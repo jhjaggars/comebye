@@ -1,0 +1,13 @@
+{
+  "name": "herdr",
+  "short_name": "herdr",
+  "description": "Drive herdr coding agents from your phone",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101218",
+  "theme_color": "#101218",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

@@ -1,0 +1,23 @@
+# Build output
+/herdr-phone
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Local config / secrets
+.env
+*.env
+
+# Claude Code worktrees and local settings
+.claude/
+
+# Editors and OS junk
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
