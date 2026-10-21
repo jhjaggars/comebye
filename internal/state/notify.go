@@ -25,12 +25,19 @@ type Pusher interface {
 	Notify(key string, msg push.Message, opts push.Options)
 }
 
-// Viewer reports whether some client is looking at an agent right now
-// (implemented by *push.Presence). The key is what the client reported:
-// the host-qualified agent ID (older clients: the bare pane ID).
+// Viewer reports whether some client is looking at an agent right now,
+// and when one last did (implemented by *push.Presence). The key is what
+// the client reported: the host-qualified agent ID (older clients: the
+// bare pane ID).
 type Viewer interface {
 	Viewing(key string) bool
+	LastViewed(key string) time.Time
 }
+
+// DefaultHoldFor bounds how long an unanswered notification holds back
+// further ones for the same agent, so a notification swiped away without
+// opening the app does not silence that agent forever.
+const DefaultHoldFor = 12 * time.Hour
 
 // Notifier sends notifications via ntfy (the optional fallback channel).
 type Notifier struct {
@@ -152,8 +159,9 @@ func PeerRef(a *herdr.AgentInfo) Ref {
 type LatestFunc func(ctx context.Context) *transcript.Latest
 
 // Dispatcher turns status transitions into notifications on every enabled
-// channel (Web Push, ntfy), applying foreground suppression and, through
-// the channels, per-agent+kind throttling. One Dispatcher is shared by the
+// channel (Web Push, ntfy), applying foreground suppression, per-agent
+// collation (one unanswered notification per agent) and, through the
+// channels, per-agent+kind throttling. One Dispatcher is shared by the
 // local state manager and the hub's peers so throttling and presence are
 // common to all of them.
 type Dispatcher struct {
@@ -165,6 +173,77 @@ type Dispatcher struct {
 	ShowHost bool
 	// ExcerptTimeout bounds the LatestFunc call (default 5s).
 	ExcerptTimeout time.Duration
+	// HoldFor is how long an agent's unanswered notification holds back
+	// its next ones (default DefaultHoldFor; negative disables holding).
+	HoldFor time.Duration
+
+	mu sync.Mutex
+	// held maps an agent key to when it was last notified. Until the user
+	// opens that agent in the app (a presence report after that time), it
+	// gets no further notifications: one per agent, not one per prompt.
+	held map[string]time.Time
+	now  func() time.Time
+}
+
+func (d *Dispatcher) clock() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
+}
+
+func (d *Dispatcher) holdFor() time.Duration {
+	if d.HoldFor == 0 {
+		return DefaultHoldFor
+	}
+	return d.HoldFor
+}
+
+// lastViewed is the latest time the user had this agent open.
+func (d *Dispatcher) lastViewed(a *herdr.AgentInfo, ref Ref) time.Time {
+	if d.Viewer == nil {
+		return time.Time{}
+	}
+	t := d.Viewer.LastViewed(ref.Key)
+	if ref.Local {
+		if bare := d.Viewer.LastViewed(a.PaneID); bare.After(t) {
+			t = bare
+		}
+	}
+	return t
+}
+
+// heldLocked reports whether an earlier notification for ref is still
+// unanswered. Callers hold d.mu.
+func (d *Dispatcher) heldLocked(a *herdr.AgentInfo, ref Ref, now time.Time) bool {
+	sent, ok := d.held[ref.Key]
+	if !ok {
+		return false
+	}
+	if hold := d.holdFor(); hold < 0 || now.Sub(sent) >= hold || d.lastViewed(a, ref).After(sent) {
+		delete(d.held, ref.Key)
+		return false
+	}
+	return true
+}
+
+// claim marks ref as notified unless an earlier notification is still
+// unanswered, reporting whether the caller may send.
+func (d *Dispatcher) claim(a *herdr.AgentInfo, ref Ref) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := d.clock()
+	if d.heldLocked(a, ref, now) {
+		return false
+	}
+	if d.holdFor() < 0 {
+		return true
+	}
+	if d.held == nil {
+		d.held = map[string]time.Time{}
+	}
+	d.held[ref.Key] = now
+	return true
 }
 
 func (d *Dispatcher) channels() (ntfyOn, pushOn bool) {
@@ -189,13 +268,17 @@ func (d *Dispatcher) Wants(a *herdr.AgentInfo, ref Ref) bool {
 	if d.Viewer != nil && (d.Viewer.Viewing(ref.Key) || (ref.Local && d.Viewer.Viewing(a.PaneID))) {
 		return false
 	}
-	return true
+	// Collation: an earlier notification for this agent is still unanswered.
+	d.mu.Lock()
+	held := d.heldLocked(a, ref, d.clock())
+	d.mu.Unlock()
+	return !held
 }
 
 // Notify sends the notifications for a's transition into blocked or done.
 // It may block on latest and on the ntfy post; run it off any lock.
 func (d *Dispatcher) Notify(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
-	if !d.Wants(a, ref) {
+	if !d.Wants(a, ref) || !d.claim(a, ref) {
 		return
 	}
 	ntfyOn, pushOn := d.channels()

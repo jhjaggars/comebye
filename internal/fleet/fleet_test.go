@@ -507,7 +507,8 @@ func (p *fakePusher) count() int {
 
 type viewer map[string]bool
 
-func (v viewer) Viewing(key string) bool { return v[key] }
+func (v viewer) Viewing(key string) bool     { return v[key] }
+func (v viewer) LastViewed(string) time.Time { return time.Time{} }
 
 func TestPeerNotifications(t *testing.T) {
 	var ntfyMu sync.Mutex
@@ -529,6 +530,7 @@ func TestPeerNotifications(t *testing.T) {
 		Push:     pusher,
 		Viewer:   viewer{"kube/wS:p2": true}, // the phone has this one open
 		ShowHost: true,
+		HoldFor:  -1, // count every transition; collation is tested in state
 	}
 	f := startFleet(t, fastOpts(d), Peer{Name: "kube", URL: fp.url()})
 	waitFor(t, "connected", func() bool { return len(f.Agents()) == 2 })

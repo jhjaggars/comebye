@@ -148,6 +148,7 @@ func TestManagerSingleHost(t *testing.T) {
 	m.SetHost("desk")
 	fp := &fakePusher{}
 	m.SetPush(fp, fakeViewer{})
+	m.dispatch.HoldFor = -1 // count every transition; collation has its own test
 	ctx := context.Background()
 	if err := m.refresh(ctx); err != nil {
 		t.Fatal(err)

@@ -12,6 +12,9 @@ import (
 // stale report can swallow notifications.
 const DefaultPresenceTTL = 45 * time.Second
 
+// maxViewed bounds the last-viewed table (one entry per agent ever opened).
+const maxViewed = 4096
+
 // maxPresenceClients bounds the presence table (one entry per open tab).
 const maxPresenceClients = 256
 
@@ -31,11 +34,14 @@ type Presence struct {
 
 	mu      sync.Mutex
 	clients map[string]presenceEntry
+	// viewed is when each agent was last reported on screen; it is what
+	// releases an agent's held notifications (see LastViewed).
+	viewed map[string]time.Time
 }
 
 // NewPresence returns an empty tracker with DefaultPresenceTTL.
 func NewPresence() *Presence {
-	return &Presence{TTL: DefaultPresenceTTL, now: time.Now, clients: map[string]presenceEntry{}}
+	return &Presence{TTL: DefaultPresenceTTL, now: time.Now, clients: map[string]presenceEntry{}, viewed: map[string]time.Time{}}
 }
 
 // Update records what client (a random per-page id) is showing. An empty
@@ -52,6 +58,12 @@ func (p *Presence) Update(client, pane string, visible bool) {
 	if pane == "" || !visible {
 		delete(p.clients, client)
 		return
+	}
+	if p.viewed == nil {
+		p.viewed = map[string]time.Time{}
+	}
+	if _, ok := p.viewed[pane]; ok || len(p.viewed) < maxViewed {
+		p.viewed[pane] = now
 	}
 	if _, ok := p.clients[client]; !ok && len(p.clients) >= maxPresenceClients {
 		return
@@ -73,4 +85,15 @@ func (p *Presence) Viewing(pane string) bool {
 		}
 	}
 	return false
+}
+
+// LastViewed is when some client last reported pane on screen; zero if
+// never (since this process started).
+func (p *Presence) LastViewed(pane string) time.Time {
+	if p == nil {
+		return time.Time{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.viewed[pane]
 }

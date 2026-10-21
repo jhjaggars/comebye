@@ -103,7 +103,8 @@ func (f *fakePusher) Notify(key string, msg push.Message, opts push.Options) {
 
 type fakeViewer map[string]bool
 
-func (v fakeViewer) Viewing(pane string) bool { return v[pane] }
+func (v fakeViewer) Viewing(pane string) bool    { return v[pane] }
+func (v fakeViewer) LastViewed(string) time.Time { return time.Time{} }
 
 func TestNotifyTransitionWebPush(t *testing.T) {
 	session := filepath.Join(t.TempDir(), "s.jsonl")
@@ -154,5 +155,59 @@ func TestForegroundSuppressionAppliesToNtfy(t *testing.T) {
 	defer mu.Unlock()
 	if n != 1 {
 		t.Fatalf("got %d ntfy posts, want 1 (viewed pane suppressed)", n)
+	}
+}
+
+// seenViewer records LastViewed times per key.
+type seenViewer map[string]time.Time
+
+func (v seenViewer) Viewing(string) bool             { return false }
+func (v seenViewer) LastViewed(key string) time.Time { return v[key] }
+
+// One unanswered notification per agent: later transitions of the same
+// agent are held until the user opens it in the app (or the hold expires);
+// other agents are unaffected.
+func TestNotificationsCollatePerAgent(t *testing.T) {
+	fp := &fakePusher{}
+	viewed := seenViewer{}
+	now := time.Unix(1_000_000, 0)
+	d := &Dispatcher{Push: fp, Viewer: viewed, now: func() time.Time { return now }}
+	a := &herdr.AgentInfo{Name: "a", ID: "desk/wS:p1", PaneID: "wS:p1", Status: herdr.StatusBlocked}
+	b := &herdr.AgentInfo{Name: "b", ID: "desk/wS:p2", PaneID: "wS:p2", Status: herdr.StatusDone}
+	send := func(x *herdr.AgentInfo) { d.Notify(x, LocalRef(x), nil) }
+
+	send(a)
+	now = now.Add(time.Minute)
+	send(a) // held: the first is unanswered
+	done := *a
+	done.Status = herdr.StatusDone
+	send(&done) // held too: any kind
+	send(b)     // another agent
+	if got := len(fp.msgs); got != 2 {
+		t.Fatalf("pushes = %d, want 2: %+v", got, fp.msgs)
+	}
+	if d.Wants(a, LocalRef(a)) {
+		t.Fatal("Wants should report the held agent as not wanted")
+	}
+
+	// Opening the agent (a presence report after the notification)
+	// releases it; a report of the bare pane ID (older client) counts.
+	viewed["wS:p1"] = now
+	now = now.Add(time.Minute)
+	send(a)
+	if got := len(fp.msgs); got != 3 {
+		t.Fatalf("after viewing: pushes = %d, want 3", got)
+	}
+	now = now.Add(time.Minute)
+	send(a) // held again until the next view
+	if got := len(fp.msgs); got != 3 {
+		t.Fatalf("pushes = %d, want 3", got)
+	}
+
+	// A notification swiped away unopened stops holding after HoldFor.
+	now = now.Add(DefaultHoldFor)
+	send(a)
+	if got := len(fp.msgs); got != 4 {
+		t.Fatalf("after hold expiry: pushes = %d, want 4", got)
 	}
 }

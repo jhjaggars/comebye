@@ -1447,6 +1447,19 @@ function reportPresence(force = false, gone = false) {
   }).catch(() => { presence.last = "?"; }); // retry on the next tick
   clearInterval(presence.timer);
   presence.timer = visible ? setInterval(() => reportPresence(true), 15000) : null;
+  if (visible) clearNotifications(pane);
+}
+
+// clearNotifications closes an agent's notification once its chat is
+// open: the server holds further ones until then, so the tray then shows
+// only agents still waiting on you. Notifications are tagged with the
+// same agent ID the presence report carries.
+function clearNotifications(tag) {
+  if (!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.getRegistration()
+    .then((reg) => reg && reg.getNotifications({ tag }))
+    .then((list) => { for (const n of list || []) n.close(); })
+    .catch(() => {});
 }
 
 /* ---------- wiring ---------- */

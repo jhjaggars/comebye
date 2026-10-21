@@ -514,3 +514,18 @@ func TestEncodePayloadTruncates(t *testing.T) {
 		t.Fatalf("len %d err %v", len(b), err)
 	}
 }
+
+func TestPresenceLastViewed(t *testing.T) {
+	p := NewPresence()
+	now := time.Unix(1_000_000, 0)
+	p.now = func() time.Time { return now }
+	if !p.LastViewed("wS:p1").IsZero() {
+		t.Fatal("never viewed should be zero")
+	}
+	p.Update("c1", "wS:p1", true)
+	now = now.Add(time.Hour)
+	p.Update("c1", "wS:p1", false) // hiding does not count as a view
+	if got := p.LastViewed("wS:p1"); !got.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("LastViewed = %v", got)
+	}
+}
