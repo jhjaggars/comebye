@@ -204,10 +204,26 @@ func TestNotificationsCollatePerAgent(t *testing.T) {
 		t.Fatalf("pushes = %d, want 3", got)
 	}
 
+	// Going back to working (answered at the terminal) releases it too.
+	working := *a
+	working.Status = herdr.StatusWorking
+	d.Observe(&working, LocalRef(&working))
+	send(a)
+	if got := len(fp.msgs); got != 4 {
+		t.Fatalf("after working: pushes = %d, want 4", got)
+	}
+	idle := *a
+	idle.Status = herdr.StatusIdle
+	d.Observe(&idle, LocalRef(&idle)) // only working releases
+	send(a)
+	if got := len(fp.msgs); got != 4 {
+		t.Fatalf("after idle: pushes = %d, want 4", got)
+	}
+
 	// A notification swiped away unopened stops holding after HoldFor.
 	now = now.Add(DefaultHoldFor)
 	send(a)
-	if got := len(fp.msgs); got != 4 {
-		t.Fatalf("after hold expiry: pushes = %d, want 4", got)
+	if got := len(fp.msgs); got != 5 {
+		t.Fatalf("after hold expiry: pushes = %d, want 5", got)
 	}
 }

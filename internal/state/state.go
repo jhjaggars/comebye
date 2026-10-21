@@ -264,7 +264,12 @@ func (m *Manager) applyStatus(paneID string, status herdr.AgentStatus) {
 }
 
 func (m *Manager) notifyTransition(a *herdr.AgentInfo) {
-	m.dispatch.Notify(a, LocalRef(a), localLatest(a, m.Agents()))
+	ref := LocalRef(a)
+	m.dispatch.Observe(a, ref)
+	if !m.dispatch.Wants(a, ref) {
+		return // skip resolving the session path for nothing
+	}
+	m.dispatch.Notify(a, ref, localLatest(a, m.Agents()))
 }
 
 // resubscribe rebuilds the subscription set from the current agent list:

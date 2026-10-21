@@ -179,8 +179,9 @@ type Dispatcher struct {
 
 	mu sync.Mutex
 	// held maps an agent key to when it was last notified. Until the user
-	// opens that agent in the app (a presence report after that time), it
-	// gets no further notifications: one per agent, not one per prompt.
+	// opens that agent in the app (a presence report after that time) or
+	// it goes back to working, it gets no further notifications: one per
+	// agent, not one per prompt.
 	held map[string]time.Time
 	now  func() time.Time
 }
@@ -251,6 +252,18 @@ func (d *Dispatcher) channels() (ntfyOn, pushOn bool) {
 		return false, false
 	}
 	return d.Ntfy.enabled(), d.Push != nil && d.Push.Active()
+}
+
+// Observe records a status transition of a. An agent going back to
+// working was answered (from the app or its terminal), which releases
+// its held notifications. Call it for every transition, before Wants.
+func (d *Dispatcher) Observe(a *herdr.AgentInfo, ref Ref) {
+	if d == nil || a.Status != herdr.StatusWorking {
+		return
+	}
+	d.mu.Lock()
+	delete(d.held, ref.Key)
+	d.mu.Unlock()
 }
 
 // Wants reports whether a transition of a into its current status would

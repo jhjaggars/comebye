@@ -520,6 +520,7 @@ func (p *peer) get(ctx context.Context, u *url.URL, limit int64) ([]byte, int, e
 func (f *Fleet) notify(p *peer, a herdr.AgentInfo) {
 	d := f.opts.Dispatcher
 	ref := state.PeerRef(&a)
+	d.Observe(&a, ref)
 	if d == nil || !d.Wants(&a, ref) {
 		return
 	}
