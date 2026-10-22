@@ -681,6 +681,108 @@
     @media (prefers-reduced-motion: reduce) { #launch.busy .ln-status::before { animation: none; } }
     .ln-go { display: block; width: 100%; margin-top: 8px; background: var(--blue); border-color: var(--blue); color: #0b0d11; font-size: 16px; }
     .ln-go:disabled { background: var(--panel2); border-color: var(--border); color: var(--muted); opacity: 1; }
+    .ln-mode { display: flex; gap: 8px; margin: 4px 0 2px; }
+    .ln-mode .hf-chip { flex: 1 1 0; justify-content: center; min-height: 44px; }
+    .ln-mode .hf-chip[aria-pressed="true"] { background: #14202f; border-color: var(--blue); color: var(--blue); }
+    #launch [hidden] { display: none; }
+    select.ln-input { appearance: none; -webkit-appearance: none; padding-right: 32px;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+    .ln-note { color: var(--muted); font-size: 12.5px; margin-top: 4px; overflow-wrap: anywhere; }
+    .ln-note:empty { display: none; }
+
+    /* Projects: the agent list grouped by repository. */
+    .proj { margin-bottom: 6px; }
+    .proj-head {
+      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
+      padding: 4px 4px 4px 2px; margin: 0 0 6px; background: none; border: 0; cursor: pointer;
+      color: var(--text); font: inherit; text-align: left;
+    }
+    .proj-head:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 8px; }
+    .proj-chev { flex: none; width: 8px; height: 8px; margin: 0 4px 0 6px;
+      border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+      transform: rotate(45deg) translate(-2px, -2px); transition: transform 0.15s; }
+    .proj-head[aria-expanded="false"] .proj-chev { transform: rotate(-45deg); }
+    .proj-name { font-weight: 650; font-size: 14px; letter-spacing: 0.02em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .proj-counts { margin-left: auto; flex: none; color: var(--muted); font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; }
+    .proj-counts .need { color: var(--orange); font-weight: 700; }
+    .proj-counts .run { color: var(--blue); }
+    .proj-body[hidden] { display: none; }
+    .agent.worker { margin-left: 18px; position: relative; }
+    .agent.worker::before { content: ""; position: absolute; left: -12px; top: -11px; bottom: 50%; width: 8px;
+      border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); border-bottom-left-radius: 6px; }
+    .lg-chip {
+      flex: none; border-radius: 5px; padding: 1px 6px; font-size: 11px; font-weight: 600;
+      background: #14202f; color: var(--blue); white-space: nowrap;
+    }
+    .lg-chip.finished { background: #1d1730; color: var(--purple); }
+    .lg-chip.candidate { background: #132a1c; color: var(--green); }
+    .lg-chip.rtr { background: #2e1d10; color: var(--orange); }
+    .lg-chip.failed { background: #2f1414; color: var(--red); }
+    .rtr-banner {
+      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-bottom: 10px;
+      padding: 0 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--orange) 45%, var(--border));
+      background: color-mix(in srgb, var(--orange) 9%, var(--panel)); color: var(--orange);
+      font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; text-align: left;
+    }
+    .rtr-banner[hidden] { display: none; }
+    .rtr-banner .ln-chev { margin-left: auto; color: var(--orange); }
+    .rtr-banner:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+    /* Detail header menu (mark ready to remove). */
+    #detail header .more {
+      flex: none; min-width: 44px; min-height: 44px; margin: -8px -8px -8px 0; padding: 0;
+      background: none; border: 0; border-radius: 10px; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer;
+    }
+    #detail header .more[hidden] { display: none; }
+    #detail header .more:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    .d-menu { position: fixed; z-index: 35; left: auto; bottom: auto; right: calc(10px + env(safe-area-inset-right, 0px)); top: calc(58px + env(safe-area-inset-top, 0px)); max-width: 80vw; }
+    .d-menu .mark-state { padding: 8px 14px; font-size: 12.5px; color: var(--orange); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+    .d-menu .mark-state[hidden] { display: none; }
+
+    /* Ready-to-remove review. */
+    #review { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden] { display: none; }
+    #review header .back {
+      font: inherit; font-size: 20px; line-height: 1; cursor: pointer; color: var(--blue);
+      background: none; border: 0; border-radius: 10px; padding: 0;
+      min-width: 44px; min-height: 44px; margin: -8px 0 -8px -8px;
+      display: inline-flex; align-items: center; justify-content: center; flex: none;
+    }
+    #review header h2 { font-size: 17px; margin: 0; font-weight: 650; }
+    #review.busy .ln-status::before {
+      content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px;
+      border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .rv-item { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; }
+    .rv-item.warn { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
+    .rv-item.done { opacity: 0.8; }
+    .rv-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .rv-top .rv-name { font-weight: 650; font-size: 15px; margin-right: auto; min-width: 0; overflow-wrap: anywhere; }
+    .rv-top .status { flex: none; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+    .rv-sub { color: var(--muted); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-top: 4px; overflow-wrap: anywhere; }
+    .rv-reason { font-size: 13px; margin-top: 6px; color: #cdd3e0; overflow-wrap: anywhere; }
+    .rv-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13px; display: flex; flex-direction: column; gap: 3px; }
+    .rv-list:empty { display: none; }
+    .rv-list li { padding-left: 20px; position: relative; overflow-wrap: anywhere; }
+    .rv-list.warn li { color: var(--orange); }
+    .rv-list.warn li::before { content: "⚠"; position: absolute; left: 0; }
+    .rv-list.ok li { color: var(--green); }
+    .rv-list.ok li::before { content: "✓"; position: absolute; left: 2px; }
+    .rv-list.info li { color: var(--muted); }
+    .rv-list.info li::before { content: "•"; position: absolute; left: 6px; }
+    .rv-report { margin-top: 6px; }
+    .rv-report > summary { cursor: pointer; color: var(--blue); font-size: 13.5px; font-weight: 600; min-height: 40px; display: flex; align-items: center; }
+    .rv-report .md { font-size: 14px; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; padding: 4px 2px; }
+    .rv-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .rv-actions .btn { flex: 1 1 0; }
+    .rv-actions .btn.go { color: var(--red); }
+    .rv-result { margin-top: 10px; font-size: 13px; border-top: 1px solid var(--border); padding-top: 8px; overflow-wrap: anywhere; }
+    .rv-result:empty { display: none; }
+    .rv-result.ok { color: var(--green); }
+    .rv-result.err { color: var(--red); }
+    .rv-result .kept { color: var(--orange); display: block; margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -706,7 +808,7 @@
         <button type="button" class="btn danger" id="notify-disable" hidden>Turn off</button>
       </div>
     </section>
-    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><div id="agents"></div></main>
+    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
   </div>
 
   <!-- New agent ("+" in the list header) -->
@@ -717,27 +819,64 @@
     </header>
     <div class="ln-body">
       <nav id="ln-hosts" class="host-filter ln-hosts" aria-label="Host" hidden></nav>
-      <div class="ln-label" id="ln-dir-label">Directory</div>
-      <div class="ln-chosen" id="ln-chosen" aria-live="polite"></div>
-      <div class="ln-browser" role="group" aria-labelledby="ln-dir-label">
-        <div class="ln-bar">
-          <button type="button" class="ln-up" id="ln-up" aria-label="Up one directory" disabled>&#8593;</button>
-          <span class="ln-crumb" id="ln-crumb"></span>
+      <div class="ln-mode" id="ln-mode" role="group" aria-label="What to start" hidden>
+        <button type="button" class="hf-chip" data-mode="agent" aria-pressed="true">Agent here</button>
+        <button type="button" class="hf-chip" data-mode="worker" aria-pressed="false">Worker (new branch)</button>
+      </div>
+      <div id="ln-dir-block">
+        <div class="ln-label" id="ln-dir-label">Directory</div>
+        <div class="ln-chosen" id="ln-chosen" aria-live="polite"></div>
+        <div class="ln-browser" role="group" aria-labelledby="ln-dir-label">
+          <div class="ln-bar">
+            <button type="button" class="ln-up" id="ln-up" aria-label="Up one directory" disabled>&#8593;</button>
+            <span class="ln-crumb" id="ln-crumb"></span>
+          </div>
+          <button type="button" class="btn ln-use" id="ln-use" hidden>Use this directory</button>
+          <div class="ln-list" id="ln-list"></div>
         </div>
-        <button type="button" class="btn ln-use" id="ln-use" hidden>Use this directory</button>
-        <div class="ln-list" id="ln-list"></div>
+      </div>
+      <div id="hw-top" hidden>
+        <label class="ln-label" for="hw-repo">Repository</label>
+        <select id="hw-repo" class="ln-input"></select>
+        <div class="ln-note" id="hw-repo-note"></div>
+        <label class="ln-label" for="hw-branch">Branch</label>
+        <input id="hw-branch" class="ln-input" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="100" placeholder="e.g. fix/login-timeout" aria-describedby="hw-branch-hint">
+        <div class="ln-hint" id="hw-branch-hint" hidden>Letters, digits, '.', '_', '-' and '/'; no '..', no leading '-' or '.'</div>
+        <div class="ln-note" id="hw-path"></div>
+        <label class="ln-label" for="hw-base">Base <span class="ln-opt">(optional)</span></label>
+        <input id="hw-base" class="ln-input" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="100" aria-describedby="hw-base-hint">
+        <div class="ln-hint" id="hw-base-hint" hidden>Not a valid branch name</div>
       </div>
       <div class="ln-label" id="ln-kind-label">Agent</div>
       <div class="ln-kinds" id="ln-kinds" role="group" aria-labelledby="ln-kind-label"></div>
-      <label class="ln-label" for="ln-name">Name <span class="ln-opt">(optional)</span></label>
-      <input id="ln-name" class="ln-input" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" aria-describedby="ln-name-hint">
-      <div class="ln-hint" id="ln-name-hint" hidden>Lowercase letters, digits, - and _, starting with a letter</div>
-      <label class="ln-label" for="ln-prompt">First prompt <span class="ln-opt">(optional)</span></label>
-      <textarea id="ln-prompt" class="ln-input" rows="3" placeholder="What should it work on?"></textarea>
+      <div id="ln-agent-extra">
+        <label class="ln-label" for="ln-name">Name <span class="ln-opt">(optional)</span></label>
+        <input id="ln-name" class="ln-input" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" aria-describedby="ln-name-hint">
+        <div class="ln-hint" id="ln-name-hint" hidden>Lowercase letters, digits, - and _, starting with a letter</div>
+        <label class="ln-label" for="ln-prompt">First prompt <span class="ln-opt">(optional)</span></label>
+        <textarea id="ln-prompt" class="ln-input" rows="3" placeholder="What should it work on?"></textarea>
+      </div>
+      <div id="hw-bottom" hidden>
+        <label class="ln-label" for="hw-brief">Brief</label>
+        <textarea id="hw-brief" class="ln-input" rows="6" placeholder="What should the worker do? It works on its own branch, commits there and ends with a report; merging stays with you."></textarea>
+      </div>
     </div>
     <footer class="ln-foot">
       <div class="ln-status" id="ln-status" aria-live="polite"></div>
       <button type="button" class="btn ln-go" id="ln-go" disabled>Launch</button>
+    </footer>
+  </section>
+
+  <!-- Sessions marked ready to remove: review and confirm -->
+  <section id="review" hidden role="dialog" aria-modal="true" aria-labelledby="rv-title">
+    <header>
+      <button type="button" class="back" id="rv-close" aria-label="Close">&#10005;</button>
+      <h2 id="rv-title">Ready to remove</h2>
+    </header>
+    <div class="ln-body" id="rv-list" aria-live="polite"></div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="rv-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="rv-all" disabled>Remove all safe</button>
     </footer>
   </section>
 
@@ -750,7 +889,12 @@
         <div class="subtitle" id="d-subtitle"></div>
       </div>
       <span class="status" id="d-status"></span>
+      <button type="button" class="more" id="d-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="d-menu" hidden>&#8942;</button>
     </header>
+    <div id="d-menu" class="attach-menu d-menu" role="menu" hidden>
+      <div class="mark-state" id="d-mark-state" hidden></div>
+      <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>
+    </div>
     <main>
       <div id="chat"></div>
       <button class="btn" id="btn-terminal" style="display:none; margin-bottom:10px;">Show raw terminal</button>

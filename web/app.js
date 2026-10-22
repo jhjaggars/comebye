@@ -94,6 +94,12 @@ function repoLabel(a) {
     }
     return { repo: a.worktree.repo };
   }
+  // No checkout info from herdr: a handed-off worker's ledger entry, or the
+  // ~/.worktrees/<repo>/<branch> convention.
+  const e = ledgerEntry(a);
+  if (e && e.repo_name) return { repo: e.repo_name, branch: e.branch };
+  const m = WT_PATH_RE.exec(a.cwd || "");
+  if (m) return { repo: m[1], branch: m[2] };
   return { repo: baseName(a.cwd) };
 }
 
@@ -104,7 +110,7 @@ function subLine(a) {
   const repoEl = `<span class="repo">${esc(repo)}</span>`;
   const chip = branch ? `<span class="wt-chip">⑂ ${esc(branch)}</span>` : "";
   const sep = kind ? '<span>·</span>' : "";
-  return `<div class="sub">${hostEl}${repoEl}${chip}${sep}${kind}</div>`;
+  return `<div class="sub">${hostEl}${repoEl}${chip}${sep}${kind}${ledgerChip(a)}</div>`;
 }
 
 /* ---------- hosts and agent identity ---------- */
@@ -424,12 +430,25 @@ function renderList() {
       <span class="status">${h.status === "connecting" ? "…" : "down"}</span>
     </div>`;
   }).join("");
+  renderRemovalBanner();
   if (!agents.length) {
     wrap.innerHTML = `<div class="empty">${state.unauthorized ? esc(UNAUTHORIZED_MSG) : "No agents running"}</div>` + downRows;
     return;
   }
-  wrap.innerHTML = agents.map((a) => `
-    <div class="agent ${esc(a.agent_status)}" role="button" tabindex="0" data-id="${esc(agentId(a))}">
+  wrap.innerHTML = projectGroups(agents).map(([name, list]) => projectHTML(name, list)).join("") + downRows;
+  wrap.querySelectorAll(".proj-head").forEach((el) =>
+    el.addEventListener("click", () => toggleProject(el.dataset.proj)));
+  wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
+    el.addEventListener("click", () => openDetail(el.dataset.id));
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(el.dataset.id); }
+    });
+  });
+}
+
+function agentRow(a, worker) {
+  return `
+    <div class="agent ${esc(a.agent_status)}${worker ? " worker" : ""}" role="button" tabindex="0" data-id="${esc(agentId(a))}">
       <span class="dot ${esc(a.agent_status)}"></span>
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}</div>
@@ -440,13 +459,362 @@ function renderList() {
           ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>`
           : a.agent_status === "working" && sinceMs(a)
             ? `<br><span class="ago">for ${fmtAgo(sinceMs(a))}</span>` : ""}</span>
-    </div>`).join("") + downRows;
-  wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
-    el.addEventListener("click", () => openDetail(el.dataset.id));
-    el.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(el.dataset.id); }
-    });
+    </div>`;
+}
+
+/* ---------- projects, workers and the handoff ledger ---------- */
+//
+// A project is a repository. Its home agents work in the primary checkout;
+// workers each have their own git worktree (~/.worktrees/<repo>/<branch>)
+// and branch. The hub's ledger records the workers it handed work to
+// (running -> finished, with the worker's final report) and the sessions
+// marked ready to remove. The list groups agents by project: home agents
+// first, then the workers, indented, each with its ledger status.
+
+const ledger = {
+  on: null,            // null until loaded; false when the server keeps no ledger
+  entries: [],
+  marks: [],           // marks on agents that are not ledger workers
+  byAgent: new Map(),  // agent id -> its active entry
+  marked: new Map(),   // agent id -> mark ({by, reason, at})
+  loadedAt: 0,
+  timer: null,
+  inflight: false,
+};
+const ACTIVE_ENTRY = new Set(["running", "finished", "ready_to_remove"]);
+// ~/.worktrees/<repo>/<branch>: a worker's checkout by convention.
+const WT_PATH_RE = /\/\.worktrees\/([^/]+)\/([^/]+)/;
+
+function ledgerEntry(a) { return ledger.byAgent.get(agentId(a)); }
+
+function setLedger(d) {
+  ledger.on = true;
+  ledger.entries = Array.isArray(d.entries) ? d.entries : [];
+  ledger.marks = Array.isArray(d.marks) ? d.marks : [];
+  ledger.byAgent = new Map();
+  ledger.marked = new Map();
+  for (const e of ledger.entries) {
+    if (!e || !e.agent_id || !ACTIVE_ENTRY.has(e.status)) continue;
+    ledger.byAgent.set(e.agent_id, e);
+    if (e.status === "ready_to_remove") ledger.marked.set(e.agent_id, e.mark || {});
+  }
+  for (const m of ledger.marks) if (m && m.agent_id) ledger.marked.set(m.agent_id, m);
+}
+
+async function loadLedger() {
+  if (ledger.inflight || ledger.on === false) return;
+  ledger.inflight = true;
+  try {
+    setLedger(await api("/api/ledger"));
+    // The server checks finished workers' worktrees in the background
+    // (for the "merged" hint): look again shortly until they are in.
+    const waiting = ledger.entries.some((e) => e.status === "finished" && e.worktree && !e.checks);
+    ledger.checkPolls = waiting ? (ledger.checkPolls || 0) + 1 : 0;
+    if (waiting && ledger.checkPolls <= 10 && !document.hidden) {
+      clearTimeout(ledger.timer);
+      ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, 3000);
+    }
+  } catch (e) {
+    if (e.status === 503) ledger.on = false; // no state directory: no handoffs or marks here
+  } finally {
+    ledger.inflight = false;
+    ledger.loadedAt = Date.now();
+  }
+  renderList();
+  if (state.selected) renderDetailMenu();
+  if (launch.open) renderLaunchForm();
+}
+
+// scheduleLedger refreshes the ledger after agent updates (a worker going
+// idle finishes it), at most every few seconds.
+function scheduleLedger() {
+  if (ledger.on === false || ledger.timer || document.hidden) return;
+  const wait = Math.max(0, ledger.loadedAt + 5000 - Date.now());
+  ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, wait);
+}
+
+function ledgerChip(a) {
+  const id = agentId(a);
+  if (ledger.marked.has(id)) return '<span class="lg-chip rtr">ready to remove</span>';
+  const e = ledger.byAgent.get(id);
+  if (!e) return "";
+  if (e.status === "finished") {
+    return e.candidate
+      ? '<span class="lg-chip candidate" title="Finished; its worktree is clean and merged">finished · merged</span>'
+      : '<span class="lg-chip finished">finished</span>';
+  }
+  return '<span class="lg-chip">running</span>';
+}
+
+function projectOf(a) {
+  return repoLabel(a).repo || "";
+}
+
+function isWorker(a) {
+  return ledger.byAgent.has(agentId(a)) || !!(a.worktree && a.worktree.linked) || WT_PATH_RE.test(a.cwd || "");
+}
+
+// projectGroups splits the (sorted) agents by project: the group with the
+// most urgent agent first, then the most recently active; "Other" (no
+// directory) last.
+function projectGroups(agents) {
+  const groups = new Map();
+  for (const a of agents) {
+    const p = projectOf(a);
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p).push(a);
+  }
+  const rank = (list) => Math.min(...list.map((a) => STATUS_ORDER[a.agent_status] ?? 9));
+  const recent = (list) => Math.max(...list.map(activeMs));
+  return [...groups.entries()].sort(([na, la], [nb, lb]) =>
+    (na === "") - (nb === "") || rank(la) - rank(lb) || recent(lb) - recent(la) || na.localeCompare(nb));
+}
+
+const COLLAPSED_KEY = "comebye-collapsed-projects";
+let collapsedProjects = null;
+function collapsed() {
+  if (!collapsedProjects) {
+    try { collapsedProjects = new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]")); }
+    catch { collapsedProjects = new Set(); }
+  }
+  return collapsedProjects;
+}
+function toggleProject(name) {
+  const c = collapsed();
+  if (c.has(name)) c.delete(name); else c.add(name);
+  try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...c].slice(-200))); } catch {}
+  renderList();
+}
+
+function projectHTML(name, list) {
+  const open = !collapsed().has(name);
+  const nBlocked = list.filter((a) => a.agent_status === "blocked").length;
+  const nWorking = list.filter((a) => a.agent_status === "working").length;
+  const counts = (nBlocked ? `<span class="need">${nBlocked} need${nBlocked === 1 ? "s" : ""} input</span>` : "") +
+    (nWorking ? `<span class="run">${nWorking} working</span>` : "") + `<span>${list.length}</span>`;
+  const home = list.filter((a) => !isWorker(a));
+  const workers = list.filter(isWorker);
+  return `<section class="proj">
+    <button type="button" class="proj-head" data-proj="${esc(name)}" aria-expanded="${open}">
+      <span class="proj-chev" aria-hidden="true"></span><span class="proj-name">${esc(name || "Other")}</span>
+      <span class="proj-counts">${counts}</span>
+    </button>
+    <div class="proj-body"${open ? "" : " hidden"}>${home.map((a) => agentRow(a, false)).join("")}${workers.map((a) => agentRow(a, true)).join("")}</div>
+  </section>`;
+}
+
+function renderRemovalBanner() {
+  const b = $("rtr-banner");
+  const n = ledger.on ? ledger.marked.size : 0;
+  b.hidden = !n;
+  if (n) b.innerHTML = `Ready to remove (${n})<span class="ln-chev" aria-hidden="true">›</span>`;
+}
+
+/* ---------- marking a session ready to remove (detail view menu) ---------- */
+
+function renderDetailMenu() {
+  const on = ledger.on === true && !!state.selected;
+  $("d-more").hidden = !on;
+  if (!on) { toggleDetailMenu(false); return; }
+  const m = ledger.marked.get(state.selected);
+  $("d-mark").textContent = m ? "Unmark (keep this session)" : "Mark ready to remove…";
+  const st = $("d-mark-state");
+  st.hidden = !m;
+  if (m) st.textContent = "Marked ready to remove" + (m.reason ? ": " + m.reason : "");
+}
+
+function toggleDetailMenu(show) {
+  const menu = $("d-menu");
+  const open = show ?? menu.hidden;
+  menu.hidden = !open;
+  $("d-more").setAttribute("aria-expanded", String(open));
+}
+
+async function toggleMark() {
+  const id = state.selected;
+  toggleDetailMenu(false);
+  if (!id) return;
+  try {
+    if (ledger.marked.has(id)) {
+      await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
+      toast("Unmarked");
+    } else {
+      const reason = prompt("Mark this session ready to remove. Why? (optional)", "");
+      if (reason === null) return;
+      await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: id, reason }) });
+      toast("Marked ready to remove");
+    }
+  } catch (e) {
+    toast(e.message, true);
+  }
+  ledger.loadedAt = 0;
+  await loadLedger();
+}
+
+/* ---------- review: remove the sessions marked ready to remove ---------- */
+//
+// The banner opens a sheet listing each marked session with safety checks
+// run on its host just now: uncommitted changes, commits its base lacks, an
+// agent that went back to work. Removing closes the session (its workspace,
+// or only its pane when others share it) and removes the worktree only when
+// it is clean and merged; the branch is always kept. Like the launch sheet,
+// it is a history entry.
+
+const review = { open: false, items: [], results: new Map(), busy: false, seq: 0 };
+
+function openReview() {
+  if (review.open) return;
+  review.open = true;
+  review.results = new Map();
+  history.pushState({ review: true }, "", location.href);
+  $("review").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("rv-close").focus();
+  loadReview();
+}
+
+function hideReview() {
+  review.open = false;
+  review.seq++;
+  $("review").hidden = true;
+  document.body.classList.remove("sheet-open");
+  if (!state.selected) $("rtr-banner").focus();
+  maybeReload();
+}
+
+function closeReview() {
+  if (review.busy) return;
+  if (history.state && history.state.review) history.back();
+  else hideReview();
+}
+
+function syncReview() {
+  if (review.open && !(history.state && history.state.review)) hideReview();
+}
+
+function setReviewBusy(on, text) {
+  review.busy = on;
+  $("review").classList.toggle("busy", on);
+  $("rv-status").textContent = text || "";
+  renderReviewFoot();
+}
+
+async function loadReview() {
+  const seq = ++review.seq;
+  setReviewBusy(true, "Checking each session on its host…");
+  if (!review.items.length) $("rv-list").innerHTML = "";
+  let d;
+  try {
+    d = await api("/api/removals");
+  } catch (e) {
+    if (seq !== review.seq) return;
+    setReviewBusy(false);
+    $("rv-list").innerHTML = `<div class="ln-empty">${esc(e.message)}</div>`;
+    return;
+  }
+  if (seq !== review.seq) return;
+  review.items = Array.isArray(d.removals) ? d.removals : [];
+  setReviewBusy(false);
+  renderReview();
+}
+
+function reviewItemHTML(it) {
+  const res = review.results.get(it.id);
+  const done = res && res.ok;
+  const st = it.live && it.live.present ? (AGENT_STATUSES.has(it.live.agent_status) ? it.live.agent_status : "unknown") : "";
+  const host = multiHost() && it.host ? `<span class="host-chip">${esc(it.host)}</span>` : "";
+  const branch = it.branch ? `<span class="wt-chip">⑂ ${esc(it.branch)}</span>` : "";
+  const status = st ? `<span class="status ${esc(st)}">${esc(st)}</span>` : '<span class="status">gone</span>';
+  const where = [it.repo, it.worktree].filter(Boolean).map(esc).join(" · ");
+  const m = it.mark || {};
+  const marked = `Marked${m.by ? " by " + esc(m.by) : ""}${m.at ? " · " + esc(fmtAgo(Date.parse(m.at))) + " ago" : ""}${m.reason ? ": " + esc(m.reason) : ""}`;
+  const c = it.checks;
+  const ok = c && c.exists && !c.primary && !c.dirty && c.unmerged_commits === 0 && !c.error
+    ? `<li>Clean, and merged into ${esc(c.base_used || "its base")}: the worktree will be removed (the branch is kept)</li>` : "";
+  const warnings = (it.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  const notes = (it.notes || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  const report = it.final_report
+    ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary><div class="md"></div></details>` : "";
+  let result = "";
+  if (res && res.ok) {
+    const r = res.result || {};
+    const closed = r.closed === "workspace" ? "Closed its workspace" : r.closed === "pane" ? "Closed its pane (the workspace has other agents or is the repository's home)" : "Nothing was open to close";
+    const wt = r.worktree_removed ? ". Removed the worktree; the branch is kept."
+      : r.kept ? `.<span class="kept">Kept the worktree: ${esc(r.kept)}</span>` : ".";
+    result = `<div class="rv-result ok">${closed}${wt}</div>`;
+  } else if (res) {
+    result = `<div class="rv-result err">Not removed: ${esc(res.message || res.code || "failed")}</div>`;
+  }
+  const actions = done ? "" : `<div class="rv-actions">
+      <button type="button" class="btn go" data-act="remove" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>${it.safe ? "Remove" : "Remove anyway…"}</button>
+      <button type="button" class="btn" data-act="unmark" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>Unmark</button>
+    </div>`;
+  return `<div class="rv-item${it.safe ? "" : " warn"}${done ? " done" : ""}">
+    <div class="rv-top"><span class="rv-name">${esc(it.name || it.pane_id || it.id)}</span>${host}${branch}${status}</div>
+    ${where ? `<div class="rv-sub">${where}</div>` : ""}
+    <div class="rv-reason">${marked}</div>
+    <ul class="rv-list warn">${done ? "" : warnings}</ul>
+    <ul class="rv-list ok">${done ? "" : ok}</ul>
+    <ul class="rv-list info">${done ? "" : notes}</ul>
+    ${report}${actions}${result}
+  </div>`;
+}
+
+function renderReview() {
+  const list = $("rv-list");
+  list.innerHTML = review.items.length ? review.items.map(reviewItemHTML).join("")
+    : '<div class="ln-empty">Nothing is marked ready to remove. Mark a session from its ⋮ menu.</div>';
+  list.querySelectorAll(".rv-report").forEach((d) => {
+    const it = review.items.find((x) => x.id === d.dataset.id);
+    if (it) mdOnOpen(d, d.querySelector(".md"), it.final_report, "report:" + it.id);
   });
+  renderReviewFoot();
+}
+
+function safeIds() {
+  return review.items.filter((it) => it.safe && !(review.results.get(it.id) || {}).ok).map((it) => it.id);
+}
+
+function renderReviewFoot() {
+  const n = safeIds().length;
+  $("rv-all").disabled = review.busy || !n;
+  $("rv-all").textContent = n ? `Remove all safe (${n})` : "Remove all safe";
+}
+
+async function confirmRemovals(ids, allowWorking) {
+  if (review.busy || !ids.length) return;
+  setReviewBusy(true, ids.length === 1 ? "Removing…" : `Removing ${ids.length} sessions…`);
+  renderReview();
+  try {
+    const d = await api("/api/removals/confirm", { method: "POST", body: JSON.stringify({ ids, allow_working: !!allowWorking }) });
+    for (const r of d.results || []) review.results.set(r.id, r);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  setReviewBusy(false);
+  renderReview();
+  ledger.loadedAt = 0;
+  loadLedger();
+  refreshAgents().catch(() => {});
+}
+
+async function reviewAction(act, id) {
+  const it = review.items.find((x) => x.id === id);
+  if (!it || review.busy) return;
+  if (act === "unmark") {
+    try {
+      await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
+    } catch (e) { toast(e.message, true); return; }
+    review.items = review.items.filter((x) => x.id !== id);
+    renderReview();
+    ledger.loadedAt = 0;
+    loadLedger();
+    return;
+  }
+  const working = it.live && (it.live.agent_status === "working" || it.live.agent_status === "blocked");
+  if (!it.safe && !confirm(`${it.name || id}:\n\n• ${(it.warnings || []).join("\n• ")}\n\n` +
+    "Remove it anyway? The worktree is still kept unless it is clean and merged.")) return;
+  confirmRemovals([id], working);
 }
 
 /* ---------- detail view ---------- */
@@ -477,6 +845,7 @@ function routedAgent(r) {
 function route() {
   syncSubview();
   syncLaunch();
+  syncReview();
   const r = parseRoute();
   if (!r) {
     state.pendingRoute = null;
@@ -525,6 +894,7 @@ function openDetail(id) {
 
 function closeDetail() {
   toggleKeypad(false);
+  toggleDetailMenu(false);
   closeActivityPanel();
   hideSubview();
   clearInterval(activity.timer);
@@ -570,6 +940,7 @@ function renderDetail() {
   updateAnswerCard();
   updateSendButton();
   renderActivity();
+  renderDetailMenu();
 }
 
 /* ---------- chat view (Pi session transcript) ---------- */
@@ -1948,6 +2319,7 @@ function refreshAgents() {
       renderList();
       if (state.selected) renderDetail();
       applyPendingRoute();
+      scheduleLedger();
     });
 }
 
@@ -1968,6 +2340,7 @@ function connectEvents() {
     state.unauthorized = false;
     setAgents(data);
     renderList();
+    scheduleLedger();
     if (state.selected) {
       const a = agentById(state.selected);
       const prev = state.lastStatus;
@@ -2283,7 +2656,82 @@ const launch = {
   kind: null,
   busy: false,
   seq: 0,       // bumped per host/listing, so a slow answer for an old one is dropped
+  mode: null,   // "agent" (in a directory) or "worker" (a handoff: new branch and worktree)
+  repos: null,  // the host's git repositories, for worker mode
+  repoSeq: 0,
 };
+
+const LAUNCH_MODE_KEY = "comebye-launch-mode";
+
+// workerMode: the sheet hands work to a new worker (needs the ledger).
+function workerMode() { return ledger.on === true && launch.mode === "worker"; }
+
+// validBranch mirrors the server's conservative branch-name rule.
+function validBranch(b) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/.test(b) || b === "HEAD" || b.includes("..") || b.includes("//") || /[/.]$/.test(b)) return false;
+  return b.split("/").every((p) => !p.startsWith(".") && !p.startsWith("-") && !p.endsWith(".lock"));
+}
+
+function setLaunchMode(mode) {
+  launch.mode = mode;
+  try { localStorage.setItem(LAUNCH_MODE_KEY, mode); } catch {}
+  if (mode === "worker" && !launch.repos) loadRepos(launch.host);
+  renderLaunchForm();
+}
+
+async function loadRepos(host) {
+  const seq = ++launch.repoSeq;
+  launch.repos = null;
+  renderLaunchForm();
+  const base = !host || host === state.localHost ? "/api/repos" : `/api/hosts/${encodeURIComponent(host)}/repos`;
+  let d;
+  try {
+    d = await api(base);
+  } catch (e) {
+    if (seq !== launch.repoSeq) return;
+    launch.repos = [];
+    $("hw-repo-note").textContent = e.message;
+    renderLaunchForm();
+    return;
+  }
+  if (seq !== launch.repoSeq) return;
+  launch.repos = Array.isArray(d.repos) ? d.repos : [];
+  $("hw-repo-note").textContent = launch.repos.length ? "" : "No git repositories in this host's launch roots";
+  renderLaunchForm();
+}
+
+function chosenRepo() {
+  const p = $("hw-repo").value;
+  return (launch.repos || []).find((r) => r.path === p) || null;
+}
+
+function renderWorkerFields() {
+  const sel = $("hw-repo");
+  const repos = launch.repos;
+  const keep = sel.value;
+  const sig = repos ? repos.map((r) => r.path).join("\n") : "loading";
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = !repos ? "<option value=\"\">Loading…</option>"
+      : '<option value="">Choose a repository</option>' + repos.map((r) =>
+        `<option value="${esc(r.path)}">${esc(r.name)} — ${esc(r.label || r.path)}</option>`).join("");
+    if (repos && repos.some((r) => r.path === keep)) sel.value = keep;
+  }
+  const repo = chosenRepo();
+  $("hw-base").placeholder = repo && repo.default_branch ? `Default: ${repo.default_branch}` : "Default: the default branch";
+  const branch = $("hw-branch").value.trim();
+  const branchOk = !branch || validBranch(branch);
+  $("hw-branch").setAttribute("aria-invalid", String(!branchOk));
+  $("hw-branch-hint").hidden = branchOk;
+  const base = $("hw-base").value.trim();
+  const baseOk = !base || validBranch(base);
+  $("hw-base").setAttribute("aria-invalid", String(!baseOk));
+  $("hw-base-hint").hidden = baseOk;
+  $("hw-path").textContent = repo && branch && branchOk
+    ? `New worktree ~/.worktrees/${repo.name}/${branch.replace(/\//g, "-")}, branch ${branch} from ${base || repo.default_branch || "the default branch"}`
+    : "";
+  return !!repo && !!branch && branchOk && baseOk && !!$("hw-brief").value.trim();
+}
 
 const AGENT_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
@@ -2306,8 +2754,14 @@ function openLaunch() {
   history.pushState({ launch: true }, "", location.href);
   const f = activeHostFilter();
   launch.host = f !== "all" ? f : state.localHost;
+  if (!launch.mode) {
+    try { launch.mode = localStorage.getItem(LAUNCH_MODE_KEY) === "worker" ? "worker" : "agent"; } catch { launch.mode = "agent"; }
+  }
   $("ln-name").value = "";
   $("ln-prompt").value = "";
+  $("hw-branch").value = "";
+  $("hw-base").value = "";
+  $("hw-brief").value = "";
   $("launch").hidden = false;
   document.body.classList.add("sheet-open");
   setLaunchHost(launch.host);
@@ -2351,6 +2805,8 @@ async function setLaunchHost(host) {
   launch.dir = null;
   launch.kind = null;
   launch.path = "";
+  launch.repos = null;
+  if (workerMode()) loadRepos(host);
   const seq = ++launch.seq;
   renderLaunchHosts();
   renderLaunchForm();
@@ -2454,10 +2910,26 @@ function renderLaunchForm() {
   const nameOk = !name || AGENT_NAME_RE.test(name);
   $("ln-name").setAttribute("aria-invalid", String(!nameOk));
   $("ln-name-hint").hidden = nameOk;
+  const worker = workerMode();
+  $("ln-mode").hidden = ledger.on !== true;
+  $("ln-mode").querySelectorAll("button[data-mode]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.mode === (worker ? "worker" : "agent"))));
+  $("ln-dir-block").hidden = worker;
+  $("ln-agent-extra").hidden = worker;
+  $("hw-top").hidden = !worker;
+  $("hw-bottom").hidden = !worker;
+  $("ln-title").textContent = worker ? "Hand off to a worker" : "New agent";
+  $("ln-go").textContent = worker ? "Hand off" : "Launch";
+  if (worker) {
+    const ready = renderWorkerFields();
+    $("ln-go").disabled = launch.busy || !ready || !launch.kind || !(o && o.enabled);
+    return;
+  }
   $("ln-go").disabled = launch.busy || !launch.dir || !launch.kind || !nameOk;
 }
 
 async function submitLaunch() {
+  if (workerMode()) return submitHandoff();
   if (launch.busy || !launch.dir || !launch.kind) return;
   const host = launch.host;
   const kind = launch.kind;
@@ -2489,6 +2961,45 @@ async function submitLaunch() {
   hideLaunch();
   const pane = r.agent && r.agent.pane_id;
   if (pane) openLaunched(host, pane, r.agent.name || kind);
+}
+
+// submitHandoff hands the brief to a new worker on the chosen host: the hub
+// creates (or reopens) the branch's worktree there, starts the agent in it,
+// sends the brief in the handoff template and records it in the ledger.
+async function submitHandoff() {
+  const repo = chosenRepo();
+  const branch = $("hw-branch").value.trim();
+  const brief = $("hw-brief").value;
+  if (launch.busy || !repo || !launch.kind || !validBranch(branch) || !brief.trim()) return;
+  const host = launch.host || state.localHost;
+  const kind = launch.kind;
+  const body = { host, repo: repo.path, branch, kind, brief };
+  const base = $("hw-base").value.trim();
+  if (base) body.base = base;
+  launch.busy = true;
+  $("launch").classList.add("busy");
+  $("ln-status").textContent = `Creating the worktree and starting ${kind}…`;
+  renderLaunchForm();
+  let r;
+  try {
+    r = await api("/api/handoffs", { method: "POST", body: JSON.stringify(body) });
+  } catch (e) {
+    toast(e.message, true);
+    $("ln-status").textContent = "";
+    return;
+  } finally {
+    launch.busy = false;
+    $("launch").classList.remove("busy");
+    renderLaunchForm();
+  }
+  $("ln-status").textContent = "";
+  if (r.entry && r.entry.error) toast(r.entry.error, true);
+  if (history.state && history.state.launch) history.replaceState(null, "", location.pathname + location.search);
+  hideLaunch();
+  ledger.loadedAt = 0;
+  loadLedger();
+  const a = r.worker && r.worker.agent;
+  if (a && a.pane_id) openLaunched(host, a.pane_id, a.name || branch);
 }
 
 // openLaunched opens the new agent's chat as soon as the agent list (SSE)
@@ -2537,7 +3048,7 @@ function noteVersion(v) {
 
 // busy: the user is reading an agent or something would be lost.
 function busy() {
-  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim() || launch.open;
+  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim() || launch.open || review.open;
 }
 
 function maybeReload() {
@@ -2689,6 +3200,30 @@ window.addEventListener("DOMContentLoaded", () => {
   $("ln-use").addEventListener("click", () => chooseLaunchDir(launch.path, launch.pathLabel));
   $("ln-name").addEventListener("input", renderLaunchForm);
   $("ln-go").addEventListener("click", submitLaunch);
+  $("ln-mode").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-mode]");
+    if (b && !launch.busy) setLaunchMode(b.dataset.mode);
+  });
+  for (const id of ["hw-repo", "hw-branch", "hw-base", "hw-brief"]) {
+    $(id).addEventListener(id === "hw-repo" ? "change" : "input", renderLaunchForm);
+  }
+
+  $("rtr-banner").addEventListener("click", openReview);
+  $("rv-close").addEventListener("click", closeReview);
+  $("review").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); closeReview(); }
+  });
+  $("rv-all").addEventListener("click", () => confirmRemovals(safeIds(), false));
+  $("rv-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-act]");
+    if (b) reviewAction(b.dataset.act, b.dataset.id);
+  });
+  $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
+  $("d-mark").addEventListener("click", toggleMark);
+  document.addEventListener("click", (ev) => {
+    if (!$("d-menu").hidden && !$("d-menu").contains(ev.target)) toggleDetailMenu(false);
+  });
+  loadLedger();
 
   $("btn-notify").addEventListener("click", toggleNotifyPanel);
   $("notify-enable").addEventListener("click", enablePush);
