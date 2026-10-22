@@ -144,9 +144,21 @@ func (s *Service) allow(key string) bool {
 	if t, ok := s.last[key]; ok && now.Sub(t) < s.cfg.MinInterval {
 		return false
 	}
+	if len(s.last) >= maxThrottleKeys {
+		// Entries past the interval no longer throttle anything.
+		for k, t := range s.last {
+			if now.Sub(t) >= s.cfg.MinInterval {
+				delete(s.last, k)
+			}
+		}
+	}
 	s.last[key] = now
 	return true
 }
+
+// maxThrottleKeys is the throttle table size at which lapsed entries are
+// pruned, so agents that come and go cannot grow it for good.
+const maxThrottleKeys = 1024
 
 // Notify queues msg for every subscription. It never blocks: sends run on
 // a small worker pool, and if the queue is full the send is dropped and

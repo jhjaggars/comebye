@@ -232,6 +232,24 @@ type peer struct {
 	agents   []herdr.AgentInfo
 	tracker  *state.Tracker
 	checked  bool // the peer's push setting was checked
+	capped   bool // the last snapshot was cut to maxPeerAgents (logged once)
+}
+
+// maxPeerAgents caps the agents taken from one peer snapshot. A real host
+// runs a handful; the cap bounds what a misbehaving peer can make the hub
+// track, broadcast and notify for.
+const maxPeerAgents = 256
+
+// maxPaneID bounds a peer agent's pane id (herdr's look like "wS:p1").
+const maxPaneID = 128
+
+// validStatus reports whether s is one of herdr's agent statuses.
+func validStatus(s herdr.AgentStatus) bool {
+	switch s {
+	case herdr.StatusIdle, herdr.StatusWorking, herdr.StatusBlocked, herdr.StatusDone, herdr.StatusUnknown:
+		return true
+	}
+	return false
 }
 
 func (p *peer) hostStatus() state.HostStatus {
@@ -419,13 +437,23 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 			own = h.Name
 		}
 	}
-	kept := make([]herdr.AgentInfo, 0, len(agents))
+	kept := make([]herdr.AgentInfo, 0, min(len(agents), maxPeerAgents))
+	dropped := false
 	for _, a := range agents {
 		if own != "" && a.Host != "" && a.Host != own {
 			continue
 		}
-		if a.PaneID == "" {
+		if a.PaneID == "" || len(a.PaneID) > maxPaneID {
 			continue
+		}
+		if len(kept) == maxPeerAgents {
+			dropped = true
+			break
+		}
+		// The browser and the dispatcher key off the status: only
+		// herdr's values get through.
+		if !validStatus(a.Status) {
+			a.Status = herdr.StatusUnknown
 		}
 		a.Host = p.name
 		a.ID = state.QualifiedID(p.name, a.PaneID)
@@ -439,7 +467,12 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	p.status, p.lastErr, p.lastSeen = StatusOK, "", now
 	check := !p.checked
 	p.checked = true
+	logCap := dropped && !p.capped
+	p.capped = dropped
 	p.mu.Unlock()
+	if logCap {
+		p.f.opts.Logf("peer %s: more than %d agents, ignoring the rest", p.name, maxPeerAgents)
+	}
 	if !wasOK {
 		p.f.opts.Logf("peer %s: connected (%d agents)", p.name, len(kept))
 	}

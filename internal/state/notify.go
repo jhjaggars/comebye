@@ -81,8 +81,25 @@ func (n *Notifier) allow(key string, now time.Time) bool {
 	if n.last == nil {
 		n.last = map[string]time.Time{}
 	}
+	if len(n.last) >= pruneAt {
+		pruneBefore(n.last, now.Add(-n.MinInterval))
+	}
 	n.last[key] = now
 	return true
+}
+
+// pruneAt is the size at which the per-agent time maps (throttle and hold)
+// drop entries that no longer affect anything, so agents that come and go
+// (or a misbehaving peer inventing pane ids) cannot grow them for good.
+const pruneAt = 1024
+
+// pruneBefore deletes the entries of m recorded before cutoff.
+func pruneBefore(m map[string]time.Time, cutoff time.Time) {
+	for k, t := range m {
+		if t.Before(cutoff) {
+			delete(m, k)
+		}
+	}
 }
 
 // agentURL is the deep link to one agent's detail view; route is the
@@ -243,6 +260,11 @@ func (d *Dispatcher) claim(a *herdr.AgentInfo, ref Ref) bool {
 	if d.held == nil {
 		d.held = map[string]time.Time{}
 	}
+	if len(d.held) >= pruneAt {
+		// Holds older than holdFor have lapsed (heldLocked drops them on
+		// the next lookup anyway).
+		pruneBefore(d.held, now.Add(-d.holdFor()))
+	}
 	d.held[ref.Key] = now
 	return true
 }
@@ -364,7 +386,7 @@ func localLatest(a *herdr.AgentInfo, all []herdr.AgentInfo) LatestFunc {
 // blocked or done. kind is the throttle bucket. host, when set, prefixes
 // the repository line.
 func buildNotification(a *herdr.AgentInfo, host string, latest *transcript.Latest, excerptChars int) (string, ntfyMessage) {
-	name := a.DisplayName()
+	name := notifyName(a)
 	excerpt := ""
 	if latest != nil {
 		excerpt = transcript.Excerpt(latest.Text, excerptChars)
@@ -414,6 +436,23 @@ func buildNotification(a *herdr.AgentInfo, host string, latest *transcript.Lates
 
 // repoLabel names where the agent works: repo (and branch for a linked
 // worktree), else the cwd basename, else the pane ID.
+// notifyName labels an agent in a notification title. Unlike DisplayName
+// it never uses the terminal title, which any program running in the pane
+// can set with an escape sequence (and so fake a title like "Security
+// alert"): the agent's name, else its type, else its pane.
+func notifyName(a *herdr.AgentInfo) string {
+	switch {
+	case a.Name != "":
+		return a.Name
+	case a.DisplayAgent != "":
+		return a.DisplayAgent
+	case a.Agent != "":
+		return a.Agent
+	default:
+		return a.PaneID
+	}
+}
+
 func repoLabel(a *herdr.AgentInfo) string {
 	if wt := a.Worktree; wt != nil && wt.RepoName != "" {
 		if wt.IsLinked && wt.Branch != "" {
