@@ -84,6 +84,12 @@ func ClaudeProjectSlug(cwd string) string {
 // other unreported Claude agent shares that cwd.
 func (r *Resolver) SessionPath(a herdr.AgentInfo, live []herdr.AgentInfo) (string, error) {
 	if p, ok := r.reported(a); ok {
+		// herdr passes on whatever path the agent reported: refuse
+		// anything but a regular file (opening a FIFO blocks, a device may
+		// never end). A file not written yet is the caller's ENOENT.
+		if fi, err := os.Stat(p); err == nil && !fi.Mode().IsRegular() {
+			return "", ErrNoSession
+		}
 		return p, nil
 	}
 	if a.Agent != claudeAgent || a.CWD == "" {
