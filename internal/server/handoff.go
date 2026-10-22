@@ -585,7 +585,7 @@ func (s *Server) review(ctx context.Context, it *removal) {
 	case !it.Live.Present:
 		it.Notes = append(it.Notes, "the agent is no longer running")
 	case it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked:
-		it.Warnings = append(it.Warnings, "the agent is "+string(it.Live.Status)+" again")
+		it.Warnings = append(it.Warnings, "the agent is "+string(it.Live.Status)+": closing it interrupts it")
 	}
 	if it.Worktree == "" {
 		it.Notes = append(it.Notes, "no worktree of its own: only the session is closed")

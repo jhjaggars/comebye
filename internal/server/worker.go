@@ -442,7 +442,7 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 			return nil, &launchError{status: http.StatusConflict, code: "agent_changed", message: "another agent runs in that pane now; nothing was closed"}
 		}
 		if !b.AllowWorking && (agent.Status == herdr.StatusWorking || agent.Status == herdr.StatusBlocked) {
-			return nil, &launchError{status: http.StatusConflict, code: "agent_working", message: "the agent is " + string(agent.Status) + " again; nothing was closed"}
+			return nil, &launchError{status: http.StatusConflict, code: "agent_working", message: "the agent is " + string(agent.Status) + "; nothing was closed"}
 		}
 		wsID = agent.WorkspaceID
 	}
