@@ -463,9 +463,11 @@ the app.
 - *Pi*: `comebye playbook --harness pi > ~/code/pi-config/agents/comebye-coordinator.md`
   (or wherever your agent definitions live) makes it a Pi agent
   definition. pi-config's permission gate has no allow list to add
-  `comebye` to. The Coordinator launch preset starts Pi with `--auto`
-  (automatic judging), so `comebye` calls are judged rather than each
-  waiting for you; `comebye presets pi` explains the other options.
+  `comebye` to. If your Pi has a permission gate with automatic judging
+  (pi-config's has `--auto`; stock Pi has no such flag), set
+  `COMEBYE_COORDINATOR_ARGS="pi=--auto"` so the Coordinator preset starts
+  with it and `comebye` calls are judged rather than each waiting for you;
+  `comebye presets pi` explains the other options.
 - *Anything else* (Codex, OpenCode, …): start it with
   "Run `comebye playbook` and follow it", and allow shell commands
   starting with `comebye` in its permission settings
@@ -575,6 +577,7 @@ to the home screen again.
 | `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL. The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers`. See [Coordinators](#coordinators). |
 | `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
+| `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
 | `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`. The CLI reads the token from here too. |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |

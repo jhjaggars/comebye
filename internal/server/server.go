@@ -89,6 +89,10 @@ type Config struct {
 	// agent (default the home directory). It need not lie in a launch
 	// root; only that preset may use it.
 	CoordinatorDir string
+	// CoordinatorArgs are extra arguments per agent kind that the
+	// Coordinator preset appends to the preset's own (e.g. pi: --auto,
+	// a flag only some Pi installs have).
+	CoordinatorArgs map[string][]string
 }
 
 // Server is the phone app HTTP server.

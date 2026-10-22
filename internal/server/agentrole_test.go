@@ -614,7 +614,10 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 	root, _ := launchTree(t)
 	coordDir, _ := filepath.EvalSymlinks(t.TempDir())
 	fh, client := startFakeLaunchHerdr(t)
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: t.TempDir()}, client, nil)
+	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: t.TempDir(),
+		// Per-install extras (here a permission gate's --auto) are appended
+		// to the preset's built-in pi arguments.
+		CoordinatorArgs: map[string][]string{"pi": {"--auto"}}}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" || name == "claude" || name == "codex" }
 
 	var o optionsBody
@@ -645,7 +648,8 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 		t.Fatal("role not recorded")
 	}
 
-	// Taken name: coordinator-2; pi gets pi-coordinator's arguments.
+	// Taken name: coordinator-2; pi gets pi-coordinator's arguments plus
+	// the configured extras.
 	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
 	w = do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"pi"}`)
 	st = fh.call("agent.start")

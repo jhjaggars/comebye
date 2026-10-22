@@ -62,7 +62,9 @@ func main() {
 		coordDir     = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
 		allowHosts   = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
 		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
+		coordArgs    = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
 	)
+	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
 	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
 	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
 	flag.Parse()
@@ -196,11 +198,12 @@ func main() {
 		// Workers' worktrees: <root>/<repo>/<branch>.
 		WorktreeRoot: expandHome(*worktreeRoot),
 		// The handoff ledger, briefing, roles and handoff-template.md.
-		StateDir:       expandHome(*stateDir),
-		NoLedger:       !*ledgerOn,
-		Upstream:       upstream,
-		AgentToken:     agentToken,
-		CoordinatorDir: expandHome(*coordDir),
+		StateDir:        expandHome(*stateDir),
+		NoLedger:        !*ledgerOn,
+		Upstream:        upstream,
+		AgentToken:      agentToken,
+		CoordinatorDir:  expandHome(*coordDir),
+		CoordinatorArgs: parseKindArgs(coordArgs),
 	}, client, manager)
 	go srv.RunLedger(context.Background())
 
@@ -227,6 +230,27 @@ func (h *hostList) String() string { return strings.Join(*h, ",") }
 func (h *hostList) Set(v string) error {
 	*h = append(*h, v)
 	return nil
+}
+
+// parseKindArgs turns -coordinator-args values (KIND=ARGS, repeatable or
+// ';'-separated) into extra arguments per agent kind. A malformed entry is
+// fatal: a silently dropped flag would start agents unexpectedly.
+func parseKindArgs(values hostList) map[string][]string {
+	out := map[string][]string{}
+	for _, v := range values {
+		for _, entry := range strings.Split(v, ";") {
+			if entry = strings.TrimSpace(entry); entry == "" {
+				continue
+			}
+			kind, args, ok := strings.Cut(entry, "=")
+			kind = strings.TrimSpace(kind)
+			if !ok || kind == "" {
+				log.Fatalf("-coordinator-args %q: want KIND=ARGS, e.g. pi=--auto", entry)
+			}
+			out[kind] = append(out[kind], strings.Fields(args)...)
+		}
+	}
+	return out
 }
 
 // launchRootList expands the -launch-root values (default ~/code); nil

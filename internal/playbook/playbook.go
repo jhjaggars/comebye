@@ -98,8 +98,9 @@ To stop being asked for each comebye call, pick one:
 
 1. Approve comebye calls as they come (the default; nothing to set up).
 
-2. Start the coordinator with automatic judging (pi --auto; Comebye's
-   Coordinator launch preset already does). The judge
+2. Start the coordinator with automatic judging (pi --auto, a flag of
+   pi-config's permission gate). For Comebye's Coordinator launch preset
+   set COMEBYE_COORDINATOR_ARGS="pi=--auto" (or -coordinator-args). The judge
    allows calls that serve what the user asked for; comebye only talks to
    the local Comebye server, which itself refuses everything but the
    coordinator's workflow.
@@ -160,10 +161,10 @@ func AgentArgs(kind, name string) []string {
 	case "pi":
 		// pi --help: --name, --no-skills, --no-context-files, --tools;
 		// mirrors pi-config's scripts/pi-coordinator (minus the herdr
-		// tools: the coordinator acts through comebye). --auto starts
-		// pi-config's permission gate in automatic judging, so comebye
-		// calls are judged instead of each waiting for the user.
-		return []string{"--name", name, "--no-skills", "--no-context-files", "--tools", "read,grep,find,ls,bash", "--auto"}
+		// tools: the coordinator acts through comebye). These are all
+		// built into pi; extension flags (e.g. a permission gate's) are
+		// per-install, added with -coordinator-args.
+		return []string{"--name", name, "--no-skills", "--no-context-files", "--tools", "read,grep,find,ls,bash"}
 	}
 	return nil
 }

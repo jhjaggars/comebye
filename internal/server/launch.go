@@ -504,7 +504,7 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	}
 	var args []string
 	if body.Coordinator {
-		args = playbook.AgentArgs(kind, name)
+		args = append(playbook.AgentArgs(kind, name), s.cfg.CoordinatorArgs[kind]...)
 		if strings.TrimSpace(body.Prompt) == "" {
 			body.Prompt = playbook.FirstPrompt(kind)
 		}
