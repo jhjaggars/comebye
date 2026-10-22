@@ -162,6 +162,10 @@ func (m *Manager) scheduleRefresh() {
 	})
 }
 
+// Refresh asks for an agent.list re-read soon (coalesced like events), for
+// when this server itself changed the agent set (a launch).
+func (m *Manager) Refresh() { m.scheduleRefresh() }
+
 // refresh re-reads agent.list, enriches agents with workspace worktree
 // info from the session snapshot, applies status transitions (with
 // notifications), and broadcasts the new list to SSE clients.

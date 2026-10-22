@@ -344,6 +344,106 @@ type waitParams struct {
 	TimeoutMs *int64   `json:"timeout_ms"`
 }
 
+// AgentKinds are the kinds agent.start accepts (herdr 0.9.5, protocol 22;
+// the schema types kind as a plain string, the CLI lists the values).
+var AgentKinds = []string{
+	"pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cline",
+	"omp", "mastracode", "opencode", "copilot", "kimi", "kiro", "droid",
+	"amp", "grok", "hermes", "kilo", "qodercli", "qwen", "letta", "maki", "muse",
+}
+
+// CreatedWorkspace is the part of workspace.create's answer the app uses.
+type CreatedWorkspace struct {
+	WorkspaceID string
+	Label       string
+	// RootPaneID is the new workspace's only pane (empty if herdr did not
+	// report one; ListPanes finds it then).
+	RootPaneID string
+}
+
+// CreateWorkspace opens a new workspace (one tab, one shell pane) in cwd.
+// With focus false the user's terminal stays where it is.
+func (c *Client) CreateWorkspace(ctx context.Context, cwd, label string, focus bool) (CreatedWorkspace, error) {
+	raw, err := c.Call(ctx, "workspace.create", struct {
+		CWD   string `json:"cwd"`
+		Label string `json:"label,omitempty"`
+		Focus bool   `json:"focus"`
+	}{CWD: cwd, Label: label, Focus: focus})
+	if err != nil {
+		return CreatedWorkspace{}, err
+	}
+	var res struct {
+		Workspace struct {
+			WorkspaceID string `json:"workspace_id"`
+			Label       string `json:"label"`
+		} `json:"workspace"`
+		RootPane struct {
+			PaneID string `json:"pane_id"`
+		} `json:"root_pane"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return CreatedWorkspace{}, fmt.Errorf("parse workspace.create: %w", err)
+	}
+	if res.Workspace.WorkspaceID == "" {
+		return CreatedWorkspace{}, errors.New("workspace.create returned no workspace")
+	}
+	return CreatedWorkspace{WorkspaceID: res.Workspace.WorkspaceID, Label: res.Workspace.Label, RootPaneID: res.RootPane.PaneID}, nil
+}
+
+// PaneInfo is the part of a pane.list entry the app uses.
+type PaneInfo struct {
+	PaneID      string `json:"pane_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Agent       string `json:"agent"`
+	CWD         string `json:"cwd"`
+}
+
+// ListPanes lists the panes of one workspace (all panes when workspaceID
+// is empty).
+func (c *Client) ListPanes(ctx context.Context, workspaceID string) ([]PaneInfo, error) {
+	params := struct {
+		WorkspaceID string `json:"workspace_id,omitempty"`
+	}{WorkspaceID: workspaceID}
+	raw, err := c.Call(ctx, "pane.list", params)
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Panes []PaneInfo `json:"panes"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("parse pane.list: %w", err)
+	}
+	return res.Panes, nil
+}
+
+// StartAgent starts a supported agent kind under name in paneID, which
+// must be at an interactive shell prompt. herdr answers once the agent is
+// detected and ready for input, or fails after timeoutMs (3001..300000;
+// 0 leaves herdr's default of 30s).
+func (c *Client) StartAgent(ctx context.Context, name, kind, paneID string, timeoutMs int64) (AgentInfo, error) {
+	params := struct {
+		Name      string `json:"name"`
+		Kind      string `json:"kind"`
+		PaneID    string `json:"pane_id"`
+		TimeoutMs *int64 `json:"timeout_ms,omitempty"`
+	}{Name: name, Kind: kind, PaneID: paneID}
+	if timeoutMs > 0 {
+		params.TimeoutMs = &timeoutMs
+	}
+	raw, err := c.Call(ctx, "agent.start", params)
+	if err != nil {
+		return AgentInfo{}, err
+	}
+	var res struct {
+		Agent AgentInfo `json:"agent"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return AgentInfo{}, fmt.Errorf("parse agent.start: %w", err)
+	}
+	return res.Agent, nil
+}
+
 // allowedKeys is the closed set of key names the phone app may send. This is
 // deliberate defense in depth: the web layer is a remote shell, so key input
 // is restricted to navigation/interrupt keys that make sense from a phone,

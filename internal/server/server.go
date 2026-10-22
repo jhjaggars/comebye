@@ -62,6 +62,10 @@ type Config struct {
 	// UploadDir is where images sent from the app are stored for agents
 	// to read. Empty disables uploads.
 	UploadDir string
+	// LaunchRoots are the directories (absolute, symlinks allowed) inside
+	// which the app may start new agents; ones that do not exist are
+	// ignored. Empty turns launching off.
+	LaunchRoots []string
 }
 
 // Server is the phone app HTTP server.
@@ -77,6 +81,9 @@ type Server struct {
 	version string
 	// streams counts open /api/events streams (see maxStreams).
 	streams atomic.Int32
+	// findExec reports whether an executable is installed (default
+	// installed; tests replace it).
+	findExec func(name string) bool
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -129,6 +136,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/answer", s.auth(s.onHost("answer", s.handleAnswer)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/image", s.auth(s.onHost("image", s.handleImage)))
+	s.mux.HandleFunc("GET /api/launch/options", s.auth(s.handleLaunchOptions))
+	s.mux.HandleFunc("GET /api/launch/dirs", s.auth(s.handleLaunchDirs))
+	s.mux.HandleFunc("POST /api/launch", s.auth(s.handleLaunch))
+	s.mux.HandleFunc("GET /api/hosts/{host}/launch/options", s.auth(s.onHostLaunch("launch-options", s.handleLaunchOptions)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/launch/dirs", s.auth(s.onHostLaunch("launch-dirs", s.handleLaunchDirs)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/launch", s.auth(s.onHostLaunch("launch", s.handleLaunch)))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	s.mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
 	s.mux.HandleFunc("POST /api/push/subscribe", s.auth(s.handlePushSubscribe))
@@ -582,6 +595,8 @@ func writeError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		case "pane_not_found", "agent_not_found":
 			status = http.StatusNotFound
+		case "agent_name_taken":
+			status = http.StatusConflict
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)

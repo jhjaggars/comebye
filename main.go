@@ -43,8 +43,11 @@ func main() {
 		hostName    = flag.String("host-name", envOr("COMEBYE_HOST_NAME", fleet.DefaultHostName()), "this host's name in agent IDs and URLs (lowercase DNS label)")
 		peersSpec   = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name defaults to the first DNS label)")
 		noAuth      = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
+		launchOn    = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
 		allowHosts  = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
+		launchRoots = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 	)
+	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
 	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
 	flag.Parse()
 	if *ntfyThottle > 0 {
@@ -154,7 +157,8 @@ func main() {
 		Presence:       presence,
 		Fleet:          fl,
 		// Images sent from the app, for agents on this host to read.
-		UploadDir: filepath.Join(expandHome(*stateDir), "uploads"),
+		UploadDir:   filepath.Join(expandHome(*stateDir), "uploads"),
+		LaunchRoots: launchRootList(*launchOn, launchRoots),
 	}, client, manager)
 
 	go func() {
@@ -170,8 +174,9 @@ func main() {
 	}
 }
 
-// hostList is the repeatable -allow-host flag; it starts with
-// COMEBYE_ALLOW_HOSTS and each value may be comma-separated.
+// hostList is a repeatable list flag (-allow-host, -launch-root); it
+// starts with its environment variable and each value may be
+// comma-separated.
 type hostList []string
 
 func (h *hostList) String() string { return strings.Join(*h, ",") }
@@ -179,6 +184,34 @@ func (h *hostList) String() string { return strings.Join(*h, ",") }
 func (h *hostList) Set(v string) error {
 	*h = append(*h, v)
 	return nil
+}
+
+// launchRootList expands the -launch-root values (default ~/code); nil
+// when launching is off.
+func launchRootList(on bool, roots hostList) []string {
+	if !on {
+		return nil
+	}
+	var out []string
+	for _, v := range roots {
+		for _, r := range strings.Split(v, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				out = append(out, filepath.Clean(expandHome(r)))
+			}
+		}
+	}
+	if len(out) == 0 {
+		out = []string{expandHome("~/code")}
+	}
+	var abs []string
+	for _, r := range out {
+		if filepath.IsAbs(r) {
+			abs = append(abs, r)
+		} else {
+			log.Printf("ignoring -launch-root %q: not an absolute path", r)
+		}
+	}
+	return abs
 }
 
 func splitLogins(s string) []string {

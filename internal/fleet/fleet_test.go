@@ -92,6 +92,16 @@ func (fp *fakePeer) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(path, "/output"):
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"text":"screen"}`)
+	case path == "/api/launch/options":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"enabled":true,"kinds":["pi"]}`)
+	case path == "/api/launch/dirs":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"path":%q,"entries":[]}`, r.URL.Query().Get("path"))
+	case path == "/api/launch":
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"code":"agent_name_taken","message":"an agent named x is already running"}`)
 	default:
 		w.WriteHeader(http.StatusTeapot)
 	}
@@ -436,6 +446,71 @@ func TestProxy(t *testing.T) {
 		if !strings.HasPrefix(r.path, "/api/agents/") {
 			t.Errorf("peer got a request outside /api/agents/: %s", r.path)
 		}
+	}
+}
+
+func TestProxyHost(t *testing.T) {
+	fp := newFakePeer(t)
+	opts := fastOpts(nil)
+	opts.MaxResponse = 8 << 20
+	f := New(nil, "desk", []Peer{{Name: "kube", URL: fp.url()}}, opts)
+	call := func(method, op, query, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/x?"+query, strings.NewReader(body))
+		r.Header.Set("Tailscale-User-Login", "phone@example.com")
+		r.Header.Set("Cookie", "secret=1")
+		r.Header.Set("Origin", "https://hub.ts.net")
+		w := httptest.NewRecorder()
+		f.ProxyHost(w, r, "kube", op)
+		return w
+	}
+	if w := call("GET", "launch-options", "path=/etc", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":true`) {
+		t.Fatalf("options = %d %s", w.Code, w.Body)
+	}
+	if o := fp.requestsTo("/launch/options"); len(o) != 1 || o[0].path != "/api/launch/options" || o[0].query != "" {
+		t.Fatalf("forwarded options = %+v", o)
+	}
+	// Only ?path= passes to the directory listing.
+	if w := call("GET", "launch-dirs", "path=/home/me/code&evil=1", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"/home/me/code"`) {
+		t.Fatalf("dirs = %d %s", w.Code, w.Body)
+	}
+	if d := fp.requestsTo("/launch/dirs"); len(d) != 1 || d[0].query != "path=%2Fhome%2Fme%2Fcode" {
+		t.Fatalf("forwarded dirs = %+v", d)
+	}
+	// The launch body is forwarded as is, without browser headers; the
+	// peer's error passes through.
+	body := `{"dir":"/home/me/code/x","kind":"pi","prompt":"` + strings.Repeat("p", 1<<20) + `"}`
+	if w := call("POST", "launch", "", body); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "agent_name_taken") {
+		t.Fatalf("launch = %d %s", w.Code, w.Body)
+	}
+	l := fp.requestsTo("/api/launch")
+	if len(l) != 1 || l[0].method != "POST" || l[0].body != body || l[0].header.Get("Content-Type") != "application/json" {
+		t.Fatalf("forwarded launch = %d requests", len(l))
+	}
+	for _, h := range []string{"Cookie", "Tailscale-User-Login", "Origin"} {
+		if l[0].header.Get(h) != "" {
+			t.Errorf("browser header %s was forwarded", h)
+		}
+	}
+	// Body cap, wrong methods, unknown ops and hosts are refused locally.
+	if w := call("POST", "launch", "", `{"prompt":"`+strings.Repeat("p", 2<<20)+`"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("oversized launch: %d", w.Code)
+	}
+	if w := call("GET", "launch", "", ""); w.Code != http.StatusNotFound {
+		t.Errorf("GET launch: %d", w.Code)
+	}
+	if w := call("POST", "launch-dirs", "", `{}`); w.Code != http.StatusNotFound {
+		t.Errorf("POST launch-dirs: %d", w.Code)
+	}
+	if w := call("GET", "output", "", ""); w.Code != http.StatusNotFound {
+		t.Errorf("per-agent op on the host proxy: %d", w.Code)
+	}
+	w := httptest.NewRecorder()
+	f.ProxyHost(w, httptest.NewRequest("GET", "/x", nil), "nope", "launch-options")
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "unknown_host") {
+		t.Errorf("unknown host: %d %s", w.Code, w.Body)
+	}
+	if n := len(fp.requestsTo("")); n != 3 {
+		t.Errorf("refused calls reached the peer: %d requests", n)
 	}
 }
 

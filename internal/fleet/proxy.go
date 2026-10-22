@@ -22,12 +22,14 @@ type proxyOp struct {
 	query   []string // query parameters passed through; all others dropped
 	maxBody int64    // request body cap for POSTs
 	timeout time.Duration
+	// bodyTimeout, when set, picks the timeout from the request body.
+	bodyTimeout func(body []byte) time.Duration
 }
 
 var proxyOps = map[string]proxyOp{
 	"output":     {method: http.MethodGet, query: []string{"lines", "source"}, timeout: 20 * time.Second},
 	"transcript": {method: http.MethodGet, query: []string{"limit", "skip", "from"}, timeout: 20 * time.Second},
-	"prompt":     {method: http.MethodPost, maxBody: 1 << 20, timeout: 30 * time.Second},
+	"prompt":     {method: http.MethodPost, maxBody: 1 << 20, bodyTimeout: promptTimeout},
 	"keys":       {method: http.MethodPost, maxBody: 64 << 10, timeout: 15 * time.Second},
 	"dialog":     {method: http.MethodGet, timeout: 20 * time.Second},
 	"answer":     {method: http.MethodPost, maxBody: 64 << 10, timeout: 20 * time.Second},
@@ -35,6 +37,19 @@ var proxyOps = map[string]proxyOp{
 	"image": {method: http.MethodPost, maxBody: 12 << 20, timeout: 60 * time.Second},
 	// subagent-transcript: /agents/{target}/subagents/{sub}/transcript.
 	"subagent-transcript": {method: http.MethodGet, query: []string{"limit", "skip", "from"}, timeout: 20 * time.Second},
+}
+
+// hostProxyOps are the per-host (not per-agent) calls the hub may forward,
+// all under /api/launch on the peer: launching an agent there.
+var hostProxyOps = map[string]struct {
+	proxyOp
+	path []string
+}{
+	"launch-options": {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "launch", "options"}},
+	"launch-dirs":    {proxyOp{method: http.MethodGet, query: []string{"path"}, timeout: 20 * time.Second}, []string{"api", "launch", "dirs"}},
+	// launch: a prompt of up to 1 MB plus the directory and name; the
+	// peer waits up to 90s for the agent to start.
+	"launch": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 100 * time.Second}, []string{"api", "launch"}},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be
@@ -53,10 +68,7 @@ func ValidTarget(target string) bool {
 
 // Proxy forwards one per-agent API call (op: output, transcript,
 // subagent-transcript, prompt, keys, dialog, answer or image) for target
-// to the peer named host and writes the peer's answer:
-// status code and JSON body pass through (e.g. 409 agent_blocked), only
-// the content type is kept from the peer's headers, and no browser header
-// is forwarded.
+// to the peer named host and writes the peer's answer (see forward).
 func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op string) {
 	p := f.byName[host]
 	if p == nil {
@@ -82,6 +94,31 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 		}
 		u = p.endpoint("api", "agents", target, "subagents", sub, "transcript")
 	}
+	f.forward(w, r, p, u, spec)
+}
+
+// ProxyHost forwards one per-host API call (op: launch-options,
+// launch-dirs or launch) to the peer named host, hardened like Proxy.
+func (f *Fleet) ProxyHost(w http.ResponseWriter, r *http.Request, host, op string) {
+	p := f.byName[host]
+	if p == nil {
+		writeJSON(w, http.StatusNotFound, "unknown_host", "no such host: "+host)
+		return
+	}
+	spec, ok := hostProxyOps[op]
+	if !ok || r.Method != spec.method {
+		writeJSON(w, http.StatusNotFound, "not_found", "not a proxied operation")
+		return
+	}
+	f.forward(w, r, p, p.endpoint(spec.path...), spec.proxyOp)
+}
+
+// forward makes the call described by spec to u on peer p and writes the
+// peer's answer: status code and JSON body pass through (e.g. 409
+// agent_blocked), only the content type and cache validator are kept from
+// the peer's headers, and no browser header is forwarded.
+func (f *Fleet) forward(w http.ResponseWriter, r *http.Request, p *peer, u *url.URL, spec proxyOp) {
+	host := p.name
 	q := url.Values{}
 	for _, k := range spec.query {
 		if v := r.URL.Query().Get(k); v != "" {
@@ -98,8 +135,8 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		if op == "prompt" {
-			timeout = promptTimeout(b)
+		if spec.bodyTimeout != nil {
+			timeout = spec.bodyTimeout(b)
 		}
 		body = bytes.NewReader(b)
 	}
