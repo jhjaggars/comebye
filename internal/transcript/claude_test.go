@@ -434,3 +434,26 @@ func TestClaudeConcurrentReads(t *testing.T) {
 		t.Fatalf("final %+v err %v", tr, err)
 	}
 }
+
+// A prompt sent while Claude was working is recorded as a queued_command
+// attachment when Claude takes it up; it must show as a user message.
+// Claude's own queued notifications and agent hand-backs must not.
+func TestClaudeQueuedPrompt(t *testing.T) {
+	path := writeSession(t, cMode, cUser, cTool,
+		`{"type":"attachment","isSidechain":false,"attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also check the README","humanTurn":true},"uuid":"q1","timestamp":"2026-10-20T10:00:02Z"}`,
+		`{"type":"attachment","isSidechain":false,"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>x</task-id>\n</task-notification>"},"uuid":"q2","timestamp":"t"}`,
+		`{"type":"attachment","isSidechain":false,"attachment":{"type":"queued_command","commandMode":"prompt","isMeta":true,"prompt":"<agent-message from=\"a1\">report</agent-message>"},"uuid":"q3","timestamp":"t"}`,
+		`{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","commandMode":"prompt","prompt":"subagent input"},"uuid":"q4","timestamp":"t"}`,
+		cResult, cFinal)
+	tr, err := Read(path, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range tr.Messages {
+		got = append(got, m.Kind+":"+m.Text)
+	}
+	if len(tr.Messages) != 4 || tr.Messages[2].Kind != "user" || tr.Messages[2].Text != "also check the README" || tr.Messages[2].ID != "q1" {
+		t.Fatalf("messages = %q", got)
+	}
+}

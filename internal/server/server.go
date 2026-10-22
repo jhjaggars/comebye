@@ -48,6 +48,9 @@ type Config struct {
 	// PingInterval is the SSE heartbeat interval (default 15s). Hubs use
 	// the pings to tell that a peer is alive.
 	PingInterval time.Duration
+	// UploadDir is where images sent from the app are stored for agents
+	// to read. Empty disables uploads.
+	UploadDir string
 }
 
 // Server is the phone app HTTP server.
@@ -96,6 +99,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
 	s.mux.HandleFunc("POST /api/agents/{target}/answer", s.auth(s.handleAnswer))
+	s.mux.HandleFunc("POST /api/agents/{target}/image", s.auth(s.handleImage))
 	// Host-qualified routes: the local host is served directly, a peer's
 	// agents are proxied to that peer (hub only).
 	s.mux.HandleFunc("GET /api/hosts", s.auth(s.handleHosts))
@@ -105,6 +109,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/keys", s.auth(s.onHost("keys", s.handleKeys)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/answer", s.auth(s.onHost("answer", s.handleAnswer)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/image", s.auth(s.onHost("image", s.handleImage)))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	s.mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
 	s.mux.HandleFunc("POST /api/push/subscribe", s.auth(s.handlePushSubscribe))

@@ -543,7 +543,7 @@ async function loadChat(reset = true) {
   if (!state.selected) return;
   const pane = state.selected;
   if (reset) {
-    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false };
+    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [] };
     $("chat").innerHTML = "";
   }
   const chat = state.chat;
@@ -578,6 +578,7 @@ function renderTranscript(t, reset) {
   chat.more = t.more;
   state.ask = t.ask || null;
   updateAnswerCard();
+  updateSendButton(); // an open question turns Stop back into Send
 
   // "Load earlier" affordance sits at the top of the transcript.
   let earlier = chatEl.querySelector(".load-earlier");
@@ -604,7 +605,9 @@ function renderTranscript(t, reset) {
     chat.rendered.add(m.id);
     chatEl.appendChild(renderMessage(m));
     appended = true;
+    if (m.kind === "user") settlePending(m.text);
   }
+  renderPending();
 
   // While the agent is working, show a typing indicator at the bottom.
   const a = agentById(state.selected);
@@ -646,6 +649,61 @@ function patchToolCard(m) {
   if (meta) meta.textContent = m.ms ? fmtMs(m.ms) : "ran";
   const body = el.querySelector(".toolresult");
   if (body && !body.textContent && m.result) body.textContent = m.result;
+}
+
+/* ---------- sent-but-not-yet-seen prompts ---------- */
+//
+// A prompt sent while the agent works is queued by the agent and reaches
+// the transcript only when it is taken up (Claude: at the next step; Pi:
+// as a steering message). Until then it is shown as a "queued" bubble, so
+// it never looks lost; it settles when a user message with the same text
+// appears.
+
+const normText = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+function addPending(text) {
+  if (!state.chat || state.chat.terminal) return null;
+  const p = { text, at: Date.now() };
+  state.chat.pending.push(p);
+  renderPending();
+  const c = $("chat");
+  c.scrollTop = c.scrollHeight;
+  return p;
+}
+
+function dropPending(p) {
+  if (!state.chat || !p) return;
+  state.chat.pending = state.chat.pending.filter((x) => x !== p);
+  renderPending();
+}
+
+function settlePending(text) {
+  const chat = state.chat;
+  if (!chat || !chat.pending.length) return;
+  const t = normText(text);
+  const i = chat.pending.findIndex((p) => normText(p.text) === t);
+  if (i >= 0) chat.pending.splice(i, 1);
+}
+
+function renderPending() {
+  const chatEl = $("chat");
+  chatEl.querySelectorAll(".msg.pending").forEach((el) => el.remove());
+  const chat = state.chat;
+  if (!chat || chat.terminal) return;
+  const a = agentById(state.selected);
+  const working = a && (a.agent_status === "working" || a.agent_status === "blocked");
+  // Once the agent is idle, anything still unmatched after a minute was
+  // rendered differently (a slash command, say) or not recorded: drop it.
+  if (!working) chat.pending = chat.pending.filter((p) => Date.now() - p.at < 60000);
+  // Keep them above the typing indicator and the jump button.
+  const before = chatEl.querySelector(".spinner") || chatEl.querySelector(".jump-anchor");
+  for (const p of chat.pending) {
+    const div = document.createElement("div");
+    div.className = "msg user pending";
+    div.innerHTML = `<div class="bubble">${esc(p.text)}</div>` +
+      `<div class="msgtime">${working ? "queued — the agent picks it up at its next step" : "sent"}</div>`;
+    chatEl.insertBefore(div, before);
+  }
 }
 
 function renderMessage(m) {
@@ -1086,7 +1144,7 @@ function stopAnswerPoll() {
 function stopMode() {
   const a = agentById(state.selected);
   return !!a && a.agent_status === "working" && !state.ask && !state.sending &&
-    !$("prompt-text").value.trim();
+    !promptValue().trim();
 }
 
 function updateSendButton() {
@@ -1098,7 +1156,7 @@ function updateSendButton() {
 }
 
 async function sendPrompt() {
-  const text = $("prompt-text").value.trim();
+  const text = promptValue().trim();
   if (!text || state.sending) return;
   if (state.ask) {
     // herdr only refuses prompts while `blocked`; an open questionnaire
@@ -1108,16 +1166,20 @@ async function sendPrompt() {
   }
   state.sending = true;
   $("btn-send").disabled = true;
+  // Shown before the POST returns: a fast transcript poll may already
+  // carry the message, and settling needs the bubble to exist.
+  const pending = addPending(text);
   try {
     await api(`${pathFor(state.selected)}/prompt`, {
       method: "POST",
       body: JSON.stringify({ text }),
     });
-    $("prompt-text").value = "";
+    setPromptValue("");
     // Echo the sent prompt locally; the transcript poll will pick it up too.
     if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
     else setTimeout(refreshOutput, 600);
   } catch (e) {
+    dropPending(pending);
     if (e.status === 409) {
       toast("agent is waiting for input — answer the dialog or press Esc first", true);
     } else {
@@ -1128,6 +1190,199 @@ async function sendPrompt() {
     $("btn-send").disabled = false;
     updateSendButton();
   }
+}
+
+/* ---------- images ---------- */
+//
+// A pasted or picked image is uploaded to the agent's host, which returns
+// a file path; the path goes into the prompt, and Claude Code and Pi read
+// the image from it. Large images are downscaled first.
+
+const IMAGE_MAX_SIDE = 2000;
+const IMAGE_KEEP_BYTES = 2 << 20; // smaller images are sent as they are
+
+async function imageDataURL(file) {
+  let blob = file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, IMAGE_MAX_SIDE / Math.max(bmp.width, bmp.height));
+    if (scale < 1 || file.size > IMAGE_KEEP_BYTES || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
+      const c = document.createElement("canvas");
+      c.width = Math.round(bmp.width * scale);
+      c.height = Math.round(bmp.height * scale);
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.9)) || file;
+    }
+    bmp.close && bmp.close();
+  } catch {} // undecodable here: let the server judge the original
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = () => rej(r.error || new Error("could not read image"));
+    r.readAsDataURL(blob);
+  });
+}
+
+/* ---------- composer ---------- */
+//
+// The prompt box is a contenteditable <div>: iOS offers Paste for an
+// image-only clipboard (a screenshot) only on rich editors, never on a
+// <textarea>. Its content is kept plain text: pastes and drops insert
+// text only, and images become uploads.
+
+function promptValue() {
+  // innerText maps <div>/<br> line breaks to "\n"; NBSPs from editing
+  // become plain spaces.
+  return $("prompt-text").innerText.replace(/\u00a0/g, " ").replace(/\n$/, "");
+}
+
+function setPromptValue(s) {
+  $("prompt-text").textContent = s;
+  updateSendButton();
+}
+
+// selectionInComposer reports whether the caret is in the composer.
+function selectionInComposer() {
+  const sel = window.getSelection();
+  return !!sel && sel.rangeCount > 0 && $("prompt-text").contains(sel.anchorNode);
+}
+
+// insertPlain inserts text at the caret (as typing would, so undo works),
+// or appends it when the caret is elsewhere.
+function insertPlain(text) {
+  const el = $("prompt-text");
+  if (!selectionInComposer()) {
+    el.focus();
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  if (!document.execCommand("insertText", false, text)) {
+    const sel = window.getSelection();
+    const r = sel.getRangeAt(0);
+    r.deleteContents();
+    const node = document.createTextNode(text);
+    r.insertNode(node);
+    r.setStartAfter(node);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  normalizeComposer();
+  updateSendButton();
+}
+
+// normalizeComposer keeps the composer plain: no stray markup (an image
+// a browser inserted on its own), and truly empty when blank so the
+// placeholder shows.
+function normalizeComposer() {
+  const el = $("prompt-text");
+  if (el.querySelector("img, picture, video, iframe, object, embed, svg, a, table")) {
+    el.textContent = promptValue();
+  }
+  if (!el.textContent && el.innerHTML) el.innerHTML = "";
+}
+
+// textBeforeCaret is the composer text up to the caret (all of it when
+// the caret is elsewhere, since insertPlain then appends).
+function textBeforeCaret() {
+  if (!selectionInComposer()) return promptValue();
+  const el = $("prompt-text");
+  const at = window.getSelection().getRangeAt(0);
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.setEnd(at.startContainer, at.startOffset);
+  return r.toString();
+}
+
+// insertPromptText inserts a word (an image path) with spaces around it.
+function insertPromptText(text) {
+  const before = textBeforeCaret();
+  insertPlain((before && !/\s$/.test(before) ? " " : "") + text + " ");
+}
+
+// imageFiles collects image files from a paste/drop DataTransfer.
+function imageFiles(dt) {
+  if (!dt) return [];
+  const files = [...(dt.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (!files.length) {
+    for (const it of dt.items || []) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+  }
+  return files;
+}
+
+function onComposerPaste(ev) {
+  ev.preventDefault(); // never let rich content in
+  const images = imageFiles(ev.clipboardData);
+  if (images.length) { attachImages(images); return; }
+  const text = ev.clipboardData ? ev.clipboardData.getData("text/plain") : "";
+  if (text) insertPlain(text);
+}
+
+function onComposerDrop(ev) {
+  ev.preventDefault();
+  const images = imageFiles(ev.dataTransfer);
+  if (images.length) { attachImages(images); return; }
+  const text = ev.dataTransfer ? ev.dataTransfer.getData("text/plain") : "";
+  if (text) insertPlain(text);
+}
+
+// The + menu: "Paste image" reads the clipboard (iOS then shows its own
+// Paste bubble), "Choose photo…" opens the picker. Both run straight from
+// a tap, which both APIs require.
+function toggleAttachMenu(show) {
+  const m = $("attach-menu");
+  m.hidden = show === undefined ? !m.hidden : !show;
+  $("btn-attach").setAttribute("aria-expanded", String(!m.hidden));
+}
+
+function pasteImageFromClipboard() {
+  toggleAttachMenu(false);
+  if (!navigator.clipboard || !navigator.clipboard.read) {
+    toast("this browser cannot read images from the clipboard — use Choose photo", true);
+    return;
+  }
+  navigator.clipboard.read().then(async (items) => {
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith("image/"));
+      if (type) {
+        const blob = await item.getType(type);
+        await attachImages([new File([blob], "pasted." + type.split("/")[1], { type })]);
+        return;
+      }
+    }
+    toast("no image on the clipboard", true);
+  }).catch((e) => {
+    if (e && e.name === "NotAllowedError") return; // the Paste bubble was dismissed
+    toast("could not read the clipboard: " + (e && e.message || e), true);
+  });
+}
+
+async function attachImages(files) {
+  const images = [...files].filter((f) => f && f.type && f.type.startsWith("image/"));
+  if (!images.length || !state.selected) return false;
+  const pane = state.selected;
+  for (const f of images) {
+    toast("uploading image…");
+    try {
+      const data = await imageDataURL(f);
+      const r = await api(`${pathFor(pane)}/image`, { method: "POST", body: JSON.stringify({ data }) });
+      if (state.selected !== pane) return true;
+      insertPromptText(r.path);
+      toast("image attached");
+    } catch (e) {
+      toast("image upload failed: " + e.message, true);
+    }
+  }
+  return true;
 }
 
 async function sendKeys(keys, label) {
@@ -1509,7 +1764,7 @@ function noteVersion(v) {
 
 // busy: the user is reading an agent or something would be lost.
 function busy() {
-  return !!state.selected || state.sending || answer.inflight || !!$("prompt-text").value.trim();
+  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim();
 }
 
 function maybeReload() {
@@ -1584,9 +1839,21 @@ window.addEventListener("DOMContentLoaded", () => {
     if (stopMode()) sendKeys(["esc"], "Stop");
     else sendPrompt();
   });
-  $("prompt-text").addEventListener("input", updateSendButton);
+  $("prompt-text").addEventListener("input", () => { normalizeComposer(); updateSendButton(); });
+  $("prompt-text").addEventListener("paste", onComposerPaste);
+  $("prompt-text").addEventListener("drop", onComposerDrop);
+  $("btn-attach").addEventListener("click", (ev) => { ev.stopPropagation(); toggleAttachMenu(); });
+  $("attach-paste").addEventListener("click", pasteImageFromClipboard);
+  $("attach-pick").addEventListener("click", () => { toggleAttachMenu(false); $("attach-file").click(); });
+  document.addEventListener("click", (ev) => {
+    if (!$("attach-menu").hidden && !$("attach-menu").contains(ev.target)) toggleAttachMenu(false);
+  });
+  $("attach-file").addEventListener("change", (ev) => {
+    attachImages(ev.target.files);
+    ev.target.value = ""; // picking the same file again still fires change
+  });
   $("prompt-text").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); sendPrompt(); }
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); sendPrompt(); }
   });
 
   // The service worker makes the app installable and receives Web Push.

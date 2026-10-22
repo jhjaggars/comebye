@@ -406,13 +406,29 @@
     .btn.warn { color: var(--orange); }
     .btn.danger { color: var(--red); }
     .btn:disabled { opacity: 0.5; }
-    .prompt { display: flex; gap: 8px; }
-    .prompt textarea {
-      flex: 1; resize: none; min-height: 44px; max-height: 160px;
+    .prompt { display: flex; gap: 8px; align-items: flex-end; position: relative; }
+    .prompt .composer {
+      flex: 1; min-width: 0; min-height: 44px; max-height: 160px; overflow-y: auto;
       background: var(--panel2); color: var(--text);
       border: 1px solid var(--border); border-radius: 12px;
       padding: 11px 12px; font: inherit; font-size: 16px; line-height: 1.4;
+      white-space: pre-wrap; overflow-wrap: anywhere; outline: none;
+      -webkit-user-select: text; user-select: text;
     }
+    .prompt .composer:focus { border-color: var(--blue); }
+    .prompt .composer:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
+    .attach-menu {
+      position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5;
+      display: flex; flex-direction: column; min-width: 180px; overflow: hidden;
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    }
+    .attach-menu[hidden] { display: none; }
+    .attach-menu button {
+      min-height: 44px; padding: 0 14px; text-align: left; background: none; border: none;
+      color: var(--text); font: inherit; font-size: 15px; cursor: pointer;
+    }
+    .attach-menu button + button { border-top: 1px solid var(--border); }
     .prompt .send {
       flex: none; width: 64px; min-height: 44px; border-radius: 12px; border: none;
       background: var(--blue); color: #0b0d11; font-weight: 700; font-size: 15px;
@@ -420,6 +436,12 @@
     }
     .prompt .send:disabled { opacity: 0.5; }
     .prompt .send.stop { background: var(--red); color: #fff; }
+    .prompt .attach {
+      flex: none; width: 44px; min-height: 44px; border-radius: 12px;
+      border: 1px solid var(--border); background: var(--panel2); color: var(--text);
+      font-size: 22px; font-weight: 600; line-height: 1; cursor: pointer;
+    }
+    .msg.pending { opacity: 0.6; }
     #toast {
       position: fixed; left: 50%; bottom: calc(24px + var(--safe-bottom));
       transform: translateX(-50%);
@@ -484,7 +506,14 @@
         <button class="btn danger" id="btn-ctrlc">Ctrl+C</button>
       </div>
       <div class="prompt">
-        <textarea id="prompt-text" placeholder="Send a prompt…" enterkeyhint="send" rows="1" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true"></textarea>
+        <button class="attach" id="btn-attach" type="button" aria-label="Attach an image">+</button>
+        <input type="file" id="attach-file" accept="image/*" multiple hidden>
+        <div id="attach-menu" class="attach-menu" hidden>
+          <button type="button" id="attach-paste">Paste image</button>
+          <button type="button" id="attach-pick">Choose photo…</button>
+        </div>
+        <!-- A rich contenteditable, not a textarea: iOS only offers Paste for an image-only clipboard on rich editors. Its content is kept plain text. -->
+        <div id="prompt-text" class="composer" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Prompt" data-placeholder="Send a prompt…" enterkeyhint="send" autocapitalize="sentences" autocorrect="on" spellcheck="true"></div>
         <button class="send" id="btn-send">Send</button>
       </div>
     </main>

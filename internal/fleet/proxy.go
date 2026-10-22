@@ -29,6 +29,8 @@ var proxyOps = map[string]proxyOp{
 	"keys":       {method: http.MethodPost, maxBody: 64 << 10, timeout: 15 * time.Second},
 	"dialog":     {method: http.MethodGet, timeout: 20 * time.Second},
 	"answer":     {method: http.MethodPost, maxBody: 64 << 10, timeout: 20 * time.Second},
+	// image: an 8 MB image as base64 JSON, stored on the agent's host.
+	"image": {method: http.MethodPost, maxBody: 12 << 20, timeout: 60 * time.Second},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be
@@ -46,7 +48,7 @@ func ValidTarget(target string) bool {
 }
 
 // Proxy forwards one per-agent API call (op: output, transcript, prompt,
-// keys, dialog or answer) for target to the peer named host and writes the peer's answer:
+// keys, dialog, answer or image) for target to the peer named host and writes the peer's answer:
 // status code and JSON body pass through (e.g. 409 agent_blocked), only
 // the content type is kept from the peer's headers, and no browser header
 // is forwarded.

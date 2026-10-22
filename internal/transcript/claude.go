@@ -14,8 +14,14 @@ package transcript
 // tool_use), all sharing message.id. Tool results arrive as user records
 // whose content is [{type:"tool_result",tool_use_id,content,is_error}].
 // User records flagged isMeta (injected context, command caveats) and
-// sidechain records are not part of the visible conversation. Everything
-// else (attachment, file-history-snapshot, mode, ai-title, cost-state,
+// sidechain records are not part of the visible conversation. A prompt
+// sent while Claude is working arrives as
+//
+//	{"type":"attachment","attachment":{"type":"queued_command",
+//	 "commandMode":"prompt","prompt":"text"}}
+//
+// when Claude takes it up mid-turn, and is shown as a user message. Everything
+// else (other attachments, file-history-snapshot, mode, ai-title, cost-state,
 // queue-operation, api-request*, summary, ...) is bookkeeping and skipped.
 //
 // Records form a parentUuid tree. Parallel tool results and rewinds create
@@ -54,6 +60,19 @@ type claudeRecord struct {
 	IsCompactSummary bool            `json:"isCompactSummary"`
 	Content          json.RawMessage `json:"content"` // system records
 	Message          *claudeMessage  `json:"message"`
+	Attachment       *claudeAttach   `json:"attachment"`
+}
+
+// claudeAttach is an attachment record's payload. The one that matters is
+// queued_command: a prompt typed (or sent through herdr) while Claude was
+// working, recorded when Claude takes it up mid-turn instead of as a user
+// record. commandMode "prompt" is the user's text; "task-notification"
+// and agent hand-backs (isMeta) are Claude's own bookkeeping.
+type claudeAttach struct {
+	Type        string          `json:"type"`
+	CommandMode string          `json:"commandMode"`
+	Prompt      json.RawMessage `json:"prompt"` // string or [blocks]
+	IsMeta      bool            `json:"isMeta"`
 }
 
 type claudeMessage struct {
@@ -163,6 +182,21 @@ func (p *claudeParser) feed(line []byte) {
 		}
 	case "system":
 		p.system(&r)
+	case "attachment":
+		if a := r.Attachment; a != nil && a.Type == "queued_command" && a.CommandMode == "prompt" && !a.IsMeta && !r.IsMeta {
+			p.queued(&r)
+		}
+	}
+}
+
+// queued renders a prompt queued mid-turn as a user message.
+func (p *claudeParser) queued(r *claudeRecord) {
+	blocks, s, isStr := decodeClaudeBlocks(r.Attachment.Prompt)
+	if !isStr {
+		s = claudeText(blocks)
+	}
+	if strings.TrimSpace(s) != "" {
+		p.userText(r, s)
 	}
 }
 

@@ -139,6 +139,8 @@ func main() {
 		Push:        pushSvc,
 		Presence:    presence,
 		Fleet:       fl,
+		// Images sent from the app, for agents on this host to read.
+		UploadDir: filepath.Join(expandHome(*stateDir), "uploads"),
 	}, client, manager)
 
 	go func() {
