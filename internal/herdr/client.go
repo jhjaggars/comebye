@@ -417,6 +417,156 @@ func (c *Client) ListPanes(ctx context.Context, workspaceID string) ([]PaneInfo,
 	return res.Panes, nil
 }
 
+// ClosePane closes one pane (pane.close). A workspace's last pane closing
+// closes the workspace too.
+func (c *Client) ClosePane(ctx context.Context, paneID string) error {
+	_, err := c.Call(ctx, "pane.close", struct {
+		PaneID string `json:"pane_id"`
+	}{PaneID: paneID})
+	return err
+}
+
+// Workspace is the part of a workspace.list entry the app uses.
+type Workspace struct {
+	WorkspaceID string             `json:"workspace_id"`
+	Label       string             `json:"label"`
+	PaneCount   int                `json:"pane_count"`
+	Worktree    *WorkspaceWorktree `json:"worktree"`
+}
+
+// WorkspaceWorktree is the checkout hosting a workspace (null for a
+// workspace outside any git repository).
+type WorkspaceWorktree struct {
+	RepoName     string `json:"repo_name"`
+	RepoRoot     string `json:"repo_root"`
+	CheckoutPath string `json:"checkout_path"`
+	IsLinked     bool   `json:"is_linked_worktree"`
+}
+
+// ListWorkspaces lists every workspace (workspace.list).
+func (c *Client) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	raw, err := c.Call(ctx, "workspace.list", nil)
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Workspaces []Workspace `json:"workspaces"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("parse workspace.list: %w", err)
+	}
+	return res.Workspaces, nil
+}
+
+// CloseWorkspace closes one workspace (workspace.close), never its group:
+// a repository's primary workspace keeps its nested worktree workspaces.
+func (c *Client) CloseWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := c.Call(ctx, "workspace.close", struct {
+		WorkspaceID string `json:"workspace_id"`
+		CloseGroup  bool   `json:"close_group"`
+	}{WorkspaceID: workspaceID})
+	return err
+}
+
+// Worktree is one entry of worktree.list.
+type Worktree struct {
+	Path            string `json:"path"`
+	Branch          string `json:"branch"`
+	Label           string `json:"label"`
+	IsLinked        bool   `json:"is_linked_worktree"`
+	IsBare          bool   `json:"is_bare"`
+	IsDetached      bool   `json:"is_detached"`
+	IsPrunable      bool   `json:"is_prunable"`
+	OpenWorkspaceID string `json:"open_workspace_id"`
+}
+
+// ListWorktrees lists the worktrees of the repository containing cwd
+// (worktree.list).
+func (c *Client) ListWorktrees(ctx context.Context, cwd string) ([]Worktree, error) {
+	raw, err := c.Call(ctx, "worktree.list", struct {
+		CWD string `json:"cwd"`
+	}{CWD: cwd})
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Worktrees []Worktree `json:"worktrees"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("parse worktree.list: %w", err)
+	}
+	return res.Worktrees, nil
+}
+
+// WorktreeRequest is a worktree.create or worktree.open request. CWD is
+// inside the repository; herdr nests the new workspace under the
+// repository's primary workspace.
+type WorktreeRequest struct {
+	CWD    string `json:"cwd"`
+	Branch string `json:"branch,omitempty"`
+	Base   string `json:"base,omitempty"` // create only: start point of a new branch
+	Path   string `json:"path,omitempty"`
+	Label  string `json:"label,omitempty"`
+	Focus  bool   `json:"focus"`
+}
+
+// OpenedWorktree is the part of worktree.create's or worktree.open's
+// answer the app uses.
+type OpenedWorktree struct {
+	WorkspaceID string
+	Label       string
+	RootPaneID  string
+	Path        string
+	Branch      string
+	// AlreadyOpen: worktree.open found the worktree's workspace open.
+	AlreadyOpen bool
+}
+
+// CreateWorktree creates a git worktree and opens it as a workspace
+// (worktree.create); the branch is created from Base when it does not
+// exist yet.
+func (c *Client) CreateWorktree(ctx context.Context, req WorktreeRequest) (OpenedWorktree, error) {
+	return c.worktreeCall(ctx, "worktree.create", req)
+}
+
+// OpenWorktree opens an existing worktree's workspace, or finds it open
+// (worktree.open). Base is ignored.
+func (c *Client) OpenWorktree(ctx context.Context, req WorktreeRequest) (OpenedWorktree, error) {
+	req.Base = ""
+	return c.worktreeCall(ctx, "worktree.open", req)
+}
+
+func (c *Client) worktreeCall(ctx context.Context, method string, req WorktreeRequest) (OpenedWorktree, error) {
+	raw, err := c.Call(ctx, method, req)
+	if err != nil {
+		return OpenedWorktree{}, err
+	}
+	var res struct {
+		Workspace struct {
+			WorkspaceID string `json:"workspace_id"`
+			Label       string `json:"label"`
+		} `json:"workspace"`
+		RootPane struct {
+			PaneID string `json:"pane_id"`
+		} `json:"root_pane"`
+		Worktree struct {
+			Path   string `json:"path"`
+			Branch string `json:"branch"`
+		} `json:"worktree"`
+		AlreadyOpen bool `json:"already_open"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return OpenedWorktree{}, fmt.Errorf("parse %s: %w", method, err)
+	}
+	if res.Workspace.WorkspaceID == "" {
+		return OpenedWorktree{}, fmt.Errorf("%s returned no workspace", method)
+	}
+	return OpenedWorktree{
+		WorkspaceID: res.Workspace.WorkspaceID, Label: res.Workspace.Label, RootPaneID: res.RootPane.PaneID,
+		Path: res.Worktree.Path, Branch: res.Worktree.Branch, AlreadyOpen: res.AlreadyOpen,
+	}, nil
+}
+
 // StartAgent starts a supported agent kind under name in paneID, which
 // must be at an interactive shell prompt. herdr answers once the agent is
 // detected and ready for input, or fails after timeoutMs (3001..300000;
