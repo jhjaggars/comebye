@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+// testHosts admits httptest.NewRequest's default Host (example.com) for
+// tests that go through Handler's Host check.
+var testHosts = []string{"example.com"}
+
 func newTest(allow ...string) *Server {
 	return New(Config{AllowLogins: allow, ReadLines: 100}, nil, nil)
 }
@@ -152,7 +156,7 @@ func TestAllowlistRequiresLoopback(t *testing.T) {
 }
 
 func TestCSRFProtection(t *testing.T) {
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100}, nil, nil)
+	s := New(Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, ReadLines: 100}, nil, nil)
 	h := s.Handler()
 	post := func(hdr map[string]string) int {
 		r := httptest.NewRequest("POST", "/api/agents/x/keys", strings.NewReader(`{"keys":[]}`))

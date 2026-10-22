@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"net/http"
 	"strings"
 )
@@ -26,7 +27,7 @@ func (s *Server) tailscaleAllowed(r *http.Request) bool {
 
 // authorized reports whether the request is allowed. With an allowlist
 // configured only an allowlisted Tailscale identity is admitted; without one
-// the API is open (ListenAndServe logs a warning).
+// (only served with InsecureNoAuth, see ListenAndServe) the API is open.
 func (s *Server) authorized(r *http.Request) bool {
 	if len(s.cfg.AllowLogins) == 0 {
 		return true
@@ -36,13 +37,80 @@ func (s *Server) authorized(r *http.Request) bool {
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
 		// Every API response (proxied peer calls included) carries this
 		// instance's app version, so a stale page notices a deploy.
-		w.Header().Set("X-App-Version", s.version)
+		h.Set("X-App-Version", s.version)
+		// API responses are never sniffed or stored. A handler that wants
+		// revalidation instead (transcripts, with an ETag) overrides
+		// Cache-Control.
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "no-store")
 		if !s.authorized(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
 	}
+}
+
+// normalizeHost lowercases a host name and drops any port, IPv6 brackets
+// and trailing dot.
+func normalizeHost(host string) string {
+	host = strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+}
+
+// hostAllowed reports whether a request was addressed to a name this server
+// answers to. Tailscale Serve forwards the browser's Host (the machine's
+// <name>.<tailnet>.ts.net); local tools use localhost or a loopback IP.
+// Anything else is a DNS rebinding attempt: a page on an attacker's domain
+// that re-resolves it to 127.0.0.1 reaches the loopback port as same-origin,
+// and since any local client may set Tailscale-User-Login it could drive
+// the agents. Nobody but Tailscale can point a ts.net name at this host.
+func (s *Server) hostAllowed(r *http.Request) bool {
+	host := normalizeHost(r.Host)
+	switch {
+	case host == "":
+		return false
+	case host == "localhost" || host == "127.0.0.1" || host == "::1":
+		return true
+	case strings.HasSuffix(host, ".ts.net"):
+		return true
+	}
+	for _, h := range s.cfg.AllowHosts {
+		if host == h {
+			return true
+		}
+	}
+	return false
+}
+
+// checkHost answers 421 Misdirected Request when the Host is not one of
+// ours (see hostAllowed), for the UI and the API alike.
+func (s *Server) checkHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.hostAllowed(r) {
+			http.Error(w, "misdirected request: unknown host (see -allow-host)", http.StatusMisdirectedRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SplitHosts parses -allow-host values: each may hold several
+// comma-separated names; ports are dropped and names lowercased.
+func SplitHosts(specs ...string) []string {
+	var out []string
+	for _, spec := range specs {
+		for _, h := range strings.Split(spec, ",") {
+			if h = normalizeHost(h); h != "" {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
 }

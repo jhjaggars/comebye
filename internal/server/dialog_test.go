@@ -247,7 +247,7 @@ func TestAnswerValidation(t *testing.T) {
 }
 
 func TestAnswerRequiresJSONAndSameOrigin(t *testing.T) {
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100}, nil, nil)
+	s := New(Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, ReadLines: 100}, nil, nil)
 	h := s.Handler()
 	post := func(ct, site string) int {
 		r := httptest.NewRequest("POST", "/api/agents/x/answer", strings.NewReader(`{"action":"cancel","fingerprint":"x"}`))

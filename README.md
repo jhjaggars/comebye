@@ -73,10 +73,10 @@ go build -o ~/.local/bin/herdr-phone .
 below expects `~/.local/bin/herdr-phone`, so adjust one or the other.
 
 Quick check (herdr must be running; the server exits if it cannot reach the
-socket):
+socket, and refuses to start without a login allowlist):
 
 ```sh
-herdr-phone            # serves http://127.0.0.1:8741
+herdr-phone -ts-allow-login you@example.com   # serves http://127.0.0.1:8741
 ```
 
 ## Setup
@@ -273,7 +273,9 @@ grow, so large sessions stay cheap to poll.
 | --- | --- | --- | --- |
 | `-addr` | | `127.0.0.1:8741` | Listen address. Keep it on loopback and use Tailscale Serve for TLS. |
 | `-sock` | | `~/.config/herdr/herdr.sock` | herdr API socket path. |
-| `-ts-allow-login` | `HERDRPHONE_TS_ALLOW_LOGIN` | (none) | Comma-separated Tailscale logins admitted via Tailscale Serve identity headers. Requires a loopback `-addr`. |
+| `-ts-allow-login` | `HERDRPHONE_TS_ALLOW_LOGIN` | (none) | Comma-separated Tailscale logins admitted via Tailscale Serve identity headers. Requires a loopback `-addr`. Required unless `-insecure-no-auth`. |
+| `-insecure-no-auth` | | `false` | Start without `-ts-allow-login`, serving an unauthenticated API to anyone who reaches the port (your whole tailnet through Serve). For local testing only. |
+| `-allow-host` | `HERDRPHONE_ALLOW_HOSTS` | (none) | Extra `Host` names the server answers to, besides `localhost`, loopback IPs and `*.ts.net`. Repeatable or comma-separated. Other hosts get 421 (DNS rebinding protection). |
 | `-host-name` | `HERDRPHONE_HOST_NAME` | short hostname | This host's name in agent IDs (`<host>/<pane>`), URLs and the UI. Lowercase DNS label. |
 | `-peers` | `HERDRPHONE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional). `https` Serve URLs only; requires `-ts-allow-login`. |
 | `-push` | `HERDRPHONE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
@@ -314,9 +316,16 @@ Treat access to it like SSH access to that machine.
   `http.CrossOriginProtection` (checks `Sec-Fetch-Site`/`Origin`) and
   requires `Content-Type: application/json` on POSTs. A web page the phone
   visits cannot drive your agents through Serve.
-- **Always set `-ts-allow-login`.** Without it the API is unauthenticated
-  and every device on your tailnet can drive your agents; the server logs a
-  warning at startup in that case.
+- **`-ts-allow-login` is required.** Without it the API would be
+  unauthenticated and every device on your tailnet could drive your agents,
+  so the server refuses to start unless you also pass `-insecure-no-auth`
+  (local testing only; it logs a warning).
+- **DNS rebinding is blocked.** Every request (UI and API) must be
+  addressed to `localhost`, a loopback IP, a `*.ts.net` name (what
+  Tailscale Serve forwards) or a name listed with `-allow-host`; anything
+  else gets 421. Otherwise a web page in a browser on the host could
+  re-resolve its own domain to `127.0.0.1` and, being same-origin with the
+  loopback port, drive your agents with a forged identity header.
 - **Local users are trusted.** Any process on the same host can connect to
   the loopback port and forge the identity header. Do not run this on a
   shared multi-user machine.

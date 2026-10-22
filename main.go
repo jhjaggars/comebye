@@ -41,20 +41,26 @@ func main() {
 		pushExcerpt = flag.Int("push-excerpt", envInt("HERDRPHONE_PUSH_EXCERPT", 200), "max characters of the agent's last message in Web Push notifications (end-to-end encrypted); 0 sends none")
 		hostName    = flag.String("host-name", envOr("HERDRPHONE_HOST_NAME", fleet.DefaultHostName()), "this host's name in agent IDs and URLs (lowercase DNS label)")
 		peersSpec   = flag.String("peers", os.Getenv("HERDRPHONE_PEERS"), "make this instance a hub over other herdr-phone instances: comma-separated name=https://host.tailnet.ts.net (name defaults to the first DNS label)")
+		noAuth      = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
+		allowHosts  = hostList{os.Getenv("HERDRPHONE_ALLOW_HOSTS")}
 	)
+	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
 	flag.Parse()
 	if *ntfyThottle > 0 {
 		*throttle = *ntfyThottle
 	}
 	logins := splitLogins(*tsAllow)
+	if len(logins) == 0 && !*noAuth {
+		log.Fatalf("no Tailscale login allowlist: set -ts-allow-login / HERDRPHONE_TS_ALLOW_LOGIN to your login (or pass -insecure-no-auth to serve an unauthenticated API)")
+	}
 
 	if !fleet.ValidName(*hostName) {
 		log.Fatalf("-host-name %q: must be a lowercase DNS label (a-z, 0-9, -)", *hostName)
 	}
 	// TEST ONLY, deliberately not a flag: lets a hub use plain-http
-	// loopback peers and run without an allowlist, for wiring two local
-	// instances together without Tailscale Serve. Never set it in a real
-	// deployment.
+	// loopback peers and (with -insecure-no-auth) run without an
+	// allowlist, for wiring two local instances together without Tailscale
+	// Serve. Never set it in a real deployment.
 	insecureTestPeers := os.Getenv("HERDRPHONE_TEST_INSECURE_PEERS") == "1"
 	peers, err := fleet.ParsePeers(*peersSpec, fleet.ParseOptions{LocalName: *hostName, AllowHTTPLoopback: insecureTestPeers})
 	if err != nil {
@@ -135,10 +141,14 @@ func main() {
 	srv := server.New(server.Config{
 		Addr:        *addr,
 		AllowLogins: logins,
-		ReadLines:   1000,
-		Push:        pushSvc,
-		Presence:    presence,
-		Fleet:       fl,
+		// Checked again by ListenAndServe, so a library caller cannot
+		// end up open by accident either.
+		InsecureNoAuth: *noAuth,
+		AllowHosts:     server.SplitHosts(allowHosts...),
+		ReadLines:      1000,
+		Push:           pushSvc,
+		Presence:       presence,
+		Fleet:          fl,
 		// Images sent from the app, for agents on this host to read.
 		UploadDir: filepath.Join(expandHome(*stateDir), "uploads"),
 	}, client, manager)
@@ -154,6 +164,17 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// hostList is the repeatable -allow-host flag; it starts with
+// HERDRPHONE_ALLOW_HOSTS and each value may be comma-separated.
+type hostList []string
+
+func (h *hostList) String() string { return strings.Join(*h, ",") }
+
+func (h *hostList) Set(v string) error {
+	*h = append(*h, v)
+	return nil
 }
 
 func splitLogins(s string) []string {

@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jhjaggars/herdr-phone/internal/fleet"
@@ -35,6 +36,13 @@ type Config struct {
 	// header (set by Tailscale Serve) matches one of these lowercase logins.
 	// Only valid with a loopback Addr, where Serve is the sole client.
 	AllowLogins []string
+	// InsecureNoAuth lets ListenAndServe run without AllowLogins, serving
+	// an unauthenticated API to anyone who reaches it. Off by default.
+	InsecureNoAuth bool
+	// AllowHosts are extra Host names (lowercase, no port) the server
+	// answers to besides localhost, loopback IPs and *.ts.net; any other
+	// Host is refused as possible DNS rebinding (see hostAllowed).
+	AllowHosts []string
 	// ReadLines caps the ?lines= parameter for output reads.
 	ReadLines int
 	// Push, when set, enables the Web Push subscription endpoints.
@@ -67,7 +75,13 @@ type Server struct {
 	// assets). Pages compare it to the one they loaded with and reload
 	// after a deploy.
 	version string
+	// streams counts open /api/events streams (see maxStreams).
+	streams atomic.Int32
 }
+
+// maxStreams caps concurrent SSE clients. A phone holds one or two and a
+// hub one per peer; each stream costs a goroutine and a hub subscription.
+const maxStreams = 64
 
 // New builds the server. manager is the local host's state manager.
 func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
@@ -127,13 +141,25 @@ func (s *Server) ListenAndServe() error {
 		return fmt.Errorf("Tailscale login auth needs a loopback listen address, got %q: any other client could forge the Tailscale-User-Login header", s.cfg.Addr)
 	}
 	if len(s.cfg.AllowLogins) == 0 {
-		log.Printf("WARNING: no Tailscale login allowlist configured (-ts-allow-login / HERDRPHONE_TS_ALLOW_LOGIN); the API is unauthenticated, so Tailscale Serve exposes it to your whole tailnet")
+		if !s.cfg.InsecureNoAuth {
+			return errors.New("no Tailscale login allowlist configured: set -ts-allow-login / HERDRPHONE_TS_ALLOW_LOGIN (or pass -insecure-no-auth to serve an unauthenticated API)")
+		}
+		log.Printf("WARNING: -insecure-no-auth: no Tailscale login allowlist; the API is unauthenticated, so Tailscale Serve exposes it to your whole tailnet")
 	}
 	log.Printf("listening on http://%s (phone app; put Tailscale Serve in front)", s.cfg.Addr)
-	return http.ListenAndServe(s.cfg.Addr, s.Handler())
+	hs := &http.Server{
+		Addr:    s.cfg.Addr,
+		Handler: s.Handler(),
+		// No WriteTimeout: /api/events streams for as long as the client
+		// stays. Slow or idle connections are still bounded.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	return hs.ListenAndServe()
 }
 
-// Handler returns the server's HTTP handler with CSRF protection applied.
+// Handler returns the server's HTTP handler with Host checking (against DNS
+// rebinding, see hostAllowed) and CSRF protection applied.
 // Tailscale identity auth is ambient (Serve attaches it to every request,
 // like a cookie), so without this any web page the phone visits could POST
 // prompts or keys to the agents. CrossOriginProtection rejects cross-origin
@@ -150,7 +176,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.mux.ServeHTTP(w, r)
 	})
-	return http.NewCrossOriginProtection().Handler(withGzip(jsonOnly))
+	return s.checkHost(http.NewCrossOriginProtection().Handler(withGzip(jsonOnly)))
 }
 
 func isLoopbackAddr(addr string) bool {
@@ -415,6 +441,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	if s.streams.Add(1) > maxStreams {
+		s.streams.Add(-1)
+		http.Error(w, "too many event streams", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.streams.Add(-1)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")

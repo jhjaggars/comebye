@@ -24,9 +24,15 @@ What it relies on:
 - **Tailscale identity headers.** Serve sets `Tailscale-User-Login` on
   proxied requests and strips client-supplied copies. With
   `-ts-allow-login`, only listed logins are admitted. The server refuses to
-  start with an allowlist on a non-loopback address.
+  start without an allowlist (unless `-insecure-no-auth`) and with an
+  allowlist on a non-loopback address.
+- **Host checking.** Requests whose `Host` is not `localhost`, a loopback
+  IP, a `*.ts.net` name or one given with `-allow-host` are refused (421),
+  so a web page cannot reach the loopback port by DNS rebinding.
 - **The local host is trusted.** Any local process can reach the loopback
-  port and forge the identity header.
+  port and forge the identity header. Web pages in a browser on the host
+  are not local processes: bypassing the Host check (DNS rebinding) is in
+  scope.
 
 In scope:
 
@@ -46,9 +52,10 @@ In scope:
 
 Out of scope:
 
-- Running without `-ts-allow-login`, exposing the port with Tailscale
-  Funnel, binding to a non-loopback address, or putting another proxy in
-  front of it. These are unsupported configurations.
+- Running with `-insecure-no-auth`, listing a name with `-allow-host`
+  whose DNS an attacker controls, exposing the port with Tailscale Funnel,
+  binding to a non-loopback address, or putting another proxy in front of
+  it. These are unsupported configurations.
 - Attacks by local users or processes on the same host.
 - A compromised tailnet account or device that is on the allowlist.
 - Content of ntfy notifications on a public ntfy server (agent names,

@@ -32,7 +32,7 @@ func newPushTest(t *testing.T, pushURL string) (*Server, *push.Service, *push.Pr
 		t.Fatal(err)
 	}
 	pr := push.NewPresence()
-	return New(Config{AllowLogins: []string{me, "other@example.com"}, ReadLines: 100, Push: svc, Presence: pr}, nil, nil), svc, pr
+	return New(Config{AllowLogins: []string{me, "other@example.com"}, AllowHosts: testHosts, ReadLines: 100, Push: svc, Presence: pr}, nil, nil), svc, pr
 }
 
 // call goes through the full Handler (CSRF + JSON checks) as a same-origin
@@ -113,7 +113,7 @@ func TestPushKeyAndDisabled(t *testing.T) {
 	if k, _ := base64.RawURLEncoding.DecodeString(svc.PublicKey()); len(k) != 65 {
 		t.Fatalf("public key is %d bytes", len(k))
 	}
-	off := New(Config{AllowLogins: []string{me}}, nil, nil)
+	off := New(Config{AllowLogins: []string{me}, AllowHosts: testHosts}, nil, nil)
 	if w := call(off, "GET", "/api/push/key", me, ""); !strings.Contains(w.Body.String(), `"enabled":false`) {
 		t.Fatalf("disabled key: %s", w.Body.String())
 	}

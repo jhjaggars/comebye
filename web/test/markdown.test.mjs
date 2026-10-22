@@ -3,7 +3,11 @@
 // live herdr-phone so the real CSP and script loading apply. No npm
 // dependencies: Node 22+ (global WebSocket) and a Chrome/Chromium binary.
 //
-//   node web/test/markdown.test.mjs http://127.0.0.1:8741/ \
+// Point it at an instance started without an allowlist on its own port,
+// e.g. `herdr-phone -addr 127.0.0.1:19741 -insecure-no-auth -push=false`
+// (headless Chrome sends no Tailscale identity):
+//
+//   node web/test/markdown.test.mjs http://127.0.0.1:19741/ \
 //     [--chrome google-chrome] [--port 19733] \
 //     [--agent '<host>/<pane>' --screenshot out.png]
 //
