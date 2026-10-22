@@ -639,7 +639,7 @@ function renderTranscript(t, reset) {
     chat.last = t.messages[t.messages.length - 1];
     // The next poll starts at the oldest message that can still change (a
     // tool call waiting for its result), else at the newest one.
-    const open = t.messages.find((m) => m.kind === "tool" && !m.result && !m.err && !m.ms);
+    const open = t.messages.find((m) => m.kind === "tool" && toolRunning(m));
     chat.from = (open || chat.last).id;
   }
   renderActivity();
@@ -684,7 +684,7 @@ function isWorking(a) { return !!a && a.agent_status === "working" && !state.ask
 // activityStep describes what the agent is doing, from the newest message.
 function activityStep() {
   const m = state.chat && state.chat.last;
-  if (m && m.kind === "tool" && !m.result && !m.err && !m.ms) {
+  if (m && m.kind === "tool" && toolRunning(m)) {
     return { verb: "Running", what: m.tool || "a tool", detail: m.args || "" };
   }
   return { verb: "Thinking", what: "", detail: "" };
@@ -746,6 +746,15 @@ function toolMeta(m) {
   return m.ms ? fmtMs(m.ms) : (m.result ? "ran" : "running…");
 }
 
+// toolRunning: a call still waiting for its result.
+function toolRunning(m) { return !m.result && !m.err && !m.ms; }
+
+// toolResultText is a tool card's body: empty (hidden) while the call runs,
+// so a result that arrives later is not mistaken for a final "(no output)".
+function toolResultText(m) {
+  return m.result || (toolRunning(m) ? "" : "(no output)");
+}
+
 function patchToolCard(m) {
   const el = document.querySelector(`#chat [data-id="${CSS.escape(m.id)}"]`);
   if (!el) return;
@@ -755,7 +764,8 @@ function patchToolCard(m) {
   const meta = el.querySelector(".toolmeta");
   if (meta) meta.textContent = toolMeta(m);
   const body = el.querySelector(".toolresult");
-  if (body && !body.textContent && m.result) body.textContent = m.result;
+  const text = toolResultText(m);
+  if (body && body.textContent !== text) body.textContent = text;
 }
 
 /* ---------- sent-but-not-yet-seen prompts ---------- */
@@ -847,7 +857,7 @@ function renderMessage(m) {
         `<summary><span class="toolname">${esc(m.tool || "tool")}</span>` +
         `<span class="toolargs">${esc(m.args || "")}</span>` +
         `<span class="toolmeta">${esc(meta)}</span></summary>` +
-        `<div class="toolresult">${esc(m.result || "(no output)")}</div>`;
+        `<div class="toolresult">${esc(toolResultText(m))}</div>`;
       return d;
     }
     case "note": {
