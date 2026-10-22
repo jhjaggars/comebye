@@ -14,8 +14,9 @@ package transcript
 // tool_use), all sharing message.id. Tool results arrive as user records
 // whose content is [{type:"tool_result",tool_use_id,content,is_error}].
 // User records flagged isMeta (injected context, command caveats) and
-// sidechain records are not part of the visible conversation. A prompt
-// sent while Claude is working arrives as
+// sidechain records are not part of the visible conversation (except in a
+// subagent's own transcript, see subagent.go). A prompt sent while Claude
+// is working arrives as
 //
 //	{"type":"attachment","attachment":{"type":"queued_command",
 //	 "commandMode":"prompt","prompt":"text"}}
@@ -61,18 +62,23 @@ type claudeRecord struct {
 	Content          json.RawMessage `json:"content"` // system records
 	Message          *claudeMessage  `json:"message"`
 	Attachment       *claudeAttach   `json:"attachment"`
+	ToolUseResult    json.RawMessage `json:"toolUseResult"`
+	Origin           *claudeOrigin   `json:"origin"`
 }
 
 // claudeAttach is an attachment record's payload. The one that matters is
 // queued_command: a prompt typed (or sent through herdr) while Claude was
 // working, recorded when Claude takes it up mid-turn instead of as a user
-// record. commandMode "prompt" is the user's text; "task-notification"
-// and agent hand-backs (isMeta) are Claude's own bookkeeping.
+// record. commandMode "prompt" is the user's text unless it is an agent
+// hand-back (isMeta); "task-notification" reports on a background task.
+// Those two update subagent cards (see subagent.go).
 type claudeAttach struct {
 	Type        string          `json:"type"`
 	CommandMode string          `json:"commandMode"`
 	Prompt      json.RawMessage `json:"prompt"` // string or [blocks]
 	IsMeta      bool            `json:"isMeta"`
+	Origin      *claudeOrigin   `json:"origin"`
+	Usage       *notifyUsage    `json:"usage"`
 }
 
 type claudeMessage struct {
@@ -149,17 +155,26 @@ type claudeParser struct {
 	toolIdx map[string]int
 	// tool_use id -> when the call was recorded, for result durations.
 	toolStart map[string]time.Time
-	// The assistant message in progress and its thinking, which is
-	// attached to the next text bubble of the same message.
+	// The assistant message in progress, its tool calls, and its
+	// thinking, which is attached to the next text bubble of the message.
 	curMsgID string
+	msgTools []string
 	think    string
 	ask      *Ask
 	// Index of a compact_boundary placeholder awaiting its summary, or -1.
 	compactIdx int
+	// Subagent cards: the index of every Agent/Task call, and agentId ->
+	// index once the id is known.
+	subs   []int
+	subIdx map[string]int
+	// sidechain parses a subagent's own transcript, whose records are all
+	// sidechain ones.
+	sidechain bool
 }
 
-func newClaudeParser() *claudeParser {
-	return &claudeParser{toolIdx: map[string]int{}, toolStart: map[string]time.Time{}, compactIdx: -1}
+func newClaudeParser(sidechain bool) *claudeParser {
+	return &claudeParser{toolIdx: map[string]int{}, toolStart: map[string]time.Time{}, compactIdx: -1,
+		subIdx: map[string]int{}, sidechain: sidechain}
 }
 
 func (p *claudeParser) feed(line []byte) {
@@ -168,7 +183,7 @@ func (p *claudeParser) feed(line []byte) {
 		return
 	}
 	var r claudeRecord
-	if json.Unmarshal(line, &r) != nil || r.IsSidechain {
+	if json.Unmarshal(line, &r) != nil || r.IsSidechain != p.sidechain {
 		return
 	}
 	switch r.Type {
@@ -177,16 +192,42 @@ func (p *claudeParser) feed(line []byte) {
 			p.assistant(&r)
 		}
 	case "user":
-		if r.Message != nil && !r.IsMeta {
+		switch {
+		case r.Message == nil:
+		case r.IsMeta:
+			if r.Origin != nil && r.Origin.Handback {
+				p.handback(r.Origin)
+			}
+		default:
 			p.user(&r)
 		}
 	case "system":
 		p.system(&r)
 	case "attachment":
-		if a := r.Attachment; a != nil && a.Type == "queued_command" && a.CommandMode == "prompt" && !a.IsMeta && !r.IsMeta {
+		a := r.Attachment
+		if a == nil || a.Type != "queued_command" {
+			break
+		}
+		switch {
+		case a.Origin != nil && a.Origin.Handback:
+			p.handback(a.Origin)
+		case a.CommandMode == "prompt" && !a.IsMeta && !r.IsMeta:
 			p.queued(&r)
+		case a.CommandMode == "task-notification":
+			p.queuedNotification(&r)
 		}
 	}
+}
+
+// queuedNotification handles a task notification delivered mid-turn: it
+// updates its subagent's card. Other tasks' (background shells) are not
+// shown, as before; Claude reports on them in its next message anyway.
+func (p *claudeParser) queuedNotification(r *claudeRecord) {
+	blocks, s, isStr := decodeClaudeBlocks(r.Attachment.Prompt)
+	if !isStr {
+		s = claudeText(blocks)
+	}
+	p.taskNotification(s, r.Attachment.Usage)
 }
 
 // queued renders a prompt queued mid-turn as a user message.
@@ -203,6 +244,7 @@ func (p *claudeParser) queued(r *claudeRecord) {
 func (p *claudeParser) assistant(r *claudeRecord) {
 	if r.Message.ID == "" || r.Message.ID != p.curMsgID {
 		p.curMsgID = r.Message.ID
+		p.msgTools = p.msgTools[:0]
 		p.think = ""
 	}
 	model := r.Message.Model
@@ -233,11 +275,38 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 			p.all = append(p.all, Message{ID: id, Kind: "assistant", Time: r.Timestamp, Model: model, Text: b.Text, Think: p.think})
 			p.think = ""
 		case "tool_use":
-			p.all = append(p.all, Message{ID: b.ID, Kind: "tool", Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)})
+			if p.sidechain && b.Name == handbackTool {
+				// A subagent's last step: its report, shown as its answer.
+				var in struct {
+					Message string `json:"message"`
+				}
+				if json.Unmarshal(b.Input, &in) == nil && strings.TrimSpace(in.Message) != "" {
+					p.all = append(p.all, Message{ID: b.ID, Kind: "assistant", Time: r.Timestamp, Model: model, Text: in.Message, Think: p.think})
+					p.think = ""
+				}
+				continue
+			}
+			m := Message{ID: b.ID, Kind: "tool", Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)}
+			if isAgentTool(b.Name) {
+				m.Subagent = newSubagent(b.Input)
+				m.Time = r.Timestamp
+				p.subs = append(p.subs, len(p.all))
+			}
+			p.all = append(p.all, m)
 			p.toolIdx[b.ID] = len(p.all) - 1
 			if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
+				// Claude writes each block of a message as it streams in
+				// and runs the calls once the message is complete, so
+				// parallel calls start no earlier than the last one was
+				// written, not when their own blocks were.
+				for _, id := range p.msgTools {
+					if _, ok := p.toolStart[id]; ok {
+						p.toolStart[id] = t
+					}
+				}
 				p.toolStart[b.ID] = t
 			}
+			p.msgTools = append(p.msgTools, b.ID)
 			if b.Name == claudeAskTool {
 				if a := parseAsk(b.ID, b.Input); a != nil {
 					p.ask = a
@@ -295,6 +364,9 @@ func (p *claudeParser) user(r *claudeRecord) {
 // commands, ! shell commands, their output, and background task
 // notifications as tagged pseudo-XML in user records.
 func (p *claudeParser) userText(r *claudeRecord, s string) {
+	if strings.HasPrefix(strings.TrimSpace(s), "<task-notification>") && p.taskNotification(s, nil) {
+		return // shown on its subagent's card
+	}
 	kind, text := classifyClaudeText(s)
 	switch kind {
 	case "user":
@@ -331,6 +403,9 @@ func (p *claudeParser) toolResult(r *claudeRecord, b claudeBlock) {
 			p.all[idx].Ms = end.Sub(start).Milliseconds()
 		}
 		delete(p.toolStart, b.ToolUseID)
+	}
+	if p.all[idx].Subagent != nil {
+		p.subagentResult(idx, r, b, s)
 	}
 }
 

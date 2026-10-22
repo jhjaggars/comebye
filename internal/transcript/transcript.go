@@ -36,6 +36,9 @@ type Message struct {
 	Result string `json:"result,omitempty"` // truncated tool result
 	Err    bool   `json:"err,omitempty"`    // tool result errored
 	Ms     int64  `json:"ms,omitempty"`     // tool duration
+	// Subagent is set on a Claude Agent/Task call (see subagent.go). It is
+	// replaced, never modified, once a message has been handed out.
+	Subagent *SubagentInfo `json:"subagent,omitempty"`
 }
 
 // Transcript is a parsed window of a session file.
@@ -53,6 +56,9 @@ type Transcript struct {
 	// requested one on (the server's ?from=); Total and More still
 	// describe the whole window.
 	Partial bool `json:"partial,omitempty"`
+	// RunningSubagents are the Claude subagents this session started that
+	// have not finished, over the whole file.
+	RunningSubagents []RunningSubagent `json:"running_subagents,omitempty"`
 }
 
 // askToolName is the tool registered by the @juicesharp/rpiv-ask-user-question
@@ -134,7 +140,7 @@ func Read(path string, limit, skip int) (*Transcript, error) {
 	}
 	defer f.Close()
 	if sniffFormat(f) == FormatClaude {
-		return readClaude(f, path, limit, skip)
+		return readClaude(f, path, limit, skip, false)
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
