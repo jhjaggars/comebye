@@ -233,7 +233,7 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 			p.all = append(p.all, Message{ID: id, Kind: "assistant", Time: r.Timestamp, Model: model, Text: b.Text, Think: p.think})
 			p.think = ""
 		case "tool_use":
-			p.all = append(p.all, Message{ID: b.ID, Kind: "tool", Tool: b.Name, Args: summarizeArgs(b.Input)})
+			p.all = append(p.all, Message{ID: b.ID, Kind: "tool", Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)})
 			p.toolIdx[b.ID] = len(p.all) - 1
 			if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
 				p.toolStart[b.ID] = t

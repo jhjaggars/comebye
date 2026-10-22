@@ -148,3 +148,22 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("truncate = %q", got)
 	}
 }
+
+func TestSummarizeArgsPerTool(t *testing.T) {
+	for _, tc := range []struct {
+		tool, args, want string
+	}{
+		{"Bash", `{"command":"ls -la","description":"list"}`, "ls -la"},
+		{"Agent", `{"description":"Fix the bug","subagent_type":"general-purpose","prompt":"A very long prompt"}`, "Fix the bug"},
+		{"Task", `{"prompt":"only a prompt"}`, "only a prompt"},
+		{"visible_subagent", `{"prompt":"long task text","name":"reviewer"}`, "reviewer"},
+		{"spawn_agent", `{"task":"do it","name":"helper"}`, "helper"},
+		{"fork_to_pane", `{"prompt":"p"}`, "p"},
+		{"bash", `{"prompt":"p","name":"n"}`, "p"}, // other tools keep the default order
+		{"x", `{"n":1}`, `{"n":1}`},
+	} {
+		if got := summarizeArgs(tc.tool, []byte(tc.args)); got != tc.want {
+			t.Errorf("%s %s = %q, want %q", tc.tool, tc.args, got, tc.want)
+		}
+	}
+}

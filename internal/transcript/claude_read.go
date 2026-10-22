@@ -171,7 +171,7 @@ func (st *claudeLatest) line(line []byte) {
 			case "tool_use":
 				if b.ID != "" {
 					st.order = append(st.order, b.ID)
-					st.pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Input)}
+					st.pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)}
 				}
 			}
 		}

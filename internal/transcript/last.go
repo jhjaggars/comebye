@@ -93,7 +93,7 @@ func latestFrom(r io.Reader, skipFirst bool) (*Latest, error) {
 			for _, b := range blocks {
 				if b.Type == "toolCall" && b.ID != "" {
 					pendingOrder = append(pendingOrder, b.ID)
-					pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Args)}
+					pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Name, b.Args)}
 				}
 			}
 		case "toolResult":

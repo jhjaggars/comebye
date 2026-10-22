@@ -312,7 +312,7 @@ func appendAssistant(all *[]Message, toolIdx map[string]int, r rawRecord) {
 			ID:   b.ID,
 			Kind: "tool",
 			Tool: b.Name,
-			Args: summarizeArgs(b.Args),
+			Args: summarizeArgs(b.Name, b.Args),
 		})
 		toolIdx[b.ID] = len(*all) - 1
 	}
@@ -347,9 +347,23 @@ func firstText(blocks []block) string {
 	return sb.String()
 }
 
-// summarizeArgs renders tool arguments as a compact preview, preferring the
-// most informative scalar field.
-func summarizeArgs(raw json.RawMessage) string {
+// argKeys is the order in which summarizeArgs looks for a preview field.
+var argKeys = []string{"command", "prompt", "path", "file_path", "query", "description", "pattern", "url", "name", "task"}
+
+// toolArgKeys overrides argKeys for tools whose most informative field is
+// not the first one found: a subagent's prompt is long, its description
+// (Claude's Agent/Task) or name (Pi's subagent tools) says what it is for.
+var toolArgKeys = map[string][]string{
+	"Agent":            {"description", "prompt"},
+	"Task":             {"description", "prompt"},
+	"visible_subagent": {"name", "description", "task", "prompt"},
+	"spawn_agent":      {"name", "description", "task", "prompt"},
+	"fork_to_pane":     {"name", "description", "task", "prompt"},
+}
+
+// summarizeArgs renders a call's arguments as a compact preview, preferring
+// the most informative scalar field for that tool.
+func summarizeArgs(tool string, raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
@@ -357,7 +371,11 @@ func summarizeArgs(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return truncate(string(raw), maxArgsChars)
 	}
-	for _, key := range []string{"command", "prompt", "path", "file_path", "query", "description", "pattern", "url", "name", "task"} {
+	keys := argKeys
+	if k, ok := toolArgKeys[tool]; ok {
+		keys = k
+	}
+	for _, key := range keys {
 		if v, ok := args[key]; ok {
 			if s, ok := v.(string); ok && s != "" {
 				return truncate(strings.TrimSpace(s), maxArgsChars)
