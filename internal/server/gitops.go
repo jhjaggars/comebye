@@ -25,9 +25,11 @@ import (
 // gitTimeout bounds one git command.
 const gitTimeout = 20 * time.Second
 
-// runGit runs git in dir and returns its trimmed stdout. Prompts and
-// optional locks are off, so it never waits on a terminal or takes the
-// index lock away from an agent working in the checkout.
+// runGit runs git in dir and returns its stdout without trailing line
+// breaks (leading spaces are kept: they are meaningful in porcelain
+// status and --stat output). Prompts and optional locks are off, so it
+// never waits on a terminal or takes the index lock away from an agent
+// working in the checkout.
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
@@ -45,7 +47,7 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 		}
 		return "", fmt.Errorf("git %s: %s", args[0], msg)
 	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimRight(out.String(), "\r\n"), nil
 }
 
 // branchRe is a conservative subset of git's branch names: ASCII letters,

@@ -408,7 +408,7 @@ func TestInspectAndDiscard(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &c)
 	d := c.Detail
 	if w.Code != 200 || c.Path != wt || c.Branch != "w" || c.Tip == "" || d == nil || len(d.Commits) != 1 || d.Commits[0].Subject != "work on a" ||
-		len(d.Status) != 2 || d.Unpushed != 1 || !strings.Contains(d.DiffStat, "a.txt") ||
+		len(d.Status) != 2 || d.Status[0] != " M a.txt" || d.Unpushed != 1 || !strings.HasPrefix(d.DiffStat, " a.txt") ||
 		!strings.Contains(d.Diff, "+work") || !strings.Contains(d.WorkDiff, "+more") {
 		t.Fatalf("inspect = %d %s", w.Code, w.Body)
 	}
