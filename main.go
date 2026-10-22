@@ -27,25 +27,26 @@ import (
 
 func main() {
 	var (
-		addr        = flag.String("addr", "127.0.0.1:8741", "listen address (keep loopback; use Tailscale Serve for TLS)")
-		sock        = flag.String("sock", herdr.DefaultSocketPath, "herdr API socket path")
-		tsAllow     = flag.String("ts-allow-login", getenv("COMEBYE_TS_ALLOW_LOGIN"), "comma-separated Tailscale logins admitted via Tailscale Serve identity headers (e.g. you@example.com)")
-		ntfyBase    = flag.String("ntfy-url", envOr("COMEBYE_NTFY_URL", "https://ntfy.sh"), "ntfy root URL; empty disables ntfy")
-		ntfyTopic   = flag.String("ntfy-topic", getenv("COMEBYE_NTFY_TOPIC"), "ntfy topic (optional fallback channel); empty disables ntfy")
-		ntfyClick   = flag.String("ntfy-click", getenv("COMEBYE_NTFY_CLICK"), "URL opened when an ntfy notification is tapped (the Serve URL)")
-		ntfyThottle = flag.Duration("ntfy-throttle", 0, "deprecated alias for -notify-throttle")
-		ntfyExcerpt = flag.Int("ntfy-excerpt", envInt("COMEBYE_NTFY_EXCERPT", 0), "max characters of the agent's last message to include in ntfy notifications; 0 (default) sends none, since ntfy.sh topics are public")
-		throttle    = flag.Duration("notify-throttle", 30*time.Second, "minimum interval between repeat notifications per agent and kind (Web Push and ntfy)")
-		stateDir    = flag.String("state-dir", envOr("COMEBYE_STATE_DIR", defaultStateDir()), "directory for the VAPID key and push subscriptions (created mode 0700)")
-		pushOn      = flag.Bool("push", envBool("COMEBYE_PUSH", true), "enable Web Push notifications")
-		pushSubject = flag.String("push-subject", getenv("COMEBYE_PUSH_SUBJECT"), "VAPID contact (mailto:you@example.com or an https:// URL); default mailto:<first -ts-allow-login that is an email>, else the project URL")
-		pushExcerpt = flag.Int("push-excerpt", envInt("COMEBYE_PUSH_EXCERPT", 200), "max characters of the agent's last message in Web Push notifications (end-to-end encrypted); 0 sends none")
-		hostName    = flag.String("host-name", envOr("COMEBYE_HOST_NAME", fleet.DefaultHostName()), "this host's name in agent IDs and URLs (lowercase DNS label)")
-		peersSpec   = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name defaults to the first DNS label)")
-		noAuth      = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
-		launchOn    = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
-		allowHosts  = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
-		launchRoots = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
+		addr         = flag.String("addr", "127.0.0.1:8741", "listen address (keep loopback; use Tailscale Serve for TLS)")
+		sock         = flag.String("sock", herdr.DefaultSocketPath, "herdr API socket path")
+		tsAllow      = flag.String("ts-allow-login", getenv("COMEBYE_TS_ALLOW_LOGIN"), "comma-separated Tailscale logins admitted via Tailscale Serve identity headers (e.g. you@example.com)")
+		ntfyBase     = flag.String("ntfy-url", envOr("COMEBYE_NTFY_URL", "https://ntfy.sh"), "ntfy root URL; empty disables ntfy")
+		ntfyTopic    = flag.String("ntfy-topic", getenv("COMEBYE_NTFY_TOPIC"), "ntfy topic (optional fallback channel); empty disables ntfy")
+		ntfyClick    = flag.String("ntfy-click", getenv("COMEBYE_NTFY_CLICK"), "URL opened when an ntfy notification is tapped (the Serve URL)")
+		ntfyThottle  = flag.Duration("ntfy-throttle", 0, "deprecated alias for -notify-throttle")
+		ntfyExcerpt  = flag.Int("ntfy-excerpt", envInt("COMEBYE_NTFY_EXCERPT", 0), "max characters of the agent's last message to include in ntfy notifications; 0 (default) sends none, since ntfy.sh topics are public")
+		throttle     = flag.Duration("notify-throttle", 30*time.Second, "minimum interval between repeat notifications per agent and kind (Web Push and ntfy)")
+		stateDir     = flag.String("state-dir", envOr("COMEBYE_STATE_DIR", defaultStateDir()), "directory for the VAPID key and push subscriptions (created mode 0700)")
+		pushOn       = flag.Bool("push", envBool("COMEBYE_PUSH", true), "enable Web Push notifications")
+		pushSubject  = flag.String("push-subject", getenv("COMEBYE_PUSH_SUBJECT"), "VAPID contact (mailto:you@example.com or an https:// URL); default mailto:<first -ts-allow-login that is an email>, else the project URL")
+		pushExcerpt  = flag.Int("push-excerpt", envInt("COMEBYE_PUSH_EXCERPT", 200), "max characters of the agent's last message in Web Push notifications (end-to-end encrypted); 0 sends none")
+		hostName     = flag.String("host-name", envOr("COMEBYE_HOST_NAME", fleet.DefaultHostName()), "this host's name in agent IDs and URLs (lowercase DNS label)")
+		peersSpec    = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name defaults to the first DNS label)")
+		noAuth       = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
+		launchOn     = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
+		worktreeRoot = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
+		allowHosts   = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
+		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 	)
 	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
 	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
@@ -159,6 +160,8 @@ func main() {
 		// Images sent from the app, for agents on this host to read.
 		UploadDir:   filepath.Join(expandHome(*stateDir), "uploads"),
 		LaunchRoots: launchRootList(*launchOn, launchRoots),
+		// Workers' worktrees: <root>/<repo>/<branch>.
+		WorktreeRoot: expandHome(*worktreeRoot),
 	}, client, manager)
 
 	go func() {

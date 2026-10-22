@@ -66,6 +66,10 @@ type Config struct {
 	// which the app may start new agents; ones that do not exist are
 	// ignored. Empty turns launching off.
 	LaunchRoots []string
+	// WorktreeRoot is where workers' worktrees are created, as
+	// <root>/<repo>/<branch> (default ~/.worktrees). Checks and removals
+	// may touch it besides the launch roots.
+	WorktreeRoot string
 }
 
 // Server is the phone app HTTP server.
@@ -142,6 +146,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/options", s.auth(s.onHostLaunch("launch-options", s.handleLaunchOptions)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/dirs", s.auth(s.onHostLaunch("launch-dirs", s.handleLaunchDirs)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/launch", s.auth(s.onHostLaunch("launch", s.handleLaunch)))
+	// Workers, on this host: the hub calls a peer's through fleet.CallHost.
+	s.mux.HandleFunc("GET /api/repos", s.auth(s.handleRepos))
+	s.mux.HandleFunc("GET /api/checks", s.auth(s.handleChecks))
+	s.mux.HandleFunc("POST /api/worker", s.auth(s.handleWorker))
+	s.mux.HandleFunc("POST /api/remove", s.auth(s.handleRemove))
+	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	s.mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
 	s.mux.HandleFunc("POST /api/push/subscribe", s.auth(s.handlePushSubscribe))

@@ -119,6 +119,8 @@ func withinAny(p string, roots []string) bool {
 type launchError struct {
 	status        int
 	code, message string
+	// workspace is a workspace the failed request left open, if any.
+	workspace string
 }
 
 // resolveLaunchDir resolves p to a real directory inside one of roots.
@@ -126,30 +128,34 @@ type launchError struct {
 // lie inside a root, so the answers say nothing about the rest of the disk.
 func resolveLaunchDir(p string, roots []string) (string, *launchError) {
 	if p == "" {
-		return "", &launchError{http.StatusBadRequest, "bad_path", "a directory is required"}
+		return "", &launchError{status: http.StatusBadRequest, code: "bad_path", message: "a directory is required"}
 	}
 	if !filepath.IsAbs(p) || strings.ContainsRune(p, 0) {
-		return "", &launchError{http.StatusBadRequest, "bad_path", "the directory must be an absolute path"}
+		return "", &launchError{status: http.StatusBadRequest, code: "bad_path", message: "the directory must be an absolute path"}
 	}
 	clean := filepath.Clean(p)
 	real, err := filepath.EvalSymlinks(clean)
 	if err != nil {
 		if withinAny(clean, roots) {
-			return "", &launchError{http.StatusNotFound, "not_found", "no such directory"}
+			return "", &launchError{status: http.StatusNotFound, code: "not_found", message: "no such directory"}
 		}
-		return "", &launchError{http.StatusForbidden, "outside_roots", "that directory is outside the launch roots"}
+		return "", &launchError{status: http.StatusForbidden, code: "outside_roots", message: "that directory is outside the launch roots"}
 	}
 	if !withinAny(real, roots) {
-		return "", &launchError{http.StatusForbidden, "outside_roots", "that directory is outside the launch roots"}
+		return "", &launchError{status: http.StatusForbidden, code: "outside_roots", message: "that directory is outside the launch roots"}
 	}
 	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
-		return "", &launchError{http.StatusBadRequest, "not_a_directory", "not a directory"}
+		return "", &launchError{status: http.StatusBadRequest, code: "not_a_directory", message: "not a directory"}
 	}
 	return real, nil
 }
 
 func writeLaunchError(w http.ResponseWriter, e *launchError) {
-	writeJSONStatus(w, e.status, map[string]string{"code": e.code, "message": e.message})
+	body := map[string]string{"code": e.code, "message": e.message}
+	if e.workspace != "" {
+		body["workspace_id"] = e.workspace
+	}
+	writeJSONStatus(w, e.status, body)
 }
 
 // homeLabel shows p with the home directory as ~.

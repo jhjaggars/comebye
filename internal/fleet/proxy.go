@@ -39,17 +39,29 @@ var proxyOps = map[string]proxyOp{
 	"subagent-transcript": {method: http.MethodGet, query: []string{"limit", "skip", "from"}, timeout: 20 * time.Second},
 }
 
-// hostProxyOps are the per-host (not per-agent) calls the hub may forward,
-// all under /api/launch on the peer: launching an agent there.
+// hostProxyOps are the per-host (not per-agent) calls the hub may make to a
+// peer: launching an agent there (browser calls, through ProxyHost), and
+// the worker operations (see CallHost).
 var hostProxyOps = map[string]struct {
 	proxyOp
 	path []string
+	// hubOnly: only the hub itself makes this call (CallHost); a browser
+	// cannot have it forwarded.
+	hubOnly bool
 }{
-	"launch-options": {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "launch", "options"}},
-	"launch-dirs":    {proxyOp{method: http.MethodGet, query: []string{"path"}, timeout: 20 * time.Second}, []string{"api", "launch", "dirs"}},
+	"launch-options": {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "launch", "options"}, false},
+	"launch-dirs":    {proxyOp{method: http.MethodGet, query: []string{"path"}, timeout: 20 * time.Second}, []string{"api", "launch", "dirs"}, false},
 	// launch: a prompt of up to 1 MB plus the directory and name; the
 	// peer waits up to 90s for the agent to start.
-	"launch": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 100 * time.Second}, []string{"api", "launch"}},
+	"launch": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 100 * time.Second}, []string{"api", "launch"}, false},
+	// Workers (see CallHost): the git repositories for the handoff form,
+	// a worktree's safety checks, starting a worker in a new or reused
+	// worktree (git plus herdr, up to 150s on the peer), and removing a
+	// worker's session.
+	"repos":  {proxyOp{method: http.MethodGet, timeout: 30 * time.Second}, []string{"api", "repos"}, false},
+	"checks": {proxyOp{method: http.MethodGet, query: []string{"path", "branch", "base"}, timeout: 45 * time.Second}, []string{"api", "checks"}, false},
+	"worker": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
+	"remove": {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be
@@ -97,8 +109,8 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 	f.forward(w, r, p, u, spec)
 }
 
-// ProxyHost forwards one per-host API call (op: launch-options,
-// launch-dirs or launch) to the peer named host, hardened like Proxy.
+// ProxyHost forwards one per-host API call of a browser (an op of
+// hostProxyOps) to the peer named host, hardened like Proxy.
 func (f *Fleet) ProxyHost(w http.ResponseWriter, r *http.Request, host, op string) {
 	p := f.byName[host]
 	if p == nil {
@@ -106,11 +118,85 @@ func (f *Fleet) ProxyHost(w http.ResponseWriter, r *http.Request, host, op strin
 		return
 	}
 	spec, ok := hostProxyOps[op]
-	if !ok || r.Method != spec.method {
+	if !ok || spec.hubOnly || r.Method != spec.method {
 		writeJSON(w, http.StatusNotFound, "not_found", "not a proxied operation")
 		return
 	}
 	f.forward(w, r, p, p.endpoint(spec.path...), spec.proxyOp)
+}
+
+// CallHost makes one per-host API call (an op of hostProxyOps) to the peer
+// named host on the hub's own behalf, not a browser's: the ledger starting a
+// worker or removing one. Only the op's query parameters are sent. It
+// returns the peer's status and JSON body; a peer that rejects the hub
+// (401/403) or redirects is an error, like for Proxy.
+func (f *Fleet) CallHost(ctx context.Context, host, op string, query url.Values, body []byte) (int, []byte, error) {
+	p := f.byName[host]
+	if p == nil {
+		return 0, nil, errors.New("no such host: " + host)
+	}
+	spec, ok := hostProxyOps[op]
+	if !ok {
+		return 0, nil, errors.New("not a proxied operation: " + op)
+	}
+	u := p.endpoint(spec.path...)
+	q := url.Values{}
+	for _, k := range spec.query {
+		if v := query.Get(k); v != "" {
+			q.Set(k, v)
+		}
+	}
+	u.RawQuery = q.Encode()
+	var rd io.Reader
+	if spec.method == http.MethodPost {
+		if int64(len(body)) > spec.maxBody || !json.Valid(body) {
+			return 0, nil, errors.New("invalid body")
+		}
+		rd = bytes.NewReader(body)
+	}
+	ctx, cancel := context.WithTimeout(ctx, spec.timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, spec.method, u.String(), rd)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	if rd != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := f.opts.Client.Do(req)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return 0, nil, errors.New(host + " did not answer in time")
+		}
+		return 0, nil, errors.New(host + " is unreachable")
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden && resp.Header.Get("Content-Type") != "application/json":
+		return 0, nil, errors.New(host + " rejected the hub; its -ts-allow-login must include the hub device owner's login")
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		return 0, nil, errors.New(host + " answered with a redirect")
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, f.opts.MaxResponse+1))
+	if err != nil {
+		return 0, nil, errors.New(host + ": " + err.Error())
+	}
+	if int64(len(data)) > f.opts.MaxResponse {
+		return 0, nil, errors.New(host + " sent too much data")
+	}
+	return resp.StatusCode, data, nil
+}
+
+// FetchLatest reads the tail of a peer agent's transcript (the last
+// assistant text), for the ledger's final reports.
+func (f *Fleet) FetchLatest(ctx context.Context, host, pane string) *transcript.Latest {
+	p := f.byName[host]
+	if p == nil || !ValidTarget(pane) {
+		return nil
+	}
+	return p.fetchLatest(ctx, pane)
 }
 
 // forward makes the call described by spec to u on peer p and writes the

@@ -26,6 +26,8 @@ type fakeLaunchHerdr struct {
 	calls    []fakeCall
 	startErr []*herdr.Error // agent.start errors, consumed one per call
 	noRoot   bool           // workspace.create reports no root_pane
+	// hook, when set, answers a call first (ok=true), under the lock.
+	hook func(method string, params map[string]any) (res any, err *herdr.Error, ok bool)
 }
 
 type fakeCall struct {
@@ -65,6 +67,11 @@ func (f *fakeLaunchHerdr) answer(method string, params map[string]any) (any, *he
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeCall{method, params})
+	if f.hook != nil {
+		if res, err, ok := f.hook(method, params); ok {
+			return res, err
+		}
+	}
 	switch method {
 	case "agent.list":
 		return map[string]any{"type": "agent_list", "agents": f.agents}, nil
