@@ -146,7 +146,14 @@ func TestPushSubscribeValidation(t *testing.T) {
 	if !ok || sub.Login != me || sub.Keys != k {
 		t.Fatalf("stored %+v", sub)
 	}
-	// Another login may not remove it.
+	// Another login may not take it over with its own keys...
+	if w := call(s, "POST", "/api/push/subscribe", "other@example.com", subJSON(ep, browserKeys(t))); w.Code != 403 {
+		t.Fatalf("foreign re-subscribe: %d", w.Code)
+	}
+	if sub, _ := svc.Store().Get(ep); sub.Login != me || sub.Keys != k {
+		t.Fatalf("foreign re-subscribe changed the subscription: %+v", sub)
+	}
+	// ...or remove it.
 	if w := call(s, "POST", "/api/push/unsubscribe", "other@example.com", `{"endpoint":"`+ep+`"}`); w.Code != 403 {
 		t.Fatalf("foreign unsubscribe: %d", w.Code)
 	}

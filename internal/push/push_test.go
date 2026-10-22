@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -527,5 +528,26 @@ func TestPresenceLastViewed(t *testing.T) {
 	p.Update("c1", "wS:p1", false) // hiding does not count as a view
 	if got := p.LastViewed("wS:p1"); !got.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("LastViewed = %v", got)
+	}
+}
+
+// A full last-viewed table evicts its stalest entry, so junk keys cannot
+// lock out real agents.
+func TestPresenceViewedEvictsOldest(t *testing.T) {
+	p := NewPresence()
+	now := time.Unix(1_000_000, 0)
+	p.now = func() time.Time { return now }
+	p.Update("c", "first", true)
+	for i := 0; i < maxViewed; i++ {
+		now = now.Add(time.Second)
+		p.Update("c", fmt.Sprintf("junk%d", i), true)
+	}
+	now = now.Add(time.Second)
+	p.Update("c", "real", true)
+	if !p.LastViewed("first").IsZero() || !p.LastViewed("junk0").IsZero() {
+		t.Fatal("the oldest entries should have been evicted")
+	}
+	if !p.LastViewed("real").Equal(now) || len(p.viewed) != maxViewed {
+		t.Fatalf("real agent not recorded (table %d)", len(p.viewed))
 	}
 }

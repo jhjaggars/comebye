@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -18,6 +19,13 @@ const maxImageBytes = 8 << 20
 
 // imageKeep is how long uploaded images are kept before being pruned.
 const imageKeep = 7 * 24 * time.Hour
+
+// The upload directory is capped in total, oldest images pruned first, so
+// a burst of uploads cannot fill the disk within imageKeep.
+const (
+	maxUploadBytes = 200 << 20
+	maxUploadFiles = 500
+)
 
 // imageExt maps the sniffed type of an accepted image to its extension.
 var imageExt = map[string]string{
@@ -73,6 +81,10 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pruneUploads(s.cfg.UploadDir, time.Now().Add(-imageKeep))
+	if !capUploads(s.cfg.UploadDir, int64(len(data)), maxUploadBytes, maxUploadFiles) {
+		writeJSONStatus(w, http.StatusInsufficientStorage, map[string]string{"code": "uploads_full", "message": "the upload directory is full"})
+		return
+	}
 	var rnd [4]byte
 	_, _ = rand.Read(rnd[:])
 	name := "img-" + time.Now().Format("20060102-150405") + "-" + hex.EncodeToString(rnd[:]) + ext
@@ -98,4 +110,43 @@ func pruneUploads(dir string, before time.Time) {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
+}
+
+// capUploads makes room for one more image of size bytes: it removes the
+// oldest uploads until the directory holds fewer than maxFiles images and
+// at most maxBytes including the new one. It reports false when that is
+// not possible (files it cannot remove).
+func capUploads(dir string, size, maxBytes int64, maxFiles int) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true // nothing there yet; the write reports real errors
+	}
+	type upload struct {
+		name string
+		size int64
+		mod  time.Time
+	}
+	var ups []upload
+	total := size
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "img-") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil {
+			ups = append(ups, upload{e.Name(), fi.Size(), fi.ModTime()})
+			total += fi.Size()
+		}
+	}
+	sort.Slice(ups, func(i, j int) bool { return ups[i].mod.Before(ups[j].mod) })
+	n := len(ups)
+	for _, u := range ups {
+		if n < maxFiles && total <= maxBytes {
+			break
+		}
+		if os.Remove(filepath.Join(dir, u.name)) == nil {
+			n--
+			total -= u.size
+		}
+	}
+	return n < maxFiles && total <= maxBytes
 }

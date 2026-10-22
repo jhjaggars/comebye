@@ -76,8 +76,16 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	store := s.cfg.Push.Store()
-	if prev, ok := store.Get(sub.Endpoint); ok && prev.Keys == sub.Keys && prev.Login == sub.Login {
-		sub.Created = prev.Created // an idempotent re-sync from the app
+	if prev, ok := store.Get(sub.Endpoint); ok {
+		// Like unsubscribe: another login may not take over (or re-key)
+		// someone's subscription and redirect their notifications.
+		if prev.Login != sub.Login {
+			writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "not_owner", "message": "that subscription belongs to another login"})
+			return
+		}
+		if prev.Keys == sub.Keys {
+			sub.Created = prev.Created // an idempotent re-sync from the app
+		}
 	}
 	if err := store.Put(sub); err != nil {
 		if errors.Is(err, push.ErrStoreFull) {

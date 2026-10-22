@@ -63,3 +63,34 @@ func TestImageUpload(t *testing.T) {
 		t.Fatalf("disabled: %d", w.Code)
 	}
 }
+
+func TestCapUploads(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	for i, name := range []string{"img-a.png", "img-b.png", "img-c.png"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, make([]byte, 100), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mod := now.Add(time.Duration(i-3) * time.Minute)
+		if err := os.Chtimes(p, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Not an upload: never counted or removed.
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), make([]byte, 1000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exists := func(name string) bool { _, err := os.Stat(filepath.Join(dir, name)); return err == nil }
+	// Room for one more with at most 3 files: the oldest goes.
+	if !capUploads(dir, 100, 1<<20, 3) || exists("img-a.png") || !exists("img-b.png") {
+		t.Fatal("the file cap should prune the oldest upload")
+	}
+	// 200 new bytes under a 250-byte cap: b and c both go.
+	if !capUploads(dir, 200, 250, 10) || exists("img-b.png") || exists("img-c.png") || !exists("notes.txt") {
+		t.Fatal("the byte cap should prune oldest first and leave other files")
+	}
+	if capUploads(dir, 300, 250, 10) {
+		t.Fatal("an image over the whole cap cannot fit")
+	}
+}

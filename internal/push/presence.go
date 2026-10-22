@@ -62,9 +62,20 @@ func (p *Presence) Update(client, pane string, visible bool) {
 	if p.viewed == nil {
 		p.viewed = map[string]time.Time{}
 	}
-	if _, ok := p.viewed[pane]; ok || len(p.viewed) < maxViewed {
-		p.viewed[pane] = now
+	if _, ok := p.viewed[pane]; !ok && len(p.viewed) >= maxViewed {
+		// Evict the stalest entry rather than refuse the new one, so junk
+		// keys cannot fill the table for good and stop viewing from
+		// releasing held notifications.
+		var oldest string
+		var at time.Time
+		for k, t := range p.viewed {
+			if oldest == "" || t.Before(at) {
+				oldest, at = k, t
+			}
+		}
+		delete(p.viewed, oldest)
 	}
+	p.viewed[pane] = now
 	if _, ok := p.clients[client]; !ok && len(p.clients) >= maxPresenceClients {
 		return
 	}
