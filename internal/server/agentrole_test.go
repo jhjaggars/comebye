@@ -532,7 +532,17 @@ func TestIdempotentHandoff(t *testing.T) {
 	fh.set(func(f *fakeLaunchHerdr) {
 		wts = append(wts, map[string]any{"path": wt, "branch": "feat/a", "is_linked_worktree": true})
 	})
+	// Right away, before the agent list caught up: still the same worker.
+	if w := do(s, "POST", "/api/handoffs", agentHdr("w1:p1"), body); !strings.Contains(w.Body.String(), `"existing":true`) || starts() != 1 {
+		t.Fatalf("immediate repeat = %d %s", w.Code, w.Body)
+	}
 	waitAgents(t, m, 2)
+	noGrace := func() {
+		s.coord.mu.Lock()
+		clear(s.coord.started)
+		s.coord.mu.Unlock()
+	}
+	noGrace()
 
 	// Again while the worker runs: the existing entry, nothing started.
 	w = do(s, "POST", "/api/handoffs", agentHdr("w1:p1"), body)
@@ -572,6 +582,22 @@ func TestIdempotentHandoff(t *testing.T) {
 	}
 	if n := len(s.ledger.Entries()); n != 1 {
 		t.Fatalf("%d entries, want 1", n)
+	}
+
+	// Gone again, and the new agent fails to start: an error, and the
+	// entry stays as it was (no failed duplicate).
+	noGrace()
+	fh.set(func(f *fakeLaunchHerdr) {
+		f.agents = f.agents[:1]
+		f.startErr = []*herdr.Error{{Code: "agent_start_failed", Message: "nope"}}
+	})
+	waitAgents(t, m, 1)
+	w = do(s, "POST", "/api/handoffs", agentHdr("w1:p1"), body)
+	if w.Code == 200 || !strings.Contains(w.Body.String(), "a new one could not be started") || len(s.ledger.Entries()) != 1 {
+		t.Fatalf("failed restart = %d %s", w.Code, w.Body)
+	}
+	if e, _ := s.ledger.Get(r1.Entry.ID); e.Status != ledger.Running || e.AgentID != "desk/w9:p2" {
+		t.Fatalf("entry after a failed restart = %+v", e)
 	}
 
 	// Removed (or failed) entries do not count: a new handoff starts.

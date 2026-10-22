@@ -18,6 +18,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
@@ -78,6 +79,7 @@ type coord struct {
 	checking  map[string]bool
 	reporting map[string]time.Time // entry id -> last capture attempt
 	starting  map[string]bool      // handoffs being started, by host, repo and branch
+	started   map[string]time.Time // entry id -> when its worker was (re)started
 }
 
 type cachedChecks struct {
@@ -121,19 +123,41 @@ func (s *Server) ledgerOff(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// agentPresent reports whether a worker's agent is still running; when its
-// host is a peer the hub cannot see right now, it is assumed to be.
-func (s *Server) agentPresent(host, id string) bool {
-	if id == "" {
+// startGrace is how long a worker just started counts as running even if
+// the (debounced, or a peer's streamed) agent list does not show it yet.
+const startGrace = 2 * time.Minute
+
+// agentPresent reports whether a ledger worker's agent is still running:
+// asked of herdr itself on this host; from the fleet's view for a peer,
+// assumed when the hub cannot see that peer right now. A worker started a
+// moment ago counts as running.
+func (s *Server) agentPresent(ctx context.Context, e ledger.Entry) bool {
+	if e.AgentID == "" {
 		return false
 	}
+	s.coord.mu.Lock()
+	at, ok := s.coord.started[e.ID]
+	s.coord.mu.Unlock()
+	if ok && time.Since(at) < startGrace {
+		return true
+	}
+	if e.Host == s.fleet.LocalName() && s.client != nil {
+		if live, err := s.client.ListAgents(ctx); err == nil {
+			for _, a := range live {
+				if state.QualifiedID(e.Host, a.PaneID) == e.AgentID {
+					return true
+				}
+			}
+			return false
+		}
+	}
 	for _, h := range s.fleet.Hosts() {
-		if h.Name == host && !h.Local && h.Status != fleet.StatusOK {
+		if h.Name == e.Host && !h.Local && h.Status != fleet.StatusOK {
 			return true
 		}
 	}
 	for _, a := range s.fleet.Agents() {
-		if a.ID == id {
+		if a.ID == e.AgentID {
 			return true
 		}
 	}
@@ -318,7 +342,9 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		return e.Host == b.Host && e.RepoName == repoName && e.Branch == branch &&
 			(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
 	})
-	if hasPrev && s.agentPresent(prev.Host, prev.AgentID) {
+	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
+	defer cancel()
+	if hasPrev && s.agentPresent(ctx, prev) {
 		writeJSON(w, map[string]any{"entry": prev, "existing": true})
 		return
 	}
@@ -328,10 +354,14 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		"{{from}}", from, "{{host}}", b.Host,
 	).Replace(s.handoffTemplate())
 
-	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
-	defer cancel()
 	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Prompt: prompt})
-	if hasPrev && lerr == nil {
+	if hasPrev && lerr != nil {
+		// Restarting the earlier worker failed: its entry stays as it was
+		// (no second, failed entry for the same branch).
+		writeJSONStatus(w, lerr.status, map[string]any{"code": lerr.code, "message": "the earlier worker's agent is gone and a new one could not be started: " + lerr.message, "entry": prev})
+		return
+	}
+	if hasPrev {
 		// The earlier worker's agent is gone: the new one takes over its
 		// entry (and its worktree, which startWorker reopened).
 		entry, _, err := s.ledger.Update(prev.ID, func(e *ledger.Entry) {
@@ -347,6 +377,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		}
 		s.coord.mu.Lock()
 		delete(s.coord.checks, prev.ID)
+		s.coord.started[prev.ID] = time.Now()
 		s.coord.mu.Unlock()
 		writeJSON(w, map[string]any{"entry": entry, "worker": res, "existing": true, "restarted": true})
 		return
@@ -378,6 +409,14 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res})
 		return
 	}
+	s.coord.mu.Lock()
+	for id, at := range s.coord.started { // keep the map small
+		if time.Since(at) > startGrace {
+			delete(s.coord.started, id)
+		}
+	}
+	s.coord.started[entry.ID] = time.Now()
+	s.coord.mu.Unlock()
 	writeJSON(w, map[string]any{"entry": entry, "worker": res})
 }
 
