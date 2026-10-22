@@ -534,6 +534,7 @@ function renderDetail() {
   st.textContent = a.agent_status;
   st.className = "status " + a.agent_status;
   updateAnswerCard();
+  updateSendButton();
 }
 
 /* ---------- chat view (Pi session transcript) ---------- */
@@ -1078,6 +1079,24 @@ function stopAnswerPoll() {
 
 /* ---------- actions ---------- */
 
+// While the agent works and nothing is typed, Send becomes Stop (Esc,
+// which interrupts both Pi and Claude Code). Typed text keeps it Send, so
+// a prompt can still be queued mid-turn. An open questionnaire has its
+// own cancel button in the answer card.
+function stopMode() {
+  const a = agentById(state.selected);
+  return !!a && a.agent_status === "working" && !state.ask && !state.sending &&
+    !$("prompt-text").value.trim();
+}
+
+function updateSendButton() {
+  const btn = $("btn-send");
+  const stop = stopMode();
+  btn.textContent = stop ? "Stop" : "Send";
+  btn.classList.toggle("stop", stop);
+  btn.setAttribute("aria-label", stop ? "Stop the agent (Esc)" : "Send prompt");
+}
+
 async function sendPrompt() {
   const text = $("prompt-text").value.trim();
   if (!text || state.sending) return;
@@ -1107,6 +1126,7 @@ async function sendPrompt() {
   } finally {
     state.sending = false;
     $("btn-send").disabled = false;
+    updateSendButton();
   }
 }
 
@@ -1558,10 +1578,13 @@ window.addEventListener("DOMContentLoaded", () => {
     showTerminal();
     refreshOutput();
   });
-  $("btn-esc").addEventListener("click", () => sendKeys(["esc"], "Esc"));
   $("btn-enter").addEventListener("click", () => sendKeys(["enter"], "Enter"));
   $("btn-ctrlc").addEventListener("click", () => sendKeys(["ctrl+c"], "Ctrl+C"));
-  $("btn-send").addEventListener("click", sendPrompt);
+  $("btn-send").addEventListener("click", () => {
+    if (stopMode()) sendKeys(["esc"], "Stop");
+    else sendPrompt();
+  });
+  $("prompt-text").addEventListener("input", updateSendButton);
   $("prompt-text").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); sendPrompt(); }
   });

@@ -419,6 +419,7 @@
       cursor: pointer;
     }
     .prompt .send:disabled { opacity: 0.5; }
+    .prompt .send.stop { background: var(--red); color: #fff; }
     #toast {
       position: fixed; left: 50%; bottom: calc(24px + var(--safe-bottom));
       transform: translateX(-50%);
@@ -479,7 +480,6 @@
       <section id="answer" style="display:none" aria-live="polite"></section>
       <div class="controls">
         <button class="btn" id="btn-refresh">Refresh</button>
-        <button class="btn warn" id="btn-esc">Esc</button>
         <button class="btn" id="btn-enter">Enter</button>
         <button class="btn danger" id="btn-ctrlc">Ctrl+C</button>
       </div>
