@@ -408,16 +408,23 @@
     .btn.warn { color: var(--orange); }
     .btn.danger { color: var(--red); }
     .btn:disabled { opacity: 0.5; }
-    .prompt { display: flex; gap: 8px; align-items: flex-end; position: relative; }
+    /* One rounded container holds +, the text and Send; it grows with the
+       text (up to ~6 lines, then the text scrolls) with the buttons
+       anchored at its bottom. */
+    .prompt {
+      display: flex; gap: 4px; align-items: flex-end; position: relative;
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 24px;
+      padding: 4px;
+    }
+    .prompt:focus-within { border-color: var(--blue); }
     .prompt .composer {
-      flex: 1; min-width: 0; min-height: 44px; max-height: 160px; overflow-y: auto;
-      background: var(--panel2); color: var(--text);
-      border: 1px solid var(--border); border-radius: 12px;
-      padding: 11px 12px; font: inherit; font-size: 16px; line-height: 1.4;
+      flex: 1; min-width: 0; min-height: 40px;
+      max-height: calc(6 * 1.4em + 20px); overflow-y: auto; overscroll-behavior: contain;
+      color: var(--text); background: none; border: none;
+      padding: 10px 6px; font: inherit; font-size: 16px; line-height: 1.4;
       white-space: pre-wrap; overflow-wrap: anywhere; outline: none;
       -webkit-user-select: text; user-select: text;
     }
-    .prompt .composer:focus { border-color: var(--blue); }
     .prompt .composer:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
     .attach-menu {
       position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5;
@@ -431,19 +438,16 @@
       color: var(--text); font: inherit; font-size: 15px; cursor: pointer;
     }
     .attach-menu button + button { border-top: 1px solid var(--border); }
-    .prompt .send {
-      flex: none; width: 64px; min-height: 44px; border-radius: 12px; border: none;
-      background: var(--blue); color: #0b0d11; font-weight: 700; font-size: 15px;
-      cursor: pointer;
+    .prompt .attach, .prompt .send {
+      flex: none; width: 40px; height: 40px; border-radius: 50%; border: none;
+      display: grid; place-items: center; padding: 0; cursor: pointer;
     }
+    .prompt .attach { background: none; color: var(--text); }
+    .prompt .attach:active { background: var(--border); }
+    .prompt .send { background: var(--blue); color: #0b0d11; }
     .prompt .send:disabled { opacity: 0.5; }
-    .prompt .send.stop { background: var(--red); color: #fff; display: grid; place-items: center; }
+    .prompt .send.stop { background: var(--red); color: #fff; }
     .stop-glyph { width: 14px; height: 14px; border-radius: 3px; background: currentColor; }
-    .prompt .attach {
-      flex: none; width: 44px; min-height: 44px; border-radius: 12px;
-      border: 1px solid var(--border); background: var(--panel2); color: var(--text);
-      font-size: 22px; font-weight: 600; line-height: 1; cursor: pointer;
-    }
     .msg.pending { opacity: 0.6; }
     #toast {
       position: fixed; left: 50%; bottom: calc(24px + var(--safe-bottom));
@@ -505,7 +509,7 @@
       <section id="answer" style="display:none" aria-live="polite"></section>
       <div id="keypad" class="keypad" hidden aria-label="Send keys"></div>
       <div class="prompt">
-        <button class="attach" id="btn-attach" type="button" aria-label="Attach an image">+</button>
+        <button class="attach" id="btn-attach" type="button" aria-label="Attach an image or send keys"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
         <input type="file" id="attach-file" accept="image/*" multiple hidden>
         <div id="attach-menu" class="attach-menu" hidden>
           <button type="button" id="attach-paste">Paste image</button>
@@ -514,7 +518,7 @@
         </div>
         <!-- A rich contenteditable, not a textarea: iOS only offers Paste for an image-only clipboard on rich editors. Its content is kept plain text. -->
         <div id="prompt-text" class="composer" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Prompt" data-placeholder="Send a prompt…" enterkeyhint="send" autocapitalize="sentences" autocorrect="on" spellcheck="true"></div>
-        <button class="send" id="btn-send">Send</button>
+        <button class="send" id="btn-send" type="button" aria-label="Send prompt"></button>
       </div>
     </main>
   </div>

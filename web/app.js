@@ -1148,11 +1148,14 @@ function stopMode() {
     !promptValue().trim();
 }
 
+const SEND_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">' +
+  '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 function updateSendButton() {
   const btn = $("btn-send");
   const stop = stopMode();
   // The stop glyph is a CSS square (an emoji ⏹ renders inconsistently).
-  btn.innerHTML = stop ? '<span class="stop-glyph" aria-hidden="true"></span>' : "Send";
+  btn.innerHTML = stop ? '<span class="stop-glyph" aria-hidden="true"></span>' : SEND_ICON;
   btn.classList.toggle("stop", stop);
   btn.setAttribute("aria-label", stop ? "Stop the agent (Esc)" : "Send prompt");
   // While the agent works, a sent prompt waits for its next step.
