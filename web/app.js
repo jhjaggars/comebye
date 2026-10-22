@@ -749,7 +749,9 @@ function toolMeta(m) {
 function patchToolCard(m) {
   const el = document.querySelector(`#chat [data-id="${CSS.escape(m.id)}"]`);
   if (!el) return;
-  el.classList.toggle("err", m.err);
+  // !!: the server omits err when false, and toggle(name, undefined) flips
+  // the class instead of removing it, so cards blinked red on every poll.
+  el.classList.toggle("err", !!m.err);
   const meta = el.querySelector(".toolmeta");
   if (meta) meta.textContent = toolMeta(m);
   const body = el.querySelector(".toolresult");
