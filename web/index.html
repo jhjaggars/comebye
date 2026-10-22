@@ -551,6 +551,104 @@
       border-radius: 22px; font: inherit; font-size: 14px; cursor: pointer;
     }
     #update-banner[hidden] { display: none; }
+
+    /* New agent sheet */
+    header .bell.launch { margin-right: -6px; }
+    body.sheet-open { overflow: hidden; }
+    #launch {
+      position: fixed; inset: 0; z-index: 40; background: var(--bg);
+      display: flex; flex-direction: column;
+    }
+    #launch[hidden] { display: none; }
+    #launch header .back {
+      font: inherit; font-size: 20px; line-height: 1; cursor: pointer; color: var(--blue);
+      background: none; border: 0; border-radius: 10px; padding: 0;
+      min-width: 44px; min-height: 44px; margin: -8px 0 -8px -8px;
+      display: inline-flex; align-items: center; justify-content: center; flex: none;
+    }
+    #launch header .back:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    #launch header h2 { font-size: 17px; margin: 0; font-weight: 650; }
+    .ln-body {
+      flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+      width: 100%; max-width: 640px; margin: 0 auto;
+      padding: 12px calc(16px + env(safe-area-inset-right, 0px)) 16px calc(16px + env(safe-area-inset-left, 0px));
+    }
+    .ln-hosts { margin: 0 -16px 4px; padding: 0 16px 2px; }
+    .hf-chip:disabled { opacity: 0.45; cursor: default; }
+    .ln-label { display: block; margin: 14px 0 6px; font-size: 13px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .ln-label .ln-opt { text-transform: none; letter-spacing: 0; font-weight: 500; }
+    .ln-chosen {
+      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--muted); margin-bottom: 8px; overflow-wrap: anywhere;
+    }
+    .ln-chosen.set { color: var(--green); }
+    .ln-chosen.set::before { content: "✓ "; }
+    .ln-browser { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+    .ln-bar { display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-bottom: 1px solid var(--border); }
+    .ln-up {
+      flex: none; min-width: 44px; min-height: 44px; border: 0; border-radius: 10px;
+      background: none; color: var(--blue); font-size: 20px; cursor: pointer;
+    }
+    .ln-up:disabled { color: var(--border); cursor: default; }
+    .ln-up:focus-visible, .ln-dir:focus-visible, .ln-go:focus-visible, .ln-use:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .ln-crumb {
+      min-width: 0; flex: 1; direction: rtl; text-align: left;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text);
+    }
+    .ln-use { display: block; width: calc(100% - 20px); margin: 10px; flex: none; color: var(--blue); }
+    .ln-use[hidden] { display: none; }
+    .ln-use[aria-pressed="true"] { color: var(--green); border-color: var(--green); }
+    .ln-list { max-height: 44vh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+    .ln-head {
+      padding: 10px 14px 4px; font-size: 11.5px; font-weight: 650; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .ln-dir {
+      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px;
+      padding: 0 14px; background: none; border: 0; border-top: 1px solid var(--border);
+      color: var(--text); font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+    }
+    .ln-head + .ln-dir, .ln-list > .ln-dir:first-child { border-top: 0; }
+    .ln-dir:active { background: var(--panel2); }
+    .ln-dir .ln-dname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ln-dir.recent .ln-dname { font: 13.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .ln-git {
+      flex: none; background: #14202f; color: var(--blue); border-radius: 5px;
+      padding: 1px 6px; font-size: 11px; font-weight: 600;
+    }
+    .ln-chev { flex: none; color: var(--muted); font-size: 20px; }
+    .ln-empty { color: var(--muted); font-size: 14px; padding: 16px 14px; text-align: center; }
+    .ln-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
+    .ln-kinds .hf-chip { min-height: 44px; }
+    .ln-kinds .hf-chip[aria-pressed="true"] { background: #14202f; border-color: var(--blue); color: var(--blue); }
+    .ln-muted { color: var(--muted); }
+    .ln-input {
+      display: block; width: 100%; padding: 10px 12px; min-height: 44px;
+      background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 12px;
+      font: inherit; font-size: 16px; /* 16px: iOS does not zoom in */
+    }
+    textarea.ln-input { resize: vertical; min-height: 88px; line-height: 1.4; }
+    .ln-input:focus { outline: none; border-color: var(--blue); }
+    .ln-input[aria-invalid="true"] { border-color: var(--red); }
+    .ln-hint { color: var(--red); font-size: 12.5px; margin-top: 4px; }
+    .ln-hint[hidden] { display: none; }
+    .ln-foot {
+      flex: none; width: 100%; max-width: 640px; margin: 0 auto;
+      padding: 10px calc(16px + env(safe-area-inset-right, 0px)) calc(10px + var(--safe-bottom)) calc(16px + env(safe-area-inset-left, 0px));
+      border-top: 1px solid var(--border); background: var(--bg);
+    }
+    .ln-status { color: var(--muted); font-size: 13px; text-align: center; }
+    .ln-status:empty { display: none; }
+    #launch.busy .ln-status::before {
+      content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px;
+      border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #launch.busy .ln-status::before { animation: none; } }
+    .ln-go { display: block; width: 100%; margin-top: 8px; background: var(--blue); border-color: var(--blue); color: #0b0d11; font-size: 16px; }
+    .ln-go:disabled { background: var(--panel2); border-color: var(--border); color: var(--muted); opacity: 1; }
   </style>
 </head>
 <body>
@@ -560,6 +658,9 @@
       <span class="conn" id="conn-list"></span>
       <h1>herdr</h1>
       <span class="count" id="count"></span>
+      <button type="button" class="bell launch" id="btn-launch" aria-label="New agent" aria-haspopup="dialog" aria-controls="launch">
+        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
       <button type="button" class="bell" id="btn-notify" aria-label="Notifications" aria-expanded="false" aria-controls="notify-panel">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2 2 0 0 0 4 0"/></svg>
       </button>
@@ -575,6 +676,38 @@
     </section>
     <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><div id="agents"></div></main>
   </div>
+
+  <!-- New agent ("+" in the list header) -->
+  <section id="launch" hidden role="dialog" aria-modal="true" aria-labelledby="ln-title">
+    <header>
+      <button type="button" class="back" id="ln-close" aria-label="Close">&#10005;</button>
+      <h2 id="ln-title">New agent</h2>
+    </header>
+    <div class="ln-body">
+      <nav id="ln-hosts" class="host-filter ln-hosts" aria-label="Host" hidden></nav>
+      <div class="ln-label" id="ln-dir-label">Directory</div>
+      <div class="ln-chosen" id="ln-chosen" aria-live="polite"></div>
+      <div class="ln-browser" role="group" aria-labelledby="ln-dir-label">
+        <div class="ln-bar">
+          <button type="button" class="ln-up" id="ln-up" aria-label="Up one directory" disabled>&#8593;</button>
+          <span class="ln-crumb" id="ln-crumb"></span>
+        </div>
+        <button type="button" class="btn ln-use" id="ln-use" hidden>Use this directory</button>
+        <div class="ln-list" id="ln-list"></div>
+      </div>
+      <div class="ln-label" id="ln-kind-label">Agent</div>
+      <div class="ln-kinds" id="ln-kinds" role="group" aria-labelledby="ln-kind-label"></div>
+      <label class="ln-label" for="ln-name">Name <span class="ln-opt">(optional)</span></label>
+      <input id="ln-name" class="ln-input" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" aria-describedby="ln-name-hint">
+      <div class="ln-hint" id="ln-name-hint" hidden>Lowercase letters, digits, - and _, starting with a letter</div>
+      <label class="ln-label" for="ln-prompt">First prompt <span class="ln-opt">(optional)</span></label>
+      <textarea id="ln-prompt" class="ln-input" rows="3" placeholder="What should it work on?"></textarea>
+    </div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="ln-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="ln-go" disabled>Launch</button>
+    </footer>
+  </section>
 
   <!-- Agent detail view -->
   <div id="detail">
