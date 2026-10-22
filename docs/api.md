@@ -1,0 +1,47 @@
+# API
+
+The JSON API the app is built on, usable from scripts on your tailnet.
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /api/agents` | Current agent list (every host's on a hub; each agent has `host` and `id` = `<host>/<pane_id>`) and `hosts` (`name`, `local`, `status` `ok`/`connecting`/`down`, `error`, `last_seen`, `agents`). |
+| `GET /api/hosts` | Just the `hosts` status list. |
+| `GET/POST /api/hosts/{host}/agents/{target}/{output,transcript,prompt,keys,dialog,answer}` | Same as the routes below for a given host: the local host is served directly, a peer's agent is proxied to that peer (status and JSON errors pass through). |
+| `GET /api/agents/{target}/output?lines=N` | Recent pane output; `&source=visible` reads the current screen instead (used for dialog snapshots). |
+| `GET /api/agents/{target}/transcript?limit=N&skip=M` | Parsed session transcript (Pi or Claude Code; `format` says which), including any pending `ask` question. 404 `no_session` when there is none. |
+| `POST /api/agents/{target}/prompt` | Body `{"text": "...", "wait": bool, "timeout_ms": int}`. |
+| `POST /api/agents/{target}/keys` | Body `{"keys": ["esc"]}` (whitelisted). |
+| `GET /api/agents/{target}/dialog` | `{"dialog": {...} \| null}`: the dialog the agent is waiting on (`kind`, `title`, `question`, `detail`, `options[]` with `label`/`description`/`checked`/`role`, `selected`, `multi`, `answerable`, `cancel_label`, `fingerprint`). Only while the agent is `blocked` or has a pending question while `working`. |
+| `POST /api/agents/{target}/answer` | Body `{"action": "select"\|"toggle"\|"submit"\|"cancel", "index": N, "fingerprint": "..."}`. Re-detects the dialog; 409 `dialog_changed` (with the fresh `dialog`), `no_dialog` or `duplicate` (same dialog answered in the last 3 s), else sends the keys and returns `{"ok": true, "keys": [...]}`. |
+| `GET /api/launch/options` | `{"enabled", "reason", "roots": [{path, label, git}], "kinds": [...], "default_kind", "recent": [{path, label, git}]}` for this host. |
+| `GET /api/launch/dirs?path=<abs>` | Subdirectories of a directory inside a launch root: `{path, label, parent, entries: [{name, path, git}], truncated}` (at most 300; hidden ones left out). Without `path`, the roots. 403 outside the roots, 404 missing. |
+| `POST /api/launch` | Body `{"dir": "<abs>", "kind": "pi", "name": "...", "prompt": "..."}` (`kind` defaults to `default_kind`, `name` to the directory's). Returns `{"agent": {id, host, pane_id, name, agent, ...}, "workspace_id"}`, plus `prompt_error` if the agent started but the prompt failed. Errors: `bad_kind`, `bad_name`, `agent_name_taken` (409), `outside_roots` (403), `launch_disabled` (403), or herdr's code with the workspace left open. With `"coordinator": true` (the Coordinator preset) `dir` is ignored: the agent starts in `-coordinator-dir`, named `coordinator[-N]`, with the harness's arguments and a first prompt pointing at the playbook, and the hub records its role (`launch/options` reports `coordinator_dir`). |
+| `GET/POST /api/hosts/{host}/launch[/options,/dirs]` | The same for a given host (proxied to a peer by a hub). |
+| `GET /api/repos` | The primary git checkouts in this host's launch roots (a root, its children and grandchildren): `{"repos": [{name, path, label, default_branch}], "truncated"}`. Also `/api/hosts/{host}/repos`. |
+| `GET /api/checks?path=<abs>&branch=&base=` | A worktree's safety checks on this host: `{path, exists, primary, branch, dirty, dirty_files, unmerged_commits, base_used, repo, error}` (`unmerged_commits` -1 when unknown). The path must be inside a launch root or the worktree root. Also `/api/hosts/{host}/checks`. |
+| `POST /api/worker` | Starts a worker on this host: body `{"repo", "branch", "base", "kind", "name", "prompt"}` (`{{worktree}}` and `{{base}}` in the prompt are filled in). Returns `{agent, workspace_id, worktree, branch, base, repo, reused}`. Errors: `bad_branch`, `bad_base`, `not_a_repo`, `branch_in_primary`, `path_exists`, `no_free_pane` (409), plus the launch errors. The hub calls a peer's; browsers use `/api/handoffs`. |
+| `POST /api/remove` | Removes a session on this host: body `{"agent": "<pane>", "name", "workspace_id", "worktree", "branch", "base", "remove_worktree": bool, "allow_working": bool}`. Returns `{closed: "workspace"\|"pane"\|"", worktree_removed, kept, checks}`; 409 `agent_working` or `agent_changed` closes nothing. |
+| `GET /api/ledger` | The hub's handoffs (`entries`, each with `live` status, `checks` and a `candidate` hint; only the latest 20 removed or failed) and standalone `marks`. 503 `ledger_disabled` without a state directory. |
+| `POST /api/handoffs` | Body `{"host", "repo", "branch", "base", "kind", "name", "brief", "from"}`: runs the worker on that host and records it. Returns `{entry, worker}`; a failure returns the error with the recorded `failed` entry. An active handoff for the same host, repository and branch is returned instead (`"existing": true`; `"restarted": true` when its gone agent was replaced). 409 `handoff_in_progress` while the same one is starting. |
+| `POST /api/marks`, `POST /api/marks/clear` | Body `{"agent_id": "<host>/<pane>", "reason", "by"}`: mark a session ready to remove, or unmark it. |
+| `GET /api/removals` | The marked sessions, each with fresh `checks` from its host, `warnings`, `notes`, `safe` and `coordinator`. |
+| `POST /api/removals/confirm` | Body `{"ids": ["<host>/<pane>", ...], "allow_working": bool, "coordinators": [...]}`: removes each on its host; a coordinator only when its id is in `coordinators` too. `{"results": [{id, ok, code, message, result}]}`. |
+| `GET /api/brief`, `POST /api/brief` | `{"brief": {markdown, by, at} \| null}`; POST `{"markdown"}` (64 KB at most) publishes it. |
+| `GET /api/roles`, `POST /api/roles` | `{"roles": {"<host>/<pane>": {role: "coordinator", name, by, at}}}` (also in `/api/ledger`); POST `{"agent_id", "role": "coordinator" \| ""}` (the user only). |
+| `GET /api/playbook?harness=pi\|claude\|generic` | The coordinator playbook (markdown). |
+| `GET /api/whoami` | `{host, role: "user"\|"agent", agent, by, hub: "self"\|"<url>"\|"", ledger}`. |
+| `GET /api/events` | SSE stream of `agents` snapshots (with `hosts`), `resync` signals and a `ping` every 15 s. |
+| `GET /api/push/key` | `{"enabled": bool, "key": "<VAPID public key, base64url>"}`. |
+| `POST /api/push/subscribe` | Body: `PushSubscription.toJSON()` (`endpoint`, `keys.p256dh`, `keys.auth`), optional `replaces`. Stored with the caller's Tailscale login. |
+| `POST /api/push/unsubscribe` | Body `{"endpoint": "..."}` (own subscriptions only). |
+| `POST /api/push/test` | Body `{"endpoint": "..."}` or `{}`: sends a test notification to the caller's subscriptions. |
+| `POST /api/push/presence` | Body `{"client": "<id>", "pane": "<agent id>", "visible": bool}`: which agent this app instance shows (its `id`, `<host>/<pane>`; a bare pane ID means a local agent); suppresses notifications for it for 45 s unless refreshed. |
+
+POSTs must send `Content-Type: application/json` (see the security model).
+Requests with `X-Comebye-Agent-Token` (the `comebye` CLI) get the agent
+role and only the routes listed under [Coordinators](agents.md#coordinators); the
+others answer 403 `agent_forbidden`.
+`{target}` is a pane ID (for example `wS:p1`) or a live agent name; the
+`/api/agents/{target}/…` routes always mean the local host. With
+`"wait": true`, herdr starts a status wait in the same `agent.prompt` call,
+so "send this and tell me when it's done" has no race.
