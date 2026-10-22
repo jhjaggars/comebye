@@ -139,9 +139,13 @@
     #detail main {
       flex: 1; min-height: 0; width: 100%; box-sizing: border-box;
       display: flex; flex-direction: column;
-      padding-bottom: calc(8px + var(--safe-bottom));
+      /* The home indicator needs only the bottom ~13px of its 34px inset:
+         sit the input just above it rather than above the whole inset. */
+      padding-bottom: max(8px, calc(var(--safe-bottom) - 12px));
     }
     #detail main > * { flex: none; }
+    /* While typing, the keyboard covers the home indicator: no inset at all. */
+    #detail:has(.composer:focus) main { padding-bottom: 8px; }
     #detail main > #chat, #detail main > #output { flex: 1 1 0; }
     #detail header .back {
       font: inherit; font-size: 24px; line-height: 1; cursor: pointer; color: var(--blue);
