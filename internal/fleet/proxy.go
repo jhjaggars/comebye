@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/jhjaggars/herdr-phone/internal/transcript"
 )
 
 // proxyOp is one per-agent API call the hub may forward. Nothing else is
@@ -24,13 +26,15 @@ type proxyOp struct {
 
 var proxyOps = map[string]proxyOp{
 	"output":     {method: http.MethodGet, query: []string{"lines", "source"}, timeout: 20 * time.Second},
-	"transcript": {method: http.MethodGet, query: []string{"limit", "skip"}, timeout: 20 * time.Second},
+	"transcript": {method: http.MethodGet, query: []string{"limit", "skip", "from"}, timeout: 20 * time.Second},
 	"prompt":     {method: http.MethodPost, maxBody: 1 << 20, timeout: 30 * time.Second},
 	"keys":       {method: http.MethodPost, maxBody: 64 << 10, timeout: 15 * time.Second},
 	"dialog":     {method: http.MethodGet, timeout: 20 * time.Second},
 	"answer":     {method: http.MethodPost, maxBody: 64 << 10, timeout: 20 * time.Second},
 	// image: an 8 MB image as base64 JSON, stored on the agent's host.
 	"image": {method: http.MethodPost, maxBody: 12 << 20, timeout: 60 * time.Second},
+	// subagent-transcript: /agents/{target}/subagents/{sub}/transcript.
+	"subagent-transcript": {method: http.MethodGet, query: []string{"limit", "skip", "from"}, timeout: 20 * time.Second},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be
@@ -47,8 +51,9 @@ func ValidTarget(target string) bool {
 	return true
 }
 
-// Proxy forwards one per-agent API call (op: output, transcript, prompt,
-// keys, dialog, answer or image) for target to the peer named host and writes the peer's answer:
+// Proxy forwards one per-agent API call (op: output, transcript,
+// subagent-transcript, prompt, keys, dialog, answer or image) for target
+// to the peer named host and writes the peer's answer:
 // status code and JSON body pass through (e.g. 409 agent_blocked), only
 // the content type is kept from the peer's headers, and no browser header
 // is forwarded.
@@ -69,6 +74,14 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 	}
 
 	u := p.endpoint("api", "agents", target, op)
+	if op == "subagent-transcript" {
+		sub := r.PathValue("sub")
+		if !transcript.ValidAgentID(sub) {
+			writeJSON(w, http.StatusBadRequest, "bad_subagent", "invalid subagent id")
+			return
+		}
+		u = p.endpoint("api", "agents", target, "subagents", sub, "transcript")
+	}
 	q := url.Values{}
 	for _, k := range spec.query {
 		if v := r.URL.Query().Get(k); v != "" {

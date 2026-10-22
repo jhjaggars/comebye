@@ -158,7 +158,7 @@
     #detail header .title { font-weight: 650; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #detail header .subtitle { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     /* Chat view */
-    #chat {
+    #chat, #sv-chat {
       background: var(--bg);
       border: 1px solid var(--border); border-radius: 12px;
       margin: 12px 0 8px; padding: 14px 10px;
@@ -291,6 +291,58 @@
       font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       white-space: pre-wrap; word-break: break-word;
     }
+    .toolcard .toolresult:empty { display: none; }
+
+    /* Subagent cards: the description is the title, the type a badge. */
+    .toolcard.subagent { border-left: 3px solid var(--purple); align-self: stretch; max-width: none; }
+    .toolcard.subagent.err { border-color: var(--red); }
+    .toolcard.subagent .toolname { color: var(--purple); background: #241a30; }
+    .toolcard.subagent.err .toolname { color: var(--red); background: #2f1414; }
+    .toolcard.subagent .toolargs {
+      color: var(--text); font: 600 14px/1.35 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      white-space: normal; overflow-wrap: anywhere;
+    }
+    .toolcard.subagent.running .toolmeta { color: var(--purple); font-variant-numeric: tabular-nums; }
+    .toolcard .sa-flags { color: var(--muted); font-size: 11px; }
+    .toolcard .sa-flags:empty { display: none; }
+    .toolcard .sa-body { border-top: 1px solid var(--border); padding: 8px 12px 10px; font-size: 14px; }
+    .toolcard .sa-report {
+      max-height: 50vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    }
+    .toolcard .sa-report.sa-none { color: var(--muted); font-size: 13px; }
+    .toolcard .sa-report:empty { display: none; }
+    .toolcard .sa-steps {
+      display: block; margin: 10px 0 2px; min-height: 40px; padding: 0 14px;
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+      color: var(--blue); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .toolcard .sa-steps[hidden], .toolcard .sa-prompt[hidden] { display: none; }
+    .toolcard .sa-prompt { margin-top: 8px; }
+    .toolcard .sa-prompt > summary {
+      cursor: pointer; color: var(--muted); font-size: 12.5px; min-height: 32px;
+      display: flex; align-items: center; user-select: none; list-style: none;
+    }
+    .toolcard .sa-prompt > summary::-webkit-details-marker { display: none; }
+    .toolcard .sa-prompt > summary::before { content: "▸"; margin-right: 6px; }
+    .toolcard .sa-prompt[open] > summary::before { content: "▾"; }
+    .toolcard .sa-prompt-text {
+      color: #cdd3e0; background: #0b0d11; border-radius: 8px; padding: 6px 8px;
+      max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    .toolcard.subagent .toolresult { margin: 8px -12px -10px; }
+
+    /* "View steps": the subagent's transcript over the chat. */
+    #subview {
+      position: fixed; inset: 0; z-index: 30; background: var(--bg);
+      display: flex; flex-direction: column;
+    }
+    #subview[hidden] { display: none; }
+    #subview #sv-chat {
+      flex: 1 1 0; margin: 0; border: 0; border-radius: 0;
+      padding-bottom: calc(14px + var(--safe-bottom));
+    }
 
     .note {
       align-self: center; max-width: 95%; text-align: center;
@@ -325,7 +377,16 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .activity .act-detail[hidden] { display: none; }
+    .activity .act-detail[hidden], .activity .act-subs[hidden] { display: none; }
+    .activity .act-subs { flex-basis: 100%; color: var(--purple); font-size: 12.5px; }
+    /* The agent is idle but its background subagents still run. */
+    .activity.idle {
+      background: color-mix(in srgb, var(--purple) 8%, transparent);
+      border-color: color-mix(in srgb, var(--purple) 26%, transparent);
+      padding: 6px 10px;
+    }
+    .activity.idle .dot { width: 9px; height: 9px; background: var(--purple); }
+    .activity.idle .act-verb { color: var(--purple); font-weight: 600; }
     /* ...and a moving bar under the header, visible while scrolled up. It
        moves by transform, which the compositor animates without repainting. */
     #detail header { position: relative; overflow: hidden; }
@@ -352,6 +413,7 @@
 
     @media (max-width: 600px) {
       #chat { border-left: 0; border-right: 0; border-radius: 0; padding: 12px 6px; margin-left: -12px; margin-right: -12px; }
+      #sv-chat { border-left: 0; border-right: 0; border-radius: 0; padding: 12px 6px; }
       .msg, .thinking, .toolcard { max-width: 94%; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -543,6 +605,17 @@
         <button class="send" id="btn-send" type="button" aria-label="Send prompt"></button>
       </div>
     </main>
+    <!-- A subagent's steps ("View steps" on a subagent card), over the chat -->
+    <section id="subview" hidden aria-label="Subagent steps">
+      <header>
+        <button type="button" class="back" id="sv-back" aria-label="Back to the chat">&#8592;</button>
+        <div class="meta">
+          <div class="title" id="sv-title"></div>
+          <div class="subtitle" id="sv-subtitle"></div>
+        </div>
+      </header>
+      <div id="sv-chat" class="chat"></div>
+    </section>
   </div>
 
   <div id="toast"></div>

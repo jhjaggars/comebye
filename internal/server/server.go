@@ -112,6 +112,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/agents", s.auth(s.handleAgents))
 	s.mux.HandleFunc("GET /api/agents/{target}/output", s.auth(s.handleOutput))
 	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.auth(s.handleTranscript))
+	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.auth(s.handleSubagentTranscript))
 	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.auth(s.handlePrompt))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
@@ -122,6 +123,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts", s.auth(s.handleHosts))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.auth(s.onHost("output", s.handleOutput)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.auth(s.onHost("transcript", s.handleTranscript)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.auth(s.onHost("subagent-transcript", s.handleSubagentTranscript)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.auth(s.onHost("prompt", s.handlePrompt)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/keys", s.auth(s.onHost("keys", s.handleKeys)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
@@ -286,11 +288,43 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": err.Error()})
 		return
 	}
-	s.serveTranscript(w, r, path)
+	s.serveTranscript(w, r, path, transcript.Read)
 }
 
-// serveTranscript answers a transcript request for the session file at path.
-func (s *Server) serveTranscript(w http.ResponseWriter, r *http.Request, path string) {
+// handleSubagentTranscript renders the transcript of one of a Claude
+// agent's subagents ({sub} is its agentId), which Claude keeps next to the
+// agent's own session.
+func (s *Server) handleSubagentTranscript(w http.ResponseWriter, r *http.Request) {
+	agent := s.resolveAgent(r.PathValue("target"))
+	if agent == nil {
+		http.Error(w, "unknown agent", http.StatusNotFound)
+		return
+	}
+	session, err := transcript.SessionPath(*agent, s.manager.Agents())
+	if err != nil {
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": err.Error()})
+		return
+	}
+	s.serveSubagent(w, r, session, r.PathValue("sub"))
+}
+
+// serveSubagent answers for subagent id of the session at session.
+func (s *Server) serveSubagent(w http.ResponseWriter, r *http.Request, session, id string) {
+	if !transcript.ValidAgentID(id) {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_subagent", "message": "invalid subagent id"})
+		return
+	}
+	path, err := transcript.SubagentPath(session, id)
+	if err != nil {
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_subagent", "message": err.Error()})
+		return
+	}
+	s.serveTranscript(w, r, path, transcript.ReadSubagent)
+}
+
+// serveTranscript answers a transcript request for the session file at
+// path, parsed by read (transcript.Read or transcript.ReadSubagent).
+func (s *Server) serveTranscript(w http.ResponseWriter, r *http.Request, path string, read func(string, int, int) (*transcript.Transcript, error)) {
 	limit, skip := queryInt(r, "limit", 100), queryInt(r, "skip", 0)
 	if limit < 1 || limit > 500 {
 		limit = 100
@@ -316,7 +350,7 @@ func (s *Server) serveTranscript(w http.ResponseWriter, r *http.Request, path st
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	t, err := transcript.Read(path, limit, skip)
+	t, err := read(path, limit, skip)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": "session file is gone"})

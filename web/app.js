@@ -475,6 +475,7 @@ function routedAgent(r) {
 // route syncs the view to the URL hash. An agent that is not in the list
 // yet (cold start from a notification) is opened once the list arrives.
 function route() {
+  syncSubview();
   const r = parseRoute();
   if (!r) {
     state.pendingRoute = null;
@@ -523,6 +524,7 @@ function openDetail(id) {
 
 function closeDetail() {
   toggleKeypad(false);
+  hideSubview();
   clearInterval(activity.timer);
   activity.timer = null;
   activity.seenAt = 0;
@@ -574,7 +576,7 @@ async function loadChat(reset = true) {
   if (!state.selected) return;
   const pane = state.selected;
   if (reset) {
-    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [], from: "" };
+    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [], from: "", running: [] };
     $("chat").innerHTML = "";
   }
   const chat = state.chat;
@@ -646,11 +648,15 @@ function renderTranscript(t, reset) {
   if (t.messages.length) {
     chat.last = t.messages[t.messages.length - 1];
     // The next poll starts at the oldest message that can still change (a
-    // tool call waiting for its result), else at the newest one.
-    const open = t.messages.find((m) => m.kind === "tool" && !m.result && !m.err && !m.ms);
-    chat.from = (open || chat.last).id;
+    // tool call waiting for its result, a subagent still running), else at
+    // the newest one.
+    chat.from = (t.messages.find(stillChanging) || chat.last).id;
   }
+  // Running subagents are counted over the whole session, so even a
+  // partial response carries the current list.
+  chat.running = t.running_subagents || [];
   renderActivity();
+  ensureSubagentTicker();
 
   chatEl.appendChild(jumpAnchor()); // keep the jump button last
   if (appended && (atBottom || reset)) chatEl.scrollTop = chatEl.scrollHeight;
@@ -692,7 +698,7 @@ function isWorking(a) { return !!a && a.agent_status === "working" && !state.ask
 // activityStep describes what the agent is doing, from the newest message.
 function activityStep() {
   const m = state.chat && state.chat.last;
-  if (m && m.kind === "tool" && !m.result && !m.err && !m.ms) {
+  if (m && m.kind === "tool" && toolRunning(m)) {
     return { verb: "Running", what: m.tool || "a tool", detail: m.args || "" };
   }
   return { verb: "Thinking", what: "", detail: "" };
@@ -709,16 +715,28 @@ function workingSince(a) {
   return activity.seenAt;
 }
 
+// runningSubagents is how many of the session's subagents are still running.
+function runningSubagents() {
+  const chat = state.chat;
+  return chat && !chat.terminal && chat.running ? chat.running.length : 0;
+}
+
+function subagentCount(n) { return n + " subagent" + (n === 1 ? "" : "s"); }
+
+// renderActivity also shows background subagents: a line in the row while
+// the agent works, and a compact row of its own while the agent is idle
+// (or blocked) and they are still running.
 function renderActivity() {
   const a = agentById(state.selected);
   const working = isWorking(a);
+  const subs = runningSubagents();
   const header = document.querySelector("#detail header");
   if (header) header.classList.toggle("busy", working);
   const chatEl = $("chat");
   let row = chatEl.querySelector(".activity");
-  if (!working || !state.chat || state.chat.terminal) {
+  if (!working) { activity.seenAt = 0; clearInterval(activity.timer); activity.timer = null; }
+  if (!state.chat || state.chat.terminal || (!working && !subs)) {
     if (row) row.remove();
-    if (!working) { activity.seenAt = 0; clearInterval(activity.timer); activity.timer = null; }
     return;
   }
   if (!row) {
@@ -727,15 +745,20 @@ function renderActivity() {
     row.setAttribute("role", "status");
     row.innerHTML = '<span class="dot working" aria-hidden="true"></span>' +
       '<span class="act-verb"></span><span class="act-what"></span>' +
-      '<span class="act-time"></span><span class="act-detail"></span>';
+      '<span class="act-time"></span><span class="act-detail"></span><span class="act-subs"></span>';
   }
   const anchor = chatEl.querySelector(".jump-anchor");
   if (row.nextSibling !== anchor || row.parentNode !== chatEl) chatEl.insertBefore(row, anchor);
-  const step = activityStep();
+  row.classList.toggle("idle", !working);
+  const step = working ? activityStep() : { verb: subagentCount(subs) + " running", what: "", detail: "" };
   row.querySelector(".act-verb").textContent = step.verb;
   row.querySelector(".act-what").textContent = step.what;
   row.querySelector(".act-detail").textContent = step.detail;
   row.querySelector(".act-detail").hidden = !step.detail;
+  const subsEl = row.querySelector(".act-subs");
+  subsEl.textContent = working && subs ? "Running " + subagentCount(subs) : "";
+  subsEl.hidden = !(working && subs);
+  if (!working) { row.querySelector(".act-time").textContent = ""; return; }
   tickActivity();
   if (!activity.timer) activity.timer = setInterval(tickActivity, 1000);
 }
@@ -754,16 +777,249 @@ function toolMeta(m) {
   return m.ms ? fmtMs(m.ms) : (m.result ? "ran" : "running…");
 }
 
-function patchToolCard(m) {
-  const el = document.querySelector(`#chat [data-id="${CSS.escape(m.id)}"]`);
+// toolRunning: a call still waiting for its result.
+function toolRunning(m) { return !m.result && !m.err && !m.ms; }
+
+// toolResultText is a tool card's body: empty (hidden) while the call runs,
+// so a result that arrives later is not mistaken for a final "(no output)".
+function toolResultText(m) {
+  return m.result || (toolRunning(m) ? "" : "(no output)");
+}
+
+// stillChanging: a message a later poll may update.
+function stillChanging(m) {
+  if (m.kind !== "tool") return false;
+  return m.subagent ? m.subagent.status === "running" : toolRunning(m);
+}
+
+function patchToolCard(m, root = $("chat")) {
+  const el = root.querySelector(`[data-id="${CSS.escape(m.id)}"]`);
   if (!el) return;
+  if (el.classList.contains("subagent")) { patchSubagentCard(el, m); return; }
   // !!: the server omits err when false, and toggle(name, undefined) flips
   // the class instead of removing it, so cards blinked red on every poll.
   el.classList.toggle("err", !!m.err);
   const meta = el.querySelector(".toolmeta");
   if (meta) meta.textContent = toolMeta(m);
   const body = el.querySelector(".toolresult");
-  if (body && !body.textContent && m.result) body.textContent = m.result;
+  const text = toolResultText(m);
+  if (body && body.textContent !== text) body.textContent = text;
+}
+
+/* ---------- subagent cards (Claude's Agent/Task calls) ---------- */
+//
+// A subagent call gets its own card: what it is for (its description), its
+// type, whether it runs in the background or its own worktree, and its
+// status, ticking while it runs. Opened, it shows the agent's report as
+// markdown and the prompt it was given, and "View steps" opens the
+// subagent's own transcript.
+
+function isSubagentCard(m) {
+  return m.kind === "tool" && (!!m.subagent || m.tool === "Agent" || m.tool === "Task");
+}
+
+// subagentInfo is the server's description, or one made up from a plain
+// tool card (an agent the server does not parse as one, e.g. Pi's).
+function subagentInfo(m) {
+  if (m.subagent) return m.subagent;
+  return {
+    description: m.args,
+    status: toolRunning(m) ? "running" : m.err ? "failed" : "completed",
+    report: m.err ? "" : m.result,
+  };
+}
+
+function subagentMeta(m) {
+  const s = subagentInfo(m);
+  if (s.status === "running") {
+    const t = m.time ? Date.parse(m.time) : NaN;
+    return "running" + (Number.isNaN(t) ? "…" : " · " + fmtClock(Date.now() - t));
+  }
+  const parts = [s.status === "completed" ? "done" : s.status];
+  if (s.dur_ms) parts.push(fmtMs(s.dur_ms));
+  if (s.tool_uses) parts.push(s.tool_uses + " tool" + (s.tool_uses === 1 ? "" : "s"));
+  return parts.join(" · ");
+}
+
+function renderSubagentCard(m) {
+  const d = document.createElement("details");
+  d.className = "toolcard subagent";
+  d.dataset.id = m.id;
+  d.innerHTML =
+    '<summary><span class="toolname"></span><span class="sa-flags"></span>' +
+    '<span class="toolargs"></span><span class="toolmeta"></span></summary>' +
+    '<div class="sa-body"><div class="sa-report"></div>' +
+    '<button type="button" class="sa-steps" hidden>View steps</button>' +
+    '<details class="sa-prompt"><summary>Prompt</summary><div class="sa-prompt-text"></div></details>' +
+    '<div class="toolresult"></div></div>';
+  // The report is rendered when the card is first opened (most never are).
+  d.addEventListener("toggle", () => { if (d.open) fillSubagentReport(d); });
+  patchSubagentCard(d, m);
+  return d;
+}
+
+function patchSubagentCard(el, m) {
+  const s = subagentInfo(m);
+  el._m = m; // for the ticker and "View steps"
+  const running = s.status === "running";
+  el.classList.toggle("running", running);
+  el.classList.toggle("err", !!m.err || s.status === "failed" || s.status === "killed");
+  el.querySelector(".toolname").textContent = s.type || m.tool || "agent";
+  el.querySelector(".toolargs").textContent = s.description || m.args || "";
+  const flags = [];
+  if (s.background) flags.push("bg");
+  if (s.worktree) flags.push("⑂ worktree");
+  el.querySelector(".sa-flags").textContent = flags.join(" · ");
+  el.querySelector(".toolmeta").textContent = subagentMeta(m);
+  el.querySelector(".sa-steps").hidden = !s.agent_id;
+  const prompt = el.querySelector(".sa-prompt");
+  prompt.hidden = !s.prompt;
+  const promptText = prompt.querySelector(".sa-prompt-text");
+  if (promptText.textContent !== (s.prompt || "")) promptText.textContent = s.prompt || "";
+  // An errored call has no report, just the error.
+  const result = el.querySelector(".toolresult");
+  const errText = m.err ? m.result || "" : "";
+  if (result.textContent !== errText) result.textContent = errText;
+  const report = s.report || "";
+  if (el._report !== report || el._running !== running) {
+    el._report = report;
+    el._running = running;
+    el.querySelector(".sa-report").dataset.md = "";
+    if (el.open) fillSubagentReport(el);
+  }
+  for (const e of subview.stack) {
+    if (e.id && e.id === s.agent_id) { e.info = s; if (e === subviewTop()) renderSubviewHeader(); }
+  }
+}
+
+function fillSubagentReport(el) {
+  const target = el.querySelector(".sa-report");
+  if (target.dataset.md) return;
+  target.dataset.md = "1";
+  const report = el._report;
+  target.classList.toggle("md", !!report);
+  target.classList.toggle("sa-none", !report);
+  if (report) target.innerHTML = renderMarkdown(report, "sa:" + el.dataset.id);
+  else target.textContent = el._running ? "Working… its report shows here when it finishes." : el._m && el._m.err ? "" : "No report.";
+}
+
+// A running subagent's clock ticks once a second while any is on screen.
+let subagentTimer = null;
+function ensureSubagentTicker() {
+  if (subagentTimer || !document.querySelector(".toolcard.subagent.running")) return;
+  subagentTimer = setInterval(() => {
+    if (document.hidden) return;
+    const cards = document.querySelectorAll(".toolcard.subagent.running");
+    if (!cards.length) { clearInterval(subagentTimer); subagentTimer = null; return; }
+    for (const el of cards) if (el._m) el.querySelector(".toolmeta").textContent = subagentMeta(el._m);
+  }, 1000);
+}
+
+/* ---------- subagent steps (a subagent's own transcript) ---------- */
+//
+// "View steps" covers the chat with the subagent's transcript, polled while
+// the subagent runs. Each one opened pushes a history entry, so Back (the
+// button or the phone's gesture) returns to the chat or the parent agent.
+
+const subview = {
+  stack: [],     // [{ id: agentId, info: SubagentInfo }], innermost last
+  rendered: null,
+  from: "",
+  timer: null,
+  seq: 0,        // bumped per view, so a slow answer for an old one is dropped
+};
+
+function subviewTop() { return subview.stack[subview.stack.length - 1] || null; }
+
+function openSubview(m) {
+  const s = subagentInfo(m);
+  if (!s.agent_id || !state.selected) return;
+  subview.stack.push({ id: s.agent_id, info: s });
+  history.pushState({ subagent: s.agent_id, depth: subview.stack.length }, "", location.href);
+  showSubview();
+}
+
+function showSubview() {
+  const top = subviewTop();
+  if (!top) { hideSubview(); return; }
+  subview.seq++;
+  subview.rendered = new Set();
+  subview.from = "";
+  $("sv-chat").innerHTML = "";
+  $("subview").hidden = false;
+  renderSubviewHeader();
+  loadSubview(true);
+  clearInterval(subview.timer);
+  subview.timer = setInterval(() => {
+    const t = subviewTop();
+    if (!document.hidden && t && t.info.status === "running") loadSubview(false);
+  }, 4000);
+}
+
+function hideSubview() {
+  subview.stack = [];
+  subview.seq++;
+  clearInterval(subview.timer);
+  subview.timer = null;
+  $("subview").hidden = true;
+  $("sv-chat").innerHTML = "";
+}
+
+// syncSubview follows the history: popping an entry closes its view.
+function syncSubview() {
+  const st = history.state;
+  const depth = st && st.subagent ? st.depth || 0 : 0;
+  if (subview.stack.length <= depth) return;
+  subview.stack.length = depth;
+  if (depth) showSubview(); else hideSubview();
+}
+
+function renderSubviewHeader() {
+  const top = subviewTop();
+  if (!top) return;
+  const s = top.info;
+  $("sv-title").textContent = s.description || "Subagent";
+  const status = s.status === "completed" ? "done" : s.status || "";
+  $("sv-subtitle").textContent = [s.type, status].filter(Boolean).join(" · ");
+}
+
+async function loadSubview(reset) {
+  const top = subviewTop();
+  const pane = state.selected;
+  if (!top || !pane) return;
+  const seq = subview.seq;
+  const el = $("sv-chat");
+  try {
+    const from = !reset && subview.from ? `&from=${encodeURIComponent(subview.from)}` : "";
+    const t = await api(`${pathFor(pane)}/subagents/${encodeURIComponent(top.id)}/transcript?limit=100${from}`);
+    if (seq !== subview.seq) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (reset && t.more) {
+      const n = document.createElement("div");
+      n.className = "note";
+      n.textContent = "Earlier steps are not shown";
+      el.appendChild(n);
+    }
+    let appended = false;
+    for (const m of t.messages) {
+      if (subview.rendered.has(m.id)) {
+        if (m.kind === "tool") patchToolCard(m, el);
+        continue;
+      }
+      subview.rendered.add(m.id);
+      el.appendChild(renderMessage(m));
+      appended = true;
+    }
+    if (t.messages.length) subview.from = (t.messages.find(stillChanging) || t.messages[t.messages.length - 1]).id;
+    if (appended && (atBottom || reset)) el.scrollTop = el.scrollHeight;
+    ensureSubagentTicker();
+  } catch (e) {
+    if (seq !== subview.seq || !reset) return;
+    const n = document.createElement("div");
+    n.className = "note";
+    n.textContent = e.status === 404 ? "This subagent's steps are not available." : "Could not load the steps: " + e.message;
+    el.appendChild(n);
+  }
 }
 
 /* ---------- sent-but-not-yet-seen prompts ---------- */
@@ -847,6 +1103,7 @@ function renderMessage(m) {
       return wrap;
     }
     case "tool": {
+      if (isSubagentCard(m)) return renderSubagentCard(m);
       const d = document.createElement("details");
       d.className = "toolcard" + (m.err ? " err" : "");
       d.dataset.id = m.id;
@@ -855,7 +1112,7 @@ function renderMessage(m) {
         `<summary><span class="toolname">${esc(m.tool || "tool")}</span>` +
         `<span class="toolargs">${esc(m.args || "")}</span>` +
         `<span class="toolmeta">${esc(meta)}</span></summary>` +
-        `<div class="toolresult">${esc(m.result || "(no output)")}</div>`;
+        `<div class="toolresult">${esc(toolResultText(m))}</div>`;
       return d;
     }
     case "note": {
@@ -930,6 +1187,8 @@ function startPolling() {
     if (a.agent_status === "working" || a.agent_status === "blocked") {
       if (state.chat && state.chat.terminal) refreshOutput();
       else loadChat(false); // append-only; new messages diff in by id
+    } else if (runningSubagents()) {
+      loadChat(false); // an idle agent's background subagents finishing
     }
   }, 4000);
 }
@@ -1955,6 +2214,8 @@ window.addEventListener("DOMContentLoaded", () => {
     suspendEvents();
     clearInterval(activity.timer);
     activity.timer = null;
+    clearInterval(subagentTimer);
+    subagentTimer = null;
   });
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) resume(); }); // skip the initial load
   window.addEventListener("online", resume);
@@ -1965,6 +2226,15 @@ window.addEventListener("DOMContentLoaded", () => {
     // link has no list entry behind it, so just close in place.
     if (state.pushedRoute) history.back();
     else closeDetail();
+  });
+  $("sv-back").addEventListener("click", () => {
+    if (history.state && history.state.subagent) history.back(); // popstate -> syncSubview
+    else hideSubview();
+  });
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest(".sa-steps");
+    const card = b && b.closest(".toolcard.subagent");
+    if (card && card._m) openSubview(card._m);
   });
   window.addEventListener("popstate", route);
   window.addEventListener("hashchange", route);

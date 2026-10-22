@@ -72,6 +72,9 @@ func (p *hubPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"messages":[{"id":"a","kind":"assistant","text":"hello from the peer"}],"total":1}`)
+	case "/api/agents/wS:p1/subagents/a1234567/transcript":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"messages":[{"id":"s","kind":"assistant","text":"subagent steps %s"}],"total":1}`, r.URL.RawQuery)
 	case "/api/agents/wS:p1/keys":
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
@@ -176,6 +179,18 @@ func TestHubServesPeers(t *testing.T) {
 		t.Fatalf("conditional transcript via hub: %v %v", resp, err)
 	} else {
 		resp.Body.Close()
+	}
+	// A subagent's transcript: only the transcript query parameters pass,
+	// and only a well-formed subagent id is forwarded.
+	if code, body := req("GET", "/api/hosts/kube/agents/wS:p1/subagents/a1234567/transcript?limit=5&from=x&evil=1", "", nil); code != 200 ||
+		!strings.Contains(body, "subagent steps from=x&limit=5\"") {
+		t.Fatalf("subagent transcript via hub: %d %s", code, body)
+	}
+	if code, _ := req("GET", "/api/hosts/kube/agents/wS:p1/subagents/..%2Fx/transcript", "", nil); code != http.StatusBadRequest {
+		t.Fatalf("bad subagent id via hub: %d", code)
+	}
+	if n := peer.count("GET /api/agents/wS:p1/subagents/"); n != 1 {
+		t.Fatalf("peer got %d subagent GETs, want 1", n)
 	}
 	if n := peer.count("GET /api/events?full=1"); n == 0 {
 		t.Fatal("the hub must read the peer's stream with full=1")

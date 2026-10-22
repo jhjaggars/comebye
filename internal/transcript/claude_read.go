@@ -54,8 +54,8 @@ func claudeEntry(path string) *claudeCacheEntry {
 }
 
 // readClaude parses (incrementally) the Claude Code session open as f and
-// returns the requested window.
-func readClaude(f *os.File, path string, limit, skip int) (*Transcript, error) {
+// returns the requested window. sidechain selects a subagent transcript.
+func readClaude(f *os.File, path string, limit, skip int, sidechain bool) (*Transcript, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -63,8 +63,8 @@ func readClaude(f *os.File, path string, limit, skip int) (*Transcript, error) {
 	e := claudeEntry(path)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.p == nil || e.fi == nil || !os.SameFile(e.fi, fi) || fi.Size() < e.offset {
-		e.p, e.offset = newClaudeParser(), 0
+	if e.p == nil || e.fi == nil || !os.SameFile(e.fi, fi) || fi.Size() < e.offset || e.p.sidechain != sidechain {
+		e.p, e.offset = newClaudeParser(sidechain), 0
 	}
 	if fi.Size() > e.offset {
 		if _, err := f.Seek(e.offset, io.SeekStart); err != nil {
@@ -82,6 +82,7 @@ func readClaude(f *os.File, path string, limit, skip int) (*Transcript, error) {
 	// while the caller may still be encoding this one.
 	t := window(e.p.all, limit, skip, e.p.ask, FormatClaude)
 	t.Messages = append([]Message(nil), t.Messages...)
+	t.RunningSubagents = e.p.running()
 	return t, nil
 }
 
@@ -171,7 +172,7 @@ func (st *claudeLatest) line(line []byte) {
 			case "tool_use":
 				if b.ID != "" {
 					st.order = append(st.order, b.ID)
-					st.pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Input)}
+					st.pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)}
 				}
 			}
 		}
