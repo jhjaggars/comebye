@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -18,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/agenttoken"
+	"github.com/jhjaggars/comebye/internal/cli"
 	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/push"
@@ -26,6 +29,15 @@ import (
 )
 
 func main() {
+	// "comebye <subcommand> ...": the coordinator CLI, not the server.
+	if len(os.Args) > 1 && cli.IsCommand(os.Args[1]) {
+		os.Exit(cli.Run(os.Args[1:], cli.OSEnv()))
+	}
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprintf(out, "Usage: comebye [flags]          run the server\n       comebye <command> [args]  run a CLI command (agents use these to coordinate)\n\nCommands:\n%s\nServer flags:\n", cli.Summary())
+		flag.PrintDefaults()
+	}
 	var (
 		addr         = flag.String("addr", "127.0.0.1:8741", "listen address (keep loopback; use Tailscale Serve for TLS)")
 		sock         = flag.String("sock", herdr.DefaultSocketPath, "herdr API socket path")
@@ -45,6 +57,9 @@ func main() {
 		noAuth       = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
 		launchOn     = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
 		worktreeRoot = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
+		hubURL       = flag.String("hub", getenv("COMEBYE_HUB"), "on a peer: the hub's Tailscale Serve URL (https://hub.tailnet.ts.net); the coordinator CLI's ledger, handoff, mark, briefing and prompt requests are forwarded there and this instance keeps no ledger")
+		ledgerOn     = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
+		coordDir     = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
 		allowHosts   = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
 		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 	)
@@ -81,6 +96,18 @@ func main() {
 		for _, p := range peers {
 			log.Printf("hub: peer %s at %s", p.Name, p.URL)
 		}
+	}
+
+	var upstream *fleet.Upstream
+	if strings.TrimSpace(*hubURL) != "" {
+		if len(peers) > 0 {
+			log.Fatalf("-hub and -peers: an instance is either the hub (with peers) or a peer (with a hub), not both")
+		}
+		upstream, err = fleet.NewUpstream(*hubURL, insecureTestPeers, nil)
+		if err != nil {
+			log.Fatalf("-hub: %v", err)
+		}
+		log.Printf("peer: the coordinator CLI's requests go to the hub at %s; no ledger here", upstream.URL())
 	}
 
 	sockPath := expandHome(*sock)
@@ -128,6 +155,12 @@ func main() {
 		}
 		log.Printf("web push enabled: state %s, subject %s, %d subscription(s)", dir, subject, pushSvc.Store().Len())
 	}
+	// The agent token lets the comebye CLI (run by a coordinator on this
+	// host) act as the restricted agent role.
+	agentToken, err := agenttoken.LoadOrCreate(expandHome(*stateDir))
+	if err != nil {
+		log.Printf("agent token: %v (the comebye CLI will not work on this host)", err)
+	}
 	// Avoid a typed-nil interface: a nil *push.Service is "no pusher".
 	if pushSvc != nil {
 		manager.SetPush(pushSvc, presence)
@@ -162,8 +195,12 @@ func main() {
 		LaunchRoots: launchRootList(*launchOn, launchRoots),
 		// Workers' worktrees: <root>/<repo>/<branch>.
 		WorktreeRoot: expandHome(*worktreeRoot),
-		// The handoff ledger and handoff-template.md.
-		StateDir: expandHome(*stateDir),
+		// The handoff ledger, briefing, roles and handoff-template.md.
+		StateDir:       expandHome(*stateDir),
+		NoLedger:       !*ledgerOn,
+		Upstream:       upstream,
+		AgentToken:     agentToken,
+		CoordinatorDir: expandHome(*coordDir),
 	}, client, manager)
 	go srv.RunLedger(context.Background())
 

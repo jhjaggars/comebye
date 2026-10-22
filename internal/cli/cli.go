@@ -1,0 +1,984 @@
+// Package cli is the comebye command line: the subcommands an agent acting
+// as coordinator uses to read the fleet and the hub's ledger and to do the
+// workflow's steps (hand off, prompt, mark, publish the briefing). It
+// talks to the local Comebye server with the local agent token, as the
+// restricted "agent" role; a peer forwards to its hub. It runs in the same
+// binary as the server: `comebye <subcommand>`.
+package cli
+
+import (
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/jhjaggars/comebye/internal/playbook"
+)
+
+// Env is the CLI's environment (replaced in tests).
+type Env struct {
+	Stdout, Stderr io.Writer
+	Stdin          io.Reader
+	Getenv         func(string) string
+	Hostname       func() (string, error)
+	// HTTP, when set, makes the requests (tests).
+	HTTP *http.Client
+	// Now is the current time (tests).
+	Now func() time.Time
+}
+
+// OSEnv is the real environment.
+func OSEnv() *Env {
+	return &Env{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin, Getenv: os.Getenv, Hostname: os.Hostname, Now: time.Now}
+}
+
+type command struct {
+	name, args, summary string
+	run                 func(e *Env, args []string) error
+}
+
+var commands []command
+
+func init() {
+	commands = []command{
+		{"agents", "[--host H] [--json]", "every agent on every host: project, branch, status, role", cmdAgents},
+		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
+		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or a worker's final report", cmdRead},
+		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
+		{"prompt", "AGENT TEXT|- [--json]", "send an agent a message", cmdPrompt},
+		{"mark", "AGENT --reason R [--json]", "propose removing a session (the user confirms in the app)", cmdMark},
+		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
+		{"brief", "set FILE|- | get [--json]", "publish or read the briefing shown in the app", cmdBrief},
+		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
+		{"presets", "claude|pi|generic", "print how to let a harness run comebye without prompts", cmdPresets},
+		{"whoami", "[--json]", "who this agent is to Comebye: id, host, hub", cmdWhoami},
+		{"help", "[COMMAND]", "this help", nil},
+	}
+}
+
+// IsCommand reports whether name is a subcommand (main uses it to choose
+// between the CLI and the server).
+func IsCommand(name string) bool {
+	for _, c := range commands {
+		if c.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Summary lists the subcommands, for the server's -h.
+func Summary() string {
+	var b strings.Builder
+	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+	for _, c := range commands {
+		fmt.Fprintf(tw, "  comebye %s\t%s\n", c.name, c.summary)
+	}
+	tw.Flush()
+	return b.String()
+}
+
+// usageError is a mistake in the command line (exit status 2).
+type usageError struct{ msg string }
+
+func (u *usageError) Error() string { return u.msg }
+
+func usageErr(format string, a ...any) error { return &usageError{fmt.Sprintf(format, a...)} }
+
+// Run runs a subcommand (args[0]) and returns the exit status: 0 on
+// success, 1 when the call failed, 2 for a usage error.
+func Run(args []string, e *Env) int {
+	if e.Now == nil {
+		e.Now = time.Now
+	}
+	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		if len(args) > 1 {
+			for _, c := range commands {
+				if c.name == args[1] && c.run != nil {
+					fmt.Fprintf(e.Stdout, "usage: comebye %s %s\n\n%s\n", c.name, c.args, c.summary)
+					return 0
+				}
+			}
+		}
+		help(e.Stdout)
+		return 0
+	}
+	for _, c := range commands {
+		if c.name != args[0] || c.run == nil {
+			continue
+		}
+		err := c.run(e, args[1:])
+		var ue *usageError
+		switch {
+		case err == nil:
+			return 0
+		case errors.Is(err, flag.ErrHelp):
+			fmt.Fprintf(e.Stdout, "usage: comebye %s %s\n\n%s\n", c.name, c.args, c.summary)
+			return 0
+		case errors.As(err, &ue):
+			fmt.Fprintf(e.Stderr, "comebye %s: %s\nusage: comebye %s %s\n", c.name, ue.msg, c.name, c.args)
+			return 2
+		default:
+			fmt.Fprintf(e.Stderr, "comebye %s: %s\n", c.name, err)
+			return 1
+		}
+	}
+	fmt.Fprintf(e.Stderr, "comebye: unknown command %q\n\n", args[0])
+	help(e.Stderr)
+	return 2
+}
+
+func help(w io.Writer) {
+	fmt.Fprint(w, `comebye: the coordinator's command line for Comebye.
+
+Usage:
+`)
+	for _, c := range commands {
+		fmt.Fprintf(w, "  comebye %s %s\n      %s\n", c.name, c.args, c.summary)
+	}
+	fmt.Fprint(w, `
+AGENT is a host-qualified id (laharl/w1Q:p1), a pane id on this host
+(w1Q:p1) or an agent name; an ambiguous name is refused.
+
+The CLI talks to the local Comebye (COMEBYE_URL, default `+DefaultURL+`)
+with the agent token in its state directory (COMEBYE_STATE_DIR), as the
+restricted agent role; $HERDR_PANE_ID identifies the calling agent.
+Without a subcommand (or with flags), comebye runs the server: see
+comebye -h.
+`)
+}
+
+// parse parses flags that may come before, between or after positional
+// arguments, and returns the positional ones.
+func parse(fs *flag.FlagSet, args []string) ([]string, error) {
+	fs.SetOutput(io.Discard)
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil, err
+			}
+			return nil, usageErr("%v", err)
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos, nil
+		}
+		// A lone "-" is an argument (stdin), and so is everything after
+		// "--" (fs.Parse consumed it already when it stopped there).
+		if len(args) > len(rest) && args[len(args)-len(rest)-1] == "--" {
+			return append(pos, rest...), nil
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
+}
+
+func jsonOut(e *Env, v any) error {
+	enc := json.NewEncoder(e.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// rawJSON pretty-prints a JSON answer.
+func rawJSON(e *Env, data []byte) error {
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		_, err := e.Stdout.Write(data)
+		return err
+	}
+	return jsonOut(e, v)
+}
+
+// readInput reads FILE, or stdin for "-".
+func readInput(e *Env, arg string, limit int64) (string, error) {
+	var r io.Reader
+	if arg == "-" {
+		r = e.Stdin
+	} else {
+		f, err := os.Open(arg)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		r = f
+	}
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(b)) > limit {
+		return "", fmt.Errorf("%s is larger than %d bytes", arg, limit)
+	}
+	return string(b), nil
+}
+
+func ago(e *Env, t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := e.Now().Sub(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", max(0, int(d.Seconds())))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// ---- agents ----
+
+type agentRow struct {
+	ID      string `json:"id"`
+	Host    string `json:"host"`
+	PaneID  string `json:"pane_id"`
+	Name    string `json:"name,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Status  string `json:"status"`
+	Project string `json:"project,omitempty"`
+	Branch  string `json:"branch,omitempty"`
+	CWD     string `json:"cwd,omitempty"`
+	// Role: coordinator, worker (a ledger handoff or a linked worktree),
+	// home (a repository's primary checkout) or "".
+	Role   string `json:"role,omitempty"`
+	Ledger string `json:"ledger_status,omitempty"`
+	Self   bool   `json:"self,omitempty"`
+}
+
+func baseName(p string) string {
+	p = strings.TrimRight(p, "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// worktreePath matches ~/.worktrees/<repo>/<branch>, a worker's checkout
+// by convention.
+func worktreeParts(cwd string) (repo, branch string, ok bool) {
+	i := strings.Index(cwd, "/.worktrees/")
+	if i < 0 {
+		return "", "", false
+	}
+	parts := strings.Split(cwd[i+len("/.worktrees/"):], "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func cmdAgents(e *Env, args []string) error {
+	fs := flag.NewFlagSet("agents", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	hostF := fs.String("host", "", "only this host's agents")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	ar, err := c.getAgents()
+	if err != nil {
+		return err
+	}
+	who, _ := c.getWhoami()
+	lg, _ := c.getLedger() // optional: no hub, no ledger
+	entries := map[string]apiEntry{}
+	roles := map[string]apiRole{}
+	if lg != nil {
+		for _, en := range lg.Entries {
+			if en.AgentID != "" && (en.Status == "running" || en.Status == "finished" || en.Status == "ready_to_remove") {
+				entries[en.AgentID] = en
+			}
+		}
+		roles = lg.Roles
+	}
+	var rows []agentRow
+	for _, a := range ar.Agents {
+		if *hostF != "" && a.Host != *hostF {
+			continue
+		}
+		r := agentRow{ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name, Kind: a.Agent, Status: a.Status, CWD: a.CWD}
+		en, isEntry := entries[a.ID]
+		wtRepo, wtBranch, inWT := worktreeParts(a.CWD)
+		switch {
+		case a.Worktree != nil && a.Worktree.Repo != "":
+			r.Project, r.Branch = a.Worktree.Repo, a.Worktree.Branch
+		case isEntry:
+			r.Project, r.Branch = en.RepoName, en.Branch
+		case inWT:
+			r.Project, r.Branch = wtRepo, wtBranch
+		case a.CWD != "":
+			r.Project = baseName(a.CWD)
+		}
+		if isEntry {
+			r.Ledger = en.Status
+			if r.Branch == "" {
+				r.Branch = en.Branch
+			}
+		}
+		switch {
+		case roles[a.ID].Role == "coordinator" && (roles[a.ID].Name == "" || roles[a.ID].Name == a.Name):
+			r.Role = "coordinator"
+		case isEntry || (a.Worktree != nil && a.Worktree.Linked) || inWT:
+			r.Role = "worker"
+		case a.Worktree != nil:
+			r.Role = "home"
+		}
+		r.Self = who != nil && who.Agent != "" && who.Agent == a.ID
+		rows = append(rows, r)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if (a.Role == "coordinator") != (b.Role == "coordinator") {
+			return a.Role == "coordinator"
+		}
+		if a.Project != b.Project {
+			return a.Project < b.Project
+		}
+		if (a.Role == "worker") != (b.Role == "worker") {
+			return b.Role == "worker"
+		}
+		return a.ID < b.ID
+	})
+	if *asJSON {
+		if rows == nil {
+			rows = []agentRow{}
+		}
+		return jsonOut(e, map[string]any{"agents": rows, "hosts": ar.Hosts})
+	}
+	tw := tabwriter.NewWriter(e.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "AGENT\tNAME\tKIND\tSTATUS\tPROJECT\tBRANCH\tROLE")
+	for _, r := range rows {
+		role := r.Role
+		if r.Ledger != "" && r.Ledger != "running" {
+			role += " (" + r.Ledger + ")"
+		}
+		if r.Self {
+			role = strings.TrimSpace(role + " (you)")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, dash(r.Name), dash(r.Kind), r.Status, dash(r.Project), dash(r.Branch), dash(role))
+	}
+	tw.Flush()
+	for _, h := range ar.Hosts {
+		if !h.Local && h.Status != "ok" && (*hostF == "" || *hostF == h.Name) {
+			fmt.Fprintf(e.Stdout, "host %s is %s%s: its agents are not listed\n", h.Name, h.Status, map[bool]string{true: " (" + h.Error + ")", false: ""}[h.Error != ""])
+		}
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(e.Stdout, "(no agents)")
+	}
+	return nil
+}
+
+// ---- ledger ----
+
+func cmdLedger(e *Env, args []string) error {
+	fs := flag.NewFlagSet("ledger", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	active := fs.Bool("active", false, "hide removed and failed handoffs")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		data, err := c.raw("GET", "/api/ledger", nil, nil)
+		if err != nil {
+			return err
+		}
+		return rawJSON(e, data)
+	}
+	lg, err := c.getLedger()
+	if err != nil {
+		return err
+	}
+	shown := 0
+	tw := tabwriter.NewWriter(e.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ENTRY\tSTATUS\tHOST\tREPO\tBRANCH\tWORKER\tREPORT\tNOTES")
+	for _, en := range lg.Entries {
+		if *active && (en.Status == "removed" || en.Status == "failed") {
+			continue
+		}
+		shown++
+		worker := en.AgentName
+		if en.AgentID != "" {
+			worker = strings.TrimSpace(worker + " " + en.AgentID)
+		}
+		var notes []string
+		switch {
+		case en.Status == "removed" || en.Status == "failed":
+		case en.Live.Present:
+			notes = append(notes, "agent "+en.Live.Status)
+		case en.AgentID != "":
+			notes = append(notes, "agent gone")
+		}
+		if en.Candidate {
+			notes = append(notes, "candidate: finished, clean and merged")
+		} else if en.Checks != nil && en.Status == "finished" {
+			if en.Checks.Dirty {
+				notes = append(notes, "uncommitted changes")
+			}
+			if en.Checks.Unmerged > 0 {
+				notes = append(notes, fmt.Sprintf("%d commits not in %s", en.Checks.Unmerged, dash(en.Checks.BaseUsed)))
+			}
+		}
+		if en.Mark != nil {
+			notes = append(notes, "marked by "+dash(en.Mark.By)+": "+dash(en.Mark.Reason))
+		}
+		if en.Error != "" {
+			notes = append(notes, "error: "+en.Error)
+		}
+		report := "no"
+		if en.FinalReport != "" {
+			report = "yes"
+		} else if en.Status == "running" {
+			report = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", en.ID, en.Status, en.Host, dash(en.RepoName), en.Branch, dash(worker), report, strings.Join(notes, "; "))
+	}
+	tw.Flush()
+	if shown == 0 {
+		fmt.Fprintln(e.Stdout, "(no handoffs)")
+	}
+	if len(lg.Marks) > 0 {
+		fmt.Fprintln(e.Stdout, "\nOther sessions marked ready to remove:")
+		for _, m := range lg.Marks {
+			fmt.Fprintf(e.Stdout, "  %s %s: marked by %s %s: %s\n", m.AgentID, dash(m.Name), dash(m.By), ago(e, m.At), dash(m.Reason))
+		}
+	}
+	return nil
+}
+
+// ---- read ----
+
+type apiMessage struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Time   string `json:"time"`
+	Text   string `json:"text"`
+	Note   string `json:"note"`
+	Tool   string `json:"tool"`
+	Args   string `json:"args"`
+	Result string `json:"result"`
+	Err    bool   `json:"err"`
+	Ms     int64  `json:"ms"`
+}
+
+func cmdRead(e *Env, args []string) error {
+	fs := flag.NewFlagSet("read", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	lines := fs.Int("lines", 20, "how many recent messages (raw terminal: lines)")
+	report := fs.Bool("report", false, "print a worker's final report from the ledger")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one AGENT")
+	}
+	if *lines < 1 || *lines > 500 {
+		return usageErr("--lines must be between 1 and 500")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	if *report {
+		return readReport(e, c, pos[0], *asJSON)
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("GET", hostPath(t, "transcript"), url.Values{"limit": {strconv.Itoa(*lines)}}, nil)
+	var ae *apiError
+	if errors.As(err, &ae) && ae.code == "no_session" {
+		// No session file (an agent kind without transcripts): the
+		// terminal's recent output instead.
+		out, err := c.raw("GET", hostPath(t, "output"), url.Values{"lines": {strconv.Itoa(max(*lines, 40))}}, nil)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, out)
+		}
+		var o struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(out, &o)
+		fmt.Fprintf(e.Stdout, "%s: no session transcript; recent terminal output:\n\n%s\n", t.label(), strings.TrimRight(o.Text, "\n"))
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var tr struct {
+		Messages []apiMessage `json:"messages"`
+		More     bool         `json:"more"`
+	}
+	if err := json.Unmarshal(data, &tr); err != nil {
+		return fmt.Errorf("unexpected transcript: %v", err)
+	}
+	status := ""
+	if t.Live != nil {
+		status = " · " + t.Live.Status
+	}
+	fmt.Fprintf(e.Stdout, "%s%s · last %d messages\n", t.label(), status, len(tr.Messages))
+	for _, m := range tr.Messages {
+		renderMessage(e.Stdout, m)
+	}
+	return nil
+}
+
+func renderMessage(w io.Writer, m apiMessage) {
+	when := ""
+	if t, err := time.Parse(time.RFC3339Nano, m.Time); err == nil {
+		when = " · " + t.Local().Format("Jan 2 15:04")
+	}
+	switch m.Kind {
+	case "user", "assistant":
+		fmt.Fprintf(w, "\n── %s%s\n%s\n", m.Kind, when, strings.TrimRight(m.Text, "\n"))
+	case "tool":
+		res := "running"
+		switch {
+		case m.Err:
+			res = "error"
+		case m.Result != "" || m.Ms > 0:
+			res = "ok"
+		}
+		first, _, _ := strings.Cut(strings.TrimSpace(m.Result), "\n")
+		if len(first) > 120 {
+			first = first[:120] + "…"
+		}
+		args := m.Args
+		if len(args) > 160 {
+			args = args[:160] + "…"
+		}
+		line := fmt.Sprintf("  · %s %s → %s", m.Tool, args, res)
+		if first != "" {
+			line += ": " + first
+		}
+		fmt.Fprintln(w, line)
+	default:
+		if t := strings.TrimSpace(m.Note + m.Text); t != "" {
+			fmt.Fprintf(w, "\n── %s%s\n%s\n", m.Kind, when, t)
+		}
+	}
+}
+
+// readReport prints the final report of a ledger worker: AGENT is a
+// worker's agent (live or not) or a ledger entry id.
+func readReport(e *Env, c *client, arg string, asJSON bool) error {
+	lg, err := c.getLedger()
+	if err != nil {
+		return err
+	}
+	var found *apiEntry
+	for i := range lg.Entries {
+		if lg.Entries[i].ID == arg {
+			found = &lg.Entries[i]
+		}
+	}
+	if found == nil {
+		ids := map[string]bool{arg: true}
+		if t, err := c.resolve(arg); err == nil {
+			ids[t.ID] = true
+		}
+		for i := len(lg.Entries) - 1; i >= 0 && found == nil; i-- {
+			en := &lg.Entries[i]
+			if ids[en.AgentID] || (en.AgentName != "" && en.AgentName == arg) || en.Branch == arg {
+				found = en
+			}
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("%q is not a worker in the ledger (see `comebye ledger`)", arg)
+	}
+	if asJSON {
+		return jsonOut(e, map[string]any{"entry": found.ID, "agent_id": found.AgentID, "branch": found.Branch, "status": found.Status, "final_report": found.FinalReport})
+	}
+	if found.FinalReport == "" {
+		return fmt.Errorf("%s (%s) has no final report yet (status %s)", found.Branch, found.ID, found.Status)
+	}
+	fmt.Fprintf(e.Stdout, "Final report of %s on %s/%s (%s, %s):\n\n%s\n", dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, strings.TrimRight(found.FinalReport, "\n"))
+	return nil
+}
+
+// ---- handoff ----
+
+func cmdHandoff(e *Env, args []string) error {
+	fs := flag.NewFlagSet("handoff", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	host := fs.String("host", "", "the host to run the worker on")
+	repo := fs.String("repo", "", "the repository's primary checkout (absolute path on that host)")
+	branch := fs.String("branch", "", "the worker's branch (created from --base when new)")
+	base := fs.String("base", "", "the base branch (default: the repository's default branch)")
+	kind := fs.String("kind", "", "the agent kind (default: the host's most used)")
+	name := fs.String("name", "", "the worker's name (default: from the branch)")
+	brief := fs.String("brief", "", "the brief: a markdown file, or - for stdin")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	switch {
+	case len(pos) > 0:
+		return usageErr("unexpected argument %q", pos[0])
+	case *host == "", *repo == "", *branch == "", *brief == "":
+		return usageErr("--host, --repo, --branch and --brief are required")
+	case !strings.HasPrefix(*repo, "/"):
+		return usageErr("--repo must be an absolute path on the host")
+	}
+	text, err := readInput(e, *brief, 1<<20)
+	if err != nil {
+		return fmt.Errorf("brief: %v", err)
+	}
+	if strings.TrimSpace(text) == "" {
+		return usageErr("the brief is empty")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	body := map[string]string{"host": *host, "repo": *repo, "branch": *branch, "brief": text}
+	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name} {
+		if v != "" {
+			body[k] = v
+		}
+	}
+	data, err := c.raw("POST", "/api/handoffs", nil, body)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Entry     apiEntry `json:"entry"`
+		Existing  bool     `json:"existing"`
+		Restarted bool     `json:"restarted"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return fmt.Errorf("unexpected answer: %v", err)
+	}
+	en := r.Entry
+	switch {
+	case r.Restarted:
+		fmt.Fprintf(e.Stdout, "The earlier worker on %s was gone: started %s (%s) in its worktree.\n", en.Branch, dash(en.AgentName), en.AgentID)
+	case r.Existing:
+		fmt.Fprintf(e.Stdout, "Already handed off: %s on %s is %s (%s, %s). Nothing new was started; use `comebye prompt` to give it more work.\n", en.Branch, en.Host, en.Status, dash(en.AgentName), en.AgentID)
+	default:
+		fmt.Fprintf(e.Stdout, "Handed off %s on %s to %s (%s).\n", en.Branch, en.Host, dash(en.AgentName), en.AgentID)
+	}
+	fmt.Fprintf(e.Stdout, "  entry:    %s\n  worktree: %s\n  base:     %s\n", en.ID, dash(en.Worktree), dash(en.Base))
+	if en.Error != "" {
+		fmt.Fprintf(e.Stdout, "  warning:  %s\n", en.Error)
+	}
+	return nil
+}
+
+// ---- prompt ----
+
+func cmdPrompt(e *Env, args []string) error {
+	fs := flag.NewFlagSet("prompt", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) < 2 {
+		return usageErr("want AGENT and TEXT (or - to read stdin)")
+	}
+	text := strings.Join(pos[1:], " ")
+	if len(pos) == 2 && pos[1] == "-" {
+		if text, err = readInput(e, "-", 1<<20); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return usageErr("the text is empty")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	if c.pane != "" {
+		if w, err := c.getWhoami(); err == nil && w.Agent == t.ID {
+			return errors.New("refusing to prompt yourself")
+		}
+	}
+	data, err := c.raw("POST", hostPath(t, "prompt"), nil, map[string]string{"text": text})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	fmt.Fprintf(e.Stdout, "Sent to %s.\n", t.label())
+	return nil
+}
+
+// ---- mark / unmark ----
+
+func cmdMark(e *Env, args []string) error {
+	fs := flag.NewFlagSet("mark", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	reason := fs.String("reason", "", "why the session can go (required)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one AGENT")
+	}
+	if strings.TrimSpace(*reason) == "" {
+		return usageErr("--reason is required: say why the session can go")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/marks", nil, map[string]string{"agent_id": t.ID, "reason": *reason})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	fmt.Fprintf(e.Stdout, "Marked %s ready to remove. The user reviews the checks and confirms in the app.\n", t.label())
+	return nil
+}
+
+func cmdUnmark(e *Env, args []string) error {
+	fs := flag.NewFlagSet("unmark", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one AGENT")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/marks/clear", nil, map[string]string{"agent_id": t.ID})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Cleared bool `json:"cleared"`
+	}
+	_ = json.Unmarshal(data, &r)
+	if r.Cleared {
+		fmt.Fprintf(e.Stdout, "Unmarked %s.\n", t.label())
+	} else {
+		fmt.Fprintf(e.Stdout, "%s was not marked.\n", t.label())
+	}
+	return nil
+}
+
+// ---- brief ----
+
+func cmdBrief(e *Env, args []string) error {
+	fs := flag.NewFlagSet("brief", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) == 0 {
+		return usageErr("want set FILE|- or get")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	switch pos[0] {
+	case "set":
+		if len(pos) != 2 {
+			return usageErr("want brief set FILE (or - for stdin)")
+		}
+		text, err := readInput(e, pos[1], 64<<10)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(text) == "" {
+			return usageErr("the briefing is empty")
+		}
+		data, err := c.raw("POST", "/api/brief", nil, map[string]string{"markdown": text})
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		fmt.Fprintln(e.Stdout, "Published the briefing; it shows at the top of the app.")
+		return nil
+	case "get":
+		if len(pos) != 1 {
+			return usageErr("brief get takes no arguments")
+		}
+		data, err := c.raw("GET", "/api/brief", nil, nil)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		var r struct {
+			Brief *struct {
+				Markdown string    `json:"markdown"`
+				By       string    `json:"by"`
+				At       time.Time `json:"at"`
+			} `json:"brief"`
+		}
+		if err := json.Unmarshal(data, &r); err != nil {
+			return fmt.Errorf("unexpected answer: %v", err)
+		}
+		if r.Brief == nil {
+			fmt.Fprintln(e.Stdout, "(no briefing published yet)")
+			return nil
+		}
+		fmt.Fprintf(e.Stdout, "Briefing from %s, %s:\n\n%s\n", dash(r.Brief.By), ago(e, r.Brief.At), strings.TrimRight(r.Brief.Markdown, "\n"))
+		return nil
+	}
+	return usageErr("unknown brief action %q (want set or get)", pos[0])
+}
+
+// ---- playbook / presets (local, no server) ----
+
+func cmdPlaybook(e *Env, args []string) error {
+	fs := flag.NewFlagSet("playbook", flag.ContinueOnError)
+	harness := fs.String("harness", "generic", "pi, claude or generic")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	text, err := playbook.Render(*harness)
+	if err != nil {
+		return usageErr("%v", err)
+	}
+	_, err = io.WriteString(e.Stdout, text)
+	return err
+}
+
+func cmdPresets(e *Env, args []string) error {
+	fs := flag.NewFlagSet("presets", flag.ContinueOnError)
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want one harness: claude, pi or generic")
+	}
+	text, err := playbook.Preset(pos[0])
+	if err != nil {
+		return usageErr("%v", err)
+	}
+	if _, err := io.WriteString(e.Stdout, text); err != nil {
+		return err
+	}
+	if note := playbook.PresetNote(pos[0]); note != "" {
+		fmt.Fprint(e.Stderr, note)
+	}
+	return nil
+}
+
+// ---- whoami ----
+
+func cmdWhoami(e *Env, args []string) error {
+	fs := flag.NewFlagSet("whoami", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	w, err := c.getWhoami()
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return jsonOut(e, map[string]any{
+			"agent": w.Agent, "by": w.By, "host": w.Host, "role": w.Role, "hub": w.Hub, "ledger": w.Ledger,
+			"pane": c.pane, "url": c.base, "token_file": c.tokenPath,
+		})
+	}
+	who := w.By
+	if who == "" {
+		who = "an agent"
+	}
+	fmt.Fprintf(e.Stdout, "You are %s, with the %s role, on host %s.\n", who, w.Role, w.Host)
+	if c.pane == "" {
+		fmt.Fprintln(e.Stdout, "HERDR_PANE_ID is not set: you are not in a herdr pane, so your actions are not attributed to an agent.")
+	}
+	switch w.Hub {
+	case "self":
+		fmt.Fprintln(e.Stdout, "This Comebye is the hub: it keeps the ledger.")
+	case "":
+		fmt.Fprintln(e.Stdout, "This Comebye keeps no ledger and has no hub configured (-hub): handoffs, marks and briefings will fail.")
+	default:
+		fmt.Fprintf(e.Stdout, "The ledger is on the hub at %s; this Comebye forwards to it.\n", w.Hub)
+	}
+	fmt.Fprintf(e.Stdout, "Comebye: %s (token %s)\n", c.base, c.tokenPath)
+	return nil
+}
