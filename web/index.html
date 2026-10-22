@@ -396,7 +396,9 @@
       font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       white-space: pre; color: #cdd3e0;
     }
-    .controls { display: flex; gap: 8px; margin-bottom: 8px; }
+    .keypad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+    .keypad[hidden] { display: none; }
+    .keypad .btn { min-height: 44px; font-size: 15px; }
     .btn {
       flex: 1; min-height: 44px; padding: 0 4px; border-radius: 12px; border: 1px solid var(--border);
       background: var(--panel2); color: var(--text); font-size: 14px; font-weight: 600;
@@ -501,17 +503,14 @@
       <button class="btn" id="btn-terminal" style="display:none; margin-bottom:10px;">Show raw terminal</button>
       <pre id="output" style="display:none"></pre>
       <section id="answer" style="display:none" aria-live="polite"></section>
-      <div class="controls">
-        <button class="btn" id="btn-refresh">Refresh</button>
-        <button class="btn" id="btn-enter">Enter</button>
-        <button class="btn danger" id="btn-ctrlc">Ctrl+C</button>
-      </div>
+      <div id="keypad" class="keypad" hidden aria-label="Send keys"></div>
       <div class="prompt">
         <button class="attach" id="btn-attach" type="button" aria-label="Attach an image">+</button>
         <input type="file" id="attach-file" accept="image/*" multiple hidden>
         <div id="attach-menu" class="attach-menu" hidden>
           <button type="button" id="attach-paste">Paste image</button>
           <button type="button" id="attach-pick">Choose photo…</button>
+          <button type="button" id="attach-keys">Keys…</button>
         </div>
         <!-- A rich contenteditable, not a textarea: iOS only offers Paste for an image-only clipboard on rich editors. Its content is kept plain text. -->
         <div id="prompt-text" class="composer" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Prompt" data-placeholder="Send a prompt…" enterkeyhint="send" autocapitalize="sentences" autocorrect="on" spellcheck="true"></div>

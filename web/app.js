@@ -498,6 +498,7 @@ function openDetail(id) {
 }
 
 function closeDetail() {
+  toggleKeypad(false);
   state.selected = null;
   state.chat = null;
   state.ask = null;
@@ -1349,6 +1350,20 @@ function toggleAttachMenu(show) {
   $("btn-attach").setAttribute("aria-expanded", String(!m.hidden));
 }
 
+// The Keys… pad: raw keys for screens the app does not recognize. Ctrl+C
+// is here, not in plain sight: Stop (Esc) is the way to interrupt, and two
+// Ctrl+C presses exit Claude Code.
+const KEYPAD_KEYS = [...PAD_KEYS.slice(0, 8), ["Ctrl+C", "ctrl+c"], ...PAD_KEYS.slice(8, 11)];
+
+function toggleKeypad(show) {
+  const pad = $("keypad");
+  if (!pad.firstChild) {
+    pad.innerHTML = KEYPAD_KEYS.map(([label, key]) =>
+      `<button type="button" class="btn${key === "esc" ? " warn" : key === "ctrl+c" ? " danger" : ""}" data-key="${esc(key)}">${esc(label)}</button>`).join("");
+  }
+  pad.hidden = show === undefined ? !pad.hidden : !show;
+}
+
 function pasteImageFromClipboard() {
   toggleAttachMenu(false);
   if (!navigator.clipboard || !navigator.clipboard.read) {
@@ -1828,18 +1843,17 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("popstate", route);
   window.addEventListener("hashchange", route);
   route(); // cold start on #/agent/[<host>/]<pane>
-  $("btn-refresh").addEventListener("click", () => {
-    if (state.chat && state.chat.terminal) refreshOutput();
-    else loadChat(false);
-  });
   $("btn-terminal").addEventListener("click", () => {
     // One-way escape hatch for debugging: show the raw pane.
     if (state.chat) state.chat.terminal = true;
     showTerminal();
     refreshOutput();
   });
-  $("btn-enter").addEventListener("click", () => sendKeys(["enter"], "Enter"));
-  $("btn-ctrlc").addEventListener("click", () => sendKeys(["ctrl+c"], "Ctrl+C"));
+  $("attach-keys").addEventListener("click", () => { toggleAttachMenu(false); toggleKeypad(); });
+  $("keypad").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-key]");
+    if (b) sendKeys([b.dataset.key], b.textContent);
+  });
   $("btn-send").addEventListener("click", () => {
     if (stopMode()) sendKeys(["esc"], "Stop");
     else sendPrompt();
