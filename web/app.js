@@ -1150,9 +1150,14 @@ function stopMode() {
 function updateSendButton() {
   const btn = $("btn-send");
   const stop = stopMode();
-  btn.textContent = stop ? "Stop" : "Send";
+  // The stop glyph is a CSS square (an emoji ⏹ renders inconsistently).
+  btn.innerHTML = stop ? '<span class="stop-glyph" aria-hidden="true"></span>' : "Send";
   btn.classList.toggle("stop", stop);
   btn.setAttribute("aria-label", stop ? "Stop the agent (Esc)" : "Send prompt");
+  // While the agent works, a sent prompt waits for its next step.
+  const a = agentById(state.selected);
+  $("prompt-text").dataset.placeholder = a && a.agent_status === "working" && !state.ask
+    ? "Queue a message for its next step…" : "Send a prompt…";
 }
 
 async function sendPrompt() {

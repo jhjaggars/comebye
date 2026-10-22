@@ -435,7 +435,8 @@
       cursor: pointer;
     }
     .prompt .send:disabled { opacity: 0.5; }
-    .prompt .send.stop { background: var(--red); color: #fff; }
+    .prompt .send.stop { background: var(--red); color: #fff; display: grid; place-items: center; }
+    .stop-glyph { width: 14px; height: 14px; border-radius: 3px; background: currentColor; }
     .prompt .attach {
       flex: none; width: 44px; min-height: 44px; border-radius: 12px;
       border: 1px solid var(--border); background: var(--panel2); color: var(--text);
