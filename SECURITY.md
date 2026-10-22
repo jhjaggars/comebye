@@ -33,6 +33,16 @@ What it relies on:
   port and forge the identity header. Web pages in a browser on the host
   are not local processes: bypassing the Host check (DNS rebinding) is in
   scope.
+- **The agent role is a guard rail, not a boundary.** The `comebye` CLI,
+  run by a coordinator agent, authenticates with the local agent token
+  (`<state-dir>/agent-token`, mode 0600) and gets a restricted role: it may
+  read, hand off, prompt, mark and publish the briefing, and nothing else;
+  removal confirmation is the user's only. This keeps a well-behaved
+  coordinator inside the workflow and prevents accidents. It does **not**
+  contain a malicious local agent: anything running as your user can read
+  the token, forge the identity header on the loopback port, or run git
+  and herdr itself. The safeguard for the workflow is that removals are
+  confirmed by the user in the app, after fresh checks.
 
 In scope:
 
@@ -54,6 +64,16 @@ In scope:
 - Making a hub forward a browser's request to a peer's `/api/worker` or
   `/api/remove` (only the hub itself calls those, for handoffs and
   confirmed removals).
+- Getting a request that carries the agent token (or a peer's forwarded
+  agent request) past the agent role: reaching a route outside its
+  allowlist (keys, answers, images, launching, workers, removals or their
+  confirmation, roles, push), marking a coordinator or itself, or being
+  treated as the user with a wrong token.
+- Making a peer with `-hub` forward anything but the agent role's
+  requests, forward them anywhere but the configured hub, or follow a
+  redirect; making a hub re-forward a forwarded request.
+- Script injection through the briefing (it is rendered with the same
+  sanitizer as transcripts).
 - Script injection in the web UI from agent output or transcripts.
 - Leaking agent output, transcripts or settings to third parties.
   Web Push payloads are end-to-end encrypted (RFC 8291); the push service
@@ -68,7 +88,8 @@ Out of scope:
   whose DNS an attacker controls, exposing the port with Tailscale Funnel,
   binding to a non-loopback address, or putting another proxy in front of
   it. These are unsupported configurations.
-- Attacks by local users or processes on the same host.
+- Attacks by local users or processes on the same host, including an
+  agent that reads the agent token or uses its shell instead of the CLI.
 - A compromised tailnet account or device that is on the allowlist.
 - Content of ntfy notifications on a public ntfy server (agent names,
   repository/branch and status, plus last-message excerpts if you enable

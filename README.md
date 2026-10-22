@@ -54,6 +54,11 @@ handoff and nothing to sync.
   ready to remove and confirm after safety checks (uncommitted changes,
   unmerged commits). See
   [Projects, workers and handoffs](#projects-workers-and-handoffs).
+- **Coordinators**: any agent (Pi, Claude Code, Codex, OpenCode…) on any
+  host can coordinate your work through the `comebye` command line: hand
+  off, follow workers, propose cleanup and publish a briefing that shows
+  at the top of the app. Removals stay yours to confirm. See
+  [Coordinators](#coordinators).
 - **Several machines in one app** (optional): run comebye on each host
   and make one of them a hub that aggregates the others. See
   [Multiple hosts](#multiple-hosts).
@@ -362,6 +367,134 @@ ledger needs the state directory (`-state-dir`); a hub runs workers on its
 peers through their own `/api/worker`, `/api/checks` and `/api/remove`, so
 peers need launching on and the same version.
 
+**One worker per branch.** A handoff for a host, repository and branch
+that already has a `running`, `finished` or `ready_to_remove` entry starts
+nothing: it answers with that entry (`"existing": true`). If that
+worker's agent is gone, a new agent is started in the same worktree and
+the entry is updated (`"restarted": true`). Removed and failed entries do
+not count.
+
+## Coordinators
+
+**Coordinator is a role, not a process.** Any agent, of any kind, on any
+host, can act as your coordinator: it turns what you ask for into
+handoffs, follows the workers, proposes cleanup and keeps a briefing for
+you. It has no memory of its own to lose: the state is the hub's ledger
+and briefing, and every action is a `comebye` command, so you can close a
+coordinator and start another (of another kind, on another host) and it
+picks up where the last one left off.
+
+**Starting one.** In the "+" sheet choose **Coordinator**, a host and an
+agent kind. Comebye starts an agent named `coordinator` (or
+`coordinator-2`, …) in your home directory on that host (`-coordinator-dir`,
+the one place outside the launch roots the app may start an agent, and
+only for this preset), with a short first prompt: run
+`comebye playbook --harness <kind>` and follow it. The playbook is the
+single source of truth for the role. Claude Code is started with
+`--allowedTools "Bash(comebye:*)"`, Pi with pi-config's coordinator
+arguments (`--name <name> --no-skills --no-context-files --tools
+read,grep,find,ls,bash`: no edit or write tools). The hub records the
+agent as a coordinator. Any agent can be made a coordinator (or not) from
+the ⋮ menu of its chat.
+
+Coordinators are pinned above the projects with a badge. Agents cannot
+mark a coordinator ready to remove; you can, and removing one asks for an
+extra confirmation ("Remove all safe" leaves it out).
+
+**The briefing.** A coordinator publishes a short markdown briefing
+(`comebye brief set`): per project, what finished and what it produced,
+what is unfinished or blocked, and proposed next tasks with branch names.
+It shows as a card at the top of the list ("from <agent> · <age>"),
+rendered like agent replies (sanitized). Collapse it, or dismiss it until
+the next one is published. Stored on the hub as `brief.json` (64 KB at
+most).
+
+**The CLI.** The same `comebye` binary runs the command line when its
+first argument is a command (`comebye` with flags, or none, is the
+server). Add `--json` for machine-readable output; the exit status is 0 on
+success, 1 when a call failed, 2 for a usage error.
+
+| Command | What it does |
+| --- | --- |
+| `comebye agents [--host H]` | Every agent on every host: id, name, kind, status, project, branch, role (coordinator, worker, home; "(you)" for the caller). |
+| `comebye ledger [--active]` | The handoffs: status, host, repository, branch, worker, whether a final report was captured, marks, and hints (agent gone, uncommitted or unmerged, `candidate`). Then the other marked sessions. |
+| `comebye read AGENT [--lines N]` | The agent's last N messages (default 20) as text; the terminal's output for agents without a transcript. |
+| `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch). |
+| `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. |
+| `comebye prompt AGENT TEXT\|-` | Send an agent a message. |
+| `comebye mark AGENT --reason R` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or withdraw it. |
+| `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
+| `comebye playbook [--harness pi\|claude\|generic]` | The coordinator playbook (`pi`: a Pi agent definition with frontmatter; `claude`: for a CLAUDE.md or first prompt). |
+| `comebye presets claude\|pi\|generic` | How to let that harness run `comebye` without asking each time. |
+| `comebye whoami` | Who the caller is to Comebye: agent id, host, role, hub. |
+
+AGENT is a host-qualified id (`laharl/w1Q:p1`), a pane id on the local
+host (`w1Q:p1`) or an agent name; a name that matches agents on several
+hosts is refused with the matches listed.
+
+The CLI talks to the local Comebye at `http://127.0.0.1:8741`
+(`COMEBYE_URL` to change it) with the **agent token**: 32 random bytes
+(hex) the server writes to `<state-dir>/agent-token` (mode 0600) at
+startup and reuses after; the CLI reads it from the same state directory
+(`COMEBYE_STATE_DIR`, default as for the server). It sends
+`$HERDR_PANE_ID` (set by herdr in every pane) so actions are attributed
+to the calling agent: the ledger's "from", marks' "by" and the briefing
+say `coordinator (laharl/w1Q:p1)`.
+
+**What an agent may do.** A request with the agent token gets the
+restricted *agent role*. It may read (agents, hosts, transcripts and
+output, the ledger, the briefing, roles, the playbook) and take the
+workflow's steps: hand off, prompt an agent, mark and unmark, publish the
+briefing. It cannot prompt or mark itself, must give a reason to mark,
+and cannot mark a coordinator. Everything else is 403 for it: keys,
+dialog answers, images, launching, the worker API, removals and their
+confirmation, roles, push. **Confirming a removal is always yours**, in
+the app.
+
+**Setup per harness.**
+
+- *Claude Code*: the Coordinator preset pre-allows `comebye`. For a
+  coordinator you start yourself, `comebye presets claude` prints the
+  settings snippet (`{"permissions": {"allow": ["Bash(comebye:*)"]}}`)
+  for `~/.claude/settings.json` or the directory's
+  `.claude/settings.local.json`, and
+  `comebye playbook --harness claude > CLAUDE.md` in the coordinator's
+  directory gives it the playbook at every start.
+- *Pi*: `comebye playbook --harness pi > ~/code/pi-config/agents/comebye-coordinator.md`
+  (or wherever your agent definitions live) makes it a Pi agent
+  definition. pi-config's permission gate has no allow list to add
+  `comebye` to; `comebye presets pi` explains the options (approve the
+  calls, start with `--auto`, or add a rule to the gate).
+- *Anything else* (Codex, OpenCode, …): start it with
+  "Run `comebye playbook` and follow it", and allow shell commands
+  starting with `comebye` in its permission settings
+  (`comebye presets generic`).
+
+**Hubs and peers.** The ledger, briefing and roles live on one instance,
+the hub: an instance with `-peers`, or a single instance (both keep a
+ledger unless `-ledger=false`). On a **peer**, set `-hub
+https://<hub>.<tailnet>.ts.net` (`COMEBYE_HUB`): it keeps no ledger, and
+forwards its agents' CLI requests (everything but `whoami` and
+`playbook`) to the hub over HTTPS, the same way the hub calls its peers:
+Tailscale Serve on the hub attaches the peer device owner's login, so the
+hub's `-ts-allow-login` must include it (with a single owner it already
+does). The request is marked as forwarded, attributed to the peer's
+agent (`kube/w2:p1`), and held to the agent role on the hub as well. A
+coordinator on a peer thus sees and acts on the whole fleet. A peer
+without `-hub` keeps a ledger of its own, which the hub never sees, so set
+`-hub` on every peer; one with `-ledger=false` and no `-hub` answers the
+CLI's ledger requests with 409 `no_hub`. `-hub` and `-peers` are
+exclusive.
+
+**Security.** The agent role keeps a well-behaved coordinator inside the
+workflow and prevents accidents: it cannot close anything, type into
+other agents' dialogs, or confirm its own proposals. It is **not** a
+boundary against a malicious local agent: anything with a shell as your
+user can read the token file, forge the Tailscale identity header on the
+loopback port, or run `git` and `herdr` itself. What guards your work is
+that removals are confirmed by you, in the app, after the checks. See
+[SECURITY.md](SECURITY.md).
+
 ## Claude Code support
 
 Claude Code agents (`agent: "claude"` in herdr) get the same chat view as
@@ -438,8 +571,11 @@ to the home screen again.
 | `-launch` | `COMEBYE_LAUNCH` | `true` | Let the app start new agents (see [Launching agents](#launching-agents)). |
 | `-launch-root` | `COMEBYE_LAUNCH_ROOTS` | `~/code` | Directory inside which agents may be launched (symlinks resolved). Repeatable or comma-separated; roots that do not exist are ignored. |
 | `-worktree-root` | `COMEBYE_WORKTREE_ROOT` | `~/.worktrees` | Where workers get their git worktrees (`<root>/<repo>/<branch>`); also allowed for worktree checks and removal. |
+| `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL. The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers`. See [Coordinators](#coordinators). |
+| `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |
+| `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
-| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json` and the handoff `ledger.json` (dir 0700, files 0600), and an optional `handoff-template.md`. |
+| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`. The CLI reads the token from here too. |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
 | `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
 | `-notify-throttle` | | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |
@@ -489,6 +625,18 @@ Treat access to it like SSH access to that machine.
 - **Local users are trusted.** Any process on the same host can connect to
   the loopback port and forge the identity header. Do not run this on a
   shared multi-user machine.
+- **Agents get a restricted role, not a boundary.** The `comebye` CLI
+  authenticates with the local agent token (`<state-dir>/agent-token`,
+  0600, compared in constant time; a wrong token is refused, never treated
+  as the user). That role may read, hand off, prompt, mark and publish the
+  briefing, and nothing else (no keys, answers, launches, removals or
+  their confirmation). It keeps a well-behaved coordinator inside the
+  workflow; an agent with a shell could still read the token, forge the
+  identity header or run git itself, so the real safeguard is that you
+  confirm removals in the app. A peer with `-hub` forwards only these
+  requests to the hub (https, no redirects, bounded, marked as forwarded),
+  and the hub applies the agent role to them again. See
+  [Coordinators](#coordinators).
 - **Never use Tailscale Funnel**, and do not put another reverse proxy in
   front of it.
 - **Key input is whitelisted** (esc, enter, arrows, ctrl+c, and similar,
@@ -574,17 +722,21 @@ The UI is built on a small JSON API, usable from scripts on the tailnet:
 | `POST /api/agents/{target}/answer` | Body `{"action": "select"\|"toggle"\|"submit"\|"cancel", "index": N, "fingerprint": "..."}`. Re-detects the dialog; 409 `dialog_changed` (with the fresh `dialog`), `no_dialog` or `duplicate` (same dialog answered in the last 3 s), else sends the keys and returns `{"ok": true, "keys": [...]}`. |
 | `GET /api/launch/options` | `{"enabled", "reason", "roots": [{path, label, git}], "kinds": [...], "default_kind", "recent": [{path, label, git}]}` for this host. |
 | `GET /api/launch/dirs?path=<abs>` | Subdirectories of a directory inside a launch root: `{path, label, parent, entries: [{name, path, git}], truncated}` (at most 300; hidden ones left out). Without `path`, the roots. 403 outside the roots, 404 missing. |
-| `POST /api/launch` | Body `{"dir": "<abs>", "kind": "pi", "name": "...", "prompt": "..."}` (`kind` defaults to `default_kind`, `name` to the directory's). Returns `{"agent": {id, host, pane_id, name, agent, ...}, "workspace_id"}`, plus `prompt_error` if the agent started but the prompt failed. Errors: `bad_kind`, `bad_name`, `agent_name_taken` (409), `outside_roots` (403), `launch_disabled` (403), or herdr's code with the workspace left open. |
+| `POST /api/launch` | Body `{"dir": "<abs>", "kind": "pi", "name": "...", "prompt": "..."}` (`kind` defaults to `default_kind`, `name` to the directory's). Returns `{"agent": {id, host, pane_id, name, agent, ...}, "workspace_id"}`, plus `prompt_error` if the agent started but the prompt failed. Errors: `bad_kind`, `bad_name`, `agent_name_taken` (409), `outside_roots` (403), `launch_disabled` (403), or herdr's code with the workspace left open. With `"coordinator": true` (the Coordinator preset) `dir` is ignored: the agent starts in `-coordinator-dir`, named `coordinator[-N]`, with the harness's arguments and a first prompt pointing at the playbook, and the hub records its role (`launch/options` reports `coordinator_dir`). |
 | `GET/POST /api/hosts/{host}/launch[/options,/dirs]` | The same for a given host (proxied to a peer by a hub). |
 | `GET /api/repos` | The primary git checkouts in this host's launch roots (a root, its children and grandchildren): `{"repos": [{name, path, label, default_branch}], "truncated"}`. Also `/api/hosts/{host}/repos`. |
 | `GET /api/checks?path=<abs>&branch=&base=` | A worktree's safety checks on this host: `{path, exists, primary, branch, dirty, dirty_files, unmerged_commits, base_used, repo, error}` (`unmerged_commits` -1 when unknown). The path must be inside a launch root or the worktree root. Also `/api/hosts/{host}/checks`. |
 | `POST /api/worker` | Starts a worker on this host: body `{"repo", "branch", "base", "kind", "name", "prompt"}` (`{{worktree}}` and `{{base}}` in the prompt are filled in). Returns `{agent, workspace_id, worktree, branch, base, repo, reused}`. Errors: `bad_branch`, `bad_base`, `not_a_repo`, `branch_in_primary`, `path_exists`, `no_free_pane` (409), plus the launch errors. The hub calls a peer's; browsers use `/api/handoffs`. |
 | `POST /api/remove` | Removes a session on this host: body `{"agent": "<pane>", "name", "workspace_id", "worktree", "branch", "base", "remove_worktree": bool, "allow_working": bool}`. Returns `{closed: "workspace"\|"pane"\|"", worktree_removed, kept, checks}`; 409 `agent_working` or `agent_changed` closes nothing. |
 | `GET /api/ledger` | The hub's handoffs (`entries`, each with `live` status, `checks` and a `candidate` hint; only the latest 20 removed or failed) and standalone `marks`. 503 `ledger_disabled` without a state directory. |
-| `POST /api/handoffs` | Body `{"host", "repo", "branch", "base", "kind", "name", "brief", "from"}`: runs the worker on that host and records it. Returns `{entry, worker}`; a failure returns the error with the recorded `failed` entry. |
+| `POST /api/handoffs` | Body `{"host", "repo", "branch", "base", "kind", "name", "brief", "from"}`: runs the worker on that host and records it. Returns `{entry, worker}`; a failure returns the error with the recorded `failed` entry. An active handoff for the same host, repository and branch is returned instead (`"existing": true`; `"restarted": true` when its gone agent was replaced). 409 `handoff_in_progress` while the same one is starting. |
 | `POST /api/marks`, `POST /api/marks/clear` | Body `{"agent_id": "<host>/<pane>", "reason", "by"}`: mark a session ready to remove, or unmark it. |
-| `GET /api/removals` | The marked sessions, each with fresh `checks` from its host, `warnings`, `notes` and `safe`. |
-| `POST /api/removals/confirm` | Body `{"ids": ["<host>/<pane>", ...], "allow_working": bool}`: removes each on its host; `{"results": [{id, ok, code, message, result}]}`. |
+| `GET /api/removals` | The marked sessions, each with fresh `checks` from its host, `warnings`, `notes`, `safe` and `coordinator`. |
+| `POST /api/removals/confirm` | Body `{"ids": ["<host>/<pane>", ...], "allow_working": bool, "coordinators": [...]}`: removes each on its host; a coordinator only when its id is in `coordinators` too. `{"results": [{id, ok, code, message, result}]}`. |
+| `GET /api/brief`, `POST /api/brief` | `{"brief": {markdown, by, at} \| null}`; POST `{"markdown"}` (64 KB at most) publishes it. |
+| `GET /api/roles`, `POST /api/roles` | `{"roles": {"<host>/<pane>": {role: "coordinator", name, by, at}}}` (also in `/api/ledger`); POST `{"agent_id", "role": "coordinator" \| ""}` (the user only). |
+| `GET /api/playbook?harness=pi\|claude\|generic` | The coordinator playbook (markdown). |
+| `GET /api/whoami` | `{host, role: "user"\|"agent", agent, by, hub: "self"\|"<url>"\|"", ledger}`. |
 | `GET /api/events` | SSE stream of `agents` snapshots (with `hosts`), `resync` signals and a `ping` every 15 s. |
 | `GET /api/push/key` | `{"enabled": bool, "key": "<VAPID public key, base64url>"}`. |
 | `POST /api/push/subscribe` | Body: `PushSubscription.toJSON()` (`endpoint`, `keys.p256dh`, `keys.auth`), optional `replaces`. Stored with the caller's Tailscale login. |
@@ -593,6 +745,9 @@ The UI is built on a small JSON API, usable from scripts on the tailnet:
 | `POST /api/push/presence` | Body `{"client": "<id>", "pane": "<agent id>", "visible": bool}`: which agent this app instance shows (its `id`, `<host>/<pane>`; a bare pane ID means a local agent); suppresses notifications for it for 45 s unless refreshed. |
 
 POSTs must send `Content-Type: application/json` (see the security model).
+Requests with `X-Comebye-Agent-Token` (the `comebye` CLI) get the agent
+role and only the routes listed under [Coordinators](#coordinators); the
+others answer 403 `agent_forbidden`.
 `{target}` is a pane ID (for example `wS:p1`) or a live agent name; the
 `/api/agents/{target}/…` routes always mean the local host. With
 `"wait": true`, herdr starts a status wait in the same `agent.prompt` call,
