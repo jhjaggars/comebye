@@ -176,6 +176,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authAgent(s.selfGuard(s.handlePrompt)))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
+	s.mux.HandleFunc("GET /api/agents/{target}/activity", s.auth(s.handleActivity))
 	s.mux.HandleFunc("POST /api/agents/{target}/answer", s.auth(s.handleAnswer))
 	s.mux.HandleFunc("POST /api/agents/{target}/image", s.auth(s.handleImage))
 	// Host-qualified routes: the local host is served directly, a peer's
@@ -187,6 +188,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authAgent(s.selfGuard(s.onHost("prompt", s.handlePrompt))))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/keys", s.auth(s.onHost("keys", s.handleKeys)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/activity", s.auth(s.onHost("activity", s.handleActivity)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/answer", s.auth(s.onHost("answer", s.handleAnswer)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/image", s.auth(s.onHost("image", s.handleImage)))
 	s.mux.HandleFunc("GET /api/launch/options", s.auth(s.handleLaunchOptions))

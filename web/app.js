@@ -1007,7 +1007,7 @@ function openDetail(id) {
   $("list").style.display = "none";
   $("detail").style.display = "flex";
   renderDetail();
-  loadChat();
+  loadChat().then(refreshStatusLine);
   startPolling();
   reportPresence();
 }
@@ -1185,17 +1185,41 @@ function updateJump() {
 // visible when the chat is scrolled up. Blocked agents get the answer
 // card instead.
 
-const activity = { timer: null, seenAt: 0, pane: null, open: false, panelTimer: null, panelTicks: 0, panelSig: "", subSteps: new Map() };
+const activity = { timer: null, seenAt: 0, pane: null, open: false, panelTimer: null, panelTicks: 0, panelSig: "", subSteps: new Map(), status: null, statusPane: null };
 
 function isWorking(a) { return !!a && a.agent_status === "working" && !state.ask; }
 
-// activityStep describes what the agent is doing, from the newest message.
+// activityStep describes what the agent is doing: the tool it is running
+// (from the newest message), else what its own status line says
+// ("Compacting conversation", the current todo), else thinking. The status
+// line's placeholder verbs ("Shimmying…") count as thinking.
 function activityStep() {
   const m = state.chat && state.chat.last;
   if (m && m.kind === "tool" && toolRunning(m)) {
     return { verb: "Running", what: m.tool || "a tool", detail: m.args || "" };
   }
+  const st = agentStatusLine();
+  if (st && !st.generic) return { verb: st.text, what: "", detail: "" };
   return { verb: "Thinking", what: "", detail: "" };
+}
+
+function agentStatusLine() {
+  return activity.statusPane === state.selected ? activity.status : null;
+}
+
+// refreshStatusLine fetches the selected agent's status line (GET
+// /activity) while it works. The poll calls it alongside the transcript.
+async function refreshStatusLine() {
+  const pane = state.selected;
+  if (!isWorking(agentById(pane)) || !state.chat || state.chat.terminal) return;
+  let st = null;
+  try {
+    st = (await api(`${pathFor(pane)}/activity`)).activity || null;
+  } catch { /* an older host without /activity: keep the transcript's view */ }
+  if (state.selected !== pane) return;
+  activity.status = st;
+  activity.statusPane = pane;
+  renderActivity();
 }
 
 function workingSince(a) {
@@ -1228,7 +1252,7 @@ function renderActivity() {
   if (header) header.classList.toggle("busy", working);
   const chatEl = $("chat");
   let row = chatEl.querySelector(".activity");
-  if (!working) { activity.seenAt = 0; clearInterval(activity.timer); activity.timer = null; }
+  if (!working) { activity.seenAt = 0; activity.status = null; clearInterval(activity.timer); activity.timer = null; }
   if (!state.chat || state.chat.terminal || (!working && !subs)) {
     if (row) row.remove();
     closeActivityPanel();
@@ -1387,7 +1411,8 @@ function tickActivity() {
   const a = agentById(state.selected);
   const row = $("chat").querySelector(".activity");
   if (!row || !isWorking(a)) return;
-  row.querySelector(".act-time").textContent = fmtClock(Date.now() - workingSince(a));
+  const st = agentStatusLine();
+  row.querySelector(".act-time").textContent = fmtClock(Date.now() - workingSince(a)) + (st && st.detail ? " · " + st.detail : "");
 }
 
 // toolMeta is a tool card's status: duration, "failed" for a call whose
@@ -1807,7 +1832,7 @@ function startPolling() {
     if (!a) return;
     if (a.agent_status === "working" || a.agent_status === "blocked") {
       if (state.chat && state.chat.terminal) refreshOutput();
-      else loadChat(false); // append-only; new messages diff in by id
+      else { loadChat(false); refreshStatusLine(); } // append-only; new messages diff in by id
     } else if (runningSubagents()) {
       loadChat(false); // an idle agent's background subagents finishing
     }

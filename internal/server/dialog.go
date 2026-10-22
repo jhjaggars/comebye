@@ -115,6 +115,31 @@ func (s *Server) handleDialog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"dialog": d})
 }
 
+// handleActivity reports what a working agent's own status line says it is
+// doing (GET /api/agents/{target}/activity → {"activity": Activity|null}).
+// The phone polls it while it shows a working agent, so "compacting" and
+// the current todo show instead of a bare "Thinking". Agents that are not
+// working are not read.
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
+	agent := s.resolveAgent(r.PathValue("target"))
+	if agent == nil {
+		http.Error(w, "unknown agent", http.StatusNotFound)
+		return
+	}
+	if agent.Status != herdr.StatusWorking {
+		writeJSON(w, map[string]any{"activity": nil})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	read, err := s.client.ReadPane(ctx, agent.PaneID, "visible", 0)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"activity": dialog.DetectActivity(read.Text, agent.Agent)})
+}
+
 // answerBody is the JSON body of an answer request.
 type answerBody struct {
 	Action      string `json:"action"`

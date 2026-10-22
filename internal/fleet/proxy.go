@@ -32,6 +32,7 @@ var proxyOps = map[string]proxyOp{
 	"prompt":     {method: http.MethodPost, maxBody: 1 << 20, bodyTimeout: promptTimeout},
 	"keys":       {method: http.MethodPost, maxBody: 64 << 10, timeout: 15 * time.Second},
 	"dialog":     {method: http.MethodGet, timeout: 20 * time.Second},
+	"activity":   {method: http.MethodGet, timeout: 15 * time.Second},
 	"answer":     {method: http.MethodPost, maxBody: 64 << 10, timeout: 20 * time.Second},
 	// image: an 8 MB image as base64 JSON, stored on the agent's host.
 	"image": {method: http.MethodPost, maxBody: 12 << 20, timeout: 60 * time.Second},
