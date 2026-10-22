@@ -57,7 +57,9 @@ handoff and nothing to sync.
 - [Tailscale](https://tailscale.com) on that machine and on your phone, with
   [HTTPS certificates](https://tailscale.com/kb/1153/enabling-https) enabled
   for the tailnet (needed by Tailscale Serve).
-- Go 1.25 or newer to build.
+- Go 1.25 or newer to build. `go.mod` names a patched toolchain
+  (`toolchain` line), which `go` downloads automatically unless you set
+  `GOTOOLCHAIN=local`; release binaries should be built with it.
 - Linux with systemd is assumed for the service setup below; anything that
   runs Go and herdr should work.
 
