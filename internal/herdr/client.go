@@ -165,6 +165,10 @@ type AgentInfo struct {
 	// file's mtime when there is one, else when this server first saw the
 	// agent in its current status. herdr itself reports no timestamps.
 	LastActive *time.Time `json:"last_active,omitempty"`
+	// StatusSince is when herdr-phone saw the agent enter its current
+	// status (so the app can show "working for 2m"); unknown after a
+	// restart until the next change, when it is the restart time.
+	StatusSince *time.Time `json:"status_since,omitempty"`
 	// Host names the herdr-phone instance that owns the agent and ID is the
 	// host-qualified "<host>/<pane_id>". Pane IDs are only unique per host.
 	// Neither comes from herdr: herdr-phone stamps them before broadcasting.

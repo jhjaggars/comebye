@@ -321,6 +321,20 @@ function activeMs(a) {
   return Number.isNaN(t) ? 0 : t;
 }
 
+// sinceMs is when the agent entered its current status (0 if unknown).
+function sinceMs(a) {
+  const t = a && a.status_since ? Date.parse(a.status_since) : NaN;
+  return Number.isNaN(t) ? 0 : t;
+}
+
+// fmtClock renders an elapsed time as m:ss (h:mm:ss past an hour).
+function fmtClock(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const two = (n) => String(n).padStart(2, "0");
+  if (s >= 3600) return `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`;
+  return `${Math.floor(s / 60)}:${two(s % 60)}`;
+}
+
 // fmtAgo renders a compact elapsed time: 45s, 12m, 3h, 2d.
 function fmtAgo(ms) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
@@ -415,7 +429,9 @@ function renderList() {
       </div>
       <span class="status ${esc(a.agent_status)}">${esc(a.agent_status)}${
         activeMs(a) && (a.agent_status === "idle" || a.agent_status === "done")
-          ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>` : ""}</span>
+          ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>`
+          : a.agent_status === "working" && sinceMs(a)
+            ? `<br><span class="ago">for ${fmtAgo(sinceMs(a))}</span>` : ""}</span>
     </div>`).join("") + downRows;
   wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
     el.addEventListener("click", () => openDetail(el.dataset.id));
@@ -499,6 +515,11 @@ function openDetail(id) {
 
 function closeDetail() {
   toggleKeypad(false);
+  clearInterval(activity.timer);
+  activity.timer = null;
+  activity.seenAt = 0;
+  const header = document.querySelector("#detail header");
+  if (header) header.classList.remove("busy");
   state.selected = null;
   state.chat = null;
   state.ask = null;
@@ -536,6 +557,7 @@ function renderDetail() {
   st.className = "status " + a.agent_status;
   updateAnswerCard();
   updateSendButton();
+  renderActivity();
 }
 
 /* ---------- chat view (Pi session transcript) ---------- */
@@ -592,10 +614,6 @@ function renderTranscript(t, reset) {
   }
   if (!chat.more && earlier) earlier.remove();
 
-  const spinner = document.createElement("div");
-  spinner.className = "spinner";
-  spinner.innerHTML = "thinking <span class='typing'><i></i><i></i><i></i></span>";
-
   let appended = false;
   for (const m of t.messages) {
     if (chat.rendered.has(m.id)) {
@@ -610,12 +628,8 @@ function renderTranscript(t, reset) {
   }
   renderPending();
 
-  // While the agent is working, show a typing indicator at the bottom.
-  const a = agentById(state.selected);
-  chatEl.querySelectorAll(".spinner").forEach((el) => el.remove());
-  if (a && (a.agent_status === "working" || a.agent_status === "blocked")) {
-    chatEl.appendChild(spinner);
-  }
+  if (t.messages.length) chat.last = t.messages[t.messages.length - 1];
+  renderActivity();
 
   chatEl.appendChild(jumpAnchor()); // keep the jump button last
   if (appended && (atBottom || reset)) chatEl.scrollTop = chatEl.scrollHeight;
@@ -642,12 +656,89 @@ function updateJump() {
   jumpEl.classList.toggle("hidden", c.scrollHeight - c.scrollTop - c.clientHeight <= 120);
 }
 
+/* ---------- activity (the agent is working) ---------- */
+//
+// While the agent works: a row at the bottom of the chat with a pulsing
+// dot, how long it has been working and what it is doing now (the tool it
+// is running, else thinking), and a moving bar under the header that stays
+// visible when the chat is scrolled up. Blocked agents get the answer
+// card instead.
+
+const activity = { timer: null, seenAt: 0, pane: null };
+
+function isWorking(a) { return !!a && a.agent_status === "working" && !state.ask; }
+
+// activityStep describes what the agent is doing, from the newest message.
+function activityStep() {
+  const m = state.chat && state.chat.last;
+  if (m && m.kind === "tool" && !m.result && !m.err && !m.ms) {
+    return { verb: "Running", what: m.tool || "a tool", detail: m.args || "" };
+  }
+  return { verb: "Thinking", what: "", detail: "" };
+}
+
+function workingSince(a) {
+  const t = sinceMs(a);
+  if (t) return t;
+  // An older server without status_since: time from when we saw it.
+  if (activity.pane !== state.selected || !activity.seenAt) {
+    activity.pane = state.selected;
+    activity.seenAt = Date.now();
+  }
+  return activity.seenAt;
+}
+
+function renderActivity() {
+  const a = agentById(state.selected);
+  const working = isWorking(a);
+  const header = document.querySelector("#detail header");
+  if (header) header.classList.toggle("busy", working);
+  const chatEl = $("chat");
+  let row = chatEl.querySelector(".activity");
+  if (!working || !state.chat || state.chat.terminal) {
+    if (row) row.remove();
+    if (!working) { activity.seenAt = 0; clearInterval(activity.timer); activity.timer = null; }
+    return;
+  }
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "activity";
+    row.setAttribute("role", "status");
+    row.innerHTML = '<span class="dot working" aria-hidden="true"></span>' +
+      '<span class="act-verb"></span><span class="act-what"></span>' +
+      '<span class="act-time"></span><span class="act-detail"></span>';
+  }
+  const anchor = chatEl.querySelector(".jump-anchor");
+  if (row.nextSibling !== anchor || row.parentNode !== chatEl) chatEl.insertBefore(row, anchor);
+  const step = activityStep();
+  row.querySelector(".act-verb").textContent = step.verb;
+  row.querySelector(".act-what").textContent = step.what;
+  row.querySelector(".act-detail").textContent = step.detail;
+  row.querySelector(".act-detail").hidden = !step.detail;
+  tickActivity();
+  if (!activity.timer) activity.timer = setInterval(tickActivity, 1000);
+}
+
+function tickActivity() {
+  const a = agentById(state.selected);
+  const row = $("chat").querySelector(".activity");
+  if (!row || !isWorking(a)) return;
+  row.querySelector(".act-time").textContent = fmtClock(Date.now() - workingSince(a));
+}
+
+// toolMeta is a tool card's status: duration, "failed" for a call whose
+// result is an error (red card), or still running.
+function toolMeta(m) {
+  if (m.err) return "failed" + (m.ms ? " · " + fmtMs(m.ms) : "");
+  return m.ms ? fmtMs(m.ms) : (m.result ? "ran" : "running…");
+}
+
 function patchToolCard(m) {
   const el = document.querySelector(`#chat [data-id="${CSS.escape(m.id)}"]`);
   if (!el) return;
   el.classList.toggle("err", m.err);
   const meta = el.querySelector(".toolmeta");
-  if (meta) meta.textContent = m.ms ? fmtMs(m.ms) : "ran";
+  if (meta) meta.textContent = toolMeta(m);
   const body = el.querySelector(".toolresult");
   if (body && !body.textContent && m.result) body.textContent = m.result;
 }
@@ -696,8 +787,8 @@ function renderPending() {
   // Once the agent is idle, anything still unmatched after a minute was
   // rendered differently (a slash command, say) or not recorded: drop it.
   if (!working) chat.pending = chat.pending.filter((p) => Date.now() - p.at < 60000);
-  // Keep them above the typing indicator and the jump button.
-  const before = chatEl.querySelector(".spinner") || chatEl.querySelector(".jump-anchor");
+  // Keep them above the activity row and the jump button.
+  const before = chatEl.querySelector(".activity") || chatEl.querySelector(".jump-anchor");
   for (const p of chat.pending) {
     const div = document.createElement("div");
     div.className = "msg user pending";
@@ -736,7 +827,7 @@ function renderMessage(m) {
       const d = document.createElement("details");
       d.className = "toolcard" + (m.err ? " err" : "");
       d.dataset.id = m.id;
-      const meta = m.ms ? fmtMs(m.ms) : (m.result || m.err ? "ran" : "running…");
+      const meta = toolMeta(m);
       d.innerHTML =
         `<summary><span class="toolname">${esc(m.tool || "tool")}</span>` +
         `<span class="toolargs">${esc(m.args || "")}</span>` +

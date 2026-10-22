@@ -154,7 +154,7 @@ func TestManagerSingleHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := m.Agents()
-	if len(a) != 1 || a[0].Host != "desk" || a[0].ID != "desk/wS:p1" || a[0].LastActive == nil {
+	if len(a) != 1 || a[0].Host != "desk" || a[0].ID != "desk/wS:p1" || a[0].LastActive == nil || a[0].StatusSince == nil {
 		t.Fatalf("agents = %+v", a)
 	}
 	fh.set(herdr.AgentInfo{Name: "fixer", PaneID: "wS:p1", Status: herdr.StatusBlocked, CWD: "/x/repo"})

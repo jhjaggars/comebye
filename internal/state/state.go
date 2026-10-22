@@ -195,7 +195,9 @@ func (m *Manager) refresh(ctx context.Context) error {
 	}
 	transitions := m.tracker.Observe(agents, time.Now())
 	for i := range agents {
-		agents[i].LastActive = lastActive(&agents[i], m.tracker.Since(AgentKey(&agents[i])))
+		since := m.tracker.Since(AgentKey(&agents[i]))
+		agents[i].LastActive = lastActive(&agents[i], since)
+		agents[i].StatusSince = timeOrNil(since)
 	}
 	m.agents = agents
 	snapshot := agents
@@ -224,6 +226,13 @@ func lastActive(a *herdr.AgentInfo, since time.Time) *time.Time {
 	return &since
 }
 
+func timeOrNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
 // applyStatus optimistically patches the cached status for one pane and
 // pushes it out without waiting for the debounced refresh.
 func (m *Manager) applyStatus(paneID string, status herdr.AgentStatus) {
@@ -243,6 +252,7 @@ func (m *Manager) applyStatus(paneID string, status herdr.AgentStatus) {
 		key := AgentKey(a)
 		if _, changed := m.tracker.Update(key, status, time.Now()); changed {
 			a.LastActive = lastActive(a, m.tracker.Since(key))
+			a.StatusSince = timeOrNil(m.tracker.Since(key))
 			copyOfAgent := *a
 			notify = &copyOfAgent
 		}
