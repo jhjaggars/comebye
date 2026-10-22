@@ -1,0 +1,745 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/transcript"
+)
+
+// Handoffs and pruning, on the hub (or a single instance): the ledger
+// (internal/ledger) records each handoff, the hub runs the worker on the
+// owning host (locally or through fleet.CallHost), follows the worker until
+// it finishes and keeps its final report. Sessions can be marked ready to
+// remove; the review list shows each with fresh safety checks from its
+// host, and a confirmed removal runs there too. Comebye never marks or
+// removes anything on its own.
+
+// defaultHandoffTemplate wraps a handoff's brief. A handoff-template.md in
+// the state directory replaces it. The hub fills {{repo}}, {{branch}},
+// {{brief}}, {{from}} and {{host}}; the worker's host fills {{worktree}} and
+// {{base}}.
+const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this task by {{from}}.
+
+## Your task
+
+{{brief}}
+
+## How to work
+
+- Work only in this git worktree, {{worktree}} (your current directory), on branch ` + "`{{branch}}`" + ` (started from ` + "`{{base}}`" + `). Do not check out other branches or edit other checkouts.
+- When you are done, commit your work on ` + "`{{branch}}`" + `. Do not merge, rebase or push other branches: merging is left to the user.
+- End with a final report as your last message, in exactly this markdown format:
+
+## Summary
+<what you did and the outcome, in a short paragraph>
+
+## Changes
+<the commits and the files changed, as a list>
+
+## Verification
+<what you ran (tests, builds, checks) and the results>
+
+## Follow-ups
+<what is left to do, risks or open questions; "None." if nothing>
+`
+
+const (
+	// maxTemplate caps handoff-template.md.
+	maxTemplate = 64 << 10
+	// maxBrief leaves room for the template within the prompt cap.
+	maxBrief = maxLaunchPrompt - maxTemplate
+	// checksTTL is how long cached checks back the ledger's hints.
+	checksTTL = 5 * time.Minute
+	// reportRetry spaces attempts to find an empty final report.
+	reportRetry = 20 * time.Second
+	// removedShown caps the removed and failed entries the ledger lists.
+	removedShown = 20
+)
+
+// coord is the hub's handoff state besides the ledger file.
+type coord struct {
+	mu        sync.Mutex
+	checks    map[string]cachedChecks // by entry id
+	checking  map[string]bool
+	reporting map[string]time.Time // entry id -> last capture attempt
+}
+
+type cachedChecks struct {
+	c  worktreeChecks
+	at time.Time
+}
+
+// handoffTemplate is the state directory's handoff-template.md, else the
+// built-in template.
+func (s *Server) handoffTemplate() string {
+	if s.cfg.StateDir != "" {
+		f, err := os.Open(filepath.Join(s.cfg.StateDir, "handoff-template.md"))
+		if err == nil {
+			defer f.Close()
+			b := make([]byte, maxTemplate+1)
+			n, _ := f.Read(b)
+			if n > 0 && n <= maxTemplate {
+				return string(b[:n])
+			}
+			if n > maxTemplate {
+				log.Printf("handoff-template.md is larger than %d bytes; using the built-in template", maxTemplate)
+			}
+		}
+	}
+	return defaultHandoffTemplate
+}
+
+// ledgerOff answers when this instance keeps no ledger (no state directory).
+func (s *Server) ledgerOff(w http.ResponseWriter) bool {
+	if s.ledger != nil {
+		return false
+	}
+	writeJSONStatus(w, http.StatusServiceUnavailable, map[string]string{"code": "ledger_disabled", "message": "this instance keeps no handoff ledger"})
+	return true
+}
+
+// knownHost reports whether host is this instance or one of its peers.
+func (s *Server) knownHost(host string) bool {
+	return host == s.fleet.LocalName() || s.fleet.HasPeer(host)
+}
+
+// opFailure decodes a host's {code, message} error answer.
+func opFailure(status int, body []byte) *launchError {
+	var e struct{ Code, Message string }
+	_ = json.Unmarshal(body, &e)
+	if e.Code == "" {
+		e.Code = "host_error"
+	}
+	if e.Message == "" {
+		e.Message = strings.TrimSpace(string(body))
+		if len(e.Message) > 300 {
+			e.Message = e.Message[:300]
+		}
+	}
+	return &launchError{status: status, code: e.Code, message: e.Message}
+}
+
+// callHost runs a worker op on a peer and decodes a 200 answer into out.
+func (s *Server) callHost(ctx context.Context, host, op string, query url.Values, in, out any) *launchError {
+	var body []byte
+	if in != nil {
+		var err error
+		if body, err = json.Marshal(in); err != nil {
+			return &launchError{status: http.StatusInternalServerError, code: "encode", message: err.Error()}
+		}
+	}
+	status, data, err := s.fleet.CallHost(ctx, host, op, query, body)
+	if err != nil {
+		return &launchError{status: http.StatusBadGateway, code: "host_unreachable", message: err.Error()}
+	}
+	if status != http.StatusOK {
+		return opFailure(status, data)
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return &launchError{status: http.StatusBadGateway, code: "bad_answer", message: host + " sent an unexpected answer"}
+	}
+	return nil
+}
+
+// workerOn starts a worker on host.
+func (s *Server) workerOn(ctx context.Context, host string, b workerBody) (*workerResult, *launchError) {
+	if host == s.fleet.LocalName() {
+		return s.startWorker(ctx, b)
+	}
+	var res workerResult
+	if e := s.callHost(ctx, host, "worker", nil, b, &res); e != nil {
+		return nil, e
+	}
+	return &res, nil
+}
+
+// checksOn runs a worktree's checks on host.
+func (s *Server) checksOn(ctx context.Context, host, path, branch, base string) (*worktreeChecks, *launchError) {
+	if host == s.fleet.LocalName() {
+		roots := s.checkRoots()
+		if len(roots) == 0 {
+			return nil, errLaunchDisabled
+		}
+		p, lerr := resolveLaunchDir(path, roots)
+		if lerr != nil {
+			if lerr.code == "not_found" {
+				return &worktreeChecks{Path: filepath.Clean(path), Unmerged: -1}, nil
+			}
+			return nil, lerr
+		}
+		c := checkWorktree(ctx, p, branch, base)
+		return &c, nil
+	}
+	var c worktreeChecks
+	q := url.Values{"path": {path}, "branch": {branch}, "base": {base}}
+	if e := s.callHost(ctx, host, "checks", q, nil, &c); e != nil {
+		return nil, e
+	}
+	return &c, nil
+}
+
+// removeOn removes a session on host.
+func (s *Server) removeOn(ctx context.Context, host string, b removeBody) (*removeResult, *launchError) {
+	if host == s.fleet.LocalName() {
+		return s.removeSession(ctx, b)
+	}
+	var res removeResult
+	if e := s.callHost(ctx, host, "remove", nil, b, &res); e != nil {
+		return nil, e
+	}
+	return &res, nil
+}
+
+// handoffBody is the JSON body of a handoff.
+type handoffBody struct {
+	Host   string `json:"host"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	Base   string `json:"base"`
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Brief  string `json:"brief"`
+	From   string `json:"from"`
+}
+
+// requester names who asked: the body's from, else the Tailscale login.
+func requester(r *http.Request, from string) string {
+	from = strings.TrimSpace(from)
+	if from == "" {
+		from = strings.TrimSpace(r.Header.Get("Tailscale-User-Login"))
+	}
+	if from == "" {
+		from = "the user"
+	}
+	if len(from) > 100 {
+		from = from[:100]
+	}
+	return from
+}
+
+// handleHandoff starts a worker on a host and records it: POST {host,
+// repo, branch, base?, kind?, name?, brief, from?}. A worker that fails to
+// start is recorded as failed.
+func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w) {
+		return
+	}
+	var b handoffBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLaunchPrompt+64<<10)).Decode(&b); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if b.Host == "" {
+		b.Host = s.fleet.LocalName()
+	}
+	switch {
+	case !s.knownHost(b.Host):
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_host", "message": "no such host"})
+		return
+	case strings.TrimSpace(b.Brief) == "":
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_brief", "message": "a brief is required"})
+		return
+	case len(b.Brief) > maxBrief:
+		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "prompt_too_large", "message": "the brief is too long"})
+		return
+	case !validBranch(strings.TrimSpace(b.Branch)):
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_branch", "message": "invalid branch name"})
+		return
+	case !filepath.IsAbs(b.Repo):
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_path", "message": "the repository must be an absolute path"})
+		return
+	}
+	branch := strings.TrimSpace(b.Branch)
+	from := requester(r, b.From)
+	repoName := filepath.Base(filepath.Clean(b.Repo))
+	prompt := strings.NewReplacer(
+		"{{repo}}", repoName, "{{branch}}", branch, "{{brief}}", strings.TrimSpace(b.Brief),
+		"{{from}}", from, "{{host}}", b.Host,
+	).Replace(s.handoffTemplate())
+
+	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
+	defer cancel()
+	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Prompt: prompt})
+	e := ledger.Entry{
+		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
+		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from,
+	}
+	if lerr != nil {
+		e.Status, e.Error = ledger.Failed, lerr.code+": "+lerr.message
+		e.WorkspaceID = lerr.workspace
+		entry, err := s.ledger.Add(e)
+		if err != nil {
+			log.Printf("ledger: %v", err)
+		}
+		body := map[string]any{"code": lerr.code, "message": lerr.message, "entry": entry}
+		writeJSONStatus(w, lerr.status, body)
+		return
+	}
+	e.Status = ledger.Running
+	e.Repo, e.RepoName, e.Base, e.Kind = res.Repo, filepath.Base(res.Repo), res.Base, res.Agent.Agent
+	e.AgentID, e.PaneID, e.AgentName = res.Agent.ID, res.Agent.PaneID, res.Agent.Name
+	e.WorkspaceID, e.Worktree, e.Reused = res.WorkspaceID, res.Worktree, res.Reused
+	if res.PromptError != "" {
+		e.Error = res.PromptError
+	}
+	entry, err := s.ledger.Add(e)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res})
+		return
+	}
+	writeJSON(w, map[string]any{"entry": entry, "worker": res})
+}
+
+// observeLedger applies an agent list to the ledger and captures the
+// final reports of workers that finished.
+func (s *Server) observeLedger(agents []herdr.AgentInfo) {
+	if s.ledger == nil {
+		return
+	}
+	for _, e := range s.ledger.Observe(agents, time.Now()) {
+		s.coord.mu.Lock()
+		last, busy := s.coord.reporting[e.ID]
+		if busy && time.Since(last) < reportRetry {
+			s.coord.mu.Unlock()
+			continue
+		}
+		s.coord.reporting[e.ID] = time.Now()
+		s.coord.mu.Unlock()
+		go s.captureReport(e)
+	}
+}
+
+// captureReport stores the worker's last assistant message as its final
+// report.
+func (s *Server) captureReport(e ledger.Entry) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var latest *transcript.Latest
+	if e.Host == s.fleet.LocalName() {
+		if a := s.resolveAgent(e.PaneID); a != nil && s.manager != nil {
+			if path, err := transcript.SessionPath(*a, s.manager.Agents()); err == nil {
+				latest, _ = transcript.LatestOf(path)
+			}
+		}
+	} else {
+		latest = s.fleet.FetchLatest(ctx, e.Host, e.PaneID)
+	}
+	text := ""
+	if latest != nil {
+		text = latest.Text
+	}
+	if err := s.ledger.SetReport(e.ID, e.FinishedAt, text); err != nil {
+		log.Printf("ledger: %v", err)
+	}
+}
+
+// RunLedger follows agent updates for the ledger (finished workers) until
+// ctx is done. Ledger reads observe too, so this only makes it prompt.
+func (s *Server) RunLedger(ctx context.Context) {
+	if s.ledger == nil {
+		return
+	}
+	events, cancel := s.fleet.Hub().Subscribe()
+	defer cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			if ev.Type == "agents" {
+				s.observeLedger(ev.Agents)
+			}
+		}
+	}
+}
+
+// liveInfo is an entry's agent as the fleet sees it now.
+type liveInfo struct {
+	Present bool              `json:"present"`
+	Status  herdr.AgentStatus `json:"agent_status,omitempty"`
+}
+
+// entryView is a ledger entry with live hints.
+type entryView struct {
+	ledger.Entry
+	Live liveInfo `json:"live"`
+	// Candidate hints that the entry could be marked ready to remove: it
+	// finished with a report, and its worktree is clean and merged (per
+	// checks at most checksTTL old). Comebye never marks on its own.
+	Candidate bool            `json:"candidate"`
+	Checks    *worktreeChecks `json:"checks,omitempty"`
+}
+
+// handleLedger lists the handoffs (removed and failed ones: the latest
+// few) and the standalone marks.
+func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w) {
+		return
+	}
+	agents := s.fleet.Agents()
+	s.observeLedger(agents)
+	live := map[string]herdr.AgentInfo{}
+	for _, a := range agents {
+		live[a.ID] = a
+	}
+	entries := s.ledger.Entries()
+	var done []int
+	for i, e := range entries {
+		if e.Status == ledger.Removed || e.Status == ledger.Failed {
+			done = append(done, i)
+		}
+	}
+	skip := map[int]bool{}
+	if len(done) > removedShown {
+		for _, i := range done[:len(done)-removedShown] {
+			skip[i] = true
+		}
+	}
+	views := []entryView{}
+	for i, e := range entries {
+		if skip[i] {
+			continue
+		}
+		v := entryView{Entry: e}
+		if a, ok := live[e.AgentID]; ok && e.AgentID != "" {
+			v.Live = liveInfo{Present: true, Status: a.Status}
+		}
+		if e.Status == ledger.Finished && e.Worktree != "" {
+			if c := s.cachedChecks(e); c != nil {
+				v.Checks = c
+				v.Candidate = e.FinalReport != "" && c.Exists && !c.Primary && !c.Dirty && c.Unmerged == 0 && c.Error == ""
+			}
+		}
+		views = append(views, v)
+	}
+	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks()})
+}
+
+// cachedChecks returns an entry's cached checks, refreshing them in the
+// background when missing or older than checksTTL.
+func (s *Server) cachedChecks(e ledger.Entry) *worktreeChecks {
+	s.coord.mu.Lock()
+	defer s.coord.mu.Unlock()
+	c, ok := s.coord.checks[e.ID]
+	if (!ok || time.Since(c.at) > checksTTL) && !s.coord.checking[e.ID] {
+		s.coord.checking[e.ID] = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			res, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base)
+			s.coord.mu.Lock()
+			defer s.coord.mu.Unlock()
+			delete(s.coord.checking, e.ID)
+			if lerr == nil {
+				s.coord.checks[e.ID] = cachedChecks{*res, time.Now()}
+			}
+		}()
+	}
+	if !ok {
+		return nil
+	}
+	cc := c.c
+	return &cc
+}
+
+// markBody is the JSON body of a mark or unmark.
+type markBody struct {
+	AgentID string `json:"agent_id"`
+	Reason  string `json:"reason"`
+	By      string `json:"by"`
+}
+
+// handleMark marks an agent ready to remove: POST {agent_id, reason?,
+// by?}. A worker's ledger entry is marked; any other agent must be live.
+func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w) {
+		return
+	}
+	var b markBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&b); err != nil || b.AgentID == "" {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if len(b.Reason) > 500 {
+		b.Reason = b.Reason[:500]
+	}
+	m := ledger.Mark{AgentID: b.AgentID, By: requester(r, b.By), Reason: strings.TrimSpace(b.Reason)}
+	_, isWorker := s.ledger.ByAgent(b.AgentID)
+	var agent *herdr.AgentInfo
+	for _, a := range s.fleet.Agents() {
+		if a.ID == b.AgentID {
+			agent = &a
+			break
+		}
+	}
+	if agent == nil && !isWorker {
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "agent_not_found", "message": "no such agent"})
+		return
+	}
+	if agent != nil {
+		m.Host, m.PaneID, m.Name, m.WorkspaceID, m.CWD = agent.Host, agent.PaneID, agent.Name, agent.WorkspaceID, agent.CWD
+		if agent.Worktree != nil && agent.Worktree.IsLinked {
+			m.Worktree = agent.Worktree.CheckoutPath
+		}
+	}
+	entry, err := s.ledger.SetMark(m)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "ledger_error", "message": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"mark": m, "entry": entry})
+}
+
+// handleUnmark clears a mark: POST {agent_id}.
+func (s *Server) handleUnmark(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w) {
+		return
+	}
+	var b markBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&b); err != nil || b.AgentID == "" {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	found, err := s.ledger.ClearMark(b.AgentID)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "ledger_error", "message": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"cleared": found})
+}
+
+// removal is one session marked ready to remove, as the review list shows
+// it.
+type removal struct {
+	ID          string            `json:"id"` // the host-qualified agent id
+	Host        string            `json:"host"`
+	PaneID      string            `json:"pane_id,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	EntryID     string            `json:"entry_id,omitempty"` // a ledger worker's entry
+	Repo        string            `json:"repo,omitempty"`
+	Branch      string            `json:"branch,omitempty"`
+	Base        string            `json:"base,omitempty"`
+	WorkspaceID string            `json:"workspace_id,omitempty"`
+	Worktree    string            `json:"worktree,omitempty"`
+	Mark        ledger.Mark       `json:"mark"`
+	Live        liveInfo          `json:"live"`
+	Checks      *worktreeChecks   `json:"checks,omitempty"`
+	ChecksError string            `json:"checks_error,omitempty"`
+	FinalReport string            `json:"final_report,omitempty"`
+	Warnings    []string          `json:"warnings"`
+	Notes       []string          `json:"notes"`
+	Safe        bool              `json:"safe"`
+	Status      herdr.AgentStatus `json:"-"`
+}
+
+// marked lists the marked sessions (without checks).
+func (s *Server) marked() []*removal {
+	live := map[string]herdr.AgentInfo{}
+	for _, a := range s.fleet.Agents() {
+		live[a.ID] = a
+	}
+	var out []*removal
+	for _, e := range s.ledger.Entries() {
+		if e.Status != ledger.ReadyToRemove || e.Mark == nil {
+			continue
+		}
+		out = append(out, &removal{
+			ID: e.AgentID, Host: e.Host, PaneID: e.PaneID, Name: e.AgentName, EntryID: e.ID, Repo: e.RepoName,
+			Branch: e.Branch, Base: e.Base, WorkspaceID: e.WorkspaceID, Worktree: e.Worktree, Mark: *e.Mark, FinalReport: e.FinalReport,
+		})
+	}
+	for _, m := range s.ledger.Marks() {
+		out = append(out, &removal{ID: m.AgentID, Host: m.Host, PaneID: m.PaneID, Name: m.Name, WorkspaceID: m.WorkspaceID, Worktree: m.Worktree, Mark: m})
+	}
+	for _, it := range out {
+		if a, ok := live[it.ID]; ok {
+			it.Live = liveInfo{Present: true, Status: a.Status}
+			if it.Repo == "" && a.Worktree != nil {
+				it.Repo = a.Worktree.RepoName
+			}
+		}
+	}
+	return out
+}
+
+// review fills in an item's checks (on its host) and its warnings.
+func (s *Server) review(ctx context.Context, it *removal) {
+	it.Warnings, it.Notes = []string{}, []string{}
+	switch {
+	case !it.Live.Present:
+		it.Notes = append(it.Notes, "the agent is no longer running")
+	case it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked:
+		it.Warnings = append(it.Warnings, "the agent is "+string(it.Live.Status)+" again")
+	}
+	if it.Worktree == "" {
+		it.Notes = append(it.Notes, "no worktree of its own: only the session is closed")
+	} else if !s.knownHost(it.Host) {
+		it.ChecksError = "unknown host " + it.Host
+	} else {
+		c, lerr := s.checksOn(ctx, it.Host, it.Worktree, it.Branch, it.Base)
+		if lerr != nil {
+			it.ChecksError = lerr.message
+		} else {
+			it.Checks = c
+			if it.Branch == "" {
+				it.Branch = c.Branch
+			}
+			switch {
+			case !c.Exists:
+				it.Notes = append(it.Notes, "the worktree is already gone")
+			case c.Primary:
+				it.Notes = append(it.Notes, "this is the repository's primary checkout: it is never removed")
+			default:
+				if c.Dirty {
+					it.Warnings = append(it.Warnings, "uncommitted changes ("+itoa(c.DirtyFiles)+" files): the worktree will be kept")
+				}
+				if c.Unmerged > 0 {
+					it.Warnings = append(it.Warnings, itoa(c.Unmerged)+" commits not in "+c.BaseUsed+": the worktree will be kept")
+				} else if c.Unmerged < 0 || c.Error != "" {
+					it.Warnings = append(it.Warnings, "could not check the branch ("+c.Error+"): the worktree will be kept")
+				}
+			}
+		}
+	}
+	if it.ChecksError != "" {
+		it.Warnings = append(it.Warnings, "checks failed: "+it.ChecksError)
+	}
+	it.Safe = len(it.Warnings) == 0
+}
+
+// handleRemovals lists the marked sessions with fresh checks from their
+// hosts.
+func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w) {
+		return
+	}
+	items := s.marked()
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for _, it := range items {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			s.review(ctx, it)
+		}()
+	}
+	wg.Wait()
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Mark.At.Before(items[j].Mark.At) })
+	if items == nil {
+		items = []*removal{}
+	}
+	writeJSON(w, map[string]any{"removals": items})
+}
+
+// confirmBody is the JSON body of a removal confirmation.
+type confirmBody struct {
+	IDs []string `json:"ids"`
+	// AllowWorking closes agents that went back to work since the review.
+	AllowWorking bool `json:"allow_working"`
+}
+
+// removalOutcome is one confirmed item's result.
+type removalOutcome struct {
+	ID      string        `json:"id"`
+	OK      bool          `json:"ok"`
+	Code    string        `json:"code,omitempty"`
+	Message string        `json:"message,omitempty"`
+	Result  *removeResult `json:"result,omitempty"`
+}
+
+// handleConfirmRemovals removes the given marked sessions, each on its
+// host: POST {ids, allow_working?}. Items not marked are refused.
+func (s *Server) handleConfirmRemovals(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w) {
+		return
+	}
+	var b confirmBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&b); err != nil || len(b.IDs) == 0 || len(b.IDs) > 100 {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	byID := map[string]*removal{}
+	for _, it := range s.marked() {
+		byID[it.ID] = it
+	}
+	out := make([]removalOutcome, len(b.IDs))
+	ctx, cancel := context.WithTimeout(r.Context(), removeTimeout+30*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for i, id := range b.IDs {
+		out[i].ID = id
+		it := byID[id]
+		if it == nil {
+			out[i].Code, out[i].Message = "not_marked", "that session is not marked ready to remove"
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			out[i] = s.confirmOne(ctx, it, b.AllowWorking)
+		}()
+	}
+	wg.Wait()
+	writeJSON(w, map[string]any{"results": out})
+}
+
+// confirmOne removes one marked session on its host and records it.
+func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool) removalOutcome {
+	o := removalOutcome{ID: it.ID}
+	if !s.knownHost(it.Host) {
+		o.Code, o.Message = "unknown_host", "no such host: "+it.Host
+		return o
+	}
+	body := removeBody{
+		Agent: it.PaneID, Name: it.Name, WorkspaceID: it.WorkspaceID, Worktree: it.Worktree,
+		Branch: it.Branch, Base: it.Base, RemoveWorktree: it.Worktree != "", AllowWorking: allowWorking,
+	}
+	res, lerr := s.removeOn(ctx, it.Host, body)
+	if lerr != nil {
+		o.Code, o.Message = lerr.code, lerr.message
+		return o
+	}
+	raw, _ := json.Marshal(res)
+	if _, err := s.ledger.Removed(it.ID, raw, time.Now()); err != nil {
+		log.Printf("ledger: %v", err)
+	}
+	s.coord.mu.Lock()
+	delete(s.coord.checks, it.EntryID)
+	s.coord.mu.Unlock()
+	o.OK, o.Result = true, res
+	return o
+}
+
+// errNoLedger is returned by OpenLedger without a state directory.
+var errNoLedger = errors.New("no state directory")
+
+// openLedger opens the state directory's ledger.json.
+func openLedger(dir string) (*ledger.Store, error) {
+	if dir == "" {
+		return nil, errNoLedger
+	}
+	return ledger.Open(filepath.Join(dir, "ledger.json"))
+}

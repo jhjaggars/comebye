@@ -21,6 +21,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/transcript"
@@ -70,6 +71,9 @@ type Config struct {
 	// <root>/<repo>/<branch> (default ~/.worktrees). Checks and removals
 	// may touch it besides the launch roots.
 	WorktreeRoot string
+	// StateDir holds the handoff ledger (ledger.json) and an optional
+	// handoff-template.md. Empty turns handoffs and marks off.
+	StateDir string
 }
 
 // Server is the phone app HTTP server.
@@ -88,6 +92,9 @@ type Server struct {
 	// findExec reports whether an executable is installed (default
 	// installed; tests replace it).
 	findExec func(name string) bool
+	// ledger records handoffs and marks (nil without a state directory).
+	ledger *ledger.Store
+	coord  coord
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -108,6 +115,15 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		cfg.PingInterval = 15 * time.Second
 	}
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux()}
+	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}}
+	if cfg.StateDir != "" {
+		l, err := openLedger(cfg.StateDir)
+		if err != nil {
+			log.Printf("handoff ledger disabled: %v", err)
+		} else {
+			s.ledger = l
+		}
+	}
 	s.routes()
 	return s
 }
@@ -153,6 +169,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/remove", s.auth(s.handleRemove))
 	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
+	// The handoff ledger (hub side).
+	s.mux.HandleFunc("GET /api/ledger", s.auth(s.handleLedger))
+	s.mux.HandleFunc("POST /api/handoffs", s.auth(s.handleHandoff))
+	s.mux.HandleFunc("POST /api/marks", s.auth(s.handleMark))
+	s.mux.HandleFunc("POST /api/marks/clear", s.auth(s.handleUnmark))
+	s.mux.HandleFunc("GET /api/removals", s.auth(s.handleRemovals))
+	s.mux.HandleFunc("POST /api/removals/confirm", s.auth(s.handleConfirmRemovals))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	s.mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
 	s.mux.HandleFunc("POST /api/push/subscribe", s.auth(s.handlePushSubscribe))

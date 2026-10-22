@@ -162,7 +162,10 @@ func main() {
 		LaunchRoots: launchRootList(*launchOn, launchRoots),
 		// Workers' worktrees: <root>/<repo>/<branch>.
 		WorktreeRoot: expandHome(*worktreeRoot),
+		// The handoff ledger and handoff-template.md.
+		StateDir: expandHome(*stateDir),
 	}, client, manager)
+	go srv.RunLedger(context.Background())
 
 	go func() {
 		sig := make(chan os.Signal, 1)
