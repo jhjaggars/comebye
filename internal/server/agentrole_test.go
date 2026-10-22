@@ -651,7 +651,7 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 	st = fh.call("agent.start")
 	args, _ = json.Marshal(st.Params["args"])
 	if w.Code != 200 || st.Params["name"] != "coordinator-2" ||
-		string(args) != `["--name","coordinator-2","--no-skills","--no-context-files","--tools","read,grep,find,ls,bash"]` {
+		string(args) != `["--name","coordinator-2","--no-skills","--no-context-files","--tools","read,grep,find,ls,bash","--auto"]` {
 		t.Fatalf("pi launch = %d %s %v", w.Code, w.Body, st.Params)
 	}
 	if !strings.Contains(fh.call("agent.prompt").Params["text"].(string), "--harness pi") {

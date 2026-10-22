@@ -463,8 +463,9 @@ the app.
 - *Pi*: `comebye playbook --harness pi > ~/code/pi-config/agents/comebye-coordinator.md`
   (or wherever your agent definitions live) makes it a Pi agent
   definition. pi-config's permission gate has no allow list to add
-  `comebye` to; `comebye presets pi` explains the options (approve the
-  calls, start with `--auto`, or add a rule to the gate).
+  `comebye` to. The Coordinator launch preset starts Pi with `--auto`
+  (automatic judging), so `comebye` calls are judged rather than each
+  waiting for you; `comebye presets pi` explains the other options.
 - *Anything else* (Codex, OpenCode, …): start it with
   "Run `comebye playbook` and follow it", and allow shell commands
   starting with `comebye` in its permission settings

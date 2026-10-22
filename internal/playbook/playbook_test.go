@@ -80,7 +80,7 @@ func TestLaunchPieces(t *testing.T) {
 	if got := strings.Join(AgentArgs("claude", "coordinator"), " "); got != "--allowedTools Bash(comebye:*)" {
 		t.Fatalf("claude args %q", got)
 	}
-	if got := strings.Join(AgentArgs("pi", "coordinator-2"), " "); got != "--name coordinator-2 --no-skills --no-context-files --tools read,grep,find,ls,bash" {
+	if got := strings.Join(AgentArgs("pi", "coordinator-2"), " "); got != "--name coordinator-2 --no-skills --no-context-files --tools read,grep,find,ls,bash --auto" {
 		t.Fatalf("pi args %q", got)
 	}
 	if AgentArgs("codex", "c") != nil {
