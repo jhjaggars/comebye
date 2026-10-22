@@ -14,11 +14,13 @@ import (
 	"time"
 )
 
-// Git, for workers: comebye runs a few read-only git commands (rev-parse,
-// status, rev-list, cherry, symbolic-ref) in checkouts inside the launch
-// roots or the worktree root, and one write: `git worktree remove` without
-// --force, which git itself refuses for a dirty worktree. Branches are never
-// deleted.
+// Git, for workers: comebye runs read-only git commands (rev-parse,
+// status, rev-list, cherry, symbolic-ref, log, diff) in checkouts inside
+// the launch roots or the worktree root, and writes only on a confirmed
+// removal: `git worktree remove` without --force, which git itself refuses
+// for a dirty worktree. Only a removal the user confirmed as a discard
+// aborts an in-progress rebase or merge, removes the worktree with --force
+// and deletes its branch.
 
 // gitTimeout bounds one git command.
 const gitTimeout = 20 * time.Second
@@ -191,8 +193,50 @@ type worktreeChecks struct {
 	Unmerged int    `json:"unmerged_commits"`
 	BaseUsed string `json:"base_used,omitempty"`
 	Repo     string `json:"repo,omitempty"` // the primary checkout
-	Error    string `json:"error,omitempty"`
+	// Tip is the commit the checks looked at (the branch, else HEAD); a
+	// discard is refused if it moved since the user reviewed it.
+	Tip string `json:"tip,omitempty"`
+	// InProgress names an unfinished git operation in the worktree:
+	// rebase, merge, cherry-pick, revert or bisect.
+	InProgress string `json:"in_progress,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// Detail is filled in for an inspection (checks?detail=1).
+	Detail *worktreeDetail `json:"detail,omitempty"`
 }
+
+// worktreeDetail is what a coordinator inspects before proposing to keep
+// or discard a worker's work.
+type worktreeDetail struct {
+	// Status is `git status --porcelain`, at most maxDetailLines lines.
+	Status []string `json:"status"`
+	// Commits are the branch's commits with no equivalent in the base
+	// (git cherry -v), oldest first, at most maxDetailLines.
+	Commits []commitInfo `json:"commits"`
+	// DiffStat is `git diff --stat` of the branch against its merge base
+	// with the base branch.
+	DiffStat string `json:"diff_stat,omitempty"`
+	// Upstream is the branch's upstream ("" when none); Unpushed counts
+	// the branch's commits that are neither in the base nor on any
+	// remote-tracking branch: work that exists only here (-1 when unknown).
+	Upstream string `json:"upstream,omitempty"`
+	Unpushed int    `json:"unpushed"`
+	// Diff (checks?diff=1): the branch's committed changes against the
+	// merge base, then the uncommitted changes (git diff HEAD), each
+	// capped at maxDiffBytes.
+	Diff          string `json:"diff,omitempty"`
+	WorkDiff      string `json:"work_diff,omitempty"`
+	DiffTruncated bool   `json:"diff_truncated,omitempty"`
+}
+
+type commitInfo struct {
+	SHA     string `json:"sha"`
+	Subject string `json:"subject"`
+}
+
+const (
+	maxDetailLines = 100
+	maxDiffBytes   = 128 << 10
+)
 
 // Removable reports whether the worktree may be removed.
 func (c worktreeChecks) Removable() (bool, string) {
@@ -203,6 +247,8 @@ func (c worktreeChecks) Removable() (bool, string) {
 		return false, "it is the repository's primary checkout"
 	case c.Error != "":
 		return false, "the checks failed: " + c.Error
+	case c.InProgress != "":
+		return false, "a " + c.InProgress + " is in progress in it"
 	case c.Dirty:
 		return false, fmt.Sprintf("it has uncommitted changes (%d files)", c.DirtyFiles)
 	case c.Unmerged != 0:
@@ -230,7 +276,11 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 	c.Exists = true
 	c.Primary = gitDir == common
 	c.Repo = filepath.Dir(common)
+	c.InProgress = inProgress(gitDir)
 	head, _ := runGit(ctx, path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if head == "" && c.InProgress == "rebase" {
+		head = rebasingBranch(gitDir)
+	}
 	if branch == "" {
 		branch = head
 	}
@@ -250,6 +300,7 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 	} else {
 		tip = "refs/heads/" + tip
 	}
+	c.Tip, _ = runGit(ctx, path, "rev-parse", "--verify", "--quiet", "--end-of-options", tip+"^{commit}")
 	if base == "" || !refExists(ctx, path, base) {
 		base = defaultBranch(ctx, path)
 	}
@@ -279,11 +330,155 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 	return c
 }
 
+// inProgress names the unfinished operation in a git dir, "" when none.
+func inProgress(gitDir string) string {
+	for _, op := range []struct{ file, name string }{
+		{"rebase-merge", "rebase"}, {"rebase-apply", "rebase"}, {"MERGE_HEAD", "merge"},
+		{"CHERRY_PICK_HEAD", "cherry-pick"}, {"REVERT_HEAD", "revert"}, {"BISECT_LOG", "bisect"},
+	} {
+		if _, err := os.Stat(filepath.Join(gitDir, op.file)); err == nil {
+			return op.name
+		}
+	}
+	return ""
+}
+
+// rebasingBranch is the branch a rebase in progress is rewriting (HEAD
+// is detached meanwhile), "" when unknown.
+func rebasingBranch(gitDir string) string {
+	for _, d := range []string{"rebase-merge", "rebase-apply"} {
+		if b, err := os.ReadFile(filepath.Join(gitDir, d, "head-name")); err == nil {
+			if name, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "refs/heads/"); ok && validBranch(name) {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+// inspectWorktree adds the detail of an inspection to checks that found
+// a worktree: its uncommitted files, unmerged commits, diff stat and
+// push state, and with diff the diffs themselves.
+func inspectWorktree(ctx context.Context, c *worktreeChecks, diff bool) {
+	if !c.Exists || c.Tip == "" {
+		return
+	}
+	d := &worktreeDetail{Status: []string{}, Commits: []commitInfo{}, Unpushed: -1}
+	c.Detail = d
+	if out, err := runGit(ctx, c.Path, "status", "--porcelain"); err == nil && out != "" {
+		d.Status = firstLines(out, maxDetailLines)
+	}
+	tip := c.Tip
+	if c.BaseUsed != "" {
+		if out, err := runGit(ctx, c.Path, "cherry", "-v", "--end-of-options", c.BaseUsed, tip); err == nil {
+			for _, l := range strings.Split(out, "\n") {
+				rest, ok := strings.CutPrefix(l, "+ ")
+				if !ok {
+					continue
+				}
+				sha, subject, _ := strings.Cut(rest, " ")
+				if len(d.Commits) < maxDetailLines {
+					d.Commits = append(d.Commits, commitInfo{SHA: shortSHA(sha), Subject: subject})
+				}
+			}
+		}
+		if mb, err := runGit(ctx, c.Path, "merge-base", "--end-of-options", c.BaseUsed, tip); err == nil {
+			if out, err := runGit(ctx, c.Path, "diff", "--stat", "--end-of-options", mb, tip); err == nil {
+				d.DiffStat, _ = capText(out, 16<<10)
+			}
+			if diff {
+				var cut bool
+				if out, err := runGit(ctx, c.Path, "diff", "--end-of-options", mb, tip); err == nil {
+					d.Diff, cut = capText(out, maxDiffBytes)
+					d.DiffTruncated = d.DiffTruncated || cut
+				}
+			}
+		}
+	}
+	if diff {
+		var cut bool
+		if out, err := runGit(ctx, c.Path, "diff", "HEAD"); err == nil {
+			d.WorkDiff, cut = capText(out, maxDiffBytes)
+			d.DiffTruncated = d.DiffTruncated || cut
+		}
+	}
+	if c.Branch != "" {
+		d.Upstream, _ = runGit(ctx, c.Path, "for-each-ref", "--format=%(upstream:short)", "refs/heads/"+c.Branch)
+	}
+	// The branch's own commits (not in the base) that no remote has.
+	notIn := []string{"rev-list", "--count", tip, "--not", "--remotes"}
+	if c.BaseUsed != "" {
+		notIn = append(notIn, c.BaseUsed)
+	}
+	if out, err := runGit(ctx, c.Path, notIn...); err == nil {
+		if n, err := strconv.Atoi(out); err == nil {
+			d.Unpushed = n
+		}
+	}
+}
+
+func firstLines(s string, n int) []string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = append(lines[:n], fmt.Sprintf("… and %d more", len(lines)-n))
+	}
+	return lines
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
+// capText cuts s to at most n bytes at a line boundary, reporting whether
+// it did.
+func capText(s string, n int) (string, bool) {
+	if len(s) <= n {
+		return s, false
+	}
+	s = s[:n]
+	if i := strings.LastIndexByte(s, '\n'); i > 0 {
+		s = s[:i+1]
+	}
+	return s, true
+}
+
 // removeWorktree removes a linked worktree with git (no --force: git
 // refuses a dirty one too). The branch stays.
 func removeWorktree(ctx context.Context, repo, path string) error {
 	_, err := runGit(ctx, repo, "worktree", "remove", "--end-of-options", path)
 	return err
+}
+
+// discardWorktree throws a worker's work away, for a removal the user
+// confirmed as a discard: it aborts an unfinished rebase, merge,
+// cherry-pick or revert, removes the worktree with its uncommitted changes
+// (--force) and deletes its branch (-D, merged or not). The caller has
+// checked that the worktree is not a primary checkout and is not in use,
+// and that branch is not the repository's default branch.
+func discardWorktree(ctx context.Context, c worktreeChecks, branch string) (branchDeleted bool, err error) {
+	switch c.InProgress {
+	case "rebase", "merge", "cherry-pick", "revert":
+		if _, err := runGit(ctx, c.Path, c.InProgress, "--abort"); err != nil {
+			return false, err
+		}
+	case "bisect":
+		if _, err := runGit(ctx, c.Path, "bisect", "reset"); err != nil {
+			return false, err
+		}
+	}
+	if _, err := runGit(ctx, c.Repo, "worktree", "remove", "--force", "--end-of-options", c.Path); err != nil {
+		return false, err
+	}
+	if branch == "" || !branchExists(ctx, c.Repo, branch) {
+		return false, nil
+	}
+	if _, err := runGit(ctx, c.Repo, "branch", "-D", branch); err != nil {
+		return false, fmt.Errorf("the worktree was removed, but %w", err)
+	}
+	return true, nil
 }
 
 // itoa is strconv.Itoa, for messages.

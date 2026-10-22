@@ -220,24 +220,15 @@ func (s *Server) workerOn(ctx context.Context, host string, b workerBody) (*work
 }
 
 // checksOn runs a worktree's checks on host.
-func (s *Server) checksOn(ctx context.Context, host, path, branch, base string) (*worktreeChecks, *launchError) {
+func (s *Server) checksOn(ctx context.Context, host, path, branch, base string, opts checkOpts) (*worktreeChecks, *launchError) {
 	if host == s.fleet.LocalName() {
-		roots := s.checkRoots()
-		if len(roots) == 0 {
-			return nil, errLaunchDisabled
-		}
-		p, lerr := resolveLaunchDir(path, roots)
-		if lerr != nil {
-			if lerr.code == "not_found" {
-				return &worktreeChecks{Path: filepath.Clean(path), Unmerged: -1}, nil
-			}
-			return nil, lerr
-		}
-		c := checkWorktree(ctx, p, branch, base)
-		return &c, nil
+		return s.localChecks(ctx, path, branch, base, opts)
 	}
 	var c worktreeChecks
-	q := url.Values{"path": {path}, "branch": {branch}, "base": {base}}
+	q := opts.query()
+	q.Set("path", path)
+	q.Set("branch", branch)
+	q.Set("base", base)
 	if e := s.callHost(ctx, host, "checks", q, nil, &c); e != nil {
 		return nil, e
 	}
@@ -559,7 +550,7 @@ func (s *Server) cachedChecks(e ledger.Entry) *worktreeChecks {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			res, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base)
+			res, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{})
 			s.coord.mu.Lock()
 			defer s.coord.mu.Unlock()
 			delete(s.coord.checking, e.ID)
@@ -580,6 +571,8 @@ type markBody struct {
 	AgentID string `json:"agent_id"`
 	Reason  string `json:"reason"`
 	By      string `json:"by"`
+	// Discard proposes throwing the work away (see ledger.Mark).
+	Discard bool `json:"discard"`
 }
 
 // handleMark marks an agent ready to remove: POST {agent_id, reason?,
@@ -596,7 +589,7 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 	if len(b.Reason) > 500 {
 		b.Reason = b.Reason[:500]
 	}
-	m := ledger.Mark{AgentID: b.AgentID, By: s.by(r, b.By), Reason: strings.TrimSpace(b.Reason)}
+	m := ledger.Mark{AgentID: b.AgentID, By: s.by(r, b.By), Reason: strings.TrimSpace(b.Reason), Discard: b.Discard}
 	entry0, isWorker := s.ledger.ByAgent(b.AgentID)
 	var agent *herdr.AgentInfo
 	for _, a := range s.fleet.Agents() {
@@ -679,6 +672,10 @@ type removal struct {
 	Warnings    []string        `json:"warnings"`
 	Notes       []string        `json:"notes"`
 	Safe        bool            `json:"safe"`
+	// Discardable: the worktree has work a plain removal keeps (uncommitted
+	// changes, unmerged commits, an unfinished rebase); the user may
+	// confirm discarding it, with the tip in checks.tip.
+	Discardable bool `json:"discardable,omitempty"`
 	// Coordinator: the agent is a coordinator; removing it needs its id
 	// in the confirmation's coordinators as well.
 	Coordinator bool              `json:"coordinator,omitempty"`
@@ -730,12 +727,13 @@ func (s *Server) review(ctx context.Context, it *removal) {
 	case it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked:
 		it.Warnings = append(it.Warnings, "the agent is "+string(it.Live.Status)+": closing it interrupts it")
 	}
+	s.findWorktree(ctx, it)
 	if it.Worktree == "" {
 		it.Notes = append(it.Notes, "no worktree of its own: only the session is closed")
 	} else if !s.knownHost(it.Host) {
 		it.ChecksError = "unknown host " + it.Host
 	} else {
-		c, lerr := s.checksOn(ctx, it.Host, it.Worktree, it.Branch, it.Base)
+		c, lerr := s.checksOn(ctx, it.Host, it.Worktree, it.Branch, it.Base, checkOpts{Detail: true})
 		if lerr != nil {
 			it.ChecksError = lerr.message
 		} else {
@@ -749,6 +747,9 @@ func (s *Server) review(ctx context.Context, it *removal) {
 			case c.Primary:
 				it.Notes = append(it.Notes, "this is the repository's primary checkout: it is never removed")
 			default:
+				if c.InProgress != "" {
+					it.Warnings = append(it.Warnings, "a "+c.InProgress+" is in progress: the worktree will be kept")
+				}
 				if c.Dirty {
 					it.Warnings = append(it.Warnings, "uncommitted changes ("+itoa(c.DirtyFiles)+" files): the worktree will be kept")
 				}
@@ -757,13 +758,31 @@ func (s *Server) review(ctx context.Context, it *removal) {
 				} else if c.Unmerged < 0 || c.Error != "" {
 					it.Warnings = append(it.Warnings, "could not check the branch ("+c.Error+"): the worktree will be kept")
 				}
+				it.Discardable = c.Tip != "" && (c.Dirty || c.InProgress != "" || c.Unmerged != 0)
 			}
 		}
 	}
 	if it.ChecksError != "" {
 		it.Warnings = append(it.Warnings, "checks failed: "+it.ChecksError)
 	}
+	if it.Mark.Discard {
+		it.Notes = append(it.Notes, "proposed: discard the work (worktree and branch)")
+	}
 	it.Safe = len(it.Warnings) == 0
+}
+
+// findWorktree fills in the worktree of a marked session that recorded
+// none (herdr did not report one for the agent) from its working
+// directory: a linked worktree around it is the session's own; a primary
+// checkout is not.
+func (s *Server) findWorktree(ctx context.Context, it *removal) {
+	if it.Worktree != "" || it.Mark.CWD == "" || !s.knownHost(it.Host) {
+		return
+	}
+	c, lerr := s.checksOn(ctx, it.Host, it.Mark.CWD, "", "", checkOpts{Within: true})
+	if lerr == nil && c.Exists && !c.Primary {
+		it.Worktree = c.Path
+	}
 }
 
 // handleRemovals lists the marked sessions with fresh checks from their
@@ -802,6 +821,9 @@ type confirmBody struct {
 	// Coordinators lists the coordinators among IDs the user confirmed a
 	// second time; any other coordinator is refused.
 	Coordinators []string `json:"coordinators"`
+	// Discard maps the IDs whose work the user confirmed throwing away to
+	// the tip they reviewed (checks.tip).
+	Discard map[string]string `json:"discard"`
 }
 
 // removalOutcome is one confirmed item's result.
@@ -849,23 +871,26 @@ func (s *Server) handleConfirmRemovals(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			out[i] = s.confirmOne(ctx, it, b.AllowWorking)
+			out[i] = s.confirmOne(ctx, it, b.AllowWorking, b.Discard[id])
 		}()
 	}
 	wg.Wait()
 	writeJSON(w, map[string]any{"results": out})
 }
 
-// confirmOne removes one marked session on its host and records it.
-func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool) removalOutcome {
+// confirmOne removes one marked session on its host and records it;
+// with discardTip, discarding its work.
+func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool, discardTip string) removalOutcome {
 	o := removalOutcome{ID: it.ID}
 	if !s.knownHost(it.Host) {
 		o.Code, o.Message = "unknown_host", "no such host: "+it.Host
 		return o
 	}
+	s.findWorktree(ctx, it)
 	body := removeBody{
 		Agent: it.PaneID, Name: it.Name, WorkspaceID: it.WorkspaceID, Worktree: it.Worktree,
 		Branch: it.Branch, Base: it.Base, RemoveWorktree: it.Worktree != "", AllowWorking: allowWorking,
+		Discard: discardTip != "", DiscardTip: discardTip,
 	}
 	res, lerr := s.removeOn(ctx, it.Host, body)
 	if lerr != nil {

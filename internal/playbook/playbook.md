@@ -28,10 +28,11 @@ with the matches listed.
 | `comebye agents` | every agent on every host: project, branch, status, role |
 | `comebye ledger` | the handoffs: status, branch, worker, report, marks, hints |
 | `comebye read AGENT [--lines N]` | an agent's recent messages |
-| `comebye read AGENT --report` | a worker's final report |
+| `comebye read AGENT --report` | a worker's final report (any other agent: its last reply) |
+| `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] --brief FILE` | start a worker (`--brief -` reads stdin) |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
-| `comebye mark AGENT --reason R` | propose removing a session |
+| `comebye mark AGENT --reason R [--discard]` | propose removing a session, or discarding its work |
 | `comebye unmark AGENT` | withdraw that proposal |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
 
@@ -93,12 +94,26 @@ Mark a session (`comebye mark AGENT --reason "…"`) only when all hold:
 - its **work is committed**, and preferably merged (the ledger's
   `candidate` hint).
 
+Before marking, run `comebye inspect AGENT`: it runs on the agent's own
+host, so it works for workers on other machines too. It shows what a
+removal would leave behind: uncommitted files, commits not in the base,
+commits on no remote (work that exists only there), an unfinished rebase.
+
 A reason is required: say why in a few words ("merged into main, report
 complete"). Never mark yourself or another coordinator, and never mark a
 project's home agent (one working in the repository's primary checkout)
 unless the user asks. Marking only proposes: the user reviews the checks
 and confirms in the app, and the worktree is only removed when clean and
 merged. If you marked something by mistake, `comebye unmark` it.
+
+**Discarding work.** When the user decides a worker's unmerged work is not
+wanted (superseded, abandoned, a failed experiment), propose discarding it:
+`comebye mark AGENT --discard --reason "…"`. Inspect it first (`--diff` to
+read the changes) and say in the reason why it can go and what replaces it.
+The app then shows the user exactly what would be lost (commits, files, the
+branch) and, only if they confirm, removes the worktree anyway and deletes
+the branch. Propose a discard only when the user asked for it or agreed;
+otherwise mark normally and let them choose.
 
 ## The briefing
 
@@ -123,7 +138,7 @@ ready to remove so the user knows to review them.
 
 - **Never edit code** or files in the repositories, and never run git
   commands that change anything. Read-only inspection is fine when it helps
-  a brief.
+  a brief; for another host's checkouts use `comebye inspect`.
 - **Never close, remove or launch** sessions, workspaces or worktrees;
   never send keys. Propose, and let the user decide in the app.
 - **Never prompt yourself.** Run `comebye whoami` to know your own id.

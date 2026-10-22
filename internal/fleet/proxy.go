@@ -60,7 +60,7 @@ var hostProxyOps = map[string]struct {
 	// worktree (git plus herdr, up to 150s on the peer), and removing a
 	// worker's session.
 	"repos":  {proxyOp{method: http.MethodGet, timeout: 30 * time.Second}, []string{"api", "repos"}, false},
-	"checks": {proxyOp{method: http.MethodGet, query: []string{"path", "branch", "base"}, timeout: 45 * time.Second}, []string{"api", "checks"}, false},
+	"checks": {proxyOp{method: http.MethodGet, query: []string{"path", "branch", "base", "detail", "diff", "within"}, timeout: 45 * time.Second}, []string{"api", "checks"}, false},
 	"worker": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
 	"remove": {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
 }

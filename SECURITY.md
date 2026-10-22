@@ -59,8 +59,12 @@ In scope:
 - Getting the worker API to run git outside the launch roots and the
   worktree root (`-worktree-root`), to pass options to git through branch,
   base or path values, to remove a worktree that is dirty, unmerged or a
-  repository's primary checkout, or to delete a branch. Removal runs only
-  `git worktree remove` without `--force`, after the checks.
+  repository's primary checkout, or to delete a branch, without the user
+  confirming a discard of that session in the app. A plain removal runs
+  only `git worktree remove` without `--force`, after the checks; a
+  confirmed discard (refused if the branch moved since the review) aborts
+  an unfinished rebase or merge, removes the worktree with `--force` and
+  deletes its branch, never a primary checkout or the default branch.
 - Making a hub forward a browser's request to a peer's `/api/worker` or
   `/api/remove` (only the hub itself calls those, for handoffs and
   confirmed removals).

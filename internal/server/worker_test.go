@@ -392,3 +392,132 @@ func TestChecksAndRepos(t *testing.T) {
 		t.Fatalf("host repos: %d", w.Code)
 	}
 }
+
+func TestInspectAndDiscard(t *testing.T) {
+	s, fh, repo, wt := removalSetup(t)
+	// Committed work on the branch, an uncommitted change and a new file.
+	os.WriteFile(wt+"/a.txt", []byte("a\nwork\n"), 0o644)
+	git(t, wt, "commit", "-q", "-am", "work on a")
+	os.WriteFile(wt+"/a.txt", []byte("a\nwork\nmore\n"), 0o644)
+	os.MkdirAll(wt+"/deep/er", 0o755)
+	os.WriteFile(wt+"/deep/er/new.txt", []byte("x\n"), 0o644)
+
+	// Inspected from a directory inside the worktree (within=1).
+	var c worktreeChecks
+	w := do(s, "GET", "/api/checks?path="+wt+"/deep/er&within=1&diff=1", nil, "")
+	json.Unmarshal(w.Body.Bytes(), &c)
+	d := c.Detail
+	if w.Code != 200 || c.Path != wt || c.Branch != "w" || c.Tip == "" || d == nil || len(d.Commits) != 1 || d.Commits[0].Subject != "work on a" ||
+		len(d.Status) != 2 || d.Unpushed != 1 || !strings.Contains(d.DiffStat, "a.txt") ||
+		!strings.Contains(d.Diff, "+work") || !strings.Contains(d.WorkDiff, "+more") {
+		t.Fatalf("inspect = %d %s", w.Code, w.Body)
+	}
+	// Plain checks carry no detail.
+	if w := do(s, "GET", "/api/checks?path="+wt, nil, ""); strings.Contains(w.Body.String(), `"detail"`) {
+		t.Fatalf("plain checks = %s", w.Body)
+	}
+
+	// A rebase stopped on a conflict: in progress, the branch still known.
+	os.Remove(wt + "/deep/er/new.txt")
+	git(t, wt, "checkout", "-q", "--", "a.txt")
+	os.WriteFile(repo+"/a.txt", []byte("a\nmain\n"), 0o644)
+	git(t, repo, "commit", "-q", "-am", "main moves")
+	if out, err := exec.Command("git", "-C", wt, "rebase", "main").CombinedOutput(); err == nil {
+		t.Fatalf("rebase did not stop: %s", out)
+	}
+	w = do(s, "GET", "/api/checks?path="+wt, nil, "")
+	c = worktreeChecks{}
+	json.Unmarshal(w.Body.Bytes(), &c)
+	if c.InProgress != "rebase" || c.Branch != "w" || c.Tip == "" {
+		t.Fatalf("rebasing = %s", w.Body)
+	}
+	if ok, why := c.Removable(); ok || !strings.Contains(why, "rebase") {
+		t.Fatalf("removable while rebasing: %v %q", ok, why)
+	}
+
+	// A discard against a tip the user did not review: refused, nothing
+	// closed.
+	if code, r := removeReq(t, s, `{"agent":"w9:p1","remove_worktree":true,"discard":true,"discard_tip":"0123abc"}`); code != http.StatusConflict || r["code"] != "discard_changed" {
+		t.Fatalf("stale discard = %d %v", code, r)
+	}
+	if fh.call("workspace.close") != nil {
+		t.Fatal("a refused discard closed the workspace")
+	}
+	// The reviewed tip: the rebase is aborted, the worktree removed and
+	// the branch deleted.
+	code, r := removeReq(t, s, `{"agent":"w9:p1","remove_worktree":true,"discard":true,"discard_tip":"`+c.Tip+`"}`)
+	if code != 200 || r["closed"] != "workspace" || r["worktree_removed"] != true || r["discarded"] != true || r["branch_deleted"] != "w" {
+		t.Fatalf("discard = %d %v", code, r)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Fatal("the worktree is still there")
+	}
+	if git(t, repo, "branch", "--list", "w") != "" {
+		t.Fatal("the branch is still there")
+	}
+	if git(t, repo, "log", "-1", "--format=%s") != "main moves" {
+		t.Fatal("the primary checkout changed")
+	}
+	// The primary checkout is never discarded.
+	tip := git(t, repo, "rev-parse", "HEAD")
+	fh.set(func(f *fakeLaunchHerdr) {
+		f.calls = nil
+		f.agents = []herdr.AgentInfo{{Name: "home", PaneID: "w1:p1", WorkspaceID: "w1", Agent: "pi", Status: herdr.StatusIdle, CWD: repo}}
+	})
+	if code, r := removeReq(t, s, `{"agent":"w1:p1","worktree":"`+repo+`","remove_worktree":true,"discard":true,"discard_tip":"`+tip+`"}`); code != http.StatusConflict || r["code"] != "primary_checkout" {
+		t.Fatalf("primary discard = %d %v", code, r)
+	}
+}
+
+func TestInspectMarkDiscardConfirm(t *testing.T) {
+	s0, fh, repo, wt := removalSetup(t)
+	client := s0.client
+	os.WriteFile(wt+"/a.txt", []byte("a\nwork\n"), 0o644)
+	git(t, wt, "commit", "-q", "-am", "superseded work")
+	fh.set(func(f *fakeLaunchHerdr) {
+		f.agents = append(f.agents, herdr.AgentInfo{Name: "coordinator", PaneID: "w1:p1", WorkspaceID: "w1", Agent: "claude", Status: herdr.StatusIdle, CWD: repo})
+	})
+	m := managerWith(t, client, "desk", 2)
+	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken,
+		LaunchRoots: []string{filepath.Dir(repo)}, WorktreeRoot: filepath.Dir(filepath.Dir(wt))}, client, m)
+
+	// The coordinator inspects the worker: read-only, allowed.
+	w := do(s, "GET", "/api/inspect?agent=desk/w9:p1", agentHdr("w1:p1"), "")
+	var in inspection
+	json.Unmarshal(w.Body.Bytes(), &in)
+	if w.Code != 200 || in.Host != "desk" || in.Checks == nil || in.Checks.Path != wt || in.Checks.Detail == nil ||
+		len(in.Checks.Detail.Commits) != 1 || in.Checks.Detail.Diff != "" {
+		t.Fatalf("inspect = %d %s", w.Code, w.Body)
+	}
+	if w := do(s, "GET", "/api/inspect?agent=desk/nope", agentHdr("w1:p1"), ""); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown agent = %d", w.Code)
+	}
+	// It proposes discarding; it cannot confirm.
+	if w := do(s, "POST", "/api/marks", agentHdr("w1:p1"), `{"agent_id":"desk/w9:p1","reason":"superseded","discard":true}`); w.Code != 200 {
+		t.Fatalf("mark = %d %s", w.Code, w.Body)
+	}
+	if w := do(s, "POST", "/api/removals/confirm", agentHdr("w1:p1"), `{"ids":["desk/w9:p1"],"discard":{"desk/w9:p1":"x"}}`); w.Code != http.StatusForbidden {
+		t.Fatalf("agent confirm = %d", w.Code)
+	}
+	// The review shows the proposal and what would be lost.
+	w = do(s, "GET", "/api/removals", userHdr, "")
+	var rv struct{ Removals []removal }
+	json.Unmarshal(w.Body.Bytes(), &rv)
+	if len(rv.Removals) != 1 {
+		t.Fatalf("removals = %s", w.Body)
+	}
+	it := rv.Removals[0]
+	if !it.Mark.Discard || !it.Discardable || it.Safe || it.Checks == nil || it.Checks.Tip == "" || it.Checks.Detail == nil ||
+		it.Checks.Detail.Commits[0].Subject != "superseded work" {
+		t.Fatalf("review = %s", w.Body)
+	}
+	// Confirmed as a plain removal, the worktree would be kept; confirmed
+	// as a discard with the reviewed tip, the work goes.
+	w = do(s, "POST", "/api/removals/confirm", userHdr, `{"ids":["desk/w9:p1"],"discard":{"desk/w9:p1":"`+it.Checks.Tip+`"}}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"discarded":true`) || !strings.Contains(w.Body.String(), `"branch_deleted":"w"`) {
+		t.Fatalf("confirm = %d %s", w.Code, w.Body)
+	}
+	if git(t, repo, "branch", "--list", "w") != "" {
+		t.Fatal("the branch is still there")
+	}
+}

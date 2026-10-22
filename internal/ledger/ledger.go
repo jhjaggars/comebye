@@ -78,16 +78,20 @@ type Entry struct {
 // Mark is a "ready to remove" mark, on a ledger entry or on any other
 // agent (kept in the ledger's marks, by host-qualified agent id).
 type Mark struct {
-	AgentID     string    `json:"agent_id"`
-	Host        string    `json:"host,omitempty"`
-	PaneID      string    `json:"pane_id,omitempty"`
-	Name        string    `json:"name,omitempty"`
-	WorkspaceID string    `json:"workspace_id,omitempty"`
-	Worktree    string    `json:"worktree,omitempty"`
-	CWD         string    `json:"cwd,omitempty"`
-	By          string    `json:"by,omitempty"`
-	Reason      string    `json:"reason,omitempty"`
-	At          time.Time `json:"at"`
+	AgentID     string `json:"agent_id"`
+	Host        string `json:"host,omitempty"`
+	PaneID      string `json:"pane_id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Worktree    string `json:"worktree,omitempty"`
+	CWD         string `json:"cwd,omitempty"`
+	By          string `json:"by,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	// Discard proposes throwing the work away: removing the worktree
+	// even with uncommitted or unmerged work, and deleting the branch.
+	// Only the user's confirmation, in the app, does it.
+	Discard bool      `json:"discard,omitempty"`
+	At      time.Time `json:"at"`
 }
 
 // file is the on-disk format.

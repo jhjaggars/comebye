@@ -772,8 +772,12 @@ async function toggleMark() {
 // run on its host just now: uncommitted changes, commits its base lacks, an
 // agent that went back to work. Removing closes the session (its workspace,
 // or only its pane when others share it) and removes the worktree only when
-// it is clean and merged; the branch is always kept. Like the launch sheet,
-// it is a history entry.
+// it is clean and merged; the branch is kept. A session whose worktree
+// has work a removal would keep (uncommitted changes, unmerged commits, an
+// unfinished rebase) can instead be discarded: the sheet lists what would
+// be lost, and only an explicit confirmation removes the worktree anyway
+// and deletes its branch. A coordinator may propose that (mark --discard);
+// only this sheet does it. Like the launch sheet, it is a history entry.
 
 const review = { open: false, items: [], results: new Map(), busy: false, seq: 0 };
 
@@ -850,18 +854,24 @@ function reviewItemHTML(it) {
   const notes = (it.notes || []).map((w) => `<li>${esc(w)}</li>`).join("");
   const report = it.final_report
     ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary><div class="md"></div></details>` : "";
+  const loss = it.discardable && !done ? lossHTML(it) : "";
   let result = "";
   if (res && res.ok) {
     const r = res.result || {};
     const closed = r.closed === "workspace" ? "Closed its workspace" : r.closed === "pane" ? "Closed its pane (the workspace has other agents or is the repository's home)" : "Nothing was open to close";
-    const wt = r.worktree_removed ? ". Removed the worktree; the branch is kept."
-      : r.kept ? `.<span class="kept">Kept the worktree: ${esc(r.kept)}</span>` : ".";
+    let wt = ".";
+    if (r.discarded) {
+      wt = ". Discarded the worktree" + (r.branch_deleted ? ` and deleted the branch ${esc(r.branch_deleted)}.` : ".") +
+        (r.kept ? `<span class="kept">${esc(r.kept)}</span>` : "");
+    } else if (r.worktree_removed) wt = ". Removed the worktree; the branch is kept.";
+    else if (r.kept) wt = `.<span class="kept">Kept the worktree: ${esc(r.kept)}</span>`;
     result = `<div class="rv-result ok">${closed}${wt}</div>`;
   } else if (res) {
     result = `<div class="rv-result err">Not removed: ${esc(res.message || res.code || "failed")}</div>`;
   }
   const actions = done ? "" : `<div class="rv-actions">
       <button type="button" class="btn go" data-act="remove" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>${it.safe ? "Remove" : "Remove anyway…"}</button>
+      ${it.discardable ? `<button type="button" class="btn danger" data-act="discard" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>Discard work…</button>` : ""}
       <button type="button" class="btn" data-act="unmark" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>Unmark</button>
     </div>`;
   const role = it.coordinator ? '<span class="role-chip">coordinator</span>' : "";
@@ -872,8 +882,34 @@ function reviewItemHTML(it) {
     <ul class="rv-list warn">${done ? "" : warnings}</ul>
     <ul class="rv-list ok">${done ? "" : ok}</ul>
     <ul class="rv-list info">${done ? "" : notes}</ul>
-    ${report}${actions}${result}
+    ${loss}${report}${actions}${result}
   </div>`;
+}
+
+// lossHTML lists what discarding a session's worktree would throw away:
+// its unmerged commits (and how many exist nowhere else), its uncommitted
+// files, an unfinished rebase or merge, and the branch.
+function lossHTML(it) {
+  const c = it.checks || {};
+  const d = c.detail || {};
+  const commits = d.commits || [];
+  const files = d.status || [];
+  const rows = [];
+  if (c.in_progress) rows.push(`<li>the unfinished ${esc(c.in_progress)} (aborted)</li>`);
+  if (commits.length) {
+    const only = d.unpushed > 0 ? `, ${d.unpushed} on no remote` : "";
+    rows.push(`<li>${commits.length} unmerged commit${commits.length === 1 ? "" : "s"}${only}:<ul class="rv-commits">` +
+      commits.slice(0, 8).map((cm) => `<li><code>${esc(cm.sha.slice(0, 9))}</code> ${esc(cm.subject)}</li>`).join("") +
+      (commits.length > 8 ? `<li>… and ${commits.length - 8} more</li>` : "") + "</ul></li>");
+  }
+  if (files.length) {
+    rows.push(`<li>${c.dirty_files || files.length} uncommitted file${(c.dirty_files || files.length) === 1 ? "" : "s"}:<ul class="rv-commits">` +
+      files.slice(0, 8).map((f) => `<li><code>${esc(f)}</code></li>`).join("") +
+      (files.length > 8 ? `<li>… and more</li>` : "") + "</ul></li>");
+  }
+  if (c.branch) rows.push(`<li>the branch <code>${esc(c.branch)}</code></li>`);
+  const proposed = it.mark && it.mark.discard ? '<div class="rv-loss-h">Proposed: discard this work</div>' : '<div class="rv-loss-h">Discarding would delete</div>';
+  return `<div class="rv-loss">${proposed}<ul>${rows.join("")}</ul></div>`;
 }
 
 function renderReview() {
@@ -897,12 +933,12 @@ function renderReviewFoot() {
   $("rv-all").textContent = n ? `Remove all safe (${n})` : "Remove all safe";
 }
 
-async function confirmRemovals(ids, allowWorking, coordinators = []) {
+async function confirmRemovals(ids, allowWorking, coordinators = [], discard = {}) {
   if (review.busy || !ids.length) return;
   setReviewBusy(true, ids.length === 1 ? "Removing…" : `Removing ${ids.length} sessions…`);
   renderReview();
   try {
-    const d = await api("/api/removals/confirm", { method: "POST", body: JSON.stringify({ ids, allow_working: !!allowWorking, coordinators }) });
+    const d = await api("/api/removals/confirm", { method: "POST", body: JSON.stringify({ ids, allow_working: !!allowWorking, coordinators, discard }) });
     for (const r of d.results || []) review.results.set(r.id, r);
   } catch (e) {
     toast(e.message, true);
@@ -928,6 +964,19 @@ async function reviewAction(act, id) {
     return;
   }
   const working = it.live && (it.live.agent_status === "working" || it.live.agent_status === "blocked");
+  if (act === "discard") {
+    const c = it.checks || {};
+    const d = c.detail || {};
+    const lost = [];
+    if (c.in_progress) lost.push(`abort the unfinished ${c.in_progress}`);
+    if ((d.commits || []).length) lost.push(`${d.commits.length} unmerged commit(s)` + (d.unpushed > 0 ? `, ${d.unpushed} of them on no remote` : ""));
+    if (c.dirty) lost.push(`${c.dirty_files} uncommitted file(s)`);
+    if (c.branch) lost.push(`delete the branch ${c.branch}`);
+    if (!c.tip || !confirm(`Discard ${it.name || id}?\n\nThis closes the session, removes ${c.path || "its worktree"} and throws away:\n\n• ${lost.join("\n• ")}\n\nThis cannot be undone.`)) return;
+    if (it.coordinator && !confirm(`${it.name || id} is a coordinator. Remove this coordinator too?`)) return;
+    confirmRemovals([id], working, it.coordinator ? [id] : [], { [id]: c.tip });
+    return;
+  }
   const others = (it.warnings || []).filter((w) => !it.coordinator || !/coordinator/.test(w));
   if (others.length && !confirm(`${it.name || id}:\n\n• ${others.join("\n• ")}\n\n` +
     "Remove it anyway? The worktree is still kept unless it is clean and merged.")) return;

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -335,32 +336,74 @@ func (s *Server) freePane(ctx context.Context, opened herdr.OpenedWorktree, reus
 		message: "every pane of the worktree's workspace already runs an agent (" + strings.Join(names, ", ") + "); prompt it instead"}
 }
 
+// checkOpts extend a worktree's checks for an inspection.
+type checkOpts struct {
+	// Detail adds the uncommitted files, unmerged commits, diff stat and
+	// push state; Diff the diffs as well.
+	Detail, Diff bool
+	// Within: the path may be any directory inside the checkout (an
+	// agent's working directory); its top level is checked. That must lie
+	// inside the roots too.
+	Within bool
+}
+
+func (o checkOpts) query() url.Values {
+	q := url.Values{}
+	for k, on := range map[string]bool{"detail": o.Detail, "diff": o.Diff, "within": o.Within} {
+		if on {
+			q.Set(k, "1")
+		}
+	}
+	return q
+}
+
 // handleChecks answers the safety checks for a worktree: GET ?path=
-// (inside the launch or worktree roots) &branch= &base=.
+// (inside the launch or worktree roots) &branch= &base=, plus detail=1,
+// diff=1 and within=1 for an inspection (see checkOpts).
 func (s *Server) handleChecks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	roots := s.checkRoots()
-	if len(roots) == 0 {
-		writeLaunchError(w, errLaunchDisabled)
-		return
-	}
-	branch, base := q.Get("branch"), q.Get("base")
-	if (branch != "" && !validBranch(branch)) || (base != "" && !validBranch(base)) {
-		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_branch", "message": "invalid branch"})
-		return
-	}
-	path, lerr := resolveLaunchDir(q.Get("path"), roots)
+	opts := checkOpts{Detail: q.Get("detail") == "1", Diff: q.Get("diff") == "1", Within: q.Get("within") == "1"}
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+	c, lerr := s.localChecks(ctx, q.Get("path"), q.Get("branch"), q.Get("base"), opts)
 	if lerr != nil {
-		if lerr.code == "not_found" {
-			writeJSON(w, worktreeChecks{Path: filepath.Clean(q.Get("path")), Unmerged: -1})
-			return
-		}
 		writeLaunchError(w, lerr)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
-	defer cancel()
-	writeJSON(w, checkWorktree(ctx, path, branch, base))
+	writeJSON(w, c)
+}
+
+// localChecks runs a worktree's checks on this host. A path that does not
+// exist gets checks saying so.
+func (s *Server) localChecks(ctx context.Context, path, branch, base string, opts checkOpts) (*worktreeChecks, *launchError) {
+	roots := s.checkRoots()
+	if len(roots) == 0 {
+		return nil, errLaunchDisabled
+	}
+	if (branch != "" && !validBranch(branch)) || (base != "" && !validBranch(base)) {
+		return nil, &launchError{status: http.StatusBadRequest, code: "bad_branch", message: "invalid branch"}
+	}
+	p, lerr := resolveLaunchDir(path, roots)
+	if lerr != nil {
+		if lerr.code == "not_found" {
+			return &worktreeChecks{Path: filepath.Clean(path), Unmerged: -1}, nil
+		}
+		return nil, lerr
+	}
+	if opts.Within {
+		top, _, _, err := gitDirs(ctx, p)
+		if err != nil {
+			return &worktreeChecks{Path: p, Unmerged: -1, Error: "not in a git checkout"}, nil
+		}
+		if p, lerr = resolveLaunchDir(top, roots); lerr != nil {
+			return nil, lerr
+		}
+	}
+	c := checkWorktree(ctx, p, branch, base)
+	if opts.Detail || opts.Diff {
+		inspectWorktree(ctx, &c, opts.Diff)
+	}
+	return &c, nil
 }
 
 // removeBody is the JSON body of a removal.
@@ -378,6 +421,12 @@ type removeBody struct {
 	// AllowWorking closes an agent that is working or blocked; without it
 	// such an agent is refused.
 	AllowWorking bool `json:"allow_working"`
+	// Discard (the user confirmed throwing the work away): the worktree
+	// is removed even when dirty or unmerged, after aborting an unfinished
+	// rebase or merge, and its branch is deleted. DiscardTip is the commit
+	// the user reviewed; if the branch moved since, nothing is done.
+	Discard    bool   `json:"discard"`
+	DiscardTip string `json:"discard_tip"`
 }
 
 // removeResult says what a removal did.
@@ -388,7 +437,9 @@ type removeResult struct {
 	WorkspaceID     string          `json:"workspace_id,omitempty"`
 	Worktree        string          `json:"worktree,omitempty"`
 	WorktreeRemoved bool            `json:"worktree_removed"`
-	Kept            string          `json:"kept,omitempty"` // why the worktree stayed
+	Discarded       bool            `json:"discarded,omitempty"`      // removed with its unmerged or uncommitted work
+	BranchDeleted   string          `json:"branch_deleted,omitempty"` // the branch a discard deleted
+	Kept            string          `json:"kept,omitempty"`           // why the worktree stayed
 	Checks          *worktreeChecks `json:"checks,omitempty"`
 }
 
@@ -414,7 +465,8 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 // removeSession closes the agent's workspace when nothing else lives in it
 // (never a repository's primary workspace), else just its pane; then, when
 // asked, removes the worktree if it is clean, merged and unused. Branches
-// are never deleted.
+// are deleted only by a discard, which removes an unused worktree whatever
+// its state.
 func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult, *launchError) {
 	roots := s.checkRoots()
 	if len(roots) == 0 {
@@ -478,6 +530,11 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 		wt = checks.Path
 		res.Worktree, res.Checks = wt, &checks
 	}
+	if b.Discard {
+		if lerr := discardable(checks, b.DiscardTip); lerr != nil {
+			return nil, lerr
+		}
+	}
 
 	// Close: the whole workspace only when no other agent lives in it and
 	// it is not a repository's home; a pane otherwise.
@@ -515,6 +572,33 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 	case wt == "":
 	case !b.RemoveWorktree:
 		res.Kept = "removing the worktree was not asked for"
+	case b.Discard:
+		closedWS := ""
+		if res.Closed == "workspace" {
+			closedWS = wsID
+		}
+		why := s.worktreeInUse(ctx, checks, live, res.PaneID, closedWS)
+		branch := checks.Branch
+		if branch != "" && branch == defaultBranch(ctx, checks.Repo) {
+			branch = "" // never the repository's default branch
+		}
+		if why == "" {
+			deleted, err := discardWorktree(ctx, checks, branch)
+			if err != nil {
+				why = err.Error()
+			}
+			// --force removed it even if the branch deletion failed.
+			res.WorktreeRemoved = err == nil || deleted || !dirExists(wt)
+			res.Discarded = res.WorktreeRemoved
+			if deleted {
+				res.BranchDeleted = branch
+			}
+		}
+		if !res.WorktreeRemoved {
+			res.Kept = why
+		} else if why != "" {
+			res.Kept = why // the branch stayed
+		}
 	default:
 		ok, why := checks.Removable()
 		if ok {
@@ -537,6 +621,25 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 		}
 	}
 	return res, nil
+}
+
+// discardable refuses a discard before anything is closed: there must be
+// a linked worktree, and its tip must be the one the user reviewed.
+func discardable(c worktreeChecks, tip string) *launchError {
+	switch {
+	case c.Path == "" || !c.Exists:
+		return &launchError{status: http.StatusConflict, code: "nothing_to_discard", message: "there is no worktree to discard; nothing was closed"}
+	case c.Primary:
+		return &launchError{status: http.StatusConflict, code: "primary_checkout", message: "a repository's primary checkout is never discarded; nothing was closed"}
+	case tip == "" || c.Tip != tip:
+		return &launchError{status: http.StatusConflict, code: "discard_changed", message: "the branch changed since you reviewed it; review it again. Nothing was closed"}
+	}
+	return nil
+}
+
+func dirExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
 }
 
 // worktreeInUse explains why a clean, merged worktree must still stay:

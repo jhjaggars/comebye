@@ -281,6 +281,11 @@ func TestLedgerAndRead(t *testing.T) {
 			t.Errorf("read lacks %q:\n%s", want, out)
 		}
 	}
+	// --report for an agent that is not a ledger worker: its last reply.
+	out.Reset()
+	if code := run(e, "read", "home", "--report"); code != 0 || !strings.Contains(out.String(), "not a worker in the ledger; its last reply") || !strings.Contains(out.String(), "Done.") {
+		t.Errorf("last reply: %d %s %s", code, out, errb)
+	}
 	// No session: the terminal's output.
 	f.answers["GET /api/hosts/kube/agents/w5:p2/transcript"] = answer{code: 404, body: `{"code":"no_session","message":"none"}`}
 	f.answers["GET /api/hosts/kube/agents/w5:p2/output"] = answer{body: `{"text":"$ codex\nworking..."}`}
@@ -342,8 +347,15 @@ func TestPromptMarkBrief(t *testing.T) {
 	if code := run(e, "mark", "w2:p1", "--reason", "merged"); code != 0 {
 		t.Fatalf("mark: %d %s", code, errb)
 	}
-	if b := f.find("POST", "/api/marks").body; b != `{"agent_id":"laharl/w2:p1","reason":"merged"}` {
+	if b := f.find("POST", "/api/marks").body; b != `{"agent_id":"laharl/w2:p1","discard":false,"reason":"merged"}` {
 		t.Fatalf("mark body %s", b)
+	}
+	out.Reset()
+	if code := run(e, "mark", "w2:p1", "--reason", "superseded", "--discard"); code != 0 || !strings.Contains(out.String(), "Proposed discarding home") {
+		t.Fatalf("mark --discard: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/marks").body; b != `{"agent_id":"laharl/w2:p1","discard":true,"reason":"superseded"}` {
+		t.Fatalf("discard body %s", b)
 	}
 	f.answers["POST /api/marks/clear"] = answer{body: `{"cleared":true}`}
 	out.Reset()
@@ -452,5 +464,27 @@ func TestStateDir(t *testing.T) {
 	env["COMEBYE_STATE_DIR"] = "~/s"
 	if d := StateDir(get); d != "/home/u/s" {
 		t.Errorf("explicit %s", d)
+	}
+}
+
+func TestInspectCommand(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["GET /api/inspect"] = answer{body: `{"agent_id":"kube/w5:p2","host":"kube","name":"solo","status":"idle","checks":{
+		"path":"/home/k/.worktrees/other/fix","exists":true,"primary":false,"branch":"fix","dirty":true,"unmerged_commits":1,"base_used":"main",
+		"tip":"5873ecd0123456789","in_progress":"rebase",
+		"detail":{"status":["M  README.md","?? new.ts"],"commits":[{"sha":"5873ecd01234","subject":"herdr: workspace spawn"}],
+		"diff_stat":" README.md | 2 +-","upstream":"","unpushed":1,"diff":"diff --git a/README.md b/README.md\n+x\n"}}}`}
+	if code := run(e, "inspect", "solo", "--diff"); code != 0 {
+		t.Fatalf("inspect: %d %s", code, errb)
+	}
+	if r := f.find("GET", "/api/inspect"); r.query != "agent=kube%2Fw5%3Ap2&diff=1" {
+		t.Fatalf("query %q", r.query)
+	}
+	for _, want := range []string{"solo (kube/w5:p2) · idle · on kube", "worktree: /home/k/.worktrees/other/fix", "tip 5873ecd01234",
+		"a rebase is in progress", "1 commits not in it", "no upstream · 1 commits on no remote (only here)",
+		"5873ecd01234 herdr: workspace spawn", "?? new.ts", "── diff: the branch against its base", "+x"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("inspect lacks %q:\n%s", want, out)
+		}
 	}
 }

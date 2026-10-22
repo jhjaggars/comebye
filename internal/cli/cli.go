@@ -52,10 +52,11 @@ func init() {
 	commands = []command{
 		{"agents", "[--host H] [--json]", "every agent on every host: project, branch, status, role", cmdAgents},
 		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
-		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or a worker's final report", cmdRead},
+		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or its final report", cmdRead},
+		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
 		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
 		{"prompt", "AGENT TEXT|- [--json]", "send an agent a message", cmdPrompt},
-		{"mark", "AGENT --reason R [--json]", "propose removing a session (the user confirms in the app)", cmdMark},
+		{"mark", "AGENT --reason R [--discard] [--json]", "propose removing a session, or discarding its work (the user confirms in the app)", cmdMark},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"brief", "set FILE|- | get [--json]", "publish or read the briefing shown in the app", cmdBrief},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
@@ -499,7 +500,7 @@ func cmdRead(e *Env, args []string) error {
 	fs := flag.NewFlagSet("read", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	lines := fs.Int("lines", 20, "how many recent messages (raw terminal: lines)")
-	report := fs.Bool("report", false, "print a worker's final report from the ledger")
+	report := fs.Bool("report", false, "print a worker's final report from the ledger (any other agent: its last reply)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -626,7 +627,7 @@ func readReport(e *Env, c *client, arg string, asJSON bool) error {
 		}
 	}
 	if found == nil {
-		return fmt.Errorf("%q is not a worker in the ledger (see `comebye ledger`)", arg)
+		return lastReply(e, c, arg, asJSON)
 	}
 	if asJSON {
 		return jsonOut(e, map[string]any{"entry": found.ID, "agent_id": found.AgentID, "branch": found.Branch, "status": found.Status, "final_report": found.FinalReport})
@@ -636,6 +637,201 @@ func readReport(e *Env, c *client, arg string, asJSON bool) error {
 	}
 	fmt.Fprintf(e.Stdout, "Final report of %s on %s/%s (%s, %s):\n\n%s\n", dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, strings.TrimRight(found.FinalReport, "\n"))
 	return nil
+}
+
+// lastReply stands in for the final report of an agent that is not a
+// ledger worker (started before the ledger, or not by a handoff): its
+// latest assistant message.
+func lastReply(e *Env, c *client, arg string, asJSON bool) error {
+	t, err := c.resolve(arg)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("GET", hostPath(t, "transcript"), url.Values{"limit": {"40"}}, nil)
+	var ae *apiError
+	if errors.As(err, &ae) && ae.code == "no_session" {
+		return fmt.Errorf("%s is not a worker in the ledger and has no session transcript; try `comebye read %s`", t.label(), arg)
+	}
+	if err != nil {
+		return err
+	}
+	var tr struct {
+		Messages []apiMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &tr); err != nil {
+		return fmt.Errorf("unexpected transcript: %v", err)
+	}
+	var last *apiMessage
+	for i := len(tr.Messages) - 1; i >= 0 && last == nil; i-- {
+		if m := &tr.Messages[i]; m.Kind == "assistant" && strings.TrimSpace(m.Text) != "" {
+			last = m
+		}
+	}
+	if asJSON {
+		text := ""
+		if last != nil {
+			text = last.Text
+		}
+		return jsonOut(e, map[string]any{"agent_id": t.ID, "ledger": false, "last_reply": text})
+	}
+	if last == nil {
+		return fmt.Errorf("%s is not a worker in the ledger and has no reply in its recent messages", t.label())
+	}
+	when := ""
+	if a := ago(e, parseTime(last.Time)); a != "" {
+		when = " (" + a + ")"
+	}
+	fmt.Fprintf(e.Stdout, "%s is not a worker in the ledger; its last reply%s:\n\n%s\n", t.label(), when, strings.TrimRight(last.Text, "\n"))
+	return nil
+}
+
+func parseTime(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, s)
+	return t
+}
+
+// ---- inspect ----
+
+type apiInspection struct {
+	AgentID string `json:"agent_id"`
+	Host    string `json:"host"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	EntryID string `json:"entry_id"`
+	Checks  struct {
+		Path       string `json:"path"`
+		Exists     bool   `json:"exists"`
+		Primary    bool   `json:"primary"`
+		Branch     string `json:"branch"`
+		Dirty      bool   `json:"dirty"`
+		Unmerged   int    `json:"unmerged_commits"`
+		BaseUsed   string `json:"base_used"`
+		Tip        string `json:"tip"`
+		InProgress string `json:"in_progress"`
+		Error      string `json:"error"`
+		Detail     *struct {
+			Status  []string `json:"status"`
+			Commits []struct {
+				SHA     string `json:"sha"`
+				Subject string `json:"subject"`
+			} `json:"commits"`
+			DiffStat      string `json:"diff_stat"`
+			Upstream      string `json:"upstream"`
+			Unpushed      int    `json:"unpushed"`
+			Diff          string `json:"diff"`
+			WorkDiff      string `json:"work_diff"`
+			DiffTruncated bool   `json:"diff_truncated"`
+		} `json:"detail"`
+	} `json:"checks"`
+}
+
+func cmdInspect(e *Env, args []string) error {
+	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	diff := fs.Bool("diff", false, "include the diffs (the branch against its base, then uncommitted changes)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one AGENT")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	q := url.Values{"agent": {t.ID}}
+	if *diff {
+		q.Set("diff", "1")
+	}
+	data, err := c.raw("GET", "/api/inspect", q, nil)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var in apiInspection
+	if err := json.Unmarshal(data, &in); err != nil {
+		return fmt.Errorf("unexpected answer: %v", err)
+	}
+	ch := in.Checks
+	w := e.Stdout
+	status := in.Status
+	if status == "" {
+		status = "gone"
+	}
+	fmt.Fprintf(w, "%s · %s · on %s\n", t.label(), status, in.Host)
+	switch {
+	case !ch.Exists:
+		fmt.Fprintf(w, "checkout: %s does not exist (any more)\n", ch.Path)
+		return nil
+	case ch.Primary:
+		fmt.Fprintf(w, "checkout: %s (the repository's primary checkout)\n", ch.Path)
+	default:
+		fmt.Fprintf(w, "worktree: %s\n", ch.Path)
+	}
+	fmt.Fprintf(w, "branch:   %s (tip %s)\n", dash(ch.Branch), dash(shortTip(ch.Tip)))
+	if ch.InProgress != "" {
+		fmt.Fprintf(w, "WARNING:  a %s is in progress\n", ch.InProgress)
+	}
+	if ch.Error != "" {
+		fmt.Fprintf(w, "error:    %s\n", ch.Error)
+	}
+	d := ch.Detail
+	if d == nil {
+		return nil
+	}
+	fmt.Fprintf(w, "base:     %s · %d commits not in it\n", dash(ch.BaseUsed), ch.Unmerged)
+	pushed := "no upstream"
+	if d.Upstream != "" {
+		pushed = "upstream " + d.Upstream
+	}
+	switch {
+	case d.Unpushed > 0:
+		pushed += fmt.Sprintf(" · %d commits on no remote (only here)", d.Unpushed)
+	case d.Unpushed == 0:
+		pushed += " · every commit is on a remote or in the base"
+	}
+	fmt.Fprintf(w, "pushed:   %s\n", pushed)
+	if len(d.Commits) > 0 {
+		fmt.Fprintf(w, "\nUnmerged commits:\n")
+		for _, cm := range d.Commits {
+			fmt.Fprintf(w, "  %s %s\n", cm.SHA, cm.Subject)
+		}
+	}
+	if len(d.Status) > 0 {
+		fmt.Fprintf(w, "\nUncommitted (git status --porcelain):\n")
+		for _, l := range d.Status {
+			fmt.Fprintf(w, "  %s\n", l)
+		}
+	} else {
+		fmt.Fprintf(w, "\nNo uncommitted changes.\n")
+	}
+	if d.DiffStat != "" {
+		fmt.Fprintf(w, "\nChanged against the base:\n%s\n", d.DiffStat)
+	}
+	if d.Diff != "" {
+		fmt.Fprintf(w, "\n── diff: the branch against its base\n%s", d.Diff)
+	}
+	if d.WorkDiff != "" {
+		fmt.Fprintf(w, "\n── diff: uncommitted changes\n%s", d.WorkDiff)
+	}
+	if d.DiffTruncated {
+		fmt.Fprintf(w, "\n(diff truncated)\n")
+	}
+	return nil
+}
+
+func shortTip(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 // ---- handoff ----
@@ -761,6 +957,7 @@ func cmdMark(e *Env, args []string) error {
 	fs := flag.NewFlagSet("mark", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	reason := fs.String("reason", "", "why the session can go (required)")
+	discard := fs.Bool("discard", false, "propose discarding its work too: the worktree even if dirty or unmerged, and the branch")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -779,12 +976,16 @@ func cmdMark(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := c.raw("POST", "/api/marks", nil, map[string]string{"agent_id": t.ID, "reason": *reason})
+	data, err := c.raw("POST", "/api/marks", nil, map[string]any{"agent_id": t.ID, "reason": *reason, "discard": *discard})
 	if err != nil {
 		return err
 	}
 	if *asJSON {
 		return rawJSON(e, data)
+	}
+	if *discard {
+		fmt.Fprintf(e.Stdout, "Proposed discarding %s: its session, worktree and branch. The user sees what would be lost and confirms in the app.\n", t.label())
+		return nil
 	}
 	fmt.Fprintf(e.Stdout, "Marked %s ready to remove. The user reviews the checks and confirms in the app.\n", t.label())
 	return nil

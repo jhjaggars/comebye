@@ -17,8 +17,9 @@ import (
 // this host, sends the local agent token (agenttoken, in the state
 // directory) instead of a Tailscale identity. Such requests get the
 // "agent" role, which may only read (agents, hosts, transcripts, output,
-// the ledger, the briefing, roles, the playbook) and do the workflow's
-// steps: hand off, prompt an agent, mark or unmark, publish the briefing.
+// the ledger, inspections of an agent's git state, the briefing, roles,
+// the playbook) and do the workflow's steps: hand off, prompt an agent,
+// mark or unmark (proposing a discard included), publish the briefing.
 // Everything else (keys, answers, images, launching, workers, removals and
 // their confirmation, push) is the user's alone: 403.
 //
@@ -180,7 +181,7 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 	}
 	// Only the query parameters the agent role's routes read.
 	q := url.Values{}
-	for _, k := range []string{"limit", "skip", "from", "lines", "source"} {
+	for _, k := range []string{"limit", "skip", "from", "lines", "source", "agent", "diff"} {
 		if v := r.URL.Query().Get(k); v != "" {
 			q.Set(k, v)
 		}

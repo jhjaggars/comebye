@@ -114,7 +114,20 @@ are warnings), or "Remove all safe" for those without warnings. Removing:
 - removes the worktree only if it is clean, fully merged, not the primary
   checkout, and no other agent or workspace uses it (`git worktree remove`
   without `--force`); otherwise the worktree stays and the review says why;
-- **never deletes the branch**.
+- never deletes the branch.
+
+**Discarding.** When a marked session's worktree has work a removal would
+keep (uncommitted changes, unmerged commits, an unfinished rebase or
+merge), the review lists what would be lost: the unmerged commits (and how
+many are on no remote, i.e. exist only there), the uncommitted files and
+the branch, and offers **Discard work…**. Only after you confirm, it
+closes the session, aborts the unfinished operation, removes the worktree
+with `git worktree remove --force` and deletes the branch (`git branch
+-D`). It is refused if the branch moved since the review (the app sends
+the commit you reviewed), for a primary checkout, a worktree another agent
+or workspace uses, and it never deletes the repository's default branch.
+A coordinator can propose a discard (`comebye mark --discard`); the review
+then says so.
 
 **Configuration.** Workers use the launch roots and agent kinds of
 [Launching agents](#launching-agents) (the repository must be a primary
@@ -177,10 +190,11 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye agents [--host H]` | Every agent on every host: id, name, kind, status, project, branch, role (coordinator, worker, home; "(you)" for the caller). |
 | `comebye ledger [--active]` | The handoffs: status, host, repository, branch, worker, whether a final report was captured, marks, and hints (agent gone, uncommitted or unmerged, `candidate`). Then the other marked sessions. |
 | `comebye read AGENT [--lines N]` | The agent's last N messages (default 20) as text; the terminal's output for agents without a transcript. |
-| `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch). |
+| `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch); for any other agent, its last reply. |
+| `comebye inspect AGENT [--diff]` | The agent's git state, checked on its own host: worktree, branch and tip, an unfinished rebase or merge, uncommitted files, commits not in the base, commits on no remote, the diff stat; `--diff` adds the diffs (128 KB each at most). |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. |
-| `comebye mark AGENT --reason R` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or withdraw it. |
+| `comebye mark AGENT --reason R [--discard]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. |
 | `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
 | `comebye playbook [--harness pi\|claude\|generic]` | The coordinator playbook (`pi`: a Pi agent definition with frontmatter; `claude`: for a CLAUDE.md or first prompt). |
 | `comebye presets claude\|pi\|generic` | How to let that harness run `comebye` without asking each time. |
@@ -201,8 +215,9 @@ say `coordinator (laharl/w1Q:p1)`.
 
 **What an agent may do.** A request with the agent token gets the
 restricted *agent role*. It may read (agents, hosts, transcripts and
-output, the ledger, the briefing, roles, the playbook) and take the
-workflow's steps: hand off, prompt an agent, mark and unmark, publish the
+output, the ledger, inspections of an agent's git state, the briefing,
+roles, the playbook) and take the workflow's steps: hand off, prompt an
+agent, mark and unmark (proposing a discard included), publish the
 briefing. It cannot prompt or mark itself, must give a reason to mark,
 and cannot mark a coordinator. Everything else is 403 for it: keys,
 dialog answers, images, launching, the worker API, removals and their
