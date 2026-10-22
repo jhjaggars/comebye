@@ -16,6 +16,7 @@ import (
 
 	"github.com/jhjaggars/herdr-phone/internal/herdr"
 	"github.com/jhjaggars/herdr-phone/internal/state"
+	"github.com/jhjaggars/herdr-phone/internal/transcript"
 )
 
 func writeSession(t *testing.T, lines ...string) string {
@@ -44,7 +45,7 @@ func TestTranscriptConditionalAndPartial(t *testing.T) {
 			r.Header.Set(k, v)
 		}
 		w := httptest.NewRecorder()
-		s.serveTranscript(w, r, path)
+		s.serveTranscript(w, r, path, transcript.Read)
 		return w
 	}
 	ids := func(w *httptest.ResponseRecorder) (out []string, partial bool) {
@@ -90,6 +91,39 @@ func TestTranscriptConditionalAndPartial(t *testing.T) {
 	f.Close()
 	if w := get("?limit=100", map[string]string{"If-None-Match": etag}); w.Code != 200 {
 		t.Fatalf("changed: %d", w.Code)
+	}
+}
+
+// A subagent's transcript is read from <session>/subagents/ only, for a
+// well-formed id, and is served like a session (ETag, ?from=).
+func TestSubagentTranscript(t *testing.T) {
+	s := New(Config{ReadLines: 100, HostName: "desk"}, nil, nil)
+	session := writeSession(t, `{"type":"user","isSidechain":false,"message":{"role":"user","content":"hi"},"uuid":"u1","timestamp":"2026-10-20T10:00:00Z"}`)
+	dir := filepath.Join(strings.TrimSuffix(session, ".jsonl"), "subagents")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sub := `{"type":"user","isSidechain":true,"message":{"role":"user","content":"do the task"},"uuid":"s1","timestamp":"2026-10-20T10:00:01Z"}` + "\n" +
+		`{"type":"assistant","isSidechain":true,"message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"SubagentHandback","input":{"message":"all done"}}]},"uuid":"s2","timestamp":"2026-10-20T10:00:02Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "agent-a1234567.jsonl"), []byte(sub), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	get := func(id, query string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.serveSubagent(w, httptest.NewRequest("GET", "/api/agents/wS:p1/subagents/x/transcript"+query, nil), session, id)
+		return w
+	}
+	w := get("a1234567", "?limit=10")
+	if w.Code != 200 || w.Header().Get("ETag") == "" || !strings.Contains(w.Body.String(), `"text":"all done"`) || !strings.Contains(w.Body.String(), `"text":"do the task"`) {
+		t.Fatalf("subagent: %d %s", w.Code, w.Body)
+	}
+	if w := get("a1234567", "?from=t1"); !strings.Contains(w.Body.String(), `"partial":true`) || strings.Contains(w.Body.String(), "do the task") {
+		t.Fatalf("from: %s", w.Body)
+	}
+	for id, code := range map[string]int{"a7654321": 404, "../s": 400, "a1234567/../../s": 400, "s": 400, "": 400} {
+		if w := get(id, ""); w.Code != code {
+			t.Errorf("%q: %d %s, want %d", id, w.Code, w.Body, code)
+		}
 	}
 }
 
