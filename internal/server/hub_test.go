@@ -78,6 +78,12 @@ func (p *hubPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/agents/wS:p1/keys":
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
+	case "/api/launch/dirs":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"path":%q,"query":%q,"entries":[]}`, r.URL.Query().Get("path"), r.URL.RawQuery)
+	case "/api/launch":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"agent":{"id":"kube/wS:p9","host":"kube","pane_id":"wS:p9","name":"x"},"workspace_id":"w9"}`)
 	default:
 		http.NotFound(w, r)
 	}
@@ -210,8 +216,19 @@ func TestHubServesPeers(t *testing.T) {
 	if resp, err := http.DefaultClient.Do(anon); err != nil || resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated: %v %v", resp, err)
 	}
-	if n := peer.count("POST "); n != 1 {
-		t.Fatalf("peer got %d POSTs, want 1", n)
+	// Launch calls for a peer go to that peer's /api/launch endpoints.
+	if code, body := req("GET", "/api/hosts/kube/launch/dirs?path=/home/me/code&evil=1", "", nil); code != 200 || !strings.Contains(body, `"query":"path=%2Fhome%2Fme%2Fcode"`) {
+		t.Fatalf("launch dirs via hub: %d %s", code, body)
+	}
+	if code, body := req("POST", "/api/hosts/kube/launch", `{"dir":"/home/me/code/x","kind":"pi"}`, map[string]string{"Content-Type": "application/json"}); code != 200 || !strings.Contains(body, "kube/wS:p9") {
+		t.Fatalf("launch via hub: %d %s", code, body)
+	}
+	if code, _ := req("POST", "/api/hosts/kube/launch", `{}`, map[string]string{
+		"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"}); code != http.StatusForbidden {
+		t.Fatalf("cross-site launch via hub: %d", code)
+	}
+	if n := peer.count("POST "); n != 2 {
+		t.Fatalf("peer got %d POSTs, want 2", n)
 	}
 	if n := peer.count("GET /api/agents/wS:p1/transcript"); n != 2 {
 		t.Fatalf("peer got %d transcript GETs, want 2", n)

@@ -476,6 +476,7 @@ function routedAgent(r) {
 // yet (cold start from a notification) is opened once the list arrives.
 function route() {
   syncSubview();
+  syncLaunch();
   const r = parseRoute();
   if (!r) {
     state.pendingRoute = null;
@@ -2262,6 +2263,253 @@ function clearNotifications(tag) {
     .catch(() => {});
 }
 
+/* ---------- launching a new agent ---------- */
+//
+// "+" in the list header opens a sheet: pick a host (on a hub), browse to
+// a directory inside that host's launch roots, pick an agent kind, and
+// optionally name it and give it a first prompt. The server opens a
+// workspace there and starts the agent; the app then opens its chat once
+// it shows up in the agent list. Like "View steps", the sheet is a
+// history entry, so Back (or Escape) closes it.
+
+const launch = {
+  open: false,
+  host: null,   // host the sheet launches on
+  opts: null,   // /launch/options answer for that host
+  path: "",     // directory being browsed ("" = the roots)
+  pathLabel: "",
+  dir: null,    // chosen directory (dirLabel: as shown, with ~)
+  dirLabel: "",
+  kind: null,
+  busy: false,
+  seq: 0,       // bumped per host/listing, so a slow answer for an old one is dropped
+};
+
+const AGENT_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+// launchBase is the API base for launching on host.
+function launchBase(host) {
+  return !host || host === state.localHost ? "/api/launch" : `/api/hosts/${encodeURIComponent(host)}/launch`;
+}
+
+// defaultLaunchName mirrors the server's default name (before any -2
+// suffix for a name that is taken).
+function defaultLaunchName(dir) {
+  let n = baseName(dir).toLowerCase().replace(/[^a-z0-9_]+/g, "-").replace(/^[-_]+|[-_]+$/g, "");
+  if (!/^[a-z]/.test(n)) n = ("agent-" + n).replace(/-+$/, "");
+  return n.length > 28 ? n.slice(0, 28).replace(/[-_]+$/, "") : n;
+}
+
+function openLaunch() {
+  if (launch.open) return;
+  launch.open = true;
+  history.pushState({ launch: true }, "", location.href);
+  const f = activeHostFilter();
+  launch.host = f !== "all" ? f : state.localHost;
+  $("ln-name").value = "";
+  $("ln-prompt").value = "";
+  $("launch").hidden = false;
+  document.body.classList.add("sheet-open");
+  setLaunchHost(launch.host);
+  $("ln-close").focus();
+}
+
+function hideLaunch() {
+  launch.open = false;
+  launch.seq++;
+  $("launch").hidden = true;
+  document.body.classList.remove("sheet-open");
+  if (!state.selected) $("btn-launch").focus();
+  maybeReload(); // a deploy noticed while the sheet was open
+}
+
+// closeLaunch pops the sheet's history entry (popstate -> syncLaunch).
+function closeLaunch() {
+  if (launch.busy) return;
+  if (history.state && history.state.launch) history.back();
+  else hideLaunch();
+}
+
+function syncLaunch() {
+  if (launch.open && !(history.state && history.state.launch)) hideLaunch();
+}
+
+function renderLaunchHosts() {
+  const nav = $("ln-hosts");
+  if (!multiHost()) { nav.hidden = true; nav.innerHTML = ""; return; }
+  nav.innerHTML = state.hosts.map((h) => {
+    const down = !h.local && h.status !== "ok";
+    return `<button type="button" class="hf-chip${down ? " down" : ""}" data-host="${esc(h.name)}"` +
+      ` aria-pressed="${launch.host === h.name}"${down ? " disabled" : ""}>${esc(h.name)}</button>`;
+  }).join("");
+  nav.hidden = false;
+}
+
+async function setLaunchHost(host) {
+  launch.host = host;
+  launch.opts = null;
+  launch.dir = null;
+  launch.kind = null;
+  launch.path = "";
+  const seq = ++launch.seq;
+  renderLaunchHosts();
+  renderLaunchForm();
+  $("ln-list").innerHTML = '<div class="ln-empty">Loading…</div>';
+  $("ln-crumb").textContent = "";
+  let o;
+  try {
+    o = await api(launchBase(host) + "/options");
+  } catch (e) {
+    if (seq !== launch.seq) return;
+    $("ln-list").innerHTML = `<div class="ln-empty">${esc(e.message)}</div>`;
+    return;
+  }
+  if (seq !== launch.seq) return;
+  launch.opts = o;
+  launch.kind = o.default_kind || (o.kinds || [])[0] || null;
+  renderLaunchForm();
+  if (!o.enabled) {
+    $("ln-list").innerHTML = `<div class="ln-empty">${esc(o.reason || "Launching is not available on this host")}</div>`;
+    return;
+  }
+  // One root: start inside it rather than on a list of one.
+  browseLaunch(o.roots.length === 1 ? o.roots[0].path : "");
+}
+
+function dirRow(d, recent) {
+  const git = d.git ? '<span class="ln-git" title="git repository">git</span>' : "";
+  const name = recent ? (d.label || d.path) : (d.name || d.label || d.path);
+  return `<button type="button" class="ln-dir${recent ? " recent" : ""}" data-path="${esc(d.path)}" data-label="${esc(d.label || d.path)}">` +
+    `<span class="ln-dname">${esc(name)}</span>${git}<span class="ln-chev" aria-hidden="true">›</span></button>`;
+}
+
+async function browseLaunch(path) {
+  const o = launch.opts;
+  if (!o || !o.enabled) return;
+  const seq = ++launch.seq;
+  launch.path = path;
+  const startPath = o.roots.length === 1 ? o.roots[0].path : "";
+  const recent = path === startPath && o.recent && o.recent.length
+    ? '<div class="ln-head">Recent</div>' + o.recent.map((d) => dirRow(d, true)).join("") +
+      `<div class="ln-head">${path ? esc(o.roots[0].label) : "Roots"}</div>`
+    : "";
+  let d;
+  if (!path) {
+    d = { path: "", entries: o.roots };
+  } else {
+    try {
+      d = await api(launchBase(launch.host) + "/dirs?path=" + encodeURIComponent(path));
+    } catch (e) {
+      if (seq !== launch.seq) return;
+      toast(e.message, true);
+      return;
+    }
+  }
+  if (seq !== launch.seq) return;
+  launch.path = d.path;
+  const atRoot = !d.parent;
+  const canUp = !!d.parent || (d.path && o.roots.length > 1);
+  $("ln-up").disabled = !canUp;
+  $("ln-up").dataset.path = d.parent || "";
+  launch.pathLabel = d.label || d.path;
+  // Right-to-left so a long path is cut at its start, with the text itself
+  // isolated left-to-right so "~/code" is not reordered.
+  $("ln-crumb").innerHTML = `<bdi dir="ltr">${esc(d.path ? launch.pathLabel : "Launch roots")}</bdi>`;
+  $("ln-crumb").title = d.path || "";
+  $("ln-use").hidden = !d.path;
+  const rows = (d.entries || []).map((e) => dirRow(e, false)).join("");
+  $("ln-list").innerHTML = recent + (rows ||
+    `<div class="ln-empty">${atRoot && !d.path ? "No launch roots" : "No subdirectories"}</div>`) +
+    (d.truncated ? '<div class="ln-empty">Only the first entries are shown</div>' : "");
+  $("ln-list").scrollTop = 0;
+  renderLaunchForm();
+}
+
+function chooseLaunchDir(path, label) {
+  launch.dir = path;
+  launch.dirLabel = label || path;
+  renderLaunchForm();
+}
+
+function renderLaunchForm() {
+  const o = launch.opts;
+  const kinds = (o && o.enabled && o.kinds) || [];
+  $("ln-kinds").innerHTML = kinds.map((k) =>
+    `<button type="button" class="hf-chip" data-kind="${esc(k)}" aria-pressed="${k === launch.kind}">${esc(k)}</button>`).join("") ||
+    '<span class="ln-muted">—</span>';
+  const chosen = $("ln-chosen");
+  if (launch.dir) {
+    chosen.textContent = launch.dirLabel;
+    chosen.title = launch.dir;
+    chosen.classList.add("set");
+  } else {
+    chosen.textContent = "No directory chosen yet";
+    chosen.title = "";
+    chosen.classList.remove("set");
+  }
+  $("ln-use").setAttribute("aria-pressed", String(!!launch.path && launch.dir === launch.path));
+  $("ln-use").textContent = launch.path && launch.dir === launch.path ? "✓ Using this directory" : "Use this directory";
+  $("ln-name").placeholder = launch.dir ? defaultLaunchName(launch.dir) : "Default: the directory's name";
+  const name = $("ln-name").value.trim();
+  const nameOk = !name || AGENT_NAME_RE.test(name);
+  $("ln-name").setAttribute("aria-invalid", String(!nameOk));
+  $("ln-name-hint").hidden = nameOk;
+  $("ln-go").disabled = launch.busy || !launch.dir || !launch.kind || !nameOk;
+}
+
+async function submitLaunch() {
+  if (launch.busy || !launch.dir || !launch.kind) return;
+  const host = launch.host;
+  const kind = launch.kind;
+  const body = { dir: launch.dir, kind };
+  const name = $("ln-name").value.trim();
+  if (name) body.name = name;
+  const prompt = $("ln-prompt").value;
+  if (prompt.trim()) body.prompt = prompt;
+  launch.busy = true;
+  $("launch").classList.add("busy");
+  $("ln-status").textContent = `Creating workspace and starting ${kind}…`;
+  renderLaunchForm();
+  let r;
+  try {
+    r = await api(launchBase(host), { method: "POST", body: JSON.stringify(body) });
+  } catch (e) {
+    toast(e.message, true);
+    $("ln-status").textContent = "";
+    return;
+  } finally {
+    launch.busy = false;
+    $("launch").classList.remove("busy");
+    renderLaunchForm();
+  }
+  $("ln-status").textContent = "";
+  if (r.prompt_error) toast(r.prompt_error, true);
+  // Leave the sheet in place of its history entry, then open the chat.
+  if (history.state && history.state.launch) history.replaceState(null, "", location.pathname + location.search);
+  hideLaunch();
+  const pane = r.agent && r.agent.pane_id;
+  if (pane) openLaunched(host, pane, r.agent.name || kind);
+}
+
+// openLaunched opens the new agent's chat as soon as the agent list (SSE)
+// has it; herdr reports it within a second or two.
+function openLaunched(host, pane, label) {
+  const r = { host: host && host !== state.localHost ? host : null, pane };
+  const until = Date.now() + 15000;
+  const tick = () => {
+    const a = routedAgent(r);
+    if (a) {
+      if (!state.selected && !launch.open) openDetail(agentId(a));
+      return;
+    }
+    if (Date.now() > until) { toast(`${label} started, but has not appeared in the list yet`, true); return; }
+    if (Date.now() > until - 10000) refreshAgents().catch(() => {});
+    setTimeout(tick, 500);
+  };
+  toast(`Started ${label}`);
+  tick();
+}
+
 /* ---------- wiring ---------- */
 
 /* ---------- new deploys ---------- */
@@ -2289,7 +2537,7 @@ function noteVersion(v) {
 
 // busy: the user is reading an agent or something would be lost.
 function busy() {
-  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim();
+  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim() || launch.open;
 }
 
 function maybeReload() {
@@ -2416,6 +2664,31 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  $("btn-launch").addEventListener("click", openLaunch);
+  $("ln-close").addEventListener("click", closeLaunch);
+  $("launch").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); closeLaunch(); }
+  });
+  $("ln-hosts").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-host]");
+    if (b && !launch.busy && b.dataset.host !== launch.host) setLaunchHost(b.dataset.host);
+  });
+  $("ln-kinds").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-kind]");
+    if (b && !launch.busy) { launch.kind = b.dataset.kind; renderLaunchForm(); }
+  });
+  $("ln-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button.ln-dir");
+    if (!b) return;
+    // A recent directory is usually the one you want: choose it as well.
+    if (b.classList.contains("recent")) chooseLaunchDir(b.dataset.path, b.dataset.label);
+    browseLaunch(b.dataset.path);
+  });
+  $("ln-up").addEventListener("click", () => browseLaunch($("ln-up").dataset.path || ""));
+  $("ln-use").addEventListener("click", () => chooseLaunchDir(launch.path, launch.pathLabel));
+  $("ln-name").addEventListener("input", renderLaunchForm);
+  $("ln-go").addEventListener("click", submitLaunch);
 
   $("btn-notify").addEventListener("click", toggleNotifyPanel);
   $("notify-enable").addEventListener("click", enablePush);

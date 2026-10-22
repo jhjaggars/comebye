@@ -43,6 +43,10 @@ handoff and nothing to sync.
   iOS 16.4+ from the Home Screen, Android, desktop), with
   [ntfy](https://ntfy.sh) as an optional fallback. Tapping one opens that
   agent's chat; nothing is sent for the agent you are looking at.
+- **Launch new agents**: "+" in the list header picks a host, a directory
+  under your launch roots (default `~/code`) and an agent kind, with an
+  optional name and first prompt, and opens the new agent's chat. See
+  [Launching agents](#launching-agents).
 - **Several machines in one app** (optional): run comebye on each host
   and make one of them a hub that aggregates the others. See
   [Multiple hosts](#multiple-hosts).
@@ -231,6 +235,47 @@ before.
 the hub acts with its owner's identity. Keep the hub's allowlist as tight as
 each peer's.
 
+## Launching agents
+
+The "+" button in the list header opens a sheet to start a new agent:
+choose the host (on a hub), browse to a directory (directories that agents
+on that host recently ran in come first; git checkouts are marked), choose
+the agent kind, and optionally give it a name and a first prompt. Launch
+then:
+
+1. opens a new herdr workspace in that directory (`workspace.create`,
+   without focusing it, so the terminal you are at does not jump), labelled
+   with the name or the directory's name;
+2. starts the agent in the workspace's shell pane (`agent.start`, waiting
+   up to 60 s for it to be ready for input);
+3. sends the first prompt, if any (`agent.prompt`, no wait),
+
+and the app opens the new agent's chat. The default name is the
+directory's name made into a valid agent name (`my.Repo` becomes
+`my-repo`), with `-2`, `-3`, ... added if an agent already has it. If the
+agent fails to start, the error says so and the new workspace is left open
+in herdr for you to look at (or close).
+
+The kinds offered are the ones herdr supports whose executable is
+installed on that host (on `PATH` or in `~/.local/bin`, `~/.npm-global/bin`,
+`~/.bun/bin`, `~/go/bin`, `~/.cargo/bin`, `/usr/local/bin`,
+`/opt/homebrew/bin`, since a systemd unit's `PATH` is minimal), plus any
+kind already running there. The one most running agents use is
+preselected.
+
+Directories are confined to the launch roots: `-launch-root` (repeatable
+or comma-separated, `COMEBYE_LAUNCH_ROOTS`, default `~/code`). Every path
+is resolved (symlinks included) and must lie inside a root, for listing as
+well as launching; roots that do not exist are ignored, and with none
+left, or with `-launch=false`, the sheet says launching is off for that
+host. Hidden directories are not listed.
+
+**Security note:** launching does not grant anything prompting did not
+already: anyone allowed to use the app can make an agent run commands as
+you. The roots keep the directory browser (and where agents start) to your
+checkouts rather than the whole disk; set `-launch=false` on a host where
+you only want to drive existing agents.
+
 ## Claude Code support
 
 Claude Code agents (`agent: "claude"` in herdr) get the same chat view as
@@ -304,6 +349,8 @@ to the home screen again.
 | `-allow-host` | `COMEBYE_ALLOW_HOSTS` | (none) | Extra `Host` names the server answers to, besides `localhost`, loopback IPs and `*.ts.net`. Repeatable or comma-separated. Other hosts get 421 (DNS rebinding protection). |
 | `-host-name` | `COMEBYE_HOST_NAME` | short hostname | This host's name in agent IDs (`<host>/<pane>`), URLs and the UI. Lowercase DNS label. |
 | `-peers` | `COMEBYE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional). `https` Serve URLs only; requires `-ts-allow-login`. |
+| `-launch` | `COMEBYE_LAUNCH` | `true` | Let the app start new agents (see [Launching agents](#launching-agents)). |
+| `-launch-root` | `COMEBYE_LAUNCH_ROOTS` | `~/code` | Directory inside which agents may be launched (symlinks resolved). Repeatable or comma-separated; roots that do not exist are ignored. |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
 | `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem` and `push-subscriptions.json` (dir 0700, files 0600). |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
@@ -371,13 +418,21 @@ Treat access to it like SSH access to that machine.
   origin, never the endpoint path.
 - **A hub is not an open proxy.** It only contacts the peers named in
   `-peers` (https only, no redirects followed, no proxy from the
-  environment), and only for the per-agent `output`, `transcript`,
-  `prompt` and `keys` calls on `/api/agents/<target>/…`, with a fixed set of
-  query parameters, size-capped bodies and responses, and timeouts. An
+  environment), and only for the per-agent calls on
+  `/api/agents/<target>/…` (`output`, `transcript`, `prompt`, `keys`,
+  `dialog`, `answer`, `image`) and the per-host launch calls on
+  `/api/launch/…`, with a fixed set of query parameters, size-capped
+  bodies and responses, and timeouts. An
   unknown `{host}` is a 404. None of the browser's headers are forwarded.
   The hub's own allowlist, cross-origin protection and JSON-only POST rule
   apply before anything is proxied, and every peer applies its own again.
   Anyone allowed on the hub can drive every peer.
+- **Launching is confined to the launch roots.** Directory listings and
+  launches resolve the path (symlinks included) and refuse anything
+  outside `-launch-root` with 403, without saying whether it exists;
+  relative paths are refused. Agent kinds are limited to the ones herdr
+  supports and that are installed (or running) on the host, and agent
+  names to herdr's `[a-z][a-z0-9_-]{0,31}`. `-launch=false` turns it off.
 - Static files are served with a restrictive Content-Security-Policy
   (same-origin scripts only, no inline script, no remote images),
   `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
@@ -426,6 +481,10 @@ The UI is built on a small JSON API, usable from scripts on the tailnet:
 | `POST /api/agents/{target}/keys` | Body `{"keys": ["esc"]}` (whitelisted). |
 | `GET /api/agents/{target}/dialog` | `{"dialog": {...} \| null}`: the dialog the agent is waiting on (`kind`, `title`, `question`, `detail`, `options[]` with `label`/`description`/`checked`/`role`, `selected`, `multi`, `answerable`, `cancel_label`, `fingerprint`). Only while the agent is `blocked` or has a pending question while `working`. |
 | `POST /api/agents/{target}/answer` | Body `{"action": "select"\|"toggle"\|"submit"\|"cancel", "index": N, "fingerprint": "..."}`. Re-detects the dialog; 409 `dialog_changed` (with the fresh `dialog`), `no_dialog` or `duplicate` (same dialog answered in the last 3 s), else sends the keys and returns `{"ok": true, "keys": [...]}`. |
+| `GET /api/launch/options` | `{"enabled", "reason", "roots": [{path, label, git}], "kinds": [...], "default_kind", "recent": [{path, label, git}]}` for this host. |
+| `GET /api/launch/dirs?path=<abs>` | Subdirectories of a directory inside a launch root: `{path, label, parent, entries: [{name, path, git}], truncated}` (at most 300; hidden ones left out). Without `path`, the roots. 403 outside the roots, 404 missing. |
+| `POST /api/launch` | Body `{"dir": "<abs>", "kind": "pi", "name": "...", "prompt": "..."}` (`kind` defaults to `default_kind`, `name` to the directory's). Returns `{"agent": {id, host, pane_id, name, agent, ...}, "workspace_id"}`, plus `prompt_error` if the agent started but the prompt failed. Errors: `bad_kind`, `bad_name`, `agent_name_taken` (409), `outside_roots` (403), `launch_disabled` (403), or herdr's code with the workspace left open. |
+| `GET/POST /api/hosts/{host}/launch[/options,/dirs]` | The same for a given host (proxied to a peer by a hub). |
 | `GET /api/events` | SSE stream of `agents` snapshots (with `hosts`), `resync` signals and a `ping` every 15 s. |
 | `GET /api/push/key` | `{"enabled": bool, "key": "<VAPID public key, base64url>"}`. |
 | `POST /api/push/subscribe` | Body: `PushSubscription.toJSON()` (`endpoint`, `keys.p256dh`, `keys.auth`), optional `replaces`. Stored with the caller's Tailscale login. |

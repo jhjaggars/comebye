@@ -42,6 +42,10 @@ In scope:
   web page the user visits).
 - Escaping the key whitelist, or reaching herdr socket methods the API does
   not intend to expose.
+- Listing or launching agents in directories outside the configured
+  launch roots (`-launch-root`), for example through `..`, symlinks or
+  relative paths, or learning through the launch API whether a path
+  outside the roots exists.
 - Script injection in the web UI from agent output or transcripts.
 - Leaking agent output, transcripts or settings to third parties.
   Web Push payloads are end-to-end encrypted (RFC 8291); the push service
