@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 )
 
 // Message is one renderable item in the chat view.
@@ -59,6 +60,11 @@ type Transcript struct {
 	// RunningSubagents are the Claude subagents this session started that
 	// have not finished, over the whole file.
 	RunningSubagents []RunningSubagent `json:"running_subagents,omitempty"`
+	// Thinking is the agent's latest thinking since the user's last
+	// message, for the "what is it doing" panel: Claude records thinking
+	// before a tool call that no bubble carries, and both formats record
+	// it a step before the next reply. Nil when none was recorded.
+	Thinking *Thought `json:"thinking,omitempty"`
 }
 
 // askToolName is the tool registered by the @juicesharp/rpiv-ask-user-question
@@ -153,6 +159,8 @@ func Read(path string, limit, skip int) (*Transcript, error) {
 	toolIdx := map[string]int{}
 	// The latest ask_user_question call, cleared when its result arrives.
 	var pendingAsk *Ask
+	// The latest thinking since the last user message.
+	var thought *Thought
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
@@ -175,9 +183,13 @@ func Read(path string, limit, skip int) (*Transcript, error) {
 				text := firstText(decodeBlocks(r.Message.Content))
 				if text != "" {
 					all = append(all, Message{ID: r.ID, Kind: "user", Time: r.Timestamp, Text: text})
+					thought = nil
 				}
 			case "assistant":
 				appendAssistant(&all, toolIdx, r)
+				if th := assistantThinking(r); th != "" {
+					thought = newThought(th, r.Timestamp)
+				}
 				if ask := findAsk(r.Message.Content); ask != nil {
 					pendingAsk = ask
 				}
@@ -204,7 +216,45 @@ func Read(path string, limit, skip int) (*Transcript, error) {
 		return nil, fmt.Errorf("scan %s: %w", path, err)
 	}
 
-	return window(all, limit, skip, pendingAsk, FormatPi), nil
+	t := window(all, limit, skip, pendingAsk, FormatPi)
+	t.Thinking = thought
+	return t, nil
+}
+
+// assistantThinking joins a Pi assistant message's thinking blocks.
+func assistantThinking(r rawRecord) string {
+	var parts []string
+	for _, b := range decodeBlocks(r.Message.Content) {
+		if b.Type == "thinking" && strings.TrimSpace(b.Thinking) != "" {
+			parts = append(parts, b.Thinking)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// Thought is a thinking block and when it was recorded.
+type Thought struct {
+	Text string `json:"text"`
+	Time string `json:"time,omitempty"`
+}
+
+// maxThoughtChars caps Transcript.Thinking; the end is what matters.
+const maxThoughtChars = 6000
+
+// newThought keeps the end of a long thinking block.
+func newThought(text, at string) *Thought {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if len(text) > maxThoughtChars {
+		cut := len(text) - maxThoughtChars
+		for cut < len(text) && !utf8.RuneStart(text[cut]) {
+			cut++
+		}
+		text = "…" + text[cut:]
+	}
+	return &Thought{Text: text, Time: at}
 }
 
 // window cuts the last `limit` messages, `skip` back from the end.

@@ -160,7 +160,9 @@ type claudeParser struct {
 	curMsgID string
 	msgTools []string
 	think    string
-	ask      *Ask
+	// thought is the latest thinking since the user's last message.
+	thought *Thought
+	ask     *Ask
 	// Index of a compact_boundary placeholder awaiting its summary, or -1.
 	compactIdx int
 	// Subagent cards: the index of every Agent/Task call, and agentId ->
@@ -263,6 +265,7 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 					p.think += "\n\n"
 				}
 				p.think += b.Thinking
+				p.thought = newThought(p.think, r.Timestamp)
 			}
 		case "text":
 			if strings.TrimSpace(b.Text) == "" {
@@ -371,6 +374,7 @@ func (p *claudeParser) userText(r *claudeRecord, s string) {
 	switch kind {
 	case "user":
 		p.all = append(p.all, Message{ID: r.UUID, Kind: "user", Time: r.Timestamp, Text: text})
+		p.thought = nil
 	case "note":
 		p.all = append(p.all, Message{ID: r.UUID, Kind: "note", Time: r.Timestamp, Note: truncate(text, maxNoteChars)})
 	}

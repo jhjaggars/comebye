@@ -83,6 +83,7 @@ func readClaude(f *os.File, path string, limit, skip int, sidechain bool) (*Tran
 	t := window(e.p.all, limit, skip, e.p.ask, FormatClaude)
 	t.Messages = append([]Message(nil), t.Messages...)
 	t.RunningSubagents = e.p.running()
+	t.Thinking = e.p.thought
 	return t, nil
 }
 

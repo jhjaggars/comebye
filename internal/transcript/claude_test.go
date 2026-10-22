@@ -457,3 +457,21 @@ func TestClaudeQueuedPrompt(t *testing.T) {
 		t.Fatalf("messages = %q", got)
 	}
 }
+
+// Thinking that precedes a tool call (no bubble carries it) is surfaced as
+// the transcript's latest thought, and a new user message clears it.
+func TestClaudeLatestThinking(t *testing.T) {
+	thinkThenTool := `{"type":"assistant","isSidechain":false,"message":{"id":"msg9","model":"m","role":"assistant","content":[{"type":"thinking","thinking":"need to check the tests first","signature":"s"}]},"uuid":"t9","timestamp":"2026-10-20T10:01:00Z"}` + "\n" +
+		`{"type":"assistant","isSidechain":false,"message":{"id":"msg9","model":"m","role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"go test ./..."}}]},"uuid":"t10","timestamp":"2026-10-20T10:01:01Z"}`
+	tr, err := Read(writeSession(t, cMode, cUser, thinkThenTool), 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Thinking == nil || tr.Thinking.Text != "need to check the tests first" || tr.Thinking.Time != "2026-10-20T10:01:00Z" {
+		t.Fatalf("thinking = %+v", tr.Thinking)
+	}
+	next := `{"type":"user","isSidechain":false,"message":{"role":"user","content":"now do something else"},"uuid":"u9","timestamp":"2026-10-20T10:02:00Z"}`
+	if tr, _ := Read(writeSession(t, cMode, cUser, thinkThenTool, next), 100, 0); tr.Thinking != nil {
+		t.Fatalf("a new user turn should clear thinking: %+v", tr.Thinking)
+	}
+}

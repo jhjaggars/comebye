@@ -524,6 +524,7 @@ function openDetail(id) {
 
 function closeDetail() {
   toggleKeypad(false);
+  closeActivityPanel();
   hideSubview();
   clearInterval(activity.timer);
   activity.timer = null;
@@ -655,6 +656,7 @@ function renderTranscript(t, reset) {
   // Running subagents are counted over the whole session, so even a
   // partial response carries the current list.
   chat.running = t.running_subagents || [];
+  chat.thinking = t.thinking || null;
   renderActivity();
   ensureSubagentTicker();
 
@@ -691,7 +693,7 @@ function updateJump() {
 // visible when the chat is scrolled up. Blocked agents get the answer
 // card instead.
 
-const activity = { timer: null, seenAt: 0, pane: null };
+const activity = { timer: null, seenAt: 0, pane: null, open: false, panelTimer: null, panelTicks: 0, panelSig: "", subSteps: new Map() };
 
 function isWorking(a) { return !!a && a.agent_status === "working" && !state.ask; }
 
@@ -737,15 +739,30 @@ function renderActivity() {
   if (!working) { activity.seenAt = 0; clearInterval(activity.timer); activity.timer = null; }
   if (!state.chat || state.chat.terminal || (!working && !subs)) {
     if (row) row.remove();
+    closeActivityPanel();
     return;
   }
   if (!row) {
     row = document.createElement("div");
     row.className = "activity";
-    row.setAttribute("role", "status");
+    // Tapping the row opens a panel with the full current step, the
+    // latest thinking and what each running subagent is doing.
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
     row.innerHTML = '<span class="dot working" aria-hidden="true"></span>' +
       '<span class="act-verb"></span><span class="act-what"></span>' +
-      '<span class="act-time"></span><span class="act-detail"></span><span class="act-subs"></span>';
+      '<span class="act-time"></span><span class="act-chev" aria-hidden="true"></span>' +
+      '<span class="act-detail"></span><span class="act-subs"></span>' +
+      '<div class="act-panel" hidden></div>';
+    row.addEventListener("click", (ev) => {
+      if (ev.target.closest(".act-panel")) return;
+      toggleActivityPanel();
+    });
+    row.addEventListener("keydown", (ev) => {
+      if (ev.target !== row || (ev.key !== "Enter" && ev.key !== " ")) return;
+      ev.preventDefault();
+      toggleActivityPanel();
+    });
   }
   const anchor = chatEl.querySelector(".jump-anchor");
   if (row.nextSibling !== anchor || row.parentNode !== chatEl) chatEl.insertBefore(row, anchor);
@@ -758,9 +775,120 @@ function renderActivity() {
   const subsEl = row.querySelector(".act-subs");
   subsEl.textContent = working && subs ? "Running " + subagentCount(subs) : "";
   subsEl.hidden = !(working && subs);
+  row.setAttribute("aria-expanded", String(activity.open));
+  row.setAttribute("aria-label", (working ? "Agent activity" : subagentCount(subs) + " running") + (activity.open ? ", tap to collapse" : ", tap for details"));
+  row.classList.toggle("open", activity.open);
+  renderActivityPanel(row, working);
   if (!working) { row.querySelector(".act-time").textContent = ""; return; }
   tickActivity();
   if (!activity.timer) activity.timer = setInterval(tickActivity, 1000);
+}
+
+/* The activity panel */
+
+function toggleActivityPanel() {
+  activity.open = !activity.open;
+  activity.panelSig = "";
+  if (activity.open) {
+    activity.panelTicks = 0;
+    clearInterval(activity.panelTimer);
+    activity.panelTimer = setInterval(panelTick, 1000);
+    fetchSubagentSteps();
+  } else {
+    clearInterval(activity.panelTimer);
+    activity.panelTimer = null;
+  }
+  renderActivity();
+}
+
+function closeActivityPanel() {
+  activity.open = false;
+  activity.panelSig = "";
+  activity.subSteps.clear();
+  clearInterval(activity.panelTimer);
+  activity.panelTimer = null;
+}
+
+// panelTick keeps the panel's subagent timers live and refreshes what each
+// subagent is doing every few seconds (ETag-revalidated, so cheap).
+function panelTick() {
+  const row = $("chat").querySelector(".activity");
+  if (!activity.open || !row) { closeActivityPanel(); return; }
+  if (document.hidden) return;
+  row.querySelectorAll(".ap-sub-time[data-since]").forEach((el) => {
+    const t = Date.parse(el.dataset.since);
+    el.textContent = Number.isNaN(t) ? "" : fmtClock(Date.now() - t);
+  });
+  if (++activity.panelTicks % 5 === 0) fetchSubagentSteps();
+}
+
+// describeStep is a one-line account of a transcript message.
+function describeStep(m) {
+  if (!m) return "";
+  if (m.kind === "tool") {
+    const verb = m.subagent ? (m.subagent.status === "running" ? "Running subagent" : "Ran subagent")
+      : toolRunning(m) ? "Running" : m.err ? "Failed" : "Ran";
+    return `${verb} ${m.tool || "tool"}${m.args ? " · " + m.args : ""}`;
+  }
+  if (m.kind === "assistant") return "Said: " + String(m.text || "").replace(/\s+/g, " ").trim();
+  if (m.kind === "user") return "Started: " + String(m.text || "").replace(/\s+/g, " ").trim();
+  return "";
+}
+
+async function fetchSubagentSteps() {
+  const chat = state.chat;
+  const pane = state.selected;
+  if (!activity.open || !chat || !pane) return;
+  await Promise.all((chat.running || []).filter((s) => s.agent_id).map(async (s) => {
+    try {
+      const t = await api(`${pathFor(pane)}/subagents/${encodeURIComponent(s.agent_id)}/transcript?limit=4`);
+      const last = t.messages[t.messages.length - 1];
+      const step = describeStep(last);
+      const thinking = t.thinking && t.thinking.text ? t.thinking.text : "";
+      activity.subSteps.set(s.agent_id, { step, thinking });
+    } catch {} // the row keeps its last known step
+  }));
+  if (state.selected === pane && activity.open) renderActivity();
+}
+
+function renderActivityPanel(row, working) {
+  const panel = row.querySelector(".act-panel");
+  panel.hidden = !activity.open;
+  if (!activity.open) return;
+  const chat = state.chat;
+  const subs = chat.running || [];
+  const step = working ? activityStep() : null;
+  const th = working ? chat.thinking : null;
+  const sig = JSON.stringify([step, th, subs, [...activity.subSteps]]);
+  if (sig === activity.panelSig) return;
+  activity.panelSig = sig;
+  let html = "";
+  if (step) {
+    html += `<div class="ap-sec"><div class="ap-h">Now</div><div class="ap-now"><b>${esc(step.verb)}</b>${step.what ? " " + esc(step.what) : ""}</div>` +
+      (step.detail ? `<pre class="ap-args">${esc(step.detail)}</pre>` : "") + "</div>";
+    html += '<div class="ap-sec"><div class="ap-h">Thinking' +
+      (th && th.time ? ` <span class="ap-ago">${esc(fmtAgo(Date.parse(th.time)))} ago</span>` : "") + "</div>" +
+      (th ? `<div class="ap-think md">${renderMarkdown(th.text, "live-thinking")}</div>`
+        : '<div class="ap-empty">No thinking recorded since your last message.</div>') + "</div>";
+  }
+  if (subs.length) {
+    html += `<div class="ap-sec"><div class="ap-h">${esc(subagentCount(subs.length))} running</div>` + subs.map((s) => {
+      const info = activity.subSteps.get(s.agent_id) || {};
+      return '<div class="ap-sub">' +
+        `<div class="ap-sub-top"><span class="ap-sub-name">${esc(s.description || "Subagent")}</span>` +
+        `<span class="ap-sub-time" data-since="${esc(s.since || "")}"></span></div>` +
+        `<div class="ap-sub-step">${esc(info.step || (s.agent_id ? "…" : "steps unavailable"))}</div>` +
+        (info.thinking ? `<div class="ap-sub-think">${esc(info.thinking.replace(/\s+/g, " ").slice(-240))}</div>` : "") +
+        (s.agent_id ? `<button type="button" class="btn ap-steps" data-agent="${esc(s.agent_id)}">View steps</button>` : "") +
+        "</div>";
+    }).join("") + "</div>";
+  }
+  panel.innerHTML = html;
+  panel.querySelectorAll(".ap-steps").forEach((b) => b.addEventListener("click", () => {
+    const s = subs.find((x) => x.agent_id === b.dataset.agent);
+    if (s) openSubviewInfo({ agent_id: s.agent_id, description: s.description, status: "running" });
+  }));
+  panelTick();
 }
 
 function tickActivity() {
@@ -931,8 +1059,9 @@ const subview = {
 
 function subviewTop() { return subview.stack[subview.stack.length - 1] || null; }
 
-function openSubview(m) {
-  const s = subagentInfo(m);
+function openSubview(m) { openSubviewInfo(subagentInfo(m)); }
+
+function openSubviewInfo(s) {
   if (!s.agent_id || !state.selected) return;
   subview.stack.push({ id: s.agent_id, info: s });
   history.pushState({ subagent: s.agent_id, depth: subview.stack.length }, "", location.href);

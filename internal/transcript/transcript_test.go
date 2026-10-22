@@ -3,7 +3,9 @@ package transcript
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func writeSession(t *testing.T, lines ...string) string {
@@ -165,5 +167,24 @@ func TestSummarizeArgsPerTool(t *testing.T) {
 		if got := summarizeArgs(tc.tool, []byte(tc.args)); got != tc.want {
 			t.Errorf("%s %s = %q, want %q", tc.tool, tc.args, got, tc.want)
 		}
+	}
+}
+
+func TestPiLatestThinking(t *testing.T) {
+	user := `{"type":"message","id":"u1","timestamp":"t0","message":{"role":"user","content":[{"type":"text","text":"go"}]}}`
+	think := `{"type":"message","id":"a1","timestamp":"t1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan the edit"},{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"ls"}}]}}`
+	tr, err := Read(writeSession(t, user, think), 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Thinking == nil || tr.Thinking.Text != "plan the edit" || tr.Thinking.Time != "t1" {
+		t.Fatalf("thinking = %+v", tr.Thinking)
+	}
+	if tr, _ := Read(writeSession(t, user, think, user), 100, 0); tr.Thinking != nil {
+		t.Fatalf("cleared by the next user message: %+v", tr.Thinking)
+	}
+	long := strings.Repeat("é", maxThoughtChars)
+	if th := newThought(long, ""); !strings.HasPrefix(th.Text, "…") || !utf8.ValidString(th.Text) || len(th.Text) > maxThoughtChars+len("…") {
+		t.Fatalf("long thought not cut cleanly: %d bytes", len(th.Text))
 	}
 }
