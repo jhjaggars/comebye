@@ -72,10 +72,11 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => (el.className = ""), 2600);
 }
 
+// esc escapes text for HTML, quotes included, so it is also safe inside a
+// quoted attribute (agent data from a hub peer is untrusted).
 function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s ?? "";
-  return d.innerHTML;
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function baseName(p) {
@@ -154,8 +155,15 @@ function hostOf(id) {
 function hostStatus(name) { return state.hosts.find((h) => h.name === name); }
 
 // setAgents applies an /api/agents answer or an SSE agents event.
+// Statuses are used as class names and compared everywhere: anything else
+// (a misbehaving hub peer) is shown as "unknown".
+const AGENT_STATUSES = new Set(["idle", "working", "blocked", "done", "unknown"]);
+
 function setAgents(d) {
-  state.agents = d.agents || [];
+  state.agents = Array.isArray(d.agents) ? d.agents : [];
+  for (const a of state.agents) {
+    if (!AGENT_STATUSES.has(a.agent_status)) a.agent_status = "unknown";
+  }
   if (Array.isArray(d.hosts)) {
     state.hosts = d.hosts;
     const local = d.hosts.find((h) => h.local);
