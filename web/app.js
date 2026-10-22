@@ -431,11 +431,18 @@ function renderList() {
     </div>`;
   }).join("");
   renderRemovalBanner();
+  renderBrief();
   if (!agents.length) {
     wrap.innerHTML = `<div class="empty">${state.unauthorized ? esc(UNAUTHORIZED_MSG) : "No agents running"}</div>` + downRows;
     return;
   }
-  wrap.innerHTML = projectGroups(agents).map(([name, list]) => projectHTML(name, list)).join("") + downRows;
+  // Coordinators are pinned above the projects.
+  const coords = agents.filter(isCoordinator);
+  const pinned = coords.length ? `<section class="proj coord-sec" aria-label="Coordinators">
+    <div class="proj-head static"><span class="proj-name">Coordinators</span></div>
+    <div class="proj-body">${coords.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
+  const rest = agents.filter((a) => !isCoordinator(a));
+  wrap.innerHTML = pinned + projectGroups(rest).map(([name, list]) => projectHTML(name, list)).join("") + downRows;
   wrap.querySelectorAll(".proj-head").forEach((el) =>
     el.addEventListener("click", () => toggleProject(el.dataset.proj)));
   wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
@@ -451,7 +458,8 @@ function agentRow(a, worker) {
     <div class="agent ${esc(a.agent_status)}${worker ? " worker" : ""}" role="button" tabindex="0" data-id="${esc(agentId(a))}">
       <span class="dot ${esc(a.agent_status)}"></span>
       <div class="meta">
-        <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}</div>
+        <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
+          isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
         ${subLine(a)}
       </div>
       <span class="status ${esc(a.agent_status)}">${esc(a.agent_status)}${
@@ -477,6 +485,7 @@ const ledger = {
   marks: [],           // marks on agents that are not ledger workers
   byAgent: new Map(),  // agent id -> its active entry
   marked: new Map(),   // agent id -> mark ({by, reason, at})
+  roles: new Map(),    // agent id -> role ({role: "coordinator", name, by, at})
   loadedAt: 0,
   timer: null,
   inflight: false,
@@ -499,6 +508,14 @@ function setLedger(d) {
     if (e.status === "ready_to_remove") ledger.marked.set(e.agent_id, e.mark || {});
   }
   for (const m of ledger.marks) if (m && m.agent_id) ledger.marked.set(m.agent_id, m);
+  ledger.roles = new Map(d.roles && typeof d.roles === "object" ? Object.entries(d.roles) : []);
+}
+
+// isCoordinator: the hub records the agent as a coordinator (and the pane
+// still runs the same agent: herdr reuses pane ids).
+function isCoordinator(a) {
+  const r = a && ledger.roles.get(agentId(a));
+  return !!r && r.role === "coordinator" && (!r.name || !a.name || r.name === a.name);
 }
 
 async function loadLedger() {
@@ -506,6 +523,8 @@ async function loadLedger() {
   ledger.inflight = true;
   try {
     setLedger(await api("/api/ledger"));
+    // The briefing rides along, at most every 20 seconds.
+    if (Date.now() - briefing.loadedAt > 20000) loadBrief();
     // The server checks finished workers' worktrees in the background
     // (for the "merged" hint): look again shortly until they are in.
     const waiting = ledger.entries.some((e) => e.status === "finished" && e.worktree && !e.checks);
@@ -515,7 +534,7 @@ async function loadLedger() {
       ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, 3000);
     }
   } catch (e) {
-    if (e.status === 503) ledger.on = false; // no state directory: no handoffs or marks here
+    if (e.status === 503) { ledger.on = false; briefing.data = null; } // no state directory: no handoffs or marks here
   } finally {
     ledger.inflight = false;
     ledger.loadedAt = Date.now();
@@ -610,6 +629,82 @@ function renderRemovalBanner() {
   if (n) b.innerHTML = `Ready to remove (${n})<span class="ln-chev" aria-hidden="true">›</span>`;
 }
 
+/* ---------- the briefing (published by a coordinator) ---------- */
+//
+// A coordinator publishes a short markdown briefing to the hub
+// (`comebye brief set`); it shows as a card at the top of the list. The
+// card can be collapsed, or dismissed: a dismissed briefing stays hidden
+// until a newer one is published (remembered per browser by its time).
+
+const briefing = { data: null, loadedAt: 0, inflight: false };
+const BRIEF_DISMISSED_KEY = "comebye-brief-dismissed";
+const BRIEF_COLLAPSED_KEY = "comebye-brief-collapsed";
+
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+
+async function loadBrief() {
+  if (briefing.inflight) return;
+  if (ledger.on !== true) { briefing.data = null; renderBrief(); return; }
+  briefing.inflight = true;
+  try {
+    const d = await api("/api/brief");
+    briefing.data = d && d.brief && typeof d.brief.markdown === "string" ? d.brief : null;
+  } catch {
+    // Keep what we had: a failed poll should not make the card blink.
+  } finally {
+    briefing.inflight = false;
+    briefing.loadedAt = Date.now();
+  }
+  renderBrief();
+}
+
+function renderBrief() {
+  const el = $("briefing");
+  if (!el) return;
+  const b = briefing.data;
+  if (!b || !b.markdown.trim() || lsGet(BRIEF_DISMISSED_KEY) === b.at) {
+    el.hidden = true;
+    el.innerHTML = "";
+    delete el.dataset.sig;
+    return;
+  }
+  const folded = lsGet(BRIEF_COLLAPSED_KEY) === b.at;
+  const at = Date.parse(b.at);
+  const when = Number.isNaN(at) ? "" : ` · ${fmtAgo(at)} ago`;
+  const sig = b.at + "|" + folded;
+  el.hidden = false;
+  if (el.dataset.sig === sig) {
+    // Same briefing, same state: only the age moves.
+    const meta = el.querySelector(".bf-meta");
+    if (meta) meta.textContent = `from ${b.by || "a coordinator"}${when}`;
+    return;
+  }
+  el.dataset.sig = sig;
+  el.innerHTML = `<div class="bf-head">
+      <button type="button" class="bf-toggle" aria-expanded="${!folded}" aria-controls="bf-body">
+        <span class="proj-chev" aria-hidden="true"></span>
+        <span class="bf-title">Briefing</span>
+        <span class="bf-meta">${esc(`from ${b.by || "a coordinator"}${when}`)}</span>
+      </button>
+      <button type="button" class="bf-dismiss" aria-label="Dismiss this briefing">&#10005;</button>
+    </div>
+    <div class="bf-body md" id="bf-body"${folded ? " hidden" : ""}>${renderMarkdown(b.markdown, "brief:" + b.at)}</div>`;
+}
+
+function onBriefClick(ev) {
+  const b = briefing.data;
+  if (!b) return;
+  if (ev.target.closest(".bf-dismiss")) {
+    lsSet(BRIEF_DISMISSED_KEY, b.at);
+    renderBrief();
+    toast("Briefing dismissed until the next one");
+  } else if (ev.target.closest(".bf-toggle")) {
+    lsSet(BRIEF_COLLAPSED_KEY, lsGet(BRIEF_COLLAPSED_KEY) === b.at ? "" : b.at);
+    renderBrief();
+  }
+}
+
 /* ---------- marking a session ready to remove (detail view menu) ---------- */
 
 function renderDetailMenu() {
@@ -621,6 +716,26 @@ function renderDetailMenu() {
   const st = $("d-mark-state");
   st.hidden = !m;
   if (m) st.textContent = "Marked ready to remove" + (m.reason ? ": " + m.reason : "");
+  const coord = isCoordinator(agentById(state.selected));
+  $("d-role").textContent = coord ? "Not coordinator" : "Make coordinator";
+}
+
+// toggleRole makes the viewed agent a coordinator (pinned in the list,
+// its removal asks twice, agents cannot mark it), or not.
+async function toggleRole() {
+  const id = state.selected;
+  toggleDetailMenu(false);
+  if (!id) return;
+  const coord = isCoordinator(agentById(id));
+  try {
+    const d = await api("/api/roles", { method: "POST", body: JSON.stringify({ agent_id: id, role: coord ? "" : "coordinator" }) });
+    ledger.roles = new Map(d.roles && typeof d.roles === "object" ? Object.entries(d.roles) : []);
+    toast(coord ? "No longer a coordinator" : "Now a coordinator");
+  } catch (e) {
+    toast(e.message, true);
+  }
+  renderDetailMenu();
+  renderList();
 }
 
 function toggleDetailMenu(show) {
@@ -749,8 +864,9 @@ function reviewItemHTML(it) {
       <button type="button" class="btn go" data-act="remove" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>${it.safe ? "Remove" : "Remove anyway…"}</button>
       <button type="button" class="btn" data-act="unmark" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>Unmark</button>
     </div>`;
+  const role = it.coordinator ? '<span class="role-chip">coordinator</span>' : "";
   return `<div class="rv-item${it.safe ? "" : " warn"}${done ? " done" : ""}">
-    <div class="rv-top"><span class="rv-name">${esc(it.name || it.pane_id || it.id)}</span>${host}${branch}${status}</div>
+    <div class="rv-top"><span class="rv-name">${esc(it.name || it.pane_id || it.id)}</span>${role}${host}${branch}${status}</div>
     ${where ? `<div class="rv-sub">${where}</div>` : ""}
     <div class="rv-reason">${marked}</div>
     <ul class="rv-list warn">${done ? "" : warnings}</ul>
@@ -781,12 +897,12 @@ function renderReviewFoot() {
   $("rv-all").textContent = n ? `Remove all safe (${n})` : "Remove all safe";
 }
 
-async function confirmRemovals(ids, allowWorking) {
+async function confirmRemovals(ids, allowWorking, coordinators = []) {
   if (review.busy || !ids.length) return;
   setReviewBusy(true, ids.length === 1 ? "Removing…" : `Removing ${ids.length} sessions…`);
   renderReview();
   try {
-    const d = await api("/api/removals/confirm", { method: "POST", body: JSON.stringify({ ids, allow_working: !!allowWorking }) });
+    const d = await api("/api/removals/confirm", { method: "POST", body: JSON.stringify({ ids, allow_working: !!allowWorking, coordinators }) });
     for (const r of d.results || []) review.results.set(r.id, r);
   } catch (e) {
     toast(e.message, true);
@@ -812,9 +928,13 @@ async function reviewAction(act, id) {
     return;
   }
   const working = it.live && (it.live.agent_status === "working" || it.live.agent_status === "blocked");
-  if (!it.safe && !confirm(`${it.name || id}:\n\n• ${(it.warnings || []).join("\n• ")}\n\n` +
+  const others = (it.warnings || []).filter((w) => !it.coordinator || !/coordinator/.test(w));
+  if (others.length && !confirm(`${it.name || id}:\n\n• ${others.join("\n• ")}\n\n` +
     "Remove it anyway? The worktree is still kept unless it is clean and merged.")) return;
-  confirmRemovals([id], working);
+  // A coordinator is removed only after its own, explicit confirmation.
+  if (it.coordinator && !confirm(`${it.name || id} is a coordinator.\n\n` +
+    "Removing it closes the agent that hands off and follows your work (the ledger and briefing stay on the hub). Remove this coordinator?")) return;
+  confirmRemovals([id], working, it.coordinator ? [id] : []);
 }
 
 /* ---------- detail view ---------- */
@@ -2665,6 +2785,12 @@ const LAUNCH_MODE_KEY = "comebye-launch-mode";
 
 // workerMode: the sheet hands work to a new worker (needs the ledger).
 function workerMode() { return ledger.on === true && launch.mode === "worker"; }
+// coordMode: the sheet starts a coordinator (the hub records its role).
+function coordMode() { return ledger.on === true && launch.mode === "coordinator"; }
+const LAUNCH_MODES = new Set(["agent", "worker", "coordinator"]);
+
+// harnessFor mirrors the server's playbook flavor for an agent kind.
+function harnessFor(kind) { return kind === "pi" || kind === "claude" ? kind : "generic"; }
 
 // validBranch mirrors the server's conservative branch-name rule.
 function validBranch(b) {
@@ -2673,8 +2799,9 @@ function validBranch(b) {
 }
 
 function setLaunchMode(mode) {
+  if (!LAUNCH_MODES.has(mode)) return;
   launch.mode = mode;
-  try { localStorage.setItem(LAUNCH_MODE_KEY, mode); } catch {}
+  lsSet(LAUNCH_MODE_KEY, mode);
   if (mode === "worker" && !launch.repos) loadRepos(launch.host);
   renderLaunchForm();
 }
@@ -2755,7 +2882,8 @@ function openLaunch() {
   const f = activeHostFilter();
   launch.host = f !== "all" ? f : state.localHost;
   if (!launch.mode) {
-    try { launch.mode = localStorage.getItem(LAUNCH_MODE_KEY) === "worker" ? "worker" : "agent"; } catch { launch.mode = "agent"; }
+    const m = lsGet(LAUNCH_MODE_KEY);
+    launch.mode = LAUNCH_MODES.has(m) ? m : "agent";
   }
   $("ln-name").value = "";
   $("ln-prompt").value = "";
@@ -2911,15 +3039,27 @@ function renderLaunchForm() {
   $("ln-name").setAttribute("aria-invalid", String(!nameOk));
   $("ln-name-hint").hidden = nameOk;
   const worker = workerMode();
+  const coord = coordMode();
   $("ln-mode").hidden = ledger.on !== true;
   $("ln-mode").querySelectorAll("button[data-mode]").forEach((b) =>
-    b.setAttribute("aria-pressed", String(b.dataset.mode === (worker ? "worker" : "agent"))));
-  $("ln-dir-block").hidden = worker;
-  $("ln-agent-extra").hidden = worker;
+    b.setAttribute("aria-pressed", String(b.dataset.mode === (worker ? "worker" : coord ? "coordinator" : "agent"))));
+  $("ln-dir-block").hidden = worker || coord;
+  $("ln-agent-extra").hidden = worker || coord;
   $("hw-top").hidden = !worker;
   $("hw-bottom").hidden = !worker;
-  $("ln-title").textContent = worker ? "Hand off to a worker" : "New agent";
-  $("ln-go").textContent = worker ? "Hand off" : "Launch";
+  $("co-block").hidden = !coord;
+  $("ln-title").textContent = worker ? "Hand off to a worker" : coord ? "Start a coordinator" : "New agent";
+  $("ln-go").textContent = worker ? "Hand off" : coord ? "Start coordinator" : "Launch";
+  if (coord) {
+    const host = launch.host || state.localHost || "this host";
+    const dir = (o && o.coordinator_dir) || "~";
+    $("co-note").innerHTML = `Starts an agent named <b>coordinator</b> in <code>${esc(dir)}</code> on <b>${esc(host)}</b> ` +
+      `and asks it to run <code>comebye playbook --harness ${esc(harnessFor(launch.kind))}</code>. ` +
+      "It hands work to workers, follows them in the ledger and publishes briefings here; " +
+      "removing anything stays with you.";
+    $("ln-go").disabled = launch.busy || !launch.kind || !(o && o.enabled);
+    return;
+  }
   if (worker) {
     const ready = renderWorkerFields();
     $("ln-go").disabled = launch.busy || !ready || !launch.kind || !(o && o.enabled);
@@ -2930,6 +3070,7 @@ function renderLaunchForm() {
 
 async function submitLaunch() {
   if (workerMode()) return submitHandoff();
+  if (coordMode()) return submitCoordinator();
   if (launch.busy || !launch.dir || !launch.kind) return;
   const host = launch.host;
   const kind = launch.kind;
@@ -3000,6 +3141,40 @@ async function submitHandoff() {
   loadLedger();
   const a = r.worker && r.worker.agent;
   if (a && a.pane_id) openLaunched(host, a.pane_id, a.name || branch);
+}
+
+// submitCoordinator starts a coordinator on the chosen host: the server
+// picks the directory (-coordinator-dir), the name, the harness's
+// permission arguments and a first prompt that points at the playbook,
+// and the hub records the coordinator role.
+async function submitCoordinator() {
+  if (launch.busy || !launch.kind) return;
+  const host = launch.host || state.localHost;
+  const kind = launch.kind;
+  launch.busy = true;
+  $("launch").classList.add("busy");
+  $("ln-status").textContent = `Starting a ${kind} coordinator…`;
+  renderLaunchForm();
+  let r;
+  try {
+    r = await api(launchBase(host), { method: "POST", body: JSON.stringify({ coordinator: true, kind }) });
+  } catch (e) {
+    toast(e.message, true);
+    $("ln-status").textContent = "";
+    return;
+  } finally {
+    launch.busy = false;
+    $("launch").classList.remove("busy");
+    renderLaunchForm();
+  }
+  $("ln-status").textContent = "";
+  if (r.prompt_error) toast(r.prompt_error, true);
+  if (history.state && history.state.launch) history.replaceState(null, "", location.pathname + location.search);
+  hideLaunch();
+  ledger.loadedAt = 0;
+  loadLedger(); // the new role
+  const pane = r.agent && r.agent.pane_id;
+  if (pane) openLaunched(host, pane, r.agent.name || "coordinator");
 }
 
 // openLaunched opens the new agent's chat as soon as the agent list (SSE)
@@ -3220,6 +3395,8 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
+  $("d-role").addEventListener("click", toggleRole);
+  $("briefing").addEventListener("click", onBriefClick);
   document.addEventListener("click", (ev) => {
     if (!$("d-menu").hidden && !$("d-menu").contains(ev.target)) toggleDetailMenu(false);
   });

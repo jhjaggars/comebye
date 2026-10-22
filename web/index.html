@@ -783,6 +783,44 @@
     .rv-result.ok { color: var(--green); }
     .rv-result.err { color: var(--red); }
     .rv-result .kept { color: var(--orange); display: block; margin-top: 2px; }
+
+    /* Coordinators: pinned above the projects, with a badge. */
+    .role-chip {
+      display: inline-block; vertical-align: 1px; margin-left: 6px; border-radius: 5px; padding: 1px 6px;
+      font-size: 11px; font-weight: 650; letter-spacing: 0.02em; background: #2a2412; color: var(--yellow, #e5c07b);
+    }
+    .rv-top .role-chip { margin-left: 0; }
+    .proj-head.static { cursor: default; padding-left: 6px; }
+    .coord-sec .agent { border-color: color-mix(in srgb, var(--yellow, #e5c07b) 35%, var(--border)); }
+    .ln-mode { flex-wrap: wrap; }
+    .ln-mode .hf-chip { flex: 1 1 auto; }
+    .co-note { margin: 12px 0 0; font-size: 14px; line-height: 1.45; color: #cdd3e0; overflow-wrap: anywhere; }
+    .co-note code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--panel2); border-radius: 5px; padding: 1px 4px; }
+
+    /* The briefing a coordinator published. */
+    .briefing {
+      margin-bottom: 10px; border-radius: 14px; background: var(--panel);
+      border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border));
+    }
+    .briefing[hidden] { display: none; }
+    .bf-head { display: flex; align-items: center; }
+    .bf-toggle {
+      flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 4px 4px 8px;
+      background: none; border: 0; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+    }
+    .bf-toggle[aria-expanded="false"] .proj-chev { transform: rotate(-45deg); }
+    .bf-title { font-weight: 650; font-size: 14px; color: var(--blue); flex: none; }
+    .bf-meta { color: var(--muted); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bf-dismiss {
+      flex: none; min-width: 44px; min-height: 44px; border: 0; border-radius: 12px; background: none;
+      color: var(--muted); font-size: 16px; cursor: pointer;
+    }
+    .bf-toggle:focus-visible, .bf-dismiss:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 12px; }
+    .bf-body { padding: 0 14px 10px; font-size: 14px; max-height: 45vh; overflow-y: auto; overscroll-behavior: contain; }
+    .bf-body[hidden] { display: none; }
+    .bf-body > :first-child { margin-top: 0; }
+    .bf-body h2 { font-size: 15px; margin: 12px 0 4px; }
+    .bf-body h2:first-child { margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -808,7 +846,7 @@
         <button type="button" class="btn danger" id="notify-disable" hidden>Turn off</button>
       </div>
     </section>
-    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
+    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
   </div>
 
   <!-- New agent ("+" in the list header) -->
@@ -822,6 +860,10 @@
       <div class="ln-mode" id="ln-mode" role="group" aria-label="What to start" hidden>
         <button type="button" class="hf-chip" data-mode="agent" aria-pressed="true">Agent here</button>
         <button type="button" class="hf-chip" data-mode="worker" aria-pressed="false">Worker (new branch)</button>
+        <button type="button" class="hf-chip" data-mode="coordinator" aria-pressed="false">Coordinator</button>
+      </div>
+      <div id="co-block" hidden>
+        <p class="co-note" id="co-note"></p>
       </div>
       <div id="ln-dir-block">
         <div class="ln-label" id="ln-dir-label">Directory</div>
@@ -894,6 +936,7 @@
     <div id="d-menu" class="attach-menu d-menu" role="menu" hidden>
       <div class="mark-state" id="d-mark-state" hidden></div>
       <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>
+      <button type="button" role="menuitem" id="d-role">Make coordinator</button>
     </div>
     <main>
       <div id="chat"></div>
