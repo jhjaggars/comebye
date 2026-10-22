@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -564,5 +565,24 @@ func TestLaunchRequiresAuthAndCSRF(t *testing.T) {
 	}
 	if c := send("GET", "/api/launch/options", me, ""); c != 200 {
 		t.Errorf("options: %d", c)
+	}
+}
+
+func TestFirstPromptArgs(t *testing.T) {
+	long := strings.Repeat("x", maxArgPrompt+1)
+	for _, c := range []struct {
+		kind, prompt string
+		want         []string
+	}{
+		{"claude", "fix `it`", []string{"--", "fix `it`"}},
+		{"pi", "-v looks like a flag", []string{"--", "-v looks like a flag"}},
+		{"codex", "fix it", nil},      // no known initial-prompt argument
+		{"claude", "two\nlines", nil}, // typed into a shell: agent.prompt instead
+		{"claude", long, nil},
+		{"claude", "  ", nil},
+	} {
+		if got := firstPromptArgs(c.kind, c.prompt); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("firstPromptArgs(%q, %.20q) = %q, want %q", c.kind, c.prompt, got, c.want)
+		}
 	}
 }

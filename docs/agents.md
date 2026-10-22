@@ -15,7 +15,10 @@ then:
    with the name or the directory's name;
 2. starts the agent in the workspace's shell pane (`agent.start`, waiting
    up to 60 s for it to be ready for input);
-3. sends the first prompt, if any (`agent.prompt`, no wait),
+3. gives it the first prompt, if any: for Claude Code and Pi on their own
+   command line (`claude -- <prompt>`, `pi -- <prompt>`), so it cannot
+   arrive before the agent reads input; for other kinds, and multi-line or
+   very long prompts, with `agent.prompt` once it is up (no wait),
 
 and the app opens the new agent's chat. The default name is the
 directory's name made into a valid agent name (`my.Repo` becomes

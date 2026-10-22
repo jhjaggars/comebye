@@ -637,12 +637,19 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 	}
 	st := fh.call("agent.start")
 	args, _ := json.Marshal(st.Params["args"])
-	if st.Params["name"] != "coordinator" || st.Params["kind"] != "claude" || string(args) != `["--allowedTools","Bash(comebye:*)"]` {
+	// The first prompt rides on the command line, after "--" so the
+	// variadic --allowedTools cannot take it; nothing is typed in after.
+	var argv []string
+	json.Unmarshal(args, &argv)
+	if st.Params["name"] != "coordinator" || st.Params["kind"] != "claude" || len(argv) != 4 ||
+		argv[0] != "--allowedTools" || argv[1] != "Bash(comebye:*)" || argv[2] != "--" {
 		t.Fatalf("agent.start = %v", st.Params)
 	}
-	text := fh.call("agent.prompt").Params["text"].(string)
-	if !strings.Contains(text, "comebye playbook --harness claude") || len(text) > 400 {
+	if text := argv[3]; !strings.Contains(text, "comebye playbook --harness claude") || len(text) > 400 {
 		t.Fatalf("first prompt = %q", text)
+	}
+	if fh.call("agent.prompt") != nil {
+		t.Fatal("first prompt typed in as well")
 	}
 	if !s.isCoordinator("desk/w9:p1", "coordinator") {
 		t.Fatal("role not recorded")
@@ -655,11 +662,9 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 	st = fh.call("agent.start")
 	args, _ = json.Marshal(st.Params["args"])
 	if w.Code != 200 || st.Params["name"] != "coordinator-2" ||
-		string(args) != `["--name","coordinator-2","--no-skills","--no-context-files","--tools","read,grep,find,ls,bash","--auto"]` {
+		!strings.HasPrefix(string(args), `["--name","coordinator-2","--no-skills","--no-context-files","--tools","read,grep,find,ls,bash","--auto","--","`) ||
+		!strings.Contains(string(args), "--harness pi") {
 		t.Fatalf("pi launch = %d %s %v", w.Code, w.Body, st.Params)
-	}
-	if !strings.Contains(fh.call("agent.prompt").Params["text"].(string), "--harness pi") {
-		t.Fatal("pi prompt")
 	}
 	// Other kinds: no extra arguments, the generic playbook.
 	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })

@@ -510,6 +510,11 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The first prompt goes on the command line where the harness takes
+	// one; otherwise it is sent once the agent is up (below).
+	promptArgs := firstPromptArgs(kind, body.Prompt)
+	args = append(args, promptArgs...)
+
 	label := filepath.Base(dir)
 	if named || body.Coordinator {
 		label = name
@@ -558,13 +563,37 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if strings.TrimSpace(body.Prompt) != "" {
+	if promptArgs == nil && strings.TrimSpace(body.Prompt) != "" {
 		// Submission only: the app shows the agent working from here.
 		if _, err := s.client.Prompt(ctx, name, body.Prompt, herdr.PromptOptions{}); err != nil {
 			resp["prompt_error"] = "the agent started, but the first prompt was not sent: " + errMessage(err)
 		}
 	}
 	writeJSON(w, resp)
+}
+
+// maxArgPrompt is the longest first prompt passed on the command line;
+// herdr types the command into the pane's shell.
+const maxArgPrompt = 4 << 10
+
+// firstPromptArgs passes a launch's first prompt as the harness's own
+// initial-prompt argument (claude [prompt], pi [messages...]), nil when the
+// prompt has to be sent with agent.prompt instead. Sent with agent.prompt
+// right after agent.start, it can reach the TUI before it reads input and
+// be lost; a coordinator then never learns its role. "--" ends option
+// parsing, so a variadic option (claude's --allowedTools) cannot swallow
+// the prompt and a prompt starting with "-" stays a prompt. Multi-line and
+// long prompts go through agent.prompt, since they would be typed into a
+// shell.
+func firstPromptArgs(kind, prompt string) []string {
+	if strings.TrimSpace(prompt) == "" || len(prompt) > maxArgPrompt || strings.ContainsAny(prompt, "\r\n") {
+		return nil
+	}
+	switch kind {
+	case "claude", "pi":
+		return []string{"--", prompt}
+	}
+	return nil
 }
 
 // startAgent runs agent.start, retrying briefly while herdr reports the

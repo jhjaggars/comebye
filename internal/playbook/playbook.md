@@ -35,6 +35,11 @@ with the matches listed.
 | `comebye unmark AGENT` | withdraw that proposal |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
 
+Your harness may have its own tools for listing or messaging sessions
+(Claude Code's ListAgents and SendMessage, for one). Do not use them for
+this job: they only see that harness's sessions on this machine, while
+`comebye` sees every agent of every kind on every host.
+
 You cannot remove, close, launch or type keys into anything, and you never
 try to get around that with git, herdr or curl: those decisions are the
 user's.
