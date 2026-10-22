@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/playbook"
 	"github.com/jhjaggars/comebye/internal/state"
 )
 
@@ -300,6 +304,9 @@ func (s *Server) handleLaunchOptions(w http.ResponseWriter, r *http.Request) {
 		resp["kinds"] = kinds
 		resp["default_kind"] = defaultKind(kinds, running)
 		resp["recent"] = recentDirs(running, roots)
+		if d := s.coordinatorDir(); d != "" {
+			resp["coordinator_dir"] = homeLabel(d)
+		}
 	}
 	writeJSON(w, resp)
 }
@@ -384,6 +391,36 @@ type launchBody struct {
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
 	Prompt string `json:"prompt"`
+	// Coordinator: the "Coordinator" preset. The agent starts in the
+	// coordinator directory (Dir is ignored; it need not be in a launch
+	// root), is named coordinator (or coordinator-N), gets the harness's
+	// permission arguments and a first prompt pointing it at the
+	// playbook, and is recorded as a coordinator on the hub.
+	Coordinator bool `json:"coordinator"`
+}
+
+// coordinatorDir is where the Coordinator preset starts agents, symlinks
+// resolved ("" when unknown).
+func (s *Server) coordinatorDir() string {
+	d := s.cfg.CoordinatorDir
+	if d == "" || d == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		d = home
+	}
+	if !filepath.IsAbs(d) {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(d)
+	if err != nil {
+		return ""
+	}
+	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return real
 }
 
 // handleLaunch starts a new agent: a fresh workspace in the directory, the
@@ -401,10 +438,20 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "launch_disabled", "message": "launching is not available on this host"})
 		return
 	}
-	dir, lerr := resolveLaunchDir(body.Dir, roots)
-	if lerr != nil {
-		writeLaunchError(w, lerr)
-		return
+	var dir string
+	if body.Coordinator {
+		// The one launch outside the roots: a fixed directory from the
+		// server's configuration, never one from the request.
+		if dir = s.coordinatorDir(); dir == "" {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "no_coordinator_dir", "message": "the coordinator directory (-coordinator-dir) does not exist on this host"})
+			return
+		}
+	} else {
+		var lerr *launchError
+		if dir, lerr = resolveLaunchDir(body.Dir, roots); lerr != nil {
+			writeLaunchError(w, lerr)
+			return
+		}
 	}
 	running := s.localAgents()
 	kinds := s.launchKinds(running)
@@ -446,15 +493,25 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 			taken[a.Name] = true
 		}
 	}
-	if !named {
+	switch {
+	case !named && body.Coordinator:
+		name = defaultAgentName(RoleCoordinator, func(n string) bool { return taken[n] })
+	case !named:
 		name = defaultAgentName(dir, func(n string) bool { return taken[n] })
-	} else if taken[name] {
+	case taken[name]:
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "agent_name_taken", "message": "an agent named " + name + " is already running"})
 		return
 	}
+	var args []string
+	if body.Coordinator {
+		args = playbook.AgentArgs(kind, name)
+		if strings.TrimSpace(body.Prompt) == "" {
+			body.Prompt = playbook.FirstPrompt(kind)
+		}
+	}
 
 	label := filepath.Base(dir)
-	if named {
+	if named || body.Coordinator {
 		label = name
 	}
 	ws, err := s.client.CreateWorkspace(ctx, dir, label, false)
@@ -473,7 +530,7 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	agent, err := s.startAgent(ctx, name, kind, pane)
+	agent, err := s.startAgent(ctx, name, kind, pane, args...)
 	if err != nil {
 		s.launchFailed(w, ws, "start "+kind, err)
 		return
@@ -485,12 +542,21 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		agent.PaneID = pane
 	}
 	host := s.fleet.LocalName()
+	id := state.QualifiedID(host, agent.PaneID)
 	resp := map[string]any{
 		"agent": browserAgent{
-			ID: state.QualifiedID(host, agent.PaneID), Host: host, PaneID: agent.PaneID,
+			ID: id, Host: host, PaneID: agent.PaneID,
 			Name: name, Agent: kind, Status: agent.Status, CWD: dir,
 		},
 		"workspace_id": ws.WorkspaceID,
+	}
+	if body.Coordinator {
+		resp["coordinator"] = true
+		if s.roles != nil { // on the hub; a hub launching on a peer records it itself
+			if err := s.recordRole(id, name, RoleCoordinator, s.by(r, "")); err != nil {
+				log.Printf("roles: %v", err)
+			}
+		}
 	}
 	if strings.TrimSpace(body.Prompt) != "" {
 		// Submission only: the app shows the agent working from here.
@@ -504,10 +570,10 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 // startAgent runs agent.start, retrying briefly while herdr reports the
 // pane unavailable: a brand-new workspace's shell may still be starting
 // up (reading its rc files) when the first attempt arrives.
-func (s *Server) startAgent(ctx context.Context, name, kind, pane string) (herdr.AgentInfo, error) {
+func (s *Server) startAgent(ctx context.Context, name, kind, pane string, args ...string) (herdr.AgentInfo, error) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		a, err := s.client.StartAgent(ctx, name, kind, pane, launchStartTimeout.Milliseconds())
+		a, err := s.client.StartAgent(ctx, name, kind, pane, launchStartTimeout.Milliseconds(), args...)
 		var he *herdr.Error
 		if err == nil || !errors.As(err, &he) || he.Code != "agent_pane_unavailable" || time.Now().After(deadline) {
 			return a, err
@@ -584,6 +650,55 @@ func defaultAgentName(dir string, taken func(string) bool) string {
 			return n
 		}
 	}
+}
+
+// handleHostLaunch is POST /api/hosts/{host}/launch: the local host's
+// launch, or a peer's through the hub. A Coordinator launch on a peer is
+// made by the hub itself (fleet.CallHost) so it can record the new agent's
+// role; any other launch is proxied as is.
+func (s *Server) handleHostLaunch(w http.ResponseWriter, r *http.Request) {
+	host := r.PathValue("host")
+	switch {
+	case host == s.fleet.LocalName():
+		s.handleLaunch(w, r)
+		return
+	case !s.fleet.HasPeer(host):
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_host", "message": "no such host"})
+		return
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLaunchPrompt+64<<10))
+	if err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	var body launchBody
+	if err := json.Unmarshal(raw, &body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if !body.Coordinator {
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		s.fleet.ProxyHost(w, r, host, "launch")
+		return
+	}
+	status, data, err := s.fleet.CallHost(r.Context(), host, "launch", nil, raw)
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadGateway, map[string]string{"code": "host_unreachable", "message": err.Error()})
+		return
+	}
+	if status == http.StatusOK && s.roles != nil {
+		var res struct {
+			Agent browserAgent `json:"agent"`
+		}
+		if json.Unmarshal(data, &res) == nil && res.Agent.PaneID != "" {
+			if err := s.recordRole(state.QualifiedID(host, res.Agent.PaneID), res.Agent.Name, RoleCoordinator, s.by(r, "")); err != nil {
+				log.Printf("roles: %v", err)
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(data)
 }
 
 // onHostLaunch routes a host-qualified launch call like onHost does for

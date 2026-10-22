@@ -9,11 +9,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/transcript"
@@ -75,6 +77,7 @@ type coord struct {
 	checks    map[string]cachedChecks // by entry id
 	checking  map[string]bool
 	reporting map[string]time.Time // entry id -> last capture attempt
+	starting  map[string]bool      // handoffs being started, by host, repo and branch
 }
 
 type cachedChecks struct {
@@ -102,13 +105,39 @@ func (s *Server) handoffTemplate() string {
 	return defaultHandoffTemplate
 }
 
-// ledgerOff answers when this instance keeps no ledger (no state directory).
-func (s *Server) ledgerOff(w http.ResponseWriter) bool {
+// ledgerOff answers when this instance keeps no ledger (no state
+// directory, or a peer that is not the hub). An agent is told that this
+// instance has no hub to forward to (409); the app gets 503 and hides the
+// ledger's features.
+func (s *Server) ledgerOff(w http.ResponseWriter, r *http.Request) bool {
 	if s.ledger != nil {
 		return false
 	}
+	if callerOf(r).agent() {
+		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "no_hub", "message": "no hub configured: this Comebye keeps no ledger; start it with -hub https://<hub>.<tailnet>.ts.net (COMEBYE_HUB) to forward to the hub"})
+		return true
+	}
 	writeJSONStatus(w, http.StatusServiceUnavailable, map[string]string{"code": "ledger_disabled", "message": "this instance keeps no handoff ledger"})
 	return true
+}
+
+// agentPresent reports whether a worker's agent is still running; when its
+// host is a peer the hub cannot see right now, it is assumed to be.
+func (s *Server) agentPresent(host, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, h := range s.fleet.Hosts() {
+		if h.Name == host && !h.Local && h.Status != fleet.StatusOK {
+			return true
+		}
+	}
+	for _, a := range s.fleet.Agents() {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // knownHost reports whether host is this instance or one of its peers.
@@ -234,7 +263,7 @@ func requester(r *http.Request, from string) string {
 // repo, branch, base?, kind?, name?, brief, from?}. A worker that fails to
 // start is recorded as failed.
 func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w) {
+	if s.ledgerOff(w, r) {
 		return
 	}
 	var b handoffBody
@@ -263,8 +292,37 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	branch := strings.TrimSpace(b.Branch)
-	from := requester(r, b.From)
+	from := s.by(r, b.From)
 	repoName := filepath.Base(filepath.Clean(b.Repo))
+
+	// One worker per host, repository and branch: a second handoff while
+	// the first is running or finished answers with it (the worktree's
+	// path, <root>/<repo>/<branch>, is that identity too). If its agent is
+	// gone, a new agent is started in the same worktree and the entry is
+	// updated.
+	key := b.Host + "\x00" + repoName + "\x00" + branch
+	s.coord.mu.Lock()
+	if s.coord.starting[key] {
+		s.coord.mu.Unlock()
+		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "handoff_in_progress", "message": "a handoff for this branch is starting right now"})
+		return
+	}
+	s.coord.starting[key] = true
+	s.coord.mu.Unlock()
+	defer func() {
+		s.coord.mu.Lock()
+		delete(s.coord.starting, key)
+		s.coord.mu.Unlock()
+	}()
+	prev, hasPrev := s.ledger.Find(func(e *ledger.Entry) bool {
+		return e.Host == b.Host && e.RepoName == repoName && e.Branch == branch &&
+			(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
+	})
+	if hasPrev && s.agentPresent(prev.Host, prev.AgentID) {
+		writeJSON(w, map[string]any{"entry": prev, "existing": true})
+		return
+	}
+
 	prompt := strings.NewReplacer(
 		"{{repo}}", repoName, "{{branch}}", branch, "{{brief}}", strings.TrimSpace(b.Brief),
 		"{{from}}", from, "{{host}}", b.Host,
@@ -273,6 +331,26 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
 	defer cancel()
 	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Prompt: prompt})
+	if hasPrev && lerr == nil {
+		// The earlier worker's agent is gone: the new one takes over its
+		// entry (and its worktree, which startWorker reopened).
+		entry, _, err := s.ledger.Update(prev.ID, func(e *ledger.Entry) {
+			e.Status, e.Error = ledger.Running, res.PromptError
+			e.AgentID, e.PaneID, e.AgentName, e.Kind = res.Agent.ID, res.Agent.PaneID, res.Agent.Name, res.Agent.Agent
+			e.WorkspaceID, e.Worktree, e.Reused = res.WorkspaceID, res.Worktree, true
+			e.Brief, e.From = strings.TrimSpace(b.Brief), from
+			e.SawWorking, e.FinishedAt, e.FinalReport, e.ReportTries, e.Mark = false, nil, "", 0, nil
+		})
+		if err != nil {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res})
+			return
+		}
+		s.coord.mu.Lock()
+		delete(s.coord.checks, prev.ID)
+		s.coord.mu.Unlock()
+		writeJSON(w, map[string]any{"entry": entry, "worker": res, "existing": true, "restarted": true})
+		return
+	}
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
 		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from,
@@ -389,7 +467,7 @@ type entryView struct {
 // handleLedger lists the handoffs (removed and failed ones: the latest
 // few) and the standalone marks.
 func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w) {
+	if s.ledgerOff(w, r) {
 		return
 	}
 	agents := s.fleet.Agents()
@@ -428,7 +506,7 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
-	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks()})
+	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks(), "roles": s.liveRoles()})
 }
 
 // cachedChecks returns an entry's cached checks, refreshing them in the
@@ -468,7 +546,7 @@ type markBody struct {
 // handleMark marks an agent ready to remove: POST {agent_id, reason?,
 // by?}. A worker's ledger entry is marked; any other agent must be live.
 func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w) {
+	if s.ledgerOff(w, r) {
 		return
 	}
 	var b markBody
@@ -479,8 +557,8 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 	if len(b.Reason) > 500 {
 		b.Reason = b.Reason[:500]
 	}
-	m := ledger.Mark{AgentID: b.AgentID, By: requester(r, b.By), Reason: strings.TrimSpace(b.Reason)}
-	_, isWorker := s.ledger.ByAgent(b.AgentID)
+	m := ledger.Mark{AgentID: b.AgentID, By: s.by(r, b.By), Reason: strings.TrimSpace(b.Reason)}
+	entry0, isWorker := s.ledger.ByAgent(b.AgentID)
 	var agent *herdr.AgentInfo
 	for _, a := range s.fleet.Agents() {
 		if a.ID == b.AgentID {
@@ -491,6 +569,23 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 	if agent == nil && !isWorker {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "agent_not_found", "message": "no such agent"})
 		return
+	}
+	if c := callerOf(r); c.agent() {
+		name := entry0.AgentName
+		if agent != nil {
+			name = agent.Name
+		}
+		switch {
+		case m.Reason == "":
+			writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "reason_required", "message": "say why the session can go (--reason)"})
+			return
+		case b.AgentID == c.agentRef():
+			writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "self", "message": "an agent cannot mark itself"})
+			return
+		case s.isCoordinator(b.AgentID, name):
+			writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "coordinator", "message": "agents cannot mark a coordinator; only the user can remove one"})
+			return
+		}
 	}
 	if agent != nil {
 		m.Host, m.PaneID, m.Name, m.WorkspaceID, m.CWD = agent.Host, agent.PaneID, agent.Name, agent.WorkspaceID, agent.CWD
@@ -508,7 +603,7 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 
 // handleUnmark clears a mark: POST {agent_id}.
 func (s *Server) handleUnmark(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w) {
+	if s.ledgerOff(w, r) {
 		return
 	}
 	var b markBody
@@ -527,24 +622,27 @@ func (s *Server) handleUnmark(w http.ResponseWriter, r *http.Request) {
 // removal is one session marked ready to remove, as the review list shows
 // it.
 type removal struct {
-	ID          string            `json:"id"` // the host-qualified agent id
-	Host        string            `json:"host"`
-	PaneID      string            `json:"pane_id,omitempty"`
-	Name        string            `json:"name,omitempty"`
-	EntryID     string            `json:"entry_id,omitempty"` // a ledger worker's entry
-	Repo        string            `json:"repo,omitempty"`
-	Branch      string            `json:"branch,omitempty"`
-	Base        string            `json:"base,omitempty"`
-	WorkspaceID string            `json:"workspace_id,omitempty"`
-	Worktree    string            `json:"worktree,omitempty"`
-	Mark        ledger.Mark       `json:"mark"`
-	Live        liveInfo          `json:"live"`
-	Checks      *worktreeChecks   `json:"checks,omitempty"`
-	ChecksError string            `json:"checks_error,omitempty"`
-	FinalReport string            `json:"final_report,omitempty"`
-	Warnings    []string          `json:"warnings"`
-	Notes       []string          `json:"notes"`
-	Safe        bool              `json:"safe"`
+	ID          string          `json:"id"` // the host-qualified agent id
+	Host        string          `json:"host"`
+	PaneID      string          `json:"pane_id,omitempty"`
+	Name        string          `json:"name,omitempty"`
+	EntryID     string          `json:"entry_id,omitempty"` // a ledger worker's entry
+	Repo        string          `json:"repo,omitempty"`
+	Branch      string          `json:"branch,omitempty"`
+	Base        string          `json:"base,omitempty"`
+	WorkspaceID string          `json:"workspace_id,omitempty"`
+	Worktree    string          `json:"worktree,omitempty"`
+	Mark        ledger.Mark     `json:"mark"`
+	Live        liveInfo        `json:"live"`
+	Checks      *worktreeChecks `json:"checks,omitempty"`
+	ChecksError string          `json:"checks_error,omitempty"`
+	FinalReport string          `json:"final_report,omitempty"`
+	Warnings    []string        `json:"warnings"`
+	Notes       []string        `json:"notes"`
+	Safe        bool            `json:"safe"`
+	// Coordinator: the agent is a coordinator; removing it needs its id
+	// in the confirmation's coordinators as well.
+	Coordinator bool              `json:"coordinator,omitempty"`
 	Status      herdr.AgentStatus `json:"-"`
 }
 
@@ -568,12 +666,15 @@ func (s *Server) marked() []*removal {
 		out = append(out, &removal{ID: m.AgentID, Host: m.Host, PaneID: m.PaneID, Name: m.Name, WorkspaceID: m.WorkspaceID, Worktree: m.Worktree, Mark: m})
 	}
 	for _, it := range out {
+		name := it.Name
 		if a, ok := live[it.ID]; ok {
 			it.Live = liveInfo{Present: true, Status: a.Status}
 			if it.Repo == "" && a.Worktree != nil {
 				it.Repo = a.Worktree.RepoName
 			}
+			name = a.Name
 		}
+		it.Coordinator = s.isCoordinator(it.ID, name)
 	}
 	return out
 }
@@ -581,6 +682,9 @@ func (s *Server) marked() []*removal {
 // review fills in an item's checks (on its host) and its warnings.
 func (s *Server) review(ctx context.Context, it *removal) {
 	it.Warnings, it.Notes = []string{}, []string{}
+	if it.Coordinator {
+		it.Warnings = append(it.Warnings, "this agent is a coordinator: removing it needs an extra confirmation")
+	}
 	switch {
 	case !it.Live.Present:
 		it.Notes = append(it.Notes, "the agent is no longer running")
@@ -626,7 +730,7 @@ func (s *Server) review(ctx context.Context, it *removal) {
 // handleRemovals lists the marked sessions with fresh checks from their
 // hosts.
 func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w) {
+	if s.ledgerOff(w, r) {
 		return
 	}
 	items := s.marked()
@@ -656,6 +760,9 @@ type confirmBody struct {
 	IDs []string `json:"ids"`
 	// AllowWorking closes agents that went back to work since the review.
 	AllowWorking bool `json:"allow_working"`
+	// Coordinators lists the coordinators among IDs the user confirmed a
+	// second time; any other coordinator is refused.
+	Coordinators []string `json:"coordinators"`
 }
 
 // removalOutcome is one confirmed item's result.
@@ -670,7 +777,7 @@ type removalOutcome struct {
 // handleConfirmRemovals removes the given marked sessions, each on its
 // host: POST {ids, allow_working?}. Items not marked are refused.
 func (s *Server) handleConfirmRemovals(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w) {
+	if s.ledgerOff(w, r) {
 		return
 	}
 	var b confirmBody
@@ -692,6 +799,10 @@ func (s *Server) handleConfirmRemovals(w http.ResponseWriter, r *http.Request) {
 		it := byID[id]
 		if it == nil {
 			out[i].Code, out[i].Message = "not_marked", "that session is not marked ready to remove"
+			continue
+		}
+		if it.Coordinator && !slices.Contains(b.Coordinators, id) {
+			out[i].Code, out[i].Message = "coordinator", "this agent is a coordinator: confirm its removal explicitly"
 			continue
 		}
 		wg.Add(1)
@@ -725,6 +836,11 @@ func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool)
 	raw, _ := json.Marshal(res)
 	if _, err := s.ledger.Removed(it.ID, raw, time.Now()); err != nil {
 		log.Printf("ledger: %v", err)
+	}
+	if it.Coordinator {
+		if err := s.recordRole(it.ID, "", "", ""); err != nil {
+			log.Printf("roles: %v", err)
+		}
 	}
 	s.coord.mu.Lock()
 	delete(s.coord.checks, it.EntryID)

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -71,9 +72,23 @@ type Config struct {
 	// <root>/<repo>/<branch> (default ~/.worktrees). Checks and removals
 	// may touch it besides the launch roots.
 	WorktreeRoot string
-	// StateDir holds the handoff ledger (ledger.json) and an optional
+	// StateDir holds the handoff ledger (ledger.json), the briefing
+	// (brief.json), the roles (roles.json) and an optional
 	// handoff-template.md. Empty turns handoffs and marks off.
 	StateDir string
+	// NoLedger turns the ledger (and the briefing and roles) off even with
+	// a state directory: the instance is a peer that is not the hub.
+	NoLedger bool
+	// Upstream, on a peer, is its hub: the agent role's requests are
+	// forwarded there, and the peer keeps no ledger of its own.
+	Upstream *fleet.Upstream
+	// AgentToken is the local agent token (see agenttoken); requests that
+	// carry it get the agent role. Empty disables the agent role.
+	AgentToken string
+	// CoordinatorDir is where the "Coordinator" launch preset starts its
+	// agent (default the home directory). It need not lie in a launch
+	// root; only that preset may use it.
+	CoordinatorDir string
 }
 
 // Server is the phone app HTTP server.
@@ -92,9 +107,13 @@ type Server struct {
 	// findExec reports whether an executable is installed (default
 	// installed; tests replace it).
 	findExec func(name string) bool
-	// ledger records handoffs and marks (nil without a state directory).
+	// ledger records handoffs and marks (nil without a state directory,
+	// and on a peer that is not the hub).
 	ledger *ledger.Store
-	coord  coord
+	// brief and roles live next to the ledger (nil when it is).
+	brief *briefStore
+	roles *roleStore
+	coord coord
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -115,13 +134,18 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		cfg.PingInterval = 15 * time.Second
 	}
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux()}
-	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}}
-	if cfg.StateDir != "" {
+	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}}
+	if cfg.StateDir != "" && !cfg.NoLedger && cfg.Upstream == nil {
 		l, err := openLedger(cfg.StateDir)
 		if err != nil {
 			log.Printf("handoff ledger disabled: %v", err)
 		} else {
 			s.ledger = l
+			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
+			if s.roles, err = openRoles(filepath.Join(cfg.StateDir, "roles.json")); err != nil {
+				log.Printf("roles: %v (starting with none)", err)
+				s.roles = &roleStore{path: filepath.Join(cfg.StateDir, "roles.json"), data: map[string]Role{}}
+			}
 		}
 	}
 	s.routes()
@@ -135,23 +159,28 @@ func (s *Server) routes() {
 	}
 	s.version = static.version
 	s.mux.Handle("GET /", static)
-	s.mux.HandleFunc("GET /api/version", s.auth(s.handleVersion))
-	s.mux.HandleFunc("GET /api/agents", s.auth(s.handleAgents))
-	s.mux.HandleFunc("GET /api/agents/{target}/output", s.auth(s.handleOutput))
-	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.auth(s.handleTranscript))
-	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.auth(s.handleSubagentTranscript))
-	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.auth(s.handlePrompt))
+	// Routes the agent role may use are wrapped in authAgent (forwarded to
+	// the hub on a peer with -hub) or authAgentLocal; everything wrapped
+	// in auth is the user's alone (see agentauth.go).
+	s.mux.HandleFunc("GET /api/version", s.authAgentLocal(s.handleVersion))
+	s.mux.HandleFunc("GET /api/whoami", s.authAgentLocal(s.handleWhoami))
+	s.mux.HandleFunc("GET /api/playbook", s.authAgentLocal(s.handlePlaybook))
+	s.mux.HandleFunc("GET /api/agents", s.authAgent(s.handleAgents))
+	s.mux.HandleFunc("GET /api/agents/{target}/output", s.authAgent(s.handleOutput))
+	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.authAgent(s.handleTranscript))
+	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.handleSubagentTranscript))
+	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authAgent(s.selfGuard(s.handlePrompt)))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
 	s.mux.HandleFunc("POST /api/agents/{target}/answer", s.auth(s.handleAnswer))
 	s.mux.HandleFunc("POST /api/agents/{target}/image", s.auth(s.handleImage))
 	// Host-qualified routes: the local host is served directly, a peer's
 	// agents are proxied to that peer (hub only).
-	s.mux.HandleFunc("GET /api/hosts", s.auth(s.handleHosts))
-	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.auth(s.onHost("output", s.handleOutput)))
-	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.auth(s.onHost("transcript", s.handleTranscript)))
-	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.auth(s.onHost("subagent-transcript", s.handleSubagentTranscript)))
-	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.auth(s.onHost("prompt", s.handlePrompt)))
+	s.mux.HandleFunc("GET /api/hosts", s.authAgent(s.handleHosts))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.onHost("output", s.handleOutput)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.onHost("transcript", s.handleTranscript)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.onHost("subagent-transcript", s.handleSubagentTranscript)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authAgent(s.selfGuard(s.onHost("prompt", s.handlePrompt))))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/keys", s.auth(s.onHost("keys", s.handleKeys)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/answer", s.auth(s.onHost("answer", s.handleAnswer)))
@@ -161,7 +190,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/launch", s.auth(s.handleLaunch))
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/options", s.auth(s.onHostLaunch("launch-options", s.handleLaunchOptions)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/dirs", s.auth(s.onHostLaunch("launch-dirs", s.handleLaunchDirs)))
-	s.mux.HandleFunc("POST /api/hosts/{host}/launch", s.auth(s.onHostLaunch("launch", s.handleLaunch)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/launch", s.auth(s.handleHostLaunch))
 	// Workers, on this host: the hub calls a peer's through fleet.CallHost.
 	s.mux.HandleFunc("GET /api/repos", s.auth(s.handleRepos))
 	s.mux.HandleFunc("GET /api/checks", s.auth(s.handleChecks))
@@ -170,12 +199,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
 	// The handoff ledger (hub side).
-	s.mux.HandleFunc("GET /api/ledger", s.auth(s.handleLedger))
-	s.mux.HandleFunc("POST /api/handoffs", s.auth(s.handleHandoff))
-	s.mux.HandleFunc("POST /api/marks", s.auth(s.handleMark))
-	s.mux.HandleFunc("POST /api/marks/clear", s.auth(s.handleUnmark))
+	s.mux.HandleFunc("GET /api/ledger", s.authAgent(s.handleLedger))
+	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))
+	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
+	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("GET /api/removals", s.auth(s.handleRemovals))
+	// Removal confirmation is the user's alone, always.
 	s.mux.HandleFunc("POST /api/removals/confirm", s.auth(s.handleConfirmRemovals))
+	// The briefing and the coordinator roles (hub side).
+	s.mux.HandleFunc("GET /api/brief", s.authAgent(s.handleGetBrief))
+	s.mux.HandleFunc("POST /api/brief", s.authAgent(s.handleSetBrief))
+	s.mux.HandleFunc("GET /api/roles", s.authAgent(s.handleRoles))
+	s.mux.HandleFunc("POST /api/roles", s.auth(s.handleSetRole))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	s.mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
 	s.mux.HandleFunc("POST /api/push/subscribe", s.auth(s.handlePushSubscribe))

@@ -35,25 +35,6 @@ func (s *Server) authorized(r *http.Request) bool {
 	return s.tailscaleAllowed(r)
 }
 
-func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		// Every API response (proxied peer calls included) carries this
-		// instance's app version, so a stale page notices a deploy.
-		h.Set("X-App-Version", s.version)
-		// API responses are never sniffed or stored. A handler that wants
-		// revalidation instead (transcripts, with an ETag) overrides
-		// Cache-Control.
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Cache-Control", "no-store")
-		if !s.authorized(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
 // normalizeHost lowercases a host name and drops any port, IPv6 brackets
 // and trailing dot.
 func normalizeHost(host string) string {

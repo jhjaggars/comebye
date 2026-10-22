@@ -196,6 +196,18 @@ func (s *Store) Get(id string) (Entry, bool) {
 	return Entry{}, false
 }
 
+// Find returns the newest entry match accepts.
+func (s *Store) Find(match func(*Entry) bool) (Entry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.data.Entries) - 1; i >= 0; i-- {
+		if e := s.data.Entries[i]; match(e) {
+			return copyEntry(e), true
+		}
+	}
+	return Entry{}, false
+}
+
 // Add records a new entry (its ID and CreatedAt are set here).
 func (s *Store) Add(e Entry) (Entry, error) {
 	s.mu.Lock()

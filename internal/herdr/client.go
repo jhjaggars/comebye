@@ -570,14 +570,16 @@ func (c *Client) worktreeCall(ctx context.Context, method string, req WorktreeRe
 // StartAgent starts a supported agent kind under name in paneID, which
 // must be at an interactive shell prompt. herdr answers once the agent is
 // detected and ready for input, or fails after timeoutMs (3001..300000;
-// 0 leaves herdr's default of 30s).
-func (c *Client) StartAgent(ctx context.Context, name, kind, paneID string, timeoutMs int64) (AgentInfo, error) {
+// 0 leaves herdr's default of 30s). args are passed to the agent's
+// executable after its name (herdr's AgentStartParams.args).
+func (c *Client) StartAgent(ctx context.Context, name, kind, paneID string, timeoutMs int64, args ...string) (AgentInfo, error) {
 	params := struct {
-		Name      string `json:"name"`
-		Kind      string `json:"kind"`
-		PaneID    string `json:"pane_id"`
-		TimeoutMs *int64 `json:"timeout_ms,omitempty"`
-	}{Name: name, Kind: kind, PaneID: paneID}
+		Name      string   `json:"name"`
+		Kind      string   `json:"kind"`
+		PaneID    string   `json:"pane_id"`
+		TimeoutMs *int64   `json:"timeout_ms,omitempty"`
+		Args      []string `json:"args,omitempty"`
+	}{Name: name, Kind: kind, PaneID: paneID, Args: args}
 	if timeoutMs > 0 {
 		params.TimeoutMs = &timeoutMs
 	}
