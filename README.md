@@ -15,8 +15,9 @@ handoff and nothing to sync.
 
 ## Features
 
-- **Agent list with live status**: grouped by status, ordered by recent
-  activity, with repository and worktree info. Kept current through herdr's
+- **Agent list with live status**: grouped by project (repository), the
+  home agents first and then the workers, each project ordered by status
+  and recent activity, with repository, branch and handoff status. Kept current through herdr's
   event stream, relayed to the browser over Server-Sent Events.
 - **Chat view** for Pi and Claude Code sessions: the agent's session
   transcript rendered as a native chat, alongside the raw terminal output
@@ -47,6 +48,12 @@ handoff and nothing to sync.
   under your launch roots (default `~/code`) and an agent kind, with an
   optional name and first prompt, and opens the new agent's chat. See
   [Launching agents](#launching-agents).
+- **Hand work to workers**: start an agent on a new branch in its own git
+  worktree with a brief; the hub keeps a ledger of handoffs, notices when
+  a worker finishes and keeps its final report. Mark finished sessions
+  ready to remove and confirm after safety checks (uncommitted changes,
+  unmerged commits). See
+  [Projects, workers and handoffs](#projects-workers-and-handoffs).
 - **Several machines in one app** (optional): run comebye on each host
   and make one of them a hub that aggregates the others. See
   [Multiple hosts](#multiple-hosts).
@@ -276,6 +283,85 @@ you. The roots keep the directory browser (and where agents start) to your
 checkouts rather than the whole disk; set `-launch=false` on a host where
 you only want to drive existing agents.
 
+## Projects, workers and handoffs
+
+A **project** is a git repository. Its home agents work in the primary
+checkout; **workers** each get their own git worktree at
+`~/.worktrees/<repo>/<branch>` (slashes in the branch become `-`) and a
+herdr workspace nested under the repository's primary workspace, the way
+herdr's own worktree flow does it. The branch is the worker's identity.
+The agent list groups agents by project (from herdr's checkout info, a
+worker's ledger entry, or the `~/.worktrees/<repo>/<branch>` path, else
+the directory's name): home agents first, then the workers, indented, with
+their branch and handoff status. Tap a project's heading to collapse it
+(remembered per browser).
+
+**Handing off.** In the "+" sheet, choose **Worker (new branch)**: host,
+repository (the primary git checkouts in that host's launch roots), branch,
+optional base (default: the repository's default branch, i.e. origin's
+`HEAD`, else `main` or `master`), agent kind and a brief. The hub then, on
+the owning host:
+
+1. creates the branch's worktree with `worktree.create` (the branch is made
+   from the base if it does not exist yet), or reopens an existing one with
+   `worktree.open`, without focusing it;
+2. starts the agent in a pane of that workspace that runs no agent
+   (`agent.start`); if every pane is busy it refuses rather than start over
+   a running agent;
+3. sends the brief wrapped in the handoff template (`agent.prompt`): work
+   only in this worktree on this branch, **commit the work on the branch**
+   when done, don't merge or push other branches (merging stays with you),
+   and end with a final report in a fixed format: `## Summary`,
+   `## Changes`, `## Verification`, `## Follow-ups`. A
+   `handoff-template.md` in the state directory replaces the built-in
+   template; the hub fills `{{repo}}`, `{{branch}}`, `{{brief}}`,
+   `{{from}}` and `{{host}}`, the worker's host fills `{{worktree}}` and
+   `{{base}}`.
+
+**The ledger.** There is one ledger, on the hub (or on a single instance):
+`ledger.json` in the state directory (mode 0600, rewritten atomically).
+Each handoff is an entry: host, repository, branch, base, agent, worktree,
+brief, who asked, and its status:
+
+- `running`: the worker is at it;
+- `finished`: it went idle or done after working; its last assistant
+  message is kept as the final report (up to 20 kB). It goes back to
+  `running` if it gets more work;
+- `ready_to_remove`: you marked it (who, when, why);
+- `removed`: you confirmed its removal (what was closed and removed is
+  recorded);
+- `failed`: the worker never started (the error is recorded).
+
+The list shows a worker's status as a chip; "finished · merged" is a hint
+that its worktree is clean and merged, but comebye never marks or removes
+anything on its own.
+
+**Pruning.** Any session can be marked ready to remove from the ⋮ menu of
+its chat (with an optional reason), not only workers; unmark it the same
+way. A "Ready to remove (N)" banner on the list opens the review: each
+marked session with checks run on its host right then: uncommitted changes
+(`git status --porcelain`, untracked files included), commits on its
+branch that its base lacks (`git cherry` against the base and origin's copy
+of it, so rebased or upstream-merged work counts as merged), and whether the
+agent is working or blocked. Confirm each one ("Remove anyway…" when there
+are warnings), or "Remove all safe" for those without warnings. Removing:
+
+- closes the agent's workspace, or only its pane when other agents live in
+  that workspace or it is a repository's primary workspace;
+- removes the worktree only if it is clean, fully merged, not the primary
+  checkout, and no other agent or workspace uses it (`git worktree remove`
+  without `--force`); otherwise the worktree stays and the review says why;
+- **never deletes the branch**.
+
+**Configuration.** Workers use the launch roots and agent kinds of
+[Launching agents](#launching-agents) (the repository must be a primary
+checkout inside a launch root). `-worktree-root` (`COMEBYE_WORKTREE_ROOT`,
+default `~/.worktrees`) is where worktrees are created; checks and removal
+may also touch paths inside it, nothing else outside the launch roots. The
+ledger needs the state directory (`-state-dir`); a hub runs workers on its
+peers through their own `/api/worker`, `/api/checks` and `/api/remove`, so
+peers need launching on and the same version.
+
 ## Claude Code support
 
 Claude Code agents (`agent: "claude"` in herdr) get the same chat view as
@@ -351,8 +437,9 @@ to the home screen again.
 | `-peers` | `COMEBYE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional). `https` Serve URLs only; requires `-ts-allow-login`. |
 | `-launch` | `COMEBYE_LAUNCH` | `true` | Let the app start new agents (see [Launching agents](#launching-agents)). |
 | `-launch-root` | `COMEBYE_LAUNCH_ROOTS` | `~/code` | Directory inside which agents may be launched (symlinks resolved). Repeatable or comma-separated; roots that do not exist are ignored. |
+| `-worktree-root` | `COMEBYE_WORKTREE_ROOT` | `~/.worktrees` | Where workers get their git worktrees (`<root>/<repo>/<branch>`); also allowed for worktree checks and removal. |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
-| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem` and `push-subscriptions.json` (dir 0700, files 0600). |
+| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json` and the handoff `ledger.json` (dir 0700, files 0600), and an optional `handoff-template.md`. |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
 | `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
 | `-notify-throttle` | | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |
@@ -464,6 +551,10 @@ vulnerability.
   not a streamed terminal.
 - Key input is limited to the whitelist; there is no free-form typing into
   dialogs.
+- A worker counts as finished once comebye has seen it working and then
+  idle; a worker that finishes while the hub is down stays `running` until
+  it works again. Squash-merged branches look unmerged, so their worktrees
+  are kept (remove them yourself).
 - Designed for phone browsers; desktop browsers work but are not the focus.
 
 ## API
@@ -485,6 +576,15 @@ The UI is built on a small JSON API, usable from scripts on the tailnet:
 | `GET /api/launch/dirs?path=<abs>` | Subdirectories of a directory inside a launch root: `{path, label, parent, entries: [{name, path, git}], truncated}` (at most 300; hidden ones left out). Without `path`, the roots. 403 outside the roots, 404 missing. |
 | `POST /api/launch` | Body `{"dir": "<abs>", "kind": "pi", "name": "...", "prompt": "..."}` (`kind` defaults to `default_kind`, `name` to the directory's). Returns `{"agent": {id, host, pane_id, name, agent, ...}, "workspace_id"}`, plus `prompt_error` if the agent started but the prompt failed. Errors: `bad_kind`, `bad_name`, `agent_name_taken` (409), `outside_roots` (403), `launch_disabled` (403), or herdr's code with the workspace left open. |
 | `GET/POST /api/hosts/{host}/launch[/options,/dirs]` | The same for a given host (proxied to a peer by a hub). |
+| `GET /api/repos` | The primary git checkouts in this host's launch roots (a root, its children and grandchildren): `{"repos": [{name, path, label, default_branch}], "truncated"}`. Also `/api/hosts/{host}/repos`. |
+| `GET /api/checks?path=<abs>&branch=&base=` | A worktree's safety checks on this host: `{path, exists, primary, branch, dirty, dirty_files, unmerged_commits, base_used, repo, error}` (`unmerged_commits` -1 when unknown). The path must be inside a launch root or the worktree root. Also `/api/hosts/{host}/checks`. |
+| `POST /api/worker` | Starts a worker on this host: body `{"repo", "branch", "base", "kind", "name", "prompt"}` (`{{worktree}}` and `{{base}}` in the prompt are filled in). Returns `{agent, workspace_id, worktree, branch, base, repo, reused}`. Errors: `bad_branch`, `bad_base`, `not_a_repo`, `branch_in_primary`, `path_exists`, `no_free_pane` (409), plus the launch errors. The hub calls a peer's; browsers use `/api/handoffs`. |
+| `POST /api/remove` | Removes a session on this host: body `{"agent": "<pane>", "name", "workspace_id", "worktree", "branch", "base", "remove_worktree": bool, "allow_working": bool}`. Returns `{closed: "workspace"\|"pane"\|"", worktree_removed, kept, checks}`; 409 `agent_working` or `agent_changed` closes nothing. |
+| `GET /api/ledger` | The hub's handoffs (`entries`, each with `live` status, `checks` and a `candidate` hint; only the latest 20 removed or failed) and standalone `marks`. 503 `ledger_disabled` without a state directory. |
+| `POST /api/handoffs` | Body `{"host", "repo", "branch", "base", "kind", "name", "brief", "from"}`: runs the worker on that host and records it. Returns `{entry, worker}`; a failure returns the error with the recorded `failed` entry. |
+| `POST /api/marks`, `POST /api/marks/clear` | Body `{"agent_id": "<host>/<pane>", "reason", "by"}`: mark a session ready to remove, or unmark it. |
+| `GET /api/removals` | The marked sessions, each with fresh `checks` from its host, `warnings`, `notes` and `safe`. |
+| `POST /api/removals/confirm` | Body `{"ids": ["<host>/<pane>", ...], "allow_working": bool}`: removes each on its host; `{"results": [{id, ok, code, message, result}]}`. |
 | `GET /api/events` | SSE stream of `agents` snapshots (with `hosts`), `resync` signals and a `ping` every 15 s. |
 | `GET /api/push/key` | `{"enabled": bool, "key": "<VAPID public key, base64url>"}`. |
 | `POST /api/push/subscribe` | Body: `PushSubscription.toJSON()` (`endpoint`, `keys.p256dh`, `keys.auth`), optional `replaces`. Stored with the caller's Tailscale login. |

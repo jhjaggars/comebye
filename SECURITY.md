@@ -46,6 +46,14 @@ In scope:
   launch roots (`-launch-root`), for example through `..`, symlinks or
   relative paths, or learning through the launch API whether a path
   outside the roots exists.
+- Getting the worker API to run git outside the launch roots and the
+  worktree root (`-worktree-root`), to pass options to git through branch,
+  base or path values, to remove a worktree that is dirty, unmerged or a
+  repository's primary checkout, or to delete a branch. Removal runs only
+  `git worktree remove` without `--force`, after the checks.
+- Making a hub forward a browser's request to a peer's `/api/worker` or
+  `/api/remove` (only the hub itself calls those, for handoffs and
+  confirmed removals).
 - Script injection in the web UI from agent output or transcripts.
 - Leaking agent output, transcripts or settings to third parties.
   Web Push payloads are end-to-end encrypted (RFC 8291); the push service
