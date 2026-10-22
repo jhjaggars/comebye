@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/jhjaggars/herdr-phone/internal/transcript"
 )
 
 // A rebinding page (evil.example re-resolved to 127.0.0.1) is refused before
@@ -53,7 +55,7 @@ func TestAPIResponseHeaders(t *testing.T) {
 		t.Fatalf("version headers: %v", w.Header())
 	}
 	path := writeSession(t, piMsg("u1", "user", "hi"))
-	h := s.auth(func(w http.ResponseWriter, r *http.Request) { s.serveTranscript(w, r, path) })
+	h := s.auth(func(w http.ResponseWriter, r *http.Request) { s.serveTranscript(w, r, path, transcript.Read) })
 	w = httptest.NewRecorder()
 	h(w, httptest.NewRequest("GET", "/api/agents/x/transcript", nil))
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-cache" || w.Header().Get("ETag") == "" {
