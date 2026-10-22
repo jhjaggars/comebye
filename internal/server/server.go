@@ -3,7 +3,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,7 +150,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.mux.ServeHTTP(w, r)
 	})
-	return http.NewCrossOriginProtection().Handler(jsonOnly)
+	return http.NewCrossOriginProtection().Handler(withGzip(jsonOnly))
 }
 
 func isLoopbackAddr(addr string) bool {
@@ -165,8 +168,16 @@ func isLoopbackAddr(addr string) bool {
 // handleAgents returns the current agent list (every host's, on a hub)
 // and each host's status. It is served from cache and never dials.
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{"agents": s.fleet.Agents(), "hosts": s.fleet.Hosts()})
+	if fullRecords(r) {
+		writeJSON(w, map[string]any{"agents": s.fleet.Agents(), "hosts": s.fleet.Hosts()})
+		return
+	}
+	writeJSON(w, map[string]any{"agents": slimAgents(s.fleet.Agents()), "hosts": slimHosts(s.fleet.Hosts())})
 }
+
+// fullRecords reports whether the caller (a hub reading a peer) asked for
+// herdr's full agent records instead of the browser's slim view.
+func fullRecords(r *http.Request) bool { return r.URL.Query().Get("full") == "1" }
 
 // handleVersion returns the app version, which every /api response also
 // carries in X-App-Version.
@@ -249,12 +260,35 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": err.Error()})
 		return
 	}
+	s.serveTranscript(w, r, path)
+}
+
+// serveTranscript answers a transcript request for the session file at path.
+func (s *Server) serveTranscript(w http.ResponseWriter, r *http.Request, path string) {
 	limit, skip := queryInt(r, "limit", 100), queryInt(r, "skip", 0)
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
 	if skip < 0 {
 		skip = 0
+	}
+	from := r.URL.Query().Get("from")
+	// The app polls this every few seconds while the agent works; most
+	// polls find the file unchanged. The ETag covers everything the
+	// response depends on, so an unchanged poll is answered 304 without
+	// reading the file (the browser revalidates on its own).
+	fi, err := os.Stat(path)
+	if err != nil {
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": "session file is gone"})
+		return
+	}
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%d\x00%s\x00%d\x00%d\x00%s", path, fi.Size(), fi.ModTime().UnixNano(), s.version, limit, skip, from))
+	etag := `W/"` + hex.EncodeToString(sum[:12]) + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
 	t, err := transcript.Read(path, limit, skip)
 	if err != nil {
@@ -264,6 +298,19 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	// ?from=<id>: only that message and the ones after it. The app passes
+	// its oldest message that can still change (a tool call still waiting
+	// for its result), else its newest, so a poll carries only what is new.
+	// An id outside the window (or gone) gets the whole window instead.
+	if from != "" {
+		for i, m := range t.Messages {
+			if m.ID == from {
+				t.Messages = t.Messages[i:]
+				t.Partial = true
+				break
+			}
+		}
 	}
 	writeJSON(w, t)
 }
@@ -375,15 +422,32 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	events, cancel := s.fleet.Hub().Subscribe()
 	defer cancel()
 
+	full := fullRecords(r)
+	var last []byte // the last "agents" payload sent to this client
 	send := func(ev state.Event) {
 		if ev.Type == "agents" {
 			// Always this instance's version: a hub's merged snapshots
 			// are built locally, never relayed from a peer.
 			ev.Version = s.version
 		}
-		payload, err := json.Marshal(ev)
+		var payload []byte
+		var err error
+		if full {
+			payload, err = json.Marshal(ev)
+		} else {
+			payload, err = json.Marshal(slimEvent(ev))
+		}
 		if err != nil {
 			return
+		}
+		if ev.Type == "agents" && !full {
+			// Most updates change only fields browsers do not get: skip
+			// them rather than wake the phone's radio and redraw for
+			// nothing.
+			if bytes.Equal(payload, last) {
+				return
+			}
+			last = payload
 		}
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, payload)
 		flusher.Flush()

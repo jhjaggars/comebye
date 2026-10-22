@@ -304,7 +304,11 @@ func (p *peer) stream(ctx context.Context) (delivered bool, err error) {
 	watchdog := time.AfterFunc(o.ConnectTimeout, func() { fired.Store(true); cancel() })
 	defer watchdog.Stop()
 
-	req, err := http.NewRequestWithContext(sctx, http.MethodGet, p.endpoint("api", "events").String(), nil)
+	// full=1: herdr's full agent records (browsers get a slim view), which
+	// the hub needs for notification excerpts.
+	u := p.endpoint("api", "events")
+	u.RawQuery = "full=1"
+	req, err := http.NewRequestWithContext(sctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return false, err
 	}

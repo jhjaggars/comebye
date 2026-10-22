@@ -321,7 +321,10 @@ func (d *Dispatcher) Notify(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
 		// get their own (by default non-zero) excerpt length.
 		kind, msg := buildNotification(a, host, latest, d.Push.ExcerptChars())
 		blocked := a.Status == herdr.StatusBlocked
-		opts := push.Options{Urgency: "normal", TTL: 4 * time.Hour, Topic: push.TopicFor(ref.Key)}
+		// "done" can wait for the phone's next convenient wake-up (low
+		// urgency lets the push service hold it, e.g. in Low Power Mode);
+		// "needs input" is delivered right away.
+		opts := push.Options{Urgency: "low", TTL: 4 * time.Hour, Topic: push.TopicFor(ref.Key)}
 		if blocked {
 			opts.Urgency, opts.TTL = "high", 12*time.Hour
 		}

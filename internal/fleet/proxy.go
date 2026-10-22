@@ -100,6 +100,11 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent)
+	// Conditional GETs (transcript polls) pass through, so an unchanged
+	// transcript costs the phone a bodiless 304 on a hub too.
+	if inm := r.Header.Get("If-None-Match"); inm != "" && spec.method == http.MethodGet {
+		req.Header.Set("If-None-Match", inm)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -118,6 +123,10 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 		// Not the browser's credentials: passing a 401 through would make
 		// the app claim the user is not allowed on the hub.
 		writeJSON(w, http.StatusBadGateway, "peer_unauthorized", host+" rejected the hub; its -ts-allow-login must include the hub device owner's login")
+		return
+	case resp.StatusCode == http.StatusNotModified:
+		copyCacheHeaders(w, resp)
+		w.WriteHeader(http.StatusNotModified)
 		return
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		writeJSON(w, http.StatusBadGateway, "peer_redirect", host+" answered with a redirect")
@@ -138,6 +147,7 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	copyCacheHeaders(w, resp)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(data)
 }
@@ -163,4 +173,13 @@ func writeJSON(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message})
+}
+
+// copyCacheHeaders passes the peer's validator through (only the ETag and
+// its no-cache policy: nothing else from the peer reaches the browser).
+func copyCacheHeaders(w http.ResponseWriter, resp *http.Response) {
+	if etag := resp.Header.Get("ETag"); etag != "" {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 }

@@ -130,7 +130,7 @@ func TestNotifyTransitionWebPush(t *testing.T) {
 	}
 	g := fp.msgs[0]
 	if fp.keys[0] != "wS:p1/done" || g.Title != "fixer has a question" || g.Body != "repo\nShould I push?" ||
-		g.URL != "/#/agent/wS:p1" || g.Tag != "wS:p1" || g.Renotify || fp.opts[0].Urgency != "normal" {
+		g.URL != "/#/agent/wS:p1" || g.Tag != "wS:p1" || g.Renotify || fp.opts[0].Urgency != "low" {
 		t.Fatalf("done push = %q %+v %+v", fp.keys[0], g, fp.opts[0])
 	}
 	if b := fp.msgs[1]; !b.Renotify || fp.opts[1].Urgency != "high" || b.Title != "other needs input" || fp.opts[1].Topic == "" {

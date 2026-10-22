@@ -52,7 +52,11 @@ type hubPeer struct {
 
 func (p *hubPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
-	p.hits = append(p.hits, r.Method+" "+r.URL.EscapedPath())
+	hit := r.Method + " " + r.URL.EscapedPath()
+	if r.URL.RawQuery == "full=1" {
+		hit += "?full=1"
+	}
+	p.hits = append(p.hits, hit)
 	p.mu.Unlock()
 	switch r.URL.Path {
 	case "/api/events":
@@ -61,6 +65,11 @@ func (p *hubPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	case "/api/agents/wS:p1/transcript":
+		w.Header().Set("ETag", `W/"peer1"`)
+		if r.Header.Get("If-None-Match") == `W/"peer1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"messages":[{"id":"a","kind":"assistant","text":"hello from the peer"}],"total":1}`)
 	case "/api/agents/wS:p1/keys":
@@ -159,6 +168,18 @@ func TestHubServesPeers(t *testing.T) {
 	if code, body := req("GET", "/api/hosts/kube/agents/wS:p1/transcript?limit=5", "", nil); code != 200 || !strings.Contains(body, "hello from the peer") {
 		t.Fatalf("transcript via hub: %d %s", code, body)
 	}
+	// A transcript poll that the peer answers 304 stays a bodiless 304.
+	cr, _ := http.NewRequest("GET", srv.URL+"/api/hosts/kube/agents/wS:p1/transcript?limit=5", nil)
+	cr.Header.Set("Tailscale-User-Login", "me@example.com")
+	cr.Header.Set("If-None-Match", `W/"peer1"`)
+	if resp, err := http.DefaultClient.Do(cr); err != nil || resp.StatusCode != http.StatusNotModified || resp.Header.Get("ETag") != `W/"peer1"` {
+		t.Fatalf("conditional transcript via hub: %v %v", resp, err)
+	} else {
+		resp.Body.Close()
+	}
+	if n := peer.count("GET /api/events?full=1"); n == 0 {
+		t.Fatal("the hub must read the peer's stream with full=1")
+	}
 	if code, body := req("POST", "/api/hosts/kube/agents/wS:p1/keys", `{"keys":["esc"]}`, map[string]string{"Content-Type": "application/json"}); code != 200 || !strings.Contains(body, "ok") {
 		t.Fatalf("keys via hub: %d %s", code, body)
 	}
@@ -177,7 +198,7 @@ func TestHubServesPeers(t *testing.T) {
 	if n := peer.count("POST "); n != 1 {
 		t.Fatalf("peer got %d POSTs, want 1", n)
 	}
-	if n := peer.count("GET /api/agents/wS:p1/transcript"); n != 1 {
-		t.Fatalf("peer got %d transcript GETs, want 1", n)
+	if n := peer.count("GET /api/agents/wS:p1/transcript"); n != 2 {
+		t.Fatalf("peer got %d transcript GETs, want 2", n)
 	}
 }

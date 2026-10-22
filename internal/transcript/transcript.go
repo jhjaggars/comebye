@@ -49,6 +49,10 @@ type Transcript struct {
 	Ask *Ask `json:"ask,omitempty"`
 	// Format is the session file format: "pi" or "claude".
 	Format string `json:"format,omitempty"`
+	// Partial marks a response cut down to the messages from the
+	// requested one on (the server's ?from=); Total and More still
+	// describe the whole window.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // askToolName is the tool registered by the @juicesharp/rpiv-ask-user-question

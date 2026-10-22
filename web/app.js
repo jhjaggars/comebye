@@ -566,12 +566,17 @@ async function loadChat(reset = true) {
   if (!state.selected) return;
   const pane = state.selected;
   if (reset) {
-    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [] };
+    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [], from: "" };
     $("chat").innerHTML = "";
   }
   const chat = state.chat;
   try {
-    const t = await api(`${pathFor(pane)}/transcript?limit=100&skip=${chat.skip}`);
+    // Polls ask only for what can have changed (?from=, see renderTranscript),
+    // and the browser revalidates by ETag, so an unchanged transcript costs
+    // a bodiless 304. The newest window is always skip=0: "Load earlier"
+    // pages are fetched separately.
+    const from = !reset && chat.from ? `&from=${encodeURIComponent(chat.from)}` : "";
+    const t = await api(`${pathFor(pane)}/transcript?limit=100${from}`);
     if (state.selected !== pane || !state.chat) return;
     renderTranscript(t, reset);
   } catch (e) {
@@ -598,7 +603,9 @@ function renderTranscript(t, reset) {
   const atBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80;
 
   if (reset) chatEl.innerHTML = "";
-  chat.more = t.more;
+  // More describes the newest window; once earlier pages are loaded it is
+  // loadEarlier's to track. A partial response carries no new information.
+  if (!t.partial && chat.skip === 0) chat.more = t.more;
   state.ask = t.ask || null;
   updateAnswerCard();
   updateSendButton(); // an open question turns Stop back into Send
@@ -628,7 +635,13 @@ function renderTranscript(t, reset) {
   }
   renderPending();
 
-  if (t.messages.length) chat.last = t.messages[t.messages.length - 1];
+  if (t.messages.length) {
+    chat.last = t.messages[t.messages.length - 1];
+    // The next poll starts at the oldest message that can still change (a
+    // tool call waiting for its result), else at the newest one.
+    const open = t.messages.find((m) => m.kind === "tool" && !m.result && !m.err && !m.ms);
+    chat.from = (open || chat.last).id;
+  }
   renderActivity();
 
   chatEl.appendChild(jumpAnchor()); // keep the jump button last
@@ -1924,6 +1937,15 @@ window.addEventListener("DOMContentLoaded", () => {
   startWatchdog();
   setInterval(() => { if (!document.hidden && !state.selected) renderList(); }, 60000);
   document.addEventListener("visibilitychange", resume);
+  // In the background nothing is shown: close the live connection and the
+  // timers so the radio and CPU can sleep (notifications arrive by push
+  // regardless). resume() reconnects and catches up when visible again.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) return;
+    suspendEvents();
+    clearInterval(activity.timer);
+    activity.timer = null;
+  });
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) resume(); }); // skip the initial load
   window.addEventListener("online", resume);
   window.addEventListener("offline", () => setConn(false));

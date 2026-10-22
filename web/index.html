@@ -322,15 +322,15 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .activity .act-detail[hidden] { display: none; }
-    /* ...and a moving bar under the header, visible while scrolled up. */
-    #detail header { position: relative; }
+    /* ...and a moving bar under the header, visible while scrolled up. It
+       moves by transform, which the compositor animates without repainting. */
+    #detail header { position: relative; overflow: hidden; }
     #detail header.busy::after {
-      content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+      content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 40%;
       background: linear-gradient(90deg, transparent, var(--blue), transparent);
-      background-size: 40% 100%; background-repeat: no-repeat;
-      animation: busybar 1.4s ease-in-out infinite;
+      animation: busybar 1.4s ease-in-out infinite; will-change: transform;
     }
-    @keyframes busybar { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+    @keyframes busybar { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
     /* Floating "jump to latest": zero-height sticky anchor kept as last child of #chat */
     .jump-anchor {
@@ -352,7 +352,7 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .dot.working { animation: none; }
-      #detail header.busy::after { animation: none; background-size: 100% 100%; opacity: 0.6; }
+      #detail header.busy::after { animation: none; width: 100%; opacity: 0.6; }
     }
 
     #output {
