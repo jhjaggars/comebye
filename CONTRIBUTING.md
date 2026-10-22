@@ -5,7 +5,7 @@ welcome.
 
 - **Open an issue first** for anything bigger than a small fix, so we can
   agree on the approach before you spend time on it.
-- **Keep it small.** herdr-phone is deliberately a single Go binary with a
+- **Keep it small.** comebye is deliberately a single Go binary with a
   dependency-free web UI (plain HTML/CSS/JS in `web/`, no build step). Please
   do not add Go module dependencies or a JS toolchain without discussing it.
 - **Before sending a pull request**, run:

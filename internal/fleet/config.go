@@ -1,6 +1,6 @@
-// Package fleet aggregates several herdr-phone instances into one view.
+// Package fleet aggregates several comebye instances into one view.
 //
-// Every host runs its own herdr-phone against its local herdr socket. One
+// Every host runs its own comebye against its local herdr socket. One
 // of them, the hub, is configured with the others as peers: it keeps a
 // long-lived subscription to each peer's /api/events stream, merges the
 // peers' agents into its own broadcasts (so a browser still needs one SSE

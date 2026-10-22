@@ -1,4 +1,4 @@
-/* herdr phone app — vanilla JS, no build step. */
+/* Comebye: a phone app for herdr. Vanilla JS, no build step. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);

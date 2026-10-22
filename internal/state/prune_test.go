@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // Pane output can set the terminal title; it never names a notification.

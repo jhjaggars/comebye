@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // ErrNoSession means no session file could be found for the agent.

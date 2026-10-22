@@ -1,4 +1,4 @@
-module github.com/jhjaggars/herdr-phone
+module github.com/jhjaggars/comebye
 
 go 1.25
 

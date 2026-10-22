@@ -1,11 +1,11 @@
-# herdr-phone
+# Comebye
 
 A phone-friendly web app for [herdr](https://herdr.dev) coding agents: list
 your agents, watch their status live, read their output or chat transcript,
 send prompts, and press Esc/Enter/Ctrl+C from your phone, over your
 [Tailscale](https://tailscale.com) tailnet.
 
-herdr-phone is a single Go binary with the web UI embedded. It talks to
+Comebye is a single Go binary with the web UI embedded. It talks to
 herdr's local socket API (`~/.config/herdr/herdr.sock`), so the phone and
 your desk terminal act on the **same** agent processes. There is no session
 handoff and nothing to sync.
@@ -43,7 +43,7 @@ handoff and nothing to sync.
   iOS 16.4+ from the Home Screen, Android, desktop), with
   [ntfy](https://ntfy.sh) as an optional fallback. Tapping one opens that
   agent's chat; nothing is sent for the agent you are looking at.
-- **Several machines in one app** (optional): run herdr-phone on each host
+- **Several machines in one app** (optional): run comebye on each host
   and make one of them a hub that aggregates the others. See
   [Multiple hosts](#multiple-hosts).
 - **Installable PWA**: add it to your home screen; it reconnects when
@@ -66,19 +66,19 @@ handoff and nothing to sync.
 ## Install
 
 ```sh
-go install github.com/jhjaggars/herdr-phone@latest
+go install github.com/jhjaggars/comebye@latest
 # or, from a checkout:
-go build -o ~/.local/bin/herdr-phone .
+go build -o ~/.local/bin/comebye .
 ```
 
 `go install` puts the binary in `$(go env GOPATH)/bin`; the systemd unit
-below expects `~/.local/bin/herdr-phone`, so adjust one or the other.
+below expects `~/.local/bin/comebye`, so adjust one or the other.
 
 Quick check (herdr must be running; the server exits if it cannot reach the
 socket, and refuses to start without a login allowlist):
 
 ```sh
-herdr-phone -ts-allow-login you@example.com   # serves http://127.0.0.1:8741
+comebye -ts-allow-login you@example.com   # serves http://127.0.0.1:8741
 ```
 
 ## Setup
@@ -86,20 +86,20 @@ herdr-phone -ts-allow-login you@example.com   # serves http://127.0.0.1:8741
 ### 1. Configure
 
 The server reads flags and, for most of them, environment variables. The
-systemd unit loads `~/.config/herdr-phone/env` if it exists, which is the
+systemd unit loads `~/.config/comebye/env` if it exists, which is the
 recommended place for settings:
 
 ```sh
-mkdir -p ~/.config/herdr-phone
+mkdir -p ~/.config/comebye
 umask 077
-cat > ~/.config/herdr-phone/env <<'EOF'
-HERDRPHONE_TS_ALLOW_LOGIN=you@example.com
+cat > ~/.config/comebye/env <<'EOF'
+COMEBYE_TS_ALLOW_LOGIN=you@example.com
 # Web Push contact for Apple/Google/Mozilla (needed if your login is not an
 # email address with a public domain, e.g. you@github):
-# HERDRPHONE_PUSH_SUBJECT=mailto:you@example.com
+# COMEBYE_PUSH_SUBJECT=mailto:you@example.com
 # Optional ntfy fallback:
-# HERDRPHONE_NTFY_TOPIC=herdr-<long-random-string>
-# HERDRPHONE_NTFY_CLICK=https://machine.tailnet.ts.net
+# COMEBYE_NTFY_TOPIC=herdr-<long-random-string>
+# COMEBYE_NTFY_CLICK=https://machine.tailnet.ts.net
 EOF
 ```
 
@@ -110,10 +110,10 @@ Use the Tailscale login that your phone is signed in as (shown by
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp deploy/herdr-phone.service ~/.config/systemd/user/
+cp deploy/comebye.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now herdr-phone
-journalctl --user -u herdr-phone -f
+systemctl --user enable --now comebye
+journalctl --user -u comebye -f
 ```
 
 To keep it running while you are logged out, enable lingering:
@@ -153,7 +153,7 @@ has open on screen right now.
 
 How it works: the server keeps a VAPID key pair and the browser
 subscriptions in its state directory (`-state-dir`, default
-`$XDG_STATE_HOME/herdr-phone` or `~/.local/state/herdr-phone`; files are
+`$XDG_STATE_HOME/comebye` or `~/.local/state/comebye`; files are
 mode 0600). It encrypts each notification to the subscribing browser
 (RFC 8291), so Apple, Google and Mozilla only relay ciphertext. That is why
 Web Push bodies include a short excerpt of the agent's last message by
@@ -173,33 +173,33 @@ your Tailscale login is something like `you@github`, set
 
 **ntfy (optional fallback)**: install the ntfy app, choose a long random
 topic name (anyone who knows it can read your notifications), subscribe to
-it, and set `HERDRPHONE_NTFY_TOPIC`. Set `HERDRPHONE_NTFY_CLICK` to the
+it, and set `COMEBYE_NTFY_TOPIC`. Set `COMEBYE_NTFY_CLICK` to the
 Serve URL so a tap opens the agent (`<ntfy-click>/#/agent/<pane>`). ntfy
 notifications carry **no message text** by default, because on public
 ntfy.sh anyone who knows the topic can read them and the server caches them
 for hours; `-ntfy-excerpt 200` opts in, ideally only with a self-hosted
-ntfy (`HERDRPHONE_NTFY_URL`). On iOS a tap on an ntfy notification opens
+ntfy (`COMEBYE_NTFY_URL`). On iOS a tap on an ntfy notification opens
 Safari rather than the installed app, another reason to prefer Web Push.
 
 ## Multiple hosts
 
-To see agents from several machines in one app, run herdr-phone on **every**
+To see agents from several machines in one app, run comebye on **every**
 host (each talks only to its own herdr socket, exactly as above) and make
 one of them the **hub**. The hub subscribes to each peer's event stream over
 your tailnet, merges their agents into its own list, proxies opening,
 prompting and keys to the owning peer, and sends the notifications for all
 of them. The phone only ever talks to the hub.
 
-1. **Install and run herdr-phone on each host** (steps 1-3 above: binary,
+1. **Install and run comebye on each host** (steps 1-3 above: binary,
    systemd unit, `tailscale serve --bg 8741`). Each host gets its own Serve
    URL, e.g. `https://vm.tailnet.ts.net`.
-2. **Allowlist on every host.** Set `HERDRPHONE_TS_ALLOW_LOGIN` on each peer
+2. **Allowlist on every host.** Set `COMEBYE_TS_ALLOW_LOGIN` on each peer
    to include the Tailscale login that **owns the hub device** (usually your
    own login, the same one your phone uses). The hub's requests to a peer go
    through the peer's Tailscale Serve, which tags them with that identity,
    so no keys or tokens are needed. The hub device must be a user-owned
    node: a tagged device carries no user identity and every peer rejects it.
-3. **Turn off Web Push on the peers**: `HERDRPHONE_PUSH=false` (and no ntfy
+3. **Turn off Web Push on the peers**: `COMEBYE_PUSH=false` (and no ntfy
    topic). The hub notifies for every host; only the hub should have push
    subscriptions. A peer with push on never notifies on its own unless a
    browser subscribed on the peer's own URL, but if you did, that device
@@ -207,8 +207,8 @@ of them. The phone only ever talks to the hub.
 4. **Point the hub at its peers** in its env file:
 
    ```sh
-   HERDRPHONE_TS_ALLOW_LOGIN=you@example.com
-   HERDRPHONE_PEERS=vm=https://vm.tailnet.ts.net,laptop=https://laptop.tailnet.ts.net
+   COMEBYE_TS_ALLOW_LOGIN=you@example.com
+   COMEBYE_PEERS=vm=https://vm.tailnet.ts.net,laptop=https://laptop.tailnet.ts.net
    ```
 
    The name before `=` is optional (it defaults to the first DNS label) and
@@ -256,7 +256,7 @@ transcript path to herdr, so every pane maps to its own transcript, even
 when several Claude agents work in the same directory. Sessions that were
 already running report on their next start, resume or `/clear`.
 
-Without a reported session, herdr-phone falls back to the newest transcript
+Without a reported session, comebye falls back to the newest transcript
 in the project directory for the agent's working directory (Claude names it
 after the path with every non-alphanumeric character replaced by `-`). That
 is only done when exactly one unreported Claude agent runs in that
@@ -269,29 +269,53 @@ branch it); the chat view shows records in file order, so a rewound branch
 stays visible. Transcripts are parsed once and then incrementally as they
 grow, so large sessions stay cheap to poll.
 
+## Upgrading from herdr-phone
+
+Comebye was called herdr-phone. An existing install keeps working after the
+rename:
+
+- `HERDRPHONE_*` environment variables are still read (each logs a
+  deprecation note once); rename them to `COMEBYE_*`.
+- On first start with the default state directory, `~/.local/state/herdr-phone`
+  is moved to `~/.local/state/comebye`, so the VAPID key and push
+  subscriptions carry over and phones keep their notifications.
+- The unit reads `~/.config/herdr-phone/env` as well as
+  `~/.config/comebye/env`. To switch over:
+
+```sh
+mkdir -p ~/.config/comebye && mv ~/.config/herdr-phone/env ~/.config/comebye/env
+systemctl --user disable --now herdr-phone
+cp deploy/comebye.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+systemctl --user enable --now comebye
+```
+
+The URL (your Tailscale Serve name) does not change, so an installed home
+screen app keeps working; iOS shows the new name only after it is added
+to the home screen again.
+
 ## Configuration
 
 | Flag | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `-addr` | | `127.0.0.1:8741` | Listen address. Keep it on loopback and use Tailscale Serve for TLS. |
 | `-sock` | | `~/.config/herdr/herdr.sock` | herdr API socket path. |
-| `-ts-allow-login` | `HERDRPHONE_TS_ALLOW_LOGIN` | (none) | Comma-separated Tailscale logins admitted via Tailscale Serve identity headers. Requires a loopback `-addr`. Required unless `-insecure-no-auth`. |
+| `-ts-allow-login` | `COMEBYE_TS_ALLOW_LOGIN` | (none) | Comma-separated Tailscale logins admitted via Tailscale Serve identity headers. Requires a loopback `-addr`. Required unless `-insecure-no-auth`. |
 | `-insecure-no-auth` | | `false` | Start without `-ts-allow-login`, serving an unauthenticated API to anyone who reaches the port (your whole tailnet through Serve). For local testing only. |
-| `-allow-host` | `HERDRPHONE_ALLOW_HOSTS` | (none) | Extra `Host` names the server answers to, besides `localhost`, loopback IPs and `*.ts.net`. Repeatable or comma-separated. Other hosts get 421 (DNS rebinding protection). |
-| `-host-name` | `HERDRPHONE_HOST_NAME` | short hostname | This host's name in agent IDs (`<host>/<pane>`), URLs and the UI. Lowercase DNS label. |
-| `-peers` | `HERDRPHONE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional). `https` Serve URLs only; requires `-ts-allow-login`. |
-| `-push` | `HERDRPHONE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
-| `-state-dir` | `HERDRPHONE_STATE_DIR` | `$XDG_STATE_HOME/herdr-phone`, else `~/.local/state/herdr-phone` | Holds `vapid.pem` and `push-subscriptions.json` (dir 0700, files 0600). |
-| `-push-subject` | `HERDRPHONE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
-| `-push-excerpt` | `HERDRPHONE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
+| `-allow-host` | `COMEBYE_ALLOW_HOSTS` | (none) | Extra `Host` names the server answers to, besides `localhost`, loopback IPs and `*.ts.net`. Repeatable or comma-separated. Other hosts get 421 (DNS rebinding protection). |
+| `-host-name` | `COMEBYE_HOST_NAME` | short hostname | This host's name in agent IDs (`<host>/<pane>`), URLs and the UI. Lowercase DNS label. |
+| `-peers` | `COMEBYE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional). `https` Serve URLs only; requires `-ts-allow-login`. |
+| `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
+| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem` and `push-subscriptions.json` (dir 0700, files 0600). |
+| `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
+| `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
 | `-notify-throttle` | | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |
-| `-ntfy-url` | `HERDRPHONE_NTFY_URL` | `https://ntfy.sh` | ntfy server root URL; empty disables ntfy. |
-| `-ntfy-topic` | `HERDRPHONE_NTFY_TOPIC` | (none) | ntfy topic; empty (the default) disables ntfy. |
-| `-ntfy-click` | `HERDRPHONE_NTFY_CLICK` | (none) | URL opened when an ntfy notification is tapped. |
-| `-ntfy-excerpt` | `HERDRPHONE_NTFY_EXCERPT` | `0` | Max characters of the agent's last message in ntfy notifications; `0` sends no message text. |
+| `-ntfy-url` | `COMEBYE_NTFY_URL` | `https://ntfy.sh` | ntfy server root URL; empty disables ntfy. |
+| `-ntfy-topic` | `COMEBYE_NTFY_TOPIC` | (none) | ntfy topic; empty (the default) disables ntfy. |
+| `-ntfy-click` | `COMEBYE_NTFY_CLICK` | (none) | URL opened when an ntfy notification is tapped. |
+| `-ntfy-excerpt` | `COMEBYE_NTFY_EXCERPT` | `0` | Max characters of the agent's last message in ntfy notifications; `0` sends no message text. |
 | `-ntfy-throttle` | | | Deprecated alias for `-notify-throttle`. |
 
-Flags take precedence over environment variables. Run `herdr-phone -h` for
+Flags take precedence over environment variables. Run `comebye -h` for
 the authoritative list.
 
 ## Security model
@@ -375,8 +399,8 @@ vulnerability.
 
 ## Limitations
 
-- Each herdr-phone talks to one local herdr; other machines need their own
-  herdr-phone plus a hub (see [Multiple hosts](#multiple-hosts)). A hub
+- Each comebye talks to one local herdr; other machines need their own
+  comebye plus a hub (see [Multiple hosts](#multiple-hosts)). A hub
   does not chain: a peer's own peers are not shown.
 - The chat view understands Pi and Claude Code session transcripts; other
   agents (and Claude agents whose transcript cannot be identified) show raw

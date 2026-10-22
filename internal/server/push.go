@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/push"
+	"github.com/jhjaggars/comebye/internal/push"
 )
 
 // callerLogin is the Tailscale identity of the request, lowercased; empty
@@ -157,7 +157,7 @@ func (s *Server) handlePushTest(w http.ResponseWriter, r *http.Request) {
 	}
 	payload, _ := json.Marshal(push.Message{
 		Title: "herdr test notification",
-		Body:  "Notifications from herdr-phone are working.",
+		Body:  "Notifications from comebye are working.",
 		URL:   "/",
 		Tag:   "herdr-test",
 	})

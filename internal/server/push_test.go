@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/jhjaggars/herdr-phone/internal/push"
+	"github.com/jhjaggars/comebye/internal/push"
 )
 
 const me = "me@example.com"

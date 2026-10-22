@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/fleet"
-	"github.com/jhjaggars/herdr-phone/internal/state"
+	"github.com/jhjaggars/comebye/internal/fleet"
+	"github.com/jhjaggars/comebye/internal/state"
 )
 
 func TestSingleHostAPIShape(t *testing.T) {

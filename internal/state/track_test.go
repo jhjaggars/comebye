@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 func TestTracker(t *testing.T) {

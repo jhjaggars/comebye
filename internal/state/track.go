@@ -3,7 +3,7 @@ package state
 import (
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // AgentKey is the key an agent is tracked, throttled and presence-matched

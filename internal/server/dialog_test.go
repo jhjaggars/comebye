@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/dialog"
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/dialog"
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // fakeIO serves a scripted visible screen and records send_keys calls.

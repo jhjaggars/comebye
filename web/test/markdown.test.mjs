@@ -1,10 +1,10 @@
 // Browser test for the chat's markdown rendering (web/app.js renderMarkdown
 // with the vendored marked + DOMPurify), run in headless Chrome against a
-// live herdr-phone so the real CSP and script loading apply. No npm
+// live comebye so the real CSP and script loading apply. No npm
 // dependencies: Node 22+ (global WebSocket) and a Chrome/Chromium binary.
 //
 // Point it at an instance started without an allowlist on its own port,
-// e.g. `herdr-phone -addr 127.0.0.1:19741 -insecure-no-auth -push=false`
+// e.g. `comebye -addr 127.0.0.1:19741 -insecure-no-auth -push=false`
 // (headless Chrome sends no Tailscale identity):
 //
 //   node web/test/markdown.test.mjs http://127.0.0.1:19741/ \
@@ -25,7 +25,7 @@ const opt = (name, def) => {
 };
 const base = args.find((a) => /^https?:\/\//.test(a));
 if (!base) {
-  console.error("usage: markdown.test.mjs <herdr-phone URL> [--chrome bin] [--port n] [--agent id --screenshot file]");
+  console.error("usage: markdown.test.mjs <comebye URL> [--chrome bin] [--port n] [--agent id --screenshot file]");
   process.exit(2);
 }
 const chromeBin = opt("chrome", process.env.CHROME || "google-chrome");

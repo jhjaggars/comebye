@@ -21,7 +21,7 @@ const vapidFile = "vapid.pem"
 
 // DefaultSubject is the fallback VAPID contact when no usable email is
 // known. It is a public https URL, which Apple's push service accepts.
-const DefaultSubject = "https://github.com/jhjaggars/herdr-phone"
+const DefaultSubject = "https://github.com/jhjaggars/comebye"
 
 // LoadOrCreateVAPID reads the VAPID key from dir, generating and saving a
 // new P-256 key (mode 0600) on first run. Changing the key invalidates

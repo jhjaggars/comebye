@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
-	"github.com/jhjaggars/herdr-phone/internal/push"
-	"github.com/jhjaggars/herdr-phone/internal/state"
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/push"
+	"github.com/jhjaggars/comebye/internal/state"
 )
 
-// fakePeer is a minimal herdr-phone instance: an SSE agents stream with
+// fakePeer is a minimal comebye instance: an SSE agents stream with
 // pings, and the per-agent endpoints, recording every request.
 type fakePeer struct {
 	srv *httptest.Server

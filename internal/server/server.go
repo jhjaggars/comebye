@@ -19,12 +19,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/fleet"
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
-	"github.com/jhjaggars/herdr-phone/internal/push"
-	"github.com/jhjaggars/herdr-phone/internal/state"
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
-	"github.com/jhjaggars/herdr-phone/web"
+	"github.com/jhjaggars/comebye/internal/fleet"
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/push"
+	"github.com/jhjaggars/comebye/internal/state"
+	"github.com/jhjaggars/comebye/internal/transcript"
+	"github.com/jhjaggars/comebye/web"
 )
 
 // Config configures the HTTP server.
@@ -144,7 +144,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	if len(s.cfg.AllowLogins) == 0 {
 		if !s.cfg.InsecureNoAuth {
-			return errors.New("no Tailscale login allowlist configured: set -ts-allow-login / HERDRPHONE_TS_ALLOW_LOGIN (or pass -insecure-no-auth to serve an unauthenticated API)")
+			return errors.New("no Tailscale login allowlist configured: set -ts-allow-login / COMEBYE_TS_ALLOW_LOGIN (or pass -insecure-no-auth to serve an unauthenticated API)")
 		}
 		log.Printf("WARNING: -insecure-no-auth: no Tailscale login allowlist; the API is unauthenticated, so Tailscale Serve exposes it to your whole tailnet")
 	}

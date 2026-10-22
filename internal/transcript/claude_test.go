@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // Synthetic Claude Code records (shapes observed in real transcripts; no
@@ -304,7 +304,7 @@ func TestClaudeLatestTailWindow(t *testing.T) {
 
 func TestClaudeProjectSlug(t *testing.T) {
 	for in, want := range map[string]string{
-		"/home/me/code/herdr-phone":                    "-home-me-code-herdr-phone",
+		"/home/me/code/comebye":                        "-home-me-code-comebye",
 		"/home/me/code/x/.claude/worktrees/fix_clippy": "-home-me-code-x--claude-worktrees-fix-clippy",
 		"/tmp/claude-1000/-home-me/a b":                "-tmp-claude-1000--home-me-a-b",
 		"/home/me/ünï":                                 "-home-me--n-", "/x/😀": "-x---",

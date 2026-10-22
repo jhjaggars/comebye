@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // proxyOp is one per-agent API call the hub may forward. Nothing else is

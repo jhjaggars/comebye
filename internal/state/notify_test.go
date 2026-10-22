@@ -12,21 +12,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
-	"github.com/jhjaggars/herdr-phone/internal/push"
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/push"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 func TestBuildNotificationBlockedShowsPendingTool(t *testing.T) {
 	a := &herdr.AgentInfo{Name: "fixer", PaneID: "wS:p1", Status: herdr.StatusBlocked,
-		Worktree: &herdr.WorktreeInfo{RepoName: "herdr-phone", IsLinked: true, Branch: "notify"}}
+		Worktree: &herdr.WorktreeInfo{RepoName: "comebye", IsLinked: true, Branch: "notify"}}
 	latest := &transcript.Latest{Text: "Running tests.",
 		Pending: []transcript.PendingTool{{Tool: "bash", Args: "go test ./..."}}}
 	kind, msg := buildNotification(a, "", latest, 200)
 	if kind != "blocked" || msg.Title != "fixer needs input" {
 		t.Fatalf("kind=%q title=%q", kind, msg.Title)
 	}
-	if msg.Message != "herdr-phone ⑂ notify\nwants to run bash: go test ./..." {
+	if msg.Message != "comebye ⑂ notify\nwants to run bash: go test ./..." {
 		t.Fatalf("message = %q", msg.Message)
 	}
 }

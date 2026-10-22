@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // All screens below are synthetic, written from the components' render code

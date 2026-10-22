@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // Resolve combines the screen and a pending transcript question (ask may be

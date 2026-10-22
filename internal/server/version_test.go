@@ -9,7 +9,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/jhjaggars/herdr-phone/web"
+	"github.com/jhjaggars/comebye/web"
 )
 
 func assets(app string) fstest.MapFS {

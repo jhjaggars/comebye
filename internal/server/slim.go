@@ -3,8 +3,8 @@ package server
 import (
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
-	"github.com/jhjaggars/herdr-phone/internal/state"
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/state"
 )
 
 // Browsers get a slim view of the agent list: only the fields the app

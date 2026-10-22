@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // A peer cannot make the hub track more than maxPeerAgents agents, use

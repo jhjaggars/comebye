@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
-	"github.com/jhjaggars/herdr-phone/internal/state"
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/state"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 func writeSession(t *testing.T, lines ...string) string {

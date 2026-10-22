@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // A reported session path that is not a regular file is never handed to a

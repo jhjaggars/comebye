@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // Manager owns the agent view and the event stream.

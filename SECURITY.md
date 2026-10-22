@@ -4,7 +4,7 @@
 
 Please **do not open a public issue** for security problems. Report them
 privately through GitHub's
-[private vulnerability reporting](https://github.com/jhjaggars/herdr-phone/security/advisories/new)
+[private vulnerability reporting](https://github.com/jhjaggars/comebye/security/advisories/new)
 for this repository. Include what you found, how to reproduce it, and the
 impact you expect. You should get a response within a week.
 
@@ -13,7 +13,7 @@ commit on the default branch is supported.
 
 ## Threat model
 
-herdr-phone lets a browser send prompts and keystrokes to coding agents
+Comebye lets a browser send prompts and keystrokes to coding agents
 running on your machine. **Anyone who can use the API can run arbitrary
 commands as your user**, so it is designed to be reachable only by you.
 

@@ -129,7 +129,7 @@ func TestLegacyTokenCredentialsRejected(t *testing.T) {
 	bearer := httptest.NewRequest("GET", "/api/agents", nil)
 	bearer.Header.Set("Authorization", "Bearer secret")
 	cookie := httptest.NewRequest("GET", "/api/agents", nil)
-	cookie.AddCookie(&http.Cookie{Name: "herdrphone_token", Value: "secret"})
+	cookie.AddCookie(&http.Cookie{Name: "comebye_token", Value: "secret"})
 	query := httptest.NewRequest("GET", "/api/agents?token=secret", nil)
 	for name, r := range map[string]*http.Request{"bearer": bearer, "cookie": cookie, "query": query} {
 		if s.authorized(r) {

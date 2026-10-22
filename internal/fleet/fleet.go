@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jhjaggars/herdr-phone/internal/herdr"
-	"github.com/jhjaggars/herdr-phone/internal/state"
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/state"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // Host status values reported in state.HostStatus.
@@ -93,7 +93,7 @@ func (o *Options) defaults() {
 }
 
 // userAgent identifies hub requests in peer logs.
-const userAgent = "herdr-phone-hub/1"
+const userAgent = "comebye-hub/1"
 
 // Fleet is the merged view of the local host and its peers. With no peers
 // it is a thin pass-through over the local state manager.
@@ -344,7 +344,7 @@ func (p *peer) stream(ctx context.Context) (delivered bool, err error) {
 		return false, statusError(resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
-		return false, fmt.Errorf("not an event stream (Content-Type %q): is this a herdr-phone URL?", ct)
+		return false, fmt.Errorf("not an event stream (Content-Type %q): is this a comebye URL?", ct)
 	}
 	watchdog.Reset(o.StaleAfter)
 

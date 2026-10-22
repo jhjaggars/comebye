@@ -1,4 +1,4 @@
-// Package push implements Web Push (RFC 8030) for herdr-phone: VAPID
+// Package push implements Web Push (RFC 8030) for comebye: VAPID
 // application server identification (RFC 8292), aes128gcm payload
 // encryption (RFC 8291 / RFC 8188), a persistent subscription store, and
 // a bounded asynchronous sender. It uses only the Go standard library.

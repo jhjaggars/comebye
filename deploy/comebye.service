@@ -1,0 +1,23 @@
+[Unit]
+Description=Comebye, a phone web app for herdr
+Documentation=https://herdr.dev/docs/socket-api/
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/comebye -addr 127.0.0.1:8741
+# Web Push is on by default; its VAPID key and subscriptions live in
+# ~/.local/state/comebye (override with -state-dir). The optional ntfy
+# fallback is enabled with -ntfy-topic / COMEBYE_NTFY_TOPIC.
+# COMEBYE_TS_ALLOW_LOGIN, COMEBYE_PUSH_SUBJECT and COMEBYE_NTFY_*
+# live in this optional file; see README. For several machines, the hub's
+# file also sets COMEBYE_PEERS and the peers' set COMEBYE_PUSH=false
+# (README, "Multiple hosts").
+# The old herdr-phone location is still read, so an upgrade keeps working
+# before the file is moved; the new location wins where both set a value.
+EnvironmentFile=-%h/.config/herdr-phone/env
+EnvironmentFile=-%h/.config/comebye/env
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

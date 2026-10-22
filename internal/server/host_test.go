@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jhjaggars/herdr-phone/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // A rebinding page (evil.example re-resolved to 127.0.0.1) is refused before
