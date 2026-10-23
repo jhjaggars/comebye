@@ -604,9 +604,10 @@ func (c *Client) StartAgent(ctx context.Context, name, kind, paneID string, time
 }
 
 // GetAgent fetches one agent by name or pane ID (agent.get). A name
-// whose launch has not activated — or was dropped — answers with an
-// agent_not_found error, the same refusal agent.prompt gives, which is
-// how a caller waits for a launch to become promptable.
+// resolves as soon as its launch is registered — before the agent is
+// ready for input — and stops resolving when the launch is dropped or
+// never registers; InteractiveReady on the answer says when prompting
+// will be accepted.
 func (c *Client) GetAgent(ctx context.Context, target string) (AgentInfo, error) {
 	raw, err := c.Call(ctx, "agent.get", struct {
 		Target string `json:"target"`

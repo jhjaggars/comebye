@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,7 +101,7 @@ func (f *fakeLaunchHerdr) answer(method string, params map[string]any) (any, *he
 				return nil, e
 			}
 		}
-		agent := herdr.AgentInfo{Name: params["name"].(string), PaneID: params["pane_id"].(string), WorkspaceID: "w9", Agent: params["kind"].(string), Status: herdr.StatusIdle}
+		agent := herdr.AgentInfo{Name: params["name"].(string), PaneID: params["pane_id"].(string), WorkspaceID: "w9", Agent: params["kind"].(string), Status: herdr.StatusIdle, InteractiveReady: true}
 		f.agents = append(f.agents, agent)
 		return map[string]any{"type": "agent_started", "agent": agent, "argv": []string{params["kind"].(string)}}, nil
 	case "agent.get":
@@ -555,6 +556,34 @@ func TestLaunchFailures(t *testing.T) {
 	}
 	if got := strings.Join(fh.methods(), ","); !strings.HasPrefix(got, "agent.list,workspace.create,agent.start,agent.get") || fh.call("agent.prompt") != nil {
 		t.Fatalf("never active calls = %s", got)
+	}
+
+	// The name resolving is not enough: herdr answers agent.get as soon
+	// as the launch is registered, so the brief must wait for the agent
+	// to report ready for input before the prompt is sent.
+	s.agentReadyPoll = 5 * time.Millisecond
+	var gets atomic.Int32
+	fh.set(func(f *fakeLaunchHerdr) {
+		f.calls = nil
+		f.agents = nil // the earlier launches left their agents behind
+		f.hook = func(method string, params map[string]any) (res any, err *herdr.Error, ok bool) {
+			if method == "agent.get" && gets.Add(1) < 3 {
+				// Registered but not yet ready (herdr's launch still
+				// pending, the agent not detected in its pane).
+				return map[string]any{"type": "agent_info", "agent": herdr.AgentInfo{Name: params["target"].(string), PaneID: "w9:p1", Agent: "pi", Status: herdr.StatusUnknown}}, nil, true
+			}
+			return nil, nil, false
+		}
+	})
+	code, r = launch(t, s, `{"dir":"`+root+`/Notes","kind":"pi","prompt":"hi\nthere"}`)
+	if code != 200 || r.PromptError != "" {
+		t.Fatalf("wait for ready = %d %+v", code, r)
+	}
+	if n := gets.Load(); n < 3 {
+		t.Fatalf("prompted after %d gets, want at least 3", n)
+	}
+	if p := fh.call("agent.prompt").Params; p["target"] != "notes" || p["text"] != "hi\nthere" {
+		t.Fatalf("prompt = %v", p)
 	}
 }
 

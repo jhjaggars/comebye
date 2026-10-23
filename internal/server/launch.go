@@ -627,20 +627,24 @@ func (s *Server) startAgent(ctx context.Context, name, kind, pane string, args .
 }
 
 // waitForNamedAgent polls agent.get until herdr resolves name to an
-// active named agent — the condition agent.prompt needs. herdr drops a
-// launch that never activates, so the wait is also where a broken
-// launch is reported instead of every later prompt failing with "is not
-// an active named agent".
+// agent that is ready for input (InteractiveReady): herdr resolves the
+// name as soon as the launch is registered, but agent.prompt needs the
+// launch to have activated, a few seconds later, once the agent is
+// detected in its pane. herdr drops a launch that never activates, so
+// the wait is also where a broken launch is reported instead of every
+// later prompt failing with "is not an active named agent".
 func (s *Server) waitForNamedAgent(ctx context.Context, name string) error {
 	waitCtx, cancel := context.WithTimeout(ctx, s.agentReadyWait)
 	defer cancel()
 	for {
-		if _, err := s.client.GetAgent(waitCtx, name); err == nil {
+		a, err := s.client.GetAgent(waitCtx, name)
+		switch {
+		case err == nil && a.InteractiveReady:
 			return nil
-		} else {
+		case err != nil:
 			var he *herdr.Error
 			if !errors.As(err, &he) {
-				return fmt.Errorf("agent %s: %w", name, err) // transport or parse error, not "not active yet"
+				return fmt.Errorf("agent %s: %w", name, err) // transport or parse error, not "not ready yet"
 			}
 		}
 		select {
