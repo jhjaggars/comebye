@@ -111,6 +111,11 @@ type Server struct {
 	// findExec reports whether an executable is installed (default
 	// installed; tests replace it).
 	findExec func(name string) bool
+	// agentReadyPoll and agentReadyWait pace waitForNamedAgent, the wait
+	// for a launched agent to become an active named agent (tests shrink
+	// them).
+	agentReadyPoll time.Duration
+	agentReadyWait time.Duration
 	// ledger records handoffs and marks (nil without a state directory,
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
@@ -137,7 +142,8 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	if cfg.PingInterval <= 0 {
 		cfg.PingInterval = 15 * time.Second
 	}
-	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux()}
+	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
+		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout}
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}}
 	if cfg.StateDir != "" && !cfg.NoLedger && cfg.Upstream == nil {
 		l, err := openLedger(cfg.StateDir)

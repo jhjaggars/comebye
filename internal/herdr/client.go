@@ -568,17 +568,24 @@ func (c *Client) worktreeCall(ctx context.Context, method string, req WorktreeRe
 }
 
 // StartAgent starts a supported agent kind under name in paneID, which
-// must be at an interactive shell prompt. herdr answers once the agent is
-// detected and ready for input, or fails after timeoutMs (3001..300000;
-// 0 leaves herdr's default of 30s). args are passed to the agent's
-// executable after its name (herdr's AgentStartParams.args).
+// must be at an interactive shell prompt. herdr answers once the launch
+// is admitted, before the agent is detected in the pane and ready for
+// input; a caller must wait for the name to become an active named agent
+// (GetAgent) before prompting it. timeoutMs (3001..300000; 0 leaves
+// herdr's default of 30s) bounds herdr's own wait for the agent. args are
+// passed to the agent's executable after its name (herdr's
+// AgentStartParams.args); they are always sent, even empty, matching the
+// herdr CLI's serialization.
 func (c *Client) StartAgent(ctx context.Context, name, kind, paneID string, timeoutMs int64, args ...string) (AgentInfo, error) {
+	if args == nil {
+		args = []string{}
+	}
 	params := struct {
 		Name      string   `json:"name"`
 		Kind      string   `json:"kind"`
 		PaneID    string   `json:"pane_id"`
 		TimeoutMs *int64   `json:"timeout_ms,omitempty"`
-		Args      []string `json:"args,omitempty"`
+		Args      []string `json:"args"`
 	}{Name: name, Kind: kind, PaneID: paneID, Args: args}
 	if timeoutMs > 0 {
 		params.TimeoutMs = &timeoutMs
@@ -592,6 +599,27 @@ func (c *Client) StartAgent(ctx context.Context, name, kind, paneID string, time
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return AgentInfo{}, fmt.Errorf("parse agent.start: %w", err)
+	}
+	return res.Agent, nil
+}
+
+// GetAgent fetches one agent by name or pane ID (agent.get). A name
+// whose launch has not activated — or was dropped — answers with an
+// agent_not_found error, the same refusal agent.prompt gives, which is
+// how a caller waits for a launch to become promptable.
+func (c *Client) GetAgent(ctx context.Context, target string) (AgentInfo, error) {
+	raw, err := c.Call(ctx, "agent.get", struct {
+		Target string `json:"target"`
+	}{Target: target})
+	if err != nil {
+		return AgentInfo{}, err
+	}
+	var res struct {
+		Type  string    `json:"type"`
+		Agent AgentInfo `json:"agent"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return AgentInfo{}, fmt.Errorf("parse agent.get: %w", err)
 	}
 	return res.Agent, nil
 }

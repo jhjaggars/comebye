@@ -103,6 +103,14 @@ func (f *fakeLaunchHerdr) answer(method string, params map[string]any) (any, *he
 		agent := herdr.AgentInfo{Name: params["name"].(string), PaneID: params["pane_id"].(string), WorkspaceID: "w9", Agent: params["kind"].(string), Status: herdr.StatusIdle}
 		f.agents = append(f.agents, agent)
 		return map[string]any{"type": "agent_started", "agent": agent, "argv": []string{params["kind"].(string)}}, nil
+	case "agent.get":
+		target, _ := params["target"].(string)
+		for i := range f.agents {
+			if f.agents[i].Name == target || f.agents[i].PaneID == target {
+				return map[string]any{"type": "agent_info", "agent": f.agents[i]}, nil
+			}
+		}
+		return nil, &herdr.Error{Code: "agent_not_found", Message: "agent target " + target + " not found"}
 	case "agent.prompt":
 		return map[string]any{"type": "agent_prompted", "agent": map[string]any{"name": params["target"], "pane_id": "w9:p1", "agent_status": "working"}}, nil
 	}
@@ -388,7 +396,7 @@ func TestLaunchHappyPath(t *testing.T) {
 		r.Agent.Name != "fixer" || r.Agent.Agent != "codex" || r.PromptError != "" {
 		t.Fatalf("launch = %d %+v", code, r)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.prompt" {
+	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.get,agent.prompt" {
 		t.Fatalf("calls = %s", got)
 	}
 	ws := fh.call("workspace.create").Params
@@ -398,6 +406,10 @@ func TestLaunchHappyPath(t *testing.T) {
 	st := fh.call("agent.start").Params
 	if st["name"] != "fixer" || st["kind"] != "codex" || st["pane_id"] != "w9:p1" || st["timeout_ms"] != float64(60000) {
 		t.Fatalf("agent.start params = %v", st)
+	}
+	// args is always sent, even when empty, matching the herdr CLI.
+	if args, ok := st["args"].([]any); !ok || len(args) != 0 {
+		t.Fatalf("agent.start args = %v", st["args"])
 	}
 	if p := fh.call("agent.prompt").Params; p["target"] != "fixer" || p["text"] != "fix the tests" || p["wait"] != nil {
 		t.Fatalf("agent.prompt params = %v", p)
@@ -419,7 +431,7 @@ func TestLaunchDefaultsAndNaming(t *testing.T) {
 	if code != 200 || r.Agent.Name != "repo-3" || r.Agent.Agent != "pi" || r.Agent.PaneID != "w9:p2" {
 		t.Fatalf("launch = %d %+v", code, r)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,pane.list,agent.start" {
+	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,pane.list,agent.start,agent.get" {
 		t.Fatalf("calls = %s", got)
 	}
 	ws := fh.call("workspace.create").Params
@@ -507,16 +519,42 @@ func TestLaunchFailures(t *testing.T) {
 		t.Fatalf("calls = %s (no prompt after a failed start)", got)
 	}
 
-	// A pane whose shell is not ready yet is retried.
+	// A pane whose shell is not ready yet is retried, whether herdr
+	// reports it unavailable or busy (its shell still initializing).
+	for _, busyCode := range []string{"agent_pane_unavailable", "agent_pane_busy"} {
+		fh.set(func(f *fakeLaunchHerdr) {
+			f.calls = nil
+			f.agents = nil // the previous retry left its agent behind
+			f.startErr = []*herdr.Error{{Code: busyCode, Message: "not at a shell prompt"}, nil}
+		})
+		if code, r := launch(t, s, `{"dir":"`+root+`/Notes","kind":"pi"}`); code != 200 || r.Agent.Name != "notes" {
+			t.Fatalf("retry %s = %d %+v", busyCode, code, r)
+		}
+		if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.start,agent.get" {
+			t.Fatalf("retry %s calls = %s", busyCode, got)
+		}
+	}
+
+	// A launch that never becomes an active named agent — herdr admits
+	// agent.start but the name never activates — fails the launch with a
+	// clear error instead of leaving a worker no prompt can reach.
+	s.agentReadyPoll, s.agentReadyWait = 20*time.Millisecond, 100*time.Millisecond
 	fh.set(func(f *fakeLaunchHerdr) {
 		f.calls = nil
-		f.startErr = []*herdr.Error{{Code: "agent_pane_unavailable", Message: "not at a shell prompt"}, nil}
+		f.hook = func(method string, params map[string]any) (res any, err *herdr.Error, ok bool) {
+			if method == "agent.get" {
+				return nil, &herdr.Error{Code: "agent_not_found", Message: "agent target not found"}, true
+			}
+			return nil, nil, false
+		}
 	})
-	if code, r := launch(t, s, `{"dir":"`+root+`/Notes","kind":"pi"}`); code != 200 || r.Agent.Name != "notes" {
-		t.Fatalf("retry = %d %+v", code, r)
+	code, r = launch(t, s, `{"dir":"`+root+`/Notes","kind":"pi","prompt":"hi"}`)
+	if code != http.StatusBadGateway || r.Code != "launch_failed" || !strings.Contains(r.Message, "did not become an active named agent") ||
+		!strings.Contains(r.Message, `workspace "Notes" is left open`) {
+		t.Fatalf("never active = %d %+v", code, r)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.start" {
-		t.Fatalf("calls = %s", got)
+	if got := strings.Join(fh.methods(), ","); !strings.HasPrefix(got, "agent.list,workspace.create,agent.start,agent.get") || fh.call("agent.prompt") != nil {
+		t.Fatalf("never active calls = %s", got)
 	}
 }
 

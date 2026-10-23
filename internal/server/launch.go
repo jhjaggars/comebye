@@ -596,21 +596,57 @@ func firstPromptArgs(kind, prompt string) []string {
 	return nil
 }
 
-// startAgent runs agent.start, retrying briefly while herdr reports the
-// pane unavailable: a brand-new workspace's shell may still be starting
-// up (reading its rc files) when the first attempt arrives.
+// startAgent runs agent.start and then waits for the launch to become
+// an active named agent. It retries briefly while herdr reports the pane
+// unavailable: a brand-new workspace's shell may still be starting up
+// (reading its rc files) when the first attempt arrives, and herdr also
+// refuses a pane whose shell is not yet at its prompt with
+// agent_pane_busy. Once herdr admits the launch it waits for the name to
+// become promptable: herdr's socket API answers agent.start as soon as
+// the launch is queued, before the agent is detected in the pane and
+// ready for input, and agent.prompt refuses a name whose launch has not
+// activated ("is not an active named agent") — the wait mirrors what
+// herdr's own CLI does after agent.start.
 func (s *Server) startAgent(ctx context.Context, name, kind, pane string, args ...string) (herdr.AgentInfo, error) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		a, err := s.client.StartAgent(ctx, name, kind, pane, launchStartTimeout.Milliseconds(), args...)
+		if err == nil {
+			return a, s.waitForNamedAgent(ctx, name)
+		}
 		var he *herdr.Error
-		if err == nil || !errors.As(err, &he) || he.Code != "agent_pane_unavailable" || time.Now().After(deadline) {
+		if !errors.As(err, &he) || (he.Code != "agent_pane_unavailable" && he.Code != "agent_pane_busy") || time.Now().After(deadline) {
 			return a, err
 		}
 		select {
 		case <-ctx.Done():
 			return a, err
 		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// waitForNamedAgent polls agent.get until herdr resolves name to an
+// active named agent — the condition agent.prompt needs. herdr drops a
+// launch that never activates, so the wait is also where a broken
+// launch is reported instead of every later prompt failing with "is not
+// an active named agent".
+func (s *Server) waitForNamedAgent(ctx context.Context, name string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, s.agentReadyWait)
+	defer cancel()
+	for {
+		if _, err := s.client.GetAgent(waitCtx, name); err == nil {
+			return nil
+		} else {
+			var he *herdr.Error
+			if !errors.As(err, &he) {
+				return fmt.Errorf("agent %s: %w", name, err) // transport or parse error, not "not active yet"
+			}
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("agent %s did not become an active named agent within %s", name, s.agentReadyWait)
+		case <-time.After(s.agentReadyPoll):
 		}
 	}
 }

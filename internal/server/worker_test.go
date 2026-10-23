@@ -144,7 +144,7 @@ func TestWorkerCreate(t *testing.T) {
 	if agent["id"] != "desk/w9:p1" || agent["name"] != "fix-login" || agent["agent"] != "pi" {
 		t.Fatalf("agent = %v", agent)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,worktree.list,worktree.create,agent.start,agent.prompt" {
+	if got := strings.Join(fh.methods(), ","); got != "agent.list,worktree.list,worktree.create,agent.start,agent.get,agent.prompt" {
 		t.Fatalf("calls = %s", got)
 	}
 	c := fh.call("worktree.create").Params
@@ -170,7 +170,7 @@ func TestWorkerCreate(t *testing.T) {
 	if code != 200 || r["reused"] != true || r["agent"].(map[string]any)["pane_id"] != "w9:p2" {
 		t.Fatalf("reuse = %d %v", code, r)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,worktree.list,worktree.open,pane.list,agent.list,agent.start" {
+	if got := strings.Join(fh.methods(), ","); got != "agent.list,worktree.list,worktree.open,pane.list,agent.list,agent.start,agent.get" {
 		t.Fatalf("calls = %s", got)
 	}
 	if o := fh.call("worktree.open").Params; o["path"] != want || o["cwd"] != repo || o["focus"] != false || o["base"] != nil {

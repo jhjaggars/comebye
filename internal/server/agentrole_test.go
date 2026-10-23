@@ -669,8 +669,9 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 	// Other kinds: no extra arguments, the generic playbook.
 	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
 	do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"codex"}`)
-	if st := fh.call("agent.start"); st.Params["args"] != nil || !strings.Contains(fh.call("agent.prompt").Params["text"].(string), "--harness generic") {
-		t.Fatalf("codex = %v", st.Params)
+	codexArgs, _ := fh.call("agent.start").Params["args"].([]any)
+	if len(codexArgs) != 0 || !strings.Contains(fh.call("agent.prompt").Params["text"].(string), "--harness generic") {
+		t.Fatalf("codex = %v", fh.call("agent.start").Params)
 	}
 	// Without the preset, the coordinator directory is outside the roots.
 	if w := do(s, "POST", "/api/launch", nil, `{"dir":"`+coordDir+`","kind":"pi"}`); w.Code != http.StatusForbidden {
