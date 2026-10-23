@@ -73,7 +73,7 @@ type Config struct {
 	// may touch it besides the launch roots.
 	WorktreeRoot string
 	// StateDir holds the handoff ledger (ledger.json), the briefing
-	// (brief.json), the roles (roles.json) and an optional
+	// (brief.json) and its schedule (brief-schedule.json), the roles (roles.json) and an optional
 	// handoff-template.md. Empty turns handoffs and marks off.
 	StateDir string
 	// NoLedger turns the ledger (and the briefing and roles) off even with
@@ -120,9 +120,10 @@ type Server struct {
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
 	// brief and roles live next to the ledger (nil when it is).
-	brief *briefStore
-	roles *roleStore
-	coord coord
+	brief      *briefStore
+	briefSched *briefSchedStore
+	roles      *roleStore
+	coord      coord
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -152,6 +153,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		} else {
 			s.ledger = l
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
+			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
+				log.Printf("brief schedule: %v (starting with none)", err)
+				s.briefSched = &briefSchedStore{path: filepath.Join(cfg.StateDir, "brief-schedule.json")}
+			}
 			if s.roles, err = openRoles(filepath.Join(cfg.StateDir, "roles.json")); err != nil {
 				log.Printf("roles: %v (starting with none)", err)
 				s.roles = &roleStore{path: filepath.Join(cfg.StateDir, "roles.json"), data: map[string]Role{}}
@@ -222,6 +227,9 @@ func (s *Server) routes() {
 	// The briefing and the coordinator roles (hub side).
 	s.mux.HandleFunc("GET /api/brief", s.authAgent(s.handleGetBrief))
 	s.mux.HandleFunc("POST /api/brief", s.authAgent(s.handleSetBrief))
+	s.mux.HandleFunc("GET /api/brief/schedule", s.authAgent(s.handleGetBriefSchedule))
+	s.mux.HandleFunc("POST /api/brief/schedule", s.authAgent(s.handleSetBriefSchedule))
+	s.mux.HandleFunc("POST /api/brief/schedule/dismiss", s.authAgent(s.handleDismissBriefMiss))
 	s.mux.HandleFunc("GET /api/roles", s.authAgent(s.handleRoles))
 	s.mux.HandleFunc("POST /api/roles", s.auth(s.handleSetRole))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))

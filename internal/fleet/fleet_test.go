@@ -559,6 +559,30 @@ func TestPromptTimeout(t *testing.T) {
 	}
 }
 
+func TestCallAgent(t *testing.T) {
+	fp := newFakePeer(t)
+	f := New(nil, "desk", []Peer{{Name: "kube", URL: fp.url()}}, fastOpts(nil))
+	ctx := context.Background()
+	status, data, err := f.CallAgent(ctx, "kube", "wS:p1", "prompt", []byte(`{"text":"brief"}`))
+	if err != nil || status != http.StatusConflict || !strings.Contains(string(data), "agent_blocked") {
+		t.Fatalf("prompt = %d %s %v", status, data, err)
+	}
+	reqs := fp.requestsTo("/prompt")
+	if len(reqs) != 1 || reqs[0].method != "POST" || reqs[0].path != "/api/agents/wS:p1/prompt" || reqs[0].body != `{"text":"brief"}` {
+		t.Fatalf("forwarded = %+v", reqs)
+	}
+	for _, c := range []struct{ host, target, op string }{
+		{"nope", "wS:p1", "prompt"},
+		{"kube", "", "prompt"},
+		{"kube", "wS:p1", "launch"},
+		{"kube", "wS:p1", "subagent-transcript"},
+	} {
+		if _, _, err := f.CallAgent(ctx, c.host, c.target, c.op, []byte(`{}`)); err == nil {
+			t.Errorf("CallAgent(%v) accepted", c)
+		}
+	}
+}
+
 // fakePusher records Web Push notifications.
 type fakePusher struct {
 	mu   sync.Mutex

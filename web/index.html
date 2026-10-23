@@ -828,6 +828,18 @@
     .bf-body > :first-child { margin-top: 0; }
     .bf-body h2 { font-size: 15px; margin: 12px 0 4px; }
     .bf-body h2:first-child { margin-top: 2px; }
+    /* Missed scheduled briefings: the briefing is stale. */
+    .briefing.stale { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
+    .bf-toggle.static { cursor: default; padding-left: 14px; }
+    .bf-stale { margin: 0 14px 10px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--orange) 12%, var(--panel)); font-size: 13.5px; }
+    .bf-stale p { margin: 0 0 6px; color: var(--text); overflow-wrap: anywhere; }
+    .bf-stale-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .bf-stale-acts button {
+      min-height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--panel2); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+    }
+    .bf-stale-acts .bf-start { border-color: var(--blue); color: var(--blue); }
+    .bf-stale-acts button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
   </style>
 </head>
 <body>
@@ -944,6 +956,7 @@
       <div class="mark-state" id="d-mark-state" hidden></div>
       <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>
       <button type="button" role="menuitem" id="d-role">Make coordinator</button>
+      <button type="button" role="menuitem" id="d-sched" hidden>Briefing schedule…</button>
     </div>
     <main>
       <div id="chat"></div>

@@ -391,6 +391,43 @@ func TestPromptMarkBrief(t *testing.T) {
 	}
 }
 
+func TestBriefSchedule(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["GET /api/brief/schedule"] = answer{body: `{"schedule":{"enabled":false,"state":"off"}}`}
+	if code := run(e, "brief", "schedule"); code != 0 || !strings.Contains(out.String(), "Scheduled briefings are off.") {
+		t.Fatalf("show off: %d %s %s", code, out, errb)
+	}
+	// The first time needs --every; flags belong to schedule.
+	if code := run(e, "brief", "schedule", "--at", "08:00"); code != 2 || !strings.Contains(errb.String(), "--every is required") {
+		t.Fatalf("no every: %d %s", code, errb)
+	}
+	if code := run(e, "brief", "get", "--off"); code != 2 {
+		t.Fatalf("get --off: %d", code)
+	}
+	f.answers["POST /api/brief/schedule"] = answer{body: `{"schedule":{}}`}
+	if code := run(e, "brief", "schedule", "--every", "24h", "--at", "08:00", "--tz", "UTC"); code != 0 {
+		t.Fatalf("set: %d %s", code, errb)
+	}
+	var body map[string]any
+	json.Unmarshal([]byte(f.find("POST", "/api/brief/schedule").body), &body)
+	if body["enabled"] != true || body["every"] != "24h" || body["at"] != "08:00" || body["tz"] != "UTC" {
+		t.Fatalf("set body = %v", body)
+	}
+	f.answers["GET /api/brief/schedule"] = answer{body: `{"schedule":{"enabled":true,"every":"24h","at":"08:00","tz":"UTC","by":"me@example.com","updated":"2026-10-22T08:00:00Z",
+		"state":"ok","next":"2026-10-23T08:00:00Z","missed":{"id":"2026-10-22T08:00:00Z","since":"2026-10-22T08:00:00Z","count":2,"reason":"no_coordinator","dismissed":false}}}`}
+	out.Reset()
+	if code := run(e, "brief", "schedule"); code != 0 ||
+		!strings.Contains(out.String(), "every 24h at 08:00 UTC, set by me@example.com 1h ago") ||
+		!strings.Contains(out.String(), "Next: Fri Oct 23 08:00 UTC") ||
+		!strings.Contains(out.String(), "Missed 2 scheduled briefing(s) since Thu Oct 22 08:00 UTC: no coordinator was running") {
+		t.Fatalf("show: %d %s", code, out)
+	}
+	f.answers["POST /api/brief/schedule/dismiss"] = answer{body: `{"schedule":{}}`}
+	if code := run(e, "brief", "schedule", "--dismiss"); code != 0 || f.find("POST", "/api/brief/schedule/dismiss").body != `{"id":"2026-10-22T08:00:00Z"}` {
+		t.Fatalf("dismiss: %d %s", code, errb)
+	}
+}
+
 func TestPlaybookPresetsWhoami(t *testing.T) {
 	_, e, out, errb := newFake(t)
 	for h, want := range map[string]string{"pi": "name: coordinator", "claude": "(Claude Code)", "generic": "# Comebye coordinator playbook"} {

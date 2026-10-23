@@ -35,6 +35,7 @@ with the matches listed.
 | `comebye mark AGENT --reason R [--discard]` | propose removing a session, or discarding its work |
 | `comebye unmark AGENT` | withdraw that proposal |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
+| `comebye brief schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss]` | show or set when the hub asks a coordinator for a briefing |
 
 Your harness may have its own tools for listing or messaging sessions
 (Claude Code's ListAgents and SendMessage, for one). Do not use them for
@@ -133,6 +134,20 @@ blocked). Keep it short; the user reads it on a phone. Format:
 
 One section per project, most urgent first. Mention sessions you marked
 ready to remove so the user knows to review them.
+
+**Scheduled briefings.** The user can have the hub ask for a briefing on
+a schedule; it is off unless someone turns it on. When the user asks for
+one ("brief me every morning at 8", "every 12 hours", "stop the daily
+briefing"), set it yourself:
+`comebye brief schedule --every 24h --at 08:00 --tz <their IANA zone>`,
+`--every 12h`, or `--off`. With no flags it shows the schedule, when the
+next one is due and any missed runs. When a scheduled run is due, the hub
+sends an idle coordinator a message that starts with "Scheduled
+briefing": catch up from the ledger and the workers' reports since the
+last briefing and publish one with `comebye brief set`, even a short "no
+changes" one; an unanswered request counts as a missed run. If the user
+says they do not want to hear about missed runs, `comebye brief schedule
+--dismiss` hides the note until the next streak.
 
 ## Rules
 

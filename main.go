@@ -206,6 +206,7 @@ func main() {
 		CoordinatorArgs: parseKindArgs(coordArgs),
 	}, client, manager)
 	go srv.RunLedger(context.Background())
+	go srv.RunBriefSchedule(context.Background())
 
 	go func() {
 		sig := make(chan os.Signal, 1)

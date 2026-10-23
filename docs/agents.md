@@ -180,6 +180,27 @@ rendered like agent replies (sanitized). Collapse it, or dismiss it until
 the next one is published. Stored on the hub as `brief.json` (64 KB at
 most).
 
+**Scheduled briefings.** The hub can ask a coordinator for a briefing on
+a schedule: off by default, set from the briefing card or a
+coordinator's ⋮ menu ("Briefing schedule…", e.g. `24h at 08:00`), or by
+a coordinator (`comebye brief schedule --every 24h --at 08:00`). Slots
+fall every interval (1h to 30 days), from a time of day in a time zone
+when given (whole days follow the calendar across DST), else from when it
+was set; the slot under way when it is set does not fire. At a slot the
+hub prompts an idle coordinator (the hub's own first, else the most
+recently made one, on any host) to catch up and `comebye brief set`. Any
+briefing published after the slot satisfies it, a hand-made one too.
+
+A slot is missed when no coordinator is running (counted at once), when
+the coordinator stays busy until the next slot, or when it was asked and
+published nothing. Misses form a streak: the card shows the briefing as
+stale with how many runs were missed since when and why, plus "Start
+coordinator" (the + sheet's Coordinator preset) and "Dismiss". Dismissing
+is stored on the hub, so it applies on every device, and only hides that
+streak; the next briefing ends it. Missed slots are never replayed and no
+notification is pushed for them. Stored on the hub as
+`brief-schedule.json`.
+
 **The CLI.** The same `comebye` binary runs the command line when its
 first argument is a command (`comebye` with flags, or none, is the
 server). Add `--json` for machine-readable output; the exit status is 0 on
@@ -196,6 +217,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. |
 | `comebye mark AGENT --reason R [--discard]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. |
 | `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
+| `comebye brief schedule [--every D] [--at HH:MM\|none] [--tz ZONE] [--off] [--dismiss]` | Show the briefing schedule (next run, missed runs), set it (flags left out keep their values), turn it off, or dismiss the missed-runs note. |
 | `comebye playbook [--harness pi\|claude\|generic]` | The coordinator playbook (`pi`: a Pi agent definition with frontmatter; `claude`: for a CLAUDE.md or first prompt). |
 | `comebye presets claude\|pi\|generic` | How to let that harness run `comebye` without asking each time. |
 | `comebye whoami` | Who the caller is to Comebye: agent id, host, role, hub. |
@@ -218,7 +240,7 @@ restricted *agent role*. It may read (agents, hosts, transcripts and
 output, the ledger, inspections of an agent's git state, the briefing,
 roles, the playbook) and take the workflow's steps: hand off, prompt an
 agent, mark and unmark (proposing a discard included), publish the
-briefing. It cannot prompt or mark itself, must give a reason to mark,
+briefing and set its schedule. It cannot prompt or mark itself, must give a reason to mark,
 and cannot mark a coordinator. Everything else is 403 for it: keys,
 dialog answers, images, launching, the worker API, removals and their
 confirmation, roles, push. **Confirming a removal is always yours**, in

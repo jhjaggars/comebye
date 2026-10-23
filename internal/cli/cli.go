@@ -58,7 +58,7 @@ func init() {
 		{"prompt", "AGENT TEXT|- [--json]", "send an agent a message", cmdPrompt},
 		{"mark", "AGENT --reason R [--discard] [--json]", "propose removing a session, or discarding its work (the user confirms in the app)", cmdMark},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
-		{"brief", "set FILE|- | get [--json]", "publish or read the briefing shown in the app", cmdBrief},
+		{"brief", "set FILE|- | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
 		{"presets", "claude|pi|generic", "print how to let a harness run comebye without prompts", cmdPresets},
 		{"whoami", "[--json]", "who this agent is to Comebye: id, host, hub", cmdWhoami},
@@ -1033,18 +1033,32 @@ func cmdUnmark(e *Env, args []string) error {
 func cmdBrief(e *Env, args []string) error {
 	fs := flag.NewFlagSet("brief", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
+	every := fs.String("every", "", "schedule: brief every D (a duration: 24h, 12h; 1h to 720h)")
+	at := fs.String("at", "", "schedule: at this time of day (HH:MM; none for no time of day)")
+	tz := fs.String("tz", "", "schedule: the time zone of --at (IANA, e.g. Europe/Berlin; default the hub's)")
+	off := fs.Bool("off", false, "schedule: turn scheduled briefings off")
+	dismiss := fs.Bool("dismiss", false, "schedule: dismiss the note about missed scheduled briefings")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) == 0 {
-		return usageErr("want set FILE|- or get")
+		return usageErr("want set FILE|-, get or schedule")
+	}
+	setsSchedule := *every != "" || *at != "" || *tz != "" || *off || *dismiss
+	if setsSchedule && pos[0] != "schedule" {
+		return usageErr("--every, --at, --tz, --off and --dismiss go with brief schedule")
 	}
 	c, err := newClient(e)
 	if err != nil {
 		return err
 	}
 	switch pos[0] {
+	case "schedule":
+		if len(pos) != 1 {
+			return usageErr("brief schedule takes flags only")
+		}
+		return briefSchedule(e, c, *asJSON, *every, *at, *tz, *off, *dismiss)
 	case "set":
 		if len(pos) != 2 {
 			return usageErr("want brief set FILE (or - for stdin)")
@@ -1093,7 +1107,148 @@ func cmdBrief(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Briefing from %s, %s:\n\n%s\n", dash(r.Brief.By), ago(e, r.Brief.At), strings.TrimRight(r.Brief.Markdown, "\n"))
 		return nil
 	}
-	return usageErr("unknown brief action %q (want set or get)", pos[0])
+	return usageErr("unknown brief action %q (want set, get or schedule)", pos[0])
+}
+
+// briefSched is the hub's schedule as GET /api/brief/schedule has it.
+type briefSched struct {
+	Enabled    bool       `json:"enabled"`
+	Every      string     `json:"every"`
+	At         string     `json:"at"`
+	TZ         string     `json:"tz"`
+	By         string     `json:"by"`
+	Updated    time.Time  `json:"updated"`
+	State      string     `json:"state"`
+	Next       *time.Time `json:"next"`
+	PromptedAt *time.Time `json:"prompted_at"`
+	PromptedTo string     `json:"prompted_to"`
+	Missed     *struct {
+		ID        string    `json:"id"`
+		Since     time.Time `json:"since"`
+		Count     int       `json:"count"`
+		Reason    string    `json:"reason"`
+		Dismissed bool      `json:"dismissed"`
+	} `json:"missed"`
+}
+
+// briefSchedule shows the schedule, or sets it (flags not given keep
+// their current values), or turns it off, or dismisses missed runs.
+func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz string, off, dismiss bool) error {
+	get := func() (*briefSched, []byte, error) {
+		data, err := c.raw("GET", "/api/brief/schedule", nil, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		var r struct {
+			Schedule briefSched `json:"schedule"`
+		}
+		if err := json.Unmarshal(data, &r); err != nil {
+			return nil, nil, fmt.Errorf("unexpected answer: %v", err)
+		}
+		return &r.Schedule, data, nil
+	}
+	cur, data, err := get()
+	if err != nil {
+		return err
+	}
+	switch {
+	case off && (every != "" || at != "" || tz != ""):
+		return usageErr("--off takes no --every, --at or --tz")
+	case dismiss:
+		if cur.Missed == nil {
+			return fmt.Errorf("no missed scheduled briefings to dismiss")
+		}
+		if _, err := c.raw("POST", "/api/brief/schedule/dismiss", nil, map[string]string{"id": cur.Missed.ID}); err != nil {
+			return err
+		}
+	case off:
+		if _, err := c.raw("POST", "/api/brief/schedule", nil, map[string]any{"enabled": false}); err != nil {
+			return err
+		}
+	case every != "" || at != "" || tz != "":
+		if every == "" {
+			every = cur.Every
+		}
+		if every == "" {
+			return usageErr("--every is required the first time (e.g. --every 24h)")
+		}
+		switch at {
+		case "":
+			at = cur.At
+		case "none":
+			at = ""
+		}
+		if tz == "" {
+			tz = cur.TZ
+		}
+		if _, err := c.raw("POST", "/api/brief/schedule", nil, map[string]any{"enabled": true, "every": every, "at": at, "tz": tz}); err != nil {
+			return err
+		}
+	}
+	if dismiss || off || every != "" {
+		if cur, data, err = get(); err != nil {
+			return err
+		}
+	}
+	if asJSON {
+		return rawJSON(e, data)
+	}
+	when := func(t time.Time) string {
+		if cur.TZ != "" {
+			if loc, err := time.LoadLocation(cur.TZ); err == nil {
+				t = t.In(loc)
+			}
+		}
+		return t.Format("Mon Jan 2 15:04 MST")
+	}
+	if !cur.Enabled {
+		fmt.Fprint(e.Stdout, "Scheduled briefings are off.")
+		if cur.Every != "" {
+			fmt.Fprintf(e.Stdout, " (Last set to every %s%s; turn on again with brief schedule --every %s.)", cur.Every, atText(cur.At, cur.TZ), cur.Every)
+		}
+		fmt.Fprintln(e.Stdout)
+		return nil
+	}
+	fmt.Fprintf(e.Stdout, "Scheduled briefings: every %s%s, set by %s %s.\n", cur.Every, atText(cur.At, cur.TZ), dash(cur.By), ago(e, cur.Updated))
+	if cur.Next != nil {
+		fmt.Fprintf(e.Stdout, "Next: %s.\n", when(*cur.Next))
+	}
+	switch cur.State {
+	case "prompted":
+		fmt.Fprintf(e.Stdout, "Asked %s for this one %s; waiting for it to publish.\n", dash(cur.PromptedTo), ago(e, *cur.PromptedAt))
+	case "waiting":
+		fmt.Fprintln(e.Stdout, "Due now; waiting for a coordinator to be idle.")
+	}
+	if m := cur.Missed; m != nil {
+		dis := ""
+		if m.Dismissed {
+			dis = " (dismissed)"
+		}
+		fmt.Fprintf(e.Stdout, "Missed %d scheduled briefing(s) since %s: %s%s.\n", m.Count, when(m.Since), missText(m.Reason), dis)
+	}
+	return nil
+}
+
+func atText(at, tz string) string {
+	switch {
+	case at == "":
+		return ""
+	case tz == "":
+		return " at " + at
+	}
+	return " at " + at + " " + tz
+}
+
+func missText(reason string) string {
+	switch reason {
+	case "no_coordinator":
+		return "no coordinator was running"
+	case "busy":
+		return "the coordinator stayed busy"
+	case "no_briefing":
+		return "the coordinator was asked but published nothing"
+	}
+	return reason
 }
 
 // ---- playbook / presets (local, no server) ----

@@ -38,8 +38,8 @@ Treat access to it like SSH access to that machine.
 - **Agents get a restricted role, not a boundary.** The `comebye` CLI
   authenticates with the local agent token (`<state-dir>/agent-token`,
   0600, compared in constant time; a wrong token is refused, never treated
-  as the user). That role may read, hand off, prompt, mark and publish the
-  briefing, and nothing else (no keys, answers, launches, removals or
+  as the user). That role may read, hand off, prompt, mark, publish the
+  briefing and set its schedule, and nothing else (no keys, answers, launches, removals or
   their confirmation). It keeps a well-behaved coordinator inside the
   workflow; an agent with a shell could still read the token, forge the
   identity header or run git itself, so the real safeguard is that you

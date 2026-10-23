@@ -262,7 +262,8 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"roles": s.liveRoles()})
 }
 
-// handleGetBrief answers {brief: {markdown, by, at} | null}.
+// handleGetBrief answers {brief: {markdown, by, at} | null, schedule}
+// (the schedule as GET /api/brief/schedule has it, so the app polls once).
 func (s *Server) handleGetBrief(w http.ResponseWriter, r *http.Request) {
 	if s.ledgerOff(w, r) {
 		return
@@ -272,7 +273,7 @@ func (s *Server) handleGetBrief(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "brief_error", "message": err.Error()})
 		return
 	}
-	writeJSON(w, map[string]any{"brief": b})
+	writeJSON(w, map[string]any{"brief": b, "schedule": s.briefSchedView(time.Now())})
 }
 
 // handleSetBrief publishes a briefing: POST {markdown} (at most 64 KB).

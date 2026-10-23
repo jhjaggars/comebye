@@ -19,7 +19,8 @@ import (
 // "agent" role, which may only read (agents, hosts, transcripts, output,
 // the ledger, inspections of an agent's git state, the briefing, roles,
 // the playbook) and do the workflow's steps: hand off, prompt an agent,
-// mark or unmark (proposing a discard included), publish the briefing.
+// mark or unmark (proposing a discard included), publish the briefing and
+// set its schedule (or dismiss a streak of missed scheduled briefings).
 // Everything else (keys, answers, images, launching, workers, removals and
 // their confirmation, push) is the user's alone: 403.
 //

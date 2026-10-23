@@ -635,8 +635,15 @@ function renderRemovalBanner() {
 // (`comebye brief set`); it shows as a card at the top of the list. The
 // card can be collapsed, or dismissed: a dismissed briefing stays hidden
 // until a newer one is published (remembered per browser by its time).
+//
+// The hub can also ask a coordinator for one on a schedule (off by
+// default; set here or by a coordinator, `comebye brief schedule`). When
+// scheduled runs are missed (no coordinator running, or it never
+// published), the card says the briefing is stale and why, with a way to
+// start a coordinator. Dismissing that note is stored on the hub, for this
+// streak of misses only; the next briefing ends the streak.
 
-const briefing = { data: null, loadedAt: 0, inflight: false };
+const briefing = { data: null, schedule: null, loadedAt: 0, inflight: false };
 const BRIEF_DISMISSED_KEY = "comebye-brief-dismissed";
 const BRIEF_COLLAPSED_KEY = "comebye-brief-collapsed";
 
@@ -645,11 +652,12 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 
 async function loadBrief() {
   if (briefing.inflight) return;
-  if (ledger.on !== true) { briefing.data = null; renderBrief(); return; }
+  if (ledger.on !== true) { briefing.data = null; briefing.schedule = null; renderBrief(); return; }
   briefing.inflight = true;
   try {
     const d = await api("/api/brief");
     briefing.data = d && d.brief && typeof d.brief.markdown === "string" ? d.brief : null;
+    briefing.schedule = d && d.schedule && typeof d.schedule === "object" ? d.schedule : null;
   } catch {
     // Keep what we had: a failed poll should not make the card blink.
   } finally {
@@ -659,50 +667,143 @@ async function loadBrief() {
   renderBrief();
 }
 
+const MISS_REASONS = {
+  no_coordinator: "no coordinator is running",
+  busy: "the coordinator stayed busy",
+  no_briefing: "the coordinator was asked but published nothing",
+};
+
+// briefMiss is the streak of missed scheduled briefings to show, if any.
+function briefMiss() {
+  const m = briefing.schedule && briefing.schedule.enabled ? briefing.schedule.missed : null;
+  return m && !m.dismissed && m.count > 0 ? m : null;
+}
+
+function fmtWhen(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  return new Date(t).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+function missNote(m, hasBrief) {
+  const runs = m.count === 1 ? "1 scheduled run" : `${m.count} scheduled runs`;
+  const why = MISS_REASONS[m.reason] || m.reason;
+  const text = `${hasBrief ? "Stale: " : ""}${runs} missed since ${fmtWhen(m.since)}; ${why}.`;
+  return `<div class="bf-stale" role="status">
+      <p>${esc(text)}</p>
+      <div class="bf-stale-acts">
+        ${m.reason === "no_coordinator" ? `<button type="button" class="bf-start">Start coordinator</button>` : ""}
+        <button type="button" class="bf-sched">Schedule…</button>
+        <button type="button" class="bf-ack">Dismiss</button>
+      </div>
+    </div>`;
+}
+
 function renderBrief() {
   const el = $("briefing");
   if (!el) return;
-  const b = briefing.data;
-  if (!b || !b.markdown.trim() || lsGet(BRIEF_DISMISSED_KEY) === b.at) {
+  let b = briefing.data;
+  if (b && (!b.markdown.trim() || lsGet(BRIEF_DISMISSED_KEY) === b.at)) b = null;
+  const miss = briefMiss();
+  if (!b && !miss) {
     el.hidden = true;
     el.innerHTML = "";
     delete el.dataset.sig;
     return;
   }
-  const folded = lsGet(BRIEF_COLLAPSED_KEY) === b.at;
-  const at = Date.parse(b.at);
-  const when = Number.isNaN(at) ? "" : ` · ${fmtAgo(at)} ago`;
-  const sig = b.at + "|" + folded;
+  const folded = !!b && lsGet(BRIEF_COLLAPSED_KEY) === b.at;
+  const sched = briefing.schedule;
+  const every = sched && sched.enabled ? ` · every ${sched.every}${sched.at ? " at " + sched.at : ""}` : "";
+  const metaText = () => {
+    if (!b) return `none to show${every}`;
+    const at = Date.parse(b.at);
+    return `from ${b.by || "a coordinator"}${Number.isNaN(at) ? "" : ` · ${fmtAgo(at)} ago`}${every}`;
+  };
+  const sig = [b ? b.at : "", folded, every, miss ? `${miss.id}|${miss.count}|${miss.reason}` : ""].join("|");
   el.hidden = false;
+  el.classList.toggle("stale", !!miss);
   if (el.dataset.sig === sig) {
     // Same briefing, same state: only the age moves.
     const meta = el.querySelector(".bf-meta");
-    if (meta) meta.textContent = `from ${b.by || "a coordinator"}${when}`;
+    if (meta) meta.textContent = metaText();
     return;
   }
   el.dataset.sig = sig;
-  el.innerHTML = `<div class="bf-head">
-      <button type="button" class="bf-toggle" aria-expanded="${!folded}" aria-controls="bf-body">
+  const head = b
+    ? `<button type="button" class="bf-toggle" aria-expanded="${!folded}" aria-controls="bf-body">
         <span class="proj-chev" aria-hidden="true"></span>
         <span class="bf-title">Briefing</span>
-        <span class="bf-meta">${esc(`from ${b.by || "a coordinator"}${when}`)}</span>
+        <span class="bf-meta">${esc(metaText())}</span>
       </button>
-      <button type="button" class="bf-dismiss" aria-label="Dismiss this briefing">&#10005;</button>
-    </div>
-    <div class="bf-body md" id="bf-body"${folded ? " hidden" : ""}>${renderMarkdown(b.markdown, "brief:" + b.at)}</div>`;
+      <button type="button" class="bf-dismiss" aria-label="Dismiss this briefing">&#10005;</button>`
+    : `<div class="bf-toggle static"><span class="bf-title">Briefing</span><span class="bf-meta">${esc(metaText())}</span></div>`;
+  el.innerHTML = `<div class="bf-head">${head}</div>
+    ${miss ? missNote(miss, !!b) : ""}
+    ${b ? `<div class="bf-body md" id="bf-body"${folded ? " hidden" : ""}>${renderMarkdown(b.markdown, "brief:" + b.at)}</div>` : ""}`;
 }
 
-function onBriefClick(ev) {
+async function onBriefClick(ev) {
   const b = briefing.data;
-  if (!b) return;
-  if (ev.target.closest(".bf-dismiss")) {
+  if (ev.target.closest(".bf-start")) {
+    openLaunch();
+    setLaunchMode("coordinator");
+  } else if (ev.target.closest(".bf-sched")) {
+    editBriefSchedule();
+  } else if (ev.target.closest(".bf-ack")) {
+    const m = briefMiss();
+    if (!m) return;
+    try {
+      const d = await api("/api/brief/schedule/dismiss", { method: "POST", body: JSON.stringify({ id: m.id }) });
+      if (d && d.schedule) briefing.schedule = d.schedule;
+    } catch (e) {
+      toast(e.message, true);
+    }
+    renderBrief();
+  } else if (b && ev.target.closest(".bf-dismiss")) {
     lsSet(BRIEF_DISMISSED_KEY, b.at);
     renderBrief();
     toast("Briefing dismissed until the next one");
-  } else if (ev.target.closest(".bf-toggle")) {
+  } else if (b && ev.target.closest(".bf-toggle")) {
     lsSet(BRIEF_COLLAPSED_KEY, lsGet(BRIEF_COLLAPSED_KEY) === b.at ? "" : b.at);
     renderBrief();
   }
+}
+
+// parseBriefSchedule reads "24h", "12h at 08:00", "2d at 7:30" or "90m".
+function parseBriefSchedule(text) {
+  const m = /^\s*(\d+)\s*(d|h|m)?\s*(?:at\s+(\d{1,2}):(\d{2}))?\s*$/i.exec(text);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = (m[2] || "h").toLowerCase();
+  const every = unit === "d" ? `${n * 24}h` : `${n}${unit}`;
+  return { every, at: m[3] ? `${m[3].padStart(2, "0")}:${m[4]}` : "" };
+}
+
+// editBriefSchedule asks for the schedule: an interval, optionally a time
+// of day (in this device's time zone); empty turns it off.
+async function editBriefSchedule() {
+  toggleDetailMenu(false);
+  const sc = briefing.schedule || {};
+  const cur = sc.enabled ? `${sc.every}${sc.at ? " at " + sc.at : ""}` : "";
+  const text = prompt("Ask a coordinator for a briefing every… (e.g. 24h at 08:00, 12h, 2d at 7:30). Leave empty to turn scheduled briefings off.", cur);
+  if (text === null) return;
+  let body = { enabled: false };
+  if (text.trim()) {
+    const p = parseBriefSchedule(text);
+    if (!p) { toast("Write an interval like 24h, optionally with a time: 24h at 08:00", true); return; }
+    let tz = "";
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch {}
+    body = { enabled: true, every: p.every, at: p.at, tz: p.at ? tz : "" };
+  }
+  try {
+    const d = await api("/api/brief/schedule", { method: "POST", body: JSON.stringify(body) });
+    if (d && d.schedule) briefing.schedule = d.schedule;
+    const s = briefing.schedule || {};
+    toast(s.enabled ? `Briefing every ${s.every}${s.at ? " at " + s.at : ""}` : "Scheduled briefings off");
+  } catch (e) {
+    toast(e.message, true);
+  }
+  renderBrief();
 }
 
 /* ---------- marking a session ready to remove (detail view menu) ---------- */
@@ -718,6 +819,7 @@ function renderDetailMenu() {
   if (m) st.textContent = "Marked ready to remove" + (m.reason ? ": " + m.reason : "");
   const coord = isCoordinator(agentById(state.selected));
   $("d-role").textContent = coord ? "Not coordinator" : "Make coordinator";
+  $("d-sched").hidden = !coord;
 }
 
 // toggleRole makes the viewed agent a coordinator (pinned in the list,
@@ -3470,6 +3572,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
   $("d-role").addEventListener("click", toggleRole);
+  $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);
   document.addEventListener("click", (ev) => {
     if (!$("d-menu").hidden && !$("d-menu").contains(ev.target)) toggleDetailMenu(false);

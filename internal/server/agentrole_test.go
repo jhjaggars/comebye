@@ -131,6 +131,9 @@ func TestAgentRoleAllowlist(t *testing.T) {
 		{"POST", "/api/marks/clear", `{"agent_id":"desk/w2:p1"}`, 200},
 		{"GET", "/api/brief", "", 200},
 		{"POST", "/api/brief", `{"markdown":"# hi"}`, 200},
+		{"GET", "/api/brief/schedule", "", 200},
+		{"POST", "/api/brief/schedule", `{"enabled":true,"every":"24h"}`, 200},
+		{"POST", "/api/brief/schedule/dismiss", `{}`, 404}, // nothing missed: but allowed
 		{"GET", "/api/roles", "", 200},
 	}
 	for _, c := range allowed {
@@ -299,7 +302,7 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestBriefStorage(t *testing.T) {
 	s, _, dir := coordServer(t)
-	if w := do(s, "GET", "/api/brief", userHdr, ""); w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"brief":null}` {
+	if w := do(s, "GET", "/api/brief", userHdr, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"brief":null`) || !strings.Contains(w.Body.String(), `"state":"off"`) {
 		t.Fatalf("empty = %d %s", w.Code, w.Body)
 	}
 	w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"## proj\n**Finished:** feat/x"}`)

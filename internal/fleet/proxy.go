@@ -148,6 +148,33 @@ func (f *Fleet) CallHost(ctx context.Context, host, op string, query url.Values,
 		}
 	}
 	u.RawQuery = q.Encode()
+	return f.call(ctx, host, spec.proxyOp, u, body)
+}
+
+// CallAgent makes one per-agent call (an op of proxyOps, e.g. prompt) to
+// an agent on the peer named host as the hub itself; the answer is
+// returned as CallHost's is. The hub's scheduled briefing prompts a
+// coordinator on a peer this way.
+func (f *Fleet) CallAgent(ctx context.Context, host, target, op string, body []byte) (int, []byte, error) {
+	p := f.byName[host]
+	if p == nil {
+		return 0, nil, errors.New("no such host: " + host)
+	}
+	spec, ok := proxyOps[op]
+	if !ok || op == "subagent-transcript" {
+		return 0, nil, errors.New("not a proxied operation: " + op)
+	}
+	if !ValidTarget(target) {
+		return 0, nil, errors.New("invalid agent")
+	}
+	if spec.bodyTimeout != nil {
+		spec.timeout = spec.bodyTimeout(body)
+	}
+	return f.call(ctx, host, spec, p.endpoint("api", "agents", target, op), body)
+}
+
+// call sends one request of the hub's own to a peer.
+func (f *Fleet) call(ctx context.Context, host string, spec proxyOp, u *url.URL, body []byte) (int, []byte, error) {
 	var rd io.Reader
 	if spec.method == http.MethodPost {
 		if int64(len(body)) > spec.maxBody || !json.Valid(body) {
