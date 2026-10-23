@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -193,6 +195,17 @@ type Dispatcher struct {
 	// HoldFor is how long an agent's unanswered notification holds back
 	// its next ones (default DefaultHoldFor; negative disables holding).
 	HoldFor time.Duration
+	// Kinds selects the notifications sent (KindBlocked, KindQuestion,
+	// KindDone); nil sends all of them.
+	Kinds map[string]bool
+	// DoneDigest, when positive, collects "done" notifications for that
+	// long after the first one and sends them as one (a single agent's
+	// as usual). Questions are never delayed.
+	DoneDigest time.Duration
+	// BlockedDelay, when positive, holds a "needs input" notification
+	// that long and drops it if the agent left blocked meanwhile (it
+	// worked through the block on its own, or someone answered).
+	BlockedDelay time.Duration
 
 	mu sync.Mutex
 	// held maps an agent key to when it was last notified. Until the user
@@ -201,6 +214,73 @@ type Dispatcher struct {
 	// agent, not one per prompt.
 	held map[string]time.Time
 	now  func() time.Time
+	// digest holds the "done" notifications waiting for the digest, by
+	// agent key; digestArmed while its timer runs. after starts the timer
+	// (time.AfterFunc; tests replace it).
+	digest      map[string]digestEntry
+	digestArmed bool
+	// blocked holds the "needs input" notifications waiting out
+	// BlockedDelay, by agent key; blockedSeq tells a timer whether its
+	// entry is still the one it was started for.
+	blocked    map[string]blockedEntry
+	blockedSeq uint64
+	after      func(time.Duration, func())
+}
+
+// blockedEntry is a "needs input" waiting out BlockedDelay.
+type blockedEntry struct {
+	a      herdr.AgentInfo
+	ref    Ref
+	latest LatestFunc
+	seq    uint64
+}
+
+// afterFunc runs f after t (time.AfterFunc unless a test replaced it).
+func (d *Dispatcher) afterFunc(t time.Duration, f func()) {
+	if d.after != nil {
+		d.after(t, f)
+		return
+	}
+	time.AfterFunc(t, f)
+}
+
+// The kinds of notification, for Dispatcher.Kinds.
+const (
+	KindBlocked  = "blocked"  // the agent needs input
+	KindQuestion = "question" // it finished on a question
+	KindDone     = "done"     // it finished
+)
+
+// ParseKinds reads a comma-separated list of notification kinds
+// ("blocked,question,done"; "none" for no notifications).
+func ParseKinds(s string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if strings.TrimSpace(s) == "none" {
+		return out, nil
+	}
+	for _, k := range strings.Split(s, ",") {
+		switch k = strings.ToLower(strings.TrimSpace(k)); k {
+		case KindBlocked, KindQuestion, KindDone:
+			out[k] = true
+		case "":
+		default:
+			return nil, fmt.Errorf("unknown notification kind %q (want blocked, question, done or none)", k)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no notification kinds (use none to turn them all off)")
+	}
+	return out, nil
+}
+
+func (d *Dispatcher) kindOn(k string) bool { return d.Kinds == nil || d.Kinds[k] }
+
+// digestEntry is one "done" waiting for the digest.
+type digestEntry struct {
+	a      herdr.AgentInfo
+	ref    Ref
+	latest *transcript.Latest
+	at     time.Time
 }
 
 func (d *Dispatcher) clock() time.Time {
@@ -246,16 +326,17 @@ func (d *Dispatcher) heldLocked(a *herdr.AgentInfo, ref Ref, now time.Time) bool
 }
 
 // claim marks ref as notified unless an earlier notification is still
-// unanswered, reporting whether the caller may send.
-func (d *Dispatcher) claim(a *herdr.AgentInfo, ref Ref) bool {
+// unanswered, reporting whether the caller may send and the claim's time
+// (for unclaim).
+func (d *Dispatcher) claim(a *herdr.AgentInfo, ref Ref) (bool, time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := d.clock()
 	if d.heldLocked(a, ref, now) {
-		return false
+		return false, now
 	}
 	if d.holdFor() < 0 {
-		return true
+		return true, now
 	}
 	if d.held == nil {
 		d.held = map[string]time.Time{}
@@ -266,7 +347,16 @@ func (d *Dispatcher) claim(a *herdr.AgentInfo, ref Ref) bool {
 		pruneBefore(d.held, now.Add(-d.holdFor()))
 	}
 	d.held[ref.Key] = now
-	return true
+	return true, now
+}
+
+// unclaim takes back a claim made at at that sent nothing.
+func (d *Dispatcher) unclaim(ref Ref, at time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if t, ok := d.held[ref.Key]; ok && t.Equal(at) {
+		delete(d.held, ref.Key)
+	}
 }
 
 func (d *Dispatcher) channels() (ntfyOn, pushOn bool) {
@@ -276,15 +366,25 @@ func (d *Dispatcher) channels() (ntfyOn, pushOn bool) {
 	return d.Ntfy.enabled(), d.Push != nil && d.Push.Active()
 }
 
-// Observe records a status transition of a. An agent going back to
+// Observe records a status transition of a. Leaving blocked drops a
+// "needs input" still waiting out BlockedDelay. An agent going back to
 // working was answered (from the app or its terminal), which releases
 // its held notifications. Call it for every transition, before Wants.
 func (d *Dispatcher) Observe(a *herdr.AgentInfo, ref Ref) {
-	if d == nil || a.Status != herdr.StatusWorking {
+	if d == nil {
+		return
+	}
+	if a.Status != herdr.StatusBlocked {
+		d.mu.Lock()
+		delete(d.blocked, ref.Key)
+		d.mu.Unlock()
+	}
+	if a.Status != herdr.StatusWorking {
 		return
 	}
 	d.mu.Lock()
 	delete(d.held, ref.Key)
+	delete(d.digest, ref.Key) // answered before the digest went out
 	d.mu.Unlock()
 }
 
@@ -292,7 +392,16 @@ func (d *Dispatcher) Observe(a *herdr.AgentInfo, ref Ref) {
 // produce a notification right now (before throttling). Callers use it to
 // skip fetching an excerpt that would be thrown away.
 func (d *Dispatcher) Wants(a *herdr.AgentInfo, ref Ref) bool {
-	if a.Status != herdr.StatusBlocked && a.Status != herdr.StatusDone {
+	switch a.Status {
+	case herdr.StatusBlocked:
+		if !d.kindOn(KindBlocked) {
+			return false
+		}
+	case herdr.StatusDone:
+		if !d.kindOn(KindDone) && !d.kindOn(KindQuestion) {
+			return false
+		}
+	default:
 		return false
 	}
 	ntfyOn, pushOn := d.channels()
@@ -310,10 +419,55 @@ func (d *Dispatcher) Wants(a *herdr.AgentInfo, ref Ref) bool {
 	return !held
 }
 
-// Notify sends the notifications for a's transition into blocked or done.
-// It may block on latest and on the ntfy post; run it off any lock.
+// Notify sends the notifications for a's transition into blocked or done
+// (a "done" may wait for the digest). It may block on latest and on the
+// ntfy post; run it off any lock.
 func (d *Dispatcher) Notify(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
-	if !d.Wants(a, ref) || !d.claim(a, ref) {
+	if !d.Wants(a, ref) {
+		return
+	}
+	if a.Status == herdr.StatusBlocked && d.BlockedDelay > 0 {
+		d.delayBlocked(a, ref, latestFn)
+		return
+	}
+	d.deliver(a, ref, latestFn)
+}
+
+// delayBlocked waits out BlockedDelay before notifying that a needs
+// input; Observe drops the wait when a leaves blocked. A wait under way
+// is not restarted.
+func (d *Dispatcher) delayBlocked(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
+	d.mu.Lock()
+	if _, waiting := d.blocked[ref.Key]; waiting {
+		d.mu.Unlock()
+		return
+	}
+	if d.blocked == nil {
+		d.blocked = map[string]blockedEntry{}
+	}
+	d.blockedSeq++
+	seq := d.blockedSeq
+	d.blocked[ref.Key] = blockedEntry{a: *a, ref: ref, latest: latestFn, seq: seq}
+	d.mu.Unlock()
+	d.afterFunc(d.BlockedDelay, func() {
+		d.mu.Lock()
+		e, ok := d.blocked[ref.Key]
+		if ok && e.seq == seq {
+			delete(d.blocked, ref.Key)
+		}
+		d.mu.Unlock()
+		if !ok || e.seq != seq || !d.Wants(&e.a, e.ref) {
+			return
+		}
+		d.deliver(&e.a, e.ref, e.latest)
+	})
+}
+
+// deliver claims a's notification and sends it (a "done" may wait for
+// the digest).
+func (d *Dispatcher) deliver(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
+	ok, claimed := d.claim(a, ref)
+	if !ok {
 		return
 	}
 	ntfyOn, pushOn := d.channels()
@@ -324,8 +478,11 @@ func (d *Dispatcher) Notify(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
 	if pushOn {
 		excerptChars = max(excerptChars, d.Push.ExcerptChars())
 	}
+	// Telling a question from a plain "done" takes the last message even
+	// when no excerpt is shown.
+	classify := a.Status == herdr.StatusDone && d.kindOn(KindQuestion) != d.kindOn(KindDone)
 	var latest *transcript.Latest
-	if excerptChars > 0 && latestFn != nil {
+	if (excerptChars > 0 || classify) && latestFn != nil {
 		timeout := d.ExcerptTimeout
 		if timeout <= 0 {
 			timeout = 5 * time.Second
@@ -334,6 +491,27 @@ func (d *Dispatcher) Notify(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
 		latest = latestFn(ctx)
 		cancel()
 	}
+	kind := KindBlocked
+	if a.Status == herdr.StatusDone {
+		kind = KindDone
+		if endsOnQuestion(latest) {
+			kind = KindQuestion
+		}
+	}
+	if !d.kindOn(kind) {
+		d.unclaim(ref, claimed)
+		return
+	}
+	if kind == KindDone && d.DoneDigest > 0 {
+		d.queueDigest(digestEntry{a: *a, ref: ref, latest: latest, at: claimed})
+		return
+	}
+	d.send(a, ref, latest)
+}
+
+// send delivers one agent's notification on every channel.
+func (d *Dispatcher) send(a *herdr.AgentInfo, ref Ref, latest *transcript.Latest) {
+	ntfyOn, pushOn := d.channels()
 	host := ""
 	if d.ShowHost {
 		host = a.Host
@@ -363,6 +541,96 @@ func (d *Dispatcher) Notify(a *herdr.AgentInfo, ref Ref, latestFn LatestFunc) {
 		msg.Click = d.Ntfy.agentURL(ref.Route)
 		d.Ntfy.notify(ref.Key, kind, msg)
 	}
+}
+
+// queueDigest adds a "done" to the digest, starting its timer with the
+// first one. The window does not slide: nothing waits longer than
+// DoneDigest.
+func (d *Dispatcher) queueDigest(e digestEntry) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.digest == nil {
+		d.digest = map[string]digestEntry{}
+	}
+	d.digest[e.ref.Key] = e
+	if d.digestArmed {
+		return
+	}
+	d.digestArmed = true
+	d.afterFunc(d.DoneDigest, d.flushDigest)
+}
+
+// flushDigest sends the digest: the agents the user has not opened (or
+// is not looking at) since they finished, one notification for all.
+func (d *Dispatcher) flushDigest() {
+	d.mu.Lock()
+	var keep []digestEntry
+	for _, e := range d.digest {
+		viewing := d.Viewer != nil && (d.Viewer.Viewing(e.ref.Key) || (e.ref.Local && d.Viewer.Viewing(e.a.PaneID)))
+		if viewing || d.lastViewed(&e.a, e.ref).After(e.at) {
+			continue
+		}
+		keep = append(keep, e)
+	}
+	d.digest, d.digestArmed = nil, false
+	d.mu.Unlock()
+	switch len(keep) {
+	case 0:
+		return
+	case 1:
+		d.send(&keep[0].a, keep[0].ref, keep[0].latest)
+		return
+	}
+	sort.Slice(keep, func(i, j int) bool { return keep[i].at.Before(keep[j].at) })
+	msg := buildDigest(keep, d.ShowHost)
+	ntfyOn, pushOn := d.channels()
+	if pushOn {
+		d.Push.Notify(digestKey+"/"+KindDone, push.Message{
+			Title: msg.Title,
+			Body:  msg.Message,
+			URL:   "/",
+			Tag:   digestKey,
+		}, push.Options{Urgency: "low", TTL: 4 * time.Hour, Topic: push.TopicFor(digestKey)})
+	}
+	if ntfyOn {
+		msg.Click = strings.TrimRight(d.Ntfy.ClickURL, "/")
+		if msg.Click != "" {
+			msg.Click += "/"
+		}
+		d.Ntfy.notify(digestKey, KindDone, msg)
+	}
+}
+
+// digestKey is the digest's throttle bucket and notification tag.
+const digestKey = "done-digest"
+
+// maxDigestLines caps the agents listed in a digest.
+const maxDigestLines = 6
+
+// buildDigest renders a digest of several finished agents: no message
+// text, only names and where they work.
+func buildDigest(es []digestEntry, showHost bool) ntfyMessage {
+	msg := ntfyMessage{Title: fmt.Sprintf("%d agents finished", len(es)), Tags: []string{"white_check_mark"}}
+	var lines []string
+	for i, e := range es {
+		if i == maxDigestLines-1 && len(es) > maxDigestLines {
+			lines = append(lines, fmt.Sprintf("and %d more", len(es)-i))
+			break
+		}
+		where := repoLabel(&e.a)
+		if showHost && e.a.Host != "" {
+			where = e.a.Host + " · " + where
+		}
+		lines = append(lines, notifyName(&e.a)+" · "+where)
+	}
+	msg.Message = strings.Join(lines, "\n")
+	return msg
+}
+
+// endsOnQuestion reports whether the agent's last message asks the user
+// something (it ends with a question mark).
+func endsOnQuestion(latest *transcript.Latest) bool {
+	return latest != nil && strings.HasSuffix(strings.TrimSpace(latest.Text), "?")
 }
 
 // localLatest reads the excerpt straight from a local agent's session file.
@@ -419,14 +687,17 @@ func buildNotification(a *herdr.AgentInfo, host string, latest *transcript.Lates
 	default: // done
 		msg.Title = name + " is done"
 		msg.Tags = []string{"white_check_mark"}
-		if strings.HasSuffix(excerpt, "?") {
+		if endsOnQuestion(latest) {
 			// The turn ended on a question: the agent is waiting on you.
 			msg.Title = name + " has a question"
 			msg.Tags = []string{"question"}
 		}
-		if excerpt != "" {
+		switch {
+		case excerpt != "":
 			lines = append(lines, excerpt)
-		} else {
+		case endsOnQuestion(latest):
+			lines = append(lines, "waiting for your answer")
+		default:
 			lines = append(lines, "completed work")
 		}
 	}
