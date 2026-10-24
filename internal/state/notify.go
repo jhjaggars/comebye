@@ -206,6 +206,10 @@ type Dispatcher struct {
 	// that long and drops it if the agent left blocked meanwhile (it
 	// worked through the block on its own, or someone answered).
 	BlockedDelay time.Duration
+	// Quiet, when set, reports agents (by key) that Comebye itself is
+	// talking to, such as a session asked whether it is safe to remove:
+	// they get no notification for answering.
+	Quiet func(key string) bool
 
 	mu sync.Mutex
 	// held maps an agent key to when it was last notified. Until the user
@@ -406,6 +410,9 @@ func (d *Dispatcher) Wants(a *herdr.AgentInfo, ref Ref) bool {
 	}
 	ntfyOn, pushOn := d.channels()
 	if !ntfyOn && !pushOn {
+		return false
+	}
+	if d.Quiet != nil && d.Quiet(ref.Key) {
 		return false
 	}
 	// Foreground suppression: the user is looking at this agent right now.

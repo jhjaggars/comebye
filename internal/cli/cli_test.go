@@ -347,14 +347,14 @@ func TestPromptMarkBrief(t *testing.T) {
 	if code := run(e, "mark", "w2:p1", "--reason", "merged"); code != 0 {
 		t.Fatalf("mark: %d %s", code, errb)
 	}
-	if b := f.find("POST", "/api/marks").body; b != `{"agent_id":"laharl/w2:p1","discard":false,"reason":"merged"}` {
+	if b := f.find("POST", "/api/marks").body; b != `{"agent_id":"laharl/w2:p1","discard":false,"no_ask":false,"reason":"merged"}` {
 		t.Fatalf("mark body %s", b)
 	}
 	out.Reset()
 	if code := run(e, "mark", "w2:p1", "--reason", "superseded", "--discard"); code != 0 || !strings.Contains(out.String(), "Proposed discarding home") {
 		t.Fatalf("mark --discard: %d %s %s", code, out, errb)
 	}
-	if b := f.find("POST", "/api/marks").body; b != `{"agent_id":"laharl/w2:p1","discard":true,"reason":"superseded"}` {
+	if b := f.find("POST", "/api/marks").body; b != `{"agent_id":"laharl/w2:p1","discard":true,"no_ask":false,"reason":"superseded"}` {
 		t.Fatalf("discard body %s", b)
 	}
 	f.answers["POST /api/marks/clear"] = answer{body: `{"cleared":true}`}
@@ -504,6 +504,70 @@ func TestStateDir(t *testing.T) {
 	}
 }
 
+// The answer to "is it safe to remove you?": printed when known, waited
+// for with --wait, and shown in the ledger.
+func TestMarkAsk(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/marks"] = answer{body: `{"mark":{"agent_id":"kube/w5:p2","at":"2026-10-22T09:00:00Z","ask":{"state":"asking"}}}`}
+	if code := run(e, "mark", "solo", "--reason", "merged"); code != 0 || !strings.Contains(out.String(), "Asked the session whether it is safe") {
+		t.Fatalf("mark: %d %s %s", code, out, errb)
+	}
+	asking := `{"entries":[],"marks":[{"agent_id":"kube/w5:p2","at":"2026-10-22T09:00:00Z","ask":{"state":"asking"}}]}`
+	f.answers["GET /api/ledger"] = answer{body: asking}
+	sleeps := 0
+	e.Sleep = func(time.Duration) {
+		sleeps++
+		f.mu.Lock()
+		f.answers["GET /api/ledger"] = answer{body: strings.Replace(asking, `{"state":"asking"}`, `{"state":"unsafe","reason":"watching PR #12"}`, 1)}
+		f.mu.Unlock()
+	}
+	out.Reset()
+	if code := run(e, "mark", "solo", "--reason", "merged", "--wait"); code != 0 || sleeps != 1 ||
+		!strings.Contains(out.String(), "The session says UNSAFE: watching PR #12.") {
+		t.Fatalf("mark --wait: %d %d %s %s", code, sleeps, out, errb)
+	}
+	out.Reset()
+	if code := run(e, "mark", "solo", "--reason", "merged", "--wait", "--json"); code != 0 || !strings.Contains(out.String(), `"state": "unsafe"`) {
+		t.Fatalf("mark --wait --json: %d %s", code, out)
+	}
+	if code := run(e, "mark", "solo", "--reason", "merged", "--no-ask"); code != 0 || !strings.Contains(f.find("POST", "/api/marks").body, `"no_ask":true`) {
+		t.Fatalf("mark --no-ask: %d %s", code, errb)
+	}
+	out.Reset()
+	if code := run(e, "ledger"); code != 0 || !strings.Contains(out.String(), "the session says UNSAFE: watching PR #12") {
+		t.Fatalf("ledger: %d %s", code, out)
+	}
+	// A mark replaced meanwhile ends the wait.
+	f.answers["GET /api/ledger"] = answer{body: strings.Replace(asking, "09:00:00", "09:00:01", 1)}
+	errb.Reset()
+	if code := run(e, "mark", "solo", "--reason", "merged", "--wait"); code != 1 || !strings.Contains(errb.String(), "replaced") {
+		t.Fatalf("replaced: %d %s", code, errb)
+	}
+}
+
+// Pushed is not merged: inspect says which.
+func TestInspectPushedNotMerged(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["GET /api/inspect"] = answer{body: `{"agent_id":"kube/w5:p2","host":"kube","name":"solo","status":"idle","checks":{
+		"path":"/w","exists":true,"branch":"fix","unmerged_commits":2,"base_used":"origin/main","tip":"abc",
+		"detail":{"status":[],"commits":[],"upstream":"origin/fix","unpushed":0}}}`}
+	if code := run(e, "inspect", "solo"); code != 0 {
+		t.Fatalf("inspect: %d %s", code, errb)
+	}
+	for _, want := range []string{"merged:   NO · 2 commits not in origin/main", "a squash-merged PR still counts here",
+		"pushed:   upstream origin/fix · every unmerged commit is on a remote, but pushed is not merged"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("inspect lacks %q:\n%s", want, out)
+		}
+	}
+	f.answers["GET /api/inspect"] = answer{body: strings.Replace(f.answers["GET /api/inspect"].body, `"unmerged_commits":2`, `"unmerged_commits":0`, 1)}
+	out.Reset()
+	if code := run(e, "inspect", "solo"); code != 0 || !strings.Contains(out.String(), "merged:   yes · every commit is in origin/main") ||
+		!strings.Contains(out.String(), "nothing only here") {
+		t.Fatalf("merged: %d %s", code, out)
+	}
+}
+
 func TestInspectCommand(t *testing.T) {
 	f, e, out, errb := newFake(t)
 	f.answers["GET /api/inspect"] = answer{body: `{"agent_id":"kube/w5:p2","host":"kube","name":"solo","status":"idle","checks":{
@@ -518,7 +582,7 @@ func TestInspectCommand(t *testing.T) {
 		t.Fatalf("query %q", r.query)
 	}
 	for _, want := range []string{"solo (kube/w5:p2) · idle · on kube", "worktree: /home/k/.worktrees/other/fix", "tip 5873ecd01234",
-		"a rebase is in progress", "1 commits not in it", "no upstream · 1 commits on no remote (only here)",
+		"a rebase is in progress", "merged:   NO · 1 commits not in main", "no upstream · 1 commits on no remote (only here)",
 		"5873ecd01234 herdr: workspace spawn", "?? new.ts", "── diff: the branch against its base", "+x"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("inspect lacks %q:\n%s", want, out)

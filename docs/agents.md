@@ -107,7 +107,27 @@ marked session with checks run on its host right then: uncommitted changes
 branch that its base lacks (`git cherry` against the base and origin's copy
 of it, so rebased or upstream-merged work counts as merged), and whether the
 agent is working or blocked. Confirm each one ("Remove anyway…" when there
-are warnings), or "Remove all safe" for those without warnings. Removing:
+are warnings), or "Remove all safe" for those without warnings.
+
+**Asking the session.** The git checks cannot see what only the session
+knows: an open PR it is watching, a loop it runs, work it was told to
+keep, a follow-up it owes you. So marking a session that is idle or done
+(from the app or `comebye mark`) also sends it a short prompt asking
+whether it is safe to remove, and to take no other action. It should reply
+with SAFE, or UNSAFE and the reason; Comebye reads the first word of its
+reply and shows it in the review:
+
+- **SAFE**: a green line, "The session says SAFE";
+- **UNSAFE**: a warning with its reason, so the session is not removed
+  with one tap ("Remove anyway…", and left out of "Remove all safe");
+- no reply within two minutes, a reply that is neither, or a restart while
+  asking: a note ("did not answer", never counted as safe);
+- a working or blocked session is not asked (nor one marked with
+  `comebye mark --no-ask`), and the review says so.
+
+Answering does not send you a notification. Marking again asks again.
+
+Removing:
 
 - closes the agent's workspace, or only its pane when other agents live in
   that workspace or it is a repository's primary workspace;
@@ -212,10 +232,10 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye ledger [--active]` | The handoffs: status, host, repository, branch, worker, whether a final report was captured, marks, and hints (agent gone, uncommitted or unmerged, `candidate`). Then the other marked sessions. |
 | `comebye read AGENT [--lines N]` | The agent's last N messages (default 20) as text; the terminal's output for agents without a transcript. |
 | `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch); for any other agent, its last reply. |
-| `comebye inspect AGENT [--diff]` | The agent's git state, checked on its own host: worktree, branch and tip, an unfinished rebase or merge, uncommitted files, commits not in the base, commits on no remote, the diff stat; `--diff` adds the diffs (128 KB each at most). |
+| `comebye inspect AGENT [--diff]` | The agent's git state, checked on its own host: worktree, branch and tip, an unfinished rebase or merge, uncommitted files, commits not in the base, commits on no remote, the diff stat; `--diff` adds the diffs (128 KB each at most). It reports `merged:` (are the commits in the base?) separately from `pushed:` (are they on a remote?): pushed work is not merged, and a squash-merged PR still counts as not merged. |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. |
-| `comebye mark AGENT --reason R [--discard]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. |
+| `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
 | `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
 | `comebye brief schedule [--every D] [--at HH:MM\|none] [--tz ZONE] [--off] [--dismiss]` | Show the briefing schedule (next run, missed runs), set it (flags left out keep their values), turn it off, or dismiss the missed-runs note. |
 | `comebye playbook [--harness pi\|claude\|generic]` | The coordinator playbook (`pi`: a Pi agent definition with frontmatter; `claude`: for a CLAUDE.md or first prompt). |

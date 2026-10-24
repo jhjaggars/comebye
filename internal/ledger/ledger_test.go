@@ -159,3 +159,38 @@ func TestTruncate(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// A session's answer lands on the mark it was asked for, and copies do
+// not share it.
+func TestSetAsk(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
+	s.SetMark(Mark{AgentID: "desk/w5:p1", At: at, Ask: &Ask{State: AskAsking}})
+	if ok, err := s.SetAsk("desk/w5:p1", at.Add(time.Second), Ask{State: AskSafe}); ok || err != nil {
+		t.Fatalf("another mark's answer applied: %v %v", ok, err)
+	}
+	if ok, _ := s.SetAsk("desk/w5:p1", at, Ask{State: AskUnsafe, Reason: "PR open"}); !ok {
+		t.Fatal("answer not applied")
+	}
+	m := s.Marks()[0]
+	if m.Ask.State != AskUnsafe || m.Ask.At.IsZero() {
+		t.Fatalf("ask = %+v", m.Ask)
+	}
+	m.Ask.State = "changed"
+	if s.Marks()[0].Ask.State != AskUnsafe {
+		t.Fatal("Marks shares the ask")
+	}
+	// A worker's mark too, and not after it is cleared.
+	e, _ := s.Add(Entry{Host: "desk", AgentID: "desk/w9:p1", Branch: "fix", Status: Finished})
+	s.SetMark(Mark{AgentID: e.AgentID, At: at})
+	if ok, _ := s.SetAsk(e.AgentID, at, Ask{State: AskSafe}); !ok {
+		t.Fatal("worker answer not applied")
+	}
+	s.ClearMark(e.AgentID)
+	if ok, _ := s.SetAsk(e.AgentID, at, Ask{State: AskSafe}); ok {
+		t.Fatal("answer applied to a cleared mark")
+	}
+}

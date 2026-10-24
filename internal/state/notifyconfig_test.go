@@ -300,3 +300,15 @@ func TestBlockedDelay(t *testing.T) {
 		t.Fatalf("done = %+v", fp.msgs)
 	}
 }
+
+// Quiet agents (a session asked whether it is safe to remove) get no
+// notification for answering.
+func TestNotifyQuiet(t *testing.T) {
+	fp := &fakePusher{}
+	d := &Dispatcher{Push: fp, Quiet: func(key string) bool { return key == "desk/wS:p1" }}
+	asked := &herdr.AgentInfo{Name: "a", ID: "desk/wS:p1", PaneID: "wS:p1", Status: herdr.StatusDone}
+	other := &herdr.AgentInfo{Name: "o", ID: "desk/wS:p2", PaneID: "wS:p2", Status: herdr.StatusDone}
+	if d.Wants(asked, LocalRef(asked)) || !d.Wants(other, LocalRef(other)) {
+		t.Fatal("Quiet not applied to the asked agent only")
+	}
+}

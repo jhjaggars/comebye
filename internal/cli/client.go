@@ -248,6 +248,13 @@ type apiMark struct {
 	By      string    `json:"by"`
 	Reason  string    `json:"reason"`
 	At      time.Time `json:"at"`
+	Ask     *apiAsk   `json:"ask"`
+}
+
+// apiAsk is a marked session's answer about its own removal.
+type apiAsk struct {
+	State  string `json:"state"`
+	Reason string `json:"reason"`
 }
 
 type apiEntry struct {

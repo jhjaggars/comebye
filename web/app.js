@@ -858,8 +858,9 @@ async function toggleMark() {
     } else {
       const reason = prompt("Mark this session ready to remove. Why? (optional)", "");
       if (reason === null) return;
-      await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: id, reason }) });
-      toast("Marked ready to remove");
+      const d = await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: id, reason }) });
+      const asking = d && d.mark && d.mark.ask && d.mark.ask.state === "asking";
+      toast(asking ? "Marked ready to remove; asking the session whether it is safe" : "Marked ready to remove");
     }
   } catch (e) {
     toast(e.message, true);
@@ -881,7 +882,7 @@ async function toggleMark() {
 // and deletes its branch. A coordinator may propose that (mark --discard);
 // only this sheet does it. Like the launch sheet, it is a history entry.
 
-const review = { open: false, items: [], results: new Map(), busy: false, seq: 0 };
+const review = { open: false, items: [], results: new Map(), busy: false, seq: 0, askTimer: 0 };
 
 function openReview() {
   if (review.open) return;
@@ -920,23 +921,31 @@ function setReviewBusy(on, text) {
   renderReviewFoot();
 }
 
-async function loadReview() {
+// loadReview checks the marked sessions; quiet (a refresh while a
+// session is being asked whether it is safe to remove) keeps the list as
+// it is meanwhile.
+async function loadReview(quiet) {
+  if (quiet && (review.busy || !review.open)) return;
   const seq = ++review.seq;
-  setReviewBusy(true, "Checking each session on its host…");
+  if (!quiet) setReviewBusy(true, "Checking each session on its host…");
   if (!review.items.length) $("rv-list").innerHTML = "";
   let d;
   try {
     d = await api("/api/removals");
   } catch (e) {
-    if (seq !== review.seq) return;
+    if (seq !== review.seq || quiet) return;
     setReviewBusy(false);
     $("rv-list").innerHTML = `<div class="ln-empty">${esc(e.message)}</div>`;
     return;
   }
   if (seq !== review.seq) return;
   review.items = Array.isArray(d.removals) ? d.removals : [];
-  setReviewBusy(false);
+  if (!quiet) setReviewBusy(false);
   renderReview();
+  if (review.items.some((it) => it.mark && it.mark.ask && it.mark.ask.state === "asking")) {
+    clearTimeout(review.askTimer);
+    review.askTimer = setTimeout(() => loadReview(true), 6000);
+  }
 }
 
 function reviewItemHTML(it) {
@@ -952,6 +961,9 @@ function reviewItemHTML(it) {
   const c = it.checks;
   const ok = c && c.exists && !c.primary && !c.dirty && c.unmerged_commits === 0 && !c.error
     ? `<li>Clean, and merged into ${esc(c.base_used || "its base")}: the worktree will be removed (the branch is kept)</li>` : "";
+  const ask = m.ask || {};
+  const said = ask.state === "safe"
+    ? `<li>The session says SAFE${ask.reason ? ": " + esc(ask.reason) : ""}</li>` : "";
   const warnings = (it.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
   const notes = (it.notes || []).map((w) => `<li>${esc(w)}</li>`).join("");
   const report = it.final_report
@@ -982,7 +994,7 @@ function reviewItemHTML(it) {
     ${where ? `<div class="rv-sub">${where}</div>` : ""}
     <div class="rv-reason">${marked}</div>
     <ul class="rv-list warn">${done ? "" : warnings}</ul>
-    <ul class="rv-list ok">${done ? "" : ok}</ul>
+    <ul class="rv-list ok">${done ? "" : ok + said}</ul>
     <ul class="rv-list info">${done ? "" : notes}</ul>
     ${loss}${report}${actions}${result}
   </div>`;
