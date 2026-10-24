@@ -653,3 +653,27 @@ func TestFirstPromptArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestInDirsFindsAgentsUnderNodeVersionManagers(t *testing.T) {
+	home := t.TempDir()
+	put := func(rel string, mode os.FileMode) {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(".nvm/versions/node/v22.4.0/bin/pi", 0o755)
+	put(".local/share/fnm/node-versions/v20.1.0/installation/bin/codex", 0o755)
+	put(".nvm/versions/node/v22.4.0/bin/claude", 0o644) // not executable
+	for name, want := range map[string]bool{"pi": true, "codex": true, "claude": false, "droid": false} {
+		if got := inDirs(name, home, userBinDirs); got != want {
+			t.Errorf("inDirs(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if inDirs("pi", "", userBinDirs) {
+		t.Error("~ entries must be skipped without a home directory")
+	}
+}
