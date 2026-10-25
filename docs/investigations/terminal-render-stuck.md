@@ -130,6 +130,38 @@ reset on agent switch (finding 9), and late reads could overwrite it
 (finding 10). To reproduce: open an agent with no transcript, go back, then
 open one that has a transcript.
 
+## Update 3: reply does not appear after a send until the agent is re-selected
+
+Report: after submitting a prompt, the response sometimes shows only after
+going back to the list and re-opening the agent.
+
+12. **After a send, only one re-read was scheduled; everything later depended
+    on the status snapshot.** `sendPrompt` schedules a single `loadChat(false)`
+    at 800 ms (raw view: `refreshOutput` at 600 ms). Further updates come from
+    the 4 s poll, which ran only while `agent_status` was `working` or
+    `blocked` (`startPolling`). Status arrives over SSE. If the snapshot lags
+    the send (a fast reply, a status herdr reports late or never), or SSE is
+    down (iOS resume), the poll does nothing and the one-shot re-read ran
+    before the reply existed. The stream stays quiet until re-selecting runs
+    `loadChat(true)`. The "working -> settled" catch-up in the SSE handler
+    cannot fire either, since it needs the status to have been seen as working.
+    History: the one-shot send re-read and the status-gated poll date from the
+    first commit (`3dafe72`) and `f47908c`; not a recent edit, but the
+    window got wider as polling moved to status gating and as iOS made SSE
+    less reliable.
+13. **My no-overlap guard (`c62d170`) could swallow the post-send raw read.**
+    `refreshOutput` returned silently while `outputBusy`, so a read hung on a
+    dead socket (up to the 30 s timeout) made the 600 ms post-send read a no-op.
+    Chat view has no such guard (`loadChat` is not guarded).
+14. 409 "agent is waiting" drops the pending bubble and toasts; it does not
+    clear timers or poll state, so it is not the cause.
+
+Fix: `state.pollUntil` is set for 2 minutes (`POLL_AFTER_SEND_MS`) after a
+prompt, key or answer send, and the poll runs while it is in the future
+regardless of status. `refreshOutput(true)` (post-send reads) aborts a stuck
+read instead of being skipped. Test: `TestAppPollsAfterSend` (source-level).
+Not reproduced in a browser.
+
 ## Ranked hypotheses (1 and below predate hypothesis 0)
 
 | # | Hypothesis | Confidence | Data that would settle it |

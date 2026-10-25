@@ -97,7 +97,7 @@ func TestAppRequestsTimeOutAndOutputReadsDoNotStack(t *testing.T) {
 	for _, re := range []string{
 		`(?s)async function api\(.*?AbortSignal\.timeout\(timeout\)`,
 		`(?s)function resume\(\) \{.*?outputBusy = false;.*?refreshOutput\(\)`,
-		`(?s)async function refreshOutput\(\) \{.*?if \(outputBusy\) return;.*?finally \{\s*if \(outputAbort === ctl\) \{ outputAbort = null; outputBusy = false;`,
+		`(?s)async function refreshOutput\([a-z]*\) \{.*?if \(outputBusy\) return;.*?finally \{\s*if \(outputAbort === ctl\) \{ outputAbort = null; outputBusy = false;`,
 	} {
 		if !regexp.MustCompile(re).Match(src) {
 			t.Errorf("app.js does not match %s", re)
@@ -119,7 +119,7 @@ func TestAppTerminalViewIsKeyedByAgent(t *testing.T) {
 		`(?s)function openDetail\(id\) \{.*?resetTerminalView\(\);`,
 		`(?s)function closeDetail\(\) \{.*?resetTerminalView\(\);`,
 		`(?s)function resetTerminalView\(\) \{.*?outputAbort\.abort\(\).*?\$\("output"\)\.textContent = "";.*?\$\("chat"\)\.style\.display = "";`,
-		`(?s)async function refreshOutput\(\) \{.*?const pane = state\.selected;.*?signal: ctl\.signal.*?if \(state\.selected !== pane \|\| !state\.chat \|\| !state\.chat\.terminal\) return;`,
+		`(?s)async function refreshOutput\([a-z]*\) \{.*?const pane = state\.selected;.*?signal: ctl\.signal.*?if \(state\.selected !== pane \|\| !state\.chat \|\| !state\.chat\.terminal\) return;`,
 		`\$\("d-refresh"\)\.addEventListener\("click", refreshView\)`,
 		`(?s)function refreshView\(\) \{.*?outputBusy = false;.*?state\.sending = false;`,
 		`echoInOutput\(text\)`,
@@ -134,5 +134,26 @@ func TestAppTerminalViewIsKeyedByAgent(t *testing.T) {
 	}
 	if !strings.Contains(string(html), `id="d-refresh"`) {
 		t.Error("index.html has no d-refresh button")
+	}
+}
+
+// After a send the reply must show up without re-selecting the agent: the
+// poll keeps running for a while whatever status the (possibly lagging)
+// snapshot reports, and the post-send raw read is not skipped behind a
+// stuck one.
+func TestAppPollsAfterSend(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`Date\.now\(\) < state\.pollUntil`,
+		`(?s)async function sendPrompt\(\) \{.*?state\.pollUntil = Date\.now\(\) \+ POLL_AFTER_SEND_MS;.*?refreshOutput\(true\)`,
+		`(?s)async function sendKeys\(.*?state\.pollUntil = Date\.now\(\) \+ POLL_AFTER_SEND_MS;`,
+		`(?s)async function refreshOutput\(force\) \{.*?force === true`,
+	} {
+		if !regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js does not match %s", re)
+		}
 	}
 }

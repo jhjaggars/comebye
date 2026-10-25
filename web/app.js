@@ -10,6 +10,7 @@ const state = {
   selected: null,      // id ("<host>/<pane>") of the agent being viewed
   es: null,            // EventSource
   pollTimer: null,     // transcript/output auto-poll while detail view is open
+  pollUntil: 0,        // poll regardless of agent status until this time (ms): set by a send
   sending: false,
   chat: null,          // chat view state: { rendered: Set<id>, skip, more, terminal: bool }
   ask: null,           // pending ask_user_question from the transcript, if any
@@ -41,6 +42,7 @@ function setUnauthorized(on) {
 // refreshOutput() pins the terminal view and a hung prompt POST leaves
 // state.sending set, so the send button stays dead until the app is killed.
 const API_TIMEOUT_MS = 30000;
+const POLL_AFTER_SEND_MS = 120000; // keep polling this long after a send, whatever the status says
 
 // anySignal aborts when any of the signals does (AbortSignal.any needs iOS 17.4).
 function anySignal(signals) {
@@ -1901,8 +1903,9 @@ function resetTerminalView() {
   $("btn-terminal").style.display = "none";
 }
 
-async function refreshOutput() {
+async function refreshOutput(force) {
   if (!state.selected || !(state.chat && state.chat.terminal)) return;
+  if (outputBusy && force === true && outputAbort) outputAbort.abort(), outputBusy = false; // a post-send read must not be skipped behind a hung one
   if (outputBusy) return; // the 4s poll must not stack reads behind a slow one
   outputBusy = true;
   const pane = state.selected;
@@ -1932,7 +1935,9 @@ function startPolling() {
     if (document.hidden) return; // resume() refreshes when visible again
     const a = agentById(state.selected);
     if (!a) return;
-    if (a.agent_status === "working" || a.agent_status === "blocked") {
+    // The status snapshot can lag a send (or SSE can be down), so also poll
+    // for a while after anything is sent; the reply must not need a re-select.
+    if (a.agent_status === "working" || a.agent_status === "blocked" || Date.now() < state.pollUntil) {
       if (state.chat && state.chat.terminal) refreshOutput();
       else { loadChat(false); refreshStatusLine(); } // append-only; new messages diff in by id
     } else if (runningSubagents()) {
@@ -2173,6 +2178,7 @@ async function tapAnswer(action, index) {
       toast("sent " + (body.keys || []).map((k) => KEY_GLYPH[k] || k).join(" "));
       setTimeout(refreshDialog, 400);
       if (answer.moreOpen) setTimeout(refreshSnapshot, 450);
+      state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
       if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
       return;
     }
@@ -2336,11 +2342,12 @@ async function sendPrompt() {
       body: JSON.stringify({ text }),
     });
     setPromptValue("");
+    state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
     // Echo the sent prompt locally; the transcript poll will pick it up too.
     if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
     else {
       echoInOutput(text);
-      setTimeout(refreshOutput, 600);
+      setTimeout(() => refreshOutput(true), 600);
     }
   } catch (e) {
     dropPending(pending);
@@ -2570,8 +2577,9 @@ async function sendKeys(keys, label) {
       body: JSON.stringify({ keys }),
     });
     toast(label + " sent");
+    state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
     if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
-    else setTimeout(refreshOutput, 500);
+    else setTimeout(() => refreshOutput(true), 500);
   } catch (e) {
     toast(label + " failed: " + e.message, true);
   }
