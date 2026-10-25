@@ -96,6 +96,7 @@ func TestAppRequestsTimeOutAndOutputReadsDoNotStack(t *testing.T) {
 	}
 	for _, re := range []string{
 		`(?s)async function api\(.*?signal: AbortSignal\.timeout\(timeout\)`,
+		`(?s)function resume\(\) \{.*?outputBusy = false;.*?refreshOutput\(\)`,
 		`(?s)async function refreshOutput\(\) \{.*?if \(outputBusy\) return;.*?finally \{\s*outputBusy = false;`,
 	} {
 		if !regexp.MustCompile(re).Match(src) {

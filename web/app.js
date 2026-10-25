@@ -2625,6 +2625,9 @@ function resume() {
   connectEvents();
   refreshAgents().catch(() => setConn(false));
   if (state.selected) {
+    // A read begun before the app was backgrounded may never settle (iOS
+    // drops its socket without failing the fetch); do not wait for it.
+    outputBusy = false;
     if (state.chat && state.chat.terminal) refreshOutput();
     else loadChat(!state.chat);
   }

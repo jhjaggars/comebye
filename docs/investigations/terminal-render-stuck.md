@@ -54,6 +54,36 @@ The cause is **not confirmed**; this lists what the code shows and ranks it.
    text each time), SSE stall (watchdog recycles a stream silent for 45 s;
    heartbeat every 15 s).
 
+## Update: user is on iOS and could not see the prompt they sent
+
+New facts: iOS, current build; the view looked stuck and the sent "ok" was
+not visible either.
+
+6. **The raw terminal view has no local echo.** `addPending()` returns early
+   in terminal mode (`if (!state.chat || state.chat.terminal) return null`),
+   and `#chat` is hidden there anyway. A sent prompt appears only when the
+   `setTimeout(refreshOutput, 600)` after the POST succeeds and the pane
+   shows it. "Can't see my prompt" is exactly what a stalled read, a hung
+   POST or a stale pane produces; it needs no render fault.
+7. **iOS suspends and half-kills connections.** On `visibilitychange` hidden
+   the app closes SSE and clears timers (`suspendEvents`), and `resume()`
+   reopens on visible. iOS (the Home Screen app especially) can drop a socket
+   during suspension without rejecting the in-flight `fetch`, which then
+   hangs forever. With no timeout, a read begun just before backgrounding
+   wedged the view; a prompt POST hung the same way leaves `state.sending`
+   set. This is the strongest candidate and fits "stuck, input does nothing,
+   force-quit recovers". The new overlap guard would have blocked recovery
+   too, so `resume()` now clears `outputBusy` before re-reading.
+8. **Viewport/keyboard.** `#detail` is `100dvh` with `overflow: hidden`; the
+   raw view autoscrolls only if it was at the bottom before the text was
+   replaced. An iOS keyboard open/close resize could leave the newest lines
+   (and the sent prompt) scrolled out of view with no fault. Low confidence;
+   the app has no `visualViewport` handling.
+
+Hypothesis 1 below is raised to medium-high by findings 6 and 7. Added
+hypothesis 3b: keyboard/viewport resize hides the newest lines (finding 8);
+a screenshot, or whether scrolling down shows the prompt, would settle it.
+
 ## Ranked hypotheses
 
 | # | Hypothesis | Confidence | Data that would settle it |
