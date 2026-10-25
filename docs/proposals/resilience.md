@@ -434,9 +434,15 @@ yarn, Linuxbrew and snap directories, with globs expanded for the
 per-node-version ones, and a test with a fake home. Running kinds still
 count, so nothing that worked stops working.
 
+**Implemented** (with the handoff fix below): `kinds.json` in the state
+directory (`{kind: {last_ok}}`, no path), updated when a kind is found, seen
+running or launched; `pickKind` accepts a kind remembered within 90 days even
+if the lookup fails. A remembered kind that then fails to start reports "worked
+on this host before but could not be started now" and is forgotten.
+
 Not done, proposed:
 
-- **Remember kinds that worked.** Persist `<state>/kinds.json`
+- **Remember kinds that worked** (original proposal, with a path): Persist `<state>/kinds.json`
   (`{kind: {path, last_ok}}`), updated whenever a kind is found or an agent
   of that kind is seen running; `pickKind` accepts a kind remembered within
   90 days even if the lookup fails. It covers installs in places nobody
@@ -486,7 +492,15 @@ worker, the branch as an attribute that can change.
   fixes handoffs answering `existing: true` for an unrelated agent in a
   reused pane.
 
-Not implemented: it touches the worker start path and its checks
+**Implemented**: `handleHandoff` passes `prev.Worktree` as
+`workerBody.Worktree`; `startWorker` finds the worktree by that path only and
+takes its live branch; the entry's `Branch` is updated and the old name kept in
+`PreviousBranches`, which `Find` also matches. A restart is refused
+(`path_taken`) when another live entry owns the worktree. Not done: the
+observer refreshing `Branch`, and matching an entry when a handoff names the
+*new* branch of an entry that was never restarted. The original note follows.
+
+Not implemented (original note): it touches the worker start path and its checks
 (`outside_roots`, `branch_in_primary`), and wants its own tests with a
 real git repository; small enough to do right after the identity work.
 

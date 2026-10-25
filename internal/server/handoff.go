@@ -330,7 +330,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		s.coord.mu.Unlock()
 	}()
 	prev, hasPrev := s.ledger.Find(func(e *ledger.Entry) bool {
-		return e.Host == b.Host && e.RepoName == repoName && e.Branch == branch &&
+		return e.Host == b.Host && e.RepoName == repoName && (e.Branch == branch || slices.Contains(e.PreviousBranches, branch)) &&
 			(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
 	})
 	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
@@ -345,7 +345,20 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		"{{from}}", from, "{{host}}", b.Host,
 	).Replace(s.handoffTemplate())
 
-	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Prompt: prompt})
+	// The entry's worktree is the worker's identity: the worker may have
+	// renamed its branch since, which startWorker follows.
+	hint := ""
+	if hasPrev && prev.Worktree != "" {
+		hint = prev.Worktree
+		if other, ok := s.ledger.Find(func(e *ledger.Entry) bool {
+			return e.ID != prev.ID && e.Host == prev.Host && e.Worktree == hint &&
+				(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
+		}); ok {
+			writeJSONStatus(w, http.StatusConflict, map[string]any{"code": "path_taken", "message": hint + " belongs to another worker (" + other.Branch + ")", "entry": prev})
+			return
+		}
+	}
+	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Worktree: hint, Prompt: prompt})
 	if hasPrev && lerr != nil {
 		// Restarting the earlier worker failed: its entry stays as it was
 		// (no second, failed entry for the same branch).
@@ -359,6 +372,11 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 			e.Status, e.Error = ledger.Running, res.PromptError
 			e.AgentID, e.PaneID, e.AgentName, e.Kind = res.Agent.ID, res.Agent.PaneID, res.Agent.Name, res.Agent.Agent
 			e.WorkspaceID, e.Worktree, e.Reused = res.WorkspaceID, res.Worktree, true
+			if res.Branch != "" && res.Branch != e.Branch {
+				// The worker renamed its branch; either name finds the entry.
+				e.PreviousBranches = append(e.PreviousBranches, e.Branch)
+				e.Branch = res.Branch
+			}
 			e.Brief, e.From = strings.TrimSpace(b.Brief), from
 			e.SawWorking, e.FinishedAt, e.FinalReport, e.ReportTries, e.Mark = false, nil, "", 0, nil
 		})
