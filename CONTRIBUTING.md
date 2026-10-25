@@ -49,3 +49,25 @@ welcome.
 - Event bursts are debounced into a single `agent.list` refresh; a 30s poll
   is the safety net.
 - `herdr api schema --json` prints the full JSON Schema for the protocol.
+
+## Browser checks against a fake herdr
+
+`web/app_test.go` only checks the source; `tools/uitest` drives the real
+app in headless Chrome (a phone-sized viewport) against `tools/devserver`,
+a fake herdr with two agents (`alpha`: Claude with a transcript, the chat
+view; `bravo`: no session, the raw terminal view). It checks that a reply
+shows after a prompt without re-selecting the agent, in both views, and that
+opening a chat agent after a raw one shows its own chat.
+
+    tools/uitest/run.sh [APP_DIR] [OUT_DIR]
+
+Needs go, node, npm and google-chrome (`CHROME=/path` overrides; the first
+run installs the pinned `playwright-core` into the git-ignored
+`tools/uitest/node_modules`). `APP_DIR` is the checkout whose binary and
+`web/` are tested (default: this one); point it at a scratch
+`git worktree add --detach <dir> <commit>` to bisect a regression. Screenshots,
+the browser console, API responses and the server logs go to `OUT_DIR`.
+`FAKE_ARGS` passes flags to the fake herdr: `-status-lag`, `-reply-delay`,
+and `-no-status` (herdr never reports working/idle, so the app cannot rely
+on the status to know it should keep reading). `REPLY_WAIT_MS` sets how long
+a reply may take to show (default 9000).

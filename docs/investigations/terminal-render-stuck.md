@@ -162,6 +162,50 @@ regardless of status. `refreshOutput(true)` (post-send reads) aborts a stuck
 read instead of being skipped. Test: `TestAppPollsAfterSend` (source-level).
 Not reproduced in a browser.
 
+## Update 4: reproduced in a real browser (headless Chrome, phone viewport)
+
+Harness: `tools/uitest/run.sh` (driver `tools/uitest/drive.mjs`, fake herdr
+`tools/devserver`; see CONTRIBUTING.md). It builds the real `comebye` binary
+of a chosen checkout, runs it against the fake herdr and drives the app with
+`playwright-core` 1.49.1 and the system Chrome, 390x844, mobile UA. Three
+checks: chat reply shows after a send without re-selecting; raw-view reply
+shows after a send; opening a chat agent after a raw one shows its own chat.
+
+Results (screenshots, `browser.log` of API calls and console, and server logs
+are written to the OUT_DIR the script prints):
+
+| Checkout | status events normal | herdr never reports a status change (`-no-status`) |
+|---|---|---|
+| `0dc69e1` (main when this started) | chat PASS, raw PASS, **switch FAIL** (`#chat` hidden) | **chat FAIL, raw FAIL**, switch FAIL |
+| `73bed48`, `703a4a8`, `b1145a0` | chat PASS, raw PASS, **switch FAIL** | not run |
+| `4ccf95c`, `92ec78c` | not run | chat FAIL, raw FAIL, switch FAIL |
+| this branch (`30bbffd` and later) | all PASS | all PASS |
+
+`3dafe72`, `f1e8e7d` and `8797627` could not be run: the harness starts the
+current binary's flags (`-insecure-no-auth`, `-host-name`), which those builds
+do not have. So the harness covers `4ccf95c` and later.
+
+What this proves:
+- **Wrong-agent/hidden-chat bug (finding 9): reproduced on every suspect
+  commit tested**, fixed on the branch. Not a regression from one commit; it
+  is present from at least `4ccf95c` through `0dc69e1`. The bug needs an agent
+  that fell back to the raw view first, then any agent with a transcript.
+- **No reply after a send (finding 12): reproduced when the app is not told
+  the agent is working.** `browser.log` for `0dc69e1` shows, after the prompt
+  POST, exactly one transcript read (`...transcript?limit=100&from=a2`, the
+  800 ms one) and then nothing; the raw view does one `/output` read and
+  stops. The reply is in the transcript the whole time, but no read asks for
+  it until the agent is re-selected. With normal status events the poll runs
+  and the reply shows, so the same code passes. The branch's "poll for 2 minutes
+  after a send" passes both.
+- **No single culprit commit.** The status-gated poll is in the design from the
+  first commit and every tested suspect behaves the same. If the regression is
+  new on the user's phone, what changed is the input, not the code: herdr (or
+  the hub's live stream) is reporting the working status late or not at all, or
+  the stream is dead after the hub reboot, so the gate never opens. A check
+  with a lagging status (`FAKE_ARGS="-status-lag 5s -reply-delay 6s"`) is
+  the next thing to try; I did not run it.
+
 ## Ranked hypotheses (1 and below predate hypothesis 0)
 
 | # | Hypothesis | Confidence | Data that would settle it |
