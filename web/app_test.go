@@ -84,3 +84,22 @@ func TestAppMarkdownIsSanitized(t *testing.T) {
 		t.Error("app.js still calls the old md() helper")
 	}
 }
+
+// A request with no deadline can hang forever on a half-dead mobile
+// connection, freezing the raw terminal view (stacked refreshOutput reads)
+// and the send button (state.sending never clears). api() must time out,
+// and refreshOutput must not overlap itself.
+func TestAppRequestsTimeOutAndOutputReadsDoNotStack(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`(?s)async function api\(.*?signal: AbortSignal\.timeout\(timeout\)`,
+		`(?s)async function refreshOutput\(\) \{.*?if \(outputBusy\) return;.*?finally \{\s*outputBusy = false;`,
+	} {
+		if !regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js does not match %s", re)
+		}
+	}
+}

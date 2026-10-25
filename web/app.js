@@ -36,11 +36,25 @@ function setUnauthorized(on) {
   renderList();
 }
 
+// A request that never answers (the phone changed networks or woke from
+// sleep; the connection is half-dead) must fail rather than hang: a hung
+// refreshOutput() pins the terminal view and a hung prompt POST leaves
+// state.sending set, so the send button stays dead until the app is killed.
+const API_TIMEOUT_MS = 30000;
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    ...opts,
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-  });
+  const { timeout = API_TIMEOUT_MS, ...init } = opts;
+  let res;
+  try {
+    res = await fetch(path, {
+      ...init,
+      signal: AbortSignal.timeout(timeout),
+      headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+    });
+  } catch (e) {
+    if (e && e.name === "TimeoutError") throw new Error("timed out — check the connection");
+    throw e;
+  }
   noteVersion(res.headers.get("X-App-Version"));
   if (res.status === 401) {
     setUnauthorized(true);
@@ -1857,8 +1871,11 @@ async function loadEarlier() {
 
 /* ---------- raw terminal fallback ---------- */
 
+let outputBusy = false;
 async function refreshOutput() {
   if (!state.selected || !(state.chat && state.chat.terminal)) return;
+  if (outputBusy) return; // the 4s poll must not stack reads behind a slow one
+  outputBusy = true;
   try {
     const read = await api(`${pathFor(state.selected)}/output?lines=400`);
     const el = $("output");
@@ -1868,6 +1885,8 @@ async function refreshOutput() {
   } catch (e) {
     if (e.status === 404) { toast("agent is gone", true); closeDetail(); }
     else toast("read failed: " + e.message, true);
+  } finally {
+    outputBusy = false;
   }
 }
 
@@ -3159,7 +3178,7 @@ async function submitLaunch() {
   renderLaunchForm();
   let r;
   try {
-    r = await api(launchBase(host), { method: "POST", body: JSON.stringify(body) });
+    r = await api(launchBase(host), { method: "POST", timeout: 180000, body: JSON.stringify(body) });
   } catch (e) {
     toast(e.message, true);
     $("ln-status").textContent = "";
@@ -3231,7 +3250,7 @@ async function submitCoordinator() {
   renderLaunchForm();
   let r;
   try {
-    r = await api(launchBase(host), { method: "POST", body: JSON.stringify({ coordinator: true, kind }) });
+    r = await api(launchBase(host), { method: "POST", timeout: 180000, body: JSON.stringify({ coordinator: true, kind }) });
   } catch (e) {
     toast(e.message, true);
     $("ln-status").textContent = "";
