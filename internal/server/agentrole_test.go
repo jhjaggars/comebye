@@ -714,3 +714,63 @@ func TestCoordinatorLaunchOnPeer(t *testing.T) {
 		t.Fatalf("unknown host = %d", w.Code)
 	}
 }
+
+// A role stays while its pane's name is unchanged or has vanished (herdr
+// clears names on its own); it is hidden only when the pane runs an agent
+// with another name, and kept while the agent is not seen at all.
+func TestLiveRolesNameCases(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*fakeLaunchHerdr)
+		applied func(a herdr.AgentInfo) bool // the fleet shows the change
+		want    bool
+	}{
+		{"unchanged", func(f *fakeLaunchHerdr) {}, func(a herdr.AgentInfo) bool { return a.ID == "desk/w1:p1" }, true},
+		{"name vanished", func(f *fakeLaunchHerdr) { f.agents[0].Name = "" }, func(a herdr.AgentInfo) bool { return a.ID == "desk/w1:p1" && a.Name == "" }, true},
+		{"name changed", func(f *fakeLaunchHerdr) { f.agents[0].Name = "other" }, func(a herdr.AgentInfo) bool { return a.ID == "desk/w1:p1" && a.Name == "other" }, false},
+		{"pane renumbered", func(f *fakeLaunchHerdr) { f.agents[0].PaneID = "w3:p1" }, func(a herdr.AgentInfo) bool { return a.ID == "desk/w3:p1" }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fh, _ := coordServer(t)
+			if err := s.roles.set("desk/w1:p1", Role{Role: RoleCoordinator, Name: "coordinator", At: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			fh.set(tc.mutate)
+			s.manager.Refresh()
+			waitFor(t, func() bool {
+				for _, a := range s.fleet.Agents() {
+					if tc.applied(a) {
+						return true
+					}
+				}
+				return false
+			})
+			if _, got := s.liveRoles()["desk/w1:p1"]; got != tc.want {
+				t.Fatalf("role listed = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The user can (re)claim the role for a coordinator whose name changed or
+// vanished: POST /api/roles replaces the stale record with the live name.
+func TestReassignRoleAfterRename(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	if err := s.roles.set("desk/w1:p1", Role{Role: RoleCoordinator, Name: "old-name", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	fh.set(func(f *fakeLaunchHerdr) { f.agents[0].Name = "coordinator" })
+	s.manager.Refresh()
+	waitFor(t, func() bool { return s.fleet.Agents()[0].Name == "coordinator" })
+	if _, ok := s.liveRoles()["desk/w1:p1"]; ok {
+		t.Fatal("stale role listed")
+	}
+	w := do(s, "POST", "/api/roles", userHdr, `{"agent_id":"desk/w1:p1","role":"coordinator"}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"desk/w1:p1":{"role":"coordinator","name":"coordinator"`) {
+		t.Fatalf("reassign = %d %s", w.Code, w.Body)
+	}
+	// An agent cannot claim it for itself.
+	if w := do(s, "POST", "/api/roles", agentHdr("w2:p1"), `{"agent_id":"desk/w2:p1","role":"coordinator"}`); w.Code != http.StatusForbidden {
+		t.Fatalf("agent self-claim = %d", w.Code)
+	}
+}

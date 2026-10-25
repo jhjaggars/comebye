@@ -343,7 +343,7 @@ func cmdAgents(e *Env, args []string) error {
 			}
 		}
 		switch {
-		case roles[a.ID].Role == "coordinator" && (roles[a.ID].Name == "" || roles[a.ID].Name == a.Name):
+		case roles[a.ID].Role == "coordinator" && (roles[a.ID].Name == "" || a.Name == "" || roles[a.ID].Name == a.Name):
 			r.Role = "coordinator"
 		case isEntry || (a.Worktree != nil && a.Worktree.Linked) || inWT:
 			r.Role = "worker"
