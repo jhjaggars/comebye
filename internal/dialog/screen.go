@@ -47,6 +47,11 @@ type row struct {
 // recognized.
 func Detect(screen, agentKind string) *Dialog {
 	lines := normalizeScreen(screen)
+	if agentKind == "claude" {
+		if d := detectClaudeMulti(lines); d != nil {
+			return d.finish()
+		}
+	}
 	// The lower of the two marker kinds wins; the other is stale.
 	ci, cc := lastMarker(lines, markerChevron)
 	ai, ac := lastMarker(lines, markerArrow)
@@ -429,10 +434,10 @@ func detectNumbered(lines []string, i, c int, agentKind string) *Dialog {
 			label, o.Checked = splitCheckbox(label)
 			if o.Checked != nil {
 				hasCheck = true
-			} else if label != otherLabel {
+			} else if !isOtherPlaceholder(label) {
 				allCheck = false
 			}
-			if label == otherLabel {
+			if isOtherPlaceholder(label) {
 				o.Role = RoleOther
 				hasOther = true
 			}

@@ -2103,7 +2103,19 @@ const answer = {
 function needsAnswer(a) {
   if (!a) return false;
   if (a.agent_status === "blocked") return true;
-  return !!state.ask && a.agent_status === "working";
+  // Claude's AskUserQuestion does not reliably flip herdr to "blocked" (a
+  // finished-looking coordinator sat on a multi-select), so an open question
+  // counts whatever the status. A stale one (nothing on screen) is hidden by
+  // staleQuestion() once the dialog read comes back empty.
+  return !!state.ask;
+}
+
+// staleQuestion: the transcript says a question is open, the agent is not
+// working or blocked, and no dialog is on its screen (the session was
+// killed mid-question). Nothing to answer; the card stays hidden.
+function staleQuestion(a) {
+  return answer.loaded && !(answer.dialog && answer.dialog.options && answer.dialog.options.length) &&
+    a.agent_status !== "blocked" && a.agent_status !== "working";
 }
 
 function updateAnswerCard() {
@@ -2127,7 +2139,7 @@ function updateAnswerCard() {
     answer.snapText = "loading screen…";
   }
   renderAnswerCard(a);
-  el.style.display = "block";
+  el.style.display = staleQuestion(a) ? "none" : "block";
   answer.shown = true;
   startAnswerPoll();
 }
@@ -2137,7 +2149,7 @@ function updateAnswerCard() {
 function renderAnswerCard(a) {
   const el = $("answer");
   const d = answer.dialog;
-  const sig = JSON.stringify([answer.loaded, d && d.fingerprint, d && d.selected, a.agent_status, a.state_labels, state.ask && state.ask.tool_call_id]);
+  const sig = JSON.stringify([answer.loaded, d && d.fingerprint, d && d.selected, d && d.insert, a.agent_status, a.state_labels, state.ask && state.ask.tool_call_id]);
   if (answer.shown && sig === answer.sig) return;
   answer.sig = sig;
   el.innerHTML = answerCardHTML(a, d);
@@ -2171,12 +2183,19 @@ function answerCardHTML(a, d) {
         html += `<div class="opt-note">✎ ${esc(o.label)} <span class="opt-desc">${esc(h.other)}</span></div>`;
         return;
       }
-      if (!d.answerable) {
+      if (o.role === "chat") {
+        html += `<div class="opt-note">💬 ${esc(o.label)} <span class="opt-desc">${esc(h.chat)}</span></div>`;
+        return;
+      }
+      if (!d.answerable || d.insert) {
         html += `<div class="opt ro${cur}"><span class="opt-label">${esc(o.label)}</span>${desc}</div>`;
         return;
       }
       if (o.role === "next") {
-        html += `<button type="button" class="opt submit${cur}" data-action="submit" data-i="${i}"><span class="opt-label">Submit selection</span></button>`;
+        // Zero ticks is a valid answer: say so, so "Next" is never a mystery.
+        const none = !d.options.some((x) => x.checked);
+        const word = o.label === "Submit" ? "Submit" : "Next";
+        html += `<button type="button" class="opt submit${cur}" data-action="submit" data-i="${i}"><span class="opt-label">${word}${none ? " with none selected" : ""}</span></button>`;
         return;
       }
       const box = d.multi ? `<span class="opt-box">${o.checked ? "☑" : "☐"}</span>` : "";
@@ -2184,7 +2203,13 @@ function answerCardHTML(a, d) {
         `${i === d.selected ? ' aria-current="true"' : ""}>${box}<span class="opt-label">${esc(o.label)}</span>${desc}</button>`;
     });
     html += "</div>";
-    if (d.cancel_label) {
+    if (d.insert) {
+      // A text field in vim INSERT mode swallows arrows and Enter. One Esc
+      // leaves it; a second would cancel the whole question, so only this
+      // button sends it, and only while the field is focused.
+      html += '<div class="ans-hint">A text field is focused (INSERT mode), so the options cannot be used yet.</div>' +
+        '<button type="button" class="opt submit" data-action="reset" data-i="-1"><span class="opt-label">Leave the text field (one Esc)</span></button>';
+    } else if (d.cancel_label) {
       html += `<button type="button" class="opt cancel" data-action="cancel" data-i="-1">${esc(h.cancel)}</button>`;
     }
     if (h.after) html += `<div class="ans-hint">${esc(h.after)}</div>`;
@@ -2219,6 +2244,7 @@ function dialogHints(d) {
     set: "",
     other: "Free-text answer: type it at the desk, or use More keys….",
     cancel: "Esc · Cancel",
+    chat: "",
     after: "",
     pad: "Use the keys below and check the screen: it shows the current highlight.",
   };
@@ -2245,7 +2271,9 @@ function dialogHints(d) {
       h.pad = "Press an option's number, or ↑/↓ then Enter; Esc cancels.";
       break;
     case "claude_question":
-      h.pad = "↑/↓ then Enter picks; Esc cancels. Check the screen below.";
+      h.cancel = d.multi ? "Esc · Cancel the question (discards answers on every tab)" : "Esc · Cancel";
+      h.chat = "ends the question to talk it over; not an answer";
+      h.pad = "↑/↓ move, Space ticks, Enter on Next continues; Esc cancels. Check the screen below.";
       break;
     case "confirm":
       h.pad = "Answer with the buttons above; the keys below move or interrupt.";
@@ -2322,7 +2350,10 @@ function setDialog(pane, d) {
   answer.dialog = d;
   answer.loaded = true;
   const a = agentById(pane);
-  if (a && needsAnswer(a)) renderAnswerCard(a);
+  if (a && needsAnswer(a)) {
+    renderAnswerCard(a);
+    $("answer").style.display = staleQuestion(a) ? "none" : "block";
+  }
 }
 
 async function refreshDialog() {
@@ -2439,9 +2470,12 @@ function refreshView() {
 async function sendPrompt() {
   const text = promptValue().trim();
   if (!text || state.sending) return;
-  if (state.ask) {
+  const cur = agentById(state.selected);
+  if (state.ask && cur && cur.agent_status === "working") {
     // herdr only refuses prompts while `blocked`; an open questionnaire
     // reports `working`, and pasted text + Enter would land in the dialog.
+    // (The server refuses with 409 dialog_open for any other status when the
+    // question is really on screen.)
     toast("answer the question first (or Esc to cancel it)", true);
     return;
   }

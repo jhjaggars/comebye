@@ -544,6 +544,12 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	if a := s.resolveAgent(target); a != nil {
+		if err := s.guardPrompt(ctx, *a); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
 	agent, err := s.client.Prompt(ctx, target, body.Text, opts)
 	if err != nil {
 		writeError(w, err)
@@ -696,7 +702,7 @@ func writeError(w http.ResponseWriter, err error) {
 	if errors.As(err, &he) {
 		status := http.StatusBadGateway
 		switch he.Code {
-		case "agent_blocked":
+		case "agent_blocked", "dialog_open":
 			status = http.StatusConflict
 		case "pane_not_found", "agent_not_found":
 			status = http.StatusNotFound

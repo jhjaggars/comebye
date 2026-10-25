@@ -84,19 +84,51 @@ func (s *Server) pendingAsk(agent herdr.AgentInfo) *transcript.Ask {
 }
 
 // currentDialog detects the dialog the agent is waiting on. Only agents that
-// are actually waiting are examined (herdr says blocked, or a transcript
-// question is open while working): an idle agent's prompt box must never be
-// "answered" with an Enter.
+// are actually waiting are examined: herdr says blocked, or a transcript
+// question is open. Claude Code's AskUserQuestion does not reliably flip
+// herdr to blocked (the coordinator showed "done" while stuck on one), so an
+// open question counts whatever the status. An idle agent's prompt box must
+// never be "answered" with an Enter, so without either signal nothing is read.
 func currentDialog(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *transcript.Ask) (*dialog.Dialog, error) {
-	waiting := agent.Status == herdr.StatusBlocked || (ask != nil && agent.Status == herdr.StatusWorking)
-	if !waiting {
+	if agent.Status != herdr.StatusBlocked && ask == nil {
 		return nil, nil
 	}
 	read, err := io.ReadPane(ctx, agent.PaneID, "visible", 0)
 	if err != nil {
 		return nil, err
 	}
-	return dialog.Resolve(read.Text, agent.Agent, ask), nil
+	d := dialog.Resolve(read.Text, agent.Agent, ask)
+	// A question the transcript still calls open but that is not on screen
+	// is only believable while the agent is working; on a finished agent it
+	// is a stale record (the session was killed or restarted).
+	if d != nil && d.Kind == dialog.KindAsk && agent.Status != herdr.StatusWorking && agent.Status != herdr.StatusBlocked {
+		return nil, nil
+	}
+	return d, nil
+}
+
+// errDialogOpen refuses free text for an agent that has a dialog on screen:
+// the text and Enter would be typed into the dialog (a multi-select's
+// free-text row, for one) instead of reaching the prompt.
+var errDialogOpen = &herdr.Error{Code: "dialog_open", Message: "the agent is waiting on a question: answer it first (or cancel it)"}
+
+// guardPrompt returns errDialogOpen when agent has a question on screen.
+// herdr only refuses prompts while the agent is blocked, which is not
+// reliable for Claude's multi-select. Read failures fail open: herdr's own
+// refusal still applies.
+func (s *Server) guardPrompt(ctx context.Context, agent herdr.AgentInfo) error {
+	return promptGuard(ctx, s.client, agent, s.pendingAsk(agent))
+}
+
+func promptGuard(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *transcript.Ask) error {
+	if ask == nil {
+		return nil
+	}
+	d, err := currentDialog(ctx, io, agent, ask)
+	if err != nil || d == nil || d.Kind == dialog.KindAsk {
+		return nil
+	}
+	return errDialogOpen
 }
 
 func (s *Server) handleDialog(w http.ResponseWriter, r *http.Request) {
@@ -168,9 +200,9 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 // returns the HTTP status and JSON body.
 func answerDialog(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *transcript.Ask, body answerBody, dd *answerDedupe, now time.Time) (int, any) {
 	switch body.Action {
-	case dialog.ActionSelect, dialog.ActionToggle, dialog.ActionSubmit, dialog.ActionCancel:
+	case dialog.ActionSelect, dialog.ActionToggle, dialog.ActionSubmit, dialog.ActionCancel, dialog.ActionReset:
 	default:
-		return http.StatusBadRequest, map[string]string{"code": "bad_answer", "message": "action must be select, toggle, submit or cancel"}
+		return http.StatusBadRequest, map[string]string{"code": "bad_answer", "message": "action must be select, toggle, submit, cancel or reset"}
 	}
 	if body.Fingerprint == "" {
 		return http.StatusBadRequest, map[string]string{"code": "bad_answer", "message": "fingerprint is required"}
@@ -190,6 +222,11 @@ func answerDialog(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *tr
 		return http.StatusBadRequest, map[string]any{"code": "bad_answer", "message": err.Error(), "dialog": d}
 	}
 	claimKey := agent.PaneID + "\x00" + d.Fingerprint
+	if body.Action == dialog.ActionReset {
+		// Leaving the text field changes nothing in the fingerprint; keep it
+		// from blocking the answer that follows.
+		claimKey += "\x00reset"
+	}
 	if !dd.claim(claimKey, now) {
 		return http.StatusConflict, map[string]any{"code": "duplicate", "message": "already answered", "dialog": d}
 	}
@@ -217,7 +254,7 @@ func errorBody(err error) (int, any) {
 	if errors.As(err, &he) {
 		status := http.StatusBadGateway
 		switch he.Code {
-		case "agent_blocked":
+		case "agent_blocked", "dialog_open":
 			status = http.StatusConflict
 		case "pane_not_found", "agent_not_found":
 			status = http.StatusNotFound

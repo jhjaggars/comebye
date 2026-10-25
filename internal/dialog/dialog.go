@@ -57,6 +57,7 @@ const (
 const (
 	RoleOther = "other" // the free-text "Type something." row
 	RoleNext  = "next"  // the multi-select "Next" (commit) row
+	RoleChat  = "chat"  // Claude's "Chat about this" row: never an answer
 )
 
 // Option is one row of a dialog.
@@ -86,6 +87,9 @@ type Dialog struct {
 	// prompt is about), already dedented.
 	Detail  string   `json:"detail,omitempty"`
 	Options []Option `json:"options"`
+	// Insert is set when the highlighted row is a free-text field in vim
+	// INSERT mode: it swallows arrows and Enter until one Esc leaves it.
+	Insert bool `json:"insert,omitempty"`
 	// Selected is the highlighted option index, -1 when unknown.
 	Selected int  `json:"selected"`
 	Multi    bool `json:"multi,omitempty"`
