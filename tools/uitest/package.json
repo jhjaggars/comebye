@@ -1,0 +1,6 @@
+{
+  "name": "comebye-uitest",
+  "private": true,
+  "description": "Headless-Chrome checks of the web app against a fake herdr. See CONTRIBUTING.md.",
+  "dependencies": { "playwright-core": "1.49.1" }
+}
