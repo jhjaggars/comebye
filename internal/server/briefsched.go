@@ -43,6 +43,10 @@ const (
 	missNoCoordinator = "no_coordinator"
 	missBusy          = "busy"
 	missNoBriefing    = "no_briefing"
+	// waitUnknown is not a miss: the hub cannot tell whether a coordinator
+	// is running (a recorded one is not in the fleet, or the fleet is
+	// empty), so it skips this tick and asks again at the next.
+	waitUnknown = "unknown"
 )
 
 // BriefSchedule is the schedule's configuration.
@@ -352,18 +356,23 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 
 // briefCoordinator picks the coordinator to prompt: a running one that is
 // idle (or done), the hub's own first, then the most recently made one.
-// Without one it says why: no coordinator running, or all busy.
+// Without one it says why: no coordinator running, all busy, or unknown
+// (a recorded coordinator is not in the fleet: its host may be down or
+// still starting; never counted as a miss).
 func (s *Server) briefCoordinator() (*herdr.AgentInfo, string) {
 	roles := s.liveRoles()
+	agents := s.fleet.Agents()
+	seen := map[string]bool{}
 	type cand struct {
 		a  herdr.AgentInfo
 		at time.Time
 	}
 	var ready []cand
 	running := false
-	for _, a := range s.fleet.Agents() {
+	for _, a := range agents {
+		seen[a.ID] = true
 		r, ok := roles[a.ID]
-		if !ok || r.Role != RoleCoordinator || (r.Name != "" && a.Name != r.Name) {
+		if !ok || r.Role != RoleCoordinator || (r.Name != "" && a.Name != "" && a.Name != r.Name) {
 			continue
 		}
 		running = true
@@ -374,6 +383,14 @@ func (s *Server) briefCoordinator() (*herdr.AgentInfo, string) {
 	if len(ready) == 0 {
 		if running {
 			return nil, missBusy
+		}
+		if len(agents) == 0 {
+			return nil, waitUnknown
+		}
+		for id, r := range roles {
+			if r.Role == RoleCoordinator && !seen[id] {
+				return nil, waitUnknown
+			}
 		}
 		return nil, missNoCoordinator
 	}

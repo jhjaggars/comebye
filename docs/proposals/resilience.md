@@ -175,8 +175,8 @@ an empty live name in `liveRoles` as "unknown", like `isCoordinator` does.
 It stops the role from being hidden by a vanished name while the real fix
 is built.
 
-Out of scope here, but part of the same symptom: the scheduled briefings
-that were dismissed are not in this repo. Whatever asks "is a coordinator
+Part of the same symptom: the scheduled briefings that were dismissed
+(`internal/server/briefsched.go`). Whatever asks "is a coordinator
 running?" should treat "cannot tell" (roles unavailable, role present but
 the agent absent) as *skip and retry*, not *dismiss*.
 
@@ -532,9 +532,9 @@ there is deliberate and documented, so I left it.
    later, and if so with or without the confirmation?
 7. **Retention**: 30 days for `absent` agents and 50 snapshots per host
    proposed; any other number?
-8. **Scheduled briefings**: where does the scheduler that asked "is a
-   coordinator running?" live? It is not in this repo; it should skip and
-   retry when it cannot tell.
+8. **Scheduled briefings**: the scheduler that asks "is a
+   coordinator running?" is `internal/server/briefsched.go`; it now skips and
+   retries when it cannot tell.
 9. **Names**: after a rebuild the VM's Pi agents have no herdr name. Should
    the hub re-apply the recorded name when it finds an identity without
    one (a "name self-heal"), given that names are only cosmetic once roles

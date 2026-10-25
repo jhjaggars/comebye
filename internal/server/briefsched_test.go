@@ -239,3 +239,32 @@ func TestBriefScheduleValidation(t *testing.T) {
 		t.Fatalf("reloaded = %+v", v)
 	}
 }
+
+// When the hub cannot tell whether a coordinator is running (the recorded
+// one is not in the fleet), the slot is neither missed nor dismissed: the
+// next tick asks again and prompts the coordinator once it is back.
+func TestBriefScheduleUnknownRetries(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	ctx := context.Background()
+	base := time.Now().Add(-10 * time.Hour).Truncate(time.Minute)
+	schedAt(t, s, base)
+	if err := s.roles.set("desk/gone:p9", Role{Role: RoleCoordinator, Name: "coordinator", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	s.briefTick(ctx, base.Add(time.Hour+30*time.Second))
+	s.briefTick(ctx, base.Add(time.Hour+90*time.Second))
+	if v := schedView(t, s); v.Missed != nil || promptCount(fh) != 0 {
+		t.Fatalf("counted a miss when it could not tell: %+v", v)
+	}
+	// The coordinator is back (a vanished name still counts).
+	if err := s.roles.set("desk/gone:p9", Role{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.roles.set("desk/w1:p1", Role{Role: RoleCoordinator, Name: "coordinator", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	s.briefTick(ctx, base.Add(time.Hour+150*time.Second))
+	if v := schedView(t, s); v.State != "prompted" || v.Missed != nil || promptCount(fh) != 1 {
+		t.Fatalf("not prompted after it was back: %+v", v)
+	}
+}
