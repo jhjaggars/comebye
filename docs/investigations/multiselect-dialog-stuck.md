@@ -143,3 +143,23 @@ is allowed. Consequences:
 - Need a real capture of the Claude multi-select screen (tab bar, `Next`,
   `Chat about this` rows) as a test fixture; `Chat about this` must be
   recognised as a non-option row and never sent.
+
+## Implemented (steps 1 and 2)
+
+- Real Claude Code v2.1.310 multi-select screens captured into
+  `internal/dialog/testdata/`. Findings that differ from the assumptions above:
+  the free-text row reads `Type something` (no period, so it was not recognised
+  as "other" and could be toggled); the commit row is an unmarked `Next` (or
+  `Submit` on the last tab); `Chat about this` is a numbered row below a rule;
+  committing with nothing ticked is allowed and leaves the tab unanswered.
+- `internal/dialog/claude_multi.go`: parser, toggle/submit key mapping,
+  `insert` flag (vim INSERT on the free-text row), `reset` action.
+- `internal/server`: questions count as waiting whatever herdr's status;
+  `/prompt` and the scheduled briefing/mark prompts refuse with 409
+  `dialog_open` when the question is really on screen; stale transcript
+  questions (nothing on screen, agent finished) neither block prompts nor
+  show a card.
+- `web/app.js`: card for any open question, "Next with none selected",
+  read-only "Chat about this", "Leave the text field (one Esc)" button.
+- Not done: CLI parity (`comebye dialog/answer`), playbook rule, hooks spike,
+  a browser-harness scenario for the multi-select card.

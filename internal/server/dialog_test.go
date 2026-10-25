@@ -291,3 +291,91 @@ func TestDialogHostRoutes(t *testing.T) {
 		}
 	}
 }
+
+const claudeMultiScreen = `
+←  ☐ Investigate  ☐ Output  ✔ Submit  →
+
+What should be investigated?
+
+❯ 1. [ ] A
+         Option A
+  2. [ ] B
+         Option B
+  3. [ ] Type something
+     Next
+──────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+`
+
+func multiAsk() *transcript.Ask {
+	return &transcript.Ask{ToolCallID: "q", Questions: []transcript.AskQuestion{{
+		Header: "Investigate", Question: "What should be investigated?", MultiSelect: true,
+		Options: []transcript.AskOption{{Label: "A"}, {Label: "B"}},
+	}}}
+}
+
+// The incident: herdr said "done" while a multi-select was open. The
+// question must still be found, answerable, and must stop free text.
+func TestClaudeMultiSelectWhileDone(t *testing.T) {
+	done := herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusDone}
+	ask := multiAsk()
+	io := &fakeIO{screens: []string{claudeMultiScreen}}
+	d, err := currentDialog(context.Background(), io, done, ask)
+	if err != nil || d == nil || !d.Multi || !d.Answerable {
+		t.Fatalf("done+ask: %+v %v", d, err)
+	}
+	if err := promptGuard(context.Background(), io, done, ask); err != errDialogOpen {
+		t.Fatalf("prompt not refused: %v", err)
+	}
+	// Toggle B, then commit with the keys computed from the highlight.
+	if s, b := answerDialog(context.Background(), io, done, ask, answerBody{Action: "toggle", Index: 1, Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now()); s != http.StatusOK {
+		t.Fatalf("toggle: %d %v", s, b)
+	}
+	if s, b := answerDialog(context.Background(), io, done, ask, answerBody{Action: "submit", Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now()); s != http.StatusOK {
+		t.Fatalf("submit: %d %v", s, b)
+	}
+	want := [][]string{{"down", "space"}, {"down", "down", "down", "enter"}}
+	if !reflect.DeepEqual(io.sent, want) {
+		t.Fatalf("sent %v, want %v", io.sent, want)
+	}
+}
+
+func TestPromptGuardAllowsStaleAndNoAsk(t *testing.T) {
+	done := herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusDone}
+	// No transcript question: nothing is read, the prompt goes through.
+	io := &fakeIO{screens: []string{claudeMultiScreen}}
+	if err := promptGuard(context.Background(), io, done, nil); err != nil || io.reads != 0 {
+		t.Fatalf("no ask: %v reads=%d", err, io.reads)
+	}
+	// A question the transcript calls open on a finished agent whose screen
+	// shows only the prompt box is stale: do not wedge prompts forever.
+	io = &fakeIO{screens: []string{"● Done.\n❯ \n"}}
+	if err := promptGuard(context.Background(), io, done, multiAsk()); err != nil {
+		t.Fatalf("stale ask refused prompts: %v", err)
+	}
+}
+
+func TestResetOnlyLeavesInsertMode(t *testing.T) {
+	done := herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusDone}
+	insert := strings.Replace(claudeMultiScreen, "❯ 1. [ ] A", "  1. [ ] A", 1)
+	insert = strings.Replace(insert, "  3. [ ] Type something", "❯ 3. [ ] typed text", 1) + "\n-- INSERT --\n"
+	io := &fakeIO{screens: []string{insert}}
+	d, _ := currentDialog(context.Background(), io, done, multiAsk())
+	if d == nil || !d.Insert {
+		t.Fatalf("insert not seen: %+v", d)
+	}
+	if s, _ := answerDialog(context.Background(), io, done, multiAsk(), answerBody{Action: "toggle", Index: 0, Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now()); s != http.StatusBadRequest || len(io.sent) != 0 {
+		t.Fatalf("toggle in INSERT mode: %d sent=%v", s, io.sent)
+	}
+	if s, b := answerDialog(context.Background(), io, done, multiAsk(), answerBody{Action: "reset", Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now()); s != http.StatusOK || !reflect.DeepEqual(io.sent, [][]string{{"esc"}}) {
+		t.Fatalf("reset: %d %v sent=%v", s, b, io.sent)
+	}
+	// Out of INSERT mode a reset is refused: Esc would cancel the question.
+	io = &fakeIO{screens: []string{claudeMultiScreen}}
+	d, _ = currentDialog(context.Background(), io, done, multiAsk())
+	if s, _ := answerDialog(context.Background(), io, done, multiAsk(), answerBody{Action: "reset", Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now()); s != http.StatusBadRequest || len(io.sent) != 0 {
+		t.Fatalf("reset outside INSERT: %d sent=%v", s, io.sent)
+	}
+}

@@ -1,0 +1,20 @@
+❯ Immediately call AskUserQuestion with exactly two questions.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Investigate  ☐ Output  ✔ Submit  →
+
+What should be investigated?
+
+  1. [✔] A
+         Option A
+  2. [ ] B
+         Option B
+  3. [ ] C
+         Option C
+  4. [ ] D
+         Option D
+  5. [ ] Type something
+❯    Next
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

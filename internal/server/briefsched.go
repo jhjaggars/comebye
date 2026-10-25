@@ -437,6 +437,9 @@ func (s *Server) promptBrief(ctx context.Context, a herdr.AgentInfo, plan schedP
 // promptAgent sends text to an agent on any host.
 func (s *Server) promptAgent(ctx context.Context, a herdr.AgentInfo, text string) error {
 	if a.Host == "" || a.Host == s.fleet.LocalName() {
+		if err := s.guardPrompt(ctx, a); err != nil {
+			return err
+		}
 		_, err := s.client.Prompt(ctx, a.PaneID, text, herdr.PromptOptions{})
 		return err
 	}

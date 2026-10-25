@@ -71,14 +71,15 @@ func labelsMatch(screen, authored string) bool {
 func mergeAsk(sd *Dialog, q transcript.AskQuestion) *Dialog {
 	n := len(q.Options)
 	matched := 0
-	activeNum, activeNext := 0, false
+	activeNum, activeNext, activeChat := 0, false, false
 	checked := map[int]*bool{}
 	for k, o := range sd.Options {
 		if k == sd.Selected {
 			activeNum, activeNext = o.num, o.Role == RoleNext
+			activeChat = o.Role == RoleChat
 		}
 		switch {
-		case o.Role == RoleNext:
+		case o.Role == RoleNext || o.Role == RoleChat:
 			continue
 		case o.num >= 1 && o.num <= n:
 			if !labelsMatch(o.Label, q.Options[o.num-1].Label) {
@@ -116,18 +117,34 @@ func mergeAsk(sd *Dialog, q transcript.AskQuestion) *Dialog {
 	}
 	d.Options = append(d.Options, Option{Label: otherLabel, Role: RoleOther, num: n + 1})
 	if d.Multi {
-		d.Options = append(d.Options, Option{Label: "Next", Role: RoleNext})
+		// Keep the screen's commit row label ("Next", or "Submit" on the last tab).
+		next := Option{Label: "Next", Role: RoleNext}
+		for _, o := range sd.Options {
+			if o.Role == RoleNext {
+				next.Label = o.Label
+			}
+		}
+		d.Options = append(d.Options, next)
+	}
+	hasChat := false
+	for _, o := range sd.Options {
+		if o.Role == RoleChat {
+			hasChat = true
+			d.Options = append(d.Options, o)
+		}
 	}
 	switch {
-	case activeNext && d.Multi:
+	case activeChat && hasChat:
 		d.Selected = len(d.Options) - 1
+	case activeNext && d.Multi:
+		d.Selected = len(d.Options) - 1 - btoi(hasChat)
 	case activeNum >= 1 && activeNum <= n+1:
 		d.Selected = activeNum - 1
 	default:
 		d.Selected = -1
 		d.Answerable = false
 	}
-	if d.Multi && d.Kind != KindPiQuestion {
+	if d.Multi && d.Kind != KindPiQuestion && !sd.Answerable {
 		d.Answerable = false
 	}
 	if d.Multi && d.Kind == KindPiQuestion && d.Selected >= 0 {
@@ -142,6 +159,7 @@ const (
 	ActionToggle = "toggle" // flip a multi-select checkbox
 	ActionSubmit = "submit" // commit a multi-select question (its Next row)
 	ActionCancel = "cancel" // Esc
+	ActionReset  = "reset"  // one Esc to leave a focused text field, only then
 )
 
 // ErrBadAnswer is returned (wrapped) for answers that cannot be keyed.
@@ -159,11 +177,22 @@ func Keys(d *Dialog, action string, index int) ([]string, error) {
 	if d == nil {
 		return nil, bad("no dialog")
 	}
+	if action == ActionReset {
+		// Leaving INSERT mode is the only thing an Esc may do here: once the
+		// field is not focused, Esc cancels the whole question.
+		if !d.Insert {
+			return nil, bad("no text field is focused; nothing to reset")
+		}
+		return []string{"esc"}, nil
+	}
 	if action == ActionCancel {
 		if d.CancelLabel == "" {
 			return nil, bad("this dialog has no cancel")
 		}
 		return []string{"esc"}, nil
+	}
+	if d.Insert {
+		return nil, bad("a text field is focused and swallows the keys: reset the dialog first")
 	}
 	if !d.Answerable {
 		return nil, bad("this dialog can only be answered with the key pad")
@@ -190,6 +219,9 @@ func Keys(d *Dialog, action string, index int) ([]string, error) {
 	o := d.Options[index]
 	if o.Role == RoleOther {
 		return nil, bad("free-text answers are not supported; use the key pad")
+	}
+	if o.Role == RoleChat {
+		return nil, bad("\"Chat about this\" is not an answer")
 	}
 	if d.Multi != (action != ActionSelect) {
 		if d.Multi {
@@ -242,4 +274,11 @@ func ArrowKeys(d *Dialog, action string, index int) ([]string, error) {
 		return append(keys, "space"), nil
 	}
 	return append(keys, "enter"), nil
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

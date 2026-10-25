@@ -1,0 +1,18 @@
+❯ Immediately call AskUserQuestion with exactly two questions.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Investigate  ☐ Output  ✔ Submit  →
+
+What output do you want?
+
+❯ 1. [ ] X
+         Output X
+  2. [ ] Y
+         Output Y
+  3. [ ] Z
+         Output Z
+  4. [ ] Type something
+     Submit
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
