@@ -62,4 +62,10 @@ jobs:
       # Dev/CI only: its playwright-core is pinned by package-lock.json and
       # drives the runner's own Chrome, so nothing is downloaded or shipped.
       - name: browser checks
-        run: CHROME="$(command -v google-chrome || command -v chromium)" tools/uitest/run.sh . "$RUNNER_TEMP/uitest"
+        run: |
+          CHROME="$(command -v google-chrome || command -v chromium || true)"
+          if [ -z "$CHROME" ]; then
+            echo "::warning::no google-chrome or chromium on this runner; skipping browser checks"
+            exit 0
+          fi
+          CHROME="$CHROME" tools/uitest/run.sh . "$RUNNER_TEMP/uitest"
