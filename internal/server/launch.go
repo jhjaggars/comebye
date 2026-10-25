@@ -222,8 +222,16 @@ func (s *Server) localAgents() []herdr.AgentInfo {
 
 // launchKinds returns the herdr agent kinds that can be launched here:
 // those installed on this host plus those already running on it (proof
-// enough that they work), in herdr's order.
+// enough that they work), in herdr's order, plus those that worked within
+// the last 90 days (kinds.json) even if they cannot be found now.
 func (s *Server) launchKinds(running []herdr.AgentInfo) []string {
+	kinds, _ := s.launchKindsDetail(running)
+	return kinds
+}
+
+// launchKindsDetail is launchKinds, and the kinds that are offered only
+// because they worked before.
+func (s *Server) launchKindsDetail(running []herdr.AgentInfo) (kinds []string, remembered map[string]bool) {
 	have := map[string]bool{}
 	for _, a := range running {
 		have[a.Agent] = true
@@ -232,17 +240,23 @@ func (s *Server) launchKinds(running []herdr.AgentInfo) []string {
 	if find == nil {
 		find = installed
 	}
-	var out []string
+	now := time.Now()
+	remembered = map[string]bool{}
 	for _, k := range herdr.AgentKinds {
 		ok := have[k] || find(k)
 		for _, alt := range kindExecutables[k] {
 			ok = ok || find(alt)
 		}
 		if ok {
-			out = append(out, k)
+			s.kinds.remember(k, now)
+		} else if s.kinds.recalled(k, now) {
+			ok, remembered[k] = true, true
+		}
+		if ok {
+			kinds = append(kinds, k)
 		}
 	}
-	return out
+	return kinds, remembered
 }
 
 // defaultKind is the kind most running agents here use, else the first.

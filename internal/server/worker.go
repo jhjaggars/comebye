@@ -73,17 +73,19 @@ func (s *Server) checkRoots() []string {
 
 // pickKind validates an agent kind for this host (default: the one most
 // running agents use).
-func (s *Server) pickKind(kind string, running []herdr.AgentInfo) (string, *launchError) {
-	kinds := s.launchKinds(running)
+// remembered is true when the kind is offered only because it worked
+// before, not because it was found or is running now.
+func (s *Server) pickKind(kind string, running []herdr.AgentInfo) (picked string, remembered bool, _ *launchError) {
+	kinds, rem := s.launchKindsDetail(running)
 	if kind == "" {
 		kind = defaultKind(kinds, running)
 	}
 	for _, k := range kinds {
 		if k == kind {
-			return kind, nil
+			return kind, rem[kind], nil
 		}
 	}
-	return "", &launchError{status: http.StatusBadRequest, code: "bad_kind", message: "agent kind " + kind + " is not available on this host"}
+	return "", false, &launchError{status: http.StatusBadRequest, code: "bad_kind", message: "agent kind " + kind + " is not available on this host"}
 }
 
 var errLaunchDisabled = &launchError{status: http.StatusForbidden, code: "launch_disabled", message: "launching is not available on this host"}
@@ -105,6 +107,11 @@ type workerBody struct {
 	Base   string `json:"base"`
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
+	// Worktree, set by a handoff restart, is the path of the worktree the
+	// worker already has: it is found by path whatever branch it is on now
+	// (the worker may have renamed it) and that branch is used. It must be a
+	// linked worktree of the repository inside the roots, like any other.
+	Worktree string `json:"worktree,omitempty"`
 	// Prompt is sent as is, except that {{worktree}} and {{base}} are
 	// replaced with the worktree's path and the base branch.
 	Prompt string `json:"prompt"`
@@ -161,7 +168,7 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 		return nil, &launchError{status: http.StatusBadRequest, code: "bad_branch", message: "branch names are letters, digits, '.', '_', '-' and '/' (no '..', no leading '-' or '.', at most 100)"}
 	}
 	running := s.localAgents()
-	kind, lerr := s.pickKind(b.Kind, running)
+	kind, remembered, lerr := s.pickKind(b.Kind, running)
 	if lerr != nil {
 		return nil, lerr
 	}
@@ -208,8 +215,19 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	if err != nil {
 		return nil, herdrFailure("list the repository's worktrees", err)
 	}
+	hint := ""
+	if b.Worktree != "" {
+		hint = filepath.Clean(b.Worktree)
+	}
 	var existing *herdr.Worktree
 	for i, wt := range wts {
+		if hint != "" {
+			if filepath.Clean(wt.Path) == hint {
+				existing = &wts[i]
+				break
+			}
+			continue
+		}
 		if wt.Branch == branch || wt.Branch == "refs/heads/"+branch || filepath.Clean(wt.Path) == wtPath {
 			existing = &wts[i]
 			break
@@ -219,6 +237,13 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	reused := existing != nil
 	if reused {
 		path := filepath.Clean(existing.Path)
+		if live := strings.TrimPrefix(existing.Branch, "refs/heads/"); hint != "" && existing.IsLinked && live != "" && live != branch {
+			// The worker renamed its branch: it is the same worker.
+			if !validBranch(live) {
+				return nil, &launchError{status: http.StatusConflict, code: "path_taken", message: path + " is on branch " + live + ", which comebye cannot manage"}
+			}
+			branch = live
+		}
 		switch {
 		case !existing.IsLinked:
 			return nil, &launchError{status: http.StatusConflict, code: "branch_in_primary", message: "branch " + branch + " is checked out in the primary checkout; a worker needs its own branch"}
@@ -259,6 +284,12 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	agent, err := s.startAgent(ctx, name, kind, pane)
 	if err != nil {
 		e := herdrFailure("start "+kind, err)
+		if remembered {
+			// It worked here before but is gone now: say so, and stop
+			// offering it.
+			s.kinds.forget(kind)
+			e.message = "agent kind " + kind + " worked on this host before but could not be started now (uninstalled or moved?): " + errMessage(err)
+		}
 		e.message += fmt.Sprintf(". The worktree's workspace %q is left open in herdr.", opened.Label)
 		if e.code == "agent_name_taken" {
 			e.status = http.StatusConflict
@@ -266,6 +297,7 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 		e.workspace = opened.WorkspaceID
 		return nil, e
 	}
+	s.kinds.remember(kind, time.Now())
 	if s.manager != nil {
 		s.manager.Refresh()
 	}

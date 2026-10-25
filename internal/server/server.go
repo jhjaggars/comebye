@@ -123,7 +123,10 @@ type Server struct {
 	brief      *briefStore
 	briefSched *briefSchedStore
 	roles      *roleStore
-	coord      coord
+	// kinds remembers the agent kinds that worked on this host (nil
+	// without a state directory).
+	kinds *kindStore
+	coord coord
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -146,6 +149,9 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout}
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}}
+	if cfg.StateDir != "" {
+		s.kinds = openKinds(kindsPath(cfg.StateDir))
+	}
 	if cfg.StateDir != "" && !cfg.NoLedger && cfg.Upstream == nil {
 		l, err := openLedger(cfg.StateDir)
 		if err != nil {
