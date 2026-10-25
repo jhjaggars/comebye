@@ -187,7 +187,9 @@ func (s *Server) isCoordinator(id, name string) bool {
 }
 
 // liveRoles are the roles of the agents the fleet sees now whose names
-// still match, plus the roles of agents not seen (a host may be down).
+// still match, plus the roles of agents not seen (a host may be down). An
+// agent seen without a name keeps its role, as in isCoordinator: herdr
+// clears a name for reasons that leave the agent as it was.
 func (s *Server) liveRoles() map[string]Role {
 	out := map[string]Role{}
 	if s.roles == nil {
@@ -198,7 +200,7 @@ func (s *Server) liveRoles() map[string]Role {
 		names[a.ID] = a.Name
 	}
 	for id, r := range s.roles.all() {
-		if n, seen := names[id]; seen && r.Name != "" && n != r.Name {
+		if n, seen := names[id]; seen && r.Name != "" && n != "" && n != r.Name {
 			continue // the pane now runs another agent
 		}
 		out[id] = r
