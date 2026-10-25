@@ -20,7 +20,7 @@ tmp="$(mktemp -d)"
 mkdir -p "$out"
 trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$tmp"' EXIT
 
-(cd "$here" && [ -d node_modules/playwright-core ] || npm install --no-audit --no-fund --silent)
+(cd "$here" && [ -d node_modules/playwright-core ] || npm ci --no-audit --no-fund --silent)
 
 (cd "$root" && go build -o "$tmp/fake-herdr" ./tools/devserver)
 (cd "$app" && go build -o "$tmp/comebye" .)

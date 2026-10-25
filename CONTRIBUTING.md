@@ -7,7 +7,9 @@ welcome.
   agree on the approach before you spend time on it.
 - **Keep it small.** comebye is deliberately a single Go binary with a
   dependency-free web UI (plain HTML/CSS/JS in `web/`, no build step). Please
-  do not add Go module dependencies or a JS toolchain without discussing it.
+  do not add Go module dependencies without discussing it. The only JS
+  tooling is the dev/CI-only browser harness in `tools/uitest` (pinned,
+  never shipped, not part of the binary).
 - **Before sending a pull request**, run:
 
   ```sh
@@ -18,6 +20,9 @@ welcome.
   # markdown rendering + sanitization in headless Chrome (Node 22+), against
   # a running instance; --agent/--screenshot also check a chat at 360px:
   node web/test/markdown.test.mjs http://127.0.0.1:8741/
+  # the app in headless Chrome against a fake herdr (see "Browser checks"
+  # below); run it for any change under web/ that affects what the user sees
+  tools/uitest/run.sh
   ```
 
   CI runs the same checks.
@@ -51,6 +56,11 @@ welcome.
 - `herdr api schema --json` prints the full JSON Schema for the protocol.
 
 ## Browser checks against a fake herdr
+
+A UI change that touches what happens after a send, switching agents, or the
+raw/chat views should add a check to `tools/uitest/drive.mjs` (and a fake
+behaviour to `tools/devserver` if it needs one) rather than only a source
+test. CI runs this harness.
 
 `web/app_test.go` only checks the source; `tools/uitest` drives the real
 app in headless Chrome (a phone-sized viewport) against `tools/devserver`,

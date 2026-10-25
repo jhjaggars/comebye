@@ -57,3 +57,9 @@ jobs:
       - name: node --check
         run: |
           for f in web/*.js; do node --check "$f"; done
+
+      # The app in headless Chrome against a fake herdr (tools/uitest).
+      # Dev/CI only: its playwright-core is pinned by package-lock.json and
+      # drives the runner's own Chrome, so nothing is downloaded or shipped.
+      - name: browser checks
+        run: CHROME="$(command -v google-chrome || command -v chromium)" tools/uitest/run.sh . "$RUNNER_TEMP/uitest"
