@@ -343,6 +343,21 @@ func TestPromptMarkBrief(t *testing.T) {
 		t.Fatalf("self prompt: %d %s", code, errb)
 	}
 
+	// A TEXT that is an existing file is refused (the agent would get the
+	// path); stdin sends the file's contents.
+	file := filepath.Join(t.TempDir(), "reboot-prompt.md")
+	if err := os.WriteFile(file, []byte("resume work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	n := len(f.reqs)
+	if code := run(e, "prompt", "solo", file); code == 0 || !strings.Contains(errb.String(), "is a file") || !strings.Contains(errb.String(), "- <") {
+		t.Fatalf("file text: %d %s", code, errb)
+	}
+	if len(f.reqs) != n {
+		t.Fatalf("a refused prompt reached the hub: %v", f.reqs[n:])
+	}
+
 	f.answers["POST /api/marks"] = answer{body: `{"mark":{}}`}
 	if code := run(e, "mark", "w2:p1", "--reason", "merged"); code != 0 {
 		t.Fatalf("mark: %d %s", code, errb)

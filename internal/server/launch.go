@@ -58,8 +58,15 @@ var kindExecutables = map[string][]string{
 }
 
 // userBinDirs are searched besides PATH: a systemd user unit's PATH is
-// minimal, while agents are usually installed per user.
-var userBinDirs = []string{"~/.local/bin", "~/.npm-global/bin", "~/.bun/bin", "~/go/bin", "~/.cargo/bin", "/usr/local/bin", "/opt/homebrew/bin"}
+// minimal, while agents are usually installed per user. Entries may hold
+// glob patterns: node version managers keep one bin directory per node
+// version (npm -g installs land there).
+var userBinDirs = []string{
+	"~/.local/bin", "~/.npm-global/bin", "~/.bun/bin", "~/go/bin", "~/.cargo/bin", "/usr/local/bin", "/opt/homebrew/bin",
+	"~/.nvm/versions/node/*/bin", "~/.local/share/fnm/node-versions/*/installation/bin", "~/.fnm/node-versions/*/installation/bin",
+	"~/.local/share/mise/installs/node/*/bin", "~/.local/share/mise/shims", "~/.asdf/shims", "~/.volta/bin",
+	"~/.local/share/pnpm", "~/.yarn/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin",
+}
 
 // installed reports whether an executable named name is on PATH or in one
 // of userBinDirs.
@@ -68,15 +75,27 @@ func installed(name string) bool {
 		return true
 	}
 	home, _ := os.UserHomeDir()
-	for _, d := range userBinDirs {
+	return inDirs(name, home, userBinDirs)
+}
+
+// inDirs reports whether an executable file name is in one of dirs ("~/"
+// is home; glob patterns are expanded).
+func inDirs(name, home string, dirs []string) bool {
+	for _, d := range dirs {
 		if rest, ok := strings.CutPrefix(d, "~/"); ok {
 			if home == "" {
 				continue
 			}
 			d = filepath.Join(home, rest)
 		}
-		if fi, err := os.Stat(filepath.Join(d, name)); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
-			return true
+		matches := []string{d}
+		if strings.ContainsAny(d, "*?[") {
+			matches, _ = filepath.Glob(d)
+		}
+		for _, m := range matches {
+			if fi, err := os.Stat(filepath.Join(m, name)); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+				return true
+			}
 		}
 	}
 	return false

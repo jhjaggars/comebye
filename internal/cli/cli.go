@@ -927,6 +927,13 @@ func cmdPrompt(e *Env, args []string) error {
 	if strings.TrimSpace(text) == "" {
 		return usageErr("the text is empty")
 	}
+	// TEXT is sent as is, never read from a file: a path that exists is
+	// almost always a mistake, and the agent would get the path itself.
+	if len(pos) == 2 && pos[1] != "-" {
+		if fi, err := os.Stat(pos[1]); err == nil && fi.Mode().IsRegular() {
+			return usageErr("%q is a file, and TEXT is sent as is; to send its contents, run: comebye prompt %s - < %s", pos[1], pos[0], pos[1])
+		}
+	}
 	c, err := newClient(e)
 	if err != nil {
 		return err
