@@ -42,17 +42,29 @@ function setUnauthorized(on) {
 // state.sending set, so the send button stays dead until the app is killed.
 const API_TIMEOUT_MS = 30000;
 
+// anySignal aborts when any of the signals does (AbortSignal.any needs iOS 17.4).
+function anySignal(signals) {
+  if (AbortSignal.any) return AbortSignal.any(signals);
+  const c = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) { c.abort(s.reason); break; }
+    s.addEventListener("abort", () => c.abort(s.reason), { once: true });
+  }
+  return c.signal;
+}
+
 async function api(path, opts = {}) {
   const { timeout = API_TIMEOUT_MS, ...init } = opts;
   let res;
   try {
     res = await fetch(path, {
       ...init,
-      signal: AbortSignal.timeout(timeout),
+      signal: init.signal ? anySignal([init.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
       headers: { "Content-Type": "application/json", ...(init.headers || {}) },
     });
   } catch (e) {
     if (e && e.name === "TimeoutError") throw new Error("timed out — check the connection");
+    if (e && e.name === "AbortError") { e.aborted = true; }
     throw e;
   }
   noteVersion(res.headers.get("X-App-Version"));
@@ -1057,6 +1069,7 @@ function applyPendingRoute() {
 function openDetail(id) {
   const a = agentById(id);
   if (!a) return;
+  resetTerminalView();
   const hash = agentHash(a);
   if (location.hash !== hash) {
     // A history entry, so the phone's back gesture returns to the list.
@@ -1089,6 +1102,7 @@ function closeDetail() {
   state.chat = null;
   state.ask = null;
   state.pushedRoute = false;
+  resetTerminalView();
   if (parseRoute()) history.replaceState(null, "", location.pathname + location.search);
   stopPolling();
   updateAnswerCard();
@@ -1872,21 +1886,41 @@ async function loadEarlier() {
 /* ---------- raw terminal fallback ---------- */
 
 let outputBusy = false;
+let outputAbort = null; // cancels the in-flight read when the view changes agent
+
+// resetTerminalView puts the detail pane back to its initial look and drops
+// any read in flight. Without it, an agent opened after one that fell back
+// to the raw view inherited the hidden chat and the previous agent's text.
+function resetTerminalView() {
+  if (outputAbort) outputAbort.abort();
+  outputAbort = null;
+  outputBusy = false;
+  $("output").textContent = "";
+  $("output").style.display = "none";
+  $("chat").style.display = "";
+  $("btn-terminal").style.display = "none";
+}
+
 async function refreshOutput() {
   if (!state.selected || !(state.chat && state.chat.terminal)) return;
   if (outputBusy) return; // the 4s poll must not stack reads behind a slow one
   outputBusy = true;
+  const pane = state.selected;
+  const ctl = outputAbort = new AbortController();
   try {
-    const read = await api(`${pathFor(state.selected)}/output?lines=400`);
+    const read = await api(`${pathFor(pane)}/output?lines=400`, { signal: ctl.signal, cache: "no-store" });
+    // The user may have switched agents while this was in flight.
+    if (state.selected !== pane || !state.chat || !state.chat.terminal) return;
     const el = $("output");
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     el.textContent = read.text || "(no output)";
     if (atBottom) el.scrollTop = el.scrollHeight;
   } catch (e) {
+    if (e.aborted || state.selected !== pane) return;
     if (e.status === 404) { toast("agent is gone", true); closeDetail(); }
     else toast("read failed: " + e.message, true);
   } finally {
-    outputBusy = false;
+    if (outputAbort === ctl) { outputAbort = null; outputBusy = false; }
   }
 }
 
@@ -2251,6 +2285,37 @@ function updateSendButton() {
     ? "Queue a message for its next step…" : "Send a prompt…";
 }
 
+// echoInOutput shows a sent prompt in the raw view at once; the next read
+// replaces it with what the pane really shows.
+function echoInOutput(text) {
+  if (!state.chat || !state.chat.terminal) return;
+  const el = $("output");
+  el.textContent += "\n> " + text;
+  el.scrollTop = el.scrollHeight;
+}
+
+// refreshView re-fetches the current agent's view from scratch: drops any
+// read in flight, reconnects the live stream and reloads chat or output.
+function refreshView() {
+  if (!state.selected) return;
+  const terminal = !!(state.chat && state.chat.terminal);
+  if (outputAbort) outputAbort.abort();
+  outputAbort = null;
+  outputBusy = false;
+  state.sending = false;
+  updateSendButton();
+  state.retryDelay = 1000;
+  connectEvents();
+  refreshAgents().catch(() => setConn(false));
+  if (terminal) {
+    $("output").textContent = "";
+    refreshOutput();
+  } else {
+    loadChat(true).then(refreshStatusLine);
+  }
+  toast("refreshing…");
+}
+
 async function sendPrompt() {
   const text = promptValue().trim();
   if (!text || state.sending) return;
@@ -2273,7 +2338,10 @@ async function sendPrompt() {
     setPromptValue("");
     // Echo the sent prompt locally; the transcript poll will pick it up too.
     if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
-    else setTimeout(refreshOutput, 600);
+    else {
+      echoInOutput(text);
+      setTimeout(refreshOutput, 600);
+    }
   } catch (e) {
     dropPending(pending);
     if (e.status === 409) {
@@ -2627,6 +2695,8 @@ function resume() {
   if (state.selected) {
     // A read begun before the app was backgrounded may never settle (iOS
     // drops its socket without failing the fetch); do not wait for it.
+    if (outputAbort) outputAbort.abort();
+    outputAbort = null;
     outputBusy = false;
     if (state.chat && state.chat.terminal) refreshOutput();
     else loadChat(!state.chat);
@@ -3489,6 +3559,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const b = ev.target.closest("button[data-act]");
     if (b) reviewAction(b.dataset.act, b.dataset.id);
   });
+  $("d-refresh").addEventListener("click", refreshView);
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
   $("d-role").addEventListener("click", toggleRole);

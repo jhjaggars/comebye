@@ -84,7 +84,53 @@ Hypothesis 1 below is raised to medium-high by findings 6 and 7. Added
 hypothesis 3b: keyboard/viewport resize hides the newest lines (finding 8);
 a screenshot, or whether scrolling down shows the prompt, would settle it.
 
-## Ranked hypotheses
+## Update 2: wrong agent's terminal shown after switching (root cause found)
+
+User: Home Screen app, no keyboard or rotation change; after switching to
+another agent the terminal view showed the same content from the wrong agent.
+
+9. **The raw view was never reset when switching agents (confirmed in code).**
+   `showTerminal()` hides `#chat` and shows `#output`, and nothing ever undid
+   it: `openDetail()` only reset `state.chat`. So once any agent fell back to
+   the raw view (no transcript, or "Show raw terminal"), every agent opened
+   afterwards kept `#chat` hidden and `#output` visible with the previous
+   agent's text. For an agent with a transcript `state.chat.terminal` is false,
+   so `refreshOutput` never ran and the stale text stayed forever - a
+   view that looks frozen, shows the wrong agent, and ignores a sent prompt
+   (its echo goes to the hidden chat). This explains the whole report
+   better than the network hypotheses; those remain real but secondary.
+10. **A late read could overwrite the view.** `refreshOutput` did not check,
+    after its `await`, that the agent was still selected (and its 404 handler
+    closed whichever view was open). A slow read for A resolving after the
+    switch to B painted A's text.
+11. The service worker has no fetch handler and caches nothing
+    (`web/sw.js`), so it is ruled out. `/output` responses carry no cache
+    headers; reads now use `cache: "no-store"` anyway.
+
+Fixes (all in `web/app.js`, one button in `web/index.html`):
+- `resetTerminalView()` runs from `openDetail()` and `closeDetail()`: aborts
+  the in-flight read, clears and hides `#output`, restores `#chat`.
+- `refreshOutput()` captures its pane, takes an `AbortController`, and drops
+  the result (and errors) if the agent or mode changed. `api()` accepts a
+  `signal`, combined with the timeout.
+- Header refresh button (`#d-refresh`, `refreshView()`): aborts reads, clears
+  `state.sending` and the busy flag, reconnects the live stream, refetches
+  the agent list, then reloads the chat from scratch or re-reads the output.
+- Local echo of a sent prompt in the raw view (`echoInOutput`), replaced by the
+  next read.
+- `resume()` aborts an orphaned read instead of only clearing the flag.
+- Tests: `TestAppTerminalViewIsKeyedByAgent` (source-level, as the repo has no
+  JS runner). Not verified in a browser or on an iOS device.
+
+Ranking after this: hypothesis 0 (below, added) is the likely cause of the
+wrong-agent content; hypothesis 1 remains plausible for a read that hangs.
+
+Hypothesis 0 (highest, for the wrong-agent symptom): the raw view was not
+reset on agent switch (finding 9), and late reads could overwrite it
+(finding 10). To reproduce: open an agent with no transcript, go back, then
+open one that has a transcript.
+
+## Ranked hypotheses (1 and below predate hypothesis 0)
 
 | # | Hypothesis | Confidence | Data that would settle it |
 |---|-----------|-----------|---------------------------|
