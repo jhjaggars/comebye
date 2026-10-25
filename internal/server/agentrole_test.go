@@ -748,3 +748,26 @@ func TestLiveRolesNameCases(t *testing.T) {
 		})
 	}
 }
+
+// The user can (re)claim the role for a coordinator whose name changed or
+// vanished: POST /api/roles replaces the stale record with the live name.
+func TestReassignRoleAfterRename(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	if err := s.roles.set("desk/w1:p1", Role{Role: RoleCoordinator, Name: "old-name", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	fh.set(func(f *fakeLaunchHerdr) { f.agents[0].Name = "coordinator" })
+	s.manager.Refresh()
+	waitFor(t, func() bool { return s.fleet.Agents()[0].Name == "coordinator" })
+	if _, ok := s.liveRoles()["desk/w1:p1"]; ok {
+		t.Fatal("stale role listed")
+	}
+	w := do(s, "POST", "/api/roles", userHdr, `{"agent_id":"desk/w1:p1","role":"coordinator"}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"desk/w1:p1":{"role":"coordinator","name":"coordinator"`) {
+		t.Fatalf("reassign = %d %s", w.Code, w.Body)
+	}
+	// An agent cannot claim it for itself.
+	if w := do(s, "POST", "/api/roles", agentHdr("w2:p1"), `{"agent_id":"desk/w2:p1","role":"coordinator"}`); w.Code != http.StatusForbidden {
+		t.Fatalf("agent self-claim = %d", w.Code)
+	}
+}

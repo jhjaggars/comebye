@@ -168,6 +168,24 @@ read,grep,find,ls,bash`: no edit or write tools). The hub records the
 agent as a coordinator. Any agent can be made a coordinator (or not) from
 the ⋮ menu of its chat.
 
+**Restoring the role.** The role is recorded on the hub (`roles.json`),
+keyed by the agent's pane id, with the herdr name it had then; it applies
+while the pane's name is that name or herdr reports none (herdr clears
+names on its own, e.g. after a restart or when it re-detects the agent).
+It is hidden when the pane's name is a different one, and an agent never
+claims it for itself: it is the user's alone. An agent started outside the
+Coordinator preset (a pane you named `coordinator` yourself, or launched
+on a peer's own app) has no record. To (re)assign it, open the agent in
+the app, ⋮ menu, **Make coordinator** (`POST /api/roles` on the hub; it
+replaces a stale record with the live name). Check with `comebye agents`:
+its ROLE column says `coordinator`. (`comebye whoami` shows the *auth*
+role, `agent`, for every agent; it never shows the coordinator role.)
+
+The scheduled briefing does not belong to a pane: the hub prompts
+whichever coordinator is running and idle when a slot comes, so making
+another agent the coordinator is all it takes; the old pane only remains
+as "set by" on the schedule.
+
 Coordinators are pinned above the projects with a badge. Agents cannot
 mark a coordinator ready to remove; you can, and removing one asks for an
 extra confirmation ("Remove all safe" leaves it out).
