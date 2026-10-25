@@ -88,11 +88,38 @@ the public internet.
 **Web Push** is the primary channel and is on by default. Open the app, tap
 the bell in the header, and choose **Enable notifications**. Use **Send
 test** to check delivery. You are notified when an agent transitions
-**into** `blocked` ("needs input") or `done` ("is done", or "has a
+**into** `blocked` ("needs input", after `-notify-blocked-delay`, 15s by
+default, if it is still blocked) or `done` ("is done", or "has a
 question" when its last message ends with `?`), at most once per agent and
 kind per `-notify-throttle`. Tapping a notification opens that agent's chat
 (`/#/agent/<pane>`). No notification is sent for an agent that some device
 has open on screen right now.
+
+**Choosing what notifies.** With many agents, "done" adds up. On the
+instance that sends notifications (the hub, with several hosts):
+
+- `-notify-kinds` (`COMEBYE_NOTIFY_KINDS`) picks the kinds: `blocked`
+  (needs input), `question` (finished on a question) and `done` (finished
+  otherwise); default all three, `none` for none.
+  `COMEBYE_NOTIFY_KINDS=blocked,question` mutes plain "done" but still
+  tells you when an agent finished by asking you something (Comebye reads
+  its last message to tell, even with excerpts off).
+- `-notify-done-digest` (`COMEBYE_NOTIFY_DONE_DIGEST`), a duration, sends
+  "done" as a digest: the first one starts a window of that length,
+  and at its end one notification lists every agent that finished in it
+  ("3 agents finished", names and repositories, no message text; it opens
+  the list). A lone agent gets its usual notification. Agents you opened
+  in the meantime, or that went back to work, are left out. The window
+  does not slide, so nothing waits longer than the digest; questions are
+  never delayed.
+- `-notify-blocked-delay` (`COMEBYE_NOTIFY_BLOCKED_DELAY`, default `15s`)
+  holds a "needs input" that long and sends nothing if the agent stopped
+  being blocked meanwhile (it worked through the block, or you answered
+  at the terminal); `0` notifies at once.
+
+Both apply to Web Push and ntfy. After a notification, an agent gets no
+more until you open it in the app or it starts working again (or 12 hours
+pass), so the noise is many agents finishing, not one repeating.
 
 - **iPhone / iPad**: needs iOS/iPadOS **16.4 or later**, and only works in
   the app **added to the Home Screen** (Safari: Share, then "Add to Home
@@ -227,7 +254,10 @@ to the home screen again.
 | `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`. The CLI reads the token from here too. |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
 | `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
-| `-notify-throttle` | | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |
+| `-notify-throttle` | `COMEBYE_NOTIFY_THROTTLE` | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |
+| `-notify-kinds` | `COMEBYE_NOTIFY_KINDS` | `blocked,question,done` | Which notifications to send: `blocked`, `question` (finished on a question), `done`; `none` for none. |
+| `-notify-done-digest` | `COMEBYE_NOTIFY_DONE_DIGEST` | `0` | Collect "done" notifications for this long after the first and send one digest; `0` sends each at once. |
+| `-notify-blocked-delay` | `COMEBYE_NOTIFY_BLOCKED_DELAY` | `15s` | Wait this long before a "needs input" notification and drop it if the agent is no longer blocked; `0` notifies at once. |
 | `-ntfy-url` | `COMEBYE_NTFY_URL` | `https://ntfy.sh` | ntfy server root URL; empty disables ntfy. |
 | `-ntfy-topic` | `COMEBYE_NTFY_TOPIC` | (none) | ntfy topic; empty (the default) disables ntfy. |
 | `-ntfy-click` | `COMEBYE_NTFY_CLICK` | (none) | URL opened when an ntfy notification is tapped. |

@@ -32,8 +32,10 @@ type Env struct {
 	Hostname       func() (string, error)
 	// HTTP, when set, makes the requests (tests).
 	HTTP *http.Client
-	// Now is the current time (tests).
-	Now func() time.Time
+	// Now is the current time and Sleep waits (tests replace them; nil
+	// Sleep is time.Sleep).
+	Now   func() time.Time
+	Sleep func(time.Duration)
 }
 
 // OSEnv is the real environment.
@@ -56,7 +58,7 @@ func init() {
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
 		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
 		{"prompt", "AGENT TEXT|- [--json]", "send an agent a message", cmdPrompt},
-		{"mark", "AGENT --reason R [--discard] [--json]", "propose removing a session, or discarding its work (the user confirms in the app)", cmdMark},
+		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"brief", "set FILE|- | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
@@ -445,17 +447,24 @@ func cmdLedger(e *Env, args []string) error {
 			notes = append(notes, "agent gone")
 		}
 		if en.Candidate {
-			notes = append(notes, "candidate: finished, clean and merged")
+			into := "its base"
+			if en.Checks != nil && en.Checks.BaseUsed != "" {
+				into = en.Checks.BaseUsed
+			}
+			notes = append(notes, "candidate: finished, clean and merged into "+into)
 		} else if en.Checks != nil && en.Status == "finished" {
 			if en.Checks.Dirty {
 				notes = append(notes, "uncommitted changes")
 			}
 			if en.Checks.Unmerged > 0 {
-				notes = append(notes, fmt.Sprintf("%d commits not in %s", en.Checks.Unmerged, dash(en.Checks.BaseUsed)))
+				notes = append(notes, fmt.Sprintf("not merged: %d commits not in %s", en.Checks.Unmerged, dash(en.Checks.BaseUsed)))
 			}
 		}
 		if en.Mark != nil {
 			notes = append(notes, "marked by "+dash(en.Mark.By)+": "+dash(en.Mark.Reason))
+			if a := askText(en.Mark.Ask); a != "" {
+				notes = append(notes, a)
+			}
 		}
 		if en.Error != "" {
 			notes = append(notes, "error: "+en.Error)
@@ -476,6 +485,9 @@ func cmdLedger(e *Env, args []string) error {
 		fmt.Fprintln(e.Stdout, "\nOther sessions marked ready to remove:")
 		for _, m := range lg.Marks {
 			fmt.Fprintf(e.Stdout, "  %s %s: marked by %s %s: %s\n", m.AgentID, dash(m.Name), dash(m.By), ago(e, m.At), dash(m.Reason))
+			if a := askText(m.Ask); a != "" {
+				fmt.Fprintf(e.Stdout, "    %s\n", a)
+			}
 		}
 	}
 	return nil
@@ -786,7 +798,15 @@ func cmdInspect(e *Env, args []string) error {
 	if d == nil {
 		return nil
 	}
-	fmt.Fprintf(w, "base:     %s · %d commits not in it\n", dash(ch.BaseUsed), ch.Unmerged)
+	base := dash(ch.BaseUsed)
+	switch {
+	case ch.Unmerged < 0:
+		fmt.Fprintf(w, "merged:   unknown · could not compare with %s\n", base)
+	case ch.Unmerged == 0:
+		fmt.Fprintf(w, "merged:   yes · every commit is in %s\n", base)
+	default:
+		fmt.Fprintf(w, "merged:   NO · %d commits not in %s (a squash-merged PR still counts here: check the PR)\n", ch.Unmerged, base)
+	}
 	pushed := "no upstream"
 	if d.Upstream != "" {
 		pushed = "upstream " + d.Upstream
@@ -794,8 +814,12 @@ func cmdInspect(e *Env, args []string) error {
 	switch {
 	case d.Unpushed > 0:
 		pushed += fmt.Sprintf(" · %d commits on no remote (only here)", d.Unpushed)
+	case d.Unpushed == 0 && ch.Unmerged > 0:
+		pushed += " · every unmerged commit is on a remote, but pushed is not merged"
 	case d.Unpushed == 0:
-		pushed += " · every commit is on a remote or in the base"
+		pushed += " · nothing only here"
+	default:
+		pushed += " · unknown"
 	}
 	fmt.Fprintf(w, "pushed:   %s\n", pushed)
 	if len(d.Commits) > 0 {
@@ -965,6 +989,8 @@ func cmdMark(e *Env, args []string) error {
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	reason := fs.String("reason", "", "why the session can go (required)")
 	discard := fs.Bool("discard", false, "propose discarding its work too: the worktree even if dirty or unmerged, and the branch")
+	noAsk := fs.Bool("no-ask", false, "do not ask the session whether it is safe to remove")
+	wait := fs.Bool("wait", false, "wait (up to about 2 minutes) for the session's answer and print it")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -983,19 +1009,114 @@ func cmdMark(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := c.raw("POST", "/api/marks", nil, map[string]any{"agent_id": t.ID, "reason": *reason, "discard": *discard})
+	data, err := c.raw("POST", "/api/marks", nil, map[string]any{"agent_id": t.ID, "reason": *reason, "discard": *discard, "no_ask": *noAsk})
 	if err != nil {
 		return err
 	}
+	var r struct {
+		Mark apiMark `json:"mark"`
+	}
+	_ = json.Unmarshal(data, &r)
+	ask := r.Mark.Ask
+	if *wait && ask != nil && ask.State == "asking" {
+		if ask, err = waitAsk(e, c, t.ID, r.Mark.At); err != nil {
+			return err
+		}
+	}
 	if *asJSON {
+		var v map[string]any
+		if *wait && json.Unmarshal(data, &v) == nil {
+			if m, ok := v["mark"].(map[string]any); ok {
+				m["ask"] = ask
+				return jsonOut(e, v)
+			}
+		}
 		return rawJSON(e, data)
 	}
 	if *discard {
 		fmt.Fprintf(e.Stdout, "Proposed discarding %s: its session, worktree and branch. The user sees what would be lost and confirms in the app.\n", t.label())
-		return nil
+	} else {
+		fmt.Fprintf(e.Stdout, "Marked %s ready to remove. The user reviews the checks and confirms in the app.\n", t.label())
 	}
-	fmt.Fprintf(e.Stdout, "Marked %s ready to remove. The user reviews the checks and confirms in the app.\n", t.label())
+	switch {
+	case ask == nil:
+	case ask.State == "asking":
+		fmt.Fprintf(e.Stdout, "Asked the session whether it is safe to remove; its answer shows in the app's review and in comebye ledger (or use --wait).\n")
+	default:
+		fmt.Fprintf(e.Stdout, "%s.\n", upperFirst(askText(ask)))
+	}
 	return nil
+}
+
+// askWaitFor bounds mark --wait: the hub gives up after 2 minutes.
+const askWaitFor = 150 * time.Second
+
+// waitAsk polls the ledger until the mark made at markedAt has an answer.
+func waitAsk(e *Env, c *client, agentID string, markedAt time.Time) (*apiAsk, error) {
+	sleep := e.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	for waited := time.Duration(0); ; waited += 2 * time.Second {
+		var lg ledgerResp
+		if err := c.call("GET", "/api/ledger", nil, nil, &lg); err != nil {
+			return nil, err
+		}
+		marks := lg.Marks
+		for _, en := range lg.Entries {
+			if en.Mark != nil && en.AgentID == agentID {
+				marks = append(marks, *en.Mark)
+			}
+		}
+		var m *apiMark
+		for i := range marks {
+			if marks[i].AgentID == agentID {
+				m = &marks[i]
+			}
+		}
+		switch {
+		case m == nil || !m.At.Equal(markedAt):
+			return nil, errors.New("the mark was cleared or replaced while waiting")
+		case m.Ask == nil || m.Ask.State != "asking":
+			return m.Ask, nil
+		case waited >= askWaitFor:
+			return m.Ask, nil
+		}
+		sleep(2 * time.Second)
+	}
+}
+
+// askText is a session's answer about its own removal, for people.
+func askText(a *apiAsk) string {
+	if a == nil {
+		return ""
+	}
+	why := ""
+	if a.Reason != "" {
+		why = " (" + a.Reason + ")"
+	}
+	switch a.State {
+	case "asking":
+		return "asking the session whether it is safe to remove"
+	case "safe":
+		return "the session says SAFE" + why
+	case "unsafe":
+		return "the session says UNSAFE: " + dash(a.Reason)
+	case "unclear":
+		return "the session answered neither SAFE nor UNSAFE: " + dash(a.Reason)
+	case "no_answer":
+		return "the session did not answer (not the same as safe)" + why
+	case "not_asked":
+		return "the session was not asked" + why
+	}
+	return "session answer: " + a.State
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func cmdUnmark(e *Env, args []string) error {

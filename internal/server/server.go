@@ -116,6 +116,11 @@ type Server struct {
 	// them).
 	agentReadyPoll time.Duration
 	agentReadyWait time.Duration
+	// askPoll and askWait pace asking a marked session whether it is safe
+	// to remove (tests shrink them); latest, when set, replaces latestOf.
+	askPoll time.Duration
+	askWait time.Duration
+	latest  func(ctx context.Context, host, pane string) *transcript.Latest
 	// ledger records handoffs and marks (nil without a state directory,
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
@@ -147,8 +152,8 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		cfg.PingInterval = 15 * time.Second
 	}
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
-		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout}
-	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}}
+		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, askPoll: askPoll, askWait: askWait}
+	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
 	}
@@ -167,7 +172,11 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				log.Printf("roles: %v (starting with none)", err)
 				s.roles = &roleStore{path: filepath.Join(cfg.StateDir, "roles.json"), data: map[string]Role{}}
 			}
+			s.endStaleAsks()
 		}
+	}
+	if manager != nil {
+		manager.Dispatcher().Quiet = s.quietAgent
 	}
 	s.routes()
 	return s

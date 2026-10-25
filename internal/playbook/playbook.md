@@ -32,7 +32,7 @@ with the matches listed.
 | `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] --brief FILE` | start a worker (`--brief -` reads stdin) |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
-| `comebye mark AGENT --reason R [--discard]` | propose removing a session, or discarding its work |
+| `comebye mark AGENT --reason R [--discard] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer) |
 | `comebye unmark AGENT` | withdraw that proposal |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
 | `comebye brief schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss]` | show or set when the hub asks a coordinator for a briefing |
@@ -93,12 +93,24 @@ Mark a session (`comebye mark AGENT --reason "…"`) only when all hold:
 - its **final report is complete** (summary, changes, verification, no open
   follow-ups that need it);
 - its **work is committed**, and preferably merged (the ledger's
-  `candidate` hint).
+  `candidate` hint). **Pushed is not merged**: commits on a remote branch
+  are not in the base until the PR merges.
 
 Before marking, run `comebye inspect AGENT`: it runs on the agent's own
 host, so it works for workers on other machines too. It shows what a
 removal would leave behind: uncommitted files, commits not in the base,
 commits on no remote (work that exists only there), an unfinished rebase.
+Read its `merged:` line: `NO` means the review will keep the worktree,
+however `pushed:` reads. A squash-merged PR still shows as not merged
+there; check the PR before calling that work merged.
+
+Marking an idle session asks it whether it is safe to remove (it replies
+SAFE, or UNSAFE and why: an open PR it is watching, a loop it runs, work
+it was told to keep). Its answer shows in the user's review and in
+`comebye ledger`; `comebye mark … --wait` waits up to two minutes and
+prints it. If it says UNSAFE, tell the user and `comebye unmark` it unless
+they decide otherwise. No answer is not a yes. A working or blocked
+session is not asked: wait for it to finish before marking it.
 
 A reason is required: say why in a few words ("merged into main, report
 complete"). Never mark yourself or another coordinator, and never mark a

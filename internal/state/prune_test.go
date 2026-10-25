@@ -42,7 +42,7 @@ func TestNotifyMapsPruned(t *testing.T) {
 	now = now.Add(time.Second)
 	fresh := &herdr.AgentInfo{ID: "desk/fresh", PaneID: "f", Status: herdr.StatusBlocked}
 	d.claim(fresh, LocalRef(fresh))
-	if len(d.held) > pruneAt || d.claim(keep, LocalRef(keep)) {
+	if ok, _ := d.claim(keep, LocalRef(keep)); len(d.held) > pruneAt || ok {
 		t.Fatalf("hold map: %d entries; an unexpired hold must survive pruning", len(d.held))
 	}
 }

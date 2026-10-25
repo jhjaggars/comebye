@@ -80,6 +80,7 @@ type coord struct {
 	reporting map[string]time.Time // entry id -> last capture attempt
 	starting  map[string]bool      // handoffs being started, by host, repo and branch
 	started   map[string]time.Time // entry id -> when its worker was (re)started
+	quiet     map[string]time.Time // agent id -> no notifications until
 }
 
 type cachedChecks struct {
@@ -453,16 +454,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 func (s *Server) captureReport(e ledger.Entry) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var latest *transcript.Latest
-	if e.Host == s.fleet.LocalName() {
-		if a := s.resolveAgent(e.PaneID); a != nil && s.manager != nil {
-			if path, err := transcript.SessionPath(*a, s.manager.Agents()); err == nil {
-				latest, _ = transcript.LatestOf(path)
-			}
-		}
-	} else {
-		latest = s.fleet.FetchLatest(ctx, e.Host, e.PaneID)
-	}
+	latest := s.latestOf(ctx, e.Host, e.PaneID)
 	text := ""
 	if latest != nil {
 		text = latest.Text
@@ -470,6 +462,25 @@ func (s *Server) captureReport(e ledger.Entry) {
 	if err := s.ledger.SetReport(e.ID, e.FinishedAt, text); err != nil {
 		log.Printf("ledger: %v", err)
 	}
+}
+
+// latestOf reads an agent's latest assistant message on any host (nil
+// when there is none or it cannot be read). Tests replace it with
+// s.latest.
+func (s *Server) latestOf(ctx context.Context, host, pane string) *transcript.Latest {
+	if s.latest != nil {
+		return s.latest(ctx, host, pane)
+	}
+	if host == "" || host == s.fleet.LocalName() {
+		if a := s.resolveAgent(pane); a != nil && s.manager != nil {
+			if path, err := transcript.SessionPath(*a, s.manager.Agents()); err == nil {
+				latest, _ := transcript.LatestOf(path)
+				return latest
+			}
+		}
+		return nil
+	}
+	return s.fleet.FetchLatest(ctx, host, pane)
 }
 
 // RunLedger follows agent updates for the ledger (finished workers) until
@@ -591,6 +602,8 @@ type markBody struct {
 	By      string `json:"by"`
 	// Discard proposes throwing the work away (see ledger.Mark).
 	Discard bool `json:"discard"`
+	// NoAsk skips asking the session whether it is safe to remove.
+	NoAsk bool `json:"no_ask"`
 }
 
 // handleMark marks an agent ready to remove: POST {agent_id, reason?,
@@ -643,10 +656,25 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 			m.Worktree = agent.Worktree.CheckoutPath
 		}
 	}
+	m.At = time.Now().UTC()
+	ask := !b.NoAsk
+	if ask {
+		// Recorded as asking first, so the asking goroutine finds its mark.
+		m.Ask = &ledger.Ask{State: ledger.AskAsking, At: m.At}
+	}
 	entry, err := s.ledger.SetMark(m)
 	if err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "ledger_error", "message": err.Error()})
 		return
+	}
+	if ask {
+		m.Ask = s.startAsk(m, agent)
+		if _, err := s.ledger.SetAsk(m.AgentID, m.At, *m.Ask); err != nil {
+			log.Printf("ledger: %v", err)
+		}
+		if entry != nil {
+			entry.Mark = &m
+		}
 	}
 	writeJSON(w, map[string]any{"mark": m, "entry": entry})
 }
@@ -786,7 +814,32 @@ func (s *Server) review(ctx context.Context, it *removal) {
 	if it.Mark.Discard {
 		it.Notes = append(it.Notes, "proposed: discard the work (worktree and branch)")
 	}
+	if a := it.Mark.Ask; a != nil {
+		switch a.State {
+		case ledger.AskUnsafe:
+			why := a.Reason
+			if why == "" {
+				why = "(no reason given)"
+			}
+			it.Warnings = append(it.Warnings, "the session says UNSAFE: "+why)
+		case ledger.AskAsking:
+			it.Notes = append(it.Notes, "asking the session whether it is safe to remove…")
+		case ledger.AskNoAnswer:
+			it.Notes = append(it.Notes, "the session did not answer whether it is safe to remove"+parenthesized(a.Reason))
+		case ledger.AskUnclear:
+			it.Notes = append(it.Notes, "the session answered neither SAFE nor UNSAFE: "+a.Reason)
+		case ledger.AskNotAsked:
+			it.Notes = append(it.Notes, "the session was not asked whether it is safe to remove"+parenthesized(a.Reason))
+		}
+	}
 	it.Safe = len(it.Warnings) == 0
+}
+
+func parenthesized(s string) string {
+	if s == "" {
+		return ""
+	}
+	return " (" + s + ")"
 }
 
 // findWorktree fills in the worktree of a marked session that recorded

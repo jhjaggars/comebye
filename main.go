@@ -47,7 +47,10 @@ func main() {
 		ntfyClick    = flag.String("ntfy-click", getenv("COMEBYE_NTFY_CLICK"), "URL opened when an ntfy notification is tapped (the Serve URL)")
 		ntfyThottle  = flag.Duration("ntfy-throttle", 0, "deprecated alias for -notify-throttle")
 		ntfyExcerpt  = flag.Int("ntfy-excerpt", envInt("COMEBYE_NTFY_EXCERPT", 0), "max characters of the agent's last message to include in ntfy notifications; 0 (default) sends none, since ntfy.sh topics are public")
-		throttle     = flag.Duration("notify-throttle", 30*time.Second, "minimum interval between repeat notifications per agent and kind (Web Push and ntfy)")
+		throttle     = flag.Duration("notify-throttle", envDuration("COMEBYE_NOTIFY_THROTTLE", 30*time.Second), "minimum interval between repeat notifications per agent and kind (Web Push and ntfy)")
+		notifyKinds  = flag.String("notify-kinds", envOr("COMEBYE_NOTIFY_KINDS", "blocked,question,done"), "which notifications to send (Web Push and ntfy), comma-separated: blocked (needs input), question (finished on a question), done (finished); none for no notifications")
+		doneDigest   = flag.Duration("notify-done-digest", envDuration("COMEBYE_NOTIFY_DONE_DIGEST", 0), "collect \"done\" notifications for this long after the first and send them as one (\"3 agents finished\"); 0 sends each at once. Questions are never delayed")
+		blockedDelay = flag.Duration("notify-blocked-delay", envDuration("COMEBYE_NOTIFY_BLOCKED_DELAY", 15*time.Second), "wait this long before notifying that an agent needs input, and send nothing if it stopped being blocked meanwhile; 0 notifies at once")
 		stateDir     = flag.String("state-dir", envOr("COMEBYE_STATE_DIR", defaultStateDir()), "directory for the VAPID key and push subscriptions (created mode 0700)")
 		pushOn       = flag.Bool("push", envBool("COMEBYE_PUSH", true), "enable Web Push notifications")
 		pushSubject  = flag.String("push-subject", getenv("COMEBYE_PUSH_SUBJECT"), "VAPID contact (mailto:you@example.com or an https:// URL); default mailto:<first -ts-allow-login that is an email>, else the project URL")
@@ -70,6 +73,13 @@ func main() {
 	flag.Parse()
 	if *ntfyThottle > 0 {
 		*throttle = *ntfyThottle
+	}
+	kinds, err := state.ParseKinds(*notifyKinds)
+	if err != nil {
+		log.Fatalf("-notify-kinds: %v", err)
+	}
+	if *doneDigest < 0 || *blockedDelay < 0 {
+		log.Fatalf("-notify-done-digest and -notify-blocked-delay must not be negative")
 	}
 	logins := splitLogins(*tsAllow)
 	if len(logins) == 0 && !*noAuth {
@@ -173,6 +183,10 @@ func main() {
 	// instance) and owns the browser broadcasts. Peer notifications share
 	// the local dispatcher: same channels, throttle and presence.
 	manager.Dispatcher().ShowHost = len(peers) > 0
+	manager.Dispatcher().Kinds = kinds
+	manager.Dispatcher().DoneDigest = *doneDigest
+	manager.Dispatcher().BlockedDelay = *blockedDelay
+	log.Printf("notifications: %s; blocked delay %v; done digest %v", *notifyKinds, *blockedDelay, *doneDigest)
 	fl := fleet.New(manager, *hostName, peers, fleet.Options{})
 	go fl.Run(context.Background())
 	go func() {
@@ -361,6 +375,16 @@ func migrateStateDir(dir string) {
 		return
 	}
 	log.Printf("state dir: moved %s to %s", legacy, dir)
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		log.Printf("ignoring %s=%q: not a duration", key, v)
+	}
+	return def
 }
 
 func envInt(key string, def int) int {

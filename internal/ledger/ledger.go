@@ -94,6 +94,38 @@ type Mark struct {
 	// Only the user's confirmation, in the app, does it.
 	Discard bool      `json:"discard,omitempty"`
 	At      time.Time `json:"at"`
+	// Ask is the marked session's own answer to "is it safe to remove
+	// you?" (nil: not asked, e.g. marked with --no-ask).
+	Ask *Ask `json:"ask,omitempty"`
+}
+
+// Ask states: the session is being asked; it answered SAFE, UNSAFE (with
+// a reason) or something else (unclear, the reply in Reason); it did not
+// answer in time; or it was not asked (why in Reason).
+const (
+	AskAsking   = "asking"
+	AskSafe     = "safe"
+	AskUnsafe   = "unsafe"
+	AskUnclear  = "unclear"
+	AskNoAnswer = "no_answer"
+	AskNotAsked = "not_asked"
+)
+
+// Ask is a marked session's answer about its own removal.
+type Ask struct {
+	State   string     `json:"state"`
+	Reason  string     `json:"reason,omitempty"`
+	AskedAt *time.Time `json:"asked_at,omitempty"`
+	At      time.Time  `json:"at"`
+}
+
+func copyMark(m *Mark) *Mark {
+	c := *m
+	if m.Ask != nil {
+		a := *m.Ask
+		c.Ask = &a
+	}
+	return &c
 }
 
 // file is the on-disk format.
@@ -173,8 +205,7 @@ func newID() string {
 func copyEntry(e *Entry) Entry {
 	c := *e
 	if e.Mark != nil {
-		m := *e.Mark
-		c.Mark = &m
+		c.Mark = copyMark(e.Mark)
 	}
 	return c
 }
@@ -270,7 +301,7 @@ func (s *Store) Marks() []Mark {
 	defer s.mu.Unlock()
 	out := make([]Mark, len(s.data.Marks))
 	for i, m := range s.data.Marks {
-		out[i] = *m
+		out[i] = *copyMark(m)
 	}
 	return out
 }
@@ -284,6 +315,7 @@ func (s *Store) SetMark(m Mark) (*Entry, error) {
 	if m.At.IsZero() {
 		m.At = time.Now().UTC()
 	}
+	m = *copyMark(&m)
 	if e := s.byAgent(m.AgentID); e != nil {
 		e.Mark = &m
 		e.Status = ReadyToRemove
@@ -298,6 +330,30 @@ func (s *Store) SetMark(m Mark) (*Entry, error) {
 	}
 	s.data.Marks = append(s.data.Marks, &m)
 	return nil, s.save()
+}
+
+// SetAsk changes the answer on the agent's mark made at markedAt; a mark
+// replaced or cleared since is left alone. It reports whether it changed.
+func (s *Store) SetAsk(agentID string, markedAt time.Time, a Ask) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var m *Mark
+	if e := s.byAgent(agentID); e != nil && e.Status == ReadyToRemove && e.Mark != nil {
+		m = e.Mark
+	}
+	for _, sm := range s.data.Marks {
+		if sm.AgentID == agentID {
+			m = sm
+		}
+	}
+	if m == nil || !m.At.Equal(markedAt) {
+		return false, nil
+	}
+	if a.At.IsZero() {
+		a.At = time.Now().UTC()
+	}
+	m.Ask = &a
+	return true, s.save()
 }
 
 // ClearMark unmarks an agent: a worker goes back to finished (or running
