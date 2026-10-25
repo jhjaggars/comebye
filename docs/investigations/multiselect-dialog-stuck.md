@@ -125,3 +125,21 @@ Do in this order, each independently shippable:
 - `internal/cli/cli.go`, `docs/api.md`: `dialog`/`answer`/reset commands; new endpoint docs.
 - `internal/playbook/playbook.md`: no-multiSelect rule.
 - Tests: `internal/dialog/dialog_test.go` (fixtures), `internal/server/dialog_test.go`.
+
+## Addendum: the dialog was a valid 0-or-more multi-select
+
+The user confirms the dialog was a legitimate multi-select where picking nothing
+is allowed. Consequences:
+- Submitting with no boxes ticked must be one tap ("Next with none selected"),
+  not a special case. The card must always offer Submit/Next for Claude
+  multi-select, even before any toggle.
+- Today the card is read-only for Claude multi-select, so the app offered no
+  valid action; typing a reply in the composer was the only visible way to
+  "answer", and it went into the "Other" row. This promotes Q3-A (make Claude
+  multi-select answerable: toggle = `down*n, space`; submit = move to `Next`,
+  `enter`; verify checkbox state from the re-read screen) from "alternative"
+  to **step 1 alongside the `/prompt` guard**. The guard stops the damage;
+  A removes the reason to type.
+- Need a real capture of the Claude multi-select screen (tab bar, `Next`,
+  `Chat about this` rows) as a test fixture; `Chat about this` must be
+  recognised as a non-option row and never sent.
