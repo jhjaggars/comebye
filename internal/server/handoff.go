@@ -81,6 +81,7 @@ type coord struct {
 	starting  map[string]bool      // handoffs being started, by host, repo and branch
 	started   map[string]time.Time // entry id -> when its worker was (re)started
 	quiet     map[string]time.Time // agent id -> no notifications until
+	calling   map[string]time.Time // entry id -> last callback attempt
 }
 
 type cachedChecks struct {
@@ -378,7 +379,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 				e.PreviousBranches = append(e.PreviousBranches, e.Branch)
 				e.Branch = res.Branch
 			}
-			e.Brief, e.From = strings.TrimSpace(b.Brief), from
+			e.Brief, e.From, e.ReplyTo, e.Callback = strings.TrimSpace(b.Brief), from, s.replyRef(r), nil
 			e.SawWorking, e.FinishedAt, e.FinalReport, e.ReportTries, e.Mark = false, nil, "", 0, nil
 		})
 		if err != nil {
@@ -394,7 +395,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from,
+		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: s.replyRef(r),
 	}
 	if lerr != nil {
 		e.Status, e.Error = ledger.Failed, lerr.code+": "+lerr.message
@@ -436,7 +437,9 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 	if s.ledger == nil {
 		return
 	}
-	for _, e := range s.ledger.Observe(agents, time.Now()) {
+	captures := s.ledger.Observe(agents, time.Now())
+	defer s.deliverCallbacks(agents)
+	for _, e := range captures {
 		s.coord.mu.Lock()
 		last, busy := s.coord.reporting[e.ID]
 		if busy && time.Since(last) < reportRetry {

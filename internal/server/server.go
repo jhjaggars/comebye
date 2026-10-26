@@ -153,7 +153,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	}
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, askPoll: askPoll, askWait: askWait}
-	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}}
+	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
 	}

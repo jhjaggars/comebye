@@ -194,3 +194,52 @@ func TestSetAsk(t *testing.T) {
 		t.Fatal("answer applied to a cleared mark")
 	}
 }
+
+func TestCallbackQueue(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	asked, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1", Name: "coordinator"}})
+	plain, _ := s.Add(Entry{AgentID: "desk/w9:p2", Status: Running}) // started by the user
+	now := time.Now()
+	work := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking), agent("desk/w9:p2", herdr.StatusWorking)}
+	idle := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusIdle), agent("desk/w9:p2", herdr.StatusIdle)}
+	s.Observe(work, now)
+	if len(s.PendingCallbacks()) != 0 {
+		t.Fatal("callback before finishing")
+	}
+	s.Observe(idle, now)
+	p := s.PendingCallbacks()
+	if len(p) != 1 || p[0].ID != asked.ID || p[0].Callback.State != CallbackPending || p[0].ReplyTo.Name != "coordinator" {
+		t.Fatalf("pending = %+v", p)
+	}
+	if got, _ := s.Get(plain.ID); got.Callback != nil {
+		t.Fatal("callback for a handoff nobody asked for")
+	}
+
+	// Back to work drops it; finishing again queues a new one, and a
+	// settle with the old queue time is ignored.
+	old := p[0].Callback.At
+	s.Observe(work, now)
+	if got, _ := s.Get(asked.ID); got.Callback != nil {
+		t.Fatalf("callback kept: %+v", got.Callback)
+	}
+	later := now.Add(time.Minute)
+	s.Observe(idle, later)
+	if err := s.CallbackDone(asked.ID, old, CallbackDelivered, "desk/w1:p1", later); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.PendingCallbacks()) != 1 {
+		t.Fatal("stale settle applied")
+	}
+	cur := s.PendingCallbacks()[0].Callback.At
+	s.CallbackTried(asked.ID, cur)
+	s.CallbackDone(asked.ID, cur, CallbackDelivered, "desk/w1:p1", later)
+	got, _ := s.Get(asked.ID)
+	if got.Callback.State != CallbackDelivered || got.Callback.To != "desk/w1:p1" || got.Callback.Tries != 2 || len(s.PendingCallbacks()) != 0 {
+		t.Fatalf("delivered = %+v", got.Callback)
+	}
+	// It survives a reload.
+	s2, _ := Open(s.path)
+	if got, _ := s2.Get(asked.ID); got.Callback == nil || got.ReplyTo == nil {
+		t.Fatalf("reload = %+v", got)
+	}
+}

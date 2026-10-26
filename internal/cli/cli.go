@@ -460,6 +460,13 @@ func cmdLedger(e *Env, args []string) error {
 				notes = append(notes, fmt.Sprintf("not merged: %d commits not in %s", en.Checks.Unmerged, dash(en.Checks.BaseUsed)))
 			}
 		}
+		if en.Callback != nil {
+			cb := "callback " + en.Callback.State
+			if en.Callback.To != "" {
+				cb += " to " + en.Callback.To
+			}
+			notes = append(notes, cb)
+		}
 		if en.Mark != nil {
 			notes = append(notes, "marked by "+dash(en.Mark.By)+": "+dash(en.Mark.Reason))
 			if a := askText(en.Mark.Ask); a != "" {

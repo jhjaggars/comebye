@@ -70,11 +70,42 @@ type Entry struct {
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	FinalReport string     `json:"final_report,omitempty"`
 	ReportTries int        `json:"report_tries,omitempty"`
-	Mark        *Mark      `json:"mark,omitempty"`
-	RemovedAt   *time.Time `json:"removed_at,omitempty"`
+	// ReplyTo is who asked for the handoff, when it was an agent: the hub
+	// tells it when the worker finishes. Callback tracks that message.
+	ReplyTo   *Ref       `json:"reply_to,omitempty"`
+	Callback  *Callback  `json:"callback,omitempty"`
+	Mark      *Mark      `json:"mark,omitempty"`
+	RemovedAt *time.Time `json:"removed_at,omitempty"`
 	// Removal is the owning host's account of the removal (what was
 	// closed, whether the worktree went and why not).
 	Removal json.RawMessage `json:"removal,omitempty"`
+}
+
+// Ref addresses an agent: its host-qualified id and the name it had then
+// (a pane id can be reused by another agent after a restart).
+type Ref struct {
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name,omitempty"`
+}
+
+// Callback states.
+const (
+	CallbackPending   = "pending"   // queued, waiting for an idle target
+	CallbackDelivered = "delivered" // the requester was prompted
+	CallbackExpired   = "expired"   // never delivered within CallbackTTL
+)
+
+// CallbackTTL bounds how long a finished worker's callback is retried.
+const CallbackTTL = 2 * time.Hour
+
+// Callback is the hub's "your worker finished" message to ReplyTo.
+type Callback struct {
+	State string    `json:"state"`
+	At    time.Time `json:"at"` // queued
+	Tries int       `json:"tries,omitempty"`
+	// To is who got it (the requester, or the coordinator standing in).
+	To          string     `json:"to,omitempty"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
 }
 
 // Mark is a "ready to remove" mark, on a ledger entry or on any other
@@ -204,6 +235,14 @@ func newID() string {
 
 func copyEntry(e *Entry) Entry {
 	c := *e
+	if e.ReplyTo != nil {
+		r := *e.ReplyTo
+		c.ReplyTo = &r
+	}
+	if e.Callback != nil {
+		cb := *e.Callback
+		c.Callback = &cb
+	}
 	if e.Mark != nil {
 		c.Mark = copyMark(e.Mark)
 	}
@@ -436,12 +475,16 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 			}
 			if e.Status == Finished {
 				e.Status, e.FinishedAt, e.FinalReport, e.ReportTries = Running, nil, "", 0
+				e.Callback = nil
 				changed = true
 			}
 		case herdr.StatusIdle, herdr.StatusDone:
 			if e.Status == Running && e.SawWorking {
 				t := now.UTC()
 				e.Status, e.FinishedAt, e.SawWorking, e.ReportTries = Finished, &t, false, 0
+				if e.ReplyTo != nil {
+					e.Callback = &Callback{State: CallbackPending, At: t}
+				}
 				changed = true
 				capture = append(capture, copyEntry(e))
 			} else if e.Status == Finished && e.FinalReport == "" && e.ReportTries < maxReportTries {
@@ -453,6 +496,56 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 		_ = s.save()
 	}
 	return capture
+}
+
+// PendingCallbacks lists the finished entries whose callback is waiting.
+func (s *Store) PendingCallbacks() []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Entry
+	for _, e := range s.data.Entries {
+		if e.Status == Finished && e.Callback != nil && e.Callback.State == CallbackPending {
+			out = append(out, copyEntry(e))
+		}
+	}
+	return out
+}
+
+// CallbackTried counts a failed delivery attempt on a pending callback.
+func (s *Store) CallbackTried(id string, at time.Time) error {
+	return s.setCallback(id, at, func(c *Callback) { c.Tries++ })
+}
+
+// CallbackDone settles a pending callback as delivered (to) or expired.
+// at is the callback's queue time: a worker that finished again since
+// has a newer callback, which this leaves alone.
+func (s *Store) CallbackDone(id string, at time.Time, state, to string, now time.Time) error {
+	return s.setCallback(id, at, func(c *Callback) {
+		c.State = state
+		if state == CallbackDelivered {
+			t := now.UTC()
+			c.To, c.DeliveredAt = to, &t
+			c.Tries++
+		}
+	})
+}
+
+func (s *Store) setCallback(id string, at time.Time, fn func(*Callback)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID == id && e.Callback != nil && e.Callback.State == CallbackPending && e.Callback.At.Equal(at) {
+			fn(e.Callback)
+			return s.save()
+		}
+	}
+	return nil
+}
+
+// ReportPending reports whether the entry's final report is still being
+// looked for (so a message that points at it should wait).
+func (e Entry) ReportPending() bool {
+	return e.FinalReport == "" && e.ReportTries < maxReportTries
 }
 
 // SetReport stores a captured final report for an entry that is still

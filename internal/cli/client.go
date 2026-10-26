@@ -276,7 +276,11 @@ type apiEntry struct {
 	FinishedAt  *time.Time `json:"finished_at"`
 	FinalReport string     `json:"final_report"`
 	Mark        *apiMark   `json:"mark"`
-	Live        struct {
+	Callback    *struct {
+		State string `json:"state"`
+		To    string `json:"to"`
+	} `json:"callback"`
+	Live struct {
 		Present bool   `json:"present"`
 		Status  string `json:"agent_status"`
 	} `json:"live"`
