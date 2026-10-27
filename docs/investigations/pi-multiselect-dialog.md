@@ -206,3 +206,48 @@ already un-mutes pi multi-select, and `web/app.js` already renders
 - Live check with a fresh scratch pi agent: open a multi-select, verify
   `comebye`'s dialog endpoint returns a tappable card, toggle + submit from
   the API, confirm the agent received the answer.
+
+## Implemented
+
+Approved by the user ("scoped generic fix"). Changes, all in
+`internal/dialog`:
+
+- `screen.go`:
+  - `collectRows` takes the allowed commit-row labels
+    (`commitRowLabels`: `Next` for everyone, `Submit` added for pi) and
+    treats a line at the row-text column as a description when the row it
+    touches has a checkbox (pi's multi-select layout). The rule applies in
+    both the upward and the downward walk, so walking up from the
+    `Submit` row reaches the full list.
+  - `detectChevron` routes a marker on a commit row (`❯ Submit`) to
+    `detectNumbered` instead of `detectPiGate` (pi gate lists never have
+    commit rows).
+  - `detectNumbered` accepts any commit label as the last row and keeps
+    the row's text as the option label (`Submit` vs `Next`).
+  - `splitCheckbox` recognizes a bare checkbox (`[ ]`): the focused
+    free-text row, whose label is gone.
+- `resolve.go`: `mergeAsk` accepts the free-text row by number alone —
+  its label reads "Type something.", vanishes when focused, or shows the
+  typed draft (`[✔] hello`), so matching on the label or the highlight
+  missed the last two.
+- `pi_multi_test.go`: fixture-driven tests for every captured state —
+  detect (kind, multi, answerable, selected, checkboxes, roles, Next vs
+  Submit), keys (toggle/submit/cancel, non-wrapping moves on a wrapping
+  list), merge with the transcript ask (including the two-question ask
+  and its single-select tab 2), and the after-answer screens staying
+  undetected.
+
+Verified live end-to-end (throwaway pi agent `pilive` in a scratch pane,
+  driving `currentDialog`/`promptGuard`/`answerDialog` against the real
+  herdr socket): the dialog endpoint returned a tappable multi-select
+  card, the prompt guard refused free text with 409 `dialog_open`, a
+  toggle sent `[down space]` and flipped the checkbox (fingerprint
+  changed), submit sent the arrows+enter and the agent received
+  "Emacs" as the answer and finished. No server or web changes were
+  needed.
+
+Not done: CLI parity (`comebye dialog/answer`), a browser-harness
+  scenario for the pi multi-select card (mirrors the Claude follow-up),
+  and the merged dialog does not model a draft typed into the free-text
+  row (it is submitted with the answer, but the card shows no state for
+  it — same limitation as the Claude card).

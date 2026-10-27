@@ -2,6 +2,7 @@ package dialog
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -146,32 +147,84 @@ func indentOf(line string) int {
 	return -1
 }
 
+// commitRowLabels lists the unnumbered commit-row labels a numbered list
+// may end with. pi questionnaires commit with "Submit" (single question)
+// or "Next" (every tab of a multi-question ask); other agents only
+// "Next". Scoped so a generic numbered list ending in "Submit" (some
+// other agent) is not mistaken for a commit row.
+func commitRowLabels(agentKind string) []string {
+	if agentKind == "pi" {
+		return []string{"Next", "Submit"}
+	}
+	return []string{"Next"}
+}
+
+func isCommitLabel(text, agentKind string) bool {
+	for _, l := range commitRowLabels(agentKind) {
+		if text == l {
+			return true
+		}
+	}
+	return false
+}
+
+// rowHasCheckbox reports whether a numbered row's label carries a checkbox
+// prefix ("1. [ ] Apple", with or without the number). A bare "[ ]" (the
+// focused free-text row, label empty) counts too.
+func rowHasCheckbox(text string) bool {
+	if m := numberedRe.FindStringSubmatch(text); m != nil {
+		text = m[2]
+	}
+	_, checked := splitCheckbox(strings.TrimSpace(text))
+	return checked != nil
+}
+
 // collectRows gathers the list around the marker line i. With numbered,
-// rows must read "N. label" (or be the bare "Next" row) and deeper-indented
-// lines are attached to the row above as its description; without, any
-// non-row line ends the list. Blank lines end the list.
-func collectRows(lines []string, i, c int, marker rune, numbered bool) (rows []row, start, end int) {
+// rows must read "N. label" (or be the bare commit row) and description
+// lines are attached to the row above; without, any non-row line ends the
+// list. Blank lines end the list.
+//
+// Descriptions are normally indented deeper than the row text, but pi's
+// multi-select layout puts them at the same column (the "[ ] " checkbox
+// prefix shifts the label, not the description), so a line at the row-text
+// column counts as a description when the row it touches has a checkbox.
+func collectRows(lines []string, i, c int, marker rune, numbered bool, commit []string) (rows []row, start, end int) {
 	isRow := func(l string) (bool, string, bool) {
 		active, text, ok := rowAt(l, c, marker)
 		if !ok {
 			return false, "", false
 		}
-		if numbered && !numberedRe.MatchString(text) && text != "Next" {
+		if numbered && !numberedRe.MatchString(text) && !slices.Contains(commit, text) {
 			return false, "", false
 		}
 		return active, text, true
 	}
-	isDesc := func(l string) bool {
+	// isDesc reports a description line next to the row rowText: deeper
+	// than the row text, or at its column under a checkbox row.
+	isDesc := func(l, rowText string) bool {
 		if !numbered {
 			return false
 		}
 		in := indentOf(l)
-		return in > c+2
+		if in > c+2 {
+			return true
+		}
+		return in == c+2 && rowHasCheckbox(rowText)
+	}
+	// lastRow is the closest row at or below start: the row a line above
+	// start would describe.
+	lastRow := ""
+	if _, text, ok := isRow(lines[i]); ok {
+		lastRow = text
 	}
 	start = i
 	for start > 0 {
 		l := lines[start-1]
-		if _, _, ok := isRow(l); ok || isDesc(l) {
+		_, text, ok := isRow(l)
+		if ok {
+			lastRow = text
+		}
+		if ok || isDesc(l, lastRow) {
 			start--
 			continue
 		}
@@ -187,7 +240,7 @@ func collectRows(lines []string, i, c int, marker rune, numbered bool) (rows []r
 				rw.text = strings.TrimSpace(m[2])
 			}
 			rows = append(rows, rw)
-		} else if isDesc(l) {
+		} else if isDesc(l, descTarget(rows)) {
 			if len(rows) > 0 {
 				rows[len(rows)-1].desc = append(rows[len(rows)-1].desc, strings.TrimSpace(l))
 			}
@@ -200,6 +253,15 @@ func collectRows(lines []string, i, c int, marker rune, numbered bool) (rows []r
 		start = rows[0].line // orphan description-like lines above belong to the heading
 	}
 	return rows, start, end
+}
+
+// descTarget is the row a non-row line in the downward walk would attach
+// to: the last collected row, or "" before the first one.
+func descTarget(rows []row) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	return rows[len(rows)-1].text
 }
 
 // activeCount returns how many rows are highlighted and the index of the
@@ -332,11 +394,18 @@ func detectChevron(lines []string, i, c int, agentKind string) *Dialog {
 	if numberedRe.MatchString(text) {
 		return detectNumbered(lines, i, c, agentKind)
 	}
+	// The highlight may sit on the commit row ("❯ Submit"): the list is
+	// still the numbered one above it.
+	if isCommitLabel(text, agentKind) {
+		if d := detectNumbered(lines, i, c, agentKind); d != nil {
+			return d
+		}
+	}
 	return detectPiGate(lines, i, c)
 }
 
 func detectPiGate(lines []string, i, c int) *Dialog {
-	rows, start, end := collectRows(lines, i, c, markerChevron, false)
+	rows, start, end := collectRows(lines, i, c, markerChevron, false, nil)
 	if len(rows) < 2 {
 		return nil
 	}
@@ -391,6 +460,11 @@ func splitCheckbox(label string) (string, *bool) {
 		if strings.HasPrefix(label, cb.prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(label, cb.prefix)), boolp(cb.checked)
 		}
+		// A bare checkbox ("[ ]") is the focused free-text row: the label
+		// is gone, the box remains.
+		if label == strings.TrimSpace(cb.prefix) {
+			return "", boolp(cb.checked)
+		}
 	}
 	return label, nil
 }
@@ -398,7 +472,7 @@ func splitCheckbox(label string) (string, *bool) {
 const otherLabel = "Type something."
 
 func detectNumbered(lines []string, i, c int, agentKind string) *Dialog {
-	rows, start, end := collectRows(lines, i, c, markerChevron, true)
+	rows, start, end := collectRows(lines, i, c, markerChevron, true, commitRowLabels(agentKind))
 	if len(rows) < 2 {
 		return nil
 	}
@@ -411,7 +485,7 @@ func detectNumbered(lines []string, i, c int, agentKind string) *Dialog {
 	hasNext := false
 	for k, r := range rows {
 		if r.num == 0 {
-			if r.text != "Next" || k != len(rows)-1 {
+			if !isCommitLabel(r.text, agentKind) || k != len(rows)-1 {
 				return nil
 			}
 			hasNext = true
@@ -428,7 +502,7 @@ func detectNumbered(lines []string, i, c int, agentKind string) *Dialog {
 		o := Option{num: r.num}
 		switch {
 		case r.num == 0:
-			o.Label, o.Role = "Next", RoleNext
+			o.Label, o.Role = r.text, RoleNext
 		default:
 			label := strings.TrimSuffix(r.text, " ✔") // previously confirmed answer mark
 			label, o.Checked = splitCheckbox(label)
@@ -493,7 +567,7 @@ func detectNumbered(lines []string, i, c int, agentKind string) *Dialog {
 // detectPiSelect handles Pi's built-in selector: a "→ " list framed by rules
 // with a "↑↓ navigate" footer.
 func detectPiSelect(lines []string, i, c int) *Dialog {
-	rows, start, end := collectRows(lines, i, c, markerArrow, false)
+	rows, start, end := collectRows(lines, i, c, markerArrow, false, nil)
 	if len(rows) < 2 {
 		return nil
 	}

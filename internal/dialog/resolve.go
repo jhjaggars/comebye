@@ -87,10 +87,9 @@ func mergeAsk(sd *Dialog, q transcript.AskQuestion) *Dialog {
 			}
 			matched++
 			checked[o.num] = o.Checked
-		case o.num == n+1 && o.Role == RoleOther:
-		case o.num == n+1 && k == sd.Selected:
-			// The focused "Type something." row renders as an input box
-			// showing the draft instead of its label.
+		case o.num == n+1:
+			// The free-text row: its label reads "Type something.", vanishes
+			// when focused, or shows the draft once something is typed.
 		default:
 			return nil
 		}
