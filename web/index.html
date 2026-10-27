@@ -462,6 +462,11 @@
       color: #cdd3e0;
     }
     /* "Needs your answer" card, shown while the agent waits on a dialog */
+    #queued { margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--muted); border-radius: 10px; font-size: 13px; }
+    #queued .q-head { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+    #queued .q-item { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+    #queued .q-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #queued .q-cancel { flex: none; padding: 4px 10px; min-height: 32px; }
     #answer {
       flex: none; max-height: 62vh; overflow-y: auto;
       border: 1px solid var(--orange); border-radius: 12px; background: var(--panel2);
@@ -964,6 +969,7 @@
       <button class="btn" id="btn-terminal" style="display:none; margin-bottom:10px;">Show raw terminal</button>
       <pre id="output" style="display:none"></pre>
       <section id="answer" style="display:none" aria-live="polite"></section>
+      <section id="queued" hidden aria-label="Queued prompts"></section>
       <div id="keypad" class="keypad" hidden aria-label="Send keys"></div>
       <div class="prompt">
         <button class="attach" id="btn-attach" type="button" aria-label="Attach an image or send keys"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>

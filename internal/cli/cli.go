@@ -57,7 +57,8 @@ func init() {
 		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or its final report", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
 		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
-		{"prompt", "AGENT TEXT|- [--json]", "send an agent a message", cmdPrompt},
+		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
+		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"brief", "set FILE|- | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
@@ -942,6 +943,7 @@ func cmdHandoff(e *Env, args []string) error {
 func cmdPrompt(e *Env, args []string) error {
 	fs := flag.NewFlagSet("prompt", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
+	queue := fs.Bool("queue", false, "hold the prompt on the hub and send it once the agent is idle with no question open (up to 2 hours) instead of failing")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -978,6 +980,9 @@ func cmdPrompt(e *Env, args []string) error {
 			return errors.New("refusing to prompt yourself")
 		}
 	}
+	if *queue {
+		return queuePrompt(e, c, t, text, *asJSON)
+	}
 	data, err := c.raw("POST", hostPath(t, "prompt"), nil, map[string]string{"text": text})
 	if err != nil {
 		return err
@@ -987,6 +992,113 @@ func cmdPrompt(e *Env, args []string) error {
 	}
 	fmt.Fprintf(e.Stdout, "Sent to %s.\n", t.label())
 	return nil
+}
+
+type apiQueued struct {
+	ID        string     `json:"id"`
+	Agent     string     `json:"agent_id"`
+	Name      string     `json:"name"`
+	Text      string     `json:"text"`
+	From      string     `json:"from"`
+	At        time.Time  `json:"at"`
+	State     string     `json:"state"`
+	Tries     int        `json:"tries"`
+	SettledAt *time.Time `json:"settled_at"`
+}
+
+func queuePrompt(e *Env, c *client, t target, text string, asJSON bool) error {
+	data, err := c.raw("POST", "/api/queue", nil, map[string]string{"agent": t.ID, "name": t.Name, "text": text})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Queued    apiQueued `json:"queued"`
+		Duplicate bool      `json:"duplicate"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	if r.Duplicate {
+		fmt.Fprintf(e.Stdout, "Already queued for %s as %s; nothing new added.\n", t.label(), r.Queued.ID)
+		return nil
+	}
+	fmt.Fprintf(e.Stdout, "Queued %s for %s: it is sent when the agent is idle with no question open, for up to 2 hours. Withdraw it with `comebye queue --cancel %s`.\n", r.Queued.ID, t.label(), r.Queued.ID)
+	return nil
+}
+
+// ---- queue ----
+
+func cmdQueue(e *Env, args []string) error {
+	fs := flag.NewFlagSet("queue", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	all := fs.Bool("all", false, "include prompts delivered, expired, dropped or withdrawn in the last day")
+	cancel := fs.String("cancel", "", "withdraw the pending prompt with this id")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 1 {
+		return usageErr("want at most one AGENT")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	if *cancel != "" {
+		if len(pos) > 0 || *all {
+			return usageErr("--cancel takes only an id")
+		}
+		data, err := c.raw("DELETE", "/api/queue/"+url.PathEscape(*cancel), nil, nil)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		fmt.Fprintf(e.Stdout, "Withdrew %s.\n", *cancel)
+		return nil
+	}
+	q := url.Values{}
+	if len(pos) == 1 {
+		t, err := c.resolve(pos[0])
+		if err != nil {
+			return err
+		}
+		q.Set("agent", t.ID)
+	}
+	if *all {
+		q.Set("all", "1")
+	}
+	data, err := c.raw("GET", "/api/queue", q, nil)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Queue []apiQueued `json:"queue"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	if len(r.Queue) == 0 {
+		fmt.Fprintln(e.Stdout, "No queued prompts.")
+		return nil
+	}
+	tw := tabwriter.NewWriter(e.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tSTATE\tTO\tFROM\tQUEUED\tTEXT")
+	for _, it := range r.Queue {
+		text := strings.Join(strings.Fields(it.Text), " ")
+		if r := []rune(text); len(r) > 60 {
+			text = string(r[:60]) + "…"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.State, strings.TrimSpace(it.Name+" "+it.Agent), it.From, it.At.Local().Format("15:04"), text)
+	}
+	return tw.Flush()
 }
 
 // ---- mark / unmark ----

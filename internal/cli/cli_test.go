@@ -604,3 +604,35 @@ func TestInspectCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptQueueAndQueueCommand(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/queue"] = answer{code: 202, body: `{"queued":{"id":"q1","agent_id":"kube/w5:p2","name":"solo","state":"pending"},"duplicate":false}`}
+	if code := run(e, "prompt", "--queue", "solo", "please", "rebase"); code != 0 || !strings.Contains(out.String(), "Queued q1") {
+		t.Fatalf("prompt --queue: %d %s %s", code, out, errb)
+	}
+	if r := f.find("POST", "/api/queue"); r == nil || r.body != `{"agent":"kube/w5:p2","name":"solo","text":"please rebase"}` {
+		t.Fatalf("queue request = %+v", r)
+	}
+	if f.find("POST", "/api/hosts/kube/agents/w5:p2/prompt") != nil {
+		t.Fatal("a queued prompt was also sent directly")
+	}
+	errb.Reset()
+	if code := run(e, "prompt", "--queue", "coordinator", "hi"); code != 1 || !strings.Contains(errb.String(), "yourself") {
+		t.Fatalf("self queue: %d %s", code, errb)
+	}
+
+	f.answers["GET /api/queue"] = answer{body: `{"queue":[{"id":"q1","agent_id":"laharl/w5:p2","name":"solo","from":"coordinator","at":"2026-10-26T12:00:00Z","state":"pending","text":"please\nrebase"}]}`}
+	out.Reset()
+	if code := run(e, "queue", "solo"); code != 0 || !strings.Contains(out.String(), "q1") || !strings.Contains(out.String(), "please rebase") {
+		t.Fatalf("queue: %d %s %s", code, out, errb)
+	}
+	if r := f.find("GET", "/api/queue"); r == nil || r.query != "agent=kube%2Fw5%3Ap2" {
+		t.Fatalf("queue query = %+v", r)
+	}
+	f.answers["DELETE /api/queue/q1"] = answer{body: `{"queued":{"id":"q1","state":"cancelled"}}`}
+	out.Reset()
+	if code := run(e, "queue", "--cancel", "q1"); code != 0 || !strings.Contains(out.String(), "Withdrew q1") {
+		t.Fatalf("cancel: %d %s %s", code, out, errb)
+	}
+}
