@@ -569,7 +569,7 @@ func TestInspectPushedNotMerged(t *testing.T) {
 	if code := run(e, "inspect", "solo"); code != 0 {
 		t.Fatalf("inspect: %d %s", code, errb)
 	}
-	for _, want := range []string{"merged:   NO · 2 commits not in origin/main", "a squash-merged PR still counts here",
+	for _, want := range []string{"merged:   NO · 2 commits not in origin/main", "a squash-merged PR whose patch differs still counts",
 		"pushed:   upstream origin/fix · every unmerged commit is on a remote, but pushed is not merged"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("inspect lacks %q:\n%s", want, out)

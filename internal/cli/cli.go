@@ -805,7 +805,7 @@ func cmdInspect(e *Env, args []string) error {
 	case ch.Unmerged == 0:
 		fmt.Fprintf(w, "merged:   yes · every commit is in %s\n", base)
 	default:
-		fmt.Fprintf(w, "merged:   NO · %d commits not in %s (a squash-merged PR still counts here: check the PR)\n", ch.Unmerged, base)
+		fmt.Fprintf(w, "merged:   NO · %d commits not in %s (a squash-merged PR whose patch differs still counts: check the PR)\n", ch.Unmerged, base)
 	}
 	pushed := "no upstream"
 	if d.Upstream != "" {

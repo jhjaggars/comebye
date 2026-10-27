@@ -16,8 +16,11 @@ import (
 
 // Git, for workers: comebye runs read-only git commands (rev-parse,
 // status, rev-list, cherry, symbolic-ref, log, diff) in checkouts inside
-// the launch roots or the worktree root, and writes only on a confirmed
-// removal: `git worktree remove` without --force, which git itself refuses
+// the launch roots or the worktree root, plus `git fetch`, which writes no
+// working tree and no local branch, only remote-tracking refs, so a merge
+// check sees origin as it is rather than as it was at this host's last
+// fetch. Comebye writes elsewhere only on a confirmed removal:
+// `git worktree remove` without --force, which git itself refuses
 // for a dirty worktree. Only a removal the user confirmed as a discard
 // aborts an in-progress rebase or merge, removes the worktree with --force
 // and deletes its branch.
@@ -192,9 +195,15 @@ type worktreeChecks struct {
 	DirtyFiles int `json:"dirty_files"`
 	// Unmerged counts the branch's commits with no equivalent in the base
 	// (git cherry), -1 when unknown.
-	Unmerged int    `json:"unmerged_commits"`
+	Unmerged int `json:"unmerged_commits"`
+	// BaseUsed names the base the Unmerged count was taken against: the
+	// base branch, or origin's fresher copy of it ("origin/<base>").
 	BaseUsed string `json:"base_used,omitempty"`
-	Repo     string `json:"repo,omitempty"` // the primary checkout
+	// baseRef is BaseUsed as an unambiguous ref ("refs/remotes/..." for
+	// origin's copy): the ref the git commands run against. Not
+	// serialized; it travels with the checks in-process only.
+	baseRef string
+	Repo    string `json:"repo,omitempty"` // the primary checkout
 	// Tip is the commit the checks looked at (the branch, else HEAD); a
 	// discard is refused if it moved since the user reviewed it.
 	Tip string `json:"tip,omitempty"`
@@ -262,10 +271,23 @@ func (c worktreeChecks) Removable() (bool, string) {
 	return true, ""
 }
 
+// fetchOrigin refreshes the repository's remote-tracking refs before a
+// merge check: a fetch writes no working tree and no local branch, only
+// refs/remotes and FETCH_HEAD. It is bounded by gitTimeout and its
+// failures are ignored — no origin, or offline, the checks simply run on
+// the remote-tracking refs they already have, as they always did.
+func fetchOrigin(ctx context.Context, path string) {
+	_, _ = runGit(ctx, path, "fetch", "--quiet", "--no-tags", "origin")
+}
+
 // checkWorktree runs the checks for the checkout at path (resolved), on
 // branch (default: its current branch) against base (default: the
 // repository's default branch; origin's copy of the base counts too, so a
-// branch merged upstream but not pulled yet is merged).
+// branch merged upstream but not pulled yet is merged). It fetches origin
+// first — a squash merge is only recognized when the remote-tracking ref
+// actually holds the squash — and takes the count, and BaseUsed, from
+// whichever of the two bases sees fewer commits: the local branch when it
+// is ahead, origin's copy when it is fresher.
 func checkWorktree(ctx context.Context, path, branch, base string) worktreeChecks {
 	c := worktreeChecks{Path: path, Unmerged: -1}
 	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
@@ -311,6 +333,8 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 		return c
 	}
 	c.BaseUsed = base
+	c.baseRef = base
+	fetchOrigin(ctx, path)
 	for _, b := range []string{base, "refs/remotes/origin/" + base} {
 		if b != base && !refExists(ctx, path, b) {
 			continue
@@ -327,6 +351,11 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 		}
 		if c.Unmerged < 0 || n < c.Unmerged {
 			c.Unmerged = n
+			c.baseRef = b
+			c.BaseUsed = b
+			if r, ok := strings.CutPrefix(b, "refs/remotes/"); ok {
+				c.BaseUsed = r
+			}
 		}
 	}
 	return c
@@ -367,12 +396,16 @@ func inspectWorktree(ctx context.Context, c *worktreeChecks, diff bool) {
 	}
 	d := &worktreeDetail{Status: []string{}, Commits: []commitInfo{}, Unpushed: -1}
 	c.Detail = d
+	base := c.baseRef
+	if base == "" {
+		base = c.BaseUsed
+	}
 	if out, err := runGit(ctx, c.Path, "status", "--porcelain"); err == nil && out != "" {
 		d.Status = firstLines(out, maxDetailLines)
 	}
 	tip := c.Tip
-	if c.BaseUsed != "" {
-		if out, err := runGit(ctx, c.Path, "cherry", "-v", "--end-of-options", c.BaseUsed, tip); err == nil {
+	if base != "" {
+		if out, err := runGit(ctx, c.Path, "cherry", "-v", "--end-of-options", base, tip); err == nil {
 			for _, l := range strings.Split(out, "\n") {
 				rest, ok := strings.CutPrefix(l, "+ ")
 				if !ok {
@@ -384,7 +417,7 @@ func inspectWorktree(ctx context.Context, c *worktreeChecks, diff bool) {
 				}
 			}
 		}
-		if mb, err := runGit(ctx, c.Path, "merge-base", "--end-of-options", c.BaseUsed, tip); err == nil {
+		if mb, err := runGit(ctx, c.Path, "merge-base", "--end-of-options", base, tip); err == nil {
 			if out, err := runGit(ctx, c.Path, "diff", "--stat", "--end-of-options", mb, tip); err == nil {
 				d.DiffStat, _ = capText(out, 16<<10)
 			}
@@ -409,8 +442,8 @@ func inspectWorktree(ctx context.Context, c *worktreeChecks, diff bool) {
 	}
 	// The branch's own commits (not in the base) that no remote has.
 	notIn := []string{"rev-list", "--count", tip, "--not", "--remotes"}
-	if c.BaseUsed != "" {
-		notIn = append(notIn, c.BaseUsed)
+	if base != "" {
+		notIn = append(notIn, base)
 	}
 	if out, err := runGit(ctx, c.Path, notIn...); err == nil {
 		if n, err := strconv.Atoi(out); err == nil {

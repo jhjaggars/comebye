@@ -142,6 +142,32 @@ In `internal/server/gitops.go`:
 
 ## Human decisions needed
 
-- Whether Comebye workers should fetch remotes (network + rate-limit policy).
-- Whether "unmerged but fully pushed" should block removal outright (current
-  `Removable()`) or warn only.
+- ~~Whether Comebye workers should fetch remotes~~ — **resolved:** yes, fetch before the merge check (bounded, failure-tolerant).
+- ~~Whether "unmerged but fully pushed" should block removal~~ — **resolved:** it stays a hard block: an open PR is active work and the agent should stay to answer review. Only the *inputs* were fixed, not the gate.
+
+## Addendum: fix implemented (same day)
+
+On branch `debug/merge-check-false-unmerged`, with the removal gate unchanged:
+
+1. **Fetch before checking** — `fetchOrigin` (`internal/server/gitops.go`) runs
+   `git fetch --quiet --no-tags origin` at the start of `checkWorktree`.
+   A fetch writes no working tree and no local branch, only remote-tracking
+   refs; failures (no origin, offline) are ignored and the checks fall back
+   to the refs they have, as before.
+2. **Count, base name and detail against the fresher base** — `checkWorktree`
+   records which candidate (`main` or `refs/remotes/origin/main`) produced
+   the minimum cherry count: `BaseUsed` now reports `origin/main` when that
+   ref was used (so "N commits not in origin/main" is honest), and
+   `inspectWorktree` runs its cherry/merge-base/rev-list against that same
+   ref — the "Unmerged commits" list now shows only the branch's own work,
+   never other authors' merged PRs the stale local main lacks.
+3. **CLI note reworded** — a clean squash merge is now detected, so the
+   parenthetical reads "a squash-merged PR whose patch differs still
+   counts: check the PR".
+
+Tests: `TestCheckWorktreeSquashMergedUpstream` (stale local main *and*
+stale remote-tracking refs; squash merged upstream → `unmerged 0`, base
+`origin/main`, removable, empty commit list) and
+`TestCheckWorktreeOpenPRAgainstFresherOrigin` (open PR against fresher
+origin/main → `unmerged 1`, only the branch's own commit listed,
+`unpushed 0`, removal still blocked). Full `go test ./...` passes.

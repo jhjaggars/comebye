@@ -521,3 +521,93 @@ func TestInspectMarkDiscardConfirm(t *testing.T) {
 		t.Fatal("the branch is still there")
 	}
 }
+
+// originRepo builds a repository with a local bare origin, main at two
+// commits (a, then someone else's b), a branch w off b with one commit of
+// its own, all pushed. It returns the repo, the worktree and the two
+// main commits' hashes.
+func originRepo(t *testing.T) (repo, wt, a, b string) {
+	t.Helper()
+	gitEnv(t)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	repo, wt = filepath.Join(dir, "proj"), filepath.Join(dir, "wt")
+	origin := filepath.Join(dir, "origin.git")
+	git(t, dir, "init", "-q", "-b", "main", "proj")
+	git(t, dir, "init", "-q", "-b", "main", "--bare", "origin.git")
+	git(t, repo, "remote", "add", "origin", origin)
+	write := func(name, text string) string {
+		t.Helper()
+		os.WriteFile(filepath.Join(repo, name), []byte(text), 0o644)
+		git(t, repo, "add", name)
+		git(t, repo, "commit", "-q", "-m", "commit "+name)
+		return git(t, repo, "rev-parse", "HEAD")
+	}
+	a = write("a.txt", "a\n")
+	git(t, repo, "push", "-q", "origin", "main")
+	b = write("b.txt", "b\n") // someone else's work, merged upstream
+	git(t, repo, "push", "-q", "origin", "main")
+	git(t, repo, "worktree", "add", "-q", "-b", "w", wt, "main")
+	os.WriteFile(wt+"/w.txt", []byte("w\n"), 0o644)
+	git(t, wt, "add", "w.txt")
+	git(t, wt, "commit", "-q", "-m", "the branch's own work")
+	git(t, wt, "push", "-q", "origin", "w")
+	return repo, wt, a, b
+}
+
+// A squash-merged branch on a host whose local main and remote-tracking
+// refs are both stale: the fetch must let the checks see the squash (git
+// cherry matches the patch), so the branch counts as merged and removable.
+func TestCheckWorktreeSquashMergedUpstream(t *testing.T) {
+	repo, wt, _, b := originRepo(t)
+	// Squash-merge w onto main upstream, as GitHub would.
+	git(t, repo, "merge", "-q", "--squash", "w")
+	git(t, repo, "commit", "-q", "-m", "the branch's own work (#1)")
+	git(t, repo, "push", "-q", "origin", "main")
+	// The stale host: local main and origin/main both back at b.
+	git(t, repo, "reset", "-q", "--hard", b)
+	git(t, repo, "update-ref", "refs/remotes/origin/main", b)
+
+	c := checkWorktree(context.Background(), wt, "", "")
+	if c.Error != "" {
+		t.Fatalf("checks: %s", c.Error)
+	}
+	if c.Unmerged != 0 || c.BaseUsed != "origin/main" {
+		t.Fatalf("unmerged = %d base = %s, want 0 origin/main", c.Unmerged, c.BaseUsed)
+	}
+	if ok, why := c.Removable(); !ok {
+		t.Fatalf("not removable: %s", why)
+	}
+	inspectWorktree(context.Background(), &c, false)
+	if len(c.Detail.Commits) != 0 {
+		t.Fatalf("commits listed: %+v", c.Detail.Commits)
+	}
+}
+
+// Not merged (an open PR), but origin's main is fresher than the stale
+// local one: the count, the base named and the commit list all come from
+// origin/main, so the detail lists only the branch's own commit — never
+// the other author's work the local main lacks — and the worktree stays
+// blocked, with nothing only here.
+func TestCheckWorktreeOpenPRAgainstFresherOrigin(t *testing.T) {
+	repo, wt, a, _ := originRepo(t)
+	// The stale host: local main way back at a; origin/main still at b.
+	git(t, repo, "reset", "-q", "--hard", a)
+
+	c := checkWorktree(context.Background(), wt, "", "")
+	if c.Error != "" {
+		t.Fatalf("checks: %s", c.Error)
+	}
+	if c.Unmerged != 1 || c.BaseUsed != "origin/main" {
+		t.Fatalf("unmerged = %d base = %s, want 1 origin/main", c.Unmerged, c.BaseUsed)
+	}
+	if ok, _ := c.Removable(); ok {
+		t.Fatal("removable with an open PR")
+	}
+	inspectWorktree(context.Background(), &c, false)
+	if len(c.Detail.Commits) != 1 || c.Detail.Commits[0].Subject != "the branch's own work" {
+		t.Fatalf("commits = %+v, want only the branch's own work", c.Detail.Commits)
+	}
+	if c.Detail.Unpushed != 0 {
+		t.Fatalf("unpushed = %d, want 0", c.Detail.Unpushed)
+	}
+}
