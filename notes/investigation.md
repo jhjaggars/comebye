@@ -1,9 +1,99 @@
 # Debug: subagent problems on jjaggars-kubevirt
 
 Investigation date: 2026-10-26 (worker `subagent-debug`, ledger h821d74fb29ca).
-All evidence read-only; nothing was restarted, killed, or reconfigured.
+Services were not restarted or reconfigured during phase 1; in phase 2 the user
+approved one config edit to `~/.pi/agent/models.json` (backed up first).
 
-## TL;DR
+## Part 2 (same evening): the HTTP errors — root cause found and fixed
+
+The user reported HTTP errors from subagents ("try a subagent now with thinking
+on", "it happens with glm too"). Reproduced and root-caused:
+
+### Repro matrix (via the Agent tool, before the fix)
+
+| spawn | result |
+|---|---|
+| general-purpose, session model, thinking medium | READY (different provider path) |
+| scout (openai/gpt-5.6-luna) + thinking high | **400** reasoning_effort error |
+| worker (openai/gpt-5.6-terra) + thinking xhigh | **400** |
+| scout + thinking off | READY |
+| codebase-analyzer (pins luna + `thinking: medium`) | **400** out of the box |
+| worker + model=enmaas glm + thinking medium | **400 naming gpt-5.6-terra** (pinned model wins over the tool's model param) |
+| general-purpose + enmaas glm + thinking minimal/low/high/xhigh | READY at every level |
+
+Error text: `400: Function tools with reasoning_effort are not supported for
+gpt-5.6-<x> in /v1/chat/completions. To use function tools, use /v1/responses
+or set reasoning_effort to 'none'.`
+
+### Root cause
+
+1. `~/.pi/agent/models.json` redirects the `openai` provider's baseUrl to the
+   internal gateway `https://api.enmaas.devshift.net/v1` (and defines an
+   `enmaas` provider with `api: openai-completions` and its own gpt-5.6
+   copies). The gateway rejects any request combining `reasoning_effort` with
+   function tools for gpt-5.6 models. Built-in gpt-5.6 definitions carry a
+   `thinkingLevelMap` (low→low … max→max), so any thinking level ≥ low sends
+   `reasoning_effort` → 400.
+2. `~/.pi/agent/agents/*.md` pin gpt-5.6 models for every custom subagent
+   type (worker→terra, scout/coordinator→luna, planner→sol, reviewer→terra,
+   codebase-analyzer→luna **with `thinking: medium` pinned**), so most
+   subagent types fail as soon as thinking is on.
+3. The pinned model in an agent definition overrides the Agent tool's `model`
+   parameter — spawning a `worker` with model=enmaas glm still ran terra and
+   400'd. This explains "it happens with glm too": glm itself is fine
+   (READY at minimal/low/high/xhigh); the failures attributed to it were the
+   pinned gpt-5.6 models.
+4. pi sends gpt-5.6 via the Responses API (`/v1/responses`, per the built-in
+   `api: openai-responses` and the SDK's `responses.create`), yet the gateway
+   error names `/v1/chat/completions` — its responses endpoint appears to be
+   a shim over chat/completions and drops reasoning+tools there.
+
+### Fix applied (user-approved: "null the thinking map")
+
+`~/.pi/agent/models.json` (backed up to `models.json.bak-pre-thinking-fix`):
+- `openai` provider: added `modelOverrides` for gpt-5.6-luna/sol/terra with
+  `thinkingLevelMap` `{off: "none", everything else: null}` — pi clamps any
+  requested thinking level down to off and sends `reasoning_effort: none`,
+  which the gateway accepts. Built-in catalog otherwise untouched.
+- `enmaas` provider's own gpt-5.6-terra/sol/luna entries: same nulled map.
+
+Effect: gpt-5.6 models get no thinking through enmaas (the gateway can't do
+reasoning+tools for them); everything else unchanged.
+
+### Verification
+
+- Fresh pi processes (config reloaded at startup):
+  `pi --model enmaas/gpt-5.6-luna:medium "…"` → READY;
+  `pi --model enmaas/gpt-5.6-terra:xhigh "…"` → READY (both 400'd before).
+- models.json is valid JSON; diff vs backup shows only the intended changes.
+- Already-running pi sessions keep their startup catalog — models.json is
+  reloaded when `/model` is opened (or on restart). Subagent spawns from my
+  own session still 400 until the user opens /model there.
+- `openai/gpt-5.6-*` one-shot verification was not possible from bash (the
+  one-shot process has no openai credentials); the override is staged for
+  those IDs and the gateway path is identical to the verified enmaas one.
+
+### Open items from part 2
+
+1. **User action**: open `/model` (or restart) in each running pi session —
+   including this one and the herdr panes — to pick up the new models.json.
+2. The other gpt-5.x/6.x entries under the `enmaas` provider (gpt-6-astra,
+   gpt-6.1-sol, gpt-6-sol/luna, gpt-5.5, 5.4*, 5.3, 5.2) still map
+   low→low… — likely the same 400 with thinking on (untested). Same one-line
+   treatment if they fail. Note gpt-6-astra and gpt-6.1-sol have
+   `off: null` (thinking cannot be disabled) — if the gateway rejects them
+   they are unusable via enmaas until their maps are changed.
+3. Pinned model in an agent definition overrides the Agent tool's `model`
+   param — verify with pi upstream whether that is intended; it surprised the
+   user ("glm too").
+4. Gateway-side: enmaas not supporting reasoning_effort + function tools for
+   gpt-5.6 on either endpoint is worth reporting to the gateway team; the
+   error's advice ("use /v1/responses") does not work through it.
+5. The earlier Comebye/herdr brief-delivery failures (part 1 below) are a
+   separate, already-fixed problem; both may have fed the "subagents are
+   broken on this VM" impression.
+
+## Part 1: Comebye/herdr worker launches — already fixed (Oct 23–25)
 
 The "subagent trouble" was Comebye→herdr worker launches in which the pi agent
 pane started but the handoff brief was never delivered — herdr refused the
