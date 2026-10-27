@@ -86,7 +86,7 @@ func callbackTarget(e ledger.Entry, agents []herdr.AgentInfo, now time.Time, coo
 		if a.ID != e.ReplyTo.AgentID || (e.ReplyTo.Name != "" && a.Name != "" && a.Name != e.ReplyTo.Name) {
 			continue
 		}
-		if a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone {
+		if canTakePrompt(a) {
 			return &a, false
 		}
 		return nil, false

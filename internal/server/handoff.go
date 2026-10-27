@@ -439,6 +439,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 	}
 	captures := s.ledger.Observe(agents, time.Now())
 	defer s.deliverCallbacks(agents)
+	defer s.deliverQueue(agents)
 	for _, e := range captures {
 		s.coord.mu.Lock()
 		last, busy := s.coord.reporting[e.ID]
