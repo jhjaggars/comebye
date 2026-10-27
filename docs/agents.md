@@ -369,6 +369,15 @@ branch it); the chat view shows records in file order, so a rewound branch
 stays visible. Transcripts are parsed once and then incrementally as they
 grow, so large sessions stay cheap to poll.
 
+## Do not use tmux
+
+Agents run inside herdr panes. Nesting `tmux` there breaks key handling
+and screen capture, leaves orphaned sessions and can touch the wrong pane,
+so the playbook and every handoff brief tell agents not to use it. To run
+or test an interactive program, drive it from a script over a pty (Python's
+`pty` module, or `script`). For the Comebye web UI, use the fake herdr in
+`tools/devserver` with `tools/uitest`.
+
 ## Limitations
 
 - Each comebye talks to one local herdr; other machines need their own

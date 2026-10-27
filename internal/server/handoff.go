@@ -44,6 +44,7 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 
 - Work only in this git worktree, {{worktree}} (your current directory), on branch ` + "`{{branch}}`" + ` (started from ` + "`{{base}}`" + `). Do not check out other branches or edit other checkouts.
 - When you are done, commit your work on ` + "`{{branch}}`" + `. Do not merge, rebase or push other branches: merging is left to the user.
+- Do not use ` + "`tmux`" + ` (it breaks inside herdr panes and leaves stray sessions): to exercise an interactive program, drive it from a script over a pty (Python pty, or script).
 - End with a final report as your last message, in exactly this markdown format:
 
 ## Summary

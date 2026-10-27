@@ -70,6 +70,8 @@ user's.
    - **Definition of done**: the tests, builds or checks that must pass and
      what to commit. Workers commit on their branch and end with a report;
      merging stays with the user.
+   - Never tell a worker to use `tmux` (see Rules): to test an interactive
+     program, name a pty script instead.
 6. Run `comebye handoff …` and tell the user the branch and worker name.
 
 ## Monitoring
@@ -168,5 +170,10 @@ says they do not want to hear about missed runs, `comebye brief schedule
   a brief; for another host's checkouts use `comebye inspect`.
 - **Never close, remove or launch** sessions, workspaces or worktrees;
   never send keys. Propose, and let the user decide in the app.
+- **Do not use `tmux`**, and do not tell workers to. Nested in a herdr pane
+  it breaks key handling and screen capture, leaves orphaned sessions and
+  can touch the wrong pane. To exercise an interactive program, drive it
+  from a script over a pty (Python `pty`, or `script`); for the Comebye web
+  UI use `tools/devserver` + `tools/uitest`.
 - **Never prompt yourself.** Run `comebye whoami` to know your own id.
 - Keep replies to the user concise: what you did, what needs them.

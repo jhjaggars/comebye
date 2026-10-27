@@ -42,7 +42,7 @@ func TestHandoffLocal(t *testing.T) {
 		t.Fatalf("handoff = %d %s", w.Code, w.Body)
 	}
 	text := fh.call("agent.prompt").Params["text"].(string)
-	for _, want := range []string{"Add the thing.", "branch `feat/a`", "started from `main`", wt, "commit your work", "## Summary", "## Changes", "## Verification", "## Follow-ups", "handed this task by me@example.com"} {
+	for _, want := range []string{"Add the thing.", "branch `feat/a`", "started from `main`", wt, "commit your work", "Do not use `tmux`", "## Summary", "## Changes", "## Verification", "## Follow-ups", "handed this task by me@example.com"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("brief lacks %q:\n%s", want, text)
 		}
