@@ -1,6 +1,6 @@
 # Agent-to-coordinator and agent-to-agent communication
 
-Status: phase 1 built on `feat/agent-comms`; phases 2-4 not started.
+Status: phases 1 and 2 built on `feat/agent-comms`; phases 3-4 not started.
 
 ## Use cases
 
@@ -81,11 +81,36 @@ Status: phase 1 built on `feat/agent-comms`; phases 2-4 not started.
 - A coordinator that is always busy gets the callback late; expiry then
   leaves the user with the done push and the briefing.
 
+## Phase 2: explicit report (built)
+
+- `comebye report FILE|-` -> `POST /api/report {text}`. The hub finds the
+  caller's running or finished entry by host-qualified pane (and refuses a
+  pane whose agent name differs from the entry's), stores the text (20 kB
+  cap) as `final_report` with `report_source: "explicit"`, finishes the
+  entry at once and queues the requester's callback (phase 1 delivery).
+  It needs no earlier sighting of the worker working.
+- The turn that ran `report` is still "working" for a moment. `await_idle`
+  keeps the entry finished until the agent goes idle once; after that,
+  working again is new work (back to `running`, report and callback
+  cleared). An explicit report is never replaced by the idle-time guess
+  (`SetReport` skips it). A second report while still finished replaces
+  the text and queues no second callback, so a looping worker cannot spam
+  the requester.
+- The default handoff template ends with "run `comebye report -` ..., then
+  stop; if it is not available, make the report your last message". A
+  custom `handoff-template.md` keeps working through the idle fallback.
+- Workers launched as `claude` start with `--allowedTools` for
+  `Bash(comebye report:*)`, `read` and `whoami` only (`playbook.WorkerArgs`):
+  no handoff, prompt, mark or brief without a prompt. Pi has no allow list.
+- Self-asserted identity applies as before: an agent can report only for
+  the pane it claims, and a report grants nothing.
+- Not verified live: that claude accepts several values after one
+  `--allowedTools` when herdr types the command (the coordinator preset
+  passes one), and that these rules avoid the permission prompt in a real
+  worker. Check on the first deploy.
+
 ## Next phases (unchanged from the research)
 
-2. `comebye report -`: explicit report and finish, handoff template ends
-   with it, workers launched with a narrow `--allowedTools` for
-   `comebye report|read|whoami`.
 3. Plans: `plan create`, `handoff --plan`, join condition, a `plan` push
    kind that bypasses the per-agent 12 h hold, `partial` on failure, app
    card; `--after` dependencies with fenced, capped predecessor reports.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/playbook"
 	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
@@ -157,5 +158,46 @@ func TestHandoffRecordsReplyTo(t *testing.T) {
 	}
 	if got := s.replyRef(req(caller{})); got != nil {
 		t.Fatalf("user reply_to = %+v", got)
+	}
+}
+
+func TestReportRoute(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	e, _ := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "feat/x", AgentID: "desk/w9:p1", PaneID: "w9:p1",
+		AgentName: "feat-x", Status: ledger.Running, ReplyTo: &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}})
+	post := func(h map[string]string, body string) int { return do(s, "POST", "/api/report", h, body).Code }
+
+	if c := post(userHdr, `{"text":"hi"}`); c != http.StatusBadRequest {
+		t.Fatalf("user = %d", c)
+	}
+	if c := post(agentHdr("w9:p1"), `{"text":"  "}`); c != http.StatusBadRequest {
+		t.Fatalf("empty = %d", c)
+	}
+	if c := post(agentHdr("w3:p1"), `{"text":"hi"}`); c != http.StatusNotFound {
+		t.Fatalf("not a worker = %d", c)
+	}
+	w := do(s, "POST", "/api/report", agentHdr("w9:p1"), `{"text":"## Summary\nreported"}`)
+	if w.Code != 200 {
+		t.Fatalf("report = %d %s", w.Code, w.Body)
+	}
+	g, _ := s.ledger.Get(e.ID)
+	if g.Status != ledger.Finished || g.FinalReport != "## Summary\nreported" || g.ReportSource != "explicit" || g.Callback.State != ledger.CallbackPending {
+		t.Fatalf("entry = %+v", g)
+	}
+	// The requester is told, without the report.
+	s.deliverCallbacks([]herdr.AgentInfo{cbAgent("w1:p1", "coordinator", herdr.StatusIdle)})
+	waitFor(t, func() bool { g, _ := s.ledger.Get(e.ID); return g.Callback.State == ledger.CallbackDelivered })
+	if text, _ := fh.call("agent.prompt").Params["text"].(string); strings.Contains(text, "reported") || !strings.Contains(text, e.ID) {
+		t.Fatalf("prompt = %q", text)
+	}
+}
+
+func TestWorkerArgsAreNarrow(t *testing.T) {
+	args := strings.Join(playbook.WorkerArgs("claude"), " ")
+	if !strings.Contains(args, "Bash(comebye report:*)") || strings.Contains(args, "Bash(comebye:*)") || strings.Contains(args, "handoff") {
+		t.Fatalf("args = %q", args)
+	}
+	if playbook.WorkerArgs("pi") != nil {
+		t.Fatal("pi has no allow list")
 	}
 }

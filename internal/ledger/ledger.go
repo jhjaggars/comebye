@@ -70,6 +70,12 @@ type Entry struct {
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	FinalReport string     `json:"final_report,omitempty"`
 	ReportTries int        `json:"report_tries,omitempty"`
+	// ReportSource is "explicit" when the worker ran `comebye report`
+	// (it declared itself done), else empty (the hub took its last reply
+	// when it went idle). AwaitIdle: after an explicit report, the agent
+	// still working is the turn that ends with the report, not new work.
+	ReportSource string `json:"report_source,omitempty"`
+	AwaitIdle    bool   `json:"await_idle,omitempty"`
 	// ReplyTo is who asked for the handoff, when it was an agent: the hub
 	// tells it when the worker finishes. Callback tracks that message.
 	ReplyTo   *Ref       `json:"reply_to,omitempty"`
@@ -473,12 +479,16 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 			if !e.SawWorking {
 				e.SawWorking, changed = true, true
 			}
-			if e.Status == Finished {
+			if e.Status == Finished && !e.AwaitIdle {
+				e.ReportSource = ""
 				e.Status, e.FinishedAt, e.FinalReport, e.ReportTries = Running, nil, "", 0
 				e.Callback = nil
 				changed = true
 			}
 		case herdr.StatusIdle, herdr.StatusDone:
+			if e.Status == Finished && e.AwaitIdle {
+				e.AwaitIdle, e.SawWorking, changed = false, false, true
+			}
 			if e.Status == Running && e.SawWorking {
 				t := now.UTC()
 				e.Status, e.FinishedAt, e.SawWorking, e.ReportTries = Finished, &t, false, 0
@@ -542,6 +552,30 @@ func (s *Store) setCallback(id string, at time.Time, fn func(*Callback)) error {
 	return nil
 }
 
+// Report records a worker's explicit report: the agent's active entry is
+// finished now with the report (capped), without waiting to see it go idle.
+// A second report while still finished replaces the text and queues no
+// second callback. ok is false when the agent has no running or finished
+// entry.
+func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byAgent(agentID)
+	if e == nil || (e.Status != Running && e.Status != Finished) {
+		return Entry{}, false, nil
+	}
+	t := now.UTC()
+	if e.Status != Finished {
+		e.Status, e.FinishedAt = Finished, &t
+		if e.ReplyTo != nil {
+			e.Callback = &Callback{State: CallbackPending, At: t}
+		}
+	}
+	e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
+	e.AwaitIdle, e.SawWorking = true, false
+	return copyEntry(e), true, s.save()
+}
+
 // ReportPending reports whether the entry's final report is still being
 // looked for (so a message that points at it should wait).
 func (e Entry) ReportPending() bool {
@@ -556,6 +590,9 @@ func (s *Store) SetReport(id string, finishedAt *time.Time, report string) error
 	for _, e := range s.data.Entries {
 		if e.ID != id {
 			continue
+		}
+		if e.ReportSource == "explicit" {
+			return nil // the worker's own report is not replaced by a guess
 		}
 		if e.FinishedAt == nil || finishedAt == nil || !e.FinishedAt.Equal(*finishedAt) {
 			return nil // it went back to work meanwhile

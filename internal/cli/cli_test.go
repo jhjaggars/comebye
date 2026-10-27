@@ -604,3 +604,22 @@ func TestInspectCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestReport(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/report"] = answer{body: `{"entry":{"id":"ab12","branch":"feat/x"}}`}
+	if code := run(e, "report"); code != 2 {
+		t.Fatalf("no arg: %d", code)
+	}
+	e.Stdin = strings.NewReader("  \n")
+	if code := run(e, "report", "-"); code != 2 || !strings.Contains(errb.String(), "empty") {
+		t.Fatalf("empty: %d %s", code, errb)
+	}
+	e.Stdin = strings.NewReader("## Summary\ndone\n")
+	if code := run(e, "report", "-"); code != 0 || !strings.Contains(out.String(), "Report recorded for feat/x (ab12)") {
+		t.Fatalf("report: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/report").body; b != `{"text":"## Summary\ndone\n"}` {
+		t.Fatalf("body %s", b)
+	}
+}

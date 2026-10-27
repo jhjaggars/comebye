@@ -44,7 +44,7 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 
 - Work only in this git worktree, {{worktree}} (your current directory), on branch ` + "`{{branch}}`" + ` (started from ` + "`{{base}}`" + `). Do not check out other branches or edit other checkouts.
 - When you are done, commit your work on ` + "`{{branch}}`" + `. Do not merge, rebase or push other branches: merging is left to the user.
-- End with a final report as your last message, in exactly this markdown format:
+- End by running ` + "`comebye report -`" + ` with your final report on its standard input (a quoted heredoc is easiest), in exactly this markdown format, and then stop. That is how {{from}} learns you are done; if the command is not available, make the report your last message instead.
 
 ## Summary
 <what you did and the outcome, in a short paragraph>

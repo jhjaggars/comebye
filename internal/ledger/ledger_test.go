@@ -243,3 +243,46 @@ func TestCallbackQueue(t *testing.T) {
 		t.Fatalf("reload = %+v", got)
 	}
 }
+
+func TestExplicitReport(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	asked, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1"}})
+	now := time.Now()
+	work := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking)}
+	idle := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusIdle)}
+	if _, ok, _ := s.Report("desk/nobody", "x", now); ok {
+		t.Fatal("report for an agent without an entry")
+	}
+	// Reporting needs no earlier sighting of the worker working.
+	e, ok, err := s.Report(asked.AgentID, "## Summary\nexplicit", now)
+	if !ok || err != nil || e.Status != Finished || e.ReportSource != "explicit" || e.Callback == nil || e.Callback.State != CallbackPending {
+		t.Fatalf("report = %+v %v %v", e, ok, err)
+	}
+	// The turn that ran the report is still working: it stays finished.
+	if c := s.Observe(work, now); len(c) != 0 {
+		t.Fatalf("capture = %+v", c)
+	}
+	if got, _ := s.Get(asked.ID); got.Status != Finished || got.FinalReport != "## Summary\nexplicit" {
+		t.Fatalf("working after report = %+v", got)
+	}
+	// Idle: no guess replaces the report.
+	if c := s.Observe(idle, now); len(c) != 0 {
+		t.Fatalf("capture at idle = %+v", c)
+	}
+	s.SetReport(asked.ID, e.FinishedAt, "a guess")
+	if got, _ := s.Get(asked.ID); got.FinalReport != "## Summary\nexplicit" || got.AwaitIdle {
+		t.Fatalf("idle = %+v", got)
+	}
+	// A second report while finished replaces the text, not the callback.
+	at := e.Callback.At
+	e2, _, _ := s.Report(asked.AgentID, "second", now.Add(time.Minute))
+	if e2.FinalReport != "second" || !e2.Callback.At.Equal(at) {
+		t.Fatalf("second = %+v", e2)
+	}
+	s.Observe(idle, now)
+	// New work after that is new work.
+	s.Observe(work, now)
+	if got, _ := s.Get(asked.ID); got.Status != Running || got.FinalReport != "" || got.ReportSource != "" || got.Callback != nil {
+		t.Fatalf("rerun = %+v", got)
+	}
+}

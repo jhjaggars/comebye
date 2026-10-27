@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
@@ -144,5 +146,55 @@ func (s *Server) sendCallback(e ledger.Entry, target herdr.AgentInfo, standIn bo
 	}
 	if lerr := s.ledger.CallbackDone(e.ID, e.Callback.At, ledger.CallbackDelivered, target.ID, time.Now()); lerr != nil {
 		log.Printf("ledger: %v", lerr)
+	}
+}
+
+// maxReportBody bounds POST /api/report (the report is cut to
+// ledger.MaxReport; the rest is room for JSON escaping).
+const maxReportBody = 64 << 10
+
+// handleReport is a worker declaring itself done: POST {text}. The
+// caller must be the agent of a running or finished handoff, found by
+// the host-qualified id the request carries; a pane id that another agent
+// has since taken (the name differs) does not match. It finishes the
+// entry now with the text as its final report and queues the requester's
+// callback. Like every agent-role call, the identity is self-asserted.
+func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w, r) {
+		return
+	}
+	c := callerOf(r)
+	if !c.agent() || c.pane == "" {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "not_a_worker", "message": "report is run by a worker agent, from its own pane"})
+		return
+	}
+	var b struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReportBody)).Decode(&b); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(b.Text) == "" {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "empty_report", "message": "the report is empty"})
+		return
+	}
+	id := s.replyRef(r).AgentID
+	if e, ok := s.ledger.ByAgent(id); ok && e.AgentName != "" {
+		for _, a := range s.fleet.Agents() {
+			if a.ID == id && a.Name != "" && a.Name != e.AgentName {
+				writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_handoff", "message": "this agent is not a handoff worker"})
+				return
+			}
+		}
+	}
+	e, ok, err := s.ledger.Report(id, b.Text, time.Now())
+	switch {
+	case err != nil:
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "ledger_error", "message": err.Error()})
+	case !ok:
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_handoff", "message": "this agent is not a handoff worker"})
+	default:
+		writeJSON(w, map[string]any{"entry": e})
 	}
 }

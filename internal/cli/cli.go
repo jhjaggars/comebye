@@ -57,6 +57,7 @@ func init() {
 		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or its final report", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
 		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
+		{"report", "FILE|-", "(workers) declare yourself done and send your final report to whoever handed you the task", cmdReport},
 		{"prompt", "AGENT TEXT|- [--json]", "send an agent a message", cmdPrompt},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
@@ -1124,6 +1125,42 @@ func upperFirst(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func cmdReport(e *Env, args []string) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want report FILE (or - for stdin)")
+	}
+	text, err := readInput(e, pos[0], 64<<10)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return usageErr("the report is empty")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/report", nil, map[string]string{"text": text})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Entry apiEntry `json:"entry"`
+	}
+	_ = json.Unmarshal(data, &r)
+	fmt.Fprintf(e.Stdout, "Report recorded for %s (%s). You can stop now.\n", r.Entry.Branch, r.Entry.ID)
+	return nil
 }
 
 func cmdUnmark(e *Env, args []string) error {
