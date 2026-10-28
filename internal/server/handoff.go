@@ -259,6 +259,8 @@ type handoffBody struct {
 	Name   string `json:"name"`
 	Brief  string `json:"brief"`
 	From   string `json:"from"`
+	// Plan joins the handoff to a plan made with POST /api/plans.
+	Plan string `json:"plan"`
 }
 
 // requester names who asked: the body's from, else the Tailscale login.
@@ -310,6 +312,16 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	branch := strings.TrimSpace(b.Branch)
 	from := s.by(r, b.From)
+	if b.Plan != "" {
+		if p, ok := s.ledger.GetPlan(b.Plan); !ok {
+			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_plan", "message": "no such plan"})
+			return
+		} else if len(s.ledger.Members(p.ID)) >= p.Size {
+			writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "plan_full", "message": "the plan already has all its members"})
+			return
+		}
+	}
+	defer s.evalPlans() // a failed handoff settles its plan
 	repoName := filepath.Base(filepath.Clean(b.Repo))
 
 	// One worker per host, repository and branch: a second handoff while
@@ -338,6 +350,10 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
 	defer cancel()
 	if hasPrev && s.agentPresent(ctx, prev) {
+		if b.Plan != "" && prev.PlanID != b.Plan {
+			// The worker already exists: it joins the plan.
+			prev, _, _ = s.ledger.Update(prev.ID, func(e *ledger.Entry) { e.PlanID = b.Plan })
+		}
 		writeJSON(w, map[string]any{"entry": prev, "existing": true})
 		return
 	}
@@ -380,6 +396,9 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 				e.Branch = res.Branch
 			}
 			e.Brief, e.From, e.ReplyTo, e.Callback = strings.TrimSpace(b.Brief), from, s.replyRef(r), nil
+			if b.Plan != "" {
+				e.PlanID = b.Plan
+			}
 			e.SawWorking, e.FinishedAt, e.FinalReport, e.ReportTries, e.Mark = false, nil, "", 0, nil
 		})
 		if err != nil {
@@ -395,7 +414,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: s.replyRef(r),
+		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: s.replyRef(r), PlanID: b.Plan,
 	}
 	if lerr != nil {
 		e.Status, e.Error = ledger.Failed, lerr.code+": "+lerr.message
@@ -438,6 +457,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 		return
 	}
 	captures := s.ledger.Observe(agents, time.Now())
+	s.evalPlans()
 	defer s.deliverCallbacks(agents)
 	for _, e := range captures {
 		s.coord.mu.Lock()
@@ -568,7 +588,7 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
-	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks(), "roles": s.liveRoles()})
+	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks(), "plans": s.planViews(), "roles": s.liveRoles()})
 }
 
 // cachedChecks returns an entry's cached checks, refreshing them in the

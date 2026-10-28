@@ -31,6 +31,7 @@ with the matches listed.
 | `comebye read AGENT --report` | a worker's final report (any other agent: its last reply) |
 | `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] --brief FILE` | start a worker (`--brief -` reads stdin) |
+| `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye mark AGENT --reason R [--discard] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer) |
 | `comebye unmark AGENT` | withdraw that proposal |
@@ -72,6 +73,27 @@ user's.
      merging stays with the user.
 6. Run `comebye handoff …` and tell the user the branch and worker name.
 
+### A change that takes several workers
+
+When one request needs workers in more than one repository or host (code
+here, configuration there), make a plan first, then hand each worker off
+into it:
+
+```
+comebye plan create --title "Add export endpoint" --size 2
+comebye handoff --plan ID --host … --repo … --branch … --brief a.md
+comebye handoff --plan ID --host … --repo … --branch … --brief b.md
+```
+
+`--size` is how many workers the whole change takes; hand off exactly that
+many. When all of them have finished, the hub pushes the user once ("Plan
+done") and sends you one notice. If a worker's handoff failed or it was
+removed unfinished, the plan settles as `partial` and the user is told
+which one. The plan does not order its workers: if one part needs the
+other's result, hand off the second when the first reports. "Done" only
+means every worker stopped and reported; whether the parts fit together
+is for you to check in the reports and for the user to judge.
+
 ## Monitoring
 
 - `comebye ledger` shows each worker: `running`, `finished` (with whether
@@ -86,6 +108,8 @@ user's.
   user in a few lines, and update the briefing. The hub tells you only
   once the report is captured, and only while you are idle; `comebye
   ledger` shows `callback pending` or `delivered` for each worker.
+- When a plan settles, `comebye plan show ID` lists its workers; read each
+  report before telling the user the change is done.
 - Workers end with `comebye report -`, which finishes their entry on the
   spot and sends you the notice above, so a worker that went idle without
   reporting may be stuck or waiting on a question: read what it is doing.

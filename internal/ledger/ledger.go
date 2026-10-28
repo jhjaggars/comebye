@@ -76,6 +76,8 @@ type Entry struct {
 	// still working is the turn that ends with the report, not new work.
 	ReportSource string `json:"report_source,omitempty"`
 	AwaitIdle    bool   `json:"await_idle,omitempty"`
+	// PlanID is the plan this handoff is a member of, if any.
+	PlanID string `json:"plan_id,omitempty"`
 	// ReplyTo is who asked for the handoff, when it was an agent: the hub
 	// tells it when the worker finishes. Callback tracks that message.
 	ReplyTo   *Ref       `json:"reply_to,omitempty"`
@@ -170,6 +172,7 @@ type file struct {
 	Version int      `json:"version"`
 	Entries []*Entry `json:"entries"`
 	Marks   []*Mark  `json:"marks"`
+	Plans   []*Plan  `json:"plans,omitempty"`
 }
 
 // Store is the ledger. Methods are safe for concurrent use and return
@@ -530,14 +533,7 @@ func (s *Store) CallbackTried(id string, at time.Time) error {
 // at is the callback's queue time: a worker that finished again since
 // has a newer callback, which this leaves alone.
 func (s *Store) CallbackDone(id string, at time.Time, state, to string, now time.Time) error {
-	return s.setCallback(id, at, func(c *Callback) {
-		c.State = state
-		if state == CallbackDelivered {
-			t := now.UTC()
-			c.To, c.DeliveredAt = to, &t
-			c.Tries++
-		}
-	})
+	return s.setCallback(id, at, func(c *Callback) { settleCallback(c, state, to, now) })
 }
 
 func (s *Store) setCallback(id string, at time.Time, fn func(*Callback)) error {

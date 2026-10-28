@@ -121,6 +121,9 @@ type Server struct {
 	askPoll time.Duration
 	askWait time.Duration
 	latest  func(ctx context.Context, host, pane string) *transcript.Latest
+	// planPush tells the user a plan settled (the dispatcher's NotifyPlan;
+	// tests replace it).
+	planPush func(id, title, body string)
 	// ledger records handoffs and marks (nil without a state directory,
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
@@ -177,6 +180,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	}
 	if manager != nil {
 		manager.Dispatcher().Quiet = s.quietAgent
+		s.planPush = manager.Dispatcher().NotifyPlan
 	}
 	s.routes()
 	return s
@@ -235,6 +239,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/inspect", s.authAgent(s.handleInspect))
 	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))
 	s.mux.HandleFunc("POST /api/report", s.authAgent(s.handleReport))
+	s.mux.HandleFunc("POST /api/plans", s.authAgent(s.handleCreatePlan))
+	s.mux.HandleFunc("GET /api/plans", s.authAgent(s.handleListPlans))
+	s.mux.HandleFunc("GET /api/plans/{id}", s.authAgent(s.handleGetPlan))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("GET /api/removals", s.auth(s.handleRemovals))

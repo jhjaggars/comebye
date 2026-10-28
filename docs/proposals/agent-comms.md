@@ -1,6 +1,6 @@
 # Agent-to-coordinator and agent-to-agent communication
 
-Status: phases 1 and 2 built on `feat/agent-comms`; phases 3-4 not started.
+Status: phases 1 to 3 built on `feat/agent-comms` (`--after` dependencies left); phase 4 not started.
 
 ## Use cases
 
@@ -109,9 +109,39 @@ Status: phases 1 and 2 built on `feat/agent-comms`; phases 3-4 not started.
   passes one), and that these rules avoid the permission prompt in a real
   worker. Check on the first deploy.
 
+## Phase 3: plans (built, without `--after`)
+
+- `comebye plan create --title T --size N` makes a plan; `handoff --plan ID`
+  joins a worker to it (an existing worker for that branch joins too).
+  `--size` is how many workers the change takes: a plan cannot know that
+  more are coming, so without it the first finished member would settle it.
+  Handing off more than `size` is refused (`plan_full`).
+- Member outcome: `pending` (running, or finished and then working again),
+  `ok` (finished, even if marked or removed afterwards), `failed` (the
+  handoff failed, or the worker was removed without ever finishing).
+- The plan settles when `size` members exist and none is pending: `done`,
+  or `partial` if any failed (decision: still a push, naming the failed
+  `repo/branch`). A member that works again reopens the plan, which then
+  settles and notifies again.
+- On settling the hub (once per settling): pushes the user with kind
+  `plan` (`Dispatcher.NotifyPlan`; key `plan/<id>`, so the per-agent 12 h
+  hold does not swallow it; `-notify-kinds` gains `plan`, on by default but
+  an explicit env value without it turns it off), and queues a fixed
+  notice to the plan's creator (same delivery as phase 1: idle target,
+  stand-in coordinator after 10 minutes, 2 h TTL). The notice says to run
+  `comebye plan show ID` and read the reports, and that the user is told.
+- Titles are agent-written and reach the user's phone and another agent:
+  they are reduced to one plain line (`plainText`, 80 characters).
+- `GET /api/ledger` carries `plans`; the app shows a plan card above the
+  workers.
+- Left for a follow-up: `--after` dependencies (a member created pending
+  and started when its predecessor finishes, with the predecessor's report
+  appended as fenced, capped context). Until then the playbook tells the
+  coordinator to hand off the second part when the first reports.
+- Limits: "done" means every worker stopped and reported, not that the
+  parts fit together. A member whose agent disappeared stays `running`
+  (the ledger only follows agents it can see), so its plan stays open.
+
 ## Next phases (unchanged from the research)
 
-3. Plans: `plan create`, `handoff --plan`, join condition, a `plan` push
-   kind that bypasses the per-agent 12 h hold, `partial` on failure, app
-   card; `--after` dependencies with fenced, capped predecessor reports.
 4. Optional plan-scoped `send/inbox` with rate limit and hop budget.

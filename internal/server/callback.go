@@ -44,37 +44,75 @@ func (s *Server) replyRef(r *http.Request) *ledger.Ref {
 	return ref
 }
 
-// deliverCallbacks sends the "your worker finished" message for each
-// finished entry that has one waiting. Only the hub writes the message
-// and it never carries the worker's report: it names the handoff and
+// cbJob is one waiting notice: to the requester of a handoff, or to the
+// creator of a plan.
+type cbJob struct {
+	key     string
+	replyTo *ledger.Ref
+	cb      *ledger.Callback
+	ready   bool // what the notice points at exists (a captured report)
+	text    func(standIn bool) string
+	tried   func()
+	done    func(state, to string)
+}
+
+// deliverCallbacks sends the "your worker finished" and "your plan
+// settled" notices that are waiting. Only the hub writes the message
+// and it never carries a worker's report: it names the handoff and
 // tells the agent to read the report. Delivery waits for the target to be
 // idle or done; a target that is working, blocked or showing a dialog is
 // retried on later fleet updates until CallbackTTL.
 func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 	now := time.Now()
+	var jobs []cbJob
 	for _, e := range s.ledger.PendingCallbacks() {
-		cb := e.Callback
-		if now.Sub(cb.At) > ledger.CallbackTTL {
-			if err := s.ledger.CallbackDone(e.ID, cb.At, ledger.CallbackExpired, "", now); err != nil {
-				log.Printf("ledger: %v", err)
-			}
+		e := e
+		jobs = append(jobs, cbJob{
+			key: e.ID, replyTo: e.ReplyTo, cb: e.Callback, ready: !e.ReportPending(),
+			text:  func(standIn bool) string { return callbackText(e, standIn) },
+			tried: func() { s.logLedger(s.ledger.CallbackTried(e.ID, e.Callback.At)) },
+			done: func(state, to string) {
+				s.logLedger(s.ledger.CallbackDone(e.ID, e.Callback.At, state, to, time.Now()))
+			},
+		})
+	}
+	for _, p := range s.ledger.PendingPlanCallbacks() {
+		p := p
+		jobs = append(jobs, cbJob{
+			key: "plan/" + p.ID, replyTo: p.ReplyTo, cb: p.Callback, ready: true,
+			text:  func(standIn bool) string { return s.planNoticeText(p, standIn) },
+			tried: func() { s.logLedger(s.ledger.PlanCallbackTried(p.ID, p.Callback.At)) },
+			done: func(state, to string) {
+				s.logLedger(s.ledger.PlanCallbackDone(p.ID, p.Callback.At, state, to, time.Now()))
+			},
+		})
+	}
+	for _, j := range jobs {
+		if now.Sub(j.cb.At) > ledger.CallbackTTL {
+			j.done(ledger.CallbackExpired, "")
 			continue
 		}
-		if e.ReportPending() {
+		if !j.ready {
 			continue
 		}
-		target, standIn := callbackTarget(e, agents, now, s.briefCoordinator)
+		target, standIn := callbackTarget(j.replyTo, j.cb, agents, now, s.briefCoordinator)
 		if target == nil {
 			continue
 		}
 		s.coord.mu.Lock()
-		if last, ok := s.coord.calling[e.ID]; ok && now.Sub(last) < callbackRetry {
+		if last, ok := s.coord.calling[j.key]; ok && now.Sub(last) < callbackRetry {
 			s.coord.mu.Unlock()
 			continue
 		}
-		s.coord.calling[e.ID] = now
+		s.coord.calling[j.key] = now
 		s.coord.mu.Unlock()
-		go s.sendCallback(e, *target, standIn)
+		go s.sendCallback(j, *target, standIn)
+	}
+}
+
+func (s *Server) logLedger(err error) {
+	if err != nil {
+		log.Printf("ledger: %v", err)
 	}
 }
 
@@ -82,10 +120,10 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 // fleet (and idle or done; nil while it is busy), else, after
 // callbackFallback, an idle coordinator (standIn). The requester must
 // still have the name it had when it asked: a pane id can be reused.
-func callbackTarget(e ledger.Entry, agents []herdr.AgentInfo, now time.Time, coordinator func() (*herdr.AgentInfo, string)) (target *herdr.AgentInfo, standIn bool) {
+func callbackTarget(replyTo *ledger.Ref, cb *ledger.Callback, agents []herdr.AgentInfo, now time.Time, coordinator func() (*herdr.AgentInfo, string)) (target *herdr.AgentInfo, standIn bool) {
 	for i := range agents {
 		a := agents[i]
-		if a.ID != e.ReplyTo.AgentID || (e.ReplyTo.Name != "" && a.Name != "" && a.Name != e.ReplyTo.Name) {
+		if a.ID != replyTo.AgentID || (replyTo.Name != "" && a.Name != "" && a.Name != replyTo.Name) {
 			continue
 		}
 		if a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone {
@@ -93,7 +131,7 @@ func callbackTarget(e ledger.Entry, agents []herdr.AgentInfo, now time.Time, coo
 		}
 		return nil, false
 	}
-	if len(agents) == 0 || now.Sub(e.Callback.At) < callbackFallback {
+	if len(agents) == 0 || now.Sub(cb.At) < callbackFallback {
 		return nil, false
 	}
 	c, _ := coordinator()
@@ -133,20 +171,15 @@ func safeText(s string) string {
 	return string(out)
 }
 
-func (s *Server) sendCallback(e ledger.Entry, target herdr.AgentInfo, standIn bool) {
+func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	err := s.promptAgent(ctx, target, callbackText(e, standIn))
-	if err != nil {
-		log.Printf("callback for %s to %s: %v", e.ID, target.ID, err)
-		if lerr := s.ledger.CallbackTried(e.ID, e.Callback.At); lerr != nil {
-			log.Printf("ledger: %v", lerr)
-		}
+	if err := s.promptAgent(ctx, target, j.text(standIn)); err != nil {
+		log.Printf("callback for %s to %s: %v", j.key, target.ID, err)
+		j.tried()
 		return
 	}
-	if lerr := s.ledger.CallbackDone(e.ID, e.Callback.At, ledger.CallbackDelivered, target.ID, time.Now()); lerr != nil {
-		log.Printf("ledger: %v", lerr)
-	}
+	j.done(ledger.CallbackDelivered, target.ID)
 }
 
 // maxReportBody bounds POST /api/report (the report is cut to

@@ -623,3 +623,36 @@ func TestReport(t *testing.T) {
 		t.Fatalf("body %s", b)
 	}
 }
+
+func TestPlan(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	if code := run(e, "plan", "create", "--title", "Add foo"); code != 2 {
+		t.Fatalf("no size: %d", code)
+	}
+	if code := run(e, "plan", "show", "--size", "2"); code != 2 {
+		t.Fatalf("size on show: %d", code)
+	}
+	f.answers["POST /api/plans"] = answer{body: `{"plan":{"id":"hab","title":"Add foo","size":2,"state":"open"}}`}
+	if code := run(e, "plan", "create", "--title", "Add foo", "--size", "2"); code != 0 || !strings.Contains(out.String(), "Plan hab created (2 workers)") || !strings.Contains(out.String(), "handoff --plan hab") {
+		t.Fatalf("create: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/plans").body; b != `{"size":2,"title":"Add foo"}` {
+		t.Fatalf("body %s", b)
+	}
+	f.answers["GET /api/plans/hab"] = answer{body: `{"plan":{"id":"hab","title":"Add foo","size":2,"state":"partial","done":1,"members":[
+		{"id":"h1","host":"laharl","repo_name":"code","branch":"feat/foo","status":"finished","outcome":"ok","reported":true},
+		{"id":"h2","host":"kube","repo_name":"infra","branch":"feat/cfg","status":"failed","outcome":"failed"}]}}`}
+	out.Reset()
+	if code := run(e, "plan", "show", "hab"); code != 0 || !strings.Contains(out.String(), "hab  partial  Add foo  1 of 2 finished (2 handed off)") ||
+		!strings.Contains(out.String(), "h2  failed  infra/feat/cfg on kube: failed (no report yet)") {
+		t.Fatalf("show: %d %s %s", code, out, errb)
+	}
+	f.answers["POST /api/handoffs"] = answer{body: `{"entry":{"id":"h1","branch":"feat/foo","host":"laharl","status":"running"}}`}
+	e.Stdin = strings.NewReader("brief")
+	if code := run(e, "handoff", "--host", "laharl", "--repo", "/r", "--branch", "feat/foo", "--brief", "-", "--plan", "hab"); code != 0 {
+		t.Fatalf("handoff: %d %s", code, errb)
+	}
+	if b := f.find("POST", "/api/handoffs").body; !strings.Contains(b, `"plan":"hab"`) {
+		t.Fatalf("handoff body %s", b)
+	}
+}
