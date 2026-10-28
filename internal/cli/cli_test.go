@@ -656,3 +656,33 @@ func TestPlan(t *testing.T) {
 		t.Fatalf("handoff body %s", b)
 	}
 }
+
+func TestHandoffAfterReleaseCancel(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	e.Stdin = strings.NewReader("brief")
+	if code := run(e, "handoff", "--host", "laharl", "--repo", "/r", "--branch", "feat/b", "--brief", "-", "--after", "h1"); code != 2 || !strings.Contains(errb.String(), "--after needs --plan") {
+		t.Fatalf("after without plan: %d %s", code, errb)
+	}
+	f.answers["POST /api/handoffs"] = answer{body: `{"queued":true,"entry":{"id":"h3","branch":"feat/b","host":"laharl","status":"waiting","after":["h1","h2"]}}`}
+	e.Stdin = strings.NewReader("brief")
+	if code := run(e, "handoff", "--host", "laharl", "--repo", "/r", "--branch", "feat/b", "--brief", "-", "--plan", "hab", "--after", "h1,research/x", "--after", "h2"); code != 0 ||
+		!strings.Contains(out.String(), "Queued feat/b on laharl (h3): it starts when h1, h2 has reported") {
+		t.Fatalf("queue: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/handoffs").body; !strings.Contains(b, `"after":["h1","research/x","h2"]`) || !strings.Contains(b, `"plan":"hab"`) {
+		t.Fatalf("body %s", b)
+	}
+	f.answers["POST /api/handoffs/h3/release"] = answer{body: `{"entry":{"id":"h3","branch":"feat/b","host":"laharl","agent_name":"feat-b","agent_id":"laharl/w4:p1"}}`}
+	out.Reset()
+	if code := run(e, "release", "h3"); code != 0 || !strings.Contains(out.String(), "Started feat/b on laharl (feat-b, laharl/w4:p1)") {
+		t.Fatalf("release: %d %s %s", code, out, errb)
+	}
+	f.answers["POST /api/handoffs/h3/cancel"] = answer{body: `{"entry":{"id":"h3","branch":"feat/b"}}`}
+	out.Reset()
+	if code := run(e, "cancel", "h3"); code != 0 || !strings.Contains(out.String(), "Cancelled feat/b (h3)") {
+		t.Fatalf("cancel: %d %s %s", code, out, errb)
+	}
+	if code := run(e, "release"); code != 2 {
+		t.Fatalf("release without id: %d", code)
+	}
+}

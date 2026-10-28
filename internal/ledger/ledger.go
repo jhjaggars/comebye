@@ -29,6 +29,7 @@ import (
 type Status string
 
 const (
+	Waiting       Status = "waiting" // queued behind earlier steps of its plan; no worker yet
 	Running       Status = "running"
 	Finished      Status = "finished"
 	ReadyToRemove Status = "ready_to_remove"
@@ -76,6 +77,9 @@ type Entry struct {
 	// still working is the turn that ends with the report, not new work.
 	ReportSource string `json:"report_source,omitempty"`
 	AwaitIdle    bool   `json:"await_idle,omitempty"`
+	// After lists the entries (ids) a waiting handoff is queued behind:
+	// it starts when all of them have reported. Kept after it starts.
+	After []string `json:"after,omitempty"`
 	// PlanID is the plan this handoff is a member of, if any.
 	PlanID string `json:"plan_id,omitempty"`
 	// ReplyTo is who asked for the handoff, when it was an agent: the hub
@@ -509,6 +513,19 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 		_ = s.save()
 	}
 	return capture
+}
+
+// Queued lists the handoffs waiting for earlier steps, oldest first.
+func (s *Store) Queued() []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Entry
+	for _, e := range s.data.Entries {
+		if e.Status == Waiting {
+			out = append(out, copyEntry(e))
+		}
+	}
+	return out
 }
 
 // PendingCallbacks lists the finished entries whose callback is waiting.

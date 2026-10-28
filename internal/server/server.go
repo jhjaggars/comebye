@@ -238,6 +238,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ledger", s.authAgent(s.handleLedger))
 	s.mux.HandleFunc("GET /api/inspect", s.authAgent(s.handleInspect))
 	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))
+	s.mux.HandleFunc("POST /api/handoffs/{id}/release", s.authAgent(s.handleReleaseHandoff))
+	s.mux.HandleFunc("POST /api/handoffs/{id}/cancel", s.authAgent(s.handleCancelHandoff))
 	s.mux.HandleFunc("POST /api/report", s.authAgent(s.handleReport))
 	s.mux.HandleFunc("POST /api/plans", s.authAgent(s.handleCreatePlan))
 	s.mux.HandleFunc("GET /api/plans", s.authAgent(s.handleListPlans))

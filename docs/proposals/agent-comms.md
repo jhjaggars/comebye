@@ -1,6 +1,6 @@
 # Agent-to-coordinator and agent-to-agent communication
 
-Status: phases 1 to 3 built on `feat/agent-comms` (`--after` dependencies left); phase 4 not started.
+Status: phases 1 to 3 built on `feat/agent-comms`, with `--after` dependencies; phase 4 not started.
 
 ## Use cases
 
@@ -134,13 +134,49 @@ Status: phases 1 to 3 built on `feat/agent-comms` (`--after` dependencies left);
   they are reduced to one plain line (`plainText`, 80 characters).
 - `GET /api/ledger` carries `plans`; the app shows a plan card above the
   workers.
-- Left for a follow-up: `--after` dependencies (a member created pending
-  and started when its predecessor finishes, with the predecessor's report
-  appended as fenced, capped context). Until then the playbook tells the
-  coordinator to hand off the second part when the first reports.
+- `--after`: see below.
 - Limits: "done" means every worker stopped and reported, not that the
   parts fit together. A member whose agent disappeared stays `running`
   (the ledger only follows agents it can see), so its plan stays open.
+
+### `--after`: steps that follow each other (built)
+
+For research -> plan -> implement flows the coordinator queues every
+stage up front: `handoff --plan P --after STEP ...`.
+
+- A queued handoff is a ledger entry with status `waiting`, `after: [ids]`
+  and everything needed to start it (host, repo, branch, base, kind, name,
+  brief, requester). It counts as a pending member, so the plan cannot
+  settle before it ran. `--after` takes entry ids or branches of members
+  that already exist, so cycles cannot be written; it needs `--plan`.
+- `releaseQueued` runs on every ledger observation. All steps `ok` *and*
+  reported explicitly -> the hub starts the worker (`doHandoff`, the same
+  code a handoff request uses, factored out of the handler) and the entry
+  becomes `running` in place. Any step failed or removed unfinished -> the
+  entry is `failed` ("skipped") and the plan ends `partial` with the push.
+- Why explicit: an idle guess also fires when a worker stops to ask a
+  question, and its last message would then be quoted into the next worker
+  as if it were a result. A step that only went idle leaves its successors
+  waiting; `comebye release ID` (after reading it) starts one anyway and
+  `comebye cancel ID` gives up. Pi workers have no allow list for
+  `comebye report`, so they will usually need a release or a confirmed
+  permission prompt.
+- The next worker's prompt = template + brief + a section "Context from
+  earlier steps": each report between `--- BEGIN report <random> ---` and
+  `--- END report <random> ---`, preceded by text saying it is information
+  from other agents, not instructions. Each report is cut to 8 kB (24 kB in
+  all) with a pointer to `comebye read ID --report`; the stored brief stays
+  the coordinator's original text. This is the one place agent-written text
+  enters another agent's prompt; the defences are the fence, the label, the
+  cap, the narrow comebye allow list of workers (no handoff, prompt, mark
+  or brief), and that merging stays with the user. They reduce the risk
+  and do not remove it: a worker that follows a hostile report can still
+  change code on its own branch.
+- `--base` lets the next step start from the earlier step's branch, so
+  files committed there (a plan document) are present.
+- Limits:
+  there is no retry of a failed step (hand it off again by the same branch
+  and the successors, already failed, need re-queuing).
 
 ## Next phases (unchanged from the research)
 

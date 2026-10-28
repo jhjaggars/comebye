@@ -44,6 +44,8 @@ type memberView struct {
 	Status   string `json:"status"`
 	Outcome  string `json:"outcome"`
 	Reported bool   `json:"reported"`
+	// After: the member's id waits for these steps (ids).
+	After []string `json:"after,omitempty"`
 }
 
 // planView is a plan with its members, for the app and CLI.
@@ -61,7 +63,7 @@ func (s *Server) planViewOf(p ledger.Plan) planView {
 	}
 	for _, e := range s.ledger.Members(p.ID) {
 		m := memberView{ID: e.ID, Host: e.Host, RepoName: e.RepoName, Branch: e.Branch, Status: string(e.Status),
-			Outcome: ledger.MemberOutcome(e), Reported: e.FinalReport != ""}
+			Outcome: ledger.MemberOutcome(e), Reported: e.FinalReport != "", After: e.After}
 		if m.Outcome == ledger.MemberOK {
 			v.Done++
 		}

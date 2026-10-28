@@ -173,7 +173,7 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 	}
 	maxBody, timeout := int64(64<<10), 30*time.Second
 	switch {
-	case r.URL.Path == "/api/handoffs":
+	case r.URL.Path == "/api/handoffs" || strings.HasPrefix(r.URL.Path, "/api/handoffs/"):
 		maxBody, timeout = maxLaunchPrompt+64<<10, workerTimeout+30*time.Second
 	case strings.HasSuffix(r.URL.Path, "/prompt"):
 		maxBody, timeout = 1<<20, 45*time.Second

@@ -86,13 +86,43 @@ comebye handoff --plan ID --host … --repo … --branch … --brief b.md
 ```
 
 `--size` is how many workers the whole change takes; hand off exactly that
-many. When all of them have finished, the hub pushes the user once ("Plan
+many (steps that wait, below, count). When all of them have finished, the hub pushes the user once ("Plan
 done") and sends you one notice. If a worker's handoff failed or it was
 removed unfinished, the plan settles as `partial` and the user is told
-which one. The plan does not order its workers: if one part needs the
-other's result, hand off the second when the first reports. "Done" only
-means every worker stopped and reported; whether the parts fit together
+which one. "Done" only means every worker stopped and reported; whether the parts fit together
 is for you to check in the reports and for the user to judge.
+
+### Steps that follow each other (research, plan, implement)
+
+`--after STEP` queues a handoff behind earlier members of the same plan
+(STEP is their id or branch; repeat it to wait for several). Hand off the
+first step as usual, then queue the rest in the same sitting:
+
+```
+comebye plan create --title "Export endpoint" --size 3
+comebye handoff --plan ID --host H --repo R --branch research/export --brief research.md
+comebye handoff --plan ID --host H --repo R --branch plan/export --after research/export --base research/export --brief plan.md
+comebye handoff --plan ID --host H --repo R --branch feat/export --after plan/export --base plan/export --brief build.md
+```
+
+A queued step has no worker yet (`waiting` in the ledger). When every step
+it waits for has reported with `comebye report`, the hub starts it and
+appends their reports to its brief, quoted as data. So write each brief
+to say what to produce and where (a report section, or a file committed on
+the branch: `--base` starts the next step from the earlier step's branch,
+so it finds those files), and what the next step will need from it. The
+hub cuts long reports (8 kB each) and the worker can read the rest with
+`comebye read ID --report`.
+
+- A step that went idle without reporting does not start its successors,
+  since it may be waiting on a question. Read it (`comebye read STEP`); if
+  it is really done, `comebye release NEXT` starts the next step anyway,
+  and `comebye cancel NEXT` gives up on a step (the plan ends `partial`).
+- If a step fails, the steps behind it are marked failed ("skipped") and
+  the plan ends `partial`; the user is told which.
+- You are told when each step finishes, as for any handoff; the next one
+  is already starting. Use that moment to check the work and tell the user
+  how the flow is going, not to start the next step yourself.
 
 ## Monitoring
 

@@ -261,6 +261,9 @@ type handoffBody struct {
 	From   string `json:"from"`
 	// Plan joins the handoff to a plan made with POST /api/plans.
 	Plan string `json:"plan"`
+	// After queues the handoff behind earlier members of the plan (their
+	// ids or branches): it starts when all of them have reported.
+	After []string `json:"after"`
 }
 
 // requester names who asked: the body's from, else the Tailscale login.
@@ -310,7 +313,6 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_path", "message": "the repository must be an absolute path"})
 		return
 	}
-	branch := strings.TrimSpace(b.Branch)
 	from := s.by(r, b.From)
 	if b.Plan != "" {
 		if p, ok := s.ledger.GetPlan(b.Plan); !ok {
@@ -321,6 +323,25 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if len(b.After) > 0 {
+		status, payload := s.queueHandoff(b, from, s.replyRef(r))
+		writeJSONStatus(w, status, payload)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
+	defer cancel()
+	status, payload := s.doHandoff(ctx, b, from, s.replyRef(r), nil, "")
+	writeJSONStatus(w, status, payload)
+}
+
+// doHandoff starts (or finds) the worker for a validated handoff and
+// records it, answering with the status and body to send. queued is the
+// ledger entry of a handoff that waited for earlier plan steps: it is
+// filled in rather than a new entry added. extra is text appended to the
+// brief in the worker's prompt (the earlier steps' reports, fenced).
+func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, reply *ledger.Ref, queued *ledger.Entry, extra string) (int, any) {
+	branch := strings.TrimSpace(b.Branch)
+
 	defer s.evalPlans() // a failed handoff settles its plan
 	repoName := filepath.Base(filepath.Clean(b.Repo))
 
@@ -333,8 +354,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	s.coord.mu.Lock()
 	if s.coord.starting[key] {
 		s.coord.mu.Unlock()
-		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "handoff_in_progress", "message": "a handoff for this branch is starting right now"})
-		return
+		return http.StatusConflict, map[string]string{"code": "handoff_in_progress", "message": "a handoff for this branch is starting right now"}
 	}
 	s.coord.starting[key] = true
 	s.coord.mu.Unlock()
@@ -347,19 +367,16 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		return e.Host == b.Host && e.RepoName == repoName && (e.Branch == branch || slices.Contains(e.PreviousBranches, branch)) &&
 			(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
 	})
-	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
-	defer cancel()
 	if hasPrev && s.agentPresent(ctx, prev) {
 		if b.Plan != "" && prev.PlanID != b.Plan {
 			// The worker already exists: it joins the plan.
 			prev, _, _ = s.ledger.Update(prev.ID, func(e *ledger.Entry) { e.PlanID = b.Plan })
 		}
-		writeJSON(w, map[string]any{"entry": prev, "existing": true})
-		return
+		return http.StatusOK, map[string]any{"entry": prev, "existing": true}
 	}
 
 	prompt := strings.NewReplacer(
-		"{{repo}}", repoName, "{{branch}}", branch, "{{brief}}", strings.TrimSpace(b.Brief),
+		"{{repo}}", repoName, "{{branch}}", branch, "{{brief}}", strings.TrimSpace(b.Brief)+extra,
 		"{{from}}", from, "{{host}}", b.Host,
 	).Replace(s.handoffTemplate())
 
@@ -372,16 +389,14 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 			return e.ID != prev.ID && e.Host == prev.Host && e.Worktree == hint &&
 				(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
 		}); ok {
-			writeJSONStatus(w, http.StatusConflict, map[string]any{"code": "path_taken", "message": hint + " belongs to another worker (" + other.Branch + ")", "entry": prev})
-			return
+			return http.StatusConflict, map[string]any{"code": "path_taken", "message": hint + " belongs to another worker (" + other.Branch + ")", "entry": prev}
 		}
 	}
 	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Worktree: hint, Prompt: prompt})
 	if hasPrev && lerr != nil {
 		// Restarting the earlier worker failed: its entry stays as it was
 		// (no second, failed entry for the same branch).
-		writeJSONStatus(w, lerr.status, map[string]any{"code": lerr.code, "message": "the earlier worker's agent is gone and a new one could not be started: " + lerr.message, "entry": prev})
-		return
+		return lerr.status, map[string]any{"code": lerr.code, "message": "the earlier worker's agent is gone and a new one could not be started: " + lerr.message, "entry": prev}
 	}
 	if hasPrev {
 		// The earlier worker's agent is gone: the new one takes over its
@@ -395,37 +410,42 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 				e.PreviousBranches = append(e.PreviousBranches, e.Branch)
 				e.Branch = res.Branch
 			}
-			e.Brief, e.From, e.ReplyTo, e.Callback = strings.TrimSpace(b.Brief), from, s.replyRef(r), nil
+			e.Brief, e.From, e.ReplyTo, e.Callback = strings.TrimSpace(b.Brief), from, reply, nil
 			if b.Plan != "" {
 				e.PlanID = b.Plan
 			}
 			e.SawWorking, e.FinishedAt, e.FinalReport, e.ReportTries, e.Mark = false, nil, "", 0, nil
 		})
 		if err != nil {
-			writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res})
-			return
+			return http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res}
 		}
 		s.coord.mu.Lock()
 		delete(s.coord.checks, prev.ID)
 		s.coord.started[prev.ID] = time.Now()
 		s.coord.mu.Unlock()
-		writeJSON(w, map[string]any{"entry": entry, "worker": res, "existing": true, "restarted": true})
-		return
+		return http.StatusOK, map[string]any{"entry": entry, "worker": res, "existing": true, "restarted": true}
+	}
+	put := func(e ledger.Entry) (ledger.Entry, error) {
+		if queued == nil {
+			return s.ledger.Add(e)
+		}
+		e.ID, e.CreatedAt, e.After = queued.ID, queued.CreatedAt, queued.After
+		got, _, err := s.ledger.Update(queued.ID, func(x *ledger.Entry) { *x = e })
+		return got, err
 	}
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: s.replyRef(r), PlanID: b.Plan,
+		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply, PlanID: b.Plan,
 	}
 	if lerr != nil {
 		e.Status, e.Error = ledger.Failed, lerr.code+": "+lerr.message
 		e.WorkspaceID = lerr.workspace
-		entry, err := s.ledger.Add(e)
+		entry, err := put(e)
 		if err != nil {
 			log.Printf("ledger: %v", err)
 		}
 		body := map[string]any{"code": lerr.code, "message": lerr.message, "entry": entry}
-		writeJSONStatus(w, lerr.status, body)
-		return
+		return lerr.status, body
 	}
 	e.Status = ledger.Running
 	e.Repo, e.RepoName, e.Base, e.Kind = res.Repo, filepath.Base(res.Repo), res.Base, res.Agent.Agent
@@ -434,10 +454,9 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	if res.PromptError != "" {
 		e.Error = res.PromptError
 	}
-	entry, err := s.ledger.Add(e)
+	entry, err := put(e)
 	if err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res})
-		return
+		return http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res}
 	}
 	s.coord.mu.Lock()
 	for id, at := range s.coord.started { // keep the map small
@@ -447,7 +466,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	s.coord.started[entry.ID] = time.Now()
 	s.coord.mu.Unlock()
-	writeJSON(w, map[string]any{"entry": entry, "worker": res})
+	return http.StatusOK, map[string]any{"entry": entry, "worker": res}
 }
 
 // observeLedger applies an agent list to the ledger and captures the
@@ -457,6 +476,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 		return
 	}
 	captures := s.ledger.Observe(agents, time.Now())
+	s.releaseQueued()
 	s.evalPlans()
 	defer s.deliverCallbacks(agents)
 	for _, e := range captures {
