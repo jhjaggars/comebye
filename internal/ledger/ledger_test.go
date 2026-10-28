@@ -286,3 +286,42 @@ func TestExplicitReport(t *testing.T) {
 		t.Fatalf("rerun = %+v", got)
 	}
 }
+
+// The turn that ran `comebye report` is absorbed only briefly: a worker
+// seen working long after it reported has been given more to do.
+func TestExplicitReportGrace(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	e, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running})
+	now := time.Now()
+	s.Report(e.AgentID, "done", now)
+	work := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking)}
+	s.Observe(work, now.Add(30*time.Second))
+	if g, _ := s.Get(e.ID); g.Status != Finished {
+		t.Fatalf("reopened inside the grace: %+v", g)
+	}
+	s.Observe(work, now.Add(reportTurnGrace+time.Second))
+	if g, _ := s.Get(e.ID); g.Status != Running || g.FinalReport != "" || g.ReportSource != "" {
+		t.Fatalf("not reopened after the grace: %+v", g)
+	}
+}
+
+// A failed handoff handed off again is replaced in its plan, not counted
+// twice.
+func TestPlanSupersedesFailedMember(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	now := time.Now()
+	p, _ := s.AddPlan(Plan{Title: "x", Size: 1})
+	s.Add(Entry{Host: "desk", RepoName: "r", Branch: "b", Status: Failed, PlanID: p.ID, CreatedAt: now.Add(-time.Minute)})
+	if got := s.EvalPlans(now); len(got) != 1 || got[0].Outcome != PlanPartial {
+		t.Fatalf("failed alone = %+v", got)
+	}
+	again, _ := s.Add(Entry{Host: "desk", RepoName: "r", Branch: "b", AgentID: "desk/w1:p1", Status: Running, PlanID: p.ID, CreatedAt: now})
+	if m := s.Members(p.ID); len(m) != 1 || m[0].ID != again.ID {
+		t.Fatalf("members = %+v", m)
+	}
+	s.Observe([]herdr.AgentInfo{agent(again.AgentID, herdr.StatusWorking)}, now)
+	s.Observe([]herdr.AgentInfo{agent(again.AgentID, herdr.StatusIdle)}, now)
+	if got := s.EvalPlans(now); len(got) != 1 || got[0].Outcome != PlanDone {
+		t.Fatalf("after the retry = %+v", got)
+	}
+}

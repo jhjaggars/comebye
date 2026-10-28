@@ -118,7 +118,7 @@ func (s *Store) Members(planID string) []Entry {
 	defer s.mu.Unlock()
 	var out []Entry
 	for _, e := range s.data.Entries {
-		if e.PlanID == planID {
+		if e.PlanID == planID && !(e.Status == Failed && s.supersededLocked(e)) {
 			out = append(out, copyEntry(e))
 		}
 	}
@@ -139,6 +139,9 @@ func (s *Store) EvalPlans(now time.Time) []Plan {
 		for _, e := range s.data.Entries {
 			if e.PlanID != p.ID {
 				continue
+			}
+			if e.Status == Failed && s.supersededLocked(e) {
+				continue // handed off again since; the new entry counts
 			}
 			members++
 			switch MemberOutcome(*e) {
@@ -172,6 +175,18 @@ func (s *Store) EvalPlans(now time.Time) []Plan {
 		_ = s.save()
 	}
 	return settled
+}
+
+// supersededLocked reports whether a failed entry has been replaced by a
+// later, not failed handoff of the same plan, host, repository and branch.
+func (s *Store) supersededLocked(f *Entry) bool {
+	for _, e := range s.data.Entries {
+		if e != f && e.PlanID == f.PlanID && e.Host == f.Host && e.RepoName == f.RepoName && e.Branch == f.Branch &&
+			e.Status != Failed && e.CreatedAt.After(f.CreatedAt) {
+			return true
+		}
+	}
+	return false
 }
 
 // PendingPlanCallbacks lists settled plans whose creator has not been told.

@@ -40,6 +40,12 @@ const (
 // MaxReport caps a captured final report (bytes).
 const MaxReport = 20000
 
+// reportTurnGrace is how long after an explicit report the agent may still
+// be working without that counting as new work: the turn that ran
+// `comebye report` ends within moments. Past it, a worker seen working has
+// been given more to do.
+const reportTurnGrace = 2 * time.Minute
+
 // maxReportTries bounds how often an empty final report is looked for.
 const maxReportTries = 3
 
@@ -486,7 +492,7 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 			if !e.SawWorking {
 				e.SawWorking, changed = true, true
 			}
-			if e.Status == Finished && !e.AwaitIdle {
+			if e.Status == Finished && !(e.AwaitIdle && e.FinishedAt != nil && now.Sub(*e.FinishedAt) < reportTurnGrace) {
 				e.ReportSource = ""
 				e.Status, e.FinishedAt, e.FinalReport, e.ReportTries = Running, nil, "", 0
 				e.Callback = nil
@@ -578,8 +584,9 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		return Entry{}, false, nil
 	}
 	t := now.UTC()
-	if e.Status != Finished {
-		e.Status, e.FinishedAt = Finished, &t
+	wasFinished := e.Status == Finished
+	e.Status, e.FinishedAt = Finished, &t
+	if !wasFinished {
 		if e.ReplyTo != nil {
 			e.Callback = &Callback{State: CallbackPending, At: t}
 		}

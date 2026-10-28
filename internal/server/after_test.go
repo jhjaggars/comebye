@@ -189,3 +189,66 @@ func newPlanOn(t *testing.T, s *Server, body string) planView {
 	}
 	return r.Plan
 }
+
+func TestAfterAmbiguousBranchNeedsID(t *testing.T) {
+	s, _ := afterServer(t)
+	p := newPlanOn(t, s, `{"title":"Two repos","size":3}`)
+	a, _ := s.ledger.Add(ledger.Entry{Host: "kube", RepoName: "code", Branch: "feat/export", AgentID: "kube/w1:p1", Status: ledger.Running, PlanID: p.ID})
+	s.ledger.Add(ledger.Entry{Host: "kube", RepoName: "infra", Branch: "feat/export", AgentID: "kube/w2:p1", Status: ledger.Running, PlanID: p.ID})
+	if code, _ := queue(t, s, p.ID, "feat/next", `"feat/export"`); code != 409 {
+		t.Fatalf("ambiguous branch = %d", code)
+	}
+	if code, q := queue(t, s, p.ID, "feat/next", `"`+a.ID+`"`); code != 200 || q.After[0] != a.ID {
+		t.Fatalf("by id = %d %+v", code, q)
+	}
+}
+
+func TestPlanRules(t *testing.T) {
+	s, _ := afterServer(t)
+	p := newPlanOn(t, s, `{"title":"A","size":1}`)
+	other := newPlanOn(t, s, `{"title":"B","size":1}`)
+	w, _ := s.ledger.Add(ledger.Entry{Host: "kube", Repo: "/home/k/code/proj", RepoName: "proj", Branch: "feat/x", AgentID: "kube/wS:p9", Status: ledger.Running, PlanID: p.ID})
+	_ = w
+	body := func(plan, branch string) string {
+		return `{"host":"kube","repo":"/home/k/code/proj","branch":"` + branch + `","brief":"b","plan":"` + plan + `"}`
+	}
+	// The plan is full, yet the same branch (an existing slot) may be handed off again.
+	if r := do(s, "POST", "/api/handoffs", nil, body(p.ID, "feat/other")); r.Code != 409 || !strings.Contains(r.Body.String(), "plan_full") {
+		t.Fatalf("full = %d %s", r.Code, r.Body)
+	}
+	// A worker is not moved to another plan.
+	if r := do(s, "POST", "/api/handoffs", nil, body(other.ID, "feat/x")); r.Code != 409 || !strings.Contains(r.Body.String(), "plan_conflict") {
+		t.Fatalf("move = %d %s", r.Code, r.Body)
+	}
+	if g, _ := s.ledger.Get(w.ID); g.PlanID != p.ID {
+		t.Fatalf("moved: %+v", g)
+	}
+	// A direct handoff cannot take the branch of a queued step.
+	q := newPlanOn(t, s, `{"title":"C","size":2}`)
+	f, _ := s.ledger.Add(ledger.Entry{Host: "kube", RepoName: "r0", Branch: "first", AgentID: "kube/wF:p1", Status: ledger.Running, PlanID: q.ID})
+	if code, _ := queue(t, s, q.ID, "feat/queued", `"`+f.ID+`"`); code != 200 {
+		t.Fatal("queue")
+	}
+	if r := do(s, "POST", "/api/handoffs", nil, body("", "feat/queued")); r.Code != 409 || !strings.Contains(r.Body.String(), "branch_waiting") {
+		t.Fatalf("waiting branch = %d %s", r.Code, r.Body)
+	}
+}
+
+func TestReportBodyLimit(t *testing.T) {
+	s, _, _ := coordServer(t)
+	s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "p", Branch: "b", AgentID: "desk/w9:p1", Status: ledger.Running})
+	// 60 KiB of quotes escapes to well over 64 KiB of JSON.
+	text, _ := json.Marshal(map[string]string{"text": strings.Repeat("\"\n", 30000)})
+	if w := do(s, "POST", "/api/report", agentHdr("w9:p1"), string(text)); w.Code != 200 {
+		t.Fatalf("big report = %d %s", w.Code, w.Body.String()[:min(200, w.Body.Len())])
+	}
+}
+
+func TestPlainTextDropsInvisibleControls(t *testing.T) {
+	if got := plainText("Add\u202e foo\u200b bar\ufeff", 50); got != "Add foo bar" {
+		t.Fatalf("got %q", got)
+	}
+	if got := plainText("Größe 日本", 50); got != "Größe 日本" {
+		t.Fatalf("got %q", got)
+	}
+}

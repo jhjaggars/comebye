@@ -120,6 +120,16 @@ func TestPlanPartialNamesFailedMember(t *testing.T) {
 	if len(got) != 1 || got[0][1] != "Plan needs a look: Two parts" || got[0][2] != "1 of 2 workers finished. Failed: infra/feat/cfg." {
 		t.Fatalf("push = %v", got)
 	}
+	// The report capture the finish started writes the ledger: let it end
+	// before the temp directory goes.
+	waitFor(t, func() bool {
+		for _, e := range s.ledger.Entries() {
+			if e.AgentID == "desk/w8:p1" {
+				return e.ReportTries > 0
+			}
+		}
+		return false
+	})
 }
 
 func TestPlainText(t *testing.T) {

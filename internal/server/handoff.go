@@ -318,7 +318,9 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		if p, ok := s.ledger.GetPlan(b.Plan); !ok {
 			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_plan", "message": "no such plan"})
 			return
-		} else if len(s.ledger.Members(p.ID)) >= p.Size {
+		} else if members := s.ledger.Members(p.ID); len(members) >= p.Size && !slices.ContainsFunc(members, func(m ledger.Entry) bool {
+			return m.Host == b.Host && m.RepoName == filepath.Base(filepath.Clean(b.Repo)) && m.Branch == strings.TrimSpace(b.Branch)
+		}) {
 			writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "plan_full", "message": "the plan already has all its members"})
 			return
 		}
@@ -367,6 +369,16 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 		return e.Host == b.Host && e.RepoName == repoName && (e.Branch == branch || slices.Contains(e.PreviousBranches, branch)) &&
 			(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
 	})
+	if hasPrev && b.Plan != "" && prev.PlanID != "" && prev.PlanID != b.Plan {
+		return http.StatusConflict, map[string]any{"code": "plan_conflict", "message": "that worker already belongs to another plan", "entry": prev}
+	}
+	if queued == nil {
+		if w, ok := s.ledger.Find(func(e *ledger.Entry) bool {
+			return e.Status == ledger.Waiting && e.Host == b.Host && e.RepoName == repoName && e.Branch == branch
+		}); ok {
+			return http.StatusConflict, map[string]any{"code": "branch_waiting", "message": "a queued step is waiting for this branch: release or cancel it first", "entry": w}
+		}
+	}
 	if hasPrev && s.agentPresent(ctx, prev) {
 		if b.Plan != "" && prev.PlanID != b.Plan {
 			// The worker already exists: it joins the plan.
@@ -415,6 +427,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 				e.PlanID = b.Plan
 			}
 			e.SawWorking, e.FinishedAt, e.FinalReport, e.ReportTries, e.Mark = false, nil, "", 0, nil
+			e.ReportSource, e.AwaitIdle = "", false
 		})
 		if err != nil {
 			return http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res}

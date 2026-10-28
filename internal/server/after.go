@@ -48,11 +48,20 @@ func (s *Server) queueHandoff(b handoffBody, from string, reply *ledger.Ref) (in
 	for _, ref := range b.After {
 		ref = strings.TrimSpace(ref)
 		var found *ledger.Entry
+		matches := 0
 		for i := range members {
 			m := &members[i]
-			if m.ID == ref || m.Branch == ref || slices.Contains(m.PreviousBranches, ref) {
-				found = m
+			if m.ID == ref {
+				found, matches = m, 1
+				break
 			}
+			if m.Branch == ref || slices.Contains(m.PreviousBranches, ref) {
+				found = m
+				matches++
+			}
+		}
+		if matches > 1 {
+			return http.StatusConflict, apiErr("ambiguous_step", plainText(ref, 60)+" is the branch of more than one member of this plan: name the step by its id (comebye plan show)")
 		}
 		if found == nil {
 			return http.StatusNotFound, apiErr("unknown_step", "no member of this plan matches "+plainText(ref, 60)+" (hand off the earlier steps first)")
@@ -152,6 +161,9 @@ func (s *Server) failQueued(id, why string) {
 // startQueued starts a waiting handoff's worker now, with its steps'
 // reports after the brief.
 func (s *Server) startQueued(ctx context.Context, e ledger.Entry) (int, any) {
+	if cur, ok := s.ledger.Get(e.ID); !ok || cur.Status != ledger.Waiting {
+		return http.StatusConflict, apiErr("not_waiting", "it is not waiting any more")
+	}
 	b := handoffBody{Host: e.Host, Repo: e.Repo, Branch: e.Branch, Base: e.Base, Kind: e.Kind, Name: e.AgentName, Brief: e.Brief, Plan: e.PlanID}
 	status, payload := s.doHandoff(ctx, b, e.From, e.ReplyTo, &e, s.stepContext(e))
 	// A worker already on that branch answers with it and leaves this
@@ -245,6 +257,13 @@ func (s *Server) handleCancelHandoff(w http.ResponseWriter, r *http.Request) {
 	e, ok := s.ledger.Get(r.PathValue("id"))
 	if !ok || e.Status != ledger.Waiting {
 		writeJSONStatus(w, http.StatusNotFound, apiErr("not_waiting", "no waiting handoff with that id"))
+		return
+	}
+	s.coord.mu.Lock()
+	starting := s.coord.starting["queued/"+e.ID]
+	s.coord.mu.Unlock()
+	if starting {
+		writeJSONStatus(w, http.StatusConflict, apiErr("handoff_in_progress", "it is starting right now"))
 		return
 	}
 	s.failQueued(e.ID, "cancelled by "+s.by(r, ""))

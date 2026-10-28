@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
@@ -23,7 +24,7 @@ func plainText(s string, n int) string {
 	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
-			strings.ContainsRune(" .,:;_-/()+'&#%!?", r), r > 0x7f && r != 0x2028 && r != 0x2029 && r != 0x85:
+			strings.ContainsRune(" .,:;_-/()+'&#%!?", r), r > 0x7f && unicode.IsPrint(r):
 			out = append(out, r)
 		default:
 			out = append(out, ' ')

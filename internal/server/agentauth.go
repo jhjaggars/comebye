@@ -177,6 +177,8 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 		maxBody, timeout = maxLaunchPrompt+64<<10, workerTimeout+30*time.Second
 	case strings.HasSuffix(r.URL.Path, "/prompt"):
 		maxBody, timeout = 1<<20, 45*time.Second
+	case r.URL.Path == "/api/report":
+		maxBody = maxReportBody
 	case r.URL.Path == "/api/brief":
 		maxBody = maxBriefBytes + 16<<10
 	}

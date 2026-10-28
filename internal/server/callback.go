@@ -20,6 +20,8 @@ const (
 	// waited for (its host may be restarting) before the current
 	// coordinator gets the callback instead.
 	callbackFallback = 10 * time.Minute
+	// sendTimeout bounds one delivery attempt.
+	sendTimeout = 45 * time.Second
 )
 
 // replyRef is who a handoff made by this request should report back to:
@@ -89,6 +91,9 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 	}
 	for _, j := range jobs {
 		if now.Sub(j.cb.At) > ledger.CallbackTTL {
+			s.coord.mu.Lock()
+			delete(s.coord.calling, j.key)
+			s.coord.mu.Unlock()
 			j.done(ledger.CallbackExpired, "")
 			continue
 		}
@@ -104,7 +109,8 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 			s.coord.mu.Unlock()
 			continue
 		}
-		s.coord.calling[j.key] = now
+		// Held until the attempt ends (a prompt can take 45 s).
+		s.coord.calling[j.key] = now.Add(sendTimeout)
 		s.coord.mu.Unlock()
 		go s.sendCallback(j, *target, standIn)
 	}
@@ -172,19 +178,26 @@ func safeText(s string) string {
 }
 
 func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
 	if err := s.promptAgent(ctx, target, j.text(standIn)); err != nil {
 		log.Printf("callback for %s to %s: %v", j.key, target.ID, err)
+		s.coord.mu.Lock()
+		s.coord.calling[j.key] = time.Now() // retry after callbackRetry
+		s.coord.mu.Unlock()
 		j.tried()
 		return
 	}
+	s.coord.mu.Lock()
+	delete(s.coord.calling, j.key)
+	s.coord.mu.Unlock()
 	j.done(ledger.CallbackDelivered, target.ID)
 }
 
-// maxReportBody bounds POST /api/report (the report is cut to
-// ledger.MaxReport; the rest is room for JSON escaping).
-const maxReportBody = 64 << 10
+// maxReportBody bounds POST /api/report: the CLI sends up to 64 KiB of
+// text, which JSON escaping can grow several times. The report is cut to
+// ledger.MaxReport when stored.
+const maxReportBody = 1 << 20
 
 // handleReport is a worker declaring itself done: POST {text}. The
 // caller must be the agent of a running or finished handoff, found by
