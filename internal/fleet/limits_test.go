@@ -16,7 +16,7 @@ func TestPeerSnapshotSanitized(t *testing.T) {
 	opts := fastOpts(nil)
 	opts.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
 	u, _ := url.Parse("https://kube.tailnet.ts.net")
-	f := New(nil, "desk", []Peer{{Name: "kube", URL: u}}, opts)
+	f := New(nil, "desk", []Peer{{Name: "kube", URLs: []*url.URL{u}}}, opts)
 	p := f.byName["kube"]
 	p.checked = true // no push probe
 

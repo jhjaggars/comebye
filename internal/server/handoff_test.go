@@ -159,7 +159,7 @@ func TestHandoffViaPeer(t *testing.T) {
 	ps := httptest.NewServer(peer)
 	defer ps.Close()
 	pu, _ := url.Parse(ps.URL)
-	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URL: pu}}, fleet.Options{Logf: func(string, ...any) {}})
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
 	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 
 	w := do(s, "POST", "/api/handoffs", nil, `{"host":"kube","repo":"/home/k/code/proj","branch":"feat/x","kind":"claude","brief":"Fix X.","from":"coordinator"}`)
@@ -248,7 +248,7 @@ func TestHostOpAllowlist(t *testing.T) {
 	ps := httptest.NewServer(peer)
 	defer ps.Close()
 	pu, _ := url.Parse(ps.URL)
-	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URL: pu}}, fleet.Options{Logf: func(string, ...any) {}})
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
 	ctx := context.Background()
 	// Only the op's own query parameters are sent.
 	if code, _, err := fl.CallHost(ctx, "kube", "checks", url.Values{"path": {"/p"}, "branch": {"b"}, "evil": {"1"}}, nil); err != nil || code != 200 {

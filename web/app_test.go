@@ -157,3 +157,24 @@ func TestAppPollsAfterSend(t *testing.T) {
 		}
 	}
 }
+
+// A peer the hub cannot reach shows the hub's diagnosis (dns, tcp, tls,
+// http) and since when, not a bare error: the down row, and the toasts
+// that name a host, all carry the class.
+func TestAppShowsPeerFailureClass(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`h.since ? Date.parse(h.since) : NaN`,
+		`what = "unreachable" + (h.class ? ` + "`: ${h.class}`" + ` : "")`,
+		"` (since ${fmtAgo(since)} ago)`",
+		`title="${esc(h.error || "")}"`,
+		"is unreachable${h.class ? `: ${h.class}` : \"\"}",
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("app.js does not contain %q", want)
+		}
+	}
+}

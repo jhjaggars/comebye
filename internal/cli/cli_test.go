@@ -83,7 +83,7 @@ const agentsJSON = `{"agents":[
  {"id":"laharl/w3:p1","host":"laharl","pane_id":"w3:p1","name":"fix-a","agent":"pi","agent_status":"idle","cwd":"/home/u/.worktrees/proj/fix-a"},
  {"id":"kube/w3:p1","host":"kube","pane_id":"w3:p1","name":"fix-a","agent":"claude","agent_status":"blocked","cwd":"/home/k/code/other"},
  {"id":"kube/w5:p2","host":"kube","pane_id":"w5:p2","name":"solo","agent":"codex","agent_status":"idle","cwd":"/home/k/code/other"}
-],"hosts":[{"name":"laharl","local":true,"status":"ok"},{"name":"kube","status":"ok"},{"name":"bee","status":"down","error":"unreachable"}]}`
+],"hosts":[{"name":"laharl","local":true,"status":"ok"},{"name":"kube","status":"ok"},{"name":"bee","status":"down","class":"dns","since":"2026-10-22T06:00:00Z","error":"cannot resolve bee.tailnet.ts.net (no such host); the peer may have been renamed in the tailnet or left it - update the hub's -peers"}]}`
 
 const ledgerJSON = `{"entries":[
  {"id":"h1","host":"laharl","repo":"/home/u/code/proj","repo_name":"proj","branch":"fix/a","base":"main","agent_id":"laharl/w3:p1","pane_id":"w3:p1","agent_name":"fix-a","worktree":"/home/u/.worktrees/proj/fix-a","status":"finished","final_report":"## Summary\nFixed A.","live":{"present":true,"agent_status":"idle"},"candidate":true},
@@ -217,7 +217,7 @@ func TestAgentsCommand(t *testing.T) {
 		!strings.Contains(lines[1], "coordinator (you)") {
 		t.Fatalf("coordinator first, marked as you:\n%s", s)
 	}
-	for _, want := range []string{"proj", "fix-a", "worker (finished)", "home", "main", "bee is down (unreachable)"} {
+	for _, want := range []string{"proj", "fix-a", "worker (finished)", "home", "main", "peer bee unreachable: dns (since 3h ago): cannot resolve bee.tailnet.ts.net", "its agents are not listed"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("agents lacks %q:\n%s", want, s)
 		}

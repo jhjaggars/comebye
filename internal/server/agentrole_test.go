@@ -701,7 +701,7 @@ func TestCoordinatorLaunchOnPeer(t *testing.T) {
 	}))
 	defer peer.Close()
 	pu, _ := url.Parse(peer.URL)
-	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URL: pu}}, fleet.Options{Logf: func(string, ...any) {}})
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
 	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	w := do(s, "POST", "/api/hosts/kube/launch", nil, `{"coordinator":true,"kind":"pi"}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "wS:p3") || !strings.Contains(string(got), `"coordinator":true`) {

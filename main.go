@@ -56,7 +56,7 @@ func main() {
 		pushSubject  = flag.String("push-subject", getenv("COMEBYE_PUSH_SUBJECT"), "VAPID contact (mailto:you@example.com or an https:// URL); default mailto:<first -ts-allow-login that is an email>, else the project URL")
 		pushExcerpt  = flag.Int("push-excerpt", envInt("COMEBYE_PUSH_EXCERPT", 200), "max characters of the agent's last message in Web Push notifications (end-to-end encrypted); 0 sends none")
 		hostName     = flag.String("host-name", envOr("COMEBYE_HOST_NAME", fleet.DefaultHostName()), "this host's name in agent IDs and URLs (lowercase DNS label)")
-		peersSpec    = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name defaults to the first DNS label)")
+		peersSpec    = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name optional; several addresses per peer, tried in order, separated by |)")
 		noAuth       = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
 		launchOn     = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
 		worktreeRoot = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
@@ -106,7 +106,11 @@ func main() {
 			log.Printf("WARNING: COMEBYE_TEST_INSECURE_PEERS=1 (test only): http loopback peers and no-allowlist hubs are allowed")
 		}
 		for _, p := range peers {
-			log.Printf("hub: peer %s at %s", p.Name, p.URL)
+			if len(p.URLs) > 1 {
+				log.Printf("hub: peer %s at %s (addresses tried in order)", p.Name, p.Addrs())
+			} else {
+				log.Printf("hub: peer %s at %s", p.Name, p.Addrs())
+			}
 		}
 	}
 

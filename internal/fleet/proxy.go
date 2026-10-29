@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -98,16 +99,16 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 		return
 	}
 
-	u := p.endpoint("api", "agents", target, op)
+	segments := []string{"api", "agents", target, op}
 	if op == "subagent-transcript" {
 		sub := r.PathValue("sub")
 		if !transcript.ValidAgentID(sub) {
 			writeJSON(w, http.StatusBadRequest, "bad_subagent", "invalid subagent id")
 			return
 		}
-		u = p.endpoint("api", "agents", target, "subagents", sub, "transcript")
+		segments = []string{"api", "agents", target, "subagents", sub, "transcript"}
 	}
-	f.forward(w, r, p, u, spec)
+	f.forward(w, r, p, segments, spec)
 }
 
 // ProxyHost forwards one per-host API call of a browser (an op of
@@ -123,7 +124,7 @@ func (f *Fleet) ProxyHost(w http.ResponseWriter, r *http.Request, host, op strin
 		writeJSON(w, http.StatusNotFound, "not_found", "not a proxied operation")
 		return
 	}
-	f.forward(w, r, p, p.endpoint(spec.path...), spec.proxyOp)
+	f.forward(w, r, p, spec.path, spec.proxyOp)
 }
 
 // CallHost makes one per-host API call (an op of hostProxyOps) to the peer
@@ -140,15 +141,13 @@ func (f *Fleet) CallHost(ctx context.Context, host, op string, query url.Values,
 	if !ok {
 		return 0, nil, errors.New("not a proxied operation: " + op)
 	}
-	u := p.endpoint(spec.path...)
 	q := url.Values{}
 	for _, k := range spec.query {
 		if v := query.Get(k); v != "" {
 			q.Set(k, v)
 		}
 	}
-	u.RawQuery = q.Encode()
-	return f.call(ctx, host, spec.proxyOp, u, body)
+	return f.call(ctx, p, spec.proxyOp, spec.path, q, body)
 }
 
 // CallAgent makes one per-agent call (an op of proxyOps, e.g. prompt) to
@@ -170,35 +169,49 @@ func (f *Fleet) CallAgent(ctx context.Context, host, target, op string, body []b
 	if spec.bodyTimeout != nil {
 		spec.timeout = spec.bodyTimeout(body)
 	}
-	return f.call(ctx, host, spec, p.endpoint("api", "agents", target, op), body)
+	return f.call(ctx, p, spec, []string{"api", "agents", target, op}, nil, body)
 }
 
-// call sends one request of the hub's own to a peer.
-func (f *Fleet) call(ctx context.Context, host string, spec proxyOp, u *url.URL, body []byte) (int, []byte, error) {
-	var rd io.Reader
-	if spec.method == http.MethodPost {
+// call sends one request of the hub's own to a peer, trying each of its
+// addresses in order.
+func (f *Fleet) call(ctx context.Context, p *peer, spec proxyOp, segments []string, query url.Values, body []byte) (int, []byte, error) {
+	host := p.name
+	post := spec.method == http.MethodPost
+	if post {
 		if int64(len(body)) > spec.maxBody || !json.Valid(body) {
 			return 0, nil, errors.New("invalid body")
 		}
-		rd = bytes.NewReader(body)
 	}
 	ctx, cancel := context.WithTimeout(ctx, spec.timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, spec.method, u.String(), rd)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-	if rd != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := f.opts.Client.Do(req)
+	resp, _, err := p.attempt(func(base *url.URL) (*http.Response, error) {
+		u := endpointOn(base, segments...)
+		if len(query) > 0 {
+			u.RawQuery = query.Encode()
+		}
+		// A fresh reader per address: a retried POST must not send a
+		// consumed body.
+		var rd io.Reader
+		if post {
+			rd = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, spec.method, u.String(), rd)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", userAgent)
+		if post {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		return f.opts.Client.Do(req)
+	})
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return 0, nil, errors.New(host + " did not answer in time")
 		}
-		return 0, nil, errors.New(host + " is unreachable")
+		_, detail := classifyError(err, "")
+		return 0, nil, fmt.Errorf("%s is unreachable: %s", host, detail)
 	}
 	defer resp.Body.Close()
 	switch {
@@ -227,11 +240,12 @@ func (f *Fleet) FetchLatest(ctx context.Context, host, pane string) *transcript.
 	return p.fetchLatest(ctx, pane)
 }
 
-// forward makes the call described by spec to u on peer p and writes the
-// peer's answer: status code and JSON body pass through (e.g. 409
-// agent_blocked), only the content type and cache validator are kept from
-// the peer's headers, and no browser header is forwarded.
-func (f *Fleet) forward(w http.ResponseWriter, r *http.Request, p *peer, u *url.URL, spec proxyOp) {
+// forward makes the call described by spec to the peer's segments and
+// writes the peer's answer: status code and JSON body pass through (e.g.
+// 409 agent_blocked), only the content type and cache validator are kept
+// from the peer's headers, and no browser header is forwarded. Each of
+// the peer's addresses is tried in order.
+func (f *Fleet) forward(w http.ResponseWriter, r *http.Request, p *peer, segments []string, spec proxyOp) {
 	host := p.name
 	q := url.Values{}
 	for _, k := range spec.query {
@@ -239,46 +253,57 @@ func (f *Fleet) forward(w http.ResponseWriter, r *http.Request, p *peer, u *url.
 			q.Set(k, v)
 		}
 	}
-	u.RawQuery = q.Encode()
 
-	timeout := spec.timeout
-	var body io.Reader
-	if spec.method == http.MethodPost {
+	var posted []byte
+	post := spec.method == http.MethodPost
+	if post {
 		b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, spec.maxBody))
 		if err != nil || !json.Valid(b) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
 		if spec.bodyTimeout != nil {
-			timeout = spec.bodyTimeout(b)
+			spec.timeout = spec.bodyTimeout(b)
 		}
-		body = bytes.NewReader(b)
+		posted = b
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), spec.timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, spec.method, u.String(), body)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, "proxy_error", err.Error())
-		return
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-	// Conditional GETs (transcript polls) pass through, so an unchanged
-	// transcript costs the phone a bodiless 304 on a hub too.
-	if inm := r.Header.Get("If-None-Match"); inm != "" && spec.method == http.MethodGet {
-		req.Header.Set("If-None-Match", inm)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := f.opts.Client.Do(req)
+	resp, _, err := p.attempt(func(base *url.URL) (*http.Response, error) {
+		u := endpointOn(base, segments...)
+		if len(q) > 0 {
+			u.RawQuery = q.Encode()
+		}
+		// A fresh reader per address: a retried POST must not send a
+		// consumed body.
+		var rd io.Reader
+		if post {
+			rd = bytes.NewReader(posted)
+		}
+		req, err := http.NewRequestWithContext(ctx, spec.method, u.String(), rd)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", userAgent)
+		// Conditional GETs (transcript polls) pass through, so an unchanged
+		// transcript costs the phone a bodiless 304 on a hub too.
+		if inm := r.Header.Get("If-None-Match"); inm != "" && spec.method == http.MethodGet {
+			req.Header.Set("If-None-Match", inm)
+		}
+		if post {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		return f.opts.Client.Do(req)
+	})
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			writeJSON(w, http.StatusGatewayTimeout, "host_timeout", host+" did not answer in time")
 			return
 		}
-		writeJSON(w, http.StatusBadGateway, "host_unreachable", host+" is unreachable")
+		_, detail := classifyError(err, "")
+		writeJSON(w, http.StatusBadGateway, "host_unreachable", host+" is unreachable: "+detail)
 		return
 	}
 	defer resp.Body.Close()

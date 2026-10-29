@@ -41,6 +41,12 @@ type Options struct {
 	// StaleAfter marks a peer down when its stream has been silent this
 	// long. Peers send a ping every 15s (default 45s, three missed pings).
 	StaleAfter time.Duration
+	// ProbeEvery is how often the hub health-checks each peer with
+	// GET /api/whoami and refreshes the failure class of a down peer
+	// (default 3m).
+	ProbeEvery time.Duration
+	// ProbeTimeout bounds one health probe (default 10s).
+	ProbeTimeout time.Duration
 	// MinBackoff and MaxBackoff bound the reconnect delay (1s, 30s).
 	MinBackoff, MaxBackoff time.Duration
 	// MaxResponse caps a proxied response body (default 8 MiB).
@@ -71,6 +77,12 @@ func (o *Options) defaults() {
 	}
 	if o.StaleAfter <= 0 {
 		o.StaleAfter = 45 * time.Second
+	}
+	if o.ProbeEvery <= 0 {
+		o.ProbeEvery = 3 * time.Minute
+	}
+	if o.ProbeTimeout <= 0 {
+		o.ProbeTimeout = 10 * time.Second
 	}
 	if o.MinBackoff <= 0 {
 		o.MinBackoff = time.Second
@@ -127,7 +139,7 @@ func New(local *state.Manager, localName string, peers []Peer, opts Options) *Fl
 		local.SetHost(localName)
 	}
 	for _, cfg := range peers {
-		p := &peer{f: f, name: cfg.Name, base: cfg.URL, status: StatusConnecting, tracker: state.NewTracker()}
+		p := &peer{f: f, name: cfg.Name, addrs: cfg.URLs, status: StatusConnecting, tracker: state.NewTracker()}
 		f.peers = append(f.peers, p)
 		f.byName[cfg.Name] = p
 	}
@@ -201,6 +213,7 @@ func (f *Fleet) Run(ctx context.Context) {
 	for _, p := range f.peers {
 		go p.run(ctx)
 	}
+	go f.probeLoop(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -223,16 +236,21 @@ func (f *Fleet) Run(ctx context.Context) {
 type peer struct {
 	f    *Fleet
 	name string
-	base *url.URL
+	// addrs are the peer's addresses, tried in order by attempt.
+	addrs []*url.URL
 
-	mu       sync.Mutex
-	status   string
-	lastErr  string
-	lastSeen time.Time
-	agents   []herdr.AgentInfo
-	tracker  *state.Tracker
-	checked  bool // the peer's push setting was checked
-	capped   bool // the last snapshot was cut to maxPeerAgents (logged once)
+	mu        sync.Mutex
+	status    string
+	lastErr   string
+	class     string // failure class while down: dns, tcp, tls, http
+	since     time.Time
+	addr      string // the address that last answered
+	preferred int    // index into addrs of the last address that answered
+	lastSeen  time.Time
+	agents    []herdr.AgentInfo
+	tracker   *state.Tracker
+	checked   bool // the peer's push setting was checked
+	capped    bool // the last snapshot was cut to maxPeerAgents (logged once)
 }
 
 // maxPeerAgents caps the agents taken from one peer snapshot. A real host
@@ -255,9 +273,13 @@ func validStatus(s herdr.AgentStatus) bool {
 func (p *peer) hostStatus() state.HostStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents)}
+	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr}
 	if p.status != StatusOK {
 		hs.Error = p.lastErr
+	}
+	if !p.since.IsZero() {
+		t := p.since
+		hs.Since = &t
 	}
 	if !p.lastSeen.IsZero() {
 		t := p.lastSeen
@@ -266,10 +288,10 @@ func (p *peer) hostStatus() state.HostStatus {
 	return hs
 }
 
-// endpoint builds a URL on the peer from fixed path segments; each
+// endpointOn builds a URL on base from fixed path segments; each
 // segment is escaped, so nothing can climb out of /api/.
-func (p *peer) endpoint(segments ...string) *url.URL {
-	u := *p.base
+func endpointOn(base *url.URL, segments ...string) *url.URL {
+	u := *base
 	var b strings.Builder
 	for _, s := range segments {
 		b.WriteByte('/')
@@ -278,6 +300,46 @@ func (p *peer) endpoint(segments ...string) *url.URL {
 	u.RawPath = b.String()
 	u.Path, _ = url.PathUnescape(u.RawPath)
 	return &u
+}
+
+// attempt runs fn against each of the peer's addresses - the one that
+// last answered first, then the rest in configured order - until one
+// returns an HTTP response. A request that fails before a response
+// (DNS, TCP, TLS) moves on to the next address, so a peer configured
+// with a name plus a tailnet IP survives a rename. It returns the
+// response, the host of the address that answered (or the last one
+// tried), and the last transport error.
+func (p *peer) attempt(fn func(base *url.URL) (*http.Response, error)) (*http.Response, string, error) {
+	if len(p.addrs) == 0 {
+		return nil, "", errors.New("no addresses configured")
+	}
+	p.mu.Lock()
+	order := make([]int, 0, len(p.addrs))
+	order = append(order, p.preferred)
+	for i := range p.addrs {
+		if i != p.preferred {
+			order = append(order, i)
+		}
+	}
+	p.mu.Unlock()
+	var err error
+	host := ""
+	for _, i := range order {
+		resp, ferr := fn(p.addrs[i])
+		host = p.addrs[i].Host
+		if ferr == nil {
+			p.mu.Lock()
+			first := p.preferred != i
+			p.preferred, p.addr = i, host
+			p.mu.Unlock()
+			if first {
+				p.f.opts.Logf("peer %s: using %s (address %d of %d)", p.name, host, i+1, len(p.addrs))
+			}
+			return resp, host, nil
+		}
+		err = ferr
+	}
+	return nil, host, err
 }
 
 var errStale = errors.New("stream went silent (missed pings)")
@@ -324,15 +386,17 @@ func (p *peer) stream(ctx context.Context) (delivered bool, err error) {
 
 	// full=1: herdr's full agent records (browsers get a slim view), which
 	// the hub needs for notification excerpts.
-	u := p.endpoint("api", "events")
-	u.RawQuery = "full=1"
-	req, err := http.NewRequestWithContext(sctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := o.Client.Do(req)
+	resp, _, err := p.attempt(func(base *url.URL) (*http.Response, error) {
+		u := endpointOn(base, "api", "events")
+		u.RawQuery = "full=1"
+		req, err := http.NewRequestWithContext(sctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("User-Agent", userAgent)
+		return o.Client.Do(req)
+	})
 	if err != nil {
 		if fired.Load() {
 			return false, fmt.Errorf("no response within %s", o.ConnectTimeout)
@@ -391,13 +455,16 @@ func (p *peer) stream(ctx context.Context) (delivered bool, err error) {
 	return delivered, errors.New("stream closed by peer")
 }
 
-// statusError explains a non-200 answer from a peer.
-func statusError(code int) error {
+// statusMessage explains a non-2xx answer from a peer.
+func statusMessage(code int) string {
 	if code == http.StatusUnauthorized || code == http.StatusForbidden {
-		return fmt.Errorf("HTTP %d: the peer rejected the hub; add the hub device owner's Tailscale login to the peer's -ts-allow-login", code)
+		return fmt.Sprintf("HTTP %d: the peer rejected the hub; add the hub device owner's Tailscale login to the peer's -ts-allow-login", code)
 	}
-	return fmt.Errorf("HTTP %d from peer", code)
+	return fmt.Sprintf("HTTP %d from peer", code)
 }
+
+// statusError wraps a peer's status code for classification as http.
+func statusError(code int) error { return peerHTTPError{code} }
 
 // handle applies one event from the peer's stream.
 func (p *peer) handle(name, data string) {
@@ -418,7 +485,11 @@ func (p *peer) handle(name, data string) {
 func (p *peer) seen() {
 	p.mu.Lock()
 	changed := p.status != StatusOK
-	p.status, p.lastErr, p.lastSeen = StatusOK, "", time.Now()
+	now := time.Now()
+	p.status, p.lastErr, p.lastSeen = StatusOK, "", now
+	if changed {
+		p.since, p.class = now, ""
+	}
 	p.mu.Unlock()
 	if changed {
 		p.f.opts.Logf("peer %s: connected", p.name)
@@ -465,6 +536,9 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	transitions := p.tracker.Observe(kept, now)
 	p.agents = kept
 	p.status, p.lastErr, p.lastSeen = StatusOK, "", now
+	if !wasOK {
+		p.since, p.class = now, ""
+	}
 	check := !p.checked
 	p.checked = true
 	logCap := dropped && !p.capped
@@ -487,11 +561,14 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 
 // markDown drops the peer's agents and forgets its statuses, so the next
 // snapshot after reconnecting is a fresh baseline (transitions missed while
-// it was down are not notified).
+// it was down are not notified). The error is classified (dns, tcp, tls,
+// http) so the shown reason names the likely fix; the down-since time is
+// kept across reconnect attempts.
 func (p *peer) markDown(err error) {
 	msg := "unreachable"
+	class := ""
 	if err != nil {
-		msg = err.Error()
+		class, msg = classifyError(err, "")
 	}
 	if len(msg) > 300 {
 		msg = msg[:300]
@@ -499,7 +576,12 @@ func (p *peer) markDown(err error) {
 	p.mu.Lock()
 	changed := p.status != StatusDown || p.lastErr != msg
 	wasDown := p.status == StatusDown
+	now := time.Now()
 	p.status, p.lastErr, p.agents = StatusDown, msg, nil
+	p.class = class
+	if !wasDown {
+		p.since = now
+	}
 	p.tracker.Reset()
 	p.mu.Unlock()
 	if !wasDown {
@@ -516,7 +598,7 @@ func (p *peer) markDown(err error) {
 func (p *peer) checkPush() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	body, code, err := p.get(ctx, p.endpoint("api", "push", "key"), 64<<10)
+	body, code, err := p.get(ctx, []string{"api", "push", "key"}, nil, 64<<10)
 	if err != nil || code != http.StatusOK {
 		return
 	}
@@ -528,15 +610,22 @@ func (p *peer) checkPush() {
 	}
 }
 
-// get fetches a small JSON resource from the peer.
-func (p *peer) get(ctx context.Context, u *url.URL, limit int64) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := p.f.opts.Client.Do(req)
+// get fetches a small JSON resource from the peer, trying each of its
+// addresses in order.
+func (p *peer) get(ctx context.Context, segments []string, query url.Values, limit int64) ([]byte, int, error) {
+	resp, _, err := p.attempt(func(base *url.URL) (*http.Response, error) {
+		u := endpointOn(base, segments...)
+		if len(query) > 0 {
+			u.RawQuery = query.Encode()
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", userAgent)
+		return p.f.opts.Client.Do(req)
+	})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -579,9 +668,7 @@ func (f *Fleet) notify(p *peer, a herdr.AgentInfo) {
 
 // fetchLatest reads the tail of a peer agent's transcript.
 func (p *peer) fetchLatest(ctx context.Context, pane string) *transcript.Latest {
-	u := p.endpoint("api", "agents", pane, "transcript")
-	u.RawQuery = "limit=20"
-	body, code, err := p.get(ctx, u, 2<<20)
+	body, code, err := p.get(ctx, []string{"api", "agents", pane, "transcript"}, url.Values{"limit": {"20"}}, 2<<20)
 	if err != nil || code != http.StatusOK {
 		return nil
 	}

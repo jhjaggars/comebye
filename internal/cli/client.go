@@ -225,6 +225,12 @@ type apiHost struct {
 	Local  bool   `json:"local"`
 	Status string `json:"status"`
 	Error  string `json:"error"`
+	// Class is the hub's diagnosis while the peer is down: dns, tcp,
+	// tls or http. Since is when it last changed status; Addr is the
+	// address that last answered when the peer has several.
+	Class string     `json:"class"`
+	Since *time.Time `json:"since"`
+	Addr  string     `json:"addr"`
 }
 
 type agentsResp struct {
