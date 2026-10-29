@@ -336,6 +336,15 @@ type HostStatus struct {
 	Status string `json:"status"`
 	// Error is the last connection error of a peer that is not ok.
 	Error string `json:"error,omitempty"`
+	// Class is the hub's diagnosis of a peer that is not ok: dns, tcp,
+	// tls or http (empty when it could not be classified). A health
+	// probe (/api/whoami) keeps it fresh while the peer is down.
+	Class string `json:"class,omitempty"`
+	// Since is when the host's status last changed ("down since").
+	Since *time.Time `json:"since,omitempty"`
+	// Addr is the peer address that last answered, when the peer has
+	// more than one configured (a name plus a tailnet IP, say).
+	Addr string `json:"addr,omitempty"`
 	// LastSeen is when the peer last sent anything (event or ping).
 	LastSeen *time.Time `json:"last_seen,omitempty"`
 	Agents   int        `json:"agents"`

@@ -106,7 +106,7 @@ func TestHubServesPeers(t *testing.T) {
 	ps := httptest.NewServer(peer)
 	defer ps.Close()
 	pu, _ := url.Parse(ps.URL)
-	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URL: pu}}, fleet.Options{Logf: func(string, ...any) {}})
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go fl.Run(ctx)

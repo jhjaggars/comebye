@@ -442,12 +442,19 @@ function renderList() {
       (nWorking ? `<span class="run">${nWorking} working</span> · ` : "") +
       agents.length + " agent" + (agents.length === 1 ? "" : "s")
     : "";
-  // Peers the hub cannot reach right now: one collapsed row each.
+  // Peers the hub cannot reach right now: one collapsed row each, saying
+  // what broke (dns, tcp, tls, http) and since when - the hub's health
+  // probe keeps the diagnosis fresh - instead of a bare error.
   const downRows = state.hosts.filter((h) => !h.local && h.status !== "ok" &&
     (filter === "all" || h.name === filter)).map((h) => {
-    const seen = h.last_seen ? Date.parse(h.last_seen) : NaN;
-    const what = h.status === "connecting" ? "connecting…" : "unreachable" +
-      (Number.isNaN(seen) ? "" : ` · last seen ${fmtAgo(seen)} ago`);
+    const since = h.since ? Date.parse(h.since) : NaN;
+    let what;
+    if (h.status === "connecting") {
+      what = "connecting…";
+    } else {
+      what = "unreachable" + (h.class ? `: ${h.class}` : "") +
+        (Number.isNaN(since) ? "" : ` (since ${fmtAgo(since)} ago)`);
+    }
     return `
     <div class="agent host-down" role="status" title="${esc(h.error || "")}">
       <span class="dot unknown"></span>
@@ -1178,7 +1185,7 @@ function applyPendingRoute() {
   const h = r.host && hostStatus(r.host);
   if (h && h.status === "connecting") return; // the hub has not reached that peer yet; wait
   state.pendingRoute = null;
-  toast(h && h.status === "down" ? `${r.host} is unreachable` : "that agent is gone", true);
+  toast(h && h.status === "down" ? `${r.host} is unreachable${h.class ? `: ${h.class}` : ""}` : "that agent is gone", true);
   history.replaceState(null, "", location.pathname + location.search);
 }
 
@@ -1232,7 +1239,7 @@ function renderDetail() {
   const a = agentById(state.selected);
   if (!a) {
     const h = hostStatus(hostOf(state.selected));
-    if (h && !h.local && h.status !== "ok") toast(`${h.name} is unreachable`, true);
+    if (h && !h.local && h.status !== "ok") toast(`${h.name} is unreachable${h.class ? `: ${h.class}` : ""}`, true);
     closeDetail();
     return;
   }

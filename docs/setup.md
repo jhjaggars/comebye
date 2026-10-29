@@ -193,16 +193,55 @@ of them. The phone only ever talks to the hub.
    (`/#/agent/vm/wS:p1`). Name the hub itself with `-host-name` if its
    short hostname is not what you want to see. A hub refuses to start
    without `-ts-allow-login`.
+
+   A peer may list **several addresses**, separated by `|`, tried in order
+   with the first that answers used (the hub logs and reports which one):
+
+   ```sh
+   COMEBYE_PEERS=laharl=https://laharl-1.tailnet.ts.net|https://100.101.102.103
+   ```
+
+   A MagicDNS name plus the peer's tailnet IP survives a rename; two names
+   (an old and a new one) work too. One caveat: the TLS certificate
+   Tailscale Serve presents is issued for the peer's **name**, not its IP,
+   so an IP address can fail the handshake with a certificate error even
+   though the peer is fine - prefer names, and treat an IP as a fallback
+   that trades the certificate check for reachability (the hub reports
+   this case as `tls` with exactly that explanation).
 5. Open the **hub's** URL on your phone and enable notifications there.
 
 With more than one host the list shows a small host chip on every agent and
 the detail header names the host; a peer the hub cannot reach shows as one
-"unreachable · last seen 3m ago" row and never affects the other hosts. A
-peer is marked down when its stream misses pings for 45 s or a reconnect
-fails; the hub retries with backoff (up to 30 s) and re-baselines statuses
-on reconnect, so it does not notify for transitions that happened while the
-peer was unreachable. A plain instance without `-peers` behaves exactly as
-before.
+"unreachable: dns (since 3h ago)" row and never affects the other hosts.
+The hub health-checks every peer at startup and every few minutes
+(GET /api/whoami) and classifies the failure - `dns` (the name does not
+resolve; a Tailscale rename?), `tcp` (no connection), `tls` (the handshake
+failed; a stale `tailscale serve`?) or `http` (it answered, but rejected
+the hub) - so the row, `comebye agents` and the error tooltip say what
+broke and since when, with the fix where one is known. A peer is marked
+down when its stream misses pings for 45 s or a reconnect fails; the hub
+retries with backoff (up to 30 s) and re-baselines statuses on reconnect,
+so it does not notify for transitions that happened while the peer was
+unreachable. A plain instance without `-peers` behaves exactly as before.
+
+### Re-pointing a peer after a Tailscale rename
+
+When a host re-registers in the tailnet it gets a new name (`laharl` ->
+`laharl-1`) and `tailscale serve` keeps serving under its **old** config:
+the hub then sees either `dns` (the old name is gone) or `tls` (Serve
+answers TLS with an internal error alert because its config names a host
+that no longer exists). Nothing on the hub needs to change for the second
+case; fix the peer:
+
+```sh
+# on the renamed peer, as the user running comebye:
+tailscale serve reset && tailscale serve --bg 8741
+```
+
+Then update the hub's `COMEBYE_PEERS` to the new name (or add it as a
+second `|`-separated address, above, so the next rename does not bite).
+The hub picks the peer up again on its next retry (at most 30 s) or its
+next health check; no restart needed.
 
 **Trust model:** anyone allowed on the hub can drive every peer, because
 the hub acts with its owner's identity. Keep the hub's allowlist as tight as
@@ -242,7 +281,7 @@ to the home screen again.
 | `-insecure-no-auth` | | `false` | Start without `-ts-allow-login`, serving an unauthenticated API to anyone who reaches the port (your whole tailnet through Serve). For local testing only. |
 | `-allow-host` | `COMEBYE_ALLOW_HOSTS` | (none) | Extra `Host` names the server answers to, besides `localhost`, loopback IPs and `*.ts.net`. Repeatable or comma-separated. Other hosts get 421 (DNS rebinding protection). |
 | `-host-name` | `COMEBYE_HOST_NAME` | short hostname | This host's name in agent IDs (`<host>/<pane>`), URLs and the UI. Lowercase DNS label. |
-| `-peers` | `COMEBYE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional). `https` Serve URLs only; requires `-ts-allow-login`. |
+| `-peers` | `COMEBYE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional; several addresses per peer, tried in order, `|`-separated). `https` Serve URLs only; requires `-ts-allow-login`. |
 | `-launch` | `COMEBYE_LAUNCH` | `true` | Let the app start new agents (see [Launching agents](agents.md#launching-agents)). |
 | `-launch-root` | `COMEBYE_LAUNCH_ROOTS` | `~/code` | Directory inside which agents may be launched (symlinks resolved). Repeatable or comma-separated; roots that do not exist are ignored. |
 | `-worktree-root` | `COMEBYE_WORKTREE_ROOT` | `~/.worktrees` | Where workers get their git worktrees (`<root>/<repo>/<branch>`); also allowed for worktree checks and removal. |

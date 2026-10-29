@@ -57,6 +57,9 @@ func (fp *fakePeer) serve(w http.ResponseWriter, r *http.Request) {
 	fp.mu.Unlock()
 	path := r.URL.EscapedPath()
 	switch {
+	case path == "/api/whoami":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"host":"kube","role":"user","ledger":true}`)
 	case path == "/api/events":
 		fp.events(w, r)
 	case path == "/api/push/key":
@@ -201,6 +204,8 @@ func fastOpts(d *state.Dispatcher) Options {
 		Dispatcher:     d,
 		ConnectTimeout: 300 * time.Millisecond,
 		StaleAfter:     400 * time.Millisecond,
+		ProbeEvery:     5 * time.Minute, // probes are tested in health_test.go
+		ProbeTimeout:   250 * time.Millisecond,
 		MinBackoff:     50 * time.Millisecond,
 		MaxBackoff:     200 * time.Millisecond,
 		MaxResponse:    1024,
@@ -247,7 +252,7 @@ func TestAggregatesPeerAgents(t *testing.T) {
 	fp.agents = append(fp.agents, own, other)
 	fp.hosts = []state.HostStatus{{Name: "kube-self", Local: true, Status: "ok"}, {Name: "third", Status: "ok"}}
 
-	f := startFleet(t, fastOpts(nil), Peer{Name: "kube", URL: fp.url()})
+	f := startFleet(t, fastOpts(nil), Peer{Name: "kube", URLs: []*url.URL{fp.url()}})
 	events, cancel := f.Hub().Subscribe()
 	defer cancel()
 	waitFor(t, "peer agents", func() bool { return len(f.Agents()) == 2 })
@@ -277,7 +282,7 @@ func TestAggregatesPeerAgents(t *testing.T) {
 
 func TestPeerDownAndUp(t *testing.T) {
 	fp := newFakePeer(t, agent("wS:p1", "fixer", herdr.StatusWorking))
-	f := startFleet(t, fastOpts(nil), Peer{Name: "kube", URL: fp.url()})
+	f := startFleet(t, fastOpts(nil), Peer{Name: "kube", URLs: []*url.URL{fp.url()}})
 	waitFor(t, "connected", func() bool { return hostByName(f, "kube").Status == StatusOK })
 
 	// Pings keep a quiet stream alive past StaleAfter.
@@ -315,9 +320,9 @@ func TestUnreachableAndHangingPeersAreIsolated(t *testing.T) {
 	hangURL, _ := url.Parse(hang.URL)
 
 	f := startFleet(t, fastOpts(nil),
-		Peer{Name: "hang", URL: hangURL},
-		Peer{Name: "gone", URL: closedURL},
-		Peer{Name: "good", URL: good.url()})
+		Peer{Name: "hang", URLs: []*url.URL{hangURL}},
+		Peer{Name: "gone", URLs: []*url.URL{closedURL}},
+		Peer{Name: "good", URLs: []*url.URL{good.url()}})
 	waitFor(t, "good peer", func() bool { return hostByName(f, "good").Status == StatusOK })
 	waitFor(t, "hanging peer down", func() bool { return hostByName(f, "hang").Status == StatusDown })
 	waitFor(t, "closed peer down", func() bool { return hostByName(f, "gone").Status == StatusDown })
@@ -356,7 +361,7 @@ func TestUnreachableAndHangingPeersAreIsolated(t *testing.T) {
 
 func TestProxy(t *testing.T) {
 	fp := newFakePeer(t)
-	f := New(nil, "desk", []Peer{{Name: "kube", URL: fp.url()}}, fastOpts(nil))
+	f := New(nil, "desk", []Peer{{Name: "kube", URLs: []*url.URL{fp.url()}}}, fastOpts(nil))
 
 	call := func(method, target, op, query, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "/x?"+query, strings.NewReader(body))
@@ -453,7 +458,7 @@ func TestProxyHost(t *testing.T) {
 	fp := newFakePeer(t)
 	opts := fastOpts(nil)
 	opts.MaxResponse = 8 << 20
-	f := New(nil, "desk", []Peer{{Name: "kube", URL: fp.url()}}, opts)
+	f := New(nil, "desk", []Peer{{Name: "kube", URLs: []*url.URL{fp.url()}}}, opts)
 	call := func(method, op, query, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "/x?"+query, strings.NewReader(body))
 		r.Header.Set("Tailscale-User-Login", "phone@example.com")
@@ -516,7 +521,7 @@ func TestProxyHost(t *testing.T) {
 
 func TestProxyDialogAndAnswer(t *testing.T) {
 	fp := newFakePeer(t)
-	f := New(nil, "desk", []Peer{{Name: "kube", URL: fp.url()}}, fastOpts(nil))
+	f := New(nil, "desk", []Peer{{Name: "kube", URLs: []*url.URL{fp.url()}}}, fastOpts(nil))
 	call := func(method, op, query, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "/x?"+query, strings.NewReader(body))
 		r.Header.Set("Tailscale-User-Login", "phone@example.com")
@@ -561,7 +566,7 @@ func TestPromptTimeout(t *testing.T) {
 
 func TestCallAgent(t *testing.T) {
 	fp := newFakePeer(t)
-	f := New(nil, "desk", []Peer{{Name: "kube", URL: fp.url()}}, fastOpts(nil))
+	f := New(nil, "desk", []Peer{{Name: "kube", URLs: []*url.URL{fp.url()}}}, fastOpts(nil))
 	ctx := context.Background()
 	status, data, err := f.CallAgent(ctx, "kube", "wS:p1", "prompt", []byte(`{"text":"brief"}`))
 	if err != nil || status != http.StatusConflict || !strings.Contains(string(data), "agent_blocked") {
@@ -631,7 +636,7 @@ func TestPeerNotifications(t *testing.T) {
 		ShowHost: true,
 		HoldFor:  -1, // count every transition; collation is tested in state
 	}
-	f := startFleet(t, fastOpts(d), Peer{Name: "kube", URL: fp.url()})
+	f := startFleet(t, fastOpts(d), Peer{Name: "kube", URLs: []*url.URL{fp.url()}})
 	waitFor(t, "connected", func() bool { return len(f.Agents()) == 2 })
 	time.Sleep(100 * time.Millisecond)
 	if pusher.count() != 0 {
@@ -692,7 +697,7 @@ func TestPeerPushWarning(t *testing.T) {
 		logs = append(logs, fmt.Sprintf(format, args...))
 		mu.Unlock()
 	}
-	startFleet(t, opts, Peer{Name: "kube", URL: fp.url()})
+	startFleet(t, opts, Peer{Name: "kube", URLs: []*url.URL{fp.url()}})
 	waitFor(t, "warning", func() bool {
 		mu.Lock()
 		defer mu.Unlock()

@@ -26,8 +26,20 @@ import (
 type Peer struct {
 	// Name is the host slug used in agent IDs and URLs.
 	Name string
-	// URL is the peer's base URL (scheme://host[:port], no path).
-	URL *url.URL
+	// URLs are the peer's addresses, tried in order: usually one
+	// Tailscale Serve URL, optionally followed by fallbacks (a MagicDNS
+	// name plus a tailnet IP, or a second name) for when a rename or a
+	// stale Serve config breaks the first one.
+	URLs []*url.URL
+}
+
+// Addrs lists the peer's addresses, " "-separated, for logs.
+func (p Peer) Addrs() string {
+	parts := make([]string, len(p.URLs))
+	for i, u := range p.URLs {
+		parts[i] = u.String()
+	}
+	return strings.Join(parts, " ")
 }
 
 var nameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -81,8 +93,11 @@ type ParseOptions struct {
 	AllowHTTPLoopback bool
 }
 
-// ParsePeers parses a comma-separated list of "name=https://host" entries.
-// The name is optional ("https://box.tailnet.ts.net" is named "box").
+// ParsePeers parses a comma-separated list of "name=url[|url...]"
+// entries. The name is optional ("https://box.tailnet.ts.net" is named
+// "box"). A peer may list more than one address (a MagicDNS name plus a
+// tailnet IP, or two names), separated by "|": they are tried in order
+// and the first that answers is used.
 func ParsePeers(spec string, opt ParseOptions) ([]Peer, error) {
 	var out []Peer
 	names := map[string]bool{}
@@ -96,12 +111,24 @@ func ParsePeers(spec string, opt ParseOptions) ([]Peer, error) {
 		if i := strings.Index(entry, "="); i >= 0 && !strings.Contains(entry[:i], "://") {
 			name, raw = strings.TrimSpace(entry[:i]), strings.TrimSpace(entry[i+1:])
 		}
-		u, err := parsePeerURL(raw, opt.AllowHTTPLoopback)
-		if err != nil {
-			return nil, fmt.Errorf("peer %q: %w", entry, err)
+		var addrs []*url.URL
+		for _, a := range strings.Split(raw, "|") {
+			a = strings.TrimSpace(a)
+			if a == "" {
+				return nil, fmt.Errorf("peer %q: empty address (addresses are separated by |)", entry)
+			}
+			u, err := parsePeerURL(a, opt.AllowHTTPLoopback)
+			if err != nil {
+				return nil, fmt.Errorf("peer %q: %w", entry, err)
+			}
+			if urls[u.String()] {
+				return nil, fmt.Errorf("peer %q: duplicate URL %s", entry, u)
+			}
+			urls[u.String()] = true
+			addrs = append(addrs, u)
 		}
 		if name == "" {
-			name = sanitizeName(u.Hostname())
+			name = sanitizeName(addrs[0].Hostname())
 			if name == "" {
 				return nil, fmt.Errorf("peer %q: cannot derive a name from the host; use name=URL", entry)
 			}
@@ -116,11 +143,8 @@ func ParsePeers(spec string, opt ParseOptions) ([]Peer, error) {
 		if names[name] {
 			return nil, fmt.Errorf("peer %q: duplicate name %q", entry, name)
 		}
-		if urls[u.String()] {
-			return nil, fmt.Errorf("peer %q: duplicate URL %s", entry, u)
-		}
-		names[name], urls[u.String()] = true, true
-		out = append(out, Peer{Name: name, URL: u})
+		names[name] = true
+		out = append(out, Peer{Name: name, URLs: addrs})
 	}
 	return out, nil
 }

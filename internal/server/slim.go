@@ -31,13 +31,18 @@ type browserAgent struct {
 }
 
 // browserHost drops LastSeen, which changes with every peer ping and is
-// not shown.
+// not shown. Class and Since (the hub's diagnosis of a down peer and
+// when it went down) are kept; so is Addr when the peer has more than
+// one address (which one answered).
 type browserHost struct {
-	Name   string `json:"name"`
-	Local  bool   `json:"local,omitempty"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-	Agents int    `json:"agents"`
+	Name   string     `json:"name"`
+	Local  bool       `json:"local,omitempty"`
+	Status string     `json:"status"`
+	Error  string     `json:"error,omitempty"`
+	Class  string     `json:"class,omitempty"`
+	Since  *time.Time `json:"since,omitempty"`
+	Addr   string     `json:"addr,omitempty"`
+	Agents int        `json:"agents"`
 }
 
 type browserEvent struct {
@@ -64,7 +69,7 @@ func slimAgents(agents []herdr.AgentInfo) []browserAgent {
 func slimHosts(hosts []state.HostStatus) []browserHost {
 	out := make([]browserHost, len(hosts))
 	for i, h := range hosts {
-		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Agents: h.Agents}
+		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Class: h.Class, Since: h.Since, Addr: h.Addr, Agents: h.Agents}
 	}
 	return out
 }

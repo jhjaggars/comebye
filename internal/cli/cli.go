@@ -389,7 +389,33 @@ func cmdAgents(e *Env, args []string) error {
 	tw.Flush()
 	for _, h := range ar.Hosts {
 		if !h.Local && h.Status != "ok" && (*hostF == "" || *hostF == h.Name) {
-			fmt.Fprintf(e.Stdout, "host %s is %s%s: its agents are not listed\n", h.Name, h.Status, map[bool]string{true: " (" + h.Error + ")", false: ""}[h.Error != ""])
+			// "peer bee unreachable: dns (since 3h ago): cannot resolve
+			// ..." - the class names what broke, the since for how long,
+			// the error how to fix it - instead of a bare error string.
+			if h.Status == "connecting" {
+				fmt.Fprintf(e.Stdout, "peer %s: connecting, not reached yet\n", h.Name)
+				continue
+			}
+			why := "unreachable"
+			if h.Class != "" {
+				why = h.Class
+			}
+			since := ""
+			if h.Since != nil {
+				if a := ago(e, *h.Since); a != "" {
+					since = " (since " + a + ")"
+				}
+			}
+			fmt.Fprintf(e.Stdout, "peer %s unreachable: %s%s", h.Name, why, since)
+			if h.Error != "" {
+				fmt.Fprintf(e.Stdout, ": %s", h.Error)
+			}
+			// Which address last answered, when the peer has more than one.
+			if h.Addr != "" {
+				fmt.Fprintf(e.Stdout, " (last answered at %s)", h.Addr)
+			}
+			fmt.Fprint(e.Stdout, "\n")
+			fmt.Fprintln(e.Stdout, "  its agents are not listed; the hub keeps retrying")
 		}
 	}
 	if len(rows) == 0 {
