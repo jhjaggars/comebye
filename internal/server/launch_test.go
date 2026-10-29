@@ -412,8 +412,19 @@ func TestLaunchHappyPath(t *testing.T) {
 	if args, ok := st["args"].([]any); !ok || len(args) != 0 {
 		t.Fatalf("agent.start args = %v", st["args"])
 	}
-	if p := fh.call("agent.prompt").Params; p["target"] != "fixer" || p["text"] != "fix the tests" || p["wait"] != nil {
+	p := fh.call("agent.prompt").Params
+	if p["target"] != "fixer" || p["text"] != "fix the tests" {
 		t.Fatalf("agent.prompt params = %v", p)
+	}
+	// The first prompt is sent with a wait for the agent to take it
+	// (verified delivery), not fire-and-forget.
+	wait, _ := p["wait"].(map[string]any)
+	if wait == nil || wait["timeout_ms"] != float64(20000) {
+		t.Fatalf("agent.prompt wait = %v, want a 20s wait for the agent to react", p["wait"])
+	}
+	until, _ := wait["until"].([]any)
+	if len(until) != 2 || until[0] != "working" || until[1] != "blocked" {
+		t.Fatalf("agent.prompt wait.until = %v", wait["until"])
 	}
 }
 

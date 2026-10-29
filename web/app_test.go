@@ -30,6 +30,25 @@ func TestAppClosesEventSourceOnPagehide(t *testing.T) {
 	}
 }
 
+// A running worker whose brief was never delivered must be visible as
+// such in the agent list, not just "running": the ledger chip shows
+// "no brief" with the recorded error as its tooltip (the handoff answer
+// already toasts it; this covers the later view).
+func TestAppShowsUndeliveredBriefChip(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`e\.status === "running" && e\.error`,
+		`lg-chip failed" title="\$\{esc\(e\.error\)\}">no brief`,
+	} {
+		if !regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js does not match %s", re)
+		}
+	}
+}
+
 // The vendored markdown libraries load before app.js, and each one matches
 // the sha256 recorded in vendor/README.md (copied byte for byte from the
 // npm tarball; see that file).

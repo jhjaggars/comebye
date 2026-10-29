@@ -598,8 +598,8 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	}
 	if promptArgs == nil && strings.TrimSpace(body.Prompt) != "" {
 		// Submission only: the app shows the agent working from here.
-		if _, err := s.client.Prompt(ctx, name, body.Prompt, herdr.PromptOptions{}); err != nil {
-			resp["prompt_error"] = "the agent started, but the first prompt was not sent: " + errMessage(err)
+		if err := s.deliverPrompt(ctx, name, body.Prompt); err != nil {
+			resp["prompt_error"] = "the agent started, but its first prompt was not delivered: " + err.Error()
 		}
 	}
 	writeJSON(w, resp)

@@ -599,6 +599,10 @@ function ledgerChip(a) {
       ? '<span class="lg-chip candidate" title="Finished; its worktree is clean and merged">finished · merged</span>'
       : '<span class="lg-chip finished">finished</span>';
   }
+  // A running worker whose brief was never delivered looks broken, not
+  // busy: the error says why (and how) it can be resent.
+  if (e.status === "running" && e.error)
+    return `<span class="lg-chip failed" title="${esc(e.error)}">no brief</span>`;
   return '<span class="lg-chip">running</span>';
 }
 
