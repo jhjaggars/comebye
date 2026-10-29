@@ -173,16 +173,18 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 	}
 	maxBody, timeout := int64(64<<10), 30*time.Second
 	switch {
-	case r.URL.Path == "/api/handoffs":
+	case r.URL.Path == "/api/handoffs" || strings.HasPrefix(r.URL.Path, "/api/handoffs/"):
 		maxBody, timeout = maxLaunchPrompt+64<<10, workerTimeout+30*time.Second
 	case strings.HasSuffix(r.URL.Path, "/prompt"):
 		maxBody, timeout = 1<<20, 45*time.Second
+	case r.URL.Path == "/api/report":
+		maxBody = maxReportBody
 	case r.URL.Path == "/api/brief":
 		maxBody = maxBriefBytes + 16<<10
 	}
 	// Only the query parameters the agent role's routes read.
 	q := url.Values{}
-	for _, k := range []string{"limit", "skip", "from", "lines", "source", "agent", "diff"} {
+	for _, k := range []string{"limit", "skip", "from", "lines", "source", "agent", "diff", "all"} {
 		if v := r.URL.Query().Get(k); v != "" {
 			q.Set(k, v)
 		}

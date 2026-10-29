@@ -29,6 +29,7 @@ import (
 type Status string
 
 const (
+	Waiting       Status = "waiting" // queued behind earlier steps of its plan; no worker yet
 	Running       Status = "running"
 	Finished      Status = "finished"
 	ReadyToRemove Status = "ready_to_remove"
@@ -38,6 +39,12 @@ const (
 
 // MaxReport caps a captured final report (bytes).
 const MaxReport = 20000
+
+// reportTurnGrace is how long after an explicit report the agent may still
+// be working without that counting as new work: the turn that ran
+// `comebye report` ends within moments. Past it, a worker seen working has
+// been given more to do.
+const reportTurnGrace = 2 * time.Minute
 
 // maxReportTries bounds how often an empty final report is looked for.
 const maxReportTries = 3
@@ -70,11 +77,53 @@ type Entry struct {
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	FinalReport string     `json:"final_report,omitempty"`
 	ReportTries int        `json:"report_tries,omitempty"`
-	Mark        *Mark      `json:"mark,omitempty"`
-	RemovedAt   *time.Time `json:"removed_at,omitempty"`
+	// ReportSource is "explicit" when the worker ran `comebye report`
+	// (it declared itself done), else empty (the hub took its last reply
+	// when it went idle). AwaitIdle: after an explicit report, the agent
+	// still working is the turn that ends with the report, not new work.
+	ReportSource string `json:"report_source,omitempty"`
+	AwaitIdle    bool   `json:"await_idle,omitempty"`
+	// After lists the entries (ids) a waiting handoff is queued behind:
+	// it starts when all of them have reported. Kept after it starts.
+	After []string `json:"after,omitempty"`
+	// PlanID is the plan this handoff is a member of, if any.
+	PlanID string `json:"plan_id,omitempty"`
+	// ReplyTo is who asked for the handoff, when it was an agent: the hub
+	// tells it when the worker finishes. Callback tracks that message.
+	ReplyTo   *Ref       `json:"reply_to,omitempty"`
+	Callback  *Callback  `json:"callback,omitempty"`
+	Mark      *Mark      `json:"mark,omitempty"`
+	RemovedAt *time.Time `json:"removed_at,omitempty"`
 	// Removal is the owning host's account of the removal (what was
 	// closed, whether the worktree went and why not).
 	Removal json.RawMessage `json:"removal,omitempty"`
+}
+
+// Ref addresses an agent: its host-qualified id and the name it had then
+// (a pane id can be reused by another agent after a restart).
+type Ref struct {
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name,omitempty"`
+}
+
+// Callback states.
+const (
+	CallbackPending   = "pending"   // queued, waiting for an idle target
+	CallbackDelivered = "delivered" // the requester was prompted
+	CallbackExpired   = "expired"   // never delivered within CallbackTTL
+)
+
+// CallbackTTL bounds how long a finished worker's callback is retried.
+const CallbackTTL = 2 * time.Hour
+
+// Callback is the hub's "your worker finished" message to ReplyTo.
+type Callback struct {
+	State string    `json:"state"`
+	At    time.Time `json:"at"` // queued
+	Tries int       `json:"tries,omitempty"`
+	// To is who got it (the requester, or the coordinator standing in).
+	To          string     `json:"to,omitempty"`
+	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
 }
 
 // Mark is a "ready to remove" mark, on a ledger entry or on any other
@@ -133,6 +182,7 @@ type file struct {
 	Version int      `json:"version"`
 	Entries []*Entry `json:"entries"`
 	Marks   []*Mark  `json:"marks"`
+	Plans   []*Plan  `json:"plans,omitempty"`
 }
 
 // Store is the ledger. Methods are safe for concurrent use and return
@@ -204,6 +254,14 @@ func newID() string {
 
 func copyEntry(e *Entry) Entry {
 	c := *e
+	if e.ReplyTo != nil {
+		r := *e.ReplyTo
+		c.ReplyTo = &r
+	}
+	if e.Callback != nil {
+		cb := *e.Callback
+		c.Callback = &cb
+	}
 	if e.Mark != nil {
 		c.Mark = copyMark(e.Mark)
 	}
@@ -434,14 +492,22 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 			if !e.SawWorking {
 				e.SawWorking, changed = true, true
 			}
-			if e.Status == Finished {
+			if e.Status == Finished && !(e.AwaitIdle && e.FinishedAt != nil && now.Sub(*e.FinishedAt) < reportTurnGrace) {
+				e.ReportSource = ""
 				e.Status, e.FinishedAt, e.FinalReport, e.ReportTries = Running, nil, "", 0
+				e.Callback = nil
 				changed = true
 			}
 		case herdr.StatusIdle, herdr.StatusDone:
+			if e.Status == Finished && e.AwaitIdle {
+				e.AwaitIdle, e.SawWorking, changed = false, false, true
+			}
 			if e.Status == Running && e.SawWorking {
 				t := now.UTC()
 				e.Status, e.FinishedAt, e.SawWorking, e.ReportTries = Finished, &t, false, 0
+				if e.ReplyTo != nil {
+					e.Callback = &Callback{State: CallbackPending, At: t}
+				}
 				changed = true
 				capture = append(capture, copyEntry(e))
 			} else if e.Status == Finished && e.FinalReport == "" && e.ReportTries < maxReportTries {
@@ -455,6 +521,87 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 	return capture
 }
 
+// Queued lists the handoffs waiting for earlier steps, oldest first.
+func (s *Store) Queued() []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Entry
+	for _, e := range s.data.Entries {
+		if e.Status == Waiting {
+			out = append(out, copyEntry(e))
+		}
+	}
+	return out
+}
+
+// PendingCallbacks lists the finished entries whose callback is waiting.
+func (s *Store) PendingCallbacks() []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Entry
+	for _, e := range s.data.Entries {
+		if e.Status == Finished && e.Callback != nil && e.Callback.State == CallbackPending {
+			out = append(out, copyEntry(e))
+		}
+	}
+	return out
+}
+
+// CallbackTried counts a failed delivery attempt on a pending callback.
+func (s *Store) CallbackTried(id string, at time.Time) error {
+	return s.setCallback(id, at, func(c *Callback) { c.Tries++ })
+}
+
+// CallbackDone settles a pending callback as delivered (to) or expired.
+// at is the callback's queue time: a worker that finished again since
+// has a newer callback, which this leaves alone.
+func (s *Store) CallbackDone(id string, at time.Time, state, to string, now time.Time) error {
+	return s.setCallback(id, at, func(c *Callback) { settleCallback(c, state, to, now) })
+}
+
+func (s *Store) setCallback(id string, at time.Time, fn func(*Callback)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID == id && e.Callback != nil && e.Callback.State == CallbackPending && e.Callback.At.Equal(at) {
+			fn(e.Callback)
+			return s.save()
+		}
+	}
+	return nil
+}
+
+// Report records a worker's explicit report: the agent's active entry is
+// finished now with the report (capped), without waiting to see it go idle.
+// A second report while still finished replaces the text and queues no
+// second callback. ok is false when the agent has no running or finished
+// entry.
+func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byAgent(agentID)
+	if e == nil || (e.Status != Running && e.Status != Finished) {
+		return Entry{}, false, nil
+	}
+	t := now.UTC()
+	wasFinished := e.Status == Finished
+	e.Status, e.FinishedAt = Finished, &t
+	if !wasFinished {
+		if e.ReplyTo != nil {
+			e.Callback = &Callback{State: CallbackPending, At: t}
+		}
+	}
+	e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
+	e.AwaitIdle, e.SawWorking = true, false
+	return copyEntry(e), true, s.save()
+}
+
+// ReportPending reports whether the entry's final report is still being
+// looked for (so a message that points at it should wait).
+func (e Entry) ReportPending() bool {
+	return e.FinalReport == "" && e.ReportTries < maxReportTries
+}
+
 // SetReport stores a captured final report for an entry that is still
 // finished (since finishedAt), counting the attempt.
 func (s *Store) SetReport(id string, finishedAt *time.Time, report string) error {
@@ -463,6 +610,9 @@ func (s *Store) SetReport(id string, finishedAt *time.Time, report string) error
 	for _, e := range s.data.Entries {
 		if e.ID != id {
 			continue
+		}
+		if e.ReportSource == "explicit" {
+			return nil // the worker's own report is not replaced by a guess
 		}
 		if e.FinishedAt == nil || finishedAt == nil || !e.FinishedAt.Equal(*finishedAt) {
 			return nil // it went back to work meanwhile

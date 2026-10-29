@@ -467,6 +467,7 @@ function renderList() {
   }).join("");
   renderRemovalBanner();
   renderBrief();
+  renderPlans();
   if (!agents.length) {
     wrap.innerHTML = `<div class="empty">${state.unauthorized ? esc(UNAUTHORIZED_MSG) : "No agents running"}</div>` + downRows;
     return;
@@ -533,6 +534,7 @@ function ledgerEntry(a) { return ledger.byAgent.get(agentId(a)); }
 
 function setLedger(d) {
   ledger.on = true;
+  ledger.plans = Array.isArray(d.plans) ? d.plans : [];
   ledger.entries = Array.isArray(d.entries) ? d.entries : [];
   ledger.marks = Array.isArray(d.marks) ? d.marks : [];
   ledger.byAgent = new Map();
@@ -732,6 +734,31 @@ function missNote(m, hasBrief) {
         <button type="button" class="bf-ack">Dismiss</button>
       </div>
     </div>`;
+}
+
+// renderPlans shows the plans (several workers, one change) that are open
+// or settled within the last day: how many workers finished and where each
+// stands. The hub pushes when a plan settles; this is for looking.
+const PLAN_SHOWN_MS = 24 * 3600 * 1000;
+function renderPlans() {
+  const el = $("plans");
+  if (!el) return;
+  const now = Date.now();
+  const shown = (ledger.on === true && Array.isArray(ledger.plans) ? ledger.plans : []).filter((p) => {
+    if (!p || !Array.isArray(p.members)) return false;
+    if (p.state === "open") return true;
+    const at = Date.parse(p.settled_at);
+    return !Number.isNaN(at) && now - at < PLAN_SHOWN_MS;
+  });
+  const sig = JSON.stringify(shown.map((p) => [p.id, p.state, p.done, p.members.map((m) => m.id + m.outcome + m.status)]));
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.hidden = !shown.length;
+  const label = { open: "in progress", done: "done", partial: "needs a look" };
+  el.innerHTML = shown.map((p) => `<div class="plan ${esc(p.state)}">
+      <div class="plan-head"><span class="plan-title">${esc(p.title)}</span><span class="plan-state">${esc(label[p.state] || p.state)} · ${p.done} of ${p.size}</span></div>
+      <ul class="plan-members">${p.members.map((m) => `<li><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span></li>`).join("")}</ul>
+    </div>`).join("");
 }
 
 function renderBrief() {
@@ -1261,7 +1288,55 @@ function renderDetail() {
   updateSendButton();
   renderActivity();
   renderDetailMenu();
+  refreshQueued();
 }
+
+/* ---------- queued prompts ---------- */
+//
+// Prompts an agent (or `comebye prompt --queue`) parked on the hub for this
+// agent: they are sent once it is idle with no question open. Shown above
+// the composer with a way to withdraw each one.
+
+const queued = { id: null, at: 0, items: [], busy: false };
+
+function renderQueued() {
+  const el = $("queued");
+  const items = queued.id === state.selected ? queued.items : [];
+  el.hidden = items.length === 0;
+  if (!items.length) { el.textContent = ""; return; }
+  el.innerHTML = `<div class="q-head">${items.length} queued — sent when the agent is free</div>` +
+    items.map((q) => `<div class="q-item"><span class="q-text" title="${escAttr(q.text)}">${esc(q.from)}: ${esc(q.text)}</span>` +
+      `<button type="button" class="btn q-cancel" data-qid="${escAttr(q.id)}">Cancel</button></div>`).join("");
+}
+
+async function refreshQueued(force = false) {
+  const id = state.selected;
+  if (!id || queued.busy) return;
+  if (!force && queued.id === id && Date.now() - queued.at < 4000) return;
+  queued.busy = true;
+  try {
+    const r = await api(`/api/queue?agent=${encodeURIComponent(id)}`);
+    if (id === state.selected) { queued.id = id; queued.items = r.queue || []; }
+  } catch {
+    if (id === state.selected) { queued.id = id; queued.items = []; } // no hub or no queue: nothing to show
+  } finally {
+    queued.busy = false;
+    queued.at = Date.now();
+    renderQueued();
+  }
+}
+
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest && ev.target.closest("#queued .q-cancel");
+  if (!b) return;
+  b.disabled = true;
+  try {
+    await api(`/api/queue/${encodeURIComponent(b.dataset.qid)}`, { method: "DELETE" });
+  } catch (e) {
+    toast("could not cancel: " + e.message, true);
+  }
+  refreshQueued(true);
+});
 
 /* ---------- chat view (Pi session transcript) ---------- */
 

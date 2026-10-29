@@ -253,6 +253,7 @@ const (
 	KindBlocked  = "blocked"  // the agent needs input
 	KindQuestion = "question" // it finished on a question
 	KindDone     = "done"     // it finished
+	KindPlan     = "plan"     // every member of a plan finished, or the plan needs a look
 )
 
 // ParseKinds reads a comma-separated list of notification kinds
@@ -264,17 +265,39 @@ func ParseKinds(s string) (map[string]bool, error) {
 	}
 	for _, k := range strings.Split(s, ",") {
 		switch k = strings.ToLower(strings.TrimSpace(k)); k {
-		case KindBlocked, KindQuestion, KindDone:
+		case KindBlocked, KindQuestion, KindDone, KindPlan:
 			out[k] = true
 		case "":
 		default:
-			return nil, fmt.Errorf("unknown notification kind %q (want blocked, question, done or none)", k)
+			return nil, fmt.Errorf("unknown notification kind %q (want blocked, question, done, plan or none)", k)
 		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no notification kinds (use none to turn them all off)")
 	}
 	return out, nil
+}
+
+// NotifyPlan tells the user a plan settled. It has its own throttle key
+// and none of the per-agent holds: it is about the change, not about one
+// agent the user may already have a notification for.
+func (d *Dispatcher) NotifyPlan(id, title, body string) {
+	if d == nil || !d.kindOn(KindPlan) {
+		return
+	}
+	ntfyOn, pushOn := d.channels()
+	key := "plan/" + id
+	if pushOn {
+		d.Push.Notify(key+"/"+KindPlan, push.Message{Title: title, Body: body, URL: "/", Tag: key},
+			push.Options{Urgency: "normal", TTL: 12 * time.Hour, Topic: push.TopicFor(key)})
+	}
+	if ntfyOn {
+		msg := ntfyMessage{Title: title, Message: body, Tags: []string{"white_check_mark"}}
+		if d.Ntfy.ClickURL != "" {
+			msg.Click = strings.TrimRight(d.Ntfy.ClickURL, "/") + "/"
+		}
+		d.Ntfy.notify(key, KindPlan, msg)
+	}
 }
 
 func (d *Dispatcher) kindOn(k string) bool { return d.Kinds == nil || d.Kinds[k] }

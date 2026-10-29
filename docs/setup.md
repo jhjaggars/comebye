@@ -99,8 +99,9 @@ has open on screen right now.
 instance that sends notifications (the hub, with several hosts):
 
 - `-notify-kinds` (`COMEBYE_NOTIFY_KINDS`) picks the kinds: `blocked`
-  (needs input), `question` (finished on a question) and `done` (finished
-  otherwise); default all three, `none` for none.
+  (needs input), `question` (finished on a question), `done` (finished
+  otherwise) and `plan` (all workers of a plan finished, or it needs a
+  look); default all four, `none` for none.
   `COMEBYE_NOTIFY_KINDS=blocked,question` mutes plain "done" but still
   tells you when an agent finished by asking you something (Comebye reads
   its last message to tell, even with excerpts off).
@@ -294,7 +295,7 @@ to the home screen again.
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
 | `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
 | `-notify-throttle` | `COMEBYE_NOTIFY_THROTTLE` | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |
-| `-notify-kinds` | `COMEBYE_NOTIFY_KINDS` | `blocked,question,done` | Which notifications to send: `blocked`, `question` (finished on a question), `done`; `none` for none. |
+| `-notify-kinds` | `COMEBYE_NOTIFY_KINDS` | `blocked,question,done,plan` | Which notifications to send: `blocked`, `question` (finished on a question), `done`, `plan` (every worker of a plan finished, or it needs a look); `none` for none. |
 | `-notify-done-digest` | `COMEBYE_NOTIFY_DONE_DIGEST` | `0` | Collect "done" notifications for this long after the first and send one digest; `0` sends each at once. |
 | `-notify-blocked-delay` | `COMEBYE_NOTIFY_BLOCKED_DELAY` | `15s` | Wait this long before a "needs input" notification and drop it if the agent is no longer blocked; `0` notifies at once. |
 | `-ntfy-url` | `COMEBYE_NTFY_URL` | `https://ntfy.sh` | ntfy server root URL; empty disables ntfy. |

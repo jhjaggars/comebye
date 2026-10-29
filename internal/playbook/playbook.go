@@ -151,6 +151,16 @@ func FirstPrompt(kind string) string {
 		"` and follow it: it explains your role and the `comebye` commands you act with. Then run `comebye whoami` and `comebye ledger`, and tell me briefly what you see."
 }
 
+// WorkerArgs are the extra arguments a handoff's worker starts with: it
+// may run the commands it needs to finish (`comebye report`, `read`,
+// `whoami`) without a permission prompt, and nothing else of comebye.
+func WorkerArgs(kind string) []string {
+	if kind == "claude" {
+		return []string{"--allowedTools", "Bash(comebye report:*)", "Bash(comebye read:*)", "Bash(comebye whoami:*)"}
+	}
+	return nil
+}
+
 // AgentArgs are the extra arguments the Coordinator launch preset passes
 // to the agent's executable (herdr agent.start args), nil when none.
 func AgentArgs(kind, name string) []string {
