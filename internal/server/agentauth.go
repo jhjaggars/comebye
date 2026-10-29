@@ -184,7 +184,7 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 	}
 	// Only the query parameters the agent role's routes read.
 	q := url.Values{}
-	for _, k := range []string{"limit", "skip", "from", "lines", "source", "agent", "diff"} {
+	for _, k := range []string{"limit", "skip", "from", "lines", "source", "agent", "diff", "all"} {
 		if v := r.URL.Query().Get(k); v != "" {
 			q.Set(k, v)
 		}

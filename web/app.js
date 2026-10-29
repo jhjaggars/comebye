@@ -1288,7 +1288,55 @@ function renderDetail() {
   updateSendButton();
   renderActivity();
   renderDetailMenu();
+  refreshQueued();
 }
+
+/* ---------- queued prompts ---------- */
+//
+// Prompts an agent (or `comebye prompt --queue`) parked on the hub for this
+// agent: they are sent once it is idle with no question open. Shown above
+// the composer with a way to withdraw each one.
+
+const queued = { id: null, at: 0, items: [], busy: false };
+
+function renderQueued() {
+  const el = $("queued");
+  const items = queued.id === state.selected ? queued.items : [];
+  el.hidden = items.length === 0;
+  if (!items.length) { el.textContent = ""; return; }
+  el.innerHTML = `<div class="q-head">${items.length} queued — sent when the agent is free</div>` +
+    items.map((q) => `<div class="q-item"><span class="q-text" title="${escAttr(q.text)}">${esc(q.from)}: ${esc(q.text)}</span>` +
+      `<button type="button" class="btn q-cancel" data-qid="${escAttr(q.id)}">Cancel</button></div>`).join("");
+}
+
+async function refreshQueued(force = false) {
+  const id = state.selected;
+  if (!id || queued.busy) return;
+  if (!force && queued.id === id && Date.now() - queued.at < 4000) return;
+  queued.busy = true;
+  try {
+    const r = await api(`/api/queue?agent=${encodeURIComponent(id)}`);
+    if (id === state.selected) { queued.id = id; queued.items = r.queue || []; }
+  } catch {
+    if (id === state.selected) { queued.id = id; queued.items = []; } // no hub or no queue: nothing to show
+  } finally {
+    queued.busy = false;
+    queued.at = Date.now();
+    renderQueued();
+  }
+}
+
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest && ev.target.closest("#queued .q-cancel");
+  if (!b) return;
+  b.disabled = true;
+  try {
+    await api(`/api/queue/${encodeURIComponent(b.dataset.qid)}`, { method: "DELETE" });
+  } catch (e) {
+    toast("could not cancel: " + e.message, true);
+  }
+  refreshQueued(true);
+});
 
 /* ---------- chat view (Pi session transcript) ---------- */
 

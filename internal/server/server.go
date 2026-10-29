@@ -129,6 +129,7 @@ type Server struct {
 	ledger *ledger.Store
 	// brief and roles live next to the ledger (nil when it is).
 	brief      *briefStore
+	pq         *promptQueue
 	briefSched *briefSchedStore
 	roles      *roleStore
 	// kinds remembers the agent kinds that worked on this host (nil
@@ -174,6 +175,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			if s.roles, err = openRoles(filepath.Join(cfg.StateDir, "roles.json")); err != nil {
 				log.Printf("roles: %v (starting with none)", err)
 				s.roles = &roleStore{path: filepath.Join(cfg.StateDir, "roles.json"), data: map[string]Role{}}
+			}
+			if s.pq, err = openPromptQueue(queuePath(cfg.StateDir)); err != nil {
+				log.Printf("prompt queue: %v (starting empty)", err)
+				s.pq = newPromptQueue("") // in memory: never overwrite the unreadable file
 			}
 			s.endStaleAsks()
 		}
@@ -244,6 +249,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/plans", s.authAgent(s.handleCreatePlan))
 	s.mux.HandleFunc("GET /api/plans", s.authAgent(s.handleListPlans))
 	s.mux.HandleFunc("GET /api/plans/{id}", s.authAgent(s.handleGetPlan))
+	s.mux.HandleFunc("POST /api/queue", s.authAgent(s.handleQueueAdd))
+	s.mux.HandleFunc("GET /api/queue", s.authAgent(s.handleQueueList))
+	s.mux.HandleFunc("DELETE /api/queue/{id}", s.authAgent(s.handleQueueCancel))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("GET /api/removals", s.auth(s.handleRemovals))

@@ -22,7 +22,7 @@ func afterServer(t *testing.T) (*Server, *workerPeer) {
 	peer := &workerPeer{}
 	ps := httptestServer(t, peer)
 	pu, _ := url.Parse(ps)
-	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URL: pu}}, fleet.Options{Logf: func(string, ...any) {}})
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
 	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	pu2 := &pushed{}
 	s.planPush = pu2.fn

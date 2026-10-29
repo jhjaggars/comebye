@@ -33,6 +33,8 @@ with the matches listed.
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] --brief FILE` | start a worker (`--brief -` reads stdin) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
+| `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` |
+| `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
 | `comebye mark AGENT --reason R [--discard] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer) |
 | `comebye unmark AGENT` | withdraw that proposal |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |

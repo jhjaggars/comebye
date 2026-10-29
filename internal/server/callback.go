@@ -132,7 +132,7 @@ func callbackTarget(replyTo *ledger.Ref, cb *ledger.Callback, agents []herdr.Age
 		if a.ID != replyTo.AgentID || (replyTo.Name != "" && a.Name != "" && a.Name != replyTo.Name) {
 			continue
 		}
-		if a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone {
+		if canTakePrompt(a) {
 			return &a, false
 		}
 		return nil, false
