@@ -1,0 +1,30 @@
+
+
+ ask_user_question questions=[{"header":"Color","multiSelect":false,"options":[{"description":"stop","label":"Red"},...
+ User has answered your questions: "Pick one color"="Red". You can now continue with the user's answers in mind.
+
+
+ You picked Red (stop). Standing by.
+
+
+ Use ask_user_question one more time with TWO questions: (1) header 'Size', question 'What size?', options Small, Medium, Large, multiSelect true; (2) header 'Speed', question 'How fast?', options Slow, Fast, multiSelect false. Then
+ wait.
+
+
+
+ ask_user_question questions=[{"header":"Size","multiSelect":true,"options":[{"description":"The smallest option","l...
+ User has answered your questions: "What size?"="Small". "How fast?"="Slow". You can now continue with the user's answers in mind.
+
+
+ Your answers:
+ - Size: Small
+ - Speed: Slow
+
+ Standing by.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp
+↑5.5k ↓377 R103k CH94.4% 1.8%/1.0M (auto)                                                                                                                                                                     rits/zai-org/glm-5-3 • high
+herdr herdr-phone/investigate-pi-multiselect-dialog ⚡auto ⏱ 20 tok in 0.1s → 222 tok/s

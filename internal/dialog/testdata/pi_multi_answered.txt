@@ -1,0 +1,30 @@
+session-manager, system-notify.ts, tokps.ts, vertex-web-search
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Package Updates Available
+ Package updates are available. Run pi update --extensions
+ Packages:
+ - @juicesharp/rpiv-ask-user-question
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+ Use the ask_user_question tool right now to ask me: 'Which fruits do you like?' with multiSelect set to true, header 'Fruit', and exactly 3 options: Apple (description: keeps the doctor away), Banana (description: yellow), Cherry
+ (description: red). Ask the question and then wait for my answer. Do not do anything else.
+
+
+
+ ask_user_question questions=[{"header":"Fruit","multiSelect":true,"options":[{"description":"keeps the doctor away"...
+ User has answered your questions: "Which fruits do you like?"="Apple, hello". You can now continue with the user's answers in mind.
+
+
+ The user answered Apple (plus a custom "hello"). I was told to ask and wait for the answer, nothing else. So just acknowledge.
+
+ Thanks! You selected Apple (and said hello 👋). Noted — I won't do anything else, as instructed.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp
+↑2.1k ↓141 R34k CH93.9% 1.7%/1.0M (auto)                                                                                                                                                                      rits/zai-org/glm-5-3 • high
+herdr herdr-phone/investigate-pi-multiselect-dialog ⚡auto ⏱ 58 tok in 0.7s → 78 tok/s

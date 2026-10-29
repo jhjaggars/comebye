@@ -1,0 +1,30 @@
+
+
+
+ ask_user_question questions=[{"header":"Size","multiSelect":true,"options":[{"description":"The smallest option","l...
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ←  □ Size   □ Speed   ✓ Submit  →
+
+
+ What size?
+
+❯ 1. [ ] Small
+  The smallest option
+  2. [ ] Medium
+  The middle option
+  3. [ ] Large
+  The biggest option
+  4. [ ] Type something.
+  Next
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · Space to toggle · n to add notes · Tab to switch questions · Esc to cancel · Ctrl+] to collapse
+
+
+
+/tmp
+↑4.5k ↓357 R86k CH95.2% 1.8%/1.0M (auto)                                                                                                                                                                      rits/zai-org/glm-5-3 • high
+herdr herdr-phone/investigate-pi-multiselect-dialog ⚡auto ⏱ 129 tok in 1.1s → 119 tok/s

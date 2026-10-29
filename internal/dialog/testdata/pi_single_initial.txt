@@ -1,0 +1,30 @@
+ Thanks! You selected Apple (and said hello 👋). Noted — I won't do anything else, as instructed.
+
+
+ Now use ask_user_question again, single select (multiSelect false): question 'Pick one color', header 'Color', options: Red (stop), Green (go), Blue (sky). Then wait.
+
+
+
+ ask_user_question questions=[{"header":"Color","multiSelect":false,"options":[{"description":"stop","label":"Red"},...
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Color
+
+ Pick one color
+
+❯ 1. Red
+     stop
+  2. Green
+     go
+  3. Blue
+     sky
+  4. Type something.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel · Ctrl+] to collapse
+/tmp
+↑2.8k ↓215 R51k CH96.2% 1.7%/1.0M (auto)                                                                                                                                                                      rits/zai-org/glm-5-3 • high
+herdr herdr-phone/investigate-pi-multiselect-dialog ⚡auto ⏱ 74 tok in 0.6s → 128 tok/s

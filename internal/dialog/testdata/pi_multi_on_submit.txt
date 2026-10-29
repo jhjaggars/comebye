@@ -1,0 +1,30 @@
+
+ Use the ask_user_question tool right now to ask me: 'Which fruits do you like?' with multiSelect set to true, header 'Fruit', and exactly 3 options: Apple (description: keeps the doctor away), Banana (description: yellow), Cherry
+ (description: red). Ask the question and then wait for my answer. Do not do anything else.
+
+
+
+ ask_user_question questions=[{"header":"Fruit","multiSelect":true,"options":[{"description":"keeps the doctor away"...
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Fruit
+
+ Which fruits do you like?
+
+  1. [✔] Apple
+  keeps the doctor away
+  2. [ ] Banana
+  yellow
+  3. [ ] Cherry
+  red
+  4. [✔] hello
+❯ Submit
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · Space to toggle · n to add notes · Esc to cancel · Ctrl+] to collapse
+/tmp
+↑990 ↓83 R17k CH94.5% 1.7%/1.0M (auto)                                                                                                                                                                        rits/zai-org/glm-5-3 • high
+herdr herdr-phone/investigate-pi-multiselect-dialog ⚡auto ⏱ 83 tok in 0.6s → 134 tok/s
