@@ -315,8 +315,8 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	}
 	prompt := strings.NewReplacer("{{worktree}}", opened.Path, "{{base}}", base).Replace(b.Prompt)
 	if strings.TrimSpace(prompt) != "" {
-		if _, err := s.client.Prompt(ctx, name, prompt, herdr.PromptOptions{}); err != nil {
-			res.PromptError = "the worker started, but its brief was not sent: " + errMessage(err)
+		if err := s.deliverPrompt(ctx, name, prompt); err != nil {
+			res.PromptError = "the worker started, but its brief was not delivered: " + err.Error()
 		}
 	}
 	return res, nil

@@ -128,14 +128,13 @@ func main() {
 
 	sockPath := expandHome(*sock)
 	client := herdr.NewClient(sockPath)
-
-	// Fail fast if herdr is not reachable.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if _, err := client.ListAgents(ctx); err != nil {
-		cancel()
-		log.Fatalf("cannot reach herdr at %s: %v", sockPath, err)
-	}
-	cancel()
+	// Wait for herdr when it is not up yet: after a reboot herdr's server
+	// starts only when the user connects remotely, so its socket may
+	// appear minutes or hours later. Waiting here (instead of exiting)
+	// keeps systemd from crash-looping comebye into its start limit
+	// before that happens. A socket that exists but cannot be reached is
+	// a real problem and still fails fast.
+	waitForHerdr(client, sockPath, time.Sleep)
 
 	notifier := &state.Notifier{
 		BaseURL:     *ntfyBase,
@@ -236,6 +235,29 @@ func main() {
 
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// waitForHerdr blocks until herdr answers on its socket, or fatals when
+// the socket exists but herdr cannot be reached (a misconfiguration, not
+// a boot race). sleep paces the retries (tests shrink it).
+func waitForHerdr(client *herdr.Client, sockPath string, sleep func(time.Duration)) {
+	backoff := time.Second
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := client.ListAgents(ctx)
+		cancel()
+		if err == nil {
+			return
+		}
+		if _, statErr := os.Stat(sockPath); !os.IsNotExist(statErr) {
+			log.Fatalf("cannot reach herdr at %s: %v", sockPath, err)
+		}
+		log.Printf("waiting for herdr at %s (it starts when you connect remotely): %v", sockPath, err)
+		sleep(backoff)
+		if backoff *= 2; backoff > 15*time.Second {
+			backoff = 15 * time.Second
+		}
 	}
 }
 
