@@ -312,3 +312,26 @@ func TestNotifyQuiet(t *testing.T) {
 		t.Fatal("Quiet not applied to the asked agent only")
 	}
 }
+
+// A plan's push is not held back by an unanswered notification for an
+// agent, has its own key per plan, and follows the kinds switch.
+func TestNotifyPlan(t *testing.T) {
+	fp := &fakePusher{}
+	d := &Dispatcher{Push: fp}
+	w := &herdr.AgentInfo{Name: "w", ID: "desk/wS:p1", PaneID: "wS:p1", Status: herdr.StatusDone}
+	n := 0
+	d.Notify(w, LocalRef(w), latestText("Done.", &n)) // leaves the agent held
+	d.NotifyPlan("hab", "Plan done: Add foo", "2 of 2 workers finished.")
+	d.NotifyPlan("hcd", "Plan done: Other", "1 of 1 workers finished.")
+	if len(fp.msgs) != 3 || fp.keys[1] != "plan/hab/plan" || fp.keys[2] != "plan/hcd/plan" || fp.msgs[1].Title != "Plan done: Add foo" {
+		t.Fatalf("pushes = %v %+v", fp.keys, fp.msgs)
+	}
+	off := &fakePusher{}
+	(&Dispatcher{Push: off, Kinds: map[string]bool{KindDone: true}}).NotifyPlan("hab", "t", "b")
+	if len(off.msgs) != 0 {
+		t.Fatal("plan push with the kind off")
+	}
+	if k, err := ParseKinds("done,plan"); err != nil || !k[KindPlan] {
+		t.Fatalf("plan kind = %v %v", k, err)
+	}
+}

@@ -48,7 +48,7 @@ func main() {
 		ntfyThottle  = flag.Duration("ntfy-throttle", 0, "deprecated alias for -notify-throttle")
 		ntfyExcerpt  = flag.Int("ntfy-excerpt", envInt("COMEBYE_NTFY_EXCERPT", 0), "max characters of the agent's last message to include in ntfy notifications; 0 (default) sends none, since ntfy.sh topics are public")
 		throttle     = flag.Duration("notify-throttle", envDuration("COMEBYE_NOTIFY_THROTTLE", 30*time.Second), "minimum interval between repeat notifications per agent and kind (Web Push and ntfy)")
-		notifyKinds  = flag.String("notify-kinds", envOr("COMEBYE_NOTIFY_KINDS", "blocked,question,done"), "which notifications to send (Web Push and ntfy), comma-separated: blocked (needs input), question (finished on a question), done (finished); none for no notifications")
+		notifyKinds  = flag.String("notify-kinds", envOr("COMEBYE_NOTIFY_KINDS", "blocked,question,done,plan"), "which notifications to send (Web Push and ntfy), comma-separated: blocked (needs input), question (finished on a question), done (finished), plan (a plan settled); none for no notifications")
 		doneDigest   = flag.Duration("notify-done-digest", envDuration("COMEBYE_NOTIFY_DONE_DIGEST", 0), "collect \"done\" notifications for this long after the first and send them as one (\"3 agents finished\"); 0 sends each at once. Questions are never delayed")
 		blockedDelay = flag.Duration("notify-blocked-delay", envDuration("COMEBYE_NOTIFY_BLOCKED_DELAY", 15*time.Second), "wait this long before notifying that an agent needs input, and send nothing if it stopped being blocked meanwhile; 0 notifies at once")
 		stateDir     = flag.String("state-dir", envOr("COMEBYE_STATE_DIR", defaultStateDir()), "directory for the VAPID key and push subscriptions (created mode 0700)")

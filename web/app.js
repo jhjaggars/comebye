@@ -467,6 +467,7 @@ function renderList() {
   }).join("");
   renderRemovalBanner();
   renderBrief();
+  renderPlans();
   if (!agents.length) {
     wrap.innerHTML = `<div class="empty">${state.unauthorized ? esc(UNAUTHORIZED_MSG) : "No agents running"}</div>` + downRows;
     return;
@@ -533,6 +534,7 @@ function ledgerEntry(a) { return ledger.byAgent.get(agentId(a)); }
 
 function setLedger(d) {
   ledger.on = true;
+  ledger.plans = Array.isArray(d.plans) ? d.plans : [];
   ledger.entries = Array.isArray(d.entries) ? d.entries : [];
   ledger.marks = Array.isArray(d.marks) ? d.marks : [];
   ledger.byAgent = new Map();
@@ -732,6 +734,31 @@ function missNote(m, hasBrief) {
         <button type="button" class="bf-ack">Dismiss</button>
       </div>
     </div>`;
+}
+
+// renderPlans shows the plans (several workers, one change) that are open
+// or settled within the last day: how many workers finished and where each
+// stands. The hub pushes when a plan settles; this is for looking.
+const PLAN_SHOWN_MS = 24 * 3600 * 1000;
+function renderPlans() {
+  const el = $("plans");
+  if (!el) return;
+  const now = Date.now();
+  const shown = (ledger.on === true && Array.isArray(ledger.plans) ? ledger.plans : []).filter((p) => {
+    if (!p || !Array.isArray(p.members)) return false;
+    if (p.state === "open") return true;
+    const at = Date.parse(p.settled_at);
+    return !Number.isNaN(at) && now - at < PLAN_SHOWN_MS;
+  });
+  const sig = JSON.stringify(shown.map((p) => [p.id, p.state, p.done, p.members.map((m) => m.id + m.outcome + m.status)]));
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.hidden = !shown.length;
+  const label = { open: "in progress", done: "done", partial: "needs a look" };
+  el.innerHTML = shown.map((p) => `<div class="plan ${esc(p.state)}">
+      <div class="plan-head"><span class="plan-title">${esc(p.title)}</span><span class="plan-state">${esc(label[p.state] || p.state)} · ${p.done} of ${p.size}</span></div>
+      <ul class="plan-members">${p.members.map((m) => `<li><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span></li>`).join("")}</ul>
+    </div>`).join("");
 }
 
 function renderBrief() {

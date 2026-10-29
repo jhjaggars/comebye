@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/playbook"
 	"github.com/jhjaggars/comebye/internal/state"
 )
 
@@ -281,7 +282,7 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	if lerr != nil {
 		return nil, lerr
 	}
-	agent, err := s.startAgent(ctx, name, kind, pane)
+	agent, err := s.startAgent(ctx, name, kind, pane, playbook.WorkerArgs(kind)...)
 	if err != nil {
 		e := herdrFailure("start "+kind, err)
 		if remembered {

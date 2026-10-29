@@ -56,7 +56,11 @@ func init() {
 		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
 		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or its final report", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
-		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
+		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--plan ID] [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
+		{"plan", "create --title T --size N | show ID | list [--json]", "group handoffs into one change: the user is told once when all of them are done", cmdPlan},
+		{"release", "ID [--json]", "start a handoff that is waiting for earlier steps now (e.g. a step that went idle without reporting)", cmdRelease},
+		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
+		{"report", "FILE|-", "(workers) declare yourself done and send your final report to whoever handed you the task", cmdReport},
 		{"prompt", "AGENT TEXT|- [--json]", "send an agent a message", cmdPrompt},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
@@ -486,6 +490,19 @@ func cmdLedger(e *Env, args []string) error {
 				notes = append(notes, fmt.Sprintf("not merged: %d commits not in %s", en.Checks.Unmerged, dash(en.Checks.BaseUsed)))
 			}
 		}
+		if en.PlanID != "" {
+			notes = append(notes, "plan "+en.PlanID)
+		}
+		if en.Status == "waiting" {
+			notes = append(notes, "waiting for "+strings.Join(en.After, ", ")+" to report (`comebye release "+en.ID+"` starts it now)")
+		}
+		if en.Callback != nil {
+			cb := "callback " + en.Callback.State
+			if en.Callback.To != "" {
+				cb += " to " + en.Callback.To
+			}
+			notes = append(notes, cb)
+		}
 		if en.Mark != nil {
 			notes = append(notes, "marked by "+dash(en.Mark.By)+": "+dash(en.Mark.Reason))
 			if a := askText(en.Mark.Ask); a != "" {
@@ -896,6 +913,9 @@ func cmdHandoff(e *Env, args []string) error {
 	kind := fs.String("kind", "", "the agent kind (default: the host's most used)")
 	name := fs.String("name", "", "the worker's name (default: from the branch)")
 	brief := fs.String("brief", "", "the brief: a markdown file, or - for stdin")
+	plan := fs.String("plan", "", "join this plan (from `comebye plan create`)")
+	var after stringList
+	fs.Var(&after, "after", "wait for this earlier step of the plan (its id or branch; repeat or comma-separate) and start when it has reported")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -907,6 +927,8 @@ func cmdHandoff(e *Env, args []string) error {
 		return usageErr("--host, --repo, --branch and --brief are required")
 	case !strings.HasPrefix(*repo, "/"):
 		return usageErr("--repo must be an absolute path on the host")
+	case len(after) > 0 && *plan == "":
+		return usageErr("--after needs --plan")
 	}
 	text, err := readInput(e, *brief, 1<<20)
 	if err != nil {
@@ -919,8 +941,11 @@ func cmdHandoff(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	body := map[string]string{"host": *host, "repo": *repo, "branch": *branch, "brief": text}
-	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name} {
+	body := map[string]any{"host": *host, "repo": *repo, "branch": *branch, "brief": text}
+	if len(after) > 0 {
+		body["after"] = []string(after)
+	}
+	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name, "plan": *plan} {
 		if v != "" {
 			body[k] = v
 		}
@@ -936,12 +961,16 @@ func cmdHandoff(e *Env, args []string) error {
 		Entry     apiEntry `json:"entry"`
 		Existing  bool     `json:"existing"`
 		Restarted bool     `json:"restarted"`
+		Queued    bool     `json:"queued"`
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
 		return fmt.Errorf("unexpected answer: %v", err)
 	}
 	en := r.Entry
 	switch {
+	case r.Queued:
+		fmt.Fprintf(e.Stdout, "Queued %s on %s (%s): it starts when %s has reported, with the report(s) quoted after its brief. `comebye release %s` starts it now; `comebye cancel %s` gives up.\n",
+			en.Branch, en.Host, en.ID, strings.Join(en.After, ", "), en.ID, en.ID)
 	case r.Restarted:
 		fmt.Fprintf(e.Stdout, "The earlier worker on %s was gone: started %s (%s) in its worktree.\n", en.Branch, dash(en.AgentName), en.AgentID)
 	case r.Existing:
@@ -1143,6 +1172,189 @@ func upperFirst(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+type apiPlan struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Size    int    `json:"size"`
+	State   string `json:"state"`
+	Done    int    `json:"done"`
+	Members []struct {
+		ID       string `json:"id"`
+		Host     string `json:"host"`
+		RepoName string `json:"repo_name"`
+		Branch   string `json:"branch"`
+		Status   string `json:"status"`
+		Outcome  string `json:"outcome"`
+		Reported bool   `json:"reported"`
+	} `json:"members"`
+}
+
+func cmdPlan(e *Env, args []string) error {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	title := fs.String("title", "", "create: what the change is, in a few words")
+	size := fs.Int("size", 0, "create: how many workers the whole change takes")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) == 0 {
+		return usageErr("want create, show ID or list")
+	}
+	if (*title != "" || *size != 0) && pos[0] != "create" {
+		return usageErr("--title and --size go with plan create")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	switch pos[0] {
+	case "create":
+		if len(pos) != 1 || strings.TrimSpace(*title) == "" || *size < 1 {
+			return usageErr("want plan create --title T --size N")
+		}
+		data, err := c.raw("POST", "/api/plans", nil, map[string]any{"title": *title, "size": *size})
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		var r struct {
+			Plan apiPlan `json:"plan"`
+		}
+		if err := json.Unmarshal(data, &r); err != nil {
+			return fmt.Errorf("unexpected answer: %v", err)
+		}
+		fmt.Fprintf(e.Stdout, "Plan %s created (%d workers). Hand each one off with `comebye handoff --plan %s …`; the user is told once all %d are done.\n", r.Plan.ID, r.Plan.Size, r.Plan.ID, r.Plan.Size)
+		return nil
+	case "show", "list":
+		path := "/api/plans"
+		if pos[0] == "show" {
+			if len(pos) != 2 {
+				return usageErr("want plan show ID")
+			}
+			path += "/" + url.PathEscape(pos[1])
+		} else if len(pos) != 1 {
+			return usageErr("plan list takes no argument")
+		}
+		data, err := c.raw("GET", path, nil, nil)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		var r struct {
+			Plan  *apiPlan  `json:"plan"`
+			Plans []apiPlan `json:"plans"`
+		}
+		if err := json.Unmarshal(data, &r); err != nil {
+			return fmt.Errorf("unexpected answer: %v", err)
+		}
+		if r.Plan != nil {
+			r.Plans = []apiPlan{*r.Plan}
+		}
+		if len(r.Plans) == 0 {
+			fmt.Fprintln(e.Stdout, "No plans.")
+		}
+		for _, p := range r.Plans {
+			fmt.Fprintf(e.Stdout, "%s  %s  %s  %d of %d finished (%d handed off)\n", p.ID, p.State, p.Title, p.Done, p.Size, len(p.Members))
+			for _, m := range p.Members {
+				fmt.Fprintf(e.Stdout, "  %s  %s  %s/%s on %s: %s (%s)\n", m.ID, m.Outcome, dash(m.RepoName), m.Branch, m.Host, m.Status, map[bool]string{true: "report captured", false: "no report yet"}[m.Reported])
+			}
+		}
+		return nil
+	}
+	return usageErr("want create, show ID or list")
+}
+
+// stringList is a repeatable, comma-separable flag.
+type stringList []string
+
+func (l *stringList) String() string { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error {
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			*l = append(*l, p)
+		}
+	}
+	return nil
+}
+
+func cmdRelease(e *Env, args []string) error { return queuedAction(e, args, "release") }
+func cmdCancel(e *Env, args []string) error  { return queuedAction(e, args, "cancel") }
+
+// queuedAction is release or cancel: both act on a waiting handoff by id.
+func queuedAction(e *Env, args []string, verb string) error {
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one handoff ID (see `comebye ledger`)")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/handoffs/"+url.PathEscape(pos[0])+"/"+verb, nil, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Entry apiEntry `json:"entry"`
+	}
+	_ = json.Unmarshal(data, &r)
+	if verb == "cancel" {
+		fmt.Fprintf(e.Stdout, "Cancelled %s (%s).\n", r.Entry.Branch, r.Entry.ID)
+	} else {
+		fmt.Fprintf(e.Stdout, "Started %s on %s (%s, %s).\n", r.Entry.Branch, r.Entry.Host, dash(r.Entry.AgentName), r.Entry.AgentID)
+	}
+	return nil
+}
+
+func cmdReport(e *Env, args []string) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want report FILE (or - for stdin)")
+	}
+	text, err := readInput(e, pos[0], 64<<10)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return usageErr("the report is empty")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/report", nil, map[string]string{"text": text})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Entry apiEntry `json:"entry"`
+	}
+	_ = json.Unmarshal(data, &r)
+	fmt.Fprintf(e.Stdout, "Report recorded for %s (%s). You can stop now.\n", r.Entry.Branch, r.Entry.ID)
+	return nil
 }
 
 func cmdUnmark(e *Env, args []string) error {

@@ -194,3 +194,134 @@ func TestSetAsk(t *testing.T) {
 		t.Fatal("answer applied to a cleared mark")
 	}
 }
+
+func TestCallbackQueue(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	asked, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1", Name: "coordinator"}})
+	plain, _ := s.Add(Entry{AgentID: "desk/w9:p2", Status: Running}) // started by the user
+	now := time.Now()
+	work := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking), agent("desk/w9:p2", herdr.StatusWorking)}
+	idle := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusIdle), agent("desk/w9:p2", herdr.StatusIdle)}
+	s.Observe(work, now)
+	if len(s.PendingCallbacks()) != 0 {
+		t.Fatal("callback before finishing")
+	}
+	s.Observe(idle, now)
+	p := s.PendingCallbacks()
+	if len(p) != 1 || p[0].ID != asked.ID || p[0].Callback.State != CallbackPending || p[0].ReplyTo.Name != "coordinator" {
+		t.Fatalf("pending = %+v", p)
+	}
+	if got, _ := s.Get(plain.ID); got.Callback != nil {
+		t.Fatal("callback for a handoff nobody asked for")
+	}
+
+	// Back to work drops it; finishing again queues a new one, and a
+	// settle with the old queue time is ignored.
+	old := p[0].Callback.At
+	s.Observe(work, now)
+	if got, _ := s.Get(asked.ID); got.Callback != nil {
+		t.Fatalf("callback kept: %+v", got.Callback)
+	}
+	later := now.Add(time.Minute)
+	s.Observe(idle, later)
+	if err := s.CallbackDone(asked.ID, old, CallbackDelivered, "desk/w1:p1", later); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.PendingCallbacks()) != 1 {
+		t.Fatal("stale settle applied")
+	}
+	cur := s.PendingCallbacks()[0].Callback.At
+	s.CallbackTried(asked.ID, cur)
+	s.CallbackDone(asked.ID, cur, CallbackDelivered, "desk/w1:p1", later)
+	got, _ := s.Get(asked.ID)
+	if got.Callback.State != CallbackDelivered || got.Callback.To != "desk/w1:p1" || got.Callback.Tries != 2 || len(s.PendingCallbacks()) != 0 {
+		t.Fatalf("delivered = %+v", got.Callback)
+	}
+	// It survives a reload.
+	s2, _ := Open(s.path)
+	if got, _ := s2.Get(asked.ID); got.Callback == nil || got.ReplyTo == nil {
+		t.Fatalf("reload = %+v", got)
+	}
+}
+
+func TestExplicitReport(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	asked, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1"}})
+	now := time.Now()
+	work := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking)}
+	idle := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusIdle)}
+	if _, ok, _ := s.Report("desk/nobody", "x", now); ok {
+		t.Fatal("report for an agent without an entry")
+	}
+	// Reporting needs no earlier sighting of the worker working.
+	e, ok, err := s.Report(asked.AgentID, "## Summary\nexplicit", now)
+	if !ok || err != nil || e.Status != Finished || e.ReportSource != "explicit" || e.Callback == nil || e.Callback.State != CallbackPending {
+		t.Fatalf("report = %+v %v %v", e, ok, err)
+	}
+	// The turn that ran the report is still working: it stays finished.
+	if c := s.Observe(work, now); len(c) != 0 {
+		t.Fatalf("capture = %+v", c)
+	}
+	if got, _ := s.Get(asked.ID); got.Status != Finished || got.FinalReport != "## Summary\nexplicit" {
+		t.Fatalf("working after report = %+v", got)
+	}
+	// Idle: no guess replaces the report.
+	if c := s.Observe(idle, now); len(c) != 0 {
+		t.Fatalf("capture at idle = %+v", c)
+	}
+	s.SetReport(asked.ID, e.FinishedAt, "a guess")
+	if got, _ := s.Get(asked.ID); got.FinalReport != "## Summary\nexplicit" || got.AwaitIdle {
+		t.Fatalf("idle = %+v", got)
+	}
+	// A second report while finished replaces the text, not the callback.
+	at := e.Callback.At
+	e2, _, _ := s.Report(asked.AgentID, "second", now.Add(time.Minute))
+	if e2.FinalReport != "second" || !e2.Callback.At.Equal(at) {
+		t.Fatalf("second = %+v", e2)
+	}
+	s.Observe(idle, now)
+	// New work after that is new work.
+	s.Observe(work, now)
+	if got, _ := s.Get(asked.ID); got.Status != Running || got.FinalReport != "" || got.ReportSource != "" || got.Callback != nil {
+		t.Fatalf("rerun = %+v", got)
+	}
+}
+
+// The turn that ran `comebye report` is absorbed only briefly: a worker
+// seen working long after it reported has been given more to do.
+func TestExplicitReportGrace(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	e, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running})
+	now := time.Now()
+	s.Report(e.AgentID, "done", now)
+	work := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking)}
+	s.Observe(work, now.Add(30*time.Second))
+	if g, _ := s.Get(e.ID); g.Status != Finished {
+		t.Fatalf("reopened inside the grace: %+v", g)
+	}
+	s.Observe(work, now.Add(reportTurnGrace+time.Second))
+	if g, _ := s.Get(e.ID); g.Status != Running || g.FinalReport != "" || g.ReportSource != "" {
+		t.Fatalf("not reopened after the grace: %+v", g)
+	}
+}
+
+// A failed handoff handed off again is replaced in its plan, not counted
+// twice.
+func TestPlanSupersedesFailedMember(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	now := time.Now()
+	p, _ := s.AddPlan(Plan{Title: "x", Size: 1})
+	s.Add(Entry{Host: "desk", RepoName: "r", Branch: "b", Status: Failed, PlanID: p.ID, CreatedAt: now.Add(-time.Minute)})
+	if got := s.EvalPlans(now); len(got) != 1 || got[0].Outcome != PlanPartial {
+		t.Fatalf("failed alone = %+v", got)
+	}
+	again, _ := s.Add(Entry{Host: "desk", RepoName: "r", Branch: "b", AgentID: "desk/w1:p1", Status: Running, PlanID: p.ID, CreatedAt: now})
+	if m := s.Members(p.ID); len(m) != 1 || m[0].ID != again.ID {
+		t.Fatalf("members = %+v", m)
+	}
+	s.Observe([]herdr.AgentInfo{agent(again.AgentID, herdr.StatusWorking)}, now)
+	s.Observe([]herdr.AgentInfo{agent(again.AgentID, herdr.StatusIdle)}, now)
+	if got := s.EvalPlans(now); len(got) != 1 || got[0].Outcome != PlanDone {
+		t.Fatalf("after the retry = %+v", got)
+	}
+}

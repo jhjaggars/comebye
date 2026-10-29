@@ -810,6 +810,24 @@
       border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border));
     }
     .briefing[hidden] { display: none; }
+    .plans { margin-bottom: 10px; }
+    .plans[hidden] { display: none; }
+    .plan {
+      margin-bottom: 6px; padding: 10px 12px; border-radius: 14px; background: var(--panel);
+      border: 1px solid color-mix(in srgb, var(--purple) 40%, var(--border));
+    }
+    .plan.partial { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
+    .plan.done { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+    .plan-head { display: flex; align-items: baseline; gap: 8px; }
+    .plan-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .plan-state { margin-left: auto; flex: none; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+    .plan.done .plan-state { color: var(--green); }
+    .plan.partial .plan-state { color: var(--orange); }
+    .plan-members { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
+    .plan-members li { display: flex; gap: 6px; padding: 2px 0; min-width: 0; }
+    .plan-members .pm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .plan-members .pm-ok { color: var(--green); }
+    .plan-members .pm-failed { color: var(--red); }
     .bf-head { display: flex; align-items: center; }
     .bf-toggle {
       flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 4px 4px 8px;
@@ -865,7 +883,7 @@
         <button type="button" class="btn danger" id="notify-disable" hidden>Turn off</button>
       </div>
     </section>
-    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
+    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
   </div>
 
   <!-- New agent ("+" in the list header) -->

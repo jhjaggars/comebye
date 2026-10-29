@@ -121,6 +121,9 @@ type Server struct {
 	askPoll time.Duration
 	askWait time.Duration
 	latest  func(ctx context.Context, host, pane string) *transcript.Latest
+	// planPush tells the user a plan settled (the dispatcher's NotifyPlan;
+	// tests replace it).
+	planPush func(id, title, body string)
 	// ledger records handoffs and marks (nil without a state directory,
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
@@ -153,7 +156,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	}
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, askPoll: askPoll, askWait: askWait}
-	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}}
+	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
 	}
@@ -177,6 +180,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	}
 	if manager != nil {
 		manager.Dispatcher().Quiet = s.quietAgent
+		s.planPush = manager.Dispatcher().NotifyPlan
 	}
 	s.routes()
 	return s
@@ -234,6 +238,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ledger", s.authAgent(s.handleLedger))
 	s.mux.HandleFunc("GET /api/inspect", s.authAgent(s.handleInspect))
 	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))
+	s.mux.HandleFunc("POST /api/handoffs/{id}/release", s.authAgent(s.handleReleaseHandoff))
+	s.mux.HandleFunc("POST /api/handoffs/{id}/cancel", s.authAgent(s.handleCancelHandoff))
+	s.mux.HandleFunc("POST /api/report", s.authAgent(s.handleReport))
+	s.mux.HandleFunc("POST /api/plans", s.authAgent(s.handleCreatePlan))
+	s.mux.HandleFunc("GET /api/plans", s.authAgent(s.handleListPlans))
+	s.mux.HandleFunc("GET /api/plans/{id}", s.authAgent(s.handleGetPlan))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("GET /api/removals", s.auth(s.handleRemovals))
