@@ -10,13 +10,27 @@ Installing and running Comebye on a host, notifications, several hosts, and ever
 - [Tailscale](https://tailscale.com) on that machine and on your phone, with
   [HTTPS certificates](https://tailscale.com/kb/1153/enabling-https) enabled
   for the tailnet (needed by Tailscale Serve).
-- Go 1.25 or newer to build. `go.mod` names a patched toolchain
-  (`toolchain` line), which `go` downloads automatically unless you set
+- Go 1.25 or newer, only to build from source. `go.mod` names a patched
+  toolchain (`toolchain` line), which `go` downloads automatically unless you set
   `GOTOOLCHAIN=local`; release binaries should be built with it.
 - Linux with systemd is assumed for the service setup below; anything that
   runs Go and herdr should work.
 
 ## Install
+
+Each [release](https://github.com/jhjaggars/comebye/releases) has static
+binaries for Linux and macOS (amd64, arm64), packed with the systemd unit,
+and a `SHA256SUMS` file:
+
+```sh
+os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/jhjaggars/comebye/releases/latest/download/comebye_${os}_${arch}.tar.gz" \
+  | tar -xz --strip-components=1 -C ~/.local/bin "comebye_${os}_${arch}/comebye"
+comebye -version
+```
+
+Or build from source:
 
 ```sh
 go install github.com/jhjaggars/comebye@latest

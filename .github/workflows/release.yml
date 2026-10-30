@@ -1,0 +1,64 @@
+name: Release
+
+# Push a tag like v0.1.0 to build binaries and publish a GitHub release:
+#   git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
+# CI (ci.yml) runs the tests on main; this only builds what was tagged.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+    steps:
+      # Third-party actions are pinned by commit; the comment names the
+      # release it was resolved from.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # go.mod's toolchain line picks the exact Go release.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - name: go vet
+        run: go vet ./...
+
+      # Static, reproducible-ish binaries: no cgo, no local paths, the tag
+      # stamped in as the version (comebye -version). Archive names carry
+      # no version, so releases/latest/download/<name> is a stable URL.
+      - name: build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*} arch=${target#*/}
+            name="comebye_${os}_${arch}"
+            mkdir -p "build/$name"
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-s -w -X main.version=$VERSION" \
+              -o "build/$name/comebye" .
+            cp LICENSE README.md deploy/comebye.service "build/$name/"
+            tar -C build -czf "dist/$name.tar.gz" "$name"
+          done
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$VERSION" \
+            --generate-notes \
+            --verify-tag

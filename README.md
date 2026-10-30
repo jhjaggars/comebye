@@ -33,13 +33,19 @@ Chat view works for Claude Code and Pi; other agents show their terminal output.
 
 You need herdr and Tailscale on the machine running your agents (with
 [HTTPS certificates](https://tailscale.com/kb/1153/enabling-https) enabled
-for your tailnet), Tailscale on your phone, and Go 1.25+ to build.
+for your tailnet), and Tailscale on your phone.
 
-**1. Install**
+**1. Install** a release binary (Linux or macOS, amd64 or arm64):
 
 ```sh
-GOBIN=~/.local/bin go install github.com/jhjaggars/comebye@latest
+os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/jhjaggars/comebye/releases/latest/download/comebye_${os}_${arch}.tar.gz" \
+  | tar -xz --strip-components=1 -C ~/.local/bin "comebye_${os}_${arch}/comebye"
 ```
+
+or build it with Go 1.25+:
+`GOBIN=~/.local/bin go install github.com/jhjaggars/comebye@latest`
 
 **2. Say who may use it.** Comebye only admits the Tailscale logins you list.
 Use the one your phone is signed in as (`tailscale status` shows it):

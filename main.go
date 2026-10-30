@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,11 +67,16 @@ func main() {
 		allowHosts   = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
 		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs    = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
+		showVersion  = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
 	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
 	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("comebye", buildVersion())
+		return
+	}
 	if *ntfyThottle > 0 {
 		*throttle = *ntfyThottle
 	}
@@ -378,6 +384,21 @@ func envBool(key string, def bool) bool {
 
 // defaultStateDir is $XDG_STATE_HOME/comebye, else
 // ~/.local/state/comebye.
+// version is stamped by release builds (-ldflags "-X main.version=v1.2.3").
+var version = ""
+
+// buildVersion reports the release version, else the module version that
+// go install recorded, else "dev" for a plain checkout build.
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
+
 // defaultSocketPath is the -sock default: COMEBYE_SOCK, then herdr's own
 // HERDR_SOCKET_PATH (set inside herdr panes, so a comebye started there
 // finds that herdr), then herdr's default location.
