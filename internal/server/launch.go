@@ -78,9 +78,24 @@ func installed(name string) bool {
 	return inDirs(name, home, userBinDirs)
 }
 
+// lookExec is the path of the executable named name on PATH or in one of
+// userBinDirs, "" when it is in neither.
+func lookExec(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	return findInDirs(name, home, userBinDirs)
+}
+
 // inDirs reports whether an executable file name is in one of dirs ("~/"
 // is home; glob patterns are expanded).
 func inDirs(name, home string, dirs []string) bool {
+	return findInDirs(name, home, dirs) != ""
+}
+
+// findInDirs is inDirs returning the executable's path ("" when absent).
+func findInDirs(name, home string, dirs []string) string {
 	for _, d := range dirs {
 		if rest, ok := strings.CutPrefix(d, "~/"); ok {
 			if home == "" {
@@ -94,11 +109,11 @@ func inDirs(name, home string, dirs []string) bool {
 		}
 		for _, m := range matches {
 			if fi, err := os.Stat(filepath.Join(m, name)); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
-				return true
+				return filepath.Join(m, name)
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // launchRoots returns the configured roots that exist, symlinks resolved,
@@ -336,6 +351,7 @@ func (s *Server) handleLaunchOptions(w http.ResponseWriter, r *http.Request) {
 		resp["roots"] = rootDirs
 		resp["kinds"] = kinds
 		resp["default_kind"] = defaultKind(kinds, running)
+		resp["model_kinds"] = modelKinds // the kinds the app offers a model picker for
 		resp["recent"] = recentDirs(running, roots)
 		if d := s.coordinatorDir(); d != "" {
 			resp["coordinator_dir"] = homeLabel(d)
@@ -424,6 +440,10 @@ type launchBody struct {
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
 	Prompt string `json:"prompt"`
+	// Model and Thinking choose the agent's model (and pi's thinking
+	// level); empty is the agent's own default.
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 	// Coordinator: the "Coordinator" preset. The agent starts in the
 	// coordinator directory (Dir is ignored; it need not be in a launch
 	// root), is named coordinator (or coordinator-N), gets the harness's
@@ -535,9 +555,14 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "agent_name_taken", "message": "an agent named " + name + " is already running"})
 		return
 	}
-	var args []string
+	// The model comes first: claude's --allowedTools swallows what follows.
+	args, lerr := s.pickModel(ctx, kind, body.Model, body.Thinking)
+	if lerr != nil {
+		writeLaunchError(w, lerr)
+		return
+	}
 	if body.Coordinator {
-		args = append(playbook.AgentArgs(kind, name), s.cfg.CoordinatorArgs[kind]...)
+		args = append(append(args, playbook.AgentArgs(kind, name)...), s.cfg.CoordinatorArgs[kind]...)
 		if strings.TrimSpace(body.Prompt) == "" {
 			body.Prompt = playbook.FirstPrompt(kind)
 		}
@@ -587,6 +612,12 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 			Name: name, Agent: kind, Status: agent.Status, CWD: dir,
 		},
 		"workspace_id": ws.WorkspaceID,
+	}
+	if body.Model != "" {
+		resp["model"] = strings.TrimSpace(body.Model)
+	}
+	if body.Thinking != "" {
+		resp["thinking"] = strings.TrimSpace(body.Thinking)
 	}
 	if body.Coordinator {
 		resp["coordinator"] = true

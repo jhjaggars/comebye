@@ -86,7 +86,7 @@ const agentsJSON = `{"agents":[
 ],"hosts":[{"name":"laharl","local":true,"status":"ok"},{"name":"kube","status":"ok"},{"name":"bee","status":"down","class":"dns","since":"2026-10-22T06:00:00Z","error":"cannot resolve bee.tailnet.ts.net (no such host); the peer may have been renamed in the tailnet or left it - update the hub's -peers"}]}`
 
 const ledgerJSON = `{"entries":[
- {"id":"h1","host":"laharl","repo":"/home/u/code/proj","repo_name":"proj","branch":"fix/a","base":"main","agent_id":"laharl/w3:p1","pane_id":"w3:p1","agent_name":"fix-a","worktree":"/home/u/.worktrees/proj/fix-a","status":"finished","final_report":"## Summary\nFixed A.","live":{"present":true,"agent_status":"idle"},"candidate":true},
+ {"id":"h1","host":"laharl","repo":"/home/u/code/proj","repo_name":"proj","branch":"fix/a","base":"main","model":"homelab/fast","thinking":"high","agent_id":"laharl/w3:p1","pane_id":"w3:p1","agent_name":"fix-a","worktree":"/home/u/.worktrees/proj/fix-a","status":"finished","final_report":"## Summary\nFixed A.","live":{"present":true,"agent_status":"idle"},"candidate":true},
  {"id":"h2","host":"kube","repo":"/home/k/code/other","repo_name":"other","branch":"feat/b","agent_id":"kube/w9:p9","agent_name":"feat-b","status":"running","live":{"present":false}},
  {"id":"h3","host":"kube","repo":"/home/k/code/other","repo_name":"other","branch":"feat/c","status":"failed","error":"bad_base: no such base"}
 ],"marks":[{"agent_id":"kube/w5:p2","name":"solo","by":"me","reason":"stale","at":"2026-10-22T08:00:00Z"}],
@@ -716,5 +716,73 @@ func TestPromptQueueAndQueueCommand(t *testing.T) {
 	out.Reset()
 	if code := run(e, "queue", "--cancel", "q1"); code != 0 || !strings.Contains(out.String(), "Withdrew q1") {
 		t.Fatalf("cancel: %d %s %s", code, out, errb)
+	}
+}
+
+func TestModelColumnsAndInspect(t *testing.T) {
+	f, e, out, _ := newFake(t)
+	f.answers["GET /api/inspect"] = answer{body: `{"agent_id":"laharl/w3:p1","host":"laharl","name":"fix-a","status":"idle","model":"homelab/fast","thinking":"high","checks":{"path":"/home/u/.worktrees/proj/fix-a","exists":true,"branch":"fix/a"}}`}
+	for _, args := range [][]string{{"agents"}, {"ledger"}, {"inspect", "laharl/w3:p1"}} {
+		out.Reset()
+		if code := run(e, args...); code != 0 || !strings.Contains(out.String(), "homelab/fast (thinking high)") {
+			t.Errorf("%v: %d\n%s", args, code, out)
+		}
+	}
+	out.Reset()
+	run(e, "agents", "--json")
+	if !strings.Contains(out.String(), `"model": "homelab/fast"`) {
+		t.Errorf("agents --json lacks the model:\n%s", out)
+	}
+}
+
+func TestHandoffModelFlags(t *testing.T) {
+	f, e, out, _ := newFake(t)
+	f.answers["POST /api/handoffs"] = answer{body: `{"entry":{"id":"h9","host":"kube","branch":"feat/x","agent_id":"kube/w7:p1","agent_name":"feat-x","model":"homelab/fast","thinking":"low","status":"running"}}`}
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	os.WriteFile(brief, []byte("Do X."), 0o600)
+	code := run(e, "handoff", "--host", "kube", "--repo", "/r", "--branch", "feat/x", "--kind", "pi", "--model", "homelab/fast", "--thinking", "low", "--brief", brief)
+	if code != 0 || !strings.Contains(out.String(), "model:    homelab/fast (thinking low)") {
+		t.Fatalf("handoff: %d %s", code, out)
+	}
+	var body map[string]string
+	json.Unmarshal([]byte(f.find("POST", "/api/handoffs").body), &body)
+	if body["model"] != "homelab/fast" || body["thinking"] != "low" || body["kind"] != "pi" {
+		t.Fatalf("body = %v", body)
+	}
+	// Without the flags, nothing is sent: the agent's default.
+	run(e, "handoff", "--host", "kube", "--repo", "/r", "--branch", "feat/y", "--brief", brief)
+	body = nil
+	json.Unmarshal([]byte(f.find("POST", "/api/handoffs").body), &body)
+	if _, ok := body["model"]; ok {
+		t.Fatalf("model sent by default: %v", body)
+	}
+}
+
+func TestModelsCommand(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["GET /api/hosts/kube/models"] = answer{body: `{"host":"kube","catalogs":[
+	 {"kind":"pi","source":"pi --list-models","exact":true,"default":"homelab/fast","default_thinking":"minimal","thinking_levels":["off","low","high"],"models":[{"id":"homelab/fast"},{"id":"homelab/thinking","thinking":true}]},
+	 {"kind":"claude","source":"curated","models":[{"id":"opus","note":"newest Opus"}]},
+	 {"kind":"codex","source":"none","models":[]}]}`}
+	if code := run(e, "models", "--host", "kube", "--kind", "pi"); code != 0 {
+		t.Fatalf("exit %d %s", code, errb)
+	}
+	if r := f.find("GET", "/api/hosts/kube/models"); r.query != "kind=pi" {
+		t.Fatalf("query = %q", r.query)
+	}
+	for _, want := range []string{"pi on kube (source: pi --list-models; default: homelab/fast, thinking minimal)", "homelab/fast  (default)", "thinking levels: off, low, high",
+		"opus  newest Opus", "(not exhaustive", "(no list: any model name"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("models lacks %q:\n%s", want, out)
+		}
+	}
+	// No host: the local one.
+	f.answers["GET /api/models"] = answer{body: `{"host":"laharl","catalogs":[]}`}
+	out.Reset()
+	if code := run(e, "models"); code != 0 || !strings.Contains(out.String(), "no installed agent kind on laharl takes a model") {
+		t.Fatalf("empty: %d %s", code, out)
+	}
+	if code := run(e, "models", "stray"); code != 2 {
+		t.Fatalf("stray arg: %d", code)
 	}
 }

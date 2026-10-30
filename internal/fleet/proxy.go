@@ -52,6 +52,7 @@ var hostProxyOps = map[string]struct {
 	hubOnly bool
 }{
 	"launch-options": {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "launch", "options"}, false},
+	"models":         {proxyOp{method: http.MethodGet, query: []string{"kind"}, timeout: 30 * time.Second}, []string{"api", "models"}, false},
 	"launch-dirs":    {proxyOp{method: http.MethodGet, query: []string{"path"}, timeout: 20 * time.Second}, []string{"api", "launch", "dirs"}, false},
 	// launch: a prompt of up to 1 MB plus the directory and name; the
 	// peer waits up to 90s for the agent to start.

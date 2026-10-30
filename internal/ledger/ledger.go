@@ -57,20 +57,24 @@ type Entry struct {
 	RepoName string `json:"repo_name"`
 	Branch   string `json:"branch"`
 	// PreviousBranches are earlier names of Branch (the worker renamed it).
-	PreviousBranches []string  `json:"previous_branches,omitempty"`
-	Base             string    `json:"base,omitempty"`
-	Kind             string    `json:"kind,omitempty"`
-	AgentID          string    `json:"agent_id,omitempty"` // "<host>/<pane>"
-	PaneID           string    `json:"pane_id,omitempty"`
-	AgentName        string    `json:"agent_name,omitempty"`
-	WorkspaceID      string    `json:"workspace_id,omitempty"`
-	Worktree         string    `json:"worktree,omitempty"`
-	Reused           bool      `json:"reused,omitempty"`
-	Brief            string    `json:"brief"`
-	From             string    `json:"from,omitempty"`
-	Status           Status    `json:"status"`
-	Error            string    `json:"error,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
+	PreviousBranches []string `json:"previous_branches,omitempty"`
+	Base             string   `json:"base,omitempty"`
+	Kind             string   `json:"kind,omitempty"`
+	// Model and Thinking are what the handoff asked for (empty: the
+	// agent's default).
+	Model       string    `json:"model,omitempty"`
+	Thinking    string    `json:"thinking,omitempty"`
+	AgentID     string    `json:"agent_id,omitempty"` // "<host>/<pane>"
+	PaneID      string    `json:"pane_id,omitempty"`
+	AgentName   string    `json:"agent_name,omitempty"`
+	WorkspaceID string    `json:"workspace_id,omitempty"`
+	Worktree    string    `json:"worktree,omitempty"`
+	Reused      bool      `json:"reused,omitempty"`
+	Brief       string    `json:"brief"`
+	From        string    `json:"from,omitempty"`
+	Status      Status    `json:"status"`
+	Error       string    `json:"error,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 	// SawWorking: the agent was seen working since it started (or since
 	// it last finished), so going idle now means it finished.
 	SawWorking  bool       `json:"saw_working,omitempty"`

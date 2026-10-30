@@ -140,7 +140,11 @@ type Server struct {
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
-	coord coord
+	// models caches each kind's model list; listModels, when set,
+	// replaces the discovery (tests).
+	models     modelCache
+	listModels func(ctx context.Context, kind string) *modelCatalog
+	coord      coord
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -234,6 +238,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/image", s.auth(s.onHost("image", s.handleImage)))
 	s.mux.HandleFunc("GET /api/launch/options", s.auth(s.handleLaunchOptions))
 	s.mux.HandleFunc("GET /api/launch/dirs", s.auth(s.handleLaunchDirs))
+	s.mux.HandleFunc("GET /api/models", s.authAgent(s.handleModels))
+	s.mux.HandleFunc("GET /api/hosts/{host}/models", s.authAgent(s.onHostLaunch("models", s.handleModels)))
 	s.mux.HandleFunc("POST /api/launch", s.auth(s.handleLaunch))
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/options", s.auth(s.onHostLaunch("launch-options", s.handleLaunchOptions)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/dirs", s.auth(s.onHostLaunch("launch-dirs", s.handleLaunchDirs)))

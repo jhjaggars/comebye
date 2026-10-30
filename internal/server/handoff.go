@@ -258,8 +258,12 @@ type handoffBody struct {
 	Base   string `json:"base"`
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
-	Brief  string `json:"brief"`
-	From   string `json:"from"`
+	// Model and Thinking choose the worker's model (see launchBody): they
+	// are recorded on the entry.
+	Model    string `json:"model"`
+	Thinking string `json:"thinking"`
+	Brief    string `json:"brief"`
+	From     string `json:"from"`
 	// Plan joins the handoff to a plan made with POST /api/plans.
 	Plan string `json:"plan"`
 	// After queues the handoff behind earlier members of the plan (their
@@ -405,7 +409,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 			return http.StatusConflict, map[string]any{"code": "path_taken", "message": hint + " belongs to another worker (" + other.Branch + ")", "entry": prev}
 		}
 	}
-	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Worktree: hint, Prompt: prompt})
+	res, lerr := s.workerOn(ctx, b.Host, workerBody{Repo: b.Repo, Branch: branch, Base: b.Base, Kind: b.Kind, Name: b.Name, Model: b.Model, Thinking: b.Thinking, Worktree: hint, Prompt: prompt})
 	if hasPrev && lerr != nil {
 		// Restarting the earlier worker failed: its entry stays as it was
 		// (no second, failed entry for the same branch).
@@ -418,6 +422,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 			e.Status, e.Error = ledger.Running, res.PromptError
 			e.AgentID, e.PaneID, e.AgentName, e.Kind = res.Agent.ID, res.Agent.PaneID, res.Agent.Name, res.Agent.Agent
 			e.WorkspaceID, e.Worktree, e.Reused = res.WorkspaceID, res.Worktree, true
+			e.Model, e.Thinking = strings.TrimSpace(b.Model), strings.TrimSpace(b.Thinking)
 			if res.Branch != "" && res.Branch != e.Branch {
 				// The worker renamed its branch; either name finds the entry.
 				e.PreviousBranches = append(e.PreviousBranches, e.Branch)
@@ -449,7 +454,8 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 	}
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply, PlanID: b.Plan,
+		Kind: b.Kind, Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking),
+		Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply, PlanID: b.Plan,
 	}
 	if lerr != nil {
 		e.Status, e.Error = ledger.Failed, lerr.code+": "+lerr.message
