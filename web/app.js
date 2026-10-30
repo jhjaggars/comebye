@@ -3187,6 +3187,12 @@ const launch = {
   mode: null,   // "agent" (in a directory) or "worker" (a handoff: new branch and worktree)
   repos: null,  // the host's git repositories, for worker mode
   repoSeq: 0,
+  model: "",    // chosen model ("" = the agent's own default: no flag is passed)
+  thinking: "", // chosen pi thinking level ("" = pi's default)
+  cat: null,    // the host's model catalog for the kind ({loading} or {error} while not known)
+  catSeq: 0,
+  picking: false, // the model list is open
+  q: "",        // its search text
 };
 
 const LAUNCH_MODE_KEY = "comebye-launch-mode";
@@ -3204,6 +3210,176 @@ function harnessFor(kind) { return kind === "pi" || kind === "claude" ? kind : "
 function validBranch(b) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/.test(b) || b === "HEAD" || b.includes("..") || b.includes("//") || /[/.]$/.test(b)) return false;
   return b.split("/").every((p) => !p.startsWith(".") && !p.startsWith("-") && !p.endsWith(".lock"));
+}
+
+/* ---- the model picker ---- */
+//
+// After the agent kind, the sheet offers the models that kind can start
+// with on the chosen host (GET .../models?kind=K). "Default" is the
+// default: no flag is passed and the agent uses its own configured model.
+// The last choice per kind is remembered on this device.
+
+const MODEL_KEY = "comebye-model-";
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]{0,127}$/;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+// supportsModel: the host's server says this kind takes a model.
+function supportsModel() {
+  const o = launch.opts;
+  return !!(o && o.enabled && launch.kind && (o.model_kinds || []).includes(launch.kind));
+}
+
+function modelsBase(host) {
+  return !host || host === state.localHost ? "/api/models" : `/api/hosts/${encodeURIComponent(host)}/models`;
+}
+
+function rememberModel() {
+  if (!launch.kind) return;
+  try {
+    if (!launch.model && !launch.thinking) localStorage.removeItem(MODEL_KEY + launch.kind);
+    else localStorage.setItem(MODEL_KEY + launch.kind, JSON.stringify({ model: launch.model, thinking: launch.thinking }));
+  } catch {}
+}
+
+// kindChosen restores the kind's remembered model and fetches its catalog.
+async function kindChosen() {
+  launch.model = "";
+  launch.thinking = "";
+  launch.picking = false;
+  launch.q = "";
+  launch.cat = null;
+  const seq = ++launch.catSeq;
+  if (!supportsModel()) { renderLaunchForm(); return; }
+  try {
+    const m = JSON.parse(lsGet(MODEL_KEY + launch.kind) || "null");
+    if (m && typeof m.model === "string" && MODEL_RE.test(m.model)) launch.model = m.model;
+    if (m && THINKING_LEVELS.includes(m.thinking) && launch.kind === "pi") launch.thinking = m.thinking;
+  } catch {}
+  launch.cat = { loading: true };
+  renderLaunchForm();
+  const kind = launch.kind;
+  let cat;
+  try {
+    const d = await api(modelsBase(launch.host) + "?kind=" + encodeURIComponent(kind));
+    cat = (d.catalogs || [])[0] || { error: "the host sent no model list" };
+  } catch (e) {
+    cat = { error: e.message };
+  }
+  if (seq !== launch.catSeq) return;
+  launch.cat = cat;
+  // A remembered model this host does not have (a different host, or
+  // removed since): back to the default rather than failing the launch.
+  if (launch.model && cat.exact && !(cat.models || []).some((m) => m.id === launch.model)) {
+    launch.model = "";
+    toast(`That model is not available on ${launch.host || "this host"}: using the default`);
+  }
+  renderLaunchForm();
+}
+
+function pickModel(id) {
+  launch.model = id;
+  launch.picking = false;
+  launch.q = "";
+  rememberModel();
+  renderLaunchForm();
+  $("ln-model-btn").focus();
+}
+
+function togglePicker() {
+  launch.picking = !launch.picking;
+  launch.q = "";
+  $("ln-model-q").value = "";
+  renderLaunchForm();
+  if (launch.picking) {
+    // Bring the list up under the header so it has room above the keyboard.
+    $("ln-model-label").scrollIntoView({ block: "start" });
+    $("ln-model-q").focus({ preventScroll: true });
+  }
+}
+
+// modelRow is one row of the list; note is a second line.
+function modelRow(id, label, { note = "", badge = "", plain = false } = {}) {
+  const sel = id === launch.model;
+  return `<button type="button" class="ln-model${plain ? " plain" : ""}" role="option" aria-selected="${sel}" data-model="${esc(id)}">` +
+    `<span class="ln-mname">${esc(label)}${note ? `<span class="ln-mnote">${esc(note)}</span>` : ""}</span>${badge}</button>`;
+}
+
+function renderModelList() {
+  const cat = launch.cat || {};
+  const list = $("ln-mlist");
+  if (cat.loading) { list.innerHTML = '<div class="ln-empty">Loading models…</div>'; return; }
+  const q = launch.q.trim().toLowerCase();
+  const terms = q.split(/\s+/).filter(Boolean);
+  const models = (cat.models || []).filter((m) => {
+    const hay = `${m.provider || ""} ${m.id} ${m.name || ""}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
+  let html = "";
+  if (!q) {
+    const dn = cat.default ? `currently ${cat.default}` : "the agent's own setting";
+    html += modelRow("", "Default", { note: `No flag is passed: ${dn}`, plain: true });
+  }
+  let prov = null;
+  for (const m of models) {
+    const p = m.provider || "Models";
+    if (p !== prov) { html += `<div class="ln-head">${esc(p)}</div>`; prov = p; }
+    const badges = (m.id === cat.default ? '<span class="ln-badge dflt">default</span>' : "") +
+      (m.thinking ? '<span class="ln-badge" title="reasoning model">thinking</span>' : "");
+    html += modelRow(m.id, m.provider && m.id.startsWith(m.provider + "/") ? m.id.slice(m.provider.length + 1) : m.id, { note: m.note, badge: badges });
+  }
+  // A name that is not listed can still be typed unless the list is exact.
+  const typed = launch.q.trim();
+  if (typed && !cat.exact && MODEL_RE.test(typed) && !(cat.models || []).some((m) => m.id === typed)) {
+    html += `<div class="ln-head">Other</div>` + modelRow(typed, `Use “${typed}”`, { plain: true });
+  }
+  if (!html || (q && !models.length && !(typed && !cat.exact && MODEL_RE.test(typed)))) {
+    html = `<div class="ln-empty">No model matches “${esc(launch.q.trim())}”</div>`;
+  }
+  list.innerHTML = html;
+}
+
+function renderModelBlock() {
+  const block = $("ln-model-block");
+  const show = supportsModel();
+  block.hidden = !show;
+  if (!show) return;
+  const cat = launch.cat || {};
+  const val = $("ln-model-val");
+  if (launch.model) {
+    val.textContent = launch.model;
+    val.classList.add("set");
+  } else {
+    val.textContent = cat.default ? `Default (${cat.default})` : "Default";
+    val.classList.remove("set");
+  }
+  // Like a model pill with its effort beside it: pi's thinking level, muted.
+  $("ln-model-think").textContent = launch.kind === "pi" ? (launch.thinking || cat.default_thinking || "") : "";
+  $("ln-model-btn").setAttribute("aria-expanded", String(launch.picking));
+  $("ln-picker").hidden = !launch.picking;
+  if (launch.picking) renderModelList();
+  let note = "";
+  if (cat.error) note = `Could not list models (${cat.error}). ${launch.kind === "pi" ? "" : "You can still type a name. "}Default still works.`;
+  else if (!launch.model) note = "Default passes no flag: the agent uses its own setting.";
+  else {
+    const m = (cat.models || []).find((x) => x.id === launch.model);
+    if (m && launch.kind === "pi" && !m.thinking && launch.thinking && launch.thinking !== "off") note = "This model does not reason: the thinking level has no effect.";
+  }
+  $("ln-model-note").textContent = note;
+  const think = launch.kind === "pi";
+  $("ln-thinking").hidden = !think;
+  if (think) {
+    const dflt = cat.default_thinking ? `Default (${cat.default_thinking})` : "Default";
+    $("ln-think-chips").innerHTML = [["", dflt], ...(cat.thinking_levels || THINKING_LEVELS).map((l) => [l, l])].map(([v, label]) =>
+      `<button type="button" class="hf-chip" data-think="${esc(v)}" aria-pressed="${v === launch.thinking}">${esc(label)}</button>`).join("");
+  }
+}
+
+// withModel adds the chosen model (and pi's thinking level) to a request.
+function withModel(body) {
+  if (!supportsModel()) return body;
+  if (launch.model) body.model = launch.model;
+  if (launch.kind === "pi" && launch.thinking) body.thinking = launch.thinking;
+  return body;
 }
 
 function setLaunchMode(mode) {
@@ -3307,6 +3483,8 @@ function openLaunch() {
 function hideLaunch() {
   launch.open = false;
   launch.seq++;
+  launch.catSeq++;
+  launch.picking = false;
   $("launch").hidden = true;
   document.body.classList.remove("sheet-open");
   if (!state.selected) $("btn-launch").focus();
@@ -3342,6 +3520,8 @@ async function setLaunchHost(host) {
   launch.kind = null;
   launch.path = "";
   launch.repos = null;
+  launch.cat = null;
+  launch.catSeq++;
   if (workerMode()) loadRepos(host);
   const seq = ++launch.seq;
   renderLaunchHosts();
@@ -3359,7 +3539,7 @@ async function setLaunchHost(host) {
   if (seq !== launch.seq) return;
   launch.opts = o;
   launch.kind = o.default_kind || (o.kinds || [])[0] || null;
-  renderLaunchForm();
+  kindChosen();
   if (!o.enabled) {
     $("ln-list").innerHTML = `<div class="ln-empty">${esc(o.reason || "Launching is not available on this host")}</div>`;
     return;
@@ -3446,6 +3626,7 @@ function renderLaunchForm() {
   const nameOk = !name || AGENT_NAME_RE.test(name);
   $("ln-name").setAttribute("aria-invalid", String(!nameOk));
   $("ln-name-hint").hidden = nameOk;
+  renderModelBlock();
   const worker = workerMode();
   const coord = coordMode();
   $("ln-mode").hidden = ledger.on !== true;
@@ -3482,7 +3663,7 @@ async function submitLaunch() {
   if (launch.busy || !launch.dir || !launch.kind) return;
   const host = launch.host;
   const kind = launch.kind;
-  const body = { dir: launch.dir, kind };
+  const body = withModel({ dir: launch.dir, kind });
   const name = $("ln-name").value.trim();
   if (name) body.name = name;
   const prompt = $("ln-prompt").value;
@@ -3522,7 +3703,7 @@ async function submitHandoff() {
   if (launch.busy || !repo || !launch.kind || !validBranch(branch) || !brief.trim()) return;
   const host = launch.host || state.localHost;
   const kind = launch.kind;
-  const body = { host, repo: repo.path, branch, kind, brief };
+  const body = withModel({ host, repo: repo.path, branch, kind, brief });
   const base = $("hw-base").value.trim();
   if (base) body.base = base;
   launch.busy = true;
@@ -3565,7 +3746,7 @@ async function submitCoordinator() {
   renderLaunchForm();
   let r;
   try {
-    r = await api(launchBase(host), { method: "POST", timeout: 180000, body: JSON.stringify({ coordinator: true, kind }) });
+    r = await api(launchBase(host), { method: "POST", timeout: 180000, body: JSON.stringify(withModel({ coordinator: true, kind })) });
   } catch (e) {
     toast(e.message, true);
     $("ln-status").textContent = "";
@@ -3762,7 +3943,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-launch").addEventListener("click", openLaunch);
   $("ln-close").addEventListener("click", closeLaunch);
   $("launch").addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") { ev.preventDefault(); closeLaunch(); }
+    if (ev.key !== "Escape") return;
+    ev.preventDefault();
+    // Escape closes the open model list first, then the sheet.
+    if (launch.picking) { launch.picking = false; renderLaunchForm(); $("ln-model-btn").focus(); } else closeLaunch();
   });
   $("ln-hosts").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-host]");
@@ -3770,7 +3954,17 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("ln-kinds").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-kind]");
-    if (b && !launch.busy) { launch.kind = b.dataset.kind; renderLaunchForm(); }
+    if (b && !launch.busy && b.dataset.kind !== launch.kind) { launch.kind = b.dataset.kind; kindChosen(); }
+  });
+  $("ln-model-btn").addEventListener("click", () => { if (!launch.busy) togglePicker(); });
+  $("ln-model-q").addEventListener("input", () => { launch.q = $("ln-model-q").value; renderModelList(); });
+  $("ln-mlist").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-model]");
+    if (b && !launch.busy) pickModel(b.dataset.model);
+  });
+  $("ln-think-chips").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-think]");
+    if (b && !launch.busy) { launch.thinking = b.dataset.think; rememberModel(); renderLaunchForm(); }
   });
   $("ln-list").addEventListener("click", (ev) => {
     const b = ev.target.closest("button.ln-dir");

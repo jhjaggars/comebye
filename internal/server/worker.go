@@ -108,6 +108,9 @@ type workerBody struct {
 	Base   string `json:"base"`
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
+	// Model and Thinking choose the worker's model (see launchBody).
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 	// Worktree, set by a handoff restart, is the path of the worktree the
 	// worker already has: it is found by path whatever branch it is on now
 	// (the worker may have renamed it) and that branch is used. It must be a
@@ -170,6 +173,10 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	}
 	running := s.localAgents()
 	kind, remembered, lerr := s.pickKind(b.Kind, running)
+	if lerr != nil {
+		return nil, lerr
+	}
+	modelArgs, lerr := s.pickModel(ctx, kind, b.Model, b.Thinking)
 	if lerr != nil {
 		return nil, lerr
 	}
@@ -282,7 +289,7 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	if lerr != nil {
 		return nil, lerr
 	}
-	agent, err := s.startAgent(ctx, name, kind, pane, playbook.WorkerArgs(kind)...)
+	agent, err := s.startAgent(ctx, name, kind, pane, append(modelArgs, playbook.WorkerArgs(kind)...)...)
 	if err != nil {
 		e := herdrFailure("start "+kind, err)
 		if remembered {

@@ -28,7 +28,10 @@ type inspection struct {
 	EntryID string            `json:"entry_id,omitempty"`
 	Branch  string            `json:"branch,omitempty"`
 	Base    string            `json:"base,omitempty"`
-	Checks  *worktreeChecks   `json:"checks"`
+	// Model and Thinking: what the handoff asked for (empty: the default).
+	Model    string          `json:"model,omitempty"`
+	Thinking string          `json:"thinking,omitempty"`
+	Checks   *worktreeChecks `json:"checks"`
 }
 
 func (s *Server) handleInspect(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +57,7 @@ func (s *Server) handleInspect(w http.ResponseWriter, r *http.Request) {
 	opts := checkOpts{Detail: true, Diff: r.URL.Query().Get("diff") == "1"}
 	if isWorker {
 		in.Host, in.Name, in.EntryID, in.Branch, in.Base, path = entry.Host, entry.AgentName, entry.ID, entry.Branch, entry.Base, entry.Worktree
+		in.Model, in.Thinking = entry.Model, entry.Thinking
 	}
 	if agent != nil {
 		in.Host, in.Status = agent.Host, agent.Status

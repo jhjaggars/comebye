@@ -686,6 +686,41 @@
     @media (prefers-reduced-motion: reduce) { #launch.busy .ln-status::before { animation: none; } }
     .ln-go { display: block; width: 100%; margin-top: 8px; background: var(--blue); border-color: var(--blue); color: #0b0d11; font-size: 16px; }
     .ln-go:disabled { background: var(--panel2); border-color: var(--border); color: var(--muted); opacity: 1; }
+    /* Model picker: a button that opens a searchable list grouped by provider. */
+    .ln-model-btn {
+      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 0 14px;
+      background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 12px;
+      font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+    }
+    .ln-model-btn[aria-expanded="true"] { border-color: var(--blue); }
+    .ln-model-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .ln-model-val { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ln-model-val.set { color: var(--blue); font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .ln-model-think { flex: none; color: var(--muted); font-size: 14px; }
+    .ln-model-think:empty { display: none; }
+    .ln-model-btn[aria-expanded="true"] .ln-chev { transform: rotate(90deg); }
+    .ln-picker { margin-top: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+    .ln-picker[hidden] { display: none; }
+    .ln-picker .ln-input { border-width: 0 0 1px; border-radius: 0; background: var(--panel); }
+    .ln-mlist { max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+    .ln-model {
+      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 6px 14px;
+      background: none; border: 0; border-top: 1px solid var(--border);
+      color: var(--text); font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+    }
+    .ln-head + .ln-model, .ln-mlist > .ln-model:first-child { border-top: 0; }
+    .ln-model:active { background: var(--panel2); }
+    .ln-model:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .ln-model[aria-selected="true"] { color: var(--blue); }
+    .ln-model[aria-selected="true"]::after { content: "✓"; flex: none; }
+    .ln-model .ln-mname { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 13.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .ln-model.plain .ln-mname { font: inherit; font-size: 15px; }
+    .ln-model .ln-mnote { display: block; color: var(--muted); font: 12px system-ui, sans-serif; }
+    .ln-badge {
+      flex: none; background: #14202f; color: var(--blue); border-radius: 5px;
+      padding: 1px 6px; font-size: 11px; font-weight: 600;
+    }
+    .ln-badge.dflt { background: #12261c; color: var(--green); }
     .ln-mode { display: flex; gap: 8px; margin: 4px 0 2px; }
     .ln-mode .hf-chip { flex: 1 1 0; justify-content: center; min-height: 44px; }
     .ln-mode .hf-chip[aria-pressed="true"] { background: #14202f; border-color: var(--blue); color: var(--blue); }
@@ -933,6 +968,21 @@
       </div>
       <div class="ln-label" id="ln-kind-label">Agent</div>
       <div class="ln-kinds" id="ln-kinds" role="group" aria-labelledby="ln-kind-label"></div>
+      <div id="ln-model-block" hidden>
+        <div class="ln-label" id="ln-model-label">Model <span class="ln-opt">(optional)</span></div>
+        <button type="button" class="ln-model-btn" id="ln-model-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="ln-picker" aria-labelledby="ln-model-label ln-model-val">
+          <span class="ln-model-val" id="ln-model-val"></span><span class="ln-model-think" id="ln-model-think"></span><span class="ln-chev" aria-hidden="true">&#8250;</span>
+        </button>
+        <div class="ln-picker" id="ln-picker" hidden>
+          <input id="ln-model-q" class="ln-input" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Search models" aria-label="Search models">
+          <div class="ln-mlist" id="ln-mlist" role="listbox" aria-label="Models"></div>
+        </div>
+        <div class="ln-note" id="ln-model-note"></div>
+        <div id="ln-thinking" hidden>
+          <div class="ln-label" id="ln-think-label">Thinking <span class="ln-opt">(optional)</span></div>
+          <div class="ln-kinds" id="ln-think-chips" role="group" aria-labelledby="ln-think-label"></div>
+        </div>
+      </div>
       <div id="ln-agent-extra">
         <label class="ln-label" for="ln-name">Name <span class="ln-opt">(optional)</span></label>
         <input id="ln-name" class="ln-input" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" aria-describedby="ln-name-hint">

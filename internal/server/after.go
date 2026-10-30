@@ -81,7 +81,7 @@ func (s *Server) queueHandoff(b handoffBody, from string, reply *ledger.Ref) (in
 	// AgentName carries the requested worker name until it starts.
 	e, err := s.ledger.Add(ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, AgentName: strings.TrimSpace(b.Name), Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply,
+		Kind: b.Kind, Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking), AgentName: strings.TrimSpace(b.Name), Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply,
 		PlanID: b.Plan, After: after, Status: ledger.Waiting,
 	})
 	if err != nil {
@@ -164,7 +164,7 @@ func (s *Server) startQueued(ctx context.Context, e ledger.Entry) (int, any) {
 	if cur, ok := s.ledger.Get(e.ID); !ok || cur.Status != ledger.Waiting {
 		return http.StatusConflict, apiErr("not_waiting", "it is not waiting any more")
 	}
-	b := handoffBody{Host: e.Host, Repo: e.Repo, Branch: e.Branch, Base: e.Base, Kind: e.Kind, Name: e.AgentName, Brief: e.Brief, Plan: e.PlanID}
+	b := handoffBody{Host: e.Host, Repo: e.Repo, Branch: e.Branch, Base: e.Base, Kind: e.Kind, Model: e.Model, Thinking: e.Thinking, Name: e.AgentName, Brief: e.Brief, Plan: e.PlanID}
 	status, payload := s.doHandoff(ctx, b, e.From, e.ReplyTo, &e, s.stepContext(e))
 	// A worker already on that branch answers with it and leaves this
 	// entry waiting: fail it rather than wait for ever.

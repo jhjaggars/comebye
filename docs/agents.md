@@ -83,8 +83,8 @@ the owning host:
 
 **The ledger.** There is one ledger, on the hub (or on a single instance):
 `ledger.json` in the state directory (mode 0600, rewritten atomically).
-Each handoff is an entry: host, repository, branch, base, agent, worktree,
-brief, who asked, and its status:
+Each handoff is an entry: host, repository, branch, base, agent, model (and
+pi's thinking level, when the handoff chose them), worktree, brief, who asked, and its status:
 
 - `running`: the worker is at it;
 - `finished`: it went idle or done after working; its last assistant
@@ -246,12 +246,13 @@ success, 1 when a call failed, 2 for a usage error.
 
 | Command | What it does |
 | --- | --- |
-| `comebye agents [--host H]` | Every agent on every host: id, name, kind, status, project, branch, role (coordinator, worker, home; "(you)" for the caller). |
+| `comebye agents [--host H]` | Every agent on every host: id, name, kind, model (ledger workers), status, project, branch, role (coordinator, worker, home; "(you)" for the caller). |
 | `comebye ledger [--active]` | The handoffs: status, host, repository, branch, worker, whether a final report was captured, marks, and hints (agent gone, uncommitted or unmerged, `candidate`). Then the other marked sessions. |
 | `comebye read AGENT [--lines N]` | The agent's last N messages (default 20) as text; the terminal's output for agents without a transcript. |
 | `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch); for any other agent, its last reply. |
 | `comebye inspect AGENT [--diff]` | The agent's git state, checked on its own host: worktree, branch and tip, an unfinished rebase or merge, uncommitted files, commits not in the base, commits on no remote, the diff stat; `--diff` adds the diffs (128 KB each at most). It reports `merged:` (are the commits in the base?) separately from `pushed:` (are they on a remote?): pushed work is not merged, and a squash-merged PR still counts as not merged. |
-| `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. |
+| `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. `--model` picks the worker's model (see `comebye models`); `--thinking` is pi's level. Neither: the agent's own default. |
+| `comebye models [--host H] [--kind K]` | The models each installed agent kind can start with on a host (default: this one), where the list came from and which is the default (`GET /api/models`). |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. TEXT is sent as is: a TEXT that is an existing file is refused (send a file with `comebye prompt AGENT - < file`). |
 | `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
 | `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
@@ -395,3 +396,34 @@ or test an interactive program, drive it from a script over a pty (Python's
   it works again. Squash-merged branches look unmerged, so their worktrees
   are kept (remove them yourself).
 - Designed for phone browsers; desktop browsers work but are not the focus.
+
+## Choosing a model
+
+The launch sheet (agent, worker and coordinator) shows a **Model** picker
+under the agent kind for the kinds that take one: pi, claude, codex, gemini
+and opencode. Tap it for a searchable list grouped by provider, with the
+host's default marked; **Default** (the first row) passes no flag, so the
+agent uses its own configured model. pi also gets a **Thinking** level
+(`--thinking`). A name that is not listed can be typed for the kinds whose
+list is a starting point (everything but pi, whose list is exact). The last
+choice per kind is remembered on the device.
+
+Where each host's list comes from (`GET /api/models?kind=K`, cached five
+minutes; `comebye models` prints it):
+
+| Kind | Flag | List | Default |
+| --- | --- | --- | --- |
+| pi | `--model provider/id`, `--thinking L` | `pi --list-models` (models.json and the built-ins, the models you are signed in for); `~/.pi/agent/models.json` when pi cannot be run | `~/.pi/agent/settings.json` |
+| claude | `--model` | curated: aliases (`fable`, `opus`, `sonnet`, `haiku`) and full ids; claude cannot list models | `model` in `~/.claude/settings.json` |
+| codex | `-m` | codex's own `~/.codex/models_cache.json`, when it has one | `model` in `~/.codex/config.toml` |
+| gemini | `-m` | curated | none known |
+| opencode | `-m provider/model` | `opencode models` | none known |
+
+The model is passed as arguments to `agent.start`, before the Coordinator
+or worker arguments (claude's `--allowedTools` would otherwise swallow it).
+The server refuses a kind that takes no model (`model_unsupported`), a name
+that is not model-shaped (`bad_model`), a model pi does not have on that
+host (`unknown_model`), and a thinking level for anything but pi
+(`thinking_unsupported`, `bad_thinking`), before it creates a workspace or
+worktree. A handoff that is refused is recorded as `failed` with the model it
+asked for.

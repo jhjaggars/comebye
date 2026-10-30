@@ -64,6 +64,147 @@ await check("switch: chat agent after a raw agent shows its own chat", async () 
   if (await visible("#output")) throw new Error("#output (raw view) still visible");
 });
 
+// ---- launch sheet: model picker (mocked launch options and model lists, so
+// the checks do not depend on which agents the host has installed) ----
+const CATALOGS = {
+  pi: { kind: "pi", source: "pi --list-models", exact: true, default: "homelab/thinking", default_thinking: "minimal",
+    thinking_levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    models: [
+      { id: "homelab/fast", provider: "homelab", name: "fast" },
+      { id: "homelab/thinking", provider: "homelab", name: "thinking", thinking: true },
+      { id: "openai-codex/gpt-5.5", provider: "openai-codex", name: "gpt-5.5", thinking: true },
+      { id: "openai-codex/gpt-5.6-luna", provider: "openai-codex", name: "gpt-5.6-luna", thinking: true },
+    ] },
+  claude: { kind: "claude", source: "curated", models: [
+    { id: "opus", provider: "Aliases", note: "newest Opus" }, { id: "sonnet", provider: "Aliases", note: "newest Sonnet" },
+    { id: "claude-opus-5-5", provider: "Full ids" } ] },
+  codex: { kind: "codex", source: "none", models: [] },
+};
+let launchPosts = [];
+const modelUrls = [];
+await page.route(/\/api\/launch\/options/, (r) => r.fulfill({ json: {
+  enabled: true, kinds: ["pi", "claude", "codex", "cursor"], default_kind: "pi", model_kinds: ["pi", "claude", "codex"],
+  roots: [{ name: "~/code", path: "/home/u/code", label: "~/code", git: false }],
+  recent: [{ name: "proj", path: "/home/u/code/proj", label: "~/code/proj", git: true }] } }));
+await page.route(/\/api\/launch\/dirs/, (r) => r.fulfill({ json: { path: "/home/u/code", label: "~/code", dirs: [] } }));
+await page.route(/\/api\/models/, (r) => {
+  modelUrls.push(r.request().url().replace(base, ""));
+  const kind = new URL(r.request().url()).searchParams.get("kind");
+  r.fulfill({ json: { host: "uitest", catalogs: CATALOGS[kind] ? [CATALOGS[kind]] : [] } });
+});
+await page.route(/\/api\/launch$/, (r) => {
+  if (r.request().method() !== "POST") return r.continue();
+  launchPosts.push(JSON.parse(r.request().postData() || "{}"));
+  r.fulfill({ json: { agent: { pane_id: "w1:p1", name: "alpha" }, workspace_id: "w9" } });
+});
+const modelVal = () => page.locator("#ln-model-val").innerText();
+async function openSheet() {
+  await page.goto(base, { waitUntil: "load" });
+  await page.waitForSelector("#btn-launch", { state: "visible" });
+  await page.locator("#btn-launch").click();
+  await page.waitForSelector("#launch", { state: "visible" });
+  await page.waitForSelector("#ln-model-block", { state: "visible" });
+  await page.locator('#ln-list .ln-dir.recent').first().click(); // choose the recent directory
+}
+const noHScroll = async () => {
+  const w = await page.evaluate(() => { const b = document.querySelector("#launch .ln-body"); return [b.scrollWidth, b.clientWidth, document.documentElement.scrollWidth, innerWidth]; });
+  if (w[0] > w[1] || w[2] > w[3]) throw new Error("horizontal overflow " + w.join("/"));
+};
+
+await page.evaluate(() => localStorage.clear()).catch(() => {});
+await check("model: default is shown and marked, no flag", async () => {
+  await openSheet();
+  await page.waitForFunction(() => document.querySelector("#ln-model-val")?.innerText === "Default (homelab/thinking)", null, { timeout: 5000 });
+  if (!(await page.locator("#ln-model-note").innerText()).includes("no flag")) throw new Error("no default note");
+  if (modelUrls[0] !== "/api/models?kind=pi") throw new Error("models url " + modelUrls[0]);
+  await noHScroll();
+});
+
+await check("model: picker lists models grouped by provider with the default marked", async () => {
+  await page.locator("#ln-model-btn").click();
+  await page.waitForSelector("#ln-picker", { state: "visible" });
+  const heads = await page.locator("#ln-mlist .ln-head").allInnerTexts();
+  if (heads.join().toLowerCase() !== "homelab,openai-codex") throw new Error("groups " + heads);
+  const dflt = await page.locator("#ln-mlist .ln-model", { has: page.locator(".ln-badge.dflt") }).innerText();
+  if (!dflt.includes("thinking") || !dflt.includes("default")) throw new Error("default row " + dflt);
+  if (!(await page.locator('#ln-mlist [data-model=""]').innerText()).includes("No flag is passed")) throw new Error("no default row");
+  // phone usability: every row is a comfortable tap target, nothing overflows
+  const hs = await page.locator("#ln-mlist .ln-model").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+  if (Math.min(...hs) < 44) throw new Error("row too small " + Math.min(...hs));
+  await noHScroll();
+});
+
+await check("model: search filters, picking sets the model", async () => {
+  await page.locator("#ln-model-q").fill("luna");
+  const rows = await page.locator("#ln-mlist .ln-model").allInnerTexts();
+  if (rows.length !== 1 || !rows[0].includes("gpt-5.6-luna")) throw new Error("rows " + JSON.stringify(rows));
+  await page.locator("#ln-model-q").fill("zzz");
+  if (!(await page.locator("#ln-mlist .ln-empty").innerText()).includes("No model matches")) throw new Error("no empty state");
+  await page.locator("#ln-model-q").fill("gpt");
+  await page.locator('#ln-mlist [data-model="openai-codex/gpt-5.5"]').click();
+  if ((await modelVal()) !== "openai-codex/gpt-5.5") throw new Error("value " + (await modelVal()));
+  if (await visible("#ln-picker")) throw new Error("picker stayed open");
+});
+
+await check("model: pi has a thinking selector", async () => {
+  const chips = await page.locator("#ln-think-chips button").allInnerTexts();
+  if (chips[0] !== "Default (minimal)" || !chips.includes("xhigh")) throw new Error("chips " + chips);
+  await page.locator('#ln-think-chips [data-think="high"]').click();
+  if ((await page.locator("#ln-model-think").innerText()) !== "high") throw new Error("level not shown beside the model");
+  if ((await page.locator('#ln-think-chips [aria-pressed="true"]').innerText()) !== "high") throw new Error("not selected");
+});
+
+await check("model: launch sends model and thinking", async () => {
+  launchPosts = [];
+  await page.locator("#ln-go").click();
+  await page.waitForFunction(() => document.querySelector("#launch")?.hidden, null, { timeout: 5000 });
+  const b = launchPosts[0];
+  if (!b || b.kind !== "pi" || b.model !== "openai-codex/gpt-5.5" || b.thinking !== "high" || b.dir !== "/home/u/code/proj") throw new Error("body " + JSON.stringify(b));
+});
+
+await check("model: the last choice per kind is remembered on the device", async () => {
+  await openSheet();
+  await page.waitForFunction(() => document.querySelector("#ln-model-val")?.innerText === "openai-codex/gpt-5.5", null, { timeout: 5000 });
+  if ((await page.locator('#ln-think-chips [aria-pressed="true"]').innerText()) !== "high") throw new Error("thinking not remembered");
+  // another kind starts from its own default, and keeps its own choice
+  await page.locator('#ln-kinds [data-kind="claude"]').click();
+  await page.waitForFunction(() => document.querySelector("#ln-model-val")?.innerText === "Default", null, { timeout: 5000 });
+  if (await visible("#ln-thinking")) throw new Error("thinking selector shown for claude");
+  await page.locator("#ln-model-btn").click();
+  await page.locator('#ln-mlist [data-model="sonnet"]').click();
+  await page.locator('#ln-kinds [data-kind="pi"]').click();
+  await page.waitForFunction(() => document.querySelector("#ln-model-val")?.innerText === "openai-codex/gpt-5.5", null, { timeout: 5000 });
+  await page.locator('#ln-kinds [data-kind="claude"]').click();
+  await page.waitForFunction(() => document.querySelector("#ln-model-val")?.innerText === "sonnet", null, { timeout: 5000 });
+});
+
+await check("model: a kind with no list accepts a typed name; exact lists do not", async () => {
+  await page.locator("#ln-model-btn").click();
+  await page.locator("#ln-model-q").fill("my-model-1");
+  await page.locator('#ln-mlist [data-model="my-model-1"]').click();
+  if ((await modelVal()) !== "my-model-1") throw new Error("typed name not used");
+  await page.locator('#ln-kinds [data-kind="pi"]').click();
+  await page.locator("#ln-model-btn").click();
+  await page.locator("#ln-model-q").fill("not-a-model");
+  if (await page.locator('#ln-mlist [data-model="not-a-model"]').count()) throw new Error("offered a typed name for pi's exact list");
+});
+
+await check("model: Escape closes the list before the sheet", async () => {
+  await page.keyboard.press("Escape");
+  if (await visible("#ln-picker")) throw new Error("list still open");
+  if (!(await visible("#launch"))) throw new Error("sheet closed too");
+});
+
+await check("model: a kind without model support hides the picker and sends none", async () => {
+  await page.locator('#ln-kinds [data-kind="cursor"]').click();
+  if (await visible("#ln-model-block")) throw new Error("picker shown for cursor");
+  launchPosts = [];
+  await page.locator("#ln-go").click();
+  await page.waitForFunction(() => document.querySelector("#launch")?.hidden, null, { timeout: 5000 });
+  const b = launchPosts[0];
+  if (!b || b.kind !== "cursor" || "model" in b || "thinking" in b) throw new Error("body " + JSON.stringify(b));
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;

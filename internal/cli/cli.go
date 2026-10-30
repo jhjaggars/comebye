@@ -56,7 +56,8 @@ func init() {
 		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
 		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or its final report", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
-		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--name N] --brief FILE|- [--plan ID] [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
+		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE|- [--plan ID] [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
+		{"models", "[--host H] [--kind K] [--json]", "the models an agent kind can be started with on a host (for `handoff --model`)", cmdModels},
 		{"plan", "create --title T --size N | show ID | list [--json]", "group handoffs into one change: the user is told once when all of them are done", cmdPlan},
 		{"release", "ID [--json]", "start a handoff that is waiting for earlier steps now (e.g. a step that went idle without reporting)", cmdRelease},
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
@@ -256,15 +257,19 @@ func dash(s string) string {
 // ---- agents ----
 
 type agentRow struct {
-	ID      string `json:"id"`
-	Host    string `json:"host"`
-	PaneID  string `json:"pane_id"`
-	Name    string `json:"name,omitempty"`
-	Kind    string `json:"kind,omitempty"`
-	Status  string `json:"status"`
-	Project string `json:"project,omitempty"`
-	Branch  string `json:"branch,omitempty"`
-	CWD     string `json:"cwd,omitempty"`
+	ID     string `json:"id"`
+	Host   string `json:"host"`
+	PaneID string `json:"pane_id"`
+	Name   string `json:"name,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	// Model and Thinking are known for ledger workers: what the handoff
+	// asked for (empty: the agent's default, or an agent not handed off).
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	Status   string `json:"status"`
+	Project  string `json:"project,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	CWD      string `json:"cwd,omitempty"`
 	// Role: coordinator, worker (a ledger handoff or a linked worktree),
 	// home (a repository's primary checkout) or "".
 	Role   string `json:"role,omitempty"`
@@ -345,6 +350,7 @@ func cmdAgents(e *Env, args []string) error {
 		}
 		if isEntry {
 			r.Ledger = en.Status
+			r.Model, r.Thinking = en.Model, en.Thinking
 			if r.Branch == "" {
 				r.Branch = en.Branch
 			}
@@ -380,7 +386,7 @@ func cmdAgents(e *Env, args []string) error {
 		return jsonOut(e, map[string]any{"agents": rows, "hosts": ar.Hosts})
 	}
 	tw := tabwriter.NewWriter(e.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "AGENT\tNAME\tKIND\tSTATUS\tPROJECT\tBRANCH\tROLE")
+	fmt.Fprintln(tw, "AGENT\tNAME\tKIND\tMODEL\tSTATUS\tPROJECT\tBRANCH\tROLE")
 	for _, r := range rows {
 		role := r.Role
 		if r.Ledger != "" && r.Ledger != "running" {
@@ -389,7 +395,7 @@ func cmdAgents(e *Env, args []string) error {
 		if r.Self {
 			role = strings.TrimSpace(role + " (you)")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, dash(r.Name), dash(r.Kind), r.Status, dash(r.Project), dash(r.Branch), dash(role))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, dash(r.Name), dash(r.Kind), dash(modelLabel(r.Model, r.Thinking)), r.Status, dash(r.Project), dash(r.Branch), dash(role))
 	}
 	tw.Flush()
 	for _, h := range ar.Hosts {
@@ -459,7 +465,7 @@ func cmdLedger(e *Env, args []string) error {
 	}
 	shown := 0
 	tw := tabwriter.NewWriter(e.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ENTRY\tSTATUS\tHOST\tREPO\tBRANCH\tWORKER\tREPORT\tNOTES")
+	fmt.Fprintln(tw, "ENTRY\tSTATUS\tHOST\tREPO\tBRANCH\tWORKER\tMODEL\tREPORT\tNOTES")
 	for _, en := range lg.Entries {
 		if *active && (en.Status == "removed" || en.Status == "failed") {
 			continue
@@ -519,7 +525,7 @@ func cmdLedger(e *Env, args []string) error {
 		} else if en.Status == "running" {
 			report = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", en.ID, en.Status, en.Host, dash(en.RepoName), en.Branch, dash(worker), report, strings.Join(notes, "; "))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", en.ID, en.Status, en.Host, dash(en.RepoName), en.Branch, dash(worker), dash(modelLabel(en.Model, en.Thinking)), report, strings.Join(notes, "; "))
 	}
 	tw.Flush()
 	if shown == 0 {
@@ -749,12 +755,14 @@ func parseTime(s string) time.Time {
 // ---- inspect ----
 
 type apiInspection struct {
-	AgentID string `json:"agent_id"`
-	Host    string `json:"host"`
-	Name    string `json:"name"`
-	Status  string `json:"status"`
-	EntryID string `json:"entry_id"`
-	Checks  struct {
+	AgentID  string `json:"agent_id"`
+	Host     string `json:"host"`
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	EntryID  string `json:"entry_id"`
+	Model    string `json:"model"`
+	Thinking string `json:"thinking"`
+	Checks   struct {
 		Path       string `json:"path"`
 		Exists     bool   `json:"exists"`
 		Primary    bool   `json:"primary"`
@@ -822,6 +830,9 @@ func cmdInspect(e *Env, args []string) error {
 		status = "gone"
 	}
 	fmt.Fprintf(w, "%s · %s · on %s\n", t.label(), status, in.Host)
+	if m := modelLabel(in.Model, in.Thinking); m != "" {
+		fmt.Fprintf(w, "model:    %s\n", m)
+	}
 	switch {
 	case !ch.Exists:
 		fmt.Fprintf(w, "checkout: %s does not exist (any more)\n", ch.Path)
@@ -913,6 +924,8 @@ func cmdHandoff(e *Env, args []string) error {
 	base := fs.String("base", "", "the base branch (default: the repository's default branch)")
 	kind := fs.String("kind", "", "the agent kind (default: the host's most used)")
 	name := fs.String("name", "", "the worker's name (default: from the branch)")
+	model := fs.String("model", "", "the worker's model (see `comebye models`; default: the agent's own)")
+	thinking := fs.String("thinking", "", "pi's thinking level: "+strings.Join(thinkingLevels, ", ")+" (default: pi's own)")
 	brief := fs.String("brief", "", "the brief: a markdown file, or - for stdin")
 	plan := fs.String("plan", "", "join this plan (from `comebye plan create`)")
 	var after stringList
@@ -946,7 +959,7 @@ func cmdHandoff(e *Env, args []string) error {
 	if len(after) > 0 {
 		body["after"] = []string(after)
 	}
-	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name, "plan": *plan} {
+	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name, "plan": *plan, "model": *model, "thinking": *thinking} {
 		if v != "" {
 			body[k] = v
 		}
@@ -980,6 +993,9 @@ func cmdHandoff(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Handed off %s on %s to %s (%s).\n", en.Branch, en.Host, dash(en.AgentName), en.AgentID)
 	}
 	fmt.Fprintf(e.Stdout, "  entry:    %s\n  worktree: %s\n  base:     %s\n", en.ID, dash(en.Worktree), dash(en.Base))
+	if m := modelLabel(en.Model, en.Thinking); m != "" {
+		fmt.Fprintf(e.Stdout, "  model:    %s\n", m)
+	}
 	if en.Error != "" {
 		fmt.Fprintf(e.Stdout, "  warning:  %s\n", en.Error)
 	}
@@ -1814,5 +1830,117 @@ func cmdWhoami(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "The ledger is on the hub at %s; this Comebye forwards to it.\n", w.Hub)
 	}
 	fmt.Fprintf(e.Stdout, "Comebye: %s (token %s)\n", c.base, c.tokenPath)
+	return nil
+}
+
+// ---- models ----
+
+// thinkingLevels are pi's --thinking values (the server checks them).
+var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// modelLabel is "model", "model (thinking high)" or "" for the defaults.
+func modelLabel(model, thinking string) string {
+	switch {
+	case model != "" && thinking != "":
+		return model + " (thinking " + thinking + ")"
+	case model != "":
+		return model
+	case thinking != "":
+		return "(thinking " + thinking + ")"
+	}
+	return ""
+}
+
+type apiCatalog struct {
+	Kind   string `json:"kind"`
+	Models []struct {
+		ID       string `json:"id"`
+		Thinking bool   `json:"thinking"`
+		Note     string `json:"note"`
+	} `json:"models"`
+	Default         string   `json:"default"`
+	DefaultThinking string   `json:"default_thinking"`
+	Levels          []string `json:"thinking_levels"`
+	Source          string   `json:"source"`
+	Exact           bool     `json:"exact"`
+	Error           string   `json:"error"`
+}
+
+func cmdModels(e *Env, args []string) error {
+	fs := flag.NewFlagSet("models", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	host := fs.String("host", "", "the host (default: this one)")
+	kind := fs.String("kind", "", "only this agent kind (default: every installed kind that takes a model)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	path := "/api/models"
+	if *host != "" {
+		path = "/api/hosts/" + url.PathEscape(*host) + "/models"
+	}
+	q := url.Values{}
+	if *kind != "" {
+		q.Set("kind", *kind)
+	}
+	data, err := c.raw("GET", path, q, nil)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Host     string       `json:"host"`
+		Catalogs []apiCatalog `json:"catalogs"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return fmt.Errorf("unexpected answer: %v", err)
+	}
+	if len(r.Catalogs) == 0 {
+		fmt.Fprintf(e.Stdout, "(no installed agent kind on %s takes a model)\n", dash(r.Host))
+		return nil
+	}
+	for i, ct := range r.Catalogs {
+		if i > 0 {
+			fmt.Fprintln(e.Stdout)
+		}
+		def := "the agent's own default"
+		if ct.Default != "" {
+			def = ct.Default
+		}
+		if ct.DefaultThinking != "" {
+			def += ", thinking " + ct.DefaultThinking
+		}
+		fmt.Fprintf(e.Stdout, "%s on %s (source: %s; default: %s)\n", ct.Kind, dash(r.Host), ct.Source, def)
+		if ct.Error != "" {
+			fmt.Fprintf(e.Stdout, "  warning: %s\n", ct.Error)
+		}
+		for _, m := range ct.Models {
+			line := "  " + m.ID
+			if m.ID == ct.Default {
+				line += "  (default)"
+			}
+			if m.Note != "" {
+				line += "  " + m.Note
+			}
+			fmt.Fprintln(e.Stdout, line)
+		}
+		if len(ct.Models) == 0 {
+			fmt.Fprintln(e.Stdout, "  (no list: any model name the agent accepts may be used)")
+		} else if !ct.Exact {
+			fmt.Fprintln(e.Stdout, "  (not exhaustive: other names the agent accepts may be used)")
+		}
+		if len(ct.Levels) > 0 {
+			fmt.Fprintf(e.Stdout, "  thinking levels: %s\n", strings.Join(ct.Levels, ", "))
+		}
+	}
 	return nil
 }

@@ -30,7 +30,8 @@ with the matches listed.
 | `comebye read AGENT [--lines N]` | an agent's recent messages |
 | `comebye read AGENT --report` | a worker's final report (any other agent: its last reply) |
 | `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
-| `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] --brief FILE` | start a worker (`--brief -` reads stdin) |
+| `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] --brief FILE` | start a worker (`--brief -` reads stdin) |
+| `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` |
@@ -61,7 +62,11 @@ user's.
 3. Pick a short branch name that says what the work is: `fix/login-timeout`,
    `feat/export-csv`, `docs/setup`. One branch per task.
 4. Pick the agent kind (`--kind`) only when the user asked for one or the
-   task clearly needs it; otherwise leave the host's default.
+   task clearly needs it; otherwise leave the host's default. The same goes
+   for the model (`--model`, from `comebye models --host H --kind K`; pi
+   also takes `--thinking off|minimal|low|medium|high|xhigh|max`): choose
+   one only when the user named it or the task needs more (or less) than
+   the default. `comebye ledger` shows what each worker was started with.
 5. Write a **strong brief** to a file and pass it with `--brief`. A worker
    starts with nothing but the brief, so it must stand alone:
    - **Goal**: what should be true when the work is done, in a sentence or
