@@ -84,3 +84,21 @@ func TestWaitForHerdr(t *testing.T) {
 		t.Fatal("did not return once herdr answered")
 	}
 }
+
+func TestDefaultSocketPath(t *testing.T) {
+	for _, tc := range []struct {
+		comebye, herdrEnv, want string
+	}{
+		{"", "", herdr.DefaultSocketPath},
+		{"", "/run/herdr.sock", "/run/herdr.sock"},
+		{"/srv/h.sock", "/run/herdr.sock", "/srv/h.sock"},
+		{"~/h.sock", "", "~/h.sock"},
+	} {
+		t.Setenv("COMEBYE_SOCK", tc.comebye)
+		t.Setenv("HERDRPHONE_SOCK", "")
+		t.Setenv("HERDR_SOCKET_PATH", tc.herdrEnv)
+		if got := defaultSocketPath(); got != tc.want {
+			t.Errorf("COMEBYE_SOCK=%q HERDR_SOCKET_PATH=%q: got %q, want %q", tc.comebye, tc.herdrEnv, got, tc.want)
+		}
+	}
+}

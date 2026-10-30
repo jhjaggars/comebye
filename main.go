@@ -40,7 +40,7 @@ func main() {
 	}
 	var (
 		addr         = flag.String("addr", "127.0.0.1:8741", "listen address (keep loopback; use Tailscale Serve for TLS)")
-		sock         = flag.String("sock", herdr.DefaultSocketPath, "herdr API socket path")
+		sock         = flag.String("sock", defaultSocketPath(), "herdr API socket path (default $COMEBYE_SOCK, else $HERDR_SOCKET_PATH, else herdr's default)")
 		tsAllow      = flag.String("ts-allow-login", getenv("COMEBYE_TS_ALLOW_LOGIN"), "comma-separated Tailscale logins admitted via Tailscale Serve identity headers (e.g. you@example.com)")
 		ntfyBase     = flag.String("ntfy-url", envOr("COMEBYE_NTFY_URL", "https://ntfy.sh"), "ntfy root URL; empty disables ntfy")
 		ntfyTopic    = flag.String("ntfy-topic", getenv("COMEBYE_NTFY_TOPIC"), "ntfy topic (optional fallback channel); empty disables ntfy")
@@ -378,6 +378,24 @@ func envBool(key string, def bool) bool {
 
 // defaultStateDir is $XDG_STATE_HOME/comebye, else
 // ~/.local/state/comebye.
+// defaultSocketPath is the -sock default: COMEBYE_SOCK, then herdr's own
+// HERDR_SOCKET_PATH (set inside herdr panes, so a comebye started there
+// finds that herdr), then herdr's default location.
+func defaultSocketPath() string {
+	if v := getenv("COMEBYE_SOCK"); v != "" {
+		return v
+	}
+	return envOrRaw("HERDR_SOCKET_PATH", herdr.DefaultSocketPath)
+}
+
+// envOrRaw is envOr for variables outside the COMEBYE_* namespace.
+func envOrRaw(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 func defaultStateDir() string {
 	if x := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(x) {
 		return filepath.Join(x, "comebye")

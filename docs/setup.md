@@ -5,7 +5,8 @@ Installing and running Comebye on a host, notifications, several hosts, and ever
 ## Requirements
 
 - [herdr](https://herdr.dev) running on the same machine, with its socket
-  API available (default `~/.config/herdr/herdr.sock`).
+  API available (default `~/.config/herdr/herdr.sock`; set `-sock` or
+  `COMEBYE_SOCK` for another location).
 - [Tailscale](https://tailscale.com) on that machine and on your phone, with
   [HTTPS certificates](https://tailscale.com/kb/1153/enabling-https) enabled
   for the tailnet (needed by Tailscale Serve).
@@ -277,7 +278,7 @@ to the home screen again.
 | Flag | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `-addr` | | `127.0.0.1:8741` | Listen address. Keep it on loopback and use Tailscale Serve for TLS. |
-| `-sock` | | `~/.config/herdr/herdr.sock` | herdr API socket path. |
+| `-sock` | `COMEBYE_SOCK`, then `HERDR_SOCKET_PATH` | `~/.config/herdr/herdr.sock` | herdr API socket path, for a herdr listening somewhere other than its default. `~` is expanded. herdr sets `HERDR_SOCKET_PATH` in its panes, so a comebye started in one finds that herdr. |
 | `-ts-allow-login` | `COMEBYE_TS_ALLOW_LOGIN` | (none) | Comma-separated Tailscale logins admitted via Tailscale Serve identity headers. Requires a loopback `-addr`. Required unless `-insecure-no-auth`. |
 | `-insecure-no-auth` | | `false` | Start without `-ts-allow-login`, serving an unauthenticated API to anyone who reaches the port (your whole tailnet through Serve). For local testing only. |
 | `-allow-host` | `COMEBYE_ALLOW_HOSTS` | (none) | Extra `Host` names the server answers to, besides `localhost`, loopback IPs and `*.ts.net`. Repeatable or comma-separated. Other hosts get 421 (DNS rebinding protection). |
