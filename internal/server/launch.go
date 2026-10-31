@@ -677,6 +677,12 @@ func (s *Server) waitForNamedAgent(ctx context.Context, name string) error {
 		case err != nil:
 			var he *herdr.Error
 			if !errors.As(err, &he) {
+				// A call cut short by the wait's own deadline is the
+				// timeout below, not a transport failure: the dial
+				// can see the deadline pass before waitCtx.Err() is set.
+				if errors.Is(err, context.DeadlineExceeded) {
+					return fmt.Errorf("agent %s did not become an active named agent within %s", name, s.agentReadyWait)
+				}
 				return fmt.Errorf("agent %s: %w", name, err) // transport or parse error, not "not ready yet"
 			}
 		}
