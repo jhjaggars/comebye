@@ -248,6 +248,54 @@ await check("switch: Escape closes the sheet and the chat is still open", async 
   if (!(await visible("#detail"))) throw new Error("detail closed too");
 });
 
+// The briefing card: collapsed by default, a new briefing keeps it collapsed,
+// and expanding is a persistent choice that survives new briefings.
+async function publishBrief(text) {
+  const r = await fetch(base + "/api/brief", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ markdown: text }) });
+  if (!r.ok) throw new Error("publish brief: " + r.status);
+  await new Promise((r) => setTimeout(r, 1100)); // briefings have a timestamp to the second
+}
+const briefState = () => page.evaluate(() => ({
+  hidden: document.querySelector("#briefing").hidden,
+  expanded: document.querySelector("#briefing .bf-toggle")?.getAttribute("aria-expanded"),
+  body: !!document.querySelector("#briefing .bf-body") && !document.querySelector("#briefing .bf-body").hidden,
+  preview: document.querySelector("#briefing .bf-preview")?.textContent || "",
+  text: document.querySelector("#briefing")?.innerText || "",
+}));
+async function reloadBrief() {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#briefing .bf-toggle", { state: "visible", timeout: 8000 });
+}
+await check("brief: collapsed by default, with a preview, and stays collapsed on a new briefing", async () => {
+  await publishBrief("## Status\n\n**All quiet** on the western front\n\nlong detail one");
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.evaluate(() => { try { localStorage.clear(); } catch {} });
+  await reloadBrief();
+  let st = await briefState();
+  if (st.expanded !== "false" || st.body) throw new Error("not collapsed by default: " + JSON.stringify(st));
+  if (st.preview !== "Status") throw new Error("preview is " + JSON.stringify(st.preview));
+  await publishBrief("**Second update** is in\n\nlong detail two");
+  await reloadBrief();
+  st = await briefState();
+  if (st.expanded !== "false" || st.body) throw new Error("new briefing expanded the card: " + JSON.stringify(st));
+  if (st.preview !== "Second update is in") throw new Error("preview is " + JSON.stringify(st.preview));
+  if (st.text.includes("long detail two")) throw new Error("body text shown while collapsed");
+});
+await check("brief: expanding persists across a reload and a new briefing; collapsing sticks too", async () => {
+  await page.locator("#briefing .bf-toggle").click();
+  let st = await briefState();
+  if (st.expanded !== "true" || !st.body || st.preview) throw new Error("tap did not expand: " + JSON.stringify(st));
+  await publishBrief("Third update\n\nlong detail three");
+  await reloadBrief();
+  st = await briefState();
+  if (st.expanded !== "true" || !st.body || !st.text.includes("long detail three")) throw new Error("new briefing collapsed an expanded card: " + JSON.stringify(st));
+  await page.locator("#briefing .bf-toggle").click();
+  await publishBrief("Fourth update\n\nlong detail four");
+  await reloadBrief();
+  st = await briefState();
+  if (st.expanded !== "false" || st.body) throw new Error("collapse did not stick: " + JSON.stringify(st));
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;
