@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -84,7 +85,11 @@ func (s *Server) switchModel(ctx context.Context, target string, b switchBody) (
 		return fail(http.StatusConflict, "agent_busy", "the agent is "+string(agent.Status)+": switch its model when it is idle")
 	}
 	if err := s.guardPrompt(ctx, *agent); err != nil {
-		return fail(http.StatusConflict, "dialog_open", err.Error())
+		var he *herdr.Error
+		if errors.As(err, &he) && he.Code == "dialog_open" {
+			return fail(http.StatusConflict, "dialog_open", err.Error())
+		}
+		return fail(http.StatusBadGateway, "herdr_error", err.Error())
 	}
 	for i, c := range cmds {
 		if i > 0 {

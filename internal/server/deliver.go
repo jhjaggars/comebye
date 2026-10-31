@@ -82,6 +82,13 @@ func (s *Server) deliverPrompt(ctx context.Context, name, text string) error {
 			case <-time.After(s.briefBackoff):
 			}
 		}
+		// Never type over a dialog (a trust-this-folder or permission
+		// prompt on a fresh agent): look at the pane right before sending.
+		if info, gerr := s.client.GetAgent(ctx, name); gerr == nil {
+			if derr := s.guardPrompt(ctx, info); derr != nil {
+				return derr
+			}
+		}
 		a, err := s.client.Prompt(ctx, name, text, herdr.PromptOptions{
 			// The wait makes the answer say whether the agent took the
 			// prompt: herdr's activity gate returns agent_prompt_stalled
