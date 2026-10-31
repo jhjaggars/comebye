@@ -39,6 +39,7 @@ with the matches listed.
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
 | `comebye mark AGENT --reason R [--discard] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer) |
 | `comebye unmark AGENT` | withdraw that proposal |
+| `comebye sweep [--dry-run] [--notify]` | find finished workers on every host, check each on its own host and mark the ones with nothing to lose; lists the rest with why |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
 | `comebye brief schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss]` | show or set when the hub asks a coordinator for a briefing |
 
@@ -189,6 +190,17 @@ it was told to keep). Its answer shows in the user's review and in
 prints it. If it says UNSAFE, tell the user and `comebye unmark` it unless
 they decide otherwise. No answer is not a yes. A working or blocked
 session is not asked: wait for it to finish before marking it.
+
+**Sweeping.** To prune in one go instead of marking one by one, run
+`comebye sweep --dry-run`, then `comebye sweep`. It looks at workers that
+finished (or sat idle past 30 minutes), never at coordinators, home agents or
+what is already marked; checks each on its own host after a fetch; and marks
+the ones whose worktree is clean, whose commits are all in the base and
+that have nothing unpushed (reason "Sweep: …"; each is asked whether it is
+safe, as with `mark`). The ones it lists as **needs a look** (uncommitted
+changes, pushed but not merged, still working) are not marked: judge them
+with `comebye inspect`, and mark them yourself if the PR is merged or the
+work is not wanted. Sweeping removes nothing; the user confirms in the app.
 
 A reason is required: say why in a few words ("merged into main, report
 complete"). Never mark yourself or another coordinator, and never mark a

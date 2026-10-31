@@ -100,8 +100,8 @@ that its worktree is clean and merged, but comebye never marks or removes
 anything on its own.
 
 **Pruning.** Any session can be marked ready to remove from the ⋮ menu of
-its chat (with an optional reason), not only workers; unmark it the same
-way. A "Ready to remove (N)" banner on the list opens the review: each
+its chat or its row's menu in the list (with an optional reason), not only
+workers; unmark it the same way. A "Ready to remove (N)" banner on the list opens the review: each
 marked session with checks run on its host right then: uncommitted changes
 (`git status --porcelain`, untracked files included), commits on its
 branch that its base lacks (`git cherry` against the base and origin's copy
@@ -135,6 +135,32 @@ Removing:
   checkout, and no other agent or workspace uses it (`git worktree remove`
   without `--force`); otherwise the worktree stays and the review says why;
 - never deletes the branch.
+
+**Sweeping for finished agents.** Instead of marking each finished worker
+by hand, sweep (`comebye sweep`, or "Sweep for finished agents" in the
+removals banner of the app). The hub looks at every ledger worker, on every
+host, that is `finished`, or still `running` but whose agent has been idle
+for 30 minutes (`--idle-after`; `0` turns it off), and that is not already
+marked. It never takes a coordinator, the caller itself, or a worker without
+a worktree of its own. Each candidate is checked on its own host (origin is
+fetched first, so a branch merged upstream since the last fetch counts as
+merged) and classified:
+
+- **ready**: worktree clean, no unfinished rebase or merge, every commit of
+  its branch is in the base (or it has none), nothing on no remote. It is
+  marked with a generated reason ("Sweep: finished; worktree clean; …"),
+  through the normal mark, so the session is asked whether it is safe;
+- **needs a look**: not marked, with why: the agent is working or blocked,
+  uncommitted changes, an unfinished rebase or merge, commits on no remote,
+  commits **pushed but not merged** (an open PR is active work), the
+  worktree is gone, or the checks failed;
+- **skipped**: already marked, a coordinator, the primary checkout, no
+  worktree.
+
+`--dry-run` shows the same without marking. A sweep removes nothing: the
+marked sessions appear in the removals review, where you confirm each as
+usual. `--notify` (not with `--dry-run`) also prompts an idle coordinator
+with the summary, so it can judge the "needs a look" ones.
 
 **Discarding.** When a marked session's worktree has work a removal would
 keep (uncommitted changes, unmerged commits, an unfinished rebase or
@@ -256,6 +282,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye models [--host H] [--kind K]` | The models each installed agent kind can start with on a host (default: this one), where the list came from and which is the default (`GET /api/models`). |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. TEXT is sent as is: a TEXT that is an existing file is refused (send a file with `comebye prompt AGENT - < file`). |
 | `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
+| `comebye sweep [--dry-run] [--idle-after D] [--notify] [--json]` | Sweep for finished workers (see [Sweeping](#sweeping-for-finished-agents)): mark the ones with nothing to lose as ready to remove, list the others with why. `--dry-run` marks nothing; `--notify` also tells an idle coordinator. |
 | `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
 | `comebye brief schedule [--every D] [--at HH:MM\|none] [--tz ZONE] [--off] [--dismiss]` | Show the briefing schedule (next run, missed runs), set it (flags left out keep their values), turn it off, or dismiss the missed-runs note. |
 | `comebye playbook [--harness pi\|claude\|generic]` | The coordinator playbook (`pi`: a Pi agent definition with frontmatter; `claude`: for a CLAUDE.md or first prompt). |

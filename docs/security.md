@@ -38,7 +38,9 @@ Treat access to it like SSH access to that machine.
 - **Agents get a restricted role, not a boundary.** The `comebye` CLI
   authenticates with the local agent token (`<state-dir>/agent-token`,
   0600, compared in constant time; a wrong token is refused, never treated
-  as the user). That role may read, hand off, prompt, mark, publish the
+  as the user). That role may read, hand off, prompt, mark, sweep (which only marks, with
+  its own generated reason, workers whose checks show nothing to lose; never a
+  coordinator or the caller itself), publish the
   briefing and set its schedule, and nothing else (no keys, answers, launches, removals or
   their confirmation). It keeps a well-behaved coordinator inside the
   workflow; an agent with a shell could still read the token, forge the

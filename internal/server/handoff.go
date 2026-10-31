@@ -714,6 +714,19 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	m, entry, err := s.applyMark(m, agent, !b.NoAsk)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "ledger_error", "message": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"mark": m, "entry": entry})
+}
+
+// applyMark records a mark on an agent (its ledger entry when a worker)
+// and, when ask, starts asking the session whether it is safe to remove.
+// agent is the live agent, nil when it is gone. It fills the mark's
+// location from the agent.
+func (s *Server) applyMark(m ledger.Mark, agent *herdr.AgentInfo, ask bool) (ledger.Mark, *ledger.Entry, error) {
 	if agent != nil {
 		m.Host, m.PaneID, m.Name, m.WorkspaceID, m.CWD = agent.Host, agent.PaneID, agent.Name, agent.WorkspaceID, agent.CWD
 		if agent.Worktree != nil && agent.Worktree.IsLinked {
@@ -721,15 +734,13 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	m.At = time.Now().UTC()
-	ask := !b.NoAsk
 	if ask {
 		// Recorded as asking first, so the asking goroutine finds its mark.
 		m.Ask = &ledger.Ask{State: ledger.AskAsking, At: m.At}
 	}
 	entry, err := s.ledger.SetMark(m)
 	if err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "ledger_error", "message": err.Error()})
-		return
+		return m, nil, err
 	}
 	if ask {
 		m.Ask = s.startAsk(m, agent)
@@ -740,7 +751,7 @@ func (s *Server) handleMark(w http.ResponseWriter, r *http.Request) {
 			entry.Mark = &m
 		}
 	}
-	writeJSON(w, map[string]any{"mark": m, "entry": entry})
+	return m, entry, nil
 }
 
 // handleUnmark clears a mark: POST {agent_id}.

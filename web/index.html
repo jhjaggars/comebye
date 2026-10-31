@@ -769,6 +769,31 @@
     .rtr-banner .ln-chev { margin-left: auto; color: var(--orange); }
     .rtr-banner:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
+
+    /* Marking: row menu, the detail bar, the sweep entry. */
+    .agent .row-more {
+      flex: none; align-self: center; margin: -6px -8px -6px 0; min-width: 44px; min-height: 44px;
+      font: inherit; font-size: 20px; line-height: 1; color: var(--muted); background: none; border: 0;
+      border-radius: 10px; cursor: pointer;
+    }
+    .agent .row-more:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    .agent.marked { box-shadow: inset 3px 0 0 var(--orange); }
+    #row-menu { position: fixed; bottom: auto; right: auto; z-index: 36; min-width: 220px; max-width: 80vw; }
+    #row-menu[hidden] { display: none; }
+    .markbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
+    .markbar[hidden] { display: none; }
+    .markbar .mb-why { flex: 1 1 140px; min-width: 0; color: var(--orange); overflow-wrap: anywhere; }
+    .markbar .btn { min-height: 40px; padding: 0 14px; font-size: 13.5px; }
+    .sweep-open {
+      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-bottom: 10px;
+      padding: 0 14px; border-radius: 12px; border: 1px dashed var(--border); background: none;
+      color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; text-align: left;
+    }
+    .sweep-open[hidden] { display: none; }
+    .sweep-open:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .sw-h { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px; }
+    .sw-h:first-child { margin-top: 0; }
+
     /* Detail header menu (mark ready to remove). */
     #detail header .more {
       flex: none; min-width: 44px; min-height: 44px; margin: -8px -8px -8px 0; padding: 0;
@@ -781,18 +806,18 @@
     .d-menu .mark-state[hidden] { display: none; }
 
     /* Ready-to-remove review. */
-    #review, #switch { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
-    #review[hidden], #switch[hidden] { display: none; }
-    #review header .back, #switch header .back {
+    #review, #switch, #mk, #sweep { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden], #switch[hidden], #mk[hidden], #sweep[hidden] { display: none; }
+    #review header .back, #switch header .back, #mk header .back, #sweep header .back {
       font: inherit; font-size: 20px; line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: 10px; padding: 0;
       min-width: 44px; min-height: 44px; margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #review header h2, #switch header h2 { font-size: 17px; margin: 0; font-weight: 650; }
+    #review header h2, #switch header h2, #mk header h2, #sweep header h2 { font-size: 17px; margin: 0; font-weight: 650; }
     #switch .ln-picker { margin-top: 0; }
     #switch .ln-mlist { max-height: 46vh; }
-    #review.busy .ln-status::before, #switch.busy .ln-status::before {
+    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #sweep.busy .ln-status::before {
       content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px;
       border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -925,7 +950,7 @@
         <button type="button" class="btn danger" id="notify-disable" hidden>Turn off</button>
       </div>
     </section>
-    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
+    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><button type="button" id="sweep-open" class="sweep-open" hidden aria-haspopup="dialog" aria-controls="sweep">Sweep for finished agents<span class="ln-chev" aria-hidden="true" style="margin-left:auto">›</span></button><div id="agents"></div></main>
   </div>
 
   <!-- New agent ("+" in the list header) -->
@@ -1027,6 +1052,40 @@
     </footer>
   </section>
 
+  <!-- A list row's menu -->
+  <div id="row-menu" class="attach-menu" role="menu" hidden><button type="button" role="menuitem" id="row-mark"></button></div>
+
+  <!-- Mark one session ready to remove (optional reason) -->
+  <section id="mk" hidden role="dialog" aria-modal="true" aria-labelledby="mk-title">
+    <header>
+      <button type="button" class="back" id="mk-close" aria-label="Close">&#10005;</button>
+      <h2 id="mk-title">Ready to remove</h2>
+    </header>
+    <div class="ln-body">
+      <div class="rv-name" id="mk-name"></div>
+      <div class="ln-note" id="mk-note">Nothing is removed now. The session is asked whether it is safe to remove, and you review and confirm under &ldquo;Ready to remove&rdquo;.</div>
+      <label class="ln-label" for="mk-reason">Why? <span class="ln-opt">(optional)</span></label>
+      <textarea id="mk-reason" class="ln-input" maxlength="500" rows="3" placeholder="e.g. merged, work is done"></textarea>
+    </div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="mk-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="mk-go">Mark ready to remove</button>
+    </footer>
+  </section>
+
+  <!-- Sweep for finished agents -->
+  <section id="sweep" hidden role="dialog" aria-modal="true" aria-labelledby="sweep-title">
+    <header>
+      <button type="button" class="back" id="sweep-close" aria-label="Close">&#10005;</button>
+      <h2 id="sweep-title">Sweep for finished agents</h2>
+    </header>
+    <div class="ln-body" id="sweep-list" aria-live="polite"></div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="sweep-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="sweep-go" disabled>Mark ready to remove</button>
+    </footer>
+  </section>
+
   <!-- Sessions marked ready to remove: review and confirm -->
   <section id="review" hidden role="dialog" aria-modal="true" aria-labelledby="rv-title">
     <header>
@@ -1060,6 +1119,7 @@
       <button type="button" role="menuitem" id="d-sched" hidden>Briefing schedule…</button>
     </div>
     <main>
+      <div id="d-markbar" class="markbar" hidden></div>
       <div id="chat"></div>
       <button class="btn" id="btn-terminal" style="display:none; margin-bottom:10px;">Show raw terminal</button>
       <pre id="output" style="display:none"></pre>

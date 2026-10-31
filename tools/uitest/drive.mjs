@@ -248,6 +248,102 @@ await check("switch: Escape closes the sheet and the chat is still open", async 
   if (!(await visible("#detail"))) throw new Error("detail closed too");
 });
 
+// ---- marking a session ready to remove, and the sweep ----
+const noOverflow = async () => {
+  const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+  if (w[0] > w[1]) throw new Error("horizontal overflow");
+};
+let nativeDialogs = 0;
+page.on("dialog", (d) => { nativeDialogs++; d.dismiss().catch(() => {}); });
+const rowOf = (pane) => page.locator(`#agents .agent[data-id$="${pane}"]`);
+async function toList() {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent", { state: "visible" });
+  await page.waitForFunction(() => !document.querySelector("#sweep-open").hidden, null, { timeout: 8000 });
+}
+
+await check("mark: the list row has a visible menu button of tap size", async () => {
+  await toList();
+  const b = rowOf(PANES.alpha).locator(".row-more");
+  if (!(await b.isVisible())) throw new Error("no menu button on the row");
+  const box = await b.boundingBox();
+  if (box.width < 44 || box.height < 44) throw new Error("tap target " + box.width + "x" + box.height);
+  await noOverflow();
+});
+
+await check("mark: row menu opens an in-app sheet (no window.prompt) and marks with the reason", async () => {
+  await rowOf(PANES.alpha).locator(".row-more").click();
+  await page.waitForSelector("#row-menu", { state: "visible" });
+  if ((await page.locator("#row-mark").innerText()).trim() !== "Mark ready to remove…") throw new Error("menu item " + (await page.locator("#row-mark").innerText()));
+  await page.locator("#row-mark").click();
+  await page.waitForSelector("#mk", { state: "visible" });
+  await noOverflow();
+  await page.locator("#mk-reason").fill("merged and deployed");
+  await page.locator("#mk-go").click();
+  await page.waitForFunction(() => document.querySelector("#mk")?.hidden, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector("#rtr-banner") && !document.querySelector("#rtr-banner").hidden, null, { timeout: 8000 });
+  await page.waitForFunction((p) => document.querySelector(`#agents .agent[data-id$="${p}"]`)?.classList.contains("marked"), PANES.alpha, { timeout: 8000 });
+  const lbl = await rowOf(PANES.alpha).locator(".row-more").getAttribute("aria-label");
+  if (!/^Unmark/.test(lbl)) throw new Error("aria-label " + lbl);
+  if (nativeDialogs) throw new Error("a native dialog opened");
+});
+
+await check("mark: the detail shows a marked badge with the reason and an Unmark button", async () => {
+  await openAgent("alpha");
+  await page.waitForSelector("#d-markbar .lg-chip.rtr", { state: "visible", timeout: 8000 });
+  const t = await page.locator("#d-markbar").innerText();
+  if (!t.includes("merged and deployed")) throw new Error("bar text " + t);
+  await noOverflow();
+  await page.locator('#d-markbar [data-mb="unmark"]').click();
+  await page.waitForSelector('#d-markbar [data-mb="mark"]', { state: "visible", timeout: 8000 });
+  if (await page.locator("#d-markbar .lg-chip.rtr").count()) throw new Error("badge still shown");
+});
+
+await check("mark: the detail's visible button marks and the row menu unmarks", async () => {
+  await page.locator('#d-markbar [data-mb="mark"]').click();
+  await page.waitForSelector("#mk", { state: "visible" });
+  await page.locator("#mk-go").click(); // no reason: optional
+  await page.waitForSelector("#d-markbar .lg-chip.rtr", { state: "visible", timeout: 8000 });
+  await page.locator("#back").click();
+  await page.waitForSelector("#list", { state: "visible" });
+  await rowOf(PANES.alpha).locator(".row-more").click();
+  if ((await page.locator("#row-mark").innerText()).trim() !== "Unmark (keep this session)") throw new Error("menu item " + (await page.locator("#row-mark").innerText()));
+  await page.locator("#row-mark").click();
+  await page.waitForFunction((p) => !document.querySelector(`#agents .agent[data-id$="${p}"]`)?.classList.contains("marked"), PANES.alpha, { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelector("#rtr-banner")?.hidden, null, { timeout: 8000 });
+});
+
+const sweepPosts = [];
+await page.route(/\/api\/sweep/, (r) => {
+  const body = JSON.parse(r.request().postData() || "{}");
+  sweepPosts.push(body);
+  const ready = { id: "uitest/w9:p1", host: "uitest", name: "fix-login", branch: "fix/login", class: "ready", reason: "Sweep: finished; worktree clean; every commit of fix/login is in origin/main; nothing unpushed" };
+  const look = { id: "uitest/w8:p1", host: "uitest", name: "feat-search", branch: "feat/search", class: "needs_look", reason: "pushed but not merged: 2 commits not in origin/main (an open PR?)" };
+  r.fulfill({ json: { dry_run: !!body.dry_run, ready: [{ ...ready, marked: !body.dry_run }], needs_look: [look], skipped: [{ id: "x" }] } });
+});
+
+await check("sweep: the button opens a dry run listing ready and needs-a-look", async () => {
+  await toList();
+  await page.locator("#sweep-open").click();
+  await page.waitForSelector("#sweep", { state: "visible" });
+  await page.waitForFunction(() => document.querySelector("#sweep-list")?.innerText.includes("fix-login"), null, { timeout: 5000 });
+  const t = await page.locator("#sweep-list").innerText();
+  if (!t.includes("feat-search") || !t.includes("open PR")) throw new Error("list " + t);
+  if (!sweepPosts.length || sweepPosts[0].dry_run !== true) throw new Error("first call was not a dry run: " + JSON.stringify(sweepPosts));
+  if ((await page.locator("#sweep-go").innerText()).trim() !== "Mark 1 ready to remove") throw new Error("button " + (await page.locator("#sweep-go").innerText()));
+  await noOverflow();
+});
+
+await check("sweep: confirming marks, then offers the removals review", async () => {
+  await page.locator("#sweep-go").click();
+  await page.waitForFunction(() => document.querySelector("#sweep-go")?.innerText.trim() === "Review removals", null, { timeout: 5000 });
+  if (sweepPosts.length !== 2 || sweepPosts[1].dry_run !== false) throw new Error("second call " + JSON.stringify(sweepPosts));
+  if (!(await page.locator("#sweep-list").innerText()).toLowerCase().includes("marked ready to remove")) throw new Error("no marked heading");
+  await page.locator("#sweep-go").click();
+  await page.waitForSelector("#review", { state: "visible", timeout: 5000 });
+  await page.locator("#rv-close").click();
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;
