@@ -358,6 +358,16 @@ func TestPromptMarkBrief(t *testing.T) {
 		t.Fatalf("a refused prompt reached the hub: %v", f.reqs[n:])
 	}
 
+	f.answers["POST /api/sweep"] = answer{body: `{"dry_run":true,"ready":[{"id":"laharl/w3:p1","name":"fix","branch":"fix/a","reason":"Sweep: clean"}],"needs_look":[{"id":"laharl/w4:p1","name":"feat","branch":"feat/b","reason":"pushed but not merged"}],"skipped":[]}`}
+	out.Reset()
+	if code := run(e, "sweep", "--dry-run"); code != 0 || !strings.Contains(out.String(), "Would mark ready to remove (dry run) (1)") || !strings.Contains(out.String(), "pushed but not merged") || strings.Contains(out.String(), "confirms removal") {
+		t.Fatalf("sweep --dry-run: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/sweep").body; b != `{"dry_run":true,"idle_after":"","notify":false}` {
+		t.Fatalf("sweep body %s", b)
+	}
+	out.Reset()
+
 	f.answers["POST /api/marks"] = answer{body: `{"mark":{}}`}
 	if code := run(e, "mark", "w2:p1", "--reason", "merged"); code != 0 {
 		t.Fatalf("mark: %d %s", code, errb)

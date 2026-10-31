@@ -66,6 +66,7 @@ func init() {
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
+		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"brief", "set FILE|- | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
@@ -1167,6 +1168,73 @@ func cmdQueue(e *Env, args []string) error {
 }
 
 // ---- mark / unmark ----
+
+type apiSweepItem struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Branch string `json:"branch"`
+	Reason string `json:"reason"`
+	Marked bool   `json:"marked"`
+}
+
+func cmdSweep(e *Env, args []string) error {
+	fs := flag.NewFlagSet("sweep", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	dry := fs.Bool("dry-run", false, "list what would be marked, mark nothing")
+	idle := fs.String("idle-after", "", "also count a worker still recorded as running whose agent has been idle this long (default 30m; 0 turns it off)")
+	notify := fs.Bool("notify", false, "tell an idle coordinator the outcome (not with --dry-run)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/sweep", nil, map[string]any{"dry_run": *dry, "idle_after": *idle, "notify": *notify})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		DryRun      bool           `json:"dry_run"`
+		Ready       []apiSweepItem `json:"ready"`
+		NeedsLook   []apiSweepItem `json:"needs_look"`
+		Skipped     []apiSweepItem `json:"skipped"`
+		Notified    string         `json:"notified"`
+		NotifyError string         `json:"notify_error"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	verb := "Marked ready to remove"
+	if r.DryRun {
+		verb = "Would mark ready to remove (dry run)"
+	}
+	section := func(title string, items []apiSweepItem) {
+		fmt.Fprintf(e.Stdout, "%s (%d)\n", title, len(items))
+		for _, it := range items {
+			fmt.Fprintf(e.Stdout, "  %s  %s  %s\n    %s\n", it.ID, it.Name, it.Branch, it.Reason)
+		}
+	}
+	section(verb, r.Ready)
+	section("Needs a look (not marked)", r.NeedsLook)
+	fmt.Fprintf(e.Stdout, "Skipped: %d\n", len(r.Skipped))
+	if r.Notified != "" {
+		fmt.Fprintf(e.Stdout, "Told %s.\n", r.Notified)
+	} else if r.NotifyError != "" {
+		fmt.Fprintf(e.Stdout, "Could not tell a coordinator: %s\n", r.NotifyError)
+	}
+	if !r.DryRun && len(r.Ready) > 0 {
+		fmt.Fprintln(e.Stdout, "The user confirms removal in the app's removals review.")
+	}
+	return nil
+}
 
 func cmdMark(e *Env, args []string) error {
 	fs := flag.NewFlagSet("mark", flag.ContinueOnError)

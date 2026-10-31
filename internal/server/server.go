@@ -271,6 +271,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/queue/{id}", s.authAgent(s.handleQueueCancel))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
+	s.mux.HandleFunc("POST /api/sweep", s.authAgent(s.handleSweep))
 	s.mux.HandleFunc("GET /api/removals", s.auth(s.handleRemovals))
 	// Removal confirmation is the user's alone, always.
 	s.mux.HandleFunc("POST /api/removals/confirm", s.auth(s.handleConfirmRemovals))

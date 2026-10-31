@@ -482,16 +482,24 @@ function renderList() {
   wrap.querySelectorAll(".proj-head").forEach((el) =>
     el.addEventListener("click", () => toggleProject(el.dataset.proj)));
   wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
-    el.addEventListener("click", () => openDetail(el.dataset.id));
+    el.addEventListener("click", (e) => {
+      const more = e.target.closest(".row-more");
+      if (more) { e.stopPropagation(); openRowMenu(more); return; }
+      openDetail(el.dataset.id);
+    });
     el.addEventListener("keydown", (e) => {
+      if (e.target.closest(".row-more")) return;
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(el.dataset.id); }
     });
   });
 }
 
 function agentRow(a, worker) {
+  const id = agentId(a);
+  const marked = ledger.on === true && ledger.marked.has(id);
+  const nm = a.name || a.pane_id || id;
   return `
-    <div class="agent ${esc(a.agent_status)}${worker ? " worker" : ""}" role="button" tabindex="0" data-id="${esc(agentId(a))}">
+    <div class="agent ${esc(a.agent_status)}${worker ? " worker" : ""}${marked ? " marked" : ""}" role="button" tabindex="0" data-id="${esc(id)}">
       <span class="dot ${esc(a.agent_status)}"></span>
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
@@ -502,7 +510,8 @@ function agentRow(a, worker) {
         activeMs(a) && (a.agent_status === "idle" || a.agent_status === "done")
           ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>`
           : a.agent_status === "working" && sinceMs(a)
-            ? `<br><span class="ago">for ${fmtAgo(sinceMs(a))}</span>` : ""}</span>
+            ? `<br><span class="ago">for ${fmtAgo(sinceMs(a))}</span>` : ""}</span>${
+      ledger.on === true ? `<button type="button" class="row-more" data-menu="${esc(id)}" aria-haspopup="menu" aria-label="${esc((marked ? "Unmark " : "Mark ready to remove: ") + nm)}">&#8942;</button>` : ""}
     </div>`;
 }
 
@@ -668,6 +677,7 @@ function renderRemovalBanner() {
   const n = ledger.on ? ledger.marked.size : 0;
   b.hidden = !n;
   if (n) b.innerHTML = `Ready to remove (${n})<span class="ln-chev" aria-hidden="true">›</span>`;
+  $("sweep-open").hidden = ledger.on !== true;
 }
 
 /* ---------- the briefing (published by a coordinator) ---------- */
@@ -881,9 +891,10 @@ function renderDetailMenu() {
   $("d-model").hidden = !can;
   for (const id of ["d-mark", "d-role"]) $(id).hidden = !led;
   if (!(led || can)) { toggleDetailMenu(false); return; }
-  if (!led) { $("d-mark-state").hidden = true; $("d-sched").hidden = true; return; }
+  if (!led) { $("d-mark-state").hidden = true; $("d-sched").hidden = true; renderMarkBar(null); return; }
   const m = ledger.marked.get(state.selected);
   $("d-mark").textContent = m ? "Unmark (keep this session)" : "Mark ready to remove…";
+  renderMarkBar(m);
   const st = $("d-mark-state");
   st.hidden = !m;
   if (m) st.textContent = "Marked ready to remove" + (m.reason ? ": " + m.reason : "");
@@ -917,26 +928,216 @@ function toggleDetailMenu(show) {
   $("d-more").setAttribute("aria-expanded", String(open));
 }
 
-async function toggleMark() {
+// Marking: the detail view's bar and menu, and each row's menu, all end in
+// markAgent (ask for an optional reason in a sheet) or unmarkAgent. Marking
+// only proposes: the session is asked, and the user confirms in the review.
+
+function renderMarkBar(m) {
+  const bar = $("d-markbar");
+  const led = ledger.on === true && !!state.selected;
+  bar.hidden = !led;
+  if (!led) return;
+  bar.innerHTML = m
+    ? `<span class="lg-chip rtr">ready to remove</span><span class="mb-why">${esc(m.reason || "no reason given")}</span><button type="button" class="btn" data-mb="unmark">Unmark</button>`
+    : `<button type="button" class="btn" data-mb="mark">Mark ready to remove…</button>`;
+}
+
+function toggleMark() {
   const id = state.selected;
   toggleDetailMenu(false);
   if (!id) return;
+  if (ledger.marked.has(id)) unmarkAgent(id);
+  else openMark(id);
+}
+
+async function unmarkAgent(id) {
   try {
-    if (ledger.marked.has(id)) {
-      await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
-      toast("Unmarked");
-    } else {
-      const reason = prompt("Mark this session ready to remove. Why? (optional)", "");
-      if (reason === null) return;
-      const d = await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: id, reason }) });
-      const asking = d && d.mark && d.mark.ask && d.mark.ask.state === "asking";
-      toast(asking ? "Marked ready to remove; asking the session whether it is safe" : "Marked ready to remove");
-    }
+    await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
+    toast("Unmarked");
   } catch (e) {
     toast(e.message, true);
   }
   ledger.loadedAt = 0;
   await loadLedger();
+}
+
+const mk = { open: false, id: "", busy: false };
+
+function openMark(id) {
+  if (mk.open) return;
+  const a = agentById(id);
+  Object.assign(mk, { open: true, id, busy: false });
+  history.pushState({ mark: true }, "", location.href);
+  $("mk-name").textContent = a ? (a.name || a.pane_id || id) : id;
+  $("mk-reason").value = "";
+  $("mk-status").textContent = "";
+  $("mk-go").disabled = false;
+  $("mk").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("mk-reason").focus();
+}
+
+function hideMark() {
+  mk.open = false;
+  $("mk").hidden = true;
+  document.body.classList.remove("sheet-open");
+  maybeReload();
+}
+
+function closeMark() {
+  if (mk.busy) return;
+  if (history.state && history.state.mark) history.back();
+  else hideMark();
+}
+
+function syncMark() {
+  if (mk.open && !(history.state && history.state.mark)) hideMark();
+}
+
+async function submitMark() {
+  if (mk.busy) return;
+  mk.busy = true;
+  $("mk").classList.add("busy");
+  $("mk-go").disabled = true;
+  $("mk-status").textContent = "Marking…";
+  try {
+    const d = await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: mk.id, reason: $("mk-reason").value.trim() }) });
+    const asking = d && d.mark && d.mark.ask && d.mark.ask.state === "asking";
+    mk.busy = false;
+    $("mk").classList.remove("busy");
+    closeMark();
+    toast(asking ? "Marked ready to remove; asking the session whether it is safe" : "Marked ready to remove");
+  } catch (e) {
+    mk.busy = false;
+    $("mk").classList.remove("busy");
+    $("mk-go").disabled = false;
+    $("mk-status").textContent = e.message;
+    return;
+  }
+  ledger.loadedAt = 0;
+  await loadLedger();
+}
+
+// The row menu: one popover, outside the list so a re-render keeps it.
+function openRowMenu(btn) {
+  const id = btn.dataset.menu;
+  const menu = $("row-menu");
+  if (!menu.hidden && menu.dataset.id === id) { closeRowMenu(); return; }
+  menu.dataset.id = id;
+  $("row-mark").textContent = ledger.marked.has(id) ? "Unmark (keep this session)" : "Mark ready to remove…";
+  menu.hidden = false;
+  const r = btn.getBoundingClientRect();
+  const w = menu.offsetWidth;
+  menu.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w)) + "px";
+  const below = r.bottom + 4;
+  menu.style.top = (below + menu.offsetHeight > innerHeight ? Math.max(8, r.top - menu.offsetHeight - 4) : below) + "px";
+  $("row-mark").focus();
+}
+
+function closeRowMenu() { $("row-menu").hidden = true; }
+
+function rowMenuMark() {
+  const id = $("row-menu").dataset.id;
+  closeRowMenu();
+  if (!id) return;
+  if (ledger.marked.has(id)) unmarkAgent(id);
+  else openMark(id);
+}
+
+/* ---------- sweep for finished agents ---------- */
+//
+// Asks the hub for a dry run, shows what it would mark (clean, merged,
+// nothing unpushed) and what needs a look, and marks the ready ones only on
+// the button. Removal stays the review's.
+
+const sweep = { open: false, busy: false, seq: 0, data: null, marked: false };
+
+function openSweep() {
+  if (sweep.open) return;
+  Object.assign(sweep, { open: true, busy: false, data: null, marked: false });
+  history.pushState({ sweep: true }, "", location.href);
+  $("sweep").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("sweep-close").focus();
+  runSweep(true);
+}
+
+function hideSweep() {
+  sweep.open = false;
+  sweep.seq++;
+  $("sweep").hidden = true;
+  document.body.classList.remove("sheet-open");
+  maybeReload();
+}
+
+function closeSweep() {
+  if (sweep.busy) return;
+  if (history.state && history.state.sweep) history.back();
+  else hideSweep();
+}
+
+function syncSweep() {
+  if (sweep.open && !(history.state && history.state.sweep)) hideSweep();
+}
+
+async function runSweep(dry) {
+  const seq = ++sweep.seq;
+  sweep.busy = true;
+  $("sweep").classList.add("busy");
+  $("sweep-go").disabled = true;
+  $("sweep-status").textContent = dry ? "Checking each finished worker on its host…" : "Marking…";
+  if (dry) $("sweep-list").innerHTML = "";
+  try {
+    const d = await api("/api/sweep", { method: "POST", body: JSON.stringify({ dry_run: dry }) });
+    if (seq !== sweep.seq) return;
+    sweep.data = d;
+    sweep.marked = !dry;
+    $("sweep-status").textContent = "";
+  } catch (e) {
+    if (seq !== sweep.seq) return;
+    $("sweep-status").textContent = "";
+    $("sweep-list").innerHTML = `<div class="ln-empty">${esc(e.message)}</div>`;
+    sweep.data = null;
+  }
+  sweep.busy = false;
+  $("sweep").classList.remove("busy");
+  renderSweep();
+  if (!dry) { ledger.loadedAt = 0; loadLedger(); }
+}
+
+function renderSweep() {
+  const d = sweep.data;
+  const go = $("sweep-go");
+  if (!d) { go.disabled = true; return; }
+  const item = (it) => `<div class="rv-item" data-sweep="${esc(it.id)}">
+      <div class="rv-top"><span class="rv-name">${esc(it.name || it.id)}</span>${it.host ? `<span class="status">${esc(it.host)}</span>` : ""}</div>
+      ${it.branch ? `<div class="rv-sub">${esc(it.branch)}</div>` : ""}
+      <div class="rv-reason">${esc(it.reason)}</div></div>`;
+  const ready = d.ready || [], look = d.needs_look || [], skipped = d.skipped || [];
+  let h = "";
+  if (!ready.length && !look.length) h += `<div class="ln-empty">No finished workers to sweep.</div>`;
+  if (ready.length) h += `<div class="sw-h">${sweep.marked ? "Marked ready to remove" : "Ready to remove"} (${ready.length})</div>` + ready.map(item).join("");
+  if (look.length) h += `<div class="sw-h">Needs a look, not marked (${look.length})</div>` + look.map(item).join("");
+  if (skipped.length) h += `<div class="ln-note">${skipped.length} skipped (already marked, coordinators, primary checkouts).</div>`;
+  $("sweep-list").innerHTML = h;
+  if (sweep.marked) {
+    go.textContent = ready.length ? "Review removals" : "Done";
+    go.disabled = false;
+  } else {
+    go.textContent = ready.length ? `Mark ${ready.length} ready to remove` : "Nothing to mark";
+    go.disabled = !ready.length;
+  }
+}
+
+function sweepGo() {
+  if (sweep.busy) return;
+  if (sweep.marked) {
+    const wantReview = ((sweep.data && sweep.data.ready) || []).length > 0;
+    closeSweep();
+    if (wantReview) setTimeout(openReview, 80);
+    return;
+  }
+  runSweep(false);
 }
 
 /* ---------- review: remove the sessions marked ready to remove ---------- */
@@ -1199,6 +1400,8 @@ function route() {
   syncSubview();
   syncLaunch();
   syncReview();
+  syncMark();
+  syncSweep();
   syncSwitch();
   const r = parseRoute();
   if (!r) {
@@ -4098,6 +4301,22 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-refresh").addEventListener("click", refreshView);
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
+  $("d-markbar").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-mb]");
+    if (!b || !state.selected) return;
+    if (b.dataset.mb === "unmark") unmarkAgent(state.selected);
+    else openMark(state.selected);
+  });
+  $("row-mark").addEventListener("click", rowMenuMark);
+  document.addEventListener("click", (ev) => { if (!ev.target.closest("#row-menu, .row-more")) closeRowMenu(); });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeRowMenu(); });
+  $("mk-close").addEventListener("click", closeMark);
+  $("mk-go").addEventListener("click", submitMark);
+  $("mk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeMark(); } });
+  $("sweep-open").addEventListener("click", openSweep);
+  $("sweep-close").addEventListener("click", closeSweep);
+  $("sweep-go").addEventListener("click", sweepGo);
+  $("sweep").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSweep(); } });
   $("d-model").addEventListener("click", openSwitch);
   $("sw-close").addEventListener("click", closeSwitch);
   $("switch").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSwitch(); } });
