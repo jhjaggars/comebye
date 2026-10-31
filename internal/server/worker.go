@@ -569,15 +569,17 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 		}
 	}
 
-	// Close: the whole workspace only when no other agent lives in it and
-	// it is not a repository's home; a pane otherwise.
+	// Close: the whole workspace only when no other agent lives in it, it
+	// holds no other pane (a plain shell in another tab or a split is not
+	// an agent, but is the user's) and it is not a repository's home; a
+	// pane otherwise.
 	others := 0
 	for _, a := range live {
 		if a.WorkspaceID == wsID && (agent == nil || a.PaneID != agent.PaneID) {
 			others++
 		}
 	}
-	wholeWS := ws != nil && others == 0 && !primaryWS
+	wholeWS := ws != nil && others == 0 && ws.PaneCount <= 1 && !primaryWS
 	switch {
 	case agent != nil && wholeWS:
 		if err := s.client.CloseWorkspace(ctx, wsID); err != nil {
