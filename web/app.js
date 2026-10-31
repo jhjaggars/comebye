@@ -684,8 +684,15 @@ function renderRemovalBanner() {
 //
 // A coordinator publishes a short markdown briefing to the hub
 // (`comebye brief set`); it shows as a card at the top of the list. The
-// card can be collapsed, or dismissed: a dismissed briefing stays hidden
-// until a newer one is published (remembered per browser by its time).
+// card is collapsed by default, and a new briefing does not expand it: the
+// collapsed header shows the title, the age and the first line of the
+// briefing (the coordinator's status line) as a preview, so a new one is
+// still noticeable. Tapping expands it; that choice is a persistent
+// per-browser preference (not tied to one briefing), so an expanded card
+// stays expanded across new briefings until it is collapsed again. The
+// card can also be dismissed: a dismissed briefing stays hidden until a
+// newer one is published (remembered per browser by its time). The stale
+// note sits outside the foldable body, so it shows either way.
 //
 // The hub can also ask a coordinator for one on a schedule (off by
 // default; set here or by a coordinator, `comebye brief schedule`). When
@@ -696,7 +703,7 @@ function renderRemovalBanner() {
 
 const briefing = { data: null, schedule: null, loadedAt: 0, inflight: false };
 const BRIEF_DISMISSED_KEY = "comebye-brief-dismissed";
-const BRIEF_COLLAPSED_KEY = "comebye-brief-collapsed";
+const BRIEF_EXPANDED_KEY = "comebye-brief-expanded"; // "1" once the user expanded the card
 
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
@@ -775,6 +782,16 @@ function renderPlans() {
     </div>`).join("");
 }
 
+// briefPreview is the first line of the briefing with the markdown marks
+// taken off (the coordinator's status line), for the collapsed card.
+function briefPreview(md) {
+  for (const raw of md.split("\n")) {
+    const t = raw.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)*/, "").replace(/[*_`~]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+    if (t && !/^[-=_*]{3,}$/.test(t)) return t.length > 200 ? t.slice(0, 200) + "…" : t;
+  }
+  return "";
+}
+
 function renderBrief() {
   const el = $("briefing");
   if (!el) return;
@@ -787,7 +804,8 @@ function renderBrief() {
     delete el.dataset.sig;
     return;
   }
-  const folded = !!b && lsGet(BRIEF_COLLAPSED_KEY) === b.at;
+  const folded = !!b && lsGet(BRIEF_EXPANDED_KEY) !== "1";
+  const preview = b && folded ? briefPreview(b.markdown) : "";
   const sched = briefing.schedule;
   const every = sched && sched.enabled ? ` · every ${sched.every}${sched.at ? " at " + sched.at : ""}` : "";
   const metaText = () => {
@@ -795,7 +813,7 @@ function renderBrief() {
     const at = Date.parse(b.at);
     return `from ${b.by || "a coordinator"}${Number.isNaN(at) ? "" : ` · ${fmtAgo(at)} ago`}${every}`;
   };
-  const sig = [b ? b.at : "", folded, every, miss ? `${miss.id}|${miss.count}|${miss.reason}` : ""].join("|");
+  const sig = [b ? b.at : "", folded, preview, every, miss ? `${miss.id}|${miss.count}|${miss.reason}` : ""].join("|");
   el.hidden = false;
   el.classList.toggle("stale", !!miss);
   if (el.dataset.sig === sig) {
@@ -814,6 +832,7 @@ function renderBrief() {
       <button type="button" class="bf-dismiss" aria-label="Dismiss this briefing">&#10005;</button>`
     : `<div class="bf-toggle static"><span class="bf-title">Briefing</span><span class="bf-meta">${esc(metaText())}</span></div>`;
   el.innerHTML = `<div class="bf-head">${head}</div>
+    ${preview ? `<div class="bf-preview">${esc(preview)}</div>` : ""}
     ${miss ? missNote(miss, !!b) : ""}
     ${b ? `<div class="bf-body md" id="bf-body"${folded ? " hidden" : ""}>${renderMarkdown(b.markdown, "brief:" + b.at)}</div>` : ""}`;
 }
@@ -840,7 +859,7 @@ async function onBriefClick(ev) {
     renderBrief();
     toast("Briefing dismissed until the next one");
   } else if (b && ev.target.closest(".bf-toggle")) {
-    lsSet(BRIEF_COLLAPSED_KEY, lsGet(BRIEF_COLLAPSED_KEY) === b.at ? "" : b.at);
+    lsSet(BRIEF_EXPANDED_KEY, lsGet(BRIEF_EXPANDED_KEY) === "1" ? "0" : "1");
     renderBrief();
   }
 }
