@@ -310,6 +310,44 @@ func TestRemoveKeepsDirtyOrUnmerged(t *testing.T) {
 	}
 }
 
+// A workspace the user arranged into tabs and splits can hold plain shells
+// next to the worker; they are not agents, but closing the workspace would
+// close them.
+func TestRemoveKeepsWorkspaceWithOtherPanes(t *testing.T) {
+	s, fh, _, wt := removalSetup(t)
+	inner := fh.hook
+	fh.set(func(f *fakeLaunchHerdr) {
+		f.hook = func(method string, p map[string]any) (any, *herdr.Error, bool) {
+			res, herr, ok := inner(method, p)
+			if method == "worktree.list" {
+				// herdr reports the worktree as still open in w9.
+				return map[string]any{"type": "worktree_list", "worktrees": []any{
+					map[string]any{"path": wt, "open_workspace_id": "w9"},
+				}}, nil, true
+			}
+			if method == "workspace.list" {
+				// w9 now has the agent's pane plus a shell in a second tab.
+				for _, w := range res.(map[string]any)["workspaces"].([]any) {
+					if m := w.(map[string]any); m["workspace_id"] == "w9" {
+						m["pane_count"], m["tab_count"] = 2, 2
+					}
+				}
+			}
+			return res, herr, ok
+		}
+	})
+	code, r := removeReq(t, s, `{"agent":"w9:p1","name":"w","remove_worktree":true}`)
+	if code != 200 || r["closed"] != "pane" || r["worktree_removed"] != false {
+		t.Fatalf("remove = %d %v", code, r)
+	}
+	if fh.call("workspace.close") != nil {
+		t.Fatalf("the workspace with another pane was closed: %v", fh.methods())
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatal("the worktree was removed while a pane still uses it")
+	}
+}
+
 func TestRemoveConservative(t *testing.T) {
 	s, fh, repo, wt := removalSetup(t)
 	// A working agent is refused unless allowed.
