@@ -781,16 +781,18 @@
     .d-menu .mark-state[hidden] { display: none; }
 
     /* Ready-to-remove review. */
-    #review { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
-    #review[hidden] { display: none; }
-    #review header .back {
+    #review, #switch { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden], #switch[hidden] { display: none; }
+    #review header .back, #switch header .back {
       font: inherit; font-size: 20px; line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: 10px; padding: 0;
       min-width: 44px; min-height: 44px; margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #review header h2 { font-size: 17px; margin: 0; font-weight: 650; }
-    #review.busy .ln-status::before {
+    #review header h2, #switch header h2 { font-size: 17px; margin: 0; font-weight: 650; }
+    #switch .ln-picker { margin-top: 0; }
+    #switch .ln-mlist { max-height: 46vh; }
+    #review.busy .ln-status::before, #switch.busy .ln-status::before {
       content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px;
       border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -1001,6 +1003,30 @@
     </footer>
   </section>
 
+  <!-- Switch a running agent's model (detail view menu) -->
+  <section id="switch" hidden role="dialog" aria-modal="true" aria-labelledby="sw-title">
+    <header>
+      <button type="button" class="back" id="sw-close" aria-label="Close">&#10005;</button>
+      <h2 id="sw-title">Switch model</h2>
+    </header>
+    <div class="ln-body">
+      <div class="ln-note" id="sw-note"></div>
+      <div class="ln-label" id="sw-model-label">Model</div>
+      <div class="ln-picker">
+        <input id="sw-q" class="ln-input" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Search models" aria-label="Search models">
+        <div class="ln-mlist" id="sw-list" role="listbox" aria-labelledby="sw-model-label"></div>
+      </div>
+      <div id="sw-thinking" hidden>
+        <div class="ln-label" id="sw-think-label">Thinking <span class="ln-opt">(optional)</span></div>
+        <div class="ln-kinds" id="sw-think-chips" role="group" aria-labelledby="sw-think-label"></div>
+      </div>
+    </div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="sw-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="sw-go" disabled>Switch</button>
+    </footer>
+  </section>
+
   <!-- Sessions marked ready to remove: review and confirm -->
   <section id="review" hidden role="dialog" aria-modal="true" aria-labelledby="rv-title">
     <header>
@@ -1028,6 +1054,7 @@
     </header>
     <div id="d-menu" class="attach-menu d-menu" role="menu" hidden>
       <div class="mark-state" id="d-mark-state" hidden></div>
+      <button type="button" role="menuitem" id="d-model" hidden>Switch model…</button>
       <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>
       <button type="button" role="menuitem" id="d-role">Make coordinator</button>
       <button type="button" role="menuitem" id="d-sched" hidden>Briefing schedule…</button>

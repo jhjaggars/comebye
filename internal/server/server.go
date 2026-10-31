@@ -140,6 +140,9 @@ type Server struct {
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
+	// switchGap is the pause between the slash commands of one model
+	// switch (tests shrink it).
+	switchGap time.Duration
 	// models caches each kind's model list; listModels, when set,
 	// replaces the discovery (tests).
 	models     modelCache
@@ -165,7 +168,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		cfg.PingInterval = 15 * time.Second
 	}
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
-		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout,
+		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait}
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
@@ -219,6 +222,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.authAgent(s.handleTranscript))
 	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.handleSubagentTranscript))
 	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authAgent(s.selfGuard(s.handlePrompt)))
+	s.mux.HandleFunc("POST /api/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
 	s.mux.HandleFunc("GET /api/agents/{target}/activity", s.auth(s.handleActivity))

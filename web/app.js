@@ -875,9 +875,13 @@ async function editBriefSchedule() {
 /* ---------- marking a session ready to remove (detail view menu) ---------- */
 
 function renderDetailMenu() {
-  const on = ledger.on === true && !!state.selected;
-  $("d-more").hidden = !on;
-  if (!on) { toggleDetailMenu(false); return; }
+  const led = ledger.on === true && !!state.selected;
+  const can = !!state.selected && switchable(agentById(state.selected));
+  $("d-more").hidden = !(led || can);
+  $("d-model").hidden = !can;
+  for (const id of ["d-mark", "d-role"]) $(id).hidden = !led;
+  if (!(led || can)) { toggleDetailMenu(false); return; }
+  if (!led) { $("d-mark-state").hidden = true; $("d-sched").hidden = true; return; }
   const m = ledger.marked.get(state.selected);
   $("d-mark").textContent = m ? "Unmark (keep this session)" : "Mark ready to remove…";
   const st = $("d-mark-state");
@@ -1195,6 +1199,7 @@ function route() {
   syncSubview();
   syncLaunch();
   syncReview();
+  syncSwitch();
   const r = parseRoute();
   if (!r) {
     state.pendingRoute = null;
@@ -1292,6 +1297,7 @@ function renderDetail() {
   updateSendButton();
   renderActivity();
   renderDetailMenu();
+  if (sw.open) renderSwitch(); // the agent may have gone idle (or busy) meanwhile
   refreshQueued();
 }
 
@@ -3298,26 +3304,27 @@ function togglePicker() {
 }
 
 // modelRow is one row of the list; note is a second line.
-function modelRow(id, label, { note = "", badge = "", plain = false } = {}) {
-  const sel = id === launch.model;
-  return `<button type="button" class="ln-model${plain ? " plain" : ""}" role="option" aria-selected="${sel}" data-model="${esc(id)}">` +
+function modelRow(id, label, selected, { note = "", badge = "", plain = false } = {}) {
+  return `<button type="button" class="ln-model${plain ? " plain" : ""}" role="option" aria-selected="${id === selected}" data-model="${esc(id)}">` +
     `<span class="ln-mname">${esc(label)}${note ? `<span class="ln-mnote">${esc(note)}</span>` : ""}</span>${badge}</button>`;
 }
 
-function renderModelList() {
-  const cat = launch.cat || {};
-  const list = $("ln-mlist");
+// fillModelList draws a catalog into list: grouped by provider, filtered by
+// the search text, the host's default marked. withDefault adds the
+// "Default: pass no flag" row (a launch has one, a running agent does not).
+function fillModelList(list, cat, query, selected, withDefault) {
+  cat = cat || {};
   if (cat.loading) { list.innerHTML = '<div class="ln-empty">Loading models…</div>'; return; }
-  const q = launch.q.trim().toLowerCase();
+  const q = query.trim().toLowerCase();
   const terms = q.split(/\s+/).filter(Boolean);
   const models = (cat.models || []).filter((m) => {
     const hay = `${m.provider || ""} ${m.id} ${m.name || ""}`.toLowerCase();
     return terms.every((t) => hay.includes(t));
   });
   let html = "";
-  if (!q) {
+  if (withDefault && !q) {
     const dn = cat.default ? `currently ${cat.default}` : "the agent's own setting";
-    html += modelRow("", "Default", { note: `No flag is passed: ${dn}`, plain: true });
+    html += modelRow("", "Default", selected, { note: `No flag is passed: ${dn}`, plain: true });
   }
   let prov = null;
   for (const m of models) {
@@ -3325,18 +3332,17 @@ function renderModelList() {
     if (p !== prov) { html += `<div class="ln-head">${esc(p)}</div>`; prov = p; }
     const badges = (m.id === cat.default ? '<span class="ln-badge dflt">default</span>' : "") +
       (m.thinking ? '<span class="ln-badge" title="reasoning model">thinking</span>' : "");
-    html += modelRow(m.id, m.provider && m.id.startsWith(m.provider + "/") ? m.id.slice(m.provider.length + 1) : m.id, { note: m.note, badge: badges });
+    html += modelRow(m.id, m.provider && m.id.startsWith(m.provider + "/") ? m.id.slice(m.provider.length + 1) : m.id, selected, { note: m.note, badge: badges });
   }
   // A name that is not listed can still be typed unless the list is exact.
-  const typed = launch.q.trim();
-  if (typed && !cat.exact && MODEL_RE.test(typed) && !(cat.models || []).some((m) => m.id === typed)) {
-    html += `<div class="ln-head">Other</div>` + modelRow(typed, `Use “${typed}”`, { plain: true });
-  }
-  if (!html || (q && !models.length && !(typed && !cat.exact && MODEL_RE.test(typed)))) {
-    html = `<div class="ln-empty">No model matches “${esc(launch.q.trim())}”</div>`;
-  }
+  const typed = query.trim();
+  const canType = typed && !cat.exact && MODEL_RE.test(typed) && !(cat.models || []).some((m) => m.id === typed);
+  if (canType) html += `<div class="ln-head">Other</div>` + modelRow(typed, `Use “${typed}”`, selected, { plain: true });
+  if (!html || (q && !models.length && !canType)) html = `<div class="ln-empty">No model matches “${esc(typed)}”</div>`;
   list.innerHTML = html;
 }
+
+function renderModelList() { fillModelList($("ln-mlist"), launch.cat, launch.q, launch.model, true); }
 
 function renderModelBlock() {
   const block = $("ln-model-block");
@@ -3785,6 +3791,100 @@ function openLaunched(host, pane, label) {
   tick();
 }
 
+/* ---------- switching a running agent's model ---------- */
+//
+// "Switch model…" in the agent's menu opens the same list. The server types
+// the agent's own slash command (claude: /model, pi: /model and /thinking),
+// so the agent must be idle; for a worker the ledger then shows the new model.
+
+const SWITCH_KINDS = ["pi", "claude"];
+const sw = { open: false, id: null, kind: null, host: null, cat: null, model: "", thinking: "", q: "", busy: false, seq: 0 };
+
+function switchable(a) { return !!a && SWITCH_KINDS.includes(a.agent); }
+
+function openSwitch() {
+  const a = agentById(state.selected);
+  toggleDetailMenu(false);
+  if (!switchable(a) || sw.open) return;
+  Object.assign(sw, { open: true, id: state.selected, kind: a.agent, host: a.host || state.localHost, cat: { loading: true }, model: "", thinking: "", q: "", busy: false });
+  const seq = ++sw.seq;
+  history.pushState({ switch: true }, "", location.href);
+  $("sw-q").value = "";
+  $("switch").hidden = false;
+  document.body.classList.add("sheet-open");
+  renderSwitch();
+  $("sw-close").focus();
+  api(modelsBase(sw.host) + "?kind=" + encodeURIComponent(sw.kind))
+    .then((d) => (d.catalogs || [])[0] || { error: "the host sent no model list" }, (e) => ({ error: e.message }))
+    .then((cat) => { if (seq === sw.seq) { sw.cat = cat; renderSwitch(); } });
+}
+
+function hideSwitch() {
+  sw.open = false;
+  sw.seq++;
+  $("switch").hidden = true;
+  document.body.classList.remove("sheet-open");
+  maybeReload();
+}
+
+function closeSwitch() {
+  if (sw.busy) return;
+  if (history.state && history.state.switch) history.back();
+  else hideSwitch();
+}
+
+function syncSwitch() {
+  if (sw.open && !(history.state && history.state.switch)) hideSwitch();
+}
+
+function renderSwitch() {
+  const a = agentById(sw.id);
+  const idle = !!a && a.agent_status === "idle";
+  const name = a ? (a.name || a.pane_id) : "this agent";
+  $("sw-title").textContent = "Switch model";
+  $("sw-note").textContent = !a ? "The agent is gone."
+    : idle ? `${name} is idle. It switches by running its own /model command.`
+    : `${name} is ${a.agent_status}: switch its model when it is idle.`;
+  if (sw.cat && sw.cat.error) $("sw-note").textContent += ` Could not list models (${sw.cat.error}); you can still type a name.`;
+  fillModelList($("sw-list"), sw.cat, sw.q, sw.model, false);
+  const pi = sw.kind === "pi";
+  $("sw-thinking").hidden = !pi;
+  if (pi) {
+    $("sw-think-chips").innerHTML = ((sw.cat && sw.cat.thinking_levels) || THINKING_LEVELS).map((l) =>
+      `<button type="button" class="hf-chip" data-think="${esc(l)}" aria-pressed="${l === sw.thinking}">${esc(l)}</button>`).join("");
+  }
+  const what = [sw.model, pi && sw.thinking ? `thinking ${sw.thinking}` : ""].filter(Boolean).join(", ");
+  $("sw-go").textContent = what ? `Switch to ${what}` : "Switch";
+  $("sw-go").disabled = sw.busy || !idle || !(sw.model || sw.thinking);
+}
+
+async function submitSwitch() {
+  if (sw.busy || !(sw.model || sw.thinking)) return;
+  const id = sw.id;
+  const body = {};
+  if (sw.model) body.model = sw.model;
+  if (sw.kind === "pi" && sw.thinking) body.thinking = sw.thinking;
+  sw.busy = true;
+  $("switch").classList.add("busy");
+  $("sw-status").textContent = "Sending the switch to the agent…";
+  renderSwitch();
+  try {
+    await api(`${pathFor(id)}/model`, { method: "POST", body: JSON.stringify(body) });
+  } catch (e) {
+    toast(e.message, true);
+    return;
+  } finally {
+    sw.busy = false;
+    $("switch").classList.remove("busy");
+    $("sw-status").textContent = "";
+    renderSwitch();
+  }
+  toast(`Switched to ${[body.model, body.thinking && "thinking " + body.thinking].filter(Boolean).join(", ")}`);
+  closeSwitch(); // pops the sheet's history entry; the chat stays open under it
+  ledger.loadedAt = 0;
+  loadLedger();
+}
+
 /* ---------- wiring ---------- */
 
 /* ---------- new deploys ---------- */
@@ -3812,7 +3912,7 @@ function noteVersion(v) {
 
 // busy: the user is reading an agent or something would be lost.
 function busy() {
-  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim() || launch.open || review.open;
+  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim() || launch.open || review.open || sw.open;
 }
 
 function maybeReload() {
@@ -3998,6 +4098,19 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-refresh").addEventListener("click", refreshView);
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
+  $("d-model").addEventListener("click", openSwitch);
+  $("sw-close").addEventListener("click", closeSwitch);
+  $("switch").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSwitch(); } });
+  $("sw-q").addEventListener("input", () => { sw.q = $("sw-q").value; renderSwitch(); });
+  $("sw-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-model]");
+    if (b && !sw.busy) { sw.model = b.dataset.model; renderSwitch(); }
+  });
+  $("sw-think-chips").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-think]");
+    if (b && !sw.busy) { sw.thinking = sw.thinking === b.dataset.think ? "" : b.dataset.think; renderSwitch(); }
+  });
+  $("sw-go").addEventListener("click", submitSwitch);
   $("d-role").addEventListener("click", toggleRole);
   $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);

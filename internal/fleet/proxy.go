@@ -35,6 +35,8 @@ var proxyOps = map[string]proxyOp{
 	"dialog":     {method: http.MethodGet, timeout: 20 * time.Second},
 	"activity":   {method: http.MethodGet, timeout: 15 * time.Second},
 	"answer":     {method: http.MethodPost, maxBody: 64 << 10, timeout: 20 * time.Second},
+	// model: switch a running agent's model (slash commands, see the server).
+	"model": {method: http.MethodPost, maxBody: 64 << 10, timeout: 30 * time.Second},
 	// image: an 8 MB image as base64 JSON, stored on the agent's host.
 	"image": {method: http.MethodPost, maxBody: 12 << 20, timeout: 60 * time.Second},
 	// subagent-transcript: /agents/{target}/subagents/{sub}/transcript.

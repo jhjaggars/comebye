@@ -57,6 +57,7 @@ func init() {
 		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or its final report", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
 		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE|- [--plan ID] [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
+		{"model", "AGENT [MODEL] [--thinking T] [--json]", "switch a running agent's model (claude, pi; it must be idle); pi also takes --thinking", cmdModel},
 		{"models", "[--host H] [--kind K] [--json]", "the models an agent kind can be started with on a host (for `handoff --model`)", cmdModels},
 		{"plan", "create --title T --size N | show ID | list [--json]", "group handoffs into one change: the user is told once when all of them are done", cmdPlan},
 		{"release", "ID [--json]", "start a handoff that is waiting for earlier steps now (e.g. a step that went idle without reporting)", cmdRelease},
@@ -1943,4 +1944,50 @@ func cmdModels(e *Env, args []string) error {
 		}
 	}
 	return nil
+}
+
+// cmdModel switches a running agent's model.
+func cmdModel(e *Env, args []string) error {
+	fs := flag.NewFlagSet("model", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	thinking := fs.String("thinking", "", "pi's thinking level: "+strings.Join(thinkingLevels, ", "))
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) < 1 || len(pos) > 2 || (len(pos) == 1 && *thinking == "") {
+		return usageErr("want AGENT and a MODEL (pi: or just --thinking)")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	body := map[string]string{}
+	if len(pos) == 2 {
+		body["model"] = pos[1]
+	}
+	if *thinking != "" {
+		body["thinking"] = *thinking
+	}
+	data, err := c.raw("POST", hostPath(t, "model"), nil, body)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	fmt.Fprintf(e.Stdout, "Switched %s to %s (sent %s).\n", t.label(), modelLabel(body["model"], body["thinking"]), switchSent(data))
+	return nil
+}
+
+func switchSent(data []byte) string {
+	var r struct {
+		Commands []string `json:"commands"`
+	}
+	json.Unmarshal(data, &r)
+	return strings.Join(r.Commands, ", ")
 }
