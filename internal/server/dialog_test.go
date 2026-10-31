@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -342,19 +343,78 @@ func TestClaudeMultiSelectWhileDone(t *testing.T) {
 	}
 }
 
-func TestPromptGuardAllowsStaleAndNoAsk(t *testing.T) {
+func TestPromptGuardAllowsStaleAsk(t *testing.T) {
 	done := herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusDone}
-	// No transcript question: nothing is read, the prompt goes through.
-	io := &fakeIO{screens: []string{claudeMultiScreen}}
-	if err := promptGuard(context.Background(), io, done, nil); err != nil || io.reads != 0 {
-		t.Fatalf("no ask: %v reads=%d", err, io.reads)
-	}
 	// A question the transcript calls open on a finished agent whose screen
 	// shows only the prompt box is stale: do not wedge prompts forever.
-	io = &fakeIO{screens: []string{"● Done.\n❯ \n"}}
+	io := &fakeIO{screens: []string{"● Done.\n❯ \n"}}
 	if err := promptGuard(context.Background(), io, done, multiAsk()); err != nil {
 		t.Fatalf("stale ask refused prompts: %v", err)
 	}
+	if err := promptGuard(context.Background(), io, done, nil); err != nil {
+		t.Fatalf("idle prompt box refused: %v", err)
+	}
+}
+
+// The reported bug: a permission prompt has no transcript question, and the
+// cached status can still say idle/working, so the old guard read nothing
+// and the text and Enter answered the dialog.
+const claudePermScreen = `
+ Bash command
+
+   rm -rf build/
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for rm commands
+   3. No, and tell Claude what to do differently (esc)
+`
+
+const piGateScreen = `
+ Permission required
+
+   git push origin feature
+
+❯ Allow once
+  Block
+
+ enter select · esc block
+`
+
+func TestPromptGuardRefusesDialogWithoutTranscriptAsk(t *testing.T) {
+	cases := map[string]struct {
+		agent  herdr.AgentInfo
+		screen string
+	}{
+		"claude permission, cached idle":    {herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusIdle}, claudePermScreen},
+		"claude permission, cached working": {herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusWorking}, claudePermScreen},
+		"claude permission, cached done":    {herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusDone}, claudePermScreen},
+		"claude multi-select, no ask":       {herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusIdle}, claudeMultiScreen},
+		"generic y/n, codex":                {herdr.AgentInfo{PaneID: "w:p1", Agent: "codex", Status: herdr.StatusIdle}, "Apply patch?\nProceed? [y/N]"},
+		"blocked, nothing recognised":       {herdr.AgentInfo{PaneID: "w:p1", Agent: "pi", Status: herdr.StatusBlocked}, "something odd\n"},
+	}
+	for name, c := range cases {
+		io := &fakeIO{screens: []string{c.screen}}
+		if err := promptGuard(context.Background(), io, c.agent, nil); err != errDialogOpen {
+			t.Errorf("%s: err = %v, want dialog_open", name, err)
+		}
+		if len(io.sent) != 0 {
+			t.Errorf("%s: keys sent %v", name, io.sent)
+		}
+	}
+}
+
+func TestPromptGuardFailsClosedOnReadError(t *testing.T) {
+	a := herdr.AgentInfo{PaneID: "w:p1", Agent: "claude", Status: herdr.StatusIdle}
+	if err := promptGuard(context.Background(), &errIO{}, a, nil); err == nil {
+		t.Fatal("unreadable pane was treated as clear")
+	}
+}
+
+type errIO struct{ fakeIO }
+
+func (*errIO) ReadPane(context.Context, string, string, int) (herdr.ReadResult, error) {
+	return herdr.ReadResult{}, errors.New("boom")
 }
 
 func TestResetOnlyLeavesInsertMode(t *testing.T) {

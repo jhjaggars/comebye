@@ -579,7 +579,16 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	if a := s.resolveAgent(target); a != nil {
+	// The guard runs here, on the host that owns the pane (a prompt
+	// forwarded from another host arrives at this handler), and for any
+	// target herdr knows, cached or not.
+	a := s.resolveAgent(target)
+	if a == nil {
+		if got, err := s.client.GetAgent(ctx, target); err == nil {
+			a = &got
+		}
+	}
+	if a != nil {
 		if err := s.guardPrompt(ctx, *a); err != nil {
 			writeError(w, err)
 			return

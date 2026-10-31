@@ -28,6 +28,9 @@ type fakeLaunchHerdr struct {
 	calls    []fakeCall
 	startErr []*herdr.Error // agent.start errors, consumed one per call
 	noRoot   bool           // workspace.create reports no root_pane
+	// screens maps a pane id to what pane.read shows; a pane without an
+	// entry shows an idle prompt box.
+	screens map[string]string
 	// hook, when set, answers a call first (ok=true), under the lock.
 	hook func(method string, params map[string]any) (res any, err *herdr.Error, ok bool)
 }
@@ -112,6 +115,13 @@ func (f *fakeLaunchHerdr) answer(method string, params map[string]any) (any, *he
 			}
 		}
 		return nil, &herdr.Error{Code: "agent_not_found", Message: "agent target " + target + " not found"}
+	case "pane.read":
+		pane, _ := params["pane_id"].(string)
+		text, ok := f.screens[pane]
+		if !ok {
+			text = "● Done.\n\n❯ \n"
+		}
+		return map[string]any{"type": "pane_read", "read": map[string]any{"text": text, "source": params["source"]}}, nil
 	case "agent.prompt":
 		return map[string]any{"type": "agent_prompted", "agent": map[string]any{"name": params["target"], "pane_id": "w9:p1", "agent_status": "working"}}, nil
 	}
@@ -397,7 +407,7 @@ func TestLaunchHappyPath(t *testing.T) {
 		r.Agent.Name != "fixer" || r.Agent.Agent != "codex" || r.PromptError != "" {
 		t.Fatalf("launch = %d %+v", code, r)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.get,agent.prompt" {
+	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.get,agent.get,pane.read,agent.prompt" {
 		t.Fatalf("calls = %s", got)
 	}
 	ws := fh.call("workspace.create").Params

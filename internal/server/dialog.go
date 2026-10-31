@@ -72,7 +72,11 @@ var answers = newAnswerDedupe()
 // Read failures just mean "no ask": the screen is still checked.
 // Pi's ask_user_question and Claude Code's AskUserQuestion both arrive here.
 func (s *Server) pendingAsk(agent herdr.AgentInfo) *transcript.Ask {
-	path, err := transcript.SessionPath(agent, s.manager.Agents())
+	var peers []herdr.AgentInfo
+	if s.manager != nil {
+		peers = s.manager.Agents()
+	}
+	path, err := transcript.SessionPath(agent, peers)
 	if err != nil {
 		return nil
 	}
@@ -108,27 +112,36 @@ func currentDialog(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *t
 }
 
 // errDialogOpen refuses free text for an agent that has a dialog on screen:
-// the text and Enter would be typed into the dialog (a multi-select's
-// free-text row, for one) instead of reaching the prompt.
-var errDialogOpen = &herdr.Error{Code: "dialog_open", Message: "the agent is waiting on a question: answer it first (or cancel it)"}
+// the text and Enter would be typed into the dialog (a permission prompt's
+// "Yes" row, a multi-select's free-text row) instead of reaching the prompt.
+var errDialogOpen = &herdr.Error{Code: "dialog_open", Message: "the agent is waiting at a dialog: answer it first (or cancel it), or queue the message with --queue"}
 
-// guardPrompt returns errDialogOpen when agent has a question on screen.
-// herdr only refuses prompts while the agent is blocked, which is not
-// reliable for Claude's multi-select. Read failures fail open: herdr's own
-// refusal still applies.
+// guardPrompt returns errDialogOpen when agent has a dialog on screen. It
+// runs on the host that owns the pane, immediately before keys are typed,
+// and always looks at the pane itself: the cached agent status lags a
+// dialog that just appeared, herdr only refuses while the agent reads as
+// blocked, and a permission prompt has no transcript question to find.
 func (s *Server) guardPrompt(ctx context.Context, agent herdr.AgentInfo) error {
 	return promptGuard(ctx, s.client, agent, s.pendingAsk(agent))
 }
 
+// promptGuard fails safe: a screen that cannot be read, or an agent that is
+// blocked on something no detector recognises, counts as a dialog.
 func promptGuard(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *transcript.Ask) error {
-	if ask == nil {
-		return nil
+	read, err := io.ReadPane(ctx, agent.PaneID, "visible", 0)
+	if err != nil {
+		return err
 	}
-	d, err := currentDialog(ctx, io, agent, ask)
-	if err != nil || d == nil || d.Kind == dialog.KindAsk {
-		return nil
+	d := dialog.Resolve(read.Text, agent.Agent, ask)
+	if d != nil && d.Kind != dialog.KindAsk {
+		return errDialogOpen
 	}
-	return errDialogOpen
+	// A transcript question that is not on screen is not typed into; the
+	// agent being blocked with nothing recognised is an unknown dialog.
+	if agent.Status == herdr.StatusBlocked {
+		return errDialogOpen
+	}
+	return nil
 }
 
 func (s *Server) handleDialog(w http.ResponseWriter, r *http.Request) {
