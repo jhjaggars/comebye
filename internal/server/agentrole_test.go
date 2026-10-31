@@ -423,6 +423,8 @@ func TestPeerForwardsToHub(t *testing.T) {
 		{"POST", "/api/agents/w2:p1/prompt", `{"text":"hi"}`, "/api/hosts/kube/agents/w2:p1/prompt"},
 		{"GET", "/api/agents/w2:p1/transcript?limit=5&evil=1", "", "/api/hosts/kube/agents/w2:p1/transcript"},
 		{"POST", "/api/hosts/desk/agents/w3:p1/prompt", `{"text":"hi"}`, "/api/hosts/desk/agents/w3:p1/prompt"},
+		// The kind a model listing is scoped to survives the hop.
+		{"GET", "/api/models?kind=pi&evil=1", "", "/api/models"},
 	}
 	for _, c := range cases {
 		w := do(s, c.method, c.path, agentHdr("w1:p1"), c.body)
@@ -439,6 +441,9 @@ func TestPeerForwardsToHub(t *testing.T) {
 		}
 		if strings.Contains(c.path, "limit=5") && r.URL.RawQuery != "limit=5" {
 			t.Errorf("query = %q", r.URL.RawQuery)
+		}
+		if strings.Contains(c.path, "kind=pi") && r.URL.RawQuery != "kind=pi" {
+			t.Errorf("kind query = %q, want kind=pi", r.URL.RawQuery)
 		}
 	}
 	n := len(hub.reqs)
