@@ -786,3 +786,25 @@ func TestModelsCommand(t *testing.T) {
 		t.Fatalf("stray arg: %d", code)
 	}
 }
+
+func TestModelSwitchCommand(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/hosts/laharl/agents/w2:p1/model"] = answer{body: `{"agent":{"pane_id":"w2:p1"},"commands":["/model homelab/fast","/thinking high"]}`}
+	if code := run(e, "model", "laharl/w2:p1", "homelab/fast", "--thinking", "high"); code != 0 ||
+		!strings.Contains(out.String(), "to homelab/fast (thinking high) (sent /model homelab/fast, /thinking high)") {
+		t.Fatalf("model: %d %s %s", code, out, errb)
+	}
+	var body map[string]string
+	json.Unmarshal([]byte(f.find("POST", "/api/hosts/laharl/agents/w2:p1/model").body), &body)
+	if body["model"] != "homelab/fast" || body["thinking"] != "high" {
+		t.Fatalf("body = %v", body)
+	}
+	f.answers["POST /api/hosts/laharl/agents/w2:p1/model"] = answer{code: 409, body: `{"code":"agent_busy","message":"the agent is working: switch its model when it is idle"}`}
+	errb.Reset()
+	if code := run(e, "model", "laharl/w2:p1", "opus"); code != 1 || !strings.Contains(errb.String(), "when it is idle") {
+		t.Fatalf("busy: %d %s", code, errb)
+	}
+	if code := run(e, "model", "laharl/w2:p1"); code != 2 {
+		t.Fatalf("no model: %d", code)
+	}
+}

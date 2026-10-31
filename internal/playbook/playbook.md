@@ -31,6 +31,7 @@ with the matches listed.
 | `comebye read AGENT --report` | a worker's final report (any other agent: its last reply) |
 | `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] --brief FILE` | start a worker (`--brief -` reads stdin) |
+| `comebye model AGENT [MODEL] [--thinking T]` | switch a running claude or pi agent's model (it must be idle) |
 | `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |

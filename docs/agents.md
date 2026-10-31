@@ -252,6 +252,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch); for any other agent, its last reply. |
 | `comebye inspect AGENT [--diff]` | The agent's git state, checked on its own host: worktree, branch and tip, an unfinished rebase or merge, uncommitted files, commits not in the base, commits on no remote, the diff stat; `--diff` adds the diffs (128 KB each at most). It reports `merged:` (are the commits in the base?) separately from `pushed:` (are they on a remote?): pushed work is not merged, and a squash-merged PR still counts as not merged. |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. `--model` picks the worker's model (see `comebye models`); `--thinking` is pi's level. Neither: the agent's own default. |
+| `comebye model AGENT [MODEL] [--thinking T]` | Switch a running agent's model (claude and pi; it must be idle): the agent's own `/model` (and pi's `/thinking`) is typed into its prompt (`POST .../agents/{target}/model`). For pi MODEL may be left out with `--thinking`. A worker's ledger entry follows. |
 | `comebye models [--host H] [--kind K]` | The models each installed agent kind can start with on a host (default: this one), where the list came from and which is the default (`GET /api/models`). |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. TEXT is sent as is: a TEXT that is an existing file is refused (send a file with `comebye prompt AGENT - < file`). |
 | `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
@@ -427,3 +428,12 @@ host (`unknown_model`), and a thinking level for anything but pi
 (`thinking_unsupported`, `bad_thinking`), before it creates a workspace or
 worktree. A handoff that is refused is recorded as `failed` with the model it
 asked for.
+
+**Switching a running agent.** An agent's menu (⋮ in its view) has
+**Switch model…**, the same searchable list without the Default row (a
+running agent cannot go back to "no flag"), and for pi the thinking level.
+It is offered for claude and pi only: both were checked to take a slash
+command (`/model <name>`; pi also `/thinking <level>`). The agent must be
+idle with no dialog open, and a pi model must be one pi lists on that host,
+since pi opens its selector for a name it does not know. The switch is not
+read back from the agent; the new model shows on the worker's ledger entry.

@@ -205,6 +205,49 @@ await check("model: a kind without model support hides the picker and sends none
   if (!b || b.kind !== "cursor" || "model" in b || "thinking" in b) throw new Error("body " + JSON.stringify(b));
 });
 
+// ---- switching a running agent's model (alpha is an idle claude agent) ----
+let switchPosts = [];
+await page.route(/\/agents\/[^/]+\/model$/, (r) => {
+  switchPosts.push({ url: r.request().url().replace(base, ""), body: JSON.parse(r.request().postData() || "{}") });
+  r.fulfill({ json: { agent: { pane_id: "w1:p1" }, commands: ["/model sonnet"] } });
+});
+await check("switch: the agent menu offers Switch model and opens the list", async () => {
+  await openAgent("alpha");
+  await page.locator("#d-more").click();
+  await page.locator("#d-model").click();
+  await page.waitForSelector("#switch", { state: "visible" });
+  await page.waitForFunction(() => document.querySelectorAll("#sw-list .ln-model").length > 0, null, { timeout: 5000 });
+  if (!(await page.locator("#sw-note").innerText()).includes("idle")) throw new Error("note " + (await page.locator("#sw-note").innerText()));
+  if (!(await page.locator("#sw-go").isDisabled())) throw new Error("Switch enabled before choosing");
+  if (await visible("#sw-thinking")) throw new Error("thinking shown for claude");
+  const heads = (await page.locator("#sw-list .ln-head").allInnerTexts()).join().toLowerCase();
+  if (heads !== "aliases,full ids") throw new Error("groups " + heads);
+  if (await page.locator('#sw-list [data-model=""]').count()) throw new Error("a Default row for a running agent");
+  const hs = await page.locator("#sw-list .ln-model").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+  if (Math.min(...hs) < 44) throw new Error("row too small");
+  const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+  if (w[0] > w[1]) throw new Error("horizontal overflow");
+});
+
+await check("switch: choosing a model sends it to the agent", async () => {
+  await page.locator("#sw-q").fill("son");
+  await page.locator('#sw-list [data-model="sonnet"]').click();
+  if ((await page.locator("#sw-go").innerText()) !== "Switch to sonnet") throw new Error("button " + (await page.locator("#sw-go").innerText()));
+  await page.locator("#sw-go").click();
+  await page.waitForFunction(() => document.querySelector("#switch")?.hidden, null, { timeout: 5000 });
+  const p = switchPosts[0];
+  if (!p || !/agents\/.*\/model$/.test(p.url) || p.body.model !== "sonnet" || "thinking" in p.body) throw new Error("post " + JSON.stringify(p));
+});
+
+await check("switch: Escape closes the sheet and the chat is still open", async () => {
+  await page.locator("#d-more").click();
+  await page.locator("#d-model").click();
+  await page.waitForSelector("#switch", { state: "visible" });
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.querySelector("#switch")?.hidden, null, { timeout: 3000 });
+  if (!(await visible("#detail"))) throw new Error("detail closed too");
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;
