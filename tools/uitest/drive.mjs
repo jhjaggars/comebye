@@ -295,12 +295,15 @@ await check("mark: the detail shows a marked badge with the reason and an Unmark
   if (!t.includes("merged and deployed")) throw new Error("bar text " + t);
   await noOverflow();
   await page.locator('#d-markbar [data-mb="unmark"]').click();
-  await page.waitForSelector('#d-markbar [data-mb="mark"]', { state: "visible", timeout: 8000 });
+  await page.waitForFunction(() => document.querySelector("#d-markbar")?.hidden, null, { timeout: 8000 });
   if (await page.locator("#d-markbar .lg-chip.rtr").count()) throw new Error("badge still shown");
+  if (await page.locator('#d-markbar [data-mb="mark"]').count()) throw new Error("persistent mark button still present");
 });
 
-await check("mark: the detail's visible button marks and the row menu unmarks", async () => {
-  await page.locator('#d-markbar [data-mb="mark"]').click();
+await check("mark: the detail's ⋯ menu marks and the row menu unmarks", async () => {
+  await page.locator("#d-more").click();
+  if ((await page.locator("#d-mark").innerText()).trim() !== "Mark ready to remove…") throw new Error("menu item " + (await page.locator("#d-mark").innerText()));
+  await page.locator("#d-mark").click();
   await page.waitForSelector("#mk", { state: "visible" });
   await page.locator("#mk-go").click(); // no reason: optional
   await page.waitForSelector("#d-markbar .lg-chip.rtr", { state: "visible", timeout: 8000 });

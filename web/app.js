@@ -953,12 +953,11 @@ function toggleDetailMenu(show) {
 
 function renderMarkBar(m) {
   const bar = $("d-markbar");
-  const led = ledger.on === true && !!state.selected;
-  bar.hidden = !led;
-  if (!led) return;
-  bar.innerHTML = m
-    ? `<span class="lg-chip rtr">ready to remove</span><span class="mb-why">${esc(m.reason || "no reason given")}</span><button type="button" class="btn" data-mb="unmark">Unmark</button>`
-    : `<button type="button" class="btn" data-mb="mark">Mark ready to remove…</button>`;
+  const show = ledger.on === true && !!state.selected && !!m;
+  bar.hidden = !show;
+  if (!show) { bar.innerHTML = ""; return; }
+  // Marking lives in the "⋯" menu; the bar only appears once marked.
+  bar.innerHTML = `<span class="lg-chip rtr">ready to remove</span><span class="mb-why">${esc(m.reason || "no reason given")}</span><button type="button" class="btn" data-mb="unmark">Unmark</button>`;
 }
 
 function toggleMark() {
@@ -4324,7 +4323,6 @@ window.addEventListener("DOMContentLoaded", () => {
     const b = ev.target.closest("button[data-mb]");
     if (!b || !state.selected) return;
     if (b.dataset.mb === "unmark") unmarkAgent(state.selected);
-    else openMark(state.selected);
   });
   $("row-mark").addEventListener("click", rowMenuMark);
   document.addEventListener("click", (ev) => { if (!ev.target.closest("#row-menu, .row-more")) closeRowMenu(); });
