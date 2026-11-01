@@ -2,7 +2,8 @@ name: Release
 
 # Push a tag like v0.1.0 to build binaries and publish a GitHub release:
 #   git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
-# CI (ci.yml) runs the tests on main; this only builds what was tagged.
+# The tagged commit is vetted and tested again here (a tag need not be on a
+# commit CI passed), so a broken tag publishes nothing.
 
 on:
   push:
@@ -30,6 +31,9 @@ jobs:
 
       - name: go vet
         run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
 
       # Static, reproducible-ish binaries: no cgo, no local paths, the tag
       # stamped in as the version (comebye -version). Archive names carry
