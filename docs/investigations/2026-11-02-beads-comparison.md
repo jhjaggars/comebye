@@ -317,7 +317,8 @@ For the coordinator to forward to `design-agent-lifecycle`:
 ## Design sketch: typed waits and a backlog
 
 The user's reply to the report: typed waits and a long-lived backlog sound
-useful. The two belong together. A backlog item is a handoff that hasn't
+useful. The user then decided that the backlog lives on the hub and is
+owned by the coordinator, with beads at most as a later bridge. The two belong together. A backlog item is a handoff that hasn't
 started yet, and waits decide when it *can* start. The backlog's "ready"
 view is then beads' `bd ready`: approved items whose waits are all met.
 
@@ -390,7 +391,12 @@ type Wait struct {
   - test-and-fix = `step_failed`;
   - landing approval = `human` on the landing phase.
 
-### A backlog
+### A backlog: on the hub, owned by the coordinator
+
+*Decided (the user, via the coordinator, 2026-11-02):* the backlog lives on
+the hub and belongs to the coordinator. The coordinator uses it to keep
+the user informed and to drive agents. beads is at most an optional bridge
+later (below).
 
 ```go
 type Item struct {
@@ -399,52 +405,69 @@ type Item struct {
     Workflow string           // feature | test | research | review | watch | deploy
     Priority int              // 0..4, as in beads
     Waits    []Wait
-    Ref      string           // external issue or bead id
+    Ref      string           // optional external issue or bead id (opaque)
     Origin   string           // user | coordinator | follow-up of entry <id> (beads' discovered-from)
-    Status   string           // proposed | approved | started | dropped
-    EntryID  string           // the handoff it became
+    Status   string           // proposed | approved | started | dropped | done
+    EntryID  string           // the handoff it became (one per round)
     Events   []Event          // who changed what, when
 }
 ```
 
-- **Persisted** on the hub as `backlog.json`, beside the ledger, with no
-  cap on open items. Dropped and started items are kept for history. This
-  is what survives sessions, coordinators and restarts.
-- **Feeds:**
-  - the user, from the app or by asking the coordinator;
-  - the coordinator, from the briefing's "Next:" lines;
-  - the **Follow-ups section of every report**, which the hub parses into
-    `proposed` items linked to the entry. These items are data and are
-    never started on their own.
-- **Ready** = `approved` items whose waits are all met, sorted by
-  priority. `comebye backlog [--ready]` lists them, and the briefing's
-  "Next:" comes from them.
-- **Starting** is always a user decision. The user taps **Start**, or the
-  coordinator relays the user's OK with `comebye backlog start ID`, which
-  fills in host, repo and branch and makes an ordinary handoff. `approved`
-  can be set in bulk, so "do these three when CI is green" runs without
-  the coordinator being awake.
-- **Plans** can be created from items: `comebye plan create --from
-  ITEM…` turns approved items with `step` waits between them into a plan.
+- **Stored on the hub** as `backlog.json`, beside the ledger: one backlog
+  for every host and repo, with no cap on open items. Done, dropped and
+  started items are kept for history. Like the ledger and the briefing,
+  it outlives any one coordinator: a new coordinator reads the backlog
+  and carries on.
+- **The coordinator owns it.** It is the only agent that writes it: `add`,
+  `edit`, `prioritise`, `approve`, `start`, `drop`. Workers can't write
+  it. They hand the coordinator follow-ups in their report, as today. The
+  agent-role check would allow these routes for coordinators only. That
+  enforcement waits on reliable caller identity (the deferred
+  server-enforced coordinator role); until then it is a playbook rule, as
+  "only coordinators hand off" is today.
+- **Where items come from:**
+  - the user's requests, which the coordinator records as `approved`
+    items so nothing they asked for is lost between sessions;
+  - the coordinator's own proposals;
+  - the Follow-ups section of each report. The coordinator reads it and
+    files the items as `proposed`, linked to the entry. These items are
+    data from a worker: the playbook rule stays that nothing is started
+    because a report says so.
+- **Approval stays the user's.** `proposed` → `approved` only on the user's
+  word: the coordinator relays it (`comebye backlog approve ID --note
+  "<the user's words>"`, recorded like the land OK), or the user taps
+  Approve in the app.
+- **Driving agents.** Within approved items, the coordinator decides what
+  starts when. `comebye backlog ready` lists approved items whose waits
+  are met, by priority, and `comebye backlog start ID` fills in host, repo
+  and branch and makes an ordinary handoff (`Item.EntryID` set, status
+  `started`). When the handoff's work is landed, or finished for workflow
+  types that don't land, the coordinator sets `done`. Items with `step`
+  waits between them can be started as a plan (`backlog start --plan ID…`),
+  so a chain runs while the coordinator is asleep.
+- **Keeping the user informed.**
+  - The briefing's "Next:" lines come from the ready and proposed items.
+  - The coordinator answers "what's queued?" from `comebye backlog`.
+  - When an item's waits are all met, the hub sends the coordinator a
+    notice, as it does for a finished worker, so it can start the item or
+    tell the user.
+  - The app shows the backlog read-only, with Approve for proposed items.
+    The user changes everything else by asking the coordinator.
+- **Hub notices, not hub actions.** The hub stores the backlog, checks
+  waits and sends notices. It never starts an item itself; the
+  coordinator does.
 
-### Where the backlog lives (decision for the user)
+### Optional later: a beads bridge
 
-1. **Native, on the hub (recommended).** It fits the phone app (one view,
-   all hosts and repos), uses the same waits, adds no dependency, and keeps
-   human approval enforced by the hub. It can't be read without Comebye,
-   and it isn't versioned with the repository.
-2. **beads, per repository, read by Comebye.** The hub would run
-   `bd ready --json` / `bd show` on the owning host and show the items;
-   **Start** would make a handoff with `--ref <bead>`; the worker would run
-   `bd close` in its report step, and `.beads/hooks/on_close` could call
-   `comebye` to wake the coordinator. The backlog lives with the code and
-   any agent can use it outside Comebye. The costs: beads must be installed
-   and migrated in step on every host, each repo has a separate backlog,
-   there is no cross-repo view without per-repo calls, and the waits are
-   split between beads gates and Comebye waits.
-3. **Native now, with an import/export bridge later**
-   (`comebye backlog import --beads REPO`). This keeps option 2 open
-   without paying for it now.
+Not planned now. If a repository already keeps its work in beads, two
+small tools would connect it without a dependency in the hub:
+- `comebye backlog import --beads REPO` (run by the coordinator, which
+  runs `bd ready --json` itself on that host) would copy beads into
+  `proposed` items with `Ref` set;
+- a worker whose item has a bead `Ref` could be told in its brief to
+  `bd close` it.
+
+Beads' storage, sync and gates stay out of Comebye.
 
 ### Order to build
 
@@ -454,9 +477,11 @@ type Item struct {
 2. `pr_merged` and `ci_green` through `/api/waitcheck` on the owning host.
 3. `comebye report --outcome`, so `step` and `step_failed` read the
    outcome rather than guess.
-4. The backlog store and CLI (`backlog add/list/approve/start/drop`), and
-   "Next:" in the briefing from ready items.
-5. Report follow-ups → `proposed` items; the backlog view in the app.
+4. The backlog store and the coordinator's CLI
+   (`backlog add/edit/list/ready/approve/start/drop/done`), the
+   "waits met" notice to the coordinator, the playbook section, and
+   briefing "Next:" from the backlog.
+5. The app's read-only backlog view with Approve.
 
 ## What was verified
 
