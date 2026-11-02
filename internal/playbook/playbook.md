@@ -34,6 +34,7 @@ with the matches listed.
 | `comebye model AGENT [MODEL] [--thinking T]` | switch a running claude or pi agent's model (it must be idle) |
 | `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
+| `comebye land AGENT [--base main] [--deploy] [--queue]` | after the user OKs it, tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery) |
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
@@ -79,7 +80,7 @@ user's.
      or avoid.
    - **Definition of done**: the tests, builds or checks that must pass and
      what to commit. Workers commit on their branch and end with a report;
-     merging stays with the user.
+     they land it themselves only after the user OKs it (see Landing).
    - For any change to the phone app's UI (`web/`), the definition of done
      includes **seeing it**: the worker starts `tools/uitest/dev.sh start`,
      takes before and after screenshots with `tools/uitest/shot.mjs` at
@@ -168,6 +169,31 @@ hub cuts long reports (8 kB each) and the worker can read the rest with
   question). Tell the user; do not answer it for them.
 - When a worker needs a follow-up (a fix, a missing test), send it with
   `comebye prompt WORKER "…"`; keep it specific.
+
+## Landing
+
+Landing is a phase of the worker's own life, done by the same worker (it has
+the context). Do not spawn a separate landing or merge agent. The cycle:
+
+1. The worker does the work, commits on its branch and reports. The
+   report's Verification section is grouped **Verified live / Unit tests
+   only / Not verified**.
+2. You tell the user how it went, including that grouping.
+3. **Ask the user whether to land it. Never land on your own.** After they
+   OK it, run `comebye land WORKER` (add `--queue` if the worker is busy or
+   a dialog is open; `--base` if not main). It sends the worker a standard
+   prompt: rebase or cherry-pick onto the latest `origin/main` as plain
+   commits (no merge commits, none that exist only to carry a signature),
+   re-run the tests, fast-forward push to main (never force, never rewrite
+   pushed history), watch CI, delete its pushed and local branch, report.
+   `comebye land` refuses unless the worker's ledger entry is finished with
+   a report. For anything else, `comebye prompt` the same steps yourself.
+4. Read the landing report and tell the user. If CI failed or the push was
+   rejected, say so; do not tell the worker to force anything.
+5. **Deploying is a separate step**, only when the user asks: then
+   `comebye land WORKER --deploy`, or a specific prompt if the worker has
+   already landed.
+6. Then mark the session ready to remove (below).
 
 ## Marking sessions ready to remove
 

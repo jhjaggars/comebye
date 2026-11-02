@@ -818,3 +818,42 @@ func TestModelSwitchCommand(t *testing.T) {
 		t.Fatalf("no model: %d", code)
 	}
 }
+
+func TestLand(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/hosts/laharl/agents/w3:p1/prompt"] = answer{body: `{"agent":{}}`}
+	f.answers["POST /api/queue"] = answer{body: `{"queued":{"id":"q1"}}`}
+
+	// A running worker (no report) and a non-worker are refused; nothing is sent.
+	for _, arg := range []string{"kube/w9:p9", "solo"} {
+		errb.Reset()
+		if code := run(e, "land", arg); code == 0 || !strings.Contains(errb.String(), "land") {
+			t.Fatalf("land %s: %d %s", arg, code, errb)
+		}
+	}
+	if f.find("POST", "/api/hosts/kube/agents/w9:p9/prompt") != nil || f.find("POST", "/api/hosts/kube/agents/w5:p2/prompt") != nil {
+		t.Fatal("a refused land reached the agent")
+	}
+
+	// A finished worker with a report gets the standard prompt.
+	if code := run(e, "land", "laharl/w3:p1", "--base", "trunk"); code != 0 {
+		t.Fatalf("land: %d %s", code, errb)
+	}
+	body := f.find("POST", "/api/hosts/laharl/agents/w3:p1/prompt").body
+	for _, want := range []string{"origin/trunk", "plain commits", "no merge commits", "Re-run the tests", "Never force-push", "Watch CI", "Delete your pushed branch", "Do not deploy"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("land prompt lacks %q: %s", want, body)
+		}
+	}
+	// --deploy and --queue.
+	out.Reset()
+	if code := run(e, "land", "laharl/w3:p1", "--deploy", "--queue"); code != 0 || !strings.Contains(out.String(), "Queued q1") {
+		t.Fatalf("land --queue: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/queue").body; !strings.Contains(b, "Deploy as the project") || strings.Contains(b, "Do not deploy") {
+		t.Errorf("queued body %s", b)
+	}
+	if code := run(e, "land", "laharl/w3:p1", "--base", "a b"); code == 0 {
+		t.Error("bad base accepted")
+	}
+}

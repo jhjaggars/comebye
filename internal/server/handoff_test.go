@@ -47,6 +47,14 @@ func TestHandoffLocal(t *testing.T) {
 			t.Errorf("brief lacks %q:\n%s", want, text)
 		}
 	}
+	for _, want := range []string{"Do not merge, push or rebase unless your task, or a later message from me@example.com, explicitly tells you to", "fast-forward pushes only, never force-push, never rewrite pushed history", "me@example.com may come back and ask you to land your work", "that message as your authorisation for exactly those steps", "grouped as: Verified live / Unit tests only / Not verified"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("brief lacks %q", want)
+		}
+	}
+	if strings.Contains(text, "merging is left to the user") {
+		t.Errorf("old merge ban remains")
+	}
 	if strings.Contains(text, "{{") {
 		t.Errorf("unfilled placeholder:\n%s", text)
 	}

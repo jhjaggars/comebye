@@ -64,6 +64,7 @@ func init() {
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
 		{"report", "FILE|-", "(workers) declare yourself done and send your final report to whoever handed you the task", cmdReport},
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
+		{"land", "AGENT [--base main] [--deploy] [--queue] [--json]", "after the user OKs it, tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
@@ -1046,18 +1047,93 @@ func cmdPrompt(e *Env, args []string) error {
 			return errors.New("refusing to prompt yourself")
 		}
 	}
-	if *queue {
-		return queuePrompt(e, c, t, text, *asJSON)
+	return sendPrompt(e, c, t, text, *queue, *asJSON)
+}
+
+// sendPrompt delivers text to t through the normal prompt path (the host's
+// dialog guard applies), or queues it on the hub.
+func sendPrompt(e *Env, c *client, t target, text string, queue, asJSON bool) error {
+	if queue {
+		return queuePrompt(e, c, t, text, asJSON)
 	}
 	data, err := c.raw("POST", hostPath(t, "prompt"), nil, map[string]string{"text": text})
 	if err != nil {
 		return err
 	}
-	if *asJSON {
+	if asJSON {
 		return rawJSON(e, data)
 	}
 	fmt.Fprintf(e.Stdout, "Sent to %s.\n", t.label())
 	return nil
+}
+
+// ---- land ----
+
+// landPrompt is the standard land request sent to a finished worker.
+func landPrompt(base string, deploy bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Your report is accepted and the user has OKed landing your work. This message is your authorisation to do exactly these steps, and nothing beyond them:\n\n")
+	fmt.Fprintf(&b, "1. `git fetch origin`, then rebase (or cherry-pick) your commits onto the latest `origin/%s` as plain commits: no merge commits, and no merge commits that exist only to carry a signature. Resolve conflicts in your own work; if one is not obviously yours to resolve, stop and report.\n", base)
+	b.WriteString("2. Re-run the tests (and vet/format checks) on the rebased result. If they fail, stop and report; do not push.\n")
+	fmt.Fprintf(&b, "3. Push as a fast-forward of `%s` (`git push origin HEAD:%s`). Never force-push, never rewrite pushed history. If the push is rejected because %s moved, fetch, rebase again and re-test; do not force.\n", base, base, base)
+	b.WriteString("4. Watch CI for the pushed commit until it finishes. If it fails, report the failure; do not push fixes unasked.\n")
+	b.WriteString("5. Delete your pushed branch and your local branch (the worktree stays; the session is removed separately).\n")
+	if deploy {
+		b.WriteString("6. Deploy as the project's docs describe, once CI is green.\n")
+		b.WriteString("\nThen report with `comebye report -`: the landed commit hashes, the test and CI results, and the deploy result.\n")
+	} else {
+		b.WriteString("\nDo not deploy: that is a separate step, done only when asked.\n")
+		b.WriteString("\nThen report with `comebye report -`: the landed commit hashes and the test and CI results.\n")
+	}
+	return b.String()
+}
+
+func cmdLand(e *Env, args []string) error {
+	fs := flag.NewFlagSet("land", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	queue := fs.Bool("queue", false, "hold the prompt on the hub and send it once the agent is idle with no question open (up to 2 hours) instead of failing")
+	base := fs.String("base", "main", "the branch to land on")
+	deploy := fs.Bool("deploy", false, "also deploy after CI is green (only when the user asked for it)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one AGENT")
+	}
+	if strings.TrimSpace(*base) == "" || strings.HasPrefix(*base, "-") || strings.ContainsAny(*base, " \t\n`$\\") {
+		return usageErr("bad --base %q", *base)
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	if c.pane != "" {
+		if w, err := c.getWhoami(); err == nil && w.Agent == t.ID {
+			return errors.New("refusing to prompt yourself")
+		}
+	}
+	lg, err := c.getLedger()
+	if err != nil {
+		return err
+	}
+	var en *apiEntry
+	for i := range lg.Entries {
+		if lg.Entries[i].AgentID == t.ID && lg.Entries[i].Status != "removed" && lg.Entries[i].Status != "failed" {
+			en = &lg.Entries[i]
+		}
+	}
+	if en == nil {
+		return fmt.Errorf("%s has no handoff in the ledger: land is for workers started with `comebye handoff`", t.label())
+	}
+	if en.Status != "finished" || strings.TrimSpace(en.FinalReport) == "" {
+		return fmt.Errorf("%s is not ready to land: its ledger entry is %q and %s a final report; land after the worker has finished and reported", t.label(), en.Status, map[bool]string{true: "has", false: "has no"}[strings.TrimSpace(en.FinalReport) != ""])
+	}
+	return sendPrompt(e, c, t, landPrompt(*base, *deploy), *queue, *asJSON)
 }
 
 type apiQueued struct {

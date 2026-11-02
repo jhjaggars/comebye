@@ -73,13 +73,28 @@ the owning host:
    a running agent;
 3. sends the brief wrapped in the handoff template (`agent.prompt`): work
    only in this worktree on this branch, **commit the work on the branch**
-   when done, don't merge or push other branches (merging stays with you),
-   and end with a final report in a fixed format: `## Summary`,
-   `## Changes`, `## Verification`, `## Follow-ups`. A
+   when done, don't merge, push or rebase unless the task or a later message
+   from the coordinator says to (then exactly that, fast-forward only, never
+   force, never rewriting history), and end with a final report in a fixed
+   format: `## Summary`, `## Changes`, `## Verification` (grouped as
+   Verified live / Unit tests only / Not verified), `## Follow-ups`. The
+   template also tells the worker that the coordinator may ask it to land its
+   work after the report, and that this message authorises exactly those
+   steps (see **Landing**). A
    `handoff-template.md` in the state directory replaces the built-in
    template; the hub fills `{{repo}}`, `{{branch}}`, `{{brief}}`,
    `{{from}}` and `{{host}}`, the worker's host fills `{{worktree}}` and
    `{{base}}`.
+
+**Landing.** Landing is a phase of the worker's lifecycle, done by the same
+worker after the user OKs it: the worker reports (the coordinator tells the
+user how it went), then on the coordinator's `comebye land AGENT` it rebases
+or cherry-picks onto the latest `origin/main` as plain commits (no merge
+commits, none that exist only to carry a signature), re-runs the tests,
+fast-forward pushes to main (never force, never rewriting pushed history),
+watches CI, deletes its pushed and local branch and reports. Deploying is a
+separate step, only when the user asks (`--deploy`). Then the session is
+marked for removal. Coordinators do not spawn separate landing agents.
 
 **The ledger.** There is one ledger, on the hub (or on a single instance):
 `ledger.json` in the state directory (mode 0600, rewritten atomically).
@@ -276,6 +291,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye ledger [--active]` | The handoffs: status, host, repository, branch, worker, whether a final report was captured, marks, and hints (agent gone, uncommitted or unmerged, `candidate`). Then the other marked sessions. |
 | `comebye read AGENT [--lines N]` | The agent's last N messages (default 20) as text; the terminal's output for agents without a transcript. |
 | `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch); for any other agent, its last reply. |
+| `comebye land AGENT [--base main] [--deploy] [--queue]` | After the user has OKed it, send a finished worker the standard land prompt through the normal prompt path (so the dialog guard applies, and `--queue` holds it): rebase or cherry-pick onto the latest `origin/BASE` as plain commits, re-run the tests, fast-forward push (never force), watch CI, delete the pushed and local branch, report. `--deploy` adds a deploy step; without it the worker is told not to deploy. Refused unless the agent's ledger entry is `finished` with a final report. |
 | `comebye inspect AGENT [--diff]` | The agent's git state, checked on its own host: worktree, branch and tip, an unfinished rebase or merge, uncommitted files, commits not in the base, commits on no remote, the diff stat; `--diff` adds the diffs (128 KB each at most). It reports `merged:` (are the commits in the base?) separately from `pushed:` (are they on a remote?): pushed work is not merged, and a squash-merged PR still counts as not merged. |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. `--model` picks the worker's model (see `comebye models`); `--thinking` is pi's level. Neither: the agent's own default. |
 | `comebye model AGENT [MODEL] [--thinking T]` | Switch a running agent's model (claude and pi; it must be idle): the agent's own `/model` (and pi's `/thinking`) is typed into its prompt (`POST .../agents/{target}/model`). For pi MODEL may be left out with `--thinking`. A worker's ledger entry follows. |
