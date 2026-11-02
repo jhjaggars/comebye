@@ -138,7 +138,12 @@ are warnings), or "Remove all safe" for those without warnings.
 knows: an open PR it is watching, a loop it runs, work it was told to
 keep, a follow-up it owes you. So marking a session that is idle or done
 (from the app or `comebye mark`) also sends it a short prompt asking
-whether it is safe to remove, and to take no other action. It should reply
+whether it is safe to remove, and to take no other action. The question
+includes the hub's own check of its worktree, run on its host just before
+asking ("the worktree is clean and every commit of feat/x is in
+origin/main (landed on origin/main as bf50213)", or the warnings), and
+tells it to trust that over its memory: work rebased or cherry-picked onto
+the base has new SHAs, which a session may not know. It should reply
 with SAFE, or UNSAFE and the reason; Comebye reads the first word of its
 reply and shows it in the review:
 

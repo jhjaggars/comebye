@@ -14,8 +14,10 @@ import (
 // Asking a marked session whether it is safe to remove. A coordinator can
 // see the git checks but not what only the session knows (an open PR it
 // is watching, a loop it runs, work it was told to keep), so a mark of a
-// live, idle session sends it askPrompt and records the first word of its
-// reply on the mark: SAFE, or UNSAFE and why. No reply within askWait is
+// live, idle session sends it askPrompt, followed by the hub's own check of
+// its worktree (askChecks, so it does not answer from stale memory of
+// rebased SHAs), and records the first word of its reply on the mark:
+// SAFE, or UNSAFE and why. No reply within askWait is
 // "no answer", never safe. A working or blocked session is not asked.
 
 const (
@@ -26,6 +28,8 @@ const (
 	// "needs input" waits out its delay first).
 	askQuietAfter = time.Minute
 	maxAskReason  = 300
+	// askChecksWait bounds the check run before asking.
+	askChecksWait = 45 * time.Second
 )
 
 const askPrompt = "A coordinator proposes removing this session and its worktree. " +
@@ -60,7 +64,7 @@ func (s *Server) runAsk(m ledger.Mark, a herdr.AgentInfo) {
 		s.setQuiet(m.AgentID, time.Now().Add(askQuietAfter))
 	}
 	before := s.latestOf(ctx, a.Host, a.PaneID)
-	if err := s.promptAgent(ctx, a, askPrompt); err != nil {
+	if err := s.promptAgent(ctx, a, askPrompt+s.askChecks(ctx, m.AgentID)); err != nil {
 		set(ledger.AskNotAsked, "could not prompt it: "+err.Error())
 		return
 	}
@@ -91,6 +95,60 @@ func (s *Server) runAsk(m ledger.Mark, a herdr.AgentInfo) {
 	if s.markCurrent(m) {
 		set(ledger.AskNoAnswer, "")
 	}
+}
+
+// askChecks is the hub's own check of the marked session's worktree, run
+// on its host just before asking, as a paragraph for the question: a
+// session whose work was rebased or cherry-picked onto the base would
+// otherwise answer from its memory of SHAs that no longer exist there. It
+// is "" when the session is not marked any more.
+func (s *Server) askChecks(ctx context.Context, agentID string) string {
+	var it *removal
+	for _, r := range s.marked() {
+		if r.ID == agentID {
+			it = r
+		}
+	}
+	if it == nil {
+		return ""
+	}
+	cctx, cancel := context.WithTimeout(ctx, askChecksWait)
+	defer cancel()
+	it.Warnings, it.Notes = []string{}, []string{}
+	s.checkRemoval(cctx, it)
+	return "\n\nThe hub checked this session's worktree on its host just now: " + checkVerdict(it) + ". " +
+		"Trust this check over your memory of the commits you made: work rebased or cherry-picked onto the base " +
+		"has new SHAs there, and the check matches it by patch."
+}
+
+// checkVerdict sums up an item's git checks (after checkRemoval) in a
+// sentence.
+func checkVerdict(it *removal) string {
+	var parts []string
+	if c := it.Checks; c != nil && c.Exists && !c.Primary && len(it.Warnings) == 0 {
+		parts = append(parts, "the worktree is clean and every commit of "+orDefault(it.Branch, "its branch")+" is in "+orDefault(c.BaseUsed, "the base"))
+		for _, n := range it.Notes {
+			if !strings.HasPrefix(n, "every commit is in ") {
+				parts = append(parts, n)
+			}
+		}
+		if len(c.Landed) > 0 {
+			parts[0] += " (" + landedText(c.BaseUsed, c.Landed) + ")"
+		}
+	} else {
+		parts = append(append(parts, it.Warnings...), it.Notes...)
+	}
+	if len(parts) == 0 {
+		return "nothing to report"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // parseAnswer reads a reply's first word: SAFE, or UNSAFE and the rest

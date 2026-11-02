@@ -891,6 +891,35 @@ func (s *Server) review(ctx context.Context, it *removal) {
 	case it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked:
 		it.Warnings = append(it.Warnings, "the agent is "+string(it.Live.Status)+": closing it interrupts it")
 	}
+	s.checkRemoval(ctx, it)
+	if it.Mark.Discard {
+		it.Notes = append(it.Notes, "proposed: discard the work (worktree and branch)")
+	}
+	if a := it.Mark.Ask; a != nil {
+		switch a.State {
+		case ledger.AskUnsafe:
+			why := a.Reason
+			if why == "" {
+				why = "(no reason given)"
+			}
+			it.Warnings = append(it.Warnings, "the session says UNSAFE: "+why)
+		case ledger.AskAsking:
+			it.Notes = append(it.Notes, "asking the session whether it is safe to remove…")
+		case ledger.AskNoAnswer:
+			it.Notes = append(it.Notes, "the session did not answer whether it is safe to remove"+parenthesized(a.Reason))
+		case ledger.AskUnclear:
+			it.Notes = append(it.Notes, "the session answered neither SAFE nor UNSAFE: "+a.Reason)
+		case ledger.AskNotAsked:
+			it.Notes = append(it.Notes, "the session was not asked whether it is safe to remove"+parenthesized(a.Reason))
+		}
+	}
+	it.Safe = len(it.Warnings) == 0
+}
+
+// checkRemoval runs an item's git checks on its host and adds what they
+// found to its warnings and notes: the part of the review that does not
+// depend on the session's state or its answer.
+func (s *Server) checkRemoval(ctx context.Context, it *removal) {
 	s.findWorktree(ctx, it)
 	if it.Worktree == "" {
 		it.Notes = append(it.Notes, "no worktree of its own: only the session is closed")
@@ -939,28 +968,6 @@ func (s *Server) review(ctx context.Context, it *removal) {
 	if it.ChecksError != "" {
 		it.Warnings = append(it.Warnings, "checks failed: "+it.ChecksError)
 	}
-	if it.Mark.Discard {
-		it.Notes = append(it.Notes, "proposed: discard the work (worktree and branch)")
-	}
-	if a := it.Mark.Ask; a != nil {
-		switch a.State {
-		case ledger.AskUnsafe:
-			why := a.Reason
-			if why == "" {
-				why = "(no reason given)"
-			}
-			it.Warnings = append(it.Warnings, "the session says UNSAFE: "+why)
-		case ledger.AskAsking:
-			it.Notes = append(it.Notes, "asking the session whether it is safe to remove…")
-		case ledger.AskNoAnswer:
-			it.Notes = append(it.Notes, "the session did not answer whether it is safe to remove"+parenthesized(a.Reason))
-		case ledger.AskUnclear:
-			it.Notes = append(it.Notes, "the session answered neither SAFE nor UNSAFE: "+a.Reason)
-		case ledger.AskNotAsked:
-			it.Notes = append(it.Notes, "the session was not asked whether it is safe to remove"+parenthesized(a.Reason))
-		}
-	}
-	it.Safe = len(it.Warnings) == 0
 }
 
 func parenthesized(s string) string {

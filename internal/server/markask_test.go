@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -200,4 +201,67 @@ func TestParseAnswer(t *testing.T) {
 	if _, why := parseAnswer("UNSAFE " + strings.Repeat("é", 400)); len(why) > maxAskReason+len("…") {
 		t.Errorf("reason not clipped: %d bytes", len(why))
 	}
+}
+
+// The question carries the hub's own check, so a session whose work was
+// cherry-picked onto main under another SHA is told it landed rather than
+// answering UNSAFE from memory (feat-ui-dev-harness, 2026-11-02).
+func TestMarkAskCarriesTheCheck(t *testing.T) {
+	r := newLandedRepo(t)
+	r.edit(t, r.wt, 3, "the worker's change")
+	landed := r.landCherryPick(t)
+	git(t, r.repo, "reset", "-q", "--hard", r.base) // local main is stale
+
+	s, fh := askServer(t, "SAFE")
+	s.cfg.LaunchRoots = []string{filepath.Dir(r.repo)}
+	if _, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: r.repo, RepoName: "proj", Branch: "w", Base: "main", AgentID: "desk/w2:p1", PaneID: "w2:p1", AgentName: "home", Worktree: r.wt, Status: ledger.Finished}); err != nil {
+		t.Fatal(err)
+	}
+	if w := do(s, "POST", "/api/marks", userHdr, `{"agent_id":"desk/w2:p1"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	entryAnswered(t, s, "desk/w2:p1")
+	text := fh.call("agent.prompt").Params["text"].(string)
+	for _, want := range []string{
+		"Do not take any other action",
+		"The hub checked this session's worktree on its host just now: the worktree is clean and every commit of w is in origin/main (landed on origin/main as " + landed[:7] + ")",
+		"Trust this check over your memory",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("question lacks %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestMarkAskCarriesUnmergedWarning(t *testing.T) {
+	r := newLandedRepo(t)
+	r.edit(t, r.wt, 3, "not landed")
+	s, fh := askServer(t, "UNSAFE: one commit is not on main")
+	s.cfg.LaunchRoots = []string{filepath.Dir(r.repo)}
+	if _, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: r.repo, RepoName: "proj", Branch: "w", Base: "main", AgentID: "desk/w2:p1", PaneID: "w2:p1", AgentName: "home", Worktree: r.wt, Status: ledger.Finished}); err != nil {
+		t.Fatal(err)
+	}
+	if w := do(s, "POST", "/api/marks", userHdr, `{"agent_id":"desk/w2:p1"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	entryAnswered(t, s, "desk/w2:p1")
+	text := fh.call("agent.prompt").Params["text"].(string)
+	if !strings.Contains(text, "just now: 1 commits not in ") || strings.Contains(text, "is clean and every commit") {
+		t.Errorf("question = %s", text)
+	}
+}
+
+func TestCheckVerdictWithoutWorktree(t *testing.T) {
+	it := &removal{Warnings: []string{}, Notes: []string{"no worktree of its own: only the session is closed"}}
+	if got := checkVerdict(it); got != "no worktree of its own: only the session is closed" {
+		t.Fatalf("verdict = %q", got)
+	}
+}
+
+func entryAnswered(t *testing.T, s *Server, id string) {
+	t.Helper()
+	waitFor(t, func() bool {
+		e, ok := s.ledger.ByAgent(id)
+		return ok && e.Mark != nil && e.Mark.Ask != nil && e.Mark.Ask.State != ledger.AskAsking
+	})
 }
