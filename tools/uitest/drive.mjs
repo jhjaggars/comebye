@@ -437,7 +437,8 @@ await check("fleet menu: Briefing item expands, collapses and shows a dismissed 
 });
 
 // ---- the collapsed briefing preview: exactly two lines, none cut ----
-for (const width of [390, 1280]) {
+// 1000px: wide, but below the desktop breakpoint (1100px), so still the card.
+for (const width of [390, 1000]) {
   await check(`brief: a long first line clamps to exactly two lines, inside the card, at ${width}px`, async () => {
     await page.setViewportSize({ width, height: 844 });
     await publishBrief('fix-header-menu landed on main as 8ea6a16 after the coordinator marked "landed on main as" the worker finished, the sweep verified every commit of the branch is in origin/main and nothing is unpushed, so it is safe to remove the worktree and its branch.\n\nmore');
@@ -725,6 +726,105 @@ await check("briefings: no swipe while an agent or the launch sheet is open", as
   st = await briefsState();
   if (st.open) throw new Error("opened over an agent");
 });
+
+// ---- desktop view (>= 1100px): list | agent | briefing, side by side ----
+const geo = (sel) => page.evaluate((s) => {
+  const e = document.querySelector(s); if (!e) return null;
+  const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+  return { x: r.x, y: r.y, w: r.width, h: r.height, shown: cs.display !== "none" && cs.visibility !== "hidden" && r.width > 0 };
+}, sel);
+async function desktopList(width) {
+  await page.setViewportSize({ width, height: 800 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.evaluate(() => { try { localStorage.clear(); } catch {} });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
+}
+for (const width of [1280, 1920]) {
+  await check(`desktop: at ${width}px the list, an empty pane and the briefing panel sit side by side`, async () => {
+    await publishBrief("## Status\n\nDesktop panel check\n\nlong detail");
+    await desktopList(width);
+    await page.waitForSelector("#briefing:not([hidden])");
+    const [l, d, e, b] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefing")]);
+    if (!l.shown || l.x !== 0 || l.w < 300 || l.w > 400) throw new Error("list column: " + JSON.stringify(l));
+    if (d.shown) throw new Error("agent pane shown with nothing selected");
+    if (!e.shown || e.x < l.x + l.w - 1) throw new Error("empty state not beside the list: " + JSON.stringify(e));
+    if (!b.shown || b.x < e.x + e.w - 1 || Math.abs(b.x + b.w - width) > 1) throw new Error("briefing panel not at the right edge: " + JSON.stringify(b));
+    const st = await briefState();
+    if (st.expanded !== "true" || !st.body) throw new Error("briefing not open in the panel: " + JSON.stringify(st));
+    if (st.preview) throw new Error("a collapsed preview shows in the panel");
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
+  });
+}
+await check("desktop: selecting an agent keeps the list visible and opens it beside it", async () => {
+  await desktopList(1280);
+  const before = await geo("#agents");
+  await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+  await page.waitForSelector("#detail", { state: "visible" });
+  await page.waitForFunction(() => document.querySelector("#chat")?.innerText.includes("alpha says hi"), null, { timeout: 5000 });
+  const [l, d, back] = await Promise.all([geo("#agents"), geo("#detail"), geo("#back")]);
+  if (!l.shown || l.x !== before.x || l.w !== before.w) throw new Error("list moved or hid: " + JSON.stringify([before, l]));
+  if (d.x < l.x + l.w - 1 || d.h < 600) throw new Error("agent pane not beside the list: " + JSON.stringify(d));
+  if (back.shown) throw new Error("back button shown on desktop");
+  const sel = await page.evaluate(() => [...document.querySelectorAll("#agents .agent.selected")].map((r) => r.dataset.id));
+  if (sel.length !== 1 || !sel[0].endsWith("w1:p1")) throw new Error("selected row marked: " + JSON.stringify(sel));
+  if (!(await visible("#detail-empty")) === false) throw new Error("empty state still shown");
+});
+await check("desktop: up/down in the list moves through the agents and opens each", async () => {
+  await desktopList(1280);
+  await page.locator("#agents .agent[data-id]").first().focus();
+  // The rows can reorder as agents change status: look up the neighbour just before each key.
+  const neighbour = (dir) => page.evaluate((d) => {
+    const rows = [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent);
+    return rows[rows.indexOf(document.activeElement.closest(".agent[data-id]")) + d]?.dataset.id;
+  }, dir);
+  for (const [key, dir] of [["ArrowDown", 1], ["ArrowUp", -1], ["ArrowDown", 1]]) {
+    const want = await neighbour(dir);
+    await page.keyboard.press(key);
+    await page.waitForFunction((id) => document.activeElement?.dataset.id === id && document.querySelector("#agents .agent.selected")?.dataset.id === id && location.hash.startsWith("#/agent/"), want, { timeout: 4000 });
+  }
+  // a re-render of the rows (the fleet menu's Refresh) must keep the focus on the same row
+  const cur = await page.evaluate(() => document.activeElement.dataset.id);
+  await page.evaluate(() => document.querySelector("#f-refresh").click());
+  await new Promise((r) => setTimeout(r, 800));
+  const id = await page.evaluate(() => document.activeElement?.dataset?.id);
+  if (id !== cur) throw new Error("focus lost on re-render: " + id + " vs " + cur);
+});
+await check("desktop: the fleet menu opens beside the list and its briefing item points at the panel", async () => {
+  await desktopList(1280);
+  await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+  await page.locator("#btn-fleet").click();
+  const m = await geo("#f-menu");
+  if (!m.shown || m.x < 0 || m.x + m.w > 361) throw new Error("menu outside the list column: " + JSON.stringify(m));
+  const t = await page.evaluate(() => ({ text: document.querySelector("#f-brief").textContent, dis: document.querySelector("#f-brief").disabled }));
+  if (!/side panel/.test(t.text) || !t.dis) throw new Error("brief item: " + JSON.stringify(t));
+  await page.keyboard.press("Escape");
+});
+await check("desktop: below the breakpoint (1099px) it is still the phone layout", async () => {
+  await desktopList(1099);
+  const [l, a] = await Promise.all([geo("#list"), geo("#agents")]);
+  if (a.x < 100 || a.w > 640) throw new Error("not the centred single column: " + JSON.stringify(a));
+  if (await visible("#detail-empty")) throw new Error("desktop empty state shown");
+  const st = await briefState();
+  if (st.expanded !== "false") throw new Error("briefing not collapsed: " + JSON.stringify(st));
+});
+await check("phone: 390px is unchanged: one column, back button, collapsed briefing, no desktop pane", async () => {
+  await desktopList(390);
+  const a = await geo("#agents");
+  if (a.x > 20 || a.w < 340 || a.w > 390) throw new Error("agents column: " + JSON.stringify(a));
+  if (await visible("#detail-empty") || await visible("#detail")) throw new Error("desktop pane visible");
+  const st = await briefState();
+  if (st.expanded !== "false" || st.body) throw new Error("briefing not collapsed: " + JSON.stringify(st));
+  const f = await geo("#f-menu"); // hidden until opened
+  await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+  await page.waitForSelector("#detail", { state: "visible" });
+  if (await visible("#list") && (await geo("#agents")).shown) throw new Error("the list stays visible under the agent on a phone");
+  const [d, back] = await Promise.all([geo("#detail"), geo("#back")]);
+  if (d.x !== 0 || d.w !== 390 || !back.shown) throw new Error("detail not full-screen with a back button: " + JSON.stringify([d, back]));
+  await page.locator("#back").click();
+  await page.waitForSelector("#agents .agent", { state: "visible" });
+});
+await page.setViewportSize({ width: 390, height: 844 });
 
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();

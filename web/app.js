@@ -426,6 +426,15 @@ function renderHostFilter() {
 }
 
 function renderList() {
+  // Re-rendering replaces the rows: keep the keyboard focus on the same one
+  // (the desktop arrow-key browsing would otherwise lose it on every poll).
+  const fid = document.activeElement && document.activeElement.closest ? document.activeElement.closest("#agents .agent[data-id]") : null;
+  renderListRows();
+  markSelectedRow();
+  if (fid) { const r = rowFor(fid.dataset.id); if (r) r.focus({ preventScroll: true }); }
+}
+
+function renderListRows() {
   const wrap = $("agents");
   renderHostFilter();
   const filter = activeHostFilter();
@@ -495,6 +504,36 @@ function renderList() {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(el.dataset.id); }
     });
   });
+}
+
+/* ---------- desktop view (>= 1100px, see the CSS): list + agent side by side ---------- */
+
+const desktopMQ = window.matchMedia("(min-width: 1100px)");
+const isDesktop = () => desktopMQ.matches;
+const rowFor = (id) => [...document.querySelectorAll("#agents .agent[data-id]")].find((r) => r.dataset.id === id);
+
+function markSelectedRow() {
+  document.querySelectorAll("#agents .agent.selected").forEach((r) => {
+    r.classList.remove("selected");
+    r.removeAttribute("aria-current");
+  });
+  const r = state.selected && rowFor(state.selected);
+  if (r) { r.classList.add("selected"); r.setAttribute("aria-current", "true"); }
+}
+
+// Up/Down on a row moves to the previous/next one and opens it.
+function onListArrow(ev) {
+  if (!isDesktop() || (ev.key !== "ArrowDown" && ev.key !== "ArrowUp")) return;
+  if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+  const cur = ev.target.closest && ev.target.closest("#agents .agent[data-id]");
+  if (!cur || ev.target.closest(".row-more")) return;
+  const rows = [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent);
+  const i = rows.indexOf(cur) + (ev.key === "ArrowDown" ? 1 : -1);
+  if (i < 0 || i >= rows.length) { ev.preventDefault(); return; }
+  ev.preventDefault();
+  rows[i].focus();
+  rows[i].scrollIntoView?.({ block: "nearest" });
+  openDetail(rows[i].dataset.id);
 }
 
 function agentRow(a, worker) {
@@ -823,7 +862,7 @@ function renderBrief() {
     delete el.dataset.sig;
     return;
   }
-  const folded = !!b && lsGet(BRIEF_EXPANDED_KEY) !== "1";
+  const folded = !!b && !isDesktop() && lsGet(BRIEF_EXPANDED_KEY) !== "1"; // the desktop side panel is always open
   const preview = b && folded ? briefPreview(b.markdown) : "";
   const sched = briefing.schedule;
   const every = sched && sched.enabled ? ` · every ${sched.every}${sched.at ? " at " + sched.at : ""}` : "";
@@ -1360,6 +1399,7 @@ function briefingUiState() {
   const b = briefing.data;
   if (!b || !b.markdown.trim()) return "none";
   if (lsGet(BRIEF_DISMISSED_KEY) === b.at) return "dismissed";
+  if (isDesktop()) return "panel";
   return lsGet(BRIEF_EXPANDED_KEY) === "1" ? "expanded" : "folded";
 }
 
@@ -1377,8 +1417,8 @@ function renderFleetMenu() {
   $("f-review").textContent = (lon ? `Review removals (${n})` : "Review removals") + sfx;
   $("f-review").disabled = !lon || !n;
   const st = briefingUiState();
-  $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
-  $("f-brief").disabled = !lon || st === "none";
+  $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (in the side panel)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
+  $("f-brief").disabled = !lon || st === "none" || st === "panel";
   $("f-sched").textContent = "Briefing schedule…" + sfx;
 }
 
@@ -1818,6 +1858,8 @@ function openDetail(id) {
   state.lastStatus = a.agent_status || null;
   $("list").style.display = "none";
   $("detail").style.display = "flex";
+  document.body.classList.add("has-detail");
+  markSelectedRow();
   renderDetail();
   loadChat().then(refreshStatusLine);
   startPolling();
@@ -1844,6 +1886,8 @@ function closeDetail() {
   updateAnswerCard();
   $("detail").style.display = "none";
   $("list").style.display = "block";
+  document.body.classList.remove("has-detail");
+  markSelectedRow();
   reportPresence();
   maybeReload(); // a deploy noticed while on the detail view
 }
@@ -4538,7 +4582,7 @@ window.addEventListener("DOMContentLoaded", () => {
     .catch((e) => { if (e.status === 401) toast(UNAUTHORIZED_MSG, true); })
     .finally(connectEvents);
   startWatchdog();
-  setInterval(() => { if (!document.hidden && !state.selected) renderList(); }, 60000);
+  setInterval(() => { if (!document.hidden && (!state.selected || isDesktop())) renderList(); }, 60000);
   document.addEventListener("visibilitychange", resume);
   // In the background nothing is shown: close the live connection and the
   // timers so the radio and CPU can sleep (notifications arrive by push
@@ -4553,6 +4597,8 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) resume(); }); // skip the initial load
   window.addEventListener("online", resume);
+  document.addEventListener("keydown", onListArrow);
+  desktopMQ.addEventListener("change", () => { renderBrief(); markSelectedRow(); });
   window.addEventListener("offline", () => setConn(false));
 
   $("back").addEventListener("click", () => {

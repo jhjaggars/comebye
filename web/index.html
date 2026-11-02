@@ -1011,6 +1011,53 @@
     }
     .bf-stale-acts .bf-start { border-color: var(--blue); color: var(--blue); }
     .bf-stale-acts button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+    /* Desktop view (>= 1100px): a three-pane layout instead of one column.
+       The list stays on the left, the selected agent opens beside it, and the
+       briefing sits open in a right-hand panel. 1100px leaves the agent view
+       at least ~440px (a phone-width chat) even with the briefing showing, and
+       is wider than any phone or portrait tablet, so those keep the phone UI.
+       Pure CSS plus a few hooks in app.js: #list and its <main> become
+       display:contents so each piece can take its own grid cell. */
+    #detail-empty { display: none; }
+    @media (min-width: 1100px) {
+      :root { --list-w: 360px; --brief-w: clamp(300px, 24vw, 420px); }
+      body {
+        display: grid; height: 100vh; height: 100dvh; overflow: hidden;
+        grid-template-columns: var(--list-w) minmax(0, 1fr);
+        grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+      }
+      body:has(#briefing:not([hidden])) { grid-template-columns: var(--list-w) minmax(0, 1fr) var(--brief-w); }
+      #list, #list main { display: contents !important; }
+      #list header { grid-column: 1; grid-row: 1; }
+      header .count .long { display: none; }
+      header .count .short { display: inline; }
+      #notify-panel { grid-column: 1; grid-row: 2; margin: 12px 12px 0; }
+      #host-filter { grid-column: 1; grid-row: 3; margin: 12px 0 0; padding: 0 12px 2px; }
+      #rtr-banner { grid-column: 1; grid-row: 4; width: auto; margin: 12px 12px 0; }
+      #plans { grid-column: 1; grid-row: 5; margin: 12px 12px 0; }
+      #agents { grid-column: 1; grid-row: 6; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 12px 20px; }
+      .agent.selected { outline: 2px solid var(--blue); outline-offset: -1px; background: var(--panel2); }
+      .agent.selected:focus-visible { outline-offset: -1px; }
+      #f-menu { right: auto; left: calc(var(--list-w) - 10px); transform: translateX(-100%); }
+
+      #briefing {
+        grid-column: 3; grid-row: 1 / -1; margin: 0; border-radius: 0; border-width: 0 0 0 1px;
+        border-color: var(--border); overflow-y: auto; overscroll-behavior: contain; padding-top: 6px;
+      }
+      #briefing .bf-toggle { pointer-events: none; padding-left: 14px; }
+      #briefing .bf-toggle .proj-chev { display: none; }
+      #briefing .bf-body { max-height: none; overflow: visible; }
+
+      #detail, #detail-empty { grid-column: 2; grid-row: 1 / -1; border-left: 1px solid var(--border); min-width: 0; min-height: 0; }
+      #detail { display: none !important; height: auto; contain: layout; } /* contain: its fixed sub-view and menu stay inside the pane */
+      body.has-detail #detail { display: flex !important; }
+      body:not(.has-detail) #detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--muted); text-align: center; padding: 24px; }
+      #detail-empty b { color: var(--text); font-weight: 650; }
+      #detail-empty kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; background: var(--panel); }
+      #detail header .back { display: none; }
+      #detail main { max-width: 900px; margin: 0 auto; }
+    }
   </style>
 </head>
 <body>
@@ -1263,6 +1310,8 @@
       <div id="sv-chat" class="chat"></div>
     </section>
   </div>
+
+  <div id="detail-empty" aria-hidden="true"><b>No agent selected</b><span>Pick one from the list, or press <kbd>↑</kbd> <kbd>↓</kbd> in it to browse.</span></div>
 
   <div id="toast"></div>
   <button type="button" id="update-banner" hidden>New version available — tap to reload</button>
