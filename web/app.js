@@ -2766,6 +2766,7 @@ async function refreshOutput(force) {
     const el = $("output");
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     el.textContent = read.text || "(no output)";
+    setAutoKeys(screenWantsKeys(read.text));
     if (atBottom) el.scrollTop = el.scrollHeight;
   } catch (e) {
     if (e.aborted || state.selected !== pane) return;
@@ -3409,7 +3410,31 @@ function toggleKeypad(show) {
     pad.innerHTML = KEYPAD_KEYS.map(([label, key]) =>
       `<button type="button" class="btn${key === "esc" ? " warn" : key === "ctrl+c" ? " danger" : ""}" data-key="${esc(key)}">${esc(label)}</button>`).join("");
   }
+  if (show === undefined && !pad.hidden && pad.classList.contains("auto")) {
+    // The automatic Esc/Enter strip is showing: Keys… widens it to the full pad.
+    pad.classList.remove("auto");
+    pad.dataset.manual = "1";
+    return;
+  }
   pad.hidden = show === undefined ? !pad.hidden : !show;
+  pad.classList.remove("auto");
+  if (pad.hidden) delete pad.dataset.manual; else pad.dataset.manual = "1";
+}
+
+// A screen that ends in a prompt-like footer ("enter to select · esc to
+// cancel", "(y/n)", "Trust project folder?") is waiting for a key even when
+// no dialog was recognised and the agent reads idle: show a compact
+// ↑ ↓ Esc Enter strip without anyone having to find Keys….
+const KEY_FOOTER = /(\benter\b[^\n]{0,24}\b(select|confirm|accept|submit|continue)|\besc\b[^\n]{0,24}\b(cancel|close|back|dismiss|exit)|\(y\/n\)|\[y\/n\]|\btrust\b[^\n]{0,40}\?|press (enter|any key)|↑\/↓|↑↓)/i;
+function screenWantsKeys(text) {
+  const tail = String(text || "").split("\n").filter((l) => l.trim()).slice(-8).join("\n");
+  return KEY_FOOTER.test(tail);
+}
+function setAutoKeys(on) {
+  const pad = $("keypad");
+  if (pad.dataset.manual) return; // the user opened the full pad themselves
+  if (on) toggleKeypad(true), delete pad.dataset.manual, pad.classList.add("auto");
+  else if (pad.classList.contains("auto")) { pad.hidden = true; pad.classList.remove("auto"); }
 }
 
 function pasteImageFromClipboard() {

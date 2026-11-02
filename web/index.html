@@ -525,6 +525,8 @@
     }
     .keypad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
     .keypad[hidden] { display: none; }
+    /* The automatic strip: only the keys a prompt footer asks for. */
+    .keypad.auto .btn:not([data-key="up"]):not([data-key="down"]):not([data-key="esc"]):not([data-key="enter"]) { display: none; }
     .keypad .btn { min-height: 44px; font-size: 15px; }
     .btn {
       flex: 1; min-height: 44px; padding: 0 4px; border-radius: 12px; border: 1px solid var(--border);

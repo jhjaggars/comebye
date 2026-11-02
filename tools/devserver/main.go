@@ -200,9 +200,15 @@ func (f *fake) answer(method string, p map[string]any) (any, *rpcErr) {
 		if a == nil {
 			return nil, &rpcErr{"agent_not_found", target}
 		}
-		if ks, _ := p["keys"].([]any); a.trust && slices.Contains(ks, any("enter")) {
+		ks, _ := p["keys"].([]any)
+		if a.trust && slices.Contains(ks, any("enter")) {
 			a.screen = []string{"pi ready"} // the prompt is answered
 		}
+		// Recorded on the screen, so a check can see which keys arrived.
+		for _, k := range ks {
+			f.record(a, "assistant", fmt.Sprintf("[keys] %v", k))
+		}
+
 		return map[string]any{"type": "ok"}, nil
 	case "agent.prompt":
 		a := f.find(target)

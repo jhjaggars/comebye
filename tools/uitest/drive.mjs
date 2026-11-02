@@ -841,6 +841,41 @@ await check("phone: 390px is unchanged: one column, back button, collapsed brief
   await page.locator("#back").click();
   await page.waitForSelector("#agents .agent", { state: "visible" });
 });
+
+// ---- the key controls on a phone: an idle agent at a prompt ----
+const inView = async (sel, vh) => { const g = await geo(sel); return g && g.shown && g.y >= 0 && g.y + g.h <= vh && g.x >= 0 && g.x + g.w <= 390 ? null : `${sel} not in the viewport: ${JSON.stringify(g)}`; };
+const SCREEN_RE = /\/output\?/;
+for (const vh of [844, 664]) {
+  await check(`keys: 390x${vh}, idle agent: + -> Keys... shows the pad; Esc and Enter are on screen and arrive`, async () => {
+    await page.setViewportSize({ width: 390, height: vh });
+    await coldOpen("bravo");
+    await page.locator("#btn-attach").tap();
+    await page.locator("#attach-keys").tap();
+    if (!(await visible("#keypad"))) throw new Error("the keypad did not show");
+    for (const k of ["esc", "enter"]) {
+      const bad = await inView(`#keypad [data-key=${k}]`, vh);
+      if (bad) throw new Error(bad);
+    }
+    await page.locator("#keypad [data-key=esc]").tap();
+    await page.locator("#keypad [data-key=enter]").tap();
+    await page.waitForFunction(() => /\[keys\] esc[\s\S]*\[keys\] enter/.test(document.querySelector("#output").textContent), null, { timeout: 4000 });
+  });
+}
+await check("keys: a screen ending in a prompt footer shows an Esc/Enter strip with no taps; Keys... widens it", async () => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  await page.route(SCREEN_RE, (r) => r.fulfill({ json: { text: "Trust project folder?\n  /home/u/code/x\n\n  enter select · esc cancel", revision: 1 } }), { times: 20 });
+  await coldOpen("bravo");
+  await page.waitForFunction(() => !document.querySelector("#keypad").hidden, null, { timeout: 4000 });
+  for (const k of ["esc", "enter", "up", "down"]) {
+    const bad = await inView(`#keypad [data-key=${k}]`, 664);
+    if (bad) throw new Error(bad);
+  }
+  if (await visible("#keypad [data-key=tab]")) throw new Error("the auto strip shows the full pad");
+  await page.locator("#btn-attach").tap();
+  await page.locator("#attach-keys").tap();
+  if (!(await visible("#keypad [data-key=tab]"))) throw new Error("Keys... did not widen the strip");
+  await page.unroute(SCREEN_RE);
+});
 await page.setViewportSize({ width: 390, height: 844 });
 
 // ---- Pi's "Trust project folder?" prompt ----
