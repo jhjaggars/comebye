@@ -225,7 +225,12 @@ const rowOf = (pane) => page.locator(`#agents .agent[data-id$="${pane}"]`);
 async function toList() {
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#agents .agent", { state: "visible" });
-  await page.waitForFunction(() => !document.querySelector("#sweep-open").hidden, null, { timeout: 8000 });
+  // The ledger is known once the fleet menu's ledger items are enabled.
+  await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled && !document.querySelector("#f-sweep").hidden, null, { timeout: 8000 });
+}
+async function fleetMenuOpen() {
+  await page.locator("#btn-fleet").click();
+  await page.waitForSelector("#f-menu", { state: "visible", timeout: 3000 });
 }
 
 await check("mark: the list row has a visible menu button of tap size", async () => {
@@ -291,9 +296,10 @@ await page.route(/\/api\/sweep/, (r) => {
   r.fulfill({ json: { dry_run: !!body.dry_run, ready: [{ ...ready, marked: !body.dry_run }], needs_look: [look], skipped: [{ id: "x" }] } });
 });
 
-await check("sweep: the button opens a dry run listing ready and needs-a-look", async () => {
+await check("sweep: the fleet menu item opens a dry run listing ready and needs-a-look", async () => {
   await toList();
-  await page.locator("#sweep-open").click();
+  await fleetMenuOpen();
+  await page.locator("#f-sweep").click();
   await page.waitForSelector("#sweep", { state: "visible" });
   await page.waitForFunction(() => document.querySelector("#sweep-list")?.innerText.includes("fix-login"), null, { timeout: 5000 });
   const t = await page.locator("#sweep-list").innerText();
@@ -360,6 +366,99 @@ await check("brief: expanding persists across a reload and a new briefing; colla
   st = await briefState();
   if (st.expanded !== "false" || st.body) throw new Error("collapse did not stick: " + JSON.stringify(st));
 });
+
+// ---- the header's fleet menu ("⋯", top right of the list) ----
+await check("fleet menu: the ⋯ is visible at 390px, on top, inside the header, without overflow", async () => {
+  await toList();
+  const r = await page.evaluate(() => {
+    const b = document.querySelector("#btn-fleet"), h = document.querySelector("#list header");
+    const r = b.getBoundingClientRect(), hr = h.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const c = document.querySelector("#count").getBoundingClientRect();
+    const bell = document.querySelector("#btn-notify").getBoundingClientRect();
+    return { x: r.x, right: r.right, w: r.width, h: r.height, top: r.top, bottom: r.bottom, hb: hr.bottom, onTop: hit === b || b.contains(hit), vw: innerWidth,
+      countRight: c.right, bellLeft: bell.left, bellRight: bell.right, countText: document.querySelector("#count").innerText };
+  });
+  if (!r.onTop || r.x < 0 || r.right > r.vw || r.w < 40 || r.h < 40 || r.bottom > r.hb + 1) throw new Error("⋯ not usable: " + JSON.stringify(r));
+  if (r.bellRight > r.x + 1) throw new Error("⋯ overlaps the bell: " + JSON.stringify(r));
+  if (r.countRight > r.bellLeft + 1) throw new Error("count runs under the buttons: " + JSON.stringify(r));
+  if (r.h > 60) throw new Error("header wrapped: " + JSON.stringify(r));
+  await noOverflow();
+});
+await check("fleet menu: opens with its items and the right aria; Escape closes it", async () => {
+  await fleetMenuOpen();
+  if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
+  if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
+  const t = (await page.locator("#f-menu button:visible").allInnerTexts()).map((x) => x.trim());
+  const want = [/^Sweep for finished agents/, /^Review removals/, /briefing/i, /^Briefing schedule/, /^Notifications/, /^Refresh/];
+  if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
+  const box = await page.locator("#f-menu").boundingBox();
+  if (box.x < 0 || box.x + box.width > 390) throw new Error("menu off-screen " + JSON.stringify(box));
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#f-menu", { state: "hidden", timeout: 2000 });
+  if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "false") throw new Error("aria-expanded not reset");
+});
+await check("fleet menu: the dashed sweep row is gone and the removals banner stays", async () => {
+  if (await page.locator("#sweep-open").count()) throw new Error("#sweep-open still in the page");
+  if ((await page.locator("#agents, main").first().innerText()).includes("Sweep for finished agents")) throw new Error("sweep row text still on the main screen");
+  // Mark one agent so the banner shows, then check the menu count too.
+  await rowOf(PANES.alpha).locator(".row-more").click();
+  await page.locator("#row-mark").click();
+  await page.waitForSelector("#mk", { state: "visible" });
+  await page.locator("#mk-go").click();
+  await page.waitForFunction(() => document.querySelector("#rtr-banner") && !document.querySelector("#rtr-banner").hidden, null, { timeout: 8000 });
+  if (!(await page.locator("#rtr-banner").innerText()).includes("Ready to remove (1)")) throw new Error("banner text");
+  await fleetMenuOpen();
+  if (!(await page.locator("#f-review").innerText()).includes("Review removals (1)")) throw new Error("menu count " + (await page.locator("#f-review").innerText()));
+  await page.locator("#f-review").click();
+  await page.waitForSelector("#review", { state: "visible", timeout: 5000 });
+  await page.locator("#rv-close").click();
+  await page.waitForSelector("#review", { state: "hidden" });
+  await rowOf(PANES.alpha).locator(".row-more").click();
+  await page.locator("#row-mark").click(); // unmark
+  await page.waitForFunction(() => document.querySelector("#rtr-banner")?.hidden, null, { timeout: 8000 });
+});
+await check("fleet menu: Briefing item expands, collapses and shows a dismissed briefing again", async () => {
+  await publishBrief("Menu briefing\n\nlong detail five");
+  await reloadBrief();
+  await page.evaluate(() => { try { localStorage.clear(); } catch {} });
+  await reloadBrief();
+  await page.waitForFunction(() => !document.querySelector("#f-brief").disabled, null, { timeout: 8000 });
+  await fleetMenuOpen();
+  if (!/^Expand/.test(await page.locator("#f-brief").innerText())) throw new Error("item " + await page.locator("#f-brief").innerText());
+  await page.locator("#f-brief").click();
+  if ((await briefState()).expanded !== "true") throw new Error("not expanded");
+  await page.locator("#briefing .bf-dismiss").click();
+  await page.waitForSelector("#briefing", { state: "hidden" });
+  await fleetMenuOpen();
+  if (!/dismissed/.test(await page.locator("#f-brief").innerText())) throw new Error("item " + await page.locator("#f-brief").innerText());
+  await page.locator("#f-brief").click();
+  await page.waitForSelector("#briefing", { state: "visible" });
+});
+
+// ---- the collapsed briefing preview: exactly two lines, none cut ----
+for (const width of [390, 1280]) {
+  await check(`brief: a long first line clamps to exactly two lines, inside the card, at ${width}px`, async () => {
+    await page.setViewportSize({ width, height: 844 });
+    await publishBrief('fix-header-menu landed on main as 8ea6a16 after the coordinator marked "landed on main as" the worker finished, the sweep verified every commit of the branch is in origin/main and nothing is unpushed, so it is safe to remove the worktree and its branch.\n\nmore');
+    await page.evaluate(() => { try { localStorage.clear(); } catch {} });
+    await reloadBrief();
+    const r = await page.evaluate(() => {
+      const p = document.querySelector("#briefing .bf-preview"), card = document.querySelector("#briefing");
+      const cs = getComputedStyle(p), lh = parseFloat(cs.lineHeight);
+      const pr = p.getBoundingClientRect(), cr = card.getBoundingClientRect();
+      // the preview's own box: padding included; no bottom padding may exist, or a third line shows in it
+      return { lines: Math.round(pr.height / lh), pad: parseFloat(cs.paddingBottom), h: pr.height, lh, bottom: pr.bottom, cardBottom: cr.bottom,
+        clamp: cs.webkitLineClamp, scrollH: p.scrollHeight, meta: document.querySelector(".bf-meta").innerText, metaCut: document.querySelector(".bf-meta").scrollWidth > document.querySelector(".bf-meta").clientWidth };
+    });
+    if (r.lines !== 2 || r.pad !== 0 || r.clamp !== "2") throw new Error("not a clean two-line clamp: " + JSON.stringify(r));
+    if (r.scrollH <= r.h + 1) throw new Error("text did not overflow two lines; the fixture is too short: " + JSON.stringify(r));
+    if (r.bottom > r.cardBottom) throw new Error("preview extends past the card: " + JSON.stringify(r));
+    if (!/^\d+\w+ ago/.test(r.meta)) throw new Error("age is not first in the meta: " + r.meta);
+    if (r.metaCut && width > 500) throw new Error("meta is truncated at " + width + "px: " + JSON.stringify(r));
+  });
+}
+await page.setViewportSize({ width: 390, height: 844 });
 
 // ---- agent view "⋯" menu: always at the top right, whatever the ledger says ----
 async function moreBox() {

@@ -163,7 +163,7 @@ Removing:
 
 **Sweeping for finished agents.** Instead of marking each finished worker
 by hand, sweep (`comebye sweep`, or "Sweep for finished agents" in the
-removals banner of the app). The hub looks at every ledger worker, on every
+⋯ menu at the top right of the app's list). The hub looks at every ledger worker, on every
 host, that is `finished`, or still `running` but whose agent has been idle
 for 30 minutes (`--idle-after`; `0` turns it off), and that is not already
 marked. It never takes a coordinator, the caller itself, or a worker without

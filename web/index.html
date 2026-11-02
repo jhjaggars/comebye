@@ -46,7 +46,12 @@
     header h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: 0.02em; }
     header .conn { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
     header .conn.ok { background: var(--green); }
-    header .count { margin-left: auto; color: var(--muted); font-size: 13px; text-align: right; }
+    header .count { margin-left: auto; min-width: 0; color: var(--muted); font-size: 13px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    header .count .short { display: none; }
+    @media (max-width: 480px) {
+      header .count .long { display: none; }
+      header .count .short { display: inline; }
+    }
     header .count .need { color: var(--orange); font-weight: 700; }
     header .count .run { color: var(--blue); }
     header .bell {
@@ -592,6 +597,9 @@
 
     /* New agent sheet */
     header .bell.launch { margin-right: -6px; }
+    header #btn-fleet { font-size: 22px; line-height: 1; }
+    #f-menu .mark-state { color: var(--muted); }
+    #f-menu button:disabled { opacity: 0.5; cursor: default; }
     body.sheet-open { overflow: hidden; }
     #launch {
       position: fixed; inset: 0; z-index: 40; background: var(--bg);
@@ -785,13 +793,6 @@
     .markbar[hidden] { display: none; }
     .markbar .mb-why { flex: 1 1 140px; min-width: 0; color: var(--orange); overflow-wrap: anywhere; }
     .markbar .btn { min-height: 40px; padding: 0 14px; font-size: 13.5px; }
-    .sweep-open {
-      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-bottom: 10px;
-      padding: 0 14px; border-radius: 12px; border: 1px dashed var(--border); background: none;
-      color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; text-align: left;
-    }
-    .sweep-open[hidden] { display: none; }
-    .sweep-open:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .sw-h { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px; }
     .sw-h:first-child { margin-top: 0; }
 
@@ -903,14 +904,14 @@
     }
     .bf-toggle[aria-expanded="false"] .proj-chev { transform: rotate(-45deg); }
     .bf-title { font-weight: 650; font-size: 14px; color: var(--blue); flex: none; }
-    .bf-meta { color: var(--muted); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bf-meta { color: var(--muted); font-size: 12.5px; min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .bf-dismiss {
       flex: none; min-width: 44px; min-height: 44px; border: 0; border-radius: 12px; background: none;
       color: var(--muted); font-size: 16px; cursor: pointer;
     }
     .bf-toggle:focus-visible, .bf-dismiss:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 12px; }
     .bf-body { padding: 0 14px 10px; font-size: 14px; max-height: 45vh; overflow-y: auto; overscroll-behavior: contain; }
-    .bf-preview { padding: 0 14px 10px 36px; margin-top: -4px; font-size: 13.5px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+    .bf-preview { padding: 0 14px 0 36px; margin: -4px 0 10px; font-size: 13.5px; line-height: 1.4; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
     .bf-body[hidden] { display: none; }
     .bf-body > :first-child { margin-top: 0; }
     .bf-body h2 { font-size: 15px; margin: 12px 0 4px; }
@@ -939,10 +940,20 @@
       <button type="button" class="bell launch" id="btn-launch" aria-label="New agent" aria-haspopup="dialog" aria-controls="launch">
         <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
-      <button type="button" class="bell" id="btn-notify" aria-label="Notifications" aria-expanded="false" aria-controls="notify-panel">
+      <button type="button" class="bell launch" id="btn-notify" aria-label="Notifications" aria-expanded="false" aria-controls="notify-panel">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2 2 0 0 0 4 0"/></svg>
       </button>
+      <button type="button" class="bell" id="btn-fleet" aria-label="More: fleet actions" aria-haspopup="menu" aria-expanded="false" aria-controls="f-menu">&#8942;</button>
     </header>
+    <div id="f-menu" class="attach-menu d-menu" role="menu" hidden>
+      <div class="mark-state" id="f-note" hidden></div>
+      <button type="button" role="menuitem" id="f-sweep">Sweep for finished agents…</button>
+      <button type="button" role="menuitem" id="f-review">Review removals</button>
+      <button type="button" role="menuitem" id="f-brief">Briefing</button>
+      <button type="button" role="menuitem" id="f-sched">Briefing schedule…</button>
+      <button type="button" role="menuitem" id="f-notify">Notifications</button>
+      <button type="button" role="menuitem" id="f-refresh">Refresh</button>
+    </div>
     <section id="notify-panel" hidden aria-live="polite">
       <div class="np-title">Notifications</div>
       <div class="np-status" id="notify-status">Checking…</div>
@@ -952,7 +963,7 @@
         <button type="button" class="btn danger" id="notify-disable" hidden>Turn off</button>
       </div>
     </section>
-    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><button type="button" id="sweep-open" class="sweep-open" hidden aria-haspopup="dialog" aria-controls="sweep">Sweep for finished agents<span class="ln-chev" aria-hidden="true" style="margin-left:auto">›</span></button><div id="agents"></div></main>
+    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
   </div>
 
   <!-- New agent ("+" in the list header) -->

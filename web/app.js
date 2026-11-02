@@ -437,10 +437,13 @@ function renderList() {
     agentId(a).localeCompare(agentId(b)));
   const nBlocked = agents.filter((a) => a.agent_status === "blocked").length;
   const nWorking = agents.filter((a) => a.agent_status === "working").length;
+  // The long form on wide screens; a short one (no "agents" word, "need")
+  // on a phone, where the header also holds +, the bell and the ⋯.
   $("count").innerHTML = agents.length
-    ? (nBlocked ? `<span class="need">${nBlocked} need${nBlocked === 1 ? "s" : ""} input</span> · ` : "") +
-      (nWorking ? `<span class="run">${nWorking} working</span> · ` : "") +
-      agents.length + " agent" + (agents.length === 1 ? "" : "s")
+    ? `<span class="long">${nBlocked ? `<span class="need">${nBlocked} need${nBlocked === 1 ? "s" : ""} input</span> · ` : ""}` +
+      `${nWorking ? `<span class="run">${nWorking} working</span> · ` : ""}${agents.length} agent${agents.length === 1 ? "" : "s"}</span>` +
+      `<span class="short">${nBlocked ? `<span class="need">${nBlocked} need</span> · ` : ""}` +
+      `${nWorking ? `<span class="run">${nWorking} working</span> · ` : ""}${agents.length}</span>`
     : "";
   // Peers the hub cannot reach right now: one collapsed row each, saying
   // what broke (dns, tcp, tls, http) and since when - the hub's health
@@ -677,7 +680,7 @@ function renderRemovalBanner() {
   const n = ledger.on ? ledger.marked.size : 0;
   b.hidden = !n;
   if (n) b.innerHTML = `Ready to remove (${n})<span class="ln-chev" aria-hidden="true">›</span>`;
-  $("sweep-open").hidden = ledger.on !== true;
+  renderFleetMenu();
 }
 
 /* ---------- the briefing (published by a coordinator) ---------- */
@@ -795,6 +798,7 @@ function briefPreview(md) {
 function renderBrief() {
   const el = $("briefing");
   if (!el) return;
+  renderFleetMenu();
   let b = briefing.data;
   if (b && (!b.markdown.trim() || lsGet(BRIEF_DISMISSED_KEY) === b.at)) b = null;
   const miss = briefMiss();
@@ -811,7 +815,8 @@ function renderBrief() {
   const metaText = () => {
     if (!b) return `none to show${every}`;
     const at = Date.parse(b.at);
-    return `from ${b.by || "a coordinator"}${Number.isNaN(at) ? "" : ` · ${fmtAgo(at)} ago`}${every}`;
+    // The age first: it is what you look for, and the rest may be cut.
+    return `${Number.isNaN(at) ? "" : `${fmtAgo(at)} ago · `}from ${b.by || "a coordinator"}${every}`;
   };
   const sig = [b ? b.at : "", folded, preview, every, miss ? `${miss.id}|${miss.count}|${miss.reason}` : ""].join("|");
   el.hidden = false;
@@ -878,6 +883,7 @@ function parseBriefSchedule(text) {
 // of day (in this device's time zone); empty turns it off.
 async function editBriefSchedule() {
   toggleDetailMenu(false);
+  toggleFleetMenu(false);
   const sc = briefing.schedule || {};
   const cur = sc.enabled ? `${sc.every}${sc.at ? " at " + sc.at : ""}` : "";
   const text = prompt("Ask a coordinator for a briefing every… (e.g. 24h at 08:00, 12h, 2d at 7:30). Leave empty to turn scheduled briefings off.", cur);
@@ -1070,6 +1076,75 @@ function rowMenuMark() {
   if (!id) return;
   if (ledger.marked.has(id)) unmarkAgent(id);
   else openMark(id);
+}
+
+/* ---------- the header's fleet menu ("⋯" at the top right of the list) ---------- */
+//
+// Fleet-wide actions, always one tap away: the sweep, the removals review,
+// the briefing (show / expand, show again after a dismissal, its schedule),
+// the notifications panel and a refresh. It reuses the agent view's menu
+// styles; the items that need the ledger wait for it ("(loading)") or, on a
+// hub that keeps none, give way to a note.
+
+function briefingUiState() {
+  const b = briefing.data;
+  if (!b || !b.markdown.trim()) return "none";
+  if (lsGet(BRIEF_DISMISSED_KEY) === b.at) return "dismissed";
+  return lsGet(BRIEF_EXPANDED_KEY) === "1" ? "expanded" : "folded";
+}
+
+function renderFleetMenu() {
+  const lon = ledger.on === true;
+  const off = ledger.on === false;
+  const loading = !lon && !off;
+  const sfx = loading ? " (loading)" : "";
+  const n = lon ? ledger.marked.size : 0;
+  const note = $("f-note");
+  note.hidden = !off;
+  note.textContent = off ? "Sweeping, removals and briefings are not available on this hub" : "";
+  for (const id of ["f-sweep", "f-review", "f-brief", "f-sched"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  $("f-sweep").textContent = "Sweep for finished agents…" + sfx;
+  $("f-review").textContent = (lon ? `Review removals (${n})` : "Review removals") + sfx;
+  $("f-review").disabled = !lon || !n;
+  const st = briefingUiState();
+  $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
+  $("f-brief").disabled = !lon || st === "none";
+  $("f-sched").textContent = "Briefing schedule…" + sfx;
+}
+
+function toggleFleetMenu(show, focus) {
+  const menu = $("f-menu");
+  const open = show ?? menu.hidden;
+  if (open === !menu.hidden) return;
+  menu.hidden = !open;
+  if (open) {
+    renderFleetMenu();
+    if (ledger.on !== true && ledger.on !== false) loadLedger();
+    if (focus !== false) (menu.querySelector("button:not(:disabled):not([hidden])") || menu).focus?.();
+  }
+  $("btn-fleet").setAttribute("aria-expanded", String(open));
+}
+
+function fleetAction(fn) {
+  return () => { toggleFleetMenu(false); fn(); };
+}
+
+function fleetBrief() {
+  const st = briefingUiState();
+  if (st === "dismissed") lsSet(BRIEF_DISMISSED_KEY, "");
+  else if (st === "folded") lsSet(BRIEF_EXPANDED_KEY, "1");
+  else if (st === "expanded") lsSet(BRIEF_EXPANDED_KEY, "0");
+  else return;
+  renderBrief();
+  $("briefing").scrollIntoView?.({ block: "nearest" });
+}
+
+function fleetRefresh() {
+  ledger.loadedAt = 0;
+  briefing.loadedAt = 0;
+  refreshAgents().catch(() => setConn(false));
+  loadLedger();
+  toast("Refreshing");
 }
 
 /* ---------- sweep for finished agents ---------- */
@@ -4340,7 +4415,25 @@ window.addEventListener("DOMContentLoaded", () => {
   $("mk-close").addEventListener("click", closeMark);
   $("mk-go").addEventListener("click", submitMark);
   $("mk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeMark(); } });
-  $("sweep-open").addEventListener("click", openSweep);
+  $("btn-fleet").addEventListener("click", (ev) => { ev.stopPropagation(); toggleFleetMenu(); });
+  $("f-sweep").addEventListener("click", fleetAction(openSweep));
+  $("f-review").addEventListener("click", fleetAction(openReview));
+  $("f-brief").addEventListener("click", fleetAction(fleetBrief));
+  $("f-sched").addEventListener("click", fleetAction(editBriefSchedule));
+  $("f-notify").addEventListener("click", fleetAction(() => { toggleNotifyPanel(); if (!$("notify-panel").hidden) $("notify-panel").scrollIntoView?.({ block: "nearest" }); }));
+  $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));
+  $("f-menu").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); toggleFleetMenu(false); $("btn-fleet").focus(); return; }
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    const items = [...$("f-menu").querySelectorAll("button:not(:disabled):not([hidden])")];
+    if (!items.length) return;
+    ev.preventDefault();
+    const i = items.indexOf(document.activeElement);
+    items[(i + (ev.key === "ArrowDown" ? 1 : -1) + items.length) % items.length].focus();
+  });
+  document.addEventListener("click", (ev) => {
+    if (!$("f-menu").hidden && !$("f-menu").contains(ev.target)) toggleFleetMenu(false);
+  });
   $("sweep-close").addEventListener("click", closeSweep);
   $("sweep-go").addEventListener("click", sweepGo);
   $("sweep").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSweep(); } });
