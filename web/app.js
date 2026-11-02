@@ -3425,7 +3425,7 @@ function toggleKeypad(show) {
 // cancel", "(y/n)", "Trust project folder?") is waiting for a key even when
 // no dialog was recognised and the agent reads idle: show a compact
 // ↑ ↓ Esc Enter strip without anyone having to find Keys….
-const KEY_FOOTER = /(\benter\b[^\n]{0,24}\b(select|confirm|accept|submit|continue)|\besc\b[^\n]{0,24}\b(cancel|close|back|dismiss|exit)|\(y\/n\)|\[y\/n\]|\btrust\b[^\n]{0,40}\?|press (enter|any key)|↑\/↓|↑↓)/i;
+const KEY_FOOTER = /(\benter\b[^\n]{0,24}\b(select|confirm|accept|submit|continue)|\besc(ape)?\b[^\n]{0,24}\b(cancel|close|back|dismiss|exit)|\(y\/n\)|\[y\/n\]|\btrust\b[^\n]{0,40}\?|press (enter|any key)|↑\/↓|↑↓)/i;
 function screenWantsKeys(text) {
   const tail = String(text || "").split("\n").filter((l) => l.trim()).slice(-8).join("\n");
   return KEY_FOOTER.test(tail);

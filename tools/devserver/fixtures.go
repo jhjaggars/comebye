@@ -94,7 +94,7 @@ func (f *fake) addFixtures(dir, tag string) {
 	// A home agent in another repository's primary checkout.
 	h := mk("notes-home", "w5:p1", "pi", "Pi", "idle", "notes", "/home/u/code/notes")
 	h.repo, h.checkout = "notes", h.CWD
-	h.screen = []string{"Trust project folder?", "  /home/u/code/notes", "", "  enter select · esc cancel"} // an unrecognised dialog on an idle agent
+	h.screen = []string{"Trust project folder?", "  /home/u/code/notes", "", " ↑↓ navigate  enter select  escape/ctrl+c cancel"} // an unrecognised dialog on an idle agent
 
 	// Blocked on a dialog: the app shows the question card.
 	b := mk("needs-input", "w6:p1", "claude", "Claude", "blocked", "waiting on you", "/home/u/code/notes")
