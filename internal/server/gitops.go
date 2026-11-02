@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -223,6 +224,11 @@ type worktreeChecks struct {
 	// worker's exists outside the base.
 	Gone    bool     `json:"gone,omitempty"`
 	Records []string `json:"records,omitempty"`
+	// RepoMissing says why a gone worktree could not be checked against a
+	// repository (the recorded one no longer exists); RepoNote says the
+	// repository was not the recorded one but found beside the worktree.
+	RepoMissing string `json:"repo_missing,omitempty"`
+	RepoNote    string `json:"repo_note,omitempty"`
 	// Tip is the commit the checks looked at (the branch, else HEAD); a
 	// discard is refused if it moved since the user reviewed it.
 	Tip string `json:"tip,omitempty"`
@@ -578,21 +584,35 @@ func checkGone(ctx context.Context, path, repo, branch string, prev, hints []str
 // goneVerdict is what to tell the user about a worktree that is gone:
 // warn is true when something may be lost or nothing could be checked.
 func (c worktreeChecks) goneVerdict() (warn bool, msg string) {
+	msg = c.goneMessage()
+	if warn = c.goneWarns(); c.RepoNote != "" && !warn {
+		msg += " [" + c.RepoNote + "]"
+	}
+	return warn, msg
+}
+
+func (c worktreeChecks) goneWarns() bool {
+	return !c.Gone || c.Unmerged != 0
+}
+
+func (c worktreeChecks) goneMessage() (msg string) {
 	switch {
+	case !c.Gone && c.RepoMissing != "":
+		return "the worktree is gone and " + c.RepoMissing + ", so its commits cannot be checked"
 	case !c.Gone:
-		return true, "the worktree is gone and there is no repository on record to check its commits against"
+		return "the worktree is gone and there is no repository on record to check its commits against"
 	case c.Unmerged < 0:
-		return true, "the worktree is gone and its commits could not be checked: " + c.Error
+		return "the worktree is gone and its commits could not be checked: " + c.Error
 	case c.Unmerged > 0:
-		return true, fmt.Sprintf("the worktree is gone, and %s has %d commits not in %s", strings.Join(c.Records, ", "), c.Unmerged, c.BaseUsed)
+		return fmt.Sprintf("the worktree is gone, and %s has %d commits not in %s", strings.Join(c.Records, ", "), c.Unmerged, c.BaseUsed)
 	case len(c.Records) == 0:
-		return false, fmt.Sprintf("the worktree and branch were removed; nothing of it exists outside %s", c.BaseUsed)
+		return fmt.Sprintf("the worktree and branch were removed; nothing of it exists outside %s", c.BaseUsed)
 	}
 	msg = fmt.Sprintf("the worktree is gone; every commit of %s is in %s", strings.Join(c.Records, ", "), c.BaseUsed)
 	if len(c.Landed) > 0 {
 		msg += " (" + landedText(c.BaseUsed, c.Landed) + ")"
 	}
-	return false, msg
+	return msg
 }
 
 // inProgress names the unfinished operation in a git dir, "" when none.
@@ -771,3 +791,47 @@ func discardWorktree(ctx context.Context, c worktreeChecks, branch string) (bran
 
 // itoa is strconv.Itoa, for messages.
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// goneRepo finds the repository to check a gone worktree against: the
+// recorded one when it still exists inside the roots, else the repository
+// of a worktree beside the gone one. Worktrees live at <root>/<repo>/
+// <branch>, so a sibling that is still a linked worktree belongs to the same
+// project even if the primary checkout was renamed or moved since (the
+// ledger records no origin to search for). Failing both, why says what
+// is missing.
+func goneRepo(ctx context.Context, recorded, path string, roots []string) (repo, note, why string) {
+	if recorded != "" {
+		if p, lerr := resolveLaunchDir(recorded, roots); lerr == nil {
+			if _, _, _, err := gitDirs(ctx, p); err == nil {
+				return p, "", ""
+			}
+		}
+	}
+	parent := filepath.Dir(path)
+	if !slices.Contains(roots, parent) {
+		if ents, err := os.ReadDir(parent); err == nil {
+			for i, de := range ents {
+				if i >= 50 {
+					break
+				}
+				d := filepath.Join(parent, de.Name())
+				top, gitDir, common, err := gitDirs(ctx, d)
+				if err != nil || !de.IsDir() || gitDir == common {
+					continue
+				}
+				_ = top
+				if p, lerr := resolveLaunchDir(filepath.Dir(common), roots); lerr == nil {
+					note = "repository " + p + " found from the worktree " + d
+					if recorded != "" {
+						note = "the recorded repository " + recorded + " no longer exists; " + note
+					}
+					return p, note, ""
+				}
+			}
+		}
+	}
+	if recorded != "" {
+		return "", "", "the recorded repository " + recorded + " no longer exists (or is not a git checkout inside the launch roots)"
+	}
+	return "", "", ""
+}

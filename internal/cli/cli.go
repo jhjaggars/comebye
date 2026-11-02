@@ -766,17 +766,19 @@ type apiInspection struct {
 	Model    string `json:"model"`
 	Thinking string `json:"thinking"`
 	Checks   struct {
-		Path     string   `json:"path"`
-		Exists   bool     `json:"exists"`
-		Primary  bool     `json:"primary"`
-		Branch   string   `json:"branch"`
-		Dirty    bool     `json:"dirty"`
-		Unmerged int      `json:"unmerged_commits"`
-		BaseUsed string   `json:"base_used"`
-		Tip      string   `json:"tip"`
-		Gone     bool     `json:"gone"`
-		Records  []string `json:"records"`
-		Landed   []struct {
+		Path        string   `json:"path"`
+		Exists      bool     `json:"exists"`
+		Primary     bool     `json:"primary"`
+		Branch      string   `json:"branch"`
+		Dirty       bool     `json:"dirty"`
+		Unmerged    int      `json:"unmerged_commits"`
+		BaseUsed    string   `json:"base_used"`
+		Tip         string   `json:"tip"`
+		Gone        bool     `json:"gone"`
+		RepoMissing string   `json:"repo_missing"`
+		RepoNote    string   `json:"repo_note"`
+		Records     []string `json:"records"`
+		Landed      []struct {
 			SHA string `json:"sha"`
 			As  string `json:"as"`
 		} `json:"landed"`
@@ -866,6 +868,8 @@ func cmdInspect(e *Env, args []string) error {
 	case !ch.Exists:
 		fmt.Fprintf(w, "checkout: %s does not exist (any more)\n", ch.Path)
 		switch {
+		case !ch.Gone && ch.RepoMissing != "":
+			fmt.Fprintf(w, "merged:   unknown · %s\n", ch.RepoMissing)
 		case !ch.Gone:
 			fmt.Fprintf(w, "merged:   unknown · no repository on record to check its commits against\n")
 		case ch.Error != "":
@@ -876,6 +880,9 @@ func cmdInspect(e *Env, args []string) error {
 			fmt.Fprintf(w, "merged:   yes · the worktree and branch were removed; nothing of it exists outside %s\n", dash(ch.BaseUsed))
 		default:
 			fmt.Fprintf(w, "merged:   yes · every commit of %s is in %s%s\n", strings.Join(ch.Records, ", "), dash(ch.BaseUsed), landedSuffix(ch.BaseUsed, ch.Landed))
+		}
+		if ch.RepoNote != "" {
+			fmt.Fprintf(w, "          (%s)\n", ch.RepoNote)
 		}
 		return nil
 	case ch.Primary:

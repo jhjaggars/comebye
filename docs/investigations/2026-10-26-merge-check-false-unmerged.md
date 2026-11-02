@@ -207,3 +207,22 @@ unfinished operations and pushed-not-merged branches still hold a removal.
 No ledger field records a worker's head SHA, so a worker that never named its
 commits and whose branch is deleted is judged by the repository alone; a
 follow-up could record the tip when a worker reports.
+
+### Addendum 2 (2026-11-02): the fix did not reach peers, nor a renamed repo
+
+After 8ea6a16 was deployed, a gone worktree on a **peer** (laharl, hub on
+jjaggars-kubevirt) still read "no repository on record". Cause: the hub
+forwards `checks` through a per-operation query allowlist in
+`internal/fleet/proxy.go`, and `repo`, `prev` and `hints` were not on it, so
+the peer never saw them. The first live check called `checkGone` directly and
+skipped that wiring; hub-local entries worked, peers' did not. Fixed by
+adding the three parameters; `TestGoneWorktreeOptionsReachThePeer` fails
+without it (inspect and the removal review both go through a stub peer).
+
+A second case: the recorded repository (`~/code/herdr-phone`) was renamed
+(`~/code/comebye`), so the recorded path no longer exists. The ledger records
+no origin to search for, so `goneRepo` takes the repository from a worktree
+beside the gone one (worktrees live at `<root>/<repo>/<branch>`, and a
+sibling that is still a linked worktree belongs to the same project), and
+says so in the verdict. With no sibling it says "the recorded repository
+/… no longer exists" rather than "no repository on record".

@@ -443,11 +443,13 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 	if lerr != nil {
 		if lerr.code == "not_found" {
 			c := worktreeChecks{Path: filepath.Clean(path), Unmerged: -1}
-			if opts.Repo != "" {
-				// The worktree is gone: fall back to the repository.
-				if repo, rerr := resolveLaunchDir(opts.Repo, roots); rerr == nil {
-					c = checkGone(ctx, filepath.Clean(path), repo, branch, opts.Prev, hexOnly(opts.Hints), base)
-				}
+			// The worktree is gone: fall back to the repository.
+			repo, note, why := goneRepo(ctx, opts.Repo, filepath.Clean(path), roots)
+			if repo != "" {
+				c = checkGone(ctx, filepath.Clean(path), repo, branch, opts.Prev, hexOnly(opts.Hints), base)
+				c.RepoNote = note
+			} else {
+				c.RepoMissing = why
 			}
 			return &c, nil
 		}

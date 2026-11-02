@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
@@ -314,5 +317,103 @@ func TestLocalChecksGoneWorktreeUsesLedgerRepo(t *testing.T) {
 	q := o.query()
 	if q.Get("repo") != repo || strings.Join(splitList(q.Get("prev")), ",") != "a,b" || q.Get("hints") != "d061192" {
 		t.Fatalf("query = %v", q)
+	}
+}
+
+// The hub sends a peer the ledger's repository, earlier branch names and
+// recorded SHAs with every checks call (inspect, removal review, sweep):
+// the fleet's allowlist of query parameters once dropped them, so every
+// gone worktree on a peer read "no repository on record".
+func TestGoneWorktreeOptionsReachThePeer(t *testing.T) {
+	peer := &workerPeer{}
+	ps := httptest.NewServer(peer)
+	defer ps.Close()
+	pu, _ := url.Parse(ps.URL)
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
+	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	e, err := s.ledger.Add(ledger.Entry{
+		Host: "kube", Repo: "/home/k/code/proj", RepoName: "proj", Branch: "feat/x", Base: "main", PreviousBranches: []string{"feat/old"},
+		AgentID: "kube/wS:p9", PaneID: "wS:p9", Worktree: "/home/k/.worktrees/proj/feat-x", Status: ledger.Finished,
+		FinalReport: "committed d061192 on the branch",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string) {
+		t.Helper()
+		got := peer.saw("GET /api/checks")
+		if len(got) == 0 {
+			t.Fatalf("%s: no checks call", what)
+		}
+		last := got[len(got)-1]
+		for _, want := range []string{"repo=%2Fhome%2Fk%2Fcode%2Fproj", "prev=feat%2Fold", "hints=d061192"} {
+			if !strings.Contains(last, want) {
+				t.Fatalf("%s: the peer was sent %s, lacking %s", what, last, want)
+			}
+		}
+	}
+	// inspect by agent id
+	if w := do(s, "GET", "/api/inspect?agent=kube/wS:p9", nil, ""); w.Code != 200 {
+		t.Fatalf("inspect = %d %s", w.Code, w.Body)
+	}
+	check("inspect")
+	// the removal review of a marked entry
+	if w := do(s, "POST", "/api/marks", nil, `{"agent_id":"kube/wS:p9","reason":"done"}`); w.Code != 200 {
+		t.Fatalf("mark: %d %s", w.Code, w.Body)
+	}
+	if w := do(s, "GET", "/api/removals", nil, ""); w.Code != 200 {
+		t.Fatalf("removals = %d %s", w.Code, w.Body)
+	}
+	check("removal review")
+	_ = e
+}
+
+// The recorded repository was renamed (herdr-phone -> comebye): the checks
+// find the project's repository from a worktree beside the gone one, and,
+// with no such sibling, say the recorded repository no longer exists.
+func TestGoneWorktreeRenamedRepo(t *testing.T) {
+	root, repo, wtRoot := workerTree(t)
+	// Another worktree of the same project still exists under the old name.
+	sib := filepath.Join(wtRoot, "herdr-phone", "deploy-x")
+	git(t, repo, "worktree", "add", "-q", "--detach", sib, "main")
+	// The worker's commit landed as a different commit; its branch is gone.
+	git(t, repo, "branch", "w", "main")
+	git(t, repo, "switch", "-q", "w")
+	os.WriteFile(filepath.Join(repo, "w.txt"), []byte("w\n"), 0o644)
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "worker")
+	own := git(t, repo, "rev-parse", "HEAD")
+	git(t, repo, "switch", "-q", "main")
+	os.WriteFile(filepath.Join(repo, "other.txt"), []byte("o\n"), 0o644)
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "other")
+	git(t, repo, "cherry-pick", own)
+	landed := git(t, repo, "rev-parse", "HEAD")
+	git(t, repo, "branch", "-D", "w")
+
+	s := newWorkerServer(t, nil, root, wtRoot)
+	gone := filepath.Join(wtRoot, "herdr-phone", "feat-w")
+	old := filepath.Join(root, "herdr-phone") // no longer exists
+	c, lerr := s.localChecks(ctx(), gone, "feat/w", "main", checkOpts{Repo: old, Hints: []string{own[:7]}})
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	warn, msg := c.goneVerdict()
+	if warn || !c.Gone || c.Unmerged != 0 || len(c.Landed) != 1 || c.Landed[0].As != landed ||
+		!strings.Contains(msg, "landed on main as "+landed[:7]) || !strings.Contains(msg, "no longer exists") {
+		t.Fatalf("with a sibling: warn=%v %q %+v", warn, msg, c)
+	}
+
+	// No sibling worktree: say what is missing.
+	git(t, repo, "worktree", "remove", "--force", sib)
+	c, _ = s.localChecks(ctx(), gone, "feat/w", "main", checkOpts{Repo: old, Hints: []string{own[:7]}})
+	warn, msg = c.goneVerdict()
+	if !warn || c.Gone || !strings.Contains(msg, "the recorded repository "+old+" no longer exists") {
+		t.Fatalf("without a sibling: warn=%v %q", warn, msg)
+	}
+	// Nothing recorded at all keeps the old wording.
+	c, _ = s.localChecks(ctx(), gone, "feat/w", "main", checkOpts{})
+	if _, msg = c.goneVerdict(); !strings.Contains(msg, "no repository on record") {
+		t.Fatalf("msg = %q", msg)
 	}
 }
