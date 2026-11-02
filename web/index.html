@@ -875,6 +875,87 @@
     .co-note { margin: 12px 0 0; font-size: 14px; line-height: 1.45; color: #cdd3e0; overflow-wrap: anywhere; }
     .co-note code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--panel2); border-radius: 5px; padding: 1px 4px; }
 
+    /* The briefings screen: a page to the right of the agent list. Swipe
+       left on the list (or tap the pill / menu item) to slide it in. */
+    /* Vertical pans scroll, sideways ones reach the swipe handler. Every
+       descendant says so, because a nested scroller (the expanded briefing)
+       would otherwise take the sideways pan itself. Things that scroll
+       sideways keep that. */
+    #list, #list *, #briefs, #briefs * { touch-action: pan-y pinch-zoom; }
+    #list .host-filter, #list .host-filter *, .md pre, .md pre *, .md table, .md table * { touch-action: pan-x pan-y pinch-zoom; }
+    /* The list covers the screen, even when short: a touch below it would go to the page, which pans sideways. */
+    #list { min-height: 100vh; min-height: 100dvh; }
+    #list > main { padding-bottom: calc(64px + var(--safe-bottom)); }
+    .pager {
+      position: fixed; z-index: 15; left: 50%; bottom: calc(10px + var(--safe-bottom)); transform: translateX(-50%);
+      display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--border); border-radius: 999px;
+      color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      transition: opacity 0.15s;
+    }
+    .pager[hidden] { display: none; }
+    .pager:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .pager.dragging { opacity: 0; pointer-events: none; }
+    .pager .pg-new { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 6px var(--blue); }
+    .pager .pg-new[hidden] { display: none; }
+    .pg-dots { display: inline-flex; gap: 5px; align-items: center; }
+    .pg-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--border); display: block; }
+    .pg-dots i.on { background: var(--text); }
+    #briefs {
+      position: fixed; inset: 0; z-index: 30; background: var(--bg);
+      display: flex; flex-direction: column;
+      transform: translateX(100%); visibility: hidden; box-shadow: -12px 0 24px rgba(0, 0, 0, 0.35);
+    }
+    #briefs.anim { transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.28s; }
+    #briefs.open, #briefs.dragging { visibility: visible; transition-delay: 0s; }
+    #briefs.open:not(.dragging) { transform: none; }
+    #briefs.open.anim { transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    #briefs.dragging { transition: none; }
+    #briefs:focus { outline: none; }
+    @media (prefers-reduced-motion: reduce) { #briefs.anim, #briefs.open.anim { transition: none; } }
+    #briefs header .back {
+      font: inherit; font-size: 24px; line-height: 1; cursor: pointer; color: var(--blue);
+      background: none; border: 0; border-radius: 10px; padding: 0;
+      min-width: 44px; min-height: 44px; margin: -8px 0 -8px -8px;
+      display: inline-flex; align-items: center; justify-content: center; flex: none;
+    }
+    #briefs header .back:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    #briefs header h2 { font-size: 17px; margin: 0; font-weight: 650; }
+    #briefs header .pg-dots { margin-left: auto; }
+    .br-body {
+      flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+      width: 100%; max-width: 640px; margin: 0 auto;
+      padding: 12px calc(12px + env(safe-area-inset-right, 0px)) calc(24px + var(--safe-bottom)) calc(12px + env(safe-area-inset-left, 0px));
+    }
+    .br-card { border-radius: 14px; background: var(--panel); border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border)); }
+    .br-card.stale { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
+    .br-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px 6px; }
+    .br-md { padding: 0 14px 12px; font-size: 14.5px; overflow-wrap: anywhere; }
+    .br-md > :first-child { margin-top: 0; }
+    .br-md h2 { font-size: 15px; margin: 12px 0 4px; }
+    .br-md h2:first-child { margin-top: 2px; }
+    .br-empty { color: var(--muted); padding: 4px 14px 14px; font-size: 14px; }
+    .br-sched { display: flex; align-items: center; gap: 10px; margin: 10px 2px 0; color: var(--muted); font-size: 13.5px; }
+    .br-sched span { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+    .br-sched button {
+      flex: none; min-height: 36px; padding: 0 12px; border-radius: 10px; font: inherit; font-size: 13px; font-weight: 600;
+      background: var(--panel2); border: 1px solid var(--border); color: var(--text); cursor: pointer;
+    }
+    .br-sched button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .br-h { margin: 20px 2px 8px; font-size: 13px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .br-note { margin: 0 2px; color: var(--muted); font-size: 13.5px; }
+    .br-item { margin-bottom: 6px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); }
+    .br-item summary {
+      display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; cursor: pointer; list-style: none;
+    }
+    .br-item summary::-webkit-details-marker { display: none; }
+    .br-item summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 12px; }
+    .br-when { flex: none; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+    .br-pre { min-width: 0; flex: 1 1 auto; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .br-item[open] .br-pre { display: none; }
+    .br-item .br-md { border-top: 1px solid var(--border); padding-top: 10px; }
+
     /* The briefing a coordinator published. */
     .briefing {
       margin-bottom: 10px; border-radius: 14px; background: var(--panel);
@@ -952,6 +1033,7 @@
       <button type="button" role="menuitem" id="f-sweep">Sweep for finished agents…</button>
       <button type="button" role="menuitem" id="f-review">Review removals</button>
       <button type="button" role="menuitem" id="f-brief">Briefing</button>
+      <button type="button" role="menuitem" id="f-briefs">Briefings screen</button>
       <button type="button" role="menuitem" id="f-sched">Briefing schedule…</button>
       <button type="button" role="menuitem" id="f-notify">Notifications</button>
       <button type="button" role="menuitem" id="f-refresh">Refresh</button>
@@ -966,7 +1048,22 @@
       </div>
     </section>
     <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
+    <button type="button" id="pager" class="pager" aria-controls="briefs" aria-label="Open the briefings screen (or swipe left)" hidden>
+      <span class="pg-dots" aria-hidden="true"><i class="on"></i><i></i></span>
+      <span class="pg-label">Briefings</span><span class="pg-new" id="pager-new" hidden></span>
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </div>
+
+  <!-- Briefings (swipe left from the agent list) -->
+  <section id="briefs" aria-label="Briefings" tabindex="-1" inert>
+    <header>
+      <button type="button" class="back" id="br-back" aria-label="Back to the agent list">&#8249;</button>
+      <h2>Briefings</h2>
+      <span class="pg-dots" aria-hidden="true"><i></i><i class="on"></i></span>
+    </header>
+    <div class="br-body" id="br-body"></div>
+  </section>
 
   <!-- New agent ("+" in the list header) -->
   <section id="launch" hidden role="dialog" aria-modal="true" aria-labelledby="ln-title">

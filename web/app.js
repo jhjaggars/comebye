@@ -738,6 +738,7 @@ async function loadBrief() {
     briefing.loadedAt = Date.now();
   }
   renderBrief();
+  if (briefs.open && Date.now() - briefs.histAt > 15000) loadBriefHistory();
 }
 
 const MISS_REASONS = {
@@ -811,6 +812,8 @@ function renderBrief() {
   const el = $("briefing");
   if (!el) return;
   renderFleetMenu();
+  renderPager();
+  renderBriefs();
   let b = briefing.data;
   if (b && (!b.markdown.trim() || lsGet(BRIEF_DISMISSED_KEY) === b.at)) b = null;
   const miss = briefMiss();
@@ -917,6 +920,261 @@ async function editBriefSchedule() {
     toast(e.message, true);
   }
   renderBrief();
+}
+
+/* ---------- the briefings screen (swipe left from the agent list) ---------- */
+//
+// A page to the right of the list: the latest briefing in full, the
+// schedule and any missed-briefing note, and the earlier briefings the hub
+// kept (GET /api/brief/history, the last 48). Reached by swiping left on the
+// list (the panel follows the finger, then snaps on distance or velocity),
+// by the pill at the bottom of the list, or by the ⋯ menu. Swiping right,
+// the back button, or the browser's back returns. The URL is #/briefings, so
+// back and reload behave. The gesture stays out of the way of vertical
+// scrolling, of the screen edges (the OS back gestures) and of anything that
+// scrolls sideways itself.
+
+const briefs = { open: false, pushed: false, history: [], histAt: 0, histLoaded: false, inflight: false, openAts: new Set(), sig: "" };
+const BRIEFS_HASH = "#/briefings";
+const BRIEF_SEEN_KEY = "comebye-brief-seen"; // the `at` of the latest briefing seen on the screen
+const SWIPE = { lock: 10, edge: 20, fraction: 0.33, velocity: 0.45 }; // px, px, of the width, px/ms
+
+const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+function briefsAvailable() { return ledger.on !== false; }
+
+async function loadBriefHistory() {
+  if (briefs.inflight || ledger.on !== true) return;
+  briefs.inflight = true;
+  try {
+    const d = await api("/api/brief/history");
+    briefs.history = d && Array.isArray(d.briefs) ? d.briefs.filter((b) => b && typeof b.markdown === "string") : [];
+    briefs.histLoaded = true;
+  } catch {
+    // Keep what we had.
+  } finally {
+    briefs.inflight = false;
+    briefs.histAt = Date.now();
+  }
+  renderBriefs();
+}
+
+// renderPager shows the pill that opens the screen, with a dot while the
+// latest briefing has not been seen there.
+function renderPager() {
+  const p = $("pager");
+  if (!p) return;
+  p.hidden = !briefsAvailable();
+  const b = briefing.data;
+  $("pager-new").hidden = !(b && b.markdown.trim() && lsGet(BRIEF_SEEN_KEY) !== b.at);
+}
+
+function briefsSchedLine() {
+  const s = briefing.schedule;
+  if (!s || !s.enabled) return "Scheduled briefings are off.";
+  const next = s.next ? Date.parse(s.next) : NaN;
+  const nextTxt = Number.isNaN(next) ? "" : ` · next ${fmtWhen(s.next)}`;
+  const state = { waiting: " · waiting for a busy coordinator", prompted: " · a coordinator was asked" }[s.state] || "";
+  return `Every ${s.every}${s.at ? " at " + s.at : ""}${nextTxt}${state}`;
+}
+
+function briefItem(h) {
+  const at = Date.parse(h.at);
+  const open = briefs.openAts.has(h.at);
+  return `<details class="br-item" data-at="${esc(h.at)}"${open ? " open" : ""}>
+      <summary><span class="br-when">${esc(Number.isNaN(at) ? "" : fmtAgo(at) + " ago · " + fmtWhen(h.at))}</span><span class="br-pre">${esc(briefPreview(h.markdown))}</span></summary>
+      <div class="br-md md">${open ? renderMarkdown(h.markdown, "brief:" + h.at) : ""}</div>
+    </details>`;
+}
+
+function renderBriefs() {
+  const el = $("br-body");
+  if (!el || !briefs.open) return;
+  const b = briefing.data && briefing.data.markdown.trim() ? briefing.data : null;
+  const miss = briefMiss();
+  const earlier = briefs.history.filter((h) => !b || h.at !== b.at);
+  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefsSchedLine(), earlier.map((h) => h.at).join(","), Math.floor(Date.now() / 60000)].join("|");
+  if (sig === briefs.sig) return;
+  briefs.sig = sig;
+  const top = el.scrollTop;
+  const at = b ? Date.parse(b.at) : NaN;
+  el.innerHTML = `<section class="br-card${miss ? " stale" : ""}" aria-label="Latest briefing">
+      <div class="br-head"><span class="bf-title">Latest</span><span class="bf-meta">${b ? esc((Number.isNaN(at) ? "" : fmtAgo(at) + " ago · ") + "from " + (b.by || "a coordinator")) : "none yet"}</span></div>
+      ${miss ? missNote(miss, !!b) : ""}
+      ${b ? `<div class="br-md md">${renderMarkdown(b.markdown, "brief:" + b.at)}</div>`
+          : `<p class="br-empty">No briefing has been published. A coordinator publishes one with <code>comebye brief set</code>.</p>`}
+    </section>
+    <div class="br-sched"><span>${esc(briefsSchedLine())}</span><button type="button" class="bf-sched">Schedule…</button></div>
+    <h3 class="br-h">Earlier</h3>
+    ${earlier.length ? earlier.map(briefItem).join("")
+      : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48." : "Loading…"}</p>`}`;
+  el.scrollTop = top;
+}
+
+// setBriefsOpen slides the screen in or out (animate: from wherever the
+// drag left it) and keeps the focus and the inert state right.
+function setBriefsOpen(open, animate) {
+  const p = $("briefs");
+  const was = briefs.open;
+  briefs.open = open;
+  p.classList.toggle("anim", !!animate && !reducedMotion());
+  p.classList.remove("dragging");
+  $("pager").classList.remove("dragging");
+  p.style.transform = "";
+  p.classList.toggle("open", open);
+  p.inert = !open;
+  if (open && !was) {
+    const b = briefing.data;
+    if (b) { lsSet(BRIEF_SEEN_KEY, b.at); renderPager(); }
+    briefs.sig = "";
+    renderBriefs();
+    loadBrief();
+    loadBriefHistory();
+    // Focus the screen itself (no ring), so a keyboard user tabs on from its top.
+    p.focus?.({ preventScroll: true });
+  } else if (!open && was) {
+    // Hand the focus back to where the user came from.
+    if (p.contains(document.activeElement)) $("pager").focus?.({ preventScroll: true });
+  }
+}
+
+function openBriefs(animate = true) {
+  if (briefs.open || state.selected != null || !briefsAvailable()) return;
+  setBriefsOpen(true, animate);
+  if (location.hash !== BRIEFS_HASH) {
+    // A history entry, so the phone's back gesture returns to the list.
+    history.pushState(null, "", BRIEFS_HASH);
+    briefs.pushed = true;
+  }
+}
+
+function closeBriefs() {
+  if (!briefs.open) return;
+  setBriefsOpen(false, true);
+  if (briefs.pushed) { briefs.pushed = false; history.back(); }
+  else if (location.hash === BRIEFS_HASH) history.replaceState(null, "", location.pathname + location.search);
+}
+
+// syncBriefs follows the URL (back, forward, a cold start on #/briefings).
+function syncBriefs() {
+  const want = location.hash === BRIEFS_HASH && state.selected == null && briefsAvailable();
+  if (want === briefs.open) return;
+  if (!want) briefs.pushed = false;
+  setBriefsOpen(want, !!briefs.inited);
+}
+
+// ---- the gesture ----
+
+// scrollsSideways says whether something between the touch and the page
+// would scroll in that direction (dir < 0: the finger moves left, so the
+// content moves right), so the swipe leaves it alone.
+function scrollsSideways(el, root, dir) {
+  for (; el && el !== root && el.nodeType === 1; el = el.parentElement) {
+    if (el.scrollWidth <= el.clientWidth + 1) continue;
+    const ox = getComputedStyle(el).overflowX;
+    if (ox !== "auto" && ox !== "scroll") continue;
+    const max = el.scrollWidth - el.clientWidth;
+    if (dir < 0 ? el.scrollLeft < max - 1 : el.scrollLeft > 1) return true;
+  }
+  return false;
+}
+
+function anotherLayerOpen() {
+  if (!$("f-menu").hidden) return true;
+  return !!document.querySelector('[role="dialog"]:not([hidden])');
+}
+
+function installBriefsGesture() {
+  let g = null; // the touch in progress
+  const W = () => window.innerWidth;
+
+  const finish = (commit) => {
+    const opening = g.opening;
+    g = null;
+    if (opening) { if (commit) openBriefs(true); else setBriefsOpen(false, true); }
+    else if (commit) closeBriefs();
+    else setBriefsOpen(true, true);
+  };
+
+  document.addEventListener("pointerdown", (ev) => {
+    if (g || ev.pointerType !== "touch" || !ev.isPrimary) return;
+    if (state.selected != null || !briefsAvailable()) return;
+    const opening = !briefs.open;
+    if (opening && (anotherLayerOpen() || $("list").style.display === "none")) return;
+    if (!opening && anotherLayerOpen()) return;
+    // The screen edges belong to the OS (iOS back swipe on the left, Android's on both).
+    if (ev.clientX < SWIPE.edge || ev.clientX > W() - SWIPE.edge) return;
+    if (ev.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    g = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, opening, state: "pending", target: ev.target, samples: [{ t: ev.timeStamp, x: ev.clientX }], dx: 0 };
+  }, { passive: true });
+
+  document.addEventListener("pointermove", (ev) => {
+    if (!g || ev.pointerId !== g.id) return;
+    const dx = ev.clientX - g.x0, dy = ev.clientY - g.y0;
+    if (g.state === "pending") {
+      if (Math.abs(dx) < SWIPE.lock && Math.abs(dy) < SWIPE.lock) return;
+      const root = g.opening ? $("list") : $("briefs");
+      const right = g.opening ? dx < 0 : dx > 0; // the direction that moves the screen
+      // Mostly sideways, the right way, and not something that scrolls itself.
+      if (Math.abs(dx) < Math.abs(dy) * 1.6 || !right || scrollsSideways(g.target, root, Math.sign(dx))) { g = null; return; }
+      g.state = "drag";
+      g.x0 = ev.clientX; // start from here: no jump when the lock engages
+      $("briefs").classList.add("dragging");
+      $("briefs").classList.remove("anim");
+      $("pager").classList.add("dragging");
+      try { document.body.setPointerCapture?.(ev.pointerId); } catch {}
+      window.getSelection?.()?.removeAllRanges?.();
+    }
+    if (g.state !== "drag") return;
+    const w = W();
+    // Opening: the screen is at w + dx (dx <= 0). Closing: at dx (dx >= 0).
+    const off = g.opening ? Math.min(w, Math.max(0, w + (ev.clientX - g.x0))) : Math.min(w, Math.max(0, ev.clientX - g.x0));
+    g.dx = g.opening ? off - w : off;
+    $("briefs").style.transform = `translateX(${off}px)`;
+    g.samples.push({ t: ev.timeStamp, x: ev.clientX });
+    while (g.samples.length > 2 && ev.timeStamp - g.samples[0].t > 100) g.samples.shift();
+    ev.preventDefault?.();
+  }, { passive: false });
+
+  const end = (ev, cancelled) => {
+    if (!g || ev.pointerId !== g.id) return;
+    if (g.state !== "drag") { g = null; return; }
+    const s = g.samples, a = s[0], z = s[s.length - 1];
+    const v = z.t > a.t ? (z.x - a.x) / (z.t - a.t) : 0; // px/ms, negative = leftwards
+    const moved = Math.abs(g.dx);
+    const toward = g.opening ? v < -SWIPE.velocity : v > SWIPE.velocity;
+    const away = g.opening ? v > SWIPE.velocity : v < -SWIPE.velocity;
+    const commit = !cancelled && !away && (moved > W() * SWIPE.fraction || (toward && moved > 24));
+    // A drag must not also be a tap on whatever is under the finger.
+    const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
+    document.addEventListener("click", swallow, { capture: true, once: true });
+    setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 60);
+    finish(commit);
+  };
+  document.addEventListener("pointerup", (ev) => end(ev, false));
+  document.addEventListener("pointercancel", (ev) => end(ev, true));
+}
+
+function initBriefs() {
+  briefs.inited = true;
+  $("pager").addEventListener("click", () => openBriefs(true));
+  $("br-back").addEventListener("click", closeBriefs);
+  $("briefs").addEventListener("click", onBriefClick);
+  $("briefs").addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !anotherLayerOpen()) { ev.stopPropagation(); closeBriefs(); } });
+  // An earlier briefing renders when it is first opened.
+  $("br-body").addEventListener("toggle", (ev) => {
+    const d = ev.target;
+    if (!d.matches?.("details.br-item")) return;
+    const at = d.dataset.at;
+    if (d.open) {
+      briefs.openAts.add(at);
+      const h = briefs.history.find((x) => x.at === at);
+      const md = d.querySelector(".br-md");
+      if (h && md && !md.firstChild) md.innerHTML = renderMarkdown(h.markdown, "brief:" + at);
+    } else briefs.openAts.delete(at);
+  }, true);
+  installBriefsGesture();
+  syncBriefs();
 }
 
 /* ---------- marking a session ready to remove (detail view menu) ---------- */
@@ -1114,7 +1372,7 @@ function renderFleetMenu() {
   const note = $("f-note");
   note.hidden = !off;
   note.textContent = off ? "Sweeping, removals and briefings are not available on this hub" : "";
-  for (const id of ["f-sweep", "f-review", "f-brief", "f-sched"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  for (const id of ["f-sweep", "f-review", "f-brief", "f-briefs", "f-sched"]) { $(id).hidden = off; $(id).disabled = !lon; }
   $("f-sweep").textContent = "Sweep for finished agents…" + sfx;
   $("f-review").textContent = (lon ? `Review removals (${n})` : "Review removals") + sfx;
   $("f-review").disabled = !lon || !n;
@@ -1512,6 +1770,7 @@ function routedAgent(r) {
 // route syncs the view to the URL hash. An agent that is not in the list
 // yet (cold start from a notification) is opened once the list arrives.
 function route() {
+  syncBriefs();
   syncSubview();
   syncLaunch();
   syncReview();
@@ -4313,6 +4572,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   window.addEventListener("popstate", route);
   window.addEventListener("hashchange", route);
+  initBriefs();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     // One-way escape hatch for debugging: show the raw pane.
@@ -4436,6 +4696,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("f-sweep").addEventListener("click", fleetAction(openSweep));
   $("f-review").addEventListener("click", fleetAction(openReview));
   $("f-brief").addEventListener("click", fleetAction(fleetBrief));
+  $("f-briefs").addEventListener("click", fleetAction(() => openBriefs(true)));
   $("f-sched").addEventListener("click", fleetAction(editBriefSchedule));
   $("f-notify").addEventListener("click", fleetAction(() => { toggleNotifyPanel(); if (!$("notify-panel").hidden) $("notify-panel").scrollIntoView?.({ block: "nearest" }); }));
   $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));

@@ -390,7 +390,7 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
   if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
   const t = (await page.locator("#f-menu button:visible").allInnerTexts()).map((x) => x.trim());
-  const want = [/^Sweep for finished agents/, /^Review removals/, /briefing/i, /^Briefing schedule/, /^Notifications/, /^Refresh/];
+  const want = [/^Sweep for finished agents/, /^Review removals/, /briefing/i, /^Briefings screen/, /^Briefing schedule/, /^Notifications/, /^Refresh/];
   if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
   const box = await page.locator("#f-menu").boundingBox();
   if (box.x < 0 || box.x + box.width > 390) throw new Error("menu off-screen " + JSON.stringify(box));
@@ -556,6 +556,174 @@ await check("more: stays visible with a very long name and title at phone width"
   await expectMore("long title");
   const w = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   if (w > 0) throw new Error("page scrolls horizontally by " + w);
+});
+
+// ---- the briefings screen: swipe left from the list, with history ----
+// A real touch swipe: CDP touch events (press, moves, release) at a pace.
+const cdp = await page.context().newCDPSession(page);
+async function swipe(x0, y0, x1, y1, { steps = 8, ms = 240, hold = false } = {}) {
+  const pt = (x, y) => [{ x, y, id: 1 }];
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(x0, y0) });
+  for (let i = 1; i <= steps; i++) {
+    await page.waitForTimeout(ms / steps);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(x0 + ((x1 - x0) * i) / steps, y0 + ((y1 - y0) * i) / steps) });
+  }
+  if (hold) return;
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+}
+const release = () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+const briefsState = () => page.evaluate(() => ({
+  open: document.querySelector("#briefs").classList.contains("open"),
+  inert: document.querySelector("#briefs").inert,
+  x: Math.round(document.querySelector("#briefs").getBoundingClientRect().x),
+  hash: location.hash,
+  listY: Math.round(window.scrollY),
+}));
+async function settle() { await page.waitForTimeout(450); }
+async function freshList() {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#pager:not([hidden])", { timeout: 8000 });
+  await page.waitForSelector("#agents .agent", { timeout: 8000 });
+}
+await check("briefings: history is kept and listed, newest first, the latest on top", async () => {
+  await publishBrief("## History one\n\nbody one");
+  await publishBrief("## History two\n\nbody two");
+  await publishBrief("## History three\n\nbody three");
+  const h = await (await fetch(base + "/api/brief/history")).json();
+  if (h.briefs.length < 3 || !h.briefs[0].markdown.includes("three") || !h.briefs[1].markdown.includes("two")) throw new Error(JSON.stringify(h).slice(0, 300));
+  await freshList();
+  await page.locator("#pager").click();
+  await page.waitForFunction(() => document.querySelectorAll("#br-body .br-item").length >= 2, null, { timeout: 5000 });
+  const t = await page.locator("#br-body").innerText();
+  if (!/History three/.test(t.split("EARLIER")[0] || t) || !t.includes("History two") || !t.includes("History one")) throw new Error(t.slice(0, 300));
+  await page.locator("#br-body .br-item summary").first().click();
+  await page.waitForFunction(() => document.querySelector("#br-body .br-item[open] .md")?.innerText.includes("body two"), null, { timeout: 3000 });
+});
+await check("briefings: the pill opens it, the back button returns (and the URL follows)", async () => {
+  await freshList();
+  let st = await briefsState();
+  if (st.open || !st.inert || st.x < 380) throw new Error("not parked off-screen: " + JSON.stringify(st));
+  await page.locator("#pager").click();
+  await settle();
+  st = await briefsState();
+  if (!st.open || st.inert || st.x !== 0 || st.hash !== "#/briefings") throw new Error("pill did not open it: " + JSON.stringify(st));
+  await page.locator("#br-back").click();
+  await settle();
+  st = await briefsState();
+  if (st.open || !st.inert || st.x < 380 || st.hash !== "") throw new Error("back did not return: " + JSON.stringify(st));
+});
+await check("briefings: the menu item opens it; the browser's back returns", async () => {
+  await freshList();
+  await page.locator("#btn-fleet").click();
+  await page.locator("#f-briefs").click();
+  await settle();
+  let st = await briefsState();
+  if (!st.open) throw new Error("menu did not open it: " + JSON.stringify(st));
+  await page.goBack();
+  await settle();
+  st = await briefsState();
+  if (st.open || st.x < 380) throw new Error("history back did not return: " + JSON.stringify(st));
+});
+await check("briefings: a cold start on #/briefings shows it without a slide", async () => {
+  await page.goto(base + "/#/briefings", { waitUntil: "load" });
+  await page.waitForTimeout(300);
+  const st = await briefsState();
+  if (!st.open || st.x !== 0) throw new Error(JSON.stringify(st));
+});
+await check("briefings: swipe left opens it, swipe right returns", async () => {
+  await freshList();
+  await swipe(330, 500, 60, 505);
+  await settle();
+  let st = await briefsState();
+  if (!st.open || st.x !== 0 || st.hash !== "#/briefings") throw new Error("swipe left did not open it: " + JSON.stringify(st));
+  await swipe(60, 500, 330, 505);
+  await settle();
+  st = await briefsState();
+  if (st.open || st.x < 380 || st.hash !== "") throw new Error("swipe right did not return: " + JSON.stringify(st));
+});
+await check("briefings: mid-swipe the screen follows the finger", async () => {
+  await freshList();
+  await swipe(330, 500, 130, 504, { hold: true });
+  await page.waitForTimeout(100);
+  const x = (await briefsState()).x;
+  await page.screenshot({ path: `${out}/briefings-mid-swipe.png` });
+  await release();
+  // 200px of finger: the left edge sits near 390 - 200 (the lock distance is not counted).
+  if (x < 190 || x > 260) throw new Error("screen at x=" + x + " with the finger 200px along");
+  await settle();
+});
+await check("briefings: a short slow drag snaps back; a short fast flick goes through", async () => {
+  await freshList();
+  await swipe(300, 500, 230, 503, { ms: 600 }); // 70px, slow
+  await settle();
+  let st = await briefsState();
+  if (st.open || st.x < 380) throw new Error("a short slow drag opened it: " + JSON.stringify(st));
+  await swipe(300, 500, 240, 502, { steps: 3, ms: 45 }); // 60px, fast
+  await settle();
+  st = await briefsState();
+  if (!st.open) throw new Error("a fast flick did not open it: " + JSON.stringify(st));
+});
+await check("briefings: a flick back the other way mid-drag cancels the open", async () => {
+  await freshList();
+  await swipe(330, 500, 150, 504, { steps: 6, ms: 300, hold: true });
+  for (const x of [165, 200, 260, 330]) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: 504, id: 1 }] }); await page.waitForTimeout(8); }
+  await release();
+  await settle();
+  const st = await briefsState();
+  if (st.open || st.x < 380) throw new Error("a reversal still opened it: " + JSON.stringify(st));
+});
+await check("briefings: vertical scrolling on the list does not open it", async () => {
+  await freshList();
+  await page.evaluate(() => { document.querySelector("#agents").style.minHeight = "2400px"; });
+  await swipe(200, 600, 190, 200, { steps: 10, ms: 200 }); // up, with a little drift left
+  await settle();
+  const st = await briefsState();
+  if (st.open || st.x < 380) throw new Error("a vertical swipe opened it: " + JSON.stringify(st));
+  if (st.listY < 100) throw new Error("the list did not scroll: " + JSON.stringify(st));
+});
+await check("briefings: a swipe that starts on a sideways-scrolling row scrolls the row, not the page", async () => {
+  await freshList();
+  await page.evaluate(() => {
+    const d = document.createElement("div");
+    d.id = "hscroll"; d.className = "host-filter"; d.style.cssText = "overflow-x:auto;white-space:nowrap;height:60px;background:#334";
+    d.innerHTML = '<div style="flex:none;width:1200px;height:40px">a wide row that scrolls sideways</div>';
+    document.querySelector("#agents").prepend(d);
+  });
+  const r = await page.evaluate(() => { const b = document.querySelector("#hscroll").getBoundingClientRect(); return { y: b.y + 20 }; });
+  await swipe(330, r.y, 60, r.y + 2);
+  await settle();
+  const st = await briefsState();
+  const sl = await page.evaluate(() => document.querySelector("#hscroll").scrollLeft);
+  if (st.open) throw new Error("opened from a scrolling row");
+  if (sl < 50) throw new Error("the row did not scroll (scrollLeft " + sl + ")");
+});
+await check("briefings: touches at the screen edges are left to the OS", async () => {
+  await freshList();
+  await swipe(383, 500, 100, 504); // starts at the right edge
+  await settle();
+  let st = await briefsState();
+  if (st.open) throw new Error("opened from the right edge");
+  await page.locator("#pager").click();
+  await settle();
+  await swipe(8, 500, 340, 504); // starts at the left edge: iOS back swipe territory
+  await settle();
+  st = await briefsState();
+  if (!st.open || st.x !== 0) throw new Error("a left-edge start was taken by the page: " + JSON.stringify(st));
+});
+await check("briefings: no swipe while an agent or the launch sheet is open", async () => {
+  await freshList();
+  await page.locator("#btn-launch").click();
+  await page.waitForSelector("#launch", { state: "visible" });
+  await swipe(330, 500, 60, 504);
+  await settle();
+  let st = await briefsState();
+  if (st.open) throw new Error("opened under the launch sheet");
+  await page.locator("#ln-close").click();
+  await openAgent("alpha");
+  await swipe(330, 500, 60, 504);
+  await settle();
+  st = await briefsState();
+  if (st.open) throw new Error("opened over an agent");
 });
 
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
