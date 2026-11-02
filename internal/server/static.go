@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 )
@@ -131,4 +132,19 @@ func etagMatches(header, etag string) bool {
 		}
 	}
 	return false
+}
+
+// diskStatic serves the app from a directory, re-reading it on every
+// request, so an edit to web/ shows on reload without a rebuild. It is the
+// dev harness's (tools/uitest/dev.sh, COMEBYE_DEV_WEB_DIR); a release serves
+// the embedded copy.
+type diskStatic struct{ dir string }
+
+func (d diskStatic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h, err := newStaticHandler(os.DirFS(d.dir))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.ServeHTTP(w, r)
 }

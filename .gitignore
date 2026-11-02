@@ -22,3 +22,6 @@ coverage.*
 .DS_Store
 Thumbs.db
 tools/uitest/node_modules/
+
+# uitest dev server record
+/tools/uitest/.dev-run

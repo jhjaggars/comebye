@@ -80,6 +80,11 @@ user's.
    - **Definition of done**: the tests, builds or checks that must pass and
      what to commit. Workers commit on their branch and end with a report;
      merging stays with the user.
+   - For any change to the phone app's UI (`web/`), the definition of done
+     includes **seeing it**: the worker starts `tools/uitest/dev.sh start`,
+     takes before and after screenshots with `tools/uitest/shot.mjs` at
+     390px and at desktop width (1280) in both themes (`--dark`, `--light`),
+     opens them to look, and lists them in its report. Say so in the brief.
    - Never tell a worker to use `tmux` (see Rules): to test an interactive
      program, name a pty script instead.
 6. Run `comebye handoff …` and tell the user the branch and worker name.

@@ -44,6 +44,9 @@ type agent struct {
 	Ready     bool   `json:"interactive_ready"`
 	Revision  uint64 `json:"revision"`
 
+	repo       string   // fixture agents: the workspace's repository ("" for none)
+	checkout   string   // ... and its checkout path
+	linked     bool     // ... and whether that is a linked worktree
 	screen     []string // pane text (bravo; alpha mirrors its transcript here)
 	transcript string   // JSONL path ("" for none)
 	n          int
@@ -64,6 +67,8 @@ func main() {
 	lag := flag.Duration("status-lag", 300*time.Millisecond, "delay between a prompt and the working status")
 	reply := flag.Duration("reply-delay", 2500*time.Millisecond, "delay between a prompt and the reply (then idle)")
 	noStatus := flag.Bool("no-status", false, "never report working/idle: the status stays idle, as when herdr misses or delays a transition")
+	fixtures := flag.Bool("fixtures", false, "add the dev-harness fixture agents (worker, coordinator, home, blocked, long names, ...) after alpha and bravo")
+	hostTag := flag.String("fixture-host", "", "with -fixtures: a tag that makes the fixture agents a second host's (a peer): a few agents named <tag>-*")
 	flag.Parse()
 	if *dir == "" {
 		d, err := os.MkdirTemp("", "fake-herdr")
@@ -71,6 +76,9 @@ func main() {
 			log.Fatal(err)
 		}
 		*dir = d
+	}
+	if err := os.MkdirAll(*dir, 0o755); err != nil {
+		log.Fatal(err)
 	}
 	f := &fake{statusLag: *lag, replyDelay: *reply, noStatus: *noStatus}
 	alphaFile := filepath.Join(*dir, "alpha.jsonl")
@@ -88,6 +96,9 @@ func main() {
 	}
 	f.record(f.agents[0], "user", "hello alpha")
 	f.record(f.agents[0], "assistant", "alpha says hi")
+	if *fixtures {
+		f.addFixtures(*dir, *hostTag)
+	}
 	_ = os.Remove(*sock)
 	l, err := net.Listen("unix", *sock)
 	if err != nil {
@@ -165,7 +176,7 @@ func (f *fake) answer(method string, p map[string]any) (any, *rpcErr) {
 	case "agent.list":
 		return map[string]any{"type": "agent_list", "agents": f.agents}, nil
 	case "session.snapshot":
-		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"workspaces": []any{}}}, nil
+		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"workspaces": f.workspaces()}}, nil
 	case "agent.get":
 		if a := f.find(target); a != nil {
 			return map[string]any{"type": "agent_info", "agent": a}, nil

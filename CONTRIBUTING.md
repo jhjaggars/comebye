@@ -32,6 +32,51 @@ welcome.
   [SECURITY.md](SECURITY.md).
 - Write commit messages that explain *why*, not just *what*.
 
+## Seeing the UI while you work (dev server + screenshots)
+
+**For any UI change** (`web/`): start the dev server, take *before* and
+*after* screenshots with `shot.mjs` at 390px and at desktop width (1280) in
+both themes, **look at them** (open the PNG with your file-reading tool; it
+shows images, or read the printed geometry) and list the screenshots in your
+report. A passing `run.sh` does not tell you the UI looks right.
+
+    tools/uitest/dev.sh start [--port P]   # prints the URL; runs in the background
+    node tools/uitest/shot.mjs ROUTE [options]
+    tools/uitest/dev.sh stop               # always stop it when you are done
+
+`dev.sh` starts the fake herdr with fixture agents (a worker, a coordinator,
+home agents, one blocked on a dialog, one marked ready to remove, long
+names, a briefing, and a second host `peerbox`) plus comebye built from the
+current checkout, on a free port, with all state in a `mktemp` dir. `web/` is
+served from disk, so **edit JS/CSS/HTML and reload, no rebuild**; after a Go
+change run `dev.sh restart`. `dev.sh status|url|logs` help when stuck. Each
+checkout has its own server (recorded in the git-ignored
+`tools/uitest/.dev-run`), so several agents can run side by side.
+
+`shot.mjs ROUTE` opens the page in headless Chrome, runs the steps, writes a
+PNG and prints console errors, failed requests and the geometry of the
+selectors you ask about:
+
+    shot.mjs /                                        # the agent list, 390px
+    shot.mjs agent/w3:p1 --wait '#detail' \
+        --inspect '#d-more'                            # is the ⋯ menu visible?
+    shot.mjs agent/w3:p1 --width 1280 --light --out after-1280-light.png
+    shot.mjs / --click '#btn-launch' --wait '#launch'  # open a sheet
+    shot.mjs agent/w6:p1 --dom '#d-menu'                # print some DOM
+
+Routes: a path or `#/agent/<pane>` (`agent/w3:p1` for short; a peer's is
+`agent/peerbox/w21:p1`). Options: `--width N` (390, 768, 1280), `--dark` /
+`--light`, `--click`, `--wait`, `--scroll SEL:PX`, `--full`, `--out`,
+`--inspect SEL` (visible/hidden and x y w h), `--dom SEL`, `--a11y SEL`;
+the header of `shot.mjs` has the full list. Fixture panes: `w1` alpha and
+`w2` bravo (the `run.sh` agents), `w3` fix-detail-menu (working worker), `w4`
+laharl (coordinator), `w5` notes-home, `w6` needs-input (blocked), `w7`
+old-worker (marked), `w8` the long names (`tools/devserver/fixtures.go`).
+
+If a Playwright MCP server is configured for your session, point it at the
+URL `dev.sh url` prints for interactive clicking; the CLI above is the
+baseline that always works.
+
 ## Notes
 
 - The only third-party code is the two vendored browser libraries in

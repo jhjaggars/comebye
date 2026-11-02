@@ -210,7 +210,12 @@ func (s *Server) routes() {
 		log.Fatalf("static assets: %v", err)
 	}
 	s.version = static.version
-	s.mux.Handle("GET /", static)
+	if dir := os.Getenv("COMEBYE_DEV_WEB_DIR"); dir != "" {
+		log.Printf("serving the app from %s (COMEBYE_DEV_WEB_DIR; edits show on reload)", dir)
+		s.mux.Handle("GET /", diskStatic{dir})
+	} else {
+		s.mux.Handle("GET /", static)
+	}
 	// Routes the agent role may use are wrapped in authAgent (forwarded to
 	// the hub on a peer with -hub) or authAgentLocal; everything wrapped
 	// in auth is the user's alone (see agentauth.go).
