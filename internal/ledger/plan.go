@@ -61,6 +61,8 @@ func MemberOutcome(e Entry) string {
 	switch {
 	case e.Status == Failed, e.Status == Removed && e.FinishedAt == nil:
 		return MemberFailed
+	case e.Status == Landing, e.Status == Landed:
+		return MemberOK // it reported before it was approved to land
 	case e.Status == Running:
 		return MemberPending
 	case e.FinishedAt != nil:

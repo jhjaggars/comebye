@@ -268,6 +268,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/handoffs/{id}/release", s.authAgent(s.handleReleaseHandoff))
 	s.mux.HandleFunc("POST /api/handoffs/{id}/cancel", s.authAgent(s.handleCancelHandoff))
 	s.mux.HandleFunc("POST /api/report", s.authAgent(s.handleReport))
+	s.mux.HandleFunc("POST /api/landings", s.authAgent(s.handleLanding))
 	s.mux.HandleFunc("POST /api/plans", s.authAgent(s.handleCreatePlan))
 	s.mux.HandleFunc("GET /api/plans", s.authAgent(s.handleListPlans))
 	s.mux.HandleFunc("GET /api/plans/{id}", s.authAgent(s.handleGetPlan))

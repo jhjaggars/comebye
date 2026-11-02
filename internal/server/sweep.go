@@ -123,10 +123,13 @@ func sweepClassify(e ledger.Entry, live *herdr.AgentInfo, c *worktreeChecks, che
 }
 
 func sweepState(e ledger.Entry) string {
-	if e.Status != ledger.Finished {
-		return "idle"
+	switch e.Status {
+	case ledger.Finished:
+		return "finished"
+	case ledger.Landed:
+		return "landed"
 	}
-	return "finished"
+	return "idle"
 }
 
 // sweepReason is the mark's reason for a ready worker, from its checks.
@@ -161,7 +164,7 @@ func (s *Server) sweepCandidates(agents []herdr.AgentInfo, idleAfter time.Durati
 			item.Reason = "already marked ready to remove"
 			skipped = append(skipped, item)
 			continue
-		case ledger.Finished:
+		case ledger.Finished, ledger.Landed:
 		case ledger.Running:
 			// Still recorded as running: only an agent that has sat idle
 			// for a while counts.

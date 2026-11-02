@@ -179,6 +179,8 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 		maxBody, timeout = 1<<20, 45*time.Second
 	case r.URL.Path == "/api/report":
 		maxBody = maxReportBody
+	case r.URL.Path == "/api/landings":
+		timeout = 75 * time.Second // the hub checks the worktree on its host first
 	case r.URL.Path == "/api/brief":
 		maxBody = maxBriefBytes + 16<<10
 	}

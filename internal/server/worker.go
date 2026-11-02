@@ -391,6 +391,11 @@ type checkOpts struct {
 	// then fall back to the repository (see checkGone).
 	Repo        string
 	Prev, Hints []string
+	// Also lists commits (a landing's approved tip) that must be in the
+	// base as well, even when the worktree exists: a worker that detached
+	// its worktree and deleted its branch without pushing must not look
+	// landed.
+	Also []string
 }
 
 func (o checkOpts) query() url.Values {
@@ -409,6 +414,9 @@ func (o checkOpts) query() url.Values {
 	if len(o.Hints) > 0 {
 		q.Set("hints", strings.Join(o.Hints, ","))
 	}
+	if len(o.Also) > 0 {
+		q.Set("also", strings.Join(o.Also, ","))
+	}
 	return q
 }
 
@@ -418,7 +426,7 @@ func (o checkOpts) query() url.Values {
 func (s *Server) handleChecks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	opts := checkOpts{Detail: q.Get("detail") == "1", Diff: q.Get("diff") == "1", Within: q.Get("within") == "1",
-		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints"))}
+		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints")), Also: splitList(q.Get("also"))}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	c, lerr := s.localChecks(ctx, q.Get("path"), q.Get("branch"), q.Get("base"), opts)
@@ -446,7 +454,7 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 			// The worktree is gone: fall back to the repository.
 			repo, note, why := goneRepo(ctx, opts.Repo, filepath.Clean(path), roots)
 			if repo != "" {
-				c = checkGone(ctx, filepath.Clean(path), repo, branch, opts.Prev, hexOnly(opts.Hints), base)
+				c = checkGone(ctx, filepath.Clean(path), repo, branch, opts.Prev, hexOnly(append(opts.Hints, opts.Also...)), base)
 				c.RepoNote = note
 			} else {
 				c.RepoMissing = why
@@ -465,6 +473,7 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 		}
 	}
 	c := checkWorktree(ctx, p, branch, base)
+	checkAlso(ctx, &c, hexOnly(opts.Also))
 	if opts.Detail || opts.Diff {
 		inspectWorktree(ctx, &c, opts.Diff)
 	}

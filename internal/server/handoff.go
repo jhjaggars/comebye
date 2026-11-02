@@ -411,7 +411,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 	}()
 	prev, hasPrev := s.ledger.Find(func(e *ledger.Entry) bool {
 		return e.Host == b.Host && e.RepoName == repoName && (e.Branch == branch || slices.Contains(e.PreviousBranches, branch)) &&
-			(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
+			e.Active()
 	})
 	if hasPrev && b.Plan != "" && prev.PlanID != "" && prev.PlanID != b.Plan {
 		return http.StatusConflict, map[string]any{"code": "plan_conflict", "message": "that worker already belongs to another plan", "entry": prev}
@@ -443,7 +443,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 		hint = prev.Worktree
 		if other, ok := s.ledger.Find(func(e *ledger.Entry) bool {
 			return e.ID != prev.ID && e.Host == prev.Host && e.Worktree == hint &&
-				(e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
+				e.Active()
 		}); ok {
 			return http.StatusConflict, map[string]any{"code": "path_taken", "message": hint + " belongs to another worker (" + other.Branch + ")", "entry": prev}
 		}
@@ -535,6 +535,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 		return
 	}
 	captures := s.ledger.Observe(agents, time.Now())
+	s.checkLandings()
 	s.releaseQueued()
 	s.evalPlans()
 	defer s.deliverCallbacks(agents)
@@ -660,7 +661,7 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		if a, ok := live[e.AgentID]; ok && e.AgentID != "" {
 			v.Live = liveInfo{Present: true, Status: a.Status}
 		}
-		if e.Status == ledger.Finished && e.Worktree != "" {
+		if e.Reported() && e.Worktree != "" {
 			if c := s.cachedChecks(e); c != nil {
 				v.Checks = c
 				v.Candidate = e.FinalReport != "" && c.Exists && !c.Primary && !c.Dirty && c.Unmerged == 0 && c.Error == ""

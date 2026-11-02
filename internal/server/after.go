@@ -74,7 +74,7 @@ func (s *Server) queueHandoff(b handoffBody, from string, reply *ledger.Ref) (in
 	repoName := filepath.Base(filepath.Clean(b.Repo))
 	if other, ok := s.ledger.Find(func(e *ledger.Entry) bool {
 		return e.Host == b.Host && e.RepoName == repoName && (e.Branch == branch || slices.Contains(e.PreviousBranches, branch)) &&
-			(e.Status == ledger.Waiting || e.Status == ledger.Running || e.Status == ledger.Finished || e.Status == ledger.ReadyToRemove)
+			(e.Status == ledger.Waiting || e.Active())
 	}); ok {
 		return http.StatusConflict, map[string]any{"code": "branch_in_use", "message": "there is already a handoff for this branch", "entry": other}
 	}

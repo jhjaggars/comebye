@@ -18,20 +18,26 @@ import (
 	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
-// Status is a ledger entry's state:
+// Status is a ledger entry's state (docs/lifecycle.md):
 //
-//	running -> finished (the worker went idle after working; its final
-//	report is captured) -> ready_to_remove (marked) -> removed
+//	running -> finished (the worker reported, or went idle after
+//	working; its final report is captured) -> landing (the user OKed
+//	landing; `comebye land`) -> landed (it reported again and the hub's
+//	check found its work in the base) -> ready_to_remove (marked) ->
+//	removed
 //
-// failed is a handoff whose worker never started. A finished worker that
-// gets more work goes back to running; unmarking returns to running or
-// finished.
+// failed is a handoff whose worker never started. A landing whose check
+// fails goes back to finished. A finished or landed worker that gets more
+// work goes back to running (a new round); unmarking returns to running,
+// finished or landed.
 type Status string
 
 const (
 	Waiting       Status = "waiting" // queued behind earlier steps of its plan; no worker yet
 	Running       Status = "running"
 	Finished      Status = "finished"
+	Landing       Status = "landing" // approved; the worker is landing its own work
+	Landed        Status = "landed"  // the hub's check found the landed work in the base
 	ReadyToRemove Status = "ready_to_remove"
 	Removed       Status = "removed"
 	Failed        Status = "failed"
@@ -94,13 +100,45 @@ type Entry struct {
 	PlanID string `json:"plan_id,omitempty"`
 	// ReplyTo is who asked for the handoff, when it was an agent: the hub
 	// tells it when the worker finishes. Callback tracks that message.
-	ReplyTo   *Ref       `json:"reply_to,omitempty"`
-	Callback  *Callback  `json:"callback,omitempty"`
-	Mark      *Mark      `json:"mark,omitempty"`
+	ReplyTo  *Ref      `json:"reply_to,omitempty"`
+	Callback *Callback `json:"callback,omitempty"`
+	Mark     *Mark     `json:"mark,omitempty"`
+	// MarkedFrom is the status the entry had when it was marked, which
+	// unmarking restores.
+	MarkedFrom Status `json:"marked_from,omitempty"`
+	// Approval is the user's OK to land, as relayed by `comebye land`
+	// (kept after it landed, until the next landing replaces it).
+	Approval *Approval `json:"approval,omitempty"`
+	// LandCheck is the hub's check after the landing report.
+	LandCheck *LandCheck `json:"land_check,omitempty"`
 	RemovedAt *time.Time `json:"removed_at,omitempty"`
 	// Removal is the owning host's account of the removal (what was
 	// closed, whether the worktree went and why not).
 	Removal json.RawMessage `json:"removal,omitempty"`
+}
+
+// Approval records who relayed the user's OK to land, when, and what
+// they approved: the branch tip then, landed onto Base.
+type Approval struct {
+	By   string    `json:"by,omitempty"`
+	Note string    `json:"note,omitempty"` // the user's words, as relayed
+	At   time.Time `json:"at"`
+	Base string    `json:"base,omitempty"`
+	Tip  string    `json:"tip,omitempty"`
+	// ReportedAt is when the worker had reported the work being landed
+	// (the entry's FinishedAt then), restored if the landing is cancelled.
+	ReportedAt *time.Time `json:"reported_at,omitempty"`
+}
+
+// LandCheck is the hub's verdict on a landing: OK when the worktree is
+// clean and every approved commit is in the base.
+type LandCheck struct {
+	At      time.Time `json:"at"`
+	OK      bool      `json:"ok"`
+	Base    string    `json:"base,omitempty"` // the base checked against ("origin/main")
+	Verdict string    `json:"verdict"`
+	// Landed lists the base commits the work landed as, where found.
+	Landed []string `json:"landed,omitempty"`
 }
 
 // Ref addresses an agent: its host-qualified id and the name it had then
@@ -269,6 +307,15 @@ func copyEntry(e *Entry) Entry {
 	if e.Mark != nil {
 		c.Mark = copyMark(e.Mark)
 	}
+	if e.Approval != nil {
+		a := *e.Approval
+		c.Approval = &a
+	}
+	if e.LandCheck != nil {
+		l := *e.LandCheck
+		l.Landed = append([]string(nil), l.Landed...)
+		c.LandCheck = &l
+	}
 	return c
 }
 
@@ -334,9 +381,21 @@ func (s *Store) Update(id string, fn func(*Entry)) (Entry, bool, error) {
 }
 
 // active reports whether an entry still has a session to track.
-func active(e *Entry) bool {
-	return e.Status == Running || e.Status == Finished || e.Status == ReadyToRemove
+func active(e *Entry) bool { return e.Active() }
+
+// Active reports whether the entry still has a session to track: it is
+// running, finished, landing, landed or marked.
+func (e Entry) Active() bool {
+	switch e.Status {
+	case Running, Finished, Landing, Landed, ReadyToRemove:
+		return true
+	}
+	return false
 }
+
+// Reported reports whether the worker is stopped with its work reported:
+// finished or landed.
+func (e Entry) Reported() bool { return e.Status == Finished || e.Status == Landed }
 
 // ByAgent returns the active entry for a host-qualified agent id.
 func (s *Store) ByAgent(agentID string) (Entry, bool) {
@@ -379,6 +438,9 @@ func (s *Store) SetMark(m Mark) (*Entry, error) {
 	}
 	m = *copyMark(&m)
 	if e := s.byAgent(m.AgentID); e != nil {
+		if e.Status != ReadyToRemove {
+			e.MarkedFrom = e.Status
+		}
 		e.Mark = &m
 		e.Status = ReadyToRemove
 		c := copyEntry(e)
@@ -430,6 +492,10 @@ func (s *Store) ClearMark(agentID string) (bool, error) {
 		if e.FinishedAt != nil {
 			e.Status = Finished
 		}
+		if e.MarkedFrom == Landed || (e.MarkedFrom == Landing && e.Approval != nil) {
+			e.Status = e.MarkedFrom
+		}
+		e.MarkedFrom = ""
 		found = true
 	}
 	kept := s.data.Marks[:0]
@@ -484,11 +550,34 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 	changed := false
 	var capture []Entry
 	for _, e := range s.data.Entries {
-		if e.Status != Running && e.Status != Finished {
+		if e.Status != Running && e.Status != Landing && !e.Reported() {
 			continue
 		}
 		a := byID[e.AgentID]
 		if a == nil {
+			continue
+		}
+		if e.Status == Landing {
+			// Landing is the worker's own work: it does not start a new
+			// round, and going idle after it is the landing report.
+			switch a.Status {
+			case herdr.StatusWorking:
+				if !e.SawWorking && e.FinishedAt == nil {
+					e.SawWorking, changed = true, true
+				}
+			case herdr.StatusIdle, herdr.StatusDone:
+				if e.AwaitIdle {
+					e.AwaitIdle, e.SawWorking, changed = false, false, true
+				}
+				if e.SawWorking && e.FinishedAt == nil {
+					t := now.UTC()
+					e.FinishedAt, e.SawWorking, e.ReportTries, e.ReportSource = &t, false, 0, ""
+					changed = true
+					capture = append(capture, copyEntry(e))
+				} else if e.FinishedAt != nil && e.FinalReport == "" && e.ReportTries < maxReportTries {
+					capture = append(capture, copyEntry(e))
+				}
+			}
 			continue
 		}
 		switch a.Status {
@@ -496,14 +585,14 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 			if !e.SawWorking {
 				e.SawWorking, changed = true, true
 			}
-			if e.Status == Finished && !(e.AwaitIdle && e.FinishedAt != nil && now.Sub(*e.FinishedAt) < reportTurnGrace) {
+			if e.Reported() && !(e.AwaitIdle && e.FinishedAt != nil && now.Sub(*e.FinishedAt) < reportTurnGrace) {
 				e.ReportSource = ""
 				e.Status, e.FinishedAt, e.FinalReport, e.ReportTries = Running, nil, "", 0
 				e.Callback = nil
 				changed = true
 			}
 		case herdr.StatusIdle, herdr.StatusDone:
-			if e.Status == Finished && e.AwaitIdle {
+			if e.Reported() && e.AwaitIdle {
 				e.AwaitIdle, e.SawWorking, changed = false, false, true
 			}
 			if e.Status == Running && e.SawWorking {
@@ -514,7 +603,7 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 				}
 				changed = true
 				capture = append(capture, copyEntry(e))
-			} else if e.Status == Finished && e.FinalReport == "" && e.ReportTries < maxReportTries {
+			} else if e.Reported() && e.FinalReport == "" && e.ReportTries < maxReportTries {
 				capture = append(capture, copyEntry(e))
 			}
 		}
@@ -544,7 +633,7 @@ func (s *Store) PendingCallbacks() []Entry {
 	defer s.mu.Unlock()
 	var out []Entry
 	for _, e := range s.data.Entries {
-		if e.Status == Finished && e.Callback != nil && e.Callback.State == CallbackPending {
+		if e.Reported() && e.Callback != nil && e.Callback.State == CallbackPending {
 			out = append(out, copyEntry(e))
 		}
 	}
@@ -584,11 +673,27 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := s.byAgent(agentID)
-	if e == nil || (e.Status != Running && e.Status != Finished) {
+	if e == nil || (e.Status != Running && e.Status != Landing && !e.Reported()) {
 		return Entry{}, false, nil
 	}
 	t := now.UTC()
+	if e.Status == Landing {
+		// The landing report: the hub checks the work before it counts
+		// as landed (SetLandCheck), and tells the requester then.
+		e.FinishedAt = &t
+		e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
+		e.AwaitIdle, e.SawWorking = true, false
+		return copyEntry(e), true, s.save()
+	}
 	wasFinished := e.Status == Finished
+	if e.Status == Landed {
+		if e.AwaitIdle {
+			// Still the landing turn (a corrected landing report).
+			e.FinalReport, e.ReportTries = Truncate(text, MaxReport), 0
+			return copyEntry(e), true, s.save()
+		}
+		e.Status = Finished // a report after landing is a new round's
+	}
 	e.Status, e.FinishedAt = Finished, &t
 	if !wasFinished {
 		if e.ReplyTo != nil {
@@ -604,6 +709,92 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 // looked for (so a message that points at it should wait).
 func (e Entry) ReportPending() bool {
 	return e.FinalReport == "" && e.ReportTries < maxReportTries
+}
+
+// StartLanding records the user's OK to land a finished worker's work
+// (relayed by `comebye land`) and moves it to landing. A landing that has
+// not reported yet may be started again (a retry); its approval is
+// replaced. ok is false when the agent has no finished entry with a
+// report, or a landing that already reported.
+func (s *Store) StartLanding(agentID string, a Approval) (Entry, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byAgent(agentID)
+	switch {
+	case e == nil:
+		return Entry{}, false, nil
+	case e.Status == Finished && e.FinalReport != "":
+		a.ReportedAt = e.FinishedAt
+	case e.Status == Landing && e.FinishedAt == nil && e.Approval != nil:
+		a.ReportedAt = e.Approval.ReportedAt
+	default:
+		return copyEntry(e), false, nil
+	}
+	if a.At.IsZero() {
+		a.At = time.Now().UTC()
+	}
+	e.Status, e.Approval, e.FinishedAt = Landing, &a, nil
+	e.SawWorking, e.AwaitIdle = false, false
+	return copyEntry(e), true, s.save()
+}
+
+// CancelLanding undoes StartLanding when the land prompt could not be
+// sent: a landing that has not started working goes back to finished.
+func (s *Store) CancelLanding(agentID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byAgent(agentID)
+	if e == nil || e.Status != Landing || e.FinishedAt != nil || e.SawWorking || e.Approval == nil || e.Approval.ReportedAt == nil {
+		return false, nil
+	}
+	e.Status, e.FinishedAt = Finished, e.Approval.ReportedAt
+	e.Approval = nil
+	return true, s.save()
+}
+
+// LandingsToCheck lists the landings whose report is in and whose check
+// is due.
+func (s *Store) LandingsToCheck() []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Entry
+	for _, e := range s.data.Entries {
+		if e.Status == Landing && e.FinishedAt != nil {
+			out = append(out, copyEntry(e))
+		}
+	}
+	return out
+}
+
+// SetLandCheck settles a landing that reported at finishedAt: landed when
+// the check is OK, else back to finished with the verdict. The requester
+// is told now, with the outcome. A landing that went back to work or was
+// marked since is left alone.
+func (s *Store) SetLandCheck(id string, finishedAt time.Time, c LandCheck) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID != id {
+			continue
+		}
+		if e.Status != Landing || e.FinishedAt == nil || !e.FinishedAt.Equal(finishedAt) {
+			return false, nil
+		}
+		if c.At.IsZero() {
+			c.At = time.Now().UTC()
+		}
+		c.Landed = append([]string(nil), c.Landed...)
+		e.LandCheck = &c
+		e.Status = Finished
+		if c.OK {
+			e.Status = Landed
+		}
+		if e.ReplyTo != nil {
+			e.Callback = &Callback{State: CallbackPending, At: c.At}
+		}
+		return true, s.save()
+	}
+	return false, nil
 }
 
 // SetReport stores a captured final report for an entry that is still

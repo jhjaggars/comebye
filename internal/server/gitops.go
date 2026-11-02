@@ -440,6 +440,49 @@ func compareToBase(ctx context.Context, dir, tip, base string) baseCmp {
 	return best
 }
 
+// checkAlso adds to c the commits of each of also (an approved tip) that
+// are not in the base and not already counted from the worktree's tip,
+// and where they landed. A SHA that does not resolve is reported as an
+// error: what was approved can no longer be found.
+func checkAlso(ctx context.Context, c *worktreeChecks, also []string) {
+	if !c.Exists || c.Error != "" || c.Unmerged < 0 || len(also) == 0 {
+		return
+	}
+	base, _ := strings.CutPrefix(c.BaseUsed, "origin/")
+	seen := map[string]bool{}
+	for _, l := range c.Landed {
+		seen[l.SHA] = true
+	}
+	for _, sha := range also {
+		full, err := runGit(ctx, c.Path, "rev-parse", "--verify", "--quiet", "--end-of-options", sha+"^{commit}")
+		if err != nil || full == "" {
+			c.Error = "the approved commit " + shortSHA(sha) + " is not in this repository"
+			c.Unmerged = -1
+			return
+		}
+		cmp := compareToBase(ctx, c.Path, full, base)
+		if cmp.n < 0 {
+			c.Error = "could not compare the approved commit " + shortSHA(sha) + " with " + base
+			c.Unmerged = -1
+			return
+		}
+		for _, p := range cmp.plus {
+			if c.Tip != "" {
+				if _, err := runGit(ctx, c.Path, "merge-base", "--is-ancestor", p, c.Tip); err == nil {
+					continue // counted from the tip already
+				}
+			}
+			c.Unmerged++
+		}
+		for _, l := range cmp.landed {
+			if !seen[l.SHA] {
+				seen[l.SHA] = true
+				c.Landed = append(c.Landed, l)
+			}
+		}
+	}
+}
+
 // maxLandedWindow bounds how many base commits are searched for a patch
 // match.
 const maxLandedWindow = 300
