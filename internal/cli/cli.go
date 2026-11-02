@@ -1196,7 +1196,7 @@ func cmdLand(e *Env, args []string) error {
 	}
 	retry := en.Status == "landing" && en.FinishedAt == nil
 	if !retry && (en.Status != "finished" || strings.TrimSpace(en.FinalReport) == "") {
-		return fmt.Errorf("%s is not ready to land: its ledger entry is %q and %s a final report; land after the worker has finished and reported", t.label(), en.Status, map[bool]string{true: "has", false: "has no"}[strings.TrimSpace(en.FinalReport) != ""])
+		return fmt.Errorf("%s is not ready to land: its ledger entry is %q and %s; land after the worker has finished and reported", t.label(), en.Status, map[bool]string{true: "has a final report", false: "has no final report"}[strings.TrimSpace(en.FinalReport) != ""])
 	}
 	// Record the approval first (the entry becomes landing), then send the
 	// prompt; if it cannot be sent, the landing is undone.
