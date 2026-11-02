@@ -11,7 +11,7 @@ are kept in step with it by tests.
 The decisions below come from two interviews with the user on 2026-11-02
 (the second after the coordinator forwarded the user's input on workflows
 and the backlog, and the findings of the beads comparison,
-[docs/investigations/2026-11-02-beads-comparison.md](investigations/2026-11-02-beads-comparison.md));
+[the beads comparison](https://claude.ai/artifact/UbVjLTGBB9S2HPhjqEbrUD), a Claude artifact);
 each section ends with what was decided.
 
 The shape: **one shared lifecycle** (states, report format, evidence
@@ -92,7 +92,7 @@ workflow says which of the rest applies:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `feature` | worktree on a new branch | landed (or reported, for land `none`) | the usual sections | `main` (`pr`, `none` per repository) | task | none | mark once landed |
 | `test` | worktree, detached at the base | reported with an outcome | what ran, the command, the result | none, unless it committed (then as feature) | ephemeral | none | sweep-ready once the coordinator has read the report |
-| `research` | worktree, detached at the base; a branch only if it commits | reported; a committed doc landed | findings, sources, recommendation | only if it committed something | task | none | mark once read (or landed) |
+| `research` | worktree, detached at the base; a branch only if it commits | reported, with the results published as an artifact | findings, sources, recommendation, the artifact's link | only if it committed code or a spec | task | none | mark once read (or landed) |
 | `review` | worktree on the reviewed branch, or none for a PR ref | the reviewed work landed with the review approved | `approve` or `changes-requested`, findings | none | standing, linked to the reviewed entry or PR | `step` on the reviewed entry, per round | mark when the reviewed work has landed |
 | `watch` | none: the hub watches | the watched thing settled (PR merged or closed, CI finished, timer) | only what changed | none | standing on the hub; an agent only to act on a change | `pr_merged`, `ci_green` or `timer` | ends by itself when the wait settles |
 | `deploy` | worktree detached at the deployed SHA | the new SHA is running and healthy | deployed and previous SHAs, the health check | none | task | `human` (the user's OK) and `ci_green` on the base | mark after the report |
@@ -116,6 +116,16 @@ ledger, the app and the briefing show each handoff's workflow.
 nothing touches the primary checkout. `test` and `research` start detached
 at the base; a worker that commits creates its branch, and its work then
 lands as a feature's would.
+
+**Research results go in an artifact, not the repository.** A `research`
+worker publishes its write-up (findings, comparisons, recommendations) as
+a private Claude artifact and links it in its report. A worker without an
+Artifact tool writes the write-up as an HTML file and gives the
+coordinator its path to publish. Only two kinds of document go in the
+repository: specs that the code follows (like this one) and usage docs
+for code that ships. *Decided by the user (2026-11-02), after the beads
+comparison was first committed to `docs/investigations/` and then
+removed.*
 
 **Review rounds.** A review is a standing entry linked to the reviewed
 entry (or a PR, by `--ref`). Each round: the reviewer reports with outcome
