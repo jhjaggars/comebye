@@ -16,7 +16,7 @@ func TestRender(t *testing.T) {
 		"comebye handoff", "comebye ledger", "comebye read", "comebye mark", "--reason", "comebye brief set",
 		"Goal", "Context", "Constraints", "Definition of done", "branch name",
 		"Never edit code", "Never close, remove or launch", "Never prompt yourself", "confirms in the app",
-		"home agent", "concise",
+		"home agent", "concise", "docs/lifecycle.md", "--note", "landed", "Never land on your own",
 	} {
 		if !strings.Contains(gen, want) {
 			t.Errorf("playbook lacks %q", want)

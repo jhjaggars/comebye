@@ -77,7 +77,10 @@ the owning host:
    from the coordinator says to (then exactly that, fast-forward only, never
    force, never rewriting history), and end with a final report in a fixed
    format: `## Summary`, `## Changes`, `## Verification` (grouped as
-   Verified live / Unit tests only / Not verified), `## Follow-ups`. The
+   Verified live / Unit tests only / Not verified, each defined: live is
+   the real program driven as a user would, not a function called
+   directly), `## Follow-ups`. `comebye report` warns the worker, without
+   refusing the report, when a section or a Verification group is missing. The
    template also tells the worker that the coordinator may ask it to land its
    work after the report, and that this message authorises exactly those
    steps (see **Landing**). A
@@ -86,13 +89,19 @@ the owning host:
    `{{from}}` and `{{host}}`, the worker's host fills `{{worktree}}` and
    `{{base}}`.
 
-**Landing.** Landing is a phase of the worker's lifecycle, done by the same
+**Landing.** The whole lifecycle (states, who acts, the user's
+decisions) is in [lifecycle.md](lifecycle.md); this is a summary. Landing is a phase of the worker's lifecycle, done by the same
 worker after the user OKs it: the worker reports (the coordinator tells the
-user how it went), then on the coordinator's `comebye land AGENT` it rebases
+user how it went), then on the coordinator's `comebye land AGENT --note
+"<the user's OK>"` (which records the approval: the entry becomes
+`landing`) it rebases
 or cherry-picks onto the latest `origin/main` as plain commits (no merge
 commits, none that exist only to carry a signature), re-runs the tests,
 fast-forward pushes to main (never force, never rewriting pushed history),
-watches CI, deletes its pushed and local branch and reports. Deploying is a
+watches CI, deletes its pushed and local branch and reports. The hub then
+checks its worktree, with the approved tip as a commit that must be in the
+base too: `landed` when every approved commit is there, else back to
+`finished` with the verdict. Deploying is a
 separate step, only when the user asks (`--deploy`). Then the session is
 marked for removal. Coordinators do not spawn separate landing agents.
 
@@ -102,9 +111,16 @@ Each handoff is an entry: host, repository, branch, base, agent, model (and
 pi's thinking level, when the handoff chose them), worktree, brief, who asked, and its status:
 
 - `running`: the worker is at it;
-- `finished`: it went idle or done after working; its last assistant
-  message is kept as the final report (up to 20 kB). It goes back to
-  `running` if it gets more work;
+- `finished`: it reported (`comebye report`), or went idle or done after
+  working (its last assistant message is kept as the final report, up to
+  20 kB). It goes back to `running` if it gets more work;
+- `landing`: the user OKed landing (`comebye land`; the `approval`
+  records who relayed it, the user's words and the approved tip) and the
+  worker is landing its work;
+- `landed`: its landing report came in and the hub's check found every
+  approved commit in the base (`land_check`, with the SHAs it landed as).
+  A failed check returns it to `finished`. More work makes it `running`
+  again, as a new round;
 - `ready_to_remove`: you marked it (who, when, why);
 - `removed`: you confirmed its removal (what was closed and removed is
   recorded);
@@ -307,7 +323,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye ledger [--active]` | The handoffs: status, host, repository, branch, worker, whether a final report was captured, marks, and hints (agent gone, uncommitted or unmerged, `candidate`). Then the other marked sessions. |
 | `comebye read AGENT [--lines N]` | The agent's last N messages (default 20) as text; the terminal's output for agents without a transcript. |
 | `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch); for any other agent, its last reply. |
-| `comebye land AGENT [--base main] [--deploy] [--queue]` | After the user has OKed it, send a finished worker the standard land prompt through the normal prompt path (so the dialog guard applies, and `--queue` holds it): rebase or cherry-pick onto the latest `origin/BASE` as plain commits, re-run the tests, fast-forward push (never force), watch CI, delete the pushed and local branch, report. `--deploy` adds a deploy step; without it the worker is told not to deploy. Refused unless the agent's ledger entry is `finished` with a final report. |
+| `comebye land AGENT --note "<the user's OK>" [--base main] [--deploy] [--queue]` | After the user has OKed it, record the approval (`POST /api/landings`: the entry becomes `landing`; undone if the prompt cannot be sent) and send a finished worker the standard land prompt through the normal prompt path (so the dialog guard applies, and `--queue` holds it): rebase or cherry-pick onto the latest `origin/BASE` as plain commits, re-run the tests, fast-forward push (never force), watch CI, delete the pushed and local branch, report. `--deploy` adds a deploy step; without it the worker is told not to deploy. Refused unless the agent's ledger entry is `finished` with a final report. |
 | `comebye inspect AGENT [--diff]` | The agent's git state, checked on its own host: worktree, branch and tip, an unfinished rebase or merge, uncommitted files, commits not in the base, commits on no remote, the diff stat; `--diff` adds the diffs (128 KB each at most). It reports `merged:` (are the commits in the base?) separately from `pushed:` (are they on a remote?): pushed work is not merged, and a squash-merged PR still counts as not merged. |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE\|-` | Hand off (`POST /api/handoffs`); prints the entry, or the existing one. `--model` picks the worker's model (see `comebye models`); `--thinking` is pi's level. Neither: the agent's own default. |
 | `comebye model AGENT [MODEL] [--thinking T]` | Switch a running agent's model (claude and pi; it must be idle): the agent's own `/model` (and pi's `/thinking`) is typed into its prompt (`POST .../agents/{target}/model`). For pi MODEL may be left out with `--thinking`. A worker's ledger entry follows. |

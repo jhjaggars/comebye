@@ -155,8 +155,14 @@ When the landing report arrives (the entry is `landing`), the hub runs the
 removal checks on the worker's host. If every commit is in
 `origin/<base>`, the entry becomes `landed` and records the matching SHAs
 on the base. Otherwise it goes back to `finished` with the checks' verdict
-recorded, so a rejected push or a red CI shows in the ledger and the
+recorded, so a rejected or skipped push shows in the ledger and the
 coordinator tells the user. It never tells the worker to force anything.
+The check is git-only: it cannot see CI. A red CI is in the worker's
+landing report, which the coordinator reads and relays.
+
+The check also covers the **approved tip**, the branch's commit when
+`comebye land` ran. A worker that detached its worktree and deleted its
+branch without pushing would otherwise look clean.
 
 **Signed commits.** The worker signs as the repository's git config says
 (`commit.gpgsign`). If signing fails, it stops and reports rather than
@@ -190,8 +196,12 @@ batch. The deploy report must show the new SHA running (a version or
 health check). The hub records the deployed SHA and the one before it, and
 a rollback redeploys the recorded previous SHA.
 
-Until that is built, `comebye land WORKER --deploy` adds a deploy step to a
-single landing.
+Until that is built: land each worker without `--deploy`. When the user
+asks to deploy, the coordinator prompts one landed worker (or the home
+session) to deploy the latest main as the project's docs describe, and to
+report the deployed SHA and its health check. That is one deploy, with its
+approvals, for the whole batch. `comebye land WORKER --deploy` still adds a
+deploy step to a single landing.
 
 *Decided:* batched and triggered by the user; a `comebye deploy` step the
 user approves once; rollback to the recorded previous SHA.

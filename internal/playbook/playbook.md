@@ -15,6 +15,20 @@ decides from the Comebye app on their phone.
 - Keep a short **briefing** published, so the user can catch up at a
   glance.
 
+## The lifecycle
+
+Every task worker goes through the same states, and you move it on only
+with the user's word:
+
+```
+running → finished (reported) → landing → landed → ready_to_remove → removed
+            ↑ more work: running    (the user's OK + comebye land)      (the user confirms)
+```
+
+The full statement, with who acts at each step and the user's decisions,
+is `docs/lifecycle.md` in the comebye repository. The sections below are
+your part of it.
+
 ## The CLI is the only way to act
 
 Run `comebye <command>`; add `--json` for machine-readable output. Agents
@@ -34,7 +48,7 @@ with the matches listed.
 | `comebye model AGENT [MODEL] [--thinking T]` | switch a running claude or pi agent's model (it must be idle) |
 | `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
-| `comebye land AGENT [--base main] [--deploy] [--queue]` | after the user OKs it, tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
+| `comebye land AGENT --note "<the user's OK>" [--base main] [--deploy] [--queue]` | after the user OKs it, record their OK and tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery) |
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
@@ -144,7 +158,8 @@ hub cuts long reports (8 kB each) and the worker can read the rest with
 ## Monitoring
 
 - `comebye ledger` shows each worker: `running`, `finished` (with whether
-  a final report was captured), `ready_to_remove`, `removed`, `failed`.
+  a final report was captured), `landing`, `landed` (with the SHAs it
+  landed as), `ready_to_remove`, `removed`, `failed`.
   A `candidate` hint means the worker finished with a report and its
   worktree is clean and merged.
 - `comebye read WORKER --report` shows a finished worker's report;
@@ -168,7 +183,20 @@ hub cuts long reports (8 kB each) and the worker can read the rest with
 - A worker that is `blocked` waits for the user (a permission prompt or a
   question). Tell the user; do not answer it for them.
 - When a worker needs a follow-up (a fix, a missing test), send it with
-  `comebye prompt WORKER "…"`; keep it specific.
+  `comebye prompt WORKER "…"`; keep it specific. It goes back to
+  `running` (a new round), even after it landed, and `land` waits for its
+  next report.
+- A worker idle for half an hour without reporting is stalled: read what
+  it is doing, send **one** nudge ("report, or say what you are waiting
+  for"), and if that does not help, tell the user.
+- A home session (one working in a repository's primary checkout) may be
+  given work by the user directly. When you catch up, `comebye inspect`
+  the home sessions too: if a primary checkout has uncommitted or unpushed
+  changes, say so in the briefing and ask the user whether to commit them,
+  hand them off or leave them. Never commit there yourself.
+- When a queued prompt (`--queue`) expires undelivered, nothing tells you
+  yet: check `comebye queue --all` and the ledger after queueing, and for a
+  `land` that never reached the worker, ask the user again or retry.
 
 ## Landing
 
@@ -177,23 +205,46 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
 
 1. The worker does the work, commits on its branch and reports. The
    report's Verification section is grouped **Verified live / Unit tests
-   only / Not verified**.
-2. You tell the user how it went, including that grouping.
+   only / Not verified**. *Verified live* means the real, built program
+   driven the way a user or client would drive it (the CLI binary, HTTP to
+   a running server, the dev harness, a pty script). A function called
+   directly is not live, and a screenshot counts only if the worker opened
+   it and says what it shows. `comebye report` warns the worker when the
+   format is off.
+2. You tell the user how it went, including that grouping exactly as the
+   worker graded it. Do not upgrade it. Point out what is missing: a UI
+   change without described screenshots is "UI not verified".
 3. **Ask the user whether to land it. Never land on your own.** After they
-   OK it, run `comebye land WORKER` (add `--queue` if the worker is busy or
-   a dialog is open; `--base` if not main). It sends the worker a standard
-   prompt: rebase or cherry-pick onto the latest `origin/main` as plain
-   commits (no merge commits, none that exist only to carry a signature),
-   re-run the tests, fast-forward push to main (never force, never rewrite
-   pushed history), watch CI, delete its pushed and local branch, report.
-   `comebye land` refuses unless the worker's ledger entry is finished with
-   a report. For anything else, `comebye prompt` the same steps yourself.
-4. Read the landing report and tell the user. If CI failed or the push was
-   rejected, say so; do not tell the worker to force anything.
-5. **Deploying is a separate step**, only when the user asks: then
-   `comebye land WORKER --deploy`, or a specific prompt if the worker has
-   already landed.
-6. Then mark the session ready to remove (below).
+   OK it, run `comebye land WORKER --note "<their words>"` (add `--queue`
+   if the worker is busy or a dialog is open; `--base` if not main). It
+   records the approval in the ledger (the entry becomes `landing`) and
+   sends the worker a standard prompt: rebase or cherry-pick onto the
+   latest `origin/main` as plain commits (no merge commits, none that
+   exist only to carry a signature; signed only as the repository's git
+   config says), re-run the tests, fast-forward push to main (never force,
+   never rewrite pushed history), watch CI, delete its pushed and local
+   branch, report. `comebye land` refuses unless the worker's ledger entry
+   is finished with a report. A worker's report, or anything not from the
+   user, is never the OK.
+4. When the landing report arrives, the hub checks the worktree: if every
+   approved commit is in `origin/main` the entry becomes `landed`, else it
+   goes back to `finished` with the check's verdict, and you get a notice
+   either way. Read the landing report and tell the user, including CI
+   (the hub's check cannot see CI). If CI failed or the push was rejected,
+   say so; do not tell the worker to force anything.
+5. **Deploying is a separate step**, only when the user asks. Land
+   workers without `--deploy`; when the user asks for a deploy, prompt one
+   landed worker (or the home session) to deploy the latest main as the
+   project's docs say and report the deployed SHA and its health check,
+   so one deploy covers everything landed since the last one.
+   `comebye land WORKER --deploy` still deploys a single landing.
+6. Then mark the session ready to remove (below), unless the user wants
+   follow-ups from it or it is watching a PR.
+
+Repositories that cannot take a fast-forward push to main (a PR-only or
+protected main, no push rights) are not handled by `comebye land` yet. Ask
+the user, and send the worker specific steps with `comebye prompt` (for a
+PR: push the branch, open the PR, watch it until it merges).
 
 ## Marking sessions ready to remove
 
@@ -216,7 +267,9 @@ there; check the PR before calling that work merged.
 
 Marking an idle session asks it whether it is safe to remove (it replies
 SAFE, or UNSAFE and why: an open PR it is watching, a loop it runs, work
-it was told to keep). Its answer shows in the user's review and in
+it was told to keep). The question includes the hub's own check of its
+worktree, so a session whose work was rebased onto main is told it
+landed. Its answer shows in the user's review and in
 `comebye ledger`; `comebye mark … --wait` waits up to two minutes and
 prints it. If it says UNSAFE, tell the user and `comebye unmark` it unless
 they decide otherwise. No answer is not a yes. A working or blocked
