@@ -1117,6 +1117,19 @@ func sendPrompt(e *Env, c *client, t target, text string, queue, asJSON bool) er
 		return queuePrompt(e, c, t, text, asJSON)
 	}
 	data, err := c.raw("POST", hostPath(t, "prompt"), nil, map[string]string{"text": text})
+	var ae *apiError
+	if errors.As(err, &ae) && ae.code == "input_busy" {
+		// The user has text in that agent's input box: typing over it would
+		// mix the two messages. Hold the prompt on the hub instead; it is
+		// sent once the box has been empty for a few seconds.
+		if !asJSON {
+			fmt.Fprintf(e.Stdout, "Held: the user is typing in %s's input box.\n", t.label())
+		}
+		if qerr := queuePrompt(e, c, t, text, asJSON); qerr != nil {
+			return fmt.Errorf("the user is typing in %s's input box, and the prompt could not be held: %v", t.label(), qerr)
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -1224,6 +1237,7 @@ type apiQueued struct {
 	State     string     `json:"state"`
 	Tries     int        `json:"tries"`
 	SettledAt *time.Time `json:"settled_at"`
+	Held      string     `json:"held"`
 }
 
 func queuePrompt(e *Env, c *client, t target, text string, asJSON bool) error {
@@ -1245,7 +1259,7 @@ func queuePrompt(e *Env, c *client, t target, text string, asJSON bool) error {
 		fmt.Fprintf(e.Stdout, "Already queued for %s as %s; nothing new added.\n", t.label(), r.Queued.ID)
 		return nil
 	}
-	fmt.Fprintf(e.Stdout, "Queued %s for %s: it is sent when the agent is idle with no question open, for up to 2 hours. Withdraw it with `comebye queue --cancel %s`.\n", r.Queued.ID, t.label(), r.Queued.ID)
+	fmt.Fprintf(e.Stdout, "Queued %s for %s: it is sent when the agent is idle with no question open and nobody is typing in its input box, for up to 2 hours. Withdraw it with `comebye queue --cancel %s`.\n", r.Queued.ID, t.label(), r.Queued.ID)
 	return nil
 }
 
@@ -1316,7 +1330,11 @@ func cmdQueue(e *Env, args []string) error {
 		if r := []rune(text); len(r) > 60 {
 			text = string(r[:60]) + "…"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.State, strings.TrimSpace(it.Name+" "+it.Agent), it.From, it.At.Local().Format("15:04"), text)
+		state := it.State
+		if it.Held != "" && it.State == "pending" {
+			state = "held (typing)"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, state, strings.TrimSpace(it.Name+" "+it.Agent), it.From, it.At.Local().Format("15:04"), text)
 	}
 	return tw.Flush()
 }

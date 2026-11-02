@@ -1632,8 +1632,13 @@ function renderQueued() {
   const items = queued.id === state.selected ? queued.items : [];
   el.hidden = items.length === 0;
   if (!items.length) { el.textContent = ""; return; }
-  el.innerHTML = `<div class="q-head">${items.length} queued — sent when the agent is free</div>` +
-    items.map((q) => `<div class="q-item"><span class="q-text" title="${escAttr(q.text)}">${esc(q.from)}: ${esc(q.text)}</span>` +
+  // The head of the queue is "held" when the agent is free but someone has
+  // text in its input box: it goes out once that box has been empty for a
+  // few seconds, and the prompts behind it wait for it.
+  const held = items.some((q) => q.held);
+  el.innerHTML = `<div class="q-head">${items.length} queued — ` +
+    (held ? "held: someone is typing in this agent's input box; sent once it is empty" : "sent when the agent is free") + `</div>` +
+    items.map((q) => `<div class="q-item${held ? " q-held" : ""}"><span class="q-text" title="${escAttr(q.text)}">${esc(q.from)}: ${esc(q.text)}</span>` +
       `<button type="button" class="btn q-cancel" data-qid="${escAttr(q.id)}">Cancel</button></div>`).join("");
 }
 

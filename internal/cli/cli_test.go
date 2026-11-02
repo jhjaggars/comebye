@@ -717,6 +717,28 @@ func TestHandoffAfterReleaseCancel(t *testing.T) {
 	}
 }
 
+// A plain prompt to an agent whose user is typing is held on the queue, not
+// typed over and not dropped; `comebye queue` shows it as held.
+func TestPromptHeldWhileUserTypes(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/hosts/kube/agents/w5:p2/prompt"] = answer{code: 409, body: `{"code":"input_busy","message":"held: the user is typing in that pane"}`}
+	f.answers["POST /api/queue"] = answer{code: 202, body: `{"queued":{"id":"q7","agent_id":"kube/w5:p2","name":"solo","state":"pending"},"duplicate":false}`}
+	if code := run(e, "prompt", "solo", "please", "rebase"); code != 0 {
+		t.Fatalf("prompt: %d %s %s", code, out, errb)
+	}
+	if !strings.Contains(out.String(), "Held: the user is typing") || !strings.Contains(out.String(), "Queued q7") {
+		t.Fatalf("output = %s", out)
+	}
+	if r := f.find("POST", "/api/queue"); r == nil || r.body != `{"agent":"kube/w5:p2","name":"solo","text":"please rebase"}` {
+		t.Fatalf("queue request = %+v", r)
+	}
+	f.answers["GET /api/queue"] = answer{body: `{"queue":[{"id":"q7","agent_id":"kube/w5:p2","name":"solo","from":"me","at":"2026-10-26T12:00:00Z","state":"pending","held":"held: the user is typing","text":"please rebase"}]}`}
+	out.Reset()
+	if code := run(e, "queue"); code != 0 || !strings.Contains(out.String(), "held (typing)") {
+		t.Fatalf("queue: %d %s %s", code, out, errb)
+	}
+}
+
 func TestPromptQueueAndQueueCommand(t *testing.T) {
 	f, e, out, errb := newFake(t)
 	f.answers["POST /api/queue"] = answer{code: 202, body: `{"queued":{"id":"q1","agent_id":"kube/w5:p2","name":"solo","state":"pending"},"duplicate":false}`}

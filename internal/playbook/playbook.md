@@ -50,7 +50,7 @@ with the matches listed.
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
 | `comebye land AGENT --note "<the user's OK>" [--base main] [--deploy] [--queue]` | after the user OKs it, record their OK and tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
-| `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery) |
+| `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery). If the user has text in the agent's input box, nothing is typed over it: a plain prompt is held on the queue automatically (`held` in `comebye queue`) and sent once the box has been empty for 5 s |
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
 | `comebye mark AGENT --reason R [--discard] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer) |
 | `comebye unmark AGENT` | withdraw that proposal |
