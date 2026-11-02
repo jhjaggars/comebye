@@ -48,7 +48,11 @@ func (s *Server) startAsk(m ledger.Mark, a *herdr.AgentInfo) *ledger.Ask {
 		return &ledger.Ask{State: ledger.AskNotAsked, Reason: "the session was " + string(a.Status), At: now}
 	}
 	s.setQuiet(m.AgentID, now.Add(s.askWait+askQuietAfter))
-	go s.runAsk(m, *a)
+	s.asking.Add(1)
+	go func() {
+		defer s.asking.Done()
+		s.runAsk(m, *a)
+	}()
 	return &ledger.Ask{State: ledger.AskAsking, AskedAt: &now, At: now}
 }
 

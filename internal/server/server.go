@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -125,7 +126,10 @@ type Server struct {
 	// to remove (tests shrink them); latest, when set, replaces latestOf.
 	askPoll time.Duration
 	askWait time.Duration
-	latest  func(ctx context.Context, host, pane string) *transcript.Latest
+	// asking counts the asks under way (they run git checks in the
+	// session's worktree), so tests can wait for them before cleaning up.
+	asking sync.WaitGroup
+	latest func(ctx context.Context, host, pane string) *transcript.Latest
 	// planPush tells the user a plan settled (the dispatcher's NotifyPlan;
 	// tests replace it).
 	planPush func(id, title, body string)

@@ -81,6 +81,7 @@ func newSweepFix(t *testing.T) *sweepFix {
 	m := managerWith(t, client, "desk", len(agents))
 	s := New(Config{ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), LaunchRoots: []string{root}, WorktreeRoot: wtRoot, AllowLogins: []string{"me@example.com"}, AgentToken: testToken}, client, m)
 	s.askPoll, s.askWait = 10_000_000, 50_000_000
+	t.Cleanup(s.asking.Wait) // before the temp dirs go: asks run git in the worktrees
 	f := &sweepFix{s: s, ids: map[string]string{}}
 	for i, n := range names {
 		id := "desk/w" + itoa(i+1) + ":p1"

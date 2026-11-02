@@ -20,6 +20,7 @@ func askServer(t *testing.T, reply string) (*Server, *fakeLaunchHerdr) {
 	t.Helper()
 	s, fh, _ := coordServer(t)
 	s.askPoll, s.askWait = 10*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(s.asking.Wait)
 	var mu sync.Mutex
 	s.latest = func(ctx context.Context, host, pane string) *transcript.Latest {
 		mu.Lock()
