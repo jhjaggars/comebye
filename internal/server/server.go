@@ -297,6 +297,7 @@ func (s *Server) routes() {
 	// The briefing and the coordinator roles (hub side).
 	s.mux.HandleFunc("GET /api/brief", s.authAgent(s.handleGetBrief))
 	s.mux.HandleFunc("POST /api/brief", s.authAgent(s.handleSetBrief))
+	s.mux.HandleFunc("GET /api/brief/history", s.auth(s.handleGetBriefHistory))
 	s.mux.HandleFunc("GET /api/brief/schedule", s.authAgent(s.handleGetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule", s.authAgent(s.handleSetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule/dismiss", s.authAgent(s.handleDismissBriefMiss))

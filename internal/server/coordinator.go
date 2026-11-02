@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,10 +58,56 @@ func (b *briefStore) get() (*Brief, error) {
 	return &out, nil
 }
 
+// maxBriefHistory bounds brief-history.json: the newest briefings, so the
+// app can page back through earlier (say hourly) ones. About 3 MB at most.
+const maxBriefHistory = 48
+
+func (b *briefStore) historyPath() string {
+	return filepath.Join(filepath.Dir(b.path), "brief-history.json")
+}
+
 func (b *briefStore) set(v Brief) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return writeFileAtomic(b.path, v)
+	if err := writeFileAtomic(b.path, v); err != nil {
+		return err
+	}
+	// The history is a convenience: the briefing is already published, so a
+	// history that cannot be read or written does not fail the publish.
+	h, _ := b.readHistory()
+	h = append([]Brief{v}, h...)
+	if len(h) > maxBriefHistory {
+		h = h[:maxBriefHistory]
+	}
+	_ = writeFileAtomic(b.historyPath(), h)
+	return nil
+}
+
+// readHistory returns the kept briefings, newest first. Callers hold b.mu.
+func (b *briefStore) readHistory() ([]Brief, error) {
+	data, err := os.ReadFile(b.historyPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Brief
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", b.historyPath(), err)
+	}
+	return out, nil
+}
+
+// history returns the kept briefings, newest first (at most limit when > 0).
+func (b *briefStore) history(limit int) ([]Brief, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	h, err := b.readHistory()
+	if limit > 0 && len(h) > limit {
+		h = h[:limit]
+	}
+	return h, err
 }
 
 // writeFileAtomic writes v as JSON to path (temp file, fsync, rename),
@@ -276,6 +323,24 @@ func (s *Server) handleGetBrief(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"brief": b, "schedule": s.briefSchedView(time.Now())})
+}
+
+// handleGetBriefHistory answers {briefs: [{markdown, by, at}, ...]}, the
+// last briefings published (at most 48) newest first; ?limit=N takes fewer.
+func (s *Server) handleGetBriefHistory(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w, r) {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	h, err := s.brief.history(limit)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "brief_error", "message": err.Error()})
+		return
+	}
+	if h == nil {
+		h = []Brief{}
+	}
+	writeJSON(w, map[string]any{"briefs": h, "max": maxBriefHistory})
 }
 
 // handleSetBrief publishes a briefing: POST {markdown} (at most 64 KB).
