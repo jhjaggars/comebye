@@ -773,6 +773,18 @@ await check("desktop: selecting an agent keeps the list visible and opens it bes
   if (sel.length !== 1 || !sel[0].endsWith("w1:p1")) throw new Error("selected row marked: " + JSON.stringify(sel));
   if (!(await visible("#detail-empty")) === false) throw new Error("empty state still shown");
 });
+for (const width of [1280, 1600, 1920, 2560]) {
+  await check(`desktop: at ${width}px the agent pane fills the space between the list and the briefings panel`, async () => {
+    await desktopList(width);
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForSelector("#chat", { state: "visible" });
+    const [l, d, m, c, h, b] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail main"), geo("#chat"), geo("#detail header"), geo("#briefs")]);
+    if (Math.abs(d.x - 360) > 2 || Math.abs(d.x + d.w - b.x) > 1.5) throw new Error("pane does not span list..panel: " + JSON.stringify([l, d, b]));
+    if (m.w < d.w - 2 || h.w < d.w - 2) throw new Error("main/header narrower than the pane: " + JSON.stringify([d, m, h]));
+    if (c.w < d.w - 40) throw new Error("chat leaves empty space at the sides: " + JSON.stringify([d, c]));
+  });
+}
 await check("desktop: up/down in the list moves through the agents and opens each", async () => {
   await desktopList(1280);
   await page.locator("#agents .agent[data-id]").first().focus();
