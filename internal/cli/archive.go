@@ -78,10 +78,12 @@ func cmdArchive(e *Env, args []string) error {
 		return usageErr("unknown archive subcommand %q", sub)
 	}
 	var ledger, to, by *string
-	var yes *bool
+	var yes, useGit, useGH *bool
 	switch sub {
 	case "index":
 		ledger = fs.String("ledger", "auto", "handoff links: FILE or - (the output of `comebye ledger --json`), auto (run it), or none")
+		useGit = fs.Bool("git", true, "check each commit against main in the local checkout (outcome source: git)")
+		useGH = fs.Bool("gh", false, "refresh PR state with `gh` (network; sends repo branch names to GitHub; cached in the index)")
 	case "restore":
 		to = fs.String("to", "", "directory to restore the session's files into (required)")
 	case "delete":
@@ -207,15 +209,15 @@ func cmdArchive(e *Env, args []string) error {
 		}
 		ix := &archive.Index{Path: cfg.IndexPath()}
 		t0 := time.Now()
-		st, err := ix.Sync(a, o, links)
+		st, err := ix.Sync(a, o, links, archive.SyncOptions{Git: *useGit, GH: *useGH})
 		if err != nil {
 			return err
 		}
 		if *asJSON {
 			return jsonOut(e, map[string]any{"result": st, "index": ix.Path, "links": len(links), "seconds": time.Since(t0).Seconds()})
 		}
-		fmt.Fprintf(e.Stdout, "%d sessions: %d indexed (%d messages), %d unchanged, %d removed; %d handoff links read; %s (%.1fs)\n",
-			st.Sessions, st.Indexed, st.Messages, st.Unchanged, st.Removed, len(links), ix.Path, time.Since(t0).Seconds())
+		fmt.Fprintf(e.Stdout, "%d sessions in %d threads: %d indexed (%d messages), %d unchanged, %d removed; %d handoff links read; %s (%.1fs)\n",
+			st.Sessions, st.Threads, st.Indexed, st.Messages, st.Unchanged, st.Removed, len(links), ix.Path, time.Since(t0).Seconds())
 		for _, m := range st.Errors {
 			fmt.Fprintln(e.Stderr, "error:", m)
 		}
@@ -331,7 +333,7 @@ func human(n int64) string {
 
 func cmdRecall(e *Env, args []string) error {
 	if len(args) == 0 {
-		return usageErr("recall needs a subcommand: list, search, show, commit")
+		return usageErr("recall needs a subcommand: ask, threads, list, search, show, commit, todo")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("recall "+sub, flag.ContinueOnError)
@@ -352,7 +354,7 @@ func cmdRecall(e *Env, args []string) error {
 	fs.IntVar(&f.Limit, "limit", 0, "most rows (default 30; search 15)")
 	text := fs.Int("text", 0, "show: also print the first N indexed messages")
 	switch sub {
-	case "list", "search", "show", "commit":
+	case "ask", "threads", "todo", "list", "search", "show", "commit":
 	default:
 		return usageErr("unknown recall subcommand %q", sub)
 	}
@@ -369,6 +371,30 @@ func cmdRecall(e *Env, args []string) error {
 	}
 	ix := &archive.Index{Path: path}
 	switch sub {
+	case "ask", "threads", "todo":
+		var views []archive.ThreadView
+		switch sub {
+		case "ask":
+			if len(pos) == 0 {
+				return usageErr("usage: comebye recall ask \"what you remember about it\" [filters]")
+			}
+			views, err = ix.Ask(strings.Join(pos, " "), f, f.Limit)
+		default:
+			views, err = ix.Threads(f, sub == "todo")
+		}
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return jsonOut(e, views)
+		}
+		if len(views) == 0 {
+			fmt.Fprintln(e.Stdout, "nothing found")
+		}
+		for i, v := range views {
+			printThread(e, i+1, v, sub == "ask")
+		}
+		return nil
 	case "list", "search", "commit":
 		var rows []map[string]any
 		switch sub {
@@ -400,7 +426,25 @@ func cmdRecall(e *Env, args []string) error {
 		return nil
 	case "show":
 		if len(pos) != 1 {
-			return usageErr("usage: comebye recall show SESSION [--text N]")
+			return usageErr("usage: comebye recall show THREAD|SESSION [--text N]")
+		}
+		if strings.HasPrefix(pos[0], "t-") {
+			v, err := ix.Thread(pos[0])
+			if err != nil {
+				return err
+			}
+			if *asJSON {
+				return jsonOut(e, v)
+			}
+			printThread(e, 0, *v, true)
+			fmt.Fprintf(e.Stdout, "    keywords: %s\n", v.Keywords)
+			for _, o := range v.Outcomes {
+				fmt.Fprintf(e.Stdout, "    %-18s %s  (%s)\n", o.Kind, oneLine(o.Text, 160), o.Source)
+			}
+			for _, sv := range v.Sessions {
+				fmt.Fprintf(e.Stdout, "    session %s %-6s %s  %s  %s\n", shortID(sv.Kind, sv.ID), sv.Kind, sv.Host, strings.Replace(sv.Started[:min(16, len(sv.Started))], "T", " ", 1), oneLine(sv.Title, 70))
+			}
+			return nil
 		}
 		s, cs, err := ix.Show(pos[0])
 		if err != nil {
@@ -417,6 +461,9 @@ func cmdRecall(e *Env, args []string) error {
 			return jsonOut(e, map[string]any{"session": s, "commits": cs, "messages": msgs})
 		}
 		printSession(e, s)
+		if t := ix.ThreadOf(str(s["host"]), str(s["kind"]), str(s["id"])); t != "" {
+			fmt.Fprintf(e.Stdout, "    thread       %s  (comebye recall show %s)\n", t, t)
+		}
 		for _, k := range []string{"cwd", "first_prompt", "brief", "summary", "plan_id", "ref", "ledger_agent", "version"} {
 			if v := str(s[k]); v != "" {
 				fmt.Fprintf(e.Stdout, "    %-12s %s\n", k, v)
@@ -503,3 +550,80 @@ func printSession(e *Env, r map[string]any) {
 }
 
 var _ = json.Marshal
+
+var verdictLabel = map[string]string{
+	"landed": "LANDED", "open": "OPEN", "unlanded": "NOT LANDED", "abandoned": "ABANDONED", "failed": "FAILED", "unknown": "OUTCOME UNKNOWN", "reported": "REPORTED (no code)",
+}
+
+// printThread is the short answer: what it was, when, how it ended, and
+// where to dig in. Every outcome line names its source.
+func printThread(e *Env, n int, v archive.ThreadView, detail bool) {
+	day := func(s string) string { return s[:min(10, len(s))] }
+	num := ""
+	if n > 0 {
+		num = fmt.Sprintf("%d. ", n)
+	}
+	fmt.Fprintf(e.Stdout, "%s%s  [%s]  %s\n", num, oneLine(v.Title, 100), v.ID, verdictLabel[v.Verdict])
+	where := v.Repos
+	if v.Branches != "" {
+		where += " @ " + v.Branches
+	}
+	fmt.Fprintf(e.Stdout, "    %s to %s, %d sessions on %s, %s\n", day(v.Started), day(v.Ended), len(v.Sessions), v.Hosts, oneLine(where, 90))
+	fmt.Fprintf(e.Stdout, "    outcome: %s\n", v.Outcome)
+	if !detail {
+		return
+	}
+	var commits, prs, docs, decisions, reports []string
+	srcs := map[string]bool{}
+	for _, o := range v.Outcomes {
+		switch {
+		case strings.HasPrefix(o.Kind, "commit-"):
+			st := strings.TrimPrefix(o.Kind, "commit-")
+			if st == "landed" {
+				st = "on main"
+			}
+			commits = append(commits, fmt.Sprintf("%s [%s]", oneLine(o.Text, 70), st))
+			srcs["git"] = true
+		case strings.HasPrefix(o.Kind, "pr-"):
+			prs = append(prs, oneLine(o.Text, 80))
+			srcs["gh"] = true
+		case o.Kind == "doc":
+			docs = append(docs, o.Text)
+		case o.Kind == "decision":
+			decisions = append(decisions, oneLine(o.Text, 160))
+		case o.Kind == "last-message":
+			reports = append(reports, "ended with: "+oneLine(o.Text, 220)+" ("+o.Source+")")
+		case o.Kind == "report":
+			reports = append(reports, oneLine(o.Text, 220)+" ("+o.Source+")")
+		case o.Kind == "handoff" || o.Kind == "unmerged" || o.Kind == "abandoned":
+			srcs["ledger"] = true
+		}
+	}
+	for _, r := range reports[:min(1, len(reports))] {
+		fmt.Fprintf(e.Stdout, "    report: %s\n", r)
+	}
+	if v.Summary != "" {
+		fmt.Fprintf(e.Stdout, "    summary: %s\n", oneLine(v.Summary, 260))
+	}
+	for _, d := range decisions[:min(2, len(decisions))] {
+		fmt.Fprintf(e.Stdout, "    decision (user's words, heuristic): %s\n", d)
+	}
+	for _, l := range []struct {
+		name string
+		v    []string
+	}{{"commits", commits}, {"PRs", prs}, {"docs", docs}} {
+		if len(l.v) > 0 {
+			shown := l.v[:min(4, len(l.v))]
+			more := ""
+			if len(l.v) > 4 {
+				more = fmt.Sprintf(" (+%d more)", len(l.v)-4)
+			}
+			fmt.Fprintf(e.Stdout, "    %s: %s%s\n", l.name, strings.Join(shown, "; "), more)
+		}
+	}
+	var ids []string
+	for _, sv := range v.Sessions[:min(6, len(v.Sessions))] {
+		ids = append(ids, shortID(sv.Kind, sv.ID))
+	}
+	fmt.Fprintf(e.Stdout, "    sessions: %s -> comebye recall show %s\n", strings.Join(ids, " "), v.ID)
+}

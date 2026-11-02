@@ -33,6 +33,9 @@ type Parsed struct {
 	Cwd, Branch, Title, FirstPrompt, Version, Start, End, AgentSessionID string
 	Msgs                                                                 []Msg
 	Commits                                                              []CommitRef
+	// Docs are markdown files under a docs/ directory that the session wrote
+	// or edited (from the tool call, so: what it did, not what it claimed).
+	Docs []string
 }
 
 const (
@@ -141,6 +144,9 @@ func (p *Parsed) blocks(role, ts string, bs []block, sub, argField string) {
 			args := b.Input
 			if len(args) == 0 {
 				args = b.Arguments
+			}
+			if sub == "" {
+				p.doc(b.Name, args)
 			}
 			s := b.Name + " " + argSummary(args)
 			p.add("tool", ts, s, sub)
@@ -368,4 +374,34 @@ func RepoFromCwd(cwd string) string {
 		return ""
 	}
 	return filepath.Base(cwd)
+}
+
+func (p *Parsed) doc(tool string, raw json.RawMessage) {
+	switch tool {
+	case "Write", "Edit", "MultiEdit", "write", "edit":
+	default:
+		return
+	}
+	var m struct {
+		FilePath string `json:"file_path"`
+		Path     string `json:"path"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return
+	}
+	f := m.FilePath
+	if f == "" {
+		f = m.Path
+	}
+	if !strings.HasSuffix(f, ".md") || !strings.Contains(f, "/docs/") {
+		return
+	}
+	for _, d := range p.Docs {
+		if d == f {
+			return
+		}
+	}
+	if len(p.Docs) < 20 {
+		p.Docs = append(p.Docs, f)
+	}
 }

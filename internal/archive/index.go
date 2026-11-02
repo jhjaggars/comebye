@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS sessions(
   summary TEXT, summary_at TEXT,
   PRIMARY KEY(host,kind,id));
 CREATE INDEX IF NOT EXISTS sessions_started ON sessions(started);
+CREATE TABLE IF NOT EXISTS artifacts(host TEXT, kind TEXT, session_id TEXT, path TEXT);
 CREATE TABLE IF NOT EXISTS commits(
   host TEXT, kind TEXT, session_id TEXT, sha TEXT, rel TEXT, branch TEXT, subject TEXT);
 CREATE INDEX IF NOT EXISTS commits_sha ON commits(sha);
@@ -146,18 +147,38 @@ func (w *stmtWriter) close() error {
 // Link ties a session to a Comebye handoff. It is built from
 // `comebye ledger --json` (the "entries" array).
 type Link struct {
-	ID          string   `json:"id"`
-	Host        string   `json:"host"`
-	AgentID     string   `json:"agent_id"`
-	RepoName    string   `json:"repo_name"`
-	Branch      string   `json:"branch"`
-	PrevBranch  []string `json:"previous_branches"`
-	Worktree    string   `json:"worktree"`
-	PlanID      string   `json:"plan_id"`
-	Ref         string   `json:"ref"` // backlog item, once handoffs carry one
-	Brief       string   `json:"brief"`
-	CreatedAt   string   `json:"created_at"`
-	FinalReport string   `json:"-"`
+	ID         string   `json:"id"`
+	Host       string   `json:"host"`
+	AgentID    string   `json:"agent_id"`
+	RepoName   string   `json:"repo_name"`
+	Branch     string   `json:"branch"`
+	PrevBranch []string `json:"previous_branches"`
+	Worktree   string   `json:"worktree"`
+	PlanID     string   `json:"plan_id"`
+	Ref        string   `json:"ref"` // backlog item, once handoffs carry one
+	Brief      string   `json:"brief"`
+	CreatedAt  string   `json:"created_at"`
+	// What the ledger says happened (structured, not the agent's claim).
+	Repo         string `json:"repo"` // the primary checkout on Host
+	Status       string `json:"status"`
+	FinalReport  string `json:"final_report"`
+	ReportSource string `json:"report_source"`
+	FinishedAt   string `json:"finished_at"`
+	RemovedAt    string `json:"removed_at"`
+	Mark         *struct {
+		Discard bool   `json:"discard"`
+		Reason  string `json:"reason"`
+	} `json:"mark"`
+	Removal *struct {
+		Discarded     bool   `json:"discarded"`
+		BranchDeleted string `json:"branch_deleted"`
+		Checks        struct {
+			Unmerged int `json:"unmerged_commits"`
+		} `json:"checks"`
+	} `json:"removal"`
+	Checks *struct {
+		Unmerged int `json:"unmerged_commits"`
+	} `json:"checks"`
 }
 
 // LoadLinks reads the output of `comebye ledger --json`.
@@ -244,6 +265,7 @@ type SyncStats struct {
 	Unchanged int      `json:"unchanged"`
 	Removed   int      `json:"removed"`
 	Messages  int      `json:"messages"`
+	Threads   int      `json:"threads"`
 	Errors    []string `json:"errors,omitempty"`
 }
 
@@ -251,7 +273,7 @@ type SyncStats struct {
 // bytes changed are re-read (decrypted, parsed) and their rows replaced;
 // sessions deleted on request are dropped; handoff links and summaries are
 // re-applied. A fresh index file is a full rebuild.
-func (ix *Index) Sync(a *Archiver, o Opener, links []Link) (SyncStats, error) {
+func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (SyncStats, error) {
 	var ss SyncStats
 	if err := ix.open(); err != nil {
 		return ss, err
@@ -303,6 +325,7 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link) (SyncStats, error) {
 		where := "host=" + q(a.Host) + " AND kind=" + q(g.Kind)
 		w.exec("DELETE FROM sessions WHERE " + where + " AND id=" + q(g.SID) + ";")
 		w.exec("DELETE FROM commits WHERE " + where + " AND session_id=" + q(g.SID) + ";")
+		w.exec("DELETE FROM artifacts WHERE " + where + " AND session_id=" + q(g.SID) + ";")
 		w.exec("DELETE FROM msgs WHERE host=" + q(a.Host) + " AND kind=" + q(g.Kind) + " AND session_id=" + q(g.SID) + ";")
 		nsub := 0
 		for _, m := range p.Msgs {
@@ -317,6 +340,9 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link) (SyncStats, error) {
 		for _, c := range p.Commits {
 			w.exec(fmt.Sprintf("INSERT INTO commits VALUES(%s,%s,%s,%s,%s,%s,%s);", q(a.Host), q(g.Kind), q(g.SID), q(c.SHA), q(c.Rel), q(c.Branch), q(c.Subject)))
 		}
+		for _, d := range p.Docs {
+			w.exec(fmt.Sprintf("INSERT INTO artifacts VALUES(%s,%s,%s,%s);", q(a.Host), q(g.Kind), q(g.SID), q(d)))
+		}
 		for _, m := range p.Msgs {
 			w.exec(fmt.Sprintf("INSERT INTO msgs(text,host,kind,session_id,seq,role,sub,ts) VALUES(%s,%s,%s,%s,%d,%s,%s,%s);",
 				q(m.Text), q(a.Host), q(g.Kind), q(g.SID), m.Seq, q(m.Role), q(m.Sub), q(m.TS)))
@@ -330,6 +356,7 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link) (SyncStats, error) {
 			kind, sid := fmt.Sprint(r["kind"]), fmt.Sprint(r["id"])
 			w.exec("DELETE FROM sessions WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND id=" + q(sid) + ";")
 			w.exec("DELETE FROM commits WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
+			w.exec("DELETE FROM artifacts WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
 			w.exec("DELETE FROM msgs WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
 			ss.Removed++
 		}
@@ -344,7 +371,9 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link) (SyncStats, error) {
 	if err := ix.applySummaries(a, o); err != nil {
 		return ss, err
 	}
-	return ss, nil
+	ts, err := ix.buildThreads(a.Host, links, opt)
+	ss.Threads, ss.Errors = ts.Threads, append(ss.Errors, ts.Errors...)
+	return ss, err
 }
 
 // parseGroup restores a session's files from the archive and parses them.
@@ -603,6 +632,6 @@ WHERE c.sha LIKE %s ORDER BY CASE c.rel WHEN 'made' THEN 0 WHEN 'pushed' THEN 1 
 // Archiver.DeleteSession).
 func (ix *Index) DeleteSession(host, kind, id string) error {
 	w := " WHERE host=" + q(host) + " AND kind=" + q(kind)
-	_, err := ix.run("BEGIN; DELETE FROM sessions"+w+" AND id="+q(id)+"; DELETE FROM commits"+w+" AND session_id="+q(id)+"; DELETE FROM msgs"+w+" AND session_id="+q(id)+"; COMMIT;", false)
+	_, err := ix.run("BEGIN; DELETE FROM sessions"+w+" AND id="+q(id)+"; DELETE FROM commits"+w+" AND session_id="+q(id)+"; DELETE FROM artifacts"+w+" AND session_id="+q(id)+"; DELETE FROM msgs"+w+" AND session_id="+q(id)+"; COMMIT;", false)
 	return err
 }

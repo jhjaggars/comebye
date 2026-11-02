@@ -61,6 +61,9 @@ func TestArchiveAndRecallCommands(t *testing.T) {
 	if err != nil || !strings.Contains(out, "33333333") || !strings.Contains(out, "october migration") || strings.Contains(out, "nothing found") {
 		t.Fatalf("%v %s", err, out)
 	}
+	if out, err = runR("recall", "ask", "we once planned the zebra migration, what happened"); err != nil || !strings.Contains(out, "october migration") || !strings.Contains(out, "[t-") || !strings.Contains(out, "outcome:") {
+		t.Fatalf("%v %s", err, out)
+	}
 	if out, _ = runR("recall", "list", "--since", "2026-11-01"); !strings.Contains(out, "nothing found") {
 		t.Fatalf("%s", out)
 	}

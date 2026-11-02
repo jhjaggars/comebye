@@ -331,7 +331,7 @@ func TestIndexSearchLinksCommitsSummaryRebuildDelete(t *testing.T) {
 	r.a.Run(r.sources())
 	ix := &Index{Path: filepath.Join(r.dir, "index.db")}
 	links := []Link{{ID: "h-1", Host: "laharl", AgentID: "laharl/w1:p1", RepoName: "comebye", Branch: "feat/x", Worktree: "/home/u/.worktrees/comebye/feat-x", Ref: "BL-7", Brief: "Fix the console cert", CreatedAt: "2026-10-03T09:59:00Z"}}
-	st, err := ix.Sync(r.a, r.op, links)
+	st, err := ix.Sync(r.a, r.op, links, SyncOptions{})
 	if err != nil || len(st.Errors) > 0 {
 		t.Fatalf("%v %v", err, st.Errors)
 	}
@@ -339,7 +339,7 @@ func TestIndexSearchLinksCommitsSummaryRebuildDelete(t *testing.T) {
 		t.Fatalf("%+v", st)
 	}
 	// Re-sync with nothing new indexes nothing.
-	st, _ = ix.Sync(r.a, r.op, links)
+	st, _ = ix.Sync(r.a, r.op, links, SyncOptions{})
 	if st.Indexed != 0 || st.Unchanged != 2 {
 		t.Fatalf("%+v", st)
 	}
@@ -383,7 +383,7 @@ func TestIndexSearchLinksCommitsSummaryRebuildDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Remove(ix.Path)
-	st, err = ix.Sync(r.a, r.op, links)
+	st, err = ix.Sync(r.a, r.op, links, SyncOptions{})
 	if err != nil || st.Indexed != 2 {
 		t.Fatalf("rebuild: %+v %v", st, err)
 	}
@@ -395,11 +395,105 @@ func TestIndexSearchLinksCommitsSummaryRebuildDelete(t *testing.T) {
 	if _, err := r.a.DeleteSession("claude", "-proj", sidA); err != nil {
 		t.Fatal(err)
 	}
-	st, _ = ix.Sync(r.a, r.op, links)
+	st, _ = ix.Sync(r.a, r.op, links, SyncOptions{})
 	if st.Removed != 1 {
 		t.Fatalf("%+v", st)
 	}
 	if rows, _ = ix.Search("rotation", Filter{}); len(rows) != 0 {
 		t.Fatal("deleted session still searchable")
+	}
+}
+
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Sessions on the same branch are one piece of work; its outcome comes from
+// the ledger and git, and a descriptive question finds it.
+func TestThreadsOutcomesAndAsk(t *testing.T) {
+	hasSqlite(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	r := newRig(t)
+	repo := filepath.Join(r.dir, "code", "widgets")
+	os.MkdirAll(repo, 0o755)
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o644)
+	gitIn(t, repo, "add", "a.txt")
+	gitIn(t, repo, "commit", "-q", "-m", "Rotate the console certificate before expiry")
+	landed := gitIn(t, repo, "rev-parse", "--short", "HEAD")
+
+	mk := func(sid, ts, branch, text string, extra string) {
+		cwd := repo
+		if sid == "44444444-4444-4444-8444-444444444444" {
+			cwd = filepath.Join(r.dir, "elsewhere")
+		}
+		r.write(filepath.Join(r.claude, "-w", sid+".jsonl"),
+			fmt.Sprintf(`{"type":"user","sessionId":%q,"cwd":%q,"gitBranch":%q,"timestamp":%q,"message":{"role":"user","content":%q}}`+"\n", sid, cwd, branch, ts, text)+extra, false)
+		r.old(filepath.Join(r.claude, "-w", sid+".jsonl"))
+	}
+	res := fmt.Sprintf(`{"type":"user","sessionId":"x","cwd":%q,"gitBranch":"feat/cert","timestamp":"2026-10-03T10:30:00Z","message":{"role":"user","content":[{"type":"tool_result","content":"[feat/cert %s] Rotate the console certificate before expiry\n"}]}}`+"\n", repo, landed)
+	mk(sidA, "2026-10-03T10:00:00Z", "feat/cert", "work on the certificate rotation for the console", res)
+	mk(sidB, "2026-10-09T10:00:00Z", "feat/cert", "follow up: we decided to go with a webhook for rotation", "")
+	other := "44444444-4444-4444-8444-444444444444"
+	mk(other, "2026-10-04T10:00:00Z", "feat/other", "benchmark the scheduler", "")
+	r.a.Run(r.sources())
+	links := []Link{{ID: "h-9", Host: "laharl", Repo: repo, RepoName: "widgets", Branch: "feat/cert", Worktree: repo, Brief: "Rotate the console certificate", CreatedAt: "2026-10-03T09:59:00Z",
+		Status: "finished", FinalReport: "## Summary\nRotation now happens a week before expiry.\n\n## Changes\n- x", ReportSource: "explicit", FinishedAt: "2026-10-03T12:00:00Z"}}
+	ix := &Index{Path: filepath.Join(r.dir, "i.db")}
+	st, err := ix.Sync(r.a, r.op, links, SyncOptions{Git: true})
+	if err != nil || len(st.Errors) > 0 {
+		t.Fatalf("%v %v", err, st.Errors)
+	}
+	if st.Threads != 2 {
+		t.Fatalf("want 2 threads (cert work, scheduler), got %d", st.Threads)
+	}
+	vs, err := ix.Ask("In the past we worked on rotating the console certificate and I forgot what the outcome was", Filter{}, 3)
+	if err != nil || len(vs) == 0 {
+		t.Fatalf("%v %v", vs, err)
+	}
+	v := vs[0]
+	if len(v.Sessions) != 2 || v.Verdict != "landed" || !strings.Contains(v.Outcome, "on main") {
+		t.Fatalf("thread: %+v", v)
+	}
+	var sawReport, sawDecision, sawCommit bool
+	for _, o := range v.Outcomes {
+		switch {
+		case o.Kind == "report" && strings.Contains(o.Text, "week before expiry") && strings.Contains(o.Source, "ledger"):
+			sawReport = true
+		case o.Kind == "decision" && strings.Contains(o.Source, "heuristic"):
+			sawDecision = true
+		case o.Kind == "commit-landed" && strings.HasPrefix(o.Ref, landed) && strings.HasPrefix(o.Source, "git"):
+			sawCommit = true
+		}
+	}
+	if !sawReport || !sawDecision || !sawCommit {
+		t.Fatalf("outcomes missing (report %v decision %v commit %v): %+v", sawReport, sawDecision, sawCommit, v.Outcomes)
+	}
+	if vs, _ = ix.Ask("scheduler benchmark", Filter{}, 3); len(vs) == 0 || vs[0].Verdict != "unknown" {
+		t.Fatalf("%+v", vs)
+	}
+	if vs, _ = ix.Ask("console certificate", Filter{Until: "2026-10-01"}, 3); len(vs) != 0 {
+		t.Fatal("date filter ignored")
+	}
+	if _, err := ix.Ask("what did we do in the past", Filter{}, 3); err == nil {
+		t.Fatal("a question with no topic words should say so")
+	}
+	// A summary written later is searched and shown, and survives a rebuild.
+	r.a.SetSummary("claude", sidA, "Moved certificate renewal to a webhook driven controller", "test")
+	os.Remove(ix.Path)
+	ix.Sync(r.a, r.op, links, SyncOptions{Git: true})
+	if vs, _ = ix.Ask("webhook driven controller", Filter{}, 3); len(vs) == 0 || vs[0].Summary == "" {
+		t.Fatalf("summary not used: %+v", vs)
+	}
+	if td, _ := ix.Threads(Filter{}, true); len(td) != 1 {
+		t.Fatalf("unsummarized threads: %d", len(td))
 	}
 }
