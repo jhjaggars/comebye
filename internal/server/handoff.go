@@ -31,7 +31,9 @@ import (
 // host, and a confirmed removal runs there too. Comebye never marks or
 // removes anything on its own.
 
-// defaultHandoffTemplate wraps a handoff's brief. A handoff-template.md in
+// defaultHandoffTemplate wraps a handoff's brief. Its rules follow
+// docs/lifecycle.md; the land prompt (internal/cli) repeats the push rules,
+// and a test there checks that the two agree. A handoff-template.md in
 // the state directory replaces it. The hub fills {{repo}}, {{branch}},
 // {{brief}}, {{from}} and {{host}}; the worker's host fills {{worktree}} and
 // {{base}}.
@@ -46,6 +48,7 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 - Work only in this git worktree, {{worktree}} (your current directory), on branch ` + "`{{branch}}`" + ` (started from ` + "`{{base}}`" + `). Do not check out other branches or edit other checkouts.
 - When you are done, commit your work on ` + "`{{branch}}`" + `. Do not merge, push or rebase unless your task, or a later message from {{from}}, explicitly tells you to. If it does, do exactly what it says: fast-forward pushes only, never force-push, never rewrite pushed history.
 - After you report, {{from}} may come back and ask you to land your work (for example: rebase it onto the latest main as plain commits, re-run the tests, push to main and watch CI). Treat that message as your authorisation for exactly those steps.
+- Grade your evidence honestly in the report's Verification section, and say for each item how you checked it. **Verified live**: the real, built program exercised the way a user or client would (the CLI binary, HTTP requests to a running server, the dev harness in a browser, a pty script); calling a function directly is not live. **Unit tests only**: covered by automated tests but not exercised live. **Not verified**: everything else. A screenshot counts only if you opened it and say in one line what it shows.
 - Do not use ` + "`tmux`" + ` (it breaks inside herdr panes and leaves stray sessions): to exercise an interactive program, drive it from a script over a pty (Python pty, or script).
 - End by running ` + "`comebye report -`" + ` with your final report on its standard input (a quoted heredoc is easiest), in exactly this markdown format, and then stop. That is how {{from}} learns you are done; if the command is not available, make the report your last message instead.
 

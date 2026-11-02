@@ -47,7 +47,7 @@ func TestHandoffLocal(t *testing.T) {
 			t.Errorf("brief lacks %q:\n%s", want, text)
 		}
 	}
-	for _, want := range []string{"Do not merge, push or rebase unless your task, or a later message from me@example.com, explicitly tells you to", "fast-forward pushes only, never force-push, never rewrite pushed history", "me@example.com may come back and ask you to land your work", "that message as your authorisation for exactly those steps", "grouped as: Verified live / Unit tests only / Not verified"} {
+	for _, want := range []string{"Do not merge, push or rebase unless your task, or a later message from me@example.com, explicitly tells you to", "fast-forward pushes only, never force-push, never rewrite pushed history", "me@example.com may come back and ask you to land your work", "that message as your authorisation for exactly those steps", "grouped as: Verified live / Unit tests only / Not verified", "calling a function directly is not live", "A screenshot counts only if you opened it"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("brief lacks %q", want)
 		}
