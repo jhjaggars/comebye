@@ -64,7 +64,7 @@ func init() {
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
 		{"report", "FILE|-", "(workers) declare yourself done and send your final report to whoever handed you the task", cmdReport},
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
-		{"land", "AGENT [--base main] [--deploy] [--queue] [--json]", "after the user OKs it, tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report", cmdLand},
+		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
@@ -327,7 +327,7 @@ func cmdAgents(e *Env, args []string) error {
 	roles := map[string]apiRole{}
 	if lg != nil {
 		for _, en := range lg.Entries {
-			if en.AgentID != "" && (en.Status == "running" || en.Status == "finished" || en.Status == "ready_to_remove") {
+			if en.AgentID != "" && activeStatus(en.Status) {
 				entries[en.AgentID] = en
 			}
 		}
@@ -492,12 +492,25 @@ func cmdLedger(e *Env, args []string) error {
 				into = en.Checks.BaseUsed
 			}
 			notes = append(notes, "candidate: finished, clean and merged into "+into)
-		} else if en.Checks != nil && en.Status == "finished" {
+		} else if en.Checks != nil && (en.Status == "finished" || en.Status == "landed") {
 			if en.Checks.Dirty {
 				notes = append(notes, "uncommitted changes")
 			}
 			if en.Checks.Unmerged > 0 {
 				notes = append(notes, fmt.Sprintf("not merged: %d commits not in %s", en.Checks.Unmerged, dash(en.Checks.BaseUsed)))
+			}
+		}
+		if a := en.Approval; a != nil {
+			notes = append(notes, "landing approved by "+dash(a.By)+": "+dash(a.Note))
+		}
+		if l := en.LandCheck; l != nil {
+			switch {
+			case l.OK && len(l.Landed) > 0:
+				notes = append(notes, "landed on "+dash(l.Base)+" as "+strings.Join(shortSHAs(l.Landed), ", "))
+			case l.OK:
+				notes = append(notes, "landed on "+dash(l.Base))
+			default:
+				notes = append(notes, "landing check failed: "+dash(l.Verdict))
 			}
 		}
 		if en.PlanID != "" {
@@ -1118,7 +1131,7 @@ func sendPrompt(e *Env, c *client, t target, text string, queue, asJSON bool) er
 func landPrompt(base string, deploy bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your report is accepted and the user has OKed landing your work. This message is your authorisation to do exactly these steps, and nothing beyond them:\n\n")
-	fmt.Fprintf(&b, "1. `git fetch origin`, then rebase (or cherry-pick) your commits onto the latest `origin/%s` as plain commits: no merge commits, and no merge commits that exist only to carry a signature. Resolve conflicts in your own work; if one is not obviously yours to resolve, stop and report. Before pushing, check that `git log --merges origin/%s..HEAD` prints nothing.\n", base, base)
+	fmt.Fprintf(&b, "1. `git fetch origin`, then rebase (or cherry-pick) your commits onto the latest `origin/%s` as plain commits: no merge commits, and no merge commits that exist only to carry a signature. Resolve conflicts in your own work; if one is not obviously yours to resolve, stop and report. Before pushing, check that `git log --merges origin/%s..HEAD` prints nothing. Sign commits only as the repository's git config says (`commit.gpgsign`); if signing fails, stop and report: never push unsigned commits to a repository that wants them signed, and never add a merge commit to carry a signature.\n", base, base)
 	b.WriteString("2. Re-run the tests (and vet/format checks) on the rebased result: all of the project's tests, including its documented UI or browser tests (see its docs or CLAUDE.md), not only the Go or unit ones. If they fail, stop and report; do not push.\n")
 	fmt.Fprintf(&b, "3. Push as a fast-forward of `%s` (`git push origin HEAD:%s`). Never force-push, never rewrite pushed history. If the push is rejected because %s moved, fetch, rebase again and re-test; do not force.\n", base, base, base)
 	fmt.Fprintf(&b, "4. Watch CI for the pushed commit until it finishes: `gh run list --branch %s --limit 1` gives the run ID for your push (check that it is your commit's run), then `gh run watch ID --exit-status`. If the watch might outlast a tool timeout, run it in the background and wait for it to finish. Confirm the result with `gh run view ID --json conclusion`: do not pipe the watch through `tail` or the like, which hides its exit status. If CI fails, report the failure; do not push fixes unasked.\n", base)
@@ -1126,11 +1139,12 @@ func landPrompt(base string, deploy bool) string {
 	b.WriteString("\nDo all of this in your own worktree. Never touch the repository's primary checkout, or any other checkout: it may hold the user's uncommitted work.\n")
 	if deploy {
 		b.WriteString("\n6. Deploy as the project's docs describe, once CI is green.\n")
-		b.WriteString("\nThen report with `comebye report -`: the landed commit hashes, the test and CI results, and the deploy result.\n")
+		b.WriteString("\nThen report with `comebye report -`, in the same format as your first report (Summary, Changes, Verification grouped as Verified live / Unit tests only / Not verified, Follow-ups): the landed commit hashes, the test and CI results, and the deploy result.\n")
 	} else {
 		b.WriteString("\nDo not deploy: that is a separate step, done only when asked.\n")
-		b.WriteString("\nThen report with `comebye report -`: the landed commit hashes and the test and CI results.\n")
+		b.WriteString("\nThen report with `comebye report -`, in the same format as your first report (Summary, Changes, Verification grouped as Verified live / Unit tests only / Not verified, Follow-ups): the landed commit hashes and the test and CI results.\n")
 	}
+	b.WriteString("\nAfter that report the hub checks your worktree: the entry counts as landed only if every commit you were approved to land is in `origin/" + base + "`.\n")
 	return b.String()
 }
 
@@ -1140,6 +1154,7 @@ func cmdLand(e *Env, args []string) error {
 	queue := fs.Bool("queue", false, "hold the prompt on the hub and send it once the agent is idle with no question open (up to 2 hours) instead of failing")
 	base := fs.String("base", "main", "the branch to land on")
 	deploy := fs.Bool("deploy", false, "also deploy after CI is green (only when the user asked for it)")
+	note := fs.String("note", "", "how the user OKed landing, in their words (required)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1149,6 +1164,9 @@ func cmdLand(e *Env, args []string) error {
 	}
 	if strings.TrimSpace(*base) == "" || strings.HasPrefix(*base, "-") || strings.ContainsAny(*base, " \t\n`$\\") {
 		return usageErr("bad --base %q", *base)
+	}
+	if strings.TrimSpace(*note) == "" {
+		return usageErr("say how the user OKed landing: --note \"<their words>\" (land only after they did)")
 	}
 	c, err := newClient(e)
 	if err != nil {
@@ -1176,10 +1194,22 @@ func cmdLand(e *Env, args []string) error {
 	if en == nil {
 		return fmt.Errorf("%s has no handoff in the ledger: land is for workers started with `comebye handoff`", t.label())
 	}
-	if en.Status != "finished" || strings.TrimSpace(en.FinalReport) == "" {
+	retry := en.Status == "landing" && en.FinishedAt == nil
+	if !retry && (en.Status != "finished" || strings.TrimSpace(en.FinalReport) == "") {
 		return fmt.Errorf("%s is not ready to land: its ledger entry is %q and %s a final report; land after the worker has finished and reported", t.label(), en.Status, map[bool]string{true: "has", false: "has no"}[strings.TrimSpace(en.FinalReport) != ""])
 	}
-	return sendPrompt(e, c, t, landPrompt(*base, *deploy), *queue, *asJSON)
+	// Record the approval first (the entry becomes landing), then send the
+	// prompt; if it cannot be sent, the landing is undone.
+	if _, err := c.raw("POST", "/api/landings", nil, map[string]string{"agent_id": t.ID, "note": *note, "base": *base}); err != nil {
+		return err
+	}
+	if err := sendPrompt(e, c, t, landPrompt(*base, *deploy), *queue, *asJSON); err != nil {
+		if _, cerr := c.raw("POST", "/api/landings", nil, map[string]any{"agent_id": t.ID, "cancel": true}); cerr != nil {
+			return fmt.Errorf("%w (and undoing the landing failed: %v; its entry still says landing)", err, cerr)
+		}
+		return fmt.Errorf("%w (the landing was not recorded)", err)
+	}
+	return nil
 }
 
 type apiQueued struct {
@@ -1672,8 +1702,80 @@ func cmdReport(e *Env, args []string) error {
 		Entry apiEntry `json:"entry"`
 	}
 	_ = json.Unmarshal(data, &r)
+	if probs := reportProblems(text); len(probs) > 0 {
+		fmt.Fprintf(e.Stderr, "warning: the report is not in the handoff's format: %s. It was recorded anyway; send a corrected one with `comebye report -` (it replaces this one) unless you were told to use another format.\n", strings.Join(probs, "; "))
+		fmt.Fprintf(e.Stdout, "Report recorded for %s (%s).\n", r.Entry.Branch, r.Entry.ID)
+		return nil
+	}
 	fmt.Fprintf(e.Stdout, "Report recorded for %s (%s). You can stop now.\n", r.Entry.Branch, r.Entry.ID)
 	return nil
+}
+
+// reportSections are the final report's sections, and verifyGroups the
+// Verification section's groups (docs/lifecycle.md).
+var (
+	reportSections = []string{"Summary", "Changes", "Verification", "Follow-ups"}
+	verifyGroups   = []string{"Verified live", "Unit tests only", "Not verified"}
+)
+
+// reportProblems lists what a report lacks of the fixed format: a
+// "## <section>" heading for each section, and each Verification group
+// named inside the Verification section.
+func reportProblems(text string) []string {
+	headings := map[string]int{} // lower-cased "## " heading -> line index
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if h, ok := strings.CutPrefix(strings.TrimSpace(l), "## "); ok {
+			headings[strings.ToLower(strings.TrimSpace(h))] = i
+		}
+	}
+	var missing []string
+	for _, s := range reportSections {
+		if _, ok := headings[strings.ToLower(s)]; !ok {
+			missing = append(missing, s)
+		}
+	}
+	var probs []string
+	if len(missing) > 0 {
+		probs = append(probs, "missing ## "+strings.Join(missing, ", ## "))
+	}
+	if at, ok := headings["verification"]; ok {
+		var sec []string
+		for _, l := range lines[at+1:] {
+			if strings.HasPrefix(strings.TrimSpace(l), "## ") {
+				break
+			}
+			sec = append(sec, l)
+		}
+		body := strings.ToLower(strings.Join(sec, "\n"))
+		var gone []string
+		for _, g := range verifyGroups {
+			if !strings.Contains(body, strings.ToLower(g)) {
+				gone = append(gone, g)
+			}
+		}
+		if len(gone) > 0 {
+			probs = append(probs, "Verification does not name the group(s) "+strings.Join(gone, ", ")+" (group it as Verified live / Unit tests only / Not verified; say \"none\" for an empty group)")
+		}
+	}
+	return probs
+}
+
+// activeStatus says whether a ledger status still has a session to track.
+func activeStatus(s string) bool {
+	switch s {
+	case "running", "finished", "landing", "landed", "ready_to_remove":
+		return true
+	}
+	return false
+}
+
+func shortSHAs(shas []string) []string {
+	out := make([]string, len(shas))
+	for i, s := range shas {
+		out[i] = s[:min(7, len(s))]
+	}
+	return out
 }
 
 func cmdUnmark(e *Env, args []string) error {

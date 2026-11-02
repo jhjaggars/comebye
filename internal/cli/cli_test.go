@@ -632,6 +632,26 @@ func TestReport(t *testing.T) {
 	if b := f.find("POST", "/api/report").body; b != `{"text":"## Summary\ndone\n"}` {
 		t.Fatalf("body %s", b)
 	}
+	// A report missing sections is recorded, with a warning.
+	if !strings.Contains(errb.String(), "warning: the report is not in the handoff's format: missing ## Changes, ## Verification, ## Follow-ups") || strings.Contains(out.String(), "You can stop now") {
+		t.Fatalf("warning: %s / %s", errb, out)
+	}
+	out.Reset()
+	errb.Reset()
+	e.Stdin = strings.NewReader("## Summary\nok\n## Changes\n- a\n## Verification\n### Verified live\n- ran it\n### Unit tests only\nnone\n### Not verified\nnone\n## Follow-ups\nNone.\n")
+	if code := run(e, "report", "-"); code != 0 || errb.Len() != 0 || !strings.Contains(out.String(), "You can stop now") {
+		t.Fatalf("good report: %d %s %s", code, out, errb)
+	}
+}
+
+func TestReportProblems(t *testing.T) {
+	if p := reportProblems("## Summary\n## Changes\n## Verification\nVerified live: x\n## Follow-ups\nVerified live, Unit tests only, Not verified\n"); len(p) != 1 ||
+		!strings.Contains(p[0], "Unit tests only, Not verified") {
+		t.Fatalf("groups outside Verification count: %v", p)
+	}
+	if p := reportProblems("## summary\n## changes\n##  Verification\n**Verified live** a\n**Unit tests only** b\n**Not verified** c\n## Follow-ups\n"); len(p) != 0 {
+		t.Fatalf("problems = %v", p)
+	}
 }
 
 func TestPlan(t *testing.T) {
@@ -823,11 +843,20 @@ func TestLand(t *testing.T) {
 	f, e, out, errb := newFake(t)
 	f.answers["POST /api/hosts/laharl/agents/w3:p1/prompt"] = answer{body: `{"agent":{}}`}
 	f.answers["POST /api/queue"] = answer{body: `{"queued":{"id":"q1"}}`}
+	f.answers["POST /api/landings"] = answer{body: `{"entry":{"status":"landing"}}`}
+
+	// No note: refused before anything is recorded or sent.
+	if code := run(e, "land", "laharl/w3:p1"); code != 2 || !strings.Contains(errb.String(), "--note") {
+		t.Fatalf("no note: %d %s", code, errb)
+	}
+	if f.find("POST", "/api/landings") != nil {
+		t.Fatal("a land without a note was recorded")
+	}
 
 	// A running worker (no report) and a non-worker are refused; nothing is sent.
 	for _, arg := range []string{"kube/w9:p9", "solo"} {
 		errb.Reset()
-		if code := run(e, "land", arg); code == 0 || !strings.Contains(errb.String(), "land") {
+		if code := run(e, "land", arg, "--note", "ok"); code == 0 || !strings.Contains(errb.String(), "land") {
 			t.Fatalf("land %s: %d %s", arg, code, errb)
 		}
 	}
@@ -836,26 +865,41 @@ func TestLand(t *testing.T) {
 	}
 
 	// A finished worker with a report gets the standard prompt.
-	if code := run(e, "land", "laharl/w3:p1", "--base", "trunk"); code != 0 {
+	if code := run(e, "land", "laharl/w3:p1", "--base", "trunk", "--note", `user: "land it"`); code != 0 {
 		t.Fatalf("land: %d %s", code, errb)
+	}
+	var rec map[string]string
+	json.Unmarshal([]byte(f.find("POST", "/api/landings").body), &rec)
+	if rec["agent_id"] != "laharl/w3:p1" || rec["note"] != `user: "land it"` || rec["base"] != "trunk" {
+		t.Fatalf("landing record = %v", rec)
 	}
 	body := f.find("POST", "/api/hosts/laharl/agents/w3:p1/prompt").body
 	for _, want := range []string{"origin/trunk", "plain commits", "no merge commits", "Re-run the tests", "Never force-push", "Watch CI", "Clean up your branch", "Do not deploy",
 		"git log --merges origin/trunk..HEAD", "gh run list --branch trunk --limit 1", "gh run watch ID --exit-status", "gh run view ID --json conclusion", "tail",
-		"git switch --detach origin/trunk", "git ls-remote --heads origin BRANCH", "primary checkout", "UI or browser tests"} {
+		"git switch --detach origin/trunk", "git ls-remote --heads origin BRANCH", "primary checkout", "UI or browser tests",
+		"commit.gpgsign", "if signing fails, stop and report", "Verified live / Unit tests only / Not verified", "counts as landed only if every commit you were approved to land is in `origin/trunk`"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("land prompt lacks %q: %s", want, body)
 		}
 	}
 	// --deploy and --queue.
 	out.Reset()
-	if code := run(e, "land", "laharl/w3:p1", "--deploy", "--queue"); code != 0 || !strings.Contains(out.String(), "Queued q1") {
+	if code := run(e, "land", "laharl/w3:p1", "--deploy", "--queue", "--note", "ok"); code != 0 || !strings.Contains(out.String(), "Queued q1") {
 		t.Fatalf("land --queue: %d %s %s", code, out, errb)
 	}
 	if b := f.find("POST", "/api/queue").body; !strings.Contains(b, "Deploy as the project") || strings.Contains(b, "Do not deploy") {
 		t.Errorf("queued body %s", b)
 	}
-	if code := run(e, "land", "laharl/w3:p1", "--base", "a b"); code == 0 {
+	if code := run(e, "land", "laharl/w3:p1", "--base", "a b", "--note", "ok"); code == 0 {
 		t.Error("bad base accepted")
+	}
+	// The prompt bounces: the landing is undone.
+	f.answers["POST /api/hosts/laharl/agents/w3:p1/prompt"] = answer{code: 409, body: `{"code":"dialog_open","message":"a dialog is open"}`}
+	errb.Reset()
+	if code := run(e, "land", "laharl/w3:p1", "--note", "ok"); code != 1 || !strings.Contains(errb.String(), "the landing was not recorded") {
+		t.Fatalf("bounced: %d %s", code, errb)
+	}
+	if last := f.find("POST", "/api/landings").body; !strings.Contains(last, `"cancel":true`) {
+		t.Fatalf("not cancelled: %s", last)
 	}
 }

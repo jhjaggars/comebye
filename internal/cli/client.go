@@ -284,9 +284,19 @@ type apiEntry struct {
 	FinishedAt  *time.Time `json:"finished_at"`
 	FinalReport string     `json:"final_report"`
 	Mark        *apiMark   `json:"mark"`
-	PlanID      string     `json:"plan_id"`
-	After       []string   `json:"after"`
-	Callback    *struct {
+	Approval    *struct {
+		By   string `json:"by"`
+		Note string `json:"note"`
+	} `json:"approval"`
+	LandCheck *struct {
+		OK      bool     `json:"ok"`
+		Base    string   `json:"base"`
+		Verdict string   `json:"verdict"`
+		Landed  []string `json:"landed"`
+	} `json:"land_check"`
+	PlanID   string   `json:"plan_id"`
+	After    []string `json:"after"`
+	Callback *struct {
 		State string `json:"state"`
 		To    string `json:"to"`
 	} `json:"callback"`
