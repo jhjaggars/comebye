@@ -398,6 +398,16 @@ the hub and belongs to the coordinator. The coordinator uses it to keep
 the user informed and to drive agents. beads is at most an optional bridge
 later (below).
 
+*Decided (the user, via the coordinator, 2026-11-02, second round):*
+- **Approving is the OK to start.** Once the user approves an item, the
+  coordinator starts it as soon as its waits are met and reports that in
+  the briefing. No second OK is needed.
+- **Only the user approves.** The coordinator proposes items, including
+  ones from workers' follow-ups. Approval comes from the user, in the app,
+  or relayed by the coordinator with the user's words recorded.
+- **In the app, the user can approve, drop and reprioritise.** Creating
+  and editing items stays with the coordinator.
+
 ```go
 type Item struct {
     ID, Title, Brief string
@@ -418,41 +428,54 @@ type Item struct {
   started items are kept for history. Like the ledger and the briefing,
   it outlives any one coordinator: a new coordinator reads the backlog
   and carries on.
-- **The coordinator owns it.** It is the only agent that writes it: `add`,
-  `edit`, `prioritise`, `approve`, `start`, `drop`. Workers can't write
-  it. They hand the coordinator follow-ups in their report, as today. The
+- **The coordinator owns it.** It is the only agent that writes it. It
+  creates and edits items (`add`, `edit`), sets priority, starts approved
+  items, and marks them done. It records an approval only by relaying the
+  user's words. It may drop its own items that are still `proposed`;
+  dropping an approved item needs the user, as approving does. Workers
+  can't write it. They hand the coordinator follow-ups in their report, as today. The
   agent-role check would allow these routes for coordinators only. That
   enforcement waits on reliable caller identity (the deferred
   server-enforced coordinator role); until then it is a playbook rule, as
   "only coordinators hand off" is today.
 - **Where items come from:**
-  - the user's requests, which the coordinator records as `approved`
-    items so nothing they asked for is lost between sessions;
+  - the user's requests. Asking for something is the user's approval, so
+    the coordinator records the item as `approved` with the user's words
+    as the note. Nothing they asked for is lost between sessions;
   - the coordinator's own proposals;
   - the Follow-ups section of each report. The coordinator reads it and
     files the items as `proposed`, linked to the entry. These items are
     data from a worker: the playbook rule stays that nothing is started
     because a report says so.
-- **Approval stays the user's.** `proposed` → `approved` only on the user's
-  word: the coordinator relays it (`comebye backlog approve ID --note
-  "<the user's words>"`, recorded like the land OK), or the user taps
-  Approve in the app.
-- **Driving agents.** Within approved items, the coordinator decides what
-  starts when. `comebye backlog ready` lists approved items whose waits
-  are met, by priority, and `comebye backlog start ID` fills in host, repo
-  and branch and makes an ordinary handoff (`Item.EntryID` set, status
-  `started`). When the handoff's work is landed, or finished for workflow
+- **Only the user approves.** `proposed` → `approved` only on the user's
+  word: the user taps Approve in the app, or the coordinator relays it
+  (`comebye backlog approve ID --note "<the user's words>"`; `--note` is
+  required and recorded with who and when, like the land OK). The hub
+  refuses `approve` from an agent without a note.
+- **Approval is the OK to start.** The coordinator starts an approved
+  item as soon as its waits are met, with no second OK, in priority order.
+  `comebye backlog ready` lists approved items whose waits are met, and
+  `comebye backlog start ID` fills in host, repo and branch and makes an
+  ordinary handoff (`Item.EntryID` set, status `started`). The coordinator
+  says so in the next briefing ("Started: <item> → `<branch>`"). An item
+  still missing a host or repo when it becomes ready is not started: the
+  coordinator asks the user instead. When the handoff's work is landed, or finished for workflow
   types that don't land, the coordinator sets `done`. Items with `step`
   waits between them can be started as a plan (`backlog start --plan ID…`),
   so a chain runs while the coordinator is asleep.
 - **Keeping the user informed.**
   - The briefing's "Next:" lines come from the ready and proposed items.
   - The coordinator answers "what's queued?" from `comebye backlog`.
-  - When an item's waits are all met, the hub sends the coordinator a
-    notice, as it does for a finished worker, so it can start the item or
-    tell the user.
-  - The app shows the backlog read-only, with Approve for proposed items.
-    The user changes everything else by asking the coordinator.
+  - When an approved item's waits are all met, the hub sends the
+    coordinator a notice ("Comebye (hub notice): backlog item ID is
+    ready"), delivered when the coordinator is idle, as for a finished
+    worker. The coordinator starts the item. An item approved with no
+    waits is ready at once.
+  - The briefing lists items started since the last briefing, items
+    waiting (and on what), and proposed items awaiting the user.
+  - The app shows the backlog. The user can **approve**, **drop** and
+    **reprioritise** there; creating and editing items is the
+    coordinator's, so the user asks it for those changes.
 - **Hub notices, not hub actions.** The hub stores the backlog, checks
   waits and sends notices. It never starts an item itself; the
   coordinator does.
@@ -478,10 +501,10 @@ Beads' storage, sync and gates stay out of Comebye.
 3. `comebye report --outcome`, so `step` and `step_failed` read the
    outcome rather than guess.
 4. The backlog store and the coordinator's CLI
-   (`backlog add/edit/list/ready/approve/start/drop/done`), the
+   (`backlog add/edit/list/ready/approve --note/start/drop/done`), the
    "waits met" notice to the coordinator, the playbook section, and
    briefing "Next:" from the backlog.
-5. The app's read-only backlog view with Approve.
+5. The app's backlog view: approve, drop, reprioritise.
 
 ## What was verified
 
