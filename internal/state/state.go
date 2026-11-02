@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/dialog"
 	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
@@ -192,6 +193,8 @@ func (m *Manager) refresh(ctx context.Context) error {
 		return agents[i].Name < agents[j].Name
 	})
 
+	m.surfaceDialogs(ctx, agents)
+
 	m.mu.Lock()
 	for i := range agents {
 		agents[i].Host = m.host
@@ -213,6 +216,39 @@ func (m *Manager) refresh(ctx context.Context) error {
 	}
 	m.hub.Broadcast(Event{Type: "agents", Agents: snapshot})
 	return nil
+}
+
+// surfaceDialogs marks an idle Pi agent as blocked when its screen shows a
+// dialog. herdr classifies Pi by its own heuristics and reports a startup
+// prompt ("Trust project folder?") as idle, so the list and the
+// notifications would never surface it; the screen parser (the one the
+// handoff guard uses) is the authority. Only idle Pi panes are read, and
+// a read that fails leaves herdr's status alone.
+func (m *Manager) surfaceDialogs(ctx context.Context, agents []herdr.AgentInfo) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for i := range agents {
+		a := &agents[i]
+		if a.Agent != "pi" || a.Status != herdr.StatusIdle || a.PaneID == "" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			read, err := m.client.ReadPane(rctx, a.PaneID, "visible", 0)
+			if err != nil {
+				return
+			}
+			if d := dialog.Detect(read.Text, a.Agent); d != nil && d.Kind != dialog.KindConfirm {
+				a.Status = herdr.StatusBlocked
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // lastActive prefers the agent's session file mtime, which survives server

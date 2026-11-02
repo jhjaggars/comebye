@@ -629,8 +629,12 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	}
 	if promptArgs == nil && strings.TrimSpace(body.Prompt) != "" {
 		// Submission only: the app shows the agent working from here.
-		if err := s.deliverPrompt(ctx, name, body.Prompt); err != nil {
+		queued, err := s.deliverOrQueue(ctx, id, name, body.Prompt)
+		switch {
+		case err != nil:
 			resp["prompt_error"] = "the agent started, but its first prompt was not delivered: " + err.Error()
+		case queued:
+			resp["prompt_note"] = "the agent started at a dialog (answer it in the app): its first prompt is queued and is sent once the dialog is answered"
 		}
 	}
 	writeJSON(w, resp)

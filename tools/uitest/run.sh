@@ -26,7 +26,7 @@ trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$tmp"' EXIT
 (cd "$app" && go build -o "$tmp/comebye" .)
 
 # shellcheck disable=SC2086
-"$tmp/fake-herdr" -sock "$tmp/h.sock" -dir "$tmp" ${FAKE_ARGS:-} >"$out/fake-herdr.log" 2>&1 &
+"$tmp/fake-herdr" -sock "$tmp/h.sock" -dir "$tmp" ${FAKE_ARGS--trust-prompt} >"$out/fake-herdr.log" 2>&1 &
 for _ in $(seq 50); do [ -S "$tmp/h.sock" ] && break; sleep 0.1; done
 
 "$tmp/comebye" -sock "$tmp/h.sock" -addr "127.0.0.1:$port" -insecure-no-auth -push=false \

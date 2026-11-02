@@ -235,6 +235,35 @@ func TestDeliverPromptBlockedFailsFast(t *testing.T) {
 	}
 }
 
+// A brief refused because of a dialog (a fresh agent at "Trust project
+// folder?") is queued, to go out once the dialog is answered; other
+// failures are still errors.
+func TestDeliverOrQueueQueuesBehindDialog(t *testing.T) {
+	s, fh := deliverServer(t)
+	s.pq = newPromptQueue("")
+	onPrompt(fh, map[int]promptAnswer{
+		0: {err: &herdr.Error{Code: "agent_blocked", Message: "the agent is waiting at a dialog"}},
+	}, nil)
+	queued, err := s.deliverOrQueue(context.Background(), "desk/w9:p1", "w", "You are a worker.\nFix it.")
+	if err != nil || !queued {
+		t.Fatalf("queued=%v err=%v", queued, err)
+	}
+	items := s.pq.list("desk/w9:p1", false)
+	if len(items) != 1 || items[0].Text != "You are a worker.\nFix it." || items[0].State != QueuePending {
+		t.Fatalf("queue = %+v", items)
+	}
+	// Any other failure is reported, not queued.
+	s2, fh2 := deliverServer(t)
+	s2.pq = newPromptQueue("")
+	onPrompt(fh2, map[int]promptAnswer{0: {err: &herdr.Error{Code: "agent_prompt_stalled", Message: "x"}}}, nil)
+	if q, err := s2.deliverOrQueue(context.Background(), "desk/w9:p1", "w", "brief text here"); q || err == nil {
+		t.Fatalf("stalled: queued=%v err=%v", q, err)
+	}
+	if n := len(s2.pq.list("", true)); n != 0 {
+		t.Fatalf("stalled brief was queued (%d)", n)
+	}
+}
+
 func TestPromptMarker(t *testing.T) {
 	for _, c := range []struct {
 		text, want string

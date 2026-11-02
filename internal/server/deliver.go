@@ -148,6 +148,26 @@ func (s *Server) deliverPrompt(ctx context.Context, name, text string) error {
 	return fmt.Errorf("the agent did not take it after %d tries: %v", s.briefTries, last)
 }
 
+// deliverOrQueue is deliverPrompt, except that a prompt refused because the
+// agent sits at a dialog (the trust-this-folder prompt on a fresh agent)
+// is put on the prompt queue instead of being dropped: it is sent once the
+// dialog is answered and the agent is idle. queued reports that; err is
+// then nil. Without a queue, or for any other failure, err is deliverPrompt's.
+func (s *Server) deliverOrQueue(ctx context.Context, agentID, name, text string) (queued bool, err error) {
+	err = s.deliverPrompt(ctx, name, text)
+	if err == nil || s.pq == nil {
+		return false, err
+	}
+	var he *herdr.Error
+	if !errors.Is(err, errDialogOpen) && !(errors.As(err, &he) && (he.Code == "dialog_open" || he.Code == "agent_blocked")) {
+		return false, err
+	}
+	if _, _, qerr := s.pq.add(QueuedPrompt{Agent: agentID, Name: name, Text: text, From: "comebye"}); qerr != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // briefArrived reports whether the agent has already taken its prompt: it
 // is working or blocked, or its session transcript exists and contains
 // the prompt's marker. herdr's answer to agent.prompt does not prove the

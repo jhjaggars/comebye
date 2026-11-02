@@ -210,6 +210,11 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	status, resp := answerDialog(ctx, s.client, *agent, s.pendingAsk(*agent), body, answers, time.Now())
+	if s.manager != nil && status == http.StatusOK {
+		// The agent's status was read off the screen: re-read it now that the
+		// dialog was answered.
+		s.manager.Refresh()
+	}
 	writeJSONStatus(w, status, resp)
 }
 

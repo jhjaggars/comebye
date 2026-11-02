@@ -101,6 +101,8 @@ func (f *fake) addFixtures(dir, tag string) {
 	chat(b, "pick a cache database", "I need to pick a database for the cache layer.")
 	b.screen = dialogScreen
 
+	f.addTrustPrompt()
+
 	// Marked ready to remove (dev.sh marks it through the API).
 	m := mk("old-worker", "w7:p1", "claude", "Claude", "idle", "done", "/home/u/.worktrees/comebye/old-worker")
 	m.repo, m.checkout, m.linked = "comebye", m.CWD, true
@@ -116,3 +118,30 @@ func (f *fake) addFixtures(dir, tag string) {
 
 const longText = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. " +
 	"Averyveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryverylongunbrokenwordtocheckwrapping-and-overflow-in-the-chat-bubble."
+
+// Pi's startup "Trust project folder?" prompt. herdr reports Pi as idle
+// while it is up; comebye reads the screen and shows the agent as blocked.
+var trustScreen = []string{
+	"",
+	" Trust project folder?",
+	" /home/u/.worktrees/notes/fix-gateway-creator",
+	"",
+	" This allows pi to load .pi settings and resources, install missing project packages, and execute project extensions.",
+	"",
+	" → Trust",
+	"   Trust parent folder (/home/u/.worktrees/notes)",
+	"   Trust (this session only)",
+	"   Do not trust",
+	"   Do not trust (this session only)",
+	"",
+	" ↑↓ navigate  enter select  escape/ctrl+c cancel",
+}
+
+// addTrustPrompt adds the Pi agent that sits at the trust prompt (status
+// idle, as herdr reports it).
+func (f *fake) addTrustPrompt() {
+	f.agents = append(f.agents, &agent{Name: "trust-prompt", PaneID: "w9:p1", Workspace: "w9", TabID: "w9:t1", Agent: "pi", Display: "Pi",
+		Status: "idle", Title: "trust-prompt", CWD: "/home/u/.worktrees/notes/fix-gateway-creator", Ready: true,
+		repo: "notes", checkout: "/home/u/.worktrees/notes/fix-gateway-creator", linked: true,
+		trust: true, screen: trustScreen})
+}

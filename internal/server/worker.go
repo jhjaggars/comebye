@@ -132,6 +132,8 @@ type workerResult struct {
 	// Reused: the branch's worktree existed and was opened, not created.
 	Reused      bool   `json:"reused"`
 	PromptError string `json:"prompt_error,omitempty"`
+	// PromptNote says the brief was queued behind a dialog (not an error).
+	PromptNote string `json:"prompt_note,omitempty"`
 }
 
 // handleWorker starts a worker: POST {repo, branch, base?, kind?, name?,
@@ -322,8 +324,12 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	}
 	prompt := strings.NewReplacer("{{worktree}}", opened.Path, "{{base}}", base).Replace(b.Prompt)
 	if strings.TrimSpace(prompt) != "" {
-		if err := s.deliverPrompt(ctx, name, prompt); err != nil {
+		queued, err := s.deliverOrQueue(ctx, res.Agent.ID, name, prompt)
+		switch {
+		case err != nil:
 			res.PromptError = "the worker started, but its brief was not delivered: " + err.Error()
+		case queued:
+			res.PromptNote = "the worker started at a dialog (answer it in the app): its brief is queued and is sent once the dialog is answered"
 		}
 	}
 	return res, nil

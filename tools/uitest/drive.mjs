@@ -843,6 +843,29 @@ await check("phone: 390px is unchanged: one column, back button, collapsed brief
 });
 await page.setViewportSize({ width: 390, height: 844 });
 
+// ---- Pi's "Trust project folder?" prompt ----
+// herdr reports the agent idle while it is up; the app must read the screen,
+// show it as blocked and offer the five options as buttons.
+await check("pi trust prompt: an idle-reported Pi agent shows as blocked with its options as buttons, and an answer clears it", async () => {
+  await page.goto(base + "/", { waitUntil: "load" });
+  const row = page.locator('#agents .agent[data-id$="w9:p1"]');
+  await row.waitFor({ state: "visible" });
+  await page.waitForFunction(() => /blocked/i.test(document.querySelector('#agents .agent[data-id$="w9:p1"]')?.innerText || ""), null, { timeout: 8000 });
+  await row.click();
+  await page.waitForSelector("#detail", { state: "visible" });
+  const card = page.locator(".ans-opts");
+  await card.waitFor({ state: "visible", timeout: 8000 });
+  if ((await page.locator(".ans-title").innerText()).trim() !== "Trust project folder?") throw new Error("title " + (await page.locator(".ans-title").innerText()));
+  const labels = await card.locator("button.opt").allInnerTexts();
+  if (labels.length !== 5 || labels[0].trim() !== "Trust" || labels[4].trim() !== "Do not trust (this session only)") throw new Error("options " + JSON.stringify(labels));
+  if (!(await card.locator("button.opt").first().getAttribute("aria-current"))) throw new Error("the highlighted row is not marked");
+  if (!(await page.locator("button.opt.cancel").isVisible())) throw new Error("no cancel button");
+  await card.locator("button.opt").nth(4).click();
+  await page.waitForFunction(() => !document.querySelector(".ans-opts"), null, { timeout: 8000 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForFunction(() => /idle/i.test(document.querySelector('#agents .agent[data-id$="w9:p1"]')?.innerText || ""), null, { timeout: 40000 });
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;

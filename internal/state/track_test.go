@@ -86,6 +86,7 @@ func TestPresenceKeysOnQualifiedID(t *testing.T) {
 type fakeHerdr struct {
 	mu     sync.Mutex
 	agents []herdr.AgentInfo
+	screen string // answer to pane.read
 }
 
 func (f *fakeHerdr) set(agents ...herdr.AgentInfo) {
@@ -127,6 +128,10 @@ func startFakeHerdr(t *testing.T) (*fakeHerdr, *herdr.Client) {
 				case "agent.list":
 					f.mu.Lock()
 					result = map[string]any{"type": "agent_list", "agents": f.agents}
+					f.mu.Unlock()
+				case "pane.read":
+					f.mu.Lock()
+					result = map[string]any{"type": "pane_read", "read": map[string]any{"text": f.screen}}
 					f.mu.Unlock()
 				default:
 					result = map[string]any{"snapshot": map[string]any{"workspaces": []any{}}}

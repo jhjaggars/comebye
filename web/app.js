@@ -4335,6 +4335,7 @@ async function submitLaunch() {
   }
   $("ln-status").textContent = "";
   if (r.prompt_error) toast(r.prompt_error, true);
+  else if (r.prompt_note) toast(r.prompt_note);
   // Leave the sheet in place of its history entry, then open the chat.
   if (history.state && history.state.launch) history.replaceState(null, "", location.pathname + location.search);
   hideLaunch();
@@ -4407,6 +4408,7 @@ async function submitCoordinator() {
   }
   $("ln-status").textContent = "";
   if (r.prompt_error) toast(r.prompt_error, true);
+  else if (r.prompt_note) toast(r.prompt_note);
   if (history.state && history.state.launch) history.replaceState(null, "", location.pathname + location.search);
   hideLaunch();
   ledger.loadedAt = 0;

@@ -25,6 +25,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,7 @@ type agent struct {
 	repo       string   // fixture agents: the workspace's repository ("" for none)
 	checkout   string   // ... and its checkout path
 	linked     bool     // ... and whether that is a linked worktree
+	trust      bool     // shows the trust prompt until an Enter arrives
 	screen     []string // pane text (bravo; alpha mirrors its transcript here)
 	transcript string   // JSONL path ("" for none)
 	n          int
@@ -69,6 +71,7 @@ func main() {
 	noStatus := flag.Bool("no-status", false, "never report working/idle: the status stays idle, as when herdr misses or delays a transition")
 	fixtures := flag.Bool("fixtures", false, "add the dev-harness fixture agents (worker, coordinator, home, blocked, long names, ...) after alpha and bravo")
 	hostTag := flag.String("fixture-host", "", "with -fixtures: a tag that makes the fixture agents a second host's (a peer): a few agents named <tag>-*")
+	trust := flag.Bool("trust-prompt", false, "add a Pi agent that herdr reports as idle while its screen shows the \"Trust project folder?\" prompt (any Enter answers it)")
 	flag.Parse()
 	if *dir == "" {
 		d, err := os.MkdirTemp("", "fake-herdr")
@@ -98,6 +101,9 @@ func main() {
 	f.record(f.agents[0], "assistant", "alpha says hi")
 	if *fixtures {
 		f.addFixtures(*dir, *hostTag)
+	}
+	if *trust && !*fixtures {
+		f.addTrustPrompt()
 	}
 	_ = os.Remove(*sock)
 	l, err := net.Listen("unix", *sock)
@@ -190,8 +196,12 @@ func (f *fake) answer(method string, p map[string]any) (any, *rpcErr) {
 		return map[string]any{"type": "pane_read", "read": map[string]any{
 			"text": strings.Join(a.screen, "\n"), "revision": a.Revision, "format": "plain", "source": p["source"]}}, nil
 	case "agent.send_keys":
-		if f.find(target) == nil {
+		a := f.find(target)
+		if a == nil {
 			return nil, &rpcErr{"agent_not_found", target}
+		}
+		if ks, _ := p["keys"].([]any); a.trust && slices.Contains(ks, any("enter")) {
+			a.screen = []string{"pi ready"} // the prompt is answered
 		}
 		return map[string]any{"type": "ok"}, nil
 	case "agent.prompt":
