@@ -171,3 +171,39 @@ stale remote-tracking refs; squash merged upstream → `unmerged 0`, base
 `TestCheckWorktreeOpenPRAgainstFresherOrigin` (open PR against fresher
 origin/main → `unmerged 1`, only the branch's own commit listed,
 `unpushed 0`, removal still blocked). Full `go test ./...` passes.
+
+## Addendum 2026-11-02: landed work reported as unmerged or uncheckable
+
+Three false alarms after workers' commits were cherry-picked onto `main` by
+another worker (`d061192` as `64c1774`, `e4cc5f3` as `bf50213`, identical
+patches) and their worktrees and branches deleted, and a deploy branch equal
+to `origin/main`:
+
+- **Worktree gone → "cannot check".** `checkWorktree` returned bare
+  `Exists:false` checks, and the review and sweep said the commits could not
+  be checked, though the repository (named by the ledger entry) still held
+  everything needed. Now `checkGone` falls back to the branch ref (also
+  earlier names and `origin/<branch>`), then to commit SHAs found in the
+  entry's final report and marks that still resolve, each compared with the
+  base. With a repository but no branch and no recorded commit, nothing of
+  the worker's exists outside the base, and the verdict says so instead of
+  warning. The hub passes `repo`, `prev` and `hints` to the owning host.
+- **Landed under another SHA.** `git cherry` already treated these as
+  equivalent (`-`), so the count was right when the branch existed; but the
+  review could not say where they went. `findLanded` matches the commits'
+  stable patch-ids (which ignore `index` lines, so a differing blob hash
+  does not matter; verified on both real cases and in a fixture whose index
+  lines differ) against the base's recent history and reports "landed on
+  main as 64c1774".
+- **Unpushed.** The unpushed count is now the branch's own commits (cherry
+  `+`) that are on no remote and in neither copy of the base; a branch equal
+  to or behind its base, or whose commits landed under other SHAs, has none.
+  (The hub-side deploy branch could not be inspected from here, the ledger
+  entry being removed; it is covered by a fixture: a branch equal to main
+  with no remote branch, and one behind main with stale local main.)
+
+True positives are unchanged: unmerged commits, uncommitted changes,
+unfinished operations and pushed-not-merged branches still hold a removal.
+No ledger field records a worker's head SHA, so a worker that never named its
+commits and whose branch is deleted is judged by the repository alone; a
+follow-up could record the tip when a worker reports.

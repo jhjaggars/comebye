@@ -385,6 +385,12 @@ type checkOpts struct {
 	// agent's working directory); its top level is checked. That must lie
 	// inside the roots too.
 	Within bool
+	// Repo, Prev and Hints are what the ledger knows about a worker, for a
+	// worktree that no longer exists: the repository's primary checkout,
+	// earlier names of its branch, and commit SHAs it recorded. The checks
+	// then fall back to the repository (see checkGone).
+	Repo        string
+	Prev, Hints []string
 }
 
 func (o checkOpts) query() url.Values {
@@ -394,6 +400,15 @@ func (o checkOpts) query() url.Values {
 			q.Set(k, "1")
 		}
 	}
+	if o.Repo != "" {
+		q.Set("repo", o.Repo)
+	}
+	if len(o.Prev) > 0 {
+		q.Set("prev", strings.Join(o.Prev, ","))
+	}
+	if len(o.Hints) > 0 {
+		q.Set("hints", strings.Join(o.Hints, ","))
+	}
 	return q
 }
 
@@ -402,7 +417,8 @@ func (o checkOpts) query() url.Values {
 // diff=1 and within=1 for an inspection (see checkOpts).
 func (s *Server) handleChecks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	opts := checkOpts{Detail: q.Get("detail") == "1", Diff: q.Get("diff") == "1", Within: q.Get("within") == "1"}
+	opts := checkOpts{Detail: q.Get("detail") == "1", Diff: q.Get("diff") == "1", Within: q.Get("within") == "1",
+		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints"))}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	c, lerr := s.localChecks(ctx, q.Get("path"), q.Get("branch"), q.Get("base"), opts)
@@ -426,7 +442,14 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 	p, lerr := resolveLaunchDir(path, roots)
 	if lerr != nil {
 		if lerr.code == "not_found" {
-			return &worktreeChecks{Path: filepath.Clean(path), Unmerged: -1}, nil
+			c := worktreeChecks{Path: filepath.Clean(path), Unmerged: -1}
+			if opts.Repo != "" {
+				// The worktree is gone: fall back to the repository.
+				if repo, rerr := resolveLaunchDir(opts.Repo, roots); rerr == nil {
+					c = checkGone(ctx, filepath.Clean(path), repo, branch, opts.Prev, hexOnly(opts.Hints), base)
+				}
+			}
+			return &c, nil
 		}
 		return nil, lerr
 	}
@@ -774,4 +797,26 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 		return out[i].Path < out[j].Path
 	})
 	writeJSON(w, map[string]any{"repos": out, "truncated": len(out) >= maxRepos})
+}
+
+// splitList splits a comma-separated query value.
+func splitList(v string) []string {
+	var out []string
+	for _, f := range strings.Split(v, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// hexOnly keeps the strings that are 7 to 40 hex digits: commit SHAs.
+func hexOnly(in []string) []string {
+	var out []string
+	for _, h := range in {
+		if len(h) >= 7 && len(h) <= 40 && strings.Trim(h, "0123456789abcdef") == "" {
+			out = append(out, h)
+		}
+	}
+	return out
 }

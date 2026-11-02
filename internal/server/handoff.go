@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -221,6 +222,43 @@ func (s *Server) workerOn(ctx context.Context, host string, b workerBody) (*work
 		return nil, e
 	}
 	return &res, nil
+}
+
+var shaRe = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
+
+// entryHints are the commit SHAs a worker's ledger entry mentions in its
+// final report and its mark (a worker names its commits when it reports;
+// whoever marks it names them too): what can still be checked once the
+// worktree and branch are gone. They are only candidates; the host keeps
+// the ones that resolve to commits. A word needs a digit and a letter to
+// count (or a full 40), so prose does not pass for a SHA.
+func entryHints(e ledger.Entry) []string {
+	text := e.FinalReport
+	if e.Mark != nil {
+		text += " " + e.Mark.Reason
+		if e.Mark.Ask != nil {
+			text += " " + e.Mark.Ask.Reason
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, h := range shaRe.FindAllString(text, -1) {
+		if seen[h] || (len(h) < 40 && (strings.Trim(h, "0123456789") == "" || strings.Trim(h, "abcdef") == "")) {
+			continue
+		}
+		seen[h] = true
+		if out = append(out, h); len(out) >= 20 {
+			break
+		}
+	}
+	return out
+}
+
+// forEntry fills in what the ledger knows about a worker, for the checks
+// of a worktree that may be gone.
+func (o checkOpts) forEntry(e ledger.Entry) checkOpts {
+	o.Repo, o.Prev, o.Hints = e.Repo, e.PreviousBranches, entryHints(e)
+	return o
 }
 
 // checksOn runs a worktree's checks on host.
@@ -644,7 +682,7 @@ func (s *Server) cachedChecks(e ledger.Entry) *worktreeChecks {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			res, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{})
+			res, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{}.forEntry(e))
 			s.coord.mu.Lock()
 			defer s.coord.mu.Unlock()
 			delete(s.coord.checking, e.ID)
@@ -802,6 +840,9 @@ type removal struct {
 	// in the confirmation's coordinators as well.
 	Coordinator bool              `json:"coordinator,omitempty"`
 	Status      herdr.AgentStatus `json:"-"`
+	// opts carries the ledger entry's repository, earlier branch names
+	// and recorded SHAs to the checks (for a worktree that is gone).
+	opts checkOpts
 }
 
 // marked lists the marked sessions (without checks).
@@ -818,6 +859,7 @@ func (s *Server) marked() []*removal {
 		out = append(out, &removal{
 			ID: e.AgentID, Host: e.Host, PaneID: e.PaneID, Name: e.AgentName, EntryID: e.ID, Repo: e.RepoName,
 			Branch: e.Branch, Base: e.Base, WorkspaceID: e.WorkspaceID, Worktree: e.Worktree, Mark: *e.Mark, FinalReport: e.FinalReport,
+			opts: checkOpts{Detail: true}.forEntry(e),
 		})
 	}
 	for _, m := range s.ledger.Marks() {
@@ -855,7 +897,9 @@ func (s *Server) review(ctx context.Context, it *removal) {
 	} else if !s.knownHost(it.Host) {
 		it.ChecksError = "unknown host " + it.Host
 	} else {
-		c, lerr := s.checksOn(ctx, it.Host, it.Worktree, it.Branch, it.Base, checkOpts{Detail: true})
+		opts := it.opts
+		opts.Detail = true
+		c, lerr := s.checksOn(ctx, it.Host, it.Worktree, it.Branch, it.Base, opts)
 		if lerr != nil {
 			it.ChecksError = lerr.message
 		} else {
@@ -865,7 +909,13 @@ func (s *Server) review(ctx context.Context, it *removal) {
 			}
 			switch {
 			case !c.Exists:
-				it.Notes = append(it.Notes, "the worktree is already gone")
+				if warn, msg := c.goneVerdict(); !c.Gone {
+					it.Notes = append(it.Notes, "the worktree is already gone")
+				} else if warn {
+					it.Warnings = append(it.Warnings, msg)
+				} else {
+					it.Notes = append(it.Notes, msg)
+				}
 			case c.Primary:
 				it.Notes = append(it.Notes, "this is the repository's primary checkout: it is never removed")
 			default:
@@ -877,6 +927,8 @@ func (s *Server) review(ctx context.Context, it *removal) {
 				}
 				if c.Unmerged > 0 {
 					it.Warnings = append(it.Warnings, itoa(c.Unmerged)+" commits not in "+c.BaseUsed+": the worktree will be kept")
+				} else if c.Unmerged == 0 && len(c.Landed) > 0 {
+					it.Notes = append(it.Notes, "every commit is in "+c.BaseUsed+" ("+landedText(c.BaseUsed, c.Landed)+")")
 				} else if c.Unmerged < 0 || c.Error != "" {
 					it.Warnings = append(it.Warnings, "could not check the branch ("+c.Error+"): the worktree will be kept")
 				}

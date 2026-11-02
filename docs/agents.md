@@ -120,8 +120,18 @@ workers; unmark it the same way. A "Ready to remove (N)" banner on the list open
 marked session with checks run on its host right then: uncommitted changes
 (`git status --porcelain`, untracked files included), commits on its
 branch that its base lacks (`git cherry` against the base and origin's copy
-of it, so rebased or upstream-merged work counts as merged), and whether the
-agent is working or blocked. Confirm each one ("Remove anyway…" when there
+of it, so rebased, cherry-picked or upstream-merged work counts as merged:
+the same patch-id under another SHA, whatever differs in the `index` lines,
+and the review says "landed on main as 64c1774" where it finds the match),
+and whether the agent is working or blocked. A branch equal to, or behind,
+its base has no work of its own, so it is never "unpushed". When the
+worktree is already gone, the checks fall back to the repository: the
+branch if it is still there (or on origin), else the commits the ledger
+recorded (SHAs in the worker's report and its marks that still resolve),
+each checked against the base by ancestry or patch-id. Unmerged ones warn;
+if nothing of the worker's is found anywhere the review says "the worktree
+and branch were removed; nothing of it exists outside main" and does not
+warn. Only a worker with no repository on record is a "cannot check". Confirm each one ("Remove anyway…" when there
 are warnings), or "Remove all safe" for those without warnings.
 
 **Asking the session.** The git checks cannot see what only the session
@@ -167,8 +177,9 @@ merged) and classified:
   through the normal mark, so the session is asked whether it is safe;
 - **needs a look**: not marked, with why: the agent is working or blocked,
   uncommitted changes, an unfinished rebase or merge, commits on no remote,
-  commits **pushed but not merged** (an open PR is active work), the
-  worktree is gone, or the checks failed;
+  commits **pushed but not merged** (an open PR is active work), a gone
+  worktree whose branch or recorded commits are not in the base (a gone
+  worktree with nothing unmerged is ready), or the checks failed;
 - **skipped**: already marked, a coordinator, the primary checkout, no
   worktree.
 

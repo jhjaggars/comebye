@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,12 +35,20 @@ const gitTimeout = 20 * time.Second
 // never waits on a terminal or takes the index lock away from an agent
 // working in the checkout.
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGitIn(ctx, dir, "", args...)
+}
+
+// runGitIn is runGit with text on git's standard input (git patch-id).
+func runGitIn(ctx context.Context, dir, stdin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if len(msg) > 300 {
@@ -204,6 +213,16 @@ type worktreeChecks struct {
 	// serialized; it travels with the checks in-process only.
 	baseRef string
 	Repo    string `json:"repo,omitempty"` // the primary checkout
+	// Landed lists the branch's commits that are in the base under another
+	// SHA (a cherry-pick, a rebase, a squash of one commit: same patch-id),
+	// with the base commit they landed as where it was found.
+	Landed []landedCommit `json:"landed,omitempty"`
+	// Gone: the worktree does not exist, so the checks fell back to the
+	// repository: Records names what was checked (the branch if it is
+	// still there, commits the ledger recorded); none means nothing of the
+	// worker's exists outside the base.
+	Gone    bool     `json:"gone,omitempty"`
+	Records []string `json:"records,omitempty"`
 	// Tip is the commit the checks looked at (the branch, else HEAD); a
 	// discard is refused if it moved since the user reviewed it.
 	Tip string `json:"tip,omitempty"`
@@ -237,6 +256,31 @@ type worktreeDetail struct {
 	Diff          string `json:"diff,omitempty"`
 	WorkDiff      string `json:"work_diff,omitempty"`
 	DiffTruncated bool   `json:"diff_truncated,omitempty"`
+	// plusSHAs are the unmerged commits' full SHAs (all of them, not just
+	// the first maxDetailLines).
+	plusSHAs []string
+}
+
+// landedCommit is a branch commit whose change is in the base: As is the
+// base commit with the same patch-id ("" when it was not found, e.g. it is
+// older than the window searched).
+type landedCommit struct {
+	SHA string `json:"sha"`
+	As  string `json:"as,omitempty"`
+}
+
+// landedText says where landed commits went: "landed on main as 64c1774".
+func landedText(base string, l []landedCommit) string {
+	var as []string
+	for _, x := range l {
+		if x.As != "" {
+			as = append(as, x.As[:min(7, len(x.As))])
+		}
+	}
+	if len(as) == 0 {
+		return fmt.Sprintf("landed on %s under other SHAs", base)
+	}
+	return fmt.Sprintf("landed on %s as %s", base, strings.Join(as, ", "))
 }
 
 type commitInfo struct {
@@ -335,30 +379,220 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 	c.BaseUsed = base
 	c.baseRef = base
 	fetchOrigin(ctx, path)
+	best := compareToBase(ctx, path, tip, base)
+	if best.n >= 0 {
+		c.Unmerged, c.BaseUsed, c.baseRef = best.n, best.name, best.ref
+		c.Landed = best.landed
+	}
+	return c
+}
+
+// baseCmp is a branch compared with the better of its two bases.
+type baseCmp struct {
+	n      int      // commits with no equivalent in the base; -1 unknown
+	name   string   // "main" or "origin/main"
+	ref    string   // unambiguous ref for git commands
+	plus   []string // those commits, oldest first
+	landed []landedCommit
+}
+
+// compareToBase runs git cherry of tip against the local base and
+// origin's copy of it and keeps whichever sees fewer unmerged commits
+// (the local one on a tie). Commits git cherry marks equivalent under
+// another SHA are looked up in the winning base for their landed SHA.
+func compareToBase(ctx context.Context, dir, tip, base string) baseCmp {
+	best := baseCmp{n: -1}
+	var eq []string
 	for _, b := range []string{base, "refs/remotes/origin/" + base} {
-		if b != base && !refExists(ctx, path, b) {
+		if b != base && !refExists(ctx, dir, b) {
 			continue
 		}
-		out, err := runGit(ctx, path, "cherry", "--end-of-options", b, tip)
+		out, err := runGit(ctx, dir, "cherry", "--end-of-options", b, tip)
 		if err != nil {
 			continue
 		}
-		n := 0
+		var plus, minus []string
 		for _, l := range strings.Split(out, "\n") {
-			if strings.HasPrefix(l, "+") {
-				n++
+			switch {
+			case strings.HasPrefix(l, "+ "):
+				plus = append(plus, l[2:])
+			case strings.HasPrefix(l, "- "):
+				minus = append(minus, l[2:])
 			}
 		}
-		if c.Unmerged < 0 || n < c.Unmerged {
-			c.Unmerged = n
-			c.baseRef = b
-			c.BaseUsed = b
+		if best.n < 0 || len(plus) < best.n {
+			best = baseCmp{n: len(plus), name: b, ref: b, plus: plus}
 			if r, ok := strings.CutPrefix(b, "refs/remotes/"); ok {
-				c.BaseUsed = r
+				best.name = r
 			}
+			eq = minus
 		}
 	}
+	if best.n >= 0 && len(eq) > 0 {
+		best.landed = findLanded(ctx, dir, best.ref, tip, eq)
+	}
+	return best
+}
+
+// maxLandedWindow bounds how many base commits are searched for a patch
+// match.
+const maxLandedWindow = 300
+
+// findLanded finds, for the branch commits git cherry marked equivalent
+// to something in the base, the base commit with the same patch-id. A
+// commit that is simply an ancestor of the base landed as itself and is
+// not listed. A match not found (older than the window) is listed with no
+// As: it still landed, as far as git cherry can tell.
+func findLanded(ctx context.Context, dir, baseRef, tip string, eq []string) []landedCommit {
+	var todo []string
+	for _, sha := range eq {
+		if _, err := runGit(ctx, dir, "merge-base", "--is-ancestor", sha, baseRef); err != nil {
+			todo = append(todo, sha)
+		}
+	}
+	if len(todo) == 0 {
+		return nil
+	}
+	if len(todo) > 50 {
+		todo = todo[:50]
+	}
+	rng := baseRef
+	if mb, err := runGit(ctx, dir, "merge-base", "--end-of-options", baseRef, tip); err == nil && mb != "" {
+		rng = mb + ".." + baseRef
+	}
+	baseIDs := patchIDs(ctx, dir, "log", "-p", "--no-ext-diff", "--no-merges", "-n", strconv.Itoa(maxLandedWindow), rng, "--")
+	mine := patchIDs(ctx, dir, append([]string{"log", "-p", "--no-ext-diff", "--no-merges", "--no-walk=unsorted", "--end-of-options"}, todo...)...)
+	byID := map[string]string{} // patch-id -> base commit
+	for sha, id := range baseIDs {
+		byID[id] = sha
+	}
+	out := make([]landedCommit, 0, len(todo))
+	for _, sha := range todo {
+		out = append(out, landedCommit{SHA: sha, As: byID[mine[sha]]})
+	}
+	return out
+}
+
+// patchIDs maps each commit in the output of a `git log -p` to its stable
+// patch-id (which ignores index lines and line numbers).
+func patchIDs(ctx context.Context, dir string, logArgs ...string) map[string]string {
+	log, err := runGit(ctx, dir, logArgs...)
+	if err != nil || log == "" {
+		return nil
+	}
+	out, err := runGitIn(ctx, dir, log+"\n", "patch-id", "--stable")
+	if err != nil {
+		return nil
+	}
+	ids := map[string]string{}
+	for _, l := range strings.Split(out, "\n") {
+		if id, sha, ok := strings.Cut(l, " "); ok {
+			ids[sha] = id
+		}
+	}
+	return ids
+}
+
+// checkGone is the check for a worktree that no longer exists, from the
+// repository: the worker's branch if it is still there (or on origin),
+// else the commits the ledger recorded (hints, SHAs from the worker's
+// report or marks that still resolve), each compared with the base. With
+// no repository to look in there is nothing to check; with a repository
+// but no branch and no recorded commits, nothing of the worker's exists
+// outside the base.
+func checkGone(ctx context.Context, path, repo, branch string, prev, hints []string, base string) worktreeChecks {
+	c := worktreeChecks{Path: path, Unmerged: -1, Branch: branch}
+	if repo == "" {
+		return c
+	}
+	top, _, common, err := gitDirs(ctx, repo)
+	if err != nil {
+		return c
+	}
+	c.Gone, c.Repo = true, filepath.Dir(common)
+	if base == "" || !refExists(ctx, top, base) {
+		base = defaultBranch(ctx, top)
+	}
+	if base == "" || !refExists(ctx, top, base) {
+		c.Error = "no base branch to compare with"
+		return c
+	}
+	c.BaseUsed, c.baseRef = base, base
+	fetchOrigin(ctx, top)
+	type rec struct{ name, tip string }
+	var recs []rec
+	seen := map[string]bool{}
+	add := func(name, tip string) {
+		sha, err := runGit(ctx, top, "rev-parse", "--verify", "--quiet", "--end-of-options", tip+"^{commit}")
+		if err != nil || sha == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		recs = append(recs, rec{name, sha})
+	}
+	for _, b := range append([]string{branch}, prev...) {
+		if b == "" || !validBranch(b) {
+			continue
+		}
+		if branchExists(ctx, top, b) {
+			add("branch "+b, "refs/heads/"+b)
+		} else {
+			add("origin/"+b, "refs/remotes/origin/"+b)
+		}
+	}
+	for _, h := range hints {
+		if len(h) >= 7 && len(h) <= 40 {
+			add("recorded commit "+h[:7], h)
+		}
+	}
+	unmerged := map[string]bool{}
+	landed := map[string]landedCommit{}
+	for _, r := range recs {
+		cmp := compareToBase(ctx, top, r.tip, base)
+		if cmp.n < 0 {
+			c.Error = "could not compare " + r.name + " with " + base
+			return c
+		}
+		for _, sha := range cmp.plus {
+			unmerged[sha] = true
+		}
+		for _, l := range cmp.landed {
+			landed[l.SHA] = l
+		}
+		c.BaseUsed, c.baseRef = cmp.name, cmp.ref
+		c.Records = append(c.Records, r.name)
+		if c.Tip == "" {
+			c.Tip = r.tip
+		}
+	}
+	if len(recs) > 0 {
+		for _, l := range landed {
+			c.Landed = append(c.Landed, l)
+		}
+		sort.Slice(c.Landed, func(i, j int) bool { return c.Landed[i].SHA < c.Landed[j].SHA })
+	}
+	c.Unmerged = len(unmerged)
 	return c
+}
+
+// goneVerdict is what to tell the user about a worktree that is gone:
+// warn is true when something may be lost or nothing could be checked.
+func (c worktreeChecks) goneVerdict() (warn bool, msg string) {
+	switch {
+	case !c.Gone:
+		return true, "the worktree is gone and there is no repository on record to check its commits against"
+	case c.Unmerged < 0:
+		return true, "the worktree is gone and its commits could not be checked: " + c.Error
+	case c.Unmerged > 0:
+		return true, fmt.Sprintf("the worktree is gone, and %s has %d commits not in %s", strings.Join(c.Records, ", "), c.Unmerged, c.BaseUsed)
+	case len(c.Records) == 0:
+		return false, fmt.Sprintf("the worktree and branch were removed; nothing of it exists outside %s", c.BaseUsed)
+	}
+	msg = fmt.Sprintf("the worktree is gone; every commit of %s is in %s", strings.Join(c.Records, ", "), c.BaseUsed)
+	if len(c.Landed) > 0 {
+		msg += " (" + landedText(c.BaseUsed, c.Landed) + ")"
+	}
+	return false, msg
 }
 
 // inProgress names the unfinished operation in a git dir, "" when none.
@@ -406,12 +640,14 @@ func inspectWorktree(ctx context.Context, c *worktreeChecks, diff bool) {
 	tip := c.Tip
 	if base != "" {
 		if out, err := runGit(ctx, c.Path, "cherry", "-v", "--end-of-options", base, tip); err == nil {
+			d.plusSHAs = []string{}
 			for _, l := range strings.Split(out, "\n") {
 				rest, ok := strings.CutPrefix(l, "+ ")
 				if !ok {
 					continue
 				}
 				sha, subject, _ := strings.Cut(rest, " ")
+				d.plusSHAs = append(d.plusSHAs, sha)
 				if len(d.Commits) < maxDetailLines {
 					d.Commits = append(d.Commits, commitInfo{SHA: shortSHA(sha), Subject: subject})
 				}
@@ -440,15 +676,32 @@ func inspectWorktree(ctx context.Context, c *worktreeChecks, diff bool) {
 	if c.Branch != "" {
 		d.Upstream, _ = runGit(ctx, c.Path, "for-each-ref", "--format=%(upstream:short)", "refs/heads/"+c.Branch)
 	}
-	// The branch's own commits (not in the base) that no remote has.
-	notIn := []string{"rev-list", "--count", tip, "--not", "--remotes"}
+	// The branch's own commits that are neither in the base (either copy
+	// of it) nor equivalent to something in it nor on any remote: work
+	// that exists only here. A branch equal to, or behind, its base has
+	// none, remote branch or not.
+	notIn := []string{"rev-list", tip, "--not", "--remotes"}
 	if base != "" {
 		notIn = append(notIn, base)
+		if c.Branch != "" {
+			// the local base too, which may be ahead of origin's
+			if def := strings.TrimPrefix(c.BaseUsed, "origin/"); def != "" && refExists(ctx, c.Path, "refs/heads/"+def) {
+				notIn = append(notIn, "refs/heads/"+def)
+			}
+		}
 	}
 	if out, err := runGit(ctx, c.Path, notIn...); err == nil {
-		if n, err := strconv.Atoi(out); err == nil {
-			d.Unpushed = n
+		own := map[string]bool{}
+		for _, cm := range d.plusSHAs {
+			own[cm] = true
 		}
+		n := 0
+		for _, sha := range strings.Fields(out) {
+			if d.plusSHAs == nil || own[sha] {
+				n++
+			}
+		}
+		d.Unpushed = n
 	}
 }
 

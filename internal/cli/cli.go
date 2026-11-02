@@ -766,14 +766,20 @@ type apiInspection struct {
 	Model    string `json:"model"`
 	Thinking string `json:"thinking"`
 	Checks   struct {
-		Path       string `json:"path"`
-		Exists     bool   `json:"exists"`
-		Primary    bool   `json:"primary"`
-		Branch     string `json:"branch"`
-		Dirty      bool   `json:"dirty"`
-		Unmerged   int    `json:"unmerged_commits"`
-		BaseUsed   string `json:"base_used"`
-		Tip        string `json:"tip"`
+		Path     string   `json:"path"`
+		Exists   bool     `json:"exists"`
+		Primary  bool     `json:"primary"`
+		Branch   string   `json:"branch"`
+		Dirty    bool     `json:"dirty"`
+		Unmerged int      `json:"unmerged_commits"`
+		BaseUsed string   `json:"base_used"`
+		Tip      string   `json:"tip"`
+		Gone     bool     `json:"gone"`
+		Records  []string `json:"records"`
+		Landed   []struct {
+			SHA string `json:"sha"`
+			As  string `json:"as"`
+		} `json:"landed"`
 		InProgress string `json:"in_progress"`
 		Error      string `json:"error"`
 		Detail     *struct {
@@ -790,6 +796,26 @@ type apiInspection struct {
 			DiffTruncated bool   `json:"diff_truncated"`
 		} `json:"detail"`
 	} `json:"checks"`
+}
+
+// landedSuffix says where commits that landed under other SHAs went.
+func landedSuffix(base string, l []struct {
+	SHA string `json:"sha"`
+	As  string `json:"as"`
+}) string {
+	var as []string
+	for _, x := range l {
+		if len(x.As) >= 7 {
+			as = append(as, x.As[:7])
+		}
+	}
+	switch {
+	case len(as) > 0:
+		return fmt.Sprintf(" (landed on %s as %s)", base, strings.Join(as, ", "))
+	case len(l) > 0:
+		return fmt.Sprintf(" (landed on %s under other SHAs)", base)
+	}
+	return ""
 }
 
 func cmdInspect(e *Env, args []string) error {
@@ -839,6 +865,18 @@ func cmdInspect(e *Env, args []string) error {
 	switch {
 	case !ch.Exists:
 		fmt.Fprintf(w, "checkout: %s does not exist (any more)\n", ch.Path)
+		switch {
+		case !ch.Gone:
+			fmt.Fprintf(w, "merged:   unknown · no repository on record to check its commits against\n")
+		case ch.Error != "":
+			fmt.Fprintf(w, "merged:   unknown · %s\n", ch.Error)
+		case ch.Unmerged > 0:
+			fmt.Fprintf(w, "merged:   NO · %s has %d commits not in %s\n", strings.Join(ch.Records, ", "), ch.Unmerged, dash(ch.BaseUsed))
+		case len(ch.Records) == 0:
+			fmt.Fprintf(w, "merged:   yes · the worktree and branch were removed; nothing of it exists outside %s\n", dash(ch.BaseUsed))
+		default:
+			fmt.Fprintf(w, "merged:   yes · every commit of %s is in %s%s\n", strings.Join(ch.Records, ", "), dash(ch.BaseUsed), landedSuffix(ch.BaseUsed, ch.Landed))
+		}
 		return nil
 	case ch.Primary:
 		fmt.Fprintf(w, "checkout: %s (the repository's primary checkout)\n", ch.Path)
@@ -861,7 +899,7 @@ func cmdInspect(e *Env, args []string) error {
 	case ch.Unmerged < 0:
 		fmt.Fprintf(w, "merged:   unknown · could not compare with %s\n", base)
 	case ch.Unmerged == 0:
-		fmt.Fprintf(w, "merged:   yes · every commit is in %s\n", base)
+		fmt.Fprintf(w, "merged:   yes · every commit is in %s%s\n", base, landedSuffix(ch.BaseUsed, ch.Landed))
 	default:
 		fmt.Fprintf(w, "merged:   NO · %d commits not in %s (a squash-merged PR whose patch differs still counts: check the PR)\n", ch.Unmerged, base)
 	}
@@ -1073,13 +1111,14 @@ func sendPrompt(e *Env, c *client, t target, text string, queue, asJSON bool) er
 func landPrompt(base string, deploy bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your report is accepted and the user has OKed landing your work. This message is your authorisation to do exactly these steps, and nothing beyond them:\n\n")
-	fmt.Fprintf(&b, "1. `git fetch origin`, then rebase (or cherry-pick) your commits onto the latest `origin/%s` as plain commits: no merge commits, and no merge commits that exist only to carry a signature. Resolve conflicts in your own work; if one is not obviously yours to resolve, stop and report.\n", base)
-	b.WriteString("2. Re-run the tests (and vet/format checks) on the rebased result. If they fail, stop and report; do not push.\n")
+	fmt.Fprintf(&b, "1. `git fetch origin`, then rebase (or cherry-pick) your commits onto the latest `origin/%s` as plain commits: no merge commits, and no merge commits that exist only to carry a signature. Resolve conflicts in your own work; if one is not obviously yours to resolve, stop and report. Before pushing, check that `git log --merges origin/%s..HEAD` prints nothing.\n", base, base)
+	b.WriteString("2. Re-run the tests (and vet/format checks) on the rebased result: all of the project's tests, including its documented UI or browser tests (see its docs or CLAUDE.md), not only the Go or unit ones. If they fail, stop and report; do not push.\n")
 	fmt.Fprintf(&b, "3. Push as a fast-forward of `%s` (`git push origin HEAD:%s`). Never force-push, never rewrite pushed history. If the push is rejected because %s moved, fetch, rebase again and re-test; do not force.\n", base, base, base)
-	b.WriteString("4. Watch CI for the pushed commit until it finishes. If it fails, report the failure; do not push fixes unasked.\n")
-	b.WriteString("5. Delete your pushed branch and your local branch (the worktree stays; the session is removed separately).\n")
+	fmt.Fprintf(&b, "4. Watch CI for the pushed commit until it finishes: `gh run list --branch %s --limit 1` gives the run ID for your push (check that it is your commit's run), then `gh run watch ID --exit-status`. If the watch might outlast a tool timeout, run it in the background and wait for it to finish. Confirm the result with `gh run view ID --json conclusion`: do not pipe the watch through `tail` or the like, which hides its exit status. If CI fails, report the failure; do not push fixes unasked.\n", base)
+	fmt.Fprintf(&b, "5. Clean up your branch: detach your worktree first (`git switch --detach origin/%s`), then delete the local branch (`git branch -D BRANCH`; it is merged, but your SHAs may differ from the pushed ones). Delete the remote branch only if `git ls-remote --heads origin BRANCH` shows it; if you never pushed it, there is nothing to delete. The worktree stays; the session is removed separately.\n", base)
+	b.WriteString("\nDo all of this in your own worktree. Never touch the repository's primary checkout, or any other checkout: it may hold the user's uncommitted work.\n")
 	if deploy {
-		b.WriteString("6. Deploy as the project's docs describe, once CI is green.\n")
+		b.WriteString("\n6. Deploy as the project's docs describe, once CI is green.\n")
 		b.WriteString("\nThen report with `comebye report -`: the landed commit hashes, the test and CI results, and the deploy result.\n")
 	} else {
 		b.WriteString("\nDo not deploy: that is a separate step, done only when asked.\n")

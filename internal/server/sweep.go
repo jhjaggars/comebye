@@ -88,7 +88,11 @@ func sweepClassify(e ledger.Entry, live *herdr.AgentInfo, c *worktreeChecks, che
 	}
 	switch {
 	case !c.Exists:
-		return SweepNeedsLook, "the worktree is gone, so its commits cannot be checked"
+		warn, msg := c.goneVerdict()
+		if warn {
+			return SweepNeedsLook, msg
+		}
+		return SweepReady, "Sweep: " + sweepState(e) + "; " + msg
 	case c.Primary:
 		return SweepSkip, "it works in the repository's primary checkout"
 	case c.InProgress != "":
@@ -118,17 +122,24 @@ func sweepClassify(e ledger.Entry, live *herdr.AgentInfo, c *worktreeChecks, che
 	return SweepReady, sweepReason(e, c)
 }
 
+func sweepState(e ledger.Entry) string {
+	if e.Status != ledger.Finished {
+		return "idle"
+	}
+	return "finished"
+}
+
 // sweepReason is the mark's reason for a ready worker, from its checks.
 func sweepReason(e ledger.Entry, c *worktreeChecks) string {
-	state := "finished"
-	if e.Status != ledger.Finished {
-		state = "idle"
-	}
 	base := c.BaseUsed
 	if base == "" {
 		base = "its base"
 	}
-	return fmt.Sprintf("Sweep: %s; worktree clean; every commit of %s is in %s; nothing unpushed", state, c.Branch, base)
+	r := fmt.Sprintf("Sweep: %s; worktree clean; every commit of %s is in %s", sweepState(e), c.Branch, base)
+	if len(c.Landed) > 0 {
+		r += " (" + landedText(base, c.Landed) + ")"
+	}
+	return r + "; nothing unpushed"
 }
 
 // sweepCandidates picks the workers to look at and the ones to skip with
@@ -216,7 +227,7 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 			e := c.e
 			// The host's checks fetch origin first, so a branch merged
 			// upstream since the last fetch is seen as merged.
-			chk, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{Detail: true})
+			chk, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{Detail: true}.forEntry(e))
 			msg := ""
 			if lerr != nil {
 				msg = lerr.message

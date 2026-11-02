@@ -58,6 +58,8 @@ func (s *Server) handleInspect(w http.ResponseWriter, r *http.Request) {
 	if isWorker {
 		in.Host, in.Name, in.EntryID, in.Branch, in.Base, path = entry.Host, entry.AgentName, entry.ID, entry.Branch, entry.Base, entry.Worktree
 		in.Model, in.Thinking = entry.Model, entry.Thinking
+		opts = opts.forEntry(entry)
+		opts.Diff = r.URL.Query().Get("diff") == "1"
 	}
 	if agent != nil {
 		in.Host, in.Status = agent.Host, agent.Status

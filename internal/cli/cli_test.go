@@ -840,7 +840,9 @@ func TestLand(t *testing.T) {
 		t.Fatalf("land: %d %s", code, errb)
 	}
 	body := f.find("POST", "/api/hosts/laharl/agents/w3:p1/prompt").body
-	for _, want := range []string{"origin/trunk", "plain commits", "no merge commits", "Re-run the tests", "Never force-push", "Watch CI", "Delete your pushed branch", "Do not deploy"} {
+	for _, want := range []string{"origin/trunk", "plain commits", "no merge commits", "Re-run the tests", "Never force-push", "Watch CI", "Clean up your branch", "Do not deploy",
+		"git log --merges origin/trunk..HEAD", "gh run list --branch trunk --limit 1", "gh run watch ID --exit-status", "gh run view ID --json conclusion", "tail",
+		"git switch --detach origin/trunk", "git ls-remote --heads origin BRANCH", "primary checkout", "UI or browser tests"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("land prompt lacks %q: %s", want, body)
 		}
