@@ -69,7 +69,7 @@ func main() {
 		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs    = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
 		archiveDir   = flag.String("archive-dir", getenv("COMEBYE_ARCHIVE_DIR"), "keep a final copy of an agent's transcript here when it is removed (see `comebye archive`); empty disables")
-		archiveRcpt  = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's public key, or a file holding it")
+		archiveRcpt  = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
 		showVersion  = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")

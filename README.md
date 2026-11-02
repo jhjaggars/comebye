@@ -102,7 +102,7 @@ node --check web/app.js web/sw.js
 go run . -insecure-no-auth       # local only: http://127.0.0.1:8741, needs herdr running
 ```
 
-The server is Go with no module dependencies; the web app is plain
+The server is Go with two module dependencies, both for the transcript archive (`filippo.io/age` and `klauspost/compress`, see `docs/archive.md`); the web app is plain
 HTML/CSS/JS in `web/` with no build step, embedded into the binary. See
 [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
 

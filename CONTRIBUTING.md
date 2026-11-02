@@ -7,7 +7,7 @@ welcome.
   agree on the approach before you spend time on it.
 - **Keep it small.** comebye is deliberately a single Go binary with a
   dependency-free web UI (plain HTML/CSS/JS in `web/`, no build step). Please
-  do not add Go module dependencies without discussing it. The only JS
+  do not add Go module dependencies without discussing it (the only ones are `filippo.io/age` and `klauspost/compress`, for the transcript archive). The only JS
   tooling is the dev/CI-only browser harness in `tools/uitest` (pinned,
   never shipped, not part of the binary).
 - **Before sending a pull request**, run:

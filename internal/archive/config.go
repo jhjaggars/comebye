@@ -14,8 +14,8 @@ import (
 type Config struct {
 	Host      string
 	Dir       string // the filesystem backend; Garage/S3 would add another field
-	Recipient string // "cbapub1:..." or a file holding it
-	Identity  string // "cbasec1:..." or a file holding it
+	Recipient string // age1... and/or ssh-... public keys (comma or newline separated), or a file of them
+	Identity  string // AGE-SECRET-KEY-1... (or an unencrypted OpenSSH key), or a file holding it
 	ClaudeDir string // default $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects
 	PiDir     string // default ~/.pi/agent/sessions
 	Index     string // default ~/.local/state/comebye/recall/index.db
@@ -33,25 +33,20 @@ func expand(p string) string {
 	return p
 }
 
-// keyText returns the key from a literal or a file.
-func keyText(v, prefix string) (string, error) {
+// identityText returns the identity's text from a literal or a file.
+func identityText(v string) (string, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return "", nil
 	}
-	if strings.HasPrefix(v, prefix) {
+	if strings.HasPrefix(v, "AGE-SECRET-KEY-") || strings.Contains(v, "PRIVATE KEY") {
 		return v, nil
 	}
 	b, err := os.ReadFile(expand(v))
 	if err != nil {
 		return "", err
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if t := strings.TrimSpace(line); strings.HasPrefix(t, prefix) {
-			return t, nil
-		}
-	}
-	return "", errors.New("archive: no key starting with " + prefix + " in " + v)
+	return string(b), nil
 }
 
 // Sources returns the agent session directories to archive.
@@ -79,26 +74,23 @@ func (c Config) IndexPath() string {
 	return expand("~/.local/state/comebye/recall/index.db")
 }
 
-// Open builds the archiver. It needs Dir and Recipient.
+// Open builds the archiver. It needs Dir and recipients (or an identity,
+// from which the native recipients are derived).
 func (c Config) Open() (*Archiver, error) {
 	if c.Dir == "" {
 		return nil, ErrNotConfigured
 	}
-	rk, err := keyText(c.Recipient, pubPrefix)
-	if err != nil {
-		return nil, err
-	}
-	if rk == "" {
-		// An identity file also holds the recipient.
-		ik, err := keyText(c.Identity, secPrefix)
-		if err != nil || ik == "" {
-			return nil, errors.New("archive: no recipient key (COMEBYE_ARCHIVE_RECIPIENT or --recipient)")
+	spec := strings.TrimSpace(c.Recipient)
+	if spec == "" {
+		it, err := identityText(c.Identity)
+		if err != nil || it == "" {
+			return nil, errors.New("archive: no recipients (COMEBYE_ARCHIVE_RECIPIENT or --recipient: age1... keys, ssh public keys, or a file of them)")
 		}
-		if rk, err = RecipientOf(ik); err != nil {
+		if spec, err = RecipientsOf(it); err != nil {
 			return nil, err
 		}
 	}
-	s, err := NewSealer(rk)
+	s, err := NewSealer(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -116,14 +108,14 @@ func (c Config) Open() (*Archiver, error) {
 
 // OpenIdentity returns the decrypting side.
 func (c Config) OpenIdentity() (Opener, error) {
-	ik, err := keyText(c.Identity, secPrefix)
+	it, err := identityText(c.Identity)
 	if err != nil {
 		return nil, err
 	}
-	if ik == "" {
-		return nil, errors.New("archive: no identity (COMEBYE_ARCHIVE_IDENTITY or --identity); it is needed to read the archive back")
+	if it == "" {
+		return nil, errors.New("archive: no identity (COMEBYE_ARCHIVE_IDENTITY); it is needed to read the archive back")
 	}
-	return NewOpener(ik)
+	return NewOpener(it)
 }
 
 // SessionRef names an archived session and its streams.

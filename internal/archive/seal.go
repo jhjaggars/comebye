@@ -1,175 +1,178 @@
 package archive
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/ecdh"
-	"crypto/hkdf"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+
+	"filippo.io/age"
+	"filippo.io/age/agessh"
 )
 
-// Encryption is public-key, so the archiving host holds only a public
-// recipient key and cannot read what it wrote; the identity (private key)
-// is needed to restore, search and rebuild the index. Each segment gets a
-// fresh X25519 ephemeral key, HKDF-SHA256 derives a one-use AES-256-GCM key
-// from the shared secret, and the segment's identity (stream, offset,
-// length) is bound as additional data, so a segment cannot be swapped or
-// moved without detection.
+// Segments are encrypted with age (filippo.io/age): each segment is an age
+// file, so `age -d -i identity.key` can read one after the 5-byte segment
+// prefix is stripped, and the archive is not tied to a Comebye-only format.
 //
-// This is ECIES built from the standard library only (the repo takes no
-// module dependencies). It is NOT the age file format; swapping in
-// filippo.io/age behind Sealer/Opener is a one-file change if module
-// dependencies are approved.
+// Recipients: any number, of two kinds: native age keys ("age1...") and
+// SSH public keys ("ssh-ed25519 ...", "ssh-rsa ..."). A segment is
+// decryptable by the identity of any one recipient it was written for. To
+// add a recipient later (for example a shared homelab identity), add it to
+// the recipient list: only segments written afterwards include it; older
+// segments stay readable with the original identity, or can be re-wrapped
+// with `comebye archive rewrap` (see docs/archive.md).
+//
+// Identities: native age identities ("AGE-SECRET-KEY-1...", one or many in
+// a file, so old and new can sit side by side) or an unencrypted OpenSSH
+// private key. Passphrase-protected SSH keys and plugin identities
+// (age-plugin-yubikey, ...) are not wired in yet.
 
-const (
-	pubPrefix = "cbapub1:"
-	secPrefix = "cbasec1:"
-	hkdfInfo  = "comebye-archive-v1"
-)
-
-// Sealer encrypts a segment.
+// Sealer encrypts a segment's bytes.
 type Sealer interface {
-	Seal(plain, aad []byte) ([]byte, error)
+	Seal(plain []byte) ([]byte, error)
 }
 
-// Opener decrypts a segment.
+// Opener decrypts them.
 type Opener interface {
-	Open(sealed, aad []byte) ([]byte, error)
+	Open(sealed []byte) ([]byte, error)
 }
 
-// GenerateKey returns a new recipient (public) and identity (private) key
-// in their text forms.
-func GenerateKey() (recipient, identity string, err error) {
-	k, err := ecdh.X25519().GenerateKey(rand.Reader)
+// GenerateIdentity returns a new native age identity (secret) and its
+// recipient (public).
+func GenerateIdentity() (identity, recipient string, err error) {
+	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		return "", "", err
 	}
-	return pubPrefix + base64.RawURLEncoding.EncodeToString(k.PublicKey().Bytes()),
-		secPrefix + base64.RawURLEncoding.EncodeToString(k.Bytes()), nil
+	return id.String(), id.Recipient().String(), nil
 }
 
-type x25519Sealer struct{ pub *ecdh.PublicKey }
-
-// NewSealer parses a recipient key ("cbapub1:...").
-func NewSealer(recipient string) (Sealer, error) {
-	raw, err := decodeKey(strings.TrimSpace(recipient), pubPrefix)
-	if err != nil {
-		return nil, err
+// ParseRecipients reads recipients from a literal list (comma or newline
+// separated) or, when spec names a file, from that file (one per line, #
+// comments allowed). It rejects an empty list.
+func ParseRecipients(spec string) ([]age.Recipient, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, errors.New("archive: no recipients")
 	}
-	pub, err := ecdh.X25519().NewPublicKey(raw)
-	if err != nil {
-		return nil, fmt.Errorf("archive: bad recipient key: %w", err)
+	text := spec
+	if !strings.HasPrefix(spec, "age1") && !strings.HasPrefix(spec, "ssh-") && !strings.Contains(spec, "\n") && !strings.Contains(spec, ",") {
+		b, err := os.ReadFile(expand(spec))
+		if err != nil {
+			return nil, err
+		}
+		text = string(b)
 	}
-	return &x25519Sealer{pub}, nil
+	var out []age.Recipient
+	for _, part := range strings.FieldsFunc(text, func(r rune) bool { return r == ',' || r == '\n' }) {
+		line := strings.TrimSpace(part)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "age1"):
+			r, err := age.ParseX25519Recipient(line)
+			if err != nil {
+				return nil, fmt.Errorf("archive: bad age recipient: %w", err)
+			}
+			out = append(out, r)
+		case strings.HasPrefix(line, "ssh-"):
+			r, err := agessh.ParseRecipient(line)
+			if err != nil {
+				return nil, fmt.Errorf("archive: bad ssh recipient: %w", err)
+			}
+			out = append(out, r)
+		default:
+			return nil, fmt.Errorf("archive: unsupported recipient %q (want age1... or ssh-...)", clip(line, 20))
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("archive: no recipients found")
+	}
+	return out, nil
 }
 
-func decodeKey(s, prefix string) ([]byte, error) {
-	if !strings.HasPrefix(s, prefix) {
-		return nil, fmt.Errorf("archive: key must start with %q", prefix)
+type ageSealer struct{ rcpts []age.Recipient }
+
+// NewSealer encrypts to every recipient in spec (see ParseRecipients).
+func NewSealer(spec string) (Sealer, error) {
+	r, err := ParseRecipients(spec)
+	if err != nil {
+		return nil, err
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(s, prefix))
-	if err != nil || len(raw) != 32 {
-		return nil, errors.New("archive: malformed key")
-	}
-	return raw, nil
+	return &ageSealer{r}, nil
 }
 
-func segKey(shared, ephPub, rcptPub []byte) ([]byte, error) {
-	salt := append(append([]byte{}, ephPub...), rcptPub...)
-	return hkdf.Key(sha256.New, shared, salt, hkdfInfo, 32)
+func (s *ageSealer) Seal(plain []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, s.rcpts...)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := w.Write(plain); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
-func (s *x25519Sealer) Seal(plain, aad []byte) ([]byte, error) {
-	eph, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
+type ageOpener struct{ ids []age.Identity }
+
+// ParseIdentities reads identities from text (a file's contents).
+func ParseIdentities(text string) ([]age.Identity, error) {
+	ids, err := age.ParseIdentities(strings.NewReader(text))
+	if err == nil && len(ids) > 0 {
+		return ids, nil
 	}
-	shared, err := eph.ECDH(s.pub)
-	if err != nil {
-		return nil, err
+	if strings.Contains(text, "PRIVATE KEY") {
+		id, serr := agessh.ParseIdentity([]byte(text))
+		if serr != nil {
+			return nil, fmt.Errorf("archive: ssh identity: %w (passphrase-protected SSH keys are not supported yet)", serr)
+		}
+		return []age.Identity{id}, nil
 	}
-	key, err := segKey(shared, eph.PublicKey().Bytes(), s.pub.Bytes())
-	if err != nil {
-		return nil, err
+	if err == nil {
+		err = errors.New("no identities found")
 	}
-	gcm, err := newGCM(key)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	out := append([]byte{}, eph.PublicKey().Bytes()...)
-	out = append(out, nonce...)
-	return gcm.Seal(out, nonce, plain, aad), nil
+	return nil, fmt.Errorf("archive: %w", err)
 }
 
-func newGCM(key []byte) (cipher.AEAD, error) {
-	blk, err := aes.NewCipher(key)
+// NewOpener decrypts with any of the identities in text.
+func NewOpener(identityText string) (Opener, error) {
+	ids, err := ParseIdentities(identityText)
 	if err != nil {
 		return nil, err
 	}
-	return cipher.NewGCM(blk)
+	return &ageOpener{ids}, nil
 }
 
-type x25519Opener struct{ priv *ecdh.PrivateKey }
-
-// NewOpener parses an identity ("cbasec1:...").
-func NewOpener(identity string) (Opener, error) {
-	raw, err := decodeKey(strings.TrimSpace(identity), secPrefix)
+func (o *ageOpener) Open(sealed []byte) ([]byte, error) {
+	r, err := age.Decrypt(bytes.NewReader(sealed), o.ids...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("archive: cannot decrypt (wrong identity, or the object was altered): %w", err)
 	}
-	priv, err := ecdh.X25519().NewPrivateKey(raw)
-	if err != nil {
-		return nil, fmt.Errorf("archive: bad identity: %w", err)
-	}
-	return &x25519Opener{priv}, nil
+	return io.ReadAll(r)
 }
 
-// RecipientOf returns the recipient key for an identity.
-func RecipientOf(identity string) (string, error) {
-	raw, err := decodeKey(strings.TrimSpace(identity), secPrefix)
+// RecipientsOf returns the public recipients of the native identities in
+// text (for a config that has only the identity).
+func RecipientsOf(identityText string) (string, error) {
+	ids, err := ParseIdentities(identityText)
 	if err != nil {
 		return "", err
 	}
-	priv, err := ecdh.X25519().NewPrivateKey(raw)
-	if err != nil {
-		return "", err
+	var out []string
+	for _, id := range ids {
+		if x, ok := id.(*age.X25519Identity); ok {
+			out = append(out, x.Recipient().String())
+		}
 	}
-	return pubPrefix + base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()), nil
-}
-
-func (o *x25519Opener) Open(sealed, aad []byte) ([]byte, error) {
-	if len(sealed) < 32+12+16 {
-		return nil, errors.New("archive: sealed segment too short")
+	if len(out) == 0 {
+		return "", errors.New("archive: the identity has no native age recipient; pass the public key explicitly")
 	}
-	ephPub, err := ecdh.X25519().NewPublicKey(sealed[:32])
-	if err != nil {
-		return nil, err
-	}
-	shared, err := o.priv.ECDH(ephPub)
-	if err != nil {
-		return nil, err
-	}
-	key, err := segKey(shared, sealed[:32], o.priv.PublicKey().Bytes())
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := newGCM(key)
-	if err != nil {
-		return nil, err
-	}
-	nonce, ct := sealed[32:44], sealed[44:]
-	plain, err := gcm.Open(nil, nonce, ct, aad)
-	if err != nil {
-		return nil, errors.New("archive: segment failed authentication (wrong key, or the object was altered)")
-	}
-	return plain, nil
+	return strings.Join(out, ","), nil
 }

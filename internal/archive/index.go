@@ -438,6 +438,8 @@ func (ix *Index) applyLinks(host string, links []Link) error {
 	return w.close()
 }
 
+func noteHeader(key string) string { return "cba2-note|" + key + "\n" }
+
 // Summaries are stored in the archive as small sealed objects, so they
 // survive an index rebuild: notes/<host>/<kind>/<sid>/<time>.json, the
 // latest wins.
@@ -448,8 +450,7 @@ func (a *Archiver) SetSummary(kind, sid, text, by string) error {
 	now := a.now().UTC()
 	body, _ := json.Marshal(map[string]string{"summary": text, "by": by, "at": now.Format(time.RFC3339)})
 	key := fmt.Sprintf("notes/%s/%s/%s/%s.json", a.Host, kind, sid, now.Format("20060102T150405.000000000Z"))
-	aad := []byte("cba1-note|" + key)
-	sealed, err := a.S.Seal(body, aad)
+	sealed, err := a.S.Seal(append([]byte(noteHeader(key)), body...))
 	if err != nil {
 		return err
 	}
@@ -478,10 +479,11 @@ func (ix *Index) applySummaries(a *Archiver, o Opener) error {
 		if err != nil {
 			continue
 		}
-		plain, err := o.Open(blob, []byte("cba1-note|"+k))
-		if err != nil {
+		plain, err := o.Open(blob)
+		if err != nil || !bytes.HasPrefix(plain, []byte(noteHeader(k))) {
 			continue
 		}
+		plain = plain[len(noteHeader(k)):]
 		var n struct{ Summary, At string }
 		var m map[string]string
 		if json.Unmarshal(plain, &m) != nil {

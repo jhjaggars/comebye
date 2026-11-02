@@ -31,7 +31,7 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	d := t.TempDir()
-	rcpt, ident, err := GenerateKey()
+	ident, rcpt, err := GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,22 +230,20 @@ func TestTamperAndWrongKey(t *testing.T) {
 	if len(keys) != 1 {
 		t.Fatal(keys)
 	}
-	_, ident2, _ := GenerateKey()
+	ident2, _, _ := GenerateIdentity()
 	o2, _ := NewOpener(ident2)
 	if _, err := StreamTo(&bytes.Buffer{}, r.a.B, o2, "laharl", "claude", "-proj/"+sidA+".jsonl"); err == nil {
 		t.Fatal("wrong key decrypted")
 	}
 	// Moving a segment to another offset fails authentication.
 	body, _ := r.a.B.Get(keys[0])
-	moved := segKeyFor("laharl", "claude", "-proj/"+sidA+".jsonl", 0, 0)
-	_ = moved
 	n, _ := parseSegKey(keys[0])
 	n.Off = 99
 	if _, err := decodeSegment(r.op, n, body); err == nil {
 		t.Fatal("segment accepted at a different offset")
 	}
 	// A flipped bit fails.
-	body[len(body)-3] ^= 1
+	body[len(body)-20] ^= 1
 	n, _ = parseSegKey(keys[0])
 	if _, err := decodeSegment(r.op, n, body); err == nil {
 		t.Fatal("tampered segment accepted")
@@ -495,5 +493,100 @@ func TestThreadsOutcomesAndAsk(t *testing.T) {
 	}
 	if td, _ := ix.Threads(Filter{}, true); len(td) != 1 {
 		t.Fatalf("unsummarized threads: %d", len(td))
+	}
+}
+
+func TestMultipleRecipientsAndRewrap(t *testing.T) {
+	r := newRig(t)
+	r.fixture()
+	// Old segments are written for identity A only (the rig's).
+	r.a.Run(r.sources())
+	oldKeys, _ := r.a.B.List("v1/laharl/claude/")
+
+	// Identity B joins later: the recipient list becomes A+B for new segments.
+	idB, rcptB, _ := GenerateIdentity()
+	opB, _ := NewOpener(idB)
+	rcptA, _ := RecipientsOf(r.identity)
+	both, err := NewSealer(rcptA + "," + rcptB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.a.S = both
+	mainA := filepath.Join(r.claude, "-proj", sidA+".jsonl")
+	r.write(mainA, claudeLine("user", "user", "later prompt", "2026-10-04T10:00:00Z"), true)
+	r.old(mainA)
+	r.a.Run(r.sources())
+	stream := "-proj/" + sidA + ".jsonl"
+	// A reads everything; B reads only the new segment.
+	if got := restoreString(t, r, "claude", stream); !strings.Contains(got, "later prompt") {
+		t.Fatal("A cannot read")
+	}
+	if _, err := StreamTo(&bytes.Buffer{}, r.a.B, opB, "laharl", "claude", stream); err == nil {
+		t.Fatal("B read segments written before it was a recipient")
+	}
+	newKeys, _ := r.a.B.List("v1/laharl/claude/" + stream + "/")
+	var newest string
+	for _, k := range newKeys {
+		newest = k
+	}
+	body, _ := r.a.B.Get(newest)
+	n, _ := parseSegKey(newest)
+	if _, err := decodeSegment(opB, n, body); err != nil {
+		t.Fatalf("B cannot read the segment written for A+B: %v", err)
+	}
+	_ = oldKeys
+
+	// Rewrap everything to B alone, into a second store; the source is unchanged.
+	dstB, _ := NewFSBackend(filepath.Join(r.dir, "store2"))
+	sealB, _ := NewSealer(rcptB)
+	if err := r.a.SetSummary("claude", sidA, "a note", "t"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := r.a.Rewrap(r.op, dstB, sealB)
+	if err != nil || st.Segments < 5 || st.Notes != 1 {
+		t.Fatalf("%+v %v", st, err)
+	}
+	if st2, _ := r.a.Rewrap(r.op, dstB, sealB); st2.Segments != 0 || st2.Skipped != st.Segments {
+		t.Fatalf("rewrap is not resumable: %+v", st2)
+	}
+	moved := &Archiver{Host: "laharl", B: dstB, S: sealB}
+	vr, _ := moved.Verify(opB, r.sources())
+	if vr.Mismatched != 0 || vr.Matched != 4 {
+		t.Fatalf("verify against the rewrapped store: %+v", vr)
+	}
+	if _, err := StreamTo(&bytes.Buffer{}, dstB, r.op, "laharl", "claude", stream); err == nil {
+		t.Fatal("the old identity still reads the rewrapped store")
+	}
+	if got := restoreString(t, r, "claude", stream); !strings.Contains(got, "later prompt") {
+		t.Fatal("source store changed")
+	}
+}
+
+func TestSSHRecipient(t *testing.T) {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("no ssh-keygen")
+	}
+	d := t.TempDir()
+	key := filepath.Join(d, "id")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil {
+		t.Skipf("ssh-keygen: %v %s", err, out)
+	}
+	pub, _ := os.ReadFile(key + ".pub")
+	priv, _ := os.ReadFile(key)
+	s, err := NewSealer(string(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := NewOpener(string(priv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := s.Seal([]byte("hello"))
+	got, err := o.Open(blob)
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err := NewSealer("not-a-key"); err == nil {
+		t.Fatal("bad recipient accepted")
 	}
 }

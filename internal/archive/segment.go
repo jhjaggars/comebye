@@ -2,7 +2,6 @@ package archive
 
 import (
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -11,10 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // An archive object is a segment: the bytes of one source file from byte
-// Off to Off+Len, gzip-compressed and sealed. Segments of a file are
+// Off to Off+Len, zstd-compressed and age-encrypted. Segments of a file are
 // contiguous and never rewritten, so the file at any past moment is the
 // concatenation of its first N segments. The key carries the position:
 //
@@ -23,15 +24,21 @@ import (
 // where <stream> is the file's path relative to the agent's session root
 // (Claude: ~/.claude/projects, pi: ~/.pi/agent/sessions).
 //
-// Body: "CBA1" | codec (1 = gzip) | sealed(gzip(raw)). The key's fields are
-// authenticated as additional data. gzip is the stdlib codec (about 3.2x
-// on transcripts, against about 4.1x for zstd, which needs a module
-// dependency); the codec byte lets zstd segments sit beside gzip ones
-// later.
+// Body: "CBA2" | codec (2 = zstd) | an age file. The age plaintext is
+// "cba2|host|kind|stream|offset|length\n" followed by the compressed bytes;
+// the header is authenticated by age, and a segment whose header does not
+// match its key (moved, renamed, or swapped) is refused. To read a segment
+// without Comebye: drop the first 5 bytes, `age -d -i identity.key`, drop
+// the header line, `zstd -d`.
 
 const (
-	magic     = "CBA1"
-	codecGzip = 1
+	magic     = "CBA2"
+	codecZstd = 2
+)
+
+var (
+	zstdEnc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithEncoderConcurrency(1))
+	zstdDec, _ = zstd.NewReader(nil, zstd.WithDecoderMaxMemory(1<<30), zstd.WithDecoderConcurrency(1))
 )
 
 // segName is a parsed segment key.
@@ -64,42 +71,35 @@ func parseSegKey(key string) (segName, bool) {
 	return segName{Host: parts[1], Kind: parts[2], Stream: strings.Join(parts[3:len(parts)-1], "/"), Off: off, Len: n}, true
 }
 
-func segAAD(host, kind, stream string, off, n int64) []byte {
-	return []byte(fmt.Sprintf("cba1|%d|%s|%s|%s|%d|%d", codecGzip, host, kind, stream, off, n))
+func segHeader(host, kind, stream string, off, n int64) string {
+	return fmt.Sprintf("cba2|%s|%s|%s|%d|%d\n", host, kind, stream, off, n)
 }
 
 func encodeSegment(s Sealer, host, kind, stream string, off int64, raw []byte) ([]byte, error) {
-	var zb bytes.Buffer
-	zw, _ := gzip.NewWriterLevel(&zb, gzip.BestCompression)
-	if _, err := zw.Write(raw); err != nil {
-		return nil, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	sealed, err := s.Seal(zb.Bytes(), segAAD(host, kind, stream, off, int64(len(raw))))
+	plain := append([]byte(segHeader(host, kind, stream, off, int64(len(raw)))), zstdEnc.EncodeAll(raw, nil)...)
+	sealed, err := s.Seal(plain)
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte(magic+string([]byte{codecGzip})), sealed...), nil
+	return append([]byte(magic+string([]byte{codecZstd})), sealed...), nil
 }
 
 func decodeSegment(o Opener, n segName, body []byte) ([]byte, error) {
 	if len(body) < 5 || string(body[:4]) != magic {
 		return nil, errors.New("archive: not a segment")
 	}
-	if body[4] != codecGzip {
+	if body[4] != codecZstd {
 		return nil, fmt.Errorf("archive: unknown codec %d", body[4])
 	}
-	plain, err := o.Open(body[5:], segAAD(n.Host, n.Kind, n.Stream, n.Off, n.Len))
+	plain, err := o.Open(body[5:])
 	if err != nil {
 		return nil, err
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(plain))
-	if err != nil {
-		return nil, err
+	want := segHeader(n.Host, n.Kind, n.Stream, n.Off, n.Len)
+	if !bytes.HasPrefix(plain, []byte(want)) {
+		return nil, errors.New("archive: segment does not belong at this key (moved or swapped)")
 	}
-	raw, err := io.ReadAll(zr)
+	raw, err := zstdDec.DecodeAll(plain[len(want):], nil)
 	if err != nil {
 		return nil, err
 	}

@@ -380,3 +380,82 @@ func (a *Archiver) Tombstoned(kind, slug, sid string) bool {
 	_, err := a.B.Get(tombKey(a.Host, kind, slug, sid))
 	return err == nil
 }
+
+// RewrapStats reports Rewrap.
+type RewrapStats struct {
+	Segments, Notes, Tombstones int
+	Skipped                     int // already in the destination
+}
+
+// Rewrap copies this host's archive into dst, decrypting each segment with
+// o and encrypting it to the recipients of newSealer. The source is not
+// changed. It is how the archive moves to a different key set (a rotated
+// key, a shared homelab identity, a different set of recipients): copy, run
+// `archive verify` against the new store with the new identity, then retire
+// the old store. It is resumable: objects already in dst are skipped.
+func (a *Archiver) Rewrap(o Opener, dst Backend, newSealer Sealer) (RewrapStats, error) {
+	var st RewrapStats
+	keys, err := a.B.List("v1/" + a.Host + "/")
+	if err != nil {
+		return st, err
+	}
+	for _, k := range keys {
+		n, ok := parseSegKey(k)
+		if !ok {
+			continue
+		}
+		body, err := a.B.Get(k)
+		if err != nil {
+			return st, err
+		}
+		raw, err := decodeSegment(o, n, body)
+		if err != nil {
+			return st, fmt.Errorf("%s: %w", k, err)
+		}
+		blob, err := encodeSegment(newSealer, n.Host, n.Kind, n.Stream, n.Off, raw)
+		if err != nil {
+			return st, err
+		}
+		if err := dst.Put(k, blob); err != nil {
+			if errors.Is(err, ErrExists) {
+				st.Skipped++
+				continue
+			}
+			return st, err
+		}
+		st.Segments++
+	}
+	notes, _ := a.B.List("notes/" + a.Host + "/")
+	for _, k := range notes {
+		blob, err := a.B.Get(k)
+		if err != nil {
+			return st, err
+		}
+		plain, err := o.Open(blob)
+		if err != nil {
+			return st, fmt.Errorf("%s: %w", k, err)
+		}
+		sealed, err := newSealer.Seal(plain)
+		if err != nil {
+			return st, err
+		}
+		if err := dst.Put(k, sealed); err != nil && !errors.Is(err, ErrExists) {
+			return st, err
+		} else if err == nil {
+			st.Notes++
+		}
+	}
+	tombs, _ := a.B.List("tomb/" + a.Host + "/")
+	for _, k := range tombs {
+		body, err := a.B.Get(k)
+		if err != nil {
+			return st, err
+		}
+		if err := dst.Put(k, body); err != nil && !errors.Is(err, ErrExists) {
+			return st, err
+		} else if err == nil {
+			st.Tombstones++
+		}
+	}
+	return st, nil
+}

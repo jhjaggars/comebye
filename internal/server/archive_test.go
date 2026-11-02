@@ -16,7 +16,7 @@ import (
 func TestRemoveFlushesTranscriptToArchive(t *testing.T) {
 	s, fh, _, _ := removalSetup(t)
 	d := t.TempDir()
-	rcpt, ident, _ := archive.GenerateKey()
+	ident, rcpt, _ := archive.GenerateIdentity()
 	sealer, _ := archive.NewSealer(rcpt)
 	opener, _ := archive.NewOpener(ident)
 	b, _ := archive.NewFSBackend(filepath.Join(d, "store"))
@@ -46,7 +46,7 @@ func TestRemoveFlushesTranscriptToArchive(t *testing.T) {
 func TestRemoveGoesAheadWhenArchiveFails(t *testing.T) {
 	s, fh, _, _ := removalSetup(t)
 	d := t.TempDir()
-	rcpt, _, _ := archive.GenerateKey()
+	_, rcpt, _ := archive.GenerateIdentity()
 	sealer, _ := archive.NewSealer(rcpt)
 	b, _ := archive.NewFSBackend(filepath.Join(d, "store"))
 	s.cfg.Archive = &archive.Archiver{Host: "laharl", B: b, S: sealer}

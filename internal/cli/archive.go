@@ -27,8 +27,8 @@ func archiveFlags(e *Env, fs *flag.FlagSet) *archive.Config {
 		return e.Getenv(k)
 	}
 	fs.StringVar(&c.Dir, "dir", env("COMEBYE_ARCHIVE_DIR"), "archive directory (COMEBYE_ARCHIVE_DIR)")
-	fs.StringVar(&c.Recipient, "recipient", env("COMEBYE_ARCHIVE_RECIPIENT"), "public key, or a file holding it (COMEBYE_ARCHIVE_RECIPIENT)")
-	fs.StringVar(&c.Identity, "identity", env("COMEBYE_ARCHIVE_IDENTITY"), "private key file, needed to read the archive back (COMEBYE_ARCHIVE_IDENTITY)")
+	fs.StringVar(&c.Recipient, "recipient", env("COMEBYE_ARCHIVE_RECIPIENT"), "recipients: age1... and/or ssh-... keys (comma separated), or a file of them (COMEBYE_ARCHIVE_RECIPIENT)")
+	fs.StringVar(&c.Identity, "identity", env("COMEBYE_ARCHIVE_IDENTITY"), "age identity file, needed to read the archive back (COMEBYE_ARCHIVE_IDENTITY)")
 	fs.StringVar(&c.ClaudeDir, "claude-dir", env("COMEBYE_ARCHIVE_CLAUDE_DIR"), "Claude Code projects dir (default ~/.claude/projects)")
 	fs.StringVar(&c.PiDir, "pi-dir", env("COMEBYE_ARCHIVE_PI_DIR"), "pi sessions dir (default ~/.pi/agent/sessions)")
 	fs.StringVar(&c.Index, "index", env("COMEBYE_RECALL_INDEX"), "index file (default ~/.local/state/comebye/recall/index.db)")
@@ -54,7 +54,7 @@ func cmdArchive(e *Env, args []string) error {
 		if len(pos) > 0 || *out == "" {
 			return usageErr("usage: comebye archive keygen --out DIR")
 		}
-		rcpt, ident, err := archive.GenerateKey()
+		ident, rcpt, err := archive.GenerateIdentity()
 		if err != nil {
 			return err
 		}
@@ -62,7 +62,7 @@ func cmdArchive(e *Env, args []string) error {
 			return err
 		}
 		idf, pubf := filepath.Join(*out, "identity.key"), filepath.Join(*out, "recipient.pub")
-		if err := writeNew(idf, "# comebye archive identity: whoever holds this can read the archive. Keep it off the archiving host.\n# recipient: "+rcpt+"\n"+ident+"\n", 0o600); err != nil {
+		if err := writeNew(idf, "# comebye archive identity (age format; works with the age CLI). Whoever holds this can read the archive: keep it off the archiving host.\n# created: "+time.Now().UTC().Format(time.RFC3339)+"\n# public key: "+rcpt+"\n"+ident+"\n", 0o600); err != nil {
 			return err
 		}
 		if err := writeNew(pubf, rcpt+"\n", 0o644); err != nil {
@@ -73,11 +73,11 @@ func cmdArchive(e *Env, args []string) error {
 		}
 		fmt.Fprintf(e.Stdout, "identity (secret): %s\nrecipient (public): %s\n%s\n", idf, pubf, rcpt)
 		return nil
-	case "run", "verify", "status", "index", "restore", "delete", "summary":
+	case "run", "verify", "status", "index", "restore", "delete", "summary", "rewrap":
 	default:
 		return usageErr("unknown archive subcommand %q", sub)
 	}
-	var ledger, to, by *string
+	var ledger, to, by, toDir, toRcpt *string
 	var yes, useGit, useGH *bool
 	switch sub {
 	case "index":
@@ -90,6 +90,9 @@ func cmdArchive(e *Env, args []string) error {
 		yes = fs.Bool("yes", false, "really delete (without it, only say what would be deleted)")
 	case "summary":
 		by = fs.String("by", "", "who wrote the summary")
+	case "rewrap":
+		toDir = fs.String("to-dir", "", "a new, empty archive directory to write the re-encrypted copy to (required)")
+		toRcpt = fs.String("to-recipient", "", "the new recipients: age1... and/or ssh-... keys, or a file of them (required)")
 	}
 	pos, err := parse(fs, rest)
 	if err != nil {
@@ -221,6 +224,30 @@ func cmdArchive(e *Env, args []string) error {
 		for _, m := range st.Errors {
 			fmt.Fprintln(e.Stderr, "error:", m)
 		}
+		return nil
+	case "rewrap":
+		if len(pos) > 0 || *toDir == "" || *toRcpt == "" {
+			return usageErr("usage: comebye archive rewrap --to-dir DIR --to-recipient KEYS (needs --identity for the current archive)")
+		}
+		o, err := cfg.OpenIdentity()
+		if err != nil {
+			return err
+		}
+		ns, err := archive.NewSealer(*toRcpt)
+		if err != nil {
+			return err
+		}
+		dst, err := archive.NewFSBackend(*toDir)
+		if err != nil {
+			return err
+		}
+		t0 := time.Now()
+		st, err := a.Rewrap(o, dst, ns)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(e.Stdout, "rewrapped into %s: %d segments, %d notes, %d tombstones (%d already there) in %.1fs. The source is unchanged; run `archive verify` against the new directory with the new identity before retiring the old one.\n",
+			*toDir, st.Segments, st.Notes, st.Tombstones, st.Skipped, time.Since(t0).Seconds())
 		return nil
 	case "restore":
 		if len(pos) != 1 || *to == "" {
