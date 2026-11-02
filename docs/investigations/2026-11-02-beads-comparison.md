@@ -314,6 +314,150 @@ For the coordinator to forward to `design-agent-lifecycle`:
    assigns work and sees liveness directly from herdr, so they solve a
    problem it doesn't have.
 
+## Design sketch: typed waits and a backlog
+
+The user's reply to the report: typed waits and a long-lived backlog sound
+useful. The two belong together. A backlog item is a handoff that hasn't
+started yet, and waits decide when it *can* start. The backlog's "ready"
+view is then beads' `bd ready`: approved items whose waits are all met.
+
+### Today
+
+`Entry.After []string` holds the ids of members of the same plan
+(`internal/server/after.go`). `stepsState` returns `go` only when every
+step reported explicitly (`report_source: explicit`), and `fail` when one
+failed or was removed. `releaseQueued` runs on every ledger observation and
+starts or fails `waiting` entries. `--after` requires `--plan` and accepts
+at most 8 steps. The successor's prompt gets the steps' reports, fenced as
+data (`stepContext`).
+
+### Typed waits
+
+```go
+type Wait struct {
+    Kind  string     // step | step_failed | human | pr_merged | ci_green | timer
+    Ref   string     // entry id or branch; "owner/repo#42"; branch or run id; "2h" or an RFC 3339 time
+    Note  string     // human: what is being approved
+    Met   *time.Time // set once, never unset
+    MetBy string     // human: who relayed it, and the user's words
+    Check *WaitCheck // external kinds: last check time, result, error
+}
+```
+
+- `Entry.Waits []Wait` replaces `After`. On load, `After` is migrated to
+  `step` waits, and `After` stays readable for older files. `--after X`
+  remains an alias for `--wait step:X`.
+- **Semantics per kind:**
+  - `step`: the step reported with outcome `done` (until outcomes exist:
+    explicit report, as today). If the step failed, the wait fails, as
+    today.
+  - `step_failed`: the step reported `failed` or `blocked`. A `done`
+    report *skips* the waiter rather than failing the plan. This is the
+    "run a fixer only if the tests fail" edge (beads' `conditional-blocks`).
+  - `human`: met only by the user's OK, through an **Approve** button on
+    the waiting entry in the app, or by the coordinator relaying it with
+    `comebye approve ID --note "<the user's words>"`. This matches how the
+    lifecycle draft records a landing OK, and the playbook rule stays the
+    same: never without the user.
+  - `pr_merged`: `gh pr view <n> -R owner/repo --json state,mergedAt`.
+    MERGED meets it; CLOSED without merging fails it.
+  - `ci_green`: `gh run list --branch B --limit 1 --json status,conclusion`,
+    or `gh run view <id>`. Success meets it; failure fails it unless the
+    wait says `retry`.
+  - `timer`: a duration from when the entry was created, or an absolute
+    time.
+- **Where checks run.** `gh` runs on the entry's host, which has the
+  repository and its credentials, through a new peer endpoint
+  (`/api/waitcheck`, beside `/api/checks`), with arguments passed as argv
+  and `owner/repo` validated against a pattern. Each external wait is
+  checked at most every 2 minutes. Errors (`gh` missing or not logged in)
+  are shown on the wait, and a wait never counts as met because of one.
+- **Without a plan.** `step` waits still need a plan, since they name
+  members. External and `human` waits don't, so a watch handoff can simply
+  wait for a PR.
+- **Shown everywhere.** The ledger, the app and `comebye plan show` say
+  why an entry waits: "waits for PR #42 to merge (checked 1 min ago)",
+  "waits for your OK: deploy to prod". A `human` wait sends the user one
+  push notification when it becomes the only thing left.
+- **CLI.**
+  `comebye handoff … --wait step:research/x --wait pr:owner/repo#42 --wait ci:main --wait human:"OK to deploy" --wait timer:2h`;
+  `comebye approve ID --note …`; `comebye waits ID`.
+- **What the workflow types get from it:**
+  - review = `pr_merged` reversed: `--wait pr-ready:#42` is a possible
+    later kind;
+  - watch = `ci_green` or `pr_merged` on a standing entry;
+  - deploy = `human` + `ci_green`;
+  - test-and-fix = `step_failed`;
+  - landing approval = `human` on the landing phase.
+
+### A backlog
+
+```go
+type Item struct {
+    ID, Title, Brief string
+    Host, Repo, Branch string // optional until it is started
+    Workflow string           // feature | test | research | review | watch | deploy
+    Priority int              // 0..4, as in beads
+    Waits    []Wait
+    Ref      string           // external issue or bead id
+    Origin   string           // user | coordinator | follow-up of entry <id> (beads' discovered-from)
+    Status   string           // proposed | approved | started | dropped
+    EntryID  string           // the handoff it became
+    Events   []Event          // who changed what, when
+}
+```
+
+- **Persisted** on the hub as `backlog.json`, beside the ledger, with no
+  cap on open items. Dropped and started items are kept for history. This
+  is what survives sessions, coordinators and restarts.
+- **Feeds:**
+  - the user, from the app or by asking the coordinator;
+  - the coordinator, from the briefing's "Next:" lines;
+  - the **Follow-ups section of every report**, which the hub parses into
+    `proposed` items linked to the entry. These items are data and are
+    never started on their own.
+- **Ready** = `approved` items whose waits are all met, sorted by
+  priority. `comebye backlog [--ready]` lists them, and the briefing's
+  "Next:" comes from them.
+- **Starting** is always a user decision. The user taps **Start**, or the
+  coordinator relays the user's OK with `comebye backlog start ID`, which
+  fills in host, repo and branch and makes an ordinary handoff. `approved`
+  can be set in bulk, so "do these three when CI is green" runs without
+  the coordinator being awake.
+- **Plans** can be created from items: `comebye plan create --from
+  ITEM…` turns approved items with `step` waits between them into a plan.
+
+### Where the backlog lives (decision for the user)
+
+1. **Native, on the hub (recommended).** It fits the phone app (one view,
+   all hosts and repos), uses the same waits, adds no dependency, and keeps
+   human approval enforced by the hub. It can't be read without Comebye,
+   and it isn't versioned with the repository.
+2. **beads, per repository, read by Comebye.** The hub would run
+   `bd ready --json` / `bd show` on the owning host and show the items;
+   **Start** would make a handoff with `--ref <bead>`; the worker would run
+   `bd close` in its report step, and `.beads/hooks/on_close` could call
+   `comebye` to wake the coordinator. The backlog lives with the code and
+   any agent can use it outside Comebye. The costs: beads must be installed
+   and migrated in step on every host, each repo has a separate backlog,
+   there is no cross-repo view without per-repo calls, and the waits are
+   split between beads gates and Comebye waits.
+3. **Native now, with an import/export bridge later**
+   (`comebye backlog import --beads REPO`). This keeps option 2 open
+   without paying for it now.
+
+### Order to build
+
+1. `Waits` in the ledger, with `step`, `step_failed`, `human` and `timer`
+   (no external calls), the `After` migration, `comebye approve`, and the
+   app's "waits for" line and Approve button.
+2. `pr_merged` and `ci_green` through `/api/waitcheck` on the owning host.
+3. `comebye report --outcome`, so `step` and `step_failed` read the
+   outcome rather than guess.
+4. The backlog store and CLI (`backlog add/list/approve/start/drop`), and
+   "Next:" in the briefing from ready items.
+5. Report follow-ups → `proposed` items; the backlog view in the app.
+
 ## What was verified
 
 - **Read in source (Comebye):** `internal/playbook/playbook.md`,
