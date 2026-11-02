@@ -72,6 +72,8 @@ func init() {
 		{"brief", "set FILE|- | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
 		{"presets", "claude|pi|generic", "print how to let a harness run comebye without prompts", cmdPresets},
+		{"archive", "keygen --out DIR | run | verify | status | index [--ledger FILE|auto|none] | restore SESSION --to DIR | delete SESSION [--yes] | summary SESSION TEXT|-  [--dir D --recipient K --identity F] [--json]", "keep every agent session forever: byte-exact, encrypted, append-only copies of Claude and pi session files, and an index to search them", cmdArchive},
+		{"recall", "list|search WORDS|show SESSION [--text N]|commit SHA  [--since D --until D --project P --branch B --kind K --ledger ID --limit N] [--json]", "find old sessions by time, project, handoff or text, and go from a commit to the conversation behind it (reads the archive's index)", cmdRecall},
 		{"whoami", "[--json]", "who this agent is to Comebye: id, host, hub", cmdWhoami},
 		{"help", "[COMMAND]", "this help", nil},
 	}

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jhjaggars/comebye/internal/archive"
 	"log"
 	"net"
 	"net/http"
@@ -32,6 +33,11 @@ import (
 
 // Config configures the HTTP server.
 type Config struct {
+	// Archive, when set, receives a final copy of an agent's transcript
+	// (and its subagents') just before the agent is removed; ArchiveSources
+	// are the session directories it covers. Off when nil.
+	Archive        *archive.Archiver
+	ArchiveSources []archive.Source
 	// Addr to listen on. Intended to be loopback only; exposure to phones
 	// happens through Tailscale Serve, which provides TLS.
 	Addr string

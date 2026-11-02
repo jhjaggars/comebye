@@ -506,15 +506,18 @@ type removeBody struct {
 // removeResult says what a removal did.
 type removeResult struct {
 	// Closed is "workspace", "pane", or "" when nothing was open.
-	Closed          string          `json:"closed"`
-	PaneID          string          `json:"pane_id,omitempty"`
-	WorkspaceID     string          `json:"workspace_id,omitempty"`
-	Worktree        string          `json:"worktree,omitempty"`
-	WorktreeRemoved bool            `json:"worktree_removed"`
-	Discarded       bool            `json:"discarded,omitempty"`      // removed with its unmerged or uncommitted work
-	BranchDeleted   string          `json:"branch_deleted,omitempty"` // the branch a discard deleted
-	Kept            string          `json:"kept,omitempty"`           // why the worktree stayed
-	Checks          *worktreeChecks `json:"checks,omitempty"`
+	Closed          string `json:"closed"`
+	PaneID          string `json:"pane_id,omitempty"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
+	Worktree        string `json:"worktree,omitempty"`
+	WorktreeRemoved bool   `json:"worktree_removed"`
+	Discarded       bool   `json:"discarded,omitempty"`      // removed with its unmerged or uncommitted work
+	BranchDeleted   string `json:"branch_deleted,omitempty"` // the branch a discard deleted
+	Kept            string `json:"kept,omitempty"`           // why the worktree stayed
+	// Archived says what the final transcript flush did, when an archive
+	// is configured (see archive.go); a failure here never stops the removal.
+	Archived string          `json:"archived,omitempty"`
+	Checks   *worktreeChecks `json:"checks,omitempty"`
 }
 
 // handleRemove closes a session and, if asked and safe, removes its
@@ -609,6 +612,10 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 			return nil, lerr
 		}
 	}
+
+	// The agent's transcript is copied to the archive before its pane goes:
+	// once the pane is closed the session file can no longer be found from it.
+	res.Archived = s.archiveFlush(agent, live)
 
 	// Close: the whole workspace only when no other agent lives in it, it
 	// holds no other pane (a plain shell in another tab or a split is not

@@ -9,6 +9,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/jhjaggars/comebye/internal/archive"
 	"log"
 	"os"
 	"os/signal"
@@ -67,6 +68,8 @@ func main() {
 		allowHosts   = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
 		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs    = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
+		archiveDir   = flag.String("archive-dir", getenv("COMEBYE_ARCHIVE_DIR"), "keep a final copy of an agent's transcript here when it is removed (see `comebye archive`); empty disables")
+		archiveRcpt  = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's public key, or a file holding it")
 		showVersion  = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
@@ -204,9 +207,20 @@ func main() {
 		}
 	}()
 
+	var arch *archive.Archiver
+	acfg := archive.Config{Dir: *archiveDir, Recipient: *archiveRcpt, Host: *hostName, ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR")}
+	if *archiveDir != "" {
+		var err error
+		if arch, err = acfg.Open(); err != nil {
+			log.Fatalf("archive: %v", err)
+		}
+		log.Printf("archive: final transcript copies go to %s", *archiveDir)
+	}
 	srv := server.New(server.Config{
-		Addr:        *addr,
-		AllowLogins: logins,
+		Archive:        arch,
+		ArchiveSources: acfg.Sources(),
+		Addr:           *addr,
+		AllowLogins:    logins,
 		// Checked again by ListenAndServe, so a library caller cannot
 		// end up open by accident either.
 		InsecureNoAuth: *noAuth,
