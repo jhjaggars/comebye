@@ -538,7 +538,7 @@ const ledger = {
   timer: null,
   inflight: false,
 };
-const ACTIVE_ENTRY = new Set(["running", "finished", "ready_to_remove"]);
+const ACTIVE_ENTRY = new Set(["running", "finished", "landing", "landed", "ready_to_remove"]);
 // ~/.worktrees/<repo>/<branch>: a worker's checkout by convention.
 const WT_PATH_RE = /\/\.worktrees\/([^/]+)\/([^/]+)/;
 
@@ -576,7 +576,7 @@ async function loadLedger() {
     if (Date.now() - briefing.loadedAt > 20000) loadBrief();
     // The server checks finished workers' worktrees in the background
     // (for the "merged" hint): look again shortly until they are in.
-    const waiting = ledger.entries.some((e) => e.status === "finished" && e.worktree && !e.checks);
+    const waiting = ledger.entries.some((e) => (e.status === "finished" || e.status === "landed") && e.worktree && !e.checks);
     ledger.checkPolls = waiting ? (ledger.checkPolls || 0) + 1 : 0;
     if (waiting && ledger.checkPolls <= 10 && !document.hidden) {
       clearTimeout(ledger.timer);
@@ -606,6 +606,18 @@ function ledgerChip(a) {
   if (ledger.marked.has(id)) return '<span class="lg-chip rtr">ready to remove</span>';
   const e = ledger.byAgent.get(id);
   if (!e) return "";
+  const lc = e.land_check;
+  if (e.status === "landing") {
+    const why = e.approval ? `Landing, approved by ${e.approval.by || "?"}: ${e.approval.note || ""}` : "Landing";
+    return `<span class="lg-chip landing" title="${esc(why)}">landing</span>`;
+  }
+  if (e.status === "landed") {
+    const as = lc && lc.landed && lc.landed.length ? ` as ${lc.landed.map((s) => s.slice(0, 7)).join(", ")}` : "";
+    return `<span class="lg-chip candidate" title="${esc(`Landed on ${(lc && lc.base) || "its base"}${as}`)}">landed</span>`;
+  }
+  if (e.status === "finished" && lc && !lc.ok && e.approval && Date.parse(lc.at) >= Date.parse(e.finished_at || 0)) {
+    return `<span class="lg-chip failed" title="${esc("The landing check failed: " + (lc.verdict || ""))}">land failed</span>`;
+  }
   if (e.status === "finished") {
     return e.candidate
       ? '<span class="lg-chip candidate" title="Finished; its worktree is clean and merged">finished · merged</span>'
