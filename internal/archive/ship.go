@@ -387,6 +387,14 @@ type RewrapStats struct {
 	Skipped                     int // already in the destination
 }
 
+// Dir returns the backend directory when the backend is a filesystem one.
+func (a *Archiver) Dir() string {
+	if fb, ok := a.B.(*FSBackend); ok {
+		return fb.Dir
+	}
+	return ""
+}
+
 // Rewrap copies this host's archive into dst, decrypting each segment with
 // o and encrypting it to the recipients of newSealer. The source is not
 // changed. It is how the archive moves to a different key set (a rotated

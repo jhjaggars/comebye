@@ -29,15 +29,34 @@ import (
 // private key. Passphrase-protected SSH keys and plugin identities
 // (age-plugin-yubikey, ...) are not wired in yet.
 
+// Encryption modes. The mode is chosen explicitly in the configuration and
+// recorded in the archive (see EnsureMode); an archive is never silently a
+// mixture.
+const (
+	ModeAge  = "age"  // every segment is an age file
+	ModeNone = "none" // segments are zstd only: the archive must live only where something else encrypts it
+)
+
 // Sealer encrypts a segment's bytes.
 type Sealer interface {
 	Seal(plain []byte) ([]byte, error)
+	// Mode is ModeAge or ModeNone; it picks the segment magic.
+	Mode() string
 }
 
 // Opener decrypts them.
 type Opener interface {
 	Open(sealed []byte) ([]byte, error)
+	Mode() string
 }
+
+// NoneSealer is the no-encryption mode: segments hold the same header and
+// zstd bytes, without the age layer.
+type NoneSealer struct{}
+
+func (NoneSealer) Seal(plain []byte) ([]byte, error) { return plain, nil }
+func (NoneSealer) Open(b []byte) ([]byte, error)     { return b, nil }
+func (NoneSealer) Mode() string                      { return ModeNone }
 
 // GenerateIdentity returns a new native age identity (secret) and its
 // recipient (public).
@@ -105,6 +124,8 @@ func NewSealer(spec string) (Sealer, error) {
 	return &ageSealer{r}, nil
 }
 
+func (s *ageSealer) Mode() string { return ModeAge }
+
 func (s *ageSealer) Seal(plain []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, s.rcpts...)
@@ -149,6 +170,8 @@ func NewOpener(identityText string) (Opener, error) {
 	}
 	return &ageOpener{ids}, nil
 }
+
+func (o *ageOpener) Mode() string { return ModeAge }
 
 func (o *ageOpener) Open(sealed []byte) ([]byte, error) {
 	r, err := age.Decrypt(bytes.NewReader(sealed), o.ids...)

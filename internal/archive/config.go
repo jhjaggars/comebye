@@ -2,6 +2,7 @@ package archive
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,13 +13,17 @@ import (
 // on removal) from its own flags. Only Dir and Recipient are needed to
 // write; Identity is needed to read back (verify, index, restore).
 type Config struct {
-	Host      string
-	Dir       string // the filesystem backend; Garage/S3 would add another field
-	Recipient string // age1... and/or ssh-... public keys (comma or newline separated), or a file of them
-	Identity  string // AGE-SECRET-KEY-1... (or an unencrypted OpenSSH key), or a file holding it
-	ClaudeDir string // default $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects
-	PiDir     string // default ~/.pi/agent/sessions
-	Index     string // default ~/.local/state/comebye/recall/index.db
+	// Encryption is ModeAge or ModeNone. There is no default: it is chosen
+	// explicitly, and an existing archive must match the mode it was
+	// created in.
+	Encryption string
+	Host       string
+	Dir        string // the filesystem backend; Garage/S3 would add another field
+	Recipient  string // age1... and/or ssh-... public keys (comma or newline separated), or a file of them
+	Identity   string // AGE-SECRET-KEY-1... (or an unencrypted OpenSSH key), or a file holding it
+	ClaudeDir  string // default $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects
+	PiDir      string // default ~/.pi/agent/sessions
+	Index      string // default ~/.local/state/comebye/recall/index.db
 }
 
 // ErrNotConfigured means no archive directory was given.
@@ -74,28 +79,46 @@ func (c Config) IndexPath() string {
 	return expand("~/.local/state/comebye/recall/index.db")
 }
 
-// Open builds the archiver. It needs Dir and recipients (or an identity,
-// from which the native recipients are derived).
+// Open builds the archiver. Encryption must be set. In ModeAge it needs
+// recipients (or an identity, from which the native recipients are derived);
+// in ModeNone it refuses recipients so a typo cannot leave an archive
+// believed to be encrypted in plaintext.
 func (c Config) Open() (*Archiver, error) {
 	if c.Dir == "" {
 		return nil, ErrNotConfigured
 	}
-	spec := strings.TrimSpace(c.Recipient)
-	if spec == "" {
-		it, err := identityText(c.Identity)
-		if err != nil || it == "" {
-			return nil, errors.New("archive: no recipients (COMEBYE_ARCHIVE_RECIPIENT or --recipient: age1... keys, ssh public keys, or a file of them)")
+	var s Sealer
+	switch c.Encryption {
+	case ModeNone:
+		if strings.TrimSpace(c.Recipient) != "" {
+			return nil, errors.New("archive: encryption is \"none\" but recipients are set; remove them, or set encryption to \"age\"")
 		}
-		if spec, err = RecipientsOf(it); err != nil {
+		s = NoneSealer{}
+	case ModeAge:
+		spec := strings.TrimSpace(c.Recipient)
+		if spec == "" {
+			it, err := identityText(c.Identity)
+			if err != nil || it == "" {
+				return nil, errors.New("archive: no recipients (COMEBYE_ARCHIVE_RECIPIENT or --recipient: age1... keys, ssh public keys, or a file of them)")
+			}
+			if spec, err = RecipientsOf(it); err != nil {
+				return nil, err
+			}
+		}
+		var err error
+		if s, err = NewSealer(spec); err != nil {
 			return nil, err
 		}
-	}
-	s, err := NewSealer(spec)
-	if err != nil {
-		return nil, err
+	case "":
+		return nil, errors.New("archive: choose the encryption explicitly: --encryption age (recipients required) or --encryption none (plaintext; only where something else encrypts the copy). COMEBYE_ARCHIVE_ENCRYPTION")
+	default:
+		return nil, fmt.Errorf("archive: unknown encryption %q (want age or none)", c.Encryption)
 	}
 	b, err := NewFSBackend(expand(c.Dir))
 	if err != nil {
+		return nil, err
+	}
+	if err := EnsureMode(b, s.Mode()); err != nil {
 		return nil, err
 	}
 	host := c.Host
@@ -106,8 +129,16 @@ func (c Config) Open() (*Archiver, error) {
 	return &Archiver{Host: host, B: b, S: s}, nil
 }
 
-// OpenIdentity returns the decrypting side.
+// OpenIdentity returns the reading side for the configured mode: an age
+// identity in ModeAge, nothing in ModeNone.
 func (c Config) OpenIdentity() (Opener, error) {
+	switch c.Encryption {
+	case ModeNone:
+		return NoneSealer{}, nil
+	case ModeAge:
+	default:
+		return nil, errors.New("archive: choose the encryption explicitly (--encryption age|none)")
+	}
 	it, err := identityText(c.Identity)
 	if err != nil {
 		return nil, err
@@ -116,6 +147,71 @@ func (c Config) OpenIdentity() (Opener, error) {
 		return nil, errors.New("archive: no identity (COMEBYE_ARCHIVE_IDENTITY); it is needed to read the archive back")
 	}
 	return NewOpener(it)
+}
+
+const modeKey = "ARCHIVE-MODE"
+
+// EnsureMode records the archive's encryption mode in the backend, or
+// checks it against the recorded one. An archive made before the marker
+// existed is read from its first segment. A mismatch is an error: a
+// plaintext archive must not quietly start receiving encrypted segments
+// (or the reverse); `archive rewrap` converts.
+func EnsureMode(b Backend, mode string) error {
+	cur, err := ReadMode(b)
+	if err != nil {
+		return err
+	}
+	if cur == "" {
+		return b.Put(modeKey, []byte(mode+"\n"))
+	}
+	if cur != mode {
+		return fmt.Errorf("archive: this archive is %q but encryption %q was asked for; mixing modes is refused (convert with `comebye archive rewrap --to-dir NEW --to-encryption %s`)", cur, mode, mode)
+	}
+	return nil
+}
+
+// ReadMode returns the recorded mode, inferring it from the first segment
+// of an archive with no marker; "" for an empty archive.
+func ReadMode(b Backend) (string, error) {
+	if raw, err := b.Get(modeKey); err == nil {
+		m := strings.TrimSpace(string(raw))
+		if m != ModeAge && m != ModeNone {
+			return "", fmt.Errorf("archive: unreadable mode marker %q", m)
+		}
+		return m, nil
+	}
+	keys, err := b.List("v1/")
+	if err != nil || len(keys) == 0 {
+		return "", err
+	}
+	body, err := b.Get(keys[0])
+	if err != nil || len(body) < 4 {
+		return "", fmt.Errorf("archive: cannot tell the mode of an archive with no marker")
+	}
+	if string(body[:4]) == magicNone {
+		return ModeNone, nil
+	}
+	return ModeAge, nil
+}
+
+// CheckPerms returns a warning for each existing path that group or others
+// can access. The archive directory, and the directory of the (plaintext)
+// index, should be private to the user.
+func CheckPerms(paths ...string) []string {
+	var out []string
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if m := fi.Mode().Perm(); m&0o077 != 0 {
+			out = append(out, fmt.Sprintf("%s is mode %04o: group or others can access it (chmod 700)", p, m))
+		}
+	}
+	return out
 }
 
 // SessionRef names an archived session and its streams.

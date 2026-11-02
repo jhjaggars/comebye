@@ -590,3 +590,170 @@ func TestSSHRecipient(t *testing.T) {
 		t.Fatal("bad recipient accepted")
 	}
 }
+
+func newPlainRig(t *testing.T) *rig {
+	t.Helper()
+	r := newRig(t)
+	r.a.S = NoneSealer{}
+	r.op = NoneSealer{}
+	return r
+}
+
+func TestPlaintextModeRoundTrip(t *testing.T) {
+	r := newPlainRig(t)
+	mainA, _, _ := r.fixture()
+	res, err := r.a.Run(r.sources())
+	if err != nil || len(res.Errors) > 0 || res.Segments != 4 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	keys, _ := r.a.B.List("v1/laharl/claude/-proj/" + sidA + ".jsonl/")
+	body, _ := r.a.B.Get(keys[0])
+	if string(body[:4]) != "CBP2" || bytes.Contains(body, []byte("age-encryption.org")) {
+		t.Fatalf("not a plaintext segment: %q", body[:12])
+	}
+	want, _ := os.ReadFile(mainA)
+	if got := restoreString(t, r, "claude", "-proj/"+sidA+".jsonl"); got != string(want) {
+		t.Fatal("restored bytes differ")
+	}
+	vr, _ := r.a.Verify(r.op, r.sources())
+	if vr.Matched != 4 || vr.Mismatched != 0 {
+		t.Fatalf("%+v", vr)
+	}
+	// Append-only and rerun-safe, as in age mode.
+	r.a.Run(r.sources())
+	before, _ := r.a.B.List("v1/")
+	r.write(mainA, claudeLine("user", "user", "more", "2026-10-03T11:00:00Z"), true)
+	r.old(mainA)
+	res, _ = r.a.Run(r.sources())
+	after, _ := r.a.B.List("v1/")
+	if res.Segments != 1 || len(after) != len(before)+1 {
+		t.Fatalf("%+v %d %d", res, len(before), len(after))
+	}
+	// A tampered plaintext segment is still caught (the header must match its key).
+	n, _ := parseSegKey(keys[0])
+	n.Off = 5
+	if _, err := decodeSegment(r.op, n, body); err == nil {
+		t.Fatal("moved plaintext segment accepted")
+	}
+}
+
+func TestModesAreNeverMixed(t *testing.T) {
+	d := t.TempDir()
+	_, rcpt, _ := GenerateIdentity()
+	open := func(mode, rc string) (*Archiver, error) {
+		return Config{Encryption: mode, Dir: filepath.Join(d, "store"), Recipient: rc, Host: "h"}.Open()
+	}
+	if _, err := open("", rcpt); err == nil || !strings.Contains(err.Error(), "explicitly") {
+		t.Fatalf("a missing mode must be an error: %v", err)
+	}
+	if _, err := open("rot13", ""); err == nil {
+		t.Fatal("unknown mode accepted")
+	}
+	if _, err := open(ModeNone, rcpt); err == nil || !strings.Contains(err.Error(), "recipients are set") {
+		t.Fatalf("none with recipients must be refused: %v", err)
+	}
+	if _, err := open(ModeAge, ""); err == nil {
+		t.Fatal("age with no recipients accepted")
+	}
+	a, err := open(ModeNone, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := ReadMode(a.B); m != ModeNone {
+		t.Fatalf("marker %q", m)
+	}
+	if _, err := open(ModeAge, rcpt); err == nil || !strings.Contains(err.Error(), "mixing modes") {
+		t.Fatalf("age onto a plaintext archive must be refused: %v", err)
+	}
+	if _, err := open(ModeNone, ""); err != nil {
+		t.Fatalf("reopening in the same mode failed: %v", err)
+	}
+	// A plain segment is refused by an age reader, and the reverse.
+	r := newPlainRig(t)
+	r.fixture()
+	r.a.Run(r.sources())
+	keys, _ := r.a.B.List("v1/laharl/pi/")
+	body, _ := r.a.B.Get(keys[0])
+	n, _ := parseSegKey(keys[0])
+	ageOp, _ := NewOpener(r.identity)
+	if _, err := decodeSegment(ageOp, n, body); err == nil || !strings.Contains(err.Error(), "mixed modes are refused") {
+		t.Fatalf("%v", err)
+	}
+	// An archive with no marker (made before it existed) is read from its first segment.
+	r2 := newRig(t)
+	r2.fixture()
+	r2.a.Run(r2.sources())
+	if m, _ := ReadMode(r2.a.B); m != ModeAge {
+		t.Fatalf("inferred %q", m)
+	}
+	if err := EnsureMode(r2.a.B, ModeNone); err == nil {
+		t.Fatal("plaintext accepted onto an age archive without a marker")
+	}
+}
+
+func TestPermissionWarnings(t *testing.T) {
+	d := t.TempDir()
+	loose := filepath.Join(d, "loose")
+	os.Mkdir(loose, 0o755)
+	os.Chmod(loose, 0o755)
+	if w := CheckPerms(loose, filepath.Join(d, "missing"), ""); len(w) != 1 || !strings.Contains(w[0], "0755") {
+		t.Fatalf("%v", w)
+	}
+	os.Chmod(loose, 0o700)
+	if w := CheckPerms(loose); len(w) != 0 {
+		t.Fatalf("%v", w)
+	}
+	// A new archive directory is private, and so is the index's.
+	b, _ := NewFSBackend(filepath.Join(d, "new", "store"))
+	if w := CheckPerms(b.Dir); len(w) != 0 {
+		t.Fatalf("new archive dir not private: %v", w)
+	}
+	ix := &Index{Path: filepath.Join(d, "idx", "i.db")}
+	if err := ix.open(); err != nil {
+		t.Skip("no sqlite3")
+	}
+	if w := CheckPerms(filepath.Dir(ix.Path), ix.Path); len(w) != 0 {
+		t.Fatalf("index not private: %v", w)
+	}
+}
+
+func TestRewrapPlainToAgeAndBack(t *testing.T) {
+	r := newPlainRig(t)
+	r.fixture()
+	r.a.Run(r.sources())
+	r.a.SetSummary("claude", sidA, "a plain note", "t")
+	ident, rcpt, _ := GenerateIdentity()
+	opAge, _ := NewOpener(ident)
+	sealAge, _ := NewSealer(rcpt)
+
+	dst, _ := NewFSBackend(filepath.Join(r.dir, "age-store"))
+	st, err := r.a.Rewrap(r.op, dst, sealAge)
+	if err != nil || st.Segments != 4 || st.Notes != 1 {
+		t.Fatalf("%+v %v", st, err)
+	}
+	aged := &Archiver{Host: "laharl", B: dst, S: sealAge}
+	vr, _ := aged.Verify(opAge, r.sources())
+	if vr.Matched != 4 || vr.Mismatched != 0 {
+		t.Fatalf("age copy does not verify: %+v", vr)
+	}
+	keys, _ := dst.List("v1/laharl/claude/-proj/" + sidA + ".jsonl/")
+	body, _ := dst.Get(keys[0])
+	if string(body[:4]) != "CBA2" {
+		t.Fatal("rewrapped segment is not age")
+	}
+	// The plain reader cannot read the age copy, with a clear refusal.
+	if _, err := StreamTo(&bytes.Buffer{}, dst, NoneSealer{}, "laharl", "claude", "-proj/"+sidA+".jsonl"); err == nil || !strings.Contains(err.Error(), "mixed modes") {
+		t.Fatalf("%v", err)
+	}
+
+	// And back to plaintext.
+	back, _ := NewFSBackend(filepath.Join(r.dir, "plain-store"))
+	st, err = aged.Rewrap(opAge, back, NoneSealer{})
+	if err != nil || st.Segments != 4 || st.Notes != 1 {
+		t.Fatalf("%+v %v", st, err)
+	}
+	plain := &Archiver{Host: "laharl", B: back, S: NoneSealer{}}
+	if vr, _ = plain.Verify(NoneSealer{}, r.sources()); vr.Matched != 4 || vr.Mismatched != 0 {
+		t.Fatalf("plaintext copy does not verify: %+v", vr)
+	}
+}

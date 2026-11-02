@@ -22,13 +22,14 @@ is gone, so the server flushes a session to the archive just before removal.
 
 | Flag / environment | Meaning |
 |---|---|
+| `--encryption`, `COMEBYE_ARCHIVE_ENCRYPTION` | **Required, no default:** `age` (every segment is age-encrypted; recipients required) or `none` (plaintext zstd; see [Where the archive may live](#where-the-archive-may-live)). Recorded in the archive on first use; a different mode later is refused. |
 | `--dir`, `COMEBYE_ARCHIVE_DIR` | Archive directory (the filesystem backend; the `Backend` interface in `internal/archive` is where an object store would plug in). |
-| `--recipient`, `COMEBYE_ARCHIVE_RECIPIENT` | Who can read: `age1...` keys and/or `ssh-ed25519`/`ssh-rsa` public keys, comma or newline separated, or a file of them. |
-| `--identity`, `COMEBYE_ARCHIVE_IDENTITY` | An age identity file (or an unencrypted OpenSSH key). Needed only to read: `verify`, `index`, `restore`, `rewrap`. |
+| `--recipient`, `COMEBYE_ARCHIVE_RECIPIENT` | With `age`: who can read: `age1...` keys and/or `ssh-ed25519`/`ssh-rsa` public keys, comma or newline separated, or a file of them. |
+| `--identity`, `COMEBYE_ARCHIVE_IDENTITY` | With `age`: an age identity file (or an unencrypted OpenSSH key). Needed only to read: `verify`, `index`, `restore`, `rewrap`. |
 | `--claude-dir`, `--pi-dir` | Session directories (default `~/.claude/projects`, `~/.pi/agent/sessions`). |
 | `--index`, `COMEBYE_RECALL_INDEX` | The index file (default `~/.local/state/comebye/recall/index.db`). It holds plaintext, so it is created mode 0600. |
 | `--host`, `COMEBYE_HOST_NAME` | This host's name inside archive keys. |
-| server `-archive-dir`, `-archive-recipient` | Turns on the flush when a worker is removed. Off unless set. |
+| server `-archive-dir`, `-archive-encryption`, `-archive-recipient` | Turns on the flush when a worker is removed. Off unless `-archive-dir` is set. |
 
 Indexing needs the `sqlite3` command-line tool with FTS5 on the host.
 
@@ -43,7 +44,8 @@ comebye archive index [--git=false] [--gh] [--ledger FILE|auto|none]
 comebye archive restore SESSION --to DIR
 comebye archive delete SESSION [--yes]       # dry run without --yes
 comebye archive summary SESSION TEXT|-       # a short summary, kept in the archive
-comebye archive rewrap --to-dir DIR --to-recipient KEYS
+comebye archive rewrap --to-dir DIR --to-encryption age --to-recipient KEYS   # plaintext or age, to age
+comebye archive rewrap --to-dir DIR --to-encryption none                      # age to plaintext (needs the identity)
 
 comebye recall ask "a vague description of the work"   # the short answer
 comebye recall threads | todo | list | search WORDS | commit SHA
@@ -63,11 +65,54 @@ damage what is stored. A run reads the store to see where to continue. A file
 that shrinks is reported and left alone. A last line still being written
 waits two minutes of quiet (the flush on removal ships it at once).
 
-A segment is `CBA2`, a codec byte (2 = zstd), then an age file. Inside the
+A segment is `CBA2`, a codec byte (2 = zstd), then an age file. In the
+`none` mode the magic is `CBP2` and the rest is the same header and zstd
+bytes without the age layer. Inside the
 age file is a header line `cba2|host|kind|stream|offset|length` followed by
 the zstd bytes; a segment at the wrong key is refused. To read one without
 Comebye: drop the first 5 bytes, `age -d -i identity.key`, drop the first
 line, `zstd -d`.
+
+## Where the archive may live
+
+Two modes, chosen explicitly and never mixed (an archive records its mode;
+a reader or writer in the other mode is refused, and `archive rewrap`
+converts either way):
+
+- **`age`:** safe wherever a copy ends up. Needs the key handling below.
+- **`none`:** plaintext zstd, with the same append-only segments and sha256
+  `verify`. Transcripts contain tokens and keys, so this mode is only for an
+  archive whose every copy sits somewhere that is encrypted by something
+  else. The archive directory and the index directory are created mode 0700
+  (the index file 0600), and `archive verify` warns if the archive or index
+  is group- or world-accessible.
+
+**Intended setup with plaintext** (the user's offsite backups are encrypted
+by the NAS's cloud sync, so the archive itself need not be):
+
+1. The archive lives on the workstation (later also on the hub), in a
+   private directory, with `--encryption none`.
+2. A second copy goes to a dataset on the NAS that is included in an
+   **encrypted** cloud sync task. The offsite copy is therefore encrypted
+   by the NAS. What the user sets up there: a dataset for the archive, a
+   share on it limited to the hosts that need it with owner-only access,
+   and a cloud sync task covering that dataset with encryption on.
+3. Copy only new objects, never with delete: segments are written once and
+   never change, so `rsync -a --ignore-existing SRC/ DEST/` (or `rclone copy
+   --immutable`) is safe and cheap. Do not use `--delete`: a lost or empty
+   source would erase the copy.
+4. **Delete on request** must be done in each place: run `archive delete
+   SESSION --yes` against the archive directory and again against the copy
+   (`--dir` pointing at the mounted dataset). The tombstone is copied by the
+   same rsync, but the already-copied segments stay until deleted there.
+5. The copy on the NAS's local network is plaintext, so the share and
+   dataset permissions are what protect it.
+
+**The rule: nothing unencrypted goes anywhere that the encrypted cloud sync
+does not cover.** No plaintext copy in an object-store bucket, a sync folder,
+a cloud drive or another host's disk. If a copy has to go somewhere else,
+convert it with `archive rewrap --to-encryption age` first, or switch the
+archive to `age`.
 
 ## Recall
 
@@ -91,7 +136,7 @@ agent that wants more reads the top threads with `recall show`.
 `recall todo` lists threads with no summary, for an agent to summarise with
 `archive summary`.
 
-## Keys
+## Keys (the `age` mode)
 
 - The archive has its own age identity. It does not depend on sops or GPG.
 - Archiving hosts need only the **public** recipients. The identity is for
@@ -119,8 +164,8 @@ agent that wants more reads the top threads with `recall show`.
 ## Limits
 
 - Transcripts contain secrets. The archive is byte-exact on purpose;
-  protect it with the keys above and with where its copies live. The index
-  is plaintext.
+  protect it with the keys above (age mode) or with where its copies live
+  (plaintext mode). The index is plaintext in both modes.
 - Hosts archive and index themselves. Threads span hosts only once each
   host's sessions are in one backend that the index reads.
 - The git check needs the repository on the same host. `gh` results are

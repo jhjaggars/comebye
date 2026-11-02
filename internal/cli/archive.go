@@ -26,6 +26,7 @@ func archiveFlags(e *Env, fs *flag.FlagSet) *archive.Config {
 		}
 		return e.Getenv(k)
 	}
+	fs.StringVar(&c.Encryption, "encryption", env("COMEBYE_ARCHIVE_ENCRYPTION"), "age (encrypt every segment; recipients required) or none (plaintext zstd, only where something else encrypts the copy); no default (COMEBYE_ARCHIVE_ENCRYPTION)")
 	fs.StringVar(&c.Dir, "dir", env("COMEBYE_ARCHIVE_DIR"), "archive directory (COMEBYE_ARCHIVE_DIR)")
 	fs.StringVar(&c.Recipient, "recipient", env("COMEBYE_ARCHIVE_RECIPIENT"), "recipients: age1... and/or ssh-... keys (comma separated), or a file of them (COMEBYE_ARCHIVE_RECIPIENT)")
 	fs.StringVar(&c.Identity, "identity", env("COMEBYE_ARCHIVE_IDENTITY"), "age identity file, needed to read the archive back (COMEBYE_ARCHIVE_IDENTITY)")
@@ -77,7 +78,7 @@ func cmdArchive(e *Env, args []string) error {
 	default:
 		return usageErr("unknown archive subcommand %q", sub)
 	}
-	var ledger, to, by, toDir, toRcpt *string
+	var ledger, to, by, toDir, toRcpt, toEnc *string
 	var yes, useGit, useGH *bool
 	switch sub {
 	case "index":
@@ -92,7 +93,8 @@ func cmdArchive(e *Env, args []string) error {
 		by = fs.String("by", "", "who wrote the summary")
 	case "rewrap":
 		toDir = fs.String("to-dir", "", "a new, empty archive directory to write the re-encrypted copy to (required)")
-		toRcpt = fs.String("to-recipient", "", "the new recipients: age1... and/or ssh-... keys, or a file of them (required)")
+		toRcpt = fs.String("to-recipient", "", "the new recipients: age1... and/or ssh-... keys, or a file of them (with --to-encryption age)")
+		toEnc = fs.String("to-encryption", "age", "the new archive's mode: age or none (plaintext)")
 	}
 	pos, err := parse(fs, rest)
 	if err != nil {
@@ -137,8 +139,15 @@ func cmdArchive(e *Env, args []string) error {
 		if err != nil {
 			return err
 		}
+		warns := archive.CheckPerms(a.Dir(), filepath.Dir(cfg.IndexPath()), cfg.IndexPath())
 		if *asJSON {
-			return jsonOut(e, map[string]any{"result": vr, "seconds": time.Since(t0).Seconds()})
+			return jsonOut(e, map[string]any{"result": vr, "seconds": time.Since(t0).Seconds(), "mode": a.S.Mode(), "warnings": warns})
+		}
+		for _, w := range warns {
+			fmt.Fprintln(e.Stderr, "warning:", w)
+		}
+		if a.S.Mode() == archive.ModeNone {
+			fmt.Fprintln(e.Stderr, "note: this archive is plaintext; keep it, and every copy of it, only where the copy is encrypted by something else")
 		}
 		fmt.Fprintf(e.Stdout, "%d files: %d match their archive by sha256 (%s compared; %d have newer bytes not yet archived), %d not archived, %d differ (%.1fs)\n",
 			vr.Files, vr.Matched, human(vr.Bytes), vr.Behind, vr.Missing, vr.Mismatched, time.Since(t0).Seconds())
@@ -226,19 +235,36 @@ func cmdArchive(e *Env, args []string) error {
 		}
 		return nil
 	case "rewrap":
-		if len(pos) > 0 || *toDir == "" || *toRcpt == "" {
-			return usageErr("usage: comebye archive rewrap --to-dir DIR --to-recipient KEYS (needs --identity for the current archive)")
+		if len(pos) > 0 || *toDir == "" {
+			return usageErr("usage: comebye archive rewrap --to-dir DIR [--to-encryption age --to-recipient KEYS | --to-encryption none] (needs --identity when the current archive is age)")
 		}
 		o, err := cfg.OpenIdentity()
 		if err != nil {
 			return err
 		}
-		ns, err := archive.NewSealer(*toRcpt)
-		if err != nil {
-			return err
+		var ns archive.Sealer
+		switch *toEnc {
+		case archive.ModeAge:
+			if *toRcpt == "" {
+				return usageErr("--to-encryption age needs --to-recipient")
+			}
+			if ns, err = archive.NewSealer(*toRcpt); err != nil {
+				return err
+			}
+		case archive.ModeNone:
+			if *toRcpt != "" {
+				return usageErr("--to-recipient makes no sense with --to-encryption none")
+			}
+			ns = archive.NoneSealer{}
+			fmt.Fprintln(e.Stderr, "note: the new archive will be plaintext; keep it, and every copy of it, only where the copy is encrypted by something else")
+		default:
+			return usageErr("--to-encryption must be age or none")
 		}
 		dst, err := archive.NewFSBackend(*toDir)
 		if err != nil {
+			return err
+		}
+		if err := archive.EnsureMode(dst, ns.Mode()); err != nil {
 			return err
 		}
 		t0 := time.Now()
@@ -246,8 +272,8 @@ func cmdArchive(e *Env, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(e.Stdout, "rewrapped into %s: %d segments, %d notes, %d tombstones (%d already there) in %.1fs. The source is unchanged; run `archive verify` against the new directory with the new identity before retiring the old one.\n",
-			*toDir, st.Segments, st.Notes, st.Tombstones, st.Skipped, time.Since(t0).Seconds())
+		fmt.Fprintf(e.Stdout, "rewrapped (%s to %s) into %s: %d segments, %d notes, %d tombstones (%d already there) in %.1fs. The source is unchanged; run `archive verify` against the new directory before retiring the old one.\n",
+			a.S.Mode(), ns.Mode(), *toDir, st.Segments, st.Notes, st.Tombstones, st.Skipped, time.Since(t0).Seconds())
 		return nil
 	case "restore":
 		if len(pos) != 1 || *to == "" {

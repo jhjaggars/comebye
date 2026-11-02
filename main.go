@@ -69,6 +69,7 @@ func main() {
 		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs    = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
 		archiveDir   = flag.String("archive-dir", getenv("COMEBYE_ARCHIVE_DIR"), "keep a final copy of an agent's transcript here when it is removed (see `comebye archive`); empty disables")
+		archiveEnc   = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir")
 		archiveRcpt  = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
 		showVersion  = flag.Bool("version", false, "print the version and exit")
 	)
@@ -208,7 +209,7 @@ func main() {
 	}()
 
 	var arch *archive.Archiver
-	acfg := archive.Config{Dir: *archiveDir, Recipient: *archiveRcpt, Host: *hostName, ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR")}
+	acfg := archive.Config{Encryption: *archiveEnc, Dir: *archiveDir, Recipient: *archiveRcpt, Host: *hostName, ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR")}
 	if *archiveDir != "" {
 		var err error
 		if arch, err = acfg.Open(); err != nil {

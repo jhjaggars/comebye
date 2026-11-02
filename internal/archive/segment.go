@@ -24,7 +24,8 @@ import (
 // where <stream> is the file's path relative to the agent's session root
 // (Claude: ~/.claude/projects, pi: ~/.pi/agent/sessions).
 //
-// Body: "CBA2" | codec (2 = zstd) | an age file. The age plaintext is
+// Body: "CBA2" | codec (2 = zstd) | an age file. In the no-encryption mode
+// the magic is "CBP2" and the rest is the plaintext below, with no age layer. The age plaintext is
 // "cba2|host|kind|stream|offset|length\n" followed by the compressed bytes;
 // the header is authenticated by age, and a segment whose header does not
 // match its key (moved, renamed, or swapped) is refused. To read a segment
@@ -32,9 +33,17 @@ import (
 // the header line, `zstd -d`.
 
 const (
-	magic     = "CBA2"
+	magicAge  = "CBA2" // body is an age file
+	magicNone = "CBP2" // body is the plain header and zstd bytes (no encryption)
 	codecZstd = 2
 )
+
+func magicFor(mode string) string {
+	if mode == ModeNone {
+		return magicNone
+	}
+	return magicAge
+}
 
 var (
 	zstdEnc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithEncoderConcurrency(1))
@@ -81,12 +90,15 @@ func encodeSegment(s Sealer, host, kind, stream string, off int64, raw []byte) (
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte(magic+string([]byte{codecZstd})), sealed...), nil
+	return append([]byte(magicFor(s.Mode())+string([]byte{codecZstd})), sealed...), nil
 }
 
 func decodeSegment(o Opener, n segName, body []byte) ([]byte, error) {
-	if len(body) < 5 || string(body[:4]) != magic {
+	if len(body) < 5 || (string(body[:4]) != magicAge && string(body[:4]) != magicNone) {
 		return nil, errors.New("archive: not a segment")
+	}
+	if string(body[:4]) != magicFor(o.Mode()) {
+		return nil, fmt.Errorf("archive: this segment is %s but the archive is configured for encryption %q (mixed modes are refused; convert with `archive rewrap`)", modeOfMagic(string(body[:4])), o.Mode())
 	}
 	if body[4] != codecZstd {
 		return nil, fmt.Errorf("archive: unknown codec %d", body[4])
@@ -219,4 +231,11 @@ func sortRefs(r []SessionRef) {
 		}
 		return r[i].SID < r[j].SID
 	})
+}
+
+func modeOfMagic(m string) string {
+	if m == magicNone {
+		return "plaintext"
+	}
+	return "age-encrypted"
 }
