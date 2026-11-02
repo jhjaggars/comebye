@@ -8,8 +8,16 @@ it and link here. The rules agents actually read, the handoff template
 (`internal/server/handoff.go`) and the land prompt (`internal/cli/cli.go`),
 are kept in step with it by tests.
 
-The decisions below come from an interview with the user on 2026-11-02;
-each section ends with what was decided. Items marked **(planned)** are
+The decisions below come from two interviews with the user on 2026-11-02
+(the second after the coordinator forwarded the user's input on workflows
+and the backlog, and the findings of the beads comparison,
+[docs/investigations/2026-11-02-beads-comparison.md](investigations/2026-11-02-beads-comparison.md));
+each section ends with what was decided.
+
+The shape: **one shared lifecycle** (states, report format, evidence
+grading, marking and removal), **workflows** that say which parts of it a
+handoff uses, **typed waits** that say when something may start, and a
+**backlog** on the hub that holds the work before it starts. Items marked **(planned)** are
 decided but not built yet; see [What is not built yet](#what-is-not-built-yet).
 
 ## Who acts
@@ -17,14 +25,18 @@ decided but not built yet; see [What is not built yet](#what-is-not-built-yet).
 - **The user** decides: what to build, whether to land, whether to deploy,
   and every removal (confirmed in the app). Blocked dialogs are theirs to
   answer.
-- **The coordinator** turns requests into handoffs, reads reports, relays
-  the user's decisions with `comebye` commands, and proposes cleanup. It
-  never edits code, lands, approves or removes on its own.
+- **The coordinator** owns the backlog: it turns requests into backlog
+  items and handoffs, picks each handoff's workflow, reads reports, files
+  follow-ups, relays the user's decisions with `comebye` commands, starts
+  approved items when their waits are met, and proposes cleanup. It never
+  edits code, lands, approves or removes on its own.
 - **The worker** (a task worker: one handoff, one branch, one worktree)
   does the work, reports, and after the user's OK lands its own work.
-- **The hub** records the states, captures reports, runs the git checks,
+- **The hub** stores the ledger and the backlog, records the states and
+  their history, captures reports, evaluates waits, runs the git checks,
   asks sessions whether they are safe to remove, and notifies the
-  coordinator. It never marks, lands or removes anything by itself.
+  coordinator. It never marks, lands, approves or removes anything by
+  itself.
 
 ## States
 
@@ -68,10 +80,221 @@ same call that moves the entry to `landing`.
 | `removed` | the user confirmed the removal in the app | user | (final) |
 | `failed` | the worker never started | hub | (final) |
 
+## Workflows
+
+The workflow is a property of the handoff (`comebye handoff --workflow
+TYPE`, recorded on the ledger entry and on its backlog item). Every
+workflow uses the shared parts: the report format and evidence grading,
+the report outcome, waits, history and notes, marking and removal. A
+workflow says which of the rest applies:
+
+| Workflow | Branch / worktree | Done means | Report adds | Lands | Lifetime | Default waits | Cleanup |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `feature` | worktree on a new branch | landed (or reported, for land `none`) | the usual sections | `main` (`pr`, `none` per repository) | task | none | mark once landed |
+| `test` | worktree, detached at the base | reported with an outcome | what ran, the command, the result | none, unless it committed (then as feature) | ephemeral | none | sweep-ready once the coordinator has read the report |
+| `research` | worktree, detached at the base; a branch only if it commits | reported; a committed doc landed | findings, sources, recommendation | only if it committed something | task | none | mark once read (or landed) |
+| `review` | worktree on the reviewed branch, or none for a PR ref | the reviewed work landed with the review approved | `approve` or `changes-requested`, findings | none | standing, linked to the reviewed entry or PR | `step` on the reviewed entry, per round | mark when the reviewed work has landed |
+| `watch` | none: the hub watches | the watched thing settled (PR merged or closed, CI finished, timer) | only what changed | none | standing on the hub; an agent only to act on a change | `pr_merged`, `ci_green` or `timer` | ends by itself when the wait settles |
+| `deploy` | worktree detached at the deployed SHA | the new SHA is running and healthy | deployed and previous SHAs, the health check | none | task | `human` (the user's OK) and `ci_green` on the base | mark after the report |
+
+**Defining a workflow.** A workflow is a markdown template, like the
+handoff template: built in, and replaceable or added to with a
+`workflows/<name>.md` in the state directory. Its frontmatter holds the
+fields the hub's shared state machine reads (`lands: main|pr|none`,
+`worktree: branch|detached|none`, `lifetime: task|standing|ephemeral`,
+`report_sections`, `default_waits`); its body is the brief scaffold that
+the handoff template wraps around the coordinator's brief. Adding a
+workflow means adding a file; only a new kind of wait or state needs code.
+
+**Choosing one.** The coordinator picks the workflow from the user's call
+to action ("spin up an agent to…", "start looking into…", "keep an eye
+on…", "deploy…") and passes `--workflow`. When it is left out, the hub
+uses `feature` (today's behaviour) and the handoff's answer says so. The
+ledger, the app and the briefing show each handoff's workflow.
+
+**Worktrees.** Every handoff that runs an agent gets its own worktree, so
+nothing touches the primary checkout. `test` and `research` start detached
+at the base; a worker that commits creates its branch, and its work then
+lands as a feature's would.
+
+**Review rounds.** A review is a standing entry linked to the reviewed
+entry (or a PR, by `--ref`). Each round: the reviewer reports with outcome
+`done` and a verdict of approve or changes-requested; the coordinator
+forwards the findings to the worker; the worker's next report starts the
+next review round. The rounds are recorded in both entries' history. The
+review ends when it approved and the reviewed work has landed. Agents do
+not prompt each other directly.
+
+**Watches.** The hub evaluates the watch's waits itself (`gh` on the
+entry's host). No session sits idle polling. When a wait settles, the hub
+tells the coordinator, or starts the successor that waits on it (for
+example a `test` handoff that reads the failed CI logs and reports).
+
+**Deploys.** Deploys are batched: one deploy item covers everything
+landed since the last one. It waits for the user's OK (a `human` wait,
+their words recorded) and for CI green on the base, deploys the latest
+base, verifies health and reports the deployed SHA and the previous one.
+A rollback is a new deploy item for the previous SHA, which needs the
+user's OK too.
+
+*Decided:* workflows are templates plus a small table in code; build
+order `test`, `research`, `review`, then `watch` and `deploy`; the
+coordinator infers the workflow from the user's request (the hub falls
+back to `feature`); a worktree always, with a branch only if the work
+commits; reviews go through the coordinator, with rounds recorded;
+watches are hub waits, with an agent only to act on a change; deploys
+wait for the user's OK and green CI, one approval per batch.
+
+## Report outcome
+
+Every report carries an outcome: `comebye report --outcome
+done|needs-input|blocked|failed` (default `done`). It is recorded on the
+entry and shown in the ledger, the app and the callback.
+
+- `done`: the work is finished as briefed. Only `done` meets a `step`
+  wait, so only it releases successors.
+- `needs-input`: the worker stopped for a question. The coordinator asks
+  the user before anything else.
+- `blocked`: something outside the worker stops it (access, a broken
+  dependency). The coordinator tells the user what is needed.
+- `failed`: it tried and could not. This meets `step_failed` waits, so a
+  fixer step can start.
+
+*Decided:* an explicit `--outcome` flag. It replaces guessing whether a
+finished worker "may have stopped to ask".
+
+## Typed waits
+
+A wait says when a handoff, or a backlog item, may start. `Entry.Waits`
+replaces `--after` (`After` is migrated to `step` waits, and `--after X`
+stays as an alias for `--wait step:X`):
+
+| Kind | Met when | Fails when |
+| --- | --- | --- |
+| `step:ID` | that plan member reported with outcome `done` | it failed or was removed unfinished |
+| `step_failed:ID` | that member reported `failed` or `blocked` | it reported `done` (the waiter is skipped, not failed) |
+| `human:"what"` | the user's OK: Approve in the app, or `comebye approve ID --note "<their words>"` relayed by the coordinator | never: it waits |
+| `pr_merged:owner/repo#N` | the PR merged | it was closed without merging |
+| `ci_green:BRANCH` | the latest CI run on the branch succeeded | it failed (unless the wait says `retry`) |
+| `timer:2h` or an RFC 3339 time | the time has passed | never |
+
+A met wait records when, and for `human` who relayed it and the user's
+words. The hub evaluates waits on every ledger update; external kinds run
+`gh` on the entry's host at most every two minutes, and an error (gh
+missing, not logged in) shows on the wait and never counts as met. The
+ledger, the app and `comebye plan show` say why something waits ("waits
+for PR #42 to merge, checked 1 min ago"; "waits for your OK: deploy to
+prod"). When a `human` wait is the only one left, the user gets one push
+notification.
+
+**Landing approval is a `human` wait.** `comebye land --note` stays the
+coordinator's one verb: it records the user's OK as a met `human` wait on
+the landing (who, when, their words) and sends the land prompt. Approving
+in the app, or `comebye approve`, meets the same wait, and the coordinator
+then sends `land`.
+
+*Decided:* typed waits, with the kinds above; keep `land --note` and
+record it as a `human` wait.
+
+## The backlog
+
+The backlog is the work that has not started yet, and the record of what
+became of it. It lives **on the hub** (`backlog.json` in the state
+directory, beside the ledger), spans every host and repository, and
+outlives any one coordinator: a new coordinator reads it and carries on.
+
+```
+proposed → approved → started → done
+    ↓          ↓
+ dropped    dropped (the user only)
+```
+
+An item has a title, a brief, a workflow, a priority (0 to 4), waits, an
+optional `--ref`, its origin (the user, the coordinator, or a follow-up of
+entry X), optional host, repo and branch until it starts, the handoffs it
+became (one per round), and its history.
+
+**Who does what.**
+
+- **The coordinator owns it.** It is the only agent that writes it. It
+  creates and edits items, sets priorities, links handoffs, reports and
+  follow-ups to them, starts approved items, and marks them done. Workers
+  never write it: they report, add notes and list follow-ups, and the
+  coordinator folds those in. (This is a playbook rule until the hub can
+  tell a coordinator from other agents reliably.)
+- **Only the user approves.** `proposed` becomes `approved` only on the
+  user's word: Approve in the app, or `comebye backlog approve ID --note
+  "<their words>"` relayed by the coordinator (the hub refuses an agent's
+  approve without a note). **A direct request is an approval**: when the
+  user asks for something, the coordinator records the item as `approved`
+  with the user's words.
+- **Approving is the OK to start.** The coordinator starts an approved
+  item as soon as its waits are met, in priority order, with no second
+  OK, and says so in the briefing. `comebye backlog ready` lists them;
+  `comebye backlog start ID` fills in host, repo and branch and makes an
+  ordinary handoff with the item's workflow and waits. An item still
+  missing a host or repo when it becomes ready is not started: the
+  coordinator asks the user.
+- **Dropping.** The coordinator may drop its own items while they are
+  `proposed`. Dropping an approved item needs the user.
+- **In the app**, the user sees the whole backlog and can approve, drop
+  and reprioritise items. Creating and editing items stays with the
+  coordinator.
+- **Done.** The coordinator sets `done` when the handoff's work has landed,
+  or, for workflows that don't land, when its report is `done` and read.
+
+**Where items come from:** the user's requests (approved at once), the
+coordinator's own proposals, and the Follow-ups of each report, which the
+coordinator reads and files as `proposed`, linked to the entry. A report
+is the worker's data: nothing is started because a report says so.
+
+**Briefings come from it.** The app renders the backlog live from
+`backlog.json`: what waits for the user's approval, what is ready, what is
+running, waiting (and on what), landed, deployed and done. The
+coordinator's briefing becomes short commentary on top, with links to
+items; it no longer restates every status.
+
+**Plans.** Items with `step` waits between them can start together as a
+plan (`backlog start --plan`), so a chain runs while the coordinator is
+idle.
+
+*Decided:* on the hub, owned by the coordinator, beads at most as an
+optional bridge later; only the user approves, and approving is the OK to
+start; a direct request counts as approval, with the user's words; the
+coordinator may drop its own unapproved items, not approved ones; a ready
+item without a host or repo is not started; the user approves, drops and
+reprioritises in the app; the hub renders the backlog, and the
+coordinator adds prose; the coordinator files follow-ups.
+
+## History, notes and re-priming
+
+- **History.** Every entry and backlog item keeps an append-only event
+  list: state changes and who caused them, prompts sent, notes, reports
+  (every round's report is kept, not only the last), wait results and
+  landing checks. Rounds are counted from it.
+- **Notes.** Workers post progress with `comebye note "…"`. It is meant
+  for long work and review rounds; notes show in the ledger and the app.
+- **Stalled.** A running worker with no turn and no note for 30 minutes is
+  flagged `stalled`. The coordinator reads it and sends one nudge, then
+  tells the user.
+- **Re-priming.** `comebye task` prints the worker's own brief, workflow,
+  place in its plan, waits and notes. The handoff template tells a worker
+  to run it whenever it has lost context (after a compaction).
+- **`--ref`.** An optional opaque reference on a handoff or backlog item
+  (`owner/repo#42`, a bead id), shown in the ledger, app, briefing and
+  callback, and linked when it looks like a GitHub issue or PR.
+
+*Decided:* history, notes, a stalled flag based on notes and turns,
+`comebye task`, and an opaque `--ref`.
+
 ## 1. Handoff
 
+Sections 1 to 6 describe the `feature` workflow in full. The other
+workflows use the same steps, minus the ones the table above leaves out.
+
 The coordinator writes a brief (goal, context, constraints, definition of
-done) and runs `comebye handoff`. The hub creates the worktree
+done), picks the workflow, and runs `comebye handoff --workflow TYPE`
+(usually as `comebye backlog start ID`). The hub creates the worktree
 `~/.worktrees/<repo>/<branch>`, starts the agent and sends the brief
 wrapped in the handoff template. A handoff for a branch that already has an
 active entry returns that entry and starts nothing.
@@ -188,11 +411,11 @@ check, not just the worker's word.
 Deploying is separate from landing and happens only when the user asks.
 
 **Batched deploys (planned).** Workers land without deploying. When the
-user says "deploy", the coordinator runs one deploy from the latest main
-covering everything landed since the last one: `comebye deploy`, which
-hands a short deploy job to a worker (or the home session) with the
-recipe from the repository's `.comebye.toml`. One approval covers the
-batch. The deploy report must show the new SHA running (a version or
+user says "deploy", the coordinator files (or starts) one `deploy`
+workflow item covering everything landed since the last one, with the
+recipe from the repository's `.comebye.toml`. It waits for the user's OK
+(a `human` wait) and green CI on the base (see [Workflows](#workflows)),
+so one approval covers the batch. The deploy report must show the new SHA running (a version or
 health check). The hub records the deployed SHA and the one before it, and
 a rollback redeploys the recorded previous SHA.
 
@@ -203,8 +426,9 @@ report the deployed SHA and its health check. That is one deploy, with its
 approvals, for the whole batch. `comebye land WORKER --deploy` still adds a
 deploy step to a single landing.
 
-*Decided:* batched and triggered by the user; a `comebye deploy` step the
-user approves once; rollback to the recorded previous SHA.
+*Decided:* batched and triggered by the user, approved once; rollback to
+the recorded previous SHA. The second interview made it the `deploy`
+workflow, gated by `human` and `ci_green` waits.
 
 ## 6. Cleanup
 
@@ -240,7 +464,9 @@ A `finished` or `landed` worker that gets more work (the user's request, a
 review fix) goes back to `running`. `comebye land` refuses until it reports
 again. Work that had already landed stays recorded as landed (the entry's
 `landed` record is kept), and the new round lands only its new commits.
-**(planned)** The ledger counts rounds and keeps the earlier reports.
+**(planned)** The history counts rounds and keeps every round's report.
+Follow-ups that the user wants handled later go into the backlog as
+`proposed` items instead.
 
 *Decided:* back to running as a new round, rather than a new handoff.
 
@@ -255,9 +481,9 @@ Task workers have a branch, a report and a landing. Standing roles do not:
   flag a home session whose checkout has uncommitted or unpushed changes;
   the coordinator asks the user whether to commit it, hand it off or leave
   it. Comebye never commits there itself;
-- **reviewer, PR watcher (planned)**: a role recorded like the coordinator
-  role. They are never swept, need no report to be "done", and are removed
-  only when the user asks.
+- **reviewers and watchers** are now workflows (`review`, `watch`): a
+  review is a standing entry tied to the work it reviews, and a watch is a
+  hub wait, not an idle session. Neither is swept while it is open.
 
 *Decided:* a standing role that is never swept; the coordinator watches
 for dirty home checkouts.
@@ -275,8 +501,8 @@ approve.
 
 ## Failures
 
-- **Stalled (planned):** a running worker idle for 30 minutes with no
-  report is flagged `stalled`. The coordinator reads what it is doing and
+- **Stalled (planned):** a running worker with no turn and no note for
+  30 minutes is flagged `stalled`. The coordinator reads what it is doing and
   sends one nudge ("report, or say what you are waiting for"), then tells
   the user. Today `comebye sweep` already lists such workers as "needs a
   look".
@@ -300,22 +526,47 @@ sender is told when a queued prompt expires.
 
 | Step | Command | Who |
 | --- | --- | --- |
-| hand off | `comebye handoff --host H --repo R --branch B --brief FILE` | coordinator |
-| report | `comebye report -` | worker |
+| file work | `comebye backlog add …` (planned); the user's requests are approved at once | coordinator |
+| approve an item | Approve in the app; `comebye backlog approve ID --note "<user's words>"` (planned) | user (coordinator relays) |
+| start work | `comebye backlog start ID` (planned), or `comebye handoff --workflow TYPE [--wait …] [--ref R] --host H --repo R --branch B --brief FILE` | coordinator |
+| progress, re-prime | `comebye note "…"`, `comebye task` (planned) | worker |
+| report | `comebye report [--outcome done\|needs-input\|blocked\|failed] -` (`--outcome` planned) | worker |
+| meet a human wait | Approve in the app; `comebye approve ID --note "…"` (planned) | user (coordinator relays) |
 | review | `comebye read ID --report`, `comebye inspect ID` | coordinator |
 | approve and land | `comebye land WORKER --note "<user's OK>" [--queue]` | coordinator, after the user's OK |
-| deploy | `comebye land WORKER --deploy` today; `comebye deploy` (planned) | coordinator, after the user asks |
+| deploy | a `deploy` workflow item (planned); `comebye land WORKER --deploy` today | coordinator, after the user asks |
 | propose removal | `comebye mark WORKER --reason R`, `comebye sweep` | coordinator |
 | remove | the removals review in the app | user |
 
-## What is not built yet
+## Build order
 
-These are decided and specified above but not implemented:
+Built on the `design/agent-lifecycle` branch:
 
-- land modes `pr` and `none` and the `.comebye.toml` file;
-- batched `comebye deploy` with recorded SHAs and rollback;
-- round counting and earlier reports kept on follow-ups;
-- the `stalled` flag and the coordinator's nudge;
-- telling the sender when a queued prompt expires;
-- flagging home sessions with uncommitted work;
-- recorded reviewer and PR-watcher roles.
+- the removal ask carries the hub's check verdict;
+- the `landing` and `landed` states, `comebye land --note` recording the
+  approval, and the hub's landed check (including the approved tip);
+- `comebye report` warning on a malformed report; the evidence grades in
+  the handoff template; a test keeping the template and the land prompt
+  in step;
+- the app's landing, landed and land-failed chips.
+
+Next, each as its own handoff (*decided:* foundations first):
+
+1. the workflow field and the template mechanism, with `test` and
+   `research` (detached worktrees, branch on first commit, ephemeral
+   cleanup);
+2. `comebye report --outcome`;
+3. typed waits (`step`, `step_failed`, `human`, `timer`), migrating
+   `--after`, with landing approval stored as a `human` wait, and
+   `comebye approve`;
+4. history, `comebye note`, `comebye task`, `--ref`, the `stalled` flag;
+5. the backlog: the store, `comebye backlog …`, the app's backlog view
+   with approve, drop and reprioritise, and briefings rendered from it;
+6. the `review` workflow with recorded rounds;
+7. `pr_merged` and `ci_green` waits (`gh` on the entry's host), then the
+   `watch` and batched `deploy` workflows, with rollback;
+8. land modes `pr` and `none` (`.comebye.toml`), expired-queue notices,
+   dirty-home flags.
+
+The beads bridge (an import, or `on_close` hooks into comebye) stays
+optional and later.
