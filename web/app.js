@@ -904,17 +904,26 @@ async function editBriefSchedule() {
 /* ---------- marking a session ready to remove (detail view menu) ---------- */
 
 function renderDetailMenu() {
-  const led = ledger.on === true && !!state.selected;
+  // The "⋯" is always there: it is the only way to mark, switch the model
+  // or change the role. Items that need the ledger wait for it (disabled)
+  // or, when this hub keeps none, give way to a note.
   const can = !!state.selected && switchable(agentById(state.selected));
-  $("d-more").hidden = !(led || can);
+  const lon = ledger.on === true && !!state.selected;
+  const off = ledger.on === false;
   $("d-model").hidden = !can;
-  for (const id of ["d-mark", "d-role"]) $(id).hidden = !led;
-  if (!(led || can)) { toggleDetailMenu(false); return; }
-  if (!led) { $("d-mark-state").hidden = true; $("d-sched").hidden = true; renderMarkBar(null); return; }
+  for (const id of ["d-mark", "d-role"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  const st = $("d-mark-state");
+  if (!lon) {
+    $("d-sched").hidden = true;
+    renderMarkBar(null);
+    st.hidden = !off;
+    st.textContent = off ? "Marking and roles are not available on this hub" : "";
+    if (!off) { $("d-mark").textContent = "Mark ready to remove… (loading)"; $("d-role").textContent = "Make coordinator (loading)"; }
+    return;
+  }
   const m = ledger.marked.get(state.selected);
   $("d-mark").textContent = m ? "Unmark (keep this session)" : "Mark ready to remove…";
   renderMarkBar(m);
-  const st = $("d-mark-state");
   st.hidden = !m;
   if (m) st.textContent = "Marked ready to remove" + (m.reason ? ": " + m.reason : "");
   const coord = isCoordinator(agentById(state.selected));
@@ -944,6 +953,7 @@ function toggleDetailMenu(show) {
   const menu = $("d-menu");
   const open = show ?? menu.hidden;
   menu.hidden = !open;
+  if (open) { renderDetailMenu(); if (ledger.on !== true && ledger.on !== false) loadLedger(); }
   $("d-more").setAttribute("aria-expanded", String(open));
 }
 

@@ -395,6 +395,104 @@ await check("brief: expanding persists across a reload and a new briefing; colla
   if (st.expanded !== "false" || st.body) throw new Error("collapse did not stick: " + JSON.stringify(st));
 });
 
+// ---- agent view "⋯" menu: always at the top right, whatever the ledger says ----
+async function moreBox() {
+  return page.evaluate(() => {
+    const b = document.querySelector("#d-more");
+    const r = b.getBoundingClientRect(), cs = getComputedStyle(b);
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { x: r.x, y: r.y, w: r.width, h: r.height, shown: cs.display !== "none" && cs.visibility !== "hidden", hidden: b.hidden, onTop: hit === b || b.contains(hit), vw: innerWidth };
+  });
+}
+async function expectMore(label) {
+  await page.waitForSelector("#d-more", { state: "visible", timeout: 3000 }).catch(() => { throw new Error(label + ": #d-more not visible"); });
+  const b = await moreBox();
+  if (!b.shown || b.hidden || b.w < 40 || b.h < 40) throw new Error(label + ": too small/hidden " + JSON.stringify(b));
+  if (b.x < 0 || b.x + b.w > b.vw + 0.5 || b.y < 0) throw new Error(label + ": off-screen " + JSON.stringify(b));
+  if (b.x + b.w < b.vw - 24) throw new Error(label + ": not at the right edge " + JSON.stringify(b));
+  if (!b.onTop) throw new Error(label + ": covered by another element");
+  return b;
+}
+async function menuItems() {
+  await page.locator("#d-more").click();
+  await page.waitForSelector("#d-menu", { state: "visible" });
+  const items = await page.evaluate(() => [...document.querySelectorAll("#d-menu [role=menuitem], #d-menu .mark-state")]
+    .filter((e) => e.offsetParent !== null).map((e) => ({ id: e.id, text: e.textContent.trim(), disabled: !!e.disabled })));
+  await page.locator("#d-more").click();
+  return items;
+}
+// A cold load of the agent's deep link, so the ledger starts unknown.
+async function coldOpen(name) { await page.goto("about:blank"); await openAgent(name); }
+async function dropLedger(handler) { await page.route(/\/api\/ledger$/, handler); }
+
+await check("more: visible at phone width for a switchable agent (ledger on), and menu opens", async () => {
+  await openAgent("alpha");
+  await expectMore("alpha");
+  const ids = (await menuItems()).map((i) => i.id);
+  if (!ids.includes("d-model") || !ids.includes("d-mark") || !ids.includes("d-role")) throw new Error("items: " + ids);
+});
+await check("more: visible for a non-switchable agent (codex)", async () => {
+  await openAgent("bravo");
+  await expectMore("bravo");
+  await page.waitForFunction(() => !document.querySelector("#d-mark").disabled, null, { timeout: 5000 });
+  const ids = (await menuItems()).map((i) => i.id);
+  if (ids.includes("d-model") || !ids.includes("d-mark")) throw new Error("items: " + ids);
+});
+await check("more: stays put after scrolling the output and the page", async () => {
+  await openAgent("alpha");
+  const before = await expectMore("before scroll");
+  await page.evaluate(() => {
+    const c = document.querySelector("#chat");
+    c.insertAdjacentHTML("beforeend", "<div style='height:4000px'>pad</div>");
+    c.scrollTop = c.scrollHeight; window.scrollTo(0, 99999);
+  });
+  const after = await expectMore("after scroll");
+  if (Math.abs(after.y - before.y) > 1 || Math.abs(after.x - before.x) > 1) throw new Error("moved " + JSON.stringify([before, after]));
+});
+await check("more: present before the ledger loads, menu opens with items waiting, then enabled", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  await dropLedger(async (r) => { await gate; r.continue(); });
+  await coldOpen("bravo");
+  await expectMore("ledger pending");
+  const pending = await menuItems();
+  const mark = pending.find((i) => i.id === "d-mark");
+  if (!mark || !mark.disabled) throw new Error("mark should wait (disabled): " + JSON.stringify(pending));
+  release();
+  await page.waitForFunction(() => !document.querySelector("#d-mark").disabled, null, { timeout: 5000 });
+  await expectMore("ledger loaded");
+  await page.unroute(/\/api\/ledger$/);
+});
+await check("more: present when the ledger fails transiently (500) and the menu still opens", async () => {
+  await dropLedger((r) => r.fulfill({ status: 500, body: "boom" }));
+  await coldOpen("bravo");
+  await expectMore("ledger 500");
+  const items = await menuItems();
+  if (!items.some((i) => i.id === "d-mark" && i.disabled)) throw new Error(JSON.stringify(items));
+  await page.unroute(/\/api\/ledger$/);
+});
+await check("more: present when the hub keeps no ledger (503): switch model for claude, a note for codex", async () => {
+  await dropLedger((r) => r.fulfill({ status: 503, body: "no state dir" }));
+  await coldOpen("alpha");
+  await expectMore("503 claude");
+  let items = await menuItems();
+  if (!items.some((i) => i.id === "d-model")) throw new Error("no model item: " + JSON.stringify(items));
+  if (items.some((i) => i.id === "d-mark")) throw new Error("mark shown without a ledger");
+  await coldOpen("bravo");
+  await expectMore("503 codex");
+  items = await menuItems();
+  if (!items.some((i) => i.id === "d-mark-state" && /not available/.test(i.text))) throw new Error("no note: " + JSON.stringify(items));
+  await page.unroute(/\/api\/ledger$/);
+});
+await check("more: stays visible with a very long name and title at phone width", async () => {
+  const long = "an-extremely-long-agent-name-that-goes-on-and-on-and-on-without-any-spaces-at-all-0123456789";
+  await coldOpen("alpha");
+  await page.evaluate((t) => { document.querySelector("#d-title").textContent = t; document.querySelector("#d-subtitle").textContent = t + t; document.querySelector("#d-status").textContent = "blocked"; }, long);
+  await expectMore("long title");
+  const w = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  if (w > 0) throw new Error("page scrolls horizontally by " + w);
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;

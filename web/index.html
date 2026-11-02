@@ -554,6 +554,7 @@
       box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
     }
     .attach-menu[hidden] { display: none; }
+    .attach-menu button:disabled { opacity: 0.5; cursor: default; }
     .attach-menu button {
       min-height: 44px; padding: 0 14px; text-align: left; background: none; border: none;
       color: var(--text); font: inherit; font-size: 15px; cursor: pointer;
@@ -1110,7 +1111,7 @@
       </div>
       <span class="status" id="d-status"></span>
       <button type="button" class="more" id="d-refresh" aria-label="Refresh this view">&#8635;</button>
-      <button type="button" class="more" id="d-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="d-menu" hidden>&#8942;</button>
+      <button type="button" class="more" id="d-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="d-menu">&#8942;</button>
     </header>
     <div id="d-menu" class="attach-menu d-menu" role="menu" hidden>
       <div class="mark-state" id="d-mark-state" hidden></div>
