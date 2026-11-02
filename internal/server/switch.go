@@ -86,8 +86,8 @@ func (s *Server) switchModel(ctx context.Context, target string, b switchBody) (
 	}
 	if err := s.guardPrompt(ctx, *agent); err != nil {
 		var he *herdr.Error
-		if errors.As(err, &he) && he.Code == "dialog_open" {
-			return fail(http.StatusConflict, "dialog_open", err.Error())
+		if errors.As(err, &he) && (he.Code == "dialog_open" || he.Code == "input_busy") {
+			return fail(http.StatusConflict, he.Code, err.Error())
 		}
 		return fail(http.StatusBadGateway, "herdr_error", err.Error())
 	}

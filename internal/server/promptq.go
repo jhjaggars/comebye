@@ -73,6 +73,13 @@ type QueuedPrompt struct {
 	// Notice is set while the sender still has to be told it was not
 	// delivered (expired or gone); the notice is fixed text.
 	Notice bool `json:"notice,omitempty"`
+	// Held says why a pending prompt is waiting although its agent is idle:
+	// the user has text in that agent's input box (typing.go). HeldSince is
+	// when that began; HeldNoticed is set once the sender was told it has
+	// been held a long time.
+	Held        string     `json:"held,omitempty"`
+	HeldSince   *time.Time `json:"held_since,omitempty"`
+	HeldNoticed bool       `json:"held_noticed,omitempty"`
 }
 
 type queueFile struct {
@@ -233,6 +240,37 @@ func (q *promptQueue) tried(id string) {
 	}
 }
 
+// setHeld marks pending id as held for typing (why "") or no longer, and
+// lets the next pass try again at once instead of after queueRetry.
+func (q *promptQueue) setHeld(id, why string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.data.Items {
+		it := &q.data.Items[i]
+		if it.ID != id || it.State != QueuePending {
+			continue
+		}
+		delete(q.sending, id)
+		if why != "" {
+			delete(q.last, it.Agent)
+		}
+		if it.Held == why {
+			return
+		}
+		it.Held = why
+		if why == "" {
+			it.HeldSince, it.HeldNoticed = nil, false
+		} else if it.HeldSince == nil {
+			now := q.now()
+			it.HeldSince = &now
+		}
+		if err := q.save(); err != nil {
+			log.Printf("prompt queue: %v", err)
+		}
+		return
+	}
+}
+
 func (q *promptQueue) clearNotice(id string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -388,6 +426,13 @@ func (s *Server) sendQueued(it QueuedPrompt, target herdr.AgentInfo) {
 		send = s.promptAgent
 	}
 	err := send(ctx, target, queueText(it))
+	if isInputBusy(err) {
+		// Not a failure: the user is typing in that pane. Held, and tried
+		// again every few seconds (typing.go).
+		s.pq.setHeld(it.ID, errInputBusy.Message)
+		s.noteHeld(target.ID)
+		return
+	}
 	if err == nil {
 		if _, lerr := s.pq.settle(it.ID, QueueDelivered, false); lerr != nil {
 			logQueueErr(lerr)

@@ -1,0 +1,38 @@
+[0m[38;2;102;102;102mdialog-blocked-bridge.ts, git-worktree, herdr,           [0m
+[0m[38;2;102;102;102mhomelab-search,                                          [0m
+[0m[38;2;102;102;102mhumanlayer/humanlayer-pi:src/pi-humanlayer.js, loop,     [0m
+[0m[38;2;102;102;102mpermission-gate, pi-langfuse, review-loop,               [0m
+[0m[38;2;102;102;102msession-manager, system-notify.ts, tokps.ts[0m              
+
+[0m[38;2;240;198;116m[Themes][0m                                                 
+[0m[38;2;102;102;102m  dracula, tokyonight[0m                                    
+
+
+[0m[38;2;255;255;0m─────────────────────────────────────────────────────────[0m
+ [0m[1m[38;2;255;255;0mUpdate Available[0m                                        
+ [0m[38;2;128;128;128mNew version 1.5.0 is available. Run [0m[38;2;138;190;183mpi update[0m           
+ [0m[38;2;128;128;128mChangelog: [0m[38;2;138;190;183mhttps://pi.dev/changelog[0m                     
+[0m[38;2;255;255;0m─────────────────────────────────────────────────────────[0m
+
+[0m[38;2;255;255;0m─────────────────────────────────────────────────────────[0m
+ [0m[1m[38;2;255;255;0mPackage Updates Available[0m                               
+ [0m[38;2;128;128;128mPackage updates are available. Run [0m[38;2;138;190;183mpi update            [0m
+ [0m[38;2;138;190;183m--extensions[0m                                            
+ [0m[38;2;128;128;128mPackages:[0m                                               
+ - @plannotator/pi-extension                             
+ - pi-langfuse                                           
+ - github.com/humanlayer/humanlayer-pi                   
+[0m[38;2;255;255;0m─────────────────────────────────────────────────────────[0m
+
+[0m[38;2;110;110;110m─────────────────────────────────────────────────────────[0m
+/mo[0m[7m [0m                                                     
+[0m[38;2;110;110;110m─────────────────────────────────────────────────────────[0m
+[0m[38;2;138;190;183m→ model                           <provider/model> — Se[0m  
+  scoped-models[0m[38;2;128;128;128m                   Enable/disable models[0m  
+  plannotator-plan-mode[0m[38;2;128;128;128m           [u:npm:@plannotator/p[0m  
+  remove-dir[0m[38;2;128;128;128m                      [u] Remove a director[0m  
+  skill:tailnet-markdown-preview[0m[38;2;128;128;128m  [u] Serve a local Mar[0m  
+[0m[38;2;128;128;128m  (1/12)[0m                                                 
+[0m[38;2;102;102;102m/tmp/tmp.rZN0GlsVe6/work (main)[0m
+[0m[38;2;102;102;102m0.0%/180k (auto)             (homelab) thinking • minimal[0m
+herdr scratch HumanLayer: /humanlayer login [0m[38;2;181;189;104m⚡auto[0m

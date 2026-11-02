@@ -122,7 +122,11 @@ var errDialogOpen = &herdr.Error{Code: "dialog_open", Message: "the agent is wai
 // dialog that just appeared, herdr only refuses while the agent reads as
 // blocked, and a permission prompt has no transcript question to find.
 func (s *Server) guardPrompt(ctx context.Context, agent herdr.AgentInfo) error {
-	return promptGuard(ctx, s.client, agent, s.pendingAsk(agent))
+	if err := promptGuard(ctx, s.client, agent, s.pendingAsk(agent)); err != nil {
+		return err
+	}
+	// Then the user's own half-typed message (typing.go).
+	return s.inputGuard(ctx, agent)
 }
 
 // promptGuard fails safe: a screen that cannot be read, or an agent that is
@@ -267,7 +271,7 @@ func errorBody(err error) (int, any) {
 	if errors.As(err, &he) {
 		status := http.StatusBadGateway
 		switch he.Code {
-		case "agent_blocked", "dialog_open":
+		case "agent_blocked", "dialog_open", "input_busy":
 			status = http.StatusConflict
 		case "pane_not_found", "agent_not_found":
 			status = http.StatusNotFound

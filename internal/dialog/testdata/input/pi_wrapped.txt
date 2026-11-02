@@ -1,0 +1,38 @@
+[Extensions]
+  @plannotator/pi-extension:, claude-skills-discovery.ts,
+dialog-blocked-bridge.ts, git-worktree, herdr,
+homelab-search,
+humanlayer/humanlayer-pi:src/pi-humanlayer.js, loop,
+permission-gate, pi-langfuse, review-loop,
+session-manager, system-notify.ts, tokps.ts
+
+[Themes]
+  dracula, tokyonight
+
+
+─────────────────────────────────────────────────────────
+ Update Available
+ New version 1.5.0 is available. Run pi update
+ Changelog: https://pi.dev/changelog
+─────────────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────
+ Package Updates Available
+ Package updates are available. Run pi update
+ --extensions
+ Packages:
+ - @plannotator/pi-extension
+ - pi-langfuse
+ - github.com/humanlayer/humanlayer-pi
+─────────────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────
+I think we should consider a way toword word word word
+word word word word word word word word word word word
+word word word word word word word word word word word
+word word word word word word word word word word word
+word word word
+─────────────────────────────────────────────────────────
+/tmp/tmp.rZN0GlsVe6/work (main)
+0.0%/180k (auto)             (homelab) thinking • minimal
+herdr scratch HumanLayer: /humanlayer login ⚡auto

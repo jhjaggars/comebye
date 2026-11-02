@@ -275,11 +275,23 @@ type ReadResult struct {
 
 // ReadPane reads a pane's recent output. source is typically "recent_unwrapped".
 func (c *Client) ReadPane(ctx context.Context, paneID, source string, lines int) (ReadResult, error) {
+	return c.readPane(ctx, paneID, source, lines, "")
+}
+
+// ReadPaneStyled is ReadPane with the terminal's styling kept in the text
+// (format "ansi": ANSI escapes), which shows what is dimmed: Claude Code draws its prompt
+// placeholder that way.
+func (c *Client) ReadPaneStyled(ctx context.Context, paneID, source string, lines int) (ReadResult, error) {
+	return c.readPane(ctx, paneID, source, lines, "ansi")
+}
+
+func (c *Client) readPane(ctx context.Context, paneID, source string, lines int, format string) (ReadResult, error) {
 	params := struct {
 		PaneID string `json:"pane_id"`
 		Source string `json:"source"`
 		Lines  *int   `json:"lines"`
-	}{PaneID: paneID, Source: source}
+		Format string `json:"format,omitempty"`
+	}{PaneID: paneID, Source: source, Format: format}
 	if lines > 0 {
 		params.Lines = &lines
 	}

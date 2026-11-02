@@ -294,7 +294,7 @@ func (s *Server) notifySweep(ctx context.Context, res sweepResult) (to, errMsg s
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	if err := s.promptAgent(ctx, *a, sweepSummary(res)); err != nil {
+	if err := s.promptHeld(ctx, *a, sweepSummary(res)); err != nil {
 		return "", err.Error()
 	}
 	return a.ID, ""

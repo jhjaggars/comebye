@@ -144,7 +144,7 @@ func TestWorkerCreate(t *testing.T) {
 	if agent["id"] != "desk/w9:p1" || agent["name"] != "fix-login" || agent["agent"] != "pi" {
 		t.Fatalf("agent = %v", agent)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,worktree.list,worktree.create,agent.start,agent.get,agent.get,pane.read,agent.prompt" {
+	if got := strings.Join(fh.methods(), ","); got != "agent.list,worktree.list,worktree.create,agent.start,agent.get,agent.get,pane.read,pane.read,agent.prompt" {
 		t.Fatalf("calls = %s", got)
 	}
 	c := fh.call("worktree.create").Params

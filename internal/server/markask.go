@@ -68,7 +68,7 @@ func (s *Server) runAsk(m ledger.Mark, a herdr.AgentInfo) {
 		s.setQuiet(m.AgentID, time.Now().Add(askQuietAfter))
 	}
 	before := s.latestOf(ctx, a.Host, a.PaneID)
-	if err := s.promptAgent(ctx, a, askPrompt+s.askChecks(ctx, m.AgentID)); err != nil {
+	if err := s.promptHeld(ctx, a, askPrompt+s.askChecks(ctx, m.AgentID)); err != nil {
 		set(ledger.AskNotAsked, "could not prompt it: "+err.Error())
 		return
 	}

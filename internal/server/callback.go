@@ -191,6 +191,15 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
 	if err := s.promptAgent(ctx, target, j.text(standIn)); err != nil {
+		if isInputBusy(err) {
+			// The user is typing in that pane: hold the notice and try
+			// again in a few seconds (typing.go); not a failed attempt.
+			s.coord.mu.Lock()
+			delete(s.coord.calling, j.key)
+			s.coord.mu.Unlock()
+			s.noteHeld(target.ID)
+			return
+		}
 		log.Printf("callback for %s to %s: %v", j.key, target.ID, err)
 		s.coord.mu.Lock()
 		s.coord.calling[j.key] = time.Now() // retry after callbackRetry

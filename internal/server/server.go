@@ -158,6 +158,8 @@ type Server struct {
 	models     modelCache
 	listModels func(ctx context.Context, kind string) *modelCatalog
 	coord      coord
+	// typing holds messages for panes whose user is typing (typing.go).
+	typing *typingTracker
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -180,6 +182,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait}
+	s.typing = newTypingTracker()
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
@@ -763,7 +766,7 @@ func writeError(w http.ResponseWriter, err error) {
 	if errors.As(err, &he) {
 		status := http.StatusBadGateway
 		switch he.Code {
-		case "agent_blocked", "dialog_open":
+		case "agent_blocked", "dialog_open", "input_busy":
 			status = http.StatusConflict
 		case "pane_not_found", "agent_not_found":
 			status = http.StatusNotFound

@@ -407,7 +407,7 @@ func TestLaunchHappyPath(t *testing.T) {
 		r.Agent.Name != "fixer" || r.Agent.Agent != "codex" || r.PromptError != "" {
 		t.Fatalf("launch = %d %+v", code, r)
 	}
-	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.get,agent.get,pane.read,agent.prompt" {
+	if got := strings.Join(fh.methods(), ","); got != "agent.list,workspace.create,agent.start,agent.get,agent.get,pane.read,pane.read,agent.prompt" {
 		t.Fatalf("calls = %s", got)
 	}
 	ws := fh.call("workspace.create").Params

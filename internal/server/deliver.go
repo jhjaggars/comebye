@@ -84,9 +84,23 @@ func (s *Server) deliverPrompt(ctx context.Context, name, text string) error {
 		}
 		// Never type over a dialog (a trust-this-folder or permission
 		// prompt on a fresh agent): look at the pane right before sending.
-		if info, gerr := s.client.GetAgent(ctx, name); gerr == nil {
-			if derr := s.guardPrompt(ctx, info); derr != nil {
+		// (And never over the user's half-typed message: wait for the box.)
+		for {
+			info, gerr := s.client.GetAgent(ctx, name)
+			if gerr != nil {
+				break
+			}
+			derr := s.guardPrompt(ctx, info)
+			if derr == nil {
+				break
+			}
+			if !isInputBusy(derr) {
 				return derr
+			}
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("not delivered: held while the user is typing in that pane: %w", ctx.Err())
+			case <-time.After(s.typing.poll):
 			}
 		}
 		a, err := s.client.Prompt(ctx, name, text, herdr.PromptOptions{
