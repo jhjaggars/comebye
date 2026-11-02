@@ -744,15 +744,18 @@ for (const width of [1280, 1920]) {
   await check(`desktop: at ${width}px the list, an empty pane and the briefing panel sit side by side`, async () => {
     await publishBrief("## Status\n\nDesktop panel check\n\nlong detail");
     await desktopList(width);
-    await page.waitForSelector("#briefing:not([hidden])");
-    const [l, d, e, b] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefing")]);
+    await page.waitForSelector("body.has-briefs #briefs.open .br-card");
+    const [l, d, e, b, c, pg] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefs"), geo("#briefing"), geo("#pager")]);
     if (!l.shown || l.x !== 0 || l.w < 300 || l.w > 400) throw new Error("list column: " + JSON.stringify(l));
     if (d.shown) throw new Error("agent pane shown with nothing selected");
     if (!e.shown || e.x < l.x + l.w - 1) throw new Error("empty state not beside the list: " + JSON.stringify(e));
-    if (!b.shown || b.x < e.x + e.w - 1 || Math.abs(b.x + b.w - width) > 1) throw new Error("briefing panel not at the right edge: " + JSON.stringify(b));
-    const st = await briefState();
-    if (st.expanded !== "true" || !st.body) throw new Error("briefing not open in the panel: " + JSON.stringify(st));
-    if (st.preview) throw new Error("a collapsed preview shows in the panel");
+    if (!b.shown || b.x < e.x + e.w - 1 || Math.abs(b.x + b.w - width) > 1 || b.h < 600) throw new Error("briefings panel not at the right edge: " + JSON.stringify(b));
+    if (c.shown) throw new Error("the latest-briefing card shows next to the briefings panel");
+    if (pg.shown) throw new Error("the pill shows on desktop");
+    const t = await page.locator("#briefs").innerText();
+    if (!t.includes("Desktop panel check")) throw new Error("latest briefing missing from the panel: " + t.slice(0, 200));
+    if (!(await page.locator("#briefs .br-item").count())) throw new Error("no history in the panel");
+    if (await page.locator("#br-back").isVisible()) throw new Error("a back button in the panel");
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
   });
 }
@@ -798,6 +801,7 @@ await check("desktop: the fleet menu opens beside the list and its briefing item
   if (!m.shown || m.x < 0 || m.x + m.w > 361) throw new Error("menu outside the list column: " + JSON.stringify(m));
   const t = await page.evaluate(() => ({ text: document.querySelector("#f-brief").textContent, dis: document.querySelector("#f-brief").disabled }));
   if (!/side panel/.test(t.text) || !t.dis) throw new Error("brief item: " + JSON.stringify(t));
+  if (await page.locator("#f-briefs").isVisible()) throw new Error("the Briefings screen item shows on desktop");
   await page.keyboard.press("Escape");
 });
 await check("desktop: below the breakpoint (1099px) it is still the phone layout", async () => {
@@ -807,6 +811,7 @@ await check("desktop: below the breakpoint (1099px) it is still the phone layout
   if (await visible("#detail-empty")) throw new Error("desktop empty state shown");
   const st = await briefState();
   if (st.expanded !== "false") throw new Error("briefing not collapsed: " + JSON.stringify(st));
+  if (await page.evaluate(() => document.body.classList.contains("has-briefs") || document.querySelector("#briefs").classList.contains("open"))) throw new Error("the briefings panel stays open below the breakpoint");
 });
 await check("phone: 390px is unchanged: one column, back button, collapsed briefing, no desktop pane", async () => {
   await desktopList(390);

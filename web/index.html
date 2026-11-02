@@ -1027,7 +1027,16 @@
         grid-template-columns: var(--list-w) minmax(0, 1fr);
         grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
       }
-      body:has(#briefing:not([hidden])) { grid-template-columns: var(--list-w) minmax(0, 1fr) var(--brief-w); }
+      body:has(#briefing:not([hidden])), body.has-briefs { grid-template-columns: var(--list-w) minmax(0, 1fr) var(--brief-w); }
+      /* With the briefings screen in the panel, it replaces the latest-briefing card (it shows the same briefing, plus history). */
+      body.has-briefs #briefing { display: none; }
+      body.has-briefs #briefs {
+        position: static; grid-column: 3; grid-row: 1 / -1; z-index: auto; min-height: 0; overflow: hidden;
+        transform: none !important; visibility: visible; box-shadow: none; border-left: 1px solid var(--border);
+      }
+      #pager, #f-briefs, #briefs header .back, #briefs header .pg-dots { display: none !important; }
+      #list { min-height: 0; }
+      .br-body { max-width: none; }
       #list, #list main { display: contents !important; }
       #list header { grid-column: 1; grid-row: 1; }
       header .count .long { display: none; }

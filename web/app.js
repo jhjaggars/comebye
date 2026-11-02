@@ -1004,6 +1004,7 @@ function renderPager() {
   const p = $("pager");
   if (!p) return;
   p.hidden = !briefsAvailable();
+  syncDesktopBriefs();
   const b = briefing.data;
   $("pager-new").hidden = !(b && b.markdown.trim() && lsGet(BRIEF_SEEN_KEY) !== b.at);
 }
@@ -1070,14 +1071,28 @@ function setBriefsOpen(open, animate) {
     loadBrief();
     loadBriefHistory();
     // Focus the screen itself (no ring), so a keyboard user tabs on from its top.
-    p.focus?.({ preventScroll: true });
+    if (!isDesktop()) p.focus?.({ preventScroll: true });
   } else if (!open && was) {
     // Hand the focus back to where the user came from.
     if (p.contains(document.activeElement)) $("pager").focus?.({ preventScroll: true });
   }
 }
 
+// On desktop the screen is the right-hand panel: always open (when the hub
+// keeps briefings), no sliding, no history entry, no gesture.
+function syncDesktopBriefs() {
+  const desk = isDesktop(), want = desk && briefsAvailable();
+  document.body.classList.toggle("has-briefs", want);
+  if (want === briefs.open) { briefs.desk = want; return; }
+  if (!want && !briefs.desk) return; // phone: the swipe state is not ours to touch
+  if (want && location.hash === BRIEFS_HASH) history.replaceState(null, "", location.pathname + location.search);
+  briefs.pushed = false;
+  briefs.desk = want;
+  setBriefsOpen(want, false);
+}
+
 function openBriefs(animate = true) {
+  if (isDesktop()) return;
   if (briefs.open || state.selected != null || !briefsAvailable()) return;
   setBriefsOpen(true, animate);
   if (location.hash !== BRIEFS_HASH) {
@@ -1088,7 +1103,7 @@ function openBriefs(animate = true) {
 }
 
 function closeBriefs() {
-  if (!briefs.open) return;
+  if (!briefs.open || isDesktop()) return;
   setBriefsOpen(false, true);
   if (briefs.pushed) { briefs.pushed = false; history.back(); }
   else if (location.hash === BRIEFS_HASH) history.replaceState(null, "", location.pathname + location.search);
@@ -1096,6 +1111,7 @@ function closeBriefs() {
 
 // syncBriefs follows the URL (back, forward, a cold start on #/briefings).
 function syncBriefs() {
+  if (isDesktop()) return;
   const want = location.hash === BRIEFS_HASH && state.selected == null && briefsAvailable();
   if (want === briefs.open) return;
   if (!want) briefs.pushed = false;
@@ -1136,7 +1152,7 @@ function installBriefsGesture() {
   };
 
   document.addEventListener("pointerdown", (ev) => {
-    if (g || ev.pointerType !== "touch" || !ev.isPrimary) return;
+    if (g || ev.pointerType !== "touch" || !ev.isPrimary || isDesktop()) return;
     if (state.selected != null || !briefsAvailable()) return;
     const opening = !briefs.open;
     if (opening && (anotherLayerOpen() || $("list").style.display === "none")) return;
@@ -1214,6 +1230,7 @@ function initBriefs() {
   }, true);
   installBriefsGesture();
   syncBriefs();
+  syncDesktopBriefs();
 }
 
 /* ---------- marking a session ready to remove (detail view menu) ---------- */
@@ -4598,7 +4615,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) resume(); }); // skip the initial load
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
-  desktopMQ.addEventListener("change", () => { renderBrief(); markSelectedRow(); });
+  desktopMQ.addEventListener("change", () => { renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
   window.addEventListener("offline", () => setConn(false));
 
   $("back").addEventListener("click", () => {
