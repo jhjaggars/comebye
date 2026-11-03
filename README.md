@@ -86,6 +86,7 @@ connecting several machines, and every setting.
 
 - [Setup](docs/setup.md): install, notifications, multiple hosts, configuration,
   upgrading from herdr-phone
+- [Worker VMs](docs/workers.md): `tools/worker` builds a tagged GCE worker and joins it to the hub
 - [Agents, workers and coordinators](docs/agents.md): launching agents,
   handoffs and cleanup, coordinators and the `comebye` command line, Claude
   Code support, limitations

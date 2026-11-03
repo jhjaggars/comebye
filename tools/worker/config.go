@@ -1,0 +1,322 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// Config is the provisioner's settings. It lives outside the repo, in a
+// KEY=VALUE file (blank lines and # comments allowed), by default
+// ~/.config/comebye-worker/config. Nothing secret belongs in it: the
+// Tailscale OAuth client has its own 0600 file (TSOAuthFile).
+type Config struct {
+	Project     string // GCP project id
+	Zone        string
+	MachineType string
+	BootDiskGB  int
+	DataDiskGB  int
+	DiskType    string
+
+	ImageProject string
+	ImageFamily  string
+
+	Network       string // dedicated VPC, created if missing
+	SubnetRange   string // CIDR of the dedicated subnet
+	SSHSourceCIDR string // the one /32 allowed to reach tcp:22
+	SSHUser       string
+
+	IdleMinutes    int    // auto-poweroff after this long with no ssh session and no working agent
+	MaxRunDuration string // GCE backstop ("24h"); empty disables
+
+	Tag          string // tailnet tag the workers carry
+	TSOAuthFile  string // OAuth client (client_id / client_secret), mode 0600
+	TSAPIBase    string // Tailscale API base (tests; default https://api.tailscale.com)
+	TSAllowLogin string // COMEBYE_TS_ALLOW_LOGIN on the worker: the login that owns the hub device
+
+	HubURL     string // the hub's Serve URL, as the user reaches it (version lookup, peer removal)
+	HubPeerURL string // COMEBYE_HUB on the worker: http://<hub>.<tailnet>.ts.net:<peer listen port>
+	HubVersion string // optional: pin the comebye version instead of asking the hub
+
+	ReleasesURL  string // comebye release base URL
+	HerdrInstall string // URL of herdr's install script
+	HerdrSHA256  string // optional: required sha256 of that script
+
+	StateDir string // per-worker ssh config and known_hosts
+	path     string
+}
+
+var (
+	nameRe    = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,28}[a-z0-9])?$`)
+	projectRe = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	zoneRe    = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]+-[a-z]$`)
+	resRe     = regexp.MustCompile(`^[a-z][a-z0-9-]{0,40}[a-z0-9]$`)
+	tagRe     = regexp.MustCompile(`^tag:[a-z][a-z0-9-]*$`)
+	userRe    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
+	durRe     = regexp.MustCompile(`^[0-9]+[smhd]$`)
+	versionRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	loginRe   = regexp.MustCompile(`^[A-Za-z0-9._%+@-]+$`)
+)
+
+// DefaultConfigPath is ~/.config/comebye-worker/config (XDG aware).
+func DefaultConfigPath() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "comebye-worker", "config")
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".config", "comebye-worker", "config")
+}
+
+func defaults() Config {
+	h, _ := os.UserHomeDir()
+	cfgDir := filepath.Join(h, ".config", "comebye-worker")
+	state := filepath.Join(h, ".local", "state", "comebye-worker")
+	if d := os.Getenv("XDG_STATE_HOME"); d != "" {
+		state = filepath.Join(d, "comebye-worker")
+	}
+	return Config{
+		MachineType:    "e2-standard-4",
+		BootDiskGB:     20,
+		DataDiskGB:     50,
+		DiskType:       "pd-balanced",
+		ImageProject:   "debian-cloud",
+		ImageFamily:    "debian-12",
+		Network:        "comebye-worker",
+		SubnetRange:    "10.77.0.0/24",
+		SSHUser:        "worker",
+		IdleMinutes:    120,
+		MaxRunDuration: "24h",
+		Tag:            "tag:worker",
+		TSOAuthFile:    filepath.Join(cfgDir, "tailscale-oauth"),
+		TSAPIBase:      "https://api.tailscale.com",
+		ReleasesURL:    "https://github.com/jhjaggars/comebye/releases",
+		HerdrInstall:   "https://herdr.dev/install.sh",
+		StateDir:       state,
+	}
+}
+
+// parseKV reads KEY=VALUE lines. Unknown keys are an error, so a typo does
+// not silently fall back to a default.
+func parseKV(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	out := map[string]string{}
+	sc := bufio.NewScanner(f)
+	for n := 1; sc.Scan(); n++ {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			return nil, fmt.Errorf("%s:%d: want KEY=VALUE", path, n)
+		}
+		out[strings.ToLower(strings.TrimSpace(k))] = strings.Trim(strings.TrimSpace(v), `"'`)
+	}
+	return out, sc.Err()
+}
+
+// LoadConfig reads path over the defaults and validates the result.
+func LoadConfig(path string) (*Config, error) {
+	c := defaults()
+	c.path = path
+	kv, err := parseKV(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("no config at %s: copy tools/worker/config.example there and fill it in", path)
+		}
+		return nil, err
+	}
+	if err := c.apply(kv); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &c, c.Validate()
+}
+
+func expand(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		h, _ := os.UserHomeDir()
+		return filepath.Join(h, strings.TrimPrefix(p, "~"))
+	}
+	return p
+}
+
+func (c *Config) apply(kv map[string]string) error {
+	for k, v := range kv {
+		var err error
+		switch k {
+		case "project":
+			c.Project = v
+		case "zone":
+			c.Zone = v
+		case "machine_type":
+			c.MachineType = v
+		case "boot_disk_gb":
+			c.BootDiskGB, err = strconv.Atoi(v)
+		case "data_disk_gb":
+			c.DataDiskGB, err = strconv.Atoi(v)
+		case "disk_type":
+			c.DiskType = v
+		case "image_project":
+			c.ImageProject = v
+		case "image_family":
+			c.ImageFamily = v
+		case "network":
+			c.Network = v
+		case "subnet_range":
+			c.SubnetRange = v
+		case "ssh_source_cidr":
+			c.SSHSourceCIDR = v
+		case "ssh_user":
+			c.SSHUser = v
+		case "idle_minutes":
+			c.IdleMinutes, err = strconv.Atoi(v)
+		case "max_run_duration":
+			c.MaxRunDuration = v
+		case "tag":
+			c.Tag = v
+		case "ts_oauth_file":
+			c.TSOAuthFile = expand(v)
+		case "ts_api_base":
+			c.TSAPIBase = v
+		case "ts_allow_login":
+			c.TSAllowLogin = v
+		case "hub_url":
+			c.HubURL = strings.TrimRight(v, "/")
+		case "hub_peer_url":
+			c.HubPeerURL = strings.TrimRight(v, "/")
+		case "hub_version":
+			c.HubVersion = v
+		case "releases_url":
+			c.ReleasesURL = strings.TrimRight(v, "/")
+		case "herdr_install_url":
+			c.HerdrInstall = v
+		case "herdr_install_sha256":
+			c.HerdrSHA256 = strings.ToLower(v)
+		case "state_dir":
+			c.StateDir = expand(v)
+		default:
+			return fmt.Errorf("unknown setting %q", k)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %v", k, err)
+		}
+	}
+	return nil
+}
+
+// Validate refuses anything that would be spliced into a command line,
+// a shell script or a firewall rule unchecked.
+func (c *Config) Validate() error {
+	chk := func(ok bool, format string, a ...any) error {
+		if ok {
+			return nil
+		}
+		return fmt.Errorf(format, a...)
+	}
+	for _, e := range []error{
+		chk(projectRe.MatchString(c.Project), "project %q is not a GCP project id", c.Project),
+		chk(zoneRe.MatchString(c.Zone), "zone %q is not a zone like us-central1-a", c.Zone),
+		chk(resRe.MatchString(c.MachineType) || strings.Contains(c.MachineType, "-"), "bad machine_type %q", c.MachineType),
+		chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.MachineType), "bad machine_type %q", c.MachineType),
+		chk(regexp.MustCompile(`^pd-[a-z]+$`).MatchString(c.DiskType), "bad disk_type %q", c.DiskType),
+		chk(c.BootDiskGB >= 10 && c.BootDiskGB <= 2000, "boot_disk_gb out of range"),
+		chk(c.DataDiskGB >= 10 && c.DataDiskGB <= 10000, "data_disk_gb out of range"),
+		chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.ImageProject), "bad image_project %q", c.ImageProject),
+		chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.ImageFamily), "bad image_family %q", c.ImageFamily),
+		chk(resRe.MatchString(c.Network), "bad network name %q", c.Network),
+		chk(userRe.MatchString(c.SSHUser) && c.SSHUser != "root", "bad ssh_user %q", c.SSHUser),
+		chk(c.IdleMinutes >= 5 && c.IdleMinutes <= 10080, "idle_minutes must be 5..10080"),
+		chk(c.MaxRunDuration == "" || durRe.MatchString(c.MaxRunDuration), "bad max_run_duration %q (want e.g. 24h, or empty)", c.MaxRunDuration),
+		chk(tagRe.MatchString(c.Tag), "bad tag %q (want tag:name)", c.Tag),
+		chk(c.TSAllowLogin == "" || loginRe.MatchString(c.TSAllowLogin), "bad ts_allow_login %q", c.TSAllowLogin),
+		chk(c.HerdrSHA256 == "" || regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(c.HerdrSHA256), "herdr_install_sha256 must be 64 hex digits"),
+		chk(c.HubVersion == "" || versionRe.MatchString(c.HubVersion), "hub_version %q is not a release tag like v0.3.0", c.HubVersion),
+	} {
+		if e != nil {
+			return e
+		}
+	}
+	if _, n, err := net.ParseCIDR(c.SubnetRange); err != nil || n.String() != c.SubnetRange {
+		return fmt.Errorf("subnet_range %q is not a CIDR network", c.SubnetRange)
+	}
+	if err := validateSSHSource(c.SSHSourceCIDR); err != nil {
+		return err
+	}
+	if c.TSAllowLogin == "" {
+		return fmt.Errorf("ts_allow_login is required: the Tailscale login that owns the hub device (the worker admits the hub's requests as that login)")
+	}
+	if _, err := hubURL(c.HubURL, true); err != nil {
+		return fmt.Errorf("hub_url: %v", err)
+	}
+	if _, err := hubURL(c.HubPeerURL, false); err != nil {
+		return fmt.Errorf("hub_peer_url: %v", err)
+	}
+	return nil
+}
+
+// validateSSHSource wants exactly one IPv4 /32: the workstation. Anything
+// wider (or 0.0.0.0/0, or a placeholder) is refused.
+func validateSSHSource(s string) error {
+	if s == "" || strings.Contains(strings.ToUpper(s), "CHANGE_ME") {
+		return fmt.Errorf("ssh_source_cidr is required: your workstation's public IPv4 as a /32")
+	}
+	ip, n, err := net.ParseCIDR(s)
+	if err != nil || ip.To4() == nil {
+		return fmt.Errorf("ssh_source_cidr %q is not an IPv4 CIDR", s)
+	}
+	if ones, _ := n.Mask.Size(); ones != 32 {
+		return fmt.Errorf("ssh_source_cidr %q must be a single address (/32)", s)
+	}
+	return nil
+}
+
+// hubURL checks a hub address: https (the Serve URL) or, for the peer
+// listener, plain http, always on a ts.net name.
+func hubURL(s string, serve bool) (*url.URL, error) {
+	if s == "" {
+		return nil, fmt.Errorf("required")
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.User != nil {
+		return nil, fmt.Errorf("%q is not a bare URL like https://hub.tailnet.ts.net", s)
+	}
+	want := "http"
+	if serve {
+		want = "https"
+	}
+	if u.Scheme != want {
+		return nil, fmt.Errorf("%q must be %s://", s, want)
+	}
+	h := u.Hostname()
+	if !strings.HasSuffix(h, ".ts.net") {
+		return nil, fmt.Errorf("%q is not a *.ts.net name", s)
+	}
+	if !serve && u.Port() == "" {
+		return nil, fmt.Errorf("%q needs the hub's peer listen port (COMEBYE_PEER_LISTEN)", s)
+	}
+	return u, nil
+}
+
+// WorkerDir is where one worker's ssh config and known_hosts live.
+func (c *Config) WorkerDir(name string) string { return filepath.Join(c.StateDir, name) }
+
+// KeyPath is the one ssh key the provisioner uses for all its workers.
+func (c *Config) KeyPath() string { return filepath.Join(c.StateDir, "id_ed25519") }
+
+// Hostnames used in GCE.
+func dataDiskName(name string) string { return name + "-data" }
+
+const (
+	labelKey = "managed-by"
+	labelVal = "comebye-worker"
+)

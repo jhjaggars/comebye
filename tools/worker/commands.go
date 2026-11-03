@@ -1,0 +1,687 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+func (e *env) printf(format string, a ...any) { fmt.Fprintf(e.Out, format, a...) }
+
+func (e *env) gc() *gcloud { return &gcloud{r: e.Run, cfg: e.Cfg} }
+
+func (e *env) hub() *hubClient { return &hubClient{base: e.Cfg.HubURL, http: e.HTTP} }
+
+func (e *env) wait(secs int) {
+	if e.Sleep != nil {
+		e.Sleep(secs)
+		return
+	}
+	time.Sleep(time.Duration(secs) * time.Second)
+}
+
+// poll calls f every few seconds until it returns true, an error, or the
+// attempts run out.
+func (e *env) poll(tries, every int, what string, f func() (bool, error)) error {
+	for i := 0; i < tries; i++ {
+		ok, err := f()
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		e.wait(every)
+	}
+	return fmt.Errorf("timed out waiting for %s", what)
+}
+
+func checkName(name string) error {
+	if !nameRe.MatchString(name) {
+		return fmt.Errorf("worker name %q: want a lowercase DNS label (letters, digits, hyphens; at most 30 characters)", name)
+	}
+	return nil
+}
+
+// resolveVersion is the comebye release the worker gets: the flag, else the
+// config pin, else whatever the hub runs. A hub on an unreleased build
+// reports something that is not a release tag; that is refused, since the
+// worker installs from a release tarball.
+func (e *env) resolveVersion(ctx context.Context, flagVal string) (string, error) {
+	v := flagVal
+	src := "--comebye-version"
+	if v == "" {
+		v, src = e.Cfg.HubVersion, "hub_version"
+	}
+	if v == "" {
+		var err error
+		if v, err = e.hub().Version(ctx); err != nil {
+			return "", err
+		}
+		src = "the hub's whoami"
+	}
+	if !versionRe.MatchString(v) {
+		return "", fmt.Errorf("comebye version %q (from %s) is not a release tag like v0.3.0: pass --comebye-version for a release, or upgrade the hub to one", v, src)
+	}
+	return v, nil
+}
+
+// ---- create ----
+
+type createOpts struct {
+	Version string
+}
+
+func (e *env) create(ctx context.Context, name string, o createOpts) error {
+	if err := checkName(name); err != nil {
+		return err
+	}
+	if e.DryRun {
+		return e.createPlan(name, o)
+	}
+	g := e.gc()
+	w := e.printf
+
+	// Version first: nothing is created if the hub's answer is unusable.
+	version, err := e.resolveVersion(ctx, o.Version)
+	if err != nil {
+		return err
+	}
+	w("worker %s: comebye %s\n", name, version)
+
+	w("1/8 network\n")
+	for _, s := range []struct {
+		what          string
+		check, create []string
+	}{
+		{"network " + e.Cfg.Network, g.argv("compute", "networks", "describe", e.Cfg.Network), g.networkCreate()},
+		{"subnet " + g.subnetName(), g.argv("compute", "networks", "subnets", "describe", g.subnetName(), "--region="+regionOf(e.Cfg.Zone)), g.subnetCreate()},
+		{"firewall " + g.firewallName(), g.argv("compute", "firewall-rules", "describe", g.firewallName()), g.firewallCreate()},
+	} {
+		if err := g.ensure(ctx, s.what, s.check, s.create, w); err != nil {
+			return err
+		}
+	}
+
+	w("2/8 ssh key\n")
+	pub, err := ensureKey(ctx, e)
+	if err != nil {
+		return err
+	}
+
+	w("3/8 data disk\n")
+	if err := g.ensure(ctx, "disk "+dataDiskName(name),
+		g.argv("compute", "disks", "describe", dataDiskName(name), "--zone="+e.Cfg.Zone), g.dataDiskCreate(name), w); err != nil {
+		return err
+	}
+
+	w("4/8 instance\n")
+	inst, err := g.describe(ctx, name)
+	if err != nil {
+		return err
+	}
+	switch {
+	case inst == nil:
+		f, err := os.CreateTemp("", "comebye-startup-*.sh")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(f.Name())
+		if _, err := f.WriteString(startupScript); err != nil {
+			return err
+		}
+		f.Close()
+		if _, err := g.run(ctx, g.instanceCreate(name, pub, f.Name())); err != nil {
+			return fmt.Errorf("creating instance: %w", err)
+		}
+	case checkOwned(inst) != nil:
+		return checkOwned(inst)
+	case inst.Status == "TERMINATED" || inst.Status == "STOPPED":
+		w("  instance %s: stopped, starting it\n", name)
+		if _, err := g.run(ctx, g.instanceAction("start", name)); err != nil {
+			return err
+		}
+	default:
+		w("  instance %s: %s\n", name, inst.Status)
+	}
+
+	w("5/8 verified ssh\n")
+	if err := e.connect(ctx, name); err != nil {
+		return err
+	}
+
+	w("6/8 packages, tailscale, idle timer\n")
+	rs, err := rootScript(e.Cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := ssh(ctx, e, name, "sudo bash -s", []byte(rs)); err != nil {
+		return fmt.Errorf("root bootstrap: %w", err)
+	}
+	if _, err := ssh(ctx, e, name, "sudo install -m 0755 /dev/stdin /usr/local/sbin/comebye-idle-check", []byte(idleCheck)); err != nil {
+		return fmt.Errorf("installing the idle check: %w", err)
+	}
+
+	w("7/8 tailnet\n")
+	if err := e.enroll(ctx, name); err != nil {
+		return err
+	}
+
+	w("8/8 herdr, agent CLIs, comebye %s\n", version)
+	us, err := userScript(e.Cfg, name, version)
+	if err != nil {
+		return err
+	}
+	if _, err := ssh(ctx, e, name, "bash -s", []byte(us)); err != nil {
+		return fmt.Errorf("user bootstrap: %w", err)
+	}
+
+	return e.awaitJoin(ctx, name)
+}
+
+// connect reads the VM's host key from guest attributes, writes the private
+// ssh config and waits until ssh answers.
+func (e *env) connect(ctx context.Context, name string) error {
+	g := e.gc()
+	var ip, key string
+	err := e.poll(60, 5, "the VM's ssh host key in guest attributes", func() (bool, error) {
+		inst, err := g.describe(ctx, name)
+		if err != nil {
+			return false, err
+		}
+		if inst == nil {
+			return false, fmt.Errorf("instance %s does not exist", name)
+		}
+		if inst.Status != "RUNNING" {
+			return false, nil
+		}
+		ip = inst.ExternalIP()
+		out, _, err := e.Run.Run(ctx, "gcloud", g.guestAttr(name, "comebye/ssh-host-key"), nil)
+		if err != nil || ip == "" {
+			return false, nil
+		}
+		key, err = parseHostKey(out)
+		return err == nil, nil
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := writeSSHConfig(e.Cfg, name, ip, key); err != nil {
+		return err
+	}
+	e.printf("  host key verified through GCE for %s\n", ip)
+	return e.poll(60, 5, "ssh", func() (bool, error) {
+		_, err := ssh(ctx, e, name, "true", nil)
+		return err == nil, nil
+	})
+}
+
+// enrolled reports whether tailscale on the VM is up already.
+func (e *env) enrolled(ctx context.Context, name string) bool {
+	out, err := ssh(ctx, e, name, "tailscale ip -4", nil)
+	return err == nil && strings.HasPrefix(strings.TrimSpace(out), "100.")
+}
+
+// authKey returns a one-time tagged key: minted through the OAuth client
+// (after clearing a stale offline device of the same name and tag), else read
+// at a hidden prompt.
+func (e *env) authKey(ctx context.Context, name string) (key string, ts *tsClient, err error) {
+	id, secret, oerr := LoadOAuth(e.Cfg.TSOAuthFile)
+	if oerr != nil {
+		if !os.IsNotExist(oerr) {
+			return "", nil, oerr
+		}
+		e.printf("  no OAuth client at %s: enter a single-use key tagged %s (minted by hand in the admin console)\n", e.Cfg.TSOAuthFile, e.Cfg.Tag)
+		k, err := e.ReadSecret("Tailscale auth key: ")
+		k = strings.TrimSpace(k)
+		if err != nil || k == "" {
+			return "", nil, fmt.Errorf("no Tailscale key given")
+		}
+		return k, nil, nil
+	}
+	ts = &tsClient{base: e.Cfg.TSAPIBase, http: e.HTTP, id: id, secret: secret}
+	devs, err := ts.Devices(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, d := range staleDevices(devs, name, e.Cfg.Tag) {
+		e.printf("  removing the stale offline device %s (%s)\n", d.Name, d.ID)
+		if err := ts.DeleteDevice(ctx, d.ID); err != nil {
+			return "", nil, err
+		}
+	}
+	kid, key, err := ts.MintKey(ctx, e.Cfg.Tag, "comebye-worker "+name)
+	if err != nil {
+		return "", nil, err
+	}
+	e.printf("  minted a single-use %s key (id %s, valid 10 minutes)\n", e.Cfg.Tag, kid)
+	return key, ts, nil
+}
+
+func (e *env) enroll(ctx context.Context, name string) error {
+	if e.enrolled(ctx, name) {
+		e.printf("  already on the tailnet\n")
+	} else {
+		key, _, err := e.authKey(ctx, name)
+		if err != nil {
+			return err
+		}
+		// The key goes over stdin: never argv, a file, or a log line.
+		up := fmt.Sprintf("sudo tailscale up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s",
+			shellQuote(name), shellQuote(e.Cfg.Tag))
+		if _, err := ssh(ctx, e, name, up, []byte(key)); err != nil {
+			return fmt.Errorf("tailscale up: %w", redact(err, key))
+		}
+	}
+	if _, err := ssh(ctx, e, name, "sudo tailscale set --operator="+shellQuote(e.Cfg.SSHUser), nil); err != nil {
+		return err
+	}
+	if _, err := ssh(ctx, e, name, "tailscale serve --bg 8741", nil); err != nil {
+		return fmt.Errorf("tailscale serve: %w (are HTTPS certificates enabled for the tailnet?)", err)
+	}
+	return nil
+}
+
+func redact(err error, secret string) error {
+	if secret == "" || err == nil {
+		return err
+	}
+	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), secret, "[redacted]"))
+}
+
+// awaitJoin waits for the hub to list the worker (self-registration), else
+// prints the fallback the user runs on the hub.
+func (e *env) awaitJoin(ctx context.Context, name string) error {
+	e.printf("waiting for the hub to register %s ...\n", name)
+	var p *hubPeer
+	err := e.poll(18, 5, "the hub to list "+name, func() (bool, error) {
+		var err error
+		p, err = e.hub().Peer(ctx, name)
+		if err != nil {
+			return false, nil
+		}
+		return p != nil, nil
+	})
+	if err != nil {
+		e.printf("The hub has not listed %s. If it is not set up for self-registration, add it by hand on the hub, as the user:\n\n  comebye peer add %s %s --tag %s\n\n",
+			name, name, peerURL(e.Cfg, name), e.Cfg.Tag)
+		return fmt.Errorf("worker %s is built and on the tailnet, but not yet a peer", name)
+	}
+	e.printf("hub: %s is %s (%d agents, %s)\n", name, p.Status, p.Agents, orDash(p.Version))
+	return nil
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// ---- dry-run ----
+
+func (e *env) createPlan(name string, o createOpts) error {
+	c := e.Cfg
+	g := e.gc()
+	version := o.Version
+	if version == "" {
+		version = c.HubVersion
+	}
+	if version == "" {
+		version = "<the hub's version, read from " + c.HubURL + "/api/whoami>"
+	}
+	pub := "<contents of " + c.KeyPath() + ".pub>"
+	if b, err := os.ReadFile(c.KeyPath() + ".pub"); err == nil {
+		if f := strings.Fields(string(b)); len(f) >= 2 {
+			pub = f[0] + " " + f[1] + " comebye-worker"
+		}
+	}
+	line := func(args []string) string {
+		q := make([]string, len(args))
+		for i, a := range args {
+			if shellSafe.MatchString(a) {
+				q[i] = a
+			} else {
+				q[i] = shellQuote(a)
+			}
+		}
+		return "gcloud " + strings.Join(q, " ")
+	}
+	e.printf("DRY RUN: nothing is created, no key is minted, no host is contacted.\n\n")
+	e.printf("worker      %s\nproject     %s   zone %s\nmachine     %s, boot %d GB, data %d GB %s\ncomebye     %s\ntailnet tag %s   hub %s\n\n",
+		name, c.Project, c.Zone, c.MachineType, c.BootDiskGB, c.DataDiskGB, c.DiskType, version, c.Tag, c.HubPeerURL)
+	e.printf("1. network (each created only if missing)\n")
+	for _, a := range [][]string{g.networkCreate(), g.subnetCreate(), g.firewallCreate()} {
+		e.printf("   %s\n", line(a))
+	}
+	e.printf("2. ssh key: ssh-keygen -t ed25519 at %s, only if absent\n", c.KeyPath())
+	e.printf("3. data disk (kept by destroy unless --delete-data-disk)\n   %s\n", line(g.dataDiskCreate(name)))
+	e.printf("4. instance (the startup script only mounts /data and publishes the ssh host key)\n   %s\n", line(g.instanceCreate(name, pub, "<startup.sh>")))
+	e.printf("5. host key: %s\n   written to %s/known_hosts; ssh runs with StrictHostKeyChecking yes\n", line(g.guestAttr(name, "comebye/ssh-host-key")), c.WorkerDir(name))
+	e.printf("6. over ssh as root: apt packages (git jq bubblewrap socat curl ...), tailscale from its apt repo,\n   linger, /data/code, /data/worktrees, idle-poweroff timer (%d min, no ssh session and no working agent)\n", c.IdleMinutes)
+	e.printf("7. tailnet:\n")
+	if _, err := os.Stat(c.TSOAuthFile); err == nil {
+		e.printf("   OAuth client %s: delete an offline %s device named %s (never an untagged one), mint a single-use\n   pre-authorized %s key valid 10 minutes\n", c.TSOAuthFile, c.Tag, name, c.Tag)
+	} else {
+		e.printf("   no OAuth client at %s: a hidden prompt asks for a single-use key tagged %s\n", c.TSOAuthFile, c.Tag)
+	}
+	e.printf("   ssh %s 'sudo tailscale up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s'   (key on stdin: <not shown>)\n", name, name, c.Tag)
+	e.printf("   ssh %s 'sudo tailscale set --operator=%s'; ssh %s 'tailscale serve --bg 8741'\n", name, c.SSHUser, name)
+	e.printf("8. over ssh as %s: herdr (%s%s) as a user service; claude and codex installed, not signed in;\n   comebye %s from %s/download/<tag>/comebye_linux_<arch>.tar.gz, SHA256SUMS checked, then `comebye upgrade --version`\n   ~/.config/comebye/env:\n",
+		c.SSHUser, c.HerdrInstall, map[bool]string{true: ", sha256 pinned", false: ", NOT pinned"}[c.HerdrSHA256 != ""], version, c.ReleasesURL)
+	for _, l := range []string{
+		"COMEBYE_HOST_NAME=" + name, "COMEBYE_TS_ALLOW_LOGIN=" + c.TSAllowLogin, "COMEBYE_PUSH=false",
+		"COMEBYE_HUB=" + c.HubPeerURL, "COMEBYE_ANNOUNCE=1", "COMEBYE_LAUNCH_ROOTS=/data/code", "COMEBYE_WORKTREE_ROOT=/data/worktrees",
+	} {
+		e.printf("     %s\n", l)
+	}
+	e.printf("9. wait for the hub (%s) to list %s; if it does not, print:\n   comebye peer add %s %s --tag %s\n", c.HubURL, name, name, peerURL(c, name), c.Tag)
+	e.printf("\nNo repo is cloned and no agent is signed in; sign in with `worker login %s claude|codex`.\n", name)
+	return nil
+}
+
+// ---- status ----
+
+func (e *env) status(ctx context.Context, name string) error {
+	g := e.gc()
+	if name == "" {
+		return e.statusAll(ctx)
+	}
+	if err := checkName(name); err != nil {
+		return err
+	}
+	inst, err := g.describe(ctx, name)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		e.printf("%s: no such instance in %s/%s\n", name, e.Cfg.Project, e.Cfg.Zone)
+		return nil
+	}
+	e.printf("gce         %s (%s)  %s\n", inst.Status, shortType(inst.MachineType), orDash(inst.ExternalIP()))
+	if inst.Status == "RUNNING" {
+		if err := e.connect(ctx, name); err != nil {
+			e.printf("ssh         unreachable: %v\n", err)
+		} else {
+			ip, _ := ssh(ctx, e, name, "tailscale ip -4", nil)
+			e.printf("tailnet     %s\n", orDash(strings.TrimSpace(ip)))
+			v, _ := ssh(ctx, e, name, "$HOME/.local/bin/comebye -version", nil)
+			active, _ := ssh(ctx, e, name, "systemctl --user is-active comebye herdr | paste -sd' '", nil)
+			e.printf("comebye     %s   units (comebye herdr): %s\n", orDash(strings.TrimSpace(v)), orDash(strings.TrimSpace(active)))
+		}
+	}
+	e.tailnetLine(ctx, name)
+	if p, err := e.hub().Peer(ctx, name); err != nil {
+		e.printf("hub         unavailable: %v\n", err)
+	} else if p == nil {
+		e.printf("hub         not a peer\n")
+	} else {
+		hv, _ := e.hub().Version(ctx)
+		mark := ""
+		if hv != "" && p.Version != "" && hv != p.Version {
+			mark = "   VERSION MISMATCH (hub " + hv + "): run `comebye upgrade` on the worker"
+		}
+		e.printf("hub         %s, %d agents, %s%s %s\n", p.Status, p.Agents, orDash(p.Version), mark, p.Error)
+	}
+	return nil
+}
+
+func shortType(s string) string { return filepath.Base(s) }
+
+func (e *env) tsClientIfConfigured() *tsClient {
+	id, secret, err := LoadOAuth(e.Cfg.TSOAuthFile)
+	if err != nil {
+		return nil
+	}
+	return &tsClient{base: e.Cfg.TSAPIBase, http: e.HTTP, id: id, secret: secret}
+}
+
+func (e *env) tailnetLine(ctx context.Context, name string) {
+	ts := e.tsClientIfConfigured()
+	if ts == nil {
+		e.printf("tailnet api not configured (no OAuth client)\n")
+		return
+	}
+	devs, err := ts.Devices(ctx)
+	if err != nil {
+		e.printf("tailnet api %v\n", err)
+		return
+	}
+	own := ownDevices(devs, name, e.Cfg.Tag)
+	if len(own) == 0 {
+		e.printf("tailnet api no %s device named %s\n", e.Cfg.Tag, name)
+	}
+	for _, d := range own {
+		state := "offline since " + d.LastSeen
+		if d.ConnectedToControl {
+			state = "online"
+		}
+		e.printf("tailnet api %s %s\n", d.Name, state)
+	}
+}
+
+func (e *env) statusAll(ctx context.Context) error {
+	g := e.gc()
+	out, err := g.run(ctx, g.instanceList())
+	if err != nil {
+		return err
+	}
+	var insts []Instance
+	if err := json.Unmarshal([]byte(out), &insts); err != nil {
+		return err
+	}
+	e.printf("instances (label %s=%s):\n", labelKey, labelVal)
+	for _, i := range insts {
+		e.printf("  %-24s %-11s %s\n", i.Name, i.Status, orDash(i.ExternalIP()))
+	}
+	out, err = g.run(ctx, g.diskList())
+	if err != nil {
+		return err
+	}
+	var disks []struct {
+		Name  string   `json:"name"`
+		Users []string `json:"users"`
+		Size  string   `json:"sizeGb"`
+	}
+	if err := json.Unmarshal([]byte(out), &disks); err != nil {
+		return err
+	}
+	e.printf("disks:\n")
+	for _, d := range disks {
+		use := "unattached (billed, kept)"
+		if len(d.Users) > 0 {
+			use = "attached"
+		}
+		e.printf("  %-24s %s GB  %s\n", d.Name, d.Size, use)
+	}
+	if ts := e.tsClientIfConfigured(); ts != nil {
+		devs, err := ts.Devices(ctx)
+		if err != nil {
+			return err
+		}
+		e.printf("tailnet devices tagged %s:\n", e.Cfg.Tag)
+		for _, d := range devs {
+			if hasTag(d, e.Cfg.Tag) {
+				e.printf("  %-24s %v\n", d.Hostname, map[bool]string{true: "online", false: "offline"}[d.ConnectedToControl])
+			}
+		}
+	}
+	return nil
+}
+
+// ---- stop / start ----
+
+func (e *env) stop(ctx context.Context, name string) error {
+	if err := checkName(name); err != nil {
+		return err
+	}
+	if err := e.owned(ctx, name); err != nil {
+		return err
+	}
+	if _, err := e.gc().run(ctx, e.gc().instanceAction("stop", name)); err != nil {
+		return err
+	}
+	e.printf("%s stopped. The tailnet node and the hub's peer entry are kept (the hub shows it unreachable). Disks are still billed.\n", name)
+	return nil
+}
+
+func (e *env) owned(ctx context.Context, name string) error {
+	inst, err := e.gc().describe(ctx, name)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		return fmt.Errorf("no instance %s in %s/%s", name, e.Cfg.Project, e.Cfg.Zone)
+	}
+	return checkOwned(inst)
+}
+
+func (e *env) start(ctx context.Context, name string) error {
+	if err := checkName(name); err != nil {
+		return err
+	}
+	if err := e.owned(ctx, name); err != nil {
+		return err
+	}
+	if _, err := e.gc().run(ctx, e.gc().instanceAction("start", name)); err != nil {
+		return err
+	}
+	// The external IP changes across a stop/start: rewrite the ssh config
+	// from GCE again, with the host key GCE vouches for.
+	if err := e.connect(ctx, name); err != nil {
+		return err
+	}
+	if err := e.poll(24, 5, "comebye to be active", func() (bool, error) {
+		out, _ := ssh(ctx, e, name, "systemctl --user is-active comebye", nil)
+		return strings.TrimSpace(out) == "active", nil
+	}); err != nil {
+		return err
+	}
+	v, _ := ssh(ctx, e, name, "$HOME/.local/bin/comebye -version", nil)
+	e.printf("%s is up, comebye %s\n", name, orDash(strings.TrimSpace(v)))
+	if hv, err := e.hub().Version(ctx); err == nil && !strings.Contains(v, hv) {
+		e.printf("warning: the hub runs %s; run `comebye upgrade --version %s` on %s\n", hv, hv, name)
+	}
+	return nil
+}
+
+// ---- destroy ----
+
+type destroyOpts struct{ DeleteDataDisk bool }
+
+func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
+	if err := checkName(name); err != nil {
+		return err
+	}
+	inst, err := e.gc().describe(ctx, name)
+	if err != nil {
+		return err
+	}
+	if inst != nil {
+		if err := checkOwned(inst); err != nil {
+			return err
+		}
+	}
+	disk := "kept (" + dataDiskName(name) + ")"
+	if o.DeleteDataDisk {
+		disk = "DELETED (" + dataDiskName(name) + ")"
+	}
+	e.printf("This removes worker %s: the VM, its tailnet node, and the hub's peer entry. Data disk: %s.\nType the worker's name to confirm: ", name, disk)
+	line, _ := bufio.NewReader(e.In).ReadString('\n')
+	if strings.TrimSpace(line) != name {
+		return fmt.Errorf("confirmation did not match: nothing was changed")
+	}
+	var failed []string
+	step := func(what string, err error) {
+		if err != nil {
+			failed = append(failed, what)
+			e.printf("  %s: %v\n", what, err)
+			return
+		}
+		e.printf("  %s: ok\n", what)
+	}
+
+	if inst != nil && inst.Status == "RUNNING" {
+		if err := e.connect(ctx, name); err != nil {
+			step("reach the VM", err)
+		} else {
+			// Best effort: sign the agents out and stop services, then leave the tailnet.
+			ssh(ctx, e, name, "systemctl --user stop comebye herdr", nil)
+			ssh(ctx, e, name, `PATH="$HOME/.local/bin:$PATH"; claude auth logout; codex logout; true`, nil)
+			_, err := ssh(ctx, e, name, "sudo tailscale logout", nil)
+			step("tailscale logout", err)
+		}
+	} else if inst != nil {
+		e.printf("  the VM is %s: skipping the on-VM sign-out and logout (the node is removed through the API below)\n", inst.Status)
+	}
+
+	if ts := e.tsClientIfConfigured(); ts != nil {
+		devs, err := ts.Devices(ctx)
+		if err == nil {
+			for _, d := range ownDevices(devs, name, e.Cfg.Tag) {
+				step("delete tailnet device "+d.Name, ts.DeleteDevice(ctx, d.ID))
+			}
+		} else {
+			step("list tailnet devices", err)
+		}
+	} else {
+		e.printf("  no OAuth client: remove the node %s from https://login.tailscale.com/admin/machines if it is still listed\n", name)
+	}
+
+	if err := e.hub().RemovePeer(ctx, name); err != nil {
+		e.printf("  hub peer entry: %v\n  remove it by hand on the hub: comebye peer remove %s\n", err, name)
+		failed = append(failed, "hub peer entry")
+	} else {
+		e.printf("  hub peer entry: removed\n")
+	}
+
+	if inst != nil {
+		_, err := e.gc().run(ctx, e.gc().instanceAction("delete", name))
+		step("delete instance", err)
+	}
+	if o.DeleteDataDisk {
+		g := e.gc()
+		ok, err := g.exists(ctx, g.argv("compute", "disks", "describe", dataDiskName(name), "--zone="+e.Cfg.Zone))
+		if err == nil && ok {
+			_, err = g.run(ctx, g.diskDelete(dataDiskName(name)))
+			step("delete data disk", err)
+		}
+	}
+	os.RemoveAll(e.Cfg.WorkerDir(name))
+	if len(failed) > 0 {
+		return fmt.Errorf("destroy finished with problems: %s", strings.Join(failed, ", "))
+	}
+	e.printf("%s destroyed.\n", name)
+	return nil
+}
+
+// ---- login ----
+
+func (e *env) login(ctx context.Context, name, agent string) error {
+	if err := checkName(name); err != nil {
+		return err
+	}
+	var cmd string
+	switch agent {
+	case "claude":
+		cmd = "claude auth login"
+	case "codex":
+		cmd = "codex login"
+	default:
+		return fmt.Errorf("agent %q: want claude or codex", agent)
+	}
+	if err := e.owned(ctx, name); err != nil {
+		return err
+	}
+	if err := e.connect(ctx, name); err != nil {
+		return err
+	}
+	e.printf("Signing in to %s on %s. Open the URL it prints in your own browser; the credential is created on the VM and copies nothing from this machine.\n", agent, name)
+	remote := `PATH="$HOME/.local/bin:$PATH"; ` + cmd
+	return e.Run.Interactive(ctx, "ssh", sshArgs(e.Cfg, name, true, remote))
+}

@@ -1,0 +1,34 @@
+# comebye-worker config. Copy to ~/.config/comebye-worker/config.
+# KEY=VALUE, one per line. No secrets here: the Tailscale OAuth client lives
+# in its own mode-0600 file (ts_oauth_file).
+
+# --- required
+project=my-gcp-project
+zone=us-central1-a
+# Your workstation's public IPv4 as a single /32: the only address that may reach tcp:22.
+ssh_source_cidr=203.0.113.7/32
+# The Tailscale login that owns the hub device (the worker admits the hub's requests as it).
+ts_allow_login=you@example.com
+# The hub's Serve URL as you reach it (version lookup, peer removal) ...
+hub_url=https://hub.your-tailnet.ts.net
+# ... and the hub's peer listener, which becomes COMEBYE_HUB on the worker.
+hub_peer_url=http://hub.your-tailnet.ts.net:8742
+
+# --- defaults, shown for reference
+# machine_type=e2-standard-4
+# boot_disk_gb=20
+# data_disk_gb=50
+# disk_type=pd-balanced
+# image_project=debian-cloud
+# image_family=debian-12
+# network=comebye-worker
+# subnet_range=10.77.0.0/24
+# ssh_user=worker
+# idle_minutes=120
+# max_run_duration=24h        # GCE backstop; empty disables
+# tag=tag:worker
+# ts_oauth_file=~/.config/comebye-worker/tailscale-oauth
+# hub_version=v0.3.0          # pin instead of asking the hub
+# herdr_install_url=https://herdr.dev/install.sh
+# herdr_install_sha256=       # pin the install script (recommended)
+# releases_url=https://github.com/jhjaggars/comebye/releases
