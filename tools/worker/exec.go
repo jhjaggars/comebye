@@ -30,7 +30,7 @@ func (osRunner) Run(ctx context.Context, name string, args []string, stdin []byt
 	}
 	err := cmd.Run()
 	if err != nil {
-		err = fmt.Errorf("%s: %w: %s", name, err, firstLine(errb.String()))
+		err = fmt.Errorf("%s: %w: %s", name, err, lastLines(errb.String(), 6))
 	}
 	return out.String(), errb.String(), err
 }
@@ -39,6 +39,17 @@ func (osRunner) Interactive(ctx context.Context, name string, args []string) err
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// lastLines is the tail of a command's stderr: the reason is at the end,
+// warnings come first.
+func lastLines(s string, n int) string {
+	s = strings.TrimSpace(s)
+	l := strings.Split(s, "\n")
+	if len(l) > n {
+		l = l[len(l)-n:]
+	}
+	return strings.Join(l, " | ")
 }
 
 func firstLine(s string) string {
