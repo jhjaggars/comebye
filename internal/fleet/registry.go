@@ -218,3 +218,90 @@ func (f *Fleet) Remove(name, by string) error {
 	f.broadcast()
 	return nil
 }
+
+// Refusals of Announce.
+var (
+	// ErrNameTaken: the name belongs to a peer on a different node.
+	ErrNameTaken = errors.New("that peer name belongs to another node")
+	// ErrNodeRegistered: the node is already registered under another name.
+	ErrNodeRegistered = errors.New("this node is already registered under another name")
+)
+
+func hostOf(u interface{ Hostname() string }) string {
+	return strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+}
+
+// FindByHost returns the peer one of whose addresses is on node (a
+// MagicDNS name, lowercase, no trailing dot): its name, recorded tag and
+// source.
+func (f *Fleet) FindByHost(node string) (name, tag string, ok bool) {
+	node = strings.ToLower(strings.TrimSuffix(node, "."))
+	for _, p := range f.peerList() {
+		for _, u := range p.addrs {
+			if hostOf(u) == node {
+				return p.name, p.meta.Tag, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// Announce registers (or re-confirms) the peer a tagged node announced.
+// The caller has verified node and tag with WhoIs. rawURL, when given,
+// must be on that very node: a worker can register only itself. The same
+// node announcing again is a no-op (created is false); a name held by a
+// different node, or a node already registered under another name, is
+// refused.
+func (f *Fleet) Announce(name, rawURL, node, tag string) (info PeerInfo, created bool, err error) {
+	node = strings.ToLower(strings.TrimSuffix(node, "."))
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		name, _, _ = strings.Cut(node, ".")
+	}
+	if rawURL = strings.TrimSpace(rawURL); rawURL == "" {
+		rawURL = "https://" + node
+	}
+	f.announceMu.Lock()
+	defer f.announceMu.Unlock()
+	f.mu.RLock()
+	reg := f.reg
+	f.mu.RUnlock()
+	if reg == nil {
+		return PeerInfo{}, false, ErrNoStore
+	}
+	addrs, err := ParseAddrs([]string{rawURL}, reg.opt)
+	if err != nil {
+		return PeerInfo{}, false, InvalidError{err.Error()}
+	}
+	if h := hostOf(addrs[0]); h != node {
+		return PeerInfo{}, false, InvalidError{fmt.Sprintf("the announced address must be this node (%s), not %s", node, h)}
+	}
+	if have, _, ok := f.FindByHost(node); ok {
+		if have == name {
+			return f.info(name), false, nil
+		}
+		return PeerInfo{}, false, fmt.Errorf("%w (%q)", ErrNodeRegistered, have)
+	}
+	if name != "" && f.lookup(name) != nil {
+		return PeerInfo{}, false, ErrNameTaken
+	}
+	by := tag + "@" + node
+	info, err = f.Add(name, []string{addrs[0].String()}, by, tag)
+	if err != nil {
+		return PeerInfo{}, false, err
+	}
+	f.opts.Logf("peers: self-registered %s at %s (node %s, tag %s)", name, addrs[0], node, tag)
+	return info, true, nil
+}
+
+func (f *Fleet) info(name string) PeerInfo {
+	for _, i := range f.List() {
+		if i.Name == name {
+			return i
+		}
+	}
+	return PeerInfo{}
+}
+
+// Logf logs through the fleet's logger.
+func (f *Fleet) Logf(format string, args ...any) { f.opts.Logf(format, args...) }

@@ -92,6 +92,12 @@ func cleanID(s string) string {
 // otherwise the Tailscale identity, as before, with a peer's forwarded
 // agent request turned into the agent role.
 func (s *Server) identify(r *http.Request) (caller, bool) {
+	// On the peer listener the caller was identified by WhoIs (see
+	// PeerHandler); no header, token or login is consulted, and the role
+	// can only be the forwarded agent.
+	if t, ok := taggedOf(r); ok {
+		return caller{role: roleAgent, pane: cleanID(r.Header.Get(HeaderAgent)), host: t.peer, forwarded: true}, true
+	}
 	if tok := r.Header.Get(HeaderAgentToken); tok != "" {
 		if !agenttoken.Equal(tok, s.cfg.AgentToken) {
 			return caller{}, false

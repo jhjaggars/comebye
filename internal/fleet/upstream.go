@@ -30,9 +30,21 @@ type Upstream struct {
 // http only on loopback with allowHTTPLoopback, for tests). A nil client
 // gets the fleet's default (no redirects, no proxy).
 func NewUpstream(raw string, allowHTTPLoopback bool, client *http.Client) (*Upstream, error) {
-	u, err := parsePeerURL(strings.TrimSpace(raw), allowHTTPLoopback)
+	raw = strings.TrimSpace(raw)
+	u, err := parsePeerURL(raw, allowHTTPLoopback)
 	if err != nil {
-		return nil, err
+		// http://<hub>.ts.net:<port> is the hub's peer listener (see
+		// server.PeerHandler): plain http, but only to a tailnet host,
+		// where WireGuard encrypts and authenticates the hop.
+		hu, perr := url.Parse(raw)
+		if perr != nil || !strings.EqualFold(hu.Scheme, "http") || hu.Port() == "" || hu.User != nil || hu.RawQuery != "" || hu.Fragment != "" || (hu.Path != "" && hu.Path != "/") || !tailnetHost(hu.Hostname(), []string{".ts.net"}) {
+			return nil, err
+		}
+		hu.Scheme, hu.Host = "http", strings.ToLower(hu.Host)
+		if u, err = parsePeerURL("https://"+hu.Host, false); err != nil {
+			return nil, err
+		}
+		u.Scheme = "http"
 	}
 	if client == nil {
 		o := Options{}
@@ -128,7 +140,7 @@ func (u *Upstream) Do(ctx context.Context, req UpstreamRequest) (int, string, []
 	isJSON := strings.TrimSpace(strings.ToLower(mt)) == "application/json"
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden && !isJSON:
-		return 0, "", nil, errors.New("the hub rejected this peer; the hub's -ts-allow-login must include this device owner's login")
+		return 0, "", nil, errors.New("the hub rejected this peer; the hub's -ts-allow-login must include this device owner's login (or, over the hub's peer listener, this node must carry an allowed -ts-allow-tag and be a registered peer)")
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		return 0, "", nil, errors.New("the hub answered with a redirect")
 	}

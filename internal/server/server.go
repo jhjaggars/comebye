@@ -28,6 +28,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/transcript"
+	"github.com/jhjaggars/comebye/internal/tsauth"
 	"github.com/jhjaggars/comebye/web"
 )
 
@@ -104,6 +105,13 @@ type Config struct {
 	// Coordinator preset appends to the preset's own (e.g. pi: --auto,
 	// a flag only some Pi installs have).
 	CoordinatorArgs map[string][]string
+	// AllowTags are the Tailscale tags (tag:worker) admitted on the peer
+	// listener (PeerHandler); WhoIs identifies the callers there.
+	AllowTags []string
+	// WhoIs identifies a connection's tailnet node (tailscaled's WhoIs).
+	WhoIs tsauth.Resolver
+	// SelfRegister lets a tagged node announce itself as a peer.
+	SelfRegister bool
 }
 
 // Server is the phone app HTTP server.
@@ -257,6 +265,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/peers", s.auth(s.handlePeers))
 	s.mux.HandleFunc("POST /api/peers", s.auth(s.handleAddPeer))
 	s.mux.HandleFunc("DELETE /api/peers/{name}", s.auth(s.handleRemovePeer))
+	// Self-registration: answered only on the peer listener, to a tagged node.
+	s.mux.HandleFunc("POST /api/peers/announce", s.authAgentLocal(s.handleAnnounce))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.onHost("output", s.handleOutput)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.onHost("transcript", s.handleTranscript)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.onHost("subagent-transcript", s.handleSubagentTranscript)))
@@ -348,7 +358,9 @@ func (s *Server) ListenAndServe() error {
 // prompts or keys to the agents. CrossOriginProtection rejects cross-origin
 // unsafe requests via Sec-Fetch-Site/Origin; requiring a JSON content type
 // also forces a CORS preflight on browsers too old to send those headers.
-func (s *Server) Handler() http.Handler {
+func (s *Server) Handler() http.Handler { return s.checkHost(s.base()) }
+
+func (s *Server) base() http.Handler {
 	jsonOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			ct := r.Header.Get("Content-Type")
@@ -359,7 +371,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.mux.ServeHTTP(w, r)
 	})
-	return s.checkHost(http.NewCrossOriginProtection().Handler(withGzip(jsonOnly)))
+	return http.NewCrossOriginProtection().Handler(withGzip(jsonOnly))
 }
 
 func isLoopbackAddr(addr string) bool {

@@ -286,6 +286,67 @@ so it does not notify for transitions that happened while the peer was
 unreachable. A plain instance without `-peers` or `-hub-mode` behaves
 exactly as before.
 
+### Tagged workers (`tag:worker` VMs)
+
+A VM that joins the tailnet with an ACL tag (`tag:worker`, e.g. from an auth
+key created for the tag) has **no user login**, so Tailscale Serve sends no
+`Tailscale-User-Login` for it and the hub's `-ts-allow-login` check rejects
+it: its workers could not `comebye report`. A tagged node therefore talks to
+the hub over a separate **peer listener**, where the hub identifies the
+caller with tailscaled's WhoIs on the connection's tailnet source address.
+
+On the hub (off unless you set these):
+
+```sh
+COMEBYE_HUB_MODE=1
+COMEBYE_TS_ALLOW_TAGS=tag:worker     # tags admitted on the peer listener
+COMEBYE_PEER_LISTEN=8742             # a port; binds to the hub's tailnet IP only
+COMEBYE_PEER_SELF_REGISTER=1         # optional: let workers register themselves
+# COMEBYE_TS_SOCKET=/var/run/tailscale/tailscaled.sock   # LocalAPI, if elsewhere
+```
+
+On the tagged worker VM:
+
+```sh
+COMEBYE_HUB=http://hub.tailnet.ts.net:8742   # the peer listener, not the Serve URL
+COMEBYE_ANNOUNCE=1                           # register with the hub at startup
+# COMEBYE_ANNOUNCE_URL=https://w1.tailnet.ts.net   # default: https://<this node's name>
+```
+
+(The worker also serves itself with `tailscale serve --bg 8741` as any peer
+does; the hub reaches it through that URL as usual.)
+
+- **What a tagged node can do:** exactly what a peer's forwarded agent can:
+  the agent-role requests of its workers (`comebye report`, `handoff`,
+  `prompt`, `mark`, the ledger and briefing reads - [Coordinators](agents.md#coordinators)),
+  attributed to the peer's name. **What it can't:** anything the user alone
+  can do (keys, answers, launching, removals, push, the peer registry), the
+  web app, or anything as the user. The listener serves `/api/*` only.
+- **Two conditions, both checked on every request:** the node carries an
+  allowed tag, and it is a **registered peer** - one of the peer's addresses
+  is the node itself (its MagicDNS name). A tagged node that is not
+  registered gets 403 `not_a_peer`. A peer added with `--tag` must still
+  carry that tag.
+- **Registering:** either the user runs `comebye peer add w1
+  https://w1.tailnet.ts.net --tag tag:worker` on the hub, or, with
+  `COMEBYE_PEER_SELF_REGISTER=1`, the worker announces itself
+  (`COMEBYE_ANNOUNCE=1`; retried until the hub answers). The announced
+  address must be the caller's own node, so a worker cannot register another
+  machine. Announcing again from the same node changes nothing; a name held
+  by another node, or a second name for a registered node, is refused (409).
+  The hub's usual rule applies: `https` under `*.ts.net`. Each registration
+  is logged and recorded with `added_by` `tag:worker@<node>` and the tag.
+- **Removal is the user's alone** (`comebye peer remove`); a tagged node can
+  not unregister itself or anyone else.
+- **Trade-offs:** the peer listener is plain HTTP (the hop is encrypted and
+  authenticated by WireGuard). It listens only on the hub's tailnet address;
+  tailscaled must be reachable for WhoIs (the listener waits for it at
+  start). **Restrict it in your tailnet ACLs** to the tagged workers (and
+  your own devices if you want): see
+  [Security](security.md#tagged-nodes-and-the-peer-listener). Self-registering
+  gives the node what any peer has: the hub sends it prompts and trusts its
+  agent list, so only tag machines you trust.
+
 ### Re-pointing a peer after a Tailscale rename
 
 When a host re-registers in the tailnet it gets a new name (`laharl` ->
@@ -409,11 +470,17 @@ to the home screen again.
 | `-host-name` | `COMEBYE_HOST_NAME` | short hostname | This host's name in agent IDs (`<host>/<pane>`), URLs and the UI. Lowercase DNS label. |
 | `-peers` | `COMEBYE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional; several addresses per peer, tried in order, `|`-separated). `https` Serve URLs only; requires `-ts-allow-login`. |
 | `-hub-mode` | `COMEBYE_HUB_MODE` | `false` | Makes this instance a hub even with no peers yet, so they can be added at runtime (`comebye peer add`). Implied by `-peers` or by stored peers. Requires `-ts-allow-login`. |
+| `-ts-allow-tag` | `COMEBYE_TS_ALLOW_TAGS` | (none) | On a hub: comma-separated tags (`tag:worker`) admitted on the peer listener. Needs `-peer-listen`. See [Tagged workers](#tagged-workers-tagworker-vms). |
+| `-peer-listen` | `COMEBYE_PEER_LISTEN` | (off) | On a hub: a port (or `tailnet-ip:port`) for the peer listener, bound only to the hub's tailnet address. Needs `-ts-allow-tag` and a hub. |
+| `-peer-self-register` | `COMEBYE_PEER_SELF_REGISTER` | `false` | On a hub: let a node with an allowed tag register itself as a peer. Needs `-peer-listen`. |
+| `-ts-socket` | `COMEBYE_TS_SOCKET` | `/var/run/tailscale/tailscaled.sock` | tailscaled's LocalAPI socket (WhoIs; this node's name for `-announce`). |
+| `-announce` | `COMEBYE_ANNOUNCE` | `false` | On a peer with `-hub`: announce this node to the hub as a peer at startup. |
+| `-announce-url` | `COMEBYE_ANNOUNCE_URL` | `https://<this node's name>` | The Serve URL to announce; must be this node. |
 | `-peer-domains` | `COMEBYE_PEER_DOMAINS` | (none) | Extra tailnet domain suffixes (comma-separated) allowed for peers added at runtime; `*.ts.net` is always allowed. Not applied to `-peers`. |
 | `-launch` | `COMEBYE_LAUNCH` | `true` | Let the app start new agents (see [Launching agents](agents.md#launching-agents)). |
 | `-launch-root` | `COMEBYE_LAUNCH_ROOTS` | `~/code` | Directory inside which agents may be launched (symlinks resolved). Repeatable or comma-separated; roots that do not exist are ignored. |
 | `-worktree-root` | `COMEBYE_WORKTREE_ROOT` | `~/.worktrees` | Where workers get their git worktrees (`<root>/<repo>/<branch>`); also allowed for worktree checks and removal. |
-| `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL. The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers` and `-hub-mode`. See [Coordinators](agents.md#coordinators). |
+| `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL (or, for a tagged node, `http://<hub>.<tailnet>.ts.net:<port>`, the hub's peer listener). The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers` and `-hub-mode`. See [Coordinators](agents.md#coordinators). |
 | `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
 | `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |

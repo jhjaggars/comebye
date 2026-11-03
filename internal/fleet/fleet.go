@@ -116,17 +116,18 @@ const userAgent = "comebye-hub/1"
 // Fleet is the merged view of the local host and its peers. With no peers
 // it is a thin pass-through over the local state manager.
 type Fleet struct {
-	local     *state.Manager
-	localName string
-	opts      Options
-	mu        sync.RWMutex // guards peers, byName, runCtx, reg
-	peers     []*peer
-	byName    map[string]*peer
-	runCtx    context.Context // set by Run; peers added later start under it
-	reg       *registry
-	hub       *state.Hub
-	bmu       sync.Mutex // serializes broadcasts so snapshots go out in order
-	excerpts  chan struct{}
+	local      *state.Manager
+	localName  string
+	opts       Options
+	mu         sync.RWMutex // guards peers, byName, runCtx, reg
+	peers      []*peer
+	byName     map[string]*peer
+	runCtx     context.Context // set by Run; peers added later start under it
+	reg        *registry
+	announceMu sync.Mutex
+	hub        *state.Hub
+	bmu        sync.Mutex // serializes broadcasts so snapshots go out in order
+	excerpts   chan struct{}
 }
 
 // New builds a fleet over local (may be nil in tests) named localName.

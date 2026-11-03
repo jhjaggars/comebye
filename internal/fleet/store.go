@@ -15,9 +15,8 @@ import (
 // StoreFile is the dynamic peers' file in the state directory.
 const StoreFile = "peers.json"
 
-// Record is one dynamic peer as stored on disk and listed by the API. The
-// provenance fields (AddedBy, AddedAt, Tag) exist so tag-based auth and
-// self-registration can fill them in later without a format change.
+// Record is one dynamic peer as stored on disk and listed by the API. AddedBy
+// is a login, or tag@node for a self-registered peer.
 type Record struct {
 	Name string   `json:"name"`
 	URLs []string `json:"urls"`
@@ -26,7 +25,8 @@ type Record struct {
 	AddedBy string    `json:"added_by,omitempty"`
 	AddedAt time.Time `json:"added_at"`
 	// Tag is an optional tailnet tag (tag:worker) the peer is expected to
-	// carry. Recorded only for now; nothing enforces it yet.
+	// carry: a self-registered peer's allowed tag. On the hub's peer
+	// listener a node of this peer must still carry it.
 	Tag string `json:"tag,omitempty"`
 }
 
