@@ -87,6 +87,28 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    COMEBYE_PEER_SELF_REGISTER=1
    ```
 
+   **A host firewall on the hub must allow the peer-listener port on
+   `tailscale0`.** The ACL only decides what the tailnet permits; the hub's own
+   firewall still sees the packets. On firewalld hosts (Fedora), `tailscale0`
+   is in no zone and falls into the default zone, which usually allows only ssh,
+   so the worker's `announce` fails with "connection refused" (instantly, unlike
+   an ACL drop, which hangs) while Tailscale Serve on 443 keeps working,
+   because tailscaled terminates that before the kernel firewall. Give the
+   interface a zone that opens only the listener port:
+
+   ```sh
+   sudo firewall-cmd --permanent --new-zone=tailscale
+   sudo firewall-cmd --permanent --zone=tailscale --add-interface=tailscale0
+   sudo firewall-cmd --permanent --zone=tailscale --add-port=8742/tcp   # = COMEBYE_PEER_LISTEN
+   sudo firewall-cmd --reload
+   ```
+
+   Moving the interface out of its old zone also drops whatever that zone
+   allowed over the tailnet (for example ssh): add those services to the new
+   zone if you use them. Check with `ss -ltn | grep 8742` on the hub (the
+   listener is up) and `curl http://<hub tailnet ip>:8742/api/whoami` from a
+   worker (reachable).
+
    Without `COMEBYE_PEER_SELF_REGISTER=1` the tool finishes with the exact
    `comebye peer add NAME https://NAME.<tailnet>.ts.net --tag tag:worker` to
    run on the hub.

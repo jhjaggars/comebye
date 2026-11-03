@@ -373,6 +373,17 @@ COMEBYE_ANNOUNCE=1                           # register with the hub at startup
 (The worker also serves itself with `tailscale serve --bg 8741` as any peer
 does; the hub reaches it through that URL as usual.)
 
+- **Host firewall:** the peer listener's port must be open to `tailscale0`
+  on the hub, in addition to the tailnet ACL. With firewalld, `tailscale0`
+  usually falls into the default zone (often ssh only), so a worker's requests
+  are refused at once ("connection refused", not a timeout) while Serve on 443
+  still works. Put the interface in its own zone and open only that port:
+  `sudo firewall-cmd --permanent --new-zone=tailscale`,
+  `--zone=tailscale --add-interface=tailscale0`,
+  `--zone=tailscale --add-port=8742/tcp` (your `COMEBYE_PEER_LISTEN`), then
+  `sudo firewall-cmd --reload`. Anything the old zone allowed over the tailnet
+  (such as ssh) must be added to the new zone too. Details:
+  [Worker VMs](workers.md).
 - **What a tagged node can do:** exactly what a peer's forwarded agent can:
   the agent-role requests of its workers (`comebye report`, `handoff`,
   `prompt`, `mark`, the ledger and briefing reads - [Coordinators](agents.md#coordinators)),
