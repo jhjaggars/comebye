@@ -249,7 +249,7 @@ func (s *Server) by(r *http.Request, given string) string {
 // handleWhoami tells the CLI how this instance sees it.
 func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
-	resp := map[string]any{"host": s.fleet.LocalName(), "role": "user", "ledger": s.ledger != nil}
+	resp := map[string]any{"host": s.fleet.LocalName(), "role": "user", "ledger": s.ledger != nil, "version": s.cfg.Version, "hub_mode": s.fleet.IsHub()}
 	switch {
 	case s.ledger != nil:
 		resp["hub"] = "self"

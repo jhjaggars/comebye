@@ -178,7 +178,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		if name == "" {
 			name = "local"
 		}
-		f = fleet.New(manager, name, nil, fleet.Options{})
+		f = fleet.New(manager, name, nil, fleet.Options{Version: cfg.Version})
 	}
 	if cfg.PingInterval <= 0 {
 		cfg.PingInterval = 15 * time.Second
@@ -254,6 +254,9 @@ func (s *Server) routes() {
 	// Host-qualified routes: the local host is served directly, a peer's
 	// agents are proxied to that peer (hub only).
 	s.mux.HandleFunc("GET /api/hosts", s.authAgent(s.handleHosts))
+	s.mux.HandleFunc("GET /api/peers", s.auth(s.handlePeers))
+	s.mux.HandleFunc("POST /api/peers", s.auth(s.handleAddPeer))
+	s.mux.HandleFunc("DELETE /api/peers/{name}", s.auth(s.handleRemovePeer))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.onHost("output", s.handleOutput)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.onHost("transcript", s.handleTranscript)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.onHost("subagent-transcript", s.handleSubagentTranscript)))

@@ -62,6 +62,8 @@ func main() {
 		noAuth       = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
 		launchOn     = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
 		worktreeRoot = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
+		hubMode      = flag.Bool("hub-mode", envBool("COMEBYE_HUB_MODE", false), "make this instance a hub even with no peers yet, so peers can be added at runtime (comebye peer add); also implied by -peers or stored peers")
+		peerDomains  = flag.String("peer-domains", getenv("COMEBYE_PEER_DOMAINS"), "extra tailnet domain suffixes (comma-separated, e.g. mytailnet.example.com) allowed for peers added at runtime; *.ts.net is always allowed; tailnet IPs only as fallback addresses")
 		hubURL       = flag.String("hub", getenv("COMEBYE_HUB"), "on a peer: the hub's Tailscale Serve URL (https://hub.tailnet.ts.net); the coordinator CLI's ledger, handoff, mark, briefing and prompt requests are forwarded there and this instance keeps no ledger")
 		ledgerOn     = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
 		coordDir     = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
@@ -108,9 +110,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("-peers: %v", err)
 	}
-	if len(peers) > 0 {
+	// Peers added at runtime (comebye peer add) live in peers.json in the
+	// state dir; they are merged with the static -peers, which win a name
+	// clash. Runtime addresses must be tailnet hosts: a peer receives the
+	// hub's requests and is trusted with its agents.
+	addrOpt := fleet.AddrOptions{AllowHTTPLoopback: insecureTestPeers, Domains: []string{".ts.net"}}
+	for _, d := range strings.Split(*peerDomains, ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			addrOpt.Domains = append(addrOpt.Domains, d)
+		}
+	}
+	peerStore, err := fleet.OpenStore(expandHome(*stateDir))
+	if err != nil {
+		log.Fatalf("peers: %v", err)
+	}
+	staticPeers := peers
+	peers = append(append([]fleet.Peer(nil), staticPeers...), fleet.LoadDynamic(peerStore, staticPeers, *hostName, addrOpt, log.Printf)...)
+	if len(peers) > 0 || *hubMode {
 		if len(logins) == 0 && !insecureTestPeers {
-			log.Fatalf("-peers needs -ts-allow-login: a hub drives every peer, so it must not be open to the whole tailnet")
+			log.Fatalf("-peers / -hub-mode needs -ts-allow-login: a hub drives every peer, so it must not be open to the whole tailnet")
 		}
 		if insecureTestPeers {
 			log.Printf("WARNING: COMEBYE_TEST_INSECURE_PEERS=1 (test only): http loopback peers and no-allowlist hubs are allowed")
@@ -126,8 +144,8 @@ func main() {
 
 	var upstream *fleet.Upstream
 	if strings.TrimSpace(*hubURL) != "" {
-		if len(peers) > 0 {
-			log.Fatalf("-hub and -peers: an instance is either the hub (with peers) or a peer (with a hub), not both")
+		if len(peers) > 0 || *hubMode {
+			log.Fatalf("-hub and -peers/-hub-mode: an instance is either the hub (with peers) or a peer (with a hub), not both")
 		}
 		upstream, err = fleet.NewUpstream(*hubURL, insecureTestPeers, nil)
 		if err != nil {
@@ -195,12 +213,13 @@ func main() {
 	// The fleet merges this host with its peers (none on a plain
 	// instance) and owns the browser broadcasts. Peer notifications share
 	// the local dispatcher: same channels, throttle and presence.
-	manager.Dispatcher().ShowHost = len(peers) > 0
+	manager.Dispatcher().ShowHost = len(peers) > 0 || *hubMode
 	manager.Dispatcher().Kinds = kinds
 	manager.Dispatcher().DoneDigest = *doneDigest
 	manager.Dispatcher().BlockedDelay = *blockedDelay
 	log.Printf("notifications: %s; blocked delay %v; done digest %v", *notifyKinds, *blockedDelay, *doneDigest)
-	fl := fleet.New(manager, *hostName, peers, fleet.Options{})
+	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode})
+	fl.AttachStore(peerStore, addrOpt)
 	go fl.Run(context.Background())
 	go func() {
 		if err := manager.Run(context.Background()); err != nil {

@@ -383,7 +383,13 @@ type HostStatus struct {
 	Addr string `json:"addr,omitempty"`
 	// LastSeen is when the peer last sent anything (event or ping).
 	LastSeen *time.Time `json:"last_seen,omitempty"`
-	Agents   int        `json:"agents"`
+	// Version is the instance's binary version (a peer's, from its
+	// X-Comebye-Version header); empty when unknown - a peer too old to
+	// send it, or not reached yet.
+	Version string `json:"version,omitempty"`
+	// VersionMismatch: a peer's known version differs from the hub's.
+	VersionMismatch bool `json:"version_mismatch,omitempty"`
+	Agents          int  `json:"agents"`
 }
 
 // Hub fans out Events to connected SSE clients.

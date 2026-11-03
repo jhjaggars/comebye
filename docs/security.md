@@ -64,8 +64,9 @@ Treat access to it like SSH access to that machine.
   payloads are encrypted end to end; logs show only the push service
   origin, never the endpoint path.
 - **A hub is not an open proxy.** It only contacts the peers named in
-  `-peers` (https only, no redirects followed, no proxy from the
-  environment), and only for the per-agent calls on
+  `-peers`, or added by the user through the peer registry
+  (`comebye peer add`: user role only, tailnet hosts only), https only (no
+  redirects followed, no proxy from the environment), and only for the per-agent calls on
   `/api/agents/<target>/…` (`output`, `transcript`, `prompt`, `keys`,
   `dialog`, `answer`, `image`) and the per-host launch calls on
   `/api/launch/…`, with a fixed set of query parameters, size-capped

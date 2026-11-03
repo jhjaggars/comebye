@@ -5,7 +5,10 @@ The JSON API the app is built on, usable from scripts on your tailnet.
 | Endpoint | Description |
 | --- | --- |
 | `GET /api/agents` | Current agent list (every host's on a hub; each agent has `host` and `id` = `<host>/<pane_id>`) and `hosts` (`name`, `local`, `status` `ok`/`connecting`/`down`, `error`, `last_seen`, `agents`). |
-| `GET /api/hosts` | Just the `hosts` status list. |
+| `GET /api/hosts` | Just the `hosts` status list. Each host has `version` (its binary version; for a peer, read from its `X-Comebye-Version` header, absent when unknown - e.g. a peer too old to send it) and, on a peer whose known version differs from the hub's, `version_mismatch: true`. |
+| <a id="peers"></a>`GET /api/peers` | **Hub only, user role only.** `{"peers": [...], "version"}`: every peer, `source` `static` (from `-peers`) or `dynamic`, each with `name`, `urls`, `added_by`, `added_at`, `tag` (dynamic ones), and the host status fields (`status`, `error`, `class`, `agents`, `version`, `version_mismatch`). 409 `not_a_hub` on an instance that is not a hub (see `-hub-mode`); 403 `agent_forbidden` for the agent role. |
+| `POST /api/peers` | **Hub only, user role only.** Body `{"name", "urls": ["https://..."], "tag"?}`. Adds a peer live: stored in `peers.json`, connected and health-checked at once. 201 with the peer as listed. `name` is a lowercase DNS label; `urls` are 1-4 `https` addresses on tailnet hosts (`*.ts.net`, the domains in `-peer-domains`, or a tailnet IP as a fallback). Errors: 400 `invalid_peer`; 409 `peer_exists` (a peer of that name exists - also when it is static, and then the message says it is set in `-peers`), `peer_is_local`, `not_a_hub`. |
+| `DELETE /api/peers/{name}` | **Hub only, user role only.** Removes a dynamic peer: its stream and in-flight requests are cancelled and its agents leave the merged view. 204. 404 `unknown_peer`; 409 `static_peer` for one set in `-peers` (edit the hub's environment and restart). |
 | `GET/POST /api/hosts/{host}/agents/{target}/{output,transcript,prompt,keys,dialog,answer}` | Same as the routes below for a given host: the local host is served directly, a peer's agent is proxied to that peer (status and JSON errors pass through). |
 | `GET /api/agents/{target}/output?lines=N` | Recent pane output; `&source=visible` reads the current screen instead (used for dialog snapshots). |
 | `GET /api/agents/{target}/transcript?limit=N&skip=M` | Parsed session transcript (Pi or Claude Code; `format` says which), including any pending `ask` question. 404 `no_session` when there is none. |
@@ -39,7 +42,7 @@ The JSON API the app is built on, usable from scripts on your tailnet.
 | `POST /api/brief/schedule/dismiss` | `{"id"}`: hides the streak of missed scheduled briefings with that id, for every device. 404 `no_missed_briefing`. |
 | `GET /api/roles`, `POST /api/roles` | `{"roles": {"<host>/<pane>": {role: "coordinator", name, by, at}}}` (also in `/api/ledger`); POST `{"agent_id", "role": "coordinator" \| ""}` (the user only). |
 | `GET /api/playbook?harness=pi\|claude\|generic` | The coordinator playbook (markdown). |
-| `GET /api/whoami` | `{host, role: "user"\|"agent", agent, by, hub: "self"\|"<url>"\|"", ledger}`. |
+| `GET /api/whoami` | `{host, role: "user"\|"agent", agent, by, hub: "self"\|"<url>"\|"", ledger, version, hub_mode}` (`version` is the binary's version, also sent as `X-Comebye-Version` on every API response; `hub_mode`: this instance is a hub). |
 | `GET /api/events` | SSE stream of `agents` snapshots (with `hosts`), `resync` signals and a `ping` every 15 s. |
 | `GET /api/push/key` | `{"enabled": bool, "key": "<VAPID public key, base64url>"}`. |
 | `POST /api/push/subscribe` | Body: `PushSubscription.toJSON()` (`endpoint`, `keys.p256dh`, `keys.auth`), optional `replaces`. Stored with the caller's Tailscale login. |

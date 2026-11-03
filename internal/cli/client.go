@@ -80,6 +80,9 @@ type client struct {
 	pane      string
 	host      string
 	http      *http.Client
+	// user, when set, makes requests as the user (the Tailscale login
+	// header, no agent token): for the registry's user-only routes.
+	user string
 
 	// Cached per run.
 	agents  *agentsResp
@@ -132,7 +135,7 @@ func (c *client) call(method, path string, query url.Values, body, out any) erro
 
 // raw makes the request and returns the 2xx body.
 func (c *client) raw(method, path string, query url.Values, body any) ([]byte, error) {
-	if c.tokenErr != nil {
+	if c.user == "" && c.tokenErr != nil {
 		if errors.Is(c.tokenErr, os.ErrNotExist) {
 			return nil, fmt.Errorf("no agent token at %s: is Comebye running on this host? It creates the token at startup in its state directory (set COMEBYE_STATE_DIR if it uses another one)", c.tokenPath)
 		}
@@ -154,14 +157,18 @@ func (c *client) raw(method, path string, query url.Values, body any) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set(headerToken, c.token)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "comebye-cli/1")
-	if c.pane != "" {
-		req.Header.Set(headerAgent, c.pane)
-	}
-	if c.host != "" {
-		req.Header.Set(headerAgentHost, c.host)
+	if c.user != "" {
+		req.Header.Set("Tailscale-User-Login", c.user)
+	} else {
+		req.Header.Set(headerToken, c.token)
+		if c.pane != "" {
+			req.Header.Set(headerAgent, c.pane)
+		}
+		if c.host != "" {
+			req.Header.Set(headerAgentHost, c.host)
+		}
 	}
 	if rd != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -192,7 +199,9 @@ func (c *client) raw(method, path string, query url.Values, body any) ([]byte, e
 			e.message = e.message[:300]
 		}
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
+	if resp.StatusCode == http.StatusUnauthorized && c.user != "" {
+		e.message = "the local Comebye did not accept the login " + c.user + ": it must be one of its -ts-allow-login logins (pass --login)"
+	} else if resp.StatusCode == http.StatusUnauthorized {
 		e.message = "the local Comebye did not accept the agent token (" + c.tokenPath + "); was it created by the server that listens at " + c.base + "?"
 	}
 	return nil, e
@@ -231,6 +240,10 @@ type apiHost struct {
 	Class string     `json:"class"`
 	Since *time.Time `json:"since"`
 	Addr  string     `json:"addr"`
+	// Version is the host's binary version ("" = unknown, e.g. a peer too
+	// old to report one); VersionMismatch: it differs from the hub's.
+	Version         string `json:"version"`
+	VersionMismatch bool   `json:"version_mismatch"`
 }
 
 type agentsResp struct {
@@ -239,12 +252,13 @@ type agentsResp struct {
 }
 
 type whoamiResp struct {
-	Host   string `json:"host"`
-	Role   string `json:"role"`
-	Agent  string `json:"agent"`
-	By     string `json:"by"`
-	Hub    string `json:"hub"`
-	Ledger bool   `json:"ledger"`
+	Host    string `json:"host"`
+	Role    string `json:"role"`
+	Agent   string `json:"agent"`
+	By      string `json:"by"`
+	Hub     string `json:"hub"`
+	Ledger  bool   `json:"ledger"`
+	Version string `json:"version"`
 }
 
 type apiMark struct {

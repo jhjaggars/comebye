@@ -57,6 +57,12 @@ type Options struct {
 	// notification excerpts (default 4); beyond it a notification goes out
 	// without an excerpt.
 	ExcerptConcurrency int
+	// Version is this instance's own version, reported as the local
+	// host's and compared with each peer's.
+	Version string
+	// HubMode makes the instance a hub even with no peers yet, so peers
+	// can be added at runtime (the peer registry).
+	HubMode bool
 	// Logf logs (default log.Printf).
 	Logf func(format string, args ...any)
 }
@@ -113,8 +119,11 @@ type Fleet struct {
 	local     *state.Manager
 	localName string
 	opts      Options
+	mu        sync.RWMutex // guards peers, byName, runCtx, reg
 	peers     []*peer
 	byName    map[string]*peer
+	runCtx    context.Context // set by Run; peers added later start under it
+	reg       *registry
 	hub       *state.Hub
 	bmu       sync.Mutex // serializes broadcasts so snapshots go out in order
 	excerpts  chan struct{}
@@ -139,21 +148,57 @@ func New(local *state.Manager, localName string, peers []Peer, opts Options) *Fl
 		local.SetHost(localName)
 	}
 	for _, cfg := range peers {
-		p := &peer{f: f, name: cfg.Name, addrs: cfg.URLs, status: StatusConnecting, tracker: state.NewTracker()}
-		f.peers = append(f.peers, p)
-		f.byName[cfg.Name] = p
+		f.addLocked(cfg)
 	}
 	return f
+}
+
+// addLocked registers a peer (f.mu held, or f not yet shared).
+func (f *Fleet) addLocked(cfg Peer) *peer {
+	if cfg.Source == "" {
+		cfg.Source = SourceStatic
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &peer{f: f, name: cfg.Name, addrs: cfg.URLs, meta: cfg, status: StatusConnecting, tracker: state.NewTracker(), ctx: ctx, cancel: cancel}
+	f.peers = append(f.peers, p)
+	f.byName[cfg.Name] = p
+	return p
+}
+
+// lookup returns the named peer, or nil.
+func (f *Fleet) lookup(name string) *peer {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.byName[name]
+}
+
+// peerList is a snapshot of the current peers.
+func (f *Fleet) peerList() []*peer {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return append([]*peer(nil), f.peers...)
 }
 
 // LocalName is this instance's host name.
 func (f *Fleet) LocalName() string { return f.localName }
 
-// HasPeers reports whether this instance is a hub.
-func (f *Fleet) HasPeers() bool { return len(f.peers) > 0 }
+// IsHub reports whether this instance is a hub: it has peers, or was
+// started in hub mode so peers can be added at runtime.
+func (f *Fleet) IsHub() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.opts.HubMode || len(f.peers) > 0
+}
+
+// HasPeers reports whether this instance has any peer.
+func (f *Fleet) HasPeers() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return len(f.peers) > 0
+}
 
 // HasPeer reports whether name is a configured peer.
-func (f *Fleet) HasPeer(name string) bool { return f.byName[name] != nil }
+func (f *Fleet) HasPeer(name string) bool { return f.lookup(name) != nil }
 
 // Hub is the broadcast hub for browser SSE clients: merged "agents"
 // snapshots (with host status) and the local manager's "resync" events.
@@ -166,7 +211,7 @@ func (f *Fleet) Agents() []herdr.AgentInfo {
 	if f.local != nil {
 		out = f.local.Agents()
 	}
-	for _, p := range f.peers {
+	for _, p := range f.peerList() {
 		p.mu.Lock()
 		out = append(out, p.agents...)
 		p.mu.Unlock()
@@ -183,9 +228,11 @@ func (f *Fleet) Hosts() []state.HostStatus {
 	if f.local != nil {
 		n = len(f.local.Agents())
 	}
-	out := []state.HostStatus{{Name: f.localName, Local: true, Status: StatusOK, Agents: n}}
-	for _, p := range f.peers {
-		out = append(out, p.hostStatus())
+	out := []state.HostStatus{{Name: f.localName, Local: true, Status: StatusOK, Agents: n, Version: f.opts.Version}}
+	for _, p := range f.peerList() {
+		hs := p.hostStatus()
+		hs.VersionMismatch = f.opts.Version != "" && hs.Version != "" && hs.Version != f.opts.Version
+		out = append(out, hs)
 	}
 	return out
 }
@@ -210,9 +257,12 @@ func (f *Fleet) Run(ctx context.Context) {
 		defer cancel()
 		events = ch
 	}
+	f.mu.Lock()
+	f.runCtx = ctx
 	for _, p := range f.peers {
-		go p.run(ctx)
+		p.start(ctx)
 	}
+	f.mu.Unlock()
 	go f.probeLoop(ctx)
 	for {
 		select {
@@ -238,6 +288,11 @@ type peer struct {
 	name string
 	// addrs are the peer's addresses, tried in order by attempt.
 	addrs []*url.URL
+	meta  Peer // as configured: source, who added it, when, tag
+	// ctx ends when the peer is removed; everything the peer does (its
+	// stream, probes, forwards) is bound to it.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu        sync.Mutex
 	status    string
@@ -247,6 +302,7 @@ type peer struct {
 	addr      string // the address that last answered
 	preferred int    // index into addrs of the last address that answered
 	lastSeen  time.Time
+	version   string // X-Comebye-Version of the last answer ("" = unknown)
 	agents    []herdr.AgentInfo
 	tracker   *state.Tracker
 	checked   bool // the peer's push setting was checked
@@ -273,7 +329,7 @@ func validStatus(s herdr.AgentStatus) bool {
 func (p *peer) hostStatus() state.HostStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr}
+	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr, Version: p.version}
 	if p.status != StatusOK {
 		hs.Error = p.lastErr
 	}
@@ -331,6 +387,8 @@ func (p *peer) attempt(fn func(base *url.URL) (*http.Response, error)) (*http.Re
 			p.mu.Lock()
 			first := p.preferred != i
 			p.preferred, p.addr = i, host
+			// A peer too old to send the header reads as unknown.
+			p.version = cleanVersion(resp.Header.Get(VersionHeader))
 			p.mu.Unlock()
 			if first {
 				p.f.opts.Logf("peer %s: using %s (address %d of %d)", p.name, host, i+1, len(p.addrs))
@@ -340,6 +398,41 @@ func (p *peer) attempt(fn func(base *url.URL) (*http.Response, error)) (*http.Re
 		err = ferr
 	}
 	return nil, host, err
+}
+
+// VersionHeader carries an instance's binary version on every API response.
+const VersionHeader = "X-Comebye-Version"
+
+// cleanVersion bounds what a peer reports about itself.
+func cleanVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) > 64 {
+		v = v[:64]
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return v
+}
+
+// bind returns ctx also cancelled when the peer is removed.
+func (p *peer) bind(ctx context.Context) (context.Context, context.CancelFunc) {
+	c, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(p.ctx, cancel)
+	return c, func() { stop(); cancel() }
+}
+
+// start runs the peer's stream (and a first health check, which also
+// reads its version) under parent, until the peer is removed.
+func (p *peer) start(parent context.Context) {
+	ctx, cancel := p.bind(parent)
+	go func() {
+		defer cancel()
+		go p.probe(ctx)
+		p.run(ctx)
+	}()
 }
 
 var errStale = errors.New("stream went silent (missed pings)")
@@ -613,6 +706,8 @@ func (p *peer) checkPush() {
 // get fetches a small JSON resource from the peer, trying each of its
 // addresses in order.
 func (p *peer) get(ctx context.Context, segments []string, query url.Values, limit int64) ([]byte, int, error) {
+	ctx, cancelBound := p.bind(ctx)
+	defer cancelBound()
 	resp, _, err := p.attempt(func(base *url.URL) (*http.Response, error) {
 		u := endpointOn(base, segments...)
 		if len(query) > 0 {

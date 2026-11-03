@@ -42,7 +42,11 @@ type browserHost struct {
 	Class  string     `json:"class,omitempty"`
 	Since  *time.Time `json:"since,omitempty"`
 	Addr   string     `json:"addr,omitempty"`
-	Agents int        `json:"agents"`
+	// Version is the host's binary version ("" = unknown); VersionMismatch
+	// marks a peer that differs from the hub, for the app's badge.
+	Version         string `json:"version,omitempty"`
+	VersionMismatch bool   `json:"version_mismatch,omitempty"`
+	Agents          int    `json:"agents"`
 }
 
 type browserEvent struct {
@@ -69,7 +73,7 @@ func slimAgents(agents []herdr.AgentInfo) []browserAgent {
 func slimHosts(hosts []state.HostStatus) []browserHost {
 	out := make([]browserHost, len(hosts))
 	for i, h := range hosts {
-		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Class: h.Class, Since: h.Since, Addr: h.Addr, Agents: h.Agents}
+		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Class: h.Class, Since: h.Since, Addr: h.Addr, Version: h.Version, VersionMismatch: h.VersionMismatch, Agents: h.Agents}
 	}
 	return out
 }

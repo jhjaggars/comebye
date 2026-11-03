@@ -197,7 +197,8 @@ of them. The phone only ever talks to the hub.
    subscriptions. A peer with push on never notifies on its own unless a
    browser subscribed on the peer's own URL, but if you did, that device
    gets everything twice (the hub logs a warning when a peer has push on).
-4. **Point the hub at its peers** in its env file:
+4. **Give the hub its peers**, either live (next section) or, for a fixed
+   setup, in its env file:
 
    ```sh
    COMEBYE_TS_ALLOW_LOGIN=you@example.com
@@ -226,6 +227,50 @@ of them. The phone only ever talks to the hub.
    this case as `tls` with exactly that explanation).
 5. Open the **hub's** URL on your phone and enable notifications there.
 
+### Adding and removing peers live
+
+Peers do not have to be in the env file. Start the hub with
+`COMEBYE_HUB_MODE=1` (alongside `COMEBYE_TS_ALLOW_LOGIN`; `COMEBYE_PEERS` is
+then optional) and manage peers while it runs, with no restart:
+
+```sh
+comebye peer add vm https://vm.tailnet.ts.net        # several: URL1|URL2
+comebye peer add w1 https://w1.tailnet.ts.net --tag tag:worker
+comebye peer list                                     # status, agents, version
+comebye peer remove vm
+```
+
+A new peer is connected and health-checked at once and its agents show up
+in the app and in `comebye agents`; a removed one disappears the same way
+(requests in flight to it fail cleanly). Run these **on the hub host**, as
+the user: `comebye peer` acts with a Tailscale login (`--login`, or
+`COMEBYE_LOGIN`, or the first of `COMEBYE_TS_ALLOW_LOGIN` when your shell has
+it) rather than the agent token, because the registry is the user's alone -
+an agent's token gets 403. The same operations are `GET/POST /api/peers` and
+`DELETE /api/peers/{name}` ([API](api.md#peers)).
+
+- Peers added live are stored in `peers.json` in the state directory
+  (written atomically, mode 0600) and merged with `COMEBYE_PEERS` at
+  startup. A peer set in `COMEBYE_PEERS` is listed as `static`; it cannot be
+  removed through the API (the error says so: edit the env file and restart)
+  and a live peer may not reuse its name.
+- **Addresses added live must be tailnet hosts:** `https` URLs under
+  `*.ts.net` (or the domains in `COMEBYE_PEER_DOMAINS`, comma-separated, for
+  a custom tailnet domain), and a tailnet IP (100.64.0.0/10,
+  fd7a:115c:a1e0::/48) only as a fallback address next to a name. A peer is
+  sent the hub's requests (agents' prompts, transcript reads) and is trusted
+  with the agents it reports, so the API will not point the hub at an
+  arbitrary host. The static `COMEBYE_PEERS` is not restricted: it is set by
+  whoever controls the hub's environment.
+- Names follow the same rule as host names (a lowercase DNS label). Each add
+  and remove is logged with who did it.
+- `comebye peer list` and `comebye agents` show each host's **version**
+  (read from the `X-Comebye-Version` header it sends; a peer too old to send
+  it shows as `unknown`). When a peer runs a different version than the hub,
+  `comebye agents` prints a warning line and the app shows a small badge on
+  that host's chip: upgrade the one that is behind
+  (`comebye upgrade` on that host).
+
 With more than one host the list shows a small host chip on every agent and
 the detail header names the host; a peer the hub cannot reach shows as one
 "unreachable: dns (since 3h ago)" row and never affects the other hosts.
@@ -238,7 +283,8 @@ broke and since when, with the fix where one is known. A peer is marked
 down when its stream misses pings for 45 s or a reconnect fails; the hub
 retries with backoff (up to 30 s) and re-baselines statuses on reconnect,
 so it does not notify for transitions that happened while the peer was
-unreachable. A plain instance without `-peers` behaves exactly as before.
+unreachable. A plain instance without `-peers` or `-hub-mode` behaves
+exactly as before.
 
 ### Re-pointing a peer after a Tailscale rename
 
@@ -255,7 +301,9 @@ tailscale serve reset && tailscale serve --bg 8741
 ```
 
 Then update the hub's `COMEBYE_PEERS` to the new name (or add it as a
-second `|`-separated address, above, so the next rename does not bite).
+second `|`-separated address, above, so the next rename does not bite). A
+peer added with `comebye peer add` is simply removed and added again under
+its new name.
 The hub picks the peer up again on its next retry (at most 30 s) or its
 next health check; no restart needed.
 
@@ -360,15 +408,17 @@ to the home screen again.
 | `-allow-host` | `COMEBYE_ALLOW_HOSTS` | (none) | Extra `Host` names the server answers to, besides `localhost`, loopback IPs and `*.ts.net`. Repeatable or comma-separated. Other hosts get 421 (DNS rebinding protection). |
 | `-host-name` | `COMEBYE_HOST_NAME` | short hostname | This host's name in agent IDs (`<host>/<pane>`), URLs and the UI. Lowercase DNS label. |
 | `-peers` | `COMEBYE_PEERS` | (none) | Makes this instance a hub: comma-separated `name=https://host.tailnet.ts.net` (name optional; several addresses per peer, tried in order, `|`-separated). `https` Serve URLs only; requires `-ts-allow-login`. |
+| `-hub-mode` | `COMEBYE_HUB_MODE` | `false` | Makes this instance a hub even with no peers yet, so they can be added at runtime (`comebye peer add`). Implied by `-peers` or by stored peers. Requires `-ts-allow-login`. |
+| `-peer-domains` | `COMEBYE_PEER_DOMAINS` | (none) | Extra tailnet domain suffixes (comma-separated) allowed for peers added at runtime; `*.ts.net` is always allowed. Not applied to `-peers`. |
 | `-launch` | `COMEBYE_LAUNCH` | `true` | Let the app start new agents (see [Launching agents](agents.md#launching-agents)). |
 | `-launch-root` | `COMEBYE_LAUNCH_ROOTS` | `~/code` | Directory inside which agents may be launched (symlinks resolved). Repeatable or comma-separated; roots that do not exist are ignored. |
 | `-worktree-root` | `COMEBYE_WORKTREE_ROOT` | `~/.worktrees` | Where workers get their git worktrees (`<root>/<repo>/<branch>`); also allowed for worktree checks and removal. |
-| `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL. The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers`. See [Coordinators](agents.md#coordinators). |
+| `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL. The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers` and `-hub-mode`. See [Coordinators](agents.md#coordinators). |
 | `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
 | `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
-| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`. The CLI reads the token from here too. |
+| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `peers.json` (peers added live), `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`. The CLI reads the token from here too. |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
 | `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
 | `-notify-throttle` | `COMEBYE_NOTIFY_THROTTLE` | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |

@@ -20,6 +20,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Peer is one configured peer instance.
@@ -31,7 +32,19 @@ type Peer struct {
 	// name plus a tailnet IP, or a second name) for when a rename or a
 	// stale Serve config breaks the first one.
 	URLs []*url.URL
+	// Source is SourceStatic (-peers) or SourceDynamic (the registry); the
+	// provenance fields below are set for dynamic peers.
+	Source  string
+	AddedBy string
+	AddedAt time.Time
+	Tag     string
 }
+
+// Where a peer came from.
+const (
+	SourceStatic  = "static"
+	SourceDynamic = "dynamic"
+)
 
 // Addrs lists the peer's addresses, " "-separated, for logs.
 func (p Peer) Addrs() string {
@@ -145,6 +158,68 @@ func ParsePeers(spec string, opt ParseOptions) ([]Peer, error) {
 		}
 		names[name] = true
 		out = append(out, Peer{Name: name, URLs: addrs})
+	}
+	return out, nil
+}
+
+// AddrOptions constrains the addresses of a peer added at runtime.
+type AddrOptions struct {
+	// AllowHTTPLoopback: see ParseOptions. TEST ONLY.
+	AllowHTTPLoopback bool
+	// Domains, when non-empty, restricts every address to a tailnet host:
+	// a name under one of these suffixes (".ts.net"), or - as a fallback
+	// address - a tailnet IP (100.64.0.0/10, fd7a:115c:a1e0::/48).
+	Domains []string
+}
+
+var tailnetV4 = net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+var tailnetV6 = net.IPNet{IP: net.ParseIP("fd7a:115c:a1e0::"), Mask: net.CIDRMask(48, 128)}
+
+// tailnetHost reports whether host is a tailnet name or address.
+func tailnetHost(host string, domains []string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if ip := net.ParseIP(host); ip != nil {
+		return tailnetV4.Contains(ip) || tailnetV6.Contains(ip)
+	}
+	for _, d := range domains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == "" {
+			continue
+		}
+		if !strings.HasPrefix(d, ".") {
+			d = "." + d
+		}
+		if strings.HasSuffix(host, d) && len(host) > len(d) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseAddrs validates a peer's addresses (https, no path, no duplicates)
+// and, with opt.Domains, that each is a tailnet host.
+func ParseAddrs(raw []string, opt AddrOptions) ([]*url.URL, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("at least one address is required")
+	}
+	if len(raw) > 4 {
+		return nil, errors.New("at most 4 addresses per peer")
+	}
+	var out []*url.URL
+	seen := map[string]bool{}
+	for _, a := range raw {
+		u, err := parsePeerURL(strings.TrimSpace(a), opt.AllowHTTPLoopback)
+		if err != nil {
+			return nil, fmt.Errorf("address %q: %w", a, err)
+		}
+		if len(opt.Domains) > 0 && !(opt.AllowHTTPLoopback && isLoopbackHost(u.Hostname())) && !tailnetHost(u.Hostname(), opt.Domains) {
+			return nil, fmt.Errorf("address %q: not a tailnet host (want a name under %s, or a tailnet IP): a peer receives the hub's requests and is trusted with its agents", a, strings.Join(opt.Domains, ", "))
+		}
+		if seen[u.String()] {
+			return nil, fmt.Errorf("duplicate address %s", u)
+		}
+		seen[u.String()] = true
+		out = append(out, u)
 	}
 	return out, nil
 }

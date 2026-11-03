@@ -70,6 +70,7 @@ func init() {
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"brief", "set FILE|- | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
+		{"peer", "list | add NAME URL[|URL...] [--tag T] | remove NAME  [--login L] [--json]", "(hub, the user's alone) the hub's peers: list them with their status and version, add one live, or remove a dynamic one; peers set with -peers are listed but only changed by editing the hub's environment", cmdPeer},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
 		{"presets", "claude|pi|generic", "print how to let a harness run comebye without prompts", cmdPresets},
 		{"archive", "keygen --out DIR | run | verify | status | index [--ledger FILE|auto|none] [--git=false] [--gh] | restore SESSION --to DIR | delete SESSION [--yes] | summary SESSION TEXT|- | rewrap --to-dir DIR [--to-encryption age|none --to-recipient KEYS]  --encryption age|none [--dir D --recipient K --identity F] [--json]", "keep every agent session forever: byte-exact, encrypted, append-only copies of Claude and pi session files, and an index to search them", cmdArchive},
@@ -435,10 +436,37 @@ func cmdAgents(e *Env, args []string) error {
 			fmt.Fprintln(e.Stdout, "  its agents are not listed; the hub keeps retrying")
 		}
 	}
+	for _, w := range versionWarnings(ar.Hosts) {
+		if *hostF == "" || strings.Contains(w, "host "+*hostF+" ") {
+			fmt.Fprintln(e.Stdout, w)
+		}
+	}
 	if len(rows) == 0 {
 		fmt.Fprintln(e.Stdout, "(no agents)")
 	}
 	return nil
+}
+
+// versionWarnings lists one line per reachable peer whose version differs
+// from the hub's, or that reports none (too old to send the header).
+func versionWarnings(hosts []apiHost) []string {
+	hub := ""
+	for _, h := range hosts {
+		if h.Local {
+			hub = h.Version
+		}
+	}
+	var out []string
+	for _, h := range hosts {
+		switch {
+		case h.Local || h.Status != "ok" || hub == "":
+		case h.Version == "":
+			out = append(out, fmt.Sprintf("warning: host %s does not report its version (too old?); the hub runs %s", h.Name, hub))
+		case h.Version != hub:
+			out = append(out, fmt.Sprintf("warning: host %s runs %s, the hub runs %s; upgrade the one that is behind (comebye upgrade on that host)", h.Name, h.Version, hub))
+		}
+	}
+	return out
 }
 
 // ---- ledger ----
@@ -2123,7 +2151,7 @@ func cmdWhoami(e *Env, args []string) error {
 	}
 	if *asJSON {
 		return jsonOut(e, map[string]any{
-			"agent": w.Agent, "by": w.By, "host": w.Host, "role": w.Role, "hub": w.Hub, "ledger": w.Ledger,
+			"agent": w.Agent, "by": w.By, "host": w.Host, "role": w.Role, "hub": w.Hub, "ledger": w.Ledger, "version": w.Version,
 			"pane": c.pane, "url": c.base, "token_file": c.tokenPath,
 		})
 	}
@@ -2144,6 +2172,9 @@ func cmdWhoami(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "The ledger is on the hub at %s; this Comebye forwards to it.\n", w.Hub)
 	}
 	fmt.Fprintf(e.Stdout, "Comebye: %s (token %s)\n", c.base, c.tokenPath)
+	if w.Version != "" {
+		fmt.Fprintf(e.Stdout, "Version: %s\n", w.Version)
+	}
 	return nil
 }
 

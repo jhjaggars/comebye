@@ -901,6 +901,29 @@ await check("pi trust prompt: an idle-reported Pi agent shows as blocked with it
   await page.waitForFunction(() => /idle/i.test(document.querySelector('#agents .agent[data-id$="w9:p1"]')?.innerText || ""), null, { timeout: 40000 });
 });
 
+// ---- version badge: a peer that runs another version than the hub ----
+await check("host chips: a peer on another version shows a badge, a matching or unknown one does not", async () => {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent");
+  const r = await page.evaluate(() => {
+    const local = state.hosts.find((h) => h.local);
+    state.hosts = [
+      { ...local, version: "v1.2.0" },
+      { name: "behind", status: "ok", agents: 0, version: "v1.1.0", version_mismatch: true },
+      { name: "same", status: "ok", agents: 0, version: "v1.2.0" },
+      { name: "old", status: "ok", agents: 0 },
+    ];
+    renderHostFilter();
+    const nav = document.getElementById("host-filter");
+    const badges = [...nav.querySelectorAll(".ver")].map((e) => ({ text: e.textContent, host: e.closest(".hf-chip").dataset.host, title: e.title }));
+    return { badges, hidden: nav.hidden, overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+  });
+  if (r.hidden) throw new Error("host filter hidden");
+  if (r.badges.length !== 1 || r.badges[0].host !== "behind" || r.badges[0].text !== "v1.1.0") throw new Error("badges " + JSON.stringify(r.badges));
+  if (!/runs v1\.1\.0; this hub runs v1\.2\.0/.test(r.badges[0].title)) throw new Error("title " + r.badges[0].title);
+  if (r.overflowX) throw new Error("the page scrolls sideways");
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;

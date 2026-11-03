@@ -87,7 +87,7 @@ func ValidTarget(target string) bool {
 // subagent-transcript, prompt, keys, dialog, answer or image) for target
 // to the peer named host and writes the peer's answer (see forward).
 func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op string) {
-	p := f.byName[host]
+	p := f.lookup(host)
 	if p == nil {
 		writeJSON(w, http.StatusNotFound, "unknown_host", "no such host: "+host)
 		return
@@ -117,7 +117,7 @@ func (f *Fleet) Proxy(w http.ResponseWriter, r *http.Request, host, target, op s
 // ProxyHost forwards one per-host API call of a browser (an op of
 // hostProxyOps) to the peer named host, hardened like Proxy.
 func (f *Fleet) ProxyHost(w http.ResponseWriter, r *http.Request, host, op string) {
-	p := f.byName[host]
+	p := f.lookup(host)
 	if p == nil {
 		writeJSON(w, http.StatusNotFound, "unknown_host", "no such host: "+host)
 		return
@@ -136,7 +136,7 @@ func (f *Fleet) ProxyHost(w http.ResponseWriter, r *http.Request, host, op strin
 // returns the peer's status and JSON body; a peer that rejects the hub
 // (401/403) or redirects is an error, like for Proxy.
 func (f *Fleet) CallHost(ctx context.Context, host, op string, query url.Values, body []byte) (int, []byte, error) {
-	p := f.byName[host]
+	p := f.lookup(host)
 	if p == nil {
 		return 0, nil, errors.New("no such host: " + host)
 	}
@@ -158,7 +158,7 @@ func (f *Fleet) CallHost(ctx context.Context, host, op string, query url.Values,
 // returned as CallHost's is. The hub's scheduled briefing prompts a
 // coordinator on a peer this way.
 func (f *Fleet) CallAgent(ctx context.Context, host, target, op string, body []byte) (int, []byte, error) {
-	p := f.byName[host]
+	p := f.lookup(host)
 	if p == nil {
 		return 0, nil, errors.New("no such host: " + host)
 	}
@@ -187,6 +187,8 @@ func (f *Fleet) call(ctx context.Context, p *peer, spec proxyOp, segments []stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, spec.timeout)
 	defer cancel()
+	ctx, cancelBound := p.bind(ctx)
+	defer cancelBound()
 	resp, _, err := p.attempt(func(base *url.URL) (*http.Response, error) {
 		u := endpointOn(base, segments...)
 		if len(query) > 0 {
@@ -210,6 +212,9 @@ func (f *Fleet) call(ctx context.Context, p *peer, spec proxyOp, segments []stri
 		return f.opts.Client.Do(req)
 	})
 	if err != nil {
+		if p.ctx.Err() != nil {
+			return 0, nil, errors.New("no such host: " + host + " (removed)")
+		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return 0, nil, errors.New(host + " did not answer in time")
 		}
@@ -236,7 +241,7 @@ func (f *Fleet) call(ctx context.Context, p *peer, spec proxyOp, segments []stri
 // FetchLatest reads the tail of a peer agent's transcript (the last
 // assistant text), for the ledger's final reports.
 func (f *Fleet) FetchLatest(ctx context.Context, host, pane string) *transcript.Latest {
-	p := f.byName[host]
+	p := f.lookup(host)
 	if p == nil || !ValidTarget(pane) {
 		return nil
 	}
@@ -273,6 +278,8 @@ func (f *Fleet) forward(w http.ResponseWriter, r *http.Request, p *peer, segment
 
 	ctx, cancel := context.WithTimeout(r.Context(), spec.timeout)
 	defer cancel()
+	ctx, cancelBound := p.bind(ctx)
+	defer cancelBound()
 	resp, _, err := p.attempt(func(base *url.URL) (*http.Response, error) {
 		u := endpointOn(base, segments...)
 		if len(q) > 0 {
@@ -301,6 +308,10 @@ func (f *Fleet) forward(w http.ResponseWriter, r *http.Request, p *peer, segment
 		return f.opts.Client.Do(req)
 	})
 	if err != nil {
+		if p.ctx.Err() != nil {
+			writeJSON(w, http.StatusNotFound, "unknown_host", host+" was removed")
+			return
+		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			writeJSON(w, http.StatusGatewayTimeout, "host_timeout", host+" did not answer in time")
 			return

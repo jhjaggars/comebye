@@ -412,14 +412,19 @@ function renderHostFilter() {
   const nav = $("host-filter");
   if (!multiHost()) { nav.hidden = true; nav.innerHTML = ""; return; }
   const active = activeHostFilter();
-  const chip = (name, label, agents, down) => {
+  const chip = (name, label, agents, down, host) => {
     const need = agents.some((a) => a.agent_status === "blocked");
+    // A peer on another version than the hub (the hub reports the
+    // mismatch): a small badge naming the version it runs.
+    const local = state.hosts.find((x) => x.local);
+    const ver = host && host.version_mismatch && host.version
+      ? `<span class="ver" title="${esc(host.name)} runs ${esc(host.version)}${local && local.version ? `; this hub runs ${esc(local.version)}` : ""}">${esc(host.version)}</span>` : "";
     return `<button type="button" class="hf-chip${down ? " down" : ""}" data-host="${esc(name)}"` +
       ` aria-pressed="${active === name}">${need ? '<span class="need" aria-label="needs input"></span>' : ""}` +
-      `${esc(label)} <span class="n">${down ? "down" : agents.length}</span></button>`;
+      `${esc(label)} <span class="n">${down ? "down" : agents.length}</span>${ver}</button>`;
   };
   nav.innerHTML = chip("all", "All", state.agents, false) + state.hosts.map((h) =>
-    chip(h.name, h.name, state.agents.filter((a) => a.host === h.name), !h.local && h.status !== "ok")).join("");
+    chip(h.name, h.name, state.agents.filter((a) => a.host === h.name), !h.local && h.status !== "ok", h)).join("");
   nav.hidden = false;
   nav.querySelectorAll(".hf-chip").forEach((el) =>
     el.addEventListener("click", () => setHostFilter(el.dataset.host)));

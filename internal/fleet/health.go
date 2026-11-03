@@ -136,6 +136,8 @@ func (p *peer) probe(ctx context.Context) {
 	o := &p.f.opts
 	ctx, cancel := context.WithTimeout(ctx, o.ProbeTimeout)
 	defer cancel()
+	ctx, cancelBound := p.bind(ctx)
+	defer cancelBound()
 	resp, addr, err := p.attempt(func(base *url.URL) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointOn(base, "api", "whoami").String(), nil)
 		if err != nil {
@@ -197,7 +199,7 @@ func (f *Fleet) probeLoop(ctx context.Context) {
 // probeAll probes every peer at once.
 func (f *Fleet) probeAll(ctx context.Context) {
 	var wg sync.WaitGroup
-	for _, p := range f.peers {
+	for _, p := range f.peerList() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

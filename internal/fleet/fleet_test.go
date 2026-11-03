@@ -26,7 +26,8 @@ type fakePeer struct {
 	mu       sync.Mutex
 	agents   []herdr.AgentInfo
 	hosts    []state.HostStatus
-	silent   bool // accept event streams but never write
+	silent   bool   // accept event streams but never write
+	version  string // X-Comebye-Version to send ("" = like a peer too old to send it)
 	pushOn   bool
 	streams  map[chan string]struct{}
 	requests []recorded
@@ -56,6 +57,11 @@ func (fp *fakePeer) serve(w http.ResponseWriter, r *http.Request) {
 	fp.requests = append(fp.requests, recorded{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, string(body), r.Header.Clone()})
 	fp.mu.Unlock()
 	path := r.URL.EscapedPath()
+	fp.mu.Lock()
+	if fp.version != "" {
+		w.Header().Set(VersionHeader, fp.version)
+	}
+	fp.mu.Unlock()
 	switch {
 	case path == "/api/whoami":
 		w.Header().Set("Content-Type", "application/json")
