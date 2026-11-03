@@ -236,7 +236,11 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
    workers without `--deploy`; when the user asks for a deploy, prompt one
    landed worker (or the home session) to deploy the latest main as the
    project's docs say and report the deployed SHA and its health check,
-   so one deploy covers everything landed since the last one.
+   so one deploy covers everything landed since the last one. For
+   comebye itself that is `comebye upgrade` on each host (docs/setup.md,
+   "Upgrading"): a release by default, `--from-source --ref <sha>` for an
+   unreleased main; it smoke-checks and rolls back by itself. Run it on
+   the peer first, then the hub, and report the versions it printed.
    `comebye land WORKER --deploy` still deploys a single landing.
 6. Then mark the session ready to remove (below), unless the user wants
    follow-ups from it or it is watching a PR.

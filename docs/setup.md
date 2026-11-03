@@ -263,6 +263,51 @@ next health check; no restart needed.
 the hub acts with its owner's identity. Keep the hub's allowlist as tight as
 each peer's.
 
+## Upgrading
+
+`comebye upgrade` replaces the installed binary and restarts the user
+service, on this host only. Run it on each host (the peer first, then the
+hub): it deliberately does not reach into other hosts, so it needs no extra
+trust.
+
+```sh
+comebye upgrade --dry-run          # download + verify the latest release, change nothing
+comebye upgrade                    # install the latest release
+comebye upgrade --version v0.2.0   # a specific release
+comebye upgrade --from-source --ref origin/main   # unreleased: build in a temp worktree of the current checkout (runs go vet + go test)
+comebye upgrade --rollback         # put comebye.prev back
+```
+
+What it does:
+
+1. Reads `comebye -version` of `~/.local/bin/comebye` (override: `--bin`).
+2. Release (the default): downloads `comebye_<os>_<arch>.tar.gz` and
+   `SHA256SUMS` from the GitHub release (`COMEBYE_RELEASES_URL` overrides the
+   base), verifies the checksum and that the binary reports the tag. No Go
+   toolchain needed. `--from-source` instead fetches, builds the commit
+   with the version stamped in, and runs `go vet` and `go test`.
+3. Same version: nothing to do. An older version is refused unless
+   `--force` (use `--rollback` to go back to the previous binary).
+4. Copies the old binary to `comebye.prev`, renames the new one over it
+   (atomic, so the running process is unaffected), and runs
+   `systemctl --user restart comebye`. The unit file and its drop-ins are
+   never touched.
+5. Smoke check, using the new binary and this host only: the unit is
+   active; `whoami` reaches the local server; its `index.html` is served;
+   `agents --host <this host>` runs; on a hub `ledger`, `queue` and
+   `sweep --dry-run` exit 0 (a sweep that fails only because another host
+   is unreachable is a warning); the journal since the restart has no
+   error-level lines. On a peer, `ledger`, `queue` and `sweep` go through
+   the hub, so a hub that is down or restarting is a warning, never a
+   failure.
+6. If the restart or the smoke check fails, it restores `comebye.prev`,
+   restarts, and exits non-zero saying so. On success it prints the
+   versions and the manual rollback command
+   (`cp ~/.local/bin/comebye.prev ~/.local/bin/comebye && systemctl --user restart comebye`).
+
+A binary that predates `comebye upgrade` cannot run it: on such a host,
+install the new binary once by hand, then use the command from then on.
+
 ## Upgrading from herdr-phone
 
 Comebye was called herdr-phone. An existing install keeps working after the
