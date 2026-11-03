@@ -60,6 +60,7 @@ type env struct {
 	Out, Err io.Writer
 	In       io.Reader
 	Run      Runner
+	P        Provider // built from Cfg on first use
 	Cfg      *Config
 	DryRun   bool
 	HTTP     httpDoer

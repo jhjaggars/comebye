@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -54,6 +55,7 @@ func rootScript(c *Config) (string, error) {
 	return withVars(bootstrapRoot, [][2]string{
 		{"WK_USER", c.SSHUser},
 		{"WK_IDLE_MINUTES", fmt.Sprint(c.IdleMinutes)},
+		{"WK_MAX_RUN_SECONDS", guestMaxRun(c)},
 	})
 }
 
@@ -67,4 +69,15 @@ func userScript(c *Config, name, version string) (string, error) {
 		{"WK_NAME", name},
 		{"WK_LOGIN", c.TSAllowLogin},
 	})
+}
+
+// guestMaxRun is the seconds for the on-VM max-run timer: only where the
+// cloud has no platform cap (aws), and "" otherwise.
+func guestMaxRun(c *Config) string {
+	if c.Provider != "aws" || c.MaxRunDuration == "" {
+		return ""
+	}
+	n, _ := strconv.Atoi(c.MaxRunDuration[:len(c.MaxRunDuration)-1])
+	mult := map[byte]int{'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[c.MaxRunDuration[len(c.MaxRunDuration)-1]]
+	return strconv.Itoa(n * mult)
 }

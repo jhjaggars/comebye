@@ -22,8 +22,10 @@ fi
 systemctl enable --now tailscaled
 
 loginctl enable-linger "$WK_USER"
-install -d -o "$WK_USER" -g "$WK_USER" -m 0755 /data/code /data/worktrees 2>/dev/null ||
-  { echo "/data is not mounted" >&2; exit 1; }
+# The data volume may still be attaching (EC2): give it a few minutes.
+for _ in $(seq 1 180); do mountpoint -q /data && break; sleep 2; done
+mountpoint -q /data || { echo "/data is not mounted" >&2; exit 1; }
+install -d -o "$WK_USER" -g "$WK_USER" -m 0755 /data/code /data/worktrees
 
 # Idle auto-poweroff: a guest poweroff stops a GCE instance, so no service
 # account is needed. The check script is installed separately.
@@ -50,4 +52,34 @@ WantedBy=timers.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now comebye-idle.timer
+
+# Advisory max run time, where the cloud has no cap of its own (EC2). It is a
+# timer on the VM, so root on the VM can defeat it: the idle poweroff above is
+# the real backstop. GCE sets WK_MAX_RUN_SECONDS to nothing and uses the
+# platform's max-run-duration instead.
+if [ -n "${WK_MAX_RUN_SECONDS:-}" ]; then
+  cat >/etc/systemd/system/comebye-maxrun.service <<'UNIT'
+[Unit]
+Description=Power off at the advisory maximum run time
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl poweroff
+UNIT
+  cat >/etc/systemd/system/comebye-maxrun.timer <<UNIT
+[Unit]
+Description=Advisory maximum run time (${WK_MAX_RUN_SECONDS}s after boot)
+
+[Timer]
+OnBootSec=${WK_MAX_RUN_SECONDS}s
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now comebye-maxrun.timer
+else
+  systemctl disable --now comebye-maxrun.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/comebye-maxrun.timer /etc/systemd/system/comebye-maxrun.service
+fi
 echo "bootstrap-root: done"

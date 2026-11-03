@@ -3,8 +3,16 @@
 # in its own mode-0600 file (ts_oauth_file).
 
 # --- required
+# provider=gcp                    # gcp (default) or aws
+
+# GCP:
 project=my-gcp-project
 zone=us-central1-a
+# AWS (instead of the two lines above; credentials are your AWS CLI profile's):
+# provider=aws
+# aws_region=us-east-1
+# aws_az=us-east-1a
+# aws_profile=work                # optional: a named profile of your AWS CLI
 # Your workstation's public IPv4 as a single /32: the only address that may reach tcp:22.
 ssh_source_cidr=203.0.113.7/32
 # The Tailscale login that owns the hub device (the worker admits the hub's requests as it).
@@ -15,17 +23,19 @@ hub_url=https://hub.your-tailnet.ts.net
 hub_peer_url=http://hub.your-tailnet.ts.net:8742
 
 # --- defaults, shown for reference
-# machine_type=e2-standard-4
+# machine_type=e2-standard-4      # aws default: t3.xlarge (Arm types are refused)
 # boot_disk_gb=20
 # data_disk_gb=50
-# disk_type=pd-balanced
-# image_project=debian-cloud
-# image_family=debian-12
+# disk_type=pd-balanced           # aws default: gp3
+# image_project=debian-cloud      # gcp
+# image_family=debian-12          # gcp
+# image_id=ami-...                # aws: instead of the Debian 12 SSM parameter
+# vpc_range=10.77.0.0/16          # aws; subnet_range must lie inside it
 # network=comebye-worker
 # subnet_range=10.77.0.0/24
 # ssh_user=worker
 # idle_minutes=120
-# max_run_duration=24h        # GCE backstop; empty disables
+# max_run_duration=24h        # gcp: platform cap; aws: advisory guest timer; empty disables
 # tag=tag:worker
 # ts_oauth_file=~/.config/comebye-worker/tailscale-oauth
 # hub_version=v0.3.0          # pin instead of asking the hub

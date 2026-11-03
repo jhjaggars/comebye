@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,8 +11,6 @@ import (
 )
 
 func (e *env) printf(format string, a ...any) { fmt.Fprintf(e.Out, format, a...) }
-
-func (e *env) gc() *gcloud { return &gcloud{r: e.Run, cfg: e.Cfg} }
 
 func (e *env) hub() *hubClient { return &hubClient{base: e.Cfg.HubURL, http: e.HTTP} }
 
@@ -84,7 +81,7 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	if e.DryRun {
 		return e.createPlan(name, o)
 	}
-	g := e.gc()
+	pv := e.prov()
 	w := e.printf
 
 	// Version first: nothing is created if the hub's answer is unusable.
@@ -92,20 +89,11 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	if err != nil {
 		return err
 	}
-	w("worker %s: comebye %s\n", name, version)
+	w("worker %s (%s): comebye %s\n", name, pv.Kind(), version)
 
 	w("1/8 network\n")
-	for _, s := range []struct {
-		what          string
-		check, create []string
-	}{
-		{"network " + e.Cfg.Network, g.argv("compute", "networks", "describe", e.Cfg.Network), g.networkCreate()},
-		{"subnet " + g.subnetName(), g.argv("compute", "networks", "subnets", "describe", g.subnetName(), "--region="+regionOf(e.Cfg.Zone)), g.subnetCreate()},
-		{"firewall " + g.firewallName(), g.argv("compute", "firewall-rules", "describe", g.firewallName()), g.firewallCreate()},
-	} {
-		if err := g.ensure(ctx, s.what, s.check, s.create, w); err != nil {
-			return err
-		}
+	if err := pv.EnsureNetwork(ctx, w); err != nil {
+		return err
 	}
 
 	w("2/8 ssh key\n")
@@ -115,39 +103,32 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	}
 
 	w("3/8 data disk\n")
-	if err := g.ensure(ctx, "disk "+dataDiskName(name),
-		g.argv("compute", "disks", "describe", dataDiskName(name), "--zone="+e.Cfg.Zone), g.dataDiskCreate(name), w); err != nil {
+	if err := pv.EnsureDataDisk(ctx, name, w); err != nil {
 		return err
 	}
 
 	w("4/8 instance\n")
-	inst, err := g.describe(ctx, name)
+	inst, err := pv.Describe(ctx, name)
 	if err != nil {
 		return err
 	}
 	switch {
 	case inst == nil:
-		f, err := os.CreateTemp("", "comebye-startup-*.sh")
-		if err != nil {
+		if err := pv.Create(ctx, name, pub); err != nil {
 			return err
-		}
-		defer os.Remove(f.Name())
-		if _, err := f.WriteString(startupScript); err != nil {
-			return err
-		}
-		f.Close()
-		if _, err := g.run(ctx, g.instanceCreate(name, pub, f.Name())); err != nil {
-			return fmt.Errorf("creating instance: %w", err)
 		}
 	case checkOwned(inst) != nil:
 		return checkOwned(inst)
-	case inst.Status == "TERMINATED" || inst.Status == "STOPPED":
+	case inst.State == stateStopped:
 		w("  instance %s: stopped, starting it\n", name)
-		if _, err := g.run(ctx, g.instanceAction("start", name)); err != nil {
+		if err := pv.Start(ctx, name); err != nil {
 			return err
 		}
 	default:
-		w("  instance %s: %s\n", name, inst.Status)
+		w("  instance %s: %s\n", name, inst.State)
+	}
+	if err := pv.Attach(ctx, name); err != nil {
+		return err
 	}
 
 	w("5/8 verified ssh\n")
@@ -187,26 +168,26 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 // connect reads the VM's host key from guest attributes, writes the private
 // ssh config and waits until ssh answers.
 func (e *env) connect(ctx context.Context, name string) error {
-	g := e.gc()
+	pv := e.prov()
 	var ip, key string
-	err := e.poll(60, 5, "the VM's ssh host key in guest attributes", func() (bool, error) {
-		inst, err := g.describe(ctx, name)
+	err := e.poll(72, 5, "the VM's ssh host key from the cloud API", func() (bool, error) {
+		inst, err := pv.Describe(ctx, name)
 		if err != nil {
 			return false, err
 		}
 		if inst == nil {
 			return false, fmt.Errorf("instance %s does not exist", name)
 		}
-		if inst.Status != "RUNNING" {
+		if inst.State != stateRunning || inst.IP == "" {
 			return false, nil
 		}
-		ip = inst.ExternalIP()
-		out, _, err := e.Run.Run(ctx, "gcloud", g.guestAttr(name, "comebye/ssh-host-key"), nil)
-		if err != nil || ip == "" {
+		ip = inst.IP
+		k, err := pv.HostKey(ctx, name, inst)
+		if err != nil || k == "" {
 			return false, nil
 		}
-		key, err = parseHostKey(out)
-		return err == nil, nil
+		key = k
+		return true, nil
 	})
 	if err != nil {
 		return err
@@ -214,7 +195,7 @@ func (e *env) connect(ctx context.Context, name string) error {
 	if _, err := writeSSHConfig(e.Cfg, name, ip, key); err != nil {
 		return err
 	}
-	e.printf("  host key verified through GCE for %s\n", ip)
+	e.printf("  host key verified through the %s API for %s\n", pv.Kind(), ip)
 	return e.poll(60, 5, "ssh", func() (bool, error) {
 		_, err := ssh(ctx, e, name, "true", nil)
 		return err == nil, nil
@@ -327,7 +308,6 @@ func orDash(s string) string {
 
 func (e *env) createPlan(name string, o createOpts) error {
 	c := e.Cfg
-	g := e.gc()
 	version := o.Version
 	if version == "" {
 		version = c.HubVersion
@@ -341,30 +321,14 @@ func (e *env) createPlan(name string, o createOpts) error {
 			pub = f[0] + " " + f[1] + " comebye-worker"
 		}
 	}
-	line := func(args []string) string {
-		q := make([]string, len(args))
-		for i, a := range args {
-			if shellSafe.MatchString(a) {
-				q[i] = a
-			} else {
-				q[i] = shellQuote(a)
-			}
-		}
-		return "gcloud " + strings.Join(q, " ")
-	}
 	e.printf("DRY RUN: nothing is created, no key is minted, no host is contacted.\n\n")
-	e.printf("worker      %s\nproject     %s   zone %s\nmachine     %s, boot %d GB, data %d GB %s\ncomebye     %s\ntailnet tag %s   hub %s\n\n",
-		name, c.Project, c.Zone, c.MachineType, c.BootDiskGB, c.DataDiskGB, c.DiskType, version, c.Tag, c.HubPeerURL)
-	e.printf("1. network (each created only if missing)\n")
-	for _, a := range [][]string{g.networkCreate(), g.subnetCreate(), g.firewallCreate()} {
-		e.printf("   %s\n", line(a))
-	}
-	e.printf("2. ssh key: ssh-keygen -t ed25519 at %s, only if absent\n", c.KeyPath())
-	e.printf("3. data disk (kept by destroy unless --delete-data-disk)\n   %s\n", line(g.dataDiskCreate(name)))
-	e.printf("4. instance (the startup script only mounts /data and publishes the ssh host key)\n   %s\n", line(g.instanceCreate(name, pub, "<startup.sh>")))
-	e.printf("5. host key: %s\n   written to %s/known_hosts; ssh runs with StrictHostKeyChecking yes\n", line(g.guestAttr(name, "comebye/ssh-host-key")), c.WorkerDir(name))
-	e.printf("6. over ssh as root: apt packages (git jq bubblewrap socat curl ...), tailscale from its apt repo,\n   linger, /data/code, /data/worktrees, idle-poweroff timer (%d min, no ssh session and no working agent)\n", c.IdleMinutes)
-	e.printf("7. tailnet:\n")
+	e.printf("worker      %s\nprovider    %s\nmachine     %s, boot %d GB, data %d GB %s\ncomebye     %s\ntailnet tag %s   hub %s\n\n",
+		name, c.Provider, c.MachineType, c.BootDiskGB, c.DataDiskGB, c.DiskType, version, c.Tag, c.HubPeerURL)
+	e.printf("1. cloud resources (%s)\n", c.Provider)
+	e.prov().Plan(name, pub, e.printf)
+	e.printf("2. ssh key: ssh-keygen -t ed25519 at %s, only if absent; host key verified, known_hosts written to %s/known_hosts, StrictHostKeyChecking yes\n", c.KeyPath(), c.WorkerDir(name))
+	e.printf("3. over ssh as root: apt packages (git jq bubblewrap socat curl ...), tailscale from its apt repo,\n   linger, /data/code, /data/worktrees, idle-poweroff timer (%d min, no ssh session and no working agent)%s\n", c.IdleMinutes, maxRunNote(c))
+	e.printf("4. tailnet:\n")
 	if _, err := os.Stat(c.TSOAuthFile); err == nil {
 		e.printf("   OAuth client %s: delete an offline %s device named %s (never an untagged one), mint a single-use\n   pre-authorized %s key valid 10 minutes\n", c.TSOAuthFile, c.Tag, name, c.Tag)
 	} else {
@@ -372,7 +336,7 @@ func (e *env) createPlan(name string, o createOpts) error {
 	}
 	e.printf("   ssh %s 'sudo tailscale up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s'   (key on stdin: <not shown>)\n", name, name, c.Tag)
 	e.printf("   ssh %s 'sudo tailscale set --operator=%s'; ssh %s 'tailscale serve --bg 8741'\n", name, c.SSHUser, name)
-	e.printf("8. over ssh as %s: herdr (%s%s) as a user service; claude and codex installed, not signed in;\n   comebye %s from %s/download/<tag>/comebye_linux_<arch>.tar.gz, SHA256SUMS checked, then `comebye upgrade --version`\n   ~/.config/comebye/env:\n",
+	e.printf("5. over ssh as %s: herdr (%s%s) as a user service; claude and codex installed, not signed in;\n   comebye %s from %s/download/<tag>/comebye_linux_<arch>.tar.gz, SHA256SUMS checked, then `comebye upgrade --version`\n   ~/.config/comebye/env:\n",
 		c.SSHUser, c.HerdrInstall, map[bool]string{true: ", sha256 pinned", false: ", NOT pinned"}[c.HerdrSHA256 != ""], version, c.ReleasesURL)
 	for _, l := range []string{
 		"COMEBYE_HOST_NAME=" + name, "COMEBYE_TS_ALLOW_LOGIN=" + c.TSAllowLogin, "COMEBYE_PUSH=false",
@@ -380,7 +344,7 @@ func (e *env) createPlan(name string, o createOpts) error {
 	} {
 		e.printf("     %s\n", l)
 	}
-	e.printf("9. wait for the hub (%s) to list %s; if it does not, print:\n   comebye peer add %s %s --tag %s\n", c.HubURL, name, name, peerURL(c, name), c.Tag)
+	e.printf("6. wait for the hub (%s) to list %s; if it does not, print:\n   comebye peer add %s %s --tag %s\n", c.HubURL, name, name, peerURL(c, name), c.Tag)
 	e.printf("\nNo repo is cloned and no agent is signed in; sign in with `worker login %s claude|codex`.\n", name)
 	return nil
 }
@@ -388,23 +352,22 @@ func (e *env) createPlan(name string, o createOpts) error {
 // ---- status ----
 
 func (e *env) status(ctx context.Context, name string) error {
-	g := e.gc()
 	if name == "" {
 		return e.statusAll(ctx)
 	}
 	if err := checkName(name); err != nil {
 		return err
 	}
-	inst, err := g.describe(ctx, name)
+	inst, err := e.prov().Describe(ctx, name)
 	if err != nil {
 		return err
 	}
 	if inst == nil {
-		e.printf("%s: no such instance in %s/%s\n", name, e.Cfg.Project, e.Cfg.Zone)
+		e.printf("%s: no such instance (%s)\n", name, e.Cfg.Provider)
 		return nil
 	}
-	e.printf("gce         %s (%s)  %s\n", inst.Status, shortType(inst.MachineType), orDash(inst.ExternalIP()))
-	if inst.Status == "RUNNING" {
+	e.printf("%-11s %s (%s)  %s\n", e.Cfg.Provider, inst.State, inst.Type, orDash(inst.IP))
+	if inst.State == stateRunning {
 		if err := e.connect(ctx, name); err != nil {
 			e.printf("ssh         unreachable: %v\n", err)
 		} else {
@@ -432,6 +395,14 @@ func (e *env) status(ctx context.Context, name string) error {
 }
 
 func shortType(s string) string { return filepath.Base(s) }
+
+// maxRunNote describes the guest-side timer used where the cloud has no cap.
+func maxRunNote(c *Config) string {
+	if c.Provider == "aws" && c.MaxRunDuration != "" {
+		return "; advisory guest timer powers off " + c.MaxRunDuration + " after boot"
+	}
+	return ""
+}
 
 func (e *env) tsClientIfConfigured() *tsClient {
 	id, secret, err := LoadOAuth(e.Cfg.TSOAuthFile)
@@ -466,38 +437,8 @@ func (e *env) tailnetLine(ctx context.Context, name string) {
 }
 
 func (e *env) statusAll(ctx context.Context) error {
-	g := e.gc()
-	out, err := g.run(ctx, g.instanceList())
-	if err != nil {
+	if err := e.prov().List(ctx, e.printf); err != nil {
 		return err
-	}
-	var insts []Instance
-	if err := json.Unmarshal([]byte(out), &insts); err != nil {
-		return err
-	}
-	e.printf("instances (label %s=%s):\n", labelKey, labelVal)
-	for _, i := range insts {
-		e.printf("  %-24s %-11s %s\n", i.Name, i.Status, orDash(i.ExternalIP()))
-	}
-	out, err = g.run(ctx, g.diskList())
-	if err != nil {
-		return err
-	}
-	var disks []struct {
-		Name  string   `json:"name"`
-		Users []string `json:"users"`
-		Size  string   `json:"sizeGb"`
-	}
-	if err := json.Unmarshal([]byte(out), &disks); err != nil {
-		return err
-	}
-	e.printf("disks:\n")
-	for _, d := range disks {
-		use := "unattached (billed, kept)"
-		if len(d.Users) > 0 {
-			use = "attached"
-		}
-		e.printf("  %-24s %s GB  %s\n", d.Name, d.Size, use)
 	}
 	if ts := e.tsClientIfConfigured(); ts != nil {
 		devs, err := ts.Devices(ctx)
@@ -523,7 +464,7 @@ func (e *env) stop(ctx context.Context, name string) error {
 	if err := e.owned(ctx, name); err != nil {
 		return err
 	}
-	if _, err := e.gc().run(ctx, e.gc().instanceAction("stop", name)); err != nil {
+	if err := e.prov().Stop(ctx, name); err != nil {
 		return err
 	}
 	e.printf("%s stopped. The tailnet node and the hub's peer entry are kept (the hub shows it unreachable). Disks are still billed.\n", name)
@@ -531,12 +472,12 @@ func (e *env) stop(ctx context.Context, name string) error {
 }
 
 func (e *env) owned(ctx context.Context, name string) error {
-	inst, err := e.gc().describe(ctx, name)
+	inst, err := e.prov().Describe(ctx, name)
 	if err != nil {
 		return err
 	}
 	if inst == nil {
-		return fmt.Errorf("no instance %s in %s/%s", name, e.Cfg.Project, e.Cfg.Zone)
+		return fmt.Errorf("no instance %s (%s)", name, e.Cfg.Provider)
 	}
 	return checkOwned(inst)
 }
@@ -548,7 +489,7 @@ func (e *env) start(ctx context.Context, name string) error {
 	if err := e.owned(ctx, name); err != nil {
 		return err
 	}
-	if _, err := e.gc().run(ctx, e.gc().instanceAction("start", name)); err != nil {
+	if err := e.prov().Start(ctx, name); err != nil {
 		return err
 	}
 	// The external IP changes across a stop/start: rewrite the ssh config
@@ -578,7 +519,7 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
-	inst, err := e.gc().describe(ctx, name)
+	inst, err := e.prov().Describe(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -606,7 +547,7 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 		e.printf("  %s: ok\n", what)
 	}
 
-	if inst != nil && inst.Status == "RUNNING" {
+	if inst != nil && inst.State == stateRunning {
 		if err := e.connect(ctx, name); err != nil {
 			step("reach the VM", err)
 		} else {
@@ -617,7 +558,7 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 			step("tailscale logout", err)
 		}
 	} else if inst != nil {
-		e.printf("  the VM is %s: skipping the on-VM sign-out and logout (the node is removed through the API below)\n", inst.Status)
+		e.printf("  the VM is %s: skipping the on-VM sign-out and logout (the node is removed through the API below)\n", inst.State)
 	}
 
 	if ts := e.tsClientIfConfigured(); ts != nil {
@@ -641,17 +582,12 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	}
 
 	if inst != nil {
-		_, err := e.gc().run(ctx, e.gc().instanceAction("delete", name))
-		step("delete instance", err)
+		step("delete instance", e.prov().Delete(ctx, name))
 	}
 	if o.DeleteDataDisk {
-		g := e.gc()
-		ok, err := g.exists(ctx, g.argv("compute", "disks", "describe", dataDiskName(name), "--zone="+e.Cfg.Zone))
-		if err == nil && ok {
-			_, err = g.run(ctx, g.diskDelete(dataDiskName(name)))
-			step("delete data disk", err)
-		}
+		step("delete data disk", e.prov().DeleteDataDisk(ctx, name))
 	}
+	step("network cleanup", e.prov().CleanupNetwork(ctx, e.printf))
 	os.RemoveAll(e.Cfg.WorkerDir(name))
 	if len(failed) > 0 {
 		return fmt.Errorf("destroy finished with problems: %s", strings.Join(failed, ", "))

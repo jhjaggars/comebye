@@ -1,4 +1,4 @@
-// Command worker provisions a comebye worker VM: it creates the GCE
+// Command worker provisions a comebye worker VM: it creates the GCE or EC2
 // instance, bootstraps it over host-key-verified ssh, enrols it in the
 // tailnet as a tagged node and lets it join the comebye hub. Agent
 // orchestration is not its job; once the VM is a peer, comebye drives it.

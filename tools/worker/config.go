@@ -17,6 +17,16 @@ import (
 // ~/.config/comebye-worker/config. Nothing secret belongs in it: the
 // Tailscale OAuth client has its own 0600 file (TSOAuthFile).
 type Config struct {
+	Provider string // gcp (default) or aws
+
+	AWSRegion  string
+	AWSAZ      string
+	AWSProfile string // optional: a named profile of the user's AWS CLI config
+	ImageID    string // aws: an AMI id instead of the Debian SSM parameter
+	VPCRange   string // aws: CIDR of the dedicated VPC; SubnetRange lies inside it
+
+	machineSet, diskSet bool
+
 	Project     string // GCP project id
 	Zone        string
 	MachineType string
@@ -81,6 +91,8 @@ func defaults() Config {
 		state = filepath.Join(d, "comebye-worker")
 	}
 	return Config{
+		Provider:       "gcp",
+		VPCRange:       "10.77.0.0/16",
 		MachineType:    "e2-standard-4",
 		BootDiskGB:     20,
 		DataDiskGB:     50,
@@ -139,6 +151,14 @@ func LoadConfig(path string) (*Config, error) {
 	if err := c.apply(kv); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	if c.Provider == "aws" {
+		if !c.machineSet {
+			c.MachineType = "t3.xlarge"
+		}
+		if !c.diskSet {
+			c.DiskType = "gp3"
+		}
+	}
 	return &c, c.Validate()
 }
 
@@ -154,18 +174,30 @@ func (c *Config) apply(kv map[string]string) error {
 	for k, v := range kv {
 		var err error
 		switch k {
+		case "provider":
+			c.Provider = v
+		case "aws_region":
+			c.AWSRegion = v
+		case "aws_az":
+			c.AWSAZ = v
+		case "aws_profile":
+			c.AWSProfile = v
+		case "image_id":
+			c.ImageID = v
+		case "vpc_range":
+			c.VPCRange = v
 		case "project":
 			c.Project = v
 		case "zone":
 			c.Zone = v
 		case "machine_type":
-			c.MachineType = v
+			c.MachineType, c.machineSet = v, true
 		case "boot_disk_gb":
 			c.BootDiskGB, err = strconv.Atoi(v)
 		case "data_disk_gb":
 			c.DataDiskGB, err = strconv.Atoi(v)
 		case "disk_type":
-			c.DiskType = v
+			c.DiskType, c.diskSet = v, true
 		case "image_project":
 			c.ImageProject = v
 		case "image_family":
@@ -223,16 +255,12 @@ func (c *Config) Validate() error {
 		}
 		return fmt.Errorf(format, a...)
 	}
+	if err := c.validateProvider(chk); err != nil {
+		return err
+	}
 	for _, e := range []error{
-		chk(projectRe.MatchString(c.Project), "project %q is not a GCP project id", c.Project),
-		chk(zoneRe.MatchString(c.Zone), "zone %q is not a zone like us-central1-a", c.Zone),
-		chk(resRe.MatchString(c.MachineType) || strings.Contains(c.MachineType, "-"), "bad machine_type %q", c.MachineType),
-		chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.MachineType), "bad machine_type %q", c.MachineType),
-		chk(regexp.MustCompile(`^pd-[a-z]+$`).MatchString(c.DiskType), "bad disk_type %q", c.DiskType),
 		chk(c.BootDiskGB >= 10 && c.BootDiskGB <= 2000, "boot_disk_gb out of range"),
 		chk(c.DataDiskGB >= 10 && c.DataDiskGB <= 10000, "data_disk_gb out of range"),
-		chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.ImageProject), "bad image_project %q", c.ImageProject),
-		chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.ImageFamily), "bad image_family %q", c.ImageFamily),
 		chk(resRe.MatchString(c.Network), "bad network name %q", c.Network),
 		chk(userRe.MatchString(c.SSHUser) && c.SSHUser != "root", "bad ssh_user %q", c.SSHUser),
 		chk(c.IdleMinutes >= 5 && c.IdleMinutes <= 10080, "idle_minutes must be 5..10080"),
@@ -248,6 +276,13 @@ func (c *Config) Validate() error {
 	}
 	if _, n, err := net.ParseCIDR(c.SubnetRange); err != nil || n.String() != c.SubnetRange {
 		return fmt.Errorf("subnet_range %q is not a CIDR network", c.SubnetRange)
+	}
+	if c.Provider == "aws" {
+		_, v, err := net.ParseCIDR(c.VPCRange)
+		_, sn, _ := net.ParseCIDR(c.SubnetRange)
+		if err != nil || v.String() != c.VPCRange || !v.Contains(sn.IP) {
+			return fmt.Errorf("vpc_range %q is not a CIDR network containing subnet_range %q", c.VPCRange, c.SubnetRange)
+		}
 	}
 	if err := validateSSHSource(c.SSHSourceCIDR); err != nil {
 		return err
@@ -320,3 +355,48 @@ const (
 	labelKey = "managed-by"
 	labelVal = "comebye-worker"
 )
+
+var (
+	regionRe   = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]$`)
+	profileRe  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+	amiRe      = regexp.MustCompile(`^ami-[0-9a-f]{8,17}$`)
+	gravitonRe = regexp.MustCompile(`^[a-z]+[0-9]+g[a-z]*\.`)
+	awsTypeRe  = regexp.MustCompile(`^[a-z][a-z0-9]*\.[a-z0-9]+$`)
+)
+
+// validateProvider checks the cloud-specific settings.
+func (c *Config) validateProvider(chk func(bool, string, ...any) error) error {
+	switch c.Provider {
+	case "gcp":
+		for _, e := range []error{
+			chk(projectRe.MatchString(c.Project), "project %q is not a GCP project id", c.Project),
+			chk(zoneRe.MatchString(c.Zone), "zone %q is not a zone like us-central1-a", c.Zone),
+			chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.MachineType), "bad machine_type %q", c.MachineType),
+			chk(regexp.MustCompile(`^pd-[a-z]+$`).MatchString(c.DiskType), "bad disk_type %q", c.DiskType),
+			chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.ImageProject), "bad image_project %q", c.ImageProject),
+			chk(regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(c.ImageFamily), "bad image_family %q", c.ImageFamily),
+		} {
+			if e != nil {
+				return e
+			}
+		}
+	case "aws":
+		for _, e := range []error{
+			chk(regionRe.MatchString(c.AWSRegion), "aws_region %q is not a region like us-east-1", c.AWSRegion),
+			chk(strings.HasPrefix(c.AWSAZ, c.AWSRegion) && len(c.AWSAZ) == len(c.AWSRegion)+1 && c.AWSAZ[len(c.AWSAZ)-1] >= 'a' && c.AWSAZ[len(c.AWSAZ)-1] <= 'z',
+				"aws_az %q is not a zone of %s (like %sa)", c.AWSAZ, c.AWSRegion, c.AWSRegion),
+			chk(c.AWSProfile == "" || profileRe.MatchString(c.AWSProfile), "bad aws_profile %q", c.AWSProfile),
+			chk(c.ImageID == "" || amiRe.MatchString(c.ImageID), "bad image_id %q", c.ImageID),
+			chk(awsTypeRe.MatchString(c.MachineType), "bad machine_type %q for aws (like t3.xlarge)", c.MachineType),
+			chk(!gravitonRe.MatchString(c.MachineType), "machine_type %q is Arm (Graviton): the bootstrap is tested on amd64 only", c.MachineType),
+			chk(c.DiskType == "gp3" || c.DiskType == "gp2", "bad disk_type %q for aws (gp3 or gp2)", c.DiskType),
+		} {
+			if e != nil {
+				return e
+			}
+		}
+	default:
+		return fmt.Errorf("provider %q: want gcp or aws", c.Provider)
+	}
+	return nil
+}

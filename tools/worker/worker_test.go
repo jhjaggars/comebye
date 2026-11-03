@@ -613,8 +613,10 @@ func TestDestroyWithDataDiskAndStoppedVM(t *testing.T) {
 	if !r.saw("disks delete w1-data") {
 		t.Error("data disk not deleted")
 	}
-	if r.saw("ssh") {
-		t.Error("tried ssh to a stopped VM")
+	for _, cl := range r.calls {
+		if cl.name == "ssh" {
+			t.Error("tried ssh to a stopped VM")
+		}
 	}
 }
 
