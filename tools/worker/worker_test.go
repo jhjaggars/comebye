@@ -762,3 +762,10 @@ func TestAuthKeyFileIsDeletedAfterEnrol(t *testing.T) {
 		}
 	}
 }
+
+func TestRootBootstrapInstallsTheUserBus(t *testing.T) {
+	// Debian cloud images lack dbus-user-session; without it `systemctl --user` has no bus.
+	if !strings.Contains(bootstrapRoot, "dbus-user-session") || !strings.Contains(bootstrapRoot, `user@$uid.service`) {
+		t.Error("the root bootstrap must install dbus-user-session and restart the user manager")
+	}
+}

@@ -7,7 +7,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
 apt-get install -y -qq git jq bubblewrap socat curl ca-certificates gnupg \
-  unzip build-essential >/dev/null
+  unzip build-essential dbus-user-session libpam-systemd >/dev/null
 
 if ! command -v tailscale >/dev/null; then
   # shellcheck disable=SC1091
@@ -22,6 +22,13 @@ fi
 systemctl enable --now tailscaled
 
 loginctl enable-linger "$WK_USER"
+# A cloud image without dbus-user-session has no user bus until the user
+# manager restarts with it installed (the user services below need the bus).
+uid=$(id -u "$WK_USER")
+if [ ! -S "/run/user/$uid/bus" ]; then
+  systemctl restart "user@$uid.service"
+  for _ in $(seq 1 30); do [ -S "/run/user/$uid/bus" ] && break; sleep 1; done
+fi
 # The data volume may still be attaching (EC2): give it a few minutes.
 for _ in $(seq 1 180); do mountpoint -q /data && break; sleep 2; done
 mountpoint -q /data || { echo "/data is not mounted" >&2; exit 1; }
