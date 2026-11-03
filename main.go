@@ -218,6 +218,7 @@ func main() {
 		log.Printf("archive: final transcript copies go to %s", *archiveDir)
 	}
 	srv := server.New(server.Config{
+		Version:        buildVersion(),
 		Archive:        arch,
 		ArchiveSources: acfg.Sources(),
 		Addr:           *addr,

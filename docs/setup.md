@@ -294,6 +294,9 @@ What it does:
    never touched.
 5. Smoke check, using the new binary and this host only: the unit is
    active; `whoami` reaches the local server; its `index.html` is served;
+   the server's `X-Comebye-Version` header (on any `/api` response) equals
+   the version just installed, else it is a failure (a target as old as
+   v0.2.0, which does not send the header, passes with a note);
    `agents --host <this host>` runs; on a hub `ledger`, `queue` and
    `sweep --dry-run` exit 0 (a sweep that fails only because another host
    is unreachable is a warning); the journal since the restart has no

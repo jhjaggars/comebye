@@ -57,6 +57,11 @@ type env struct {
 	archHits atomic.Int32
 	tags     map[string][]byte // tag -> tarball
 	badSum   bool
+	// The local server's X-Comebye-Version: "" follows the installed
+	// binary (a running service), noHeader sends none (an old build),
+	// fixedHeader pins it (a service that kept running the old binary).
+	noHeader    bool
+	fixedHeader string
 }
 
 func stub(version, marker string) string {
@@ -90,6 +95,16 @@ func newEnv(t *testing.T, installed string) *env {
 	}
 	e.local = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"abc"`)
+		switch {
+		case e.noHeader:
+		case e.fixedHeader != "":
+			w.Header().Set("X-Comebye-Version", e.fixedHeader)
+		default:
+			if out, err := exec.Command(e.bin, "-version").Output(); err == nil {
+				f := strings.Fields(string(out))
+				w.Header().Set("X-Comebye-Version", f[len(f)-1])
+			}
+		}
 		fmt.Fprint(w, "<html>")
 	}))
 	e.rel = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -467,4 +482,54 @@ func main() {
 	if err := Run(o); err != nil || !strings.Contains(e.out.String(), "nothing to do") {
 		t.Fatalf("%v\n%s", err, e.out.String())
 	}
+}
+
+func TestServedVersionCheck(t *testing.T) {
+	t.Run("a matching header passes", func(t *testing.T) {
+		e := newEnv(t, "v0.1.0")
+		if err := Run(e.opts()); err != nil {
+			t.Fatalf("%v\n%s", err, e.err.String())
+		}
+		if !strings.Contains(e.out.String(), "the server reports version v0.2.0") {
+			t.Fatal(e.out.String())
+		}
+	})
+	t.Run("a mismatch rolls back", func(t *testing.T) {
+		e := newEnv(t, "v0.1.0")
+		e.fixedHeader = "v0.1.0" // the service still runs the old binary
+		err := Run(e.opts())
+		if !errors.Is(err, ErrRolledBack) || !strings.Contains(err.Error(), "reports version v0.1.0, expected v0.2.0") {
+			t.Fatalf("err = %v", err)
+		}
+		if e.version(e.bin) != "comebye v0.1.0" {
+			t.Fatal("not rolled back")
+		}
+	})
+	t.Run("a missing header on a new target rolls back", func(t *testing.T) {
+		e := newEnv(t, "v0.1.0")
+		e.release("v0.3.0", "NEW")
+		e.noHeader = true
+		o := e.opts()
+		o.Version = "v0.3.0"
+		err := Run(o)
+		if !errors.Is(err, ErrRolledBack) || !strings.Contains(err.Error(), "sends no X-Comebye-Version") {
+			t.Fatalf("err = %v", err)
+		}
+		if e.version(e.bin) != "comebye v0.1.0" {
+			t.Fatal("not rolled back")
+		}
+	})
+	t.Run("a missing header on an old target passes with a note", func(t *testing.T) {
+		e := newEnv(t, "v0.1.0")
+		e.noHeader = true
+		if err := Run(e.opts()); err != nil { // target v0.2.0
+			t.Fatalf("%v\n%s", err, e.err.String())
+		}
+		if !strings.Contains(e.out.String(), "note: v0.2.0 predates X-Comebye-Version") {
+			t.Fatal(e.out.String())
+		}
+		if e.version(e.bin) != "comebye v0.2.0" {
+			t.Fatal("not upgraded")
+		}
+	})
 }

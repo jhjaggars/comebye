@@ -35,6 +35,41 @@ func waitActive(o *Options) error {
 	return fmt.Errorf("%s is %q, not active", o.Service, last)
 }
 
+// lastWithoutVersionHeader is the newest release whose server does not
+// send X-Comebye-Version; anything newer is expected to.
+const lastWithoutVersionHeader = "v0.2.0"
+
+// checkServedVersion asks the local server which binary version it runs
+// (the X-Comebye-Version header of any /api response, a 401 included) and
+// requires it to be the target. A target that predates the header cannot
+// be checked: that passes with a note.
+func checkServedVersion(o *Options, target string) error {
+	got := ""
+	resp, err := o.HTTP.Get(strings.TrimRight(o.LocalURL, "/") + "/api/version")
+	if err == nil {
+		resp.Body.Close()
+		got = resp.Header.Get("X-Comebye-Version")
+	}
+	switch {
+	case got == target:
+		o.printf("smoke: the server reports version %s\n", got)
+	case got == "" && compareVersions(target, lastWithoutVersionHeader) <= 0:
+		o.printf("note: %s predates X-Comebye-Version, so the served version cannot be checked\n", target)
+	case got == "":
+		return fmt.Errorf("the server sends no X-Comebye-Version (%v); expected %s", orErr(err), target)
+	default:
+		return fmt.Errorf("the server reports version %s, expected %s: the restart did not pick up the new binary", got, target)
+	}
+	return nil
+}
+
+func orErr(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return "header missing"
+}
+
 // indexTag is the ETag of the local server's index.html (the served build);
 // "" when the server does not answer.
 func indexTag(o *Options) string {
@@ -75,7 +110,7 @@ var netWords = regexp.MustCompile(`(?i)unreachable|timeout|timed out|connection|
 //     fails only because a host is unreachable is a warning); on a peer
 //     they go through the hub, so a failure is a warning;
 //   - the journal since the restart has no error-level lines.
-func smoke(o *Options, since time.Time, beforeTag string) error {
+func smoke(o *Options, since time.Time, beforeTag, target string) error {
 	if err := waitActive(o); err != nil {
 		return err
 	}
@@ -114,6 +149,10 @@ func smoke(o *Options, since time.Time, beforeTag string) error {
 		o.printf("smoke: index.html changed (%s -> %s): the new build is served\n", beforeTag, tag)
 	} else {
 		o.printf("smoke: index.html served (%s)\n", tag)
+	}
+
+	if err := checkServedVersion(o, target); err != nil {
+		return err
 	}
 
 	// Only this host's agents: other hosts may be offline.

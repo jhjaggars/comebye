@@ -202,7 +202,7 @@ func Run(o Options) error {
 		return failAndRestore(&o, haveOld, prev, fmt.Errorf("restart: %w", err))
 	}
 	start := o.Now().Add(-2 * time.Second)
-	if err := smoke(&o, start, before); err != nil {
+	if err := smoke(&o, start, before, target); err != nil {
 		return failAndRestore(&o, haveOld, prev, err)
 	}
 	after, _ := binVersion(&o, o.Bin)
@@ -260,7 +260,7 @@ func rollback(o *Options) error {
 	if err := systemctl(o, "restart", o.Service); err != nil {
 		return err
 	}
-	if err := smoke(o, o.Now().Add(-2*time.Second), before); err != nil {
+	if err := smoke(o, o.Now().Add(-2*time.Second), before, pv); err != nil {
 		return fmt.Errorf("rolled back, but the smoke check failed: %w", err)
 	}
 	o.printf("rolled back to %s\n", pv)

@@ -127,6 +127,11 @@ func (s *Server) guard(a access, next http.HandlerFunc) http.HandlerFunc {
 		// Every API response (proxied peer calls included) carries this
 		// instance's app version, so a stale page notices a deploy.
 		h.Set("X-App-Version", s.version)
+		// The binary's own version (a tag, or git describe), as opposed to
+		// the app-asset hash above.
+		if s.cfg.Version != "" {
+			h.Set("X-Comebye-Version", s.cfg.Version)
+		}
 		// API responses are never sniffed or stored. A handler that wants
 		// revalidation instead (transcripts, with an ETag) overrides
 		// Cache-Control.

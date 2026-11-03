@@ -33,6 +33,10 @@ import (
 
 // Config configures the HTTP server.
 type Config struct {
+	// Version is the binary's release version (comebye -version); every
+	// API response carries it in X-Comebye-Version, so `comebye upgrade`
+	// can tell the restarted service runs the binary it installed.
+	Version string
 	// Archive, when set, receives a final copy of an agent's transcript
 	// (and its subagents') just before the agent is removed; ArchiveSources
 	// are the session directories it covers. Off when nil.
