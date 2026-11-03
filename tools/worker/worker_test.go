@@ -769,3 +769,10 @@ func TestRootBootstrapInstallsTheUserBus(t *testing.T) {
 		t.Error("the root bootstrap must install dbus-user-session and restart the user manager")
 	}
 }
+
+func TestHerdrServiceHasTheAgentPath(t *testing.T) {
+	// Found on the first real run: panes opened by herdr could not find claude.
+	if !strings.Contains(bootstrapUser, "Environment=PATH=%h/.local/bin:") {
+		t.Error("herdr.service must put ~/.local/bin on the PATH its panes inherit")
+	}
+}

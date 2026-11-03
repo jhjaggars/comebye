@@ -35,6 +35,9 @@ cat >"$HOME/.config/systemd/user/herdr.service" <<'UNIT'
 Description=herdr headless server
 
 [Service]
+# Panes inherit this PATH: the agent CLIs (claude, codex, mise) live in
+# ~/.local/bin, which a user service does not have by default.
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
 ExecStart=%h/.local/bin/herdr server
 Restart=on-failure
 RestartSec=3
