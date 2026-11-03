@@ -75,6 +75,7 @@ func testCfg(t *testing.T) *Config {
 	c.HubPeerURL = "http://hub.tail1.ts.net:8742"
 	c.StateDir = filepath.Join(dir, "state")
 	c.TSOAuthFile = filepath.Join(dir, "oauth")
+	c.TSAuthKeyFile = filepath.Join(dir, "authkey")
 	c.TSAPIBase = "https://api.test"
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
@@ -697,6 +698,67 @@ func TestScriptsHoldNoSecrets(t *testing.T) {
 			if strings.Contains(s, bad) {
 				t.Errorf("%s script mentions %q", name, bad)
 			}
+		}
+	}
+}
+
+func TestAuthKeyFile(t *testing.T) {
+	c := testCfg(t)
+	w := &fakeWorld{hubVersion: "v0.3.1", peers: map[string]bool{}}
+	r := &fakeRunner{state: map[string]bool{}, handle: func(call, *fakeRunner) (string, string, error) { return "", "", nil }}
+	e, out, _ := newEnv(t, c, w, r)
+	ctx := context.Background()
+
+	// a 0600 file is used
+	os.WriteFile(c.TSAuthKeyFile, []byte(secretKey+"\n"), 0o600)
+	k, used, err := e.authKey(ctx, "w1")
+	if err != nil || k != secretKey || used != c.TSAuthKeyFile {
+		t.Fatalf("file key: %q %q %v", k, used, err)
+	}
+	// group-readable is refused, and so is junk
+	os.Chmod(c.TSAuthKeyFile, 0o644)
+	if _, _, err := e.authKey(ctx, "w1"); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Errorf("mode: %v", err)
+	}
+	os.WriteFile(c.TSAuthKeyFile, []byte("not a key"), 0o600)
+	if _, _, err := e.authKey(ctx, "w1"); err == nil {
+		t.Error("junk accepted")
+	}
+	os.Remove(c.TSAuthKeyFile)
+
+	// no file, no terminal: it announces and waits, then takes the file when it appears
+	waits := 0
+	e.Sleep = func(int) {
+		waits++
+		if waits == 3 {
+			os.WriteFile(c.TSAuthKeyFile, []byte(secretKey), 0o600)
+		}
+	}
+	k, used, err = e.authKey(ctx, "w1")
+	if err != nil || k != secretKey || used == "" || waits != 3 {
+		t.Fatalf("wait: %q %q %v waits=%d", k, used, err, waits)
+	}
+	if !strings.Contains(out.String(), "WAITING FOR A TAILSCALE KEY") || strings.Contains(out.String(), secretKey) {
+		t.Errorf("announcement/leak:\n%s", out)
+	}
+}
+
+func TestAuthKeyFileIsDeletedAfterEnrol(t *testing.T) {
+	c := testCfg(t)
+	os.WriteFile(c.TSAuthKeyFile, []byte(secretKey), 0o600)
+	w := &fakeWorld{hubVersion: "v0.3.1", peers: map[string]bool{}}
+	r := &fakeRunner{state: map[string]bool{}}
+	r.handle = gceFake(w, c)
+	e, _, _ := newEnv(t, c, w, r)
+	if err := e.enroll(context.Background(), "w1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(c.TSAuthKeyFile); !os.IsNotExist(err) {
+		t.Error("the key file is still on disk")
+	}
+	for _, cl := range r.calls {
+		if strings.Contains(cl.line(), secretKey) {
+			t.Error("key in argv")
 		}
 	}
 }

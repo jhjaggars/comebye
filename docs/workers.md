@@ -48,8 +48,13 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    printf 'client_id=...\nclient_secret=...\n' > ~/.config/comebye-worker/tailscale-oauth
    ```
 
-   Without that file the tool asks, at a hidden prompt, for a single-use key
-   tagged `tag:worker` that you minted by hand. It then cannot clear stale
+   Without that file the tool needs a single-use key tagged `tag:worker` that
+   you minted by hand. It reads it from a mode-0600 file (`ts_authkey_file`,
+   default `~/.config/comebye-worker/authkey`), else a hidden prompt, and with no
+   terminal it announces that it is waiting and polls for the file for up to 20
+   minutes. Write the file from your own shell so the key stays out of any
+   transcript: `umask 077; read -rs k; printf %s "$k" > ~/.config/comebye-worker/authkey; unset k`.
+   The file is deleted as soon as the key has been used. It then cannot clear stale
    devices or delete the node on `destroy` (it tells you to).
 3. **Tailnet ACLs** (you apply them; the tool never edits the policy):
 

@@ -45,10 +45,11 @@ type Config struct {
 	IdleMinutes    int    // auto-poweroff after this long with no ssh session and no working agent
 	MaxRunDuration string // GCE backstop ("24h"); empty disables
 
-	Tag          string // tailnet tag the workers carry
-	TSOAuthFile  string // OAuth client (client_id / client_secret), mode 0600
-	TSAPIBase    string // Tailscale API base (tests; default https://api.tailscale.com)
-	TSAllowLogin string // COMEBYE_TS_ALLOW_LOGIN on the worker: the login that owns the hub device
+	Tag           string // tailnet tag the workers carry
+	TSOAuthFile   string // OAuth client (client_id / client_secret), mode 0600
+	TSAuthKeyFile string // fallback: a hand-minted single-use tagged key in a mode-0600 file; deleted after use
+	TSAPIBase     string // Tailscale API base (tests; default https://api.tailscale.com)
+	TSAllowLogin  string // COMEBYE_TS_ALLOW_LOGIN on the worker: the login that owns the hub device
 
 	HubURL     string // the hub's Serve URL, as the user reaches it (version lookup, peer removal)
 	HubPeerURL string // COMEBYE_HUB on the worker: http://<hub>.<tailnet>.ts.net:<peer listen port>
@@ -106,6 +107,7 @@ func defaults() Config {
 		MaxRunDuration: "24h",
 		Tag:            "tag:worker",
 		TSOAuthFile:    filepath.Join(cfgDir, "tailscale-oauth"),
+		TSAuthKeyFile:  filepath.Join(cfgDir, "authkey"),
 		TSAPIBase:      "https://api.tailscale.com",
 		ReleasesURL:    "https://github.com/jhjaggars/comebye/releases",
 		HerdrInstall:   "https://herdr.dev/install.sh",
@@ -218,6 +220,8 @@ func (c *Config) apply(kv map[string]string) error {
 			c.Tag = v
 		case "ts_oauth_file":
 			c.TSOAuthFile = expand(v)
+		case "ts_authkey_file":
+			c.TSAuthKeyFile = expand(v)
 		case "ts_api_base":
 			c.TSAPIBase = v
 		case "ts_allow_login":

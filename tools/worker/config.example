@@ -38,6 +38,7 @@ hub_peer_url=http://hub.your-tailnet.ts.net:8742
 # max_run_duration=24h        # gcp: platform cap; aws: advisory guest timer; empty disables
 # tag=tag:worker
 # ts_oauth_file=~/.config/comebye-worker/tailscale-oauth
+# ts_authkey_file=~/.config/comebye-worker/authkey   # hand-minted single-use key; deleted after use
 # hub_version=v0.3.0          # pin instead of asking the hub
 # herdr_install_url=https://herdr.dev/install.sh
 # herdr_install_sha256=       # pin the install script (recommended)

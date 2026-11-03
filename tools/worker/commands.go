@@ -208,49 +208,96 @@ func (e *env) enrolled(ctx context.Context, name string) bool {
 	return err == nil && strings.HasPrefix(strings.TrimSpace(out), "100.")
 }
 
+// readKeyFile reads a hand-minted key from a file that only we may read.
+func readKeyFile(path string) (string, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("%s is mode %o: chmod 600 it", path, st.Mode().Perm())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	k := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(k, "tskey-") || strings.ContainsAny(k, " \t\r\n") {
+		return "", fmt.Errorf("%s does not hold a Tailscale key (tskey-...)", path)
+	}
+	return k, nil
+}
+
 // authKey returns a one-time tagged key: minted through the OAuth client
-// (after clearing a stale offline device of the same name and tag), else read
-// at a hidden prompt.
-func (e *env) authKey(ctx context.Context, name string) (key string, ts *tsClient, err error) {
+// (after clearing a stale offline device of the same name and tag); else read
+// from the key file; else read at a hidden prompt; else, with no terminal,
+// waited for as a key file. usedFile is set when the key came from a file,
+// so the caller can delete it once the key has been used.
+func (e *env) authKey(ctx context.Context, name string) (key, usedFile string, err error) {
 	id, secret, oerr := LoadOAuth(e.Cfg.TSOAuthFile)
 	if oerr != nil {
 		if !os.IsNotExist(oerr) {
-			return "", nil, oerr
+			return "", "", oerr
 		}
-		e.printf("  no OAuth client at %s: enter a single-use key tagged %s (minted by hand in the admin console)\n", e.Cfg.TSOAuthFile, e.Cfg.Tag)
-		k, err := e.ReadSecret("Tailscale auth key: ")
-		k = strings.TrimSpace(k)
-		if err != nil || k == "" {
-			return "", nil, fmt.Errorf("no Tailscale key given")
+		kf := e.Cfg.TSAuthKeyFile
+		if k, err := readKeyFile(kf); err == nil {
+			return k, kf, nil
+		} else if !os.IsNotExist(err) {
+			return "", "", err
 		}
-		return k, nil, nil
+		e.printf("  no OAuth client at %s: a single-use key tagged %s, minted by hand in the admin console, is needed\n", e.Cfg.TSOAuthFile, e.Cfg.Tag)
+		if k, err := e.ReadSecret("Tailscale auth key: "); err == nil && strings.TrimSpace(k) != "" {
+			return strings.TrimSpace(k), "", nil
+		}
+		e.printf("\n  >>> WAITING FOR A TAILSCALE KEY (no terminal here for a prompt).\n"+
+			"  >>> In your own shell, with the key hidden, run:\n"+
+			"  >>>   umask 077; read -rs k; printf %%s \"$k\" > %s; unset k\n"+
+			"  >>> It is read once and then deleted. Waiting up to 20 minutes.\n\n", kf)
+		var k string
+		err := e.poll(240, 5, "a Tailscale key in "+kf, func() (bool, error) {
+			var err error
+			k, err = readKeyFile(kf)
+			if err != nil && !os.IsNotExist(err) {
+				return false, err
+			}
+			return err == nil, nil
+		})
+		if err != nil {
+			return "", "", err
+		}
+		return k, kf, nil
 	}
-	ts = &tsClient{base: e.Cfg.TSAPIBase, http: e.HTTP, id: id, secret: secret}
+	ts := &tsClient{base: e.Cfg.TSAPIBase, http: e.HTTP, id: id, secret: secret}
 	devs, err := ts.Devices(ctx)
 	if err != nil {
-		return "", nil, err
+		return "", "", err
 	}
 	for _, d := range staleDevices(devs, name, e.Cfg.Tag) {
 		e.printf("  removing the stale offline device %s (%s)\n", d.Name, d.ID)
 		if err := ts.DeleteDevice(ctx, d.ID); err != nil {
-			return "", nil, err
+			return "", "", err
 		}
 	}
 	kid, key, err := ts.MintKey(ctx, e.Cfg.Tag, "comebye-worker "+name)
 	if err != nil {
-		return "", nil, err
+		return "", "", err
 	}
 	e.printf("  minted a single-use %s key (id %s, valid 10 minutes)\n", e.Cfg.Tag, kid)
-	return key, ts, nil
+	return key, "", nil
 }
 
 func (e *env) enroll(ctx context.Context, name string) error {
 	if e.enrolled(ctx, name) {
 		e.printf("  already on the tailnet\n")
 	} else {
-		key, _, err := e.authKey(ctx, name)
+		key, usedFile, err := e.authKey(ctx, name)
 		if err != nil {
 			return err
+		}
+		if usedFile != "" {
+			// A single-use key is spent by the first `up`, success or not;
+			// never leave it on disk.
+			defer os.Remove(usedFile)
 		}
 		// The key goes over stdin: never argv, a file, or a log line.
 		up := fmt.Sprintf("sudo tailscale up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s",
