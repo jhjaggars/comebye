@@ -308,8 +308,22 @@ What it does:
    versions and the manual rollback command
    (`cp ~/.local/bin/comebye.prev ~/.local/bin/comebye && systemctl --user restart comebye`).
 
-A binary that predates `comebye upgrade` cannot run it: on such a host,
-install the new binary once by hand, then use the command from then on.
+A binary that predates `comebye upgrade` cannot run it. On such a host,
+bootstrap once from the release tarball, then use the command from then on.
+The tarball extracts to a `comebye_<os>_<arch>/` directory (the binary,
+`comebye.service`, LICENSE and README), not to a bare `./comebye`:
+
+```sh
+d=$(mktemp -d) && cd "$d"
+curl -fsSLO https://github.com/jhjaggars/comebye/releases/latest/download/comebye_linux_amd64.tar.gz
+curl -fsSLO https://github.com/jhjaggars/comebye/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS && tar -xzf comebye_linux_amd64.tar.gz
+comebye_linux_amd64/comebye upgrade
+```
+
+The binary runs from the extracted directory, and `upgrade` installs to
+`~/.local/bin/comebye` whatever its own path. Swap `linux_amd64` for the
+host's os and arch.
 
 ## Upgrading from herdr-phone
 
