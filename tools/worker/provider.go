@@ -51,6 +51,7 @@ type Inst struct {
 	Type     string
 	IP       string // external IPv4
 	Managed  bool   // carries managed-by=comebye-worker
+	Note     string // extra status line, e.g. "spot, reclaimed by AWS"
 }
 
 func newProvider(r Runner, c *Config) Provider {

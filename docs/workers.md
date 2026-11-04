@@ -224,6 +224,32 @@ A forgotten running worker is the real cost, which is what the idle timer and
 the max-run cap are for. `worker status` (no name) lists everything the tool
 created.
 
+### Spot instances on AWS (opt-in)
+
+Set `aws_spot=true` (default `false`, on-demand) to launch the worker as a
+**persistent spot instance with interruption behaviour `stop`**. Spot is
+typically 60 to 70% cheaper than on-demand (check `aws ec2
+describe-spot-price-history` for your type and zone; no price cap is set, so
+you never pay more than on-demand).
+
+- **Reclaim.** AWS gives a two-minute warning, then stops the instance. The
+  root volume, the data volume and the Tailscale node state survive, and AWS
+  restarts the instance by itself when capacity returns (the node keeps its
+  identity; the public IP changes, the tailnet name does not). A running
+  agent session does not survive the stop, so spot suits short or resumable
+  work, not long unattended runs. `worker status` shows `stopped by AWS` when
+  that is what happened.
+- **`start` may fail** with `InsufficientInstanceCapacity` or a spot quota
+  error. Wait and run it again. The tool does not silently fall back to
+  on-demand.
+- **`destroy` cancels the spot request first**, then terminates; otherwise
+  the persistent request would launch a replacement. A request that is not
+  this instance's own is never touched.
+- Spot has its own vCPU quota, separate from on-demand; a new account may
+  start low.
+- Everything else (IMDSv2, no instance profile, encrypted volumes, host-key
+  pinning, idle poweroff) is unchanged. `provider=gcp` rejects `aws_spot`.
+
 ## Limits
 
 - The bootstrap is written for Debian and Ubuntu images (apt), amd64 only.

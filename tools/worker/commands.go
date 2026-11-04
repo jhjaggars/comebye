@@ -414,6 +414,9 @@ func (e *env) status(ctx context.Context, name string) error {
 		return nil
 	}
 	e.printf("%-11s %s (%s)  %s\n", e.Cfg.Provider, inst.State, inst.Type, orDash(inst.IP))
+	if inst.Note != "" {
+		e.printf("            %s\n", inst.Note)
+	}
 	if inst.State == stateRunning {
 		if err := e.connect(ctx, name); err != nil {
 			e.printf("ssh         unreachable: %v\n", err)

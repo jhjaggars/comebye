@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,6 +37,9 @@ type awsFake struct {
 	console                                                     string
 	userData                                                    string
 	ops                                                         []string
+	spot                                                        bool   // the instance is a persistent spot instance
+	reason                                                      string // StateTransitionReason
+	startErr                                                    string
 }
 
 func (f *awsFake) did(op string) bool {
@@ -147,7 +151,11 @@ func (f *awsFake) handler(w *fakeWorld, c *Config) func(call, *fakeRunner) (stri
 			if f.foreign {
 				tag = ""
 			}
-			return fmt.Sprintf(`{"Reservations":[{"Instances":[{"InstanceId":"i-1","InstanceType":"t3.xlarge","PublicIpAddress":"198.51.100.9","State":{"Name":%q},"Tags":[%s{"Key":"Name","Value":"w1"}]}]}]}`, f.inst, tag), "", nil
+			spot := ""
+			if f.spot {
+				spot = `"InstanceLifecycle":"spot","SpotInstanceRequestId":"sir-1",`
+			}
+			return fmt.Sprintf(`{"Reservations":[{"Instances":[{"InstanceId":"i-1","InstanceType":"t3.xlarge","PublicIpAddress":"198.51.100.9",%s"StateTransitionReason":%q,"State":{"Name":%q},"Tags":[%s{"Key":"Name","Value":"w1"}]}]}]}`, spot, f.reason, f.inst, tag), "", nil
 		case "run-instances":
 			f.inst = "running"
 			if p, ok := strings.CutPrefix(qarg(cl, "--user-data"), "file://"); ok {
@@ -156,6 +164,9 @@ func (f *awsFake) handler(w *fakeWorld, c *Config) func(call, *fakeRunner) (stri
 			}
 			return "i-1", "", nil
 		case "start-instances":
+			if f.startErr != "" {
+				return "", f.startErr, errors.New(f.startErr)
+			}
 			f.inst = "running"
 		case "stop-instances":
 			f.inst = "stopped"
@@ -717,5 +728,122 @@ func TestAWSScriptsParse(t *testing.T) {
 	}
 	if _, err := awsUserData(c, "ssh-ed25519 AAAA x", "vol-1; reboot"); err == nil {
 		t.Error("accepted a bad volume id")
+	}
+}
+
+// ---- spot ----
+
+func runInstancesLine(r *fakeRunner) string {
+	for _, cl := range r.calls {
+		if strings.Contains(cl.line(), "run-instances") {
+			return cl.line()
+		}
+	}
+	return ""
+}
+
+func TestAWSSpotIsOptIn(t *testing.T) {
+	for _, spot := range []bool{false, true} {
+		w := &fakeWorld{hubVersion: "v0.3.1", peers: map[string]bool{}}
+		f := &awsFake{console: consoleKey}
+		e, r, c := awsEnv(t, f, w)
+		c.AWSSpot = spot
+		if err := e.create(context.Background(), "w1", createOpts{}); err != nil {
+			t.Fatal(err)
+		}
+		run := runInstancesLine(r)
+		has := strings.Contains(run, "--instance-market-options MarketType=spot,SpotOptions={SpotInstanceType=persistent,InstanceInterruptionBehavior=stop}")
+		if has != spot {
+			t.Errorf("spot=%v: market options present=%v:\n%s", spot, has, run)
+		}
+		if strings.Contains(run, "MaxPrice") {
+			t.Error("a max price was set")
+		}
+		for _, want := range []string{"HttpTokens=required", "--instance-initiated-shutdown-behavior stop", "Encrypted=true"} {
+			if !strings.Contains(run, want) {
+				t.Errorf("spot=%v: hardening flag %q lost", spot, want)
+			}
+		}
+	}
+}
+
+func TestAWSSpotDestroyCancelsRequestBeforeTerminating(t *testing.T) {
+	f := fullAWS()
+	f.spot = true
+	e, r, out := awsDestroyEnv(t, f, "w1\n")
+	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	cancel, term := -1, -1
+	for i, o := range f.ops {
+		switch o {
+		case "cancel-spot-instance-requests":
+			cancel = i
+		case "terminate-instances":
+			term = i
+		}
+	}
+	if cancel < 0 || term < 0 || cancel > term {
+		t.Errorf("cancel must precede terminate: %v", f.ops)
+	}
+	found := false
+	for _, cl := range r.calls {
+		if strings.Contains(cl.line(), "cancel-spot-instance-requests") && strings.Contains(cl.line(), "--spot-instance-request-ids sir-1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("cancel did not name the instance's own request")
+	}
+}
+
+func TestAWSOnDemandDestroyDoesNotCancel(t *testing.T) {
+	f := fullAWS()
+	e, _, out := awsDestroyEnv(t, f, "w1\n")
+	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if f.did("cancel-spot-instance-requests") {
+		t.Error("cancelled a spot request for an on-demand instance")
+	}
+}
+
+func TestAWSSpotStartCapacityHintAndStatusNote(t *testing.T) {
+	w := &fakeWorld{peers: map[string]bool{}}
+	f := &awsFake{inst: "stopped", spot: true, reason: "Server.SpotInstanceTermination: Spot capacity reclaimed", startErr: "InsufficientInstanceCapacity"}
+	e, _, c := awsEnv(t, f, w)
+	c.AWSSpot = true
+	if err := e.start(context.Background(), "w1"); err == nil || !strings.Contains(err.Error(), "InsufficientInstanceCapacity") || !strings.Contains(err.Error(), "spot instance") {
+		t.Errorf("start error: %v", err)
+	}
+	var out strings.Builder
+	e.Out = &out
+	if err := e.status(context.Background(), "w1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "stopped by AWS") {
+		t.Errorf("status does not say AWS stopped it:\n%s", out.String())
+	}
+}
+
+func TestAWSSpotConfig(t *testing.T) {
+	base := "provider=aws\naws_region=us-east-1\naws_az=us-east-1a\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=http://h.t.ts.net:8742\n"
+	p := filepath.Join(t.TempDir(), "config")
+	os.WriteFile(p, []byte(base+"aws_spot=true\n"), 0o600)
+	if c, err := LoadConfig(p); err != nil || !c.AWSSpot {
+		t.Fatalf("aws_spot=true: %v", err)
+	}
+	os.WriteFile(p, []byte(base), 0o600)
+	if c, err := LoadConfig(p); err != nil || c.AWSSpot {
+		t.Fatalf("default must be on-demand: %v", err)
+	}
+	os.WriteFile(p, []byte(base+"aws_spot=yes\n"), 0o600)
+	if _, err := LoadConfig(p); err == nil || !strings.Contains(err.Error(), "aws_spot") {
+		t.Errorf("aws_spot=yes accepted: %v", err)
+	}
+	c := testCfg(t)
+	c.AWSSpot = true
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "aws_spot needs provider=aws") {
+		t.Errorf("spot on gcp: %v", err)
 	}
 }

@@ -13,6 +13,7 @@ zone=us-central1-a
 # aws_region=us-east-1
 # aws_az=us-east-1a
 # aws_profile=work                # optional: a named profile of your AWS CLI
+# aws_spot=true                   # optional: spot pricing (see docs/workers.md); default false
 # Your workstation's public IPv4 as a single /32: the only address that may reach tcp:22.
 ssh_source_cidr=203.0.113.7/32
 # The Tailscale login that owns the hub device (the worker admits the hub's requests as it).

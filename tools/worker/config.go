@@ -23,6 +23,7 @@ type Config struct {
 	AWSAZ      string
 	AWSProfile string // optional: a named profile of the user's AWS CLI config
 	ImageID    string // aws: an AMI id instead of the Debian SSM parameter
+	AWSSpot    bool   // aws: launch a persistent spot instance that stops (not terminates) when reclaimed
 	VPCRange   string // aws: CIDR of the dedicated VPC; SubnetRange lies inside it
 
 	machineSet, diskSet bool
@@ -184,6 +185,15 @@ func (c *Config) apply(kv map[string]string) error {
 			c.AWSAZ = v
 		case "aws_profile":
 			c.AWSProfile = v
+		case "aws_spot":
+			switch v {
+			case "true":
+				c.AWSSpot = true
+			case "false":
+				c.AWSSpot = false
+			default:
+				err = fmt.Errorf("aws_spot must be true or false, not %q", v)
+			}
 		case "image_id":
 			c.ImageID = v
 		case "vpc_range":
@@ -267,6 +277,7 @@ func (c *Config) Validate() error {
 		chk(c.DataDiskGB >= 10 && c.DataDiskGB <= 10000, "data_disk_gb out of range"),
 		chk(resRe.MatchString(c.Network), "bad network name %q", c.Network),
 		chk(userRe.MatchString(c.SSHUser) && c.SSHUser != "root", "bad ssh_user %q", c.SSHUser),
+		chk(!c.AWSSpot || c.Provider == "aws", "aws_spot needs provider=aws"),
 		chk(c.IdleMinutes >= 5 && c.IdleMinutes <= 10080, "idle_minutes must be 5..10080"),
 		chk(c.MaxRunDuration == "" || durRe.MatchString(c.MaxRunDuration), "bad max_run_duration %q (want e.g. 24h, or empty)", c.MaxRunDuration),
 		chk(tagRe.MatchString(c.Tag), "bad tag %q (want tag:name)", c.Tag),

@@ -256,6 +256,9 @@ type awsInstance struct {
 	InstanceType string
 	PublicIP     string `json:"PublicIpAddress"`
 	State        struct{ Name string }
+	Lifecycle    string `json:"InstanceLifecycle"`
+	SpotRequest  string `json:"SpotInstanceRequestId"`
+	Reason       string `json:"StateTransitionReason"`
 	Tags         []struct{ Key, Value string }
 }
 
@@ -294,7 +297,14 @@ func (p *awsProv) Describe(ctx context.Context, name string) (*Inst, error) {
 		}
 	}
 	st := strings.ToUpper(i.State.Name)
-	return &Inst{Name: name, ID: i.InstanceID, State: st, Type: i.InstanceType, IP: i.PublicIP, Managed: managed}, nil
+	note := ""
+	if i.Lifecycle == "spot" {
+		note = "spot instance (persistent request, stops when AWS reclaims the capacity)"
+		if strings.Contains(i.Reason, "Spot") {
+			note = "spot instance, stopped by AWS (" + i.Reason + "): it restarts by itself when capacity returns"
+		}
+	}
+	return &Inst{Name: name, ID: i.InstanceID, State: st, Type: i.InstanceType, IP: i.PublicIP, Managed: managed, Note: note}, nil
 }
 
 func (p *awsProv) imageID(ctx context.Context) (string, error) {
@@ -313,7 +323,14 @@ func (p *awsProv) imageID(ctx context.Context) (string, error) {
 // is encrypted, and a guest poweroff stops the instance.
 func (p *awsProv) runInstances(name, ami, rootDev, subnet, sg, userDataFile string) []string {
 	c := p.cfg
-	return p.a.text("ec2", "run-instances", "--count", "1",
+	var spot []string
+	if c.AWSSpot {
+		// persistent + stop: AWS stops a reclaimed instance (disks survive) and
+		// restarts it when capacity returns; no max price means up to on-demand.
+		spot = []string{"--instance-market-options", "MarketType=spot,SpotOptions={SpotInstanceType=persistent,InstanceInterruptionBehavior=stop}"}
+	}
+	args := append([]string{"ec2", "run-instances", "--count", "1"}, spot...)
+	args = append(args,
 		"--image-id", ami, "--instance-type", c.MachineType,
 		"--network-interfaces", fmt.Sprintf("DeviceIndex=0,SubnetId=%s,Groups=%s,AssociatePublicIpAddress=true,DeleteOnTermination=true", subnet, sg),
 		"--block-device-mappings", fmt.Sprintf("DeviceName=%s,Ebs={VolumeSize=%d,VolumeType=%s,Encrypted=true,DeleteOnTermination=true}", rootDev, c.BootDiskGB, c.DiskType),
@@ -322,6 +339,7 @@ func (p *awsProv) runInstances(name, ami, rootDev, subnet, sg, userDataFile stri
 		"--tag-specifications", p.a.tagSpec("instance", name), p.a.tagSpec("volume", name+"-root"),
 		"--user-data", "file://"+userDataFile,
 		"--query", "Instances[0].InstanceId")
+	return p.a.text(args...)
 }
 
 func (p *awsProv) Create(ctx context.Context, name, pubKey string) error {
@@ -409,6 +427,9 @@ func (p *awsProv) Start(ctx context.Context, name string) error {
 		return err
 	}
 	_, err = p.a.runText(ctx, p.a.text("ec2", "start-instances", "--instance-ids", id, "--query", "StartingInstances[0].InstanceId"))
+	if err != nil && p.cfg.AWSSpot {
+		return fmt.Errorf("%w\n(spot instance: if AWS has no capacity right now, wait and run start again; it also restarts by itself when capacity returns)", err)
+	}
 	return err
 }
 
@@ -428,6 +449,13 @@ func (p *awsProv) Delete(ctx context.Context, name string) error {
 	id, err := p.byName(ctx, name)
 	if err != nil {
 		return err
+	}
+	// A persistent spot request outlives its instance and would launch a
+	// replacement, so cancel it first.
+	if i, err := p.find(ctx, name); err == nil && i != nil && i.SpotRequest != "" {
+		if _, err := p.a.runText(ctx, p.a.text("ec2", "cancel-spot-instance-requests", "--spot-instance-request-ids", i.SpotRequest, "--query", "CancelledSpotInstanceRequests[0].State")); err != nil {
+			return fmt.Errorf("cancelling spot request %s: %w", i.SpotRequest, err)
+		}
 	}
 	if _, err := p.a.runText(ctx, p.a.text("ec2", "terminate-instances", "--instance-ids", id, "--query", "TerminatingInstances[0].InstanceId")); err != nil {
 		return err
@@ -630,6 +658,9 @@ func (p *awsProv) Plan(name, pub string, w logf) {
 	w("   then: aws ec2 wait instance-running; aws ec2 attach-volume --device /dev/sdf\n")
 	w("   host key, printed by the VM to its console (marker COMEBYE-HOSTKEY) and read through the EC2 API:\n     %s\n",
 		cmdLine("aws", a.text("ec2", "get-console-output", "--instance-id", "<id>", "--latest", "--query", "Output")))
+	if c.AWSSpot {
+		w("   spot: persistent request, interruption behaviour stop (AWS stops a reclaimed instance and restarts it when capacity returns; no max price, so up to on-demand)\n")
+	}
 	if c.MaxRunDuration != "" {
 		w("   advisory max run time: a guest-side timer powers the VM off %s after boot (EC2 has no platform cap)\n", c.MaxRunDuration)
 	}
