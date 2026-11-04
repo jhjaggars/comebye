@@ -239,6 +239,10 @@ you never pay more than on-demand).
   agent session does not survive the stop, so spot suits short or resumable
   work, not long unattended runs. `worker status` shows `stopped by AWS` when
   that is what happened.
+- **`start` waits** for AWS to finish disabling the spot request after a stop
+  (about 2 to 3 minutes; AWS refuses `start-instances` with
+  `IncorrectSpotRequestState` until then), so a `start` right after a `stop`
+  takes that long.
 - **`start` may fail** with `InsufficientInstanceCapacity` or a spot quota
   error. Wait and run it again. The tool does not silently fall back to
   on-demand.

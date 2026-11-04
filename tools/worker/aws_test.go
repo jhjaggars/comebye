@@ -40,6 +40,7 @@ type awsFake struct {
 	spot                                                        bool   // the instance is a persistent spot instance
 	reason                                                      string // StateTransitionReason
 	startErr                                                    string
+	reqActive                                                   int // the spot request reads "active" this many more times
 }
 
 func (f *awsFake) did(op string) bool {
@@ -163,7 +164,16 @@ func (f *awsFake) handler(w *fakeWorld, c *Config) func(call, *fakeRunner) (stri
 				f.userData = string(b)
 			}
 			return "i-1", "", nil
+		case "describe-spot-instance-requests":
+			if f.reqActive > 0 {
+				f.reqActive--
+				return "active", "", nil
+			}
+			return "disabled", "", nil
 		case "start-instances":
+			if f.reqActive > 0 {
+				return "", "IncorrectSpotRequestState", errors.New("IncorrectSpotRequestState")
+			}
 			if f.startErr != "" {
 				return "", f.startErr, errors.New(f.startErr)
 			}
@@ -845,5 +855,29 @@ func TestAWSSpotConfig(t *testing.T) {
 	c.AWSSpot = true
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "aws_spot needs provider=aws") {
 		t.Errorf("spot on gcp: %v", err)
+	}
+}
+
+func TestAWSSpotStartWaitsForTheRequestToBeDisabled(t *testing.T) {
+	polls := 0
+	old := spotPoll
+	spotPoll = func() { polls++ }
+	defer func() { spotPoll = old }()
+	w := &fakeWorld{peers: map[string]bool{}}
+	f := &awsFake{inst: "stopped", spot: true, reqActive: 3, console: consoleKey}
+	e, _, c := awsEnv(t, f, w)
+	c.AWSSpot = true
+	if err := e.prov().Start(context.Background(), "w1"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if polls != 3 || !f.did("start-instances") || f.inst != "running" {
+		t.Errorf("polls=%d inst=%s ops=%v", polls, f.inst, f.ops)
+	}
+	// an on-demand instance is never polled
+	polls = 0
+	g := &awsFake{inst: "stopped", console: consoleKey}
+	e2, _, _ := awsEnv(t, g, &fakeWorld{peers: map[string]bool{}})
+	if err := e2.prov().Start(context.Background(), "w1"); err != nil || polls != 0 || g.did("describe-spot-instance-requests") {
+		t.Errorf("on-demand start: err=%v polls=%d ops=%v", err, polls, g.ops)
 	}
 }

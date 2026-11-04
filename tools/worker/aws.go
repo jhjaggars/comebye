@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // awsCLI builds and runs `aws` commands. Credentials are the user's own AWS
@@ -421,10 +422,43 @@ func (p *awsProv) byName(ctx context.Context, name string) (string, error) {
 	return i.InstanceID, nil
 }
 
+// spotPoll is how long Start waits between looks at a spot request; tests
+// replace it.
+var spotPoll = func() { time.Sleep(10 * time.Second) }
+
+const spotWaitTries = 54 // about 9 minutes
+
+// waitSpotStartable waits for a persistent spot request to leave "active".
+// After a stop, AWS keeps the request active ("marked-for-stop") for a couple
+// of minutes and refuses start-instances (IncorrectSpotRequestState) until it
+// is "disabled".
+func (p *awsProv) waitSpotStartable(ctx context.Context, reqID string) error {
+	for i := 0; i < spotWaitTries; i++ {
+		st, err := p.a.runText(ctx, p.a.text("ec2", "describe-spot-instance-requests", "--spot-instance-request-ids", reqID, "--query", "SpotInstanceRequests[0].State"))
+		if err != nil {
+			return err
+		}
+		if st != "active" {
+			return nil
+		}
+		spotPoll()
+	}
+	return nil // try the start anyway; its error says what AWS thinks
+}
+
 func (p *awsProv) Start(ctx context.Context, name string) error {
-	id, err := p.byName(ctx, name)
+	i, err := p.find(ctx, name)
 	if err != nil {
 		return err
+	}
+	if i == nil {
+		return fmt.Errorf("no instance %s", name)
+	}
+	id := i.InstanceID
+	if i.SpotRequest != "" {
+		if err := p.waitSpotStartable(ctx, i.SpotRequest); err != nil {
+			return err
+		}
 	}
 	_, err = p.a.runText(ctx, p.a.text("ec2", "start-instances", "--instance-ids", id, "--query", "StartingInstances[0].InstanceId"))
 	if err != nil && p.cfg.AWSSpot {
