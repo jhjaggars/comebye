@@ -108,6 +108,9 @@ type Config struct {
 	// AllowTags are the Tailscale tags (tag:worker) admitted on the peer
 	// listener (PeerHandler); WhoIs identifies the callers there.
 	AllowTags []string
+	// AllowCap is the app capability that admits a tagged node: through
+	// Tailscale Serve (capPeers) and on the peer listener.
+	AllowCap string
 	// WhoIs identifies a connection's tailnet node (tailscaled's WhoIs).
 	WhoIs tsauth.Resolver
 	// SelfRegister lets a tagged node announce itself as a peer.
@@ -358,7 +361,7 @@ func (s *Server) ListenAndServe() error {
 // prompts or keys to the agents. CrossOriginProtection rejects cross-origin
 // unsafe requests via Sec-Fetch-Site/Origin; requiring a JSON content type
 // also forces a CORS preflight on browsers too old to send those headers.
-func (s *Server) Handler() http.Handler { return s.checkHost(s.base()) }
+func (s *Server) Handler() http.Handler { return s.checkHost(s.capPeers(s.base())) }
 
 func (s *Server) base() http.Handler {
 	jsonOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

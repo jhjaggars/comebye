@@ -7,6 +7,11 @@
 // address, and a process on the hub cannot make a TCP connection arrive
 // from another node's tailnet IP, so unlike a header the answer cannot be
 // forged from the hub's loopback.
+//
+// A grant's app capability identifies such a node too. Tailscale Serve
+// forwards the capabilities named by --accept-app-caps in a request header
+// (HeaderAppCaps), for tagged nodes as well, and WhoIs reports them in its
+// CapMap.
 package tsauth
 
 import (
@@ -15,10 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +41,16 @@ type Identity struct {
 	Node string
 	// Tags are the node's ACL tags (tag:worker); empty for a user-owned node.
 	Tags []string
+	// Caps are the app capabilities the node holds toward this node, from
+	// the tailnet policy's grants: capability name to its values.
+	Caps map[string]json.RawMessage
+}
+
+// HasCap reports whether the node holds the app capability (exact name;
+// the values are not looked at).
+func (i Identity) HasCap(name string) bool {
+	_, ok := i.Caps[name]
+	return name != "" && ok
 }
 
 // HasTag reports whether the node carries tag.
@@ -59,8 +76,8 @@ var ErrUnknown = errors.New("not a tailnet node")
 // cached for a short time per IP.
 type LocalAPI struct {
 	Socket string
-	// TTL is how long a WhoIs answer is reused (default 30s). Tag changes
-	// by the tailnet admin take effect after it.
+	// TTL is how long a WhoIs answer is reused (default 30s). Tag and grant
+	// changes by the tailnet admin take effect after it.
 	TTL time.Duration
 
 	once   sync.Once
@@ -152,11 +169,12 @@ func (l *LocalAPI) WhoIs(ctx context.Context, remoteAddr string) (Identity, erro
 			Name string
 			Tags []string
 		}
+		CapMap map[string]json.RawMessage
 	}
 	if err := json.Unmarshal(b, &w); err != nil {
 		return Identity{}, fmt.Errorf("tailscaled whois: %w", err)
 	}
-	id := Identity{Node: strings.ToLower(strings.TrimSuffix(w.Node.Name, ".")), Tags: w.Node.Tags}
+	id := Identity{Node: strings.ToLower(strings.TrimSuffix(w.Node.Name, ".")), Tags: w.Node.Tags, Caps: w.CapMap}
 	if id.Node == "" {
 		return Identity{}, ErrUnknown
 	}
@@ -217,4 +235,40 @@ func NormalizeTags(spec string) ([]string, error) {
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// HeaderAppCaps is the header in which Tailscale Serve forwards a caller's
+// app capabilities, when its handler was set up with --accept-app-caps.
+// The value is a JSON object of capability name to an array of values;
+// non-ASCII values are RFC 2047 encoded. Serve removes a client's copy.
+const HeaderAppCaps = "Tailscale-App-Capabilities"
+
+// HeaderHasCap reports whether a HeaderAppCaps value holds the capability.
+// Anything malformed holds nothing.
+func HeaderHasCap(value, name string) bool {
+	if value == "" || name == "" {
+		return false
+	}
+	dec, err := new(mime.WordDecoder).DecodeHeader(value)
+	if err != nil {
+		return false
+	}
+	var caps map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dec), &caps); err != nil {
+		return false
+	}
+	_, ok := caps[name]
+	return ok
+}
+
+// capNameRE is the form Tailscale requires of an app capability's name.
+var capNameRE = regexp.MustCompile(`^([\pL\pN-]+\.)+[\pL\pN-]+/[\pL\pN-/]+$`)
+
+// NormalizeCap checks an app capability's name; empty means none.
+func NormalizeCap(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name != "" && !capNameRE.MatchString(name) {
+		return "", fmt.Errorf("capability %q: want {domain}/{name} (example.com/cap/peer)", name)
+	}
+	return name, nil
 }

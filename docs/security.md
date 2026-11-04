@@ -10,7 +10,8 @@ Treat access to it like SSH access to that machine.
   reachable only from inside your tailnet.
 - <a id="tagged-nodes-and-the-peer-listener"></a>**Tagged nodes and the peer
   listener (opt-in).** Tagged tailnet nodes (`tag:worker`) have no login, so
-  Serve cannot identify them. With `-peer-listen` (needs `-ts-allow-tag`) the
+  Serve cannot identify them by one. With `-peer-listen` (needs `-ts-allow-tag`
+  or `-ts-allow-cap`) the
   hub opens **one more listener, on its tailnet IP only** (never a wildcard
   or loopback address; the server refuses to serve it otherwise). This is
   the only exception to "loopback only", and everything else stays as
@@ -21,15 +22,16 @@ Treat access to it like SSH access to that machine.
     connection that arrives from another node's tailnet IP, and
     `Tailscale-*` headers (and the agent token, forwarding and host headers)
     are discarded, so the loopback header forgery described below does not
-    apply to it. Answers are cached for 30 s, so a tag removed in the admin
-    console takes effect within that time. WhoIs failing (tailscaled down)
+    apply to it. Answers are cached for 30 s, so a tag or grant removed in the
+    admin console takes effect within that time. WhoIs failing (tailscaled down)
     is a refusal, never an admission.
   - **Role: the forwarded agent only**, never the user. Only `/api/*` routes
     open to the agent role answer; the web app and every user-only route
     (keys, answers, launching, removals, push, the peer registry) do not. A
     tagged node's requests are attributed to its peer name, not to a host it
     names itself.
-  - **Admission needs two things:** an allowed tag, and a registered peer
+  - **Admission needs two things:** an allowed tag (or a tag plus the
+    `-ts-allow-cap` capability in WhoIs's answer), and a registered peer
     whose address is that very node (and that carries the peer's tag, if one
     was recorded). A tagged VM that nobody registered gets 403.
   - **Self-registration** (`-peer-self-register`, off by default) lets such
@@ -50,11 +52,35 @@ Treat access to it like SSH access to that machine.
   - The remaining limit is unchanged: **a local process on the hub** can
     still forge the Serve identity header on the loopback port (the main
     listener), and a local process on a *worker* is the worker's agent.
+- <a id="tagged-nodes-through-serve"></a>**Tagged nodes through Serve
+  (opt-in).** With `-ts-allow-cap`, a tagged node holding that app capability
+  from a tailnet grant is admitted on the main listener, through Serve run with
+  `--accept-app-caps`. The role and rules are the peer listener's: the
+  forwarded agent only, a registered peer (or one announcing itself),
+  `/api/*` only, and no login, token or host name it claims counts.
+  - **Identity:** Serve's `Tailscale-App-Capabilities` header must hold the
+    capability, and tailscaled's WhoIs on the address in `X-Forwarded-For` must
+    show a tagged node that holds it too. Serve replaces both headers, so a
+    tailnet node cannot forge them. WhoIs answers are cached for 30 s. A grant
+    removed from the policy stops the header as soon as the hub's tailscaled
+    sees it.
+  - **The trade-off against the peer listener:** a **local process on the hub**
+    can forge both headers on the loopback port, the same way it can forge
+    `Tailscale-User-Login`. This adds no new power: forging the login already
+    gets it the user role, while this gets it only the agent role, and only as
+    a node that really holds the grant. The peer listener doesn't have this
+    weakness, but the login forgery on the same host remains either way.
+  - **Reach:** the grant's `ip` block lets those nodes reach the hub's Serve
+    port, so they can load the static UI shell if the capability header is
+    missing (for example Serve lacks the flag). They still get no API.
+  - Requests with a login, or without the capability, are handled as if this
+    feature were off.
 - **Identity allowlist.** Tailscale Serve adds a `Tailscale-User-Login`
   header to every request it proxies from a tailnet device and strips any
   client-supplied copy. With `-ts-allow-login`, only the listed logins get
   through; other tailnet users, tagged devices (which carry no user
-  identity), and Funnel traffic are rejected with 401, and the app shows a
+  identity; see above for how they can be admitted, never as the user), and
+  Funnel traffic are rejected with 401, and the app shows a
   "Not authorized" message. Matching is case-insensitive. The server
   refuses to start with an allowlist unless it listens on loopback, since
   any other client could forge the header. There are no passwords, tokens

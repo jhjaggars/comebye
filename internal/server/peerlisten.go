@@ -18,7 +18,8 @@ import (
 // cannot pass Serve's identity check. The hub asks tailscaled's WhoIs who
 // the connection's source address is (the address WireGuard authenticated,
 // which no local process can fake from loopback), admits only nodes that
-// carry an allowed tag, and gives them the forwarded-agent role and
+// carry an allowed tag or hold the hub's app capability (AllowCap), and
+// gives them the forwarded-agent role and
 // nothing else: user-only routes answer 403 as they do for any agent, the
 // UI is not served, and the Tailscale-*, agent-token and forwarding
 // headers are ignored (a tagged node cannot claim a login, the local
@@ -26,7 +27,8 @@ import (
 //
 // Beyond the identity, a node must be a registered peer (one of whose
 // addresses is the node itself), or announce itself as one when the hub
-// allows self-registration.
+// allows self-registration. capPeers (capauth.go) admits the same nodes,
+// under the same rules, through Tailscale Serve.
 
 type taggedKey struct{}
 
@@ -54,6 +56,50 @@ func (s *Server) allowedTag(id tsauth.Identity) string {
 	return ""
 }
 
+// admittedTag says whether the hub admits a node: by an allowed tag, or as
+// a tagged node holding the app capability. It returns the tag to record
+// for the node, "" when not admitted. Grants can name users too, but only a
+// tagged node comes in this way: a user's device has its login.
+func (s *Server) admittedTag(id tsauth.Identity) string {
+	if t := s.allowedTag(id); t != "" {
+		return t
+	}
+	if len(id.Tags) > 0 && s.cfg.AllowCap != "" && id.HasCap(s.cfg.AllowCap) {
+		return strings.ToLower(id.Tags[0])
+	}
+	return ""
+}
+
+// admitPeer applies the rules for an admitted node, however it came in: it
+// must be a registered peer that still carries the peer's recorded tag, or
+// be announcing itself. It refuses the request itself when not.
+func (s *Server) admitPeer(w http.ResponseWriter, r *http.Request, id tsauth.Identity, tag string) (tagged, bool) {
+	t := tagged{node: id.Node, tag: tag}
+	if name, ptag, ok := s.fleet.FindByHost(id.Node); ok {
+		if ptag != "" && !id.HasTag(ptag) {
+			peerDeny(w, http.StatusForbidden, "tag_mismatch", "node "+id.Node+" no longer carries the tag "+ptag+" its peer was registered with")
+			return t, false
+		}
+		t.peer = name
+	} else if r.URL.Path != "/api/peers/announce" {
+		peerDeny(w, http.StatusForbidden, "not_a_peer", "node "+id.Node+" is not a registered peer of this hub"+announceHint(s.cfg.SelfRegister))
+		return t, false
+	}
+	return t, true
+}
+
+// dropClaims removes everything a client says about who it is.
+func dropClaims(r *http.Request) {
+	for k := range r.Header {
+		if strings.HasPrefix(strings.ToLower(k), "tailscale-") {
+			delete(r.Header, k)
+		}
+	}
+	for _, k := range []string{HeaderAgentToken, HeaderForwarded, HeaderAgentHost} {
+		r.Header.Del(k)
+	}
+}
+
 func peerDeny(w http.ResponseWriter, status int, code, msg string) {
 	writeJSONStatus(w, status, map[string]string{"code": code, "message": msg})
 }
@@ -67,16 +113,9 @@ func (s *Server) PeerHandler() http.Handler {
 			return
 		}
 		// Nothing the client says about who it is counts here.
-		for k := range r.Header {
-			if strings.HasPrefix(strings.ToLower(k), "tailscale-") {
-				delete(r.Header, k)
-			}
-		}
-		for _, k := range []string{HeaderAgentToken, HeaderForwarded, HeaderAgentHost} {
-			r.Header.Del(k)
-		}
-		if len(s.cfg.AllowTags) == 0 || s.cfg.WhoIs == nil {
-			peerDeny(w, http.StatusForbidden, "tags_off", "this hub admits no tagged nodes (-ts-allow-tag)")
+		dropClaims(r)
+		if (len(s.cfg.AllowTags) == 0 && s.cfg.AllowCap == "") || s.cfg.WhoIs == nil {
+			peerDeny(w, http.StatusForbidden, "tags_off", "this hub admits no tagged nodes (-ts-allow-tag, -ts-allow-cap)")
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -89,20 +128,13 @@ func (s *Server) PeerHandler() http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		tag := s.allowedTag(id)
+		tag := s.admittedTag(id)
 		if tag == "" {
-			peerDeny(w, http.StatusForbidden, "tag_not_allowed", "node "+id.Node+" carries none of this hub's allowed tags")
+			peerDeny(w, http.StatusForbidden, "tag_not_allowed", "node "+id.Node+" carries none of this hub's allowed tags and does not hold its capability")
 			return
 		}
-		t := tagged{node: id.Node, tag: tag}
-		if name, ptag, ok := s.fleet.FindByHost(id.Node); ok {
-			if ptag != "" && !id.HasTag(ptag) {
-				peerDeny(w, http.StatusForbidden, "tag_mismatch", "node "+id.Node+" no longer carries the tag "+ptag+" its peer was registered with")
-				return
-			}
-			t.peer = name
-		} else if r.URL.Path != "/api/peers/announce" {
-			peerDeny(w, http.StatusForbidden, "not_a_peer", "node "+id.Node+" is not a registered peer of this hub"+announceHint(s.cfg.SelfRegister))
+		t, ok := s.admitPeer(w, r, id, tag)
+		if !ok {
 			return
 		}
 		inner.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), taggedKey{}, t)))
@@ -143,13 +175,13 @@ func (s *Server) ServePeerListener(ln net.Listener) error {
 }
 
 // handleAnnounce is POST /api/peers/announce {name?, url?}: a tagged node
-// registers itself as a peer. It is answered only on the peer listener,
-// only when the hub allows self-registration, and only for the caller's
+// registers itself as a peer. It is answered only for a caller admitted as
+// a tagged node (the peer listener, or capPeers), only when the hub allows self-registration, and only for the caller's
 // own node: the announced URL must be on the node WhoIs identified.
 func (s *Server) handleAnnounce(w http.ResponseWriter, r *http.Request) {
 	t, ok := taggedOf(r)
 	if !ok {
-		peerDeny(w, http.StatusForbidden, "announce_tagged_only", "peers announce themselves over the hub's peer listener, from a tagged node")
+		peerDeny(w, http.StatusForbidden, "announce_tagged_only", "peers announce themselves from a tagged node, through the hub's peer listener or its Serve URL with the capability")
 		return
 	}
 	if s.notHub(w) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -104,6 +105,65 @@ func TestNormalizeTags(t *testing.T) {
 	}
 	for _, bad := range []string{"worker", "tag:", "tag:a b"} {
 		if _, err := NormalizeTags(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestWhoIsParsesCapMap(t *testing.T) {
+	sock, _ := fakeTailscaled(t, func(string) (int, string) {
+		return 200, `{"Node":{"Name":"w1.tail.ts.net.","Tags":["tag:worker"]},"CapMap":{"example.com/cap/peer":[{"role":"worker"}]}}`
+	})
+	id, err := (&LocalAPI{Socket: sock}).WhoIs(context.Background(), "100.64.0.7:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !id.HasCap("example.com/cap/peer") || id.HasCap("example.com/cap") || id.HasCap("") {
+		t.Fatalf("caps = %v", id.Caps)
+	}
+	if (Identity{}).HasCap("example.com/cap/peer") {
+		t.Fatal("no caps holds a capability")
+	}
+}
+
+func TestHeaderHasCap(t *testing.T) {
+	const name = "example.com/cap/peer"
+	for _, c := range []struct {
+		name, value string
+		want        bool
+	}{
+		{"one", `{"example.com/cap/peer":[{"role":"worker"}]}`, true},
+		{"among several", `{"example.com/cap/other":[1],"example.com/cap/peer":[{"a":1},{"b":2}]}`, true},
+		{"no values", `{"example.com/cap/peer":[]}`, true},
+		{"Q-encoded, as Serve sends non-ASCII", mime.QEncoding.Encode("utf-8", `{"example.com/cap/peer":[{"role":"🐿"}]}`), true},
+		{"empty", "", false},
+		{"none accepted", `{}`, false},
+		{"another", `{"example.com/cap/other":[{}]}`, false},
+		{"a longer name", `{"example.com/cap/peer/more":[{}]}`, false},
+		{"different case", `{"example.com/cap/PEER":[{}]}`, false},
+		{"bare name", name, false},
+		{"not an object", `["example.com/cap/peer"]`, false},
+		{"truncated", `{"example.com/cap/peer":[`, false},
+		{"bad encoding", `=?nope?Q?x?=`, false},
+	} {
+		if got := HeaderHasCap(c.value, name); got != c.want {
+			t.Errorf("%s: %q = %v", c.name, c.value, got)
+		}
+	}
+	if HeaderHasCap(`{"":[]}`, "") {
+		t.Error("the empty name matched")
+	}
+}
+
+func TestNormalizeCap(t *testing.T) {
+	if got, err := NormalizeCap(" github.com/jhjaggars/comebye/cap/peer "); err != nil || got != "github.com/jhjaggars/comebye/cap/peer" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if got, err := NormalizeCap(""); err != nil || got != "" {
+		t.Fatalf("empty: %q %v", got, err)
+	}
+	for _, bad := range []string{"peer", "example/cap", "example.com/", "a.b/c,d.e/f", "a b.c/d"} {
+		if _, err := NormalizeCap(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
 	}

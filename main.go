@@ -67,10 +67,11 @@ func main() {
 		peerDomains  = flag.String("peer-domains", getenv("COMEBYE_PEER_DOMAINS"), "extra tailnet domain suffixes (comma-separated, e.g. mytailnet.example.com) allowed for peers added at runtime; *.ts.net is always allowed; tailnet IPs only as fallback addresses")
 		hubURL       = flag.String("hub", getenv("COMEBYE_HUB"), "on a peer: the hub's Tailscale Serve URL (https://hub.tailnet.ts.net); the coordinator CLI's ledger, handoff, mark, briefing and prompt requests are forwarded there and this instance keeps no ledger")
 		tsAllowTags  = flag.String("ts-allow-tag", getenv("COMEBYE_TS_ALLOW_TAGS"), "on a hub: comma-separated Tailscale tags (tag:worker) admitted on the peer listener (-peer-listen); a tagged node must also be a registered peer, and gets the forwarded-agent role only")
-		peerListen   = flag.String("peer-listen", getenv("COMEBYE_PEER_LISTEN"), "on a hub: a port (8742) or tailnet-ip:port for the peer listener, bound to this node's tailnet address only, where tagged workers set COMEBYE_HUB=http://<hub>.<tailnet>.ts.net:<port>; needs -ts-allow-tag; off by default")
-		selfRegister = flag.Bool("peer-self-register", envBool("COMEBYE_PEER_SELF_REGISTER", false), "on a hub: let a node with an allowed tag register itself as a peer (POST /api/peers/announce on the peer listener); needs -peer-listen; off by default")
-		tsSocket     = flag.String("ts-socket", envOr("COMEBYE_TS_SOCKET", tsauth.DefaultSocket), "tailscaled's LocalAPI socket (WhoIs for the peer listener; this node's name for -announce)")
-		announce     = flag.Bool("announce", envBool("COMEBYE_ANNOUNCE", false), "on a peer with -hub: announce this node to the hub as a peer at startup (the hub needs -peer-self-register and this node an allowed tag)")
+		tsAllowCap   = flag.String("ts-allow-cap", getenv("COMEBYE_TS_ALLOW_CAP"), "on a hub: the Tailscale app capability (example.com/cap/peer) that admits a tagged node through Tailscale Serve (run Serve with --accept-app-caps) and on the peer listener; the node must also be a registered peer, and gets the forwarded-agent role only")
+		peerListen   = flag.String("peer-listen", getenv("COMEBYE_PEER_LISTEN"), "on a hub: a port (8742) or tailnet-ip:port for the peer listener, bound to this node's tailnet address only, where tagged workers set COMEBYE_HUB=http://<hub>.<tailnet>.ts.net:<port>; needs -ts-allow-tag or -ts-allow-cap; off by default")
+		selfRegister = flag.Bool("peer-self-register", envBool("COMEBYE_PEER_SELF_REGISTER", false), "on a hub: let a node with an allowed tag or the capability register itself as a peer (POST /api/peers/announce); needs -peer-listen or -ts-allow-cap; off by default")
+		tsSocket     = flag.String("ts-socket", envOr("COMEBYE_TS_SOCKET", tsauth.DefaultSocket), "tailscaled's LocalAPI socket (WhoIs for tagged nodes; this node's name for -announce)")
+		announce     = flag.Bool("announce", envBool("COMEBYE_ANNOUNCE", false), "on a peer with -hub: announce this node to the hub as a peer at startup (the hub needs -peer-self-register and this node an allowed tag or the capability)")
 		announceURL  = flag.String("announce-url", getenv("COMEBYE_ANNOUNCE_URL"), "the Serve URL to announce (default https://<this node's MagicDNS name>)")
 		ledgerOn     = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
 		coordDir     = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
@@ -153,15 +154,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("-ts-allow-tag: %v", err)
 	}
+	allowCap, err := tsauth.NormalizeCap(*tsAllowCap)
+	if err != nil {
+		log.Fatalf("-ts-allow-cap: %v", err)
+	}
 	switch {
 	case len(allowTags) > 0 && *peerListen == "":
 		log.Fatalf("-ts-allow-tag only applies on the peer listener: set -peer-listen too")
-	case *peerListen != "" && len(allowTags) == 0:
-		log.Fatalf("-peer-listen needs -ts-allow-tag: with no allowed tag nobody could use it")
+	case *peerListen != "" && len(allowTags) == 0 && allowCap == "":
+		log.Fatalf("-peer-listen needs -ts-allow-tag or -ts-allow-cap: otherwise nobody could use it")
 	case *peerListen != "" && !(len(peers) > 0 || *hubMode):
 		log.Fatalf("-peer-listen is for a hub: set -hub-mode (or -peers)")
-	case *selfRegister && *peerListen == "":
-		log.Fatalf("-peer-self-register needs -peer-listen")
+	case allowCap != "" && !(len(peers) > 0 || *hubMode):
+		log.Fatalf("-ts-allow-cap is for a hub: set -hub-mode (or -peers)")
+	case *selfRegister && *peerListen == "" && allowCap == "":
+		log.Fatalf("-peer-self-register needs -peer-listen or -ts-allow-cap")
 	case *announce && strings.TrimSpace(*hubURL) == "":
 		log.Fatalf("-announce needs -hub")
 	}
@@ -288,11 +295,15 @@ func main() {
 		CoordinatorDir:  expandHome(*coordDir),
 		CoordinatorArgs: parseKindArgs(coordArgs),
 		AllowTags:       allowTags,
+		AllowCap:        allowCap,
 		WhoIs:           localAPI,
 		SelfRegister:    *selfRegister,
 	}, client, manager)
 	if *peerListen != "" {
-		go servePeerListener(srv, localAPI, *peerListen, allowTags, *selfRegister)
+		go servePeerListener(srv, localAPI, *peerListen, allowTags, allowCap, *selfRegister)
+	}
+	if allowCap != "" {
+		log.Printf("tagged peers admitted through Tailscale Serve with capability %s (agent role only; self-registration %v); Serve needs --accept-app-caps=%s", allowCap, *selfRegister, allowCap)
 	}
 	if *announce {
 		go announceToHub(upstream, localAPI, *hostName, *announceURL)

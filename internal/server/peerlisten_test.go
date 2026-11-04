@@ -54,6 +54,11 @@ type tagRig struct {
 
 func newTagRig(t *testing.T, selfRegister bool) *tagRig {
 	t.Helper()
+	return newRigWith(t, selfRegister, func(c *Config) { c.AllowTags = []string{"tag:worker"} })
+}
+
+func newRigWith(t *testing.T, selfRegister bool, set func(*Config)) *tagRig {
+	t.Helper()
 	worker := httptest.NewServer(&hubPeer{})
 	t.Cleanup(worker.Close)
 	store, err := fleet.OpenStore(t.TempDir())
@@ -73,10 +78,12 @@ func newTagRig(t *testing.T, selfRegister bool) *tagRig {
 	t.Cleanup(cancel)
 	go fl.Run(ctx)
 	who := &fakeWhoIs{}
-	s := New(Config{
+	cfg := Config{
 		AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: "tok",
-		AllowTags: []string{"tag:worker"}, WhoIs: who, SelfRegister: selfRegister,
-	}, nil, nil)
+		WhoIs: who, SelfRegister: selfRegister,
+	}
+	set(&cfg)
+	s := New(cfg, nil, nil)
 	r := &tagRig{t: t, fl: fl, who: who, worker: worker,
 		main:  httptest.NewServer(s.Handler()),
 		peers: httptest.NewServer(s.PeerHandler()),

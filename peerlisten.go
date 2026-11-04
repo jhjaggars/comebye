@@ -18,7 +18,7 @@ import (
 // servePeerListener binds the peer listener to this node's tailnet
 // address (spec: a port, or tailnet-ip:port) and serves it. tailscaled may
 // not be up yet when the hub starts, so it retries instead of exiting.
-func servePeerListener(srv *server.Server, ts *tsauth.LocalAPI, spec string, tags []string, selfReg bool) {
+func servePeerListener(srv *server.Server, ts *tsauth.LocalAPI, spec string, tags []string, capName string, selfReg bool) {
 	spec = strings.TrimSpace(spec)
 	host, port := "", strings.TrimPrefix(spec, ":")
 	if h, p, err := net.SplitHostPort(spec); err == nil && h != "" {
@@ -55,7 +55,7 @@ func servePeerListener(srv *server.Server, ts *tsauth.LocalAPI, spec string, tag
 			}
 			continue
 		}
-		log.Printf("peer listener on http://%s for tags %s (agent role only; self-registration %v)", ln.Addr(), strings.Join(tags, ","), selfReg)
+		log.Printf("peer listener on http://%s for tags [%s] and capability [%s] (agent role only; self-registration %v)", ln.Addr(), strings.Join(tags, ","), capName, selfReg)
 		log.Printf("peer listener stopped: %v", srv.ServePeerListener(ln))
 		return
 	}

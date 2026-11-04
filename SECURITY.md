@@ -30,7 +30,8 @@ What it relies on:
   IP, a `*.ts.net` name or one given with `-allow-host` are refused (421),
   so a web page cannot reach the loopback port by DNS rebinding.
 - **The local host is trusted.** Any local process can reach the loopback
-  port and forge the identity header. Web pages in a browser on the host
+  port and forge the identity header, or the capability headers that admit a
+  tagged node (`-ts-allow-cap`). Web pages in a browser on the host
   are not local processes: bypassing the Host check (DNS rebinding) is in
   scope.
 - **The agent role is a guard rail, not a boundary.** The `comebye` CLI,
