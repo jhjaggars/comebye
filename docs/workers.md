@@ -56,7 +56,10 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    transcript: `umask 077; read -rs k; printf %s "$k" > ~/.config/comebye-worker/authkey; unset k`.
    The file is deleted as soon as the key has been used. It then cannot clear stale
    devices or delete the node on `destroy` (it tells you to).
-3. **Tailnet ACLs** (you apply them; the tool never edits the policy):
+3. **Tailnet policy** (you apply it; the tool never edits the policy). A
+   worker joins the hub through the hub's normal Tailscale Serve URL, admitted
+   by an **app capability** granted to `tag:worker`; no extra port and no hub
+   firewall change:
 
    ```jsonc
    {
@@ -64,37 +67,65 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
      "grants": [
        // you, your phone and the hub reach a worker's Tailscale Serve (the hub drives it)
        { "src": ["autogroup:member"], "dst": ["tag:worker"], "ip": ["tcp:443"] },
-       // a worker reaches ONLY the hub's peer listener (report, handoff, self-registration)
-       { "src": ["tag:worker"], "dst": ["you@example.com"], "ip": ["tcp:8742"] }
+       // a worker reaches ONLY the hub's Serve, and holds the comebye capability there.
+       // An app block alone opens no port, so it also needs ip.
+       {
+         "src": ["tag:worker"],
+         "dst": ["comebye-hub"],   // a host alias or tag for the hub
+         "ip":  ["tcp:443"],
+         "app": { "github.com/jhjaggars/comebye/cap/peer": [{ "role": "worker" }] }
+       }
      ]
    }
    ```
 
-   Use your login for `dst` (the hub is a node you own), or an IP-set alias
-   for the hub alone if you have other devices. Remove or narrow any
-   allow-all rule: with one, a compromised worker reaches your whole tailnet.
-   There is no rule from one worker to another. Keep the port equal to the
-   hub's `COMEBYE_PEER_LISTEN`.
-4. **Hub environment** (its `~/.config/comebye/env`, then restart the hub's
-   comebye once). See [Tagged workers](setup.md#tagged-workers-tagworker-vms)
-   and [Security](security.md#tagged-nodes-and-the-peer-listener):
+   The capability's name is yours to choose, as long as it matches the hub's
+   `COMEBYE_TS_ALLOW_CAP`. Remove or narrow any allow-all rule: with one, a
+   compromised worker reaches your whole tailnet. There is no rule from one
+   worker to another. Needs Tailscale 1.92 or later on the hub.
+4. **Hub setup** (its `~/.config/comebye/env`, then restart the hub's comebye
+   once). See [Tagged workers](setup.md#tagged-workers-tagworker-vms) and
+   [Security](security.md#tagged-nodes-through-serve). Have Serve forward the
+   capability, and name it to comebye:
 
    ```sh
+   tailscale serve --bg --accept-app-caps=github.com/jhjaggars/comebye/cap/peer 8741
+
    COMEBYE_HUB_MODE=1
    COMEBYE_TS_ALLOW_LOGIN=you@example.com
-   COMEBYE_TS_ALLOW_TAGS=tag:worker
-   COMEBYE_PEER_LISTEN=8742
+   COMEBYE_TS_ALLOW_CAP=github.com/jhjaggars/comebye/cap/peer
    COMEBYE_PEER_SELF_REGISTER=1
    ```
 
-   **A host firewall on the hub must allow the peer-listener port on
-   `tailscale0`.** The ACL only decides what the tailnet permits; the hub's own
-   firewall still sees the packets. On firewalld hosts (Fedora), `tailscale0`
-   is in no zone and falls into the default zone, which usually allows only ssh,
-   so the worker's `announce` fails with "connection refused" (instantly, unlike
-   an ACL drop, which hangs) while Tailscale Serve on 443 keeps working,
-   because tailscaled terminates that before the kernel firewall. Give the
-   interface a zone that opens only the listener port:
+   Serve on 443 is terminated by tailscaled, so the hub's host firewall is not
+   in the path. A worker can do the agent-role requests of its workers
+   (`comebye report`, `handoff`, `prompt`, `mark`, the ledger and briefing
+   reads) and register itself; it cannot do anything the user alone can (keys,
+   answers, launching, removals, the peer registry), which Serve answers with
+   403 or 401.
+
+   Without `COMEBYE_PEER_SELF_REGISTER=1` the tool finishes with the exact
+   `comebye peer add NAME https://NAME.<tailnet>.ts.net --tag tag:worker` to
+   run on the hub.
+
+   **Legacy: the peer listener.** Before the capability path, workers reached
+   the hub on a second socket. It still works and can run alongside Serve:
+
+   ```sh
+   COMEBYE_TS_ALLOW_TAGS=tag:worker
+   COMEBYE_PEER_LISTEN=8742
+   ```
+
+   with `hub_peer_url=http://hub.<tailnet>.ts.net:8742` in the worker config,
+   an ACL grant `{ "src": ["tag:worker"], "dst": ["you@example.com"], "ip":
+   ["tcp:8742"] }` (the port equal to `COMEBYE_PEER_LISTEN`), and **a host
+   firewall on the hub that allows that port on `tailscale0`.** The ACL only
+   decides what the tailnet permits; the hub's own firewall still sees the
+   packets. On firewalld hosts (Fedora), `tailscale0` is in no zone and falls
+   into the default zone, which usually allows only ssh, so the worker's
+   `announce` fails with "connection refused" (instantly, unlike an ACL drop,
+   which hangs) while Serve on 443 keeps working. Give the interface a zone
+   that opens only the listener port:
 
    ```sh
    sudo firewall-cmd --permanent --new-zone=tailscale
@@ -107,11 +138,9 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    allowed over the tailnet (for example ssh): add those services to the new
    zone if you use them. Check with `ss -ltn | grep 8742` on the hub (the
    listener is up) and `curl http://<hub tailnet ip>:8742/api/whoami` from a
-   worker (reachable).
-
-   Without `COMEBYE_PEER_SELF_REGISTER=1` the tool finishes with the exact
-   `comebye peer add NAME https://NAME.<tailnet>.ts.net --tag tag:worker` to
-   run on the hub.
+   worker (reachable). A hub that is unreachable at install time also fails
+   the worker's `comebye upgrade` smoke check, which asks the hub for the
+   worker's own agents.
 5. **Config** at `~/.config/comebye-worker/config` (copy
    [`tools/worker/config.example`](../tools/worker/config.example)). The
    required keys are `provider` (default `gcp`), then for GCP the project and
@@ -119,9 +148,10 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    `ssh_source_cidr`,
    `ts_allow_login` (the login that owns the hub device, which the worker
    admits the hub's requests as), `hub_url` (the hub's Serve URL, used to read
-   its version and remove the peer entry) and `hub_peer_url` (the peer
-   listener, `http://hub.<tailnet>.ts.net:8742`, which becomes `COMEBYE_HUB` on
-   the worker). Everything else has a default: `e2-standard-4` (GCP) or `t3.xlarge` (AWS),
+   its version and remove the peer entry) and `hub_peer_url`, which becomes
+   `COMEBYE_HUB` on the worker: the same Serve URL
+   (`https://hub.<tailnet>.ts.net`) for the capability path, or, for the legacy
+   peer listener, `http://hub.<tailnet>.ts.net:8742`. Everything else has a default: `e2-standard-4` (GCP) or `t3.xlarge` (AWS),
    20 GB boot, 50 GB data disk (`pd-balanced` or `gp3`), Debian 12 amd64
    (Arm/Graviton types are refused), auto-stop after 120 idle minutes.
 6. **The hub must run a release** (`vX.Y.Z`). The worker installs the hub's

@@ -53,7 +53,7 @@ type Config struct {
 	TSAllowLogin  string // COMEBYE_TS_ALLOW_LOGIN on the worker: the login that owns the hub device
 
 	HubURL     string // the hub's Serve URL, as the user reaches it (version lookup, peer removal)
-	HubPeerURL string // COMEBYE_HUB on the worker: http://<hub>.<tailnet>.ts.net:<peer listen port>
+	HubPeerURL string // COMEBYE_HUB on the worker: the hub's Serve URL https://<hub>.<tailnet>.ts.net, or the legacy http://<hub>.<tailnet>.ts.net:<peer listen port>
 	HubVersion string // optional: pin the comebye version instead of asking the hub
 
 	ReleasesURL  string // comebye release base URL
@@ -308,7 +308,7 @@ func (c *Config) Validate() error {
 	if _, err := hubURL(c.HubURL, true); err != nil {
 		return fmt.Errorf("hub_url: %v", err)
 	}
-	if _, err := hubURL(c.HubPeerURL, false); err != nil {
+	if err := validatePeerURL(c.HubPeerURL); err != nil {
 		return fmt.Errorf("hub_peer_url: %v", err)
 	}
 	return nil
@@ -355,6 +355,24 @@ func hubURL(s string, serve bool) (*url.URL, error) {
 		return nil, fmt.Errorf("%q needs the hub's peer listen port (COMEBYE_PEER_LISTEN)", s)
 	}
 	return u, nil
+}
+
+// validatePeerURL checks COMEBYE_HUB for the worker: either the hub's Tailscale
+// Serve URL (https://<hub>.<tailnet>.ts.net, port 443; the worker is admitted
+// by its tag's app capability) or, as the legacy path, the hub's peer listener
+// (http://<hub>.<tailnet>.ts.net:<port>).
+func validatePeerURL(s string) error {
+	if u, err := url.Parse(s); err == nil && u.Scheme == "https" {
+		if _, err := hubURL(s, true); err != nil {
+			return err
+		}
+		if p := u.Port(); p != "" && p != "443" {
+			return fmt.Errorf("%q: the Serve URL is on port 443; a hub peer listener port uses http://", s)
+		}
+		return nil
+	}
+	_, err := hubURL(s, false)
+	return err
 }
 
 // WorkerDir is where one worker's ssh config and known_hosts live.

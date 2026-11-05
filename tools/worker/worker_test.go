@@ -220,6 +220,7 @@ func TestConfigValidation(t *testing.T) {
 		"hub not tailnet":  func(c *Config) { c.HubURL = "https://evil.example.com" },
 		"peer url no port": func(c *Config) { c.HubPeerURL = "http://hub.tail1.ts.net" },
 		"peer url https":   func(c *Config) { c.HubPeerURL = "https://hub.tail1.ts.net:8742" },
+		"peer url not ts":  func(c *Config) { c.HubPeerURL = "https://hub.example.com" },
 		"root user":        func(c *Config) { c.SSHUser = "root" },
 		"short idle":       func(c *Config) { c.IdleMinutes = 1 },
 		"bad tag":          func(c *Config) { c.Tag = "worker" },
@@ -774,5 +775,15 @@ func TestHerdrServiceHasTheAgentPath(t *testing.T) {
 	// Found on the first real run: panes opened by herdr could not find claude.
 	if !strings.Contains(bootstrapUser, "Environment=PATH=%h/.local/bin:") {
 		t.Error("herdr.service must put ~/.local/bin on the PATH its panes inherit")
+	}
+}
+
+func TestPeerURLAcceptsServeAndLegacyListener(t *testing.T) {
+	for _, u := range []string{"https://hub.tail1.ts.net", "https://hub.tail1.ts.net:443", "http://hub.tail1.ts.net:8742"} {
+		c := testCfg(t)
+		c.HubPeerURL = u
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s refused: %v", u, err)
+		}
 	}
 }
