@@ -881,3 +881,41 @@ func TestAWSSpotStartWaitsForTheRequestToBeDisabled(t *testing.T) {
 		t.Errorf("on-demand start: err=%v polls=%d ops=%v", err, polls, g.ops)
 	}
 }
+
+// ---- ssh timeout hint ----
+
+func TestSSHTimeoutNamesTheSourceCIDR(t *testing.T) {
+	w := &fakeWorld{peers: map[string]bool{}}
+	f := &awsFake{inst: "running", console: consoleKey}
+	e, r, _ := awsEnv(t, f, w)
+	inner := r.handle
+	r.handle = func(cl call, fr *fakeRunner) (string, string, error) {
+		if cl.name == "ssh" {
+			return "", "Connection timed out", errors.New("exit status 255")
+		}
+		return inner(cl, fr)
+	}
+	err := e.connect(context.Background(), "w1")
+	if err == nil {
+		t.Fatal("connect succeeded with ssh down")
+	}
+	for _, want := range []string{"timed out waiting for ssh", "203.0.113.7/32", "ssh_source_cidr", "comebye-worker-ssh", "checkip", "(it resumes)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+	// the host-key wait is a different failure and gets no firewall advice
+	g := &awsFake{inst: "running", console: "None"}
+	e2, _, _ := awsEnv(t, g, &fakeWorld{peers: map[string]bool{}})
+	if err := e2.connect(context.Background(), "w1"); err == nil || strings.Contains(err.Error(), "ssh_source_cidr") {
+		t.Errorf("host-key timeout: %v", err)
+	}
+}
+
+func TestSSHTimeoutHintGCE(t *testing.T) {
+	c := testCfg(t)
+	h := sshTimeoutHint(c)
+	if !strings.Contains(h, "203.0.113.7/32") || !strings.Contains(h, "gcloud compute firewall-rules update "+c.Network+"-ssh --source-ranges=<new-ip>/32") {
+		t.Errorf("gce hint:\n%s", h)
+	}
+}

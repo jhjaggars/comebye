@@ -196,10 +196,33 @@ func (e *env) connect(ctx context.Context, name string) error {
 		return err
 	}
 	e.printf("  host key verified through the %s API for %s\n", pv.Kind(), ip)
-	return e.poll(60, 5, "ssh", func() (bool, error) {
+	err = e.poll(60, 5, "ssh", func() (bool, error) {
 		_, err := ssh(ctx, e, name, "true", nil)
 		return err == nil, nil
 	})
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, sshTimeoutHint(e.Cfg))
+	}
+	return nil
+}
+
+// sshTimeoutHint explains the usual cause of an ssh timeout on a VM that is
+// running with a verified host key: the firewall admits ssh only from
+// ssh_source_cidr, and a home or office address changes. The rule is made
+// once and not rewritten from the config, so the fix has two parts.
+func sshTimeoutHint(c *Config) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "the VM is running, but ssh did not answer. The firewall admits ssh only from ssh_source_cidr = %s.\n", c.SSHSourceCIDR)
+	b.WriteString("If your public IP changed since create, find the new one (curl -s https://checkip.amazonaws.com), then\n")
+	fmt.Fprintf(&b, "  1. set ssh_source_cidr=<new-ip>/32 in %s\n", DefaultConfigPath())
+	switch c.Provider {
+	case "aws":
+		b.WriteString("  2. in the security group comebye-worker-ssh (tcp 22): add the new /32 and remove the old one\n")
+	default:
+		fmt.Fprintf(&b, "  2. gcloud compute firewall-rules update %s-ssh --source-ranges=<new-ip>/32\n", c.Network)
+	}
+	b.WriteString("then run the same command again (it resumes).")
+	return b.String()
 }
 
 // enrolled reports whether tailscale on the VM is up already.
