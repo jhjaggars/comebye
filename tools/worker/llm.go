@@ -437,7 +437,7 @@ func (e *env) keys(ctx context.Context, prune bool) error {
 		return err
 	}
 	scope := llmScope(e.Cfg)
-	e.printf("%-22s %-9s %-14s %s\n", "KEY", "VM", "SPEND/BUDGET", "SCOPE")
+	e.printf("%-22s %-9s %-16s %s\n", "KEY", "VM", "SPEND/BUDGET", "SCOPE")
 	n, pruned, failed := 0, 0, 0
 	for _, k := range keys {
 		if !strings.HasPrefix(k.Alias, llmAliasPrefix) {
@@ -459,9 +459,9 @@ func (e *env) keys(ctx context.Context, prune bool) error {
 		}
 		budget := "-"
 		if k.MaxBudget != nil {
-			budget = fmt.Sprintf("$%.2f/$%.2f", k.Spend, *k.MaxBudget)
+			budget = fmt.Sprintf("$%.4f/$%.2f", k.Spend, *k.MaxBudget)
 		} else {
-			budget = fmt.Sprintf("$%.2f/-", k.Spend)
+			budget = fmt.Sprintf("$%.4f/-", k.Spend)
 		}
 		sc := k.meta("scope")
 		if !ours {
