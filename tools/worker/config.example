@@ -59,7 +59,6 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # llm_provisioner_key_file=~/.config/comebye-worker/llm-provisioner-key
 # llm_models=rits/zai-org/glm-5-3          # comma separated; the key can use only these
 # llm_max_budget=5                         # USD per budget period
-# llm_budget_duration=30d
+# llm_budget_duration=30d                 # the budget resets this often; the key itself never expires
 # llm_rpm=30
-# llm_key_duration=                        # optional: the key itself expires after this long
 

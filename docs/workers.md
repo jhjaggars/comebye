@@ -175,7 +175,8 @@ account on the VM:
    `worker-NAME`, `user_id comebye-worker-provisioner`, and **always** an
    explicit `models` list, `max_budget`, `budget_duration` and `rpm_limit` (a
    LiteLLM key without `models` can use every model, so the tool refuses to mint
-   without all four). The provisioning key only manages keys and stays on your
+   without all four). The key has no expiry and is never renewed: it lives from `create` to
+   `destroy`, and `stop`/`start` keep it. The provisioning key only manages keys and stays on your
    workstation.
 3. The key goes over ssh **stdin** into the worker's `~/.pi/agent/auth.json`
    (mode 0600, provider `homelab-enmaas`, `type: api_key`), merged with whatever

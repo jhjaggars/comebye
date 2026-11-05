@@ -73,7 +73,6 @@ type Config struct {
 	LLMMaxBudget          float64 // USD per budget period
 	LLMBudgetDuration     string  // LiteLLM duration: 30d, 12h, ...
 	LLMRPM                int
-	LLMKeyDuration        string // optional: the key itself expires after this long (LiteLLM duration)
 
 	StateDir string // per-worker ssh config and known_hosts
 	path     string
@@ -288,8 +287,6 @@ func (c *Config) apply(kv map[string]string) error {
 			c.LLMMaxBudget, err = strconv.ParseFloat(v, 64)
 		case "llm_budget_duration":
 			c.LLMBudgetDuration = v
-		case "llm_key_duration":
-			c.LLMKeyDuration = v
 		case "llm_rpm":
 			c.LLMRPM, err = strconv.Atoi(v)
 		case "state_dir":
@@ -365,9 +362,6 @@ func (c *Config) validateLLM() error {
 	}
 	if !llmDurRe.MatchString(c.LLMBudgetDuration) {
 		return fmt.Errorf("llm_budget_duration %q: want something like 30d, 12h or 1mo", c.LLMBudgetDuration)
-	}
-	if c.LLMKeyDuration != "" && !llmDurRe.MatchString(c.LLMKeyDuration) {
-		return fmt.Errorf("llm_key_duration %q: want something like 30d, or empty for no expiry", c.LLMKeyDuration)
 	}
 	if c.LLMRPM < 1 || c.LLMRPM > 100000 {
 		return fmt.Errorf("llm_rpm must be 1..100000")

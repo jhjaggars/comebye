@@ -423,13 +423,12 @@ func (e *env) createPlan(name string, o createOpts) error {
 	if c.LLMGatewayURL != "" {
 		e.printf("   LLM gateway %s (checked first, from this machine: /health/liveliness; nothing is created if it is down):\n"+
 			"     POST /key/generate with the provisioning key from %s (never printed): alias %s, user_id %s,\n"+
-			"       models %s, max_budget $%g per %s, rpm_limit %d%s\n"+
+			"       models %s, max_budget $%g per %s, rpm_limit %d; no expiry (revoked at destroy)\n"+
 			"     the new key travels over ssh stdin into ~/.pi/agent/auth.json (mode 600, provider %s); never argv, user-data or a log\n"+
 			"     ~/.pi/agent/models.json: provider %s -> %s/v1 (openai-completions), no maxTokens; settings.json: default model %s\n"+
 			"     destroy deletes the key first (by alias) and checks the gateway refuses it\n",
 			c.LLMGatewayURL, c.LLMProvisionerKeyFile, llmAlias(name), llmProvisionerUser,
 			strings.Join(c.LLMModels, ", "), c.LLMMaxBudget, c.LLMBudgetDuration, c.LLMRPM,
-			map[bool]string{true: ", key expires after " + c.LLMKeyDuration, false: ""}[c.LLMKeyDuration != ""],
 			llmProvider, llmProvider, c.LLMGatewayURL, c.LLMModels[0])
 	}
 	e.printf("6. wait for the hub (%s) to list %s; if it does not, print:\n   comebye peer add %s %s --tag %s\n", c.HubURL, name, name, peerURL(c, name), c.Tag)

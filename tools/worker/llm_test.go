@@ -195,7 +195,7 @@ func TestLLMConfig(t *testing.T) {
 	}
 	base := "provider=aws\naws_region=us-east-1\naws_az=us-east-1b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"
 	p := filepath.Join(t.TempDir(), "config")
-	os.WriteFile(p, []byte(base+"llm_gateway_url=https://llm.t.ts.net/\nllm_models=a/b, c\nllm_max_budget=2.5\nllm_budget_duration=7d\nllm_rpm=10\nllm_key_duration=30d\nagents=pi,codex\npi_version=0.85.2\n"), 0o600)
+	os.WriteFile(p, []byte(base+"llm_gateway_url=https://llm.t.ts.net/\nllm_models=a/b, c\nllm_max_budget=2.5\nllm_budget_duration=7d\nllm_rpm=10\nagents=pi,codex\npi_version=0.85.2\n"), 0o600)
 	lc, err := LoadConfig(p)
 	if err != nil || lc.LLMGatewayURL != "https://llm.t.ts.net" || len(lc.LLMModels) != 2 || lc.LLMMaxBudget != 2.5 || lc.LLMRPM != 10 || lc.PiVersion != "0.85.2" || !lc.hasAgent("codex") {
 		t.Fatalf("load: %+v %v", lc, err)
@@ -207,7 +207,7 @@ func TestLLMConfig(t *testing.T) {
 		"bad model":       "llm_gateway_url=https://llm.t.ts.net\nllm_models=a;rm -rf /\n",
 		"zero budget":     "llm_gateway_url=https://llm.t.ts.net\nllm_max_budget=0\n",
 		"bad duration":    "llm_gateway_url=https://llm.t.ts.net\nllm_budget_duration=forever\n",
-		"bad key expiry":  "llm_gateway_url=https://llm.t.ts.net\nllm_key_duration=soon\n",
+		"key expiry":      "llm_gateway_url=https://llm.t.ts.net\nllm_key_duration=30d\n",
 		"zero rpm":        "llm_gateway_url=https://llm.t.ts.net\nllm_rpm=0\n",
 		"unknown agent":   "agents=pi,gemini\n",
 		"unpinned pi":     "pi_version=latest\n",

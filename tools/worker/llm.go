@@ -223,9 +223,6 @@ func (c *llmClient) Generate(ctx context.Context, cfg *Config, name string) (str
 		"rpm_limit":       cfg.LLMRPM,
 		"metadata":        map[string]string{"created_by": llmCreatedBy, "worker": name, "scope": llmScope(cfg)},
 	}
-	if cfg.LLMKeyDuration != "" {
-		body["duration"] = cfg.LLMKeyDuration
-	}
 	code, b, err := c.do(ctx, "POST", "/key/generate", body, c.provKey)
 	if err != nil {
 		return "", err
