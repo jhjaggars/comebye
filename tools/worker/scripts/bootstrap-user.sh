@@ -101,7 +101,10 @@ umask 022
 systemctl --user daemon-reload
 systemctl --user enable --now herdr.service
 "$dir/comebye" upgrade --version "$WK_VERSION"
-systemctl --user enable comebye.service
+# --now: if the upgrade above failed its smoke check on an earlier run (the hub
+# had not seen this node announce yet) and this run finds the version already
+# installed, nothing else would have started the unit.
+systemctl --user enable --now comebye.service
 installed=$("$HOME/.local/bin/comebye" -version 2>&1 | head -1)
 case "$installed" in *"$WK_VERSION"*) ;; *) echo "comebye reports '$installed', wanted $WK_VERSION" >&2; exit 1 ;; esac
 echo "bootstrap-user: comebye $WK_VERSION, herdr, agents ready"

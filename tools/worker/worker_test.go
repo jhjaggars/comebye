@@ -773,6 +773,9 @@ func TestRootBootstrapInstallsTheUserBus(t *testing.T) {
 
 func TestHerdrServiceHasTheAgentPath(t *testing.T) {
 	// Found on the first real run: panes opened by herdr could not find claude.
+	if !strings.Contains(bootstrapUser, "systemctl --user enable --now comebye.service") {
+		t.Error("the user bootstrap must start comebye.service itself (a resumed run finds the version installed and upgrade starts nothing)")
+	}
 	if !strings.Contains(bootstrapUser, "Environment=PATH=%h/.local/bin:") {
 		t.Error("herdr.service must put ~/.local/bin on the PATH its panes inherit")
 	}
