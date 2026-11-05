@@ -99,11 +99,16 @@ type fakeWorld struct {
 	hubVersion  string
 	peerRemoved []string
 	apiCalls    []string
+	llm         *fakeLiteLLM
 }
 
 func (w *fakeWorld) Do(r *http.Request) (*http.Response, error) {
 	w.apiCalls = append(w.apiCalls, r.Method+" "+r.URL.Host+r.URL.Path)
 	switch r.URL.Host {
+	case llmHost:
+		if w.llm != nil {
+			return w.llm.serve(r)
+		}
 	case "api.test":
 		switch {
 		case r.URL.Path == "/api/v2/oauth/token":
@@ -658,7 +663,7 @@ func TestLoginRunsOnTheVM(t *testing.T) {
 	if last.name != "ssh" || !strings.Contains(last.line(), "-t") || !strings.HasSuffix(last.line(), "codex login") {
 		t.Errorf("login call: %s", last.line())
 	}
-	if err := e.login(context.Background(), "w1", "pi"); err == nil {
+	if err := e.login(context.Background(), "w1", "gemini"); err == nil {
 		t.Error("accepted an unknown agent")
 	}
 }

@@ -68,6 +68,8 @@ func userScript(c *Config, name, version string) (string, error) {
 		{"WK_HUB", c.HubPeerURL},
 		{"WK_NAME", name},
 		{"WK_LOGIN", c.TSAllowLogin},
+		{"WK_AGENTS", strings.Join(c.Agents, ",")},
+		{"WK_PI_VERSION", c.PiVersion},
 	})
 }
 

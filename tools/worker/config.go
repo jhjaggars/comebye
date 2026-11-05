@@ -60,6 +60,21 @@ type Config struct {
 	HerdrInstall string // URL of herdr's install script
 	HerdrSHA256  string // optional: required sha256 of that script
 
+	// Agent harnesses installed on the worker (never signed in). pi is the
+	// default; claude and codex are optional.
+	Agents    []string
+	PiVersion string // npm version of @earendil-works/pi-coding-agent, pinned
+
+	// The LLM gateway (LiteLLM). Off unless LLMGatewayURL is set: then each
+	// worker gets its own virtual key, limited by the fields below.
+	LLMGatewayURL         string
+	LLMProvisionerKeyFile string // key-management routes only; mode 0600
+	LLMModels             []string
+	LLMMaxBudget          float64 // USD per budget period
+	LLMBudgetDuration     string  // LiteLLM duration: 30d, 12h, ...
+	LLMRPM                int
+	LLMKeyDuration        string // optional: the key itself expires after this long (LiteLLM duration)
+
 	StateDir string // per-worker ssh config and known_hosts
 	path     string
 }
@@ -73,6 +88,9 @@ var (
 	userRe    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
 	durRe     = regexp.MustCompile(`^[0-9]+[smhd]$`)
 	versionRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	piVerRe   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	modelRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:-]{0,100}$`)
+	llmDurRe  = regexp.MustCompile(`^[1-9][0-9]{0,3}(s|m|h|d|w|mo)$`)
 	loginRe   = regexp.MustCompile(`^[A-Za-z0-9._%+@-]+$`)
 )
 
@@ -113,6 +131,14 @@ func defaults() Config {
 		ReleasesURL:    "https://github.com/jhjaggars/comebye/releases",
 		HerdrInstall:   "https://herdr.dev/install.sh",
 		StateDir:       state,
+
+		Agents:                []string{"pi"},
+		PiVersion:             "0.85.1",
+		LLMProvisionerKeyFile: filepath.Join(cfgDir, "llm-provisioner-key"),
+		LLMModels:             []string{"rits/zai-org/glm-5-3"},
+		LLMMaxBudget:          5,
+		LLMBudgetDuration:     "30d",
+		LLMRPM:                30,
 	}
 }
 
@@ -248,6 +274,24 @@ func (c *Config) apply(kv map[string]string) error {
 			c.HerdrInstall = v
 		case "herdr_install_sha256":
 			c.HerdrSHA256 = strings.ToLower(v)
+		case "agents":
+			c.Agents = splitList(v)
+		case "pi_version":
+			c.PiVersion = v
+		case "llm_gateway_url":
+			c.LLMGatewayURL = strings.TrimRight(v, "/")
+		case "llm_provisioner_key_file":
+			c.LLMProvisionerKeyFile = expand(v)
+		case "llm_models":
+			c.LLMModels = splitList(v)
+		case "llm_max_budget":
+			c.LLMMaxBudget, err = strconv.ParseFloat(v, 64)
+		case "llm_budget_duration":
+			c.LLMBudgetDuration = v
+		case "llm_key_duration":
+			c.LLMKeyDuration = v
+		case "llm_rpm":
+			c.LLMRPM, err = strconv.Atoi(v)
 		case "state_dir":
 			c.StateDir = expand(v)
 		default:
@@ -256,6 +300,77 @@ func (c *Config) apply(kv map[string]string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %v", k, err)
 		}
+	}
+	return nil
+}
+
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// validateAgents and validateLLM are split out of Validate.
+func (c *Config) validateAgents() error {
+	if len(c.Agents) == 0 {
+		return fmt.Errorf("agents is empty (pi, claude, codex)")
+	}
+	for _, a := range c.Agents {
+		if a != "pi" && a != "claude" && a != "codex" {
+			return fmt.Errorf("agents: %q is not pi, claude or codex", a)
+		}
+	}
+	if !piVerRe.MatchString(c.PiVersion) {
+		return fmt.Errorf("pi_version %q is not a version like 0.85.1 (it is pinned)", c.PiVersion)
+	}
+	return nil
+}
+
+func (c *Config) hasAgent(a string) bool {
+	for _, x := range c.Agents {
+		if x == a {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Config) validateLLM() error {
+	if c.LLMGatewayURL == "" {
+		return nil
+	}
+	if _, err := hubURL(c.LLMGatewayURL, true); err != nil {
+		return fmt.Errorf("llm_gateway_url: %v", err)
+	}
+	if !c.hasAgent("pi") {
+		return fmt.Errorf("llm_gateway_url needs pi in agents: the key and models.json are pi's")
+	}
+	if c.LLMProvisionerKeyFile == "" {
+		return fmt.Errorf("llm_provisioner_key_file is empty")
+	}
+	if len(c.LLMModels) == 0 || len(c.LLMModels) > 20 {
+		return fmt.Errorf("llm_models: want 1 to 20 model names")
+	}
+	for _, m := range c.LLMModels {
+		if !modelRe.MatchString(m) {
+			return fmt.Errorf("llm_models: bad model name %q", m)
+		}
+	}
+	if !(c.LLMMaxBudget > 0 && c.LLMMaxBudget <= 10000) {
+		return fmt.Errorf("llm_max_budget must be above 0 and at most 10000 (USD)")
+	}
+	if !llmDurRe.MatchString(c.LLMBudgetDuration) {
+		return fmt.Errorf("llm_budget_duration %q: want something like 30d, 12h or 1mo", c.LLMBudgetDuration)
+	}
+	if c.LLMKeyDuration != "" && !llmDurRe.MatchString(c.LLMKeyDuration) {
+		return fmt.Errorf("llm_key_duration %q: want something like 30d, or empty for no expiry", c.LLMKeyDuration)
+	}
+	if c.LLMRPM < 1 || c.LLMRPM > 100000 {
+		return fmt.Errorf("llm_rpm must be 1..100000")
 	}
 	return nil
 }
@@ -270,6 +385,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf(format, a...)
 	}
 	if err := c.validateProvider(chk); err != nil {
+		return err
+	}
+	if err := c.validateAgents(); err != nil {
+		return err
+	}
+	if err := c.validateLLM(); err != nil {
 		return err
 	}
 	for _, e := range []error{

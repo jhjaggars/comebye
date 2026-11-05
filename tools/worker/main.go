@@ -31,8 +31,11 @@ Commands:
   start NAME          start it again and re-verify
   destroy NAME [--delete-data-disk]
         asks you to type NAME; removes the VM, tailnet node and hub peer entry
-  login NAME claude|codex
+  login NAME pi|claude|codex
         sign in on the VM (the credential is created there)
+  keys [--prune]
+        the per-worker LLM gateway keys (worker-NAME) and whether a VM exists
+        for each; --prune deletes the ones whose VM is gone
 
 Config: ~/.config/comebye-worker/config (see tools/worker/config.example).
 `
@@ -112,6 +115,7 @@ func run(args []string, e *env) int {
 	dry := cf.Bool("dry-run", false, "create: print the plan only")
 	ver := cf.String("comebye-version", "", "create: a release tag instead of the hub's version")
 	delData := cf.Bool("delete-data-disk", false, "destroy: also delete the data disk")
+	prune := cf.Bool("prune", false, "keys: delete worker keys whose VM is gone")
 	// Flags may follow the positional name: split them out.
 	var pos, flags []string
 	for i := 0; i < len(rest); i++ {
@@ -134,7 +138,7 @@ func run(args []string, e *env) int {
 	}
 
 	switch cmd {
-	case "create", "status", "stop", "start", "destroy", "login":
+	case "create", "status", "stop", "start", "destroy", "login", "keys":
 	case "help":
 		fmt.Fprint(e.Out, usage)
 		return 0
@@ -142,7 +146,7 @@ func run(args []string, e *env) int {
 		fmt.Fprintf(e.Err, "worker: unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
-	want := map[string][2]int{"create": {1, 1}, "status": {0, 1}, "stop": {1, 1}, "start": {1, 1}, "destroy": {1, 1}, "login": {2, 2}}[cmd]
+	want := map[string][2]int{"create": {1, 1}, "status": {0, 1}, "stop": {1, 1}, "start": {1, 1}, "destroy": {1, 1}, "login": {2, 2}, "keys": {0, 0}}[cmd]
 	if len(pos) < want[0] || len(pos) > want[1] {
 		fmt.Fprintf(e.Err, "worker %s: wrong number of arguments\n\n%s", cmd, usage)
 		return 2
@@ -179,6 +183,8 @@ func run(args []string, e *env) int {
 		err = e.destroy(ctx, name, destroyOpts{DeleteDataDisk: *delData})
 	case "login":
 		err = e.login(ctx, name, pos[1])
+	case "keys":
+		err = e.keys(ctx, *prune)
 	}
 	if err != nil {
 		fmt.Fprintf(e.Err, "worker: %v\n", err)

@@ -45,3 +45,21 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # herdr_install_url=https://herdr.dev/install.sh
 # herdr_install_sha256=       # pin the install script (recommended)
 # releases_url=https://github.com/jhjaggars/comebye/releases
+
+# Agent harnesses installed on the worker, never signed in: pi (default), claude, codex.
+# agents=pi
+# pi is pinned; bump it on purpose.
+# pi_version=0.85.1
+
+# LLM gateway (LiteLLM on the tailnet). Off unless llm_gateway_url is set. Each worker then
+# gets its OWN virtual key (alias worker-NAME) with the limits below, delivered over ssh
+# stdin into pi's auth.json (mode 600), and deleted again by destroy. The provisioning key
+# (key-management routes only) stays on this machine, mode 600.
+# llm_gateway_url=https://llm.your-tailnet.ts.net
+# llm_provisioner_key_file=~/.config/comebye-worker/llm-provisioner-key
+# llm_models=rits/zai-org/glm-5-3          # comma separated; the key can use only these
+# llm_max_budget=5                         # USD per budget period
+# llm_budget_duration=30d
+# llm_rpm=30
+# llm_key_duration=                        # optional: the key itself expires after this long
+

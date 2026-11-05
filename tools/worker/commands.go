@@ -90,6 +90,9 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 		return err
 	}
 	w("worker %s (%s): comebye %s\n", name, pv.Kind(), version)
+	if err := e.llmPreflight(ctx); err != nil {
+		return err
+	}
 
 	w("1/8 network\n")
 	if err := pv.EnsureNetwork(ctx, w); err != nil {
@@ -160,6 +163,9 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	}
 	if _, err := ssh(ctx, e, name, "bash -s", []byte(us)); err != nil {
 		return fmt.Errorf("user bootstrap: %w", err)
+	}
+	if err := e.provisionLLM(ctx, name); err != nil {
+		return err
 	}
 
 	return e.awaitJoin(ctx, name)
@@ -406,13 +412,25 @@ func (e *env) createPlan(name string, o createOpts) error {
 	}
 	e.printf("   ssh %s 'sudo tailscale up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s'   (key on stdin: <not shown>)\n", name, name, c.Tag)
 	e.printf("   ssh %s 'sudo tailscale set --operator=%s'; ssh %s 'tailscale serve --bg 8741'\n", name, c.SSHUser, name)
-	e.printf("5. over ssh as %s: herdr (%s%s) as a user service; claude and codex installed, not signed in;\n   comebye %s from %s/download/<tag>/comebye_linux_<arch>.tar.gz, SHA256SUMS checked, then `comebye upgrade --version`\n   ~/.config/comebye/env:\n",
-		c.SSHUser, c.HerdrInstall, map[bool]string{true: ", sha256 pinned", false: ", NOT pinned"}[c.HerdrSHA256 != ""], version, c.ReleasesURL)
+	e.printf("5. over ssh as %s: herdr (%s%s) as a user service; agent CLIs installed, not signed in: %s (pi pinned at %s);\n   comebye %s from %s/download/<tag>/comebye_linux_<arch>.tar.gz, SHA256SUMS checked, then `comebye upgrade --version`\n   ~/.config/comebye/env:\n",
+		c.SSHUser, c.HerdrInstall, map[bool]string{true: ", sha256 pinned", false: ", NOT pinned"}[c.HerdrSHA256 != ""], strings.Join(c.Agents, ", "), c.PiVersion, version, c.ReleasesURL)
 	for _, l := range []string{
 		"COMEBYE_HOST_NAME=" + name, "COMEBYE_TS_ALLOW_LOGIN=" + c.TSAllowLogin, "COMEBYE_PUSH=false",
 		"COMEBYE_HUB=" + c.HubPeerURL, "COMEBYE_ANNOUNCE=1", "COMEBYE_LAUNCH_ROOTS=/data/code", "COMEBYE_WORKTREE_ROOT=/data/worktrees",
 	} {
 		e.printf("     %s\n", l)
+	}
+	if c.LLMGatewayURL != "" {
+		e.printf("   LLM gateway %s (checked first, from this machine: /health/liveliness; nothing is created if it is down):\n"+
+			"     POST /key/generate with the provisioning key from %s (never printed): alias %s, user_id %s,\n"+
+			"       models %s, max_budget $%g per %s, rpm_limit %d%s\n"+
+			"     the new key travels over ssh stdin into ~/.pi/agent/auth.json (mode 600, provider %s); never argv, user-data or a log\n"+
+			"     ~/.pi/agent/models.json: provider %s -> %s/v1 (openai-completions), no maxTokens; settings.json: default model %s\n"+
+			"     destroy deletes the key first (by alias) and checks the gateway refuses it\n",
+			c.LLMGatewayURL, c.LLMProvisionerKeyFile, llmAlias(name), llmProvisionerUser,
+			strings.Join(c.LLMModels, ", "), c.LLMMaxBudget, c.LLMBudgetDuration, c.LLMRPM,
+			map[bool]string{true: ", key expires after " + c.LLMKeyDuration, false: ""}[c.LLMKeyDuration != ""],
+			llmProvider, llmProvider, c.LLMGatewayURL, c.LLMModels[0])
 	}
 	e.printf("6. wait for the hub (%s) to list %s; if it does not, print:\n   comebye peer add %s %s --tag %s\n", c.HubURL, name, name, peerURL(c, name), c.Tag)
 	e.printf("\nNo repo is cloned and no agent is signed in; sign in with `worker login %s claude|codex`.\n", name)
@@ -611,6 +629,11 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 		return fmt.Errorf("confirmation did not match: nothing was changed")
 	}
 	var failed []string
+	// The worker's LLM key goes first: it is the one thing here that is
+	// useful to anyone who has it.
+	if p := e.revokeLLM(ctx, name, inst != nil && inst.State == stateRunning); p != "" {
+		failed = append(failed, p)
+	}
 	step := func(what string, err error) {
 		if err != nil {
 			failed = append(failed, what)
@@ -681,8 +704,10 @@ func (e *env) login(ctx context.Context, name, agent string) error {
 		cmd = "claude auth login"
 	case "codex":
 		cmd = "codex login"
+	case "pi":
+		cmd = "pi"
 	default:
-		return fmt.Errorf("agent %q: want claude or codex", agent)
+		return fmt.Errorf("agent %q: want pi, claude or codex", agent)
 	}
 	if err := e.owned(ctx, name); err != nil {
 		return err
@@ -691,6 +716,9 @@ func (e *env) login(ctx context.Context, name, agent string) error {
 		return err
 	}
 	e.printf("Signing in to %s on %s. Open the URL it prints in your own browser; the credential is created on the VM and copies nothing from this machine.\n", agent, name)
+	if agent == "pi" {
+		e.printf("pi has no login command: it opens now; type /login, choose a provider, and /quit when done. (Workers on the LLM gateway need no login: their key is delivered by create.)\n")
+	}
 	remote := `PATH="$HOME/.local/bin:$PATH"; ` + cmd
 	return e.Run.Interactive(ctx, "ssh", sshArgs(e.Cfg, name, true, remote))
 }

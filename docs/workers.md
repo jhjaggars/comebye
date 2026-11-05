@@ -158,6 +158,51 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    version from the release tarball; a hub on a development build is refused
    (pass `--comebye-version` or pin `hub_version`).
 
+## pi and the LLM gateway
+
+The default agent on a worker is [pi](https://github.com/earendil-works/pi-mono),
+installed at the version in `pi_version` (pinned; bump it on purpose) and never
+signed in. `agents=pi,claude,codex` adds the others.
+
+With `llm_gateway_url` set (a LiteLLM proxy on the tailnet, `https://*.ts.net`),
+`create` also gives the worker its own way to reach models, with no provider
+account on the VM:
+
+1. Before anything is built, the tool checks the gateway answers
+   (`/health/liveliness`) and that `llm_provisioner_key_file` is mode 0600. A
+   gateway that is down stops `create` with nothing created.
+2. It mints a **per-worker virtual key** with `/key/generate`: alias
+   `worker-NAME`, `user_id comebye-worker-provisioner`, and **always** an
+   explicit `models` list, `max_budget`, `budget_duration` and `rpm_limit` (a
+   LiteLLM key without `models` can use every model, so the tool refuses to mint
+   without all four). The provisioning key only manages keys and stays on your
+   workstation.
+3. The key goes over ssh **stdin** into the worker's `~/.pi/agent/auth.json`
+   (mode 0600, provider `homelab-enmaas`, `type: api_key`), merged with whatever
+   is there. It is never in an argument list, user-data, a log line, the repo or
+   this tool's state. `models.json` (provider `homelab-enmaas` →
+   `<gateway>/v1`, `openai-completions`, your models, no `maxTokens`: reasoning
+   models spend a small output limit on thinking and return nothing) and
+   `settings.json` (default provider and model) carry no secret.
+4. `destroy` deletes the key **first** (by alias) and, if it can read the key
+   back from the running VM, checks that the gateway now answers 401 to it. If
+   the delete fails it warns, finishes the rest, and leaves the key for
+   `worker keys --prune`.
+
+`worker keys` lists the `worker-*` keys with whether a VM exists for each;
+`--prune` deletes the keys whose VM is gone. It only touches keys it minted
+(`created_by` and a scope of provider and region or project in the metadata), so
+another operator's workers are never judged by your cloud, and it never deletes
+a key whose VM it could not check.
+
+Anything pi can use, the model's shell tool on that VM can read. The key is
+therefore per worker, capped in budget, rate and models, and revoked at
+`destroy`; the gateway's tailnet policy (`tag:worker` to the gateway on tcp:443
+only) is what limits where it works from.
+
+`worker login NAME pi` opens pi over ssh for `/login` to a provider of your own
+(not needed for gateway workers).
+
 ## What `create` does
 
 1. **Cloud resources**, each created only if missing and marked

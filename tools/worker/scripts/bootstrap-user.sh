@@ -5,7 +5,8 @@
 set -euo pipefail
 : "${WK_VERSION:?}" "${WK_RELEASES:?}" "${WK_HERDR_URL:?}" "${WK_HUB:?}" "${WK_NAME:?}" "${WK_LOGIN:?}"
 WK_HERDR_SHA="${WK_HERDR_SHA:-}"
-WK_AGENTS="${WK_AGENTS:-claude,codex}"
+WK_AGENTS="${WK_AGENTS:-pi}"
+WK_PI_VERSION="${WK_PI_VERSION:-}"
 export PATH="$HOME/.local/bin:$PATH"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.config/comebye"
@@ -59,7 +60,21 @@ case ",$WK_AGENTS," in *,codex,*)
       chmod +x "$HOME/.local/bin/codex" ||
       echo "warning: installing codex failed" >&2
   fi ;; esac
-for a in claude codex; do
+# pi, at the pinned version (npm's own integrity checks apply; the package ships
+# a shrinkwrap). A missing harness is a failed worker, not a warning.
+case ",$WK_AGENTS," in *,pi,*)
+  : "${WK_PI_VERSION:?}"
+  if [ "$("$HOME/.local/bin/pi" --version 2>/dev/null | head -1)" != "$WK_PI_VERSION" ]; then
+    { command -v mise >/dev/null || curl -fsSL https://mise.run | sh; } &&
+      "$HOME/.local/bin/mise" use -g node@lts >/dev/null &&
+      "$HOME/.local/bin/mise" exec -- npm install -g "@earendil-works/pi-coding-agent@$WK_PI_VERSION" >/dev/null &&
+      printf '#!/bin/sh\nexec "$HOME/.local/bin/mise" exec -- pi "$@"\n' >"$HOME/.local/bin/pi" &&
+      chmod +x "$HOME/.local/bin/pi" ||
+      { echo "installing pi $WK_PI_VERSION failed" >&2; exit 1; }
+  fi
+  got=$("$HOME/.local/bin/pi" --version 2>/dev/null | head -1)
+  [ "$got" = "$WK_PI_VERSION" ] || { echo "pi reports '$got', wanted $WK_PI_VERSION" >&2; exit 1; } ;; esac
+for a in pi claude codex; do
   if command -v "$a" >/dev/null; then herdr integration install "$a" >/dev/null 2>&1 || true; fi
 done
 
