@@ -202,6 +202,12 @@ func metaOf(x map[string]any) SessionMeta {
 		Ledger: sget(x, "ledger_id"), Thread: sget(x, "thread_id"), Verdict: sget(x, "verdict")}
 }
 
+// apiMarks turns the marks a query asks for (U+E000, U+E001: char(57344) and
+// char(57345)) into the API's \x02 and \x03. The query cannot ask for control
+// bytes directly: older sqlite3 shells write them in -json output as a bare
+// "u0002", which comes out as text. Stored text holds neither pair.
+var apiMarks = strings.NewReplacer("\ue000", "\x02", "\ue001", "\x03")
+
 // SearchHit is one session that matched, with its best match.
 type SearchHit struct {
 	SessionMeta
@@ -275,12 +281,12 @@ ORDER BY %s LIMIT %d OFFSET %d;`, q(match), f.where(), f.roles(), metaCols, meta
 	}
 	snips := map[int]string{}
 	if len(ids) > 0 {
-		sn, err := r.query(ctx, fmt.Sprintf("SELECT rowid AS mid, snippet(msgs,0,char(2),char(3),'…',24) AS snippet FROM msgs WHERE msgs MATCH %s AND rowid IN (%s);", q(match), strings.Join(ids, ",")))
+		sn, err := r.query(ctx, fmt.Sprintf("SELECT rowid AS mid, snippet(msgs,0,char(57344),char(57345),'…',24) AS snippet FROM msgs WHERE msgs MATCH %s AND rowid IN (%s);", q(match), strings.Join(ids, ",")))
 		if err != nil {
 			return res, err
 		}
 		for _, x := range sn {
-			snips[num(x, "mid")] = sget(x, "snippet")
+			snips[num(x, "mid")] = apiMarks.Replace(sget(x, "snippet"))
 		}
 	}
 	for _, x := range rows {
@@ -412,7 +418,7 @@ func (r *Reader) Session(ctx context.Context, host, kind, id string, o PageOpts)
 			ids[i] = qn(int64(num(x, "id")))
 		}
 		hl := func(match string) ([]map[string]any, error) {
-			return r.query(ctx, fmt.Sprintf("SELECT rowid AS id, highlight(msgs,0,char(2),char(3)) AS text FROM msgs WHERE msgs MATCH %s AND rowid IN (%s);", q(match), strings.Join(ids, ",")))
+			return r.query(ctx, fmt.Sprintf("SELECT rowid AS id, highlight(msgs,0,char(57344),char(57345)) AS text FROM msgs WHERE msgs MATCH %s AND rowid IN (%s);", q(match), strings.Join(ids, ",")))
 		}
 		hs, err := hl(FTSQuery(o.Q))
 		if err != nil && ctx.Err() == nil {
@@ -420,7 +426,7 @@ func (r *Reader) Session(ctx context.Context, host, kind, id string, o PageOpts)
 		}
 		if err == nil {
 			for _, x := range hs {
-				marked[num(x, "id")] = sget(x, "text")
+				marked[num(x, "id")] = apiMarks.Replace(sget(x, "text"))
 			}
 		}
 	}

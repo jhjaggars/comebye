@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func newRecallRig(t *testing.T) *recallRig {
 	long := "start of output\n" + strings.Repeat("noise noise\n", 1000) + "kerfuffle at the very end"
 	first := recallLine(t, "user", "2026-10-03T10:00:00Z", "the zebra plan, token "+fakeGH)
 	body := first +
-		recallLine(t, "assistant", "2026-10-03T10:00:01Z", []map[string]any{{"type": "text", "text": "**zebra** [x]\x02 fake\x03 mark"}}) +
+		recallLine(t, "assistant", "2026-10-03T10:00:01Z", []map[string]any{{"type": "text", "text": "**zebra** [x]\x02 fake\x03 \ue000mark\ue001"}}) +
 		recallLine(t, "assistant", "2026-10-03T10:00:02Z", []map[string]any{{"type": "tool_use", "id": "t1", "name": "Bash", "input": map[string]string{"command": "curl -H 'Authorization: Bearer " + fakeBearer + "' zebra.test"}}}) +
 		recallLine(t, "user", "2026-10-03T10:00:03Z", []map[string]any{{"type": "tool_result", "tool_use_id": "t1", "is_error": true, "content": long}})
 	for i := 0; i < 30; i++ {
@@ -387,5 +388,31 @@ func TestThreadInputsPerSession(t *testing.T) {
 	os, _ = r.ix.Query("SELECT o.kind AS kind, o.text AS text FROM outcomes o JOIN thread_sessions x ON x.thread_id=o.thread_id WHERE x.session_id=" + q(sidR) + " AND o.kind='report';")
 	if len(os) != 1 || strings.Contains(sget(os[0], "text"), "tskey") {
 		t.Errorf("report: %v", os)
+	}
+}
+
+// Older sqlite3 shells write control bytes in -json output as a bare "u0002", so
+// marks must not pass through the shell as control bytes. This shell behaves so.
+func TestMarksSurviveAnOlderSqliteShell(t *testing.T) {
+	r := newRecallRig(t)
+	real, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("no sqlite3")
+	}
+	shim := filepath.Join(r.dir, "old-sqlite3")
+	script := "#!/bin/sh\n" + real + " \"$@\" | sed 's/\\\\u00\\(0[0-9a-f]\\)/u00\\1/g'\n"
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := NewReader(r.path)
+	old.Sqlite = shim
+	ctx := context.Background()
+	res, err := old.Search(ctx, "wombat", Filter{}, "", 0)
+	if err != nil || res.Total != 1 || !strings.Contains(res.Hits[0].Snippet, "\x02wombat\x03") {
+		t.Errorf("%v %+v", err, res)
+	}
+	p, err := old.Session(ctx, "laharl", "claude", sidR, PageOpts{Sub: "sub1", Q: "wombat"})
+	if err != nil || len(p.Msgs) != 1 || !strings.Contains(p.Msgs[0].Text, "\x02wombat\x03") {
+		t.Errorf("%v %+v", err, p.Msgs)
 	}
 }

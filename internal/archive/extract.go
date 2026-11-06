@@ -229,9 +229,10 @@ func (p *Parsed) addResult(ts, text, sub, toolID string, isErr bool) {
 	p.append(Msg{Role: "result", TS: ts, Text: masked, Sub: sub, ToolID: toolID, IsErr: isErr, Secret: secret, FullLen: full})
 }
 
-// highlightMarks are the bytes the API uses to mark a match inside a snippet.
+// highlightMarks are what the API and its queries use to mark a match inside a
+// snippet (see apiMarks).
 // They are taken out of stored text, so a transcript cannot fake a highlight.
-var highlightMarks = strings.NewReplacer("\x02", "", "\x03", "")
+var highlightMarks = strings.NewReplacer("\x02", "", "\x03", "", "\ue000", "", "\ue001", "")
 
 func (p *Parsed) append(m Msg) *Msg {
 	m.Seq, m.Stream, m.Off = len(p.Msgs), p.stream, p.off
