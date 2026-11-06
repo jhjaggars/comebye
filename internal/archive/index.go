@@ -323,13 +323,17 @@ func (a *Archiver) groups(state map[string]*streamState) map[string]*group {
 
 // SyncStats reports Sync.
 type SyncStats struct {
-	Sessions  int      `json:"sessions"`
-	Indexed   int      `json:"indexed"` // parsed this run
-	Unchanged int      `json:"unchanged"`
-	Removed   int      `json:"removed"`
-	Messages  int      `json:"messages"`
-	Threads   int      `json:"threads"`
-	Errors    []string `json:"errors,omitempty"`
+	Sessions  int `json:"sessions"`
+	Indexed   int `json:"indexed"` // parsed this run
+	Unchanged int `json:"unchanged"`
+	Removed   int `json:"removed"`
+	Messages  int `json:"messages"`
+	Threads   int `json:"threads"`
+	// Hosts is what an AllHosts run or a run with workers went through beyond
+	// a.Host; FailedHosts the ones that could not be read this time.
+	Hosts       []string `json:"hosts,omitempty"`
+	FailedHosts []string `json:"failed_hosts,omitempty"`
+	Errors      []string `json:"errors,omitempty"`
 }
 
 // Sync brings the index up to date with the archive: sessions whose stored
@@ -338,7 +342,8 @@ type SyncStats struct {
 // re-applied. A fresh index file is a full rebuild.
 //
 // It covers a.Host and the workers this machine uploaded, so that recall finds
-// a worker's sessions. Threads do not span hosts yet.
+// a worker's sessions, or with opt.AllHosts every host in the store. Threads are
+// worked out over every session the index holds.
 func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (SyncStats, error) {
 	links = maskLinks(links)
 	v, err := ix.version()
@@ -373,7 +378,7 @@ func (ix *Index) rebuild(a *Archiver, o Opener, links []Link, opt SyncOptions) (
 		return st, err
 	}
 	// Folds the old file's WAL into it, so that it cannot be applied to the new.
-	if _, err := ix.run("PRAGMA journal_mode=DELETE;", false); err != nil {
+	if err := ix.foldWAL(); err != nil {
 		clean(tmp.Path)
 		return st, err
 	}
@@ -393,35 +398,41 @@ func (ix *Index) sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (Syn
 	if err != nil {
 		return ss, err
 	}
-	ss, err = ix.syncHost(a, o, links, opt, scopeOf(a.Host, claims))
-	if err != nil {
-		return ss, err
-	}
-	hosts := []string{a.Host}
-	mine := machineID()
-	var workers []string
-	for h, cl := range claims {
-		if h != a.Host && cl.Kind == hostKindWorker && cl.Machine == mine {
-			workers = append(workers, h)
+	var others []string
+	if opt.AllHosts {
+		if others, err = ix.storeHosts(a); err != nil {
+			return ss, err
 		}
+	} else {
+		ss, err = ix.syncHost(a, o, links, opt, scopeOf(a.Host, claims))
+		if err != nil {
+			return ss, err
+		}
+		mine := machineID()
+		for h, cl := range claims {
+			if h != a.Host && cl.Kind == hostKindWorker && cl.Machine == mine {
+				others = append(others, h)
+			}
+		}
+		sort.Strings(others)
 	}
-	sort.Strings(workers)
-	for _, h := range workers {
-		// One worker's trouble must not stop the others. Its rows from earlier
+	for _, h := range others {
+		// One host's trouble must not stop the others. Its rows from earlier
 		// runs stay, so it keeps its threads.
 		st, err := ix.syncHost(a.forHost(h), o, links, opt, scopeOf(h, claims))
 		if err != nil {
 			ss.Errors = append(ss.Errors, h+": "+err.Error())
+			ss.FailedHosts = append(ss.FailedHosts, h)
 		}
+		ss.Hosts = append(ss.Hosts, h)
 		ss.Sessions += st.Sessions
 		ss.Indexed += st.Indexed
 		ss.Unchanged += st.Unchanged
 		ss.Removed += st.Removed
 		ss.Messages += st.Messages
 		ss.Errors = append(ss.Errors, st.Errors...)
-		hosts = append(hosts, h)
 	}
-	ts, err := ix.buildThreads(hosts, links, opt)
+	ts, err := ix.buildThreads(a.Host, links, opt)
 	ss.Threads, ss.Errors = ts.Threads, append(ss.Errors, ts.Errors...)
 	if err != nil {
 		return ss, err
@@ -433,6 +444,33 @@ func (ix *Index) sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (Syn
 		return ss, err
 	}
 	return ss, nil
+}
+
+// storeHosts lists the hosts to index with AllHosts: every host with a segment
+// in the store, this host, and any host the index still holds, so that the rows
+// of a host whose last session was deleted go too.
+func (ix *Index) storeHosts(a *Archiver) ([]string, error) {
+	hosts, err := listHosts(a.B)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{a.Host: true}
+	for _, h := range hosts {
+		seen[h] = true
+	}
+	rows, err := ix.Query("SELECT DISTINCT host FROM sessions;")
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		seen[sget(r, "host")] = true
+	}
+	out := make([]string, 0, len(seen))
+	for h := range seen {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // syncHost brings the rows of one host up to date.

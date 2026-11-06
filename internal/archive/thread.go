@@ -32,6 +32,8 @@ import (
 type SyncOptions struct {
 	Git bool // check commits against the local checkout's main
 	GH  bool // refresh PR state with `gh` (network); cached between runs
+	// AllHosts indexes every host in the store, not only this one and its workers.
+	AllHosts bool
 }
 
 // ThreadStats reports the thread pass.
@@ -111,26 +113,29 @@ type thread struct {
 	text       strings.Builder
 }
 
-// hostThreads is one host's threads, ready to write.
-type hostThreads struct {
-	host    string
+// builtThreads is the index's threads, ready to write.
+type builtThreads struct {
 	threads []*thread
 	sums    map[string]string
 }
 
-// buildThreads replaces the thread tables with the threads of these hosts. Each
-// host's threads are worked out from that host's sessions alone. Everything is
-// read first, because reading a thread's outcome can write the PR cache, which
-// an open write transaction here would block.
-func (ix *Index) buildThreads(hosts []string, links []Link, opt SyncOptions) (ThreadStats, error) {
+// threadID names a thread after its first session. The thread keeps the id
+// when later sessions join it from any host, unless an earlier one joins.
+func threadID(first *sess) string {
+	h := sha1.Sum([]byte(first.host + "|" + first.kind + "/" + first.id))
+	return "t-" + hex.EncodeToString(h[:])[:8]
+}
+
+// buildThreads replaces the thread tables with the threads of every session in
+// the index, on whichever host. thisHost is the host this machine is, whose
+// sessions' paths can be looked at here. Everything is read first, because
+// reading a thread's outcome can write the PR cache, which an open write
+// transaction here would block.
+func (ix *Index) buildThreads(thisHost string, links []Link, opt SyncOptions) (ThreadStats, error) {
 	var st ThreadStats
-	var all []*hostThreads
-	for _, h := range hosts {
-		ht, err := ix.gatherThreads(h, links, opt, &st)
-		if err != nil {
-			return st, err
-		}
-		all = append(all, ht)
+	built, err := ix.gatherThreads(thisHost, links, opt, &st)
+	if err != nil {
+		return st, err
 	}
 	w, err := ix.writer()
 	if err != nil {
@@ -139,15 +144,13 @@ func (ix *Index) buildThreads(hosts []string, links []Link, opt SyncOptions) (Th
 	// In one transaction with the drops, so a reader never finds no threads.
 	w.exec("BEGIN;")
 	w.exec(threadSchema)
-	for _, ht := range all {
-		ht.write(w, &st)
-	}
+	built.write(w, &st)
 	w.exec("COMMIT;")
 	return st, w.close()
 }
 
-func (ix *Index) gatherThreads(host string, links []Link, opt SyncOptions, st *ThreadStats) (*hostThreads, error) {
-	rows, err := ix.Query("SELECT kind,id,repo,branch,ledger_branch,ledger_id,plan_id,ref,cwd,started,ended,title,first_prompt,brief,n_msgs,summary FROM sessions WHERE host=" + q(host) + " ORDER BY started;")
+func (ix *Index) gatherThreads(thisHost string, links []Link, opt SyncOptions, st *ThreadStats) (*builtThreads, error) {
+	rows, err := ix.Query("SELECT host,kind,id,repo,branch,ledger_branch,ledger_id,plan_id,ref,cwd,started,ended,title,first_prompt,brief,n_msgs,summary FROM sessions ORDER BY started,host,kind,id;")
 	if err != nil {
 		return nil, err
 	}
@@ -159,11 +162,11 @@ func (ix *Index) gatherThreads(host string, links []Link, opt SyncOptions, st *T
 	sums := map[string]string{}
 	u := uf{}
 	for _, r := range rows {
-		s := &sess{host: host, kind: sget(r, "kind"), id: sget(r, "id"), repo: sget(r, "repo"), branch: sget(r, "branch"), lbranch: sget(r, "ledger_branch"),
+		s := &sess{host: sget(r, "host"), kind: sget(r, "kind"), id: sget(r, "id"), repo: sget(r, "repo"), branch: sget(r, "branch"), lbranch: sget(r, "ledger_branch"),
 			ledger: sget(r, "ledger_id"), plan: sget(r, "plan_id"), ref: sget(r, "ref"), cwd: sget(r, "cwd"), started: sget(r, "started"), ended: sget(r, "ended"),
 			title: sget(r, "title"), first: sget(r, "first_prompt"), brief: sget(r, "brief")}
 		fmt.Sscan(sget(r, "n_msgs"), &s.nmsgs)
-		s.key = s.kind + "/" + s.id
+		s.key = sessKey(s.host, s.kind, s.id)
 		all = append(all, s)
 		sums[s.key] = sget(r, "summary")
 		u.find(s.key)
@@ -196,14 +199,18 @@ func (ix *Index) gatherThreads(host string, links []Link, opt SyncOptions, st *T
 	}
 	var threads []*thread
 	for _, t := range groups {
-		sort.Slice(t.ss, func(i, j int) bool { return t.ss[i].started < t.ss[j].started })
-		h := sha1.Sum([]byte(host + "|" + t.ss[0].key))
-		t.id = "t-" + hex.EncodeToString(h[:])[:8]
+		// The rows are already in order, with ties settled by host, kind and id.
+		t.id = threadID(t.ss[0])
 		threads = append(threads, t)
 	}
-	sort.Slice(threads, func(i, j int) bool { return threads[i].ss[0].started < threads[j].ss[0].started })
+	sort.Slice(threads, func(i, j int) bool {
+		if a, b := threads[i].ss[0].started, threads[j].ss[0].started; a != b {
+			return a < b
+		}
+		return threads[i].id < threads[j].id
+	})
 
-	g := &gitCtx{host: host, enabled: opt.Git, cache: map[string]*repoInfo{}}
+	g := &gitCtx{host: thisHost, enabled: opt.Git, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &st.Errors}
 	ghc := map[string][]ghPR{}
 	if opt.GH {
 		g.loadGH(ix)
@@ -212,7 +219,7 @@ func (ix *Index) gatherThreads(host string, links []Link, opt SyncOptions, st *T
 		ghc = prs
 	}
 
-	in, err := ix.loadThreadInputs(host)
+	in, err := ix.loadThreadInputs()
 	if err != nil {
 		return nil, err
 	}
@@ -236,21 +243,21 @@ func (ix *Index) gatherThreads(host string, links []Link, opt SyncOptions, st *T
 		}
 		t.finish()
 	}
-	return &hostThreads{host: host, threads: threads, sums: sums}, nil
+	return &builtThreads{threads: threads, sums: sums}, nil
 }
 
-func (ht *hostThreads) write(w *stmtWriter, st *ThreadStats) {
-	host, sums := ht.host, ht.sums
-	for _, t := range ht.threads {
+func (bt *builtThreads) write(w *stmtWriter, st *ThreadStats) {
+	sums := bt.sums
+	for _, t := range bt.threads {
 		st.Threads++
 		first := t.ss[0]
 		hosts, repos, branches := t.sets()
 		lead := t.lead()
 		w.exec(fmt.Sprintf("INSERT INTO threads VALUES(%s,%s,%s,%s,%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s);",
-			q(t.id), q(host), q(t.title()), q(clip(t.brief(), 600)), q(first.started), q(t.end()), len(t.ss), q(hosts), q(repos), q(branches),
+			q(t.id), q(first.host), q(t.title()), q(clip(t.brief(), 600)), q(first.started), q(t.end()), len(t.ss), q(hosts), q(repos), q(branches),
 			q(t.verdict), q(t.outcomeTxt), q(strings.Join(t.keywords, " ")), q(t.summary), q(lead.kind), q(lead.id)))
 		for _, s := range t.ss {
-			w.exec(fmt.Sprintf("INSERT INTO thread_sessions VALUES(%s,%s,%s,%s);", q(t.id), q(host), q(s.kind), q(s.id)))
+			w.exec(fmt.Sprintf("INSERT INTO thread_sessions VALUES(%s,%s,%s,%s);", q(t.id), q(s.host), q(s.kind), q(s.id)))
 		}
 		var dec []string
 		for _, o := range t.outs {
@@ -360,9 +367,13 @@ func (t *thread) digest(sums map[string]string) string {
 	return clip(sb.String(), 8000)
 }
 
-// threadInputs is what gather reads from the messages and commits of one host's
-// sessions, by "kind/id". It is read once per host: a query per thread is what
-// made the hub's build take nine minutes (threads x queries x messages).
+// sessKey names a session in the thread pass. The host is part of it: a session
+// id is only unique within a host.
+func sessKey(host, kind, id string) string { return host + "/" + kind + "/" + id }
+
+// threadInputs is what gather reads from the messages and commits of every
+// session, by sessKey. It is read once: a query per thread is what made the
+// hub's build take nine minutes (threads x queries x messages).
 type threadInputs struct {
 	commits, docs, users, prose map[string][]map[string]any
 	last                        map[string]string
@@ -372,9 +383,8 @@ type threadInputs struct {
 // stops at 60000 bytes, so later rows of a session cannot matter.
 const proseBytes = 60000
 
-func (ix *Index) loadThreadInputs(host string) (*threadInputs, error) {
+func (ix *Index) loadThreadInputs() (*threadInputs, error) {
 	in := &threadInputs{last: map[string]string{}}
-	h := q(host)
 	load := func(sql string) (map[string][]map[string]any, error) {
 		rows, err := ix.Query(sql)
 		if err != nil {
@@ -382,35 +392,35 @@ func (ix *Index) loadThreadInputs(host string) (*threadInputs, error) {
 		}
 		out := map[string][]map[string]any{}
 		for _, r := range rows {
-			k := sget(r, "kind") + "/" + sget(r, "sid")
+			k := sessKey(sget(r, "host"), sget(r, "kind"), sget(r, "sid"))
 			out[k] = append(out[k], r)
 		}
 		return out, nil
 	}
 	var err error
-	if in.commits, err = load(fmt.Sprintf("SELECT c.kind AS kind, c.session_id AS sid, c.sha, c.rel, c.branch, c.subject, s.cwd, s.repo, s.ledger_id FROM commits c JOIN sessions s ON s.host=c.host AND s.kind=c.kind AND s.id=c.session_id WHERE c.host=%s AND c.rel IN ('made','pushed') ORDER BY c.rowid;", h)); err != nil {
+	if in.commits, err = load("SELECT c.host AS host, c.kind AS kind, c.session_id AS sid, c.sha, c.rel, c.branch, c.subject, s.cwd, s.repo, s.ledger_id FROM commits c JOIN sessions s ON s.host=c.host AND s.kind=c.kind AND s.id=c.session_id WHERE c.rel IN ('made','pushed') ORDER BY c.rowid;"); err != nil {
 		return nil, err
 	}
-	if in.docs, err = load(fmt.Sprintf("SELECT kind, session_id AS sid, path FROM artifacts WHERE host=%s;", h)); err != nil {
+	if in.docs, err = load("SELECT host, kind, session_id AS sid, path FROM artifacts;"); err != nil {
 		return nil, err
 	}
-	if in.users, err = load(fmt.Sprintf("SELECT kind, session_id AS sid, ts, text FROM messages WHERE host=%s AND role='user' AND sub='' AND length(text) < 700 ORDER BY ts;", h)); err != nil {
+	if in.users, err = load("SELECT host, kind, session_id AS sid, ts, text FROM messages WHERE role='user' AND sub='' AND length(text) < 700 ORDER BY ts;"); err != nil {
 		return nil, err
 	}
-	if in.prose, err = load(fmt.Sprintf(`SELECT kind, sid, seq, text FROM (
-  SELECT kind, session_id AS sid, seq, substr(text,1,1200) AS text,
+	if in.prose, err = load(fmt.Sprintf(`SELECT host, kind, sid, seq, text FROM (
+  SELECT host, kind, session_id AS sid, seq, substr(text,1,1200) AS text,
     row_number() OVER w AS n, sum(min(length(text),1200)) OVER w AS upto
-  FROM messages WHERE host=%s AND role IN ('user','assistant') AND sub='' AND seq>=0
-  WINDOW w AS (PARTITION BY kind, session_id ORDER BY seq))
-WHERE n <= 400 AND upto - 1200 <= %d ORDER BY seq;`, h, proseBytes)); err != nil {
+  FROM messages WHERE role IN ('user','assistant') AND sub='' AND seq>=0
+  WINDOW w AS (PARTITION BY host, kind, session_id ORDER BY seq))
+WHERE n <= 400 AND upto - 1200 <= %d ORDER BY seq;`, proseBytes)); err != nil {
 		return nil, err
 	}
-	rows, err := ix.Query(fmt.Sprintf("SELECT kind, session_id AS sid, substr(text,1,600) AS text, max(seq) AS seq FROM messages WHERE host=%s AND role='assistant' AND sub='' AND seq>=0 GROUP BY kind, session_id;", h))
+	rows, err := ix.Query("SELECT host, kind, session_id AS sid, substr(text,1,600) AS text, max(seq) AS seq FROM messages WHERE role='assistant' AND sub='' AND seq>=0 GROUP BY host, kind, session_id;")
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range rows {
-		in.last[sget(r, "kind")+"/"+sget(r, "sid")] = sget(r, "text")
+		in.last[sessKey(sget(r, "host"), sget(r, "kind"), sget(r, "sid"))] = sget(r, "text")
 	}
 	return in, nil
 }
@@ -476,7 +486,7 @@ func (t *thread) gather(in *threadInputs, byLedger map[string]*Link, sums map[st
 		if l := sget(r, "ledger_id"); l != "" {
 			link = byLedger[l]
 		}
-		state, how := g.landed(sget(r, "cwd"), sget(r, "repo"), link, sha, sget(r, "subject"))
+		state, how := g.landed(sget(r, "host"), sget(r, "cwd"), sget(r, "repo"), link, sha, sget(r, "subject"))
 		txt := fmt.Sprintf("%s %s", sha[:min(8, len(sha))], clip(sget(r, "subject"), 80))
 		t.outs = append(t.outs, outcome{"commit-" + state, sha, txt, how, ""})
 	}
@@ -489,7 +499,7 @@ func (t *thread) gather(in *threadInputs, byLedger map[string]*Link, sums map[st
 		if genericBranch[b] {
 			continue
 		}
-		repoDir := g.repoDir(s.cwd, s.repo, byLedger[s.ledger])
+		repoDir := g.repoDir(s.host, s.cwd, s.repo, byLedger[s.ledger])
 		for _, pr := range prs[repoDir+"\x00"+b] {
 			if seen["pr"+fmt.Sprint(pr.Number)+repoDir] {
 				continue
@@ -674,9 +684,11 @@ type repoInfo struct {
 }
 
 type gitCtx struct {
-	host    string
+	host    string // the host this machine is
 	enabled bool
 	cache   map[string]*repoInfo
+	fetched map[string]bool // by the repository's common git directory
+	errs    *[]string
 }
 
 func run(dir string, timeout time.Duration, name string, args ...string) (string, int, error) {
@@ -695,15 +707,20 @@ func run(dir string, timeout time.Duration, name string, args ...string) (string
 	return strings.TrimSpace(string(out)), code, err
 }
 
-// repoDir finds a checkout on this host to ask git about: the ledger's
-// primary checkout, the session's cwd if it still exists, or ~/code/<repo>.
-func (g *gitCtx) repoDir(cwd, repo string, l *Link) string {
+// repoDir finds a checkout on this machine to ask git about: for a session of
+// this host, the ledger's primary checkout or the session's cwd if it still
+// exists; otherwise ~/code/<repo>. The ledger's path and the cwd of another
+// host's session name directories on that host. The same path here could be
+// something else entirely.
+func (g *gitCtx) repoDir(host, cwd, repo string, l *Link) string {
 	cands := []string{}
-	if l != nil && l.Repo != "" {
-		cands = append(cands, l.Repo)
-	}
-	if cwd != "" {
-		cands = append(cands, cwd)
+	if host == g.host {
+		if l != nil && l.Repo != "" {
+			cands = append(cands, l.Repo)
+		}
+		if cwd != "" {
+			cands = append(cands, cwd)
+		}
 	}
 	if home, err := os.UserHomeDir(); err == nil && repo != "" {
 		cands = append(cands, filepath.Join(home, "code", repo))
@@ -723,6 +740,7 @@ func (g *gitCtx) info(dir string) *repoInfo {
 	}
 	ri := &repoInfo{dir: dir}
 	g.cache[dir] = ri
+	g.fetch(dir)
 	for _, ref := range []string{"origin/main", "main", "origin/master", "master"} {
 		if _, code, _ := run(dir, 10*time.Second, "git", "rev-parse", "--verify", "-q", ref+"^{commit}"); code == 0 {
 			ri.base, ri.ok = ref, true
@@ -732,14 +750,40 @@ func (g *gitCtx) info(dir string) *repoInfo {
 	return ri
 }
 
+// fetch brings a repository's origin up to date, once per repository however
+// many worktrees it has, so that work landed from another host does not read as
+// not landed. A failure leaves the last-known origin/main and is reported.
+func (g *gitCtx) fetch(dir string) {
+	common, code, _ := run(dir, 10*time.Second, "git", "rev-parse", "--git-common-dir")
+	if code != 0 {
+		return
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dir, common)
+	}
+	if g.fetched[common] {
+		return
+	}
+	g.fetched[common] = true
+	if _, code, _ := run(dir, 10*time.Second, "git", "remote", "get-url", "origin"); code != 0 {
+		return // nothing to fetch from
+	}
+	if _, code, _ := run(dir, gitFetchTimeout, "git", "fetch", "--quiet", "origin"); code != 0 && g.errs != nil {
+		*g.errs = append(*g.errs, "git fetch failed in "+filepath.Base(dir)+": its commits are checked against the last-known origin")
+	}
+}
+
+// gitFetchTimeout limits one `git fetch origin`.
+const gitFetchTimeout = 2 * time.Minute
+
 // landed says whether a commit is on the default branch of a local checkout:
 // "landed" (an ancestor, or a commit on main with the same subject: the
 // land step rebases, which changes SHAs), "notinmain", or "unchecked".
-func (g *gitCtx) landed(cwd, repo string, l *Link, sha, subject string) (state, how string) {
+func (g *gitCtx) landed(host, cwd, repo string, l *Link, sha, subject string) (state, how string) {
 	if !g.enabled {
 		return "unchecked", "git not consulted"
 	}
-	dir := g.repoDir(cwd, repo, l)
+	dir := g.repoDir(host, cwd, repo, l)
 	if dir == "" {
 		return "unchecked", "no local checkout"
 	}
@@ -789,7 +833,7 @@ func (ix *Index) cachedPRs() (map[string][]ghPR, error) {
 // exist for each repo+branch the index knows, and caches the answers in the
 // index. It sends branch names and repo directories' remotes only.
 func (g *gitCtx) loadGH(ix *Index) {
-	rows, err := ix.Query("SELECT DISTINCT repo, CASE WHEN ledger_branch<>'' THEN ledger_branch ELSE branch END AS br, cwd, ledger_id FROM sessions WHERE host=" + q(g.host) + ";")
+	rows, err := ix.Query("SELECT DISTINCT host, repo, CASE WHEN ledger_branch<>'' THEN ledger_branch ELSE branch END AS br, cwd, ledger_id FROM sessions;")
 	if err != nil {
 		return
 	}
@@ -806,7 +850,7 @@ func (g *gitCtx) loadGH(ix *Index) {
 		if genericBranch[br] {
 			continue
 		}
-		dir := g.repoDir(sget(r, "cwd"), sget(r, "repo"), nil)
+		dir := g.repoDir(sget(r, "host"), sget(r, "cwd"), sget(r, "repo"), nil)
 		if dir == "" || seen[key{dir, br}] {
 			continue
 		}

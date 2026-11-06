@@ -85,6 +85,9 @@ type IndexStatus struct {
 	Hosts    []string `json:"hosts,omitempty"`
 	Sessions int      `json:"sessions"`
 	Messages int      `json:"messages"`
+	// Snapshot names the snapshot this file was pulled from; "" for an index
+	// this machine builds. BuiltAt is when the machine that built it did.
+	Snapshot string `json:"snapshot,omitempty"`
 }
 
 // staleAfter: the index is rebuilt hourly, so two missed builds mean trouble.
@@ -105,14 +108,14 @@ func (r *Reader) Status(ctx context.Context) (IndexStatus, error) {
 	if len(rows) == 0 || num(rows[0], "user_version") != schemaVersion {
 		return IndexStatus{State: "outdated"}, nil
 	}
-	rows, err = r.query(ctx, `SELECT (SELECT value FROM meta WHERE key='built_at') AS built_at, count(*) AS sessions, coalesce(sum(n_msgs+n_sub),0) AS messages, group_concat(DISTINCT host) AS hosts FROM sessions;`)
+	rows, err = r.query(ctx, `SELECT (SELECT value FROM meta WHERE key='built_at') AS built_at, (SELECT value FROM meta WHERE key='snapshot_key') AS snapshot, count(*) AS sessions, coalesce(sum(n_msgs+n_sub),0) AS messages, group_concat(DISTINCT host) AS hosts FROM sessions;`)
 	if err != nil || len(rows) == 0 {
 		if ctx.Err() != nil {
 			return IndexStatus{}, ctx.Err()
 		}
 		return IndexStatus{State: "unavailable"}, nil
 	}
-	st := IndexStatus{State: "ok", BuiltAt: sget(rows[0], "built_at"), Sessions: num(rows[0], "sessions"), Messages: num(rows[0], "messages")}
+	st := IndexStatus{State: "ok", BuiltAt: sget(rows[0], "built_at"), Snapshot: sget(rows[0], "snapshot"), Sessions: num(rows[0], "sessions"), Messages: num(rows[0], "messages")}
 	if h := sget(rows[0], "hosts"); h != "" {
 		st.Hosts = strings.Split(h, ",")
 	}
@@ -301,6 +304,34 @@ WHERE c.sha LIKE %s AND %s ORDER BY CASE c.rel WHEN 'made' THEN 0 WHEN 'pushed' 
 		for _, x := range cs {
 			res.Commits = append(res.Commits, CommitHit{metaOf(x), sget(x, "sha"), sget(x, "rel"), sget(x, "subject")})
 		}
+	}
+	return res, nil
+}
+
+// RecentResult is a page of sessions, newest first: what the app shows before
+// anything is searched for.
+type RecentResult struct {
+	Total int           `json:"total"`
+	Hits  []SessionMeta `json:"hits"`
+}
+
+// Recent lists sessions newest first, skipping skip. Filter.Role is about where
+// words are, so it does not apply.
+func (r *Reader) Recent(ctx context.Context, f Filter, skip int) (RecentResult, error) {
+	res := RecentResult{Hits: []SessionMeta{}}
+	rows, err := r.query(ctx, "SELECT count(*) AS n FROM sessions s WHERE "+f.where()+";")
+	if err != nil {
+		return res, err
+	}
+	if len(rows) == 1 {
+		res.Total = num(rows[0], "n")
+	}
+	rows, err = r.query(ctx, fmt.Sprintf("SELECT %s FROM sessions s %s WHERE %s ORDER BY s.started DESC, s.host, s.kind, s.id LIMIT %d OFFSET %d;", metaCols, metaJoins, f.where(), f.limit(20), skip))
+	if err != nil {
+		return res, err
+	}
+	for _, x := range rows {
+		res.Hits = append(res.Hits, metaOf(x))
 	}
 	return res, nil
 }

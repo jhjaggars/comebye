@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -420,6 +421,129 @@ func (a *Archiver) Verify(o Opener, sources []Source) (VerifyResult, error) {
 		})
 	}
 	return vr, nil
+}
+
+// StoreCheck reports VerifyStore.
+type StoreCheck struct {
+	Hosts    []string `json:"hosts"`
+	Streams  int      `json:"streams"`
+	Segments int      `json:"segments"`
+	Bytes    int64    `json:"bytes"`    // the raw bytes the segments hold
+	Gaps     int      `json:"gaps"`     // missing ranges
+	Overlaps int      `json:"overlaps"` // segments that cover bytes another one has
+	Bad      int      `json:"bad"`      // segments that could not be read or decoded
+	Unnamed  int      `json:"unnamed"`  // objects under v1/ that are not named like a segment
+	Failures []string `json:"failures,omitempty"`
+}
+
+// OK says the store has no fault of any kind.
+func (c StoreCheck) OK() bool { return c.Gaps+c.Overlaps+c.Bad+c.Unnamed == 0 }
+
+// verifyStoreWorkers is how many segments are read at once.
+const verifyStoreWorkers = 4
+
+// VerifyStore checks the store by itself, with no session files to compare with:
+// it decodes every segment of this host, or of all hosts (magic, header against
+// key, zstd, length), and reports gaps and overlaps in each stream. It is what
+// proves a restored backup, and the only check for a session whose source is gone.
+func (a *Archiver) VerifyStore(o Opener, allHosts bool) (StoreCheck, error) {
+	c := StoreCheck{Hosts: []string{}}
+	prefix := "v1/" + a.Host + "/"
+	if allHosts {
+		prefix = "v1/"
+	}
+	keys, err := a.B.List(prefix)
+	if err != nil {
+		return c, err
+	}
+	type streamID struct{ host, kind, stream string }
+	streams := map[streamID][]segName{}
+	type job struct {
+		key string
+		n   segName
+	}
+	var jobs []job
+	for _, k := range keys {
+		n, ok := parseSegKey(k)
+		if !ok {
+			c.Unnamed++
+			c.Failures = append(c.Failures, k+": not named like a segment")
+			continue
+		}
+		id := streamID{n.Host, n.Kind, n.Stream}
+		streams[id] = append(streams[id], n)
+		jobs = append(jobs, job{k, n})
+	}
+	hosts := map[string]bool{}
+	ids := make([]streamID, 0, len(streams))
+	for id := range streams {
+		ids = append(ids, id)
+		if !hosts[id.host] {
+			hosts[id.host] = true
+			c.Hosts = append(c.Hosts, id.host)
+		}
+	}
+	sort.Strings(c.Hosts)
+	sort.Slice(ids, func(i, j int) bool {
+		x, y := ids[i], ids[j]
+		return x.host+"/"+x.kind+"/"+x.stream < y.host+"/"+y.kind+"/"+y.stream
+	})
+	c.Streams, c.Segments = len(ids), len(jobs)
+	for _, id := range ids {
+		segs := streams[id]
+		sort.Slice(segs, func(i, j int) bool {
+			if segs[i].Off != segs[j].Off {
+				return segs[i].Off < segs[j].Off
+			}
+			return segs[i].Len < segs[j].Len
+		})
+		name := id.host + "/" + id.kind + "/" + id.stream
+		var pos int64
+		for _, s := range segs {
+			switch {
+			case s.Off > pos:
+				c.Gaps++
+				c.Failures = append(c.Failures, fmt.Sprintf("%s: gap, bytes %d to %d are missing", name, pos, s.Off))
+			case s.Off < pos:
+				c.Overlaps++
+				c.Failures = append(c.Failures, fmt.Sprintf("%s: overlap, the segment at %d covers bytes up to %d that are already stored", name, s.Off, pos))
+			}
+			if e := s.Off + s.Len; e > pos {
+				pos = e
+			}
+		}
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	next := make(chan job)
+	for i := 0; i < verifyStoreWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range next {
+				var raw []byte
+				body, err := a.B.Get(j.key)
+				if err == nil {
+					raw, err = decodeSegment(o, j.n, body)
+				}
+				mu.Lock()
+				if err != nil {
+					c.Bad++
+					c.Failures = append(c.Failures, j.key+": "+err.Error())
+				} else {
+					c.Bytes += int64(len(raw))
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, j := range jobs {
+		next <- j
+	}
+	close(next)
+	wg.Wait()
+	sort.Strings(c.Failures)
+	return c, nil
 }
 
 // DeleteSession removes a session from the archive on request: it writes a

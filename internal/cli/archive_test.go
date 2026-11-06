@@ -211,3 +211,121 @@ func TestArchiveCommandsReachAnotherHostWithHostFlag(t *testing.T) {
 		t.Fatalf("a deleted session is not a missing one: %v %s %s", err, out, e)
 	}
 }
+
+// Two hosts in one store: one machine indexes both and publishes, the other
+// pulls, and the commands answer for both hosts. All through the CLI.
+func TestAllHostsPublishPullAndVerifyCommands(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("no sqlite3")
+	}
+	d := t.TempDir()
+	store := filepath.Join(d, "store")
+	session := func(host, sid, cwd, branch, start, text string) {
+		t.Helper()
+		p := filepath.Join(d, host, "claude", "-p", sid+".jsonl")
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		line := fmt.Sprintf(`{"type":"user","sessionId":%q,"cwd":%q,"gitBranch":%q,"timestamp":%q,"message":{"role":"user","content":%q}}`+"\n", sid, cwd, branch, start, text)
+		os.WriteFile(p, []byte(line), 0o644)
+		os.Chtimes(p, mtime(), mtime())
+	}
+	as := func(host string, args ...string) (string, string, error) {
+		var out, errb bytes.Buffer
+		env := &Env{Stdout: &out, Stderr: &errb, Stdin: strings.NewReader(""), Getenv: func(k string) string { return "" }}
+		full := append(args[:2:2], append([]string{"--dir", store, "--encryption", "none", "--host", host,
+			"--claude-dir", filepath.Join(d, host, "claude"), "--pi-dir", filepath.Join(d, host, "pi"),
+			"--index", filepath.Join(d, host, "state", "index.db")}, args[2:]...)...)
+		if st := Run(full, env); st != 0 {
+			return out.String(), errb.String(), fmt.Errorf("exit %d", st)
+		}
+		return out.String(), errb.String(), nil
+	}
+	recall := func(host string, args ...string) string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		env := &Env{Stdout: &out, Stderr: &errb, Stdin: strings.NewReader(""), Getenv: func(k string) string { return "" }}
+		full := append(args[:2:2], append([]string{"--index", filepath.Join(d, host, "state", "index.db")}, args[2:]...)...)
+		if st := Run(full, env); st != 0 {
+			t.Fatalf("%v: %s", args, errb.String())
+		}
+		return out.String()
+	}
+	session("laharl", "aaaaaaaa-1111-4111-8111-111111111111", "/w/.worktrees/app/feat-span", "feat/span", "2026-10-02T08:00:00Z", "the second half with a zebra")
+	session("hub", "bbbbbbbb-2222-4222-8222-222222222222", "/w/.worktrees/app/feat-span", "feat/span", "2026-10-01T08:00:00Z", "the first half with a zebra")
+	session("hub", "cccccccc-3333-4333-8333-333333333333", "/w/code/solo", "main", "2026-10-03T08:00:00Z", "only on the hub")
+	for _, h := range []string{"laharl", "hub"} {
+		if out, e, err := as(h, "archive", "run"); err != nil {
+			t.Fatalf("%s: %v %s %s", h, err, out, e)
+		}
+	}
+	for _, args := range [][]string{
+		{"archive", "index", "--publish"},
+		{"archive", "index", "--pull", "--all-hosts"},
+		{"archive", "index", "--pull", "--publish"},
+		{"archive", "verify", "--all-hosts"},
+	} {
+		if _, e, err := as("laharl", args...); err == nil || !strings.Contains(e, "needs") && !strings.Contains(e, "does not go") {
+			t.Errorf("%v: %v %s", args, err, e)
+		}
+	}
+	if _, e, err := as("hub", "archive", "index", "--pull", "--ledger", "none"); err == nil || !strings.Contains(e, "no index snapshot") {
+		t.Fatalf("nothing to pull yet: %v %s", err, e)
+	}
+	out, e, err := as("laharl", "archive", "index", "--all-hosts", "--publish", "--ledger", "none", "--git=false")
+	if err != nil || !strings.Contains(out, "3 sessions in 2 threads") || !strings.Contains(out, "hosts: hub, laharl") || !strings.Contains(out, "published index/") {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	out, e, err = as("hub", "archive", "index", "--pull")
+	if err != nil || !strings.Contains(out, "now holds index/") {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	if out, _, err = as("hub", "archive", "index", "--pull"); err != nil || !strings.Contains(out, "up to date") {
+		t.Fatalf("%v %s", err, out)
+	}
+	out, _, err = as("hub", "archive", "status")
+	if err != nil || !strings.Contains(out, "pulled from snapshot") || !strings.Contains(out, "3 sessions on") || !strings.Contains(out, "newest snapshot in the store: index/") {
+		t.Fatalf("%v %s", err, out)
+	}
+	if out, _, err = as("laharl", "archive", "status"); err != nil || !strings.Contains(out, "built on this machine") {
+		t.Fatalf("%v %s", err, out)
+	}
+
+	// The pulled copy answers for both hosts, each row naming its own.
+	list := recall("hub", "recall", "list")
+	if !strings.Contains(list, "aaaaaaaa  laharl") || !strings.Contains(list, "bbbbbbbb  hub") {
+		t.Errorf("no host column:\n%s", list)
+	}
+	if s := recall("hub", "recall", "search", "zebra", "--host", "laharl"); !strings.Contains(s, "aaaaaaaa  laharl") || strings.Contains(s, "bbbbbbbb") {
+		t.Errorf("search --host:\n%s", s)
+	}
+	threads := recall("hub", "recall", "threads", "--host", "laharl")
+	if !strings.Contains(threads, "2 sessions on hub,laharl") {
+		t.Errorf("threads --host:\n%s", threads)
+	}
+	if s := recall("hub", "recall", "threads", "--host", "lah"); !strings.Contains(s, "nothing found") {
+		t.Errorf("a part of a host name should not match:\n%s", s)
+	}
+
+	out, e, err = as("hub", "archive", "verify", "--all-hosts", "--no-source")
+	if err != nil || !strings.Contains(out, "2 hosts [hub laharl]") || !strings.Contains(out, "3 streams, 3 segments") || !strings.Contains(out, "0 bad, 0 gaps, 0 overlaps") {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	if out, _, err = as("hub", "archive", "verify", "--no-source"); err != nil || !strings.Contains(out, "1 hosts [hub]") {
+		t.Fatalf("%v %s", err, out)
+	}
+	// A damaged segment is a fault,
+	// and the command fails.
+	var seg string
+	filepath.WalkDir(filepath.Join(store, "v1", "laharl"), func(p string, de os.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(p, ".seg") {
+			seg = p
+		}
+		return nil
+	})
+	os.Chmod(seg, 0o600)
+	if err := os.WriteFile(seg, []byte("nonsense"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, e, err = as("hub", "archive", "verify", "--all-hosts", "--no-source"); err == nil || !strings.Contains(e, "fault:") {
+		t.Fatalf("%v %s", err, e)
+	}
+}

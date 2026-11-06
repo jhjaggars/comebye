@@ -85,7 +85,9 @@ func (f Filter) threadWhere() string {
 		c = append(c, "t.started < "+q(f.Until))
 	}
 	if f.Host != "" {
-		c = append(c, "t.hosts LIKE "+q("%"+f.Host+"%"))
+		// Exact, as in Filter.where: a worker's bare name finds its VMs (name.instance).
+		list := "','||t.hosts||','"
+		c = append(c, "(instr("+list+","+q(","+f.Host+",")+")>0 OR instr("+list+","+q(","+f.Host+".")+")>0)")
 	}
 	if f.Project != "" {
 		p := q("%" + f.Project + "%")

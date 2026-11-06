@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -84,11 +85,24 @@ func cmdArchive(e *Env, args []string) error {
 		return usageErr("unknown archive subcommand %q", sub)
 	}
 	var ledger, to, by, toDir, toRcpt, toEnc *string
-	var yes, useGit, useGH, final *bool
+	var yes, useGit, useGH, final, allHosts, noSource, publish, pull *bool
+	snapshotPrefix := new(string)
+	snapshotFlag := func() {
+		fs.StringVar(snapshotPrefix, "snapshot-prefix", archive.SnapshotPrefix, "where index snapshots live in the store (for testing against a real store)")
+	}
 	switch sub {
 	case "run":
 		final = fs.Bool("final", false, "the sessions have ended: also take each file's last, unterminated line now")
+	case "verify":
+		allHosts = fs.Bool("all-hosts", false, "check every host in the store (needs --no-source)")
+		noSource = fs.Bool("no-source", false, "check the store by itself: decode every segment and report gaps and overlaps, with no session files to compare")
+	case "status":
+		snapshotFlag()
 	case "index":
+		snapshotFlag()
+		allHosts = fs.Bool("all-hosts", false, "index every host in the store, not only this one and the workers it uploaded")
+		publish = fs.Bool("publish", false, "after indexing, write a copy of the index to the store (needs --all-hosts; one machine only)")
+		pull = fs.Bool("pull", false, "do not index: download the newest copy from the store and move it over the index file")
 		ledger = fs.String("ledger", "auto", "handoff links: FILE or - (the output of `comebye ledger --json`), auto (run it), or none")
 		useGit = fs.Bool("git", true, "check each commit against main in the local checkout (outcome source: git)")
 		useGH = fs.Bool("gh", false, "refresh PR state with `gh` (network; sends repo branch names to GitHub; cached in the index)")
@@ -141,11 +155,35 @@ func cmdArchive(e *Env, args []string) error {
 		}
 		return nil
 	case "verify":
+		if *allHosts && !*noSource {
+			return usageErr("--all-hosts needs --no-source: other hosts' session files are not here to compare with")
+		}
 		o, err := cfg.OpenIdentity()
 		if err != nil {
 			return err
 		}
 		t0 := time.Now()
+		if *noSource {
+			c, err := a.VerifyStore(o, *allHosts)
+			if err != nil {
+				return err
+			}
+			if *asJSON {
+				if jerr := jsonOut(e, map[string]any{"result": c, "seconds": time.Since(t0).Seconds(), "mode": a.S.Mode()}); jerr != nil {
+					return jerr
+				}
+			} else {
+				fmt.Fprintf(e.Stdout, "%d hosts %v: %d streams, %d segments, %s raw; %d bad, %d gaps, %d overlaps, %d misnamed (%.1fs)\n",
+					len(c.Hosts), c.Hosts, c.Streams, c.Segments, human(c.Bytes), c.Bad, c.Gaps, c.Overlaps, c.Unnamed, time.Since(t0).Seconds())
+				for _, f := range c.Failures {
+					fmt.Fprintln(e.Stderr, "fault:", f)
+				}
+			}
+			if !c.OK() {
+				return fmt.Errorf("the store has %d faults", c.Bad+c.Gaps+c.Overlaps+c.Unnamed)
+			}
+			return nil
+		}
 		vr, err := a.Verify(o, cfg.Sources())
 		if err != nil {
 			return err
@@ -192,19 +230,51 @@ func cmdArchive(e *Env, args []string) error {
 				}
 			}
 		}
+		ix, err := archive.NewReader(cfg.IndexPath()).Status(context.Background())
+		if err != nil {
+			return err
+		}
+		newest, err := archive.NewestSnapshot(a.B, *snapshotPrefix)
+		if err != nil {
+			return err
+		}
 		if *asJSON {
-			return jsonOut(e, map[string]any{"host": a.Host, "sessions": len(ss), "by_kind": byKind, "segments": segs, "raw_bytes": raw, "stored_bytes": stored})
+			return jsonOut(e, map[string]any{"host": a.Host, "sessions": len(ss), "by_kind": byKind, "segments": segs, "raw_bytes": raw, "stored_bytes": stored, "index": ix, "newest_snapshot": newest})
 		}
 		ratio := 0.0
 		if stored > 0 {
 			ratio = float64(raw) / float64(stored)
 		}
 		fmt.Fprintf(e.Stdout, "host %s: %d sessions %v, %d segments, %s raw, %s stored (%.1fx)\n", a.Host, len(ss), byKind, segs, human(raw), human(stored), ratio)
+		printIndexFreshness(e, cfg.IndexPath(), ix, newest)
 		return nil
 	case "index":
+		if *pull && (*allHosts || *publish) {
+			return usageErr("--pull replaces the index with a downloaded one, so it does not go with --all-hosts or --publish")
+		}
+		if *publish && !*allHosts {
+			return usageErr("--publish needs --all-hosts: other machines replace their index with this copy")
+		}
 		o, err := cfg.OpenIdentity()
 		if err != nil {
 			return err
+		}
+		if *pull {
+			ix := &archive.Index{Path: cfg.IndexPath()}
+			t0 := time.Now()
+			res, err := ix.Pull(a, o, *snapshotPrefix)
+			if err != nil {
+				return err
+			}
+			if *asJSON {
+				return jsonOut(e, map[string]any{"result": res, "index": ix.Path, "seconds": time.Since(t0).Seconds()})
+			}
+			if res.UpToDate {
+				fmt.Fprintf(e.Stdout, "%s is up to date with %s\n", ix.Path, res.Key)
+				return nil
+			}
+			fmt.Fprintf(e.Stdout, "%s now holds %s: %d sessions, built %s, %s downloaded (%.1fs)\n", ix.Path, res.Key, res.Sessions, res.BuiltAt, human(res.Stored), time.Since(t0).Seconds())
+			return nil
 		}
 		var links []archive.Link
 		switch *ledger {
@@ -235,17 +305,49 @@ func cmdArchive(e *Env, args []string) error {
 		}
 		ix := &archive.Index{Path: cfg.IndexPath()}
 		t0 := time.Now()
-		st, err := ix.Sync(a, o, links, archive.SyncOptions{Git: *useGit, GH: *useGH})
+		st, err := ix.Sync(a, o, links, archive.SyncOptions{Git: *useGit, GH: *useGH, AllHosts: *allHosts})
 		if err != nil {
 			return err
 		}
+		seconds := time.Since(t0).Seconds()
+		var pub *archive.PublishResult
+		var pubErr error
+		if *publish {
+			// A host that could not be read may be missing from this index, and
+			// other machines would lose it with this copy. Its rows here stay.
+			if len(st.FailedHosts) > 0 {
+				pubErr = fmt.Errorf("not publishing: could not read %s", strings.Join(st.FailedHosts, ", "))
+			} else {
+				res, err := ix.Publish(a, *snapshotPrefix)
+				pub, pubErr = &res, err
+			}
+		}
 		if *asJSON {
-			return jsonOut(e, map[string]any{"result": st, "index": ix.Path, "links": len(links), "seconds": time.Since(t0).Seconds()})
+			out := map[string]any{"result": st, "index": ix.Path, "links": len(links), "seconds": seconds}
+			if pub != nil && pubErr == nil {
+				out["published"] = pub
+			}
+			if jerr := jsonOut(e, out); jerr != nil {
+				return jerr
+			}
+			return pubErr
 		}
 		fmt.Fprintf(e.Stdout, "%d sessions in %d threads: %d indexed (%d messages), %d unchanged, %d removed; %d handoff links read; %s (%.1fs)\n",
-			st.Sessions, st.Threads, st.Indexed, st.Messages, st.Unchanged, st.Removed, len(links), ix.Path, time.Since(t0).Seconds())
+			st.Sessions, st.Threads, st.Indexed, st.Messages, st.Unchanged, st.Removed, len(links), ix.Path, seconds)
+		if *allHosts {
+			fmt.Fprintf(e.Stdout, "hosts: %s\n", strings.Join(st.Hosts, ", "))
+		}
 		for _, m := range st.Errors {
 			fmt.Fprintln(e.Stderr, "error:", m)
+		}
+		if pubErr != nil {
+			return pubErr
+		}
+		if pub != nil {
+			fmt.Fprintf(e.Stdout, "published %s: %s, %s stored, %d older removed\n", pub.Key, human(pub.DBBytes), human(pub.Stored), len(pub.Pruned))
+			if pub.PruneError != "" {
+				fmt.Fprintln(e.Stderr, "warning: older snapshots were not removed:", pub.PruneError)
+			}
 		}
 		return nil
 	case "rewrap":
@@ -372,6 +474,37 @@ func cmdArchive(e *Env, args []string) error {
 	return nil
 }
 
+// printIndexFreshness says what the index file holds and how old it is. The
+// build time is the indexing machine's, so a pulled copy that stopped updating
+// shows its real age.
+func printIndexFreshness(e *Env, path string, st archive.IndexStatus, newest string) {
+	switch st.State {
+	case "missing":
+		fmt.Fprintf(e.Stdout, "index: none at %s\n", path)
+	case "outdated":
+		fmt.Fprintf(e.Stdout, "index: %s is in an older format\n", path)
+	case "unavailable":
+		fmt.Fprintf(e.Stdout, "index: %s could not be read\n", path)
+	default:
+		age := "at an unknown time"
+		if t, err := time.Parse(time.RFC3339, st.BuiltAt); err == nil {
+			age = time.Since(t).Round(time.Minute).String() + " ago"
+		}
+		from := "built on this machine"
+		if st.Snapshot != "" {
+			from = "pulled from snapshot " + st.Snapshot
+		}
+		note := ""
+		if st.State == "stale" {
+			note = " (stale: two builds missed)"
+		}
+		fmt.Fprintf(e.Stdout, "index: built %s%s, %s; %d sessions on %s\n", age, note, from, st.Sessions, strings.Join(st.Hosts, ", "))
+	}
+	if newest != "" {
+		fmt.Fprintf(e.Stdout, "newest snapshot in the store: %s\n", newest)
+	}
+}
+
 func writeNew(path, content string, mode os.FileMode) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
@@ -413,7 +546,7 @@ func cmdRecall(e *Env, args []string) error {
 	var f archive.Filter
 	fs.StringVar(&f.Since, "since", "", "sessions active on or after this date (2026-10-01)")
 	fs.StringVar(&f.Until, "until", "", "sessions started before this date (2026-11-01)")
-	fs.StringVar(&f.Host, "host", "", "only this host")
+	fs.StringVar(&f.Host, "host", "", "only this host, by its exact name; a worker's bare name finds every VM that had it")
 	fs.StringVar(&f.Kind, "kind", "", "only this agent kind (claude, pi)")
 	fs.StringVar(&f.Project, "project", "", "repo, directory, branch or title contains this")
 	fs.StringVar(&f.Branch, "branch", "", "exactly this branch (the session's or its handoff's)")

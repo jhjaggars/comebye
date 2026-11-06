@@ -178,6 +178,24 @@ func scan(b Backend, host string) (map[string]*streamState, error) {
 	return out, nil
 }
 
+// listHosts returns the hosts with at least one segment in the store, sorted.
+func listHosts(b Backend) ([]string, error) {
+	keys, err := b.List("v1/")
+	if err != nil {
+		return nil, fmt.Errorf("archive: listing hosts: %w", err)
+	}
+	seen := map[string]bool{}
+	var hosts []string
+	for _, k := range keys {
+		if n, ok := parseSegKey(k); ok && !seen[n.Host] {
+			seen[n.Host] = true
+			hosts = append(hosts, n.Host)
+		}
+	}
+	sort.Strings(hosts)
+	return hosts, nil
+}
+
 // StreamTo writes the whole stored stream to w, decrypting and checking
 // every segment; it fails on a gap or an overlap.
 func StreamTo(w io.Writer, b Backend, o Opener, host, kind, stream string) (int64, error) {
