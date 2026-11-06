@@ -1014,6 +1014,20 @@
     .td-acts button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
     .pager .pg-todo { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--orange); color: #111; font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
     .pager .pg-todo[hidden] { display: none; }
+    /* The page rows above the agent list: desktop only. */
+    .pnav { display: none; }
+    .nv {
+      display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 4px 10px;
+      background: none; border: 0; border-radius: 9px; color: var(--text); font: inherit; font-size: 14.5px; font-weight: 550;
+      text-align: left; cursor: pointer;
+    }
+    .nv:hover { background: var(--panel2); }
+    .nv.on { background: var(--panel2); box-shadow: inset 0 0 0 1px var(--blue); }
+    .nv:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+    .nv svg { width: 20px; height: 20px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+    .nv .badge { margin-left: auto; min-width: 19px; padding: 0 5px; border-radius: 10px; background: var(--orange); color: #111; font-size: 11.5px; font-weight: 700; text-align: center; line-height: 19px; }
+    .nv .bdot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 6px var(--blue); }
+
     /* The To do page: desktop only (the media query below shows it). */
     .page { display: none; }
     .page header .pg-count { margin-left: auto; color: var(--muted); font-size: 13px; }
@@ -1101,8 +1115,9 @@
         transform: none !important; visibility: visible; box-shadow: none; border-left: 1px solid var(--border);
         display: none; flex-direction: column;
       }
-      body.view-briefing #briefs, body.view-todo #p-todo { display: flex; }
-      #pager, #f-briefs, #briefs header .back, #briefs header .pg-dots { display: none !important; }
+      body.view-briefing #briefs, body.view-todo #p-todo, body.view-search #p-search { display: flex; }
+      #pager, #f-brief, #f-briefs, #briefs header .back, #briefs header .pg-dots { display: none !important; }
+      #rtr-banner { display: none !important; } /* the Ready to remove row replaces it */
       #list { min-height: 0; }
       .br-body { max-width: 820px; margin: 0; }
       #list, #list main { display: contents !important; }
@@ -1110,10 +1125,18 @@
       header .count .long { display: none; }
       header .count .short { display: inline; }
       #notify-panel { grid-column: 1; grid-row: 2; margin: 12px 12px 0; }
-      #host-filter { grid-column: 1; grid-row: 3; margin: 12px 0 0; padding: 0 12px 2px; }
-      #rtr-banner { grid-column: 1; grid-row: 4; width: auto; margin: 12px 12px 0; }
-      #plans { grid-column: 1; grid-row: 5; margin: 12px 12px 0; }
-      #agents { grid-column: 1; grid-row: 6; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 12px 20px; }
+      #nav { grid-column: 1; grid-row: 3; display: flex; flex-direction: column; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+      #nav:empty { display: none; }
+      #host-filter { grid-column: 1; grid-row: 4; margin: 10px 0 0; padding: 0 12px 2px; }
+      #host-filter .hf-chip { min-height: 34px; }
+      #plans { grid-column: 1; grid-row: 5; margin: 10px 12px 0; max-height: 30vh; overflow-y: auto; }
+      #agents { grid-column: 1; grid-row: 6; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 12px 20px; }
+      header .bell { min-width: 36px; min-height: 36px; margin: -6px -6px -6px 0; }
+      /* Denser rows, so more agents fit: one line of detail, tighter padding. */
+      .agent { padding: 7px 12px; min-height: 0; margin-bottom: 6px; gap: 10px; border-radius: 11px; }
+      .agent .sub { flex-wrap: nowrap; overflow: hidden; }
+      .agent.worker { margin-left: 14px; }
+      .proj-head { min-height: 34px; }
       .agent.selected { outline: 2px solid var(--blue); outline-offset: -1px; background: var(--panel2); }
       .agent.selected:focus-visible { outline-offset: -1px; }
       #f-menu { right: auto; left: calc(var(--list-w) - 10px); transform: translateX(-100%); }
@@ -1283,7 +1306,7 @@
         <button type="button" class="btn danger" id="notify-disable" hidden>Turn off</button>
       </div>
     </section>
-    <main><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
+    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
     <button type="button" id="pager" class="pager" aria-controls="briefs" aria-label="Open the briefings screen (or swipe left)" hidden>
       <span class="pg-dots" aria-hidden="true"><i class="on"></i><i></i></span>
       <span class="pg-label">Briefings</span><span class="pg-todo" id="pager-todo" title="Open to-do items" hidden></span><span class="pg-new" id="pager-new" hidden></span>
@@ -1299,6 +1322,12 @@
       <span class="pg-dots" aria-hidden="true"><i></i><i class="on"></i></span>
     </header>
     <div class="br-body" id="br-body"></div>
+  </section>
+
+  <!-- Search page (desktop only): a stand-in until the Transcripts screen from feat/recall-ui lands; see openSearchStub in app.js -->
+  <section id="p-search" class="page" aria-label="Search">
+    <header><h2>Search</h2></header>
+    <div class="page-body"><div class="empty">Transcript search is not part of this build yet.</div></div>
   </section>
 
   <!-- To do page (desktop only): its own pane; the phone keeps the card in the list -->

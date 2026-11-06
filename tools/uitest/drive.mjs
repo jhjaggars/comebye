@@ -809,15 +809,13 @@ await check("desktop: up/down in the list moves through the agents and opens eac
   const id = await page.evaluate(() => document.activeElement?.dataset?.id);
   if (id !== cur) throw new Error("focus lost on re-render: " + id + " vs " + cur);
 });
-await check("desktop: the fleet menu opens beside the list and its briefing item points at the Briefing page", async () => {
+await check("desktop: the fleet menu opens beside the list and has no Briefing items", async () => {
   await desktopList(1280);
   await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
   await page.locator("#btn-fleet").click();
   const m = await geo("#f-menu");
   if (!m.shown || m.x < 0 || m.x + m.w > 361) throw new Error("menu outside the list column: " + JSON.stringify(m));
-  const t = await page.evaluate(() => ({ text: document.querySelector("#f-brief").textContent, dis: document.querySelector("#f-brief").disabled }));
-  if (!/Briefing page/.test(t.text) || !t.dis) throw new Error("brief item: " + JSON.stringify(t));
-  if (await page.locator("#f-briefs").isVisible()) throw new Error("the Briefings screen item shows on desktop");
+  if (await page.locator("#f-briefs").isVisible() || await page.locator("#f-brief").isVisible()) throw new Error("a Briefing item shows in the fleet menu on desktop");
   await page.keyboard.press("Escape");
 });
 // ---- waiting agents: the tab title, a Needs you group on desktop, the n key ----
@@ -937,6 +935,49 @@ await check("pages: the To do page fills the pane and answers from it; the list 
   await page.evaluate(() => loadTodos());
   await page.waitForFunction((s) => !document.querySelector(s), item, { timeout: 5000 });
   if (!(await page.locator("#p-todo").innerText()).includes("Nothing is waiting on you")) throw new Error("no empty note");
+});
+await check("pages: the rows above the list open the pages; the open one is marked; leaving an agent clears presence", async () => {
+  await desktopList(1280);
+  await page.waitForSelector("#nav .nv");
+  const posts = [];
+  const onReq = (r) => { if (r.url().includes("/api/push/presence")) posts.push(JSON.parse(r.postData() || "{}")); };
+  page.on("request", onReq);
+  try {
+    const rows = await page.locator("#nav .nv span:first-of-type").allInnerTexts();
+    for (const want of ["Briefing", "To do", "Search"]) if (!rows.includes(want)) throw new Error("rows " + JSON.stringify(rows));
+    const [n, l] = await Promise.all([geo("#nav"), geo("#agents")]);
+    if (!n.shown || n.x !== 0 || n.y > l.y) throw new Error("the rows are not above the agent list: " + JSON.stringify([n, l]));
+    if (await page.locator("#rtr-banner").isVisible()) throw new Error("the removal banner shows beside its row");
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForTimeout(300);
+    if (await page.locator("#nav .nv.on").count()) throw new Error("a page row marked over an agent");
+    posts.length = 0;
+    await page.locator('#nav .nv[data-page="todo"]').click();
+    await page.waitForSelector("#p-todo", { state: "visible" });
+    if (await visible("#detail")) throw new Error("the agent stays under the page");
+    if ((await page.locator("#nav .nv.on").getAttribute("data-page")) !== "todo") throw new Error("row not marked");
+    await page.waitForTimeout(300);
+    if (!posts.length || posts[posts.length - 1].pane !== "") throw new Error("presence not cleared: " + JSON.stringify(posts));
+    await page.locator('#nav .nv[data-page="briefing"]').click();
+    await page.waitForSelector("#briefs.open", { state: "visible" });
+    await page.locator('#nav .nv[data-page="search"]').click();
+    await page.waitForSelector("#p-search", { state: "visible" });
+    if (await visible("#briefs")) throw new Error("two pages at once");
+    // Back (the browser's) returns through the pages.
+    await page.goBack();
+    await page.waitForSelector("#briefs", { state: "visible" });
+    // The removals row follows the ledger's marks.
+    const marks = await page.evaluate(() => ledger.marked.size);
+    const row = await page.locator('#nav .nv[data-page="removals"]').count();
+    if ((marks > 0) !== (row === 1)) throw new Error(`removals row ${row} for ${marks} marks`);
+    if (row) {
+      await page.locator('#nav .nv[data-page="removals"]').click();
+      await page.waitForSelector("#review", { state: "visible" });
+      await page.locator("#rv-close").click();
+    }
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
+  } finally { page.off("request", onReq); }
 });
 await check("pages: below the breakpoint the page hashes do nothing and openPage is a no-op", async () => {
   await desktopList(1099);

@@ -490,6 +490,7 @@ function renderListRows() {
   renderRemovalBanner();
   renderBrief();
   renderPlans();
+  renderNav();
   if (!agents.length) {
     wrap.innerHTML = `<div class="empty">${state.unauthorized ? esc(UNAUTHORIZED_MSG) : "No agents running"}</div>` + downRows;
     return;
@@ -965,6 +966,7 @@ function renderTodos() {
         <span class="proj-chev" aria-hidden="true"></span><span class="td-title">To do</span><span class="td-count">${esc(todoCountText())}</span></button></div>
       <div class="td-list"${folded ? " hidden" : ""}>${todos.items.map(todoItemHtml).join("")}</div>`;
   }
+  renderNav();
   // The desktop page: the same items without the fold, and an empty note.
   if (page) {
     $("pt-count").textContent = show ? todoCountText() : "";
@@ -1201,6 +1203,7 @@ function renderPager() {
   syncDesktopBriefs();
   const b = briefing.data;
   $("pager-new").hidden = !(b && b.markdown.trim() && lsGet(BRIEF_SEEN_KEY) !== b.at);
+  renderNav();
 }
 
 function briefsSchedLine() {
@@ -2794,6 +2797,7 @@ function setView(v) {
   for (const k of ["briefing", "todo", "search"]) document.body.classList.toggle("view-" + k, state.view === k);
   document.body.classList.toggle("has-page", !!state.view);
   syncDesktopBriefs();
+  renderNav();
   if (state.view === "todo") renderTodos();
 }
 
@@ -2823,6 +2827,52 @@ function openToSomething() {
     setView("briefing");
   }
 }
+
+/* ---------- the page rows above the agent list (desktop) ---------- */
+//
+// One table; a row is a page (openPage) or an action (a dialog). The
+// Briefing row is the only one that depends on the briefing, so it is the
+// one to delete if the briefing goes: with its page (#briefs) and its fleet
+// menu items.
+
+const NAV_ICON = {
+  briefing: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM9 12h7M9 16h7M9 8h3"/></svg>',
+  todo: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>',
+  search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
+  removals: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+};
+const NAV_ROWS = [
+  { key: "briefing", label: "Briefing", show: () => briefsAvailable(),
+    dot: () => { const b = briefing.data; return !!(b && b.markdown.trim() && lsGet(BRIEF_SEEN_KEY) !== b.at && state.view !== "briefing"); } },
+  { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open + todos.answered },
+  { key: "search", label: "Search", show: () => true, open: () => openSearchStub() }, // feat/recall-ui: point this at its opener
+  { key: "removals", label: "Ready to remove", show: () => ledger.on === true && ledger.marked.size > 0, count: () => ledger.marked.size, open: () => openReview(), noPage: true },
+];
+
+function renderNav() {
+  const el = $("nav");
+  if (!el) return;
+  const rows = NAV_ROWS.filter((r) => r.show());
+  const html = rows.map((r) => {
+    const n = r.count ? r.count() : 0;
+    const on = !r.noPage && state.view === r.key;
+    return `<button type="button" class="nv${on ? " on" : ""}" data-page="${r.key}"${on ? ' aria-current="page"' : ""}>${NAV_ICON[r.key]}<span>${esc(r.label)}</span>${
+      n ? `<span class="badge" aria-label="${n} open">${n}</span>` : r.dot && r.dot() ? '<span class="bdot" aria-label="new"></span>' : ""}</button>`;
+  }).join("");
+  if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; }
+}
+
+function onNavClick(ev) {
+  const b = ev.target.closest("button[data-page]");
+  const r = b && NAV_ROWS.find((x) => x.key === b.dataset.page);
+  if (!r) return;
+  if (r.open) r.open(); else openPage(r.key);
+}
+
+// The Search row stands in for the Transcripts screen until feat/recall-ui
+// is on main. When it lands: point the row's `open` at its opener, delete
+// this, #p-search and the view-search rules.
+function openSearchStub() { openPage("search"); }
 
 function openDetail(id) {
   const a = agentById(id);
@@ -5753,6 +5803,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-fleet").addEventListener("click", (ev) => { ev.stopPropagation(); toggleFleetMenu(); });
   $("f-sweep").addEventListener("click", fleetAction(openSweep));
   $("f-review").addEventListener("click", fleetAction(openReview));
+  $("nav").addEventListener("click", onNavClick);
   $("f-brief").addEventListener("click", fleetAction(fleetBrief));
   $("f-briefs").addEventListener("click", fleetAction(() => openBriefs(true)));
   $("f-sched").addEventListener("click", fleetAction(editBriefSchedule));
