@@ -2636,6 +2636,9 @@ function renderRecallMessages() {
   list.replaceChildren(...kids);
 }
 
+// openRecall opens the Transcripts screen, at the last search if there was one.
+function openRecall() { location.hash = rcSearchHash(rc.q); }
+
 function closeRecall() {
   history.replaceState(null, "", location.pathname + location.search);
   route();
@@ -2648,7 +2651,7 @@ function rcBack() {
 }
 
 function initRecall() {
-  $("btn-recall").addEventListener("click", () => { location.hash = rcSearchHash(rc.q); });
+  $("btn-recall").addEventListener("click", openRecall);
   $("rc-back").addEventListener("click", rcBack);
   $("rc-q").addEventListener("input", (ev) => {
     clearTimeout(rc.timer);
