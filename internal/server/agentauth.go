@@ -16,8 +16,8 @@ import (
 // Agents as callers. The comebye CLI, run by an agent (a coordinator) on
 // this host, sends the local agent token (agenttoken, in the state
 // directory) instead of a Tailscale identity. Such requests get the
-// "agent" role, which may only read (agents, hosts, transcripts, output,
-// the ledger, inspections of an agent's git state, the briefing, roles,
+// "agent" role, which may only read (agents, hosts, transcripts and output
+// within readGuard's rule, the ledger, inspections of an agent's git state, the briefing, roles,
 // the playbook) and do the workflow's steps: hand off, prompt an agent,
 // mark or unmark (proposing a discard included), publish the briefing and
 // set its schedule (or dismiss a streak of missed scheduled briefings),
@@ -30,6 +30,15 @@ import (
 // (which keeps the one ledger), marked X-Comebye-Forwarded; the hub
 // authenticates the peer by its Tailscale identity and applies the agent
 // role to the forwarded request again.
+//
+// A tagged node (a spot worker, which WhoIs identified: see capauth.go and
+// peerlisten.go) gets less than that, and it is a real boundary: such a
+// node's identity is not something it can claim otherwise. Only
+// routes wrapped in authWorker or authAgentLocal admit it, and those it
+// reaches are limited to its own host and the recorded coordinators (see
+// taggedscope.go). New routes refuse it unless they say otherwise.
+//
+// Other agents' text (output and transcripts) has its own rule: readGuard.
 //
 // This keeps a well-behaved coordinator inside the workflow and prevents
 // accidents. It is not a boundary against a malicious local agent: a
@@ -62,9 +71,11 @@ const (
 type caller struct {
 	role role
 	// For the agent role: the agent's pane and host ("" when unknown),
-	// and whether a peer forwarded the request.
+	// and whether a peer forwarded the request. tagged: the caller is a
+	// tagged node, identified by WhoIs rather than by anything it sent.
 	pane, host string
 	forwarded  bool
+	tagged     bool
 }
 
 type callerKey struct{}
@@ -98,7 +109,7 @@ func (s *Server) identify(r *http.Request) (caller, bool) {
 	// no header, token or login is consulted, and the role can only be the
 	// forwarded agent.
 	if t, ok := taggedOf(r); ok {
-		return caller{role: roleAgent, pane: cleanID(r.Header.Get(HeaderAgent)), host: t.peer, forwarded: true}, true
+		return caller{role: roleAgent, pane: cleanID(r.Header.Get(HeaderAgent)), host: t.peer, forwarded: true, tagged: true}, true
 	}
 	if tok := r.Header.Get(HeaderAgentToken); tok != "" {
 		if !agenttoken.Equal(tok, s.cfg.AgentToken) {
@@ -120,10 +131,14 @@ type access int
 
 const (
 	userOnly access = iota
-	// agentOK: the agent role may call it; on a peer with -hub it is
-	// forwarded to the hub.
+	// agentOK: the agent role may call it, except a tagged node; on a peer
+	// with -hub it is forwarded to the hub.
 	agentOK
-	// agentLocal: the agent role may call it, always answered here.
+	// workerOK: as agentOK, and a tagged node may call it too. The handler
+	// limits what a tagged node reaches.
+	workerOK
+	// agentLocal: the agent role may call it, a tagged node included, always
+	// answered here.
 	agentLocal
 )
 
@@ -155,7 +170,10 @@ func (s *Server) guard(a access, next http.HandlerFunc) http.HandlerFunc {
 			case a == userOnly:
 				writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "agent_forbidden", "message": "agents cannot do this through Comebye; it is left to the user in the app"})
 				return
-			case a == agentOK && s.cfg.Upstream != nil && !c.forwarded:
+			case a == agentOK && c.tagged:
+				writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "worker_forbidden", "message": "a tagged worker cannot do this; ask the coordinator"})
+				return
+			case (a == agentOK || a == workerOK) && s.cfg.Upstream != nil && !c.forwarded:
 				s.forwardToHub(w, r, c)
 				return
 			}
@@ -168,10 +186,14 @@ func (s *Server) guard(a access, next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc { return s.guard(userOnly, next) }
 
 // authAgent admits the user and the agent role (forwarded to the hub on a
-// peer with -hub).
+// peer with -hub), but not a tagged node.
 func (s *Server) authAgent(next http.HandlerFunc) http.HandlerFunc { return s.guard(agentOK, next) }
 
-// authAgentLocal admits the user and the agent role, answered here.
+// authWorker is authAgent that admits a tagged node too.
+func (s *Server) authWorker(next http.HandlerFunc) http.HandlerFunc { return s.guard(workerOK, next) }
+
+// authAgentLocal admits the user and the agent role, a tagged node
+// included, answered here.
 func (s *Server) authAgentLocal(next http.HandlerFunc) http.HandlerFunc {
 	return s.guard(agentLocal, next)
 }

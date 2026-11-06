@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
@@ -17,7 +18,8 @@ import (
 // The checks run on the agent's own host (through the hub for a peer's):
 // its worktree for a ledger worker or an agent in a linked worktree, else
 // the checkout around its working directory. Read-only, for the user and
-// the agent role.
+// the agent role (a tagged node: only its own host's agents, since a diff
+// is another agent's work).
 
 // inspection is the answer: who, and what the checks found.
 type inspection struct {
@@ -36,6 +38,13 @@ type inspection struct {
 
 func (s *Server) handleInspect(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("agent")
+	if c := callerOf(r); c.tagged {
+		host, _, _ := strings.Cut(id, "/")
+		if !sameHost(host, c.host) {
+			readForbidden(w)
+			return
+		}
+	}
 	var agent *herdr.AgentInfo
 	for _, a := range s.fleet.Agents() {
 		if a.ID == id {

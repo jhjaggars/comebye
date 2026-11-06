@@ -250,16 +250,17 @@ func (s *Server) routes() {
 		s.mux.Handle("GET /", static)
 	}
 	// Routes the agent role may use are wrapped in authAgent (forwarded to
-	// the hub on a peer with -hub) or authAgentLocal; everything wrapped
-	// in auth is the user's alone (see agentauth.go).
+	// the hub on a peer with -hub), authWorker (the same, and open to a tagged
+	// node) or authAgentLocal; everything wrapped in auth is the user's alone
+	// (see agentauth.go).
 	s.mux.HandleFunc("GET /api/version", s.authAgentLocal(s.handleVersion))
 	s.mux.HandleFunc("GET /api/whoami", s.authAgentLocal(s.handleWhoami))
 	s.mux.HandleFunc("GET /api/playbook", s.authAgentLocal(s.handlePlaybook))
-	s.mux.HandleFunc("GET /api/agents", s.authAgent(s.handleAgents))
-	s.mux.HandleFunc("GET /api/agents/{target}/output", s.authAgent(s.handleOutput))
-	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.authAgent(s.handleTranscript))
-	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.handleSubagentTranscript))
-	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authAgent(s.selfGuard(s.handlePrompt)))
+	s.mux.HandleFunc("GET /api/agents", s.authWorker(s.handleAgents))
+	s.mux.HandleFunc("GET /api/agents/{target}/output", s.authAgent(s.readGuard(s.handleOutput)))
+	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.authAgent(s.readGuard(s.handleTranscript)))
+	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.readGuard(s.handleSubagentTranscript)))
+	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.handlePrompt))))
 	s.mux.HandleFunc("POST /api/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
@@ -269,16 +270,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agents/{target}/image", s.auth(s.handleImage))
 	// Host-qualified routes: the local host is served directly, a peer's
 	// agents are proxied to that peer (hub only).
-	s.mux.HandleFunc("GET /api/hosts", s.authAgent(s.handleHosts))
+	s.mux.HandleFunc("GET /api/hosts", s.authWorker(s.handleHosts))
 	s.mux.HandleFunc("GET /api/peers", s.auth(s.handlePeers))
 	s.mux.HandleFunc("POST /api/peers", s.auth(s.handleAddPeer))
 	s.mux.HandleFunc("DELETE /api/peers/{name}", s.auth(s.handleRemovePeer))
 	// Self-registration: answered only on the peer listener, to a tagged node.
 	s.mux.HandleFunc("POST /api/peers/announce", s.authAgentLocal(s.handleAnnounce))
-	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.onHost("output", s.handleOutput)))
-	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.onHost("transcript", s.handleTranscript)))
-	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.onHost("subagent-transcript", s.handleSubagentTranscript)))
-	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authAgent(s.selfGuard(s.onHost("prompt", s.handlePrompt))))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.readGuard(s.onHost("output", s.handleOutput))))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.readGuard(s.onHost("transcript", s.handleTranscript))))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.readGuard(s.onHost("subagent-transcript", s.handleSubagentTranscript))))
+	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.onHost("prompt", s.handlePrompt)))))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/keys", s.auth(s.onHost("keys", s.handleKeys)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/activity", s.auth(s.onHost("activity", s.handleActivity)))
@@ -300,24 +301,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
 	// The handoff ledger (hub side).
-	s.mux.HandleFunc("GET /api/ledger", s.authAgent(s.handleLedger))
-	s.mux.HandleFunc("GET /api/inspect", s.authAgent(s.handleInspect))
+	s.mux.HandleFunc("GET /api/ledger", s.authWorker(s.handleLedger))
+	s.mux.HandleFunc("GET /api/inspect", s.authWorker(s.handleInspect))
 	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))
 	s.mux.HandleFunc("POST /api/handoffs/{id}/release", s.authAgent(s.handleReleaseHandoff))
 	s.mux.HandleFunc("POST /api/handoffs/{id}/cancel", s.authAgent(s.handleCancelHandoff))
-	s.mux.HandleFunc("POST /api/report", s.authAgent(s.handleReport))
+	s.mux.HandleFunc("POST /api/report", s.authWorker(s.handleReport))
 	s.mux.HandleFunc("POST /api/landings", s.authAgent(s.handleLanding))
 	s.mux.HandleFunc("POST /api/plans", s.authAgent(s.handleCreatePlan))
 	s.mux.HandleFunc("GET /api/plans", s.authAgent(s.handleListPlans))
 	s.mux.HandleFunc("GET /api/plans/{id}", s.authAgent(s.handleGetPlan))
-	s.mux.HandleFunc("POST /api/queue", s.authAgent(s.handleQueueAdd))
-	s.mux.HandleFunc("GET /api/queue", s.authAgent(s.handleQueueList))
-	s.mux.HandleFunc("DELETE /api/queue/{id}", s.authAgent(s.handleQueueCancel))
+	s.mux.HandleFunc("POST /api/queue", s.authWorker(s.handleQueueAdd))
+	s.mux.HandleFunc("GET /api/queue", s.authWorker(s.handleQueueList))
+	s.mux.HandleFunc("DELETE /api/queue/{id}", s.authWorker(s.handleQueueCancel))
 	// The to-do list: any agent adds and reads; answering, finishing and
 	// dropping are the user's or a coordinator's (checked in the handler).
-	s.mux.HandleFunc("POST /api/todos", s.authAgent(s.handleTodoAdd))
-	s.mux.HandleFunc("GET /api/todos", s.authAgent(s.handleTodoList))
-	s.mux.HandleFunc("GET /api/todos/{id}", s.authAgent(s.handleTodoGet))
+	s.mux.HandleFunc("POST /api/todos", s.authWorker(s.handleTodoAdd))
+	s.mux.HandleFunc("GET /api/todos", s.authWorker(s.handleTodoList))
+	s.mux.HandleFunc("GET /api/todos/{id}", s.authWorker(s.handleTodoGet))
 	s.mux.HandleFunc("POST /api/todos/{id}/answer", s.authAgent(s.handleTodoAnswer))
 	s.mux.HandleFunc("POST /api/todos/{id}/done", s.authAgent(s.handleTodoDone))
 	s.mux.HandleFunc("POST /api/todos/{id}/drop", s.authAgent(s.handleTodoDrop))
@@ -334,7 +335,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/brief/schedule", s.authAgent(s.handleGetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule", s.authAgent(s.handleSetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule/dismiss", s.authAgent(s.handleDismissBriefMiss))
-	s.mux.HandleFunc("GET /api/roles", s.authAgent(s.handleRoles))
+	s.mux.HandleFunc("GET /api/roles", s.authWorker(s.handleRoles))
 	s.mux.HandleFunc("POST /api/roles", s.auth(s.handleSetRole))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	s.mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
@@ -405,7 +406,7 @@ func isLoopbackAddr(addr string) bool {
 // handleAgents returns the current agent list (every host's, on a hub)
 // and each host's status. It is served from cache and never dials.
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
-	if fullRecords(r) {
+	if fullRecords(r) && !callerOf(r).tagged {
 		writeJSON(w, map[string]any{"agents": s.fleet.Agents(), "hosts": s.fleet.Hosts()})
 		return
 	}

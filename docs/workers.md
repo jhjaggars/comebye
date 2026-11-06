@@ -99,11 +99,14 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    ```
 
    Serve on 443 is terminated by tailscaled, so the hub's host firewall is not
-   in the path. A worker can do the agent-role requests of its workers
-   (`comebye report`, `handoff`, `prompt`, `mark`, the ledger and briefing
-   reads) and register itself; it cannot do anything the user alone can (keys,
-   answers, launching, removals, the peer registry), which Serve answers with
-   403 or 401.
+   in the path. A worker can do what its workers need (`comebye report`,
+   `comebye prompt` to a coordinator or an agent on its own host, adding a
+   to-do, the ledger in outline) and register itself; see
+   [what a tagged worker reaches](security.md#what-a-tagged-worker-reaches). It
+   cannot read other agents' output or transcripts, hand off or mark, or do
+   anything the user alone can (keys, answers, launching, removals, the peer
+   registry), which Serve answers with 403 or 401. A coordinator cannot run on a
+   worker VM.
 
    Without `COMEBYE_PEER_SELF_REGISTER=1` the tool finishes with the exact
    `comebye peer add NAME https://NAME.<tailnet>.ts.net --tag tag:worker` to

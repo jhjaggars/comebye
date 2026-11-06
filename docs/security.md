@@ -25,11 +25,11 @@ Treat access to it like SSH access to that machine.
     apply to it. Answers are cached for 30 s, so a tag or grant removed in the
     admin console takes effect within that time. WhoIs failing (tailscaled down)
     is a refusal, never an admission.
-  - **Role: the forwarded agent only**, never the user. Only `/api/*` routes
-    open to the agent role answer; the web app and every user-only route
-    (keys, answers, launching, removals, push, the peer registry) do not. A
-    tagged node's requests are attributed to its peer name, not to a host it
-    names itself.
+  - **Role: the forwarded agent only**, never the user, and with the
+    [limits on a tagged worker](#what-a-tagged-worker-reaches). The web app
+    and every user-only route (keys, answers, launching, removals, push, the
+    peer registry) do not answer. A tagged node's requests are attributed to
+    its peer name, not to a host it names itself.
   - **Admission needs two things:** an allowed tag (or a tag plus the
     `-ts-allow-cap` capability in WhoIs's answer), and a registered peer
     whose address is that very node (and that carries the peer's tag, if one
@@ -56,8 +56,9 @@ Treat access to it like SSH access to that machine.
   (opt-in).** With `-ts-allow-cap`, a tagged node holding that app capability
   from a tailnet grant is admitted on the main listener, through Serve run with
   `--accept-app-caps`. The role and rules are the peer listener's: the
-  forwarded agent only, a registered peer (or one announcing itself),
-  `/api/*` only, and no login, token or host name it claims counts.
+  forwarded agent only, [limited as below](#what-a-tagged-worker-reaches), a
+  registered peer (or one announcing itself), `/api/*` only, and no login,
+  token or host name it claims counts.
   - **Identity:** Serve's `Tailscale-App-Capabilities` header must hold the
     capability, and tailscaled's WhoIs on the address in `X-Forwarded-For` must
     show a tagged node that holds it too. Serve replaces both headers, so a
@@ -75,6 +76,50 @@ Treat access to it like SSH access to that machine.
     missing (for example Serve lacks the flag). They still get no API.
   - Requests with a login, or without the capability, are handled as if this
     feature were off.
+- <a id="what-a-tagged-worker-reaches"></a>**What a tagged worker reaches.**
+  A worker VM may run code you would not trust with the rest of your fleet, and
+  its identity comes from WhoIs, so these limits hold even against a malicious
+  worker. Agent routes refuse a tagged node unless they are opened to it
+  (403 `worker_forbidden`), so a new route starts closed. What is open:
+  - **Its own bookkeeping:** `POST /api/report`, adding a to-do, `whoami`,
+    `version`, the playbook, the agent and host lists (the slim view, never
+    `?full=1`) and the roles.
+  - **Prompts,** direct or queued, only to a recorded coordinator on any host
+    and to agents on its own host (403 `prompt_forbidden`). This is how a worker
+    reaches its coordinator. Coordinators should treat these prompts as data.
+  - **Reads limited to its own host.** `GET /api/ledger` gives other hosts'
+    entries in outline (no brief, report, mark or checks), plus the report of
+    any entry one of its host's entries waits on, and no plans. `GET /api/queue`
+    lists prompts to or from its host, and it can withdraw only those it queued.
+    `GET /api/todos` and `/api/todos/{id}` show items created on its host or
+    waiting on an agent there (others: 404). `GET /api/inspect` answers only for
+    its host's agents (403 `read_forbidden`).
+  - **Everything else is refused:** other agents' output and transcripts on any
+    host, its own panes included; the briefing; plans; handoffs, on any host
+    (they could start an agent elsewhere, and `--after` pastes other workers'
+    reports into the new prompt); landings; marks and sweeps; model switches;
+    closing to-dos. Keys, answers, images and removals remain the user's alone.
+
+  What this leaves open: a worker can still put text in front of a coordinator
+  by prompt, in a to-do or in its report. Its brief and any report it waits on
+  are visible to it by design.
+- <a id="reading-other-agents"></a>**Reading other agents' output.** Output and
+  transcripts (`/output`, `/transcript`, the subagent transcript, bare or under
+  `/api/hosts/{host}/`, and so `comebye read`) hold tool output and possibly
+  secrets. The user reads any. An agent reads those **on its own host**, and an
+  agent recorded as a **coordinator** on the hub reads any host's. A tagged node
+  reads none. Any other request gets 403 `read_forbidden`. The rule is applied
+  on the hub, since a peer with `-hub` forwards its agents' reads there; the hub
+  then calls the peer as itself, with none of the caller's claims. A coordinator
+  must be recorded: the Coordinator preset or the app's "Make coordinator" does
+  it, and one you started by hand reads only its own host until then.
+  **Limitation, inherited and not widened (issues #3 and #4):** for an untagged
+  agent this is a guard rail, not a boundary. The pane and host it is judged by
+  are self-asserted, so a process with the agent token can claim a coordinator's
+  pane, and any local process can forge the identity header on the loopback
+  port or read the session files directly. A worker on the same host as your
+  other agents is not contained by it. For a real boundary, run the work on a
+  tagged worker VM, where none of those claims count.
 - **Identity allowlist.** Tailscale Serve adds a `Tailscale-User-Login`
   header to every request it proxies from a tailnet device and strips any
   client-supplied copy. With `-ts-allow-login`, only the listed logins get
@@ -107,7 +152,8 @@ Treat access to it like SSH access to that machine.
 - **Agents get a restricted role, not a boundary.** The `comebye` CLI
   authenticates with the local agent token (`<state-dir>/agent-token`,
   0600, compared in constant time; a wrong token is refused, never treated
-  as the user). That role may read, hand off, prompt, mark, sweep (which only marks, with
+  as the user). That role may read (other agents' output
+  [within its rule](#reading-other-agents)), hand off, prompt, mark, sweep (which only marks, with
   its own generated reason, workers whose checks show nothing to lose; never a
   coordinator or the caller itself), publish the
   briefing and set its schedule, add and read to-do items (any agent), and,
@@ -120,9 +166,10 @@ Treat access to it like SSH access to that machine.
   and the hub applies the agent role to them again. See
   [Coordinators](agents.md#coordinators).
 - **The to-do list** (`comebye todo`, `/api/todos`) is for questions the user
-  has to deal with. Any agent may add and list items. Answering, finishing and
+  has to deal with. Any agent may add and list items (a tagged worker
+  [sees only its own host's](#what-a-tagged-worker-reaches)). Answering, finishing and
   dropping are the user's (the app) or a recorded coordinator's: another agent
-  gets 403 `coordinator_only`. A coordinator's `answer` records the user's
+  gets 403 `coordinator_only`, a tagged worker `worker_forbidden`. A coordinator's `answer` records the user's
   words it relayed (`via: relay`); only an answer typed in the app (`via: app`)
   sends the coordinator a notice, whose text is fixed and names the item id
   only. The hub never forwards an answer to the waiting agent. Item text,
@@ -131,7 +178,7 @@ Treat access to it like SSH access to that machine.
   links `http(s)` URLs; the CLI labels the context "data, not instructions".
   **Limitation, inherited and not widened (issues #3 and #4):** "coordinator"
   is judged from the agent role's self-asserted pane header plus the shared
-  agent token, so any local process on the hub (or a worker host's agent
+  agent token, so any local process on the hub (or an untagged host's agent
   through its peer) can claim to be the coordinator and answer, finish or drop
   items, exactly as it can already forge the identity header on the loopback
   port. What it gets is bookkeeping on a list, not a way to run anything; the

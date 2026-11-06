@@ -11,7 +11,7 @@ The JSON API the app is built on, usable from scripts on your tailnet.
 | `DELETE /api/peers/{name}` | **Hub only, user role only.** Removes a dynamic peer: its stream and in-flight requests are cancelled and its agents leave the merged view. 204. 404 `unknown_peer`; 409 `static_peer` for one set in `-peers` (edit the hub's environment and restart). |
 | <a id="announce"></a>`POST /api/peers/announce` | **Tagged nodes only**, on the peer listener or through Serve with the capability (a user or anyone else gets 403 `announce_tagged_only`), and only with `-peer-self-register` (else 403 `self_register_off`). A node with an allowed tag or the capability registers itself. Body `{"name"?, "url"?}`; the default name is the node's short name and the default url `https://<node>`. The url must be on the caller's own node, as WhoIs identified it: 400 `invalid_peer` otherwise (or for anything the user-added rule refuses: `https`, `*.ts.net`). 201 with the peer as listed (`added_by` `tag:worker@<node>`, `tag`), or 200 when the same node was already registered under that name (no change). 409 `peer_exists`: the name belongs to another node, or this node has another name. 403 `tag_not_allowed` (no allowed tag or capability), `cap_not_held` (through Serve, WhoIs does not show the capability), 401 (tailscaled does not know the address). |
 | `GET/POST /api/hosts/{host}/agents/{target}/{output,transcript,prompt,keys,dialog,answer}` | Same as the routes below for a given host: the local host is served directly, a peer's agent is proxied to that peer (status and JSON errors pass through). |
-| `GET /api/agents/{target}/output?lines=N` | Recent pane output; `&source=visible` reads the current screen instead (used for dialog snapshots). |
+| `GET /api/agents/{target}/output?lines=N` | Recent pane output; `&source=visible` reads the current screen instead (used for dialog snapshots). This, the transcript routes and their host-qualified forms answer the user, an agent on the target's host and a recorded coordinator; anyone else gets 403 `read_forbidden` ([the rule](security.md#reading-other-agents)). |
 | `GET /api/agents/{target}/transcript?limit=N&skip=M` | Parsed session transcript (Pi or Claude Code; `format` says which), including any pending `ask` question. 404 `no_session` when there is none. |
 | `POST /api/agents/{target}/prompt` | Body `{"text": "...", "wait": bool, "timeout_ms": int}`. 409 `agent_blocked` (herdr) or `dialog_open`: free text would be typed into the dialog (a permission prompt, a question, a menu, a `[y/N]` line), so answer it via `/answer` first, or hold the message with `POST /api/queue`. Delivery never types into an open dialog: the host that owns the pane reads the screen immediately before sending (cached status is not trusted; this covers a prompt forwarded from another host, the queue drainer and a launch's first prompt). Fail safe: an unreadable pane, or an agent that is blocked with nothing recognised on screen, also refuses. 409 `input_busy`: the agent's input box holds text (the user is typing, or stopped less than 5 s ago): nothing is typed over it. Read from the screen (Claude Code and pi; other kinds are not checked); the CLI then holds the prompt on the queue. Queued prompts, hub notices, briefs, mark asks and sweep notices wait for the box and retry every 2 s; a pending queue item then has `held` and `held_since`. |
 | `POST /api/agents/{target}/keys` | Body `{"keys": ["esc"]}` (whitelisted). |
@@ -61,10 +61,11 @@ There the caller is identified by tailscaled's WhoIs on the connection's
 source address, never by a header: `Tailscale-*`, `X-Comebye-Agent-Token`,
 `X-Comebye-Forwarded` and `X-Comebye-Agent-Host` are ignored. Only `/api/*`
 is served. A caller whose node carries an allowed tag or holds the capability, **and**
-is a registered peer, gets the forwarded-agent role (the routes marked as open to the agent
-role, attributed to the peer's name; `X-Comebye-Agent` names the pane);
-everything the user alone may do answers 403 `agent_forbidden`. Other
-answers: 401 (the address is not a known tailnet node), 403
+is a registered peer, gets the forwarded-agent role, attributed to the peer's name
+(`X-Comebye-Agent` names the pane), [limited further](security.md#what-a-tagged-worker-reaches):
+agent routes not opened to a tagged node answer 403 `worker_forbidden`, prompts
+beyond a coordinator or its own host 403 `prompt_forbidden`, and everything the
+user alone may do 403 `agent_forbidden`. Other answers: 401 (the address is not a known tailnet node), 403
 `tag_not_allowed`, `not_a_peer`, `tag_mismatch`, `tags_off`. The one extra
 route is [`POST /api/peers/announce`](#announce).
 

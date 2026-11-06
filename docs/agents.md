@@ -355,14 +355,15 @@ say `coordinator (laharl/w1Q:p1)`.
 
 **What an agent may do.** A request with the agent token gets the
 restricted *agent role*. It may read (agents, hosts, transcripts and
-output, the ledger, inspections of an agent's git state, the briefing,
+output [on its own host, or any host for a recorded coordinator](security.md#reading-other-agents), the ledger, inspections of an agent's git state, the briefing,
 roles, the playbook) and take the workflow's steps: hand off, prompt an
 agent, mark and unmark (proposing a discard included), publish the
 briefing and set its schedule. It cannot prompt or mark itself, must give a reason to mark,
 and cannot mark a coordinator. Everything else is 403 for it: keys,
 dialog answers, images, launching, the worker API, removals and their
 confirmation, roles, push. **Confirming a removal is always yours**, in
-the app.
+the app. A worker on a tagged VM gets
+[much less](security.md#what-a-tagged-worker-reaches).
 
 **Setup per harness.**
 
@@ -396,7 +397,8 @@ Tailscale Serve on the hub attaches the peer device owner's login, so the
 hub's `-ts-allow-login` must include it (with a single owner it already
 does). The request is marked as forwarded, attributed to the peer's
 agent (`kube/w2:p1`), and held to the agent role on the hub as well. A
-coordinator on a peer thus sees and acts on the whole fleet. A peer
+coordinator on a peer thus sees and acts on the whole fleet, once the hub has
+it recorded as a coordinator (reading other hosts' agents needs that). A peer
 without `-hub` keeps a ledger of its own, which the hub never sees, so set
 `-hub` on every peer; one with `-ledger=false` and no `-hub` answers the
 CLI's ledger requests with 409 `no_hub`. `-hub` and `-peers` are

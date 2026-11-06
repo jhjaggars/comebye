@@ -74,6 +74,10 @@ In scope:
   allowlist (keys, answers, images, launching, workers, removals or their
   confirmation, roles, push), marking a coordinator or itself, or being
   treated as the user with a wrong token.
+- Getting another agent's output, transcript, report or diff as a tagged
+  node, or making a tagged node's prompt or handoff reach what
+  `docs/security.md` keeps from it. (Between untagged agents the read rule is a
+  guard rail, like the rest of the agent role.)
 - Making a peer with `-hub` forward anything but the agent role's
   requests, forward them anywhere but the configured hub, or follow a
   redirect; making a hub re-forward a forwarded request.

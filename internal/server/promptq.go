@@ -615,6 +615,10 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := callerOf(r)
+	if c.tagged && !sameHost(target.Host, c.host) && !s.isCoordinator(target.ID, target.Name) {
+		promptForbidden(w)
+		return
+	}
 	if c.agent() && s.isSelf(c, target.Host, target.PaneID) {
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "self", "message": "an agent cannot do this to itself"})
 		return
@@ -646,12 +650,20 @@ func (s *Server) handleQueueList(w http.ResponseWriter, r *http.Request) {
 	if s.queueOff(w, r) {
 		return
 	}
-	writeJSON(w, map[string]any{"queue": s.pq.list(r.URL.Query().Get("agent"), r.URL.Query().Get("all") != "")})
+	items := s.pq.list(r.URL.Query().Get("agent"), r.URL.Query().Get("all") != "")
+	if c := callerOf(r); c.tagged {
+		items = taggedQueue(items, c.host)
+	}
+	writeJSON(w, map[string]any{"queue": items})
 }
 
 // handleQueueCancel withdraws a pending prompt (DELETE /api/queue/{id}).
 func (s *Server) handleQueueCancel(w http.ResponseWriter, r *http.Request) {
 	if s.queueOff(w, r) {
+		return
+	}
+	if c := callerOf(r); c.tagged && !s.queuedBy(r.PathValue("id"), c.host) {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "worker_forbidden", "message": "a tagged worker can only withdraw what its own host queued"})
 		return
 	}
 	p, err := s.pq.settle(r.PathValue("id"), QueueCancelled, false)

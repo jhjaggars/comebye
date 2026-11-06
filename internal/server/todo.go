@@ -551,6 +551,10 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		todoErr(w, err)
 		return
 	}
+	if c.tagged && !todoVisible(out, c.host) {
+		// A duplicate another caller's item matched: the id says enough.
+		out = Todo{ID: out.ID, State: out.State, Question: out.Question}
+	}
 	writeJSONStatus(w, http.StatusCreated, map[string]any{"todo": out, "duplicate": dup})
 }
 
@@ -567,9 +571,12 @@ func (s *Server) handleTodoList(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_state", "message": "state is open, answered, done, dropped or all"})
 		return
 	}
-	items := s.todos.list(st)
+	items, active := s.todos.list(st), s.todos.list("")
+	if c := callerOf(r); c.tagged {
+		items, active = taggedTodos(items, c.host), taggedTodos(active, c.host)
+	}
 	open, answered := 0, 0
-	for _, it := range s.todos.list("") {
+	for _, it := range active {
 		if it.State == TodoOpen {
 			open++
 		} else {
@@ -584,7 +591,7 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	it, ok := s.todos.get(r.PathValue("id"))
-	if !ok {
+	if c := callerOf(r); !ok || (c.tagged && !todoVisible(it, c.host)) {
 		todoErr(w, errTodoNotFound)
 		return
 	}

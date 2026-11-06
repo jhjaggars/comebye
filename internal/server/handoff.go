@@ -673,6 +673,10 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
+	if c := callerOf(r); c.tagged {
+		writeJSON(w, map[string]any{"entries": taggedEntries(views, c.host), "marks": taggedMarks(s.ledger.Marks(), c.host), "plans": []planView{}, "roles": s.liveRoles()})
+		return
+	}
 	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks(), "plans": s.planViews(), "roles": s.liveRoles()})
 }
 

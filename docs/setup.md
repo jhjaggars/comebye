@@ -384,12 +384,14 @@ does; the hub reaches it through that URL as usual.)
   `sudo firewall-cmd --reload`. Anything the old zone allowed over the tailnet
   (such as ssh) must be added to the new zone too. Details:
   [Worker VMs](workers.md).
-- **What a tagged node can do:** exactly what a peer's forwarded agent can:
-  the agent-role requests of its workers (`comebye report`, `handoff`,
-  `prompt`, `mark`, the ledger and briefing reads - [Coordinators](agents.md#coordinators)),
-  attributed to the peer's name. **What it can't:** anything the user alone
-  can do (keys, answers, launching, removals, push, the peer registry), the
-  web app, or anything as the user. The listener serves `/api/*` only.
+- **What a tagged node can do:** less than a peer's forwarded agent: what its
+  workers need (`comebye report`, `comebye prompt` to a coordinator or an agent
+  on its own host, adding a to-do, the ledger in outline), attributed to the
+  peer's name. See [what a tagged worker reaches](security.md#what-a-tagged-worker-reaches).
+  **What it can't:** read other agents' output or transcripts, hand off, mark,
+  anything the user alone can do (keys, answers, launching, removals, push, the
+  peer registry), the web app, or anything as the user. The listener serves
+  `/api/*` only.
 - **Two conditions, both checked on every request:** the node carries an
   allowed tag (or is tagged and holds the capability), and it is a **registered peer** - one of the peer's addresses
   is the node itself (its MagicDNS name). A tagged node that is not
