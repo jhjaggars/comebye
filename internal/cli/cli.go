@@ -283,6 +283,9 @@ type agentRow struct {
 	Role   string `json:"role,omitempty"`
 	Ledger string `json:"ledger_status,omitempty"`
 	Self   bool   `json:"self,omitempty"`
+	// Instance is the host's incarnation: it differs when a host name has
+	// been taken over by another machine (--json only).
+	Instance string `json:"instance,omitempty"`
 }
 
 func baseName(p string) string {
@@ -343,8 +346,11 @@ func cmdAgents(e *Env, args []string) error {
 		if *hostF != "" && a.Host != *hostF {
 			continue
 		}
-		r := agentRow{ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name, Kind: a.Agent, Status: a.Status, CWD: a.CWD}
+		r := agentRow{ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name, Kind: a.Agent, Status: a.Status, CWD: a.CWD, Instance: a.Instance}
 		en, isEntry := entries[a.ID]
+		if isEntry && en.HostInstance != "" && a.Instance != "" && en.HostInstance != a.Instance {
+			isEntry = false // an earlier machine of that name
+		}
 		wtRepo, wtBranch, inWT := worktreeParts(a.CWD)
 		switch {
 		case a.Worktree != nil && a.Worktree.Repo != "":
@@ -512,7 +518,7 @@ func cmdLedger(e *Env, args []string) error {
 		}
 		var notes []string
 		switch {
-		case en.Status == "removed" || en.Status == "failed":
+		case en.Status == "removed" || en.Status == "failed" || en.Status == "lost":
 		case en.Live.Present:
 			notes = append(notes, "agent "+en.Live.Status)
 		case en.AgentID != "":
@@ -1232,7 +1238,7 @@ func cmdLand(e *Env, args []string) error {
 	}
 	var en *apiEntry
 	for i := range lg.Entries {
-		if lg.Entries[i].AgentID == t.ID && lg.Entries[i].Status != "removed" && lg.Entries[i].Status != "failed" {
+		if lg.Entries[i].AgentID == t.ID && lg.Entries[i].Status != "removed" && lg.Entries[i].Status != "failed" && lg.Entries[i].Status != "lost" {
 			en = &lg.Entries[i]
 		}
 	}

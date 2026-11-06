@@ -227,6 +227,7 @@ type apiAgent struct {
 	Title      string        `json:"terminal_title_stripped"`
 	Worktree   *worktreeInfo `json:"worktree"`
 	LastActive *time.Time    `json:"last_active"`
+	Instance   string        `json:"instance"`
 }
 
 type apiHost struct {
@@ -278,27 +279,28 @@ type apiAsk struct {
 }
 
 type apiEntry struct {
-	ID          string     `json:"id"`
-	Host        string     `json:"host"`
-	Repo        string     `json:"repo"`
-	RepoName    string     `json:"repo_name"`
-	Branch      string     `json:"branch"`
-	Base        string     `json:"base"`
-	Kind        string     `json:"kind"`
-	Model       string     `json:"model"`
-	Thinking    string     `json:"thinking"`
-	AgentID     string     `json:"agent_id"`
-	PaneID      string     `json:"pane_id"`
-	AgentName   string     `json:"agent_name"`
-	Worktree    string     `json:"worktree"`
-	From        string     `json:"from"`
-	Status      string     `json:"status"`
-	Error       string     `json:"error"`
-	CreatedAt   time.Time  `json:"created_at"`
-	FinishedAt  *time.Time `json:"finished_at"`
-	FinalReport string     `json:"final_report"`
-	Mark        *apiMark   `json:"mark"`
-	Approval    *struct {
+	ID           string     `json:"id"`
+	Host         string     `json:"host"`
+	Repo         string     `json:"repo"`
+	RepoName     string     `json:"repo_name"`
+	Branch       string     `json:"branch"`
+	Base         string     `json:"base"`
+	Kind         string     `json:"kind"`
+	Model        string     `json:"model"`
+	Thinking     string     `json:"thinking"`
+	AgentID      string     `json:"agent_id"`
+	HostInstance string     `json:"host_instance"`
+	PaneID       string     `json:"pane_id"`
+	AgentName    string     `json:"agent_name"`
+	Worktree     string     `json:"worktree"`
+	From         string     `json:"from"`
+	Status       string     `json:"status"`
+	Error        string     `json:"error"`
+	CreatedAt    time.Time  `json:"created_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+	FinalReport  string     `json:"final_report"`
+	Mark         *apiMark   `json:"mark"`
+	Approval     *struct {
 		By   string `json:"by"`
 		Note string `json:"note"`
 	} `json:"approval"`

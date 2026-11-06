@@ -462,6 +462,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 		// entry (and its worktree, which startWorker reopened).
 		entry, _, err := s.ledger.Update(prev.ID, func(e *ledger.Entry) {
 			e.Status, e.Error = ledger.Running, res.PromptError
+			e.HostInstance, e.LostAt = s.hostInstance(e.Host), nil
 			e.AgentID, e.PaneID, e.AgentName, e.Kind = res.Agent.ID, res.Agent.PaneID, res.Agent.Name, res.Agent.Agent
 			e.WorkspaceID, e.Worktree, e.Reused = res.WorkspaceID, res.Worktree, true
 			e.Model, e.Thinking = strings.TrimSpace(b.Model), strings.TrimSpace(b.Thinking)
@@ -487,6 +488,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 		return http.StatusOK, map[string]any{"entry": entry, "worker": res, "existing": true, "restarted": true}
 	}
 	put := func(e ledger.Entry) (ledger.Entry, error) {
+		e.HostInstance = s.hostInstance(e.Host)
 		if queued == nil {
 			return s.ledger.Add(e)
 		}

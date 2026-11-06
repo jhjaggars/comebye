@@ -199,17 +199,20 @@ func (w *stmtWriter) close() error {
 // Link ties a session to a Comebye handoff. It is built from
 // `comebye ledger --json` (the "entries" array).
 type Link struct {
-	ID         string   `json:"id"`
-	Host       string   `json:"host"`
-	AgentID    string   `json:"agent_id"`
-	RepoName   string   `json:"repo_name"`
-	Branch     string   `json:"branch"`
-	PrevBranch []string `json:"previous_branches"`
-	Worktree   string   `json:"worktree"`
-	PlanID     string   `json:"plan_id"`
-	Ref        string   `json:"ref"` // backlog item, once handoffs carry one
-	Brief      string   `json:"brief"`
-	CreatedAt  string   `json:"created_at"`
+	ID      string `json:"id"`
+	Host    string `json:"host"`
+	AgentID string `json:"agent_id"`
+	// HostInstance is the incarnation of Host the handoff ran on: a spot
+	// worker's cloud instance id. Empty for older entries.
+	HostInstance string   `json:"host_instance"`
+	RepoName     string   `json:"repo_name"`
+	Branch       string   `json:"branch"`
+	PrevBranch   []string `json:"previous_branches"`
+	Worktree     string   `json:"worktree"`
+	PlanID       string   `json:"plan_id"`
+	Ref          string   `json:"ref"` // backlog item, once handoffs carry one
+	Brief        string   `json:"brief"`
+	CreatedAt    string   `json:"created_at"`
 	// What the ledger says happened (structured, not the agent's claim).
 	Repo         string `json:"repo"` // the primary checkout on Host
 	Status       string `json:"status"`
@@ -237,8 +240,17 @@ type Link struct {
 
 // sig changes when anything the index stores from the link changes.
 func (l *Link) sig() string {
-	h := sha1.Sum([]byte(strings.Join([]string{l.ID, l.AgentID, l.Branch, l.PlanID, l.Ref, l.RepoName, l.CreatedAt, l.Brief}, "\x00")))
+	h := sha1.Sum([]byte(strings.Join([]string{l.ID, l.AgentID, l.Branch, l.PlanID, l.Ref, l.RepoName, l.CreatedAt, l.Brief}, "\x00") + instSig(l.HostInstance)))
 	return hex.EncodeToString(h[:])
+}
+
+// instSig is the instance's share of a link's signature: nothing when there is
+// none, so rows linked before instances are not rewritten.
+func instSig(in string) string {
+	if in == "" {
+		return ""
+	}
+	return "\x00" + in
 }
 
 // LoadLinks reads the output of `comebye ledger --json`.
@@ -262,6 +274,11 @@ func bestLink(links []Link, scope linkScope, cwd, start string) *Link {
 	for i := range links {
 		l := &links[i]
 		if l.Host != scope.host || l.Worktree == "" {
+			continue
+		}
+		// A worker's sessions belong to one VM: a handoff that ran on another
+		// instance of the same name is not theirs, whatever the dates say.
+		if scope.instance != "" && l.HostInstance != "" && l.HostInstance != scope.instance {
 			continue
 		}
 		if cwd != l.Worktree && !strings.HasPrefix(cwd, strings.TrimSuffix(l.Worktree, "/")+"/") {

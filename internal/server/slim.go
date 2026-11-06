@@ -28,6 +28,8 @@ type browserAgent struct {
 	Worktree      *herdr.WorktreeInfo `json:"worktree,omitempty"`
 	LastActive    *time.Time          `json:"last_active,omitempty"`
 	StatusSince   *time.Time          `json:"status_since,omitempty"`
+	// Instance is the host's incarnation (the hub's peer registry).
+	Instance string `json:"instance,omitempty"`
 }
 
 // browserHost drops LastSeen, which changes with every peer ping and is
@@ -64,7 +66,7 @@ func slimAgents(agents []herdr.AgentInfo) []browserAgent {
 			ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name,
 			Agent: a.Agent, DisplayAgent: a.DisplayAgent, Status: a.Status,
 			StateLabels: a.StateLabels, CWD: a.CWD, TerminalTitle: a.TitleStripped,
-			Worktree: a.Worktree, LastActive: a.LastActive, StatusSince: a.StatusSince,
+			Worktree: a.Worktree, LastActive: a.LastActive, StatusSince: a.StatusSince, Instance: a.Instance,
 		}
 	}
 	return out

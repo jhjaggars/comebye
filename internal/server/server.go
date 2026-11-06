@@ -228,6 +228,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				s.todos = newTodoStore("") // in memory: never overwrite the unreadable file
 			}
 			s.endStaleAsks()
+			s.trackInstances()
 		}
 	}
 	if manager != nil {
@@ -276,6 +277,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/peers", s.auth(s.handlePeers))
 	s.mux.HandleFunc("POST /api/peers", s.auth(s.handleAddPeer))
 	s.mux.HandleFunc("DELETE /api/peers/{name}", s.auth(s.handleRemovePeer))
+	s.mux.HandleFunc("PUT /api/peers/{name}/instance", s.auth(s.handleSetInstance))
 	// Self-registration: answered only to a tagged node (capPeers).
 	s.mux.HandleFunc("POST /api/peers/announce", s.authAgentLocal(s.handleAnnounce))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.readGuard(s.onHost("output", s.handleOutput))))

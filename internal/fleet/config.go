@@ -38,6 +38,9 @@ type Peer struct {
 	AddedBy string
 	AddedAt time.Time
 	Tag     string
+	// Instance is the peer's incarnation id (see Record.Instance); static
+	// peers have none.
+	Instance string
 }
 
 // Where a peer came from.

@@ -1,8 +1,11 @@
 package fleet
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -61,6 +64,13 @@ func LoadDynamic(store *Store, static []Peer, localName string, opt AddrOptions,
 			continue
 		}
 		p.Source, p.AddedBy, p.AddedAt, p.Tag = SourceDynamic, r.AddedBy, r.AddedAt, r.Tag
+		if r.Instance == "" { // a peers.json from before instances: the peer present now is the one
+			r.Instance = NewInstance()
+			if err := store.SetInstance(r.Name, r.Instance); err != nil {
+				logf("peers: could not save the instance of %q: %v", r.Name, err)
+			}
+		}
+		p.Instance = r.Instance
 		out = append(out, p)
 	}
 	return out
@@ -74,6 +84,8 @@ type PeerInfo struct {
 	AddedBy string     `json:"added_by,omitempty"`
 	AddedAt *time.Time `json:"added_at,omitempty"`
 	Tag     string     `json:"tag,omitempty"`
+	// Instance is this incarnation of the peer (see Record.Instance).
+	Instance string `json:"instance,omitempty"`
 	state.HostStatus
 }
 
@@ -87,7 +99,7 @@ func (f *Fleet) List() []PeerInfo {
 			}
 			hs := p.hostStatus()
 			hs.VersionMismatch = f.opts.Version != "" && hs.Version != "" && hs.Version != f.opts.Version
-			info := PeerInfo{Name: p.name, Source: p.meta.Source, AddedBy: p.meta.AddedBy, Tag: p.meta.Tag, HostStatus: hs}
+			info := PeerInfo{Name: p.name, Source: p.meta.Source, AddedBy: p.meta.AddedBy, Tag: p.meta.Tag, Instance: p.instance(), HostStatus: hs}
 			for _, u := range p.addrs {
 				info.URLs = append(info.URLs, u.String())
 			}
@@ -156,7 +168,7 @@ func (f *Fleet) Add(name string, urls []string, by, tag string) (PeerInfo, error
 		}
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	rec := Record{Name: name, AddedBy: by, AddedAt: now, Tag: tag}
+	rec := Record{Name: name, AddedBy: by, AddedAt: now, Tag: tag, Instance: NewInstance()}
 	for _, u := range addrs {
 		rec.URLs = append(rec.URLs, u.String())
 	}
@@ -164,7 +176,7 @@ func (f *Fleet) Add(name string, urls []string, by, tag string) (PeerInfo, error
 		f.mu.Unlock()
 		return PeerInfo{}, err
 	}
-	p := f.addLocked(Peer{Name: name, URLs: addrs, Source: SourceDynamic, AddedBy: by, AddedAt: now, Tag: tag})
+	p := f.addLocked(Peer{Name: name, URLs: addrs, Source: SourceDynamic, AddedBy: by, AddedAt: now, Tag: tag, Instance: rec.Instance})
 	if f.runCtx != nil {
 		p.start(f.runCtx)
 	}
@@ -213,10 +225,98 @@ func (f *Fleet) Remove(name, by string) error {
 		}
 	}
 	p.cancel()
+	old := p.instance()
 	f.mu.Unlock()
 	f.opts.Logf("peers: removed %s (by %s)", name, by)
+	f.ended(name, old, "its host "+name+" was removed from the hub")
 	f.broadcast()
 	return nil
+}
+
+// NewInstance makes a fresh instance id (a random UUID).
+func NewInstance() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6], b[8] = b[6]&0x0f|0x40, b[8]&0x3f|0x80
+	h := hex.EncodeToString(b[:])
+	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+}
+
+var instanceRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// ValidInstance reports whether s is usable as an instance id (a UUID or a
+// cloud instance id such as i-0abc123).
+func ValidInstance(s string) bool { return instanceRE.MatchString(s) }
+
+// OnInstanceEnd sets fn, called (outside the fleet's locks) when a peer's
+// incarnation ends: the peer was removed, or its instance replaced. host and
+// instance name the incarnation that ended.
+func (f *Fleet) OnInstanceEnd(fn func(host, instance, why string)) {
+	f.mu.Lock()
+	f.instanceEnd = fn
+	f.mu.Unlock()
+}
+
+func (f *Fleet) ended(host, instance, why string) {
+	f.mu.RLock()
+	fn := f.instanceEnd
+	f.mu.RUnlock()
+	if fn != nil && instance != "" {
+		fn(host, instance, why)
+	}
+}
+
+// Instances maps each peer that has an instance to it. The local host and
+// static peers have none.
+func (f *Fleet) Instances() map[string]string {
+	out := map[string]string{}
+	for _, p := range f.peerList() {
+		if in := p.instance(); in != "" {
+			out[p.name] = in
+		}
+	}
+	return out
+}
+
+// SetInstance replaces a dynamic peer's instance (the cloud's id, set by
+// `worker create`). A different value ends the old incarnation: its ledger
+// entries are lost. The same value is a no-op.
+func (f *Fleet) SetInstance(name, instance, by string) (PeerInfo, error) {
+	if !ValidInstance(instance) {
+		return PeerInfo{}, InvalidError{"instance must be 1-64 letters, digits, '.', '_' or '-'"}
+	}
+	f.mu.Lock()
+	reg := f.reg
+	if reg == nil {
+		f.mu.Unlock()
+		return PeerInfo{}, ErrNoStore
+	}
+	p := f.byName[name]
+	switch {
+	case p == nil:
+		f.mu.Unlock()
+		return PeerInfo{}, ErrNotFound
+	case p.meta.Source == SourceStatic:
+		f.mu.Unlock()
+		return PeerInfo{}, ErrStaticPeer
+	}
+	old := p.instance()
+	if old == instance {
+		f.mu.Unlock()
+		return f.info(name), nil
+	}
+	if err := reg.store.SetInstance(name, instance); err != nil {
+		f.mu.Unlock()
+		return PeerInfo{}, err
+	}
+	p.setInstance(instance)
+	f.mu.Unlock()
+	f.opts.Logf("peers: %s is now instance %s (was %s; by %s)", name, instance, old, by)
+	f.ended(name, old, "its host "+name+" was replaced by another machine ("+instance+")")
+	f.broadcast()
+	return f.info(name), nil
 }
 
 // Refusals of Announce.

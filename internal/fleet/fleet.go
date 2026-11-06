@@ -128,6 +128,8 @@ type Fleet struct {
 	hub        *state.Hub
 	bmu        sync.Mutex // serializes broadcasts so snapshots go out in order
 	excerpts   chan struct{}
+	// instanceEnd is told when a peer's incarnation ends (OnInstanceEnd).
+	instanceEnd func(host, instance, why string)
 }
 
 // New builds a fleet over local (may be nil in tests) named localName.
@@ -160,7 +162,7 @@ func (f *Fleet) addLocked(cfg Peer) *peer {
 		cfg.Source = SourceStatic
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &peer{f: f, name: cfg.Name, addrs: cfg.URLs, meta: cfg, status: StatusConnecting, tracker: state.NewTracker(), ctx: ctx, cancel: cancel}
+	p := &peer{f: f, name: cfg.Name, addrs: cfg.URLs, meta: cfg, inst: cfg.Instance, status: StatusConnecting, tracker: state.NewTracker(), ctx: ctx, cancel: cancel}
 	f.peers = append(f.peers, p)
 	f.byName[cfg.Name] = p
 	return p
@@ -306,8 +308,25 @@ type peer struct {
 	version   string // X-Comebye-Version of the last answer ("" = unknown)
 	agents    []herdr.AgentInfo
 	tracker   *state.Tracker
-	checked   bool // the peer's push setting was checked
-	capped    bool // the last snapshot was cut to maxPeerAgents (logged once)
+	checked   bool   // the peer's push setting was checked
+	capped    bool   // the last snapshot was cut to maxPeerAgents (logged once)
+	inst      string // the peer's incarnation id (Record.Instance); "" for a static peer
+}
+
+func (p *peer) instance() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.inst
+}
+
+// setInstance changes the id and re-stamps the agents already held.
+func (p *peer) setInstance(in string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.inst = in
+	for i := range p.agents {
+		p.agents[i].Instance = in
+	}
 }
 
 // maxPeerAgents caps the agents taken from one peer snapshot. A real host
@@ -602,6 +621,7 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 			own = h.Name
 		}
 	}
+	inst := p.instance()
 	kept := make([]herdr.AgentInfo, 0, min(len(agents), maxPeerAgents))
 	dropped := false
 	for _, a := range agents {
@@ -622,6 +642,7 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 		}
 		a.Host = p.name
 		a.ID = state.QualifiedID(p.name, a.PaneID)
+		a.Instance = inst // the hub's own record, never what the peer said
 		kept = append(kept, a)
 	}
 	now := time.Now()

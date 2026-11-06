@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -82,6 +83,29 @@ func (h *hubClient) Peer(ctx context.Context, name string) (*hubPeer, error) {
 		}
 	}
 	return nil, nil
+}
+
+// SetInstance tells the hub which machine the peer is: the cloud's instance
+// id. Worker names are reused, and the hub ties ledger entries and to-do
+// items to this id so that a new machine under an old name is not mistaken
+// for the old one (its old unfinished entries become "lost").
+func (h *hubClient) SetInstance(ctx context.Context, name, instance string) error {
+	body, _ := json.Marshal(map[string]string{"instance": instance})
+	req, err := http.NewRequestWithContext(ctx, "PUT", h.base+"/api/peers/"+url.PathEscape(name)+"/instance", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("hub PUT instance: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("hub PUT /api/peers/%s/instance: HTTP %d %s", name, resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
 }
 
 // RemovePeer deletes the hub's entry; a missing one is fine. A static peer

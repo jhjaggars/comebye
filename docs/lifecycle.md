@@ -60,7 +60,10 @@ stateDiagram-v2
     ready_to_remove --> landed: unmark (had landed)
     ready_to_remove --> removed: user confirms in the app
     removed --> [*]
+    running --> lost: its host was removed or taken over by another machine
+    landing --> lost: same
     failed --> [*]
+    lost --> [*]
 ```
 
 `finished` is the **reported** state: the worker stopped and its final
@@ -79,6 +82,7 @@ same call that moves the entry to `landing`.
 | `ready_to_remove` | `comebye mark`, `comebye sweep`, or the app | coordinator, user | unmark → back; the user confirms → `removed` |
 | `removed` | the user confirmed the removal in the app | user | (final) |
 | `failed` | the worker never started | hub | (final) |
+| `lost` | the worker's host was removed from the hub, or its name taken over by another machine (a reused spot-worker name), before the work was reported. Entries follow one *instance* of a host (the hub's peer registry: a UUID, or the cloud instance id `worker create` records), so the new machine's panes never move an old entry. The branch and brief remain; `error` says why | hub | (final) |
 
 ## Workflows
 

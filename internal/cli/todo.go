@@ -36,6 +36,7 @@ type apiTodo struct {
 	Waiting *struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Gone bool   `json:"gone"`
 	} `json:"waiting"`
 	Answer *struct {
 		Text string    `json:"text"`
@@ -54,10 +55,14 @@ func (t apiTodo) waiter() string {
 	if t.Waiting == nil {
 		return "-"
 	}
+	w := t.Waiting.ID
 	if t.Waiting.Name != "" {
-		return t.Waiting.Name + " (" + t.Waiting.ID + ")"
+		w = t.Waiting.Name + " (" + t.Waiting.ID + ")"
 	}
-	return t.Waiting.ID
+	if t.Waiting.Gone {
+		w += " - GONE: the agent that asked is gone (its host was replaced or removed), so do not relay the answer to whatever has that id now"
+	}
+	return w
 }
 
 var linkLabelRE = regexp.MustCompile(`^([^=]{1,40})=(https?://.*)$`)

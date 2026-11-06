@@ -28,6 +28,12 @@ type Record struct {
 	// carry: a self-registered peer's allowed tag. On the hub's peer
 	// listener a node of this peer must still carry it.
 	Tag string `json:"tag,omitempty"`
+	// Instance identifies this incarnation of the peer: a UUID the hub made
+	// when it was added, or the cloud's instance id of a spot worker (set by
+	// `worker create`). A peer removed and added again gets a new one, so
+	// ledger entries and to-do items can tell a reused name from the old
+	// machine. Never taken from the peer itself.
+	Instance string `json:"instance,omitempty"`
 }
 
 // Peer converts a stored record to a Peer (the URLs were validated when
@@ -116,6 +122,25 @@ func (s *Store) Add(r Record) error {
 	s.recs[r.Name] = r
 	if err := s.save(); err != nil {
 		delete(s.recs, r.Name)
+		return err
+	}
+	return nil
+}
+
+// SetInstance changes the named record's instance and writes the file.
+func (s *Store) SetInstance(name, instance string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.recs[name]
+	if !ok {
+		return ErrNotFound
+	}
+	old := r.Instance
+	r.Instance = instance
+	s.recs[name] = r
+	if err := s.save(); err != nil {
+		r.Instance = old
+		s.recs[name] = r
 		return err
 	}
 	return nil

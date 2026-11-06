@@ -113,6 +113,7 @@ const maxLinkAfterStart = 5 * time.Minute
 // links must also fall inside this VM's life.
 type linkScope struct {
 	host      string
+	instance  string // a worker's VM (cloud instance id), when known
 	worker    bool
 	notBefore time.Time
 }
@@ -122,7 +123,7 @@ func scopeOf(host string, claims map[string]hostClaim) linkScope {
 	if !ok || cl.Kind != hostKindWorker {
 		return linkScope{host: host}
 	}
-	s := linkScope{host: cl.Worker, worker: true}
+	s := linkScope{host: cl.Worker, instance: cl.InstanceID, worker: true}
 	s.notBefore, _ = time.Parse(time.RFC3339, cl.InstanceCreated)
 	return s
 }

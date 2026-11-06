@@ -243,3 +243,96 @@ func TestCleanVersion(t *testing.T) {
 		t.Fatal("cleanVersion")
 	}
 }
+
+func TestPeerInstances(t *testing.T) {
+	static := newFakePeer(t)
+	f, store := registryFleet(t, "v1.0.0", Peer{Name: "stat", URLs: []*url.URL{static.url()}})
+	var ended [][3]string
+	f.OnInstanceEnd(func(host, in, why string) { ended = append(ended, [3]string{host, in, why}) })
+
+	// The peer claims an instance of its own in its agent list: ignored.
+	forged := agent("wS:p1", "remote", herdr.StatusIdle)
+	forged.Instance = "i-forged"
+	fp := newFakePeer(t, forged)
+	info, err := f.Add("w1", []string{fp.srv.URL}, "me", "")
+	if err != nil || info.Instance == "" || len(info.Instance) != 36 {
+		t.Fatalf("add = %+v %v", info, err)
+	}
+	if rec, _ := store.Get("w1"); rec.Instance != info.Instance {
+		t.Fatalf("not stored: %+v", rec)
+	}
+	waitFor(t, "stamped agent", func() bool {
+		for _, a := range f.Agents() {
+			if a.ID == "w1/wS:p1" {
+				return a.Instance == info.Instance
+			}
+		}
+		return false
+	})
+	if got := f.Instances(); got["w1"] != info.Instance || len(got) != 1 {
+		t.Fatalf("instances = %v (a static peer has none)", got)
+	}
+
+	// The cloud's id replaces it; the agents are re-stamped and the old
+	// incarnation ends.
+	if _, err := f.SetInstance("w1", "bad id!", "me"); !errors.As(err, new(InvalidError)) {
+		t.Fatalf("bad instance: %v", err)
+	}
+	if _, err := f.SetInstance("stat", "i-1", "me"); !errors.Is(err, ErrStaticPeer) {
+		t.Fatalf("static: %v", err)
+	}
+	if _, err := f.SetInstance("nope", "i-1", "me"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown: %v", err)
+	}
+	if _, err := f.SetInstance("w1", "i-0abc123", "me"); err != nil {
+		t.Fatal(err)
+	}
+	if len(ended) != 1 || ended[0][0] != "w1" || ended[0][1] != info.Instance || !strings.Contains(ended[0][2], "i-0abc123") {
+		t.Fatalf("ended = %v", ended)
+	}
+	for _, a := range f.Agents() {
+		if a.ID == "w1/wS:p1" && a.Instance != "i-0abc123" {
+			t.Fatalf("agent still stamped %q", a.Instance)
+		}
+	}
+	if rec, _ := store.Get("w1"); rec.Instance != "i-0abc123" {
+		t.Fatalf("not stored: %+v", rec)
+	}
+	// The same value again is not a new incarnation.
+	if _, err := f.SetInstance("w1", "i-0abc123", "me"); err != nil || len(ended) != 1 {
+		t.Fatalf("same instance: %v ended=%v", err, ended)
+	}
+
+	// Removing the peer ends it; adding the name again is a new one.
+	if err := f.Remove("w1", "me"); err != nil {
+		t.Fatal(err)
+	}
+	if len(ended) != 2 || ended[1][1] != "i-0abc123" {
+		t.Fatalf("ended = %v", ended)
+	}
+	again, err := f.Add("w1", []string{fp.srv.URL}, "me", "")
+	if err != nil || again.Instance == "" || again.Instance == "i-0abc123" || again.Instance == info.Instance {
+		t.Fatalf("re-added = %+v %v", again, err)
+	}
+}
+
+// A peers.json from before instances: each stored peer gets one, saved.
+func TestLoadDynamicGivesLegacyPeersAnInstance(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := OpenStore(dir)
+	if err := store.Add(Record{Name: "w1", URLs: []string{"https://w1.ts.net"}, AddedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	opt := AddrOptions{Domains: []string{".ts.net"}}
+	ps := LoadDynamic(store, nil, "desk", opt, t.Logf)
+	if len(ps) != 1 || ps[0].Instance == "" {
+		t.Fatalf("peers = %+v", ps)
+	}
+	again, _ := OpenStore(dir)
+	if rec, _ := again.Get("w1"); rec.Instance != ps[0].Instance {
+		t.Fatalf("not saved: %+v", rec)
+	}
+	if ps2 := LoadDynamic(again, nil, "desk", opt, t.Logf); ps2[0].Instance != ps[0].Instance {
+		t.Fatal("changes on every start")
+	}
+}

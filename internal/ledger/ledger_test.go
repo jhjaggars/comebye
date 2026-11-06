@@ -325,3 +325,122 @@ func TestPlanSupersedesFailedMember(t *testing.T) {
 		t.Fatalf("after the retry = %+v", got)
 	}
 }
+
+func inst(id, instance string, st herdr.AgentStatus) herdr.AgentInfo {
+	return herdr.AgentInfo{ID: id, Status: st, Instance: instance}
+}
+
+// A spot worker's name is reused: its old VM is destroyed and a new one gets
+// the same name, so the agent id "w1/w2:p1" names two different agents. An
+// unfinished entry of the first must not follow the second's status.
+func TestReusedWorkerNameDoesNotFollowNewInstance(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _ := s.Add(Entry{Host: "w1", HostInstance: "i-old", AgentID: "w1/w2:p1", Branch: "old", Brief: "first VM's job", Status: Running, SawWorking: true})
+	// The first w1 is destroyed: its agent disappears. The entry stays as it was.
+	s.Observe(nil, time.Now())
+	if e, _ := s.Get(old.ID); e.Status != Running {
+		t.Fatalf("entry moved while its agent was gone: %v", e.Status)
+	}
+	// A new VM is created under the same name and its pane has the same id.
+	// It is idle: it has not been given anything.
+	if caps := s.Observe([]herdr.AgentInfo{inst("w1/w2:p1", "i-new", herdr.StatusIdle)}, time.Now()); len(caps) != 0 {
+		t.Fatalf("captured a report from the wrong machine: %+v", caps)
+	}
+	e, _ := s.Get(old.ID)
+	if e.Status != Lost || e.FinishedAt != nil || e.LostAt == nil || !strings.Contains(e.Error, "i-new") {
+		t.Fatalf("old entry = %v finished=%v lost=%v err=%q; want lost, not finished", e.Status, e.FinishedAt, e.LostAt, e.Error)
+	}
+	if _, ok := s.ByAgent("w1/w2:p1"); ok {
+		t.Fatal("a lost entry still answers for the new w1's pane")
+	}
+}
+
+func TestReportedEntryDoesNotRestartOnNewInstance(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	old, _ := s.Add(Entry{Host: "w1", HostInstance: "i-old", AgentID: "w1/w2:p1", Branch: "b", Status: Finished, FinalReport: "done"})
+	s.Observe([]herdr.AgentInfo{inst("w1/w2:p1", "i-new", herdr.StatusWorking)}, time.Now())
+	e, _ := s.Get(old.ID)
+	if e.Status != Finished || e.FinalReport != "done" {
+		t.Fatalf("a new machine's work restarted the old report: %+v", e)
+	}
+	// The pane id now belongs to the new machine: the old entry no longer answers for it.
+	if _, ok := s.ByAgent("w1/w2:p1"); ok {
+		t.Fatal("ByAgent found the old instance's entry for the new instance's pane")
+	}
+}
+
+func TestSameInstanceKeepsFollowing(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	old, _ := s.Add(Entry{Host: "w1", HostInstance: "i-1", AgentID: "w1/w2:p1", Status: Running, SawWorking: true})
+	s.Observe([]herdr.AgentInfo{inst("w1/w2:p1", "i-1", herdr.StatusIdle)}, time.Now()) // a stop/start keeps the id
+	if e, _ := s.Get(old.ID); e.Status != Finished {
+		t.Fatalf("status %v, want finished", e.Status)
+	}
+}
+
+func TestLoseInstance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.json")
+	s, _ := Open(path)
+	run, _ := s.Add(Entry{Host: "w1", HostInstance: "i-1", AgentID: "w1/w2:p1", Status: Running, Callback: &Callback{State: CallbackPending}})
+	fin, _ := s.Add(Entry{Host: "w1", HostInstance: "i-1", AgentID: "w1/w3:p1", Status: Finished})
+	other, _ := s.Add(Entry{Host: "w1", HostInstance: "i-2", AgentID: "w1/w4:p1", Status: Running})
+	legacy, _ := s.Add(Entry{Host: "w1", AgentID: "w1/w5:p1", Status: Running})
+	lost, err := s.LoseInstance("w1", "i-1", "its host w1 was removed")
+	if err != nil || len(lost) != 1 || lost[0].ID != run.ID {
+		t.Fatalf("lost = %+v, %v", lost, err)
+	}
+	if s2, _ := Open(path); true {
+		if e, _ := s2.Get(run.ID); e.Status != Lost || e.Error == "" || e.Callback != nil {
+			t.Fatalf("not saved as lost: %+v", e)
+		}
+	}
+	for id, want := range map[string]Status{fin.ID: Finished, other.ID: Running, legacy.ID: Running} {
+		if e, _ := s.Get(id); e.Status != want {
+			t.Fatalf("%s = %v, want %v", id, e.Status, want)
+		}
+	}
+	if n, _ := s.LoseInstance("w1", "", "x"); n != nil {
+		t.Fatal("an empty instance must lose nothing")
+	}
+}
+
+func TestBackfill(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	a, _ := s.Add(Entry{Host: "w1", AgentID: "w1/w2:p1", Status: Running})
+	b, _ := s.Add(Entry{Host: "desk", AgentID: "desk/w2:p1", Status: Running})
+	c, _ := s.Add(Entry{Host: "w1", AgentID: "w1/w9:p1", Status: Removed})
+	d, _ := s.Add(Entry{Host: "w1", HostInstance: "i-keep", AgentID: "w1/w3:p1", Status: Running})
+	n, err := s.Backfill(map[string]string{"w1": "i-now"})
+	if err != nil || n != 1 {
+		t.Fatalf("backfilled %d, %v", n, err)
+	}
+	for id, want := range map[string]string{a.ID: "i-now", b.ID: "", c.ID: "", d.ID: "i-keep"} {
+		if e, _ := s.Get(id); e.HostInstance != want {
+			t.Fatalf("%s instance = %q, want %q", id, e.HostInstance, want)
+		}
+	}
+}
+
+// A ledger file from before instances loads unchanged and behaves as it did.
+func TestOldLedgerFileLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.json")
+	old := `{"version":1,"entries":[{"id":"h1","host":"w1","agent_id":"w1/w2:p1","branch":"b","brief":"x","status":"running","saw_working":true,"created_at":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := s.Get("h1")
+	if e.HostInstance != "" || e.Status != Running {
+		t.Fatalf("%+v", e)
+	}
+	s.Observe([]herdr.AgentInfo{inst("w1/w2:p1", "i-any", herdr.StatusIdle)}, time.Now())
+	if e, _ := s.Get("h1"); e.Status != Finished {
+		t.Fatalf("an entry without an instance should follow its agent as before: %v", e.Status)
+	}
+}

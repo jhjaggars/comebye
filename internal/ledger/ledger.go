@@ -41,6 +41,10 @@ const (
 	ReadyToRemove Status = "ready_to_remove"
 	Removed       Status = "removed"
 	Failed        Status = "failed"
+	// Lost: the host the worker ran on was removed or taken over by another
+	// machine (a reused worker name) before the work was reported. The branch
+	// and brief remain; nothing follows the new host's panes.
+	Lost Status = "lost"
 )
 
 // MaxReport caps a captured final report (bytes).
@@ -68,19 +72,24 @@ type Entry struct {
 	Kind             string   `json:"kind,omitempty"`
 	// Model and Thinking are what the handoff asked for (empty: the
 	// agent's default).
-	Model       string    `json:"model,omitempty"`
-	Thinking    string    `json:"thinking,omitempty"`
-	AgentID     string    `json:"agent_id,omitempty"` // "<host>/<pane>"
-	PaneID      string    `json:"pane_id,omitempty"`
-	AgentName   string    `json:"agent_name,omitempty"`
-	WorkspaceID string    `json:"workspace_id,omitempty"`
-	Worktree    string    `json:"worktree,omitempty"`
-	Reused      bool      `json:"reused,omitempty"`
-	Brief       string    `json:"brief"`
-	From        string    `json:"from,omitempty"`
-	Status      Status    `json:"status"`
-	Error       string    `json:"error,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	AgentID  string `json:"agent_id,omitempty"` // "<host>/<pane>"
+	// HostInstance is the incarnation of Host the worker started on (the
+	// hub's peer registry). A host name can be reused by another machine; the
+	// entry follows only agents of this instance. Empty: an entry from before
+	// instances, or a host without one (the hub's own).
+	HostInstance string    `json:"host_instance,omitempty"`
+	PaneID       string    `json:"pane_id,omitempty"`
+	AgentName    string    `json:"agent_name,omitempty"`
+	WorkspaceID  string    `json:"workspace_id,omitempty"`
+	Worktree     string    `json:"worktree,omitempty"`
+	Reused       bool      `json:"reused,omitempty"`
+	Brief        string    `json:"brief"`
+	From         string    `json:"from,omitempty"`
+	Status       Status    `json:"status"`
+	Error        string    `json:"error,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 	// SawWorking: the agent was seen working since it started (or since
 	// it last finished), so going idle now means it finished.
 	SawWorking  bool       `json:"saw_working,omitempty"`
@@ -112,6 +121,8 @@ type Entry struct {
 	// LandCheck is the hub's check after the landing report.
 	LandCheck *LandCheck `json:"land_check,omitempty"`
 	RemovedAt *time.Time `json:"removed_at,omitempty"`
+	// LostAt is when the entry became Lost (Error says why).
+	LostAt *time.Time `json:"lost_at,omitempty"`
 	// Removal is the owning host's account of the removal (what was
 	// closed, whether the worktree went and why not).
 	Removal json.RawMessage `json:"removal,omitempty"`
@@ -233,6 +244,10 @@ type Store struct {
 	mu   sync.Mutex
 	path string
 	data file
+	// inst is each live agent's instance as of the last Observe (agent id ->
+	// instance), so a lookup by agent id can tell an old entry from a reused
+	// name. Not persisted.
+	inst map[string]string
 }
 
 // Open loads the ledger at path, or starts an empty one if the file does
@@ -409,11 +424,67 @@ func (s *Store) ByAgent(agentID string) (Entry, bool) {
 
 func (s *Store) byAgent(agentID string) *Entry {
 	for i := len(s.data.Entries) - 1; i >= 0; i-- {
-		if e := s.data.Entries[i]; e.AgentID == agentID && active(e) {
+		if e := s.data.Entries[i]; e.AgentID == agentID && active(e) && !s.otherInstance(e, agentID) {
 			return e
 		}
 	}
 	return nil
+}
+
+// otherInstance reports whether the live agent now named agentID belongs to
+// another incarnation of the host than the entry's.
+func (s *Store) otherInstance(e *Entry, agentID string) bool {
+	live, ok := s.inst[agentID]
+	return e.HostInstance != "" && ok && live != "" && live != e.HostInstance
+}
+
+// LoseInstance settles the unfinished entries (running or landing) of an
+// incarnation of host that ended to Lost, with why. Entries already reported
+// keep their status: their work was reported, and they stop following the
+// host's panes anyway (their HostInstance no longer matches).
+func (s *Store) LoseInstance(host, instance, why string) ([]Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if instance == "" {
+		return nil, nil
+	}
+	var out []Entry
+	now := time.Now().UTC()
+	for _, e := range s.data.Entries {
+		if e.Host != host || e.HostInstance != instance || (e.Status != Running && e.Status != Landing) {
+			continue
+		}
+		e.Status, e.Error, e.LostAt = Lost, why, &now
+		e.Callback = nil
+		out = append(out, copyEntry(e))
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, s.save()
+}
+
+// Backfill gives the active entries that predate instances the instance their
+// host has now (hosts maps host -> instance), assuming the machine there is
+// the one that ran them, which is what they have always assumed. It returns
+// how many it stamped.
+func (s *Store) Backfill(hosts map[string]string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, e := range s.data.Entries {
+		if e.HostInstance != "" || !e.Active() {
+			continue
+		}
+		if in := hosts[e.Host]; in != "" {
+			e.HostInstance = in
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return n, s.save()
 }
 
 // Marks returns the marks on agents that are not ledger workers.
@@ -544,8 +615,10 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	byID := make(map[string]*herdr.AgentInfo, len(agents))
+	s.inst = make(map[string]string, len(agents))
 	for i := range agents {
 		byID[agents[i].ID] = &agents[i]
+		s.inst[agents[i].ID] = agents[i].Instance
 	}
 	changed := false
 	var capture []Entry
@@ -555,6 +628,17 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 		}
 		a := byID[e.AgentID]
 		if a == nil {
+			continue
+		}
+		if e.HostInstance != "" && a.Instance != "" && a.Instance != e.HostInstance {
+			// The host name now belongs to another machine: this agent is not
+			// the entry's. An unfinished entry is lost; a reported one stays.
+			if e.Status == Running || e.Status == Landing {
+				t := now.UTC()
+				e.Status, e.LostAt, e.Callback = Lost, &t, nil
+				e.Error = "its host " + e.Host + " was replaced by another machine (instance " + a.Instance + ")"
+				changed = true
+			}
 			continue
 		}
 		if e.Status == Landing {

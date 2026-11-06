@@ -68,6 +68,12 @@ type TodoLink struct {
 type TodoAgent struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
+	// Instance is the incarnation of the agent's host when the item was
+	// added (set by the hub from its peer registry, never from the request).
+	Instance string `json:"instance,omitempty"`
+	// Gone is computed when the item is served: the host is no longer that
+	// incarnation, so the agent that asked is not the one now at that id.
+	Gone bool `json:"gone,omitempty"`
 }
 
 // TodoAnswer is the answer to an item. Via is "app" (the user typed it in
@@ -225,7 +231,7 @@ func sameWaiting(a, b *TodoAgent) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.ID == b.ID
+	return a.ID == b.ID && a.Instance == b.Instance
 }
 
 func (t *todoStore) get(id string) (Todo, bool) {
@@ -536,7 +542,7 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		waiting = s.replyID(c)
 	}
 	if waiting != "" {
-		it.Waiting = &TodoAgent{ID: waiting}
+		it.Waiting = &TodoAgent{ID: waiting, Instance: s.hostInstance(idHost(waiting))}
 		for _, a := range s.fleet.Agents() {
 			if a.ID == waiting {
 				it.Waiting.Name = a.Name
@@ -583,7 +589,7 @@ func (s *Server) handleTodoList(w http.ResponseWriter, r *http.Request) {
 			answered++
 		}
 	}
-	writeJSON(w, map[string]any{"todos": items, "open": open, "answered": answered})
+	writeJSON(w, map[string]any{"todos": s.todosGone(items), "open": open, "answered": answered})
 }
 
 func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
@@ -595,7 +601,7 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		todoErr(w, errTodoNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"todo": it})
+	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
 }
 
 // handleTodoAnswer: POST /api/todos/{id}/answer {text}. The user's answer
@@ -629,7 +635,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	if via == "app" {
 		s.deliverTodoNotices(s.fleet.Agents())
 	}
-	writeJSON(w, map[string]any{"todo": it})
+	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
 }
 
 // handleTodoDone and handleTodoDrop: POST /api/todos/{id}/done|drop.
@@ -657,7 +663,7 @@ func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string)
 		todoErr(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"todo": it})
+	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
 }
 
 // ---- telling the coordinator ----
@@ -723,4 +729,25 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 		}
 		t.settleNotices(ids, todoNoticeSent)
 	}(*target)
+}
+
+// todoGone marks the waiting agent gone when its host is no longer the
+// incarnation the item was added under (the peer was removed, or its name
+// taken over by another machine). Items from before instances never are.
+func (s *Server) todoGone(it Todo) Todo {
+	if it.Waiting == nil || it.Waiting.Instance == "" {
+		return it
+	}
+	w := *it.Waiting
+	w.Gone = s.hostInstance(idHost(w.ID)) != w.Instance
+	it.Waiting = &w
+	return it
+}
+
+func (s *Server) todosGone(items []Todo) []Todo {
+	out := make([]Todo, len(items))
+	for i, it := range items {
+		out[i] = s.todoGone(it)
+	}
+	return out
 }

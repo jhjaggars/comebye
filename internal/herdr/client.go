@@ -165,6 +165,10 @@ type AgentInfo struct {
 	// file's mtime when there is one, else when this server first saw the
 	// agent in its current status. herdr itself reports no timestamps.
 	LastActive *time.Time `json:"last_active,omitempty"`
+	// Instance identifies the host's incarnation: it changes when a host
+	// name is taken over by another machine (a reused spot worker name). The
+	// hub sets it from its peer registry and never believes a peer's own.
+	Instance string `json:"instance,omitempty"`
 	// StatusSince is when comebye saw the agent enter its current
 	// status (so the app can show "working for 2m"); unknown after a
 	// restart until the next change, when it is the restart time.

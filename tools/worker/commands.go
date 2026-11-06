@@ -372,6 +372,15 @@ func (e *env) awaitJoin(ctx context.Context, name string) error {
 		return fmt.Errorf("worker %s is built and on the tailnet, but not yet a peer", name)
 	}
 	e.printf("hub: %s is %s (%d agents, %s)\n", name, p.Status, p.Agents, orDash(p.Version))
+	// The hub ties ledger entries to this machine, not the name. A failure
+	// leaves the hub's own id for the peer: still one per registration.
+	if inst, err := e.prov().Describe(ctx, name); err == nil && inst != nil && inst.ID != "" {
+		if err := e.hub().SetInstance(ctx, name, inst.ID); err != nil {
+			e.printf("hub: could not record %s's instance id (%v); entries still follow this registration, but an old %s would not be told apart\n", name, err, name)
+		} else {
+			e.printf("hub: %s is instance %s\n", name, inst.ID)
+		}
+	}
 	return nil
 }
 
