@@ -1414,6 +1414,13 @@ await check("transcripts: no index, an old index, a stale one, a deleted session
   await withStatus({ state: "missing", sessions: 0, messages: 0 }, "no transcript index yet");
   await withStatus({ state: "outdated", sessions: 0, messages: 0 }, "older version");
   await withStatus({ state: "stale", built_at: new Date(Date.now() - 86400000 * 2).toISOString(), sessions: 3, messages: 9 }, "last built 2d ago");
+  // Content days old, with the indexer still looking: the age shown is the look's.
+  await page.route(/\/api\/recall\/status$/, (r) => r.fulfill({ json: { state: "ok", built_at: new Date(Date.now() - 86400000 * 3).toISOString(), checked_at: new Date(Date.now() - 600000).toISOString(), snapshot: "x.db.zst", sessions: 3, messages: 9 } }));
+  await page.goto("about:blank");
+  await page.goto(base + "/#/transcripts", { waitUntil: "load" });
+  await page.waitForFunction(() => /indexed 10m ago/.test(document.querySelector("#rc-fresh").textContent), null, { timeout: 5000 });
+  if (await page.locator("#rc-fresh.warn").count()) throw new Error("warns about a copy whose indexer is alive");
+  await page.unroute(/\/api\/recall\/status$/);
   await page.goto(base + "/#/session/devbox/claude/gone-session", { waitUntil: "load" });
   await page.waitForFunction(() => /isn't in the index/.test(document.querySelector("#rc-session").textContent), null, { timeout: 5000 });
 });

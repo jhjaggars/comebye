@@ -274,6 +274,9 @@ func TestAllHostsPublishPullAndVerifyCommands(t *testing.T) {
 	if err != nil || !strings.Contains(out, "3 sessions in 2 threads") || !strings.Contains(out, "hosts: hub, laharl") || !strings.Contains(out, "published index/") {
 		t.Fatalf("%v %s %s", err, out, e)
 	}
+	if out, e, err = as("laharl", "archive", "index", "--all-hosts", "--publish", "--ledger", "none", "--git=false"); err != nil || !strings.Contains(out, "not published: the content is what index/") {
+		t.Fatalf("an unchanged index: %v %s %s", err, out, e)
+	}
 	out, e, err = as("hub", "archive", "index", "--pull")
 	if err != nil || !strings.Contains(out, "now holds index/") {
 		t.Fatalf("%v %s %s", err, out, e)
@@ -282,7 +285,7 @@ func TestAllHostsPublishPullAndVerifyCommands(t *testing.T) {
 		t.Fatalf("%v %s", err, out)
 	}
 	out, _, err = as("hub", "archive", "status")
-	if err != nil || !strings.Contains(out, "pulled from snapshot") || !strings.Contains(out, "3 sessions on") || !strings.Contains(out, "newest snapshot in the store: index/") {
+	if err != nil || !strings.Contains(out, "pulled from snapshot") || !strings.Contains(out, "3 sessions on") || !strings.Contains(out, "newest snapshot in the store: index/") || !strings.Contains(out, "indexer last looked") || !strings.Contains(out, "last check in the store: ") {
 		t.Fatalf("%v %s", err, out)
 	}
 	if out, _, err = as("laharl", "archive", "status"); err != nil || !strings.Contains(out, "built on this machine") {

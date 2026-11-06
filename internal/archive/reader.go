@@ -86,8 +86,12 @@ type IndexStatus struct {
 	Sessions int      `json:"sessions"`
 	Messages int      `json:"messages"`
 	// Snapshot names the snapshot this file was pulled from; "" for an index
-	// this machine builds. BuiltAt is when the machine that built it did.
-	Snapshot string `json:"snapshot,omitempty"`
+	// this machine builds. BuiltAt is when the machine that built it did, which
+	// for a pull is when the content last changed. CheckedAt, on a pulled copy, is
+	// when that machine last looked and found this content still current. State
+	// goes by whichever is later.
+	Snapshot  string `json:"snapshot,omitempty"`
+	CheckedAt string `json:"checked_at,omitempty"`
 }
 
 // staleAfter: the index is rebuilt hourly, so two missed builds mean trouble.
@@ -108,21 +112,31 @@ func (r *Reader) Status(ctx context.Context) (IndexStatus, error) {
 	if len(rows) == 0 || num(rows[0], "user_version") != schemaVersion {
 		return IndexStatus{State: "outdated"}, nil
 	}
-	rows, err = r.query(ctx, `SELECT (SELECT value FROM meta WHERE key='built_at') AS built_at, (SELECT value FROM meta WHERE key='snapshot_key') AS snapshot, count(*) AS sessions, coalesce(sum(n_msgs+n_sub),0) AS messages, group_concat(DISTINCT host) AS hosts FROM sessions;`)
+	rows, err = r.query(ctx, `SELECT (SELECT value FROM meta WHERE key='built_at') AS built_at, (SELECT value FROM meta WHERE key='snapshot_key') AS snapshot, (SELECT value FROM meta WHERE key='checked_at') AS checked_at, count(*) AS sessions, coalesce(sum(n_msgs+n_sub),0) AS messages, group_concat(DISTINCT host) AS hosts FROM sessions;`)
 	if err != nil || len(rows) == 0 {
 		if ctx.Err() != nil {
 			return IndexStatus{}, ctx.Err()
 		}
 		return IndexStatus{State: "unavailable"}, nil
 	}
-	st := IndexStatus{State: "ok", BuiltAt: sget(rows[0], "built_at"), Snapshot: sget(rows[0], "snapshot"), Sessions: num(rows[0], "sessions"), Messages: num(rows[0], "messages")}
+	st := IndexStatus{State: "ok", BuiltAt: sget(rows[0], "built_at"), Snapshot: sget(rows[0], "snapshot"), CheckedAt: sget(rows[0], "checked_at"), Sessions: num(rows[0], "sessions"), Messages: num(rows[0], "messages")}
 	if h := sget(rows[0], "hosts"); h != "" {
 		st.Hosts = strings.Split(h, ",")
 	}
-	if t, err := time.Parse(time.RFC3339, st.BuiltAt); err != nil || time.Since(t) > staleAfter {
+	if !seenWithin(staleAfter, st.BuiltAt, st.CheckedAt) {
 		st.State = "stale"
 	}
 	return st, nil
+}
+
+// seenWithin reports whether any of these RFC 3339 times is recent enough.
+func seenWithin(d time.Duration, times ...string) bool {
+	for _, s := range times {
+		if t, err := time.Parse(time.RFC3339, s); err == nil && time.Since(t) <= d {
+			return true
+		}
+	}
+	return false
 }
 
 func num(r map[string]any, k string) int {

@@ -2108,11 +2108,18 @@ async function rcLoadMeta() {
   } catch {}
 }
 
+// rcLastSeen is when the index was last known current. A pulled copy's content
+// can be days old with its indexer still looking every hour.
+function rcLastSeen(st) {
+  const built = Date.parse(st.built_at || ""), checked = Date.parse(st.checked_at || "");
+  return Number.isNaN(checked) || checked < built ? built : checked;
+}
+
 function renderRecallFresh() {
   const st = rc.status;
   const el = $("rc-fresh");
   if (!st) { el.textContent = ""; return; }
-  const at = Date.parse(st.built_at || "");
+  const at = rcLastSeen(st);
   el.textContent = Number.isNaN(at) ? "" : `indexed ${fmtAgo(at)} ago`;
   el.classList.toggle("warn", st.state === "stale");
 }
@@ -2308,7 +2315,7 @@ function renderRecallResults() {
   const st = rc.status;
   const kids = [];
   if (st && st.state === "stale") {
-    const at = Date.parse(st.built_at || "");
+    const at = rcLastSeen(st);
     const d = rcNotice(`The index was last built ${Number.isNaN(at) ? "a while" : fmtAgo(at)} ago, so recent sessions are missing.`);
     d.classList.add("warn");
     kids.push(d);

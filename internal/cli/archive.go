@@ -238,15 +238,19 @@ func cmdArchive(e *Env, args []string) error {
 		if err != nil {
 			return err
 		}
+		lastCheck, err := archive.LastCheck(a.B, *snapshotPrefix)
+		if err != nil {
+			return err
+		}
 		if *asJSON {
-			return jsonOut(e, map[string]any{"host": a.Host, "sessions": len(ss), "by_kind": byKind, "segments": segs, "raw_bytes": raw, "stored_bytes": stored, "index": ix, "newest_snapshot": newest})
+			return jsonOut(e, map[string]any{"host": a.Host, "sessions": len(ss), "by_kind": byKind, "segments": segs, "raw_bytes": raw, "stored_bytes": stored, "index": ix, "newest_snapshot": newest, "last_check": lastCheck})
 		}
 		ratio := 0.0
 		if stored > 0 {
 			ratio = float64(raw) / float64(stored)
 		}
 		fmt.Fprintf(e.Stdout, "host %s: %d sessions %v, %d segments, %s raw, %s stored (%.1fx)\n", a.Host, len(ss), byKind, segs, human(raw), human(stored), ratio)
-		printIndexFreshness(e, cfg.IndexPath(), ix, newest)
+		printIndexFreshness(e, cfg.IndexPath(), ix, newest, lastCheck)
 		return nil
 	case "index":
 		if *pull && (*allHosts || *publish) {
@@ -270,7 +274,7 @@ func cmdArchive(e *Env, args []string) error {
 				return jsonOut(e, map[string]any{"result": res, "index": ix.Path, "seconds": time.Since(t0).Seconds()})
 			}
 			if res.UpToDate {
-				fmt.Fprintf(e.Stdout, "%s is up to date with %s\n", ix.Path, res.Key)
+				fmt.Fprintf(e.Stdout, "%s is up to date with %s (indexer last looked %s)\n", ix.Path, res.Key, res.CheckedAt)
 				return nil
 			}
 			fmt.Fprintf(e.Stdout, "%s now holds %s: %d sessions, built %s, %s downloaded (%.1fs)\n", ix.Path, res.Key, res.Sessions, res.BuiltAt, human(res.Stored), time.Since(t0).Seconds())
@@ -344,7 +348,11 @@ func cmdArchive(e *Env, args []string) error {
 			return pubErr
 		}
 		if pub != nil {
-			fmt.Fprintf(e.Stdout, "published %s: %s, %s stored, %d older removed\n", pub.Key, human(pub.DBBytes), human(pub.Stored), len(pub.Pruned))
+			if pub.Skipped {
+				fmt.Fprintf(e.Stdout, "not published: the content is what %s already holds\n", pub.Key)
+			} else {
+				fmt.Fprintf(e.Stdout, "published %s: %s, %s stored, %d older removed\n", pub.Key, human(pub.DBBytes), human(pub.Stored), len(pub.Pruned))
+			}
 			if pub.PruneError != "" {
 				fmt.Fprintln(e.Stderr, "warning: older snapshots were not removed:", pub.PruneError)
 			}
@@ -477,7 +485,7 @@ func cmdArchive(e *Env, args []string) error {
 // printIndexFreshness says what the index file holds and how old it is. The
 // build time is the indexing machine's, so a pulled copy that stopped updating
 // shows its real age.
-func printIndexFreshness(e *Env, path string, st archive.IndexStatus, newest string) {
+func printIndexFreshness(e *Env, path string, st archive.IndexStatus, newest string, lastCheck *archive.SnapshotCheck) {
 	switch st.State {
 	case "missing":
 		fmt.Fprintf(e.Stdout, "index: none at %s\n", path)
@@ -486,9 +494,15 @@ func printIndexFreshness(e *Env, path string, st archive.IndexStatus, newest str
 	case "unavailable":
 		fmt.Fprintf(e.Stdout, "index: %s could not be read\n", path)
 	default:
-		age := "at an unknown time"
-		if t, err := time.Parse(time.RFC3339, st.BuiltAt); err == nil {
-			age = time.Since(t).Round(time.Minute).String() + " ago"
+		ago := func(at string) string {
+			if t, err := time.Parse(time.RFC3339, at); err == nil {
+				return time.Since(t).Round(time.Minute).String() + " ago"
+			}
+			return "at an unknown time"
+		}
+		age := ago(st.BuiltAt)
+		if st.CheckedAt != "" {
+			age += ", indexer last looked " + ago(st.CheckedAt)
 		}
 		from := "built on this machine"
 		if st.Snapshot != "" {
@@ -502,6 +516,9 @@ func printIndexFreshness(e *Env, path string, st archive.IndexStatus, newest str
 	}
 	if newest != "" {
 		fmt.Fprintf(e.Stdout, "newest snapshot in the store: %s\n", newest)
+	}
+	if lastCheck != nil {
+		fmt.Fprintf(e.Stdout, "last check in the store: %s, content in %s\n", lastCheck.CheckedAt, lastCheck.Snapshot)
 	}
 }
 

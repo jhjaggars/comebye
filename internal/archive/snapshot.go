@@ -2,6 +2,9 @@ package archive
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +27,13 @@ import (
 // A snapshot is <prefix><time>.db.zst: the database, zstd-compressed, and in the
 // age mode then sealed like everything else in the store. A copy is in rollback
 // journal mode, never WAL, so that a reader creates no files beside it.
+//
+// A snapshot is large and the store's backups keep what it overwrites, so one is
+// only uploaded when the index's content differs from the last one's. Every run
+// also writes a small check object, <prefix><time>.check.json, saying when it
+// looked and what it found. A pull copies that time into the local file, so a
+// copy whose content has not changed for days still shows that its indexer is
+// alive, and one whose indexer has stopped goes stale.
 
 // SnapshotPrefix is where snapshots live in the store.
 const SnapshotPrefix = "index/"
@@ -39,7 +50,18 @@ const (
 // foldWait is how long foldWAL keeps trying: longer than a Reader's query may run.
 var foldWait = 4 * time.Second
 
-var snapshotRE = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z\.db\.zst$`)
+var (
+	snapshotRE = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z\.db\.zst$`)
+	checkRE    = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z\.check\.json$`)
+)
+
+// SnapshotCheck is what an indexing run found. Objects are never overwritten, so
+// each run writes a new one and the older ones get removed.
+type SnapshotCheck struct {
+	CheckedAt   string `json:"checked_at"`
+	Snapshot    string `json:"snapshot"`    // the key of the snapshot that holds this content
+	Fingerprint string `json:"fingerprint"` // see Index.fingerprint
+}
 
 // ErrNoSnapshot means the store holds no snapshot under the prefix.
 var ErrNoSnapshot = errors.New("archive: no index snapshot in the store")
@@ -47,8 +69,9 @@ var ErrNoSnapshot = errors.New("archive: no index snapshot in the store")
 // PublishResult reports Publish.
 type PublishResult struct {
 	Key     string   `json:"key"`
-	DBBytes int64    `json:"db_bytes"`
-	Stored  int64    `json:"stored_bytes"`
+	Skipped bool     `json:"skipped,omitempty"` // the content is what Key already holds: nothing uploaded
+	DBBytes int64    `json:"db_bytes,omitempty"`
+	Stored  int64    `json:"stored_bytes,omitempty"`
 	Pruned  []string `json:"pruned,omitempty"`
 	// PruneError: the snapshot is stored, but older ones could not be removed.
 	PruneError string `json:"prune_error,omitempty"`
@@ -58,9 +81,11 @@ type PublishResult struct {
 type PullResult struct {
 	Key      string `json:"key"`
 	UpToDate bool   `json:"up_to_date"` // the local file already is this snapshot or a newer one
-	BuiltAt  string `json:"built_at,omitempty"`
-	Sessions int    `json:"sessions,omitempty"`
-	Stored   int64  `json:"stored_bytes,omitempty"`
+	// CheckedAt is when the indexer last looked, as recorded in the local file.
+	CheckedAt string `json:"checked_at,omitempty"`
+	BuiltAt   string `json:"built_at,omitempty"`
+	Sessions  int    `json:"sessions,omitempty"`
+	Stored    int64  `json:"stored_bytes,omitempty"`
 }
 
 func checkSnapshotPrefix(prefix string) error {
@@ -92,6 +117,87 @@ func snapshots(b Backend, prefix string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// LastCheck returns the newest check object, or nil when there is none.
+func LastCheck(b Backend, prefix string) (*SnapshotCheck, error) {
+	if err := checkSnapshotPrefix(prefix); err != nil {
+		return nil, err
+	}
+	keys, err := b.List(prefix)
+	if err != nil {
+		return nil, err
+	}
+	newest := ""
+	for _, k := range keys {
+		if checkRE.MatchString(strings.TrimPrefix(k, prefix)) && k > newest {
+			newest = k
+		}
+	}
+	if newest == "" {
+		return nil, nil
+	}
+	raw, err := b.Get(newest)
+	if err != nil {
+		return nil, err
+	}
+	var c SnapshotCheck
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, fmt.Errorf("archive: reading %s: %w", newest, err)
+	}
+	return &c, nil
+}
+
+// writeCheck stores a check object and removes all but the newest two.
+func writeCheck(b Backend, prefix string, at time.Time, c SnapshotCheck) error {
+	body, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	key := prefix + at.UTC().Format(snapshotTimeFmt) + ".check.json"
+	if err := b.Put(key, body); err != nil && !errors.Is(err, ErrExists) {
+		return err
+	}
+	keys, err := b.List(prefix)
+	if err != nil {
+		return err
+	}
+	var checks []string
+	for _, k := range keys {
+		if checkRE.MatchString(strings.TrimPrefix(k, prefix)) {
+			checks = append(checks, k)
+		}
+	}
+	sort.Strings(checks)
+	for len(checks) > snapshotKeep {
+		if err := b.Delete(checks[0]); err != nil {
+			return err
+		}
+		checks = checks[1:]
+	}
+	return nil
+}
+
+// fingerprint hashes what a reader of the index can tell apart. It leaves out the
+// build time, which changes on every run, and the database's bytes, which a
+// rebuild of the thread tables changes without changing anything in them. A
+// session's messages follow from its archived bytes and its handoff link, so
+// those stand in for them.
+func (ix *Index) fingerprint() (string, error) {
+	h := sha256.New()
+	for _, sql := range []string{
+		"SELECT host,kind,id,n_bytes,link_sig,summary,summary_at FROM sessions ORDER BY host,kind,id;",
+		"SELECT id,host,title,brief,started,ended,n_sessions,hosts,repos,branches,verdict,outcome,keywords,summary,lead_kind,lead_id FROM threads ORDER BY id;",
+		"SELECT thread_id,host,kind,session_id FROM thread_sessions ORDER BY thread_id,host,kind,session_id;",
+		"SELECT thread_id,kind,ref,text,source,at FROM outcomes ORDER BY thread_id,kind,ref,text,source,at;",
+	} {
+		out, err := ix.run(sql, false)
+		if err != nil {
+			return "", fmt.Errorf("archive: fingerprinting the index: %w", err)
+		}
+		h.Write(out)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // NewestSnapshot returns the newest snapshot's key, or "" when there is none.
@@ -160,71 +266,101 @@ func (ix *Index) checkSnapshotDB() (builtAt string, sessions int, err error) {
 	return sget(rows[0], "built_at"), num(rows[0], "sessions"), nil
 }
 
-// Publish writes a consistent copy of the index to the store as a new snapshot
-// and removes all but the newest two. Only one machine should do this.
+// Publish records that the index was checked and, if its content differs from
+// the last snapshot's, first writes a consistent copy of it as a new snapshot and
+// removes all but the newest two. Only one machine should do this.
 func (ix *Index) Publish(a *Archiver, prefix string) (PublishResult, error) {
 	var res PublishResult
 	if err := checkSnapshotPrefix(prefix); err != nil {
 		return res, err
 	}
-	tmp, err := ix.tempBeside("publish")
+	fp, err := ix.fingerprint()
 	if err != nil {
 		return res, err
+	}
+	// An unreadable last check fails the run: it is not the same as "changed",
+	// and uploading on every blip is what this avoids.
+	last, err := LastCheck(a.B, prefix)
+	if err != nil {
+		return res, err
+	}
+	keys, err := snapshots(a.B, prefix)
+	if err != nil {
+		return res, err
+	}
+	if last != nil && last.Fingerprint == fp && slices.Contains(keys, last.Snapshot) {
+		res.Key, res.Skipped = last.Snapshot, true
+	} else if err := ix.upload(a, prefix, &res); err != nil {
+		return res, err
+	}
+	now := a.now()
+	if err := writeCheck(a.B, prefix, now, SnapshotCheck{CheckedAt: now.UTC().Format(time.RFC3339), Snapshot: res.Key, Fingerprint: fp}); err != nil {
+		return res, fmt.Errorf("archive: recording the check: %w", err)
+	}
+	return res, nil
+}
+
+// upload writes a new snapshot and removes all but the newest two.
+func (ix *Index) upload(a *Archiver, prefix string, res *PublishResult) error {
+	tmp, err := ix.tempBeside("publish")
+	if err != nil {
+		return err
 	}
 	defer removeDB(tmp)
 	key := prefix + a.now().UTC().Format(snapshotTimeFmt) + ".db.zst"
 	if _, err := ix.run("VACUUM INTO "+q(tmp)+";", false); err != nil {
-		return res, fmt.Errorf("archive: copying the index: %w", err)
+		return fmt.Errorf("archive: copying the index: %w", err)
 	}
 	c := &Index{Path: tmp, Sqlite: ix.Sqlite}
 	if _, err := c.run("PRAGMA journal_mode=DELETE; INSERT OR REPLACE INTO meta VALUES('snapshot_key',"+q(path.Base(key))+");", false); err != nil {
-		return res, fmt.Errorf("archive: preparing the copy: %w", err)
+		return fmt.Errorf("archive: preparing the copy: %w", err)
 	}
 	if _, _, err := c.checkSnapshotDB(); err != nil {
-		return res, fmt.Errorf("not publishing: %w", err)
+		return fmt.Errorf("not publishing: %w", err)
 	}
 	f, err := os.Open(tmp)
 	if err != nil {
-		return res, err
+		return err
 	}
 	defer f.Close()
 	var buf bytes.Buffer
 	zw, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedDefault))
 	if err != nil {
-		return res, err
+		return err
 	}
 	if res.DBBytes, err = io.Copy(zw, f); err != nil {
 		zw.Close()
-		return res, err
+		return err
 	}
 	if err := zw.Close(); err != nil {
-		return res, err
+		return err
 	}
 	sealed, err := a.S.Seal(buf.Bytes())
 	if err != nil {
-		return res, err
+		return err
 	}
 	if err := a.B.Put(key, sealed); err != nil {
-		return res, err
+		return err
 	}
 	res.Key, res.Stored = key, int64(len(sealed))
 	keys, err := snapshots(a.B, prefix)
 	if err != nil {
 		res.PruneError = err.Error()
-		return res, nil
+		return nil
 	}
 	for len(keys) > snapshotKeep {
 		if err := a.B.Delete(keys[0]); err != nil {
 			res.PruneError = err.Error()
-			return res, nil
+			return nil
 		}
 		res.Pruned = append(res.Pruned, keys[0])
 		keys = keys[1:]
 	}
-	return res, nil
+	return nil
 }
 
-// Pull downloads the newest snapshot, checks it, and moves it over the index.
+// Pull downloads the newest snapshot if it is new, checks it, and moves it over
+// the index, and records in the local file when the indexer last looked.
 // A failure at any step leaves the current file as it was. A reader that is in
 // the middle of a query finishes on the old file, and the next query opens the
 // new one.
@@ -238,6 +374,13 @@ func (ix *Index) Pull(a *Archiver, o Opener, prefix string) (PullResult, error) 
 		return res, fmt.Errorf("%w under %s: has the indexing machine run `archive index --all-hosts --publish`?", ErrNoSnapshot, prefix)
 	}
 	res.Key = key
+	check, err := LastCheck(a.B, prefix)
+	if err != nil {
+		return res, err
+	}
+	if check != nil {
+		res.CheckedAt = check.CheckedAt
+	}
 	dir := filepath.Dir(ix.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return res, err
@@ -253,6 +396,11 @@ func (ix *Index) Pull(a *Archiver, o Opener, prefix string) (PullResult, error) 
 		// An older index, or none of this, answers with an error or no row.
 		if rows, err := ix.Query("SELECT value FROM meta WHERE key='snapshot_key';"); err == nil && len(rows) == 1 && sget(rows[0], "value") >= path.Base(key) {
 			res.UpToDate = true
+			if check != nil {
+				if err := ix.recordCheck(check.CheckedAt); err != nil {
+					return res, err
+				}
+			}
 			return res, nil
 		}
 	}
@@ -282,6 +430,11 @@ func (ix *Index) Pull(a *Archiver, o Opener, prefix string) (PullResult, error) 
 	if _, err := c.run("PRAGMA journal_mode=DELETE;", false); err != nil {
 		return res, err
 	}
+	if check != nil {
+		if err := c.recordCheck(check.CheckedAt); err != nil {
+			return res, err
+		}
+	}
 	if err := ix.foldWAL(); err != nil {
 		return res, err
 	}
@@ -296,6 +449,13 @@ func (ix *Index) Pull(a *Archiver, o Opener, prefix string) (PullResult, error) 
 		d.Close()
 	}
 	return res, nil
+}
+
+// recordCheck stores when the indexer last looked. Readers wait out the moment
+// this takes.
+func (ix *Index) recordCheck(at string) error {
+	_, err := ix.run("INSERT OR REPLACE INTO meta VALUES('checked_at',"+q(at)+");", false)
+	return err
 }
 
 // unpackSnapshot decompresses to path, checking zstd's content checksum.

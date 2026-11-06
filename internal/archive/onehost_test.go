@@ -408,6 +408,14 @@ func builtIndex(t *testing.T, r *rig, name string) *Index {
 	return ix
 }
 
+// changeIndex changes what a reader of the index would see.
+func changeIndex(t *testing.T, ix *Index) {
+	t.Helper()
+	if _, err := ix.run("UPDATE sessions SET summary=coalesce(summary,'')||'x' WHERE rowid=(SELECT min(rowid) FROM sessions);", false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testPublishPull(t *testing.T, r *rig) {
 	t.Helper()
 	twoHosts(r)
@@ -420,14 +428,15 @@ func testPublishPull(t *testing.T, r *rig) {
 	}
 	var keys []string
 	for i := 0; i < 3; i++ {
+		changeIndex(t, ix)
 		res, err := ix.Publish(r.a, SnapshotPrefix)
-		if err != nil || res.PruneError != "" {
+		if err != nil || res.PruneError != "" || res.Skipped {
 			t.Fatalf("%v %+v", err, res)
 		}
 		keys = append(keys, res.Key)
 		r.now = r.now.Add(time.Hour)
 	}
-	stored, err := r.a.B.List(SnapshotPrefix)
+	stored, err := snapshots(r.a.B, SnapshotPrefix)
 	if err != nil || fmt.Sprint(stored) != fmt.Sprint(keys[1:]) {
 		t.Fatalf("keeps the newest two: %v %v", err, stored)
 	}
@@ -766,6 +775,7 @@ func TestReaderKeepsWorkingDuringPulls(t *testing.T) {
 	}
 	for i := 0; i < 8; i++ {
 		r.now = r.now.Add(time.Hour)
+		changeIndex(t, ix)
 		if _, err := ix.Publish(r.a, SnapshotPrefix); err != nil {
 			t.Fatal(err)
 		}
@@ -808,14 +818,18 @@ func TestPruneLeavesOtherObjectsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 4; i++ {
+		changeIndex(t, ix)
 		if _, err := ix.Publish(r.a, SnapshotPrefix); err != nil {
 			t.Fatal(err)
 		}
 		r.now = r.now.Add(time.Hour)
 	}
 	keys, _ := r.a.B.List(SnapshotPrefix)
-	if len(keys) != 3 {
+	if len(keys) != 5 { // two snapshots, two checks, and the other object
 		t.Errorf("%v", keys)
+	}
+	if err := r.a.B.Put(SnapshotPrefix+"zzz-notes.txt", []byte("x")); !errors.Is(err, ErrExists) {
+		t.Errorf("the other object went: %v", err)
 	}
 	if n, err := NewestSnapshot(r.a.B, SnapshotPrefix); err != nil || !strings.HasSuffix(n, "T120000Z.db.zst") && !strings.HasSuffix(n, "T130000Z.db.zst") {
 		t.Errorf("%v %s", err, n)
@@ -957,6 +971,196 @@ func TestReaderRecent(t *testing.T) {
 	} {
 		if res, err := rd.Recent(ctx, *f, 0); err != nil || res.Total != want || len(res.Hits) != want {
 			t.Errorf("%+v: %v %+v", *f, err, res)
+		}
+	}
+}
+
+// Nothing changed: no upload, but the check is written. A real change uploads.
+func TestPublishOnlyWhenChanged(t *testing.T) {
+	hasSqlite(t)
+	for name, mk := range map[string]func(*testing.T) *rig{
+		"fs-age": newRig,
+		"s3":     func(t *testing.T) *rig { r, _ := s3Rig(t); return r },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := mk(t)
+			twoHosts(r)
+			ix := builtIndex(t, r, "b")
+			r.now = time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+			first, err := ix.Publish(r.a, SnapshotPrefix)
+			if err != nil || first.Skipped || first.Stored == 0 {
+				t.Fatalf("%v %+v", err, first)
+			}
+			step := func(what string, wantSkip bool) PublishResult {
+				t.Helper()
+				r.now = r.now.Add(time.Hour)
+				res, err := ix.Publish(r.a, SnapshotPrefix)
+				if err != nil || res.Skipped != wantSkip {
+					t.Fatalf("%s: %v %+v", what, err, res)
+				}
+				c, err := LastCheck(r.a.B, SnapshotPrefix)
+				if err != nil || c == nil || c.CheckedAt != r.now.UTC().Format(time.RFC3339) || c.Snapshot != res.Key {
+					t.Fatalf("%s: %v %+v", what, err, c)
+				}
+				return res
+			}
+			// Rebuilding the index rewrites the thread tables and the build time
+			// without changing anything a reader sees.
+			if _, err := ix.Sync(r.a, r.op, nil, SyncOptions{AllHosts: true}); err != nil {
+				t.Fatal(err)
+			}
+			res := step("a rerun of the index", true)
+			if res.Key != first.Key || res.Stored != 0 {
+				t.Errorf("%+v", res)
+			}
+			if keys, _ := snapshots(r.a.B, SnapshotPrefix); len(keys) != 1 {
+				t.Errorf("%v", keys)
+			}
+			// A session that grows.
+			r.hostSession("laharl", sidLah1, "/home/u/.worktrees/widgets/feat-span", "feat/span", "2026-10-02T08:00:00Z", "finish the span work about aardvarks", "more output")
+			if _, err := ix.Sync(r.a, r.op, nil, SyncOptions{AllHosts: true}); err != nil {
+				t.Fatal(err)
+			}
+			step("a session grew", false)
+			step("then nothing again", true)
+			// A summary, and a thread's outcome, with no session growing.
+			if _, err := ix.run("UPDATE sessions SET summary='new' WHERE id="+q(sidLah2)+";", false); err != nil {
+				t.Fatal(err)
+			}
+			step("a summary", false)
+			step("then nothing again", true)
+			if _, err := ix.run("INSERT INTO outcomes VALUES('t-x','doc','r','text','src','');", false); err != nil {
+				t.Fatal(err)
+			}
+			step("an outcome", false)
+			// Checks are pruned too.
+			keys, _ := r.a.B.List(SnapshotPrefix)
+			if len(keys) != 2*snapshotKeep {
+				t.Errorf("%v", keys)
+			}
+			// The snapshot the last check names has gone: the content is uploaded again.
+			last, _ := LastCheck(r.a.B, SnapshotPrefix)
+			if err := r.a.B.Delete(last.Snapshot); err != nil {
+				t.Fatal(err)
+			}
+			step("the snapshot went missing", false)
+		})
+	}
+}
+
+// A failure reading the last check is not "changed": nothing is uploaded.
+func TestPublishFailsWhenTheLastCheckCannotBeRead(t *testing.T) {
+	hasSqlite(t)
+	r := newPlainRig(t)
+	twoHosts(r)
+	ix := builtIndex(t, r, "b")
+	r.now = time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	a := *r.a
+	a.B = failingList{r.a.B, SnapshotPrefix}
+	if res, err := ix.Publish(&a, SnapshotPrefix); err == nil {
+		t.Fatalf("%+v", res)
+	}
+	if keys, _ := r.a.B.List(SnapshotPrefix); len(keys) != 0 {
+		t.Errorf("%v", keys)
+	}
+}
+
+// Old content with a live indexer is fresh. When the indexer stops, it goes stale.
+func TestHeartbeatKeepsAnUnchangedCopyFresh(t *testing.T) {
+	hasSqlite(t)
+	r := newPlainRig(t)
+	twoHosts(r)
+	ix := builtIndex(t, r, "b")
+	now := time.Now().UTC()
+	// The content was built three days ago, and every check since found it the same.
+	old := now.Add(-72 * time.Hour).Format(time.RFC3339)
+	if _, err := ix.run("INSERT OR REPLACE INTO meta VALUES('built_at',"+q(old)+");", false); err != nil {
+		t.Fatal(err)
+	}
+	r.now = now.Add(-72 * time.Hour)
+	first, err := ix.Publish(r.a, SnapshotPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := &Index{Path: filepath.Join(r.dir, "h", "index.db")}
+	if res, err := hub.Pull(r.a, r.op, SnapshotPrefix); err != nil || res.UpToDate {
+		t.Fatalf("%v %+v", err, res)
+	}
+	rd := NewReader(hub.Path)
+	status := func() IndexStatus {
+		t.Helper()
+		st, err := rd.Status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	if st := status(); st.State != "stale" || st.BuiltAt != old {
+		t.Fatalf("no check for three days: %+v", st)
+	}
+	r.now = now.Add(-30 * time.Minute)
+	if res, err := ix.Publish(r.a, SnapshotPrefix); err != nil || !res.Skipped || res.Key != first.Key {
+		t.Fatalf("%v %+v", err, res)
+	}
+	res, err := hub.Pull(r.a, r.op, SnapshotPrefix)
+	if err != nil || !res.UpToDate || res.Stored != 0 {
+		t.Fatalf("%v %+v", err, res)
+	}
+	st := status()
+	if st.State != "ok" || st.BuiltAt != old || st.CheckedAt != r.now.Format(time.RFC3339) || st.Snapshot == "" {
+		t.Errorf("a fresh check should keep it ok, and the content's age should stay: %+v", st)
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(hub.Path)); len(ents) != 1 {
+		t.Errorf("left beside the index: %v", ents)
+	}
+	// A new copy also takes the check.
+	hub2 := &Index{Path: filepath.Join(r.dir, "h2", "index.db")}
+	if _, err := hub2.Pull(r.a, r.op, SnapshotPrefix); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := NewReader(hub2.Path).Status(context.Background()); st.State != "ok" {
+		t.Errorf("%+v", st)
+	}
+	// The indexer stops: later pulls find nothing newer, and the time runs out.
+	r.now = now.Add(-3 * time.Hour)
+	if _, err := hub.run("INSERT OR REPLACE INTO meta VALUES('checked_at',"+q(r.now.Format(time.RFC3339))+");", false); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(); st.State != "stale" {
+		t.Errorf("%+v", st)
+	}
+}
+
+// The fingerprint leaves out the build time and sees every table a reader reads.
+func TestFingerprint(t *testing.T) {
+	hasSqlite(t)
+	r := newPlainRig(t)
+	twoHosts(r)
+	ix := builtIndex(t, r, "b")
+	base, err := ix.fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ix.run("INSERT OR REPLACE INTO meta VALUES('built_at','2000-01-01T00:00:00Z');", false); err != nil {
+		t.Fatal(err)
+	}
+	if fp, _ := ix.fingerprint(); fp != base {
+		t.Error("the build time changed it")
+	}
+	for name, sql := range map[string]string{
+		"session bytes": "UPDATE sessions SET n_bytes=n_bytes+1 WHERE rowid=1;",
+		"handoff link":  "UPDATE sessions SET link_sig='new' WHERE rowid=1;",
+		"thread":        "UPDATE threads SET verdict='landed' WHERE rowid=1;",
+		"membership":    "DELETE FROM thread_sessions WHERE rowid=1;",
+		"outcome":       "INSERT INTO outcomes VALUES('t','k','r','x','s','');",
+		"a session":     "DELETE FROM sessions WHERE rowid=2;",
+	} {
+		before, _ := ix.fingerprint()
+		if _, err := ix.run(sql, false); err != nil {
+			t.Fatal(err)
+		}
+		if fp, _ := ix.fingerprint(); fp == before {
+			t.Errorf("%s did not change it", name)
 		}
 	}
 }

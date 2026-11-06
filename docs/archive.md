@@ -244,8 +244,21 @@ and writes it to `index/<time>.db.zst`, keeping the newest two. Other objects un
 `index/` are left alone. In the `none` mode it is an ordinary zstd file. In the `age`
 mode it is sealed like everything else, and pulling needs the identity.
 
-**The pull.** `--pull` downloads the newest snapshot if it is newer than the one the
-local file came from, and checks it: zstd's checksum, SQLite's `quick_check`, the
+**Only when changed.** A snapshot is over 100 MB and the store's nightly backups keep
+what it replaces, so `--publish` uploads only when the content differs from the last
+snapshot's. It compares a fingerprint: a sha256 over each session's host, kind, id,
+archived bytes, handoff link and summary, plus every thread and outcome. Build times
+and the database's bytes are not in it. Any session that grows changes it, so during
+a working day most runs still upload, and a quiet night uploads nothing.
+
+**The check object.** Every `--publish` also writes `index/<time>.check.json`, a few
+hundred bytes holding the time, the fingerprint and the snapshot with that content.
+The newest two are kept. It is plain JSON in every mode and holds no transcript text.
+A run that fails to write it fails.
+
+**The pull.** `--pull` copies the newest check's time into the local file, and
+downloads the newest snapshot if it is newer than the one the local file came from.
+It checks a download: zstd's checksum, SQLite's `quick_check`, the
 format version, a build time, and at least one session. Only then does it move it
 over the index file, mode 0600. It refuses a directory that others can read. Any
 failure leaves the current file as it was and exits non-zero, so the timer's unit
@@ -266,18 +279,21 @@ hosts, so it gains nothing.
 **How fresh it is.** `archive status` prints the index's age and where it came from:
 
 ```
-index: built 40m0s ago, pulled from snapshot 20261106T140000Z.db.zst; 1560 sessions on jjaggars-kubevirt, laharl
+index: built 9h0m0s ago, indexer last looked 40m0s ago, pulled from snapshot 20261106T140000Z.db.zst; 1560 sessions on jjaggars-kubevirt, laharl
 newest snapshot in the store: index/20261106T140000Z.db.zst
+last check in the store: 2026-11-06T23:00:00Z, content in index/20261106T140000Z.db.zst
 ```
 
-The age is measured from when the indexing machine built it, not from when it was
-pulled. So if laharl stops indexing, or the hub stops pulling, the hub's `status` and
-its app both show the true age, and the app warns after two missed builds
-(`state: stale`). A session reaches the other host's search after up to three hourly
+`built` is when the indexing machine built this content, which is when it last
+changed. `last looked` is the indexing machine's time from the last check this copy
+has pulled. Neither is the time of the pull. So if laharl stops indexing, or the hub
+stops pulling, the hub's `status` and its app both show the true age, and the app
+warns after two missed runs (`state: stale`), however old the content is otherwise. A
+session reaches the other host's search after up to three hourly
 steps in the worst case: the host's own `archive run`, the indexer's run, then the
-pull. Comparing the two `status` lines shows which side has stopped: an old index with
-a newer snapshot in the store means the pull is failing, and an old snapshot means
-publishing is.
+pull. Comparing the `status` lines shows which side has stopped: `last looked` older
+than the last check in the store means the pull is failing, and an old last check
+means the indexing machine has stopped.
 
 **Delete on request.** `archive delete SESSION --host H --yes` works from any machine
 with a key. It removes the segments and the local index's rows, and the indexing
