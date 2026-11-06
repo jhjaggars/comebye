@@ -54,7 +54,7 @@ func recallIndex(t *testing.T) string {
 
 func recallPaths() []string {
 	s := "/api/recall/sessions/desk/claude/" + recallSID
-	return []string{"/api/recall/status", "/api/recall/facets", "/api/recall/search?q=zebra", s, s + "/hits?q=zebra"}
+	return []string{"/api/recall/status", "/api/recall/facets", "/api/recall/search?q=zebra", "/api/recall/recent", s, s + "/hits?q=zebra"}
 }
 
 // The API is the user's alone. An agent with the local token, a request a peer
@@ -128,6 +128,13 @@ func TestRecallAnswers(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"total":1`) || !strings.Contains(body, `\u0002zebra\u0003`) {
 		t.Errorf("%d %s", code, body)
 	}
+	code, _, body = recallGet(t, ts, "/api/recall/recent?limit=9999&host=desk&since=2026-01-01")
+	if code != 200 || !strings.Contains(body, `"total":1`) || !strings.Contains(body, recallSID) {
+		t.Errorf("%d %s", code, body)
+	}
+	if code, _, body := recallGet(t, ts, "/api/recall/recent?host=elsewhere"); code != 200 || !strings.Contains(body, `"total":0`) || !strings.Contains(body, `"hits":[]`) {
+		t.Errorf("%d %s", code, body)
+	}
 	if code, _, body := recallGet(t, ts, "/api/recall/sessions/desk/claude/nope"); code != 404 || !strings.Contains(body, "no_session") {
 		t.Errorf("%d %s", code, body)
 	}
@@ -151,6 +158,10 @@ func TestRecallRefusesBadInput(t *testing.T) {
 		"/api/recall/search?q=a&skip=x",
 		"/api/recall/search?q=a&since=" + url.QueryEscape("'; DROP TABLE sessions; --"),
 		"/api/recall/search?q=a&host=" + strings.Repeat("h", recallMaxValue+1),
+		"/api/recall/recent?limit=-1",
+		"/api/recall/recent?skip=x",
+		"/api/recall/recent?since=" + url.QueryEscape("'; DROP TABLE sessions; --"),
+		"/api/recall/recent?host=" + strings.Repeat("h", recallMaxValue+1),
 		"/api/recall/sessions/" + url.PathEscape("de sk") + "/claude/" + recallSID,
 		"/api/recall/sessions/desk/" + url.PathEscape("cl'aude") + "/" + recallSID,
 		"/api/recall/sessions/desk/claude/" + url.PathEscape("x' OR '1'='1"),

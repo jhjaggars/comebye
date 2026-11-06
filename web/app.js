@@ -2009,7 +2009,7 @@ function agentById(id) {
 
 /* ---------- transcripts: search and read archived sessions ---------- */
 
-// #/transcripts?q=...           the search screen
+// #/transcripts?q=...           the search screen: the newest sessions until there is a query
 // #/session/<host>/<kind>/<id>?seq=N&sub=S&q=...   one session, at a match
 // The screen covers the app. At desktop width both panes show side by side.
 // All text comes from agents and tools: snippets and output go in as text nodes,
@@ -2076,7 +2076,8 @@ function syncRecall() {
   }
   const input = $("rc-q");
   if (document.activeElement !== input || !was) input.value = r.q;
-  if (r.q !== rc.q || !rc.res) {
+  // Opened afresh with no query, the list of recent sessions may have moved on.
+  if (r.q !== rc.q || !rc.res || (!was && !r.q)) {
     rc.q = r.q;
     rcSearch();
   }
@@ -2151,12 +2152,19 @@ function renderRecallFilters() {
     rcSelect("project", "Project", opt("Any project", f.projects)),
     rcSelect("sort", "Order", Object.entries(RC_SORT)),
   );
+  rcSyncFilters();
+}
+
+// Where the words are, and best match, mean nothing until there are words.
+function rcSyncFilters() {
+  for (const s of $("rc-filters").querySelectorAll('[data-key="role"], [data-key="sort"]')) s.hidden = !rc.q;
 }
 
 function rcParams(skip) {
-  const p = new URLSearchParams({ q: rc.q, limit: "20" });
+  const p = new URLSearchParams({ limit: "20" });
+  if (rc.q) p.set("q", rc.q);
   const f = rc.filters;
-  for (const k of ["role", "host", "kind", "project", "sort"]) if (f[k]) p.set(k, f[k]);
+  for (const k of rc.q ? ["role", "host", "kind", "project", "sort"] : ["host", "kind", "project"]) if (f[k]) p.set(k, f[k]);
   if (f.when) p.set("since", new Date(Date.now() - Number(f.when) * 86400000).toISOString().slice(0, 10));
   if (skip) p.set("skip", String(skip));
   return p;
@@ -2164,18 +2172,15 @@ function rcParams(skip) {
 
 async function rcSearch(more = false) {
   if (rc.ctl) rc.ctl.abort();
-  if (!rc.q.trim()) {
-    rc.res = null; rc.err = ""; rc.loading = false;
-    renderRecallResults();
-    return;
-  }
+  rcSyncFilters();
   const ctl = new AbortController();
   rc.ctl = ctl;
   rc.loading = !more; rc.more = more; rc.err = "";
   if (!more) renderRecallResults();
   try {
-    const d = await api("/api/recall/search?" + rcParams(more ? rc.res.hits.length : 0), { signal: ctl.signal });
+    const d = await api((rc.q ? "/api/recall/search?" : "/api/recall/recent?") + rcParams(more ? rc.res.hits.length : 0), { signal: ctl.signal });
     if (rc.ctl !== ctl) return;
+    d.recent = !rc.q;
     if (more) {
       rc.res.hits.push(...d.hits);
       rc.res.total = d.total;
@@ -2221,8 +2226,15 @@ function rcDate(iso) {
   return d.toLocaleDateString(undefined, opts);
 }
 
-function rcMetaLine(s) {
-  return [s.host, s.kind, s.repo, s.branch, rcDate(s.started || s.ended)].filter(Boolean).join(" · ");
+// rcWhen is a date with the time, for a list where the newest are hours apart.
+function rcWhen(iso) {
+  const t = Date.parse(iso || "");
+  if (Number.isNaN(t)) return "";
+  return `${rcDate(iso)}, ${new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function rcMetaLine(s, when = rcDate) {
+  return [s.host, s.kind, s.repo, s.branch, when(s.started || s.ended)].filter(Boolean).join(" · ");
 }
 
 function rcVerdictTag(v) {
@@ -2239,7 +2251,9 @@ function rcCard(h) {
   title.textContent = h.title || h.id;
   const meta = document.createElement("div");
   meta.className = "rc-meta";
-  meta.textContent = rcMetaLine(h);
+  // A recent session was not matched by anything, so it has no match to place.
+  const recent = h.matches === undefined;
+  meta.textContent = rcMetaLine(h, recent ? rcWhen : rcDate);
   a.append(title, meta);
   if (h.snippet) {
     const sn = document.createElement("div");
@@ -2250,7 +2264,9 @@ function rcCard(h) {
   const foot = document.createElement("div");
   foot.className = "rc-meta rc-foot";
   const where = { result: " in output", tool: " in commands" }[h.role] || "";
-  foot.append(document.createTextNode(`${h.matches} ${h.matches === 1 ? "match" : "matches"}${where}`));
+  foot.append(document.createTextNode(recent
+    ? `${h.messages} ${h.messages === 1 ? "message" : "messages"}`
+    : `${h.matches} ${h.matches === 1 ? "match" : "matches"}${where}`));
   const v = rcVerdictTag(h.verdict);
   if (v) foot.append(v);
   if (h.secrets) foot.append(rcTag("possible secret", "t-orange"));
@@ -2301,15 +2317,22 @@ function renderRecallResults() {
   else if (st && st.state === "outdated") kids.push(rcNotice("The index is from an older version. The next hourly build replaces it, or run", "comebye archive index"));
   else if (st && st.state === "unavailable") kids.push(rcNotice("The index could not be read. Is sqlite3 installed on this host?"));
   else if (rc.err) { const d = rcNotice(rc.err); d.classList.add("warn"); kids.push(d); }
-  else if (rc.loading) kids.push(rcNotice("Searching…"));
+  else if (rc.loading) kids.push(rcNotice(rc.q ? "Searching…" : "Loading…"));
   else if (rc.res) {
     const count = document.createElement("div");
     count.className = "rc-count";
-    count.textContent = rc.res.total === 1 ? "1 session" : `${rc.res.total} sessions`;
+    const sessions = rc.res.total === 1 ? "1 session" : `${rc.res.total} sessions`;
+    count.textContent = rc.res.recent ? `${sessions}, newest first` : sessions;
+    if (rc.res.recent) {
+      const tip = document.createElement("div");
+      tip.className = "rc-count";
+      tip.textContent = `Search what agents said, ran and got back. Put a phrase in "quotes"; a commit's SHA also works.`;
+      kids.push(tip);
+    }
     kids.push(count);
     for (const c of rc.res.commits || []) kids.push(rcCommitCard(c));
     for (const h of rc.res.hits) kids.push(rcCard(h));
-    if (!rc.res.total && !(rc.res.commits || []).length) kids.push(rcNotice("Nothing matches. Filters narrow this too, and only the start and end of long output is indexed."));
+    if (!rc.res.total && !(rc.res.commits || []).length) kids.push(rcNotice(rc.res.recent ? "No sessions match these filters." : "Nothing matches. Filters narrow this too, and only the start and end of long output is indexed."));
     if (rc.res.hits.length < rc.res.total) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "btn rc-more"; b.id = "rc-more";
@@ -2317,8 +2340,6 @@ function renderRecallResults() {
       b.disabled = rc.more;
       kids.push(b);
     }
-  } else if (st && (st.state === "ok" || st.state === "stale")) {
-    kids.push(rcNotice(`Search what agents said, ran and got back, across ${st.sessions} sessions. Put a phrase in "quotes"; a commit's SHA also works.`));
   }
   list.replaceChildren(...kids);
   rcMarkCurrent();

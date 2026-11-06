@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -42,6 +43,7 @@ func (s *Server) recallRoutes() {
 	s.mux.HandleFunc("GET /api/recall/status", s.auth(s.recallOnly(s.handleRecallStatus)))
 	s.mux.HandleFunc("GET /api/recall/facets", s.auth(s.recallOnly(s.handleRecallFacets)))
 	s.mux.HandleFunc("GET /api/recall/search", s.auth(s.recallOnly(s.handleRecallSearch)))
+	s.mux.HandleFunc("GET /api/recall/recent", s.auth(s.recallOnly(s.handleRecallRecent)))
 	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}", s.auth(s.recallOnly(s.handleRecallSession)))
 	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}/hits", s.auth(s.recallOnly(s.handleRecallHits)))
 }
@@ -109,6 +111,45 @@ func recallInt(v string, def, max int) (int, bool) {
 	return n, true
 }
 
+// recallFilter reads the filters a listing and a search share.
+func recallFilter(w http.ResponseWriter, v url.Values) (archive.Filter, bool) {
+	f := archive.Filter{Host: v.Get("host"), Kind: v.Get("kind"), Project: v.Get("project"), Branch: v.Get("branch"), Ledger: v.Get("ledger"), Since: v.Get("since"), Until: v.Get("until")}
+	for _, x := range []string{f.Host, f.Kind, f.Project, f.Branch, f.Ledger} {
+		if len(x) > recallMaxValue {
+			recallBad(w, "a filter value is too long")
+			return f, false
+		}
+	}
+	for _, d := range []string{f.Since, f.Until} {
+		if d != "" && !recallDateRE.MatchString(d) {
+			recallBad(w, "since and until are dates or times")
+			return f, false
+		}
+	}
+	return f, true
+}
+
+func (s *Server) handleRecallRecent(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query()
+	f, ok := recallFilter(w, v)
+	if !ok {
+		return
+	}
+	limit, ok1 := recallInt(v.Get("limit"), 20, recallMaxSessions)
+	skip, ok2 := recallInt(v.Get("skip"), 0, recallMaxSkip)
+	if !ok1 || !ok2 {
+		recallBad(w, "limit and skip are whole numbers")
+		return
+	}
+	f.Limit = limit
+	res, err := s.recall.Recent(r.Context(), f, skip)
+	if err != nil {
+		recallErr(w, "recent", err)
+		return
+	}
+	writeJSON(w, res)
+}
+
 func (s *Server) handleRecallSearch(w http.ResponseWriter, r *http.Request) {
 	v := r.URL.Query()
 	text := strings.TrimSpace(v.Get("q"))
@@ -124,19 +165,11 @@ func (s *Server) handleRecallSearch(w http.ResponseWriter, r *http.Request) {
 		recallBad(w, "unknown mode")
 		return
 	}
-	f := archive.Filter{Host: v.Get("host"), Kind: v.Get("kind"), Project: v.Get("project"), Branch: v.Get("branch"), Ledger: v.Get("ledger"), Role: v.Get("role"), Since: v.Get("since"), Until: v.Get("until")}
-	for _, x := range []string{f.Host, f.Kind, f.Project, f.Branch, f.Ledger} {
-		if len(x) > recallMaxValue {
-			recallBad(w, "a filter value is too long")
-			return
-		}
+	f, ok := recallFilter(w, v)
+	if !ok {
+		return
 	}
-	for _, d := range []string{f.Since, f.Until} {
-		if d != "" && !recallDateRE.MatchString(d) {
-			recallBad(w, "since and until are dates or times")
-			return
-		}
-	}
+	f.Role = v.Get("role")
 	switch f.Role {
 	case "", "said", "commands", "output":
 	default:

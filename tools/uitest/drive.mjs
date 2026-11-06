@@ -1223,6 +1223,40 @@ const noSideways = () => page.evaluate(() => {
   if (over.length || document.documentElement.scrollWidth > innerWidth) throw new Error("wider than the screen: " + (over[0]?.className || over[0]?.tagName));
 });
 
+await check("transcripts: before typing, the newest sessions, with filters that narrow them", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.evaluate(() => localStorage.removeItem("comebye.recall.filters"));
+  await page.locator("#btn-recall").click();
+  await page.waitForSelector("#recall", { state: "visible" });
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 3, null, { timeout: 5000 });
+  const titles = await page.locator(".rc-card .rc-title").allInnerTexts();
+  if (!titles[0].includes("Provision") || !titles[1].includes("Long session") || !titles[2].includes("Retry")) throw new Error("not newest first: " + titles);
+  const metas = await page.locator(".rc-card > .rc-meta:not(.rc-foot)").allInnerTexts();
+  if (!metas[0].includes("w-spot-3") || !metas[1].includes("devbox") || !metas[1].includes("homelab")) throw new Error("no host or project: " + metas);
+  if (!metas.every((m) => /\d:\d\d/.test(m))) throw new Error("no time of day: " + metas);
+  if (!/3 sessions, newest first/.test(await page.locator("#rc-results").innerText())) throw new Error("no count");
+  if (await page.locator(".rc-card mark").count()) throw new Error("marks with no query");
+  if (await visible('#rc-filters select[data-key="role"]') || await visible('#rc-filters select[data-key="sort"]')) throw new Error("word filters with no words");
+  await page.screenshot({ path: `${out}/search-before-typing.png` });
+  await page.waitForFunction(() => document.querySelector('#rc-filters select[data-key="host"] option[value="devbox"]'), null, { timeout: 5000 });
+  await page.locator('#rc-filters select[data-key="host"]').selectOption("devbox");
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 2, null, { timeout: 5000 });
+  await page.locator('#rc-filters select[data-key="host"]').selectOption("");
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 3, null, { timeout: 5000 });
+  // Opens at the start of the session: no match to jump to.
+  const href = await page.locator(".rc-card").first().getAttribute("href");
+  if (/[?&](seq|q)=/.test(href)) throw new Error("a recent card links to a match: " + href);
+  await noSideways();
+  // A query takes over, and clearing it brings the list back.
+  await page.locator("#rc-q").fill("\"connection refused\"");
+  await page.waitForSelector(".rc-card .rc-snip mark", { timeout: 5000 });
+  if (!await visible('#rc-filters select[data-key="role"]')) throw new Error("no word filter with words");
+  await page.locator("#rc-q").fill("");
+  await page.waitForFunction(() => /newest first/.test(document.querySelector("#rc-results").textContent), null, { timeout: 5000 });
+  if (await page.locator(".rc-card mark").count()) throw new Error("marks after clearing");
+});
+
 await check("transcripts: the header icon searches, one card per session, real marks", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(base + "/", { waitUntil: "load" });
@@ -1230,7 +1264,7 @@ await check("transcripts: the header icon searches, one card per session, real m
   await page.waitForSelector("#recall", { state: "visible" });
   await page.waitForFunction(() => /indexed/.test(document.querySelector("#rc-fresh").textContent), null, { timeout: 5000 });
   await page.locator("#rc-q").fill("\"connection refused\"");
-  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  await page.waitForSelector(".rc-card .rc-snip mark", { timeout: 5000 });
   const n = await page.locator(".rc-card").count();
   if (n !== 3) throw new Error(`${n} cards`);
   const marks = await page.locator(".rc-card .rc-snip mark").count();
