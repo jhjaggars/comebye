@@ -618,6 +618,7 @@ async function loadLedger() {
     setLedger(await api("/api/ledger"));
     // The briefing rides along, at most every 20 seconds.
     if (Date.now() - briefing.loadedAt > 20000) loadBrief();
+    if (Date.now() - todos.loadedAt > 8000) loadTodos();
     // The server checks finished workers' worktrees in the background
     // (for the "merged" hint): look again shortly until they are in.
     const waiting = ledger.entries.some((e) => (e.status === "finished" || e.status === "landed") && e.worktree && !e.checks);
@@ -840,6 +841,166 @@ function renderPlans() {
       <div class="plan-head"><span class="plan-title">${esc(p.title)}</span><span class="plan-state">${esc(label[p.state] || p.state)} · ${p.done} of ${p.size}</span></div>
       <ul class="plan-members">${p.members.map((m) => `<li><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span></li>`).join("")}</ul>
     </div>`).join("");
+}
+
+
+/* ---------- the to-do panel ---------- */
+//
+// Questions and decisions the user has to deal with, and follow-ups, that
+// coordinators and workers put on the hub's to-do list (`comebye todo`).
+// The panel sits under the briefing on the phone and at the top of the
+// right-hand briefings panel on a wide screen. Answering is the user's
+// action here: the hub then tells the coordinator, who relays the words to
+// the agent that waits. Every string comes from an agent (the question, the
+// context, the links) and is escaped or sanitized; links must be http(s).
+
+const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false, openIds: new Set(), drafts: new Map(), busy: new Set() };
+const TODO_FOLDED_KEY = "comebye-todo-folded";
+const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up" };
+
+function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") ? u : ""; }
+
+async function loadTodos() {
+  if (todos.inflight || ledger.on !== true) { if (ledger.on !== true) { todos.on = false; renderTodos(); } return; }
+  todos.inflight = true;
+  try {
+    const d = await api("/api/todos");
+    todos.on = true;
+    todos.items = Array.isArray(d.todos) ? d.todos : [];
+    todos.open = d.open | 0;
+    todos.answered = d.answered | 0;
+  } catch (e) {
+    if (e.status === 503 || e.status === 404) todos.on = false;
+    // Otherwise keep what we had: a failed poll should not make the panel blink.
+  } finally {
+    todos.inflight = false;
+    todos.loadedAt = Date.now();
+  }
+  renderTodos();
+}
+
+function todoCountText() {
+  const p = [];
+  if (todos.open) p.push(`${todos.open} open`);
+  if (todos.answered) p.push(`${todos.answered} answered`);
+  return p.join(" · ");
+}
+
+function todoItemHtml(t) {
+  const at = Date.parse(t.created_at);
+  const who = t.waiting ? `waiting: ${t.waiting.name || t.waiting.id}` : "";
+  const meta = [who, Number.isNaN(at) ? "" : fmtAgo(at)].filter(Boolean).join(" · ");
+  const open = todos.openIds.has(t.id);
+  const links = (t.links || []).map((l) => {
+    const href = todoLinkHref(l.url);
+    const label = l.label || l.url || `handoff ${l.handoff}`;
+    return href
+      ? `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`
+      : `<span>${esc(l.handoff ? `handoff ${l.handoff}` : label)}</span>`;
+  });
+  const a = t.answer;
+  const aAt = a ? Date.parse(a.at) : NaN;
+  const answered = a
+    ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : esc(fmtAgo(aAt)) + " ago"}</div>
+        <div class="td-answer-t">${esc(a.text)}</div>
+        <div class="td-wait">${t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""}</div></div>` : "";
+  const busy = todos.busy.has(t.id) ? " disabled" : "";
+  const form = t.state === "open"
+    ? `<textarea class="td-text" rows="2" maxlength="4000" placeholder="Your answer" aria-label="Your answer">${esc(todos.drafts.get(t.id) || "")}</textarea>` : "";
+  return `<details class="td-item td-${esc(t.kind)}${t.state === "answered" ? " answered" : ""}" data-id="${escAttr(t.id)}"${open ? " open" : ""}>
+      <summary><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${esc(t.question)}</span>${t.state === "answered" ? `<span class="td-st">answered</span>` : ""}</summary>
+      <div class="td-body">
+        ${meta ? `<div class="td-meta">${esc(meta)} · ${esc(t.id)}</div>` : ""}
+        ${t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
+        ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
+        ${answered}
+        ${form}
+        <div class="td-acts">
+          ${t.state === "open" ? `<button type="button" class="td-answer-btn"${busy}>Answer</button>` : ""}
+          <button type="button" class="td-done"${busy}>Done</button>
+          <button type="button" class="td-drop"${busy}>Drop</button>
+        </div>
+      </div>
+    </details>`;
+}
+
+function renderTodos() {
+  const main = $("todo"), side = $("br-todo");
+  const n = todos.open + todos.answered;
+  const pill = $("pager-todo");
+  if (pill) { pill.hidden = !n; pill.textContent = String(n); }
+  const show = todos.on === true && todos.items.length > 0;
+  for (const el of [main, side]) if (el) el.hidden = !show;
+  if (!show) {
+    for (const el of [main, side]) if (el) { el.innerHTML = ""; delete el.dataset.sig; }
+    return;
+  }
+  const folded = lsGet(TODO_FOLDED_KEY) === "1";
+  const sig = JSON.stringify([folded, todos.busy.size, [...todos.openIds].sort(), todos.items.map((t) => [t.id, t.state, t.updated_at, t.question])]);
+  // The age moves between renders; a typed answer must not be lost to one.
+  const typing = (el) => el && el.contains(document.activeElement) && document.activeElement.classList.contains("td-text");
+  for (const el of [main, side]) {
+    if (!el || el.dataset.sig === sig || typing(el)) continue;
+    el.dataset.sig = sig;
+    el.innerHTML = `<div class="td-head"><button type="button" class="td-toggle" aria-expanded="${!folded}">
+        <span class="proj-chev" aria-hidden="true"></span><span class="td-title">To do</span><span class="td-count">${esc(todoCountText())}</span></button></div>
+      <div class="td-list"${folded ? " hidden" : ""}>${todos.items.map(todoItemHtml).join("")}</div>`;
+  }
+}
+
+async function todoAct(id, what, body) {
+  todos.busy.add(id);
+  renderTodos();
+  try {
+    await api(`/api/todos/${encodeURIComponent(id)}/${what}`, { method: "POST", body: JSON.stringify(body || {}) });
+    todos.drafts.delete(id);
+    todos.openIds.delete(id);
+    toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : "Dropped");
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    todos.busy.delete(id);
+  }
+  todos.loadedAt = 0;
+  await loadTodos();
+}
+
+function onTodoClick(ev) {
+  const toggle = ev.target.closest(".td-toggle");
+  if (toggle) {
+    lsSet(TODO_FOLDED_KEY, lsGet(TODO_FOLDED_KEY) === "1" ? "0" : "1");
+    for (const el of [$("todo"), $("br-todo")]) if (el) delete el.dataset.sig;
+    renderTodos();
+    return;
+  }
+  const item = ev.target.closest(".td-item");
+  if (!item) return;
+  const id = item.dataset.id;
+  const t = todos.items.find((x) => x.id === id);
+  if (!t) return;
+  if (ev.target.closest(".td-answer-btn")) {
+    const box = item.querySelector(".td-text");
+    const text = box ? box.value.trim() : "";
+    if (!text) { toast("Write your answer first", true); return; }
+    todoAct(id, "answer", { text });
+  } else if (ev.target.closest(".td-done")) {
+    todoAct(id, "done");
+  } else if (ev.target.closest(".td-drop")) {
+    if (!confirm(`Drop this item?\n\n${t.question}\n\nIt leaves the list and nobody is told.`)) return;
+    todoAct(id, "drop");
+  }
+}
+
+// <details> toggles and drafts are remembered so a re-render keeps them.
+function onTodoToggle(ev) {
+  const item = ev.target.closest && ev.target.closest(".td-item");
+  if (!item || ev.target !== item) return;
+  if (item.open) todos.openIds.add(item.dataset.id); else todos.openIds.delete(item.dataset.id);
+}
+function onTodoInput(ev) {
+  const box = ev.target.closest && ev.target.closest(".td-text");
+  const item = box && box.closest(".td-item");
+  if (item) todos.drafts.set(item.dataset.id, box.value);
 }
 
 // briefPreview is the first line of the briefing with the markdown marks
@@ -4826,6 +4987,13 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-role").addEventListener("click", toggleRole);
   $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);
+  for (const id of ["todo", "br-todo"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener("click", onTodoClick);
+    el.addEventListener("input", onTodoInput);
+    el.addEventListener("toggle", onTodoToggle, true);
+  }
   document.addEventListener("click", (ev) => {
     if (!$("d-menu").hidden && !$("d-menu").contains(ev.target)) toggleDetailMenu(false);
   });

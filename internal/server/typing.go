@@ -201,6 +201,7 @@ func (s *Server) retryHeld() {
 		s.deliverQueue(agents)
 		if s.ledger != nil {
 			s.deliverCallbacks(agents)
+			s.deliverTodoNotices(agents)
 		}
 	}
 }

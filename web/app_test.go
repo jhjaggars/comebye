@@ -197,3 +197,24 @@ func TestAppShowsPeerFailureClass(t *testing.T) {
 		}
 	}
 }
+
+// The to-do panel: Drop asks first (the point of the list is not losing
+// follow-up work), Done is a single tap, agent text is escaped, and links
+// are only ever http(s).
+func TestAppTodoPanelWiring(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`(?s)\.td-drop"\)\) \{\s*if \(!confirm\(`,
+		`\.td-done"\)\) \{\s*todoAct\(id, "done"\)`,
+		`function todoLinkHref\(u\) \{ return /\^https\?:`,
+		`esc\(t\.question\)`,
+		`renderMarkdown\(t\.context,`,
+	} {
+		if !regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js does not match %s", re)
+		}
+	}
+}

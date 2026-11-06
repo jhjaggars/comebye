@@ -21,7 +21,9 @@ Beyond watching agents, it can:
 - **clean up** finished sessions after you confirm, keeping their branches;
 - **span several machines** in one list, with one of them acting as the hub;
 - let a **coordinator** agent (Claude Code, Pi or others) organize work for
-  you and leave you a briefing for when you come back.
+  you and leave you a briefing for when you come back;
+- keep a **to-do list** of the questions and decisions waiting on you, with
+  context, and answer them from the app.
 
 Chat view works for Claude Code and Pi; other agents show their terminal output.
 

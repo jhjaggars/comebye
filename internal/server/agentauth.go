@@ -20,7 +20,9 @@ import (
 // the ledger, inspections of an agent's git state, the briefing, roles,
 // the playbook) and do the workflow's steps: hand off, prompt an agent,
 // mark or unmark (proposing a discard included), publish the briefing and
-// set its schedule (or dismiss a streak of missed scheduled briefings).
+// set its schedule (or dismiss a streak of missed scheduled briefings),
+// add and read to-do items (answering, finishing and dropping them need a
+// recorded coordinator).
 // Everything else (keys, answers, images, launching, workers, removals and
 // their confirmation, push) is the user's alone: 403.
 //
@@ -197,7 +199,7 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 	}
 	// Only the query parameters the agent role's routes read.
 	q := url.Values{}
-	for _, k := range []string{"limit", "skip", "from", "lines", "source", "agent", "diff", "all", "kind"} {
+	for _, k := range []string{"limit", "skip", "from", "lines", "source", "agent", "diff", "all", "kind", "state"} {
 		if v := r.URL.Query().Get(k); v != "" {
 			q.Set(k, v)
 		}

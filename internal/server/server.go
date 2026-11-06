@@ -160,6 +160,7 @@ type Server struct {
 	// brief and roles live next to the ledger (nil when it is).
 	brief      *briefStore
 	pq         *promptQueue
+	todos      *todoStore
 	briefSched *briefSchedStore
 	roles      *roleStore
 	// kinds remembers the agent kinds that worked on this host (nil
@@ -220,6 +221,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			if s.pq, err = openPromptQueue(queuePath(cfg.StateDir)); err != nil {
 				log.Printf("prompt queue: %v (starting empty)", err)
 				s.pq = newPromptQueue("") // in memory: never overwrite the unreadable file
+			}
+			if s.todos, err = openTodoStore(todoPath(cfg.StateDir)); err != nil {
+				log.Printf("to-do list: %v (starting empty)", err)
+				s.todos = newTodoStore("") // in memory: never overwrite the unreadable file
 			}
 			s.endStaleAsks()
 		}
@@ -308,6 +313,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/queue", s.authAgent(s.handleQueueAdd))
 	s.mux.HandleFunc("GET /api/queue", s.authAgent(s.handleQueueList))
 	s.mux.HandleFunc("DELETE /api/queue/{id}", s.authAgent(s.handleQueueCancel))
+	// The to-do list: any agent adds and reads; answering, finishing and
+	// dropping are the user's or a coordinator's (checked in the handler).
+	s.mux.HandleFunc("POST /api/todos", s.authAgent(s.handleTodoAdd))
+	s.mux.HandleFunc("GET /api/todos", s.authAgent(s.handleTodoList))
+	s.mux.HandleFunc("GET /api/todos/{id}", s.authAgent(s.handleTodoGet))
+	s.mux.HandleFunc("POST /api/todos/{id}/answer", s.authAgent(s.handleTodoAnswer))
+	s.mux.HandleFunc("POST /api/todos/{id}/done", s.authAgent(s.handleTodoDone))
+	s.mux.HandleFunc("POST /api/todos/{id}/drop", s.authAgent(s.handleTodoDrop))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("POST /api/sweep", s.authAgent(s.handleSweep))

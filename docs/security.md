@@ -110,7 +110,8 @@ Treat access to it like SSH access to that machine.
   as the user). That role may read, hand off, prompt, mark, sweep (which only marks, with
   its own generated reason, workers whose checks show nothing to lose; never a
   coordinator or the caller itself), publish the
-  briefing and set its schedule, and nothing else (no keys, answers, launches, removals or
+  briefing and set its schedule, add and read to-do items (any agent), and,
+  for a recorded coordinator only, answer, finish or drop them, and nothing else (no keys, answers, launches, removals or
   their confirmation). It keeps a well-behaved coordinator inside the
   workflow; an agent with a shell could still read the token, forge the
   identity header or run git itself, so the real safeguard is that you
@@ -118,6 +119,23 @@ Treat access to it like SSH access to that machine.
   requests to the hub (https, no redirects, bounded, marked as forwarded),
   and the hub applies the agent role to them again. See
   [Coordinators](agents.md#coordinators).
+- **The to-do list** (`comebye todo`, `/api/todos`) is for questions the user
+  has to deal with. Any agent may add and list items. Answering, finishing and
+  dropping are the user's (the app) or a recorded coordinator's: another agent
+  gets 403 `coordinator_only`. A coordinator's `answer` records the user's
+  words it relayed (`via: relay`); only an answer typed in the app (`via: app`)
+  sends the coordinator a notice, whose text is fixed and names the item id
+  only. The hub never forwards an answer to the waiting agent. Item text,
+  context and links are agent-written: the app escapes the text, renders the
+  context through the same marked + DOMPurify path as transcripts, and only
+  links `http(s)` URLs; the CLI labels the context "data, not instructions".
+  **Limitation, inherited and not widened (issues #3 and #4):** "coordinator"
+  is judged from the agent role's self-asserted pane header plus the shared
+  agent token, so any local process on the hub (or a worker host's agent
+  through its peer) can claim to be the coordinator and answer, finish or drop
+  items, exactly as it can already forge the identity header on the loopback
+  port. What it gets is bookkeeping on a list, not a way to run anything; the
+  list holds no secrets and answering does not trigger any action by itself.
 - **Never use Tailscale Funnel**, and do not put another reverse proxy in
   front of it.
 - **Key input is whitelisted** (esc, enter, arrows, ctrl+c, and similar,

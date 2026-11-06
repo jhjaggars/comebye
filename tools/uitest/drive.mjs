@@ -924,6 +924,52 @@ await check("host chips: a peer on another version shows a badge, a matching or 
   if (r.overflowX) throw new Error("the page scrolls sideways");
 });
 
+// ---- the to-do panel: read the context, answer, finish, drop ----
+await check("to-do: items show with their context; answer, done and drop work from the app", async () => {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent");
+  const ids = await page.evaluate(async () => {
+    const post = (b) => fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }).then((r) => r.json());
+    const a = await post({ question: "may the worker delete <i>the old key</i>?", kind: "decision", context: "## Why\nunused\n\n<script>window.__xss=1</script>", links: [{ label: "PR", url: "https://example.com/pr/1" }] });
+    const b = await post({ question: "run aws login", kind: "action" });
+    const c = await post({ question: "close the old ticket", kind: "followup" });
+    return [a.todo.id, b.todo.id, c.todo.id];
+  });
+  await page.evaluate(() => loadTodos());
+  await page.waitForSelector("#todo:not([hidden]) .td-item");
+  if ((await page.locator("#todo .td-item").count()) < 3) throw new Error("items missing");
+  if ((await page.locator("#todo .td-count").innerText()).indexOf("3 open") < 0) throw new Error("count " + (await page.locator("#todo .td-count").innerText()));
+  await page.evaluate(() => window.confirm = () => true); // a native dialog would block; the check below is about the buttons
+  const q = (id) => `#todo .td-item[data-id="${id}"]`;
+  await page.locator(q(ids[0]) + " summary").click();
+  if (!(await page.locator(q(ids[0]) + " .td-ctx h2").count())) throw new Error("context not rendered as markdown");
+  if (await page.evaluate(() => window.__xss)) throw new Error("script in the context ran");
+  if ((await page.locator(q(ids[0]) + " .td-q").innerText()).indexOf("<i>") < 0) throw new Error("question was not escaped");
+  const href = await page.locator(q(ids[0]) + " .td-links a").getAttribute("href");
+  if (href !== "https://example.com/pr/1") throw new Error("link " + href);
+  await noOverflow();
+  // Answer.
+  await page.locator(q(ids[0]) + " .td-text").fill("yes, delete it");
+  await page.locator(q(ids[0]) + " .td-answer-btn").click();
+  await page.waitForSelector(`${q(ids[0])}.answered`, { timeout: 5000 });
+  const ans = await page.evaluate((id) => fetch("/api/todos/" + id).then((r) => r.json()), ids[0]);
+  if (ans.todo.state !== "answered" || ans.todo.answer.text !== "yes, delete it" || ans.todo.answer.via !== "app") throw new Error("answer " + JSON.stringify(ans));
+  // Done, a single tap.
+  await page.locator(q(ids[1]) + " summary").click();
+  await page.locator(q(ids[1]) + " .td-done").click();
+  await page.waitForFunction((s) => !document.querySelector(s), q(ids[1]), { timeout: 5000 });
+  // Drop asks first: a refusal keeps the item.
+  await page.locator(q(ids[2]) + " summary").click();
+  await page.evaluate(() => window.confirm = () => false);
+  await page.locator(q(ids[2]) + " .td-drop").click();
+  await page.waitForTimeout(300);
+  if (!(await page.locator(q(ids[2])).count())) throw new Error("dropped without the user confirming");
+  await page.evaluate(() => window.confirm = () => true);
+  await page.locator(q(ids[2]) + " .td-drop").click();
+  await page.waitForFunction((s) => !document.querySelector(s), q(ids[2]), { timeout: 5000 });
+  await page.screenshot({ path: `${out}/todo.png` });
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;
