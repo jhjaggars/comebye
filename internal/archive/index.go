@@ -283,6 +283,10 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (Syn
 		return ss, err
 	}
 	gs := a.groups(state)
+	tombs, err := a.tombstones()
+	if err != nil {
+		return ss, err
+	}
 	rows, err := ix.Query("SELECT kind,id,n_bytes FROM sessions WHERE host=" + q(a.Host) + ";")
 	if err != nil {
 		return ss, err
@@ -305,7 +309,7 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (Syn
 	live := map[string]bool{}
 	for _, k := range keys {
 		g := gs[k]
-		if a.Tombstoned(g.Kind, g.Slug, g.SID) {
+		if tombs[tombKey(a.Host, g.Kind, g.Slug, g.SID)] {
 			continue
 		}
 		live[g.Kind+"/"+g.SID] = true

@@ -23,6 +23,11 @@ import (
 // Objects are never overwritten.
 var ErrExists = errors.New("archive: object already exists")
 
+// ErrNotExist is what Backend.Get's error wraps when the key is not stored.
+// Any other error means the backend could not say: a caller must not read
+// that as "not there", because on a network backend it may only be a blip.
+var ErrNotExist = fs.ErrNotExist
+
 // Backend is where archive objects live. Keys are slash-separated and
 // never contain "." or ".." elements. Garage or S3 can implement this
 // later; Put must be atomic and create-only (S3: If-None-Match: *).
@@ -30,6 +35,7 @@ type Backend interface {
 	// Put stores data under key unless the key exists (ErrExists).
 	// The object is either completely visible or not at all.
 	Put(key string, data []byte) error
+	// Get returns the object, or an error wrapping ErrNotExist.
 	Get(key string) ([]byte, error)
 	// List returns every key that starts with prefix, sorted.
 	List(prefix string) ([]string, error)

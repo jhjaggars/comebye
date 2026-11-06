@@ -162,7 +162,14 @@ func EnsureMode(b Backend, mode string) error {
 		return err
 	}
 	if cur == "" {
-		return b.Put(modeKey, []byte(mode+"\n"))
+		err := b.Put(modeKey, []byte(mode+"\n"))
+		if !errors.Is(err, ErrExists) {
+			return err
+		}
+		// Another host wrote the marker first: go by what it wrote.
+		if cur, err = ReadMode(b); err != nil {
+			return err
+		}
 	}
 	if cur != mode {
 		return fmt.Errorf("archive: this archive is %q but encryption %q was asked for; mixing modes is refused (convert with `comebye archive rewrap --to-dir NEW --to-encryption %s`)", cur, mode, mode)
@@ -173,12 +180,16 @@ func EnsureMode(b Backend, mode string) error {
 // ReadMode returns the recorded mode, inferring it from the first segment
 // of an archive with no marker; "" for an empty archive.
 func ReadMode(b Backend) (string, error) {
-	if raw, err := b.Get(modeKey); err == nil {
+	raw, err := b.Get(modeKey)
+	if err == nil {
 		m := strings.TrimSpace(string(raw))
 		if m != ModeAge && m != ModeNone {
 			return "", fmt.Errorf("archive: unreadable mode marker %q", m)
 		}
 		return m, nil
+	}
+	if !errors.Is(err, ErrNotExist) {
+		return "", fmt.Errorf("archive: reading the mode marker: %w", err)
 	}
 	keys, err := b.List("v1/")
 	if err != nil || len(keys) == 0 {

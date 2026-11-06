@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -35,6 +37,9 @@ type Archiver struct {
 	// byte-exactly; this only keeps segments on line boundaries.
 	IdleAfter time.Duration
 	Now       func() time.Time
+	// LockDir holds the per-host lock taken by Run, Flush and DeleteSession
+	// (default ~/.local/state/comebye/locks).
+	LockDir string
 }
 
 // Result counts what a run did.
@@ -120,17 +125,63 @@ func (a *Archiver) Flush(src Source, sessionFile string) (Result, error) {
 	return a.run([]Source{src}, true, sessionFile)
 }
 
+// lock serialises everything on this machine that writes one host's
+// segments. Two writers starting from the same offset can cut different
+// lengths (a run holds back an unterminated last line, a flush does not),
+// which leaves overlapping segments, and shipFile then refuses that stream
+// for good. The timer's own flock does not cover the server's flush.
+//
+// It is a separate file from the timer's lock on purpose: that flock is
+// held by the process that runs `comebye archive run`, so taking the same
+// file here would wait forever.
+func (a *Archiver) lock() (unlock func(), err error) {
+	dir := a.LockDir
+	if dir == "" {
+		dir = expand("~/.local/state/comebye/locks")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("archive: lock: %w", err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "archive-"+url.PathEscape(a.Host)+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("archive: lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("archive: lock: %w", err)
+	}
+	return func() { f.Close() }, nil
+}
+
+// tombstones lists the sessions of this host deleted on request. A failure
+// is an error, never an empty set: treating it as "none deleted" would copy
+// a deleted session back in.
+func (a *Archiver) tombstones() (map[string]bool, error) {
+	keys, err := a.B.List("tomb/" + a.Host + "/")
+	if err != nil {
+		return nil, fmt.Errorf("archive: reading tombstones: %w", err)
+	}
+	tombs := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		tombs[k] = true
+	}
+	return tombs, nil
+}
+
 func (a *Archiver) run(sources []Source, final bool, only string) (Result, error) {
 	var res Result
+	unlock, err := a.lock()
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
 	state, err := scan(a.B, a.Host)
 	if err != nil {
 		return res, err
 	}
-	tombs := map[string]bool{}
-	if keys, err := a.B.List("tomb/" + a.Host + "/"); err == nil {
-		for _, k := range keys {
-			tombs[k] = true
-		}
+	tombs, err := a.tombstones()
+	if err != nil {
+		return res, err
 	}
 	for _, src := range sources {
 		root := filepath.Clean(src.Root)
@@ -346,6 +397,11 @@ func (a *Archiver) Verify(o Opener, sources []Source) (VerifyResult, error) {
 // files again) and then deletes the segments. It returns the number of
 // segments deleted.
 func (a *Archiver) DeleteSession(kind, slug, sid string) (int, error) {
+	unlock, err := a.lock()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	meta, _ := json.Marshal(map[string]string{"deleted_at": a.now().UTC().Format(time.RFC3339)})
 	if err := a.B.Put(tombKey(a.Host, kind, slug, sid), meta); err != nil && !errors.Is(err, ErrExists) {
 		return 0, err
@@ -374,12 +430,6 @@ func (a *Archiver) DeleteSession(kind, slug, sid string) (int, error) {
 
 // slugJoin is the stream (already "<slug>/<rest>").
 func slugJoin(stream string) string { return stream }
-
-// Tombstoned reports whether a session was deleted on request.
-func (a *Archiver) Tombstoned(kind, slug, sid string) bool {
-	_, err := a.B.Get(tombKey(a.Host, kind, slug, sid))
-	return err == nil
-}
 
 // RewrapStats reports Rewrap.
 type RewrapStats struct {
@@ -433,7 +483,10 @@ func (a *Archiver) Rewrap(o Opener, dst Backend, newSealer Sealer) (RewrapStats,
 		}
 		st.Segments++
 	}
-	notes, _ := a.B.List("notes/" + a.Host + "/")
+	notes, err := a.B.List("notes/" + a.Host + "/")
+	if err != nil {
+		return st, err
+	}
 	for _, k := range notes {
 		blob, err := a.B.Get(k)
 		if err != nil {
@@ -453,7 +506,10 @@ func (a *Archiver) Rewrap(o Opener, dst Backend, newSealer Sealer) (RewrapStats,
 			st.Notes++
 		}
 	}
-	tombs, _ := a.B.List("tomb/" + a.Host + "/")
+	tombs, err := a.B.List("tomb/" + a.Host + "/")
+	if err != nil {
+		return st, err
+	}
 	for _, k := range tombs {
 		body, err := a.B.Get(k)
 		if err != nil {

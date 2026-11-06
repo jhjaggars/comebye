@@ -48,7 +48,7 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	r := &rig{t: t, claude: filepath.Join(d, "claude"), pi: filepath.Join(d, "pi"), dir: d, op: o, identity: ident, now: time.Now()}
-	r.a = &Archiver{Host: "laharl", B: b, S: s, MaxSegment: 64 << 10, IdleAfter: time.Minute, Now: func() time.Time { return r.now }}
+	r.a = &Archiver{Host: "laharl", B: b, S: s, MaxSegment: 64 << 10, IdleAfter: time.Minute, Now: func() time.Time { return r.now }, LockDir: filepath.Join(d, "locks")}
 	return r
 }
 
