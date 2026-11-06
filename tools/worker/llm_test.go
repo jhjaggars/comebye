@@ -190,7 +190,7 @@ func newWorld() *fakeWorld {
 
 func TestLLMConfig(t *testing.T) {
 	c := testAWSCfg(t)
-	if c.LLMGatewayURL != "" || !c.hasAgent("pi") || c.PiVersion != "0.85.1" || c.LLMModels[0] != "rits/zai-org/glm-5-3" {
+	if c.LLMGatewayURL != "" || !c.hasAgent("pi") || c.PiVersion != "1.5.0" || c.LLMModels[0] != "rits/zai-org/glm-5-3" {
 		t.Errorf("defaults: %+v", c)
 	}
 	base := "provider=aws\naws_region=us-east-1\naws_az=us-east-1b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"
@@ -294,7 +294,7 @@ func TestLLMCreateDeliversAKeyAndNeverLeaksIt(t *testing.T) {
 	}
 	// pi is installed by the user bootstrap at the pinned version
 	us, _ := userScript(c, "w1", "v0.3.1")
-	if !strings.Contains(us, "WK_AGENTS='pi'") || !strings.Contains(us, "WK_PI_VERSION='0.85.1'") {
+	if !strings.Contains(us, "WK_AGENTS='pi'") || !strings.Contains(us, "WK_PI_VERSION='1.5.0'") {
 		t.Error("the user bootstrap does not carry the pi pin")
 	}
 }
@@ -586,7 +586,7 @@ func TestLLMDryRunShowsThePlanWithoutCalls(t *testing.T) {
 	if err := e.create(context.Background(), "w1", createOpts{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"worker-w1", llmProvisionerUser, "rits/zai-org/glm-5-3", "ssh stdin", "mode 600", "pi pinned at 0.85.1"} {
+	for _, want := range []string{"worker-w1", llmProvisionerUser, "rits/zai-org/glm-5-3", "ssh stdin", "mode 600", "pi pinned at 1.5.0"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("plan lacks %q", want)
 		}

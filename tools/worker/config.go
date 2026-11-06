@@ -132,7 +132,7 @@ func defaults() Config {
 		StateDir:       state,
 
 		Agents:                []string{"pi"},
-		PiVersion:             "0.85.1",
+		PiVersion:             "1.5.0",
 		LLMProvisionerKeyFile: filepath.Join(cfgDir, "llm-provisioner-key"),
 		LLMModels:             []string{"rits/zai-org/glm-5-3"},
 		LLMMaxBudget:          5,
@@ -322,7 +322,7 @@ func (c *Config) validateAgents() error {
 		}
 	}
 	if !piVerRe.MatchString(c.PiVersion) {
-		return fmt.Errorf("pi_version %q is not a version like 0.85.1 (it is pinned)", c.PiVersion)
+		return fmt.Errorf("pi_version %q is not a version like 1.5.0 (it is pinned)", c.PiVersion)
 	}
 	return nil
 }

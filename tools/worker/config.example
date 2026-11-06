@@ -49,7 +49,7 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # Agent harnesses installed on the worker, never signed in: pi (default), claude, codex.
 # agents=pi
 # pi is pinned; bump it on purpose.
-# pi_version=0.85.1
+# pi_version=1.5.0
 
 # LLM gateway (LiteLLM on the tailnet). Off unless llm_gateway_url is set. Each worker then
 # gets its OWN virtual key (alias worker-NAME) with the limits below, delivered over ssh
