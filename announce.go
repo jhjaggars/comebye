@@ -5,61 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/fleet"
-	"github.com/jhjaggars/comebye/internal/server"
 	"github.com/jhjaggars/comebye/internal/tsauth"
 )
-
-// servePeerListener binds the peer listener to this node's tailnet
-// address (spec: a port, or tailnet-ip:port) and serves it. tailscaled may
-// not be up yet when the hub starts, so it retries instead of exiting.
-func servePeerListener(srv *server.Server, ts *tsauth.LocalAPI, spec string, tags []string, capName string, selfReg bool) {
-	spec = strings.TrimSpace(spec)
-	host, port := "", strings.TrimPrefix(spec, ":")
-	if h, p, err := net.SplitHostPort(spec); err == nil && h != "" {
-		host, port = h, p
-	}
-	backoff := time.Second
-	for {
-		addr := host
-		if addr == "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, ips, err := ts.Self(ctx)
-			cancel()
-			for _, ip := range ips {
-				if ip.Is4() {
-					addr = ip.String()
-					break
-				}
-			}
-			if err != nil || addr == "" {
-				log.Printf("peer listener: waiting for tailscaled (%s): %v", ts.Socket, err)
-				time.Sleep(backoff)
-				if backoff *= 2; backoff > time.Minute {
-					backoff = time.Minute
-				}
-				continue
-			}
-		}
-		ln, err := net.Listen("tcp", net.JoinHostPort(addr, port))
-		if err != nil {
-			log.Printf("peer listener: %v", err)
-			time.Sleep(backoff)
-			if backoff *= 2; backoff > time.Minute {
-				backoff = time.Minute
-			}
-			continue
-		}
-		log.Printf("peer listener on http://%s for tags [%s] and capability [%s] (agent role only; self-registration %v)", ln.Addr(), strings.Join(tags, ","), capName, selfReg)
-		log.Printf("peer listener stopped: %v", srv.ServePeerListener(ln))
-		return
-	}
-}
 
 // announceToHub registers this node with the hub as a peer, retrying
 // until the hub answers definitively.

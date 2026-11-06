@@ -46,6 +46,11 @@ func (r *tagRig) serve(method, path, body string, extra map[string]string) (int,
 	return r.call(r.main, method, path, body, h)
 }
 
+// peer is serve with no extra headers.
+func (r *tagRig) peer(method, path, body string) (int, string) {
+	return r.serve(method, path, body, nil)
+}
+
 func (r *tagRig) addPeer(name, url, tag string) {
 	r.t.Helper()
 	b, _ := json.Marshal(map[string]any{"name": name, "urls": []string{url}, "tag": tag})
@@ -207,7 +212,7 @@ func TestCapDoesNotTouchUsers(t *testing.T) {
 }
 
 func TestCapOffIgnoresTheHeader(t *testing.T) {
-	r := newTagRig(t, false) // tags only: no -ts-allow-cap
+	r := newRigWith(t, false, func(*Config) {}) // no -ts-allow-cap
 	r.addPeer("w1", "https://w1.t.ts.net", "tag:worker")
 	r.who.setHolder("w1.t.ts.net", "tag:worker")
 	if code, _ := r.serve("GET", "/api/whoami", "", nil); code != http.StatusUnauthorized {
@@ -262,42 +267,5 @@ func TestCapAnnounceThroughServe(t *testing.T) {
 	off.who.setHolder(off.node, "tag:worker")
 	if code, body := off.serve("POST", "/api/peers/announce", `{"name":"vm1","url":"`+off.workerURL()+`"}`, nil); code != http.StatusForbidden || !strings.Contains(body, "self_register_off") {
 		t.Fatalf("self-registration off: %d %s", code, body)
-	}
-}
-
-func TestPeerListenerAcceptsTheCapAlongsideTags(t *testing.T) {
-	// The capability alone opens the listener.
-	r := newCapRig(t, false)
-	r.addPeer("w1", "https://w1.t.ts.net", "")
-	r.who.setHolder("w1.t.ts.net", "tag:worker")
-	code, body := r.call(r.peers, "GET", "/api/whoami", "", map[string]string{HeaderAgent: "w:1"})
-	if code != 200 || !strings.Contains(body, `"agent":"w1/w:1"`) {
-		t.Fatalf("holder: %d %s", code, body)
-	}
-	// WhoIs decides: a client's header counts for nothing here.
-	r.who.set("w1.t.ts.net", "tag:worker")
-	if code, body := r.call(r.peers, "GET", "/api/whoami", "", map[string]string{tsauth.HeaderAppCaps: capValue}); code != http.StatusForbidden || !strings.Contains(body, "tag_not_allowed") {
-		t.Fatalf("header only: %d %s", code, body)
-	}
-	// A user's device holding the grant doesn't come in this way.
-	r.who.setHolder("w1.t.ts.net")
-	if code, body := r.peer("GET", "/api/whoami", ""); code != http.StatusForbidden || !strings.Contains(body, "tag_not_allowed") {
-		t.Fatalf("user-owned holder: %d %s", code, body)
-	}
-
-	// With both configured, either one admits.
-	both := newRigWith(t, false, func(c *Config) { c.AllowTags = []string{"tag:worker"}; c.AllowCap = testCap })
-	both.addPeer("w1", "https://w1.t.ts.net", "")
-	both.who.set("w1.t.ts.net", "tag:worker")
-	if code, body := both.peer("GET", "/api/whoami", ""); code != 200 {
-		t.Fatalf("tag: %d %s", code, body)
-	}
-	both.who.setHolder("w1.t.ts.net", "tag:vm")
-	if code, body := both.peer("GET", "/api/whoami", ""); code != 200 {
-		t.Fatalf("capability: %d %s", code, body)
-	}
-	both.who.set("w1.t.ts.net", "tag:vm")
-	if code, body := both.peer("GET", "/api/whoami", ""); code != http.StatusForbidden || !strings.Contains(body, "tag_not_allowed") {
-		t.Fatalf("neither: %d %s", code, body)
 	}
 }

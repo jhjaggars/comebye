@@ -221,22 +221,6 @@ var (
 // Tailnet reports whether ip is in Tailscale's address ranges.
 func Tailnet(ip netip.Addr) bool { return v4.Contains(ip) || v6.Contains(ip) }
 
-// NormalizeTags parses a comma-separated tag list (tag:worker,tag:vm).
-func NormalizeTags(spec string) ([]string, error) {
-	var out []string
-	for _, t := range strings.Split(spec, ",") {
-		t = strings.ToLower(strings.TrimSpace(t))
-		if t == "" {
-			continue
-		}
-		if !strings.HasPrefix(t, "tag:") || len(t) == 4 || strings.ContainsAny(t, " \t") {
-			return nil, fmt.Errorf("tag %q: want tag:<name> (tag:worker)", t)
-		}
-		out = append(out, t)
-	}
-	return out, nil
-}
-
 // HeaderAppCaps is the header in which Tailscale Serve forwards a caller's
 // app capabilities, when its handler was set up with --accept-app-caps.
 // The value is a JSON object of capability name to an array of values;

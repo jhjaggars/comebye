@@ -33,18 +33,10 @@ func NewUpstream(raw string, allowHTTPLoopback bool, client *http.Client) (*Upst
 	raw = strings.TrimSpace(raw)
 	u, err := parsePeerURL(raw, allowHTTPLoopback)
 	if err != nil {
-		// http://<hub>.ts.net:<port> is the hub's peer listener (see
-		// server.PeerHandler): plain http, but only to a tailnet host,
-		// where WireGuard encrypts and authenticates the hop.
-		hu, perr := url.Parse(raw)
-		if perr != nil || !strings.EqualFold(hu.Scheme, "http") || hu.Port() == "" || hu.User != nil || hu.RawQuery != "" || hu.Fragment != "" || (hu.Path != "" && hu.Path != "/") || !tailnetHost(hu.Hostname(), []string{".ts.net"}) {
-			return nil, err
+		if hu, perr := url.Parse(raw); perr == nil && strings.EqualFold(hu.Scheme, "http") && hu.Port() != "" && tailnetHost(hu.Hostname(), []string{".ts.net"}) {
+			return nil, errors.New("COMEBYE_HUB must be the hub's Tailscale Serve URL (https://<hub>.<tailnet>.ts.net); the plain-http peer listener (port " + hu.Port() + ") was removed")
 		}
-		hu.Scheme, hu.Host = "http", strings.ToLower(hu.Host)
-		if u, err = parsePeerURL("https://"+hu.Host, false); err != nil {
-			return nil, err
-		}
-		u.Scheme = "http"
+		return nil, err
 	}
 	if client == nil {
 		o := Options{}
@@ -140,7 +132,7 @@ func (u *Upstream) Do(ctx context.Context, req UpstreamRequest) (int, string, []
 	isJSON := strings.TrimSpace(strings.ToLower(mt)) == "application/json"
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden && !isJSON:
-		return 0, "", nil, errors.New("the hub rejected this peer; the hub's -ts-allow-login must include this device owner's login (or, over the hub's peer listener, this node must carry an allowed -ts-allow-tag and be a registered peer)")
+		return 0, "", nil, errors.New("the hub rejected this peer; the hub's -ts-allow-login must include this device owner's login (or, for a tagged node, the Serve grant must carry the hub's -ts-allow-cap capability and the node must be a registered peer)")
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		return 0, "", nil, errors.New("the hub answered with a redirect")
 	}

@@ -105,11 +105,8 @@ type Config struct {
 	// Coordinator preset appends to the preset's own (e.g. pi: --auto,
 	// a flag only some Pi installs have).
 	CoordinatorArgs map[string][]string
-	// AllowTags are the Tailscale tags (tag:worker) admitted on the peer
-	// listener (PeerHandler); WhoIs identifies the callers there.
-	AllowTags []string
-	// AllowCap is the app capability that admits a tagged node: through
-	// Tailscale Serve (capPeers) and on the peer listener.
+	// AllowCap is the app capability that admits a tagged node through
+	// Tailscale Serve (capPeers); WhoIs identifies the callers there.
 	AllowCap string
 	// WhoIs identifies a connection's tailnet node (tailscaled's WhoIs).
 	WhoIs tsauth.Resolver
@@ -274,7 +271,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/peers", s.auth(s.handlePeers))
 	s.mux.HandleFunc("POST /api/peers", s.auth(s.handleAddPeer))
 	s.mux.HandleFunc("DELETE /api/peers/{name}", s.auth(s.handleRemovePeer))
-	// Self-registration: answered only on the peer listener, to a tagged node.
+	// Self-registration: answered only to a tagged node (capPeers).
 	s.mux.HandleFunc("POST /api/peers/announce", s.authAgentLocal(s.handleAnnounce))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.readGuard(s.onHost("output", s.handleOutput))))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.readGuard(s.onHost("transcript", s.handleTranscript))))

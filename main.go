@@ -42,48 +42,48 @@ func main() {
 		flag.PrintDefaults()
 	}
 	var (
-		addr         = flag.String("addr", "127.0.0.1:8741", "listen address (keep loopback; use Tailscale Serve for TLS)")
-		sock         = flag.String("sock", defaultSocketPath(), "herdr API socket path (default $COMEBYE_SOCK, else $HERDR_SOCKET_PATH, else herdr's default)")
-		tsAllow      = flag.String("ts-allow-login", getenv("COMEBYE_TS_ALLOW_LOGIN"), "comma-separated Tailscale logins admitted via Tailscale Serve identity headers (e.g. you@example.com)")
-		ntfyBase     = flag.String("ntfy-url", envOr("COMEBYE_NTFY_URL", "https://ntfy.sh"), "ntfy root URL; empty disables ntfy")
-		ntfyTopic    = flag.String("ntfy-topic", getenv("COMEBYE_NTFY_TOPIC"), "ntfy topic (optional fallback channel); empty disables ntfy")
-		ntfyClick    = flag.String("ntfy-click", getenv("COMEBYE_NTFY_CLICK"), "URL opened when an ntfy notification is tapped (the Serve URL)")
-		ntfyThottle  = flag.Duration("ntfy-throttle", 0, "deprecated alias for -notify-throttle")
-		ntfyExcerpt  = flag.Int("ntfy-excerpt", envInt("COMEBYE_NTFY_EXCERPT", 0), "max characters of the agent's last message to include in ntfy notifications; 0 (default) sends none, since ntfy.sh topics are public")
-		throttle     = flag.Duration("notify-throttle", envDuration("COMEBYE_NOTIFY_THROTTLE", 30*time.Second), "minimum interval between repeat notifications per agent and kind (Web Push and ntfy)")
-		notifyKinds  = flag.String("notify-kinds", envOr("COMEBYE_NOTIFY_KINDS", "blocked,question,done,plan"), "which notifications to send (Web Push and ntfy), comma-separated: blocked (needs input), question (finished on a question), done (finished), plan (a plan settled); none for no notifications")
-		doneDigest   = flag.Duration("notify-done-digest", envDuration("COMEBYE_NOTIFY_DONE_DIGEST", 0), "collect \"done\" notifications for this long after the first and send them as one (\"3 agents finished\"); 0 sends each at once. Questions are never delayed")
-		blockedDelay = flag.Duration("notify-blocked-delay", envDuration("COMEBYE_NOTIFY_BLOCKED_DELAY", 15*time.Second), "wait this long before notifying that an agent needs input, and send nothing if it stopped being blocked meanwhile; 0 notifies at once")
-		stateDir     = flag.String("state-dir", envOr("COMEBYE_STATE_DIR", defaultStateDir()), "directory for the VAPID key and push subscriptions (created mode 0700)")
-		pushOn       = flag.Bool("push", envBool("COMEBYE_PUSH", true), "enable Web Push notifications")
-		pushSubject  = flag.String("push-subject", getenv("COMEBYE_PUSH_SUBJECT"), "VAPID contact (mailto:you@example.com or an https:// URL); default mailto:<first -ts-allow-login that is an email>, else the project URL")
-		pushExcerpt  = flag.Int("push-excerpt", envInt("COMEBYE_PUSH_EXCERPT", 200), "max characters of the agent's last message in Web Push notifications (end-to-end encrypted); 0 sends none")
-		hostName     = flag.String("host-name", envOr("COMEBYE_HOST_NAME", fleet.DefaultHostName()), "this host's name in agent IDs and URLs (lowercase DNS label)")
-		peersSpec    = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name optional; several addresses per peer, tried in order, separated by |)")
-		noAuth       = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
-		launchOn     = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
-		worktreeRoot = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
-		hubMode      = flag.Bool("hub-mode", envBool("COMEBYE_HUB_MODE", false), "make this instance a hub even with no peers yet, so peers can be added at runtime (comebye peer add); also implied by -peers or stored peers")
-		peerDomains  = flag.String("peer-domains", getenv("COMEBYE_PEER_DOMAINS"), "extra tailnet domain suffixes (comma-separated, e.g. mytailnet.example.com) allowed for peers added at runtime; *.ts.net is always allowed; tailnet IPs only as fallback addresses")
-		hubURL       = flag.String("hub", getenv("COMEBYE_HUB"), "on a peer: the hub's Tailscale Serve URL (https://hub.tailnet.ts.net); the coordinator CLI's ledger, handoff, mark, briefing and prompt requests are forwarded there and this instance keeps no ledger")
-		tsAllowTags  = flag.String("ts-allow-tag", getenv("COMEBYE_TS_ALLOW_TAGS"), "on a hub: comma-separated Tailscale tags (tag:worker) admitted on the peer listener (-peer-listen); a tagged node must also be a registered peer, and gets the forwarded-agent role only")
-		tsAllowCap   = flag.String("ts-allow-cap", getenv("COMEBYE_TS_ALLOW_CAP"), "on a hub: the Tailscale app capability (example.com/cap/peer) that admits a tagged node through Tailscale Serve (run Serve with --accept-app-caps) and on the peer listener; the node must also be a registered peer, and gets the forwarded-agent role only")
-		peerListen   = flag.String("peer-listen", getenv("COMEBYE_PEER_LISTEN"), "on a hub: a port (8742) or tailnet-ip:port for the peer listener, bound to this node's tailnet address only, where tagged workers set COMEBYE_HUB=http://<hub>.<tailnet>.ts.net:<port>; needs -ts-allow-tag or -ts-allow-cap; off by default")
-		selfRegister = flag.Bool("peer-self-register", envBool("COMEBYE_PEER_SELF_REGISTER", false), "on a hub: let a node with an allowed tag or the capability register itself as a peer (POST /api/peers/announce); needs -peer-listen or -ts-allow-cap; off by default")
-		tsSocket     = flag.String("ts-socket", envOr("COMEBYE_TS_SOCKET", tsauth.DefaultSocket), "tailscaled's LocalAPI socket (WhoIs for tagged nodes; this node's name for -announce)")
-		announce     = flag.Bool("announce", envBool("COMEBYE_ANNOUNCE", false), "on a peer with -hub: announce this node to the hub as a peer at startup (the hub needs -peer-self-register and this node an allowed tag or the capability)")
-		announceURL  = flag.String("announce-url", getenv("COMEBYE_ANNOUNCE_URL"), "the Serve URL to announce (default https://<this node's MagicDNS name>)")
-		ledgerOn     = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
-		coordDir     = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
-		allowHosts   = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
-		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
-		coordArgs    = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
-		archiveDir   = flag.String("archive-dir", getenv("COMEBYE_ARCHIVE_DIR"), "keep a final copy of an agent's transcript here when it is removed (see `comebye archive`); empty disables")
-		archiveS3    = flag.String("archive-s3", getenv("COMEBYE_ARCHIVE_S3"), "keep those copies in this bucket instead: https://HOST/BUCKET (see `comebye archive`)")
-		archiveS3Cr  = flag.String("archive-s3-credentials", getenv("COMEBYE_ARCHIVE_S3_CREDENTIALS"), "mode-0600 file of key_id= and secret_key= lines for -archive-s3")
-		archiveEnc   = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir or -archive-s3")
-		archiveRcpt  = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
-		showVersion  = flag.Bool("version", false, "print the version and exit")
+		addr          = flag.String("addr", "127.0.0.1:8741", "listen address (keep loopback; use Tailscale Serve for TLS)")
+		sock          = flag.String("sock", defaultSocketPath(), "herdr API socket path (default $COMEBYE_SOCK, else $HERDR_SOCKET_PATH, else herdr's default)")
+		tsAllow       = flag.String("ts-allow-login", getenv("COMEBYE_TS_ALLOW_LOGIN"), "comma-separated Tailscale logins admitted via Tailscale Serve identity headers (e.g. you@example.com)")
+		ntfyBase      = flag.String("ntfy-url", envOr("COMEBYE_NTFY_URL", "https://ntfy.sh"), "ntfy root URL; empty disables ntfy")
+		ntfyTopic     = flag.String("ntfy-topic", getenv("COMEBYE_NTFY_TOPIC"), "ntfy topic (optional fallback channel); empty disables ntfy")
+		ntfyClick     = flag.String("ntfy-click", getenv("COMEBYE_NTFY_CLICK"), "URL opened when an ntfy notification is tapped (the Serve URL)")
+		ntfyThottle   = flag.Duration("ntfy-throttle", 0, "deprecated alias for -notify-throttle")
+		ntfyExcerpt   = flag.Int("ntfy-excerpt", envInt("COMEBYE_NTFY_EXCERPT", 0), "max characters of the agent's last message to include in ntfy notifications; 0 (default) sends none, since ntfy.sh topics are public")
+		throttle      = flag.Duration("notify-throttle", envDuration("COMEBYE_NOTIFY_THROTTLE", 30*time.Second), "minimum interval between repeat notifications per agent and kind (Web Push and ntfy)")
+		notifyKinds   = flag.String("notify-kinds", envOr("COMEBYE_NOTIFY_KINDS", "blocked,question,done,plan"), "which notifications to send (Web Push and ntfy), comma-separated: blocked (needs input), question (finished on a question), done (finished), plan (a plan settled); none for no notifications")
+		doneDigest    = flag.Duration("notify-done-digest", envDuration("COMEBYE_NOTIFY_DONE_DIGEST", 0), "collect \"done\" notifications for this long after the first and send them as one (\"3 agents finished\"); 0 sends each at once. Questions are never delayed")
+		blockedDelay  = flag.Duration("notify-blocked-delay", envDuration("COMEBYE_NOTIFY_BLOCKED_DELAY", 15*time.Second), "wait this long before notifying that an agent needs input, and send nothing if it stopped being blocked meanwhile; 0 notifies at once")
+		stateDir      = flag.String("state-dir", envOr("COMEBYE_STATE_DIR", defaultStateDir()), "directory for the VAPID key and push subscriptions (created mode 0700)")
+		pushOn        = flag.Bool("push", envBool("COMEBYE_PUSH", true), "enable Web Push notifications")
+		pushSubject   = flag.String("push-subject", getenv("COMEBYE_PUSH_SUBJECT"), "VAPID contact (mailto:you@example.com or an https:// URL); default mailto:<first -ts-allow-login that is an email>, else the project URL")
+		pushExcerpt   = flag.Int("push-excerpt", envInt("COMEBYE_PUSH_EXCERPT", 200), "max characters of the agent's last message in Web Push notifications (end-to-end encrypted); 0 sends none")
+		hostName      = flag.String("host-name", envOr("COMEBYE_HOST_NAME", fleet.DefaultHostName()), "this host's name in agent IDs and URLs (lowercase DNS label)")
+		peersSpec     = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name optional; several addresses per peer, tried in order, separated by |)")
+		noAuth        = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
+		launchOn      = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
+		worktreeRoot  = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
+		hubMode       = flag.Bool("hub-mode", envBool("COMEBYE_HUB_MODE", false), "make this instance a hub even with no peers yet, so peers can be added at runtime (comebye peer add); also implied by -peers or stored peers")
+		peerDomains   = flag.String("peer-domains", getenv("COMEBYE_PEER_DOMAINS"), "extra tailnet domain suffixes (comma-separated, e.g. mytailnet.example.com) allowed for peers added at runtime; *.ts.net is always allowed; tailnet IPs only as fallback addresses")
+		hubURL        = flag.String("hub", getenv("COMEBYE_HUB"), "on a peer: the hub's Tailscale Serve URL (https://hub.tailnet.ts.net); the coordinator CLI's ledger, handoff, mark, briefing and prompt requests are forwarded there and this instance keeps no ledger")
+		tsAllowCap    = flag.String("ts-allow-cap", getenv("COMEBYE_TS_ALLOW_CAP"), "on a hub: the Tailscale app capability (example.com/cap/peer) that admits a tagged node through Tailscale Serve (run Serve with --accept-app-caps); the node must also be a registered peer, and gets the forwarded-agent role only")
+		removedTags   = flag.String("ts-allow-tag", getenv("COMEBYE_TS_ALLOW_TAGS"), "REMOVED, ignored with a warning: tagged nodes come in through Serve with -ts-allow-cap")
+		removedListen = flag.String("peer-listen", getenv("COMEBYE_PEER_LISTEN"), "REMOVED, ignored with a warning: the peer listener (port 8742) is gone; use Serve with -ts-allow-cap")
+		selfRegister  = flag.Bool("peer-self-register", envBool("COMEBYE_PEER_SELF_REGISTER", false), "on a hub: let a node holding the -ts-allow-cap capability register itself as a peer (POST /api/peers/announce); needs -ts-allow-cap; off by default")
+		tsSocket      = flag.String("ts-socket", envOr("COMEBYE_TS_SOCKET", tsauth.DefaultSocket), "tailscaled's LocalAPI socket (WhoIs for tagged nodes; this node's name for -announce)")
+		announce      = flag.Bool("announce", envBool("COMEBYE_ANNOUNCE", false), "on a peer with -hub: announce this node to the hub as a peer at startup (the hub needs -peer-self-register and this node the -ts-allow-cap capability)")
+		announceURL   = flag.String("announce-url", getenv("COMEBYE_ANNOUNCE_URL"), "the Serve URL to announce (default https://<this node's MagicDNS name>)")
+		ledgerOn      = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
+		coordDir      = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
+		allowHosts    = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
+		launchRoots   = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
+		coordArgs     = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
+		archiveDir    = flag.String("archive-dir", getenv("COMEBYE_ARCHIVE_DIR"), "keep a final copy of an agent's transcript here when it is removed (see `comebye archive`); empty disables")
+		archiveS3     = flag.String("archive-s3", getenv("COMEBYE_ARCHIVE_S3"), "keep those copies in this bucket instead: https://HOST/BUCKET (see `comebye archive`)")
+		archiveS3Cr   = flag.String("archive-s3-credentials", getenv("COMEBYE_ARCHIVE_S3_CREDENTIALS"), "mode-0600 file of key_id= and secret_key= lines for -archive-s3")
+		archiveEnc    = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir or -archive-s3")
+		archiveRcpt   = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
+		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
 	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
@@ -152,25 +152,27 @@ func main() {
 		}
 	}
 
-	allowTags, err := tsauth.NormalizeTags(*tsAllowTags)
-	if err != nil {
-		log.Fatalf("-ts-allow-tag: %v", err)
+	// The plain-HTTP peer listener (port 8742) and its tag allowlist were
+	// removed: tagged nodes come in through Serve with the app capability.
+	// Warn and carry on rather than exit, so a hub upgraded before its env
+	// file is cleaned up keeps running (nothing is listening on the old
+	// port, and nothing is admitted that was not already admitted by the
+	// capability).
+	if strings.TrimSpace(*removedListen) != "" {
+		log.Printf("WARNING: -peer-listen / COMEBYE_PEER_LISTEN is removed and ignored: the peer listener is gone; tagged nodes use the Serve URL with -ts-allow-cap (run Serve with --accept-app-caps)")
+	}
+	if strings.TrimSpace(*removedTags) != "" {
+		log.Printf("WARNING: -ts-allow-tag / COMEBYE_TS_ALLOW_TAGS is removed and ignored: tags no longer admit anything; set -ts-allow-cap / COMEBYE_TS_ALLOW_CAP and a Tailscale grant carrying that capability")
 	}
 	allowCap, err := tsauth.NormalizeCap(*tsAllowCap)
 	if err != nil {
 		log.Fatalf("-ts-allow-cap: %v", err)
 	}
 	switch {
-	case len(allowTags) > 0 && *peerListen == "":
-		log.Fatalf("-ts-allow-tag only applies on the peer listener: set -peer-listen too")
-	case *peerListen != "" && len(allowTags) == 0 && allowCap == "":
-		log.Fatalf("-peer-listen needs -ts-allow-tag or -ts-allow-cap: otherwise nobody could use it")
-	case *peerListen != "" && !(len(peers) > 0 || *hubMode):
-		log.Fatalf("-peer-listen is for a hub: set -hub-mode (or -peers)")
 	case allowCap != "" && !(len(peers) > 0 || *hubMode):
 		log.Fatalf("-ts-allow-cap is for a hub: set -hub-mode (or -peers)")
-	case *selfRegister && *peerListen == "" && allowCap == "":
-		log.Fatalf("-peer-self-register needs -peer-listen or -ts-allow-cap")
+	case *selfRegister && allowCap == "":
+		log.Fatalf("-peer-self-register needs -ts-allow-cap")
 	case *announce && strings.TrimSpace(*hubURL) == "":
 		log.Fatalf("-announce needs -hub")
 	}
@@ -300,14 +302,10 @@ func main() {
 		AgentToken:      agentToken,
 		CoordinatorDir:  expandHome(*coordDir),
 		CoordinatorArgs: parseKindArgs(coordArgs),
-		AllowTags:       allowTags,
 		AllowCap:        allowCap,
 		WhoIs:           localAPI,
 		SelfRegister:    *selfRegister,
 	}, client, manager)
-	if *peerListen != "" {
-		go servePeerListener(srv, localAPI, *peerListen, allowTags, allowCap, *selfRegister)
-	}
 	if allowCap != "" {
 		log.Printf("tagged peers admitted through Tailscale Serve with capability %s (agent role only; self-registration %v); Serve needs --accept-app-caps=%s", allowCap, *selfRegister, allowCap)
 	}

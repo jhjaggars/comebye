@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -63,13 +64,17 @@ func TestAnnounceNeedsAHubWithAStore(t *testing.T) {
 	}
 }
 
-func TestUpstreamAcceptsHTTPOnlyToATailnetPort(t *testing.T) {
-	for _, ok := range []string{"http://hub.t.ts.net:8742", "http://100.64.0.9:8742", "https://hub.t.ts.net"} {
-		if _, err := NewUpstream(ok, false, nil); err != nil {
-			t.Errorf("%s: %v", ok, err)
+func TestUpstreamRefusesThePlainHTTPPeerListener(t *testing.T) {
+	if _, err := NewUpstream("https://hub.t.ts.net", false, nil); err != nil {
+		t.Errorf("Serve URL: %v", err)
+	}
+	// The removed peer listener's address says so, rather than "not https".
+	for _, old := range []string{"http://hub.t.ts.net:8742", "http://100.64.0.9:8742"} {
+		if _, err := NewUpstream(old, false, nil); err == nil || !strings.Contains(err.Error(), "Serve URL") {
+			t.Errorf("%s: %v", old, err)
 		}
 	}
-	for _, bad := range []string{"http://hub.t.ts.net", "http://hub.example.com:8742", "http://192.168.1.2:8742", "http://hub.t.ts.net:8742/api", "http://u:p@hub.t.ts.net:8742"} {
+	for _, bad := range []string{"http://hub.t.ts.net", "http://hub.example.com:8742", "http://192.168.1.2:8742", "http://u:p@hub.t.ts.net:8742"} {
 		if _, err := NewUpstream(bad, false, nil); err == nil {
 			t.Errorf("%s accepted", bad)
 		}

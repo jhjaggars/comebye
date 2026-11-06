@@ -98,18 +98,6 @@ func TestSelf(t *testing.T) {
 	}
 }
 
-func TestNormalizeTags(t *testing.T) {
-	got, err := NormalizeTags(" Tag:Worker, tag:vm ,")
-	if err != nil || len(got) != 2 || got[0] != "tag:worker" || got[1] != "tag:vm" {
-		t.Fatalf("%v %v", got, err)
-	}
-	for _, bad := range []string{"worker", "tag:", "tag:a b"} {
-		if _, err := NormalizeTags(bad); err == nil {
-			t.Errorf("%q accepted", bad)
-		}
-	}
-}
-
 func TestWhoIsParsesCapMap(t *testing.T) {
 	sock, _ := fakeTailscaled(t, func(string) (int, string) {
 		return 200, `{"Node":{"Name":"w1.tail.ts.net.","Tags":["tag:worker"]},"CapMap":{"example.com/cap/peer":[{"role":"worker"}]}}`

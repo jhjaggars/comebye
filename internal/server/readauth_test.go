@@ -93,14 +93,13 @@ func newReadRig(t *testing.T) *readRig {
 	who := &fakeWhoIs{}
 	s := New(Config{
 		AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken,
-		WhoIs: who, AllowCap: testCap, AllowTags: []string{"tag:worker"}, StateDir: t.TempDir(),
+		WhoIs: who, AllowCap: testCap, StateDir: t.TempDir(),
 	}, nil, nil)
 	r := &readRig{
-		tagRig: &tagRig{t: t, fl: fl, who: who, main: httptest.NewServer(s.Handler()), peers: httptest.NewServer(s.PeerHandler()), node: "127.0.0.1"},
+		tagRig: &tagRig{t: t, fl: fl, who: who, main: httptest.NewServer(s.Handler()), node: "127.0.0.1"},
 		s:      s, w1: w1, kube: kube,
 	}
 	t.Cleanup(r.main.Close)
-	t.Cleanup(r.peers.Close)
 	// fakeWhoIs says the caller is the node at 127.0.0.1, which is w1; kube
 	// is the same fake machine under another name, so it is not that node.
 	r.addPeer("w1", ws.URL, "tag:worker")
@@ -126,18 +125,11 @@ func forwarded(host, pane string) map[string]string {
 	return map[string]string{"Tailscale-User-Login": "me@example.com", HeaderForwarded: "1", HeaderAgentHost: host, HeaderAgent: pane}
 }
 
-// asTagged runs one request by the tagged worker on both ways in: the peer
-// listener and Serve with the capability. They must agree.
+// asTagged runs one request by the tagged worker, through Serve with the
+// capability.
 func (r *readRig) asTagged(method, path, body string) (int, string) {
 	r.t.Helper()
-	hdr := map[string]string{HeaderAgent: "wS:p1"}
-	c1, b1 := r.call(r.peers, method, path, body, hdr)
-	c2, b2 := r.serve(method, path, body, hdr)
-	if c1 != c2 {
-		r.t.Errorf("%s %s: peer listener %d, Serve %d", method, path, c1, c2)
-	}
-	_ = b2
-	return c1, b1
+	return r.serve(method, path, body, map[string]string{HeaderAgent: "wS:p1"})
 }
 
 var readRoutes = []string{
@@ -181,19 +173,8 @@ func TestTaggedWorkerCannotReadAnyAgent(t *testing.T) {
 // The tagged worker's claims don't help it.
 func TestTaggedWorkerClaimsDoNotHelpItRead(t *testing.T) {
 	r := newReadRig(t)
-	for _, h := range []map[string]string{
-		{"Tailscale-User-Login": "me@example.com"},
-		{HeaderAgentToken: testToken},
-		{HeaderForwarded: "1", HeaderAgentHost: "kube", HeaderAgent: "wC:p1"},
-		{HeaderAgent: "wC:p1"},
-	} {
-		code, body := r.call(r.peers, "GET", readRoutes[1], "", h)
-		if code != http.StatusForbidden || strings.Contains(body, peerText) {
-			t.Errorf("peer listener, claims %v: %d %s", h, code, body)
-		}
-	}
-	// Through Serve a login means Serve vouched for a user, and capPeers lets
-	// it by; everything else is still the tagged node.
+	// A login means Serve vouched for a user (Serve strips a client's own),
+	// so capPeers lets it by; everything else is still the tagged node.
 	for _, h := range []map[string]string{
 		{HeaderAgentToken: testToken},
 		{HeaderForwarded: "1", HeaderAgentHost: "kube", HeaderAgent: "wC:p1"},
@@ -201,7 +182,7 @@ func TestTaggedWorkerClaimsDoNotHelpItRead(t *testing.T) {
 	} {
 		code, body := r.serve("GET", readRoutes[1], "", h)
 		if code != http.StatusForbidden || strings.Contains(body, peerText) {
-			t.Errorf("Serve, claims %v: %d %s", h, code, body)
+			t.Errorf("claims %v: %d %s", h, code, body)
 		}
 	}
 }
@@ -351,7 +332,7 @@ func TestTaggedWorkerWrites(t *testing.T) {
 	if code, body := r.asTagged("POST", "/api/queue", `{"agent":"kube/wS:p1","text":"hi"}`); code != http.StatusForbidden || !strings.Contains(body, "prompt_forbidden") {
 		t.Errorf("queue to a worker elsewhere: %d %s", code, body)
 	}
-	if code, body := r.call(r.peers, "POST", "/api/queue", `{"agent":"kube/wC:p1","text":"queued to the coordinator"}`, map[string]string{HeaderAgent: "wS:p1"}); code != http.StatusAccepted {
+	if code, body := r.serve("POST", "/api/queue", `{"agent":"kube/wC:p1","text":"queued to the coordinator"}`, map[string]string{HeaderAgent: "wS:p1"}); code != http.StatusAccepted {
 		t.Errorf("queue to the coordinator: %d %s", code, body)
 	}
 	// Everything else a worker has no use for is refused, with no effect.
@@ -513,7 +494,7 @@ func TestTaggedQueueOnlyItsOwnHost(t *testing.T) {
 	if code, body := r.call(r.main, "POST", "/api/queue", `{"agent":"kube/wS:p1","text":"`+peerText+`"}`, forwarded("laharl", "wZ:p1")); code != http.StatusAccepted {
 		t.Fatalf("%d %s", code, body)
 	}
-	_, body := r.call(r.peers, "POST", "/api/queue", `{"agent":"kube/wC:p1","text":"from the worker"}`, mine)
+	_, body := r.serve("POST", "/api/queue", `{"agent":"kube/wC:p1","text":"from the worker"}`, mine)
 	var q struct {
 		Queued QueuedPrompt `json:"queued"`
 	}
@@ -521,11 +502,11 @@ func TestTaggedQueueOnlyItsOwnHost(t *testing.T) {
 	if q.Queued.ID == "" {
 		t.Fatalf("queue: %s", body)
 	}
-	_, list := r.call(r.peers, "GET", "/api/queue?all=1", "", mine)
+	_, list := r.serve("GET", "/api/queue?all=1", "", mine)
 	if strings.Contains(list, peerText) || !strings.Contains(list, "from the worker") {
 		t.Errorf("list: %s", list)
 	}
-	_, list = r.call(r.peers, "GET", "/api/queue?all=1&agent=kube/wS:p1", "", mine)
+	_, list = r.serve("GET", "/api/queue?all=1&agent=kube/wS:p1", "", mine)
 	if strings.Contains(list, peerText) {
 		t.Errorf("list by agent: %s", list)
 	}
@@ -539,7 +520,7 @@ func TestTaggedQueueOnlyItsOwnHost(t *testing.T) {
 	for _, it := range all.Queue {
 		if strings.Contains(it.Text, peerText) {
 			refused++
-			if code, b := r.call(r.peers, "DELETE", "/api/queue/"+it.ID, "", mine); code != http.StatusForbidden || !strings.Contains(b, "worker_forbidden") {
+			if code, b := r.serve("DELETE", "/api/queue/"+it.ID, "", mine); code != http.StatusForbidden || !strings.Contains(b, "worker_forbidden") {
 				t.Errorf("withdraw another's: %d %s", code, b)
 			}
 		}
@@ -548,10 +529,10 @@ func TestTaggedQueueOnlyItsOwnHost(t *testing.T) {
 		t.Errorf("the other prompt is not on the list: %s", ulist)
 	}
 	// Its own passes the gate (an idle target has it already: 404, not 403).
-	if code, b := r.call(r.peers, "DELETE", "/api/queue/"+q.Queued.ID, "", mine); code == http.StatusForbidden {
+	if code, b := r.serve("DELETE", "/api/queue/"+q.Queued.ID, "", mine); code == http.StatusForbidden {
 		t.Errorf("withdraw its own: %d %s", code, b)
 	}
-	if code, b := r.call(r.peers, "DELETE", "/api/queue/nope", "", mine); code != http.StatusForbidden {
+	if code, b := r.serve("DELETE", "/api/queue/nope", "", mine); code != http.StatusForbidden {
 		t.Errorf("withdraw an unknown id: %d %s", code, b)
 	}
 }
@@ -596,7 +577,7 @@ func TestTaggedTodosOnlyItsOwn(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 	mine := map[string]string{HeaderAgent: "wS:p1"}
-	code, body := r.call(r.peers, "POST", "/api/todos", `{"question":"mine"}`, mine)
+	code, body := r.serve("POST", "/api/todos", `{"question":"mine"}`, mine)
 	if code != http.StatusCreated {
 		t.Fatalf("a worker adds: %d %s", code, body)
 	}
@@ -604,7 +585,7 @@ func TestTaggedTodosOnlyItsOwn(t *testing.T) {
 		Todo Todo `json:"todo"`
 	}
 	json.Unmarshal([]byte(body), &res)
-	_, list := r.call(r.peers, "GET", "/api/todos?state=all", "", mine)
+	_, list := r.serve("GET", "/api/todos?state=all", "", mine)
 	var got struct {
 		Todos []Todo `json:"todos"`
 		Open  int    `json:"open"`
@@ -615,7 +596,7 @@ func TestTaggedTodosOnlyItsOwn(t *testing.T) {
 		t.Errorf("list: %s", list)
 	}
 	for id, want := range map[string]int{res.Todo.ID: 200, waitingHere: 200, elsewhere: http.StatusNotFound, "nope": http.StatusNotFound} {
-		if code, b := r.call(r.peers, "GET", "/api/todos/"+id, "", mine); code != want || (want != 200 && strings.Contains(b, "elsewhere")) {
+		if code, b := r.serve("GET", "/api/todos/"+id, "", mine); code != want || (want != 200 && strings.Contains(b, "elsewhere")) {
 			t.Errorf("show %s: %d %s", id, code, b)
 		}
 	}
@@ -631,7 +612,7 @@ func TestTaggedTodosOnlyItsOwn(t *testing.T) {
 // A tagged node gets no herdr records either; the hub reading a peer does.
 func TestTaggedAgentsAreTheSlimView(t *testing.T) {
 	r := newReadRig(t)
-	code, body := r.call(r.peers, "GET", "/api/agents?full=1", "", map[string]string{HeaderAgent: "wS:p1"})
+	code, body := r.serve("GET", "/api/agents?full=1", "", map[string]string{HeaderAgent: "wS:p1"})
 	if code != 200 || strings.Contains(body, "workspace_id") {
 		t.Errorf("%d %s", code, body)
 	}

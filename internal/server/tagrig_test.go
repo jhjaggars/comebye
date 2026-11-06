@@ -37,8 +37,8 @@ func (f *fakeWhoIs) WhoIs(_ context.Context, addr string) (tsauth.Identity, erro
 	return f.id, f.err
 }
 
-// tagRig is a hub with a peer listener (the PeerHandler on its own test
-// server) next to its normal handler, and a fake worker node at the
+// tagRig is a hub (its handler on a test server; serve() calls it as Serve
+// does for a tagged node holding the capability), and a fake worker node at the
 // address a self-registration announces. The fake WhoIs reports the
 // worker's node as the loopback address, so the announced URL (the fake
 // worker's own) is "on the caller's node".
@@ -46,15 +46,9 @@ type tagRig struct {
 	t      *testing.T
 	fl     *fleet.Fleet
 	main   *httptest.Server
-	peers  *httptest.Server
 	worker *httptest.Server
 	who    *fakeWhoIs
 	node   string
-}
-
-func newTagRig(t *testing.T, selfRegister bool) *tagRig {
-	t.Helper()
-	return newRigWith(t, selfRegister, func(c *Config) { c.AllowTags = []string{"tag:worker"} })
 }
 
 func newRigWith(t *testing.T, selfRegister bool, set func(*Config)) *tagRig {
@@ -85,11 +79,9 @@ func newRigWith(t *testing.T, selfRegister bool, set func(*Config)) *tagRig {
 	set(&cfg)
 	s := New(cfg, nil, nil)
 	r := &tagRig{t: t, fl: fl, who: who, worker: worker,
-		main:  httptest.NewServer(s.Handler()),
-		peers: httptest.NewServer(s.PeerHandler()),
+		main: httptest.NewServer(s.Handler()),
 	}
 	t.Cleanup(r.main.Close)
-	t.Cleanup(r.peers.Close)
 	u, _ := net.ResolveTCPAddr("tcp", strings.TrimPrefix(worker.URL, "http://"))
 	r.node = u.IP.String() // 127.0.0.1: the "node" whose address is the fake worker
 	return r
@@ -115,107 +107,9 @@ func (r *tagRig) call(srv *httptest.Server, method, path, body string, hdr map[s
 	return resp.StatusCode, string(b)
 }
 
-func (r *tagRig) peer(method, path, body string) (int, string) {
-	return r.call(r.peers, method, path, body, nil)
-}
-
-func TestPeerListenerIdentityAndTagAllowlist(t *testing.T) {
-	r := newTagRig(t, true)
-	// tailscaled does not know the address (or the lookup failed): 401.
-	r.who.err = tsauth.ErrUnknown
-	if code, _ := r.peer("GET", "/api/whoami", ""); code != http.StatusUnauthorized {
-		t.Fatalf("unknown address: %d", code)
-	}
-	// A user-owned node (no tags) and a node with another tag: 403.
-	r.who.set("laptop.t.ts.net")
-	if code, body := r.peer("GET", "/api/whoami", ""); code != http.StatusForbidden || !strings.Contains(body, "tag_not_allowed") {
-		t.Fatalf("untagged: %d %s", code, body)
-	}
-	r.who.set("db.t.ts.net", "tag:db")
-	if code, body := r.peer("GET", "/api/whoami", ""); code != http.StatusForbidden || !strings.Contains(body, "tag_not_allowed") {
-		t.Fatalf("other tag: %d %s", code, body)
-	}
-	// The right tag but not a registered peer: 403, whatever it claims.
-	r.who.set("w1.t.ts.net", "tag:other", "tag:worker")
-	code, body := r.peer("GET", "/api/whoami", "")
-	if code != http.StatusForbidden || !strings.Contains(body, "not_a_peer") {
-		t.Fatalf("unregistered: %d %s", code, body)
-	}
-	// The WhoIs lookup used the connection's remote address.
-	if !strings.HasPrefix(r.who.addr, "127.0.0.1:") {
-		t.Fatalf("whois addr = %q", r.who.addr)
-	}
-}
-
-func TestPeerListenerRoleIsAgentOnly(t *testing.T) {
-	r := newTagRig(t, false)
-	if code, body := r.call(r.main, "POST", "/api/peers", `{"name":"w1","urls":["https://w1.t.ts.net"],"tag":"tag:worker"}`, map[string]string{"Tailscale-User-Login": "me@example.com"}); code != http.StatusCreated {
-		t.Fatalf("user adds the peer: %d %s", code, body)
-	}
-	r.who.set("w1.t.ts.net", "tag:worker")
-
-	// Agent-role routes work, as the forwarded agent of the peer's name,
-	// whatever host the request claims to be from.
-	code, body := r.call(r.peers, "GET", "/api/whoami", "", map[string]string{HeaderAgent: "w:1", HeaderAgentHost: "someone-else"})
-	var who struct{ Role, Agent, Host string }
-	json.Unmarshal([]byte(body), &who)
-	if code != 200 || who.Role != "agent" || who.Agent != "w1/w:1" {
-		t.Fatalf("whoami: %d %s", code, body)
-	}
-	if code, _ := r.peer("GET", "/api/hosts", ""); code != 200 {
-		t.Fatalf("agent route: %d", code)
-	}
-	// User-only routes are refused, for every kind of route the user has.
-	for _, c := range []struct{ m, p, b string }{
-		{"POST", "/api/launch", `{}`},
-		{"GET", "/api/peers", ""},
-		{"POST", "/api/peers", `{"name":"x","urls":["https://x.t.ts.net"]}`},
-		{"DELETE", "/api/peers/w1", ""},
-		{"POST", "/api/removals/confirm", `{}`},
-		{"GET", "/api/events", ""},
-	} {
-		if code, body := r.peer(c.m, c.p, c.b); code != http.StatusForbidden || !strings.Contains(body, "agent_forbidden") {
-			t.Errorf("%s %s: %d %s", c.m, c.p, code, body)
-		}
-	}
-	// Nothing but /api is served (no UI).
-	if code, _ := r.peer("GET", "/", ""); code != http.StatusNotFound {
-		t.Errorf("UI on the peer listener: %d", code)
-	}
-	// Forged identity headers change nothing: a login is not the user
-	// role here, and the local agent token is not honored.
-	for _, h := range []map[string]string{
-		{"Tailscale-User-Login": "me@example.com"},
-		{HeaderAgentToken: "tok"},
-		{"Tailscale-User-Login": "me@example.com", HeaderForwarded: "1"},
-	} {
-		if code, body := r.call(r.peers, "POST", "/api/launch", `{}`, h); code != http.StatusForbidden || !strings.Contains(body, "agent_forbidden") {
-			t.Errorf("forged %v: %d %s", h, code, body)
-		}
-	}
-	// And the other way round: the peer listener's WhoIs path is not
-	// reachable on the Serve handler (no tagged context there).
-	if code, _ := r.call(r.main, "GET", "/api/whoami", "", nil); code != http.StatusUnauthorized {
-		t.Errorf("anonymous on main: %d", code)
-	}
-}
-
-func TestPeerListenerPeerTagMustStillMatch(t *testing.T) {
-	r := newTagRig(t, false)
-	r.call(r.main, "POST", "/api/peers", `{"name":"w1","urls":["https://w1.t.ts.net"],"tag":"tag:vm"}`, map[string]string{"Tailscale-User-Login": "me@example.com"})
-	r.who.set("w1.t.ts.net", "tag:worker") // allowed tag, but not the tag the peer was registered with
-	if code, body := r.peer("GET", "/api/whoami", ""); code != http.StatusForbidden || !strings.Contains(body, "tag_mismatch") {
-		t.Fatalf("%d %s", code, body)
-	}
-	r.who.set("w1.t.ts.net", "tag:worker", "tag:vm")
-	if code, _ := r.peer("GET", "/api/whoami", ""); code != 200 {
-		t.Fatalf("both tags: %d", code)
-	}
-}
-
 func TestAnnounceThenPeerAndAgentsAppear(t *testing.T) {
-	r := newTagRig(t, true)
-	r.who.set(r.node, "tag:worker")
+	r := newCapRig(t, true)
+	r.who.setHolder(r.node, "tag:worker")
 	code, body := r.peer("POST", "/api/peers/announce", `{"name":"vm1","url":"`+r.workerURL()+`"}`)
 	if code != http.StatusCreated {
 		t.Fatalf("announce: %d %s", code, body)
@@ -237,7 +131,7 @@ func TestAnnounceThenPeerAndAgentsAppear(t *testing.T) {
 		_, b := r.call(r.main, "GET", "/api/agents", "", map[string]string{"Tailscale-User-Login": "me@example.com"})
 		return strings.Contains(b, `"id":"vm1/wS:p1"`)
 	})
-	// Once registered, the node is a peer on the peer listener too.
+	// Once registered, the node is a peer on through Serve too.
 	if code, _ := r.peer("GET", "/api/whoami", ""); code != 200 {
 		t.Fatalf("announced node as a peer: %d", code)
 	}
@@ -255,12 +149,12 @@ func TestAnnounceThenPeerAndAgentsAppear(t *testing.T) {
 	if code, body := r.peer("POST", "/api/peers/announce", `{"name":"vm2","url":"`+r.workerURL()+`"}`); code != http.StatusConflict || !strings.Contains(body, "already registered") {
 		t.Fatalf("second name: %d %s", code, body)
 	}
-	r.who.set("other.t.ts.net", "tag:worker")
+	r.who.setHolder("other.t.ts.net", "tag:worker")
 	if code, body := r.peer("POST", "/api/peers/announce", `{"name":"vm1","url":"https://other.t.ts.net"}`); code != http.StatusConflict || !strings.Contains(body, "another node") {
 		t.Fatalf("taken name: %d %s", code, body)
 	}
 	// The announcer cannot remove anyone: DELETE is the user's alone.
-	r.who.set(r.node, "tag:worker")
+	r.who.setHolder(r.node, "tag:worker")
 	if code, _ := r.peer("DELETE", "/api/peers/vm1", ""); code != http.StatusForbidden {
 		t.Fatalf("self-unregister: %d", code)
 	}
@@ -268,8 +162,8 @@ func TestAnnounceThenPeerAndAgentsAppear(t *testing.T) {
 
 func TestAnnounceRefusals(t *testing.T) {
 	// Off by default.
-	off := newTagRig(t, false)
-	off.who.set("w1.t.ts.net", "tag:worker")
+	off := newCapRig(t, false)
+	off.who.setHolder("w1.t.ts.net", "tag:worker")
 	if code, body := off.peer("POST", "/api/peers/announce", `{"name":"w1"}`); code != http.StatusForbidden || !strings.Contains(body, "self_register_off") {
 		t.Fatalf("off: %d %s", code, body)
 	}
@@ -277,14 +171,14 @@ func TestAnnounceRefusals(t *testing.T) {
 		t.Fatalf("registered while off: %s", b)
 	}
 
-	r := newTagRig(t, true)
+	r := newCapRig(t, true)
 	// Untagged / wrongly tagged nodes cannot announce.
-	r.who.set("laptop.t.ts.net")
-	if code, body := r.peer("POST", "/api/peers/announce", `{"name":"laptop"}`); code != http.StatusForbidden || !strings.Contains(body, "tag_not_allowed") {
+	r.who.setHolder("laptop.t.ts.net")
+	if code, body := r.peer("POST", "/api/peers/announce", `{"name":"laptop"}`); code != http.StatusForbidden || !strings.Contains(body, "cap_not_held") {
 		t.Fatalf("untagged: %d %s", code, body)
 	}
 	// A worker cannot register someone else's URL, however it is spelled.
-	r.who.set("w1.t.ts.net", "tag:worker")
+	r.who.setHolder("w1.t.ts.net", "tag:worker")
 	for _, u := range []string{"https://w2.t.ts.net", "https://w1.t.ts.net.evil.example.com", "https://evil.example.com", "https://w2.t.ts.net@w1.t.ts.net"} {
 		if code, body := r.peer("POST", "/api/peers/announce", `{"name":"w1","url":"`+u+`"}`); code != http.StatusBadRequest {
 			t.Errorf("url %s: %d %s", u, code, body)
@@ -305,20 +199,5 @@ func TestAnnounceRefusals(t *testing.T) {
 	// With no name or url, the node's own are used.
 	if code, body := r.peer("POST", "/api/peers/announce", `{}`); code != http.StatusCreated || !strings.Contains(body, `"name":"w1"`) || !strings.Contains(body, `https://w1.t.ts.net`) {
 		t.Fatalf("defaults: %d %s", code, body)
-	}
-}
-
-func TestServePeerListenerRefusesNonTailnetAddresses(t *testing.T) {
-	r := newTagRig(t, false)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, Fleet: r.fl, AllowTags: []string{"tag:worker"}, WhoIs: r.who}, nil, nil)
-	for _, addr := range []string{"127.0.0.1:0", "0.0.0.0:0"} {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s.ServePeerListener(ln); err == nil || !strings.Contains(err.Error(), "tailnet") {
-			t.Errorf("%s: %v", addr, err)
-		}
-		ln.Close()
 	}
 }

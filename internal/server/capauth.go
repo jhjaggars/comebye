@@ -19,7 +19,7 @@ import (
 // That header does not say who the caller is, so the hub asks WhoIs about
 // X-Forwarded-For, which Serve overwrites with the real source address. The
 // answer must be a tagged node that holds the capability itself. From there
-// the rules are the peer listener's: the forwarded-agent role and nothing
+// the rules: the forwarded-agent role and nothing
 // else, a registered peer (or one announcing itself), /api/* only, and no
 // login, token or host name the client claims counts.
 //

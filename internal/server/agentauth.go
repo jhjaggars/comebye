@@ -32,7 +32,7 @@ import (
 // role to the forwarded request again.
 //
 // A tagged node (a spot worker, which WhoIs identified: see capauth.go and
-// peerlisten.go) gets less than that, and it is a real boundary: such a
+// tagged.go) gets less than that, and it is a real boundary: such a
 // node's identity is not something it can claim otherwise. Only
 // routes wrapped in authWorker or authAgentLocal admit it, and those it
 // reaches are limited to its own host and the recorded coordinators (see
@@ -105,7 +105,7 @@ func cleanID(s string) string {
 // otherwise the Tailscale identity, as before, with a peer's forwarded
 // agent request turned into the agent role.
 func (s *Server) identify(r *http.Request) (caller, bool) {
-	// A tagged node was identified by WhoIs (see PeerHandler and capPeers);
+	// A tagged node was identified by WhoIs (see capPeers);
 	// no header, token or login is consulted, and the role can only be the
 	// forwarded agent.
 	if t, ok := taggedOf(r); ok {
