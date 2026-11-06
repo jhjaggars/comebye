@@ -11,6 +11,17 @@
 # and network logs land in OUT_DIR (default: a temp dir). Exit 1 on failure.
 set -euo pipefail
 
+# SCHEME=dark|light picks the emulated prefers-color-scheme. Unset, the whole
+# run happens twice on fresh servers (state left by one pass would skew the
+# other): dark in OUT_DIR, then light in OUT_DIR/light.
+if [ -z "${SCHEME:-}" ]; then
+  me="${BASH_SOURCE[0]}"; rc=0
+  o="${2:-$(mktemp -d)}"
+  SCHEME=dark "$me" "${1:-}" "$o" || rc=1
+  SCHEME=light PORT=$(( ${PORT:-18741} + 1 )) "$me" "${1:-}" "$o/light" || rc=1
+  exit $rc
+fi
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 app="$(cd "${1:-$root}" && pwd)"

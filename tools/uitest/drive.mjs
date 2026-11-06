@@ -8,7 +8,7 @@ import fs from "node:fs";
 const [base, out] = process.argv.slice(2);
 const WAIT = Number(process.env.REPLY_WAIT_MS || 9000);
 
-const { browser, page } = await launch();
+const { browser, page } = await launch({ dark: process.env.SCHEME !== "light" });
 const log = [];
 page.on("console", (m) => log.push(`console.${m.type()}: ${m.text()}`));
 page.on("pageerror", (e) => log.push(`pageerror: ${e.message}`));
@@ -390,13 +390,40 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
   if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
   const t = (await page.locator("#f-menu button:visible").allInnerTexts()).map((x) => x.trim());
-  const want = [/^Sweep for finished agents/, /^Review removals/, /briefing/i, /^Briefings screen/, /^Briefing schedule/, /^Notifications/, /^Refresh/];
+  const want = [/^Sweep for finished agents/, /^Review removals/, /briefing/i, /^Briefings screen/, /^Briefing schedule/, /^Notifications/, /^Theme:/, /^Refresh/];
   if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
   const box = await page.locator("#f-menu").boundingBox();
   if (box.x < 0 || box.x + box.width > 390) throw new Error("menu off-screen " + JSON.stringify(box));
   await page.keyboard.press("Escape");
   await page.waitForSelector("#f-menu", { state: "hidden", timeout: 2000 });
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "false") throw new Error("aria-expanded not reset");
+});
+await check("theme: the menu cycles System / Light / Dark, it is stored, and a reload applies it before first paint", async () => {
+  const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const attr = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+  const dark = "rgb(16, 18, 24)", light = "rgb(243, 244, 247)";
+  const sys = process.env.SCHEME === "light" ? light : dark;
+  await page.evaluate(() => { try { localStorage.removeItem("comebye.theme"); } catch {} });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#btn-fleet");
+  if (await attr() !== null || await bg() !== sys) throw new Error("system: " + await attr() + " " + await bg());
+  const step = async (label, want, color) => {
+    await fleetMenuOpen();
+    await page.locator("#f-theme").click();
+    if (await attr() !== want) throw new Error(label + ": data-theme " + await attr());
+    if (await bg() !== color) throw new Error(label + ": body " + await bg());
+    const saved = await page.evaluate(() => localStorage.getItem("comebye.theme"));
+    if (saved !== label) throw new Error("stored " + saved);
+  };
+  await step("light", "light", light);
+  await step("dark", "dark", dark);
+  // Forced dark survives a reload and is painted by the <head> script, before the app runs.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  if (await attr() !== "dark" || await bg() !== dark) throw new Error("reload: " + await attr());
+  await step("system", null, sys);
+  await fleetMenuOpen();
+  if (!/Theme: System/.test(await page.locator("#f-theme").innerText())) throw new Error("label");
+  await page.keyboard.press("Escape");
 });
 await check("fleet menu: the dashed sweep row is gone and the removals banner stays", async () => {
   if (await page.locator("#sweep-open").count()) throw new Error("#sweep-open still in the page");
