@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const secretKey = "tskey-auth-SECRETSECRET-DONOTLEAK"
@@ -850,5 +851,80 @@ echo "$3" >>"$HOME/installed"
 	out, err := run(step)
 	if err == nil || !strings.Contains(out, "herdr integration install pi failed") {
 		t.Errorf("a failed install must fail the step clearly: err=%v out=%q", err, out)
+	}
+}
+
+// runIdleCheck runs the idle script under bash with fake ps, runuser, getent,
+// systemctl and logger, and returns the decision line and whether it powered off.
+func runIdleCheck(t *testing.T, ps, herdrOut string, herdrFails, herdrUnit bool, idleMin int, minutesAgo int) (line string, poweroff, touched bool) {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/bash\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w("ps", "cat <<'EOF'\n"+ps+"\nEOF\n")
+	w("getent", "echo worker:x:1000:1000::"+dir+":/bin/bash\n")
+	fail := "0"
+	if herdrFails {
+		fail = "1"
+	}
+	// runuser -u USER -- env HOME=... herdr agent list
+	w("runuser", "[ "+fail+" = 1 ] && exit 1\ncat <<'EOF'\n"+herdrOut+"\nEOF\n")
+	unit := "1"
+	if herdrUnit {
+		unit = "0"
+	}
+	w("systemctl", "if [ \"$1\" = poweroff ]; then echo poweroff >>"+dir+"/log; exit 0; fi\nexit "+unit+"\n")
+	w("logger", "shift 2; echo \"$*\" >>"+dir+"/log\n")
+	conf := filepath.Join(dir, "idle.conf")
+	os.WriteFile(conf, []byte(fmt.Sprintf("WK_USER=worker\nWK_IDLE_MINUTES=%d\n", idleMin)), 0o644)
+	stamp := filepath.Join(dir, "stamp")
+	os.WriteFile(stamp, nil, 0o644)
+	old := time.Now().Add(-time.Duration(minutesAgo) * time.Minute)
+	os.Chtimes(stamp, old, old)
+	cmd := exec.Command("bash", "-c", idleCheck)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "WK_IDLE_CONF=" + conf, "WK_IDLE_STAMP=" + stamp}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("idle check: %v\n%s", err, out)
+	}
+	logb, _ := os.ReadFile(filepath.Join(dir, "log"))
+	st, _ := os.Stat(stamp)
+	return string(logb), strings.Contains(string(logb), "poweroff\n"), st.ModTime().After(old.Add(time.Minute))
+}
+
+const (
+	psMux      = "sshd: /usr/sbin/sshd -D [listener]\nsshd: worker [priv]\nsshd: worker@notty\n/home/worker/.local/bin/herdr remote-client-bridge --idle-timeout-v1"
+	psPty      = psMux + "\nsshd: worker [priv]\nsshd: worker@pts/1"
+	agentsIdle = `{"result":{"agents":[{"agent_status":"idle"},{"agent_status":"blocked"},{"agent_status":"done"},{"agent_status":"unknown"}]}}`
+	agentsWork = `{"result":{"agents":[{"agent_status":"idle"},{"agent_status":"working"}]}}`
+)
+
+func TestIdleCheckDecisions(t *testing.T) {
+	cases := []struct {
+		name                     string
+		ps, agents               string
+		herdrFails, herdrUnit    bool
+		minutesAgo               int
+		wantActive, wantPoweroff bool
+		wantLine                 string
+	}{
+		{"herdr's bare ssh connection and an idle agent do not keep the VM up", psMux, agentsIdle, false, true, 40, false, true, "powering off"},
+		{"not yet idle long enough", psMux, agentsIdle, false, true, 10, false, false, "idle for 10 of 30 min"},
+		{"an interactive ssh session is activity", psPty, agentsIdle, false, true, 40, true, false, "1 interactive ssh session"},
+		{"a working agent is activity", psMux, agentsWork, false, true, 40, true, false, "1 herdr agent(s) working"},
+		{"herdr up but silent: no guess", psMux, "", true, true, 40, true, false, "did not answer"},
+		{"herdr not running at all: idle", psMux, "", true, false, 40, false, true, "powering off"},
+	}
+	for _, c := range cases {
+		line, off, touched := runIdleCheck(t, c.ps, c.agents, c.herdrFails, c.herdrUnit, 30, c.minutesAgo)
+		if off != c.wantPoweroff || touched != c.wantActive || !strings.Contains(line, c.wantLine) {
+			t.Errorf("%s: poweroff=%v touched=%v log=%q", c.name, off, touched, line)
+		}
 	}
 }

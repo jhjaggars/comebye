@@ -214,8 +214,20 @@ only) is what limits where it works from.
    `StrictHostKeyChecking yes`.
 3. Over that ssh: packages (`git jq bubblewrap socat curl`), Tailscale from its
    apt repository, linger, and the idle timer. Every five minutes it powers the
-   VM off after 120 minutes with no ssh session and no herdr agent `working`
-   (a guest poweroff stops the instance on both clouds; `start` brings it back).
+   VM off after `idle_minutes` with no interactive ssh session and no herdr agent
+   `working` (a guest poweroff stops the instance on both clouds; `start` brings it back).
+   What counts as activity: an ssh session with a pty (`ssh -t`, `worker login`),
+   and an agent whose herdr state is `working`. Bare ssh connections do not count,
+   so herdr's saved-machine connection (a ControlMaster or bridge, no pty) cannot
+   keep the VM up; neither does a herdr TUI merely attached (herdr exposes no
+   "client attached" signal; typing makes the agent `working`). `idle`, `done`,
+   `unknown` and `blocked` agents do not count: a blocked agent waits on you, and
+   `start` brings the VM back. If herdr is up but does not answer, the VM stays
+   up. Each tick logs its decision: `journalctl -t comebye-idle` on the VM. Run
+   `sudo WK_IDLE_DRY=1 /usr/local/sbin/comebye-idle-check` to see the decision
+   without changing anything. Re-running `create NAME` re-installs the script
+   on an existing worker (step 6 always runs), so a worker built earlier gets
+   this rule that way.
    **Max run time:** GCP enforces `max_run_duration` itself. EC2 has no such
    cap, so on AWS a **guest-side systemd timer** powers the VM off that long
    after each boot. It is **advisory**: root on the VM can defeat it, so the
@@ -314,8 +326,8 @@ WantedBy=timers.target
 
 Each run sends the whole session directory, compressed, from every running worker.
 On AWS, at $0.09/GB egress, a worker with 200 MB of sessions costs about $0.09 a day
-at this rate (an estimate; most have far less). A pull overlapping the idle check's
-5-minute tick counts as ssh activity, so it can only rarely delay the idle poweroff.
+at this rate (an estimate; most have far less). A pull is not an interactive session, so it does not
+delay the idle poweroff; a tick that lands mid-pull on an otherwise idle worker past its limit could stop the VM, which `archive` reports as an ssh failure to repeat.
 Codex sessions are not archived: the archive knows only Claude and pi.
 
 ## What `destroy` removes

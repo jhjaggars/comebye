@@ -414,7 +414,7 @@ func (e *env) createPlan(name string, o createOpts) error {
 	e.printf("1. cloud resources (%s)\n", c.Provider)
 	e.prov().Plan(name, pub, e.printf)
 	e.printf("2. ssh key: ssh-keygen -t ed25519 at %s, only if absent; host key verified, known_hosts written to %s/known_hosts, StrictHostKeyChecking yes\n", c.KeyPath(), c.WorkerDir(name))
-	e.printf("3. over ssh as root: apt packages (git jq bubblewrap socat curl ...), tailscale from its apt repo,\n   linger, /data/code, /data/worktrees, idle-poweroff timer (%d min, no ssh session and no working agent)%s\n", c.IdleMinutes, maxRunNote(c))
+	e.printf("3. over ssh as root: apt packages (git jq bubblewrap socat curl ...), tailscale from its apt repo,\n   linger, /data/code, /data/worktrees, idle-poweroff timer (%d min, no interactive ssh session and no working agent)%s\n", c.IdleMinutes, maxRunNote(c))
 	e.printf("4. tailnet:\n")
 	if _, err := os.Stat(c.TSOAuthFile); err == nil {
 		e.printf("   OAuth client %s: delete an offline %s device named %s (never an untagged one), mint a single-use\n   pre-authorized %s key valid 10 minutes\n", c.TSOAuthFile, c.Tag, name, c.Tag)

@@ -40,7 +40,7 @@ install -d -m 0755 /etc/comebye-worker
 printf 'WK_USER=%s\nWK_IDLE_MINUTES=%s\n' "$WK_USER" "$WK_IDLE_MINUTES" >/etc/comebye-worker/idle.conf
 cat >/etc/systemd/system/comebye-idle.service <<'UNIT'
 [Unit]
-Description=Power off when idle (no ssh session, no working herdr agent)
+Description=Power off when idle (no interactive ssh session, no working herdr agent)
 
 [Service]
 Type=oneshot
