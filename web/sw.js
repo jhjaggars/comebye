@@ -40,7 +40,7 @@ self.addEventListener("push", (ev) => {
     opts.tag = d.tag;           // a newer notification for an agent replaces the older one
     opts.renotify = !!d.renotify; // ...and buzzes again for "needs input"
   }
-  ev.waitUntil(self.registration.showNotification(d.title || "herdr", opts));
+  ev.waitUntil(self.registration.showNotification(d.title || "Comebye", opts));
 });
 
 self.addEventListener("notificationclick", (ev) => {

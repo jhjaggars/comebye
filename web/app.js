@@ -4787,7 +4787,7 @@ function pushState() {
 }
 
 const PUSH_TEXT = {
-  "ios-install": "On iPhone and iPad, notifications only work in the Home Screen app. In Safari, tap Share, then “Add to Home Screen”, and open herdr from your Home Screen.",
+  "ios-install": "On iPhone and iPad, notifications only work in the Home Screen app. In Safari, tap Share, then “Add to Home Screen”, and open Comebye from your Home Screen.",
   "ios-old": "Notifications need iOS 16.4 or later, in the Home Screen app.",
   unsupported: "This browser does not support Web Push notifications.",
   "server-off": "Web Push is turned off on the server.",
