@@ -1639,6 +1639,41 @@ function renderFleetMenu() {
   $("f-sched").textContent = "Briefing schedule…" + sfx;
 }
 
+/* ---------- theme: System / Light / Dark ---------- */
+//
+// The inline script in <head> applies the saved choice before first paint;
+// this cycles it from the ⋯ menu. "system" removes data-theme so the
+// prefers-color-scheme media query decides.
+
+const THEME_KEY = "comebye.theme";
+const THEMES = ["system", "light", "dark"];
+
+function themeChoice() {
+  const t = lsGet(THEME_KEY);
+  return THEMES.includes(t) ? t : "system";
+}
+
+function applyTheme(t) {
+  const root = document.documentElement;
+  if (t === "light" || t === "dark") root.setAttribute("data-theme", t);
+  else root.removeAttribute("data-theme");
+  // The two media-qualified theme-color metas follow the OS; a forced theme
+  // needs one unconditional value.
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+    if (!m.dataset.media) m.dataset.media = m.getAttribute("media") || "";
+    if (t === "system") m.setAttribute("media", m.dataset.media);
+    else m.setAttribute("media", m.dataset.media.includes(t) ? "all" : "not all");
+  });
+  const b = $("f-theme");
+  if (b) b.textContent = "Theme: " + t[0].toUpperCase() + t.slice(1);
+}
+
+function cycleTheme() {
+  const next = THEMES[(THEMES.indexOf(themeChoice()) + 1) % THEMES.length];
+  lsSet(THEME_KEY, next);
+  applyTheme(next);
+}
+
 function toggleFleetMenu(show, focus) {
   const menu = $("f-menu");
   const open = show ?? menu.hidden;
@@ -5943,6 +5978,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("f-sched").addEventListener("click", fleetAction(editBriefSchedule));
   $("f-notify").addEventListener("click", fleetAction(() => { toggleNotifyPanel(); if (!$("notify-panel").hidden) $("notify-panel").scrollIntoView?.({ block: "nearest" }); }));
   $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));
+  $("f-theme").addEventListener("click", fleetAction(cycleTheme));
+  applyTheme(themeChoice());
   $("f-menu").addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); toggleFleetMenu(false); $("btn-fleet").focus(); return; }
     if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
