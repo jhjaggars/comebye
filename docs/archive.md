@@ -81,6 +81,16 @@ The object keys are the same as the file paths in a directory, so `aws s3 sync`
 or `rclone copy` moves an archive into a bucket, and `archive verify` then checks
 it against the session files. Tested against Garage v2.5.0.
 
+Two things about the `aws` CLI through a Tailscale Ingress:
+
+- **`aws s3 cp` downloads fail** with `signed header content-length is not
+  present`. Check an upload with `archive verify` and ETags instead. Comebye's own
+  reads, `aws s3api get-object` and uploads are not affected.
+- **Set `multipart_threshold = 64MB` under `s3 =` in the `aws` config before
+  migrating.** Above the default 8 MB threshold, `aws s3 sync` uploads in parts, and
+  the object's ETag (`...-2`) cannot be compared with a local MD5. Below the
+  threshold, the ETag is the file's MD5.
+
 - **Create-only is done by HEAD then PUT.** Garage v2.5.0 ignores `If-None-Match`
   on PUT: a second PUT replaces the object. That window is safe because each host
   writes only under its own `v1/<host>/` prefix, its writers take the lock above,
