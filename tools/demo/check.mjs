@@ -200,7 +200,7 @@ console.log("== free exploration, dark");
   await page.click('#nav [data-page="search"]');
   await page.waitForSelector("#recall:not([hidden])");
   await page.waitForSelector("#rc-results .rc-card");
-  ok(await page.locator("#rc-results .rc-card").count() === 5, "recent sessions listed");
+  ok(await page.locator("#rc-results .rc-card").count() === 10, "recent sessions listed");
   await page.fill("#rc-q", "jitter");
   await page.waitForFunction(() => document.querySelectorAll("#rc-results .rc-card").length === 1 && document.querySelector("#rc-results mark"));
   ok(true, "search finds and marks the match");

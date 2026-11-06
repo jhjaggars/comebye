@@ -5,6 +5,7 @@
   "use strict";
   const el = (id) => document.getElementById(id);
   const REPO = "https://github.com/jhjaggars/comebye";
+  const GALLERY = "https://claude.ai/artifact/CT5UEDMUgX7hLUBzuvtrfm"; // the screenshots page (shots.mjs)
   PUSH_TEXT.unsupported = "Push notifications are off in this demo. On a real install, you get one when an agent finishes or needs input, even with the app closed.";
 
   const STORE = "studio/w4:p1", WORKER = "buildbox/w3:p1", COORD = "studio/w1:p1";
@@ -284,7 +285,7 @@
         ${wide ? `<button type="button" class="demo-btn primary" data-act="tour">Take the tour (${STEPS.length} steps)</button>` : ""}
         <button type="button" class="demo-btn${wide ? "" : " primary"}" data-act="close">Explore on my own</button>
       </div>
-      <p class="fine">Source and install guide: <a href="${REPO}" target="_blank" rel="noopener">github.com/jhjaggars/comebye</a> · <a href="${REPO}/tree/main/docs" target="_blank" rel="noopener">docs</a></p>
+      <p class="fine">Source and install guide: <a href="${REPO}" target="_blank" rel="noopener">github.com/jhjaggars/comebye</a> · <a href="${REPO}/tree/main/docs" target="_blank" rel="noopener">docs</a> · <a href="${GALLERY}" target="_blank" rel="noopener">screenshots</a></p>
     </div>`;
     d.addEventListener("click", (ev) => {
       const b = ev.target.closest("[data-act]");

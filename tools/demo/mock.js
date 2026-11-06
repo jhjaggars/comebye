@@ -370,6 +370,37 @@
       ["tool", "Bash deployctl logs tidepool --since 01:45 --until 02:15", "t1"], ["result", "01:58 migrate: bookings_idx started\n02:03 health: /readyz 503 (db pool exhausted)\n02:04 token=•••••••• rolled back by operator", "t1"],
       ["assistant", "The index migration held the connection pool, so the readiness check failed and paged. The fix is to build the index concurrently, and to give the health check its own connection."],
     ], { secrets: 1 }),
+    R("studio", "claude", "f6a5b4c3-6666-4fff-8fff-000000000006", "Failed confirmation emails are never retried", "tidepool", "mail-backoff", 2300, 50, "landed", [
+      ["handoff", "Booking confirmation emails are lost when the mail provider has a bad minute. Queue and retry them."],
+      ["user", "Booking confirmation emails are lost when the mail provider has a bad minute. Queue and retry them."],
+      ["assistant", "They're sent once, inline, and a failure is only logged. I'll move them to the outbox table and reuse the sync client's backoff instead of writing another one."],
+      ["tool", "Edit internal/mail/outbox.go", "t1"], ["result", "Send() now writes to the outbox; a worker drains it with backoff.Next(attempt)", "t1"],
+      ["tool", "Bash go test ./internal/mail/", "t2"], ["result", "ok  \texample.dev/tidepool/internal/mail\t0.644s", "t2"],
+      ["assistant", "Done. A provider outage now delays an email instead of losing it, and after 24 hours the booking gets a flag in the admin page."],
+    ]),
+    R("buildbox", "pi", "a7b6c5d4-7777-4aaa-8bbb-000000000007", "Uploader gives up on the first 429", "fernlog", "upload-429", 5200, 40, "reported", [
+      ["user", "fernlog upload drops the whole batch when the collector returns 429. It should wait and carry on."],
+      ["assistant", "It treats every non-2xx as fatal. I'll retry 429 and 503 with a capped backoff, and resume from the last acknowledged chunk."],
+      ["tool", "Edit upload/client.go", "t1"], ["result", "retryable(status) covers 429, 502, 503; resume uses the ack offset", "t1"],
+      ["tool", "Bash go test ./upload/ -run TestResume", "t2"], ["result", "ok  \texample.dev/fernlog/upload\t0.291s", "t2"],
+      ["assistant", "**Report:** a 2 GB upload against a collector that returns 429 half the time now finishes, with no duplicate chunks."],
+    ]),
+    R("spot-7", "claude", "b8c7d6e5-8888-4bbb-8ccc-000000000008", "Do partners actually send Retry-After?", "tidepool", "", 900, 25, "reported", [
+      ["user", "Before we change webhook retries: how many partners send Retry-After with a 429?"],
+      ["assistant", "I'll count it from last month's delivery log."],
+      ["tool", "Bash deployctl logs webhooks --since 30d --grep ' 429 ' | cut -d' ' -f4,9 | sort | uniq -c", "t1"], ["result", "  8123 partner-a retry-after=120\n   941 partner-b -\n   212 partner-c retry-after=30", "t1"],
+      ["assistant", "Two of the three do, and those two are 90% of the traffic. So honour the header first, and use backoff only when it's missing."],
+    ]),
+    R("studio", "codex", "c9d8e7f6-9999-4ccc-8ddd-000000000009", "Pick a backoff library or write our own?", "fernlog", "", 8800, 15, "abandoned", [
+      ["user", "Is there a backoff library worth using here, or should this stay a few lines of ours?"],
+      ["assistant", "The function is six lines, and the libraries bring contexts and timers we already have. I'd keep ours and test it."],
+    ]),
+    R("buildbox", "claude", "d0e9f8a7-aaaa-4ddd-8eee-00000000000a", "Contact form submits twice on slow networks", "marigold-site", "form-once", 3100, 18, "landed", [
+      ["user", "The contact form sometimes sends two messages. Fix it."],
+      ["assistant", "The button stays enabled while the request is in flight, so an impatient second tap sends again. I'll disable it and send an idempotency key too."],
+      ["tool", "Edit src/components/ContactForm.tsx", "t1"], ["result", "disabled while pending; sends one key per form render", "t1"],
+      ["assistant", "Fixed and landed. The server already drops repeated keys."],
+    ]),
   ];
   const SUB = { "a1f0c2d4-1111-4aaa-8aaa-000000000001": { "sa-44d0e1a9": [
     { seq: 0, role: "user", ts: ago(4290), text: "Find every caller of the sync client that sets its own retry loop." },
