@@ -22,6 +22,7 @@ const state = {
   unauthorized: false, // last API call got 401 (Tailscale login not allowlisted)
   pendingRoute: null,  // {host, pane} from #/agent/... waiting for the agent list to arrive
   pushedRoute: false,  // openDetail pushed a history entry (back pops it)
+  view: null,          // desktop only: the page filling the main pane ("briefing", "todo", "search"), or null for an agent / nothing
 };
 
 /* ---------- helpers ---------- */
@@ -2749,6 +2750,8 @@ function route() {
   if (!r) {
     state.pendingRoute = null;
     if (state.selected) closeDetail();
+    // The hash names the page (desktop); the search page has none and keeps itself.
+    if (isDesktop() && (viewFromHash() || state.view !== "search")) setView(viewFromHash());
     return;
   }
   const a = routedAgent(r);
@@ -2770,9 +2773,39 @@ function applyPendingRoute() {
   history.replaceState(null, "", location.pathname + location.search);
 }
 
+/* ---------- pages (desktop): Briefing, To do, Search fill the main pane ---------- */
+//
+// One selection fills one pane: an agent (state.selected) or a page
+// (state.view), never both. The pages are only a desktop thing; below
+// 1100px the hash routes do nothing new and the phone flow is unchanged.
+
+const PAGE_HASH = { briefing: "#/briefings", todo: "#/todo" };
+const viewFromHash = () => (isDesktop() ? Object.keys(PAGE_HASH).find((k) => PAGE_HASH[k] === location.hash) || null : null);
+
+// setView shows a page (or none) without touching the history.
+function setView(v) {
+  state.view = isDesktop() ? v : null;
+  for (const k of ["briefing", "todo", "search"]) document.body.classList.toggle("view-" + k, state.view === k);
+  document.body.classList.toggle("has-page", !!state.view);
+  if (state.view === "todo") renderTodos();
+}
+
+// openPage replaces the agent in the main pane with a page. Leaving the
+// agent goes through closeDetail, which stops the polling and clears
+// presence: otherwise the server keeps holding notifications for an agent
+// that is no longer on screen.
+function openPage(v) {
+  if (!isDesktop()) return;
+  if (state.selected != null) closeDetail();
+  const hash = PAGE_HASH[v] || "";
+  if (location.hash !== hash && (hash || location.hash)) history.pushState(null, "", hash || location.pathname + location.search);
+  setView(v);
+}
+
 function openDetail(id) {
   const a = agentById(id);
   if (!a) return;
+  setView(null);
   resetTerminalView();
   const hash = agentHash(a);
   if (location.hash !== hash) {
@@ -5554,7 +5587,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
   document.addEventListener("keydown", onNextWaiting);
-  desktopMQ.addEventListener("change", () => { renderList(); renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
+  desktopMQ.addEventListener("change", () => { setView(viewFromHash()); renderList(); renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
   window.addEventListener("offline", () => setConn(false));
 
   $("back").addEventListener("click", () => {

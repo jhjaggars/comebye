@@ -837,6 +837,42 @@ await check("desktop: waiting agents sit in a Needs you group at the top, and n 
   await page.waitForFunction(() => document.querySelector("#agents .agent.selected")?.dataset.id.endsWith("w9:p1") && location.hash.startsWith("#/agent/"), null, { timeout: 5000 });
 });
 
+// ---- pages in the router: one selection fills the main pane ----
+await check("pages: opening one leaves the agent through closeDetail (presence clears), and its hash is the route", async () => {
+  await desktopList(1280);
+  const posts = [];
+  const onReq = (r) => { if (r.url().includes("/api/push/presence")) posts.push(JSON.parse(r.postData() || "{}")); };
+  page.on("request", onReq);
+  try {
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForFunction(() => state.selected && state.selected.endsWith("w1:p1"));
+    await page.waitForTimeout(300);
+    if (!posts.some((p) => p.pane && p.visible)) throw new Error("no presence for the open agent: " + JSON.stringify(posts));
+    posts.length = 0;
+    await page.evaluate(() => openPage("todo"));
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => ({ sel: state.selected, view: state.view, hash: location.hash, poll: state.pollTimer, cls: document.body.className }));
+    if (r.sel !== null || r.view !== "todo" || r.hash !== "#/todo" || r.poll || !/view-todo/.test(r.cls) || /has-detail/.test(r.cls)) throw new Error("state " + JSON.stringify(r));
+    if (!posts.length || posts[posts.length - 1].pane !== "") throw new Error("presence not cleared: " + JSON.stringify(posts));
+    // Opening an agent from a page drops the page.
+    await page.evaluate(() => openDetail(state.agents[0].id || state.agents[0].pane_id));
+    const v = await page.evaluate(() => state.view);
+    if (v !== null) throw new Error("page still set over an agent: " + v);
+    // Back returns to the page, and a cold start on its hash opens it.
+    await page.goto(base + "/#/todo", { waitUntil: "load" });
+    await page.waitForFunction(() => state.view === "todo");
+  } finally { page.off("request", onReq); }
+});
+await check("pages: below the breakpoint the page hashes do nothing and openPage is a no-op", async () => {
+  await desktopList(1099);
+  await page.goto(base + "/#/todo", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
+  await page.evaluate(() => openPage("briefing"));
+  const r = await page.evaluate(() => ({ view: state.view, hash: location.hash, cls: document.body.className }));
+  if (r.view !== null || r.hash !== "#/todo" || /view-|has-page/.test(r.cls)) throw new Error("state " + JSON.stringify(r));
+});
+
 await check("desktop: below the breakpoint (1099px) it is still the phone layout", async () => {
   await desktopList(1099);
   const [l, a] = await Promise.all([geo("#list"), geo("#agents")]);
