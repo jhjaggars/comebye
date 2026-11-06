@@ -112,39 +112,12 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    `comebye peer add NAME https://NAME.<tailnet>.ts.net --tag tag:worker` to
    run on the hub.
 
-   **Legacy: the peer listener.** Before the capability path, workers reached
-   the hub on a second socket. It still works and can run alongside Serve:
-
-   ```sh
-   COMEBYE_TS_ALLOW_TAGS=tag:worker
-   COMEBYE_PEER_LISTEN=8742
-   ```
-
-   with `hub_peer_url=http://hub.<tailnet>.ts.net:8742` in the worker config,
-   an ACL grant `{ "src": ["tag:worker"], "dst": ["you@example.com"], "ip":
-   ["tcp:8742"] }` (the port equal to `COMEBYE_PEER_LISTEN`), and **a host
-   firewall on the hub that allows that port on `tailscale0`.** The ACL only
-   decides what the tailnet permits; the hub's own firewall still sees the
-   packets. On firewalld hosts (Fedora), `tailscale0` is in no zone and falls
-   into the default zone, which usually allows only ssh, so the worker's
-   `announce` fails with "connection refused" (instantly, unlike an ACL drop,
-   which hangs) while Serve on 443 keeps working. Give the interface a zone
-   that opens only the listener port:
-
-   ```sh
-   sudo firewall-cmd --permanent --new-zone=tailscale
-   sudo firewall-cmd --permanent --zone=tailscale --add-interface=tailscale0
-   sudo firewall-cmd --permanent --zone=tailscale --add-port=8742/tcp   # = COMEBYE_PEER_LISTEN
-   sudo firewall-cmd --reload
-   ```
-
-   Moving the interface out of its old zone also drops whatever that zone
-   allowed over the tailnet (for example ssh): add those services to the new
-   zone if you use them. Check with `ss -ltn | grep 8742` on the hub (the
-   listener is up) and `curl http://<hub tailnet ip>:8742/api/whoami` from a
-   worker (reachable). A hub that is unreachable at install time also fails
-   the worker's `comebye upgrade` smoke check, which asks the hub for the
-   worker's own agents.
+   The old peer listener (`COMEBYE_PEER_LISTEN`, `COMEBYE_TS_ALLOW_TAGS`, port
+   8742 and its firewall opening) was removed. A worker config with
+   `hub_peer_url=http://...:8742` is refused with a message saying so.
+   A hub that is unreachable at install time fails the worker's
+   `comebye upgrade` smoke check, which asks the hub for the worker's own
+   agents.
 5. **Config** at `~/.config/comebye-worker/config` (copy
    [`tools/worker/config.example`](../tools/worker/config.example)). The
    required keys are `provider` (default `gcp`), then for GCP the project and
@@ -154,8 +127,7 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
    admits the hub's requests as), `hub_url` (the hub's Serve URL, used to read
    its version and remove the peer entry) and `hub_peer_url`, which becomes
    `COMEBYE_HUB` on the worker: the same Serve URL
-   (`https://hub.<tailnet>.ts.net`) for the capability path, or, for the legacy
-   peer listener, `http://hub.<tailnet>.ts.net:8742`. Everything else has a default: `e2-standard-4` (GCP) or `t3.xlarge` (AWS),
+   (`https://hub.<tailnet>.ts.net`). Everything else has a default: `e2-standard-4` (GCP) or `t3.xlarge` (AWS),
    20 GB boot, 50 GB data disk (`pd-balanced` or `gp3`), Debian 12 amd64
    (Arm/Graviton types are refused), auto-stop after 120 idle minutes.
 6. **The hub must run a release** (`vX.Y.Z`). The worker installs the hub's

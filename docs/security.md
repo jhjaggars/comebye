@@ -4,58 +4,14 @@
 agent is, in practice, arbitrary command execution on the host as your user.
 Treat access to it like SSH access to that machine.
 
-- **Loopback only** (with one opt-in exception, below). The server listens on
+- **Loopback only.** The server listens on
   `127.0.0.1`. The only intended
   path from your phone is Tailscale Serve, which terminates HTTPS and is
   reachable only from inside your tailnet.
-- <a id="tagged-nodes-and-the-peer-listener"></a>**Tagged nodes and the peer
-  listener (opt-in).** Tagged tailnet nodes (`tag:worker`) have no login, so
-  Serve cannot identify them by one. With `-peer-listen` (needs `-ts-allow-tag`
-  or `-ts-allow-cap`) the
-  hub opens **one more listener, on its tailnet IP only** (never a wildcard
-  or loopback address; the server refuses to serve it otherwise). This is
-  the only exception to "loopback only", and everything else stays as
-  above: the main listener, its login allowlist and Serve are unchanged.
-  On the peer listener:
-  - **Identity** is tailscaled's WhoIs on the connection's remote address.
-    WireGuard authenticates that address; a local process cannot open a
-    connection that arrives from another node's tailnet IP, and
-    `Tailscale-*` headers (and the agent token, forwarding and host headers)
-    are discarded, so the loopback header forgery described below does not
-    apply to it. Answers are cached for 30 s, so a tag or grant removed in the
-    admin console takes effect within that time. WhoIs failing (tailscaled down)
-    is a refusal, never an admission.
-  - **Role: the forwarded agent only**, never the user, and with the
-    [limits on a tagged worker](#what-a-tagged-worker-reaches). The web app
-    and every user-only route (keys, answers, launching, removals, push, the
-    peer registry) do not answer. A tagged node's requests are attributed to
-    its peer name, not to a host it names itself.
-  - **Admission needs two things:** an allowed tag (or a tag plus the
-    `-ts-allow-cap` capability in WhoIs's answer), and a registered peer
-    whose address is that very node (and that carries the peer's tag, if one
-    was recorded). A tagged VM that nobody registered gets 403.
-  - **Self-registration** (`-peer-self-register`, off by default) lets such
-    a node add *only itself*: the announced URL must be its own node,
-    `https` under `*.ts.net`; names are unique; repeating it is a no-op; it
-    is logged and recorded as `added_by tag:worker@<node>`. It can never
-    remove or alter a peer; removal is the user's alone. Note what
-    registration grants: the hub sends a peer its prompts and trusts its
-    agent list, so tag (and self-register) only machines you control.
-  - **Plain HTTP.** The hop is encrypted and authenticated by WireGuard, but
-    Serve's HTTPS does not cover it, and it exposes a TCP port on the hub's
-    tailnet address to every node your tailnet ACLs let reach it. **Add an
-    ACL** so that only `tag:worker` (and, if you want, your own devices) may
-    reach `<hub>:<port>`; for example a rule allowing `tag:worker` to
-    `<hub-tag-or-host>:8742`, and no `*:*` grants to that port from other
-    tags. Without it, other nodes get a 401/403 from the listener, which is
-    still the whole defence for nodes you did not mean to allow.
-  - The remaining limit is unchanged: **a local process on the hub** can
-    still forge the Serve identity header on the loopback port (the main
-    listener), and a local process on a *worker* is the worker's agent.
-- <a id="tagged-nodes-through-serve"></a>**Tagged nodes through Serve
+- <a id="tagged-nodes-through-serve"></a><a id="tagged-nodes-and-the-peer-listener"></a>**Tagged nodes through Serve
   (opt-in).** With `-ts-allow-cap`, a tagged node holding that app capability
   from a tailnet grant is admitted on the main listener, through Serve run with
-  `--accept-app-caps`. The role and rules are the peer listener's: the
+  `--accept-app-caps`. The role: the
   forwarded agent only, [limited as below](#what-a-tagged-worker-reaches), a
   registered peer (or one announcing itself), `/api/*` only, and no login,
   token or host name it claims counts.
@@ -65,12 +21,27 @@ Treat access to it like SSH access to that machine.
     tailnet node cannot forge them. WhoIs answers are cached for 30 s. A grant
     removed from the policy stops the header as soon as the hub's tailscaled
     sees it.
-  - **The trade-off against the peer listener:** a **local process on the hub**
+  - **The trade-off:** a **local process on the hub**
     can forge both headers on the loopback port, the same way it can forge
     `Tailscale-User-Login`. This adds no new power: forging the login already
     gets it the user role, while this gets it only the agent role, and only as
-    a node that really holds the grant. The peer listener doesn't have this
-    weakness, but the login forgery on the same host remains either way.
+    a node that really holds the grant.
+  - **Admission needs two things:** the capability (in the header and in
+    WhoIs's answer), and a registered peer whose address is that very node
+    (and that carries the peer's tag, if one was recorded). A tagged VM that
+    nobody registered gets 403.
+  - **Self-registration** (`-peer-self-register`, off by default) lets such a
+    node add *only itself*: the announced URL must be its own node, `https`
+    under `*.ts.net`; names are unique; repeating it is a no-op; it is logged
+    and recorded as `added_by tag:worker@<node>`. It can never remove or alter
+    a peer; removal is the user's alone. Note what registration grants: the
+    hub sends a peer its prompts and trusts its agent list, so tag (and
+    self-register) only machines you control.
+  - **Removed:** releases up to v0.5.x could also open a plain-HTTP "peer
+    listener" on its tailnet IP (`-peer-listen`, port 8742, with
+    `-ts-allow-tag`). Tags alone no longer admit anything; the capability is
+    the only way in. Delete the tailnet grant to that port and the hub's
+    firewall opening for it.
   - **Reach:** the grant's `ip` block lets those nodes reach the hub's Serve
     port, so they can load the static UI shell if the capability header is
     missing (for example Serve lacks the flag). They still get no API.
