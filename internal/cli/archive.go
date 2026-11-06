@@ -437,6 +437,9 @@ func cmdRecall(e *Env, args []string) error {
 		return fmt.Errorf("no index at %s: run `comebye archive index` first", path)
 	}
 	ix := &archive.Index{Path: path}
+	if ix.Outdated() {
+		return fmt.Errorf("the index at %s is in an older format: run `comebye archive index` to rebuild it", path)
+	}
 	switch sub {
 	case "ask", "threads", "todo":
 		var views []archive.ThreadView

@@ -2,6 +2,8 @@ package archive
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,13 +38,17 @@ func (ix *Index) bin() string {
 	return "sqlite3"
 }
 
+// schemaVersion is PRAGMA user_version. An index with another version is rebuilt
+// from the archive, into a new file that replaces it when it is complete.
+const schemaVersion = 2
+
 const schema = `
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS sessions(
   host TEXT, kind TEXT, id TEXT, slug TEXT, cwd TEXT, repo TEXT, branch TEXT,
   title TEXT, first_prompt TEXT, version TEXT, started TEXT, ended TEXT,
-  n_msgs INT, n_sub INT, n_bytes INT, n_segs INT, n_streams INT,
-  ledger_id TEXT, ledger_agent TEXT, ledger_branch TEXT, plan_id TEXT, ref TEXT, brief TEXT,
+  n_msgs INT, n_sub INT, n_bytes INT, n_segs INT, n_streams INT, n_secret INT DEFAULT 0,
+  ledger_id TEXT, ledger_agent TEXT, ledger_branch TEXT, plan_id TEXT, ref TEXT, brief TEXT, link_sig TEXT,
   summary TEXT, summary_at TEXT,
   PRIMARY KEY(host,kind,id));
 CREATE INDEX IF NOT EXISTS sessions_started ON sessions(started);
@@ -51,9 +57,21 @@ CREATE TABLE IF NOT EXISTS commits(
   host TEXT, kind TEXT, session_id TEXT, sha TEXT, rel TEXT, branch TEXT, subject TEXT);
 CREATE INDEX IF NOT EXISTS commits_sha ON commits(sha);
 CREATE INDEX IF NOT EXISTS commits_session ON commits(host,kind,session_id);
-CREATE VIRTUAL TABLE IF NOT EXISTS msgs USING fts5(
-  text, host UNINDEXED, kind UNINDEXED, session_id UNINDEXED, seq UNINDEXED,
-  role UNINDEXED, sub UNINDEXED, ts UNINDEXED, tokenize='porter unicode61');
+CREATE TABLE IF NOT EXISTS messages(
+  id INTEGER PRIMARY KEY, host TEXT, kind TEXT, session_id TEXT, seq INT, role TEXT, sub TEXT, ts TEXT,
+  stream TEXT, off INT, tool_id TEXT, is_err INT, secret INT, full_len INT,
+  text TEXT); -- last: long text spills to overflow pages, which filtering on the other columns then skips
+CREATE INDEX IF NOT EXISTS messages_session ON messages(host,kind,session_id,seq);
+CREATE VIRTUAL TABLE IF NOT EXISTS msgs USING fts5(text, content='messages', content_rowid='id', tokenize='porter unicode61');
+CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO msgs(rowid,text) VALUES(new.id,new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO msgs(msgs,rowid,text) VALUES('delete',old.id,old.text);
+END;
+CREATE TABLE IF NOT EXISTS gh_prs(repo TEXT, branch TEXT, fetched TEXT, json TEXT, PRIMARY KEY(repo,branch));
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+PRAGMA user_version=2;
 `
 
 func q(s string) string {
@@ -99,6 +117,14 @@ func (ix *Index) Query(sql string) ([]map[string]any, error) {
 
 // open creates the file (mode 0600) and the schema.
 func (ix *Index) open() error {
+	if err := ix.create(); err != nil {
+		return err
+	}
+	_, err := ix.run(schema, false)
+	return err
+}
+
+func (ix *Index) create() error {
 	if err := os.MkdirAll(filepath.Dir(ix.Path), 0o700); err != nil {
 		return err
 	}
@@ -109,8 +135,34 @@ func (ix *Index) open() error {
 		}
 		f.Close()
 	}
-	_, err := ix.run(schema, false)
-	return err
+	return nil
+}
+
+// version reads the schema version of an existing file; a file that does not
+// exist or is empty has the current one, because open will create it as such.
+func (ix *Index) version() (int, error) {
+	fi, err := os.Stat(ix.Path)
+	if os.IsNotExist(err) || (err == nil && fi.Size() == 0) {
+		return schemaVersion, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	rows, err := ix.Query("PRAGMA user_version;")
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	v, _ := rows[0]["user_version"].(float64)
+	return int(v), nil
+}
+
+// Outdated reports an existing index in another format, which queries cannot read.
+func (ix *Index) Outdated() bool {
+	v, err := ix.version()
+	return err == nil && v != schemaVersion
 }
 
 // stmtWriter streams statements to one sqlite3 process.
@@ -179,6 +231,14 @@ type Link struct {
 	Checks *struct {
 		Unmerged int `json:"unmerged_commits"`
 	} `json:"checks"`
+
+	briefMasked bool // see maskLinks
+}
+
+// sig changes when anything the index stores from the link changes.
+func (l *Link) sig() string {
+	h := sha1.Sum([]byte(strings.Join([]string{l.ID, l.AgentID, l.Branch, l.PlanID, l.Ref, l.RepoName, l.CreatedAt, l.Brief}, "\x00")))
+	return hex.EncodeToString(h[:])
 }
 
 // LoadLinks reads the output of `comebye ledger --json`.
@@ -280,6 +340,51 @@ type SyncStats struct {
 // It covers a.Host and the workers this machine uploaded, so that recall finds
 // a worker's sessions. Threads do not span hosts yet.
 func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (SyncStats, error) {
+	links = maskLinks(links)
+	v, err := ix.version()
+	if err != nil {
+		return SyncStats{}, err
+	}
+	if v != schemaVersion {
+		return ix.rebuild(a, o, links, opt)
+	}
+	return ix.sync(a, o, links, opt)
+}
+
+// rebuild builds the whole index in a new file and moves it into place when it
+// is done, so that readers see the old file until then.
+func (ix *Index) rebuild(a *Archiver, o Opener, links []Link, opt SyncOptions) (SyncStats, error) {
+	tmp := &Index{Path: ix.Path + ".rebuild", Sqlite: ix.Sqlite}
+	clean := func(p string) {
+		for _, f := range []string{p, p + "-wal", p + "-shm"} {
+			os.Remove(f)
+		}
+	}
+	clean(tmp.Path)
+	if err := tmp.open(); err != nil {
+		return SyncStats{}, err
+	}
+	// The PR cache is the one thing the archive cannot give back.
+	// An index too old to have it fails here, and that is fine.
+	_, _ = tmp.run("ATTACH "+q(ix.Path)+" AS old; INSERT OR IGNORE INTO gh_prs SELECT * FROM old.gh_prs; DETACH old;", false)
+	st, err := tmp.sync(a, o, links, opt)
+	if err != nil {
+		clean(tmp.Path)
+		return st, err
+	}
+	// Folds the old file's WAL into it, so that it cannot be applied to the new.
+	if _, err := ix.run("PRAGMA journal_mode=DELETE;", false); err != nil {
+		clean(tmp.Path)
+		return st, err
+	}
+	if err := os.Rename(tmp.Path, ix.Path); err != nil {
+		clean(tmp.Path)
+		return st, err
+	}
+	return st, nil
+}
+
+func (ix *Index) sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (SyncStats, error) {
 	var ss SyncStats
 	if err := ix.open(); err != nil {
 		return ss, err
@@ -318,7 +423,16 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (Syn
 	}
 	ts, err := ix.buildThreads(hosts, links, opt)
 	ss.Threads, ss.Errors = ts.Threads, append(ss.Errors, ts.Errors...)
-	return ss, err
+	if err != nil {
+		return ss, err
+	}
+	// Merges the full-text index's segments. Without it the index grows with
+	// every session rewritten, and queries read every segment.
+	built := time.Now().UTC().Format(time.RFC3339)
+	if _, err := ix.run("INSERT INTO msgs(msgs) VALUES('optimize'); INSERT OR REPLACE INTO meta VALUES('built_at',"+q(built)+"); PRAGMA wal_checkpoint(TRUNCATE);", false); err != nil {
+		return ss, err
+	}
+	return ss, nil
 }
 
 // syncHost brings the rows of one host up to date.
@@ -376,7 +490,7 @@ func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, 
 		w.exec("DELETE FROM sessions WHERE " + where + " AND id=" + q(g.SID) + ";")
 		w.exec("DELETE FROM commits WHERE " + where + " AND session_id=" + q(g.SID) + ";")
 		w.exec("DELETE FROM artifacts WHERE " + where + " AND session_id=" + q(g.SID) + ";")
-		w.exec("DELETE FROM msgs WHERE host=" + q(a.Host) + " AND kind=" + q(g.Kind) + " AND session_id=" + q(g.SID) + ";")
+		w.exec("DELETE FROM messages WHERE host=" + q(a.Host) + " AND kind=" + q(g.Kind) + " AND session_id=" + q(g.SID) + ";")
 		nsub := 0
 		for _, m := range p.Msgs {
 			if m.Sub != "" {
@@ -384,9 +498,9 @@ func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, 
 			}
 		}
 		repo := RepoFromCwd(p.Cwd)
-		w.exec(fmt.Sprintf("INSERT INTO sessions(host,kind,id,slug,cwd,repo,branch,title,first_prompt,version,started,ended,n_msgs,n_sub,n_bytes,n_segs,n_streams) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,%d,%d);",
+		w.exec(fmt.Sprintf("INSERT INTO sessions(host,kind,id,slug,cwd,repo,branch,title,first_prompt,version,started,ended,n_msgs,n_sub,n_bytes,n_segs,n_streams,n_secret) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,%d,%d,%d);",
 			q(a.Host), q(g.Kind), q(g.SID), q(g.Slug), q(p.Cwd), q(repo), q(p.Branch), q(p.Title), q(p.FirstPrompt), q(p.Version),
-			q(p.Start), q(p.End), len(p.Msgs)-nsub, nsub, g.Bytes, g.Segs, g.Streams))
+			q(p.Start), q(p.End), len(p.Msgs)-nsub, nsub, g.Bytes, g.Segs, g.Streams, p.Secrets))
 		for _, c := range p.Commits {
 			w.exec(fmt.Sprintf("INSERT INTO commits VALUES(%s,%s,%s,%s,%s,%s,%s);", q(a.Host), q(g.Kind), q(g.SID), q(c.SHA), q(c.Rel), q(c.Branch), q(c.Subject)))
 		}
@@ -394,8 +508,11 @@ func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, 
 			w.exec(fmt.Sprintf("INSERT INTO artifacts VALUES(%s,%s,%s,%s);", q(a.Host), q(g.Kind), q(g.SID), q(d)))
 		}
 		for _, m := range p.Msgs {
-			w.exec(fmt.Sprintf("INSERT INTO msgs(text,host,kind,session_id,seq,role,sub,ts) VALUES(%s,%s,%s,%s,%d,%s,%s,%s);",
-				q(m.Text), q(a.Host), q(g.Kind), q(g.SID), m.Seq, q(m.Role), q(m.Sub), q(m.TS)))
+			if m.Sub == "" {
+				m.Stream = "" // the main file: it follows from the session's slug and id
+			}
+			w.exec(fmt.Sprintf("INSERT INTO messages(text,host,kind,session_id,seq,role,sub,ts,stream,off,tool_id,is_err,secret,full_len) VALUES(%s,%s,%s,%s,%d,%s,%s,%s,%s,%d,%s,%d,%d,%d);",
+				q(m.Text), q(a.Host), q(g.Kind), q(g.SID), m.Seq, q(m.Role), q(m.Sub), q(m.TS), q(m.Stream), m.Off, q(m.ToolID), b2i(m.IsErr), b2i(m.Secret), m.FullLen))
 		}
 		ss.Indexed++
 		ss.Messages += len(p.Msgs)
@@ -407,7 +524,7 @@ func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, 
 			w.exec("DELETE FROM sessions WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND id=" + q(sid) + ";")
 			w.exec("DELETE FROM commits WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
 			w.exec("DELETE FROM artifacts WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
-			w.exec("DELETE FROM msgs WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
+			w.exec("DELETE FROM messages WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
 			ss.Removed++
 		}
 	}
@@ -427,7 +544,7 @@ func (a *Archiver) parseGroup(o Opener, g *group) (*Parsed, error) {
 	if _, err := StreamTo(&main, a.B, o, a.Host, g.Kind, g.Main); err != nil {
 		return nil, err
 	}
-	p := &Parsed{}
+	p := &Parsed{stream: g.Main}
 	switch g.Kind {
 	case "claude":
 		if err := p.ParseClaude(&main, ""); err != nil {
@@ -439,6 +556,7 @@ func (a *Archiver) parseGroup(o Opener, g *group) (*Parsed, error) {
 				continue // a subagent stream with a gap must not hide the session
 			}
 			id := strings.TrimSuffix(filepath.Base(s), ".jsonl")
+			p.stream = s
 			if err := p.ParseClaude(&b, strings.TrimPrefix(id, "agent-")); err != nil {
 				continue
 			}
@@ -457,7 +575,7 @@ func (a *Archiver) parseGroup(o Opener, g *group) (*Parsed, error) {
 }
 
 func (ix *Index) applyLinks(host string, scope linkScope, links []Link) error {
-	rows, err := ix.Query("SELECT kind,id,cwd,started FROM sessions WHERE host=" + q(host) + ";")
+	rows, err := ix.Query("SELECT kind,id,cwd,started,link_sig FROM sessions WHERE host=" + q(host) + ";")
 	if err != nil || len(links) == 0 {
 		return err
 	}
@@ -468,19 +586,32 @@ func (ix *Index) applyLinks(host string, scope linkScope, links []Link) error {
 	w.exec("BEGIN;")
 	for _, r := range rows {
 		kind, id, cwd, start := fmt.Sprint(r["kind"]), fmt.Sprint(r["id"]), fmt.Sprint(r["cwd"]), fmt.Sprint(r["started"])
-		where := " WHERE host=" + q(host) + " AND kind=" + q(kind) + " AND id=" + q(id) + ";"
 		l := bestLink(links, scope, cwd, start)
 		if l == nil {
 			continue
 		}
-		w.exec(fmt.Sprintf("UPDATE sessions SET ledger_id=%s, ledger_agent=%s, ledger_branch=%s, plan_id=%s, ref=%s, brief=%s, repo=CASE WHEN %s<>'' THEN %s ELSE repo END%s",
-			q(l.ID), q(l.AgentID), q(l.Branch), q(l.PlanID), q(l.Ref), q(clip(l.Brief, 600)), q(l.RepoName), q(l.RepoName), where))
-		w.exec("DELETE FROM msgs WHERE host=" + q(host) + " AND kind=" + q(kind) + " AND session_id=" + q(id) + " AND role='handoff';")
-		w.exec(fmt.Sprintf("INSERT INTO msgs(text,host,kind,session_id,seq,role,sub,ts) VALUES(%s,%s,%s,%s,-1,'handoff','',%s);",
-			q(clip(l.Brief, 4000)), q(host), q(kind), q(id), q(l.CreatedAt)))
+		// Only what changed is rewritten: rewriting the brief's row every hour
+		// grew the full-text index and cost a scan per linked session.
+		sig := l.sig()
+		if sget(r, "link_sig") == sig {
+			continue
+		}
+		sess := "host=" + q(host) + " AND kind=" + q(kind) + " AND session_id=" + q(id) + " "
+		w.exec("DELETE FROM messages WHERE " + sess + "AND seq=-1 AND role='handoff';")
+		w.exec(fmt.Sprintf("INSERT INTO messages(text,host,kind,session_id,seq,role,sub,ts,stream,off,tool_id,is_err,secret,full_len) VALUES(%s,%s,%s,%s,-1,'handoff','',%s,'',0,'',0,%d,0);",
+			q(clip(l.Brief, 4000)), q(host), q(kind), q(id), q(l.CreatedAt), b2i(l.briefMasked)))
+		w.exec(fmt.Sprintf("UPDATE sessions SET ledger_id=%s, ledger_agent=%s, ledger_branch=%s, plan_id=%s, ref=%s, brief=%s, link_sig=%s, repo=CASE WHEN %s<>'' THEN %s ELSE repo END, n_secret=(SELECT count(*) FROM messages WHERE %sAND secret=1) WHERE host=%s AND kind=%s AND id=%s;",
+			q(l.ID), q(l.AgentID), q(l.Branch), q(l.PlanID), q(l.Ref), q(clip(l.Brief, 600)), q(sig), q(l.RepoName), q(l.RepoName), sess, q(host), q(kind), q(id)))
 	}
 	w.exec("COMMIT;")
 	return w.close()
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func noteHeader(key string) string { return "cba2-note|" + key + "\n" }
@@ -536,7 +667,7 @@ func (ix *Index) applySummaries(a *Archiver, o Opener) error {
 		}
 		n.Summary, n.At = m["summary"], m["at"]
 		kind, sid, _ := strings.Cut(ks, "/")
-		w.exec(fmt.Sprintf("UPDATE sessions SET summary=%s, summary_at=%s WHERE host=%s AND kind=%s AND id=%s;", q(n.Summary), q(n.At), q(a.Host), q(kind), q(sid)))
+		w.exec(fmt.Sprintf("UPDATE sessions SET summary=%s, summary_at=%s WHERE host=%s AND kind=%s AND id=%s;", q(maskPlain(n.Summary)), q(n.At), q(a.Host), q(kind), q(sid)))
 	}
 	w.exec("COMMIT;")
 	return w.close()
@@ -549,7 +680,21 @@ type Filter struct {
 	Project      string // matches repo, cwd, branch, or the handoff's branch
 	Branch       string
 	Ledger       string // handoff id
+	Role         string // said, commands or output (Search only)
 	Limit        int
+}
+
+// roles maps Filter.Role to the message roles it covers.
+func (f Filter) roles() string {
+	switch f.Role {
+	case "said":
+		return "m.role IN ('user','assistant','handoff')"
+	case "commands":
+		return "m.role = 'tool'"
+	case "output":
+		return "m.role = 'result'"
+	}
+	return "1=1"
 }
 
 func (f Filter) where() string {
@@ -613,9 +758,9 @@ func FTSQuery(text string) string {
 func (ix *Index) Search(text string, f Filter) ([]map[string]any, error) {
 	lim := f.limit(15)
 	sql := fmt.Sprintf(`SELECT %s, m.role AS role, m.sub AS sub, m.seq AS seq,
-  snippet(msgs, 0, '[', ']', '…', 14) AS snippet, m.rank AS rank
-FROM msgs m JOIN sessions s ON s.host=m.host AND s.kind=m.kind AND s.id=m.session_id
-WHERE msgs MATCH %s AND %s ORDER BY m.rank LIMIT %d;`, sessionCols, q(FTSQuery(text)), f.where(), lim*8)
+  snippet(msgs, 0, '[', ']', '…', 14) AS snippet, msgs.rank AS rank
+FROM msgs JOIN messages m ON m.id=msgs.rowid JOIN sessions s ON s.host=m.host AND s.kind=m.kind AND s.id=m.session_id
+WHERE msgs MATCH %s AND %s AND %s ORDER BY msgs.rank LIMIT %d;`, sessionCols, q(FTSQuery(text)), f.where(), f.roles(), lim*8)
 	rows, err := ix.Query(sql)
 	if err != nil { // FTS5 syntax error in the user's text: search it as plain words
 		plain := strings.NewReplacer(`"`, ` `, `'`, ` `, `(`, ` `, `)`, ` `, `*`, ` `, `:`, ` `).Replace(text)
@@ -662,7 +807,7 @@ func (ix *Index) Text(host, kind, id string, limit int) ([]map[string]any, error
 	if limit <= 0 {
 		limit = 200
 	}
-	return ix.Query(fmt.Sprintf("SELECT seq,role,sub,ts,text FROM msgs WHERE host=%s AND kind=%s AND session_id=%s AND seq>=0 ORDER BY seq LIMIT %d;", q(host), q(kind), q(id), limit))
+	return ix.Query(fmt.Sprintf("SELECT seq,role,sub,ts,text FROM messages WHERE host=%s AND kind=%s AND session_id=%s AND seq>=0 ORDER BY seq LIMIT %d;", q(host), q(kind), q(id), limit))
 }
 
 // ByCommit finds the sessions that made, pushed or saw a commit (sha or a
@@ -679,7 +824,10 @@ WHERE c.sha LIKE %s ORDER BY CASE c.rel WHEN 'made' THEN 0 WHEN 'pushed' THEN 1 
 // DeleteSession drops a session's rows (the archive's copy is removed with
 // Archiver.DeleteSession).
 func (ix *Index) DeleteSession(host, kind, id string) error {
+	if ix.Outdated() {
+		return nil // the rebuild that replaces it leaves out what was deleted
+	}
 	w := " WHERE host=" + q(host) + " AND kind=" + q(kind)
-	_, err := ix.run("BEGIN; DELETE FROM sessions"+w+" AND id="+q(id)+"; DELETE FROM commits"+w+" AND session_id="+q(id)+"; DELETE FROM artifacts"+w+" AND session_id="+q(id)+"; DELETE FROM msgs"+w+" AND session_id="+q(id)+"; COMMIT;", false)
+	_, err := ix.run("BEGIN; DELETE FROM sessions"+w+" AND id="+q(id)+"; DELETE FROM commits"+w+" AND session_id="+q(id)+"; DELETE FROM artifacts"+w+" AND session_id="+q(id)+"; DELETE FROM messages"+w+" AND session_id="+q(id)+"; COMMIT;", false)
 	return err
 }

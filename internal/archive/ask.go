@@ -130,8 +130,9 @@ func (ix *Index) Ask(question string, f Filter, n int) ([]ThreadView, error) {
 	}
 	add(rows)
 	rows, err = ix.Query(fmt.Sprintf(`SELECT thread_id, min(sc) AS sc FROM (
-  SELECT x.thread_id AS thread_id, m.rank AS sc FROM msgs m JOIN thread_sessions x ON x.host=m.host AND x.kind=m.kind AND x.session_id=m.session_id
-  WHERE msgs MATCH %s ORDER BY m.rank LIMIT 600) GROUP BY thread_id ORDER BY sc LIMIT 60;`, mq))
+  SELECT x.thread_id AS thread_id, msgs.rank AS sc FROM msgs JOIN messages m ON m.id=msgs.rowid
+  JOIN thread_sessions x ON x.host=m.host AND x.kind=m.kind AND x.session_id=m.session_id
+  WHERE msgs MATCH %s ORDER BY msgs.rank LIMIT 600) GROUP BY thread_id ORDER BY sc LIMIT 60;`, mq))
 	if err != nil {
 		return nil, err
 	}

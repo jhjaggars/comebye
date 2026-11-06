@@ -132,11 +132,13 @@ func (ix *Index) buildThreads(hosts []string, links []Link, opt SyncOptions) (Th
 		}
 		all = append(all, ht)
 	}
-	w, err := ix.writerNoSchema(threadSchema)
+	w, err := ix.writer()
 	if err != nil {
 		return st, err
 	}
+	// In one transaction with the drops, so a reader never finds no threads.
 	w.exec("BEGIN;")
+	w.exec(threadSchema)
 	for _, ht := range all {
 		ht.write(w, &st)
 	}
@@ -210,10 +212,15 @@ func (ix *Index) gatherThreads(host string, links []Link, opt SyncOptions, st *T
 		ghc = prs
 	}
 
+	in, err := ix.loadThreadInputs(host)
+	if err != nil {
+		return nil, err
+	}
+
 	// document frequency for keywords
 	var texts []map[string]int
 	for _, t := range threads {
-		t.gather(ix, byLedger, sums, g, ghc, opt)
+		t.gather(in, byLedger, sums, g, ghc, opt)
 		texts = append(texts, termCounts(t.text.String()))
 	}
 	df := map[string]int{}
@@ -247,21 +254,12 @@ func (ht *hostThreads) write(w *stmtWriter, st *ThreadStats) {
 		}
 		var dec []string
 		for _, o := range t.outs {
-			w.exec(fmt.Sprintf("INSERT INTO outcomes VALUES(%s,%s,%s,%s,%s,%s);", q(t.id), q(o.kind), q(o.ref), q(o.text), q(o.source), q(o.at)))
+			w.exec(fmt.Sprintf("INSERT INTO outcomes VALUES(%s,%s,%s,%s,%s,%s);", q(t.id), q(o.kind), q(o.ref), q(maskPlain(o.text)), q(o.source), q(o.at)))
 		}
 		dec = append(dec, t.decisions...)
 		w.exec(fmt.Sprintf("INSERT INTO thread_fts(title,brief,outcome,keywords,digest,decisions,thread_id) VALUES(%s,%s,%s,%s,%s,%s,%s);",
 			q(t.title()), q(t.brief()), q(t.outcomeTxt+" "+t.report), q(strings.Join(t.keywords, " ")), q(t.digest(sums)), q(strings.Join(dec, "\n")), q(t.id)))
 	}
-}
-
-func (ix *Index) writerNoSchema(pre string) (*stmtWriter, error) {
-	w, err := ix.writer()
-	if err != nil {
-		return nil, err
-	}
-	w.exec(pre)
-	return w, nil
 }
 
 func (t *thread) end() string {
@@ -362,14 +360,73 @@ func (t *thread) digest(sums map[string]string) string {
 	return clip(sb.String(), 8000)
 }
 
-// gather collects the outcome evidence for a thread.
-func (t *thread) gather(ix *Index, byLedger map[string]*Link, sums map[string]string, g *gitCtx, prs map[string][]ghPR, opt SyncOptions) {
-	seen := map[string]bool{}
-	var ids []string
-	for _, s := range t.ss {
-		ids = append(ids, q(s.id))
+// threadInputs is what gather reads from the messages and commits of one host's
+// sessions, by "kind/id". It is read once per host: a query per thread is what
+// made the hub's build take nine minutes (threads x queries x messages).
+type threadInputs struct {
+	commits, docs, users, prose map[string][]map[string]any
+	last                        map[string]string
+}
+
+// proseBytes is how much of a session's prose can reach the keywords: termCounts
+// stops at 60000 bytes, so later rows of a session cannot matter.
+const proseBytes = 60000
+
+func (ix *Index) loadThreadInputs(host string) (*threadInputs, error) {
+	in := &threadInputs{last: map[string]string{}}
+	h := q(host)
+	load := func(sql string) (map[string][]map[string]any, error) {
+		rows, err := ix.Query(sql)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string][]map[string]any{}
+		for _, r := range rows {
+			k := sget(r, "kind") + "/" + sget(r, "sid")
+			out[k] = append(out[k], r)
+		}
+		return out, nil
 	}
-	in := strings.Join(ids, ",")
+	var err error
+	if in.commits, err = load(fmt.Sprintf("SELECT c.kind AS kind, c.session_id AS sid, c.sha, c.rel, c.branch, c.subject, s.cwd, s.repo, s.ledger_id FROM commits c JOIN sessions s ON s.host=c.host AND s.kind=c.kind AND s.id=c.session_id WHERE c.host=%s AND c.rel IN ('made','pushed') ORDER BY c.rowid;", h)); err != nil {
+		return nil, err
+	}
+	if in.docs, err = load(fmt.Sprintf("SELECT kind, session_id AS sid, path FROM artifacts WHERE host=%s;", h)); err != nil {
+		return nil, err
+	}
+	if in.users, err = load(fmt.Sprintf("SELECT kind, session_id AS sid, ts, text FROM messages WHERE host=%s AND role='user' AND sub='' AND length(text) < 700 ORDER BY ts;", h)); err != nil {
+		return nil, err
+	}
+	if in.prose, err = load(fmt.Sprintf(`SELECT kind, sid, seq, text FROM (
+  SELECT kind, session_id AS sid, seq, substr(text,1,1200) AS text,
+    row_number() OVER w AS n, sum(min(length(text),1200)) OVER w AS upto
+  FROM messages WHERE host=%s AND role IN ('user','assistant') AND sub='' AND seq>=0
+  WINDOW w AS (PARTITION BY kind, session_id ORDER BY seq))
+WHERE n <= 400 AND upto - 1200 <= %d ORDER BY seq;`, h, proseBytes)); err != nil {
+		return nil, err
+	}
+	rows, err := ix.Query(fmt.Sprintf("SELECT kind, session_id AS sid, substr(text,1,600) AS text, max(seq) AS seq FROM messages WHERE host=%s AND role='assistant' AND sub='' AND seq>=0 GROUP BY kind, session_id;", h))
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		in.last[sget(r, "kind")+"/"+sget(r, "sid")] = sget(r, "text")
+	}
+	return in, nil
+}
+
+// of returns one table's rows for the thread's sessions.
+func (t *thread) of(table map[string][]map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, s := range t.ss {
+		out = append(out, table[s.key]...)
+	}
+	return out
+}
+
+// gather collects the outcome evidence for a thread.
+func (t *thread) gather(in *threadInputs, byLedger map[string]*Link, sums map[string]string, g *gitCtx, prs map[string][]ghPR, opt SyncOptions) {
+	seen := map[string]bool{}
 	// Ledger: what the hub recorded.
 	for _, s := range t.ss {
 		if s.ledger == "" || seen[s.ledger] {
@@ -408,9 +465,8 @@ func (t *thread) gather(ix *Index, byLedger map[string]*Link, sums map[string]st
 		}
 	}
 	// Commits and their state on main.
-	rows, _ := ix.Query(fmt.Sprintf("SELECT c.sha, c.rel, c.branch, c.subject, s.cwd, s.repo, s.ledger_id FROM commits c JOIN sessions s ON s.host=c.host AND s.kind=c.kind AND s.id=c.session_id WHERE c.host=%s AND c.session_id IN (%s) AND c.rel IN ('made','pushed');", q(g.host), in))
 	done := map[string]bool{}
-	for _, r := range rows {
+	for _, r := range t.of(in.commits) {
 		sha := sget(r, "sha")
 		if done[sha] {
 			continue
@@ -446,33 +502,42 @@ func (t *thread) gather(ix *Index, byLedger map[string]*Link, sums map[string]st
 		}
 	}
 	// Docs written.
-	drows, _ := ix.Query(fmt.Sprintf("SELECT DISTINCT path FROM artifacts WHERE host=%s AND session_id IN (%s);", q(g.host), in))
-	for _, r := range drows {
-		t.outs = append(t.outs, outcome{"doc", sget(r, "path"), shortPath(sget(r, "path")), "tool call in transcript", ""})
+	docs := map[string]bool{}
+	for _, r := range t.of(in.docs) {
+		if p := sget(r, "path"); !docs[p] {
+			docs[p] = true
+			t.outs = append(t.outs, outcome{"doc", p, shortPath(p), "tool call in transcript", ""})
+		}
 	}
 	// Decisions: the user's own lines that sound like one (a heuristic).
-	urows, _ := ix.Query(fmt.Sprintf("SELECT session_id, ts, text FROM msgs WHERE host=%s AND session_id IN (%s) AND role='user' AND sub='' AND length(text) < 700 ORDER BY ts;", q(g.host), in))
+	urows := t.of(in.users)
+	sort.SliceStable(urows, func(i, j int) bool { return sget(urows[i], "ts") < sget(urows[j], "ts") })
 	for _, r := range urows {
 		txt := sget(r, "text")
 		if decisionRE.MatchString(txt) && !strings.HasPrefix(txt, "You are a worker agent") && len(t.decisions) < 5 {
 			t.decisions = append(t.decisions, clip(strings.Join(strings.Fields(txt), " "), 240))
-			t.outs = append(t.outs, outcome{"decision", sget(r, "session_id"), clip(strings.Join(strings.Fields(txt), " "), 240), "user message (keyword heuristic)", sget(r, "ts")})
+			t.outs = append(t.outs, outcome{"decision", sget(r, "sid"), clip(strings.Join(strings.Fields(txt), " "), 240), "user message (keyword heuristic)", sget(r, "ts")})
 		}
 	}
 	// No structured report: show how the last session ended, labelled as
 	// the agent's own words.
 	if t.report == "" {
 		last := t.ss[len(t.ss)-1]
-		lrows, _ := ix.Query(fmt.Sprintf("SELECT substr(text,1,600) AS text FROM msgs WHERE host=%s AND kind=%s AND session_id=%s AND role='assistant' AND sub='' AND seq>=0 ORDER BY seq DESC LIMIT 1;", q(g.host), q(last.kind), q(last.id)))
-		if len(lrows) > 0 {
-			t.outs = append(t.outs, outcome{"last-message", last.id, clip(strings.Join(strings.Fields(sget(lrows[0], "text")), " "), 320), "the agent's last reply (its own claim, not verified)", last.ended})
+		if txt, ok := in.last[last.key]; ok {
+			t.outs = append(t.outs, outcome{"last-message", last.id, clip(strings.Join(strings.Fields(txt), " "), 320), "the agent's last reply (its own claim, not verified)", last.ended})
 		}
 	}
 	// Text for keywords: titles, briefs, user and assistant prose.
 	for _, s := range t.ss {
 		t.text.WriteString(s.title + " " + s.first + " " + s.brief + " " + sums[s.key] + "\n")
 	}
-	trows, _ := ix.Query(fmt.Sprintf("SELECT substr(text,1,1200) AS text FROM msgs WHERE host=%s AND session_id IN (%s) AND role IN ('user','assistant') AND sub='' AND seq>=0 ORDER BY seq LIMIT 400;", q(g.host), in))
+	trows := t.of(in.prose)
+	if len(t.ss) > 1 {
+		sort.SliceStable(trows, func(i, j int) bool { return seqOf(trows[i]) < seqOf(trows[j]) })
+	}
+	if len(trows) > 400 {
+		trows = trows[:400]
+	}
 	for _, r := range trows {
 		t.text.WriteString(sget(r, "text") + "\n")
 	}
@@ -486,6 +551,11 @@ func (t *thread) gather(ix *Index, byLedger map[string]*Link, sums map[string]st
 			t.summary = sums[s.key]
 		}
 	}
+}
+
+func seqOf(r map[string]any) float64 {
+	n, _ := r["seq"].(float64)
+	return n
 }
 
 var decisionRE = regexp.MustCompile(`(?i)\b(decided|decision|let'?s go with|go with|we'?ll go|approved?|lgtm|ship it|abandon|scrap|drop (it|this)|don'?t (do|bother)|instead of|rather than|the plan is)\b`)

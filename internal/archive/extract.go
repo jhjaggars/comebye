@@ -18,6 +18,16 @@ type Msg struct {
 	TS   string
 	Text string
 	Sub  string // subagent id, "" for the main thread
+	// Where the record is in the archive, so that a later reader can fetch the
+	// message's full text from the segments that hold it.
+	Stream string
+	Off    int64  // byte offset of the record's line in Stream
+	ToolID string // ties a tool call and its result together
+	IsErr  bool   // a tool result that reported failure
+	Secret bool   // something in Text was masked
+	// FullLen is the length of the original text when Text holds only part of
+	// it; 0 when Text is all of it.
+	FullLen int
 }
 
 // CommitRef is a commit a session made, pushed or saw.
@@ -36,11 +46,16 @@ type Parsed struct {
 	// Docs are markdown files under a docs/ directory that the session wrote
 	// or edited (from the tool call, so: what it did, not what it claimed).
 	Docs []string
+	// Secrets counts the messages with masked text (see mask.go); stream and
+	// off say where the record being parsed is.
+	Secrets int
+	stream  string
+	off     int64
 }
 
 const (
 	maxMsgText    = 4000 // per message, indexed
-	maxResultText = 1500 // per tool result, indexed
+	maxResultText = 1500 // per tool result, indexed: this much from each end
 )
 
 type claudeRec struct {
@@ -61,6 +76,9 @@ type claudeRec struct {
 type block struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
+	ID        string          `json:"id"`
+	ToolUseID string          `json:"tool_use_id"`
+	IsError   bool            `json:"is_error"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
 	Arguments json.RawMessage `json:"arguments"`
@@ -71,8 +89,11 @@ type block struct {
 // its id) and appends to p.
 func (p *Parsed) ParseClaude(r io.Reader, sub string) error {
 	br := bufio.NewReaderSize(r, 1<<20)
+	var pos int64
 	for {
 		line, err := br.ReadBytes('\n')
+		p.off = pos
+		pos += int64(len(line))
 		if len(line) > 0 && line[len(line)-1] == '\n' { // an unterminated tail is not parsed yet
 			var rec claudeRec
 			if json.Unmarshal(line, &rec) == nil {
@@ -103,7 +124,7 @@ func (p *Parsed) claudeRec(rec *claudeRec, sub string) {
 			p.AgentSessionID = rec.SessionID
 		}
 		if rec.AITitle != "" {
-			p.Title = rec.AITitle
+			p.Title = maskPlain(rec.AITitle)
 		}
 		p.stamp(rec.Timestamp)
 	}
@@ -148,13 +169,15 @@ func (p *Parsed) blocks(role, ts string, bs []block, sub, argField string) {
 			if sub == "" {
 				p.doc(b.Name, args)
 			}
-			s := b.Name + " " + argSummary(args)
-			p.add("tool", ts, s, sub)
-			p.commitsIn(argSummary(args), "")
+			sum := argSummary(args)
+			if m := p.push("tool", ts, b.Name+" "+sum, sub); m != nil {
+				m.ToolID = b.ID
+			}
+			p.commitsIn(sum, "")
 		case "tool_result":
 			t := textOf(b.Content)
 			p.commitsIn(t, "")
-			p.add("result", ts, clip(t, maxResultText), sub)
+			p.addResult(ts, t, sub, b.ToolUseID, b.IsError)
 		}
 	}
 }
@@ -171,15 +194,53 @@ func (p *Parsed) stamp(ts string) {
 	}
 }
 
-func (p *Parsed) add(role, ts, text, sub string) {
+func (p *Parsed) add(role, ts, text, sub string) { p.push(role, ts, text, sub) }
+
+// push adds a message, masked and clipped to its head, and returns it (nil
+// when there was no text) so that the caller can fill in the rest.
+func (p *Parsed) push(role, ts, text, sub string) *Msg {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	full := len(text)
+	masked, secret := maskHead(text, maxMsgText)
+	secret = secret || strings.Contains(masked, MaskMark) // argSummary masks what it clips
+	if full <= maxMsgText {
+		full = 0
+	}
+	if role == "user" && sub == "" && p.FirstPrompt == "" && !strings.HasPrefix(masked, "<") {
+		p.FirstPrompt = clip(strings.Join(strings.Fields(masked), " "), 240)
+	}
+	return p.append(Msg{Role: role, TS: ts, Text: masked, Sub: sub, Secret: secret, FullLen: full})
+}
+
+// addResult adds a tool's output: both of its ends, masked.
+func (p *Parsed) addResult(ts, text, sub, toolID string, isErr bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
-	if role == "user" && sub == "" && p.FirstPrompt == "" && !strings.HasPrefix(text, "<") {
-		p.FirstPrompt = clip(strings.Join(strings.Fields(text), " "), 240)
+	full := len(text)
+	masked, secret, clipped := maskEnds(text, maxResultText)
+	if !clipped {
+		full = 0
 	}
-	p.Msgs = append(p.Msgs, Msg{Seq: len(p.Msgs), Role: role, TS: ts, Text: clip(text, maxMsgText), Sub: sub})
+	p.append(Msg{Role: "result", TS: ts, Text: masked, Sub: sub, ToolID: toolID, IsErr: isErr, Secret: secret, FullLen: full})
+}
+
+// highlightMarks are the bytes the API uses to mark a match inside a snippet.
+// They are taken out of stored text, so a transcript cannot fake a highlight.
+var highlightMarks = strings.NewReplacer("\x02", "", "\x03", "")
+
+func (p *Parsed) append(m Msg) *Msg {
+	m.Seq, m.Stream, m.Off = len(p.Msgs), p.stream, p.off
+	m.Text = highlightMarks.Replace(m.Text)
+	if m.Secret {
+		p.Secrets++
+	}
+	p.Msgs = append(p.Msgs, m)
+	return &p.Msgs[len(p.Msgs)-1]
 }
 
 // textOf flattens a tool result: a string or a list of text blocks.
@@ -219,7 +280,9 @@ func argSummary(raw json.RawMessage) string {
 		if v, ok := m[k]; ok {
 			var s string
 			if json.Unmarshal(v, &s) == nil && s != "" {
-				parts = append(parts, clip(s, 400))
+				// Masked before clipping, so a clip cannot leave half a value.
+				m, _ := maskHead(s, 400)
+				parts = append(parts, m)
 			}
 		}
 	}
@@ -240,8 +303,11 @@ func clip(s string, n int) string {
 // ParsePi reads a pi session file (session v3).
 func (p *Parsed) ParsePi(r io.Reader) error {
 	br := bufio.NewReaderSize(r, 1<<20)
+	var pos int64
 	for {
 		line, err := br.ReadBytes('\n')
+		p.off = pos
+		pos += int64(len(line))
 		if len(line) > 0 && line[len(line)-1] == '\n' {
 			var rec struct {
 				Type      string `json:"type"`
@@ -251,8 +317,10 @@ func (p *Parsed) ParsePi(r io.Reader) error {
 				Version   any    `json:"version"`
 				Summary   string `json:"summary"`
 				Message   struct {
-					Role    string          `json:"role"`
-					Content json.RawMessage `json:"content"`
+					Role       string          `json:"role"`
+					Content    json.RawMessage `json:"content"`
+					ToolCallID string          `json:"toolCallId"`
+					IsError    bool            `json:"isError"`
 				} `json:"message"`
 			}
 			if json.Unmarshal(line, &rec) == nil {
@@ -271,7 +339,11 @@ func (p *Parsed) ParsePi(r io.Reader) error {
 					if len(c) > 0 && c[0] == '"' {
 						var s string
 						_ = json.Unmarshal(c, &s)
-						p.add(role, rec.Timestamp, s, "")
+						if role == "result" {
+							p.addResult(rec.Timestamp, s, "", rec.Message.ToolCallID, rec.Message.IsError)
+						} else {
+							p.add(role, rec.Timestamp, s, "")
+						}
 					} else {
 						var bs []block
 						if json.Unmarshal(c, &bs) == nil {
@@ -283,7 +355,7 @@ func (p *Parsed) ParsePi(r io.Reader) error {
 									}
 								}
 								p.commitsIn(sb.String(), "")
-								p.add("result", rec.Timestamp, clip(sb.String(), maxResultText), "")
+								p.addResult(rec.Timestamp, sb.String(), "", rec.Message.ToolCallID, rec.Message.IsError)
 							} else {
 								p.blocks(role, rec.Timestamp, bs, "", "arguments")
 							}
@@ -329,6 +401,7 @@ func (p *Parsed) commitsIn(text, _ string) {
 }
 
 func (p *Parsed) commit(c CommitRef) {
+	c.Subject, c.Branch = maskPlain(c.Subject), maskPlain(c.Branch)
 	for i := range p.Commits {
 		o := &p.Commits[i]
 		if strings.HasPrefix(o.SHA, c.SHA) || strings.HasPrefix(c.SHA, o.SHA) {
