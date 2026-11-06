@@ -1,11 +1,13 @@
 package archive
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Config says where the archive is and how it is encrypted. The CLI reads
@@ -18,16 +20,31 @@ type Config struct {
 	// created in.
 	Encryption string
 	Host       string
-	Dir        string // the filesystem backend; Garage/S3 would add another field
-	Recipient  string // age1... and/or ssh-... public keys (comma or newline separated), or a file of them
-	Identity   string // AGE-SECRET-KEY-1... (or an unencrypted OpenSSH key), or a file holding it
-	ClaudeDir  string // default $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects
-	PiDir      string // default ~/.pi/agent/sessions
-	Index      string // default ~/.local/state/comebye/recall/index.db
+	Dir        string // the filesystem backend
+	// S3 is the bucket's URL, https://HOST/BUCKET, instead of Dir. It needs
+	// S3Credentials (a mode-0600 file of key_id= and secret_key= lines).
+	S3            string
+	S3Credentials string
+	S3Region      string // default "garage"
+	// S3Plaintext must be "homelab" to use ModeNone with S3: a stated
+	// acknowledgement that the bucket meets the rule in docs/archive.md, so
+	// that a mistyped URL cannot send plaintext to some other bucket.
+	S3Plaintext string
+	// AdoptHost lets this machine write under a host name another machine
+	// claimed in the bucket.
+	AdoptHost bool
+	Recipient string // age1... and/or ssh-... public keys (comma or newline separated), or a file of them
+	Identity  string // AGE-SECRET-KEY-1... (or an unencrypted OpenSSH key), or a file holding it
+	ClaudeDir string // default $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects
+	PiDir     string // default ~/.pi/agent/sessions
+	Index     string // default ~/.local/state/comebye/recall/index.db
 }
 
-// ErrNotConfigured means no archive directory was given.
-var ErrNotConfigured = errors.New("archive: no directory configured (set COMEBYE_ARCHIVE_DIR or pass --dir)")
+// ErrNotConfigured means no archive location was given.
+var ErrNotConfigured = errors.New("archive: no location configured (set COMEBYE_ARCHIVE_DIR or pass --dir, or COMEBYE_ARCHIVE_S3 or --s3)")
+
+// Configured reports whether an archive location is set.
+func (c Config) Configured() bool { return c.Dir != "" || c.S3 != "" }
 
 func expand(p string) string {
 	if p == "~" || strings.HasPrefix(p, "~/") {
@@ -83,9 +100,22 @@ func (c Config) IndexPath() string {
 // recipients (or an identity, from which the native recipients are derived);
 // in ModeNone it refuses recipients so a typo cannot leave an archive
 // believed to be encrypted in plaintext.
-func (c Config) Open() (*Archiver, error) {
-	if c.Dir == "" {
+func (c Config) Open() (*Archiver, error) { return c.open(false) }
+
+// OpenDeferred is Open for a long-running server: with an S3 backend, the
+// checks that need the network wait for the first write. An unreachable
+// Garage must not stop the server from starting, and a failed write only
+// costs a retry, because the session files are still on disk. Mistakes in the
+// configuration itself still fail here, and a filesystem backend is checked
+// at once as usual.
+func (c Config) OpenDeferred() (*Archiver, error) { return c.open(true) }
+
+func (c Config) open(deferred bool) (*Archiver, error) {
+	if !c.Configured() {
 		return nil, ErrNotConfigured
+	}
+	if c.Dir != "" && c.S3 != "" {
+		return nil, errors.New("archive: both a directory and an S3 bucket are configured; choose one")
 	}
 	var s Sealer
 	switch c.Encryption {
@@ -114,6 +144,44 @@ func (c Config) Open() (*Archiver, error) {
 	default:
 		return nil, fmt.Errorf("archive: unknown encryption %q (want age or none)", c.Encryption)
 	}
+	host := c.Host
+	if host == "" {
+		h, _ := os.Hostname()
+		host = strings.ToLower(strings.SplitN(h, ".", 2)[0])
+	}
+	if c.S3 != "" {
+		if s.Mode() == ModeNone && c.S3Plaintext != "homelab" {
+			return nil, errors.New("archive: encryption \"none\" with an S3 bucket needs COMEBYE_ARCHIVE_S3_PLAINTEXT=homelab, which states that the bucket meets the rule in docs/archive.md; otherwise use encryption age")
+		}
+		if c.S3Credentials == "" {
+			return nil, errors.New("archive: an S3 bucket needs a credentials file (COMEBYE_ARCHIVE_S3_CREDENTIALS or --s3-credentials)")
+		}
+		id, secret, err := LoadS3Credentials(c.S3Credentials)
+		if err != nil {
+			return nil, err
+		}
+		b, err := NewS3Backend(c.S3, id, secret, c.S3Region)
+		if err != nil {
+			return nil, err
+		}
+		a := &Archiver{Host: host, B: b, S: s}
+		a.beforeWrite = func() error { return a.claimHost(c.AdoptHost) }
+		mode := s.Mode()
+		if deferred {
+			claim := a.beforeWrite
+			a.beforeWrite = func() error {
+				if err := EnsureMode(b, mode); err != nil {
+					return err
+				}
+				return claim()
+			}
+			return a, nil
+		}
+		if err := EnsureMode(b, mode); err != nil {
+			return nil, err
+		}
+		return a, nil
+	}
 	b, err := NewFSBackend(expand(c.Dir))
 	if err != nil {
 		return nil, err
@@ -121,12 +189,67 @@ func (c Config) Open() (*Archiver, error) {
 	if err := EnsureMode(b, s.Mode()); err != nil {
 		return nil, err
 	}
-	host := c.Host
-	if host == "" {
-		h, _ := os.Hostname()
-		host = strings.ToLower(strings.SplitN(h, ".", 2)[0])
-	}
 	return &Archiver{Host: host, B: b, S: s}, nil
+}
+
+// hostClaim is hosts/<host>.json: which machine writes under this host name.
+// Segments are only safe from a lost HEAD-then-PUT race if one machine writes
+// each host's prefix (see S3Backend), so a second machine is refused.
+type hostClaim struct {
+	Machine   string `json:"machine"` // a hash of the machine id
+	Hostname  string `json:"hostname"`
+	FirstSeen string `json:"first_seen"`
+}
+
+func hostClaimKey(host string) string { return "hosts/" + host + ".json" }
+
+// machineID identifies this machine without publishing its machine id.
+func machineID() string {
+	raw := ""
+	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+		if b, err := os.ReadFile(p); err == nil && strings.TrimSpace(string(b)) != "" {
+			raw = strings.TrimSpace(string(b))
+			break
+		}
+	}
+	if raw == "" {
+		raw, _ = os.Hostname()
+	}
+	return hexSHA256([]byte("comebye-archive|" + raw))[:32]
+}
+
+// claimHost records this machine as the writer of a.Host, or checks that it is.
+func (a *Archiver) claimHost(adopt bool) error {
+	if adopt {
+		return nil
+	}
+	key := hostClaimKey(a.Host)
+	mine := machineID()
+	read := func() error {
+		raw, err := a.B.Get(key)
+		if err != nil {
+			return fmt.Errorf("archive: reading %s: %w", key, err)
+		}
+		var cl hostClaim
+		if err := json.Unmarshal(raw, &cl); err != nil {
+			return fmt.Errorf("archive: reading %s: %w", key, err)
+		}
+		if cl.Machine != mine {
+			return fmt.Errorf("archive: host name %q belongs to another machine (%s, since %s). Set a different COMEBYE_HOST_NAME, or pass --adopt-host if this machine really replaces it", a.Host, cl.Hostname, cl.FirstSeen)
+		}
+		return nil
+	}
+	err := read()
+	if err == nil || !errors.Is(err, ErrNotExist) {
+		return err
+	}
+	name, _ := os.Hostname()
+	body, _ := json.Marshal(hostClaim{Machine: mine, Hostname: name, FirstSeen: a.now().UTC().Format(time.RFC3339)})
+	if err := a.B.Put(key, body); errors.Is(err, ErrExists) {
+		return read()
+	} else {
+		return err
+	}
 }
 
 // OpenIdentity returns the reading side for the configured mode: an age

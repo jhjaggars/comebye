@@ -28,9 +28,10 @@ var ErrExists = errors.New("archive: object already exists")
 // that as "not there", because on a network backend it may only be a blip.
 var ErrNotExist = fs.ErrNotExist
 
-// Backend is where archive objects live. Keys are slash-separated and
-// never contain "." or ".." elements. Garage or S3 can implement this
-// later; Put must be atomic and create-only (S3: If-None-Match: *).
+// Backend is where archive objects live: FSBackend or S3Backend. Keys are
+// slash-separated and never contain "." or ".." elements. Put must be atomic
+// and must not replace an object; S3Backend says how it manages that on
+// Garage, which ignores If-None-Match on PUT.
 type Backend interface {
 	// Put stores data under key unless the key exists (ErrExists).
 	// The object is either completely visible or not at all.

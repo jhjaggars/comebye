@@ -40,6 +40,9 @@ type Archiver struct {
 	// LockDir holds the per-host lock taken by Run, Flush and DeleteSession
 	// (default ~/.local/state/comebye/locks).
 	LockDir string
+	// beforeWrite, if set, runs under the lock before the first write and
+	// again until it succeeds: checks an S3 backend makes over the network.
+	beforeWrite func() error
 }
 
 // Result counts what a run did.
@@ -175,6 +178,12 @@ func (a *Archiver) run(sources []Source, final bool, only string) (Result, error
 		return res, err
 	}
 	defer unlock()
+	if a.beforeWrite != nil {
+		if err := a.beforeWrite(); err != nil {
+			return res, err
+		}
+		a.beforeWrite = nil
+	}
 	state, err := scan(a.B, a.Host)
 	if err != nil {
 		return res, err

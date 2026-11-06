@@ -28,6 +28,11 @@ func archiveFlags(e *Env, fs *flag.FlagSet) *archive.Config {
 	}
 	fs.StringVar(&c.Encryption, "encryption", env("COMEBYE_ARCHIVE_ENCRYPTION"), "age (encrypt every segment; recipients required) or none (plaintext zstd, only where something else encrypts the copy); no default (COMEBYE_ARCHIVE_ENCRYPTION)")
 	fs.StringVar(&c.Dir, "dir", env("COMEBYE_ARCHIVE_DIR"), "archive directory (COMEBYE_ARCHIVE_DIR)")
+	fs.StringVar(&c.S3, "s3", env("COMEBYE_ARCHIVE_S3"), "archive bucket instead of a directory: https://HOST/BUCKET (COMEBYE_ARCHIVE_S3)")
+	fs.StringVar(&c.S3Credentials, "s3-credentials", env("COMEBYE_ARCHIVE_S3_CREDENTIALS"), "mode-0600 file of key_id= and secret_key= lines (COMEBYE_ARCHIVE_S3_CREDENTIALS)")
+	fs.StringVar(&c.S3Region, "s3-region", env("COMEBYE_ARCHIVE_S3_REGION"), "S3 region (default garage; COMEBYE_ARCHIVE_S3_REGION)")
+	fs.BoolVar(&c.AdoptHost, "adopt-host", false, "write under a host name another machine claimed in the bucket")
+	c.S3Plaintext = env("COMEBYE_ARCHIVE_S3_PLAINTEXT")
 	fs.StringVar(&c.Recipient, "recipient", env("COMEBYE_ARCHIVE_RECIPIENT"), "recipients: age1... and/or ssh-... keys (comma separated), or a file of them (COMEBYE_ARCHIVE_RECIPIENT)")
 	fs.StringVar(&c.Identity, "identity", env("COMEBYE_ARCHIVE_IDENTITY"), "age identity file, needed to read the archive back (COMEBYE_ARCHIVE_IDENTITY)")
 	fs.StringVar(&c.ClaudeDir, "claude-dir", env("COMEBYE_ARCHIVE_CLAUDE_DIR"), "Claude Code projects dir (default ~/.claude/projects)")
@@ -171,7 +176,10 @@ func cmdArchive(e *Env, args []string) error {
 			byKind[s.Kind]++
 		}
 		if sz, ok := a.B.(interface{ Size(string) (int64, error) }); ok {
-			keys, _ := a.B.List("v1/")
+			keys, err := a.B.List("v1/" + a.Host + "/")
+			if err != nil {
+				return err
+			}
 			for _, k := range keys {
 				if n, err := sz.Size(k); err == nil {
 					stored += n

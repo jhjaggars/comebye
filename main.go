@@ -79,7 +79,9 @@ func main() {
 		launchRoots  = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs    = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
 		archiveDir   = flag.String("archive-dir", getenv("COMEBYE_ARCHIVE_DIR"), "keep a final copy of an agent's transcript here when it is removed (see `comebye archive`); empty disables")
-		archiveEnc   = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir")
+		archiveS3    = flag.String("archive-s3", getenv("COMEBYE_ARCHIVE_S3"), "keep those copies in this bucket instead: https://HOST/BUCKET (see `comebye archive`)")
+		archiveS3Cr  = flag.String("archive-s3-credentials", getenv("COMEBYE_ARCHIVE_S3_CREDENTIALS"), "mode-0600 file of key_id= and secret_key= lines for -archive-s3")
+		archiveEnc   = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir or -archive-s3")
 		archiveRcpt  = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
 		showVersion  = flag.Bool("version", false, "print the version and exit")
 	)
@@ -260,13 +262,17 @@ func main() {
 	}()
 
 	var arch *archive.Archiver
-	acfg := archive.Config{Encryption: *archiveEnc, Dir: *archiveDir, Recipient: *archiveRcpt, Host: *hostName, ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR")}
-	if *archiveDir != "" {
+	acfg := archive.Config{
+		Encryption: *archiveEnc, Dir: *archiveDir, Recipient: *archiveRcpt, Host: *hostName,
+		S3: *archiveS3, S3Credentials: *archiveS3Cr, S3Region: getenv("COMEBYE_ARCHIVE_S3_REGION"), S3Plaintext: getenv("COMEBYE_ARCHIVE_S3_PLAINTEXT"),
+		ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR"),
+	}
+	if acfg.Configured() {
 		var err error
-		if arch, err = acfg.Open(); err != nil {
+		if arch, err = acfg.OpenDeferred(); err != nil {
 			log.Fatalf("archive: %v", err)
 		}
-		log.Printf("archive: final transcript copies go to %s", *archiveDir)
+		log.Printf("archive: final transcript copies go to %s", *archiveDir+*archiveS3)
 	}
 	srv := server.New(server.Config{
 		Version:        buildVersion(),

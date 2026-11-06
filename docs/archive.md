@@ -23,13 +23,18 @@ is gone, so the server flushes a session to the archive just before removal.
 | Flag / environment | Meaning |
 |---|---|
 | `--encryption`, `COMEBYE_ARCHIVE_ENCRYPTION` | **Required, no default:** `age` (every segment is age-encrypted; recipients required) or `none` (plaintext zstd; see [Where the archive may live](#where-the-archive-may-live)). Recorded in the archive on first use; a different mode later is refused. |
-| `--dir`, `COMEBYE_ARCHIVE_DIR` | Archive directory (the filesystem backend; the `Backend` interface in `internal/archive` is where an object store would plug in). |
+| `--dir`, `COMEBYE_ARCHIVE_DIR` | Archive directory (the filesystem backend). |
+| `--s3`, `COMEBYE_ARCHIVE_S3` | Archive bucket instead of a directory: `https://HOST/BUCKET`, path-style. Plain `http` is refused except on loopback. Setting both this and a directory is an error. |
+| `--s3-credentials`, `COMEBYE_ARCHIVE_S3_CREDENTIALS` | A mode-0600 file of `key_id=` and `secret_key=` lines. A file others can read is refused. |
+| `--s3-region`, `COMEBYE_ARCHIVE_S3_REGION` | Default `garage`. |
+| `COMEBYE_ARCHIVE_S3_PLAINTEXT` | Must be `homelab` to use `none` with a bucket: it states that the bucket meets [the rule](#where-the-archive-may-live). |
+| `--adopt-host` | Write under a host name that another machine claimed in the bucket. |
 | `--recipient`, `COMEBYE_ARCHIVE_RECIPIENT` | With `age`: who can read: `age1...` keys and/or `ssh-ed25519`/`ssh-rsa` public keys, comma or newline separated, or a file of them. |
 | `--identity`, `COMEBYE_ARCHIVE_IDENTITY` | With `age`: an age identity file (or an unencrypted OpenSSH key). Needed only to read: `verify`, `index`, `restore`, `rewrap`. |
 | `--claude-dir`, `--pi-dir` | Session directories (default `~/.claude/projects`, `~/.pi/agent/sessions`). |
 | `--index`, `COMEBYE_RECALL_INDEX` | The index file (default `~/.local/state/comebye/recall/index.db`). It holds plaintext, so it is created mode 0600. |
 | `--host`, `COMEBYE_HOST_NAME` | This host's name inside archive keys. |
-| server `-archive-dir`, `-archive-encryption`, `-archive-recipient` | Turns on the flush when a worker is removed. Off unless `-archive-dir` is set. |
+| server `-archive-dir` or `-archive-s3` and `-archive-s3-credentials`, `-archive-encryption`, `-archive-recipient` | Turns on the flush when a worker is removed. Off unless one of those locations is set. With a bucket, the server starts even if the store is unreachable; the checks wait for the first flush, and a failed flush is retried by the next `archive run` because the session files are still on disk. |
 
 Indexing needs the `sqlite3` command-line tool with FTS5 on the host.
 
@@ -64,6 +69,34 @@ created once, atomically, and never rewritten, so a rerun or a crash cannot
 damage what is stored. A run reads the store to see where to continue. A file
 that shrinks is reported and left alone. A last line still being written
 waits two minutes of quiet (the flush on removal ships it at once).
+
+Everything on a machine that writes one host's segments (`run`, the server's
+flush, `delete`) takes a lock file under `~/.local/state/comebye/locks`.
+Without it, two writers can cut different lengths from one offset, and the
+overlap makes that stream refuse further segments.
+
+### In a bucket
+
+The object keys are the same as the file paths in a directory, so `aws s3 sync`
+or `rclone copy` moves an archive into a bucket, and `archive verify` then checks
+it against the session files. Tested against Garage v2.5.0.
+
+- **Create-only is done by HEAD then PUT.** Garage v2.5.0 ignores `If-None-Match`
+  on PUT: a second PUT replaces the object. That window is safe because each host
+  writes only under its own `v1/<host>/` prefix, its writers take the lock above,
+  and the first run writes `hosts/<host>.json`, which refuses a second machine
+  using the same name. Do not point two machines at one host name with
+  `--adopt-host`.
+- **A key's write permission covers the whole bucket**, including overwrite and
+  delete. Garage has no prefix scoping, and a write-only key cannot list, which
+  `run` needs in order to resume. Give a key only to a host you would trust with
+  every other host's history.
+- **Object names are not encrypted in any mode.** They hold host names, project
+  paths and session ids.
+- **To re-run the contract test against a real store,** for example before a Garage
+  upgrade: `COMEBYE_TEST_S3_URL=URL COMEBYE_TEST_S3_CREDENTIALS=FILE go test
+  ./internal/archive/ -run RealStore`. It writes only under `contract-test/` and
+  cleans up.
 
 A segment is `CBA2`, a codec byte (2 = zstd), then an age file. In the
 `none` mode the magic is `CBP2` and the rest is the same header and zstd
@@ -109,10 +142,27 @@ by the NAS's cloud sync, so the archive itself need not be):
    dataset permissions are what protect it.
 
 **The rule: nothing unencrypted goes anywhere that the encrypted cloud sync
-does not cover.** No plaintext copy in an object-store bucket, a sync folder,
-a cloud drive or another host's disk. If a copy has to go somewhere else,
-convert it with `archive rewrap --to-encryption age` first, or switch the
-archive to `age`.
+does not cover.** No plaintext copy in a sync folder, a cloud drive or another
+host's disk. If a copy has to go somewhere else, convert it with `archive rewrap
+--to-encryption age` first, or switch the archive to `age`.
+
+**The one exception is a homelab bucket.** A plaintext archive may live in an
+object-store bucket only if all of these hold:
+
+1. The bucket is on a Garage inside the homelab, used for nothing else.
+2. Its only network path is a Tailscale Ingress: no Traefik host, no public name,
+   no website access, and workers (`tag:worker`) are denied.
+3. Its only credentials are one per archiving host, kept in mode-0600 files
+   outside any repository. Workers hold none.
+4. Its volumes are in Longhorn's `critical-backup` group, and any copy that leaves
+   TrueNAS is encrypted by the TrueNAS job that sends it. Nothing unencrypted goes
+   to a cloud drive or to another host's disk.
+5. The plaintext index lives only on hosts that index or download it (mode 0600 in
+   a 0700 directory), and in that same bucket. Never on a worker.
+
+Anyone with an archive key, the index, or read access to the Longhorn backup
+dataset can read every transcript, tokens and keys included. Setting
+`COMEBYE_ARCHIVE_S3_PLAINTEXT=homelab` is the statement that these hold.
 
 ## Recall
 
@@ -171,4 +221,4 @@ agent that wants more reads the top threads with `recall show`.
 - The git check needs the repository on the same host. `gh` results are
   cached until the next `--gh`.
 - Decision lines are a keyword heuristic and miss some.
-- No object-store backend, no scheduler, and no semantic (embedding) search.
+- No scheduler and no semantic (embedding) search.

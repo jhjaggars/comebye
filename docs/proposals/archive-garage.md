@@ -82,6 +82,9 @@ this way, and an SDK would be a large dependency for so little.
   `COMEBYE_ARCHIVE_S3_CREDENTIALS=FILE` (mode 0600), region `garage`, path-style,
   `https` only except on loopback. Setting both this and `--dir` is an error. The
   server's flush reads the same settings (`main.go:263`).
+- **The server must not depend on Garage to start.** `Config.Open` makes network calls and
+  `main.go` treats a failure as fatal, so the server uses `OpenDeferred`: with a bucket, the
+  mode and host checks wait for the first flush. Configuration mistakes still fail at start.
 - **Plaintext gate:** `none` with an S3 backend also requires
   `COMEBYE_ARCHIVE_S3_PLAINTEXT=homelab`. A typo in the URL must not send
   plaintext to some other bucket.
@@ -146,6 +149,8 @@ host, no LAN name.
   denied `tag:archive:443`.
 - **A second tailnet user has `*:*`** too, so that account can reach the endpoint.
   It still needs an S3 key. The user accepted this with decision 2.
+- **StorageClass `reclaimPolicy: Retain`:** losing the PVC or the namespace does not delete a
+  volume holding sessions that exist nowhere else.
 - **Keys:** `archive-laharl` and `archive-hub`, read and write, no owner, created
   from SOPS secrets as `sccache-key.yaml` does. There is no admin token on any host.
 
