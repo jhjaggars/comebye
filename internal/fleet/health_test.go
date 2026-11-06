@@ -137,15 +137,22 @@ func TestHealthProbe(t *testing.T) {
 
 	// The healthy peer is probed: /api/whoami was asked, and its host
 	// status stays ok with the address recorded.
-	waitFor(t, "whoami probe", func() bool { return len(fp.requestsTo("/api/whoami")) > 0 })
+	// The request is served before the probe records the answer, so wait
+	// for the status instead of reading it right away.
+	waitFor(t, "kube host ok", func() bool {
+		h := hostByName(f, "kube")
+		return len(fp.requestsTo("/api/whoami")) > 0 && h.Status == StatusOK && h.Addr != ""
+	})
 	h := hostByName(f, "kube")
 	if h.Status != StatusOK || h.Class != "" || h.Addr == "" {
 		t.Fatalf("kube host = %+v", h)
 	}
 
 	// The TLS-broken peer goes down and the probe says tls, with a fix.
-	waitFor(t, "stale peer down", func() bool { return hostByName(f, "stale").Status == StatusDown })
-	waitFor(t, "classified", func() bool { return hostByName(f, "stale").Class == ClassTLS })
+	waitFor(t, "stale peer down and classified", func() bool {
+		h := hostByName(f, "stale")
+		return h.Status == StatusDown && h.Class == ClassTLS && h.Since != nil && h.Error != ""
+	})
 	h = hostByName(f, "stale")
 	if !strings.Contains(h.Error, "tailscale serve") || h.Since == nil {
 		t.Fatalf("stale host = %+v", h)
