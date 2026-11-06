@@ -205,6 +205,8 @@ func TestPromptHeldGivesUpWhenContextEnds(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	s.typing.poll = 10 * time.Millisecond
 	showScreen(fh, "w2:p1", capture(t, "pi_typed.ansi"))
+	// Short on purpose: the context ends mid-poll, and promptHeld must still
+	// report "held" even when the in-flight attempt fails with an i/o error.
 	ctx, stop := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer stop()
 	err := s.promptHeld(ctx, herdr.AgentInfo{ID: "desk/w2:p1", Host: "desk", PaneID: "w2:p1", Name: "home", Agent: "pi"}, "x")

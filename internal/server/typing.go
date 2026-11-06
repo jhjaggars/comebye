@@ -214,14 +214,23 @@ func (s *Server) promptHeld(ctx context.Context, a herdr.AgentInfo, text string)
 	if s.typing != nil {
 		poll = s.typing.poll
 	}
+	const heldMsg = "held: the user was typing in that pane the whole time and the message was not sent"
+	wasBusy := false
 	for {
 		err := s.promptAgent(ctx, a, text)
 		if !isInputBusy(err) {
+			// The context can end while this attempt is in flight, which
+			// fails it with a dial/i-o error. If the pane was busy before,
+			// the honest answer is still "held".
+			if err != nil && wasBusy && ctx.Err() != nil {
+				return errors.New(heldMsg)
+			}
 			return err
 		}
+		wasBusy = true
 		select {
 		case <-ctx.Done():
-			return errors.New("held: the user was typing in that pane the whole time and the message was not sent")
+			return errors.New(heldMsg)
 		case <-time.After(poll):
 		}
 	}
