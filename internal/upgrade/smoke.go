@@ -3,6 +3,7 @@ package upgrade
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -56,9 +57,10 @@ func checkServedVersion(o *Options, target string) error {
 	case got == "" && compareVersions(target, lastWithoutVersionHeader) <= 0:
 		o.printf("note: %s predates X-Comebye-Version, so the served version cannot be checked\n", target)
 	case got == "":
+		// No answer or no header: the server may still be starting.
 		return fmt.Errorf("the server sends no X-Comebye-Version (%v); expected %s", orErr(err), target)
 	default:
-		return fmt.Errorf("the server reports version %s, expected %s: the restart did not pick up the new binary", got, target)
+		return fatal(fmt.Errorf("the server reports version %s, expected %s: the restart did not pick up the new binary", got, target))
 	}
 	return nil
 }
@@ -97,6 +99,43 @@ func runBin(o *Options, args ...string) (string, string, error) {
 	return so.String(), strings.TrimSpace(se.String()), err
 }
 
+// retryDelays are the waits between the attempts of a transient smoke step:
+// 5 attempts, 2+4+8+16 = 30s in all. A freshly started peer has to announce
+// itself and be registered by the hub before the hub will answer it; that
+// takes a few seconds (the worker tool allows the hub 90s to list a new
+// node), so the waits double from 2s and stop at 30s in total.
+var retryDelays = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
+
+// errFatal marks an error that waiting cannot fix.
+type errFatal struct{ err error }
+
+func (e errFatal) Error() string { return e.err.Error() }
+func (e errFatal) Unwrap() error { return e.err }
+
+func fatal(err error) error { return errFatal{err} }
+
+// retry runs fn up to len(delays)+1 times, sleeping between attempts, and
+// logs each retry on one line. It stops at once on an errFatal and returns
+// the last error after the final attempt.
+func retry(o *Options, what string, delays []time.Duration, fn func() error) error {
+	var err error
+	for i := 0; ; i++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		var f errFatal
+		if errors.As(err, &f) || i >= len(delays) {
+			return err
+		}
+		o.printf("smoke: %s: attempt %d/%d failed (%s); retrying in %s\n", what, i+1, len(delays)+1, oneLine(err), delays[i])
+		o.Sleep(delays[i])
+	}
+}
+
+func oneLine(err error) string {
+	return strings.Join(strings.Fields(err.Error()), " ")
+}
+
 var netWords = regexp.MustCompile(`(?i)unreachable|timeout|timed out|connection|dial|no route|refused|offline|deadline`)
 
 // smoke checks the restarted service. It depends on this host only: a peer
@@ -122,20 +161,16 @@ func smoke(o *Options, since time.Time, beforeTag, target string) error {
 		Hub    string `json:"hub"`
 		Ledger bool   `json:"ledger"`
 	}
-	var err error
-	for i := 0; i < o.SmokeTries; i++ {
-		var out, serr string
-		out, serr, err = runBin(o, "whoami", "--json")
-		if err == nil {
-			err = json.Unmarshal([]byte(out), &who)
-		} else if serr != "" {
-			err = fmt.Errorf("%v: %s", err, serr)
+	err := retry(o, "whoami", retryDelays, func() error {
+		out, serr, err := runBin(o, "whoami", "--json")
+		if err != nil {
+			if serr != "" {
+				return fmt.Errorf("%v: %s", err, serr)
+			}
+			return err
 		}
-		if err == nil {
-			break
-		}
-		o.Sleep(o.SmokeWait)
-	}
+		return json.Unmarshal([]byte(out), &who)
+	})
 	if err != nil {
 		return fmt.Errorf("the new binary cannot reach the local server (whoami): %w", err)
 	}
@@ -151,14 +186,26 @@ func smoke(o *Options, since time.Time, beforeTag, target string) error {
 		o.printf("smoke: index.html served (%s)\n", tag)
 	}
 
-	if err := checkServedVersion(o, target); err != nil {
+	if err := retry(o, "served version", retryDelays, func() error { return checkServedVersion(o, target) }); err != nil {
 		return err
 	}
 
 	// Only this host's agents: other hosts may be offline.
-	out, serr, err := runBin(o, "agents", "--host", who.Host, "--json")
+	var out string
+	err = retry(o, "agents", retryDelays, func() error {
+		var serr string
+		var err error
+		out, serr, err = runBin(o, "agents", "--host", who.Host, "--json")
+		if err != nil {
+			err = fmt.Errorf("agents --host %s: %v: %s", who.Host, err, serr)
+			if !transientAgents(serr) {
+				return fatal(err)
+			}
+		}
+		return err
+	})
 	if err != nil {
-		return fmt.Errorf("agents --host %s: %v: %s", who.Host, err, serr)
+		return err
 	}
 	var ag struct {
 		Agents []struct {
@@ -208,4 +255,16 @@ func smoke(o *Options, since time.Time, beforeTag, target string) error {
 		o.printf("smoke: journal has no errors since the restart\n")
 	}
 	return nil
+}
+
+// transientAgents reports whether a failed "agents" call may succeed
+// shortly: the peer is not registered with the hub yet (it announces itself
+// after it starts), or the server or hub is not answering yet. A rejection
+// for a reason that will not change (a tag mismatch, auth refused) is not.
+func transientAgents(stderr string) bool {
+	l := strings.ToLower(stderr)
+	if strings.Contains(l, "tag_mismatch") || strings.Contains(l, "no longer carries the tag") || strings.Contains(l, "rejected this peer") {
+		return false
+	}
+	return strings.Contains(l, "not a registered peer") || strings.Contains(l, "not_a_peer") || netWords.MatchString(l) || strings.Contains(l, "starting")
 }
