@@ -899,9 +899,9 @@ await check("desktop opens to a waiting agent when there is one", async () => {
   const r = await coldStartWith(true);
   if (!r.sel || !r.sel.endsWith("w1:p1") || r.view !== null) throw new Error("opened " + JSON.stringify(r));
 });
-await check("desktop opens to the Briefing page when nothing is waiting", async () => {
+await check("desktop opens to the Status page when nothing is waiting", async () => {
   const r = await coldStartWith(false);
-  if (r.sel !== null || r.view !== "briefing" || r.hash !== "#/briefings") throw new Error("opened " + JSON.stringify(r));
+  if (r.sel !== null || r.view !== "status" || r.hash !== "#/status") throw new Error("opened " + JSON.stringify(r));
 });
 await check("desktop: a deep link to an agent wins over the default", async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -944,7 +944,7 @@ await check("pages: the rows above the list open the pages; the open one is mark
   page.on("request", onReq);
   try {
     const rows = await page.locator("#nav .nv span:first-of-type").allInnerTexts();
-    for (const want of ["Briefing", "To do", "Search"]) if (!rows.includes(want)) throw new Error("rows " + JSON.stringify(rows));
+    for (const want of ["Status", "To do", "Search"]) if (!rows.includes(want)) throw new Error("rows " + JSON.stringify(rows));
     const [n, l] = await Promise.all([geo("#nav"), geo("#agents")]);
     if (!n.shown || n.x !== 0 || n.y > l.y) throw new Error("the rows are not above the agent list: " + JSON.stringify([n, l]));
     if (await page.locator("#rtr-banner").isVisible()) throw new Error("the removal banner shows beside its row");
@@ -959,8 +959,8 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if ((await page.locator("#nav .nv.on").getAttribute("data-page")) !== "todo") throw new Error("row not marked");
     await page.waitForTimeout(300);
     if (!posts.length || posts[posts.length - 1].pane !== "") throw new Error("presence not cleared: " + JSON.stringify(posts));
-    await page.locator('#nav .nv[data-page="briefing"]').click();
-    await page.waitForSelector("#briefs.open", { state: "visible" });
+    await page.locator('#nav .nv[data-page="status"]').click();
+    await page.waitForSelector("#p-status", { state: "visible" });
     // Search opens the Transcripts screen (openRecall), over the pages; closing it leaves no page behind.
     await page.locator('#nav .nv[data-page="search"]').click();
     await page.waitForSelector("#recall", { state: "visible" });
@@ -978,8 +978,8 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if (await page.evaluate(() => state.selected) !== null || !posts.length || posts[posts.length - 1].pane !== "") throw new Error("the agent stays open under Transcripts: " + JSON.stringify(posts));
     await page.keyboard.press("Escape");
     await page.waitForSelector("#recall", { state: "hidden" });
-    await page.locator('#nav .nv[data-page="briefing"]').click();
-    await page.waitForSelector("#briefs", { state: "visible" });
+    await page.locator('#nav .nv[data-page="status"]').click();
+    await page.waitForSelector("#p-status", { state: "visible" });
     // The removals row follows the ledger's marks.
     const marks = await page.evaluate(() => ledger.marked.size);
     const row = await page.locator('#nav .nv[data-page="removals"]').count();
@@ -992,6 +992,64 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
   } finally { page.off("request", onReq); }
 });
+// ---- Status: generated from the ledger, the to-do list and the agents (synthetic data, mocked routes) ----
+const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
+const SYN_LEDGER = { plans: [], marks: [], roles: {}, entries: [
+  { id: "h1", repo_name: "webapp", branch: "fix/login-timeout", agent_name: "fix-login", agent_id: "uitest/w1:p1", status: "running", created_at: ago(12), brief: "x" },
+  { id: "h2", repo_name: "webapp", branch: "feat/after-login", agent_name: "after-login", status: "waiting", after: ["h1"], created_at: ago(11), brief: "x" },
+  { id: "h3", repo_name: "webapp", branch: "chore/old-worker", agent_name: "old-worker", status: "ready_to_remove", finished_at: ago(60), created_at: ago(300), final_report: "Fixed the **header** overlap.\n\nTests pass.", brief: "x" },
+  { id: "h4", repo_name: "ci-tools", branch: "feat/arm64", agent_name: "arm64", status: "landed", finished_at: ago(200), created_at: ago(400), final_report: "Added arm64.", brief: "x" },
+  { id: "h5", repo_name: "ci-tools", branch: "fix/old", agent_name: "ancient", status: "finished", finished_at: ago(60 * 24 * 5), created_at: ago(60 * 24 * 6), final_report: "Too old to show.", brief: "x" },
+  { id: "h6", repo_name: "webapp", branch: "fix/never", agent_name: "never", status: "failed", error: "the worker never started", created_at: ago(120), brief: "x" },
+] };
+const SYN_TODOS = { open: 1, answered: 0, todos: [{ id: "t1", kind: "decision", question: "Keep old session cookies for 30 days?", state: "open", created_at: ago(25), updated_at: ago(25), waiting: { id: "uitest/w1:p1", name: "fix-login" } }] };
+async function mockStatusData() {
+  await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: SYN_LEDGER }));
+  await page.route(/\/api\/todos$/, (r) => r.fulfill({ json: SYN_TODOS }));
+}
+async function unmockStatusData() { await page.unroute(/\/api\/ledger$/); await page.unroute(/\/api\/todos$/); }
+await check("status: the page groups the ledger, to-dos and agents by project, with reports and no Needs you section", async () => {
+  await mockStatusData();
+  try {
+    await desktopList(1280, "#/status");
+    await page.waitForSelector("#ps-body .st-proj", { timeout: 8000 });
+    const t = await page.locator("#ps-body").innerText();
+    for (const want of ["webapp", "ci-tools", "fix-login", "fix/login-timeout", "running 12m", "queued behind 1 step", "Keep old session cookies", "ready to remove", "landed", "failed"]) if (!t.includes(want)) throw new Error(`missing "${want}" in: ${t.slice(0, 400)}`);
+    if (t.includes("Too old to show") || t.includes("ancient")) throw new Error("an entry older than 2 days is shown");
+    if (/needs you/i.test(t)) throw new Error("a Needs you section");
+    if (!(await page.locator("#ps-body .st-g.blocked").count()) || !(await page.locator("#ps-body .st-g.you").count()) || !(await page.locator("#ps-body .st-g.prog").count())) throw new Error("groups missing");
+    // A report opens in place and stays open across a re-render.
+    await page.locator('#ps-body details[data-id="h3"] summary').click();
+    await page.waitForSelector("#ps-body .st-rep strong");
+    await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+    if (!(await page.locator('#ps-body details[data-id="h3"]').evaluate((d) => d.open))) throw new Error("report closed by a re-render");
+    // The links: to-do goes to the To do page; the old briefing is still readable.
+    await page.locator('#ps-body [data-go="todo"]').click();
+    await page.waitForSelector("#p-todo", { state: "visible" });
+    await page.locator('#nav .nv[data-page="status"]').click();
+    await page.locator('#ps-body [data-go="briefing"]').click();
+    await page.waitForSelector("#briefs.open", { state: "visible" });
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
+    await page.locator('#nav .nv[data-page="status"]').click();
+    await page.screenshot({ path: `${out}/status-1280.png` });
+    await page.setViewportSize({ width: 1600, height: 800 });
+    await page.screenshot({ path: `${out}/status-1600.png` });
+  } finally { await unmockStatusData(); }
+});
+await check("status: readable on the phone, at the top of the briefings screen, with no sideways scroll", async () => {
+  await mockStatusData();
+  try {
+    await desktopList(390);
+    await page.goto(base + "/#/briefings", { waitUntil: "load" });
+    await page.waitForSelector("#br-status .st-proj", { timeout: 8000 });
+    const t = await page.locator("#br-status").innerText();
+    if (!t.includes("fix-login") || !t.includes("queued behind")) throw new Error(t.slice(0, 300));
+    if (await page.locator("#br-status [data-go]").count()) throw new Error("desktop-only links on the phone");
+    await noOverflow();
+    await page.screenshot({ path: `${out}/status-390.png` });
+  } finally { await unmockStatusData(); }
+});
+
 await check("pages: below the breakpoint the page hashes do nothing and openPage is a no-op", async () => {
   await desktopList(1099);
   await page.goto(base + "/#/todo", { waitUntil: "load" });

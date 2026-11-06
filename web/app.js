@@ -23,7 +23,7 @@ const state = {
   pendingRoute: null,  // {host, pane} from #/agent/... waiting for the agent list to arrive
   pushedRoute: false,  // openDetail pushed a history entry (back pops it)
   opened: false,       // the desktop's cold-start choice (openToSomething) has been made
-  view: null,          // desktop only: the page filling the main pane ("briefing", "todo"), or null for an agent / nothing
+  view: null,          // desktop only: the page filling the main pane ("status", "briefing", "todo"), or null for an agent / nothing
 };
 
 /* ---------- helpers ---------- */
@@ -491,6 +491,7 @@ function renderListRows() {
   renderBrief();
   renderPlans();
   renderNav();
+  renderStatus();
   if (!agents.length) {
     wrap.innerHTML = `<div class="empty">${state.unauthorized ? esc(UNAUTHORIZED_MSG) : "No agents running"}</div>` + downRows;
     return;
@@ -967,6 +968,7 @@ function renderTodos() {
       <div class="td-list"${folded ? " hidden" : ""}>${todos.items.map(todoItemHtml).join("")}</div>`;
   }
   renderNav();
+  renderStatus();
   // The desktop page: the same items without the fold, and an empty note.
   if (page) {
     $("pt-count").textContent = show ? todoCountText() : "";
@@ -1235,7 +1237,7 @@ function renderBriefs() {
   briefs.sig = sig;
   const top = el.scrollTop;
   const at = b ? Date.parse(b.at) : NaN;
-  el.innerHTML = `<section class="br-card${miss ? " stale" : ""}" aria-label="Latest briefing">
+  el.innerHTML = `<div id="br-status"></div><section class="br-card${miss ? " stale" : ""}" aria-label="Latest briefing">
       <div class="br-head"><span class="bf-title">Latest</span><span class="bf-meta">${b ? esc((Number.isNaN(at) ? "" : fmtAgo(at) + " ago · ") + "from " + (b.by || "a coordinator")) : "none yet"}</span></div>
       ${miss ? missNote(miss, !!b) : ""}
       ${b ? `<div class="br-md md">${renderMarkdown(b.markdown, "brief:" + b.at)}</div>`
@@ -1246,6 +1248,7 @@ function renderBriefs() {
     ${earlier.length ? earlier.map(briefItem).join("")
       : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48." : "Loading…"}</p>`}`;
   el.scrollTop = top;
+  renderStatus();
 }
 
 // setBriefsOpen slides the screen in or out (animate: from wherever the
@@ -2787,16 +2790,17 @@ function applyPendingRoute() {
 // (state.view), never both. The pages are only a desktop thing; below
 // 1100px the hash routes do nothing new and the phone flow is unchanged.
 
-const PAGE_HASH = { briefing: "#/briefings", todo: "#/todo" };
+const PAGE_HASH = { status: "#/status", briefing: "#/briefings", todo: "#/todo" }; // briefing: the old hand-written one, reached from Status
 const viewFromHash = () => (isDesktop() ? Object.keys(PAGE_HASH).find((k) => PAGE_HASH[k] === location.hash) || null : null);
 
 // setView shows a page (or none) without touching the history.
 function setView(v) {
   state.view = isDesktop() ? v : null;
-  for (const k of ["briefing", "todo"]) document.body.classList.toggle("view-" + k, state.view === k);
+  for (const k of ["status", "briefing", "todo"]) document.body.classList.toggle("view-" + k, state.view === k);
   document.body.classList.toggle("has-page", !!state.view);
   syncDesktopBriefs();
   renderNav();
+  renderStatus();
   if (state.view === "todo") renderTodos();
 }
 
@@ -2813,7 +2817,7 @@ function openPage(v) {
 }
 
 // On a cold start the desktop opens to something: an agent that is waiting
-// on you if there is one, otherwise the Briefing page. A deep link or a
+// on you if there is one, otherwise the Status page. A deep link or a
 // page's own hash wins, and it happens once.
 function openToSomething() {
   if (state.opened || !isDesktop() || state.pendingRoute) return;
@@ -2821,10 +2825,115 @@ function openToSomething() {
   if (state.selected || state.view || location.hash) return;
   const w = document.querySelector("#agents .agent.blocked[data-id]");
   if (w) { openDetail(w.dataset.id); return; }
-  if (briefsAvailable()) {
-    history.replaceState(null, "", PAGE_HASH.briefing);
-    setView("briefing");
+  if (ledger.on !== false) {
+    history.replaceState(null, "", PAGE_HASH.status);
+    setView("status");
   }
+}
+
+/* ---------- Status: a page generated from the ledger, the to-do list and the agents ---------- */
+//
+// Nothing here is written by anyone: it is the same data the list and the
+// To do page show, grouped by project, so it is as fresh as they are.
+//   in progress     running handoffs (worker, branch, age)
+//   blocked         a handoff queued behind earlier steps (ledger "waiting"),
+//                   or a running one whose agent is stuck on a dialog
+//   waiting on you  open to-do items, linked to the To do page
+//   finished        reported / landed / ready to remove / failed in the last
+//                   2 days, each with its report
+// There is no "Needs you" section: the To do page is that.
+
+const STATUS_RECENT_MS = 2 * 24 * 3600 * 1000;
+const statusUi = { open: new Set() };
+
+function statusModel() {
+  const now = Date.now();
+  const projects = new Map();
+  const P = (name) => { if (!projects.has(name)) projects.set(name, { name, progress: [], blocked: [], todos: [], done: [] }); return projects.get(name); };
+  for (const e of ledger.entries) {
+    if (!e) continue;
+    const proj = P(e.repo_name || "Other");
+    const ag = e.agent_id ? agentById(e.agent_id) : null;
+    const at = Date.parse(e.finished_at || e.created_at);
+    if (e.status === "waiting") proj.blocked.push({ e, why: `queued behind ${(e.after || []).length || "earlier"} step${(e.after || []).length === 1 ? "" : "s"}` });
+    else if (e.status === "running" || e.status === "landing") {
+      if (ag && ag.agent_status === "blocked") proj.blocked.push({ e, ag, why: "waiting on a dialog" });
+      else proj.progress.push({ e, ag });
+    } else if (["finished", "landed", "ready_to_remove", "failed"].includes(e.status) && !Number.isNaN(at) && now - at < STATUS_RECENT_MS) proj.done.push({ e, at, ag });
+  }
+  if (todos.on === true) {
+    for (const t of todos.items) {
+      if (t.state !== "open") continue;
+      const wa = t.waiting && agentById(t.waiting.id);
+      P(wa ? repoLabel(wa).repo || "Other" : "Not tied to a project").todos.push(t);
+    }
+  }
+  for (const p of projects.values()) p.done.sort((a, b) => b.at - a.at);
+  return [...projects.values()].filter((p) => p.progress.length + p.blocked.length + p.todos.length + p.done.length)
+    .sort((a, b) => (a.name === "Not tied to a project") - (b.name === "Not tied to a project") ||
+      (b.blocked.length + b.todos.length > 0) - (a.blocked.length + a.todos.length > 0) || a.name.localeCompare(b.name));
+}
+
+function statusWho(e) { return e.agent_name || e.branch || e.id; }
+
+function statusHTML(desktop) {
+  if (ledger.on === false) return `<div class="empty">Status needs the hub's ledger, which this host does not keep.</div>`;
+  if (ledger.on !== true) return `<div class="empty">Loading…</div>`;
+  const ps = statusModel();
+  const nProg = ps.reduce((n, p) => n + p.progress.length, 0), nBlk = ps.reduce((n, p) => n + p.blocked.length, 0), nYou = ps.reduce((n, p) => n + p.todos.length, 0);
+  const sum = [nProg ? `${nProg} in progress` : "", nBlk ? `${nBlk} blocked` : "", nYou ? `${nYou} waiting on you` : ""].filter(Boolean).join(" · ") || "Nothing in progress, and nothing is waiting on you.";
+  const open = (a) => desktop && a ? ` <button type="button" class="st-link" data-agent="${escAttr(agentId(a))}">open</button>` : "";
+  const card = (p) => {
+    let h = "";
+    if (p.blocked.length) h += `<div class="st-g blocked">Blocked</div>` + p.blocked.map(({ e, ag, why }) =>
+      `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span><span class="st-m warn">${esc(why)}</span><span class="st-r">${esc(e.branch || "")}${open(ag)}</span></div>`).join("");
+    if (p.todos.length) h += `<div class="st-g you">Waiting on you</div>` + p.todos.map((t) =>
+      `<div class="st-row"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="st-n">${esc(t.question)}</span>${desktop ? `<span class="st-r"><button type="button" class="st-link" data-go="todo">To do</button></span>` : ""}</div>`).join("");
+    if (p.progress.length) h += `<div class="st-g prog">In progress</div>` + p.progress.map(({ e, ag }) => {
+      const at = Date.parse(e.created_at);
+      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? "landing" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${open(ag)}</span></div>`;
+    }).join("");
+    if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
+      const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
+      const body = e.final_report ? `<div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
+      return `<details class="st-row" data-id="${escAttr(e.id)}"${statusUi.open.has(e.id) ? " open" : ""}><summary><span class="st-n">${esc(statusWho(e))}</span><span class="lg-chip ${chip[0]}">${chip[1]}</span><span class="st-r">${esc(fmtAgo(at))} ago</span></summary>${statusUi.open.has(e.id) ? body : ""}</details>`;
+    }).join("");
+    return `<section class="st-proj${p.blocked.length || p.todos.length ? " hot" : ""}" aria-label="${escAttr(p.name)}"><div class="st-ph">${esc(p.name)}</div>${h}</section>`;
+  };
+  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${ps.map(card).join("")}${
+    desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
+}
+
+// renderStatus fills the desktop page and, on the phone, the top of the briefings screen.
+function renderStatus() {
+  for (const [el, desktop] of [[$("ps-body"), true], [$("br-status"), false]]) {
+    if (!el) continue;
+    if (desktop && state.view !== "status") continue; // only the page on screen
+    if (!desktop && !briefs.open) continue;
+    const html = statusHTML(desktop);
+    if (el._html === html) continue;
+    el._html = html;
+    const sc = el.closest(".page-body, .br-body");
+    const y = sc ? sc.scrollTop : 0;
+    el.innerHTML = html;
+    if (sc) sc.scrollTop = y;
+  }
+}
+
+function onStatusClick(ev) {
+  const g = ev.target.closest("[data-go]"), a = ev.target.closest("[data-agent]");
+  if (g) openPage(g.dataset.go);
+  else if (a) openDetail(a.dataset.agent);
+}
+
+// An opened report is kept across re-renders, and rendered when first opened.
+function onStatusToggle(ev) {
+  const d = ev.target;
+  if (!d.matches || !d.matches("details.st-row")) return;
+  if (d.open === statusUi.open.has(d.dataset.id)) return; // a re-rendered <details open> fires toggle too: not a change
+  if (d.open) statusUi.open.add(d.dataset.id); else statusUi.open.delete(d.dataset.id);
+  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  renderStatus();
 }
 
 /* ---------- the page rows above the agent list (desktop) ---------- */
@@ -2835,14 +2944,13 @@ function openToSomething() {
 // menu items.
 
 const NAV_ICON = {
-  briefing: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM9 12h7M9 16h7M9 8h3"/></svg>',
+  status: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/><circle cx="19" cy="12" r="1.5"/></svg>',
   todo: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
   removals: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
 };
 const NAV_ROWS = [
-  { key: "briefing", label: "Briefing", show: () => briefsAvailable(),
-    dot: () => { const b = briefing.data; return !!(b && b.markdown.trim() && lsGet(BRIEF_SEEN_KEY) !== b.at && state.view !== "briefing"); } },
+  { key: "status", label: "Status", show: () => ledger.on === true },
   { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open + todos.answered },
   { key: "search", label: "Search", show: () => true, open: () => openRecall(), noPage: true }, // Transcripts is a screen of its own
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && ledger.marked.size > 0, count: () => ledger.marked.size, open: () => openReview(), noPage: true },
@@ -5798,6 +5906,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("f-sweep").addEventListener("click", fleetAction(openSweep));
   $("f-review").addEventListener("click", fleetAction(openReview));
   $("nav").addEventListener("click", onNavClick);
+  for (const id of ["ps-body", "br-body"]) {
+    $(id).addEventListener("click", onStatusClick);
+    $(id).addEventListener("toggle", onStatusToggle, true);
+  }
   $("f-brief").addEventListener("click", fleetAction(fleetBrief));
   $("f-briefs").addEventListener("click", fleetAction(() => openBriefs(true)));
   $("f-sched").addEventListener("click", fleetAction(editBriefSchedule));
