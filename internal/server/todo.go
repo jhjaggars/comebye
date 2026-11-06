@@ -325,8 +325,10 @@ func (t *todoStore) settleNotices(ids []string, state string) {
 	for i := range t.data.Items {
 		it := &t.data.Items[i]
 		if want[it.ID] && it.Notice != nil && it.Notice.State == todoNoticePending {
-			it.Notice.State = state
-			it.Notice.At = t.now()
+			// Copy on write: copies of the item handed out earlier share the pointer.
+			n := *it.Notice
+			n.State, n.At = state, t.now()
+			it.Notice = &n
 		}
 	}
 	if err := t.save(); err != nil {
@@ -343,7 +345,9 @@ func (t *todoStore) noticeTried(ids []string) {
 	}
 	for i := range t.data.Items {
 		if it := &t.data.Items[i]; want[it.ID] && it.Notice != nil {
-			it.Notice.Tries++
+			n := *it.Notice
+			n.Tries++
+			it.Notice = &n
 		}
 	}
 }
