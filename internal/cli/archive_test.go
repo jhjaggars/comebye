@@ -144,3 +144,70 @@ func TestArchivePlaintextModeCommands(t *testing.T) {
 		t.Fatalf("%v %s %s", err, out, e)
 	}
 }
+
+// A worker's sessions live under a host other than this machine's, and every
+// command that names a session reaches them with --host.
+func TestArchiveCommandsReachAnotherHostWithHostFlag(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("no sqlite3")
+	}
+	d := t.TempDir()
+	t.Setenv("HOME", d)
+	sid := "2026-11-06T10-00-00-000Z_abcd"
+	sess := filepath.Join(d, "pi", "--data-w--", sid+".jsonl")
+	os.MkdirAll(filepath.Dir(sess), 0o755)
+	body := `{"type":"session","version":3,"id":"abcd","timestamp":"2026-11-06T10:00:00Z","cwd":"/data/w"}` + "\n" + `{"partial`
+	os.WriteFile(sess, []byte(body), 0o644)
+	run := func(args ...string) (string, string, error) {
+		var out, errb bytes.Buffer
+		env := &Env{Stdout: &out, Stderr: &errb, Stdin: strings.NewReader(""), Getenv: func(k string) string { return "" }}
+		if st := Run(args, env); st != 0 {
+			return out.String(), errb.String(), fmt.Errorf("exit %d", st)
+		}
+		return out.String(), errb.String(), nil
+	}
+	store := filepath.Join(d, "store")
+	host := "w1.i-0abc"
+	common := []string{"--dir", store, "--encryption", "none", "--pi-dir", filepath.Join(d, "pi"), "--claude-dir", filepath.Join(d, "claude"), "--index", filepath.Join(d, "i", "idx.db")}
+	at := func(sub string, h string, more ...string) (string, string, error) {
+		a := append([]string{"archive", sub}, common...)
+		if h != "" {
+			a = append(a, "--host", h)
+		}
+		return run(append(a, more...)...)
+	}
+	if out, e, err := at("run", host, "--final"); err != nil || !strings.Contains(out, "1 segments written") {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	// Without --host it is not this machine's session, and the error says what to do.
+	if _, e, err := at("restore", "laharl", "abcd", "--to", filepath.Join(d, "nope")); err == nil || !strings.Contains(e, "--host") {
+		t.Fatalf("%v %s", err, e)
+	}
+	to := filepath.Join(d, "restored")
+	if out, e, err := at("restore", host, "abcd", "--to", to); err != nil {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	got, err := os.ReadFile(filepath.Join(to, "--data-w--", sid+".jsonl"))
+	if err != nil || string(got) != body {
+		t.Fatalf("restored %q, %v (--final must keep the unterminated last line)", got, err)
+	}
+	if out, e, err := at("summary", host, "abcd", "a summary"); err != nil {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	if out, e, err := at("index", host, "--ledger", "none"); err != nil || !strings.Contains(out, "1 indexed") {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	out, e, err := run("recall", "list", "--index", filepath.Join(d, "i", "idx.db"), "--host", "w1")
+	if err != nil || !strings.Contains(out, host) || !strings.Contains(out, "a summary") {
+		t.Fatalf("recall must show the host and the summary: %v %s %s", err, out, e)
+	}
+	if out, e, err := at("delete", host, "abcd"); err != nil || !strings.Contains(out, "would delete") {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	if out, e, err := at("delete", host, "abcd", "--yes"); err != nil || !strings.Contains(out, "deleted") {
+		t.Fatalf("%v %s %s", err, out, e)
+	}
+	if out, e, err := at("verify", host); err != nil || !strings.Contains(out, "0 not archived") {
+		t.Fatalf("a deleted session is not a missing one: %v %s %s", err, out, e)
+	}
+}

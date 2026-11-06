@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Provider is the cloud half of a worker: networks, disks, the VM and the
@@ -28,6 +29,8 @@ type Provider interface {
 	// HostKey returns the VM's ssh-ed25519 host key as the cloud API vouches
 	// for it, or "" when it is not published yet.
 	HostKey(ctx context.Context, name string, inst *Inst) (string, error)
+	// Instances returns every live instance the tool created.
+	Instances(ctx context.Context) ([]Inst, error)
 	// List prints every instance and disk the tool created.
 	List(ctx context.Context, w logf) error
 	// CleanupNetwork removes the tool-created network pieces, only if every
@@ -46,12 +49,13 @@ const (
 
 // Inst is an instance as the commands see it, whatever the cloud.
 type Inst struct {
-	Name, ID string
+	Name, ID string // ID is the cloud's own id, kept through a stop and a start and never reused
 	State    string // RUNNING, STOPPED, or the cloud's own word
 	Type     string
-	IP       string // external IPv4
-	Managed  bool   // carries managed-by=comebye-worker
-	Note     string // extra status line, e.g. "spot, reclaimed by AWS"
+	IP       string    // external IPv4
+	Managed  bool      // carries managed-by=comebye-worker
+	Note     string    // extra status line, e.g. "spot, reclaimed by AWS"
+	Created  time.Time // when the VM was first created (not its latest boot); zero if unknown
 }
 
 func newProvider(r Runner, c *Config) Provider {

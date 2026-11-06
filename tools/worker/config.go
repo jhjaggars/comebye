@@ -75,7 +75,10 @@ type Config struct {
 	LLMRPM                int
 
 	StateDir string // per-worker ssh config and known_hosts
-	path     string
+	// ArchiveEnv is a file of COMEBYE_ARCHIVE_* settings: the same one the
+	// archive timer on this machine reads. destroy refuses without it.
+	ArchiveEnv string
+	path       string
 }
 
 var (
@@ -130,6 +133,7 @@ func defaults() Config {
 		ReleasesURL:    "https://github.com/jhjaggars/comebye/releases",
 		HerdrInstall:   "https://herdr.dev/install.sh",
 		StateDir:       state,
+		ArchiveEnv:     filepath.Join(h, ".config", "comebye", "archive.env"),
 
 		Agents:                []string{"pi"},
 		PiVersion:             "1.5.0",
@@ -253,6 +257,8 @@ func (c *Config) apply(kv map[string]string) error {
 			c.MaxRunDuration = v
 		case "tag":
 			c.Tag = v
+		case "archive_env":
+			c.ArchiveEnv = expand(v)
 		case "ts_oauth_file":
 			c.TSOAuthFile = expand(v)
 		case "ts_authkey_file":

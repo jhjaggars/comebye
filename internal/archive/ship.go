@@ -122,6 +122,12 @@ func (a *Archiver) Run(sources []Source) (Result, error) {
 	return a.run(sources, false, "")
 }
 
+// RunFinal is Run for sessions that have ended: it also takes each file's last,
+// unterminated line, without waiting for the file to go quiet.
+func (a *Archiver) RunFinal(sources []Source) (Result, error) {
+	return a.run(sources, true, "")
+}
+
 // Flush archives the files of one session now, including a last line
 // with no newline (the agent is going away). Used when a worker is removed.
 func (a *Archiver) Flush(src Source, sessionFile string) (Result, error) {
@@ -334,7 +340,9 @@ type VerifyResult struct {
 	Files      int      `json:"files"`
 	Matched    int      `json:"matched"`    // archived prefix equals the file's prefix (sha256)
 	Behind     int      `json:"behind"`     // matched, and the file has newer bytes not yet archived
-	Missing    int      `json:"missing"`    // file has no archive at all
+	Missing    int      `json:"missing"`    // file has bytes and no archive at all
+	Tombstoned int      `json:"tombstoned"` // session deleted on request: not archived on purpose
+	Empty      int      `json:"empty"`      // zero-length file with no archive: nothing to keep
 	Mismatched int      `json:"mismatched"` // archive differs from the file
 	Bytes      int64    `json:"bytes"`      // bytes compared
 	Failures   []string `json:"failures,omitempty"`
@@ -348,6 +356,10 @@ func (a *Archiver) Verify(o Opener, sources []Source) (VerifyResult, error) {
 	if err != nil {
 		return vr, err
 	}
+	tombs, err := a.tombstones()
+	if err != nil {
+		return vr, err
+	}
 	for _, src := range sources {
 		root := filepath.Clean(src.Root)
 		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -355,13 +367,22 @@ func (a *Archiver) Verify(o Opener, sources []Source) (VerifyResult, error) {
 				return nil
 			}
 			rel, _ := filepath.Rel(root, p)
-			if _, _, ok := SessionOf(src.Kind, rel); !ok {
+			slug, sid, ok := SessionOf(src.Kind, rel)
+			if !ok {
 				return nil
 			}
 			stream := filepath.ToSlash(rel)
 			st := state[src.Kind+"/"+stream]
 			vr.Files++
+			if tombs[tombKey(a.Host, src.Kind, slug, sid)] {
+				vr.Tombstoned++
+				return nil
+			}
 			if st == nil {
+				if fi, err := d.Info(); err == nil && fi.Size() == 0 {
+					vr.Empty++
+					return nil
+				}
 				vr.Missing++
 				return nil
 			}

@@ -33,7 +33,7 @@ is gone, so the server flushes a session to the archive just before removal.
 | `--identity`, `COMEBYE_ARCHIVE_IDENTITY` | With `age`: an age identity file (or an unencrypted OpenSSH key). Needed only to read: `verify`, `index`, `restore`, `rewrap`. |
 | `--claude-dir`, `--pi-dir` | Session directories (default `~/.claude/projects`, `~/.pi/agent/sessions`). |
 | `--index`, `COMEBYE_RECALL_INDEX` | The index file (default `~/.local/state/comebye/recall/index.db`). It holds plaintext, so it is created mode 0600. |
-| `--host`, `COMEBYE_HOST_NAME` | This host's name inside archive keys. |
+| `--host`, `COMEBYE_HOST_NAME` | The host's name inside archive keys. `restore`, `delete`, `summary` and `verify` reach another host's sessions with it: `comebye recall list` shows each session's host. |
 | server `-archive-dir` or `-archive-s3` and `-archive-s3-credentials`, `-archive-encryption`, `-archive-recipient` | Turns on the flush when a worker is removed. Off unless one of those locations is set. With a bucket, the server starts even if the store is unreachable; the checks wait for the first flush, and a failed flush is retried by the next `archive run` because the session files are still on disk. |
 
 Indexing needs the `sqlite3` command-line tool with FTS5 on the host.
@@ -42,13 +42,14 @@ Indexing needs the `sqlite3` command-line tool with FTS5 on the host.
 
 ```
 comebye archive keygen --out DIR     # age identity (age-keygen format) + recipient.pub
-comebye archive run                  # copy new bytes; safe to rerun and after a crash
+comebye archive run [--final]        # copy new bytes; safe to rerun and after a crash
+                                     # --final: the sessions have ended, take each last line too
 comebye archive verify               # restore every stream and compare sha256 with the source
 comebye archive status               # sessions, segments, raw and stored size
 comebye archive index [--git=false] [--gh] [--ledger FILE|auto|none]
-comebye archive restore SESSION --to DIR
-comebye archive delete SESSION [--yes]       # dry run without --yes
-comebye archive summary SESSION TEXT|-       # a short summary, kept in the archive
+comebye archive restore SESSION --to DIR [--host H]
+comebye archive delete SESSION [--yes] [--host H]    # dry run without --yes
+comebye archive summary SESSION TEXT|- [--host H]    # a short summary, kept in the archive
 comebye archive rewrap --to-dir DIR --to-encryption age --to-recipient KEYS   # plaintext or age, to age
 comebye archive rewrap --to-dir DIR --to-encryption none                      # age to plaintext (needs the identity)
 
@@ -58,7 +59,8 @@ comebye recall show THREAD|SESSION [--text N]
 ```
 
 Every `recall` command takes `--json` and filters `--since`, `--until`,
-`--project`, `--branch`, `--kind`, `--ledger`, `--limit`.
+`--host`, `--project`, `--branch`, `--kind`, `--ledger`, `--limit`. `--host w1`
+also finds every VM that was called `w1` (see [Spot workers](#spot-workers)).
 
 ## How it stores
 
@@ -196,6 +198,29 @@ agent that wants more reads the top threads with `recall show`.
 `recall todo` lists threads with no summary, for an agent to summarise with
 `archive summary`.
 
+## Spot workers
+
+A worker holds no archive key. `comebye-worker archive` and `destroy` pull its
+sessions over ssh and upload them from the machine running the tool:
+[Sessions and the archive](workers.md#sessions-and-the-archive).
+
+- **Its host is `NAME.INSTANCE_ID`**, because worker names get reused.
+  `hosts/<host>.json` records the uploading machine, as for any host, plus `kind:
+  worker`, the worker's name, provider, instance id and creation time.
+- **`archive index` also covers the workers this machine uploaded.** They have no
+  timer of their own, so the existing one picks them up. A blip reading `hosts/`
+  fails the run rather than dropping them. A worker's thread stays separate from
+  its coordinator's, because threads do not span hosts yet.
+- **Handoff links survive the worker.** Removing a peer does not touch the ledger.
+  The ledger knows the worker by its bare name, so the index joins on that name, and
+  takes a handoff only if it was created during this VM's life and no more than 5
+  minutes after the session started. A reused name and worktree path therefore do
+  not link to another VM's handoff.
+- **To upload by hand** when the tool cannot: copy the session directories off the
+  VM, then `comebye archive run --final --host NAME.INSTANCE_ID --claude-dir DIR
+  --pi-dir DIR`. Without the tool's claim, a normal `archive index` does not pick
+  that host up, so `recall` will not find it.
+
 ## Keys (the `age` mode)
 
 - The archive has its own age identity. It does not depend on sops or GPG.
@@ -226,8 +251,8 @@ agent that wants more reads the top threads with `recall show`.
 - Transcripts contain secrets. The archive is byte-exact on purpose;
   protect it with the keys above (age mode) or with where its copies live
   (plaintext mode). The index is plaintext in both modes.
-- Hosts archive and index themselves. Threads span hosts only once each
-  host's sessions are in one backend that the index reads.
+- Hosts archive and index themselves, plus the workers they uploaded. Threads do
+  not span hosts yet, and the hub cannot search a worker's sessions.
 - The git check needs the repository on the same host. `gh` results are
   cached until the next `--gh`.
 - Decision lines are a keyword heuristic and miss some.

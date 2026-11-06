@@ -409,5 +409,5 @@ on both, a flush from a removed worker pane lands in the bucket, and a nightly b
 | Slice | Contents | Rollout steps |
 |---|---|---|
 | 2: one index | `--all-hosts`, global threads (the risky part), host-scoped git candidates and fetch, `--host` fixes, publish and pull, `verify --all-hosts --no-source`, the restore drill | 6, 7 |
-| 3: workers | `run --final`, `--host` on restore, delete and summary, the pull in `destroy`, `worker archive`, refusal and `--no-archive`, `docs/workers.md` | 8 |
+| 3: workers | `run --final`, `--host` on restore, delete and summary, the pull in `destroy`, `worker archive`, refusal and `--no-archive`, `docs/workers.md`. Built ahead of slice 2: the archive host is `NAME.INSTANCE_ID`, and each machine indexes the workers it uploaded, with threads per host. Slice 2 folds that into `--all-hosts` | 8 |
 | 4: retire local archives | After a week of clean runs, with the user's OK | 9 |

@@ -195,19 +195,22 @@ func LoadLinks(r io.Reader) ([]Link, error) {
 // bestLink picks the handoff a session ran for: same host, and its cwd is
 // the handoff's worktree (or inside it); of several (a worktree reused by
 // a follow-up), the one created closest to the session's start.
-func bestLink(links []Link, host, cwd, start string) *Link {
+func bestLink(links []Link, scope linkScope, cwd, start string) *Link {
 	var best *Link
 	var bestD time.Duration
 	st, _ := time.Parse(time.RFC3339, start)
 	for i := range links {
 		l := &links[i]
-		if l.Host != host || l.Worktree == "" {
+		if l.Host != scope.host || l.Worktree == "" {
 			continue
 		}
 		if cwd != l.Worktree && !strings.HasPrefix(cwd, strings.TrimSuffix(l.Worktree, "/")+"/") {
 			continue
 		}
 		ct, _ := time.Parse(time.RFC3339, l.CreatedAt)
+		if !scope.admits(ct, st) {
+			continue
+		}
 		d := st.Sub(ct)
 		if d < 0 {
 			d = -d
@@ -273,11 +276,54 @@ type SyncStats struct {
 // bytes changed are re-read (decrypted, parsed) and their rows replaced;
 // sessions deleted on request are dropped; handoff links and summaries are
 // re-applied. A fresh index file is a full rebuild.
+//
+// It covers a.Host and the workers this machine uploaded, so that recall finds
+// a worker's sessions. Threads do not span hosts yet.
 func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (SyncStats, error) {
 	var ss SyncStats
 	if err := ix.open(); err != nil {
 		return ss, err
 	}
+	claims, err := a.hostClaims()
+	if err != nil {
+		return ss, err
+	}
+	ss, err = ix.syncHost(a, o, links, opt, scopeOf(a.Host, claims))
+	if err != nil {
+		return ss, err
+	}
+	hosts := []string{a.Host}
+	mine := machineID()
+	var workers []string
+	for h, cl := range claims {
+		if h != a.Host && cl.Kind == hostKindWorker && cl.Machine == mine {
+			workers = append(workers, h)
+		}
+	}
+	sort.Strings(workers)
+	for _, h := range workers {
+		// One worker's trouble must not stop the others. Its rows from earlier
+		// runs stay, so it keeps its threads.
+		st, err := ix.syncHost(a.forHost(h), o, links, opt, scopeOf(h, claims))
+		if err != nil {
+			ss.Errors = append(ss.Errors, h+": "+err.Error())
+		}
+		ss.Sessions += st.Sessions
+		ss.Indexed += st.Indexed
+		ss.Unchanged += st.Unchanged
+		ss.Removed += st.Removed
+		ss.Messages += st.Messages
+		ss.Errors = append(ss.Errors, st.Errors...)
+		hosts = append(hosts, h)
+	}
+	ts, err := ix.buildThreads(hosts, links, opt)
+	ss.Threads, ss.Errors = ts.Threads, append(ss.Errors, ts.Errors...)
+	return ss, err
+}
+
+// syncHost brings the rows of one host up to date.
+func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, scope linkScope) (SyncStats, error) {
+	var ss SyncStats
 	state, err := scan(a.B, a.Host)
 	if err != nil {
 		return ss, err
@@ -369,15 +415,10 @@ func (ix *Index) Sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (Syn
 	if err := w.close(); err != nil {
 		return ss, err
 	}
-	if err := ix.applyLinks(a.Host, links); err != nil {
+	if err := ix.applyLinks(a.Host, scope, links); err != nil {
 		return ss, err
 	}
-	if err := ix.applySummaries(a, o); err != nil {
-		return ss, err
-	}
-	ts, err := ix.buildThreads(a.Host, links, opt)
-	ss.Threads, ss.Errors = ts.Threads, append(ss.Errors, ts.Errors...)
-	return ss, err
+	return ss, ix.applySummaries(a, o)
 }
 
 // parseGroup restores a session's files from the archive and parses them.
@@ -415,7 +456,7 @@ func (a *Archiver) parseGroup(o Opener, g *group) (*Parsed, error) {
 	return p, nil
 }
 
-func (ix *Index) applyLinks(host string, links []Link) error {
+func (ix *Index) applyLinks(host string, scope linkScope, links []Link) error {
 	rows, err := ix.Query("SELECT kind,id,cwd,started FROM sessions WHERE host=" + q(host) + ";")
 	if err != nil || len(links) == 0 {
 		return err
@@ -428,7 +469,7 @@ func (ix *Index) applyLinks(host string, links []Link) error {
 	for _, r := range rows {
 		kind, id, cwd, start := fmt.Sprint(r["kind"]), fmt.Sprint(r["id"]), fmt.Sprint(r["cwd"]), fmt.Sprint(r["started"])
 		where := " WHERE host=" + q(host) + " AND kind=" + q(kind) + " AND id=" + q(id) + ";"
-		l := bestLink(links, host, cwd, start)
+		l := bestLink(links, scope, cwd, start)
 		if l == nil {
 			continue
 		}
@@ -520,7 +561,8 @@ func (f Filter) where() string {
 		c = append(c, "s.started < "+q(f.Until))
 	}
 	if f.Host != "" {
-		c = append(c, "s.host = "+q(f.Host))
+		// A worker's bare name finds every VM that had it (name.instance).
+		c = append(c, "(s.host = "+q(f.Host)+" OR substr(s.host,1,"+qn(int64(len(f.Host))+1)+") = "+q(f.Host+".")+")")
 	}
 	if f.Kind != "" {
 		c = append(c, "s.kind = "+q(f.Kind))

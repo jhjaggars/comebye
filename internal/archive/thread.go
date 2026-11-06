@@ -111,11 +111,43 @@ type thread struct {
 	text       strings.Builder
 }
 
-func (ix *Index) buildThreads(host string, links []Link, opt SyncOptions) (ThreadStats, error) {
+// hostThreads is one host's threads, ready to write.
+type hostThreads struct {
+	host    string
+	threads []*thread
+	sums    map[string]string
+}
+
+// buildThreads replaces the thread tables with the threads of these hosts. Each
+// host's threads are worked out from that host's sessions alone. Everything is
+// read first, because reading a thread's outcome can write the PR cache, which
+// an open write transaction here would block.
+func (ix *Index) buildThreads(hosts []string, links []Link, opt SyncOptions) (ThreadStats, error) {
 	var st ThreadStats
-	rows, err := ix.Query("SELECT kind,id,repo,branch,ledger_branch,ledger_id,plan_id,ref,cwd,started,ended,title,first_prompt,brief,n_msgs,summary FROM sessions WHERE host=" + q(host) + " ORDER BY started;")
+	var all []*hostThreads
+	for _, h := range hosts {
+		ht, err := ix.gatherThreads(h, links, opt, &st)
+		if err != nil {
+			return st, err
+		}
+		all = append(all, ht)
+	}
+	w, err := ix.writerNoSchema(threadSchema)
 	if err != nil {
 		return st, err
+	}
+	w.exec("BEGIN;")
+	for _, ht := range all {
+		ht.write(w, &st)
+	}
+	w.exec("COMMIT;")
+	return st, w.close()
+}
+
+func (ix *Index) gatherThreads(host string, links []Link, opt SyncOptions, st *ThreadStats) (*hostThreads, error) {
+	rows, err := ix.Query("SELECT kind,id,repo,branch,ledger_branch,ledger_id,plan_id,ref,cwd,started,ended,title,first_prompt,brief,n_msgs,summary FROM sessions WHERE host=" + q(host) + " ORDER BY started;")
+	if err != nil {
+		return nil, err
 	}
 	byLedger := map[string]*Link{}
 	for i := range links {
@@ -178,11 +210,6 @@ func (ix *Index) buildThreads(host string, links []Link, opt SyncOptions) (Threa
 		ghc = prs
 	}
 
-	w, err := ix.writerNoSchema(threadSchema)
-	if err != nil {
-		return st, err
-	}
-	w.exec("BEGIN;")
 	// document frequency for keywords
 	var texts []map[string]int
 	for _, t := range threads {
@@ -201,6 +228,13 @@ func (ix *Index) buildThreads(host string, links []Link, opt SyncOptions) (Threa
 			// fetched below; PR outcomes were added in gather from cache
 		}
 		t.finish()
+	}
+	return &hostThreads{host: host, threads: threads, sums: sums}, nil
+}
+
+func (ht *hostThreads) write(w *stmtWriter, st *ThreadStats) {
+	host, sums := ht.host, ht.sums
+	for _, t := range ht.threads {
 		st.Threads++
 		first := t.ss[0]
 		hosts, repos, branches := t.sets()
@@ -219,8 +253,6 @@ func (ix *Index) buildThreads(host string, links []Link, opt SyncOptions) (Threa
 		w.exec(fmt.Sprintf("INSERT INTO thread_fts(title,brief,outcome,keywords,digest,decisions,thread_id) VALUES(%s,%s,%s,%s,%s,%s,%s);",
 			q(t.title()), q(t.brief()), q(t.outcomeTxt+" "+t.report), q(strings.Join(t.keywords, " ")), q(t.digest(sums)), q(strings.Join(dec, "\n")), q(t.id)))
 	}
-	w.exec("COMMIT;")
-	return st, w.close()
 }
 
 func (ix *Index) writerNoSchema(pre string) (*stmtWriter, error) {

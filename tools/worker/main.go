@@ -29,8 +29,13 @@ Commands:
   status [NAME]       one worker, or (no NAME) every worker, disk and tagged node
   stop NAME           stop the VM; the tailnet node and peer entry stay
   start NAME          start it again and re-verify
-  destroy NAME [--delete-data-disk]
-        asks you to type NAME; removes the VM, tailnet node and hub peer entry
+  archive NAME | --all
+        copy a running worker's sessions to the transcript archive (--all: every
+        running worker; stopped ones are skipped)
+  destroy NAME [--delete-data-disk] [--no-archive]
+        asks you to type NAME; saves the sessions to the archive, then removes the
+        VM, tailnet node and hub peer entry. It refuses if the sessions cannot be
+        saved; --no-archive loses them instead
   login NAME pi|claude|codex
         sign in on the VM (the credential is created there)
   keys [--prune]
@@ -116,6 +121,8 @@ func run(args []string, e *env) int {
 	ver := cf.String("comebye-version", "", "create: a release tag instead of the hub's version")
 	delData := cf.Bool("delete-data-disk", false, "destroy: also delete the data disk")
 	prune := cf.Bool("prune", false, "keys: delete worker keys whose VM is gone")
+	all := cf.Bool("all", false, "archive: every running worker")
+	noArchive := cf.Bool("no-archive", false, "destroy: do not save the worker's sessions (they are lost)")
 	// Flags may follow the positional name: split them out.
 	var pos, flags []string
 	for i := 0; i < len(rest); i++ {
@@ -138,7 +145,7 @@ func run(args []string, e *env) int {
 	}
 
 	switch cmd {
-	case "create", "status", "stop", "start", "destroy", "login", "keys":
+	case "create", "status", "stop", "start", "destroy", "login", "keys", "archive":
 	case "help":
 		fmt.Fprint(e.Out, usage)
 		return 0
@@ -146,9 +153,18 @@ func run(args []string, e *env) int {
 		fmt.Fprintf(e.Err, "worker: unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
-	want := map[string][2]int{"create": {1, 1}, "status": {0, 1}, "stop": {1, 1}, "start": {1, 1}, "destroy": {1, 1}, "login": {2, 2}, "keys": {0, 0}}[cmd]
+	want := map[string][2]int{"create": {1, 1}, "status": {0, 1}, "stop": {1, 1}, "start": {1, 1}, "destroy": {1, 1}, "login": {2, 2}, "keys": {0, 0}, "archive": {0, 1}}[cmd]
 	if len(pos) < want[0] || len(pos) > want[1] {
 		fmt.Fprintf(e.Err, "worker %s: wrong number of arguments\n\n%s", cmd, usage)
+		return 2
+	}
+
+	if cmd == "archive" && *all == (len(pos) == 1) {
+		fmt.Fprintf(e.Err, "worker archive: give a NAME or --all\n\n%s", usage)
+		return 2
+	}
+	if (*all && cmd != "archive") || (*noArchive && cmd != "destroy") {
+		fmt.Fprintf(e.Err, "worker: --all is only for archive, and --no-archive only for destroy\n")
 		return 2
 	}
 
@@ -180,7 +196,13 @@ func run(args []string, e *env) int {
 	case "start":
 		err = e.start(ctx, name)
 	case "destroy":
-		err = e.destroy(ctx, name, destroyOpts{DeleteDataDisk: *delData})
+		err = e.destroy(ctx, name, destroyOpts{DeleteDataDisk: *delData, NoArchive: *noArchive})
+	case "archive":
+		if *all {
+			err = e.archiveAll(ctx)
+		} else if err = checkName(name); err == nil {
+			err = e.archiveOne(ctx, name)
+		}
 	case "login":
 		err = e.login(ctx, name, pos[1])
 	case "keys":

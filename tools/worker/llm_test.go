@@ -438,7 +438,7 @@ func TestLLMDestroyDeletesTheKeyFirstAndChecksItIsRefused(t *testing.T) {
 	if !l.active[key] {
 		t.Fatal("setup: the key is not live")
 	}
-	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
 		t.Fatalf("destroy: %v\n%s", err, out)
 	}
 	if l.active[key] || l.find("worker-w1") != nil {
@@ -471,7 +471,7 @@ func TestLLMDestroyWarnsAndLeavesTheKeyForPruneWhenDeleteFails(t *testing.T) {
 	e, _, l, vm, out := destroyLLM(t, f)
 	key := vm.authKey
 	l.deleteFail = true
-	err := e.destroy(context.Background(), "w1", destroyOpts{})
+	err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true})
 	if err == nil || !strings.Contains(err.Error(), "llm key") {
 		t.Fatalf("destroy error: %v", err)
 	}

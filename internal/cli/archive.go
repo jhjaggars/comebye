@@ -38,7 +38,7 @@ func archiveFlags(e *Env, fs *flag.FlagSet) *archive.Config {
 	fs.StringVar(&c.ClaudeDir, "claude-dir", env("COMEBYE_ARCHIVE_CLAUDE_DIR"), "Claude Code projects dir (default ~/.claude/projects)")
 	fs.StringVar(&c.PiDir, "pi-dir", env("COMEBYE_ARCHIVE_PI_DIR"), "pi sessions dir (default ~/.pi/agent/sessions)")
 	fs.StringVar(&c.Index, "index", env("COMEBYE_RECALL_INDEX"), "index file (default ~/.local/state/comebye/recall/index.db)")
-	fs.StringVar(&c.Host, "host", env("COMEBYE_HOST_NAME"), "this host's name in archive keys (default the short hostname)")
+	fs.StringVar(&c.Host, "host", env("COMEBYE_HOST_NAME"), "the host's name in archive keys (default this machine's short hostname; a worker's is NAME.INSTANCE_ID, shown by `comebye recall`)")
 	return c
 }
 
@@ -84,8 +84,10 @@ func cmdArchive(e *Env, args []string) error {
 		return usageErr("unknown archive subcommand %q", sub)
 	}
 	var ledger, to, by, toDir, toRcpt, toEnc *string
-	var yes, useGit, useGH *bool
+	var yes, useGit, useGH, final *bool
 	switch sub {
+	case "run":
+		final = fs.Bool("final", false, "the sessions have ended: also take each file's last, unterminated line now")
 	case "index":
 		ledger = fs.String("ledger", "auto", "handoff links: FILE or - (the output of `comebye ledger --json`), auto (run it), or none")
 		useGit = fs.Bool("git", true, "check each commit against main in the local checkout (outcome source: git)")
@@ -115,7 +117,11 @@ func cmdArchive(e *Env, args []string) error {
 			return usageErr("unexpected argument %q", pos[0])
 		}
 		t0 := time.Now()
-		res, err := a.Run(cfg.Sources())
+		ship := a.Run
+		if *final {
+			ship = a.RunFinal
+		}
+		res, err := ship(cfg.Sources())
 		if err != nil {
 			return err
 		}
@@ -285,7 +291,7 @@ func cmdArchive(e *Env, args []string) error {
 		return nil
 	case "restore":
 		if len(pos) != 1 || *to == "" {
-			return usageErr("usage: comebye archive restore SESSION --to DIR")
+			return usageErr("usage: comebye archive restore SESSION --to DIR [--host HOST]")
 		}
 		o, err := cfg.OpenIdentity()
 		if err != nil {
@@ -316,7 +322,7 @@ func cmdArchive(e *Env, args []string) error {
 		return nil
 	case "delete":
 		if len(pos) != 1 {
-			return usageErr("usage: comebye archive delete SESSION [--yes]")
+			return usageErr("usage: comebye archive delete SESSION [--yes] [--host HOST]")
 		}
 		ref, err := a.FindSession(pos[0])
 		if err != nil {
@@ -339,7 +345,7 @@ func cmdArchive(e *Env, args []string) error {
 		return nil
 	case "summary":
 		if len(pos) != 2 {
-			return usageErr("usage: comebye archive summary SESSION TEXT|-")
+			return usageErr("usage: comebye archive summary SESSION TEXT|- [--host HOST]")
 		}
 		ref, err := a.FindSession(pos[0])
 		if err != nil {
@@ -598,7 +604,7 @@ func printSession(e *Env, r map[string]any) {
 	if v := str(r["ref"]); v != "" {
 		extra += " [" + v + "]"
 	}
-	fmt.Fprintf(e.Stdout, "%s  %-6s %s  %s  %s%s\n", when, str(r["kind"]), shortID(str(r["kind"]), str(r["id"])), where, oneLine(title, 80), extra)
+	fmt.Fprintf(e.Stdout, "%s  %-6s %s  %s  %s  %s%s\n", when, str(r["kind"]), shortID(str(r["kind"]), str(r["id"])), str(r["host"]), where, oneLine(title, 80), extra)
 	if sn := str(r["snippet"]); sn != "" {
 		fmt.Fprintf(e.Stdout, "    %s: %s\n", str(r["role"]), oneLine(sn, 200))
 	}

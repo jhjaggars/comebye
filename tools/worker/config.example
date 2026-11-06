@@ -46,6 +46,10 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # herdr_install_sha256=       # pin the install script (recommended)
 # releases_url=https://github.com/jhjaggars/comebye/releases
 
+# The transcript archive's settings (COMEBYE_ARCHIVE_*), the file the archive timer reads.
+# `worker archive` and `destroy` upload through it; destroy refuses if it cannot.
+# archive_env=~/.config/comebye/archive.env
+
 # Agent harnesses installed on the worker, never signed in: pi (default), claude, codex.
 # agents=pi
 # pi is pinned; bump it on purpose.

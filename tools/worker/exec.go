@@ -19,7 +19,36 @@ type Runner interface {
 	Interactive(ctx context.Context, name string, args []string) error
 }
 
+// streamRunner is a Runner that can send a program's stdout to a writer, for
+// output too large to hold in memory.
+type streamRunner interface {
+	RunStream(ctx context.Context, name string, args []string, stdout io.Writer) error
+}
+
+// runStream runs a program with its stdout going to w. A Runner that cannot
+// stream still works: the output is copied once the program ends.
+func runStream(ctx context.Context, r Runner, name string, args []string, w io.Writer) error {
+	if s, ok := r.(streamRunner); ok {
+		return s.RunStream(ctx, name, args, w)
+	}
+	out, _, err := r.Run(ctx, name, args, nil)
+	if _, werr := io.WriteString(w, out); err == nil {
+		err = werr
+	}
+	return err
+}
+
 type osRunner struct{}
+
+func (osRunner) RunStream(ctx context.Context, name string, args []string, stdout io.Writer) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	var errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = stdout, &errb
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w: %s", name, err, lastLines(errb.String(), 6))
+	}
+	return nil
+}
 
 func (osRunner) Run(ctx context.Context, name string, args []string, stdin []byte) (string, string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)

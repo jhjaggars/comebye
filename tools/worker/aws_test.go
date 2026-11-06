@@ -451,7 +451,7 @@ func TestAWSRefusesForeignInstance(t *testing.T) {
 	for name, fn := range map[string]func() error{
 		"stop":    func() error { return e.stop(context.Background(), "w1") },
 		"start":   func() error { return e.start(context.Background(), "w1") },
-		"destroy": func() error { return e.destroy(context.Background(), "w1", destroyOpts{}) },
+		"destroy": func() error { return e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}) },
 		"login":   func() error { return e.login(context.Background(), "w1", "claude") },
 		"create":  func() error { w.hubVersion = "v0.3.1"; return e.create(context.Background(), "w1", createOpts{}) },
 	} {
@@ -528,7 +528,7 @@ func fullAWS() *awsFake {
 func TestAWSDestroyKeepsVolumeAndCleansUnusedNetwork(t *testing.T) {
 	f := fullAWS()
 	e, r, out := awsDestroyEnv(t, f, "w1\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if !f.did("terminate-instances") || f.did("delete-volume") {
@@ -556,7 +556,7 @@ func TestAWSDestroyKeepsVolumeAndCleansUnusedNetwork(t *testing.T) {
 func TestAWSDestroyDeletesVolumeOnlyWhenAsked(t *testing.T) {
 	f := fullAWS()
 	e, _, out := awsDestroyEnv(t, f, "w1\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{DeleteDataDisk: true}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{DeleteDataDisk: true, NoArchive: true}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if !f.did("delete-volume") {
@@ -572,7 +572,7 @@ func TestAWSNetworkCleanupRefusals(t *testing.T) {
 		f := fullAWS()
 		set(f)
 		e, _, out := awsDestroyEnv(t, f, "w1\n")
-		if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+		if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
 			t.Fatalf("%s: %v\n%s", name, err, out)
 		}
 		for _, op := range []string{"delete-security-group", "delete-route-table", "delete-subnet", "delete-internet-gateway", "delete-vpc"} {
@@ -688,7 +688,7 @@ func TestGCENetworkCleanupRefusals(t *testing.T) {
 
 func TestGCEDestroyRunsNetworkCleanupAfterTheInstance(t *testing.T) {
 	e, r, _, _ := destroyEnv(t, "RUNNING", "w1\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
 		t.Fatal(err)
 	}
 	del, clean := -1, -1
@@ -781,7 +781,7 @@ func TestAWSSpotDestroyCancelsRequestBeforeTerminating(t *testing.T) {
 	f := fullAWS()
 	f.spot = true
 	e, r, out := awsDestroyEnv(t, f, "w1\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	cancel, term := -1, -1
@@ -810,7 +810,7 @@ func TestAWSSpotDestroyCancelsRequestBeforeTerminating(t *testing.T) {
 func TestAWSOnDemandDestroyDoesNotCancel(t *testing.T) {
 	f := fullAWS()
 	e, _, out := awsDestroyEnv(t, f, "w1\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if f.did("cancel-spot-instance-requests") {

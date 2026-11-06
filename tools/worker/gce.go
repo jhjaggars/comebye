@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // gcloud builds and runs the gcloud commands. Every builder returns the
@@ -96,6 +97,8 @@ func regionOf(zone string) string { return zone[:strings.LastIndex(zone, "-")] }
 // Instance is the part of `instances describe` the tool reads.
 type Instance struct {
 	Name              string            `json:"name"`
+	ID                string            `json:"id"`
+	CreationTimestamp string            `json:"creationTimestamp"`
 	Status            string            `json:"status"`
 	Zone              string            `json:"zone"`
 	MachineType       string            `json:"machineType"`
@@ -177,8 +180,31 @@ func (g *gcloud) Describe(ctx context.Context, name string) (*Inst, error) {
 	if st == "TERMINATED" {
 		st = stateStopped
 	}
-	return &Inst{Name: i.Name, ID: i.Name, State: st, Type: shortType(i.MachineType), IP: i.ExternalIP(),
-		Managed: i.Labels[labelKey] == labelVal}, nil
+	created, _ := time.Parse(time.RFC3339, i.CreationTimestamp)
+	return &Inst{Name: i.Name, ID: i.ID, State: st, Type: shortType(i.MachineType), IP: i.ExternalIP(),
+		Managed: i.Labels[labelKey] == labelVal, Created: created}, nil
+}
+
+func (g *gcloud) Instances(ctx context.Context) ([]Inst, error) {
+	out, err := g.run(ctx, g.instanceList())
+	if err != nil {
+		return nil, err
+	}
+	var list []Instance
+	if out != "" {
+		if err := json.Unmarshal([]byte(out), &list); err != nil {
+			return nil, err
+		}
+	}
+	insts := make([]Inst, 0, len(list))
+	for _, i := range list {
+		st := i.Status
+		if st == "TERMINATED" {
+			st = stateStopped
+		}
+		insts = append(insts, Inst{Name: i.Name, State: st})
+	}
+	return insts, nil
 }
 
 func (g *gcloud) EnsureNetwork(ctx context.Context, w logf) error {

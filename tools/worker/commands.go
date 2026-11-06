@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jhjaggars/comebye/internal/archive"
 )
 
 func (e *env) printf(format string, a ...any) { fmt.Fprintf(e.Out, format, a...) }
@@ -457,6 +459,7 @@ func (e *env) status(ctx context.Context, name string) error {
 	if inst.Note != "" {
 		e.printf("            %s\n", inst.Note)
 	}
+	e.printf("archive     host %s\n", archive.WorkerHost(name, inst.ID))
 	if inst.State == stateRunning {
 		if err := e.connect(ctx, name); err != nil {
 			e.printf("ssh         unreachable: %v\n", err)
@@ -603,7 +606,10 @@ func (e *env) start(ctx context.Context, name string) error {
 
 // ---- destroy ----
 
-type destroyOpts struct{ DeleteDataDisk bool }
+type destroyOpts struct {
+	DeleteDataDisk bool
+	NoArchive      bool // lose the worker's sessions rather than save them first
+}
 
 func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	if err := checkName(name); err != nil {
@@ -618,6 +624,10 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 			return err
 		}
 	}
+	archiving := !o.NoArchive && inst != nil
+	if archiving && inst.State != stateRunning {
+		return fmt.Errorf("destroy refused, nothing was changed: %s is %s and its sessions are on its boot disk. Run `worker start %s` first, or pass --no-archive to lose them", name, inst.State, name)
+	}
 	disk := "kept (" + dataDiskName(name) + ")"
 	if o.DeleteDataDisk {
 		disk = "DELETED (" + dataDiskName(name) + ")"
@@ -626,6 +636,16 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	line, _ := bufio.NewReader(e.In).ReadString('\n')
 	if strings.TrimSpace(line) != name {
 		return fmt.Errorf("confirmation did not match: nothing was changed")
+	}
+	switch {
+	case archiving:
+		if err := e.archiveBeforeDestroy(ctx, inst); err != nil {
+			return err
+		}
+	case inst == nil:
+		e.printf("  no VM exists, so there are no sessions to save\n")
+	default:
+		e.printf("  --no-archive: this worker's sessions are NOT being saved\n")
 	}
 	var failed []string
 	// The worker's LLM key goes first: it is the one thing here that is

@@ -22,7 +22,8 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
 | `create NAME [--dry-run] [--comebye-version vX.Y.Z]` | Builds the VM, enrols it, bootstraps it, waits for the hub. Safe to re-run: it resumes where it stopped and never mints a second key for a node that is already enrolled. `--dry-run` prints the plan and touches nothing. |
 | `status [NAME]` | One worker: GCE state, tailnet address, comebye version and units, the tailnet device, the hub's view (with a version-mismatch warning). Without a name: every labelled instance and disk and every `tag:worker` device. |
 | `stop NAME` / `start NAME` | Stop or start the VM. The tailnet node and the hub's peer entry stay (the hub shows it unreachable). `start` re-reads the host key from GCE (the external IP changes) and waits for comebye. |
-| `destroy NAME [--delete-data-disk]` | Asks you to type the name. Signs the agents out, `tailscale logout`, deletes the tailnet device (only one with the exact hostname **and** the tag), removes the hub's peer entry, deletes the VM. The data disk is kept unless you pass the flag. |
+| `archive NAME` / `archive --all` | Copies a running worker's sessions to the transcript archive, and verifies them. Safe to repeat, and leaves the agents running. `--all` covers every running worker and skips stopped ones. See [Sessions and the archive](#sessions-and-the-archive). |
+| `destroy NAME [--delete-data-disk] [--no-archive]` | Asks you to type the name. Saves the worker's sessions to the archive, and **refuses** if it cannot. Then signs the agents out, `tailscale logout`, deletes the tailnet device (only one with the exact hostname **and** the tag), removes the hub's peer entry, deletes the VM. The data disk is kept unless you pass the flag. `--no-archive` skips the save, and the sessions are lost. |
 | `login NAME claude\|codex` | Runs the agent's own sign-in on the VM over ssh. You open the printed URL in your browser; the credential is created on the VM and nothing is copied from your machine. |
 
 ## Before the first run
@@ -266,9 +267,76 @@ Sign in with `worker login NAME claude` (and `codex`), then use comebye as
 usual. Git push credentials are yours to arrange (a per-repo deploy key, or a
 temporary `gh auth login --web` on the VM).
 
+## Sessions and the archive
+
+A worker's sessions are on its boot disk (`~/.pi/agent/sessions`, and
+`~/.claude/projects` if Claude is installed), which survives a stop or a spot
+reclaim and is deleted with the VM. A worker holds **no archive key** and
+`tag:worker` is denied the bucket, because an archive key can delete every host's
+history. So the machine running this tool pulls the sessions over ssh and uploads
+them itself, using the settings in `archive_env` (default
+`~/.config/comebye/archive.env`, the file the [archive timer](archive.md) reads).
+
+**The archive host is `NAME.INSTANCE_ID`**, for example `w1.i-0abc123def4567890`.
+Worker names get reused, but an instance id does not, and a stop, start or reclaim
+keeps it. `worker status NAME` prints it. The worker still calls itself `w1` to the
+hub and in the ledger.
+
+`destroy` does this after the typed confirmation, before anything else:
+
+1. Pull and upload with the agents still running. If the bucket or the VM cannot be
+   reached, it refuses here, with nothing changed.
+2. Stop the agents.
+3. Pull and upload again, now including any unfinished last line, and verify every
+   file by sha256. If this fails, it restarts the agents, leaves the VM running and
+   refuses. If the restart fails too, it says so.
+
+| Situation | What `destroy` does | `--no-archive` |
+|---|---|---|
+| VM running, archive works | Saves, then destroys | Destroys; the sessions are lost |
+| Bucket unreachable, `archive_env` missing or wrong | Refuses | Destroys; the sessions are lost |
+| VM stopped, or reclaimed by AWS | Refuses: run `worker start NAME` first | Destroys; the sessions are lost |
+| VM already gone | Continues: there is nothing to save | Same |
+
+The tool treats the worker as untrusted while pulling. It unpacks only regular files
+under the two session directories, refuses other paths, makes no links, and stops at
+10 GiB or a million files. The copy sits in a mode-0700 directory under the state
+directory and is removed after the upload. A worker can only affect its own host's
+sessions, but what it wrote is still untrusted text when `recall` shows it. `recall`
+on this machine finds the sessions after the next `archive index`.
+
+Only this machine uploads a given worker: a second machine is refused, because the
+archive's safety depends on one writer per host.
+
+**What this does not cover:** a VM deleted outside this tool, for example in the
+cloud console, loses whatever was not yet copied. `worker archive --all` on a timer
+limits that loss. It is not installed for you:
+
+```ini
+# ~/.config/systemd/user/comebye-worker-archive.service
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/comebye-worker archive --all
+
+# ~/.config/systemd/user/comebye-worker-archive.timer
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Each run sends the whole session directory, compressed, from every running worker.
+On AWS, at $0.09/GB egress, a worker with 200 MB of sessions costs about $0.09 a day
+at this rate (an estimate; most have far less). A pull overlapping the idle check's
+5-minute tick counts as ssh activity, so it can only rarely delay the idle poweroff.
+Codex sessions are not archived: the archive knows only Claude and pi.
+
 ## What `destroy` removes
 
-After the typed confirmation: the agents are signed out, the node leaves the
+After the sessions are saved: the agents are signed out, the node leaves the
 tailnet (`tailscale logout`, then the API delete of the device with that exact
 hostname **and** tag), the hub's peer entry is removed, and the instance is
 deleted (terminated, on AWS). The **data disk or volume is kept** unless you
@@ -337,5 +405,5 @@ you never pay more than on-demand).
   after boot; `create` and `start` poll for it.
 - The herdr, Claude and Codex installers are third-party scripts. Pin herdr's
   with `herdr_install_sha256`; the agent installers are not pinned.
-- `destroy` signs the agents out only if the VM is running. A stopped VM is
-  deleted with its node removed through the API.
+- `destroy` signs the agents out only if the VM is running. A stopped VM (which
+  takes `--no-archive`) is deleted with its node removed through the API.

@@ -77,6 +77,7 @@ func testCfg(t *testing.T) *Config {
 	c.TSOAuthFile = filepath.Join(dir, "oauth")
 	c.TSAuthKeyFile = filepath.Join(dir, "authkey")
 	c.TSAPIBase = "https://api.test"
+	c.ArchiveEnv = filepath.Join(dir, "archive.env") // never the real archive
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +586,7 @@ func destroyEnv(t *testing.T, status string, input string) (*env, *fakeRunner, *
 
 func TestDestroyNeedsTypedName(t *testing.T) {
 	e, r, w, _ := destroyEnv(t, "RUNNING", "yes\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err == nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err == nil {
 		t.Fatal("proceeded without the name")
 	}
 	if len(r.calls) > 1 || len(w.deleted) != 0 || len(w.peerRemoved) != 0 {
@@ -595,7 +596,7 @@ func TestDestroyNeedsTypedName(t *testing.T) {
 
 func TestDestroyKeepsDataDiskByDefault(t *testing.T) {
 	e, r, w, out := destroyEnv(t, "RUNNING", "w1\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if !r.saw("instances delete w1") || r.saw("disks delete") {
@@ -614,7 +615,7 @@ func TestDestroyKeepsDataDiskByDefault(t *testing.T) {
 
 func TestDestroyWithDataDiskAndStoppedVM(t *testing.T) {
 	e, r, _, _ := destroyEnv(t, "TERMINATED", "w1\n")
-	if err := e.destroy(context.Background(), "w1", destroyOpts{DeleteDataDisk: true}); err != nil {
+	if err := e.destroy(context.Background(), "w1", destroyOpts{DeleteDataDisk: true, NoArchive: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !r.saw("disks delete w1-data") {
@@ -638,7 +639,7 @@ func TestRefusesToManageForeignInstance(t *testing.T) {
 	for name, f := range map[string]func() error{
 		"stop":    func() error { return e.stop(context.Background(), "w1") },
 		"start":   func() error { return e.start(context.Background(), "w1") },
-		"destroy": func() error { return e.destroy(context.Background(), "w1", destroyOpts{}) },
+		"destroy": func() error { return e.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}) },
 		"login":   func() error { return e.login(context.Background(), "w1", "claude") },
 	} {
 		if err := f(); err == nil || !strings.Contains(err.Error(), "refusing") {

@@ -199,7 +199,16 @@ type hostClaim struct {
 	Machine   string `json:"machine"` // a hash of the machine id
 	Hostname  string `json:"hostname"`
 	FirstSeen string `json:"first_seen"`
+	// A worker's sessions are uploaded by the machine that runs tools/worker,
+	// so Machine and Hostname above are that machine. See ClaimWorker.
+	Kind            string `json:"kind,omitempty"`
+	Worker          string `json:"worker,omitempty"` // its name, as the ledger has it
+	Provider        string `json:"provider,omitempty"`
+	InstanceID      string `json:"instance_id,omitempty"`
+	InstanceCreated string `json:"instance_created,omitempty"`
 }
+
+const hostKindWorker = "worker"
 
 func hostClaimKey(host string) string { return "hosts/" + host + ".json" }
 
@@ -406,7 +415,7 @@ func (a *Archiver) FindSession(id string) (SessionRef, error) {
 	}
 	switch len(hit) {
 	case 0:
-		return SessionRef{}, errors.New("no archived session " + id)
+		return SessionRef{}, fmt.Errorf("no archived session %s on host %s (another host's session needs --host; `comebye recall list` shows the host)", id, a.Host)
 	case 1:
 		return hit[0], nil
 	}

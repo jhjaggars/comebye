@@ -261,6 +261,23 @@ type awsInstance struct {
 	SpotRequest  string `json:"SpotInstanceRequestId"`
 	Reason       string `json:"StateTransitionReason"`
 	Tags         []struct{ Key, Value string }
+	RootDevice   string `json:"RootDeviceName"`
+	Devices      []struct {
+		DeviceName string
+		Ebs        struct{ AttachTime string }
+	} `json:"BlockDeviceMappings"`
+}
+
+// created is when the root volume was attached: when the VM was first made.
+// LaunchTime will not do, because every start changes it.
+func (i *awsInstance) created() time.Time {
+	for _, d := range i.Devices {
+		if d.DeviceName == i.RootDevice {
+			t, _ := time.Parse(time.RFC3339, d.Ebs.AttachTime)
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func (p *awsProv) find(ctx context.Context, name string) (*awsInstance, error) {
@@ -305,7 +322,23 @@ func (p *awsProv) Describe(ctx context.Context, name string) (*Inst, error) {
 			note = "spot instance, stopped by AWS (" + i.Reason + "): it restarts by itself when capacity returns"
 		}
 	}
-	return &Inst{Name: name, ID: i.InstanceID, State: st, Type: i.InstanceType, IP: i.PublicIP, Managed: managed, Note: note}, nil
+	return &Inst{Name: name, ID: i.InstanceID, State: st, Type: i.InstanceType, IP: i.PublicIP, Managed: managed, Note: note, Created: i.created()}, nil
+}
+
+func (p *awsProv) Instances(ctx context.Context) ([]Inst, error) {
+	out, err := p.a.runText(ctx, p.a.text("ec2", "describe-instances", "--filters", "Name=tag:"+labelKey+",Values="+labelVal,
+		"Name=instance-state-name,Values=pending,running,stopping,stopped",
+		"--query", "Reservations[].Instances[].[Tags[?Key=='Name']|[0].Value,State.Name]"))
+	if err != nil {
+		return nil, err
+	}
+	var insts []Inst
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) >= 2 {
+			insts = append(insts, Inst{Name: f[0], State: strings.ToUpper(f[1])})
+		}
+	}
+	return insts, nil
 }
 
 func (p *awsProv) imageID(ctx context.Context) (string, error) {
