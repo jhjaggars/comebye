@@ -49,8 +49,8 @@ comebye archive verify --no-source [--all-hosts]   # check the store by itself: 
 comebye archive status               # sessions, segments, sizes, and how old the index is
 comebye archive index [--git=false] [--gh] [--ledger FILE|auto|none]
                                      # this host and the workers it uploaded
-comebye archive index --all-hosts [--publish]      # every host in the store; --publish copies the result to the store
-comebye archive index --pull         # do not index: download the newest copy and move it into place
+comebye archive index --all-hosts    # every host in the store
+comebye archive index --all-hosts --if-changed [--git-every 1h]   # the same, for a frequent timer: skips if nothing changed
 comebye archive restore SESSION --to DIR [--host H]
 comebye archive delete SESSION [--yes] [--host H]    # dry run without --yes
 comebye archive summary SESSION TEXT|- [--host H]    # a short summary, kept in the archive
@@ -176,8 +176,8 @@ object-store bucket only if all of these hold:
 4. Its volumes are in Longhorn's `critical-backup` group, and any copy that leaves
    TrueNAS is encrypted by the TrueNAS job that sends it. Nothing unencrypted goes
    to a cloud drive or to another host's disk.
-5. The plaintext index lives only on hosts that index or download it (mode 0600 in
-   a 0700 directory), and in that same bucket. Never on a worker.
+5. The plaintext index lives only on the hosts that build it (mode 0600 in a 0700
+   directory). It never goes in the bucket or any other store, and never on a worker.
 
 Anyone with an archive key, the index, or read access to the Longhorn backup
 dataset can read every transcript, tokens and keys included. Setting
@@ -218,89 +218,74 @@ those paths name directories over there. It runs `git fetch origin` once per
 repository first, so that work landed from another host does not read as not landed.
 A failed fetch is reported on stderr and the check goes on against the last-known
 origin. Fetching is what `--git` costs on a timer: it writes to `refs/remotes/origin`
-in those checkouts and needs credentials that work without a terminal.
+in those checkouts and needs credentials that work without a terminal. Each host checks
+its own checkouts, so two hosts can disagree on a commit's verdict, where only one has
+the repository or a fresher one. Session search reads the same segments and does not
+differ.
 
 ### One index for every host
 
-With a bucket, one machine builds the index of every host, and the others download
-it. `comebye recall` and the app read a local file on both, so neither changes.
+With a bucket, each machine builds its own index of every host from the segments, so
+`comebye recall` and the app read a local file and search finds every host's sessions.
+The index itself never leaves the machine: it is not in the bucket or its backups. A
+machine needs only its archive key, and the ledger for handoff links.
 
-| Machine | Its timer runs | What it needs |
-|---|---|---|
-| The indexing machine (laharl) | `comebye archive run && comebye archive index --git --all-hosts --publish` | The checkouts for the git check, `gh` if you add `--gh`, and the ledger holding both hosts' entries. |
-| Every other machine (the hub) | `comebye archive run && comebye archive index --pull` | Room for two copies of the index while it swaps them. |
+**The timer.** Run this every 5 minutes on each machine, on a timer like
+`OnCalendar=*:0/5`:
 
-**Run `--publish` on one machine only.** Snapshots are named by time and the newest
-wins, and two publishers would each prune the other's.
+```
+comebye archive run && comebye archive index --all-hosts --if-changed
+```
+
+Start it under `flock -n`, so that a tick finding the last one still going exits at
+once. `flock -n -E 0` makes that exit count as success, which keeps the unit from
+reading as failed.
 
 **`--all-hosts`** finds hosts in the `v1/` listing and runs the same incremental
 per-host sync on each, tombstones included. It also covers any host the index still
 has rows for, so that the rows of a host whose last session was deleted go too. One
 host that cannot be read keeps its rows and is named on stderr, and the others carry
-on. `--publish` then refuses, so that a copy missing a host never replaces a good one.
+on.
 
-**The snapshot.** `--publish` makes a consistent copy with `VACUUM INTO`, checks it,
-and writes it to `index/<time>.db.zst`, keeping the newest two. Other objects under
-`index/` are left alone. In the `none` mode it is an ordinary zstd file. In the `age`
-mode it is sealed like everything else, and pulling needs the identity.
+**`--if-changed`** first compares a hash of the `v1/`, `notes/`, `tomb/` and `hosts/`
+listings and of the ledger with what the index was last built from. On a match it
+records that it looked and stops: about 0.3 s, with no index work. A segment's name
+holds its offset and length, so the listing is the store's whole state. It compares
+state rather than waiting for an event, so a missed event loses nothing: the next tick
+sees the difference.
 
-**Only when changed.** A snapshot is over 100 MB and the store's nightly backups keep
-what it replaces, so `--publish` uploads only when the content differs from the last
-snapshot's. It compares a fingerprint: a sha256 over each session's host, kind, id,
-archived bytes, handoff link and summary, plus every thread and outcome. Build times
-and the database's bytes are not in it. Any session that grows changes it, so during
-a working day most runs still upload, and a quiet night uploads nothing.
+Three things run on their own schedules, because they cost far more than the rest:
 
-**The check object.** Every `--publish` also writes `index/<time>.check.json`, a few
-hundred bytes holding the time, the fingerprint and the snapshot with that content.
-The newest two are kept. It is plain JSON in every mode and holds no transcript text.
-A run that fails to write it fails.
+| What | When | Why |
+|---|---|---|
+| Indexing what changed, and rebuilding threads | Any tick with a change | About 15 s and 400 MB. |
+| The git check, with `git fetch` | Hourly, with or without a change (`--git-every`) | About 30 s, on the network. A fetch can change a verdict with no new bytes, which is why it runs even when nothing else changed. Between passes a commit keeps its verdict, and a new commit is checked locally with no fetch. So a commit landed from elsewhere reads as not landed for up to an hour. |
+| FTS `optimize` | Daily | It rewrites the whole full-text index: about 170 MB of disk writes on a 500 MB index, which at every active tick would be tens of GB a day. Without it, 144 session rewrites grew that index by 19 MB and left searches at the same speed. |
 
-**The pull.** `--pull` copies the newest check's time into the local file, and
-downloads the newest snapshot if it is newer than the one the local file came from.
-It checks a download: zstd's checksum, SQLite's `quick_check`, the
-format version, a build time, and at least one session. Only then does it move it
-over the index file, mode 0600. It refuses a directory that others can read. Any
-failure leaves the current file as it was and exits non-zero, so the timer's unit
-shows failed. The hub's first pull replaces the index it built itself, including that
-index's PR cache.
+`--gh` also runs only with the git check. If the ledger cannot be read, new sessions are
+still indexed, but threads wait until it can, because rebuilding them without it would
+drop their reports and other ledger outcomes. A plain `archive index`, without
+`--if-changed`, does everything every time.
 
-**Swapping under the server.** The server opens the file for each query, so a move
-into place needs no restart. A query in flight finishes on the old file and the next
-one reads the new. Snapshots are not in WAL mode, because SQLite applies a `-wal` file
-it finds beside a database whatever that database's own mode says. So `--pull` first
-closes any log the old file has, and if it cannot, within a few seconds, it does not
-replace the file.
-
-**Do not run a plain `archive index` on a pulling machine.** It would work, adding to
-the copy, but the next pull discards the result. It also would not re-read other
-hosts, so it gains nothing.
-
-**How fresh it is.** `archive status` prints the index's age and where it came from:
+**How fresh it is.** A session reaches another host's search after that host's `archive
+run` and the other's next tick: about 5 to 10 minutes. Agents are active nearly all the
+time, so expect most ticks to index something: in one 8-day sample, 73% of 5-minute
+windows held a message, and 97% of 30-minute windows. `archive status` shows both times:
 
 ```
-index: built 9h0m0s ago, indexer last looked 40m0s ago, pulled from snapshot 20261106T140000Z.db.zst; 1560 sessions on jjaggars-kubevirt, laharl
-newest snapshot in the store: index/20261106T140000Z.db.zst
-last check in the store: 2026-11-06T23:00:00Z, content in index/20261106T140000Z.db.zst
+index: built 4m0s ago, last checked 1m0s ago; 1570 sessions on jjaggars-kubevirt, laharl
 ```
 
-`built` is when the indexing machine built this content, which is when it last
-changed. `last looked` is the indexing machine's time from the last check this copy
-has pulled. Neither is the time of the pull. So if laharl stops indexing, or the hub
-stops pulling, the hub's `status` and its app both show the true age, and the app
-warns after two missed runs (`state: stale`), however old the content is otherwise. A
-session reaches the other host's search after up to three hourly
-steps in the worst case: the host's own `archive run`, the indexer's run, then the
-pull. Comparing the `status` lines shows which side has stopped: `last looked` older
-than the last check in the store means the pull is failing, and an old last check
-means the indexing machine has stopped.
+`built` is when the content last changed. `last checked` is the last tick, which only
+`--if-changed` records. The app shows the later of the two and warns (`state: stale`)
+after 30 minutes with neither, so a stopped timer or an unreachable store shows up
+quickly. An index built without `--if-changed` has no check time and keeps the old
+limit of a little over two hours, which suits an hourly timer.
 
 **Delete on request.** `archive delete SESSION --host H --yes` works from any machine
-with a key. It removes the segments and the local index's rows, and the indexing
-machine drops the session at its next run. Until then a pull can bring it back into
-the local copy. The session stays in the older snapshots until they are replaced,
-about two hours, and in Longhorn backups until those are pruned. If it matters, run
-the indexer and the pull by hand after deleting.
+with a key. It removes the segments and that machine's index rows, and writes a
+tombstone that every other machine's next tick sees, so the session leaves every index
+within minutes. It stays in Longhorn backups of the bucket until those are pruned.
 
 **To prove a restored backup,** point a binary at the restored store and run `archive
 verify --all-hosts --no-source`. It decodes every segment (magic, header against key,
@@ -340,10 +325,10 @@ restart. It serves whatever that host's index holds and is [for the user
 alone](security.md#searching-transcripts). The session view shows the indexed text
 with a notice where it is clipped.
 
-The index is as fresh as its last build: hourly on the timer, plus a run that
-`comebye-worker destroy` starts as it finishes, so that a destroyed worker's sessions
-are searchable within minutes. The app shows the age of the index and warns after
-two missed builds.
+The index is as fresh as its last build: see [How fresh it is](#one-index-for-every-host).
+`comebye-worker destroy` also starts a run as it finishes, so that a destroyed worker's
+sessions are searchable at once. The app shows the age of the index and warns when it
+has stopped updating.
 
 ## Spot workers
 
@@ -399,10 +384,10 @@ sessions over ssh and upload them from the machine running the tool:
   protect it with the keys above (age mode) or with where its copies live
   (plaintext mode). The index is plaintext in both modes, and masking does not
   change that: treat it as holding secrets.
-- Without `--all-hosts` and a pull, a host indexes itself and the workers it
-  uploaded, and cannot search the others.
-- The git check needs the repository at `~/code/<repo>` on the indexing machine for
-  other hosts' sessions; without it their commits read as unchecked. `gh` results
+- Without `--all-hosts`, a host indexes itself and the workers it uploaded, and
+  cannot search the others.
+- For other hosts' sessions, the git check needs the repository at `~/code/<repo>`
+  on the machine building the index; without it their commits read as unchecked. `gh` results
   are cached until the next `--gh`.
 - Decision lines are a keyword heuristic and miss some.
 - No scheduler and no semantic (embedding) search.

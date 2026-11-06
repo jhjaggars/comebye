@@ -16,7 +16,7 @@ import (
 
 // Reader answers the app's questions from an index file. It never writes: each
 // query is its own `sqlite3 -readonly -safe` process, with a time limit and a
-// cap on how many run at once. Opening the file per query means a snapshot moved
+// cap on how many run at once. Opening the file per query means a file moved
 // into place is picked up with no restart.
 type Reader struct {
 	Path   string
@@ -85,17 +85,18 @@ type IndexStatus struct {
 	Hosts    []string `json:"hosts,omitempty"`
 	Sessions int      `json:"sessions"`
 	Messages int      `json:"messages"`
-	// Snapshot names the snapshot this file was pulled from; "" for an index
-	// this machine builds. BuiltAt is when the machine that built it did, which
-	// for a pull is when the content last changed. CheckedAt, on a pulled copy, is
-	// when that machine last looked and found this content still current. State
-	// goes by whichever is later.
-	Snapshot  string `json:"snapshot,omitempty"`
+	// BuiltAt is when the content last changed. CheckedAt, on an index that a
+	// gated timer keeps (`archive index --if-changed`), is when that timer last
+	// looked and found it current. State goes by whichever is later.
 	CheckedAt string `json:"checked_at,omitempty"`
 }
 
-// staleAfter: the index is rebuilt hourly, so two missed builds mean trouble.
-const staleAfter = 2*time.Hour + 15*time.Minute
+// staleAfter: an index rebuilt by an hourly timer has missed two builds. An index
+// with a gated timer records every look, every few minutes, so it can tell sooner.
+const (
+	staleAfter      = 2*time.Hour + 15*time.Minute
+	staleAfterGated = 30 * time.Minute
+)
 
 // Status reports the state of the index. Only a failure of the context is an error.
 func (r *Reader) Status(ctx context.Context) (IndexStatus, error) {
@@ -112,18 +113,22 @@ func (r *Reader) Status(ctx context.Context) (IndexStatus, error) {
 	if len(rows) == 0 || num(rows[0], "user_version") != schemaVersion {
 		return IndexStatus{State: "outdated"}, nil
 	}
-	rows, err = r.query(ctx, `SELECT (SELECT value FROM meta WHERE key='built_at') AS built_at, (SELECT value FROM meta WHERE key='snapshot_key') AS snapshot, (SELECT value FROM meta WHERE key='checked_at') AS checked_at, count(*) AS sessions, coalesce(sum(n_msgs+n_sub),0) AS messages, group_concat(DISTINCT host) AS hosts FROM sessions;`)
+	rows, err = r.query(ctx, `SELECT (SELECT value FROM meta WHERE key='built_at') AS built_at, (SELECT value FROM meta WHERE key='checked_at') AS checked_at, count(*) AS sessions, coalesce(sum(n_msgs+n_sub),0) AS messages, group_concat(DISTINCT host) AS hosts FROM sessions;`)
 	if err != nil || len(rows) == 0 {
 		if ctx.Err() != nil {
 			return IndexStatus{}, ctx.Err()
 		}
 		return IndexStatus{State: "unavailable"}, nil
 	}
-	st := IndexStatus{State: "ok", BuiltAt: sget(rows[0], "built_at"), Snapshot: sget(rows[0], "snapshot"), CheckedAt: sget(rows[0], "checked_at"), Sessions: num(rows[0], "sessions"), Messages: num(rows[0], "messages")}
+	st := IndexStatus{State: "ok", BuiltAt: sget(rows[0], "built_at"), CheckedAt: sget(rows[0], "checked_at"), Sessions: num(rows[0], "sessions"), Messages: num(rows[0], "messages")}
 	if h := sget(rows[0], "hosts"); h != "" {
 		st.Hosts = strings.Split(h, ",")
 	}
-	if !seenWithin(staleAfter, st.BuiltAt, st.CheckedAt) {
+	limit := staleAfter
+	if st.CheckedAt != "" {
+		limit = staleAfterGated
+	}
+	if !seenWithin(limit, st.BuiltAt, st.CheckedAt) {
 		st.State = "stale"
 	}
 	return st, nil

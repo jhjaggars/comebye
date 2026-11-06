@@ -2143,8 +2143,8 @@ async function rcLoadMeta() {
   } catch {}
 }
 
-// rcLastSeen is when the index was last known current. A pulled copy's content
-// can be days old with its indexer still looking every hour.
+// rcLastSeen is when the index was last known current. Its content can be hours
+// old with the timer still looking every few minutes.
 function rcLastSeen(st) {
   const built = Date.parse(st.built_at || ""), checked = Date.parse(st.checked_at || "");
   return Number.isNaN(checked) || checked < built ? built : checked;

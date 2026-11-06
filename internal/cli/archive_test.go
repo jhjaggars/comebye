@@ -212,9 +212,9 @@ func TestArchiveCommandsReachAnotherHostWithHostFlag(t *testing.T) {
 	}
 }
 
-// Two hosts in one store: one machine indexes both and publishes, the other
-// pulls, and the commands answer for both hosts. All through the CLI.
-func TestAllHostsPublishPullAndVerifyCommands(t *testing.T) {
+// Two hosts in one store: each builds its own index of both, and the commands
+// answer for both hosts. All through the CLI.
+func TestAllHostsIfChangedAndVerifyCommands(t *testing.T) {
 	if _, err := exec.LookPath("sqlite3"); err != nil {
 		t.Skip("no sqlite3")
 	}
@@ -257,42 +257,46 @@ func TestAllHostsPublishPullAndVerifyCommands(t *testing.T) {
 			t.Fatalf("%s: %v %s %s", h, err, out, e)
 		}
 	}
-	for _, args := range [][]string{
-		{"archive", "index", "--publish"},
-		{"archive", "index", "--pull", "--all-hosts"},
-		{"archive", "index", "--pull", "--publish"},
-		{"archive", "verify", "--all-hosts"},
+	for args, want := range map[string]string{
+		"archive index --if-changed":       "needs --all-hosts",
+		"archive index --all-hosts --pull": "--pull are gone",
+		"archive index --publish":          "--pull are gone",
+		"archive verify --all-hosts":       "needs --no-source",
 	} {
-		if _, e, err := as("laharl", args...); err == nil || !strings.Contains(e, "needs") && !strings.Contains(e, "does not go") {
-			t.Errorf("%v: %v %s", args, err, e)
+		if _, e, err := as("laharl", strings.Fields(args)...); err == nil || !strings.Contains(e, want) {
+			t.Errorf("%s: %v %s", args, err, e)
 		}
 	}
-	if _, e, err := as("hub", "archive", "index", "--pull", "--ledger", "none"); err == nil || !strings.Contains(e, "no index snapshot") {
-		t.Fatalf("nothing to pull yet: %v %s", err, e)
+	tick := func(host string) string {
+		t.Helper()
+		out, e, err := as(host, "archive", "index", "--all-hosts", "--if-changed", "--ledger", "none", "--git=false")
+		if err != nil {
+			t.Fatalf("%s: %v %s %s", host, err, out, e)
+		}
+		return out
 	}
-	out, e, err := as("laharl", "archive", "index", "--all-hosts", "--publish", "--ledger", "none", "--git=false")
-	if err != nil || !strings.Contains(out, "3 sessions in 2 threads") || !strings.Contains(out, "hosts: hub, laharl") || !strings.Contains(out, "published index/") {
+	for _, h := range []string{"laharl", "hub"} {
+		if out := tick(h); !strings.Contains(out, "3 sessions in 2 threads") {
+			t.Errorf("%s: %s", h, out)
+		}
+		if out := tick(h); !strings.Contains(out, "nothing changed") {
+			t.Errorf("%s, nothing new: %s", h, out)
+		}
+	}
+	out, _, err := as("hub", "archive", "status")
+	if err != nil || !strings.Contains(out, "last checked") || !strings.Contains(out, "3 sessions on") {
+		t.Fatalf("%v %s", err, out)
+	}
+	// A new session on one host shows up on the other's next tick.
+	session("laharl", "dddddddd-4444-4444-8444-444444444444", "/w/code/more", "main", "2026-10-04T08:00:00Z", "a later one")
+	if out, e, err := as("laharl", "archive", "run"); err != nil {
 		t.Fatalf("%v %s %s", err, out, e)
 	}
-	if out, e, err = as("laharl", "archive", "index", "--all-hosts", "--publish", "--ledger", "none", "--git=false"); err != nil || !strings.Contains(out, "not published: the content is what index/") {
-		t.Fatalf("an unchanged index: %v %s %s", err, out, e)
-	}
-	out, e, err = as("hub", "archive", "index", "--pull")
-	if err != nil || !strings.Contains(out, "now holds index/") {
-		t.Fatalf("%v %s %s", err, out, e)
-	}
-	if out, _, err = as("hub", "archive", "index", "--pull"); err != nil || !strings.Contains(out, "up to date") {
-		t.Fatalf("%v %s", err, out)
-	}
-	out, _, err = as("hub", "archive", "status")
-	if err != nil || !strings.Contains(out, "pulled from snapshot") || !strings.Contains(out, "3 sessions on") || !strings.Contains(out, "newest snapshot in the store: index/") || !strings.Contains(out, "indexer last looked") || !strings.Contains(out, "last check in the store: ") {
-		t.Fatalf("%v %s", err, out)
-	}
-	if out, _, err = as("laharl", "archive", "status"); err != nil || !strings.Contains(out, "built on this machine") {
-		t.Fatalf("%v %s", err, out)
+	if out := tick("hub"); !strings.Contains(out, "1 indexed") {
+		t.Errorf("%s", out)
 	}
 
-	// The pulled copy answers for both hosts, each row naming its own.
+	// Each row names its own host, whichever host answers.
 	list := recall("hub", "recall", "list")
 	if !strings.Contains(list, "aaaaaaaa  laharl") || !strings.Contains(list, "bbbbbbbb  hub") {
 		t.Errorf("no host column:\n%s", list)
@@ -308,8 +312,8 @@ func TestAllHostsPublishPullAndVerifyCommands(t *testing.T) {
 		t.Errorf("a part of a host name should not match:\n%s", s)
 	}
 
-	out, e, err = as("hub", "archive", "verify", "--all-hosts", "--no-source")
-	if err != nil || !strings.Contains(out, "2 hosts [hub laharl]") || !strings.Contains(out, "3 streams, 3 segments") || !strings.Contains(out, "0 bad, 0 gaps, 0 overlaps") {
+	out, e, err := as("hub", "archive", "verify", "--all-hosts", "--no-source")
+	if err != nil || !strings.Contains(out, "2 hosts [hub laharl]") || !strings.Contains(out, "4 streams, 4 segments") || !strings.Contains(out, "0 bad, 0 gaps, 0 overlaps") {
 		t.Fatalf("%v %s %s", err, out, e)
 	}
 	if out, _, err = as("hub", "archive", "verify", "--no-source"); err != nil || !strings.Contains(out, "1 hosts [hub]") {

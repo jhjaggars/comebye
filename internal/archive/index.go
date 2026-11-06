@@ -449,15 +449,24 @@ func (ix *Index) sync(a *Archiver, o Opener, links []Link, opt SyncOptions) (Syn
 		ss.Messages += st.Messages
 		ss.Errors = append(ss.Errors, st.Errors...)
 	}
-	ts, err := ix.buildThreads(a.Host, links, opt)
-	ss.Threads, ss.Errors = ts.Threads, append(ss.Errors, ts.Errors...)
-	if err != nil {
-		return ss, err
+	if !opt.NoThreads {
+		ts, err := ix.buildThreads(a.Host, links, opt)
+		ss.Threads, ss.Errors = ts.Threads, append(ss.Errors, ts.Errors...)
+		if err != nil {
+			return ss, err
+		}
 	}
-	// Merges the full-text index's segments. Without it the index grows with
-	// every session rewritten, and queries read every segment.
-	built := time.Now().UTC().Format(time.RFC3339)
-	if _, err := ix.run("INSERT INTO msgs(msgs) VALUES('optimize'); INSERT OR REPLACE INTO meta VALUES('built_at',"+q(built)+"); PRAGMA wal_checkpoint(TRUNCATE);", false); err != nil {
+	built := a.now().UTC().Format(time.RFC3339)
+	final := "INSERT OR REPLACE INTO meta VALUES('built_at'," + q(built) + ");"
+	// Merges the full-text index's segments, which FTS5 otherwise only partly does
+	// as it goes. It rewrites the whole full-text index.
+	if !opt.SkipOptimize {
+		final = "INSERT INTO msgs(msgs) VALUES('optimize'); INSERT OR REPLACE INTO meta VALUES('optimize_at'," + q(built) + ");" + final
+	}
+	// A check time left by SyncIfChanged is not this run's, and it sets its own after.
+	// A key from a release that pulled snapshots would name one this file is not.
+	final += "DELETE FROM meta WHERE key IN ('checked_at','snapshot_key'); PRAGMA wal_checkpoint(TRUNCATE);"
+	if _, err := ix.run(final, false); err != nil {
 		return ss, err
 	}
 	return ss, nil

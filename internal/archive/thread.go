@@ -34,6 +34,13 @@ type SyncOptions struct {
 	GH  bool // refresh PR state with `gh` (network); cached between runs
 	// AllHosts indexes every host in the store, not only this one and its workers.
 	AllHosts bool
+	// GitCached keeps the verdict each commit already has, and asks only about
+	// commits with none, with no fetch. See SyncIfChanged.
+	GitCached bool
+	// SkipOptimize leaves out merging the full-text index.
+	SkipOptimize bool
+	// NoThreads leaves the thread tables as they are.
+	NoThreads bool
 }
 
 // ThreadStats reports the thread pass.
@@ -211,6 +218,9 @@ func (ix *Index) gatherThreads(thisHost string, links []Link, opt SyncOptions, s
 	})
 
 	g := &gitCtx{host: thisHost, enabled: opt.Git, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &st.Errors}
+	if opt.Git && opt.GitCached {
+		g.noFetch, g.known = true, ix.knownCommits()
+	}
 	ghc := map[string][]ghPR{}
 	if opt.GH {
 		g.loadGH(ix)
@@ -689,6 +699,25 @@ type gitCtx struct {
 	cache   map[string]*repoInfo
 	fetched map[string]bool // by the repository's common git directory
 	errs    *[]string
+	noFetch bool
+	known   map[string]knownCommit // verdicts to keep, by full sha
+}
+
+// knownCommit is a verdict from an earlier git pass.
+type knownCommit struct{ state, how string }
+
+// knownCommits reads the verdicts in the current outcomes. An index with no
+// thread tables yet has none.
+func (ix *Index) knownCommits() map[string]knownCommit {
+	out := map[string]knownCommit{}
+	rows, err := ix.Query("SELECT ref, kind, source FROM outcomes WHERE kind IN ('commit-landed','commit-notinmain');")
+	if err != nil {
+		return out
+	}
+	for _, r := range rows {
+		out[sget(r, "ref")] = knownCommit{strings.TrimPrefix(sget(r, "kind"), "commit-"), sget(r, "source")}
+	}
+	return out
 }
 
 func run(dir string, timeout time.Duration, name string, args ...string) (string, int, error) {
@@ -740,7 +769,9 @@ func (g *gitCtx) info(dir string) *repoInfo {
 	}
 	ri := &repoInfo{dir: dir}
 	g.cache[dir] = ri
-	g.fetch(dir)
+	if !g.noFetch {
+		g.fetch(dir)
+	}
 	for _, ref := range []string{"origin/main", "main", "origin/master", "master"} {
 		if _, code, _ := run(dir, 10*time.Second, "git", "rev-parse", "--verify", "-q", ref+"^{commit}"); code == 0 {
 			ri.base, ri.ok = ref, true
@@ -782,6 +813,9 @@ const gitFetchTimeout = 2 * time.Minute
 func (g *gitCtx) landed(host, cwd, repo string, l *Link, sha, subject string) (state, how string) {
 	if !g.enabled {
 		return "unchecked", "git not consulted"
+	}
+	if k, ok := g.known[sha]; ok {
+		return k.state, k.how
 	}
 	dir := g.repoDir(host, cwd, repo, l)
 	if dir == "" {
