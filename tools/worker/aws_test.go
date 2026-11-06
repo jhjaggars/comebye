@@ -219,12 +219,12 @@ func TestAWSConfig(t *testing.T) {
 		t.Errorf("aws defaults: %s %s", c.MachineType, c.DiskType)
 	}
 	p := filepath.Join(t.TempDir(), "config")
-	os.WriteFile(p, []byte("provider=aws\naws_region=eu-west-1\naws_az=eu-west-1b\naws_profile=work\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=http://h.t.ts.net:8742\n"), 0o600)
+	os.WriteFile(p, []byte("provider=aws\naws_region=eu-west-1\naws_az=eu-west-1b\naws_profile=work\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"), 0o600)
 	lc, err := LoadConfig(p)
 	if err != nil || lc.MachineType != "t3.xlarge" || lc.DiskType != "gp3" || lc.AWSProfile != "work" {
 		t.Fatalf("load: %+v %v", lc, err)
 	}
-	os.WriteFile(p, []byte("provider=aws\nmachine_type=m6g.large\naws_region=eu-west-1\naws_az=eu-west-1b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=http://h.t.ts.net:8742\n"), 0o600)
+	os.WriteFile(p, []byte("provider=aws\nmachine_type=m6g.large\naws_region=eu-west-1\naws_az=eu-west-1b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"), 0o600)
 	if _, err := LoadConfig(p); err == nil || !strings.Contains(err.Error(), "Graviton") {
 		t.Errorf("Arm type accepted: %v", err)
 	}
@@ -837,7 +837,7 @@ func TestAWSSpotStartCapacityHintAndStatusNote(t *testing.T) {
 }
 
 func TestAWSSpotConfig(t *testing.T) {
-	base := "provider=aws\naws_region=us-east-1\naws_az=us-east-1a\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=http://h.t.ts.net:8742\n"
+	base := "provider=aws\naws_region=us-east-1\naws_az=us-east-1a\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"
 	p := filepath.Join(t.TempDir(), "config")
 	os.WriteFile(p, []byte(base+"aws_spot=true\n"), 0o600)
 	if c, err := LoadConfig(p); err != nil || !c.AWSSpot {

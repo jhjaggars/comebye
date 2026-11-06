@@ -20,8 +20,8 @@ ssh_source_cidr=203.0.113.7/32
 ts_allow_login=you@example.com
 # The hub's Serve URL as you reach it (version lookup, peer removal) ...
 hub_url=https://hub.your-tailnet.ts.net
-# ... what becomes COMEBYE_HUB on the worker: the hub's Serve URL again (the app-capability
-# path, recommended), or the legacy peer listener, http://hub.your-tailnet.ts.net:8742.
+# ... what becomes COMEBYE_HUB on the worker: the hub's Serve URL again (the worker is
+# admitted by its tag's app capability).
 hub_peer_url=https://hub.your-tailnet.ts.net
 
 # --- defaults, shown for reference

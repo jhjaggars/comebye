@@ -53,7 +53,7 @@ type Config struct {
 	TSAllowLogin  string // COMEBYE_TS_ALLOW_LOGIN on the worker: the login that owns the hub device
 
 	HubURL     string // the hub's Serve URL, as the user reaches it (version lookup, peer removal)
-	HubPeerURL string // COMEBYE_HUB on the worker: the hub's Serve URL https://<hub>.<tailnet>.ts.net, or the legacy http://<hub>.<tailnet>.ts.net:<peer listen port>
+	HubPeerURL string // COMEBYE_HUB on the worker: the hub's Serve URL https://<hub>.<tailnet>.ts.net
 	HubVersion string // optional: pin the comebye version instead of asking the hub
 
 	ReleasesURL  string // comebye release base URL
@@ -346,7 +346,7 @@ func (c *Config) validateLLM() error {
 	if c.LLMGatewayURL == "" {
 		return nil
 	}
-	if _, err := hubURL(c.LLMGatewayURL, true); err != nil {
+	if _, err := hubURL(c.LLMGatewayURL); err != nil {
 		return fmt.Errorf("llm_gateway_url: %v", err)
 	}
 	if !c.hasAgent("pi") {
@@ -426,7 +426,7 @@ func (c *Config) Validate() error {
 	if c.TSAllowLogin == "" {
 		return fmt.Errorf("ts_allow_login is required: the Tailscale login that owns the hub device (the worker admits the hub's requests as that login)")
 	}
-	if _, err := hubURL(c.HubURL, true); err != nil {
+	if _, err := hubURL(c.HubURL); err != nil {
 		return fmt.Errorf("hub_url: %v", err)
 	}
 	if err := validatePeerURL(c.HubPeerURL); err != nil {
@@ -451,9 +451,8 @@ func validateSSHSource(s string) error {
 	return nil
 }
 
-// hubURL checks a hub address: https (the Serve URL) or, for the peer
-// listener, plain http, always on a ts.net name.
-func hubURL(s string, serve bool) (*url.URL, error) {
+// hubURL checks a hub address: the Serve URL, https on a ts.net name.
+func hubURL(s string) (*url.URL, error) {
 	if s == "" {
 		return nil, fmt.Errorf("required")
 	}
@@ -461,39 +460,30 @@ func hubURL(s string, serve bool) (*url.URL, error) {
 	if err != nil || u.Host == "" || u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.User != nil {
 		return nil, fmt.Errorf("%q is not a bare URL like https://hub.tailnet.ts.net", s)
 	}
-	want := "http"
-	if serve {
-		want = "https"
+	if u.Scheme != "https" {
+		if u.Scheme == "http" && u.Port() != "" {
+			return nil, fmt.Errorf("%q is the hub's old peer listener, which was removed: use the hub's Serve URL (https://<hub>.<tailnet>.ts.net); the worker is admitted by its tag's app capability", s)
+		}
+		return nil, fmt.Errorf("%q must be https://", s)
 	}
-	if u.Scheme != want {
-		return nil, fmt.Errorf("%q must be %s://", s, want)
-	}
-	h := u.Hostname()
-	if !strings.HasSuffix(h, ".ts.net") {
+	if !strings.HasSuffix(u.Hostname(), ".ts.net") {
 		return nil, fmt.Errorf("%q is not a *.ts.net name", s)
-	}
-	if !serve && u.Port() == "" {
-		return nil, fmt.Errorf("%q needs the hub's peer listen port (COMEBYE_PEER_LISTEN)", s)
 	}
 	return u, nil
 }
 
-// validatePeerURL checks COMEBYE_HUB for the worker: either the hub's Tailscale
+// validatePeerURL checks COMEBYE_HUB for the worker: the hub's Tailscale
 // Serve URL (https://<hub>.<tailnet>.ts.net, port 443; the worker is admitted
-// by its tag's app capability) or, as the legacy path, the hub's peer listener
-// (http://<hub>.<tailnet>.ts.net:<port>).
+// by its tag's app capability).
 func validatePeerURL(s string) error {
-	if u, err := url.Parse(s); err == nil && u.Scheme == "https" {
-		if _, err := hubURL(s, true); err != nil {
-			return err
-		}
-		if p := u.Port(); p != "" && p != "443" {
-			return fmt.Errorf("%q: the Serve URL is on port 443; a hub peer listener port uses http://", s)
-		}
-		return nil
+	u, err := hubURL(s)
+	if err != nil {
+		return err
 	}
-	_, err := hubURL(s, false)
-	return err
+	if p := u.Port(); p != "" && p != "443" {
+		return fmt.Errorf("%q: the Serve URL is on port 443", s)
+	}
+	return nil
 }
 
 // WorkerDir is where one worker's ssh config and known_hosts live.

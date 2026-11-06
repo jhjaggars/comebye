@@ -72,7 +72,7 @@ func testCfg(t *testing.T) *Config {
 	c.SSHSourceCIDR = "203.0.113.7/32"
 	c.TSAllowLogin = "you@example.com"
 	c.HubURL = "https://hub.tail1.ts.net"
-	c.HubPeerURL = "http://hub.tail1.ts.net:8742"
+	c.HubPeerURL = "https://hub.tail1.ts.net"
 	c.StateDir = filepath.Join(dir, "state")
 	c.TSOAuthFile = filepath.Join(dir, "oauth")
 	c.TSAuthKeyFile = filepath.Join(dir, "authkey")
@@ -224,8 +224,8 @@ func TestConfigValidation(t *testing.T) {
 		"shell in project": func(c *Config) { c.Project = "p; rm -rf /" },
 		"hub http":         func(c *Config) { c.HubURL = "http://hub.tail1.ts.net" },
 		"hub not tailnet":  func(c *Config) { c.HubURL = "https://evil.example.com" },
-		"peer url no port": func(c *Config) { c.HubPeerURL = "http://hub.tail1.ts.net" },
-		"peer url https":   func(c *Config) { c.HubPeerURL = "https://hub.tail1.ts.net:8742" },
+		"peer url http":    func(c *Config) { c.HubPeerURL = "http://hub.tail1.ts.net:8742" },
+		"peer url port":    func(c *Config) { c.HubPeerURL = "https://hub.tail1.ts.net:8742" },
 		"peer url not ts":  func(c *Config) { c.HubPeerURL = "https://hub.example.com" },
 		"root user":        func(c *Config) { c.SSHUser = "root" },
 		"short idle":       func(c *Config) { c.IdleMinutes = 1 },
@@ -245,7 +245,7 @@ func TestConfigValidation(t *testing.T) {
 
 func TestConfigFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config")
-	os.WriteFile(p, []byte("# c\nproject = comebye-test-0001\nzone=us-east1-b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=http://h.t.ts.net:8742\nidle_minutes=30\n"), 0o600)
+	os.WriteFile(p, []byte("# c\nproject = comebye-test-0001\nzone=us-east1-b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\nidle_minutes=30\n"), 0o600)
 	c, err := LoadConfig(p)
 	if err != nil {
 		t.Fatal(err)
@@ -464,7 +464,7 @@ func TestCreateEndToEnd(t *testing.T) {
 			user = cl.stdin
 		}
 	}
-	for _, want := range []string{"WK_VERSION='v0.3.1'", "WK_HUB='http://hub.tail1.ts.net:8742'", "COMEBYE_ANNOUNCE=1", "sha256sum -c"} {
+	for _, want := range []string{"WK_VERSION='v0.3.1'", "WK_HUB='https://hub.tail1.ts.net'", "COMEBYE_ANNOUNCE=1", "sha256sum -c"} {
 		if !strings.Contains(user, want) {
 			t.Errorf("user script lacks %q", want)
 		}
@@ -787,8 +787,16 @@ func TestHerdrServiceHasTheAgentPath(t *testing.T) {
 	}
 }
 
-func TestPeerURLAcceptsServeAndLegacyListener(t *testing.T) {
-	for _, u := range []string{"https://hub.tail1.ts.net", "https://hub.tail1.ts.net:443", "http://hub.tail1.ts.net:8742"} {
+func TestOldPeerListenerURLSaysItWasRemoved(t *testing.T) {
+	c := testCfg(t)
+	c.HubPeerURL = "http://hub.tail1.ts.net:8742"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "removed") || !strings.Contains(err.Error(), "Serve URL") {
+		t.Errorf("old listener URL: %v", err)
+	}
+}
+
+func TestPeerURLIsTheServeURL(t *testing.T) {
+	for _, u := range []string{"https://hub.tail1.ts.net", "https://hub.tail1.ts.net:443"} {
 		c := testCfg(t)
 		c.HubPeerURL = u
 		if err := c.Validate(); err != nil {
