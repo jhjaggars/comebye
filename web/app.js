@@ -872,8 +872,8 @@ function renderPlans() {
 //
 // Questions and decisions the user has to deal with, and follow-ups, that
 // coordinators and workers put on the hub's to-do list (`comebye todo`).
-// The panel sits under the briefing on the phone and at the top of the
-// right-hand briefings panel on a wide screen. Answering is the user's
+// The panel sits under the briefing on the phone; on a wide screen it is the
+// To do page, in the main pane. Answering is the user's
 // action here: the hub then tells the coordinator, who relays the words to
 // the agent that waits. Every string comes from an agent (the question, the
 // context, the links) and is escaped or sanitized; links must be http(s).
@@ -1058,7 +1058,7 @@ function renderBrief() {
     delete el.dataset.sig;
     return;
   }
-  const folded = !!b && !isDesktop() && lsGet(BRIEF_EXPANDED_KEY) !== "1"; // the desktop side panel is always open
+  const folded = !!b && !isDesktop() && lsGet(BRIEF_EXPANDED_KEY) !== "1"; // the desktop has the Briefing page instead of this card
   const preview = b && folded ? briefPreview(b.markdown) : "";
   const sched = briefing.schedule;
   const every = sched && sched.enabled ? ` · every ${sched.every}${sched.at ? " at " + sched.at : ""}` : "";
