@@ -41,7 +41,19 @@ func newPQRig(t *testing.T) (*pqRig, string) {
 
 func (r *pqRig) advance(d time.Duration) { r.mu.Lock(); r.now = r.now.Add(d); r.mu.Unlock() }
 func (r *pqRig) sentN() int              { r.mu.Lock(); defer r.mu.Unlock(); return len(r.sent) }
-func (r *pqRig) setErr(e error)          { r.mu.Lock(); r.err = e; r.mu.Unlock() }
+
+// sentAndSettled is true once n prompts went out and no send goroutine is
+// still running: sendQueued saves the queue after the fake send returns, and
+// a test that ends before that save races the TempDir cleanup.
+func (r *pqRig) sentAndSettled(n int) bool {
+	if r.sentN() != n {
+		return false
+	}
+	r.s.pq.mu.Lock()
+	defer r.s.pq.mu.Unlock()
+	return len(r.s.pq.sending) == 0
+}
+func (r *pqRig) setErr(e error) { r.mu.Lock(); r.err = e; r.mu.Unlock() }
 
 func home(st herdr.AgentStatus) herdr.AgentInfo {
 	return cbAgent("w2:p1", "home", st)
@@ -123,7 +135,7 @@ func TestQueueFIFOOnePerTarget(t *testing.T) {
 	r.setErr(nil)
 	r.advance(queueRetry + time.Second)
 	r.s.deliverQueue([]herdr.AgentInfo{home(herdr.StatusIdle)})
-	waitFor(t, func() bool { return r.sentN() == 1 })
+	waitFor(t, func() bool { return r.sentAndSettled(1) })
 	r.s.deliverQueue([]herdr.AgentInfo{home(herdr.StatusIdle)}) // too soon after the first
 	time.Sleep(50 * time.Millisecond)
 	if r.sentN() != 1 || !strings.HasSuffix(r.sent[0], "first") {
@@ -131,7 +143,7 @@ func TestQueueFIFOOnePerTarget(t *testing.T) {
 	}
 	r.advance(queueRetry + time.Second)
 	r.s.deliverQueue([]herdr.AgentInfo{home(herdr.StatusIdle)})
-	waitFor(t, func() bool { return r.sentN() == 2 })
+	waitFor(t, func() bool { return r.sentAndSettled(2) })
 	if !strings.HasSuffix(r.sent[1], "second") {
 		t.Fatalf("sent = %v", r.sent)
 	}
@@ -146,7 +158,7 @@ func TestQueueExpiryNotifiesSender(t *testing.T) {
 	r.advance(queueTTL + time.Minute)
 	// Target busy forever; the sender (coordinator) is idle.
 	r.s.deliverQueue([]herdr.AgentInfo{home(herdr.StatusWorking), cbAgent("w1:p1", "coordinator", herdr.StatusIdle)})
-	waitFor(t, func() bool { return r.sentN() == 1 })
+	waitFor(t, func() bool { return r.sentAndSettled(1) })
 	if !strings.HasPrefix(r.sent[0], "desk/w1:p1: Comebye (hub notice): your queued prompt") || strings.Contains(r.sent[0], "never arrives") {
 		t.Fatalf("notice = %q", r.sent[0])
 	}
@@ -190,7 +202,7 @@ func TestQueueAgentMissingKeepsWaiting(t *testing.T) {
 		t.Fatalf("dropped while the agent was missing: %+v", l)
 	}
 	r.s.deliverQueue([]herdr.AgentInfo{home(herdr.StatusDone)})
-	waitFor(t, func() bool { return r.sentN() == 1 })
+	waitFor(t, func() bool { return r.sentAndSettled(1) })
 }
 
 func TestQueuePersistsAcrossRestart(t *testing.T) {
