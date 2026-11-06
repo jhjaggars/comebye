@@ -160,7 +160,7 @@
     .agent .sub { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 5px; min-width: 0; }
     .agent .sub .repo { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .wt-chip {
-      flex: 0 1 auto; display: inline-flex; align-items: center; gap: 3px;
+      flex: 0 1 auto; display: inline-block; /* inline-flex would clip without the ellipsis */
       background: var(--chip-blue); color: var(--blue); border-radius: 5px;
       padding: 1px 6px; font-size: 11px; max-width: 100%; min-width: 0;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1222,6 +1222,13 @@
       /* Denser rows, so more agents fit: one line of detail, tighter padding. */
       .agent { padding: 7px 12px; min-height: 0; margin-bottom: 6px; gap: 10px; border-radius: 11px; }
       .agent .sub { flex-wrap: nowrap; overflow: hidden; }
+      /* One line is tight beside the status column. The repo stays readable and the
+         branch gives way; a worker's kind and a plain "running" (the status column
+         says as much) go first. A state worth reading wraps instead of being cut. */
+      .agent .sub .repo { flex: none; max-width: 50%; }
+      .agent .sub .wt-chip { min-width: 4em; }
+      .agent .sub:has(.wt-chip) .kind, .agent .sub .lg-chip.running { display: none; }
+      .agent .sub:has(.lg-chip:not(.running)) { flex-wrap: wrap; }
       .agent.worker { margin-left: 14px; }
       .proj-head { min-height: 34px; }
       .agent.selected { outline: 2px solid var(--blue); outline-offset: -1px; background: var(--panel2); }

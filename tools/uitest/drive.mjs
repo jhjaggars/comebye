@@ -789,6 +789,39 @@ for (const width of [1280, 1920]) {
     if (await page.evaluate(() => getComputedStyle(document.body).gridTemplateColumns.split(" ").length) !== 2) throw new Error("not two grid columns");
   });
 }
+// A multi-host worker row is the tightest case: host, repo and branch, and sometimes a state chip.
+for (const width of [1280, 390]) {
+  await check(`agent rows: at ${width}px a worker keeps its repo whole, room for its branch and its state`, async () => {
+    await desktopList(width);
+    const m = await page.evaluate(() => {
+      state.hosts = [{ name: "hub", local: true, status: "ok" }, { name: "buildbox", status: "ok" }];
+      const a = { id: "buildbox/w9:p1", host: "buildbox", pane_id: "w9:p1", name: "a-worker", agent: "claude", agent_status: "idle", cwd: "/x",
+        worktree: { repo: "tidepool", checkout: "/x", linked: true, branch: "a-rather-long-branch-name-for-this-one-worker" } };
+      const wrap = document.getElementById("agents");
+      const measure = () => {
+        wrap.insertAdjacentHTML("afterbegin", agentRow(a, true));
+        const row = wrap.firstElementChild, sub = row.querySelector(".sub"), box = (e) => e.getBoundingClientRect();
+        const repo = sub.querySelector(".repo"), chip = sub.querySelector(".wt-chip"), lg = sub.querySelector(".lg-chip");
+        const out = { repoCut: repo.scrollWidth > repo.clientWidth, branch: box(chip).width, branchEnd: box(chip).right, subEnd: box(sub).right,
+          state: lg && getComputedStyle(lg).display !== "none" ? { end: box(lg).right, cut: lg.scrollWidth > lg.clientWidth } : null, subH: box(sub).height };
+        row.remove();
+        return out;
+      };
+      const running = (ledger.byAgent.set(a.id, { status: "running" }), measure());
+      const finished = (ledger.byAgent.set(a.id, { status: "finished", candidate: true }), measure());
+      ledger.byAgent.delete(a.id);
+      return { running, finished };
+    });
+    for (const [what, r] of Object.entries(m)) {
+      if (r.repoCut) throw new Error(`${what}: the repo is cut: ` + JSON.stringify(r));
+      if (r.branch < 45) throw new Error(`${what}: no room for the branch: ` + JSON.stringify(r));
+      if (r.branchEnd > r.subEnd + 0.5) throw new Error(`${what}: the branch runs off the row: ` + JSON.stringify(r));
+    }
+    if (!m.finished.state || m.finished.state.cut || m.finished.state.end > m.finished.subEnd + 0.5) throw new Error("the finished chip is cut: " + JSON.stringify(m.finished));
+    if (width >= 1100 && m.running.subH > 24) throw new Error("a running worker's detail takes more than one line on desktop: " + JSON.stringify(m.running));
+  });
+}
+
 await check("desktop: selecting an agent keeps the list visible and opens it beside it", async () => {
   await desktopList(1280);
   const before = await geo("#agents");

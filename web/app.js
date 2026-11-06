@@ -135,12 +135,11 @@ function repoLabel(a) {
 
 function subLine(a) {
   const { repo, branch } = repoLabel(a);
-  const kind = a.agent ? esc(a.agent) : "";
+  const kindEl = a.agent ? `<span class="kind">· ${esc(a.agent)}</span>` : "";
   const hostEl = multiHost() && a.host ? `<span class="host-chip">${esc(a.host)}</span>` : "";
   const repoEl = `<span class="repo">${esc(repo)}</span>`;
   const chip = branch ? `<span class="wt-chip">⑂ ${esc(branch)}</span>` : "";
-  const sep = kind ? '<span>·</span>' : "";
-  return `<div class="sub">${hostEl}${repoEl}${chip}${sep}${kind}${ledgerChip(a)}</div>`;
+  return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${ledgerChip(a)}</div>`;
 }
 
 /* ---------- hosts and agent identity ---------- */
@@ -697,7 +696,7 @@ function ledgerChip(a) {
   // busy: the error says why (and how) it can be resent.
   if (e.status === "running" && e.error)
     return `<span class="lg-chip failed" title="${esc(e.error)}">no brief</span>`;
-  return '<span class="lg-chip">running</span>';
+  return '<span class="lg-chip running">running</span>';
 }
 
 function projectOf(a) {
