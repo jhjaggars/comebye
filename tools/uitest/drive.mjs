@@ -961,11 +961,24 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if (!posts.length || posts[posts.length - 1].pane !== "") throw new Error("presence not cleared: " + JSON.stringify(posts));
     await page.locator('#nav .nv[data-page="briefing"]').click();
     await page.waitForSelector("#briefs.open", { state: "visible" });
+    // Search opens the Transcripts screen (openRecall), over the pages; closing it leaves no page behind.
     await page.locator('#nav .nv[data-page="search"]').click();
-    await page.waitForSelector("#p-search", { state: "visible" });
-    if (await visible("#briefs")) throw new Error("two pages at once");
-    // Back (the browser's) returns through the pages.
-    await page.goBack();
+    await page.waitForSelector("#recall", { state: "visible" });
+    if (!(await page.evaluate(() => location.hash)).startsWith("#/transcripts")) throw new Error("hash " + (await page.evaluate(() => location.hash)));
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#recall", { state: "hidden" });
+    if (await page.evaluate(() => state.view) !== null) throw new Error("a page stays after closing Transcripts");
+    // Opening Transcripts over an agent leaves it through closeDetail too.
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    posts.length = 0;
+    await page.locator('#nav .nv[data-page="search"]').click();
+    await page.waitForSelector("#recall", { state: "visible" });
+    await page.waitForTimeout(300);
+    if (await page.evaluate(() => state.selected) !== null || !posts.length || posts[posts.length - 1].pane !== "") throw new Error("the agent stays open under Transcripts: " + JSON.stringify(posts));
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#recall", { state: "hidden" });
+    await page.locator('#nav .nv[data-page="briefing"]').click();
     await page.waitForSelector("#briefs", { state: "visible" });
     // The removals row follows the ledger's marks.
     const marks = await page.evaluate(() => ledger.marked.size);

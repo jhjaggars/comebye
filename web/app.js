@@ -23,7 +23,7 @@ const state = {
   pendingRoute: null,  // {host, pane} from #/agent/... waiting for the agent list to arrive
   pushedRoute: false,  // openDetail pushed a history entry (back pops it)
   opened: false,       // the desktop's cold-start choice (openToSomething) has been made
-  view: null,          // desktop only: the page filling the main pane ("briefing", "todo", "search"), or null for an agent / nothing
+  view: null,          // desktop only: the page filling the main pane ("briefing", "todo"), or null for an agent / nothing
 };
 
 /* ---------- helpers ---------- */
@@ -2759,8 +2759,7 @@ function route() {
   if (!r) {
     state.pendingRoute = null;
     if (state.selected) closeDetail();
-    // The hash names the page (desktop); the search page has none and keeps itself.
-    if (isDesktop() && (viewFromHash() || state.view !== "search")) setView(viewFromHash());
+    if (isDesktop()) setView(viewFromHash()); // the hash names the page
     return;
   }
   const a = routedAgent(r);
@@ -2794,7 +2793,7 @@ const viewFromHash = () => (isDesktop() ? Object.keys(PAGE_HASH).find((k) => PAG
 // setView shows a page (or none) without touching the history.
 function setView(v) {
   state.view = isDesktop() ? v : null;
-  for (const k of ["briefing", "todo", "search"]) document.body.classList.toggle("view-" + k, state.view === k);
+  for (const k of ["briefing", "todo"]) document.body.classList.toggle("view-" + k, state.view === k);
   document.body.classList.toggle("has-page", !!state.view);
   syncDesktopBriefs();
   renderNav();
@@ -2845,7 +2844,7 @@ const NAV_ROWS = [
   { key: "briefing", label: "Briefing", show: () => briefsAvailable(),
     dot: () => { const b = briefing.data; return !!(b && b.markdown.trim() && lsGet(BRIEF_SEEN_KEY) !== b.at && state.view !== "briefing"); } },
   { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open + todos.answered },
-  { key: "search", label: "Search", show: () => true, open: () => openSearchStub() }, // feat/recall-ui: point this at its opener
+  { key: "search", label: "Search", show: () => true, open: () => openRecall(), noPage: true }, // Transcripts is a screen of its own
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && ledger.marked.size > 0, count: () => ledger.marked.size, open: () => openReview(), noPage: true },
 ];
 
@@ -2868,11 +2867,6 @@ function onNavClick(ev) {
   if (!r) return;
   if (r.open) r.open(); else openPage(r.key);
 }
-
-// The Search row stands in for the Transcripts screen until feat/recall-ui
-// is on main. When it lands: point the row's `open` at its opener, delete
-// this, #p-search and the view-search rules.
-function openSearchStub() { openPage("search"); }
 
 function openDetail(id) {
   const a = agentById(id);
