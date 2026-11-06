@@ -816,6 +816,27 @@ await check("desktop: the fleet menu opens beside the list and its briefing item
   if (await page.locator("#f-briefs").isVisible()) throw new Error("the Briefings screen item shows on desktop");
   await page.keyboard.press("Escape");
 });
+// ---- waiting agents: the tab title, a Needs you group on desktop, the n key ----
+// (w9:p1 is the Pi agent whose trust prompt makes it blocked.)
+await check("waiting: the tab title counts them, the host filter never hides one, and the phone list has no Needs you group", async () => {
+  await desktopList(390);
+  await page.waitForFunction(() => /blocked/i.test(document.querySelector('#agents .agent[data-id$="w9:p1"]')?.innerText || ""), null, { timeout: 10000 });
+  if (!/^\(\d+\) Comebye$/.test(await page.title())) throw new Error("title " + (await page.title()));
+  if (await page.locator(".needs-sec").count()) throw new Error("a Needs you group on the phone");
+  await page.evaluate(() => { setHostFilter("nowhere"); });
+  if (!(await page.locator('#agents .agent[data-id$="w9:p1"]').count())) throw new Error("the host filter hid a waiting agent");
+  await page.evaluate(() => { setHostFilter("all"); });
+});
+await check("desktop: waiting agents sit in a Needs you group at the top, and n opens the next one", async () => {
+  await desktopList(1280);
+  await page.waitForSelector('.needs-sec .agent[data-id$="w9:p1"]', { timeout: 10000 });
+  const first = await page.evaluate(() => document.querySelector("#agents .agent[data-id]").closest(".needs-sec") !== null);
+  if (!first) throw new Error("the Needs you group is not first");
+  if (await page.locator('.proj:not(.needs-sec) .agent[data-id$="w9:p1"]').count()) throw new Error("the waiting agent is listed twice");
+  await page.locator("body").press("n");
+  await page.waitForFunction(() => document.querySelector("#agents .agent.selected")?.dataset.id.endsWith("w9:p1") && location.hash.startsWith("#/agent/"), null, { timeout: 5000 });
+});
+
 await check("desktop: below the breakpoint (1099px) it is still the phone layout", async () => {
   await desktopList(1099);
   const [l, a] = await Promise.all([geo("#list"), geo("#agents")]);

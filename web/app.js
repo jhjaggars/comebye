@@ -443,7 +443,8 @@ function renderListRows() {
   const wrap = $("agents");
   renderHostFilter();
   const filter = activeHostFilter();
-  const agents = state.agents.filter((a) => filter === "all" || a.host === filter).sort((a, b) =>
+  // A host filter never hides an agent that is waiting on you.
+  const agents = state.agents.filter((a) => filter === "all" || a.host === filter || a.agent_status === "blocked").sort((a, b) =>
     (STATUS_ORDER[a.agent_status] ?? 9) - (STATUS_ORDER[b.agent_status] ?? 9) ||
     // Within a status, most recently active first, so the agents that just
     // went idle sit above the ones that have been idle for days.
@@ -451,6 +452,8 @@ function renderListRows() {
     agentId(a).localeCompare(agentId(b)));
   const nBlocked = agents.filter((a) => a.agent_status === "blocked").length;
   const nWorking = agents.filter((a) => a.agent_status === "working").length;
+  // The tab title carries the count, so a background tab shows it.
+  document.title = nBlocked ? `(${nBlocked}) Comebye` : "Comebye";
   // The long form on wide screens; a short one (no "agents" word, "need")
   // on a phone, where the header also holds +, the bell and the ⋯.
   $("count").innerHTML = agents.length
@@ -490,12 +493,17 @@ function renderListRows() {
     return;
   }
   // Coordinators are pinned above the projects.
-  const coords = agents.filter(isCoordinator);
+  // Desktop: the agents waiting on you sit in a group of their own at the top.
+  const needs = isDesktop() ? agents.filter((a) => a.agent_status === "blocked") : [];
+  const needsSec = needs.length ? `<section class="proj needs-sec" aria-label="Needs you">
+    <div class="proj-head static"><span class="proj-name">Needs you</span><span class="proj-counts"><span class="need">${needs.length}</span></span></div>
+    <div class="proj-body">${needs.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
+  const coords = agents.filter((a) => isCoordinator(a) && !needs.includes(a));
   const pinned = coords.length ? `<section class="proj coord-sec" aria-label="Coordinators">
     <div class="proj-head static"><span class="proj-name">Coordinators</span></div>
     <div class="proj-body">${coords.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
-  const rest = agents.filter((a) => !isCoordinator(a));
-  wrap.innerHTML = pinned + projectGroups(rest).map(([name, list]) => projectHTML(name, list)).join("") + downRows;
+  const rest = agents.filter((a) => !isCoordinator(a) && !needs.includes(a));
+  wrap.innerHTML = needsSec + pinned + projectGroups(rest).map(([name, list]) => projectHTML(name, list)).join("") + downRows;
   wrap.querySelectorAll(".proj-head").forEach((el) =>
     el.addEventListener("click", () => toggleProject(el.dataset.proj)));
   wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
@@ -524,6 +532,19 @@ function markSelectedRow() {
   });
   const r = state.selected && rowFor(state.selected);
   if (r) { r.classList.add("selected"); r.setAttribute("aria-current", "true"); }
+}
+
+// "n" jumps to the next agent that is waiting on you (desktop).
+function onNextWaiting(ev) {
+  if (!isDesktop() || ev.key !== "n" || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.repeat) return;
+  if (ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
+  const rows = [...document.querySelectorAll("#agents .agent.blocked[data-id]")];
+  if (!rows.length) return;
+  const i = rows.findIndex((r) => r.dataset.id === state.selected);
+  ev.preventDefault();
+  const r = rows[(i + 1) % rows.length];
+  openDetail(r.dataset.id);
+  r.scrollIntoView?.({ block: "nearest" });
 }
 
 // Up/Down on a row moves to the previous/next one and opens it.
@@ -5532,7 +5553,8 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) resume(); }); // skip the initial load
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
-  desktopMQ.addEventListener("change", () => { renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
+  document.addEventListener("keydown", onNextWaiting);
+  desktopMQ.addEventListener("change", () => { renderList(); renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
   window.addEventListener("offline", () => setConn(false));
 
   $("back").addEventListener("click", () => {
