@@ -53,10 +53,12 @@ start_servers() { # uses $d, $port, $peerport
   COMEBYE_DEV_WEB_DIR="$web" spawn peer "$d/peer.log" "$d/comebye" -sock "$d/peer.sock" -addr "127.0.0.1:$peerport" \
     -insecure-no-auth -push=false -state-dir "$d/peer-state" -host-name peerbox -ledger=false
   wait_for "the peer" curl -sf "$peer_url/api/agents"
+  # A synthetic transcript index, for the Transcripts screen. Needs sqlite3.
+  [ -f "$d/recall.db" ] || "$d/fake-herdr" -recall-fixture "$d/recall.db" || echo "dev: no transcript fixture (is sqlite3 installed?)" >&2
   spawn herdr "$d/herdr.log" "$d/fake-herdr" -sock "$d/h.sock" -dir "$d/tx" -fixtures
   wait_for "the fake herdr" test -S "$d/h.sock"
   COMEBYE_DEV_WEB_DIR="$web" COMEBYE_TEST_INSECURE_PEERS=1 spawn comebye "$d/comebye.log" "$d/comebye" -sock "$d/h.sock" \
-    -addr "127.0.0.1:$port" -insecure-no-auth -push=false -state-dir "$d/state" -host-name devbox -peers "peerbox=$peer_url"
+    -addr "127.0.0.1:$port" -insecure-no-auth -push=false -state-dir "$d/state" -host-name devbox -peers "peerbox=$peer_url" -recall-index "$d/recall.db"
   wait_for "comebye" curl -sf "http://127.0.0.1:$port/api/agents"
   # the peer's agents arrive on the hub's next poll
   wait_for "the peer's agents" bash -c "curl -sf http://127.0.0.1:$port/api/agents | grep -q peerbox-build"

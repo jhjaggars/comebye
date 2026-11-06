@@ -409,6 +409,33 @@ func TestDestroySavesSessionsFirst(t *testing.T) {
 	}
 }
 
+// A destroyed worker's sessions become searchable soon, not at the next hourly
+// run; a host without the service still destroys cleanly.
+func TestDestroyStartsTheIndexService(t *testing.T) {
+	a, e := newArchWorld(t, "w1\n")
+	if err := e.destroy(context.Background(), "w1", destroyOpts{}); err != nil {
+		t.Fatalf("%v\n%s", err, a.out)
+	}
+	started := func(r *fakeRunner) bool {
+		for _, c := range r.calls {
+			if c.name == "systemctl" && strings.Contains(strings.Join(c.args, " "), "start --no-block comebye-archive.service") {
+				return true
+			}
+		}
+		return false
+	}
+	if !started(a.r) {
+		t.Error("the index was not started")
+	}
+	b, e2 := newArchWorld(t, "w1\n")
+	if err := e2.destroy(context.Background(), "w1", destroyOpts{NoArchive: true}); err != nil {
+		t.Fatalf("%v\n%s", err, b.out)
+	}
+	if started(b.r) {
+		t.Error("nothing was saved, so there is nothing to index")
+	}
+}
+
 func TestDestroyFinalPullTakesTheLastLine(t *testing.T) {
 	a, e := newArchWorld(t, "w1\n")
 	calls := 0

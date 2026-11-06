@@ -43,6 +43,9 @@ type Config struct {
 	// are the session directories it covers. Off when nil.
 	Archive        *archive.Archiver
 	ArchiveSources []archive.Source
+	// RecallIndex is the transcript index file the app searches, read-only.
+	// Empty, or no such file: the app says there is no index.
+	RecallIndex string
 	// Addr to listen on. Intended to be loopback only; exposure to phones
 	// happens through Tailscale Serve, which provides TLS.
 	Addr string
@@ -117,6 +120,7 @@ type Config struct {
 // Server is the phone app HTTP server.
 type Server struct {
 	cfg     Config
+	recall  *archive.Reader
 	client  *herdr.Client
 	manager *state.Manager
 	fleet   *fleet.Fleet
@@ -192,7 +196,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	if cfg.PingInterval <= 0 {
 		cfg.PingInterval = 15 * time.Second
 	}
-	s := &Server{cfg: cfg, client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
+	s := &Server{cfg: cfg, recall: archive.NewReader(cfg.RecallIndex), client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait}
 	s.typing = newTypingTracker()
@@ -250,6 +254,7 @@ func (s *Server) routes() {
 	// the hub on a peer with -hub), authWorker (the same, and open to a tagged
 	// node) or authAgentLocal; everything wrapped in auth is the user's alone
 	// (see agentauth.go).
+	s.recallRoutes()
 	s.mux.HandleFunc("GET /api/version", s.authAgentLocal(s.handleVersion))
 	s.mux.HandleFunc("GET /api/whoami", s.authAgentLocal(s.handleWhoami))
 	s.mux.HandleFunc("GET /api/playbook", s.authAgentLocal(s.handlePlaybook))

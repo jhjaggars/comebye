@@ -74,6 +74,21 @@ Treat access to it like SSH access to that machine.
   What this leaves open: a worker can still put text in front of a coordinator
   by prompt, in a to-do or in its report. Its brief and any report it waits on
   are visible to it by design.
+- <a id="searching-transcripts"></a>**Searching transcripts.** `/api/recall/*` reads
+  the index: every session the host indexed, tool output included. Those routes are
+  the user's alone, with no agent level at all. The agent levels would admit a tagged
+  worker or a forwarding peer, and the plaintext index must never reach a worker;
+  keeping other agents' output out of an agent's reach also closes a prompt-injection
+  route. Agents on a host with the index keep `comebye recall`, which reads the file
+  and needs nothing from the server. The usual limit applies: a local process can
+  read the file anyway. The server opens the index with `sqlite3 -readonly -safe`, in
+  a process per query with a 3 s limit and at most two at once, and checks path values
+  against an allowlist. It does not log queries. Answers are `no-store`, and the app
+  keeps no query or transcript text in browser storage (it remembers filters; a query
+  does appear in the browser's history, through the URL). Messages go through the same
+  sanitizer as chat; tool arguments and output are only ever text nodes. Secret-looking
+  text is [masked when indexed](archive.md#what-the-index-keeps), which limits what a
+  shoulder-surfer or a snapshot sees and is not access control.
 - <a id="reading-other-agents"></a>**Reading other agents' output.** Output and
   transcripts (`/output`, `/transcript`, the subagent transcript, bare or under
   `/api/hosts/{host}/`, and so `comebye read`) hold tool output and possibly

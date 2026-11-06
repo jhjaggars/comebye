@@ -277,8 +277,10 @@ The tool treats the worker as untrusted while pulling. It unpacks only regular f
 under the two session directories, refuses other paths, makes no links, and stops at
 10 GiB or a million files. The copy sits in a mode-0700 directory under the state
 directory and is removed after the upload. A worker can only affect its own host's
-sessions, but what it wrote is still untrusted text when `recall` shows it. `recall`
-on this machine finds the sessions after the next `archive index`.
+sessions, but what it wrote is still untrusted text when `recall` shows it. `destroy`
+finishes by starting `comebye-archive.service`, if this machine has it, so `recall`
+and the app's search find the sessions within minutes. Otherwise they appear after
+the next `archive index`.
 
 Only this machine uploads a given worker: a second machine is refused, because the
 archive's safety depends on one writer per host.

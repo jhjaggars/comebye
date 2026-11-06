@@ -83,6 +83,7 @@ func main() {
 		archiveS3Cr   = flag.String("archive-s3-credentials", getenv("COMEBYE_ARCHIVE_S3_CREDENTIALS"), "mode-0600 file of key_id= and secret_key= lines for -archive-s3")
 		archiveEnc    = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir or -archive-s3")
 		archiveRcpt   = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
+		recallIndex   = flag.String("recall-index", getenv("COMEBYE_RECALL_INDEX"), "the transcript index the app searches, read-only (default ~/.local/state/comebye/recall/index.db; see `comebye archive index`)")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
@@ -280,6 +281,7 @@ func main() {
 		Version:        buildVersion(),
 		Archive:        arch,
 		ArchiveSources: acfg.Sources(),
+		RecallIndex:    (&archive.Config{Index: *recallIndex}).IndexPath(),
 		Addr:           *addr,
 		AllowLogins:    logins,
 		// Checked again by ListenAndServe, so a library caller cannot

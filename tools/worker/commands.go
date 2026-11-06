@@ -707,8 +707,22 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	if len(failed) > 0 {
 		return fmt.Errorf("destroy finished with problems: %s", strings.Join(failed, ", "))
 	}
+	if archiving {
+		e.reindex(ctx)
+	}
 	e.printf("%s destroyed.\n", name)
 	return nil
+}
+
+// reindex starts the archive service now, so that the worker's sessions are
+// searchable in minutes rather than at the next hourly run. The saved sessions are
+// safe either way, so a host without the service only gets a note.
+func (e *env) reindex(ctx context.Context) {
+	if _, _, err := e.Run.Run(ctx, "systemctl", []string{"--user", "start", "--no-block", "comebye-archive.service"}, nil); err != nil {
+		e.printf("  index: not started (%v); the next `comebye archive index` finds this worker's sessions\n", err)
+		return
+	}
+	e.printf("  index: rebuilding in the background, for search\n")
 }
 
 // ---- login ----

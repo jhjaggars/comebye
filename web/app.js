@@ -1973,6 +1973,726 @@ function agentById(id) {
   return state.agents.find((a) => agentId(a) === id);
 }
 
+/* ---------- transcripts: search and read archived sessions ---------- */
+
+// #/transcripts?q=...           the search screen
+// #/session/<host>/<kind>/<id>?seq=N&sub=S&q=...   one session, at a match
+// The screen covers the app. At desktop width both panes show side by side.
+// All text comes from agents and tools: snippets and output go in as text nodes,
+// messages through renderMarkdown. Filters may be remembered in localStorage;
+// queries and transcript text never are.
+const RC_FILTERS_KEY = "comebye.recall.filters";
+const RC_PAGE = 100;
+const rc = {
+  q: "", filters: {}, res: null, loading: false, facets: null, status: null, err: "",
+  ctl: null, timer: null, more: false, route: null,
+  sess: null, sessKey: "", msgs: [], before: false, after: false, sessErr: "", sessLoading: false,
+  hits: [], hitAt: -1, open: new Set(),
+};
+
+function rcLoadFilters() {
+  try { return JSON.parse(localStorage.getItem(RC_FILTERS_KEY)) || {}; } catch { return {}; }
+}
+function rcSaveFilters() {
+  try { localStorage.setItem(RC_FILTERS_KEY, JSON.stringify(rc.filters)); } catch {}
+}
+
+function parseRecallRoute() {
+  const h = location.hash;
+  const [path, qs] = h.slice(1).split("?");
+  const p = new URLSearchParams(qs || "");
+  if (path === "/transcripts") return { q: p.get("q") || "" };
+  const m = path.match(/^\/session\/([^/]+)\/([^/]+)\/([^/]+)$/);
+  if (!m) return null;
+  try {
+    const seq = p.get("seq");
+    return { q: p.get("q") || "", session: { host: decodeURIComponent(m[1]), kind: decodeURIComponent(m[2]), id: decodeURIComponent(m[3]) },
+      seq: seq !== null && /^-?\d+$/.test(seq) ? Number(seq) : null, sub: p.get("sub") || "" };
+  } catch { return null; }
+}
+
+function rcSearchHash(q) { return "#/transcripts" + (q ? "?q=" + encodeURIComponent(q) : ""); }
+function rcSessionHash(s, o = {}) {
+  const p = new URLSearchParams();
+  if (o.seq !== undefined && o.seq !== null) p.set("seq", o.seq);
+  if (o.sub) p.set("sub", o.sub);
+  if (o.q) p.set("q", o.q);
+  const qs = p.toString();
+  return `#/session/${encodeURIComponent(s.host)}/${encodeURIComponent(s.kind)}/${encodeURIComponent(s.id)}${qs ? "?" + qs : ""}`;
+}
+
+// syncRecall follows the hash: route() calls it.
+function syncRecall() {
+  const r = parseRecallRoute();
+  const el = $("recall");
+  const was = !el.hidden;
+  rc.route = r;
+  el.hidden = !r;
+  document.body.classList.toggle("has-recall", !!r);
+  if (!r) {
+    if (rc.ctl) rc.ctl.abort();
+    rc.sess = null; rc.sessKey = ""; rc.msgs = []; rc.hits = [];
+    return;
+  }
+  el.classList.toggle("in-session", !!r.session);
+  if (!was) {
+    rc.filters = rcLoadFilters();
+    rcLoadMeta();
+    renderRecallFilters();
+  }
+  const input = $("rc-q");
+  if (document.activeElement !== input || !was) input.value = r.q;
+  if (r.q !== rc.q || !rc.res) {
+    rc.q = r.q;
+    rcSearch();
+  }
+  if (r.session) rcOpenSession(r);
+  else { $("rc-session").replaceChildren(rcEmptySession()); rc.sessKey = ""; }
+  if (!was && !r.session && isDesktop()) input.focus();
+}
+
+function rcEmptySession() {
+  const d = document.createElement("div");
+  d.className = "rc-empty rc-pick";
+  d.textContent = "Choose a result to read that session.";
+  return d;
+}
+
+async function rcLoadMeta() {
+  try {
+    rc.status = await api("/api/recall/status");
+  } catch (e) {
+    rc.status = { state: "unavailable" };
+  }
+  renderRecallFresh();
+  renderRecallResults();
+  if (rc.status.state !== "ok" && rc.status.state !== "stale") return;
+  try {
+    rc.facets = await api("/api/recall/facets");
+    renderRecallFilters();
+  } catch {}
+}
+
+function renderRecallFresh() {
+  const st = rc.status;
+  const el = $("rc-fresh");
+  if (!st) { el.textContent = ""; return; }
+  const at = Date.parse(st.built_at || "");
+  el.textContent = Number.isNaN(at) ? "" : `indexed ${fmtAgo(at)} ago`;
+  el.classList.toggle("warn", st.state === "stale");
+}
+
+const RC_WHEN = { "": "Any time", "7": "Last 7 days", "30": "Last 30 days", "90": "Last 90 days" };
+const RC_IN = { "": "Anywhere", said: "Said", commands: "Commands", output: "Output" };
+const RC_SORT = { "": "Best match", new: "Newest" };
+
+function rcSelect(key, label, options) {
+  const s = document.createElement("select");
+  s.className = "rc-chip" + (rc.filters[key] ? " on" : "");
+  s.setAttribute("aria-label", label);
+  s.dataset.key = key;
+  for (const [value, text] of options) {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = text;
+    s.append(o);
+  }
+  // A remembered value the index no longer has.
+  if (rc.filters[key] && !options.some(([v]) => v === rc.filters[key])) {
+    const o = document.createElement("option");
+    o.value = rc.filters[key]; o.textContent = rc.filters[key];
+    s.append(o);
+  }
+  s.value = rc.filters[key] || "";
+  return s;
+}
+
+function renderRecallFilters() {
+  const f = rc.facets || { hosts: [], kinds: [], projects: [] };
+  const opt = (all, list) => [["", all], ...list.map((x) => [x.value, `${x.value} (${x.n})`])];
+  $("rc-filters").replaceChildren(
+    rcSelect("role", "Where the words are", Object.entries(RC_IN)),
+    rcSelect("when", "When", Object.entries(RC_WHEN)),
+    rcSelect("host", "Host", opt("Any host", f.hosts)),
+    rcSelect("kind", "Agent", opt("Any agent", f.kinds)),
+    rcSelect("project", "Project", opt("Any project", f.projects)),
+    rcSelect("sort", "Order", Object.entries(RC_SORT)),
+  );
+}
+
+function rcParams(skip) {
+  const p = new URLSearchParams({ q: rc.q, limit: "20" });
+  const f = rc.filters;
+  for (const k of ["role", "host", "kind", "project", "sort"]) if (f[k]) p.set(k, f[k]);
+  if (f.when) p.set("since", new Date(Date.now() - Number(f.when) * 86400000).toISOString().slice(0, 10));
+  if (skip) p.set("skip", String(skip));
+  return p;
+}
+
+async function rcSearch(more = false) {
+  if (rc.ctl) rc.ctl.abort();
+  if (!rc.q.trim()) {
+    rc.res = null; rc.err = ""; rc.loading = false;
+    renderRecallResults();
+    return;
+  }
+  const ctl = new AbortController();
+  rc.ctl = ctl;
+  rc.loading = !more; rc.more = more; rc.err = "";
+  if (!more) renderRecallResults();
+  try {
+    const d = await api("/api/recall/search?" + rcParams(more ? rc.res.hits.length : 0), { signal: ctl.signal });
+    if (rc.ctl !== ctl) return;
+    if (more) {
+      rc.res.hits.push(...d.hits);
+      rc.res.total = d.total;
+    } else rc.res = d;
+  } catch (e) {
+    if (e.aborted || rc.ctl !== ctl) return;
+    rc.err = e.message || "the search failed";
+    if (!more) rc.res = null;
+  }
+  rc.loading = false; rc.more = false;
+  renderRecallResults();
+}
+
+// rcMarked turns text with \x02 and \x03 around matches into text nodes and <mark>s.
+function rcMarked(text) {
+  const out = document.createDocumentFragment();
+  for (const [i, part] of String(text ?? "").split(/[\x02\x03]/).entries()) {
+    if (!part) continue;
+    if (i % 2) {
+      const m = document.createElement("mark");
+      m.textContent = part;
+      out.append(m);
+    } else out.append(document.createTextNode(part));
+  }
+  return out;
+}
+
+function rcTag(text, cls) {
+  const t = document.createElement("span");
+  t.className = "rc-tag " + cls;
+  t.textContent = text;
+  return t;
+}
+
+const RC_VERDICT = { landed: "t-green", open: "t-blue", reported: "t-blue", unlanded: "t-orange", abandoned: "t-muted", failed: "t-red" };
+
+function rcDate(iso) {
+  const t = Date.parse(iso || "");
+  if (Number.isNaN(t)) return "";
+  const d = new Date(t);
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString(undefined, opts);
+}
+
+function rcMetaLine(s) {
+  return [s.host, s.kind, s.repo, s.branch, rcDate(s.started || s.ended)].filter(Boolean).join(" · ");
+}
+
+function rcVerdictTag(v) {
+  return v && v !== "unknown" && RC_VERDICT[v] ? rcTag(v, RC_VERDICT[v]) : null;
+}
+
+function rcCard(h) {
+  const a = document.createElement("a");
+  a.className = "rc-card";
+  a.href = rcSessionHash(h, { seq: h.seq, sub: h.sub, q: rc.q });
+  a.dataset.key = `${h.host}/${h.kind}/${h.id}`;
+  const title = document.createElement("div");
+  title.className = "rc-title";
+  title.textContent = h.title || h.id;
+  const meta = document.createElement("div");
+  meta.className = "rc-meta";
+  meta.textContent = rcMetaLine(h);
+  a.append(title, meta);
+  if (h.snippet) {
+    const sn = document.createElement("div");
+    sn.className = "rc-snip";
+    sn.append(rcMarked(h.snippet));
+    a.append(sn);
+  }
+  const foot = document.createElement("div");
+  foot.className = "rc-meta rc-foot";
+  const where = { result: " in output", tool: " in commands" }[h.role] || "";
+  foot.append(document.createTextNode(`${h.matches} ${h.matches === 1 ? "match" : "matches"}${where}`));
+  const v = rcVerdictTag(h.verdict);
+  if (v) foot.append(v);
+  if (h.secrets) foot.append(rcTag("possible secret", "t-orange"));
+  a.append(foot);
+  return a;
+}
+
+function rcCommitCard(c) {
+  const a = document.createElement("a");
+  a.className = "rc-card";
+  a.href = rcSessionHash(c);
+  const title = document.createElement("div");
+  title.className = "rc-title";
+  title.textContent = c.title || c.id;
+  const meta = document.createElement("div");
+  meta.className = "rc-meta";
+  meta.textContent = rcMetaLine(c);
+  const sn = document.createElement("div");
+  sn.className = "rc-snip";
+  sn.textContent = `${c.rel} ${c.sha.slice(0, 12)}${c.subject ? " " + c.subject : ""}`;
+  a.append(title, meta, sn);
+  return a;
+}
+
+function rcNotice(text, code) {
+  const d = document.createElement("div");
+  d.className = "rc-empty";
+  d.textContent = text;
+  if (code) {
+    const c = document.createElement("code");
+    c.textContent = code;
+    d.append(document.createTextNode(" "), c);
+  }
+  return d;
+}
+
+function renderRecallResults() {
+  const list = $("rc-results");
+  const st = rc.status;
+  const kids = [];
+  if (st && st.state === "stale") {
+    const at = Date.parse(st.built_at || "");
+    const d = rcNotice(`The index was last built ${Number.isNaN(at) ? "a while" : fmtAgo(at)} ago, so recent sessions are missing.`);
+    d.classList.add("warn");
+    kids.push(d);
+  }
+  if (st && st.state === "missing") kids.push(rcNotice("This host has no transcript index yet. Build it with", "comebye archive index"));
+  else if (st && st.state === "outdated") kids.push(rcNotice("The index is from an older version. The next hourly build replaces it, or run", "comebye archive index"));
+  else if (st && st.state === "unavailable") kids.push(rcNotice("The index could not be read. Is sqlite3 installed on this host?"));
+  else if (rc.err) { const d = rcNotice(rc.err); d.classList.add("warn"); kids.push(d); }
+  else if (rc.loading) kids.push(rcNotice("Searching…"));
+  else if (rc.res) {
+    const count = document.createElement("div");
+    count.className = "rc-count";
+    count.textContent = rc.res.total === 1 ? "1 session" : `${rc.res.total} sessions`;
+    kids.push(count);
+    for (const c of rc.res.commits || []) kids.push(rcCommitCard(c));
+    for (const h of rc.res.hits) kids.push(rcCard(h));
+    if (!rc.res.total && !(rc.res.commits || []).length) kids.push(rcNotice("Nothing matches. Filters narrow this too, and only the start and end of long output is indexed."));
+    if (rc.res.hits.length < rc.res.total) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "btn rc-more"; b.id = "rc-more";
+      b.textContent = rc.more ? "Loading…" : "More";
+      b.disabled = rc.more;
+      kids.push(b);
+    }
+  } else if (st && (st.state === "ok" || st.state === "stale")) {
+    kids.push(rcNotice(`Search what agents said, ran and got back, across ${st.sessions} sessions. Put a phrase in "quotes"; a commit's SHA also works.`));
+  }
+  list.replaceChildren(...kids);
+  rcMarkCurrent();
+}
+
+function rcMarkCurrent() {
+  const r = rc.route;
+  const key = r && r.session ? `${r.session.host}/${r.session.kind}/${r.session.id}` : "";
+  for (const c of document.querySelectorAll("#rc-results .rc-card")) c.classList.toggle("current", !!key && c.dataset.key === key);
+}
+
+/* session view */
+
+function rcSessionURL(r) {
+  const s = r.session;
+  return `/api/recall/sessions/${encodeURIComponent(s.host)}/${encodeURIComponent(s.kind)}/${encodeURIComponent(s.id)}`;
+}
+
+async function rcFetchPage(r, opts) {
+  const p = new URLSearchParams({ limit: String(RC_PAGE) });
+  if (r.sub) p.set("sub", r.sub);
+  if (r.q) p.set("q", r.q);
+  for (const [k, v] of Object.entries(opts)) p.set(k, v);
+  return api(rcSessionURL(r) + "?" + p);
+}
+
+async function rcOpenSession(r) {
+  rcMarkCurrent();
+  const key = `${r.session.host}/${r.session.kind}/${r.session.id}|${r.sub}|${r.q}`;
+  if (key === rc.sessKey) {
+    if (r.seq !== null) rcShowSeq(r.seq);
+    return;
+  }
+  rc.sessKey = key;
+  rc.sess = null; rc.msgs = []; rc.hits = []; rc.hitAt = -1; rc.sessErr = ""; rc.open = new Set();
+  rc.sessLoading = true;
+  renderRecallSession();
+  try {
+    const d = await rcFetchPage(r, r.seq !== null ? { seq: r.seq, dir: "around" } : {});
+    if (rc.sessKey !== key) return;
+    rc.sess = d; rc.msgs = d.messages; rc.before = d.before; rc.after = d.after;
+  } catch (e) {
+    if (rc.sessKey !== key) return;
+    rc.sessErr = e.code === "no_session" ? "This session isn't in the index. It was deleted, or it hasn't been indexed yet." : (e.message || "the session could not be read");
+  }
+  rc.sessLoading = false;
+  renderRecallSession();
+  if (r.q && !rc.sessErr) {
+    try {
+      const d = await api(rcSessionURL(r) + "/hits?q=" + encodeURIComponent(r.q));
+      if (rc.sessKey !== key) return;
+      rc.hits = d.hits.filter((h) => h.sub === r.sub).map((h) => h.seq);
+      rc.otherHits = d.hits.length - rc.hits.length;
+      rc.hitAt = r.seq !== null ? rc.hits.indexOf(r.seq) : -1;
+    } catch {}
+    renderRecallFind();
+  }
+  if (r.seq !== null) rcShowSeq(r.seq);
+}
+
+function rcMerge(list, older) {
+  return older ? [...list, ...rc.msgs] : [...rc.msgs, ...list];
+}
+
+async function rcLoadSide(older) {
+  const r = rc.route;
+  if (!r || !r.session || !rc.msgs.length) return;
+  const key = rc.sessKey;
+  const edge = older ? rc.msgs[0].seq : rc.msgs[rc.msgs.length - 1].seq;
+  const box = $("rc-session");
+  const before = box.scrollHeight - box.scrollTop;
+  try {
+    const d = await rcFetchPage(r, { seq: edge, dir: older ? "before" : "after" });
+    if (rc.sessKey !== key) return;
+    rc.msgs = rcMerge(d.messages, older);
+    if (older) rc.before = d.before; else rc.after = d.after;
+  } catch (e) { toast(e.message || "could not load more", true); return; }
+  renderRecallMessages();
+  if (older) box.scrollTop = box.scrollHeight - before;
+}
+
+// rcShowSeq scrolls to a message, loading the page around it if needed, and
+// opens the tool card that holds it.
+async function rcShowSeq(seq) {
+  const r = rc.route;
+  if (!r || !r.session) return;
+  const want = (rc.showing = (rc.showing || 0) + 1); // only the latest tap wins
+  if (!rc.msgs.some((m) => m.seq === seq)) {
+    const key = rc.sessKey;
+    try {
+      const d = await rcFetchPage(r, { seq, dir: "around" });
+      if (rc.sessKey !== key || rc.showing !== want) return;
+      rc.msgs = d.messages; rc.before = d.before; rc.after = d.after;
+    } catch (e) { toast(e.message || "could not load that message", true); return; }
+  }
+  rc.current = seq;
+  const m = rc.msgs.find((x) => x.seq === seq);
+  if (m && m.role === "result" && m.tool_id) rc.open.add(m.tool_id);
+  if (m && m.role === "tool") rc.open.add(m.tool_id || "seq" + m.seq);
+  if (m && m.role === "result" && !m.tool_id) rc.open.add("seq" + m.seq);
+  renderRecallMessages();
+  const el = document.querySelector(`#rc-session [data-seq="${seq}"]`);
+  if (el) el.scrollIntoView({ block: "center" });
+}
+
+function renderRecallFind() {
+  const bar = $("rc-find");
+  const r = rc.route;
+  if (!bar || !r || !r.q) return;
+  const count = bar.querySelector(".rc-find-n");
+  const n = rc.hits.length;
+  let text = n ? `${rc.hitAt >= 0 ? rc.hitAt + 1 : "–"} of ${n}${n >= 500 ? "+" : ""}` : "no matches here";
+  if (rc.otherHits) text += ` · ${rc.otherHits} elsewhere`;
+  count.textContent = text;
+  for (const b of bar.querySelectorAll("button")) b.disabled = !n;
+}
+
+function rcStep(d) {
+  const n = rc.hits.length;
+  if (!n) return;
+  // From no current match, down goes to the first and up to the last.
+  rc.hitAt = rc.hitAt < 0 ? (d > 0 ? 0 : n - 1) : (rc.hitAt + d + n) % n;
+  renderRecallFind();
+  rcShowSeq(rc.hits[rc.hitAt]);
+}
+
+function renderRecallSession() {
+  const box = $("rc-session");
+  const r = rc.route;
+  if (!r || !r.session) return;
+  if (rc.sessErr) { box.replaceChildren(rcNotice(rc.sessErr)); return; }
+  if (!rc.sess) { box.replaceChildren(rcNotice(rc.sessLoading ? "Loading…" : "")); return; }
+  const s = rc.sess.session;
+  const kids = [];
+  if (r.q) {
+    const bar = document.createElement("div");
+    bar.id = "rc-find"; bar.className = "rc-find";
+    const term = document.createElement("span");
+    term.className = "rc-find-q"; term.textContent = r.q;
+    const n = document.createElement("span");
+    n.className = "rc-find-n"; n.setAttribute("aria-live", "polite");
+    const up = document.createElement("button");
+    up.type = "button"; up.className = "rc-step"; up.id = "rc-prev"; up.textContent = "↑"; up.setAttribute("aria-label", "Previous match");
+    const down = document.createElement("button");
+    down.type = "button"; down.className = "rc-step"; down.id = "rc-next"; down.textContent = "↓"; down.setAttribute("aria-label", "Next match");
+    bar.append(term, n, up, down);
+    kids.push(bar);
+  }
+  const body = document.createElement("div");
+  body.className = "rc-sbody";
+  const title = document.createElement("h2");
+  title.className = "rc-stitle"; title.textContent = s.title || s.id;
+  const meta = document.createElement("div");
+  meta.className = "rc-meta";
+  meta.textContent = `${rcMetaLine(s)} · ${s.messages} messages`;
+  const v = rcVerdictTag(s.verdict);
+  if (v) { meta.append(" "); meta.append(v); }
+  body.append(title, meta);
+  if (rc.sess.subs.length) {
+    const subs = document.createElement("nav");
+    subs.className = "rc-subs"; subs.setAttribute("aria-label", "Subagents");
+    const link = (label, sub) => {
+      const a = document.createElement("a");
+      a.href = rcSessionHash(s, { sub, q: r.q });
+      a.textContent = label;
+      a.className = "rc-chip" + (sub === r.sub ? " on" : "");
+      return a;
+    };
+    subs.append(link("Main thread", ""));
+    for (const x of rc.sess.subs) subs.append(link(`Subagent ${x.id.slice(0, 8)} (${x.messages})`, x.id));
+    body.append(subs);
+  }
+  if (s.secrets) {
+    const w = document.createElement("div");
+    w.className = "rc-secret";
+    w.textContent = `${s.secrets === 1 ? "A possible secret was" : s.secrets + " possible secrets were"} masked in this session. Masking can miss things, so treat what's here as sensitive.`;
+    body.append(w);
+  }
+  const clipped = document.createElement("div");
+  clipped.className = "rc-meta rc-clipnote";
+  clipped.textContent = "This view shows the indexed text: long messages and tool output are clipped. The archive holds them in full.";
+  body.append(clipped);
+  const list = document.createElement("div");
+  list.id = "rc-msgs"; list.className = "rc-msgs";
+  body.append(list);
+  kids.push(body);
+  box.replaceChildren(...kids);
+  box.scrollTop = 0;
+  renderRecallMessages();
+  renderRecallFind();
+}
+
+// rcHighlightText wraps the matched words in a rendered, sanitized message: it
+// only touches text nodes, so no markup comes from the transcript's text.
+function rcHighlightText(root, terms) {
+  if (!terms.size) return;
+  const list = [...terms].slice(0, 20).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(list.join("|"), "gi");
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const n of nodes) {
+    const t = n.nodeValue;
+    re.lastIndex = 0;
+    if (!re.test(t)) continue;
+    re.lastIndex = 0;
+    const f = document.createDocumentFragment();
+    let at = 0, m;
+    while ((m = re.exec(t))) {
+      if (!m[0]) break;
+      f.append(document.createTextNode(t.slice(at, m.index)));
+      const mk = document.createElement("mark");
+      mk.textContent = m[0];
+      f.append(mk);
+      at = m.index + m[0].length;
+    }
+    f.append(document.createTextNode(t.slice(at)));
+    n.replaceWith(f);
+  }
+}
+
+function rcTerms(text) {
+  const out = new Set();
+  String(text).split(/[\x02\x03]/).forEach((p, i) => { if (i % 2 && p) out.add(p.toLowerCase()); });
+  return out;
+}
+
+function rcPlain(text) { return String(text ?? "").replace(/[\x02\x03]/g, ""); }
+
+function rcClipNote(m, kept) {
+  if (!m.full_len) return null;
+  const d = document.createElement("div");
+  d.className = "rc-note";
+  d.textContent = `Clipped: ${kept} of ${m.full_len.toLocaleString("en-US")} bytes kept.`;
+  return d;
+}
+
+function rcSecretNote(m) {
+  if (!m.secret) return null;
+  const d = document.createElement("div");
+  d.className = "rc-secret";
+  d.textContent = "A possible secret was masked here.";
+  return d;
+}
+
+function rcMessage(m) {
+  const d = document.createElement("div");
+  d.dataset.seq = m.seq;
+  if (m.role === "handoff") {
+    d.className = "rc-handoff";
+    const det = document.createElement("details");
+    det.open = m.seq === rc.current;
+    const sum = document.createElement("summary");
+    sum.textContent = "Handoff brief · from the ledger";
+    const body = document.createElement("div");
+    body.className = "md";
+    body.innerHTML = renderMarkdown(rcPlain(m.text));
+    rcHighlightText(body, rcTerms(m.text));
+    det.append(sum, body);
+    d.append(det);
+  } else {
+    d.className = "rc-msg " + (m.role === "user" ? "rc-user" : "rc-asst");
+    const body = document.createElement("div");
+    body.className = "md";
+    body.innerHTML = renderMarkdown(rcPlain(m.text));
+    rcHighlightText(body, rcTerms(m.text));
+    d.append(body);
+    const n = rcClipNote(m, "the first 4,000");
+    if (n) d.append(n);
+  }
+  const s = rcSecretNote(m);
+  if (s) d.append(s);
+  if (m.seq === rc.current) d.classList.add("cur");
+  return d;
+}
+
+// rcToolCard shows a tool call on one line; opening it shows the output as text.
+function rcToolCard(call, result) {
+  const id = (call && call.tool_id) || (result && result.tool_id) || "seq" + (call || result).seq;
+  const det = document.createElement("details");
+  det.className = "rc-tool";
+  det.open = rc.open.has(id);
+  det.dataset.tool = id;
+  const sum = document.createElement("summary");
+  const text = rcPlain(call ? call.text : "");
+  const sp = text.indexOf(" ");
+  const nm = document.createElement("span");
+  nm.className = "rc-tname";
+  nm.textContent = call ? (sp < 0 ? text : text.slice(0, sp)) : "Output";
+  const ar = document.createElement("span");
+  ar.className = "rc-targs";
+  ar.textContent = call && sp >= 0 ? text.slice(sp + 1) : "";
+  const st = document.createElement("span");
+  st.className = "rc-tstate " + (result ? (result.is_err ? "t-red" : "t-green") : "t-muted");
+  st.textContent = result ? (result.is_err ? "error" : "ok") : "";
+  sum.append(nm, ar, st);
+  det.append(sum);
+  if (call) {
+    const args = document.createElement("pre");
+    args.className = "rc-args";
+    args.dataset.seq = call.seq;
+    const rawSp = call.text.indexOf(" ");
+    args.append(rcMarked(rawSp < 0 ? call.text : call.text.slice(rawSp + 1)));
+    det.append(args);
+    if (call.seq === rc.current) { args.classList.add("cur"); }
+    const s = rcSecretNote(call);
+    if (s) det.append(s);
+  }
+  if (result) {
+    const out = document.createElement("pre");
+    out.className = "rc-out";
+    out.dataset.seq = result.seq;
+    out.append(rcMarked(result.text));
+    if (result.seq === rc.current) out.classList.add("cur");
+    det.append(out);
+    const n = rcClipNote(result, "the first and last 1,500");
+    if (n) det.append(n);
+    const s = rcSecretNote(result);
+    if (s) det.append(s);
+  }
+  det.addEventListener("toggle", () => { if (det.open) rc.open.add(id); else rc.open.delete(id); });
+  return det;
+}
+
+function renderRecallMessages() {
+  const list = $("rc-msgs");
+  if (!list) return;
+  const results = new Map();
+  for (const m of rc.msgs) if (m.role === "result" && m.tool_id) results.set(m.tool_id, m);
+  const calls = new Set();
+  for (const m of rc.msgs) if (m.role === "tool" && m.tool_id) calls.add(m.tool_id);
+  const kids = [];
+  if (rc.before) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn rc-more"; b.id = "rc-earlier"; b.textContent = "Earlier messages";
+    kids.push(b);
+  }
+  for (const m of rc.msgs) {
+    if (m.role === "tool") kids.push(rcToolCard(m, m.tool_id ? results.get(m.tool_id) : null));
+    else if (m.role === "result") {
+      if (!m.tool_id || !calls.has(m.tool_id)) kids.push(rcToolCard(null, m)); // its call is on another page
+    } else kids.push(rcMessage(m));
+  }
+  if (rc.after) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn rc-more"; b.id = "rc-later"; b.textContent = "Later messages";
+    kids.push(b);
+  }
+  list.replaceChildren(...kids);
+}
+
+function closeRecall() {
+  history.replaceState(null, "", location.pathname + location.search);
+  route();
+}
+
+function rcBack() {
+  const r = rc.route;
+  if (r && r.session && !isDesktop()) location.hash = rcSearchHash(r.q);
+  else closeRecall();
+}
+
+function initRecall() {
+  $("btn-recall").addEventListener("click", () => { location.hash = rcSearchHash(rc.q); });
+  $("rc-back").addEventListener("click", rcBack);
+  $("rc-q").addEventListener("input", (ev) => {
+    clearTimeout(rc.timer);
+    const v = ev.target.value;
+    rc.timer = setTimeout(() => {
+      const r = rc.route;
+      if (!r || v.trim() === rc.q) return;
+      if (v.length > 500) return;
+      rc.q = v.trim();
+      // Replaces the entry, so back leaves the search rather than stepping through each word.
+      if (!r.session) history.replaceState(null, "", location.pathname + location.search + rcSearchHash(rc.q));
+      rcSearch();
+    }, 300);
+  });
+  $("rc-form").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    clearTimeout(rc.timer);
+    const v = $("rc-q").value.trim();
+    if (rc.route && rc.route.session && !isDesktop()) { location.hash = rcSearchHash(v); return; }
+    if (v !== rc.q) { rc.q = v; history.replaceState(null, "", location.pathname + location.search + rcSearchHash(rc.q)); rcSearch(); }
+    $("rc-q").blur();
+  });
+  $("rc-filters").addEventListener("change", (ev) => {
+    const k = ev.target.dataset.key;
+    if (!k) return;
+    if (ev.target.value) rc.filters[k] = ev.target.value; else delete rc.filters[k];
+    ev.target.classList.toggle("on", !!ev.target.value);
+    rcSaveFilters();
+    rcSearch();
+  });
+  $("rc-results").addEventListener("click", (ev) => {
+    if (ev.target.closest("#rc-more") && !rc.more) { rc.more = true; renderRecallResults(); rcSearch(true); }
+  });
+  $("rc-session").addEventListener("click", (ev) => {
+    if (ev.target.closest("#rc-earlier")) rcLoadSide(true);
+    else if (ev.target.closest("#rc-later")) rcLoadSide(false);
+    else if (ev.target.closest("#rc-prev")) rcStep(-1);
+    else if (ev.target.closest("#rc-next")) rcStep(1);
+  });
+  $("recall").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.stopPropagation(); rcBack(); }
+  });
+}
+
 /* ---------- routing: #/agent/[<host>/]<pane> deep links (notification taps) ---------- */
 
 // parseRoute reads #/agent/<pane> (the server's own host, as in older
@@ -1993,6 +2713,7 @@ function routedAgent(r) {
 // route syncs the view to the URL hash. An agent that is not in the list
 // yet (cold start from a notification) is opened once the list arrives.
 function route() {
+  syncRecall();
   syncBriefs();
   syncSubview();
   syncLaunch();
@@ -4829,6 +5550,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("popstate", route);
   window.addEventListener("hashchange", route);
   initBriefs();
+  initRecall();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     // One-way escape hatch for debugging: show the raw pane.

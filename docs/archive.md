@@ -198,6 +198,41 @@ agent that wants more reads the top threads with `recall show`.
 `recall todo` lists threads with no summary, for an agent to summarise with
 `archive summary`.
 
+### What the index keeps
+
+- **Secret-looking text is masked as it is indexed.** Known token shapes (API and
+  tailnet keys, GitHub and cloud tokens, PEM private keys, JWTs, `Bearer` values,
+  `password=` and the like, passwords in URLs) become `••••••`, before clipping, in
+  messages, tool calls, tool output, titles, handoff briefs, reports and summaries.
+  A session with any is flagged, and the app warns about it. The archive stays
+  byte-exact. This is a safety net and patterns miss things, so the index still
+  counts as holding secrets and its access rules stay as they are. A masked value
+  cannot be searched for: use `archive restore` for that. New patterns take effect
+  when a session is next indexed.
+- **Long text is clipped.** A message keeps its first 4,000 bytes and a tool's output
+  its first and last 1,500, because errors tend to come last. Each message records
+  its stream and byte offset in the archive, and its original length.
+- **The format has a version.** `archive index` replaces an index in an older
+  format with a complete rebuild from the archive, into `index.db.rebuild`, and moves
+  it into place when it is done. Until then `recall` needs the new file and the app
+  says the index is out of date. A binary older than the format cannot read the new
+  file: to roll back, delete the index and let the old binary rebuild it.
+
+### Searching from the app
+
+The app's search icon opens **Transcripts**: search what agents said, ran and got
+back, and read a session with its tool calls collapsed. The server reads the file
+named by `-recall-index` (`COMEBYE_RECALL_INDEX`, by default the path above) with
+`sqlite3 -readonly -safe`, one process per query, so a file moved into place needs no
+restart. It serves whatever that host's index holds and is [for the user
+alone](security.md#searching-transcripts). The session view shows the indexed text
+with a notice where it is clipped.
+
+The index is as fresh as its last build: hourly on the timer, plus a run that
+`comebye-worker destroy` starts as it finishes, so that a destroyed worker's sessions
+are searchable within minutes. The app shows the age of the index and warns after
+two missed builds.
+
 ## Spot workers
 
 A worker holds no archive key. `comebye-worker archive` and `destroy` pull its
@@ -250,7 +285,8 @@ sessions over ssh and upload them from the machine running the tool:
 
 - Transcripts contain secrets. The archive is byte-exact on purpose;
   protect it with the keys above (age mode) or with where its copies live
-  (plaintext mode). The index is plaintext in both modes.
+  (plaintext mode). The index is plaintext in both modes, and masking does not
+  change that: treat it as holding secrets.
 - Hosts archive and index themselves, plus the workers they uploaded. Threads do
   not span hosts yet, and the hub cannot search a worker's sessions.
 - The git check needs the repository on the same host. `gh` results are

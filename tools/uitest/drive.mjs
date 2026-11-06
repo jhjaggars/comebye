@@ -970,6 +970,177 @@ await check("to-do: items show with their context; answer, done and drop work fr
   await page.screenshot({ path: `${out}/todo.png` });
 });
 
+
+/* ---------- transcripts (a synthetic index: tools/devserver/recall.go) ---------- */
+const SMOKE = "#/session/devbox/claude/11111111-aaaa-4aaa-8aaa-111111111111";
+const LONGS = "#/session/devbox/claude/22222222-bbbb-4bbb-8bbb-222222222222";
+const noSideways = () => page.evaluate(() => {
+  const el = document.querySelector("#recall");
+  const over = [...el.querySelectorAll("*")].filter((x) => x.getBoundingClientRect().right > innerWidth + 1 && !x.closest(".rc-filters, .rc-subs, .rc-targs"));
+  if (over.length || document.documentElement.scrollWidth > innerWidth) throw new Error("wider than the screen: " + (over[0]?.className || over[0]?.tagName));
+});
+
+await check("transcripts: the header icon searches, one card per session, real marks", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.locator("#btn-recall").click();
+  await page.waitForSelector("#recall", { state: "visible" });
+  await page.waitForFunction(() => /indexed/.test(document.querySelector("#rc-fresh").textContent), null, { timeout: 5000 });
+  await page.locator("#rc-q").fill("\"connection refused\"");
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  const n = await page.locator(".rc-card").count();
+  if (n !== 3) throw new Error(`${n} cards`);
+  const marks = await page.locator(".rc-card .rc-snip mark").count();
+  if (!marks) throw new Error("no <mark> in the snippets");
+  const raw = await page.locator(".rc-card").first().innerText();
+  if (/[\x02\x03]/.test(raw)) throw new Error("control characters on screen");
+  await page.getByText("possible secret").first().waitFor();
+  await noSideways();
+  await page.setViewportSize({ width: 360, height: 700 });
+  await noSideways();
+  await page.setViewportSize({ width: 390, height: 844 });
+});
+
+await check("transcripts: filters narrow, are remembered, and the query is not stored", async () => {
+  await page.locator('#rc-filters select[data-key="role"]').selectOption("commands");
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 1, null, { timeout: 5000 });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  if (await page.locator('#rc-filters select[data-key="role"]').inputValue() !== "commands") throw new Error("the filter was not remembered");
+  const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }));
+  if (/connection refused/i.test(stored)) throw new Error("the query is in browser storage");
+  await page.locator('#rc-filters select[data-key="role"]').selectOption("");
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 3, null, { timeout: 5000 });
+});
+
+await check("transcripts: a card opens the session at its match; back returns to the results", async () => {
+  await page.locator(".rc-card", { hasText: "Long session" }).click();
+  await page.waitForSelector("#rc-find", { timeout: 5000 });
+  await page.waitForFunction(() => /of 8/.test(document.querySelector(".rc-find-n").textContent), null, { timeout: 5000 });
+  const cur = page.locator(".rc-out.cur");
+  await cur.waitFor();
+  if (!(await cur.innerText()).toLowerCase().includes("connection refused")) throw new Error("the current match is another message");
+  if (await visible(".rc-list")) throw new Error("the results pane still shows on a phone");
+  await page.goBack();
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  if (await visible("#rc-find")) throw new Error("still in the session");
+});
+
+await check("transcripts: arrows step through matches across pages", async () => {
+  await page.goto(base + "/" + LONGS + "?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
+  await page.waitForFunction(() => /of 8/.test(document.querySelector(".rc-find-n")?.textContent || ""), null, { timeout: 5000 });
+  const seen = new Set();
+  for (let i = 0; i < 8; i++) {
+    await page.locator("#rc-next").click();
+    await page.waitForFunction((n) => document.querySelector(".rc-find-n").textContent.startsWith(n + " of"), i + 1, { timeout: 5000 });
+    const step = `step ${(i + 1) * 20}:`;
+    await page.waitForFunction((s) => document.querySelector(".rc-out.cur")?.textContent.startsWith(s), step, { timeout: 5000 });
+    const t = await page.locator(".rc-out.cur").innerText();
+    if (!/connection refused/i.test(t)) throw new Error("match " + i + " shows " + t);
+    const box = await page.locator(".rc-out.cur").boundingBox();
+    if (!box || box.y < 0 || box.y > 844) throw new Error("match " + i + " is off screen");
+    seen.add(t);
+  }
+  if (seen.size !== 8) throw new Error(`${seen.size} different matches`);
+  await page.locator("#rc-next").click(); // wraps
+  await page.waitForFunction(() => document.querySelector(".rc-find-n").textContent.startsWith("1 of"), null, { timeout: 5000 });
+  await page.locator("#rc-prev").click();
+  await page.waitForFunction(() => document.querySelector(".rc-find-n").textContent.startsWith("8 of"), null, { timeout: 5000 });
+});
+
+await check("transcripts: paging by Earlier and Later messages", async () => {
+  await page.goto(base + "/" + LONGS + "?seq=160", { waitUntil: "load" });
+  await page.waitForSelector("#rc-earlier", { timeout: 5000 });
+  const count = () => page.locator("#rc-msgs [data-seq]").count();
+  const a = await count();
+  await page.locator("#rc-earlier").click();
+  await page.waitForFunction((n) => document.querySelectorAll("#rc-msgs [data-seq]").length > n, a, { timeout: 5000 });
+  const b = await count();
+  await page.locator("#rc-later").click();
+  await page.waitForFunction((n) => document.querySelectorAll("#rc-msgs [data-seq]").length > n, b, { timeout: 5000 });
+});
+
+await check("transcripts: agent text cannot run; markdown still renders; output stays text", async () => {
+  await page.goto(base + "/" + SMOKE, { waitUntil: "load" });
+  await page.waitForSelector(".rc-tool", { timeout: 5000 });
+  await page.locator(".rc-tool", { hasText: "printf" }).locator("summary").click();
+  await page.waitForTimeout(200);
+  const r = await page.evaluate(() => ({
+    xss: window.__xss,
+    imgs: document.querySelectorAll("#recall img").length,
+    scripts: document.querySelectorAll("#recall script").length,
+    bolds: [...document.querySelectorAll("#recall .rc-out b")].length,
+    strong: document.querySelector("#recall .rc-asst strong")?.textContent,
+    lib: !!(window.marked && window.marked.Marked),
+    out: [...document.querySelectorAll("#recall .rc-out")].map((x) => x.textContent).join(""),
+  }));
+  if (r.xss !== undefined || r.imgs || r.scripts || r.bolds) throw new Error(JSON.stringify(r));
+  if (r.strong !== "reproduce" || !r.lib) throw new Error("markdown did not render: " + JSON.stringify(r));
+  if (!r.out.includes("<img src=x onerror=window.__xss=1>")) throw new Error("the output was not shown as text");
+  await page.screenshot({ path: `${out}/transcripts-session.png` });
+});
+
+await check("transcripts: secrets are masked, with a warning, and clipped output says so", async () => {
+  await page.goto(base + "/" + SMOKE, { waitUntil: "load" });
+  await page.waitForSelector(".rc-secret", { timeout: 5000 });
+  await page.locator(".rc-tool", { hasText: "Authorization" }).locator("summary").click();
+  await page.locator(".rc-tool", { hasText: "journalctl" }).locator("summary").click();
+  const text = await page.locator("#recall").innerText();
+  if (/Tok3n|ghp_/.test(text)) throw new Error("a secret is on screen");
+  if (!text.includes("••••••")) throw new Error("no mask mark");
+  if (!/possible secrets? (was|were) masked/.test(text)) throw new Error("no warning");
+  if (!/Clipped: the first and last 1,500 of [\d,]+ bytes kept/.test(text)) throw new Error("no clip notice");
+  if (!text.includes("gave up: connection refused")) throw new Error("the tail of long output is missing");
+  await noSideways();
+});
+
+await check("transcripts: a subagent opens as its own thread", async () => {
+  await page.goto(base + "/#/transcripts?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
+  await page.locator(".rc-card", { hasText: "Retry the upgrade" }).click();
+  await page.waitForSelector(".rc-subs", { timeout: 5000 });
+  const on = await page.locator(".rc-subs .rc-chip.on").innerText();
+  if (!on.startsWith("Subagent")) throw new Error("opened on " + on);
+  await page.locator(".rc-subs .rc-chip", { hasText: "Main thread" }).click();
+  await page.waitForFunction(() => document.querySelector(".rc-subs .rc-chip.on")?.textContent === "Main thread", null, { timeout: 5000 });
+  await page.waitForFunction(() => /reproduce/.test(document.querySelector("#rc-msgs")?.innerText || ""), null, { timeout: 5000 });
+});
+
+await check("transcripts: a commit's SHA finds the session", async () => {
+  await page.goto(base + "/#/transcripts?q=1a2b3c4d", { waitUntil: "load" });
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  if (!(await page.locator("#rc-results").innerText()).includes("made 1a2b3c4d")) throw new Error("no commit card");
+});
+
+await check("transcripts: at desktop width, results and session side by side", async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(base + "/#/transcripts?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  await page.locator(".rc-card", { hasText: "Provision" }).click();
+  await page.waitForFunction(() => /Provision/.test(document.querySelector(".rc-stitle")?.textContent || ""), null, { timeout: 5000 });
+  if (!(await visible(".rc-list"))) throw new Error("the results went away");
+  if (!(await page.locator(".rc-card.current").count())) throw new Error("the open session is not marked");
+  const a = await page.locator(".rc-list").boundingBox(), b = await page.locator("#rc-session").boundingBox();
+  if (a.x + a.width > b.x + 1 || b.width < 500) throw new Error(JSON.stringify({ a, b }));
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#recall", { state: "hidden" });
+  await page.setViewportSize({ width: 390, height: 844 });
+});
+
+await check("transcripts: no index, an old index, a stale one, a deleted session", async () => {
+  const withStatus = async (body, want) => {
+    await page.route(/\/api\/recall\/status$/, (r) => r.fulfill({ json: body }));
+    await page.goto("about:blank");
+    await page.goto(base + "/#/transcripts", { waitUntil: "load" });
+    await page.waitForFunction((w) => new RegExp(w).test(document.querySelector("#rc-results").textContent), want, { timeout: 5000 });
+    await page.unroute(/\/api\/recall\/status$/);
+  };
+  await withStatus({ state: "missing", sessions: 0, messages: 0 }, "no transcript index yet");
+  await withStatus({ state: "outdated", sessions: 0, messages: 0 }, "older version");
+  await withStatus({ state: "stale", built_at: new Date(Date.now() - 86400000 * 2).toISOString(), sessions: 3, messages: 9 }, "last built 2d ago");
+  await page.goto(base + "/#/session/devbox/claude/gone-session", { waitUntil: "load" });
+  await page.waitForFunction(() => /isn't in the index/.test(document.querySelector("#rc-session").textContent), null, { timeout: 5000 });
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;

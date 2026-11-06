@@ -1130,15 +1130,133 @@
       #detail header .back { display: none; }
       #detail main { max-width: none; margin: 0; } /* the agent pane fills the space between the list and the briefings panel */
     }
+    /* Transcripts */
+    #recall {
+      position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg);
+      /* Over the desktop grid too: it is a screen of its own. */
+    }
+    #recall[hidden] { display: none; }
+    #recall header { position: static; flex: none; }
+    #recall #rc-back { margin: -10px 0 -10px -10px; color: var(--text); }
+    .rc-fresh { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .rc-fresh.warn { color: var(--orange); }
+    .rc-panes { flex: 1; min-height: 0; display: flex; }
+    .rc-list, .rc-session { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    .rc-list { flex: 1; padding: 12px calc(12px + env(safe-area-inset-right, 0px)) calc(20px + var(--safe-bottom)) calc(12px + env(safe-area-inset-left, 0px)); }
+    .rc-session { display: none; flex: 1; padding-bottom: calc(20px + var(--safe-bottom)); }
+    #recall.in-session .rc-list { display: none; }
+    #recall.in-session .rc-session { display: block; }
+    #rc-q {
+      width: 100%; min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px; color: var(--text);
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    }
+    #rc-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    .rc-filters { display: flex; gap: 6px; margin: 8px 0 10px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+    .rc-filters::-webkit-scrollbar { display: none; }
+    .rc-chip {
+      flex: none; max-width: 180px; min-height: 34px; padding: 4px 10px; font: inherit; font-size: 13px; color: var(--muted);
+      background: var(--panel); border: 1px solid var(--border); border-radius: 99px; text-decoration: none;
+      display: inline-flex; align-items: center;
+    }
+    .rc-chip.on { color: var(--blue); border-color: var(--blue); }
+    .rc-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .rc-count { color: var(--muted); font-size: 13px; margin: 0 2px 8px; }
+    .rc-empty { color: var(--muted); font-size: 14px; padding: 14px 4px; overflow-wrap: anywhere; }
+    .rc-empty.warn { color: var(--orange); }
+    .rc-empty code { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); }
+    .rc-pick { padding: 24px; text-align: center; }
+    .rc-card {
+      display: flex; flex-direction: column; gap: 3px; margin-bottom: 9px; padding: 10px 12px; min-width: 0;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px; color: inherit; text-decoration: none;
+    }
+    .rc-card:hover { background: var(--panel2); }
+    .rc-card:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+    .rc-card.current { border-color: var(--blue); }
+    .rc-title { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+    .rc-meta { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    .rc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .rc-snip { font: 12.5px/1.42 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #c6cad5; overflow-wrap: anywhere; margin-top: 2px; }
+    #recall mark { background: #5b4a12; color: #ffe9a8; border-radius: 2px; padding: 0 1px; }
+    .rc-tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 99px; border: 1px solid currentColor; white-space: nowrap; }
+    .t-green { color: var(--green); } .t-orange { color: var(--orange); } .t-blue { color: var(--blue); } .t-red { color: var(--red); } .t-muted { color: var(--muted); }
+    .btn.rc-more { display: block; width: 100%; margin: 4px 0 10px; }
+    .rc-find {
+      position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 14px;
+      font-size: 13px; background: var(--panel2); border-bottom: 1px solid var(--border);
+    }
+    .rc-find-q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rc-find-n { margin-left: auto; flex: none; color: var(--muted); white-space: nowrap; }
+    .rc-step { flex: none; min-width: 44px; min-height: 44px; font: inherit; font-size: 17px; color: var(--text); background: none; border: 0; border-radius: 8px; cursor: pointer; }
+    .rc-step:disabled { color: var(--muted); opacity: .5; cursor: default; }
+    .rc-step:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .rc-sbody { max-width: 860px; margin: 0 auto; padding: 12px calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px)); }
+    .rc-stitle { font-size: 17px; font-weight: 650; margin: 0 0 3px; overflow-wrap: anywhere; }
+    .rc-subs { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; scrollbar-width: none; }
+    .rc-subs .rc-chip { max-width: none; white-space: nowrap; }
+    .rc-secret { margin-top: 8px; padding: 6px 9px; font-size: 12.5px; color: var(--orange); background: rgba(251,146,60,.12); border-radius: 8px; }
+    .rc-clipnote { margin-top: 8px; }
+    .rc-msgs { display: flex; flex-direction: column; gap: 9px; margin-top: 12px; min-width: 0; }
+    .rc-msg { font-size: 14.5px; min-width: 0; }
+    .rc-msg.cur, .rc-handoff.cur { box-shadow: -3px 0 0 var(--orange); }
+    .rc-user { align-self: flex-end; max-width: 88%; background: #1e3a5f; border-radius: 12px; padding: 8px 11px; }
+    .rc-asst { padding: 0 2px; }
+    .rc-handoff details { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 11px; font-size: 14px; }
+    .rc-handoff summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+    .rc-handoff .md { margin-top: 8px; }
+    .rc-note { color: var(--muted); font-size: 12px; padding: 5px 9px; }
+    .rc-tool { border: 1px solid var(--border); border-radius: 9px; font-size: 13px; overflow: hidden; min-width: 0; flex: none; }
+    .rc-tool summary {
+      display: flex; align-items: baseline; gap: 8px; min-height: 36px; padding: 8px 10px; background: var(--panel);
+      cursor: pointer; list-style: none;
+    }
+    .rc-tool summary::-webkit-details-marker { display: none; }
+    .rc-tool summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .rc-tname { flex: none; color: var(--purple); }
+    .rc-targs { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); }
+    .rc-tstate { flex: none; margin-left: auto; font-size: 12px; }
+    .rc-args, .rc-out {
+      margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap; overflow-wrap: anywhere; color: #c6cad5; border-top: 1px solid var(--border);
+    }
+    .rc-out { background: #0c0e13; }
+    .rc-args.cur, .rc-out.cur { box-shadow: inset 3px 0 0 var(--orange); }
+    .rc-tool .rc-secret { margin: 0; border-radius: 0; border-top: 1px solid var(--border); }
+    @media (min-width: 1100px) {
+      /* The app's grid does not apply: this screen is fixed over it. */
+      #recall .rc-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
+      #recall .rc-session { display: block !important; }
+    }
   </style>
 </head>
 <body>
+  <!-- Transcripts: search and read archived sessions -->
+  <div id="recall" hidden>
+    <header>
+      <button type="button" class="bell" id="rc-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <h1>Transcripts</h1>
+      <span class="rc-fresh" id="rc-fresh"></span>
+    </header>
+    <div class="rc-panes">
+      <section class="rc-list" aria-label="Search">
+        <form id="rc-form" role="search">
+          <input id="rc-q" type="search" placeholder="Search transcripts" aria-label="Search transcripts" maxlength="500" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+        </form>
+        <div id="rc-filters" class="rc-filters"></div>
+        <div id="rc-results" aria-live="polite"></div>
+      </section>
+      <section id="rc-session" class="rc-session" aria-label="Session" tabindex="0"></section>
+    </div>
+  </div>
+
   <!-- Agent list view -->
   <div id="list">
     <header>
       <span class="conn" id="conn-list"></span>
       <h1>herdr</h1>
       <span class="count" id="count"></span>
+      <button type="button" class="bell launch" id="btn-recall" aria-label="Search transcripts">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
       <button type="button" class="bell launch" id="btn-launch" aria-label="New agent" aria-haspopup="dialog" aria-controls="launch">
         <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>

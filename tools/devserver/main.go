@@ -72,7 +72,14 @@ func main() {
 	fixtures := flag.Bool("fixtures", false, "add the dev-harness fixture agents (worker, coordinator, home, blocked, long names, ...) after alpha and bravo")
 	hostTag := flag.String("fixture-host", "", "with -fixtures: a tag that makes the fixture agents a second host's (a peer): a few agents named <tag>-*")
 	trust := flag.Bool("trust-prompt", false, "add a Pi agent that herdr reports as idle while its screen shows the \"Trust project folder?\" prompt (any Enter answers it)")
+	recallFixture := flag.String("recall-fixture", "", "write a synthetic transcript index to this file and exit")
 	flag.Parse()
+	if *recallFixture != "" {
+		if err := writeRecallFixture(*recallFixture); err != nil {
+			log.Fatalf("recall fixture: %v", err)
+		}
+		return
+	}
 	if *dir == "" {
 		d, err := os.MkdirTemp("", "fake-herdr")
 		if err != nil {

@@ -218,3 +218,34 @@ func TestAppTodoPanelWiring(t *testing.T) {
 		}
 	}
 }
+
+// Transcripts hold anything an agent or a tool ever printed: output and snippets
+// are text nodes, messages go through the sanitizer, and queries and text stay out
+// of browser storage. A helper must not take the name of a vendored library's
+// global, which would turn markdown off in the whole app.
+func TestAppRecallWiring(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`m\.textContent = part`,
+		`out\.append\(document\.createTextNode\(part\)\)`,
+		`body\.innerHTML = renderMarkdown\(rcPlain\(m\.text\)\)`,
+		`out\.append\(rcMarked\(result\.text\)\)`,
+		`localStorage\.setItem\(RC_FILTERS_KEY, JSON\.stringify\(rc\.filters\)\)`,
+	} {
+		if !regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js does not match %s", re)
+		}
+	}
+	for _, re := range []string{`(?m)^function marked\(`, `(?m)^function DOMPurify\(`, `localStorage\.setItem\([^)]*rc\.q`} {
+		if regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js matches %s", re)
+		}
+	}
+	// Filters are the only thing remembered, and a query is not among them.
+	if strings.Contains(string(src), "rc.filters.q") {
+		t.Error("the query went into the remembered filters")
+	}
+}
