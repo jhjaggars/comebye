@@ -1,7 +1,6 @@
 # Proposal: one central transcript archive in Garage, with one index
 
-Status: design decided; the user approves the build separately. Nothing here is
-built. Written 2026-11-06 against main at `0c78560`.
+Status: design decided; the first slice is approved and in progress. Written 2026-11-06 against main at `0c78560`.
 
 The user's decisions: a dedicated bucket, **plaintext stays** (`encryption
 none`), the bucket lives only in the homelab, storage is protected by Longhorn
@@ -48,7 +47,7 @@ Some of these change the design, and some correct the brief.
 | **Permissions are per key and per bucket, and write includes overwrite and delete.** A write-only key could overwrite and delete any object, but could not List or Get. | Same container | A key cannot be limited to its own host's prefix. A write-only key would also break `archive run`, which lists to find where to resume. Hosts get read and write. |
 | An interrupted PUT leaves nothing visible (HEAD 404). ETag equals the MD5 of the object. Keys with spaces, `+`, `=` and `ü` round-trip. | Same container | The `Put` atomicity contract holds. ETag gives an end-to-end integrity check. |
 | `aws s3 sync` copied 2,600 synthetic segments in 2.8 s; a resync found 0 differences; listing them took 0.5 s. | Same container, on loopback | Migration needs no new code. Hourly listing cost is negligible. Loopback flatters the speed, so a real network will be slower. |
-| **The langfuse Garage is not in-cluster only.** It has a Traefik Ingress, `garage.jaggars.cc`, and laharl gets a 403 from it. The name resolves to 192.168.1.100 even on 1.1.1.1. | `kubectl get ingress`, `curl`, `dig` | Corrects the brief. It is LAN-reachable, and the public DNS record points at a private address. |
+| **The langfuse Garage is not in-cluster only.** It has a Traefik Ingress, `garage.jaggars.cc`, and laharl gets a 403 from it. The name resolves to 192.168.1.100 even on 1.1.1.1. | `kubectl get ingress`, `curl`, `dig` | Corrects the brief. It is LAN-only: the user confirms there is no port forward, and the public DNS record points at a private address. |
 | **rf 1 is not one physical copy.** All six langfuse Garage volumes have 3 Longhorn replicas and `critical-backup`. Last backup today, 08:00 to 08:02 UTC. | `kubectl get volumes.longhorn.io`, `backupvolumes` | Details under [Durability](#durability). |
 | The recurring-job labels are live-only. They are on the Volume objects and appear nowhere in the homelab repo. The sccache volumes are not in the backup group. | `kubectl`, `grep` of the repo | A new Garage gets **no backup** unless this is done on purpose. |
 | `threadSchema` starts with `DROP TABLE threads`, and `buildThreads` works on one host. | Read `thread.go` | Calling `Sync` once per host would leave only the last host's threads. Threads must become global. |
@@ -105,9 +104,9 @@ Each of these is harmless on a local disk and wrong over a network.
   `tomb/<host>/...` and removes the segments. The owning host's next run sees the
   tombstone and stops copying. This replaces the "do it in each place" step in the
   current doc. The index drops the session on its next sync, and the hub's copy on
-  its next pull. **Longhorn backups keep it for up to 7 days.** How long the Storj copy
-  keeps it depends on how that job is set up on TrueNAS, so "really gone" is at least
-  7 days and may be longer.
+  its next pull. **Longhorn backups keep it for up to 7 days**, until the last backup holding
+  it is pruned. The Storj copy mirrors TrueNAS and keeps no older copies, so it is gone
+  from off-site at the first Storj sync after that.
 - **`archive verify`** works unchanged with `--host`: it compares the bucket with
   the session files still on that host.
 - **New: `archive verify --all-hosts --no-source`** decodes every segment (magic,
@@ -286,8 +285,11 @@ In `destroy`, after the agents stop and **before** sign-out and tailnet logout:
 `/mnt/Mirrored/longhorn-backup` off-site, encrypted. So the plaintext rule holds, and the
 new volumes are covered as soon as their backups land in that dataset.
 
+- **It is a mirror, not history.** A delete on TrueNAS reaches Storj at the next sync, and
+  Storj keeps no older copies. That is good for sessions deleted on request and bad for
+  accidental deletes. **The 7 nightly Longhorn backups are the only history anywhere.**
 - **It is configured on TrueNAS, not in git.** Nothing in the homelab repo describes it,
-  and nothing in the cluster would notice if it stopped.
+  and nothing in the cluster would notice if it stopped. Its schedule is unknown.
 - **This design relies on the user's description of it.** I did not inspect the job, and
   the restore drill below does not exercise a restore from Storj.
 
@@ -297,9 +299,10 @@ new volumes are covered as soon as their backups land in that dataset.
 |---|---|
 | A disk or node fails | Fine: Longhorn has 2 more replicas and the pod reattaches. Writes wait, and hosts catch up on the next timer run. |
 | Garage pod or volume is down | No reads or writes. A worker `destroy` aborts (nothing lost). Session files wait, though Claude deletes its own after 30 days. |
-| A bad delete, a buggy client, a leaked key | **Replicas do not help:** all 3 copy the damage at once. Only the nightly backup does, so up to 24 h is lost, and it must be noticed within 7 days. |
+| A bad delete, a buggy client, a leaked key | **Replicas do not help:** all 3 copy the damage at once. Only the nightly backups do, so up to 24 h is lost, and it must be noticed within 7 days. Storj does not help: it mirrors the same backups. |
+| Backups deleted on TrueNAS | The next Storj sync deletes them off-site too. Until that sync, Storj can restore them. Its schedule is unknown. |
 | Cluster or Longhorn lost | Restore from TrueNAS. |
-| TrueNAS lost as well | Restore from the Storj copy: the backups as of its last run. It needs the job's encryption key, which is held outside this design. |
+| TrueNAS lost as well | Restore from the Storj copy: the backups as of its last sync. It needs the job's encryption key, which is held outside this design. |
 
 **Restores need a drill.** Longhorn backs up the meta and data volumes separately: about
 2 minutes apart on the langfuse volumes. A restore can have metadata pointing at blocks
@@ -378,7 +381,8 @@ the homelab, and everything after it builds on the same error handling.
 4. `docs/archive.md`: the new rule and configuration.
 
 **Secrets in PR 2:** the agent generates them directly into SOPS-encrypted files and never prints them.
-This covers the RPC secret, the admin token and the two S3 keys.
+This covers the RPC secret, the admin token and the two S3 keys. Nobody runs `garage key create`: the
+chart's configure Job imports each key from its Secret, as homelab #313 does for langfuse.
 
 **After all four land** (rollout steps 2 to 5):
 
@@ -394,8 +398,6 @@ This covers the RPC secret, the admin token and the two S3 keys.
 on both, a flush from a removed worker pane lands in the bucket, and a nightly backup covers the new objects.
 
 **Left for the user in this slice:** merging PRs 1 and 2, placing the two key files, and approving the restarts.
-Also check how the Storj job treats deleted files, because it sets how long a session deleted on request
-survives off-site.
 
 ### Later slices
 
