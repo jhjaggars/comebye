@@ -1,14 +1,14 @@
 # Proposal: one central transcript archive in Garage, with one index
 
-Status: design, awaiting the user's approval. Nothing here is built. Written
-2026-11-06 against main at `0c78560`.
+Status: design decided; the user approves the build separately. Nothing here is
+built. Written 2026-11-06 against main at `0c78560`.
 
 The user's decisions: a dedicated bucket, **plaintext stays** (`encryption
 none`), the bucket lives only in the homelab, storage is protected by Longhorn
 backups to TrueNAS, one index for everything, and every session records which
-host produced it.
+host produced it. The later decisions are under [Decisions](#decisions).
 
-## Recommendation
+## Design
 
 - **A new single-node Garage** in its own namespace (`comebye-archive`), one
   bucket `comebye-archive`, on Longhorn with 3 replicas. It is not a bucket in
@@ -23,7 +23,8 @@ host produced it.
   to the bucket. The hub downloads it, so `comebye recall` keeps working the same
   way on both.
 - **Durability:** Longhorn replicas for disk and node loss; the existing nightly
-  `critical-backup` job to TrueNAS for everything else.
+  `critical-backup` job to TrueNAS for everything else, and the user's encrypted
+  Storj copy of that dataset for off-site.
 
 ```mermaid
 flowchart LR
@@ -104,8 +105,9 @@ Each of these is harmless on a local disk and wrong over a network.
   `tomb/<host>/...` and removes the segments. The owning host's next run sees the
   tombstone and stops copying. This replaces the "do it in each place" step in the
   current doc. The index drops the session on its next sync, and the hub's copy on
-  its next pull. **Longhorn backups keep it for up to 7 days**, which is the honest
-  answer to "when is it really gone".
+  its next pull. **Longhorn backups keep it for up to 7 days.** How long the Storj copy
+  keeps it depends on how that job is set up on TrueNAS, so "really gone" is at least
+  7 days and may be longer.
 - **`archive verify`** works unchanged with `--host`: it compares the bucket with
   the session files still on that host.
 - **New: `archive verify --all-hosts --no-source`** decodes every segment (magic,
@@ -118,11 +120,17 @@ Each of these is harmless on a local disk and wrong over a network.
 
 | | New single-node Garage | Bucket in the langfuse Garage |
 |---|---|---|
-| Who can read plaintext transcripts | Its own SOPS-encrypted secrets | Anyone with the homelab repo: `garage-values.yaml` holds the `rpcSecret` and `adminToken` in plaintext |
+| Network path (decision 2) | Tailscale Ingress only | Already has a Traefik ingress, `garage.jaggars.cc`, reachable from the LAN. Decision 2 could not hold unless that is removed, and other clients of it would have to be checked first |
+| Who can reach the transcripts through an admin credential | Only this Garage's own admin token | Holders of an admin token shared with langfuse and `cnpg-backups`. These are in SOPS now and were rotated today (homelab #312), after sitting in git in plaintext since 2026-05-29 |
 | Tailnet exposure | Only this bucket's endpoint | The same endpoint as `cnpg-backups` |
 | Node outage | The whole bucket waits for the volume to reattach | With rf 1 across 3 nodes, part of the key space fails until that pod returns |
 | Risk to other things | None | A resize mistake stalls Flux and blocks `langfuse` (happened 2026-09-13); `meta-garage-0` is already at 2.5 of 4 GB (Longhorn's actual size) |
 | Work | One homelab directory | One bucket and keys |
+
+A key's write access covering its whole bucket is a separate point. It is the reason for
+a dedicated bucket and for workers holding no key, wherever that bucket lives. It does
+not favour one Garage over the other: a key on the langfuse Garage would not reach
+`cnpg-backups` unless it was granted that bucket too.
 
 Sizing: `longhorn-sata`, 40 Gi data and 5 Gi meta. Today's total is about 0.6 GB
 stored; laharl's October was 1.9 GB raw and compresses about 5.5 times. That is
@@ -138,14 +146,15 @@ host, no LAN name.
 - The policy PR adds `tagOwners` for `tag:archive` and a test that `tag:worker` is
   denied `tag:archive:443`.
 - **A second tailnet user has `*:*`** too, so that account can reach the endpoint.
-  It still needs an S3 key. See the decisions below.
+  It still needs an S3 key. The user accepted this with decision 2.
 - **Keys:** `archive-laharl` and `archive-hub`, read and write, no owner, created
   from SOPS secrets as `sccache-key.yaml` does. There is no admin token on any host.
 
 **Unverified risk:** SigV4 signs the Host header. Tailscale's source sets
 `Out.Host = In.Host` (`ipn/ipnlocal/serve.go`), so this should work, but it has not
-been run against Garage. Rollout step 2 tests it first. The fallback is a Traefik
-host like sccache's, LAN only.
+been run against Garage. Rollout step 2 tests it first, before any comebye cutover. If
+it fails, a Traefik host like sccache's would work, but that reverses decision 2, so it
+goes back to the user.
 
 ## 3. Encryption
 
@@ -168,8 +177,9 @@ wording below makes explicit.
 > 3. Its only credentials are one per archiving host, kept in mode-0600 files
 >    outside any repository. Workers hold none.
 > 4. Its volumes are in Longhorn's `critical-backup` group, and any copy that leaves
->    TrueNAS is encrypted by the cloud sync. Nothing unencrypted goes to a cloud
->    drive or to another host's disk.
+>    TrueNAS is encrypted by the TrueNAS job that sends it (today the Storj job on
+>    `/mnt/Mirrored/longhorn-backup`). Nothing unencrypted goes to a cloud drive or to
+>    another host's disk.
 > 5. The plaintext index lives only on the indexing host and on hosts that download
 >    its snapshot (mode 0600 in a 0700 directory), and in that same bucket. Never on
 >    a worker.
@@ -272,6 +282,15 @@ In `destroy`, after the agents stop and **before** sign-out and tailnet logout:
 `lastBackupAt` the next morning. Labelling by hand is the fallback, as documented in
 `openclaw-shared-lab/AGENTS.md`.
 
+**Off-site: the Storj copy.** The user's Storj job on TrueNAS copies
+`/mnt/Mirrored/longhorn-backup` off-site, encrypted. So the plaintext rule holds, and the
+new volumes are covered as soon as their backups land in that dataset.
+
+- **It is configured on TrueNAS, not in git.** Nothing in the homelab repo describes it,
+  and nothing in the cluster would notice if it stopped.
+- **This design relies on the user's description of it.** I did not inspect the job, and
+  the restore drill below does not exercise a restore from Storj.
+
 **What replicationFactor 1 means here:**
 
 | Event | Result |
@@ -280,7 +299,7 @@ In `destroy`, after the agents stop and **before** sign-out and tailnet logout:
 | Garage pod or volume is down | No reads or writes. A worker `destroy` aborts (nothing lost). Session files wait, though Claude deletes its own after 30 days. |
 | A bad delete, a buggy client, a leaked key | **Replicas do not help:** all 3 copy the damage at once. Only the nightly backup does, so up to 24 h is lost, and it must be noticed within 7 days. |
 | Cluster or Longhorn lost | Restore from TrueNAS. |
-| TrueNAS lost as well | Everything older than 30 days is gone, and all destroyed workers' sessions, unless there is an off-site copy. See decision 3. |
+| TrueNAS lost as well | Restore from the Storj copy: the backups as of its last run. It needs the job's encryption key, which is held outside this design. |
 
 **Restores need a drill.** Longhorn backs up the meta and data volumes separately: about
 2 minutes apart on the langfuse volumes. A restore can have metadata pointing at blocks
@@ -291,7 +310,7 @@ step 7 makes the drill a gate.
 
 ## 6. Rollout
 
-Each step can be undone on its own. Local archives stay until step 8.
+Each step can be undone on its own, except the last. Local archives stay until step 9.
 
 | Step | What | Who | Undo |
 |---|---|---|---|
@@ -303,40 +322,85 @@ Each step can be undone on its own. Local archives stay until step 8.
 | 6 | laharl indexes all hosts and publishes; hub pulls. Check `recall --host` for both, and a thread spanning hosts | Agent | Rebuild the old per-host index |
 | 7 | **Restore drill:** restore last night's backups to a scratch Garage, `verify --all-hosts --no-source` | Agent, read-only on the real volumes | Delete the scratch copy |
 | 8 | `worker destroy` with the pull, on one disposable worker | Agent | `--no-archive` |
-| 9 | After a week of clean runs, retire the local archive directories (hub first, for the space) | **User's OK**, because this removes the only other copy | Not reversible, except by syncing back from the bucket beforehand |
+| 9 | After a week of clean runs, retire the local archive directories (hub first, for the space) | **User's OK**, because after this the bucket and its backups are the only copies of anything Claude has already cleaned up | Not reversible, except by syncing back from the bucket beforehand |
 
 Retiring the hub's 206 MB will not fix its 84% full `/home`, and the index on the hub
 grows. Expect roughly no net change there.
 
-## Decisions for the user
+## Decisions
 
-1. **A new Garage, as recommended, or a bucket in the langfuse one?** A bucket there is
-   one step less work, but its secrets sit in plaintext in the homelab repo, and those
-   secrets could then reach every transcript.
-2. **Tailscale only, as recommended, or a LAN name too?** A second tailnet user has `*:*`
-   and can reach the endpoint, though they would still need an S3 key. If that is not
-   acceptable, the rule itself has to narrow.
-3. **Is `/mnt/Mirrored/longhorn-backup` in an encrypted cloud sync?** Longhorn backups will
-   now hold plaintext transcripts. If that dataset syncs off-site unencrypted, the rule
-   above is broken. If it does not sync at all, there is no off-site copy, and the worst
-   case in the table applies. I could not check TrueNAS from here.
-4. **Should `destroy` refuse when the sessions cannot be saved**, as recommended, with
-   `--no-archive` to override? The alternative is warning and continuing, which is the way
-   to lose a worker's history by accident.
-5. **Is a read-only copy of the index on the hub acceptable?** It is what the hub holds
-   today (for its own sessions), but now it covers every host.
+All decided by the user on 2026-11-06.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Which Garage | A new one, `comebye-archive` |
+| 2 | How it is reached | Tailscale only, no LAN name |
+| 3 | Does the backup dataset leave TrueNAS unencrypted | No. `/mnt/Mirrored/longhorn-backup` goes off-site encrypted, by the Storj job on TrueNAS |
+| 4 | `destroy` when it cannot save a worker's sessions | It refuses; `--no-archive` overrides |
+| 5 | A read-only copy of the all-hosts index on the hub | Yes |
 
 ## Build plan
 
-| Part | Contents | Rough size |
-|---|---|---|
-| `S3Backend` and config | SigV4, HEAD plus PUT, paging, plaintext gate, tests, server wiring | Medium |
-| Network-safety fixes | The table in section 1, the host lock, `hosts/<host>.json` | Small |
-| Central index | `--all-hosts`, global threads, host-scoped git candidates and fetch, `--host` fixes, publish and pull | Medium; the thread refactor is the risky part |
-| Verify and flags | `--no-source`, `--final`, `--host` on restore, delete and summary | Small |
-| `tools/worker` | The pull, `worker archive`, refusal rules, `--no-archive` | Small to medium |
-| Docs | `docs/archive.md` (rule, config, limits), `docs/workers.md` | Small |
-| Homelab and policy PRs | As in step 2 | Small |
+### First slice: both hosts write to the bucket
 
-Parallel work is possible: homelab and policy PRs, then backend plus fixes, then index and
-worker changes.
+**The goal is a real off-host copy.** laharl and the hub write to Garage, the volumes back
+up to TrueNAS, and Storj carries that off-site. Each host keeps its own index for now, and
+local archives stay. Workers do not change.
+
+| Order | Change | Where | Who lands it | Needs |
+|---|---|---|---|---|
+| 1 | Add `tag:archive` to `tagOwners`, the same as `tag:llm`. Add tests that `tag:worker` and `tag:llm` are denied `tag:archive:443` | PR on `jhjaggars/tailscale` | **User merges** | Nothing. It must merge first, or the Ingress proxy cannot authenticate |
+| 2 | `clusters/homelab/comebye-archive/`, modelled on `sccache/`: namespace, single-node Garage with the chart and image pinned (v2.5.0 is the version tested), bucket, SOPS secrets, Tailscale Ingress, no Traefik. StorageClass `longhorn-archive`. A row in `clusters/homelab/CLAUDE.md` | PR on `jhjaggars/homelab` | **User merges** | 1 |
+| 3 | `fix/archive-network-safety` | comebye branch | Coordinator, after the user approves the build | Nothing. It is useful even without Garage |
+| 4 | `feat/archive-s3` | comebye branch | Coordinator, after the user approves the build | 3 |
+
+Comebye lands branches on main rather than through PRs, as its recent history does. 1 and 2
+can run alongside 3 and 4. The cutover needs all four.
+
+**What I would build first in comebye: branch 3**, because it fixes real bugs without touching
+the homelab, and everything after it builds on the same error handling.
+
+1. Backends return `ErrNotExist`. `ReadMode` and `EnsureMode` use it, so a network error is no
+   longer read as "no marker", and a lost first-write race is no longer a failure.
+2. Tombstones are listed once and a failure stops the run, so a blip cannot re-archive a session
+   deleted on request. Tests use a backend wrapper that fails on demand.
+3. A host-wide lock inside `Archiver.run`, with a test that runs a timer-style run and a flush
+   together and finds no overlapping segments.
+
+**Then branch 4:**
+
+1. `S3Backend`, with one contract test suite that also runs against `FSBackend`. It runs against an
+   `httptest` fake by default, and a real local Garage when a test setting names one. The contract
+   includes the `If-None-Match` result from this design, so a Garage upgrade that changes it shows up.
+2. `COMEBYE_ARCHIVE_S3` and its credentials file, the plaintext gate, https only, and the server's
+   flush.
+3. `hosts/<host>.json` and `--adopt-host`, and `status` sizes.
+4. `docs/archive.md`: the new rule and configuration.
+
+**Secrets in PR 2:** the agent generates them directly into SOPS-encrypted files and never prints them.
+This covers the RPC secret, the admin token and the two S3 keys.
+
+**After all four land** (rollout steps 2 to 5):
+
+1. Smoke-test signed requests through the Ingress from laharl and the hub. If this fails, stop: see the
+   risk in section 2.
+2. **User:** put each host's key file in place, mode 0600.
+3. Confirm the first Longhorn backup, and that it appears in the Storj copy.
+4. Upgrade both hosts' comebye. Run `aws s3 sync`, compare ETags with local MD5s, and run `archive
+   verify`. The hub's steps run through an agent on the hub, because ssh to it from this seat is denied.
+5. **User:** approve the server restarts. Then switch both `archive.env` files to S3.
+
+**The slice is done when** both hosts' timers have run clean against S3 for 24 hours, `archive verify` passes
+on both, a flush from a removed worker pane lands in the bucket, and a nightly backup covers the new objects.
+
+**Left for the user in this slice:** merging PRs 1 and 2, placing the two key files, and approving the restarts.
+Also check how the Storj job treats deleted files, because it sets how long a session deleted on request
+survives off-site.
+
+### Later slices
+
+| Slice | Contents | Rollout steps |
+|---|---|---|
+| 2: one index | `--all-hosts`, global threads (the risky part), host-scoped git candidates and fetch, `--host` fixes, publish and pull, `verify --all-hosts --no-source`, the restore drill | 6, 7 |
+| 3: workers | `run --final`, `--host` on restore, delete and summary, the pull in `destroy`, `worker archive`, refusal and `--no-archive`, `docs/workers.md` | 8 |
+| 4: retire local archives | After a week of clean runs, with the user's OK | 9 |
