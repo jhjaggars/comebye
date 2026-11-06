@@ -727,36 +727,39 @@ await check("briefings: no swipe while an agent or the launch sheet is open", as
   if (st.open) throw new Error("opened over an agent");
 });
 
-// ---- desktop view (>= 1100px): list | agent | briefing, side by side ----
+// ---- desktop view (>= 1100px): two columns, the list and one pane ----
 const geo = (sel) => page.evaluate((s) => {
   const e = document.querySelector(s); if (!e) return null;
   const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
   return { x: r.x, y: r.y, w: r.width, h: r.height, shown: cs.display !== "none" && cs.visibility !== "hidden" && r.width > 0 };
 }, sel);
-async function desktopList(width) {
+// start: the hash to load. The Briefing page by default, so what is in the pane does not
+// depend on which agents happen to be waiting (the desktop's own default has its own checks).
+async function desktopList(width, start = "#/briefings") {
   await page.setViewportSize({ width, height: 800 });
   await page.goto(base + "/", { waitUntil: "load" });
   await page.evaluate(() => { try { localStorage.clear(); } catch {} });
-  await page.goto(base + "/", { waitUntil: "load" });
+  await page.goto(base + "/" + (width >= 1100 ? start : ""), { waitUntil: "load" });
   await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
 }
 for (const width of [1280, 1920]) {
-  await check(`desktop: at ${width}px the list, an empty pane and the briefing panel sit side by side`, async () => {
+  await check(`desktop: at ${width}px the list and the Briefing page sit side by side, two columns`, async () => {
     await publishBrief("## Status\n\nDesktop panel check\n\nlong detail");
     await desktopList(width);
-    await page.waitForSelector("body.has-briefs #briefs.open .br-card");
-    const [l, d, e, b, c, pg] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefs"), geo("#briefing"), geo("#pager")]);
+    await page.waitForSelector("body.view-briefing #briefs.open .br-card");
+    const [l, d, e, b, c, pg, td] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefs"), geo("#briefing"), geo("#pager"), geo("#todo")]);
     if (!l.shown || l.x !== 0 || l.w < 300 || l.w > 400) throw new Error("list column: " + JSON.stringify(l));
-    if (d.shown) throw new Error("agent pane shown with nothing selected");
-    if (!e.shown || e.x < l.x + l.w - 1) throw new Error("empty state not beside the list: " + JSON.stringify(e));
-    if (!b.shown || b.x < e.x + e.w - 1 || Math.abs(b.x + b.w - width) > 1 || b.h < 600) throw new Error("briefings panel not at the right edge: " + JSON.stringify(b));
-    if (c.shown) throw new Error("the latest-briefing card shows next to the briefings panel");
+    if (d.shown) throw new Error("agent pane shown with a page open");
+    if (e.shown) throw new Error("the empty state shows over a page");
+    if (!b.shown || Math.abs(b.x - (l.x + l.w)) > 2 || Math.abs(b.x + b.w - width) > 1 || b.h < 600) throw new Error("the Briefing page does not fill the pane beside the list: " + JSON.stringify(b));
+    if (c.shown || (td && td.shown)) throw new Error("the latest-briefing or to-do card shows in the list column");
     if (pg.shown) throw new Error("the pill shows on desktop");
     const t = await page.locator("#briefs").innerText();
-    if (!t.includes("Desktop panel check")) throw new Error("latest briefing missing from the panel: " + t.slice(0, 200));
-    if (!(await page.locator("#briefs .br-item").count())) throw new Error("no history in the panel");
-    if (await page.locator("#br-back").isVisible()) throw new Error("a back button in the panel");
+    if (!t.includes("Desktop panel check")) throw new Error("latest briefing missing from the page: " + t.slice(0, 200));
+    if (!(await page.locator("#briefs .br-item").count())) throw new Error("no history on the page");
+    if (await page.locator("#br-back").isVisible()) throw new Error("a back button on the page");
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
+    if (await page.evaluate(() => getComputedStyle(document.body).gridTemplateColumns.split(" ").length) !== 2) throw new Error("not two grid columns");
   });
 }
 await check("desktop: selecting an agent keeps the list visible and opens it beside it", async () => {
@@ -774,13 +777,14 @@ await check("desktop: selecting an agent keeps the list visible and opens it bes
   if (!(await visible("#detail-empty")) === false) throw new Error("empty state still shown");
 });
 for (const width of [1280, 1600, 1920, 2560]) {
-  await check(`desktop: at ${width}px the agent pane fills the space between the list and the briefings panel`, async () => {
+  await check(`desktop: at ${width}px the agent pane fills all the space beside the list`, async () => {
     await desktopList(width);
     await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
     await page.waitForSelector("#detail", { state: "visible" });
     await page.waitForSelector("#chat", { state: "visible" });
     const [l, d, m, c, h, b] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail main"), geo("#chat"), geo("#detail header"), geo("#briefs")]);
-    if (Math.abs(d.x - 360) > 2 || Math.abs(d.x + d.w - b.x) > 1.5) throw new Error("pane does not span list..panel: " + JSON.stringify([l, d, b]));
+    if (Math.abs(d.x - 360) > 2 || Math.abs(d.x + d.w - width) > 1.5) throw new Error("pane does not span list..window edge: " + JSON.stringify([l, d]));
+    if (b.shown) throw new Error("the Briefing page stays over an agent");
     if (m.w < d.w - 2 || h.w < d.w - 2) throw new Error("main/header narrower than the pane: " + JSON.stringify([d, m, h]));
     if (c.w < d.w - 40) throw new Error("chat leaves empty space at the sides: " + JSON.stringify([d, c]));
   });
@@ -805,14 +809,14 @@ await check("desktop: up/down in the list moves through the agents and opens eac
   const id = await page.evaluate(() => document.activeElement?.dataset?.id);
   if (id !== cur) throw new Error("focus lost on re-render: " + id + " vs " + cur);
 });
-await check("desktop: the fleet menu opens beside the list and its briefing item points at the panel", async () => {
+await check("desktop: the fleet menu opens beside the list and its briefing item points at the Briefing page", async () => {
   await desktopList(1280);
   await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
   await page.locator("#btn-fleet").click();
   const m = await geo("#f-menu");
   if (!m.shown || m.x < 0 || m.x + m.w > 361) throw new Error("menu outside the list column: " + JSON.stringify(m));
   const t = await page.evaluate(() => ({ text: document.querySelector("#f-brief").textContent, dis: document.querySelector("#f-brief").disabled }));
-  if (!/side panel/.test(t.text) || !t.dis) throw new Error("brief item: " + JSON.stringify(t));
+  if (!/Briefing page/.test(t.text) || !t.dis) throw new Error("brief item: " + JSON.stringify(t));
   if (await page.locator("#f-briefs").isVisible()) throw new Error("the Briefings screen item shows on desktop");
   await page.keyboard.press("Escape");
 });
@@ -863,6 +867,76 @@ await check("pages: opening one leaves the agent through closeDetail (presence c
     await page.goto(base + "/#/todo", { waitUntil: "load" });
     await page.waitForFunction(() => state.view === "todo");
   } finally { page.off("request", onReq); }
+});
+// What the desktop opens to on a cold start. The agent list is rewritten on its way (and live
+// events are cut) so the answer does not depend on which agents the fake herdr has waiting.
+async function coldStartWith(blocked) {
+  const rewrite = (j) => {
+    for (const a of j.agents) if (a.agent_status === "blocked") a.agent_status = "idle";
+    if (blocked) { const a = j.agents.find((x) => x.pane_id === "w1:p1"); if (a) a.agent_status = "blocked"; }
+    return j;
+  };
+  const list = async (r) => { const res = await r.fetch(); await r.fulfill({ response: res, json: rewrite(await res.json()) }); };
+  // The first list arrives as an SSE "agents" event: serve one (the app reconnects and gets it again).
+  const events = async (r) => {
+    const res = await page.request.get(base + "/api/agents");
+    await r.fulfill({ status: 200, headers: { "content-type": "text/event-stream", "cache-control": "no-cache" }, body: `event: agents\ndata: ${JSON.stringify(rewrite(await res.json()))}\n\n` });
+  };
+  await page.route(/\/api\/events/, events);
+  await page.route(/\/api\/agents$/, list);
+  try {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.evaluate(() => { try { localStorage.clear(); } catch {} });
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
+    await page.waitForTimeout(600);
+    return await page.evaluate(() => ({ sel: state.selected, view: state.view, hash: location.hash }));
+  } finally {
+    await page.unroute(/\/api\/agents$/, list);
+    await page.unroute(/\/api\/events/, events);
+  }
+}
+await check("desktop opens to a waiting agent when there is one", async () => {
+  const r = await coldStartWith(true);
+  if (!r.sel || !r.sel.endsWith("w1:p1") || r.view !== null) throw new Error("opened " + JSON.stringify(r));
+});
+await check("desktop opens to the Briefing page when nothing is waiting", async () => {
+  const r = await coldStartWith(false);
+  if (r.sel !== null || r.view !== "briefing" || r.hash !== "#/briefings") throw new Error("opened " + JSON.stringify(r));
+});
+await check("desktop: a deep link to an agent wins over the default", async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(base + "/#/agent/" + encodeURIComponent(PANES.bravo), { waitUntil: "load" });
+  await page.waitForSelector("#detail", { state: "visible" });
+  const r = await page.evaluate(() => ({ sel: state.selected, view: state.view }));
+  if (!r.sel || !r.sel.endsWith(PANES.bravo) || r.view !== null) throw new Error(JSON.stringify(r));
+});
+await check("pages: the To do page fills the pane and answers from it; the list column has no to-do card", async () => {
+  await desktopList(1280, "#/todo");
+  const id = await page.evaluate(async () => {
+    const r = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "page check: keep the old key?", kind: "decision", context: "Some **context**" }) }).then((x) => x.json());
+    await loadTodos();
+    return r.todo.id;
+  });
+  const item = `#p-todo .td-item[data-id="${id}"]`;
+  await page.waitForSelector(item);
+  const [l, p, card] = await Promise.all([geo("#agents"), geo("#p-todo"), geo("#todo")]);
+  if (!p.shown || Math.abs(p.x - (l.x + l.w)) > 2 || Math.abs(p.x + p.w - 1280) > 1 || p.h < 600) throw new Error("page not filling the pane: " + JSON.stringify(p));
+  if (card && card.shown) throw new Error("the to-do card shows in the list column");
+  await page.locator(item + " summary").click();
+  const box = page.locator(item + " .td-text");
+  if ((await box.boundingBox()).width < 500) throw new Error("the answer box is cramped: " + JSON.stringify(await box.boundingBox()));
+  // A typed answer survives a poll (the re-render guard).
+  await box.fill("draft answer");
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  if ((await box.inputValue()) !== "draft answer") throw new Error("draft lost on re-render");
+  await page.locator(item + " .td-answer-btn").click();
+  await page.waitForSelector(item + ".answered", { timeout: 5000 });
+  await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id);
+  await page.evaluate(() => loadTodos());
+  await page.waitForFunction((s) => !document.querySelector(s), item, { timeout: 5000 });
+  if (!(await page.locator("#p-todo").innerText()).includes("Nothing is waiting on you")) throw new Error("no empty note");
 });
 await check("pages: below the breakpoint the page hashes do nothing and openPage is a no-op", async () => {
   await desktopList(1099);

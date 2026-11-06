@@ -22,6 +22,7 @@ const state = {
   unauthorized: false, // last API call got 401 (Tailscale login not allowlisted)
   pendingRoute: null,  // {host, pane} from #/agent/... waiting for the agent list to arrive
   pushedRoute: false,  // openDetail pushed a history entry (back pops it)
+  opened: false,       // the desktop's cold-start choice (openToSomething) has been made
   view: null,          // desktop only: the page filling the main pane ("briefing", "todo", "search"), or null for an agent / nothing
 };
 
@@ -947,26 +948,31 @@ function todoItemHtml(t) {
 }
 
 function renderTodos() {
-  const main = $("todo"), side = $("br-todo");
+  const main = $("todo"), page = $("pt-body");
   const n = todos.open + todos.answered;
   const pill = $("pager-todo");
   if (pill) { pill.hidden = !n; pill.textContent = String(n); }
   const show = todos.on === true && todos.items.length > 0;
-  for (const el of [main, side]) if (el) el.hidden = !show;
-  if (!show) {
-    for (const el of [main, side]) if (el) { el.innerHTML = ""; delete el.dataset.sig; }
-    return;
-  }
+  if (main) main.hidden = !show;
+  if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
   const sig = JSON.stringify([folded, todos.busy.size, [...todos.openIds].sort(), todos.items.map((t) => [t.id, t.state, t.updated_at, t.question])]);
   // The age moves between renders; a typed answer must not be lost to one.
   const typing = (el) => el && el.contains(document.activeElement) && document.activeElement.classList.contains("td-text");
-  for (const el of [main, side]) {
-    if (!el || el.dataset.sig === sig || typing(el)) continue;
-    el.dataset.sig = sig;
-    el.innerHTML = `<div class="td-head"><button type="button" class="td-toggle" aria-expanded="${!folded}">
+  if (show && main && main.dataset.sig !== sig && !typing(main)) {
+    main.dataset.sig = sig;
+    main.innerHTML = `<div class="td-head"><button type="button" class="td-toggle" aria-expanded="${!folded}">
         <span class="proj-chev" aria-hidden="true"></span><span class="td-title">To do</span><span class="td-count">${esc(todoCountText())}</span></button></div>
       <div class="td-list"${folded ? " hidden" : ""}>${todos.items.map(todoItemHtml).join("")}</div>`;
+  }
+  // The desktop page: the same items without the fold, and an empty note.
+  if (page) {
+    $("pt-count").textContent = show ? todoCountText() : "";
+    const psig = show ? "p" + sig : "empty";
+    if (page.dataset.sig !== psig && !typing(page)) {
+      page.dataset.sig = psig;
+      page.innerHTML = show ? `<div class="td-list">${todos.items.map(todoItemHtml).join("")}</div>` : `<div class="empty">Nothing is waiting on you.</div>`;
+    }
   }
 }
 
@@ -991,7 +997,7 @@ function onTodoClick(ev) {
   const toggle = ev.target.closest(".td-toggle");
   if (toggle) {
     lsSet(TODO_FOLDED_KEY, lsGet(TODO_FOLDED_KEY) === "1" ? "0" : "1");
-    for (const el of [$("todo"), $("br-todo")]) if (el) delete el.dataset.sig;
+    for (const el of [$("todo"), $("pt-body")]) if (el) delete el.dataset.sig;
     renderTodos();
     return;
   }
@@ -1266,14 +1272,14 @@ function setBriefsOpen(open, animate) {
   }
 }
 
-// On desktop the screen is the right-hand panel: always open (when the hub
-// keeps briefings), no sliding, no history entry, no gesture.
+// On desktop the screen is the Briefing page in the main pane: open while it
+// is the page shown (and the hub keeps briefings), no sliding, no gesture;
+// its history entry is the page's own hash.
 function syncDesktopBriefs() {
-  const desk = isDesktop(), want = desk && briefsAvailable();
-  document.body.classList.toggle("has-briefs", want);
+  if (isDesktop() && state.view === "briefing" && !briefsAvailable()) { setView(null); return; } // the hub keeps none
+  const desk = isDesktop(), want = desk && state.view === "briefing";
   if (want === briefs.open) { briefs.desk = want; return; }
   if (!want && !briefs.desk) return; // phone: the swipe state is not ours to touch
-  if (want && location.hash === BRIEFS_HASH) history.replaceState(null, "", location.pathname + location.search);
   briefs.pushed = false;
   briefs.desk = want;
   setBriefsOpen(want, false);
@@ -1622,7 +1628,7 @@ function renderFleetMenu() {
   $("f-review").textContent = (lon ? `Review removals (${n})` : "Review removals") + sfx;
   $("f-review").disabled = !lon || !n;
   const st = briefingUiState();
-  $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (in the side panel)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
+  $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (see the Briefing page)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
   $("f-brief").disabled = !lon || st === "none" || st === "panel";
   $("f-sched").textContent = "Briefing schedule…" + sfx;
 }
@@ -2763,7 +2769,7 @@ function route() {
 // applyPendingRoute runs after each authoritative agent list.
 function applyPendingRoute() {
   const r = state.pendingRoute;
-  if (!r) return;
+  if (!r) { openToSomething(); return; }
   const a = routedAgent(r);
   if (a) { state.pendingRoute = null; openDetail(agentId(a)); return; }
   const h = r.host && hostStatus(r.host);
@@ -2787,6 +2793,7 @@ function setView(v) {
   state.view = isDesktop() ? v : null;
   for (const k of ["briefing", "todo", "search"]) document.body.classList.toggle("view-" + k, state.view === k);
   document.body.classList.toggle("has-page", !!state.view);
+  syncDesktopBriefs();
   if (state.view === "todo") renderTodos();
 }
 
@@ -2800,6 +2807,21 @@ function openPage(v) {
   const hash = PAGE_HASH[v] || "";
   if (location.hash !== hash && (hash || location.hash)) history.pushState(null, "", hash || location.pathname + location.search);
   setView(v);
+}
+
+// On a cold start the desktop opens to something: an agent that is waiting
+// on you if there is one, otherwise the Briefing page. A deep link or a
+// page's own hash wins, and it happens once.
+function openToSomething() {
+  if (state.opened || !isDesktop() || state.pendingRoute) return;
+  state.opened = true;
+  if (state.selected || state.view || location.hash) return;
+  const w = document.querySelector("#agents .agent.blocked[data-id]");
+  if (w) { openDetail(w.dataset.id); return; }
+  if (briefsAvailable()) {
+    history.replaceState(null, "", PAGE_HASH.briefing);
+    setView("briefing");
+  }
 }
 
 function openDetail(id) {
@@ -5767,7 +5789,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-role").addEventListener("click", toggleRole);
   $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);
-  for (const id of ["todo", "br-todo"]) {
+  for (const id of ["todo", "pt-body"]) {
     const el = $(id);
     if (!el) continue;
     el.addEventListener("click", onTodoClick);
