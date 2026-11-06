@@ -804,3 +804,51 @@ func TestPeerURLIsTheServeURL(t *testing.T) {
 		}
 	}
 }
+
+// herdr refuses to install an integration until the agent's config directory
+// exists, and a fresh VM has none. Found live: the old loop hid that failure.
+func TestBootstrapInstallsHerdrIntegrations(t *testing.T) {
+	i := strings.Index(bootstrapUser, "for spec in pi:")
+	j := strings.Index(bootstrapUser, "herdr integration status |")
+	if i < 0 || j < i {
+		t.Fatal("the user bootstrap has no herdr integration step")
+	}
+	step := bootstrapUser[i:j]
+	bin := t.TempDir()
+	home := t.TempDir()
+	fake := `#!/bin/sh
+# fake herdr: like the real one, refuses unless the agent's directory exists
+[ "$1 $2" = "integration install" ] || exit 2
+case "$3" in
+  pi) d=$HOME/.pi/agent/extensions ;; claude) d=$HOME/.claude ;; codex) d=$HOME/.codex ;; *) exit 3 ;;
+esac
+[ -d "$d" ] || { echo "$3 directory not found" >&2; exit 1; }
+echo "$3" >>"$HOME/installed"
+`
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(script string) (string, error) {
+		cmd := exec.Command("bash", "-c", "set -euo pipefail\n"+script)
+		cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	for n := 0; n < 2; n++ { // twice: a resumed bootstrap must be a no-op
+		if out, err := run(step); err != nil {
+			t.Fatalf("run %d: %v\n%s", n, err, out)
+		}
+	}
+	got, _ := os.ReadFile(filepath.Join(home, "installed"))
+	if strings.Count(string(got), "pi\n") != 2 || !strings.Contains(string(got), "claude\n") || !strings.Contains(string(got), "codex\n") {
+		t.Errorf("integrations installed: %q", got)
+	}
+	// a failing herdr must fail the step with a message naming the agent
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte("#!/bin/sh\necho boom >&2; exit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(step)
+	if err == nil || !strings.Contains(out, "herdr integration install pi failed") {
+		t.Errorf("a failed install must fail the step clearly: err=%v out=%q", err, out)
+	}
+}

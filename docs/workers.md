@@ -236,6 +236,12 @@ only) is what limits where it works from.
    `COMEBYE_TS_ALLOW_LOGIN`, `COMEBYE_LAUNCH_ROOTS=/data/code` and
    `COMEBYE_WORKTREE_ROOT=/data/worktrees`, so repos and worktrees live on the
    data disk and survive a rebuilt boot disk.
+   It also runs `herdr integration install` for pi, claude and codex. These are
+   hooks only; they are what lets herdr report an agent's session file and state,
+   without which the comebye app shows raw terminal output. herdr refuses unless
+   the agent's config directory exists, so the bootstrap creates `~/.pi/agent/extensions`,
+   `~/.claude` and `~/.codex` first. A failure fails the step. `worker status NAME`
+   shows each integration's state (`current (vN)` or `not installed`).
 6. Waits for the hub to list the worker.
 
 Sign in with `worker login NAME claude` (and `codex`), then use comebye as

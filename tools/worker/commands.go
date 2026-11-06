@@ -478,6 +478,8 @@ func (e *env) status(ctx context.Context, name string) error {
 			v, _ := ssh(ctx, e, name, "$HOME/.local/bin/comebye -version", nil)
 			active, _ := ssh(ctx, e, name, "systemctl --user is-active comebye herdr | paste -sd' '", nil)
 			e.printf("comebye     %s   units (comebye herdr): %s\n", orDash(strings.TrimSpace(v)), orDash(strings.TrimSpace(active)))
+			integ, _ := ssh(ctx, e, name, "$HOME/.local/bin/herdr integration status 2>/dev/null | grep -E '^(pi|claude|codex):' | sed 's/ (\\/.*//' | paste -sd';'", nil)
+			e.printf("herdr       integrations: %s\n", orDash(strings.ReplaceAll(strings.TrimSpace(integ), ";", ";  ")))
 		}
 	}
 	e.tailnetLine(ctx, name)

@@ -74,9 +74,18 @@ case ",$WK_AGENTS," in *,pi,*)
   fi
   got=$("$HOME/.local/bin/pi" --version 2>/dev/null | head -1)
   [ "$got" = "$WK_PI_VERSION" ] || { echo "pi reports '$got', wanted $WK_PI_VERSION" >&2; exit 1; } ;; esac
-for a in pi claude codex; do
-  if command -v "$a" >/dev/null; then herdr integration install "$a" >/dev/null 2>&1 || true; fi
+# ---- herdr's agent integrations. Without them herdr never learns an agent's
+# session file or state, and the comebye app shows raw terminal output. The
+# installer refuses unless the agent's config directory exists (a fresh VM has
+# none until the agent first runs), so create it. Hooks only: no sign-in, and
+# idempotent (a current integration is left alone).
+for spec in pi:.pi/agent/extensions claude:.claude codex:.codex; do
+  a=${spec%%:*}
+  mkdir -p "$HOME/${spec#*:}"
+  herdr integration install "$a" >/dev/null ||
+    { echo "herdr integration install $a failed (see above); agent state would not reach comebye" >&2; exit 1; }
 done
+herdr integration status | grep -E '^(pi|claude|codex):'
 
 # ---- comebye at the hub's version: release tarball, SHA256SUMS verified,
 # then `comebye upgrade` (installs, restarts the unit, smoke-checks).
