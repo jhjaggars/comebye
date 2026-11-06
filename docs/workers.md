@@ -316,6 +316,7 @@ limits that loss. It is not installed for you:
 # ~/.config/systemd/user/comebye-worker-archive.service
 [Service]
 Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 ExecStart=%h/.local/bin/comebye-worker archive --all
 
 # ~/.config/systemd/user/comebye-worker-archive.timer
