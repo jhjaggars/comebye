@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/jhjaggars/comebye/internal/archive"
+	"github.com/jhjaggars/comebye/internal/gitfetch"
 	"log"
 	"os"
 	"os/signal"
@@ -255,7 +256,11 @@ func main() {
 	manager.Dispatcher().DoneDigest = *doneDigest
 	manager.Dispatcher().BlockedDelay = *blockedDelay
 	log.Printf("notifications: %s; blocked delay %v; done digest %v", *notifyKinds, *blockedDelay, *doneDigest)
-	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode})
+	// What git has reported as damaged in the repositories agents work in here,
+	// and the daily fsck that looks for it. Shown on the host, and to the hub.
+	repoHealth := gitfetch.OpenHealth(filepath.Join(expandHome(*stateDir), "repo-health.json"), log.Printf)
+	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode, RepoDamage: repoHealth.List})
+	repoHealth.OnChange = fl.Changed
 	fl.AttachStore(peerStore, addrOpt)
 	go fl.Run(context.Background())
 	go func() {
@@ -299,6 +304,7 @@ func main() {
 		WorktreeRoot: expandHome(*worktreeRoot),
 		// The handoff ledger, briefing, roles and handoff-template.md.
 		StateDir:        expandHome(*stateDir),
+		RepoHealth:      repoHealth,
 		NoLedger:        !*ledgerOn,
 		Upstream:        upstream,
 		AgentToken:      agentToken,
@@ -315,6 +321,7 @@ func main() {
 		go announceToHub(upstream, localAPI, *hostName, *announceURL)
 	}
 	go srv.RunLedger(context.Background())
+	go srv.RunRepoHealth(context.Background())
 	go srv.RunBriefSchedule(context.Background())
 
 	go func() {

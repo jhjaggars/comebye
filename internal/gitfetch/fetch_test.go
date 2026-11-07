@@ -113,17 +113,10 @@ func TestConcurrentChecksOfOneRepositoryShareOneFetch(t *testing.T) {
 	if n, _ := w.served(t); n != 1 {
 		t.Errorf("%d fetches", n)
 	}
-	fetched := 0
 	for _, r := range results {
-		if r.Failed() || r.Busy || r.NoRepo {
+		if r.Failed() || r.Busy || r.NoRepo || r.Pending || !r.Fetched {
 			t.Errorf("%+v", r)
 		}
-		if r.Fetched && !r.Recent {
-			fetched++
-		}
-	}
-	if fetched != 1 {
-		t.Errorf("%d callers ran a fetch: %+v", fetched, results)
 	}
 	// The next round, after Fresh, fetches again.
 	f.Now = func() time.Time { return time.Now().Add(time.Minute) }

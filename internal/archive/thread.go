@@ -808,7 +808,7 @@ func (g *gitCtx) fetch(dir string) {
 }
 
 // gitFetchTimeout limits one `git fetch origin`.
-const gitFetchTimeout = 2 * time.Minute
+const gitFetchTimeout = gitfetch.DefaultTimeout
 
 // gitFetchWait is how long the git pass waits for another fetch of the same
 // repository (the server's merge checks) to finish.

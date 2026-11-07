@@ -95,3 +95,55 @@ func TestChecksOfOneRepositoryShareOneFetch(t *testing.T) {
 		t.Errorf("%q", logs)
 	}
 }
+
+// Any git command of the server that finds missing objects reports the
+// repository, and the brief tells workers not to cause it.
+func TestServerGitReportsADamagedRepository(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	d := t.TempDir()
+	repo := filepath.Join(d, "repo")
+	fetchGit(t, d, "init", "-q", "-b", "main", repo)
+	if err := os.MkdirAll(filepath.Join(repo, "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tests", "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fetchGit(t, repo, "add", ".")
+	fetchGit(t, repo, "commit", "-q", "-m", "one")
+	tree, err := runGit(context.Background(), repo, "rev-parse", "HEAD:tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(repo, ".git", "objects", tree[:2], tree[2:])); err != nil {
+		t.Fatal(err)
+	}
+	h := &gitfetch.Health{}
+	saved := gitHealth
+	gitHealth = h
+	t.Cleanup(func() { gitHealth = saved })
+	if _, err := runGit(context.Background(), repo, "ls-tree", "-r", "HEAD"); err == nil {
+		t.Fatal("ls-tree should fail")
+	}
+	list := h.List()
+	if len(list) != 1 || list[0].Source != "git" || list[0].Path != repo {
+		t.Fatalf("%+v", list)
+	}
+	// A failure that is not damage is not reported.
+	h2 := &gitfetch.Health{}
+	gitHealth = h2
+	runGit(context.Background(), repo, "rev-parse", "--verify", "no-such-branch")
+	if l := h2.List(); len(l) != 0 {
+		t.Errorf("%+v", l)
+	}
+}
+
+func TestTheBriefWarnsAgainstPruningASharedStore(t *testing.T) {
+	for _, s := range []string{"`git gc --prune=now`", "`git prune --expire=now`", "`git reflog expire --expire=now`", "`git repack -ad`", "push your branch to a remote early"} {
+		if !strings.Contains(defaultHandoffTemplate, s) {
+			t.Errorf("the brief does not say %s", s)
+		}
+	}
+}

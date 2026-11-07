@@ -65,7 +65,16 @@ type Options struct {
 	HubMode bool
 	// Logf logs (default log.Printf).
 	Logf func(format string, args ...any)
+	// RepoDamage lists this host's damaged repositories, for its own entry in
+	// Hosts. Nil reports none.
+	RepoDamage func() []state.RepoDamage
 }
+
+// Limits on what a peer may report about its repositories.
+const (
+	maxPeerRepoDamage = 50
+	maxRepoDamageText = 600
+)
 
 func (o *Options) defaults() {
 	if o.Client == nil {
@@ -232,6 +241,9 @@ func (f *Fleet) Hosts() []state.HostStatus {
 		n = len(f.local.Agents())
 	}
 	out := []state.HostStatus{{Name: f.localName, Local: true, Status: StatusOK, Agents: n, Version: f.opts.Version}}
+	if f.opts.RepoDamage != nil {
+		out[0].RepoDamage = f.opts.RepoDamage()
+	}
 	for _, p := range f.peerList() {
 		hs := p.hostStatus()
 		hs.VersionMismatch = f.opts.Version != "" && hs.Version != "" && hs.Version != f.opts.Version
@@ -244,6 +256,10 @@ func (f *Fleet) Hosts() []state.HostStatus {
 func (f *Fleet) Snapshot() state.Event {
 	return state.Event{Type: "agents", Agents: f.Agents(), Hosts: f.Hosts()}
 }
+
+// Changed sends the current snapshot to every browser, for a change that is not
+// an agent's (a repository found damaged, say).
+func (f *Fleet) Changed() { f.broadcast() }
 
 func (f *Fleet) broadcast() {
 	f.bmu.Lock()
@@ -287,8 +303,9 @@ func (f *Fleet) Run(ctx context.Context) {
 
 // peer is the hub's connection to one peer instance.
 type peer struct {
-	f    *Fleet
-	name string
+	repoDamage []state.RepoDamage // what the peer last reported about its repositories
+	f          *Fleet
+	name       string
 	// addrs are the peer's addresses, tried in order by attempt.
 	addrs []*url.URL
 	meta  Peer // as configured: source, who added it, when, tag
@@ -349,7 +366,7 @@ func validStatus(s herdr.AgentStatus) bool {
 func (p *peer) hostStatus() state.HostStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr, Version: p.version}
+	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr, Version: p.version, RepoDamage: p.repoDamage}
 	if p.status != StatusOK {
 		hs.Error = p.lastErr
 	}
@@ -616,9 +633,11 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	// Only the peer's own agents: if the peer is itself a hub, its list
 	// includes other hosts, which must not be re-aggregated here.
 	own := ""
+	var damage []state.RepoDamage
 	for _, h := range hosts {
 		if h.Local {
 			own = h.Name
+			damage = clipRepoDamage(h.RepoDamage)
 		}
 	}
 	inst := p.instance()
@@ -647,6 +666,7 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	}
 	now := time.Now()
 	p.mu.Lock()
+	p.repoDamage = damage
 	wasOK := p.status == StatusOK
 	transitions := p.tracker.Observe(kept, now)
 	p.agents = kept
@@ -794,4 +814,29 @@ func (p *peer) fetchLatest(ctx context.Context, pane string) *transcript.Latest 
 		return nil
 	}
 	return transcript.LatestFromMessages(t.Messages)
+}
+
+// clipRepoDamage bounds what a peer reports about its repositories.
+func clipRepoDamage(in []state.RepoDamage) []state.RepoDamage {
+	if len(in) > maxPeerRepoDamage {
+		in = in[:maxPeerRepoDamage]
+	}
+	clip := func(s string) string {
+		if len(s) > maxRepoDamageText {
+			return s[:maxRepoDamageText]
+		}
+		return s
+	}
+	out := make([]state.RepoDamage, 0, len(in))
+	for _, d := range in {
+		d.Repo, d.Path, d.Reason, d.Ref, d.Hint, d.Source = clip(d.Repo), clip(d.Path), clip(d.Reason), clip(d.Ref), clip(d.Hint), clip(d.Source)
+		if len(d.Worktrees) > maxPeerRepoDamage {
+			d.Worktrees = d.Worktrees[:maxPeerRepoDamage]
+		}
+		for i := range d.Worktrees {
+			d.Worktrees[i] = clip(d.Worktrees[i])
+		}
+		out = append(out, d)
+	}
+	return out
 }

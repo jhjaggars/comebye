@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jhjaggars/comebye/internal/archive"
+	"github.com/jhjaggars/comebye/internal/gitfetch"
 	"log"
 	"net"
 	"net/http"
@@ -91,6 +92,9 @@ type Config struct {
 	// (brief.json) and its schedule (brief-schedule.json), the roles (roles.json) and an optional
 	// handoff-template.md. Empty turns handoffs and marks off.
 	StateDir string
+	// RepoHealth hears about damaged repositories (fetches, other git
+	// commands, the daily fsck); nil leaves them unreported.
+	RepoHealth *gitfetch.Health
 	// NoLedger turns the ledger (and the briefing and roles) off even with
 	// a state directory: the instance is a peer that is not the hub.
 	NoLedger bool
@@ -185,6 +189,10 @@ const maxStreams = 64
 
 // New builds the server. manager is the local host's state manager.
 func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
+	if cfg.RepoHealth != nil {
+		originFetcher.Health = cfg.RepoHealth
+		gitHealth = cfg.RepoHealth
+	}
 	f := cfg.Fleet
 	if f == nil {
 		name := cfg.HostName

@@ -8,6 +8,9 @@
 // it lives with the object store it protects, so it holds across processes (the
 // server and the archive timer) whatever state directory each of them uses, and
 // across every worktree of the repository. The kernel drops it when a process dies.
+//
+// A fetch that runs too long is stopped with SIGTERM, so that git removes its
+// temporary pack, and killed only if it is still running after TermGrace.
 package gitfetch
 
 import (
@@ -26,6 +29,18 @@ import (
 // LockName is the lock file in a repository's common git directory.
 const LockName = "comebye-fetch.lock"
 
+// DefaultTimeout bounds one fetch. An ordinary fetch of the largest repository
+// here takes seconds; a first fetch after weeks, or one that brings a large
+// branch, can take a minute or two. Stopping it sooner wastes the transfer, and
+// a stopped fetch is what leaves partial state behind.
+const DefaultTimeout = 5 * time.Minute
+
+// TermGrace is how long a fetch gets to exit after SIGTERM before SIGKILL.
+var TermGrace = 15 * time.Second
+
+// gitBin is the git binary; a test can put a fake in its place.
+var gitBin = "git"
+
 // Result is what one fetch did.
 type Result struct {
 	Common  string // the repository's common git directory; "" if dir is not in one
@@ -33,22 +48,32 @@ type Result struct {
 	Fetched bool   // a fetch ran and succeeded
 	Busy    bool   // another fetch of this repository held the lock for the whole wait
 	Recent  bool   // skipped: this process fetched it a moment ago (Fetcher only)
+	Pending bool   // still running when the caller stopped waiting (Fetcher only)
 	Reason  string // why the fetch failed, in a few words; "" if it did not fail
+	// Damaged: git says the repository has missing or damaged objects. BrokenRef
+	// is the ref it named, if any.
+	Damaged   bool
+	BrokenRef string
 }
 
 // Failed reports a fetch that ran and failed.
 func (r Result) Failed() bool { return r.Reason != "" }
 
-func git(ctx context.Context, dir string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	// English messages, for Reason; no prompts on a timer.
+// Command is a git command in dir: English messages (Reason reads them), no
+// prompts, and SIGTERM then SIGKILL when ctx ends.
+func Command(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, gitBin, append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = TermGrace
 	return cmd
 }
 
 // CommonDir is the repository's common git directory, shared by its worktrees.
 func CommonDir(ctx context.Context, dir string) (string, error) {
-	out, err := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
@@ -59,9 +84,9 @@ func CommonDir(ctx context.Context, dir string) (string, error) {
 	return p, nil
 }
 
-// lock takes the repository's fetch lock, waiting at most wait. The returned
-// function releases it.
-func lock(ctx context.Context, common string, wait time.Duration) (func(), error) {
+// Lock takes the repository's fetch lock, waiting at most wait. The returned
+// function releases it. ErrBusy means another holder kept it the whole time.
+func Lock(ctx context.Context, common string, wait time.Duration) (func(), error) {
 	f, err := os.OpenFile(filepath.Join(common, LockName), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -78,7 +103,7 @@ func lock(ctx context.Context, common string, wait time.Duration) (func(), error
 		}
 		if time.Now().After(end) || ctx.Err() != nil {
 			f.Close()
-			return nil, errBusy
+			return nil, ErrBusy
 		}
 		select {
 		case <-ctx.Done():
@@ -87,11 +112,12 @@ func lock(ctx context.Context, common string, wait time.Duration) (func(), error
 	}
 }
 
-var errBusy = errors.New("busy")
+// ErrBusy: the lock stayed taken for the whole wait.
+var ErrBusy = errors.New("busy")
 
 // Once fetches origin into the repository that holds dir, under the repository's
 // lock: it waits up to wait for another fetch to finish, and the fetch itself
-// runs at most timeout.
+// runs at most timeout. Remote-tracking refs of branches deleted upstream go.
 func Once(ctx context.Context, dir string, wait, timeout time.Duration) Result {
 	common, err := CommonDir(ctx, dir)
 	if err != nil {
@@ -102,13 +128,13 @@ func Once(ctx context.Context, dir string, wait, timeout time.Duration) Result {
 
 func once(ctx context.Context, dir, common string, wait, timeout time.Duration) Result {
 	res := Result{Common: common}
-	url, err := git(ctx, dir, "remote", "get-url", "origin").Output()
+	url, err := Command(ctx, dir, "remote", "get-url", "origin").Output()
 	if err != nil {
 		res.NoRepo = true
 		return res
 	}
-	unlock, err := lock(ctx, common, wait)
-	if errors.Is(err, errBusy) {
+	unlock, err := Lock(ctx, common, wait)
+	if errors.Is(err, ErrBusy) {
 		res.Busy = true
 		return res
 	}
@@ -119,11 +145,15 @@ func once(ctx context.Context, dir, common string, wait, timeout time.Duration) 
 	defer unlock()
 	fctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := git(fctx, dir, "fetch", "--quiet", "--no-tags", "origin")
+	// --prune: a remote-tracking ref of a branch deleted upstream would otherwise
+	// stay, pointing at objects nothing on the remote keeps any more.
+	cmd := Command(fctx, dir, "fetch", "--quiet", "--no-tags", "--prune", "origin")
 	var errb strings.Builder
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
 		res.Reason = Reason(errb.String(), RemoteHost(string(url)), fctx.Err() == context.DeadlineExceeded, timeout)
+		res.Damaged = IsDamage(errb.String())
+		res.BrokenRef = BrokenRef(errb.String())
 		return res
 	}
 	res.Fetched = true
@@ -131,17 +161,21 @@ func once(ctx context.Context, dir, common string, wait, timeout time.Duration) 
 }
 
 // Fetcher is for a long-running process that fetches the same repositories again
-// and again: callers that arrive while a fetch of their repository is running
-// wait for it and share it, a fetch within Fresh counts for the next caller too,
-// and a failure is logged at most once per LogEvery for each repository, or when
-// its reason changes.
+// and again. A fetch runs in the background, bounded by Timeout; a caller waits
+// for it at most Wait and then goes on with the refs it has. Callers that arrive
+// while a fetch of their repository is running wait for that one, a fetch within
+// Fresh counts for the next caller too, and a failure is logged at most once per
+// LogEvery for each repository, or when its reason changes. Health, if set, hears
+// about every result.
 type Fetcher struct {
 	Fresh    time.Duration
 	LogEvery time.Duration
-	Wait     time.Duration // for another process's fetch to finish
+	Wait     time.Duration // how long a caller waits for the fetch
+	LockWait time.Duration // how long the fetch waits for another process's; 0 is Timeout
 	Timeout  time.Duration
 	Logf     func(format string, args ...any)
 	Now      func() time.Time
+	Health   *Health
 
 	mu    sync.Mutex
 	repos map[string]*repoState
@@ -149,6 +183,7 @@ type Fetcher struct {
 
 type repoState struct {
 	mu       sync.Mutex
+	inflight chan struct{}
 	last     time.Time
 	result   Result
 	logged   time.Time
@@ -185,25 +220,57 @@ func (f *Fetcher) Fetch(ctx context.Context, dir string) Result {
 	}
 	r := f.state(common)
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.last.IsZero() && f.now().Sub(r.last) < f.Fresh {
+	if r.inflight == nil && !r.last.IsZero() && f.now().Sub(r.last) < f.Fresh {
 		res := r.result
+		r.mu.Unlock()
 		res.Recent = true
 		return res
 	}
-	res := once(ctx, dir, common, f.Wait, f.Timeout)
-	if res.Busy {
-		return res // the other process's fetch serves this round; try again next time
+	if r.inflight == nil {
+		done := make(chan struct{})
+		r.inflight = done
+		go f.run(r, dir, common, done)
 	}
-	r.last, r.result = f.now(), res
-	switch {
-	case res.Failed() && f.Logf != nil && (res.Reason != r.loggedAs || f.now().Sub(r.logged) >= f.LogEvery):
-		f.Logf("git fetch failed in %s (%s); merge checks use the last-known origin", filepath.Base(filepath.Dir(common)), res.Reason)
-		r.logged, r.loggedAs = f.now(), res.Reason
-	case !res.Failed():
-		r.loggedAs = ""
+	done := r.inflight
+	r.mu.Unlock()
+	select {
+	case <-done:
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.result
+	case <-ctx.Done():
+	case <-time.After(f.Wait):
 	}
-	return res
+	return Result{Common: common, Pending: true}
+}
+
+func (f *Fetcher) run(r *repoState, dir, common string, done chan struct{}) {
+	wait := f.LockWait
+	if wait <= 0 {
+		wait = f.Timeout
+	}
+	// Not the caller's context: a fetch stopped halfway is worse than one that
+	// finishes after nobody is waiting.
+	res := once(context.Background(), dir, common, wait, f.Timeout)
+	if f.Health != nil && !res.Busy && !res.NoRepo {
+		f.Health.Fetched(common, res)
+	}
+	r.mu.Lock()
+	r.inflight = nil
+	if !res.Busy { // another process's fetch serves this round; try again next time
+		r.last, r.result = f.now(), res
+		switch {
+		case res.Failed() && f.Logf != nil && (res.Reason != r.loggedAs || f.now().Sub(r.logged) >= f.LogEvery):
+			f.Logf("git fetch failed in %s (%s); merge checks use the last-known origin", filepath.Base(filepath.Dir(common)), res.Reason)
+			r.logged, r.loggedAs = f.now(), res.Reason
+		case !res.Failed():
+			r.loggedAs = ""
+		}
+	} else {
+		r.result = res
+	}
+	r.mu.Unlock()
+	close(done)
 }
 
 // RemoteHost is the host part of a remote URL, with no user, password, token or
@@ -238,9 +305,28 @@ func RemoteHost(url string) string {
 }
 
 var (
-	urlRE = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://\S+`)
-	scpRE = regexp.MustCompile(`\S+@[^\s:]+:\S+`)
+	urlRE    = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://\S+`)
+	scpRE    = regexp.MustCompile(`\S+@[^\s:]+:\S+`)
+	damageRE = regexp.MustCompile(`(?i)missing object|bad object|did not send all necessary objects|invalid sha1 pointer|broken link from|missing (blob|tree|commit|tag) |unable to read [0-9a-f]{7,}|does not point to a valid object|corrupt|could not read [0-9a-f]{40}`)
+	refRE    = regexp.MustCompile(`\b(refs/[A-Za-z0-9._/@+-]+?)(?::|\s+does not point| |$)`)
 )
+
+// IsDamage reports whether git's output says the repository has missing or
+// damaged objects, as against a network or credentials failure.
+func IsDamage(out string) bool { return damageRE.MatchString(out) }
+
+// BrokenRef is the first ref named next to a damage message, if any.
+func BrokenRef(out string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if !damageRE.MatchString(l) {
+			continue
+		}
+		if m := refRE.FindStringSubmatch(l); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
 
 // Reason says in a few words why a fetch failed, from git's own stderr. It names
 // the remote by host only, so that no user, token or path from a URL reaches a
@@ -259,6 +345,8 @@ func Reason(stderr, host string, timedOut bool, timeout time.Duration) string {
 		return false
 	}
 	switch {
+	case IsDamage(stderr):
+		return "the local repository has missing or damaged objects"
 	case has("could not resolve host"):
 		return "could not resolve host " + host
 	case has("permission denied (publickey", "host key verification failed"):
@@ -269,8 +357,6 @@ func Reason(stderr, host string, timedOut bool, timeout time.Duration) string {
 		return "no repository at origin on " + host
 	case has("connection timed out", "connection refused", "network is unreachable", "no route to host", "failed to connect"):
 		return "could not connect to " + host
-	case has("missing object", "bad object", "did not send all necessary objects", "unable to read", "corrupt"):
-		return "the local repository has missing or damaged objects"
 	}
 	for _, l := range strings.Split(stderr, "\n") {
 		l = strings.TrimSpace(l)

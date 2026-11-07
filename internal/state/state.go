@@ -390,6 +390,25 @@ type HostStatus struct {
 	// VersionMismatch: a peer's known version differs from the hub's.
 	VersionMismatch bool `json:"version_mismatch,omitempty"`
 	Agents          int  `json:"agents"`
+	// RepoDamage lists the host's repositories whose object store git reports
+	// as damaged (see gitfetch.Health). A peer reports its own; the hub keeps it.
+	RepoDamage []RepoDamage `json:"repo_damage,omitempty"`
+}
+
+// RepoDamage is a repository whose object store git reports as damaged: missing
+// objects, or a ref that points at one. Nothing repairs it automatically.
+type RepoDamage struct {
+	Repo   string `json:"repo"` // its name
+	Path   string `json:"path"` // the repository's directory on that host
+	Reason string `json:"reason"`
+	Ref    string `json:"ref,omitempty"` // the broken ref git named, if any
+	Hint   string `json:"hint"`          // how to repair it by hand
+	// Source is what found it: fetch, git (another git command) or fsck.
+	Source string    `json:"source"`
+	Since  time.Time `json:"since"`
+	// Worktrees are the checkouts that share the store, so the app can mark
+	// the agents working in them.
+	Worktrees []string `json:"worktrees,omitempty"`
 }
 
 // Hub fans out Events to connected SSE clients.

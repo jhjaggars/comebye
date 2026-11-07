@@ -234,7 +234,11 @@ A fetch takes a lock, `comebye-fetch.lock` in the repository's git directory, wh
 server's merge checks take as well. Two fetches into one object store at once can leave
 a remote-tracking ref pointing at an object that never arrived, and after that every
 fetch fails and leaves a temporary pack behind (`.git/objects/pack/tmp_pack_*`). The
-git pass waits up to two minutes for the lock, then says the fetch was skipped.
+git pass waits up to five minutes for the lock, then says the fetch was skipped. A fetch
+runs at most five minutes (an ordinary one takes seconds) and is then stopped with SIGTERM,
+so that git removes its temporary pack, and killed only if it is still running 15 seconds
+later. Fetches use `--prune`, so the ref of a branch deleted upstream goes rather than
+pointing at objects nothing keeps.
 
 ### One index for every host
 

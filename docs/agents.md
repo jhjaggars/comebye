@@ -239,6 +239,27 @@ worker's agent is gone, a new agent is started in the same worktree and
 the entry is updated (`"restarted": true`). Removed and failed entries do
 not count.
 
+### Damaged repositories
+
+Workers share their repository's object store with every other worktree of it. If
+git reports that store damaged (objects missing, or a ref pointing at one), the host
+says so: a **Repositories need repair** section at the top of the Status page, a
+*repo damaged* chip on the agents working in it, and a line in the journal (again
+after a day, or when the reason changes). Each entry gives the repository, the
+reason, the broken ref if git named one, and how to repair it by hand: delete a
+broken remote-tracking ref and fetch again, or restore missing objects with `git
+fetch --refetch <remote> <branch>` from a remote that has the branch. Nothing repairs
+it automatically, and the hint never suggests gc or prune.
+
+Three things find damage: a merge check's fetch, any other git command of the
+server, and a daily `git fsck --connectivity-only --no-dangling` of every repository
+the host's agents have worked in, run between 02:00 and 06:00 under the same lock as
+fetches (or at any hour once two days overdue). It is cheap: under a second for the
+largest store measured (290,000 objects). The list survives a restart
+(`repo-health.json` in the state directory), and an entry goes when a fetch, or the
+next fsck, finds the store sound again. A peer's list reaches the hub with its
+agents.
+
 ## Coordinators
 
 **Coordinator is a role, not a process.** Any agent, of any kind, on any

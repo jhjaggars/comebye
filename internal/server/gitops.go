@@ -53,6 +53,11 @@ func runGitIn(ctx context.Context, dir, stdin string, args ...string) (string, e
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	if err := cmd.Run(); err != nil {
+		if h := gitHealth; h != nil && gitfetch.IsDamage(errb.String()) {
+			if common, cerr := gitfetch.CommonDir(context.Background(), dir); cerr == nil {
+				h.GitFailed(common, errb.String())
+			}
+		}
 		msg := strings.TrimSpace(errb.String())
 		if len(msg) > 300 {
 			msg = msg[:300]
@@ -342,8 +347,48 @@ var originFetcher = &gitfetch.Fetcher{
 	Fresh:    fetchFresh,
 	LogEvery: 24 * time.Hour,
 	Wait:     gitTimeout,
-	Timeout:  gitTimeout,
+	Timeout:  gitfetch.DefaultTimeout,
 	Logf:     log.Printf,
+}
+
+// gitHealth hears about git commands that find a damaged repository.
+var gitHealth *gitfetch.Health
+
+// RunRepoHealth checks the repositories this host's agents work in with a daily
+// fsck, and records them so that the check goes on after the agents are gone.
+func (s *Server) RunRepoHealth(ctx context.Context) {
+	h := gitHealth
+	if h == nil {
+		return
+	}
+	commons := map[string]string{} // checkout -> common git directory
+	known := func() []string {
+		var out []string
+		for _, a := range s.fleet.Agents() {
+			if a.Host != "" && a.Host != s.fleet.LocalName() {
+				continue
+			}
+			dir := a.CWD
+			if a.Worktree != nil && a.Worktree.CheckoutPath != "" {
+				dir = a.Worktree.CheckoutPath
+			}
+			if dir == "" {
+				continue
+			}
+			c, ok := commons[dir]
+			if !ok {
+				cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				c, _ = gitfetch.CommonDir(cctx, dir)
+				cancel()
+				commons[dir] = c
+			}
+			if c != "" {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	h.Run(ctx, 10*time.Minute, known)
 }
 
 const fetchFresh = 30 * time.Second
