@@ -736,6 +736,25 @@ func run(dir string, timeout time.Duration, name string, args ...string) (string
 	return strings.TrimSpace(string(out)), code, err
 }
 
+// runErr is run that also returns what the command wrote to stderr, and whether
+// it was stopped for taking too long.
+func runErr(dir string, timeout time.Duration, name string, args ...string) (code int, stderr string, timedOut bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		code = -1
+	}
+	return code, errb.String(), ctx.Err() == context.DeadlineExceeded
+}
+
 // repoDir finds a checkout on this machine to ask git about: for a session of
 // this host, the ledger's primary checkout or the session's cwd if it still
 // exists; otherwise ~/code/<repo>. The ledger's path and the cwd of another
@@ -796,12 +815,95 @@ func (g *gitCtx) fetch(dir string) {
 		return
 	}
 	g.fetched[common] = true
-	if _, code, _ := run(dir, 10*time.Second, "git", "remote", "get-url", "origin"); code != 0 {
+	url, code, _ := run(dir, 10*time.Second, "git", "remote", "get-url", "origin")
+	if code != 0 {
 		return // nothing to fetch from
 	}
-	if _, code, _ := run(dir, gitFetchTimeout, "git", "fetch", "--quiet", "origin"); code != 0 && g.errs != nil {
-		*g.errs = append(*g.errs, "git fetch failed in "+filepath.Base(dir)+": its commits are checked against the last-known origin")
+	code, stderr, timedOut := runErr(dir, gitFetchTimeout, "git", "fetch", "--quiet", "origin")
+	if code != 0 && g.errs != nil {
+		*g.errs = append(*g.errs, "git fetch failed in "+filepath.Base(dir)+" ("+fetchReason(stderr, remoteHost(url), timedOut)+"): its commits are checked against the last-known origin")
 	}
+}
+
+// remoteHost is the host part of a remote URL, with no user, password, token or
+// path: https://user:token@host/path, ssh://git@host:22/path or git@host:path.
+func remoteHost(url string) string {
+	u := strings.TrimSpace(url)
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+		if j := strings.IndexAny(u, "/?#"); j >= 0 {
+			u = u[:j]
+		}
+		if j := strings.LastIndex(u, "@"); j >= 0 {
+			u = u[j+1:]
+		}
+		if h, _, ok := strings.Cut(u, ":"); ok && !strings.HasPrefix(u, "[") {
+			u = h
+		}
+		if u == "" {
+			return "a local path"
+		}
+		return u
+	}
+	// scp-like: [user@]host:path. A local path has no colon before its first slash.
+	if c := strings.Index(u, ":"); c > 0 && !strings.Contains(u[:c], "/") {
+		h := u[:c]
+		if j := strings.LastIndex(h, "@"); j >= 0 {
+			h = h[j+1:]
+		}
+		return h
+	}
+	return "a local path"
+}
+
+var (
+	fetchURLRE = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://\S+`)
+	fetchSCPRE = regexp.MustCompile(`\S+@[^\s:]+:\S+`)
+)
+
+// fetchReason says in a few words why a fetch failed, from git's own stderr. It
+// names the remote by host only, so that no user, token or path from a URL reaches
+// the log, and it keeps to one short line.
+func fetchReason(stderr, host string, timedOut bool) string {
+	if timedOut {
+		return "timed out after " + gitFetchTimeout.String()
+	}
+	low := strings.ToLower(stderr)
+	has := func(s ...string) bool {
+		for _, x := range s {
+			if strings.Contains(low, x) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("could not resolve host"):
+		return "could not resolve host " + host
+	case has("permission denied (publickey", "host key verification failed"):
+		return "ssh refused by " + host
+	case has("authentication failed", "terminal prompts disabled", "could not read username", "could not read password"):
+		return "no credentials for " + host
+	case has("repository not found", "does not appear to be a git repository"):
+		return "no repository at origin on " + host
+	case has("connection timed out", "connection refused", "network is unreachable", "no route to host", "failed to connect"):
+		return "could not connect to " + host
+	case has("missing object", "bad object", "did not send all necessary objects", "unable to read", "corrupt"):
+		return "the local repository has missing or damaged objects"
+	}
+	for _, l := range strings.Split(stderr, "\n") {
+		l = strings.TrimSpace(l)
+		for _, p := range []string{"fatal:", "error:"} {
+			if strings.HasPrefix(strings.ToLower(l), p) {
+				l = strings.TrimSpace(l[len(p):])
+				l = fetchURLRE.ReplaceAllString(l, host)
+				l = fetchSCPRE.ReplaceAllString(l, host)
+				l = strings.NewReplacer("'", "", `"`, "").Replace(l)
+				return clip(strings.ToLower(l), 100)
+			}
+		}
+	}
+	return "git gave no reason"
 }
 
 // gitFetchTimeout limits one `git fetch origin`.
