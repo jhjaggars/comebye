@@ -878,11 +878,32 @@ function renderPlans() {
 // the agent that waits. Every string comes from an agent (the question, the
 // context, the links) and is escaped or sanitized; links must be http(s).
 
-const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false, openIds: new Set(), drafts: new Map(), busy: new Set() };
+// One item is open at a time (an accordion). The open item, the answered
+// group's fold and the drafts are the page's own state; drafts are kept in
+// localStorage so an unsent answer survives a reload, and outlive an item
+// that is closed or answered elsewhere until the user discards them.
 const TODO_FOLDED_KEY = "comebye-todo-folded";
+const TODO_DRAFTS_KEY = "comebye.todo.drafts";
 const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up" };
+const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false,
+  openId: null, lastId: null, ansOpen: false, seen: new Map(), order: [], follow: false,
+  drafts: loadTodoDrafts(), busy: new Set() };
 
 function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") ? u : ""; }
+
+// drafts: item id -> { text, q }; q is the question, for a draft whose item is gone.
+function loadTodoDrafts() {
+  const m = new Map();
+  try {
+    const d = JSON.parse(lsGet(TODO_DRAFTS_KEY) || "{}");
+    for (const [id, v] of Object.entries(d || {})) {
+      if (v && typeof v.text === "string" && v.text.trim()) m.set(id, { text: v.text, q: String(v.q || "") });
+    }
+  } catch {}
+  return m;
+}
+function saveTodoDrafts() { lsSet(TODO_DRAFTS_KEY, JSON.stringify(Object.fromEntries(todos.drafts))); }
+function todoDraft(id) { const d = todos.drafts.get(id); return d ? d.text : ""; }
 
 async function loadTodos() {
   if (todos.inflight || ledger.on !== true) { if (ledger.on !== true) { todos.on = false; renderTodos(); } return; }
@@ -910,82 +931,247 @@ function todoCountText() {
   return p.join(" · ");
 }
 
-function todoItemHtml(t) {
-  const at = Date.parse(t.created_at);
-  const who = t.waiting ? `waiting: ${t.waiting.name || t.waiting.id}` : "";
-  const meta = [who, Number.isNaN(at) ? "" : fmtAgo(at)].filter(Boolean).join(" · ");
-  const open = todos.openIds.has(t.id);
-  const links = (t.links || []).map((l) => {
-    const href = todoLinkHref(l.url);
-    const label = l.label || l.url || `handoff ${l.handoff}`;
-    return href
-      ? `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`
-      : `<span>${esc(l.handoff ? `handoff ${l.handoff}` : label)}</span>`;
-  });
-  const a = t.answer;
-  const aAt = a ? Date.parse(a.at) : NaN;
-  const answered = a
-    ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : esc(fmtAgo(aAt)) + " ago"}</div>
-        <div class="td-answer-t">${esc(a.text)}</div>
-        <div class="td-wait">${t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""}</div></div>` : "";
-  const busy = todos.busy.has(t.id) ? " disabled" : "";
-  const form = t.state === "open"
-    ? `<textarea class="td-text" rows="2" maxlength="4000" placeholder="Your answer" aria-label="Your answer">${esc(todos.drafts.get(t.id) || "")}</textarea>` : "";
-  return `<details class="td-item td-${esc(t.kind)}${t.state === "answered" ? " answered" : ""}" data-id="${escAttr(t.id)}"${open ? " open" : ""}>
-      <summary><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${esc(t.question)}</span>${t.state === "answered" ? `<span class="td-st">answered</span>` : ""}</summary>
-      <div class="td-body">
-        ${meta ? `<div class="td-meta">${esc(meta)} · ${esc(t.id)}</div>` : ""}
-        ${t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
-        ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
-        ${answered}
-        ${form}
-        <div class="td-acts">
-          ${t.state === "open" ? `<button type="button" class="td-answer-btn"${busy}>Answer</button>` : ""}
-          <button type="button" class="td-done"${busy}>Done</button>
-          <button type="button" class="td-drop"${busy}>Drop</button>
-        </div>
-      </div>
-    </details>`;
+// Open items first; the answered ones wait in their own group at the bottom.
+function todoOrder() {
+  return todos.items.filter((t) => t.state === "open").concat(todos.items.filter((t) => t.state !== "open"));
 }
 
-function renderTodos() {
+// The next open item after id, in the order the list showed (wrapping to
+// the top), or null when nothing else is open.
+function todoNextOpen(id, order) {
+  const open = todoOrder().filter((t) => t.state === "open" && t.id !== id).map((t) => t.id);
+  const at = order.indexOf(id);
+  for (let k = 1; k <= order.length; k++) {
+    const x = order[(at + k + order.length) % order.length];
+    if (open.includes(x)) return x;
+  }
+  return open[0] || null;
+}
+
+function todoOrphans() {
+  if (todos.on !== true) return [];
+  const ids = new Set(todos.items.map((t) => t.id));
+  return [...todos.drafts].filter(([id, d]) => !ids.has(id) && d.text.trim());
+}
+
+function todoKeptHtml(id, text, label) {
+  return `<div class="td-kept" data-kept="${escAttr(id)}"><div class="td-kept-h">${esc(label)}</div>
+      <textarea class="td-kept-t" rows="2" readonly aria-label="Your unsent answer">${esc(text)}</textarea>
+      <div class="td-acts"><button type="button" class="td-copy">Copy</button><button type="button" class="td-discard">Discard</button></div></div>`;
+}
+
+// pfx keeps element ids apart: the same item is drawn in the phone card
+// and on the desktop page.
+function todoItemHtml(t, pfx) {
+  const at = Date.parse(t.created_at);
+  const age = Number.isNaN(at) ? "" : fmtAgo(at);
+  const who = t.waiting ? t.waiting.name || t.waiting.id : "";
+  const open = todos.openId === t.id;
+  const ans = t.state !== "open";
+  const draft = todoDraft(t.id).trim() !== "";
+  const rid = `${pfx}-row-${t.id}`, pid = `${pfx}-panel-${t.id}`;
+  const chips = `<span class="td-chip td-draft"${draft ? "" : " hidden"}>draft</span>` +
+    (ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`);
+  let panel = "";
+  if (open) {
+    const meta = [who && `waiting: ${who}`, age, t.id].filter(Boolean).join(" · ");
+    const links = (t.links || []).map((l) => {
+      const href = todoLinkHref(l.url);
+      const label = l.label || l.url || `handoff ${l.handoff}`;
+      return href
+        ? `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`
+        : `<span>${esc(l.handoff ? `handoff ${l.handoff}` : label)}</span>`;
+    });
+    const a = t.answer;
+    const aAt = a ? Date.parse(a.at) : NaN;
+    const answered = a
+      ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : esc(fmtAgo(aAt)) + " ago"}</div>
+          <div class="td-answer-t">${esc(a.text)}</div>
+          <div class="td-wait">${t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""}</div></div>` : "";
+    const kept = ans && draft ? todoKeptHtml(t.id, todoDraft(t.id), "Not sent: this was answered before you sent yours.") : "";
+    const busy = todos.busy.has(t.id) ? " disabled" : "";
+    const form = ans ? ""
+      : `<textarea class="td-text" id="${pfx}-answer-${escAttr(t.id)}" rows="2" maxlength="4000" placeholder="Your answer" aria-label="Your answer">${esc(todoDraft(t.id))}</textarea>`;
+    panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
+        <div class="td-scroll">
+          ${meta ? `<div class="td-meta">${esc(meta)}</div>` : ""}
+          ${t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
+          ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
+          ${answered}${kept}
+        </div>
+        <div class="td-form">${form}
+          <div class="td-acts">
+            ${ans ? "" : `<button type="button" class="td-answer-btn"${busy}>Answer</button>`}
+            <button type="button" class="td-done"${busy}>Done</button>
+            <button type="button" class="td-drop"${busy}>Drop</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}" data-id="${escAttr(t.id)}">
+      <button type="button" class="td-row" id="${escAttr(rid)}" aria-expanded="${open}"${open ? ` aria-controls="${escAttr(pid)}"` : ""}>
+        <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${esc(t.question)}</span>
+        <span class="td-rm"><span class="td-who">${esc(who)}</span><span class="td-age">${esc(age)}</span><span class="td-chips">${chips}</span></span>
+        <span class="td-chev" aria-hidden="true"></span>
+      </button>${panel}
+    </div>`;
+}
+
+function todoListHtml(pfx) {
+  const opens = todos.items.filter((t) => t.state === "open");
+  const done = todos.items.filter((t) => t.state !== "open");
+  let h = todoOrphans().map(([id, d]) => todoKeptHtml(id, d.text, `Not sent: “${d.q || id}” was closed before you answered.`)).join("");
+  h += opens.map((t) => todoItemHtml(t, pfx)).join("");
+  if (!opens.length) h += `<div class="td-none">${done.length ? "Nothing else is waiting on you." : "Nothing is waiting on you."}</div>`;
+  if (done.length) {
+    const drafts = done.some((t) => todoDraft(t.id).trim());
+    h += `<button type="button" class="td-g" aria-expanded="${todos.ansOpen}"${todos.ansOpen ? ` aria-controls="${pfx}-ans"` : ""}>Answered, being passed on <span class="td-gn">${done.length}</span>${
+      drafts ? `<span class="td-chip td-draft">draft</span>` : ""}<span class="td-chev" aria-hidden="true"></span></button>`;
+    if (todos.ansOpen) h += `<div class="td-ans" id="${pfx}-ans">${done.map((t) => todoItemHtml(t, pfx)).join("")}</div>`;
+  }
+  return h;
+}
+
+function todoHasFocus() {
+  const a = document.activeElement;
+  return !!a && [$("todo"), $("pt-body")].some((el) => el && el.contains(a));
+}
+function todoRowIn(el, id) { return id ? el.querySelector(`.td-item[data-id="${CSS.escape(id)}"] > .td-row`) : null; }
+
+// A refresh closed the open item, or someone else answered it: open the
+// next one, as after the user's own answer. Its draft stays in
+// todos.drafts, shown on the answered item or as a kept answer.
+function todoFollowRefresh() {
+  let moved = false;
+  const id = todos.openId;
+  if (id && todos.on === true && !todos.busy.has(id)) {
+    const t = todos.items.find((x) => x.id === id);
+    if (!t || (todos.seen.get(id) === "open" && t.state !== "open")) {
+      const kept = todoDraft(id).trim() !== "";
+      todos.openId = todoNextOpen(id, todos.order);
+      if (todos.openId) todos.lastId = todos.openId;
+      todos.follow = todoHasFocus();
+      moved = true;
+      if (todos.follow || (isDesktop() && state.view === "todo")) {
+        toast((t ? "That item was answered elsewhere." : "That item was closed elsewhere.") + (kept ? " Your unsent answer is kept." : ""));
+      }
+    }
+  }
+  todos.seen = new Map(todos.items.map((x) => [x.id, x.state]));
+  todos.order = todoOrder().map((x) => x.id);
+  return moved;
+}
+
+// Redraws a list and puts back what a redraw loses: the scroll positions and
+// the keyboard focus (the same control of the same item, or the open row).
+function todoPaint(el, html) {
+  const a = document.activeElement;
+  const had = !!a && a !== el && el.contains(a);
+  let sel = null;
+  if (had && a.classList[0]) {
+    const h = a.closest("[data-kept], [data-id]");
+    sel = (h ? (h.dataset.kept ? `[data-kept="${CSS.escape(h.dataset.kept)}"] ` : `[data-id="${CSS.escape(h.dataset.id)}"] `) : "") + "." + a.classList[0];
+  }
+  const top = el.scrollTop;
+  const inner = el.querySelector(".td-item.open .td-scroll");
+  const innerId = inner && inner.closest(".td-item").dataset.id, innerTop = inner ? inner.scrollTop : 0;
+  el.innerHTML = html;
+  el.scrollTop = top;
+  const ni = el.querySelector(".td-item.open .td-scroll");
+  if (ni && ni.closest(".td-item").dataset.id === innerId) ni.scrollTop = innerTop;
+  // Follow the open item only from inside the list (or from nowhere): never take focus from elsewhere.
+  const follow = todos.follow && (had || document.activeElement === document.body);
+  if (!had && !follow) return;
+  const target = follow ? todoRowIn(el, todos.openId) || el.querySelector(".td-g") : (sel && el.querySelector(sel)) || todoRowIn(el, todos.openId);
+  if (target) {
+    target.focus({ preventScroll: true });
+    if (follow) target.scrollIntoView?.({ block: "nearest" });
+  }
+}
+
+function renderTodos(force) {
   const main = $("todo"), page = $("pt-body");
-  const n = todos.open + todos.answered;
   const pill = $("pager-todo");
-  if (pill) { pill.hidden = !n; pill.textContent = String(n); }
-  const show = todos.on === true && todos.items.length > 0;
+  if (pill) { pill.hidden = !todos.open; pill.textContent = String(todos.open); }
+  const moved = todoFollowRefresh();
+  // A forced redraw, or one that moves to another item, goes ahead even while the user types.
+  const again = !!force || moved || todos.follow;
+  const show = todos.on === true && (todos.items.length > 0 || todoOrphans().length > 0);
   if (main) main.hidden = !show;
   if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
-  const sig = JSON.stringify([folded, todos.busy.size, [...todos.openIds].sort(), todos.items.map((t) => [t.id, t.state, t.updated_at, t.question])]);
+  const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.busy.size, [...todos.drafts.keys()],
+    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question])]);
   // The age moves between renders; a typed answer must not be lost to one.
   const typing = (el) => el && el.contains(document.activeElement) && document.activeElement.classList.contains("td-text");
-  if (show && main && main.dataset.sig !== sig && !typing(main)) {
+  if (show && main && (again || (main.dataset.sig !== sig && !typing(main)))) {
     main.dataset.sig = sig;
-    main.innerHTML = `<div class="td-head"><button type="button" class="td-toggle" aria-expanded="${!folded}">
+    todoPaint(main, `<div class="td-head"><button type="button" class="td-toggle" aria-expanded="${!folded}">
         <span class="proj-chev" aria-hidden="true"></span><span class="td-title">To do</span><span class="td-count">${esc(todoCountText())}</span></button></div>
-      <div class="td-list"${folded ? " hidden" : ""}>${todos.items.map(todoItemHtml).join("")}</div>`;
+      <div class="td-list"${folded ? " hidden" : ""}>${todoListHtml("tdc")}</div>`);
   }
   renderNav();
   renderStatus();
   // The desktop page: the same items without the fold, and an empty note.
   if (page) {
     $("pt-count").textContent = show ? todoCountText() : "";
+    const keys = $("pt-keys");
+    if (keys) keys.hidden = !show;
     const psig = show ? "p" + sig : "empty";
-    if (page.dataset.sig !== psig && !typing(page)) {
+    if (again || (page.dataset.sig !== psig && !typing(page))) {
       page.dataset.sig = psig;
-      page.innerHTML = show ? `<div class="td-list">${todos.items.map(todoItemHtml).join("")}</div>` : `<div class="empty">Nothing is waiting on you.</div>`;
+      todoPaint(page, show ? `<div class="td-list">${todoListHtml("tdp")}</div>` : `<div class="empty">Nothing is waiting on you.</div>`);
     }
   }
+  todos.follow = false;
+}
+
+// The list the user sees: the To do page on desktop, the card on a phone.
+function todoListEl() { return isDesktop() ? $("pt-body") : $("todo"); }
+
+// Opens one item (closing the one that was open) and focuses its row, or
+// its answer box with to = "box".
+function todoExpand(id, to) {
+  todos.openId = id;
+  if (id) todos.lastId = id;
+  renderTodos(true);
+  const el = todoListEl();
+  const row = el && todoRowIn(el, id);
+  if (!row) return;
+  const box = to === "box" && row.parentElement.querySelector(".td-text");
+  if (box) {
+    box.focus({ preventScroll: true });
+    box.setSelectionRange(box.value.length, box.value.length);
+    box.scrollIntoView?.({ block: "nearest" });
+    return;
+  }
+  row.focus({ preventScroll: true });
+  row.scrollIntoView?.({ block: isDesktop() ? "nearest" : "start" });
+}
+function todoCollapse() {
+  if (todos.openId) todos.lastId = todos.openId;
+  todos.openId = null;
+  renderTodos(true);
+  const el = todoListEl();
+  const row = el && todoRowIn(el, todos.lastId);
+  if (row) row.focus({ preventScroll: true });
 }
 
 async function todoAct(id, what, body) {
+  const next = todoNextOpen(id, todoOrder().map((t) => t.id));
+  const hadFocus = todoHasFocus();
   todos.busy.add(id);
   renderTodos();
   try {
     await api(`/api/todos/${encodeURIComponent(id)}/${what}`, { method: "POST", body: JSON.stringify(body || {}) });
     todos.drafts.delete(id);
-    todos.openIds.delete(id);
+    saveTodoDrafts();
+    // Focus moves on to the next open item, as the list closes this one.
+    if (todos.openId === id) {
+      todos.openId = next;
+      if (next) todos.lastId = next;
+      todos.follow = hadFocus;
+    }
     toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : "Dropped");
   } catch (e) {
     toast(e.message, true);
@@ -996,24 +1182,48 @@ async function todoAct(id, what, body) {
   await loadTodos();
 }
 
+function todoAnswer(id, box) {
+  const text = box ? box.value.trim() : "";
+  if (!text) { toast("Write your answer first", true); return; }
+  todoAct(id, "answer", { text });
+}
+
+function todoCopy(ta) {
+  const fallback = () => { ta.focus(); ta.select(); toast("Selected: copy it with your keyboard"); };
+  if (!navigator.clipboard || !navigator.clipboard.writeText) { fallback(); return; }
+  navigator.clipboard.writeText(ta.value).then(() => toast("Copied"), fallback);
+}
+
 function onTodoClick(ev) {
-  const toggle = ev.target.closest(".td-toggle");
-  if (toggle) {
+  if (ev.target.closest(".td-toggle")) {
     lsSet(TODO_FOLDED_KEY, lsGet(TODO_FOLDED_KEY) === "1" ? "0" : "1");
-    for (const el of [$("todo"), $("pt-body")]) if (el) delete el.dataset.sig;
-    renderTodos();
+    renderTodos(true);
+    return;
+  }
+  if (ev.target.closest(".td-g")) {
+    todos.ansOpen = !todos.ansOpen;
+    const cur = todos.items.find((t) => t.id === todos.openId);
+    if (!todos.ansOpen && cur && cur.state !== "open") todos.openId = null;
+    renderTodos(true);
+    return;
+  }
+  const kept = ev.target.closest("[data-kept]");
+  if (kept) {
+    if (ev.target.closest(".td-copy")) todoCopy(kept.querySelector(".td-kept-t"));
+    else if (ev.target.closest(".td-discard")) { todos.drafts.delete(kept.dataset.kept); saveTodoDrafts(); renderTodos(true); }
     return;
   }
   const item = ev.target.closest(".td-item");
   if (!item) return;
   const id = item.dataset.id;
+  if (ev.target.closest(".td-row")) {
+    if (todos.openId === id) todoCollapse(); else todoExpand(id);
+    return;
+  }
   const t = todos.items.find((x) => x.id === id);
   if (!t) return;
   if (ev.target.closest(".td-answer-btn")) {
-    const box = item.querySelector(".td-text");
-    const text = box ? box.value.trim() : "";
-    if (!text) { toast("Write your answer first", true); return; }
-    todoAct(id, "answer", { text });
+    todoAnswer(id, item.querySelector(".td-text"));
   } else if (ev.target.closest(".td-done")) {
     todoAct(id, "done");
   } else if (ev.target.closest(".td-drop")) {
@@ -1022,16 +1232,67 @@ function onTodoClick(ev) {
   }
 }
 
-// <details> toggles and drafts are remembered so a re-render keeps them.
-function onTodoToggle(ev) {
-  const item = ev.target.closest && ev.target.closest(".td-item");
-  if (!item || ev.target !== item) return;
-  if (item.open) todos.openIds.add(item.dataset.id); else todos.openIds.delete(item.dataset.id);
-}
+// A typed answer is kept per item (and across reloads), and marks the row.
 function onTodoInput(ev) {
   const box = ev.target.closest && ev.target.closest(".td-text");
   const item = box && box.closest(".td-item");
-  if (item) todos.drafts.set(item.dataset.id, box.value);
+  if (!item) return;
+  const id = item.dataset.id;
+  const t = todos.items.find((x) => x.id === id);
+  if (box.value.trim()) todos.drafts.set(id, { text: box.value, q: t ? t.question : "" });
+  else todos.drafts.delete(id);
+  saveTodoDrafts();
+  const chip = item.querySelector(".td-row .td-draft");
+  if (chip) chip.hidden = !box.value.trim();
+}
+
+// Keys. Ctrl/Cmd+Enter sends from any answer box. On the desktop To do page:
+// ↑/↓ or j/k open the next or previous item, Enter goes to its answer box,
+// Esc leaves the box and then closes the item.
+function onTodoKey(ev) {
+  if (ev.defaultPrevented || ev.isComposing) return;
+  const el = ev.target;
+  const box = el.closest && el.closest(".td-text");
+  if (box && ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey) {
+    ev.preventDefault();
+    todoAnswer(box.closest(".td-item").dataset.id, box);
+    return;
+  }
+  if (!isDesktop() || state.view !== "todo" || anotherLayerOpen()) return;
+  if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+  const page = $("pt-body");
+  if (!page || !(el === document.body || page.contains(el))) return;
+  const k = ev.key;
+  if (box) {
+    if (k === "Escape") {
+      ev.preventDefault();
+      const row = todoRowIn(page, box.closest(".td-item").dataset.id);
+      if (row) row.focus();
+    }
+    return;
+  }
+  if (el.closest("input, textarea, select, a, [contenteditable]")) return;
+  if (k === "ArrowDown" || k === "j" || k === "ArrowUp" || k === "k") {
+    ev.preventDefault();
+    const rows = [...page.querySelectorAll(".td-row")];
+    const ids = rows.map((r) => r.closest(".td-item").dataset.id);
+    if (!rows.length) return;
+    const down = k === "ArrowDown" || k === "j";
+    let i = rows.indexOf(el);
+    if (i < 0) i = ids.indexOf(todos.openId || todos.lastId);
+    i = i < 0 ? (down ? 0 : rows.length - 1) : i + (down ? 1 : -1);
+    if (i >= 0 && i < rows.length) todoExpand(ids[i]);
+  } else if (k === "Enter") {
+    if (el.closest(".td-acts, .td-g, .td-kept")) return; // a button does what it says
+    const row = el.closest(".td-row");
+    const id = row ? row.closest(".td-item").dataset.id : todos.openId || todos.lastId;
+    if (!id) return;
+    ev.preventDefault();
+    todoExpand(id, todos.openId === id ? "box" : undefined);
+  } else if (k === "Escape" && todos.openId) {
+    ev.preventDefault();
+    todoCollapse();
+  }
 }
 
 // briefPreview is the first line of the briefing with the markdown marks
@@ -3013,7 +3274,7 @@ const NAV_ICON = {
 };
 const NAV_ROWS = [
   { key: "status", label: "Status", show: () => ledger.on === true },
-  { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open + todos.answered },
+  { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open },
   { key: "search", label: "Search", show: () => true, open: () => openRecall(), noPage: true }, // Transcripts is a screen of its own
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && ledger.marked.size > 0, count: () => ledger.marked.size, open: () => openReview(), noPage: true },
 ];
@@ -5823,6 +6084,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
   document.addEventListener("keydown", onNextWaiting);
+  document.addEventListener("keydown", onTodoKey);
   desktopMQ.addEventListener("change", () => { setView(viewFromHash()); renderList(); renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
   window.addEventListener("offline", () => setConn(false));
 
@@ -6015,7 +6277,6 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!el) continue;
     el.addEventListener("click", onTodoClick);
     el.addEventListener("input", onTodoInput);
-    el.addEventListener("toggle", onTodoToggle, true);
   }
   document.addEventListener("click", (ev) => {
     if (!$("d-menu").hidden && !$("d-menu").contains(ev.target)) toggleDetailMenu(false);

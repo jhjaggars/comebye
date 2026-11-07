@@ -1022,7 +1022,8 @@
     .br-item .br-md { border-top: 1px solid var(--border); padding-top: 10px; }
 
 
-    /* The to-do panel: questions and follow-ups for the user. */
+    /* The to-do list: an accordion, one item open at a time. The phone shows
+       it as a card in the list; desktop as the To do page (rules further down). */
     .todo {
       margin-bottom: 10px; border-radius: 14px; background: var(--panel);
       border: 1px solid color-mix(in srgb, var(--orange) 45%, var(--border));
@@ -1037,20 +1038,46 @@
     .td-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 12px; }
     .td-title { font-weight: 650; font-size: 14px; color: var(--orange); flex: none; }
     .td-count { color: var(--muted); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .td-list { padding: 0 8px 8px; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; }
+    .td-list { display: flex; flex-direction: column; min-width: 0; padding: 0 6px 6px; }
     .td-list[hidden] { display: none; }
-    .td-item { border-top: 1px solid var(--border); }
-    .td-item summary { display: flex; align-items: baseline; gap: 8px; min-height: 44px; padding: 8px 4px; cursor: pointer; list-style: none; }
-    .td-item summary::-webkit-details-marker { display: none; }
-    .td-item summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 10px; }
+    .td-ans { display: contents; }
+    .td-item { flex: none; min-width: 0; border-top: 1px solid var(--border); }
+    .td-list > .td-item:first-child, .td-g + .td-ans > .td-item:first-child, .td-item.open, .td-item.open + .td-item { border-top-color: transparent; }
+    /* A row: kind, the question on one line, then who waits, the age and the chips (a second line on a phone). */
+    .td-row {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; width: 100%; min-height: 44px; padding: 8px;
+      background: none; border: 0; border-radius: 10px; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+      scroll-margin: 72px 0 12px;
+    }
+    @media (hover: hover) { .td-row:hover, .td-g:hover { background: var(--panel2); } }
+    .td-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
     .td-kind { flex: none; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--blue); }
     .td-action .td-kind { color: var(--orange); }
     .td-followup .td-kind { color: var(--muted); }
-    .td-q { min-width: 0; flex: 1 1 auto; font-size: 14px; overflow-wrap: anywhere; }
-    .td-item:not([open]) .td-q { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .td-st { flex: none; font-size: 11px; font-weight: 600; color: var(--green); }
-    .td-body { padding: 0 4px 10px; font-size: 14px; overflow-wrap: anywhere; }
-    .td-meta { color: var(--muted); font-size: 12.5px; margin-bottom: 6px; }
+    .td-q { min-width: 0; flex: 1 1 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .td-item.answered:not(.open) .td-q { color: var(--muted); }
+    .td-rm { order: 3; flex: 1 0 100%; display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+    .td-who { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .td-who:empty { display: none; }
+    .td-who:not(:empty)::after { content: " ·"; }
+    .td-age { flex: none; }
+    .td-chips { flex: none; display: flex; gap: 6px; margin-left: auto; }
+    .td-chip { padding: 1px 7px; border-radius: 7px; font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+    .td-chip.st-open { background: var(--chip-blue); color: var(--blue); }
+    .td-chip.st-answered { background: var(--chip-green); color: var(--green); }
+    .td-chip.td-draft { background: var(--chip-yellow); color: var(--yellow); }
+    .td-chev { flex: none; width: 8px; height: 8px; margin: 0 4px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); }
+    [aria-expanded="true"] > .td-chev { transform: translateY(-2px) rotate(45deg); }
+    /* The open item: the question in full, then its body, the answer box and the buttons. */
+    .td-item.open { border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border)); border-radius: 12px; margin-block: 4px; }
+    .td-item.open > .td-row { align-items: baseline; padding: 10px 11px 4px; }
+    .td-item.open > .td-row:hover { background: none !important; }
+    .td-item.open .td-q { order: 4; flex: 1 1 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; font-size: 15px; font-weight: 600; }
+    .td-item.open .td-rm { order: 2; flex: 1 1 auto; }
+    .td-item.open .td-chev { order: 3; }
+    .td-item.open .td-who, .td-item.open .td-age { display: none; }
+    .td-panel { display: flex; flex-direction: column; min-height: 0; padding: 0 11px 11px; font-size: 14px; overflow-wrap: anywhere; }
+    .td-meta { color: var(--muted); font-size: 12.5px; margin: 4px 0 6px; }
     .td-ctx { margin: 6px 0; font-size: 13.5px; }
     .td-ctx > :first-child { margin-top: 0; }
     .td-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0; font-size: 13px; }
@@ -1059,8 +1086,9 @@
     .td-answer-t { margin-top: 2px; white-space: pre-wrap; }
     .td-wait { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
     .td-wait:empty { display: none; }
+    .td-form { flex: none; display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
     .td-text {
-      box-sizing: border-box; width: 100%; margin: 6px 0; padding: 8px 10px; border-radius: 10px; resize: vertical;
+      box-sizing: border-box; width: 100%; min-height: 52px; max-height: 40vh; margin: 0; padding: 8px 10px; border-radius: 10px; resize: vertical; field-sizing: content;
       background: var(--panel2); color: var(--text); border: 1px solid var(--border); font: inherit; font-size: 14px;
     }
     .td-text:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
@@ -1073,6 +1101,23 @@
     .td-acts .td-answer-btn { border-color: var(--blue); color: var(--blue); }
     .td-acts .td-drop { margin-left: auto; color: var(--muted); }
     .td-acts button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+    /* Answered items wait in a group at the bottom, folded until opened. */
+    .td-g {
+      flex: none; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; margin-top: 6px; padding: 0 8px;
+      background: none; border: 0; border-radius: 10px; color: var(--green); font: inherit; font-size: 11.5px; font-weight: 650;
+      letter-spacing: 0.06em; text-transform: uppercase; text-align: left; cursor: pointer;
+    }
+    .td-g:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .td-g .td-gn { color: var(--muted); font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+    .td-g .td-chev { margin-left: auto; }
+    .td-none { flex: none; padding: 8px; color: var(--muted); font-size: 14px; }
+    /* An unsent answer whose item was answered or closed elsewhere: kept until discarded. */
+    .td-kept { flex: none; margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip-yellow); border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); font-size: 13.5px; }
+    .td-kept-h { color: var(--text); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+    .td-kept-t {
+      box-sizing: border-box; width: 100%; margin: 6px 0; padding: 6px 8px; border-radius: 8px; resize: vertical; field-sizing: content; max-height: 30vh;
+      background: var(--panel); color: var(--text); border: 1px solid var(--border); font: inherit; font-size: 13.5px;
+    }
     .pager .pg-todo { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--orange); color: var(--on-orange); font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
     .pager .pg-todo[hidden] { display: none; }
     /* The page rows above the agent list: desktop only. */
@@ -1118,10 +1163,28 @@
     .page header .pg-count { margin-left: auto; color: var(--muted); font-size: 13px; }
     .page header h2 { font-size: 16px; margin: 0; font-weight: 650; }
     .page-body { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px 20px 24px; }
-    .page-body .td-list { max-width: none; max-height: none; overflow: visible; padding: 0; }
-    .page-body .td-item:first-child { border-top: 0; }
-    .page-body .td-q, .page-body .td-ctx, .page-body .td-answer-t { max-width: 90ch; }
-    .page-body .td-st { margin-left: auto; }
+    /* The To do page: one line per row in columns, and the open item fills
+       the pane, so the other rows stay put above and below it. */
+    #pt-body { display: flex; flex-direction: column; padding: 8px 20px 12px; }
+    #pt-body > .td-list { flex: 1 1 auto; min-height: 0; padding: 0; }
+    #pt-body .td-row { flex-wrap: nowrap; gap: 10px; }
+    #pt-body .td-kind { width: 76px; }
+    #pt-body .td-rm { order: 0; flex: none; gap: 10px; }
+    #pt-body .td-who { display: block; width: 132px; text-align: right; }
+    #pt-body .td-who::after { content: none; }
+    #pt-body .td-age { width: 34px; text-align: right; }
+    #pt-body .td-chips { width: 132px; justify-content: flex-end; }
+    #pt-body .td-item.open { flex: 1 1 0; min-height: 280px; display: flex; flex-direction: column; background: var(--panel); }
+    #pt-body .td-item.open > .td-row { flex: none; }
+    #pt-body .td-item.open .td-q { order: 0; flex: 1 1 0; max-width: 90ch; }
+    #pt-body .td-item.open .td-rm, #pt-body .td-item.open .td-chev { order: 0; }
+    #pt-body .td-item.open .td-chips { width: auto; }
+    #pt-body .td-panel { flex: 1 1 0; }
+    #pt-body .td-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    #pt-body .td-ctx, #pt-body .td-answer, #pt-body .td-kept { max-width: 90ch; }
+    .pt-keys { flex: none; display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+    .pt-keys[hidden] { display: none; }
+    .pt-keys kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel2); color: var(--text); }
     .page-body .empty { max-width: none; text-align: left; padding: 8px 0; }
 
     /* The briefing a coordinator published. */
@@ -1430,6 +1493,7 @@
   <section id="p-todo" class="page" aria-label="To do">
     <header><h2>To do</h2><span class="pg-count" id="pt-count"></span></header>
     <div class="page-body" id="pt-body"></div>
+    <div class="pt-keys" id="pt-keys" hidden><span><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>Enter</kbd> write an answer</span><span><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> send</span><span><kbd>Esc</kbd> leave the box, then close</span></div>
   </section>
 
   <!-- New agent ("+" in the list header) -->

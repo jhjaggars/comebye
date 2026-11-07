@@ -982,7 +982,7 @@ await check("pages: the To do page fills the pane and answers from it; the list 
   const [l, p, card] = await Promise.all([geo("#agents"), geo("#p-todo"), geo("#todo")]);
   if (!p.shown || Math.abs(p.x - (l.x + l.w)) > 2 || Math.abs(p.x + p.w - 1280) > 1 || p.h < 600) throw new Error("page not filling the pane: " + JSON.stringify(p));
   if (card && card.shown) throw new Error("the to-do card shows in the list column");
-  await page.locator(item + " summary").click();
+  await page.locator(item + " > .td-row").click();
   const box = page.locator(item + " .td-text");
   if ((await box.boundingBox()).width < 500) throw new Error("the answer box is cramped: " + JSON.stringify(await box.boundingBox()));
   // A typed answer survives a poll (the re-render guard).
@@ -990,6 +990,9 @@ await check("pages: the To do page fills the pane and answers from it; the list 
   await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
   if ((await box.inputValue()) !== "draft answer") throw new Error("draft lost on re-render");
   await page.locator(item + " .td-answer-btn").click();
+  // Answered items fold into their group at the bottom.
+  await page.waitForFunction((s) => !document.querySelector(s), item, { timeout: 5000 });
+  await page.locator("#pt-body .td-g").click();
   await page.waitForSelector(item + ".answered", { timeout: 5000 });
   await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id);
   await page.evaluate(() => loadTodos());
@@ -1244,7 +1247,9 @@ await check("to-do: items show with their context; answer, done and drop work fr
   if ((await page.locator("#todo .td-count").innerText()).indexOf("3 open") < 0) throw new Error("count " + (await page.locator("#todo .td-count").innerText()));
   await page.evaluate(() => window.confirm = () => true); // a native dialog would block; the check below is about the buttons
   const q = (id) => `#todo .td-item[data-id="${id}"]`;
-  await page.locator(q(ids[0]) + " summary").click();
+  // Opens an item unless it is open already (focus moves on to the next one by itself).
+  const openIt = async (id) => { if (!(await page.locator(q(id) + ".open").count())) await page.locator(q(id) + " > .td-row").click(); await page.waitForSelector(q(id) + ".open"); };
+  await openIt(ids[0]);
   if (!(await page.locator(q(ids[0]) + " .td-ctx h2").count())) throw new Error("context not rendered as markdown");
   if (await page.evaluate(() => window.__xss)) throw new Error("script in the context ran");
   if ((await page.locator(q(ids[0]) + " .td-q").innerText()).indexOf("<i>") < 0) throw new Error("question was not escaped");
@@ -1254,15 +1259,15 @@ await check("to-do: items show with their context; answer, done and drop work fr
   // Answer.
   await page.locator(q(ids[0]) + " .td-text").fill("yes, delete it");
   await page.locator(q(ids[0]) + " .td-answer-btn").click();
-  await page.waitForSelector(`${q(ids[0])}.answered`, { timeout: 5000 });
+  await page.waitForFunction((s) => !document.querySelector(s), q(ids[0]), { timeout: 5000 }); // into the folded Answered group
   const ans = await page.evaluate((id) => fetch("/api/todos/" + id).then((r) => r.json()), ids[0]);
   if (ans.todo.state !== "answered" || ans.todo.answer.text !== "yes, delete it" || ans.todo.answer.via !== "app") throw new Error("answer " + JSON.stringify(ans));
   // Done, a single tap.
-  await page.locator(q(ids[1]) + " summary").click();
+  await openIt(ids[1]);
   await page.locator(q(ids[1]) + " .td-done").click();
   await page.waitForFunction((s) => !document.querySelector(s), q(ids[1]), { timeout: 5000 });
   // Drop asks first: a refusal keeps the item.
-  await page.locator(q(ids[2]) + " summary").click();
+  await openIt(ids[2]);
   await page.evaluate(() => window.confirm = () => false);
   await page.locator(q(ids[2]) + " .td-drop").click();
   await page.waitForTimeout(300);
@@ -1271,6 +1276,116 @@ await check("to-do: items show with their context; answer, done and drop work fr
   await page.locator(q(ids[2]) + " .td-drop").click();
   await page.waitForFunction((s) => !document.querySelector(s), q(ids[2]), { timeout: 5000 });
   await page.screenshot({ path: `${out}/todo.png` });
+});
+
+
+// ---- the to-do accordion: one item open, keys, focus after an answer, drafts across refreshes ----
+const postTodos = (list) => page.evaluate(async (list) => {
+  const out = [];
+  for (const b of list) out.push((await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ no_wait: true, ...b }) }).then((r) => r.json())).todo.id);
+  await loadTodos();
+  return out;
+}, list);
+const dropTodos = (ids) => page.evaluate(async (ids) => {
+  for (const i of ids) await fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await loadTodos();
+}, ids);
+const openIds = (list) => page.evaluate((l) => [...document.querySelectorAll(l + " .td-item.open")].map((e) => e.dataset.id), list);
+const focusedItem = () => page.evaluate(() => { const a = document.activeElement; return { cls: a.className, id: a.closest(".td-item")?.dataset.id || null }; });
+
+await check("to-do accordion (desktop): one item open at a time; keys move, answer and close; focus moves on; answered items fold; the badge counts open items", async () => {
+  await desktopList(1280, "#/todo");
+  const ids = await postTodos([{ question: "accordion one: keep the old key?", kind: "decision", context: "Some *context*" }, { question: "accordion two: run the migration", kind: "action" }, { question: "accordion three: check the backup", kind: "followup" }]);
+  const row = (id) => `#pt-body .td-item[data-id="${id}"] > .td-row`;
+  await page.waitForSelector(row(ids[2]));
+  await page.locator(row(ids[0])).click();
+  if ((await openIds("#pt-body")).join() !== ids[0]) throw new Error("open after a click: " + await openIds("#pt-body"));
+  await page.locator(row(ids[1])).click();
+  if ((await openIds("#pt-body")).join() !== ids[1]) throw new Error("two open: " + await openIds("#pt-body"));
+  if (await page.locator(row(ids[0])).getAttribute("aria-expanded") !== "false" || await page.locator(row(ids[1])).getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded");
+  const order = await page.evaluate(() => [...document.querySelectorAll("#pt-body .td-row")].map((r) => r.closest(".td-item").dataset.id));
+  const at = order.indexOf(ids[1]);
+  // ↓ and k move and open; Enter goes to the box; Esc leaves it, then closes the item.
+  await page.keyboard.press("ArrowDown");
+  if ((await openIds("#pt-body")).join() !== order[at + 1] || (await focusedItem()).id !== order[at + 1]) throw new Error("ArrowDown: " + JSON.stringify(await focusedItem()));
+  await page.keyboard.press("k");
+  if ((await openIds("#pt-body")).join() !== ids[1]) throw new Error("k did not move back");
+  await page.keyboard.press("Enter");
+  if (!/td-text/.test((await focusedItem()).cls)) throw new Error("Enter did not go to the box: " + JSON.stringify(await focusedItem()));
+  await page.keyboard.type("jk typed");
+  if ((await openIds("#pt-body")).join() !== ids[1]) throw new Error("j/k in the box moved the list");
+  await page.keyboard.press("Escape");
+  const f = await focusedItem();
+  if (!/td-row/.test(f.cls) || f.id !== ids[1] || (await openIds("#pt-body")).join() !== ids[1]) throw new Error("first Esc: " + JSON.stringify(f));
+  await page.keyboard.press("Escape");
+  if ((await openIds("#pt-body")).length) throw new Error("second Esc did not close the item");
+  if (!(await page.locator(row(ids[1]) + " .td-draft").isVisible())) throw new Error("no draft mark on the closed row");
+  await page.keyboard.press("Enter");
+  if ((await page.locator(`#pt-body .td-item[data-id="${ids[1]}"] .td-text`).inputValue()) !== "jk typed") throw new Error("draft lost on closing");
+  // Ctrl+Enter sends; the next open item opens, its row focused; the answered one folds into the group.
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Enter");
+  const next = order[(at + 1) % order.length];
+  await page.waitForFunction((n) => document.activeElement?.closest(".td-item")?.dataset.id === n && document.querySelector("#pt-body .td-item.open")?.dataset.id === n, next, { timeout: 5000 });
+  const st = await page.evaluate((i) => fetch("/api/todos/" + i).then((r) => r.json()), ids[1]);
+  if (st.todo.state !== "answered" || st.todo.answer.text !== "jk typed") throw new Error("answer " + JSON.stringify(st.todo));
+  if (await page.locator(row(ids[1])).count()) throw new Error("the answered item is still in the open list");
+  if (await page.locator("#pt-body .td-g").getAttribute("aria-expanded") !== "false") throw new Error("the Answered group is not folded");
+  const counts = await page.evaluate(() => ({ open: todos.open, badge: document.querySelector('#nav .nv[data-page="todo"] .badge')?.textContent, pill: document.querySelector("#pager-todo").textContent }));
+  if (counts.badge !== String(counts.open) || counts.pill !== String(counts.open)) throw new Error("badge counts more than open items: " + JSON.stringify(counts));
+  await page.screenshot({ path: `${out}/todo-accordion-1280.png` });
+  await page.locator("#pt-body .td-g").click();
+  await page.waitForSelector(row(ids[1]));
+  await page.locator("#pt-body .td-g").click();
+  await page.waitForFunction((s) => !document.querySelector(s), row(ids[1]));
+  await noOverflow();
+  await dropTodos(ids);
+});
+
+await check("to-do accordion (phone): one item open; a draft survives a poll and a reload; a refresh that closes the open item opens the next and keeps the draft; a refresh never takes focus", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.evaluate(() => { try { localStorage.clear(); } catch {} });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent[data-id]");
+  const ids = await postTodos([{ question: "phone one: which region?", kind: "decision" }, { question: "phone two: rotate the token", kind: "action" }]);
+  const it = (id) => `#todo .td-item[data-id="${id}"]`;
+  await page.waitForSelector(it(ids[1]));
+  await page.locator(it(ids[0]) + " > .td-row").click();
+  await page.locator(it(ids[1]) + " > .td-row").click();
+  if ((await openIds("#todo")).join() !== ids[1]) throw new Error("open: " + await openIds("#todo"));
+  await page.locator(it(ids[0]) + " > .td-row").click();
+  const box = page.locator(it(ids[0]) + " .td-text");
+  await box.fill("eu-west, keep it");
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  if ((await box.inputValue()) !== "eu-west, keep it") throw new Error("draft lost to a poll");
+  await page.reload({ waitUntil: "load" });
+  await page.waitForSelector(it(ids[0]) + " .td-draft:not([hidden])", { timeout: 8000 });
+  await page.locator(it(ids[0]) + " > .td-row").click();
+  if ((await page.locator(it(ids[0]) + " .td-text").inputValue()) !== "eu-west, keep it") throw new Error("draft lost to a reload");
+  // Closed elsewhere while open here: the next open item opens and takes the focus; the draft is kept.
+  await page.locator(it(ids[0]) + " .td-text").focus();
+  await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), ids[0]);
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  await page.waitForFunction((s) => !document.querySelector(s), it(ids[0]), { timeout: 5000 });
+  const open = await openIds("#todo");
+  if (open.length !== 1 || open[0] === ids[0]) throw new Error("open after the refresh: " + open);
+  if ((await focusedItem()).id !== open[0]) throw new Error("focus did not move on: " + JSON.stringify(await focusedItem()));
+  const kept = page.locator(`#todo [data-kept="${ids[0]}"] .td-kept-t`);
+  if ((await kept.inputValue()) !== "eu-west, keep it") throw new Error("the unsent answer was not kept");
+  await page.screenshot({ path: `${out}/todo-accordion-390-kept.png` });
+  await page.locator(`#todo [data-kept="${ids[0]}"] .td-discard`).click();
+  if (await page.locator(`#todo [data-kept="${ids[0]}"]`).count()) throw new Error("discard left the kept answer");
+  if (await page.evaluate((i) => (localStorage.getItem("comebye.todo.drafts") || "").includes(i), ids[0])) throw new Error("discard left the draft in storage");
+  // A refresh that does not touch the open item keeps it open and leaves the focus alone.
+  await page.locator(it(ids[1]) + ".open, " + it(ids[1])).first().waitFor();
+  if (!(await page.locator(it(ids[1]) + ".open").count())) await page.locator(it(ids[1]) + " > .td-row").click();
+  await page.evaluate(() => document.getElementById("btn-recall").focus());
+  const more = await postTodos([{ question: "phone three: a new item arrives", kind: "followup" }]);
+  if ((await openIds("#todo")).join() !== ids[1]) throw new Error("a refresh changed the open item: " + await openIds("#todo"));
+  if (await page.evaluate(() => document.activeElement.id) !== "btn-recall") throw new Error("a refresh took the focus");
+  await noOverflow();
+  await dropTodos([ids[1], ...more]);
 });
 
 
