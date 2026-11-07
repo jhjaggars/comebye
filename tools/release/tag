@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Tag a comebye release and push just that tag, which starts the Release workflow.
+#
+#   tools/release/tag VERSION [COMMIT] [--yes] [--dry-run]
+#
+#   tools/release/tag v0.5.9                  # tip of origin/main
+#   tools/release/tag v0.5.9 6acddb6 --dry-run
+#
+# Checks first (and refuses): VERSION is vMAJOR.MINOR.PATCH and newer than the
+# latest v* tag, the tag exists nowhere, COMMIT is on origin/main, CI passed on
+# COMMIT. Works from any checkout or worktree of the repository.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$root"
+
+die() { echo "tag: $*" >&2; exit 1; }
+usage() { sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+
+yes=0 dry=0 args=()
+for a in "$@"; do
+  case "$a" in
+    --yes|-y) yes=1 ;;
+    --dry-run|-n) dry=1 ;;
+    -h|--help) usage 0 ;;
+    -*) echo "tag: unknown option $a" >&2; usage ;;
+    *) args+=("$a") ;;
+  esac
+done
+[ "${#args[@]}" -ge 1 ] && [ "${#args[@]}" -le 2 ] || usage
+version="${args[0]}"
+want="${args[1]:-origin/main}"
+
+[[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+  die "$version is not vMAJOR.MINOR.PATCH (e.g. v0.5.9)"
+command -v gh >/dev/null || die "the gh CLI is required for the CI check"
+
+git fetch origin --tags --quiet || die "git fetch origin failed"
+
+sha="$(git rev-parse --verify --quiet "$want^{commit}")" || die "no such commit: $want"
+short="$(git rev-parse --short "$sha")"
+
+if git rev-parse --verify --quiet "refs/tags/$version" >/dev/null; then
+  die "tag $version already exists locally"
+fi
+if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
+  die "tag $version already exists on origin"
+fi
+
+prev="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)"
+if [ -n "$prev" ]; then
+  top="$(printf '%s\n%s\n' "$prev" "$version" | sort -V | tail -n1)"
+  [ "$top" = "$version" ] || die "$version is not greater than the latest tag $prev"
+fi
+
+git merge-base --is-ancestor "$sha" origin/main ||
+  die "commit $short is not on origin/main"
+
+# CI: the newest run of the CI workflow for this commit must have succeeded.
+runs="$(gh run list --commit "$sha" --workflow CI --limit 1 \
+  --json databaseId,status,conclusion,url \
+  --jq '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.url)"')" ||
+  die "could not list CI runs (is gh authenticated?)"
+[ -n "$runs" ] || die "no CI run found for $short; wait for CI to start or push the commit"
+read -r ci_id ci_status ci_conclusion ci_url <<<"$runs"
+if [ "$ci_status" != completed ]; then
+  die "CI for $short is still $ci_status: $ci_url"
+elif [ "$ci_conclusion" != success ]; then
+  die "CI for $short finished with $ci_conclusion: $ci_url"
+fi
+
+echo "Commit:   $short $(git log -1 --format=%s "$sha")"
+echo "Previous: ${prev:-(none)}"
+echo "CI run:   $ci_id ($ci_url)"
+echo "Changes since ${prev:-the start}:"
+git log --oneline "${prev:+$prev..}$sha" | sed 's/^/  /' || true
+
+sign=-a kind=annotated
+if [ "$(git config --type=bool --get tag.gpgSign || true)" = true ] || [ -n "$(git config --get user.signingkey || true)" ]; then
+  sign=-s kind=signed
+fi
+
+if [ "$dry" = 1 ]; then
+  echo
+  echo "Dry run. Would run:"
+  echo "  git tag $sign -m $version $version $sha   ($kind)"
+  echo "  git push origin refs/tags/$version"
+  exit 0
+fi
+
+if [ "$yes" != 1 ]; then
+  printf 'Tag and push? [y/N] '
+  read -r ans || ans=
+  case "$ans" in y|Y|yes|YES) ;; *) echo "Not tagged."; exit 1 ;; esac
+fi
+
+git tag "$sign" -m "$version" "$version" "$sha"
+git push origin "refs/tags/$version"
+echo "Pushed $version ($kind) at $short."
+
+# The Release workflow run for the new tag appears a few seconds later.
+for _ in $(seq 1 12); do
+  url="$(gh run list --workflow Release --branch "$version" --limit 1 \
+    --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+  if [ -n "$url" ]; then echo "Release workflow: $url"; exit 0; fi
+  sleep 5
+done
+echo "Release workflow not visible yet; see https://github.com/jhjaggars/comebye/actions/workflows/release.yml"

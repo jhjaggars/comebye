@@ -88,6 +88,7 @@ connecting several machines, and every setting.
 
 - [Setup](docs/setup.md): install, notifications, multiple hosts, configuration,
   upgrading from herdr-phone
+- [Releasing](docs/releasing.md): `tools/release/tag` tags and pushes a release
 - [Worker VMs](docs/workers.md): `tools/worker` builds a tagged GCE or AWS worker and joins it to the hub
 - [Agents, workers and coordinators](docs/agents.md): launching agents,
   handoffs and cleanup, coordinators and the `comebye` command line, Claude
