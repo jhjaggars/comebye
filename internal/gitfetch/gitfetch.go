@@ -69,6 +69,17 @@ func Command(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// FetchArgs is the git command line (after -C dir) of comebye's own fetch of
+// origin. -c gc.auto=0 and maintenance.auto=false keep git from starting its
+// automatic background gc or repack after the fetch: that would run outside the
+// repository's fetch lock, and it prunes objects other worktrees may need. The
+// settings apply to this one command only; repository config and the user's own
+// git are untouched.
+func FetchArgs() []string {
+	return []string{"-c", "gc.auto=0", "-c", "maintenance.auto=false",
+		"fetch", "--quiet", "--no-tags", "--prune", "origin"}
+}
+
 // CommonDir is the repository's common git directory, shared by its worktrees.
 func CommonDir(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -147,7 +158,7 @@ func once(ctx context.Context, dir, common string, wait, timeout time.Duration) 
 	defer cancel()
 	// --prune: a remote-tracking ref of a branch deleted upstream would otherwise
 	// stay, pointing at objects nothing on the remote keeps any more.
-	cmd := Command(fctx, dir, "fetch", "--quiet", "--no-tags", "--prune", "origin")
+	cmd := Command(fctx, dir, FetchArgs()...)
 	var errb strings.Builder
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {

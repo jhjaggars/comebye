@@ -35,8 +35,9 @@ import (
 // docs/lifecycle.md; the land prompt (internal/cli) repeats the push rules,
 // and a test there checks that the two agree. A handoff-template.md in
 // the state directory replaces it. The hub fills {{repo}}, {{branch}},
-// {{brief}}, {{from}} and {{host}}; the worker's host fills {{worktree}} and
-// {{base}}.
+// {{brief}}, {{from}} and {{host}}; the worker's host fills {{worktree}},
+// {{base}} and {{push_remote}} (the remote that belongs to the user, found
+// from the repository's remotes).
 const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this task by {{from}}.
 
 ## Your task
@@ -46,8 +47,9 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 ## How to work
 
 - Work only in this git worktree, {{worktree}} (your current directory), on branch ` + "`{{branch}}`" + ` (started from ` + "`{{base}}`" + `). Do not check out other branches or edit other checkouts.
-- When you are done, commit your work on ` + "`{{branch}}`" + `. Do not merge, push or rebase unless your task, or a later message from {{from}}, explicitly tells you to. If it does, do exactly what it says: fast-forward pushes only, never force-push, never rewrite pushed history.
-- The repository's object store is shared with other worktrees and agents. Never run ` + "`git gc --prune=now`" + `, ` + "`git prune --expire=now`" + `, ` + "`git reflog expire --expire=now`" + `, or ` + "`git repack -ad`" + ` followed by a prune in it: they can delete objects that another worktree, or a fetch in progress, still needs. When your task lets you push, push your branch to a remote early, so that lost work can be fetched back.
+- When you are done, commit your work on ` + "`{{branch}}`" + `. Do not merge or rebase, and push only as the next rule says, unless your task, or a later message from {{from}}, explicitly tells you to. If it does, do exactly what it says: fast-forward pushes only, never force-push, never rewrite pushed history.
+- The repository's object store is shared with other worktrees and agents. Never run ` + "`git gc --prune=now`" + `, ` + "`git prune --expire=now`" + `, ` + "`git reflog expire --expire=now`" + `, or ` + "`git repack -ad`" + ` followed by a prune in it: they can delete objects that another worktree, or a fetch in progress, still needs.
+- Back up your work: push your branch early, and again after each commit, to the user's own remote only: {{push_remote}} (` + "`git push -u <remote> {{branch}}`" + `). Never push to a shared upstream (a remote owned by someone else or by an organisation, such as NVIDIA/OpenShell), never force-push, never push to ` + "`main`" + ` or the default branch, and never open a PR or merge: pushing your branch is only a backup, and it does not land anything.
 - After you report, {{from}} may come back and ask you to land your work (for example: rebase it onto the latest main as plain commits, re-run the tests, push to main and watch CI). Treat that message as your authorisation for exactly those steps.
 - Grade your evidence honestly in the report's Verification section, and say for each item how you checked it. **Verified live**: the real, built program exercised the way a user or client would (the CLI binary, HTTP requests to a running server, the dev harness in a browser, a pty script); calling a function directly is not live. **Unit tests only**: covered by automated tests but not exercised live. **Not verified**: everything else. A screenshot counts only if you opened it and say in one line what it shows.
 - Do not use ` + "`tmux`" + ` (it breaks inside herdr panes and leaves stray sessions): to exercise an interactive program, drive it from a script over a pty (Python pty, or script).

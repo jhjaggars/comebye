@@ -116,8 +116,9 @@ type workerBody struct {
 	// (the worker may have renamed it) and that branch is used. It must be a
 	// linked worktree of the repository inside the roots, like any other.
 	Worktree string `json:"worktree,omitempty"`
-	// Prompt is sent as is, except that {{worktree}} and {{base}} are
-	// replaced with the worktree's path and the base branch.
+	// Prompt is sent as is, except that {{worktree}}, {{base}} and
+	// {{push_remote}} are replaced with the worktree's path, the base branch
+	// and the remote that belongs to the user (see pushremote.go).
 	Prompt string `json:"prompt"`
 }
 
@@ -322,7 +323,11 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 		},
 		WorkspaceID: opened.WorkspaceID, Worktree: opened.Path, Branch: branch, Base: base, Repo: repo, Reused: reused,
 	}
-	prompt := strings.NewReplacer("{{worktree}}", opened.Path, "{{base}}", base).Replace(b.Prompt)
+	r := strings.NewReplacer("{{worktree}}", opened.Path, "{{base}}", base)
+	prompt := r.Replace(b.Prompt)
+	if strings.Contains(prompt, "{{push_remote}}") {
+		prompt = strings.ReplaceAll(prompt, "{{push_remote}}", pushRemoteFor(ctx, opened.Path))
+	}
 	if strings.TrimSpace(prompt) != "" {
 		queued, err := s.deliverOrQueue(ctx, res.Agent.ID, name, prompt)
 		switch {

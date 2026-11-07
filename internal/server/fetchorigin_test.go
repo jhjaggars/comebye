@@ -141,7 +141,7 @@ func TestServerGitReportsADamagedRepository(t *testing.T) {
 }
 
 func TestTheBriefWarnsAgainstPruningASharedStore(t *testing.T) {
-	for _, s := range []string{"`git gc --prune=now`", "`git prune --expire=now`", "`git reflog expire --expire=now`", "`git repack -ad`", "push your branch to a remote early"} {
+	for _, s := range []string{"`git gc --prune=now`", "`git prune --expire=now`", "`git reflog expire --expire=now`", "`git repack -ad`", "push your branch early"} {
 		if !strings.Contains(defaultHandoffTemplate, s) {
 			t.Errorf("the brief does not say %s", s)
 		}

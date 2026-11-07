@@ -319,7 +319,11 @@ includes the dev-harness screenshots (see [UI work](#ui-work)).
 ## 2. Working and reporting
 
 The worker works only in its worktree, commits on its branch with explicit
-paths, does not merge, push or rebase unless told to, and ends with
+paths, does not merge or rebase unless told to, pushes its branch early and
+after each commit to the user's own remote only (comebye finds it from the
+repository's remotes and the user's GitHub login and names it in the brief;
+with none, the worker does not push and says so; never a shared upstream, never
+a force-push, never `main`, never a PR: it is only a backup), and ends with
 `comebye report -` in the fixed format:
 
 ```markdown
