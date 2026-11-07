@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jhjaggars/comebye/internal/gitfetch"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -323,12 +325,28 @@ func (c worktreeChecks) Removable() (bool, string) {
 
 // fetchOrigin refreshes the repository's remote-tracking refs before a
 // merge check: a fetch writes no working tree and no local branch, only
-// refs/remotes and FETCH_HEAD. It is bounded by gitTimeout and its
-// failures are ignored — no origin, or offline, the checks simply run on
-// the remote-tracking refs they already have, as they always did.
+// refs/remotes and FETCH_HEAD. A failure does not fail the check: no origin,
+// or offline, the checks run on the remote-tracking refs they already have.
+//
+// The checks of several worktrees of one repository share one fetch: they
+// arrive together, and two fetches into one object store at once can leave a
+// ref pointing at an object that never arrived, after which every fetch fails.
+// A failure is logged at most once a day for each repository.
 func fetchOrigin(ctx context.Context, path string) {
-	_, _ = runGit(ctx, path, "fetch", "--quiet", "--no-tags", "origin")
+	originFetcher.Fetch(ctx, path)
 }
+
+// originFetcher serves fetchOrigin. A fetch within fetchFresh counts for every
+// check of that repository in the same round.
+var originFetcher = &gitfetch.Fetcher{
+	Fresh:    fetchFresh,
+	LogEvery: 24 * time.Hour,
+	Wait:     gitTimeout,
+	Timeout:  gitTimeout,
+	Logf:     log.Printf,
+}
+
+const fetchFresh = 30 * time.Second
 
 // checkWorktree runs the checks for the checkout at path (resolved), on
 // branch (default: its current branch) against base (default: the

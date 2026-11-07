@@ -189,8 +189,9 @@ host, that is `finished`, or still `running` but whose agent has been idle
 for 30 minutes (`--idle-after`; `0` turns it off), and that is not already
 marked. It never takes a coordinator, the caller itself, or a worker without
 a worktree of its own. Each candidate is checked on its own host (origin is
-fetched first, so a branch merged upstream since the last fetch counts as
-merged) and classified:
+fetched first, once for all the worktrees of a repository, so a branch merged
+upstream since the last fetch counts as merged; a failing fetch is logged once a
+day and the check goes on with what it has) and classified:
 
 - **ready**: worktree clean, no unfinished rebase or merge, every commit of
   its branch is in the base (or it has none), nothing on no remote. It is
