@@ -35,7 +35,7 @@
   const getPromptValueIsTourText = () => el("prompt-text").textContent.trim() === TOUR_PROMPT;
   const openFirstTodo = () => {
     const d = document.querySelector("#pt-body .td-item:not(.answered)");
-    if (d) d.open = true;
+    if (d && !d.classList.contains("open")) todoExpand(d.dataset.id);
   };
 
   const STEPS = [

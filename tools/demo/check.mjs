@@ -99,7 +99,8 @@ console.log("== try-its inside the tour");
   const t = page.locator("#pt-body .td-item", { hasText: "on by default" });
   await t.locator(".td-text").fill("Yes.");
   await t.locator(".td-answer-btn").click();
-  await page.waitForSelector("#pt-body .td-item.answered:has-text('on by default')");
+  // An answered item folds into the Answered group at the bottom.
+  await page.waitForFunction(() => ![...document.querySelectorAll("#pt-body .td-item:not(.answered)")].some((e) => /on by default/.test(e.textContent)));
   ok(true, "step 10: answering in the tour works");
   await go(10);
   await page.fill("#rc-q", "migration");
@@ -168,21 +169,24 @@ console.log("== free exploration, dark");
   await page.click('#nav [data-page="todo"]');
   await page.waitForSelector("#pt-body .td-item");
   const n0 = await page.locator("#pt-body .td-item").count();
+  // One item is open at a time, and the next opens by itself after an action: open one only if it is closed.
+  const openTodo = async (loc) => { if (!(await loc.evaluate((e) => e.classList.contains("open")))) await loc.locator(".td-row").click(); };
   const it = page.locator("#pt-body .td-item", { hasText: "on by default" });
-  await it.locator("summary").click();
+  await openTodo(it);
   await it.locator(".td-text").fill("On by default, at 600 a minute.");
   await it.locator(".td-answer-btn").click();
+  await page.click("#pt-body .td-g");
   await page.waitForSelector("#pt-body .td-item.answered:has-text('on by default')");
   ok(true, "to-do answered");
   await shot(page, "explore-todo-answered");
   await page.waitForFunction(() => ![...document.querySelectorAll("#pt-body .td-item")].some((e) => /on by default/.test(e.textContent)), null, { timeout: 20000 });
   ok(true, "answered item relayed and closed");
   const f = page.locator("#pt-body .td-item", { hasText: "time zone" });
-  await f.locator("summary").click(); await f.locator(".td-done").click();
+  await openTodo(f); await f.locator(".td-done").click();
   await page.waitForFunction(() => ![...document.querySelectorAll("#pt-body .td-item")].some((e) => /time zone/.test(e.textContent)));
   ok(true, "Done removes it");
   const g = page.locator("#pt-body .td-item", { hasText: "signing key" });
-  await g.locator("summary").click(); await g.locator(".td-drop").click();
+  await openTodo(g); await g.locator(".td-drop").click();
   await page.waitForFunction(() => ![...document.querySelectorAll("#pt-body .td-item")].some((e) => /signing key/.test(e.textContent)));
   ok(true, "Drop removes it (" + n0 + " items at the start)");
 

@@ -121,7 +121,7 @@ const SCENES = {
     await p.locator("#ps-body details.st-row", { hasText: "csv-export" }).locator("summary").click();
     await p.waitForSelector("#ps-body details.st-row[open] .st-rep"); await settle(p); },
   async "07-todo"(p) { await p.click('#nav [data-page="todo"]');
-    const it = p.locator("#pt-body .td-item", { hasText: "on by default" }); await it.locator("summary").click();
+    const it = p.locator("#pt-body .td-item", { hasText: "on by default" }); await it.locator(".td-row").click();
     await it.locator(".td-text").fill("On by default, at 600 a minute. Tell the partner with bulk imports first."); await settle(p); },
   async "08-search"(p) { await p.click('#nav [data-page="search"]'); await p.waitForSelector("#rc-results .rc-card");
     await p.fill("#rc-q", "backoff"); await p.waitForSelector("#rc-results mark"); await settle(p); },
@@ -222,7 +222,7 @@ async function makeVideo(browser, base) {
   await caption("Decisions wait for you in To do");
   await click('#nav [data-page="todo"]');
   const it = page.locator("#pt-body .td-item", { hasText: "on by default" });
-  await click(it.locator("summary"));
+  await click(it.locator(".td-row"));
   await wait(200);
   await click(it.locator(".td-text"));
   await page.keyboard.type("On by default, at 600 a minute.", { delay: 14 });
