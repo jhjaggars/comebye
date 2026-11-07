@@ -205,10 +205,30 @@ func TestPromptHeldGivesUpWhenContextEnds(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	s.typing.poll = 10 * time.Millisecond
 	showScreen(fh, "w2:p1", capture(t, "pi_typed.ansi"))
-	// Short on purpose: the context ends mid-poll, and promptHeld must still
-	// report "held" even when the in-flight attempt fails with an i/o error.
-	ctx, stop := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	// No wall-clock timeout: a fixed deadline could expire during the very
+	// first dial (on a loaded CI box), before promptHeld has seen the pane be
+	// busy, and then a dial error is the right answer. Instead end the
+	// context only once a second attempt has started (a third pane.read: each
+	// attempt reads the pane twice), which proves the first one came back busy; that second attempt is then in
+	// flight or polling when the context ends, and either way must report
+	// "held".
+	ctx, stop := context.WithCancel(t.Context())
 	defer stop()
+	go func() {
+		for ctx.Err() == nil {
+			n := 0
+			for _, m := range fh.methods() {
+				if m == "pane.read" {
+					n++
+				}
+			}
+			if n >= 3 {
+				stop()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
 	err := s.promptHeld(ctx, herdr.AgentInfo{ID: "desk/w2:p1", Host: "desk", PaneID: "w2:p1", Name: "home", Agent: "pi"}, "x")
 	if err == nil || !strings.Contains(err.Error(), "held") {
 		t.Fatalf("err = %v", err)
