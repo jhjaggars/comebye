@@ -1113,6 +1113,50 @@ await check("status: readable on the phone, at the top of the briefings screen, 
   } finally { await unmockStatusData(); }
 });
 
+// A host reports a damaged repository: the Status page says how to repair it, and
+// the agents working in it are marked. Runs in both schemes (run.sh), at both widths.
+async function injectRepoDamage() {
+  return page.evaluate(() => {
+    const a = state.agents.find((x) => (x.worktree && x.worktree.checkout) || x.cwd);
+    const dir = (a.worktree && a.worktree.checkout) || a.cwd;
+    const local = state.hosts.find((h) => h.local) || state.hosts[0];
+    local.repo_damage = [{
+      repo: "OpenShell", path: "/home/dev/code/OpenShell", source: "fetch", since: new Date(Date.now() - 3600e3).toISOString(),
+      reason: "the local repository has missing or damaged objects", ref: "refs/remotes/origin/pull-request/4789",
+      hint: "Delete the broken remote-tracking ref and fetch again: git -C /home/dev/code/OpenShell update-ref -d refs/remotes/origin/pull-request/4789 && git -C /home/dev/code/OpenShell fetch origin. Then check with git -C /home/dev/code/OpenShell fsck --connectivity-only.",
+      worktrees: ["/home/dev/code/OpenShell", dir],
+    }];
+    renderList(); renderStatus();
+    return agentId(a);
+  });
+}
+for (const width of [1280, 390]) {
+  await check(`repo damage: Status says how to repair it and the agents in it are marked (${width})`, async () => {
+    await mockStatusData();
+    try {
+      await desktopList(width, "#/status");
+      if (width < 1100) await page.goto(base + "/#/briefings", { waitUntil: "load" });
+      await page.waitForSelector(width >= 1100 ? "#ps-body .st-proj" : "#br-status .st-proj", { timeout: 8000 });
+      const id = await injectRepoDamage();
+      const box = width >= 1100 ? "#ps-body" : "#br-status";
+      const r = await page.evaluate(([box, id]) => {
+        const sec = document.querySelector(box + " .st-repair");
+        const row = document.querySelector(`#agents .agent[data-id="${CSS.escape(id)}"] .rd-chip`);
+        return { text: sec ? sec.innerText : "", first: document.querySelector(box + " .st").firstElementChild.nextElementSibling === sec,
+          sum: document.querySelector(box + " .st-sum").textContent, chip: row ? row.textContent : "", title: row ? row.title : "",
+          others: document.querySelectorAll("#agents .rd-chip").length };
+      }, [box, id]);
+      if (!r.text.includes("Repositories need repair") || !r.text.includes("OpenShell") || !r.text.includes("update-ref -d refs/remotes/origin/pull-request/4789") || !r.text.includes("1 agent works in it")) throw new Error(r.text.slice(0, 300));
+      if (!r.first) throw new Error("the repair section is not first");
+      if (!r.sum.startsWith("1 repository needs repair")) throw new Error(r.sum);
+      if (r.chip !== "repo damaged" || !r.title.includes("missing or damaged objects")) throw new Error(JSON.stringify(r));
+      if (r.others !== 1) throw new Error(`${r.others} agents marked`);
+      await noOverflow();
+      await page.locator(box + " .st-repair").screenshot({ path: `${out}/repo-damage-${width}.png` });
+    } finally { await unmockStatusData(); }
+  });
+}
+
 await check("pages: below the breakpoint the page hashes do nothing and openPage is a no-op", async () => {
   await desktopList(1099);
   await page.goto(base + "/#/todo", { waitUntil: "load" });

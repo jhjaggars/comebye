@@ -139,7 +139,35 @@ function subLine(a) {
   const hostEl = multiHost() && a.host ? `<span class="host-chip">${esc(a.host)}</span>` : "";
   const repoEl = `<span class="repo">${esc(repo)}</span>`;
   const chip = branch ? `<span class="wt-chip">⑂ ${esc(branch)}</span>` : "";
-  return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${ledgerChip(a)}</div>`;
+  const d = repoDamageOf(a);
+  const dmg = d ? `<span class="lg-chip failed rd-chip" title="${escAttr(`${d.repo}: ${d.reason}. ${d.hint}`)}">repo damaged</span>` : "";
+  return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${dmg}${ledgerChip(a)}</div>`;
+}
+
+/* ---------- damaged repositories ---------- */
+//
+// Each host reports the repositories whose object store git found damaged (a
+// failed fetch, another git command, or the daily fsck), with the checkouts that
+// share them and how to repair them by hand. Nothing repairs them by itself.
+
+function repoDamageList() {
+  const out = [];
+  for (const h of state.hosts || []) for (const d of h.repo_damage || []) out.push({ host: h.name, local: !!h.local, d });
+  return out;
+}
+
+// repoDamageOf is the damaged repository an agent works in, if any.
+function repoDamageOf(a) {
+  const h = (a.host && hostStatus(a.host)) || (state.hosts || []).find((x) => x.local);
+  if (!h || !h.repo_damage || !h.repo_damage.length) return null;
+  const dir = (a.worktree && a.worktree.checkout) || a.cwd || "";
+  if (!dir) return null;
+  for (const d of h.repo_damage) {
+    for (const w of (d.worktrees && d.worktrees.length ? d.worktrees : [d.path])) {
+      if (w && (dir === w || dir.startsWith(w.replace(/\/+$/, "") + "/"))) return d;
+    }
+  }
+  return null;
 }
 
 /* ---------- hosts and agent identity ---------- */
@@ -3204,7 +3232,8 @@ function statusHTML(desktop) {
   if (ledger.on !== true) return `<div class="empty">Loading…</div>`;
   const ps = statusModel();
   const nProg = ps.reduce((n, p) => n + p.progress.length, 0), nBlk = ps.reduce((n, p) => n + p.blocked.length, 0), nYou = ps.reduce((n, p) => n + p.todos.length, 0);
-  const sum = [nProg ? `${nProg} in progress` : "", nBlk ? `${nBlk} blocked` : "", nYou ? `${nYou} waiting on you` : ""].filter(Boolean).join(" · ") || "Nothing in progress, and nothing is waiting on you.";
+  const dmg = repoDamageList();
+  const sum = [dmg.length ? `${dmg.length} ${dmg.length === 1 ? "repository needs" : "repositories need"} repair` : "", nProg ? `${nProg} in progress` : "", nBlk ? `${nBlk} blocked` : "", nYou ? `${nYou} waiting on you` : ""].filter(Boolean).join(" · ") || "Nothing in progress, and nothing is waiting on you.";
   const open = (a) => desktop && a ? ` <button type="button" class="st-link" data-agent="${escAttr(agentId(a))}">open</button>` : "";
   const card = (p) => {
     let h = "";
@@ -3223,7 +3252,13 @@ function statusHTML(desktop) {
     }).join("");
     return `<section class="st-proj${p.blocked.length || p.todos.length ? " hot" : ""}" aria-label="${escAttr(p.name)}"><div class="st-ph">${esc(p.name)}</div>${h}</section>`;
   };
-  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${ps.map(card).join("")}${
+  const repair = dmg.length ? `<section class="st-proj hot st-repair" aria-label="Repositories need repair"><div class="st-ph">Repositories need repair</div>${dmg.map(({ host, d }) => {
+    const n = state.agents.filter((a) => repoDamageOf(a) === d).length;
+    const since = Date.parse(d.since);
+    return `<div class="st-row"><span class="st-n">${esc(multiHost() ? `${host} · ${d.repo}` : d.repo)}</span><span class="st-m warn">${esc(d.reason)}${d.ref ? ` at <code>${esc(d.ref)}</code>` : ""}</span><span class="st-r">${Number.isNaN(since) ? "" : "since " + esc(fmtAgo(since)) + " ago"}</span>` +
+      `<div class="st-hint">${esc(d.hint)}</div><div class="st-m">${esc(d.path)} · found by ${esc(d.source)}${n ? ` · ${n} ${n === 1 ? "agent works" : "agents work"} in it` : ""}</div></div>`;
+  }).join("")}</section>` : "";
+  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${ps.map(card).join("")}${
     desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
 }
 
