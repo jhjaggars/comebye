@@ -92,9 +92,16 @@ it against the session files. Tested against Garage v2.5.0.
 
 Two things about the `aws` CLI through a Tailscale Ingress:
 
-- **`aws s3 cp` downloads fail** with `signed header content-length is not
-  present`. Check an upload with `archive verify` and ETags instead. Comebye's own
-  reads, `aws s3api get-object` and uploads are not affected.
+- **`aws s3 cp` downloads and `aws s3 rm` deletes fail** with `signed header
+  content-length is not present`: the CLI signs that header, and it does not survive
+  the Ingress. Check an upload with `archive verify` and ETags instead. Comebye's own
+  reads, `aws s3api get-object`, listing and uploads are not affected.
+  - **To delete a session**, use `archive delete SESSION --host H --yes`. It goes
+    through Comebye's own client, which does not sign that header, and it writes the
+    tombstone that keeps the session from coming back.
+  - **To delete any other object**, use a client that does not sign
+    `content-length`, or reach Garage without the Ingress, for example with `kubectl
+    port-forward` to its S3 port.
 - **Set `multipart_threshold = 64MB` under `s3 =` in the `aws` config before
   migrating.** Above the default 8 MB threshold, `aws s3 sync` uploads in parts, and
   the object's ETag (`...-2`) cannot be compared with a local MD5. Below the
