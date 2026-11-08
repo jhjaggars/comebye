@@ -339,7 +339,10 @@ function mdSetup() {
       },
     },
   });
-  return (mdLib = { m, P });
+  // Titles and answers: raw HTML is shown as text, never interpreted.
+  const inline = new M.Marked({ gfm: true, breaks: true, async: false });
+  inline.use({ renderer: { html: (token) => esc(token.text) } });
+  return (mdLib = { m, P, inline });
 }
 
 function escAttr(s) {
@@ -373,6 +376,24 @@ function renderMarkdown(src, key) {
     mdCache.set(key, { src, html });
   }
   return html;
+}
+
+// renderInline returns sanitized HTML for a short text shown inside a line
+// or a box (a to-do title, an answer): code spans, bold/italic, strikethrough
+// and links, no block elements. Single newlines stay line breaks. Escaped
+// text when the libraries are missing.
+// links=false drops the anchors but keeps their text (a title sits inside a
+// <button>, where a link must not be).
+const MD_INLINE_TAGS = ["b", "br", "code", "del", "em", "i", "s", "strong"];
+function renderInline(src, links = true) {
+  src = String(src ?? "");
+  const lib = src.length <= MD_MAX_CHARS ? mdSetup() : false;
+  if (!lib) return esc(src);
+  try {
+    return lib.P.sanitize(lib.inline.parseInline(src), { ...MD_PURIFY, ALLOWED_TAGS: links ? ["a", ...MD_INLINE_TAGS] : MD_INLINE_TAGS });
+  } catch {
+    return esc(src);
+  }
 }
 
 // mdOnOpen fills a <details> body with rendered markdown the first time it
@@ -1024,7 +1045,7 @@ function todoItemHtml(t, pfx) {
     const aAt = a ? Date.parse(a.at) : NaN;
     const answered = a
       ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : esc(fmtAgo(aAt)) + " ago"}</div>
-          <div class="td-answer-t">${esc(a.text)}</div>
+          <div class="td-answer-t">${renderInline(a.text)}</div>
           <div class="td-wait">${t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""}</div></div>` : "";
     const kept = ans && draft ? todoKeptHtml(t.id, todoDraft(t.id), "Not sent: this was answered before you sent yours.") : "";
     const busy = todos.busy.has(t.id) ? " disabled" : "";
@@ -1048,7 +1069,7 @@ function todoItemHtml(t, pfx) {
   }
   return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}" data-id="${escAttr(t.id)}">
       <button type="button" class="td-row" id="${escAttr(rid)}" aria-expanded="${open}"${open ? ` aria-controls="${escAttr(pid)}"` : ""}>
-        <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${esc(t.question)}</span>
+        <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</span>
         <span class="td-rm"><span class="td-who">${esc(who)}</span><span class="td-age">${esc(age)}</span><span class="td-chips">${chips}</span></span>
         <span class="td-chev" aria-hidden="true"></span>
       </button>${panel}

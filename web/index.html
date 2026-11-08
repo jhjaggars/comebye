@@ -1081,9 +1081,14 @@
     .td-ctx { margin: 6px 0; font-size: 13.5px; }
     .td-ctx > :first-child { margin-top: 0; }
     .td-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0; font-size: 13px; }
-    .td-answer { margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--green) 10%, var(--panel2)); }
+    .td-answer { margin: 10px 0; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--green) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--green) 35%, var(--border)); }
     .td-answer-h { font-size: 12px; font-weight: 600; color: var(--muted); }
-    .td-answer-t { margin-top: 2px; white-space: pre-wrap; }
+    .td-answer-t { margin-top: 2px; overflow-wrap: anywhere; }
+    .td-q code, .td-answer-t code { font: 0.87em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-weight: 400; }
+    .td-q a, .td-answer-t a { color: var(--blue); }
+    .td-q strong, .td-q b { font-weight: 700; }
+    .td-ctx pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .td-ctx pre code { overflow-wrap: anywhere; }
     .td-wait { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
     .td-wait:empty { display: none; }
     .td-form { flex: none; display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); }

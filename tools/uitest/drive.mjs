@@ -1337,6 +1337,46 @@ const dropTodos = (ids) => page.evaluate(async (ids) => {
 const openIds = (list) => page.evaluate((l) => [...document.querySelectorAll(l + " .td-item.open")].map((e) => e.dataset.id), list);
 const focusedItem = () => page.evaluate(() => { const a = document.activeElement; return { cls: a.className, id: a.closest(".td-item")?.dataset.id || null }; });
 
+const todoMdCheck = async (root, setup) => {
+  await setup();
+  const ids = await postTodos([
+    { question: "md `code` and **bold** <script>window.__tq=1</script> [x](https://example.com)", kind: "decision", context: "line one\nline two\nline three\n\n```\n" + "long-command-".repeat(30) + "\n```" },
+  ]);
+  const ans = await page.evaluate(async (id) => (await fetch("/api/todos/" + id + "/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "use **bubblewrap**\nthen `make clean` <img src=x onerror=\"window.__ta=1\"> [l](https://example.com/a)" }) })).status, ids[0]);
+  if (ans >= 300) throw new Error("answer status " + ans);
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  const item = `${root} .td-item[data-id="${ids[0]}"]`;
+  // answered items fold into their group
+  if (!(await page.locator(item).count())) await page.locator(`${root} .td-g`).first().click();
+  await page.waitForSelector(item);
+  const row = page.locator(item + " > .td-row");
+  const q = item + " .td-q";
+  // collapsed: markdown renders, still one line, no link, no script
+  if ((await page.locator(item + ".open").count())) await row.click();
+  const c = await page.evaluate((s) => { const e = document.querySelector(s); return { code: !!e.querySelector("code"), bold: !!e.querySelector("strong"), a: !!e.querySelector("a"), script: !!e.querySelector("script"), text: e.textContent, h: e.getBoundingClientRect().height, ell: getComputedStyle(e).textOverflow, ws: getComputedStyle(e).whiteSpace }; }, q);
+  if (!c.code || !c.bold || c.a || c.script || c.text.indexOf("`") >= 0 || c.text.indexOf("**") >= 0 || c.ell !== "ellipsis" || c.ws !== "nowrap" || c.h > 24) throw new Error("collapsed title " + JSON.stringify(c));
+  await row.click();
+  await page.waitForSelector(item + ".open");
+  const o = await page.evaluate((s) => { const t = document.querySelector(s + " .td-q"), a = document.querySelector(s + " .td-answer-t"), x = document.querySelector(s + " .td-ctx"); return {
+    tcode: !!t.querySelector("code"), tbold: !!t.querySelector("strong"), tscript: !!t.querySelector("script"), tlit: t.textContent.indexOf("<script>") >= 0,
+    abold: !!a.querySelector("strong"), acode: !!a.querySelector("code"), abr: a.querySelectorAll("br").length, alink: a.querySelector("a")?.getAttribute("href"), aimg: !!a.querySelector("img"), alit: a.textContent.indexOf("<img") >= 0,
+    ctxbr: x.querySelectorAll("br").length, prew: getComputedStyle(x.querySelector("pre")).whiteSpace, prow: x.querySelector("pre").scrollWidth <= x.querySelector("pre").clientWidth + 1 }; }, item);
+  if (!o.tcode || !o.tbold || o.tscript || !o.tlit) throw new Error("open title " + JSON.stringify(o));
+  if (!o.abold || !o.acode || o.abr < 1 || o.alink !== "https://example.com/a" || o.aimg || !o.alit) throw new Error("answer " + JSON.stringify(o));
+  if (o.ctxbr < 2) throw new Error("single newlines lost their line breaks in the context: " + JSON.stringify(o));
+  if (o.prew !== "pre-wrap" || !o.prow) throw new Error("code block in the context scrolls sideways: " + JSON.stringify(o));
+  if (await page.evaluate(() => window.__tq || window.__ta)) throw new Error("script ran");
+  await noOverflow();
+  await page.screenshot({ path: `${out}/todo-md-${root.replace(/\W/g, "")}.png` });
+  await dropTodos(ids);
+};
+await check("to-do markdown (desktop): title and answer render inline markdown, sanitized; context keeps single newlines; no sideways overflow", async () => {
+  await todoMdCheck("#pt-body", () => desktopList(1280, "#/todo"));
+});
+await check("to-do markdown (phone): title and answer render inline markdown, sanitized; context keeps single newlines; no sideways overflow", async () => {
+  await todoMdCheck("#todo", async () => { await page.setViewportSize({ width: 390, height: 844 }); await page.goto(base + "/", { waitUntil: "load" }); await page.waitForSelector("#agents .agent"); });
+});
+
 await check("to-do accordion (desktop): one item open at a time; keys move, answer and close; focus moves on; answered items fold; the badge counts open items", async () => {
   await desktopList(1280, "#/todo");
   const ids = await postTodos([{ question: "accordion one: keep the old key?", kind: "decision", context: "Some *context*" }, { question: "accordion two: run the migration", kind: "action" }, { question: "accordion three: check the backup", kind: "followup" }]);
