@@ -24,9 +24,11 @@ ConnectPort 443
 C2
 keep tinyproxy tinyproxy -d -c "$S/tinyproxy.conf"
 
+# The sandbox has only lo, so tailscaled thinks it is offline and never contacts control;
+# TS_ASSUME_NETWORK_UP_FOR_TEST overrides that (a test-named knob: fragile across versions).
 # Userspace networking: no /dev/net/tun, no capabilities. DERP and the control
 # plane go through the local CONNECT proxy because OpenShell denies IP-literal TCP.
-keep tailscaled env HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128 \
+keep tailscaled env TS_ASSUME_NETWORK_UP_FOR_TEST=1 HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128 \
   tailscaled --tun=userspace-networking --state="$S/tailscaled.state" --socket="$S/tailscaled.sock" --port=0
 
 keep herdr herdr server
