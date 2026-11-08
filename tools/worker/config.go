@@ -581,7 +581,7 @@ func (c *Config) validateOpenShell(chk func(bool, string, ...any) error) error {
 		chk(c.OpenShellGateway == "" || osGatewayRe.MatchString(c.OpenShellGateway), "bad openshell_gateway %q", c.OpenShellGateway),
 		chk(c.OpenShellWorkspace != "" && osWorkspaceRe.MatchString(c.OpenShellWorkspace), "openshell_workspace is required (a gateway can refuse the default workspace); got %q", c.OpenShellWorkspace),
 		chk(c.SandboxImage != "" && osImageRe.MatchString(c.SandboxImage), "sandbox_image is required: an image reference such as registry.example/comebye-sandbox:{version} (got %q)", c.SandboxImage),
-		chk(c.SandboxPolicy != "", "sandbox_policy is required: the gateway's default policy denies the Tailscale hosts and the PTY paths, so the sandbox could not join the tailnet or run herdr (render tools/worker/openshell/policy.yaml.tmpl with render-policy.sh)"),
+		chk(c.SandboxPolicy != "", "sandbox_policy is required: the gateway's default policy denies the Tailscale hosts and the PTY paths, so the sandbox could not join the tailnet or run herdr (render tools/worker/openshell/policy.yaml.tmpl with tools/worker/openshell/render-policy.sh)"),
 		chk(c.SandboxCPU == "" || osQuantityRe.MatchString(c.SandboxCPU), "bad sandbox_cpu %q (like 2 or 500m)", c.SandboxCPU),
 		chk(c.SandboxMemory == "" || osQuantityRe.MatchString(c.SandboxMemory), "bad sandbox_memory %q (like 6Gi)", c.SandboxMemory),
 		chk(c.LLMGatewayURL == "", "llm_gateway_url is not supported with provider=openshell: a sandbox cannot reach the tailnet's LLM gateway; give it an LLM provider on the OpenShell gateway (sandbox_providers)"),

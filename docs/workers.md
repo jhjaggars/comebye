@@ -349,7 +349,10 @@ A sandbox has no ssh and no sudo; every step is `openshell sandbox exec`, with s
 
 - The gateway must use the **Kubernetes driver**. A podman sandbox has only a loopback interface
   and cannot join the tailnet.
-- The image, the init (`comebye-sandbox-init`) and the policy come from `tools/worker/openshell/`.
+- The image, the init (`comebye-sandbox-init`) and the policy template come from `tools/worker/openshell/`:
+  [README.md](../tools/worker/openshell/README.md) is the contract between the init and this tool (the
+  settings file and its keys, what the init runs and what the tool runs); [RUNBOOK.md](../tools/worker/openshell/RUNBOOK.md)
+  covers the gateway, the providers and the Claude login.
   The image must hold the comebye release the hub runs; `sandbox_image` takes `{version}`.
 - comebye in the image must be able to reach the hub through tailscaled's SOCKS5 listener
   (`127.0.0.1:1055`): the sandbox cannot resolve tailnet names itself.
@@ -357,7 +360,8 @@ A sandbox has no ssh and no sudo; every step is `openshell sandbox exec`, with s
   `Authentication: Ok`. When the login has lapsed, the tool says so and names the command.
 - The gateway providers the sandbox uses (`sandbox_providers`: model keys, a GitHub token) are
   made once by an admin. They hold the real secrets; the sandbox sees placeholders.
-- `sandbox_policy` is **required**: render the image's `policy.yaml.tmpl` with `render-policy.sh`. The
+- `sandbox_policy` is **required**: render the image's `policy.yaml.tmpl` with
+  `tools/worker/openshell/render-policy.sh > policy.yaml`. The
   gateway's default policy denies the Tailscale hosts and the PTY paths, and only the *network* part
   of a policy can be changed on a live sandbox (`openshell policy set`), so a sandbox created
   without it can never join the tailnet or run herdr panes: delete it and create it again.
