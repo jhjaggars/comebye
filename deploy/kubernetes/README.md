@@ -19,6 +19,10 @@ default and needs none of this.
 
 ## What it relies on
 
+- **A TUN sidecar** (`TS_USERSPACE=false`): `NET_ADMIN` and `/dev/net/tun`.
+  The hub dials its peers directly and ignores proxies, so a userspace
+  tailscaled (proxy only) cannot reach them. If your cluster forbids
+  `NET_ADMIN`, this base does not fit as is.
 - `replicas: 1`, never more. The state directory is single-writer;
   `hub.lock` refuses a second server.
 - A `ReadWriteOnce` volume at `/var/lib/comebye` (the state directory).

@@ -70,7 +70,10 @@ spec:
             - {name: TS_HOSTNAME, value: comebye}
             - {name: TS_KUBE_SECRET, value: comebye-tailscale-state}
             - {name: TS_STATE_DIR, value: /var/lib/tailscale}
-            - {name: TS_USERSPACE, value: "true"}
+            # Kernel (TUN) networking, not userspace: the hub dials its peers
+            # directly and ignores proxies, so a userspace sidecar (which only
+            # offers a SOCKS5/HTTP proxy) could not reach them.
+            - {name: TS_USERSPACE, value: "false"}
             - {name: TS_SOCKET, value: /var/run/tailscale/tailscaled.sock}
             - {name: TS_SERVE_CONFIG, value: /config/serve.json}
             # First start only: an auth key from your tailnet admin. Put it in
@@ -79,13 +82,20 @@ spec:
             - name: TS_AUTHKEY
               valueFrom:
                 secretKeyRef: {name: comebye-tailscale-auth, key: authkey, optional: true}
+          # TUN mode needs NET_ADMIN and the /dev/net/tun device, and runs as
+          # root inside the container. Your cluster policy (Pod Security
+          # "restricted", for one) may forbid this; use a namespace that allows
+          # NET_ADMIN, or expose /dev/net/tun through a device plugin instead of
+          # the hostPath below.
           securityContext:
-            runAsUser: 1000
-            runAsNonRoot: true
+            capabilities: {add: ["NET_ADMIN"]}
           volumeMounts:
             - {name: tailscale-socket, mountPath: /var/run/tailscale}
             - {name: serve-config, mountPath: /config, readOnly: true}
+            - {name: dev-net-tun, mountPath: /dev/net/tun}
       volumes:
+        - name: dev-net-tun
+          hostPath: {path: /dev/net/tun, type: CharDevice}
         - name: tailscale-socket
           emptyDir: {}
         - name: serve-config
