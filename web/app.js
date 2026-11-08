@@ -983,6 +983,25 @@ function missNote(m, hasBrief) {
 const PLAN_SHOWN_MS = 24 * 3600 * 1000;
 const planOpen = new Set(); // plans whose card is expanded (the page's own state)
 
+// Dismissed plans are kept per browser (localStorage, by plan id): the hub
+// has no per-user state, and a dismissal is a view preference.
+const PLAN_DISMISSED_KEY = "comebye.plans.dismissed";
+const planDismissed = new Set((() => {
+  try { const a = JSON.parse(localStorage.getItem(PLAN_DISMISSED_KEY)); return Array.isArray(a) ? a.filter((x) => typeof x === "string") : []; } catch { return []; }
+})());
+function savePlanDismissed() {
+  // Forget ids the ledger no longer has, so the list cannot grow for ever.
+  const known = new Set((ledger.plans || []).map((p) => p && p.id));
+  if (ledger.on === true && known.size) for (const id of [...planDismissed]) if (!known.has(id)) planDismissed.delete(id);
+  try { localStorage.setItem(PLAN_DISMISSED_KEY, JSON.stringify([...planDismissed])); } catch {}
+}
+
+// planGone: a settled plan with every member landed or removed has nothing
+// left to look at. A partial plan ("needs a look") is never hidden by itself.
+function planAllGone(p) {
+  return p.state === "done" && p.members.length > 0 && p.members.every((m) => m.status === "landed" || m.status === "removed");
+}
+
 // planMemberTarget says where a member leads: its agent while that is still
 // running, else the archived session in Search (the worker was removed).
 function planMemberTarget(m) {
@@ -1010,10 +1029,12 @@ function renderPlans() {
   const shown = (ledger.on === true && Array.isArray(ledger.plans) ? ledger.plans : []).filter((p) => {
     if (!p || !Array.isArray(p.members)) return false;
     if (p.state === "open") return true;
+    if (planDismissed.has(p.id)) return false;
+    if (planAllGone(p)) return false;
     const at = Date.parse(p.settled_at);
     return !Number.isNaN(at) && now - at < PLAN_SHOWN_MS;
   });
-  const sig = JSON.stringify([shown.map((p) => [p.id, p.state, p.done, p.landing, p.working, planOpen.has(p.id), p.members.map((m) => [m.id, m.outcome, m.status, m.followup, m.agent_id, m.reported, !!(m.agent_id && agentById(m.agent_id)), m.agent_id && agentById(m.agent_id)?.agent_status])]), ledger.entries.length]);
+  const sig = JSON.stringify([shown.map((p) => [p.id, p.state, p.done, p.landing, p.working, planOpen.has(p.id), planDismissed.size, p.members.map((m) => [m.id, m.outcome, m.status, m.followup, m.agent_id, m.reported, !!(m.agent_id && agentById(m.agent_id)), m.agent_id && agentById(m.agent_id)?.agent_status])]), ledger.entries.length]);
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   el.hidden = !shown.length;
@@ -1024,12 +1045,17 @@ function renderPlans() {
   const focus = el.contains(ae) && ae.matches(":focus-visible") ? document.activeElement.dataset.plan || document.activeElement.getAttribute("href") : null;
   el.innerHTML = shown.map((p) => {
     const open = planOpen.has(p.id);
+    const settled = p.state !== "open";
+    const collapsed = p.state === "done" && !open; // done: one line until opened; partial never collapses
     const follow = [p.landing ? `${p.landing} landing` : "", p.working ? `${p.working} working` : ""].filter(Boolean).join(", ");
     const created = Date.parse(p.created_at);
-    return `<div class="plan ${esc(p.state)}">
-      <div class="plan-head"><button type="button" class="plan-title" data-plan="${esc(p.id)}" aria-expanded="${open}" title="${open ? "Collapse" : "Show members, branches and reports"}">${esc(p.title)}</button><span class="plan-state">${esc(label[p.state] || p.state)}${follow ? ` · ${esc(follow)}` : ` · ${p.done} of ${p.size}`}</span></div>
+    const state = `${label[p.state] || p.state}${follow ? ` · ${follow}` : ` · ${p.done} of ${p.size}`}`;
+    const tip = `${p.title}\n${open ? "Click to collapse" : collapsed ? "Click to show the members" : "Click for branches and reports"}`;
+    return `<div class="plan ${esc(p.state)}${collapsed ? " collapsed" : ""}${settled ? " settled" : ""}">
+      <div class="plan-head"><button type="button" class="plan-title" data-plan="${esc(p.id)}" aria-expanded="${open}" title="${esc(tip)}">${p.state === "done" ? `<span class="plan-check" aria-hidden="true">✓</span> ` : ""}${esc(p.title)}</button><span class="plan-state">${esc(state)}</span></div>
+      ${settled ? `<button type="button" class="plan-x" data-dismiss="${esc(p.id)}" aria-label="Dismiss this plan" title="Dismiss (hides it in this browser)">×</button>` : ""}
       ${open ? `<div class="plan-meta">${p.done} of ${p.size} finished${created ? ` · started ${fmtAgo(created)} ago` : ""}${p.by ? ` · by ${esc(p.by)}` : ""}</div>` : ""}
-      <ul class="plan-members">${p.members.map((m) => planMemberHtml(m, p, open)).join("")}</ul>
+      ${collapsed ? "" : `<ul class="plan-members">${p.members.map((m) => planMemberHtml(m, p, open)).join("")}</ul>`}
     </div>`;
   }).join("");
   if (focus) {
@@ -1040,6 +1066,13 @@ function renderPlans() {
 
 function initPlans() {
   $("plans").addEventListener("click", (ev) => {
+    const x = ev.target.closest("button.plan-x");
+    if (x) {
+      planDismissed.add(x.dataset.dismiss);
+      savePlanDismissed();
+      renderPlans();
+      return;
+    }
     const b = ev.target.closest("button.plan-title");
     if (!b) return;
     const id = b.dataset.plan;

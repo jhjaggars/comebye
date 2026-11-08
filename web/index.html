@@ -1392,12 +1392,28 @@
     }
     .plan.partial { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
     .plan.done { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+    .plan { position: relative; }
     .plan-head { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+    .plan.settled .plan-head { padding-right: 26px; }
+    .plan.collapsed { padding-top: 6px; padding-bottom: 6px; }
+    .plan.collapsed .plan-head { flex-direction: row; align-items: center; gap: 8px; }
+    .plan-check { color: var(--green); font-weight: 700; margin-right: 4px; }
     .plan-title {
-      font: inherit; font-weight: 600; color: var(--text); text-align: left; min-width: 0; max-width: 100%; text-wrap: balance;
+      font: inherit; font-weight: 600; color: var(--text); text-align: left; min-width: 0; max-width: 100%;
       background: none; border: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 8px; cursor: pointer;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+      display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    .plan.collapsed .plan-title { flex: 0 1 auto; }
+    .plan.collapsed .plan-state { flex: none; }
+    .plan-x {
+      position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px;
+      background: none; color: var(--muted); font: inherit; font-size: 18px; line-height: 1; cursor: pointer;
+    }
+    .plan.collapsed .plan-x { top: 4px; }
+    .plan-x:active { background: var(--panel2); }
+    @media (hover: hover) { .plan-x:hover { background: var(--panel2); color: var(--text); } }
+    .plan-x:focus:not(:focus-visible) { outline: none; }
+    .plan-x:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
     .plan-title:active, .plan-members a.pm:active { background: var(--panel2); }
     @media (hover: hover) { .plan-title:hover, .plan-members a.pm:hover { background: var(--panel2); } }
     .plan-title:focus:not(:focus-visible), .plan-members a.pm:focus:not(:focus-visible) { outline: none; }

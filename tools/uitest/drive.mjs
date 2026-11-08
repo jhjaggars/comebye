@@ -1185,19 +1185,21 @@ const PLAN_LEDGER = { marks: [], roles: {}, entries: [
   { id: "m2", host: "uitest", repo_name: "infra", branch: "feat/removed-one", agent_id: "uitest/w77:p1", pane_id: "w77:p1", status: "removed", outcome: "ok", reported: false },
 ] }] };
 for (const width of [1280, 390]) {
-  await check(`plan card: at ${width}px a member opens its agent, a gone one falls back to Search, the title wraps, keys work`, async () => {
+  await check(`plan card: at ${width}px a member opens its agent, a gone one falls back to Search, a long title stays on one line, keys work`, async () => {
     await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: PLAN_LEDGER }));
     try {
       await desktopList(width, "#/status");
-      await page.waitForSelector("#plans .plan .pm", { state: "visible", timeout: 8000 });
+      await page.waitForSelector("#plans .plan-title", { state: "visible", timeout: 8000 });
       const title = page.locator("#plans .plan-title");
-      const lines = await title.evaluate((e) => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)));
-      if (lines !== 2) throw new Error(`title takes ${lines} lines`);
+      const one = await title.evaluate((e) => ({ lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)), cut: e.scrollWidth > e.clientWidth, ell: getComputedStyle(e).textOverflow, tip: e.title }));
+      if (one.lines !== 1 || !one.cut || one.ell !== "ellipsis" || !one.tip.includes("a single line of the card")) throw new Error("title is not one truncated line with the full title as tooltip: " + JSON.stringify(one));
       const t = await page.locator("#plans").innerText();
-      if (!/done · 1 landing/i.test(t) || !/landing/.test(t)) throw new Error("no landing shown: " + t);
+      if (!/done · 1 landing/i.test(t)) throw new Error("no landing shown: " + t);
+      if (await page.locator("#plans .pm").count()) throw new Error("a done plan shows its members before it is opened");
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls sideways");
-      // Expanding shows the report; the card keeps working.
-      await title.click();
+      await title.click(); // opens the done plan
+      await page.waitForSelector("#plans .plan .pm", { state: "visible" });
+      // Opened above: the report is there and the card keeps working.
       await page.waitForSelector("#plans .pm-rep", { state: "visible" });
       // Keyboard: focus the first member, Enter opens its agent.
       await page.locator('#plans a.pm').first().focus();
@@ -1221,24 +1223,14 @@ const PLAN_SHORT = { marks: [], roles: {}, entries: [], plans: [{ id: "pl2", tit
   { id: "n2", host: "uitest", repo_name: "comebye", branch: "feat/todo-auto", agent_id: "uitest/w2:p1", pane_id: "w2:p1", status: "running", outcome: "pending", reported: false },
 ] }] };
 for (const width of [1280, 390]) {
-  await check(`plan card: at ${width}px a short title keeps no lone last word, the state sits under it, and the focus ring is for the keyboard only`, async () => {
+  await check(`plan card: at ${width}px a title stays on one line, the state sits under it, and the focus ring is for the keyboard only`, async () => {
     await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: PLAN_SHORT }));
     try {
       await desktopList(width, "#/status");
       await page.waitForSelector("#plans .plan .pm", { state: "visible", timeout: 8000 });
       const title = page.locator("#plans .plan-title");
-      // Per-line word counts of the title: the last line must not be one word (unless it is the only line).
-      const words = await title.evaluate((e) => {
-        const r = document.createRange(), tops = [];
-        const walker = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
-        for (let n; (n = walker.nextNode());) {
-          const re = /\S+/g;
-          for (let m; (m = re.exec(n.data));) { r.setStart(n, m.index); r.setEnd(n, m.index + m[0].length); tops.push(Math.round(r.getBoundingClientRect().top)); }
-        }
-        const lines = {}; for (const t of tops) lines[t] = (lines[t] || 0) + 1;
-        return Object.keys(lines).sort((a, b) => a - b).map((k) => lines[k]);
-      });
-      if (words.length > 1 && words[words.length - 1] < 2) throw new Error("lone last word: " + JSON.stringify(words));
+      const lines = await title.evaluate((e) => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)));
+      if (lines !== 1) throw new Error(`title takes ${lines} lines`);
       const geo = await page.evaluate(() => { const t = document.querySelector("#plans .plan-title").getBoundingClientRect(), s = document.querySelector("#plans .plan-state").getBoundingClientRect(); return { below: s.top >= t.bottom - 1 }; });
       if (!geo.below) throw new Error("state is not under the title");
       const ring = () => page.evaluate(() => { const a = document.activeElement; if (!a || !a.closest("#plans")) return "none"; const c = getComputedStyle(a); return c.outlineStyle !== "none" && parseFloat(c.outlineWidth) > 0 ? "ring" : "none"; });
@@ -1254,6 +1246,64 @@ for (const width of [1280, 390]) {
       await page.waitForSelector("#plans .plan-meta", { state: "detached" });
       if (!(await page.evaluate(() => document.activeElement.classList.contains("plan-title"))) || (await ring()) !== "ring") throw new Error("focus lost on a keyboard toggle");
       await page.locator("#plans").screenshot({ path: `${out}/plan-card-polish-${width}.png` });
+    } finally { await page.unroute(/\/api\/ledger$/); }
+  });
+}
+const mk = (id, status, outcome = "ok") => ({ id, host: "uitest", repo_name: "comebye", branch: "feat/" + id, status, outcome, reported: true });
+const PLAN_MANY = { marks: [], roles: {}, entries: [], plans: [
+  { id: "d1", title: "Migrate the billing service to the new queue", size: 3, state: "done", done: 3, created_at: ago(200), settled_at: ago(30), members: [mk("a1", "finished"), mk("a2", "ready_to_remove"), mk("a3", "landed")] },
+  { id: "d2", title: "Everything landed already", size: 2, state: "done", done: 2, created_at: ago(200), settled_at: ago(30), members: [mk("b1", "landed"), mk("b2", "removed")] },
+  { id: "p1", title: "One worker failed", size: 2, state: "partial", done: 1, created_at: ago(200), settled_at: ago(30), members: [mk("c1", "landed"), mk("c2", "removed", "failed")] },
+  { id: "o1", title: "Still going", size: 2, state: "open", done: 0, created_at: ago(20), members: [mk("e1", "running", "pending"), mk("e2", "running", "pending")] },
+] };
+for (const width of [1280, 390]) {
+  await check(`plan card: at ${width}px a done plan collapses to a line, dismisses per browser, hides once landed; a partial one never does`, async () => {
+    await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: PLAN_MANY }));
+    try {
+      await desktopList(width, "#/status");
+      await page.waitForSelector("#plans .plan", { state: "visible", timeout: 8000 });
+      const ids = () => page.locator("#plans .plan-title").evaluateAll((es) => es.map((e) => e.dataset.plan));
+      if (JSON.stringify(await ids()) !== JSON.stringify(["d1", "p1", "o1"])) throw new Error("plans shown: " + JSON.stringify(await ids()) + " (d2, every member landed or removed, must be hidden)");
+      const d1 = page.locator('#plans .plan:has([data-plan="d1"])');
+      const p1 = page.locator('#plans .plan:has([data-plan="p1"])');
+      const o1 = page.locator('#plans .plan:has([data-plan="o1"])');
+      if (!(await d1.evaluate((e) => e.classList.contains("collapsed"))) || (await d1.locator(".pm").count())) throw new Error("done plan is not collapsed");
+      const dt = await d1.innerText();
+      if (!dt.includes("✓") || !/done · 3 of 3/i.test(dt)) throw new Error("collapsed line: " + dt);
+      const dh = await d1.evaluate((e) => e.getBoundingClientRect().height);
+      if (dh > 60) throw new Error("collapsed plan is " + dh + "px tall");
+      if (await p1.evaluate((e) => e.classList.contains("collapsed")) || !(await p1.locator(".pm").count())) throw new Error("a partial plan collapsed");
+      if (await o1.locator(".plan-x").count()) throw new Error("an open plan can be dismissed");
+      await page.locator("#plans").screenshot({ path: `${out}/plan-card-collapsed-${width}.png` });
+      // Click opens, click closes.
+      await d1.locator(".plan-title").click();
+      await page.waitForSelector('#plans .plan:has([data-plan="d1"]) .pm', { state: "visible" });
+      await page.locator("#plans").screenshot({ path: `${out}/plan-card-expanded-${width}.png` });
+      await page.locator('#plans [data-plan="d1"]').click();
+      await page.waitForFunction(() => document.querySelector('#plans .plan [data-plan="d1"]').closest(".plan").classList.contains("collapsed"));
+      // Dismiss hides it, and it stays hidden after a reload; the partial plan is still there.
+      await d1.locator(".plan-x").click();
+      await page.waitForFunction(() => !document.querySelector('#plans [data-plan="d1"]'));
+      if (await page.evaluate(() => document.activeElement && document.activeElement.matches && document.activeElement.closest("#plans") ? true : false)) throw new Error("focus left inside a removed card");
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector("#plans .plan", { state: "visible", timeout: 8000 });
+      if (JSON.stringify(await ids()) !== JSON.stringify(["p1", "o1"])) throw new Error("after reload: " + JSON.stringify(await ids()));
+      // A partial plan is dismissable by hand but is never hidden on its own: its members are all landed or removed, and it is still shown.
+      await page.locator('#plans .plan:has([data-plan="p1"]) .plan-x').click();
+      await page.waitForFunction(() => !document.querySelector('#plans [data-plan="p1"]'));
+      await page.screenshot({ path: `${out}/plan-card-collapse-${width}.png` });
+    } finally { await page.unroute(/\/api\/ledger$/); }
+  });
+  await check(`plan card: at ${width}px a ~40-character title stays on one line`, async () => {
+    const title40 = "Rate limits for the public API gateway!!"; // 40 characters
+    await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: { ...PLAN_SHORT, plans: [{ ...PLAN_SHORT.plans[0], title: title40 }, { ...PLAN_SHORT.plans[0], id: "pl3", title: title40 + " and then some more words to push it past the edge of the card" }] } }));
+    try {
+      await desktopList(width, "#/status");
+      await page.waitForSelector("#plans .plan-title", { state: "visible", timeout: 8000 });
+      const info = await page.locator("#plans .plan-title").evaluateAll((es) => es.map((e) => ({ lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)), cut: e.scrollWidth > e.clientWidth, tip: e.title.split("\n")[0] })));
+      if (info.length !== 2 || info.some((i) => i.lines !== 1)) throw new Error("not one line: " + JSON.stringify(info));
+      if (!info[1].cut || !info[1].tip.includes("push it past")) throw new Error("long title not cut with a tooltip: " + JSON.stringify(info));
+      await page.locator("#plans").screenshot({ path: `${out}/plan-card-longtitle-${width}.png` });
     } finally { await page.unroute(/\/api\/ledger$/); }
   });
 }
