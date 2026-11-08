@@ -16,10 +16,15 @@ import (
 // requests on a peer (ledger, handoffs, marks, the briefing, prompts) are
 // forwarded there, because the hub keeps the one ledger. It is the mirror
 // of the hub's calls to its peers and hardened the same way: no redirects,
-// no proxy from the environment, bounded bodies and answers, and only the
+// bounded bodies and answers, and only the
 // paths the caller names. The hub authenticates the forwarded request by
 // the Tailscale identity Serve attaches (the peer device owner's login),
 // so its -ts-allow-login must include that login.
+//
+// The one thing that differs from the hub's calls to its peers: this link
+// honours the proxy environment (ALL_PROXY, HTTPS_PROXY, NO_PROXY; http,
+// https, socks5 and socks5h proxies; see upstreamProxy). A sandbox host has no
+// route to the tailnet except tailscaled's SOCKS5 listener.
 type Upstream struct {
 	base        *url.URL
 	client      *http.Client
@@ -28,7 +33,7 @@ type Upstream struct {
 
 // NewUpstream parses the hub's URL (https, its Tailscale Serve URL; plain
 // http only on loopback with allowHTTPLoopback, for tests). A nil client
-// gets the fleet's default (no redirects, no proxy).
+// gets the default: no redirects, and the proxy from the environment.
 func NewUpstream(raw string, allowHTTPLoopback bool, client *http.Client) (*Upstream, error) {
 	raw = strings.TrimSpace(raw)
 	u, err := parsePeerURL(raw, allowHTTPLoopback)
@@ -39,9 +44,12 @@ func NewUpstream(raw string, allowHTTPLoopback bool, client *http.Client) (*Upst
 		return nil, err
 	}
 	if client == nil {
-		o := Options{}
-		o.defaults()
-		client = o.Client
+		client = &http.Client{
+			Transport: upstreamTransport(),
+			// Never follow redirects: the hub must not be able to point a
+			// peer somewhere else.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	return &Upstream{base: u, client: client, maxResponse: 8 << 20}, nil
 }
