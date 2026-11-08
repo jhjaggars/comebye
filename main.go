@@ -95,7 +95,8 @@ func main() {
 		archiveEnc    = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir or -archive-s3")
 		archiveRcpt   = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
 		recallIndex   = flag.String("recall-index", getenv("COMEBYE_RECALL_INDEX"), "the transcript index the app searches, read-only (default ~/.local/state/comebye/recall/index.db; see `comebye archive index`)")
-		releaseRepo   = flag.String("release-repo", getenv("COMEBYE_RELEASE_REPO"), "on the hub: the comebye checkout the app's \"Approve release\" button tags from, with the server's own git and gh credentials (see docs/security.md); empty: the button is off")
+		releaseRepo   = flag.String("release-repo", getenv("COMEBYE_RELEASE_REPO"), "a dedicated comebye clone this host tags releases from, with its own git and gh credentials (see docs/security.md). On a hub it backs the app's \"Approve release\" button; on a peer (-hub) it lets the hub tag through this host (-release-host there); empty: off")
+		releaseHost   = flag.String("release-host", getenv("COMEBYE_RELEASE_HOST"), "on the hub: the peer whose -release-repo the \"Approve release\" button tags through (the hub asks it to check, tag and report the build; it keeps no clone or credentials of its own); not with -release-repo")
 		releaseUp     = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
 		releaseDry    = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
 		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
@@ -303,7 +304,7 @@ func main() {
 		}
 		log.Printf("archive: final transcript copies go to %s", *archiveDir+*archiveS3)
 	}
-	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseUp, *releaseSim, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != ""); err != nil {
+	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseHost, *releaseUp, *releaseSim, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != ""); err != nil {
 		log.Fatal(err)
 	}
 	var relCfg server.ReleaseConfig
@@ -313,6 +314,14 @@ func main() {
 		log.Printf("release: SIMULATED (canned results, nothing runs)")
 	default:
 		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry}
+		if h := strings.TrimSpace(*releaseHost); h != "" {
+			// The hub asks that peer to tag; it must be a peer we know now.
+			if err := releaseHostError(h, *hostName, fl.HasPeer); err != nil {
+				log.Fatal(err)
+			}
+			relCfg.Host = h
+			log.Printf("release: the app tags releases through the peer %s (dry run here %v; the peer has its own flag)", h, *releaseDry)
+		}
 		if r := strings.TrimSpace(*releaseRepo); r != "" {
 			repo := expandHome(r)
 			if st, err := os.Stat(filepath.Join(repo, ".git")); err != nil || st == nil {
@@ -625,17 +634,36 @@ func isLoopbackListen(addr string) bool {
 // then protects nothing) could tag or upgrade. -release-simulate runs
 // nothing, so it may go with -insecure-no-auth (the browser tests do), but
 // not with the real flags, and only on loopback.
-func releaseFlagError(noAuth bool, repo string, upgrade, simulate bool, addr string, noLedger, hasHub bool) error {
-	real := strings.TrimSpace(repo) != "" || upgrade
+func releaseFlagError(noAuth bool, repo, host string, upgrade, simulate bool, addr string, noLedger, hasHub bool) error {
+	repo, host = strings.TrimSpace(repo), strings.TrimSpace(host)
+	real := repo != "" || host != "" || upgrade
 	switch {
 	case noAuth && real:
-		return errors.New("-release-repo / -release-upgrade need -ts-allow-login: they cannot be combined with -insecure-no-auth")
+		return errors.New("-release-repo / -release-host / -release-upgrade need -ts-allow-login: they cannot be combined with -insecure-no-auth")
+	case repo != "" && host != "":
+		return errors.New("-release-repo and -release-host together are ambiguous: tag from a clone here, or through a peer's clone, not both")
+	case host != "" && (noLedger || hasHub):
+		return errors.New("-release-host is for the hub (it keeps the ledger and has no -hub): the peer that owns the clone sets -release-repo")
+	case repo != "" && noLedger && !hasHub:
+		// As for -release-upgrade below: a host with no ledger is a peer, and
+		// the hub-call route to its clone is open on it.
+		return errors.New("-release-repo with -ledger=false needs -hub: a host with no ledger is a peer, tagging for its hub")
 	case upgrade && noLedger && !hasHub:
 		// A host with no ledger is a peer (the hub's upgrade route is open on
 		// it); with no hub to ask it, nothing should be reaching that route.
 		return errors.New("-release-upgrade with -ledger=false needs -hub: a host with no ledger is a peer, upgraded by its hub")
 	case simulate && (real || !isLoopbackListen(addr)):
-		return errors.New("-release-simulate is for demos and tests: not with -release-repo or -release-upgrade, and only on a loopback address")
+		return errors.New("-release-simulate is for demos and tests: not with -release-repo, -release-host or -release-upgrade, and only on a loopback address")
+	}
+	return nil
+}
+
+// releaseHostError refuses a -release-host that is not a peer this hub knows
+// (a typo, this host itself, a peer not added yet): the button would
+// otherwise fail at the first click.
+func releaseHostError(host, local string, hasPeer func(string) bool) error {
+	if !fleet.ValidName(host) || host == local || !hasPeer(host) {
+		return fmt.Errorf("-release-host %q: not a peer of this hub (add the peer first; this host is %s)", host, local)
 	}
 	return nil
 }

@@ -215,6 +215,13 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait}
 	s.typing = newTypingTracker()
 	s.rel = newRelState()
+	switch rc := &s.cfg.Release; {
+	case rc.Host != "" && rc.Tool != nil:
+		log.Printf("release: both a local release tool and -release-host %s are set: tagging is off", rc.Host)
+		rc.Host, rc.Tool = "", nil
+	case rc.Host != "":
+		rc.Tool = &remoteTool{s: s, host: rc.Host}
+	}
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
@@ -351,6 +358,10 @@ func (s *Server) routes() {
 	// level; TestReleaseRoutesAreUserOnly keeps it so.
 	s.mux.HandleFunc("GET /api/release/upgrade", s.auth(s.handleUpgradeStatus))
 	s.mux.HandleFunc("POST /api/release/upgrade", s.auth(s.handleUpgradeLocal))
+	// A hub's tagging through this peer (-release-host there): hub calls only.
+	s.mux.HandleFunc("POST /api/release/check", s.auth(s.handlePeerCheck))
+	s.mux.HandleFunc("POST /api/release/tag", s.auth(s.handlePeerTag))
+	s.mux.HandleFunc("GET /api/release/build", s.auth(s.handlePeerBuild))
 	s.mux.HandleFunc("GET /api/release/{id}", s.auth(s.handleReleaseView))
 	s.mux.HandleFunc("POST /api/release/{id}/approve", s.auth(s.handleReleaseApprove))
 	s.mux.HandleFunc("POST /api/hosts/{host}/release/upgrade", s.auth(s.handleHostUpgrade))

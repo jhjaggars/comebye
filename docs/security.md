@@ -170,7 +170,7 @@ Treat access to it like SSH access to that machine.
   port. What it gets is bookkeeping on a list, not a way to run anything; the
   list holds no secrets and answering does not trigger any action by itself.
 - <a id="releasing-and-upgrading-from-the-app"></a>**Releasing and upgrading from
-  the app** (`-release-repo`, `-release-upgrade`; both off by default, and refused
+  the app** (`-release-repo` or `-release-host`, `-release-upgrade`; both off by default, and refused
   together with `-insecure-no-auth`, since the buttons act with your credentials).
   - **Who.** The routes `GET /api/release/{id}`, `POST /api/release/{id}/approve`,
     `GET|POST /api/release/upgrade` and `POST /api/hosts/{host}/release/upgrade` are
@@ -222,7 +222,44 @@ Treat access to it like SSH access to that machine.
     last release, and an upgrade needs a tagged release with a passed build. And an
     agent with a shell can run `git push` of a tag or `comebye upgrade` itself, as it
     always could, so the harness rule against agents pushing tags still matters.
-  - **The checkout.** `git` and `gh` run in `-release-repo` with your credentials,
+  - **Tagging through a peer** (`-release-host NAME` on the hub; the peer sets
+    `-release-repo`). Then **the peer, not the hub, holds the git and `gh`
+    credentials** and the clone; the hub holds none for releases and runs no
+    script. The trust path is *you → the hub's page → the hub → that peer*:
+    - The hub checks everything the user does (user role, CSRF token, confirm
+      body, the item's state, one tagging at a time) before it asks, and only a
+      user click on an item a coordinator raised ever causes a call. It asks over
+      the existing fleet connection with three hub-only ops, `release-check`,
+      `release-tag` and `release-build` (`POST /api/release/check`, `POST
+      /api/release/tag`, `GET /api/release/build`).
+    - The peer answers them only for **the hub's own call**: the user role (the
+      hub device owner's login from Serve, so a wrong or foreign login is 401), the
+      hub-call marker `X-Comebye-Hub-Call` (set by the hub's `CallHost` and by no
+      browser forward; `ProxyHost` refuses these ops), and a host with no ledger.
+      A browser, an agent token, a peer forwarding for its agents and a tagged
+      node are refused (403 `agent_forbidden` or `hub_only`, 401), and a host that
+      keeps the ledger (a hub) refuses them outright. Tests cover each.
+    - The peer **does not trust the hub's judgement**: it validates the version and
+      the 40-character commit again, then runs the same embedded script with all
+      its checks (commit on `origin/main`, CI green, newer than origin's last tag,
+      tag absent, origin pinned) and the same pins on `gh`, hooks and git config.
+      Its audit lines (`release.tagged`, `release.failed`, `release.dry_run`) go to
+      its journal; the hub's log records the same event with the peer as its
+      host. A peer's dry-run flag is its own.
+    - The hub does not trust the peer's answer more than it must: a check about
+      another commit is refused, a dry run that reports a push is a failure, a link
+      that is not `https://` is dropped, and a run with no stated push is a failure.
+      A compromised peer can of course lie about CI, which the hub shows, and it
+      holds the credentials anyway: **the peer's account is the release boundary**.
+    - Limitation, same as upgrades: the hub-call marker is a guard, not
+      authentication. Whoever can present the hub device owner's login to the
+      peer, and add the header, can call these ops directly (a local process on the
+      peer forging the login header on its loopback port; a host that can reach the
+      peer's Serve URL with that login). That is bounded by the script's checks
+      above and is no wider than what the peer's account could already do with the
+      same credentials.
+  - **The checkout.** `git` and `gh` run in `-release-repo` (on the hub, or on the
+    `-release-host` peer) with that host's user's credentials,
     and anyone who can write that directory can write its `.git/config`. Give it a
     **dedicated clone** that no agent works in (not a worktree host or an agent's
     checkout); the pins above close the easy routes, not an agent with write access

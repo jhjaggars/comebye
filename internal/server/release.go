@@ -66,8 +66,11 @@ type TodoRelease struct {
 	ApprovedBy string     `json:"approved_by,omitempty"`
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
 	TaggedAt   *time.Time `json:"tagged_at,omitempty"`
-	RunURL     string     `json:"run_url,omitempty"`
-	Error      string     `json:"error,omitempty"`
+	// Host is the host whose git and credentials did (or are doing) the
+	// tagging: this one, or the -release-host peer.
+	Host   string `json:"host,omitempty"`
+	RunURL string `json:"run_url,omitempty"`
+	Error  string `json:"error,omitempty"`
 	// DryRun is the last dry run's output (a server run with
 	// -release-dry-run never tags).
 	DryRun string `json:"dry_run,omitempty"`
@@ -78,6 +81,10 @@ type ReleaseConfig struct {
 	// Tool tags releases from this host's checkout; nil: this host cannot
 	// (the hub's item then says so).
 	Tool release.Tool
+	// Host, on a hub, is the peer that owns the release clone: the hub then
+	// asks it to check, tag and report the build instead of running the
+	// script itself. Exclusive with Tool (New disables both if both are set).
+	Host string
 	// Upgrade lets the app upgrade this host's binary.
 	Upgrade bool
 	// DryRun makes every action do its checks and change nothing.
@@ -96,7 +103,7 @@ type UpgradeRunner interface {
 	Start(ctx context.Context, rec upgrade.Record, path string, rollback, dry bool) error
 }
 
-func (c ReleaseConfig) enabled() bool { return c.Tool != nil || c.Upgrade }
+func (c ReleaseConfig) enabled() bool { return c.Tool != nil || c.Upgrade || c.Host != "" }
 
 // relState is the server's release bookkeeping.
 type relState struct {
@@ -314,8 +321,9 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{
 		"todo": s.todoGone(it), "csrf": s.csrfToken(r),
-		"can_tag": cfg.Tool != nil, "dry_run": cfg.DryRun, "simulated": cfg.Simulated,
-		"audit": s.ledger.AuditLog(it.ID),
+		"can_tag": cfg.Tool != nil, "simulated": cfg.Simulated,
+		"release_host": s.releaseHost(),
+		"audit":        s.ledger.AuditLog(it.ID),
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
@@ -336,6 +344,7 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	out["dry_run"] = cfg.DryRun || s.remoteDry() // after the check: the release host reports its mode with it
 	if it.Release.State == relTagged {
 		out["hosts"] = s.relHosts(ctx)
 	}
@@ -396,7 +405,7 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg.Release
 	if cfg.Tool == nil {
-		relErr(w, http.StatusConflict, "release_disabled", "this host does not tag releases: start comebye with -release-repo <checkout> (or run tools/release/tag by hand)")
+		relErr(w, http.StatusConflict, "release_disabled", "this host does not tag releases: start comebye with -release-repo <checkout> or -release-host <peer> (or run tools/release/tag by hand)")
 		return
 	}
 	var b approveBody
@@ -452,7 +461,7 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 			return errTodoClosed
 		}
 		rel := *t.Release
-		rel.State, rel.ApprovedBy, rel.ApprovedAt, rel.Error = relTagging, by, &now, ""
+		rel.State, rel.ApprovedBy, rel.ApprovedAt, rel.Error, rel.Host = relTagging, by, &now, "", s.releaseHost()
 		t.Release = &rel
 		return nil
 	}); err != nil {
@@ -460,7 +469,7 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 		todoErr(w, err)
 		return
 	}
-	s.audit(r, ledger.AuditEvent{Action: "release.approve", Todo: it.ID, OK: true, Detail: fmt.Sprintf("%s at %s (dry run %v)", it.Release.Version, it.Release.Commit, cfg.DryRun)})
+	s.audit(r, ledger.AuditEvent{Action: "release.approve", Todo: it.ID, Host: s.releaseHost(), OK: true, Detail: fmt.Sprintf("%s at %s (dry run %v)", it.Release.Version, it.Release.Commit, cfg.DryRun)})
 	unlock = false
 	go s.tagRelease(it, by)
 	cur, _ := s.todos.get(it.ID)
@@ -473,13 +482,13 @@ func (s *Server) tagRelease(it Todo, by string) {
 	defer s.rel.mu.Unlock()
 	defer s.setTagging(it.ID, false)
 	cfg := s.cfg.Release
-	res, err := cfg.Tool.Tag(context.Background(), it.Release.Version, it.Release.Commit, cfg.DryRun)
+	res, err := cfg.Tool.Tag(withRelCall(context.Background(), relCall{By: by, Todo: it.ID}), it.Release.Version, it.Release.Commit, cfg.DryRun)
 	done := time.Now().UTC()
-	ev := ledger.AuditEvent{By: by, Todo: it.ID}
+	ev := ledger.AuditEvent{By: by, Todo: it.ID, Host: s.releaseHost()}
 	switch {
 	case err != nil:
 		ev.Action, ev.Detail = "release.failed", it.Release.Version+": "+oneLine(err.Error(), 300)
-	case cfg.DryRun:
+	case res.DryRun:
 		ev.Action, ev.OK, ev.Detail = "release.dry_run", true, it.Release.Version+": nothing tagged"
 	default:
 		ev.Action, ev.OK, ev.Detail = "release.tagged", true, it.Release.Version+" at "+it.Release.Commit+" "+res.RunURL
@@ -490,7 +499,7 @@ func (s *Server) tagRelease(it Todo, by string) {
 		switch {
 		case err != nil:
 			rel.State, rel.Error = relFailed, oneLine(err.Error(), 600)
-		case cfg.DryRun:
+		case res.DryRun:
 			rel.State, rel.Error, rel.DryRun = relPending, "", block(res.Output, 4000)
 		default:
 			rel.State, rel.Error, rel.TaggedAt, rel.RunURL = relTagged, "", &done, res.RunURL
@@ -820,4 +829,18 @@ func (s *Server) recoverTagging() {
 		}
 		s.auditBy(ledger.AuditEvent{By: "comebye", Todo: it.ID, Action: "release.interrupted", Detail: it.Release.Version + ": the server restarted while tagging"})
 	}
+}
+
+// releaseHost is the host that tags: the -release-host peer, else this one.
+func (s *Server) releaseHost() string {
+	if h := s.cfg.Release.Host; h != "" {
+		return h
+	}
+	return s.fleet.LocalName()
+}
+
+// remoteDry: the -release-host peer last said it is in dry-run mode.
+func (s *Server) remoteDry() bool {
+	rt, ok := s.cfg.Release.Tool.(*remoteTool)
+	return ok && rt.dry.Load()
 }

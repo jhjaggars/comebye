@@ -80,6 +80,13 @@ var hostProxyOps = map[string]struct {
 	// handler makes these calls).
 	"release-upgrade": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 20 * time.Second}, []string{"api", "release", "upgrade"}, true},
 	"release-status":  {proxyOp{method: http.MethodGet, timeout: 10 * time.Second}, []string{"api", "release", "upgrade"}, true},
+	// Tagging on a peer (the hub's -release-host): the hub asks the peer that
+	// owns the release clone to check a commit, to tag and push it (git and
+	// gh, up to 3 minutes on the peer), or for the state of the tag's Release
+	// workflow run. Hub-only: never a browser's forward, never an agent's.
+	"release-check": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "release", "check"}, true},
+	"release-tag":   {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 200 * time.Second}, []string{"api", "release", "tag"}, true},
+	"release-build": {proxyOp{method: http.MethodGet, query: []string{"version"}, timeout: 40 * time.Second}, []string{"api", "release", "build"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

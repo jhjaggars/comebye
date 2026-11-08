@@ -63,3 +63,38 @@ ledger's audit log (who, what, when, how it went) and to the journal as
 nothing. The script's `--check` mode (key=value lines, no changes) is what the
 page reads; run it by hand to see what the page sees. Who can do this, and why
 an agent cannot, is in [Security](security.md#releasing-and-upgrading-from-the-app).
+
+## From the app, and on which host
+
+The To do page's **Approve release** button runs this same script, as the user
+of the server that owns the repository, with that user's git and `gh`
+credentials. Where it runs is a choice of two settings:
+
+- **On the hub itself:** `-release-repo <dedicated clone>` (`COMEBYE_RELEASE_REPO`)
+  on the hub. The hub holds the credentials.
+- **On a peer** (the setup to prefer when the hub should hold no release
+  credentials): the peer that owns the clone sets `-release-repo <dedicated clone>`
+  (and `-hub`, as every peer does), and the hub sets `-release-host <peer name>`
+  (`COMEBYE_RELEASE_HOST`). The button stays on the hub's page; the hub does not
+  run git or `gh` at all but asks that peer, over its fleet connection, to
+  check the commit, to tag and push, and to report the tag's Release workflow
+  run. The peer runs the embedded script in its own clone with its own
+  credentials, after the same version and commit validation, and writes its own
+  audit lines to its journal. The hub keeps the page, the CSRF check, the
+  confirm step, the item's state, the retry and the audit log, and records on
+  the item which host tagged.
+
+The two are exclusive: `-release-repo` together with `-release-host` is refused
+at start-up (and by the server, which then leaves tagging off), and so is a
+`-release-host` that is not a peer the hub knows, a `-release-host` on a host with
+`-hub` or `-ledger=false`, and `-release-repo` with `-ledger=false` but no `-hub`.
+`-release-dry-run` is per host: a peer started with it never tags, whatever
+the hub asks; a hub started with it asks every tagging to be a dry run.
+
+If the peer cannot be reached, refuses, or the push fails, the item goes to
+**failed** with the reason and **Approve** is offered again. When the hub got no
+answer to a tag request, the reason says the tag may have been pushed: trying
+again is safe, since the script refuses with "tag exists on origin" if it was.
+A peer finishes a push it started even if the hub stopped waiting, and does one
+tagging at a time. The hub's upgrade gate reads the release build from the same
+peer, so the hub needs neither `gh` nor a clone for it.

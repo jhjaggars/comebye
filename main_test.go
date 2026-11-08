@@ -107,26 +107,34 @@ func TestReleaseFlagsAreRefusedWithoutAnAllowlist(t *testing.T) {
 	for _, c := range []struct {
 		name          string
 		noAuth        bool
-		repo          string
+		repo, host    string
 		up, sim       bool
 		addr          string
 		noLedger, hub bool
 		wantErr       bool
 	}{
-		{"repo with allowlist", false, "/x", false, false, "127.0.0.1:8741", false, false, false},
-		{"upgrade with allowlist", false, "", true, false, "127.0.0.1:8741", false, false, false},
-		{"repo, no auth", true, "/x", false, false, "127.0.0.1:8741", false, false, true},
-		{"upgrade, no auth", true, "", true, false, "127.0.0.1:8741", false, false, true},
-		{"nothing, no auth", true, "", false, false, "127.0.0.1:8741", false, false, false},
-		{"simulate, no auth, loopback (the browser tests)", true, "", false, true, "127.0.0.1:18741", false, false, false},
-		{"simulate off loopback", false, "", false, true, "0.0.0.0:8741", false, false, true},
-		{"simulate with repo", false, "/x", false, true, "127.0.0.1:8741", false, false, true},
-		{"simulate with upgrade", false, "", true, true, "127.0.0.1:8741", false, false, true},
-		{"upgrade, no ledger, no hub", false, "", true, false, "127.0.0.1:8741", true, false, true},
-		{"upgrade, no ledger, with hub (a peer)", false, "", true, false, "127.0.0.1:8741", true, true, false},
-		{"upgrade, with ledger, hub or standalone", false, "", true, false, "127.0.0.1:8741", false, false, false},
+		{"repo with allowlist", false, "/x", "", false, false, "127.0.0.1:8741", false, false, false},
+		{"upgrade with allowlist", false, "", "", true, false, "127.0.0.1:8741", false, false, false},
+		{"repo, no auth", true, "/x", "", false, false, "127.0.0.1:8741", false, false, true},
+		{"upgrade, no auth", true, "", "", true, false, "127.0.0.1:8741", false, false, true},
+		{"nothing, no auth", true, "", "", false, false, "127.0.0.1:8741", false, false, false},
+		{"simulate, no auth, loopback (the browser tests)", true, "", "", false, true, "127.0.0.1:18741", false, false, false},
+		{"simulate off loopback", false, "", "", false, true, "0.0.0.0:8741", false, false, true},
+		{"simulate with repo", false, "/x", "", false, true, "127.0.0.1:8741", false, false, true},
+		{"simulate with upgrade", false, "", "", true, true, "127.0.0.1:8741", false, false, true},
+		{"upgrade, no ledger, no hub", false, "", "", true, false, "127.0.0.1:8741", true, false, true},
+		{"upgrade, no ledger, with hub (a peer)", false, "", "", true, false, "127.0.0.1:8741", true, true, false},
+		{"upgrade, with ledger, hub or standalone", false, "", "", true, false, "127.0.0.1:8741", false, false, false},
+		{"release host on the hub", false, "", "laharl", false, false, "127.0.0.1:8741", false, false, false},
+		{"release host, no auth", true, "", "laharl", false, false, "127.0.0.1:8741", false, false, true},
+		{"release host and a local repo are ambiguous", false, "/x", "laharl", false, false, "127.0.0.1:8741", false, false, true},
+		{"release host on a peer (-hub)", false, "", "laharl", false, false, "127.0.0.1:8741", false, true, true},
+		{"release host with no ledger", false, "", "laharl", false, false, "127.0.0.1:8741", true, false, true},
+		{"release host with simulate", false, "", "laharl", false, true, "127.0.0.1:8741", false, false, true},
+		{"repo on a peer (the hub tags through it)", false, "/x", "", false, false, "127.0.0.1:8741", true, true, false},
+		{"repo, no ledger, no hub", false, "/x", "", false, false, "127.0.0.1:8741", true, false, true},
 	} {
-		if err := releaseFlagError(c.noAuth, c.repo, c.up, c.sim, c.addr, c.noLedger, c.hub); (err != nil) != c.wantErr {
+		if err := releaseFlagError(c.noAuth, c.repo, c.host, c.up, c.sim, c.addr, c.noLedger, c.hub); (err != nil) != c.wantErr {
 			t.Errorf("%s: err = %v, want error %v", c.name, err, c.wantErr)
 		}
 	}
@@ -156,5 +164,14 @@ func TestParseAutoTodo(t *testing.T) {
 	}
 	if _, err := parseAutoTodo("question", ten, 0); err == nil {
 		t.Error("a zero question delay is refused")
+	}
+}
+
+func TestReleaseHostMustBeAKnownPeer(t *testing.T) {
+	known := func(n string) bool { return n == "laharl" }
+	for host, wantErr := range map[string]bool{"laharl": false, "laharlx": true, "desk": true, "Bad Name": true, "": true} {
+		if err := releaseHostError(host, "desk", known); (err != nil) != wantErr {
+			t.Errorf("%q: err = %v, want error %v", host, err, wantErr)
+		}
 	}
 }

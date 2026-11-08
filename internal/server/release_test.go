@@ -181,8 +181,8 @@ func TestReleaseRoutesAreUserOnly(t *testing.T) {
 			t.Errorf("a release route is not user-only: %s", strings.TrimSpace(line))
 		}
 	}
-	if n != 5 {
-		t.Fatalf("found %d release routes, want 5: update this test with the route", n)
+	if n != 8 { // 5 for the page and upgrades, 3 hub-only peer ops (release_remote.go)
+		t.Fatalf("found %d release routes, want 8: update this test with the route", n)
 	}
 }
 

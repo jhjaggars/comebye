@@ -1739,6 +1739,8 @@ function relHtml(t) {
   if (d && d.dry_run) h += `<div class="rel-note rel-dry">Dry run: the checks run for real, but nothing is tagged or installed.</div>`;
   h += `<dl class="rel-facts"><dt>Commit</dt><dd><code class="rel-sha">${esc(rl.commit)}</code></dd>`;
   if (ck && ck.subject) h += `<dt>Subject</dt><dd>${esc(ck.subject)}</dd>`;
+  const rhost = rl.host || (d && d.release_host);
+  if (rhost) h += `<dt>${rl.state === "tagged" ? "Tagged on" : "Tags from"}</dt><dd>${esc(rhost)}</dd>`;
   if (ck) h += `<dt>Last tag</dt><dd>${esc(ck.previous || "none yet")}</dd><dt>CI</dt><dd>${relCiChip(ck)}</dd>`;
   if (rl.state === "tagged") h += `<dt>Build</dt><dd>${relBuildChip(d)}${rl.run_url ? ` ${relChip("none", "workflow run", rl.run_url)}` : ""}</dd>`;
   h += `</dl>`;
