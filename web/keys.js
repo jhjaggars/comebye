@@ -115,6 +115,7 @@
       L.push({ id: "a-role", label: "Set role for " + nm + "…", step: "role" });
     }
     if (canRename(a)) L.push({ id: "a-rename", label: "Rename " + nm + "…", keys: ["r"], step: "rename" });
+    else L.push({ id: "a-rename", label: "Rename " + nm + " (Claude agents only)", run: () => toast("Rename is only available for Claude agents", true) });
     if (switchable(a)) L.push({ id: "a-model", label: "Switch model for " + nm + "…", keys: ["Shift", "M"], step: "model" });
     L.push({ id: "a-int", label: "Interrupt " + nm + " (send Esc)…", step: "confirm-int" });
     L.push({ id: "a-stop", label: "Stop " + nm + " (send Ctrl+C)…", step: "confirm-stop" });
@@ -575,7 +576,11 @@
       case "N": if (isDesktop()) { ev.preventDefault(); nextNeeds(-1); } return;
       case "m": if (state.selected && hasLedger()) { ev.preventDefault(); toggleMark(); } return;
       case "M": if (state.selected && switchable(cur())) { ev.preventDefault(); openSwitch(); } return;
-      case "r": if (state.selected && canRename(cur())) { ev.preventDefault(); openPalette(); startStep(stepFor("rename", cur())); } return;
+      case "r":
+        if (!state.selected) return;
+        ev.preventDefault();
+        if (canRename(cur())) { openPalette(); startStep(stepFor("rename", cur())); } else toast("Rename is only available for Claude agents", true);
+        return;
     }
   }
 

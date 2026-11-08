@@ -872,8 +872,10 @@ function projectHTML(name, list) {
 function renderRemovalBanner() {
   const b = $("rtr-banner");
   const n = ledger.on ? ledger.marked.size : 0;
-  b.hidden = !n;
-  if (n) b.innerHTML = `Ready to remove (${n})<span class="ln-chev" aria-hidden="true">›</span>`;
+  // On the phone the banner is the way into the page, so at zero it offers the sweep (the desktop has the sidebar entry and hides it).
+  b.hidden = !ledger.on;
+  b.classList.toggle("quiet", !n);
+  if (ledger.on) b.innerHTML = `${n ? `Ready to remove (${n})` : "Look for finished agents"}<span class="ln-chev" aria-hidden="true">›</span>`;
   renderFleetMenu();
 }
 

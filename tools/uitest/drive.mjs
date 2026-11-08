@@ -253,7 +253,7 @@ await check("mark: row menu opens an in-app sheet (no window.prompt) and marks w
   await page.locator("#mk-reason").fill("merged and deployed");
   await page.locator("#mk-go").click();
   await page.waitForFunction(() => document.querySelector("#mk")?.hidden, null, { timeout: 5000 });
-  await page.waitForFunction(() => document.querySelector("#rtr-banner") && !document.querySelector("#rtr-banner").hidden, null, { timeout: 8000 });
+  await page.waitForFunction(() => /Ready to remove \(1\)/.test(document.querySelector("#rtr-banner")?.textContent || ""), null, { timeout: 8000 });
   await page.waitForFunction((p) => document.querySelector(`#agents .agent[data-id$="${p}"]`)?.classList.contains("marked"), PANES.alpha, { timeout: 8000 });
   const lbl = await rowOf(PANES.alpha).locator(".row-more").getAttribute("aria-label");
   if (!/^Unmark/.test(lbl)) throw new Error("aria-label " + lbl);
@@ -285,7 +285,7 @@ await check("mark: the detail's ⋯ menu marks and the row menu unmarks", async 
   if ((await page.locator("#row-mark").innerText()).trim() !== "Unmark (keep this session)") throw new Error("menu item " + (await page.locator("#row-mark").innerText()));
   await page.locator("#row-mark").click();
   await page.waitForFunction((p) => !document.querySelector(`#agents .agent[data-id$="${p}"]`)?.classList.contains("marked"), PANES.alpha, { timeout: 8000 });
-  await page.waitForFunction(() => document.querySelector("#rtr-banner")?.hidden, null, { timeout: 8000 });
+  await page.waitForFunction(() => /^Look for finished agents/.test(document.querySelector("#rtr-banner")?.textContent || ""), null, { timeout: 8000 }); // at zero the phone banner offers the sweep
 });
 
 const sweepPosts = [];
@@ -427,7 +427,7 @@ await check("fleet menu: the sweep and review items are gone; the removals banne
   await page.locator("#row-mark").click();
   await page.waitForSelector("#mk", { state: "visible" });
   await page.locator("#mk-go").click();
-  await page.waitForFunction(() => document.querySelector("#rtr-banner") && !document.querySelector("#rtr-banner").hidden, null, { timeout: 8000 });
+  await page.waitForFunction(() => /Ready to remove \(1\)/.test(document.querySelector("#rtr-banner")?.textContent || ""), null, { timeout: 8000 });
   if (!(await page.locator("#rtr-banner").innerText()).includes("Ready to remove (1)")) throw new Error("banner text");
   await page.locator("#rtr-banner").click();
   await page.waitForSelector("#review", { state: "visible", timeout: 5000 });
@@ -436,7 +436,17 @@ await check("fleet menu: the sweep and review items are gone; the removals banne
   await page.waitForSelector("#review", { state: "hidden" });
   await rowOf(PANES.alpha).locator(".row-more").click();
   await page.locator("#row-mark").click(); // unmark
-  await page.waitForFunction(() => document.querySelector("#rtr-banner")?.hidden, null, { timeout: 8000 });
+  await page.waitForFunction(() => /^Look for finished agents/.test(document.querySelector("#rtr-banner")?.textContent || ""), null, { timeout: 8000 }); // at zero the phone banner offers the sweep
+});
+await check("remove page: at zero the phone banner reads \"Look for finished agents\" and opens #/remove", async () => {
+  await toList();
+  const t = (await page.locator("#rtr-banner").innerText()).trim().replace(/\s*\u203a$/, "");
+  if (t !== "Look for finished agents") throw new Error("banner " + t);
+  await page.locator("#rtr-banner").click();
+  await page.waitForSelector("#review", { state: "visible", timeout: 5000 });
+  if ((await page.evaluate(() => location.hash)) !== "#/remove") throw new Error("hash");
+  await page.locator("#rv-close").click();
+  await page.waitForSelector("#review", { state: "hidden" });
 });
 await check("fleet menu: Briefing item expands, collapses and shows a dismissed briefing again", async () => {
   await publishBrief("Menu briefing\n\nlong detail five");
@@ -2600,7 +2610,22 @@ await check("remove page: on the phone it is a full page with a Back arrow, no o
     if ((await act()) !== before) throw new Error(`focus not restored: ${before} -> ${await act()}`);
   });
 
-  await check("keys: stop and interrupt are in the palette only, behind a confirm", async () => {
+  await check("keys: for an agent that is not Claude the palette says Rename is Claude-only, and r says so", async () => {
+  await keysDesk();
+  await page.locator('#agents .agent[data-id$="w2:p1"]').first().click(); // bravo, a codex agent
+  await page.waitForSelector("#detail", { state: "visible" });
+  await page.evaluate(() => rowFor(state.selected).focus());
+  await page.keyboard.press("r");
+  await page.waitForFunction(() => /only available for Claude/.test(document.querySelector("#toast")?.textContent || ""), null, { timeout: 3000 });
+  if (await visible("#palette")) throw new Error("r opened a rename step for a non-Claude agent");
+  await page.keyboard.press("Control+k");
+  await page.keyboard.type("rename");
+  if (!/Claude agents only/.test((await items())[0] || "")) throw new Error("palette: " + (await items()));
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("#palette", { state: "hidden" });
+});
+
+await check("keys: stop and interrupt are in the palette only, behind a confirm", async () => {
     keyPosts.length = 0;
     const el = await page.locator("#agents .agent.selected, #agents .agent[aria-current]").first().getAttribute("data-id");
     await page.keyboard.press("Control+k");
