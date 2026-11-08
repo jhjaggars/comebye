@@ -171,7 +171,7 @@ type Server struct {
 	// releasing counts the releaseQueued passes started by queueing a step,
 	// so tests can wait for them before asserting or cleaning up.
 	releasing sync.WaitGroup
-	latest func(ctx context.Context, host, pane string) *transcript.Latest
+	latest    func(ctx context.Context, host, pane string) *transcript.Latest
 	// planPush tells the user a plan settled (the dispatcher's NotifyPlan;
 	// tests replace it).
 	planPush func(id, title, body string)
