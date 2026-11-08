@@ -1,0 +1,69 @@
+# Sandbox policy template for a comebye worker (Kubernetes driver).
+# Render with ./render-policy.sh [--llm-host HOST] > policy.yaml, then
+#   openshell sandbox create --policy policy.yaml ...
+# Tokens: @@LLM_GATEWAY_HOST@@ (hostname only, e.g. llm.example.com). The llm_gateway rule
+# (delimited by BEGIN/END marker lines) is dropped when no LLM host is given.
+#
+# Principle: every network rule names the binaries allowed to use it. GitHub is NOT here:
+# it comes from the `github-push` provider profile (profiles/github-push.yaml), which
+# carries its own endpoints, binaries and the token.
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  # Read-only: the image (tools live in /usr/local) and system config.
+  read_only: [/usr, /lib, /lib64, /bin, /etc, /proc, /dev/urandom, /var/log, /sys]
+  # Read-write: /sandbox is the PVC (the only durable path); /tmp holds logs and is lost on
+  # stop/start. /dev/pts, /dev/ptmx, /dev/shm, /dev/tty: herdr PTYs for the panes.
+  read_write: [/sandbox, /tmp, /var/tmp, /dev/null, /dev/pts, /dev/ptmx, /dev/shm, /dev/tty]
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  # Why a proxy: OpenShell refuses IP-literal TCP, and tailscaled dials DERP relays by IP.
+  # tailscaled is pointed at tinyproxy (HTTPS_PROXY=127.0.0.1:3128), which dials by
+  # hostname. Only these two binaries may reach these hosts, so tinyproxy is useless to a
+  # process that is not allowed to use it (a pane's `curl 127.0.0.1:3128` gets no more
+  # than Tailscale hosts). Never add a non-Tailscale host to this rule.
+  tailscale:
+    name: tailscale
+    endpoints:
+      - { host: controlplane.tailscale.com, port: 443, protocol: tcp, tls: skip }   # control plane: login, netmap, Serve config, ACME DNS challenge
+      - { host: login.tailscale.com, port: 443, protocol: tcp, tls: skip }          # interactive/auth-key login
+      - { host: "derp*.tailscale.com", port: 443, protocol: tcp, tls: skip }        # DERP relays: ALL tailnet traffic rides these (UDP is fenced, no direct paths)
+      - { host: log.tailscale.com, port: 443, protocol: tcp, tls: skip }            # client logging; tailscaled retries noisily without it
+      - { host: acme-v02.api.letsencrypt.org, port: 443, protocol: tcp, tls: skip } # `tailscale serve` certificates: tailscaled does ACME itself
+    binaries:
+      - { path: /usr/bin/tinyproxy }          # exact path matters: not /usr/sbin
+      - { path: /usr/local/bin/tailscaled }
+
+  # claude: API-key mode talks to api.anthropic.com (the key is a gateway provider,
+  # injected on egress). The subscription `/login` flow needs claude.ai, console.anthropic.com
+  # and platform.claude.com. Telemetry (datadog, statsig, sentry) stays denied on purpose.
+  anthropic:
+    name: anthropic
+    endpoints:
+      - { host: api.anthropic.com, port: 443 }
+      - { host: claude.ai, port: 443 }
+      - { host: console.anthropic.com, port: 443 }
+      - { host: platform.claude.com, port: 443 }
+    binaries:
+      - { path: /usr/local/bin/claude }
+
+  # @@BEGIN llm
+  # pi (a node program) talks to the tailnet-or-public LiteLLM gateway. Its key is a
+  # gateway provider (LiteLLM key), injected on egress; or, until that exists, the
+  # per-worker key written into pi's auth.json by the provisioner.
+  llm_gateway:
+    name: llm_gateway
+    endpoints:
+      - { host: "@@LLM_GATEWAY_HOST@@", port: 443 }
+    binaries:
+      - { path: /usr/local/bin/node }
+      - { path: /usr/local/bin/pi }
+  # @@END llm
