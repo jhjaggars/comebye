@@ -224,10 +224,13 @@ func (l *Lock) write() error {
 	if err != nil {
 		return err
 	}
-	if err := l.f.Truncate(0); err != nil {
+	// Write over the record, then cut any longer leftover: truncating first
+	// would show a reader (another machine checking the lease) an empty file.
+	b = append(b, '\n')
+	if _, err := l.f.WriteAt(b, 0); err != nil {
 		return err
 	}
-	if _, err := l.f.WriteAt(append(b, '\n'), 0); err != nil {
+	if err := l.f.Truncate(int64(len(b))); err != nil {
 		return err
 	}
 	return l.f.Sync()
