@@ -45,3 +45,17 @@ func TestIdleExitCodes(t *testing.T) {
 		t.Fatalf("extra arg: %d", code)
 	}
 }
+
+// The CLI only ever talks to the local server, never to the hub: a proxy in
+// its environment (a sandbox pane sets ALL_PROXY for tailscaled's SOCKS5)
+// must not be applied to that call. The server's own link to the hub is the
+// one that uses the proxy (internal/fleet).
+func TestCLIIgnoresProxyEnvironment(t *testing.T) {
+	for _, k := range []string{"ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"} {
+		t.Setenv(k, "socks5h://127.0.0.1:1") // nothing listens there
+	}
+	_, e, out, errb := newFake(t)
+	if code := run(e, "whoami", "--json"); code != 0 {
+		t.Fatalf("code %d out %q err %q", code, out, errb)
+	}
+}
