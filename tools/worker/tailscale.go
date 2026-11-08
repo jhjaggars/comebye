@@ -103,14 +103,21 @@ func (t *tsClient) login(ctx context.Context) error {
 // MintKey makes a single-use, pre-authorized, tagged key that expires in
 // ten minutes. The returned key is a secret: pass it on over stdin only.
 func (t *tsClient) MintKey(ctx context.Context, tag, desc string) (id, key string, err error) {
+	return t.MintKeyOpts(ctx, tag, desc, false, 10)
+}
+
+// MintKeyOpts is MintKey with the node's ephemerality and the key's lifetime
+// in minutes chosen. An ephemeral node is removed by Tailscale soon after it
+// goes offline: for tests, not for workers that stop and start.
+func (t *tsClient) MintKeyOpts(ctx context.Context, tag, desc string, ephemeral bool, minutes int) (id, key string, err error) {
 	if err := t.login(ctx); err != nil {
 		return "", "", err
 	}
 	body, _ := json.Marshal(map[string]any{
 		"capabilities": map[string]any{"devices": map[string]any{"create": map[string]any{
-			"reusable": false, "ephemeral": false, "preauthorized": true, "tags": []string{tag},
+			"reusable": false, "ephemeral": ephemeral, "preauthorized": true, "tags": []string{tag},
 		}}},
-		"expirySeconds": 600,
+		"expirySeconds": minutes * 60,
 		"description":   desc,
 	})
 	b, code, err := t.do(ctx, "POST", "/api/v2/tailnet/-/keys", bytes.NewReader(body), "application/json", true)

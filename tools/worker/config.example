@@ -3,7 +3,7 @@
 # in its own mode-0600 file (ts_oauth_file).
 
 # --- required
-# provider=gcp                    # gcp (default) or aws
+# provider=gcp                    # gcp (default), aws or openshell
 
 # GCP:
 project=my-gcp-project
@@ -66,3 +66,22 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # llm_budget_duration=30d                 # the budget resets this often; the key itself never expires
 # llm_rpm=30
 
+
+# OpenShell sandboxes (provider=openshell, instead of the gcp/aws settings above; project, zone and
+# ssh_source_cidr are not needed). The sandbox is a worker on the OpenShell gateway's Kubernetes driver.
+# The gateway login is the openshell CLI's own (`openshell gateway login NAME`); nothing secret is here.
+# provider=openshell
+# openshell_gateway=homelab                  # a gateway registered with the CLI; or openshell_endpoint=https://...
+# openshell_workspace=openshell-sandboxes    # required; a gateway can refuse "default"
+# sandbox_image=registry.example/comebye-sandbox:{version}   # {version} = the hub's release
+# sandbox_policy=~/.config/comebye-worker/sandbox-policy.yaml   # rendered from the image's template; optional
+# sandbox_providers=anthropic-claude,github-push   # gateway credential providers, made once by an admin
+# sandbox_cpu=2
+# sandbox_memory=6Gi
+# idle_minutes=120                           # the init exits (sandbox Completed) after this long idle
+# openshell_bin=openshell                    # the CLI to run
+
+# Tailnet key (all providers). Defaults suit real workers. ts_key_ephemeral=true makes the node vanish
+# from the tailnet soon after it goes offline: for tests only.
+# ts_key_ephemeral=false
+# ts_key_minutes=10                          # 1..60

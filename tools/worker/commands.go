@@ -334,11 +334,15 @@ func (e *env) authKey(ctx context.Context, name string) (key, usedFile string, e
 			return "", "", err
 		}
 	}
-	kid, key, err := ts.MintKey(ctx, e.Cfg.Tag, "comebye-worker "+name)
+	kid, key, err := ts.MintKeyOpts(ctx, e.Cfg.Tag, "comebye-worker "+name, e.Cfg.TSKeyEphemeral, e.Cfg.TSKeyMinutes)
 	if err != nil {
 		return "", "", err
 	}
-	e.printf("  minted a single-use %s key (id %s, valid 10 minutes)\n", e.Cfg.Tag, kid)
+	eph := ""
+	if e.Cfg.TSKeyEphemeral {
+		eph = ", ephemeral"
+	}
+	e.printf("  minted a single-use %s key (id %s, valid %d minutes%s)\n", e.Cfg.Tag, kid, e.Cfg.TSKeyMinutes, eph)
 	return key, "", nil
 }
 

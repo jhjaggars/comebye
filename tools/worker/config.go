@@ -57,11 +57,13 @@ type Config struct {
 	IdleMinutes    int    // auto-poweroff after this long with no ssh session and no working agent
 	MaxRunDuration string // GCE backstop ("24h"); empty disables
 
-	Tag           string // tailnet tag the workers carry
-	TSOAuthFile   string // OAuth client (client_id / client_secret), mode 0600
-	TSAuthKeyFile string // fallback: a hand-minted single-use tagged key in a mode-0600 file; deleted after use
-	TSAPIBase     string // Tailscale API base (tests; default https://api.tailscale.com)
-	TSAllowLogin  string // COMEBYE_TS_ALLOW_LOGIN on the worker: the login that owns the hub device
+	Tag            string // tailnet tag the workers carry
+	TSOAuthFile    string // OAuth client (client_id / client_secret), mode 0600
+	TSAuthKeyFile  string // fallback: a hand-minted single-use tagged key in a mode-0600 file; deleted after use
+	TSKeyEphemeral bool   // the minted key's node is ephemeral (tests; default false)
+	TSKeyMinutes   int    // how long the minted key is valid (default 10)
+	TSAPIBase      string // Tailscale API base (tests; default https://api.tailscale.com)
+	TSAllowLogin   string // COMEBYE_TS_ALLOW_LOGIN on the worker: the login that owns the hub device
 
 	HubURL     string // the hub's Serve URL, as the user reaches it (version lookup, peer removal)
 	HubPeerURL string // COMEBYE_HUB on the worker: the hub's Serve URL https://<hub>.<tailnet>.ts.net
@@ -142,6 +144,7 @@ func defaults() Config {
 		TSOAuthFile:    filepath.Join(cfgDir, "tailscale-oauth"),
 		TSAuthKeyFile:  filepath.Join(cfgDir, "authkey"),
 		TSAPIBase:      "https://api.tailscale.com",
+		TSKeyMinutes:   10,
 		ReleasesURL:    "https://github.com/jhjaggars/comebye/releases",
 		HerdrInstall:   "https://herdr.dev/install.sh",
 		StateDir:       state,
@@ -293,6 +296,17 @@ func (c *Config) apply(kv map[string]string) error {
 			c.TSOAuthFile = expand(v)
 		case "ts_authkey_file":
 			c.TSAuthKeyFile = expand(v)
+		case "ts_key_ephemeral":
+			switch v {
+			case "true":
+				c.TSKeyEphemeral = true
+			case "false":
+				c.TSKeyEphemeral = false
+			default:
+				err = fmt.Errorf("ts_key_ephemeral must be true or false, not %q", v)
+			}
+		case "ts_key_minutes":
+			c.TSKeyMinutes, err = strconv.Atoi(v)
 		case "ts_api_base":
 			c.TSAPIBase = v
 		case "ts_allow_login":
@@ -431,6 +445,7 @@ func (c *Config) Validate() error {
 		chk(!c.AWSSpot || c.Provider == "aws", "aws_spot needs provider=aws"),
 		chk(c.IdleMinutes >= 5 && c.IdleMinutes <= 10080, "idle_minutes must be 5..10080"),
 		chk(c.MaxRunDuration == "" || durRe.MatchString(c.MaxRunDuration), "bad max_run_duration %q (want e.g. 24h, or empty)", c.MaxRunDuration),
+		chk(c.TSKeyMinutes >= 1 && c.TSKeyMinutes <= 60, "ts_key_minutes must be 1..60"),
 		chk(tagRe.MatchString(c.Tag), "bad tag %q (want tag:name)", c.Tag),
 		chk(c.TSAllowLogin == "" || loginRe.MatchString(c.TSAllowLogin), "bad ts_allow_login %q", c.TSAllowLogin),
 		chk(c.HerdrSHA256 == "" || regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(c.HerdrSHA256), "herdr_install_sha256 must be 64 hex digits"),

@@ -471,3 +471,22 @@ func TestOpenShellArchiveAll(t *testing.T) {
 		t.Errorf("not archived: %v", s3.keys(""))
 	}
 }
+
+func TestKeyLifetimeAndEphemeralAreConfigurable(t *testing.T) {
+	f := newOSFake(t)
+	f.hubFollowsEnv()
+	f.e.Cfg.TSKeyEphemeral, f.e.Cfg.TSKeyMinutes = true, 30
+	if err := f.e.create(context.Background(), "w1", createOpts{}); err != nil {
+		t.Fatalf("%v\n%s", err, f.out.String())
+	}
+	for _, want := range []string{`"ephemeral":true`, `"expirySeconds":1800`, `"reusable":false`, `"preauthorized":true`} {
+		if len(f.w.mintBodies) != 1 || !strings.Contains(f.w.mintBodies[0], want) {
+			t.Errorf("mint body lacks %s: %v", want, f.w.mintBodies)
+		}
+	}
+	c := osCfg(t, "openshell")
+	c.TSKeyMinutes = 90
+	if c.Validate() == nil {
+		t.Error("accepted a 90 minute key")
+	}
+}

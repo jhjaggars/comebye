@@ -1,7 +1,8 @@
 # Worker VMs
 
 `tools/worker` builds a worker VM on Google Compute Engine **or AWS EC2**
-(`provider = gcp|aws`), puts it on your tailnet as a **tagged, persistent** node (`tag:worker`) and lets it join the
+(`provider = gcp|aws`), or a sandbox on an **OpenShell gateway**
+(`provider = openshell`, see [OpenShell sandboxes](#openshell-sandboxes)), puts it on your tailnet as a **tagged, persistent** node (`tag:worker`) and lets it join the
 comebye hub. After that, comebye does the rest: launching agents, handoffs
 and repo checkouts go through the hub like any other peer. The tool does no
 agent orchestration and clones no repositories.
@@ -329,6 +330,89 @@ On AWS, at $0.09/GB egress, a worker with 200 MB of sessions costs about $0.09 a
 at this rate (an estimate; most have far less). A pull is not an interactive session, so it does not
 delay the idle poweroff; a tick that lands mid-pull on an otherwise idle worker past its limit could stop the VM, which `archive` reports as an ssh failure to repeat.
 Codex sessions are not archived: the archive knows only Claude and pi.
+
+## OpenShell sandboxes
+
+`provider = openshell` makes the worker a **sandbox** on an [OpenShell](https://github.com/NVIDIA/OpenShell)
+gateway instead of a VM. The same commands work (`create`, `status`, `stop`, `start`,
+`archive`, `login`, `destroy`); the tailnet join, the hub registration, the archive pull and
+the order of `destroy` are the same code. Only the resource steps and the transport differ.
+
+**Two planes.** The gateway carries the *management plane*: create, exec, stop, start, delete.
+The tool shells out to the `openshell` CLI (JSON output), which holds *your* login; the tool never
+reads, stores or prints the gateway credential, and the sandbox never holds one. comebye's *own
+traffic* stays on the tailnet: the sandbox runs a stock tailscaled in userspace mode as a
+`tag:worker` node, so the hub, ACLs, `tsauth` and the archive host name work as for a VM.
+A sandbox has no ssh and no sudo; every step is `openshell sandbox exec`, with secrets on stdin.
+
+**Requirements**
+
+- The gateway must use the **Kubernetes driver**. A podman sandbox has only a loopback interface
+  and cannot join the tailnet.
+- The image, the init (`comebye-sandbox-init`) and the policy come from `tools/worker/openshell/`.
+  The image must hold the comebye release the hub runs; `sandbox_image` takes `{version}`.
+- comebye in the image must be able to reach the hub through tailscaled's SOCKS5 listener
+  (`127.0.0.1:1055`): the sandbox cannot resolve tailnet names itself.
+- `openshell gateway login NAME` on a user-owned tailnet node, then `status` shows
+  `Authentication: Ok`. When the login has lapsed, the tool says so and names the command.
+- The gateway providers the sandbox uses (`sandbox_providers`: model keys, a GitHub token) are
+  made once by an admin. They hold the real secrets; the sandbox sees placeholders.
+
+```ini
+provider=openshell
+openshell_gateway=homelab
+openshell_workspace=openshell-sandboxes      # required; the gateway may refuse "default"
+sandbox_image=registry.example/comebye-sandbox:{version}
+sandbox_policy=~/.config/comebye-worker/sandbox-policy.yaml
+sandbox_providers=anthropic-claude,github-push
+sandbox_cpu=2
+sandbox_memory=6Gi
+idle_minutes=120
+ts_allow_login=you@example.com
+hub_url=https://hub.your-tailnet.ts.net
+hub_peer_url=https://hub.your-tailnet.ts.net
+```
+
+`project`, `zone` and `ssh_source_cidr` do not apply. Use `openshell_endpoint=https://...`
+instead of `openshell_gateway` to connect to a gateway that is not registered with the CLI.
+`llm_gateway_url` is refused: a sandbox cannot reach the tailnet's LLM gateway, so give it a
+provider on the OpenShell gateway.
+
+**What `create` does** (four steps, resumable):
+
+1. `openshell sandbox create --name NAME --from IMAGE --label managed-by=comebye-worker
+   [--policy P] [--provider X]... [--cpu C] [--memory M] --detach -- comebye-sandbox-init`, then
+   waits for the phase `Ready` and for exec to answer. The gateway creates the volume. A sandbox
+   of that name that lacks the label is never touched.
+2. Waits for tailscaled's socket, clears a stale offline `tag:worker` device of that name, mints a
+   single-use, pre-authorized `tag:worker` key (10 minutes; `ts_key_minutes`, and
+   `ts_key_ephemeral` for tests) and runs `tailscale up` over exec **stdin**. Tailscale Serve is the
+   init's job.
+3. Writes `~/.config/comebye/env` over exec stdin (mode 600, written atomically; the init waits for
+   the file): `COMEBYE_HOST_NAME`, `COMEBYE_TS_ALLOW_LOGIN`, `COMEBYE_HUB`, `COMEBYE_ANNOUNCE=1`,
+   `COMEBYE_PUSH=false`, the launch and worktree roots under the sandbox's `$HOME`, and
+   `SBX_IDLE_MINUTES`.
+4. Waits for the hub to list the worker, and tells the hub the **sandbox id** as its instance.
+
+**Differences from a VM**
+
+| | VM | Sandbox |
+|---|---|---|
+| Archive host | `NAME.INSTANCE_ID` | `NAME.SANDBOX_ID` (the gateway's immutable id; it survives stop and start) |
+| Idle stop | poweroff timer | the init exits 0 after `idle_minutes` with no working agent; the sandbox goes to `Completed`. `status` shows it as stopped, and `start` resumes it |
+| `stop` / `start` | VM stop / start | `openshell sandbox stop` / `start`. `/sandbox` (the volume) is kept; only that is promised, not `/tmp`. The init brings the whole stack back and the node keeps its identity |
+| `destroy` | the VM; the data disk is kept | the sandbox **and its volume**; `--delete-data-disk` is refused. A `Completed` or stopped sandbox needs `start` first, or `--no-archive`, because its sessions are on the volume |
+| Agent stop for the final archive | `systemctl --user stop` | `herdr server stop`; the init restarts herdr, so a failed archive leaves the sandbox as it was |
+| `login` | ssh `-t` | `openshell sandbox exec --tty` |
+
+`destroy` runs in the VM's order: save the sessions (agents running), stop the agents, save again,
+sign the agents out, `tailscale logout`, delete the tailnet device (exact hostname **and** tag),
+remove the hub's peer entry, then `openshell sandbox delete`, which removes the volume too.
+
+**Known limits.** Every request between the hub and a sandbox goes through a DERP relay (UDP is not
+available in a sandbox): fine for comebye's polling and prompts, not for bulk transfer. The CLI and
+the gateway are 0.1.x and change; the tool depends on `sandbox list/start/stop/delete/exec/create`
+and the `-o json` fields `id`, `name`, `labels`, `phase` and `created_at`.
 
 ## What `destroy` removes
 
