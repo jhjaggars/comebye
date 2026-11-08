@@ -390,9 +390,13 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   await fleetMenuOpen();
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
   if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
-  const t = (await page.locator("#f-menu button:visible").allInnerTexts()).map((x) => x.trim());
-  const want = [/^Sweep for finished agents/, /^Review removals/, /briefing/i, /^Briefings screen/, /^Briefing schedule/, /^Notifications/, /^Theme:/, /^Refresh/];
+  const t = (await page.locator("#f-menu button:visible:not(.pop-x)").allInnerTexts()).map((x) => x.trim().replace(/\s+/g, " "));
+  // View (Theme, Notifications), Hub (Sweep, Review removals, the briefing item when there is one, History, Refresh): the schedule lives on Status.
+  const want = [/^Theme /, /^Notifications/, /^Sweep for finished agents/, /^Review removals/, /briefing/i, /^History/, /^Refresh/];
   if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
+  if (/schedule/i.test(t.join("|"))) throw new Error("the schedule is still in the menu");
+  const grp = await page.locator("#f-menu .m-grp").allInnerTexts();
+  if (grp.join(",").toLowerCase() !== "view,hub") throw new Error("groups " + grp);
   const box = await page.locator("#f-menu").boundingBox();
   if (box.x < 0 || box.x + box.width > 390) throw new Error("menu off-screen " + JSON.stringify(box));
   await page.keyboard.press("Escape");
@@ -409,12 +413,12 @@ await check("theme: System paints the OS scheme (Comebye Light/Dark) on load; th
   await page.waitForSelector("#btn-fleet");
   if (await attr() !== (light_os ? "light" : "dark") || await bg() !== (light_os ? light : dark)) throw new Error("system: " + await attr() + " " + await bg());
   await fleetMenuOpen();
-  if (!/Theme: System/.test(await page.locator("#f-theme").innerText())) throw new Error("label");
+  if (!/Theme\s+System/.test(await page.locator("#f-theme").innerText())) throw new Error("label " + await page.locator("#f-theme").innerText());
   await page.locator("#f-theme").click();
   await page.waitForSelector("#theme-panel", { state: "visible" });
   if ((await page.locator("#tp-list .tp-opt").count()) < 3) throw new Error("no options");
-  await page.locator("#f-theme").click().catch(() => {});
-  await page.evaluate(() => document.getElementById("theme-panel").hidden = true);
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#theme-panel", { state: "hidden" });
 });
 await check("fleet menu: the dashed sweep row is gone and the removals banner stays", async () => {
   if (await page.locator("#sweep-open").count()) throw new Error("#sweep-open still in the page");
@@ -2258,20 +2262,27 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     await tp.reload({ waitUntil: "load" });
     if ((await cur()) !== "light") throw new Error("System + light OS should be the Comebye Light theme, got " + (await cur()));
     if ((await tok("--bg")) !== "#f3f4f7") throw new Error("light --bg " + (await tok("--bg")));
-    await tp.locator("#btn-fleet").click();
-    await tp.locator("#f-theme").click();
-    await tp.waitForSelector("#theme-panel", { state: "visible" });
+    const openPicker = async () => {
+      if (await tp.locator("#theme-panel").isVisible()) return;
+      await tp.locator("#btn-fleet").click();
+      await tp.locator("#f-theme").click();
+      await tp.waitForSelector("#theme-panel", { state: "visible" });
+    };
+    await openPicker();
     const n = await tp.locator("#tp-list .tp-opt").count();
     if (n !== 16) throw new Error("expected System + 15 themes, got " + n);
     await tp.locator('#tp-list [data-theme-id="gruvbox-dark"]').click();
+    await tp.waitForSelector("#theme-panel", { state: "hidden" }); // picking closes the picker
     if ((await cur()) !== "gruvbox-dark") throw new Error("data-theme not applied");
     if ((await tok("--bg")) !== "#1d2021") throw new Error("--bg " + (await tok("--bg")));
     if ((await bodyBg()) !== "rgb(29, 32, 33)") throw new Error("body background " + (await bodyBg()));
+    await openPicker();
     if ((await tp.locator('#tp-list [data-theme-id="gruvbox-dark"]').getAttribute("aria-checked")) !== "true") throw new Error("option not marked checked");
     // A swatch previews ITS theme, not the active one.
     const sw = await tp.locator('#tp-list [data-theme-id="dracula"] .tp-sw').evaluate((e) => getComputedStyle(e).backgroundColor);
     if (sw !== "rgb(33, 34, 44)") throw new Error("dracula swatch background " + sw);
     for (const id of ["dracula", "tokyonight-day", "solarized-light"]) {
+      await openPicker();
       await tp.locator(`#tp-list [data-theme-id="${id}"]`).click();
       const want = await tp.evaluate((i) => ComebyeThemes.byId[i].vars.bg, id);
       if ((await tok("--bg")) !== want) throw new Error(id + " --bg " + (await tok("--bg")) + " != " + want);
@@ -2300,6 +2311,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     // The pickers in the panel set those two slots.
     await tp.locator("#btn-fleet").click();
     await tp.locator("#f-theme").click();
+    await tp.locator("#tp-more").click(); // System's light and dark themes are a second step
     await tp.selectOption('#tp-sys select[data-sys="dark"]', "dracula");
     if ((await cur()) !== "dracula") throw new Error("dark slot change not applied: " + (await cur()));
     if ((await tp.evaluate(() => localStorage.getItem("comebye.theme.dark"))) !== "dracula") throw new Error("slot not stored");
@@ -2439,6 +2451,292 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     if (!r.fh.includes('data-fill="ok 1+3"') || !r.fh.includes("fresh, rotates")) throw new Error("recommendation or detail missing: " + r.fh);
     if (JSON.stringify(r.b) !== JSON.stringify(["A", "B"]) || !r.bh.includes('data-fill="ok 2"')) throw new Error("fallback: " + r.bh);
     if (r.one !== "") throw new Error("one option drew buttons");
+  });
+}
+
+// ---- menus: one set of rules for every ⋯ popover; the theme picker; the ☀/☾ toggle; the Briefings card ----
+{
+  const vis = (sel) => page.locator(sel).isVisible();
+  const active = () => page.evaluate(() => document.activeElement?.id || document.activeElement?.className || "");
+  const resetTheme = () => page.evaluate(() => { try { localStorage.clear(); } catch {} });
+  const OPEN = {
+    fleet: async () => { await page.locator("#btn-fleet").click(); await page.waitForSelector("#f-menu", { state: "visible" }); },
+    theme: async () => { await page.locator("#btn-fleet").click(); await page.locator("#f-theme").click(); await page.waitForSelector("#theme-panel", { state: "visible" }); },
+    notify: async () => { await page.locator("#btn-notify").click(); await page.waitForSelector("#notify-panel", { state: "visible" }); },
+    row: async () => { await rowOf(PANES.alpha).locator(".row-more").click(); await page.waitForSelector("#row-menu", { state: "visible" }); },
+  };
+  const BOX = { fleet: "#f-menu", theme: "#theme-panel", notify: "#notify-panel", row: "#row-menu" };
+  const TRIG = { fleet: "btn-fleet", theme: "btn-fleet", notify: "btn-notify", row: "row-more" };
+  const openIds = () => page.evaluate(() => ["f-menu", "d-menu", "row-menu", "theme-panel", "notify-panel"].filter((i) => !document.getElementById(i).hidden));
+
+  for (const width of [1280, 390]) {
+    await check(`menus: Escape, a click outside and the × close the fleet menu, the theme picker, the notifications and a row's menu, with the focus back on the button, at ${width}px`, async () => {
+      await desktopList(width);
+      await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+      for (const name of ["fleet", "theme", "notify", "row"]) {
+        await OPEN[name]();
+        await page.keyboard.press("Escape");
+        await page.waitForSelector(BOX[name], { state: "hidden", timeout: 2000 });
+        if (!(await active()).includes(TRIG[name])) throw new Error(`${name}: Escape left the focus on "${await active()}"`);
+        await OPEN[name]();
+        await page.mouse.click(width - 8, 8); // empty corner (on a phone, the sheet's backdrop)
+        await page.waitForSelector(BOX[name], { state: "hidden", timeout: 2000 }).catch(() => { throw new Error(`${name}: a click outside did not close it`); });
+        await OPEN[name]();
+        await page.locator(BOX[name] + " .pop-x").click();
+        await page.waitForSelector(BOX[name], { state: "hidden", timeout: 2000 });
+        if (!(await active()).includes(TRIG[name])) throw new Error(`${name}: × left the focus on "${await active()}"`);
+      }
+      if (nativeDialogs) throw new Error("a native dialog opened");
+      await noOverflow();
+    });
+  }
+
+  await check("menus: only one is open at a time", async () => {
+    await desktopList(1280);
+    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    await OPEN.row();
+    await page.locator("#btn-notify").click();
+    if ((await openIds()).join() !== "notify-panel") throw new Error("row then bell: " + await openIds());
+    await page.locator("#btn-fleet").click();
+    if ((await openIds()).join() !== "f-menu") throw new Error("bell then ⋯: " + await openIds());
+    await page.locator("#f-theme").click();
+    if ((await openIds()).join() !== "theme-panel") throw new Error("Theme item: " + await openIds());
+    await page.locator("#btn-notify").click();
+    if ((await openIds()).join() !== "notify-panel") throw new Error("theme then bell: " + await openIds());
+    await page.locator("#btn-notify").click();
+    if ((await openIds()).length) throw new Error("the bell did not toggle it shut: " + await openIds());
+  });
+
+  await check("menus: ↑ ↓ Home End move between the items (the × is not one) and wrap", async () => {
+    await OPEN.fleet();
+    const items = await page.evaluate(() => [...document.querySelectorAll("#f-menu button:not(.pop-x)")].filter((b) => !b.disabled && !b.hidden && b.getClientRects().length).map((b) => b.id));
+    if (items.length < 4) throw new Error("few items " + items);
+    if ((await active()) !== items[0]) throw new Error("first item not focused: " + await active());
+    await page.keyboard.press("ArrowDown");
+    if ((await active()) !== items[1]) throw new Error("ArrowDown: " + await active());
+    await page.keyboard.press("End");
+    if ((await active()) !== items[items.length - 1]) throw new Error("End: " + await active());
+    await page.keyboard.press("ArrowDown");
+    if ((await active()) !== items[0]) throw new Error("ArrowDown did not wrap: " + await active());
+    await page.keyboard.press("ArrowUp");
+    if ((await active()) !== items[items.length - 1]) throw new Error("ArrowUp did not wrap: " + await active());
+    await page.keyboard.press("Home");
+    if ((await active()) !== items[0]) throw new Error("Home: " + await active());
+    await page.keyboard.press("Escape");
+    // The notifications and the theme picker answer the arrows too.
+    await OPEN.notify();
+    const nb = await page.evaluate(() => document.activeElement.id);
+    if (!/^notify-/.test(nb) && nb !== "") throw new Error("notifications focus " + nb);
+    await page.keyboard.press("Escape");
+    await OPEN.theme();
+    await page.keyboard.press("ArrowDown");
+    const a1 = await page.evaluate(() => document.activeElement.dataset.themeId || document.activeElement.id);
+    if (!a1) throw new Error("theme ArrowDown went nowhere");
+    await page.keyboard.press("Escape");
+    // ArrowDown on the ⋯ itself opens the menu.
+    await page.locator("#btn-fleet").focus();
+    await page.keyboard.press("ArrowDown");
+    await page.waitForSelector("#f-menu", { state: "visible" });
+    await page.keyboard.press("Escape");
+  });
+
+  await check("theme: the picker is a popover under ⋯; hovering previews, leaving reverts, a click keeps it and closes it", async () => {
+    await resetTheme();
+    await page.reload({ waitUntil: "load" });
+    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    const attr = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    const saved = await attr();
+    await OPEN.theme();
+    const g = await page.evaluate(() => { const p = document.querySelector("#theme-panel").getBoundingClientRect(), b = document.querySelector("#btn-fleet").getBoundingClientRect(); return { top: p.top, bottom: p.bottom, right: p.right, btnBottom: b.bottom, btnRight: b.right, vh: innerHeight }; });
+    if (g.top < g.btnBottom - 1 || g.right > g.btnRight + 24 || g.bottom > g.vh) throw new Error("not under ⋯: " + JSON.stringify(g));
+    await page.locator('#tp-list [data-theme-id="dracula"]').hover();
+    if ((await attr()) !== "dracula") throw new Error("hover did not preview: " + await attr());
+    if (!/Previewing Dracula/.test(await page.locator("#tp-hint").innerText())) throw new Error("hint " + await page.locator("#tp-hint").innerText());
+    if ((await page.evaluate(() => localStorage.getItem("comebye.theme"))) === "dracula") throw new Error("a preview was saved");
+    await page.mouse.move(5, 400); // off the list
+    await page.waitForFunction((t) => document.documentElement.getAttribute("data-theme") === t, saved, { timeout: 2000 }).catch(() => { throw new Error("leaving the list did not revert"); });
+    await page.locator('#tp-list [data-theme-id="nord"]').hover();
+    await page.locator('#tp-list [data-theme-id="nord"]').click();
+    await page.waitForSelector("#theme-panel", { state: "hidden" });
+    if ((await attr()) !== "nord" || (await page.evaluate(() => localStorage.getItem("comebye.theme"))) !== "nord") throw new Error("click did not keep nord: " + await attr());
+    if ((await active()) !== "btn-fleet") throw new Error("focus after picking: " + await active());
+  });
+
+  await check("theme: arrowing previews, Escape reverts and closes, Enter keeps", async () => {
+    const attr = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    await page.evaluate(() => ComebyeThemes.set("gruvbox-dark"));
+    await OPEN.theme();
+    if ((await page.evaluate(() => document.activeElement.dataset.themeId)) !== "gruvbox-dark") throw new Error("the saved theme is not focused: " + await page.evaluate(() => document.activeElement.dataset.themeId));
+    await page.keyboard.press("ArrowDown");
+    const next = await page.evaluate(() => document.activeElement.dataset.themeId);
+    const want = await page.evaluate((i) => ComebyeThemes.byId[ComebyeThemes.resolve(i)].id, next);
+    if ((await attr()) !== want || want === "gruvbox-dark") throw new Error("arrow did not preview " + next + ": " + await attr());
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#theme-panel", { state: "hidden" });
+    if ((await attr()) !== "gruvbox-dark") throw new Error("Escape did not revert: " + await attr());
+    if ((await page.evaluate(() => localStorage.getItem("comebye.theme"))) !== "gruvbox-dark") throw new Error("Escape changed the saved theme");
+    await OPEN.theme();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    const pick = await page.evaluate(() => document.activeElement.dataset.themeId);
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#theme-panel", { state: "hidden" });
+    if ((await page.evaluate(() => localStorage.getItem("comebye.theme"))) !== pick || (await attr()) !== (await page.evaluate((i) => ComebyeThemes.resolve(i), pick))) throw new Error("Enter did not keep " + pick);
+    if ((await active()) !== "btn-fleet") throw new Error("focus after Enter: " + await active());
+  });
+
+  await check("theme: System's light and dark themes are a second step", async () => {
+    await OPEN.theme();
+    if (await vis("#tp-sys")) throw new Error("the system step shows up front");
+    await page.locator("#tp-more").click();
+    await page.waitForSelector("#tp-sys", { state: "visible" });
+    if (await vis("#tp-list")) throw new Error("the list stays beside the step");
+    await page.selectOption('#tp-sys select[data-sys="light"]', "catppuccin-latte");
+    if ((await page.evaluate(() => localStorage.getItem("comebye.theme.light"))) !== "catppuccin-latte") throw new Error("slot not stored");
+    await page.locator("#tp-back").click();
+    await page.waitForSelector("#tp-list", { state: "visible" });
+    await page.keyboard.press("Escape");
+  });
+
+  await check("theme: the ☀/☾ button flips within the family and says when there is no other half", async () => {
+    const attr = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    const q = page.locator("#btn-theme-q");
+    if (!(await q.isVisible())) throw new Error("no ☀/☾ button");
+    const bb = await q.boundingBox();
+    if (bb.width < 36 || bb.height < 36) throw new Error("tap target " + bb.width + "x" + bb.height);
+    await page.evaluate(() => ComebyeThemes.set("gruvbox-dark"));
+    await page.evaluate(() => window.dispatchEvent(new Event("storage")));
+    if (!/Gruvbox Light/.test(await q.getAttribute("aria-label"))) throw new Error("label " + await q.getAttribute("aria-label"));
+    await q.click();
+    if ((await attr()) !== "gruvbox-light") throw new Error("☀ gave " + await attr());
+    await q.click();
+    if ((await attr()) !== "gruvbox-dark") throw new Error("☾ gave " + await attr());
+    await page.evaluate(() => { ComebyeThemes.set("tokyonight-storm"); window.dispatchEvent(new Event("storage")); });
+    await q.click();
+    if ((await attr()) !== "tokyonight-day") throw new Error("storm -> " + await attr());
+    await page.evaluate(() => { ComebyeThemes.set("dracula"); window.dispatchEvent(new Event("storage")); });
+    await page.evaluate(() => document.querySelector("#btn-theme-q").click()); // aria-disabled: it still answers, with a toast
+    if ((await attr()) !== "dracula") throw new Error("Dracula changed to " + await attr());
+    await page.waitForFunction(() => /no light version/.test(document.querySelector("#toast").textContent), null, { timeout: 2000 });
+    if ((await q.getAttribute("aria-disabled")) !== "true") throw new Error("not marked unavailable");
+    // System with a dark OS flips to an explicit light theme of the same family.
+    await page.evaluate(() => { ComebyeThemes.set("system"); window.dispatchEvent(new Event("storage")); });
+    const first = await attr();
+    await q.click();
+    if ((await attr()) === first) throw new Error("System did not flip");
+    await page.evaluate(() => localStorage.clear());
+  });
+
+  await check("sheet: on a phone every ⋯ menu is a bottom sheet with a handle; the backdrop and a swipe down close it", async () => {
+    await desktopList(390);
+    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    for (const name of ["fleet", "theme", "notify", "row"]) {
+      await OPEN[name]();
+      await page.waitForTimeout(400); // the slide-in
+      const g = await page.evaluate((sel) => { const e = document.querySelector(sel), r = e.getBoundingClientRect(), gr = e.querySelector(".grab").getBoundingClientRect(), bk = document.querySelector("#sheet-bk"); return { x: r.x, w: r.width, bottom: r.bottom, top: r.top, vh: innerHeight, vw: innerWidth, grab: gr.height, bk: !bk.hidden && getComputedStyle(bk).display !== "none" }; }, BOX[name]);
+      if (g.x !== 0 || Math.abs(g.w - g.vw) > 1 || Math.abs(g.bottom - g.vh) > 1 || g.grab < 10 || !g.bk || g.top < g.vh * 0.15) throw new Error(`${name}: not a bottom sheet ` + JSON.stringify(g));
+      // A short pull springs back; a long one closes.
+      const hb = await page.locator(BOX[name] + " .grab").boundingBox();
+      const cx = hb.x + hb.width / 2, cy = hb.y + hb.height / 2;
+      await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx, cy + 20, { steps: 3 }); await page.mouse.up();
+      await page.waitForTimeout(350);
+      if (!(await vis(BOX[name]))) throw new Error(`${name}: a 20px pull closed it`);
+      const hb2 = await page.locator(BOX[name] + " .grab").boundingBox();
+      await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2); await page.mouse.down();
+      await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + 160, { steps: 8 }); await page.mouse.up();
+      await page.waitForSelector(BOX[name], { state: "hidden", timeout: 2000 }).catch(() => { throw new Error(`${name}: a swipe down did not close it`); });
+      if (await vis("#sheet-bk")) throw new Error(`${name}: the backdrop stayed`);
+      await OPEN[name]();
+      await page.mouse.click(195, 60); // the backdrop
+      await page.waitForSelector(BOX[name], { state: "hidden", timeout: 2000 }).catch(() => { throw new Error(`${name}: the backdrop did not close it`); });
+    }
+    await noOverflow();
+  });
+
+  // screenshots of the popovers, in two themes, at 1280 and 390
+  for (const width of [1280, 390]) {
+    await check(`menus: the theme picker and the fleet menu in two themes at ${width}px (screenshots)`, async () => {
+      for (const th of ["dark", "gruvbox-light"]) {
+        await desktopList(width);
+        await page.evaluate((t) => ComebyeThemes.set(t), th);
+        await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+        await OPEN.fleet();
+        await page.waitForTimeout(450); // the open animation
+        await page.screenshot({ path: `${out}/menus-fleet-${th}-${width}.png` });
+        await page.locator("#f-theme").click();
+        await page.waitForSelector("#theme-panel", { state: "visible" });
+        await page.waitForTimeout(450);
+        await page.screenshot({ path: `${out}/menus-theme-${th}-${width}.png` });
+        const bad = await page.evaluate(() => [...document.querySelectorAll("#theme-panel *")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflowX === "visible").map((e) => e.tagName + "." + e.className));
+        if (bad.length) throw new Error("clipped: " + bad.join(","));
+        await page.keyboard.press("Escape");
+      }
+      await noOverflow();
+      await page.evaluate(() => localStorage.clear());
+    });
+  }
+
+  // ---- the Briefings card on Status ----
+  const schedule = () => page.evaluate(async () => (await (await fetch("/api/brief/schedule")).json()).schedule);
+  const cardSteps = async (card) => {
+    const c = (s) => page.locator(`${card} ${s}`);
+    await page.waitForSelector(`${card} .bcard`, { state: "visible", timeout: 8000 });
+    const t = await c(".bcard").innerText();
+    for (const w of ["Last briefing", "Next briefing", "Skip when nothing has changed", "Max quiet", "Publish now", "History"]) if (!t.includes(w)) throw new Error("card lacks " + w + ": " + t);
+    for (const l of ["Off", "1 h", "3 h", "6 h"]) if (!(await c(".bc-seg button").filter({ hasText: new RegExp("^" + l + "$") }).count())) throw new Error("no " + l + " button");
+    await c('[data-bi="3h"]').click();
+    await page.waitForFunction(() => /Briefing every 3 h/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+    let sc = await schedule();
+    if (!sc.enabled || sc.every !== "3h") throw new Error("3 h not saved: " + JSON.stringify(sc));
+    if ((await c('[data-bi="3h"]').getAttribute("aria-pressed")) !== "true") throw new Error("3 h not pressed");
+    if (!/Next briefing\s*\n?.*\S/.test(await c(".bcard").innerText()) || /Next briefing\s+off/.test(await c(".bcard").innerText())) throw new Error("next slot missing: " + await c(".bcard").innerText());
+    await page.waitForFunction((cd) => document.activeElement?.dataset?.bk === "int-3h" && document.activeElement.closest(cd), card, { timeout: 2000 }).catch(() => { throw new Error("focus lost after saving"); });
+    await c('[data-bskip]').uncheck();
+    await page.waitForFunction(() => /every slot/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+    sc = await schedule();
+    if (!sc.always) throw new Error("skip off not saved: " + JSON.stringify(sc));
+    if (!(await c("[data-bquiet]").isDisabled())) throw new Error("max quiet should wait for the skip");
+    await c('[data-bskip]').check();
+    await page.waitForFunction(() => /Skipping when nothing/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+    await c("[data-bquiet]").selectOption("12h");
+    await page.waitForFunction(() => /Max quiet 12 h/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+    sc = await schedule();
+    if (sc.always || sc.max_quiet !== "12h" || sc.every !== "3h") throw new Error("quiet not saved: " + JSON.stringify(sc));
+    await c('[data-bi=""]').click();
+    await page.waitForFunction(() => /briefings off/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+    sc = await schedule();
+    if (sc.enabled) throw new Error("Off not saved");
+    if (!(await c("[data-bskip]").isDisabled())) throw new Error("the options stay live while off");
+    await c('[data-bi="1h"]').click();
+    await page.waitForFunction(() => /every 1 h/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+    if ((await schedule()).every !== "1h") throw new Error("1 h not saved");
+    await c("[data-bpub]").click();
+    await page.waitForFunction(() => /No coordinator|Asked/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+  };
+  await check("briefings card: on the desktop Status page it shows the times and applies each change through the schedule API", async () => {
+    await desktopList(1280, "#/status");
+    await page.waitForSelector("#p-status", { state: "visible" });
+    await cardSteps("#ps-body");
+    await page.screenshot({ path: `${out}/briefings-card-1280.png` });
+    const bad = await page.evaluate(() => [...document.querySelectorAll("#ps-body .bcard *")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className));
+    if (bad.length) throw new Error("clipped: " + bad.join(","));
+    await page.locator("#ps-body [data-bhist]").click();
+    await page.waitForSelector("#p-briefing, #briefs", { state: "visible" });
+  });
+  await check("briefings card: on the phone it sits at the top of the briefings screen and the schedule is gone from ⋯", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent");
+    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    await page.evaluate(() => { location.hash = "#/briefings"; });
+    await page.waitForSelector("#br-status", { state: "visible" });
+    await cardSteps("#br-status");
+    await page.screenshot({ path: `${out}/briefings-card-390.png` });
+    await noOverflow();
+    const bad = await page.evaluate(() => [...document.querySelectorAll("#br-status .bcard *")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className));
+    if (bad.length) throw new Error("clipped: " + bad.join(","));
+    if (nativeDialogs) throw new Error("a native dialog opened");
+    if (await page.locator("#f-sched").count()) throw new Error("#f-sched is still in the page");
   });
 }
 

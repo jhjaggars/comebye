@@ -931,6 +931,7 @@ async function loadBrief() {
     briefing.loadedAt = Date.now();
   }
   renderBrief();
+  renderStatus();
   if (briefs.open && Date.now() - briefs.histAt > 15000) loadBriefHistory();
 }
 
@@ -2028,42 +2029,19 @@ async function onBriefClick(ev) {
   }
 }
 
-// parseBriefSchedule reads "24h", "12h at 08:00", "2d at 7:30" or "90m".
-function parseBriefSchedule(text) {
-  const m = /^\s*(\d+)\s*(d|h|m)?\s*(?:at\s+(\d{1,2}):(\d{2}))?\s*$/i.exec(text);
-  if (!m) return null;
-  const n = Number(m[1]);
-  const unit = (m[2] || "h").toLowerCase();
-  const every = unit === "d" ? `${n * 24}h` : `${n}${unit}`;
-  return { every, at: m[3] ? `${m[3].padStart(2, "0")}:${m[4]}` : "" };
-}
-
-// editBriefSchedule asks for the schedule: an interval, optionally a time
-// of day (in this device's time zone); empty turns it off.
-async function editBriefSchedule() {
+// editBriefSchedule takes you to the Briefings card on Status (on the phone,
+// the top of the briefings screen), where the schedule is edited in place.
+function editBriefSchedule() {
   toggleDetailMenu(false);
   toggleFleetMenu(false);
-  const sc = briefing.schedule || {};
-  const cur = sc.enabled ? `${sc.every}${sc.at ? " at " + sc.at : ""}` : "";
-  const text = prompt("Ask a coordinator for a briefing every… (e.g. 24h at 08:00, 12h, 2d at 7:30). Leave empty to turn scheduled briefings off.", cur);
-  if (text === null) return;
-  let body = { enabled: false };
-  if (text.trim()) {
-    const p = parseBriefSchedule(text);
-    if (!p) { toast("Write an interval like 24h, optionally with a time: 24h at 08:00", true); return; }
-    let tz = "";
-    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch {}
-    body = { enabled: true, every: p.every, at: p.at, tz: p.at ? tz : "" };
-  }
-  try {
-    const d = await api("/api/brief/schedule", { method: "POST", body: JSON.stringify(body) });
-    if (d && d.schedule) briefing.schedule = d.schedule;
-    const s = briefing.schedule || {};
-    toast(s.enabled ? `Briefing every ${s.every}${s.at ? " at " + s.at : ""}` : "Scheduled briefings off");
-  } catch (e) {
-    toast(e.message, true);
-  }
-  renderBrief();
+  if (isDesktop()) openPage("status"); else openBriefs(true);
+  setTimeout(() => {
+    renderStatus();
+    const c = [...document.querySelectorAll(".bcard")].find((x) => x.getClientRects().length);
+    if (!c) return;
+    c.scrollIntoView?.({ block: "nearest" });
+    c.querySelector("[data-bk]")?.focus();
+  }, 80);
 }
 
 /* ---------- the briefings screen (swipe left from the agent list) ---------- */
@@ -2115,15 +2093,6 @@ function renderPager() {
   renderNav();
 }
 
-function briefsSchedLine() {
-  const s = briefing.schedule;
-  if (!s || !s.enabled) return "Scheduled briefings are off.";
-  const next = s.next ? Date.parse(s.next) : NaN;
-  const nextTxt = Number.isNaN(next) ? "" : ` · next ${fmtWhen(s.next)}`;
-  const state = { waiting: " · waiting for a busy coordinator", prompted: " · a coordinator was asked" }[s.state] || "";
-  return `Every ${s.every}${s.at ? " at " + s.at : ""}${nextTxt}${state}`;
-}
-
 function briefItem(h) {
   const at = Date.parse(h.at);
   const open = briefs.openAts.has(h.at);
@@ -2139,23 +2108,24 @@ function renderBriefs() {
   const b = briefing.data && briefing.data.markdown.trim() ? briefing.data : null;
   const miss = briefMiss();
   const earlier = briefs.history.filter((h) => !b || h.at !== b.at);
-  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefsSchedLine(), briefChecked(), earlier.map((h) => h.at).join(","), Math.floor(Date.now() / 60000)].join("|");
+  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefChecked(), earlier.map((h) => h.at).join(","), Math.floor(Date.now() / 60000)].join("|");
   if (sig === briefs.sig) return;
   briefs.sig = sig;
   const top = el.scrollTop;
   const at = b ? Date.parse(b.at) : NaN;
+  const key = el.contains(document.activeElement) ? document.activeElement.dataset.bk : ""; // the Briefings card's control in use
   el.innerHTML = `<div id="br-status"></div><section class="br-card${miss ? " stale" : ""}" aria-label="Latest briefing">
       <div class="br-head"><span class="bf-title">Latest</span><span class="bf-meta">${b ? esc((Number.isNaN(at) ? "" : fmtAgo(at) + " ago · ") + "from " + (b.by || "a coordinator") + (briefChecked() ? " · " + briefChecked() : "")) : "none yet"}</span></div>
       ${miss ? missNote(miss, !!b) : ""}
       ${b ? `<div class="br-md md">${renderMarkdown(b.markdown, "brief:" + b.at)}</div>`
           : `<p class="br-empty">No briefing has been published. A coordinator publishes one with <code>comebye brief set</code>.</p>`}
     </section>
-    <div class="br-sched"><span>${esc(briefsSchedLine())}</span><button type="button" class="bf-sched">Schedule…</button></div>
     <h3 class="br-h">Earlier</h3>
     ${earlier.length ? earlier.map(briefItem).join("")
       : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48." : "Loading…"}</p>`}`;
   el.scrollTop = top;
   renderStatus();
+  if (key) el.querySelector(`[data-bk="${key}"]`)?.focus({ preventScroll: true });
 }
 
 // setBriefsOpen slides the screen in or out (animate: from wherever the
@@ -2242,7 +2212,7 @@ function scrollsSideways(el, root, dir) {
 }
 
 function anotherLayerOpen() {
-  if (!$("f-menu").hidden) return true;
+  if (openPopName()) return true;
   return !!document.querySelector('[role="dialog"]:not([hidden])');
 }
 
@@ -2401,8 +2371,10 @@ async function toggleRole() {
 function toggleDetailMenu(show) {
   const menu = $("d-menu");
   const open = show ?? menu.hidden;
+  if (open === !menu.hidden) return;
   menu.hidden = !open;
-  if (open) { renderDetailMenu(); if (ledger.on !== true && ledger.on !== false) loadLedger(); }
+  if (open) { renderDetailMenu(); if (ledger.on !== true && ledger.on !== false) loadLedger(); popOpened("detail"); popItems(menu)[0]?.focus(); }
+  else popClosed("detail");
   $("d-more").setAttribute("aria-expanded", String(open));
 }
 
@@ -2526,6 +2498,7 @@ function openRowMenu(btn) {
   menu.dataset.id = id;
   $("row-mark").textContent = ledger.marked.has(id) ? "Unmark (keep this session)" : "Mark ready to remove…";
   menu.hidden = false;
+  popOpened("row");
   const r = btn.getBoundingClientRect();
   const w = menu.offsetWidth;
   menu.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w)) + "px";
@@ -2534,7 +2507,7 @@ function openRowMenu(btn) {
   $("row-mark").focus();
 }
 
-function closeRowMenu() { $("row-menu").hidden = true; }
+function closeRowMenu() { const m = $("row-menu"); if (m.hidden) return; m.hidden = true; popClosed("row"); }
 
 function rowMenuMark() {
   const id = $("row-menu").dataset.id;
@@ -2569,23 +2542,158 @@ function renderFleetMenu() {
   const note = $("f-note");
   note.hidden = !off;
   note.textContent = off ? "Sweeping, removals and briefings are not available on this hub" : "";
-  for (const id of ["f-sweep", "f-review", "f-brief", "f-briefs", "f-sched"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  for (const id of ["f-sweep", "f-review", "f-brief", "f-briefs"]) { $(id).hidden = off; $(id).disabled = !lon; }
   $("f-sweep").textContent = "Sweep for finished agents…" + sfx;
   $("f-review").textContent = (lon ? `Review removals (${n})` : "Review removals") + sfx;
   $("f-review").disabled = !lon || !n;
   const st = briefingUiState();
   $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (see the Briefing page)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
   $("f-brief").disabled = !lon || st === "none" || st === "panel";
-  $("f-sched").textContent = "Briefing schedule…" + sfx;
+  // Nothing to expand or show: the item would only be a dead row.
+  $("f-brief").hidden = off || (lon && (st === "none" || st === "panel"));
+  $("f-notify-val").textContent = ({ on: "On", off: "Off" })[pushState()] || "";
+  applyTheme();
+}
+
+/* ---------- popovers: one set of rules for every ⋯ menu ---------- */
+//
+// The fleet menu, the agent menu, a row's menu, the theme picker and the
+// notifications are popovers, and on a phone (<= 600px) bottom sheets. Each
+// opens and closes through its own function; these rules are shared:
+//   - one is open at a time (opening one closes the rest);
+//   - Escape closes it and puts the focus back on the button that opened it;
+//   - a click outside it (on a sheet, its backdrop), or its ×, closes it;
+//   - ↑ ↓ Home End move between its items;
+//   - a sheet also closes on a swipe down from its handle or title.
+
+const POPS = {
+  fleet: { id: "f-menu", close: () => toggleFleetMenu(false), trigger: () => $("btn-fleet") },
+  detail: { id: "d-menu", close: () => toggleDetailMenu(false), trigger: () => $("d-more") },
+  row: { id: "row-menu", close: () => closeRowMenu(), trigger: () => [...document.querySelectorAll(".row-more")].find((b) => b.dataset.menu === $("row-menu").dataset.id) },
+  theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => $("btn-fleet") },
+  notify: { id: "notify-panel", close: () => toggleNotifyPanel(false), trigger: () => $("btn-notify") },
+};
+const sheetMQ = window.matchMedia("(max-width: 600px)");
+const isSheet = () => sheetMQ.matches;
+let clickNow = null; // the click being dispatched: a popover it opens must not be closed by that same click
+let popOpenedBy = null;
+document.addEventListener("click", (ev) => { clickNow = ev; }, true);
+
+const openPopName = () => Object.keys(POPS).find((n) => !$(POPS[n].id).hidden) || "";
+// popItems are the things the arrow keys move between (visible, enabled; the × is not one).
+const popItems = (el) => [...el.querySelectorAll("button:not(.pop-x), select")].filter((b) => !b.disabled && !b.hidden && b.getClientRects().length);
+function syncSheet() { $("sheet-bk").hidden = !(isSheet() && Object.values(POPS).some((p) => !$(p.id).hidden)); }
+function popOpened(name) {
+  popOpenedBy = clickNow;
+  for (const n of Object.keys(POPS)) if (n !== name) POPS[n].close();
+  syncSheet();
+}
+function popClosed(name) {
+  if (name === "theme") { CT.apply(); themeHint(""); } // a preview ends with the picker
+  syncSheet();
+}
+function closePop(name, focus) {
+  const t = POPS[name].trigger();
+  POPS[name].close();
+  if (focus && t && t.isConnected) t.focus();
+}
+// placePop puts a popover under its button (right edges aligned); a sheet needs no place.
+function placePop(name, anchor) {
+  const el = $(POPS[name].id);
+  el.style.left = el.style.top = el.style.maxHeight = "";
+  if (isSheet() || !anchor) return;
+  const r = anchor.getBoundingClientRect(), w = el.offsetWidth, top = r.bottom + 4;
+  el.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w)) + "px";
+  el.style.top = top + "px";
+  el.style.maxHeight = Math.max(160, innerHeight - top - 8) + "px";
+}
+
+function initPopovers() {
+  document.addEventListener("keydown", (ev) => {
+    const name = openPopName();
+    if (!name) return;
+    const el = $(POPS[name].id);
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); closePop(name, true); return; }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key) || !el.contains(document.activeElement)) return;
+    if (document.activeElement.tagName === "SELECT") return;
+    const items = popItems(el);
+    if (!items.length) return;
+    ev.preventDefault();
+    const i = items.indexOf(document.activeElement);
+    const next = ev.key === "Home" ? 0 : ev.key === "End" ? items.length - 1
+      : ev.key === "ArrowDown" ? (i + 1) % items.length : (i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length);
+    items[next].focus();
+  }, true);
+  document.addEventListener("click", (ev) => {
+    const name = openPopName();
+    if (!name || ev === popOpenedBy) return;
+    const t = ev.target;
+    if (!t.isConnected) return; // the click re-rendered its own target
+    if ($(POPS[name].id).contains(t)) return;
+    const trig = POPS[name].trigger();
+    if (trig && trig.contains(t)) return;
+    if (name === "row" && t.closest(".row-more")) return;
+    POPS[name].close();
+  });
+  for (const p of Object.values(POPS)) {
+    $(p.id).addEventListener("click", (ev) => {
+      if (!ev.target.closest(".pop-x")) return;
+      ev.stopPropagation();
+      closePop(Object.keys(POPS).find((n) => POPS[n] === p), true);
+    });
+  }
+  sheetMQ.addEventListener?.("change", syncSheet);
+
+  // Swipe down on a sheet's handle or title: it follows the finger, then
+  // closes on distance or speed, or springs back.
+  let g = null;
+  const reset = (pop) => { pop.style.transform = ""; pop.style.transition = ""; pop.style.animation = ""; };
+  document.addEventListener("pointerdown", (ev) => {
+    if (!isSheet() || ev.button > 0) return;
+    const h = ev.target.closest(".pop .grab, .pop .pop-head");
+    if (!h || ev.target.closest("button, select")) return;
+    const pop = h.closest(".pop");
+    g = { pop, y0: ev.clientY, t0: ev.timeStamp, dy: 0, id: ev.pointerId };
+    h.setPointerCapture?.(ev.pointerId);
+    pop.style.transition = "none";
+    pop.style.animation = "none";
+  });
+  document.addEventListener("pointermove", (ev) => {
+    if (!g || ev.pointerId !== g.id) return;
+    g.dy = Math.max(0, ev.clientY - g.y0);
+    g.pop.style.transform = "translateY(" + g.dy + "px)";
+  });
+  const end = (ev) => {
+    if (!g || ev.pointerId !== g.id) return;
+    const { pop, dy, t0 } = g;
+    g = null;
+    const fast = dy > 24 && dy / Math.max(1, ev.timeStamp - t0) > 0.5;
+    const ms = reducedMotion() ? 0 : 180;
+    pop.style.transition = ms ? "transform 0.18s ease-out" : "none";
+    if (dy > 70 || fast) {
+      pop.style.transform = "translateY(105%)";
+      const name = Object.keys(POPS).find((n) => $(POPS[n].id) === pop);
+      setTimeout(() => { if (name) closePop(name, true); reset(pop); }, ms);
+    } else {
+      pop.style.transform = "";
+      setTimeout(() => reset(pop), ms);
+    }
+  };
+  document.addEventListener("pointerup", end);
+  document.addEventListener("pointercancel", end);
 }
 
 /* ---------- theme: System or one of the themes in themes.js ---------- */
 //
 // themes.js (loaded in <head>) owns the data, the saved choice and the
-// pre-paint apply; this is only the picker in the ⋯ menu. "System" follows
-// the OS light/dark, each with its own chosen theme.
+// pre-paint apply; this is the picker, a popover under the ⋯, and the ☀/☾
+// button in the header. Hovering or arrowing over a theme previews it
+// (CT.preview); Enter or a click keeps it, Escape (or leaving) reverts.
+// "System" follows the OS light/dark, each with its own chosen theme, set in
+// a second step.
 
 const CT = window.ComebyeThemes;
+const tp = { step: 1 };
 
 function themeLabel() {
   const c = CT.choice();
@@ -2596,41 +2704,105 @@ function swatch(id) {
   return '<span class="tp-sw" data-theme="' + id + '" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>';
 }
 
+const SUN_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M5.3 18.7L7 17M17 7l1.7-1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+const MOON_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
+
+function themeHint(id) {
+  const h = $("tp-hint");
+  if (!h) return;
+  h.textContent = id ? "Previewing " + CT.byId[CT.resolve(id)].name + " · Enter keeps · Esc reverts"
+    : (window.matchMedia?.("(hover: none)").matches ? "Tap a theme to use it." : "Hover or arrow to preview · Enter keeps · Esc reverts");
+}
+
 function renderThemePanel() {
   const choice = CT.choice();
   const row = (id, name, sub, on) =>
-    '<button type="button" class="tp-opt" role="radio" aria-checked="' + on + '" data-theme-id="' + id + '">' +
+    '<button type="button" class="tp-opt" role="menuitemradio" aria-checked="' + on + '" data-theme-id="' + id + '">' +
     swatch(id) + '<span class="tp-name">' + esc(name) + '</span><span class="tp-mode">' + esc(sub) + '</span></button>';
-  const sys = CT.sysPair();
   $("tp-list").innerHTML =
-    '<button type="button" class="tp-opt" role="radio" aria-checked="' + (choice === "system") + '" data-theme-id="system">' +
-    swatch(CT.resolve("system")) + '<span class="tp-name">System</span><span class="tp-mode">follows device</span></button>' +
+    '<div class="tp-row">' + row("system", "System", "follows device", choice === "system") +
+    '<button type="button" class="tp-more" id="tp-more" aria-label="Choose the light and dark themes System uses">light/dark ›</button></div>' +
     CT.THEMES.map((t) => row(t.id, t.name, t.mode, choice === t.id)).join("");
+  const sys = CT.sysPair();
   const sel = (mode) => '<select data-sys="' + mode + '" aria-label="Theme when the device is ' + mode + '">' +
     CT.THEMES.filter((t) => t.mode === mode).map((t) => '<option value="' + t.id + '"' + (sys[mode] === t.id ? " selected" : "") + ">" + esc(t.name) + "</option>").join("") + "</select>";
-  $("tp-sys").innerHTML = '<span>With System:</span><label>light ' + sel("light") + "</label><label>dark " + sel("dark") + "</label>";
+  $("tp-sys").innerHTML = '<label>When the device is light' + sel("light") + "</label><label>When the device is dark" + sel("dark") + "</label>";
+  const two = tp.step === 2;
+  $("tp-list").hidden = two;
+  $("tp-hint").hidden = two;
+  $("tp-sys").hidden = !two;
+  $("tp-back").hidden = !two;
+  $("tp-title").textContent = two ? "System" : "Theme";
+  if (!two) themeHint("");
 }
 
 function applyTheme() {
   CT.apply();
-  const b = $("f-theme");
-  if (b) b.textContent = "Theme: " + themeLabel();
+  const id = CT.resolve();
+  const sw = $("f-theme-sw");
+  if (sw) sw.innerHTML = swatch(id);
+  const v = $("f-theme-val");
+  if (v) v.textContent = themeLabel();
+  const q = $("btn-theme-q");
+  if (q) {
+    const t = CT.byId[id], cp = CT.counterpart(id), other = t.mode === "dark" ? "light" : "dark";
+    q.innerHTML = t.mode === "dark" ? SUN_SVG : MOON_SVG;
+    const label = cp ? "Switch to " + CT.byId[cp].name : t.name + " has no " + other + " version";
+    q.setAttribute("aria-label", label);
+    q.title = label;
+    q.setAttribute("aria-disabled", String(!cp));
+  }
+}
+
+// quickTheme flips between the light and dark of the chosen theme's family.
+function quickTheme() {
+  const id = CT.resolve(), t = CT.byId[id], cp = CT.counterpart(id);
+  if (!cp) { toast(t.name + " has no " + (t.mode === "dark" ? "light" : "dark") + " version"); return; }
+  CT.set(cp);
+  applyTheme();
+  toast("Theme: " + CT.byId[cp].name);
 }
 
 function toggleThemePanel(show) {
   const p = $("theme-panel");
-  p.hidden = !(show ?? p.hidden);
-  if (!p.hidden) renderThemePanel();
+  const open = show ?? p.hidden;
+  if (open === !p.hidden) return;
+  p.hidden = !open;
+  if (open) {
+    tp.step = 1;
+    renderThemePanel();
+    placePop("theme", $("btn-fleet"));
+    popOpened("theme");
+    (p.querySelector('[aria-checked="true"]') || popItems(p)[0])?.focus();
+  } else {
+    popClosed("theme");
+  }
 }
 
 function initThemePanel() {
-  $("tp-list").addEventListener("click", (ev) => {
-    const b = ev.target.closest("[data-theme-id]");
+  const list = $("tp-list");
+  const previewable = (ev) => ev.target.closest && ev.target.closest("[data-theme-id]");
+  list.addEventListener("click", (ev) => {
+    if (ev.target.closest("#tp-more")) { tp.step = 2; renderThemePanel(); $("tp-sys").querySelector("select")?.focus(); return; }
+    const b = previewable(ev);
     if (!b) return;
     CT.set(b.dataset.themeId);
     applyTheme();
-    renderThemePanel();
-    $("tp-list").querySelector('[aria-checked="true"]')?.focus();
+    toast("Theme: " + themeLabel());
+    closePop("theme", true);
+  });
+  $("tp-back").addEventListener("click", () => { tp.step = 1; renderThemePanel(); $("tp-more")?.focus(); });
+  list.addEventListener("pointerover", (ev) => {
+    const b = previewable(ev);
+    if (b && ev.pointerType === "mouse") { CT.preview(CT.resolve(b.dataset.themeId)); themeHint(b.dataset.themeId); }
+  });
+  list.addEventListener("pointerleave", (ev) => { if (ev.pointerType === "mouse") { CT.apply(); themeHint(""); } });
+  list.addEventListener("focusin", (ev) => {
+    const b = previewable(ev);
+    if (b) { CT.preview(CT.resolve(b.dataset.themeId)); themeHint(b.dataset.themeId); }
+  });
+  list.addEventListener("focusout", (ev) => {
+    if (!ev.relatedTarget || !list.contains(ev.relatedTarget)) { CT.apply(); themeHint(""); }
   });
   $("tp-sys").addEventListener("change", (ev) => {
     const s = ev.target.closest("select[data-sys]");
@@ -2638,10 +2810,13 @@ function initThemePanel() {
     CT.setSystem(s.dataset.sys, s.value);
     applyTheme();
     renderThemePanel();
+    $("tp-sys").querySelector('select[data-sys="' + s.dataset.sys + '"]')?.focus();
   });
+  $("btn-theme-q").addEventListener("click", quickTheme);
   // Another tab or the OS changed the theme: keep the label and swatches true.
-  window.addEventListener("storage", () => { applyTheme(); if (!$("theme-panel").hidden) renderThemePanel(); });
-  window.matchMedia?.("(prefers-color-scheme: light)").addEventListener?.("change", () => { applyTheme(); if (!$("theme-panel").hidden) renderThemePanel(); });
+  const sync = () => { applyTheme(); if (!$("theme-panel").hidden) renderThemePanel(); };
+  window.addEventListener("storage", sync);
+  window.matchMedia?.("(prefers-color-scheme: light)").addEventListener?.("change", sync);
 }
 
 function toggleFleetMenu(show, focus) {
@@ -2652,7 +2827,10 @@ function toggleFleetMenu(show, focus) {
   if (open) {
     renderFleetMenu();
     if (ledger.on !== true && ledger.on !== false) loadLedger();
-    if (focus !== false) (menu.querySelector("button:not(:disabled):not([hidden])") || menu).focus?.();
+    popOpened("fleet");
+    if (focus !== false) (popItems(menu)[0] || menu).focus?.();
+  } else {
+    popClosed("fleet");
   }
   $("btn-fleet").setAttribute("aria-expanded", String(open));
 }
@@ -3946,8 +4124,89 @@ function statusHTML(desktop) {
     return `<div class="st-row"><span class="st-n">${esc(multiHost() ? `${host} · ${d.repo}` : d.repo)}</span><span class="st-m warn">${esc(d.reason)}${d.ref ? ` at <code>${esc(d.ref)}</code>` : ""}</span><span class="st-r">${Number.isNaN(since) ? "" : "since " + esc(fmtAgo(since)) + " ago"}</span>` +
       `<div class="st-hint">${esc(d.hint)}</div><div class="st-m">${esc(d.path)} · found by ${esc(d.source)}${n ? ` · ${n} ${n === 1 ? "agent works" : "agents work"} in it` : ""}</div></div>`;
   }).join("")}</section>` : "";
-  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${ps.map(card).join("")}${
+  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${briefCardHtml()}${ps.map(card).join("")}${
     desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
+}
+
+// The Briefings card: when the last briefing was, when the next is due, and
+// the schedule, edited in place through the hub's brief schedule API (what
+// `comebye brief schedule` calls). Anything else a schedule can carry (a time
+// of day, a long interval) shows as a pressed "Every …" chip and is kept.
+const BRIEF_INTERVALS = [["", "Off"], ["1h", "1 h"], ["3h", "3 h"], ["6h", "6 h"]];
+const BRIEF_QUIET = ["6h", "12h", "24h", "48h"];
+const briefCard = { busy: false };
+const hoursLabel = (d) => { const m = /^(\d+)h$/.exec(d || ""); return m ? m[1] + " h" : d || ""; };
+
+function briefCardHtml() {
+  const sc = briefing.schedule;
+  if (!sc) return "";
+  const on = !!sc.enabled;
+  const cur = on ? sc.every : "";
+  const b = briefing.data && briefing.data.markdown.trim() ? briefing.data : null;
+  const checked = briefChecked();
+  const next = !on ? "off" : sc.next && fmtWhen(sc.next) ? fmtWhen(sc.next) : "soon";
+  const state = on ? { waiting: " · waiting for a busy coordinator", prompted: " · a coordinator was asked" }[sc.state] || "" : "";
+  const quiet = sc.max_quiet || "6h";
+  const quietOpts = BRIEF_QUIET.includes(quiet) ? BRIEF_QUIET : [...BRIEF_QUIET, quiet];
+  const seg = BRIEF_INTERVALS.map(([v, l]) => `<button type="button" data-bk="int-${v || "off"}" data-bi="${v}" aria-pressed="${v === cur}">${l}</button>`).join("") +
+    (on && !BRIEF_INTERVALS.some(([v]) => v === cur) ? `<button type="button" data-bk="int-custom" aria-pressed="true" disabled>Every ${esc(sc.every)}${sc.at ? " at " + esc(sc.at) : ""}</button>` : "");
+  return `<section class="bcard" aria-label="Briefings">
+    <div class="bc-h">Briefings</div>
+    <div class="bc-kv"><span>Last briefing</span><b>${esc(b ? fmtWhen(b.at) + (checked ? " · " + checked : "") : "none yet")}</b></div>
+    <div class="bc-kv"><span>Next briefing</span><b>${esc(next + state)}</b></div>
+    <div class="bc-seg" role="group" aria-label="Ask a coordinator for a briefing every">${seg}</div>
+    <label class="bc-chk"><input type="checkbox" data-bk="skip" data-bskip${sc.always ? "" : " checked"}${on ? "" : " disabled"}> Skip when nothing has changed</label>
+    <label class="bc-fld">Max quiet<select data-bk="quiet" data-bquiet${on && !sc.always ? "" : " disabled"}>${quietOpts.map((v) => `<option value="${v}"${v === quiet ? " selected" : ""}>${hoursLabel(v)}</option>`).join("")}</select>
+      <small>With skipping on, ask anyway once the last briefing is this old.</small></label>
+    <div class="bc-acts"><button type="button" class="btn" data-bk="pub" data-bpub>Publish now</button><button type="button" class="btn" data-bk="hist" data-bhist>History</button></div>
+  </section>`;
+}
+
+async function saveSchedule(patch, say) {
+  if (briefCard.busy) return;
+  const c = briefing.schedule || {};
+  const body = { enabled: !!c.enabled, every: c.every || "", at: c.at || "", tz: c.tz || "", always: !!c.always, max_quiet: c.max_quiet || "", ...patch };
+  briefCard.busy = true;
+  try {
+    const d = await api("/api/brief/schedule", { method: "POST", body: JSON.stringify(body) });
+    if (d && d.schedule) briefing.schedule = d.schedule;
+    toast(say(briefing.schedule || {}));
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    briefCard.busy = false;
+  }
+  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  renderStatus();
+  renderBrief();
+}
+
+function setBriefInterval(v) {
+  // Off keeps the interval for next time (the hub holds on to it); a picked interval drops a time of day.
+  if (!v) saveSchedule({ enabled: false, every: "", at: "", tz: "" }, () => "Scheduled briefings off");
+  else saveSchedule({ enabled: true, every: v, at: "", tz: "" }, (sc) => `Briefing every ${hoursLabel(sc.every)}`);
+}
+
+// briefNow asks the coordinator for a briefing right away, as a scheduled
+// run does (the hub has no endpoint for it; this is a prompt to its pane).
+async function briefNow() {
+  if (briefCard.busy) return;
+  const a = state.agents.find((x) => isCoordinator(x));
+  if (!a) { toast("No coordinator is running. Start one first.", true); return; }
+  briefCard.busy = true;
+  try {
+    await api(`${pathFor(agentId(a))}/prompt`, { method: "POST", body: JSON.stringify({ text: "Publish a briefing now (asked from the Comebye Status page). Run `comebye todo list` first and relay answered items, catch up from the ledger (`comebye ledger`) and the workers' reports since the last briefing, then publish with `comebye brief set` in the playbook's format. If nothing changed, publish a short one that says so." }) });
+    toast("Asked " + (a.name || "the coordinator") + " for a briefing");
+  } catch (e) {
+    toast(e.status === 409 ? "The coordinator is waiting for input; answer it first" : "Could not ask: " + e.message, true);
+  } finally {
+    briefCard.busy = false;
+  }
+}
+
+function briefHistory() {
+  if (isDesktop()) openPage("briefing");
+  else document.querySelector("#br-body .br-h")?.scrollIntoView?.({ block: "start" });
 }
 
 // renderStatus fills the desktop page and, on the phone, the top of the briefings screen.
@@ -3961,15 +4220,26 @@ function renderStatus() {
     el._html = html;
     const sc = el.closest(".page-body, .br-body");
     const y = sc ? sc.scrollTop : 0;
+    const key = el.contains(document.activeElement) ? document.activeElement.dataset.bk : "";
     el.innerHTML = html;
     if (sc) sc.scrollTop = y;
+    if (key) el.querySelector(`[data-bk="${key}"]`)?.focus({ preventScroll: true });
   }
 }
 
 function onStatusClick(ev) {
-  const g = ev.target.closest("[data-go]"), a = ev.target.closest("[data-agent]");
-  if (g) openPage(g.dataset.go);
+  const g = ev.target.closest("[data-go]"), a = ev.target.closest("[data-agent]"), bi = ev.target.closest("[data-bi]");
+  if (bi) setBriefInterval(bi.dataset.bi);
+  else if (ev.target.closest("[data-bpub]")) briefNow();
+  else if (ev.target.closest("[data-bhist]")) briefHistory();
+  else if (g) openPage(g.dataset.go);
   else if (a) openDetail(a.dataset.agent);
+}
+
+function onStatusChange(ev) {
+  const t = ev.target;
+  if (t.matches?.("[data-bskip]")) saveSchedule({ always: !t.checked }, (sc) => sc.always ? "A briefing every slot" : "Skipping when nothing has changed");
+  else if (t.matches?.("[data-bquiet]")) saveSchedule({ max_quiet: t.value }, (sc) => "Max quiet " + hoursLabel(sc.max_quiet));
 }
 
 // An opened report is kept across re-renders, and rendered when first opened.
@@ -6104,11 +6374,21 @@ async function testPush() {
   }
 }
 
-function toggleNotifyPanel() {
+function toggleNotifyPanel(show) {
   const panel = $("notify-panel");
-  panel.hidden = !panel.hidden;
-  $("btn-notify").setAttribute("aria-expanded", String(!panel.hidden));
-  if (!panel.hidden) { renderPush(); if (push.serverOn === null) initPush(); }
+  const open = show ?? panel.hidden;
+  if (open === !panel.hidden) return;
+  panel.hidden = !open;
+  $("btn-notify").setAttribute("aria-expanded", String(open));
+  if (open) {
+    renderPush();
+    if (push.serverOn === null) initPush();
+    placePop("notify", $("btn-notify"));
+    popOpened("notify");
+    (popItems(panel)[0] || panel.querySelector(".pop-x")).focus();
+  } else {
+    popClosed("notify");
+  }
 }
 
 /* ---------- presence (foreground suppression) ---------- */
@@ -7095,8 +7375,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (b.dataset.mb === "unmark") unmarkAgent(state.selected);
   });
   $("row-mark").addEventListener("click", rowMenuMark);
-  document.addEventListener("click", (ev) => { if (!ev.target.closest("#row-menu, .row-more")) closeRowMenu(); });
-  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeRowMenu(); });
+  initPopovers();
   $("mk-close").addEventListener("click", closeMark);
   $("mk-go").addEventListener("click", submitMark);
   $("mk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeMark(); } });
@@ -7106,28 +7385,17 @@ window.addEventListener("DOMContentLoaded", () => {
   $("nav").addEventListener("click", onNavClick);
   for (const id of ["ps-body", "br-body"]) {
     $(id).addEventListener("click", onStatusClick);
+    $(id).addEventListener("change", onStatusChange);
     $(id).addEventListener("toggle", onStatusToggle, true);
   }
   $("f-brief").addEventListener("click", fleetAction(fleetBrief));
   $("f-briefs").addEventListener("click", fleetAction(() => openBriefs(true)));
-  $("f-sched").addEventListener("click", fleetAction(editBriefSchedule));
-  $("f-notify").addEventListener("click", fleetAction(() => { toggleNotifyPanel(); if (!$("notify-panel").hidden) $("notify-panel").scrollIntoView?.({ block: "nearest" }); }));
+  $("f-notify").addEventListener("click", fleetAction(() => toggleNotifyPanel(true)));
   $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));
-  $("f-theme").addEventListener("click", fleetAction(() => { toggleThemePanel(); if (!$("theme-panel").hidden) $("theme-panel").scrollIntoView?.({ block: "nearest" }); }));
+  $("f-theme").addEventListener("click", fleetAction(() => toggleThemePanel(true)));
   initThemePanel();
   applyTheme();
-  $("f-menu").addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); toggleFleetMenu(false); $("btn-fleet").focus(); return; }
-    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
-    const items = [...$("f-menu").querySelectorAll("button:not(:disabled):not([hidden])")];
-    if (!items.length) return;
-    ev.preventDefault();
-    const i = items.indexOf(document.activeElement);
-    items[(i + (ev.key === "ArrowDown" ? 1 : -1) + items.length) % items.length].focus();
-  });
-  document.addEventListener("click", (ev) => {
-    if (!$("f-menu").hidden && !$("f-menu").contains(ev.target)) toggleFleetMenu(false);
-  });
+  $("btn-fleet").addEventListener("keydown", (ev) => { if (ev.key === "ArrowDown" && $("f-menu").hidden) { ev.preventDefault(); toggleFleetMenu(true); } });
   $("sweep-close").addEventListener("click", closeSweep);
   $("sweep-go").addEventListener("click", sweepGo);
   $("sweep").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSweep(); } });
@@ -7154,12 +7422,9 @@ window.addEventListener("DOMContentLoaded", () => {
     el.addEventListener("click", onTodoClick);
     el.addEventListener("input", onTodoInput);
   }
-  document.addEventListener("click", (ev) => {
-    if (!$("d-menu").hidden && !$("d-menu").contains(ev.target)) toggleDetailMenu(false);
-  });
   loadLedger();
 
-  $("btn-notify").addEventListener("click", toggleNotifyPanel);
+  $("btn-notify").addEventListener("click", () => toggleNotifyPanel());
   $("notify-enable").addEventListener("click", enablePush);
   $("notify-disable").addEventListener("click", disablePush);
   $("notify-test").addEventListener("click", testPush);

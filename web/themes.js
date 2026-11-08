@@ -272,6 +272,23 @@
     });
     return id;
   };
+  // preview paints a theme for a moment without saving it; apply() puts the
+  // saved choice back (the picker's live preview, Escape reverts).
+  API.preview = (id) => {
+    if (!byId[id]) return;
+    document.documentElement.setAttribute("data-theme", id);
+    const m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute("content", byId[id].vars.bg);
+  };
+  // counterpart: the same family in the other mode ("" when it has none), for
+  // the header's light/dark toggle.
+  const PAIRS = {
+    dark: "light", light: "dark", "gruvbox-dark": "gruvbox-light", "gruvbox-light": "gruvbox-dark",
+    "tokyonight-night": "tokyonight-day", "tokyonight-storm": "tokyonight-day", "tokyonight-day": "tokyonight-night",
+    "catppuccin-mocha": "catppuccin-latte", "catppuccin-latte": "catppuccin-mocha",
+    "solarized-dark": "solarized-light", "solarized-light": "solarized-dark",
+  };
+  API.counterpart = (id) => PAIRS[id] || "";
   API.set = (choice) => { ls.set(API.KEY, choice); API.apply(); };
   API.setSystem = (mode, id) => { ls.set(mode === "light" ? API.KEY_LIGHT : API.KEY_DARK, id); API.apply(); };
 

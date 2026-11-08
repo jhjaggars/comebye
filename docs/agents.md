@@ -325,9 +325,11 @@ the next one is published. Stored on the hub as `brief.json` (64 KB at
 most).
 
 **Scheduled briefings.** The hub can ask a coordinator for a briefing on
-a schedule: off by default, set from the briefing card or a
-coordinator's ⋮ menu ("Briefing schedule…", e.g. `24h at 08:00`), or by
-a coordinator (`comebye brief schedule --every 24h --at 08:00`). Slots
+a schedule: off by default, set from the Briefings card on the Status page
+(on a phone, the top of the briefings screen: Off, 1 h, 3 h or 6 h, the
+skip-when-unchanged switch and the max-quiet safety net, applied at once),
+or by a coordinator (`comebye brief schedule --every 24h --at 08:00`, which
+the card shows as an "Every 24h at 08:00" chip and keeps). Slots
 fall every interval (1h to 30 days), from a time of day in a time zone
 when given (whole days follow the calendar across DST), else from when it
 was set; the slot under way when it is set does not fire. At a slot the

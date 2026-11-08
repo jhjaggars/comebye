@@ -56,31 +56,6 @@
     }
     header .bell.on { color: var(--green); }
     header .bell:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
-    #notify-panel {
-      /* Same column as the agent list (main: 640px max, 12px padding). */
-      margin: 12px max(12px, calc(50% - 308px)) 0; padding: 12px 14px;
-      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    }
-    #notify-panel[hidden] { display: none; }
-    #notify-panel .np-title { font-weight: 650; margin-bottom: 4px; }
-    #notify-panel .np-status { color: var(--muted); font-size: 13.5px; }
-    #notify-panel .np-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-    #notify-panel .np-actions:not(:has(.btn:not([hidden]))) { display: none; }
-    #theme-panel {
-      margin: 12px max(12px, calc(50% - 308px)) 0; padding: 12px 14px;
-      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    }
-    #theme-panel[hidden] { display: none; }
-    #theme-panel .tp-title { font-weight: 650; margin-bottom: 8px; }
-    #theme-panel .tp-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px; }
-    #theme-panel .tp-opt {
-      display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 3px 10px; text-align: left;
-      background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; font: inherit; font-size: 14px; cursor: pointer;
-    }
-    #theme-panel .tp-opt[aria-checked="true"] { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
-    #theme-panel .tp-opt:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-    #theme-panel .tp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #theme-panel .tp-mode { color: var(--muted); font-size: 12px; }
     /* The swatch carries its own data-theme, so the tokens below are THAT theme's. */
     .tp-sw { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 4px 5px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); }
     .tp-sw i { width: 9px; height: 16px; border-radius: 3px; background: var(--panel2); }
@@ -89,12 +64,34 @@
     .tp-sw i:nth-child(4) { background: var(--orange); }
     .tp-sw i:nth-child(5) { background: var(--red); }
     .tp-sw i:nth-child(1) { background: var(--text); }
-    #theme-panel .tp-sys { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; color: var(--muted); font-size: 13.5px; }
-    #theme-panel .tp-sys label { display: inline-flex; align-items: center; gap: 6px; }
-    #theme-panel select { min-height: 36px; padding: 0 8px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 14px; }
-    #theme-panel select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    #notify-panel { width: 300px; }
+    #theme-panel { width: 340px; }
+    #notify-panel .np-status { color: var(--muted); font-size: 13.5px; padding: 2px 14px 0; }
+    #notify-panel .np-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px 14px; }
+    #notify-panel .np-actions:not(:has(.btn:not([hidden]))) { display: none; }
     #notify-panel .btn { flex: 1 1 auto; padding: 0 12px; }
     #notify-panel .btn[hidden] { display: none; }
+    #theme-panel .tp-list { display: flex; flex-direction: column; gap: 2px; padding: 4px 6px; }
+    #theme-panel .tp-row { display: flex; align-items: center; gap: 4px; }
+    #theme-panel .tp-row .tp-opt { flex: 1; min-width: 0; }
+    #theme-panel .tp-opt {
+      display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 3px 10px; text-align: left;
+      background: none; color: var(--text); border: 1px solid transparent; border-radius: 10px; font: inherit; font-size: 14px; cursor: pointer;
+    }
+    #theme-panel .tp-opt[aria-checked="true"] { border-color: var(--blue); }
+    #theme-panel .tp-opt:focus-visible, #theme-panel .tp-more:focus-visible, #theme-panel .tp-back:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+    @media (hover: hover) { #theme-panel .tp-opt:hover { background: var(--panel); } }
+    #theme-panel .tp-opt:focus-visible { background: var(--panel); }
+    #theme-panel .tp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #theme-panel .tp-mode { color: var(--muted); font-size: 12px; }
+    #theme-panel .tp-more, #theme-panel .tp-back { flex: none; min-height: 32px; padding: 0 10px; background: var(--btn-bg); color: var(--text); border: 0; border-radius: 8px; font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+    #theme-panel .tp-back[hidden] { display: none; }
+    #theme-panel .tp-hint { margin: 2px 14px 10px; min-height: 1.4em; color: var(--muted); font-size: 12.5px; }
+    #theme-panel .tp-sys { display: flex; flex-direction: column; gap: 10px; padding: 6px 14px 14px; color: var(--muted); font-size: 13.5px; }
+    #theme-panel .tp-sys[hidden], #theme-panel .tp-list[hidden], #theme-panel .tp-hint[hidden] { display: none; }
+    #theme-panel .tp-sys label { display: flex; flex-direction: column; gap: 4px; }
+    #theme-panel select { min-height: 40px; padding: 0 8px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 14px; }
+    #theme-panel select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     main { padding: 12px calc(12px + env(safe-area-inset-right, 0px)) calc(20px + var(--safe-bottom)) calc(12px + env(safe-area-inset-left, 0px)); max-width: 640px; margin: 0 auto; }
 
     .agent {
@@ -899,6 +896,39 @@
     .d-menu { position: fixed; z-index: 35; left: auto; bottom: auto; right: calc(10px + env(safe-area-inset-right, 0px)); top: calc(58px + env(safe-area-inset-top, 0px)); max-width: 80vw; }
     .d-menu .mark-state { padding: 8px 14px; font-size: 12.5px; color: var(--orange); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
     .d-menu .mark-state[hidden] { display: none; }
+    /* Popovers: the fleet menu, the agent and row menus, the theme picker and the notifications.
+       app.js gives them one set of rules (Escape, a click outside, the x, arrow keys, one open at a time);
+       on a phone each is a bottom sheet with a grab handle. */
+    .pop { position: fixed; z-index: 36; bottom: auto; min-width: 220px; max-width: min(92vw, 360px); display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; max-height: calc(100vh - 80px); animation: pop-in 0.12s ease-out; }
+    .pop[hidden] { display: none; }
+    @keyframes pop-in { from { opacity: 0; } }
+    @keyframes sheet-in { from { transform: translateY(100%); } }
+    @keyframes bk-in { from { opacity: 0; } }
+    .pop .grab { display: none; }
+    .pop-head { display: flex; align-items: center; gap: 6px; flex: none; padding: 2px 4px 0 14px; min-height: 40px; }
+    .pop-title { flex: 1; min-width: 0; font-weight: 650; font-size: 14px; }
+    .pop .pop-x { flex: none; width: 40px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 10px; background: none; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer; }
+    .pop .pop-x:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+    @media (hover: hover) { .pop .pop-x:hover { background: var(--panel); color: var(--text); } }
+    .m-grp { flex: none; padding: 10px 14px 4px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+    .attach-menu .m-grp + button, .attach-menu .pop-head + button { border-top: 0; }
+    .attach-menu button.has-side { display: flex; align-items: center; gap: 10px; width: 100%; }
+    .attach-menu .m-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attach-menu .m-side { color: var(--muted); font-size: 13px; white-space: nowrap; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+    #sheet-bk { display: none; }
+    @media (max-width: 600px) {
+      .pop { position: fixed !important; left: 0 !important; right: 0 !important; top: auto !important; bottom: 0 !important; width: auto !important; max-width: none !important;
+        max-height: 80vh !important; border-radius: 18px 18px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom, 0px); z-index: 37; animation: sheet-in 0.22s ease-out; }
+      .pop .grab { display: grid; place-items: center; flex: none; height: 24px; touch-action: none; cursor: grab; }
+      .pop .grab i { width: 40px; height: 5px; border-radius: 3px; background: var(--border); }
+      .pop-head { touch-action: none; min-height: 48px; }
+      .pop-title { font-size: 16px; }
+      .pop .pop-x { width: 48px; min-width: 48px; min-height: 48px; }
+      .attach-menu button { min-height: 52px; font-size: 16px; }
+      #sheet-bk { display: block; position: fixed; inset: 0; z-index: 34; background: rgba(0, 0, 0, 0.5); animation: bk-in 0.2s; }
+      #sheet-bk[hidden] { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { .pop, #sheet-bk { animation: none !important; } }
 
     /* Ready-to-remove review. */
     #review, #switch, #mk, #sweep { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
@@ -1209,6 +1239,27 @@
     /* Status: one card per project, built from live data. Used on the desktop page and on the phone's briefings screen. */
     .st { display: flex; flex-direction: column; gap: 10px; max-width: 820px; }
     .st-sum { color: var(--muted); font-size: 13.5px; margin: 0 2px; }
+    /* The Briefings card on Status (desktop page and the top of the phone's briefings screen). */
+    .bcard { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; }
+    .bc-h { font-weight: 650; }
+    .bc-kv { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+    .bc-kv span { color: var(--muted); flex: none; }
+    .bc-kv b { font-weight: 600; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+    .bc-seg { display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .bc-seg button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0 6px; background: var(--panel2); color: var(--text); border: 0; font: inherit; font-size: 14px; cursor: pointer; overflow-wrap: anywhere; }
+    .bc-seg button + button { border-left: 1px solid var(--border); }
+    .bc-seg button[aria-pressed="true"] { background: var(--blue); color: var(--on-accent); font-weight: 600; }
+    .bc-seg button:disabled { cursor: default; flex-grow: 2; }
+    .bc-seg button:focus-visible, .bc-fld select:focus-visible, .bc-chk input:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+    .bc-chk { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
+    .bc-chk input { width: 20px; height: 20px; accent-color: var(--blue); flex: none; }
+    .bc-fld { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+    .bc-fld select { min-height: 44px; padding: 0 8px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 14px; }
+    .bc-fld small { color: var(--muted); font-size: 12.5px; }
+    .bc-chk:has(input:disabled), .bc-fld:has(select:disabled) { opacity: 0.55; }
+    .bc-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+    .bc-acts .btn { flex: 1 1 auto; }
+    header .bell[aria-disabled="true"] { opacity: 0.5; }
     .st-proj { border-radius: 14px; background: var(--panel); border: 1px solid var(--border); padding: 10px 12px 6px; }
     .st-proj.hot { border-color: color-mix(in srgb, var(--orange) 45%, var(--border)); }
     .st-ph { font-weight: 650; font-size: 15px; margin-bottom: 2px; }
@@ -1430,7 +1481,6 @@
       #list header { grid-column: 1; grid-row: 1; }
       header .count .long { display: none; }
       header .count .short { display: inline; }
-      #notify-panel { grid-column: 1; grid-row: 2; margin: 12px 12px 0; }
       #nav { grid-column: 1; grid-row: 3; display: flex; flex-direction: column; padding: 6px 8px; border-bottom: 1px solid var(--border); }
       #nav:empty { display: none; }
       #host-filter { grid-column: 1; grid-row: 4; margin: 10px 0 0; padding: 0 12px 2px; }
@@ -1621,24 +1671,30 @@
       <button type="button" class="bell launch" id="btn-launch" aria-label="New agent" aria-haspopup="dialog" aria-controls="launch">
         <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
-      <button type="button" class="bell launch" id="btn-notify" aria-label="Notifications" aria-expanded="false" aria-controls="notify-panel">
+      <button type="button" class="bell launch" id="btn-theme-q" aria-label="Switch theme"></button>
+      <button type="button" class="bell launch" id="btn-notify" aria-label="Notifications" aria-expanded="false" aria-haspopup="dialog" aria-controls="notify-panel">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2 2 0 0 0 4 0"/></svg>
       </button>
       <button type="button" class="bell" id="btn-fleet" aria-label="More: fleet actions" aria-haspopup="menu" aria-expanded="false" aria-controls="f-menu">&#8942;</button>
     </header>
-    <div id="f-menu" class="attach-menu d-menu" role="menu" hidden>
+    <div id="sheet-bk" hidden></div>
+    <div id="f-menu" class="attach-menu d-menu pop" role="menu" aria-label="Fleet actions" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><span class="pop-title">Fleet</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
       <div class="mark-state" id="f-note" hidden></div>
+      <div class="m-grp" role="presentation">View</div>
+      <button type="button" role="menuitem" id="f-theme" class="has-side" aria-haspopup="dialog" aria-controls="theme-panel"><span id="f-theme-sw"></span><span class="m-grow">Theme</span><span class="m-side" id="f-theme-val">System</span></button>
+      <button type="button" role="menuitem" id="f-notify" class="has-side" aria-haspopup="dialog" aria-controls="notify-panel"><span class="m-grow">Notifications</span><span class="m-side" id="f-notify-val"></span></button>
+      <div class="m-grp" role="presentation">Hub</div>
       <button type="button" role="menuitem" id="f-sweep">Sweep for finished agents…</button>
       <button type="button" role="menuitem" id="f-review">Review removals</button>
       <button type="button" role="menuitem" id="f-brief">Briefing</button>
-      <button type="button" role="menuitem" id="f-briefs">Briefings screen</button>
-      <button type="button" role="menuitem" id="f-sched">Briefing schedule…</button>
-      <button type="button" role="menuitem" id="f-notify">Notifications</button>
-      <button type="button" role="menuitem" id="f-theme" aria-haspopup="true" aria-controls="theme-panel">Theme: System</button>
+      <button type="button" role="menuitem" id="f-briefs">History</button>
       <button type="button" role="menuitem" id="f-refresh">Refresh</button>
     </div>
-    <section id="notify-panel" hidden aria-live="polite">
-      <div class="np-title">Notifications</div>
+    <section id="notify-panel" class="attach-menu pop" role="dialog" aria-label="Notifications" aria-live="polite" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><span class="pop-title">Notifications</span><button type="button" class="pop-x" aria-label="Close notifications">&times;</button></div>
       <div class="np-status" id="notify-status">Checking…</div>
       <div class="np-actions">
         <button type="button" class="btn" id="notify-enable" hidden>Enable notifications</button>
@@ -1646,10 +1702,12 @@
         <button type="button" class="btn danger" id="notify-disable" hidden>Turn off</button>
       </div>
     </section>
-    <section id="theme-panel" hidden aria-label="Theme">
-      <div class="tp-title">Theme</div>
-      <div class="tp-list" id="tp-list" role="radiogroup" aria-label="Theme"></div>
-      <div class="tp-sys" id="tp-sys"></div>
+    <section id="theme-panel" class="attach-menu pop" role="dialog" aria-label="Theme" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><button type="button" class="tp-back" id="tp-back" aria-label="Back to the themes" hidden>&#8249; Back</button><span class="pop-title" id="tp-title">Theme</span><button type="button" class="pop-x" aria-label="Close the theme picker">&times;</button></div>
+      <div class="tp-list" id="tp-list" role="menu" aria-label="Theme"></div>
+      <div class="tp-hint" id="tp-hint" aria-live="polite"></div>
+      <div class="tp-sys" id="tp-sys" hidden></div>
     </section>
     <main><nav id="nav" class="pnav" aria-label="Pages"></nav><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
     <button type="button" id="pager" class="pager" aria-controls="briefs" aria-label="Open the briefings screen (or swipe left)" hidden>
@@ -1782,7 +1840,7 @@
   </section>
 
   <!-- A list row's menu -->
-  <div id="row-menu" class="attach-menu" role="menu" hidden><button type="button" role="menuitem" id="row-mark"></button></div>
+  <div id="row-menu" class="attach-menu pop" role="menu" aria-label="Agent actions" hidden><div class="grab" aria-hidden="true"><i></i></div><div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div><button type="button" role="menuitem" id="row-mark"></button></div>
 
   <!-- Mark one session ready to remove (optional reason) -->
   <section id="mk" hidden role="dialog" aria-modal="true" aria-labelledby="mk-title">
@@ -1840,7 +1898,9 @@
       <button type="button" class="more" id="d-refresh" aria-label="Refresh this view">&#8635;</button>
       <button type="button" class="more" id="d-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="d-menu">&#8942;</button>
     </header>
-    <div id="d-menu" class="attach-menu d-menu" role="menu" hidden>
+    <div id="d-menu" class="attach-menu d-menu pop" role="menu" aria-label="Agent actions" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
       <div class="mark-state" id="d-mark-state" hidden></div>
       <button type="button" role="menuitem" id="d-model" hidden>Switch model…</button>
       <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>

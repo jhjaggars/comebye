@@ -145,7 +145,7 @@ for (const L of LATS) {
   // --- local-only: theme ---
   await open("/");
   delay = L;
-  rec("theme toggle", L, await timeIt(`document.querySelector('#f-theme').click()`, { changed: `document.documentElement.getAttribute('data-theme')` }));
+  rec("theme toggle", L, await timeIt(`document.querySelector('#btn-theme-q').click()`, { changed: `document.documentElement.getAttribute('data-theme')` }));
   delay = 0;
 }
 await browser.close();
