@@ -2597,14 +2597,10 @@ function renderFleetMenu() {
   const off = ledger.on === false;
   const loading = !lon && !off;
   const sfx = loading ? " (loading)" : "";
-  const n = lon ? ledger.marked.size : 0;
   const note = $("f-note");
   note.hidden = !off;
-  note.textContent = off ? "Sweeping, removals and briefings are not available on this hub" : "";
-  for (const id of ["f-sweep", "f-review", "f-brief", "f-briefs"]) { $(id).hidden = off; $(id).disabled = !lon; }
-  $("f-sweep").textContent = "Sweep for finished agents…" + sfx;
-  $("f-review").textContent = (lon ? `Review removals (${n})` : "Review removals") + sfx;
-  $("f-review").disabled = !lon || !n;
+  note.textContent = off ? "Removals and briefings are not available on this hub" : "";
+  for (const id of ["f-brief", "f-briefs"]) { $(id).hidden = off; $(id).disabled = !lon; }
   const st = briefingUiState();
   $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (see the Briefing page)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
   $("f-brief").disabled = !lon || st === "none" || st === "panel";
@@ -2916,152 +2912,75 @@ function fleetRefresh() {
   toast("Refreshing");
 }
 
-/* ---------- sweep for finished agents ---------- */
+/* ---------- Ready to remove: a page (#/remove) ---------- */
 //
-// Asks the hub for a dry run, shows what it would mark (clean, merged,
-// nothing unpushed) and what needs a look, and marks the ready ones only on
-// the button. Removal stays the review's.
-
-const sweep = { open: false, busy: false, seq: 0, data: null, marked: false };
-
-function openSweep() {
-  if (sweep.open) return;
-  Object.assign(sweep, { open: true, busy: false, data: null, marked: false });
-  history.pushState({ sweep: true }, "", location.href);
-  $("sweep").hidden = false;
-  document.body.classList.add("sheet-open");
-  $("sweep-close").focus();
-  runSweep(true);
-}
-
-function hideSweep() {
-  sweep.open = false;
-  sweep.seq++;
-  $("sweep").hidden = true;
-  document.body.classList.remove("sheet-open");
-  maybeReload();
-}
-
-function closeSweep() {
-  if (sweep.busy) return;
-  if (history.state && history.state.sweep) history.back();
-  else hideSweep();
-}
-
-function syncSweep() {
-  if (sweep.open && !(history.state && history.state.sweep)) hideSweep();
-}
-
-async function runSweep(dry) {
-  const seq = ++sweep.seq;
-  sweep.busy = true;
-  $("sweep").classList.add("busy");
-  $("sweep-go").disabled = true;
-  $("sweep-status").textContent = dry ? "Checking each finished worker on its host…" : "Marking…";
-  if (dry) $("sweep-list").innerHTML = "";
-  try {
-    const d = await api("/api/sweep", { method: "POST", body: JSON.stringify({ dry_run: dry }) });
-    if (seq !== sweep.seq) return;
-    sweep.data = d;
-    sweep.marked = !dry;
-    $("sweep-status").textContent = "";
-  } catch (e) {
-    if (seq !== sweep.seq) return;
-    $("sweep-status").textContent = "";
-    $("sweep-list").innerHTML = `<div class="ln-empty">${esc(e.message)}</div>`;
-    sweep.data = null;
-  }
-  sweep.busy = false;
-  $("sweep").classList.remove("busy");
-  renderSweep();
-  if (!dry) { ledger.loadedAt = 0; loadLedger(); }
-}
-
-function renderSweep() {
-  const d = sweep.data;
-  const go = $("sweep-go");
-  if (!d) { go.disabled = true; return; }
-  const item = (it) => `<div class="rv-item" data-sweep="${esc(it.id)}">
-      <div class="rv-top"><span class="rv-name">${esc(it.name || it.id)}</span>${it.host ? `<span class="status">${esc(it.host)}</span>` : ""}</div>
-      ${it.branch ? `<div class="rv-sub">${esc(it.branch)}</div>` : ""}
-      <div class="rv-reason">${esc(it.reason)}</div></div>`;
-  const ready = d.ready || [], look = d.needs_look || [], skipped = d.skipped || [];
-  let h = "";
-  if (!ready.length && !look.length) h += `<div class="ln-empty">No finished workers to sweep.</div>`;
-  if (ready.length) h += `<div class="sw-h">${sweep.marked ? "Marked ready to remove" : "Ready to remove"} (${ready.length})</div>` + ready.map(item).join("");
-  if (look.length) h += `<div class="sw-h">Needs a look, not marked (${look.length})</div>` + look.map(item).join("");
-  if (skipped.length) h += `<div class="ln-note">${skipped.length} skipped (already marked, coordinators, primary checkouts).</div>`;
-  $("sweep-list").innerHTML = h;
-  if (sweep.marked) {
-    go.textContent = ready.length ? "Review removals" : "Done";
-    go.disabled = false;
-  } else {
-    go.textContent = ready.length ? `Mark ${ready.length} ready to remove` : "Nothing to mark";
-    go.disabled = !ready.length;
-  }
-}
-
-function sweepGo() {
-  if (sweep.busy) return;
-  if (sweep.marked) {
-    const wantReview = ((sweep.data && sweep.data.ready) || []).length > 0;
-    closeSweep();
-    if (wantReview) setTimeout(openReview, 80);
-    return;
-  }
-  runSweep(false);
-}
-
-/* ---------- review: remove the sessions marked ready to remove ---------- */
+// The sessions marked ready to remove, each with safety checks run on its
+// host just now: uncommitted changes, commits its base lacks, an agent that
+// went back to work. Removing closes the session (its workspace, or only its
+// pane when others share it) and removes the worktree only when it is clean
+// and merged; the branch is kept. A session whose worktree has work a
+// removal would keep can instead be discarded: the row lists what would be
+// lost, and only an explicit confirmation removes the worktree anyway and
+// deletes its branch. A coordinator may propose that (mark --discard); only
+// this page does it. Every removal is confirmed in the row it belongs to.
 //
-// The banner opens a sheet listing each marked session with safety checks
-// run on its host just now: uncommitted changes, commits its base lacks, an
-// agent that went back to work. Removing closes the session (its workspace,
-// or only its pane when others share it) and removes the worktree only when
-// it is clean and merged; the branch is kept. A session whose worktree
-// has work a removal would keep (uncommitted changes, unmerged commits, an
-// unfinished rebase) can instead be discarded: the sheet lists what would
-// be lost, and only an explicit confirmation removes the worktree anyway
-// and deletes its branch. A coordinator may propose that (mark --discard);
-// only this sheet does it. Like the launch sheet, it is a history entry.
+// "Look for finished agents" (the sweep) asks the hub for a dry run, shows
+// what it would mark (clean, merged, nothing unpushed) and what needs a
+// look, and marks the ready ones only on its button. Marked rows appear in
+// the list below it.
 
-const review = { open: false, items: [], results: new Map(), busy: false, seq: 0, askTimer: 0 };
+const REMOVE_HASH = "#/remove";
+const review = { open: false, items: [], results: new Map(), busy: false, seq: 0, askTimer: 0, sel: new Set(), confirm: null };
+const sweep = { busy: false, seq: 0, data: null, marked: false, shown: false, err: "" };
 
+// openReview goes to the page; the hash change shows it.
 function openReview() {
-  if (review.open) return;
+  if (location.hash !== REMOVE_HASH) location.hash = REMOVE_HASH;
+}
+
+function showReview() {
   review.open = true;
   review.results = new Map();
-  history.pushState({ review: true }, "", location.href);
+  review.sel = new Set();
+  review.confirm = null;
+  Object.assign(sweep, { busy: false, data: null, marked: false, shown: false, err: "" });
   $("review").hidden = false;
-  document.body.classList.add("sheet-open");
-  $("rv-close").focus();
+  document.body.classList.add("has-remove");
+  document.body.classList.toggle("sheet-open", !isDesktop());
+  renderSweep();
+  renderNav();
   loadReview();
 }
 
 function hideReview() {
   review.open = false;
   review.seq++;
+  sweep.seq++;
+  review.confirm = null;
   $("review").hidden = true;
-  document.body.classList.remove("sheet-open");
-  if (!state.selected) $("rtr-banner").focus();
+  document.body.classList.remove("has-remove", "sheet-open");
+  renderNav();
   maybeReload();
 }
 
+// closeReview is the phone's Back: it leaves for the list.
 function closeReview() {
   if (review.busy) return;
-  if (history.state && history.state.review) history.back();
-  else hideReview();
+  history.replaceState(null, "", location.pathname + location.search);
+  route();
 }
 
 function syncReview() {
-  if (review.open && !(history.state && history.state.review)) hideReview();
+  const want = location.hash.split("?")[0] === REMOVE_HASH;
+  if (want && !review.open) showReview();
+  else if (!want && review.open) hideReview();
 }
 
 function setReviewBusy(on, text) {
   review.busy = on;
   $("review").classList.toggle("busy", on);
   $("rv-status").textContent = text || "";
-  renderReviewFoot();
+  renderReview();
 }
 
 // loadReview checks the marked sessions; quiet (a refresh while a
@@ -3083,6 +3002,9 @@ async function loadReview(quiet) {
   }
   if (seq !== review.seq) return;
   review.items = Array.isArray(d.removals) ? d.removals : [];
+  const ids = new Set(review.items.map((it) => it.id));
+  for (const id of [...review.sel]) if (!ids.has(id)) review.sel.delete(id);
+  if (review.confirm && !review.confirm.ids.every((id) => ids.has(id))) review.confirm = null;
   if (!quiet) setReviewBusy(false);
   renderReview();
   if (review.items.some((it) => it.mark && it.mark.ask && it.mark.ask.state === "asking")) {
@@ -3090,6 +3012,10 @@ async function loadReview(quiet) {
     review.askTimer = setTimeout(() => loadReview(true), 6000);
   }
 }
+
+const reviewDone = (it) => !!(review.results.get(it.id) || {}).ok;
+// isWorking: the agent is mid-task (or waiting on you), so removing it needs the "allow working" flag.
+const reviewWorking = (it) => !!(it.live && (it.live.agent_status === "working" || it.live.agent_status === "blocked"));
 
 function reviewItemHTML(it) {
   const res = review.results.get(it.id);
@@ -3126,14 +3052,21 @@ function reviewItemHTML(it) {
   } else if (res) {
     result = `<div class="rv-result err">Not removed: ${esc(res.message || res.code || "failed")}</div>`;
   }
-  const actions = done ? "" : `<div class="rv-actions">
-      <button type="button" class="btn go" data-act="remove" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>${it.safe ? "Remove" : "Remove anyway…"}</button>
-      ${it.discardable ? `<button type="button" class="btn danger" data-act="discard" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>Discard work…</button>` : ""}
-      <button type="button" class="btn" data-act="unmark" data-id="${esc(it.id)}"${review.busy ? " disabled" : ""}>Unmark</button>
+  const dis = review.busy ? " disabled" : "";
+  const cf = review.confirm && review.confirm.ids.length === 1 && review.confirm.ids[0] === it.id ? review.confirm : null;
+  const name = esc(it.name || it.pane_id || it.id);
+  let actions = "";
+  if (done) actions = "";
+  else if (cf) actions = reviewConfirmHTML(it, cf);
+  else actions = `<div class="rv-actions">
+      <button type="button" class="btn go" data-act="remove" data-id="${esc(it.id)}"${dis}>${it.safe ? "Remove" : "Remove anyway…"}</button>
+      ${it.discardable ? `<button type="button" class="btn danger" data-act="discard" data-id="${esc(it.id)}"${dis}>Discard work…</button>` : ""}
+      <button type="button" class="btn" data-act="unmark" data-id="${esc(it.id)}"${dis}>Keep</button>
     </div>`;
   const role = it.coordinator ? '<span class="role-chip">coordinator</span>' : "";
-  return `<div class="rv-item${it.safe ? "" : " warn"}${done ? " done" : ""}">
-    <div class="rv-top"><span class="rv-name">${esc(it.name || it.pane_id || it.id)}</span>${role}${host}${branch}${status}</div>
+  const chk = done ? "" : `<input type="checkbox" class="rv-chk" data-id="${esc(it.id)}" aria-label="Select ${name}"${review.sel.has(it.id) ? " checked" : ""}${dis}>`;
+  return `<div class="rv-item${it.safe ? "" : " warn"}${done ? " done" : ""}" data-id="${esc(it.id)}">
+    <div class="rv-top">${chk}<span class="rv-name">${name}</span>${role}${host}${branch}${status}</div>
     ${where ? `<div class="rv-sub">${where}</div>` : ""}
     <div class="rv-reason">${marked}</div>
     <ul class="rv-list warn">${done ? "" : warnings}</ul>
@@ -3141,6 +3074,28 @@ function reviewItemHTML(it) {
     <ul class="rv-list info">${done ? "" : notes}</ul>
     ${loss}${report}${actions}${result}
   </div>`;
+}
+
+// reviewConfirmHTML is the question a row asks before it removes anything.
+function reviewConfirmHTML(it, cf) {
+  const name = `<b>${esc(it.name || it.pane_id || it.id)}</b>`;
+  let body, yes;
+  if (cf.kind === "discard") {
+    const c = it.checks || {};
+    body = `<p>Discard ${name}? This closes the session, removes ${esc(c.path || "its worktree")} and throws away the work listed above. This cannot be undone.</p>`;
+    yes = "Discard work";
+  } else if (it.safe && !(it.warnings || []).length) {
+    body = `<p>Remove the worktree for ${name}? The branch stays.</p>`;
+    yes = "Remove";
+  } else {
+    const w = (it.warnings || []).map((x) => `<li>${esc(x)}</li>`).join("");
+    body = `<p>${name} has work a removal keeps on disk:</p><ul>${w || "<li>its worktree is not clean and merged</li>"}</ul><p>The worktree stays; only the session closes.</p>`;
+    yes = "Close session";
+  }
+  if (it.coordinator) body += `<p>${name} is a coordinator. Removing it closes the agent that hands off and follows your work (the ledger and briefing stay on the hub).</p>`;
+  return `<div class="rv-confirm" role="group" aria-label="Confirm">${body}<div class="rv-actions">
+    <button type="button" class="btn ${cf.kind === "discard" ? "danger" : "go"}" data-act="confirm-yes" data-id="${esc(it.id)}">${yes}</button>
+    <button type="button" class="btn" data-act="confirm-no" data-id="${esc(it.id)}">Cancel</button></div></div>`;
 }
 
 // lossHTML lists what discarding a session's worktree would throw away:
@@ -3172,81 +3127,162 @@ function lossHTML(it) {
 function renderReview() {
   const list = $("rv-list");
   list.innerHTML = review.items.length ? review.items.map(reviewItemHTML).join("")
-    : '<div class="ln-empty">Nothing is marked ready to remove. Mark a session from its ⋮ menu.</div>';
+    : '<div class="ln-empty">Nothing is marked ready to remove. Mark a session from its ⋮ menu, or look for finished agents.</div>';
   list.querySelectorAll(".rv-report").forEach((d) => {
     const it = review.items.find((x) => x.id === d.dataset.id);
     if (it) mdOnOpen(d, d.querySelector(".md"), it.final_report, "report:" + it.id);
   });
-  renderReviewFoot();
+  renderReviewBulk();
+  $("rv-sweep").disabled = review.busy || sweep.busy;
 }
 
-function safeIds() {
-  return review.items.filter((it) => it.safe && !(review.results.get(it.id) || {}).ok).map((it) => it.id);
+// The select-all bar: it counts the selection and removes the safe rows in it.
+function reviewOpenIds() { return review.items.filter((it) => !reviewDone(it)).map((it) => it.id); }
+function reviewBulkIds() {
+  return review.items.filter((it) => review.sel.has(it.id) && it.safe && !it.coordinator && !reviewDone(it)).map((it) => it.id);
 }
 
-function renderReviewFoot() {
-  const n = safeIds().length;
-  $("rv-all").disabled = review.busy || !n;
-  $("rv-all").textContent = n ? `Remove all safe (${n})` : "Remove all safe";
+function renderReviewBulk() {
+  const bar = $("rv-bulk");
+  const open = reviewOpenIds();
+  bar.hidden = !open.length;
+  if (!open.length) return;
+  const sel = open.filter((id) => review.sel.has(id)).length;
+  const safe = reviewBulkIds().length;
+  const dis = review.busy ? " disabled" : "";
+  const cf = review.confirm && review.confirm.ids.length > 1 ? review.confirm : null;
+  const skipped = sel - safe;
+  bar.innerHTML = `<label><input type="checkbox" id="rv-selall"${sel === open.length ? " checked" : ""}${dis}> Select all</label>
+    <span class="rv-grow">${sel ? `${sel} selected` : `${open.length} ready`}</span>
+    ${cf ? "" : `<button type="button" class="btn go" id="rv-all" data-act="bulk"${dis}${safe ? "" : " disabled"}>${safe ? `Remove selected (${safe})` : "Remove selected"}</button>`}
+    ${cf ? `<div class="rv-confirm" role="group" aria-label="Confirm" style="flex-basis:100%"><p>Remove the worktree${cf.ids.length === 1 ? "" : "s"} of ${cf.ids.length} sessions? The branches stay.${skipped ? ` ${skipped} selected with work to keep or a coordinator are left for Remove anyway… in their rows.` : ""}</p>
+      <div class="rv-actions"><button type="button" class="btn go" data-act="bulk-yes">Remove ${cf.ids.length}</button><button type="button" class="btn" data-act="bulk-no">Cancel</button></div></div>` : ""}`;
 }
 
 async function confirmRemovals(ids, allowWorking, coordinators = [], discard = {}) {
   if (review.busy || !ids.length) return;
+  review.confirm = null;
   setReviewBusy(true, ids.length === 1 ? "Removing…" : `Removing ${ids.length} sessions…`);
-  renderReview();
   try {
     const d = await api("/api/removals/confirm", { method: "POST", body: JSON.stringify({ ids, allow_working: !!allowWorking, coordinators, discard }) });
-    for (const r of d.results || []) review.results.set(r.id, r);
+    for (const r of d.results || []) { review.results.set(r.id, r); review.sel.delete(r.id); }
   } catch (e) {
     toast(e.message, true);
   }
   setReviewBusy(false);
-  renderReview();
   ledger.loadedAt = 0;
   loadLedger();
   refreshAgents().catch(() => {});
 }
 
 async function reviewAction(act, id) {
+  if (review.busy) return;
+  if (act === "bulk") {
+    const ids = reviewBulkIds();
+    if (ids.length) { review.confirm = { ids, kind: "bulk" }; renderReview(); }
+    return;
+  }
+  if (act === "bulk-no") { review.confirm = null; renderReview(); return; }
+  if (act === "bulk-yes") {
+    const cf = review.confirm;
+    if (cf && cf.ids.length > 1) confirmRemovals(cf.ids, false);
+    return;
+  }
   const it = review.items.find((x) => x.id === id);
-  if (!it || review.busy) return;
+  if (!it) return;
+  if (act === "confirm-no") { review.confirm = null; renderReview(); return; }
+  if (act === "remove" || act === "discard") {
+    if (act === "discard") {
+      const c = it.checks || {};
+      if (!c.tip) { toast("Cannot discard: the worktree's tip is unknown", true); return; }
+    }
+    review.confirm = { ids: [id], kind: act };
+    renderReview();
+    return;
+  }
+  if (act === "confirm-yes") {
+    const cf = review.confirm;
+    if (!cf || cf.ids.length !== 1 || cf.ids[0] !== id) return;
+    const working = reviewWorking(it);
+    if (cf.kind === "discard") confirmRemovals([id], working, it.coordinator ? [id] : [], { [id]: (it.checks || {}).tip });
+    else confirmRemovals([id], working, it.coordinator ? [id] : []);
+    return;
+  }
   if (act === "unmark") {
-    // The row leaves the review now; it comes back if the request fails.
+    // The row leaves the page now; it comes back if the request fails.
     const was = review.items.slice();
     review.items = review.items.filter((x) => x.id !== id);
+    review.sel.delete(id);
     renderReview();
     try {
       await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
     } catch (e) {
       if (review.open && !review.items.some((x) => x.id === id)) { review.items = was; renderReview(); }
-      toast("Could not unmark: " + e.message, true);
+      toast("Could not keep it: " + e.message, true);
       return;
     }
     ledger.loadedAt = 0;
     loadLedger();
+  }
+}
+
+/* ---- the sweep, on the page ---- */
+
+async function runSweep(dry) {
+  const seq = ++sweep.seq;
+  sweep.busy = true;
+  sweep.dry = dry;
+  sweep.shown = true;
+  sweep.err = "";
+  if (dry) { sweep.data = null; sweep.marked = false; }
+  $("review").classList.add("busy");
+  renderSweep();
+  renderReview();
+  try {
+    const d = await api("/api/sweep", { method: "POST", body: JSON.stringify({ dry_run: dry }) });
+    if (seq !== sweep.seq) return;
+    sweep.data = d;
+    sweep.marked = !dry;
+  } catch (e) {
+    if (seq !== sweep.seq) return;
+    sweep.err = e.message;
+    sweep.data = null;
+  }
+  sweep.busy = false;
+  $("review").classList.toggle("busy", review.busy);
+  renderSweep();
+  renderReview();
+  if (!dry) { ledger.loadedAt = 0; loadLedger(); loadReview(true); }
+}
+
+function renderSweep() {
+  const box = $("rv-sweepbox");
+  box.hidden = !sweep.shown;
+  if (!sweep.shown) { box.innerHTML = ""; return; }
+  if (sweep.busy) {
+    box.innerHTML = `<div class="sw-box"><div class="sw-row"><span class="ln-status" style="display:inline">${sweep.dry === false ? "Marking…" : "Checking each finished worker on its host…"}</span></div></div>`;
     return;
   }
-  const working = it.live && (it.live.agent_status === "working" || it.live.agent_status === "blocked");
-  if (act === "discard") {
-    const c = it.checks || {};
-    const d = c.detail || {};
-    const lost = [];
-    if (c.in_progress) lost.push(`abort the unfinished ${c.in_progress}`);
-    if ((d.commits || []).length) lost.push(`${d.commits.length} unmerged commit(s)` + (d.unpushed > 0 ? `, ${d.unpushed} of them on no remote` : ""));
-    if (c.dirty) lost.push(`${c.dirty_files} uncommitted file(s)`);
-    if (c.branch) lost.push(`delete the branch ${c.branch}`);
-    if (!c.tip || !confirm(`Discard ${it.name || id}?\n\nThis closes the session, removes ${c.path || "its worktree"} and throws away:\n\n• ${lost.join("\n• ")}\n\nThis cannot be undone.`)) return;
-    if (it.coordinator && !confirm(`${it.name || id} is a coordinator. Remove this coordinator too?`)) return;
-    confirmRemovals([id], working, it.coordinator ? [id] : [], { [id]: c.tip });
-    return;
-  }
-  const others = (it.warnings || []).filter((w) => !it.coordinator || !/coordinator/.test(w));
-  if (others.length && !confirm(`${it.name || id}:\n\n• ${others.join("\n• ")}\n\n` +
-    "Remove it anyway? The worktree is still kept unless it is clean and merged.")) return;
-  // A coordinator is removed only after its own, explicit confirmation.
-  if (it.coordinator && !confirm(`${it.name || id} is a coordinator.\n\n` +
-    "Removing it closes the agent that hands off and follows your work (the ledger and briefing stay on the hub). Remove this coordinator?")) return;
-  confirmRemovals([id], working, it.coordinator ? [id] : []);
+  const d = sweep.data;
+  if (!d) { box.innerHTML = `<div class="sw-box"><div class="ln-empty">${esc(sweep.err || "The sweep did not run.")}</div><div class="sw-row"><button type="button" class="btn" data-act="sw-dismiss">Dismiss</button></div></div>`; return; }
+  const item = (it) => `<div class="rv-item" data-sweep="${esc(it.id)}">
+      <div class="rv-top"><span class="rv-name">${esc(it.name || it.id)}</span>${it.host ? `<span class="status">${esc(it.host)}</span>` : ""}</div>
+      ${it.branch ? `<div class="rv-sub">${esc(it.branch)}</div>` : ""}
+      <div class="rv-reason">${esc(it.reason)}</div></div>`;
+  const ready = d.ready || [], look = d.needs_look || [], skipped = d.skipped || [];
+  let h = `<div class="sw-box"><div class="sw-row"><b class="rv-grow">${ready.length || look.length ? "Finished agents" : "Sweep"}</b><button type="button" class="btn" data-act="sw-dismiss">${sweep.marked ? "Dismiss" : "Not now"}</button></div>`;
+  if (!ready.length && !look.length) h += `<div class="ln-empty">No finished workers to sweep.</div>`;
+  if (ready.length) h += `<div class="sw-h">${sweep.marked ? "Marked ready to remove" : "Ready to remove"} (${ready.length})</div>` + ready.map(item).join("");
+  if (look.length) h += `<div class="sw-h">Needs a look, not marked (${look.length})</div>` + look.map(item).join("");
+  if (skipped.length) h += `<div class="ln-note">${skipped.length} skipped (already marked, coordinators, primary checkouts).</div>`;
+  if (sweep.marked) h += `<div class="sw-done">${ready.length ? `Marked ${ready.length} ready to remove. They are in the list below.` : "Nothing was marked."}</div>`;
+  else if (ready.length) h += `<div class="sw-row" style="margin-top:8px"><button type="button" class="btn go" id="sw-mark" data-act="sw-mark">Mark ${ready.length} ready to remove</button></div>`;
+  box.innerHTML = h + "</div>";
+}
+
+function sweepAction(act) {
+  if (act === "sw-dismiss") { sweep.seq++; Object.assign(sweep, { shown: false, busy: false, data: null, marked: false }); renderSweep(); renderReview(); return; }
+  if (act === "sw-mark" && !sweep.busy) runSweep(false);
 }
 
 /* ---------- detail view ---------- */
@@ -3257,9 +3293,11 @@ function agentById(id) {
 
 /* ---------- transcripts: search and read archived sessions ---------- */
 
-// #/transcripts?q=...           the search screen: the newest sessions until there is a query
-// #/session/<host>/<kind>/<id>?seq=N&sub=S&q=...   one session, at a match
-// The screen covers the app. At desktop width both panes show side by side.
+// #/search?q=...               the Search page: the newest sessions until there is a query
+// #/search/<host>/<kind>/<id>?seq=N&sub=S&q=...   one session, at a match
+// (#/transcripts and #/session/... are the old forms and redirect.)
+// On the desktop it is a page beside the agent list, results and session side by
+// side (stacked in a narrow pane); on the phone it covers the app.
 // All text comes from agents and tools: snippets and output go in as text nodes,
 // messages through renderMarkdown. Filters may be remembered in localStorage;
 // queries and transcript text never are.
@@ -3283,34 +3321,42 @@ function parseRecallRoute() {
   const h = location.hash;
   const [path, qs] = h.slice(1).split("?");
   const p = new URLSearchParams(qs || "");
-  if (path === "/transcripts") return { q: p.get("q") || "" };
-  const m = path.match(/^\/session\/([^/]+)\/([^/]+)\/([^/]+)$/);
+  // #/transcripts and #/session/... are the old forms of these two: saved links and
+  // notifications still carry them, and syncRecall rewrites them.
+  if (path === "/search" || path === "/transcripts") return { q: p.get("q") || "", legacy: path === "/transcripts" };
+  const m = path.match(/^\/(search|session)\/([^/]+)\/([^/]+)\/([^/]+)$/);
   if (!m) return null;
   try {
     const seq = p.get("seq");
-    return { q: p.get("q") || "", session: { host: decodeURIComponent(m[1]), kind: decodeURIComponent(m[2]), id: decodeURIComponent(m[3]) },
+    return { q: p.get("q") || "", legacy: m[1] === "session", session: { host: decodeURIComponent(m[2]), kind: decodeURIComponent(m[3]), id: decodeURIComponent(m[4]) },
       seq: seq !== null && /^-?\d+$/.test(seq) ? Number(seq) : null, sub: p.get("sub") || "" };
   } catch { return null; }
 }
 
-function rcSearchHash(q) { return "#/transcripts" + (q ? "?q=" + encodeURIComponent(q) : ""); }
+function rcSearchHash(q) { return "#/search" + (q ? "?q=" + encodeURIComponent(q) : ""); }
 function rcSessionHash(s, o = {}) {
   const p = new URLSearchParams();
   if (o.seq !== undefined && o.seq !== null) p.set("seq", o.seq);
   if (o.sub) p.set("sub", o.sub);
   if (o.q) p.set("q", o.q);
   const qs = p.toString();
-  return `#/session/${encodeURIComponent(s.host)}/${encodeURIComponent(s.kind)}/${encodeURIComponent(s.id)}${qs ? "?" + qs : ""}`;
+  return `#/search/${encodeURIComponent(s.host)}/${encodeURIComponent(s.kind)}/${encodeURIComponent(s.id)}${qs ? "?" + qs : ""}`;
 }
 
 // syncRecall follows the hash: route() calls it.
 function syncRecall() {
-  const r = parseRecallRoute();
+  let r = parseRecallRoute();
+  if (r && r.legacy) {
+    const h = r.session ? rcSessionHash(r.session, { seq: r.seq, sub: r.sub, q: r.q }) : rcSearchHash(r.q);
+    history.replaceState(history.state, "", location.pathname + location.search + h);
+    r = parseRecallRoute();
+  }
   const el = $("recall");
   const was = !el.hidden;
   rc.route = r;
   el.hidden = !r;
   document.body.classList.toggle("has-recall", !!r);
+  if (was !== !!r) renderNav();
   if (!r) {
     if (rc.ctl) rc.ctl.abort();
     rc.sess = null; rc.sessKey = ""; rc.msgs = []; rc.hits = [];
@@ -3721,6 +3767,14 @@ function rcStep(d) {
   rcShowSeq(rc.hits[rc.hitAt]);
 }
 
+// rcLiveAgent is the running agent that holds this session, if there is one.
+function rcLiveAgent(s) {
+  return state.agents.find((a) => {
+    const v = a.agent_session && a.agent_session.value;
+    return v && String(v).includes(s.id) && (a.host || state.localHost) === s.host;
+  });
+}
+
 function renderRecallSession() {
   const box = $("rc-session");
   const r = rc.route;
@@ -3753,6 +3807,14 @@ function renderRecallSession() {
   const v = rcVerdictTag(s.verdict);
   if (v) { meta.append(" "); meta.append(v); }
   body.append(title, meta);
+  const live = rcLiveAgent(s);
+  if (live) {
+    const open = document.createElement("button");
+    open.type = "button"; open.className = "btn rc-openagent"; open.id = "rc-open";
+    open.dataset.hash = agentHash(live);
+    open.textContent = "Open agent";
+    body.append(open);
+  }
   if (rc.sess.subs.length) {
     const subs = document.createElement("nav");
     subs.className = "rc-subs"; subs.setAttribute("aria-label", "Subagents");
@@ -4001,8 +4063,22 @@ function initRecall() {
     else if (ev.target.closest("#rc-prev")) rcStep(-1);
     else if (ev.target.closest("#rc-next")) rcStep(1);
   });
+  // Esc clears the query; with nothing to clear it does nothing (Back is the way out).
   $("recall").addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") { ev.stopPropagation(); rcBack(); }
+    if (ev.key !== "Escape" || ev.defaultPrevented) return;
+    const q = $("rc-q");
+    ev.preventDefault();
+    if (ev.target !== q || !q.value) return;
+    ev.stopPropagation();
+    clearTimeout(rc.timer);
+    q.value = "";
+    rc.q = "";
+    if (rc.route && !rc.route.session) history.replaceState(null, "", location.pathname + location.search + rcSearchHash(""));
+    rcSearch();
+  });
+  $("rc-session").addEventListener("click", (ev) => {
+    const b = ev.target.closest("#rc-open");
+    if (b) location.hash = b.dataset.hash;
   });
 }
 
@@ -4032,7 +4108,6 @@ function route() {
   syncLaunch();
   syncReview();
   syncMark();
-  syncSweep();
   syncSwitch();
   const r = parseRoute();
   if (!r) {
@@ -4089,6 +4164,8 @@ function openPage(v) {
   if (state.selected != null) closeDetail();
   const hash = PAGE_HASH[v] || "";
   if (location.hash !== hash && (hash || location.hash)) history.pushState(null, "", hash || location.pathname + location.search);
+  syncRecall();
+  syncReview();
   setView(v);
 }
 
@@ -4327,8 +4404,9 @@ const NAV_ICON = {
 const NAV_ROWS = [
   { key: "status", label: "Status", show: () => ledger.on === true },
   { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open },
-  { key: "search", label: "Search", show: () => true, open: () => openRecall(), noPage: true }, // Transcripts is a screen of its own
-  { key: "removals", label: "Ready to remove", show: () => ledger.on === true && ledger.marked.size > 0, count: () => ledger.marked.size, open: () => openReview(), noPage: true },
+  { key: "search", label: "Search", show: () => true, open: () => openRecall(), on: () => !!rc.route },
+  // Hidden at zero, except while you are on it.
+  { key: "removals", label: "Ready to remove", show: () => ledger.on === true && (ledger.marked.size > 0 || review.open), count: () => ledger.marked.size, open: () => openReview(), on: () => review.open },
 ];
 
 function renderNav() {
@@ -4337,7 +4415,7 @@ function renderNav() {
   const rows = NAV_ROWS.filter((r) => r.show());
   const html = rows.map((r) => {
     const n = r.count ? r.count() : 0;
-    const on = !r.noPage && state.view === r.key;
+    const on = r.on ? r.on() : state.view === r.key;
     return `<button type="button" class="nv${on ? " on" : ""}" data-page="${r.key}"${on ? ' aria-current="page"' : ""}>${NAV_ICON[r.key]}<span>${esc(r.label)}</span>${
       n ? `<span class="badge" aria-label="${n} open">${n}</span>` : r.dot && r.dot() ? '<span class="bdot" aria-label="new"></span>' : ""}</button>`;
   }).join("");
@@ -4361,6 +4439,8 @@ function openDetail(id) {
     // A history entry, so the phone's back gesture returns to the list.
     history.pushState(null, "", hash);
     state.pushedRoute = true;
+    syncRecall(); // a page that follows the hash gives way
+    syncReview();
   }
   state.selected = id;
   state.chat = null;
@@ -7417,14 +7497,29 @@ window.addEventListener("DOMContentLoaded", () => {
 
   $("rtr-banner").addEventListener("click", openReview);
   $("rv-close").addEventListener("click", closeReview);
-  $("review").addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") { ev.preventDefault(); closeReview(); }
+  $("rv-sweep").addEventListener("click", () => { if (!sweep.busy && !review.busy) runSweep(true); });
+  $("rv-sweepbox").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-act]");
+    if (b) sweepAction(b.dataset.act);
   });
-  $("rv-all").addEventListener("click", () => confirmRemovals(safeIds(), false));
   $("rv-list").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-act]");
     if (b) reviewAction(b.dataset.act, b.dataset.id);
   });
+  $("rv-bulk").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-act]");
+    if (b) reviewAction(b.dataset.act, b.dataset.id);
+  });
+  const rvSelect = (ev) => {
+    const c = ev.target.closest("input.rv-chk, #rv-selall");
+    if (!c) return;
+    if (c.id === "rv-selall") review.sel = c.checked ? new Set(reviewOpenIds()) : new Set();
+    else if (c.checked) review.sel.add(c.dataset.id); else review.sel.delete(c.dataset.id);
+    review.confirm = null;
+    renderReview();
+  };
+  $("rv-list").addEventListener("change", rvSelect);
+  $("rv-bulk").addEventListener("change", rvSelect);
   $("d-refresh").addEventListener("click", refreshView);
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
@@ -7439,8 +7534,6 @@ window.addEventListener("DOMContentLoaded", () => {
   $("mk-go").addEventListener("click", submitMark);
   $("mk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeMark(); } });
   $("btn-fleet").addEventListener("click", (ev) => { ev.stopPropagation(); toggleFleetMenu(); });
-  $("f-sweep").addEventListener("click", fleetAction(openSweep));
-  $("f-review").addEventListener("click", fleetAction(openReview));
   $("nav").addEventListener("click", onNavClick);
   for (const id of ["ps-body", "br-body"]) {
     $(id).addEventListener("click", onStatusClick);
@@ -7455,9 +7548,6 @@ window.addEventListener("DOMContentLoaded", () => {
   initThemePanel();
   applyTheme();
   $("btn-fleet").addEventListener("keydown", (ev) => { if (ev.key === "ArrowDown" && $("f-menu").hidden) { ev.preventDefault(); toggleFleetMenu(true); } });
-  $("sweep-close").addEventListener("click", closeSweep);
-  $("sweep-go").addEventListener("click", sweepGo);
-  $("sweep").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSweep(); } });
   $("d-model").addEventListener("click", openSwitch);
   $("sw-close").addEventListener("click", closeSwitch);
   $("switch").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSwitch(); } });

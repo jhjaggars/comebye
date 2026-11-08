@@ -226,8 +226,8 @@ const rowOf = (pane) => page.locator(`#agents .agent[data-id$="${pane}"]`);
 async function toList() {
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#agents .agent", { state: "visible" });
-  // The ledger is known once the fleet menu's ledger items are enabled.
-  await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled && !document.querySelector("#f-sweep").hidden, null, { timeout: 8000 });
+  // The ledger is known once the hub has answered.
+  await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
 }
 async function fleetMenuOpen() {
   await page.locator("#btn-fleet").click();
@@ -297,27 +297,26 @@ await page.route(/\/api\/sweep/, (r) => {
   r.fulfill({ json: { dry_run: !!body.dry_run, ready: [{ ...ready, marked: !body.dry_run }], needs_look: [look], skipped: [{ id: "x" }] } });
 });
 
-await check("sweep: the fleet menu item opens a dry run listing ready and needs-a-look", async () => {
-  await toList();
-  await fleetMenuOpen();
-  await page.locator("#f-sweep").click();
-  await page.waitForSelector("#sweep", { state: "visible" });
-  await page.waitForFunction(() => document.querySelector("#sweep-list")?.innerText.includes("fix-login"), null, { timeout: 5000 });
-  const t = await page.locator("#sweep-list").innerText();
+await check("remove page: sweep: the button on Ready to remove runs a dry run listing ready and needs-a-look", async () => {
+  await page.goto(base + "/#/remove", { waitUntil: "load" });
+  await page.waitForSelector("#review", { state: "visible" });
+  await page.locator("#rv-sweep").click();
+  await page.waitForFunction(() => document.querySelector("#rv-sweepbox")?.innerText.includes("fix-login"), null, { timeout: 5000 });
+  const t = await page.locator("#rv-sweepbox").innerText();
   if (!t.includes("feat-search") || !t.includes("open PR")) throw new Error("list " + t);
   if (!sweepPosts.length || sweepPosts[0].dry_run !== true) throw new Error("first call was not a dry run: " + JSON.stringify(sweepPosts));
-  if ((await page.locator("#sweep-go").innerText()).trim() !== "Mark 1 ready to remove") throw new Error("button " + (await page.locator("#sweep-go").innerText()));
+  if ((await page.locator("#sw-mark").innerText()).trim() !== "Mark 1 ready to remove") throw new Error("button " + (await page.locator("#sw-mark").innerText()));
   await noOverflow();
 });
 
-await check("sweep: confirming marks, then offers the removals review", async () => {
-  await page.locator("#sweep-go").click();
-  await page.waitForFunction(() => document.querySelector("#sweep-go")?.innerText.trim() === "Review removals", null, { timeout: 5000 });
+await check("remove page: sweep: confirming marks, and the result stays on the page", async () => {
+  await page.locator("#sw-mark").click();
+  await page.waitForFunction(() => document.querySelector("#rv-sweepbox")?.innerText.includes("Marked 1 ready to remove"), null, { timeout: 5000 });
   if (sweepPosts.length !== 2 || sweepPosts[1].dry_run !== false) throw new Error("second call " + JSON.stringify(sweepPosts));
-  if (!(await page.locator("#sweep-list").innerText()).toLowerCase().includes("marked ready to remove")) throw new Error("no marked heading");
-  await page.locator("#sweep-go").click();
-  await page.waitForSelector("#review", { state: "visible", timeout: 5000 });
+  if (!(await page.locator("#rv-sweepbox").innerText()).toLowerCase().includes("marked ready to remove")) throw new Error("no marked heading");
+  if (!(await page.evaluate(() => location.hash === "#/remove"))) throw new Error("left the page");
   await page.locator("#rv-close").click();
+  await page.waitForSelector("#review", { state: "hidden" });
 });
 
 // The briefing card: collapsed by default, a new briefing keeps it collapsed,
@@ -391,8 +390,8 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
   if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
   const t = (await page.locator("#f-menu button:visible:not(.pop-x)").allInnerTexts()).map((x) => x.trim().replace(/\s+/g, " "));
-  // View (Theme, Notifications), Hub (Sweep, Review removals, the briefing item when there is one, History, Refresh): the schedule lives on Status.
-  const want = [/^Theme /, /^Notifications/, /^Sweep for finished agents/, /^Review removals/, /briefing/i, /^History/, /^Refresh/];
+  // View (Theme, Notifications), Hub (the briefing item when there is one, History, Refresh): the schedule lives on Status; sweep and removals are the Ready to remove page.
+  const want = [/^Theme /, /^Notifications/, /briefing/i, /^History/, /^Refresh/];
   if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
   if (/schedule/i.test(t.join("|"))) throw new Error("the schedule is still in the menu");
   const grp = await page.locator("#f-menu .m-grp").allInnerTexts();
@@ -420,20 +419,19 @@ await check("theme: System paints the OS scheme (Comebye Light/Dark) on load; th
   await page.keyboard.press("Escape");
   await page.waitForSelector("#theme-panel", { state: "hidden" });
 });
-await check("fleet menu: the dashed sweep row is gone and the removals banner stays", async () => {
-  if (await page.locator("#sweep-open").count()) throw new Error("#sweep-open still in the page");
+await check("fleet menu: the sweep and review items are gone; the removals banner opens #/remove", async () => {
+  if (await page.locator("#sweep-open, #f-sweep, #f-review").count()) throw new Error("a sweep/review item is still in the page");
   if ((await page.locator("#agents, main").first().innerText()).includes("Sweep for finished agents")) throw new Error("sweep row text still on the main screen");
-  // Mark one agent so the banner shows, then check the menu count too.
+  // Mark one agent so the banner shows.
   await rowOf(PANES.alpha).locator(".row-more").click();
   await page.locator("#row-mark").click();
   await page.waitForSelector("#mk", { state: "visible" });
   await page.locator("#mk-go").click();
   await page.waitForFunction(() => document.querySelector("#rtr-banner") && !document.querySelector("#rtr-banner").hidden, null, { timeout: 8000 });
   if (!(await page.locator("#rtr-banner").innerText()).includes("Ready to remove (1)")) throw new Error("banner text");
-  await fleetMenuOpen();
-  if (!(await page.locator("#f-review").innerText()).includes("Review removals (1)")) throw new Error("menu count " + (await page.locator("#f-review").innerText()));
-  await page.locator("#f-review").click();
+  await page.locator("#rtr-banner").click();
   await page.waitForSelector("#review", { state: "visible", timeout: 5000 });
+  if ((await page.evaluate(() => location.hash)) !== "#/remove") throw new Error("hash " + (await page.evaluate(() => location.hash)));
   await page.locator("#rv-close").click();
   await page.waitForSelector("#review", { state: "hidden" });
   await rowOf(PANES.alpha).locator(".row-more").click();
@@ -866,7 +864,7 @@ await check("desktop: up/down in the list moves through the agents and opens eac
 });
 await check("desktop: the fleet menu opens beside the list and has no Briefing items", async () => {
   await desktopList(1280);
-  await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+  await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
   await page.locator("#btn-fleet").click();
   const m = await geo("#f-menu");
   if (!m.shown || m.x < 0 || m.x + m.w > 361) throw new Error("menu outside the list column: " + JSON.stringify(m));
@@ -1085,25 +1083,30 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if (!posts.length || posts[posts.length - 1].pane !== "") throw new Error("presence not cleared: " + JSON.stringify(posts));
     await page.locator('#nav .nv[data-page="status"]').click();
     await page.waitForSelector("#p-status", { state: "visible" });
-    // Search opens the Transcripts screen (openRecall), over the pages; closing it leaves no page behind.
+    // Search is a page beside the list: the row is marked, the sidebar stays, Esc does nothing with an empty query.
     await page.locator('#nav .nv[data-page="search"]').click();
     await page.waitForSelector("#recall", { state: "visible" });
-    if (!(await page.evaluate(() => location.hash)).startsWith("#/transcripts")) throw new Error("hash " + (await page.evaluate(() => location.hash)));
+    if (!(await page.evaluate(() => location.hash)).startsWith("#/search")) throw new Error("hash " + (await page.evaluate(() => location.hash)));
+    if ((await page.locator("#nav .nv.on").getAttribute("data-page")) !== "search") throw new Error("search row not marked");
+    if (!(await visible("#agents"))) throw new Error("the sidebar went away");
+    if (await visible("#p-status")) throw new Error("the Status page stays under Search");
     await page.keyboard.press("Escape");
+    await page.waitForTimeout(150);
+    if (!(await visible("#recall"))) throw new Error("Esc left the Search page");
+    await page.locator('#nav .nv[data-page="status"]').click();
+    await page.waitForSelector("#p-status", { state: "visible" });
     await page.waitForSelector("#recall", { state: "hidden" });
-    if (await page.evaluate(() => state.view) !== null) throw new Error("a page stays after closing Transcripts");
-    // Opening Transcripts over an agent leaves it through closeDetail too.
+    // Opening Search over an agent leaves it through closeDetail too.
     await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
     await page.waitForSelector("#detail", { state: "visible" });
     posts.length = 0;
     await page.locator('#nav .nv[data-page="search"]').click();
     await page.waitForSelector("#recall", { state: "visible" });
     await page.waitForTimeout(300);
-    if (await page.evaluate(() => state.selected) !== null || !posts.length || posts[posts.length - 1].pane !== "") throw new Error("the agent stays open under Transcripts: " + JSON.stringify(posts));
-    await page.keyboard.press("Escape");
-    await page.waitForSelector("#recall", { state: "hidden" });
+    if (await page.evaluate(() => state.selected) !== null || !posts.length || posts[posts.length - 1].pane !== "") throw new Error("the agent stays open under Search: " + JSON.stringify(posts));
     await page.locator('#nav .nv[data-page="status"]').click();
     await page.waitForSelector("#p-status", { state: "visible" });
+    await page.waitForSelector("#recall", { state: "hidden" });
     // The removals row follows the ledger's marks.
     const marks = await page.evaluate(() => ledger.marked.size);
     const row = await page.locator('#nav .nv[data-page="removals"]').count();
@@ -1111,7 +1114,9 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if (row) {
       await page.locator('#nav .nv[data-page="removals"]').click();
       await page.waitForSelector("#review", { state: "visible" });
-      await page.locator("#rv-close").click();
+      if ((await page.locator("#nav .nv.on").getAttribute("data-page")) !== "removals") throw new Error("removals row not marked");
+      await page.locator('#nav .nv[data-page="status"]').click();
+      await page.waitForSelector("#review", { state: "hidden" });
     }
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
   } finally { page.off("request", onReq); }
@@ -1214,7 +1219,7 @@ for (const width of [1280, 390]) {
       await page.locator("#plans a.pm.gone").click();
       await page.waitForSelector("#recall", { state: "visible" });
       const h = await page.evaluate(() => decodeURIComponent(location.hash));
-      if (!h.startsWith("#/transcripts") || !h.includes("feat/removed-one")) throw new Error("hash " + h);
+      if (!h.startsWith("#/search") || !h.includes("feat/removed-one")) throw new Error("hash " + h);
     } finally { await page.unroute(/\/api\/ledger$/); }
   });
 }
@@ -2089,8 +2094,8 @@ await check("to-do accordion (phone): one item open; a draft survives a poll and
 
 
 /* ---------- transcripts (a synthetic index: tools/devserver/recall.go) ---------- */
-const SMOKE = "#/session/devbox/claude/11111111-aaaa-4aaa-8aaa-111111111111";
-const LONGS = "#/session/devbox/claude/22222222-bbbb-4bbb-8bbb-222222222222";
+const SMOKE = "#/search/devbox/claude/11111111-aaaa-4aaa-8aaa-111111111111";
+const LONGS = "#/search/devbox/claude/22222222-bbbb-4bbb-8bbb-222222222222";
 const noSideways = () => page.evaluate(() => {
   const el = document.querySelector("#recall");
   const over = [...el.querySelectorAll("*")].filter((x) => x.getBoundingClientRect().right > innerWidth + 1 && !x.closest(".rc-filters, .rc-subs, .rc-targs"));
@@ -2246,7 +2251,7 @@ await check("transcripts: secrets are masked, with a warning, and clipped output
 });
 
 await check("transcripts: a subagent opens as its own thread", async () => {
-  await page.goto(base + "/#/transcripts?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
+  await page.goto(base + "/#/search?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
   await page.locator(".rc-card", { hasText: "Retry the upgrade" }).click();
   await page.waitForSelector(".rc-subs", { timeout: 5000 });
   const on = await page.locator(".rc-subs .rc-chip.on").innerText();
@@ -2257,14 +2262,14 @@ await check("transcripts: a subagent opens as its own thread", async () => {
 });
 
 await check("transcripts: a commit's SHA finds the session", async () => {
-  await page.goto(base + "/#/transcripts?q=1a2b3c4d", { waitUntil: "load" });
+  await page.goto(base + "/#/search?q=1a2b3c4d", { waitUntil: "load" });
   await page.waitForSelector(".rc-card", { timeout: 5000 });
   if (!(await page.locator("#rc-results").innerText()).includes("made 1a2b3c4d")) throw new Error("no commit card");
 });
 
 await check("transcripts: at desktop width, results and session side by side", async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto(base + "/#/transcripts?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
+  await page.goto(base + "/#/search?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
   await page.waitForSelector(".rc-card", { timeout: 5000 });
   await page.locator(".rc-card", { hasText: "Provision" }).click();
   await page.waitForFunction(() => /Provision/.test(document.querySelector(".rc-stitle")?.textContent || ""), null, { timeout: 5000 });
@@ -2272,8 +2277,6 @@ await check("transcripts: at desktop width, results and session side by side", a
   if (!(await page.locator(".rc-card.current").count())) throw new Error("the open session is not marked");
   const a = await page.locator(".rc-list").boundingBox(), b = await page.locator("#rc-session").boundingBox();
   if (a.x + a.width > b.x + 1 || b.width < 500) throw new Error(JSON.stringify({ a, b }));
-  await page.keyboard.press("Escape");
-  await page.waitForSelector("#recall", { state: "hidden" });
   await page.setViewportSize({ width: 390, height: 844 });
 });
 
@@ -2281,7 +2284,7 @@ await check("transcripts: no index, an old index, a stale one, a deleted session
   const withStatus = async (body, want) => {
     await page.route(/\/api\/recall\/status$/, (r) => r.fulfill({ json: body }));
     await page.goto("about:blank");
-    await page.goto(base + "/#/transcripts", { waitUntil: "load" });
+    await page.goto(base + "/#/search", { waitUntil: "load" });
     await page.waitForFunction((w) => new RegExp(w).test(document.querySelector("#rc-results").textContent), want, { timeout: 5000 });
     await page.unroute(/\/api\/recall\/status$/);
   };
@@ -2291,12 +2294,211 @@ await check("transcripts: no index, an old index, a stale one, a deleted session
   // Content days old, with the indexer still looking: the age shown is the look's.
   await page.route(/\/api\/recall\/status$/, (r) => r.fulfill({ json: { state: "ok", built_at: new Date(Date.now() - 86400000 * 3).toISOString(), checked_at: new Date(Date.now() - 600000).toISOString(), sessions: 3, messages: 9 } }));
   await page.goto("about:blank");
-  await page.goto(base + "/#/transcripts", { waitUntil: "load" });
+  await page.goto(base + "/#/search", { waitUntil: "load" });
   await page.waitForFunction(() => /indexed 10m ago/.test(document.querySelector("#rc-fresh").textContent), null, { timeout: 5000 });
   if (await page.locator("#rc-fresh.warn").count()) throw new Error("warns about a copy whose indexer is alive");
   await page.unroute(/\/api\/recall\/status$/);
-  await page.goto(base + "/#/session/devbox/claude/gone-session", { waitUntil: "load" });
+  await page.goto(base + "/#/search/devbox/claude/gone-session", { waitUntil: "load" });
   await page.waitForFunction(() => /isn't in the index/.test(document.querySelector("#rc-session").textContent), null, { timeout: 5000 });
+});
+
+// ---- Search and Ready to remove as pages (#/search, #/remove) ----
+await check("search page: old #/transcripts and #/session links redirect to #/search", async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(base + "/#/transcripts?q=" + encodeURIComponent("connection refused"), { waitUntil: "load" });
+  await page.waitForSelector("#recall", { state: "visible" });
+  const h1 = await page.evaluate(() => decodeURIComponent(location.hash));
+  if (h1 !== "#/search?q=connection refused") throw new Error("transcripts -> " + h1);
+  if ((await page.locator("#rc-q").inputValue()) !== "connection refused") throw new Error("query not carried");
+  await page.goto(base + "/#/session/devbox/claude/22222222-bbbb-4bbb-8bbb-222222222222?q=retry", { waitUntil: "load" });
+  await page.waitForFunction(() => location.hash.startsWith("#/search/devbox/claude/"), null, { timeout: 5000 });
+  if (!(await page.evaluate(() => location.hash)).includes("q=retry")) throw new Error("q lost: " + (await page.evaluate(() => location.hash)));
+  // The redirect replaces the entry: Back leaves the page rather than bouncing off it.
+  await page.waitForSelector(".rc-stitle", { timeout: 5000 });
+});
+
+await check("search page: sidebar kept, query box in the header, Esc clears then does nothing", async () => {
+  await desktopList(1440, "#/search?q=" + encodeURIComponent("connection refused"));
+  await page.waitForSelector("#recall", { state: "visible" });
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  const [side, rc, q, hd] = await Promise.all([geo("#agents"), geo("#recall"), geo("#rc-q"), geo("#recall header")]);
+  if (!side.shown || rc.x < side.x + side.w - 1) throw new Error("not beside the sidebar: " + JSON.stringify([side, rc]));
+  if (q.y < hd.y || q.y + q.h > hd.y + hd.h + 1) throw new Error("the query box is not in the page header: " + JSON.stringify([q, hd]));
+  if (await visible("#rc-back")) throw new Error("a Back arrow on the desktop page");
+  if ((await page.locator("#nav .nv.on").getAttribute("data-page")) !== "search") throw new Error("nav not marked");
+  await page.locator("#rc-q").focus();
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.querySelector("#rc-q").value === "", null, { timeout: 3000 });
+  await page.waitForFunction(() => /newest first/.test(document.querySelector("#rc-results").textContent), null, { timeout: 5000 });
+  if ((await page.evaluate(() => location.hash)) !== "#/search") throw new Error("hash " + (await page.evaluate(() => location.hash)));
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(200);
+  if (!(await visible("#recall"))) throw new Error("a second Esc left the page");
+  await page.locator("#rc-q").fill("connection refused");
+  await page.waitForSelector(".rc-card .rc-snip mark", { timeout: 5000 });
+  await page.locator(".rc-card", { hasText: "Provision" }).click();
+  await page.waitForFunction(() => /Provision/.test(document.querySelector(".rc-stitle")?.textContent || ""), null, { timeout: 5000 });
+  const [l, ss] = await Promise.all([geo(".rc-list"), geo("#rc-session")]);
+  if (l.x + l.w > ss.x + 1) throw new Error("results and session do not sit side by side at 1440: " + JSON.stringify([l, ss]));
+  await page.screenshot({ path: `${out}/search-page-1440.png` });
+});
+
+await check("search page: the results stack above the session when the pane is narrow", async () => {
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.waitForTimeout(300);
+  const [l, ss] = await Promise.all([geo(".rc-list"), geo("#rc-session")]);
+  if (ss.y < l.y + l.h - 1 || Math.abs(ss.x - l.x) > 2) throw new Error("not stacked at 1100: " + JSON.stringify([l, ss]));
+  await page.screenshot({ path: `${out}/search-page-1100.png` });
+  await page.setViewportSize({ width: 1440, height: 800 });
+});
+
+await check("search page: Open agent leaves for the agent, and Back restores the same query and session", async () => {
+  await desktopList(1440, "#/search?q=" + encodeURIComponent("connection refused"));
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  await page.locator(".rc-card", { hasText: "Long session" }).click();
+  await page.waitForSelector(".rc-stitle", { timeout: 5000 });
+  if (await visible("#rc-open")) throw new Error("Open agent on a session with no live agent");
+  const want = await page.evaluate(() => location.hash);
+  // Make one live agent hold this session (the fixture's agents hold other sessions).
+  await page.evaluate(() => {
+    const a = state.agents[0];
+    a.host = "devbox"; a.agent_session = { kind: "id", value: "22222222-bbbb-4bbb-8bbb-222222222222" };
+    renderRecallSession();
+  });
+  await page.waitForSelector("#rc-open", { timeout: 3000 });
+  await page.locator("#rc-open").click();
+  await page.waitForSelector("#detail", { state: "visible" });
+  await page.waitForSelector("#recall", { state: "hidden" });
+  await page.goBack();
+  await page.waitForSelector("#recall", { state: "visible" });
+  await page.waitForSelector(".rc-stitle", { timeout: 5000 });
+  if ((await page.evaluate(() => location.hash)) !== want) throw new Error("hash " + (await page.evaluate(() => location.hash)));
+  if ((await page.locator("#rc-q").inputValue()) !== "connection refused") throw new Error("query lost: " + (await page.locator("#rc-q").inputValue()));
+  if (!/Long session/.test(await page.locator(".rc-stitle").innerText())) throw new Error("another session");
+  if (!(await page.locator(".rc-card.current").count())) throw new Error("the open session is not marked");
+});
+
+await check("search page: on the phone it is a full page with a Back arrow", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.locator("#btn-recall").click();
+  await page.waitForSelector("#recall", { state: "visible" });
+  if ((await page.evaluate(() => location.hash)) !== "#/search") throw new Error("hash " + (await page.evaluate(() => location.hash)));
+  const b = await geo("#rc-back");
+  if (!b.shown) throw new Error("no Back arrow");
+  await page.locator("#rc-q").fill("retry");
+  await page.waitForSelector(".rc-card", { timeout: 5000 });
+  await page.locator("#rc-back").click();
+  await page.waitForSelector("#recall", { state: "hidden" });
+  await noSideways();
+  await page.screenshot({ path: `${out}/search-page-390.png` });
+});
+
+const RM_ITEMS = () => [
+  { id: "uitest/w7:p1", name: "tidy-docs", host: "uitest", branch: "docs/tidy", repo: "webapp", safe: true, coordinator: false,
+    live: { present: false }, mark: { by: "coordinator", at: new Date().toISOString() }, checks: { exists: true, primary: false, dirty: false, unmerged_commits: 0, base_used: "origin/main" }, warnings: [], notes: [] },
+  { id: "uitest/w7:p2", name: "spike-sse", host: "uitest", branch: "spike/sse", repo: "webapp", safe: false, coordinator: false, discardable: false,
+    live: { present: false }, mark: { by: "you", at: new Date().toISOString() }, checks: { exists: true, dirty: true, dirty_files: 1 }, warnings: ["1 uncommitted file: README.md"], notes: [] },
+  { id: "uitest/w7:p3", name: "bump-go", host: "uitest", branch: "chore/go", repo: "webapp", safe: true, coordinator: false,
+    live: { present: false }, mark: { by: "coordinator", at: new Date().toISOString() }, checks: { exists: true, primary: false, dirty: false, unmerged_commits: 0, base_used: "origin/main" }, warnings: [], notes: [] },
+];
+async function mockRemovals() {
+  const posts = { confirm: [], clear: [] };
+  let items = RM_ITEMS();
+  await page.route(/\/api\/removals$/, (r) => r.fulfill({ json: { removals: items } }));
+  await page.route(/\/api\/removals\/confirm$/, (r) => {
+    const b = JSON.parse(r.request().postData() || "{}");
+    posts.confirm.push(b);
+    r.fulfill({ json: { results: b.ids.map((id) => ({ id, ok: true, result: { closed: "workspace", worktree_removed: items.find((x) => x.id === id).safe } })) } });
+  });
+  await page.route(/\/api\/marks\/clear$/, (r) => { posts.clear.push(JSON.parse(r.request().postData() || "{}")); r.fulfill({ json: {} }); });
+  return posts;
+}
+async function unmockRemovals() {
+  for (const re of [/\/api\/removals$/, /\/api\/removals\/confirm$/, /\/api\/marks\/clear$/]) await page.unroute(re);
+}
+
+await check("remove page: sidebar entry hides at zero except on the page; select-all; inline confirms; Keep", async () => {
+  const dialogs0 = nativeDialogs;
+  const posts = await mockRemovals();
+  try {
+    await desktopList(1440, "#/status");
+    await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
+    if (await page.locator('#nav .nv[data-page="removals"]').count()) throw new Error("the entry shows with no marks");
+    await page.goto(base + "/#/remove", { waitUntil: "load" });
+    await page.waitForSelector("#review", { state: "visible" });
+    await page.waitForSelector("#rv-list .rv-item", { timeout: 5000 });
+    if ((await page.locator('#nav .nv[data-page="removals"].on').count()) !== 1) throw new Error("the entry is not shown and marked on the page");
+    const [side, pg] = await Promise.all([geo("#agents"), geo("#review")]);
+    if (pg.x < side.x + side.w - 1) throw new Error("not beside the sidebar");
+    if (await visible("#rv-close")) throw new Error("a Back arrow on the desktop page");
+    if ((await page.locator("#rv-list .rv-item").count()) !== 3) throw new Error("rows");
+    // select-all, then the bulk button counts the safe rows only
+    await page.locator("#rv-selall").check();
+    if ((await page.locator("#rv-list .rv-chk:checked").count()) !== 3) throw new Error("select-all did not select every row");
+    if (!/Remove selected \(2\)/.test(await page.locator("#rv-all").innerText())) throw new Error("bulk label " + (await page.locator("#rv-all").innerText()));
+    await page.locator("#rv-all").click();
+    await page.waitForSelector("#rv-bulk .rv-confirm", { timeout: 3000 });
+    if (!/left for Remove anyway/.test(await page.locator("#rv-bulk .rv-confirm").innerText())) throw new Error("bulk confirm does not name what it leaves");
+    await page.locator('#rv-bulk [data-act="bulk-no"]').click();
+    if (posts.confirm.length) throw new Error("cancel sent a removal");
+    // an unsafe row: "Remove anyway…" confirms in the row and lists what stays
+    const row2 = page.locator('#rv-list .rv-item[data-id="uitest/w7:p2"]');
+    await row2.locator('[data-act="remove"]').click();
+    const cf = row2.locator(".rv-confirm");
+    await cf.waitFor({ timeout: 3000 });
+    const ct = await cf.innerText();
+    if (!ct.includes("README.md") || !/stays/.test(ct)) throw new Error("confirm text: " + ct);
+    await cf.locator('[data-act="confirm-no"]').click();
+    if (await row2.locator(".rv-confirm").count()) throw new Error("Cancel left the confirm");
+    // a safe row: Remove asks, then removes
+    const row1 = page.locator('#rv-list .rv-item[data-id="uitest/w7:p1"]');
+    await row1.locator('[data-act="remove"]').click();
+    await row1.locator(".rv-confirm").waitFor({ timeout: 3000 });
+    if (posts.confirm.length) throw new Error("Remove did not wait for the confirm");
+    await page.screenshot({ path: `${out}/remove-page-1440.png` });
+    await row1.locator('[data-act="confirm-yes"]').click();
+    await row1.locator(".rv-result.ok").waitFor({ timeout: 5000 });
+    if (JSON.stringify(posts.confirm[0].ids) !== '["uitest/w7:p1"]' || posts.confirm[0].allow_working) throw new Error("body " + JSON.stringify(posts.confirm));
+    // Keep un-marks
+    await row2.locator('[data-act="unmark"]').click();
+    await page.waitForFunction(() => !document.querySelector('#rv-list .rv-item[data-id="uitest/w7:p2"]'), null, { timeout: 3000 });
+    if (posts.clear[0].agent_id !== "uitest/w7:p2") throw new Error("clear " + JSON.stringify(posts.clear));
+    if (nativeDialogs !== dialogs0) throw new Error("a native dialog opened");
+    // leaving the page by the sidebar: Esc did nothing, the entry goes with the page
+    await page.keyboard.press("Escape");
+    if (!(await visible("#review"))) throw new Error("Esc left the page");
+  } finally { await unmockRemovals(); }
+});
+
+await check("remove page: the sweep is a button on the page; its result shows above the list and marking adds rows", async () => {
+  await desktopList(1440, "#/remove");
+  await page.waitForSelector("#review", { state: "visible" });
+  await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
+  const calls = sweepPosts.length;
+  await page.locator("#rv-sweep").click();
+  await page.waitForFunction(() => /fix-login/.test(document.querySelector("#rv-sweepbox")?.innerText || ""), null, { timeout: 5000 });
+  if (sweepPosts.length !== calls + 1 || sweepPosts[calls].dry_run !== true) throw new Error("not a dry run");
+  const [sw, list] = await Promise.all([geo("#rv-sweepbox"), geo("#rv-list")]);
+  if (sw.y > list.y) throw new Error("the sweep result is not above the list");
+  await page.locator('#rv-sweepbox [data-act="sw-dismiss"]').click();
+  if (await visible("#rv-sweepbox")) throw new Error("Not now left the box");
+});
+
+await check("remove page: on the phone it is a full page with a Back arrow, no overflow", async () => {
+  const posts = await mockRemovals();
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("about:blank");
+    await page.goto(base + "/#/remove", { waitUntil: "load" });
+    await page.waitForSelector("#rv-list .rv-item", { timeout: 5000 });
+    if (!(await geo("#rv-close")).shown) throw new Error("no Back arrow");
+    await noSideways();
+    await page.screenshot({ path: `${out}/remove-page-390.png` });
+    await page.locator("#rv-close").click();
+    await page.waitForSelector("#review", { state: "hidden" });
+    if ((await page.evaluate(() => location.hash)) !== "") throw new Error("hash " + (await page.evaluate(() => location.hash)));
+  } finally { await unmockRemovals(); }
 });
 
 await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\" with the briefing", async () => {
@@ -2440,9 +2642,9 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         // Each state is forced, then its box is measured: non-zero left padding, text centred, inside its pane.
         const states = [
           ["list", "state.agents = []; renderList()", "#agents .empty"],
-          ["search none", "location.hash = '#/transcripts?q=zzzqqqnomatch'", ".rc-empty"],
+          ["search none", "location.hash = '#/search?q=zzzqqqnomatch'", ".rc-empty"],
           ["ready to remove", "openReview(); await new Promise(r => setTimeout(r, 500)); review.items = []; renderReview()", "#rv-list .ln-empty"],
-          ["sweep", "openSweep(); await new Promise(r => setTimeout(r, 500)); sweep.data = { ready: [], look: [] }; renderSweep()", "#sweep-list .ln-empty"],
+          ["sweep", "openReview(); await new Promise(r => setTimeout(r, 500)); Object.assign(sweep, { shown: true, busy: false, data: { ready: [], needs_look: [] } }); renderSweep()", "#rv-sweepbox .ln-empty"],
           ...(mobile ? [] : [["To do none", "location.hash = '#/todo'; todos.loadedAt = 0; await loadTodos()", "#pt-body .empty"]]),
         ];
         const bad = [];
@@ -2457,7 +2659,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
           }, sel);
           if (!m) bad.push(`${name}: not shown (${sel})`);
           else if (!(m.padL > 0 && m.padR > 0) || m.align !== "center" || !m.inside) bad.push(`${name}: ${JSON.stringify(m)}`);
-          await p.evaluate(() => { for (const id of ["rv-close", "sweep-close"]) document.getElementById(id)?.click(); });
+          await p.evaluate(() => { document.getElementById("rv-close")?.click(); });
         }
         if (bad.length) throw new Error(bad.join("; "));
       } finally { await ctx.close(); }
@@ -2565,7 +2767,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
   for (const width of [1280, 390]) {
     await check(`menus: Escape, a click outside and the × close the fleet menu, the theme picker, the notifications and a row's menu, with the focus back on the button, at ${width}px`, async () => {
       await desktopList(width);
-      await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+      await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
       for (const name of ["fleet", "theme", "notify", "row"]) {
         await OPEN[name]();
         await page.keyboard.press("Escape");
@@ -2586,7 +2788,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
 
   await check("menus: only one is open at a time", async () => {
     await desktopList(1280);
-    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
     await OPEN.row();
     await page.locator("#btn-notify").click();
     if ((await openIds()).join() !== "notify-panel") throw new Error("row then bell: " + await openIds());
@@ -2603,7 +2805,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
   await check("menus: ↑ ↓ Home End move between the items (the × is not one) and wrap", async () => {
     await OPEN.fleet();
     const items = await page.evaluate(() => [...document.querySelectorAll("#f-menu button:not(.pop-x)")].filter((b) => !b.disabled && !b.hidden && b.getClientRects().length).map((b) => b.id));
-    if (items.length < 4) throw new Error("few items " + items);
+    if (items.length < 3) throw new Error("few items " + items);
     if ((await active()) !== items[0]) throw new Error("first item not focused: " + await active());
     await page.keyboard.press("ArrowDown");
     if ((await active()) !== items[1]) throw new Error("ArrowDown: " + await active());
@@ -2637,7 +2839,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     await desktopList(1280);
     await resetTheme();
     await page.reload({ waitUntil: "load" });
-    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
     const attr = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
     const saved = await attr();
     await OPEN.theme();
@@ -2723,7 +2925,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
 
   await check("sheet: on a phone every ⋯ menu is a bottom sheet with a handle; the backdrop and a swipe down close it", async () => {
     await desktopList(390);
-    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
     for (const name of ["fleet", "theme", "notify", "row"]) {
       await OPEN[name]();
       await page.waitForTimeout(400); // the slide-in
@@ -2753,7 +2955,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
       for (const th of ["dark", "gruvbox-light"]) {
         await desktopList(width);
         await page.evaluate((t) => ComebyeThemes.set(t), th);
-        await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+        await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
         await OPEN.fleet();
         await page.waitForTimeout(450); // the open animation
         await page.screenshot({ path: `${out}/menus-fleet-${th}-${width}.png` });
@@ -2821,7 +3023,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(base + "/", { waitUntil: "load" });
     await page.waitForSelector("#agents .agent");
-    await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
+    await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
     await page.evaluate(() => { location.hash = "#/briefings"; });
     await page.waitForSelector("#br-status", { state: "visible" });
     await cardSteps("#br-status");

@@ -931,18 +931,18 @@
     @media (prefers-reduced-motion: reduce) { .pop, #sheet-bk { animation: none !important; } }
 
     /* Ready-to-remove review. */
-    #review, #switch, #mk, #sweep { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
-    #review[hidden], #switch[hidden], #mk[hidden], #sweep[hidden] { display: none; }
-    #review header .back, #switch header .back, #mk header .back, #sweep header .back {
+    #review, #switch, #mk { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden], #switch[hidden], #mk[hidden] { display: none; }
+    #review header .back, #switch header .back, #mk header .back {
       font: inherit; font-size: 20px; line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: 10px; padding: 0;
       min-width: 44px; min-height: 44px; margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #review header h2, #switch header h2, #mk header h2, #sweep header h2 { font-size: 17px; margin: 0; font-weight: 650; }
+    #review header h2, #switch header h2, #mk header h2 { font-size: 17px; margin: 0; font-weight: 650; }
     #switch .ln-picker { margin-top: 0; }
     #switch .ln-mlist { max-height: 46vh; }
-    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #sweep.busy .ln-status::before {
+    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before {
       content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px;
       border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -982,6 +982,27 @@
     .rv-result.ok { color: var(--green); }
     .rv-result.err { color: var(--red); }
     .rv-result .kept { color: var(--orange); display: block; margin-top: 2px; }
+    #review header .rv-grow { flex: 1; }
+    #review header .btn, .rv-bulk .btn { width: auto; flex: none; }
+    #review .ln-body { max-width: 900px; margin: 0; }
+    .rv-top .rv-chk { width: 20px; height: 20px; margin: 0 2px 0 0; accent-color: var(--blue); flex: none; }
+    .rv-bulk { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 2px 10px; position: sticky; top: -12px; z-index: 2; background: var(--bg); }
+    .rv-bulk[hidden] { display: none; }
+    .rv-bulk label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; min-height: 36px; }
+    .rv-bulk input { width: 20px; height: 20px; accent-color: var(--blue); }
+    .rv-bulk .rv-grow { flex: 1; color: var(--muted); font-size: 13px; }
+    .rv-confirm { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px;
+      background: color-mix(in srgb, var(--orange) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--orange) 50%, transparent); }
+    .rv-confirm p { margin: 0 0 8px; overflow-wrap: anywhere; }
+    .rv-confirm ul { margin: 0 0 8px; padding-left: 18px; }
+    .rv-confirm .rv-actions { margin-top: 0; }
+    #rv-sweepbox { margin-bottom: 12px; }
+    .sw-box { background: var(--panel); border: 1px dashed var(--blue); border-radius: 14px; padding: 12px 14px; }
+    .sw-box .sw-h:first-child { margin-top: 0; }
+    .sw-box .rv-item { background: var(--bg); }
+    .sw-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .sw-row .rv-grow { flex: 1; min-width: 160px; }
+    .sw-done { color: var(--green); font-size: 13px; margin-top: 8px; }
 
     /* Coordinators: pinned above the projects, with a badge. */
     .role-chip {
@@ -1527,7 +1548,7 @@
       #detail, #detail-empty { grid-column: 2; grid-row: 1 / -1; border-left: 1px solid var(--border); min-width: 0; min-height: 0; }
       #detail { display: none !important; height: auto; contain: layout; } /* contain: its fixed sub-view and menu stay inside the pane */
       body.has-detail #detail { display: flex !important; }
-      body:not(.has-detail):not(.has-page) #detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--muted); text-align: center; padding: 24px; }
+      body:not(.has-detail):not(.has-page):not(.has-recall):not(.has-remove) #detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--muted); text-align: center; padding: 24px; }
       #detail-empty b { color: var(--text); font-weight: 650; }
       #detail-empty kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; background: var(--panel); }
       #detail header .back { display: none; }
@@ -1624,10 +1645,29 @@
     .rc-out { background: var(--rc-out); }
     .rc-args.cur, .rc-out.cur { box-shadow: inset 3px 0 0 var(--orange); }
     .rc-tool .rc-secret { margin: 0; border-radius: 0; border-top: 1px solid var(--border); }
+    #recall { container-type: inline-size; }
+    #recall header { flex-wrap: wrap; }
+    #recall #rc-form { flex: 1 1 100%; order: 5; min-width: 0; }
+    #recall.in-session #rc-form { display: none; }
     @media (min-width: 1100px) {
-      /* The app's grid does not apply: this screen is fixed over it. */
-      #recall .rc-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
+      /* The page takes the detail cell, beside the agent list. */
+      #recall, #review {
+        position: static; grid-column: 2; grid-row: 1 / -1; z-index: auto; min-width: 0; min-height: 0; overflow: hidden;
+        border-left: 1px solid var(--border);
+      }
+      #recall header, #review header { padding-left: 20px; min-height: 56px; }
+      #recall #rc-back, #review #rv-close { display: none; }
+      #recall #rc-form, #recall.in-session #rc-form { display: block; flex: 1 1 280px; order: 0; max-width: 640px; }
+      #recall .rc-list { flex: 0 0 clamp(320px, 40%, 460px); display: block !important; border-right: 1px solid var(--border); }
       #recall .rc-session { display: block !important; }
+      #recall #rc-q { min-height: 38px; }
+    }
+    /* Under 900px of pane the results stack above the session. */
+    @container (max-width: 899px) {
+      @media (min-width: 1100px) {
+        #recall .rc-panes { flex-direction: column; }
+        #recall .rc-list { flex: 0 0 38%; border-right: 0; border-bottom: 1px solid var(--border); }
+      }
     }
     /* Interaction states for every option-like control, from tokens only. Hover is a neutral lift (a border
        toward --muted and a surface shift); the selected state keeps its blue; pressed sinks and darkens, so a click
@@ -1659,17 +1699,17 @@
 </head>
 <body>
   <!-- Transcripts: search and read archived sessions -->
-  <div id="recall" hidden>
+  <div id="recall" hidden role="region" aria-label="Search">
     <header>
       <button type="button" class="bell" id="rc-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-      <h1>Transcripts</h1>
+      <h1>Search</h1>
+      <form id="rc-form" role="search">
+        <input id="rc-q" type="search" placeholder="Search transcripts" aria-label="Search transcripts" maxlength="500" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+      </form>
       <span class="rc-fresh" id="rc-fresh"></span>
     </header>
     <div class="rc-panes">
-      <section class="rc-list" aria-label="Search">
-        <form id="rc-form" role="search">
-          <input id="rc-q" type="search" placeholder="Search transcripts" aria-label="Search transcripts" maxlength="500" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
-        </form>
+      <section class="rc-list" aria-label="Results">
         <div id="rc-filters" class="rc-filters"></div>
         <div id="rc-results" aria-live="polite"></div>
       </section>
@@ -1704,8 +1744,6 @@
       <button type="button" role="menuitem" id="f-theme" class="has-side" aria-haspopup="dialog" aria-controls="theme-panel"><span id="f-theme-sw"></span><span class="m-grow">Theme</span><span class="m-side" id="f-theme-val">System</span></button>
       <button type="button" role="menuitem" id="f-notify" class="has-side" aria-haspopup="dialog" aria-controls="notify-panel"><span class="m-grow">Notifications</span><span class="m-side" id="f-notify-val"></span></button>
       <div class="m-grp" role="presentation">Hub</div>
-      <button type="button" role="menuitem" id="f-sweep">Sweep for finished agents…</button>
-      <button type="button" role="menuitem" id="f-review">Review removals</button>
       <button type="button" role="menuitem" id="f-brief">Briefing</button>
       <button type="button" role="menuitem" id="f-briefs">History</button>
       <button type="button" role="menuitem" id="f-refresh">Refresh</button>
@@ -1727,7 +1765,7 @@
       <div class="tp-hint" id="tp-hint" aria-live="polite"></div>
       <div class="tp-sys" id="tp-sys" hidden></div>
     </section>
-    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden aria-haspopup="dialog" aria-controls="review"></button><div id="agents"></div></main>
+    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
     <button type="button" id="pager" class="pager" aria-controls="briefs" aria-label="Open the briefings screen (or swipe left)" hidden>
       <span class="pg-dots" aria-hidden="true"><i class="on"></i><i></i></span>
       <span class="pg-label">Briefings</span><span class="pg-todo" id="pager-todo" title="Open to-do items" hidden></span><span class="pg-new" id="pager-new" hidden></span>
@@ -1878,30 +1916,20 @@
     </footer>
   </section>
 
-  <!-- Sweep for finished agents -->
-  <section id="sweep" hidden role="dialog" aria-modal="true" aria-labelledby="sweep-title">
+  <!-- Ready to remove: a page (#/remove), with the sweep as a button -->
+  <section id="review" hidden role="region" aria-labelledby="rv-title">
     <header>
-      <button type="button" class="back" id="sweep-close" aria-label="Close">&#10005;</button>
-      <h2 id="sweep-title">Sweep for finished agents</h2>
-    </header>
-    <div class="ln-body" id="sweep-list" aria-live="polite"></div>
-    <footer class="ln-foot">
-      <div class="ln-status" id="sweep-status" aria-live="polite"></div>
-      <button type="button" class="btn ln-go" id="sweep-go" disabled>Mark ready to remove</button>
-    </footer>
-  </section>
-
-  <!-- Sessions marked ready to remove: review and confirm -->
-  <section id="review" hidden role="dialog" aria-modal="true" aria-labelledby="rv-title">
-    <header>
-      <button type="button" class="back" id="rv-close" aria-label="Close">&#10005;</button>
+      <button type="button" class="back" id="rv-close" aria-label="Back">&#8592;</button>
       <h2 id="rv-title">Ready to remove</h2>
+      <span class="rv-grow"></span>
+      <button type="button" class="btn" id="rv-sweep">Look for finished agents</button>
     </header>
-    <div class="ln-body" id="rv-list" aria-live="polite"></div>
-    <footer class="ln-foot">
+    <div class="ln-body" id="rv-body">
+      <div id="rv-sweepbox" aria-live="polite" hidden></div>
+      <div id="rv-bulk" class="rv-bulk" hidden></div>
+      <div id="rv-list" aria-live="polite"></div>
       <div class="ln-status" id="rv-status" aria-live="polite"></div>
-      <button type="button" class="btn ln-go" id="rv-all" disabled>Remove all safe</button>
-    </footer>
+    </div>
   </section>
 
   <!-- Agent detail view -->
