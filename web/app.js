@@ -2955,6 +2955,11 @@ function hideReview() {
   review.seq++;
   sweep.seq++;
   review.confirm = null;
+  // Leaving is always possible: a check that is still running is dropped (its seq is stale), and a
+  // removal that is in flight finishes on its own.
+  review.busy = false;
+  sweep.busy = false;
+  $("review").classList.remove("busy");
   $("review").hidden = true;
   document.body.classList.remove("has-remove", "sheet-open");
   renderNav();
@@ -2963,7 +2968,6 @@ function hideReview() {
 
 // closeReview is the phone's Back: it leaves for the list.
 function closeReview() {
-  if (review.busy) return;
   history.replaceState(null, "", location.pathname + location.search);
   route();
 }
