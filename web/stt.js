@@ -353,7 +353,7 @@
       eng.offered = { target, info, backend };
       setUi({
         kind: "offer", target, bytes: info.bytes[backend],
-        text: `Voice input runs on this device (${BACKEND_NAME[backend]}); no audio leaves it.${eng.fellBack ? " The GPU could not be used, so this is the slower CPU version." : ""}`,
+        text: `Voice input runs on this device, using the ${BACKEND_NAME[backend]}; no audio leaves it.${eng.fellBack ? " The GPU could not be used, so this is the slower CPU version." : ""}`,
       });
       return;
     }
