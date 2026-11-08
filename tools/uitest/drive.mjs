@@ -2594,6 +2594,7 @@ await check("remove page: on the phone it is a full page with a Back arrow, no o
 
   await check("keys: the palette's prefixes @ > # narrow it; typing filters; Enter on an agent opens it", async () => {
     await page.route(/\/api\/todos$/, (r) => r.fulfill({ json: { todos: [{ id: "t1", kind: "question", question: "Which retry policy?", state: "open", context: "", agent_name: "w", created_at: new Date().toISOString() }], open: 1, answered: 0 } }));
+    try { // the mock must not outlive this check, whatever happens in it: the release check posts to the real /api/todos
     await keysDesk();
     await page.waitForFunction(() => todos.items.length === 1, null, { timeout: 8000 });
     await page.keyboard.press("Control+k");
@@ -2609,7 +2610,7 @@ await check("remove page: on the phone it is a full page with a Back arrow, no o
     if (!/Which retry policy/.test((await items())[0])) throw new Error("to-do item " + (await items()));
     await page.keyboard.press("Enter");
     await page.waitForSelector("#p-todo", { state: "visible" });
-    if (!(await page.locator(".td-item.open, .td-item[data-open], #pt-body .td-dtitle").count())) throw new Error("the to-do did not open");
+    await page.waitForSelector('#p-todo .td-item.open[data-id="t1"]', { timeout: 5000 }).catch(() => { throw new Error("the to-do did not open"); });
     await page.keyboard.press("Control+k");
     await page.keyboard.type("brav");
     if (!/bravo/.test((await items())[0])) throw new Error("fuzzy: " + (await items()));
@@ -2617,7 +2618,7 @@ await check("remove page: on the phone it is a full page with a Back arrow, no o
     await page.waitForSelector("#detail", { state: "visible" });
     if (!/w2:p1$/.test(await sel())) throw new Error("opened " + (await sel()));
     if (await palOpen()) throw new Error("the palette stayed open");
-    await page.unroute(/\/api\/todos$/);
+    } finally { await page.unroute(/\/api\/todos$/); }
   });
 
   await check("keys: second steps (rename, model, role) and Esc goes back one step, then closes", async () => {

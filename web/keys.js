@@ -425,7 +425,7 @@
   function runItem(it) {
     if (!it) return;
     if (it.kind === "agent") { closePalette(false); openDetail(agentId(it.a)); focusRow(agentId(it.a)); return; }
-    if (it.kind === "todo") { closePalette(false); openPage("todo"); todos.nxt = null; setTimeout(() => todoExpand(it.t.id), 0); return; }
+    if (it.kind === "todo") { closePalette(false); openPage("todo"); todos.nxt = null; todoExpand(it.t.id); return; }
     if (it.kind === "choice") { it.run(); return; }
     const c = it.c;
     if (c.step) { const a = cur(); if (a) startStep(stepFor(c.step, a)); return; }
