@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,9 +60,26 @@ type BriefSchedule struct {
 	// they count from when the schedule was set.
 	At string `json:"at,omitempty"`
 	// TZ is an IANA zone ("" is the hub's local time).
-	TZ      string    `json:"tz,omitempty"`
-	By      string    `json:"by,omitempty"`
-	Updated time.Time `json:"updated"`
+	TZ string `json:"tz,omitempty"`
+	// Always turns the skip off: every slot prompts, changed or not.
+	Always bool `json:"always,omitempty"`
+	// MaxQuiet is the longest the coordinator is left alone while nothing
+	// changed (a Go duration; "" is 6h): once the last briefing is older
+	// than that, the next slot prompts anyway.
+	MaxQuiet string    `json:"max_quiet,omitempty"`
+	By       string    `json:"by,omitempty"`
+	Updated  time.Time `json:"updated"`
+}
+
+// defaultMaxQuiet is the safety net when MaxQuiet is not set.
+const defaultMaxQuiet = 6 * time.Hour
+
+// maxQuiet is the configured safety-net interval (the default when unset).
+func (c BriefSchedule) maxQuiet() time.Duration {
+	if d, err := time.ParseDuration(c.MaxQuiet); err == nil && d >= time.Hour {
+		return d
+	}
+	return defaultMaxQuiet
 }
 
 // briefMiss is a streak of missed scheduled briefings.
@@ -86,6 +105,14 @@ type briefRun struct {
 	Missed     *briefMiss `json:"missed,omitempty"`
 	// Dismissed is the id of the streak the user dismissed.
 	Dismissed string `json:"dismissed,omitempty"`
+	// Fingerprint is what a briefing reports as it stood when the briefing
+	// published at FingerprintFor was published (see briefFingerprint).
+	Fingerprint    string    `json:"fingerprint,omitempty"`
+	FingerprintFor time.Time `json:"fingerprint_for,omitzero"`
+	// Skipped is the slot that was found unchanged and not prompted;
+	// Checked is when that was decided (shown with the briefing).
+	Skipped time.Time  `json:"skipped,omitzero"`
+	Checked *time.Time `json:"checked,omitempty"`
 }
 
 type briefSchedFile struct {
@@ -278,6 +305,14 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 		briefAt = b.At
 	}
 	slot := plan.slotAt(now)
+	// Unchanged since the last briefing (and not for too long): no prompt.
+	// The fingerprint is read outside the state lock.
+	quiet := false
+	var fp string
+	if !cur.Schedule.Always && !briefAt.IsZero() && now.Sub(briefAt) < cur.Schedule.maxQuiet() {
+		fp = s.briefFingerprint()
+		quiet = fp == cur.Run.Fingerprint && cur.Run.FingerprintFor.Equal(briefAt)
+	}
 
 	// The decision is made on a copy; the prompt goes out between two
 	// updates so the lock is not held across the network.
@@ -310,6 +345,17 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 			return string(before) != string(after)
 		}
 		r.Slot = slot
+		if r.Skipped.Equal(slot) {
+			return false // decided for this slot already; the next one looks again
+		}
+		if quiet && r.PromptedAt == nil {
+			// Nothing a briefing reports has changed: the slot counts as
+			// handled (never a miss), the coordinator is left alone.
+			t := now.UTC()
+			r.Skipped, r.Checked, r.Counted, r.Waiting = slot, &t, true, ""
+			after, _ := json.Marshal(r)
+			return string(before) != string(after)
+		}
 		if r.PromptedAt == nil {
 			a, why := s.briefCoordinator()
 			switch {
@@ -350,6 +396,64 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 		return true
 	})
 	if err != nil {
+		log.Printf("brief schedule: %v", err)
+	}
+}
+
+// briefFingerprint digests what a briefing reports, so the hub can tell
+// whether a fresh one would say anything new:
+//
+//   - to-do items: id, state, updated_at (an answer or a close changes them);
+//   - ledger entries: id, status, report_seq and the report's timestamp (a
+//     worker filing a report, finishing, landing, being lost or removed);
+//   - agents: which ids exist and whether each is done. Not working/idle,
+//     which flaps all day (a worker with a watch loop, a busy coordinator)
+//     and says nothing a briefing reports;
+//   - damaged repositories (host, path, source, since) and each host's
+//     version.
+//
+// Not in it, on purpose: hosts going up and down, branch tips, and anything
+// only an agent's transcript shows. The safety net (MaxQuiet) covers those.
+func (s *Server) briefFingerprint() string {
+	var lines []string
+	if s.todos != nil {
+		for _, t := range s.todos.list("all") {
+			lines = append(lines, fmt.Sprintf("todo %s %s %d", t.ID, t.State, t.UpdatedAt.UnixNano()))
+		}
+	}
+	if s.ledger != nil {
+		for _, e := range s.ledger.Entries() {
+			var fin int64
+			if e.FinishedAt != nil {
+				fin = e.FinishedAt.UnixNano()
+			}
+			lines = append(lines, fmt.Sprintf("entry %s %s %d %d", e.ID, e.Status, e.ReportSeq, fin))
+		}
+	}
+	for _, a := range s.fleet.Agents() {
+		lines = append(lines, fmt.Sprintf("agent %s %t", a.ID, a.Status == herdr.StatusDone))
+	}
+	for _, h := range s.fleet.Hosts() {
+		lines = append(lines, fmt.Sprintf("host %s %s", h.Name, h.Version))
+		for _, d := range h.RepoDamage {
+			lines = append(lines, fmt.Sprintf("damage %s %s %s %d", h.Name, d.Path, d.Source, d.Since.UnixNano()))
+		}
+	}
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// briefPublished records the fingerprint of a briefing just published.
+func (s *Server) briefPublished(at time.Time) {
+	if s.briefSched == nil {
+		return
+	}
+	fp := s.briefFingerprint()
+	if err := s.briefSched.update(func(f *briefSchedFile) bool {
+		f.Run.Fingerprint, f.Run.FingerprintFor, f.Run.Checked = fp, at, nil
+		return true
+	}); err != nil {
 		log.Printf("brief schedule: %v", err)
 	}
 }
@@ -466,6 +570,9 @@ type briefSchedView struct {
 	PromptedAt *time.Time `json:"prompted_at,omitempty"`
 	PromptedTo string     `json:"prompted_to,omitempty"`
 	Missed     *missView  `json:"missed,omitempty"`
+	// CheckedAt: the hub looked at the latest briefing's slot and found
+	// nothing changed, so it did not prompt (only while no newer briefing).
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
 }
 
 type missView struct {
@@ -489,6 +596,11 @@ func (s *Server) briefSchedView(now time.Time) briefSchedView {
 		v.State, v.PromptedAt, v.PromptedTo = "prompted", f.Run.PromptedAt, f.Run.PromptedTo
 	case f.Run.Waiting == missBusy:
 		v.State = "waiting"
+	}
+	if f.Run.Checked != nil {
+		if b, err := s.brief.get(); err == nil && b != nil && f.Run.Checked.After(b.At) {
+			v.CheckedAt = f.Run.Checked
+		}
 	}
 	if f.Run.Missed != nil {
 		v.Missed = &missView{briefMiss: *f.Run.Missed, Dismissed: f.Run.Dismissed == f.Run.Missed.ID}
@@ -515,13 +627,17 @@ func (s *Server) handleSetBriefSchedule(w http.ResponseWriter, r *http.Request) 
 		Every   string `json:"every"`
 		At      string `json:"at"`
 		TZ      string `json:"tz"`
+		// Always: prompt at every slot, changed or not. MaxQuiet: the
+		// safety net ("" is 6h, 1h or more).
+		Always   bool   `json:"always"`
+		MaxQuiet string `json:"max_quiet"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&b); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
 	now := time.Now().UTC()
-	c := BriefSchedule{Enabled: b.Enabled, Every: strings.TrimSpace(b.Every), At: strings.TrimSpace(b.At), TZ: strings.TrimSpace(b.TZ), By: s.by(r, ""), Updated: now}
+	c := BriefSchedule{Enabled: b.Enabled, Every: strings.TrimSpace(b.Every), At: strings.TrimSpace(b.At), TZ: strings.TrimSpace(b.TZ), Always: b.Always, MaxQuiet: strings.TrimSpace(b.MaxQuiet), By: s.by(r, ""), Updated: now}
 	// Turning it off with no interval keeps the last one for next time.
 	keep := !c.Enabled && c.Every == "" && c.At == "" && c.TZ == ""
 	if !keep {
@@ -531,6 +647,14 @@ func (s *Server) handleSetBriefSchedule(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		c.Every = fmtEvery(plan.every)
+		if c.MaxQuiet != "" {
+			d, err := time.ParseDuration(c.MaxQuiet)
+			if err != nil || d < time.Hour || d > maxBriefEvery {
+				writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_schedule", "message": "max_quiet must be a duration between 1h and 720h"})
+				return
+			}
+			c.MaxQuiet = fmtEvery(d)
+		}
 		if plan.hasAt {
 			c.At = fmt.Sprintf("%02d:%02d", plan.hh, plan.mm)
 		}
@@ -538,11 +662,12 @@ func (s *Server) handleSetBriefSchedule(w http.ResponseWriter, r *http.Request) 
 	err := s.briefSched.update(func(f *briefSchedFile) bool {
 		if keep {
 			c.Every, c.At, c.TZ = f.Schedule.Every, f.Schedule.At, f.Schedule.TZ
+			c.Always, c.MaxQuiet = f.Schedule.Always, f.Schedule.MaxQuiet
 		}
 		f.Schedule = c
 		// A new schedule starts clean: no streak, and the slot under way
-		// does not fire.
-		f.Run = briefRun{Floor: now}
+		// does not fire. What the last briefing was published against stays.
+		f.Run = briefRun{Floor: now, Fingerprint: f.Run.Fingerprint, FingerprintFor: f.Run.FingerprintFor}
 		return true
 	})
 	if err != nil {

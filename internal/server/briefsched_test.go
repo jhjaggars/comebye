@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/state"
 )
 
 func TestBriefSchedulePlan(t *testing.T) {
@@ -87,6 +90,20 @@ func promptCount(fh *fakeLaunchHerdr) int {
 	n := 0
 	for _, m := range fh.methods() {
 		if m == "agent.prompt" {
+			n++
+		}
+	}
+	return n
+}
+
+// schedPrompts counts the scheduler's prompts only (a to-do answer prompts
+// its waiting agent too).
+func schedPrompts(fh *fakeLaunchHerdr) int {
+	n := 0
+	fh.mu.Lock()
+	defer fh.mu.Unlock()
+	for _, c := range fh.calls {
+		if txt, _ := c.Params["text"].(string); c.Method == "agent.prompt" && strings.HasPrefix(txt, "Scheduled briefing") {
 			n++
 		}
 	}
@@ -266,5 +283,210 @@ func TestBriefScheduleUnknownRetries(t *testing.T) {
 	s.briefTick(ctx, base.Add(time.Hour+150*time.Second))
 	if v := schedView(t, s); v.State != "prompted" || v.Missed != nil || promptCount(fh) != 1 {
 		t.Fatalf("not prompted after it was back: %+v", v)
+	}
+}
+
+// quietSetup: an idle coordinator, an hourly schedule set just now, a
+// briefing published (its fingerprint is taken), and the first slot after it.
+func quietSetup(t *testing.T) (s *Server, fh *fakeLaunchHerdr, base time.Time) {
+	t.Helper()
+	s, fh, _ = coordServer(t)
+	if err := s.recordRole("desk/w1:p1", "coordinator", RoleCoordinator, "me"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { a, _ := s.briefCoordinator(); return a != nil })
+	base = time.Now().Truncate(time.Minute)
+	schedAt(t, s, base)
+	if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"## all quiet"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	return s, fh, base
+}
+
+func TestBriefScheduleSkipsUnchanged(t *testing.T) {
+	s, fh, base := quietSetup(t)
+	ctx := context.Background()
+	// Nothing changed (the coordinator going working/idle does not count):
+	// no prompt, however many ticks, and the briefing is marked checked.
+	fh.set(func(f *fakeLaunchHerdr) { f.agents[0].Status = herdr.StatusWorking })
+	s.manager.Refresh()
+	s.briefTick(ctx, base.Add(time.Hour+30*time.Second))
+	s.briefTick(ctx, base.Add(time.Hour+90*time.Second))
+	v := schedView(t, s)
+	if schedPrompts(fh) != 0 || v.CheckedAt == nil || v.State != "ok" || v.Missed != nil {
+		t.Fatalf("unchanged = %+v (prompts %d)", v, schedPrompts(fh))
+	}
+	// The next slot looks again and is also left alone; still no miss.
+	s.briefTick(ctx, base.Add(2*time.Hour+30*time.Second))
+	if v = schedView(t, s); schedPrompts(fh) != 0 || v.Missed != nil || !v.CheckedAt.After(base.Add(2*time.Hour)) {
+		t.Fatalf("second slot = %+v", v)
+	}
+	// A newer briefing replaces the note.
+	time.Sleep(1100 * time.Millisecond)
+	if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"## still quiet"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if v = schedView(t, s); v.CheckedAt != nil {
+		t.Fatalf("checked note outlived its briefing: %+v", v)
+	}
+}
+
+func TestBriefScheduleSkipNoCoordinatorIsNoMiss(t *testing.T) {
+	s, fh, base := quietSetup(t)
+	fh.set(func(f *fakeLaunchHerdr) { f.agents = nil })
+	s.manager.Refresh()
+	s.briefTick(context.Background(), base.Add(time.Hour+30*time.Second))
+	if v := schedView(t, s); v.Missed != nil {
+		t.Fatalf("a quiet slot counted as missed: %+v", v.Missed)
+	}
+}
+
+func TestBriefSchedulePromptsOnChange(t *testing.T) {
+	changes := map[string]func(t *testing.T, s *Server, fh *fakeLaunchHerdr){
+		"a to-do appears": func(t *testing.T, s *Server, _ *fakeLaunchHerdr) {
+			if w := do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"ship it?"}`); w.Code != 201 {
+				t.Fatal(w.Body)
+			}
+		},
+		"a to-do is answered": nil, // set below: needs a to-do before the briefing
+		"a worker files a report": func(t *testing.T, s *Server, _ *fakeLaunchHerdr) {
+			if _, ok, err := s.ledger.Report("desk/w9:p1", "done", time.Now()); err != nil || !ok {
+				t.Fatalf("report: %v %v", ok, err)
+			}
+		},
+		"an agent is done": func(t *testing.T, s *Server, fh *fakeLaunchHerdr) {
+			fh.set(func(f *fakeLaunchHerdr) { f.agents[1].Status = herdr.StatusDone })
+			s.manager.Refresh()
+			waitFor(t, func() bool {
+				for _, a := range s.fleet.Agents() {
+					if a.PaneID == "w2:p1" {
+						return a.Status == herdr.StatusDone
+					}
+				}
+				return false
+			})
+		},
+		"a repository is damaged": func(t *testing.T, s *Server, _ *fakeLaunchHerdr) {
+			s.fleet = fleet.New(s.manager, "desk", nil, fleet.Options{Logf: func(string, ...any) {}, RepoDamage: func() []state.RepoDamage {
+				return []state.RepoDamage{{Repo: "proj", Path: "/r/proj", Source: "fetch", Since: time.Now()}}
+			}})
+		},
+		"a host runs another version": func(t *testing.T, s *Server, _ *fakeLaunchHerdr) {
+			s.fleet = fleet.New(s.manager, "desk", nil, fleet.Options{Logf: func(string, ...any) {}, Version: "v9.9.9"})
+		},
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			s, fh, _ := coordServer(t)
+			if err := s.recordRole("desk/w1:p1", "coordinator", RoleCoordinator, "me"); err != nil {
+				t.Fatal(err)
+			}
+			// State the briefing is published against.
+			var todoID string
+			if w := do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"first?"}`); w.Code != 201 {
+				t.Fatal(w.Body)
+			} else {
+				todoID = todoOf(t, w.Body.Bytes()).ID
+			}
+			if _, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "b", AgentID: "desk/w9:p1", Status: ledger.Running}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, func() bool { a, _ := s.briefCoordinator(); return a != nil })
+			base := time.Now().Truncate(time.Minute)
+			schedAt(t, s, base)
+			if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"## now"}`); w.Code != 200 {
+				t.Fatal(w.Body)
+			}
+			if change == nil {
+				change = func(t *testing.T, s *Server, _ *fakeLaunchHerdr) {
+					if w := do(s, "POST", "/api/todos/"+todoID+"/answer", userHdr, `{"text":"yes"}`); w.Code != 200 {
+						t.Fatalf("answer = %d %s", w.Code, w.Body)
+					}
+				}
+			}
+			change(t, s, fh)
+			s.briefTick(context.Background(), base.Add(time.Hour+30*time.Second))
+			if v := schedView(t, s); schedPrompts(fh) != 1 || v.State != "prompted" || v.CheckedAt != nil {
+				t.Fatalf("after %q: prompts %d, %+v", name, schedPrompts(fh), v)
+			}
+		})
+	}
+}
+
+func TestBriefScheduleSafetyNetAndSwitch(t *testing.T) {
+	s, fh, base := quietSetup(t)
+	ctx := context.Background()
+	// Quiet for under 6h (the default): left alone. Past it: asked anyway.
+	s.briefTick(ctx, base.Add(5*time.Hour+30*time.Second))
+	if schedPrompts(fh) != 0 {
+		t.Fatal("prompted inside the safety net")
+	}
+	s.briefTick(ctx, base.Add(7*time.Hour))
+	if schedPrompts(fh) != 1 {
+		t.Fatalf("prompts = %d after the safety net", schedPrompts(fh))
+	}
+
+	// A shorter net, set through the API; the briefing is kept.
+	s, fh, base = quietSetup(t)
+	if w := do(s, "POST", "/api/brief/schedule", userHdr, `{"enabled":true,"every":"1h","max_quiet":"2h"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	_ = s.briefSched.update(func(f *briefSchedFile) bool { f.Schedule.Updated, f.Run.Floor = base, base; return true })
+	s.briefTick(ctx, base.Add(time.Hour+30*time.Second))
+	s.briefTick(ctx, base.Add(3*time.Hour))
+	if schedPrompts(fh) != 1 {
+		t.Fatalf("prompts = %d with max_quiet 2h", schedPrompts(fh))
+	}
+	for _, bad := range []string{`"max_quiet":"30m"`, `"max_quiet":"soon"`} {
+		if w := do(s, "POST", "/api/brief/schedule", userHdr, `{"enabled":true,"every":"1h",`+bad+`}`); w.Code != 400 {
+			t.Errorf("%s = %d", bad, w.Code)
+		}
+	}
+
+	// always: every slot prompts although nothing changed.
+	s, fh, base = quietSetup(t)
+	if w := do(s, "POST", "/api/brief/schedule", userHdr, `{"enabled":true,"every":"1h","always":true}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	_ = s.briefSched.update(func(f *briefSchedFile) bool { f.Schedule.Updated, f.Run.Floor = base, base; return true })
+	s.briefTick(ctx, base.Add(time.Hour+30*time.Second))
+	if v := schedView(t, s); schedPrompts(fh) != 1 || !v.Always {
+		t.Fatalf("always: prompts %d, %+v", schedPrompts(fh), v)
+	}
+}
+
+func TestBriefScheduleFingerprintSurvivesRestart(t *testing.T) {
+	s, fh, base := quietSetup(t)
+	ctx := context.Background()
+	// The hub restarts: the schedule file is read again.
+	re, err := openBriefSched(s.briefSched.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.briefSched = re
+	s.briefTick(ctx, base.Add(time.Hour+30*time.Second))
+	if schedPrompts(fh) != 0 {
+		t.Fatal("a restart woke the coordinator for nothing")
+	}
+	// Something changed while the hub was down: the restart does not hide it.
+	if w := do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"while you were out"}`); w.Code != 201 {
+		t.Fatal(w.Body)
+	}
+	re, err = openBriefSched(s.briefSched.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.briefSched = re
+	s.briefTick(ctx, base.Add(2*time.Hour+30*time.Second))
+	if schedPrompts(fh) != 1 {
+		t.Fatalf("prompts = %d, want 1", schedPrompts(fh))
+	}
+
+	// No fingerprint on file (a briefing from before this feature): ask.
+	s, fh, base = quietSetup(t)
+	_ = s.briefSched.update(func(f *briefSchedFile) bool { f.Run.Fingerprint, f.Run.FingerprintFor = "", time.Time{}; return true })
+	s.briefTick(ctx, base.Add(time.Hour+30*time.Second))
+	if schedPrompts(fh) != 1 {
+		t.Fatalf("no fingerprint: prompts = %d", schedPrompts(fh))
 	}
 }

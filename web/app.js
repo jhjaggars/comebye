@@ -844,6 +844,16 @@ const MISS_REASONS = {
   no_briefing: "the coordinator was asked but published nothing",
 };
 
+// briefChecked is the note "checked 14:05, no change" the hub keeps with the
+// latest briefing when it skipped a scheduled run because nothing a briefing
+// reports had changed ("" when there is none, or a newer briefing replaced it).
+function briefChecked() {
+  const sc = briefing.schedule;
+  const t = sc && sc.enabled && sc.checked_at ? Date.parse(sc.checked_at) : NaN;
+  if (Number.isNaN(t)) return "";
+  return `checked ${new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}, no change`;
+}
+
 // briefMiss is the streak of missed scheduled briefings to show, if any.
 function briefMiss() {
   const m = briefing.schedule && briefing.schedule.enabled ? briefing.schedule.missed : null;
@@ -1356,9 +1366,10 @@ function renderBrief() {
     if (!b) return `none to show${every}`;
     const at = Date.parse(b.at);
     // The age first: it is what you look for, and the rest may be cut.
-    return `${Number.isNaN(at) ? "" : `${fmtAgo(at)} ago · `}from ${b.by || "a coordinator"}${every}`;
+    const chk = briefChecked();
+    return `${Number.isNaN(at) ? "" : `${fmtAgo(at)} ago · `}from ${b.by || "a coordinator"}${chk ? " · " + chk : ""}${every}`;
   };
-  const sig = [b ? b.at : "", folded, preview, every, miss ? `${miss.id}|${miss.count}|${miss.reason}` : ""].join("|");
+  const sig = [b ? b.at : "", folded, preview, every, briefChecked(), miss ? `${miss.id}|${miss.count}|${miss.reason}` : ""].join("|");
   el.hidden = false;
   el.classList.toggle("stale", !!miss);
   if (el.dataset.sig === sig) {
@@ -1520,13 +1531,13 @@ function renderBriefs() {
   const b = briefing.data && briefing.data.markdown.trim() ? briefing.data : null;
   const miss = briefMiss();
   const earlier = briefs.history.filter((h) => !b || h.at !== b.at);
-  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefsSchedLine(), earlier.map((h) => h.at).join(","), Math.floor(Date.now() / 60000)].join("|");
+  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefsSchedLine(), briefChecked(), earlier.map((h) => h.at).join(","), Math.floor(Date.now() / 60000)].join("|");
   if (sig === briefs.sig) return;
   briefs.sig = sig;
   const top = el.scrollTop;
   const at = b ? Date.parse(b.at) : NaN;
   el.innerHTML = `<div id="br-status"></div><section class="br-card${miss ? " stale" : ""}" aria-label="Latest briefing">
-      <div class="br-head"><span class="bf-title">Latest</span><span class="bf-meta">${b ? esc((Number.isNaN(at) ? "" : fmtAgo(at) + " ago · ") + "from " + (b.by || "a coordinator")) : "none yet"}</span></div>
+      <div class="br-head"><span class="bf-title">Latest</span><span class="bf-meta">${b ? esc((Number.isNaN(at) ? "" : fmtAgo(at) + " ago · ") + "from " + (b.by || "a coordinator") + (briefChecked() ? " · " + briefChecked() : "")) : "none yet"}</span></div>
       ${miss ? missNote(miss, !!b) : ""}
       ${b ? `<div class="br-md md">${renderMarkdown(b.markdown, "brief:" + b.at)}</div>`
           : `<p class="br-empty">No briefing has been published. A coordinator publishes one with <code>comebye brief set</code>.</p>`}

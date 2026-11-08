@@ -1879,6 +1879,8 @@ func cmdBrief(e *Env, args []string) error {
 	every := fs.String("every", "", "schedule: brief every D (a duration: 24h, 12h; 1h to 720h)")
 	at := fs.String("at", "", "schedule: at this time of day (HH:MM; none for no time of day)")
 	tz := fs.String("tz", "", "schedule: the time zone of --at (IANA, e.g. Europe/Berlin; default the hub's)")
+	skip := fs.String("skip", "", "schedule: on (default) skips a slot when nothing a briefing reports changed; off asks at every slot")
+	maxQuiet := fs.String("max-quiet", "", "schedule: with --skip on, ask anyway when the last briefing is this old (default 6h, 1h or more)")
 	off := fs.Bool("off", false, "schedule: turn scheduled briefings off")
 	dismiss := fs.Bool("dismiss", false, "schedule: dismiss the note about missed scheduled briefings")
 	pos, err := parse(fs, args)
@@ -1888,9 +1890,12 @@ func cmdBrief(e *Env, args []string) error {
 	if len(pos) == 0 {
 		return usageErr("want set FILE|-, get or schedule")
 	}
-	setsSchedule := *every != "" || *at != "" || *tz != "" || *off || *dismiss
+	setsSchedule := *every != "" || *at != "" || *tz != "" || *skip != "" || *maxQuiet != "" || *off || *dismiss
 	if setsSchedule && pos[0] != "schedule" {
-		return usageErr("--every, --at, --tz, --off and --dismiss go with brief schedule")
+		return usageErr("--every, --at, --tz, --skip, --max-quiet, --off and --dismiss go with brief schedule")
+	}
+	if *skip != "" && *skip != "on" && *skip != "off" {
+		return usageErr("--skip is on or off")
 	}
 	c, err := newClient(e)
 	if err != nil {
@@ -1901,7 +1906,7 @@ func cmdBrief(e *Env, args []string) error {
 		if len(pos) != 1 {
 			return usageErr("brief schedule takes flags only")
 		}
-		return briefSchedule(e, c, *asJSON, *every, *at, *tz, *off, *dismiss)
+		return briefSchedule(e, c, *asJSON, *every, *at, *tz, *skip, *maxQuiet, *off, *dismiss)
 	case "set":
 		if len(pos) != 2 {
 			return usageErr("want brief set FILE (or - for stdin)")
@@ -1959,6 +1964,9 @@ type briefSched struct {
 	Every      string     `json:"every"`
 	At         string     `json:"at"`
 	TZ         string     `json:"tz"`
+	Always     bool       `json:"always"`
+	MaxQuiet   string     `json:"max_quiet"`
+	CheckedAt  *time.Time `json:"checked_at"`
 	By         string     `json:"by"`
 	Updated    time.Time  `json:"updated"`
 	State      string     `json:"state"`
@@ -1976,7 +1984,7 @@ type briefSched struct {
 
 // briefSchedule shows the schedule, or sets it (flags not given keep
 // their current values), or turns it off, or dismisses missed runs.
-func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz string, off, dismiss bool) error {
+func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz, skip, maxQuiet string, off, dismiss bool) error {
 	get := func() (*briefSched, []byte, error) {
 		data, err := c.raw("GET", "/api/brief/schedule", nil, nil)
 		if err != nil {
@@ -1995,8 +2003,8 @@ func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz string, off, di
 		return err
 	}
 	switch {
-	case off && (every != "" || at != "" || tz != ""):
-		return usageErr("--off takes no --every, --at or --tz")
+	case off && (every != "" || at != "" || tz != "" || skip != "" || maxQuiet != ""):
+		return usageErr("--off takes no --every, --at, --tz, --skip or --max-quiet")
 	case dismiss:
 		if cur.Missed == nil {
 			return fmt.Errorf("no missed scheduled briefings to dismiss")
@@ -2008,7 +2016,7 @@ func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz string, off, di
 		if _, err := c.raw("POST", "/api/brief/schedule", nil, map[string]any{"enabled": false}); err != nil {
 			return err
 		}
-	case every != "" || at != "" || tz != "":
+	case every != "" || at != "" || tz != "" || skip != "" || maxQuiet != "":
 		if every == "" {
 			every = cur.Every
 		}
@@ -2024,11 +2032,21 @@ func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz string, off, di
 		if tz == "" {
 			tz = cur.TZ
 		}
-		if _, err := c.raw("POST", "/api/brief/schedule", nil, map[string]any{"enabled": true, "every": every, "at": at, "tz": tz}); err != nil {
+		always := cur.Always
+		switch skip {
+		case "on":
+			always = false
+		case "off":
+			always = true
+		}
+		if maxQuiet == "" {
+			maxQuiet = cur.MaxQuiet
+		}
+		if _, err := c.raw("POST", "/api/brief/schedule", nil, map[string]any{"enabled": true, "every": every, "at": at, "tz": tz, "always": always, "max_quiet": maxQuiet}); err != nil {
 			return err
 		}
 	}
-	if dismiss || off || every != "" {
+	if dismiss || off || every != "" || at != "" || tz != "" || skip != "" || maxQuiet != "" {
 		if cur, data, err = get(); err != nil {
 			return err
 		}
@@ -2053,6 +2071,18 @@ func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz string, off, di
 		return nil
 	}
 	fmt.Fprintf(e.Stdout, "Scheduled briefings: every %s%s, set by %s %s.\n", cur.Every, atText(cur.At, cur.TZ), dash(cur.By), ago(e, cur.Updated))
+	if cur.Always {
+		fmt.Fprintln(e.Stdout, "Asks at every slot, changed or not (--skip off).")
+	} else {
+		mq := cur.MaxQuiet
+		if mq == "" {
+			mq = "6h"
+		}
+		fmt.Fprintf(e.Stdout, "Skips a slot when nothing a briefing reports changed, but asks when the last briefing is %s old (--skip, --max-quiet).\n", mq)
+	}
+	if cur.CheckedAt != nil {
+		fmt.Fprintf(e.Stdout, "Checked %s: nothing changed, no coordinator asked.\n", ago(e, *cur.CheckedAt))
+	}
 	if cur.Next != nil {
 		fmt.Fprintf(e.Stdout, "Next: %s.\n", when(*cur.Next))
 	}

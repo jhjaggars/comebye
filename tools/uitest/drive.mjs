@@ -1644,6 +1644,30 @@ await check("transcripts: no index, an old index, a stale one, a deleted session
   await page.waitForFunction(() => /isn't in the index/.test(document.querySelector("#rc-session").textContent), null, { timeout: 5000 });
 });
 
+await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\" with the briefing", async () => {
+  await publishBrief("## Status\n\nchecked-note briefing");
+  const checked = new Date(Date.now() + 1000).toISOString();
+  await page.route(/\/api\/brief$/, async (r) => {
+    const res = await r.fetch();
+    const j = await res.json();
+    j.schedule = { ...(j.schedule || {}), enabled: true, every: "1h", state: "ok", checked_at: checked };
+    await r.fulfill({ response: res, json: j });
+  });
+  try {
+    await page.goto("about:blank");
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForFunction(() => /checked \d{1,2}:\d{2}.*no change/.test(document.querySelector("#briefing .bf-meta")?.textContent || ""), null, { timeout: 8000 });
+    const t = await page.locator("#briefing .bf-meta").innerText();
+    if (!/ago · from .* · checked/.test(t)) throw new Error("meta: " + t);
+  } finally {
+    await page.unroute(/\/api\/brief$/);
+  }
+  await page.goto("about:blank");
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#briefing .bf-toggle", { state: "visible", timeout: 8000 });
+  if (/no change/.test(await page.locator("#briefing").innerText())) throw new Error("note shown without the hub saying so");
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;

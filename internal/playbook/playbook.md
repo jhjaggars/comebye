@@ -59,7 +59,7 @@ with the matches listed.
 | `comebye todo add "QUESTION" [--kind K] [--context FILE\|-] [--link URL] [--waiting AGENT]` | put a question, decision or follow-up for the user on the to-do list |
 | `comebye todo list` / `show ID` | the open and answered items / one item with its context |
 | `comebye todo answer ID "WORDS"` / `done ID` / `drop ID` | record the user's answer you relayed from chat / finish / drop an item |
-| `comebye brief schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss]` | show or set when the hub asks a coordinator for a briefing |
+| `comebye brief schedule [--every D] [--at HH:MM] [--tz ZONE] [--skip on\|off] [--max-quiet D] [--off] [--dismiss]` | show or set when the hub asks a coordinator for a briefing |
 
 Your harness may have its own tools for listing or messaging sessions
 (Claude Code's ListAgents and SendMessage, for one). Do not use them for
@@ -366,7 +366,13 @@ briefing": catch up from the ledger and the workers' reports since the
 last briefing and publish one with `comebye brief set`, even a short "no
 changes" one; an unanswered request counts as a missed run. If the user
 says they do not want to hear about missed runs, `comebye brief schedule
---dismiss` hides the note until the next streak.
+--dismiss` hides the note until the next streak. The hub does not send
+the message when nothing a briefing reports has changed since your last
+briefing (to-do items, ledger entries and reports, agents done, damaged
+repositories, host versions); the app then shows "checked HH:MM, no
+change" with your briefing. It still asks at least every 6 hours, so use
+that run to refresh your state file. The user can change this with
+`--skip off` or `--max-quiet D`.
 
 ## Rules
 

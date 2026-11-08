@@ -373,6 +373,7 @@ func (s *Server) handleSetBrief(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "brief_error", "message": err.Error()})
 		return
 	}
+	s.briefPublished(v.At)
 	writeJSON(w, map[string]any{"brief": v})
 }
 
