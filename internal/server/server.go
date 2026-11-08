@@ -168,6 +168,9 @@ type Server struct {
 	// asking counts the asks under way (they run git checks in the
 	// session's worktree), so tests can wait for them before cleaning up.
 	asking sync.WaitGroup
+	// releasing counts the releaseQueued passes started by queueing a step,
+	// so tests can wait for them before asserting or cleaning up.
+	releasing sync.WaitGroup
 	latest func(ctx context.Context, host, pane string) *transcript.Latest
 	// planPush tells the user a plan settled (the dispatcher's NotifyPlan;
 	// tests replace it).

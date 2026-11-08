@@ -26,6 +26,7 @@ func afterServer(t *testing.T) (*Server, *workerPeer) {
 	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	pu2 := &pushed{}
 	s.planPush = pu2.fn
+	t.Cleanup(s.releasing.Wait) // runs before the TempDir removal
 	return s, peer
 }
 
@@ -38,6 +39,7 @@ func queue(t *testing.T, s *Server, planID, branch, after string) (int, ledger.E
 		Queued bool         `json:"queued"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &r)
+	s.releasing.Wait() // the pass queueing started must not race what the test does next
 	if w.Code == 200 && !r.Queued {
 		t.Fatalf("not queued: %s", w.Body)
 	}

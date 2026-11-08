@@ -87,7 +87,11 @@ func (s *Server) queueHandoff(b handoffBody, from string, reply *ledger.Ref) (in
 	if err != nil {
 		return http.StatusInternalServerError, apiErr("ledger_error", err.Error())
 	}
-	go s.releaseQueued() // its steps may have reported already
+	s.releasing.Add(1)
+	go func() { // its steps may have reported already
+		defer s.releasing.Done()
+		s.releaseQueued()
+	}()
 	return http.StatusOK, map[string]any{"entry": e, "queued": true}
 }
 
