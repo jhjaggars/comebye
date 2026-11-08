@@ -1774,7 +1774,7 @@ func cmdReport(e *Env, args []string) error {
 // reportSections are the final report's sections, and verifyGroups the
 // Verification section's groups (docs/lifecycle.md).
 var (
-	reportSections = []string{"Summary", "Changes", "Verification", "Follow-ups"}
+	reportSections = []string{"Summary", "Changes", "Verification", "Follow-ups", "Decisions for the user"}
 	verifyGroups   = []string{"Verified live", "Unit tests only", "Not verified"}
 )
 

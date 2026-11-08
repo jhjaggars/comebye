@@ -1,0 +1,168 @@
+package server
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/jhjaggars/comebye/internal/ledger"
+)
+
+func TestParseReportDecisions(t *testing.T) {
+	const head = "## Summary\nx\n## Decisions for the user\n"
+	cases := []struct {
+		name                  string
+		text                  string
+		found, none, unparsed bool
+		n, skipped            int
+		q0                    string
+		opts, rec             int
+	}{
+		{"no section", "## Summary\nx\n## Follow-ups\nNone.\n", false, false, false, 0, 0, "", 0, 0},
+		{"None.", head + "None.\n", true, true, false, 0, 0, "", 0, 0},
+		{"bold none", head + "**None.**\n## Follow-ups\n", true, true, false, 0, 0, "", 0, 0},
+		{"one bullet", head + "- May I delete the old key?\n", true, false, false, 1, 0, "May I delete the old key?", 0, 0},
+		{"nested options", head + "- Which key?\n  1. Mint a key - fresh\n  2. **Reuse** the old one\n  Recommend: 2\n- Second?\n", true, false, false, 2, 0, "Which key?", 2, 1},
+		{"recommend multi", head + "- Which?\n  1. a\n  2. b\n  3. c\n  My recommendation: ok 1+3\n", true, false, false, 1, 0, "Which?", 3, 2},
+		{"carries an id", head + "- Already filed t0123456789\n- New one?\n", true, false, false, 1, 1, "New one?", 0, 0},
+		{"only ids", head + "- t0123456789 is filed\n", true, false, false, 0, 1, "", 0, 0},
+		{"prose", head + "I think you should look at the key and decide.\n", true, false, true, 0, 0, "", 0, 0},
+		{"empty", head, true, false, true, 0, 0, "", 0, 0},
+		{"ends at next heading", head + "- A?\n## Follow-ups\n- not a decision\n", true, false, false, 1, 0, "A?", 0, 0},
+		{"fenced heading ignored", "```\n## Decisions for the user\n- fake?\n```\n## Summary\nx\n", false, false, false, 0, 0, "", 0, 0},
+		{"case and colon", "## decisions for the user:\n- A?\n", true, false, false, 1, 0, "A?", 0, 0},
+	}
+	for _, c := range cases {
+		ds, found, none, unparsed, skipped, _ := parseReportDecisions(c.text)
+		if found != c.found || none != c.none || unparsed != c.unparsed || len(ds) != c.n || skipped != c.skipped {
+			t.Errorf("%s: found=%v none=%v unparsed=%v n=%d skipped=%d", c.name, found, none, unparsed, len(ds), skipped)
+			continue
+		}
+		if c.n > 0 && (ds[0].Question != c.q0 || len(ds[0].Options) != c.opts || len(ds[0].Rec) != c.rec) {
+			t.Errorf("%s: first = %+v", c.name, ds[0])
+		}
+	}
+}
+
+func decisionsServer(t *testing.T) (*Server, ledger.Entry) {
+	t.Helper()
+	s, _, _ := todoServer(t)
+	e, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "feat/x", AgentID: "desk/w9:p1", PaneID: "w9:p1",
+		AgentName: "feat-x", Status: ledger.Running, ReplyTo: &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, e
+}
+
+func report(t *testing.T, s *Server, text string) int {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"text": text})
+	return do(s, "POST", "/api/report", agentHdr("w9:p1"), string(b)).Code
+}
+
+func activeItems(s *Server) []Todo { return s.todos.list("all") }
+
+func TestReportFilesDecisions(t *testing.T) {
+	s, e := decisionsServer(t)
+	const tail = "## Summary\nx\n## Decisions for the user\n"
+	text := tail + "- Which key should the service use?\n  1. Mint a key - fresh, rotates\n  2. Reuse the old key\n  Recommend: 2\n- Delete the old branch?\n- Already asked (t0123456789)\n"
+	if c := report(t, s, text); c != http.StatusOK {
+		t.Fatalf("report = %d", c)
+	}
+	items := activeItems(s)
+	if len(items) != 2 {
+		t.Fatalf("items = %+v", items)
+	}
+	it := items[0]
+	if it.Question != "Which key should the service use?" || it.Source != SourceReport || it.CreatedBy != AutoCreator || it.Kind != "decision" ||
+		it.Waiting == nil || it.Waiting.ID != "desk/w9:p1" || len(it.Links) != 1 || it.Links[0].Handoff != e.ID ||
+		len(it.Options) != 2 || it.Options[0].Label != "Mint a key" || it.Options[0].Detail != "fresh, rotates" || len(it.Recommend) != 1 || it.Recommend[0] != 2 ||
+		!strings.Contains(it.Context, "1. **Mint a key** - fresh, rotates") || !strings.Contains(it.Context, "My recommendation: ok 2") {
+		t.Fatalf("item = %+v", it)
+	}
+	if items[1].Question != "Delete the old branch?" || len(items[1].Options) != 0 {
+		t.Fatalf("second = %+v", items[1])
+	}
+	// The same report again files nothing; a changed bullet files one.
+	report(t, s, text)
+	if n := len(activeItems(s)); n != 2 {
+		t.Fatalf("after repeat: %d items", n)
+	}
+	report(t, s, text+"- A brand new question?\n")
+	if n := len(activeItems(s)); n != 3 {
+		t.Fatalf("after change: %d items", n)
+	}
+	// A bullet already filed stays deduped after the user closed it.
+	if _, err := s.todos.close(items[1].ID, TodoDropped, "me", "moot"); err != nil {
+		t.Fatal(err)
+	}
+	report(t, s, text)
+	if n := len(activeItems(s)); n != 3 {
+		t.Fatalf("after drop and repeat: %d items", n)
+	}
+}
+
+func TestReportDecisionsNoneFilesNothing(t *testing.T) {
+	s, _ := decisionsServer(t)
+	for _, text := range []string{"## Summary\nx\n## Decisions for the user\nNone.\n", "## Summary\nx\n"} {
+		if c := report(t, s, text); c != http.StatusOK {
+			t.Fatalf("report = %d", c)
+		}
+	}
+	if n := len(activeItems(s)); n != 0 {
+		t.Fatalf("%d items", n)
+	}
+}
+
+func TestReportDecisionsCapAndFallback(t *testing.T) {
+	s, _ := decisionsServer(t)
+	var sb strings.Builder
+	sb.WriteString("## Decisions for the user\n")
+	for i := 0; i < 8; i++ {
+		sb.WriteString("- Question number " + string(rune('A'+i)) + "?\n")
+	}
+	report(t, s, sb.String())
+	items := activeItems(s)
+	if len(items) != reportMaxDecisions {
+		t.Fatalf("%d items, want %d", len(items), reportMaxDecisions)
+	}
+	if last := items[len(items)-1]; !strings.Contains(last.Context, "3 more decisions") {
+		t.Fatalf("overflow not mentioned: %q", last.Context)
+	}
+	// A section that does not parse files one pointer item, once.
+	s2, e2 := decisionsServer(t)
+	prose := "## Summary\nx\n## Decisions for the user\nYou should look at the key and decide.\n"
+	report(t, s2, prose)
+	report(t, s2, prose)
+	items = activeItems(s2)
+	if len(items) != 1 || !strings.Contains(items[0].Question, "read the report") || items[0].Links[0].Handoff != e2.ID ||
+		!strings.Contains(items[0].Context, "look at the key") {
+		t.Fatalf("fallback = %+v", items)
+	}
+	// Choices that break the rules (one option) are kept as text, not dropped.
+	s3, _ := decisionsServer(t)
+	report(t, s3, "## Decisions for the user\n- Pick?\n  1. only one\n  Recommend: 1\n")
+	items = activeItems(s3)
+	if len(items) != 1 || len(items[0].Options) != 0 || !strings.Contains(items[0].Context, "1. only one") {
+		t.Fatalf("bad options = %+v", items)
+	}
+}
+
+// A worker whose handoff is landed or marked ready to remove can report
+// again (it was refused as "not a handoff worker"), and its decisions are
+// filed.
+func TestReportAfterLandedOrMarkedRoute(t *testing.T) {
+	for _, st := range []ledger.Status{ledger.Landed, ledger.ReadyToRemove} {
+		s, _, _ := coordServer(t)
+		e, _ := s.ledger.Add(ledger.Entry{Host: "desk", Branch: "feat/x", AgentID: "desk/w9:p1", PaneID: "w9:p1", AgentName: "feat-x", Status: st, FinalReport: "old", Mark: &ledger.Mark{AgentID: "desk/w9:p1"}})
+		if c := report(t, s, "## Summary\nagain\n## Decisions for the user\n- One more?\n"); c != http.StatusOK {
+			t.Fatalf("%s: report = %d", st, c)
+		}
+		g, _ := s.ledger.Get(e.ID)
+		if g.Status != ledger.Finished || !strings.Contains(g.FinalReport, "again") || len(s.todos.list("")) != 1 {
+			t.Fatalf("%s: entry %+v, items %d", st, g, len(s.todos.list("")))
+		}
+	}
+}

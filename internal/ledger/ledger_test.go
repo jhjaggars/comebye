@@ -280,9 +280,9 @@ func TestExplicitReport(t *testing.T) {
 		t.Fatalf("second = %+v", e2)
 	}
 	s.Observe(idle, now)
-	// New work after that is new work.
+	// New work after that is new work; the worker's own report stays.
 	s.Observe(work, now)
-	if got, _ := s.Get(asked.ID); got.Status != Running || got.FinalReport != "" || got.ReportSource != "" || got.Callback != nil {
+	if got, _ := s.Get(asked.ID); got.Status != Running || got.FinalReport != "second" || got.ReportSource != "explicit" || got.Callback != nil {
 		t.Fatalf("rerun = %+v", got)
 	}
 }
@@ -300,8 +300,72 @@ func TestExplicitReportGrace(t *testing.T) {
 		t.Fatalf("reopened inside the grace: %+v", g)
 	}
 	s.Observe(work, now.Add(reportTurnGrace+time.Second))
-	if g, _ := s.Get(e.ID); g.Status != Running || g.FinalReport != "" || g.ReportSource != "" {
+	if g, _ := s.Get(e.ID); g.Status != Running || g.FinalReport != "done" || g.ReportSource != "explicit" {
 		t.Fatalf("not reopened after the grace: %+v", g)
+	}
+}
+
+// Only `comebye report` replaces a worker's own report: a later round that
+// ends idle, and the capture of its last message, leave it alone. A guessed
+// report is still cleared and guessed again.
+func TestExplicitReportSurvivesLaterRounds(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	e, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running})
+	now := time.Now()
+	work := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking)}
+	idle := []herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusIdle)}
+	s.Report(e.AgentID, "## Summary\nthe report", now)
+	later := now.Add(reportTurnGrace + time.Minute)
+	s.Observe(work, later) // asked to do more
+	if c := s.Observe(idle, later.Add(time.Minute)); len(c) != 0 {
+		// A capture would be harmless only if SetReport refuses it.
+		for _, en := range c {
+			s.SetReport(en.ID, en.FinishedAt, "Done, anything else?")
+		}
+	}
+	got, _ := s.Get(e.ID)
+	s.SetReport(e.ID, got.FinishedAt, "Done, anything else?")
+	if got, _ = s.Get(e.ID); got.Status != Finished || got.FinalReport != "## Summary\nthe report" || got.ReportSource != "explicit" {
+		t.Fatalf("after a later round = %+v", got)
+	}
+	// A new explicit report does replace it.
+	s.Report(e.AgentID, "newer", later.Add(2*time.Minute))
+	if got, _ = s.Get(e.ID); got.FinalReport != "newer" {
+		t.Fatalf("newer = %+v", got)
+	}
+	// A guess is cleared by the next round.
+	g, _ := s.Add(Entry{AgentID: "desk/w8:p1", Status: Running})
+	gwork := []herdr.AgentInfo{agent("desk/w8:p1", herdr.StatusWorking)}
+	gidle := []herdr.AgentInfo{agent("desk/w8:p1", herdr.StatusIdle)}
+	s.Observe(gwork, now)
+	s.Observe(gidle, now)
+	gg, _ := s.Get(g.ID)
+	s.SetReport(g.ID, gg.FinishedAt, "a guess")
+	s.Observe(gwork, now)
+	if gg, _ = s.Get(g.ID); gg.Status != Running || gg.FinalReport != "" {
+		t.Fatalf("guess kept: %+v", gg)
+	}
+}
+
+// A worker whose handoff is landed or marked ready to remove can still
+// report: that is a new round's report, and the mark no longer holds.
+func TestReportAfterLandedOrMarked(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	now := time.Now()
+	l, _ := s.Add(Entry{AgentID: "desk/w1:p1", Status: Landed, FinalReport: "old"})
+	if e, ok, err := s.Report(l.AgentID, "after landing", now); !ok || err != nil || e.Status != Finished || e.FinalReport != "after landing" {
+		t.Fatalf("landed: %+v %v %v", e, ok, err)
+	}
+	m, _ := s.Add(Entry{AgentID: "desk/w2:p1", Status: Finished, FinalReport: "old"})
+	if _, err := s.SetMark(Mark{AgentID: m.AgentID, Reason: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.Get(m.ID); g.Status != ReadyToRemove {
+		t.Fatalf("not marked: %+v", g)
+	}
+	e, ok, err := s.Report(m.AgentID, "after the mark", now)
+	if !ok || err != nil || e.Status != Finished || e.FinalReport != "after the mark" || e.Mark != nil || e.MarkedFrom != "" {
+		t.Fatalf("marked: %+v %v %v", e, ok, err)
 	}
 }
 

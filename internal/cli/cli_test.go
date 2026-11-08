@@ -633,23 +633,23 @@ func TestReport(t *testing.T) {
 		t.Fatalf("body %s", b)
 	}
 	// A report missing sections is recorded, with a warning.
-	if !strings.Contains(errb.String(), "warning: the report is not in the handoff's format: missing ## Changes, ## Verification, ## Follow-ups") || strings.Contains(out.String(), "You can stop now") {
+	if !strings.Contains(errb.String(), "warning: the report is not in the handoff's format: missing ## Changes, ## Verification, ## Follow-ups, ## Decisions for the user") || strings.Contains(out.String(), "You can stop now") {
 		t.Fatalf("warning: %s / %s", errb, out)
 	}
 	out.Reset()
 	errb.Reset()
-	e.Stdin = strings.NewReader("## Summary\nok\n## Changes\n- a\n## Verification\n### Verified live\n- ran it\n### Unit tests only\nnone\n### Not verified\nnone\n## Follow-ups\nNone.\n")
+	e.Stdin = strings.NewReader("## Summary\nok\n## Changes\n- a\n## Verification\n### Verified live\n- ran it\n### Unit tests only\nnone\n### Not verified\nnone\n## Follow-ups\nNone.\n## Decisions for the user\nNone.\n")
 	if code := run(e, "report", "-"); code != 0 || errb.Len() != 0 || !strings.Contains(out.String(), "You can stop now") {
 		t.Fatalf("good report: %d %s %s", code, out, errb)
 	}
 }
 
 func TestReportProblems(t *testing.T) {
-	if p := reportProblems("## Summary\n## Changes\n## Verification\nVerified live: x\n## Follow-ups\nVerified live, Unit tests only, Not verified\n"); len(p) != 1 ||
+	if p := reportProblems("## Summary\n## Changes\n## Verification\nVerified live: x\n## Follow-ups\nVerified live, Unit tests only, Not verified\n## Decisions for the user\nNone.\n"); len(p) != 1 ||
 		!strings.Contains(p[0], "Unit tests only, Not verified") {
 		t.Fatalf("groups outside Verification count: %v", p)
 	}
-	if p := reportProblems("## summary\n## changes\n##  Verification\n**Verified live** a\n**Unit tests only** b\n**Not verified** c\n## Follow-ups\n"); len(p) != 0 {
+	if p := reportProblems("## summary\n## changes\n##  Verification\n**Verified live** a\n**Unit tests only** b\n**Not verified** c\n## Follow-ups\n## Decisions for the user\n"); len(p) != 0 {
 		t.Fatalf("problems = %v", p)
 	}
 }

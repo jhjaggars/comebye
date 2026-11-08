@@ -681,8 +681,14 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 				e.SawWorking, changed = true, true
 			}
 			if e.Reported() && !(e.AwaitIdle && e.FinishedAt != nil && now.Sub(*e.FinishedAt) < reportTurnGrace) {
-				e.ReportSource = ""
-				e.Status, e.FinishedAt, e.FinalReport, e.ReportTries = Running, nil, "", 0
+				// A new round. The worker's own report stays until it files
+				// another: what it says next on going idle is not a report
+				// (SetReport leaves an explicit one alone). A guessed report
+				// is cleared, to be guessed again.
+				if e.ReportSource != "explicit" {
+					e.FinalReport, e.ReportTries = "", 0
+				}
+				e.Status, e.FinishedAt = Running, nil
 				e.Callback = nil
 				changed = true
 			}
@@ -770,8 +776,13 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := s.byAgent(agentID)
-	if e == nil || (e.Status != Running && e.Status != Landing && !e.Reported()) {
+	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != ReadyToRemove && !e.Reported()) {
 		return Entry{}, false, nil
+	}
+	if e.Status == ReadyToRemove {
+		// A marked worker that reports again is at work again: the mark
+		// no longer holds, and this is a new round's report.
+		e.Mark, e.MarkedFrom, e.Status = nil, "", Finished
 	}
 	t := now.UTC()
 	if e.Status == Landing {

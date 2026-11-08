@@ -345,6 +345,10 @@ fresh from the to-do list each time, never from memory:
   list and "My recommendation: ok N" into the context itself and the app
   draws exact buttons from the fields; the user's answer comes back as
   `ok 2`. Do not hand-write the list in the context.
+- A worker's report may end with `## Decisions for the user`; the hub files
+  each bullet as an item (source `hub-report`, waiting on that worker) when
+  it records the report, so do not add them again. They appear in
+  `comebye todo list` and belong in "Needs you".
 - Before each briefing run `comebye todo list`. An item marked
   `answered` has an answer that has not reached the agent that waits: the
   user answered in the app (the hub sends you a "Comebye (hub notice)"

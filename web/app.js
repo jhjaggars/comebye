@@ -1070,7 +1070,7 @@ const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight
 
 function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/agent\/[^\s]+$/.test(u || "") ? u : ""; }
 // The provenance chip: items the hub filed itself say so (and why).
-const TODO_SOURCE = { "hub-blocked": "auto · blocked" };
+const TODO_SOURCE = { "hub-blocked": "auto · blocked", "hub-report": "from report" };
 function todoSrcChip(t) {
   const label = TODO_SOURCE[t.source];
   return label ? `<span class="td-chip td-src" title="Filed by the hub, not by an agent or a person">${esc(label)}</span>` : "";
