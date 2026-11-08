@@ -140,7 +140,7 @@ func TestAppTerminalViewIsKeyedByAgent(t *testing.T) {
 		`(?s)function resetTerminalView\(\) \{.*?outputAbort\.abort\(\).*?\$\("output"\)\.textContent = "";.*?\$\("chat"\)\.style\.display = "";`,
 		`(?s)async function refreshOutput\([a-z]*\) \{.*?const pane = state\.selected;.*?signal: ctl\.signal.*?if \(state\.selected !== pane \|\| !state\.chat \|\| !state\.chat\.terminal\) return;`,
 		`\$\("d-refresh"\)\.addEventListener\("click", refreshView\)`,
-		`(?s)function refreshView\(\) \{.*?outputBusy = false;.*?state\.sending = false;`,
+		`(?s)function refreshView\(\) \{.*?outputBusy = false;.*?state\.sending = 0;`,
 		`echoInOutput\(text\)`,
 	} {
 		if !regexp.MustCompile(re).Match(src) {
@@ -167,7 +167,7 @@ func TestAppPollsAfterSend(t *testing.T) {
 	}
 	for _, re := range []string{
 		`Date\.now\(\) < state\.pollUntil`,
-		`(?s)async function sendPrompt\(\) \{.*?state\.pollUntil = Date\.now\(\) \+ POLL_AFTER_SEND_MS;.*?refreshOutput\(true\)`,
+		`(?s)async function postPrompt\(job\) \{.*?state\.pollUntil = Date\.now\(\) \+ POLL_AFTER_SEND_MS;.*?refreshOutput\(true\)`,
 		`(?s)async function sendKeys\(.*?state\.pollUntil = Date\.now\(\) \+ POLL_AFTER_SEND_MS;`,
 		`(?s)async function refreshOutput\(force\) \{.*?force === true`,
 	} {
