@@ -206,8 +206,8 @@ func TestFindServers(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 	for _, p := range got {
-		if !want[p] {
-			t.Errorf("unexpected pid %d", p)
+		if !want[p.pid] {
+			t.Errorf("unexpected pid %d", p.pid)
 		}
 	}
 	// A different uid owns none of them.
@@ -258,5 +258,30 @@ func TestRealSIGTERM(t *testing.T) {
 	}
 	if o.isAlive(cmd.Process.Pid) {
 		t.Fatal("alive after SIGTERM")
+	}
+}
+
+// On a shared host the servers running this install's binary are chosen; the
+// binary may already be replaced ("(deleted)").
+func TestSeveralServersPreferThisInstall(t *testing.T) {
+	root := fakeProc(t, map[int][]string{
+		10: {"comebye", "-addr", ":1"}, // another checkout's dev server
+		11: {"comebye", "-addr", ":2"}, // this install's
+		12: {"comebye", "-addr", ":3"}, // another install's
+	})
+	bin := filepath.Join(t.TempDir(), "comebye")
+	os.WriteFile(bin, nil, 0o755)
+	os.Symlink(bin+" (deleted)", filepath.Join(root, "11", "exe"))
+	os.Symlink("/elsewhere/comebye", filepath.Join(root, "10", "exe"))
+	os.Symlink("/other/comebye", filepath.Join(root, "12", "exe"))
+	o := Options{ProcRoot: root, Bin: bin}
+	pids, err := serverPIDs(&o)
+	if err != nil || len(pids) != 1 || pids[0] != 11 {
+		t.Fatalf("%v %v", pids, err)
+	}
+	// none of them is ours: ambiguous, refuse
+	o.Bin = filepath.Join(t.TempDir(), "comebye")
+	if _, err := serverPIDs(&o); err == nil {
+		t.Fatal("picked one of several unrelated servers")
 	}
 }

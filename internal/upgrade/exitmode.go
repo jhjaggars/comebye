@@ -145,9 +145,26 @@ func serverPIDs(o *Options) ([]int, error) {
 	if root == "" {
 		root = "/proc"
 	}
-	pids, err := findServers(root, os.Getpid(), os.Getuid())
+	procs, err := findServers(root, os.Getpid(), os.Getuid())
 	if err != nil {
 		return nil, err
+	}
+	// Several servers (a shared host, another checkout's dev server): the
+	// ones running this install's binary are the ones to restart.
+	if len(procs) > 1 {
+		var mine []serverProc
+		for _, p := range procs {
+			if p.exe != "" && p.exe == cleanExe(o.Bin) {
+				mine = append(mine, p)
+			}
+		}
+		if len(mine) > 0 {
+			procs = mine
+		}
+	}
+	var pids []int
+	for _, p := range procs {
+		pids = append(pids, p.pid)
 	}
 	if len(pids) > 1 {
 		return nil, fmt.Errorf("%d comebye servers run as this user (pids %v): pass --pid for the one to restart", len(pids), pids)
@@ -155,15 +172,28 @@ func serverPIDs(o *Options) ([]int, error) {
 	return pids, nil
 }
 
+type serverProc struct {
+	pid int
+	exe string // the executable, "" when unreadable
+}
+
+// cleanExe resolves symlinks of an installed binary path.
+func cleanExe(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
 // findServers lists the processes under procRoot that run the comebye
 // server: the command is comebye with no subcommand (no arguments, or only
 // flags), owned by uid, and not self.
-func findServers(procRoot string, self, uid int) ([]int, error) {
+func findServers(procRoot string, self, uid int) ([]serverProc, error) {
 	ents, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, fmt.Errorf("list processes: %w", err)
 	}
-	var out []int
+	var out []serverProc
 	for _, e := range ents {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || pid == self {
@@ -193,7 +223,8 @@ func findServers(procRoot string, self, uid int) ([]int, error) {
 		}) {
 			continue // asks and exits, not a server
 		}
-		out = append(out, pid)
+		exe, _ := os.Readlink(filepath.Join(dir, "exe"))
+		out = append(out, serverProc{pid, strings.TrimSuffix(exe, " (deleted)")})
 	}
 	return out, nil
 }
