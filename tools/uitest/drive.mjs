@@ -1731,7 +1731,15 @@ await check("to-do: items show with their context; answer, done and drop work fr
 // ---- the to-do accordion: one item open, keys, focus after an answer, drafts across refreshes ----
 const postTodos = (list) => page.evaluate(async (list) => {
   const out = [];
-  for (const b of list) out.push((await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ no_wait: true, ...b }) }).then((r) => r.json())).todo.id);
+  for (const b of list) {
+    // The server allows 20 adds a minute: when a run is over that, wait the window out.
+    for (let tries = 0; ; tries++) {
+      const r = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ no_wait: true, ...b }) });
+      if (r.status === 429 && tries < 20) { await new Promise((ok) => setTimeout(ok, 4000)); continue; }
+      out.push((await r.json()).todo.id);
+      break;
+    }
+  }
   await loadTodos();
   return out;
 }, list);
@@ -1831,30 +1839,111 @@ await check("to-do accordion (desktop): one item open at a time; keys move, answ
   await dropTodos(ids);
 });
 
-await check("to-do choices (desktop): a numbered list in the context becomes choice buttons; they fill the answer box as ok 1+2; the recommendation is marked; a digit key picks; the queue shows what is next", async () => {
+const CHOICE_CTX = "Ways:\n\n1. **Rotate now.** wait\n2. **Rotate later.** no wait\n3. **Both.** why not\n\nMy recommendation: ok 1+3.";
+// What the server holds for a to-do (its state and answer text), not the page's overlay.
+const serverTodo = (id) => page.evaluate(async (id) => { const d = await fetch("/api/todos").then((r) => r.json()); const t = d.todos.find((x) => x.id === id); return t ? { state: t.state, text: t.answer && t.answer.text } : null; }, id);
+// One to-do per call (the server rate-limits adds to 20 a minute); two when the queue's next line is under test.
+const openChoices = async (q, two = false) => {
   await desktopList(1280, "#/todo");
-  const ids = await postTodos([{ question: "choices one: which way?", kind: "decision", context: "Ways:\n\n1. **Rotate now.** wait\n2. **Rotate later.** no wait\n3. **Both.** why not\n\nMy recommendation: ok 1+3." }, { question: "choices two: plain", kind: "action" }]);
+  await page.evaluate(() => { CHOICE_UNDO_MS = 1200; });
+  const ids = await postTodos([{ question: q, kind: "decision", context: CHOICE_CTX }, ...(two ? [{ question: q + " (other)", kind: "action" }] : [])]);
   const it = `#pt-body .td-item[data-id="${ids[0]}"]`;
   await page.locator(it + " > .td-row").click();
   await page.waitForSelector(it + ".open .td-opt");
-  const box = page.locator(it + " .td-text");
+  return { ids, it, box: page.locator(it + " .td-text") };
+};
+
+await check("to-do choices (desktop): a numbered list in the context becomes choice buttons; the recommendation is marked; Shift-click builds a pending combination in the answer box without sending; typed text is kept (the choice goes in front); the queue shows what is next", async () => {
+  const { ids, it, box } = await openChoices("choices one: which way?", true);
   if ((await page.locator(it + " .td-opt[data-n]").count()) !== 3) throw new Error("expected 3 choices");
   if (!(await page.locator(it + " .td-opt.rec[data-n='1']").count()) || !(await page.locator(it + " .td-opt.rec[data-n='3']").count()) || (await page.locator(it + " .td-opt.rec[data-n='2']").count())) throw new Error("recommendation marks wrong");
-  await page.locator(it + " .td-opt[data-n='2']").click();
-  if ((await box.inputValue()) !== "ok 2") throw new Error("pick: " + await box.inputValue());
-  await page.locator(it + " .td-opt[data-n='1']").click();
+  if (!/Send the recommendation: ok 1\+3/.test(await page.locator(it + " .td-rec").innerText())) throw new Error("recommendation button text");
+  await page.locator(it + " .td-opt[data-n='2']").click({ modifiers: ["Shift"] });
+  if ((await box.inputValue()) !== "ok 2") throw new Error("shift pick: " + await box.inputValue());
+  await page.locator(it + " .td-opt[data-n='1']").click({ modifiers: ["Shift"] });
   if ((await box.inputValue()) !== "ok 1+2" || (await page.locator(it + " .td-opt.on").count()) !== 2) throw new Error("two picks: " + await box.inputValue());
-  await page.locator(it + " .td-opt[data-n='2']").click();
+  await page.locator(it + " .td-opt[data-n='2']").click({ modifiers: ["Shift"] });
   if ((await box.inputValue()) !== "ok 1") throw new Error("unpick: " + await box.inputValue());
-  await page.locator(it + " .td-rec").click();
-  if ((await box.inputValue()) !== "ok 1+3") throw new Error("recommendation: " + await box.inputValue());
+  await page.waitForTimeout(1600);
+  if ((await serverTodo(ids[0])).state !== "open") throw new Error("a shift-click sent the answer");
+  // Typed text that did not come from a button is not replaced and not sent.
+  await box.fill("because the old key leaks");
+  await page.locator(it + " .td-opt[data-n='3']").click();
+  if ((await box.inputValue()) !== "ok 3 because the old key leaks") throw new Error("front: " + await box.inputValue());
+  if (!/to the front of your answer/.test(await page.locator("#toast").innerText())) throw new Error("no toast saying so: " + await page.locator("#toast").innerText());
+  await page.waitForTimeout(1600);
+  if ((await serverTodo(ids[0])).state !== "open") throw new Error("typed text was sent by a choice click");
   await box.fill("");
-  await page.locator(it + " > .td-row").focus();
-  await page.keyboard.press("2");
-  if ((await box.inputValue()) !== "ok 2") throw new Error("digit key: " + await box.inputValue());
   if (!(await page.locator("#pt-body .td-nx").count())) throw new Error("no Next up mark");
   if (!/Next:/.test(await page.locator(it + " .td-after").innerText())) throw new Error("no next line");
   await dropTodos(ids);
+});
+
+await check("to-do choices: a click sends at once (the item is answered on screen, a toast offers Undo) and the request goes out when the window ends", async () => {
+  const { ids, it } = await openChoices("choices send: which way?");
+  await page.locator(it + " .td-opt[data-n='2']").click();
+  await page.waitForFunction((i) => todos.items.find((x) => x.id === i)?.state === "answered" && !document.querySelector(`#pt-body .td-item.open[data-id="${i}"]`), ids[0], { timeout: 1000 });
+  const toast = await page.locator("#toast").innerText();
+  if (!/Sent: ok 2/.test(toast) || !/Undo/.test(toast)) throw new Error("toast: " + toast);
+  if ((await serverTodo(ids[0])).state !== "open") throw new Error("the request went out before the window ended");
+  await page.waitForFunction(async (i) => { const d = await fetch("/api/todos").then((r) => r.json()); const t = d.todos.find((x) => x.id === i); return t && t.state !== "open" && t.answer.text === "ok 2"; }, ids[0], { timeout: 6000 });
+  await dropTodos(ids);
+});
+
+await check("to-do choices: Undo inside the window puts the item back, with its draft, and nothing is ever sent", async () => {
+  const { ids, it, box } = await openChoices("choices undo: which way?");
+  await page.locator(it + " .td-opt[data-n='1']").click({ modifiers: ["Shift"] }); // a pending pick is the draft
+  await page.locator(it + " .td-opt[data-n='3']").click();                          // adds 3 and sends "ok 1+3"
+  await page.waitForFunction((i) => todos.items.find((x) => x.id === i)?.state === "answered" && !document.querySelector(`#pt-body .td-item.open[data-id="${i}"]`), ids[0], { timeout: 1000 });
+  if (!/Sent: ok 1\+3/.test(await page.locator("#toast").innerText())) throw new Error("toast: " + await page.locator("#toast").innerText());
+  await page.locator("#toast .toast-act").click();
+  await page.waitForFunction((i) => { const e = document.querySelector(`#pt-body .td-item[data-id="${i}"]`); return todos.items.find((x) => x.id === i)?.state === "open" && e && !e.classList.contains("answered"); }, ids[0], { timeout: 2000 });
+  await page.locator(it + " > .td-row").evaluate((r) => { if (!r.closest(".td-item").classList.contains("open")) r.click(); });
+  if ((await page.locator(it + " .td-text").inputValue()) !== "ok 1") throw new Error("draft after undo: " + await page.locator(it + " .td-text").inputValue());
+  await page.waitForTimeout(2000);
+  if ((await serverTodo(ids[0])).state !== "open") throw new Error("an undone choice was sent");
+  await dropTodos(ids);
+});
+
+await check("to-do choices: the recommendation, a digit key and Shift+digit then Answer all send; leaving the page inside the window still sends", async () => {
+  // The answer requests are captured (and answered 200) so one to-do serves all three: the server
+  // keeps it open and a reset puts it back, which also keeps under the server's 20 adds a minute.
+  const sent = [];
+  const cap = async (route) => { sent.push(JSON.parse(route.request().postData() || "{}").text); await route.fulfill({ json: {} }); };
+  const c = await openChoices("choices keys: which way?");
+  await page.route(/\/api\/todos\/[^/]+\/answer$/, cap);
+  const reset = async () => {
+    await page.evaluate(async (id) => { todos.pend.drop(id); todos.openId = id; todos.loadedAt = 0; await loadTodos(); }, c.ids[0]);
+    await page.waitForSelector(c.it + ".open .td-opt");
+  };
+  const waitSent = (n) => page.waitForFunction(() => true).then(async () => { for (let k = 0; k < 80 && sent.length < n; k++) await page.waitForTimeout(100); if (sent.length < n) throw new Error(`only ${sent.length} sent: ` + JSON.stringify(sent)); });
+  // The recommendation button sends ok 1+3.
+  await page.locator(c.it + " .td-rec").click();
+  await waitSent(1);
+  await reset();
+  // A digit key sends that choice.
+  await page.locator(c.it + " > .td-row").focus();
+  await page.keyboard.press("2");
+  await waitSent(2);
+  await reset();
+  // Shift+digit builds a combination, shown in the box (the keys stay with the list); Answer sends it.
+  await page.locator(c.it + " > .td-row").focus();
+  await page.keyboard.press("Shift+Digit1");
+  await page.keyboard.press("Shift+Digit2");
+  if ((await c.box.inputValue()) !== "ok 1+2") throw new Error("combo in the box: " + await c.box.inputValue());
+  await page.locator(c.it + " .td-answer-btn").click();
+  await waitSent(3);
+  if (JSON.stringify(sent) !== JSON.stringify(["ok 1+3", "ok 2", "ok 1+2"])) throw new Error("sent: " + JSON.stringify(sent));
+  await page.unroute(/\/api\/todos\/[^/]+\/answer$/, cap);
+  await dropTodos(c.ids);
+  // Reloading inside the window sends it, for real.
+  const d = await openChoices("choices leave: which way?");
+  await page.evaluate(() => { CHOICE_UNDO_MS = 30000; });
+  await page.locator(d.it + " .td-opt[data-n='2']").click();
+  await page.waitForFunction((i) => todos.items.find((x) => x.id === i)?.state === "answered", d.ids[0], { timeout: 1000 });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForFunction(async (i) => { const r = await fetch("/api/todos").then((x) => x.json()); const t = r.todos.find((x) => x.id === i); return t && t.state !== "open" && t.answer.text === "ok 2"; }, d.ids[0], { timeout: 6000 });
+  await dropTodos(d.ids);
 });
 
 await check("to-do accordion (phone): one item open; a draft survives a poll and a reload; a refresh that closes the open item opens the next and keeps the draft; a refresh never takes focus", async () => {

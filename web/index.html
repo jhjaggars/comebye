@@ -676,6 +676,8 @@
       z-index: 100;
     }
     #toast.show { opacity: 1; }
+    #toast.act { pointer-events: auto; }
+    #toast .toast-act { margin-left: 4px; min-height: 28px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--blue); background: var(--chip-blue); color: var(--blue); font: inherit; font-weight: 600; cursor: pointer; }
     #toast.error { border-color: var(--red); color: var(--red); }
     #update-banner {
       position: fixed; left: 50%; top: calc(8px + env(safe-area-inset-top, 0px));
@@ -1297,6 +1299,7 @@
     .td-opt.on { background: var(--chip-blue); border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
     .td-opt.td-rec { border-style: dashed; border-color: color-mix(in srgb, var(--green) 55%, var(--border)); color: var(--green); }
     .td-opt.td-rec span::after { content: none; }
+    .td-opts-hint { flex-basis: 100%; color: var(--muted); font-size: 12px; }
     .td-opt:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
     .tds-none { display: none; position: absolute; left: var(--td-list-w); top: 0; right: 0; bottom: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 0 12%; border-left: 1px solid var(--border); color: var(--muted); }
     .tds-none b { color: var(--text); font-size: 18px; font-weight: 650; }
@@ -1676,7 +1679,7 @@
   <section id="p-todo" class="page" aria-label="To do">
     <header><h2>To do</h2><span class="pg-count" id="pt-count"></span></header>
     <div class="page-body" id="pt-body"></div>
-    <div class="pt-keys" id="pt-keys" hidden><span><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>1</kbd>–<kbd>9</kbd> pick a choice</span><span><kbd>Enter</kbd> write an answer</span><span><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> send</span><span><kbd>Esc</kbd> leave the box, then close</span></div>
+    <div class="pt-keys" id="pt-keys" hidden><span><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>1</kbd>–<kbd>9</kbd> send a choice</span><span><kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> combine</span><span><kbd>Enter</kbd> write an answer</span><span><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> send</span><span><kbd>Esc</kbd> leave the box, then close</span></div>
   </section>
 
   <!-- New agent ("+" in the list header) -->

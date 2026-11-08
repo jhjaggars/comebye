@@ -102,6 +102,19 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => (el.className = ""), 2600);
 }
 
+// toastAction: a toast with one button (Undo), on screen for ms.
+function toastAction(msg, label, onClick, ms) {
+  const el = $("toast");
+  el.textContent = "";
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "toast-act"; b.textContent = label;
+  b.onclick = () => { el.className = ""; onClick(); };
+  el.append(msg + " · ", b);
+  el.className = "show act";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.className = ""), ms);
+}
+
 // ---- optimistic actions ----
 //
 // A tap must look done within a frame, whatever the network does: the app
@@ -1195,8 +1208,8 @@ function todoOptsHtml(t) {
   if (!opts.length) return "";
   const picked = todoPicked(todoDraft(t.id));
   return `<div class="td-opts" role="group" aria-label="Choices">` + opts.map((o) =>
-    `<button type="button" class="td-opt${rec.includes(o.n) ? " rec" : ""}${picked.includes(o.n) ? " on" : ""}" data-n="${o.n}" aria-pressed="${picked.includes(o.n)}" title="${escAttr(o.detail ? `${o.detail} (adds ${o.n} to the answer)` : `Adds ${o.n} to the answer`)}"><kbd>${o.n}</kbd><span>${esc(o.label)}</span></button>`).join("") +
-    (rec.length ? `<button type="button" class="td-opt td-rec" data-fill="ok ${rec.join("+")}"><span>Use the recommendation: ok ${rec.join("+")}</span></button>` : "") + `</div>`;
+    `<button type="button" class="td-opt${rec.includes(o.n) ? " rec" : ""}${picked.includes(o.n) ? " on" : ""}" data-n="${o.n}" aria-pressed="${picked.includes(o.n)}" title="${escAttr(o.detail ? `${o.detail} (sends “ok ${o.n}” now; Shift-click to combine choices first)` : `Sends “ok ${o.n}” now (Shift-click to combine choices first)`)}"><kbd>${o.n}</kbd><span>${esc(o.label)}</span></button>`).join("") +
+    (rec.length ? `<button type="button" class="td-opt td-rec" data-fill="ok ${rec.join("+")}" title="Sends “ok ${rec.join("+")}” now"><span>Send the recommendation: ok ${rec.join("+")}</span></button>` : "") + `<span class="td-opts-hint">Click a choice to send it · Shift-click to combine, then Answer</span></div>`;
 }
 function todoSyncOpts(item, text) {
   const picked = todoPicked(text);
@@ -1206,13 +1219,15 @@ function todoSyncOpts(item, text) {
     b.setAttribute("aria-pressed", String(on));
   });
 }
+// True while a Shift+digit key adds a pick: the keys stay with the list, not the box.
+let todoKeyPick = false;
 // Puts text in an item's answer box as if typed, and leaves the cursor there.
-function todoFill(item, text) {
+function todoFill(item, text, focus = !todoKeyPick) {
   const box = item.querySelector(".td-text");
   if (!box) return;
   box.value = text;
   box.dispatchEvent(new Event("input", { bubbles: true }));
-  box.focus({ preventScroll: true });
+  if (focus) box.focus({ preventScroll: true });
   box.setSelectionRange(box.value.length, box.value.length);
 }
 
@@ -1457,10 +1472,11 @@ function todoReapply() {
 
 // todoAct: the item leaves the open list in this frame, the POST goes out
 // behind it. On failure it comes back, open, with the draft in its box.
-async function todoAct(id, what, body) {
+async function todoAct(id, what, body, opts = {}) {
   if (todos.pend.busy(id)) return; // already on its way
   const t = todos.items.find((x) => x.id === id);
   if (!t) return;
+  if (opts.undoMs) flushChoiceUndo(); // one undo window at a time: an earlier one ends now
   const next = todoNextOpen(id, todoOrder().map((x) => x.id));
   const hadFocus = todoHasFocus();
   const prev = { item: JSON.parse(JSON.stringify(t)), draft: todos.drafts.get(id), open: todos.open, answered: todos.answered, at: todos.items.indexOf(t) };
@@ -1475,26 +1491,86 @@ async function todoAct(id, what, body) {
     todos.follow = hadFocus;
   }
   renderTodos(true);
-  try {
-    await api(`/api/todos/${encodeURIComponent(id)}/${what}`, { method: "POST", body: JSON.stringify(body || {}) });
-    todos.pend.settle(id);
-    toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : "Dropped");
-  } catch (e) {
-    // Put it back as it was, with the typed answer, so a second try is one tap.
+  // Puts the item back as it was. keepText: the typed answer comes back in its box
+  // (a failed send), not just the draft it had before (an undo).
+  const restore = (keepText) => {
     todos.pend.drop(id);
     todos.items = todos.items.filter((x) => x.id !== id);
     todos.items.splice(Math.min(prev.at, todos.items.length), 0, prev.item);
     todos.open = prev.open; todos.answered = prev.answered;
-    const keep = prev.draft || (what === "answer" && body && body.text ? { text: body.text, q: prev.item.question } : null);
+    const keep = prev.draft || (keepText && what === "answer" && body && body.text ? { text: body.text, q: prev.item.question } : null);
     if (keep) { todos.drafts.set(id, keep); saveTodoDrafts(); }
     todos.openId = id; todos.lastId = id;
     todos.seen.set(id, "open");
     renderTodos(true);
-    toast((what === "answer" ? "Not sent: " : "Not done: ") + e.message, true);
+  };
+  let started = false;
+  const send = async (keepalive) => {
+    if (started) return;
+    started = true;
+    try {
+      await api(`/api/todos/${encodeURIComponent(id)}/${what}`, { method: "POST", body: JSON.stringify(body || {}), keepalive: !!keepalive });
+      todos.pend.settle(id);
+      toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : "Dropped");
+    } catch (e) {
+      // Put it back as it was, with the typed answer, so a second try is one tap.
+      restore(true);
+      toast((what === "answer" ? "Not sent: " : "Not done: ") + e.message, true);
+      return;
+    }
+    todos.loadedAt = 0;
+    await loadTodos();
+  };
+  if (opts.undoMs) {
+    // The item is answered on screen now; the request goes out when the window ends,
+    // on Undo it never does, and leaving the page inside the window sends it at once.
+    const u = {
+      id,
+      timer: setTimeout(() => u.flush(), opts.undoMs),
+      flush(keepalive) { clearTimeout(u.timer); if (todos.undo === u) todos.undo = null; return send(keepalive); },
+      undo() { clearTimeout(u.timer); if (todos.undo === u) todos.undo = null; started = true; restore(false); },
+    };
+    todos.undo = u;
+    toastAction(`Sent: ${body.text}`, "Undo", () => u.undo(), opts.undoMs);
     return;
   }
-  todos.loadedAt = 0;
-  await loadTodos();
+  await send(false);
+}
+
+// flushChoiceUndo ends the undo window now, sending what is waiting in it.
+function flushChoiceUndo(keepalive) {
+  const u = todos.undo;
+  if (!u) return;
+  const el = $("toast");
+  if (el.classList.contains("act")) el.className = "";
+  return u.flush(keepalive);
+}
+for (const ev of ["pagehide", "beforeunload"]) window.addEventListener(ev, () => flushChoiceUndo(true));
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushChoiceUndo(true); });
+
+// A choice (a button, the recommendation, a digit key) sends that answer at once,
+// with an undo window. Shift adds to a pending combination instead of sending (the
+// Answer button then sends it). Typed free text is never replaced or sent by a
+// choice: the choice goes in front of it, and Answer sends the lot.
+let CHOICE_UNDO_MS = 5000; // let: the uitest shortens it
+function todoChoose(item, text, shift) {
+  const box = item.querySelector(".td-text");
+  if (!box) return;
+  const id = item.dataset.id;
+  const typed = box.value.trim();
+  const pending = todoPicked(box.value);
+  if (typed && !pending.length) {
+    todoFill(item, text + " " + typed);
+    toast(`Added “${text}” to the front of your answer. Press Answer to send it.`);
+    return;
+  }
+  const picks = todoPicked(text);
+  let combo = pending;
+  if (picks.length > 1 && !pending.length) combo = picks; // the recommendation: ok 1+3
+  else for (const n of picks) if (!combo.includes(n)) combo = combo.concat(n);
+  combo = combo.slice().sort((a, b) => a - b);
+  if (shift) { todoFill(item, "ok " + combo.join("+")); return; }
+  todoAct(id, "answer", { text: "ok " + combo.join("+") }, { undoMs: CHOICE_UNDO_MS });
 }
 
 function todoAnswer(id, box) {
@@ -1762,12 +1838,17 @@ function onTodoClick(ev) {
   if (ag) { openDetail(ag.dataset.agent); return; }
   const opt = ev.target.closest(".td-opt");
   if (opt) {
-    const box = item.querySelector(".td-text");
-    if (!box) return;
-    if (opt.dataset.fill) { todoFill(item, opt.dataset.fill); return; }
-    const picked = todoPicked(box.value), n = Number(opt.dataset.n);
-    const next = picked.includes(n) ? picked.filter((x) => x !== n) : picked.concat(n).sort((a, b) => a - b);
-    todoFill(item, next.length ? "ok " + next.join("+") : "");
+    if (!item.querySelector(".td-text")) return;
+    if (opt.dataset.fill) { todoChoose(item, opt.dataset.fill, ev.shiftKey); return; }
+    const box = item.querySelector(".td-text"), n = Number(opt.dataset.n);
+    const picked = todoPicked(box.value);
+    // A button already in the pending combination, shift-clicked, leaves it.
+    if (ev.shiftKey && picked.includes(n)) {
+      const rest = picked.filter((x) => x !== n);
+      todoFill(item, rest.length ? "ok " + rest.join("+") : "");
+      return;
+    }
+    todoChoose(item, "ok " + n, ev.shiftKey);
     return;
   }
   if (ev.target.closest(".td-row")) {
@@ -1816,7 +1897,7 @@ function onTodoKey(ev) {
     return;
   }
   if (!isDesktop() || state.view !== "todo" || anotherLayerOpen()) return;
-  if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+  if (ev.altKey || ev.ctrlKey || ev.metaKey || (ev.shiftKey && !/^Digit[1-9]$/.test(ev.code))) return;
   const page = $("pt-body");
   if (!page || !(el === document.body || page.contains(el))) return;
   const k = ev.key;
@@ -1839,9 +1920,11 @@ function onTodoKey(ev) {
     if (i < 0) i = ids.indexOf(todos.openId || todos.lastId);
     i = i < 0 ? (down ? 0 : rows.length - 1) : i + (down ? 1 : -1);
     if (i >= 0 && i < rows.length) todoExpand(ids[i]);
-  } else if (/^[1-9]$/.test(k) && todos.openId) {
-    const b = page.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"] .td-opt[data-n="${k}"]`);
-    if (b) { ev.preventDefault(); b.click(); }
+  } else if ((/^[1-9]$/.test(k) || (ev.shiftKey && /^Digit[1-9]$/.test(ev.code))) && todos.openId) {
+    // 1-9 sends that choice; Shift+1-9 adds it to a pending combination.
+    const d = ev.shiftKey ? ev.code.slice(5) : k;
+    const b = page.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"] .td-opt[data-n="${d}"]`);
+    if (b) { ev.preventDefault(); todoKeyPick = true; try { b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: ev.shiftKey })); } finally { todoKeyPick = false; } }
   } else if (k === "Enter") {
     if (el.closest(".td-acts, .td-g, .td-kept")) return; // a button does what it says
     const row = el.closest(".td-row");
