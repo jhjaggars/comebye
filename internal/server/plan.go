@@ -45,6 +45,12 @@ type memberView struct {
 	Status   string `json:"status"`
 	Outcome  string `json:"outcome"`
 	Reported bool   `json:"reported"`
+	// AgentID is "<host>/<pane>" while the member has an agent (the entry
+	// may outlive it); Followup is "working" or "landing" when a member of
+	// a settled plan is at work again.
+	AgentID  string `json:"agent_id,omitempty"`
+	PaneID   string `json:"pane_id,omitempty"`
+	Followup string `json:"followup,omitempty"`
 	// After: the member's id waits for these steps (ids).
 	After []string `json:"after,omitempty"`
 }
@@ -52,8 +58,11 @@ type memberView struct {
 // planView is a plan with its members, for the app and CLI.
 type planView struct {
 	ledger.Plan
-	State   string       `json:"state"` // open, done or partial
-	Done    int          `json:"done"`  // members that finished
+	State string `json:"state"` // open, done or partial
+	Done  int    `json:"done"`  // members that finished
+	// Landing and Working count members of a settled plan that are back at work.
+	Landing int          `json:"landing,omitempty"`
+	Working int          `json:"working,omitempty"`
 	Members []memberView `json:"members"`
 }
 
@@ -64,7 +73,19 @@ func (s *Server) planViewOf(p ledger.Plan) planView {
 	}
 	for _, e := range s.ledger.Members(p.ID) {
 		m := memberView{ID: e.ID, Host: e.Host, RepoName: e.RepoName, Branch: e.Branch, Status: string(e.Status),
-			Outcome: ledger.MemberOutcome(e), Reported: e.FinalReport != "", After: e.After}
+			Outcome: ledger.MemberOutcome(e), Reported: e.FinalReport != "", After: e.After, AgentID: e.AgentID, PaneID: e.PaneID}
+		if p.Outcome != "" && m.Outcome != ledger.MemberFailed {
+			switch e.Status {
+			case ledger.Landing:
+				if e.FinishedAt == nil {
+					m.Followup = "landing"
+					v.Landing++
+				}
+			case ledger.Running:
+				m.Followup = "working"
+				v.Working++
+			}
+		}
 		if m.Outcome == ledger.MemberOK {
 			v.Done++
 		}

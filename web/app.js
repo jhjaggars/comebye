@@ -967,6 +967,28 @@ function missNote(m, hasBrief) {
 // or settled within the last day: how many workers finished and where each
 // stands. The hub pushes when a plan settles; this is for looking.
 const PLAN_SHOWN_MS = 24 * 3600 * 1000;
+const planOpen = new Set(); // plans whose card is expanded (the page's own state)
+
+// planMemberTarget says where a member leads: its agent while that is still
+// running, else the archived session in Search (the worker was removed).
+function planMemberTarget(m) {
+  const a = m.agent_id ? agentById(m.agent_id) : null;
+  if (a) return { hash: agentHash(a), live: a, tip: `Open ${m.repo_name || "?"}/${m.branch}` };
+  return { hash: rcSearchHash(m.branch || m.repo_name || ""), live: null, tip: "This agent is gone: search its archived session" };
+}
+
+function planMemberHtml(m, p, open) {
+  const t = planMemberTarget(m);
+  // The outcome is what the member reported; the live status is what it does now.
+  let live = "";
+  if (m.followup === "landing") live = `<span class="pm-live landing">landing</span>`;
+  else if (t.live && t.live.agent_status === "working" && m.outcome !== "pending") live = `<span class="pm-live working">working</span>`;
+  const e = open ? ledger.entries.find((x) => x.id === m.id) : null;
+  const when = e && Date.parse(e.created_at) ? ` · started ${fmtAgo(Date.parse(e.created_at))} ago` : "";
+  const detail = open ? `<div class="pm-detail">${esc(m.host || "")}${m.host ? " · " : ""}${esc(m.status)}${esc(when)}${e && e.final_report ? `<details class="pm-rep"><summary>Report</summary><div class="md">${renderMarkdown(e.final_report, "pm" + e.id)}</div></details>` : ""}</div>` : "";
+  return `<li><a class="pm${t.live ? "" : " gone"}" href="${esc(t.hash)}" title="${esc(t.tip)}"><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span>${live}</a>${detail}</li>`;
+}
+
 function renderPlans() {
   const el = $("plans");
   if (!el) return;
@@ -977,15 +999,37 @@ function renderPlans() {
     const at = Date.parse(p.settled_at);
     return !Number.isNaN(at) && now - at < PLAN_SHOWN_MS;
   });
-  const sig = JSON.stringify(shown.map((p) => [p.id, p.state, p.done, p.members.map((m) => m.id + m.outcome + m.status)]));
+  const sig = JSON.stringify([shown.map((p) => [p.id, p.state, p.done, p.landing, p.working, planOpen.has(p.id), p.members.map((m) => [m.id, m.outcome, m.status, m.followup, m.agent_id, m.reported, !!(m.agent_id && agentById(m.agent_id)), m.agent_id && agentById(m.agent_id)?.agent_status])]), ledger.entries.length]);
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   el.hidden = !shown.length;
   const label = { open: "in progress", done: "done", partial: "needs a look" };
-  el.innerHTML = shown.map((p) => `<div class="plan ${esc(p.state)}">
-      <div class="plan-head"><span class="plan-title">${esc(p.title)}</span><span class="plan-state">${esc(label[p.state] || p.state)} · ${p.done} of ${p.size}</span></div>
-      <ul class="plan-members">${p.members.map((m) => `<li><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span></li>`).join("")}</ul>
-    </div>`).join("");
+  // The plan card keeps keyboard focus across a re-render.
+  const focus = el.contains(document.activeElement) ? document.activeElement.dataset.plan || document.activeElement.getAttribute("href") : null;
+  el.innerHTML = shown.map((p) => {
+    const open = planOpen.has(p.id);
+    const follow = [p.landing ? `${p.landing} landing` : "", p.working ? `${p.working} working` : ""].filter(Boolean).join(", ");
+    const created = Date.parse(p.created_at);
+    return `<div class="plan ${esc(p.state)}">
+      <div class="plan-head"><button type="button" class="plan-title" data-plan="${esc(p.id)}" aria-expanded="${open}" title="${open ? "Collapse" : "Show members, branches and reports"}">${esc(p.title)}</button><span class="plan-state">${esc(label[p.state] || p.state)}${follow ? ` · ${esc(follow)}` : ` · ${p.done} of ${p.size}`}</span></div>
+      ${open ? `<div class="plan-meta">${p.done} of ${p.size} finished${created ? ` · started ${fmtAgo(created)} ago` : ""}${p.by ? ` · by ${esc(p.by)}` : ""}</div>` : ""}
+      <ul class="plan-members">${p.members.map((m) => planMemberHtml(m, p, open)).join("")}</ul>
+    </div>`;
+  }).join("");
+  if (focus) {
+    const again = [...el.querySelectorAll("[data-plan], a.pm")].find((x) => x.dataset.plan === focus || x.getAttribute("href") === focus);
+    if (again) again.focus({ preventScroll: true });
+  }
+}
+
+function initPlans() {
+  $("plans").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button.plan-title");
+    if (!b) return;
+    const id = b.dataset.plan;
+    if (planOpen.has(id)) planOpen.delete(id); else planOpen.add(id);
+    renderPlans();
+  });
 }
 
 
@@ -6602,6 +6646,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("hashchange", route);
   initBriefs();
   initRecall();
+  initPlans();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     // One-way escape hatch for debugging: show the raw pane.

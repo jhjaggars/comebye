@@ -129,14 +129,19 @@ func (s *Store) Members(planID string) []Entry {
 
 // EvalPlans settles plans whose members are all accounted for and
 // returns those that just settled (each once; the user's push and the
-// creator's callback are queued here). A settled plan whose member goes
-// back to work opens again, and settles (and notifies) again later.
+// creator's callback are queued here). A done plan stays done (a partial one can still become done when a
+// failed member is handed off again and finishes): a
+// member that goes back to work (to land, or on a follow-up) neither
+// reopens it nor tells anyone again; the views show that as a follow-up.
 func (s *Store) EvalPlans(now time.Time) []Plan {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var settled []Plan
 	changed := false
 	for _, p := range s.data.Plans {
+		if p.Outcome == PlanDone {
+			continue // settled once; follow-up work on a member does not reopen it
+		}
 		members, pending, failed := 0, 0, 0
 		for _, e := range s.data.Entries {
 			if e.PlanID != p.ID {
@@ -154,10 +159,7 @@ func (s *Store) EvalPlans(now time.Time) []Plan {
 			}
 		}
 		if members < p.Size || pending > 0 {
-			if p.Outcome != "" {
-				p.Outcome, p.SettledAt, p.Notified, p.Callback, changed = "", nil, false, nil, true
-			}
-			continue
+			continue // never reopens: a partial plan waits for its retried member to finish
 		}
 		outcome := PlanDone
 		if failed > 0 {

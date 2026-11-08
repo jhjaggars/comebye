@@ -105,6 +105,26 @@ func TestPlanJoinPushesOnceAndTellsCreator(t *testing.T) {
 	if w := do(s, "GET", "/api/plans/nope", userHdr, ""); w.Code != 404 {
 		t.Fatalf("unknown = %d", w.Code)
 	}
+
+	// A member back at work (to land) does not reopen the plan or push again;
+	// the view shows the follow-up, with the member's agent to jump to.
+	for i := 0; i < 3; i++ {
+		s.observeLedger(state(herdr.StatusWorking, herdr.StatusIdle))
+		w = do(s, "GET", "/api/plans/"+p.ID, userHdr, "")
+		r.Plan = planView{}
+		json.Unmarshal(w.Body.Bytes(), &r)
+		if r.Plan.State != "done" || r.Plan.Working != 1 || r.Plan.Members[0].Followup != "working" || r.Plan.Members[0].AgentID != "desk/w8:p1" || r.Plan.Members[1].Followup != "" {
+			t.Fatalf("while resumed: %s", w.Body)
+		}
+		s.observeLedger(state(herdr.StatusIdle, herdr.StatusIdle))
+		s.observeLedger(state(herdr.StatusIdle, herdr.StatusIdle))
+	}
+	if n := len(pu.get()); n != 1 {
+		t.Fatalf("pushed %d times: %v", n, pu.get())
+	}
+	if n := len(s.ledger.PendingPlanCallbacks()); n != 0 {
+		t.Fatalf("creator told again: %d pending", n)
+	}
 }
 
 func TestPlanPartialNamesFailedMember(t *testing.T) {

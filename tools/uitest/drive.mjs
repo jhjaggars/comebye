@@ -1172,6 +1172,46 @@ await check("status: readable on the phone, at the top of the briefings screen, 
 
 // A host reports a damaged repository: the Status page says how to repair it, and
 // the agents working in it are marked. Runs in both schemes (run.sh), at both widths.
+// ---- Plan card: members link to their agents ----
+const PLAN_LEDGER = { marks: [], roles: {}, entries: [
+  { id: "m1", host: "uitest", repo_name: "webapp", branch: "feat/openshell-sandbox", agent_id: "uitest/w1:p1", pane_id: "w1:p1", status: "landing", finished_at: null, created_at: ago(90), brief: "x", plan_id: "pl1", final_report: "Done **it**." },
+  { id: "m2", host: "uitest", repo_name: "infra", branch: "feat/removed-one", agent_id: "uitest/w77:p1", pane_id: "w77:p1", status: "removed", finished_at: ago(30), created_at: ago(80), brief: "x", plan_id: "pl1" },
+], plans: [{ id: "pl1", title: "OpenShell sandbox with a long enough title that it cannot fit on a single line of the card", size: 2, state: "done", done: 2, landing: 1, created_at: ago(95), settled_at: ago(30), members: [
+  { id: "m1", host: "uitest", repo_name: "webapp", branch: "feat/openshell-sandbox", agent_id: "uitest/w1:p1", pane_id: "w1:p1", status: "landing", outcome: "ok", followup: "landing", reported: true },
+  { id: "m2", host: "uitest", repo_name: "infra", branch: "feat/removed-one", agent_id: "uitest/w77:p1", pane_id: "w77:p1", status: "removed", outcome: "ok", reported: false },
+] }] };
+for (const width of [1280, 390]) {
+  await check(`plan card: at ${width}px a member opens its agent, a gone one falls back to Search, the title wraps, keys work`, async () => {
+    await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: PLAN_LEDGER }));
+    try {
+      await desktopList(width, "#/status");
+      await page.waitForSelector("#plans .plan .pm", { state: "visible", timeout: 8000 });
+      const title = page.locator("#plans .plan-title");
+      const lines = await title.evaluate((e) => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)));
+      if (lines !== 2) throw new Error(`title takes ${lines} lines`);
+      const t = await page.locator("#plans").innerText();
+      if (!/done · 1 landing/i.test(t) || !/landing/.test(t)) throw new Error("no landing shown: " + t);
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls sideways");
+      // Expanding shows the report; the card keeps working.
+      await title.click();
+      await page.waitForSelector("#plans .pm-rep", { state: "visible" });
+      // Keyboard: focus the first member, Enter opens its agent.
+      await page.locator('#plans a.pm').first().focus();
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("#detail", { state: "visible" });
+      if (!/#\/agent\/w1(:|%3A)p1/.test(await page.evaluate(() => location.hash))) throw new Error("hash " + await page.evaluate(() => location.hash));
+      // The gone one: a tooltip says so and the click lands in Search.
+      await page.goto(base + "/#/status", { waitUntil: "load" });
+      await page.waitForSelector("#plans a.pm.gone", { state: "visible" });
+      const tip = await page.locator("#plans a.pm.gone").getAttribute("title");
+      if (!/gone/.test(tip)) throw new Error("tooltip " + tip);
+      await page.locator("#plans a.pm.gone").click();
+      await page.waitForSelector("#recall", { state: "visible" });
+      const h = await page.evaluate(() => decodeURIComponent(location.hash));
+      if (!h.startsWith("#/transcripts") || !h.includes("feat/removed-one")) throw new Error("hash " + h);
+    } finally { await page.unroute(/\/api\/ledger$/); }
+  });
+}
 async function injectRepoDamage() {
   return page.evaluate(() => {
     const a = state.agents.find((x) => (x.worktree && x.worktree.checkout) || x.cwd);

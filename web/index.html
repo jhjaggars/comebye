@@ -1254,15 +1254,31 @@
     .plan.partial { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
     .plan.done { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
     .plan-head { display: flex; align-items: baseline; gap: 8px; }
-    .plan-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .plan-title {
+      font: inherit; font-weight: 600; color: var(--text); text-align: left; min-width: 0; flex: 1 1 auto;
+      background: none; border: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 8px; cursor: pointer;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+    }
+    .plan-title:active, .plan-members a.pm:active { background: var(--panel2); }
+    @media (hover: hover) { .plan-title:hover, .plan-members a.pm:hover { background: var(--panel2); } }
+    .plan-title:focus-visible, .plan-members a.pm:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .plan-state { margin-left: auto; flex: none; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
     .plan.done .plan-state { color: var(--green); }
     .plan.partial .plan-state { color: var(--orange); }
+    .plan-meta { margin-top: 4px; font-size: 12px; color: var(--muted); }
     .plan-members { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
-    .plan-members li { display: flex; gap: 6px; padding: 2px 0; min-width: 0; }
+    .plan-members li { padding: 0; min-width: 0; }
+    .plan-members a.pm { display: flex; gap: 6px; padding: 3px 4px; margin: 0 -4px; border-radius: 8px; min-width: 0; color: inherit; text-decoration: none; }
     .plan-members .pm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .plan-members a.pm.gone .pm-name { text-decoration: underline dotted; }
     .plan-members .pm-ok { color: var(--green); }
     .plan-members .pm-failed { color: var(--red); }
+    .plan-members .pm-live { flex: none; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 8px; border: 1px solid currentColor; align-self: center; }
+    .plan-members .pm-live.working, .plan-members .pm-live.landing { color: var(--blue); }
+    .pm-detail { font-size: 12px; padding: 0 0 4px; color: var(--muted); overflow-wrap: anywhere; }
+    .pm-rep summary { cursor: pointer; padding: 2px 0; }
+    .pm-rep summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .pm-rep .md { color: var(--text); max-height: 40vh; overflow: auto; }
     .bf-head { display: flex; align-items: center; }
     .bf-toggle {
       flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 4px 4px 8px;

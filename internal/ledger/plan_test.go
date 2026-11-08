@@ -43,17 +43,23 @@ func TestPlanSettles(t *testing.T) {
 		t.Fatal("still pending")
 	}
 
-	// A member back at work reopens it; it settles (and tells) again.
-	s.Observe(both(herdr.StatusIdle, herdr.StatusWorking), now)
-	if got := s.EvalPlans(now); len(got) != 0 {
-		t.Fatalf("settled while reopened: %+v", got)
-	}
-	if q, _ := s.GetPlan(p.ID); q.Outcome != "" || q.Notified {
-		t.Fatalf("not reopened: %+v", q)
-	}
-	s.Observe(both(herdr.StatusIdle, herdr.StatusIdle), now)
-	if got := s.EvalPlans(now); len(got) != 1 {
-		t.Fatalf("not settled again: %+v", got)
+	// A member back at work (to land, say) does not reopen the plan, and
+	// finishing again does not tell anyone a second time.
+	for round := 0; round < 3; round++ {
+		s.Observe(both(herdr.StatusIdle, herdr.StatusWorking), now)
+		if got := s.EvalPlans(now); len(got) != 0 {
+			t.Fatalf("settled again while a member worked: %+v", got)
+		}
+		if q, _ := s.GetPlan(p.ID); q.Outcome != PlanDone || !q.Notified {
+			t.Fatalf("reopened: %+v", q)
+		}
+		s.Observe(both(herdr.StatusIdle, herdr.StatusIdle), now)
+		if got := s.EvalPlans(now); len(got) != 0 {
+			t.Fatalf("settled twice: %+v", got)
+		}
+		if len(s.PendingPlanCallbacks()) != 0 {
+			t.Fatal("creator told again")
+		}
 	}
 	// A finished member that is removed later still counts as finished.
 	s.Removed(a.AgentID, nil, now)
