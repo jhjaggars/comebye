@@ -136,6 +136,7 @@ func TestOpenShellConfig(t *testing.T) {
 		want string
 	}{
 		{func(c *Config) { c.SandboxImage = "" }, "sandbox_image is required"},
+		{func(c *Config) { c.SandboxPolicy = "" }, "sandbox_policy is required"},
 		{func(c *Config) { c.OpenShellWorkspace = "" }, "openshell_workspace is required"},
 		{func(c *Config) { c.OpenShellEndpoint = "https://gw.example.com" }, "alternatives"},
 		{func(c *Config) { c.OpenShellGateway = ""; c.OpenShellEndpoint = "http://gw" }, "bare https"},
@@ -158,6 +159,7 @@ func TestOpenShellConfigFile(t *testing.T) {
 openshell_gateway=homelab
 openshell_workspace=openshell-sandboxes
 sandbox_image=registry.jaggars.cc/comebye-sandbox:{version}
+sandbox_policy=/etc/sandbox-policy.yaml
 sandbox_providers=anthropic-claude, github-push
 sandbox_cpu=2
 sandbox_memory=6Gi
@@ -223,7 +225,7 @@ func TestOpenShellCreateEndToEnd(t *testing.T) {
 			up = s
 		}
 	}
-	for _, want := range []string{`--socket="$HOME/.ts/tailscaled.sock"`, "--auth-key=file:/dev/stdin", "--hostname='w1'", "--advertise-tags='tag:worker'"} {
+	for _, want := range []string{"timeout 180 tailscale", `--socket="$HOME/.ts/tailscaled.sock"`, "--auth-key=file:/dev/stdin", "--hostname='w1'", "--advertise-tags='tag:worker'"} {
 		if !strings.Contains(up, want) {
 			t.Errorf("tailscale up lacks %s: %s", want, up)
 		}

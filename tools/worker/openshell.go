@@ -212,9 +212,7 @@ func (p *openshellProv) CleanupNetwork(context.Context, logf) error             
 func (p *openshellProv) createArgs(name string) []string {
 	c := p.cfg
 	a := []string{"--name", name, "--from", p.Image, "--label", labelKey + "=" + labelVal, "--detach", "--no-tty", "--no-auto-providers"}
-	if c.SandboxPolicy != "" {
-		a = append(a, "--policy", c.SandboxPolicy)
-	}
+	a = append(a, "--policy", c.SandboxPolicy)
 	for _, pr := range c.SandboxProviders {
 		a = append(a, "--provider", pr)
 	}
@@ -435,9 +433,11 @@ func (e *env) enrollSandbox(ctx context.Context, name string) error {
 	if usedFile != "" {
 		defer os.Remove(usedFile)
 	}
-	up := fmt.Sprintf("%s up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s", sandboxTS, shellQuote(name), shellQuote(e.Cfg.Tag))
+	// `tailscale up` waits for the control plane without end if the sandbox's policy keeps
+	// tinyproxy from reaching it: bound it.
+	up := fmt.Sprintf("timeout 180 %s up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s", sandboxTS, shellQuote(name), shellQuote(e.Cfg.Tag))
 	if _, err := e.sh(ctx, name, up, []byte(key)); err != nil {
-		return fmt.Errorf("tailscale up: %w", redact(err, key))
+		return fmt.Errorf("tailscale up: %w\nif it timed out, the sandbox's network policy probably lacks the Tailscale hosts (check /tmp/tailscaled.log and /tmp/tinyproxy.log in the sandbox; the key is spent only if it reached the control plane)", redact(err, key))
 	}
 	return nil
 }

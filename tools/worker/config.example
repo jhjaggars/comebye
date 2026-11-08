@@ -74,7 +74,7 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # openshell_gateway=homelab                  # a gateway registered with the CLI; or openshell_endpoint=https://...
 # openshell_workspace=openshell-sandboxes    # required; a gateway can refuse "default"
 # sandbox_image=registry.example/comebye-sandbox:{version}   # {version} = the hub's release
-# sandbox_policy=~/.config/comebye-worker/sandbox-policy.yaml   # rendered from the image's template; optional
+# sandbox_policy=~/.config/comebye-worker/sandbox-policy.yaml   # REQUIRED: render-policy.sh output from the image's template
 # sandbox_providers=anthropic-claude,github-push   # gateway credential providers, made once by an admin
 # sandbox_cpu=2
 # sandbox_memory=6Gi

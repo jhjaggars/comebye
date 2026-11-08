@@ -357,6 +357,10 @@ A sandbox has no ssh and no sudo; every step is `openshell sandbox exec`, with s
   `Authentication: Ok`. When the login has lapsed, the tool says so and names the command.
 - The gateway providers the sandbox uses (`sandbox_providers`: model keys, a GitHub token) are
   made once by an admin. They hold the real secrets; the sandbox sees placeholders.
+- `sandbox_policy` is **required**: render the image's `policy.yaml.tmpl` with `render-policy.sh`. The
+  gateway's default policy denies the Tailscale hosts and the PTY paths, and only the *network* part
+  of a policy can be changed on a live sandbox (`openshell policy set`), so a sandbox created
+  without it can never join the tailnet or run herdr panes: delete it and create it again.
 
 ```ini
 provider=openshell
@@ -381,7 +385,7 @@ provider on the OpenShell gateway.
 **What `create` does** (four steps, resumable):
 
 1. `openshell sandbox create --name NAME --from IMAGE --label managed-by=comebye-worker
-   [--policy P] [--provider X]... [--cpu C] [--memory M] --detach -- comebye-sandbox-init`, then
+   --policy P [--provider X]... [--cpu C] [--memory M] --detach -- comebye-sandbox-init`, then
    waits for the phase `Ready` and for exec to answer. The gateway creates the volume. A sandbox
    of that name that lacks the label is never touched.
 2. Waits for tailscaled's socket, clears a stale offline `tag:worker` device of that name, mints a
