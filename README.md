@@ -93,6 +93,7 @@ connecting several machines, and every setting.
 - [Agents, workers and coordinators](docs/agents.md): launching agents,
   handoffs and cleanup, coordinators and the `comebye` command line, Claude
   Code support, limitations
+- [Voice input](docs/speech-to-text.md): the mic buttons; `comebye stt fetch` installs the speech model on a host
 - [Security model](docs/security.md) and [SECURITY.md](SECURITY.md) (reporting
   vulnerabilities)
 - [API](docs/api.md): the JSON API behind the app

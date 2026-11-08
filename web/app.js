@@ -1264,7 +1264,9 @@ function todoItemHtml(t, pfx) {
           ${answered}${kept}
         </div>
         <div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
+          ${ans || isRel ? "" : sttStatusHtml("todo:" + t.id)}
           <div class="td-acts">
+            ${ans || isRel ? "" : sttMicHtml("todo:" + t.id)}
             ${ans || isRel ? "" : `<button type="button" class="td-answer-btn"${busy}>Answer</button>`}
             <button type="button" class="td-done"${busy}>Done</button>
             <button type="button" class="td-drop"${busy}>Drop</button>
@@ -1341,6 +1343,7 @@ function todoPaint(el, html) {
   const inner = el.querySelector(".td-item.open .td-scroll");
   const innerId = inner && inner.closest(".td-item").dataset.id, innerTop = inner ? inner.scrollTop : 0;
   el.innerHTML = html;
+  if (typeof sttSync === "function") sttSync(); // the mic buttons just drawn show the current state
   el.scrollTop = top;
   const ni = el.querySelector(".td-item.open .td-scroll");
   if (ni && ni.closest(".td-item").dataset.id === innerId) ni.scrollTop = innerTop;

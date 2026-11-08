@@ -270,6 +270,8 @@ func (s *Server) routes() {
 	// (see agentauth.go).
 	s.recallRoutes()
 	s.mux.HandleFunc("GET /api/version", s.authAgentLocal(s.handleVersion))
+	s.mux.HandleFunc("GET /api/stt", s.auth(s.handleSTT))
+	s.mux.HandleFunc("GET /stt/{version}/{path...}", s.serveSTT)
 	s.mux.HandleFunc("GET /api/whoami", s.authAgentLocal(s.handleWhoami))
 	s.mux.HandleFunc("GET /api/playbook", s.authAgentLocal(s.handlePlaybook))
 	s.mux.HandleFunc("GET /api/agents", s.authWorker(s.handleAgents))

@@ -48,4 +48,23 @@ for _ in $(seq 50); do curl -sf "http://127.0.0.1:$port/api/agents" >/dev/null &
 
 echo "app: $app ($(git -C "$app" log -1 --format='%h %s'))"
 cd "$here"
-node drive.mjs "http://127.0.0.1:$port" "$out"
+rc=0
+node drive.mjs "http://127.0.0.1:$port" "$out" || rc=1
+
+# Voice input (stt.mjs). The "not installed" and secure-context checks always
+# run, against the server above (no speech files in its state dir). The rest
+# need the real model: set STT_DATA to a state directory that
+# `comebye stt fetch --state-dir DIR` filled (about 290 MB, not downloaded
+# here), and a second server is started on it. STT_GPU=1 runs them on the GPU.
+inst=""
+if [ -n "${STT_DATA:-}" ]; then
+  mkdir -p "$tmp/state-stt"
+  ln -s "$STT_DATA/stt" "$tmp/state-stt/stt"
+  iport=$((port + 100))
+  "$tmp/comebye" -sock "$tmp/h.sock" -addr "127.0.0.1:$iport" -insecure-no-auth -push=false \
+    -state-dir "$tmp/state-stt" -host-name uitest -recall-index "$tmp/recall.db" >"$out/comebye-stt.log" 2>&1 &
+  for _ in $(seq 50); do curl -sf "http://127.0.0.1:$iport/api/agents" >/dev/null && break; sleep 0.1; done
+  inst="http://127.0.0.1:$iport"
+fi
+node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1
+exit $rc

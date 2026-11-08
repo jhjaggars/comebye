@@ -13,7 +13,10 @@ import (
 
 // contentSecurityPolicy is conservative: same-origin scripts only, inline
 // styles allowed (index.html has an inline <style> and style attributes).
-const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+// 'wasm-unsafe-eval' is for the speech-to-text runtime (WebAssembly, in a
+// worker); it permits compiling WebAssembly and nothing else: JavaScript
+// eval and new Function stay blocked.
+const contentSecurityPolicy = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
 	"base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
@@ -37,7 +40,7 @@ type staticHandler struct {
 // must reload to pick up. Icons are left out; the vendored libraries are
 // in, so a library bump reloads open pages too.
 var versionFiles = []string{"index.html", "app.js", "themes.js", "sw.js", "manifest.webmanifest",
-	"vendor/marked.umd.js", "vendor/purify.min.js"}
+	"vendor/marked.umd.js", "vendor/purify.min.js", "stt.js", "stt-worker.js", "vendor/transformers.bundle.js"}
 
 // assetVersion combines the per-file ETags of versionFiles into a short
 // stable hash: identical assets always give the same version.

@@ -270,3 +270,47 @@ func TestThemesPlumbing(t *testing.T) {
 		t.Errorf("index.html hard-codes a colour: %q (use a token from themes.js)", re.FindString(string(idx[strings.Index(string(idx), "<style>"):])))
 	}
 }
+
+// The speech-to-text engine is the one vendored file that is built, not
+// copied: its hash is recorded, its licences are shipped, and the worker
+// that runs it can reach nothing but this origin.
+func TestSpeechEngineFiles(t *testing.T) {
+	readme, err := os.ReadFile("vendor/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := FS.ReadFile("vendor/transformers.bundle.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(b)
+	if want := "`transformers.bundle.js` " + hex.EncodeToString(sum[:]); !strings.Contains(string(readme), want) {
+		t.Errorf("vendor/README.md does not record %s", want)
+	}
+	if _, err := FS.ReadFile("vendor/LICENSE-transformers-bundle.txt"); err != nil {
+		t.Errorf("missing licence file: %v", err)
+	}
+	idx, _ := FS.ReadFile("index.html")
+	if !strings.Contains(string(idx), `<script src="stt.js"></script>`) {
+		t.Error("index.html does not load stt.js")
+	}
+	worker, err := FS.ReadFile("stt-worker.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`env\.allowRemoteModels = false`,
+		`env\.useWasmCache = false`, // no blob: URL, so the CSP stays free of blob:
+		`from "\./vendor/transformers\.bundle\.js"`,
+	} {
+		if !regexp.MustCompile(re).Match(worker) {
+			t.Errorf("stt-worker.js does not match %s", re)
+		}
+	}
+	for _, name := range []string{"stt.js", "stt-worker.js"} {
+		src, _ := FS.ReadFile(name)
+		if regexp.MustCompile(`https?://`).Match(src) {
+			t.Errorf("%s names an absolute URL; everything must come from this origin", name)
+		}
+	}
+}

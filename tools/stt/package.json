@@ -1,0 +1,11 @@
+{
+  "name": "comebye-stt-bundle",
+  "private": true,
+  "description": "Builds web/vendor/transformers.bundle.js (the speech-to-text engine). Dev-only; never shipped. See web/vendor/README.md.",
+  "dependencies": {
+    "@huggingface/transformers": "4.3.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

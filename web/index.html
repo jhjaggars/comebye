@@ -599,6 +599,50 @@
       -webkit-user-select: text; user-select: text;
     }
     .prompt .composer:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
+    /* Voice input (stt.js): the mic button, shared by the prompt box and the To do answer box, and its status line. */
+    .stt-mic {
+      flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid transparent;
+      display: grid; place-items: center; cursor: pointer; background: none; color: var(--text);
+    }
+    .stt-mic svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    @media (hover: hover) { .stt-mic:hover { background: var(--border); } }
+    .stt-mic:active { background: var(--border); }
+    .stt-mic:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .stt-mic.stt-wait { opacity: 0.5; cursor: default; }
+    .stt-mic[data-state="listening"] { background: var(--red); border-color: var(--red); color: var(--on-red); animation: stt-pulse 1.2s infinite; }
+    .stt-mic[data-state="busy"], .stt-mic[data-state="down"] { border: 1px dashed var(--blue); color: var(--blue); }
+    .stt-mic[data-state="busy"] svg { animation: stt-spin 1.4s linear infinite; }
+    .stt-mic[data-state="error"] { border-color: var(--red); color: var(--red); }
+    .td-acts .stt-mic { width: 40px; min-height: 40px; padding: 0; border-radius: 10px; background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+    .td-acts .stt-mic[data-state="listening"] { background: var(--red); border-color: var(--red); color: var(--on-red); }
+    .td-acts .stt-mic[data-state="busy"], .td-acts .stt-mic[data-state="down"] { border: 1px dashed var(--blue); color: var(--blue); background: var(--panel2); }
+    .td-acts .stt-mic[data-state="error"] { border-color: var(--red); color: var(--red); background: var(--panel2); }
+    @media (hover: hover) { .td-acts .stt-mic:hover { background: var(--border); } .td-acts .stt-mic[data-state="listening"]:hover { background: var(--red); } }
+    @keyframes stt-pulse { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--red) 28%, transparent); } }
+    @keyframes stt-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .stt-mic[data-state="listening"], .stt-mic[data-state="busy"] svg { animation: none; } }
+    .stt-status {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 6px; padding: 8px 12px;
+      border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); color: var(--text);
+      font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere;
+    }
+    .stt-status[hidden] { display: none; }
+    .stt-status[data-kind="listening"] { border-color: var(--red); }
+    .stt-status[data-kind="error"], .stt-status[data-kind="missing"] { border-color: var(--red); }
+    .stt-status[data-kind="offer"], .stt-status[data-kind="downloading"] { border-color: var(--blue); }
+    .stt-msg { flex: 1 1 14em; min-width: 0; }
+    .stt-msg code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); border-radius: 4px; padding: 1px 4px; }
+    .stt-dyn { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .stt-hint { color: var(--muted); font-size: 12.5px; }
+    .stt-bar { flex: 1 1 100%; height: 6px; accent-color: var(--blue); }
+    .stt-act {
+      min-height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer;
+    }
+    .stt-act.primary { border-color: var(--blue); color: var(--blue); }
+    @media (hover: hover) { .stt-act:hover { background: var(--border); } }
+    .stt-act:active { background: var(--border); }
+    .stt-act:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
     .attach-menu {
       position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5;
       display: flex; flex-direction: column; min-width: 180px; overflow: hidden;
@@ -1807,6 +1851,7 @@
       <section id="answer" style="display:none" aria-live="polite"></section>
       <section id="queued" hidden aria-label="Queued prompts"></section>
       <div id="keypad" class="keypad" hidden aria-label="Send keys"></div>
+      <div class="stt-status" data-stt-status="prompt" role="status" aria-live="polite" hidden></div>
       <div class="prompt">
         <button class="attach" id="btn-attach" type="button" aria-label="Attach an image or send keys"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
         <input type="file" id="attach-file" accept="image/*" multiple hidden>
@@ -1817,6 +1862,7 @@
         </div>
         <!-- A rich contenteditable, not a textarea: iOS only offers Paste for an image-only clipboard on rich editors. Its content is kept plain text. -->
         <div id="prompt-text" class="composer" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Prompt" data-placeholder="Send a prompt…" enterkeyhint="send" autocapitalize="sentences" autocorrect="on" spellcheck="true"></div>
+        <button type="button" class="stt-mic" data-stt="prompt" data-state="idle" aria-label="Voice input" title="Voice input (Ctrl+Shift+Space)"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
         <button class="send" id="btn-send" type="button" aria-label="Send prompt"></button>
       </div>
     </main>
@@ -1840,5 +1886,6 @@
   <script src="vendor/marked.umd.js"></script>
   <script src="vendor/purify.min.js"></script>
   <script src="app.js"></script>
+  <script src="stt.js"></script>
 </body>
 </html>

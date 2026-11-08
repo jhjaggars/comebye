@@ -25,3 +25,4 @@ tools/uitest/node_modules/
 
 # uitest dev server record
 /tools/uitest/.dev-run
+/tools/stt/node_modules/

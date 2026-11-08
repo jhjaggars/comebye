@@ -276,6 +276,14 @@ Treat access to it like SSH access to that machine.
   for byte from the npm tarballs with their hashes recorded in
   `web/vendor/README.md` (checked by `go test`), and served from the app's
   own origin; nothing is loaded from a CDN.
+- **Voice input** ([docs/speech-to-text.md](speech-to-text.md)) adds one word
+  to the policy: `script-src 'self' 'wasm-unsafe-eval'`. It allows compiling
+  WebAssembly (the speech runtime) and nothing else; `eval` and
+  `new Function` stay blocked, and `connect-src`, `worker-src` and the rest
+  are unchanged. The audio is transcribed in the browser and goes nowhere. The
+  files it needs are served only by exact pinned name, were checked against
+  pinned SHA-256s when fetched, and no `Permissions-Policy` is sent, so the
+  microphone is not blocked.
 
 See [SECURITY.md](../SECURITY.md) for the threat model and how to report a
 vulnerability.
