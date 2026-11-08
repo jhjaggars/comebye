@@ -999,6 +999,61 @@ await check("pages: the To do page fills the pane and answers from it; the list 
   await page.waitForFunction((s) => !document.querySelector(s), item, { timeout: 5000 });
   if (!(await page.locator("#p-todo").innerText()).includes("Nothing is waiting on you")) throw new Error("no empty note");
 });
+await check("pages: an open To do item uses the panel's width (code and tables wide, prose capped at ~90ch), without horizontal scroll, at 1280/2000 and on the phone", async () => {
+  const cmd = "cd ~/code/comebye && git fetch origin && git pull --ff-only && tools/release/tag v0.5.11 38ccfe8079bafda0972880e6b93197991f7667af";
+  const prose = "Mark Done after the tag; I then start the rollout. This is a longer paragraph of running prose that must keep a readable measure however wide the window is. ".repeat(4);
+  const ctx = "Main is at `38ccfe8`:\n\n```\n" + cmd + "\n```\n\nThree lines:\n\n```\ngit push origin --delete a\ngit worktree remove b\ngit branch -D c\n```\n\n" + prose + "\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+  const post = (b) => page.evaluate(async (b) => (await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ no_wait: true, ...b }) }).then((x) => x.json())).todo.id, b);
+  const drop = (i) => page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), i);
+  await desktopList(2000, "#/todo");
+  const id = await post({ question: "width check: a long question that should use the panel's width rather than stop at a narrow column, with `code` in it", kind: "decision", context: ctx });
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  const item = `#p-todo .td-item[data-id="${id}"]`;
+  await page.waitForSelector(item);
+  await page.locator(item + " > .td-row").click();
+  await page.waitForSelector(item + ".open .td-ctx pre");
+  const measure = () => page.evaluate((item) => {
+    const it = document.querySelector(item);
+    const pre = it.querySelector(".td-ctx pre"), ctx = it.querySelector(".td-ctx"), p = [...it.querySelectorAll(".td-ctx p")].sort((a, b) => b.textContent.length - a.textContent.length)[0];
+    const zero = document.createElement("span"); zero.textContent = "0"; zero.style.cssText = "position:absolute;visibility:hidden;white-space:pre"; p.append(zero);
+    const chPx = zero.getBoundingClientRect().width; zero.remove();
+    const tab = it.querySelector(".td-ctx table"), q = it.querySelector(".td-q"), txt = it.querySelector(".td-text"), acts = it.querySelector(".td-acts");
+    return { chPx, pre: pre.getBoundingClientRect().width, preScroll: pre.scrollWidth - pre.clientWidth, ctxW: ctx.getBoundingClientRect().width, p: p.getBoundingClientRect().width,
+      table: tab.getBoundingClientRect().right <= ctx.getBoundingClientRect().right + 1, qW: q.getBoundingClientRect().width,
+      txtL: txt.getBoundingClientRect().left, ctxL: ctx.getBoundingClientRect().left, txtR: txt.getBoundingClientRect().right, preR: pre.getBoundingClientRect().right, actsR: acts.getBoundingClientRect().right,
+      pageOver: document.documentElement.scrollWidth - innerWidth };
+  }, item);
+  let m = await measure();
+  if (m.pre <= 90 * m.chPx + 20 || m.preScroll > 0) throw new Error("2000: the code block should be wider than 90ch with no scroll: " + JSON.stringify(m));
+  if (m.p > 90 * m.chPx + 2) throw new Error("2000: prose wider than 90ch: " + JSON.stringify(m));
+  if (m.qW < 1000) throw new Error("2000: the title stops short: " + JSON.stringify(m));
+  if (Math.abs(m.txtL - m.ctxL) > 1 || Math.abs(m.txtR - m.preR) > 1 || Math.abs(m.actsR - m.preR) > 1) throw new Error("2000: the answer box and buttons do not line up with the content: " + JSON.stringify(m));
+  if (m.pageOver > 0) throw new Error("2000: page scrolls horizontally");
+  // A short body: the answer form follows it instead of being pinned far below.
+  await drop(id);
+  const sid = await post({ question: "short one", kind: "decision", context: "Just a line." });
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  const sitem = `#p-todo .td-item[data-id="${sid}"]`;
+  await page.waitForSelector(sitem);
+  if (!(await page.locator(sitem + ".open").count())) await page.locator(sitem + " > .td-row").click();
+  await page.waitForSelector(sitem + ".open .td-text");
+  const gap = await page.evaluate((s) => { const i = document.querySelector(s); return i.querySelector(".td-form").getBoundingClientRect().top - i.querySelector(".td-ctx").getBoundingClientRect().bottom; }, sitem);
+  if (gap > 60) throw new Error("a short body leaves a " + gap + "px gap before the answer form");
+  await drop(sid);
+  // The phone: no page overflow with a long one-line command.
+  const pid = await post({ question: "phone width check", kind: "decision", context: ctx });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent");
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  const pitem = `#todo .td-item[data-id="${pid}"]`;
+  await page.waitForSelector(pitem);
+  if (!(await page.locator(pitem + ".open").count())) await page.locator(pitem + " > .td-row").click();
+  await page.waitForSelector(pitem + ".open .td-ctx pre");
+  const o = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+  if (o[0] > o[1]) throw new Error("390: page scrolls horizontally " + o);
+  await drop(pid);
+});
 await check("pages: the rows above the list open the pages; the open one is marked; leaving an agent clears presence", async () => {
   await desktopList(1280);
   await page.waitForSelector("#nav .nv");

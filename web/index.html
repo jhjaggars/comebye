@@ -1188,12 +1188,16 @@
     #pt-body .td-chips { width: 132px; justify-content: flex-end; }
     #pt-body .td-item.open { flex: 1 1 0; min-height: 280px; display: flex; flex-direction: column; background: var(--panel); }
     #pt-body .td-item.open > .td-row { flex: none; }
-    #pt-body .td-item.open .td-q { order: 0; flex: 1 1 0; max-width: 90ch; }
+    #pt-body .td-item.open .td-q { order: 0; flex: 1 1 0; }
     #pt-body .td-item.open .td-rm, #pt-body .td-item.open .td-chev { order: 0; }
     #pt-body .td-item.open .td-chips { width: auto; }
+    #pt-body .td-item.open .td-rm { flex: none; }
+    #pt-body .td-item.open .td-who, #pt-body .td-item.open .td-age { display: none; }
     #pt-body .td-panel { flex: 1 1 0; }
-    #pt-body .td-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-    #pt-body .td-ctx, #pt-body .td-answer, #pt-body .td-kept { max-width: 90ch; }
+    /* The form follows a short body and pins to the bottom only when the body scrolls. */
+    #pt-body .td-scroll { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    /* Running prose keeps a readable measure; code, tables, links and the boxes use the panel's width. */
+    #pt-body .td-ctx :is(p, li, blockquote), #pt-body .td-answer-t, #pt-body .td-kept-h { max-width: 90ch; }
     .pt-keys { flex: none; display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
     .pt-keys[hidden] { display: none; }
     .pt-keys kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel2); color: var(--text); }
