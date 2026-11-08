@@ -73,6 +73,14 @@ the header of `shot.mjs` has the full list. Fixture panes: `w1` alpha and
 laharl (coordinator), `w5` notes-home, `w6` needs-input (blocked), `w7`
 old-worker (marked), `w8` the long names (`tools/devserver/fixtures.go`).
 
+Inputs must answer within a frame whatever the network does: a tap changes
+the app's own state first (optimistic), the request follows, a refusal rolls
+it back with an error, and a refresh in flight is laid over, never allowed to
+undo it (`Overlay` in `web/app.js`). `drive.mjs` holds each request for 1.5 s
+to check that (`ONLY=latency tools/uitest/run.sh` runs just those checks), and
+`node tools/uitest/measure.mjs URL 0 300 1500` against a dev server prints
+click-to-first-change times per input at the latencies you give it.
+
 If a Playwright MCP server is configured for your session, point it at the
 URL `dev.sh url` prints for interactive clicking; the CLI above is the
 baseline that always works.

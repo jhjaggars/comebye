@@ -16,6 +16,7 @@ page.on("response", (r) => { if (r.url().includes("/api/") && !r.url().includes(
 
 const results = [];
 async function check(name, fn) {
+  if (process.env.ONLY && !name.includes(process.env.ONLY)) return; // ONLY=latency: run one group while iterating
   try { await fn(); results.push([name, true, ""]); }
   catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); }
   await page.screenshot({ path: `${out}/${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
@@ -1293,6 +1294,314 @@ await check("keys: a screen ending in a prompt footer shows an Esc/Enter strip w
   await page.unroute(SCREEN_RE);
 });
 await page.setViewportSize({ width: 390, height: 844 });
+
+// ---- inputs answer within a frame, whatever the network does ----
+//
+// Every request below is held for a second or more (or refused). The tap must
+// show its result in the next frame, a refresh while the request is out must
+// not undo it, and a failed request must roll it back with an error.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const SLOW = 1500, FRAME_MS = 120; // a frame is ~16ms; this leaves room for a loaded CI box
+// tapThen runs clickJs in the page, waits one frame and returns [snapJs(), ms since the tap].
+const tapThen = (clickJs, snapJs) => page.evaluate(([c, s]) => {
+  const t0 = performance.now();
+  new Function(c)();
+  return new Promise((r) => requestAnimationFrame(() => r([new Function("return (" + s + ")")(), Math.round(performance.now() - t0)])));
+}, [clickJs, snapJs]);
+const inFrame = ([, ms], what) => { if (ms > FRAME_MS) throw new Error(`${what}: took ${ms}ms, not one frame (the request is held ${SLOW}ms)`); };
+// hold routes a request: after ms it is refused (fail: message), answered (json) or sent on.
+async function hold(re, method, ms, { fail, json } = {}) {
+  const h = async (r) => {
+    if (r.request().method() !== method) return r.fallback();
+    await sleep(ms);
+    if (fail) return r.fulfill({ status: 500, json: { message: fail } });
+    if (json) return r.fulfill({ json });
+    return r.continue();
+  };
+  await page.route(re, h);
+  return () => page.unroute(re, h);
+}
+const jpost = (u, b) => page.evaluate(([u, b]) => fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }).then((r) => r.json()), [u, b]);
+const toastNow = () => page.evaluate(() => [document.querySelector("#toast").className, document.querySelector("#toast").textContent]);
+
+async function openBlocked() { // the Pi trust prompt: five options as buttons
+  await page.goto(base + "/", { waitUntil: "load" });
+  const row = page.locator('#agents .agent[data-id$="w9:p1"]');
+  await row.waitFor({ state: "visible" });
+  await page.waitForFunction(() => /blocked/i.test(document.querySelector('#agents .agent[data-id$="w9:p1"]')?.innerText || ""), null, { timeout: 8000 });
+  await row.click();
+  await page.locator(".ans-opts button.opt").first().waitFor({ state: "visible", timeout: 8000 });
+}
+const OPT = `document.querySelectorAll('.ans-opts button.opt:not(.cancel):not(.submit)')[1]`;
+
+await check("latency: an option tap shows chosen in a frame; a refresh in flight does not undo it; it stays until the screen moves", async () => {
+  await openBlocked();
+  const off = await hold(/\/answer$/, "POST", SLOW, { json: { ok: true, keys: ["down", "enter"] } });
+  try {
+    const t = await tapThen(`${OPT}.click()`, `[${OPT}.className, document.querySelectorAll('.ans-opts button.opt.locked').length, document.querySelectorAll('.ans-opts button.opt:disabled').length].join("|")`);
+    inFrame(t, "option tap");
+    const [cls, locked, disabled] = t[0].split("|");
+    if (!/\bchosen\b/.test(cls) || !/\bpend\b/.test(cls)) throw new Error("the tapped option does not show as chosen/pending: " + cls);
+    if (Number(locked) < 3) throw new Error("the other options do not hold still: " + locked);
+    if (disabled !== "0") throw new Error("buttons were disabled (the card feels dead): " + disabled);
+    await sleep(300);
+    // A poll and an SSE redraw land while the answer is out.
+    await page.evaluate(() => { refreshDialog(); renderAnswerCard(agentById(state.selected)); });
+    await sleep(200);
+    if (!/\bchosen\b/.test(await page.evaluate(`${OPT}.className`))) throw new Error("a refresh undid the tap");
+    // A second tap while it is out is refused, not sent.
+    await page.evaluate(`document.querySelectorAll('.ans-opts button.opt')[3].click()`);
+    await sleep(SLOW);
+    // Confirmed: the screen still shows the old dialog (nothing really moved, the answer was mocked): that is stale, not a rollback.
+    await page.evaluate(() => refreshDialog());
+    await sleep(500);
+    if (!/\bchosen\b/.test(await page.evaluate(`${OPT}.className`))) throw new Error("a refresh that still shows the old dialog undid a confirmed tap");
+    if (!/sent/.test((await toastNow())[1])) throw new Error("no confirmation toast");
+  } finally { await off(); }
+});
+
+await check("latency: a refused answer rolls the card back with the error, and a second tap sends it", async () => {
+  await openBlocked();
+  const posts = [];
+  const spy = async (r) => { if (r.request().method() === "POST") posts.push(JSON.parse(r.request().postData() || "{}")); await r.fallback(); };
+  await page.route(/\/answer$/, spy);
+  const off = await hold(/\/answer$/, "POST", 600, { fail: "herdr is down" });
+  try {
+    const t = await tapThen(`${OPT}.click()`, `${OPT}.className`);
+    inFrame(t, "option tap");
+    if (!/\bchosen\b/.test(t[0])) throw new Error("not chosen at once: " + t[0]);
+    await page.waitForSelector("#answer .ans-err", { timeout: 4000 });
+    const r = await page.evaluate(`[${OPT}.className, document.querySelector('#answer .ans-err').textContent, document.querySelectorAll('.ans-opts button.opt.locked, .ans-opts button.opt:disabled').length]`);
+    if (/\bchosen\b|\bpend\b/.test(r[0])) throw new Error("still chosen after the failure: " + r[0]);
+    if (!/herdr is down/.test(r[1])) throw new Error("error not shown: " + r[1]);
+    if (r[2] !== 0) throw new Error("buttons stay locked after a failure");
+    const [tc, tx] = await toastNow();
+    if (!/error/.test(tc) || !/herdr is down/.test(tx)) throw new Error("toast " + tc + " " + tx);
+  } finally { await off(); }
+  const ok = await hold(/\/answer$/, "POST", 200, { json: { ok: true, keys: ["enter"] } });
+  try {
+    const t = await tapThen(`${OPT}.click()`, `${OPT}.className`); // retry
+    inFrame(t, "retry tap");
+    if (!/\bchosen\b/.test(t[0])) throw new Error("retry not chosen: " + t[0]);
+    await sleep(500);
+    if (await page.locator("#answer .ans-err").count()) throw new Error("the old error stays after a retry");
+  } finally { await ok(); await page.unroute(/\/answer$/, spy); }
+});
+
+await check("latency: ticking several boxes quickly shows each at once and sends them in order", async () => {
+  await openBlocked();
+  const checked = [false, false, false];
+  let n = 0;
+  const bodies = [];
+  const dialog = () => ({ kind: "claude_question", agent: "claude", header: "Pick", question: "Which?", multi: true, answerable: true, selected: 0, cancel_label: "Cancel",
+    fingerprint: "fp" + n, options: [...checked.map((c, i) => ({ label: "Opt " + "ABC"[i], checked: c })), { label: "Next", role: "next" }] });
+  const rd = async (r) => { if (r.request().method() === "GET") return r.fulfill({ json: { dialog: dialog() } }); r.fallback(); };
+  const ra = async (r) => {
+    if (r.request().method() !== "POST") return r.fallback();
+    const b = JSON.parse(r.request().postData());
+    bodies.push(b);
+    await sleep(700);
+    checked[b.index] = !checked[b.index]; n++;
+    r.fulfill({ json: { ok: true, keys: ["space"] } });
+  };
+  await page.route(/\/dialog$/, rd);
+  await page.route(/\/answer$/, ra);
+  try {
+    await page.evaluate(() => refreshDialog());
+    await page.waitForFunction(() => document.querySelectorAll(".ans-opts .opt-box").length === 3, null, { timeout: 5000 });
+    const t = await tapThen(`const b = document.querySelectorAll('.ans-opts button.opt'); b[0].click(); b[1].click();`,
+      `[...document.querySelectorAll('.ans-opts .opt-box')].map((e) => e.textContent).join("")`);
+    inFrame(t, "toggle taps");
+    if (t[0] !== "☑☑☐") throw new Error("boxes not ticked at once: " + t[0]);
+    await sleep(900);
+    await page.evaluate(() => refreshDialog()); // mid-queue: the server has ticked A only
+    await sleep(100);
+    if ((await page.evaluate(`[...document.querySelectorAll('.ans-opts .opt-box')].map((e) => e.textContent).join("")`)) !== "☑☑☐") throw new Error("a refresh flipped a box back");
+    await page.waitForFunction(() => !answer.inflight, null, { timeout: 8000 });
+    if (bodies.length !== 2 || bodies[0].index !== 0 || bodies[1].index !== 1) throw new Error("sent " + JSON.stringify(bodies));
+    if (bodies[0].fingerprint !== "fp0" || bodies[1].fingerprint !== "fp1") throw new Error("the second tap did not quote the dialog the first one produced: " + JSON.stringify(bodies));
+    await page.evaluate(() => refreshDialog());
+    await sleep(300);
+    const end = await page.evaluate(`[...document.querySelectorAll('.ans-opts .opt-box')].map((e) => e.textContent).join("")`);
+    if (end !== "☑☑☐") throw new Error("final " + end);
+  } finally { await page.unroute(/\/dialog$/, rd); await page.unroute(/\/answer$/, ra); }
+});
+
+await check("latency: a sent prompt leaves the box and shows as sending in a frame, survives a transcript poll, and comes back if refused", async () => {
+  await openAgent("alpha");
+  await page.waitForFunction(() => document.querySelector("#chat")?.innerText.includes("alpha says hi"), null, { timeout: 5000 });
+  const off = await hold(/\/prompt$/, "POST", SLOW);
+  try {
+    await page.locator("#prompt-text").click(); await page.keyboard.type("lat one");
+    const t = await tapThen(`document.querySelector('#btn-send').click()`, `[document.querySelector('#prompt-text').innerText, document.querySelector('#chat .msg.pending .msgtime')?.textContent, document.querySelector('#btn-send').disabled].join("|")`);
+    inFrame(t, "send");
+    const [box, mt, dis] = t[0].split("|");
+    if (box !== "") throw new Error("the box still holds the text: " + box);
+    if (mt !== "sending…") throw new Error("no sending bubble: " + mt);
+    if (dis === "true") throw new Error("the send button went dead");
+    await sleep(300);
+    await page.evaluate(() => loadChat(false));
+    await sleep(300);
+    if (!(await page.locator("#chat .msg.pending").count())) throw new Error("the transcript poll removed the pending bubble");
+    // Another message while the first is out: shown at once too.
+    await page.locator("#prompt-text").click(); await page.keyboard.type("lat two");
+    const t2 = await tapThen(`document.querySelector('#btn-send').click()`, `document.querySelectorAll('#chat .msg.pending').length + "|" + document.querySelector('#prompt-text').innerText`);
+    inFrame(t2, "second send");
+    if (t2[0] !== "2|") throw new Error("second message not shown at once: " + t2[0]);
+    await sleep(SLOW * 2 + 500);
+  } finally { await off(); }
+  await page.waitForFunction(() => document.querySelector("#chat")?.innerText.includes("reply to: lat two"), null, { timeout: 12000 });
+  // Refused: the text is back in the box, the bubble is gone, the error is shown.
+  const bad = await hold(/\/prompt$/, "POST", 500, { fail: "agent unreachable" });
+  try {
+    await page.locator("#prompt-text").click(); await page.keyboard.type("lat three");
+    const t = await tapThen(`document.querySelector('#btn-send').click()`, `document.querySelector('#prompt-text').innerText`);
+    inFrame(t, "send");
+    if (t[0] !== "") throw new Error("not cleared at once");
+    await page.waitForFunction(() => document.querySelector("#prompt-text").innerText.trim() === "lat three", null, { timeout: 4000 });
+    if (await page.locator("#chat .msg.pending").count()) throw new Error("the bubble stays after a failure");
+    const [tc, tx] = await toastNow();
+    if (!/error/.test(tc) || !/agent unreachable/.test(tx)) throw new Error("toast " + tc + " " + tx);
+  } finally { await bad(); }
+  await page.evaluate(() => setPromptValue(""));
+});
+
+await check("latency: To do answer, done and drop leave the open list in a frame, a refresh in flight keeps them gone, a refusal brings them back", async () => {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent");
+  const ids = await page.evaluate(async () => {
+    const post = (b) => fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ no_wait: true, ...b }) }).then((r) => r.json());
+    return [(await post({ question: "lat done", kind: "decision" })).todo.id, (await post({ question: "lat answer", kind: "decision" })).todo.id, (await post({ question: "lat drop", kind: "decision" })).todo.id];
+  });
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  await page.waitForSelector("#todo:not([hidden]) .td-item");
+  await page.evaluate(() => window.confirm = () => true);
+  const q = (id) => `#todo .td-item[data-id="${id}"]`;
+  const open = async (id) => { if (!(await page.locator(q(id) + ".open").count())) await page.locator(q(id) + " > .td-row").click(); await page.waitForSelector(q(id) + ".open"); };
+  const gone = (id) => `!document.querySelector('${q(id)}:not(.answered)')`;
+  const count = () => page.locator("#todo .td-count").innerText();
+  const c0 = await count();
+  // Done, held.
+  const off = await hold(/\/api\/todos\/[^/]+\/(done|answer|drop)$/, "POST", SLOW);
+  try {
+    await open(ids[0]);
+    const t = await tapThen(`document.querySelector('${q(ids[0])} .td-done').click()`, `${gone(ids[0])}`);
+    inFrame(t, "Done");
+    if (t[0] !== true) throw new Error("the item is still in the open list");
+    if ((await count()) === c0) throw new Error("the count did not move: " + c0);
+    await sleep(300);
+    await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); }); // the server has not heard of it yet
+    await sleep(300);
+    if (!(await page.evaluate(`${gone(ids[0])}`))) throw new Error("a refresh brought the done item back");
+    // Answer, held: into the answered group, with the pending marker.
+    await open(ids[1]);
+    await page.locator(q(ids[1]) + " .td-text").fill("lat yes");
+    const a = await tapThen(`document.querySelector('${q(ids[1])} .td-answer-btn').click()`, `${gone(ids[1])} + "|" + document.querySelector('#todo .td-gn')?.textContent`);
+    inFrame(a, "Answer");
+    if (!a[0].startsWith("true|") || !/[1-9]/.test(a[0].split("|")[1] || "")) throw new Error("not in the answered group: " + a[0]);
+    await sleep(SLOW * 2 + 500);
+  } finally { await off(); }
+  const st = await page.evaluate((i) => fetch("/api/todos/" + i).then((r) => r.json()).then((x) => x.todo.state), ids[0]);
+  if (st === "open") throw new Error("the held done never reached the server");
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  if (!(await page.evaluate(`${gone(ids[0])}`))) throw new Error("done item reappeared after the server confirmed");
+  // Refused: back, open, with the typed answer.
+  await open(ids[2]);
+  await page.locator(q(ids[2]) + " .td-text").fill("lat typed");
+  const bad = await hold(/\/api\/todos\/[^/]+\/(done|answer|drop)$/, "POST", 400, { fail: "ledger is busy" });
+  try {
+    const t = await tapThen(`document.querySelector('${q(ids[2])} .td-answer-btn').click()`, `${gone(ids[2])}`);
+    inFrame(t, "Answer");
+    if (t[0] !== true) throw new Error("not moved at once");
+    await page.waitForSelector(q(ids[2]) + ".open", { timeout: 4000 });
+    if ((await page.locator(q(ids[2]) + " .td-text").inputValue()) !== "lat typed") throw new Error("the typed answer was lost on rollback");
+    const [tc, tx] = await toastNow();
+    if (!/error/.test(tc) || !/ledger is busy/.test(tx)) throw new Error("toast " + tc + " " + tx);
+    const t2 = await tapThen(`document.querySelector('${q(ids[2])} .td-drop').click()`, `${gone(ids[2])}`);
+    inFrame(t2, "Drop");
+    if (t2[0] !== true) throw new Error("drop not at once");
+    await page.waitForSelector(q(ids[2]) + ".open", { timeout: 4000 });
+  } finally { await bad(); }
+  await page.evaluate((ids) => Promise.all(ids.map((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }))), ids);
+});
+
+await check("latency: unmark and the coordinator role show in a frame, stay through a refresh, and roll back on a refusal", async () => {
+  await openAgent("alpha");
+  await jpost("/api/marks", { agent_id: "uitest/w1:p1", reason: "lat" });
+  await page.evaluate(() => { ledger.loadedAt = 0; return loadLedger(); });
+  await page.waitForSelector('#d-markbar [data-mb="unmark"]', { timeout: 5000 });
+  const bad = await hold(/\/api\/marks\/clear$/, "POST", 500, { fail: "no ledger" });
+  try {
+    const t = await tapThen(`document.querySelector('#d-markbar [data-mb="unmark"]').click()`, `document.querySelector('#d-markbar').hidden`);
+    inFrame(t, "Unmark");
+    if (t[0] !== true) throw new Error("the bar is still there");
+    await page.waitForSelector('#d-markbar [data-mb="unmark"]', { timeout: 4000 }); // refused: back
+    const [tc, tx] = await toastNow();
+    if (!/error/.test(tc) || !/no ledger/.test(tx)) throw new Error("toast " + tc + " " + tx);
+  } finally { await bad(); }
+  const slow = await hold(/\/api\/marks\/clear$/, "POST", SLOW);
+  try {
+    const t = await tapThen(`document.querySelector('#d-markbar [data-mb="unmark"]').click()`, `document.querySelector('#d-markbar').hidden`);
+    inFrame(t, "Unmark");
+    await sleep(300);
+    await page.evaluate(() => { ledger.loadedAt = 0; return loadLedger(); }); // still marked on the server
+    await sleep(300);
+    if (!(await page.evaluate(() => document.querySelector("#d-markbar").hidden))) throw new Error("a refresh brought the mark back");
+    await sleep(SLOW);
+  } finally { await slow(); }
+  // The role.
+  await page.locator("#d-more").click();
+  const roleSlow = await hold(/\/api\/roles$/, "POST", SLOW);
+  try {
+    const t = await tapThen(`document.querySelector('#d-role').click()`, `isCoordinator(agentById(state.selected)) + "|" + document.querySelector('#d-menu').hidden`);
+    inFrame(t, "role");
+    if (t[0] !== "true|true") throw new Error("role not applied at once: " + t[0]);
+    await sleep(300);
+    await page.evaluate(() => { ledger.loadedAt = 0; return loadLedger(); });
+    await sleep(300);
+    if (!(await page.evaluate(() => isCoordinator(agentById(state.selected))))) throw new Error("a refresh undid the role");
+    await sleep(SLOW);
+  } finally { await roleSlow(); }
+  await jpost("/api/roles", { agent_id: "uitest/w1:p1", role: "" });
+  await page.evaluate(() => { ledgerOpt.m.clear(); ledger.loadedAt = 0; return loadLedger(); });
+});
+
+await check("latency: cancelling a queued prompt removes it in a frame; a refresh in flight does not bring it back; a refusal does", async () => {
+  await openAgent("alpha");
+  let alive = true;
+  const rq = async (r) => {
+    const m = r.request().method();
+    if (m === "GET") return r.fulfill({ json: { queue: alive ? [{ id: "q1", text: "wait for me", from: "you" }] : [] } });
+    r.fallback();
+  };
+  await page.route(/\/api\/queue(\?.*)?$/, rq);
+  const rd = async (r) => { if (r.request().method() !== "DELETE") return r.fallback(); await sleep(SLOW); alive = false; r.fulfill({ json: { ok: true } }); };
+  await page.route(/\/api\/queue\/q1$/, rd);
+  try {
+    await page.evaluate(() => refreshQueued(true));
+    await page.waitForSelector("#queued .q-cancel", { timeout: 5000 });
+    const t = await tapThen(`document.querySelector('#queued .q-cancel').click()`, `document.querySelector('#queued').hidden`);
+    inFrame(t, "Cancel");
+    if (t[0] !== true) throw new Error("the queued prompt is still listed");
+    await sleep(300);
+    await page.evaluate(() => refreshQueued(true)); // the server still lists it
+    await sleep(300);
+    if (!(await page.evaluate(() => document.querySelector("#queued").hidden))) throw new Error("a refresh brought the cancelled prompt back");
+    await sleep(SLOW);
+  } finally { await page.unroute(/\/api\/queue\/q1$/, rd); }
+  alive = true;
+  const bad = async (r) => { if (r.request().method() !== "DELETE") return r.fallback(); await sleep(300); r.fulfill({ status: 500, json: { message: "queue busy" } }); };
+  await page.route(/\/api\/queue\/q1$/, bad);
+  try {
+    await page.evaluate(() => { queued.gone.clear(); return refreshQueued(true); });
+    await page.waitForSelector("#queued .q-cancel", { timeout: 5000 });
+    const t = await tapThen(`document.querySelector('#queued .q-cancel').click()`, `document.querySelector('#queued').hidden`);
+    inFrame(t, "Cancel");
+    await page.waitForSelector("#queued .q-cancel", { timeout: 4000 });
+    const [tc, tx] = await toastNow();
+    if (!/error/.test(tc) || !/queue busy/.test(tx)) throw new Error("toast " + tc + " " + tx);
+  } finally { await page.unroute(/\/api\/queue\/q1$/, bad); await page.unroute(/\/api\/queue(\?.*)?$/, rq); }
+});
 
 // ---- Pi's "Trust project folder?" prompt ----
 // herdr reports the agent idle while it is up; the app must read the screen,

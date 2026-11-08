@@ -11,7 +11,7 @@ const state = {
   es: null,            // EventSource
   pollTimer: null,     // transcript/output auto-poll while detail view is open
   pollUntil: 0,        // poll regardless of agent status until this time (ms): set by a send
-  sending: false,
+  sending: 0, // prompts on the wire
   chat: null,          // chat view state: { rendered: Set<id>, skip, more, terminal: bool }
   ask: null,           // pending ask_user_question from the transcript, if any
   lastStatus: null,    // status of the viewed agent at the previous SSE event
@@ -100,6 +100,48 @@ function toast(msg, isError = false) {
   el.className = "show" + (isError ? " error" : "");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.className = ""), 2600);
+}
+
+// ---- optimistic actions ----
+//
+// A tap must look done within a frame, whatever the network does: the app
+// changes its own state first, sends the request behind it, and rolls back
+// with an error if the request fails. Refreshes (polls, SSE) re-fetch the
+// server's view, which has not heard of the tap yet, so the pending change
+// is an Overlay: it is re-applied to every refresh until the server shows it
+// (or SETTLE_MS after the request was confirmed), so nothing flickers back.
+const SETTLE_MS = 6000;
+
+class Overlay {
+  constructor() { this.m = new Map(); }
+  // busy: the request is still on the wire (a double submit is refused);
+  // has also covers the settle window, where only refreshes need covering.
+  busy(key) { const e = this.m.get(key); return !!e && e.until === Infinity; }
+  busyKeys() { return [...this.m].filter(([, e]) => e.until === Infinity).map(([k]) => k); }
+  has(key) { return this.m.has(key); }
+  // add registers a pending change; reapply(fn) runs fn(entry, key) for each.
+  add(key, entry) { this.m.set(key, { ...entry, until: Infinity }); }
+  // settle: the request was confirmed; keep covering refreshes that were
+  // already on the wire for a while longer.
+  settle(key) { const e = this.m.get(key); if (e) e.until = Date.now() + SETTLE_MS; }
+  drop(key) { this.m.delete(key); }
+  each(fn) {
+    const now = Date.now();
+    for (const [k, e] of this.m) {
+      if (e.until < now) this.m.delete(k);
+      else fn(e, k);
+    }
+  }
+}
+
+// flash gives a pressed button an instant, quiet "taken" cue (it needs no
+// network): used where the change the tap causes is not drawn at once.
+function flash(el) {
+  if (!el) return;
+  el.classList.remove("flash");
+  void el.offsetWidth; // restart the animation
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 500);
 }
 
 // esc escapes text for HTML, quotes included, so it is also safe inside a
@@ -644,6 +686,7 @@ function agentRow(a, worker) {
 // marked ready to remove. The list groups agents by project: home agents
 // first, then the workers, indented, each with its ledger status.
 
+const ledgerOpt = new Overlay(); // marks and roles changed here, on the wire or just confirmed
 const ledger = {
   on: null,            // null until loaded; false when the server keeps no ledger
   entries: [],
@@ -675,6 +718,13 @@ function setLedger(d) {
   }
   for (const m of ledger.marks) if (m && m.agent_id) ledger.marked.set(m.agent_id, m);
   ledger.roles = new Map(d.roles && typeof d.roles === "object" ? Object.entries(d.roles) : []);
+  ledgerOpt.each((e) => e.apply());
+}
+
+// redrawMarks repaints what a mark or role change shows.
+function redrawMarks() {
+  renderList();
+  if (state.selected) renderDetailMenu();
 }
 
 // isCoordinator: the hub records the agent as a coordinator (and the pane
@@ -834,7 +884,7 @@ function renderRemovalBanner() {
 // start a coordinator. Dismissing that note is stored on the hub, for this
 // streak of misses only; the next briefing ends the streak.
 
-const briefing = { data: null, schedule: null, loadedAt: 0, inflight: false };
+const briefing = { data: null, schedule: null, loadedAt: 0, inflight: false, acking: null };
 const BRIEF_DISMISSED_KEY = "comebye-brief-dismissed";
 const BRIEF_EXPANDED_KEY = "comebye-brief-expanded"; // "1" once the user expanded the card
 
@@ -878,7 +928,7 @@ function briefChecked() {
 // briefMiss is the streak of missed scheduled briefings to show, if any.
 function briefMiss() {
   const m = briefing.schedule && briefing.schedule.enabled ? briefing.schedule.missed : null;
-  return m && !m.dismissed && m.count > 0 ? m : null;
+  return m && !m.dismissed && m.count > 0 && m.id !== briefing.acking ? m : null;
 }
 
 function fmtWhen(iso) {
@@ -946,7 +996,7 @@ const TODO_DRAFTS_KEY = "comebye.todo.drafts";
 const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up" };
 const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false,
   openId: null, lastId: null, nxt: null, ansOpen: false, seen: new Map(), order: [], follow: false,
-  drafts: loadTodoDrafts(), busy: new Set() };
+  drafts: loadTodoDrafts(), pend: new Overlay() };
 
 function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") ? u : ""; }
 
@@ -973,6 +1023,7 @@ async function loadTodos() {
     todos.items = Array.isArray(d.todos) ? d.todos : [];
     todos.open = d.open | 0;
     todos.answered = d.answered | 0;
+    todoReapply();
   } catch (e) {
     if (e.status === 503 || e.status === 404) todos.on = false;
     // Otherwise keep what we had: a failed poll should not make the panel blink.
@@ -1085,7 +1136,8 @@ function todoItemHtml(t, pfx) {
   const draft = todoDraft(t.id).trim() !== "";
   const rid = `${pfx}-row-${t.id}`, pid = `${pfx}-panel-${t.id}`;
   const chips = `<span class="td-chip td-draft"${draft ? "" : " hidden"}>draft</span>` +
-    (ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`);
+    (ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`) +
+    (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "");
   let panel = "";
   if (open) {
     const meta = [who && `waiting: ${who}`, age, t.id].filter(Boolean).join(" · ");
@@ -1113,7 +1165,7 @@ function todoItemHtml(t, pfx) {
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
     const after = ans ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
     const kept = ans && draft ? todoKeptHtml(t.id, todoDraft(t.id), "Not sent: this was answered before you sent yours.") : "";
-    const busy = todos.busy.has(t.id) ? " disabled" : "";
+    const busy = "";
     const form = ans ? ""
       : `<textarea class="td-text" id="${pfx}-answer-${escAttr(t.id)}" rows="2" maxlength="4000" placeholder="Your answer" aria-label="Your answer">${esc(todoDraft(t.id))}</textarea>`;
     panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
@@ -1133,7 +1185,7 @@ function todoItemHtml(t, pfx) {
         </div>
       </div>`;
   }
-  return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}" data-id="${escAttr(t.id)}">
+  return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}${todos.pend.busy(t.id) ? " sending" : ""}" data-id="${escAttr(t.id)}">
       <button type="button" class="td-row" id="${escAttr(rid)}" aria-expanded="${open}"${open ? ` aria-controls="${escAttr(pid)}"` : ""}>
         <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</span>${!open && !ans && todos.nxt === t.id ? `<span class="td-nx">Next up</span>` : ""}
         <span class="td-rm"><span class="td-who">${esc(who)}</span><span class="td-age">${esc(age)}</span><span class="td-chips">${chips}</span></span>
@@ -1170,7 +1222,7 @@ function todoRowIn(el, id) { return id ? el.querySelector(`.td-item[data-id="${C
 function todoFollowRefresh() {
   let moved = false;
   const id = todos.openId;
-  if (id && todos.on === true && !todos.busy.has(id)) {
+  if (id && todos.on === true && !todos.pend.busy(id)) {
     const t = todos.items.find((x) => x.id === id);
     if (!t || (todos.seen.get(id) === "open" && t.state !== "open")) {
       const kept = todoDraft(id).trim() !== "";
@@ -1226,7 +1278,7 @@ function renderTodos(force) {
   if (main) main.hidden = !show;
   if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
-  const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.busy.size, [...todos.drafts.keys()],
+  const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()],
     todos.items.map((t) => [t.id, t.state, t.updated_at, t.question])]);
   // The age moves between renders; a typed answer must not be lost to one.
   const typing = (el) => el && el.contains(document.activeElement) && document.activeElement.classList.contains("td-text");
@@ -1283,26 +1335,66 @@ function todoCollapse() {
   if (row) row.focus({ preventScroll: true });
 }
 
+// todoApply makes an action true in the local list: done and drop take the
+// item off it, an answer moves it to the answered group.
+function todoApply(id, what, body) {
+  const t = todos.items.find((x) => x.id === id);
+  if (!t || t.state !== "open") return;
+  if (what === "answer") {
+    t.state = "answered";
+    t.answer = { text: body.text, via: "app", by: "", at: new Date().toISOString() };
+    t.updated_at = t.answer.at;
+    todos.open = Math.max(0, todos.open - 1);
+    todos.answered++;
+  } else {
+    todos.items = todos.items.filter((x) => x.id !== id);
+    todos.open = Math.max(0, todos.open - 1);
+  }
+}
+
+// A refresh brings the server's list, which has not heard of an action
+// still on the wire (or just confirmed): lay those actions over it again.
+function todoReapply() {
+  todos.pend.each((e, id) => todoApply(id, e.what, e.body));
+}
+
+// todoAct: the item leaves the open list in this frame, the POST goes out
+// behind it. On failure it comes back, open, with the draft in its box.
 async function todoAct(id, what, body) {
-  const next = todoNextOpen(id, todoOrder().map((t) => t.id));
+  if (todos.pend.busy(id)) return; // already on its way
+  const t = todos.items.find((x) => x.id === id);
+  if (!t) return;
+  const next = todoNextOpen(id, todoOrder().map((x) => x.id));
   const hadFocus = todoHasFocus();
-  todos.busy.add(id);
-  renderTodos();
+  const prev = { item: JSON.parse(JSON.stringify(t)), draft: todos.drafts.get(id), open: todos.open, answered: todos.answered, at: todos.items.indexOf(t) };
+  todos.pend.add(id, { what, body });
+  todoApply(id, what, body);
+  todos.drafts.delete(id);
+  saveTodoDrafts();
+  // Focus moves on to the next open item, as the list closes this one.
+  if (todos.openId === id) {
+    todos.openId = next;
+    if (next) todos.lastId = next;
+    todos.follow = hadFocus;
+  }
+  renderTodos(true);
   try {
     await api(`/api/todos/${encodeURIComponent(id)}/${what}`, { method: "POST", body: JSON.stringify(body || {}) });
-    todos.drafts.delete(id);
-    saveTodoDrafts();
-    // Focus moves on to the next open item, as the list closes this one.
-    if (todos.openId === id) {
-      todos.openId = next;
-      if (next) todos.lastId = next;
-      todos.follow = hadFocus;
-    }
+    todos.pend.settle(id);
     toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : "Dropped");
   } catch (e) {
-    toast(e.message, true);
-  } finally {
-    todos.busy.delete(id);
+    // Put it back as it was, with the typed answer, so a second try is one tap.
+    todos.pend.drop(id);
+    todos.items = todos.items.filter((x) => x.id !== id);
+    todos.items.splice(Math.min(prev.at, todos.items.length), 0, prev.item);
+    todos.open = prev.open; todos.answered = prev.answered;
+    const keep = prev.draft || (what === "answer" && body && body.text ? { text: body.text, q: prev.item.question } : null);
+    if (keep) { todos.drafts.set(id, keep); saveTodoDrafts(); }
+    todos.openId = id; todos.lastId = id;
+    todos.seen.set(id, "open");
+    renderTodos(true);
+    toast((what === "answer" ? "Not sent: " : "Not done: ") + e.message, true);
+    return;
   }
   todos.loadedAt = 0;
   await loadTodos();
@@ -1512,12 +1604,15 @@ async function onBriefClick(ev) {
   } else if (ev.target.closest(".bf-ack")) {
     const m = briefMiss();
     if (!m) return;
+    briefing.acking = m.id; // gone now; back if the request fails
+    renderBrief();
     try {
       const d = await api("/api/brief/schedule/dismiss", { method: "POST", body: JSON.stringify({ id: m.id }) });
       if (d && d.schedule) briefing.schedule = d.schedule;
     } catch (e) {
-      toast(e.message, true);
+      toast("Could not dismiss: " + e.message, true);
     }
+    briefing.acking = null;
     renderBrief();
   } else if (b && ev.target.closest(".bf-dismiss")) {
     lsSet(BRIEF_DISMISSED_KEY, b.at);
@@ -1876,17 +1971,27 @@ function renderDetailMenu() {
 async function toggleRole() {
   const id = state.selected;
   toggleDetailMenu(false);
-  if (!id) return;
-  const coord = isCoordinator(agentById(id));
+  if (!id || ledgerOpt.busy("role:" + id)) return;
+  const a = agentById(id);
+  const coord = isCoordinator(a);
+  const was = ledger.roles.get(id);
+  const want = coord ? "" : "coordinator";
+  const apply = () => { if (want) ledger.roles.set(id, { role: want, name: a ? a.name || "" : "", by: "app", at: new Date().toISOString() }); else ledger.roles.delete(id); };
+  ledgerOpt.add("role:" + id, { apply });
+  apply();
+  redrawMarks();
   try {
-    const d = await api("/api/roles", { method: "POST", body: JSON.stringify({ agent_id: id, role: coord ? "" : "coordinator" }) });
+    const d = await api("/api/roles", { method: "POST", body: JSON.stringify({ agent_id: id, role: want }) });
     ledger.roles = new Map(d.roles && typeof d.roles === "object" ? Object.entries(d.roles) : []);
+    ledgerOpt.settle("role:" + id);
+    ledgerOpt.each((e) => e.apply());
     toast(coord ? "No longer a coordinator" : "Now a coordinator");
   } catch (e) {
-    toast(e.message, true);
+    ledgerOpt.drop("role:" + id);
+    if (was) ledger.roles.set(id, was); else ledger.roles.delete(id);
+    toast("Could not change the role: " + e.message, true);
   }
-  renderDetailMenu();
-  renderList();
+  redrawMarks();
 }
 
 function toggleDetailMenu(show) {
@@ -1919,11 +2024,23 @@ function toggleMark() {
 }
 
 async function unmarkAgent(id) {
+  const key = "mark:" + id;
+  if (ledgerOpt.busy(key)) return;
+  const was = ledger.marked.get(id);
+  const apply = () => ledger.marked.delete(id);
+  ledgerOpt.add(key, { apply });
+  apply();
+  redrawMarks();
   try {
     await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
+    ledgerOpt.settle(key);
     toast("Unmarked");
   } catch (e) {
-    toast(e.message, true);
+    ledgerOpt.drop(key);
+    if (was) ledger.marked.set(id, was);
+    redrawMarks();
+    toast("Could not unmark: " + e.message, true);
+    return;
   }
   ledger.loadedAt = 0;
   await loadLedger();
@@ -1964,24 +2081,35 @@ function syncMark() {
 
 async function submitMark() {
   if (mk.busy) return;
-  mk.busy = true;
-  $("mk").classList.add("busy");
-  $("mk-go").disabled = true;
-  $("mk-status").textContent = "Marking…";
+  const id = mk.id;
+  const reason = $("mk-reason").value.trim();
+  const key = "mark:" + id;
+  // The sheet closes and the agent shows as marked now; the request follows.
+  const apply = () => ledger.marked.set(id, { agent_id: id, reason, by: "app", at: new Date().toISOString(), pending: true });
+  ledgerOpt.add(key, { apply });
+  apply();
+  closeMark();
+  redrawMarks();
+  toast("Marked ready to remove");
+  let d;
   try {
-    const d = await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: mk.id, reason: $("mk-reason").value.trim() }) });
-    const asking = d && d.mark && d.mark.ask && d.mark.ask.state === "asking";
-    mk.busy = false;
-    $("mk").classList.remove("busy");
-    closeMark();
-    toast(asking ? "Marked ready to remove; asking the session whether it is safe" : "Marked ready to remove");
+    d = await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: id, reason }) });
+    ledgerOpt.settle(key);
   } catch (e) {
-    mk.busy = false;
-    $("mk").classList.remove("busy");
-    $("mk-go").disabled = false;
-    $("mk-status").textContent = e.message;
+    ledgerOpt.drop(key);
+    ledger.marked.delete(id);
+    redrawMarks();
+    toast("Could not mark: " + e.message, true);
+    // Reopen the sheet with the reason, so a second try is one tap.
+    setTimeout(() => {
+      if (mk.open) return;
+      openMark(id);
+      $("mk-reason").value = reason;
+      $("mk-status").textContent = e.message;
+    }, 200);
     return;
   }
+  if (d && d.mark && d.mark.ask && d.mark.ask.state === "asking") toast("Marked ready to remove; asking the session whether it is safe");
   ledger.loadedAt = 0;
   await loadLedger();
 }
@@ -2412,11 +2540,17 @@ async function reviewAction(act, id) {
   const it = review.items.find((x) => x.id === id);
   if (!it || review.busy) return;
   if (act === "unmark") {
-    try {
-      await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
-    } catch (e) { toast(e.message, true); return; }
+    // The row leaves the review now; it comes back if the request fails.
+    const was = review.items.slice();
     review.items = review.items.filter((x) => x.id !== id);
     renderReview();
+    try {
+      await api("/api/marks/clear", { method: "POST", body: JSON.stringify({ agent_id: id }) });
+    } catch (e) {
+      if (review.open && !review.items.some((x) => x.id === id)) { review.items = was; renderReview(); }
+      toast("Could not unmark: " + e.message, true);
+      return;
+    }
     ledger.loadedAt = 0;
     loadLedger();
     return;
@@ -3541,7 +3675,7 @@ function renderDetail() {
 // agent: they are sent once it is idle with no question open. Shown above
 // the composer with a way to withdraw each one.
 
-const queued = { id: null, at: 0, items: [], busy: false };
+const queued = { id: null, at: 0, items: [], busy: false, gone: new Set() };
 
 function renderQueued() {
   const el = $("queued");
@@ -3565,7 +3699,7 @@ async function refreshQueued(force = false) {
   queued.busy = true;
   try {
     const r = await api(`/api/queue?agent=${encodeURIComponent(id)}`);
-    if (id === state.selected) { queued.id = id; queued.items = r.queue || []; }
+    if (id === state.selected) { queued.id = id; queued.items = (r.queue || []).filter((q) => !queued.gone.has(q.id)); }
   } catch {
     if (id === state.selected) { queued.id = id; queued.items = []; } // no hub or no queue: nothing to show
   } finally {
@@ -3578,10 +3712,18 @@ async function refreshQueued(force = false) {
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest && ev.target.closest("#queued .q-cancel");
   if (!b) return;
-  b.disabled = true;
+  const qid = b.dataset.qid;
+  if (queued.gone.has(qid)) return;
+  // The prompt leaves the list now; a refresh that still has it (it was
+  // fetched before the DELETE) must not bring it back.
+  queued.gone.add(qid);
+  queued.items = queued.items.filter((q) => q.id !== qid);
+  renderQueued();
   try {
-    await api(`/api/queue/${encodeURIComponent(b.dataset.qid)}`, { method: "DELETE" });
+    await api(`/api/queue/${encodeURIComponent(qid)}`, { method: "DELETE" });
+    setTimeout(() => queued.gone.delete(qid), SETTLE_MS);
   } catch (e) {
+    queued.gone.delete(qid);
     toast("could not cancel: " + e.message, true);
   }
   refreshQueued(true);
@@ -4242,7 +4384,7 @@ function renderPending() {
     const div = document.createElement("div");
     div.className = "msg user pending";
     div.innerHTML = `<div class="bubble">${esc(p.text)}</div>` +
-      `<div class="msgtime">${working ? "queued — the agent picks it up at its next step" : "sent"}</div>`;
+      `<div class="msgtime">${p.sending ? "sending…" : working ? "queued — the agent picks it up at its next step" : "sent"}</div>`;
     chatEl.insertBefore(div, before);
   }
 }
@@ -4427,7 +4569,11 @@ const answer = {
   pane: null,      // pane the dialog below belongs to
   dialog: null,    // last GET /dialog result (null: none recognized)
   loaded: false,   // a /dialog response has arrived for this pane
-  inflight: false, // an answer POST is running
+  inflight: false, // taps are being sent (answer.queue is not empty)
+  queue: [],       // taps already shown on the card, sent one at a time: {action, index, label, want}
+  server: null,    // the last dialog the server reported (what a failed tap rolls back to)
+  hold: null,      // after a sent tap: {fp, until}: refreshes still showing that dialog are stale
+  err: "",         // why the last tap failed (shown on the card until the next tap)
   moreOpen: false, // "More keys…" disclosure state (kept across re-renders)
   snapText: "loading screen…",
 };
@@ -4460,6 +4606,7 @@ function updateAnswerCard() {
     answer.dialog = null;
     answer.loaded = false;
     answer.pane = null;
+    answer.queue = []; answer.inflight = false; answer.hold = null; answer.err = ""; answer.server = null;
     stopAnswerPoll();
     return;
   }
@@ -4467,6 +4614,7 @@ function updateAnswerCard() {
     answer.pane = state.selected;
     answer.dialog = null;
     answer.loaded = false;
+    answer.queue = []; answer.inflight = false; answer.hold = null; answer.err = ""; answer.server = null;
     answer.moreOpen = false;
     answer.snapText = "loading screen…";
   }
@@ -4481,12 +4629,13 @@ function updateAnswerCard() {
 function renderAnswerCard(a) {
   const el = $("answer");
   const d = answer.dialog;
-  const sig = JSON.stringify([answer.loaded, d && d.fingerprint, d && d.selected, d && d.insert, a.agent_status, a.state_labels, state.ask && state.ask.tool_call_id]);
+  const sig = JSON.stringify([answer.loaded, d && d.fingerprint, d && d.selected, d && d.insert, d && d.options && d.options.map((o) => (o.checked ? 1 : 0)).join(""),
+    answer.queue.map((q) => q.action + q.index), answer.hold && answer.hold.index, answer.err, a.agent_status, a.state_labels, state.ask && state.ask.tool_call_id]);
   if (answer.shown && sig === answer.sig) return;
   answer.sig = sig;
   el.innerHTML = answerCardHTML(a, d);
   el.querySelectorAll(".pad .btn").forEach((b) =>
-    b.addEventListener("click", () => padPress(b.dataset.key, b.textContent)));
+    b.addEventListener("click", () => padPress(b.dataset.key, b.textContent, b)));
   el.querySelectorAll("button.opt").forEach((b) =>
     b.addEventListener("click", () => tapAnswer(b.dataset.action, Number(b.dataset.i))));
   const more = el.querySelector("details.ans-more");
@@ -4494,7 +4643,6 @@ function renderAnswerCard(a) {
     answer.moreOpen = more.open;
     if (more.open) refreshSnapshot();
   });
-  setAnswerBusy(answer.inflight);
 }
 
 function answerCardHTML(a, d) {
@@ -4508,6 +4656,14 @@ function answerCardHTML(a, d) {
     const h = dialogHints(d);
     if (h.set) html += `<div class="ans-hint">${esc(h.set)}</div>`;
     html += '<div class="ans-opts">';
+    // Taps already made show as chosen at once (pend: the first one still in
+    // flight); while a single-shot answer is out, the other options hold still.
+    const oneShot = answer.queue.some((q) => q.action !== "toggle") || (answer.hold && answer.hold.action !== "toggle" && answer.hold.fp === d.fingerprint);
+    const stateOf = (i, action) => {
+      const k = answer.queue.findIndex((q) => q.index === i && (q.action === "toggle") === (action === "toggle"));
+      const held = answer.hold && answer.hold.fp === d.fingerprint && answer.hold.index === i && action !== "toggle";
+      return (k >= 0 || held ? " chosen" : "") + (k === 0 ? " pend" : "") + (oneShot ? " locked" : "");
+    };
     d.options.forEach((o, i) => {
       const cur = i === d.selected ? " cur" : "";
       const desc = o.description ? `<span class="opt-desc">${esc(o.description)}</span>` : "";
@@ -4527,11 +4683,11 @@ function answerCardHTML(a, d) {
         // Zero ticks is a valid answer: say so, so "Next" is never a mystery.
         const none = !d.options.some((x) => x.checked);
         const word = o.label === "Submit" ? "Submit" : "Next";
-        html += `<button type="button" class="opt submit${cur}" data-action="submit" data-i="${i}"><span class="opt-label">${word}${none ? " with none selected" : ""}</span></button>`;
+        html += `<button type="button" class="opt submit${cur}${stateOf(i, "submit")}" data-action="submit" data-i="${i}"><span class="opt-label">${word}${none ? " with none selected" : ""}</span></button>`;
         return;
       }
       const box = d.multi ? `<span class="opt-box">${o.checked ? "☑" : "☐"}</span>` : "";
-      html += `<button type="button" class="opt${cur}${o.checked ? " checked" : ""}" data-action="${d.multi ? "toggle" : "select"}" data-i="${i}"` +
+      html += `<button type="button" class="opt${cur}${o.checked ? " checked" : ""}${stateOf(i, d.multi ? "toggle" : "select")}" data-action="${d.multi ? "toggle" : "select"}" data-i="${i}"` +
         `${i === d.selected ? ' aria-current="true"' : ""}>${box}<span class="opt-label">${esc(o.label)}</span>${desc}</button>`;
     });
     html += "</div>";
@@ -4540,10 +4696,11 @@ function answerCardHTML(a, d) {
       // leaves it; a second would cancel the whole question, so only this
       // button sends it, and only while the field is focused.
       html += '<div class="ans-hint">A text field is focused (INSERT mode), so the options cannot be used yet.</div>' +
-        '<button type="button" class="opt submit" data-action="reset" data-i="-1"><span class="opt-label">Leave the text field (one Esc)</span></button>';
+        `<button type="button" class="opt submit${stateOf(-1, "reset")}" data-action="reset" data-i="-1"><span class="opt-label">Leave the text field (one Esc)</span></button>`;
     } else if (d.cancel_label) {
-      html += `<button type="button" class="opt cancel" data-action="cancel" data-i="-1">${esc(h.cancel)}</button>`;
+      html += `<button type="button" class="opt cancel${stateOf(-1, "cancel")}" data-action="cancel" data-i="-1">${esc(h.cancel)}</button>`;
     }
+    if (answer.err) html += `<div class="ans-err" role="alert">${esc(answer.err)}</div>`;
     if (h.after) html += `<div class="ans-hint">${esc(h.after)}</div>`;
   } else if (!answer.loaded) {
     html += '<div class="ans-hint">Reading the dialog…</div>';
@@ -4626,59 +4783,165 @@ function dialogHints(d) {
   return h;
 }
 
-function setAnswerBusy(busy) {
-  document.querySelectorAll("#answer button.opt").forEach((b) => { b.disabled = busy; });
-}
-
 const KEY_GLYPH = { up: "↑", down: "↓", enter: "Enter", esc: "Esc", space: "Space" };
+const ANSWER_HOLD_MS = 3500; // how long a refresh that still shows the old dialog is taken as stale
 
-async function tapAnswer(action, index) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// tapAnswer: the tap shows on the card in this frame (a toggled box flips, a
+// chosen option takes the chosen look); the request goes out behind it. Taps
+// are sent one at a time, each quoting the dialog as the server last showed it,
+// so ticking several boxes quickly all land. A single-shot answer (select,
+// submit, cancel) locks the card until it is confirmed or rolled back.
+function tapAnswer(action, index) {
   const d = answer.dialog;
   const pane = state.selected;
-  if (!d || !pane || answer.inflight) return;
+  if (!d || !pane) return;
+  if (answer.queue.some((q) => q.action !== "toggle")) return; // an answer is already on its way
+  const h = answer.hold;
+  if (h && h.action !== "toggle" && h.fp === d.fingerprint && Date.now() < h.until) return; // sent; waiting for the screen
+  const o = d.options && d.options[index];
+  const op = { action, index, label: o ? o.label : "", want: null };
+  if (action === "toggle") {
+    if (!o) return;
+    o.checked = !o.checked;
+    op.want = !!o.checked;
+  }
+  answer.err = "";
+  answer.hold = null;
+  answer.queue.push(op);
   answer.inflight = true;
-  setAnswerBusy(true);
+  const a = agentById(pane);
+  if (a) renderAnswerCard(a);
+  pumpAnswers(pane);
+}
+
+async function postAnswer(pane, op, fingerprint) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
   try {
     const res = await fetch(`${pathFor(pane)}/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, index, fingerprint: d.fingerprint }),
+      body: JSON.stringify({ action: op.action, index: op.index, fingerprint }),
+      signal: ctl.signal,
     });
     let body = {};
     try { body = await res.json(); } catch {}
-    if (state.selected !== pane) return;
-    if (res.status === 401) { setUnauthorized(true); toast(UNAUTHORIZED_MSG, true); return; }
-    if (res.ok) {
-      toast("sent " + (body.keys || []).map((k) => KEY_GLYPH[k] || k).join(" "));
-      setTimeout(refreshDialog, 400);
-      if (answer.moreOpen) setTimeout(refreshSnapshot, 450);
-      state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
-      if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
-      return;
-    }
-    if (res.status === 409 && body.code === "dialog_changed") {
-      toast("the question changed — check it again", true);
-      setDialog(pane, body.dialog || null);
-    } else if (res.status === 409 && body.code === "duplicate") {
-      toast("already answered", true);
-      setTimeout(refreshDialog, 400);
-    } else if (res.status === 409 && body.code === "no_dialog") {
-      toast("the dialog is gone", true);
-      setDialog(pane, null);
-    } else {
-      toast("answer failed: " + (body.message || body.code || res.statusText), true);
-      if (body.dialog !== undefined) setDialog(pane, body.dialog);
-    }
-  } catch (e) {
-    toast("answer failed: " + e.message, true);
+    return { res, body };
   } finally {
-    answer.inflight = false;
-    setAnswerBusy(false);
+    clearTimeout(timer);
   }
 }
 
+// freshDialog waits (a few tries) for the screen to show a dialog other than
+// the one with this fingerprint: the previous tap has to land first.
+async function freshDialog(pane, fp) {
+  for (let i = 0; i < 6; i++) {
+    await sleep(i ? 350 : 200);
+    if (state.selected !== pane) return null;
+    try {
+      const r = await api(`${pathFor(pane)}/dialog`);
+      if (r.dialog && r.dialog.fingerprint !== fp) return r.dialog;
+      if (!r.dialog) return null;
+    } catch { return null; }
+  }
+  return null;
+}
+
+async function pumpAnswers(pane) {
+  if (answer.pumping) return;
+  answer.pumping = true;
+  let fail = "";
+  let sentLast = null;
+  try {
+    while (answer.queue.length && state.selected === pane && answer.pane === pane) {
+      const op = answer.queue[0];
+      const base = answer.server || answer.dialog;
+      let fp = base && base.fingerprint;
+      let attempt = 0;
+      for (;;) {
+        let r;
+        try { r = await postAnswer(pane, op, fp); }
+        catch (e) { fail = e && e.name === "AbortError" ? "timed out — check the connection" : (e && e.message) || "network error"; break; }
+        if (state.selected !== pane) return;
+        const { res, body } = r;
+        if (res.status === 401) { setUnauthorized(true); fail = UNAUTHORIZED_MSG; break; }
+        if (res.ok) { sentLast = { op, fp, keys: body.keys || [] }; break; }
+        // A toggle can be sent again against the dialog as it is now, when it is
+        // the same question and the box still needs flipping (the previous tap
+        // had not landed yet, or two taps raced).
+        const nd = body.dialog;
+        const retryable = op.action === "toggle" && attempt < 3 && (
+          (res.status === 409 && body.code === "dialog_changed" && nd && nd.options && nd.options[op.index] &&
+            nd.options[op.index].label === op.label && !!nd.options[op.index].checked !== op.want) ||
+          (res.status === 409 && body.code === "duplicate"));
+        if (retryable) {
+          attempt++;
+          if (body.code === "duplicate") { const f = await freshDialog(pane, fp); if (!f) { fail = "already answered"; break; } fp = f.fingerprint; answer.server = f; }
+          else { fp = nd.fingerprint; answer.server = nd; }
+          continue;
+        }
+        if (res.status === 409 && body.code === "dialog_changed") { fail = "the question changed — check it again"; if (nd) answer.server = nd; }
+        else if (res.status === 409 && body.code === "duplicate") { fail = "already answered"; }
+        else if (res.status === 409 && body.code === "no_dialog") { fail = "the dialog is gone"; answer.server = null; answer.gone = true; }
+        else { fail = "answer failed: " + (body.message || body.code || res.statusText); if (body.dialog !== undefined) answer.server = body.dialog; }
+        break;
+      }
+      if (fail) break;
+      answer.queue.shift();
+      if (answer.queue.length) {
+        // Next tap: quote the dialog as it is once this one has landed.
+        const f = await freshDialog(pane, fp);
+        if (!f) { fail = "the question changed — check it again"; break; }
+        answer.server = f;
+      }
+    }
+  } finally {
+    answer.pumping = false;
+  }
+  if (state.selected !== pane || answer.pane !== pane) return;
+  const a = agentById(pane);
+  if (fail) {
+    // Roll back to what the server showed, with the reason on the card.
+    const gone = answer.gone; answer.gone = false;
+    answer.queue = [];
+    answer.inflight = false;
+    answer.hold = null;
+    answer.err = fail;
+    toast(fail, true);
+    answer.dialog = gone ? null : answer.server ? JSON.parse(JSON.stringify(answer.server)) : answer.dialog;
+    if (a) { renderAnswerCard(a); if (gone) { $("answer").style.display = staleQuestion(a) ? "none" : "block"; } }
+    setTimeout(refreshDialog, 300);
+    return;
+  }
+  answer.inflight = false;
+  if (sentLast) {
+    toast("sent " + sentLast.keys.map((k) => KEY_GLYPH[k] || k).join(" "));
+    // Until the screen shows something else, a refresh that still has this
+    // dialog is the tap not having landed yet, not a rollback.
+    answer.hold = { fp: sentLast.fp, index: sentLast.op.index, action: sentLast.op.action, until: Date.now() + ANSWER_HOLD_MS };
+    if (a) renderAnswerCard(a); // the spinner stops; the option stays chosen
+    for (const ms of [400, 1500, ANSWER_HOLD_MS + 100]) setTimeout(refreshDialog, ms);
+    if (answer.moreOpen) setTimeout(refreshSnapshot, 450);
+    state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
+    if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
+  }
+}
+
+const cloneDialog = (d) => (d ? JSON.parse(JSON.stringify(d)) : d);
+
 function setDialog(pane, d) {
   if (state.selected !== pane || answer.pane !== pane) return;
+  answer.server = cloneDialog(d);
+  // Taps in flight own what the card shows; a refresh that still carries the
+  // dialog a tap was sent against has not heard of it yet: neither may undo it.
+  if (answer.queue.length) return;
+  const h = answer.hold;
+  if (h) {
+    if (d && d.fingerprint === h.fp && Date.now() < h.until) return;
+    answer.hold = null;
+  }
   answer.dialog = d;
   answer.loaded = true;
   const a = agentById(pane);
@@ -4701,8 +4964,8 @@ async function refreshDialog() {
   }
 }
 
-async function padPress(key, label) {
-  await sendKeys([key], label);
+async function padPress(key, label, btn) {
+  await sendKeys([key], label, btn);
   setTimeout(refreshSnapshot, 350);
   setTimeout(refreshDialog, 400);
 }
@@ -4785,7 +5048,7 @@ function refreshView() {
   if (outputAbort) outputAbort.abort();
   outputAbort = null;
   outputBusy = false;
-  state.sending = false;
+  state.sending = 0;
   updateSendButton();
   state.retryDelay = 1000;
   connectEvents();
@@ -4799,9 +5062,15 @@ function refreshView() {
   toast("refreshing…");
 }
 
-async function sendPrompt() {
+// sendPrompt: the message leaves the box and shows in the transcript (as
+// "sending…") in this frame; the POST goes out behind it, in order, and a
+// failure puts the text back in the box with the error. Several messages can
+// be typed and sent while earlier ones are still on the wire.
+let sendChain = Promise.resolve();
+
+function sendPrompt() {
   const text = promptValue().trim();
-  if (!text || state.sending) return;
+  if (!text) return;
   const cur = agentById(state.selected);
   if (state.ask && cur && cur.agent_status === "working") {
     // herdr only refuses prompts while `blocked`; an open questionnaire
@@ -4811,34 +5080,47 @@ async function sendPrompt() {
     toast("answer the question first (or Esc to cancel it)", true);
     return;
   }
-  state.sending = true;
-  $("btn-send").disabled = true;
+  const pane = state.selected;
+  let path;
+  try { path = pathFor(pane); } catch (e) { toast("prompt failed: " + e.message, true); return; }
+  state.sending++;
+  setPromptValue("");
   // Shown before the POST returns: a fast transcript poll may already
   // carry the message, and settling needs the bubble to exist.
   const pending = addPending(text);
+  if (pending) pending.sending = true;
+  renderPending();
+  const terminal = !!(state.chat && state.chat.terminal);
+  if (terminal) echoInOutput(text);
+  updateSendButton();
+  sendChain = sendChain.then(() => postPrompt({ text, pane, path, pending, terminal }));
+}
+
+async function postPrompt(job) {
+  const { text, pane, path, pending, terminal } = job;
   try {
-    await api(`${pathFor(state.selected)}/prompt`, {
-      method: "POST",
-      body: JSON.stringify({ text }),
-    });
-    setPromptValue("");
+    await api(`${path}/prompt`, { method: "POST", body: JSON.stringify({ text }) });
+    if (pending) { pending.sending = false; if (state.selected === pane) renderPending(); }
     state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
-    // Echo the sent prompt locally; the transcript poll will pick it up too.
+    if (state.selected !== pane) return;
+    // The transcript poll picks the message up too.
     if (state.chat && !state.chat.terminal) setTimeout(() => loadChat(false), 800);
-    else {
-      echoInOutput(text);
-      setTimeout(() => refreshOutput(true), 600);
-    }
+    else setTimeout(() => refreshOutput(true), 600);
   } catch (e) {
-    dropPending(pending);
+    if (state.selected === pane) {
+      dropPending(pending);
+      if (terminal) refreshOutput(true); // replaces the echo with what the pane shows
+      // Back in the box, ready to send again (ahead of anything typed since).
+      const now = promptValue();
+      setPromptValue(now.trim() ? text + "\n" + now : text);
+    }
     if (e.status === 409) {
       toast("agent is waiting for input — answer the dialog or press Esc first", true);
     } else {
-      toast("prompt failed: " + e.message, true);
+      toast("prompt failed: " + e.message + (state.selected === pane ? " — your message is back in the box" : ""), true);
     }
   } finally {
-    state.sending = false;
-    $("btn-send").disabled = false;
+    state.sending = Math.max(0, state.sending - 1);
     updateSendButton();
   }
 }
@@ -5074,7 +5356,9 @@ async function attachImages(files) {
   return true;
 }
 
-async function sendKeys(keys, label) {
+async function sendKeys(keys, label, btn) {
+  flash(btn);
+  toast(label + "…"); // the tap is taken now; the confirmation replaces this
   try {
     await api(`${pathFor(state.selected)}/keys`, {
       method: "POST",
@@ -6272,7 +6556,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("attach-keys").addEventListener("click", () => { toggleAttachMenu(false); toggleKeypad(); });
   $("keypad").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-key]");
-    if (b) sendKeys([b.dataset.key], b.textContent);
+    if (b) sendKeys([b.dataset.key], b.textContent, b);
   });
   $("btn-send").addEventListener("click", () => {
     if (stopMode()) sendKeys(["esc"], "Stop");
