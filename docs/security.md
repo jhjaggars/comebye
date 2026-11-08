@@ -263,6 +263,18 @@ Treat access to it like SSH access to that machine.
       peer's Serve URL with that login). That is bounded by the script's checks
       above and is no wider than what the peer's account could already do with the
       same credentials.
+  - **Recommended: the release peer is its own OS user** (decided for laharl, where
+    agents run). The marker does not authenticate the hub, so on a host where
+    agents run as the user that owns the credentials, a forged call to the peer's
+    loopback port, or just reading `~/.config/gh`, `~/.ssh` and the clone, gets a
+    tag with no click. Run a second comebye there as a dedicated account with its
+    own home (mode 700), `-hub`, `-release-repo` on its own clone, its own
+    `-host-name`, port and Serve name, and only a repo-scoped `gh` token and push
+    credential that only it can read; the hub's `-release-host` names that peer.
+    The agents' comebye on the host keeps no `-release-repo`. What remains is the
+    loopback port: the script's checks (a CI-green commit of `main`, newer than the
+    last tag, origin pinned) still bound a forged call, and the credentials are out
+    of the agents' reach. Setup steps are in `docs/releasing.md`.
   - **The checkout.** `git` and `gh` run in `-release-repo` (on the hub, or on the
     `-release-host` peer) with that host's user's credentials,
     and anyone who can write that directory can write its `.git/config`. Give it a

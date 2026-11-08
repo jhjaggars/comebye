@@ -103,3 +103,33 @@ another commit, or an item nobody approved, is never reconciled.
 A peer finishes a push it started even if the hub stopped waiting, and does one
 tagging at a time. The hub's upgrade gate reads the release build from the same
 peer, so the hub needs neither `gh` nor a clone for it.
+
+### Recommended setup: a dedicated OS user for the release peer
+
+Run the peer that tags as **its own OS user**, not as the user the agents run
+as. On a host where agents work (laharl), that means a second comebye instance:
+
+- A dedicated account (say `comebye-release`) with its **own home**: no shared
+  `HOME`, and nothing of it readable by the agents' user (mode 700 on the home).
+- Its own comebye service started as that user with `-hub <the hub's Serve URL>`
+  and `-release-repo <its own dedicated clone>`, its own `-host-name` (say
+  `laharl-release`), its own listen port and its own Tailscale Serve name or
+  port. It is added to the hub as a separate peer, and the hub sets
+  `-release-host laharl-release`. Its `-ts-allow-login` must include the hub
+  device owner's login, as for any peer.
+- Its own credentials, and only these: a `gh` login (or token) limited to this
+  repository, with the access the Release workflow needs, and git push rights
+  to `origin` (an SSH key or credential that only this account can read, ideally
+  a deploy key or fine-grained token that can push tags to this one repository).
+  Nothing else of the agents' user's keys, `~/.gitconfig` or `~/.config/gh`
+  is shared.
+- The clone is owned by that account and no agent works in it.
+
+Why: the hub-call marker is a guard, not authentication. Anything that can send
+the hub device owner's login to the peer's port with `X-Comebye-Hub-Call: 1`
+can call `release-tag`. If the peer runs as the agents' own user, an agent there
+can do that (or edit the clone's config and credentials) with no click. As a
+separate user, an agent on that host cannot read the credentials or the clone,
+and the script's checks still bound what a forged call to the loopback port can
+tag: a CI-green commit of `main`, newer than the last tag. The agents' own
+comebye on that host stays as it is and has no `-release-repo`.
