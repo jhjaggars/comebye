@@ -879,3 +879,34 @@ func TestUpgradeAPeerThroughTheHub(t *testing.T) {
 		t.Fatalf("%d result events for kube", n)
 	}
 }
+
+func TestInFlightFlagIsSetWhileTaggingAndClearedAfter(t *testing.T) {
+	s, tool, _ := relServer(t)
+	tool.gate = make(chan struct{})
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	tok := token(t, s, it.ID)
+	if code, body := approve(s, it.ID, tok, "v0.5.9", relSHA); code != 202 {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	// By the time the item says tagging, the flag is set: a drop is refused, never let through.
+	if !s.tagInFlight(it.ID) {
+		t.Fatal("tagging with no flag")
+	}
+	if w := do(s, "POST", "/api/todos/"+it.ID+"/done", userHdr, `{}`); w.Code != 409 {
+		t.Fatalf("done while pushing = %d", w.Code)
+	}
+	close(tool.gate)
+	waitRel(t, s, it.ID, relTagged)
+	waitUntil(t, "flag cleared", func() bool { return !s.tagInFlight(it.ID) })
+	// A failed push clears it too.
+	b := newRelease(t, s, "v0.5.10", relSHA2)
+	tool.gate = nil
+	tool.mu.Lock()
+	tool.tagErr = os.ErrPermission
+	tool.mu.Unlock()
+	if code, body := approve(s, b.ID, tok, "v0.5.10", relSHA2); code != 202 {
+		t.Fatalf("approve b = %d %s", code, body)
+	}
+	waitRel(t, s, b.ID, relFailed)
+	waitUntil(t, "flag cleared after failure", func() bool { return !s.tagInFlight(b.ID) })
+}

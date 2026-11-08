@@ -296,7 +296,7 @@ func main() {
 		}
 		log.Printf("archive: final transcript copies go to %s", *archiveDir+*archiveS3)
 	}
-	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseUp, *releaseSim, *addr); err != nil {
+	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseUp, *releaseSim, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != ""); err != nil {
 		log.Fatal(err)
 	}
 	var relCfg server.ReleaseConfig
@@ -616,11 +616,15 @@ func isLoopbackListen(addr string) bool {
 // then protects nothing) could tag or upgrade. -release-simulate runs
 // nothing, so it may go with -insecure-no-auth (the browser tests do), but
 // not with the real flags, and only on loopback.
-func releaseFlagError(noAuth bool, repo string, upgrade, simulate bool, addr string) error {
+func releaseFlagError(noAuth bool, repo string, upgrade, simulate bool, addr string, noLedger, hasHub bool) error {
 	real := strings.TrimSpace(repo) != "" || upgrade
 	switch {
 	case noAuth && real:
 		return errors.New("-release-repo / -release-upgrade need -ts-allow-login: they cannot be combined with -insecure-no-auth")
+	case upgrade && noLedger && !hasHub:
+		// A host with no ledger is a peer (the hub's upgrade route is open on
+		// it); with no hub to ask it, nothing should be reaching that route.
+		return errors.New("-release-upgrade with -ledger=false needs -hub: a host with no ledger is a peer, upgraded by its hub")
 	case simulate && (real || !isLoopbackListen(addr)):
 		return errors.New("-release-simulate is for demos and tests: not with -release-repo or -release-upgrade, and only on a loopback address")
 	}

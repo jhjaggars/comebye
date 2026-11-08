@@ -534,7 +534,7 @@ to the home screen again.
 | `-launch` | `COMEBYE_LAUNCH` | `true` | Let the app start new agents (see [Launching agents](agents.md#launching-agents)). |
 | `-launch-root` | `COMEBYE_LAUNCH_ROOTS` | `~/code` | Directory inside which agents may be launched (symlinks resolved). Repeatable or comma-separated; roots that do not exist are ignored. |
 | `-release-repo` | `COMEBYE_RELEASE_REPO` | empty (off) | On the hub: the comebye checkout the To do page's **Approve release** button tags from, using this server's own `git` and `gh` credentials. See [Releasing](releasing.md#from-the-app). |
-| `-release-upgrade` | `COMEBYE_RELEASE_UPGRADE` | `false` | Let the To do page's **Upgrade** button run `comebye upgrade --version` on this host (needs `systemd-run`). |
+| `-release-upgrade` | `COMEBYE_RELEASE_UPGRADE` | `false` | Let the To do page's **Upgrade** button run `comebye upgrade --version` on this host (needs `systemd-run`; on a peer it also needs `-hub`, and `-ledger=false` needs `-hub` with it). |
 | `-release-dry-run` | `COMEBYE_RELEASE_DRY_RUN` | `false` | Both buttons do every check and change nothing: no tag, no install. For trying it out. |
 | `-worktree-root` | `COMEBYE_WORKTREE_ROOT` | `~/.worktrees` | Where workers get their git worktrees (`<root>/<repo>/<branch>`); also allowed for worktree checks and removal. |
 | `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL (a tagged node uses it too). The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers` and `-hub-mode`. See [Coordinators](agents.md#coordinators). |

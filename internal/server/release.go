@@ -444,6 +444,9 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	by := s.by(r, "")
+	// In flight first, so a drop cannot slip in between the state change and
+	// the goroutine; cleared if the change fails.
+	s.setTagging(it.ID, true)
 	if _, err := s.todos.mutate(it.ID, func(t *Todo) error {
 		if !t.active() || t.Release == nil || (t.Release.State != relPending && t.Release.State != relFailed) {
 			return errTodoClosed
@@ -453,14 +456,12 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 		t.Release = &rel
 		return nil
 	}); err != nil {
+		s.setTagging(it.ID, false)
 		todoErr(w, err)
 		return
 	}
 	s.audit(r, ledger.AuditEvent{Action: "release.approve", Todo: it.ID, OK: true, Detail: fmt.Sprintf("%s at %s (dry run %v)", it.Release.Version, it.Release.Commit, cfg.DryRun)})
 	unlock = false
-	s.rel.cmu.Lock()
-	s.rel.tagging[it.ID] = true
-	s.rel.cmu.Unlock()
 	go s.tagRelease(it, by)
 	cur, _ := s.todos.get(it.ID)
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"todo": s.todoGone(cur)})
@@ -470,11 +471,7 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 // the outcome on the item.
 func (s *Server) tagRelease(it Todo, by string) {
 	defer s.rel.mu.Unlock()
-	defer func() {
-		s.rel.cmu.Lock()
-		delete(s.rel.tagging, it.ID)
-		s.rel.cmu.Unlock()
-	}()
+	defer s.setTagging(it.ID, false)
 	cfg := s.cfg.Release
 	res, err := cfg.Tool.Tag(context.Background(), it.Release.Version, it.Release.Commit, cfg.DryRun)
 	done := time.Now().UTC()
@@ -780,6 +777,16 @@ func (SimulatedUpgrade) Start(_ context.Context, rec upgrade.Record, path string
 	rec.State, rec.Finished, rec.To = upgrade.RecDryRun, time.Now().UTC(), rec.Version
 	rec.Output = "simulated: nothing was installed"
 	return upgrade.WriteRecord(path, rec)
+}
+
+func (s *Server) setTagging(id string, on bool) {
+	s.rel.cmu.Lock()
+	defer s.rel.cmu.Unlock()
+	if on {
+		s.rel.tagging[id] = true
+	} else {
+		delete(s.rel.tagging, id)
+	}
 }
 
 // tagInFlight: a goroutine of this process is pushing the item's tag.

@@ -48,7 +48,8 @@ then shows the tag, the Release workflow run and its state.
 
 When the release build has passed, each host in the item gets **Upgrade**
 (a host needs `-release-upgrade`, and the hub `-release-repo` to see the build;
-a peer is asked by the hub). It runs
+a peer is asked by the hub, and must run with `-hub` (or `-ledger=false`), since the
+hub-only route it answers is refused on a host that keeps a ledger). It runs
 `comebye upgrade --version vX.Y.Z` on that host, with the same checksum and
 smoke checks, and keeps `comebye.prev`; the result and the host's version show
 in the item, and **Roll back** runs `comebye upgrade --rollback`. The upgrade

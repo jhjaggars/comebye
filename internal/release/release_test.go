@@ -242,18 +242,34 @@ func TestACheckoutCannotSteerTheScript(t *testing.T) {
 	if err != nil || !c.OK || c.Previous != "v0.1.0" {
 		t.Fatalf("planted tag: %+v %v", c, err)
 	}
-	// Hooks in the checkout do not run, and fsmonitor is off.
+	// Hooks in the checkout do not run.
 	marker := filepath.Join(t.TempDir(), "ran")
 	hooks := filepath.Join(r.clone, ".git", "hooks")
 	for _, h := range []string{"pre-push", "reference-transaction", "post-checkout"} {
 		os.WriteFile(filepath.Join(hooks, h), []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755)
 	}
-	git(t, r.clone, "config", "core.fsmonitor", "touch "+marker)
 	if res, err := r.script.Tag(ctx, "v0.2.0", r.sha, false); err != nil || !res.Pushed {
 		t.Fatalf("tag: %+v %v", res, err)
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("a hook or fsmonitor command of the checkout ran")
+	}
+	// A local config key that names a program is refused, before any network
+	// use, and nothing it names runs.
+	for _, kv := range [][2]string{{"core.fsmonitor", "touch " + marker}, {"core.sshCommand", "touch " + marker}, {"credential.helper", "!touch " + marker},
+		{"gpg.program", marker}, {"core.gitProxy", marker}, {"http.proxy", "http://127.0.0.1:1"}, {"include.path", "/nonexistent"}, {"url.https://x/.insteadOf", "https://y/"}} {
+		git(t, r.clone, "config", "--local", kv[0], kv[1])
+		c, err := r.script.Check(ctx, "v0.4.0", r.sha)
+		if err != nil || c.OK || !strings.Contains(c.Problem, "checkout's own git config sets") {
+			t.Fatalf("%s: %+v %v", kv[0], c, err)
+		}
+		if _, err := r.script.Tag(ctx, "v0.4.0", r.sha, false); err == nil {
+			t.Fatalf("%s: tagged", kv[0])
+		}
+		git(t, r.clone, "config", "--local", "--unset-all", kv[0])
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a program named by the checkout's config ran")
 	}
 	// An origin that is not the project is refused, before anything is fetched or pushed.
 	git(t, r.clone, "remote", "set-url", "origin", "https://github.com/someone/else")

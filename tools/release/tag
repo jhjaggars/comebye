@@ -57,6 +57,16 @@ command -v gh >/dev/null || die "the gh CLI is required for the CI check"
 slug="${COMEBYE_RELEASE_SLUG:-jhjaggars/comebye}"
 export GH_REPO="$slug"
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
+# The clone's own configuration may hold only what a clone has: a key that
+# names a program to run (core.sshCommand, credential.helper, gpg.program,
+# core.gitProxy, an include, ...) is refused before anything touches the network.
+while IFS= read -r key; do
+  case "$key" in
+    core.repositoryformatversion|core.filemode|core.bare|core.logallrefupdates|core.ignorecase|core.precomposeunicode|core.symlinks) ;;
+    remote.origin.url|remote.origin.pushurl|remote.origin.fetch|remote.origin.tagopt|branch.*|user.name|user.email) ;;
+    *) die "the checkout's own git config sets $key: use a dedicated clone with a plain configuration" ;;
+  esac
+done < <(git config --local --list --name-only 2>/dev/null)
 for u in "$(git ls-remote --get-url origin 2>/dev/null)" "$(git remote get-url --push origin 2>/dev/null)"; do
   case "$u" in
     "https://github.com/$slug"|"https://github.com/$slug.git"|"git@github.com:$slug"|"git@github.com:$slug.git"|"ssh://git@github.com/$slug"|"ssh://git@github.com/$slug.git") ;;
