@@ -61,7 +61,12 @@ type Client struct {
 	nextID     atomic.Int64
 }
 
-// NewClient returns a client for the socket at socketPath.
+// ErrNoHerdr is what every call of a client with no socket returns: a hub
+// that hosts no agents (comebye -hub-only).
+var ErrNoHerdr = &Error{Code: "no_herdr", Message: "this hub hosts no agents: there is no herdr here"}
+
+// NewClient returns a client for the socket at socketPath. An empty path
+// gives a client whose calls all fail with ErrNoHerdr.
 func NewClient(socketPath string) *Client {
 	return &Client{socketPath: socketPath}
 }
@@ -72,6 +77,9 @@ func (c *Client) SocketPath() string { return c.socketPath }
 // Call sends one request and returns the raw "result" payload. A herdr-side
 // failure is returned as *Error.
 func (c *Client) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if c.socketPath == "" {
+		return nil, ErrNoHerdr
+	}
 	id := fmt.Sprintf("hp%d", c.nextID.Add(1))
 	d := net.Dialer{}
 	conn, err := d.DialContext(ctx, "unix", c.socketPath)

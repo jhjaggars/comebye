@@ -29,6 +29,9 @@ const (
 
 // Options tunes a Fleet. Zero values pick the defaults.
 type Options struct {
+	// NoLocalAgents: this instance hosts no agents (hub-only); its own
+	// host is reported as such.
+	NoLocalAgents bool
 	// Dispatcher sends notifications for peer agents. Default: the local
 	// manager's, so throttling and presence are shared with local agents.
 	Dispatcher *state.Dispatcher
@@ -240,7 +243,7 @@ func (f *Fleet) Hosts() []state.HostStatus {
 	if f.local != nil {
 		n = len(f.local.Agents())
 	}
-	out := []state.HostStatus{{Name: f.localName, Local: true, Status: StatusOK, Agents: n, Version: f.opts.Version}}
+	out := []state.HostStatus{{Name: f.localName, Local: true, Status: StatusOK, Agents: n, Version: f.opts.Version, NoAgents: f.opts.NoLocalAgents}}
 	if f.opts.RepoDamage != nil {
 		out[0].RepoDamage = f.opts.RepoDamage()
 	}

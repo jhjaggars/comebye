@@ -132,6 +132,38 @@ Treat access to it like SSH access to that machine.
   else gets 421. Otherwise a web page in a browser on the host could
   re-resolve its own domain to `127.0.0.1` and, being same-origin with the
   loopback port, drive your agents with a forged identity header.
+- <a id="health-probes"></a>**Health probes are the one unauthenticated API.**
+  `GET /healthz` and `/readyz` (see [Health probes](setup.md#health-probes))
+  answer without a login and on any `Host` header, so a kubelet can probe the
+  pod IP. They are read-only, do no network I/O and say nothing but the version,
+  whether the hub is hub-only, and `ok`/`fail` per check (never a path, host
+  name, peer or count). The only side effect is a small file written and removed
+  in the state directory, at most once every 5 s however often they are hit. A
+  failing check tells a caller that the volume is unwritable or the lock lost,
+  which is operational, not secret. `-health-addr` opens a **second listener**
+  that serves only these two paths: bind it to the pod network, not to a
+  tailnet interface you do not control, and note that nothing on it is checked
+  against a login, so it must never be pointed at the main handler.
+- <a id="single-hub-lock"></a>**One server per state directory.** `hub.lock`
+  (mode 0600, holding the holder's pid, machine name, `-host-name`, listen
+  address and times) is an integrity guard against two servers overwriting each
+  other's ledger and to-dos, not an access control: anything that can write the
+  state directory can already replace every file in it. Where `flock` is
+  honored (a local filesystem, Longhorn RWO) it is exact; on storage that does
+  not carry it between machines a heartbeat lease (20 s) backs it up, so a
+  second hub on another machine is refused for as long as the first keeps
+  writing. See [One server per state directory](setup.md#one-server-per-state-directory).
+- <a id="state-directory-backups"></a>**State directory backups are secrets.**
+  The directory holds `vapid.pem` (the Web Push signing key: whoever has it can
+  send notifications to every subscribed phone), `agent-token` (the local CLI's
+  token), the ledger, to-dos and briefings (prompts, reports, questions you were
+  asked), and `push-subscriptions.json`. A tarball of it is as sensitive as the
+  directory: create it mode 0600, store it encrypted (or on storage only you can
+  read), and exclude `hub.lock`. A restore needs the same care: extract into a
+  directory only the server's user can read (mode 0700). A hub in a container
+  keeps the same rule as on a host: the main listener stays on loopback
+  (with `tailscaled` as a sidecar sharing the pod's network namespace, Serve is
+  its only client), so no `Service` or `Ingress` should point at it.
 - **Local users are trusted.** Any process on the same host can connect to
   the loopback port and forge the identity header. Do not run this on a
   shared multi-user machine.

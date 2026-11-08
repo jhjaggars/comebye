@@ -390,6 +390,9 @@ type HostStatus struct {
 	// VersionMismatch: a peer's known version differs from the hub's.
 	VersionMismatch bool `json:"version_mismatch,omitempty"`
 	Agents          int  `json:"agents"`
+	// NoAgents marks a host that runs no agents by design (a hub-only
+	// hub): the app says "no agents here" instead of an empty count.
+	NoAgents bool `json:"no_agents,omitempty"`
 	// RepoDamage lists the host's repositories whose object store git reports
 	// as damaged (see gitfetch.Health). A peer reports its own; the hub keeps it.
 	RepoDamage []RepoDamage `json:"repo_damage,omitempty"`

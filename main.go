@@ -15,6 +15,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/gitfetch"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/cli"
 	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/hublock"
 	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/release"
 	"github.com/jhjaggars/comebye/internal/server"
@@ -103,6 +105,9 @@ func main() {
 		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on a question past -auto-todo-question-after, filed as a suggestion to keep or dismiss); off for none")
 		autoBlocked   = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
 		autoQuestion  = flag.Duration("auto-todo-question-after", envDuration("COMEBYE_AUTO_TODO_QUESTION_AFTER", server.DefaultAutoQuestion), "how long an agent must sit idle or done on a question, with no device viewing it, before -auto-todo suggests an item")
+		hubOnly       = flag.Bool("hub-only", envBool("COMEBYE_HUB_ONLY", false), "run as a hub that hosts no agents (no herdr here, nothing waits for a socket): the ledger, to-dos, briefings, plans, peers, archive, push and the app all work; implies -hub-mode. Also implied by an explicitly empty -sock (see docs/setup.md)")
+		lockWait      = flag.Duration("lock-wait", envDuration("COMEBYE_LOCK_WAIT", 0), "when another comebye holds the state directory, retry this long before refusing to start (0 refuses at once); a Kubernetes replacement pod can set 30s")
+		healthAddr    = flag.String("health-addr", getenv("COMEBYE_HEALTH_ADDR"), "also serve /healthz and /readyz (nothing else, no login) on this address, e.g. :8743, for probes that cannot reach the loopback listener; empty (default) serves them on -addr only")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
@@ -112,6 +117,22 @@ func main() {
 	if *showVersion {
 		fmt.Println("comebye", buildVersion())
 		return
+	}
+	// An explicitly empty -sock (flag, not env) says "no herdr here".
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "sock" && strings.TrimSpace(*sock) == "" {
+			*hubOnly = true
+		}
+	})
+	if *hubOnly {
+		switch {
+		case strings.TrimSpace(*hubURL) != "":
+			log.Fatalf("-hub-only and -hub: a hub-only instance is the hub, not a peer")
+		case !*ledgerOn:
+			log.Fatalf("-hub-only and -ledger=false: the ledger is the point of a hub-only instance")
+		}
+		*hubMode = true
+		*launchOn = false
 	}
 	if *ntfyThottle > 0 {
 		*throttle = *ntfyThottle
@@ -153,6 +174,15 @@ func main() {
 		if d = strings.TrimSpace(d); d != "" {
 			addrOpt.Domains = append(addrOpt.Domains, d)
 		}
+	}
+	if *stateDir == defaultStateDir() {
+		migrateStateDir(expandHome(*stateDir))
+	}
+	// One server per state directory: taken before anything reads or writes
+	// it (see internal/hublock and docs/setup.md).
+	lock, err := hublock.Acquire(expandHome(*stateDir), hublock.Options{Name: *hostName, Addr: *addr, Wait: *lockWait, Logf: log.Printf})
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
 	peerStore, err := fleet.OpenStore(expandHome(*stateDir))
 	if err != nil {
@@ -215,6 +245,9 @@ func main() {
 	}
 
 	sockPath := expandHome(*sock)
+	if *hubOnly {
+		sockPath = ""
+	}
 	client := herdr.NewClient(sockPath)
 	// Wait for herdr when it is not up yet: after a reboot herdr's server
 	// starts only when the user connects remotely, so its socket may
@@ -222,7 +255,11 @@ func main() {
 	// keeps systemd from crash-looping comebye into its start limit
 	// before that happens. A socket that exists but cannot be reached is
 	// a real problem and still fails fast.
-	waitForHerdr(client, sockPath, time.Sleep)
+	if *hubOnly {
+		log.Printf("hub-only: no herdr; this host (%s) hosts no agents, everything else runs", *hostName)
+	} else {
+		waitForHerdr(client, sockPath, time.Sleep)
+	}
 
 	notifier := &state.Notifier{
 		BaseURL:     *ntfyBase,
@@ -236,9 +273,6 @@ func main() {
 
 	manager := state.New(client, notifier)
 	presence := push.NewPresence()
-	if *stateDir == defaultStateDir() {
-		migrateStateDir(expandHome(*stateDir))
-	}
 	var pushSvc *push.Service
 	if *pushOn {
 		subject := *pushSubject
@@ -281,15 +315,17 @@ func main() {
 	// What git has reported as damaged in the repositories agents work in here,
 	// and the daily fsck that looks for it. Shown on the host, and to the hub.
 	repoHealth := gitfetch.OpenHealth(filepath.Join(expandHome(*stateDir), "repo-health.json"), log.Printf)
-	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode, RepoDamage: repoHealth.List})
+	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List})
 	repoHealth.OnChange = fl.Changed
 	fl.AttachStore(peerStore, addrOpt)
 	go fl.Run(context.Background())
-	go func() {
-		if err := manager.Run(context.Background()); err != nil {
-			log.Printf("state manager stopped: %v", err)
-		}
-	}()
+	if !*hubOnly {
+		go func() {
+			if err := manager.Run(context.Background()); err != nil {
+				log.Printf("state manager stopped: %v", err)
+			}
+		}()
+	}
 
 	var arch *archive.Archiver
 	acfg := archive.Config{
@@ -372,6 +408,8 @@ func main() {
 		AllowCap:        allowCap,
 		WhoIs:           localAPI,
 		SelfRegister:    *selfRegister,
+		HubOnly:         *hubOnly,
+		LockErr:         lock.Err,
 	}, client, manager)
 	if allowCap != "" {
 		log.Printf("tagged peers admitted through Tailscale Serve with capability %s (agent role only; self-registration %v); Serve needs --accept-app-caps=%s", allowCap, *selfRegister, allowCap)
@@ -389,10 +427,22 @@ func main() {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		log.Print("shutting down")
+		srv.ShuttingDown()
+		lock.Release()
 		os.Exit(0)
 	}()
 
+	if *healthAddr != "" {
+		go func() {
+			hs := &http.Server{Addr: *healthAddr, Handler: srv.HealthHandler(), ReadHeaderTimeout: 5 * time.Second}
+			log.Printf("health probes (/healthz, /readyz only) on http://%s", *healthAddr)
+			if err := hs.ListenAndServe(); err != nil {
+				log.Fatalf("-health-addr: %v", err)
+			}
+		}()
+	}
 	if err := srv.ListenAndServe(); err != nil {
+		lock.Release()
 		log.Fatal(err)
 	}
 }

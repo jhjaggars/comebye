@@ -715,3 +715,14 @@ func TestPeerPushWarning(t *testing.T) {
 		return false
 	})
 }
+
+func TestHostsReportsAHubThatHostsNoAgents(t *testing.T) {
+	f := New(nil, "hub", nil, Options{NoLocalAgents: true})
+	h := f.Hosts()
+	if len(h) != 1 || !h[0].Local || !h[0].NoAgents || h[0].Agents != 0 {
+		t.Fatalf("hosts = %+v", h)
+	}
+	if h := New(nil, "hub", nil, Options{}).Hosts(); h[0].NoAgents {
+		t.Errorf("a normal host is not no_agents")
+	}
+}

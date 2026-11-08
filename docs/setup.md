@@ -398,6 +398,189 @@ next health check; no restart needed.
 the hub acts with its owner's identity. Keep the hub's allowlist as tight as
 each peer's.
 
+## A hub with no herdr (containers, Kubernetes)
+
+A hub does not have to run agents itself. `-hub-only` (`COMEBYE_HUB_ONLY=true`)
+starts comebye as a **hub that hosts no agents**: it does not wait for a herdr
+socket and never talks to one. `-hub-only` implies `-hub-mode` (peers can be
+added live) and turns launching off on this host. An
+**explicitly empty** `-sock=` also means hub-only. A merely missing socket
+does not: a normal instance keeps waiting for herdr to appear, as before.
+
+```sh
+comebye -hub-only -addr 127.0.0.1:8741 -host-name hub \
+  -ts-allow-login you@example.com -state-dir /var/lib/comebye
+```
+
+`-hub-only` refuses to start with `-hub` (it is the hub, not a peer) or
+`-ledger=false`. Everything that is not about a pane on this machine works as
+on any hub:
+
+| Feature | In hub-only mode |
+| --- | --- |
+| Handoff ledger, plans, marks, reports, landings, queue | Work as on any hub. A worker runs on a **peer**; name the host when you hand off. |
+| To do, briefing and its schedule, coordinator roles | Work. The scheduled briefing prompts a coordinator on any **peer**; with none reachable it waits, as for any busy coordinator. |
+| Peers, the agent list, push and ntfy notifications, release | Work: the hub merges its peers' agents and notifies for them. |
+| Archive and `recall` search | Searching works (it reads the index, `-recall-index`). The server ships a transcript copy only when a **local** agent is removed, so a hub-only hub ships none. |
+| The app's host list | The hub's own host shows **"no agents here"** (`no_agents` in `/api/hosts`), not an error or a bare 0. Its peers' hosts are listed as usual. |
+| Launching (the + button, Coordinator preset, `comebye launch`), workers, repo checks | Not on the hub itself: `403 launch_disabled`, and the app greys out the hub's host in the launch form and starts on a peer. On a peer they work through the hub. |
+| Keys, answers, dialogs, images, output and prompts for a **local** pane | There are none: `409 no_herdr` ("this hub hosts no agents"). Peers' agents are reached through the proxy as before. |
+| Daily repository fsck | Nothing local to check; peers report their own. |
+
+## Health probes
+
+`GET /healthz` and `GET /readyz` answer without a login and on **any `Host`
+header** (a kubelet probes the pod IP, which the DNS-rebinding check would
+otherwise refuse). They do no network I/O, and the answer carries no path, name
+or count: only the version and a status per check.
+
+```
+$ curl -i localhost:8741/healthz
+HTTP/1.1 200 OK
+{"checks":{"state_dir":"ok"},"hub_only":true,"status":"ok","version":"v1.2.3"}
+```
+
+| Probe | Checks | Use for |
+| --- | --- | --- |
+| `/healthz` | The process is serving, and **the state directory is writable**: a file is written, synced and removed there (at most once every 5 s; a probe storm costs one write). 503 `"status":"fail"` otherwise. | Liveness. |
+| `/readyz` | `/healthz`, plus **the single-hub lock is still held** (its heartbeat is being written, see below) and the server is **not shutting down** (it fails as soon as SIGTERM arrives, so traffic drains first). | Readiness. |
+
+Both answer `GET` and `HEAD` only. Because the main listener is loopback-only
+(Tailscale Serve must be its only client), a kubelet `httpGet` probe cannot
+reach it. Either probe with `exec` (`curl -fs localhost:8741/readyz` inside the
+container), or give the probes their own listener:
+`-health-addr :8743` (`COMEBYE_HEALTH_ADDR`) serves **only** these two paths,
+with no login and nothing else behind it.
+
+## One server per state directory
+
+Two comebye servers writing one state directory would overwrite each other's
+ledger and to-dos. On start, before it reads anything, the server takes an
+exclusive lock on **`hub.lock`** in the state directory and holds it until it
+exits. The file says who holds it:
+
+```
+{"pid":4321,"host":"comebye-0","name":"hub","addr":"127.0.0.1:8741",
+ "started":"2026-11-08T15:06:22-05:00","heartbeat":"2026-11-08T15:08:42-05:00"}
+```
+
+A second server on the same directory refuses to start and names the holder:
+
+```
+state directory is in use by another comebye: pid 4321 on comebye-0 (host-name hub), started 2026-11-08T15:06:22-05:00, last heartbeat 2026-11-08T15:08:42-05:00 (flock lock /var/lib/comebye/hub.lock). Only one server may use a state directory; stop that one first
+```
+
+`-lock-wait 30s` (`COMEBYE_LOCK_WAIT`) retries once a second for that long
+before refusing, so a replacement pod waits for the old one to leave. The
+default `0` refuses at once.
+
+- **After a crash** there is nothing to clean up. The lock is an `flock(2)`
+  that the kernel drops when the process dies, however it dies (`kill -9`, OOM,
+  node loss); the leftover `hub.lock` is only a stale note. The next server
+  starts at once and logs `the previous server on this machine did not shut down
+  cleanly`. A clean exit empties the file. Do not delete `hub.lock` by hand to
+  "unstick" a start: if the message names a live process, that process is real.
+- **On shared storage** `flock` alone is not trusted. Some network filesystems
+  (NFS without lock support, some FUSE and object-store mounts) do not carry it
+  between machines, and then two servers on two machines could both "hold" it.
+  So the holder also rewrites `heartbeat` every 5 s, and a server that wins the
+  flock but finds a record from **another machine** (`host` differs) with a
+  heartbeat younger than **20 s** refuses too (`lease` in the message). A
+  record from another machine older than 20 s is taken over, with a log line
+  naming the previous holder (a crash, or a node that went away). The cost is
+  at most a 20 s wait after an unclean loss of a different machine; use
+  `-lock-wait 30s` to ride it out. A record from the **same** machine needs no
+  wait: there the flock is authoritative.
+- **Longhorn ReadWriteOnce** (and any block volume) is mounted on one node at a
+  time and is an ordinary local filesystem to the pod, so the `flock` is
+  authoritative and the lease is a second line of defence. A ReadWriteMany or
+  NFS volume is exactly the case the lease exists for; even so, run one
+  replica (`replicas: 1`, a StatefulSet) and do not rely on the lock to make
+  two replicas safe: it makes a mistake loud, it does not make two hubs
+  correct.
+- If the volume goes read-only or away while the hub runs, the heartbeat fails,
+  `/readyz` returns 503 (`"lock":"fail"`) and the log says so; after 20 s
+  another machine may take over, so stop the old one (the failing probes will).
+
+## The state directory: what is in it, and moving it
+
+`-state-dir` (default `~/.local/state/comebye`; in a container set it, for
+example `/var/lib/comebye`, on the persistent volume). Files marked
+**required** are the hub's memory: without them it starts empty and forgets.
+**Rebuildable** ones come back by themselves or by a command. Nothing in the
+directory is a secret except the files marked *secret*; keep the volume and its
+backups private.
+
+| Path | What it is | If lost |
+| --- | --- | --- |
+| `ledger.json` | The handoff ledger: workers, marks, plans, reports | **Required.** History and open work are gone. |
+| `todo.json` | The To do list | **Required.** |
+| `brief.json`, `brief-history.json`, `brief-schedule.json` | The briefing, its history and schedule | **Required** (history is lost; the briefing is rewritten by the next run). |
+| `roles.json` | Which agents are coordinators | **Required**; coordinators must be marked again. |
+| `queue.json` | Prompts waiting to be delivered | **Required** if prompts are queued; otherwise empty. |
+| `peers.json` | Peers added live (`comebye peer add`) | **Required**, or re-add each peer. Peers in `-peers` need no file. |
+| `vapid.pem` *(secret)* | The Web Push signing key | **Required.** A new key invalidates every phone's subscription: each must turn notifications on again. |
+| `push-subscriptions.json` | Phones subscribed to push | **Required**, or each phone re-subscribes. |
+| `handoff-template.md` | Your handoff template, if you made one | **Required** if present. |
+| `kinds.json` | When each agent kind last worked here (orders the launch form) | Rebuildable; refills as agents work. |
+| `agent-token` *(secret)* | The local CLI's token | Rebuildable: a new one is made at start. Only the `comebye` CLI run on this host needs to read the new one. |
+| `repo-health.json` | Damaged repositories git reported | Rebuildable (the daily fsck refills it); meaningless on a hub-only hub. |
+| `uploads/` | Images sent from the app for agents on this host | Disposable. |
+| `recall/index.db` | The transcript search index (`comebye archive index` builds it) | Rebuildable from the archive. **Not under `-state-dir`**: `-recall-index` defaults to `~/.local/state/comebye/recall/index.db` whatever `-state-dir` says; point `-recall-index` at the volume if the hub should keep it. |
+| `hub.lock`, `.healthz` | The lock (above) and the writability probe's scratch file | **Never restore.** Created at start. |
+| `coordinator/`, `locks/`, `stt/` | Seen on a long-lived host: scratch the coordinator agents and the archive shipper keep (`locks/` holds the shipper's per-host `archive-<host>.lock`) | Not read by a hub-only hub. |
+
+Every JSON file is written whole to a temp file, synced and renamed, so a
+copy taken while the hub runs contains each file either before or after a
+change, never half of one. A copy is not a snapshot across files (a worker
+filed in `ledger.json` while `todo.json` was copied earlier). For a backup that
+is also consistent across files, take it with the hub stopped (a StatefulSet
+scaled to 0) or from a volume snapshot.
+
+**What hard-codes the host name.** Agent ids are `<host>/<pane>`, and that id
+is stored in `ledger.json` (`host`, `agent_id`), `todo.json` (who waits),
+`queue.json`, `roles.json` and `brief-schedule.json`. The `-host-name` of the
+hub that wrote them is therefore **part of the data**. When a hub moves:
+
+1. Give the new hub a `-host-name` that is **not** the old hub's, and not the
+   pod's hostname (a StatefulSet pod is `comebye-0`; the default host name is
+   the machine's short hostname, so always set `-host-name` explicitly).
+2. Register the machine that used to be the hub **as a peer under its old
+   host name** (`comebye peer add OLDNAME https://...`), so the ids already in
+   the ledger (`OLDNAME/w1:p1`) resolve to its agents again. A peer cannot
+   take the hub's own name; that is why step 1 matters.
+3. Keep the **tailnet name** if phones and peers know the hub by it: the
+   browser's push subscriptions and the app's saved URL are tied to that origin,
+   and peers' `-hub` URLs point at it.
+4. The archive's per-host claim (`hosts/<host>.json`) records the machine that
+   writes a host's transcripts, by machine id (else hostname). It matters
+   only to a hub that ships transcripts, which a hub-only hub does not.
+
+### Backup and restore
+
+Backup (the hub may be running; see the caveat above):
+
+```sh
+tar -C /var/lib/comebye --exclude=./hub.lock --exclude=./.healthz \
+    -czf comebye-state-$(date +%Y%m%d-%H%M%S).tgz .
+chmod 600 comebye-state-*.tgz     # it holds vapid.pem and agent-token
+```
+
+Restore into an empty directory, with **no hub running on it**:
+
+```sh
+mkdir -m 700 /var/lib/comebye && tar -C /var/lib/comebye -xzf comebye-state-XXXX.tgz
+comebye -hub-only -state-dir /var/lib/comebye -host-name hub -ts-allow-login you@example.com
+```
+
+Check it: `curl localhost:8741/readyz`, then `comebye todo list` and
+`comebye brief get` with `COMEBYE_STATE_DIR=/var/lib/comebye` show your data. To
+rehearse a restore without touching the live hub, extract the archive into a
+scratch directory and start a second hub there on **another port** (`-addr
+127.0.0.1:18761`) and its own `-state-dir`: the lock is per directory, so it
+does not collide. Do this before you rely on a backup, and again after you
+change anything about where the hub's state lives.
+
 ## Upgrading
 
 `comebye upgrade` replaces the installed binary and restarts the user
@@ -541,8 +724,11 @@ to the home screen again.
 | `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
 | `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |
+| `-hub-only` | `COMEBYE_HUB_ONLY` | `false` | Run as a hub that hosts no agents: no herdr, nothing waits for a socket; implies `-hub-mode`, turns launching off here. An explicitly empty `-sock=` means the same. See [A hub with no herdr](#a-hub-with-no-herdr-containers-kubernetes). |
+| `-lock-wait` | `COMEBYE_LOCK_WAIT` | `0` | When another comebye holds the state directory, retry this long (once a second) before refusing to start. See [One server per state directory](#one-server-per-state-directory). |
+| `-health-addr` | `COMEBYE_HEALTH_ADDR` | (none) | Also serve `/healthz` and `/readyz` (nothing else, no login) on this address, e.g. `:8743`, for probes that cannot reach the loopback listener. |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
-| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `peers.json` (peers added live), `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`. The CLI reads the token from here too. |
+| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `peers.json` (peers added live), `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`; `hub.lock` keeps a second server off it. The CLI reads the token from here too. Every file is listed, with what to do if it is lost, in [The state directory](#the-state-directory-what-is-in-it-and-moving-it). |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
 | `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
 | `-notify-throttle` | `COMEBYE_NOTIFY_THROTTLE` | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |

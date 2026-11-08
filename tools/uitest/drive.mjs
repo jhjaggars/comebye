@@ -825,6 +825,28 @@ for (const width of [1280, 390]) {
   });
 }
 
+// A hub-only hub (no herdr): its own host is "no agents here", not an error, and the launch form starts elsewhere.
+await check("hub-only: the hub's own host reads 'no agents here' and the launch form skips it", async () => {
+  await desktopList(1280);
+  const r = await page.evaluate(() => {
+    const saved = { agents: state.agents, hosts: state.hosts };
+    state.hosts = [{ name: "hub", local: true, status: "ok", no_agents: true, agents: 0 }, { name: "buildbox", status: "ok", agents: 0 }];
+    state.agents = [];
+    renderList();
+    const chips = document.getElementById("host-filter").innerText;
+    const empty = document.querySelector("#agents .empty")?.innerText || "";
+    renderLaunchHosts();
+    const launch = [...document.querySelectorAll("#ln-hosts .hf-chip")].map((b) => [b.dataset.host, b.disabled]);
+    state.agents = saved.agents; state.hosts = saved.hosts;
+    renderList();
+    return { chips, empty, launch };
+  });
+  if (!/hub\s+no agents here/.test(r.chips)) throw new Error("the host chip does not say 'no agents here': " + JSON.stringify(r.chips));
+  if (!/hosts none/.test(r.empty)) throw new Error("the empty state does not explain: " + JSON.stringify(r.empty));
+  const byHost = Object.fromEntries(r.launch);
+  if (byHost.hub !== true || byHost.buildbox !== false) throw new Error("launch form hosts: " + JSON.stringify(r.launch));
+});
+
 await check("desktop: selecting an agent keeps the list visible and opens it beside it", async () => {
   await desktopList(1280);
   const before = await geo("#agents");

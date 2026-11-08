@@ -49,6 +49,7 @@ type browserHost struct {
 	Version         string             `json:"version,omitempty"`
 	VersionMismatch bool               `json:"version_mismatch,omitempty"`
 	Agents          int                `json:"agents"`
+	NoAgents        bool               `json:"no_agents,omitempty"`
 	RepoDamage      []state.RepoDamage `json:"repo_damage,omitempty"`
 }
 
@@ -76,7 +77,7 @@ func slimAgents(agents []herdr.AgentInfo) []browserAgent {
 func slimHosts(hosts []state.HostStatus) []browserHost {
 	out := make([]browserHost, len(hosts))
 	for i, h := range hosts {
-		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Class: h.Class, Since: h.Since, Addr: h.Addr, Version: h.Version, VersionMismatch: h.VersionMismatch, Agents: h.Agents, RepoDamage: h.RepoDamage}
+		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Class: h.Class, Since: h.Since, Addr: h.Addr, Version: h.Version, VersionMismatch: h.VersionMismatch, Agents: h.Agents, NoAgents: h.NoAgents, RepoDamage: h.RepoDamage}
 	}
 	return out
 }

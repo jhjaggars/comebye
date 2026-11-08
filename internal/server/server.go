@@ -123,6 +123,11 @@ type Config struct {
 	WhoIs tsauth.Resolver
 	// SelfRegister lets a tagged node announce itself as a peer.
 	SelfRegister bool
+	// HubOnly: this hub hosts no agents (no herdr); /healthz says so.
+	HubOnly bool
+	// LockErr, when set, is the single-hub lock's health (hublock.Lock.Err);
+	// /readyz fails while it returns an error.
+	LockErr func() error
 }
 
 // Server is the phone app HTTP server.
@@ -139,6 +144,10 @@ type Server struct {
 	version string
 	// streams counts open /api/events streams (see maxStreams).
 	streams atomic.Int32
+	// health tests that the state directory is writable (nil without one);
+	// shuttingDown fails /readyz.
+	health       *healthProbe
+	shuttingDown atomic.Bool
 	// findExec reports whether an executable is installed (default
 	// installed; tests replace it).
 	findExec func(name string) bool
@@ -221,6 +230,9 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		rc.Host, rc.Tool = "", nil
 	case rc.Host != "":
 		rc.Tool = &remoteTool{s: s, host: rc.Host}
+	}
+	if cfg.StateDir != "" {
+		s.health = &healthProbe{dir: cfg.StateDir, now: time.Now}
 	}
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
@@ -418,7 +430,16 @@ func (s *Server) ListenAndServe() error {
 // prompts or keys to the agents. CrossOriginProtection rejects cross-origin
 // unsafe requests via Sec-Fetch-Site/Origin; requiring a JSON content type
 // also forces a CORS preflight on browsers too old to send those headers.
-func (s *Server) Handler() http.Handler { return s.checkHost(s.capPeers(s.base())) }
+func (s *Server) Handler() http.Handler {
+	app := s.checkHost(s.capPeers(s.base()))
+	// The health probes come first: no Host check (a kubelet probes the pod
+	// IP), no login, nothing secret in the answer (see health.go).
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.serveHealth(w, r) {
+			app.ServeHTTP(w, r)
+		}
+	})
+}
 
 func (s *Server) base() http.Handler {
 	jsonOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -850,7 +871,7 @@ func writeError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		case "pane_not_found", "agent_not_found":
 			status = http.StatusNotFound
-		case "agent_name_taken":
+		case "agent_name_taken", "no_herdr":
 			status = http.StatusConflict
 		}
 		w.Header().Set("Content-Type", "application/json")

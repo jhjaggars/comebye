@@ -524,9 +524,11 @@ function renderHostFilter() {
     const local = state.hosts.find((x) => x.local);
     const ver = host && host.version_mismatch && host.version
       ? `<span class="ver" title="${esc(host.name)} runs ${esc(host.version)}${local && local.version ? `; this hub runs ${esc(local.version)}` : ""}">${esc(host.version)}</span>` : "";
+    const none = host && host.no_agents;
     return `<button type="button" class="hf-chip${down ? " down" : ""}" data-host="${esc(name)}"` +
+      `${none ? ' title="This hub hosts no agents; its peers\' agents are listed"' : ""}` +
       ` aria-pressed="${active === name}">${need ? '<span class="need" aria-label="needs input"></span>' : ""}` +
-      `${esc(label)} <span class="n">${down ? "down" : agents.length}</span>${ver}</button>`;
+      `${esc(label)} <span class="n">${down ? "down" : none ? "no agents here" : agents.length}</span>${ver}</button>`;
   };
   nav.innerHTML = chip("all", "All", state.agents, false) + state.hosts.map((h) =>
     chip(h.name, h.name, state.agents.filter((a) => a.host === h.name), !h.local && h.status !== "ok", h)).join("");
@@ -604,7 +606,11 @@ function renderListRows() {
   renderStatus();
   if (!agents.length) {
     const f = activeHostFilter();
+    const hubOnly = state.hosts.some((h) => h.local && h.no_agents);
+    // A hub-only hub (no herdr) says so, instead of telling you to start an agent here.
+    const here = f === "all" || state.hosts.some((h) => h.local && h.name === f);
     wrap.innerHTML = (state.unauthorized ? `<div class="empty"><b>${esc(UNAUTHORIZED_MSG)}</b></div>`
+      : hubOnly && here ? emptyHtml("No agents here", "This hub hosts none. Agents on its peers appear as they connect.")
       : f !== "all" ? emptyHtml(`No agents on ${f}`, "", ["Show all hosts", "all-hosts"])
       : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + downRows;
     const act = wrap.querySelector(".empty-act");
@@ -6874,6 +6880,12 @@ function openLaunch() {
   history.pushState({ launch: true }, "", location.href);
   const f = activeHostFilter();
   launch.host = f !== "all" ? f : state.localHost;
+  // A hub-only hub starts nothing itself: begin on the first host that can.
+  const hosting = (state.hosts || []).find((h) => h.name === launch.host);
+  if (hosting && hosting.no_agents) {
+    const other = state.hosts.find((h) => !h.no_agents && (h.local || h.status === "ok"));
+    if (other) launch.host = other.name;
+  }
   if (!launch.mode) {
     const m = lsGet(LAUNCH_MODE_KEY);
     launch.mode = LAUNCH_MODES.has(m) ? m : "agent";
@@ -6916,8 +6928,10 @@ function renderLaunchHosts() {
   if (!multiHost()) { nav.hidden = true; nav.innerHTML = ""; return; }
   nav.innerHTML = state.hosts.map((h) => {
     const down = !h.local && h.status !== "ok";
+    const off = down || h.no_agents; // a hub-only hub starts nothing itself
     return `<button type="button" class="hf-chip${down ? " down" : ""}" data-host="${esc(h.name)}"` +
-      ` aria-pressed="${launch.host === h.name}"${down ? " disabled" : ""}>${esc(h.name)}</button>`;
+      `${h.no_agents ? ' title="This hub hosts no agents"' : ""}` +
+      ` aria-pressed="${launch.host === h.name}"${off ? " disabled" : ""}>${esc(h.name)}</button>`;
   }).join("");
   nav.hidden = false;
 }
