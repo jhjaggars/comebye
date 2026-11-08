@@ -106,7 +106,7 @@ async function openAlpha(page, base) {
 }
 
 if (!baseInst) {
-  for (const n of ["mic denied", "enable step, download progress, listening, transcript inserted and not sent", "later visit skips the download", "To do answer box", "shortcut and Esc"]) skip(n, "no installed host given (BASE_INSTALLED)");
+  for (const n of ["mic denied", "enable step, download progress, listening, transcript inserted and not sent", "later visit skips the download", "To do answer box", "hidden tab stops and discards the recording", "shortcut and Esc"]) skip(n, "no installed host given (BASE_INSTALLED)");
 } else {
   // ---- mic denied ----
   {
@@ -218,6 +218,7 @@ if (!baseInst) {
     const box = page.locator(`#p-todo .td-item[data-id="${id}"] .td-text`);
     await box.click();
     await box.fill("My answer:");
+    await box.selectText(); // a selection: the dictation must not replace it
     const m = mic(page, "todo:" + id);
     await m.click();
     await until(page, (ks) => ks.includes(document.querySelector(".stt-status:not([hidden])")?.dataset.kind), ["listening"], { timeout: 15000 });
@@ -229,11 +230,34 @@ if (!baseInst) {
     await mic(page, "todo:" + id).click();
     await until(page, (ks) => ks.includes(document.querySelector(".stt-status:not([hidden])")?.dataset.kind), ["note"], { timeout: 120000 });
     const v = await page.locator(`#p-todo .td-item[data-id="${id}"] .td-text`).inputValue();
+    // It is also the item's saved draft, as typed text is.
+    const draft = await page.evaluate((i) => todos.drafts.get(i)?.text, id);
+    if (draft !== v) throw new Error("not saved as the draft: " + draft);
+    const stored = await page.evaluate((i) => JSON.parse(localStorage.getItem(TODO_DRAFTS_KEY) || "{}")[i]?.text, id);
+    if (stored !== v) throw new Error("draft not persisted");
     if (!v.startsWith("My answer:") || !words.every((w) => v.toLowerCase().includes(w))) throw new Error("answer box: " + v);
     const t = await page.evaluate((i) => fetch("/api/todos").then((x) => x.json()).then((d) => (d.items || d.todos || []).find((x) => x.id === i)?.state), id);
     if (t && t !== "open") throw new Error("the item was answered: " + t);
     await page.screenshot({ path: `${out}/stt-todo-inserted.png` });
     await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id);
+  }, page);
+
+  await check("hidden tab stops and discards the recording", async () => {
+    await openAlpha(page, baseInst);
+    await page.locator("#prompt-text").click();
+    await page.keyboard.press("Control+Shift+Space");
+    await until(page, (ks) => ks.includes(document.querySelector(".stt-status:not([hidden])")?.dataset.kind), ["listening"], { timeout: 15000 });
+    const before = await promptText(page);
+    // Make the page report itself hidden, as a switched-away tab does.
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await until(page, () => /Cancelled/.test(document.querySelector(".stt-status:not([hidden])")?.innerText || ""), null, { timeout: 5000 });
+    if ((await mic(page).getAttribute("data-state")) !== "idle") throw new Error("still recording");
+    await page.waitForTimeout(1500);
+    if ((await promptText(page)) !== before) throw new Error("text was inserted from a discarded recording");
+    await page.evaluate(() => { delete document.hidden; });
   }, page);
 
   await check("shortcut and Esc", async () => {

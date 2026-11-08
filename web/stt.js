@@ -499,8 +499,10 @@
     const id = target.slice("todo:".length);
     const ta = textareaFor(target);
     if (ta && !ta.disabled) {
-      let s = anchor.start == null ? ta.value.length : Math.min(anchor.start, ta.value.length);
-      let e = anchor.end == null ? s : Math.min(anchor.end, ta.value.length);
+      // Dictation adds to what is typed, never replaces it: a selection is
+      // not overwritten, the words go in after it.
+      const e = anchor.end == null ? ta.value.length : Math.min(anchor.end, ta.value.length);
+      const s = e;
       let t = text;
       if (s > 0 && !/\s$/.test(ta.value.slice(0, s))) t = " " + t;
       if (ta.maxLength > 0) t = t.slice(0, Math.max(0, ta.maxLength - (ta.value.length - (e - s))));
@@ -580,7 +582,10 @@
     }
   }, true);
 
+  // A hidden tab (switched away, phone locked) must not keep the microphone:
+  // stop and throw the recording away.
   window.addEventListener("pagehide", () => { if (rec) stopRecording(true); });
+  document.addEventListener("visibilitychange", () => { if (document.hidden && rec) stopRecording(true); });
 
   document.addEventListener("DOMContentLoaded", sync);
   if (document.readyState !== "loading") sync();
