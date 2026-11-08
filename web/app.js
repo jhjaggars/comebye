@@ -2640,7 +2640,10 @@ document.addEventListener("click", (ev) => { clickNow = ev; }, true);
 const openPopName = () => Object.keys(POPS).find((n) => !$(POPS[n].id).hidden) || "";
 // popItems are the things the arrow keys move between (visible, enabled; the × is not one).
 const popItems = (el) => [...el.querySelectorAll("button:not(.pop-x), select")].filter((b) => !b.disabled && !b.hidden && b.getClientRects().length);
-function syncSheet() { $("sheet-bk").hidden = !(isSheet() && Object.values(POPS).some((p) => !p.noSheet && !$(p.id).hidden)); }
+function syncSheet() {
+  // A drag set animation:none on its sheet so the slide-in would not fight it; a hidden sheet gets it back for its next opening.
+  for (const p of Object.values(POPS)) if ($(p.id).hidden) $(p.id).style.animation = "";
+  $("sheet-bk").hidden = !(isSheet() && Object.values(POPS).some((p) => !p.noSheet && !$(p.id).hidden)); }
 function popOpened(name) {
   popOpenedBy = clickNow;
   for (const n of Object.keys(POPS)) if (n !== name) POPS[n].close();
@@ -2706,7 +2709,8 @@ function initPopovers() {
   // Swipe down on a sheet's handle or title: it follows the finger, then
   // closes on distance or speed, or springs back.
   let g = null;
-  const reset = (pop) => { pop.style.transform = ""; pop.style.transition = ""; pop.style.animation = ""; };
+  // reset leaves animation alone: clearing it on a sheet that is still open replays the slide-in (syncSheet restores it once the sheet is hidden).
+  const reset = (pop) => { pop.style.transform = ""; pop.style.transition = ""; };
   document.addEventListener("pointerdown", (ev) => {
     if (!isSheet() || ev.button > 0) return;
     const h = ev.target.closest(".pop .grab, .pop .pop-head");

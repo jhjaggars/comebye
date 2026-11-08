@@ -3250,6 +3250,8 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
       await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx, cy + 20, { steps: 3 }); await page.mouse.up();
       await page.waitForTimeout(350);
       if (!(await vis(BOX[name]))) throw new Error(`${name}: a 20px pull closed it`);
+      // The spring-back must not replay the slide-in (it used to, 180 ms later, which moved the handle under the next pull).
+      if (await page.evaluate((sel) => document.querySelector(sel).getAnimations().filter((a) => a.animationName === "sheet-in").length, BOX[name])) throw new Error(`${name}: the slide-in replayed after a short pull`);
       const hb2 = await page.locator(BOX[name] + " .grab").boundingBox();
       await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2); await page.mouse.down();
       await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + 160, { steps: 8 }); await page.mouse.up();
