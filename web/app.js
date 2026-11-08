@@ -531,6 +531,13 @@ function renderList() {
   if (fid) { const r = rowFor(fid.dataset.id); if (r) r.focus({ preventScroll: true }); }
 }
 
+// emptyHtml is the one empty state: a plain line saying why nothing is shown,
+// what will appear there (hint, trusted HTML) and, where it helps, the one
+// action to take (act = [label, key]; a click on .empty-act[data-act=key]).
+function emptyHtml(title, hint, act) {
+  return `<div class="empty"><b>${esc(title)}</b>${hint ? `<span>${hint}</span>` : ""}${act ? `<button type="button" class="empty-act" data-act="${escAttr(act[1])}">${esc(act[0])}</button>` : ""}</div>`;
+}
+
 function renderListRows() {
   const wrap = $("agents");
   renderHostFilter();
@@ -583,7 +590,12 @@ function renderListRows() {
   renderNav();
   renderStatus();
   if (!agents.length) {
-    wrap.innerHTML = `<div class="empty">${state.unauthorized ? esc(UNAUTHORIZED_MSG) : "No agents running"}</div>` + downRows;
+    const f = activeHostFilter();
+    wrap.innerHTML = (state.unauthorized ? `<div class="empty"><b>${esc(UNAUTHORIZED_MSG)}</b></div>`
+      : f !== "all" ? emptyHtml(`No agents on ${f}`, "", ["Show all hosts", "all-hosts"])
+      : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + downRows;
+    const act = wrap.querySelector(".empty-act");
+    if (act) act.onclick = () => setHostFilter("all");
     return;
   }
   // Coordinators are pinned above the projects.
@@ -1070,6 +1082,22 @@ function todoKeptHtml(id, text, label) {
       <div class="td-acts"><button type="button" class="td-copy">Copy</button><button type="button" class="td-discard">Discard</button></div></div>`;
 }
 
+// todoRecommended finds the recommendation line ("I recommend ok 2",
+// "Recommendation: **1**", "recommend 1+3", "recommend option 2": bold markers
+// are fine) and returns the option numbers it names that exist.
+function todoRecommended(lines, n) {
+  for (const l0 of lines) {
+    const l = String(l0).replace(/[*_`]/g, "");
+    const NUMS = "(\\d+(?:\\s*(?:\\+|,|and|&)\\s*\\d+)*)";
+    // "ok 1+2" anywhere after "recommend", or the number right after it.
+    const m = new RegExp("recommend[^\\n]*?\\bok\\s+" + NUMS, "i").exec(l) ||
+      new RegExp("recommend\\w*\\s*(?:[:=\\-\u2013\\u2014]|is)?\\s*(?:options?\\s+|choice\\s+|#\\s*)?" + NUMS, "i").exec(l);
+    if (!m) continue;
+    const nums = m[1].split(/\s*(?:\+|,|and|&)\s*/).map(Number).filter((x) => x >= 1 && x <= n);
+    if (nums.length) return nums;
+  }
+  return [];
+}
 // Choices a question offers: the numbered list in its context ("1. **Mint a key** ..."),
 // 2 to 9 items counted from 1. rec holds the numbers a "recommend... ok 1+2" line names.
 function todoOptions(ctx) {
@@ -1089,9 +1117,7 @@ function todoOptions(ctx) {
     opts.push({ n, label });
   }
   if (opts.length < 2 || opts.length > 9) return { opts: [], rec: [] };
-  const rl = lines.find((l) => /recommend/i.test(l) && /\bok\s+\d/i.test(l));
-  const rm = rl && /\bok\s+(\d+(?:\+\d+)*)/i.exec(rl);
-  const rec = rm ? rm[1].split("+").map(Number).filter((n) => n <= opts.length) : [];
+  const rec = todoRecommended(lines, opts.length);
   return { opts, rec };
 }
 // The numbers picked in an answer box that holds "ok 1+2".
@@ -1298,7 +1324,7 @@ function renderTodos(force) {
     const psig = show ? "p" + sig : "empty";
     if (again || (page.dataset.sig !== psig && !typing(page))) {
       page.dataset.sig = psig;
-      todoPaint(page, show ? `<div class="td-list">${todoListHtml("tdp")}</div><div class="tds-none"><b>${todos.open ? `${todos.open} waiting on you` : "Nothing is waiting on you"}</b><span>Pick a question on the left, or press <kbd>j</kbd>.</span>${todos.nxt ? `<button type="button" class="td-start">Start with the first</button>` : ""}</div>` : `<div class="empty">Nothing is waiting on you.</div>`);
+      todoPaint(page, show ? `<div class="td-list">${todoListHtml("tdp")}</div><div class="tds-none"><b>${todos.open ? `${todos.open} waiting on you` : "Nothing is waiting on you"}</b><span>Pick a question on the left, or press <kbd>j</kbd>.</span>${todos.nxt ? `<button type="button" class="td-start">Start with the first</button>` : ""}</div>` : emptyHtml("Nothing is waiting on you", "When a coordinator needs an answer, the question appears here."));
     }
   }
   todos.follow = false;
@@ -3512,8 +3538,8 @@ function statusModel() {
 function statusWho(e) { return e.agent_name || e.branch || e.id; }
 
 function statusHTML(desktop) {
-  if (ledger.on === false) return `<div class="empty">Status needs the hub's ledger, which this host does not keep.</div>`;
-  if (ledger.on !== true) return `<div class="empty">Loading…</div>`;
+  if (ledger.on === false) return emptyHtml("Status is not available here", "It needs the hub's ledger, which this host does not keep.");
+  if (ledger.on !== true) return emptyHtml("Loading…");
   const ps = statusModel();
   const nProg = ps.reduce((n, p) => n + p.progress.length, 0), nBlk = ps.reduce((n, p) => n + p.blocked.length, 0), nYou = ps.reduce((n, p) => n + p.todos.length, 0);
   const dmg = repoDamageList();

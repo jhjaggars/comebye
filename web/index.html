@@ -159,7 +159,13 @@
     .status.done { color: var(--purple); }
     .agent .status { text-align: right; line-height: 1.25; }
     .agent .status .ago { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11px; color: var(--muted); }
-    .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+    /* One empty state everywhere: muted, centred in its pane, with its own padding (never flush to an edge),
+       a short line saying why it is empty, and where it helps what will appear or the one action to take. */
+    .empty, .ln-empty, .br-empty, .rc-empty, .td-none { box-sizing: border-box; color: var(--muted); font-size: 14px; line-height: 1.45; text-align: center; padding: 28px 20px; overflow-wrap: anywhere; }
+    .empty b { display: block; color: var(--text); font-size: 15px; font-weight: 650; }
+    .empty span { display: block; margin-top: 4px; }
+    .empty button.empty-act { margin-top: 12px; min-height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--blue); background: var(--chip-blue); color: var(--blue); font: inherit; font-weight: 600; cursor: pointer; }
+    .empty kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel2); color: var(--text); }
 
     /* Detail view */
     #detail { display: none; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
@@ -705,7 +711,6 @@
       padding: 1px 6px; font-size: 11px; font-weight: 600;
     }
     .ln-chev { flex: none; color: var(--muted); font-size: 20px; }
-    .ln-empty { color: var(--muted); font-size: 14px; padding: 16px 14px; text-align: center; }
     .ln-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
     .ln-kinds .hf-chip { min-height: 44px; }
     .ln-kinds .hf-chip[aria-pressed="true"] { background: var(--chip-blue); border-color: var(--blue); color: var(--blue); }
@@ -976,7 +981,6 @@
     .br-md > :first-child { margin-top: 0; }
     .br-md h2 { font-size: 15px; margin: 12px 0 4px; }
     .br-md h2:first-child { margin-top: 2px; }
-    .br-empty { color: var(--muted); padding: 4px 14px 14px; font-size: 14px; }
     .br-sched { display: flex; align-items: center; gap: 10px; margin: 10px 2px 0; color: var(--muted); font-size: 13.5px; }
     .br-sched span { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
     .br-sched button {
@@ -1091,7 +1095,7 @@
     .td-g:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
     .td-g .td-gn { color: var(--muted); font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
     .td-g .td-chev { margin-left: auto; }
-    .td-none { flex: none; padding: 8px; color: var(--muted); font-size: 14px; }
+    .td-none { flex: none; }
     /* An unsent answer whose item was answered or closed elsewhere: kept until discarded. */
     .td-kept { flex: none; margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip-yellow); border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); font-size: 13.5px; }
     .td-kept-h { color: var(--text); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
@@ -1234,7 +1238,6 @@
     .pt-keys { flex: none; display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
     .pt-keys[hidden] { display: none; }
     .pt-keys kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel2); color: var(--text); }
-    .page-body .empty { max-width: none; text-align: left; padding: 8px 0; }
 
     /* The briefing a coordinator published. */
     .briefing {
@@ -1390,7 +1393,6 @@
     .rc-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .rc-chip[hidden] { display: none; }
     .rc-count { color: var(--muted); font-size: 13px; margin: 0 2px 8px; }
-    .rc-empty { color: var(--muted); font-size: 14px; padding: 14px 4px; overflow-wrap: anywhere; }
     .rc-empty.warn { color: var(--orange); }
     .rc-empty code { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); }
     .rc-pick { padding: 24px; text-align: center; }
@@ -1454,6 +1456,32 @@
       /* The app's grid does not apply: this screen is fixed over it. */
       #recall .rc-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
       #recall .rc-session { display: block !important; }
+    }
+    /* Interaction states for every option-like control, from tokens only. Hover is a neutral lift (a border
+       toward --muted and a surface shift); the selected state keeps its blue; pressed sinks and darkens, so a click
+       feels physical. Hover only where a pointer can hover, so a tap never leaves a sticky highlight. */
+    .td-opt, #answer button.opt, .hf-chip, .tp-opt, .attach-menu button, .ln-dir, .ln-model, .td-row, .nv, .rc-card {
+      transition: background-color .12s ease, border-color .12s ease, transform .08s ease, filter .12s ease;
+    }
+    .td-opt:active:not(:disabled), #answer button.opt:active:not(:disabled):not(.locked), .hf-chip:active:not(:disabled), .tp-opt:active { transform: translateY(1px); }
+    .td-opt:active:not(:disabled) { background: var(--bg); border-color: var(--muted); }
+    .td-opt.on:active:not(:disabled) { background: color-mix(in srgb, var(--blue) 24%, var(--bg)); border-color: var(--blue); }
+    .hf-chip:active:not(:disabled) { background: var(--bg); }
+    .tp-opt:active { background: var(--bg); }
+    .attach-menu button:active:not(:disabled) { background: var(--bg); }
+    #answer button.opt:active { filter: none; background: var(--bg); }
+    @media (hover: hover) {
+      .td-opt:not(.on):not(:disabled):hover { background: var(--panel); border-color: var(--muted); }
+      .td-opt.on:hover { background: color-mix(in srgb, var(--blue) 16%, var(--chip-blue)); }
+      #answer button.opt:not(.locked):not(.ro):not(.chosen):hover { background: var(--panel2); border-color: var(--muted); }
+      .hf-chip:not(:disabled):not([aria-pressed="true"]):hover { background: var(--panel2); border-color: var(--muted); }
+      .tp-opt:not([aria-checked="true"]):hover { background: var(--panel); border-color: var(--muted); }
+      .attach-menu button:not(:disabled):hover { background: var(--panel2); }
+      .ln-dir:hover, .ln-model:hover { background: var(--panel2); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .td-opt, #answer button.opt, .hf-chip, .tp-opt, .attach-menu button, .ln-dir, .ln-model, .td-row, .nv, .rc-card { transition: none; }
+      .td-opt:active, #answer button.opt:active, .hf-chip:active, .tp-opt:active { transform: none; }
     }
   </style>
 </head>

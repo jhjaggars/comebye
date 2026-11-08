@@ -2190,6 +2190,114 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
   await tctx.close();
 }
 
+// Empty states and option controls, at desktop and phone widths in a few themes.
+{
+  const EMPTY_LEDGER = { plans: [], entries: [], marks: [], roles: {} };
+  const NO_TODOS = { todos: [], open: 0, answered: 0 };
+  for (const [w, theme] of [[1280, "dark"], [1280, "light"], [2000, "nord"], [390, "dark"], [390, "light"], [390, "gruvbox-dark"]]) {
+    await check(`empty states: padded and centred at ${w} in ${theme}`, async () => {
+      const mobile = w <= 500;
+      const ctx = await browser.newContext({ viewport: { width: w, height: mobile ? 844 : 800 }, colorScheme: theme === "light" ? "light" : "dark", bypassCSP: true, isMobile: mobile, hasTouch: mobile });
+      await ctx.addInitScript((t) => { if (t !== "light" && t !== "dark") localStorage.setItem("comebye.theme", t); }, theme);
+      const p = await ctx.newPage();
+      try {
+        await p.route(/\/api\/ledger$/, (r) => r.fulfill({ json: EMPTY_LEDGER }));
+        await p.route(/\/api\/todos$/, (r) => r.fulfill({ json: NO_TODOS }));
+        await p.goto(base + "/" + (mobile ? "" : "#/todo"), { waitUntil: "load" });
+        await p.waitForTimeout(600);
+        // Each state is forced, then its box is measured: non-zero left padding, text centred, inside its pane.
+        const states = [
+          ["list", "state.agents = []; renderList()", "#agents .empty"],
+          ["search none", "location.hash = '#/transcripts?q=zzzqqqnomatch'", ".rc-empty"],
+          ["ready to remove", "openReview(); await new Promise(r => setTimeout(r, 500)); review.items = []; renderReview()", "#rv-list .ln-empty"],
+          ["sweep", "openSweep(); await new Promise(r => setTimeout(r, 500)); sweep.data = { ready: [], look: [] }; renderSweep()", "#sweep-list .ln-empty"],
+          ...(mobile ? [] : [["To do none", "location.hash = '#/todo'; todos.loadedAt = 0; await loadTodos()", "#pt-body .empty"]]),
+        ];
+        const bad = [];
+        for (const [name, js, sel] of states) {
+          await p.evaluate(`(async () => { ${js} })()`);
+          await p.waitForTimeout(700);
+          const m = await p.evaluate((sel) => {
+            const el = [...document.querySelectorAll(sel)].find((e) => e.offsetParent !== null);
+            if (!el) return null;
+            const cs = getComputedStyle(el), r = el.getBoundingClientRect(), pr = el.parentElement.getBoundingClientRect();
+            return { padL: parseFloat(cs.paddingLeft), padR: parseFloat(cs.paddingRight), align: cs.textAlign, inside: r.left >= pr.left - 0.5 && r.right <= pr.right + 0.5 };
+          }, sel);
+          if (!m) bad.push(`${name}: not shown (${sel})`);
+          else if (!(m.padL > 0 && m.padR > 0) || m.align !== "center" || !m.inside) bad.push(`${name}: ${JSON.stringify(m)}`);
+          await p.evaluate(() => { for (const id of ["rv-close", "sweep-close"]) document.getElementById(id)?.click(); });
+        }
+        if (bad.length) throw new Error(bad.join("; "));
+      } finally { await ctx.close(); }
+    });
+  }
+
+  // Option-like controls: hover and pressed look different from rest, the selected look differs from hover,
+  // and hover is limited to devices that can hover. Checked in two themes.
+  for (const theme of ["dark", "nord"]) {
+    await check(`option controls: hover and pressed styles differ from rest (${theme})`, async () => {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: "dark", bypassCSP: true });
+      await ctx.addInitScript((t) => { if (t !== "dark") localStorage.setItem("comebye.theme", t); }, theme);
+      const p = await ctx.newPage();
+      try {
+        await p.goto(base + "/#/todo", { waitUntil: "load" });
+        await p.waitForTimeout(500);
+        // A To do item with choices, drawn from the app's own markup.
+        await p.evaluate(() => {
+          document.body.insertAdjacentHTML("beforeend", `<div id="zz" style="position:fixed;left:20px;top:20px;z-index:99999;background:var(--bg);padding:10px">
+            <div class="td-opts"><button type="button" class="td-opt" id="zz-a"><kbd>1</kbd><span>Plain</span></button><button type="button" class="td-opt on" id="zz-b"><kbd>2</kbd><span>Selected</span></button></div>
+            <button type="button" class="hf-chip" id="zz-c">chip</button></div>`);
+        });
+        const look = (sel) => p.evaluate((sel) => { const cs = getComputedStyle(document.querySelector(sel)); return [cs.backgroundColor, cs.borderTopColor, cs.transform, cs.cursor].join("|"); }, sel);
+        const bad = [];
+        for (const sel of ["#zz-a", "#zz-b", "#zz-c"]) {
+          await p.mouse.move(700, 600); await p.waitForTimeout(250);
+          const rest = await look(sel);
+          await p.hover(sel); await p.waitForTimeout(250);
+          const hover = await look(sel);
+          await p.mouse.down(); await p.waitForTimeout(250);
+          const press = await look(sel);
+          await p.mouse.up();
+          if (hover === rest) bad.push(`${sel}: hover looks like rest`);
+          if (press === hover) bad.push(`${sel}: pressed looks like hover`);
+          if (!rest.endsWith("|pointer")) bad.push(`${sel}: cursor is not pointer`);
+        }
+        await p.mouse.move(700, 600); await p.waitForTimeout(250);
+        const selRest = await look("#zz-b");
+        await p.hover("#zz-a"); await p.waitForTimeout(250);
+        const plainHover = await look("#zz-a");
+        if (plainHover.split("|").slice(0, 2).join() === selRest.split("|").slice(0, 2).join()) bad.push("hovered plain option looks like the selected one");
+        // Only (hover: hover) devices get hover rules: none outside such a media block.
+        const ok = await p.evaluate(() => {
+          let outside = [];
+          const walk = (rules, inHover) => { for (const r of rules) { if (r.cssRules && r.media) walk(r.cssRules, inHover || /hover:\s*hover/.test(r.media.mediaText)); else if (r.selectorText && /\.(td-opt|hf-chip|tp-opt)[^,{]*:hover/.test(r.selectorText) && !inHover) outside.push(r.selectorText); } };
+          for (const sh of document.styleSheets) { try { walk(sh.cssRules, false); } catch {} }
+          return outside;
+        });
+        if (ok.length) bad.push("hover outside (hover: hover): " + ok.join(", "));
+        if (bad.length) throw new Error(bad.join("; "));
+      } finally { await ctx.close(); }
+    });
+  }
+
+  await check("todo choices: a recommendation is found in the forms people write", async () => {
+    await page.goto(base + "/", { waitUntil: "load" });
+    const r = await page.evaluate(() => [
+      todoRecommended(["I recommend ok 2"], 3),
+      todoRecommended(["Recommendation: **1**"], 3),
+      todoRecommended(["My recommendation: ok 1+3 here"], 3),
+      todoRecommended(["recommend 1+3"], 3),
+      todoRecommended(["**Recommend option 2**"], 3),
+      todoRecommended(["recommend option 5"], 3),
+      todoRecommended(["I recommend waiting for a bit"], 3),
+      todoRecommended(["no opinion"], 3),
+      todoOptions("1. **A** x\n2. **B** y\nRecommend option 2 because it is cheaper").rec,
+    ]);
+    const want = [[2], [1], [1, 3], [1, 3], [2], [], [], [], [2]];
+    if (JSON.stringify(r) !== JSON.stringify(want)) throw new Error(JSON.stringify(r) + " != " + JSON.stringify(want));
+  });
+}
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();
 let failed = 0;
