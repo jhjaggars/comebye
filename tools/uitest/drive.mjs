@@ -2495,6 +2495,22 @@ await check("remove page: the sweep is a button on the page; its result shows ab
   if (await visible("#rv-sweepbox")) throw new Error("Not now left the box");
 });
 
+await check("remove page: Back leaves at once even while the check on each session is still running", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  await page.route(/\/api\/removals$/, async (r) => { await gate; r.fulfill({ json: { removals: [] } }); });
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("about:blank");
+    await page.goto(base + "/#/remove", { waitUntil: "load" });
+    await page.waitForSelector("#review", { state: "visible" });
+    await page.waitForFunction(() => review.busy === true, null, { timeout: 5000 });
+    await page.locator("#rv-close").click();
+    await page.waitForSelector("#review", { state: "hidden", timeout: 3000 });
+    if ((await page.evaluate(() => location.hash)) !== "") throw new Error("hash " + (await page.evaluate(() => location.hash)));
+  } finally { release(); await page.unroute(/\/api\/removals$/); }
+});
+
 await check("remove page: on the phone it is a full page with a Back arrow, no overflow", async () => {
   const posts = await mockRemovals();
   try {
