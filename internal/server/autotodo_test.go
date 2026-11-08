@@ -65,7 +65,10 @@ func TestAutoBlockedThreshold(t *testing.T) {
 	if len(it.Links) != 1 || it.Links[0].URL != "/#/agent/w2:p1" {
 		t.Fatalf("links = %+v", it.Links)
 	}
-	for _, want := range []string{"rm -rf build/", "1. Yes\n", "3. No\n", "11 minutes"} {
+	if len(it.Options) != 3 || it.Options[0].Label != "Yes" || it.Options[2].Label != "No" {
+		t.Fatalf("options = %+v", it.Options)
+	}
+	for _, want := range []string{"rm -rf build/", "1. **Yes**", "3. **No**", "11 minutes", "in its pane"} {
 		if !strings.Contains(it.Context, want) {
 			t.Errorf("context lacks %q:\n%s", want, it.Context)
 		}
@@ -137,7 +140,7 @@ func TestAutoBlockedClosesWhenAgentLeaves(t *testing.T) {
 	// lists nobody is probably down, so its items stay.
 	r.step(autoT0.Add(time.Hour), autoAgent("desk/w2:p1", "home", herdr.StatusBlocked, autoT0.Add(30*time.Minute)))
 	id2 := r.items("")[0].ID
-	r.step(autoT0.Add(2*time.Hour))
+	r.step(autoT0.Add(2 * time.Hour))
 	if it, _ := r.s.todos.get(id2); it.State != TodoOpen {
 		t.Fatalf("host not listed at all: %+v", it)
 	}
@@ -277,4 +280,3 @@ func TestAutoStubForAgentReaders(t *testing.T) {
 		t.Fatalf("show for the user lacks the text: %s", w.Body)
 	}
 }
-

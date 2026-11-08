@@ -255,6 +255,7 @@ func autoName(a herdr.AgentInfo) string {
 func (s *Server) autoBlockedItem(ctx context.Context, a herdr.AgentInfo, since, now time.Time) Todo {
 	name := autoName(a)
 	var b strings.Builder
+	var opts []TodoOption
 	fmt.Fprintf(&b, "**%s** has been blocked for %s (since %s) and nobody has had it open.\n\n",
 		mdSafe(name), roundMinutes(now.Sub(since)), since.Local().Format("15:04"))
 	d, err := s.auto.readDialog(ctx, a)
@@ -265,10 +266,15 @@ func (s *Server) autoBlockedItem(ctx context.Context, a herdr.AgentInfo, since, 
 		b.WriteString("Blocked, no dialog recognised on its screen. Open the agent to see what it is waiting for.")
 	default:
 		b.WriteString(dialogContext(d))
+		if opts = dialogOptions(d); len(opts) > 0 {
+			// The same numbered list `todo add --option` writes, for readers of the text.
+			b.WriteString("\n\n" + optionsMarkdown(opts, nil) + "\n\nThese are the dialog's own options. Answering here does not answer the dialog: open the agent (link above) and answer it in its pane.")
+		}
 	}
 	it := Todo{
 		Question:  oneLine(name+" is blocked at a dialog and waiting for you", todoMaxQuestion),
 		Context:   block(b.String(), todoMaxContext),
+		Options:   opts,
 		Kind:      "action",
 		Links:     []TodoLink{{Label: "Open " + oneLine(name, 60), URL: s.autoAgentLink(a)}},
 		Waiting:   &TodoAgent{ID: state.AgentKey(&a), Name: a.Name, Instance: s.hostInstance(a.Host)},
@@ -301,9 +307,9 @@ func fenced(text string) string {
 	return "```\n" + strings.TrimRight(text, "\n") + "\n```"
 }
 
-// dialogContext is the Markdown for a recognised dialog: what it asks, what
-// it is about (the command or tool waiting) and its options as a numbered
-// list, which the app turns into buttons.
+// dialogContext is the Markdown for a recognised dialog: what it asks and
+// what it is about (the command or tool waiting). Its options go in the
+// item's Options (dialogOptions).
 func dialogContext(d *dialog.Dialog) string {
 	var b strings.Builder
 	title := strings.TrimSpace(d.Title)
@@ -319,25 +325,27 @@ func dialogContext(d *dialog.Dialog) string {
 	if det := strings.TrimSpace(d.Detail); det != "" {
 		b.WriteString(fenced(det) + "\n\n")
 	}
-	n := 0
-	for _, o := range d.Options {
-		if o.Role == dialog.RoleOther || o.Role == dialog.RoleChat || o.Role == dialog.RoleNext || strings.TrimSpace(o.Label) == "" {
-			continue
-		}
-		n++
-		fmt.Fprintf(&b, "%d. %s", n, oneLine(o.Label, 120))
-		if desc := oneLine(o.Description, 160); desc != "" {
-			b.WriteString(" — " + desc)
-		}
-		b.WriteString("\n")
-	}
-	if n > 0 {
-		b.WriteString("\nThese are the dialog's own options: answer them in the agent's pane (Open it with the link).\n")
-	}
 	if strings.TrimSpace(b.String()) == "" {
 		return "A dialog is open, but it showed no text."
 	}
 	return b.String()
+}
+
+// dialogOptions are the dialog's own rows as the item's structured options
+// (none when there are fewer than two or more than nine).
+func dialogOptions(d *dialog.Dialog) []TodoOption {
+	var in []TodoOption
+	for _, o := range d.Options {
+		if o.Role == dialog.RoleOther || o.Role == dialog.RoleChat || o.Role == dialog.RoleNext || strings.TrimSpace(o.Label) == "" {
+			continue
+		}
+		in = append(in, TodoOption{Label: o.Label, Detail: o.Description})
+	}
+	opts, _, err := cleanOptions(in, nil)
+	if err != nil {
+		return nil
+	}
+	return opts
 }
 
 // ---- the store side ----
