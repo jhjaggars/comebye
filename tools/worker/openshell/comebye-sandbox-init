@@ -74,10 +74,13 @@ supervise_comebye() {
   # SBX_* keys steer this script; the rest is comebye's own configuration.
   # shellcheck disable=SC1090
   set -a; . "$ENVF"; set +a
-  # comebye's own HTTP client reaches the hub (a tailnet host) through tailscaled's SOCKS5.
-  # Only comebye gets this, never herdr's panes (git/claude must go through the policy).
+  # The comebye server's calls to the hub (a tailnet host) go through tailscaled's SOCKS5 (it honours
+  # ALL_PROXY/NO_PROXY, socks5h included). Only the server gets it: the `comebye` CLI in a pane talks to the
+  # local server only and ignores proxy variables, and git/claude must keep going through the policy.
   local px=${SBX_HUB_PROXY-socks5h://127.0.0.1:1055}
-  ( [ -n "$px" ] && export HTTPS_PROXY=$px HTTP_PROXY=$px NO_PROXY=127.0.0.1,localhost
+  ( [ -n "$px" ] && export ALL_PROXY=$px NO_PROXY=127.0.0.1,localhost
+    # Restarted on ANY exit (`comebye upgrade --restart exit` makes it exit 0). `comebye` is resolved at each
+    # start from PATH, where ~/.local/bin (the upgraded copy) comes before the image's /usr/local/bin.
     keep comebye comebye -addr 127.0.0.1:8741 -ts-socket "$S/tailscaled.sock"; wait )
 }
 supervise_comebye &
@@ -98,18 +101,16 @@ serve_up() {  # needs a joined node; idempotent (the Serve config persists in th
 }
 serve_up &
 
-# ---- Idle exit. "Busy" = SBX_IDLE_CMD exits 0 (if set; comebye's one-command idle
-# check), else any herdr agent reporting agent_status "working". herdr up but silent
-# also counts as busy: do not stop on a guess.
-busy() {
+# ---- Idle exit. `comebye idle --minutes N` exits 0 when no herdr agent has been working and no
+# interactive session has been active for N minutes; each poll that sees activity renews its clock
+# (in the state dir under /sandbox). Exit 1 = not idle; anything else (comebye missing, herdr down)
+# is treated as not idle: do not stop on a guess. SBX_IDLE_CMD overrides the check (exit 0 = idle).
+rm -f "$HOME/.local/state/comebye/idle-stamp"   # a stop/start must not count the time the sandbox was stopped
+idle_now() {
   if [ -n "${SBX_IDLE_CMD:-}" ]; then bash -c "$SBX_IDLE_CMD" >/dev/null 2>&1; return; fi
-  local out
-  if out=$(herdr agent list 2>/dev/null); then grep -q '"agent_status":"working"' <<<"$out"
-  else [ -S "$HOME/.config/herdr/herdr.sock" ]; fi
+  comebye idle --minutes "$idle_min" >/dev/null 2>&1
 }
-last=$(date +%s)
 while sleep "$(envval SBX_TICK_SECONDS 300)"; do
   idle_min=$(envval SBX_IDLE_MINUTES 120); SBX_IDLE_CMD=$(envval SBX_IDLE_CMD "")
-  if busy; then last=$(date +%s); continue; fi
-  if (( $(date +%s) - last >= idle_min * 60 )); then log "idle $idle_min min: exiting 0"; exit 0; fi
+  if idle_now; then log "idle $idle_min min: exiting 0"; exit 0; fi
 done

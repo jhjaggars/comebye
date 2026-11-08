@@ -42,7 +42,7 @@ openshell sandbox create --name NAME --from registry.jaggars.cc/comebye-sandbox:
 | `tailscale up --authkey=… --hostname=… --advertise-tags=…` | **provisioner (W1)** | `sandbox exec --no-tty` with the key on stdin; socket `/sandbox/.ts/tailscaled.sock` (`tailscale --socket=…`). Needed only the first time: the node identity persists in `/sandbox/.ts` across stop/start |
 | `tailscale serve --bg 8741` + certificate warm-up | `comebye-sandbox-init` | background task: waits for the env file **and** `BackendState=Running`, then serves and requests the cert (first issuance ≈ 36 s). Disable with `SBX_SERVE=0` |
 | comebye server | `comebye-sandbox-init` | starts when the env file exists: `comebye -addr 127.0.0.1:8741 -ts-socket /sandbox/.ts/tailscaled.sock`, env file sourced, restarted on exit |
-| idle exit | `comebye-sandbox-init` | exit 0 → sandbox `Completed`; `sandbox start` brings it back and re-runs everything |
+| idle exit | `comebye-sandbox-init` | `comebye idle` says idle → kill the whole process tree, exit 0 → sandbox `Completed`; `sandbox start` brings it back and re-runs everything |
 
 The init never reads or stores a tailnet key. Order between the provisioner steps does
 not matter: comebye starts when the env file appears; Serve starts when the node is joined.
@@ -70,16 +70,22 @@ Init's keys (all optional):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `SBX_IDLE_MINUTES` | `120` | exit 0 after this long with nothing busy; checked every 5 min |
-| `SBX_IDLE_CMD` | unset | shell command, exit 0 = **busy**. Unset → "any herdr agent `agent_status` is `working`" (herdr up but silent counts as busy). Set it to comebye's one-command idle check when W3 ships it |
+| `SBX_IDLE_MINUTES` | `120` | passed to `comebye idle --minutes`; polled every 5 min |
+| `SBX_IDLE_CMD` | unset | overrides the check (shell command, exit 0 = idle) |
+| `SBX_TICK_SECONDS` | `300` | poll interval (tests) |
 | `SBX_SERVE` | `1` | `0` skips `tailscale serve` + warm-up |
-| `SBX_HUB_PROXY` | `socks5h://127.0.0.1:1055` | exported as `HTTPS_PROXY`/`HTTP_PROXY` **to the comebye server only** (Go's net/http honours socks5h) so it reaches the hub through tailscaled. Empty string disables |
+| `SBX_HUB_PROXY` | `socks5h://127.0.0.1:1055` | exported as `ALL_PROXY` (+ `NO_PROXY=127.0.0.1,localhost`) **to the comebye server only**, so its hub calls go through tailscaled. Empty string disables |
 
-Known gap (for W3/coordinator): this reaches the hub from the comebye *server*
-(announce). The `comebye report/prompt` CLI run inside a herdr pane inherits nothing,
-and Go does not read `ALL_PROXY`; the CLI needs a comebye-specific setting (e.g.
-`COMEBYE_HUB_PROXY`) or the panes' env must carry `HTTPS_PROXY` — which would also push
-git/claude through tailscaled and bypass the policy rules, so it is not set.
+The panes get no proxy variables: the `comebye` CLI in a pane talks to the local server only (it
+ignores proxy variables), and git/claude/pi must keep going through the sandbox policy (a
+proxy in their environment would send them to tailscaled's SOCKS5, which the policy does not
+let reach the internet).
+
+Idle and upgrade (comebye >= the sandbox-support change): idle is `comebye idle --minutes N`
+(0 = idle, 1 = not idle, anything else counts as not idle; the clock file is removed at init
+start so stopped time never counts). `comebye upgrade --restart exit` installs to
+`~/.local/bin` and SIGTERMs the server, which exits 0; init restarts `comebye` on **any** exit,
+3 s later, resolved by name from a PATH with `~/.local/bin` first.
 
 ### What survives stop/start
 
