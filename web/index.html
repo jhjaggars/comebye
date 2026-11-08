@@ -1413,11 +1413,11 @@
     .plan-x:active { background: var(--panel2); }
     @media (hover: hover) { .plan-x:hover { background: var(--panel2); color: var(--text); } }
     .plan-x:focus:not(:focus-visible) { outline: none; }
-    .plan-x:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    .plan-x:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
     .plan-title:active, .plan-members a.pm:active { background: var(--panel2); }
     @media (hover: hover) { .plan-title:hover, .plan-members a.pm:hover { background: var(--panel2); } }
     .plan-title:focus:not(:focus-visible), .plan-members a.pm:focus:not(:focus-visible) { outline: none; }
-    .plan-title:focus-visible, .plan-members a.pm:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .plan-title:focus-visible, .plan-members a.pm:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     .plan-state { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 0 8px; border-radius: 999px; border: 1px solid var(--border); }
     .plan.done .plan-state { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
     .plan.partial .plan-state { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
@@ -1433,7 +1433,7 @@
     .plan-members .pm-live.working, .plan-members .pm-live.landing { color: var(--blue); }
     .pm-detail { font-size: 12px; padding: 0 0 4px; color: var(--muted); overflow-wrap: anywhere; }
     .pm-rep summary { cursor: pointer; padding: 2px 0; }
-    .pm-rep summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .pm-rep summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     .pm-rep .md { color: var(--text); max-height: 40vh; overflow: auto; }
     .bf-head { display: flex; align-items: center; }
     .bf-toggle {
