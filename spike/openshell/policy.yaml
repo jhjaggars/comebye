@@ -20,6 +20,7 @@ network_policies:
       - { host: login.tailscale.com, port: 443, protocol: tcp, tls: skip }
       - { host: "derp*.tailscale.com", port: 443, protocol: tcp, tls: skip }
       - { host: log.tailscale.com, port: 443, protocol: tcp, tls: skip }
+      - { host: acme-v02.api.letsencrypt.org, port: 443, protocol: tcp, tls: skip }   # tailscale serve certs (tailscaled does ACME itself)
     binaries:
       # tailscaled dials DERP by IP, which OpenShell blocks. It is pointed at a
       # local CONNECT proxy (HTTPS_PROXY) that dials by hostname instead.
