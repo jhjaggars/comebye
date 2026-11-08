@@ -443,6 +443,33 @@ What it does:
    versions and the manual rollback command
    (`cp ~/.local/bin/comebye.prev ~/.local/bin/comebye && systemctl --user restart comebye`).
 
+### Without systemd (sandbox hosts)
+
+A host with no systemd user unit, such as an OpenShell sandbox whose init
+loop keeps `comebye` running, upgrades with `--restart exit` (the default
+when `systemctl` is missing or has no `comebye` unit; `--restart systemd`
+forces the unit):
+
+```sh
+comebye upgrade --restart exit            # or just: comebye upgrade
+comebye upgrade --restart exit --pid 123  # when several comebye servers run as this user
+```
+
+Steps 1 to 4 are the same: the same checksum, version and downgrade checks,
+the same `comebye.prev`. The restart is different: instead of
+`systemctl restart`, it sends the running server SIGTERM (it logs "shutting
+down" and exits 0), waits for it to go, and relies on the supervisor to start
+`~/.local/bin/comebye` again. The server is found by its command line: a
+`comebye` process of this user with no subcommand (only flags). The smoke
+check is the same minus the unit and journal checks: it waits (up to 30 s)
+for the local server to answer, then runs the same `whoami`, `index.html`,
+served-version, `agents` and `ledger` steps. If the server never comes back
+(nothing restarts it), it restores `comebye.prev`, signals again and says so.
+The supervisor must therefore start the binary by name from a PATH where
+`~/.local/bin` comes first; see [sandbox hosts](sandbox-hosts.md).
+
+`COMEBYE_UPGRADE_RESTART` sets the default for `--restart`.
+
 A binary that predates `comebye upgrade` cannot run it. On such a host,
 bootstrap once from the release tarball, then use the command from then on.
 The tarball extracts to a `comebye_<os>_<arch>/` directory (the binary,
