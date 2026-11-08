@@ -945,7 +945,7 @@ const TODO_FOLDED_KEY = "comebye-todo-folded";
 const TODO_DRAFTS_KEY = "comebye.todo.drafts";
 const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up" };
 const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false,
-  openId: null, lastId: null, ansOpen: false, seen: new Map(), order: [], follow: false,
+  openId: null, lastId: null, nxt: null, ansOpen: false, seen: new Map(), order: [], follow: false,
   drafts: loadTodoDrafts(), busy: new Set() };
 
 function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") ? u : ""; }
@@ -1019,6 +1019,61 @@ function todoKeptHtml(id, text, label) {
       <div class="td-acts"><button type="button" class="td-copy">Copy</button><button type="button" class="td-discard">Discard</button></div></div>`;
 }
 
+// Choices a question offers: the numbered list in its context ("1. **Mint a key** ..."),
+// 2 to 9 items counted from 1. rec holds the numbers a "recommend... ok 1+2" line names.
+function todoOptions(ctx) {
+  const lines = String(ctx || "").split("\n");
+  let opts = [];
+  let inCode = false;
+  for (const l of lines) {
+    if (/^\s*```/.test(l)) { inCode = !inCode; continue; }
+    const m = !inCode && /^ {0,3}(\d{1,2})[.)]\s+(.+)$/.exec(l);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (n === 1) opts = [];
+    if (n !== opts.length + 1) continue;
+    const b = /\*\*([^*]+)\*\*/.exec(m[2]);
+    let label = (b ? b[1] : m[2]).replace(/[*_`~]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim().replace(/[.:;,]+$/, "");
+    if (label.length > 42) label = label.slice(0, 40).trimEnd() + "…";
+    opts.push({ n, label });
+  }
+  if (opts.length < 2 || opts.length > 9) return { opts: [], rec: [] };
+  const rl = lines.find((l) => /recommend/i.test(l) && /\bok\s+\d/i.test(l));
+  const rm = rl && /\bok\s+(\d+(?:\+\d+)*)/i.exec(rl);
+  const rec = rm ? rm[1].split("+").map(Number).filter((n) => n <= opts.length) : [];
+  return { opts, rec };
+}
+// The numbers picked in an answer box that holds "ok 1+2".
+function todoPicked(text) {
+  const m = /^\s*ok\s+(\d+(?:\+\d+)*)\s*$/i.exec(text || "");
+  return m ? m[1].split("+").map(Number) : [];
+}
+function todoOptsHtml(t) {
+  const { opts, rec } = todoOptions(t.context);
+  if (!opts.length) return "";
+  const picked = todoPicked(todoDraft(t.id));
+  return `<div class="td-opts" role="group" aria-label="Choices">` + opts.map((o) =>
+    `<button type="button" class="td-opt${rec.includes(o.n) ? " rec" : ""}${picked.includes(o.n) ? " on" : ""}" data-n="${o.n}" aria-pressed="${picked.includes(o.n)}" title="Adds ${o.n} to the answer"><kbd>${o.n}</kbd><span>${esc(o.label)}</span></button>`).join("") +
+    (rec.length ? `<button type="button" class="td-opt td-rec" data-fill="ok ${rec.join("+")}"><span>Use the recommendation: ok ${rec.join("+")}</span></button>` : "") + `</div>`;
+}
+function todoSyncOpts(item, text) {
+  const picked = todoPicked(text);
+  item.querySelectorAll(".td-opt[data-n]").forEach((b) => {
+    const on = picked.includes(Number(b.dataset.n));
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+}
+// Puts text in an item's answer box as if typed, and leaves the cursor there.
+function todoFill(item, text) {
+  const box = item.querySelector(".td-text");
+  if (!box) return;
+  box.value = text;
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+  box.focus({ preventScroll: true });
+  box.setSelectionRange(box.value.length, box.value.length);
+}
+
 // pfx keeps element ids apart: the same item is drawn in the phone card
 // and on the desktop page.
 function todoItemHtml(t, pfx) {
@@ -1047,29 +1102,40 @@ function todoItemHtml(t, pfx) {
       ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : esc(fmtAgo(aAt)) + " ago"}</div>
           <div class="td-answer-t">${renderInline(a.text)}</div>
           <div class="td-wait">${t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""}</div></div>` : "";
+    const nx = todos.nxt && todos.nxt !== t.id ? todos.items.find((x) => x.id === todos.nxt) : null;
+    const agentId = t.waiting && t.waiting.id;
+    const strip = `<div class="td-strip">
+        ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}</span></div>` : ""}
+        ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
+        <div><span class="td-sl">Item</span><span class="td-sv"><code>${esc(t.id)}</code></span></div>
+        ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;
+    const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
+        <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
+    const after = ans ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
     const kept = ans && draft ? todoKeptHtml(t.id, todoDraft(t.id), "Not sent: this was answered before you sent yours.") : "";
     const busy = todos.busy.has(t.id) ? " disabled" : "";
     const form = ans ? ""
       : `<textarea class="td-text" id="${pfx}-answer-${escAttr(t.id)}" rows="2" maxlength="4000" placeholder="Your answer" aria-label="Your answer">${esc(todoDraft(t.id))}</textarea>`;
     panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
+        ${dhead}
         <div class="td-scroll">
           ${meta ? `<div class="td-meta">${esc(meta)}</div>` : ""}
           ${t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
           ${answered}${kept}
         </div>
-        <div class="td-form">${form}
+        <div class="td-form">${ans ? "" : todoOptsHtml(t)}${form}
           <div class="td-acts">
             ${ans ? "" : `<button type="button" class="td-answer-btn"${busy}>Answer</button>`}
             <button type="button" class="td-done"${busy}>Done</button>
             <button type="button" class="td-drop"${busy}>Drop</button>
-          </div>
+          </div>${after}
         </div>
       </div>`;
   }
   return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}" data-id="${escAttr(t.id)}">
       <button type="button" class="td-row" id="${escAttr(rid)}" aria-expanded="${open}"${open ? ` aria-controls="${escAttr(pid)}"` : ""}>
-        <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</span>
+        <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</span>${!open && !ans && todos.nxt === t.id ? `<span class="td-nx">Next up</span>` : ""}
         <span class="td-rm"><span class="td-who">${esc(who)}</span><span class="td-age">${esc(age)}</span><span class="td-chips">${chips}</span></span>
         <span class="td-chev" aria-hidden="true"></span>
       </button>${panel}
@@ -1077,6 +1143,7 @@ function todoItemHtml(t, pfx) {
 }
 
 function todoListHtml(pfx) {
+  todos.nxt = todoNextOpen(todos.openId, todoOrder().map((t) => t.id));
   const opens = todos.items.filter((t) => t.state === "open");
   const done = todos.items.filter((t) => t.state !== "open");
   let h = todoOrphans().map(([id, d]) => todoKeptHtml(id, d.text, `Not sent: “${d.q || id}” was closed before you answered.`)).join("");
@@ -1179,7 +1246,7 @@ function renderTodos(force) {
     const psig = show ? "p" + sig : "empty";
     if (again || (page.dataset.sig !== psig && !typing(page))) {
       page.dataset.sig = psig;
-      todoPaint(page, show ? `<div class="td-list">${todoListHtml("tdp")}</div>` : `<div class="empty">Nothing is waiting on you.</div>`);
+      todoPaint(page, show ? `<div class="td-list">${todoListHtml("tdp")}</div><div class="tds-none"><b>${todos.open ? `${todos.open} waiting on you` : "Nothing is waiting on you"}</b><span>Pick a question on the left, or press <kbd>j</kbd>.</span>${todos.nxt ? `<button type="button" class="td-start">Start with the first</button>` : ""}</div>` : `<div class="empty">Nothing is waiting on you.</div>`);
     }
   }
   todos.follow = false;
@@ -1272,9 +1339,26 @@ function onTodoClick(ev) {
     else if (ev.target.closest(".td-discard")) { todos.drafts.delete(kept.dataset.kept); saveTodoDrafts(); renderTodos(true); }
     return;
   }
+  if (ev.target.closest(".td-start")) {
+    const first = todoOrder().find((t) => t.state === "open");
+    if (first) todoExpand(first.id);
+    return;
+  }
   const item = ev.target.closest(".td-item");
   if (!item) return;
   const id = item.dataset.id;
+  const ag = ev.target.closest(".td-agent");
+  if (ag) { openDetail(ag.dataset.agent); return; }
+  const opt = ev.target.closest(".td-opt");
+  if (opt) {
+    const box = item.querySelector(".td-text");
+    if (!box) return;
+    if (opt.dataset.fill) { todoFill(item, opt.dataset.fill); return; }
+    const picked = todoPicked(box.value), n = Number(opt.dataset.n);
+    const next = picked.includes(n) ? picked.filter((x) => x !== n) : picked.concat(n).sort((a, b) => a - b);
+    todoFill(item, next.length ? "ok " + next.join("+") : "");
+    return;
+  }
   if (ev.target.closest(".td-row")) {
     if (todos.openId === id) todoCollapse(); else todoExpand(id);
     return;
@@ -1301,6 +1385,7 @@ function onTodoInput(ev) {
   if (box.value.trim()) todos.drafts.set(id, { text: box.value, q: t ? t.question : "" });
   else todos.drafts.delete(id);
   saveTodoDrafts();
+  todoSyncOpts(item, box.value);
   const chip = item.querySelector(".td-row .td-draft");
   if (chip) chip.hidden = !box.value.trim();
 }
@@ -1341,6 +1426,9 @@ function onTodoKey(ev) {
     if (i < 0) i = ids.indexOf(todos.openId || todos.lastId);
     i = i < 0 ? (down ? 0 : rows.length - 1) : i + (down ? 1 : -1);
     if (i >= 0 && i < rows.length) todoExpand(ids[i]);
+  } else if (/^[1-9]$/.test(k) && todos.openId) {
+    const b = page.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"] .td-opt[data-n="${k}"]`);
+    if (b) { ev.preventDefault(); b.click(); }
   } else if (k === "Enter") {
     if (el.closest(".td-acts, .td-g, .td-kept")) return; // a button does what it says
     const row = el.closest(".td-row");

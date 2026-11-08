@@ -1175,29 +1175,80 @@
     .page header .pg-count { margin-left: auto; color: var(--muted); font-size: 13px; }
     .page header h2 { font-size: 16px; margin: 0; font-weight: 650; }
     .page-body { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px 20px 24px; }
-    /* The To do page: one line per row in columns, and the open item fills
-       the pane, so the other rows stay put above and below it. */
-    #pt-body { display: flex; flex-direction: column; padding: 8px 20px 12px; }
-    #pt-body > .td-list { flex: 1 1 auto; min-height: 0; padding: 0; }
-    #pt-body .td-row { flex-wrap: nowrap; gap: 10px; }
-    #pt-body .td-kind { width: 76px; }
-    #pt-body .td-rm { order: 0; flex: none; gap: 10px; }
-    #pt-body .td-who { display: block; width: 132px; text-align: right; }
+    /* The To do page: the queue on the left, the open item beside it. The list
+       scrolls on its own; the open item's panel is positioned over the pane to the
+       right of it (its containing block is #pt-body, outside the scroller), so each
+       item stays one .td-item with a row and a panel and the DOM is the phone's. */
+    #pt-body { --td-list-w: 300px; position: relative; display: block; overflow: hidden; padding: 0; container-type: inline-size; }
+    #pt-body > .td-list { position: static; width: var(--td-list-w); height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 10px; gap: 4px; }
+    #pt-body .td-item { border: 0; margin: 0; }
+    #pt-body .td-item.open { border: 0; background: none; }
+    #pt-body .td-row { display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: "kind chips age" "q q q" "who who nx"; align-items: center; gap: 3px 8px; width: 100%; padding: 9px 10px; border-radius: 10px; border: 1px solid transparent; text-align: left; }
+    #pt-body .td-item.open > .td-row { background: var(--panel); border-color: color-mix(in srgb, var(--blue) 45%, var(--border)); box-shadow: 0 1px 6px var(--sh-md); padding: 9px 10px; }
+    #pt-body .td-row .td-kind { grid-area: kind; width: auto; }
+    #pt-body .td-rm { display: contents; }
+    #pt-body .td-chips { grid-area: chips; justify-self: start; width: auto; margin: 0; }
+    #pt-body .td-age { grid-area: age; width: auto; }
+    #pt-body .td-who { grid-area: who; display: block; width: auto; text-align: left; font-size: 12px; }
     #pt-body .td-who::after { content: none; }
-    #pt-body .td-age { width: 34px; text-align: right; }
-    #pt-body .td-chips { width: 132px; justify-content: flex-end; }
-    #pt-body .td-item.open { flex: 1 1 0; min-height: 280px; display: flex; flex-direction: column; background: var(--panel); }
-    #pt-body .td-item.open > .td-row { flex: none; }
-    #pt-body .td-item.open .td-q { order: 0; flex: 1 1 0; }
-    #pt-body .td-item.open .td-rm, #pt-body .td-item.open .td-chev { order: 0; }
-    #pt-body .td-item.open .td-chips { width: auto; }
-    #pt-body .td-item.open .td-rm { flex: none; }
-    #pt-body .td-item.open .td-who, #pt-body .td-item.open .td-age { display: none; }
-    #pt-body .td-panel { flex: 1 1 0; }
-    /* The form follows a short body and pins to the bottom only when the body scrolls. */
-    #pt-body .td-scroll { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-    /* Running prose keeps a readable measure; code, tables, links and the boxes use the panel's width. */
-    #pt-body .td-ctx :is(p, li, blockquote), #pt-body .td-answer-t, #pt-body .td-kept-h { max-width: 90ch; }
+    #pt-body .td-row .td-q, #pt-body .td-item.open .td-q { grid-area: q; order: 0; flex: none; font-size: 13.5px; font-weight: 600; line-height: 1.35; white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    #pt-body .td-item.answered:not(.open) .td-q { font-weight: 500; }
+    #pt-body .td-item.open .td-who, #pt-body .td-item.open .td-age { display: block; }
+    #pt-body .td-row .td-chev { display: none; }
+    #pt-body .td-nx { display: block; grid-area: nx; justify-self: end; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--orange); }
+    #pt-body .td-g { margin-top: 6px; }
+    .td-nx, .td-dh, .td-after { display: none; }
+    /* The open item. Stacked (a narrower pane): header, body that scrolls, and the answer pinned below it. */
+    #pt-body .td-panel { position: absolute; left: var(--td-list-w); top: 0; right: 0; bottom: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; padding: 0; border-left: 1px solid var(--border); font-size: 14.5px; }
+    #pt-body .td-dh { display: flex; flex-direction: column; gap: 10px; padding: 18px 28px 12px; grid-column: 1 / -1; }
+    .td-dtop { display: flex; align-items: center; gap: 8px; }
+    .td-dtitle { margin: 0; font-size: 21px; line-height: 1.3; font-weight: 650; text-wrap: balance; max-width: 60ch; overflow-wrap: anywhere; }
+    .td-dtitle code { font: 0.87em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); border-radius: 4px; padding: 1px 4px; font-weight: 400; }
+    .td-dtitle a { color: var(--blue); }
+    .td-strip { display: flex; flex-wrap: wrap; gap: 8px 26px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); font-size: 13px; min-width: 0; }
+    .td-strip > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .td-sl { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 650; }
+    .td-sv { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-width: 0; overflow-wrap: anywhere; }
+    .td-sv code { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .td-adot { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 6px var(--orange); flex: none; }
+    .td-agent { background: none; border: 0; padding: 0; font: inherit; font-weight: 600; color: var(--blue); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--blue) 40%, transparent); }
+    .td-agent:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
+    #pt-body .td-meta, #pt-body .td-panel > .td-scroll > .td-links { display: none; }
+    #pt-body .td-scroll { grid-column: 1; min-height: 0; padding: 0 28px 20px; overflow-y: auto; overscroll-behavior: contain; }
+    #pt-body .td-form { grid-column: 1; margin: 0; padding: 12px 28px 14px; background: var(--bg); box-shadow: 0 -8px 18px -12px var(--sh-md); max-height: 100%; overflow-y: auto; }
+    #pt-body .td-text { min-height: 40px; }
+    #pt-body .td-after { display: block; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    /* Running prose keeps a readable measure; code, tables, links and the boxes use the pane's width. */
+    #pt-body .td-ctx :is(p, li, blockquote), #pt-body .td-answer-t, #pt-body .td-kept-h { max-width: 72ch; }
+    #pt-body .td-answer { max-width: 72ch; }
+    #pt-body .td-ctx { font-size: 14.5px; line-height: 1.55; }
+    /* Choices from the question's numbered list. */
+    .td-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .td-opt { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; text-align: left; min-width: 0; }
+    .td-opt span { overflow-wrap: anywhere; }
+    .td-opt kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
+    .td-opt.rec { border-color: color-mix(in srgb, var(--green) 55%, var(--border)); }
+    .td-opt.rec span::after { content: " · recommended"; color: var(--green); font-weight: 600; font-size: 12px; }
+    .td-opt.on { background: var(--chip-blue); border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
+    .td-opt.td-rec { border-style: dashed; border-color: color-mix(in srgb, var(--green) 55%, var(--border)); color: var(--green); }
+    .td-opt.td-rec span::after { content: none; }
+    .td-opt:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .tds-none { display: none; position: absolute; left: var(--td-list-w); top: 0; right: 0; bottom: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 0 12%; border-left: 1px solid var(--border); color: var(--muted); }
+    .tds-none b { color: var(--text); font-size: 18px; font-weight: 650; }
+    .tds-none kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel2); color: var(--text); }
+    .tds-none button { min-height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--blue); background: var(--chip-blue); color: var(--blue); font: inherit; font-weight: 600; cursor: pointer; margin-top: 4px; }
+    #pt-body > .td-list:not(:has(.td-item.open)) ~ .tds-none { display: flex; }
+    /* A wide pane (about 1400px and up): the body and the answer sit side by side. */
+    @container (min-width: 1400px) {
+      #pt-body { --td-list-w: 340px; }
+      #pt-body .td-panel { grid-template-columns: minmax(0, 1fr) minmax(380px, 440px); gap: 0 36px; padding: 0 28px; }
+      #pt-body .td-dh { padding: 22px 0 14px; }
+      #pt-body .td-dtitle { font-size: 24px; }
+      #pt-body .td-scroll { grid-column: 1; padding: 0 0 24px; }
+      #pt-body .td-form { grid-column: 2; align-self: start; margin: 0 0 20px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 2px 10px -4px var(--sh-md); max-height: calc(100% - 20px); }
+      #pt-body .td-opts { flex-direction: column; flex-wrap: nowrap; }
+      #pt-body .td-opt { width: 100%; }
+    }
     .pt-keys { flex: none; display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 7px 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
     .pt-keys[hidden] { display: none; }
     .pt-keys kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel2); color: var(--text); }
@@ -1509,7 +1560,7 @@
   <section id="p-todo" class="page" aria-label="To do">
     <header><h2>To do</h2><span class="pg-count" id="pt-count"></span></header>
     <div class="page-body" id="pt-body"></div>
-    <div class="pt-keys" id="pt-keys" hidden><span><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>Enter</kbd> write an answer</span><span><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> send</span><span><kbd>Esc</kbd> leave the box, then close</span></div>
+    <div class="pt-keys" id="pt-keys" hidden><span><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>1</kbd>–<kbd>9</kbd> pick a choice</span><span><kbd>Enter</kbd> write an answer</span><span><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> send</span><span><kbd>Esc</kbd> leave the box, then close</span></div>
   </section>
 
   <!-- New agent ("+" in the list header) -->

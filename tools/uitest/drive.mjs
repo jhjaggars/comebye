@@ -1017,7 +1017,7 @@ await check("pages: an open To do item uses the panel's width (code and tables w
     const pre = it.querySelector(".td-ctx pre"), ctx = it.querySelector(".td-ctx"), p = [...it.querySelectorAll(".td-ctx p")].sort((a, b) => b.textContent.length - a.textContent.length)[0];
     const zero = document.createElement("span"); zero.textContent = "0"; zero.style.cssText = "position:absolute;visibility:hidden;white-space:pre"; p.append(zero);
     const chPx = zero.getBoundingClientRect().width; zero.remove();
-    const tab = it.querySelector(".td-ctx table"), q = it.querySelector(".td-q"), txt = it.querySelector(".td-text"), acts = it.querySelector(".td-acts");
+    const tab = it.querySelector(".td-ctx table"), q = it.querySelector(".td-dtitle"), txt = it.querySelector(".td-text"), acts = it.querySelector(".td-acts");
     return { chPx, pre: pre.getBoundingClientRect().width, preScroll: pre.scrollWidth - pre.clientWidth, ctxW: ctx.getBoundingClientRect().width, p: p.getBoundingClientRect().width,
       table: tab.getBoundingClientRect().right <= ctx.getBoundingClientRect().right + 1, qW: q.getBoundingClientRect().width,
       txtL: txt.getBoundingClientRect().left, ctxL: ctx.getBoundingClientRect().left, txtR: txt.getBoundingClientRect().right, preR: pre.getBoundingClientRect().right, actsR: acts.getBoundingClientRect().right,
@@ -1025,9 +1025,9 @@ await check("pages: an open To do item uses the panel's width (code and tables w
   }, item);
   let m = await measure();
   if (m.pre <= 90 * m.chPx + 20 || m.preScroll > 0) throw new Error("2000: the code block should be wider than 90ch with no scroll: " + JSON.stringify(m));
-  if (m.p > 90 * m.chPx + 2) throw new Error("2000: prose wider than 90ch: " + JSON.stringify(m));
-  if (m.qW < 1000) throw new Error("2000: the title stops short: " + JSON.stringify(m));
-  if (Math.abs(m.txtL - m.ctxL) > 1 || Math.abs(m.txtR - m.preR) > 1 || Math.abs(m.actsR - m.preR) > 1) throw new Error("2000: the answer box and buttons do not line up with the content: " + JSON.stringify(m));
+  if (m.p > 72 * m.chPx + 2) throw new Error("2000: prose wider than 72ch: " + JSON.stringify(m));
+  if (m.qW < 500) throw new Error("2000: the open item title is cramped: " + JSON.stringify(m));
+  if (m.txtL < m.preR + 20 || m.txtR > 2001 || m.actsR > m.txtR + 1) throw new Error("2000: the answer should sit beside the content, inside the pane: " + JSON.stringify(m));
   if (m.pageOver > 0) throw new Error("2000: page scrolls horizontally");
   // Nothing inside an open item scrolls sideways, at any width.
   const hscroll = (sel) => page.evaluate((sel) => [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth), sel);
@@ -1420,7 +1420,7 @@ const todoMdCheck = async (root, setup) => {
   // collapsed: markdown renders, still one line, no link, no script
   if ((await page.locator(item + ".open").count())) await row.click();
   const c = await page.evaluate((s) => { const e = document.querySelector(s); return { code: !!e.querySelector("code"), bold: !!e.querySelector("strong"), a: !!e.querySelector("a"), script: !!e.querySelector("script"), text: e.textContent, h: e.getBoundingClientRect().height, ell: getComputedStyle(e).textOverflow, ws: getComputedStyle(e).whiteSpace }; }, q);
-  if (!c.code || !c.bold || c.a || c.script || c.text.indexOf("`") >= 0 || c.text.indexOf("**") >= 0 || c.ell !== "ellipsis" || c.ws !== "nowrap" || c.h > 24) throw new Error("collapsed title " + JSON.stringify(c));
+  if (!c.code || !c.bold || c.a || c.script || c.text.indexOf("`") >= 0 || c.text.indexOf("**") >= 0 || (root === "#pt-body" ? c.ws !== "normal" || c.h > 40 : c.ell !== "ellipsis" || c.ws !== "nowrap" || c.h > 24)) throw new Error("collapsed title " + JSON.stringify(c));
   await row.click();
   await page.waitForSelector(item + ".open");
   const o = await page.evaluate((s) => { const t = document.querySelector(s + " .td-q"), a = document.querySelector(s + " .td-answer-t"), x = document.querySelector(s + " .td-ctx"); return {
@@ -1489,6 +1489,32 @@ await check("to-do accordion (desktop): one item open at a time; keys move, answ
   await page.locator("#pt-body .td-g").click();
   await page.waitForFunction((s) => !document.querySelector(s), row(ids[1]));
   await noOverflow();
+  await dropTodos(ids);
+});
+
+await check("to-do choices (desktop): a numbered list in the context becomes choice buttons; they fill the answer box as ok 1+2; the recommendation is marked; a digit key picks; the queue shows what is next", async () => {
+  await desktopList(1280, "#/todo");
+  const ids = await postTodos([{ question: "choices one: which way?", kind: "decision", context: "Ways:\n\n1. **Rotate now.** wait\n2. **Rotate later.** no wait\n3. **Both.** why not\n\nMy recommendation: ok 1+3." }, { question: "choices two: plain", kind: "action" }]);
+  const it = `#pt-body .td-item[data-id="${ids[0]}"]`;
+  await page.locator(it + " > .td-row").click();
+  await page.waitForSelector(it + ".open .td-opt");
+  const box = page.locator(it + " .td-text");
+  if ((await page.locator(it + " .td-opt[data-n]").count()) !== 3) throw new Error("expected 3 choices");
+  if (!(await page.locator(it + " .td-opt.rec[data-n='1']").count()) || !(await page.locator(it + " .td-opt.rec[data-n='3']").count()) || (await page.locator(it + " .td-opt.rec[data-n='2']").count())) throw new Error("recommendation marks wrong");
+  await page.locator(it + " .td-opt[data-n='2']").click();
+  if ((await box.inputValue()) !== "ok 2") throw new Error("pick: " + await box.inputValue());
+  await page.locator(it + " .td-opt[data-n='1']").click();
+  if ((await box.inputValue()) !== "ok 1+2" || (await page.locator(it + " .td-opt.on").count()) !== 2) throw new Error("two picks: " + await box.inputValue());
+  await page.locator(it + " .td-opt[data-n='2']").click();
+  if ((await box.inputValue()) !== "ok 1") throw new Error("unpick: " + await box.inputValue());
+  await page.locator(it + " .td-rec").click();
+  if ((await box.inputValue()) !== "ok 1+3") throw new Error("recommendation: " + await box.inputValue());
+  await box.fill("");
+  await page.locator(it + " > .td-row").focus();
+  await page.keyboard.press("2");
+  if ((await box.inputValue()) !== "ok 2") throw new Error("digit key: " + await box.inputValue());
+  if (!(await page.locator("#pt-body .td-nx").count())) throw new Error("no Next up mark");
+  if (!/Next:/.test(await page.locator(it + " .td-after").innerText())) throw new Error("no next line");
   await dropTodos(ids);
 });
 
