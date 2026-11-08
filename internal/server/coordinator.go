@@ -350,6 +350,7 @@ func (s *Server) handleSetBrief(w http.ResponseWriter, r *http.Request) {
 	}
 	var b struct {
 		Markdown string `json:"markdown"`
+		NoCheck  bool   `json:"no_check"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBriefBytes+16<<10)).Decode(&b); err != nil {
 		var mbe *http.MaxBytesError
@@ -368,13 +369,25 @@ func (s *Server) handleSetBrief(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "brief_too_large", "message": "the briefing is larger than 64 KB"})
 		return
 	}
+	var warns []string
+	if s.todos != nil && !b.NoCheck {
+		var fail string
+		if fail, warns = checkBrief(b.Markdown, s.todos.list("")); fail != "" {
+			writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"code": "needs_you_unlinked", "message": fail})
+			return
+		}
+	}
 	v := Brief{Markdown: b.Markdown, By: s.by(r, ""), At: time.Now().UTC()}
 	if err := s.brief.set(v); err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "brief_error", "message": err.Error()})
 		return
 	}
 	s.briefPublished(v.At)
-	writeJSON(w, map[string]any{"brief": v})
+	resp := map[string]any{"brief": v}
+	if len(warns) > 0 {
+		resp["warnings"] = warns
+	}
+	writeJSON(w, resp)
 }
 
 // handlePlaybook serves the coordinator playbook: ?harness=pi|claude|

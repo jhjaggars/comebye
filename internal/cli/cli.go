@@ -66,11 +66,11 @@ func init() {
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
 		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
-		{"todo", "add QUESTION [--kind decision|action|followup|release --version vX.Y.Z --commit REF] [--context FILE|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT | --no-wait] | list [--all | --state S] | show ID | answer ID TEXT|- | done ID | drop ID [--reason R]  [--json]", "the to-do list beside the briefing: questions and follow-ups the user has to deal with, with context; any agent adds, the user answers in the app, the coordinator relays answers (answer, done and drop are the coordinator's)", cmdTodo},
+		{"todo", "add QUESTION [--kind decision|action|followup|release --version vX.Y.Z --commit REF] [--option LABEL[|DETAIL] ... [--recommend N[,M]]] [--context FILE|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT | --no-wait] | list [--all | --state S] | show ID | answer ID TEXT|- | done ID | drop ID [--reason R]  [--json]", "the to-do list beside the briefing: questions and follow-ups the user has to deal with, with context; any agent adds, the user answers in the app, the coordinator relays answers (answer, done and drop are the coordinator's)", cmdTodo},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
-		{"brief", "set FILE|- | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
+		{"brief", "set FILE|- [--no-check] | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"peer", "list | add NAME URL[|URL...] [--tag T] | remove NAME  [--login L] [--json]", "(hub, the user's alone) the hub's peers: list them with their status and version, add one live, or remove a dynamic one; peers set with -peers are listed but only changed by editing the hub's environment", cmdPeer},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
 		{"presets", "claude|pi|generic", "print how to let a harness run comebye without prompts", cmdPresets},
@@ -1886,6 +1886,7 @@ func cmdBrief(e *Env, args []string) error {
 	maxQuiet := fs.String("max-quiet", "", "schedule: with --skip on, ask anyway when the last briefing is this old (default 6h, 1h or more)")
 	off := fs.Bool("off", false, "schedule: turn scheduled briefings off")
 	dismiss := fs.Bool("dismiss", false, "schedule: dismiss the note about missed scheduled briefings")
+	noCheck := fs.Bool("no-check", false, "set: publish even if a \"Needs you\" line has no id of an active to-do item")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1896,6 +1897,9 @@ func cmdBrief(e *Env, args []string) error {
 	setsSchedule := *every != "" || *at != "" || *tz != "" || *skip != "" || *maxQuiet != "" || *off || *dismiss
 	if setsSchedule && pos[0] != "schedule" {
 		return usageErr("--every, --at, --tz, --skip, --max-quiet, --off and --dismiss go with brief schedule")
+	}
+	if *noCheck && pos[0] != "set" {
+		return usageErr("--no-check goes with brief set")
 	}
 	if *skip != "" && *skip != "on" && *skip != "off" {
 		return usageErr("--skip is on or off")
@@ -1921,7 +1925,11 @@ func cmdBrief(e *Env, args []string) error {
 		if strings.TrimSpace(text) == "" {
 			return usageErr("the briefing is empty")
 		}
-		data, err := c.raw("POST", "/api/brief", nil, map[string]string{"markdown": text})
+		body := map[string]any{"markdown": text}
+		if *noCheck {
+			body["no_check"] = true
+		}
+		data, err := c.raw("POST", "/api/brief", nil, body)
 		if err != nil {
 			return err
 		}
@@ -1929,6 +1937,14 @@ func cmdBrief(e *Env, args []string) error {
 			return rawJSON(e, data)
 		}
 		fmt.Fprintln(e.Stdout, "Published the briefing; it shows at the top of the app.")
+		var r struct {
+			Warnings []string `json:"warnings"`
+		}
+		if json.Unmarshal(data, &r) == nil {
+			for _, w := range r.Warnings {
+				fmt.Fprintf(e.Stdout, "Warning: %s\n", w)
+			}
+		}
 		return nil
 	case "get":
 		if len(pos) != 1 {

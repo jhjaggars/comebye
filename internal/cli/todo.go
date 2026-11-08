@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -76,6 +77,43 @@ func (t apiTodo) waiter() string {
 
 var linkLabelRE = regexp.MustCompile(`^([^=]{1,40})=(https?://.*)$`)
 
+// parseAskOptions turns --option "label|detail" and --recommend N[,M]
+// into the request fields, checking what the hub checks so the mistake is
+// reported before anything is sent.
+func parseAskOptions(options, recommends []string) ([]map[string]string, []int, error) {
+	if len(options) == 0 {
+		return nil, nil, usageErr("--recommend goes with --option")
+	}
+	if len(options) < 2 || len(options) > 9 {
+		return nil, nil, usageErr("a choice has 2 to 9 --option flags, got %d", len(options))
+	}
+	var opts []map[string]string
+	for i, o := range options {
+		label, detail, _ := strings.Cut(o, "|")
+		label, detail = strings.TrimSpace(label), strings.TrimSpace(detail)
+		if label == "" {
+			return nil, nil, usageErr("--option %d has no label (want \"label|detail\")", i+1)
+		}
+		m := map[string]string{"label": label}
+		if detail != "" {
+			m["detail"] = detail
+		}
+		opts = append(opts, m)
+	}
+	var recs []int
+	for _, r := range recommends {
+		for _, f := range strings.Split(r, ",") {
+			f = strings.TrimSpace(f)
+			n, err := strconv.Atoi(f)
+			if err != nil || n < 1 || n > len(options) {
+				return nil, nil, usageErr("--recommend %q: want option numbers from 1 to %d", f, len(options))
+			}
+			recs = append(recs, n)
+		}
+	}
+	return opts, recs, nil
+}
+
 func cmdTodo(e *Env, args []string) error {
 	fs := flag.NewFlagSet("todo", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
@@ -85,7 +123,9 @@ func cmdTodo(e *Env, args []string) error {
 	ctxFile := fs.String("context", "", "add: the context as markdown: a file, or - for stdin")
 	waiting := fs.String("waiting", "", "add: the agent waiting on this item (default: you, unless you are a coordinator)")
 	noWait := fs.Bool("no-wait", false, "add: nobody is waiting on this item")
-	var links, handoffs listFlag
+	var links, handoffs, options, recommends listFlag
+	fs.Var(&options, "option", `add: one choice of the question, as "label" or "label|detail" (repeatable; 2 to 9)`)
+	fs.Var(&recommends, "recommend", "add: the option number(s) you recommend, e.g. 2 or 1,3 (needs --option)")
 	fs.Var(&links, "link", "add: a PR, artifact or report URL, as URL or LABEL=URL (repeatable)")
 	fs.Var(&handoffs, "handoff", "add: a ledger handoff id this is about (repeatable)")
 	all := fs.Bool("all", false, "list: every item, closed ones too")
@@ -144,6 +184,13 @@ func cmdTodo(e *Env, args []string) error {
 			}
 			body["context"] = text
 		}
+		if len(options) > 0 || len(recommends) > 0 {
+			opts, recs, err := parseAskOptions(options, recommends)
+			if err != nil {
+				return err
+			}
+			body["options"], body["recommend"] = opts, recs
+		}
 		var ls []map[string]string
 		for _, l := range links {
 			if m := linkLabelRE.FindStringSubmatch(l); m != nil && !strings.Contains(m[1], "://") {
@@ -175,6 +222,7 @@ func cmdTodo(e *Env, args []string) error {
 		var r struct {
 			Todo      apiTodo `json:"todo"`
 			Duplicate bool    `json:"duplicate"`
+			Hint      string  `json:"hint"`
 		}
 		if err := json.Unmarshal(data, &r); err != nil {
 			return err
@@ -184,6 +232,9 @@ func cmdTodo(e *Env, args []string) error {
 			return nil
 		}
 		fmt.Fprintf(e.Stdout, "Added %s (%s); it shows in the app's To do panel. Waiting: %s.\n", r.Todo.ID, r.Todo.Kind, r.Todo.waiter())
+		if r.Hint != "" {
+			fmt.Fprintf(e.Stdout, "Hint: %s.\n", r.Hint)
+		}
 		return nil
 	case "list":
 		if len(pos) != 0 {

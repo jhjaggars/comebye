@@ -518,7 +518,7 @@ func briefPrompt(plan schedPlan, last time.Time) string {
 		" Catch up from the ledger (`comebye ledger`) and the workers' reports since then, and publish a fresh" +
 		" briefing with `comebye brief set` in the playbook's format. If nothing changed, publish a short one that says so." +
 		" First run `comebye todo list`: relay answered items to the agents waiting on them and close them (`comebye todo done ID`)," +
-		" and write the briefing's \"Needs you\" from the open items, one short line each with its item id (every Needs-you line is an open to-do item)."
+		" and write the briefing's \"Needs you\" from the open items, one short line each with its item id (every Needs-you line is an open to-do item; `comebye brief set` refuses a line without the id of an active item, and \"Nothing open.\" is fine when nothing is)."
 }
 
 // fmtEvery prints an interval the way people write it: 24h, 90m, 1h30m.

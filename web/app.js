@@ -1164,17 +1164,32 @@ function todoOptions(ctx) {
   const rec = todoRecommended(lines, opts.length);
   return { opts, rec };
 }
+// The choices of an item: its options and recommend fields when it has them
+// (2 to 9), else whatever the context's Markdown list yields.
+function todoItemOptions(t) {
+  const o = t && t.options;
+  if (Array.isArray(o) && o.length >= 2 && o.length <= 9) {
+    const opts = o.map((x, i) => {
+      let label = String((x && x.label) || "").replace(/[*_`~]/g, "").trim();
+      if (label.length > 42) label = label.slice(0, 40).trimEnd() + "…";
+      return { n: i + 1, label, detail: String((x && x.detail) || "") };
+    });
+    const rec = [...new Set((Array.isArray(t.recommend) ? t.recommend : []).map(Number))].filter((n) => n >= 1 && n <= opts.length).sort((a, b) => a - b);
+    return { opts, rec };
+  }
+  return todoOptions(t && t.context);
+}
 // The numbers picked in an answer box that holds "ok 1+2".
 function todoPicked(text) {
   const m = /^\s*ok\s+(\d+(?:\+\d+)*)\s*$/i.exec(text || "");
   return m ? m[1].split("+").map(Number) : [];
 }
 function todoOptsHtml(t) {
-  const { opts, rec } = todoOptions(t.context);
+  const { opts, rec } = todoItemOptions(t);
   if (!opts.length) return "";
   const picked = todoPicked(todoDraft(t.id));
   return `<div class="td-opts" role="group" aria-label="Choices">` + opts.map((o) =>
-    `<button type="button" class="td-opt${rec.includes(o.n) ? " rec" : ""}${picked.includes(o.n) ? " on" : ""}" data-n="${o.n}" aria-pressed="${picked.includes(o.n)}" title="Adds ${o.n} to the answer"><kbd>${o.n}</kbd><span>${esc(o.label)}</span></button>`).join("") +
+    `<button type="button" class="td-opt${rec.includes(o.n) ? " rec" : ""}${picked.includes(o.n) ? " on" : ""}" data-n="${o.n}" aria-pressed="${picked.includes(o.n)}" title="${escAttr(o.detail ? `${o.detail} (adds ${o.n} to the answer)` : `Adds ${o.n} to the answer`)}"><kbd>${o.n}</kbd><span>${esc(o.label)}</span></button>`).join("") +
     (rec.length ? `<button type="button" class="td-opt td-rec" data-fill="ok ${rec.join("+")}"><span>Use the recommendation: ok ${rec.join("+")}</span></button>` : "") + `</div>`;
 }
 function todoSyncOpts(item, text) {

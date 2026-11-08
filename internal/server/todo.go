@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +47,8 @@ const (
 	todoMaxContext  = 8 << 10
 	todoMaxAnswer   = 4 << 10
 	todoMaxLinks    = 10
+	todoMinOptions  = 2
+	todoMaxOptions  = 9
 	todoMaxActive   = 200
 	todoRate        = 20 // adds per creator per minute
 	todoRetention   = 14 * 24 * time.Hour
@@ -62,6 +66,12 @@ type TodoLink struct {
 	Label   string `json:"label,omitempty"`
 	URL     string `json:"url,omitempty"`
 	Handoff string `json:"handoff,omitempty"`
+}
+
+// TodoOption is one choice of a structured ask.
+type TodoOption struct {
+	Label  string `json:"label"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // TodoAgent is the agent waiting on an item.
@@ -95,22 +105,27 @@ type TodoNotice struct {
 
 // Todo is one item.
 type Todo struct {
-	ID          string      `json:"id"`
-	Question    string      `json:"question"`
-	Context     string      `json:"context,omitempty"`
-	Kind        string      `json:"kind"`
-	Links       []TodoLink  `json:"links,omitempty"`
-	Waiting     *TodoAgent  `json:"waiting,omitempty"`
-	State       string      `json:"state"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	CreatedBy   string      `json:"created_by"`
-	CreatedByID string      `json:"created_by_id,omitempty"` // fleet id of an agent creator
-	Answer      *TodoAnswer `json:"answer,omitempty"`
-	ClosedBy    string      `json:"closed_by,omitempty"`
-	ClosedAt    *time.Time  `json:"closed_at,omitempty"`
-	DropReason  string      `json:"drop_reason,omitempty"`
-	Notice      *TodoNotice `json:"notice,omitempty"`
+	ID       string `json:"id"`
+	Question string `json:"question"`
+	Context  string `json:"context,omitempty"`
+	Kind     string `json:"kind"`
+	// Options are the choices a decision offers (2 to 9) and Recommend the
+	// 1-based numbers the asker recommends. The context carries the same
+	// list as Markdown, so readers that ignore these fields see it too.
+	Options     []TodoOption `json:"options,omitempty"`
+	Recommend   []int        `json:"recommend,omitempty"`
+	Links       []TodoLink   `json:"links,omitempty"`
+	Waiting     *TodoAgent   `json:"waiting,omitempty"`
+	State       string       `json:"state"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
+	CreatedBy   string       `json:"created_by"`
+	CreatedByID string       `json:"created_by_id,omitempty"` // fleet id of an agent creator
+	Answer      *TodoAnswer  `json:"answer,omitempty"`
+	ClosedBy    string       `json:"closed_by,omitempty"`
+	ClosedAt    *time.Time   `json:"closed_at,omitempty"`
+	DropReason  string       `json:"drop_reason,omitempty"`
+	Notice      *TodoNotice  `json:"notice,omitempty"`
 	// Release is set on a kind "release" item: the version and commit a
 	// coordinator proposes, and what the user's approval did (release.go).
 	Release *TodoRelease `json:"release,omitempty"`
@@ -488,13 +503,94 @@ func todoErr(w http.ResponseWriter, err error) {
 	}
 }
 
+// cleanOptions validates a structured ask: 2 to 9 labelled options and
+// recommend numbers that point at them.
+func cleanOptions(in []TodoOption, rec []int) ([]TodoOption, []int, error) {
+	if len(in) == 0 {
+		if len(rec) > 0 {
+			return nil, nil, errors.New("recommend needs options")
+		}
+		return nil, nil, nil
+	}
+	if len(in) < todoMinOptions || len(in) > todoMaxOptions {
+		return nil, nil, fmt.Errorf("a choice has %d to %d options, got %d", todoMinOptions, todoMaxOptions, len(in))
+	}
+	out := make([]TodoOption, 0, len(in))
+	for i, o := range in {
+		o.Label = strings.TrimSpace(strings.ReplaceAll(oneLine(o.Label, 80), "**", ""))
+		o.Detail = strings.TrimSpace(strings.ReplaceAll(oneLine(o.Detail, 300), "**", ""))
+		if o.Label == "" {
+			return nil, nil, fmt.Errorf("option %d has no label", i+1)
+		}
+		out = append(out, o)
+	}
+	var recs []int
+	seen := map[int]bool{}
+	for _, n := range rec {
+		if n < 1 || n > len(out) {
+			return nil, nil, fmt.Errorf("recommend %d is not one of the %d options", n, len(out))
+		}
+		if !seen[n] {
+			seen[n] = true
+			recs = append(recs, n)
+		}
+	}
+	sort.Ints(recs)
+	return out, recs, nil
+}
+
+// optionsMarkdown is the numbered list and recommendation line written
+// into the context, in the form the app's fallback reader and `todo show`
+// understand.
+func optionsMarkdown(opts []TodoOption, rec []int) string {
+	var sb strings.Builder
+	for i, o := range opts {
+		fmt.Fprintf(&sb, "%d. **%s**", i+1, o.Label)
+		if o.Detail != "" {
+			sb.WriteString(" - " + o.Detail)
+		}
+		sb.WriteByte('\n')
+	}
+	if len(rec) > 0 {
+		ns := make([]string, len(rec))
+		for i, n := range rec {
+			ns[i] = strconv.Itoa(n)
+		}
+		fmt.Fprintf(&sb, "\nMy recommendation: ok %s\n", strings.Join(ns, "+"))
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+var todoListLineRE = regexp.MustCompile(`^ {0,3}(\d{1,2})[.)]\s+\S`)
+
+// looksLikeChoices: the context has a numbered list that starts at 1 and
+// has at least 2 items (outside code fences).
+func looksLikeChoices(ctx string) bool {
+	next, inCode := 1, false
+	for _, l := range strings.Split(ctx, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			inCode = !inCode
+			continue
+		}
+		if m := todoListLineRE.FindStringSubmatch(l); m != nil && !inCode {
+			n, _ := strconv.Atoi(m[1])
+			if n == next {
+				next++
+			}
+		}
+	}
+	return next > 2
+}
+
 type todoAddBody struct {
-	Question string     `json:"question"`
-	Context  string     `json:"context"`
-	Kind     string     `json:"kind"`
-	Links    []TodoLink `json:"links"`
-	Waiting  string     `json:"waiting"` // fleet id of the agent waiting
-	NoWait   bool       `json:"no_wait"`
+	Question  string       `json:"question"`
+	Context   string       `json:"context"`
+	Kind      string       `json:"kind"`
+	Options   []TodoOption `json:"options"`
+	Recommend []int        `json:"recommend"`
+	Links     []TodoLink   `json:"links"`
+	Waiting   string       `json:"waiting"` // fleet id of the agent waiting
+	NoWait    bool         `json:"no_wait"`
 	// Release is required for kind "release" and refused for any other.
 	Release *struct {
 		Version string `json:"version"`
@@ -541,8 +637,19 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		bad("bad_link", err.Error())
 		return
 	}
+	opts, recs, err := cleanOptions(b.Options, b.Recommend)
+	if err != nil {
+		bad("bad_options", err.Error())
+		return
+	}
+	ctx := block(b.Context, todoMaxContext)
+	if len(opts) > 0 {
+		list := optionsMarkdown(opts, recs)
+		ctx = block(b.Context, todoMaxContext-len(list)-2)
+		ctx = strings.TrimSpace(ctx + "\n\n" + list)
+	}
 	c := callerOf(r)
-	it := Todo{Question: q, Context: block(b.Context, todoMaxContext), Kind: b.Kind, Links: links, CreatedBy: s.by(r, ""), Release: rel}
+	it := Todo{Question: q, Context: ctx, Kind: b.Kind, Options: opts, Recommend: recs, Links: links, CreatedBy: s.by(r, ""), Release: rel}
 	waiting := strings.TrimSpace(b.Waiting)
 	switch {
 	case waiting != "":
@@ -573,7 +680,11 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		// A duplicate another caller's item matched: the id says enough.
 		out = Todo{ID: out.ID, State: out.State, Question: out.Question}
 	}
-	writeJSONStatus(w, http.StatusCreated, map[string]any{"todo": out, "duplicate": dup})
+	resp := map[string]any{"todo": out, "duplicate": dup}
+	if !dup && len(opts) == 0 && looksLikeChoices(b.Context) {
+		resp["hint"] = "the context has a numbered list: pass each choice as --option \"label|detail\" (and --recommend N) so the app shows exact buttons"
+	}
+	writeJSONStatus(w, http.StatusCreated, resp)
 }
 
 // handleTodoList: GET /api/todos?state=open|answered|done|dropped|all

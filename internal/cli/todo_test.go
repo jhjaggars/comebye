@@ -112,3 +112,67 @@ func TestTodoAddRelease(t *testing.T) {
 		t.Fatalf("show: %d %s", code, out)
 	}
 }
+
+func TestTodoAddOptions(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/todos"] = answer{code: 201, body: `{"todo":` + todoJSON + `}`}
+	code := run(e, "todo", "add", "which key?", "--option", "Mint a key|fresh, rotates", "--option", "Reuse the old key", "--option", " Skip | ", "--recommend", "1,3", "--no-wait")
+	if code != 0 {
+		t.Fatalf("add: %d %s", code, errb)
+	}
+	var body struct {
+		Options   []map[string]string `json:"options"`
+		Recommend []int               `json:"recommend"`
+	}
+	json.Unmarshal([]byte(f.find("POST", "/api/todos").body), &body)
+	if len(body.Options) != 3 || body.Options[0]["label"] != "Mint a key" || body.Options[0]["detail"] != "fresh, rotates" ||
+		body.Options[1]["detail"] != "" || body.Options[2]["label"] != "Skip" || len(body.Recommend) != 2 || body.Recommend[1] != 3 {
+		t.Fatalf("body = %s", f.find("POST", "/api/todos").body)
+	}
+	// Mistakes are caught before anything is sent.
+	f.answers["POST /api/todos"] = answer{code: 201, body: `{"todo":` + todoJSON + `}`}
+	for name, args := range map[string][]string{
+		"one option":      {"--option", "a"},
+		"no label":        {"--option", "|detail", "--option", "b"},
+		"recommend range": {"--option", "a", "--option", "b", "--recommend", "3"},
+		"recommend junk":  {"--option", "a", "--option", "b", "--recommend", "x"},
+		"recommend alone": {"--recommend", "1"},
+		"ten options":     {"--option", "1", "--option", "2", "--option", "3", "--option", "4", "--option", "5", "--option", "6", "--option", "7", "--option", "8", "--option", "9", "--option", "10"},
+	} {
+		n := len(f.reqs)
+		if code := run(e, append([]string{"todo", "add", "q"}, args...)...); code != 2 || len(f.reqs) != n {
+			t.Errorf("%s: code %d, calls %d->%d", name, code, n, len(f.reqs))
+		}
+	}
+	// The hub's hint is passed on.
+	f.answers["POST /api/todos"] = answer{code: 201, body: `{"todo":` + todoJSON + `,"hint":"the context has a numbered list: pass each choice as --option"}`}
+	out.Reset()
+	e.Stdin = strings.NewReader("1. a\n2. b")
+	if code := run(e, "todo", "add", "q", "--context", "-"); code != 0 || !strings.Contains(out.String(), "Hint: the context has a numbered list") {
+		t.Fatalf("hint: %d %s", code, out)
+	}
+}
+
+func TestBriefSetNoCheck(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/brief"] = answer{body: `{"brief":{"markdown":"x"},"warnings":["1 open to-do item(s) are not in \"Needs you\": t1 (q)"]}`}
+	e.Stdin = strings.NewReader("## Needs you\n- q\n")
+	if code := run(e, "brief", "set", "-", "--no-check"); code != 0 || !strings.Contains(f.find("POST", "/api/brief").body, `"no_check":true`) ||
+		!strings.Contains(out.String(), "Warning: 1 open to-do item") {
+		t.Fatalf("no-check: %d %s %s", code, out, errb)
+	}
+	e.Stdin = strings.NewReader("## proj\n")
+	if code := run(e, "brief", "set", "-"); code != 0 || strings.Contains(f.find("POST", "/api/brief").body, "no_check") {
+		t.Fatalf("default: %d %s", code, f.find("POST", "/api/brief").body)
+	}
+	// The refusal reaches the caller with its fix.
+	f.answers["POST /api/brief"] = answer{code: 422, body: `{"code":"needs_you_unlinked","message":"the briefing was not published: add the id"}`}
+	e.Stdin = strings.NewReader("## Needs you\n- q\n")
+	errb.Reset()
+	if code := run(e, "brief", "set", "-"); code != 1 || !strings.Contains(errb.String(), "add the id") {
+		t.Fatalf("refusal: %d %s", code, errb)
+	}
+	if code := run(e, "brief", "get", "--no-check"); code != 2 {
+		t.Fatalf("--no-check on get: %d", code)
+	}
+}

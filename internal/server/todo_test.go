@@ -301,3 +301,60 @@ func TestTodoStoreLimits(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestTodoStructuredAsk(t *testing.T) {
+	s, _, _ := todoServer(t)
+	w := do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"which key?","context":"The old one **expires**.","options":[{"label":"Mint a key","detail":"fresh, rotates"},{"label":"Reuse the old key"},{"label":"Skip it"}],"recommend":[3,1,1]}`)
+	if w.Code != 201 || strings.Contains(w.Body.String(), `"hint"`) {
+		t.Fatalf("add = %d %s", w.Code, w.Body)
+	}
+	it := todoOf(t, w.Body.Bytes())
+	if len(it.Options) != 3 || it.Options[0].Detail != "fresh, rotates" || len(it.Recommend) != 2 || it.Recommend[0] != 1 || it.Recommend[1] != 3 {
+		t.Fatalf("item = %+v", it)
+	}
+	want := "The old one **expires**.\n\n1. **Mint a key** - fresh, rotates\n2. **Reuse the old key**\n3. **Skip it**\n\nMy recommendation: ok 1+3"
+	if it.Context != want {
+		t.Fatalf("context = %q\nwant %q", it.Context, want)
+	}
+	// No context of its own: the list alone.
+	w = do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"pick","options":[{"label":"a"},{"label":"b"}]}`)
+	if it := todoOf(t, w.Body.Bytes()); it.Context != "1. **a**\n2. **b**" || it.Recommend != nil {
+		t.Fatalf("bare = %q %v", it.Context, it.Recommend)
+	}
+	for name, body := range map[string]string{
+		"one option":        `{"question":"q","options":[{"label":"a"}]}`,
+		"ten options":       `{"question":"q","options":[{"label":"1"},{"label":"2"},{"label":"3"},{"label":"4"},{"label":"5"},{"label":"6"},{"label":"7"},{"label":"8"},{"label":"9"},{"label":"10"}]}`,
+		"empty label":       `{"question":"q","options":[{"label":" "},{"label":"b"}]}`,
+		"recommend high":    `{"question":"q","options":[{"label":"a"},{"label":"b"}],"recommend":[3]}`,
+		"recommend zero":    `{"question":"q","options":[{"label":"a"},{"label":"b"}],"recommend":[0]}`,
+		"recommend no opts": `{"question":"q","recommend":[1]}`,
+	} {
+		if w := do(s, "POST", "/api/todos", userHdr, body); w.Code != 400 || !strings.Contains(w.Body.String(), "bad_options") {
+			t.Errorf("%s = %d %s, want 400 bad_options", name, w.Code, w.Body)
+		}
+	}
+	// Nine is allowed.
+	nine := `{"question":"nine","options":[` + strings.TrimSuffix(strings.Repeat(`{"label":"x"},`, 9), ",") + `]}`
+	if w := do(s, "POST", "/api/todos", userHdr, nine); w.Code != 201 {
+		t.Errorf("nine = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestTodoHintsAtUnstructuredChoices(t *testing.T) {
+	s, _, _ := todoServer(t)
+	w := do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"which?","context":"Options:\n1. **A** x\n2. **B** y\nMy recommendation: ok 2"}`)
+	if w.Code != 201 || !strings.Contains(w.Body.String(), `"hint"`) || !strings.Contains(w.Body.String(), "--option") {
+		t.Fatalf("hint = %d %s", w.Code, w.Body)
+	}
+	for _, ctx := range []string{"1. only one", "steps:\n1. a\n3. c", "```\n1. a\n2. b\n```", "no list"} {
+		b, _ := json.Marshal(map[string]string{"question": "q " + ctx, "context": ctx})
+		if w := do(s, "POST", "/api/todos", agentHdr("w2:p1"), string(b)); strings.Contains(w.Body.String(), `"hint"`) {
+			t.Errorf("context %q got a hint", ctx)
+		}
+	}
+	// With options there is no hint.
+	w = do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"which2?","context":"1. a\n2. b","options":[{"label":"a"},{"label":"b"}]}`)
+	if strings.Contains(w.Body.String(), `"hint"`) {
+		t.Errorf("hint with options: %s", w.Body)
+	}
+}

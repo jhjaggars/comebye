@@ -2336,6 +2336,21 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     const want = [[2], [1], [1, 3], [1, 3], [2], [], [], [], [2]];
     if (JSON.stringify(r) !== JSON.stringify(want)) throw new Error(JSON.stringify(r) + " != " + JSON.stringify(want));
   });
+
+  await check("todo choices: buttons come from the options and recommend fields; the context's list is only the fallback", async () => {
+    await page.goto(base + "/", { waitUntil: "load" });
+    const r = await page.evaluate(() => {
+      const labels = (h) => [...new DOMParser().parseFromString(h, "text/html").querySelectorAll(".td-opt[data-n] span")].map((x) => x.textContent);
+      const withFields = todoOptsHtml({ id: "tzz00000001", context: "1. **Wrong** a\n2. **Also wrong** b", options: [{ label: "Mint a key", detail: "fresh, rotates" }, { label: "Reuse the old key" }, { label: "Skip" }], recommend: [3, 1, 9] });
+      const fallback = todoOptsHtml({ id: "tzz00000002", context: "1. **A** x\n2. **B** y\nRecommend option 2" });
+      const one = todoOptsHtml({ id: "tzz00000003", context: "", options: [{ label: "only" }] });
+      return { f: labels(withFields), fh: withFields, b: labels(fallback), bh: fallback, one };
+    });
+    if (JSON.stringify(r.f) !== JSON.stringify(["Mint a key", "Reuse the old key", "Skip"])) throw new Error("field labels: " + JSON.stringify(r.f));
+    if (!r.fh.includes('data-fill="ok 1+3"') || !r.fh.includes("fresh, rotates")) throw new Error("recommendation or detail missing: " + r.fh);
+    if (JSON.stringify(r.b) !== JSON.stringify(["A", "B"]) || !r.bh.includes('data-fill="ok 2"')) throw new Error("fallback: " + r.bh);
+    if (r.one !== "") throw new Error("one option drew buttons");
+  });
 }
 
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
