@@ -31,6 +31,7 @@ func TestParseReportDecisions(t *testing.T) {
 		{"empty", head, true, false, true, 0, 0, "", 0, 0},
 		{"ends at next heading", head + "- A?\n## Follow-ups\n- not a decision\n", true, false, false, 1, 0, "A?", 0, 0},
 		{"fenced heading ignored", "```\n## Decisions for the user\n- fake?\n```\n## Summary\nx\n", false, false, false, 0, 0, "", 0, 0},
+		{"numbered top level", head + "1. Which key?\n   1. Mint a key\n   2. Reuse it\n   My recommendation: ok 2\n2. Second?\n   1. a\n   2. b\n   My recommendation: ok 1\n", true, false, false, 2, 0, "Which key?", 2, 1},
 		{"case and colon", "## decisions for the user:\n- A?\n", true, false, false, 1, 0, "A?", 0, 0},
 	}
 	for _, c := range cases {
@@ -164,5 +165,54 @@ func TestReportAfterLandedOrMarkedRoute(t *testing.T) {
 		if g.Status != ledger.Finished || !strings.Contains(g.FinalReport, "again") || len(s.todos.list("")) != 1 {
 			t.Fatalf("%s: entry %+v, items %d", st, g, len(s.todos.list("")))
 		}
+	}
+}
+
+// hubK8sSection paraphrases the section hub-k8s's report filed as a
+// fallback: numbered decisions, indented numbered options, a recommendation.
+const hubK8sSection = `## Summary
+x
+
+## Decisions for the user
+1. Recall index refresh after the cutover (step M)?
+   1. Give the hub its own archive key and an hourly index container in the pod.
+   2. Keep the VM's index job and copy the index over on a schedule.
+   3. Accept a stale index at first and decide later.
+   My recommendation: ok 1
+2. May I run the read-only preparation on the old VM and the rehearsal on another port?
+   1. Yes, both.
+   2. Preparation only.
+   3. Not yet.
+   My recommendation: ok 1
+3. When should the cutover window be, and what is the rollback deadline?
+   1. A quiet slot you name; rollback by copy-back within 4 hours.
+   2. Same slot, but a stricter 1-hour deadline.
+   My recommendation: ok 1
+`
+
+func TestReportFilesNumberedDecisions(t *testing.T) {
+	s, _ := decisionsServer(t)
+	report(t, s, hubK8sSection)
+	items := activeItems(s)
+	if len(items) != 3 {
+		t.Fatalf("%d items, want 3: %+v", len(items), items)
+	}
+	for _, it := range items {
+		if strings.Contains(it.Question, "read the report") || len(it.Options) < 2 || len(it.Recommend) != 1 {
+			t.Errorf("item not split: %+v", it)
+		}
+	}
+}
+
+func TestReportFallbackKeepsLines(t *testing.T) {
+	s, _ := decisionsServer(t)
+	report(t, s, "## Decisions for the user\nFirst thought.\n\nSecond thought.\n  indented\n")
+	items := activeItems(s)
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	c := items[0].Context
+	if strings.Contains(c, "```") || !strings.Contains(c, "> First thought.\n>\n> Second thought.\n>   indented") {
+		t.Fatalf("fallback lost its lines: %q", c)
 	}
 }

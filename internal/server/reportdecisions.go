@@ -13,15 +13,16 @@ import (
 )
 
 // A worker's report may end with a "## Decisions for the user" section.
-// When the report is recorded the hub turns each top-level bullet into a
+// When the report is recorded the hub turns each top-level bullet (or
+// numbered line, "1. Question?" at the left margin) into a
 // to-do item waiting on that worker, so the coordinator does not have to
 // convert prose into items:
 //
 //	## Decisions for the user
-//	- Which key should the service use?
-//	  1. Mint a key - fresh, rotates
-//	  2. Reuse the old key
-//	  Recommend: 2
+//	1. Which key should the service use?
+//	   1. Mint a key - fresh, rotates
+//	   2. Reuse the old key
+//	   Recommend: 2
 //
 // or the single word "None.". A bullet that carries the id of an item the
 // worker already filed is skipped. At most reportMaxDecisions are filed per
@@ -37,7 +38,7 @@ const (
 )
 
 var (
-	repBulletRE  = regexp.MustCompile(`^[-*+]\s+(.*\S.*)$`)
+	repBulletRE  = regexp.MustCompile(`^(?:[-*+]|\d{1,2}[.)])\s+(.*\S.*)$`)
 	repNestedRE  = regexp.MustCompile(`^(?:\s{2,}|\t)(\S.*)$`)
 	repOptionRE  = regexp.MustCompile(`^(\d{1,2})[.)]\s+(.*\S.*)$`)
 	repRecRE     = regexp.MustCompile(`(?i)^(?:my\s+)?recommend(?:ation|ed)?\s*[:=-]?\s*(?:is\s+)?(?:ok\s+|option\s+)?(\d+(?:\s*(?:\+|,|&|and)\s*\d+)*)\s*\.?\s*$`)
@@ -158,6 +159,25 @@ func parseReportDecisions(text string) (ds []reportDecision, found, none, unpars
 	return ds, true, false, false, skipped, raw
 }
 
+// quoted renders text as a Markdown quote that keeps its line breaks, cut
+// at n runes.
+func quoted(text string, n int) string {
+	text = strings.TrimSpace(strings.ReplaceAll(strings.ToValidUTF8(text, " "), "\r", ""))
+	if r := []rune(text); len(r) > n {
+		text = string(r[:n]) + "\n…"
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		l = strings.TrimRight(l, " \t")
+		if l == "" {
+			lines[i] = ">"
+		} else {
+			lines[i] = "> " + l
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func parseRecNumbers(s string) []int {
 	var out []int
 	for _, f := range regexp.MustCompile(`\d+`).FindAllString(s, -1) {
@@ -204,7 +224,7 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent) []Todo {
 	if unparsed {
 		return []Todo{{
 			Question:  oneLine(fmt.Sprintf("%s's report lists decisions for you; read the report", who), todoMaxQuestion),
-			Context:   block(from+"\n\nThe \"Decisions for the user\" section could not be read as bullets, so nothing was split out of it. It says:\n\n"+fenced(oneLine(raw, 1500)), todoMaxContext),
+			Context:   block(from+"\n\nThe \"Decisions for the user\" section could not be read as numbered items or bullets, so nothing was split out of it. It says:\n\n"+quoted(raw, 1500), todoMaxContext),
 			Kind:      "decision",
 			Links:     link,
 			Waiting:   w,

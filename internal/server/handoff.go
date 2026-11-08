@@ -68,12 +68,12 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 <what is left to do, risks or open questions; "None." if nothing>
 
 ## Decisions for the user
-<one top-level bullet per decision only the user can make, or "None."; nest the choices under the bullet as a numbered list ("1. label - detail") and add a line "Recommend: N". Example:
-- Which key should the service use?
-  1. Mint a key - fresh, rotates
-  2. Reuse the old key
-  Recommend: 2
-A decision you already filed with ` + "`comebye todo add`" + ` needs no bullet, or carry its id (t plus 10 hex) in the bullet.>
+<one top-level numbered item (or bullet) per decision only the user can make, or "None."; indent the choices under it as a numbered list ("1. label - detail") and add a line "Recommend: N". Example:
+1. Which key should the service use?
+   1. Mint a key - fresh, rotates
+   2. Reuse the old key
+   Recommend: 2
+A decision you already filed with ` + "`comebye todo add`" + ` needs no bullet, or carry its id (t plus 10 hex) in the item.>
 `
 
 const (

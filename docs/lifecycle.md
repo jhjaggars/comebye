@@ -337,7 +337,7 @@ a force-push, never `main`, never a PR: it is only a backup), and ends with
 ## Decisions for the user
 ```
 
-`## Decisions for the user` holds one top-level bullet per decision only the
+`## Decisions for the user` holds one top-level numbered item (`1. Question?`) or bullet per decision only the
 user can make, with the choices nested as a numbered list and a `Recommend: N`
 line, or the word `None.`. When the hub records the report it files one to-do
 item per bullet (at most 5; source `hub-report`, waiting on the worker, linked
