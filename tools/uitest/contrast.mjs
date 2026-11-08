@@ -51,7 +51,8 @@ const TEXT = [
 // Tokens index.html uses; every theme must define all of them.
 const html = fs.readFileSync(path.join(web, "index.html"), "utf8");
 const used = new Set([...html.matchAll(/var\(--([a-z0-9-]+)/g)].map((m) => m[1]));
-for (const own of ["safe-bottom", "list-w"]) used.delete(own); // layout, not colour
+// Tokens index.html declares itself (safe-bottom, list-w, td-list-w...) are layout, not colour.
+for (const m of html.matchAll(/(?:^|[;{\s])--([a-z0-9-]+)\s*:/g)) used.delete(m[1]);
 
 let fails = 0, checks = 0;
 for (const t of THEMES) {
