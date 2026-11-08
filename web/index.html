@@ -985,11 +985,16 @@
     #review header .rv-grow { flex: 1; }
     #review header .btn, .rv-bulk .btn { width: auto; flex: none; }
     #review .ln-body { max-width: 900px; margin: 0; }
-    .rv-top .rv-chk { width: 20px; height: 20px; margin: 0 2px 0 0; accent-color: var(--blue); flex: none; }
+    .rv-top .rv-chk, .rv-bulk input { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; margin: 0 2px 0 0; flex: none; cursor: pointer;
+      border: 2px solid var(--muted); border-radius: 5px; background: var(--panel) center / 14px no-repeat; }
+    .rv-top .rv-chk:checked, .rv-bulk input:checked { background-color: var(--blue); border-color: var(--blue);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+    .rv-top .rv-chk:focus-visible, .rv-bulk input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .rv-s { display: none; }
+    @media (max-width: 480px) { .rv-l { display: none; } .rv-s { display: inline; } }
     .rv-bulk { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 2px 10px; position: sticky; top: -12px; z-index: 2; background: var(--bg); }
     .rv-bulk[hidden] { display: none; }
     .rv-bulk label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; min-height: 36px; }
-    .rv-bulk input { width: 20px; height: 20px; accent-color: var(--blue); }
     .rv-bulk .rv-grow { flex: 1; color: var(--muted); font-size: 13px; }
     .rv-confirm { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px;
       background: color-mix(in srgb, var(--orange) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--orange) 50%, transparent); }
@@ -1503,7 +1508,7 @@
       body {
         display: grid; height: 100vh; height: 100dvh; overflow: hidden;
         grid-template-columns: var(--list-w) minmax(0, 1fr);
-        grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+        grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
       }
       /* The pages take the detail cell. The briefings screen is the Briefing page. */
       #briefs, .page {
@@ -1669,6 +1674,53 @@
         #recall .rc-list { flex: 0 0 38%; border-right: 0; border-bottom: 1px solid var(--border); }
       }
     }
+
+    /* Keyboard layer (keys.js): the palette, the shortcut sheet, the mode chip. */
+    .scrim { position: fixed; inset: 0; z-index: 70; background: var(--sh-lg); display: flex; justify-content: center; align-items: flex-start; padding: min(14vh, 120px) 16px 16px; }
+    .scrim[hidden] { display: none; }
+    .pal { width: min(640px, 100%); max-height: min(70vh, 560px); display: flex; flex-direction: column; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 20px 60px var(--sh-lg); }
+    .pal-in { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    .pal-in:focus-within { box-shadow: inset 0 -2px var(--focus); }
+    .pal-pfx { font: 700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--purple); border: 1px solid currentColor; padding: 2px 7px; border-radius: 5px; }
+    #pal-q { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; font: inherit; font-size: 16px; color: var(--text); min-height: 40px; }
+    .pal-list { overflow-y: auto; padding: 4px 6px; min-height: 0; overscroll-behavior: contain; }
+    .pal-sec { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); padding: 8px 8px 3px; overflow-wrap: anywhere; }
+    .pal-it { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; cursor: pointer; min-width: 0; }
+    .pal-it[aria-selected="true"] { background: var(--blue); color: var(--on-accent); }
+    .pal-it.danger .pal-main { color: var(--red); }
+    .pal-it[aria-selected="true"].danger .pal-main { color: inherit; }
+    .pal-ic { width: 18px; text-align: center; color: var(--muted); flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .pal-it[aria-selected="true"] .pal-ic, .pal-it[aria-selected="true"] .pal-meta { color: inherit; opacity: 0.85; }
+    .pal-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pal-main mark { background: transparent; color: inherit; font-weight: 800; text-decoration: underline; text-underline-offset: 2px; }
+    .pal-meta { font-size: 12px; color: var(--muted); white-space: nowrap; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+    .pal-empty { padding: 14px; color: var(--muted); text-align: center; font-size: 14px; overflow-wrap: anywhere; }
+    .pal-foot { display: flex; gap: 14px; flex-wrap: wrap; padding: 7px 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); background: var(--panel2); }
+    .pal kbd, .keybar kbd { font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 2px 5px; white-space: nowrap; }
+    .pal-it[aria-selected="true"] kbd { background: transparent; color: var(--on-accent); border-color: currentColor; }
+    .pal-keys { display: inline-flex; gap: 4px; align-items: center; font-size: 10px; color: var(--muted); flex: none; }
+    .pal-it[aria-selected="true"] .pal-keys { color: inherit; }
+    .cheat { padding: 16px 18px; overflow-y: auto; max-height: 80vh; width: min(860px, 100%); outline: 0; }
+    .cheat:focus-visible { outline: 2px solid var(--focus); }
+    .cheat h3 { margin: 0 0 12px; font-size: 16px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .ch-sub { font-size: 12px; font-weight: 400; color: var(--muted); }
+    .ch-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 22px; }
+    .ch-cols h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+    .ch-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 3px 0; font-size: 13.5px; }
+    .pal { min-width: 0; }
+    .pal-it { overflow: hidden; }
+    @media (max-width: 480px) { #list header { gap: 6px; } #list header .bell:not(#btn-fleet) { min-width: 38px; } } /* room for the Commands button */
+    .keybar { display: none; }
+    #btn-cmds { display: inline-flex; }
+    @media (min-width: 1100px) {
+      #btn-cmds { display: none; }
+      .keybar { grid-column: 1; grid-row: 7; display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-top: 1px solid var(--border); background: var(--panel); font-size: 12px; color: var(--muted); min-width: 0; }
+      .kb-hint { flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .kb-hint:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: 4px; }
+    }
+    .kb-mode { font: 700 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 5px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); flex: none; }
+    .kb-mode[data-mode="TYPING"] { background: var(--blue); border-color: var(--blue); color: var(--on-accent); }
+    .kb-mode[data-mode="PALETTE"], .kb-mode[data-mode="SHEET"] { background: var(--purple); border-color: var(--purple); color: var(--on-accent); }
     /* Interaction states for every option-like control, from tokens only. Hover is a neutral lift (a border
        toward --muted and a surface shift); the selected state keeps its blue; pressed sinks and darkens, so a click
        feels physical. Hover only where a pointer can hover, so a tap never leaves a sticky highlight. */
@@ -1723,6 +1775,7 @@
       <span class="conn" id="conn-list"></span>
       <h1>Comebye</h1>
       <span class="count" id="count"></span>
+      <button type="button" class="bell launch" id="btn-cmds" aria-label="Commands" aria-haspopup="dialog" aria-controls="palette"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="m5 8 5 4-5 4M12 17h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button type="button" class="bell launch" id="btn-recall" aria-label="Search transcripts">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       </button>
@@ -1766,6 +1819,7 @@
       <div class="tp-sys" id="tp-sys" hidden></div>
     </section>
     <main><nav id="nav" class="pnav" aria-label="Pages"></nav><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
+    <div id="keybar" class="keybar"><span id="kb-mode" class="kb-mode" data-mode="NAV" role="status" aria-label="Keyboard mode">NAV</span><button type="button" id="kb-open" class="kb-hint" aria-label="Open the command palette"><span id="kb-hint"></span></button></div>
     <button type="button" id="pager" class="pager" aria-controls="briefs" aria-label="Open the briefings screen (or swipe left)" hidden>
       <span class="pg-dots" aria-hidden="true"><i class="on"></i><i></i></span>
       <span class="pg-label">Briefings</span><span class="pg-todo" id="pager-todo" title="Open to-do items" hidden></span><span class="pg-new" id="pager-new" hidden></span>
@@ -1922,7 +1976,7 @@
       <button type="button" class="back" id="rv-close" aria-label="Back">&#8592;</button>
       <h2 id="rv-title">Ready to remove</h2>
       <span class="rv-grow"></span>
-      <button type="button" class="btn" id="rv-sweep">Look for finished agents</button>
+      <button type="button" class="btn" id="rv-sweep" aria-label="Look for finished agents"><span class="rv-l">Look for finished agents</span><span class="rv-s">Find finished</span></button>
     </header>
     <div class="ln-body" id="rv-body">
       <div id="rv-sweepbox" aria-live="polite" hidden></div>
@@ -1991,11 +2045,22 @@
 
   <div id="detail-empty" aria-hidden="true"><b>No agent selected</b><span>Pick one from the list, or press <kbd>↑</kbd> <kbd>↓</kbd> in it to browse.</span></div>
 
+  <div id="palette" class="scrim" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+    <div class="pal">
+      <div class="pal-in"><span class="pal-pfx" id="pal-pfx" hidden></span><input id="pal-q" type="text" role="combobox" aria-expanded="true" aria-controls="pal-list" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" aria-label="Command palette"></div>
+      <div id="pal-list" class="pal-list" role="listbox"></div>
+      <div id="pal-foot" class="pal-foot"></div>
+    </div>
+  </div>
+  <div id="cheats" class="scrim" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" hidden>
+    <div id="cheat-box" class="pal cheat" tabindex="-1"></div>
+  </div>
   <div id="toast"></div>
   <button type="button" id="update-banner" hidden>New version available — tap to reload</button>
   <script src="vendor/marked.umd.js"></script>
   <script src="vendor/purify.min.js"></script>
   <script src="app.js"></script>
+  <script src="keys.js"></script>
   <script src="stt.js"></script>
 </body>
 </html>

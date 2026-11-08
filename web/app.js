@@ -653,18 +653,7 @@ function markSelectedRow() {
   if (r) { r.classList.add("selected"); r.setAttribute("aria-current", "true"); }
 }
 
-// "n" jumps to the next agent that is waiting on you (desktop).
-function onNextWaiting(ev) {
-  if (!isDesktop() || ev.key !== "n" || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.repeat) return;
-  if (ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
-  const rows = [...document.querySelectorAll("#agents .agent.blocked[data-id]")];
-  if (!rows.length) return;
-  const i = rows.findIndex((r) => r.dataset.id === state.selected);
-  ev.preventDefault();
-  const r = rows[(i + 1) % rows.length];
-  openDetail(r.dataset.id);
-  r.scrollIntoView?.({ block: "nearest" });
-}
+// The single-key shortcuts (n, j, k, i, /, ?, g chords) and the Ctrl/⌘+K palette live in keys.js.
 
 // Up/Down on a row moves to the previous/next one and opens it.
 function onListArrow(ev) {
@@ -2625,6 +2614,10 @@ const POPS = {
   fleet: { id: "f-menu", close: () => toggleFleetMenu(false), trigger: () => $("btn-fleet") },
   detail: { id: "d-menu", close: () => toggleDetailMenu(false), trigger: () => $("d-more") },
   row: { id: "row-menu", close: () => closeRowMenu(), trigger: () => [...document.querySelectorAll(".row-more")].find((b) => b.dataset.menu === $("row-menu").dataset.id) },
+  // The palette and the shortcut sheet (keys.js) are popovers too: one manager closes the others, answers
+  // Esc (the palette's esc goes back a step first) and puts the focus back. noSheet: no phone backdrop.
+  palette: { id: "palette", noSheet: true, close: () => window.CMDK && CMDK.close(false), trigger: () => window.CMDK && CMDK.from(), esc: () => !!(window.CMDK && CMDK.back()) },
+  cheats: { id: "cheats", noSheet: true, close: () => window.CMDK && CMDK.closeCheats(false), trigger: () => window.CMDK && CMDK.cheatFrom() },
   theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => $("btn-fleet") },
   notify: { id: "notify-panel", close: () => toggleNotifyPanel(false), trigger: () => $("btn-notify") },
 };
@@ -2637,7 +2630,7 @@ document.addEventListener("click", (ev) => { clickNow = ev; }, true);
 const openPopName = () => Object.keys(POPS).find((n) => !$(POPS[n].id).hidden) || "";
 // popItems are the things the arrow keys move between (visible, enabled; the × is not one).
 const popItems = (el) => [...el.querySelectorAll("button:not(.pop-x), select")].filter((b) => !b.disabled && !b.hidden && b.getClientRects().length);
-function syncSheet() { $("sheet-bk").hidden = !(isSheet() && Object.values(POPS).some((p) => !$(p.id).hidden)); }
+function syncSheet() { $("sheet-bk").hidden = !(isSheet() && Object.values(POPS).some((p) => !p.noSheet && !$(p.id).hidden)); }
 function popOpened(name) {
   popOpenedBy = clickNow;
   for (const n of Object.keys(POPS)) if (n !== name) POPS[n].close();
@@ -2668,7 +2661,8 @@ function initPopovers() {
     const name = openPopName();
     if (!name) return;
     const el = $(POPS[name].id);
-    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); closePop(name, true); return; }
+    // A popover with steps (the palette) answers Esc itself first: it goes back one step.
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); if (POPS[name].esc && POPS[name].esc()) return; closePop(name, true); return; }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(ev.key) || !el.contains(document.activeElement)) return;
     if (document.activeElement.tagName === "SELECT") return;
     const items = popItems(el);
@@ -7375,7 +7369,6 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) resume(); }); // skip the initial load
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
-  document.addEventListener("keydown", onNextWaiting);
   document.addEventListener("keydown", onTodoKey);
   desktopMQ.addEventListener("change", () => { setView(viewFromHash()); renderList(); renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
   window.addEventListener("offline", () => setConn(false));

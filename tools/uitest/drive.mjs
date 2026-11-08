@@ -2501,6 +2501,256 @@ await check("remove page: on the phone it is a full page with a Back arrow, no o
   } finally { await unmockRemovals(); }
 });
 
+// ---- the keyboard layer (web/keys.js): palette, shortcuts, chips, cheat sheet ----
+{
+  const palOpen = () => visible("#palette");
+  const act = () => page.evaluate(() => { const e = document.activeElement; return e ? (e.id || e.dataset.id || e.tagName) : ""; });
+  const sel = () => page.evaluate(() => state.selected);
+  const chip = () => page.locator("#kb-mode").innerText();
+  const items = () => page.locator("#pal-list .pal-it .pal-main").allTextContents();
+  const secs = () => page.locator("#pal-list .pal-sec").allTextContents();
+  async function keysDesk(start = "#/status") {
+    await desktopList(1440, start);
+    await page.waitForFunction(() => ledger.on === true && document.querySelectorAll("#agents .agent[data-id]").length >= 3, null, { timeout: 8000 });
+  }
+  await page.route(/\/api\/models/, (r) => r.fulfill({ json: { host: "uitest", catalogs: [{ kind: "claude", source: "curated", models: [{ id: "sonnet", provider: "Aliases" }, { id: "opus", provider: "Aliases" }] }] } }));
+  const keyPosts = [];
+  await page.route(/\/api\/agents\/[^/]+\/keys$/, (r) => { keyPosts.push(JSON.parse(r.request().postData() || "{}")); r.fulfill({ json: { ok: true } }); });
+
+  await check("keys: Ctrl+K opens the palette with needs-you agents first, pages and actions; Esc closes and restores the focus", async () => {
+    await keysDesk();
+    await page.evaluate(() => rowFor(state.agents[0] && agentId(state.agents[0]))?.focus());
+    const before = await act();
+    if ((await chip()) !== "NAV") throw new Error("chip " + (await chip()));
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector("#palette", { state: "visible" });
+    if ((await act()) !== "pal-q") throw new Error("the field is not focused: " + (await act()));
+    if ((await chip()) !== "PALETTE") throw new Error("chip " + (await chip()));
+    const sc = await secs();
+    if (!/^Agents: needs you first/.test(sc[0])) throw new Error("sections " + sc);
+    const first = (await items())[0];
+    if (!/trust-prompt/.test(first)) throw new Error("the agent that needs you is not first: " + first);
+    if (!sc.includes("Go to") || !sc.includes("Fleet")) throw new Error("sections " + sc);
+    const all = (await items()).join("|");
+    for (const w of ["Status", "To do", "Search", "Ready to remove"]) if (!all.includes(w)) throw new Error("no page " + w + ": " + all);
+    await page.screenshot({ path: `${out}/palette-1440.png` });
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#palette", { state: "hidden" });
+    if ((await act()) !== before) throw new Error(`focus not restored: ${before} -> ${await act()}`);
+    if ((await chip()) !== "NAV") throw new Error("chip after " + (await chip()));
+    await page.keyboard.press("Meta+k");
+    await page.waitForSelector("#palette", { state: "visible" });
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector("#palette", { state: "hidden" });
+  });
+
+  await check("keys: the palette's prefixes @ > # narrow it; typing filters; Enter on an agent opens it", async () => {
+    await page.route(/\/api\/todos$/, (r) => r.fulfill({ json: { todos: [{ id: "t1", kind: "question", question: "Which retry policy?", state: "open", context: "", agent_name: "w", created_at: new Date().toISOString() }], open: 1, answered: 0 } }));
+    await keysDesk();
+    await page.waitForFunction(() => todos.items.length === 1, null, { timeout: 8000 });
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("@");
+    if ((await page.locator("#pal-pfx").innerText()) !== "@") throw new Error("no prefix chip");
+    if ((await secs()).join() !== "Agents") throw new Error("@ sections " + (await secs()));
+    await page.keyboard.press("Backspace"); await page.keyboard.press("Backspace"); // the prefix goes with the text
+    await page.keyboard.type(">");
+    if (!(await secs()).every((x) => !/^Agents|^To do/.test(x)) || !(await secs()).length) throw new Error("> sections " + (await secs()));
+    await page.keyboard.press("Backspace");
+    await page.keyboard.type("#");
+    if ((await secs()).join() !== "To do") throw new Error("# sections " + (await secs()));
+    if (!/Which retry policy/.test((await items())[0])) throw new Error("to-do item " + (await items()));
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#p-todo", { state: "visible" });
+    if (!(await page.locator(".td-item.open, .td-item[data-open], #pt-body .td-dtitle").count())) throw new Error("the to-do did not open");
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("brav");
+    if (!/bravo/.test((await items())[0])) throw new Error("fuzzy: " + (await items()));
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#detail", { state: "visible" });
+    if (!/w2:p1$/.test(await sel())) throw new Error("opened " + (await sel()));
+    if (await palOpen()) throw new Error("the palette stayed open");
+    await page.unroute(/\/api\/todos$/);
+  });
+
+  await check("keys: second steps (rename, model, role) and Esc goes back one step, then closes", async () => {
+    await keysDesk();
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.evaluate(() => rowFor(state.selected).focus());
+    const before = await act();
+    await page.keyboard.press("Control+k");
+    if (!(await secs()).some((x) => /^Current agent/.test(x))) throw new Error("no current-agent group: " + (await secs()));
+    await page.keyboard.type("rename");
+    await page.keyboard.press("Enter");
+    if ((await page.locator("#pal-q").getAttribute("placeholder")) !== "Rename alpha") throw new Error("placeholder " + (await page.locator("#pal-q").getAttribute("placeholder")));
+    await page.keyboard.press("Escape"); // back to the list, still open
+    if (!(await palOpen())) throw new Error("Esc closed the palette from a second step");
+    if ((await page.locator("#pal-q").inputValue()) !== "") throw new Error("the field was not cleared");
+    await page.keyboard.type("switch model");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => /sonnet/.test(document.querySelector("#pal-list")?.innerText || ""), null, { timeout: 4000 });
+    await page.keyboard.press("Escape");
+    await page.keyboard.type("role");
+    await page.keyboard.press("Enter");
+    const roles = await items();
+    if (roles.join() !== "worker,coordinator") throw new Error("roles " + roles);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#palette", { state: "hidden" });
+    if ((await act()) !== before) throw new Error(`focus not restored: ${before} -> ${await act()}`);
+  });
+
+  await check("keys: stop and interrupt are in the palette only, behind a confirm", async () => {
+    keyPosts.length = 0;
+    const el = await page.locator("#agents .agent.selected, #agents .agent[aria-current]").first().getAttribute("data-id");
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("stop");
+    await page.keyboard.press("Enter");
+    const t = await items();
+    if (t.length !== 2 || !/^Stop/.test(t[0]) || t[1] !== "Cancel") throw new Error("confirm " + t);
+    if (keyPosts.length) throw new Error("sent before the confirm");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter"); // Cancel
+    if (keyPosts.length || !(await palOpen())) throw new Error("Cancel sent keys or closed");
+    await page.keyboard.type("interrupt");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter"); // the confirm
+    await page.waitForFunction(() => document.querySelector("#palette").hidden);
+    await page.waitForTimeout(300);
+    if (keyPosts.length !== 1 || keyPosts[0].keys.join() !== "esc") throw new Error("keys " + JSON.stringify(keyPosts));
+    // and no single key does it
+    keyPosts.length = 0;
+    for (const k of ["s", "x", "Escape", "Control+c"]) await page.keyboard.press(k);
+    await page.waitForTimeout(200);
+    if (keyPosts.length) throw new Error("a bare key sent " + JSON.stringify(keyPosts));
+  });
+
+  await check("keys: i focuses the prompt, nothing fires while typing, Esc leaves it for the agent row", async () => {
+    await keysDesk();
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.evaluate(() => rowFor(state.selected).focus());
+    const id = await sel();
+    await page.keyboard.press("i");
+    if ((await act()) !== "prompt-text") throw new Error("not focused: " + (await act()));
+    if ((await page.evaluate(() => promptValue())) !== "") throw new Error("the i was typed into the box");
+    if ((await chip()) !== "TYPING") throw new Error("chip " + (await chip()));
+    await page.keyboard.type("njkgtm?/i hello n");
+    if ((await page.evaluate(() => promptValue())) !== "njkgtm?/i hello n") throw new Error("typed: " + (await page.evaluate(() => promptValue())));
+    if ((await sel()) !== id || (await palOpen()) || (await visible("#cheats")) || (await page.evaluate(() => location.hash.startsWith("#/search")))) throw new Error("a key fired while typing");
+    await page.keyboard.press("Escape");
+    if ((await act()) !== id) throw new Error("focus did not go to the row: " + (await act()));
+    if ((await chip()) !== "NAV") throw new Error("chip " + (await chip()));
+    await page.evaluate(() => { $("prompt-text").textContent = ""; });
+    // Ctrl+K works while typing
+    await page.keyboard.press("i");
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector("#palette", { state: "visible" });
+    await page.keyboard.press("Escape");
+    if ((await act()) !== "prompt-text") throw new Error("focus not restored to the prompt: " + (await act()));
+    await page.keyboard.press("Escape");
+    await page.screenshot({ path: `${out}/keys-nav-1440.png` });
+  });
+
+  await check("keys: / opens Search; j k n Shift+N Alt+digit move between agents; g chords go to pages; ? opens the cheat sheet", async () => {
+    let step = "start";
+    const S = (n) => { step = n; };
+    try {
+    await keysDesk();
+    S("slash"); await page.keyboard.press("/");
+    await page.waitForSelector("#recall", { state: "visible" });
+    if (!(await page.evaluate(() => location.hash.startsWith("#/search")))) throw new Error("hash");
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === "rc-q", null, { timeout: 3000 });
+    if ((await page.locator("#rc-q").inputValue()) !== "") throw new Error("the slash was typed");
+    await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
+    await page.locator("#agents").focus().catch(() => {});
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    const ids = await page.evaluate(() => [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent).map((r) => r.dataset.id));
+    S("alt2 " + JSON.stringify(ids)); await page.keyboard.press("Alt+2");
+    await page.waitForFunction((x) => state.selected === x, ids[1], { timeout: 3000 });
+    S("j " + (await sel())); await page.keyboard.press("j");
+    await page.waitForFunction((x) => state.selected === x, ids[2], { timeout: 3000 });
+    S("k " + (await sel())); await page.keyboard.press("k");
+    await page.waitForFunction((x) => state.selected === x, ids[1], { timeout: 3000 });
+    // Two agents that need you, whatever the earlier checks left answered (the next list update would undo it, so press at once).
+    const blocked = await page.evaluate(() => {
+      const rs = [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent);
+      for (const r of [rs[0], rs[2]]) { const a = agentById(r.dataset.id); if (a) a.agent_status = "blocked"; }
+      renderList();
+      return [...document.querySelectorAll("#agents .agent.blocked[data-id]")].map((r) => r.dataset.id);
+    });
+    if (blocked.length < 2) throw new Error("could not make two agents need you");
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    S("n " + JSON.stringify(blocked)); await page.keyboard.press("n");
+    await page.waitForFunction((x) => state.selected === x, blocked[0], { timeout: 3000 });
+    S("N"); await page.keyboard.press("Shift+N");
+    await page.waitForFunction((x) => state.selected === x, blocked[blocked.length - 1], { timeout: 3000 });
+    // g chords
+    await page.keyboard.press("g"); await page.keyboard.press("t");
+    await page.waitForSelector("#p-todo", { state: "visible" });
+    await page.keyboard.press("g"); await page.keyboard.press("s");
+    await page.waitForSelector("#p-status", { state: "visible" });
+    await page.keyboard.press("g"); await page.keyboard.press("r");
+    await page.waitForSelector("#review", { state: "visible" });
+    await page.keyboard.press("g"); await page.keyboard.press("t");
+    await page.waitForSelector("#p-todo", { state: "visible" });
+    // the chord times out after about a second
+    await page.keyboard.press("g");
+    await page.waitForTimeout(1500);
+    await page.keyboard.press("s");
+    await page.waitForTimeout(250);
+    if (!(await visible("#p-todo")) || (await visible("#p-status"))) throw new Error("a stale g still chorded");
+    // ? opens the cheat sheet; Esc closes it and the focus comes back
+    await page.evaluate(() => document.querySelector("#nav .nv")?.focus());
+    const before = await act();
+    await page.keyboard.press("?");
+    await page.waitForSelector("#cheats", { state: "visible" });
+    if ((await chip()) !== "SHEET") throw new Error("chip " + (await chip()));
+    const txt = await page.locator("#cheat-box").textContent();
+    for (const w of ["Command palette", "Next agent that needs you", "g", "To do page"]) if (!txt.includes(w)) throw new Error("cheat sheet lacks " + w);
+    await page.screenshot({ path: `${out}/cheats-1440.png` });
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#cheats", { state: "hidden" });
+    if ((await act()) !== before) throw new Error(`focus not restored: ${before} -> ${await act()}`);
+    } catch (e) { throw new Error(step + ": " + String(e.message).split("\n")[0]); }
+  });
+
+  await check("keys: m marks the open agent; the existing To do keys still work", async () => {
+    await keysDesk();
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.evaluate(() => rowFor(state.selected).focus());
+    await page.keyboard.press("m");
+    await page.waitForSelector("#mk", { state: "visible", timeout: 3000 });
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#mk", { state: "hidden" });
+  });
+
+  await check("keys: on the phone the Commands button opens the palette; no chip or hint shows", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("about:blank");
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
+    if (!(await visible("#btn-cmds"))) throw new Error("no Commands button");
+    if (await visible("#keybar")) throw new Error("the key bar shows on the phone");
+    const fl = await page.locator("#btn-fleet").boundingBox();
+    if (fl.x + fl.width > 390) throw new Error("the header's last button is cut off: " + JSON.stringify(fl));
+    const b = await page.locator("#btn-cmds").boundingBox();
+    if (b.width < 38 || b.height < 36) throw new Error("tap target " + b.width + "x" + b.height);
+    await page.locator("#btn-cmds").click();
+    await page.waitForSelector("#palette", { state: "visible" });
+    await noSideways();
+    const pb = await page.locator("#palette .pal").boundingBox();
+    if (pb.x < 0 || pb.x + pb.width > 390) throw new Error("the palette is off screen: " + JSON.stringify(pb));
+    await page.screenshot({ path: `${out}/palette-390.png` });
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#palette", { state: "hidden" });
+    if ((await act()) !== "btn-cmds") throw new Error("focus not restored to the button: " + (await act()));
+  });
+  await page.unroute(/\/api\/models/);
+  await page.unroute(/\/api\/agents\/[^/]+\/keys$/);
+}
+
 await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\" with the briefing", async () => {
   await publishBrief("## Status\n\nchecked-note briefing");
   const checked = new Date(Date.now() + 1000).toISOString();

@@ -314,3 +314,24 @@ func TestSpeechEngineFiles(t *testing.T) {
 		}
 	}
 }
+
+// The keyboard layer loads after app.js (it uses its globals), ships in the
+// embedded files and counts toward the app version.
+func TestKeysScriptLoadsAfterApp(t *testing.T) {
+	idx, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := strings.Index(string(idx), `<script src="app.js"></script>`)
+	k := strings.Index(string(idx), `<script src="keys.js"></script>`)
+	if a < 0 || k < a {
+		t.Error("index.html must load keys.js after app.js")
+	}
+	src, err := FS.ReadFile("keys.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile(`https?://`).Match(src) {
+		t.Error("keys.js names an absolute URL; everything must come from this origin")
+	}
+}
