@@ -2461,7 +2461,9 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
   const resetTheme = () => page.evaluate(() => { try { localStorage.clear(); } catch {} });
   const OPEN = {
     fleet: async () => { await page.locator("#btn-fleet").click(); await page.waitForSelector("#f-menu", { state: "visible" }); },
-    theme: async () => { await page.locator("#btn-fleet").click(); await page.locator("#f-theme").click(); await page.waitForSelector("#theme-panel", { state: "visible" }); },
+    // The pointer is parked in a corner afterwards: a mouse resting over a row would preview that row
+    // when the browser next re-hit-tests (slow CI), over whatever the keyboard previewed.
+    theme: async () => { await page.locator("#btn-fleet").click(); await page.locator("#f-theme").click(); await page.waitForSelector("#theme-panel", { state: "visible" }); await page.mouse.move(page.viewportSize().width - 3, 3); await page.waitForTimeout(150); },
     notify: async () => { await page.locator("#btn-notify").click(); await page.waitForSelector("#notify-panel", { state: "visible" }); },
     row: async () => { await rowOf(PANES.alpha).locator(".row-more").click(); await page.waitForSelector("#row-menu", { state: "visible" }); },
   };
@@ -2541,6 +2543,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
   });
 
   await check("theme: the picker is a popover under ⋯; hovering previews, leaving reverts, a click keeps it and closes it", async () => {
+    await desktopList(1280);
     await resetTheme();
     await page.reload({ waitUntil: "load" });
     await page.waitForFunction(() => !document.querySelector("#f-sweep").disabled, null, { timeout: 8000 });
