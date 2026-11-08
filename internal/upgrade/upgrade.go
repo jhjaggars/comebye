@@ -48,6 +48,18 @@ type Options struct {
 	Force    bool // allow a downgrade, or reinstall the same version
 	Rollback bool // restore Bin.prev instead of upgrading
 
+	// Restart is how the server is restarted: "systemd" (the user unit),
+	// "exit" (SIGTERM to the running server, restarted by a supervisor such
+	// as a sandbox's init loop) or "auto" (the default: systemd when the
+	// unit exists). PID names the server to stop in exit mode when there is
+	// more than one.
+	Restart string
+	PID     int
+	// ProcRoot, Kill and Alive replace /proc and signals (tests).
+	ProcRoot string
+	Kill     func(pid int) error
+	Alive    func(pid int) bool
+
 	Releases   string // release base URL (default DefaultReleases)
 	OS, Arch   string // default the running ones
 	Service    string // unit name (default comebye)
@@ -135,6 +147,10 @@ func Run(o Options) error {
 	if o.Bin == "" {
 		return errors.New("no binary path")
 	}
+	if err := resolveMode(&o); err != nil {
+		return err
+	}
+	o.printf("restart mode: %s\n", o.Restart)
 	if o.Rollback {
 		return rollback(&o)
 	}
@@ -177,8 +193,8 @@ func Run(o Options) error {
 	prev := o.Bin + ".prev"
 	if o.DryRun {
 		o.printf("dry run: would install %s over %s (was %s)\n", target, o.Bin, orUnknown(cur, curErr))
-		o.printf("dry run: would keep the old binary as %s and restart %s\n", prev, o.Service)
-		o.printf("dry run: rollback would be: cp %s %s && systemctl --user restart %s\n", prev, o.Bin, o.Service)
+		o.printf("dry run: would keep the old binary as %s and restart %s\n", prev, o.restartTarget())
+		o.printf("dry run: rollback would be: cp %s %s && %s\n", prev, o.Bin, restartCmdHint(&o))
 		return nil
 	}
 
@@ -198,7 +214,7 @@ func Run(o Options) error {
 		return fmt.Errorf("install %s: %w", o.Bin, err)
 	}
 	o.printf("installed %s at %s\n", target, o.Bin)
-	if err := systemctl(&o, "restart", o.Service); err != nil {
+	if err := restartServer(&o); err != nil {
 		return failAndRestore(&o, haveOld, prev, fmt.Errorf("restart: %w", err))
 	}
 	start := o.Now().Add(-2 * time.Second)
@@ -208,9 +224,17 @@ func Run(o Options) error {
 	after, _ := binVersion(&o, o.Bin)
 	o.printf("upgraded %s -> %s\n", orUnknown(cur, curErr), after)
 	if haveOld {
-		o.printf("to roll back: comebye upgrade --rollback   (or: cp %s %s && systemctl --user restart %s)\n", prev, o.Bin, o.Service)
+		o.printf("to roll back: comebye upgrade --rollback   (or: cp %s %s && %s)\n", prev, o.Bin, restartCmdHint(&o))
 	}
 	return nil
+}
+
+// restartTarget names what is restarted, for messages.
+func (o *Options) restartTarget() string {
+	if o.exitMode() {
+		return "the running server (SIGTERM; a supervisor starts it again)"
+	}
+	return o.Service
 }
 
 func orUnknown(v string, err error) string {
@@ -229,10 +253,10 @@ func failAndRestore(o *Options, haveOld bool, prev string, cause error) error {
 	if err := copyFile(prev, o.Bin); err != nil {
 		return fmt.Errorf("%v; and restoring %s failed: %w", cause, prev, err)
 	}
-	if err := systemctl(o, "restart", o.Service); err != nil {
+	if err := restartServer(o); err != nil {
 		return fmt.Errorf("%v; restored %s but the restart failed: %w", cause, o.Bin, err)
 	}
-	if err := waitActive(o); err != nil {
+	if err := waitUp(o); err != nil {
 		return fmt.Errorf("%v; restored %s but the service is not active: %w", cause, o.Bin, err)
 	}
 	v, _ := binVersion(o, o.Bin)
@@ -257,7 +281,7 @@ func rollback(o *Options) error {
 	if err := copyFile(prev, o.Bin); err != nil {
 		return err
 	}
-	if err := systemctl(o, "restart", o.Service); err != nil {
+	if err := restartServer(o); err != nil {
 		return err
 	}
 	if err := smoke(o, o.Now().Add(-2*time.Second), before, pv); err != nil {

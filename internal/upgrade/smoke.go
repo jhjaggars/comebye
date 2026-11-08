@@ -150,10 +150,14 @@ var netWords = regexp.MustCompile(`(?i)unreachable|timeout|timed out|connection|
 //     they go through the hub, so a failure is a warning;
 //   - the journal since the restart has no error-level lines.
 func smoke(o *Options, since time.Time, beforeTag, target string) error {
-	if err := waitActive(o); err != nil {
+	if err := waitUp(o); err != nil {
 		return err
 	}
-	o.printf("smoke: %s is active\n", o.Service)
+	if o.exitMode() {
+		o.printf("smoke: the local server answers again\n")
+	} else {
+		o.printf("smoke: %s is active\n", o.Service)
+	}
 
 	// The server needs a moment after "active"; retry the first call.
 	var who struct {
@@ -243,6 +247,10 @@ func smoke(o *Options, since time.Time, beforeTag, target string) error {
 		}
 	}
 
+	if o.exitMode() {
+		o.printf("smoke: no journal check (exit-restart mode: the supervisor keeps the server's log)\n")
+		return nil
+	}
 	jc := exec.Command(o.Journalctl, "--user", "-u", o.Service, "--since", since.Format("2006-01-02 15:04:05"), "-p", "err", "-q", "--no-pager")
 	jc.Env = o.Env
 	jout, jerr := jc.Output()

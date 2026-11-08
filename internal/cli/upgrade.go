@@ -8,7 +8,8 @@ import (
 )
 
 // cmdUpgrade installs a new comebye over the installed one and restarts
-// the user service; it works on this host only and does not need the
+// the user service (or, without systemd, makes the server exit so its
+// supervisor restarts it); it works on this host only and does not need the
 // server (it is the thing that restarts it).
 func cmdUpgrade(e *Env, args []string) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
@@ -21,6 +22,8 @@ func cmdUpgrade(e *Env, args []string) error {
 	fs.BoolVar(&o.DryRun, "dry-run", false, "download and verify, print the plan, install nothing")
 	fs.BoolVar(&o.Force, "force", false, "allow a downgrade, or reinstall the same version")
 	fs.BoolVar(&o.Rollback, "rollback", false, "restore the previous binary (comebye.prev) and restart")
+	fs.StringVar(&o.Restart, "restart", e.Getenv("COMEBYE_UPGRADE_RESTART"), "how to restart: systemd (the user unit), exit (SIGTERM to the running server; a supervisor such as a sandbox's init loop starts it again) or auto (default: systemd when the unit exists, else exit)")
+	fs.IntVar(&o.PID, "pid", 0, "with --restart exit: the server's pid, when more than one comebye server runs as this user")
 	fs.StringVar(&o.Releases, "releases", e.Getenv("COMEBYE_RELEASES_URL"), "release base URL (COMEBYE_RELEASES_URL; default the GitHub releases)")
 	bin := fs.String("bin", "", "the installed binary (default ~/.local/bin/comebye)")
 	pos, err := parse(fs, args)
