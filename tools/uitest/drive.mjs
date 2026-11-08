@@ -1216,6 +1216,47 @@ for (const width of [1280, 390]) {
     } finally { await page.unroute(/\/api\/ledger$/); }
   });
 }
+const PLAN_SHORT = { marks: [], roles: {}, entries: [], plans: [{ id: "pl2", title: "Structural to-dos, slice 1", size: 2, state: "open", done: 0, created_at: ago(20), members: [
+  { id: "n1", host: "uitest", repo_name: "comebye", branch: "feat/todo-asks", agent_id: "uitest/w1:p1", pane_id: "w1:p1", status: "running", outcome: "pending", reported: false },
+  { id: "n2", host: "uitest", repo_name: "comebye", branch: "feat/todo-auto", agent_id: "uitest/w2:p1", pane_id: "w2:p1", status: "running", outcome: "pending", reported: false },
+] }] };
+for (const width of [1280, 390]) {
+  await check(`plan card: at ${width}px a short title keeps no lone last word, the state sits under it, and the focus ring is for the keyboard only`, async () => {
+    await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: PLAN_SHORT }));
+    try {
+      await desktopList(width, "#/status");
+      await page.waitForSelector("#plans .plan .pm", { state: "visible", timeout: 8000 });
+      const title = page.locator("#plans .plan-title");
+      // Per-line word counts of the title: the last line must not be one word (unless it is the only line).
+      const words = await title.evaluate((e) => {
+        const r = document.createRange(), tops = [];
+        const walker = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+        for (let n; (n = walker.nextNode());) {
+          const re = /\S+/g;
+          for (let m; (m = re.exec(n.data));) { r.setStart(n, m.index); r.setEnd(n, m.index + m[0].length); tops.push(Math.round(r.getBoundingClientRect().top)); }
+        }
+        const lines = {}; for (const t of tops) lines[t] = (lines[t] || 0) + 1;
+        return Object.keys(lines).sort((a, b) => a - b).map((k) => lines[k]);
+      });
+      if (words.length > 1 && words[words.length - 1] < 2) throw new Error("lone last word: " + JSON.stringify(words));
+      const geo = await page.evaluate(() => { const t = document.querySelector("#plans .plan-title").getBoundingClientRect(), s = document.querySelector("#plans .plan-state").getBoundingClientRect(); return { below: s.top >= t.bottom - 1 }; });
+      if (!geo.below) throw new Error("state is not under the title");
+      const ring = () => page.evaluate(() => { const a = document.activeElement; if (!a || !a.closest("#plans")) return "none"; const c = getComputedStyle(a); return c.outlineStyle !== "none" && parseFloat(c.outlineWidth) > 0 ? "ring" : "none"; });
+      // A mouse click leaves no ring on the title (the card re-renders under it).
+      await title.click();
+      await page.waitForTimeout(150);
+      if ((await ring()) !== "none") throw new Error("a ring after a mouse click on the title");
+      await page.locator("#plans a.pm").first().focus();
+      await page.keyboard.press("Shift+Tab"); // keyboard moves to the title
+      if (!(await page.evaluate(() => document.activeElement.classList.contains("plan-title")))) throw new Error("Shift+Tab did not reach the title");
+      if ((await ring()) !== "ring") throw new Error("no ring after Tab");
+      await page.keyboard.press("Enter"); // collapses (the click opened it); focus stays and keeps its ring
+      await page.waitForSelector("#plans .plan-meta", { state: "detached" });
+      if (!(await page.evaluate(() => document.activeElement.classList.contains("plan-title"))) || (await ring()) !== "ring") throw new Error("focus lost on a keyboard toggle");
+      await page.locator("#plans").screenshot({ path: `${out}/plan-card-polish-${width}.png` });
+    } finally { await page.unroute(/\/api\/ledger$/); }
+  });
+}
 async function injectRepoDamage() {
   return page.evaluate(() => {
     const a = state.agents.find((x) => (x.worktree && x.worktree.checkout) || x.cwd);

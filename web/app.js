@@ -1018,8 +1018,10 @@ function renderPlans() {
   el.dataset.sig = sig;
   el.hidden = !shown.length;
   const label = { open: "in progress", done: "done", partial: "needs a look" };
-  // The plan card keeps keyboard focus across a re-render.
-  const focus = el.contains(document.activeElement) ? document.activeElement.dataset.plan || document.activeElement.getAttribute("href") : null;
+  // The plan card keeps keyboard focus across a re-render. After a mouse
+  // click nothing is restored: a script's focus() would draw the ring.
+  const ae = document.activeElement;
+  const focus = el.contains(ae) && ae.matches(":focus-visible") ? document.activeElement.dataset.plan || document.activeElement.getAttribute("href") : null;
   el.innerHTML = shown.map((p) => {
     const open = planOpen.has(p.id);
     const follow = [p.landing ? `${p.landing} landing` : "", p.working ? `${p.working} working` : ""].filter(Boolean).join(", ");
