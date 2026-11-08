@@ -345,6 +345,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/todos/{id}/answer", s.authAgent(s.handleTodoAnswer))
 	s.mux.HandleFunc("POST /api/todos/{id}/done", s.authAgent(s.handleTodoDone))
 	s.mux.HandleFunc("POST /api/todos/{id}/drop", s.authAgent(s.handleTodoDrop))
+	s.mux.HandleFunc("POST /api/todos/{id}/keep", s.authAgent(s.handleTodoKeep))
+	s.mux.HandleFunc("POST /api/todos/{id}/dismiss", s.authAgent(s.handleTodoDismiss))
 	// Releasing and upgrading: the user role only (s.auth), never an agent
 	// level; TestReleaseRoutesAreUserOnly keeps it so.
 	s.mux.HandleFunc("GET /api/release/upgrade", s.auth(s.handleUpgradeStatus))

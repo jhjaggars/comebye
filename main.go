@@ -99,8 +99,9 @@ func main() {
 		releaseUp     = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
 		releaseDry    = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
 		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
-		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after); off for none")
+		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on a question past -auto-todo-question-after, filed as a suggestion to keep or dismiss); off for none")
 		autoBlocked   = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
+		autoQuestion  = flag.Duration("auto-todo-question-after", envDuration("COMEBYE_AUTO_TODO_QUESTION_AFTER", server.DefaultAutoQuestion), "how long an agent must sit idle or done on a question, with no device viewing it, before -auto-todo suggests an item")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
@@ -121,7 +122,7 @@ func main() {
 	if *doneDigest < 0 || *blockedDelay < 0 {
 		log.Fatalf("-notify-done-digest and -notify-blocked-delay must not be negative")
 	}
-	autoCfg, err := parseAutoTodo(*autoTodo, *autoBlocked)
+	autoCfg, err := parseAutoTodo(*autoTodo, *autoBlocked, *autoQuestion)
 	if err != nil {
 		log.Fatalf("-auto-todo: %v", err)
 	}
@@ -640,7 +641,7 @@ func releaseFlagError(noAuth bool, repo string, upgrade, simulate bool, addr str
 }
 
 // parseAutoTodo reads -auto-todo: a comma list of detectors, or off.
-func parseAutoTodo(spec string, blockedAfter time.Duration) (server.AutoTodoConfig, error) {
+func parseAutoTodo(spec string, blockedAfter, questionAfter time.Duration) (server.AutoTodoConfig, error) {
 	var cfg server.AutoTodoConfig
 	for _, k := range strings.Split(spec, ",") {
 		switch k = strings.ToLower(strings.TrimSpace(k)); k {
@@ -650,8 +651,13 @@ func parseAutoTodo(spec string, blockedAfter time.Duration) (server.AutoTodoConf
 				return cfg, fmt.Errorf("-auto-todo-blocked-after must be positive")
 			}
 			cfg.Blocked = blockedAfter
+		case "question":
+			if questionAfter <= 0 {
+				return cfg, fmt.Errorf("-auto-todo-question-after must be positive")
+			}
+			cfg.Question = questionAfter
 		default:
-			return cfg, fmt.Errorf("unknown detector %q (want blocked, or off)", k)
+			return cfg, fmt.Errorf("unknown detector %q (want blocked, question, or off)", k)
 		}
 	}
 	return cfg, nil

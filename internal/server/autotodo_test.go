@@ -10,6 +10,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/dialog"
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 var autoT0 = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -24,22 +25,34 @@ type autoRig struct {
 	reads int
 	view  map[string]bool
 	dlg   *dialog.Dialog
+	// the agents' last message, and how often it was read
+	text    string
+	msgTime string
+	lreads  int
+	clock   time.Time
 }
 
 func newAutoRig(t *testing.T) *autoRig {
 	t.Helper()
 	s, _, _ := todoServer(t)
-	s.initAutoTodo(AutoTodoConfig{Blocked: 10 * time.Minute})
+	s.initAutoTodo(AutoTodoConfig{Blocked: 10 * time.Minute, Question: 3 * time.Minute})
 	r := &autoRig{s: s, view: map[string]bool{}, dlg: &dialog.Dialog{
 		Kind: dialog.KindClaudePermission, Title: "Bash command", Detail: "rm -rf build/", Question: "Do you want to proceed?",
 		Options: []dialog.Option{{Label: "Yes"}, {Label: "Yes, and don't ask again"}, {Label: "No"}, {Label: "Type something", Role: dialog.RoleOther}},
 	}}
 	s.auto.readDialog = func(context.Context, herdr.AgentInfo) (*dialog.Dialog, error) { r.reads++; return r.dlg, nil }
 	s.auto.viewing = func(a herdr.AgentInfo) bool { return r.view[a.ID] }
+	s.auto.latest = func(context.Context, herdr.AgentInfo) *transcript.Latest {
+		r.lreads++
+		return &transcript.Latest{Text: r.text, Time: r.msgTime}
+	}
+	r.clock = autoT0
+	s.todos.now = func() time.Time { return r.clock }
 	return r
 }
 
 func (r *autoRig) step(now time.Time, agents ...herdr.AgentInfo) {
+	r.clock = now
 	r.s.autoTodoStep(context.Background(), agents, now)
 }
 
@@ -278,5 +291,237 @@ func TestAutoStubForAgentReaders(t *testing.T) {
 	w = do(s, "GET", "/api/todos/"+plain.ID, userHdr, "")
 	if !strings.Contains(w.Body.String(), "rm -rf") {
 		t.Fatalf("show for the user lacks the text: %s", w.Body)
+	}
+}
+
+// ---- B2/E2: idle on a question ----
+
+const askText = "I rebased and the tests pass.\n\nShould I push it to main, or open a PR first?"
+
+func TestAutoQuestionThresholdAndClassifier(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = askText
+	idle := autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0)
+	r.step(autoT0.Add(2*time.Minute), idle)
+	if len(r.items("all")) != 0 || r.lreads != 0 {
+		t.Fatalf("2 min: %d items, %d reads; want none and none", len(r.items("all")), r.lreads)
+	}
+	r.step(autoT0.Add(4*time.Minute), idle)
+	got := r.items("")
+	if len(got) != 1 || r.lreads != 1 {
+		t.Fatalf("4 min: %d items, %d reads", len(got), r.lreads)
+	}
+	it := got[0]
+	if it.Source != SourceQuestion || !it.Suggested || it.CreatedBy != "hub" || it.Kind != "decision" ||
+		it.Waiting == nil || it.Waiting.ID != "desk/w2:p1" || !strings.Contains(it.Question, "Should I push it to main") ||
+		!strings.Contains(it.Context, "> Should I push it to main") {
+		t.Fatalf("item = %+v", it)
+	}
+	// Later ticks neither refile nor read again.
+	r.step(autoT0.Add(30*time.Minute), idle)
+	if len(r.items("")) != 1 || r.lreads != 1 {
+		t.Fatalf("later: %d items, %d reads", len(r.items("")), r.lreads)
+	}
+}
+
+func TestAutoQuestionDoneCountsAndNonQuestionsAreReadOnce(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = "All done. Anything else?"
+	done := autoAgent("desk/w2:p1", "home", herdr.StatusDone, autoT0)
+	for i := 4; i < 40; i += 6 {
+		r.step(autoT0.Add(time.Duration(i)*time.Minute), done)
+	}
+	if len(r.items("all")) != 0 || r.lreads != 1 {
+		t.Fatalf("a closer: %d items, %d reads; want none and one read", len(r.items("all")), r.lreads)
+	}
+	r2 := newAutoRig(t)
+	r2.text = askText
+	r2.step(autoT0.Add(5*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusDone, autoT0))
+	if len(r2.items("")) != 1 {
+		t.Fatal("a done agent on a question gets a suggestion")
+	}
+}
+
+func TestAutoQuestionClosesWhenAgentWorks(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = askText
+	r.step(autoT0.Add(4*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0))
+	id := r.items("")[0].ID
+	at := autoT0.Add(6 * time.Minute)
+	r.step(at, autoAgent("desk/w2:p1", "home", herdr.StatusWorking, at))
+	it, _ := r.s.todos.get(id)
+	if it.State != TodoDropped || it.ClosedBy != "hub" || it.DropReason != "the agent is no longer idle" {
+		t.Fatalf("after the agent worked: %+v", it)
+	}
+	// Idle again later on the same question: a new episode, one new suggestion.
+	later := autoT0.Add(time.Hour)
+	r.step(later.Add(4*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, later))
+	if n := len(r.items("")); n != 1 {
+		t.Fatalf("new episode: %d active", n)
+	}
+}
+
+func TestAutoQuestionSkips(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = askText
+	a := autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0)
+	late := autoT0.Add(20 * time.Minute)
+	r.view[a.ID] = true
+	r.step(late, a)
+	r.view[a.ID] = false
+	r.s.MuteAutoTodo(a.ID, true)
+	r.step(late, a)
+	r.s.MuteAutoTodo(a.ID, false)
+	if len(r.items("all")) != 0 || r.lreads != 0 {
+		t.Fatalf("viewed or muted: %d items, %d reads", len(r.items("all")), r.lreads)
+	}
+	// A person's item already waits on it.
+	if _, _, err := r.s.todos.add(Todo{Question: "may I?", Kind: "decision", CreatedBy: "me", Waiting: &TodoAgent{ID: a.ID, Instance: r.s.hostInstance("desk")}}); err != nil {
+		t.Fatal(err)
+	}
+	r.step(late, a)
+	if len(r.items("")) != 1 || r.lreads != 0 {
+		t.Fatalf("an item waits already: %d items, %d reads", len(r.items("")), r.lreads)
+	}
+	// A working agent is not read.
+	r.step(late, autoAgent("desk/w1:p1", "coordinator", herdr.StatusWorking, autoT0))
+	if r.lreads != 0 {
+		t.Fatal("a working agent was read")
+	}
+}
+
+func TestAutoQuestionCoordinatorFiledItsOwn(t *testing.T) {
+	// E2: the coordinator filed an item during the turn: nothing is suggested.
+	r := newAutoRig(t)
+	r.text = askText
+	r.msgTime = autoT0.Add(-time.Minute).Format(time.RFC3339Nano)
+	r.clock = autoT0.Add(-5 * time.Minute)
+	if _, _, err := r.s.todos.add(Todo{Question: "pick one", Kind: "decision", CreatedBy: "coordinator", CreatedByID: "desk/w1:p1"}); err != nil {
+		t.Fatal(err)
+	}
+	coord := autoAgent("desk/w1:p1", "coordinator", herdr.StatusIdle, autoT0)
+	r.step(autoT0.Add(4*time.Minute), coord)
+	if n := len(r.items("")); n != 1 {
+		t.Fatalf("items = %d, want only the coordinator's own", n)
+	}
+
+	// Filed later: the suggestion goes, superseded.
+	r2 := newAutoRig(t)
+	r2.text = askText
+	r2.msgTime = autoT0.Format(time.RFC3339Nano)
+	coord2 := autoAgent("desk/w1:p1", "coordinator", herdr.StatusIdle, autoT0)
+	r2.step(autoT0.Add(4*time.Minute), coord2)
+	sug := r2.items("")
+	if len(sug) != 1 || !sug[0].Suggested {
+		t.Fatalf("no suggestion: %+v", sug)
+	}
+	r2.clock = autoT0.Add(5 * time.Minute)
+	filed, _, err := r2.s.todos.add(Todo{Question: "pick one", Kind: "decision", CreatedBy: "coordinator", CreatedByID: "desk/w1:p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.step(autoT0.Add(5*time.Minute), coord2)
+	it, _ := r2.s.todos.get(sug[0].ID)
+	if it.State != TodoDropped || it.DropReason != "superseded by "+filed.ID {
+		t.Fatalf("not superseded: %+v", it)
+	}
+}
+
+func TestAutoQuestionKeepAndDismiss(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = askText
+	a := autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0)
+	r.step(autoT0.Add(4*time.Minute), a)
+	id := r.items("")[0].ID
+
+	w := do(r.s, "POST", "/api/todos/"+id+"/keep", userHdr, "")
+	if w.Code != 200 || todoOf(t, w.Body.Bytes()).Suggested {
+		t.Fatalf("keep = %d %s", w.Code, w.Body)
+	}
+	// A kept item stays when the agent works.
+	at := autoT0.Add(6 * time.Minute)
+	r.step(at, autoAgent("desk/w2:p1", "home", herdr.StatusWorking, at))
+	if it, _ := r.s.todos.get(id); it.State != TodoOpen {
+		t.Fatalf("a kept item was closed: %+v", it)
+	}
+	// While the kept item is open, the agent is already waited on: no new
+	// suggestion. Once it is done, a new episode gets one.
+	r.step(autoT0.Add(30*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0.Add(20*time.Minute)))
+	if n := len(r.items("")); n != 1 {
+		t.Fatalf("a suggestion beside a kept item: %d active", n)
+	}
+	if _, err := r.s.todos.close(id, TodoDone, "me", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Dismiss another episode.
+	r.step(autoT0.Add(time.Hour+4*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0.Add(time.Hour)))
+	var sug Todo
+	for _, it := range r.items("") {
+		if it.Suggested {
+			sug = it
+		}
+	}
+	if sug.ID == "" {
+		t.Fatal("no second suggestion")
+	}
+	if w := do(r.s, "POST", "/api/todos/"+sug.ID+"/dismiss", userHdr, `{"reason":"nope"}`); w.Code != 400 {
+		t.Fatalf("bad reason = %d", w.Code)
+	}
+	w = do(r.s, "POST", "/api/todos/"+sug.ID+"/dismiss", userHdr, `{"reason":"not_a_question"}`)
+	if w.Code != 200 {
+		t.Fatalf("dismiss = %d %s", w.Code, w.Body)
+	}
+	it, _ := r.s.todos.get(sug.ID)
+	if it.State != TodoDropped || it.DropReason != "dismissed: not a question for me" {
+		t.Fatalf("dismissed item = %+v", it)
+	}
+	stats := r.s.todos.autoStats()
+	if stats["kept:hub-question"] != 1 || stats["dismissed:hub-question"] != 1 || stats["dismissed:hub-question:not_a_question"] != 1 {
+		t.Fatalf("stats = %v", stats)
+	}
+	if !strings.Contains(do(r.s, "GET", "/api/todos", userHdr, "").Body.String(), `"dismissed:hub-question":1`) {
+		t.Fatal("the list lacks the counts")
+	}
+	// A dismissed episode is not refiled.
+	r.step(autoT0.Add(time.Hour+30*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0.Add(time.Hour)))
+	for _, it := range r.items("") {
+		if it.Suggested {
+			t.Fatalf("refiled: %+v", it)
+		}
+	}
+	// Answering a suggestion keeps it.
+	r.step(autoT0.Add(3*time.Hour+4*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0.Add(3*time.Hour)))
+	for _, it := range r.items("") {
+		if it.Suggested {
+			if _, err := r.s.todos.answer(it.ID, TodoAnswer{Text: "ok", By: "me", Via: "app"}); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := r.s.todos.get(it.ID); got.Suggested {
+				t.Fatal("an answered suggestion is still a suggestion")
+			}
+		}
+	}
+	if r.s.todos.autoStats()["kept:hub-question"] != 2 {
+		t.Fatalf("stats = %v", r.s.todos.autoStats())
+	}
+}
+
+func TestAutoQuestionStubForInteractiveSessions(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = askText + " The key is sk-secret-123."
+	s := r.s
+	r.step(autoT0.Add(4*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0))
+	list := func(hdr map[string]string) string { return do(s, "GET", "/api/todos", hdr, "").Body.String() }
+	if !strings.Contains(list(userHdr), "sk-secret-123") {
+		t.Fatal("the user sees the text")
+	}
+	agent := list(agentHdr("w1:p1"))
+	if strings.Contains(agent, "secret") || strings.Contains(agent, "Should I push") || !strings.Contains(agent, "session home is waiting on you") {
+		t.Fatalf("agents see a stub of an interactive session: %s", agent)
+	}
+	// The coordinator's own suggestion is whole for agent readers (it is not an interactive session).
+	r.step(autoT0.Add(5*time.Minute), autoAgent("desk/w1:p1", "coordinator", herdr.StatusIdle, autoT0.Add(time.Minute)))
+	if !strings.Contains(list(agentHdr("w1:p1")), "Should I push") {
+		t.Fatal("the coordinator's suggestion should be readable by agents")
 	}
 }

@@ -1,0 +1,45 @@
+{"ask": true, "text": "Should I start the import job now, or wait until the schema change is in?"}
+{"ask": true, "text": "Can you tell me which environment you mean? Once I know, I'll rerun the check there."}
+{"ask": true, "text": "The queue depth is steady at 40, well under the limit. Want me to keep watching it, or stop here?"}
+{"ask": true, "text": "Removing the draft is permanent because it was never saved elsewhere. Should I go ahead, or would you rather archive it?"}
+{"ask": true, "text": "What did you want to do next with the report?"}
+{"ask": true, "text": "**Decision for you:** do you want me to compress the old exports, move them to cold storage, or both?"}
+{"ask": true, "text": "Two temporary files are left in the output folder: tmp1.out and tmp2.out. Should I delete them as well?"}
+{"ask": true, "text": "The changelog entry isn't committed yet. Want me to commit it?"}
+{"ask": true, "text": "The edits in those two modules aren't committed. Should I commit and push them? The pipeline will then run the checks."}
+{"ask": true, "text": "I can fetch the logs from both services. I can also graph the error rate over the last day. Do you want either?"}
+{"ask": true, "text": "I didn't answer your earlier question: the daemon is up and listening. Which machine are you connecting from, and what error do you see?"}
+{"ask": true, "text": "Done, the change is ready.\n\nWhich should I do first: the cleanup or the new feature?"}
+{"ask": true, "text": "Two options:\n\n1. Use a queue\n2. Use a cron job\n\nWhich do you prefer?"}
+{"ask": true, "text": "Which one should I take?\n\n- Plan A\n- Plan B"}
+{"ask": true, "text": "I can ship this now.\n\nShould I run it?\n\n```\nmake ship\n```"}
+{"ask": true, "text": "Yaml or toml?"}
+{"ask": true, "text": "The patch is ready. Want me to apply it?"}
+{"ask": true, "text": "Is it ok if I squash the commits first?"}
+{"ask": true, "text": "I found two unused directories.\n\n- build/a\n- build/b\n\nShall I remove both?"}
+{"ask": true, "text": "The tests passed. Would you like me to bump the version?"}
+{"ask": true, "text": "Before I go on: do you want the legacy flag kept for another release?"}
+{"ask": true, "text": "I'm unsure whether to key this by account or by project. Which fits how you use it?"}
+{"ask": true, "text": "That needs one more package.\n\nOK to install it?"}
+{"ask": false, "text": "Done. Anything else?"}
+{"ask": false, "text": "All set. Is there anything else you'd like me to look at?"}
+{"ask": false, "text": "Finished the cleanup. What would you like to work on next?"}
+{"ask": false, "text": "Everything is merged. Let me know if you have any questions?"}
+{"ask": false, "text": "> Should I proceed?"}
+{"ask": false, "text": "Why does this fail? The lock is held by the sweep, which never releases it on error."}
+{"ask": false, "text": "What is the result? It is 42, so the check passes and nothing else is needed."}
+{"ask": false, "text": "See https://example.com/search?q=go for the details."}
+{"ask": false, "text": "Run `git log -1 --format=%s?` to check the subject."}
+{"ask": false, "text": "The test checks whether `a ? b : c` parses."}
+{"ask": false, "text": "Here is the query:\n\n```sql\nselect * from t where a = ?\n```"}
+{"ask": false, "text": "Tests pass and the branch is pushed."}
+{"ask": false, "text": "I wonder whether the cache is too small, but I have not measured it."}
+{"ask": false, "text": "Summary: the work is committed, the tree is clean, and nothing is pending."}
+{"ask": false, "text": "If you meant the import failure, I can read its log and say why it exits 1. Or tell me where you saw the other problem and I'll look at that."}
+{"ask": false, "text": "The first option is safer. If it still fails, send me the path and the exact error, and I'll check the config next."}
+{"ask": false, "text": "If this happens again, restart the service yourself: open Settings, then Services, then Restart."}
+{"ask": false, "text": "One more thing: the images move to a new base tomorrow. The first run afterwards may hit new problems because of that."}
+{"ask": false, "text": "I removed the old branch after checking it was fully merged. No other branches remain."}
+{"ask": false, "text": "Was that the right call? Probably, since the numbers agree, so I'm moving on to the next step."}
+{"ask": false, "text": "How did it get here? A retry loop re-queued the job after each timeout."}
+{"ask": false, "text": "Open question for later: how should retries back off? Noting it in the follow-ups; nothing is needed from you now."}

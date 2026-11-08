@@ -1105,10 +1105,11 @@ const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight
 
 function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/agent\/[^\s]+$/.test(u || "") ? u : ""; }
 // The provenance chip: items the hub filed itself say so (and why).
-const TODO_SOURCE = { "hub-blocked": "auto · blocked", "hub-report": "from report" };
+const TODO_SOURCE = { "hub-blocked": "auto · blocked", "hub-question": "auto · question", "hub-report": "from report" };
 function todoSrcChip(t) {
   const label = TODO_SOURCE[t.source];
-  return label ? `<span class="td-chip td-src" title="Filed by the hub, not by an agent or a person">${esc(label)}</span>` : "";
+  return (label ? `<span class="td-chip td-src" title="Filed by the hub, not by an agent or a person">${esc(label)}</span>` : "") +
+    (t.suggested && t.state === "open" ? `<span class="td-chip td-sug" title="The hub guessed this from the agent's last message: keep it or dismiss it">suggested</span>` : "");
 }
 
 // drafts: item id -> { text, q }; q is the question, for a draft whose item is gone.
@@ -1324,6 +1325,7 @@ function todoItemHtml(t, pfx) {
           ${ans || isRel ? "" : sttStatusHtml("todo:" + t.id)}
           <div class="td-acts">
             ${ans || isRel ? "" : sttMicHtml("todo:" + t.id)}
+            ${t.suggested && !ans ? `<button type="button" class="td-keep" title="Make this a real item">Keep</button><button type="button" class="td-dismiss" data-why="not_a_question">Not a question</button><button type="button" class="td-dismiss" data-why="already_handled">Already handled</button>` : ""}
             ${ans || isRel ? "" : `<button type="button" class="td-answer-btn"${busy}>Answer</button>`}
             <button type="button" class="td-done"${busy}>Done</button>
             <button type="button" class="td-drop"${busy}>Drop</button>
@@ -1547,7 +1549,7 @@ async function todoAct(id, what, body, opts = {}) {
     try {
       await api(`/api/todos/${encodeURIComponent(id)}/${what}`, { method: "POST", body: JSON.stringify(body || {}), keepalive: !!keepalive });
       todos.pend.settle(id);
-      toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : "Dropped");
+      toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : what === "dismiss" ? "Dismissed" : "Dropped");
     } catch (e) {
       // Put it back as it was, with the typed answer, so a second try is one tap.
       restore(true);
@@ -1607,6 +1609,24 @@ function todoChoose(item, text, shift) {
   combo = combo.slice().sort((a, b) => a - b);
   if (shift) { todoFill(item, "ok " + combo.join("+")); return; }
   todoAct(id, "answer", { text: "ok " + combo.join("+") }, { undoMs: CHOICE_UNDO_MS });
+}
+
+// todoKeep makes a suggestion a real item: it stays, the "suggested" marks go.
+async function todoKeep(id) {
+  const t = todos.items.find((x) => x.id === id);
+  if (!t || !t.suggested || todos.pend.busy(id)) return;
+  t.suggested = false;
+  renderTodos(true);
+  try {
+    await api(`/api/todos/${encodeURIComponent(id)}/keep`, { method: "POST", body: "{}" });
+  } catch (e) {
+    t.suggested = true;
+    renderTodos(true);
+    toast("Not kept: " + e.message, true);
+    return;
+  }
+  todos.loadedAt = 0;
+  await loadTodos();
 }
 
 function todoAnswer(id, box) {
@@ -1897,6 +1917,10 @@ function onTodoClick(ev) {
   if (rb && t.release) { relClick(t, rb.dataset.rel, rb.dataset.host); return; }
   if (ev.target.closest(".td-answer-btn")) {
     todoAnswer(id, item.querySelector(".td-text"));
+  } else if (ev.target.closest(".td-keep")) {
+    todoKeep(id);
+  } else if (ev.target.closest(".td-dismiss")) {
+    todoAct(id, "dismiss", { reason: ev.target.closest(".td-dismiss").dataset.why || "other" });
   } else if (ev.target.closest(".td-done")) {
     todoAct(id, "done");
   } else if (ev.target.closest(".td-drop")) {

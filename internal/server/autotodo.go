@@ -14,7 +14,9 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/dialog"
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/question"
 	"github.com/jhjaggars/comebye/internal/state"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // Auto items: to-do items the hub files itself, so a need does not depend
@@ -29,10 +31,24 @@ import (
 const (
 	// SourceBlocked marks an item filed because an agent sat blocked.
 	SourceBlocked = "hub-blocked"
+	// SourceQuestion marks a suggestion: an agent sat idle on a question.
+	SourceQuestion = "hub-question"
 	// SourceAgent marks an item an agent added with `comebye todo add`.
 	SourceAgent = "agent"
 	// AutoCreator is the CreatedBy and ClosedBy of the hub's own items.
 	AutoCreator = "hub"
+
+	// DefaultAutoQuestion is how long an agent must sit idle (or done) on a
+	// question before the hub suggests an item: long enough that a user
+	// answering in the terminal never trips it.
+	DefaultAutoQuestion = 3 * time.Minute
+
+	// autoTurnWindow is how far before an agent's last message an item the
+	// agent filed still counts as filed "during that turn" (the hub does not
+	// see where a turn began).
+	autoTurnWindow = 30 * time.Minute
+	// autoReadsPerStep bounds the transcript reads one snapshot may start.
+	autoReadsPerStep = 8
 
 	// DefaultAutoBlocked is how long an agent must be blocked, unwatched,
 	// before the hub files an item.
@@ -49,6 +65,9 @@ const (
 type AutoTodoConfig struct {
 	// Blocked, when positive, is the blocked-agent threshold.
 	Blocked time.Duration
+	// Question, when positive, is how long an agent sits idle on a question
+	// before the hub suggests an item for it.
+	Question time.Duration
 }
 
 var (
@@ -65,13 +84,23 @@ type autoTodo struct {
 	// readDialog and viewing are replaced by tests.
 	readDialog func(ctx context.Context, a herdr.AgentInfo) (*dialog.Dialog, error)
 	viewing    func(a herdr.AgentInfo) bool
+	latest     func(ctx context.Context, a herdr.AgentInfo) *transcript.Latest
+	// checked is the idle episode (agent id -> key) whose last message was
+	// already read and judged not to be a question, so a long idle agent
+	// is read once, not every tick.
+	checked map[string]string
 }
 
 func (s *Server) initAutoTodo(cfg AutoTodoConfig) {
-	if cfg.Blocked <= 0 || s.todos == nil {
+	if (cfg.Blocked <= 0 && cfg.Question <= 0) || s.todos == nil {
 		return
 	}
-	s.auto = &autoTodo{cfg: cfg, muted: map[string]bool{}}
+	s.auto = &autoTodo{cfg: cfg, muted: map[string]bool{}, checked: map[string]string{}}
+	s.auto.latest = func(ctx context.Context, a herdr.AgentInfo) *transcript.Latest {
+		ctx, cancel := context.WithTimeout(ctx, autoReadTimeout)
+		defer cancel()
+		return s.latestOf(ctx, a.Host, a.PaneID)
+	}
 	s.auto.readDialog = s.autoReadDialog
 	s.auto.viewing = func(a herdr.AgentInfo) bool {
 		p := s.cfg.Presence
@@ -159,20 +188,42 @@ func (s *Server) autoTodoStep(ctx context.Context, agents []herdr.AgentInfo, now
 	}
 	// 1. Close what is over.
 	for _, it := range s.todos.list("") {
-		if it.Source != SourceBlocked || it.State != TodoOpen || it.Waiting == nil {
+		if it.State != TodoOpen || it.Waiting == nil {
 			continue
 		}
 		a, ok := byID[it.Waiting.ID]
 		reason := ""
-		switch {
-		case !ok:
-			// A host that reports nobody may be down: only an agent that
-			// vanished from a host that still lists others is gone.
-			if hosts[idHost(it.Waiting.ID)] {
-				reason = "the agent is gone"
+		switch it.Source {
+		case SourceBlocked:
+			switch {
+			case !ok:
+				// A host that reports nobody may be down: only an agent that
+				// vanished from a host that still lists others is gone.
+				if hosts[idHost(it.Waiting.ID)] {
+					reason = "the agent is gone"
+				}
+			case a.Status != herdr.StatusBlocked:
+				reason = "the agent is no longer blocked"
 			}
-		case a.Status != herdr.StatusBlocked:
-			reason = "the agent is no longer blocked"
+		case SourceQuestion:
+			if !it.Suggested {
+				continue // kept: it is the user's item now
+			}
+			switch {
+			case !ok:
+				if hosts[idHost(it.Waiting.ID)] {
+					reason = "the agent is gone"
+				}
+			case a.Status != herdr.StatusIdle && a.Status != herdr.StatusDone:
+				// The user answered, or the agent went on.
+				reason = "the agent is no longer idle"
+			default:
+				if by := s.todos.filedBy(it.Waiting.ID, it.CreatedAt); by != "" {
+					reason = "superseded by " + by // E2: it filed its own item after all
+				}
+			}
+		default:
+			continue
 		}
 		if reason != "" {
 			if _, err := s.todos.close(it.ID, TodoDropped, AutoCreator, reason); err != nil && !errors.Is(err, errTodoClosed) {
@@ -181,11 +232,17 @@ func (s *Server) autoTodoStep(ctx context.Context, agents []herdr.AgentInfo, now
 		}
 	}
 	// 2. File what is due.
+	reads := 0
 	for _, a := range agents {
 		if ctx.Err() != nil {
 			return
 		}
-		if a.Status != herdr.StatusBlocked {
+		if (a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone) && au.cfg.Question > 0 {
+			if reads < autoReadsPerStep && s.autoQuestion(ctx, a, now, &reads) {
+				continue
+			}
+		}
+		if a.Status != herdr.StatusBlocked || au.cfg.Blocked <= 0 {
 			continue
 		}
 		since := autoSince(a)
@@ -455,4 +512,204 @@ func (s *Server) todosForReader(r *http.Request, items []Todo) []Todo {
 		}
 	}
 	return out
+}
+
+// ---- B2/E2: an agent idle on a question ----
+
+func autoQuestionKey(a herdr.AgentInfo, since time.Time) string {
+	return SourceQuestion + ":" + state.AgentKey(&a) + "@" + since.UTC().Format(time.RFC3339)
+}
+
+// autoQuestion files a suggestion for an agent that has sat idle past the
+// threshold with a question as its last message. It reports whether it
+// handled the agent (read or decided something), so the caller can count
+// the reads. It reads the transcript only when every cheap check passes,
+// and once per idle episode.
+func (s *Server) autoQuestion(ctx context.Context, a herdr.AgentInfo, now time.Time, reads *int) bool {
+	au := s.auto
+	since := autoSince(a)
+	if since == nil || now.Sub(*since) < au.cfg.Question {
+		return false
+	}
+	id := state.AgentKey(&a)
+	if au.isMuted(id) || (au.viewing != nil && au.viewing(a)) {
+		return false
+	}
+	key := autoQuestionKey(a, *since)
+	au.mu.Lock()
+	done := au.checked[id] == key
+	au.mu.Unlock()
+	if done || !s.todos.wantsAuto(key, id) {
+		return false
+	}
+	*reads++
+	latest := au.latest(ctx, a)
+	var res question.Result
+	if latest != nil {
+		res = question.Classify(latest.Text)
+	}
+	au.mu.Lock()
+	au.checked[id] = key // judged, whatever the verdict
+	au.mu.Unlock()
+	if !res.Ask {
+		return true
+	}
+	// E2: an item the agent filed itself during that turn already says it.
+	from := now
+	if t, err := time.Parse(time.RFC3339Nano, latest.Time); err == nil {
+		from = t
+	} else if since != nil {
+		from = *since
+	}
+	if by := s.todos.filedBy(id, from.Add(-autoTurnWindow)); by != "" {
+		return true
+	}
+	name := autoName(a)
+	it := Todo{
+		Question: oneLine(name+" asks: "+res.Question, todoMaxQuestion),
+		Context: block(fmt.Sprintf("Suggested by the hub: **%s** has been idle for %s with this as its last message.\n\n%s\n\n*Keep it to make it a real item; Dismiss it if it is not waiting on you.*",
+			mdSafe(name), roundMinutes(now.Sub(*since)), quoteBlock(res.Block)), todoMaxContext),
+		Kind:      "decision",
+		Links:     []TodoLink{{Label: "Open " + oneLine(name, 60), URL: s.autoAgentLink(a)}},
+		Waiting:   &TodoAgent{ID: id, Name: a.Name, Instance: s.hostInstance(a.Host)},
+		CreatedBy: AutoCreator,
+		Source:    SourceQuestion,
+		AutoKey:   key,
+		Suggested: true,
+	}
+	out, err := s.todos.addAuto(it)
+	switch {
+	case err == nil:
+		log.Printf("auto to-do: suggested %s for %s (idle since %s)", out.ID, id, since.Format(time.RFC3339))
+	case errors.Is(err, errAutoCap), errors.Is(err, errAutoHuman), errors.Is(err, errAutoDup), errors.Is(err, errTodoFull):
+	default:
+		log.Printf("auto to-do: %s: %v", id, err)
+	}
+	return true
+}
+
+func quoteBlock(s string) string {
+	lines := strings.Split(strings.ReplaceAll(s, "\r", ""), "\n")
+	for i, l := range lines {
+		lines[i] = "> " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// filedBy returns the id of an item filed (not by the hub) by the agent at
+// or after from, "" when there is none. Items of any state count: a
+// coordinator that filed one and saw it answered has still said it.
+func (t *todoStore) filedBy(agentID string, from time.Time) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, e := range t.data.Items {
+		if e.CreatedByID == agentID && e.CreatedBy != AutoCreator && !e.CreatedAt.Before(from) {
+			return e.ID
+		}
+	}
+	return ""
+}
+
+// ---- keep and dismiss ----
+
+// autoStat counts what the user did with the hub's items, the tuning data
+// for the thresholds and the classifier: kept:<source>, dismissed:<source>
+// and dismissed:<source>:<why>. The counts outlive the items (which are
+// pruned after todoRetention).
+func (t *todoStore) countLocked(key string) {
+	if t.data.Auto == nil {
+		t.data.Auto = map[string]int{}
+	}
+	t.data.Auto[key]++
+}
+
+// keep turns a suggestion into a plain item. It reports errTodoClosed for
+// an item that is closed.
+func (t *todoStore) keep(id string) (Todo, error) {
+	return t.mutate(id, func(it *Todo) error {
+		if !it.active() {
+			return errTodoClosed
+		}
+		if it.Suggested {
+			it.Suggested = false
+			t.countLocked("kept:" + it.Source)
+		}
+		return nil
+	})
+}
+
+// dismissReasons are what the user may say about a suggestion.
+var dismissReasons = map[string]string{
+	"not_a_question":  "not a question for me",
+	"already_handled": "already handled",
+	"other":           "",
+}
+
+// dismiss drops a suggestion and counts it by source and reason.
+func (t *todoStore) dismiss(id, by, why string) (Todo, error) {
+	return t.mutate(id, func(it *Todo) error {
+		if !it.active() {
+			return errTodoClosed
+		}
+		now := t.now()
+		reason := "dismissed"
+		if txt := dismissReasons[why]; txt != "" {
+			reason += ": " + txt
+		}
+		it.State, it.ClosedBy, it.ClosedAt, it.DropReason, it.Notice = TodoDropped, by, &now, reason, nil
+		key := "dismissed:" + it.Source
+		t.countLocked(key)
+		if why != "" && why != "other" {
+			t.countLocked(key + ":" + why)
+		}
+		return nil
+	})
+}
+
+// autoStats copies the counters.
+func (t *todoStore) autoStats() map[string]int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[string]int, len(t.data.Auto))
+	for k, v := range t.data.Auto {
+		out[k] = v
+	}
+	return out
+}
+
+// handleTodoKeep: POST /api/todos/{id}/keep makes a suggestion a real item.
+func (s *Server) handleTodoKeep(w http.ResponseWriter, r *http.Request) {
+	if s.todoOff(w, r) || !s.mayManage(w, r) {
+		return
+	}
+	it, err := s.todos.keep(r.PathValue("id"))
+	if err != nil {
+		todoErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
+}
+
+// handleTodoDismiss: POST /api/todos/{id}/dismiss {reason} drops a
+// suggestion and counts it. reason: not_a_question, already_handled or other.
+func (s *Server) handleTodoDismiss(w http.ResponseWriter, r *http.Request) {
+	if s.todoOff(w, r) || !s.mayManage(w, r) {
+		return
+	}
+	var b struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength != 0 {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&b)
+	}
+	if _, ok := dismissReasons[b.Reason]; !ok && b.Reason != "" {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_reason", "message": "reason is not_a_question, already_handled or other"})
+		return
+	}
+	it, err := s.todos.dismiss(r.PathValue("id"), s.by(r, ""), b.Reason)
+	if err != nil {
+		todoErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
 }

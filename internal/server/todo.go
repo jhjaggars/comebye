@@ -143,6 +143,8 @@ func (t Todo) active() bool { return t.State == TodoOpen || t.State == TodoAnswe
 type todoFile struct {
 	Version int    `json:"version"`
 	Items   []Todo `json:"items"`
+	// Auto counts what the user did with the hub's own items (autotodo.go).
+	Auto map[string]int `json:"auto,omitempty"`
 }
 
 // todoStore keeps todo.json.
@@ -313,6 +315,10 @@ func (t *todoStore) answer(id string, a TodoAnswer) (Todo, error) {
 		}
 		a.At = t.now()
 		it.State, it.Answer, it.Notice = TodoAnswered, &a, nil
+		if it.Suggested { // answering it is keeping it
+			it.Suggested = false
+			t.countLocked("kept:" + it.Source)
+		}
 		if a.Via == "app" {
 			it.Notice = &TodoNotice{State: todoNoticePending, At: a.At}
 		}
@@ -722,7 +728,7 @@ func (s *Server) handleTodoList(w http.ResponseWriter, r *http.Request) {
 			answered++
 		}
 	}
-	writeJSON(w, map[string]any{"todos": s.todosForReader(r, s.todosGone(items)), "open": open, "answered": answered})
+	writeJSON(w, map[string]any{"todos": s.todosForReader(r, s.todosGone(items)), "open": open, "answered": answered, "auto": s.todos.autoStats()})
 }
 
 func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {

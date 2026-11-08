@@ -131,3 +131,30 @@ func TestReleaseFlagsAreRefusedWithoutAnAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAutoTodo(t *testing.T) {
+	ten, three := 10*time.Minute, 3*time.Minute
+	for _, c := range []struct {
+		spec     string
+		blocked  time.Duration
+		question time.Duration
+		bad      bool
+	}{
+		{"blocked,question", ten, three, false},
+		{"blocked", ten, 0, false},
+		{"question", 0, three, false},
+		{" Blocked , QUESTION ", ten, three, false},
+		{"off", 0, 0, false},
+		{"none", 0, 0, false},
+		{"", 0, 0, false},
+		{"blocked,sometimes", 0, 0, true},
+	} {
+		got, err := parseAutoTodo(c.spec, ten, three)
+		if (err != nil) != c.bad || (err == nil && (got.Blocked != c.blocked || got.Question != c.question)) {
+			t.Errorf("%q = %+v, %v", c.spec, got, err)
+		}
+	}
+	if _, err := parseAutoTodo("question", ten, 0); err == nil {
+		t.Error("a zero question delay is refused")
+	}
+}

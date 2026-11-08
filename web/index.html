@@ -1117,11 +1117,12 @@
     .td-who:empty { display: none; }
     .td-who:not(:empty)::after { content: " ·"; }
     .td-age { flex: none; }
-    .td-chips { flex: none; display: flex; gap: 6px; margin-left: auto; }
+    .td-chips { flex: none; display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
     .td-chip { padding: 1px 7px; border-radius: 7px; font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap; text-transform: none; letter-spacing: 0; }
     .td-chip.st-open { background: var(--chip-blue); color: var(--blue); }
     .td-chip.st-answered { background: var(--chip-green); color: var(--green); }
     .td-chip.td-src { background: var(--chip-yellow); color: var(--yellow); }
+    .td-chip.td-sug { background: var(--chip-blue); color: var(--blue); }
     .td-chip.td-draft { background: var(--chip-yellow); color: var(--yellow); }
     .td-chev { flex: none; width: 8px; height: 8px; margin: 0 4px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); }
     [aria-expanded="true"] > .td-chev { transform: translateY(-2px) rotate(45deg); }
