@@ -297,7 +297,7 @@ func main() {
 	var relCfg server.ReleaseConfig
 	switch {
 	case *releaseSim:
-		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, DryRun: true, Runner: server.SimulatedUpgrade{}}
+		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, Runner: server.SimulatedUpgrade{}}
 		log.Printf("release: SIMULATED (canned results, nothing runs)")
 	default:
 		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry}

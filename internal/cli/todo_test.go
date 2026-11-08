@@ -77,3 +77,38 @@ func TestTodoListShowAnswerCloseSubcommands(t *testing.T) {
 		t.Fatalf("bogus: %d", code)
 	}
 }
+
+func TestTodoAddRelease(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/todos"] = answer{code: 201, body: `{"todo":` + todoJSON + `}`}
+	sha := strings.Repeat("ab", 20)
+	if code := run(e, "todo", "add", "--kind", "release", "--version", "v0.5.9", "--commit", sha); code != 0 {
+		t.Fatalf("release add: %d %s", code, errb)
+	}
+	var body map[string]any
+	json.Unmarshal([]byte(f.find("POST", "/api/todos").body), &body)
+	rel, _ := body["release"].(map[string]any)
+	if body["kind"] != "release" || rel["version"] != "v0.5.9" || rel["commit"] != sha {
+		t.Fatalf("body = %v", body)
+	}
+	if !strings.Contains(out.String(), "Added t1") {
+		t.Fatalf("out = %s", out)
+	}
+	// A release needs both; the flags belong to nothing else; a ref that is no commit is refused here.
+	for _, args := range [][]string{
+		{"--kind", "release", "--version", "v0.5.9"},
+		{"--kind", "release", "--commit", sha},
+		{"q", "--version", "v0.5.9"},
+		{"--kind", "release", "--version", "v0.5.9", "--commit", "no-such-ref-anywhere"},
+	} {
+		if code := run(e, append([]string{"todo", "add"}, args...)...); code != 2 {
+			t.Errorf("%v = %d, want 2", args, code)
+		}
+	}
+	// show prints the release part.
+	f.answers["GET /api/todos/t9"] = answer{body: `{"todo":{"id":"t9","question":"Release v0.5.9?","kind":"release","state":"open","created_at":"2026-10-22T08:00:00Z","release":{"version":"v0.5.9","commit":"` + sha + `","state":"tagged","approved_by":"me@example.com","run_url":"https://run/1"}}}`}
+	out.Reset()
+	if code := run(e, "todo", "show", "t9"); code != 0 || !strings.Contains(out.String(), "Release v0.5.9 at "+sha+": tagged (approved by me@example.com)") || !strings.Contains(out.String(), "https://run/1") {
+		t.Fatalf("show: %d %s", code, out)
+	}
+}

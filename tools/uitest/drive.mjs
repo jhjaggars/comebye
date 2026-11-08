@@ -1056,6 +1056,75 @@ await check("pages: an open To do item uses the panel's width (code and tables w
   if (bad390.length) throw new Error("390: horizontal scroll inside the open To do item: " + bad390.join("; "));
   await drop(pid);
 });
+await check("release: a release to-do shows the commit, CI and changes; approving needs a confirm naming the version and commit; the hosts then offer Upgrade with its own confirm", async () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567", VER = "v9.9.9";
+  const post = (b) => page.evaluate(async (b) => (await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }).then((x) => x.json())).todo, b);
+  await desktopList(1280, "#/todo");
+  const t = await post({ question: "", kind: "release", no_wait: true, release: { version: VER, commit: SHA } });
+  if (!t || !t.release || t.release.state !== "pending") throw new Error("not raised: " + JSON.stringify(t));
+  try {
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  const item = `#p-todo .td-item[data-id="${t.id}"]`;
+  await page.waitForSelector(item);
+  await page.locator(item + " > .td-row").click();
+  const rel = item + " .rel";
+  await page.waitForSelector(rel + " .rel-facts dd .rel-chip.rel-ok");
+  const txt = async () => (await page.locator(rel).innerText());
+  let tx = await txt();
+  if (!tx.includes(SHA) || !tx.includes("v0.0.0") || !/CI passed/.test(tx) || !/Changes since v0\.0\.0 \(2\)/.test(tx)) throw new Error("facts missing: " + tx);
+  if (await page.locator(item + " .td-text, " + item + " .td-answer-btn").count()) throw new Error("a release item offers a free-text answer");
+  // The confirm step names the version and the whole commit, and Cancel backs out.
+  await page.locator(rel + " .rel-approve").click();
+  const conf = rel + " .rel-confirm";
+  await page.waitForSelector(conf);
+  const ct = await page.locator(conf).innerText();
+  if (!ct.includes(VER) || !ct.includes(SHA)) throw new Error("confirm does not name the version and commit: " + ct);
+  await page.locator(conf + " [data-rel=cancel]").click();
+  await page.waitForSelector(conf, { state: "detached" });
+  // Without the page's token the server refuses.
+  const noTok = await page.evaluate(async ([id, v, c]) => (await fetch(`/api/release/${id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: v, commit: c }) })).status, [t.id, VER, SHA]);
+  if (noTok !== 403) throw new Error("approve without the CSRF token = " + noTok);
+  if ((await page.evaluate((id) => todos.items.find((x) => x.id === id).release.state, t.id)) !== "pending") throw new Error("state moved without a confirm");
+  // Approve, confirm.
+  await page.locator(rel + " .rel-approve").click();
+  await page.locator(conf + " .rel-go").click();
+  await page.waitForSelector(rel + " .rel-s-tagged", { timeout: 15000 });
+  await page.waitForSelector(rel + " .rel-hosts .rel-host .rel-up", { timeout: 15000 });
+  tx = await txt();
+  if (!/build passed/.test(tx) || !/uitest/.test(tx)) throw new Error("tagged view: " + tx);
+  // Upgrade the one host: its own confirm names the host and version.
+  await page.locator(rel + " .rel-host .rel-up").click();
+  await page.waitForSelector(conf);
+  const ut = await page.locator(conf).innerText();
+  if (!ut.includes("uitest") || !ut.includes(VER)) throw new Error("upgrade confirm: " + ut);
+  await page.locator(conf + " .rel-go").click();
+  await page.waitForFunction((s) => /dry run v9\.9\.9/.test(document.querySelector(s).innerText), rel, { timeout: 15000 });
+  // The record says who did what.
+  await page.locator(rel + " .rel-audit summary").click();
+  const au = await page.locator(rel + " .rel-audit").innerText();
+  for (const a of ["release.approve", "release.tagged", "upgrade.request"]) if (!au.includes(a)) throw new Error("record lacks " + a + ": " + au);
+  await page.screenshot({ path: `${out}/release-1280.png` });
+  // Nothing in the item scrolls sideways, here or on the phone.
+  const hscroll = (sel) => page.evaluate((sel) => [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth), sel);
+  let bad = await hscroll(item);
+  if (bad.length) throw new Error("1280: sideways scroll: " + bad.join("; "));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent");
+  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+  const pitem = `#todo .td-item[data-id="${t.id}"]`;
+  await page.waitForSelector(pitem);
+  if (!(await page.locator(pitem + ".open").count())) await page.locator(pitem + " > .td-row").click();
+  await page.waitForSelector(pitem + " .rel .rel-host");
+  await page.locator(pitem + " .rel .rel-rb, " + pitem + " .rel .rel-up").first().click().catch(() => {});
+  bad = await hscroll(pitem);
+  const o = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+  if (bad.length || o[0] > o[1]) throw new Error("390: sideways scroll: " + bad.join("; ") + " " + o);
+  await page.screenshot({ path: `${out}/release-390.png` });
+  } finally {
+    await page.evaluate((id) => fetch("/api/todos/" + id + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), t.id).catch(() => {});
+  }
+});
 await check("pages: the rows above the list open the pages; the open one is marked; leaving an agent clears presence", async () => {
   await desktopList(1280);
   await page.waitForSelector("#nav .nv");

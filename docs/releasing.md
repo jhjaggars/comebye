@@ -22,3 +22,40 @@ tag is pushed. It then prints the Release workflow run URL.
 `--dry-run` does every check and prints what it would do; `--yes` skips the
 question. It needs `git` and an authenticated `gh`, and runs from any checkout
 or worktree of the repository.
+
+## From the app
+
+A coordinator that thinks a commit is ready raises a release item instead of
+asking you to run the script:
+
+```
+comebye todo add --kind release --version v0.5.9 --commit <ref>   # the ref is resolved to the full id
+```
+
+The To do page shows the item with what matters, taken from the hub's own
+checkout and GitHub rather than from the item's text: the full commit id, the
+last tag, the CI result of that commit, and the commits since the last tag.
+**Approve release** asks you to confirm, naming the version and the commit.
+The server then runs this same script (`tools/release/tag VERSION COMMIT
+--yes`; its text is embedded in the binary) in the checkout named by
+`-release-repo`, as the user the server runs as, with that user's git and `gh`
+credentials. It refuses, with the script's reason, unless the commit is on
+`origin/main`, its CI run passed, the version is newer than the last tag and
+the tag does not exist; it checks again at the moment of the click. The item
+then shows the tag, the Release workflow run and its state.
+
+When the release build has passed, each host in the item gets **Upgrade**
+(a host needs `-release-upgrade`; a peer is asked by the hub). It runs
+`comebye upgrade --version vX.Y.Z` on that host, with the same checksum and
+smoke checks, and keeps `comebye.prev`; the result and the host's version show
+in the item, and **Roll back** runs `comebye upgrade --rollback`. The upgrade
+runs as a transient `comebye-upgrade-*` user unit, because it restarts the
+service that started it; its verdict is kept in
+`<state-dir>/release/upgrade.json`.
+
+Every approval, refusal, tag, upgrade request and result is written to the
+ledger's audit log (who, what, when, how it went) and to the journal as
+`audit: ...` lines. `-release-dry-run` runs all the checks and changes
+nothing. The script's `--check` mode (key=value lines, no changes) is what the
+page reads; run it by hand to see what the page sees. Who can do this, and why
+an agent cannot, is in [Security](security.md#releasing-and-upgrading-from-the-app).

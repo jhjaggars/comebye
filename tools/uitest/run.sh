@@ -43,7 +43,7 @@ for _ in $(seq 50); do [ -S "$tmp/h.sock" ] && break; sleep 0.1; done
 "$tmp/fake-herdr" -recall-fixture "$tmp/recall.db" 2>"$out/recall-fixture.log"
 
 "$tmp/comebye" -sock "$tmp/h.sock" -addr "127.0.0.1:$port" -insecure-no-auth -push=false \
-  -state-dir "$tmp/state" -host-name uitest -recall-index "$tmp/recall.db" >"$out/comebye.log" 2>&1 &
+  -state-dir "$tmp/state" -host-name uitest -recall-index "$tmp/recall.db" -release-simulate >"$out/comebye.log" 2>&1 &
 for _ in $(seq 50); do curl -sf "http://127.0.0.1:$port/api/agents" >/dev/null && break; sleep 0.1; done
 
 echo "app: $app ($(git -C "$app" log -1 --format='%h %s'))"

@@ -1097,6 +1097,46 @@
     .td-g .td-chev { margin-left: auto; }
     .td-none { flex: none; }
     /* An unsent answer whose item was answered or closed elsewhere: kept until discarded. */
+    .td-release .td-kind { color: var(--green); }
+    .rel { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; min-width: 0; }
+    .rel-h { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    .rel-state { padding: 1px 7px; border-radius: 7px; font-size: 11px; font-weight: 600; background: var(--chip-blue); color: var(--blue); }
+    .rel-s-tagged { background: var(--chip-green); color: var(--green); }
+    .rel-s-failed { background: var(--chip-red, var(--chip-yellow)); color: var(--red, var(--yellow)); }
+    .rel-s-tagging { background: var(--chip-yellow); color: var(--yellow); }
+    .rel-refresh { margin-left: auto; border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 8px; width: 30px; height: 30px; font: inherit; cursor: pointer; }
+    .rel-refresh:disabled { opacity: 0.5; cursor: default; }
+    .rel-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13.5px; }
+    .rel-facts dt { color: var(--muted); }
+    .rel-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .rel-sha, .rel-confirm code, .rel-note code { font: 0.87em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); border-radius: 4px; padding: 1px 4px; overflow-wrap: anywhere; word-break: break-all; }
+    .rel-chip { display: inline-block; padding: 1px 8px; border-radius: 7px; font-size: 12px; font-weight: 600; background: var(--panel2); color: var(--muted); }
+    .rel-chip a { color: inherit; }
+    .rel-chip.rel-ok { background: var(--chip-green); color: var(--green); }
+    .rel-chip.rel-wait { background: var(--chip-yellow); color: var(--yellow); }
+    .rel-chip.rel-bad { background: var(--chip-red, var(--chip-yellow)); color: var(--red, var(--yellow)); }
+    .rel-note { color: var(--muted); font-size: 13px; }
+    .rel-dry { color: var(--yellow); }
+    .rel-block { padding: 8px 10px; border-radius: 10px; font-size: 13.5px; background: var(--chip-red, var(--chip-yellow)); border: 1px solid color-mix(in srgb, var(--red, var(--yellow)) 40%, var(--border)); overflow-wrap: anywhere; }
+    .rel-changes { font-size: 13px; }
+    .rel-changes summary { cursor: pointer; color: var(--muted); }
+    .rel-changes ul { margin: 4px 0 0; padding-left: 18px; }
+    .rel-changes li { overflow-wrap: anywhere; }
+    .rel-changes pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; font-size: 12px; }
+    .rel-sub { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-top: 4px; }
+    .rel-hosts { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; }
+    .rel-host { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 7px 10px; font-size: 13.5px; }
+    .rel-host + .rel-host { border-top: 1px solid var(--border); }
+    .rel-hn { font-weight: 600; }
+    .rel-hv { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .rel-hs { flex: 1 1 14ch; min-width: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    .rel-ha { margin-left: auto; }
+    .rel-confirm { padding: 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--orange) 50%, var(--border)); background: color-mix(in srgb, var(--orange) 8%, var(--panel)); font-size: 13.5px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+    .rel button:not(.rel-refresh) { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; min-height: 32px; }
+    .rel button:disabled { opacity: 0.5; cursor: default; }
+    .rel .rel-approve, .rel .rel-go, .rel .rel-up { border-color: var(--blue); color: var(--blue); }
+    .rel .rel-go { background: color-mix(in srgb, var(--blue) 12%, var(--panel)); font-weight: 600; }
+    .rel button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
     .td-kept { flex: none; margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip-yellow); border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); font-size: 13.5px; }
     .td-kept-h { color: var(--text); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
     .td-kept-t {

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+	"os/exec"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -49,6 +50,14 @@ type apiTodo struct {
 	Notice     *struct {
 		State string `json:"state"`
 	} `json:"notice"`
+	Release *struct {
+		Version    string `json:"version"`
+		Commit     string `json:"commit"`
+		State      string `json:"state"`
+		ApprovedBy string `json:"approved_by"`
+		RunURL     string `json:"run_url"`
+		Error      string `json:"error"`
+	} `json:"release"`
 }
 
 func (t apiTodo) waiter() string {
@@ -70,7 +79,9 @@ var linkLabelRE = regexp.MustCompile(`^([^=]{1,40})=(https?://.*)$`)
 func cmdTodo(e *Env, args []string) error {
 	fs := flag.NewFlagSet("todo", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	kind := fs.String("kind", "", "add: decision (default), action (the user has to do something) or followup")
+	kind := fs.String("kind", "", "add: decision (default), action (the user has to do something), followup, or release (coordinators: ask the user to approve a release in the app; needs --version and --commit)")
+	version := fs.String("version", "", "add --kind release: the tag to create, vMAJOR.MINOR.PATCH")
+	commit := fs.String("commit", "", "add --kind release: the commit to tag (resolved here with git rev-parse, so run it in the checkout)")
 	ctxFile := fs.String("context", "", "add: the context as markdown: a file, or - for stdin")
 	waiting := fs.String("waiting", "", "add: the agent waiting on this item (default: you, unless you are a coordinator)")
 	noWait := fs.Bool("no-wait", false, "add: nobody is waiting on this item")
@@ -100,13 +111,32 @@ func cmdTodo(e *Env, args []string) error {
 	}
 	switch sub {
 	case "add":
-		if len(pos) != 1 {
+		isRelease := *kind == "release"
+		if len(pos) != 1 && !(isRelease && len(pos) == 0) {
 			return usageErr(`want todo add "QUESTION" [--kind K] [--context FILE|-] [--link URL] [--waiting AGENT | --no-wait]`)
 		}
 		if *waiting != "" && *noWait {
 			return usageErr("--waiting and --no-wait exclude each other")
 		}
-		body := map[string]any{"question": pos[0], "kind": *kind, "no_wait": *noWait}
+		question := ""
+		if len(pos) == 1 {
+			question = pos[0]
+		}
+		body := map[string]any{"question": question, "kind": *kind, "no_wait": *noWait}
+		switch {
+		case isRelease:
+			if *version == "" || *commit == "" {
+				return usageErr("a release needs --version vX.Y.Z and --commit REF")
+			}
+			sha, err := resolveCommit(*commit)
+			if err != nil {
+				return err
+			}
+			body["release"] = map[string]string{"version": *version, "commit": sha}
+			// The user approves it in the app; nothing here tags anything.
+		case *version != "" || *commit != "":
+			return usageErr("--version and --commit go with --kind release")
+		}
 		if *ctxFile != "" {
 			text, err := readInput(e, *ctxFile, 16<<10)
 			if err != nil {
@@ -231,6 +261,19 @@ func cmdTodo(e *Env, args []string) error {
 		for _, l := range t.Links {
 			fmt.Fprintf(e.Stdout, "Link: %s %s %s\n", l.Label, l.URL, strings.TrimSpace("handoff "+l.Handoff))
 		}
+		if rl := t.Release; rl != nil {
+			fmt.Fprintf(e.Stdout, "\nRelease %s at %s: %s", rl.Version, rl.Commit, rl.State)
+			if rl.ApprovedBy != "" {
+				fmt.Fprintf(e.Stdout, " (approved by %s)", rl.ApprovedBy)
+			}
+			fmt.Fprintln(e.Stdout)
+			if rl.RunURL != "" {
+				fmt.Fprintf(e.Stdout, "Release workflow: %s\n", rl.RunURL)
+			}
+			if rl.Error != "" {
+				fmt.Fprintf(e.Stdout, "Last error: %s\n", rl.Error)
+			}
+		}
 		if a := t.Answer; a != nil {
 			fmt.Fprintf(e.Stdout, "\nAnswer (%s, %s, %s):\n%s\n", a.By, a.Via, ago(e, a.At), a.Text)
 		}
@@ -277,4 +320,19 @@ func cmdTodo(e *Env, args []string) error {
 		return nil
 	}
 	return usageErr("unknown todo command %q: want add, list, show, answer, done or drop", sub)
+}
+
+var fullSHARE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// resolveCommit turns a ref into the full commit id the server wants.
+func resolveCommit(ref string) (string, error) {
+	if fullSHARE.MatchString(ref) {
+		return ref, nil
+	}
+	out, err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}").Output()
+	sha := strings.TrimSpace(string(out))
+	if err != nil || !fullSHARE.MatchString(sha) {
+		return "", usageErr("--commit %q is not a commit here: run this in the checkout, or pass the full 40-character id", ref)
+	}
+	return sha, nil
 }
