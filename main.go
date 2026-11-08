@@ -99,6 +99,8 @@ func main() {
 		releaseUp     = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
 		releaseDry    = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
 		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
+		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after); off for none")
+		autoBlocked   = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
@@ -118,6 +120,10 @@ func main() {
 	}
 	if *doneDigest < 0 || *blockedDelay < 0 {
 		log.Fatalf("-notify-done-digest and -notify-blocked-delay must not be negative")
+	}
+	autoCfg, err := parseAutoTodo(*autoTodo, *autoBlocked)
+	if err != nil {
+		log.Fatalf("-auto-todo: %v", err)
 	}
 	logins := splitLogins(*tsAllow)
 	if len(logins) == 0 && !*noAuth {
@@ -338,6 +344,7 @@ func main() {
 		ReadLines:      1000,
 		Push:           pushSvc,
 		Presence:       presence,
+		AutoTodo:       autoCfg,
 		Fleet:          fl,
 		// Images sent from the app, for agents on this host to read.
 		UploadDir:   filepath.Join(expandHome(*stateDir), "uploads"),
@@ -363,6 +370,7 @@ func main() {
 		go announceToHub(upstream, localAPI, *hostName, *announceURL)
 	}
 	go srv.RunLedger(context.Background())
+	go srv.RunAutoTodo(context.Background())
 	go srv.RunRepoHealth(context.Background())
 	go srv.RunBriefSchedule(context.Background())
 
@@ -629,4 +637,22 @@ func releaseFlagError(noAuth bool, repo string, upgrade, simulate bool, addr str
 		return errors.New("-release-simulate is for demos and tests: not with -release-repo or -release-upgrade, and only on a loopback address")
 	}
 	return nil
+}
+
+// parseAutoTodo reads -auto-todo: a comma list of detectors, or off.
+func parseAutoTodo(spec string, blockedAfter time.Duration) (server.AutoTodoConfig, error) {
+	var cfg server.AutoTodoConfig
+	for _, k := range strings.Split(spec, ",") {
+		switch k = strings.ToLower(strings.TrimSpace(k)); k {
+		case "", "off", "none":
+		case "blocked":
+			if blockedAfter <= 0 {
+				return cfg, fmt.Errorf("-auto-todo-blocked-after must be positive")
+			}
+			cfg.Blocked = blockedAfter
+		default:
+			return cfg, fmt.Errorf("unknown detector %q (want blocked, or off)", k)
+		}
+	}
+	return cfg, nil
 }

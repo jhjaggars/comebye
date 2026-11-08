@@ -1054,7 +1054,13 @@ const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight
   openId: null, lastId: null, nxt: null, ansOpen: false, seen: new Map(), order: [], follow: false,
   drafts: loadTodoDrafts(), pend: new Overlay() };
 
-function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") ? u : ""; }
+function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/agent\/[^\s]+$/.test(u || "") ? u : ""; }
+// The provenance chip: items the hub filed itself say so (and why).
+const TODO_SOURCE = { "hub-blocked": "auto · blocked" };
+function todoSrcChip(t) {
+  const label = TODO_SOURCE[t.source];
+  return label ? `<span class="td-chip td-src" title="Filed by the hub, not by an agent or a person">${esc(label)}</span>` : "";
+}
 
 // drafts: item id -> { text, q }; q is the question, for a draft whose item is gone.
 function loadTodoDrafts() {
@@ -1220,7 +1226,7 @@ function todoItemHtml(t, pfx) {
   const ans = t.state !== "open";
   const draft = todoDraft(t.id).trim() !== "";
   const rid = `${pfx}-row-${t.id}`, pid = `${pfx}-panel-${t.id}`;
-  const chips = `<span class="td-chip td-draft"${draft ? "" : " hidden"}>draft</span>` +
+  const chips = `<span class="td-chip td-draft"${draft ? "" : " hidden"}>draft</span>` + todoSrcChip(t) +
     (ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`) +
     (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "");
   let panel = "";
@@ -1230,7 +1236,7 @@ function todoItemHtml(t, pfx) {
       const href = todoLinkHref(l.url);
       const label = l.label || l.url || `handoff ${l.handoff}`;
       return href
-        ? `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`
+        ? (href.startsWith("/#/") ? `<a href="${escAttr(href)}">${esc(label)}</a>` : `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`)
         : `<span>${esc(l.handoff ? `handoff ${l.handoff}` : label)}</span>`;
     });
     const a = t.answer;
@@ -1246,7 +1252,7 @@ function todoItemHtml(t, pfx) {
         ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
         <div><span class="td-sl">Item</span><span class="td-sv"><code>${esc(t.id)}</code></span></div>
         ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;
-    const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
+    const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
     const isRel = t.kind === "release" && !!t.release;
     const after = ans || isRel ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;

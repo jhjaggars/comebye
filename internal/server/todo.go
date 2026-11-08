@@ -129,6 +129,13 @@ type Todo struct {
 	// Release is set on a kind "release" item: the version and commit a
 	// coordinator proposes, and what the user's approval did (release.go).
 	Release *TodoRelease `json:"release,omitempty"`
+	// Source says how the item came to be: "agent" (an agent added it),
+	// "hub-blocked" (the hub filed it, autotodo.go), or empty (a person).
+	// AutoKey is the hub's dedupe key; Suggested marks a guess the user has
+	// yet to keep.
+	Source    string `json:"source,omitempty"`
+	AutoKey   string `json:"auto_key,omitempty"`
+	Suggested bool   `json:"suggested,omitempty"`
 }
 
 func (t Todo) active() bool { return t.State == TodoOpen || t.State == TodoAnswered }
@@ -671,6 +678,9 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 	if c.agent() && c.pane != "" {
 		it.CreatedByID = s.replyID(c)
 	}
+	if c.agent() {
+		it.Source = SourceAgent
+	}
 	out, dup, err := s.todos.add(it)
 	if err != nil {
 		todoErr(w, err)
@@ -712,7 +722,7 @@ func (s *Server) handleTodoList(w http.ResponseWriter, r *http.Request) {
 			answered++
 		}
 	}
-	writeJSON(w, map[string]any{"todos": s.todosGone(items), "open": open, "answered": answered})
+	writeJSON(w, map[string]any{"todos": s.todosForReader(r, s.todosGone(items)), "open": open, "answered": answered})
 }
 
 func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
@@ -724,7 +734,11 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		todoErr(w, errTodoNotFound)
 		return
 	}
-	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
+	if s.autoShownToAgent(it) || !callerOf(r).agent() {
+		writeJSON(w, map[string]any{"todo": s.todoGone(it)})
+		return
+	}
+	writeJSON(w, map[string]any{"todo": s.todoGone(autoStub(it))})
 }
 
 // handleTodoAnswer: POST /api/todos/{id}/answer {text}. The user's answer

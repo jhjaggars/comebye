@@ -101,6 +101,8 @@ type Config struct {
 	// Upstream, on a peer, is its hub: the agent role's requests are
 	// forwarded there, and the peer keeps no ledger of its own.
 	Upstream *fleet.Upstream
+	// AutoTodo turns on the to-do items the hub files itself (autotodo.go).
+	AutoTodo AutoTodoConfig
 	// Release turns on the release and upgrade buttons (release.go).
 	Release ReleaseConfig
 	// AgentToken is the local agent token (see agenttoken); requests that
@@ -168,6 +170,7 @@ type Server struct {
 	brief      *briefStore
 	pq         *promptQueue
 	todos      *todoStore
+	auto       *autoTodo
 	rel        *relState
 	briefSched *briefSchedStore
 	roles      *roleStore
@@ -239,6 +242,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				log.Printf("to-do list: %v (starting empty)", err)
 				s.todos = newTodoStore("") // in memory: never overwrite the unreadable file
 			}
+			s.initAutoTodo(cfg.AutoTodo)
 			s.endStaleAsks()
 			s.trackInstances()
 			s.recoverTagging()
