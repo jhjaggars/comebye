@@ -101,6 +101,8 @@ type Config struct {
 	// Upstream, on a peer, is its hub: the agent role's requests are
 	// forwarded there, and the peer keeps no ledger of its own.
 	Upstream *fleet.Upstream
+	// Release turns on the release and upgrade buttons (release.go).
+	Release ReleaseConfig
 	// AgentToken is the local agent token (see agenttoken); requests that
 	// carry it get the agent role. Empty disables the agent role.
 	AgentToken string
@@ -166,6 +168,7 @@ type Server struct {
 	brief      *briefStore
 	pq         *promptQueue
 	todos      *todoStore
+	rel        *relState
 	briefSched *briefSchedStore
 	roles      *roleStore
 	// kinds remembers the agent kinds that worked on this host (nil
@@ -208,6 +211,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait}
 	s.typing = newTypingTracker()
+	s.rel = newRelState()
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
@@ -334,6 +338,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/todos/{id}/answer", s.authAgent(s.handleTodoAnswer))
 	s.mux.HandleFunc("POST /api/todos/{id}/done", s.authAgent(s.handleTodoDone))
 	s.mux.HandleFunc("POST /api/todos/{id}/drop", s.authAgent(s.handleTodoDrop))
+	// Releasing and upgrading: the user role only (s.auth), never an agent
+	// level; TestReleaseRoutesAreUserOnly keeps it so.
+	s.mux.HandleFunc("GET /api/release/upgrade", s.auth(s.handleUpgradeStatus))
+	s.mux.HandleFunc("POST /api/release/upgrade", s.auth(s.handleUpgradeLocal))
+	s.mux.HandleFunc("GET /api/release/{id}", s.auth(s.handleReleaseView))
+	s.mux.HandleFunc("POST /api/release/{id}/approve", s.auth(s.handleReleaseApprove))
+	s.mux.HandleFunc("POST /api/hosts/{host}/release/upgrade", s.auth(s.handleHostUpgrade))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("POST /api/sweep", s.authAgent(s.handleSweep))

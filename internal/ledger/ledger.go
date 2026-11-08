@@ -242,10 +242,11 @@ func copyMark(m *Mark) *Mark {
 
 // file is the on-disk format.
 type file struct {
-	Version int      `json:"version"`
-	Entries []*Entry `json:"entries"`
-	Marks   []*Mark  `json:"marks"`
-	Plans   []*Plan  `json:"plans,omitempty"`
+	Version int           `json:"version"`
+	Entries []*Entry      `json:"entries"`
+	Marks   []*Mark       `json:"marks"`
+	Plans   []*Plan       `json:"plans,omitempty"`
+	Audit   []*AuditEvent `json:"audit,omitempty"`
 }
 
 // Store is the ledger. Methods are safe for concurrent use and return

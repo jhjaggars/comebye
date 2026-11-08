@@ -67,6 +67,12 @@ var hostProxyOps = map[string]struct {
 	"checks": {proxyOp{method: http.MethodGet, query: []string{"path", "branch", "base", "detail", "diff", "within", "repo", "prev", "hints"}, timeout: 45 * time.Second}, []string{"api", "checks"}, false},
 	"worker": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
 	"remove": {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
+	// The app's upgrade button: the hub asks a peer to upgrade itself, or
+	// for its last upgrade's record, on the user's click (never a browser's
+	// own forward, and not callable by an agent: only the hub's user-only
+	// handler makes these calls).
+	"release-upgrade": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 20 * time.Second}, []string{"api", "release", "upgrade"}, true},
+	"release-status":  {proxyOp{method: http.MethodGet, timeout: 10 * time.Second}, []string{"api", "release", "upgrade"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tag a comebye release and push just that tag, which starts the Release workflow.
 #
-#   tools/release/tag VERSION [COMMIT] [--yes] [--dry-run]
+#   tools/release/tag VERSION [COMMIT] [--yes] [--dry-run] [--check]
 #
 #   tools/release/tag v0.5.9                  # tip of origin/main
 #   tools/release/tag v0.5.9 6acddb6 --dry-run
@@ -9,12 +9,27 @@
 # Checks first (and refuses): VERSION is vMAJOR.MINOR.PATCH and newer than the
 # latest v* tag, the tag exists nowhere, COMMIT is on origin/main, CI passed on
 # COMMIT. Works from any checkout or worktree of the repository.
+#
+# --check changes nothing and prints key=value lines for the Comebye app (the
+# server runs this same script for its release page): commit, short, subject,
+# previous, ci_id, ci_status, ci_conclusion, ci_url, change (one per commit),
+# then ok=1, or problem=<why> in place of ok (the exit status is 0 either way).
+# COMEBYE_RELEASE_REPO names the checkout to work in (the server sets it; it
+# also runs the script from its own copy).
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [ -n "${COMEBYE_RELEASE_REPO:-}" ]; then
+  root="$COMEBYE_RELEASE_REPO"
+else
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
 cd "$root"
 
-die() { echo "tag: $*" >&2; exit 1; }
+check=0
+die() {
+  if [ "$check" = 1 ]; then echo "problem=$*"; exit 0; fi
+  echo "tag: $*" >&2; exit 1
+}
 usage() { sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 yes=0 dry=0 args=()
@@ -22,6 +37,7 @@ for a in "$@"; do
   case "$a" in
     --yes|-y) yes=1 ;;
     --dry-run|-n) dry=1 ;;
+    --check) check=1 ;;
     -h|--help) usage 0 ;;
     -*) echo "tag: unknown option $a" >&2; usage ;;
     *) args+=("$a") ;;
@@ -39,6 +55,11 @@ git fetch origin --tags --quiet || die "git fetch origin failed"
 
 sha="$(git rev-parse --verify --quiet "$want^{commit}")" || die "no such commit: $want"
 short="$(git rev-parse --short "$sha")"
+if [ "$check" = 1 ]; then
+  echo "commit=$sha"
+  echo "short=$short"
+  echo "subject=$(git log -1 --format=%s "$sha" | tr -d '\n\r')"
+fi
 
 if git rev-parse --verify --quiet "refs/tags/$version" >/dev/null; then
   die "tag $version already exists locally"
@@ -53,6 +74,7 @@ if [ -n "$prev" ]; then
   [ "$top" = "$version" ] || die "$version is not greater than the latest tag $prev"
 fi
 
+[ "$check" = 1 ] && echo "previous=$prev"
 git merge-base --is-ancestor "$sha" origin/main ||
   die "commit $short is not on origin/main"
 
@@ -63,10 +85,19 @@ runs="$(gh run list --commit "$sha" --workflow CI --limit 1 \
   die "could not list CI runs (is gh authenticated?)"
 [ -n "$runs" ] || die "no CI run found for $short; wait for CI to start or push the commit"
 read -r ci_id ci_status ci_conclusion ci_url <<<"$runs"
+if [ "$check" = 1 ]; then
+  echo "ci_id=$ci_id"; echo "ci_status=$ci_status"; echo "ci_conclusion=$ci_conclusion"; echo "ci_url=$ci_url"
+fi
 if [ "$ci_status" != completed ]; then
   die "CI for $short is still $ci_status: $ci_url"
 elif [ "$ci_conclusion" != success ]; then
   die "CI for $short finished with $ci_conclusion: $ci_url"
+fi
+
+if [ "$check" = 1 ]; then
+  git log --format='change=%h %s' --max-count=200 "${prev:+$prev..}$sha" | tr -d '\r'
+  echo "ok=1"
+  exit 0
 fi
 
 echo "Commit:   $short $(git log -1 --format=%s "$sha")"

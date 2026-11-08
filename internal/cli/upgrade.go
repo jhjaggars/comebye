@@ -25,6 +25,7 @@ func cmdUpgrade(e *Env, args []string) error {
 	fs.StringVar(&o.Restart, "restart", e.Getenv("COMEBYE_UPGRADE_RESTART"), "how to restart: systemd (the user unit), exit (SIGTERM to the running server; a supervisor such as a sandbox's init loop starts it again) or auto (default: systemd when the unit exists, else exit)")
 	fs.IntVar(&o.PID, "pid", 0, "with --restart exit: the server's pid, when more than one comebye server runs as this user")
 	fs.StringVar(&o.Releases, "releases", e.Getenv("COMEBYE_RELEASES_URL"), "release base URL (COMEBYE_RELEASES_URL; default the GitHub releases)")
+	record := fs.String("record", "", "write the verdict to this record file (the app's upgrade button uses it)")
 	bin := fs.String("bin", "", "the installed binary (default ~/.local/bin/comebye)")
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -47,5 +48,8 @@ func cmdUpgrade(e *Env, args []string) error {
 	o.HTTP = e.HTTP
 	o.Out, o.Err = e.Stdout, e.Stderr
 	o.Sleep = e.Sleep
+	if *record != "" {
+		return upgrade.RunRecorded(o, *record)
+	}
 	return upgrade.Run(o)
 }

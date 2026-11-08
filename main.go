@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
 	"github.com/jhjaggars/comebye/internal/archive"
@@ -27,10 +28,17 @@ import (
 	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/push"
+	"github.com/jhjaggars/comebye/internal/release"
 	"github.com/jhjaggars/comebye/internal/server"
 	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/tsauth"
 )
+
+// releaseScript is the release tagging script a person runs by hand
+// (docs/releasing.md); the server runs this same text, not a checkout's copy.
+//
+//go:embed tools/release/tag
+var releaseScript string
 
 func main() {
 	// "comebye <subcommand> ...": the coordinator CLI, not the server.
@@ -85,6 +93,10 @@ func main() {
 		archiveEnc    = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir or -archive-s3")
 		archiveRcpt   = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
 		recallIndex   = flag.String("recall-index", getenv("COMEBYE_RECALL_INDEX"), "the transcript index the app searches, read-only (default ~/.local/state/comebye/recall/index.db; see `comebye archive index`)")
+		releaseRepo   = flag.String("release-repo", getenv("COMEBYE_RELEASE_REPO"), "on the hub: the comebye checkout the app's \"Approve release\" button tags from, with the server's own git and gh credentials (see docs/security.md); empty: the button is off")
+		releaseUp     = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
+		releaseDry    = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
+		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
@@ -282,7 +294,32 @@ func main() {
 		}
 		log.Printf("archive: final transcript copies go to %s", *archiveDir+*archiveS3)
 	}
+	var relCfg server.ReleaseConfig
+	switch {
+	case *releaseSim:
+		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, DryRun: true, Runner: server.SimulatedUpgrade{}}
+		log.Printf("release: SIMULATED (canned results, nothing runs)")
+	default:
+		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry}
+		if r := strings.TrimSpace(*releaseRepo); r != "" {
+			repo := expandHome(r)
+			if st, err := os.Stat(filepath.Join(repo, ".git")); err != nil || st == nil {
+				log.Fatalf("-release-repo %q: not a git checkout", repo)
+			}
+			relCfg.Tool = &release.Script{Source: releaseScript, Repo: repo}
+			log.Printf("release: the app may tag releases from %s (dry run %v)", repo, *releaseDry)
+		}
+		if *releaseUp {
+			log.Printf("release: the app may upgrade this host (dry run %v)", *releaseDry)
+		}
+	}
+	if relCfg.Upgrade {
+		if exe, err := os.Executable(); err == nil {
+			relCfg.Bin = exe
+		}
+	}
 	srv := server.New(server.Config{
+		Release:        relCfg,
 		Version:        buildVersion(),
 		Archive:        arch,
 		ArchiveSources: acfg.Sources(),

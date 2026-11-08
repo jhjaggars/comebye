@@ -54,7 +54,7 @@ const (
 	todoNoticeExpired = "expired"
 )
 
-var todoKinds = map[string]bool{"decision": true, "action": true, "followup": true}
+var todoKinds = map[string]bool{"decision": true, "action": true, "followup": true, "release": true}
 
 // TodoLink points at something the item is about: a URL (PR, artifact,
 // report) and/or a handoff entry.
@@ -111,6 +111,9 @@ type Todo struct {
 	ClosedAt    *time.Time  `json:"closed_at,omitempty"`
 	DropReason  string      `json:"drop_reason,omitempty"`
 	Notice      *TodoNotice `json:"notice,omitempty"`
+	// Release is set on a kind "release" item: the version and commit a
+	// coordinator proposes, and what the user's approval did (release.go).
+	Release *TodoRelease `json:"release,omitempty"`
 }
 
 func (t Todo) active() bool { return t.State == TodoOpen || t.State == TodoAnswered }
@@ -492,6 +495,11 @@ type todoAddBody struct {
 	Links    []TodoLink `json:"links"`
 	Waiting  string     `json:"waiting"` // fleet id of the agent waiting
 	NoWait   bool       `json:"no_wait"`
+	// Release is required for kind "release" and refused for any other.
+	Release *struct {
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+	} `json:"release"`
 }
 
 // handleTodoAdd: POST /api/todos. Any caller may add. An agent that is not
@@ -508,6 +516,10 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 	bad := func(code, msg string) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": code, "message": msg})
 	}
+	rel, ok := s.releaseFromAdd(w, r, &b)
+	if !ok {
+		return
+	}
 	q := oneLine(b.Question, todoMaxQuestion)
 	if q == "" {
 		bad("bad_question", "a question is required")
@@ -517,7 +529,7 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		b.Kind = "decision"
 	}
 	if !todoKinds[b.Kind] {
-		bad("bad_kind", "kind is decision, action or followup")
+		bad("bad_kind", "kind is decision, action, followup or release")
 		return
 	}
 	if len(b.Context) > todoMaxContext*2 {
@@ -530,7 +542,7 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := callerOf(r)
-	it := Todo{Question: q, Context: block(b.Context, todoMaxContext), Kind: b.Kind, Links: links, CreatedBy: s.by(r, "")}
+	it := Todo{Question: q, Context: block(b.Context, todoMaxContext), Kind: b.Kind, Links: links, CreatedBy: s.by(r, ""), Release: rel}
 	waiting := strings.TrimSpace(b.Waiting)
 	switch {
 	case waiting != "":
@@ -646,6 +658,10 @@ func (s *Server) handleTodoDrop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string) {
 	if s.todoOff(w, r) || !s.mayManage(w, r) {
+		return
+	}
+	if it, ok := s.todos.get(r.PathValue("id")); ok && it.Release != nil && it.Release.State == relTagging {
+		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "release_busy", "message": "the tag is being pushed: wait for it to finish"})
 		return
 	}
 	var b struct {
