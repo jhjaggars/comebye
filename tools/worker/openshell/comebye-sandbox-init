@@ -17,6 +17,14 @@ log() { echo "[$(date -Is)] init: $*" >>"$L/init.log"; echo "init: $*"; }
 # A stop/start keeps /sandbox but nothing is running: drop sockets the last run left.
 rm -f "$HOME/.config/herdr/herdr.sock" "$HOME"/.config/herdr/*.pid "$S/tailscaled.sock"
 
+# The sandbox only reaches Completed when EVERY process is gone (the supervisor, pid 1, waits
+# for them), and the keep loops outlive this script. So on any exit, kill the whole tree,
+# parents before children (a killed child would be restarted by its loop).
+kill_tree() { local k kids; kids=$(pgrep -P "$1" 2>/dev/null); kill "$1" 2>/dev/null; for k in $kids; do kill_tree "$k"; done; }
+reap() { local k; for k in $(pgrep -P $$ 2>/dev/null); do kill_tree "$k"; done; }
+trap reap EXIT
+trap 'exit 143' TERM INT
+
 keep() {  # keep NAME CMD...: restart on exit, 3 s apart
   local n=$1; shift
   ( while :; do "$@" >>"$L/$n.log" 2>&1 </dev/null; echo "[$(date -Is)] $n exited $?, restarting" >>"$L/$n.log"; sleep 3; done ) &
@@ -100,7 +108,7 @@ busy() {
   else [ -S "$HOME/.config/herdr/herdr.sock" ]; fi
 }
 last=$(date +%s)
-while sleep "${SBX_TICK_SECONDS:-300}"; do
+while sleep "$(envval SBX_TICK_SECONDS 300)"; do
   idle_min=$(envval SBX_IDLE_MINUTES 120); SBX_IDLE_CMD=$(envval SBX_IDLE_CMD "")
   if busy; then last=$(date +%s); continue; fi
   if (( $(date +%s) - last >= idle_min * 60 )); then log "idle $idle_min min: exiting 0"; exit 0; fi

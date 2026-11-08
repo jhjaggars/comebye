@@ -1,0 +1,25 @@
+# Provider profile: the Anthropic API key for `claude` (API-key mode). The gateway holds the
+# key and injects it on egress; the sandbox only sees an openshell:resolve:env:… placeholder.
+# Subscription login does not use this: see RUNBOOK.md ("claude login").
+#   openshell provider profile lint   -f profiles/anthropic.yaml
+#   openshell provider profile import -f profiles/anthropic.yaml
+id: anthropic
+display_name: Anthropic
+description: Anthropic API for Claude Code
+category: inference
+credentials:
+  - name: api_key
+    description: Anthropic API key
+    env_vars: [ANTHROPIC_API_KEY]
+    required: true
+    auth_style: header
+    header_name: x-api-key
+discovery:
+  credentials: [api_key]
+endpoints:
+  - host: api.anthropic.com
+    port: 443
+    protocol: rest
+    access: full
+    enforcement: enforce
+binaries: [/usr/local/bin/claude]

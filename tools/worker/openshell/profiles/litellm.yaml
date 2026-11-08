@@ -1,0 +1,25 @@
+# Provider profile: the LiteLLM gateway key for `pi`. Replace the host with your gateway's
+# (the same host as --llm-host in render-policy.sh). The key is held by the OpenShell
+# gateway and injected on egress. Only works if the sandbox's supervisor can resolve the
+# LiteLLM host (cluster DNS): a tailnet-only name will not resolve. Otherwise the
+# provisioner writes a per-worker key into pi's auth.json instead.
+id: litellm
+display_name: LiteLLM gateway
+description: LiteLLM model gateway for pi
+category: inference
+credentials:
+  - name: api_key
+    description: LiteLLM virtual key
+    env_vars: [LITELLM_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_key]
+endpoints:
+  - host: llm.example.com
+    port: 443
+    protocol: rest
+    access: full
+    enforcement: enforce
+binaries: [/usr/local/bin/node, /usr/local/bin/pi]

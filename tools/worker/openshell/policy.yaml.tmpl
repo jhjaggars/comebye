@@ -48,7 +48,8 @@ network_policies:
   anthropic:
     name: anthropic
     endpoints:
-      - { host: api.anthropic.com, port: 443 }
+      # L7 (protocol rest) is required here: a provider-credentialed endpoint may not be L4-only.
+      - { host: api.anthropic.com, port: 443, protocol: rest, access: full, enforcement: enforce }
       - { host: claude.ai, port: 443 }
       - { host: console.anthropic.com, port: 443 }
       - { host: platform.claude.com, port: 443 }
@@ -62,7 +63,7 @@ network_policies:
   llm_gateway:
     name: llm_gateway
     endpoints:
-      - { host: "@@LLM_GATEWAY_HOST@@", port: 443 }
+      - { host: "@@LLM_GATEWAY_HOST@@", port: 443, protocol: rest, access: full, enforcement: enforce }   # L7 so a provider key can be injected
     binaries:
       - { path: /usr/local/bin/node }
       - { path: /usr/local/bin/pi }
