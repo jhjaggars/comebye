@@ -48,6 +48,30 @@ socket, and refuses to start without a login allowlist):
 comebye -ts-allow-login you@example.com   # serves http://127.0.0.1:8741
 ```
 
+## Deployment options
+
+Comebye runs the same way in all three; pick the smallest that fits.
+
+1. **A single host (the default).** comebye and herdr on one machine, as a
+   systemd user service ([steps 1-3](#2-run-as-a-systemd-user-service)). Nothing
+   below is needed or changes: no hub-only mode, no probes to configure, no
+   Kubernetes. (The state directory's `hub.lock` and the `/healthz` endpoint
+   are present but invisible.)
+2. **A host plus peers.** One of your hosts is the hub and the others run
+   comebye as peers ([Multiple hosts](#multiple-hosts)). The hub still has its
+   own herdr and agents.
+3. **In Kubernetes (optional).** For a hub that should live in a cluster
+   rather than on a machine you keep awake: a single-replica StatefulSet running
+   comebye in [`-hub-only` mode](#a-hub-with-no-herdr-containers-kubernetes)
+   (it hosts no agents; they run on peers), a `tailscaled` sidecar to publish it
+   with Serve, a persistent volume for the state directory, probes on
+   `/healthz` and `/readyz` ([Health probes](#health-probes)), and
+   [backups](#backup-and-restore) of the volume. A generic starting point is in
+   [`deploy/kubernetes/`](../deploy/kubernetes/). Nothing about the
+   comebye server requires it: the same binary and state directory work on a
+   plain host, and a state directory can move between the two (see
+   [the state directory](#the-state-directory-what-is-in-it-and-moving-it)).
+
 ## 1. Configure
 
 The server reads flags and, for most of them, environment variables. The

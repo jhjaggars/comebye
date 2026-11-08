@@ -1,0 +1,17 @@
+# Tailscale Serve: terminate HTTPS on the tailnet name and proxy to comebye on
+# the pod's loopback (both containers share the pod's network namespace).
+# ${TS_CERT_DOMAIN} is filled in by the tailscale container.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: comebye-serve
+data:
+  serve.json: |
+    {
+      "TCP": {"443": {"HTTPS": true}},
+      "Web": {
+        "${TS_CERT_DOMAIN}:443": {
+          "Handlers": {"/": {"Proxy": "http://127.0.0.1:8741"}}
+        }
+      }
+    }

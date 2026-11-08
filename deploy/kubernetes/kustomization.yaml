@@ -1,0 +1,12 @@
+# A generic single-hub comebye for Kubernetes. Copy this directory, edit the
+# placeholders marked CHANGE-ME (grep for them), then:
+#   kubectl apply -k .
+# See README.md and docs/setup.md ("Deployment options").
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: comebye
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - serve-config.yaml
+  - statefulset.yaml

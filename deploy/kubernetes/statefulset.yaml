@@ -1,0 +1,100 @@
+# One comebye hub (no herdr, no agents of its own) with a tailscaled sidecar.
+# replicas MUST stay 1: the state directory is single-writer (hub.lock refuses
+# a second server, but that makes a mistake loud, not harmless).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: comebye
+spec:
+  replicas: 1
+  serviceName: comebye
+  selector:
+    matchLabels: {app: comebye}
+  # Replace the pod only after the old one has stopped holding the volume.
+  podManagementPolicy: OrderedReady
+  template:
+    metadata:
+      labels: {app: comebye}
+    spec:
+      serviceAccountName: comebye
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: comebye
+          # CHANGE-ME: an image containing the comebye binary as the entrypoint
+          # (build one from a release binary; none is assumed here).
+          image: registry.example.com/comebye:CHANGE-ME
+          securityContext:
+            runAsUser: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          env:
+            - {name: COMEBYE_HUB_ONLY, value: "true"}
+            - {name: COMEBYE_STATE_DIR, value: /var/lib/comebye}
+            - {name: COMEBYE_RECALL_INDEX, value: /var/lib/comebye/recall/index.db}
+            # Set explicitly: the default is the pod name, and agent ids stored
+            # in the state embed this name. Keep it stable for the hub's life.
+            - {name: COMEBYE_HOST_NAME, value: hub}
+            # CHANGE-ME: the Tailscale login(s) allowed to use the app.
+            - {name: COMEBYE_TS_ALLOW_LOGIN, value: you@example.com}
+            - {name: COMEBYE_PUSH_SUBJECT, value: "mailto:you@example.com"}  # CHANGE-ME
+            # Wait for a previous pod to release the state directory.
+            - {name: COMEBYE_LOCK_WAIT, value: 30s}
+            # /healthz and /readyz only, no login, for the kubelet (the main
+            # listener is loopback and unreachable from outside the pod).
+            - {name: COMEBYE_HEALTH_ADDR, value: ":8743"}
+            # Optional: let tagged worker nodes in through Serve (see docs/setup.md).
+            # - {name: COMEBYE_TS_ALLOW_CAP, value: "example.com/cap/comebye"}
+          ports:
+            - {name: health, containerPort: 8743}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/comebye}
+            - {name: tailscale-socket, mountPath: /var/run/tailscale}
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+        - name: tailscale
+          image: ghcr.io/tailscale/tailscale:stable  # CHANGE-ME: pin a version
+          env:
+            # CHANGE-ME: the tailnet name. Use the name of the machine this
+            # hub replaces if you are moving one (remove or rename that
+            # node first so the name is free).
+            - {name: TS_HOSTNAME, value: comebye}
+            - {name: TS_KUBE_SECRET, value: comebye-tailscale-state}
+            - {name: TS_STATE_DIR, value: /var/lib/tailscale}
+            - {name: TS_USERSPACE, value: "true"}
+            - {name: TS_SOCKET, value: /var/run/tailscale/tailscaled.sock}
+            - {name: TS_SERVE_CONFIG, value: /config/serve.json}
+            # First start only: an auth key from your tailnet admin. Put it in
+            # a Secret named comebye-tailscale-auth (key authkey); once the
+            # node has joined, the key is no longer needed.
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef: {name: comebye-tailscale-auth, key: authkey, optional: true}
+          securityContext:
+            runAsUser: 1000
+            runAsNonRoot: true
+          volumeMounts:
+            - {name: tailscale-socket, mountPath: /var/run/tailscale}
+            - {name: serve-config, mountPath: /config, readOnly: true}
+      volumes:
+        - name: tailscale-socket
+          emptyDir: {}
+        - name: serve-config
+          configMap: {name: comebye-serve}
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # storageClassName: CHANGE-ME  (omit for the cluster default)
+        resources:
+          requests: {storage: 1Gi}

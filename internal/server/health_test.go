@@ -157,3 +157,21 @@ func TestHubOnlyHostReachesTheBrowser(t *testing.T) {
 		t.Fatalf("slim host lacks no_agents: %s", b)
 	}
 }
+
+// A normal instance (with a herdr client) is unchanged by the hub-only work:
+// its host is not "no agents", the probes do not claim hub-only, and the
+// herdr-backed routes still reach herdr.
+func TestNormalHostIsUnchanged(t *testing.T) {
+	s, _, _ := coordServer(t)
+	w := do(s, "GET", "/api/hosts", userHdr, "")
+	if strings.Contains(w.Body.String(), "no_agents") {
+		t.Errorf("a normal host reports no_agents: %s", w.Body)
+	}
+	code, body := getHealth(s, "/healthz", "localhost")
+	if code != 200 || body["hub_only"] != nil {
+		t.Errorf("healthz = %d %v", code, body)
+	}
+	if w := do(s, "GET", "/api/launch/options", userHdr, ""); !strings.Contains(w.Body.String(), `"enabled":true`) {
+		t.Errorf("launching is off on a normal host: %s", w.Body)
+	}
+}
