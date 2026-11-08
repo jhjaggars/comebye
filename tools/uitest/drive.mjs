@@ -1029,6 +1029,15 @@ await check("pages: an open To do item uses the panel's width (code and tables w
   if (m.qW < 1000) throw new Error("2000: the title stops short: " + JSON.stringify(m));
   if (Math.abs(m.txtL - m.ctxL) > 1 || Math.abs(m.txtR - m.preR) > 1 || Math.abs(m.actsR - m.preR) > 1) throw new Error("2000: the answer box and buttons do not line up with the content: " + JSON.stringify(m));
   if (m.pageOver > 0) throw new Error("2000: page scrolls horizontally");
+  // Nothing inside an open item scrolls sideways, at any width.
+  const hscroll = (sel) => page.evaluate((sel) => [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth), sel);
+  for (const w of [1280, 1600, 2000]) {
+    await page.setViewportSize({ width: w, height: 800 });
+    await page.waitForTimeout(150);
+    const bad = await hscroll(item);
+    if (bad.length) throw new Error(w + ": horizontal scroll inside the open To do item: " + bad.join("; "));
+  }
+  await page.setViewportSize({ width: 2000, height: 800 });
   // A short body: the answer form follows it instead of being pinned far below.
   await drop(id);
   const sid = await post({ question: "short one", kind: "decision", context: "Just a line." });
@@ -1052,6 +1061,8 @@ await check("pages: an open To do item uses the panel's width (code and tables w
   await page.waitForSelector(pitem + ".open .td-ctx pre");
   const o = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
   if (o[0] > o[1]) throw new Error("390: page scrolls horizontally " + o);
+  const bad390 = await hscroll(pitem);
+  if (bad390.length) throw new Error("390: horizontal scroll inside the open To do item: " + bad390.join("; "));
   await drop(pid);
 });
 await check("pages: the rows above the list open the pages; the open one is marked; leaving an agent clears presence", async () => {
