@@ -1,0 +1,46 @@
+#!/bin/bash
+# Main process of a comebye worker sandbox (OpenShell). Runs as the sandbox user,
+# no systemd, no root: a tiny supervisor that keeps the stack up and, after
+# SBX_IDLE_MINUTES with no herdr agent "working", exits 0 so the sandbox goes to
+# Completed (the gateway keeps it; `sandbox start` brings it back).
+set -u
+export HOME=${HOME:-/sandbox}
+S=$HOME/.ts; C=$HOME/.config/comebye
+mkdir -p "$S" "$C" "$HOME/code" "$HOME/worktrees" "$HOME/.local/state/comebye"
+
+keep() {  # keep NAME CMD...: restart on exit, 3 s apart
+  local n=$1; shift
+  ( while :; do "$@" >>"/tmp/$n.log" 2>&1 </dev/null; echo "[$(date -Is)] $n exited $?, restarting" >>"/tmp/$n.log"; sleep 3; done ) &
+}
+
+cat >"$S/tinyproxy.conf" <<C2
+Port 3128
+Listen 127.0.0.1
+Timeout 600
+PidFile "$S/tinyproxy.pid"
+LogFile "/tmp/tinyproxy.log"
+MaxClients 64
+ConnectPort 443
+C2
+keep tinyproxy tinyproxy -d -c "$S/tinyproxy.conf"
+
+# Userspace networking: no /dev/net/tun, no capabilities. DERP and the control
+# plane go through the local CONNECT proxy because OpenShell denies IP-literal TCP.
+keep tailscaled env HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128 \
+  tailscaled --tun=userspace-networking --state="$S/tailscaled.state" --socket="$S/tailscaled.sock" --port=0
+
+keep herdr herdr server
+for _ in $(seq 1 30); do [ -S "$HOME/.config/herdr/herdr.sock" ] && break; sleep 1; done
+for spec in pi:.pi/agent/extensions claude:.claude; do
+  mkdir -p "$HOME/${spec#*:}"; herdr integration install "${spec%%:*}" >/dev/null 2>&1
+done
+# The provisioner writes $C/env over exec stdin (COMEBYE_TS_ALLOW_LOGIN, _HUB, ...); wait for it.
+until [ -f "$C/env" ]; do sleep 2; done
+keep comebye bash -c 'set -a; . "$1"; set +a; exec comebye -addr 127.0.0.1:8741 -ts-socket "$2"' _ "$C/env" "$S/tailscaled.sock"
+
+# Idle stop.
+idle_min=${SBX_IDLE_MINUTES:-120}; last=$(date +%s)
+while sleep 300; do
+  if herdr agent list 2>/dev/null | grep -q '"agent_status":"working"'; then last=$(date +%s); continue; fi
+  if (( $(date +%s) - last >= idle_min * 60 )); then echo "idle $idle_min min: exiting 0"; exit 0; fi
+done

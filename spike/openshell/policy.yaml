@@ -1,0 +1,35 @@
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only: [/usr, /lib, /lib64, /bin, /etc, /proc, /dev/urandom, /var/log, /sys]
+  read_write: [/sandbox, /tmp, /var/tmp, /dev/null, /dev/pts, /dev/ptmx, /dev/shm, /dev/tty]
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  tailscale:
+    name: tailscale
+    endpoints:
+      - { host: controlplane.tailscale.com, port: 443, protocol: tcp, tls: skip }
+      - { host: login.tailscale.com, port: 443, protocol: tcp, tls: skip }
+      - { host: "derp*.tailscale.com", port: 443, protocol: tcp, tls: skip }
+      - { host: log.tailscale.com, port: 443, protocol: tcp, tls: skip }
+    binaries:
+      # tailscaled dials DERP by IP, which OpenShell blocks. It is pointed at a
+      # local CONNECT proxy (HTTPS_PROXY) that dials by hostname instead.
+      - { path: /usr/bin/tinyproxy }
+      - { path: /usr/local/bin/tailscaled }
+      - { path: /usr/local/bin/tailscale }
+  anthropic:
+    name: anthropic
+    endpoints:
+      - { host: claude.ai, port: 443 }
+      - { host: console.anthropic.com, port: 443 }
+    binaries:
+      - { path: /usr/local/bin/claude }
