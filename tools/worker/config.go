@@ -17,7 +17,18 @@ import (
 // ~/.config/comebye-worker/config. Nothing secret belongs in it: the
 // Tailscale OAuth client has its own 0600 file (TSOAuthFile).
 type Config struct {
-	Provider string // gcp (default) or aws
+	Provider string // gcp (default), aws or openshell
+
+	// openshell: the gateway that runs the sandboxes (see docs/workers.md).
+	OpenShellBin       string   // the CLI (default "openshell")
+	OpenShellGateway   string   // a gateway registered with `openshell gateway add/login`; empty = the CLI's active one
+	OpenShellEndpoint  string   // alternative to the above: a gateway URL (the CLI connects directly)
+	OpenShellWorkspace string   // workspace the sandboxes live in
+	SandboxImage       string   // image reference; {version} becomes the comebye release
+	SandboxPolicy      string   // policy YAML file (rendered from the image's template); empty = the gateway's default
+	SandboxProviders   []string // gateway credential providers to attach
+	SandboxCPU         string   // e.g. 2 or 500m; empty = the gateway's default
+	SandboxMemory      string   // e.g. 6Gi; empty = the gateway's default
 
 	AWSRegion  string
 	AWSAZ      string
@@ -114,6 +125,7 @@ func defaults() Config {
 	}
 	return Config{
 		Provider:       "gcp",
+		OpenShellBin:   "openshell",
 		VPCRange:       "10.77.0.0/16",
 		MachineType:    "e2-standard-4",
 		BootDiskGB:     20,
@@ -208,6 +220,24 @@ func (c *Config) apply(kv map[string]string) error {
 		switch k {
 		case "provider":
 			c.Provider = v
+		case "openshell_bin":
+			c.OpenShellBin = v
+		case "openshell_gateway":
+			c.OpenShellGateway = v
+		case "openshell_endpoint":
+			c.OpenShellEndpoint = strings.TrimRight(v, "/")
+		case "openshell_workspace":
+			c.OpenShellWorkspace = v
+		case "sandbox_image":
+			c.SandboxImage = v
+		case "sandbox_policy":
+			c.SandboxPolicy = expand(v)
+		case "sandbox_providers":
+			c.SandboxProviders = splitList(v)
+		case "sandbox_cpu":
+			c.SandboxCPU = v
+		case "sandbox_memory":
+			c.SandboxMemory = v
 		case "aws_region":
 			c.AWSRegion = v
 		case "aws_az":
@@ -420,8 +450,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("vpc_range %q is not a CIDR network containing subnet_range %q", c.VPCRange, c.SubnetRange)
 		}
 	}
-	if err := validateSSHSource(c.SSHSourceCIDR); err != nil {
-		return err
+	if c.Provider != "openshell" {
+		if err := validateSSHSource(c.SSHSourceCIDR); err != nil {
+			return err
+		}
 	}
 	if c.TSAllowLogin == "" {
 		return fmt.Errorf("ts_allow_login is required: the Tailscale login that owns the hub device (the worker admits the hub's requests as that login)")
@@ -508,6 +540,48 @@ var (
 	awsTypeRe  = regexp.MustCompile(`^[a-z][a-z0-9]*\.[a-z0-9]+$`)
 )
 
+var (
+	osGatewayRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+	osWorkspaceRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+	osImageRe     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@{}-]{0,254}$`)
+	osProviderRe  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+	osQuantityRe  = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(m|Ki|Mi|Gi|Ti|K|M|G|T)?$`)
+	osBinRe       = regexp.MustCompile(`^[A-Za-z0-9._/~+-]{1,200}$`)
+)
+
+// validateOpenShell checks the sandbox settings. The gcp/aws settings
+// (project, zone, ssh_source_cidr, ...) do not apply and are not required.
+func (c *Config) validateOpenShell(chk func(bool, string, ...any) error) error {
+	if c.OpenShellGateway != "" && c.OpenShellEndpoint != "" {
+		return fmt.Errorf("openshell_gateway and openshell_endpoint are alternatives: set one")
+	}
+	if c.OpenShellEndpoint != "" {
+		u, err := url.Parse(c.OpenShellEndpoint)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
+			return fmt.Errorf("openshell_endpoint %q is not a bare https:// URL", c.OpenShellEndpoint)
+		}
+	}
+	for _, e := range []error{
+		chk(osBinRe.MatchString(c.OpenShellBin), "bad openshell_bin %q", c.OpenShellBin),
+		chk(c.OpenShellGateway == "" || osGatewayRe.MatchString(c.OpenShellGateway), "bad openshell_gateway %q", c.OpenShellGateway),
+		chk(c.OpenShellWorkspace != "" && osWorkspaceRe.MatchString(c.OpenShellWorkspace), "openshell_workspace is required (a gateway can refuse the default workspace); got %q", c.OpenShellWorkspace),
+		chk(c.SandboxImage != "" && osImageRe.MatchString(c.SandboxImage), "sandbox_image is required: an image reference such as registry.example/comebye-sandbox:{version} (got %q)", c.SandboxImage),
+		chk(c.SandboxCPU == "" || osQuantityRe.MatchString(c.SandboxCPU), "bad sandbox_cpu %q (like 2 or 500m)", c.SandboxCPU),
+		chk(c.SandboxMemory == "" || osQuantityRe.MatchString(c.SandboxMemory), "bad sandbox_memory %q (like 6Gi)", c.SandboxMemory),
+		chk(c.LLMGatewayURL == "", "llm_gateway_url is not supported with provider=openshell: a sandbox cannot reach the tailnet's LLM gateway; give it an LLM provider on the OpenShell gateway (sandbox_providers)"),
+	} {
+		if e != nil {
+			return e
+		}
+	}
+	for _, p := range c.SandboxProviders {
+		if !osProviderRe.MatchString(p) {
+			return fmt.Errorf("sandbox_providers: bad provider name %q", p)
+		}
+	}
+	return nil
+}
+
 // validateProvider checks the cloud-specific settings.
 func (c *Config) validateProvider(chk func(bool, string, ...any) error) error {
 	switch c.Provider {
@@ -539,8 +613,10 @@ func (c *Config) validateProvider(chk func(bool, string, ...any) error) error {
 				return e
 			}
 		}
+	case "openshell":
+		return c.validateOpenShell(chk)
 	default:
-		return fmt.Errorf("provider %q: want gcp or aws", c.Provider)
+		return fmt.Errorf("provider %q: want gcp, aws or openshell", c.Provider)
 	}
 	return nil
 }

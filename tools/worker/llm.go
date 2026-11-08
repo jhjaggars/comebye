@@ -341,10 +341,10 @@ func (e *env) provisionLLM(ctx context.Context, name string) error {
 		return nil
 	}
 	e.printf("  llm gateway %s: pi provider %s, models %s\n", e.Cfg.LLMGatewayURL, llmProvider, strings.Join(e.Cfg.LLMModels, ", "))
-	if _, err := ssh(ctx, e, name, "bash -s", []byte(piConfigScript(e.Cfg))); err != nil {
+	if _, err := e.sh(ctx, name, "bash -s", []byte(piConfigScript(e.Cfg))); err != nil {
 		return fmt.Errorf("writing pi's models.json and settings.json: %w", err)
 	}
-	if _, err := ssh(ctx, e, name, authHasKeyCmd, nil); err == nil {
+	if _, err := e.sh(ctx, name, authHasKeyCmd, nil); err == nil {
 		e.printf("  the worker already has its key: kept\n")
 		return nil
 	}
@@ -363,11 +363,11 @@ func (e *env) provisionLLM(ctx context.Context, name string) error {
 		return err
 	}
 	frag, _ := json.Marshal(map[string]any{llmProvider: map[string]string{"type": "api_key", "key": key}})
-	if _, err := ssh(ctx, e, name, authMergeCmd, frag); err != nil {
+	if _, err := e.sh(ctx, name, authMergeCmd, frag); err != nil {
 		c.DeleteAlias(ctx, alias) // never delivered: do not leave it live
 		return fmt.Errorf("delivering the key: %w", redact(err, key))
 	}
-	out, err := ssh(ctx, e, name, authModeCmd, nil)
+	out, err := e.sh(ctx, name, authModeCmd, nil)
 	if err != nil || strings.TrimSpace(out) != "600" {
 		c.DeleteAlias(ctx, alias)
 		return fmt.Errorf("auth.json on %s is not mode 600 (got %q): key revoked", name, strings.TrimSpace(out))
@@ -392,7 +392,7 @@ func (e *env) revokeLLM(ctx context.Context, name string, running bool) (problem
 	held := ""
 	if running {
 		if err := e.connect(ctx, name); err == nil {
-			out, _ := ssh(ctx, e, name, authReadKeyCmd, nil)
+			out, _ := e.sh(ctx, name, authReadKeyCmd, nil)
 			held = strings.TrimSpace(out)
 		}
 	}

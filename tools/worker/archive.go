@@ -182,7 +182,7 @@ func (e *env) pull(ctx context.Context, name, dir string) (int, error) {
 		pr.CloseWithError(errors.New("extraction stopped"))
 		done <- result{n, err}
 	}()
-	rerr := runStream(ctx, e.Run, "ssh", sshArgs(e.Cfg, name, false, pullScript), pw)
+	rerr := e.tr().Stream(ctx, name, pullScript, pw)
 	pw.CloseWithError(rerr) // a nil error is a clean end of file
 	res := <-done
 	if res.err != nil {
@@ -326,7 +326,7 @@ func (e *env) archiveBeforeDestroy(ctx context.Context, inst *Inst) error {
 	if err := e.saveSessions(ctx, inst, false); err != nil {
 		return fmt.Errorf("destroy refused, nothing was changed: %w\nFix that and run it again, or pass --no-archive to lose this worker's sessions", err)
 	}
-	if _, err := ssh(ctx, e, inst.Name, "systemctl --user stop comebye herdr", nil); err != nil {
+	if _, err := e.sh(ctx, inst.Name, e.guest().StopServices, nil); err != nil {
 		e.printf("  stopping the agents: %v (continuing: the copy is still a snapshot)\n", err)
 	}
 	e.printf("  saving the sessions, agents stopped\n")
@@ -335,7 +335,7 @@ func (e *env) archiveBeforeDestroy(ctx context.Context, inst *Inst) error {
 		return nil
 	}
 	msg := fmt.Sprintf("destroy refused: %v\nThe VM was left running and nothing was deleted. Fix that and run it again, or pass --no-archive to lose this worker's sessions", err)
-	if _, rerr := ssh(ctx, e, inst.Name, "systemctl --user start herdr comebye", nil); rerr != nil {
+	if _, rerr := e.sh(ctx, inst.Name, e.guest().StartServices, nil); rerr != nil {
 		e.printf("  RESTARTING THE AGENTS FAILED: %v\n", rerr)
 		return fmt.Errorf("%s\nThe agents are STOPPED: the restart failed too (%v). Start them on the VM with: systemctl --user start herdr comebye", msg, rerr)
 	}

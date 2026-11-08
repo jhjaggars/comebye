@@ -80,6 +80,12 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
+	if e.Cfg.Provider == "openshell" {
+		if e.DryRun {
+			return e.createSandboxPlan(name, o)
+		}
+		return e.createSandbox(ctx, name, o)
+	}
 	if e.DryRun {
 		return e.createPlan(name, o)
 	}
@@ -146,10 +152,10 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	if err != nil {
 		return err
 	}
-	if _, err := ssh(ctx, e, name, "sudo bash -s", []byte(rs)); err != nil {
+	if _, err := e.sh(ctx, name, "sudo bash -s", []byte(rs)); err != nil {
 		return fmt.Errorf("root bootstrap: %w", err)
 	}
-	if _, err := ssh(ctx, e, name, "sudo install -m 0755 /dev/stdin /usr/local/sbin/comebye-idle-check", []byte(idleCheck)); err != nil {
+	if _, err := e.sh(ctx, name, "sudo install -m 0755 /dev/stdin /usr/local/sbin/comebye-idle-check", []byte(idleCheck)); err != nil {
 		return fmt.Errorf("installing the idle check: %w", err)
 	}
 
@@ -163,7 +169,7 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	if err != nil {
 		return err
 	}
-	if _, err := ssh(ctx, e, name, "bash -s", []byte(us)); err != nil {
+	if _, err := e.sh(ctx, name, "bash -s", []byte(us)); err != nil {
 		return fmt.Errorf("user bootstrap: %w", err)
 	}
 	if err := e.provisionLLM(ctx, name); err != nil {
@@ -173,9 +179,28 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	return e.awaitJoin(ctx, name)
 }
 
-// connect reads the VM's host key from guest attributes, writes the private
-// ssh config and waits until ssh answers.
+// connect makes the worker reachable through its transport. For a sandbox
+// that is only a check that it is Ready: the gateway authenticates every exec.
 func (e *env) connect(ctx context.Context, name string) error {
+	if e.Cfg.Provider == "openshell" {
+		inst, err := e.prov().Describe(ctx, name)
+		if err != nil {
+			return err
+		}
+		if inst == nil {
+			return fmt.Errorf("sandbox %s does not exist", name)
+		}
+		if inst.State != stateRunning {
+			return fmt.Errorf("sandbox %s is %s", name, inst.State)
+		}
+		return nil
+	}
+	return e.connectVM(ctx, name)
+}
+
+// connectVM reads the VM's host key from guest attributes, writes the private
+// ssh config and waits until ssh answers.
+func (e *env) connectVM(ctx context.Context, name string) error {
 	pv := e.prov()
 	var ip, key string
 	err := e.poll(72, 5, "the VM's ssh host key from the cloud API", func() (bool, error) {
@@ -205,7 +230,7 @@ func (e *env) connect(ctx context.Context, name string) error {
 	}
 	e.printf("  host key verified through the %s API for %s\n", pv.Kind(), ip)
 	err = e.poll(60, 5, "ssh", func() (bool, error) {
-		_, err := ssh(ctx, e, name, "true", nil)
+		_, err := e.sh(ctx, name, "true", nil)
 		return err == nil, nil
 	})
 	if err != nil {
@@ -235,7 +260,7 @@ func sshTimeoutHint(c *Config) string {
 
 // enrolled reports whether tailscale on the VM is up already.
 func (e *env) enrolled(ctx context.Context, name string) bool {
-	out, err := ssh(ctx, e, name, "tailscale ip -4", nil)
+	out, err := e.sh(ctx, name, e.guest().TSIP, nil)
 	return err == nil && strings.HasPrefix(strings.TrimSpace(out), "100.")
 }
 
@@ -333,14 +358,14 @@ func (e *env) enroll(ctx context.Context, name string) error {
 		// The key goes over stdin: never argv, a file, or a log line.
 		up := fmt.Sprintf("sudo tailscale up --auth-key=file:/dev/stdin --hostname=%s --advertise-tags=%s",
 			shellQuote(name), shellQuote(e.Cfg.Tag))
-		if _, err := ssh(ctx, e, name, up, []byte(key)); err != nil {
+		if _, err := e.sh(ctx, name, up, []byte(key)); err != nil {
 			return fmt.Errorf("tailscale up: %w", redact(err, key))
 		}
 	}
-	if _, err := ssh(ctx, e, name, "sudo tailscale set --operator="+shellQuote(e.Cfg.SSHUser), nil); err != nil {
+	if _, err := e.sh(ctx, name, "sudo tailscale set --operator="+shellQuote(e.Cfg.SSHUser), nil); err != nil {
 		return err
 	}
-	if _, err := ssh(ctx, e, name, "tailscale serve --bg 8741", nil); err != nil {
+	if _, err := e.sh(ctx, name, "tailscale serve --bg 8741", nil); err != nil {
 		return fmt.Errorf("tailscale serve: %w (are HTTPS certificates enabled for the tailnet?)", err)
 	}
 	return nil
@@ -471,14 +496,15 @@ func (e *env) status(ctx context.Context, name string) error {
 	e.printf("archive     host %s\n", archive.WorkerHost(name, inst.ID))
 	if inst.State == stateRunning {
 		if err := e.connect(ctx, name); err != nil {
-			e.printf("ssh         unreachable: %v\n", err)
+			e.printf("%-11s unreachable: %v\n", e.reachWord(), err)
 		} else {
-			ip, _ := ssh(ctx, e, name, "tailscale ip -4", nil)
+			g := e.guest()
+			ip, _ := e.sh(ctx, name, g.TSIP, nil)
 			e.printf("tailnet     %s\n", orDash(strings.TrimSpace(ip)))
-			v, _ := ssh(ctx, e, name, "$HOME/.local/bin/comebye -version", nil)
-			active, _ := ssh(ctx, e, name, "systemctl --user is-active comebye herdr | paste -sd' '", nil)
-			e.printf("comebye     %s   units (comebye herdr): %s\n", orDash(strings.TrimSpace(v)), orDash(strings.TrimSpace(active)))
-			integ, _ := ssh(ctx, e, name, "$HOME/.local/bin/herdr integration status 2>/dev/null | grep -E '^(pi|claude|codex):' | sed 's/ (\\/.*//' | paste -sd';'", nil)
+			v, _ := e.sh(ctx, name, g.Version, nil)
+			active, _ := e.sh(ctx, name, g.Units, nil)
+			e.printf("comebye     %s   %s: %s\n", orDash(strings.TrimSpace(v)), g.UnitsLabel, orDash(strings.TrimSpace(active)))
+			integ, _ := e.sh(ctx, name, g.Integrations, nil)
 			e.printf("herdr       integrations: %s\n", orDash(strings.ReplaceAll(strings.TrimSpace(integ), ";", ";  ")))
 		}
 	}
@@ -571,7 +597,7 @@ func (e *env) stop(ctx context.Context, name string) error {
 	if err := e.prov().Stop(ctx, name); err != nil {
 		return err
 	}
-	e.printf("%s stopped. The tailnet node and the hub's peer entry are kept (the hub shows it unreachable). Disks are still billed.\n", name)
+	e.printf("%s stopped. The tailnet node and the hub's peer entry are kept (the hub shows it unreachable). %s\n", name, e.stopNote())
 	return nil
 }
 
@@ -597,17 +623,23 @@ func (e *env) start(ctx context.Context, name string) error {
 		return err
 	}
 	// The external IP changes across a stop/start: rewrite the ssh config
-	// from GCE again, with the host key GCE vouches for.
-	if err := e.connect(ctx, name); err != nil {
+	// from GCE again, with the host key GCE vouches for. A sandbox takes a
+	// while to be Ready again.
+	if e.Cfg.Provider == "openshell" {
+		if err := e.sandboxReady(ctx, name); err != nil {
+			return err
+		}
+	} else if err := e.connect(ctx, name); err != nil {
 		return err
 	}
+	g := e.guest()
 	if err := e.poll(24, 5, "comebye to be active", func() (bool, error) {
-		out, _ := ssh(ctx, e, name, "systemctl --user is-active comebye", nil)
+		out, _ := e.sh(ctx, name, g.Active, nil)
 		return strings.TrimSpace(out) == "active", nil
 	}); err != nil {
 		return err
 	}
-	v, _ := ssh(ctx, e, name, "$HOME/.local/bin/comebye -version", nil)
+	v, _ := e.sh(ctx, name, g.Version, nil)
 	e.printf("%s is up, comebye %s\n", name, orDash(strings.TrimSpace(v)))
 	if hv, err := e.hub().Version(ctx); err == nil && !strings.Contains(v, hv) {
 		e.printf("warning: the hub runs %s; run `comebye upgrade --version %s` on %s\n", hv, hv, name)
@@ -626,6 +658,9 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
+	if o.DeleteDataDisk && e.Cfg.Provider == "openshell" {
+		return fmt.Errorf("--delete-data-disk: a sandbox has no separate data disk; its volume is deleted with it")
+	}
 	inst, err := e.prov().Describe(ctx, name)
 	if err != nil {
 		return err
@@ -637,13 +672,17 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	}
 	archiving := !o.NoArchive && inst != nil
 	if archiving && inst.State != stateRunning {
-		return fmt.Errorf("destroy refused, nothing was changed: %s is %s and its sessions are on its boot disk. Run `worker start %s` first, or pass --no-archive to lose them", name, inst.State, name)
+		return fmt.Errorf("destroy refused, nothing was changed: %s is %s and its sessions are on its %s. Run `worker start %s` first, or pass --no-archive to lose them", name, inst.State, e.storeWord(), name)
 	}
 	disk := "kept (" + dataDiskName(name) + ")"
 	if o.DeleteDataDisk {
 		disk = "DELETED (" + dataDiskName(name) + ")"
 	}
-	e.printf("This removes worker %s: the VM, its tailnet node, and the hub's peer entry. Data disk: %s.\nType the worker's name to confirm: ", name, disk)
+	if e.Cfg.Provider == "openshell" {
+		e.printf("This removes worker %s: the sandbox and its volume, its tailnet node, and the hub's peer entry.\nType the worker's name to confirm: ", name)
+	} else {
+		e.printf("This removes worker %s: the VM, its tailnet node, and the hub's peer entry. Data disk: %s.\nType the worker's name to confirm: ", name, disk)
+	}
 	line, _ := bufio.NewReader(e.In).ReadString('\n')
 	if strings.TrimSpace(line) != name {
 		return fmt.Errorf("confirmation did not match: nothing was changed")
@@ -654,7 +693,7 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 			return err
 		}
 	case inst == nil:
-		e.printf("  no VM exists, so there are no sessions to save\n")
+		e.printf("  no %s exists, so there are no sessions to save\n", e.noun())
 	default:
 		e.printf("  --no-archive: this worker's sessions are NOT being saved\n")
 	}
@@ -675,16 +714,17 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 
 	if inst != nil && inst.State == stateRunning {
 		if err := e.connect(ctx, name); err != nil {
-			step("reach the VM", err)
+			step("reach the "+e.noun(), err)
 		} else {
 			// Best effort: sign the agents out and stop services, then leave the tailnet.
-			ssh(ctx, e, name, "systemctl --user stop comebye herdr", nil)
-			ssh(ctx, e, name, `PATH="$HOME/.local/bin:$PATH"; claude auth logout; codex logout; true`, nil)
-			_, err := ssh(ctx, e, name, "sudo tailscale logout", nil)
+			g := e.guest()
+			e.sh(ctx, name, g.StopServices, nil)
+			e.sh(ctx, name, g.AgentLogout, nil)
+			_, err := e.sh(ctx, name, g.TSLogout, nil)
 			step("tailscale logout", err)
 		}
 	} else if inst != nil {
-		e.printf("  the VM is %s: skipping the on-VM sign-out and logout (the node is removed through the API below)\n", inst.State)
+		e.printf("  the %s is %s: skipping the on-host sign-out and logout (the node is removed through the API below)\n", e.noun(), inst.State)
 	}
 
 	if ts := e.tsClientIfConfigured(); ts != nil {
@@ -759,10 +799,10 @@ func (e *env) login(ctx context.Context, name, agent string) error {
 	if err := e.connect(ctx, name); err != nil {
 		return err
 	}
-	e.printf("Signing in to %s on %s. Open the URL it prints in your own browser; the credential is created on the VM and copies nothing from this machine.\n", agent, name)
+	e.printf("Signing in to %s on %s. Open the URL it prints in your own browser; the credential is created on the worker and copies nothing from this machine.\n", agent, name)
 	if agent == "pi" {
 		e.printf("pi has no login command: it opens now; type /login, choose a provider, and /quit when done. (Workers on the LLM gateway need no login: their key is delivered by create.)\n")
 	}
 	remote := `PATH="$HOME/.local/bin:$PATH"; ` + cmd
-	return e.Run.Interactive(ctx, "ssh", sshArgs(e.Cfg, name, true, remote))
+	return e.tr().Interactive(ctx, name, remote)
 }

@@ -59,6 +59,9 @@ type Inst struct {
 }
 
 func newProvider(r Runner, c *Config) Provider {
+	if c.Provider == "openshell" {
+		return &openshellProv{cli: &osCLI{r: r, cfg: c}, cfg: c, wait: func(s int) { time.Sleep(time.Duration(s) * time.Second) }}
+	}
 	if c.Provider == "aws" {
 		return &awsProv{a: &awsCLI{r: r, cfg: c}, cfg: c}
 	}
@@ -68,6 +71,9 @@ func newProvider(r Runner, c *Config) Provider {
 func (e *env) prov() Provider {
 	if e.P == nil {
 		e.P = newProvider(e.Run, e.Cfg)
+		if p, ok := e.P.(*openshellProv); ok {
+			p.wait = e.wait
+		}
 	}
 	return e.P
 }

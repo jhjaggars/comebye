@@ -1,5 +1,5 @@
-// Command worker provisions a comebye worker VM: it creates the GCE or EC2
-// instance, bootstraps it over host-key-verified ssh, enrols it in the
+// Command worker provisions a comebye worker: a GCE or EC2 VM, or an
+// OpenShell sandbox. It creates the instance, bootstraps it over host-key-verified ssh, enrols it in the
 // tailnet as a tagged node and lets it join the comebye hub. Agent
 // orchestration is not its job; once the VM is a peer, comebye drives it.
 //
@@ -25,7 +25,7 @@ const usage = `Usage: worker [-config FILE] <command> [flags] [args]
 
 Commands:
   create NAME [--dry-run] [--comebye-version vX.Y.Z]
-        build the VM, enrol it as tag:worker, bootstrap it, wait for the hub
+        build the VM (or sandbox), enrol it as tag:worker, bootstrap it, wait for the hub
   status [NAME]       one worker, or (no NAME) every worker, disk and tagged node
   stop NAME           stop the VM; the tailnet node and peer entry stay
   start NAME          start it again and re-verify
@@ -37,7 +37,7 @@ Commands:
         VM, tailnet node and hub peer entry. It refuses if the sessions cannot be
         saved; --no-archive loses them instead
   login NAME pi|claude|codex
-        sign in on the VM (the credential is created there)
+        sign in on the worker (the credential is created there)
   keys [--prune]
         the per-worker LLM gateway keys (worker-NAME) and whether a VM exists
         for each; --prune deletes the ones whose VM is gone
