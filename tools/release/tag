@@ -51,6 +51,20 @@ want="${args[1]:-origin/main}"
   die "$version is not vMAJOR.MINOR.PATCH (e.g. v0.5.9)"
 command -v gh >/dev/null || die "the gh CLI is required for the CI check"
 
+# Work only with the project's own repository, whatever the checkout's local
+# configuration says: gh is pinned to it, hooks and fsmonitor are off, and
+# origin (fetch and push, after any url.*.insteadOf rewriting) must be it.
+slug="${COMEBYE_RELEASE_SLUG:-jhjaggars/comebye}"
+export GH_REPO="$slug"
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
+for u in "$(git ls-remote --get-url origin 2>/dev/null)" "$(git remote get-url --push origin 2>/dev/null)"; do
+  case "$u" in
+    "https://github.com/$slug"|"https://github.com/$slug.git"|"git@github.com:$slug"|"git@github.com:$slug.git"|"ssh://git@github.com/$slug"|"ssh://git@github.com/$slug.git") ;;
+    "${COMEBYE_RELEASE_ORIGIN:-/nonexistent}") ;;   # tests: a local stand-in for GitHub
+    *) die "origin is ${u:-unset}, not github.com/$slug: use a dedicated clone of the project" ;;
+  esac
+done
+
 git fetch origin --tags --quiet || die "git fetch origin failed"
 
 sha="$(git rev-parse --verify --quiet "$want^{commit}")" || die "no such commit: $want"
@@ -61,14 +75,24 @@ if [ "$check" = 1 ]; then
   echo "subject=$(git log -1 --format=%s "$sha" | tr -d '\n\r')"
 fi
 
-if git rev-parse --verify --quiet "refs/tags/$version" >/dev/null; then
-  die "tag $version already exists locally"
-fi
-if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
+# The tags that count are origin's: a tag planted in the checkout changes nothing.
+rtags="$(git ls-remote --tags --refs origin 'refs/tags/v*')" || die "could not list the tags on origin"
+rtags="$(printf '%s\n' "$rtags" | sed 's|.*refs/tags/||' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true)"
+if printf '%s\n' "$rtags" | grep -qx "$version"; then
   die "tag $version already exists on origin"
 fi
+# A tag left here by a push that failed points at this commit and is not on
+# origin: it is replaced, so the failed try can be repeated.
+stale=0
+if git rev-parse --verify --quiet "refs/tags/$version" >/dev/null; then
+  if [ "$(git rev-parse "refs/tags/$version^{commit}")" = "$sha" ]; then
+    stale=1
+  else
+    die "tag $version already exists locally, at another commit"
+  fi
+fi
 
-prev="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)"
+prev="$(printf '%s\n' "$rtags" | sort -V | tail -n1)"
 if [ -n "$prev" ]; then
   top="$(printf '%s\n%s\n' "$prev" "$version" | sort -V | tail -n1)"
   [ "$top" = "$version" ] || die "$version is not greater than the latest tag $prev"
@@ -125,8 +149,12 @@ if [ "$yes" != 1 ]; then
   case "$ans" in y|Y|yes|YES) ;; *) echo "Not tagged."; exit 1 ;; esac
 fi
 
+[ "$stale" = 1 ] && git tag -d "$version" >/dev/null
 git tag "$sign" -m "$version" "$version" "$sha"
-git push origin "refs/tags/$version"
+if ! git push origin "refs/tags/$version"; then
+  git tag -d "$version" >/dev/null 2>&1 || true   # so the next try is not blocked by it
+  die "git push of $version failed; nothing was pushed"
+fi
 echo "Pushed $version ($kind) at $short."
 
 # The Release workflow run for the new tag appears a few seconds later.

@@ -170,38 +170,65 @@ Treat access to it like SSH access to that machine.
   port. What it gets is bookkeeping on a list, not a way to run anything; the
   list holds no secrets and answering does not trigger any action by itself.
 - <a id="releasing-and-upgrading-from-the-app"></a>**Releasing and upgrading from
-  the app** (`-release-repo`, `-release-upgrade`; both off by default). The
-  routes `GET /api/release/{id}`, `POST /api/release/{id}/approve`,
-  `GET|POST /api/release/upgrade` and `POST /api/hosts/{host}/release/upgrade` are
-  the **user role's alone**, registered with the same wrapper as keys and
-  launches: the agent token, a peer forwarding for its agents, a tagged node and
-  a wrong token all fail before any handler runs (403 `agent_forbidden`, or 401),
-  and a test fails if a release route is added with another wrapper. A caller is
-  the user only when the request carries an allowlisted `Tailscale-User-Login` from
-  Serve and none of the agent markers. On top of the cross-site rules above, an
-  action needs the page's CSRF token (`X-Comebye-Csrf`, an HMAC of the login under a
-  key made at start-up, handed out by the same-origin GET), and a body that repeats
-  the version and commit the confirm step showed; a stale page is refused. What an
-  agent can do is raise the item, and only a recorded coordinator may: it fixes a
-  version and a full commit id and nothing else is acted on (the item's text and
-  context are untrusted as ever; the page shows the server's own check of the
-  commit instead). Answering, finishing or dropping the item as a coordinator
-  approves nothing. Before it tags, the server runs the release script again:
-  the commit on `origin/main`, CI passed, the version newer than the last tag, no
-  such tag, which also bounds what a forged login could get done (a good commit
-  of `main`, as the coordinator proposed it); one tagging at a time; the
-  script is the binary's embedded copy, not a checkout's. An upgrade needs a
-  tagged item whose release build has passed, an exact version (never `latest`,
-  `--from-source` or `--force`), and runs `comebye upgrade` on that host; a peer
-  is asked by the hub on the user's click, with none of the browser's headers (the
-  peer's own route is again user-only). Every action goes to the ledger's audit log
-  and the journal. **Limitation, inherited and not widened (issues #3 and #4):** a
-  local process on a host can forge the identity header on the loopback port and
-  then do these too, within the limits above; and an agent with a shell can run
-  `git push` of a tag or `comebye upgrade` itself, as it always could, so
-  the harness rule against agents pushing tags still matters. The tag is pushed with the credentials of the user
-  the server runs as, so run it as that user and give `-release-repo` a checkout
-  of the project only.
+  the app** (`-release-repo`, `-release-upgrade`; both off by default, and refused
+  together with `-insecure-no-auth`, since the buttons act with your credentials).
+  - **Who.** The routes `GET /api/release/{id}`, `POST /api/release/{id}/approve`,
+    `GET|POST /api/release/upgrade` and `POST /api/hosts/{host}/release/upgrade` are
+    the **user role's alone**, registered with the same wrapper as keys and
+    launches: the agent token, a peer forwarding for its agents, a tagged node and
+    a wrong token all fail before any handler runs (403 `agent_forbidden`, or 401),
+    and a test fails if a release route is added with another wrapper. A caller is
+    the user only when the request carries an allowlisted `Tailscale-User-Login`
+    from Serve and none of the agent markers.
+  - **What an action needs.** On top of the cross-site rules above: the page's CSRF
+    token (`X-Comebye-Csrf`, an HMAC of the login under a key made at start-up,
+    handed out by the same-origin GET), and a body repeating the version and commit
+    (or host) the confirm step showed. The page's GET refuses another site and
+    paces its refresh, since it runs `git` and `gh`.
+  - **Tagging.** The server runs the release script again at the click: the commit
+    on `origin/main`, CI passed, the version newer than origin's last tag, no such
+    tag. One tagging at a time. The script is the binary's embedded copy, run with
+    `gh` pinned to `jhjaggars/comebye`, git hooks and fsmonitor off, no system git
+    config, tags and the latest tag read from origin (a tag planted locally counts
+    for nothing), and origin (fetch and push URL, after any `insteadOf`) required to
+    be that repository. It uses your global git config on purpose (that is where
+    your credentials and signing key are). A tagging a restart interrupted becomes
+    `failed` at start-up, and a failed push removes its local tag, so it can be tried again.
+  - **Upgrading.** A hub upgrades a host only for a tagged item whose release build
+    it has just seen pass (this needs `-release-repo` on the hub), with an exact
+    version (never `latest`, `--from-source` or `--force`). A peer is asked by the
+    hub, on your click, over `POST /api/release/upgrade`; that route is **only for
+    a hub calling its peer**: it needs the hub-call marker the hub's own calls carry
+    (no browser path sets it) and a host that keeps no ledger, so on a hub it is
+    refused outright. The marker is not authentication, only a guard: whoever can
+    forge the login can add it.
+  - **What an agent can do.** Raise the item, and only a recorded coordinator may:
+    it fixes a version and a full commit id and nothing else is acted on. The title
+    is the server's (`Release vX (abc1234)?`), the facts shown are the server's own
+    check, and the item's context stays untrusted text. Answering, finishing or
+    dropping the item as a coordinator approves nothing. An agent can still squat a
+    version with an open item until you drop it.
+  - **Audit.** Every action goes to the ledger's audit log and the journal. The log
+    is **not tamper-proof against agents**: they run as the same OS user and can
+    edit the ledger file, and the result of an upgrade is read from a record file in
+    the state directory that they can write too (a forged "running" record also
+    blocks an upgrade for 15 minutes).
+  - **Limitations, inherited and not widened (issues #3 and #4).** Anything that can
+    present your login can do these: a local process forging the header on the
+    loopback port, and also a process on **any untagged peer host**, which can call
+    the hub's Serve URL (Serve stamps your login on it) without the forwarded
+    marker. The CSRF token does not stop it, since the same GET hands it out.
+    What bounds it: the tag must be a CI-green commit of `main` and newer than the
+    last release, and an upgrade needs a tagged release with a passed build. And an
+    agent with a shell can run `git push` of a tag or `comebye upgrade` itself, as it
+    always could, so the harness rule against agents pushing tags still matters.
+  - **The checkout.** `git` and `gh` run in `-release-repo` with your credentials,
+    and anyone who can write that directory can write its `.git/config`. Give it a
+    **dedicated clone** that no agent works in (not a worktree host or an agent's
+    checkout); the pins above close the easy routes, not an agent with write access
+    to the same account's files. `-release-simulate` (demos and browser tests)
+    runs nothing, is loopback-only and cannot go with the real flags; the page says
+    SIMULATED when it is on.
 - **Never use Tailscale Funnel**, and do not put another reverse proxy in
   front of it.
 - **Key input is whitelisted** (esc, enter, arrows, ctrl+c, and similar,

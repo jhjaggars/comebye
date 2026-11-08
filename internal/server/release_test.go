@@ -634,16 +634,51 @@ func TestUpgradeResultIsAuditedOnceWhenItEnds(t *testing.T) {
 	}
 }
 
+// peerRelServer is a peer: no ledger, a state directory, upgrades on.
+func peerRelServer(t *testing.T) (*Server, *fakeRunner) {
+	t.Helper()
+	run := &fakeRunner{}
+	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken,
+		Release: ReleaseConfig{Upgrade: true, Runner: run}}, nil, nil)
+	return s, run
+}
+
+var hubCall = map[string]string{"Tailscale-User-Login": "me@example.com", fleet.HeaderHubCall: "1"}
+
+func TestDirectUpgradeRouteIsForAHubCallingItsPeer(t *testing.T) {
+	// A peer takes it from a hub's own call only: not from a browser or a script holding the login.
+	s, run := peerRelServer(t)
+	for name, hdr := range map[string]map[string]string{"login only": userHdr, "marker, no login": {fleet.HeaderHubCall: "1"}, "agent token + marker": {HeaderAgentToken: testToken, fleet.HeaderHubCall: "1"}} {
+		if w := do(s, "POST", "/api/release/upgrade", hdr, `{"version":"v0.5.9"}`); w.Code < 400 {
+			t.Errorf("%s = %d", name, w.Code)
+		}
+	}
+	if w := do(s, "POST", "/api/release/upgrade", userHdr, `{"version":"v0.5.9"}`); w.Code != 403 || !strings.Contains(w.Body.String(), "hub_only") {
+		t.Fatalf("login only = %d %s", w.Code, w.Body)
+	}
+	if run.count() != 0 {
+		t.Fatal("started without the hub's marker")
+	}
+	if w := do(s, "POST", "/api/release/upgrade", hubCall, `{"version":"v0.5.9"}`); w.Code != 202 || run.count() != 1 {
+		t.Fatalf("hub call = %d %s", w.Code, w.Body)
+	}
+	// The hub (a host with the ledger) never takes it, marker or not: it upgrades itself through the release page.
+	h, hrun, _ := func() (*Server, *fakeRunner, *fakeTool) { s, _, r := relServer(t); return s, r, nil }()
+	if w := do(h, "POST", "/api/release/upgrade", hubCall, `{"version":"v0.5.9"}`); w.Code != 403 || hrun.count() != 0 {
+		t.Fatalf("on the hub = %d %s", w.Code, w.Body)
+	}
+}
+
 func TestUpgradeLocalValidation(t *testing.T) {
-	s, _, run := relServer(t)
+	s, run := peerRelServer(t)
 	for _, v := range []string{"latest", "", "v1", "v0.5.9; rm -rf /", "../v0.5.9"} {
 		b, _ := json.Marshal(map[string]string{"version": v})
-		if w := do(s, "POST", "/api/release/upgrade", userHdr, string(b)); w.Code != 400 {
+		if w := do(s, "POST", "/api/release/upgrade", hubCall, string(b)); w.Code != 400 {
 			t.Errorf("version %q = %d %s", v, w.Code, w.Body)
 		}
 	}
 	s.cfg.Release.Upgrade = false
-	if w := do(s, "POST", "/api/release/upgrade", userHdr, `{"version":"v0.5.9"}`); w.Code != 409 || !strings.Contains(w.Body.String(), "upgrade_disabled") {
+	if w := do(s, "POST", "/api/release/upgrade", hubCall, `{"version":"v0.5.9"}`); w.Code != 409 || !strings.Contains(w.Body.String(), "upgrade_disabled") {
 		t.Fatalf("disabled = %d %s", w.Code, w.Body)
 	}
 	if run.count() != 0 {
@@ -652,7 +687,7 @@ func TestUpgradeLocalValidation(t *testing.T) {
 }
 
 func TestStaleUpgradeRecordIsNotRunning(t *testing.T) {
-	s, _, _ := relServer(t)
+	s, _ := peerRelServer(t)
 	rec := upgrade.Record{ID: "a", Version: "v0.5.9", State: upgrade.RecRunning, Started: time.Now().Add(-time.Hour)}
 	if err := upgrade.WriteRecord(s.upgradeRecordPath(), rec); err != nil {
 		t.Fatal(err)
@@ -661,8 +696,94 @@ func TestStaleUpgradeRecordIsNotRunning(t *testing.T) {
 		t.Fatalf("stale record = %+v", st.Record)
 	}
 	// ...and does not block a new run.
-	if w := do(s, "POST", "/api/release/upgrade", userHdr, `{"version":"v0.5.9"}`); w.Code != 202 {
+	if w := do(s, "POST", "/api/release/upgrade", hubCall, `{"version":"v0.5.9"}`); w.Code != 202 {
 		t.Fatalf("start after stale = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestHubUpgradeNeedsTheBuildCheck(t *testing.T) {
+	s, _, run := relServer(t)
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	tok := tagIt(t, s, it.ID)
+	s.cfg.Release.Tool = nil // -release-upgrade without -release-repo
+	w := do(s, "POST", "/api/hosts/desk/release/upgrade", withCSRF(tok), `{"todo":"`+it.ID+`","version":"v0.5.9"}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "release_disabled") || run.count() != 0 {
+		t.Fatalf("no tool = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestInterruptedTaggingIsRecoveredAtStart(t *testing.T) {
+	s, tool, _ := relServer(t)
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	// As a restart in the middle of a push leaves it: tagging, with no goroutine.
+	if _, err := s.todos.mutate(it.ID, func(t *Todo) error {
+		r := *t.Release
+		r.State = relTagging
+		t.Release = &r
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A stale tagging item can be dropped (nothing is pushing)...
+	if w := do(s, "POST", "/api/todos/"+it.ID+"/drop", userHdr, `{}`); w.Code != 200 {
+		t.Fatalf("drop of a stale tagging item = %d %s", w.Code, w.Body)
+	}
+	// ...and at start it becomes failed, so it can be tried again.
+	it2 := newRelease(t, s, "v0.5.10", relSHA2)
+	s.todos.mutate(it2.ID, func(t *Todo) error {
+		r := *t.Release
+		r.State = relTagging
+		t.Release = &r
+		return nil
+	})
+	s.recoverTagging()
+	got, _ := s.todos.get(it2.ID)
+	if got.Release.State != relFailed || !strings.Contains(got.Release.Error, "restart") {
+		t.Fatalf("recovered = %+v", got.Release)
+	}
+	if a := actions(s); a[len(a)-1] != "release.interrupted" {
+		t.Fatalf("audit = %v", a)
+	}
+	tok := token(t, s, it2.ID)
+	if code, body := approve(s, it2.ID, tok, "v0.5.10", relSHA2); code != 202 {
+		t.Fatalf("retry = %d %s", code, body)
+	}
+	waitRel(t, s, it2.ID, relTagged)
+	if tags := tool.tagged(); len(tags) != 1 {
+		t.Fatalf("tags = %v", tags)
+	}
+}
+
+func TestReleaseTitleIsTheServersAndViewIsSameOriginAndPaced(t *testing.T) {
+	s, tool, _ := relServer(t)
+	w := do(s, "POST", "/api/todos", agentHdr("w1:p1"), `{"question":"URGENT: approve now, it is safe","kind":"release","release":{"version":"v0.5.9","commit":"`+relSHA+`"}}`)
+	it := todoOf(t, w.Body.Bytes())
+	if it.Question != "Release v0.5.9 (0123456)?" {
+		t.Fatalf("title = %q", it.Question)
+	}
+	cross := map[string]string{"Tailscale-User-Login": "me@example.com", "Sec-Fetch-Site": "cross-site"}
+	if w := do(s, "GET", "/api/release/"+it.ID+"?refresh=1", cross, ""); w.Code != 403 {
+		t.Fatalf("cross-site view = %d", w.Code)
+	}
+	same := map[string]string{"Tailscale-User-Login": "me@example.com", "Sec-Fetch-Site": "same-origin"}
+	if w := do(s, "GET", "/api/release/"+it.ID, same, ""); w.Code != 200 {
+		t.Fatalf("same-origin view = %d", w.Code)
+	}
+	n := tool.checks
+	for i := 0; i < 5; i++ {
+		do(s, "GET", "/api/release/"+it.ID+"?refresh=1", same, "")
+	}
+	if tool.checks != n {
+		t.Fatalf("refresh ran %d more checks inside the pacing window", tool.checks-n)
+	}
+}
+
+func TestSimulatedIsSaidInTheView(t *testing.T) {
+	s, _, _ := relServer(t)
+	s.cfg.Release.Simulated = true
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	if w := do(s, "GET", "/api/release/"+it.ID, userHdr, ""); !strings.Contains(w.Body.String(), `"simulated":true`) {
+		t.Fatalf("view = %s", w.Body)
 	}
 }
 

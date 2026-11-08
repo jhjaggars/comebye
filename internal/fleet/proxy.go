@@ -18,6 +18,13 @@ import (
 
 // proxyOp is one per-agent API call the hub may forward. Nothing else is
 // ever proxied: the hub is not a general-purpose proxy to its peers.
+// HeaderHubCall marks a request the hub itself makes to a peer (CallHost,
+// CallAgent), as opposed to a browser's call it forwards. A peer's route
+// that only a hub should reach (the app's upgrade) asks for it. It is not
+// authentication (a caller that forged the login can add it too); it keeps
+// a browser, and the hub's own handlers, from using the peer-side route.
+const HeaderHubCall = "X-Comebye-Hub-Call"
+
 type proxyOp struct {
 	method  string
 	query   []string // query parameters passed through; all others dropped
@@ -212,6 +219,7 @@ func (f *Fleet) call(ctx context.Context, p *peer, spec proxyOp, segments []stri
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set(HeaderHubCall, "1") // only the hub's own calls (this function), never a forwarded browser's
 		if post {
 			req.Header.Set("Content-Type", "application/json")
 		}

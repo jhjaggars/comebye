@@ -8,7 +8,7 @@ const MaxAudit = 2000
 // AuditEvent is one action the user took through the app that changes
 // something outside it (a release tagged, a host upgraded): who, what, when
 // and how it went. It is the ledger's record, beside the journal line the
-// server logs for the same action. Nothing in it is written by an agent.
+// server logs for the same action. No route lets an agent write to it, but it is not tamper-proof: the file is the same user's, and an upgrade's result is read from a record file agents can write too (docs/security.md).
 type AuditEvent struct {
 	At     time.Time `json:"at"`
 	By     string    `json:"by"`               // the Tailscale login (or "the user" without one)

@@ -241,6 +241,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			}
 			s.endStaleAsks()
 			s.trackInstances()
+			s.recoverTagging()
 		}
 	}
 	if manager != nil {

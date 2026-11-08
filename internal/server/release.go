@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/release"
 	"github.com/jhjaggars/comebye/internal/upgrade"
@@ -81,6 +82,8 @@ type ReleaseConfig struct {
 	Upgrade bool
 	// DryRun makes every action do its checks and change nothing.
 	DryRun bool
+	// Simulated: nothing here is real (-release-simulate); the page says so.
+	Simulated bool
 	// Bin is the installed binary `comebye upgrade` replaces.
 	Bin string
 	// Runner starts an upgrade (default: a transient systemd user unit,
@@ -101,7 +104,10 @@ type relState struct {
 	upMu   sync.Mutex // one upgrade start at a time
 	cmu    sync.Mutex
 	checks map[string]relCached
-	key    []byte
+	// tagging holds the items whose tag is being pushed by a goroutine of
+	// this process: one in state tagging that is not here was interrupted.
+	tagging map[string]bool
+	key     []byte
 }
 
 type relCached struct {
@@ -113,7 +119,7 @@ type relCached struct {
 func newRelState() *relState {
 	k := make([]byte, 32)
 	_, _ = rand.Read(k)
-	return &relState{checks: map[string]relCached{}, key: k}
+	return &relState{checks: map[string]relCached{}, tagging: map[string]bool{}, key: k}
 }
 
 // csrf is an HMAC of the caller's login under a key made at start-up. A page
@@ -204,9 +210,8 @@ func (s *Server) releaseFromAdd(w http.ResponseWriter, r *http.Request, b *todoA
 		relErr(w, http.StatusBadRequest, "bad_release", "the commit is the full 40-character id (git rev-parse)")
 		return nil, false
 	}
-	if b.Question == "" {
-		b.Question = fmt.Sprintf("Release %s (%s)?", v, c[:7])
-	}
+	// The title is the server's, not an agent's wording.
+	b.Question = fmt.Sprintf("Release %s (%s)?", v, c[:7])
 	for _, it := range s.todos.list("") {
 		if it.Release != nil && it.Release.Version == v {
 			relErr(w, http.StatusConflict, "release_exists", "there is an open item for "+v+" already: "+it.ID)
@@ -229,18 +234,22 @@ type relHost struct {
 	Record  *upgrade.Record `json:"record,omitempty"`
 }
 
+// How old an answer from git or GitHub the page may be shown. The refresh
+// button asks for a newer one, but not more often than relForceGap; approving
+// and upgrading always ask afresh (maxAge 0).
 const (
 	relCheckTTL = 20 * time.Second
 	relBuildTTL = 15 * time.Second
+	relForceGap = 5 * time.Second
 )
 
 // cached runs fn unless a fresh answer for the key exists (or force).
-func (s *Server) relCheck(ctx context.Context, it Todo, force bool) (release.Check, error) {
+func (s *Server) relCheck(ctx context.Context, it Todo, maxAge time.Duration) (release.Check, error) {
 	k := "check:" + it.ID
 	s.rel.cmu.Lock()
 	c, ok := s.rel.checks[k]
 	s.rel.cmu.Unlock()
-	if ok && !force && time.Since(c.at) < relCheckTTL {
+	if ok && time.Since(c.at) < maxAge {
 		return c.check, nil
 	}
 	ck, err := s.cfg.Release.Tool.Check(ctx, it.Release.Version, it.Release.Commit)
@@ -253,12 +262,12 @@ func (s *Server) relCheck(ctx context.Context, it Todo, force bool) (release.Che
 	return ck, nil
 }
 
-func (s *Server) relBuild(ctx context.Context, it Todo, force bool) (release.Build, error) {
+func (s *Server) relBuild(ctx context.Context, it Todo, maxAge time.Duration) (release.Build, error) {
 	k := "build:" + it.ID
 	s.rel.cmu.Lock()
 	c, ok := s.rel.checks[k]
 	s.rel.cmu.Unlock()
-	if ok && !force && time.Since(c.at) < relBuildTTL {
+	if ok && time.Since(c.at) < maxAge {
 		return c.build, nil
 	}
 	b, err := s.cfg.Release.Tool.Build(ctx, it.Release.Version)
@@ -288,29 +297,38 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 	if !s.relGuard(w, r, false) || s.todoOff(w, r) {
 		return
 	}
+	// A GET is not covered by the cross-origin rule, and this one runs git
+	// and gh: a page that is not this one cannot have it done.
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" && sfs != "none" {
+		relErr(w, http.StatusForbidden, "cross_site", "not from another site")
+		return
+	}
 	it, ok := s.releaseItem(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
 	cfg := s.cfg.Release
-	force := r.URL.Query().Get("refresh") == "1"
+	checkAge, buildAge := relCheckTTL, relBuildTTL
+	if r.URL.Query().Get("refresh") == "1" {
+		checkAge, buildAge = relForceGap, relForceGap
+	}
 	out := map[string]any{
 		"todo": s.todoGone(it), "csrf": s.csrfToken(r),
-		"can_tag": cfg.Tool != nil, "dry_run": cfg.DryRun,
+		"can_tag": cfg.Tool != nil, "dry_run": cfg.DryRun, "simulated": cfg.Simulated,
 		"audit": s.ledger.AuditLog(it.ID),
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
 	if cfg.Tool != nil && it.active() {
 		if it.Release.State != relTagged {
-			ck, err := s.relCheck(ctx, it, force)
+			ck, err := s.relCheck(ctx, it, checkAge)
 			if err != nil {
 				out["check_error"] = err.Error()
 			} else {
 				out["check"] = ck
 			}
 		} else {
-			bd, err := s.relBuild(ctx, it, force)
+			bd, err := s.relBuild(ctx, it, buildAge)
 			if err != nil {
 				out["build_error"] = err.Error()
 			} else {
@@ -414,7 +432,7 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 	}()
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
-	ck, err := s.relCheck(ctx, it, true)
+	ck, err := s.relCheck(ctx, it, 0)
 	if err != nil || !ck.OK {
 		why := ck.Problem
 		if err != nil {
@@ -440,6 +458,9 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, ledger.AuditEvent{Action: "release.approve", Todo: it.ID, OK: true, Detail: fmt.Sprintf("%s at %s (dry run %v)", it.Release.Version, it.Release.Commit, cfg.DryRun)})
 	unlock = false
+	s.rel.cmu.Lock()
+	s.rel.tagging[it.ID] = true
+	s.rel.cmu.Unlock()
 	go s.tagRelease(it, by)
 	cur, _ := s.todos.get(it.ID)
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"todo": s.todoGone(cur)})
@@ -449,6 +470,11 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 // the outcome on the item.
 func (s *Server) tagRelease(it Todo, by string) {
 	defer s.rel.mu.Unlock()
+	defer func() {
+		s.rel.cmu.Lock()
+		delete(s.rel.tagging, it.ID)
+		s.rel.cmu.Unlock()
+	}()
 	cfg := s.cfg.Release
 	res, err := cfg.Tool.Tag(context.Background(), it.Release.Version, it.Release.Commit, cfg.DryRun)
 	done := time.Now().UTC()
@@ -529,16 +555,19 @@ type upgradeBody struct {
 	By       string `json:"by,omitempty"` // unused from outside: the server names the caller
 }
 
-// handleUpgradeLocal: POST /api/release/upgrade {version, rollback?}. This
-// host's own side: validate and start. The hub's handler (below) calls it
-// on a peer on the user's behalf. User role only; an agent never reaches it.
+// handleUpgradeLocal: POST /api/release/upgrade {version, rollback?}. The
+// peer side of an upgrade, for the hub only: it needs the hub-call marker
+// (fleet.HeaderHubCall, set by the hub's own calls and by no browser path)
+// and is refused on a host that keeps the ledger, since a hub starts its own
+// upgrade through handleHostUpgrade, which needs the page's CSRF token and a
+// tagged release whose build passed. User role only, so an agent never
+// reaches it either way.
 func (s *Server) handleUpgradeLocal(w http.ResponseWriter, r *http.Request) {
 	if !s.relGuard(w, r, false) {
 		return
 	}
-	cfg := s.cfg.Release
-	if !cfg.Upgrade {
-		relErr(w, http.StatusConflict, "upgrade_disabled", "this host does not let the app upgrade it: start comebye with -release-upgrade")
+	if s.ledger != nil || r.Header.Get(fleet.HeaderHubCall) != "1" {
+		relErr(w, http.StatusForbidden, "hub_only", "this route is for a hub upgrading its peer; use the release page")
 		return
 	}
 	var b upgradeBody
@@ -546,42 +575,53 @@ func (s *Server) handleUpgradeLocal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if !release.VersionRE.MatchString(b.Version) {
-		relErr(w, http.StatusBadRequest, "bad_version", "an exact version vMAJOR.MINOR.PATCH is required (not latest)")
+	rec, code, msg := s.startUpgrade(s.by(r, ""), b.Version, b.Rollback)
+	if code != http.StatusAccepted {
+		relErr(w, code, msg[0], msg[1])
 		return
+	}
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"record": rec})
+}
+
+// startUpgrade validates and starts an upgrade of this host: the record is
+// written as running, then the runner starts the run. On refusal it returns
+// the status and {code, message}.
+func (s *Server) startUpgrade(by, version string, rollback bool) (upgrade.Record, int, [2]string) {
+	cfg := s.cfg.Release
+	if !cfg.Upgrade {
+		return upgrade.Record{}, http.StatusConflict, [2]string{"upgrade_disabled", "this host does not let the app upgrade it: start comebye with -release-upgrade"}
+	}
+	if !release.VersionRE.MatchString(version) {
+		return upgrade.Record{}, http.StatusBadRequest, [2]string{"bad_version", "an exact version vMAJOR.MINOR.PATCH is required (not latest)"}
 	}
 	path := s.upgradeRecordPath()
 	if path == "" {
-		relErr(w, http.StatusConflict, "upgrade_disabled", "this host has no state directory")
-		return
+		return upgrade.Record{}, http.StatusConflict, [2]string{"upgrade_disabled", "this host has no state directory"}
 	}
 	s.rel.upMu.Lock()
 	defer s.rel.upMu.Unlock()
 	if rec, _ := upgrade.ReadRecord(path); rec.Live(time.Now()) {
-		relErr(w, http.StatusConflict, "upgrade_running", "an upgrade is running on this host already")
-		return
+		return upgrade.Record{}, http.StatusConflict, [2]string{"upgrade_running", "an upgrade is running on this host already"}
 	}
 	var idb [6]byte
 	_, _ = rand.Read(idb[:])
-	rec := upgrade.Record{ID: hex.EncodeToString(idb[:]), Version: b.Version, Rollback: b.Rollback, State: upgrade.RecRunning,
-		By: s.by(r, ""), Started: time.Now().UTC(), From: s.cfg.Version}
+	rec := upgrade.Record{ID: hex.EncodeToString(idb[:]), Version: version, Rollback: rollback, State: upgrade.RecRunning,
+		By: by, Started: time.Now().UTC(), From: s.cfg.Version}
 	if err := upgrade.WriteRecord(path, rec); err != nil {
-		relErr(w, http.StatusInternalServerError, "upgrade_error", err.Error())
-		return
+		return rec, http.StatusInternalServerError, [2]string{"upgrade_error", err.Error()}
 	}
 	runner := cfg.Runner
 	if runner == nil {
 		runner = &systemdRunner{Bin: cfg.Bin, URL: "http://" + s.cfg.Addr}
 	}
-	if err := runner.Start(context.Background(), rec, path, b.Rollback, cfg.DryRun); err != nil {
+	if err := runner.Start(context.Background(), rec, path, rollback, cfg.DryRun); err != nil {
 		rec.State, rec.Error, rec.Finished = upgrade.RecFailed, "could not start: "+err.Error(), time.Now().UTC()
 		_ = upgrade.WriteRecord(path, rec)
-		s.auditBy(ledger.AuditEvent{By: rec.By, Action: "upgrade.start", Detail: b.Version + ": " + rec.Error})
-		relErr(w, http.StatusInternalServerError, "upgrade_error", rec.Error)
-		return
+		s.auditBy(ledger.AuditEvent{By: by, Action: "upgrade.start", Detail: version + ": " + rec.Error})
+		return rec, http.StatusInternalServerError, [2]string{"upgrade_error", rec.Error}
 	}
-	s.auditBy(ledger.AuditEvent{By: rec.By, Action: "upgrade.start", OK: true, Detail: fmt.Sprintf("%s (rollback %v, dry run %v) run %s", b.Version, b.Rollback, cfg.DryRun, rec.ID)})
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"record": rec})
+	s.auditBy(ledger.AuditEvent{By: by, Action: "upgrade.start", OK: true, Detail: fmt.Sprintf("%s (rollback %v, dry run %v) run %s", version, rollback, cfg.DryRun, rec.ID)})
+	return rec, http.StatusAccepted, [2]string{}
 }
 
 type hostUpgradeBody struct {
@@ -621,10 +661,16 @@ func (s *Server) handleHostUpgrade(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusNotFound, "unknown_host", "no such host")
 		return
 	}
-	if s.cfg.Release.Tool != nil {
+	// The build gate needs gh and the checkout, so a hub upgrades hosts only
+	// with -release-repo set.
+	if s.cfg.Release.Tool == nil {
+		relErr(w, http.StatusConflict, "release_disabled", "this hub cannot check the release build: start comebye with -release-repo <checkout>")
+		return
+	}
+	{
 		ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 		defer cancel()
-		if bd, err := s.relBuild(ctx, it, true); err != nil || bd.State != "success" {
+		if bd, err := s.relBuild(ctx, it, 0); err != nil || bd.State != "success" {
 			why := "the release build is " + bd.State
 			if err != nil {
 				why = err.Error()
@@ -637,13 +683,13 @@ func (s *Server) handleHostUpgrade(w http.ResponseWriter, r *http.Request) {
 	by := s.by(r, "")
 	inner, _ := json.Marshal(upgradeBody{Version: b.Version, Rollback: b.Rollback})
 	if local {
-		r2 := r.Clone(r.Context())
-		r2.Body = http.NoBody
-		rr := &bufResponse{h: http.Header{}}
-		r2.Body = nopCloser{strings.NewReader(string(inner))}
-		s.handleUpgradeLocal(rr, r2)
-		s.auditBy(ledger.AuditEvent{By: by, Action: "upgrade.request", Todo: it.ID, Host: host, OK: rr.code == 0 || rr.code == http.StatusAccepted, Detail: fmt.Sprintf("%s rollback=%v -> %d", b.Version, b.Rollback, rr.status())})
-		rr.copyTo(w)
+		rec, code, msg := s.startUpgrade(by, b.Version, b.Rollback)
+		s.auditBy(ledger.AuditEvent{By: by, Action: "upgrade.request", Todo: it.ID, Host: host, OK: code == http.StatusAccepted, Detail: fmt.Sprintf("%s rollback=%v -> %d", b.Version, b.Rollback, code)})
+		if code != http.StatusAccepted {
+			relErr(w, code, msg[0], msg[1])
+			return
+		}
+		writeJSONStatus(w, http.StatusAccepted, map[string]any{"record": rec})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
@@ -692,7 +738,7 @@ func (s *systemdRunner) Start(ctx context.Context, rec upgrade.Record, path stri
 		if err != nil {
 			return err
 		}
-		bin = exe
+		bin = strings.TrimSuffix(exe, " (deleted)") // the binary was replaced while this server ran
 	}
 	args := []string{"upgrade", "--bin", bin, "--record", path}
 	switch {
@@ -726,35 +772,6 @@ func (s *systemdRunner) Start(ctx context.Context, rec upgrade.Record, path stri
 	return nil
 }
 
-// ---- small plumbing for calling a handler in-process ----
-
-type bufResponse struct {
-	h    http.Header
-	code int
-	buf  strings.Builder
-}
-
-func (b *bufResponse) Header() http.Header         { return b.h }
-func (b *bufResponse) WriteHeader(c int)           { b.code = c }
-func (b *bufResponse) Write(p []byte) (int, error) { return b.buf.Write(p) }
-func (b *bufResponse) status() int {
-	if b.code == 0 {
-		return http.StatusOK
-	}
-	return b.code
-}
-func (b *bufResponse) copyTo(w http.ResponseWriter) {
-	for k, v := range b.h {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(b.status())
-	_, _ = w.Write([]byte(b.buf.String()))
-}
-
-type nopCloser struct{ *strings.Reader }
-
-func (nopCloser) Close() error { return nil }
-
 // SimulatedUpgrade is an UpgradeRunner that runs nothing and writes a
 // finished record at once (-release-simulate: demos and browser tests).
 type SimulatedUpgrade struct{}
@@ -763,4 +780,37 @@ func (SimulatedUpgrade) Start(_ context.Context, rec upgrade.Record, path string
 	rec.State, rec.Finished, rec.To = upgrade.RecDryRun, time.Now().UTC(), rec.Version
 	rec.Output = "simulated: nothing was installed"
 	return upgrade.WriteRecord(path, rec)
+}
+
+// tagInFlight: a goroutine of this process is pushing the item's tag.
+func (s *Server) tagInFlight(id string) bool {
+	s.rel.cmu.Lock()
+	defer s.rel.cmu.Unlock()
+	return s.rel.tagging[id]
+}
+
+// recoverTagging runs at start-up: an item left in state tagging by a
+// restart (a deploy, a crash) is moved to failed, saying the tag may or may
+// not have been pushed. The user can then try again (the script refuses if
+// the tag is there) or drop it.
+func (s *Server) recoverTagging() {
+	if s.todos == nil {
+		return
+	}
+	for _, it := range s.todos.list("") {
+		if it.Release == nil || it.Release.State != relTagging {
+			continue
+		}
+		_, err := s.todos.mutate(it.ID, func(t *Todo) error {
+			rel := *t.Release
+			rel.State, rel.Error = relFailed, "interrupted by a restart: check whether the tag "+rel.Version+" exists on origin before trying again"
+			t.Release = &rel
+			return nil
+		})
+		if err != nil {
+			log.Printf("release: recovering %s: %v", it.ID, err)
+			continue
+		}
+		s.auditBy(ledger.AuditEvent{By: "comebye", Todo: it.ID, Action: "release.interrupted", Detail: it.Release.Version + ": the server restarted while tagging"})
+	}
 }

@@ -8,11 +8,13 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/jhjaggars/comebye/internal/archive"
 	"github.com/jhjaggars/comebye/internal/gitfetch"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -294,10 +296,13 @@ func main() {
 		}
 		log.Printf("archive: final transcript copies go to %s", *archiveDir+*archiveS3)
 	}
+	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseUp, *releaseSim, *addr); err != nil {
+		log.Fatal(err)
+	}
 	var relCfg server.ReleaseConfig
 	switch {
 	case *releaseSim:
-		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, Runner: server.SimulatedUpgrade{}}
+		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, Simulated: true, Runner: server.SimulatedUpgrade{}}
 		log.Printf("release: SIMULATED (canned results, nothing runs)")
 	default:
 		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry}
@@ -590,4 +595,34 @@ func envInt(key string, def int) int {
 		log.Printf("ignoring %s=%q: not an integer", key, v)
 	}
 	return def
+}
+
+func isLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// releaseFlagError refuses the release flags in combinations that would
+// leave the buttons open. They act as the user with the user's credentials,
+// so they are never offered without an identity allowlist: with
+// -insecure-no-auth anyone who reaches the port (and the CSRF token, which
+// then protects nothing) could tag or upgrade. -release-simulate runs
+// nothing, so it may go with -insecure-no-auth (the browser tests do), but
+// not with the real flags, and only on loopback.
+func releaseFlagError(noAuth bool, repo string, upgrade, simulate bool, addr string) error {
+	real := strings.TrimSpace(repo) != "" || upgrade
+	switch {
+	case noAuth && real:
+		return errors.New("-release-repo / -release-upgrade need -ts-allow-login: they cannot be combined with -insecure-no-auth")
+	case simulate && (real || !isLoopbackListen(addr)):
+		return errors.New("-release-simulate is for demos and tests: not with -release-repo or -release-upgrade, and only on a loopback address")
+	}
+	return nil
 }

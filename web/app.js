@@ -1588,6 +1588,7 @@ function relHtml(t) {
   let h = `<div class="rel" data-rel-id="${escAttr(t.id)}">`;
   h += `<div class="rel-h">Release <b>${esc(rl.version)}</b><span class="rel-state rel-s-${esc(rl.state)}">${esc(STATE[rl.state] || rl.state)}</span>
     <button type="button" class="rel-refresh" data-rel="refresh" aria-label="Check again"${r.inflight ? " disabled" : ""}>↻</button></div>`;
+  if (d && d.simulated) h += `<div class="rel-block" role="alert">SIMULATED: this server runs no git, no GitHub and no upgrade. Nothing below is real.</div>`;
   if (d && d.dry_run) h += `<div class="rel-note rel-dry">Dry run: the checks run for real, but nothing is tagged or installed.</div>`;
   h += `<dl class="rel-facts"><dt>Commit</dt><dd><code class="rel-sha">${esc(rl.commit)}</code></dd>`;
   if (ck && ck.subject) h += `<dt>Subject</dt><dd>${esc(ck.subject)}</dd>`;

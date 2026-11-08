@@ -102,3 +102,28 @@ func TestDefaultSocketPath(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseFlagsAreRefusedWithoutAnAllowlist(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		noAuth  bool
+		repo    string
+		up, sim bool
+		addr    string
+		wantErr bool
+	}{
+		{"repo with allowlist", false, "/x", false, false, "127.0.0.1:8741", false},
+		{"upgrade with allowlist", false, "", true, false, "127.0.0.1:8741", false},
+		{"repo, no auth", true, "/x", false, false, "127.0.0.1:8741", true},
+		{"upgrade, no auth", true, "", true, false, "127.0.0.1:8741", true},
+		{"nothing, no auth", true, "", false, false, "127.0.0.1:8741", false},
+		{"simulate, no auth, loopback (the browser tests)", true, "", false, true, "127.0.0.1:18741", false},
+		{"simulate off loopback", false, "", false, true, "0.0.0.0:8741", true},
+		{"simulate with repo", false, "/x", false, true, "127.0.0.1:8741", true},
+		{"simulate with upgrade", false, "", true, true, "127.0.0.1:8741", true},
+	} {
+		if err := releaseFlagError(c.noAuth, c.repo, c.up, c.sim, c.addr); (err != nil) != c.wantErr {
+			t.Errorf("%s: err = %v, want error %v", c.name, err, c.wantErr)
+		}
+	}
+}

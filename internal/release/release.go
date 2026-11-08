@@ -87,9 +87,13 @@ func defaultExec(ctx context.Context, dir string, env []string, name string, arg
 // Script is the real Tool: the tag script, run in Repo.
 type Script struct {
 	Source string // the tools/release/tag script text
-	Repo   string // the checkout that owns the repository
-	Exec   Exec   // default: os/exec
-	Now    func() time.Time
+	Repo   string // the checkout that owns the repository (a dedicated clone: see docs/releasing.md)
+	// Slug pins gh and origin to this GitHub repository (default
+	// jhjaggars/comebye); Origin, for tests only, is one more URL accepted
+	// as origin (a local stand-in for GitHub).
+	Slug, Origin string
+	Exec         Exec // default: os/exec
+	Now          func() time.Time
 }
 
 func (s *Script) exec() Exec {
@@ -110,7 +114,18 @@ func (s *Script) run(ctx context.Context, args ...string) ([]byte, error) {
 	// bash -c SCRIPT NAME ARGS...: the script comes from the binary, and
 	// stdin is not the script, so git cannot swallow it.
 	a := append([]string{"-c", s.Source, "tag"}, args...)
-	return s.exec()(ctx, s.Repo, []string{"COMEBYE_RELEASE_REPO=" + s.Repo, "GIT_TERMINAL_PROMPT=0"}, "bash", a...)
+	return s.exec()(ctx, s.Repo, s.env(), "bash", a...)
+}
+
+func (s *Script) env() []string {
+	e := []string{"COMEBYE_RELEASE_REPO=" + s.Repo, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1"}
+	if s.Slug != "" {
+		e = append(e, "COMEBYE_RELEASE_SLUG="+s.Slug)
+	}
+	if s.Origin != "" {
+		e = append(e, "COMEBYE_RELEASE_ORIGIN="+s.Origin)
+	}
+	return e
 }
 
 func validate(version, commit string) error {
@@ -185,7 +200,12 @@ func ParseCheck(out string) Check {
 	return c
 }
 
-var runURLRE = regexp.MustCompile(`Release workflow: (https://\S+)`)
+// The script's own lines start in column 0; commit subjects it lists are
+// indented, so text in a commit message cannot pass for them.
+var (
+	runURLRE = regexp.MustCompile(`(?m)^Release workflow: (https://\S+)`)
+	pushedRE = regexp.MustCompile(`(?m)^Pushed (v\S+) `)
+)
 
 // Tag runs the script with --yes (or --dry-run). The script re-checks
 // everything itself before it tags.
@@ -204,10 +224,14 @@ func (s *Script) Tag(ctx context.Context, version, commit string, dry bool) (Tag
 	if err != nil {
 		return res, fmt.Errorf("%w: %s", err, tail(string(out), 400))
 	}
-	if m := runURLRE.FindStringSubmatch(string(out)); m != nil {
-		res.RunURL = m[1]
+	if all := runURLRE.FindAllStringSubmatch(string(out), -1); len(all) > 0 {
+		res.RunURL = all[len(all)-1][1]
 	}
-	res.Pushed = !dry && strings.Contains(string(out), "Pushed "+version)
+	for _, m := range pushedRE.FindAllStringSubmatch(string(out), -1) {
+		if m[1] == version {
+			res.Pushed = !dry
+		}
+	}
 	if !dry && !res.Pushed {
 		return res, errors.New("the script ended without saying it pushed the tag: " + tail(string(out), 300))
 	}
@@ -221,12 +245,20 @@ func (s *Script) Build(ctx context.Context, version string) (Build, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := s.exec()(ctx, s.Repo, []string{"GH_PROMPT_DISABLED=1"}, "gh", "run", "list", "--workflow", "Release", "--branch", version,
+	out, err := s.exec()(ctx, s.Repo, s.ghEnv(), "gh", "run", "list", "--workflow", "Release", "--branch", version,
 		"--limit", "1", "--json", "status,conclusion,url", "--jq", `.[] | "\(.status) \(.conclusion) \(.url)"`)
 	if err != nil {
 		return Build{}, fmt.Errorf("gh run list: %w: %s", err, tail(string(out), 200))
 	}
 	return ParseBuild(string(out), s.now()), nil
+}
+
+func (s *Script) ghEnv() []string {
+	slug := s.Slug
+	if slug == "" {
+		slug = "jhjaggars/comebye"
+	}
+	return []string{"GH_PROMPT_DISABLED=1", "GH_REPO=" + slug}
 }
 
 // ParseBuild reads one "status conclusion url" line of gh's output.

@@ -38,14 +38,17 @@ last tag, the CI result of that commit, and the commits since the last tag.
 **Approve release** asks you to confirm, naming the version and the commit.
 The server then runs this same script (`tools/release/tag VERSION COMMIT
 --yes`; its text is embedded in the binary) in the checkout named by
-`-release-repo`, as the user the server runs as, with that user's git and `gh`
-credentials. It refuses, with the script's reason, unless the commit is on
+`-release-repo` (a **dedicated clone** of the project that no agent works in), as
+the user the server runs as, with that user's git and `gh` credentials. The script
+works only with `github.com/jhjaggars/comebye` whatever the clone's configuration
+says (`COMEBYE_RELEASE_SLUG` names another repository). It refuses, with the script's reason, unless the commit is on
 `origin/main`, its CI run passed, the version is newer than the last tag and
 the tag does not exist; it checks again at the moment of the click. The item
 then shows the tag, the Release workflow run and its state.
 
 When the release build has passed, each host in the item gets **Upgrade**
-(a host needs `-release-upgrade`; a peer is asked by the hub). It runs
+(a host needs `-release-upgrade`, and the hub `-release-repo` to see the build;
+a peer is asked by the hub). It runs
 `comebye upgrade --version vX.Y.Z` on that host, with the same checksum and
 smoke checks, and keeps `comebye.prev`; the result and the host's version show
 in the item, and **Roll back** runs `comebye upgrade --rollback`. The upgrade

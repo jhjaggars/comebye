@@ -660,7 +660,7 @@ func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string)
 	if s.todoOff(w, r) || !s.mayManage(w, r) {
 		return
 	}
-	if it, ok := s.todos.get(r.PathValue("id")); ok && it.Release != nil && it.Release.State == relTagging {
+	if it, ok := s.todos.get(r.PathValue("id")); ok && it.Release != nil && it.Release.State == relTagging && s.tagInFlight(it.ID) {
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "release_busy", "message": "the tag is being pushed: wait for it to finish"})
 		return
 	}
