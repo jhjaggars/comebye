@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/fleet"
@@ -115,6 +116,8 @@ type relState struct {
 	// this process: one in state tagging that is not here was interrupted.
 	tagging map[string]bool
 	key     []byte
+	// peerTagging: this host, as a release peer, is running a tagging.
+	peerTagging atomic.Bool
 }
 
 type relCached struct {
@@ -315,9 +318,18 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.cfg.Release
+	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
+	defer cancel()
 	checkAge, buildAge := relCheckTTL, relBuildTTL
 	if r.URL.Query().Get("refresh") == "1" {
 		checkAge, buildAge = relForceGap, relForceGap
+	}
+	if cfg.Tool != nil && it.active() && it.Release.State == relFailed {
+		// A push that went through without being acknowledged left the item
+		// failed: if the tag is on origin at this commit, record that.
+		if ck, err := s.relCheck(ctx, it, checkAge); err == nil && s.reconcileTagged(it, ck) {
+			it, _ = s.todos.get(it.ID)
+		}
 	}
 	out := map[string]any{
 		"todo": s.todoGone(it), "csrf": s.csrfToken(r),
@@ -325,10 +337,12 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 		"release_host": s.releaseHost(),
 		"audit":        s.ledger.AuditLog(it.ID),
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
-	defer cancel()
 	if cfg.Tool != nil && it.active() {
-		if it.Release.State != relTagged {
+		// While the tag is being pushed the page shows the stored state: a
+		// check now would fetch in the clone the push is using.
+		if it.Release.State == relTagging {
+			// nothing to ask
+		} else if it.Release.State != relTagged {
 			ck, err := s.relCheck(ctx, it, checkAge)
 			if err != nil {
 				out["check_error"] = err.Error()
@@ -843,4 +857,38 @@ func (s *Server) releaseHost() string {
 func (s *Server) remoteDry() bool {
 	rt, ok := s.cfg.Release.Tool.(*remoteTool)
 	return ok && rt.dry.Load()
+}
+
+// reconcileTagged moves a failed item to tagged when origin has its tag at
+// exactly its commit. That is the case of a push that went through while the
+// answer was lost (the peer finished after the hub gave up, or the hub
+// restarted): the script now refuses the retry, so without this the item
+// stays failed and no host can be upgraded from it. Only an item the user
+// approved is touched, never one with a push in flight, and the commit must
+// match the item's; the move is audited.
+func (s *Server) reconcileTagged(it Todo, ck release.Check) bool {
+	rel := it.Release
+	if rel == nil || rel.State != relFailed || rel.ApprovedBy == "" || ck.TagOnOrigin == "" || ck.TagOnOrigin != rel.Commit || s.tagInFlight(it.ID) {
+		return false
+	}
+	now := time.Now().UTC()
+	moved := false
+	if _, err := s.todos.mutate(it.ID, func(t *Todo) error {
+		if t.Release == nil || t.Release.State != relFailed || t.Release.ApprovedBy == "" || !t.active() {
+			return nil
+		}
+		r := *t.Release
+		r.State, r.Error, r.TaggedAt = relTagged, "", &now
+		t.Release, moved = &r, true
+		return nil
+	}); err != nil || !moved {
+		return false
+	}
+	s.auditBy(ledger.AuditEvent{By: "comebye", Todo: it.ID, Host: s.releaseHost(), Action: "release.reconciled", OK: true,
+		Detail: rel.Version + ": the tag is on origin at " + rel.Commit + "; the earlier try ended without an answer"})
+	s.rel.cmu.Lock()
+	delete(s.rel.checks, "check:"+it.ID)
+	delete(s.rel.checks, "build:"+it.ID)
+	s.rel.cmu.Unlock()
+	return true
 }

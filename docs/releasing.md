@@ -95,6 +95,11 @@ If the peer cannot be reached, refuses, or the push fails, the item goes to
 **failed** with the reason and **Approve** is offered again. When the hub got no
 answer to a tag request, the reason says the tag may have been pushed: trying
 again is safe, since the script refuses with "tag exists on origin" if it was.
+In that case the page, when it next checks, sees (`--check` prints
+`tag_on_origin=<commit>`) that origin has the tag at the item's own commit and
+moves the approved item from **failed** to **tagged** itself, with a
+`release.reconciled` audit line, so the hosts can be upgraded from it. A tag at
+another commit, or an item nobody approved, is never reconciled.
 A peer finishes a push it started even if the hub stopped waiting, and does one
 tagging at a time. The hub's upgrade gate reads the release build from the same
 peer, so the hub needs neither `gh` nor a clone for it.

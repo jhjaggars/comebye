@@ -31,19 +31,22 @@ var (
 // before the first failing check are still set, so the page can show the
 // commit and a CI run that has not finished.
 type Check struct {
-	Version      string    `json:"version"`
-	Commit       string    `json:"commit"`
-	Short        string    `json:"short,omitempty"`
-	Subject      string    `json:"subject,omitempty"`
-	Previous     string    `json:"previous,omitempty"`
-	CIID         string    `json:"ci_id,omitempty"`
-	CIStatus     string    `json:"ci_status,omitempty"`
-	CIConclusion string    `json:"ci_conclusion,omitempty"`
-	CIURL        string    `json:"ci_url,omitempty"`
-	Changes      []string  `json:"changes,omitempty"`
-	OK           bool      `json:"ok"`
-	Problem      string    `json:"problem,omitempty"`
-	At           time.Time `json:"at"`
+	Version      string   `json:"version"`
+	Commit       string   `json:"commit"`
+	Short        string   `json:"short,omitempty"`
+	Subject      string   `json:"subject,omitempty"`
+	Previous     string   `json:"previous,omitempty"`
+	CIID         string   `json:"ci_id,omitempty"`
+	CIStatus     string   `json:"ci_status,omitempty"`
+	CIConclusion string   `json:"ci_conclusion,omitempty"`
+	CIURL        string   `json:"ci_url,omitempty"`
+	Changes      []string `json:"changes,omitempty"`
+	// TagOnOrigin is the commit the version's tag already points at on
+	// origin (empty: no such tag).
+	TagOnOrigin string    `json:"tag_on_origin,omitempty"`
+	OK          bool      `json:"ok"`
+	Problem     string    `json:"problem,omitempty"`
+	At          time.Time `json:"at"`
 }
 
 // TagResult is the outcome of a tagging.
@@ -189,6 +192,10 @@ func ParseCheck(out string) Check {
 			c.CIConclusion = v
 		case "ci_url":
 			c.CIURL = v
+		case "tag_on_origin":
+			if CommitRE.MatchString(v) {
+				c.TagOnOrigin = v
+			}
 		case "change":
 			c.Changes = append(c.Changes, v)
 		case "problem":

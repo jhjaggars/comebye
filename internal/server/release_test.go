@@ -35,6 +35,7 @@ type fakeTool struct {
 	tags   []string // "version commit dry"
 	checks int
 	gate   chan struct{} // when set, Tag waits for it
+	runURL string        // the run Tag reports (default https://run/1)
 }
 
 func okCheck() release.Check {
@@ -60,7 +61,11 @@ func (f *fakeTool) Tag(_ context.Context, v, c string, dry bool) (release.TagRes
 	if f.tagErr != nil {
 		return release.TagResult{}, f.tagErr
 	}
-	return release.TagResult{Pushed: !dry, DryRun: dry, RunURL: "https://run/1", Output: "Pushed"}, nil
+	url := f.runURL
+	if url == "" {
+		url = "https://run/1"
+	}
+	return release.TagResult{Pushed: !dry, DryRun: dry, RunURL: url, Output: "Pushed"}, nil
 }
 
 func (f *fakeTool) Build(_ context.Context, v string) (release.Build, error) {

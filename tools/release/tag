@@ -12,7 +12,7 @@
 #
 # --check changes nothing and prints key=value lines for the Comebye app (the
 # server runs this same script for its release page): commit, short, subject,
-# previous, ci_id, ci_status, ci_conclusion, ci_url, change (one per commit),
+# previous, tag_on_origin (when the tag is there), ci_id, ci_status, ci_conclusion, ci_url, change (one per commit),
 # then ok=1, or problem=<why> in place of ok (the exit status is 0 either way).
 # COMEBYE_RELEASE_REPO names the checkout to work in (the server sets it; it
 # also runs the script from its own copy).
@@ -89,6 +89,13 @@ fi
 rtags="$(git ls-remote --tags --refs origin 'refs/tags/v*')" || die "could not list the tags on origin"
 rtags="$(printf '%s\n' "$rtags" | sed 's|.*refs/tags/||' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true)"
 if printf '%s\n' "$rtags" | grep -qx "$version"; then
+  if [ "$check" = 1 ]; then
+    # Where the tag points (the commit, for an annotated tag too), so the app
+    # can tell a push that went through unanswered from one that never did.
+    tsha="$(git ls-remote origin "refs/tags/$version^{}" | awk 'NR==1{print $1}')"
+    [ -n "$tsha" ] || tsha="$(git ls-remote origin "refs/tags/$version" | awk 'NR==1{print $1}')"
+    echo "tag_on_origin=$tsha"
+  fi
   die "tag $version already exists on origin"
 fi
 # A tag left here by a push that failed points at this commit and is not on

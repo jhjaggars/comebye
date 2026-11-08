@@ -114,6 +114,11 @@ func (s *Server) handlePeerCheck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A check runs git fetch in the clone a tagging is using: not meanwhile.
+	if s.rel.peerTagging.Load() {
+		relErr(w, http.StatusConflict, "release_busy", "a release is being tagged here: wait for it to finish")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 95*time.Second)
 	defer cancel()
 	ck, err := s.cfg.Release.Tool.Check(ctx, b.Version, b.Commit)
@@ -142,6 +147,8 @@ func (s *Server) handlePeerTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.rel.mu.Unlock()
+	s.rel.peerTagging.Store(true)
+	defer s.rel.peerTagging.Store(false)
 	cfg := s.cfg.Release
 	dry := cfg.DryRun || b.DryRun
 	claim := fmt.Sprintf("(hub says: todo %s, by %s)", oneLine(b.Todo, 40), oneLine(b.By, 80))
@@ -244,10 +251,11 @@ func (t *remoteTool) call(ctx context.Context, op string, q url.Values, body any
 	return nil
 }
 
-// httpsOnly keeps a link a peer sent only if it is an https URL: the page
-// links it, and a peer's text is not trusted to be a safe href.
+// httpsOnly keeps a link a peer sent only if it is a GitHub https URL (the
+// CI and Release runs are there): the page links it, and a peer's text is
+// not trusted to be a safe href or to send the user elsewhere.
 func httpsOnly(u string) string {
-	if strings.HasPrefix(u, "https://") && !strings.ContainsAny(u, " \t\r\n\"'<>") {
+	if strings.HasPrefix(u, "https://github.com/") && !strings.ContainsAny(u, " \t\r\n\"'<>") {
 		return u
 	}
 	return ""

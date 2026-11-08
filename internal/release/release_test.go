@@ -305,3 +305,22 @@ func TestCommitSubjectsCannotPassForTheScriptsLines(t *testing.T) {
 		t.Fatalf("run url = %q", res.RunURL)
 	}
 }
+
+func TestCheckSaysWhereAnExistingTagPointsOnOrigin(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.script.Tag(ctx, "v0.2.0", r.sha, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.script.Check(ctx, "v0.2.0", r.sha) // an annotated tag: the commit, not the tag object
+	if err != nil || got.OK || got.TagOnOrigin != r.sha {
+		t.Fatalf("v0.2.0 = %+v %v, want the tag at %s", got, err, r.sha)
+	}
+	got, _ = r.script.Check(ctx, "v0.1.0", r.sha) // another commit
+	if got.TagOnOrigin == "" || got.TagOnOrigin == r.sha {
+		t.Fatalf("v0.1.0 tag_on_origin = %q", got.TagOnOrigin)
+	}
+	if got, _ = r.script.Check(ctx, "v0.3.0", r.sha); got.TagOnOrigin != "" || !got.OK {
+		t.Fatalf("no tag: %+v", got)
+	}
+}

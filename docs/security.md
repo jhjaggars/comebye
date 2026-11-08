@@ -245,10 +245,15 @@ Treat access to it like SSH access to that machine.
       tag absent, origin pinned) and the same pins on `gh`, hooks and git config.
       Its audit lines (`release.tagged`, `release.failed`, `release.dry_run`) go to
       its journal; the hub's log records the same event with the peer as its
-      host. A peer's dry-run flag is its own.
+      host. A peer's dry-run flag is its own. The peer refuses a check while it
+      is tagging (they share the clone), and the hub's page does not ask one then.
+    - A tag that went through while its answer was lost is reconciled by the hub:
+      an item the user approved, failed, whose tag is on origin at exactly the
+      item's commit (read by the peer's `--check`) becomes tagged, with a
+      `release.reconciled` audit line. It adds no way to tag, only a record.
     - The hub does not trust the peer's answer more than it must: a check about
       another commit is refused, a dry run that reports a push is a failure, a link
-      that is not `https://` is dropped, and a run with no stated push is a failure.
+      that is not an `https://github.com/` URL is dropped, and a run with no stated push is a failure.
       A compromised peer can of course lie about CI, which the hub shows, and it
       holds the credentials anyway: **the peer's account is the release boundary**.
     - Limitation, same as upgrades: the hub-call marker is a guard, not

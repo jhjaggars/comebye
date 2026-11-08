@@ -20,11 +20,15 @@ import (
 
 // ---- the peer's side ----
 
+const ghRun = "https://github.com/jhjaggars/comebye/actions/runs/"
+
 // peerTagServer is a peer that owns the release clone: no ledger, a fake
 // release tool, the app's upgrade off.
 func peerTagServer(t *testing.T) (*Server, *fakeTool) {
 	t.Helper()
-	tool := &fakeTool{check: okCheck(), build: release.Build{State: "success", URL: "https://run/1"}}
+	ck := okCheck()
+	ck.CIURL = ghRun + "100"
+	tool := &fakeTool{check: ck, build: release.Build{State: "success", URL: ghRun + "1"}, runURL: ghRun + "1"}
 	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken,
 		Release: ReleaseConfig{Tool: tool}}, nil, nil)
 	return s, tool
@@ -336,7 +340,7 @@ func TestHubTagsThroughItsReleaseHost(t *testing.T) {
 		t.Fatalf("approve = %d %s", code, body)
 	}
 	got := waitRel(t, s, it.ID, relTagged)
-	if got.Release.Host != "kube" || got.Release.RunURL != "https://run/1" || got.Release.ApprovedBy != "me@example.com" {
+	if got.Release.Host != "kube" || got.Release.RunURL != ghRun+"1" || got.Release.ApprovedBy != "me@example.com" {
 		t.Fatalf("item = %+v", got.Release)
 	}
 	if tags := p.tool.tagged(); len(tags) != 1 || tags[0] != "v0.5.9 "+relSHA+" real" {
@@ -349,7 +353,7 @@ func TestHubTagsThroughItsReleaseHost(t *testing.T) {
 		case "release.approve":
 			sawApprove = e.Host == "kube" && e.OK
 		case "release.tagged":
-			sawTagged = e.Host == "kube" && e.OK && strings.Contains(e.Detail, "https://run/1")
+			sawTagged = e.Host == "kube" && e.OK && strings.Contains(e.Detail, ghRun+"1")
 		}
 	}
 	if !sawApprove || !sawTagged {
@@ -376,7 +380,7 @@ func TestHubTagsThroughItsReleaseHost(t *testing.T) {
 		t.Fatalf("upgrade = %d %s", w.Code, w.Body)
 	}
 	p.tool.mu.Lock()
-	p.tool.build = release.Build{State: "failure", URL: "https://run/1"}
+	p.tool.build = release.Build{State: "failure", URL: ghRun + "1"}
 	p.tool.mu.Unlock()
 	if w := do(s, "POST", "/api/hosts/desk/release/upgrade", withCSRF(v.CSRF), `{"todo":"`+it.ID+`","version":"v0.5.9"}`); w.Code != 409 || !strings.Contains(w.Body.String(), "build_not_green") || run.count() != 1 {
 		t.Fatalf("upgrade with a failed build = %d %s", w.Code, w.Body)
@@ -577,6 +581,15 @@ func TestHubDistrustsAPeersAnswer(t *testing.T) {
 	if got := waitRel(t, s, it.ID, relTagged); got.Release.RunURL != "" {
 		t.Fatalf("run url = %q", got.Release.RunURL)
 	}
+	// A link to anywhere but GitHub is dropped too.
+	for _, u := range []string{"https://evil.example/actions/runs/1", "https://github.com.evil.example/x", "http://github.com/x"} {
+		if httpsOnly(u) != "" {
+			t.Errorf("httpsOnly(%q) kept", u)
+		}
+	}
+	if httpsOnly(ghRun+"7") == "" {
+		t.Error("a GitHub run link was dropped")
+	}
 	// A dry run that pushed is a failure, not a success.
 	rt := s.cfg.Release.Tool.(*remoteTool)
 	p.setHook(func(w http.ResponseWriter, r *http.Request) bool {
@@ -664,5 +677,120 @@ func TestReleaseHostThatIsNotAPeerFailsCleanly(t *testing.T) {
 	}
 	if fmt.Sprint(p.requests("/api/release/tag")) != "[]" {
 		t.Fatal("asked a peer that is not the release host")
+	}
+}
+
+func TestPeerRefusesACheckWhileItTags(t *testing.T) {
+	s, tool := peerTagServer(t)
+	tool.gate = make(chan struct{})
+	done := make(chan int, 1)
+	go func() { done <- do(s, "POST", "/api/release/tag", hubCall, peerRelCalls[1].body).Code }()
+	waitUntil(t, "tagging", func() bool { return s.rel.peerTagging.Load() })
+	if w := do(s, "POST", "/api/release/check", hubCall, peerRelCalls[0].body); w.Code != 409 || !strings.Contains(w.Body.String(), "release_busy") {
+		t.Fatalf("check while tagging = %d %s", w.Code, w.Body)
+	}
+	if tool.checks != 0 {
+		t.Fatal("the clone was used by a check during the tagging")
+	}
+	close(tool.gate)
+	if <-done != 200 {
+		t.Fatal("tag failed")
+	}
+	if w := do(s, "POST", "/api/release/check", hubCall, peerRelCalls[0].body); w.Code != 200 {
+		t.Fatalf("check after = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestViewDoesNotCheckWhileTagging(t *testing.T) {
+	s, tool, _ := relServer(t)
+	tool.gate = make(chan struct{})
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	tok := token(t, s, it.ID)
+	if code, body := approve(s, it.ID, tok, "v0.5.9", relSHA); code != 202 {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	n := tool.checks
+	forgetChecks(s)
+	w := do(s, "GET", "/api/release/"+it.ID+"?refresh=1", userHdr, "")
+	if w.Code != 200 || tool.checks != n || strings.Contains(w.Body.String(), `"check"`) {
+		t.Fatalf("view while tagging = %d (checks %d -> %d) %s", w.Code, n, tool.checks, w.Body)
+	}
+	close(tool.gate)
+	waitRel(t, s, it.ID, relTagged)
+}
+
+func TestFailedItemWhosePushWentThroughIsReconciled(t *testing.T) {
+	p := newRelPeer(t)
+	s := relHub(t, p, nil)
+	it := raiseOnHub(t, s, "v0.5.9", relSHA)
+	tok := token(t, s, it.ID)
+	// The push goes through, but the hub never gets the answer.
+	p.setHook(func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/api/release/tag" {
+			return false
+		}
+		r.Header.Set("Tailscale-User-Login", "me@example.com")
+		rec := httptest.NewRecorder()
+		p.peer.mux.ServeHTTP(rec, r)
+		c, _, _ := w.(http.Hijacker).Hijack()
+		c.Close()
+		return true
+	})
+	if code, body := approve(s, it.ID, tok, "v0.5.9", relSHA); code != 202 {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	waitRel(t, s, it.ID, relFailed)
+	if len(p.tool.tagged()) != 1 {
+		t.Fatalf("peer = %v", p.tool.tagged())
+	}
+	p.setHook(nil)
+	view := func() Todo {
+		forgetChecks(s)
+		if w := do(s, "GET", "/api/release/"+it.ID, userHdr, ""); w.Code != 200 {
+			t.Fatalf("view = %d %s", w.Code, w.Body)
+		}
+		cur, _ := s.todos.get(it.ID)
+		return cur
+	}
+	// Now the script refuses the version, and says where the tag is.
+	setCheck := func(ck release.Check) {
+		p.tool.mu.Lock()
+		p.tool.check = ck
+		p.tool.mu.Unlock()
+	}
+	// A tag at another commit changes nothing.
+	setCheck(release.Check{Problem: "tag v0.5.9 already exists on origin", TagOnOrigin: relSHA2})
+	if got := view(); got.Release.State != relFailed {
+		t.Fatalf("a tag at another commit: %s", got.Release.State)
+	}
+	// An item the user never approved is not touched.
+	setCheck(release.Check{Problem: "tag v0.5.9 already exists on origin", TagOnOrigin: relSHA})
+	s.todos.mutate(it.ID, func(t *Todo) error { r := *t.Release; r.ApprovedBy = ""; t.Release = &r; return nil })
+	if got := view(); got.Release.State != relFailed {
+		t.Fatalf("unapproved item: %s", got.Release.State)
+	}
+	s.todos.mutate(it.ID, func(t *Todo) error { r := *t.Release; r.ApprovedBy = "me@example.com"; t.Release = &r; return nil })
+	// The tag at the item's commit: tagged, once, audited.
+	got := view()
+	if got.Release.State != relTagged || got.Release.Error != "" || got.Release.TaggedAt == nil || got.Release.Host != "kube" {
+		t.Fatalf("reconciled = %+v", got.Release)
+	}
+	view()
+	n := 0
+	for _, e := range s.ledger.AuditLog(it.ID) {
+		if e.Action == "release.reconciled" && e.OK && e.Host == "kube" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d reconciled events: %v", n, actions(s))
+	}
+	// A pending item is never moved by a tag on origin.
+	other := raiseOnHub(t, s, "v0.5.10", relSHA2)
+	setCheck(release.Check{Problem: "tag exists", TagOnOrigin: relSHA2})
+	forgetChecks(s)
+	do(s, "GET", "/api/release/"+other.ID, userHdr, "")
+	if cur, _ := s.todos.get(other.ID); cur.Release.State != relPending {
+		t.Fatalf("pending item = %s", cur.Release.State)
 	}
 }
