@@ -23,6 +23,8 @@ welcome.
   # the app in headless Chrome against a fake herdr (see "Browser checks"
   # below); run it for any change under web/ that affects what the user sees
   tools/uitest/run.sh
+  # every theme in web/themes.js: WCAG AA contrast + all tokens defined
+  node tools/uitest/contrast.mjs
   ```
 
   CI runs the same checks.
@@ -134,3 +136,15 @@ the browser console, API responses and the server logs go to `OUT_DIR`.
 and `-no-status` (herdr never reports working/idle, so the app cannot rely
 on the status to know it should keep reading). `REPLY_WAIT_MS` sets how long
 a reply may take to show (default 9000).
+
+## Themes
+
+Colours live only in `web/themes.js`: one `theme({...})` entry per theme
+(a core palette; chips, code, marks and the rest are derived), and
+`index.html` uses `var(--token)` only. To add a theme, add an entry (note the
+palette's source and licence in a comment above it), then run
+`node tools/uitest/contrast.mjs`: it fails if body, muted, chip or button
+text is under 4.5:1, a focus ring or status dot is under 3:1, or a theme
+lacks a token `index.html` uses. A palette colour that fails AA is nudged
+(lightness only) and listed as `adjusted` in that script's output. Take
+screenshots of a new theme with `shot.mjs ROUTE --theme ID`.

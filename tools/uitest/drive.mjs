@@ -399,32 +399,22 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   await page.waitForSelector("#f-menu", { state: "hidden", timeout: 2000 });
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "false") throw new Error("aria-expanded not reset");
 });
-await check("theme: the menu cycles System / Light / Dark, it is stored, and a reload applies it before first paint", async () => {
+await check("theme: System paints the OS scheme (Comebye Light/Dark) on load; the menu item opens the theme panel", async () => {
   const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const attr = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
   const dark = "rgb(16, 18, 24)", light = "rgb(243, 244, 247)";
-  const sys = process.env.SCHEME === "light" ? light : dark;
+  const light_os = process.env.SCHEME === "light";
   await page.evaluate(() => { try { localStorage.removeItem("comebye.theme"); } catch {} });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("#btn-fleet");
-  if (await attr() !== null || await bg() !== sys) throw new Error("system: " + await attr() + " " + await bg());
-  const step = async (label, want, color) => {
-    await fleetMenuOpen();
-    await page.locator("#f-theme").click();
-    if (await attr() !== want) throw new Error(label + ": data-theme " + await attr());
-    if (await bg() !== color) throw new Error(label + ": body " + await bg());
-    const saved = await page.evaluate(() => localStorage.getItem("comebye.theme"));
-    if (saved !== label) throw new Error("stored " + saved);
-  };
-  await step("light", "light", light);
-  await step("dark", "dark", dark);
-  // Forced dark survives a reload and is painted by the <head> script, before the app runs.
-  await page.reload({ waitUntil: "domcontentloaded" });
-  if (await attr() !== "dark" || await bg() !== dark) throw new Error("reload: " + await attr());
-  await step("system", null, sys);
+  if (await attr() !== (light_os ? "light" : "dark") || await bg() !== (light_os ? light : dark)) throw new Error("system: " + await attr() + " " + await bg());
   await fleetMenuOpen();
   if (!/Theme: System/.test(await page.locator("#f-theme").innerText())) throw new Error("label");
-  await page.keyboard.press("Escape");
+  await page.locator("#f-theme").click();
+  await page.waitForSelector("#theme-panel", { state: "visible" });
+  if ((await page.locator("#tp-list .tp-opt").count()) < 3) throw new Error("no options");
+  await page.locator("#f-theme").click().catch(() => {});
+  await page.evaluate(() => document.getElementById("theme-panel").hidden = true);
 });
 await check("fleet menu: the dashed sweep row is gone and the removals banner stays", async () => {
   if (await page.locator("#sweep-open").count()) throw new Error("#sweep-open still in the page");
@@ -2108,6 +2098,97 @@ await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\
   await page.waitForSelector("#briefing .bf-toggle", { state: "visible", timeout: 8000 });
   if (/no change/.test(await page.locator("#briefing").innerText())) throw new Error("note shown without the hub saying so");
 });
+
+// ---- themes (web/themes.js): contrast, picker, persistence, no flash ----
+await check("themes: every theme passes the contrast check (tools/uitest/contrast.mjs)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  try { execFileSync("node", [new URL("./contrast.mjs", import.meta.url).pathname], { encoding: "utf8", stdio: "pipe" }); }
+  catch (e) { throw new Error(String(e.stdout || e.message).split("\n").filter((l) => /FAIL|<|missing|not defined/.test(l)).slice(0, 4).join(" | ")); }
+});
+
+{
+  const tctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: "light", bypassCSP: true });
+  const tp = await tctx.newPage();
+  // Record every data-theme <html> ever had, and whether <body> existed yet:
+  // the right theme must be there before the body (so before first paint).
+  await tctx.addInitScript(() => {
+    window.__themeLog = [];
+    const set = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (n, v) {
+      if (this === document.documentElement && n === "data-theme") window.__themeLog.push([v, document.body === null]);
+      return set.call(this, n, v);
+    };
+  });
+  const tok = (name) => tp.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
+  const bodyBg = () => tp.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const cur = () => tp.evaluate(() => document.documentElement.getAttribute("data-theme"));
+
+  await check("themes: the picker switches the tokens instantly and lists every theme", async () => {
+    await tp.goto(base + "/", { waitUntil: "load" });
+    await tp.evaluate(() => localStorage.clear());
+    await tp.reload({ waitUntil: "load" });
+    if ((await cur()) !== "light") throw new Error("System + light OS should be the Comebye Light theme, got " + (await cur()));
+    if ((await tok("--bg")) !== "#f3f4f7") throw new Error("light --bg " + (await tok("--bg")));
+    await tp.locator("#btn-fleet").click();
+    await tp.locator("#f-theme").click();
+    await tp.waitForSelector("#theme-panel", { state: "visible" });
+    const n = await tp.locator("#tp-list .tp-opt").count();
+    if (n !== 16) throw new Error("expected System + 15 themes, got " + n);
+    await tp.locator('#tp-list [data-theme-id="gruvbox-dark"]').click();
+    if ((await cur()) !== "gruvbox-dark") throw new Error("data-theme not applied");
+    if ((await tok("--bg")) !== "#1d2021") throw new Error("--bg " + (await tok("--bg")));
+    if ((await bodyBg()) !== "rgb(29, 32, 33)") throw new Error("body background " + (await bodyBg()));
+    if ((await tp.locator('#tp-list [data-theme-id="gruvbox-dark"]').getAttribute("aria-checked")) !== "true") throw new Error("option not marked checked");
+    // A swatch previews ITS theme, not the active one.
+    const sw = await tp.locator('#tp-list [data-theme-id="dracula"] .tp-sw').evaluate((e) => getComputedStyle(e).backgroundColor);
+    if (sw !== "rgb(33, 34, 44)") throw new Error("dracula swatch background " + sw);
+    for (const id of ["dracula", "tokyonight-day", "solarized-light"]) {
+      await tp.locator(`#tp-list [data-theme-id="${id}"]`).click();
+      const want = await tp.evaluate((i) => ComebyeThemes.byId[i].vars.bg, id);
+      if ((await tok("--bg")) !== want) throw new Error(id + " --bg " + (await tok("--bg")) + " != " + want);
+    }
+    await tp.keyboard.press("Escape").catch(() => {});
+    await tp.locator("#btn-fleet").click();
+    if (!/Solarized Light/.test(await tp.locator("#f-theme").innerText())) throw new Error("menu label: " + (await tp.locator("#f-theme").innerText()));
+  });
+
+  await check("themes: the choice persists across reload with no flash of another theme", async () => {
+    await tp.evaluate(() => ComebyeThemes.set("tokyonight-storm"));
+    await tp.reload({ waitUntil: "load" });
+    const log = await tp.evaluate(() => window.__themeLog);
+    const set = log;
+    if (!set.length || set.some(([t]) => t !== "tokyonight-storm")) throw new Error("theme sequence " + JSON.stringify(log));
+    if (!set[0][1]) throw new Error("data-theme was set only after <body> existed (could flash): " + JSON.stringify(log));
+    if ((await tok("--bg")) !== "#1f2335") throw new Error("--bg " + (await tok("--bg")));
+  });
+
+  await check("themes: System follows the OS, with a chosen theme for each of light and dark", async () => {
+    await tp.evaluate(() => { localStorage.setItem("comebye.theme", "system"); localStorage.setItem("comebye.theme.light", "catppuccin-latte"); localStorage.setItem("comebye.theme.dark", "nord"); });
+    await tp.reload({ waitUntil: "load" });
+    if ((await cur()) !== "catppuccin-latte") throw new Error("light OS gave " + (await cur()));
+    await tp.emulateMedia({ colorScheme: "dark" });
+    await tp.waitForFunction(() => document.documentElement.getAttribute("data-theme") === "nord", null, { timeout: 3000 });
+    // The pickers in the panel set those two slots.
+    await tp.locator("#btn-fleet").click();
+    await tp.locator("#f-theme").click();
+    await tp.selectOption('#tp-sys select[data-sys="dark"]', "dracula");
+    if ((await cur()) !== "dracula") throw new Error("dark slot change not applied: " + (await cur()));
+    if ((await tp.evaluate(() => localStorage.getItem("comebye.theme.dark"))) !== "dracula") throw new Error("slot not stored");
+    await tp.emulateMedia({ colorScheme: "light" });
+    await tp.waitForFunction(() => document.documentElement.getAttribute("data-theme") === "catppuccin-latte", null, { timeout: 3000 });
+  });
+
+  await check("themes: an old stored value (light, dark) and a junk one still work", async () => {
+    await tp.evaluate(() => { localStorage.removeItem("comebye.theme.light"); localStorage.removeItem("comebye.theme.dark"); });
+    for (const [v, want] of [["dark", "dark"], ["light", "light"], ["nonsense", "light"]]) {
+      await tp.evaluate((x) => localStorage.setItem("comebye.theme", x), v);
+      await tp.reload({ waitUntil: "load" });
+      const got = await cur();
+      if (got !== want) throw new Error(`${v} -> ${got}, want ${want}`);
+    }
+  });
+  await tctx.close();
+}
 
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 await browser.close();

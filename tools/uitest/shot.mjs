@@ -16,6 +16,7 @@
 //   --wait SEL           wait for an element to be visible (repeatable)
 //   --scroll SEL:PX      scroll an element by PX (SEL "window" for the page)
 //   --full               full-page screenshot (default: the viewport)
+//   --theme ID           a theme id from web/themes.js (gruvbox-dark, dracula, ...); default: System
 //   --out FILE           PNG path (default: ./shot-<width>-<theme>.png)
 //   --inspect SEL        print visibility + bounding box (repeatable)
 //   --dom SEL            print the element's outerHTML, trimmed (repeatable)
@@ -71,9 +72,10 @@ else {
 const width = Number(opt.width || 390);
 const height = Number(opt.height || (width <= 500 ? 844 : 800));
 const theme = opt.dark === undefined ? "default" : opt.dark ? "dark" : "light";
-const out = opt.out || `shot-${width}-${theme}.png`;
+const out = opt.out || `shot-${width}-${opt.theme || theme}.png`;
 
-const { browser, page } = await launch({ width, height, dark: opt.dark });
+const { browser, ctx, page } = await launch({ width, height, dark: opt.dark });
+if (opt.theme) await ctx.addInitScript((t) => { try { localStorage.setItem("comebye.theme", t); } catch {} }, opt.theme);
 const problems = [];
 page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") problems.push(`console.${m.type()}: ${m.text()}`); });
 page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));

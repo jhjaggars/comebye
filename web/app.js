@@ -2175,39 +2175,69 @@ function renderFleetMenu() {
   $("f-sched").textContent = "Briefing schedule…" + sfx;
 }
 
-/* ---------- theme: System / Light / Dark ---------- */
+/* ---------- theme: System or one of the themes in themes.js ---------- */
 //
-// The inline script in <head> applies the saved choice before first paint;
-// this cycles it from the ⋯ menu. "system" removes data-theme so the
-// prefers-color-scheme media query decides.
+// themes.js (loaded in <head>) owns the data, the saved choice and the
+// pre-paint apply; this is only the picker in the ⋯ menu. "System" follows
+// the OS light/dark, each with its own chosen theme.
 
-const THEME_KEY = "comebye.theme";
-const THEMES = ["system", "light", "dark"];
+const CT = window.ComebyeThemes;
 
-function themeChoice() {
-  const t = lsGet(THEME_KEY);
-  return THEMES.includes(t) ? t : "system";
+function themeLabel() {
+  const c = CT.choice();
+  return c === "system" ? "System (" + CT.byId[CT.resolve()].name + ")" : CT.byId[c].name;
 }
 
-function applyTheme(t) {
-  const root = document.documentElement;
-  if (t === "light" || t === "dark") root.setAttribute("data-theme", t);
-  else root.removeAttribute("data-theme");
-  // The two media-qualified theme-color metas follow the OS; a forced theme
-  // needs one unconditional value.
-  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
-    if (!m.dataset.media) m.dataset.media = m.getAttribute("media") || "";
-    if (t === "system") m.setAttribute("media", m.dataset.media);
-    else m.setAttribute("media", m.dataset.media.includes(t) ? "all" : "not all");
-  });
+function swatch(id) {
+  return '<span class="tp-sw" data-theme="' + id + '" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>';
+}
+
+function renderThemePanel() {
+  const choice = CT.choice();
+  const row = (id, name, sub, on) =>
+    '<button type="button" class="tp-opt" role="radio" aria-checked="' + on + '" data-theme-id="' + id + '">' +
+    swatch(id) + '<span class="tp-name">' + esc(name) + '</span><span class="tp-mode">' + esc(sub) + '</span></button>';
+  const sys = CT.sysPair();
+  $("tp-list").innerHTML =
+    '<button type="button" class="tp-opt" role="radio" aria-checked="' + (choice === "system") + '" data-theme-id="system">' +
+    swatch(CT.resolve("system")) + '<span class="tp-name">System</span><span class="tp-mode">follows device</span></button>' +
+    CT.THEMES.map((t) => row(t.id, t.name, t.mode, choice === t.id)).join("");
+  const sel = (mode) => '<select data-sys="' + mode + '" aria-label="Theme when the device is ' + mode + '">' +
+    CT.THEMES.filter((t) => t.mode === mode).map((t) => '<option value="' + t.id + '"' + (sys[mode] === t.id ? " selected" : "") + ">" + esc(t.name) + "</option>").join("") + "</select>";
+  $("tp-sys").innerHTML = '<span>With System:</span><label>light ' + sel("light") + "</label><label>dark " + sel("dark") + "</label>";
+}
+
+function applyTheme() {
+  CT.apply();
   const b = $("f-theme");
-  if (b) b.textContent = "Theme: " + t[0].toUpperCase() + t.slice(1);
+  if (b) b.textContent = "Theme: " + themeLabel();
 }
 
-function cycleTheme() {
-  const next = THEMES[(THEMES.indexOf(themeChoice()) + 1) % THEMES.length];
-  lsSet(THEME_KEY, next);
-  applyTheme(next);
+function toggleThemePanel(show) {
+  const p = $("theme-panel");
+  p.hidden = !(show ?? p.hidden);
+  if (!p.hidden) renderThemePanel();
+}
+
+function initThemePanel() {
+  $("tp-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-theme-id]");
+    if (!b) return;
+    CT.set(b.dataset.themeId);
+    applyTheme();
+    renderThemePanel();
+    $("tp-list").querySelector('[aria-checked="true"]')?.focus();
+  });
+  $("tp-sys").addEventListener("change", (ev) => {
+    const s = ev.target.closest("select[data-sys]");
+    if (!s) return;
+    CT.setSystem(s.dataset.sys, s.value);
+    applyTheme();
+    renderThemePanel();
+  });
+  // Another tab or the OS changed the theme: keep the label and swatches true.
+  window.addEventListener("storage", () => { applyTheme(); if (!$("theme-panel").hidden) renderThemePanel(); });
+  window.matchMedia?.("(prefers-color-scheme: light)").addEventListener?.("change", () => { applyTheme(); if (!$("theme-panel").hidden) renderThemePanel(); });
 }
 
 function toggleFleetMenu(show, focus) {
@@ -6678,8 +6708,9 @@ window.addEventListener("DOMContentLoaded", () => {
   $("f-sched").addEventListener("click", fleetAction(editBriefSchedule));
   $("f-notify").addEventListener("click", fleetAction(() => { toggleNotifyPanel(); if (!$("notify-panel").hidden) $("notify-panel").scrollIntoView?.({ block: "nearest" }); }));
   $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));
-  $("f-theme").addEventListener("click", fleetAction(cycleTheme));
-  applyTheme(themeChoice());
+  $("f-theme").addEventListener("click", fleetAction(() => { toggleThemePanel(); if (!$("theme-panel").hidden) $("theme-panel").scrollIntoView?.({ block: "nearest" }); }));
+  initThemePanel();
+  applyTheme();
   $("f-menu").addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); toggleFleetMenu(false); $("btn-fleet").focus(); return; }
     if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;

@@ -249,3 +249,24 @@ func TestAppRecallWiring(t *testing.T) {
 		t.Error("the query went into the remembered filters")
 	}
 }
+
+// Colours live in themes.js (one entry per theme): index.html must load it
+// synchronously from <head> before the body (an external script, since the
+// CSP forbids inline ones) and must not hard-code any colour itself, or a
+// theme would leave that spot behind.
+func TestThemesPlumbing(t *testing.T) {
+	idx, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _, ok := strings.Cut(string(idx), "</head>")
+	if !ok || !strings.Contains(head, `<script src="themes.js"></script>`) {
+		t.Error("index.html must load themes.js in <head>")
+	}
+	if _, err := FS.ReadFile("themes.js"); err != nil {
+		t.Fatalf("themes.js is not embedded: %v", err)
+	}
+	if re := regexp.MustCompile(`[:( ,]#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(`); re.MatchString(string(idx[strings.Index(string(idx), "<style>"):])) {
+		t.Errorf("index.html hard-codes a colour: %q (use a token from themes.js)", re.FindString(string(idx[strings.Index(string(idx), "<style>"):])))
+	}
+}
