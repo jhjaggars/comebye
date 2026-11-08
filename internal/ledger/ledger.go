@@ -111,7 +111,15 @@ type Entry struct {
 	// tells it when the worker finishes. Callback tracks that message.
 	ReplyTo  *Ref      `json:"reply_to,omitempty"`
 	Callback *Callback `json:"callback,omitempty"`
-	Mark     *Mark     `json:"mark,omitempty"`
+	// ReportSeq counts the explicit reports (`comebye report`) the worker
+	// filed. Noticed says the requester has been told about the entry, and
+	// NoticeSeq is the ReportSeq that notice covered: a worker that goes
+	// idle again without filing a new report sends no new notice. Both
+	// survive the entry going back to running.
+	ReportSeq int   `json:"report_seq,omitempty"`
+	Noticed   bool  `json:"noticed,omitempty"`
+	NoticeSeq int   `json:"notice_seq,omitempty"`
+	Mark      *Mark `json:"mark,omitempty"`
 	// MarkedFrom is the status the entry had when it was marked, which
 	// unmarking restores.
 	MarkedFrom Status `json:"marked_from,omitempty"`
@@ -174,6 +182,8 @@ type Callback struct {
 	State string    `json:"state"`
 	At    time.Time `json:"at"` // queued
 	Tries int       `json:"tries,omitempty"`
+	// Seq is the entry's ReportSeq when the notice was queued.
+	Seq int `json:"seq,omitempty"`
 	// To is who got it (the requester, or the coordinator standing in).
 	To          string     `json:"to,omitempty"`
 	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
@@ -682,9 +692,7 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 			if e.Status == Running && e.SawWorking {
 				t := now.UTC()
 				e.Status, e.FinishedAt, e.SawWorking, e.ReportTries = Finished, &t, false, 0
-				if e.ReplyTo != nil {
-					e.Callback = &Callback{State: CallbackPending, At: t}
-				}
+				queueNotice(e, t)
 				changed = true
 				capture = append(capture, copyEntry(e))
 			} else if e.Reported() && e.FinalReport == "" && e.ReportTries < maxReportTries {
@@ -742,6 +750,10 @@ func (s *Store) setCallback(id string, at time.Time, fn func(*Callback)) error {
 	for _, e := range s.data.Entries {
 		if e.ID == id && e.Callback != nil && e.Callback.State == CallbackPending && e.Callback.At.Equal(at) {
 			fn(e.Callback)
+			if e.Callback.State != CallbackPending {
+				// Told (or given up on): remember what the notice covered.
+				e.Noticed, e.NoticeSeq = true, e.Callback.Seq
+			}
 			return s.save()
 		}
 	}
@@ -769,7 +781,6 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		e.AwaitIdle, e.SawWorking = true, false
 		return copyEntry(e), true, s.save()
 	}
-	wasFinished := e.Status == Finished
 	if e.Status == Landed {
 		if e.AwaitIdle {
 			// Still the landing turn (a corrected landing report).
@@ -778,15 +789,31 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		}
 		e.Status = Finished // a report after landing is a new round's
 	}
+	e.ReportSeq++
 	e.Status, e.FinishedAt = Finished, &t
-	if !wasFinished {
-		if e.ReplyTo != nil {
-			e.Callback = &Callback{State: CallbackPending, At: t}
-		}
-	}
+	queueNotice(e, t)
 	e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
 	e.AwaitIdle, e.SawWorking = true, false
 	return copyEntry(e), true, s.save()
+}
+
+// queueNotice queues the requester's "your worker finished" notice when
+// there is something new for it: the worker filed a report since the last
+// notice, or it was never told about this entry at all (a worker that
+// forgets to report still surfaces once). A notice already waiting is
+// left alone (it points at the newest report). Going idle again without a
+// new report queues nothing.
+func queueNotice(e *Entry, at time.Time) {
+	if e.ReplyTo == nil {
+		return
+	}
+	if e.Callback != nil && e.Callback.State == CallbackPending {
+		return
+	}
+	if e.Noticed && e.ReportSeq <= e.NoticeSeq {
+		return
+	}
+	e.Callback = &Callback{State: CallbackPending, At: at, Seq: e.ReportSeq}
 }
 
 // ReportPending reports whether the entry's final report is still being
@@ -874,7 +901,7 @@ func (s *Store) SetLandCheck(id string, finishedAt time.Time, c LandCheck) (bool
 			e.Status = Landed
 		}
 		if e.ReplyTo != nil {
-			e.Callback = &Callback{State: CallbackPending, At: c.At}
+			e.Callback = &Callback{State: CallbackPending, At: c.At, Seq: e.ReportSeq}
 		}
 		return true, s.save()
 	}

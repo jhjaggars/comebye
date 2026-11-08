@@ -114,6 +114,17 @@ pi's thinking level, when the handoff chose them), worktree, brief, who asked, a
 - `finished`: it reported (`comebye report`), or went idle or done after
   working (its last assistant message is kept as the final report, up to
   20 kB). It goes back to `running` if it gets more work;
+  The agent that asked for the handoff gets one "worker finished" hub
+  notice, and only when there is something new for it: the first time the
+  worker finishes (even without reporting, so a forgetful worker surfaces
+  once), then once per new `comebye report`. A worker that works, goes
+  idle and works again (a watch loop) without reporting sends nothing
+  more. The marker (`report_seq`, `noticed`, `notice_seq` on the entry) is
+  in `ledger.json`, so a restart neither repeats nor loses a notice; a
+  notice queued but never delivered before the worker resumed is not
+  counted as sent. A worker that has been told once and then only goes
+  idle with a changed last message is not announced again: have it
+  `comebye report` what the coordinator should see;
 - `landing`: the user OKed landing (`comebye land`; the `approval`
   records who relayed it, the user's words and the approved tip) and the
   worker is landing its work;

@@ -444,3 +444,89 @@ func TestOldLedgerFileLoads(t *testing.T) {
 		t.Fatalf("an entry without an instance should follow its agent as before: %v", e.Status)
 	}
 }
+
+// settle delivers the entry's pending callback, as the server does.
+func settle(t *testing.T, s *Store, id string) {
+	t.Helper()
+	e, _ := s.Get(id)
+	if e.Callback == nil || e.Callback.State != CallbackPending {
+		t.Fatalf("no pending callback: %+v", e.Callback)
+	}
+	s.CallbackDone(id, e.Callback.At, CallbackDelivered, "desk/w1:p1", time.Now())
+}
+
+// A watcher goes idle after every round: the requester hears once, then
+// again only when the worker files a new report.
+func TestNoticeOnlyForNewReport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.json")
+	s, _ := Open(path)
+	e, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1"}})
+	work := []herdr.AgentInfo{agent(e.AgentID, herdr.StatusWorking)}
+	idle := []herdr.AgentInfo{agent(e.AgentID, herdr.StatusIdle)}
+	now := time.Now()
+	round := func() {
+		now = now.Add(time.Minute)
+		s.Observe(work, now)
+		now = now.Add(time.Minute)
+		s.Observe(idle, now)
+	}
+	notices := 0
+	count := func() {
+		if len(s.PendingCallbacks()) == 1 {
+			settle(t, s, e.ID)
+			notices++
+		}
+	}
+	// Never reported: the first idle surfaces it once.
+	round()
+	count()
+	for i := 0; i < 5; i++ {
+		round()
+		count()
+	}
+	if notices != 1 {
+		t.Fatalf("watcher with no report: %d notices", notices)
+	}
+	// A restart in between neither resends nor loses.
+	s, _ = Open(path)
+	round()
+	count()
+	if notices != 1 {
+		t.Fatalf("after restart: %d notices", notices)
+	}
+	// A new report is one more notice, however many idle rounds follow.
+	s.Observe(work, now.Add(time.Minute))
+	now = now.Add(time.Minute)
+	if _, ok, _ := s.Report(e.AgentID, "found something", now); !ok {
+		t.Fatal("report refused")
+	}
+	count()
+	s.Observe(idle, now)
+	round()
+	round()
+	count()
+	if notices != 2 {
+		t.Fatalf("after a new report: %d notices", notices)
+	}
+	s, _ = Open(path)
+	round()
+	count()
+	if notices != 2 {
+		t.Fatalf("after second restart: %d notices", notices)
+	}
+}
+
+// A notice that was queued but never delivered before the worker resumed
+// is not counted as sent.
+func TestUndeliveredNoticeIsNotLost(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	e, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1"}})
+	now := time.Now()
+	for i := 0; i < 2; i++ {
+		s.Observe([]herdr.AgentInfo{agent(e.AgentID, herdr.StatusWorking)}, now)
+		s.Observe([]herdr.AgentInfo{agent(e.AgentID, herdr.StatusIdle)}, now)
+	}
+	if len(s.PendingCallbacks()) != 1 {
+		t.Fatal("undelivered notice dropped")
+	}
+}
