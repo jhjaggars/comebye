@@ -74,7 +74,8 @@ func init() {
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"brief", "set FILE|- [--no-check] | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
-		{"peer", "list | add NAME URL[|URL...] [--tag T] | remove NAME  [--login L] [--json]", "(hub, the user's alone) the hub's peers: list them with their status and version, add one live, or remove a dynamic one; peers set with -peers are listed but only changed by editing the hub's environment", cmdPeer},
+		{"settings", "[show | set [--default-kind K] [--allow K,K|any] [--model KIND=M] [--thinking pi=LEVEL] | clear [--field default-kind|allowed|models]] [--host H] [--login L] [--json]", "a host's agent settings: the kind, model and thinking level a start uses when none is asked for, and the kinds it may start. Anyone reads them; setting is the user's alone", cmdSettings},
+		{"peer", "list | show NAME | add NAME URL[|URL...] [--tag T] | remove NAME  [--login L] [--json]", "(hub, the user's alone) the hub's peers: list them with their status and version, add one live, or remove a dynamic one; peers set with -peers are listed but only changed by editing the hub's environment", cmdPeer},
 		{"stt", "fetch | status [--verify] [--state-dir DIR] [--json]", "voice input for the app's mic buttons: `fetch` downloads the speech model and runtime once on this host from pinned upstream URLs, checked against pinned SHA-256s; `status` says whether they are installed (this host only)", cmdSTT},
 		{"playbook", "[--harness pi|claude|generic]", "print the coordinator playbook", cmdPlaybook},
 		{"presets", "claude|pi|generic", "print how to let a harness run comebye without prompts", cmdPresets},
@@ -1028,7 +1029,7 @@ func cmdHandoff(e *Env, args []string) error {
 	repo := fs.String("repo", "", "the repository's primary checkout (absolute path on that host)")
 	branch := fs.String("branch", "", "the worker's branch (created from --base when new)")
 	base := fs.String("base", "", "the base branch (default: the repository's default branch)")
-	kind := fs.String("kind", "", "the agent kind (default: the host's most used)")
+	kind := fs.String("kind", "", "the agent kind (default: the host's own default, see `comebye settings --host H`; naming another kind is allowed but warned about, and refused outside the host's allowed kinds)")
 	purpose := fs.String("purpose", "", "research, plan, review or spike when the branch is not meant to merge (its report is the deliverable; the sweep then lists it apart)")
 	name := fs.String("name", "", "the worker's name (default: from the branch)")
 	model := fs.String("model", "", "the worker's model (see `comebye models`; default: the agent's own)")
@@ -1085,9 +1086,17 @@ func cmdHandoff(e *Env, args []string) error {
 		Existing  bool     `json:"existing"`
 		Restarted bool     `json:"restarted"`
 		Queued    bool     `json:"queued"`
+		Worker    struct {
+			Warnings []string `json:"warnings"`
+		} `json:"worker"`
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
 		return fmt.Errorf("unexpected answer: %v", err)
+	}
+	// A warning about the host's settings goes to stderr, where a script
+	// that parses stdout still sees it.
+	for _, w := range r.Worker.Warnings {
+		fmt.Fprintf(e.Stderr, "comebye handoff: warning: %s\n", w)
 	}
 	en := r.Entry
 	switch {
@@ -1102,6 +1111,9 @@ func cmdHandoff(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Handed off %s on %s to %s (%s).\n", en.Branch, en.Host, dash(en.AgentName), en.AgentID)
 	}
 	fmt.Fprintf(e.Stdout, "  entry:    %s\n  worktree: %s\n  base:     %s\n", en.ID, dash(en.Worktree), dash(en.Base))
+	if en.Kind != "" && en.KindSource != "" {
+		fmt.Fprintf(e.Stdout, "  agent:    %s (%s)\n", en.Kind, kindSourceLabel(en.KindSource))
+	}
 	if m := modelLabel(en.Model, en.Thinking); m != "" {
 		fmt.Fprintf(e.Stdout, "  model:    %s\n", m)
 	}

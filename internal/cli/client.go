@@ -287,6 +287,7 @@ type apiEntry struct {
 	Branch       string     `json:"branch"`
 	Base         string     `json:"base"`
 	Kind         string     `json:"kind"`
+	KindSource   string     `json:"kind_source"`
 	Model        string     `json:"model"`
 	Thinking     string     `json:"thinking"`
 	AgentID      string     `json:"agent_id"`

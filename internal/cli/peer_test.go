@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"github.com/jhjaggars/comebye/internal/agenttoken"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,9 +17,12 @@ import (
 func peerEnv(t *testing.T, env map[string]string, answers map[string]answer) (*Env, *bytes.Buffer, *bytes.Buffer, *[]recorded) {
 	t.Helper()
 	var reqs []recorded
+	var mu sync.Mutex // `peer list` reads each peer's settings in parallel
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
 		reqs = append(reqs, recorded{r.Method, r.URL.Path, r.URL.RawQuery, string(b), r.Header.Clone()})
+		mu.Unlock()
 		a, ok := answers[r.Method+" "+r.URL.Path]
 		if !ok {
 			a = answer{404, `{"code":"not_found"}`}
@@ -31,6 +36,7 @@ func peerEnv(t *testing.T, env map[string]string, answers map[string]answer) (*E
 	for k, v := range env {
 		m[k] = v
 	}
+	agenttoken.LoadOrCreate(m["COMEBYE_STATE_DIR"]) // for the calls an agent makes
 	var out, errb bytes.Buffer
 	e := &Env{Stdout: &out, Stderr: &errb, Stdin: strings.NewReader(""),
 		Getenv:   func(k string) string { return m[k] },
