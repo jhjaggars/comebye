@@ -89,6 +89,8 @@ func main() {
 		ledgerOn      = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
 		coordDir      = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
 		publicURL     = flag.String("public-url", getenv("COMEBYE_PUBLIC_URL"), "the https URL this hub is reached at (https://hub.tailnet.ts.net); `comebye publish` prints links built from it")
+		pagesListen   = flag.String("pages-listen", getenv("COMEBYE_PAGES_LISTEN"), "serve published pages on a second loopback listener (e.g. 127.0.0.1:8742) that has only /p and no /api; put Tailscale Serve on its own port in front (tailscale serve --https=8443 http://127.0.0.1:8742) so pages get an origin of their own; needs -pages-url")
+		pagesURL      = flag.String("pages-url", getenv("COMEBYE_PAGES_URL"), "the https URL of that pages listener as the browser reaches it (https://hub.tailnet.ts.net:8443); the app frames pages from it and page links are built from it")
 		allowHosts    = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
 		launchRoots   = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs     = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
@@ -395,6 +397,7 @@ func main() {
 		InsecureNoAuth: *noAuth,
 		AllowHosts:     server.SplitHosts(allowHosts...),
 		PublicURL:      strings.TrimRight(strings.TrimSpace(*publicURL), "/"),
+		PagesURL:       strings.TrimRight(strings.TrimSpace(*pagesURL), "/"),
 		ReadLines:      1000,
 		Push:           pushSvc,
 		Presence:       presence,
@@ -448,6 +451,12 @@ func main() {
 				log.Fatalf("-health-addr: %v", err)
 			}
 		}()
+	}
+	if *pagesListen != "" {
+		if strings.TrimSpace(*pagesURL) == "" {
+			log.Fatalf("-pages-listen needs -pages-url: the app frames pages from that origin")
+		}
+		go func() { log.Fatalf("pages listener: %v", srv.ListenPages(*pagesListen)) }()
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		lock.Release()

@@ -385,3 +385,52 @@ Treat access to it like SSH access to that machine.
 
 See [SECURITY.md](../SECURITY.md) for the threat model and how to report a
 vulnerability.
+
+## Published pages
+
+`comebye publish` lets any agent put an HTML or Markdown page on the hub for
+you to read in the app. A page is code an agent wrote (it may have read a web
+page, a repository or a log on the way), and Tailscale Serve's identity is
+ambient, like a cookie: a script that could call `/api/*` from your browser
+would be you. So a page never runs as the app:
+
+- **Opaque origin.** Every response under `/p/` carries
+  `Content-Security-Policy: sandbox allow-scripts; default-src 'none'; connect-src 'none'; form-action 'none'; ...`
+  with no `allow-same-origin`, and the app shows a page only in
+  `<iframe sandbox="allow-scripts">`. The page's own scripts run, but with no
+  access to the app's cookies or storage, no way to read a response from `/api`
+  or from another page (CORS fails, and `connect-src` is `none` besides), no
+  fetch, form post, popup, nested frame, or navigation of the top window.
+  Images and fonts must be `data:` URIs; scripts are inline or from cdnjs.
+- **The header is on everything under `/p/`:** pages, 404s, auth failures, a
+  wrong Host, and any path that matches no route.
+- **No CORS, ever.** No page or asset response carries
+  `Access-Control-Allow-Origin`. Serve's identity is not a CORS credential, so
+  one would let any website you visit read your pages.
+- **POSTs stay JSON-only** (and cross-origin-protected) as everywhere else, so
+  a page cannot post as you.
+- **Who is who.** The publisher shown in the app is the authenticated caller,
+  never a field in the body. Only the user, the publisher or a recorded
+  coordinator updates or deletes a page; a tagged node reaches only its own
+  host's pages; reading a page is the user's alone (`/p/`), and an agent reads
+  a body back only for its own host's pages unless it is a coordinator.
+- **Markdown** is rendered in the sandboxed shell with DOMPurify: raw HTML is
+  shown as text, no images, links shown as text with their URL.
+- **Limits:** 5 MiB a version, 10 versions a page, 500 MiB and 1000 pages in
+  all, 20 publishes a minute per publisher.
+
+- **A separate origin (optional, recommended).** With `-pages-listen` and
+  `-pages-url`, pages are also served by a second loopback listener that has
+  only `/p/...` (every other path, `/api` included, is a 404), published on its
+  own Serve port, so a page's origin shares nothing with the app and there is no
+  API beside it at all. The app then frames pages from that origin only (its
+  Content-Security-Policy `frame-src` names it), page links use it, and a page's
+  `frame-ancestors` names the app's `-public-url`. The listener applies the same
+  Host check and user login as the main one. The main listener still serves
+  `/p/` too (sandboxed the same way), so old links keep working.
+
+Without the listener the page is served from the app's own origin and the
+isolation rests on the browser honouring `sandbox`. A page can show anything, so the app puts a provenance bar (who
+published it, when) above it: use the app's link, not a page's own text, to
+know where it came from. A page cannot reach the network, but its text is
+agent text: do not paste commands from it.

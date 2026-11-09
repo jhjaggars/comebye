@@ -23,7 +23,9 @@ Beyond watching agents, it can:
 - let a **coordinator** agent (Claude Code, Pi or others) organize work for
   you and leave you a briefing for when you come back;
 - keep a **to-do list** of the questions and decisions waiting on you, with
-  context, and answer them from the app.
+  context, and answer them from the app;
+- read the **pages** agents publish: `comebye publish report.html` (or
+  Markdown) from any agent, shown in the app inside a sandbox.
 
 Chat view works for Claude Code and Pi; other agents show their terminal output.
 

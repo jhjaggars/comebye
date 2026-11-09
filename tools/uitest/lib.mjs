@@ -6,12 +6,14 @@ import { chromium } from "playwright-core";
 export const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
 
 // Launches headless Chrome with a phone-style context (390x844 by default;
-// width > 500 makes a desktop one: no touch, no mobile emulation).
-export async function launch({ width = 390, height = 844, dark } = {}) {
+// width > 500 makes a desktop one: no touch, no mobile emulation). bypassCSP:
+// false keeps the servers' Content-Security-Policy in force (the Pages checks
+// test the sandbox it sets).
+export async function launch({ width = 390, height = 844, dark, bypassCSP = true } = {}) {
   const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ["--no-sandbox"] });
   const mobile = width <= 500;
   const ctx = await browser.newContext({
-    viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile, bypassCSP: true,
+    viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile, bypassCSP,
     ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1" } : {}),
     ...(dark === undefined ? {} : { colorScheme: dark ? "dark" : "light" }),
   });

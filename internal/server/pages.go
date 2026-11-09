@@ -10,6 +10,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -445,12 +446,43 @@ func (s *Server) pageRoutes() {
 	s.mux.HandleFunc("GET /api/pages", s.authWorker(s.handlePageList))
 	s.mux.HandleFunc("GET /api/pages/{id}", s.authWorker(s.handlePageGet))
 	s.mux.HandleFunc("DELETE /api/pages/{id}", s.authWorker(s.handlePageDelete))
-	// The pages themselves: the user's alone. Every other path under /p/
-	// answers 404 with the same headers.
-	s.mux.HandleFunc("GET /p/_/{name}", s.handlePageLib)
-	s.mux.HandleFunc("GET /p/{id}", s.auth(s.handlePageView))
-	s.mux.HandleFunc("GET /p/{id}/{ver}", s.auth(s.handlePageView))
-	s.mux.HandleFunc("GET /p/", s.handlePageMissing)
+	s.pageViewRoutes(s.mux)
+}
+
+// pageViewRoutes serves the pages themselves: the user's alone. Every other
+// path under /p/ answers 404 with the same headers. The main mux has them,
+// and so does the pages listener's.
+func (s *Server) pageViewRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /p/_/{name}", s.handlePageLib)
+	mux.HandleFunc("GET /p/{id}", s.auth(s.handlePageView))
+	mux.HandleFunc("GET /p/{id}/{ver}", s.auth(s.handlePageView))
+	mux.HandleFunc("GET /p/", s.handlePageMissing)
+}
+
+// PagesHandler is the handler of the pages listener (-pages-listen): only
+// /p/..., on an origin of its own, so a page's origin shares nothing with the
+// app and there is no /api to reach, not even by mistake. Everything else is
+// a 404 with the page policy. The same Host check and the same user
+// authentication apply.
+func (s *Server) PagesHandler() http.Handler {
+	mux := http.NewServeMux()
+	s.pageViewRoutes(mux)
+	mux.HandleFunc("/", s.handlePageMissing)
+	return s.pagesHeaders(true, s.checkHost(mux))
+}
+
+// ListenPages serves PagesHandler on addr until the listener fails. Like the
+// main listener it must be loopback when logins are checked.
+func (s *Server) ListenPages(addr string) error {
+	if len(s.cfg.AllowLogins) > 0 && !isLoopbackAddr(addr) {
+		return fmt.Errorf("the pages listener needs a loopback address with Tailscale login auth, got %q", addr)
+	}
+	if addr == s.cfg.Addr {
+		return errors.New("-pages-listen must differ from -addr")
+	}
+	log.Printf("pages listening on http://%s (put Tailscale Serve on its own port in front; no /api here)", addr)
+	hs := &http.Server{Addr: addr, Handler: s.PagesHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	return hs.ListenAndServe()
 }
 
 func (s *Server) pagesOff(w http.ResponseWriter, r *http.Request) bool {
@@ -512,11 +544,20 @@ type pageBody struct {
 	IfVersion *int   `json:"if_version"`
 }
 
+// pagesBase is where page links point: the pages origin when there is one,
+// else the hub's public URL.
+func (s *Server) pagesBase() string {
+	if o := s.pagesOrigin(); o != "" {
+		return o
+	}
+	return s.cfg.PublicURL
+}
+
 // pageJSON is a page as the API shows it.
 func (s *Server) pageJSON(p Page) map[string]any {
 	m := map[string]any{"page": p, "path": "/p/" + p.ID}
-	if s.cfg.PublicURL != "" {
-		m["url"] = s.cfg.PublicURL + "/p/" + p.ID
+	if base := s.pagesBase(); base != "" {
+		m["url"] = base + "/p/" + p.ID
 	}
 	return m
 }
@@ -621,7 +662,7 @@ func (s *Server) handlePageList(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, p)
 	}
-	writeJSON(w, map[string]any{"pages": out, "public_url": s.cfg.PublicURL})
+	writeJSON(w, map[string]any{"pages": out, "public_url": s.cfg.PublicURL, "pages_url": s.pagesOrigin()})
 }
 
 // mayOwn is "mine" in a listing: published by this caller.
@@ -691,16 +732,47 @@ func (s *Server) handlePageDelete(w http.ResponseWriter, r *http.Request) {
 // (connect-src, form-action), embedded (default-src 'none': no frames, no
 // objects) or loaded except images and fonts as data: URIs and scripts
 // inline or from cdnjs.
-const pageCSP = "sandbox allow-scripts; default-src 'none'; base-uri 'none'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com; " +
+const pageCSPBody = "default-src 'none'; base-uri 'none'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com; " +
 	"style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'"
 
 // A Markdown page is shown by a fixed shell that renders it with the
 // vendored libraries, which it loads from this server: the one place
 // 'self' is allowed.
-const pageMDCSP = "sandbox allow-scripts; default-src 'none'; base-uri 'none'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'"
+const pageMDCSPBody = "default-src 'none'; base-uri 'none'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'"
 
-func setPageHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", pageCSP)
+// origin is scheme://host[:port] of a URL, "" when it is not one.
+func origin(u string) string {
+	p, err := url.Parse(strings.TrimSpace(u))
+	if err != nil || (p.Scheme != "https" && p.Scheme != "http") || p.Host == "" {
+		return ""
+	}
+	return p.Scheme + "://" + p.Host
+}
+
+// pagesOrigin is the separate origin pages are served from ("" when they
+// share the app's).
+func (s *Server) pagesOrigin() string { return origin(s.cfg.PagesURL) }
+
+// pageCSP is the policy for a page; md is the Markdown shell's. Only the
+// app may frame a page: the app's own origin, which for pages served on
+// their own origin is the public URL (unknown: no restriction, rather than a
+// wrong one that would blank the viewer).
+func (s *Server) pageCSP(md bool) string {
+	body := pageCSPBody
+	if md {
+		body = pageMDCSPBody
+	}
+	fa := "'self'"
+	if app := origin(s.cfg.PublicURL); app != "" && s.pagesOrigin() != "" {
+		fa = app
+	} else if s.pagesOrigin() != "" {
+		return "sandbox allow-scripts; " + body
+	}
+	return "sandbox allow-scripts; " + body + "; frame-ancestors " + fa
+}
+
+func (s *Server) setPageHeaders(h http.Header) {
+	h.Set("Content-Security-Policy", s.pageCSP(false))
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cache-Control", "no-store")
@@ -708,18 +780,19 @@ func setPageHeaders(h http.Header) {
 }
 
 // pagesHeaders puts the page policy on every response under /p/, whatever
-// answers it (a wrong Host, a missing route, an auth failure included).
-func pagesHeaders(next http.Handler) http.Handler {
+// answers it (a wrong Host, a missing route, an auth failure included); on
+// the pages listener (all) on every response there is.
+func (s *Server) pagesHeaders(all bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/p" || strings.HasPrefix(r.URL.Path, "/p/") {
-			setPageHeaders(w.Header())
+		if all || r.URL.Path == "/p" || strings.HasPrefix(r.URL.Path, "/p/") {
+			s.setPageHeaders(w.Header())
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func pageText(w http.ResponseWriter, status int, msg string) {
-	setPageHeaders(w.Header())
+func (s *Server) pageText(w http.ResponseWriter, status int, msg string) {
+	s.setPageHeaders(w.Header())
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(msg + "\n"))
@@ -728,9 +801,9 @@ func pageText(w http.ResponseWriter, status int, msg string) {
 // handlePageView: GET /p/{id}[/{version}] (the user only: a page may hold
 // anything an agent saw).
 func (s *Server) handlePageView(w http.ResponseWriter, r *http.Request) {
-	setPageHeaders(w.Header())
+	s.setPageHeaders(w.Header())
 	if s.pages == nil {
-		pageText(w, http.StatusNotFound, "no pages here: they are kept on the hub")
+		s.pageText(w, http.StatusNotFound, "no pages here: they are kept on the hub")
 		return
 	}
 	id := r.PathValue("id")
@@ -738,28 +811,28 @@ func (s *Server) handlePageView(w http.ResponseWriter, r *http.Request) {
 	if v := strings.TrimPrefix(r.PathValue("ver"), "v"); r.PathValue("ver") != "" {
 		var err error
 		if n, err = strconv.Atoi(v); err != nil || n < 1 {
-			pageText(w, http.StatusNotFound, "no such page")
+			s.pageText(w, http.StatusNotFound, "no such page")
 			return
 		}
 	}
 	if !pageIDRE.MatchString(id) {
-		pageText(w, http.StatusNotFound, "no such page")
+		s.pageText(w, http.StatusNotFound, "no such page")
 		return
 	}
 	_, v, body, err := s.pages.body(id, n)
 	switch {
 	case errors.Is(err, errPageNotFound):
-		pageText(w, http.StatusNotFound, "no such page")
+		s.pageText(w, http.StatusNotFound, "no such page")
 		return
 	case err != nil:
-		pageText(w, http.StatusGone, "that page's file is missing on the hub")
+		s.pageText(w, http.StatusGone, "that page's file is missing on the hub")
 		return
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	if v.Kind == "md" {
-		h.Set("Content-Security-Policy", pageMDCSP)
+		h.Set("Content-Security-Policy", s.pageCSP(true))
 		body = markdownShell(body)
 	}
 	_, _ = w.Write(body)
@@ -767,7 +840,7 @@ func (s *Server) handlePageView(w http.ResponseWriter, r *http.Request) {
 
 // handlePageMissing answers every other /p/ path.
 func (s *Server) handlePageMissing(w http.ResponseWriter, r *http.Request) {
-	pageText(w, http.StatusNotFound, "no such page")
+	s.pageText(w, http.StatusNotFound, "no such page")
 }
 
 // pageLibs are the vendored libraries a Markdown page loads.
@@ -775,16 +848,16 @@ var pageLibs = map[string]string{"marked.js": "vendor/marked.umd.js", "purify.js
 
 // handlePageLib: GET /p/_/{name}. Public like the app's own assets.
 func (s *Server) handlePageLib(w http.ResponseWriter, r *http.Request) {
-	setPageHeaders(w.Header())
+	s.setPageHeaders(w.Header())
 	path, ok := pageLibs[r.PathValue("name")]
 	if !ok {
-		pageText(w, http.StatusNotFound, "no such file")
+		s.pageText(w, http.StatusNotFound, "no such file")
 		return
 	}
 	b, err := web.FS.ReadFile(path)
 	if err != nil {
 		log.Printf("pages: %s: %v", path, err)
-		pageText(w, http.StatusInternalServerError, "unavailable")
+		s.pageText(w, http.StatusInternalServerError, "unavailable")
 		return
 	}
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")

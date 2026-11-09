@@ -61,6 +61,11 @@ type Config struct {
 	// name, no trailing slash); links to published pages are built from it.
 	// Empty: the API gives paths only.
 	PublicURL string
+	// PagesURL is the https URL of the pages listener (-pages-listen) as the
+	// browser reaches it, e.g. https://hub.tailnet.ts.net:8443: the app frames
+	// pages from there, and page links are built from it. Empty: pages are
+	// served on the app's own origin.
+	PagesURL string
 	// AllowHosts are extra Host names (lowercase, no port) the server
 	// answers to besides localhost, loopback IPs and *.ts.net; any other
 	// Host is refused as possible DNS rebinding (see hostAllowed).
@@ -293,9 +298,10 @@ func (s *Server) routes() {
 		log.Fatalf("static assets: %v", err)
 	}
 	s.version = static.version
+	static.csp = appCSP(s.pagesOrigin())
 	if dir := os.Getenv("COMEBYE_DEV_WEB_DIR"); dir != "" {
 		log.Printf("serving the app from %s (COMEBYE_DEV_WEB_DIR; edits show on reload)", dir)
-		s.mux.Handle("GET /", diskStatic{dir})
+		s.mux.Handle("GET /", diskStatic{dir, appCSP(s.pagesOrigin())})
 	} else {
 		s.mux.Handle("GET /", static)
 	}
@@ -447,7 +453,7 @@ func (s *Server) ListenAndServe() error {
 // unsafe requests via Sec-Fetch-Site/Origin; requiring a JSON content type
 // also forces a CORS preflight on browsers too old to send those headers.
 func (s *Server) Handler() http.Handler {
-	app := pagesHeaders(s.checkHost(s.capPeers(s.base())))
+	app := s.pagesHeaders(false, s.checkHost(s.capPeers(s.base())))
 	// The health probes come first: no Host check (a kubelet probes the pod
 	// IP), no login, nothing secret in the answer (see health.go).
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

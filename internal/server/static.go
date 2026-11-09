@@ -18,7 +18,16 @@ import (
 // eval and new Function stay blocked.
 const contentSecurityPolicy = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
-	"base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	"frame-src 'self'%s; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+// appCSP is the app's policy; pagesOrigin, when pages are served on their
+// own origin, is the one other origin the app may frame.
+func appCSP(pagesOrigin string) string {
+	if pagesOrigin != "" {
+		pagesOrigin = " " + pagesOrigin
+	}
+	return fmt.Sprintf(contentSecurityPolicy, pagesOrigin)
+}
 
 type staticFile struct {
 	data  []byte
@@ -30,6 +39,7 @@ type staticFile struct {
 // staticHandler serves embedded files with content-hash ETags, since
 // embed.FS has zero modtimes and http.FileServer would emit no validators.
 type staticHandler struct {
+	csp   string // the Content-Security-Policy to send
 	files map[string]*staticFile
 	// version identifies this build of the app (see assetVersion).
 	version string
@@ -57,7 +67,7 @@ func assetVersion(files map[string]*staticFile) string {
 }
 
 func newStaticHandler(fsys fs.FS) (*staticHandler, error) {
-	h := &staticHandler{files: map[string]*staticFile{}}
+	h := &staticHandler{files: map[string]*staticFile{}, csp: appCSP("")}
 	// Walk subdirectories too (vendor/); names are slash paths like
 	// "vendor/marked.umd.js", matching the request path.
 	err := fs.WalkDir(fsys, ".", func(name string, e fs.DirEntry, err error) error {
@@ -113,7 +123,7 @@ func (h *staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hd := w.Header()
 	hd.Set("X-Content-Type-Options", "nosniff")
 	hd.Set("Referrer-Policy", "no-referrer")
-	hd.Set("Content-Security-Policy", contentSecurityPolicy)
+	hd.Set("Content-Security-Policy", h.csp)
 	hd.Set("Content-Type", f.ctype)
 	hd.Set("Cache-Control", f.cache)
 	hd.Set("ETag", f.etag)
@@ -141,7 +151,7 @@ func etagMatches(header, etag string) bool {
 // request, so an edit to web/ shows on reload without a rebuild. It is the
 // dev harness's (tools/uitest/dev.sh, COMEBYE_DEV_WEB_DIR); a release serves
 // the embedded copy.
-type diskStatic struct{ dir string }
+type diskStatic struct{ dir, csp string }
 
 func (d diskStatic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h, err := newStaticHandler(os.DirFS(d.dir))
@@ -149,5 +159,6 @@ func (d diskStatic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	h.csp = d.csp
 	h.ServeHTTP(w, r)
 }

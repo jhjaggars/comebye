@@ -17,8 +17,11 @@ set -euo pipefail
 if [ -z "${SCHEME:-}" ]; then
   me="${BASH_SOURCE[0]}"; rc=0
   o="${2:-$(mktemp -d)}"
-  SCHEME=dark "$me" "${1:-}" "$o" || rc=1
-  SCHEME=light PORT=$(( ${PORT:-18741} + 1 )) "$me" "${1:-}" "$o/light" || rc=1
+  # The dark pass serves pages from a second listener on its own origin
+  # (-pages-listen); the light pass serves them from the app's origin (the
+  # default), so both set-ups are driven in a browser.
+  SCHEME=dark PAGES_LISTENER=1 "$me" "${1:-}" "$o" || rc=1
+  SCHEME=light PAGES_LISTENER=0 PORT=$(( ${PORT:-18741} + 1 )) "$me" "${1:-}" "$o/light" || rc=1
   exit $rc
 fi
 
@@ -49,7 +52,14 @@ if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
   exit 1
 fi
 
-"$tmp/comebye" -sock "$tmp/h.sock" -addr "127.0.0.1:$port" -insecure-no-auth -push=false \
+pages_args=()
+pages_url=""
+if [ "${PAGES_LISTENER:-0}" = 1 ]; then
+  pport="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
+  pages_url="http://127.0.0.1:$pport"
+  pages_args=(-pages-listen "127.0.0.1:$pport" -pages-url "$pages_url" -public-url "http://127.0.0.1:$port")
+fi
+"$tmp/comebye" -sock "$tmp/h.sock" -addr "127.0.0.1:$port" -insecure-no-auth -push=false "${pages_args[@]}" \
   -state-dir "$tmp/state" -host-name uitest -recall-index "$tmp/recall.db" -release-simulate >"$out/comebye.log" 2>&1 &
 for _ in $(seq 50); do curl -sf "http://127.0.0.1:$port/api/agents" >/dev/null && break; sleep 0.1; done
 
@@ -74,4 +84,7 @@ if [ -n "${STT_DATA:-}" ]; then
   inst="http://127.0.0.1:$iport"
 fi
 node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1
+
+# The Pages checks publish with the real CLI, so they need the binary and its state.
+PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1
 exit $rc

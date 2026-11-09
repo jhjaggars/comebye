@@ -357,13 +357,19 @@ func TestPagesEveryResponseIsSandboxed(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `\u003c/script\u003e\u003cb\u003ex`) || strings.Count(w.Body.String(), "</script>") != 4 {
 		t.Errorf("markdown shell = %s", w.Body)
 	}
-	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "'self'") || strings.Contains(csp, "cdnjs") {
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'unsafe-inline' 'self'") || strings.Contains(csp, "cdnjs") {
 		t.Errorf("markdown CSP = %q", csp)
 	}
 	// The page CSP for HTML allows no 'self': a page cannot load the
 	// hub's own scripts.
-	if csp := served(s, "GET", "/p/"+p.ID, userHdr, "").Header().Get("Content-Security-Policy"); strings.Contains(csp, "'self'") {
-		t.Errorf("html CSP = %q", csp)
+	csp := served(s, "GET", "/p/"+p.ID, userHdr, "").Header().Get("Content-Security-Policy")
+	for _, d := range strings.Split(csp, ";") {
+		if d = strings.TrimSpace(d); strings.HasPrefix(d, "script-src") && strings.Contains(d, "'self'") {
+			t.Errorf("html CSP lets a page load the hub's scripts: %q", csp)
+		}
+	}
+	if !strings.Contains(csp, "frame-ancestors 'self'") {
+		t.Errorf("html CSP lets any site frame a page: %q", csp)
 	}
 	// An old version stays addressable after an update.
 	do(s, "POST", "/api/pages", agentHdr("w2:p1"), pubJSON(map[string]any{"id": p.ID, "body": "<p>new"}))
@@ -443,5 +449,77 @@ func TestPagesTaggedNodeSeesOnlyItsOwnHost(t *testing.T) {
 	}
 	if code, _ := r.serve("DELETE", "/api/pages/"+mine.ID, "", nil); code != 200 {
 		t.Errorf("tagged delete of its own: %d", code)
+	}
+}
+
+// The pages listener has /p and nothing else: no /api, no app, whatever the
+// method, and the page policy on every answer.
+func TestPagesListenerServesOnlyPages(t *testing.T) {
+	s, _, _ := todoServer(t)
+	s.cfg.PagesURL = "https://hub.t.ts.net:8443"
+	s.cfg.PublicURL = "https://hub.t.ts.net"
+	p := pageOf(t, do(s, "POST", "/api/pages", agentHdr("w2:p1"), pubJSON(map[string]any{"body": "<p>hi"})).Body.Bytes())
+	h := s.PagesHandler()
+	get := func(method, path string, hdr map[string]string, host string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(""))
+		r.Host = host
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := get("GET", "/p/"+p.ID, userHdr, "hub.t.ts.net:8443"); w.Code != 200 || w.Body.String() != "<p>hi" {
+		t.Fatalf("page = %d %q", w.Code, w.Body)
+	}
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/agents"}, {"GET", "/api/pages"}, {"GET", "/api/whoami"}, {"POST", "/api/pages"}, {"POST", "/api/todos"},
+		{"DELETE", "/api/pages/" + p.ID}, {"GET", "/api/events"}, {"GET", "/"}, {"GET", "/app.js"}, {"GET", "/vendor/marked.umd.js"}, {"GET", "/index.html"},
+	} {
+		w := get(c.method, c.path, userHdr, "localhost")
+		if w.Code != 404 || strings.Contains(w.Body.String(), "agents") || !strings.HasPrefix(w.Header().Get("Content-Security-Policy"), "sandbox allow-scripts;") {
+			t.Errorf("%s %s = %d %.60q csp=%q", c.method, c.path, w.Code, w.Body, w.Header().Get("Content-Security-Policy"))
+		}
+	}
+	// Only the app may frame a page (its own origin is not this one).
+	csp := get("GET", "/p/"+p.ID, userHdr, "localhost").Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "frame-ancestors https://hub.t.ts.net") || strings.Contains(csp, "frame-ancestors 'self'") {
+		t.Errorf("csp = %q", csp)
+	}
+	if w := get("GET", "/p/"+p.ID, nil, "localhost"); w.Code != 401 {
+		t.Errorf("anonymous = %d", w.Code)
+	}
+	if w := get("GET", "/p/"+p.ID, agentHdr("w2:p1"), "localhost"); w.Code != 403 {
+		t.Errorf("agent = %d", w.Code)
+	}
+	if w := get("GET", "/p/"+p.ID, userHdr, "evil.example.com"); w.Code != 421 || w.Header().Get("Content-Security-Policy") == "" {
+		t.Errorf("wrong host = %d", w.Code)
+	}
+	// The app may frame the pages origin, and only that one.
+	if c := appCSP(s.pagesOrigin()); !strings.Contains(c, "frame-src 'self' https://hub.t.ts.net:8443;") {
+		t.Errorf("app csp = %q", c)
+	}
+	if c := appCSP(""); !strings.Contains(c, "frame-src 'self';") {
+		t.Errorf("app csp = %q", c)
+	}
+	// The API gives the pages origin, and links use it.
+	var l struct {
+		PagesURL string `json:"pages_url"`
+	}
+	json.Unmarshal(do(s, "GET", "/api/pages", userHdr, "").Body.Bytes(), &l)
+	if l.PagesURL != "https://hub.t.ts.net:8443" {
+		t.Errorf("pages_url = %q", l.PagesURL)
+	}
+	if w := do(s, "GET", "/api/pages/"+p.ID, userHdr, ""); !strings.Contains(w.Body.String(), `"url":"https://hub.t.ts.net:8443/p/`+p.ID+`"`) {
+		t.Errorf("link = %s", w.Body)
+	}
+	// Refusals to listen.
+	s.cfg.Addr = "127.0.0.1:8741"
+	if err := s.ListenPages("0.0.0.0:8742"); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Errorf("non-loopback: %v", err)
+	}
+	if err := s.ListenPages("127.0.0.1:8741"); err == nil || !strings.Contains(err.Error(), "differ") {
+		t.Errorf("same address: %v", err)
 	}
 }

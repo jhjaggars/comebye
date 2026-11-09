@@ -1,0 +1,351 @@
+// Pages (comebye publish): the sandbox, and how the screen looks.
+//
+// Pages are published the way a pi worker does it: by the real `comebye`
+// binary, from a bare environment, as an agent. A hostile page then tries to
+// read the hub's API, post to it, read the hub's cookie and localStorage and
+// navigate the app's window, in the app's iframe and opened directly: every
+// attempt must fail while the page's own script runs. The same attack code
+// run from the hub's own origin must succeed, so the test cannot pass because
+// the attacks are broken.
+//
+//   node pages.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
+import { launch } from "./lib.mjs";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const [base, out] = process.argv.slice(2);
+const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
+if (!bin || !stateDir) { console.error("pages.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
+const pagesUrl = process.env.PAGES_URL || ""; // set when the hub runs a pages listener
+const dark = process.env.SCHEME !== "light";
+const work = fs.mkdtempSync(path.join(os.tmpdir(), "pages-ui-"));
+const results = [];
+const log = [];
+
+// The CLI as a pi worker has it: nothing but PATH, HOME and where the hub is.
+function publish(args, input, pane = "w2:p1") {
+  const env = { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: pane };
+  return execFileSync(bin, ["publish", ...args], { env, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+}
+const idOf = (link) => link.match(/pg_[0-9a-f]{10}/)[0];
+const file = (name, text) => { const p = path.join(work, name); fs.writeFileSync(p, text); return p; };
+
+// ---- the attack, as source text: run in the page and, as a control, from the hub ----
+const PROBE = `async function probe(o) {
+  const out = {}, viol = [];
+  document.addEventListener("securitypolicyviolation", (e) => viol.push(e.effectiveDirective));
+  const rec = async (k, f) => { try { out[k] = "READ: " + String(await f()).slice(0, 50); } catch (e) { out[k] = "blocked: " + ((e && e.name) || "error"); } };
+  await rec("fetch /api/agents", async () => { const r = await fetch("/api/agents"); const t = await r.text(); if (!r.ok || !t) throw new Error("no"); return t; });
+  await rec("xhr /api/agents", () => new Promise((res, rej) => { const x = new XMLHttpRequest(); x.open("GET", "/api/agents"); x.onload = () => (x.status === 200 && x.responseText ? res(x.responseText) : rej(new Error("status " + x.status))); x.onerror = () => rej(new Error("xhr error")); x.send(); }));
+  await rec("fetch absolute hub url", async () => { const r = await fetch(o.hub + "/api/agents"); const t = await r.text(); if (!r.ok || !t) throw new Error("no"); return t; });
+  await rec("post /api/todos", async () => { const r = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "PWNED " + o.tag, kind: "decision" }) }); if (!r.ok) throw new Error("status " + r.status); return await r.text(); });
+  await rec("document.cookie", () => { const c = document.cookie; if (!c.includes("hubsecret")) throw new DOMException("no secret", "NotFound"); return c; });
+  await rec("localStorage", () => { const v = localStorage.getItem("hubsecret"); if (v !== "s3cret") throw new DOMException("no secret", "NotFound"); return v; });
+  await rec("fetch another page", async () => { const r = await fetch("/p/" + o.other); const t = await r.text(); if (!r.ok || !t) throw new Error("no"); return t; });
+  if (o.frame) {
+    await rec("parent.document", () => parent.document.title);
+    await rec("window.open", () => { const w = window.open(o.hub + "/api/agents"); if (!w) throw new DOMException("popup blocked", "NotAllowed"); return "opened"; });
+    out["top.location"] = await (async () => { try { window.top.location.href = o.hub + "/api/agents"; return "no exception (the browser must still refuse)"; } catch (e) { return "threw " + e.name; } })();
+    await rec("nested iframe on the API", () => new Promise((res, rej) => { const f = document.createElement("iframe"); f.src = "/api/agents"; f.onload = () => { try { res("loaded: " + f.contentDocument.body.innerText.slice(0, 40)); } catch (e) { rej(e); } }; document.body.append(f); setTimeout(() => rej(new DOMException("no load", "Timeout")), 800); }));
+    await rec("script from the hub", () => new Promise((res, rej) => { const s = document.createElement("script"); s.src = "/api/agents"; s.onload = () => res("loaded"); s.onerror = () => rej(new DOMException("blocked", "ScriptError")); document.body.append(s); }));
+    await rec("form post", () => new Promise((res, rej) => { const f = document.createElement("form"); f.method = "post"; f.action = "/api/todos"; const i = document.createElement("input"); i.name = "x"; f.append(i); document.body.append(f); f.submit(); setTimeout(() => rej(new DOMException("did not navigate", "NotAllowed")), 500); }));
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  out.violations = viol.length;
+  return out;
+}`;
+
+const probePage = (hub, other, tag) => `<!doctype html><html><head><meta charset="utf-8"><title>Probe: a hostile page</title>
+<style>body{font:15px system-ui;margin:24px;background:#0d1b2a;color:#e0e6ee}h1{margin:0 0 12px}#alive{padding:10px;background:#1b3a4b;border-radius:6px}pre{white-space:pre-wrap;word-break:break-all}</style></head>
+<body><h1>Hostile page</h1><p id="alive">script has not run</p><pre id="result">running…</pre>
+<script>
+document.getElementById("alive").textContent = "own script ran: 6 x 7 = " + (6 * 7);
+${PROBE}
+probe({ hub: ${JSON.stringify(hub)}, other: ${JSON.stringify(other)}, tag: ${JSON.stringify(tag)}, frame: window.top !== window })
+  .then((r) => { document.getElementById("result").textContent = JSON.stringify(r); window.__done = true; });
+</script></body></html>`;
+
+const directProbePage = (hub, other, tag) => probePage(hub, other, tag).replace("frame: window.top !== window", "frame: false");
+
+const mdSource = `# Failover test: 3 of 3 passed
+
+Run on **w1**, \`kubectl\` 1.31. See [the dashboard](https://example.com/dash) and [below](#table).
+
+| step | result | ms |
+|------|--------|---:|
+| drain node | ok | 412 |
+| promote replica | ok | 1 920 |
+| restore | ok | 3 305 |
+
+<script>window.__pwned = 1; document.title = "pwned"</script>
+<img src="x" onerror="window.__pwned = 2">
+
+- [x] data kept
+- [ ] latency under 1s
+
+\`\`\`sh
+comebye publish report.md --key failover
+\`\`\`
+`;
+
+const chartHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Latency by hour</title>
+<style>body{font:15px system-ui;margin:0;padding:20px;background:#fff;color:#111}h1{font-size:20px;margin:0 0 4px}p{color:#555;margin:0 0 14px}
+.bar{display:flex;align-items:center;gap:8px;margin:5px 0}.bar b{width:48px;font-weight:500}.bar i{display:block;height:16px;background:#2563eb;border-radius:3px}
+.wide{min-width:900px;border-collapse:collapse}.wide td,.wide th{border:1px solid #ccc;padding:4px 10px}</style></head><body>
+<h1>Latency by hour</h1><p>p95 in milliseconds, last 12 hours (drawn by this page's own script)</p><div id="c"></div>
+<script>const d=[120,140,135,180,260,410,380,300,220,190,150,130];
+d.forEach((v,i)=>{const r=document.createElement("div");r.className="bar";r.innerHTML="<b>"+String(i).padStart(2,"0")+":00</b><i style='width:"+v*1.2+"px'></i><span>"+v+" ms</span>";document.getElementById("c").append(r)});</script>
+<div style="overflow-x:auto;margin-top:16px"><table class="wide"><tr><th>hour</th><th>p50</th><th>p95</th><th>p99</th><th>errors</th><th>notes</th></tr><tr><td>05:00</td><td>40</td><td>410</td><td>900</td><td>3</td><td>deploy at 05:02, cache cold for a few minutes</td></tr></table></div>
+</body></html>`;
+
+const pages = {};
+const check = async (name, fn) => {
+  try { await fn(); results.push([name, true, ""]); } catch (e) {
+    results.push([name, false, String(e.message).split("\n")[0]]);
+    await shotFail?.(name);
+  }
+};
+let shotFail = null;
+// A frame under the page CSP cannot take Playwright's string-evaluating waits: poll with evaluate.
+async function until(fr, fn, arg, ms = 8000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    if (await fr.evaluate(fn, arg).catch(() => false)) return;
+    if (Date.now() > end) throw new Error("timed out waiting for the page");
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+// ---- publish: as a pi worker would, with the CLI only ----
+await check("publish: the CLI alone prints a link, lists, shows, updates in place", async () => {
+  pages.secret = idOf(publish([file("secret.md", "# Quarterly numbers\n\nsecret-marker-4711"), "--handoff", "h-report"]));
+  // stdin and a key, the way a script without a file does it
+  pages.md = idOf(publish(["-", "--key", "failover", "--title", "Failover test"], mdSource, "w1:p1"));
+  pages.chart = idOf(publish([file("latency.html", chartHtml)]));
+  const again = publish(["-", "--key", "failover"], mdSource.replace("3 of 3", "3 of 3 (rerun)"), "w1:p1");
+  if (idOf(again) !== pages.md) throw new Error("same key made another page: " + again);
+  const list = execFileSync(bin, ["pages", "list"], { env: { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w2:p1" }, encoding: "utf8" });
+  for (const id of [pages.secret, pages.md, pages.chart]) if (!list.includes(id)) throw new Error("not listed: " + id + "\n" + list);
+  if (!/Latency by hour/.test(list) || !/Failover test/.test(list)) throw new Error("titles missing:\n" + list);
+  const probeFile = file("probe.html", probePage(base, pages.secret, "frame"));
+  pages.probe = idOf(publish([probeFile, "--title", "Probe: a hostile page"]));
+  pages.direct = idOf(publish([file("probe2.html", directProbePage(base, pages.secret, "direct")), "--title", "Probe, opened directly"]));
+});
+
+// ---- the sandbox, in the app's iframe ----
+const desktop = await launch({ width: 1280, height: 800, dark, bypassCSP: false });
+const { page } = desktop;
+page.on("console", (m) => log.push(`console.${m.type()}: ${m.text()}`));
+page.on("pageerror", (e) => log.push(`pageerror: ${e.message}`));
+let popups = 0;
+desktop.ctx.on("page", () => { popups++; });
+const frameOf = (id) => page.frames().find((f) => f.url().includes("/p/" + id));
+const todoCount = async () => (await (await fetch(base + "/api/todos?state=all")).json()).todos.filter((t) => /PWNED/.test(t.question)).length;
+const shot = (name) => page.screenshot({ path: `${out}/${name}.png` });
+shotFail = (name) => page.screenshot({ path: `${out}/pages-fail-${name.replace(/\W+/g, "-").slice(0, 40)}.png` }).catch(() => {});
+
+await check("control: the same attacks from the hub's own origin all succeed", async () => {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.evaluate(() => { document.cookie = "hubsecret=s3cret; path=/"; localStorage.setItem("hubsecret", "s3cret"); });
+  const r = await page.evaluate(`(${PROBE})({ hub: ${JSON.stringify(base)}, other: ${JSON.stringify(pages.secret)}, tag: "control", frame: false })`);
+  for (const k of ["fetch /api/agents", "xhr /api/agents", "fetch absolute hub url", "post /api/todos", "document.cookie", "localStorage", "fetch another page"]) {
+    if (!String(r[k]).startsWith("READ")) throw new Error(`control could not do "${k}": ${r[k]}; the attacks prove nothing`);
+  }
+  if ((await todoCount()) !== 1) throw new Error("the control's POST did not land");
+  // clean up the control's to-do item so only the page can add one from here on
+  const t = (await (await fetch(base + "/api/todos?state=all")).json()).todos.find((x) => /PWNED/.test(x.question));
+  await fetch(base + "/api/todos/" + t.id + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+});
+
+const bad = (r, keys) => keys.filter((k) => !String(r[k]).startsWith("blocked")).map((k) => `${k}: ${r[k]}`);
+const NET = ["fetch /api/agents", "xhr /api/agents", "fetch absolute hub url", "post /api/todos", "document.cookie", "localStorage", "fetch another page"];
+const FRAME = ["parent.document", "window.open", "nested iframe on the API", "script from the hub", "form post"];
+let probeResult = null;
+
+await check("sandbox: in the app's iframe nothing of the hub is reachable and the page's own script runs", async () => {
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.evaluate(() => { window.__marker = "app window"; document.cookie = "hubsecret=s3cret; path=/"; localStorage.setItem("hubsecret", "s3cret"); });
+  const before = await todoCount();
+  popups = 0;
+  await page.goto(base + `/#/pages/${pages.probe}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  const sandbox = await page.locator("iframe.pgs-frame").getAttribute("sandbox");
+  if (sandbox !== "allow-scripts") throw new Error(`iframe sandbox=${sandbox}`);
+  await page.evaluate(() => { window.__marker = "app window"; });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.probe); if (!fr) await page.waitForTimeout(100); }
+  if (!fr) throw new Error("page frame not found");
+  await until(fr, () => window.__done === true);
+  probeResult = JSON.parse(await fr.locator("#result").innerText());
+  if (!/own script ran: 6 x 7 = 42/.test(await fr.locator("#alive").innerText())) throw new Error("the page's own script did not run");
+  await page.waitForTimeout(700); // time for a top navigation to land, if one would
+  const failures = bad(probeResult, [...NET, ...FRAME]);
+  if (failures.length) throw new Error("not blocked: " + failures.join("; "));
+  if (!/sandbox/.test(probeResult["top.location"] || "") && !/threw|no exception/.test(probeResult["top.location"])) throw new Error("top.location: " + probeResult["top.location"]);
+  if (probeResult.violations < 3) throw new Error("the browser reported only " + probeResult.violations + " CSP violations");
+  if (page.url() !== base + `/#/pages/${pages.probe}`) throw new Error("the app's window was navigated: " + page.url());
+  if ((await page.evaluate(() => window.__marker)) !== "app window") throw new Error("the app's document was replaced");
+  if (popups !== 0) throw new Error(popups + " popup(s) opened");
+  if ((await todoCount()) !== before) throw new Error("the page managed to add a to-do item");
+  if (/s3cret|secret-marker-4711/.test(JSON.stringify(probeResult))) throw new Error("the page saw hub data");
+});
+
+await check("sandbox: opened directly in a tab the same header applies", async () => {
+  const p2 = await desktop.ctx.newPage();
+  await p2.goto(base + "/", { waitUntil: "load" });
+  await p2.evaluate(() => { document.cookie = "hubsecret=s3cret; path=/"; localStorage.setItem("hubsecret", "s3cret"); });
+  const before = await todoCount();
+  const resp = await p2.goto(base + "/p/" + pages.direct, { waitUntil: "load" });
+  const csp = resp.headers()["content-security-policy"] || "";
+  if (!/^sandbox allow-scripts;/.test(csp) || /allow-same-origin/.test(csp)) throw new Error("CSP: " + csp);
+  if (Object.keys(resp.headers()).some((h) => h.startsWith("access-control-"))) throw new Error("CORS headers on a page");
+  await until(p2, () => window.__done === true);
+  const r = JSON.parse(await p2.locator("#result").innerText());
+  if (!/own script ran: 6 x 7 = 42/.test(await p2.locator("#alive").innerText())) throw new Error("own script did not run");
+  const failures = bad(r, NET);
+  if (failures.length) throw new Error("not blocked: " + failures.join("; "));
+  if ((await todoCount()) !== before) throw new Error("the page managed to add a to-do item");
+  // the response headers of other /p/ answers, errors included
+  for (const [u, status] of [["/p/pg_0000000000", 404], ["/p/_/nope.js", 404], ["/p/" + pages.md, 200]]) {
+    const r2 = await fetch(base + u);
+    if (r2.status !== status || !/^sandbox allow-scripts;/.test(r2.headers.get("content-security-policy") || "") || [...r2.headers.keys()].some((h) => h.startsWith("access-control-"))) throw new Error(`${u}: ${r2.status} ${r2.headers.get("content-security-policy")}`);
+  }
+  await p2.close();
+});
+
+await check("markdown: rendered in the sandbox, its script and handler do nothing, links are text", async () => {
+  await page.goto(base + `/#/pages/${pages.md}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.md); if (!fr) await page.waitForTimeout(100); }
+  await fr.waitForSelector("#out h1", { timeout: 8000 });
+  const h1 = await fr.locator("#out h1").innerText();
+  if (!/Failover test: 3 of 3/.test(h1)) throw new Error("h1: " + h1);
+  if ((await fr.locator("#out table tr").count()) !== 4) throw new Error("table rows " + (await fr.locator("#out table tr").count()));
+  if (await fr.evaluate(() => window.__pwned)) throw new Error("script or handler in the markdown ran");
+  if (await fr.locator("#out script, #out img, #out a[href^=http]").count()) throw new Error("script, img or external link survived");
+  if (!/the dashboard \(https:\/\/example\.com\/dash\)/.test(await fr.locator("#out").innerText())) throw new Error("link text: " + (await fr.locator("#out").innerText()).slice(0, 200));
+  // two versions were published: the picker shows both
+  const opts = await page.locator("#pgs-ver option").allInnerTexts();
+  if (opts.length !== 2 || !/latest/.test(opts[0])) throw new Error("versions: " + opts);
+  await shot("pages-markdown-1280");
+});
+
+// ---- the pages listener: its own origin, and nothing but /p ----
+await check(pagesUrl ? "listener: pages come from an origin of their own that has no /api, no app, no way in" : "listener: not configured in this pass (pages share the app's origin)", async () => {
+  if (!pagesUrl) {
+    const fr = frameOf(pages.md) || null;
+    const src = await page.evaluate(() => document.querySelector("iframe.pgs-frame")?.src || "");
+    if (src && !src.startsWith(base + "/p/")) throw new Error("iframe src " + src);
+    return;
+  }
+  const origin = new URL(pagesUrl).origin;
+  if (origin === new URL(base).origin) throw new Error("the pages origin is the app's");
+  // The iframe is on the pages origin; the app's CSP names it.
+  await page.goto(base + `/#/pages/${pages.chart}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  const src = await page.locator("iframe.pgs-frame").getAttribute("src");
+  if (!src.startsWith(origin + "/p/")) throw new Error("iframe src " + src);
+  const appCsp = (await page.request.get(base + "/")).headers()["content-security-policy"] || "";
+  if (!appCsp.includes("frame-src 'self' " + origin)) throw new Error("app CSP: " + appCsp);
+  // Everything but /p/... is a 404 there, with the page policy.
+  for (const [m, p] of [["GET", "/api/agents"], ["GET", "/api/pages"], ["GET", "/api/whoami"], ["GET", "/api/events"], ["GET", "/"], ["GET", "/app.js"], ["GET", "/index.html"], ["POST", "/api/todos"], ["POST", "/api/pages"], ["DELETE", "/api/pages/" + pages.chart]]) {
+    const r = await fetch(origin + p, { method: m, headers: m === "GET" ? {} : { "Content-Type": "application/json" }, body: m === "GET" || m === "DELETE" ? undefined : "{}" });
+    const body = await r.text();
+    if (r.status !== 404 || /agents|todos|<html/i.test(body) || !/^sandbox allow-scripts;/.test(r.headers.get("content-security-policy") || "")) throw new Error(`${m} ${p} on the pages origin: ${r.status} ${body.slice(0, 40)}`);
+  }
+  // A page there reaches the pages origin's /api? It does not exist, and the hub's is unreachable.
+  const tabs = await desktop.ctx.newPage();
+  const resp = await tabs.goto(origin + "/p/" + pages.direct, { waitUntil: "load" });
+  if (resp.status() !== 200) throw new Error("page on the listener: " + resp.status());
+  await until(tabs, () => window.__done === true);
+  const rr = JSON.parse(await tabs.locator("#result").innerText());
+  const bad2 = bad(rr, NET);
+  if (bad2.length) throw new Error("not blocked on the listener: " + bad2.join("; "));
+  await tabs.close();
+  // The app's own origin still answers /api (the control is not a 404 everywhere).
+  if ((await fetch(base + "/api/agents")).status !== 200) throw new Error("control: the app's /api is gone");
+  await shot("pages-listener-1280");
+});
+
+// ---- the screen, at both widths ----
+await check("screens: the list and an open page at 1280 and 390", async () => {
+  await page.goto(base + "/#/pages", { waitUntil: "load" });
+  await page.waitForSelector(".pgs-card", { timeout: 8000 });
+  const cards = await page.locator(".pgs-card").count();
+  if (cards < 5) throw new Error("cards " + cards);
+  const titles = (await page.locator(".pgs-title").allInnerTexts()).join("|");
+  if (!/Latency by hour/.test(titles) || !/Failover test/.test(titles)) throw new Error("titles " + titles);
+  await page.waitForTimeout(300);
+  await shot("pages-list-1280");
+  await page.goto(base + `/#/pages/${pages.chart}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.chart); if (!fr) await page.waitForTimeout(100); }
+  await fr.waitForSelector(".bar", { timeout: 8000 });
+  await page.waitForTimeout(300);
+  const prov = await page.locator(".pgs-prov").innerText();
+  if (!/Published by .*w2:p1/.test(prov) || !/sandbox/.test(prov)) throw new Error("provenance: " + prov);
+  await shot("pages-open-1280");
+  // filter
+  await page.locator("#pgs-q").fill("failover");
+  if ((await page.locator(".pgs-card").count()) !== 1) throw new Error("filter left " + (await page.locator(".pgs-card").count()));
+  await page.locator("#pgs-q").fill("");
+  // the hash opens the same screens on a phone
+  const phone = await launch({ width: 390, height: 844, dark, bypassCSP: false });
+  const m = phone.page;
+  await m.goto(base + "/#/pages", { waitUntil: "load" });
+  await m.waitForSelector(".pgs-card", { timeout: 8000 });
+  const over = await m.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-list").scrollWidth, document.querySelector(".pgs-list").clientWidth]);
+  if (over[0] > over[1] || over[2] > over[3]) throw new Error("list scrolls sideways " + over);
+  await m.waitForTimeout(300);
+  await m.screenshot({ path: `${out}/pages-list-390.png` });
+  await m.locator(`.pgs-card[data-id="${pages.chart}"]`).click();
+  await m.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  let mf;
+  for (let i = 0; i < 60 && !mf; i++) { mf = m.frames().find((f) => f.url().includes("/p/" + pages.chart)); if (!mf) await m.waitForTimeout(100); }
+  await mf.waitForSelector(".bar", { timeout: 8000 });
+  await m.waitForTimeout(300);
+  const over2 = await m.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-bar").scrollWidth, document.querySelector(".pgs-bar").clientWidth]);
+  if (over2[0] > over2[1] || over2[2] > over2[3]) throw new Error("page view scrolls sideways " + over2);
+  await m.screenshot({ path: `${out}/pages-open-390.png` });
+  // back returns to the list, and back again to the app
+  await m.locator("#pgs-back").click();
+  await m.waitForSelector(".pgs-card", { state: "visible" });
+  await m.locator("#pgs-back").click();
+  await m.waitForSelector("#pages", { state: "hidden" });
+  await phone.browser.close();
+});
+
+await check("links: a to-do link to a page opens it in the app; delete asks and removes", async () => {
+  // a to-do item whose link is the page's URL
+  const link = base + "/p/" + pages.secret;
+  const added = await (await fetch(base + "/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "Read the report", kind: "action", no_wait: true, links: [{ label: "Report", url: link }] }) })).json();
+  await page.goto("about:blank"); // a fresh load: the to-do list is read on load
+  await page.goto(base + "/#/todo", { waitUntil: "load" });
+  // Select the item; its link is shown in the detail pane.
+  await page.locator("#p-todo").getByText("Read the report").first().click();
+  const lk = page.locator(`#p-todo a[href="${link}"]`).filter({ visible: true }).first();
+  await lk.waitFor({ state: "visible", timeout: 8000 });
+  await lk.click();
+  await until(page, (id) => location.hash === "#/pages/" + id, pages.secret, 4000);
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  // delete: the app asks first
+  let asked = "";
+  page.once("dialog", (d) => { asked = d.message(); d.accept(); });
+  await page.locator("#pgs-del").click();
+  await until(page, (id) => !document.querySelector(`.pgs-card[data-id="${id}"]`), pages.secret, 5000);
+  if (!/Delete/.test(asked)) throw new Error("no confirmation: " + asked);
+  const r = await fetch(base + "/p/" + pages.secret);
+  if (r.status !== 404) throw new Error("deleted page answers " + r.status);
+});
+
+fs.writeFileSync(`${out}/pages-browser.log`, log.join("\n") + "\n");
+fs.writeFileSync(`${out}/pages-probe.json`, JSON.stringify(probeResult, null, 2) + "\n");
+await desktop.browser.close();
+fs.rmSync(work, { recursive: true, force: true });
+let failed = 0;
+for (const [name, ok, why] of results) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : "  -- " + why}`); if (!ok) failed++; }
+process.exit(failed ? 1 : 0);

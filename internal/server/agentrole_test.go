@@ -425,6 +425,11 @@ func TestPeerForwardsToHub(t *testing.T) {
 		{"POST", "/api/hosts/desk/agents/w3:p1/prompt", `{"text":"hi"}`, "/api/hosts/desk/agents/w3:p1/prompt"},
 		// The kind a model listing is scoped to survives the hop.
 		{"GET", "/api/models?kind=pi&evil=1", "", "/api/models"},
+		// Pages live on the hub too: publish, list, read back, delete.
+		{"POST", "/api/pages", `{"title":"t","body":"<p>x"}`, "/api/pages"},
+		{"GET", "/api/pages?mine=1&evil=1", "", "/api/pages"},
+		{"GET", "/api/pages/pg_0123456789?body=1", "", "/api/pages/pg_0123456789"},
+		{"DELETE", "/api/pages/pg_0123456789", "", "/api/pages/pg_0123456789"},
 	}
 	for _, c := range cases {
 		w := do(s, c.method, c.path, agentHdr("w1:p1"), c.body)
@@ -441,6 +446,9 @@ func TestPeerForwardsToHub(t *testing.T) {
 		}
 		if strings.Contains(c.path, "limit=5") && r.URL.RawQuery != "limit=5" {
 			t.Errorf("query = %q", r.URL.RawQuery)
+		}
+		if strings.Contains(c.path, "mine=1") && r.URL.RawQuery != "mine=1" {
+			t.Errorf("pages query = %q, want mine=1", r.URL.RawQuery)
 		}
 		if strings.Contains(c.path, "kind=pi") && r.URL.RawQuery != "kind=pi" {
 			t.Errorf("kind query = %q, want kind=pi", r.URL.RawQuery)

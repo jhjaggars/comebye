@@ -4158,6 +4158,194 @@ function initRecall() {
   });
 }
 
+/* ---------- Pages: reports agents publish (comebye publish) ---------- */
+
+// #/pages                  the list
+// #/pages/<id>[/<n>]       one page (version n, default the newest)
+// A page is code an agent wrote, so it is only ever shown in an iframe with
+// sandbox="allow-scripts" (no allow-same-origin): its scripts run, but in an
+// opaque origin that cannot read this app, its API, cookies or storage, and
+// the server's Content-Security-Policy on /p/ forbids fetches, forms, popups
+// and navigating this window too. Everything about it that this screen
+// prints (title, publisher) is agent text, escaped.
+const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
+const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "" };
+
+function parsePagesRoute() {
+  const m = location.hash.match(/^#\/pages(?:\/([^/]+)(?:\/(\d+))?)?$/);
+  if (!m) return null;
+  if (m[1] === undefined) return { id: "", ver: 0 };
+  return PAGE_ID_RE.test(m[1]) ? { id: m[1], ver: m[2] ? Number(m[2]) : 0 } : { id: "", ver: 0 };
+}
+
+function pageHash(id, ver) { return "#/pages/" + id + (ver ? "/" + ver : ""); }
+
+// pageFromUrl: a link to one of this hub's pages (/p/<id>) goes to the
+// Pages screen instead of a new tab.
+function pageFromUrl(href) {
+  let u;
+  try { u = new URL(href, location.href); } catch { return null; }
+  if (u.origin !== location.origin && !(pgs.publicUrl && u.origin === pgs.publicUrl) && !(pgs.pagesUrl && u.origin === pgs.pagesUrl)) return null;
+  const m = u.pathname.match(/^\/p\/(pg_[0-9a-f]{10})(?:\/v?(\d+))?$/);
+  return m ? { id: m[1], ver: m[2] ? Number(m[2]) : 0 } : null;
+}
+
+async function pagesLoad() {
+  try {
+    const r = await api("/api/pages");
+    pgs.items = r.pages || [];
+    try { pgs.publicUrl = r.public_url ? new URL(r.public_url).origin : ""; } catch { pgs.publicUrl = ""; }
+    pgs.pagesUrl = r.pages_url || ""; // pages served from an origin of their own (-pages-listen), or ""
+    pgs.err = "";
+  } catch (e) {
+    pgs.err = e.status === 503 ? "Pages are off on this hub." : e.message;
+  }
+  pgs.loaded = true;
+  if (pgs.route) renderPages();
+}
+
+function pagesFiltered() {
+  const q = pgs.q.trim().toLowerCase();
+  if (!q) return pgs.items;
+  return pgs.items.filter((p) => [p.title, p.by, p.host, p.id, p.key, p.kind, p.handoff].some((v) => String(v || "").toLowerCase().includes(q)));
+}
+
+function pageSize(n) {
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + " MiB" : n >= 1024 ? (n / 1024).toFixed(1) + " KiB" : n + " B";
+}
+
+function pageAgo(t) { const at = Date.parse(t); return Number.isNaN(at) ? "" : fmtAgo(at) + " ago"; }
+
+function renderPages() {
+  const r = pgs.route;
+  if (!r) return;
+  const list = pagesFiltered();
+  $("pgs-count").textContent = pgs.loaded && !pgs.err ? `${pgs.items.length} page${pgs.items.length === 1 ? "" : "s"}` : "";
+  let html;
+  if (pgs.err) html = `<div class="pgs-empty">${esc(pgs.err)}</div>`;
+  else if (!pgs.loaded) html = `<div class="pgs-empty">Loading…</div>`;
+  else if (!pgs.items.length) html = `<div class="pgs-empty">No pages yet. An agent publishes one with <code>comebye publish report.html</code> (or a <code>.md</code> file).</div>`;
+  else if (!list.length) html = `<div class="pgs-empty">No page matches “${esc(pgs.q)}”.</div>`;
+  else html = list.map((p) => `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">
+      <span class="pgs-title">${esc(p.title)}</span>
+      <span class="pgs-meta">${esc(p.by)}${p.host ? " · " + esc(p.host) : ""} · ${esc(pageAgo(p.updated_at))}</span>
+      <span class="pgs-meta">${esc(p.kind)} · v${p.version} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></a>`).join("");
+  if ($("pgs-items")._html !== html) { $("pgs-items")._html = html; $("pgs-items").innerHTML = html; }
+  renderPageView();
+}
+
+function renderPageView() {
+  const r = pgs.route, view = $("pgs-view");
+  $("pages").classList.toggle("in-page", !!(r && r.id));
+  if (!r || !r.id) {
+    if (view.dataset.id) { view.replaceChildren(); view.dataset.id = ""; pgs.frameKey = ""; }
+    if (!view.firstChild) view.innerHTML = `<div class="pgs-pick">Pick a page from the list.</div>`;
+    return;
+  }
+  const p = pgs.items.find((x) => x.id === r.id);
+  if (!p) {
+    pgs.frameKey = "";
+    view.dataset.id = "";
+    view.innerHTML = `<div class="pgs-pick">${pgs.loaded ? "That page is gone." : "Loading…"}</div>`;
+    return;
+  }
+  const ver = r.ver || p.version;
+  const key = p.id + "/" + ver + "/" + p.updated_at;
+  const vers = (p.versions || []).slice().reverse();
+  const opts = vers.map((v) => `<option value="${v.n}"${v.n === ver ? " selected" : ""}>v${v.n}${v.n === p.version ? " (latest)" : ""} · ${esc(pageAgo(v.at))}</option>`).join("");
+  const bar = `<div class="pgs-bar"><h2>${esc(p.title)}</h2>
+    <div class="pgs-prov">Published by ${esc(p.by)}${p.host ? " on " + esc(p.host) : ""}${p.tagged ? " (a worker node)" : ""} · ${esc(pageAgo(p.created_at))}${p.updated_at !== p.created_at ? ", updated " + esc(pageAgo(p.updated_at)) : ""} · ${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}<br>Agent-written page, shown in a sandbox: its scripts run, but it cannot reach Comebye, your data or the network.</div>
+    <div class="pgs-acts">${vers.length > 1 ? `<select id="pgs-ver" aria-label="Version">${opts}</select>` : ""}
+      <button type="button" class="btn" id="pgs-copy">Copy link</button>
+      <a class="btn" id="pgs-open" href="${esc(pgs.pagesUrl + "/p/" + p.id + (r.ver ? "/" + r.ver : ""))}" target="_blank" rel="noopener">Open in tab</a>
+      <button type="button" class="btn danger" id="pgs-del">Delete</button></div></div>`;
+  if (view.dataset.id === p.id && pgs.frameKey === key) {
+    // Same page and version: refresh the bar only, so the page keeps its state.
+    view.querySelector(".pgs-bar").outerHTML = bar;
+    return;
+  }
+  view.dataset.id = p.id;
+  pgs.frameKey = key;
+  view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
+}
+
+// syncPages follows the hash: route() calls it.
+function syncPages() {
+  const r = parsePagesRoute();
+  const el = $("pages");
+  const was = !el.hidden;
+  pgs.route = r;
+  el.hidden = !r;
+  document.body.classList.toggle("has-pages", !!r);
+  if (!r) {
+    clearInterval(pgs.timer); pgs.timer = null;
+    $("pgs-view").replaceChildren(); $("pgs-view").dataset.id = ""; pgs.frameKey = "";
+    return;
+  }
+  if (!was) {
+    $("pgs-q").value = pgs.q;
+    pgs.timer = setInterval(pagesLoad, 20000);
+    pagesLoad();
+  } else if (r.id && !pgs.items.some((p) => p.id === r.id)) {
+    pagesLoad(); // a page published since the list was read
+  }
+  renderPages();
+}
+
+function closePages() {
+  history.replaceState(null, "", location.pathname + location.search);
+  route();
+}
+
+function pagesBack() {
+  if (pgs.route && pgs.route.id && !isDesktop()) location.hash = "#/pages";
+  else closePages();
+}
+
+async function pagesDelete() {
+  const r = pgs.route, p = r && pgs.items.find((x) => x.id === r.id);
+  if (!p || !confirm(`Delete “${p.title}”?\n\nThis removes the page and all ${(p.versions || []).length} kept version(s) for good.`)) return;
+  try {
+    await api("/api/pages/" + encodeURIComponent(p.id), { method: "DELETE" });
+    pgs.items = pgs.items.filter((x) => x.id !== p.id);
+    toast("Deleted");
+    if (isDesktop()) history.replaceState(null, "", "#/pages"); else history.back();
+    route();
+  } catch (e) { toast(e.message, true); }
+}
+
+function initPages() {
+  $("pgs-back").addEventListener("click", pagesBack);
+  $("pgs-q").addEventListener("input", (ev) => { pgs.q = ev.target.value; renderPages(); });
+  $("pages").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.stopPropagation(); pagesBack(); }
+  });
+  $("pgs-view").addEventListener("change", (ev) => {
+    if (ev.target.id !== "pgs-ver" || !pgs.route) return;
+    const p = pgs.items.find((x) => x.id === pgs.route.id), n = Number(ev.target.value);
+    history.replaceState(null, "", pageHash(pgs.route.id, p && n === p.version ? 0 : n));
+    route();
+  });
+  $("pgs-view").addEventListener("click", async (ev) => {
+    if (ev.target.closest("#pgs-del")) { pagesDelete(); return; }
+    if (!ev.target.closest("#pgs-copy")) return;
+    const r = pgs.route, base = pgs.pagesUrl || pgs.publicUrl || location.origin;
+    const link = base + "/p/" + r.id + (r.ver ? "/" + r.ver : "");
+    try { await navigator.clipboard.writeText(link); toast("Link copied"); } catch { toast(link); }
+  });
+  // A link in a report, briefing or to-do item to one of this hub's pages
+  // opens it here.
+  document.addEventListener("click", (ev) => {
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+    const a = ev.target.closest && ev.target.closest("a[href]");
+    if (!a || a.closest("#pages") || a.getAttribute("target") === "_blank" && a.id === "pgs-open") return;
+    const pg = pageFromUrl(a.href);
+    if (!pg) return;
+    ev.preventDefault();
+    location.hash = pageHash(pg.id, pg.ver);
+  });
+}
+
 /* ---------- routing: #/agent/[<host>/]<pane> deep links (notification taps) ---------- */
 
 // parseRoute reads #/agent/<pane> (the server's own host, as in older
@@ -4179,6 +4367,7 @@ function routedAgent(r) {
 // yet (cold start from a notification) is opened once the list arrives.
 function route() {
   syncRecall();
+  syncPages();
   syncBriefs();
   syncSubview();
   syncLaunch();
@@ -4475,12 +4664,14 @@ const NAV_ICON = {
   status: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/><circle cx="19" cy="12" r="1.5"/></svg>',
   todo: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
+  pages: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>',
   removals: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
 };
 const NAV_ROWS = [
   { key: "status", label: "Status", show: () => ledger.on === true },
   { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open },
   { key: "search", label: "Search", show: () => true, open: () => openRecall(), on: () => !!rc.route },
+  { key: "pages", label: "Pages", show: () => ledger.on === true, open: () => { location.hash = "#/pages"; }, on: () => !!pgs.route }, // a screen of its own, like Transcripts
   // Hidden at zero, except while you are on it.
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && (ledger.marked.size > 0 || review.open), count: () => ledger.marked.size, open: () => openReview(), on: () => review.open },
 ];
@@ -7483,6 +7674,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initBriefs();
   initRecall();
   initPlans();
+  initPages();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     // One-way escape hatch for debugging: show the raw pane.

@@ -1749,6 +1749,49 @@
       .td-opt, #answer button.opt, .hf-chip, .tp-opt, .attach-menu button, .ln-dir, .ln-model, .td-row, .nv, .rc-card { transition: none; }
       .td-opt:active, #answer button.opt:active, .hf-chip:active, .tp-opt:active { transform: none; }
     }
+    /* Pages: reports agents publish (comebye publish). A screen of its own, like Transcripts. */
+    #pages {
+      position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg);
+    }
+    #pages[hidden] { display: none; }
+    #pages header { position: static; flex: none; }
+    #pgs-back { margin: -10px 0 -10px -10px; color: var(--text); }
+    .pgs-panes { flex: 1; min-height: 0; display: flex; }
+    .pgs-list, .pgs-view { min-width: 0; min-height: 0; }
+    .pgs-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 12px calc(12px + env(safe-area-inset-right, 0px)) calc(20px + var(--safe-bottom)) calc(12px + env(safe-area-inset-left, 0px)); }
+    .pgs-view { display: none; flex: 1; flex-direction: column; }
+    #pages.in-page .pgs-list { display: none; }
+    #pages.in-page .pgs-view { display: flex; }
+    #pgs-q {
+      width: 100%; min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px; color: var(--text);
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px;
+    }
+    #pgs-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    .pgs-card {
+      display: flex; flex-direction: column; gap: 3px; margin-bottom: 9px; padding: 10px 12px; min-width: 0;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px; color: inherit; text-decoration: none;
+    }
+    .pgs-card:hover { background: var(--panel2); }
+    .pgs-card:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+    .pgs-card.current { border-color: var(--blue); }
+    .pgs-title { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+    .pgs-meta { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    .pgs-empty { color: var(--muted); font-size: 14px; padding: 14px 4px; overflow-wrap: anywhere; }
+    .pgs-empty code { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); }
+    .pgs-bar { flex: none; padding: 8px calc(12px + env(safe-area-inset-right, 0px)) 8px calc(12px + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .pgs-bar h2 { margin: 0; font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+    .pgs-prov { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    .pgs-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .pgs-acts .btn, .pgs-acts select { min-height: 36px; font-size: 13px; }
+    .pgs-acts select { padding: 0 8px; color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; font: inherit; font-size: 13px; }
+    .pgs-acts a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: var(--text); }
+    .pgs-acts .danger { margin-left: auto; }
+    .pgs-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: white; } /* a page that sets no background is drawn for light paper, in any theme */
+    .pgs-pick { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
+    @media (min-width: 1100px) {
+      #pages .pgs-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
+      #pages .pgs-view { display: flex !important; }
+    }
   </style>
 </head>
 <body>
@@ -1768,6 +1811,22 @@
         <div id="rc-results" aria-live="polite"></div>
       </section>
       <section id="rc-session" class="rc-session" aria-label="Session" tabindex="0"></section>
+    </div>
+  </div>
+
+  <!-- Pages: reports agents publish with `comebye publish` -->
+  <div id="pages" hidden>
+    <header>
+      <button type="button" class="bell" id="pgs-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <h1>Pages</h1>
+      <span class="rc-fresh" id="pgs-count"></span>
+    </header>
+    <div class="pgs-panes">
+      <section class="pgs-list" aria-label="Pages">
+        <input id="pgs-q" type="search" placeholder="Filter pages" aria-label="Filter pages" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <div id="pgs-items" aria-live="polite"></div>
+      </section>
+      <section class="pgs-view" id="pgs-view" aria-label="Page"></section>
     </div>
   </div>
 
