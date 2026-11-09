@@ -4465,6 +4465,11 @@ function openPage(v) {
   syncRecall();
   syncReview();
   setView(v);
+  // Focus left on the row or button that was in use (an agent row, say) stays there when the page
+  // replaces the agent, so a key such as j lands outside the page and the page's own keys
+  // (onTodoKey) ignore it. The keyboard route (g t) never clicks into the page: park focus on the body.
+  const ae = document.activeElement;
+  if (ae && ae !== document.body && ae.closest && ae.closest("#agents, #nav, #detail")) ae.blur();
 }
 
 // On a cold start the desktop opens to something: an agent that is waiting

@@ -1002,6 +1002,52 @@ await check("pages: opening one leaves the agent through closeDetail (presence c
     await page.waitForFunction(() => state.view === "todo");
   } finally { page.off("request", onReq); }
 });
+// The g <x> jumps leave focus on the agent row that was in use; the To do page's own keys must still work.
+await check("pages: g t then j/k move the To do selection, even with focus left on an agent row; so after a reload", async () => {
+  await desktopList(1280);
+  const ids = await page.evaluate(async () => {
+    const out = [];
+    for (const q of ["keys check one", "keys check two", "keys check three"]) {
+      const r = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q, kind: "decision", no_wait: true }) }).then((x) => x.json());
+      out.push(r.todo.id);
+    }
+    return out;
+  });
+  const open = () => page.evaluate(() => todos.openId);
+  const rowsOpen = async (want, what) => { await page.waitForTimeout(150); const got = await open(); if (got !== want) throw new Error(what + ": open item " + got + ", want " + want + " rows " + JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("#p-todo .td-item")].map((e) => e.dataset.id)))); };
+  try {
+    const gt = async () => { await page.keyboard.press("g"); await page.keyboard.press("t"); await page.waitForSelector("#p-todo", { state: "visible" }); };
+    const fresh = async () => { await page.evaluate(() => { todos.loadedAt = 0; todos.openId = null; todos.lastId = null; return loadTodos(); }); await page.waitForSelector("#p-todo .td-item", { state: "visible" }); };
+    // Focus on an agent row (the case that broke), then g t.
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.locator('#agents .agent[data-id$="w1:p1"]').first().focus();
+    await gt();
+    await fresh();
+    const ord = () => page.evaluate(() => [...document.querySelectorAll("#p-todo .td-item")].map((e) => e.dataset.id));
+    let order = await ord();
+    await page.keyboard.press("j"); await rowsOpen(order[0], "g t, j");
+    await page.keyboard.press("j"); await rowsOpen(order[1], "g t, j j");
+    await page.keyboard.press("k"); await rowsOpen(order[0], "g t, j j k");
+    await page.keyboard.press("Escape"); await rowsOpen(null, "Esc closes");
+    // g s, then g t again from the Status page.
+    await page.keyboard.press("g"); await page.keyboard.press("s");
+    await page.waitForSelector("#p-status", { state: "visible" });
+    await gt(); await fresh(); order = await ord();
+    await page.keyboard.press("j"); await rowsOpen(order[0], "status, g t, j");
+    // A reload on #/todo.
+    await page.goto(base + "/#/todo", { waitUntil: "load" });
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector("#p-todo .td-item", { state: "visible" });
+    await page.waitForTimeout(500);
+    order = await ord();
+    // The page may already show the first item; j then goes to the next.
+    const was = await open();
+    await page.keyboard.press("j"); await rowsOpen(was ? order[order.indexOf(was) + 1] : order[0], "reload, j");
+  } finally {
+    await page.evaluate((ids) => Promise.all(ids.map((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }))), ids);
+  }
+});
 // What the desktop opens to on a cold start. The agent list is rewritten on its way (and live
 // events are cut) so the answer does not depend on which agents the fake herdr has waiting.
 async function coldStartWith(blocked) {
