@@ -301,6 +301,8 @@ type apiEntry struct {
 	Error        string     `json:"error"`
 	CreatedAt    time.Time  `json:"created_at"`
 	FinishedAt   *time.Time `json:"finished_at"`
+	RemovedAt    *time.Time `json:"removed_at"`
+	LostAt       *time.Time `json:"lost_at"`
 	FinalReport  string     `json:"final_report"`
 	Mark         *apiMark   `json:"mark"`
 	Approval     *struct {

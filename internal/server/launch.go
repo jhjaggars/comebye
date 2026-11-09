@@ -571,6 +571,13 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	// The model comes first: claude's --allowedTools swallows what follows.
 	args := choice.Args
 	if body.Coordinator {
+		// The reset hook's settings (installed with `comebye coordinator
+		// install-hook`) go before --allowedTools, which swallows what follows.
+		if kind == "claude" && s.cfg.StateDir != "" {
+			if p := filepath.Join(s.cfg.StateDir, "coordinator", playbook.HookSettingsName); fileExists(p) {
+				args = append(args, "--settings", p)
+			}
+		}
 		args = append(append(args, playbook.AgentArgs(kind, name)...), s.cfg.CoordinatorArgs[kind]...)
 		if strings.TrimSpace(body.Prompt) == "" {
 			body.Prompt = playbook.FirstPrompt(kind)
@@ -871,4 +878,9 @@ func (s *Server) onHostLaunch(op string, local http.HandlerFunc) http.HandlerFun
 			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_host", "message": "no such host"})
 		}
 	}
+}
+
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
 }

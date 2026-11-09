@@ -654,6 +654,18 @@ func (c *Client) GetAgent(ctx context.Context, target string) (AgentInfo, error)
 	return res.Agent, nil
 }
 
+// RenameAgent names the agent in target (a pane id or its current name).
+// An empty name clears it. herdr drops an agent's name when its session
+// changes (Claude's /clear), so a caller that clears a session names the
+// agent again with this.
+func (c *Client) RenameAgent(ctx context.Context, target, name string) error {
+	_, err := c.Call(ctx, "agent.rename", struct {
+		Target string  `json:"target"`
+		Name   *string `json:"name"`
+	}{Target: target, Name: &name})
+	return err
+}
+
 // allowedKeys is the closed set of key names the phone app may send. This is
 // deliberate defense in depth: the web layer is a remote shell, so key input
 // is restricted to navigation/interrupt keys that make sense from a phone,

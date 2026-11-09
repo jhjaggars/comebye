@@ -276,6 +276,7 @@ func (s *Server) RunBriefSchedule(ctx context.Context) {
 	defer t.Stop()
 	for {
 		s.briefTick(ctx, time.Now())
+		s.resetTick(ctx, time.Now())
 		select {
 		case <-ctx.Done():
 			return

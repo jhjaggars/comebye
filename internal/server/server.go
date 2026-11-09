@@ -121,6 +121,10 @@ type Config struct {
 	// agent (default the home directory). It need not lie in a launch
 	// root; only that preset may use it.
 	CoordinatorDir string
+	// CoordinatorResetTokens is the context size, in tokens, past which the
+	// first briefing marks the coordinator's in-place reset due (reset.go).
+	// 0 turns the automatic reset off. Hub only.
+	CoordinatorResetTokens int
 	// RelayBlocked, when positive, is how long an agent that has a
 	// coordinator must be blocked before the coordinator is told (the
 	// blocked relay, blockedrelay.go). Hub only: it needs the ledger.
@@ -213,7 +217,11 @@ type Server struct {
 	rel        *relState
 	pages      *pageStore
 	briefSched *briefSchedStore
-	roles      *roleStore
+	resets     *resetStore
+	// resetPoll and resetWait pace a reset's wait for the new session
+	// (tests shrink them).
+	resetPoll, resetWait time.Duration
+	roles                *roleStore
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
@@ -253,7 +261,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		cfg.PingInterval = 15 * time.Second
 	}
 	s := &Server{cfg: cfg, recall: archive.NewReader(cfg.RecallIndex), client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
-		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond,
+		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond, resetPoll: 500 * time.Millisecond, resetWait: 30 * time.Second,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait,
 		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
 	s.typing = newTypingTracker()
@@ -283,6 +291,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
 				log.Printf("brief schedule: %v (starting with none)", err)
 				s.briefSched = &briefSchedStore{path: filepath.Join(cfg.StateDir, "brief-schedule.json")}
+			}
+			if s.resets, err = openResets(filepath.Join(cfg.StateDir, "coordinator-reset.json")); err != nil {
+				log.Printf("coordinator reset: %v (starting with none)", err)
+				s.resets = &resetStore{path: filepath.Join(cfg.StateDir, "coordinator-reset.json"), busy: map[string]bool{}}
 			}
 			if s.roles, err = openRoles(filepath.Join(cfg.StateDir, "roles.json")); err != nil {
 				log.Printf("roles: %v (starting with none)", err)
@@ -345,6 +357,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.handlePrompt))))
 	s.mux.HandleFunc("POST /api/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
+	// The coordinator's context reset, on the agent's host: the hub's own
+	// calls (the user's identity), never an agent's.
+	s.mux.HandleFunc("GET /api/agents/{target}/context", s.auth(s.handleContext))
+	s.mux.HandleFunc("POST /api/agents/{target}/reset", s.auth(s.handleResetAgent))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
 	s.mux.HandleFunc("GET /api/agents/{target}/activity", s.auth(s.handleActivity))
@@ -444,6 +460,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/brief/schedule", s.authAgent(s.handleGetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule", s.authAgent(s.handleSetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule/dismiss", s.authAgent(s.handleDismissBriefMiss))
+	s.mux.HandleFunc("GET /api/coordinator", s.authAgent(s.handleCoordinator))
+	s.mux.HandleFunc("POST /api/coordinator/reset", s.auth(s.handleCoordinatorReset))
 	s.mux.HandleFunc("GET /api/roles", s.authWorker(s.handleRoles))
 	s.mux.HandleFunc("POST /api/roles", s.auth(s.handleSetRole))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))

@@ -111,6 +111,7 @@ func main() {
 		releaseDepLbl = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
 		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		relayBlocked  = flag.Duration("relay-blocked-after", envDuration("COMEBYE_RELAY_BLOCKED_AFTER", server.DefaultRelayBlocked), "how long an agent that has a coordinator must be blocked at a dialog before the hub tells that coordinator (once, and once more when it clears); 0 turns the relay off. Hub only")
+		resetTokens   = flag.Int("coordinator-reset-tokens", envInt("COMEBYE_COORDINATOR_RESET_TOKENS", server.DefaultResetTokens), "hub: the context size, in tokens, past which the first briefing after it marks the coordinator's in-place reset due (the hub sends /clear into its pane when it is idle with nothing queued, and a SessionStart hook injects a digest; needs `comebye coordinator install-hook`); 0 turns the automatic reset off. The app's Fresh start works either way")
 		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on a question past -auto-todo-question-after, filed as a suggestion to keep or dismiss); off for none")
 		autoBlocked   = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
 		autoQuestion  = flag.Duration("auto-todo-question-after", envDuration("COMEBYE_AUTO_TODO_QUESTION_AFTER", server.DefaultAutoQuestion), "how long an agent must sit idle or done on a question, with no device viewing it, before -auto-todo suggests an item")
@@ -417,21 +418,22 @@ func main() {
 		// Workers' worktrees: <root>/<repo>/<branch>.
 		WorktreeRoot: expandHome(*worktreeRoot),
 		// The handoff ledger, briefing, roles and handoff-template.md.
-		StateDir:        expandHome(*stateDir),
-		RepoHealth:      repoHealth,
-		NoLedger:        !*ledgerOn,
-		Upstream:        upstream,
-		AgentToken:      agentToken,
-		CoordinatorDir:  expandHome(*coordDir),
-		CoordinatorArgs: parseKindArgs(coordArgs),
-		DefaultKind:     checkKind("-default-kind", strings.ToLower(strings.TrimSpace(*defaultKind))),
-		AllowedKinds:    parseKinds("-allowed-kinds", allowedKinds),
-		AllowCap:        allowCap,
-		WhoIs:           localAPI,
-		SelfRegister:    *selfRegister,
-		HubOnly:         *hubOnly,
-		RelayBlocked:    *relayBlocked,
-		LockErr:         lock.Err,
+		StateDir:               expandHome(*stateDir),
+		RepoHealth:             repoHealth,
+		NoLedger:               !*ledgerOn,
+		Upstream:               upstream,
+		AgentToken:             agentToken,
+		CoordinatorDir:         expandHome(*coordDir),
+		CoordinatorResetTokens: *resetTokens,
+		CoordinatorArgs:        parseKindArgs(coordArgs),
+		DefaultKind:            checkKind("-default-kind", strings.ToLower(strings.TrimSpace(*defaultKind))),
+		AllowedKinds:           parseKinds("-allowed-kinds", allowedKinds),
+		AllowCap:               allowCap,
+		WhoIs:                  localAPI,
+		SelfRegister:           *selfRegister,
+		HubOnly:                *hubOnly,
+		RelayBlocked:           *relayBlocked,
+		LockErr:                lock.Err,
 	}, client, manager)
 	if allowCap != "" {
 		log.Printf("tagged peers admitted through Tailscale Serve with capability %s (agent role only; self-registration %v); Serve needs --accept-app-caps=%s", allowCap, *selfRegister, allowCap)

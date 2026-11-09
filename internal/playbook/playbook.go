@@ -178,3 +178,10 @@ func AgentArgs(kind, name string) []string {
 	}
 	return nil
 }
+
+// HookSettingsName is the file `comebye coordinator install-hook` writes in
+// <state dir>/coordinator/ and the Coordinator preset hands to a Claude
+// coordinator with --settings: the settings are the coordinator's alone, so
+// no other Claude session (and not the user's own settings.json) gets the
+// hook.
+const HookSettingsName = "settings.json"

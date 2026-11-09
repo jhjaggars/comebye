@@ -38,10 +38,14 @@ var proxyOps = map[string]proxyOp{
 	"output":     {method: http.MethodGet, query: []string{"lines", "source"}, timeout: 20 * time.Second},
 	"transcript": {method: http.MethodGet, query: []string{"limit", "skip", "from"}, timeout: 20 * time.Second},
 	"prompt":     {method: http.MethodPost, maxBody: 1 << 20, bodyTimeout: promptTimeout},
-	"keys":       {method: http.MethodPost, maxBody: 64 << 10, timeout: 15 * time.Second},
-	"dialog":     {method: http.MethodGet, timeout: 20 * time.Second},
-	"activity":   {method: http.MethodGet, timeout: 15 * time.Second},
-	"answer":     {method: http.MethodPost, maxBody: 64 << 10, timeout: 20 * time.Second},
+	// context and reset: the coordinator's in-place context reset, called
+	// by the hub only (no browser route forwards them).
+	"context":  {method: http.MethodGet, timeout: 20 * time.Second},
+	"reset":    {method: http.MethodPost, maxBody: 4 << 10, timeout: 120 * time.Second},
+	"keys":     {method: http.MethodPost, maxBody: 64 << 10, timeout: 15 * time.Second},
+	"dialog":   {method: http.MethodGet, timeout: 20 * time.Second},
+	"activity": {method: http.MethodGet, timeout: 15 * time.Second},
+	"answer":   {method: http.MethodPost, maxBody: 64 << 10, timeout: 20 * time.Second},
 	// model: switch a running agent's model (slash commands, see the server).
 	"model": {method: http.MethodPost, maxBody: 64 << 10, timeout: 30 * time.Second},
 	// image: an 8 MB image as base64 JSON, stored on the agent's host.
