@@ -2832,8 +2832,8 @@ const ASK_ITEMS = () => {
   const item = (type, label, state, now, text, more) => ({ type, label, state, now, text, ...more });
   return [
     // Fresh: the session re-checked and said SAFE two minutes ago.
-    base("uitest/w9:p1", "release-simple", "release/simple", mark("coordinator", 0.05, { state: "safe", reason: "both PRs merged, nothing running", at: hoursAgo(0.03) }),
-      { ask_review: { state: "safe", answered_at: hoursAgo(0.03) } }),
+    base("uitest/w9:p1", "release-simple", "release/simple", mark("coordinator", 0.05, { state: "safe", reason: "both PRs merged, nothing running", at: hoursAgo(0.005) }),
+      { ask_review: { state: "safe", answered_at: hoursAgo(0.005) } }),
     // Stale, and everything it named has since resolved: a note, counted as safe.
     base("uitest/w9:p2", "rollout-v0-5-16", "rollout/v0.5.16", mark("coordinator", 7, { state: "unsafe", reason: "PR homelab#343; to-do t972236dfee", at: hoursAgo(6) }),
       { notes: ["the session said UNSAFE at 08:12 UTC (6 h ago), but PR jhjaggars/homelab#343 merged 5 h ago and to-do t972236dfee is done 2 h ago"],
@@ -2866,7 +2866,7 @@ await check("remove page: the safety answer shows its age, each item's re-checke
       const row = (n) => page.locator(`#rv-list .rv-item[data-id="uitest/w9:p${n}"]`);
       // fresh
       const t1 = await row(1).innerText();
-      if (!/The session says SAFE/.test(t1) || !/answered just now/.test(t1) || !(await row(1).locator('[data-act="reask"]').count())) throw new Error("fresh row: " + t1);
+      if (!/The session says SAFE/.test(t1) || !/answered just now/.test(t1) || !(await row(1).locator('[data-act="reask"]').count())) throw new Error("fresh row: " + JSON.stringify(t1));
       if ((await row(1).locator(".rv-list.warn li").count()) !== 0) throw new Error("the fresh row warns");
       // stale and resolved
       const t2 = await row(2).innerText();
@@ -2885,6 +2885,7 @@ await check("remove page: the safety answer shows its age, each item's re-checke
         if (!g.shown || g.x < 0 || g.x + g.w > w + 0.5) throw new Error(`${sel} is not on screen at ${w}: ${JSON.stringify(g)}`);
       }
       await page.screenshot({ path: `${out}/remove-asks-${w}.png`, fullPage: false });
+      for (const n of [1, 2, 3]) await row(n).screenshot({ path: `${out}/remove-asks-row${n}-${w}.png` });
       await r3.locator(".rv-ai:nth-child(3) button.rv-reask").click();
       await page.waitForFunction(() => true);
       await new Promise((ok) => setTimeout(ok, 300));
