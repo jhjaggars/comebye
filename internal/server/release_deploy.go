@@ -59,7 +59,11 @@ type DeployRecord struct {
 	Todo     string     `json:"todo,omitempty"`
 	Started  time.Time  `json:"started"`
 	Finished *time.Time `json:"finished,omitempty"`
-	Output   string     `json:"output,omitempty"` // the tail of the command's output
+	Output   string     `json:"output,omitempty"` // the tail of the command's output, cleaned and redacted
+	// Headline is the one line to lead with: the FAILED line (else the error)
+	// of a failed run, the bump: ok line of a good one, the latest line while
+	// it runs. The hub derives it too, so a peer without it still shows one.
+	Headline string `json:"headline,omitempty"`
 	Error    string     `json:"error,omitempty"`
 }
 
@@ -137,6 +141,7 @@ func (s *Server) deployStatusLocal() deployStatus {
 					now := time.Now().UTC()
 					rec.State, rec.Finished, rec.Error = depFailed, &now, "the deploy stopped without a verdict (this server restarted while it ran)"
 				}
+				cleanDeployRecord(&rec)
 				st.Record = &rec
 			}
 		}
@@ -212,11 +217,12 @@ func (s *Server) simulateDeploy(rec DeployRecord) {
 	rec.Finished = &now
 	if strings.HasSuffix(rec.Version, ".13") {
 		rec.State, rec.Error = depFailed, "simulated failure: the rollout did not finish"
-		rec.Output = "bump: edit      +0s attempt 1\nbump: push      +1s (simulated)\nbump: FAILED phase=rollout reason=simulated"
+		rec.Output = "bump: edit      +0s attempt 1\nbump: push      +1s (simulated)\nflux: command not found\nbump: FAILED phase=reconcile reason=flux: command not found"
 	} else {
 		rec.State = depOK
 		rec.Output = "bump: edit      +0s attempt 1\nbump: push      +1s (simulated)\nbump: done      +2s " + rec.Version + " is serving\nbump: ok version=" + rec.Version + " total=2s"
 	}
+	cleanDeployRecord(&rec)
 	s.writeDeployRecord(rec)
 }
 
@@ -225,7 +231,7 @@ func (s *Server) runDeploy(rec DeployRecord, argv []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	out := &tailBuffer{max: 4000}
+	out := &tailBuffer{max: 2 * deployOutMax}
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.Env = append(os.Environ(), "COMEBYE_RELEASE_VERSION="+rec.Version, "COMEBYE_RELEASE_TODO="+rec.Todo, "COMEBYE_RELEASE_BY="+rec.By)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -233,7 +239,7 @@ func (s *Server) runDeploy(rec DeployRecord, argv []string) {
 	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()
 	now := time.Now().UTC()
-	rec.Finished, rec.Output = &now, out.String()
+	rec.Finished, rec.Output = &now, cleanDeployOutput(out.String())
 	switch {
 	case err == nil:
 		rec.State = depOK
@@ -242,6 +248,7 @@ func (s *Server) runDeploy(rec DeployRecord, argv []string) {
 	default:
 		rec.State, rec.Error = depFailed, oneLine(err.Error(), 300)
 	}
+	cleanDeployRecord(&rec)
 	s.writeDeployRecord(rec)
 	log.Printf("release: deploy %s finished: %s", rec.Version, rec.State)
 }
@@ -318,7 +325,8 @@ func (s *Server) deployStatusFor(ctx context.Context) (deployStatus, error) {
 	// a peer's text is shown, never trusted: bound it
 	st.Label, st.Command = oneLine(st.Label, 40), oneLine(st.Command, 80)
 	if st.Record != nil {
-		st.Record.Output, st.Record.Error = block(st.Record.Output, 4000), oneLine(st.Record.Error, 300)
+		st.Record.Headline = "" // derive it here: a peer's is not trusted
+		cleanDeployRecord(st.Record)
 		st.Record.By, st.Record.Todo = oneLine(st.Record.By, 160), oneLine(st.Record.Todo, 40)
 		switch st.Record.State {
 		case depRunning, depOK, depFailed, depDryRun:

@@ -3657,6 +3657,10 @@ await check(`release deploy at ${width}: Bump hub is offered once tagged, needs 
     if (!tx.includes(OK + " ✓") || await page.locator(dep(rel) + " .rel-dep-btn").count()) throw new Error("passed: " + tx);
     await page.locator(rel + " summary", { hasText: "output" }).first().click();
     if (!/is serving/.test(await page.locator(rel).innerText())) throw new Error("the output is not shown");
+    // the ok line leads, the full output sits behind the toggle (here open), and nothing is HTML
+    const okHead = (await page.locator(rel + " .rel-dephead").innerText()).trim();
+    if (!okHead.startsWith("bump: ok version=" + OK)) throw new Error("passed headline: " + okHead);
+    if (!(await page.locator(rel + " .rel-depout-ok summary", { hasText: "Show bump hub output" }).count())) throw new Error("no Show output toggle");
     await noSideways(rel, "passed"); await snap(rel, "4-passed");
     // failed, with the reason and the button back for a retry
     rel = await open(b);
@@ -3664,8 +3668,30 @@ await check(`release deploy at ${width}: Bump hub is offered once tagged, needs 
     await page.locator(rel + " .rel-confirm .rel-go").click();
     await page.waitForFunction((s) => /failed/.test(document.querySelector(s).innerText), dep(rel), { timeout: 20000 });
     tx = await page.locator(dep(rel)).innerText();
-    if (!/simulated failure/.test(tx) || !(await page.locator(dep(rel) + " .rel-dep-btn").count())) throw new Error("failed: " + tx);
-    await noSideways(rel, "failed"); await snap(rel, "5-failed");
+    if (!/failed/.test(tx) || !(await page.locator(dep(rel) + " .rel-dep-btn").count())) throw new Error("failed: " + tx);
+    // the reason is on the page: the FAILED line as the headline, the last lines in a monospace block
+    const fHead = (await page.locator(rel + " .rel-dephead").innerText()).trim();
+    if (fHead !== "bump: FAILED phase=reconcile reason=flux: command not found") throw new Error("failed headline: " + fHead);
+    const fTail = await page.locator(rel + " pre.rel-deptail").innerText();
+    if (!fTail.includes("bump: push") || !fTail.includes("flux: command not found")) throw new Error("failed tail: " + fTail);
+    if ((await page.locator(rel + " pre.rel-deptail").evaluate((e) => getComputedStyle(e).fontFamily)).indexOf("monospace") < 0) throw new Error("the tail is not monospace");
+    await noSideways(rel, "failed");
+    for (const cs of ["light", "dark"]) { await page.emulateMedia({ colorScheme: cs }); await snap(rel, `5-failed-${cs}`); }
+    await page.emulateMedia({ colorScheme: "light" });
+    // output is text, never HTML: a hostile line from the command is shown as typed
+    await page.route(new RegExp(`/api/release/${b.id}(\\?.*)?$`), async (route) => {
+      const resp = await route.fetch(), j = await resp.json();
+      if (j.deploy && j.deploy.record) { delete j.deploy.record.headline; j.deploy.record.output = "\u001b[31mred\u001b[0m\n<img src=x onerror=window.__xss=1>\nbump: FAILED phase=x reason=<b>bold</b>"; }
+      return route.fulfill({ response: resp, json: j });
+    });
+    try {
+      await page.evaluate((id) => loadRelease(id, true), b.id);
+      await page.waitForFunction((s) => /<b>bold<\/b>/.test(document.querySelector(s).innerText), rel, { timeout: 10000 });
+      if (await page.evaluate(() => window.__xss)) throw new Error("output ran as HTML");
+      if (await page.locator(rel + " .rel-depout img, " + rel + " .rel-depout b").count()) throw new Error("output became elements");
+    } finally { await page.unroute(new RegExp(`/api/release/${b.id}(\\?.*)?$`)); }
+    await page.evaluate((id) => loadRelease(id, true), b.id);
+    await snap(rel, "5-failed");
     // the hub is replaced while a deploy runs: the page cannot load for a while, then reads the record the release host kept
     const id = b.id;
     let mode = "down";

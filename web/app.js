@@ -1745,8 +1745,39 @@ function relDeployText(dp, version) {
     case "running": return `${rc.version} running${by}…`;
     case "ok": return `${rc.version} done${by}${ago}`;
     case "dry_run": return `dry run ${rc.version}: nothing was run${ago}`;
-    default: return `${rc.version} failed${ago}: ${rc.error || ""}`;
+    default: return `${rc.version} failed${ago}`;
   }
+}
+
+// The deploy's own words: the headline (FAILED phase=… reason=…, else the
+// error; the latest line while it runs; the ok line when it passed) and, for a
+// failure, the last lines of output in a monospace block. Plain text only: the
+// output is an operator command's, never HTML. A host that predates "headline"
+// gets one made here from "output" and "error".
+function relDeployOut(rc, label) {
+  if (!rc || rc.state === "dry_run") return "";
+  const lines = String(rc.output || "").split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
+  let head = rc.headline || "";
+  if (!head) {
+    const find = (sub) => [...lines].reverse().find((l) => l.includes(sub)) || "";
+    head = rc.state === "failed" ? find("FAILED") || rc.error || "" : rc.state === "ok" ? find("bump: ok") || lines[lines.length - 1] || "" : lines[lines.length - 1] || "";
+  }
+  head = head.slice(0, 300);
+  if (!head && !lines.length) return "";
+  const cls = rc.state === "failed" ? "bad" : rc.state === "ok" ? "ok" : "run";
+  let h = `<div class="rel-depout rel-depout-${cls}" data-deploy-out>`;
+  if (head) h += `<div class="rel-dephead" role="${rc.state === "failed" ? "alert" : "status"}">${esc(head)}</div>`;
+  if (lines.length) {
+    const nm = esc(label.toLowerCase());
+    if (rc.state === "failed") {
+      const tail = lines.slice(-15), more = lines.length > tail.length;
+      h += `<pre class="rel-deptail">${esc(tail.join("\n"))}</pre>`;
+      if (more) h += `<details class="rel-changes"><summary>Show all ${nm} output (${lines.length} lines)</summary><pre>${esc(lines.join("\n"))}</pre></details>`;
+    } else if (lines.length > 1 || lines[0] !== head) {
+      h += `<details class="rel-changes"><summary>Show ${nm} output</summary><pre>${esc(lines.join("\n"))}</pre></details>`;
+    }
+  }
+  return h + `</div>`;
 }
 
 function relDeployHtml(t, r, d, green) {
@@ -1762,7 +1793,7 @@ function relDeployHtml(t, r, d, green) {
   if (green && !running && !doneHere) h += `<span class="rel-ha"><button type="button" class="rel-dep-btn" data-rel="deploy"${r.busy ? " disabled" : ""}>${esc(label)}</button></span>`;
   h += `</div></div>`;
   if (!green) h += `<div class="rel-note">${esc(label)} is offered once the release build has passed. Approve release never runs it.</div>`;
-  if (rc && rc.output) h += `<details class="rel-changes"><summary>Last ${esc(label.toLowerCase())} output</summary><pre>${esc(rc.output)}</pre></details>`;
+  h += relDeployOut(rc, label);
   const c = r.confirm;
   if (c && c.k === "deploy") {
     h += `<div class="rel-confirm" role="group" aria-label="Confirm the deploy"><div>Run <code>${esc(dp.command || "the deploy command")}</code> on ${esc(d.release_host || "the release host")} for <b>${esc(rl.version)}</b>${dp.dry_run ? " (dry run: nothing will run)" : ""}? This is a separate step from the release: it changes what is running.</div>

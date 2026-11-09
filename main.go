@@ -356,6 +356,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if len(deployCmd) > 0 {
+		log.Printf("release: deploy command loaded: %s (%d argument(s) not shown)", filepath.Base(deployCmd[0]), len(deployCmd)-1)
+	}
 	var relCfg server.ReleaseConfig
 	switch {
 	case *releaseSim:

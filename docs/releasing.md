@@ -127,6 +127,17 @@ knows nothing about what it does.
   `<state-dir>/release/deploy.json` and read by the page whenever it asks, also
   after the hub came back. A run that was cut short by a restart of the release host
   reads as failed. The audit log gets `deploy.request` and, once seen, `deploy.result`.
+- **What the page shows of the output.** A failed run leads with its
+  `FAILED phase=… reason=…` line (else `exit status N`) and the last 15 lines in a
+  monospace block; a running one shows its latest line; a good one shows its
+  `bump: ok …` line with the full output behind "Show output". The output is
+  untrusted text: it is shown as plain text, never HTML. Before it is kept or
+  served, terminal escapes are stripped, the tail is capped at 4000 bytes, and
+  obvious secrets are blanked (`ghp_…`/`github_pat_…`/`glpat-…`/`xox…`/`sk-…`/`AKIA…`
+  tokens, JWTs, `Bearer …`, `user:password@` in URLs, `token=`/`password=`/`secret=`
+  style values, private key blocks). That is a safety net only: **the deploy command
+  must not print secrets**, because what it prints is served to the page and kept
+  in `deploy.json` on the release host.
 - `-release-dry-run` runs nothing and records a dry run.
 
 ### Simple setup: your own comebye holds the clone

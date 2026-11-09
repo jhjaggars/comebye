@@ -295,3 +295,106 @@ func TestSimulatedDeploy(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanDeployOutput(t *testing.T) {
+	in := "\x1b[31mred\x1b[0m line\nprogress 50%\rprogress 100%\n" +
+		"token=abc123secretvalue\n" +
+		"GITHUB_TOKEN: ghp_" + strings.Repeat("a", 30) + "\n" +
+		"Authorization: Bearer abcdefghijkl.mnop\n" +
+		"git clone https://bob:hunter2@example.com/x.git\n" +
+		`{"password": "p w"}` + "\n" +
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\nBBBB\n-----END OPENSSH PRIVATE KEY-----\n" +
+		"bump: FAILED phase=reconcile reason=flux: command not found\x07\n"
+	out := cleanDeployOutput(in)
+	for _, bad := range []string{"\x1b", "\x07", "abc123secretvalue", "ghp_", "abcdefghijkl", "hunter2", "p w", "AAAA", "progress 50"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("output still has %q:\n%s", bad, out)
+		}
+	}
+	for _, want := range []string{"red line", "progress 100%", "FAILED phase=reconcile reason=flux: command not found", "[redacted]", "https://bob:[redacted]@example.com"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lost %q:\n%s", want, out)
+		}
+	}
+	// capped to its tail, on a line boundary
+	long := strings.Repeat("0123456789abcdef\n", 1000) + "last line"
+	c := cleanDeployOutput(long)
+	if len(c) > deployOutMax || !strings.HasSuffix(c, "last line") || !strings.HasPrefix(c, "0123456789abcdef") {
+		t.Errorf("cap: len %d, %q...", len(c), c[:20])
+	}
+}
+
+func TestDeployHeadline(t *testing.T) {
+	for _, c := range []struct {
+		rec  DeployRecord
+		want string
+	}{
+		{DeployRecord{State: depFailed, Error: "exit status 1", Output: "a\nbump: FAILED phase=reconcile reason=x\ntrailing"}, "bump: FAILED phase=reconcile reason=x"},
+		{DeployRecord{State: depFailed, Error: "exit status 1", Output: "a\nb"}, "exit status 1"},
+		{DeployRecord{State: depFailed, Error: "exit status 1"}, "exit status 1"},
+		{DeployRecord{State: depOK, Output: "bump: edit\nbump: ok version=v1.2.3 total=2s\nbye"}, "bump: ok version=v1.2.3 total=2s"},
+		{DeployRecord{State: depOK, Output: "one\ntwo"}, "two"},
+		{DeployRecord{State: depRunning, Output: "bump: edit\nbump: push +1s\n\n"}, "bump: push +1s"},
+		{DeployRecord{State: depDryRun, Output: "dry run: would run x"}, ""},
+	} {
+		if got := deployHeadline(c.rec); got != c.want {
+			t.Errorf("%+v: headline %q, want %q", c.rec, got, c.want)
+		}
+	}
+}
+
+// The API: a failed run carries the cleaned output and a headline; the
+// secrets the command printed are not served.
+func TestDeployStatusCarriesHeadlineAndRedactedOutput(t *testing.T) {
+	script, _ := deployScript(t, "printf '\\033[1mstep\\033[0m\\n'\necho 'token=sekrit-value-123' >&2\necho 'bump: FAILED phase=reconcile reason=flux: command not found'\nexit 1")
+	s, _ := deployHub(t, script)
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	tok := token(t, s, it.ID)
+	approve(s, it.ID, tok, "v0.5.9", relSHA)
+	waitRel(t, s, it.ID, relTagged)
+	if code, body := doDeploy(s, it.ID, tok, "v0.5.9", relSHA); code != 202 {
+		t.Fatalf("deploy = %d %s", code, body)
+	}
+	waitUntil(t, "deploy failed", func() bool {
+		st, ok := deployState(s, it.ID)
+		return ok && st.Record != nil && st.Record.State == depFailed
+	})
+	w := do(s, "GET", "/api/release/"+it.ID, userHdr, "")
+	var got struct {
+		Deploy struct {
+			Record map[string]any `json:"record"`
+		} `json:"deploy"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	r := got.Deploy.Record
+	if r["headline"] != "bump: FAILED phase=reconcile reason=flux: command not found" || r["error"] != "exit status 1" {
+		t.Fatalf("record = %v", r)
+	}
+	out, _ := r["output"].(string)
+	if strings.Contains(out, "sekrit") || strings.Contains(out, "\x1b") || !strings.Contains(out, "step") {
+		t.Fatalf("output = %q", out)
+	}
+	if strings.Contains(w.Body.String(), "sekrit") {
+		t.Fatal("the secret is in the response")
+	}
+}
+
+// A peer on an older version sends no headline, and whatever it sends is
+// cleaned by the hub.
+func TestHubCleansAPeersDeployRecord(t *testing.T) {
+	rec := DeployRecord{Version: "v0.5.9", State: depFailed, Error: "exit status 1", Started: time.Now(),
+		Headline: "<b>forged</b>", Output: "\x1b[31mx\x1b[0m\npassword=hunter22\nbump: FAILED phase=a reason=b"}
+	p := newRelPeer(t)
+	p.peer.cfg.Release.DeployCmd = []string{"/bin/true"}
+	p.peer.writeDeployRecord(rec)
+	s := relHub(t, p, nil)
+	st, err := s.deployStatusFor(t.Context())
+	if err != nil || st.Record == nil {
+		t.Fatalf("status = %+v %v", st, err)
+	}
+	if st.Record.Headline != "bump: FAILED phase=a reason=b" || strings.Contains(st.Record.Output, "hunter22") || strings.Contains(st.Record.Output, "\x1b") {
+		t.Fatalf("record = %+v", st.Record)
+	}
+}
