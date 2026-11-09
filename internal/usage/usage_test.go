@@ -132,7 +132,7 @@ func TestScanDedupeAndSubagents(t *testing.T) {
 	write(t, filepath.Join(dir, "proj", "sess1", "subagents", "agent-a.jsonl"),
 		cl("sub1", "2026-11-05T10:40:00Z", "claude-haiku-5-5", 7, 3, 0, 0, ""))
 	st := newStore(t)
-	scan(t, st, Source{"claude", dir})
+	scan(t, st, Source{Kind: "claude", Root: dir})
 	s := session(t, st, "claude", "sess1")
 	tot := s.Total()
 	want := Tokens{In: 10 + 20 + 7, Out: 50 + 5 + 3, CW: 100, CR: 3000, Calls: 3, Sub: 1}
@@ -146,7 +146,7 @@ func TestScanDedupeAndSubagents(t *testing.T) {
 		t.Fatalf("cwd/branch = %q %q", s.Cwd, s.Branch)
 	}
 	// A second scan with nothing new changes nothing.
-	if x := scan(t, st, Source{"claude", dir}); x.Read != 0 || session(t, st, "claude", "sess1").Total() != want {
+	if x := scan(t, st, Source{Kind: "claude", Root: dir}); x.Read != 0 || session(t, st, "claude", "sess1").Total() != want {
 		t.Fatalf("rescan read %d", x.Read)
 	}
 }
@@ -159,7 +159,7 @@ func TestIncrementalOffsetsAndTruncatedLine(t *testing.T) {
 	cut := len(l2) / 2
 	write(t, f, l1+l2[:cut]) // the last line is still being written
 	st := newStore(t)
-	scan(t, st, Source{"claude", dir})
+	scan(t, st, Source{Kind: "claude", Root: dir})
 	if got := session(t, st, "claude", "s").Total(); got.In != 1 || got.Calls != 1 {
 		t.Fatalf("after the partial line: %+v", got)
 	}
@@ -171,13 +171,13 @@ func TestIncrementalOffsetsAndTruncatedLine(t *testing.T) {
 	}
 	appendTo(t, f, l2[cut:])
 	appendTo(t, f, cl("b", "2026-11-05T10:01:30Z", "m", 2, 9, 0, 0, "")) // b again, grown: replaces the first b
-	scan(t, st, Source{"claude", dir})
+	scan(t, st, Source{Kind: "claude", Root: dir})
 	if got := session(t, st, "claude", "s").Total(); got.In != 3 || got.Out != 1+9 || got.Calls != 2 {
 		t.Fatalf("after completing: %+v", got)
 	}
 	// The replacement works across scans, and a whole last line without a newline is read.
 	appendTo(t, f, strings.TrimSuffix(cl("c", "2026-11-05T10:02:00Z", "m", 5, 5, 0, 0, ""), "\n"))
-	scan(t, st, Source{"claude", dir})
+	scan(t, st, Source{Kind: "claude", Root: dir})
 	if got := session(t, st, "claude", "s").Total(); got.In != 8 || got.Calls != 3 {
 		t.Fatalf("no trailing newline: %+v", got)
 	}
@@ -190,7 +190,7 @@ func TestIncrementalOffsetsAndTruncatedLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	st2.SetClock(clock)
-	scan(t, st2, Source{"claude", dir})
+	scan(t, st2, Source{Kind: "claude", Root: dir})
 	if got := session(t, st2, "claude", "s").Total(); got.In != 8 || got.Calls != 3 {
 		t.Fatalf("after reopen: %+v", got)
 	}
@@ -203,7 +203,7 @@ func TestPiSessions(t *testing.T) {
 			`{"type":"message","id":"a","timestamp":"2026-11-05T10:01:00.000Z","message":{"role":"assistant","provider":"p","model":"m","usage":{"input":100,"output":10,"cacheRead":50,"cacheWrite":0,"cost":{"total":1}}}}`+"\n"+
 			`{"type":"message","id":"b","timestamp":"2026-11-05T10:02:00.000Z","message":{"role":"toolResult","content":[{"type":"text","text":"x"}]}}`+"\n")
 	st := newStore(t)
-	scan(t, st, Source{"pi", dir})
+	scan(t, st, Source{Kind: "pi", Root: dir})
 	s := session(t, st, "pi", "01a01214-5122-79e4-b929-ff945fa74686")
 	if s.Cwd != "/home/u/work" || s.Total() != (Tokens{In: 100, Out: 10, CR: 50, Calls: 1}) || s.Rows[0].M != "p/m" {
 		t.Fatalf("%+v", s)
@@ -214,7 +214,7 @@ func TestStoresCountsAndLabelsNeverText(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "p", "s.jsonl"), cl("a", "2026-11-05T10:00:00Z", "m", 1, 1, 0, 0, ""))
 	st := newStore(t)
-	scan(t, st, Source{"claude", dir})
+	scan(t, st, Source{Kind: "claude", Root: dir})
 	if err := st.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestOldFilesAreNotRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := newStore(t)
-	if x := scan(t, st, Source{"claude", dir}); x.Read != 0 {
+	if x := scan(t, st, Source{Kind: "claude", Root: dir}); x.Read != 0 {
 		t.Fatalf("read %d", x.Read)
 	}
 }
@@ -395,7 +395,7 @@ func TestGatherSnapshots(t *testing.T) {
 	f := filepath.Join(dir, "p", "s.jsonl")
 	write(t, f, cl("a", "2026-11-05T10:00:00Z", "m", 1, 1, 0, 0, ""))
 	peer := newStore(t)
-	scan(t, peer, Source{"claude", dir})
+	scan(t, peer, Source{Kind: "claude", Root: dir})
 	hub := newStore(t)
 	hub.host = "hub"
 
@@ -416,7 +416,7 @@ func TestGatherSnapshots(t *testing.T) {
 	}
 	// Growth: the whole session comes again and replaces the hub's copy (no double count).
 	appendTo(t, f, cl("b", "2026-11-05T10:05:00Z", "m", 2, 2, 0, 0, ""))
-	scan(t, peer, Source{"claude", dir})
+	scan(t, peer, Source{Kind: "claude", Root: dir})
 	hub.Merge("peer1", peer.SnapshotSince(since, 0))
 	hub.mu.Lock()
 	s := hub.sessions["peer1/claude/s"]
@@ -427,7 +427,7 @@ func TestGatherSnapshots(t *testing.T) {
 	// Labels the hub gave survive the next merge, and a guess does not replace a ledger label.
 	hub.Relabel(func(host, home string, s *Session) Labels { return Labels{Project: "p", Src: SrcLedger} })
 	appendTo(t, f, cl("c", "2026-11-05T10:06:00Z", "m", 1, 1, 0, 0, ""))
-	scan(t, peer, Source{"claude", dir})
+	scan(t, peer, Source{Kind: "claude", Root: dir})
 	hub.Merge("peer1", peer.SnapshotSince(0, 0))
 	hub.Relabel(func(host, home string, s *Session) Labels { return Labels{Project: "guess"} })
 	hub.mu.Lock()

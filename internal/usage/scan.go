@@ -17,6 +17,9 @@ import (
 type Source struct {
 	Kind string // claude or pi
 	Root string
+	// SkipSubagents leaves out Claude's subagent transcripts (their tokens
+	// are real spend; this is for comparing with a count that missed them).
+	SkipSubagents bool
 }
 
 // FileState is how far a transcript has been read. Offsets move only past
@@ -64,7 +67,10 @@ func listFiles(src Source) []fileJob {
 		}
 		// A subagent's transcript is <project>/<session>/subagents/<agent>.jsonl and
 		// counts toward <session>.
-		b, _ := filepath.Glob(filepath.Join(src.Root, "*", "*", "subagents", "*.jsonl"))
+		var b []string
+		if !src.SkipSubagents {
+			b, _ = filepath.Glob(filepath.Join(src.Root, "*", "*", "subagents", "*.jsonl"))
+		}
 		for _, p := range b {
 			sid := filepath.Base(filepath.Dir(filepath.Dir(p)))
 			jobs = append(jobs, fileJob{p, "claude", sid, true})
