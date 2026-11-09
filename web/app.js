@@ -3065,7 +3065,7 @@ function reviewItemHTML(it) {
     result = `<div class="rv-result err">Not removed: ${esc(res.message || res.code || "failed")}</div>`;
   }
   const dis = review.busy ? " disabled" : "";
-  const cf = review.confirm && review.confirm.ids.length === 1 && review.confirm.ids[0] === it.id ? review.confirm : null;
+  const cf = review.confirm && review.confirm.kind !== "bulk" && review.confirm.ids.length === 1 && review.confirm.ids[0] === it.id ? review.confirm : null;
   const name = esc(it.name || it.pane_id || it.id);
   let actions = "";
   if (done) actions = "";
@@ -3154,6 +3154,11 @@ function reviewBulkIds() {
   return review.items.filter((it) => review.sel.has(it.id) && it.safe && !it.coordinator && !reviewDone(it)).map((it) => it.id);
 }
 
+// Every row a removal would fully clean up: landed or merged, clean, nothing unpushed (it.safe), and not a coordinator.
+function reviewSafeIds() {
+  return review.items.filter((it) => it.safe && !it.coordinator && !reviewDone(it)).map((it) => it.id);
+}
+
 function renderReviewBulk() {
   const bar = $("rv-bulk");
   const open = reviewOpenIds();
@@ -3162,12 +3167,21 @@ function renderReviewBulk() {
   const sel = open.filter((id) => review.sel.has(id)).length;
   const safe = reviewBulkIds().length;
   const dis = review.busy ? " disabled" : "";
-  const cf = review.confirm && review.confirm.ids.length > 1 ? review.confirm : null;
+  const cf = review.confirm && review.confirm.kind === "bulk" ? review.confirm : null;
   const skipped = sel - safe;
+  const allSafe = reviewSafeIds();
+  const left = open.length - allSafe.length;
+  const nm = (id) => { const it = review.items.find((x) => x.id === id); return esc((it && (it.name || it.pane_id)) || id); };
+  const names = cf ? cf.ids.map((id) => `<li>${nm(id)}</li>`).join("") : "";
+  const why = cf && cf.all
+    ? (left ? ` ${left} not safe (uncommitted or unmerged work, or a coordinator) left alone, still in the list.` : "")
+    : (skipped ? ` ${skipped} selected with work to keep or a coordinator are left for Remove anyway… in their rows.` : "");
   bar.innerHTML = `<label><input type="checkbox" id="rv-selall"${sel === open.length ? " checked" : ""}${dis}> Select all</label>
     <span class="rv-grow">${sel ? `${sel} selected` : `${open.length} ready`}</span>
-    ${cf ? "" : `<button type="button" class="btn go" id="rv-all" data-act="bulk"${dis}${safe ? "" : " disabled"}>${safe ? `Remove selected (${safe})` : "Remove selected"}</button>`}
-    ${cf ? `<div class="rv-confirm" role="group" aria-label="Confirm" style="flex-basis:100%"><p>Remove the worktree${cf.ids.length === 1 ? "" : "s"} of ${cf.ids.length} sessions? The branches stay.${skipped ? ` ${skipped} selected with work to keep or a coordinator are left for Remove anyway… in their rows.` : ""}</p>
+    ${cf ? "" : `<button type="button" class="btn go" id="rv-all-safe" data-act="bulk-safe"${dis}${allSafe.length ? "" : " disabled"}>Remove all safe (${allSafe.length})</button>
+    <button type="button" class="btn go" id="rv-all" data-act="bulk"${dis}${safe ? "" : " disabled"}>${safe ? `Remove selected (${safe})` : "Remove selected"}</button>`}
+    ${!cf && left && allSafe.length ? `<div class="rv-note ln-note" style="flex-basis:100%">${left} not safe: left alone (use Remove anyway… in their rows).</div>` : ""}
+    ${cf ? `<div class="rv-confirm" role="group" aria-label="Confirm" style="flex-basis:100%"><p>Remove the worktree${cf.ids.length === 1 ? "" : "s"} of ${cf.ids.length} session${cf.ids.length === 1 ? "" : "s"}? The branches stay.${why}</p><ul>${names}</ul>
       <div class="rv-actions"><button type="button" class="btn go" data-act="bulk-yes">Remove ${cf.ids.length}</button><button type="button" class="btn" data-act="bulk-no">Cancel</button></div></div>` : ""}`;
 }
 
@@ -3194,10 +3208,15 @@ async function reviewAction(act, id) {
     if (ids.length) { review.confirm = { ids, kind: "bulk" }; renderReview(); }
     return;
   }
+  if (act === "bulk-safe") {
+    const ids = reviewSafeIds();
+    if (ids.length) { review.confirm = { ids, kind: "bulk", all: true }; renderReview(); }
+    return;
+  }
   if (act === "bulk-no") { review.confirm = null; renderReview(); return; }
   if (act === "bulk-yes") {
     const cf = review.confirm;
-    if (cf && cf.ids.length > 1) confirmRemovals(cf.ids, false);
+    if (cf && cf.kind === "bulk" && cf.ids.length) confirmRemovals(cf.ids, false);
     return;
   }
   const it = review.items.find((x) => x.id === id);

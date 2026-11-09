@@ -2517,6 +2517,61 @@ await check("remove page: the sweep is a button on the page; its result shows ab
   if (await visible("#rv-sweepbox")) throw new Error("Not now left the box");
 });
 
+await check("remove page: Remove all safe (N) asks once, lists the rows, removes only the safe ones, and says what it skipped", async () => {
+  const dialogs0 = nativeDialogs;
+  const posts = await mockRemovals();
+  try {
+    await desktopList(1440, "#/remove");
+    await page.waitForSelector("#rv-list .rv-item", { timeout: 5000 });
+    // N=2 safe (tidy-docs, bump-go), M=1 unsafe (spike-sse); nothing is selected
+    const b = page.locator("#rv-all-safe");
+    if (!/^Remove all safe \(2\)$/.test((await b.innerText()).trim())) throw new Error("label " + (await b.innerText()));
+    if ((await page.locator("#rv-list .rv-chk:checked").count()) !== 0) throw new Error("the action needs no selection");
+    if (!/1 not safe/.test(await page.locator("#rv-bulk").innerText())) throw new Error("no note about the skipped row");
+    await b.click();
+    const cf = page.locator("#rv-bulk .rv-confirm");
+    await cf.waitFor({ timeout: 3000 });
+    const t = await cf.innerText();
+    if (!/2 sessions/.test(t) || !t.includes("tidy-docs") || !t.includes("bump-go") || t.includes("spike-sse") || !/1 not safe/.test(t)) throw new Error("confirm text: " + t);
+    if ((await page.locator("#rv-list .rv-confirm").count()) !== 0) throw new Error("a second confirm opened in a row");
+    if (posts.confirm.length) throw new Error("removed before the confirm");
+    await page.screenshot({ path: `${out}/remove-all-safe-confirm.png` });
+    await cf.locator('[data-act="bulk-no"]').click();
+    if (posts.confirm.length) throw new Error("Cancel sent a removal");
+    await b.click();
+    await page.locator('#rv-bulk [data-act="bulk-yes"]').click();
+    await page.waitForFunction(() => document.querySelectorAll("#rv-list .rv-result.ok").length === 2, null, { timeout: 5000 });
+    if (posts.confirm.length !== 1) throw new Error("one request expected: " + JSON.stringify(posts.confirm));
+    if (JSON.stringify(posts.confirm[0].ids.slice().sort()) !== '["uitest/w7:p1","uitest/w7:p3"]' || posts.confirm[0].allow_working) throw new Error("body " + JSON.stringify(posts.confirm[0]));
+    if ((await page.locator('#rv-list .rv-item[data-id="uitest/w7:p2"] .rv-result').count()) !== 0) throw new Error("the unsafe row was touched");
+    if (nativeDialogs !== dialogs0) throw new Error("a native dialog opened");
+  } finally { await unmockRemovals(); }
+});
+
+// The prompt bar and the keybar keep one row at every width (a long placeholder is cut, not wrapped). run.sh runs this in both colour schemes.
+await check("prompt bar: one row at 390, 1100, 1280, 1440 and 2000, for both placeholders, with the hint on one line", async () => {
+  for (const w of [390, 1100, 1280, 1440, 2000]) {
+    await page.setViewportSize({ width: w, height: w < 500 ? 844 : 800 });
+    await page.goto("about:blank");
+    await openAgent("alpha");
+    await page.waitForSelector("#prompt-text", { state: "visible" });
+    for (const ph of ["Queue a message for its next step…", "Send a prompt…"]) {
+      await page.evaluate((ph) => { const p = document.getElementById("prompt-text"); p.textContent = ""; p.dataset.placeholder = ph; }, ph);
+      const m = await page.evaluate(() => {
+        const r = (s) => document.querySelector(s)?.getBoundingClientRect();
+        const c = document.getElementById("prompt-text");
+        const lh = parseFloat(getComputedStyle(c).lineHeight);
+        const kh = document.getElementById("kb-hint");
+        return { prompt: r(".prompt").height, composer: c.getBoundingClientRect().height, line: lh,
+          kb: kh && kh.offsetParent ? kh.getBoundingClientRect().height : 0, kbLine: kh ? parseFloat(getComputedStyle(kh).lineHeight) || 20 : 0 };
+      });
+      if (m.composer > 44 || m.prompt > 54) throw new Error(`${w}: the prompt bar is more than one row with "${ph}": ${JSON.stringify(m)}`);
+      if (m.kb && m.kb > m.kbLine * 1.5) throw new Error(`${w}: the keybar hint wraps: ${JSON.stringify(m)}`);
+    }
+    if (w === 390) await page.screenshot({ path: `${out}/prompt-bar-390.png` });
+  }
+});
+
 await check("remove page: Back leaves at once even while the check on each session is still running", async () => {
   let release;
   const gate = new Promise((r) => { release = r; });

@@ -595,7 +595,8 @@
       white-space: pre-wrap; overflow-wrap: anywhere; outline: none;
       -webkit-user-select: text; user-select: text;
     }
-    .prompt .composer:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; }
+    /* The placeholder is one row: a long one ("Queue a message for its next step…") is cut with an ellipsis, not wrapped to two rows in a narrow bar. */
+    .prompt .composer:empty::before { content: attr(data-placeholder); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); pointer-events: none; }
     /* Voice input (stt.js): the mic button, shared by the prompt box and the To do answer box, and its status line. */
     .stt-mic {
       flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid transparent;
