@@ -386,6 +386,23 @@ Treat access to it like SSH access to that machine.
 See [SECURITY.md](../SECURITY.md) for the threat model and how to report a
 vulnerability.
 
+## Token usage
+
+Each host counts the tokens its agents spend by reading their session files
+(`~/.claude/projects`, `~/.pi/agent/sessions`) and keeps **numbers and labels
+only**: counts, model names, hours, the session id, the directory and the git
+branch. It never copies a message, a prompt or a tool result, so the store
+(`usage.json` in the state directory, mode 0600) and the Usage screen need no
+secrets check. The hub gathers its peers' counts with a hub-only call
+(`GET /api/usage/sessions`, user role, never forwardable by an agent) and
+labels them from the ledger; a peer never sees the ledger.
+
+Who may read the totals: **you, and a coordinator** (any host; a peer forwards
+its coordinator's request to the hub). A worker, a tagged node and an agent
+that is not a coordinator get 403: spend is the coordinator's to watch, and a
+worker has no use for it. Only you change the price table, and prices are
+estimates. `-usage=false` turns the counting off on a host.
+
 ## Published pages
 
 `comebye publish` lets any agent put an HTML or Markdown page on the hub for
