@@ -421,12 +421,14 @@ const mdCache = new Map();
 const MD_CACHE_MAX = 400;
 
 // renderMarkdown returns sanitized HTML for untrusted markdown text.
-function renderMarkdown(src, key) {
+// max raises the size limit for a caller that shows a whole document (the
+// Doc panel); chat text keeps MD_MAX_CHARS.
+function renderMarkdown(src, key, max = MD_MAX_CHARS) {
   src = String(src ?? "");
   const hit = key && mdCache.get(key);
   if (hit && hit.src === src) return hit.html;
   let html;
-  const lib = src.length <= MD_MAX_CHARS ? mdSetup() : false;
+  const lib = src.length <= max ? mdSetup() : false;
   if (!lib) {
     html = `<div class="md-plain">${esc(src)}</div>`;
   } else {
@@ -5751,6 +5753,7 @@ function openDetail(id) {
   loadChat().then(refreshStatusLine);
   startPolling();
   reportPresence();
+  if (window.SP) window.SP.onAgent(id);
 }
 
 function closeDetail() {
@@ -5767,6 +5770,7 @@ function closeDetail() {
   state.chat = null;
   state.ask = null;
   state.pushedRoute = false;
+  if (window.SP) window.SP.onAgent(null);
   resetTerminalView();
   if (parseRoute()) history.replaceState(null, "", location.pathname + location.search);
   stopPolling();

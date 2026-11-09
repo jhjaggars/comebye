@@ -97,6 +97,16 @@ fport=$((port + 200))
   -state-dir "$tmp/state-fb" -host-name uitest >"$out/comebye-fb.log" 2>&1 &
 for _ in $(seq 50); do curl -sf "http://127.0.0.1:$fport/api/agents" >/dev/null && break; sleep 0.1; done
 node falseblocked.mjs "http://127.0.0.1:$fport" "$out" || rc=1
+# The Doc and Diff side panels: an agent in a real git worktree (a temp HOME, under a dot-directory), declaring its document
+# with the real CLI; its own fake herdr and hub so the shared fleet's agent count is untouched.
+pdir="$tmp/phome"; mkdir -p "$pdir"
+"$tmp/fake-herdr" -sock "$tmp/fp.sock" -dir "$tmp/fp" -panel-dir "$pdir/.worktrees/proj/feat" >"$out/fake-herdr-panel.log" 2>&1 &
+for _ in $(seq 50); do [ -S "$tmp/fp.sock" ] && break; sleep 0.1; done
+pport=$((port + 300))
+HOME="$pdir" "$tmp/comebye" -sock "$tmp/fp.sock" -addr "127.0.0.1:$pport" -insecure-no-auth -push=false \
+  -state-dir "$tmp/state-panel" -host-name uitest >"$out/comebye-panel.log" 2>&1 &
+for _ in $(seq 50); do curl -sf "http://127.0.0.1:$pport/api/agents" >/dev/null && break; sleep 0.1; done
+PANEL_HOME="$pdir" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-panel" node sidepanel.mjs "http://127.0.0.1:$pport" "$out" || rc=1
 # The Peers screen and the host defaults: real servers (a hub, a peer, a peer that is down) on the same fake herdr.
 FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node peers.mjs "$out" || rc=1
 # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.

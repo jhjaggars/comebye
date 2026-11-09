@@ -73,6 +73,7 @@ func main() {
 	hostTag := flag.String("fixture-host", "", "with -fixtures: a tag that makes the fixture agents a second host's (a peer): a few agents named <tag>-*")
 	falseBlocked := flag.Bool("false-blocked", false, "add a Claude agent that herdr reports as blocked while its screen shows a running command and no dialog")
 	trust := flag.Bool("trust-prompt", false, "add a Pi agent that herdr reports as idle while its screen shows the \"Trust project folder?\" prompt (any Enter answers it)")
+	panelDir := flag.String("panel-dir", "", "add an agent \"panel\" (w7:p1) working in this git worktree, for the side-panel checks")
 	recallFixture := flag.String("recall-fixture", "", "write a synthetic transcript index to this file and exit")
 	flag.Parse()
 	if *recallFixture != "" {
@@ -112,6 +113,11 @@ func main() {
 	}
 	if *trust && !*fixtures {
 		f.addTrustPrompt()
+	}
+	if *panelDir != "" {
+		f.agents = append(f.agents, &agent{Name: "panel", PaneID: "w7:p1", Workspace: "w7", TabID: "w7:t1", Agent: "claude", Display: "Claude",
+			Status: "idle", Title: "panel", CWD: *panelDir, Ready: true, repo: "proj", checkout: *panelDir, linked: true,
+			screen: []string{"panel ready"}})
 	}
 	if *falseBlocked && !*fixtures {
 		f.addLongCommand()

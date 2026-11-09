@@ -49,7 +49,7 @@ type staticHandler struct {
 // a long-lived page (an iOS Home Screen app survives deploys in memory)
 // must reload to pick up. Icons are left out; the vendored libraries are
 // in, so a library bump reloads open pages too.
-var versionFiles = []string{"index.html", "app.js", "keys.js", "themes.js", "sw.js", "manifest.webmanifest",
+var versionFiles = []string{"index.html", "app.js", "keys.js", "sidepanel.js", "themes.js", "sw.js", "manifest.webmanifest",
 	"vendor/marked.umd.js", "vendor/purify.min.js", "stt.js", "stt-worker.js", "vendor/transformers.bundle.js"}
 
 // assetVersion combines the per-file ETags of versionFiles into a short

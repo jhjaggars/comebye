@@ -737,7 +737,7 @@
     .ln-up:disabled { color: var(--border); cursor: default; }
     .ln-up:focus-visible, .ln-dir:focus-visible, .ln-go:focus-visible, .ln-use:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
     .ln-crumb {
-      min-width: 0; flex: 1; direction: rtl; text-align: left;
+      min-width: 0; flex: 1;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text);
     }
@@ -1953,6 +1953,90 @@
     .us-prices .tw { overflow-x: auto; }
     .us-prices summary { cursor: pointer; font-weight: 650; font-size: 15px; min-height: 36px; display: flex; align-items: center; }
     @media (max-width: 820px) { .us-two { grid-template-columns: 1fr; } }
+    /* Side panels (Doc and Diff) beside an agent's chat: web/sidepanel.js.
+       Desktop: a resizable split inside #detail; narrower: a bottom sheet. */
+    :root { --sp-w: 44%; }
+    #sp-btn { color: var(--muted); }
+    #sp-btn[aria-pressed="true"] { background: var(--chip-blue); color: var(--blue); }
+    #sp-btn[hidden] { display: none; }
+    #sp { display: none; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); border-left: 1px solid var(--border); position: relative; }
+    #detail.sp-open #sp { display: flex; }
+    #sp .sp-tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); align-items: center; flex: none; position: relative; }
+    #sp .sp-tab { font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; min-height: 44px; cursor: pointer; }
+    #sp .sp-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
+    #sp .sp-badge { font-size: 11px; margin-left: 5px; padding: 1px 6px; border-radius: 9px; background: var(--panel2); color: var(--muted); font-weight: 600; }
+    #sp .sp-badge[hidden] { display: none; }
+    #sp .sp-x { margin-left: auto; font: inherit; font-size: 22px; line-height: 1; background: none; border: 0; border-radius: 10px; color: var(--muted); min-width: 44px; min-height: 44px; cursor: pointer; }
+    #sp button:focus-visible, #sp select:focus-visible, #sp input:focus-visible, #sp summary:focus-visible, #sp-grip:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+    #sp .sp-bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); flex: none; flex-wrap: wrap; min-width: 0; }
+    #sp .sp-bar select, #sp .sp-bar button, #sp .sp-bar input { font: inherit; font-size: 12px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; min-height: 36px; max-width: 100%; }
+    #sp .sp-bar select, #sp .sp-bar button { cursor: pointer; }
+    #sp .sp-bar button:disabled, #sp .sp-bar select:disabled { opacity: .5; cursor: default; }
+    #sp .sp-bar select { min-width: 0; flex: 0 1 180px; text-overflow: ellipsis; }
+    #sp .sp-pathf { display: flex; gap: 6px; flex: 1 1 160px; min-width: 0; margin: 0; }
+    #sp .sp-pathf input { flex: 1 1 auto; min-width: 0; width: 100%; font-family: ui-monospace, Menlo, monospace; }
+    #sp .sp-tot { color: var(--text); }
+    #sp .muted { color: var(--muted); }
+    #sp .live { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; white-space: nowrap; }
+    #sp .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    #sp .live.off::before { background: var(--orange); }
+    #sp .sp-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 14px 24px; padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+    #sp .doc { max-width: 780px; font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; min-width: 0; }
+    #sp .doc h1 { font-size: 20px; margin: 0 0 8px; } #sp .doc h2 { font-size: 16px; margin: 20px 0 6px; } #sp .doc h3 { font-size: 14.5px; margin: 14px 0 4px; }
+    #sp .doc :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: 8px; position: relative; border-radius: 6px; }
+    #sp .doc .anchor { margin-left: 6px; color: var(--muted); text-decoration: none; opacity: 0; font-weight: 400; }
+    #sp .doc :is(h1, h2, h3, h4, h5, h6):hover .anchor, #sp .doc .anchor:focus-visible { opacity: 1; }
+    @media (hover: none) { #sp .doc .anchor { display: none; } }
+    #sp .doc .cited { background: var(--mark-bg); padding: 2px 6px; margin-left: -6px; }
+    #sp .doc .flash, #sp .df.flash { animation: spflash 1.6s ease-out; }
+    @keyframes spflash { from { background: var(--mark-bg); } to { background-color: transparent; } }
+    @media (prefers-reduced-motion: reduce) { #sp .doc .flash, #sp .df.flash { animation: none; } }
+    #sp .doc pre.src { background: var(--code-bg); color: var(--code-text); padding: 10px; border-radius: 8px; overflow-x: auto; white-space: pre; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+    #sp .cite { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 12px; }
+    #sp .cite button { font: inherit; font-size: 12px; color: var(--blue); background: var(--chip-blue); border: 1px solid var(--blue); border-radius: 8px; padding: 3px 12px; min-height: 36px; cursor: pointer; }
+    #sp .note { margin: 0 0 10px; padding: 6px 10px; font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    #sp .redact { margin: 0 0 10px; font-size: 12px; color: var(--orange); }
+    #sp .ds { margin: 0 0 16px; }
+    #sp .ds h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 6px; }
+    #sp .commits { margin: 0 0 8px; padding: 0 0 0 4px; list-style: none; font-size: 12px; color: var(--muted); }
+    #sp .commits li { overflow-wrap: anywhere; }
+    #sp .df { border: 1px solid var(--border); border-radius: 10px; margin: 0 0 10px; background: var(--panel); overflow: hidden; }
+    #sp .df > summary { list-style: none; cursor: pointer; display: flex; gap: 8px; align-items: center; padding: 8px 10px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; min-height: 40px; }
+    #sp .df > summary::-webkit-details-marker { display: none; }
+    #sp .df > summary::before { content: "▸"; color: var(--muted); }
+    #sp .df[open] > summary::before { content: "▾"; }
+    #sp .df .p { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sp .ad { color: var(--green); } #sp .dl { color: var(--red); }
+    #sp .tg { font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--panel2); color: var(--muted); }
+    #sp .tg.nw { background: var(--chip-green); color: var(--green); } #sp .tg.dd { background: var(--chip-red); color: var(--red); }
+    #sp .ph { padding: 10px 12px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--border); }
+    #sp .hk { display: flex; align-items: center; gap: 8px; padding: 2px 10px; background: var(--panel2); color: var(--muted); font: 11.5px ui-monospace, Menlo, monospace; }
+    #sp .hk span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sp .hk button { font: inherit; font-size: 11px; color: var(--blue); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; min-height: 28px; cursor: pointer; }
+    #sp .code { overflow-x: auto; }
+    #sp .ln { display: grid; grid-template-columns: 38px 38px 1fr; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre; min-width: max-content; }
+    #sp .ln i { font-style: normal; color: var(--muted); text-align: right; padding-right: 6px; user-select: none; }
+    #sp .ln.add { background: var(--chip-green); } #sp .ln.del { background: var(--chip-red); }
+    #sp .ln.add b { color: var(--green); } #sp .ln.del b { color: var(--red); } #sp .ln.nl b { color: var(--muted); font-style: italic; }
+    #sp .ln b { font-weight: 400; padding-left: 6px; }
+    #sp .empty { color: var(--muted); font-size: 13px; padding: 20px 4px; line-height: 1.5; overflow-wrap: anywhere; }
+    #sp .empty b { color: var(--text); }
+    #sp-grip { display: none; }
+    @media (min-width: 1100px) {
+      body.has-detail #detail.sp-open { display: grid !important; grid-template-columns: minmax(0, 1fr) var(--sp-w, 44%); grid-template-rows: auto minmax(0, 1fr); }
+      #detail.sp-open > header { grid-column: 1 / -1; grid-row: 1; }
+      #detail.sp-open > main { grid-column: 1; grid-row: 2; }
+      #detail.sp-open > #sp { grid-column: 2; grid-row: 2; }
+      #detail.sp-open > #d-menu, #detail.sp-open > #subview { grid-row: 1; }
+      #detail.sp-open #sp-grip { display: block; position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: col-resize; z-index: 2; touch-action: none; }
+      #detail.sp-open #sp-grip:hover, #detail.sp-open.sp-drag #sp-grip, #sp-grip:focus-visible { background: var(--blue); opacity: .4; outline: 0; }
+      #detail.sp-drag { user-select: none; }
+    }
+    @media (max-width: 1099px) {
+      #detail.sp-open > #sp { position: fixed; left: 0; right: 0; bottom: 0; height: 72vh; height: 72dvh; z-index: 30; border-left: 0; border-top: 1px solid var(--border); border-radius: 16px 16px 0 0; box-shadow: 0 -6px 24px var(--sh-lg); }
+      #sp .sp-tabs { padding-top: 14px; }
+      #sp .sp-tabs::before { content: ""; position: absolute; top: 5px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--border); }
+    }
   </style>
 </head>
 <body>
@@ -2326,6 +2410,7 @@
   <script src="vendor/purify.min.js"></script>
   <script src="app.js"></script>
   <script src="keys.js"></script>
+  <script src="sidepanel.js"></script>
   <script src="stt.js"></script>
 </body>
 </html>

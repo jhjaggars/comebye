@@ -227,6 +227,8 @@ type Server struct {
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
+	// pins: the documents agents declared (comebye show), see panelpin.go.
+	pins *pinStore
 	// settings is this host's settings.json (see settings.go); nil without a state directory.
 	settings *settingsStore
 	// switchGap is the pause between the slash commands of one model
@@ -284,6 +286,9 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
 		s.settings = openSettings(settingsPath(cfg.StateDir))
+		s.pins = openPins(pinsPath(cfg.StateDir))
+	} else {
+		s.pins = &pinStore{data: map[string]docPin{}}
 	}
 	if cfg.StateDir != "" && !cfg.NoLedger && cfg.Upstream == nil {
 		l, err := openLedger(cfg.StateDir)
@@ -404,6 +409,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/options", s.auth(s.onHostLaunch("launch-options", s.handleLaunchOptions)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/dirs", s.auth(s.onHostLaunch("launch-dirs", s.handleLaunchDirs)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/launch", s.auth(s.handleHostLaunch))
+	// The side panels (see panel.go): the user reads any agent's, an agent its
+	// own; the hub reads a peer's through fleet.CallHost (/api/panel/*).
+	s.mux.HandleFunc("GET /api/agents/{target}/diff", s.authAgent(s.handlePanelDiff))
+	s.mux.HandleFunc("GET /api/agents/{target}/file", s.authAgent(s.handlePanelFile))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/diff", s.authAgent(s.handlePanelDiff))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/file", s.authAgent(s.handlePanelFile))
+	s.mux.HandleFunc("POST /api/show", s.authAgent(s.handleShow))
+	s.mux.HandleFunc("GET /api/panel/diff", s.auth(s.handlePanelHost("diff")))
+	s.mux.HandleFunc("GET /api/panel/file", s.auth(s.handlePanelHost("file")))
 	// Workers, on this host: the hub calls a peer's through fleet.CallHost.
 	s.mux.HandleFunc("GET /api/repos", s.auth(s.handleRepos))
 	s.mux.HandleFunc("GET /api/checks", s.auth(s.handleChecks))

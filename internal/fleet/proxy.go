@@ -87,6 +87,10 @@ var hostProxyOps = map[string]struct {
 	"usage-sessions": {proxyOp{method: http.MethodGet, query: []string{"since", "epoch", "limit"}, timeout: 60 * time.Second}, []string{"api", "usage", "sessions"}, true},
 	"worker":         {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
 	"remove":         {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
+	// The side panels: an agent's per-file diff and its documents, read on
+	// the agent's host (see the server's panel.go). Hub-only.
+	"panel-diff": {proxyOp{method: http.MethodGet, query: []string{"dir", "since"}, timeout: 40 * time.Second}, []string{"api", "panel", "diff"}, true},
+	"panel-file": {proxyOp{method: http.MethodGet, query: []string{"dir", "pin", "path", "list", "since", "section", "meta"}, timeout: 30 * time.Second}, []string{"api", "panel", "file"}, true},
 	// The app's upgrade button: the hub asks a peer to upgrade itself, or
 	// for its last upgrade's record, on the user's click (never a browser's
 	// own forward, and not callable by an agent: only the hub's user-only

@@ -56,6 +56,7 @@ with the matches listed.
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
 | `comebye reask AGENT [--item N]` | ask a marked session again whether it is safe to remove (its old answer stands until it replies) |
 | `comebye mark AGENT --reason R [--discard [--delivered PAGE,…]] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer); `--delivered` also records the pages that hold the work |
+| `comebye show FILE [--section HEADING]` / `show --clear` | put a document (`.md`, `.markdown`, `.txt`, `.html` in your worktree or under home, up to 1 MB) in the Doc panel beside your chat, opened at a heading; the user reads it live as you edit it. A refused file is an error here. The Diff panel needs nothing from you: it shows your checkout's changes |
 | `comebye deliver [AGENT] PAGE… [--not-captured TEXT]` | record the pages (`pg_…`) that hold a finished agent's work (yours if no AGENT); with `mark --discard` its notes and docs show as captured in the review |
 | `comebye unmark AGENT` | withdraw that proposal |
 | `comebye sweep [--dry-run] [--notify]` | find finished workers on every host, check each on its own host and mark the ones with nothing to lose; lists the rest with why |
