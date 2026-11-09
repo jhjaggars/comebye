@@ -1737,7 +1737,7 @@ function relRecordText(h) {
 
 function relDeployText(dp, version) {
   const rc = dp.record;
-  if (!rc) return "";
+  if (!rc || rc.version !== version) return "";
   const when = Date.parse(rc.finished || rc.started);
   const ago = Number.isNaN(when) ? "" : " " + fmtAgo(when) + " ago";
   const by = rc.by ? " by " + rc.by : "";
@@ -1753,12 +1753,13 @@ function relDeployHtml(t, r, d, green) {
   const rl = t.release, dp = d && d.deploy;
   if (!dp || !dp.enabled) return d && d.deploy_error ? `<div class="rel-note">Deploy status unknown: ${esc(d.deploy_error)}</div>` : "";
   const label = dp.label || "Deploy";
-  const rc = dp.record;
-  const running = !!(rc && rc.state === "running");
-  const doneHere = !!(rc && rc.version === rl.version && rc.state === "ok");
-  let h = `<div class="rel-sub">${esc(label)}</div><div class="rel-hosts"><div class="rel-host rel-deploy">
-    <span class="rel-hn">${esc(d.release_host || "")}</span><span class="rel-hv">${esc(rl.version)}${doneHere ? " ✓" : ""}</span><span class="rel-hs">${esc(relDeployText(dp, rl.version))}</span>`;
-  if (green && !running && !doneHere) h += `<span class="rel-ha"><button type="button" class="rel-up" data-rel="deploy"${r.busy ? " disabled" : ""}>${esc(label)}</button></span>`;
+  // The host keeps only its last run: it belongs to this item only if it is for this version.
+  const last = dp.record, rc = last && last.version === rl.version ? last : null;
+  const running = !!(last && last.state === "running");
+  const doneHere = !!(rc && rc.state === "ok");
+  let h = `<div class="rel-sub">${esc(label)}</div><div class="rel-deps"><div class="rel-dephost" data-deploy>
+    <span class="rel-hn">${esc(d.release_host || "")}</span><span class="rel-hv">${esc(rl.version)}${doneHere ? " ✓" : ""}</span><span class="rel-hs">${esc(rc ? relDeployText(dp, rl.version) : running ? `another deploy (${last.version}) is running…` : "")}</span>`;
+  if (green && !running && !doneHere) h += `<span class="rel-ha"><button type="button" class="rel-dep-btn" data-rel="deploy"${r.busy ? " disabled" : ""}>${esc(label)}</button></span>`;
   h += `</div></div>`;
   if (!green) h += `<div class="rel-note">${esc(label)} is offered once the release build has passed. Approve release never runs it.</div>`;
   if (rc && rc.output) h += `<details class="rel-changes"><summary>Last ${esc(label.toLowerCase())} output</summary><pre>${esc(rc.output)}</pre></details>`;

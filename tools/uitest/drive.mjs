@@ -3486,6 +3486,112 @@ await check("release: a release to-do shows the commit, CI and changes; approvin
     await page.evaluate((id) => fetch("/api/todos/" + id + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), t.id).catch(() => {});
   }
 });
+// The deploy block ("Bump hub"): offered only after the build passed, never run by Approve release, its own
+// confirm, then running / passed / failed, and the page's recovery when the hub it runs on is replaced.
+// The simulated deploy takes 2 s and fails for a patch number of 13 (internal/server/release_deploy.go).
+for (const width of [1280, 390]) {
+await check(`release deploy at ${width}: Bump hub is offered once tagged, needs its own confirm, then shows running, passed, failed and the page recovers after a hub restart`, async () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const OK = width === 1280 ? "v9.8.1" : "v9.7.1", BAD = width === 1280 ? "v9.8.13" : "v9.7.13";
+  const post = async (b) => {
+    for (let i = 0; i < 14; i++) {
+      const r = await page.evaluate(async (b) => { const x = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }); return { code: x.status, body: await x.json() }; }, b);
+      if (r.code !== 429) return r.body.todo;
+      await page.waitForTimeout(5000);
+    }
+    return undefined;
+  };
+  const approveApi = (id, v) => page.evaluate(async ([id, v, c]) => {
+    const d = await (await fetch("/api/release/" + id)).json();
+    return (await fetch("/api/release/" + id + "/approve", { method: "POST", headers: { "Content-Type": "application/json", "X-Comebye-Csrf": d.csrf }, body: JSON.stringify({ version: v, commit: c }) })).status;
+  }, [id, v, SHA]);
+  const raise = async (v) => {
+    const t = await post({ question: "", kind: "release", no_wait: true, release: { version: v, commit: SHA } });
+    if (!t || t.release.state !== "pending") throw new Error("not raised: " + JSON.stringify(t));
+    if ((await approveApi(t.id, v)) !== 202) throw new Error("approve failed");
+    await page.waitForFunction(async (id) => (await (await fetch("/api/todos/" + id)).json()).todo.release.state === "tagged", t.id, { timeout: 15000 });
+    return t;
+  };
+  const items = [];
+  try {
+    const a = await raise(OK), b = await raise(BAD);
+    items.push(a, b);
+    // open an item the way this width shows the list
+    const open = async (t) => {
+      if (width === 1280) await desktopList(1280, "#/todo");
+      else { await page.setViewportSize({ width, height: 844 }); await page.goto(base + "/", { waitUntil: "load" }); await page.waitForSelector("#agents .agent"); }
+      await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+      const item = `${width === 1280 ? "#p-todo" : "#todo"} .td-item[data-id="${t.id}"]`;
+      await page.waitForSelector(item);
+      if (!(await page.locator(item + ".open").count())) await page.locator(item + " > .td-row").click();
+      await page.waitForSelector(item + " .rel .rel-dephost", { timeout: 20000 });
+      return item + " .rel";
+    };
+    const snap = async (rel, name) => { await page.locator(rel).scrollIntoViewIfNeeded(); await page.locator(rel).screenshot({ path: `${out}/bump-${name}-${width}.png` }); };
+    const hscroll = (rel) => page.evaluate((sel) => [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth), rel);
+    const noSideways = async (rel, what) => { const bad = await hscroll(rel); if (bad.length) throw new Error(`${width}: sideways scroll in ${what}: ` + bad.join("; ")); };
+    const dep = (rel) => rel + " .rel-dephost";
+
+    // offered: tagged, build passed, and Approve release has run nothing
+    let rel = await open(a);
+    let tx = await page.locator(rel).innerText();
+    if (!tx.includes("Bump hub") || !(await page.locator(dep(rel) + " .rel-dep-btn").count())) throw new Error("not offered: " + tx);
+    if ((await page.locator(dep(rel) + " .rel-hs").innerText()).trim() !== "") throw new Error("Approve release already ran a deploy: " + tx);
+    await noSideways(rel, "offered"); await snap(rel, "1-offered");
+    // confirm: names the version and says it is a separate step; Cancel backs out; no token, no deploy
+    await page.locator(dep(rel) + " .rel-dep-btn").click();
+    await page.waitForSelector(rel + " .rel-confirm");
+    const ct = await page.locator(rel + " .rel-confirm").innerText();
+    if (!ct.includes(OK) || !/separate step/.test(ct)) throw new Error("confirm: " + ct);
+    await noSideways(rel, "confirm"); await snap(rel, "2-confirm");
+    await page.locator(rel + " .rel-confirm [data-rel=cancel]").click();
+    await page.waitForSelector(rel + " .rel-confirm", { state: "detached" });
+    const noTok = await page.evaluate(async ([id, v, c]) => (await fetch(`/api/release/${id}/deploy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: v, commit: c }) })).status, [a.id, OK, SHA]);
+    if (noTok !== 403) throw new Error("deploy without the CSRF token = " + noTok);
+    if ((await page.locator(dep(rel) + " .rel-hs").innerText()).trim() !== "") throw new Error("a refused deploy left a record");
+    // running -> passed
+    await page.locator(dep(rel) + " .rel-dep-btn").click();
+    await page.locator(rel + " .rel-confirm .rel-go").click();
+    await page.waitForFunction((s) => /running/.test(document.querySelector(s).innerText), dep(rel), { timeout: 10000 });
+    if (await page.locator(dep(rel) + " .rel-dep-btn").count()) throw new Error("the button is still offered while it runs");
+    await noSideways(rel, "running"); await snap(rel, "3-running");
+    await page.waitForFunction((s) => /done/.test(document.querySelector(s).innerText), dep(rel), { timeout: 20000 });
+    tx = await page.locator(dep(rel)).innerText();
+    if (!tx.includes(OK + " ✓") || await page.locator(dep(rel) + " .rel-dep-btn").count()) throw new Error("passed: " + tx);
+    await page.locator(rel + " summary", { hasText: "output" }).first().click();
+    if (!/is serving/.test(await page.locator(rel).innerText())) throw new Error("the output is not shown");
+    await noSideways(rel, "passed"); await snap(rel, "4-passed");
+    // failed, with the reason and the button back for a retry
+    rel = await open(b);
+    await page.locator(dep(rel) + " .rel-dep-btn").click();
+    await page.locator(rel + " .rel-confirm .rel-go").click();
+    await page.waitForFunction((s) => /failed/.test(document.querySelector(s).innerText), dep(rel), { timeout: 20000 });
+    tx = await page.locator(dep(rel)).innerText();
+    if (!/simulated failure/.test(tx) || !(await page.locator(dep(rel) + " .rel-dep-btn").count())) throw new Error("failed: " + tx);
+    await noSideways(rel, "failed"); await snap(rel, "5-failed");
+    // the hub is replaced while a deploy runs: the page cannot load for a while, then reads the record the release host kept
+    const id = b.id;
+    let mode = "down";
+    await page.route(new RegExp(`/api/release/${id}(\\?.*)?$`), async (route) => {
+      if (mode === "down") return route.abort("connectionrefused");
+      const resp = await route.fetch(), j = await resp.json();
+      if (j.deploy) j.deploy.record = { version: BAD, state: "failed", started: new Date(Date.now() - 60000).toISOString(), finished: new Date().toISOString(), error: "the deploy stopped without a verdict (this server restarted while it ran)" };
+      return route.fulfill({ response: resp, json: j });
+    });
+    try {
+      await page.evaluate((id) => loadRelease(id, true), id);
+      await page.waitForFunction((s) => /Could not load the release page/.test(document.querySelector(s).innerText), rel, { timeout: 10000 });
+      await noSideways(rel, "hub down"); await snap(rel, "6a-hub-down");
+      mode = "up";
+      await page.evaluate((id) => loadRelease(id, true), id);
+      await page.waitForFunction((s) => /restarted while it ran/.test(document.querySelector(s).innerText) && !/Could not load/.test(document.querySelector(s).innerText), rel, { timeout: 10000 });
+      await noSideways(rel, "after restart"); await snap(rel, "6b-after-restart");
+    } finally { await page.unroute(new RegExp(`/api/release/${id}(\\?.*)?$`)); }
+  } finally {
+    for (const t of items) await page.evaluate((id) => fetch("/api/todos/" + id + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), t.id).catch(() => {});
+  }
+});
+}
 await browser.close();
 let failed = 0;
 for (const [name, ok, why] of results) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : "  -- " + why}`); if (!ok) failed++; }

@@ -275,3 +275,23 @@ func TestHubDeploysThroughItsReleaseHost(t *testing.T) {
 		t.Fatalf("deploy on a red build = %d %s", code, body)
 	}
 }
+
+// -release-simulate's deploy runs nothing and takes the verdict from the
+// version, so the demo and the browser tests see both.
+func TestSimulatedDeploy(t *testing.T) {
+	for _, c := range []struct{ version, state string }{{"v0.5.9", depOK}, {"v0.5.13", depFailed}} {
+		s, _ := deployHub(t)
+		s.cfg.Release.Simulated = true
+		rec, code, _ := s.startDeployLocal("me", "t1", c.version)
+		if code != 202 || rec.State != depRunning {
+			t.Fatalf("%s: start = %d %+v", c.version, code, rec)
+		}
+		if st := s.deployStatusLocal(); !st.Enabled || st.Label != "Bump hub" && st.Label == "" {
+			t.Fatalf("status = %+v", st)
+		}
+		waitUntil(t, c.version+" settles", func() bool {
+			st := s.deployStatusLocal()
+			return st.Record != nil && st.Record.State == c.state
+		})
+	}
+}

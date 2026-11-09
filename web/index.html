@@ -1230,9 +1230,9 @@
     .rel-changes li { overflow-wrap: anywhere; }
     .rel-changes pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; font-size: 12px; }
     .rel-sub { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-top: 4px; }
-    .rel-hosts { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; }
-    .rel-host { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 7px 10px; font-size: 13.5px; }
-    .rel-host + .rel-host { border-top: 1px solid var(--border); }
+    .rel-hosts, .rel-deps { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; }
+    .rel-host, .rel-dephost { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 7px 10px; font-size: 13.5px; }
+    .rel-host + .rel-host, .rel-dephost + .rel-dephost { border-top: 1px solid var(--border); }
     .rel-hn { font-weight: 600; }
     .rel-hv { color: var(--muted); font-variant-numeric: tabular-nums; }
     .rel-hs { flex: 1 1 14ch; min-width: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
@@ -1240,7 +1240,7 @@
     .rel-confirm { padding: 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--orange) 50%, var(--border)); background: color-mix(in srgb, var(--orange) 8%, var(--panel)); font-size: 13.5px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
     .rel button:not(.rel-refresh) { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; min-height: 32px; }
     .rel button:disabled { opacity: 0.5; cursor: default; }
-    .rel .rel-approve, .rel .rel-go, .rel .rel-up { border-color: var(--blue); color: var(--blue); }
+    .rel .rel-approve, .rel .rel-go, .rel .rel-up, .rel .rel-dep-btn { border-color: var(--blue); color: var(--blue); }
     .rel .rel-go { background: color-mix(in srgb, var(--blue) 12%, var(--panel)); font-weight: 600; }
     .rel button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
     .td-kept { flex: none; margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip-yellow); border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); font-size: 13.5px; }

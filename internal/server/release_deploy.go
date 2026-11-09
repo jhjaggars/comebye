@@ -78,6 +78,16 @@ type deployReq struct {
 	By      string `json:"by,omitempty"`
 }
 
+// deployEnabled: this host has a deploy command (or is a -release-simulate demo).
+func (s *Server) deployEnabled() bool {
+	return len(s.cfg.Release.DeployCmd) > 0 || s.cfg.Release.Simulated
+}
+
+// simDeployDelay is how long a simulated deploy "runs"; a simulated deploy of
+// a version whose patch number is 13 fails, so a demo and the browser tests
+// can see both verdicts. Nothing is executed.
+const simDeployDelay = 2 * time.Second
+
 func (s *Server) deployRecordPath() string {
 	if s.cfg.StateDir == "" {
 		return ""
@@ -107,11 +117,18 @@ func (s *Server) writeDeployRecord(rec DeployRecord) {
 // deployStatusLocal is this host's own deploy command and its last run.
 func (s *Server) deployStatusLocal() deployStatus {
 	cfg := s.cfg.Release
-	st := deployStatus{Enabled: len(cfg.DeployCmd) > 0, DryRun: cfg.DryRun, Label: cfg.DeployLabel}
+	st := deployStatus{Enabled: s.deployEnabled(), DryRun: cfg.DryRun, Label: cfg.DeployLabel}
 	if !st.Enabled {
 		return st
 	}
-	st.Command = filepath.Base(cfg.DeployCmd[0])
+	if cfg.Simulated {
+		st.Command = "simulated-bump.sh"
+		if st.Label == "" {
+			st.Label = "Bump hub"
+		}
+	} else {
+		st.Command = filepath.Base(cfg.DeployCmd[0])
+	}
 	if p := s.deployRecordPath(); p != "" {
 		if data, err := os.ReadFile(p); err == nil {
 			var rec DeployRecord
@@ -153,7 +170,7 @@ func (t *tailBuffer) String() string {
 // It returns the record, or an HTTP status and {code, message}.
 func (s *Server) startDeployLocal(by, todo, version string) (DeployRecord, int, [2]string) {
 	cfg := s.cfg.Release
-	if len(cfg.DeployCmd) == 0 {
+	if !s.deployEnabled() {
 		return DeployRecord{}, http.StatusConflict, [2]string{"deploy_disabled", "this host has no deploy command: start comebye with -release-deploy-cmd"}
 	}
 	if !release.VersionRE.MatchString(version) {
@@ -163,6 +180,9 @@ func (s *Server) startDeployLocal(by, todo, version string) (DeployRecord, int, 
 		return DeployRecord{}, http.StatusConflict, [2]string{"deploy_busy", "a deploy is already running: wait for it to finish"}
 	}
 	argv := append(append([]string{}, cfg.DeployCmd...), version)
+	if cfg.Simulated {
+		argv = []string{"simulated-bump.sh", version}
+	}
 	rec := DeployRecord{Version: version, State: depRunning, By: oneLine(by, 120), Todo: oneLine(todo, 40), Started: time.Now().UTC()}
 	if cfg.DryRun {
 		now := time.Now().UTC()
@@ -175,8 +195,29 @@ func (s *Server) startDeployLocal(by, todo, version string) (DeployRecord, int, 
 	}
 	s.writeDeployRecord(rec)
 	log.Printf("release: deploy %s started by %s: %s", version, rec.By, filepath.Base(argv[0]))
+	if cfg.Simulated {
+		go s.simulateDeploy(rec)
+		return rec, http.StatusAccepted, [2]string{}
+	}
 	go s.runDeploy(rec, argv)
 	return rec, http.StatusAccepted, [2]string{}
+}
+
+// simulateDeploy is -release-simulate's deploy: it runs nothing, takes
+// simDeployDelay, and fails for a patch number of 13.
+func (s *Server) simulateDeploy(rec DeployRecord) {
+	defer s.rel.deploying.Store(false)
+	time.Sleep(simDeployDelay)
+	now := time.Now().UTC()
+	rec.Finished = &now
+	if strings.HasSuffix(rec.Version, ".13") {
+		rec.State, rec.Error = depFailed, "simulated failure: the rollout did not finish"
+		rec.Output = "bump: edit      +0s attempt 1\nbump: push      +1s (simulated)\nbump: FAILED phase=rollout reason=simulated"
+	} else {
+		rec.State = depOK
+		rec.Output = "bump: edit      +0s attempt 1\nbump: push      +1s (simulated)\nbump: done      +2s " + rec.Version + " is serving\nbump: ok version=" + rec.Version + " total=2s"
+	}
+	s.writeDeployRecord(rec)
 }
 
 func (s *Server) runDeploy(rec DeployRecord, argv []string) {
@@ -224,7 +265,7 @@ func (s *Server) handlePeerDeploy(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusBadRequest, "bad_release", "the version is vMAJOR.MINOR.PATCH")
 		return
 	}
-	if len(s.cfg.Release.DeployCmd) == 0 {
+	if !s.deployEnabled() {
 		relErr(w, http.StatusConflict, "deploy_disabled", "this host has no deploy command: start comebye with -release-deploy-cmd")
 		return
 	}

@@ -42,6 +42,13 @@ for _ in $(seq 50); do [ -S "$tmp/h.sock" ] && break; sleep 0.1; done
 
 "$tmp/fake-herdr" -recall-fixture "$tmp/recall.db" 2>"$out/recall-fixture.log"
 
+# Something else already listening on the port would answer the readiness loop below and the driver would then
+# test (or hang on) that: refuse to start instead.
+if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+  echo "port $port is already in use by another process: set PORT=<free port> (the light pass uses PORT+1)" >&2
+  exit 1
+fi
+
 "$tmp/comebye" -sock "$tmp/h.sock" -addr "127.0.0.1:$port" -insecure-no-auth -push=false \
   -state-dir "$tmp/state" -host-name uitest -recall-index "$tmp/recall.db" -release-simulate >"$out/comebye.log" 2>&1 &
 for _ in $(seq 50); do curl -sf "http://127.0.0.1:$port/api/agents" >/dev/null && break; sleep 0.1; done
