@@ -443,3 +443,19 @@ func TestSweepMarksDeliveredOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("delivered not marked for discard: %+v %+v", r.Delivered, got.Mark)
 	}
 }
+
+func TestSweepMarksGoneRowsItself(t *testing.T) {
+	f := newSweepFix(t)
+	if _, err := f.s.ledger.Add(ledger.Entry{Host: "arch1", Repo: "/r", RepoName: "r", Branch: "smoke/x", AgentID: "arch1/w1:p1", AgentName: "smoke", Worktree: "/w/smoke", Status: ledger.Finished}); err != nil {
+		t.Fatal(err)
+	}
+	r := sweepOf(t, f.s, `{"dry_run":true}`)
+	if len(r.Gone) != 1 || r.Gone[0].Marked || statusOf(f.s, "arch1/w1:p1") != ledger.Finished {
+		t.Fatalf("dry run: %+v", r.Gone)
+	}
+	r = sweepOf(t, f.s, `{}`)
+	got, _ := f.s.ledger.ByAgent("arch1/w1:p1")
+	if len(r.Gone) != 1 || !r.Gone[0].Marked || got.Status != ledger.ReadyToRemove || got.Mark == nil || got.Mark.Discard || !strings.HasPrefix(got.Mark.Reason, "Sweep:") {
+		t.Fatalf("gone not marked by a plain sweep: %+v %+v", r.Gone, got.Mark)
+	}
+}

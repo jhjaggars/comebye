@@ -28,8 +28,8 @@ const (
 	// marked unless asked (mark_delivered): the user sees it first.
 	SweepDelivered = "delivered"
 	// SweepGone: nothing is left to lose or to check (an unknown host, a
-	// vanished repository). Marked only when asked (mark_gone); removing
-	// it clears the record.
+	// vanished repository). Marked by a plain sweep; removing it clears
+	// the record.
 	SweepGone = "gone"
 	SweepSkip = "skip" // not a candidate (already marked, a coordinator, a primary checkout…)
 )
@@ -48,10 +48,9 @@ type sweepBody struct {
 	// Notify tells a coordinator the outcome (never on a dry run).
 	Notify bool `json:"notify"`
 	// MarkDelivered also marks the "delivered" group for discarding (the
-	// user still confirms each in the removals review); MarkGone the
-	// "gone" group. Both default off: they are the user's call.
+	// user still confirms each in the removals review). Off by default: it
+	// holds unpushed commits, so it is the user's call.
 	MarkDelivered bool `json:"mark_delivered"`
-	MarkGone      bool `json:"mark_gone"`
 }
 
 // sweepItem is one worker's outcome.
@@ -378,6 +377,18 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 		}
 		res.Skipped = append(res.Skipped[:i], res.Skipped[i+1:]...)
 	}
+	if !b.DryRun {
+		for i := range res.Gone {
+			g := &res.Gone[i]
+			if g.ID == "" {
+				continue
+			}
+			m := ledger.Mark{AgentID: g.ID, By: by, Reason: clip("Sweep: "+g.Reason, 500)}
+			if _, _, err := s.applyMark(m, nil, true); err == nil {
+				g.Marked = true
+			}
+		}
+	}
 	items := make([]sweepItem, len(cands))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
@@ -402,7 +413,7 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 	wg.Wait()
 	for i, it := range items {
 		// Ready always marks; delivered and gone only when asked.
-		wanted := it.Class == SweepReady || (it.Class == SweepDelivered && b.MarkDelivered) || (it.Class == SweepGone && b.MarkGone)
+		wanted := it.Class == SweepReady || (it.Class == SweepDelivered && b.MarkDelivered) || it.Class == SweepGone
 		if wanted && !b.DryRun {
 			why := it.Reason
 			if it.AdHoc && it.Class == SweepReady {
@@ -459,7 +470,7 @@ func sweepSummary(res sweepResult) string {
 		items []sweepItem
 	}{
 		{"Work delivered in the report; the branch has local commits (the user can discard these after reading the report; `comebye sweep --mark-delivered` marks them)", res.Delivered},
-		{"Gone: nothing left to lose or check (`comebye sweep --mark-gone` marks them; removing clears the record)", res.Gone},
+		{"Gone: nothing left to lose or check (marked; removing clears the record)", res.Gone},
 	} {
 		if len(g.items) > 0 {
 			sb.WriteString("\n" + g.title + ":")

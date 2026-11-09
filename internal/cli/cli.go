@@ -1414,7 +1414,6 @@ func cmdSweep(e *Env, args []string) error {
 	idle := fs.String("idle-after", "", "also count a worker still recorded as running whose agent has been idle this long (default 30m; 0 turns it off)")
 	notify := fs.Bool("notify", false, "tell an idle coordinator the outcome (not with --dry-run)")
 	markDelivered := fs.Bool("mark-delivered", false, "also mark the research/plan/review/spike workers that reported, to discard their local commits (the user confirms each)")
-	markGone := fs.Bool("mark-gone", false, "also mark the workers whose host or repository is gone (removing clears the record)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1426,7 +1425,7 @@ func cmdSweep(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := c.raw("POST", "/api/sweep", nil, map[string]any{"dry_run": *dry, "idle_after": *idle, "notify": *notify, "mark_delivered": *markDelivered, "mark_gone": *markGone})
+	data, err := c.raw("POST", "/api/sweep", nil, map[string]any{"dry_run": *dry, "idle_after": *idle, "notify": *notify, "mark_delivered": *markDelivered})
 	if err != nil {
 		return err
 	}
@@ -1463,7 +1462,7 @@ func cmdSweep(e *Env, args []string) error {
 	section(verb, r.Ready)
 	section("Needs a look (not marked)", r.NeedsLook)
 	section("Work delivered in the report; branch has local commits ("+sweepGroupNote(*markDelivered, r.DryRun, "mark with --mark-delivered")+")", r.Delivered)
-	section("Gone: nothing left to lose or check ("+sweepGroupNote(*markGone, r.DryRun, "mark with --mark-gone")+")", r.Gone)
+	section("Gone: nothing left to lose or check ("+sweepGroupNote(true, r.DryRun, "")+")", r.Gone)
 	fmt.Fprintf(e.Stdout, "Skipped: %d\n", len(r.Skipped))
 	if r.Notified != "" {
 		fmt.Fprintf(e.Stdout, "Told %s.\n", r.Notified)
