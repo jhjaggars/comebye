@@ -274,7 +274,11 @@ func failAndRestore(o *Options, haveOld bool, prev string, cause error) error {
 		return fmt.Errorf("%v; restored %s but the service is not active: %w", cause, o.Bin, err)
 	}
 	v, _ := binVersion(o, o.Bin)
-	fmt.Fprintf(o.Err, "rolled back to %s (%s is active again)\n", v, o.Service)
+	svc := o.Service
+	if o.launchdMode() {
+		svc = o.launchdTarget()
+	}
+	fmt.Fprintf(o.Err, "rolled back to %s (%s is active again)\n", v, svc)
 	return fmt.Errorf("%w: %v", ErrRolledBack, cause)
 }
 

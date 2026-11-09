@@ -686,6 +686,36 @@ served-version, `agents` and `ledger` steps. If the server never comes back
 The supervisor must therefore start the binary by name from a PATH where
 `~/.local/bin` comes first; see [sandbox hosts](sandbox-hosts.md).
 
+### macOS (launchd)
+
+On a Mac comebye runs as a launchd user agent (for example
+`~/Library/LaunchAgents/com.jhjaggars.comebye.plist`, label
+`com.jhjaggars.comebye`, `RunAtLoad` and `KeepAlive` true, program
+`~/.local/bin/comebye`). `comebye upgrade` there needs no flags: with no
+systemd it checks that `launchctl print gui/<uid>/<label>` knows the agent
+and uses the **launchd** restart mode. The label is, in order: `--launchd-label`
+(or `COMEBYE_LAUNCHD_LABEL`), the label of the plist in `~/Library/LaunchAgents`
+whose arguments name the installed binary, else `com.jhjaggars.comebye`.
+
+```sh
+comebye upgrade                              # the latest release
+comebye upgrade --launchd-label my.label     # an agent with another label
+comebye upgrade --restart launchd            # force the mode
+```
+
+Steps 1 to 3 are as above. The restart is
+`launchctl kickstart -k gui/<uid>/<label>` (kill and start again; no /proc
+is read). The wait is until `launchctl print` says `state = running` and the
+local server answers; then the same smoke check runs, minus the journal check
+(launchd writes the log to the plist's `StandardOutPath`). A failure restores
+`comebye.prev`, kickstarts again and exits non-zero. A binary built by the
+release (Go links an ad-hoc signature on darwin/arm64) and installed by
+`upgrade` runs as is: it needs no `codesign` and carries no quarantine
+attribute, since `upgrade` downloads it itself rather than through a browser.
+Manual rollback: `cp ~/.local/bin/comebye.prev ~/.local/bin/comebye && launchctl kickstart -k gui/$(id -u)/com.jhjaggars.comebye`.
+Run `upgrade` from a terminal or ssh session, not from a process the agent
+itself started: the kickstart would kill it.
+
 `COMEBYE_UPGRADE_RESTART` sets the default for `--restart`.
 
 A binary that predates `comebye upgrade` cannot run it. On such a host,
