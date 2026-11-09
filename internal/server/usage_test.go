@@ -49,7 +49,7 @@ func writeTranscript(t *testing.T, path string, lines ...string) {
 	}
 }
 
-func usageLine(id, ts, model, cwd, branch string, in, out, cw, cr int) string {
+func tokenLine(id, ts, model, cwd, branch string, in, out, cw, cr int) string {
 	return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"cwd":%q,"gitBranch":%q,"message":{"id":%q,"model":%q,"usage":{"input_tokens":%d,"output_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d}}}`,
 		ts, cwd, branch, id, model, in, out, cw, cr)
 }
@@ -65,9 +65,9 @@ func newUsageRig(t *testing.T) *usageRig {
 	// The peer ("kube") ran a worker in its worktree and a plain session at home.
 	kdir := t.TempDir()
 	writeTranscript(t, filepath.Join(kdir, "p", "w.jsonl"),
-		usageLine("a", now, "claude-opus-5-5", "/home/k/.worktrees/proj/research-x", "research/x", 100, 200, 300, 4000))
+		tokenLine("a", now, "claude-opus-5-5", "/home/k/.worktrees/proj/research-x", "research/x", 100, 200, 300, 4000))
 	writeTranscript(t, filepath.Join(kdir, "p", "h.jsonl"),
-		usageLine("b", now, "claude-sonnet-5-5", "/home/k", "", 10, 20, 30, 400))
+		tokenLine("b", now, "claude-sonnet-5-5", "/home/k", "", 10, 20, 30, 400))
 	ks, err := usage.Open(filepath.Join(t.TempDir(), "usage.json"), "kube")
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func newUsageRig(t *testing.T) *usageRig {
 	// The hub's own transcripts.
 	hdir := t.TempDir()
 	writeTranscript(t, filepath.Join(hdir, "p", "hub.jsonl"),
-		usageLine("c", now, "claude-haiku-5-5", "/srv/other", "", 1, 2, 3, 4))
+		tokenLine("c", now, "claude-haiku-5-5", "/srv/other", "", 1, 2, 3, 4))
 	s := New(Config{
 		AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken,
 		WhoIs: who, AllowCap: testCap, StateDir: t.TempDir(),
