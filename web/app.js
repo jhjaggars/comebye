@@ -2644,7 +2644,8 @@ function renderFleetMenu() {
   const note = $("f-note");
   note.hidden = !off;
   note.textContent = off ? "Removals and briefings are not available on this hub" : "";
-  for (const id of ["f-brief", "f-briefs"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  for (const id of ["f-brief", "f-briefs", "f-peers"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  $("f-peers").hidden = off || !multiHost();
   const st = briefingUiState();
   $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (see the Briefing page)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
   $("f-brief").disabled = !lon || st === "none" || st === "panel";
@@ -4399,6 +4400,7 @@ function routedAgent(r) {
 function route() {
   syncRecall();
   syncPages();
+  syncPeers();
   syncBriefs();
   syncSubview();
   syncLaunch();
@@ -4684,6 +4686,310 @@ function onStatusToggle(ev) {
   renderStatus();
 }
 
+/* ---------- Peers: each host's status and agent settings ---------- */
+//
+//   #/peers            the list
+//   #/peers/<name>     one host: how the hub sees it, what it can start, and
+//                      the settings it applies when a start names none
+//
+// The settings live on the host itself (settings.json there); the hub reads
+// and writes a peer's through /api/hosts/<name>/settings. Everything shown
+// here that a host or agent chose (names, models) goes through esc().
+const prs = {
+  route: null, timer: null, seq: 0,
+  info: {},      // name -> the hub's record of a peer (urls, source, added by); /api/peers, hub only
+  hubVersion: "",
+  cfg: {},       // name -> { state: "loading"|"ok"|"old"|"err", data, err }
+  cats: {},      // name -> { kind -> catalog } once loaded
+  draft: null,   // the form being edited: { host, rev, default_kind, allowed: [], kinds: { kind: { model, thinking } } }
+  saving: false,
+};
+const PEER_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function parsePeersRoute() {
+  const m = location.hash.match(/^#\/peers(?:\/([^/]+))?$/);
+  if (!m) return null;
+  return { name: m[1] && PEER_NAME_RE.test(m[1]) ? m[1] : "" };
+}
+function peerHash(name) { return "#/peers" + (name ? "/" + name : ""); }
+function isLocalHostName(name) { return !!state.localHost && name === state.localHost; }
+function settingsBase(name) { return isLocalHostName(name) ? "/api/settings" : `/api/hosts/${encodeURIComponent(name)}/settings`; }
+
+async function peersLoadInfo() {
+  try {
+    const r = await api("/api/peers");
+    prs.info = {};
+    for (const p of r.peers || []) prs.info[p.name] = p;
+    prs.hubVersion = r.version || "";
+  } catch { /* not a hub: only this host is listed */ }
+}
+
+async function peersLoadCfg(name, force) {
+  const h = hostStatus(name);
+  if (!h || (h.status && h.status !== "ok")) { prs.cfg[name] = { state: "down" }; return; }
+  const cur = prs.cfg[name];
+  if (!cur) prs.cfg[name] = { state: "loading" };
+  else if (cur.state === "loading" && !force) return;
+  try {
+    const data = await api(settingsBase(name));
+    prs.cfg[name] = { state: "ok", data };
+    // A form with no edits follows the host.
+    if (prs.draft && prs.draft.host === name && !draftDirty()) prs.draft = draftFrom(name, data);
+  } catch (e) {
+    prs.cfg[name] = e.status === 404 ? { state: "old" } : { state: "err", err: e.message };
+  }
+  renderPeers();
+}
+
+async function peersLoadCats(name) {
+  if (prs.cats[name]) return;
+  prs.cats[name] = {};
+  try {
+    const d = await api(modelsBase(isLocalHostName(name) ? null : name));
+    prs.cats[name] = Object.fromEntries((d.catalogs || []).map((c) => [c.kind, c]));
+  } catch { prs.cats[name] = {}; }
+  renderPeers();
+}
+
+function peersLoadAll() {
+  peersLoadInfo().then(renderPeers);
+  for (const h of state.hosts) peersLoadCfg(h.name);
+}
+
+function draftFrom(name, data) {
+  const s = (data && data.settings) || {};
+  const kinds = {};
+  for (const [k, v] of Object.entries(s.kinds || {})) kinds[k] = { model: v.model || "", thinking: v.thinking || "" };
+  return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds };
+}
+
+function draftBody(d) {
+  const kinds = {};
+  for (const [k, v] of Object.entries(d.kinds)) if ((v.model || "").trim() || (v.thinking || "").trim()) kinds[k] = { model: (v.model || "").trim(), thinking: (v.thinking || "").trim() };
+  return { default_kind: d.default_kind, allowed_kinds: d.allowed, kinds, rev: d.rev };
+}
+
+function draftDirty() {
+  const d = prs.draft, c = d && prs.cfg[d.host];
+  if (!d || !c || c.state !== "ok") return false;
+  return JSON.stringify(draftBody(d)) !== JSON.stringify(draftBody(draftFrom(d.host, c.data)));
+}
+
+function peerStatusOf(h) { return h.local ? "ok" : (h.status || "connecting"); }
+function peerStatusText(h) { return ({ ok: "Connected", down: "Down", connecting: "Connecting" })[peerStatusOf(h)] || peerStatusOf(h); }
+
+function peerDefaultText(name) {
+  const c = prs.cfg[name];
+  if (!c || c.state !== "ok") return "";
+  const e = c.data.effective || {}, k = e.default_kind;
+  if (!k) return "default: not set";
+  const m = ((c.data.settings || {}).kinds || {})[k];
+  return "default: " + k + (m && m.model ? " · " + m.model : "");
+}
+
+function renderPeersList() {
+  const r = prs.route;
+  const hosts = state.hosts || [];
+  $("pr-count").textContent = hosts.length ? `${hosts.length} host${hosts.length === 1 ? "" : "s"}` : "";
+  if (!hosts.length) { $("pr-items").innerHTML = '<div class="pr-empty">Loading…</div>'; return; }
+  const html = hosts.map((h) => {
+    const st = peerStatusOf(h);
+    const mis = h.version_mismatch ? ` · <span class="warn">differs from the hub (${esc(prs.hubVersion || "?")})</span>` : "";
+    const def = peerDefaultText(h.name);
+    const old = prs.cfg[h.name] && prs.cfg[h.name].state === "old" ? " · <span class=\"warn\">needs an upgrade for settings</span>" : "";
+    return `<a class="pr-card${r.name === h.name ? " current" : ""}" href="${esc(peerHash(h.name))}" data-name="${esc(h.name)}">
+      <span class="pr-name"><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}${h.local ? ' <span class="pr-meta">(this host)</span>' : ""}</span>
+      <span class="pr-meta">${esc(peerStatusText(h))} · ${esc(h.version || "version unknown")}${mis} · ${h.no_agents ? "no agents here" : (h.agents || 0) + " agent" + (h.agents === 1 ? "" : "s")}</span>
+      ${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}</a>`;
+  }).join("");
+  if ($("pr-items")._html !== html) { $("pr-items")._html = html; $("pr-items").innerHTML = html; }
+}
+
+function fmtWhen(t) { const at = Date.parse(t); return Number.isNaN(at) ? "" : fmtAgo(at) + " ago"; }
+
+function peerSettingsForm(h, c, d) {
+  const data = c.data;
+  const installed = data.installed_kinds || [];
+  const kindsAll = [...new Set([...installed, ...d.allowed, d.default_kind].filter(Boolean))];
+  const modelKinds = data.model_kinds || [];
+  const cats = prs.cats[h.name] || {};
+  const eff = data.effective || {};
+  const dsrc = eff.default_source === "flag" ? "Unset here: this host's -default-kind applies" : eff.default_source === "auto" ? "Unset: this host uses the kind most of its running agents use" : "";
+  const sel = (k) => `<option value="${esc(k)}"${d.default_kind === k ? " selected" : ""}>${esc(k)}${installed.includes(k) ? "" : " (not installed)"}</option>`;
+  const lists = kindsAll.filter((k) => modelKinds.includes(k)).map((k) => {
+    const v = d.kinds[k] || { model: "", thinking: "" }, cat = cats[k] || {};
+    const opts = (cat.models || []).map((m) => `<option value="${esc(m.id)}"></option>`).join("");
+    const think = k === "pi" ? `<div class="pr-field"><label for="pr-th-${esc(k)}">Thinking</label><select id="pr-th-${esc(k)}" data-think="${esc(k)}">
+        <option value="">Agent's own${cat.default_thinking ? " (" + esc(cat.default_thinking) + ")" : ""}</option>
+        ${(cat.thinking_levels || THINKING_LEVELS).map((l) => `<option value="${esc(l)}"${v.thinking === l ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></div>` : "";
+    return `<div class="pr-kind"><b>${esc(k)}</b><div class="pr-row">
+      <div class="pr-field"><label for="pr-m-${esc(k)}">Model</label><input type="text" id="pr-m-${esc(k)}" data-model="${esc(k)}" value="${esc(v.model)}" list="pr-dl-${esc(k)}" placeholder="${esc(cat.default ? "Agent's own (" + cat.default + ")" : "Agent's own default")}" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="128"><datalist id="pr-dl-${esc(k)}">${opts}</datalist></div>
+      ${think}</div>${cat.error ? `<div class="pr-note warn">Could not list ${esc(k)} models here: ${esc(cat.error)}</div>` : ""}</div>`;
+  }).join("");
+  const dirty = draftDirty();
+  return `<form class="pr-form" id="pr-form" autocomplete="off">
+    <div class="pr-field"><label for="pr-default">Default agent</label>
+      <select id="pr-default"><option value="">No default (guess)</option>${kindsAll.map(sel).join("")}</select>
+      <div class="pr-note">Used when a launch, handoff or plan step names no agent. A request that names another one still wins, with a warning.${dsrc ? " " + esc(dsrc) + "." : ""}</div></div>
+    <div class="pr-field"><span class="pr-lbl" id="pr-allow-l">Allowed agents</span>
+      <div class="pr-checks" role="group" aria-labelledby="pr-allow-l">${kindsAll.map((k) => `<label class="pr-check"><input type="checkbox" data-allow="${esc(k)}"${d.allowed.includes(k) ? " checked" : ""}>${esc(k)}</label>`).join("") || '<span class="pr-note">No agent is installed here.</span>'}</div>
+      <div class="pr-note">${d.allowed.length ? "Only these are started here; anything else is refused." : "None ticked: any installed agent may be started."}${eff.allowed_source === "flag" && !d.allowed.length ? " This host's -allowed-kinds applies." : ""}</div></div>
+    ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
+    <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
+      <button type="button" class="btn" id="pr-revert"${dirty ? "" : " disabled"}>Revert</button>
+      <span class="pr-note" id="pr-dirty">${dirty ? "Unsaved changes" : ""}</span></div>
+  </form>`;
+}
+
+function renderPeerView() {
+  const r = prs.route, view = $("pr-view");
+  $("peers").classList.toggle("in-peer", !!r.name);
+  if (!r.name) { view.dataset.name = ""; view.innerHTML = '<div class="pr-empty" style="margin:auto;text-align:center">Pick a host from the list.</div>'; return; }
+  const h = (state.hosts || []).find((x) => x.name === r.name);
+  if (!h) { view.dataset.name = ""; view.innerHTML = `<div class="pr-empty" style="margin:auto;text-align:center">${(state.hosts || []).length ? "That host is gone." : "Loading…"}</div>`; return; }
+  const c = prs.cfg[h.name] || { state: "loading" };
+  if (view.dataset.name !== h.name) { // a different host: a fresh form, and its models
+    view.dataset.name = h.name;
+    prs.draft = c.state === "ok" ? draftFrom(h.name, c.data) : null;
+    if (c.state === "ok") peersLoadCats(h.name);
+  }
+  if (c.state === "ok" && (!prs.draft || prs.draft.host !== h.name)) { prs.draft = draftFrom(h.name, c.data); peersLoadCats(h.name); }
+  const st = peerStatusOf(h), info = prs.info[h.name];
+  const rows = [
+    ["Status", `${esc(peerStatusText(h))}${h.since && st !== "ok" ? " since " + esc(fmtWhen(h.since)) : ""}${h.error ? ' <span class="warn">' + esc(h.error) + "</span>" : ""}`],
+    ["Version", `${esc(h.version || "unknown")}${h.version_mismatch ? ` <span class="warn">(the hub runs ${esc(prs.hubVersion || "another version")})</span>` : ""}`],
+    ["Agents", h.no_agents ? "none by design (a hub only)" : String(h.agents || 0)],
+  ];
+  if (h.last_seen && !h.local) rows.push(["Last seen", esc(fmtWhen(h.last_seen))]);
+  if (info) {
+    rows.push(["Address", (info.urls || []).map(esc).join("<br>")]);
+    rows.push(["Source", info.source === "static" ? "Static: set in the hub's -peers, changed by editing its environment" : "Added" + (info.added_by ? " by " + esc(info.added_by) : "") + (info.added_at ? " " + esc(fmtWhen(info.added_at)) : "")]);
+  } else if (h.local) rows.push(["Source", "This host"]);
+  let reach = "", body = "";
+  if (c.state === "ok") {
+    const d = c.data, l = d.launch || {};
+    rows.push(["Starting agents", l.enabled ? "On" : `<span class="warn">Off: ${esc(l.reason || "not available")}</span>`]);
+    const cats = prs.cats[h.name] || {};
+    const inst = (d.installed_kinds || []).map((k) => {
+      const ct = cats[k];
+      return `<span class="hf-chip" style="cursor:default">${esc(k)}${ct && ct.models ? ` · ${ct.models.length} model${ct.models.length === 1 ? "" : "s"}` : ""}${ct && ct.default ? ` · ${esc(ct.default)}` : ""}</span>`;
+    }).join("");
+    reach = `<div class="pr-sec"><h3>Installed agents</h3><div class="pr-chips">${inst || '<span class="pr-note">None found on this host.</span>'}</div></div>`;
+    if (d.effective && d.effective.notice) reach += `<div class="pr-sec"><div class="pr-note warn">${esc(d.effective.notice)}</div></div>`;
+    const s = d.settings || {};
+    body = `<div class="pr-sec"><h3>Defaults for this host</h3>${peerSettingsForm(h, c, prs.draft)}
+      <div class="pr-note">${s.rev ? "Revision " + s.rev + (s.updated_by ? " · set by " + esc(s.updated_by) : "") + (s.updated_at ? " · " + esc(fmtWhen(s.updated_at)) : "") : "Nothing has been set on this host yet."}</div></div>`;
+  } else if (c.state === "old") {
+    body = `<div class="pr-sec"><h3>Defaults for this host</h3><div class="pr-note warn">This host runs ${esc(h.version || "an older version")}, which has no host settings. Upgrade it to set a default agent, model and thinking level.</div></div>`;
+  } else if (c.state === "down") {
+    body = `<div class="pr-sec"><h3>Defaults for this host</h3><div class="pr-note">Settings are kept on the host itself, which is not answering. They can be edited again when it is back.</div></div>`;
+  } else if (c.state === "err") {
+    body = `<div class="pr-sec"><h3>Defaults for this host</h3><div class="pr-note warn">${esc(c.err || "Could not read the settings")}</div></div>`;
+  } else body = '<div class="pr-sec"><div class="pr-note">Loading…</div></div>';
+  const head = `<div class="pr-bar"><h2><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}</h2></div>
+    <div class="pr-sec"><h3>Host</h3><dl class="pr-kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl></div>`;
+  // Keep the focus and caret in a field being typed in across a redraw.
+  const ae = document.activeElement, keep = ae && view.contains(ae) && ae.id ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
+  const html = head + reach + body;
+  if (view._html === html) return;
+  view._html = html;
+  view.innerHTML = html;
+  if (keep) {
+    const el = document.getElementById(keep.id);
+    if (el) { el.focus(); try { if (keep.s != null) el.setSelectionRange(keep.s, keep.e); } catch {} }
+  }
+}
+
+function renderPeers() {
+  if (!prs.route) return;
+  renderPeersList();
+  renderPeerView();
+}
+
+function syncPeers() {
+  const r = parsePeersRoute();
+  const el = $("peers");
+  const was = !el.hidden;
+  prs.route = r;
+  el.hidden = !r;
+  document.body.classList.toggle("has-peers", !!r);
+  if (!r) { clearInterval(prs.timer); prs.timer = null; return; }
+  if (!was) {
+    prs.cfg = {}; prs.cats = {}; prs.draft = null; $("pr-view").dataset.name = ""; $("pr-view")._html = "";
+    prs.timer = setInterval(peersLoadAll, 20000);
+    peersLoadAll();
+  }
+  renderPeers();
+}
+
+function closePeers() {
+  history.replaceState(null, "", location.pathname + location.search);
+  route();
+}
+function peersBack() {
+  if (prs.route && prs.route.name && !isDesktop()) location.hash = "#/peers";
+  else closePeers();
+}
+
+async function peersSave() {
+  const d = prs.draft;
+  if (!d || prs.saving || !draftDirty()) return;
+  prs.saving = true;
+  $("pr-view")._html = ""; renderPeers();
+  try {
+    const data = await api(settingsBase(d.host), { method: "PUT", body: JSON.stringify(draftBody(d)) });
+    prs.cfg[d.host] = { state: "ok", data };
+    prs.draft = draftFrom(d.host, data);
+    toast("Saved");
+  } catch (e) {
+    if (e.code === "rev_conflict") {
+      toast("Someone else changed these settings. Reloaded; check them and save again.", true);
+      prs.draft = null;
+      await peersLoadCfg(d.host, true);
+    } else toast(e.message, true);
+  }
+  prs.saving = false;
+  $("pr-view")._html = ""; renderPeers();
+}
+
+function initPeers() {
+  $("pr-back").addEventListener("click", peersBack);
+  $("peers").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); peersBack(); } });
+  const v = $("pr-view");
+  const touch = () => { v._html = ""; /* the dirty marks change; the fields keep what was typed */ };
+  v.addEventListener("input", (ev) => {
+    const d = prs.draft, t = ev.target;
+    if (!d) return;
+    if (t.dataset.model) { (d.kinds[t.dataset.model] ||= { model: "", thinking: "" }).model = t.value; refreshDirty(); }
+  });
+  v.addEventListener("change", (ev) => {
+    const d = prs.draft, t = ev.target;
+    if (!d) return;
+    if (t.id === "pr-default") d.default_kind = t.value;
+    else if (t.dataset.allow) d.allowed = t.checked ? [...new Set([...d.allowed, t.dataset.allow])] : d.allowed.filter((k) => k !== t.dataset.allow);
+    else if (t.dataset.think) (d.kinds[t.dataset.think] ||= { model: "", thinking: "" }).thinking = t.value;
+    else return;
+    touch(); renderPeers();
+  });
+  v.addEventListener("submit", (ev) => { ev.preventDefault(); peersSave(); });
+  v.addEventListener("click", (ev) => {
+    if (!ev.target.closest("#pr-revert")) return;
+    const c = prs.cfg[prs.route.name];
+    if (c && c.state === "ok") { prs.draft = draftFrom(prs.route.name, c.data); touch(); renderPeers(); }
+  });
+}
+
+// refreshDirty updates the Save buttons while typing, without redrawing the
+// field being typed in.
+function refreshDirty() {
+  const dirty = draftDirty();
+  const save = $("pr-save"), rev = $("pr-revert");
+  if (save) save.disabled = !dirty || prs.saving;
+  if (rev) rev.disabled = !dirty;
+  const n = $("pr-dirty");
+  if (n) n.textContent = dirty ? "Unsaved changes" : "";
+}
+
 /* ---------- the page rows above the agent list (desktop) ---------- */
 //
 // One table; a row is a page (openPage) or an action (a dialog). The
@@ -4696,6 +5002,7 @@ const NAV_ICON = {
   todo: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
   pages: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>',
+  peers: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>',
   removals: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
 };
 const NAV_ROWS = [
@@ -4703,6 +5010,7 @@ const NAV_ROWS = [
   { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open },
   { key: "search", label: "Search", show: () => true, open: () => openRecall(), on: () => !!rc.route },
   { key: "pages", label: "Pages", show: () => ledger.on === true, open: () => { location.hash = "#/pages"; }, on: () => !!pgs.route }, // a screen of its own, like Transcripts
+  { key: "peers", label: "Peers", show: () => ledger.on === true && multiHost(), open: () => { location.hash = "#/peers"; }, on: () => !!prs.route }, // the hosts and what each starts by default
   // Hidden at zero, except while you are on it.
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && (ledger.marked.size > 0 || review.open), count: () => ledger.marked.size, open: () => openReview(), on: () => review.open },
 ];
@@ -6929,6 +7237,13 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]{0,127}$/;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // supportsModel: the host's server says this kind takes a model.
+// hostKindDefault: the model and thinking level this host starts a kind with
+// when the request names none (its settings).
+function hostKindDefault() {
+  const o = launch.opts;
+  return (o && o.kind_settings && launch.kind && o.kind_settings[launch.kind]) || {};
+}
+
 function supportsModel() {
   const o = launch.opts;
   return !!(o && o.enabled && launch.kind && (o.model_kinds || []).includes(launch.kind));
@@ -7054,16 +7369,18 @@ function renderModelBlock() {
     val.textContent = launch.model;
     val.classList.add("set");
   } else {
-    val.textContent = cat.default ? `Default (${cat.default})` : "Default";
+    const hd = hostKindDefault();
+    val.textContent = hd.model ? `Host default (${hd.model})` : cat.default ? `Default (${cat.default})` : "Default";
     val.classList.remove("set");
   }
   // Like a model pill with its effort beside it: pi's thinking level, muted.
-  $("ln-model-think").textContent = launch.kind === "pi" ? (launch.thinking || cat.default_thinking || "") : "";
+  $("ln-model-think").textContent = launch.kind === "pi" ? (launch.thinking || hostKindDefault().thinking || cat.default_thinking || "") : "";
   $("ln-model-btn").setAttribute("aria-expanded", String(launch.picking));
   $("ln-picker").hidden = !launch.picking;
   if (launch.picking) renderModelList();
   let note = "";
   if (cat.error) note = `Could not list models (${cat.error}). ${launch.kind === "pi" ? "" : "You can still type a name. "}Default still works.`;
+  else if (!launch.model && hostKindDefault().model) note = `${launch.host || "This host"} starts ${launch.kind} with ${hostKindDefault().model} unless you choose another model. Change it under Peers.`;
   else if (!launch.model) note = "Default passes no flag: the agent uses its own setting.";
   else {
     const m = (cat.models || []).find((x) => x.id === launch.model);
@@ -7073,7 +7390,8 @@ function renderModelBlock() {
   const think = launch.kind === "pi";
   $("ln-thinking").hidden = !think;
   if (think) {
-    const dflt = cat.default_thinking ? `Default (${cat.default_thinking})` : "Default";
+    const hdt = hostKindDefault().thinking, dt = hdt || cat.default_thinking;
+    const dflt = dt ? `${hdt ? "Host default" : "Default"} (${dt})` : "Default";
     $("ln-think-chips").innerHTML = [["", dflt], ...(cat.thinking_levels || THINKING_LEVELS).map((l) => [l, l])].map(([v, label]) =>
       `<button type="button" class="hf-chip" data-think="${esc(v)}" aria-pressed="${v === launch.thinking}">${esc(label)}</button>`).join("");
   }
@@ -7319,8 +7637,10 @@ function chooseLaunchDir(path, label) {
 function renderLaunchForm() {
   const o = launch.opts;
   const kinds = (o && o.enabled && o.kinds) || [];
+  // The host's own default agent is marked, so a choice of another is deliberate.
+  const hostDefault = o && (o.default_source === "setting" || o.default_source === "flag") ? o.default_kind : "";
   $("ln-kinds").innerHTML = kinds.map((k) =>
-    `<button type="button" class="hf-chip" data-kind="${esc(k)}" aria-pressed="${k === launch.kind}">${esc(k)}</button>`).join("") ||
+    `<button type="button" class="hf-chip" data-kind="${esc(k)}" aria-pressed="${k === launch.kind}"${k === hostDefault ? ' title="This host\'s default agent"' : ""}>${esc(k)}${k === hostDefault ? ' <small class="ln-defmark">default</small>' : ""}</button>`).join("") ||
     '<span class="ln-muted">—</span>';
   const chosen = $("ln-chosen");
   if (launch.dir) {
@@ -7706,6 +8026,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initRecall();
   initPlans();
   initPages();
+  initPeers();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     // One-way escape hatch for debugging: show the raw pane.
@@ -7848,6 +8169,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
   $("f-brief").addEventListener("click", fleetAction(fleetBrief));
   $("f-briefs").addEventListener("click", fleetAction(() => openBriefs(true)));
+  $("f-peers").addEventListener("click", fleetAction(() => { location.hash = "#/peers"; }));
   $("f-notify").addEventListener("click", fleetAction(() => toggleNotifyPanel(true)));
   $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));
   $("f-theme").addEventListener("click", fleetAction(() => toggleThemePanel(true)));

@@ -757,6 +757,7 @@
     .ln-chev { flex: none; color: var(--muted); font-size: 20px; }
     .ln-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
     .ln-kinds .hf-chip { min-height: 44px; }
+    .ln-kinds .hf-chip small.ln-defmark { margin-left: 6px; font-size: 11px; color: var(--muted); font-weight: 500; letter-spacing: 0.02em; }
     .ln-kinds .hf-chip[aria-pressed="true"] { background: var(--chip-blue); border-color: var(--blue); color: var(--blue); }
     .ln-muted { color: var(--muted); }
     .ln-input {
@@ -1793,6 +1794,65 @@
       #pages .pgs-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
       #pages .pgs-view { display: flex !important; }
     }
+    /* Peers: each host's status and its agent settings (default kind, model, thinking, allowed kinds). A screen of its own, like Pages. */
+    #peers {
+      position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg);
+    }
+    #peers[hidden] { display: none; }
+    #peers header { position: static; flex: none; }
+    #pr-back { margin: -10px 0 -10px -10px; color: var(--text); }
+    .pr-panes { flex: 1; min-height: 0; display: flex; }
+    .pr-list, .pr-view { min-width: 0; min-height: 0; }
+    .pr-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 12px calc(12px + env(safe-area-inset-right, 0px)) calc(20px + var(--safe-bottom)) calc(12px + env(safe-area-inset-left, 0px)); }
+    .pr-view { display: none; flex: 1; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 0 0 calc(20px + var(--safe-bottom)); }
+    #peers.in-peer .pr-list { display: none; }
+    #peers.in-peer .pr-view { display: flex; }
+    .pr-card {
+      display: flex; flex-direction: column; gap: 3px; margin-bottom: 9px; padding: 10px 12px; min-width: 0;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px; color: inherit; text-decoration: none;
+    }
+    .pr-card:hover { background: var(--panel2); }
+    .pr-card:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+    .pr-card.current { border-color: var(--blue); }
+    .pr-name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+    .pr-st { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--muted); }
+    .pr-st.ok { background: var(--green); }
+    .pr-st.down { background: var(--red); }
+    .pr-st.connecting { background: var(--orange); }
+    .pr-meta { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    .pr-meta .warn { color: var(--orange); }
+    .pr-empty { color: var(--muted); font-size: 14px; padding: 14px 4px; overflow-wrap: anywhere; }
+    .pr-bar { flex: none; padding: 10px calc(12px + env(safe-area-inset-right, 0px)) 10px calc(12px + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .pr-bar h2 { margin: 0; font-size: 16px; font-weight: 650; overflow-wrap: anywhere; display: flex; align-items: center; gap: 8px; }
+    .pr-sec { padding: 14px calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .pr-sec h3 { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+    .pr-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 14px; min-width: 0; margin: 0; }
+    .pr-kv dt { color: var(--muted); } .pr-kv dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+    .pr-kv .warn, .pr-note.warn { color: var(--orange); }
+    .pr-note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .pr-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pr-form { display: flex; flex-direction: column; gap: 14px; }
+    .pr-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .pr-field > label, .pr-field > .pr-lbl { font-size: 14px; font-weight: 600; }
+    .pr-form select, .pr-form input[type="text"] {
+      min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px; color: var(--text); width: 100%; min-width: 0;
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .pr-form select:focus-visible, .pr-form input:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    .pr-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pr-check { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); cursor: pointer; }
+    .pr-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); }
+    .pr-kind { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); min-width: 0; }
+    .pr-kind b { font-size: 14px; }
+    .pr-row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .pr-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .pr-acts .btn { min-height: 44px; padding: 0 18px; }
+    .pr-acts .btn.primary { border-color: var(--blue); background: var(--chip-blue); color: var(--blue); font-weight: 600; }
+    @media (min-width: 600px) { .pr-row { grid-template-columns: 2fr 1fr; } }
+    @media (min-width: 1100px) {
+      #peers .pr-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
+      #peers .pr-view { display: flex !important; }
+    }
   </style>
 </head>
 <body>
@@ -1812,6 +1872,19 @@
         <div id="rc-results" aria-live="polite"></div>
       </section>
       <section id="rc-session" class="rc-session" aria-label="Session" tabindex="0"></section>
+    </div>
+  </div>
+
+  <!-- Peers: each host's status and agent settings -->
+  <div id="peers" hidden>
+    <header>
+      <button type="button" class="bell" id="pr-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <h1>Peers</h1>
+      <span class="rc-fresh" id="pr-count"></span>
+    </header>
+    <div class="pr-panes">
+      <section class="pr-list" aria-label="Hosts"><div id="pr-items" aria-live="polite"></div></section>
+      <section class="pr-view" id="pr-view" aria-label="Host"></section>
     </div>
   </div>
 
@@ -1861,6 +1934,7 @@
       <div class="m-grp" role="presentation">Hub</div>
       <button type="button" role="menuitem" id="f-brief">Briefing</button>
       <button type="button" role="menuitem" id="f-briefs">History</button>
+      <button type="button" role="menuitem" id="f-peers">Peers</button>
       <button type="button" role="menuitem" id="f-refresh">Refresh</button>
     </div>
     <section id="notify-panel" class="attach-menu pop" role="dialog" aria-label="Notifications" aria-live="polite" hidden>
