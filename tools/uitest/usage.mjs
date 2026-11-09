@@ -88,7 +88,7 @@ try {
 
     await check(`${tag}: the screen opens with tiles, a stacked chart and the numbers match the API`, async () => {
       await open("#/usage");
-      const a = await api("/api/usage?by=kind&since=14d");
+      const a = await api(`/api/usage?by=kind&since=14d&tz=${-new Date().getTimezoneOffset()}`); // the browser buckets days in its own zone
       const tiles = await page.locator(".us-tile").allInnerTexts();
       if (tiles.length !== 4) throw new Error("tiles: " + tiles.length);
       const fmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + "M" : (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + "k");
