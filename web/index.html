@@ -860,6 +860,8 @@
     .lg-chip.candidate { background: var(--chip-cand); color: var(--green); }
     .lg-chip.rtr { background: var(--chip-rtr); color: var(--orange); }
     .lg-chip.failed { background: var(--chip-red); color: var(--red); }
+    /* landing states are sentences: they wrap inside the row instead of running off it */
+    .agent .sub .lg-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
     .lg-chip.landing { background: var(--chip-landing); color: var(--teal); }
     .rtr-banner {
       display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-bottom: 10px;

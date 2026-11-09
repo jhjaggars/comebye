@@ -876,6 +876,69 @@ for (const width of [1280, 390]) {
   });
 }
 
+// Landing cards say only what is true: a progress note, an unpushed branch, a background wait, CI of a landed
+// commit, a failure with its reason. Each state is drawn as a worker row, in both themes, phone and desktop.
+for (const width of [390, 1280]) {
+  await check(`landing states: at ${width}px each card says what is true, in both themes`, async () => {
+    await desktopList(width);
+    const rows = await page.evaluate(() => {
+      const iso0 = (ms) => new Date(Date.now() - ms).toISOString();
+      const mk = (i, status, over = {}, ag = {}) => ({
+        a: { id: `uit/w${i}:p1`, host: "uit", pane_id: `w${i}:p1`, name: `worker-${i}`, agent: "claude", agent_status: "idle", cwd: "/x",
+          worktree: { repo: "proj", checkout: "/x", linked: true, branch: `fix/state-${i}` }, ...ag },
+        e: { status, approval: { by: "coordinator", note: "ok" }, finished_at: iso0(3600e3), live: { present: true }, ...over },
+      });
+      const lc = (o) => ({ at: iso0(5e3), base: "origin/main", verdict: "1 commits not in origin/main", unmerged: 1, unpushed: 0, ...o });
+      const bg = [{ id: "b1", tool: "Bash", desc: "full UI suite" }];
+      const cases = [
+        ["landing", mk(1, "landing", { finished_at: undefined })],
+        ["landing: tests running", mk(2, "landing", { finished_at: undefined, progress: { text: "the full UI suite is running", phase: "tests", at: iso0(60e3) } }, { agent_status: "working" })],
+        ["landing: not pushed yet", mk(3, "landing", { finished_at: undefined, land_check: lc({ state: "pending", unpushed: 1, reason: "the worker is working" }) }, { agent_status: "working" })],
+        ["landing: not on main yet", mk(4, "landing", { finished_at: undefined, land_check: lc({ state: "pending" }) }, { agent_status: "working" })],
+        ["landing: waiting on a background task", mk(5, "landing", { finished_at: undefined, live: { present: true, background: bg, background_known: true }, land_check: lc({ state: "pending", unpushed: 1 }) })],
+        ["landed", mk(6, "landed", { land_check: lc({ ok: true, state: "landed", landed: ["64c1774aaaa"] }) })],
+        ["landed, CI running", mk(7, "landed", { land_check: lc({ ok: true, state: "landed", ci: { state: "running", runs: 2 } }) })],
+        ["landed, CI green", mk(8, "landed", { land_check: lc({ ok: true, state: "landed", ci: { state: "success", runs: 2 } }) })],
+        ["landed, CI failed", mk(9, "landed", { land_check: lc({ ok: true, state: "landed", ci: { state: "failure", runs: 2, url: "https://ci/9" } }) })],
+        ["land failed", mk(10, "finished", { finished_at: iso0(60e3), land_check: lc({ state: "failed", reason: "the worker said it was done, but its work is not on the base" }) })],
+        ["finished", mk(11, "finished", { finished_at: iso0(60e3), approval: undefined })],
+        ["running", mk(12, "running", { finished_at: undefined, approval: undefined }, { agent_status: "working" })],
+        ["bg", mk(13, "running", { finished_at: undefined, approval: undefined, live: { present: true, background: bg, background_known: true } })],
+      ];
+      for (const [, c] of cases) ledger.byAgent.set(c.a.id, c.e);
+      const wrap = document.getElementById("agents");
+      wrap.innerHTML = cases.map(([, c]) => agentRow(c.a, true)).join("");
+      return cases.map(([want, c]) => {
+        const row = wrap.querySelector(`[data-id="${c.a.id}"]`), chip = row.querySelector(".lg-chip");
+        const st = row.querySelector(".status");
+        return { want, chip: chip && getComputedStyle(chip).display !== "none" ? chip.textContent : null, status: st.textContent, statusBg: st.classList.contains("bg"),
+          dotBg: row.querySelector(".dot").classList.contains("bg"), cut: chip ? chip.scrollWidth > chip.clientWidth + 1 || chip.getBoundingClientRect().right > row.querySelector('.sub').getBoundingClientRect().right + 1 : false, rowEnd: row.getBoundingClientRect().right };
+      });
+    });
+    for (const r of rows) {
+      if (r.want === "bg") {
+        if (!/^working/.test(r.status) || !r.statusBg || !r.dotBg) throw new Error("an idle agent with a background task is not shown working (background): " + JSON.stringify(r));
+        continue;
+      }
+      if (r.want === "running") { if (!/^working/.test(r.status)) throw new Error("a running worker: " + JSON.stringify(r)); continue; }
+      if (r.want === "finished") { if (r.chip !== "finished") throw new Error("finished: " + JSON.stringify(r)); continue; }
+      const ok = r.want === "land failed" ? r.chip && r.chip.startsWith("land failed: the worker said it was done") : r.chip === r.want;
+      if (!ok) throw new Error(`want chip "${r.want}", got ${JSON.stringify(r)}`);
+      if (r.cut) throw new Error("a chip is cut: " + JSON.stringify(r));
+      if (r.rowEnd > width + 1) throw new Error("a row runs off the screen: " + JSON.stringify(r));
+    }
+    const bgRow = rows.find((r) => r.want === "landing: waiting on a background task");
+    if (!/^working/.test(bgRow.status) || !bgRow.statusBg) throw new Error("the waiting worker's status is not working (background): " + JSON.stringify(bgRow));
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
+    for (const cs of ["dark", "light"]) {
+      await page.emulateMedia({ colorScheme: cs });
+      await page.locator("#agents").screenshot({ path: `${out}/landing-states-${width}-${cs}.png` });
+    }
+    await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
+    await page.evaluate(() => { for (let i = 1; i <= 13; i++) ledger.byAgent.delete(`uit/w${i}:p1`); });
+  });
+}
+
 // A hub-only hub (no herdr): its own host is "no agents here", not an error, and the launch form starts elsewhere.
 await check("hub-only: the hub's own host reads 'no agents here' and the launch form skips it", async () => {
   await desktopList(1280);
