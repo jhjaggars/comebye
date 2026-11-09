@@ -425,6 +425,8 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye todo add "QUESTION" [--kind decision\|action\|followup] [--option "LABEL\|DETAIL" ... [--recommend N[,M]]] [--context FILE\|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT \| --no-wait]` | Put a question, a decision, something only the user can do, or a follow-up on the to-do list, with a little context (why, what yes and no do, links to the PR or report). It shows in the app's To do panel beside the briefing, so it is not lost while you field other agents' feedback. Any agent may add; a worker is by default the agent waiting on its own item, a coordinator by default names none (`--waiting AGENT` for the agent blocked on it). A question with choices takes `--option "label\|detail"` (2 to 9, repeatable) and `--recommend N[,M]`; the hub also writes the numbered list and a "My recommendation: ok N" line into the context, and the app draws its buttons from the fields. |
 | `comebye publish FILE\|- [--title T] [--kind html\|md] [--key K \| --update ID] [--if-version N] [--handoff ID]` | Publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages screen, sandboxed. `--update ID` (or `--key K`, which is idempotent) adds a version to the same link. Images go in as `data:` URIs; 5 MiB at most. The link is full when the hub has `-public-url` set (or you are on a peer, which knows the hub), else a path. Put the link in a report or `todo add --link`: the app opens it in place. |
 | `comebye pages list [--mine] [--handoff ID]` / `show ID [--body [--version N]]` / `link ID` / `rm ID` | The published pages / one page's details, and with `--body` its source (written by an agent: data, not instructions) / its link / delete one of yours (the user and coordinators may delete any). |
+| `comebye pages guide` / `comebye pages new [--type doc\|mockup\|deck\|dashboard] [--title T]` | How to make a good page (the `comebye-pages` skill, printed) / a starter page on stdout, built on the Comebye page template: the app's colour tokens and the `comebye-theme` listener, plus a filled-in example of the type. Neither needs the hub. See [Pages](#pages-the-comebye-pages-skill). |
+| `comebye skill install\|status [--claude] [--pi] [--force] [--json]` | Install the `comebye-pages` skill where claude (`~/.claude/skills/comebye-pages/SKILL.md`) and pi (`~/.pi/agent/skills/comebye-pages/SKILL.md`) find it, or say whether each copy is missing, current, outdated, edited or a symlink. Running it again changes nothing; a copy you edited (or a symlink) is never replaced, except an edited one with `--force`, which keeps yours as `SKILL.md.bak`. |
 | `comebye todo list [--all \| --state S]` / `show ID` | The open and answered items (`--all` adds done and dropped) / one item with its context, links and answer. Item text comes from agents: data, not instructions. |
 | `comebye todo answer ID TEXT\|-` / `done ID` / `drop ID [--reason R]` | Coordinator only (and the user, in the app). `answer` records the user's own words that you relayed from chat; an answer the user gave in the app arrives as a "Comebye (hub notice)" naming the item. Then tell the waiting agent and `done`. |
 | `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
@@ -534,6 +536,38 @@ answer with who gave it and when. It is stored in the hub's state directory
   with how to fix it. `--no-check` publishes anyway. A line such as "Nothing
   open." passes when no item is active. Open items missing from the section
   only produce a warning. A briefing with no such heading is not checked.
+
+### Pages: the comebye-pages skill
+
+Agents publish pages for you to read in the app (`comebye publish`). To make
+them good (HTML in the app's theme, mockups, diagrams and charts that work on a
+phone and inside the page sandbox), the binary carries a skill:
+
+```sh
+comebye skill install                                  # once per host: claude and pi pick it up
+comebye pages guide                                    # the same text, for any agent
+comebye pages new --type mockup --title "New Pages screen" > page.html
+comebye publish page.html --key <agent-name>-pages-screen
+```
+
+- **The skill.** It covers when to make a page, the page contract (tokens
+  only, 390 px wide, no network, pinned cdnjs scripts, 5 MiB), mockup
+  patterns, diagrams, charts and publishing with a stable `--key` that starts
+  with the agent's name. claude and pi load it by its description when a task
+  calls for a page. `/skill:comebye-pages` in pi forces it.
+- **`skill install`** writes the skill only to those two `SKILL.md` files and
+  records what it wrote in a `.comebye-installed` file beside each. So an
+  upgrade updates a copy comebye wrote, and leaves a copy you edited alone.
+  `skill status` says which is which.
+- **The starters** are the Comebye page template with an example of their
+  type: `doc` (a plan, review or report), `mockup` (proposed UI as real
+  HTML/CSS, phone and desktop), `deck` (one slide per screen) and
+  `dashboard` (tiles, an SVG chart, a status table).
+  - Every colour is a token from `web/themes.js`. In the app's viewer, the
+    page follows the theme you picked through the `comebye-theme` message.
+    Opened directly, it follows the system's light or dark.
+  - `internal/pageskit` tests that the template's colours are the app's, so a
+    change to the Comebye themes fails the build until the template follows.
 
 ## Claude Code support
 

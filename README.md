@@ -25,7 +25,9 @@ Beyond watching agents, it can:
 - keep a **to-do list** of the questions and decisions waiting on you, with
   context, and answer them from the app;
 - read the **pages** agents publish: `comebye publish report.html` (or
-  Markdown) from any agent, shown in the app inside a sandbox.
+  Markdown) from any agent, shown in the app inside a sandbox. Agents learn
+  to make good ones (mockups, diagrams, charts in the app's theme) from the
+  `comebye-pages` skill: `comebye skill install`, `comebye pages new`.
 
 Chat view works for Claude Code and Pi; other agents show their terminal output.
 

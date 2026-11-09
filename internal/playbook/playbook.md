@@ -59,6 +59,7 @@ with the matches listed.
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
 | `comebye todo add "QUESTION" [--kind K] [--option "LABEL\|DETAIL" ... --recommend N] [--context FILE\|-] [--link URL] [--waiting AGENT]` | put a question, decision or follow-up for the user on the to-do list |
 | `comebye publish FILE\|- [--title T] [--key K \| --update ID]` | publish an HTML or Markdown page to the hub and print its link; give the link in reports and `todo add --link` |
+| `comebye pages guide` / `pages new --type doc\|mockup\|deck\|dashboard` | how to make a good page, and a starter in the app's theme; for anything visual (a plan with mockups, a review, a chart) tell workers to publish HTML from a starter, not Markdown, with `--key <agent-name>-<subject>` |
 | `comebye pages list` / `show ID [--body]` / `rm ID` | the published pages, one page's details or source, delete one |
 | `comebye todo list` / `show ID` | the open and answered items / one item with its context |
 | `comebye todo answer ID "WORDS"` / `done ID` / `drop ID` | record the user's answer you relayed from chat / finish / drop an item |
