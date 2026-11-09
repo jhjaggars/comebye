@@ -80,8 +80,10 @@ func cmdCoordDigest(e *Env, args []string) error {
 // best digest it can make: a failing hook must not keep a session from
 // starting.
 func coordHook(e *Env, note bool, harness string) error {
-	c, err := newClient(e)
-	if err == nil && !isCoordinator(c) {
+	// The note is left at every start, before the preset has recorded the
+	// role (and it holds nothing private); the digest only goes to a
+	// recorded coordinator.
+	if c, err := newClient(e); !note && err == nil && !isCoordinator(c) {
 		return nil // not the coordinator: the hook is for it alone
 	}
 	var ctx, msg string
@@ -492,7 +494,8 @@ func cmdCoordReset(e *Env, args []string) error {
 		Renamed      bool `json:"renamed"`
 		DigestLanded bool `json:"digest_landed"`
 		Record       struct {
-			AgentID, Name string
+			AgentID string `json:"agent_id"`
+			Name    string `json:"name"`
 		} `json:"record"`
 	}
 	_ = json.Unmarshal(data, &r)

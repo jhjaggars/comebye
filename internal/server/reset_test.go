@@ -502,3 +502,61 @@ func TestFreshStartOnAPeer(t *testing.T) {
 		t.Fatalf("recorded %+v due %v", f.Last, f.Due)
 	}
 }
+
+// The Coordinator preset passes the hook's settings to a Claude coordinator,
+// before --allowedTools (which swallows what follows), and only when
+// `comebye coordinator install-hook` wrote them; nobody else gets them.
+func TestCoordinatorPresetPassesTheHookSettings(t *testing.T) {
+	root, _ := launchTree(t)
+	coordDir, _ := filepath.EvalSymlinks(t.TempDir())
+	state := t.TempDir()
+	fh, client := startFakeLaunchHerdr(t)
+	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: state}, client, nil)
+	s.findExec = func(name string) bool { return name == "pi" || name == "claude" }
+	argsOf := func() []string {
+		var argv []string
+		b, _ := json.Marshal(fh.call("agent.start").Params["args"])
+		json.Unmarshal(b, &argv)
+		return argv
+	}
+
+	// Not installed: no --settings.
+	if w := do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"claude"}`); w.Code != 200 {
+		t.Fatalf("launch = %d %s", w.Code, w.Body)
+	}
+	for _, a := range argsOf() {
+		if a == "--settings" {
+			t.Fatalf("settings passed without the hook installed: %v", argsOf())
+		}
+	}
+
+	// Installed: --settings <file> comes before --allowedTools.
+	settings := filepath.Join(state, "coordinator", "settings.json")
+	os.MkdirAll(filepath.Dir(settings), 0o700)
+	os.WriteFile(settings, []byte(`{}`), 0o600)
+	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
+	if w := do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"claude"}`); w.Code != 200 {
+		t.Fatalf("launch = %d %s", w.Code, w.Body)
+	}
+	argv := argsOf()
+	if len(argv) < 4 || argv[0] != "--settings" || argv[1] != settings || argv[2] != "--allowedTools" {
+		t.Fatalf("args = %v", argv)
+	}
+
+	// A pi coordinator, and a plain worker launch, never get it.
+	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
+	do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"pi"}`)
+	for _, a := range argsOf() {
+		if a == "--settings" {
+			t.Fatalf("a pi coordinator got the claude settings: %v", argsOf())
+		}
+	}
+	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
+	do(s, "POST", "/api/launch", nil, `{"dir":"`+root+`","kind":"claude"}`)
+	if st := fh.call("agent.start"); st != nil {
+		b, _ := json.Marshal(st.Params["args"])
+		if strings.Contains(string(b), "--settings") {
+			t.Fatalf("a plain agent got the coordinator's settings: %s", b)
+		}
+	}
+}

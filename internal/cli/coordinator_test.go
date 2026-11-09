@@ -121,6 +121,15 @@ func TestCoordinatorDigestHookWithoutTheHub(t *testing.T) {
 	}
 }
 
+// The start-up note is left before the role is recorded (the preset records
+// it after the start), so it does not depend on the role.
+func TestCoordinatorNoteDoesNotNeedTheRole(t *testing.T) {
+	e, out, _ := coordEnvWithState(t, coordAnswers(rolesNone), "")
+	if code := run(e, "coordinator", "digest", "--hook", "--note"); code != 0 || !strings.Contains(out.String(), "comebye-hook:v1") {
+		t.Fatalf("exit %d, printed %q", code, out)
+	}
+}
+
 func TestCoordinatorInstallHook(t *testing.T) {
 	e, out, dir := coordEnvWithState(t, nil, "")
 	if code := run(e, "coordinator", "install-hook", "--bin", "/opt/comebye bin/comebye"); code != 0 {
