@@ -2521,6 +2521,7 @@ function renderDetailMenu() {
   const st = $("d-mark-state");
   if (!lon) {
     $("d-sched").hidden = true;
+    $("d-fresh").hidden = true;
     renderMarkBar(null);
     st.hidden = !off;
     st.textContent = off ? "Marking and roles are not available on this hub" : "";
@@ -2535,6 +2536,7 @@ function renderDetailMenu() {
   const coord = isCoordinator(agentById(state.selected));
   $("d-role").textContent = coord ? "Not coordinator" : "Make coordinator";
   $("d-sched").hidden = !coord;
+  $("d-fresh").hidden = !(coord && agentById(state.selected)?.agent === "claude");
 }
 
 // toggleRole makes the viewed agent a coordinator (pinned in the list,
@@ -2685,6 +2687,93 @@ async function submitMark() {
   if (d && d.mark && d.mark.ask && d.mark.ask.state === "asking") toast("Marked ready to remove; asking the session whether it is safe");
   ledger.loadedAt = 0;
   await loadLedger();
+}
+
+/* ---------- fresh start: clear the coordinator's context in place ---------- */
+//
+// The hub sends /clear into the coordinator's pane and a SessionStart hook
+// loads a digest (see docs/coordinator-reset.md). The sheet shows how large
+// the context is and whether the hook is there, then asks the hub. The hub
+// refuses while the coordinator is working or blocked, or while it holds a
+// message for it, and says why.
+
+const fs = { open: false, id: "", busy: false };
+
+function fmtTokens(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n); }
+
+async function openFresh() {
+  const id = state.selected;
+  toggleDetailMenu(false);
+  if (!id || fs.open) return;
+  const a = agentById(id);
+  Object.assign(fs, { open: true, id, busy: false });
+  history.pushState({ fresh: true }, "", location.href);
+  $("fs-name").textContent = a ? (a.name || a.pane_id || id) : id;
+  $("fs-ctx").textContent = "Reading its context size…";
+  $("fs-status").textContent = "";
+  $("fs-go").disabled = false;
+  $("fs").classList.remove("busy");
+  $("fs").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("fs-go").focus();
+  try {
+    const d = await api("/api/coordinator?refresh=1");
+    if (!fs.open || fs.id !== id) return;
+    const c = (d.coordinators || []).find((x) => x.id === id);
+    const parts = [];
+    if (c && c.context) {
+      parts.push("Context: " + fmtTokens(c.context.tokens) + " tokens.");
+      if (!c.context.hook_active) {
+        parts.push("This session was not started with the reset hook, so the hub will refuse: run comebye coordinator install-hook, then start the coordinator again.");
+        $("fs-go").disabled = true;
+      }
+    } else if (c && c.error) parts.push("Could not read its context: " + c.error);
+    if (d.threshold > 0) parts.push("The hub clears it by itself at the first briefing after " + fmtTokens(d.threshold) + " tokens.");
+    else parts.push("The automatic fresh start is off.");
+    if (d.last) parts.push("Last fresh start: " + new Date(d.last.at).toLocaleString() + " (" + d.last.trigger + ").");
+    $("fs-ctx").textContent = parts.join(" ");
+  } catch (e) {
+    if (fs.open) $("fs-ctx").textContent = "Could not read its context: " + e.message;
+  }
+}
+
+function hideFresh() {
+  fs.open = false;
+  $("fs").hidden = true;
+  document.body.classList.remove("sheet-open");
+  maybeReload();
+}
+
+function closeFresh() {
+  if (fs.busy) return;
+  if (history.state && history.state.fresh) history.back();
+  else hideFresh();
+}
+
+function syncFresh() {
+  if (fs.open && !(history.state && history.state.fresh)) hideFresh();
+}
+
+async function submitFresh() {
+  if (fs.busy) return;
+  const id = fs.id;
+  fs.busy = true;
+  $("fs-go").disabled = true;
+  $("fs").classList.add("busy");
+  $("fs-status").textContent = "Clearing the context…";
+  try {
+    const d = await api("/api/coordinator/reset", { method: "POST", body: JSON.stringify({ agent_id: id }) });
+    fs.busy = false;
+    $("fs").classList.remove("busy");
+    closeFresh();
+    if (d && d.digest_landed === false) toast("Cleared, but the digest was not seen in the new session: look at the pane", true);
+    else toast("Fresh start done" + (d && d.tokens ? " (was " + fmtTokens(d.tokens) + " tokens)" : ""));
+  } catch (e) {
+    fs.busy = false;
+    $("fs").classList.remove("busy");
+    $("fs-go").disabled = false;
+    $("fs-status").textContent = e.message;
+  }
 }
 
 // The row menu: one popover, outside the list so a re-render keeps it.
@@ -4619,6 +4708,7 @@ function route() {
   syncLaunch();
   syncReview();
   syncMark();
+  syncFresh();
   syncSwitch();
   const r = parseRoute();
   if (!r) {
@@ -8383,6 +8473,10 @@ window.addEventListener("DOMContentLoaded", () => {
   initPopovers();
   $("mk-close").addEventListener("click", closeMark);
   $("mk-go").addEventListener("click", submitMark);
+  $("d-fresh").addEventListener("click", openFresh);
+  $("fs-close").addEventListener("click", closeFresh);
+  $("fs-go").addEventListener("click", submitFresh);
+  $("fs").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeFresh(); } });
   $("mk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeMark(); } });
   $("btn-fleet").addEventListener("click", (ev) => { ev.stopPropagation(); toggleFleetMenu(); });
   $("nav").addEventListener("click", onNavClick);

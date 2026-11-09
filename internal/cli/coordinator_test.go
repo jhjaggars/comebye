@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	whoamiMe   = `{"host":"laharl","role":"agent","agent":"laharl/w21:p1","ledger":false,"hub":"https://hub"}`
-	rolesCoord = `{"roles":{"laharl/w21:p1":{"role":"coordinator","name":"coordinator"}}}`
-	rolesNone  = `{"roles":{"laharl/w99:p1":{"role":"coordinator"}}}`
-	coordState = `{"threshold":150000,"last":{"at":"2026-11-02T09:00:00Z","name":"coordinator","trigger":"briefing","tokens":161000,"digest_landed":true},"coordinators":[]}`
-	briefJSON  = `{"brief":{"markdown":"# Briefing\n\nNeeds you: t1","by":"coordinator","at":"2026-11-03T08:00:00Z"}}`
-	todosJSON  = `{"todos":[{"id":"t1","question":"Which key?","kind":"decision","state":"open","created_at":"2026-11-03T07:00:00Z","waiting":{"id":"laharl/w9:p1","name":"keysmith"}}]}`
+	whoamiMe        = `{"host":"laharl","role":"agent","agent":"laharl/w21:p1","ledger":false,"hub":"https://hub"}`
+	rolesCoord      = `{"roles":{"laharl/w21:p1":{"role":"coordinator","name":"coordinator"}}}`
+	rolesNone       = `{"roles":{"laharl/w99:p1":{"role":"coordinator"}}}`
+	coordState      = `{"threshold":150000,"last":{"at":"2026-11-02T09:00:00Z","name":"coordinator","trigger":"briefing","tokens":161000,"digest_landed":true},"coordinators":[]}`
+	briefJSON       = `{"brief":{"markdown":"# Briefing\n\nNeeds you: t1","by":"coordinator","at":"2026-11-03T08:00:00Z"}}`
+	todosJSON       = `{"todos":[{"id":"t1","question":"Which key?","kind":"decision","state":"open","created_at":"2026-11-03T07:00:00Z","waiting":{"id":"laharl/w9:p1","name":"keysmith"}}]}`
 	coordLedgerJSON = `{"entries":[
  {"id":"h1","host":"laharl","repo_name":"comebye","branch":"feat/a","status":"running","agent_name":"alpha","created_at":"2026-11-03T06:00:00Z","live":{"present":true,"agent_status":"working"}},
  {"id":"h2","host":"laharl","repo_name":"comebye","branch":"feat/b","status":"finished","agent_name":"beta","created_at":"2026-11-02T06:00:00Z","finished_at":"2026-11-03T05:00:00Z"},
@@ -212,3 +212,61 @@ func TestCoordinatorStatus(t *testing.T) {
 		}
 	}
 }
+
+const sampleReport = `## Summary
+Built the reset. It works.
+
+## Changes
+- a.go
+- b.go
+
+## Verification
+Verified live: x
+
+## Follow-ups
+None.
+
+## Decisions for the user
+1. Install the hook?
+   Recommend: 1
+`
+
+func TestReadReportSummary(t *testing.T) {
+	got := summarizeReport(sampleReport, "h1")
+	for _, want := range []string{"## Summary\nBuilt the reset", "## Decisions for the user\n1. Install the hook?", "Changes: 2 lines", "Follow-ups: none", "comebye read h1 --report"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "a.go") || strings.Contains(got, "Verified live") {
+		t.Errorf("summary carries other sections:\n%s", got)
+	}
+	if len(got) >= len(sampleReport)+120 {
+		t.Errorf("summary is not smaller than the report")
+	}
+	// A report without sections is cut to its first lines; "Decisions: None." is not shown.
+	long := strings.Repeat("line\n", 40)
+	if g := summarizeReport(long, "h2"); strings.Count(g, "line") != 12 || !strings.Contains(g, "--report") {
+		t.Errorf("sectionless = %q", g)
+	}
+	if g := summarizeReport("## Summary\nok\n\n## Decisions for the user\nNone.\n", "h3"); strings.Contains(g, "## Decisions") || !strings.Contains(g, "Decisions for the user: none") {
+		t.Errorf("none decisions = %q", g)
+	}
+}
+
+func TestReadSummaryFlag(t *testing.T) {
+	ledger := `{"entries":[{"id":"h1","agent_id":"laharl/w9:p1","agent_name":"w","repo_name":"r","branch":"b","status":"finished","final_report":` + string(mustJSON(sampleReport)) + `}]}`
+	e, out, _, _ := peerEnv(t, nil, map[string]answer{"GET /api/ledger": {200, ledger}})
+	if code := run(e, "read", "h1", "--report", "--summary"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), "Summary of the final report of w on r/b") || strings.Contains(out.String(), "a.go") {
+		t.Fatalf("output = %s", out)
+	}
+	e, _, errb, _ := peerEnv(t, nil, nil)
+	if code := run(e, "read", "h1", "--summary"); code != 2 || !strings.Contains(errb.String(), "--report") {
+		t.Fatalf("--summary alone: %d %s", code, errb)
+	}
+}
+
+func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }

@@ -550,6 +550,7 @@ backups private.
 | `ledger.json` | The handoff ledger: workers, marks, plans, reports | **Required.** History and open work are gone. |
 | `todo.json` | The To do list | **Required.** |
 | `brief.json`, `brief-history.json`, `brief-schedule.json` | The briefing, its history and schedule | **Required** (history is lost; the briefing is rewritten by the next run). |
+| `coordinator-reset.json` | The last coordinator resets, and any due one | Optional; the next briefing decides again. |
 | `roles.json` | Which agents are coordinators | **Required**; coordinators must be marked again. |
 | `queue.json` | Prompts waiting to be delivered | **Required** if prompts are queued; otherwise empty. |
 | `peers.json` | Peers added live (`comebye peer add`) | **Required**, or re-add each peer. Peers in `-peers` need no file. |
@@ -795,6 +796,7 @@ to the home screen again.
 | `-default-kind` | `COMEBYE_DEFAULT_KIND` | (none) | The agent kind a start on this host uses when the request names none (a launch, a handoff, a plan step). A seed: a value saved in `settings.json` (the app's Peers screen, `comebye settings set`) wins. Empty: the kind most of the running agents use. Use it to give an ephemeral host (a spot worker) a rule at creation: `COMEBYE_DEFAULT_KIND=pi`. |
 | `-allowed-kinds` | `COMEBYE_ALLOWED_KINDS` | (none) | The only agent kinds this host starts, comma-separated (`pi`, or `pi,codex`); anything else is refused (`kind_not_allowed`) and the launch sheet does not offer it. A seed that `settings.json` overrides. Empty: every installed kind. |
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
+| `-coordinator-reset-tokens` | `COMEBYE_COORDINATOR_RESET_TOKENS` | `150000` | Hub: the context size past which the first briefing marks the coordinator's in-place reset (`/clear` plus a digest) due; it runs when the coordinator is idle with nothing queued. `0` turns it off. Needs `comebye coordinator install-hook`; see [coordinator-reset.md](coordinator-reset.md). |
 | `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |
 | `-hub-only` | `COMEBYE_HUB_ONLY` | `false` | Run as a hub that hosts no agents: no herdr, nothing waits for a socket; implies `-hub-mode`, turns launching off here. An explicitly empty `-sock=` means the same. See [A hub with no herdr](#a-hub-with-no-herdr-containers-kubernetes). |
 | `-lock-wait` | `COMEBYE_LOCK_WAIT` | `0` | When another comebye holds the state directory, retry this long (once a second) before refusing to start. See [One server per state directory](#one-server-per-state-directory). |

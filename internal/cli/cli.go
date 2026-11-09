@@ -55,7 +55,7 @@ func init() {
 	commands = []command{
 		{"agents", "[--host H] [--json]", "every agent on every host: project, branch, status, role", cmdAgents},
 		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
-		{"read", "AGENT [--lines N] [--report] [--json]", "an agent's recent messages, or its final report", cmdRead},
+		{"read", "AGENT [--lines N] [--report [--summary]] [--json]", "an agent's recent messages, or its final report (--summary: just its Summary and Decisions for the user)", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
 		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE|- [--plan ID] [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
 		{"model", "AGENT [MODEL] [--thinking T] [--json]", "switch a running agent's model (claude, pi; it must be idle); pi also takes --thinking", cmdModel},
@@ -630,6 +630,7 @@ func cmdRead(e *Env, args []string) error {
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	lines := fs.Int("lines", 20, "how many recent messages (raw terminal: lines)")
 	report := fs.Bool("report", false, "print a worker's final report from the ledger (any other agent: its last reply)")
+	summary := fs.Bool("summary", false, "with --report: only the report's Summary and Decisions for the user, and a list of the other sections (the full report is one command away)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -644,8 +645,11 @@ func cmdRead(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *summary && !*report {
+		return usageErr("--summary goes with --report")
+	}
 	if *report {
-		return readReport(e, c, pos[0], *asJSON)
+		return readReport(e, c, pos[0], *asJSON, *summary)
 	}
 	t, err := c.resolve(pos[0])
 	if err != nil {
@@ -732,7 +736,7 @@ func renderMessage(w io.Writer, m apiMessage) {
 
 // readReport prints the final report of a ledger worker: AGENT is a
 // worker's agent (live or not) or a ledger entry id.
-func readReport(e *Env, c *client, arg string, asJSON bool) error {
+func readReport(e *Env, c *client, arg string, asJSON, summary bool) error {
 	lg, err := c.getLedger()
 	if err != nil {
 		return err
@@ -764,8 +768,70 @@ func readReport(e *Env, c *client, arg string, asJSON bool) error {
 	if found.FinalReport == "" {
 		return fmt.Errorf("%s (%s) has no final report yet (status %s)", found.Branch, found.ID, found.Status)
 	}
-	fmt.Fprintf(e.Stdout, "Final report of %s on %s/%s (%s, %s):\n\n%s\n", dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, strings.TrimRight(found.FinalReport, "\n"))
+	body := strings.TrimRight(found.FinalReport, "\n")
+	title := "Final report"
+	if summary {
+		body, title = summarizeReport(body, found.ID), "Summary of the final report"
+	}
+	fmt.Fprintf(e.Stdout, "%s of %s on %s/%s (%s, %s):\n\n%s\n", title, dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, body)
 	return nil
+}
+
+// summarizeReport keeps what a coordinator needs to decide whether to read
+// on: the report's Summary and what it asks of the user, and a line per
+// other section. Reports follow the worker format (## Summary, ## Changes,
+// ## Verification, ## Follow-ups, ## Decisions for the user); one without
+// those headings is cut to its first lines.
+func summarizeReport(report, id string) string {
+	type section struct {
+		name string
+		body []string
+	}
+	var secs []*section
+	var cur *section
+	for _, l := range strings.Split(report, "\n") {
+		if name, ok := strings.CutPrefix(l, "## "); ok {
+			cur = &section{name: strings.TrimSpace(name)}
+			secs = append(secs, cur)
+			continue
+		}
+		if cur != nil {
+			cur.body = append(cur.body, l)
+		}
+	}
+	more := "\n\n(the full report: `comebye read " + id + " --report`)"
+	if len(secs) == 0 {
+		lines := strings.Split(report, "\n")
+		if len(lines) > 12 {
+			return strings.Join(lines[:12], "\n") + "\n…" + more
+		}
+		return report
+	}
+	trim := func(s *section) string { return strings.TrimSpace(strings.Join(s.body, "\n")) }
+	var out, rest []string
+	for _, s := range secs {
+		low := strings.ToLower(s.name)
+		switch {
+		case low == "summary", strings.HasPrefix(low, "decisions") && !strings.EqualFold(strings.TrimRight(trim(s), "."), "none"):
+			out = append(out, "## "+s.name+"\n"+trim(s))
+		default:
+			t := trim(s)
+			n := 0
+			if t != "" {
+				n = len(strings.Split(t, "\n"))
+			}
+			if strings.EqualFold(strings.TrimRight(t, "."), "none") {
+				rest = append(rest, s.name+": none")
+			} else {
+				rest = append(rest, fmt.Sprintf("%s: %d lines", s.name, n))
+			}
+		}
+	}
+	text := strings.Join(out, "\n\n")
+	if len(rest) > 0 {
+		text += "\n\n(not shown: " + strings.Join(rest, "; ") + ")"
+	}
+	return text + more
 }
 
 // lastReply stands in for the final report of an agent that is not a

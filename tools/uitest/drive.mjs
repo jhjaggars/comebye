@@ -1921,6 +1921,90 @@ await check("latency: unmark and the coordinator role show in a frame, stay thro
   await page.evaluate(() => { ledgerOpt.m.clear(); ledger.loadedAt = 0; return loadLedger(); });
 });
 
+// ---- Fresh start: the coordinator's in-place context reset ----
+// The real hub answers (alpha is a Claude agent with a session file that has no
+// usage lines and no hook), so the refusal path is the real one; the success
+// path is mocked, since the fake herdr has no Claude to clear.
+const freshCtx = (over = {}) => ({ threshold: 150000, last: { at: "2026-11-08T09:00:00Z", trigger: "briefing", tokens: 158000 }, coordinators: [{ id: "uitest/w1:p1", name: "alpha", context: { tokens: 163000, hook_active: true, ...over } }] });
+async function openFresh() {
+  await page.locator("#d-more").click();
+  await page.locator("#d-fresh").click();
+  await page.waitForSelector("#fs", { state: "visible" });
+}
+for (const [width, height] of [[390, 844], [1440, 900]]) {
+  await check(`fresh start: the sheet in a coordinator's menu reads, fits and works at ${width}px`, async () => {
+    await page.setViewportSize({ width, height });
+    await page.goto(base + "/", { waitUntil: "load" });
+    await jpost("/api/roles", { agent_id: "uitest/w1:p1", role: "coordinator" });
+    await openAgent("alpha");
+    await page.evaluate(() => { ledger.loadedAt = 0; return loadLedger(); });
+    await page.waitForFunction(() => isCoordinator(agentById(state.selected)), null, { timeout: 8000 });
+    // Not offered to an agent that is no coordinator (checked below, after the role is dropped).
+    await page.locator("#d-more").click();
+    const it = await page.locator("#d-fresh").boundingBox();
+    if (!it || it.height < 40) throw new Error("menu item box " + JSON.stringify(it));
+    await page.keyboard.press("Escape");
+    // The real hub: no usage in the fixture's session, so it cannot read the context.
+    await openFresh();
+    await page.waitForFunction(() => /Could not read its context/.test(document.querySelector("#fs-ctx")?.textContent || ""), null, { timeout: 8000 });
+    await page.locator("#fs-go").click();
+    await page.waitForFunction(() => (document.querySelector("#fs-status")?.textContent || "").length > 5 && !/^Clearing/.test(document.querySelector("#fs-status").textContent), null, { timeout: 8000 });
+    const refused = await page.locator("#fs-status").innerText();
+    if (!/usage|session|hook/i.test(refused)) throw new Error("the refusal is not shown: " + refused);
+    if (await page.locator("#fs-go").isDisabled()) throw new Error("the button stayed disabled after a refusal");
+    if (!(await page.evaluate(() => !document.querySelector("#fs").hidden))) throw new Error("the sheet closed on a refusal");
+    await page.locator("#fs-close").click();
+    await page.waitForFunction(() => document.querySelector("#fs").hidden, null, { timeout: 3000 });
+
+    // Mocked: a large context, the hook there; the reset succeeds.
+    let posts = [];
+    await page.route(/\/api\/coordinator(\?.*)?$/, (r) => r.fulfill({ json: freshCtx() }));
+    await page.route(/\/api\/coordinator\/reset$/, async (r) => { posts.push(JSON.parse(r.request().postData() || "{}")); await sleep(600); r.fulfill({ json: { tokens: 163000, session_after: "s2", digest_landed: true, record: { agent_id: "uitest/w1:p1", name: "alpha" } } }); });
+    try {
+      await openFresh();
+      await page.waitForFunction(() => /163k tokens/.test(document.querySelector("#fs-ctx")?.textContent || ""), null, { timeout: 5000 });
+      const ctx = await page.locator("#fs-ctx").innerText();
+      if (!/150k tokens/.test(ctx) || !/Last fresh start/.test(ctx)) throw new Error("context note: " + ctx);
+      await noOverflow();
+      const box = await page.locator("#fs-go").boundingBox();
+      if (box.height < 40 || box.x < 0 || box.x + box.width > width) throw new Error("button box " + JSON.stringify(box));
+      await page.screenshot({ path: `${out}/fresh-start-sheet-${width}.png` });
+      await page.locator("#fs-go").click();
+      await page.waitForFunction(() => document.querySelector("#fs").classList.contains("busy"), null, { timeout: 2000 });
+      await page.screenshot({ path: `${out}/fresh-start-busy-${width}.png` });
+      await page.waitForFunction(() => document.querySelector("#fs").hidden, null, { timeout: 5000 });
+      const [tc, tx] = await toastNow();
+      if (/error/.test(tc) || !/Fresh start done \(was 163k tokens\)/.test(tx)) throw new Error("toast " + tc + " " + tx);
+      if (posts.length !== 1 || posts[0].agent_id !== "uitest/w1:p1") throw new Error("posts " + JSON.stringify(posts));
+      if (nativeDialogs) throw new Error("a native dialog opened");
+    } finally { await page.unroute(/\/api\/coordinator\/reset$/); await page.unroute(/\/api\/coordinator(\?.*)?$/); }
+
+    // Mocked: the session has no hook: the button is off and says what to do.
+    await page.route(/\/api\/coordinator(\?.*)?$/, (r) => r.fulfill({ json: freshCtx({ hook_active: false }) }));
+    try {
+      await openFresh();
+      await page.waitForFunction(() => /install-hook/.test(document.querySelector("#fs-ctx")?.textContent || ""), null, { timeout: 5000 });
+      if (!(await page.locator("#fs-go").isDisabled())) throw new Error("the button is on without the hook");
+      await page.screenshot({ path: `${out}/fresh-start-nohook-${width}.png` });
+      await noOverflow();
+      await page.locator("#fs-close").click();
+      await page.waitForFunction(() => document.querySelector("#fs").hidden, null, { timeout: 3000 });
+    } finally { await page.unroute(/\/api\/coordinator(\?.*)?$/); }
+
+    // Back (the browser's) closes the sheet; and a non-coordinator is not offered it.
+    await openFresh();
+    await page.goBack();
+    await page.waitForFunction(() => document.querySelector("#fs").hidden, null, { timeout: 3000 });
+    await jpost("/api/roles", { agent_id: "uitest/w1:p1", role: "" });
+    await page.evaluate(() => { ledgerOpt.m.clear(); ledger.loadedAt = 0; return loadLedger(); });
+    await page.waitForFunction(() => !isCoordinator(agentById(state.selected)), null, { timeout: 8000 });
+    await page.locator("#d-more").click();
+    if (await page.locator("#d-fresh").isVisible()) throw new Error("Fresh start offered for a non-coordinator");
+    await page.keyboard.press("Escape");
+  });
+}
+await page.setViewportSize({ width: 390, height: 844 });
+
 await check("latency: cancelling a queued prompt removes it in a frame; a refresh in flight does not bring it back; a refusal does", async () => {
   await openAgent("alpha");
   let alive = true;

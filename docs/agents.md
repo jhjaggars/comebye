@@ -521,6 +521,10 @@ loopback port, or run `git` and `herdr` itself. What guards your work is
 that removals are confirmed by you, in the app, after the checks. See
 [SECURITY.md](../SECURITY.md).
 
+### Fresh start: clearing a coordinator's context in place
+
+A Claude Code coordinator's context only grows. At the first briefing after it passes about 150k tokens, and only while it is idle with nothing queued for it, the hub sends `/clear` into its pane and a `SessionStart` hook loads a digest (the briefing, to-dos, handoffs, recent events and the tail of its state file). Same pane, name and role. The user can also start one from the coordinator's ⋯ menu (*Fresh start…*) or with `comebye coordinator reset`. The hook is installed with `comebye coordinator install-hook`, and only the coordinator gets it. See [coordinator-reset.md](coordinator-reset.md).
+
 ### The to-do list
 
 Open questions used to live in the briefing's "Needs you" list and in chat

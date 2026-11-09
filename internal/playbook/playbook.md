@@ -42,7 +42,7 @@ with the matches listed.
 | `comebye agents` | every agent on every host: project, branch, status, role |
 | `comebye ledger` | the handoffs: status, branch, worker, report, marks, hints |
 | `comebye read AGENT [--lines N]` | an agent's recent messages |
-| `comebye read AGENT --report` | a worker's final report (any other agent: its last reply) |
+| `comebye read AGENT --report` | a worker's final report (any other agent: its last reply); add `--summary` for just its Summary and Decisions for the user, and read the rest only when you need it |
 | `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] --brief FILE` | start a worker (`--brief -` reads stdin) |
 | `comebye model AGENT [MODEL] [--thinking T]` | switch a running claude or pi agent's model (it must be idle) |
@@ -446,6 +446,14 @@ repositories, host versions); the app then shows "checked HH:MM, no
 change" with your briefing. It still asks at least every 6 hours, so use
 that run to refresh your state file. The user can change this with
 `--skip off` or `--max-quiet D`.
+
+## Fresh starts
+
+When your context has grown large the hub may clear it in place: at a briefing, only while you are idle with nothing queued for you, it sends `/clear` into your own pane, and a hook loads a **digest** (the briefing, the open to-dos, the running and landing handoffs, the recent ledger events, the tail of your state file). You keep your pane, name and role. The user can also start one from the app.
+
+- **Keep `~/.local/state/comebye/coordinator/state.md` current** at every briefing: decisions, gotchas, what you are waiting for, newest last. After a fresh start its tail is all you remember of this session, besides the digest.
+- After one, run `comebye todo list` and `comebye ledger --active` before acting; do not trust a recollection you no longer have. `comebye coordinator digest` prints the digest again.
+- Do not `/clear` or compact yourself, and do not run `comebye coordinator reset` (the user's).
 
 ## Rules
 

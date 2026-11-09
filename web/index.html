@@ -945,18 +945,18 @@
     @media (prefers-reduced-motion: reduce) { .pop, #sheet-bk { animation: none !important; } }
 
     /* Ready-to-remove review. */
-    #review, #switch, #mk { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
-    #review[hidden], #switch[hidden], #mk[hidden] { display: none; }
-    #review header .back, #switch header .back, #mk header .back {
+    #review, #switch, #mk, #fs { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden], #switch[hidden], #mk[hidden], #fs[hidden] { display: none; }
+    #review header .back, #switch header .back, #mk header .back, #fs header .back {
       font: inherit; font-size: 20px; line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: 10px; padding: 0;
       min-width: 44px; min-height: 44px; margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #review header h2, #switch header h2, #mk header h2 { font-size: 17px; margin: 0; font-weight: 650; }
+    #review header h2, #switch header h2, #mk header h2, #fs header h2 { font-size: 17px; margin: 0; font-weight: 650; }
     #switch .ln-picker { margin-top: 0; }
     #switch .ln-mlist { max-height: 46vh; }
-    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before {
+    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #fs.busy .ln-status::before {
       content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px;
       border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -2140,6 +2140,23 @@
     </footer>
   </section>
 
+  <!-- Fresh start: clear the coordinator's context in place -->
+  <section id="fs" hidden role="dialog" aria-modal="true" aria-labelledby="fs-title">
+    <header>
+      <button type="button" class="back" id="fs-close" aria-label="Close">&#10005;</button>
+      <h2 id="fs-title">Fresh start</h2>
+    </header>
+    <div class="ln-body">
+      <div class="rv-name" id="fs-name"></div>
+      <div class="ln-note" id="fs-note">Clears this coordinator&rsquo;s context in place: the hub sends <code>/clear</code> into its pane and a digest of the briefing, to-dos, handoffs and its notes is loaded into the new session. Same pane, name and role. It waits until the coordinator is idle with nothing queued for it.</div>
+      <div class="ln-note" id="fs-ctx" aria-live="polite"></div>
+    </div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="fs-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="fs-go">Fresh start</button>
+    </footer>
+  </section>
+
   <!-- Ready to remove: a page (#/remove), with the sweep as a button -->
   <section id="review" hidden role="region" aria-labelledby="rv-title">
     <header>
@@ -2177,6 +2194,7 @@
       <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>
       <button type="button" role="menuitem" id="d-role">Make coordinator</button>
       <button type="button" role="menuitem" id="d-sched" hidden>Briefing schedule…</button>
+      <button type="button" role="menuitem" id="d-fresh" hidden>Fresh start…</button>
     </div>
     <main>
       <div id="d-markbar" class="markbar" hidden></div>
