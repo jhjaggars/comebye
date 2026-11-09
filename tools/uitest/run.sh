@@ -87,6 +87,8 @@ node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1
 
 # The Pages checks publish with the real CLI, so they need the binary and its state.
 PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1
+# The page starters (comebye pages new): published by the real CLI, opened in the viewer under the real CSP.
+COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node starters.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # The Peers screen and the host defaults: real servers (a hub, a peer, a peer that is down) on the same fake herdr.
 FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node peers.mjs "$out" || rc=1
 exit $rc
