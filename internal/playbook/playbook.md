@@ -46,6 +46,7 @@ with the matches listed.
 | `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] --brief FILE` | start a worker (`--brief -` reads stdin) |
 | `comebye model AGENT [MODEL] [--thinking T]` | switch a running claude or pi agent's model (it must be idle) |
+| `comebye usage [--by kind\|model\|host\|project\|role\|purpose\|handoff\|session\|token] [--since 14d]` | tokens spent (fresh = input + output + cache writes; cache reads apart) with estimated dollars, top handoffs and sessions, and cache efficiency; yours to read, workers cannot |
 | `comebye settings [--host H]` | a host's agent settings: the default kind, the model and thinking level each kind starts with, the allowed kinds (read only for you) |
 | `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
