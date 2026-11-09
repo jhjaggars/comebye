@@ -295,8 +295,10 @@ Treat access to it like SSH access to that machine.
       peer's Serve URL with that login). That is bounded by the script's checks
       above and is no wider than what the peer's account could already do with the
       same credentials.
-  - **Recommended: the release peer is its own OS user** (decided for laharl, where
-    agents run). The marker does not authenticate the hub, so on a host where
+  - **Optional hardening: the release peer is its own OS user.** The simple setup
+    (your own comebye on the host holds the clone) is fine for a single user, and
+    is what the docs start from; this is for when you want the credentials out of
+    your agents' reach. The marker does not authenticate the hub, so on a host where
     agents run as the user that owns the credentials, a forged call to the peer's
     loopback port, or just reading `~/.config/gh`, `~/.ssh` and the clone, gets a
     tag with no click. Run a second comebye there as a dedicated account with its

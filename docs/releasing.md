@@ -104,10 +104,30 @@ A peer finishes a push it started even if the hub stopped waiting, and does one
 tagging at a time. The hub's upgrade gate reads the release build from the same
 peer, so the hub needs neither `gh` nor a clone for it.
 
-### Recommended setup: a dedicated OS user for the release peer
+### Simple setup: your own comebye holds the clone
 
-Run the peer that tags as **its own OS user**, not as the user the agents run
-as. On a host where agents work (laharl), that means a second comebye instance:
+For a single user this is fine. The comebye you already run on a host (say
+laharl) takes the clone and the credentials you already have there, with no
+new account:
+
+- A fresh dedicated clone, say `~/release/comebye`, of
+  `github.com/jhjaggars/comebye` that no agent works in. Leave its git config at
+  the clone defaults; `tools/release/tag --check` should print `ok=1` there.
+- In that comebye's env: `COMEBYE_RELEASE_REPO=<the clone>`, and
+  `COMEBYE_RELEASE_DRY_RUN=true` until you have rehearsed. The host runs with
+  `-hub`, as every peer does. Restart it (agents keep running); the journal
+  says `release: the app may tag releases from <clone> (dry run true)`.
+- On the hub: `COMEBYE_RELEASE_HOST=<that peer's name>` and no
+  `COMEBYE_RELEASE_REPO`.
+
+The cost is the one explained below: an agent running as the same user could
+forge the hub's call or read the credentials. The script's checks still bound
+what a forged call can tag.
+
+### Optional hardening: a dedicated OS user for the release peer
+
+To close that gap, run the peer that tags as **its own OS user**, not as the user
+the agents run as. On a host where agents work (laharl), that means a second comebye instance:
 
 - A dedicated account (say `comebye-release`) with its **own home**: no shared
   `HOME`, and nothing of it readable by the agents' user (mode 700 on the home).
