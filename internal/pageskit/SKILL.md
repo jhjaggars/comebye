@@ -212,3 +212,33 @@ comebye publish page.html --key <your-name>-<subject> --if-version 3   # refuse 
 `comebye whoami` shows your name, and `--key` takes letters, digits, `.`,
 `_` and `-`. Every revision lands on the same link and keeps its version
 history. Put the printed link in your report.
+
+## After you publish: record the delivery, then tidy up
+
+Once your findings are in a page, the notes you wrote on the way are noise
+in the worktree, and they are what keeps the user from removing your session
+in one click. So, in this order:
+
+1. **Record the delivery** with the ids of the pages that hold your work
+   (`publish` prints the link; `comebye pages list --mine` shows the ids):
+
+   ```sh
+   comebye deliver pg_0123456789 [pg_…]
+   comebye deliver pg_0123456789 --not-captured "src/parser.go: a fix the page only describes"
+   ```
+
+   Say what is **not** in a page with `--not-captured` (code, a data file,
+   anything a reader would lose). While you list something, your files and
+   commits stay warnings in the user's removal review. Never claim a page
+   holds work it does not.
+2. **Delete the scratch files that a page now holds** (your notes,
+   `notes/`, `docs/investigations/`, drafts, exported data), but only inside
+   your own worktree, and never code or anything you did not write. Do not
+   leave notes in the worktree in the first place: write the page directly.
+3. Say in your report which pages hold the work and which files, if any, you
+   left on purpose.
+
+Recording a delivery discards nothing. When the coordinator marks you with
+`--discard`, the user's review lists your remaining files and local commits
+as "captured in <page>", and the user confirms the discard (with the exact
+list of what is dropped) once for every delivered session.

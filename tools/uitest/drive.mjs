@@ -2741,6 +2741,88 @@ await check("remove page: Remove all safe (N) asks once, lists the rows, removes
   } finally { await unmockRemovals(); }
 });
 
+// Work captured in Pages: its dirty files and local commits are notes, and one confirmation discards every such row.
+const DV_ITEMS = () => {
+  const mark = { by: "coordinator", at: new Date().toISOString(), discard: true, reason: "published as pages" };
+  const delivered = (id, name, branch, pages, files, commits) => ({
+    id, name, host: "uitest", branch, repo: "webapp", safe: true, coordinator: false, discardable: true, delivered_discard: true,
+    live: { present: false }, mark, checks: { exists: true, primary: false, dirty: true, dirty_files: files.length, unmerged_commits: commits.length, base_used: "origin/main", branch, tip: "tip-" + name,
+      detail: { status: files, commits: commits.map((c, i) => ({ sha: "a1b2c3d4e" + i, subject: c })), unpushed: commits.length } },
+    warnings: [], notes: [`captured in ${pages.map((p) => "\u201c" + p.title + "\u201d").join(", ")}; discarding drops ${files.length} uncommitted files and ${commits.length} unmerged commits`],
+    delivered: { pages, holds: true, files: files.length, file_list: files, commits: commits.length, commit_list: commits.map((c, i) => "a1b2c3d4e" + i + " " + c) } });
+  return [
+    delivered("uitest/w8:p1", "credential-bridge-review", "review/credential-bridge", [{ id: "pg_0123456789", title: "Credential bridge review" }], ["?? notes/", "?? docs/investigations/"], ["docs: investigation notes"]),
+    delivered("uitest/w8:p2", "stt-research", "research/stt", [{ id: "pg_abcdef0123", title: "Speech to text options" }, { id: "pg_abcdef0124", title: "STT benchmark table" }], ["?? notes/stt.md", " M README.md"], ["docs: stt notes", "docs: benchmark numbers"]),
+    { id: "uitest/w8:p3", name: "pr4941-review", host: "uitest", branch: "review/pr4941", repo: "webapp", safe: false, coordinator: false, discardable: true,
+      live: { present: false }, mark, checks: { exists: true, dirty: true, dirty_files: 1, unmerged_commits: 0, tip: "tip-pr", base_used: "origin/main", detail: { status: [" M src/fix.go"], commits: [], unpushed: 0 } },
+      warnings: ["the session says UNSAFE: there is code in src/", "uncommitted changes (1 files): the worktree will be kept"], notes: [],
+      delivered: { pages: [{ id: "pg_0123456790", title: "PR 4941 review" }], holds: false, why: "the session answered UNSAFE after its pages were recorded", files: 0, commits: 0 } },
+    { id: "uitest/w8:p4", name: "tidy-docs", host: "uitest", branch: "docs/tidy", repo: "webapp", safe: true, coordinator: false,
+      live: { present: false }, mark: { by: "coordinator", at: new Date().toISOString() }, checks: { exists: true, primary: false, dirty: false, unmerged_commits: 0, base_used: "origin/main" }, warnings: [], notes: [] },
+  ];
+};
+const reviewFits = () => page.evaluate(() => {
+  const over = [...document.querySelectorAll("#review *")].filter((x) => x.getBoundingClientRect().right > innerWidth + 1 && x.offsetParent);
+  if (over.length || document.documentElement.scrollWidth > innerWidth) throw new Error("wider than the screen: " + (over[0]?.className || over[0]?.tagName));
+});
+await check("remove page: Discard all delivered (N) asks once, lists each item with its Pages and what is dropped, sends each tip, and Remove all safe leaves them alone", async () => {
+  const dialogs0 = nativeDialogs;
+  const posts = [];
+  const items = DV_ITEMS();
+  await page.route(/\/api\/removals$/, (r) => r.fulfill({ json: { removals: items } }));
+  await page.route(/\/api\/removals\/confirm$/, (r) => {
+    const b = JSON.parse(r.request().postData() || "{}");
+    posts.push(b);
+    r.fulfill({ json: { results: b.ids.map((id) => ({ id, ok: true, result: { closed: "workspace", worktree_removed: true, discarded: !!(b.discard || {})[id], branch_deleted: "x" } })) } });
+  });
+  try {
+    for (const w of [1440, 390]) {
+      posts.length = 0;
+      await page.setViewportSize({ width: w, height: w < 500 ? 844 : 900 });
+      await page.goto("about:blank");
+      await page.goto(base + "/#/remove", { waitUntil: "load" });
+      await page.waitForSelector("#rv-list .rv-item", { timeout: 5000 });
+      const row1 = page.locator('#rv-list .rv-item[data-id="uitest/w8:p1"]');
+      const rt = await row1.innerText();
+      if (!/Captured in/.test(rt) || !rt.includes("Credential bridge review") || !rt.includes("docs/investigations") || !rt.includes("docs: investigation notes")) throw new Error("row text: " + rt);
+      if (!(await row1.locator('[data-act="discard"]').count()) || (await row1.locator('[data-act="remove"]').innerText()).trim() !== "Close session only…") throw new Error("row actions");
+      if ((await row1.locator(".rv-list.warn li").count()) !== 0) throw new Error("a delivered row warns");
+      if ((await page.locator('#rv-list .rv-item[data-id="uitest/w8:p3"] .rv-list.warn li').count()) !== 2) throw new Error("the UNSAFE-after row lost its warnings");
+      const b = page.locator("#rv-all-deliv");
+      if (!/^Discard all delivered \(2\)$/.test((await b.innerText()).trim())) throw new Error("label " + (await b.innerText()));
+      if (!/^Remove all safe \(1\)$/.test((await page.locator("#rv-all-safe").innerText()).trim())) throw new Error("Remove all safe must count only tidy-docs: " + (await page.locator("#rv-all-safe").innerText()));
+      await reviewFits();
+      await page.screenshot({ path: `${out}/remove-delivered-${w}.png` });
+      await b.click();
+      const cf = page.locator("#rv-bulk .rv-dconfirm");
+      await cf.waitFor({ timeout: 3000 });
+      const t = await cf.innerText();
+      for (const want of ["2 delivered sessions", "credential-bridge-review", "stt-research", "Credential bridge review", "Speech to text options", "STT benchmark table",
+        "2 uncommitted files", "1 unmerged commit", "docs: stt notes", "cannot be undone"]) if (!t.includes(want)) throw new Error(`confirm lacks "${want}": ${t}`);
+      if (t.includes("pr4941-review") || t.includes("tidy-docs")) throw new Error("confirm lists a row that is not delivered: " + t);
+      if (posts.length) throw new Error("discarded before the confirm");
+      for (const sel of ['#rv-bulk [data-act="bulk-yes"]', '#rv-bulk [data-act="bulk-no"]']) {
+        const g = await geo(sel);
+        if (!g.shown || g.x < 0 || g.x + g.w > w + 0.5 || g.y < 0 || g.y + g.h > (w < 500 ? 844 : 900) + 0.5) throw new Error(`${sel} is not on screen at ${w}: ${JSON.stringify(g)}`);
+      }
+      await reviewFits();
+      await page.screenshot({ path: `${out}/remove-delivered-confirm-${w}.png` });
+      await cf.locator('[data-act="bulk-no"]').click();
+      if (posts.length || (await page.locator("#rv-bulk .rv-dconfirm").count())) throw new Error("Cancel sent a request or left the confirm");
+      await b.click();
+      await page.locator('#rv-bulk [data-act="bulk-yes"]').click();
+      await page.waitForFunction(() => document.querySelectorAll("#rv-list .rv-result.ok").length === 2, null, { timeout: 5000 });
+      if (posts.length !== 1) throw new Error("one request expected: " + JSON.stringify(posts));
+      const body = posts[0];
+      if (JSON.stringify(body.ids.slice().sort()) !== '["uitest/w8:p1","uitest/w8:p2"]' || body.allow_working) throw new Error("body " + JSON.stringify(body));
+      if (body.discard["uitest/w8:p1"] !== "tip-credential-bridge-review" || body.discard["uitest/w8:p2"] !== "tip-stt-research" || Object.keys(body.discard).length !== 2) throw new Error("tips " + JSON.stringify(body.discard));
+      if (!/Discarded the worktree/.test(await page.locator('#rv-list .rv-item[data-id="uitest/w8:p1"] .rv-result').innerText())) throw new Error("no result line");
+      if ((await page.locator('#rv-list .rv-item[data-id="uitest/w8:p3"] .rv-result').count()) !== 0) throw new Error("the UNSAFE-after row was touched");
+    }
+    if (nativeDialogs !== dialogs0) throw new Error("a native dialog opened");
+  } finally { for (const re of [/\/api\/removals$/, /\/api\/removals\/confirm$/]) await page.unroute(re); }
+});
+
 // The prompt bar and the keybar keep one row at every width (a long placeholder is cut, not wrapped). run.sh runs this in both colour schemes.
 await check("prompt bar: one row at 390, 1100, 1280, 1440 and 2000, for both placeholders, with the hint on one line", async () => {
   for (const w of [390, 1100, 1280, 1440, 2000]) {

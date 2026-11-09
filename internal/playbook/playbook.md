@@ -53,7 +53,8 @@ with the matches listed.
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery). If the user has text in the agent's input box, nothing is typed over it: a plain prompt is held on the queue automatically (`held` in `comebye queue`) and sent once the box has been empty for 5 s |
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
-| `comebye mark AGENT --reason R [--discard] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer) |
+| `comebye mark AGENT --reason R [--discard [--delivered PAGE,…]] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer); `--delivered` also records the pages that hold the work |
+| `comebye deliver [AGENT] PAGE… [--not-captured TEXT]` | record the pages (`pg_…`) that hold a finished agent's work (yours if no AGENT); with `mark --discard` its notes and docs show as captured in the review |
 | `comebye unmark AGENT` | withdraw that proposal |
 | `comebye sweep [--dry-run] [--notify]` | find finished workers on every host, check each on its own host and mark the ones with nothing to lose; lists the rest with why |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
@@ -330,6 +331,23 @@ The app then shows the user exactly what would be lost (commits, files, the
 branch) and, only if they confirm, removes the worktree anyway and deletes
 the branch. Propose a discard only when the user asked for it or agreed;
 otherwise mark normally and let them choose.
+
+**Work that is already in a page.** A review, research or plan worker whose
+write-up is a published page does not need its worktree: the notes and local
+docs commits it leaves would only block the user's removal review. Tell such
+workers in the brief to publish the page, run `comebye deliver PAGE…`
+(naming anything the page does *not* hold with `--not-captured`) and delete
+their own scratch files. Then mark the session with
+`comebye mark AGENT --discard --reason "findings are in <page title>"`
+(or `--delivered pg_…` yourself, when the worker is gone or did not record
+it: the pages must be the worker's, or filed under its handoff by you or the
+user). The removal review then lists the files and commits as "captured in
+<page>; discarding drops …", and the user clears every such session with one
+"Discard all delivered" confirmation that lists what is dropped. It still
+warns, and the user still decides, when the session answered UNSAFE after the
+pages were recorded, when anything was flagged as not captured, when it is
+working, or when a git operation is unfinished. Do not use this for code
+that is meant to land: that is a normal landing.
 
 ## The briefing
 

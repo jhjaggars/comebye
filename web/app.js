@@ -3190,6 +3190,7 @@ function reviewItemHTML(it) {
   const report = it.final_report
     ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary><div class="md"></div></details>` : "";
   const loss = it.discardable && !done ? lossHTML(it) : "";
+  const dd = !!it.delivered_discard && !done;
   let result = "";
   if (res && res.ok) {
     const r = res.result || {};
@@ -3210,6 +3211,11 @@ function reviewItemHTML(it) {
   let actions = "";
   if (done) actions = "";
   else if (cf) actions = reviewConfirmHTML(it, cf);
+  else if (dd) actions = `<div class="rv-actions">
+      <button type="button" class="btn danger" data-act="discard" data-id="${esc(it.id)}"${dis}>Discard work…</button>
+      <button type="button" class="btn" data-act="remove" data-id="${esc(it.id)}"${dis}>Close session only…</button>
+      <button type="button" class="btn" data-act="unmark" data-id="${esc(it.id)}"${dis}>Keep</button>
+    </div>`;
   else actions = `<div class="rv-actions">
       <button type="button" class="btn go" data-act="remove" data-id="${esc(it.id)}"${dis}>${it.safe ? "Remove" : "Remove anyway…"}</button>
       ${it.discardable ? `<button type="button" class="btn danger" data-act="discard" data-id="${esc(it.id)}"${dis}>Discard work…</button>` : ""}
@@ -3236,6 +3242,9 @@ function reviewConfirmHTML(it, cf) {
     const c = it.checks || {};
     body = `<p>Discard ${name}? This closes the session, removes ${esc(c.path || "its worktree")} and throws away the work listed above. This cannot be undone.</p>`;
     yes = "Discard work";
+  } else if (it.delivered_discard) {
+    body = `<p>Close ${name} but keep its worktree? Its notes and commits stay on disk; only the session closes.</p>`;
+    yes = "Close session";
   } else if (it.safe && !(it.warnings || []).length) {
     body = `<p>Remove the worktree for ${name}? The branch stays.</p>`;
     yes = "Remove";
@@ -3248,6 +3257,23 @@ function reviewConfirmHTML(it, cf) {
   return `<div class="rv-confirm" role="group" aria-label="Confirm">${body}<div class="rv-actions">
     <button type="button" class="btn ${cf.kind === "discard" ? "danger" : "go"}" data-act="confirm-yes" data-id="${esc(it.id)}">${yes}</button>
     <button type="button" class="btn" data-act="confirm-no" data-id="${esc(it.id)}">Cancel</button></div></div>`;
+}
+
+// deliveredLinks names the Pages that capture an item's work, each a link to
+// the Pages screen (page titles are agent text, escaped).
+function deliveredLinks(it) {
+  const pages = (it.delivered && it.delivered.pages) || [];
+  return pages.map((p) => `<a class="rv-page" href="${pageHash(p.id)}">${esc(p.title || p.id)}</a>`).join(", ") || "a page";
+}
+
+// deliveredDrops is one line of what a delivered item's discard throws away.
+function deliveredDrops(it) {
+  const d = it.delivered || {};
+  const bits = [];
+  const some = (list, n) => list.slice(0, 4).map((x) => `<code>${esc(x)}</code>`).join(", ") + (n > 4 ? ", …" : "");
+  if (d.files) bits.push(`${d.files} uncommitted file${d.files === 1 ? "" : "s"} (${some(d.file_list || [], d.files)})`);
+  if (d.commits) bits.push(`${d.commits} unmerged commit${d.commits === 1 ? "" : "s"} (${some((d.commit_list || []).map((c) => c.replace(/^[0-9a-f]+ /, "")), d.commits)})`);
+  return bits.join(" and ") || "nothing";
 }
 
 // lossHTML lists what discarding a session's worktree would throw away:
@@ -3272,7 +3298,8 @@ function lossHTML(it) {
       (files.length > 8 ? `<li>… and more</li>` : "") + "</ul></li>");
   }
   if (c.branch) rows.push(`<li>the branch <code>${esc(c.branch)}</code></li>`);
-  const proposed = it.mark && it.mark.discard ? '<div class="rv-loss-h">Proposed: discard this work</div>' : '<div class="rv-loss-h">Discarding would delete</div>';
+  let proposed = it.mark && it.mark.discard ? '<div class="rv-loss-h">Proposed: discard this work</div>' : '<div class="rv-loss-h">Discarding would delete</div>';
+  if (it.delivered_discard) proposed = `<div class="rv-loss-h">Captured in ${deliveredLinks(it)}. Discarding drops</div>`;
   return `<div class="rv-loss">${proposed}<ul>${rows.join("")}</ul></div>`;
 }
 
@@ -3291,12 +3318,18 @@ function renderReview() {
 // The select-all bar: it counts the selection and removes the safe rows in it.
 function reviewOpenIds() { return review.items.filter((it) => !reviewDone(it)).map((it) => it.id); }
 function reviewBulkIds() {
-  return review.items.filter((it) => review.sel.has(it.id) && it.safe && !it.coordinator && !reviewDone(it)).map((it) => it.id);
+  return review.items.filter((it) => review.sel.has(it.id) && it.safe && !it.delivered_discard && !it.coordinator && !reviewDone(it)).map((it) => it.id);
 }
 
 // Every row a removal would fully clean up: landed or merged, clean, nothing unpushed (it.safe), and not a coordinator.
 function reviewSafeIds() {
-  return review.items.filter((it) => it.safe && !it.coordinator && !reviewDone(it)).map((it) => it.id);
+  return review.items.filter((it) => it.safe && !it.delivered_discard && !it.coordinator && !reviewDone(it)).map((it) => it.id);
+}
+
+// Every row whose work is captured in Pages and that has nothing else against it: one confirmation discards them
+// all. A plain removal would keep their worktrees, so they are not in "Remove all safe".
+function reviewDeliveredIds() {
+  return review.items.filter((it) => it.safe && it.delivered_discard && !it.coordinator && !reviewDone(it) && it.checks && it.checks.tip).map((it) => it.id);
 }
 
 function renderReviewBulk() {
@@ -3310,18 +3343,25 @@ function renderReviewBulk() {
   const cf = review.confirm && review.confirm.kind === "bulk" ? review.confirm : null;
   const skipped = sel - safe;
   const allSafe = reviewSafeIds();
-  const left = open.length - allSafe.length;
+  const deliv = reviewDeliveredIds();
+  const left = open.length - allSafe.length - deliv.length;
   const nm = (id) => { const it = review.items.find((x) => x.id === id); return esc((it && (it.name || it.pane_id)) || id); };
   const names = cf ? cf.ids.map((id) => `<li>${nm(id)}</li>`).join("") : "";
   const why = cf && cf.all
     ? (left ? ` ${left} not safe (uncommitted or unmerged work, or a coordinator) left alone, still in the list.` : "")
     : (skipped ? ` ${skipped} selected with work to keep or a coordinator are left for Remove anyway… in their rows.` : "");
+  const dcf = cf && cf.discard;
+  const dlist = dcf ? cf.ids.map((id) => review.items.find((x) => x.id === id)).filter(Boolean).map((it) =>
+    `<li><b>${esc(it.name || it.pane_id || it.id)}</b>${it.branch ? ` <code>${esc(it.branch)}</code>` : ""}<br>Captured in ${deliveredLinks(it)}<br>Drops ${deliveredDrops(it)}</li>`).join("") : "";
   bar.innerHTML = `<label><input type="checkbox" id="rv-selall"${sel === open.length ? " checked" : ""}${dis}> Select all</label>
     <span class="rv-grow">${sel ? `${sel} selected` : `${open.length} ready`}</span>
+    ${cf || !deliv.length ? "" : `<button type="button" class="btn danger" id="rv-all-deliv" data-act="bulk-deliv"${dis}>Discard all delivered (${deliv.length})</button>`}
     ${cf ? "" : `<button type="button" class="btn go" id="rv-all-safe" data-act="bulk-safe"${dis}${allSafe.length ? "" : " disabled"}>Remove all safe (${allSafe.length})</button>
     <button type="button" class="btn go" id="rv-all" data-act="bulk"${dis}${safe ? "" : " disabled"}>${safe ? `Remove selected (${safe})` : "Remove selected"}</button>`}
     ${!cf && left && allSafe.length ? `<div class="rv-note ln-note" style="flex-basis:100%">${left} not safe: left alone (use Remove anyway… in their rows).</div>` : ""}
-    ${cf ? `<div class="rv-confirm" role="group" aria-label="Confirm" style="flex-basis:100%"><p>Remove the worktree${cf.ids.length === 1 ? "" : "s"} of ${cf.ids.length} session${cf.ids.length === 1 ? "" : "s"}? The branches stay.${why}</p><ul>${names}</ul>
+    ${dcf ? `<div class="rv-confirm rv-dconfirm" role="group" aria-label="Confirm discard" style="flex-basis:100%"><p>Discard ${cf.ids.length} delivered session${cf.ids.length === 1 ? "" : "s"}? Each is closed, its worktree removed and its branch deleted. What they found is in the Pages named below; the files and commits listed are dropped for good. This cannot be undone.</p><ul class="rv-dlist">${dlist}</ul>
+      <div class="rv-actions"><button type="button" class="btn danger" data-act="bulk-yes">Discard ${cf.ids.length}</button><button type="button" class="btn" data-act="bulk-no">Cancel</button></div></div>` : ""}
+    ${cf && !dcf ? `<div class="rv-confirm" role="group" aria-label="Confirm" style="flex-basis:100%"><p>Remove the worktree${cf.ids.length === 1 ? "" : "s"} of ${cf.ids.length} session${cf.ids.length === 1 ? "" : "s"}? The branches stay.${why}</p><ul>${names}</ul>
       <div class="rv-actions"><button type="button" class="btn go" data-act="bulk-yes">Remove ${cf.ids.length}</button><button type="button" class="btn" data-act="bulk-no">Cancel</button></div></div>` : ""}`;
 }
 
@@ -3353,10 +3393,20 @@ async function reviewAction(act, id) {
     if (ids.length) { review.confirm = { ids, kind: "bulk", all: true }; renderReview(); }
     return;
   }
+  if (act === "bulk-deliv") {
+    const ids = reviewDeliveredIds();
+    if (ids.length) { review.confirm = { ids, kind: "bulk", discard: true }; renderReview(); }
+    return;
+  }
   if (act === "bulk-no") { review.confirm = null; renderReview(); return; }
   if (act === "bulk-yes") {
     const cf = review.confirm;
-    if (cf && cf.kind === "bulk" && cf.ids.length) confirmRemovals(cf.ids, false);
+    if (cf && cf.kind === "bulk" && cf.discard && cf.ids.length) {
+      // Each item's own reviewed tip: a branch that moved since is refused by the host.
+      const tips = {};
+      for (const id of cf.ids) { const it = review.items.find((x) => x.id === id); if (it && it.checks && it.checks.tip) tips[id] = it.checks.tip; }
+      confirmRemovals(cf.ids.filter((id) => tips[id]), false, [], tips);
+    } else if (cf && cf.kind === "bulk" && cf.ids.length) confirmRemovals(cf.ids, false);
     return;
   }
   const it = review.items.find((x) => x.id === id);
