@@ -72,23 +72,6 @@ func (s *Server) checkRoots() []string {
 	return roots
 }
 
-// pickKind validates an agent kind for this host (default: the one most
-// running agents use).
-// remembered is true when the kind is offered only because it worked
-// before, not because it was found or is running now.
-func (s *Server) pickKind(kind string, running []herdr.AgentInfo) (picked string, remembered bool, _ *launchError) {
-	kinds, rem := s.launchKindsDetail(running)
-	if kind == "" {
-		kind = defaultKind(kinds, running)
-	}
-	for _, k := range kinds {
-		if k == kind {
-			return kind, rem[kind], nil
-		}
-	}
-	return "", false, &launchError{status: http.StatusBadRequest, code: "bad_kind", message: "agent kind " + kind + " is not available on this host"}
-}
-
 var errLaunchDisabled = &launchError{status: http.StatusForbidden, code: "launch_disabled", message: "launching is not available on this host"}
 
 // herdrFailure turns a herdr (or socket) error into a launchError.
@@ -135,6 +118,14 @@ type workerResult struct {
 	PromptError string `json:"prompt_error,omitempty"`
 	// PromptNote says the brief was queued behind a dialog (not an error).
 	PromptNote string `json:"prompt_note,omitempty"`
+	// KindSource says where the kind came from: request, setting (this
+	// host's settings.json), flag (-default-kind) or auto (the old guess).
+	// Model and Thinking are what the agent was started with, a request's
+	// or this host's default; Warnings are things the caller should know.
+	KindSource string   `json:"kind_source,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	Thinking   string   `json:"thinking,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
 }
 
 // handleWorker starts a worker: POST {repo, branch, base?, kind?, name?,
@@ -175,14 +166,11 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 		return nil, &launchError{status: http.StatusBadRequest, code: "bad_branch", message: "branch names are letters, digits, '.', '_', '-' and '/' (no '..', no leading '-' or '.', at most 100)"}
 	}
 	running := s.localAgents()
-	kind, remembered, lerr := s.pickKind(b.Kind, running)
+	choice, lerr := s.chooseAgent(ctx, b.Kind, b.Model, b.Thinking, running)
 	if lerr != nil {
 		return nil, lerr
 	}
-	modelArgs, lerr := s.pickModel(ctx, kind, b.Model, b.Thinking)
-	if lerr != nil {
-		return nil, lerr
-	}
+	kind, remembered, modelArgs := choice.Kind, choice.Remembered, choice.Args
 	name := strings.TrimSpace(b.Name)
 	named := name != ""
 	if named && !agentNameRe.MatchString(name) {
@@ -322,6 +310,7 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 			Name: name, Agent: kind, Status: agent.Status, CWD: opened.Path,
 		},
 		WorkspaceID: opened.WorkspaceID, Worktree: opened.Path, Branch: branch, Base: base, Repo: repo, Reused: reused,
+		KindSource: choice.KindSource, Model: choice.Model, Thinking: choice.Thinking, Warnings: choice.Warnings,
 	}
 	r := strings.NewReplacer("{{worktree}}", opened.Path, "{{base}}", base)
 	prompt := r.Replace(b.Prompt)

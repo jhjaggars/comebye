@@ -75,8 +75,11 @@ type Entry struct {
 	// DisposablePurposes). Its output is the worker's report; the sweep
 	// lists such a worker apart once it has reported, instead of "unmerged".
 	Purpose string `json:"purpose,omitempty"`
-	// Model and Thinking are what the handoff asked for (empty: the
-	// agent's default).
+	// KindSource says where Kind came from: request, setting, flag or auto
+	// (empty on entries from before host settings).
+	KindSource string `json:"kind_source,omitempty"`
+	// Model and Thinking are what the worker was started with: the handoff's
+	// request, else its host's default (empty: the agent's own default).
 	Model    string `json:"model,omitempty"`
 	Thinking string `json:"thinking,omitempty"`
 	AgentID  string `json:"agent_id,omitempty"` // "<host>/<pane>"

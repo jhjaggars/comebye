@@ -206,6 +206,9 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 	if len(segs) >= 3 && segs[0] == "api" && segs[1] == "agents" {
 		segs = append([]string{"api", "hosts", s.fleet.LocalName()}, segs[1:]...)
 	}
+	if len(segs) == 2 && segs[0] == "api" && segs[1] == "settings" { // this host's, not the hub's
+		segs = []string{"api", "hosts", s.fleet.LocalName(), "settings"}
+	}
 	maxBody, timeout := int64(64<<10), 30*time.Second
 	switch {
 	case r.URL.Path == "/api/handoffs" || strings.HasPrefix(r.URL.Path, "/api/handoffs/"):

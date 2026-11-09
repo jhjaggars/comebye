@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,6 +95,8 @@ func main() {
 		allowHosts    = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
 		launchRoots   = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs     = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
+		defaultKind   = flag.String("default-kind", getenv("COMEBYE_DEFAULT_KIND"), "the agent kind a start on this host uses when the request names none (a seed: settings.json, edited in the app or with `comebye settings`, wins); empty guesses from the running agents")
+		allowedKinds  = hostList{getenv("COMEBYE_ALLOWED_KINDS")}
 		archiveDir    = flag.String("archive-dir", getenv("COMEBYE_ARCHIVE_DIR"), "keep a final copy of an agent's transcript here when it is removed (see `comebye archive`); empty disables")
 		archiveS3     = flag.String("archive-s3", getenv("COMEBYE_ARCHIVE_S3"), "keep those copies in this bucket instead: https://HOST/BUCKET (see `comebye archive`)")
 		archiveS3Cr   = flag.String("archive-s3-credentials", getenv("COMEBYE_ARCHIVE_S3_CREDENTIALS"), "mode-0600 file of key_id= and secret_key= lines for -archive-s3")
@@ -115,6 +118,7 @@ func main() {
 		healthAddr    = flag.String("health-addr", getenv("COMEBYE_HEALTH_ADDR"), "also serve /healthz and /readyz (nothing else, no login) on this address, e.g. :8743, for probes that cannot reach the loopback listener; empty (default) serves them on -addr only")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
+	flag.Var(&allowedKinds, "allowed-kinds", "the only agent kinds this host starts (comma-separated, e.g. pi); a seed that settings.json overrides; empty allows every installed kind")
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
 	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
 	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
@@ -416,6 +420,8 @@ func main() {
 		AgentToken:      agentToken,
 		CoordinatorDir:  expandHome(*coordDir),
 		CoordinatorArgs: parseKindArgs(coordArgs),
+		DefaultKind:     checkKind("-default-kind", strings.ToLower(strings.TrimSpace(*defaultKind))),
+		AllowedKinds:    parseKinds("-allowed-kinds", allowedKinds),
 		AllowCap:        allowCap,
 		WhoIs:           localAPI,
 		SelfRegister:    *selfRegister,
@@ -518,6 +524,27 @@ func parseKindArgs(values hostList) map[string][]string {
 		}
 	}
 	return out
+}
+
+// parseKinds turns a comma-separated kind list flag into kinds; one herdr
+// does not know is fatal, like a malformed -coordinator-args.
+func parseKinds(flagName string, values hostList) []string {
+	var out []string
+	for _, v := range values {
+		for _, k := range strings.Split(v, ",") {
+			if k = checkKind(flagName, strings.ToLower(strings.TrimSpace(k))); k != "" && !slices.Contains(out, k) {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
+}
+
+func checkKind(flagName, k string) string {
+	if k != "" && !slices.Contains(herdr.AgentKinds, k) {
+		log.Fatalf("%s: %q is not an agent kind (%s)", flagName, k, strings.Join(herdr.AgentKinds, ", "))
+	}
+	return k
 }
 
 // launchRootList expands the -launch-root values (default ~/code); nil

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -271,6 +272,9 @@ func (s *Server) launchKindsDetail(running []herdr.AgentInfo) (kinds []string, r
 			kinds = append(kinds, k)
 		}
 	}
+	if allowed := s.effective().AllowedKinds; len(allowed) > 0 {
+		kinds = slices.DeleteFunc(kinds, func(k string) bool { return !slices.Contains(allowed, k) })
+	}
 	return kinds, remembered
 }
 
@@ -351,6 +355,22 @@ func (s *Server) handleLaunchOptions(w http.ResponseWriter, r *http.Request) {
 		resp["roots"] = rootDirs
 		resp["kinds"] = kinds
 		resp["default_kind"] = defaultKind(kinds, running)
+		if eff := s.effective(); eff.DefaultKind != "" && slices.Contains(kinds, eff.DefaultKind) {
+			resp["default_kind"] = eff.DefaultKind
+			resp["default_source"] = eff.DefaultSource
+		}
+		if dk, _ := resp["default_kind"].(string); dk != "" {
+			// What a start of that kind uses without a choice: the app preselects it.
+			if ks, ok := s.settings.get().Kinds[dk]; ok {
+				if ks.Model != "" {
+					resp["default_model"] = ks.Model
+				}
+				if ks.Thinking != "" && dk == "pi" {
+					resp["default_thinking"] = ks.Thinking
+				}
+			}
+		}
+		resp["kind_settings"] = s.settings.get().Kinds
 		resp["model_kinds"] = modelKinds // the kinds the app offers a model picker for
 		resp["recent"] = recentDirs(running, roots)
 		if d := s.coordinatorDir(); d != "" {
@@ -507,19 +527,12 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	running := s.localAgents()
-	kinds := s.launchKinds(running)
-	kind := body.Kind
-	if kind == "" {
-		kind = defaultKind(kinds, running)
-	}
-	known := false
-	for _, k := range kinds {
-		known = known || k == kind
-	}
-	if !known {
-		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_kind", "message": "agent kind " + kind + " is not available on this host"})
+	choice, lerr := s.chooseAgent(r.Context(), body.Kind, body.Model, body.Thinking, running)
+	if lerr != nil {
+		writeLaunchError(w, lerr)
 		return
 	}
+	kind := choice.Kind
 	name := strings.TrimSpace(body.Name)
 	named := name != ""
 	if named && !agentNameRe.MatchString(name) {
@@ -556,11 +569,7 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The model comes first: claude's --allowedTools swallows what follows.
-	args, lerr := s.pickModel(ctx, kind, body.Model, body.Thinking)
-	if lerr != nil {
-		writeLaunchError(w, lerr)
-		return
-	}
+	args := choice.Args
 	if body.Coordinator {
 		args = append(append(args, playbook.AgentArgs(kind, name)...), s.cfg.CoordinatorArgs[kind]...)
 		if strings.TrimSpace(body.Prompt) == "" {
@@ -613,11 +622,15 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		},
 		"workspace_id": ws.WorkspaceID,
 	}
-	if body.Model != "" {
-		resp["model"] = strings.TrimSpace(body.Model)
+	resp["kind_source"] = choice.KindSource
+	if len(choice.Warnings) > 0 {
+		resp["warnings"] = choice.Warnings
 	}
-	if body.Thinking != "" {
-		resp["thinking"] = strings.TrimSpace(body.Thinking)
+	if choice.Model != "" {
+		resp["model"] = choice.Model
+	}
+	if choice.Thinking != "" {
+		resp["thinking"] = choice.Thinking
 	}
 	if body.Coordinator {
 		resp["coordinator"] = true

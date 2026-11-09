@@ -125,6 +125,10 @@ type Config struct {
 	// Coordinator preset appends to the preset's own (e.g. pi: --auto,
 	// a flag only some Pi installs have).
 	CoordinatorArgs map[string][]string
+	// DefaultKind and AllowedKinds seed the host settings (-default-kind,
+	// -allowed-kinds): used where settings.json has no value.
+	DefaultKind  string
+	AllowedKinds []string
 	// AllowCap is the app capability that admits a tagged node through
 	// Tailscale Serve (capPeers); WhoIs identifies the callers there.
 	AllowCap string
@@ -199,6 +203,8 @@ type Server struct {
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
+	// settings is this host's settings.json (see settings.go); nil without a state directory.
+	settings *settingsStore
 	// switchGap is the pause between the slash commands of one model
 	// switch (tests shrink it).
 	switchGap time.Duration
@@ -250,6 +256,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
+		s.settings = openSettings(settingsPath(cfg.StateDir))
 	}
 	if cfg.StateDir != "" && !cfg.NoLedger && cfg.Upstream == nil {
 		l, err := openLedger(cfg.StateDir)
@@ -348,6 +355,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/launch/options", s.auth(s.handleLaunchOptions))
 	s.mux.HandleFunc("GET /api/launch/dirs", s.auth(s.handleLaunchDirs))
 	s.mux.HandleFunc("GET /api/models", s.authAgent(s.handleModels))
+	// Host settings: read by the user, a coordinator (any host) and a tagged
+	// node (its own host); written by the user alone.
+	s.mux.HandleFunc("GET /api/settings", s.authWorker(s.settingsGuard(s.handleGetSettings)))
+	s.mux.HandleFunc("PUT /api/settings", s.auth(s.handlePutSettings))
+	s.mux.HandleFunc("GET /api/hosts/{host}/settings", s.authWorker(s.settingsGuard(s.onHostLaunch("settings", s.handleGetSettings))))
+	s.mux.HandleFunc("PUT /api/hosts/{host}/settings", s.auth(s.onHostLaunch("settings-set", s.handlePutSettings)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/models", s.authAgent(s.onHostLaunch("models", s.handleModels)))
 	s.mux.HandleFunc("POST /api/launch", s.auth(s.handleLaunch))
 	s.mux.HandleFunc("GET /api/hosts/{host}/launch/options", s.auth(s.onHostLaunch("launch-options", s.handleLaunchOptions)))

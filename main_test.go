@@ -198,3 +198,13 @@ func TestReleaseDeployCmd(t *testing.T) {
 		}
 	}
 }
+
+func TestParseKinds(t *testing.T) {
+	got := parseKinds("-allowed-kinds", hostList{"pi, Claude", "pi", " "})
+	if strings.Join(got, ",") != "pi,claude" {
+		t.Fatalf("parseKinds = %v", got)
+	}
+	if parseKinds("-allowed-kinds", nil) != nil || checkKind("-default-kind", "") != "" {
+		t.Fatal("empty values are no kinds")
+	}
+}

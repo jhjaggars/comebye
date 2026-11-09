@@ -532,6 +532,12 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 	e.Repo, e.RepoName, e.Base, e.Kind = res.Repo, filepath.Base(res.Repo), res.Base, res.Agent.Agent
 	e.AgentID, e.PaneID, e.AgentName = res.Agent.ID, res.Agent.PaneID, res.Agent.Name
 	e.WorkspaceID, e.Worktree, e.Reused = res.WorkspaceID, res.Worktree, res.Reused
+	// What the host started the agent with (a request's values or its own
+	// defaults); a host too old to say leaves what was asked for.
+	e.KindSource = res.KindSource
+	if res.KindSource != "" {
+		e.Model, e.Thinking = res.Model, res.Thinking
+	}
 	if res.PromptError != "" {
 		e.Error = res.PromptError
 	}

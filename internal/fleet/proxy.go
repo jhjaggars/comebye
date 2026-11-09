@@ -62,7 +62,11 @@ var hostProxyOps = map[string]struct {
 }{
 	"launch-options": {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "launch", "options"}, false},
 	"models":         {proxyOp{method: http.MethodGet, query: []string{"kind"}, timeout: 30 * time.Second}, []string{"api", "models"}, false},
-	"launch-dirs":    {proxyOp{method: http.MethodGet, query: []string{"path"}, timeout: 20 * time.Second}, []string{"api", "launch", "dirs"}, false},
+	// A host's settings (settings.json there): read by the user and by a
+	// coordinator, written by the user alone (the hub's PUT route is user-only).
+	"settings":     {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "settings"}, false},
+	"settings-set": {proxyOp{method: http.MethodPut, maxBody: 16 << 10, timeout: 20 * time.Second}, []string{"api", "settings"}, false},
+	"launch-dirs":  {proxyOp{method: http.MethodGet, query: []string{"path"}, timeout: 20 * time.Second}, []string{"api", "launch", "dirs"}, false},
 	// launch: a prompt of up to 1 MB plus the directory and name; the
 	// peer waits up to 90s for the agent to start.
 	"launch": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 100 * time.Second}, []string{"api", "launch"}, false},
@@ -203,7 +207,7 @@ func (f *Fleet) CallAgent(ctx context.Context, host, target, op string, body []b
 // addresses in order.
 func (f *Fleet) call(ctx context.Context, p *peer, spec proxyOp, segments []string, query url.Values, body []byte) (int, []byte, error) {
 	host := p.name
-	post := spec.method == http.MethodPost
+	post := spec.method == http.MethodPost || spec.method == http.MethodPut
 	if post {
 		if int64(len(body)) > spec.maxBody || !json.Valid(body) {
 			return 0, nil, errors.New("invalid body")
@@ -288,7 +292,7 @@ func (f *Fleet) forward(w http.ResponseWriter, r *http.Request, p *peer, segment
 	}
 
 	var posted []byte
-	post := spec.method == http.MethodPost
+	post := spec.method == http.MethodPost || spec.method == http.MethodPut
 	if post {
 		b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, spec.maxBody))
 		if err != nil || !json.Valid(b) {
