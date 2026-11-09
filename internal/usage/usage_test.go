@@ -399,7 +399,7 @@ func TestGatherSnapshots(t *testing.T) {
 	hub := newStore(t)
 	hub.host = "hub"
 
-	snap := peer.SnapshotSince(0)
+	snap := peer.SnapshotSince(0, 0)
 	if len(snap.Sessions) != 1 || snap.Sessions[0].L != (Labels{}) {
 		t.Fatalf("snapshot %+v", snap)
 	}
@@ -411,13 +411,13 @@ func TestGatherSnapshots(t *testing.T) {
 		t.Fatalf("cursor %d %q", since, epoch)
 	}
 	// Nothing changed: nothing comes.
-	if again := peer.SnapshotSince(since); len(again.Sessions) != 0 {
+	if again := peer.SnapshotSince(since, 0); len(again.Sessions) != 0 {
 		t.Fatalf("again %+v", again)
 	}
 	// Growth: the whole session comes again and replaces the hub's copy (no double count).
 	appendTo(t, f, cl("b", "2026-11-05T10:05:00Z", "m", 2, 2, 0, 0, ""))
 	scan(t, peer, Source{"claude", dir})
-	hub.Merge("peer1", peer.SnapshotSince(since))
+	hub.Merge("peer1", peer.SnapshotSince(since, 0))
 	hub.mu.Lock()
 	s := hub.sessions["peer1/claude/s"]
 	hub.mu.Unlock()
@@ -425,11 +425,11 @@ func TestGatherSnapshots(t *testing.T) {
 		t.Fatalf("hub copy %+v", s)
 	}
 	// Labels the hub gave survive the next merge, and a guess does not replace a ledger label.
-	hub.Relabel(func(host string, s *Session) Labels { return Labels{Project: "p", Src: SrcLedger} })
+	hub.Relabel(func(host, home string, s *Session) Labels { return Labels{Project: "p", Src: SrcLedger} })
 	appendTo(t, f, cl("c", "2026-11-05T10:06:00Z", "m", 1, 1, 0, 0, ""))
 	scan(t, peer, Source{"claude", dir})
-	hub.Merge("peer1", peer.SnapshotSince(0))
-	hub.Relabel(func(host string, s *Session) Labels { return Labels{Project: "guess"} })
+	hub.Merge("peer1", peer.SnapshotSince(0, 0))
+	hub.Relabel(func(host, home string, s *Session) Labels { return Labels{Project: "guess"} })
 	hub.mu.Lock()
 	got := hub.sessions["peer1/claude/s"].L
 	hub.mu.Unlock()

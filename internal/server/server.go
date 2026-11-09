@@ -146,6 +146,8 @@ type Config struct {
 	SelfRegister bool
 	// HubOnly: this hub hosts no agents (no herdr); /healthz says so.
 	HubOnly bool
+	// Usage configures token counting (usage.go).
+	Usage UsageConfig
 	// LockErr, when set, is the single-hub lock's health (hublock.Lock.Err);
 	// /readyz fails while it returns an error.
 	LockErr func() error
@@ -237,6 +239,8 @@ type Server struct {
 	coord      coord
 	// typing holds messages for panes whose user is typing (typing.go).
 	typing *typingTracker
+	// usage counts tokens (usage.go); nil when off.
+	usage *usageState
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -319,6 +323,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.recoverTagging()
 		}
 	}
+	s.initUsage()
 	if manager != nil {
 		manager.Dispatcher().Quiet = s.quietAgent
 		s.planPush = manager.Dispatcher().NotifyPlan
@@ -345,6 +350,7 @@ func (s *Server) routes() {
 	// node) or authAgentLocal; everything wrapped in auth is the user's alone
 	// (see agentauth.go).
 	s.recallRoutes()
+	s.usageRoutes()
 	s.mux.HandleFunc("GET /api/version", s.authAgentLocal(s.handleVersion))
 	s.mux.HandleFunc("GET /api/stt", s.auth(s.handleSTT))
 	s.mux.HandleFunc("GET /stt/{version}/{path...}", s.serveSTT)

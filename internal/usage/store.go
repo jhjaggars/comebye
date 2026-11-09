@@ -201,30 +201,44 @@ type Snapshot struct {
 	Host     string     `json:"host"`
 	Home     string     `json:"home,omitempty"`
 	Cursor   int64      `json:"cursor"` // pass back as since
+	More     bool       `json:"more,omitempty"`
 	Sessions []*Session `json:"sessions"`
 }
 
-// SnapshotSince returns the local host's sessions changed after since.
-func (st *Store) SnapshotSince(since int64) Snapshot {
+// SnapshotSince returns the local host's sessions changed after since,
+// oldest change first, at most limit of them (and about maxRows rows). More
+// says there are further ones: ask again from Cursor.
+func (st *Store) SnapshotSince(since int64, limit int) Snapshot {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	out := Snapshot{Epoch: st.epoch, Host: st.host, Home: st.home, Cursor: since}
+	var all []*Session
 	for _, s := range st.sessions {
-		if s.Host != st.host || s.Upd <= since {
-			continue
+		if s.Host == st.host && s.Upd > since {
+			all = append(all, s)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Upd < all[j].Upd })
+	rows := 0
+	for i, s := range all {
+		if (limit > 0 && len(out.Sessions) >= limit) || (rows > maxSnapshotRows && len(out.Sessions) > 0) {
+			out.More = len(all) > i
+			break
 		}
 		cp := *s
 		cp.Rows = append([]Row(nil), s.Rows...)
 		cp.idx = nil
 		cp.L = Labels{} // labels are the hub's
 		out.Sessions = append(out.Sessions, &cp)
-		if s.Upd > out.Cursor {
-			out.Cursor = s.Upd
-		}
+		rows += len(s.Rows)
+		out.Cursor = s.Upd
 	}
-	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].Upd < out.Sessions[j].Upd })
 	return out
 }
+
+// maxSnapshotRows bounds one answer to a gathering hub (a peer's answer is
+// read up to a few MiB).
+const maxSnapshotRows = 20000
 
 // PeerCursor is where to resume gathering from host, and the epoch that
 // cursor belongs to.
@@ -304,6 +318,10 @@ func (st *Store) Peers() map[string]PeerState {
 func (st *Store) HomeOf(host string) string {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	return st.homeLocked(host)
+}
+
+func (st *Store) homeLocked(host string) string {
 	if host == st.host {
 		return st.home
 	}
@@ -318,7 +336,7 @@ func (st *Store) SetHome(h string) { st.mu.Lock(); st.home = h; st.mu.Unlock() }
 
 // Relabel gives each session of the last 30 days the labels fn computes,
 // except that a ledger-derived label is never replaced by a guess.
-func (st *Store) Relabel(fn func(host string, s *Session) Labels) {
+func (st *Store) Relabel(fn func(host, home string, s *Session) Labels) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	cutoff := st.now().Add(-30 * 24 * time.Hour).Unix()
@@ -326,7 +344,7 @@ func (st *Store) Relabel(fn func(host string, s *Session) Labels) {
 		if s.Last < cutoff {
 			continue
 		}
-		n := fn(s.Host, s)
+		n := fn(s.Host, st.homeLocked(s.Host), s)
 		if n.Src < s.L.Src || n == s.L {
 			continue
 		}
@@ -360,3 +378,6 @@ func (st *Store) Prune() int {
 	}
 	return n
 }
+
+// Epoch identifies this store; a hub resets its cursor when it changes.
+func (st *Store) Epoch() string { return st.epoch }

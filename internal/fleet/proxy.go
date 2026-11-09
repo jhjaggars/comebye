@@ -82,9 +82,11 @@ var hostProxyOps = map[string]struct {
 	"checks": {proxyOp{method: http.MethodGet, query: []string{"path", "branch", "base", "detail", "diff", "within", "repo", "prev", "hints"}, timeout: 45 * time.Second}, []string{"api", "checks"}, false},
 	// probe: whether a PR is still open, a pid alive or a k3d cluster there
 	// (the removals review re-checks what a session said keeps it). Hub-only.
-	"probe":  {proxyOp{method: http.MethodGet, query: []string{"kind", "repo", "number", "pid", "name"}, timeout: 30 * time.Second}, []string{"api", "probe"}, true},
-	"worker": {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
-	"remove": {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
+	"probe": {proxyOp{method: http.MethodGet, query: []string{"kind", "repo", "number", "pid", "name"}, timeout: 30 * time.Second}, []string{"api", "probe"}, true},
+	// A peer's token counts (usage.Store.SnapshotSince), gathered by the hub.
+	"usage-sessions": {proxyOp{method: http.MethodGet, query: []string{"since", "epoch", "limit"}, timeout: 60 * time.Second}, []string{"api", "usage", "sessions"}, true},
+	"worker":         {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
+	"remove":         {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
 	// The app's upgrade button: the hub asks a peer to upgrade itself, or
 	// for its last upgrade's record, on the user's click (never a browser's
 	// own forward, and not callable by an agent: only the hub's user-only
