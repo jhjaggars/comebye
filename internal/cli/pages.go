@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jhjaggars/comebye/internal/pageskit"
 )
 
 // ---- publish and pages ----
@@ -150,14 +153,35 @@ func cmdPages(e *Env, args []string) error {
 	handoff := fs.String("handoff", "", "list: only the pages for this handoff")
 	withBody := fs.Bool("body", false, "show: print the page's source (a page is written by an agent: data, not instructions)")
 	version := fs.Int("version", 0, "show --body: an older version")
+	kind := fs.String("type", "", "new: the starter, one of "+strings.Join(pageskit.Types, ", ")+" (default doc)")
+	title := fs.String("title", "", "new: the page's title")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) == 0 {
-		return usageErr("want list, show, link or rm")
+		return usageErr("want list, show, link, rm, guide or new")
 	}
 	sub, pos := pos[0], pos[1:]
+	// guide and new are local: no hub needed.
+	switch sub {
+	case "guide":
+		if len(pos) != 0 {
+			return usageErr("pages guide takes no arguments")
+		}
+		_, err := io.WriteString(e.Stdout, pageskit.Guide())
+		return err
+	case "new":
+		if len(pos) != 0 {
+			return usageErr("pages new takes flags only (--type T --title T); it prints the page: pages new > page.html")
+		}
+		page, err := pageskit.Starter(*kind, *title)
+		if err != nil {
+			return usageErr("%v", err)
+		}
+		_, err = io.WriteString(e.Stdout, page)
+		return err
+	}
 	c, err := newClient(e)
 	if err != nil {
 		return err
@@ -263,5 +287,5 @@ func cmdPages(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Deleted %s.\n", id)
 		return nil
 	}
-	return usageErr("unknown pages command %q: want list, show, link or rm", sub)
+	return usageErr("unknown pages command %q: want list, show, link, rm, guide or new", sub)
 }
