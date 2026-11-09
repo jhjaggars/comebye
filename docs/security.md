@@ -414,6 +414,15 @@ would be you. So a page never runs as the app:
   coordinator updates or deletes a page; a tagged node reaches only its own
   host's pages; reading a page is the user's alone (`/p/`), and an agent reads
   a body back only for its own host's pages unless it is a coordinator.
+- **The theme message.** A page cannot read the app's theme, so the app sends
+  it: after the frame loads, and again whenever the theme changes, it posts
+  `{type: "comebye-theme", scheme: "light" | "dark", tokens: {"--bg": "#101218", ...}}`
+  into the frame (`postMessage` with target origin `"*"`, because the frame's
+  origin is opaque). It carries colours only (the theme's token names and
+  values, as in `web/themes.js`) and nothing about you, the app or the hub. A
+  page that does not listen ignores it; one that does should apply only known
+  `--` names with colour values and never evaluate the data (the page template
+  does exactly that, and falls back to `prefers-color-scheme` without it).
 - **Markdown** is rendered in the sandboxed shell with DOMPurify: raw HTML is
   shown as text, no images, links shown as text with their URL.
 - **Limits:** 5 MiB a version, 10 versions a page, 500 MiB and 1000 pages in
