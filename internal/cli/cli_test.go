@@ -363,7 +363,7 @@ func TestPromptMarkBrief(t *testing.T) {
 	if code := run(e, "sweep", "--dry-run"); code != 0 || !strings.Contains(out.String(), "Work delivered in the report; branch has local commits (not marked; mark with --mark-delivered) (1)") || !strings.Contains(out.String(), "Gone: nothing left to lose or check (would mark) (1)") || !strings.Contains(out.String(), "(no handoff)") || !strings.Contains(out.String(), "Would mark ready to remove (dry run) (1)") || !strings.Contains(out.String(), "pushed but not merged") || strings.Contains(out.String(), "confirms removal") {
 		t.Fatalf("sweep --dry-run: %d %s %s", code, out, errb)
 	}
-	if b := f.find("POST", "/api/sweep").body; b != `{"dry_run":true,"idle_after":"","mark_delivered":false,"mark_gone":false,"notify":false}` {
+	if b := f.find("POST", "/api/sweep").body; b != `{"dry_run":true,"idle_after":"","mark_delivered":false,"notify":false}` {
 		t.Fatalf("sweep body %s", b)
 	}
 	out.Reset()
