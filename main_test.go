@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,6 +173,28 @@ func TestReleaseHostMustBeAKnownPeer(t *testing.T) {
 	for host, wantErr := range map[string]bool{"laharl": false, "laharlx": true, "desk": true, "Bad Name": true, "": true} {
 		if err := releaseHostError(host, "desk", known); (err != nil) != wantErr {
 			t.Errorf("%q: err = %v, want error %v", host, err, wantErr)
+		}
+	}
+}
+
+func TestReleaseDeployCmd(t *testing.T) {
+	for _, c := range []struct {
+		name, spec, repo, host string
+		sim                    bool
+		want                   []string
+		err                    string
+	}{
+		{"unset", "", "", "", false, nil, ""},
+		{"ok", "/opt/bump.sh --fast", "/r", "", false, []string{"/opt/bump.sh", "--fast"}, ""},
+		{"relative program", "bump.sh", "/r", "", false, nil, "absolute"},
+		{"no clone", "/opt/bump.sh", "", "", false, nil, "-release-repo"},
+		{"hub that tags through a peer", "/opt/bump.sh", "", "laharl", false, nil, "-release-repo"},
+		{"both", "/opt/bump.sh", "/r", "laharl", false, nil, "-release-host"},
+		{"simulate", "/opt/bump.sh", "/r", "", true, nil, "simulate"},
+	} {
+		got, err := releaseDeployCmd(c.spec, c.repo, c.host, c.sim)
+		if (err == nil) != (c.err == "") || (err != nil && !strings.Contains(err.Error(), c.err)) || strings.Join(got, " ") != strings.Join(c.want, " ") {
+			t.Errorf("%s: got %v, %v; want %v, %q", c.name, got, err, c.want, c.err)
 		}
 	}
 }

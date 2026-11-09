@@ -101,6 +101,8 @@ func main() {
 		releaseHost   = flag.String("release-host", getenv("COMEBYE_RELEASE_HOST"), "on the hub: the peer whose -release-repo the \"Approve release\" button tags through (the hub asks it to check, tag and report the build; it keeps no clone or credentials of its own); not with -release-repo")
 		releaseUp     = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
 		releaseDry    = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
+		releaseDeploy = flag.String("release-deploy-cmd", getenv("COMEBYE_RELEASE_DEPLOY_CMD"), "on the host that owns -release-repo: a command (absolute program path and arguments, no shell) that the release item's second button runs once the build passed, with the version appended as the last argument and in COMEBYE_RELEASE_VERSION. Approve release never runs it. For example a script that commits the version to a deployment repository; empty: no such button")
+		releaseDepLbl = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
 		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on a question past -auto-todo-question-after, filed as a suggestion to keep or dismiss); off for none")
 		autoBlocked   = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
@@ -343,13 +345,17 @@ func main() {
 	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseHost, *releaseUp, *releaseSim, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != ""); err != nil {
 		log.Fatal(err)
 	}
+	deployCmd, err := releaseDeployCmd(*releaseDeploy, *releaseRepo, *releaseHost, *releaseSim)
+	if err != nil {
+		log.Fatal(err)
+	}
 	var relCfg server.ReleaseConfig
 	switch {
 	case *releaseSim:
 		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, Simulated: true, Runner: server.SimulatedUpgrade{}}
 		log.Printf("release: SIMULATED (canned results, nothing runs)")
 	default:
-		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry}
+		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry, DeployCmd: deployCmd, DeployLabel: strings.TrimSpace(*releaseDepLbl)}
 		if h := strings.TrimSpace(*releaseHost); h != "" {
 			// The hub asks that peer to tag; it must be a peer we know now.
 			if err := releaseHostError(h, *hostName, fl.HasPeer); err != nil {
@@ -706,6 +712,28 @@ func releaseFlagError(noAuth bool, repo, host string, upgrade, simulate bool, ad
 		return errors.New("-release-simulate is for demos and tests: not with -release-repo, -release-host or -release-upgrade, and only on a loopback address")
 	}
 	return nil
+}
+
+// releaseDeployCmd parses -release-deploy-cmd. The command runs as this
+// server's user on the user's click, so it must name its program by absolute
+// path (no PATH lookup), runs without a shell, and belongs on the host that
+// owns the release clone: not on a hub that tags through -release-host (the
+// peer holds it), and not with -release-simulate.
+func releaseDeployCmd(spec, repo, host string, simulate bool) ([]string, error) {
+	argv := strings.Fields(spec)
+	switch {
+	case len(argv) == 0:
+		return nil, nil
+	case strings.TrimSpace(repo) == "":
+		return nil, errors.New("-release-deploy-cmd goes with -release-repo: the host that tags runs the deploy (on a hub that uses -release-host, set it on that peer)")
+	case strings.TrimSpace(host) != "":
+		return nil, errors.New("-release-deploy-cmd and -release-host together: the peer that owns the clone runs the deploy; set it there")
+	case simulate:
+		return nil, errors.New("-release-deploy-cmd cannot be combined with -release-simulate")
+	case !filepath.IsAbs(argv[0]):
+		return nil, fmt.Errorf("-release-deploy-cmd: the program %q must be an absolute path", argv[0])
+	}
+	return argv, nil
 }
 
 // releaseHostError refuses a -release-host that is not a peer this hub knows

@@ -87,6 +87,10 @@ var hostProxyOps = map[string]struct {
 	"release-check": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "release", "check"}, true},
 	"release-tag":   {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 200 * time.Second}, []string{"api", "release", "tag"}, true},
 	"release-build": {proxyOp{method: http.MethodGet, query: []string{"version"}, timeout: 40 * time.Second}, []string{"api", "release", "build"}, true},
+	// The deploy button's command, on the same peer: start it (it returns at
+	// once; the command runs on in the background) and read its last record.
+	"release-deploy":        {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 50 * time.Second}, []string{"api", "release", "deploy"}, true},
+	"release-deploy-status": {proxyOp{method: http.MethodGet, timeout: 10 * time.Second}, []string{"api", "release", "deploy"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

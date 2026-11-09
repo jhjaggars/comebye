@@ -743,6 +743,8 @@ to the home screen again.
 | `-release-repo` | `COMEBYE_RELEASE_REPO` | empty (off) | On the hub: the comebye checkout the To do page's **Approve release** button tags from, using this server's own `git` and `gh` credentials. See [Releasing](releasing.md#from-the-app). |
 | `-release-upgrade` | `COMEBYE_RELEASE_UPGRADE` | `false` | Let the To do page's **Upgrade** button run `comebye upgrade --version` on this host (needs `systemd-run`; on a peer it also needs `-hub`, and `-ledger=false` needs `-hub` with it). |
 | `-release-dry-run` | `COMEBYE_RELEASE_DRY_RUN` | `false` | Both buttons do every check and change nothing: no tag, no install. For trying it out. |
+| `-release-deploy-cmd` | `COMEBYE_RELEASE_DEPLOY_CMD` | empty (off) | On the host that owns `-release-repo`: a command (absolute program path and arguments, no shell) that a release item's second button runs once the build passed, with the version appended as the last argument and in `COMEBYE_RELEASE_VERSION`. Approve release never runs it. See [Releasing](releasing.md#deploying-a-release-your-own-command). |
+| `-release-deploy-label` | `COMEBYE_RELEASE_DEPLOY_LABEL` | `Deploy` | The name of that button. |
 | `-worktree-root` | `COMEBYE_WORKTREE_ROOT` | `~/.worktrees` | Where workers get their git worktrees (`<root>/<repo>/<branch>`); also allowed for worktree checks and removal. |
 | `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL (a tagged node uses it too). The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers` and `-hub-mode`. See [Coordinators](agents.md#coordinators). |
 | `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |

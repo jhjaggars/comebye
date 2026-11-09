@@ -97,6 +97,14 @@ type ReleaseConfig struct {
 	// Runner starts an upgrade (default: a transient systemd user unit,
 	// which survives the restart of this service).
 	Runner UpgradeRunner
+	// DeployCmd is the operator's own command (an absolute program path and
+	// its arguments) that the item's second button runs on this host, with
+	// the released version appended as the last argument and in
+	// COMEBYE_RELEASE_VERSION. It belongs on the host that owns the release
+	// clone (Tool); empty: no deploy button. See release_deploy.go.
+	DeployCmd []string
+	// DeployLabel names that button (default "Deploy").
+	DeployLabel string
 }
 
 // UpgradeRunner starts an upgrade run that outlives this server.
@@ -118,6 +126,11 @@ type relState struct {
 	key     []byte
 	// peerTagging: this host, as a release peer, is running a tagging.
 	peerTagging atomic.Bool
+	// deploying: the deploy command is running on this host.
+	deploying atomic.Bool
+	// deployAudited: finished deploys already written to the audit log
+	// (guarded by cmu).
+	deployAudited map[string]bool
 }
 
 type relCached struct {
@@ -129,7 +142,7 @@ type relCached struct {
 func newRelState() *relState {
 	k := make([]byte, 32)
 	_, _ = rand.Read(k)
-	return &relState{checks: map[string]relCached{}, tagging: map[string]bool{}, key: k}
+	return &relState{checks: map[string]relCached{}, tagging: map[string]bool{}, deployAudited: map[string]bool{}, key: k}
 }
 
 // csrf is an HMAC of the caller's login under a key made at start-up. A page
@@ -361,6 +374,17 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 	out["dry_run"] = cfg.DryRun || s.remoteDry() // after the check: the release host reports its mode with it
 	if it.Release.State == relTagged {
 		out["hosts"] = s.relHosts(ctx)
+		if cfg.Tool != nil {
+			// The deploy command lives on the host that owns the clone.
+			dctx, dcancel := context.WithTimeout(ctx, 8*time.Second)
+			if st, err := s.deployStatusFor(dctx); err != nil {
+				out["deploy_error"] = oneLine(err.Error(), 200)
+			} else if st.Enabled {
+				out["deploy"] = st
+				s.settleDeployAudit(st)
+			}
+			dcancel()
+		}
 	}
 	writeJSON(w, out)
 }

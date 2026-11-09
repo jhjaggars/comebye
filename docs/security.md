@@ -279,6 +279,16 @@ Treat access to it like SSH access to that machine.
       its journal; the hub's log records the same event with the peer as its
       host. A peer's dry-run flag is its own. The peer refuses a check while it
       is tagging (they share the clone), and the hub's page does not ask one then.
+    - **Deploying** (`-release-deploy-cmd`, an operator-chosen command on the
+      release host) is a second hub-only op pair, `release-deploy` and
+      `release-deploy-status` (`POST`/`GET /api/release/deploy`), behind the same
+      guard. A request sends only a version (`vMAJOR.MINOR.PATCH`) that is appended
+      to the configured argument list, never a program or a shell string. The peer
+      re-checks that the version's Release build passed before it starts, runs one
+      at a time, and audits `deploy.request`. What the command can do is whatever
+      the operator wired: a deploy-capable credential widens what the release
+      host's user can do from "tag comebye" to "change that deployment", which is a
+      reason to give the release peer its own OS user (below).
     - A tag that went through while its answer was lost is reconciled by the hub:
       an item the user approved, failed, whose tag is on origin at exactly the
       item's commit (read by the peer's `--check`) becomes tagged, with a

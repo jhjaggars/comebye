@@ -104,6 +104,31 @@ A peer finishes a push it started even if the hub stopped waiting, and does one
 tagging at a time. The hub's upgrade gate reads the release build from the same
 peer, so the hub needs neither `gh` nor a clone for it.
 
+## Deploying a release: your own command
+
+Some deployments of comebye are not upgraded by `comebye upgrade` on the host: a
+hub in a container, a binary pinned in a GitOps repository. For those, the release
+host can run **your own command** from a second button on the release item. comebye
+knows nothing about what it does.
+
+- `-release-deploy-cmd '/abs/path/to/script [args...]'` (`COMEBYE_RELEASE_DEPLOY_CMD`)
+  on the host that owns `-release-repo` (the peer, when the hub uses `-release-host`;
+  the hub then needs no setting). The program is named by absolute path and run
+  without a shell; the released version (`vX.Y.Z`) is appended as the last argument
+  and set in `COMEBYE_RELEASE_VERSION` (also `COMEBYE_RELEASE_TODO`, `COMEBYE_RELEASE_BY`).
+  `-release-deploy-label` names the button (default **Deploy**).
+- **Approve release never runs it.** The button appears on a tagged item once the
+  Release workflow has passed, and needs its own confirm naming the version. It is
+  the user's alone, with the same CSRF and user-role rules as the other buttons; the
+  hub asks the release host, which checks the build itself again before it starts.
+- The command may restart the hub that asked for it, so it runs in the background on
+  the release host, one at a time (timeout 10 minutes, the whole process group is
+  killed on timeout). Its verdict and the tail of its output are kept in
+  `<state-dir>/release/deploy.json` and read by the page whenever it asks, also
+  after the hub came back. A run that was cut short by a restart of the release host
+  reads as failed. The audit log gets `deploy.request` and, once seen, `deploy.result`.
+- `-release-dry-run` runs nothing and records a dry run.
+
 ### Simple setup: your own comebye holds the clone
 
 For a single user this is fine. The comebye you already run on a host (say

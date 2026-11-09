@@ -1678,6 +1678,7 @@ function relActive(t, d) {
   if (t.release.state !== "tagged") return false;
   if (!d) return true;
   if (d.build && d.build.state !== "success" && d.build.state !== "failure") return true;
+  if (d.deploy && d.deploy.record && d.deploy.record.state === "running") return true;
   return (d.hosts || []).some((h) => h.record && h.record.state === "running");
 }
 
@@ -1732,6 +1733,42 @@ function relRecordText(h) {
     case "dry_run": return `dry run ${rc.version}: nothing installed${ago}`;
     default: return `${verb} failed${ago}: ${rc.error || ""}`;
   }
+}
+
+function relDeployText(dp, version) {
+  const rc = dp.record;
+  if (!rc) return "";
+  const when = Date.parse(rc.finished || rc.started);
+  const ago = Number.isNaN(when) ? "" : " " + fmtAgo(when) + " ago";
+  const by = rc.by ? " by " + rc.by : "";
+  switch (rc.state) {
+    case "running": return `${rc.version} running${by}…`;
+    case "ok": return `${rc.version} done${by}${ago}`;
+    case "dry_run": return `dry run ${rc.version}: nothing was run${ago}`;
+    default: return `${rc.version} failed${ago}: ${rc.error || ""}`;
+  }
+}
+
+function relDeployHtml(t, r, d, green) {
+  const rl = t.release, dp = d && d.deploy;
+  if (!dp || !dp.enabled) return d && d.deploy_error ? `<div class="rel-note">Deploy status unknown: ${esc(d.deploy_error)}</div>` : "";
+  const label = dp.label || "Deploy";
+  const rc = dp.record;
+  const running = !!(rc && rc.state === "running");
+  const doneHere = !!(rc && rc.version === rl.version && rc.state === "ok");
+  let h = `<div class="rel-sub">${esc(label)}</div><div class="rel-hosts"><div class="rel-host rel-deploy">
+    <span class="rel-hn">${esc(d.release_host || "")}</span><span class="rel-hv">${esc(rl.version)}${doneHere ? " ✓" : ""}</span><span class="rel-hs">${esc(relDeployText(dp, rl.version))}</span>`;
+  if (green && !running && !doneHere) h += `<span class="rel-ha"><button type="button" class="rel-up" data-rel="deploy"${r.busy ? " disabled" : ""}>${esc(label)}</button></span>`;
+  h += `</div></div>`;
+  if (!green) h += `<div class="rel-note">${esc(label)} is offered once the release build has passed. Approve release never runs it.</div>`;
+  if (rc && rc.output) h += `<details class="rel-changes"><summary>Last ${esc(label.toLowerCase())} output</summary><pre>${esc(rc.output)}</pre></details>`;
+  const c = r.confirm;
+  if (c && c.k === "deploy") {
+    h += `<div class="rel-confirm" role="group" aria-label="Confirm the deploy"><div>Run <code>${esc(dp.command || "the deploy command")}</code> on ${esc(d.release_host || "the release host")} for <b>${esc(rl.version)}</b>${dp.dry_run ? " (dry run: nothing will run)" : ""}? This is a separate step from the release: it changes what is running.</div>
+      <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-deploy"${r.busy ? " disabled" : ""}>Confirm: ${esc(label.toLowerCase())} ${esc(rl.version)}</button>
+      <button type="button" data-rel="cancel"${r.busy ? " disabled" : ""}>Cancel</button></div></div>`;
+  }
+  return h;
 }
 
 function relHtml(t) {
@@ -1806,6 +1843,8 @@ function relHtml(t) {
     }
   }
 
+  if (rl.state === "tagged") h += relDeployHtml(t, r, d, !!(d && d.build && d.build.state === "success"));
+
   // Who did what.
   const au = (d && d.audit) || [];
   if (au.length) {
@@ -1842,7 +1881,12 @@ async function relClick(t, act, host) {
     case "approve": r.confirm = { k: "tag" }; break;
     case "up": r.confirm = { k: "up", host, rollback: false }; break;
     case "rollback": r.confirm = { k: "up", host, rollback: true }; break;
+    case "deploy": r.confirm = { k: "deploy" }; break;
     case "cancel": r.confirm = null; break;
+    case "confirm-deploy":
+      if (await relPost(t.id, `/api/release/${encodeURIComponent(t.id)}/deploy`, { version: t.release.version, commit: t.release.commit })) toast("Started.");
+      await loadRelease(t.id, true);
+      return;
     case "confirm-tag":
       if (await relPost(t.id, `/api/release/${encodeURIComponent(t.id)}/approve`, { version: t.release.version, commit: t.release.commit })) toast("Approved. Tagging…");
       todos.loadedAt = 0;

@@ -95,18 +95,18 @@ func TestPeerReleaseOpsAreOnlyEverRegisteredUserOnly(t *testing.T) {
 	}
 	n := 0
 	for _, line := range strings.Split(string(src), "\n") {
-		if strings.Contains(line, ` /api/release/check"`) || strings.Contains(line, ` /api/release/tag"`) || strings.Contains(line, ` /api/release/build"`) {
+		if strings.Contains(line, ` /api/release/check"`) || strings.Contains(line, ` /api/release/tag"`) || strings.Contains(line, ` /api/release/build"`) || strings.Contains(line, ` /api/release/deploy"`) {
 			n++
 			if !strings.Contains(line, "s.auth(") || strings.Contains(line, "authAgent") {
 				t.Errorf("not user-only: %s", line)
 			}
 		}
 	}
-	if n != 3 {
+	if n != 5 {
 		t.Fatalf("found %d peer release routes", n)
 	}
 	// ...and the hub's browser forward cannot reach them.
-	for _, op := range []string{"release-check", "release-tag", "release-build"} {
+	for _, op := range []string{"release-check", "release-tag", "release-build", "release-deploy", "release-deploy-status"} {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader("{}"))
 		fleet.New(nil, "desk", nil, fleet.Options{}).ProxyHost(w, r, "kube", op)
