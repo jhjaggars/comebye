@@ -105,6 +105,13 @@
     .agent.blocked { border-color: var(--orange); border-left-width: 4px; background: var(--blocked-bg); }
     .agent.working { border-left: 4px solid var(--blue); }
     .agent.blocked .name { color: var(--blocked-name); }
+    /* What a blocked agent is blocked on ("blocked: permission prompt (git push)"): the row's own colour pair, so it is as legible as the name. */
+    .why { display: block; max-width: 100%; margin-top: 3px; padding: 1px 8px; border-radius: 6px; font-size: 12.5px; font-weight: 600;
+      background: var(--blocked-bg); color: var(--blocked-name); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: fit-content; }
+    .why.quiet { background: transparent; color: var(--muted); font-weight: 500; padding-left: 0; }
+    #detail header .why.quiet { border: 0; }
+    .agent.blocked .why { background: transparent; padding-left: 0; }
+    #detail header .why { margin-top: 4px; border: 1px solid var(--orange); }
     .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
     .dot.idle { background: var(--muted); }
     .dot.working { background: var(--blue); animation: pulse 1.6s ease-in-out infinite; }
@@ -2136,6 +2143,7 @@
       <div class="meta">
         <div class="title" id="d-title"></div>
         <div class="subtitle" id="d-subtitle"></div>
+        <div class="why" id="d-why" hidden></div>
       </div>
       <span class="status" id="d-status"></span>
       <button type="button" class="more" id="d-refresh" aria-label="Refresh this view">&#8635;</button>

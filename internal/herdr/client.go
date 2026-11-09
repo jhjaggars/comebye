@@ -181,6 +181,11 @@ type AgentInfo struct {
 	// status (so the app can show "working for 2m"); unknown after a
 	// restart until the next change, when it is the restart time.
 	StatusSince *time.Time `json:"status_since,omitempty"`
+	// StatusNote is set when comebye overrode herdr's status because the
+	// screen disagreed: herdr said blocked, no dialog is on screen and the
+	// agent's spinner is running, so it is working ("running a long
+	// command"). Empty otherwise.
+	StatusNote string `json:"status_note,omitempty"`
 	// Host names the comebye instance that owns the agent and ID is the
 	// host-qualified "<host>/<pane_id>". Pane IDs are only unique per host.
 	// Neither comes from herdr: comebye stamps them before broadcasting.

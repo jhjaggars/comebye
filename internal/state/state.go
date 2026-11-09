@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,8 @@ type Manager struct {
 	mu     sync.Mutex
 	host   string // stamped on every agent as Host (and the ID prefix)
 	agents []herdr.AgentInfo
+	// overrideLogged paces the log line for a blocked status the screen contradicts.
+	overrideLogged map[string]time.Time
 	// tracker diffs statuses so notifications fire only on transitions
 	// into blocked/done, and records when each agent entered its current
 	// status (the fallback for AgentInfo.LastActive).
@@ -108,7 +111,9 @@ func (m *Manager) onEvent(ev herdr.PushEvent) {
 	case "pane.agent_status_changed":
 		// Fast path: the event carries the new status; apply it immediately.
 		var d herdr.AgentStatusChangedData
-		if err := json.Unmarshal(ev.Data, &d); err == nil && d.PaneID != "" {
+		// "blocked" waits for the refresh, which checks it against the
+		// screen (verifyBlocked): a false one would notify before then.
+		if err := json.Unmarshal(ev.Data, &d); err == nil && d.PaneID != "" && herdr.AgentStatus(d.Status) != herdr.StatusBlocked {
 			m.applyStatus(d.PaneID, herdr.AgentStatus(d.Status))
 		}
 		// Also fall through to a debounced authoritative refresh, since the
@@ -194,6 +199,7 @@ func (m *Manager) refresh(ctx context.Context) error {
 	})
 
 	m.surfaceDialogs(ctx, agents)
+	m.verifyBlocked(ctx, agents)
 
 	m.mu.Lock()
 	for i := range agents {
@@ -249,6 +255,74 @@ func (m *Manager) surfaceDialogs(ctx context.Context, agents []herdr.AgentInfo) 
 		}()
 	}
 	wg.Wait()
+}
+
+// verifyBlocked checks herdr's "blocked" against the screen. herdr decides
+// from text anywhere in the recent screen (a phrase in command output, a
+// footer, a task panel can match a dialog rule) and so can call a busy agent
+// blocked while nobody is asked anything: the app then shows "needs you",
+// pushes the user and tells the coordinator. "Blocked" must mean a dialog
+// waiting for the user, so a blocked agent whose screen shows no dialog the
+// parser recognises and an active spinner ("✻ Running… (3m 2s)") is
+// reported as working, with a note saying why. A blocked agent with no
+// readable screen, or with a dialog, or with neither a dialog nor a
+// spinner (a dialog this app may not know) stays blocked: hiding a real
+// prompt costs more than showing a false one. Every override is logged
+// with the bottom of the screen, so a wrong one can be diagnosed.
+func (m *Manager) verifyBlocked(ctx context.Context, agents []herdr.AgentInfo) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for i := range agents {
+		a := &agents[i]
+		if a.Status != herdr.StatusBlocked || a.PaneID == "" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			read, err := m.client.ReadPane(rctx, a.PaneID, "visible", 0)
+			if err != nil || dialog.Detect(read.Text, a.Agent) != nil {
+				return
+			}
+			act := dialog.DetectActivity(read.Text, a.Agent)
+			if act == nil {
+				return
+			}
+			note := "running: " + act.Text
+			if act.Note != "" {
+				note += " (" + act.Note + ")"
+			}
+			a.Status, a.StatusNote = herdr.StatusWorking, note
+			m.logBlockedOverride(a, read.Text)
+		}()
+	}
+	wg.Wait()
+}
+
+// logBlockedOverride records an override once per pane per minute.
+func (m *Manager) logBlockedOverride(a *herdr.AgentInfo, screen string) {
+	m.mu.Lock()
+	if m.overrideLogged == nil {
+		m.overrideLogged = map[string]time.Time{}
+	}
+	last, ok := m.overrideLogged[a.PaneID]
+	now := time.Now()
+	if ok && now.Sub(last) < time.Minute {
+		m.mu.Unlock()
+		return
+	}
+	m.overrideLogged[a.PaneID] = now
+	m.mu.Unlock()
+	lines := strings.Split(strings.TrimRight(screen, "\n "), "\n")
+	if len(lines) > 14 {
+		lines = lines[len(lines)-14:]
+	}
+	log.Printf("status: herdr says %s (%s) is blocked, but its screen shows no dialog and a running spinner (%s); reporting it as working. Bottom of the screen:\n%s",
+		a.Name, a.PaneID, a.StatusNote, strings.Join(lines, "\n"))
 }
 
 // lastActive prefers the agent's session file mtime, which survives server

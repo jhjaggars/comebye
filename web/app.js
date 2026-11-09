@@ -188,6 +188,17 @@ function repoLabel(a) {
   return { repo: baseName(a.cwd) };
 }
 
+// whyBlocked is what a blocked agent waits on, as the hub read it from its
+// screen ("blocked: permission prompt (git push origin x)"); "" until read.
+function whyBlocked(a) {
+  const b = a && a.agent_status === "blocked" && a.blocked_on;
+  return b && b.label ? "blocked: " + b.label : "";
+}
+// noteOf: herdr said blocked but the screen shows no dialog and a running step.
+function noteOf(a) {
+  return a && a.agent_status === "working" && a.status_note ? "working (" + a.status_note + ")" : "";
+}
+
 function subLine(a) {
   const { repo, branch } = repoLabel(a);
   const kindEl = a.agent ? `<span class="kind">· ${esc(a.agent)}</span>` : "";
@@ -686,7 +697,7 @@ function agentRow(a, worker) {
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
           isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
-        ${subLine(a)}
+        ${subLine(a)}${whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
       </div>
       <span class="status ${esc(agentStatusText(a))}${bgRunning(a) ? " bg" : ""}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
         bgRunning(a) ? `<br><span class="ago">background</span>`
@@ -5224,6 +5235,11 @@ function renderDetail() {
   st.textContent = bgRunning(a) ? "working (background)" : a.agent_status;
   st.className = "status " + agentStatusText(a) + (bgRunning(a) ? " bg" : "");
   st.title = bgRunning(a) ? bgTitle(a) : "";
+  const why = $("d-why"), wt = whyBlocked(a) || noteOf(a);
+  why.classList.toggle("quiet", !whyBlocked(a));
+  why.textContent = wt;
+  why.title = wt;
+  why.hidden = !wt;
   updateAnswerCard();
   updateSendButton();
   renderActivity();

@@ -1038,6 +1038,39 @@ await check("desktop: waiting agents sit in a Needs you group at the top, and n 
   await page.waitForFunction(() => document.querySelector("#agents .agent.selected")?.dataset.id.endsWith("w9:p1") && location.hash.startsWith("#/agent/"), null, { timeout: 5000 });
 });
 
+// ---- what a blocked agent is blocked on, on its card (blockedrelay.go) ----
+// The hub reads the dialog of every blocked agent; the list row and the opened agent say "blocked: <what>"
+// instead of a bare "blocked". (w9:p1 sits at Pi's "Trust project folder?" selector.)
+for (const width of [390, 1280]) {
+  await check(`blocked card at ${width}px: the row and the opened agent say what it is blocked on, inside their boxes`, async () => {
+    await desktopList(width);
+    await page.waitForFunction(() => /^blocked: /.test(document.querySelector('#agents .agent[data-id$="w9:p1"] .why')?.textContent || ""), null, { timeout: 15000 });
+    const row = await page.evaluate(() => {
+      const r = document.querySelector('#agents .agent[data-id$="w9:p1"]'), w = r.querySelector(".why");
+      const rb = r.getBoundingClientRect(), wb = w.getBoundingClientRect();
+      return { text: w.textContent, inside: wb.left >= rb.left - 1 && wb.right <= rb.right + 1, scroll: document.documentElement.scrollWidth > innerWidth };
+    });
+    if (!/choice \(|question \(|permission prompt/.test(row.text) || /undefined|null/.test(row.text)) throw new Error("row text: " + row.text);
+    if (!row.inside || row.scroll) throw new Error("row geometry " + JSON.stringify(row));
+    await page.locator('#agents .agent[data-id$="w9:p1"]').first().screenshot({ path: `${out}/blocked-card-row-${width}.png` });
+    await page.locator('#agents .agent[data-id$="w9:p1"]').first().click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForFunction(() => { const w = document.querySelector("#d-why"); return w && !w.hidden && /^blocked: /.test(w.textContent); }, null, { timeout: 8000 });
+    const head = await page.evaluate(() => {
+      const w = document.querySelector("#d-why"), h = document.querySelector("#detail header");
+      const wb = w.getBoundingClientRect(), hb = h.getBoundingClientRect();
+      return { text: w.textContent, inside: wb.right <= hb.right + 1 && wb.left >= hb.left - 1, scroll: document.documentElement.scrollWidth > innerWidth };
+    });
+    if (!head.inside || head.scroll) throw new Error("header geometry " + JSON.stringify(head));
+    await page.screenshot({ path: `${out}/blocked-card-open-${width}.png` });
+  });
+}
+await check("blocked card: an agent that is not blocked shows no reason", async () => {
+  await desktopList(1280);
+  const n = await page.evaluate(() => [...document.querySelectorAll("#agents .agent:not(.blocked) .why:not(.quiet)")].length);
+  if (n) throw new Error(n + " rows that are not blocked show a blocked reason");
+});
+
 // ---- pages in the router: one selection fills the main pane ----
 await check("pages: opening one leaves the agent through closeDetail (presence clears), and its hash is the route", async () => {
   await desktopList(1280);

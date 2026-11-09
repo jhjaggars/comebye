@@ -89,6 +89,14 @@ node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1
 PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # The page starters (comebye pages new): published by the real CLI, opened in the viewer under the real CSP.
 COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node starters.mjs "http://127.0.0.1:$port" "$out" || rc=1
+# herdr calls a busy agent blocked: its own fake herdr and hub, so the shared fleet's agent count is untouched.
+"$tmp/fake-herdr" -sock "$tmp/fb.sock" -dir "$tmp/fb" -false-blocked >"$out/fake-herdr-fb.log" 2>&1 &
+for _ in $(seq 50); do [ -S "$tmp/fb.sock" ] && break; sleep 0.1; done
+fport=$((port + 200))
+"$tmp/comebye" -sock "$tmp/fb.sock" -addr "127.0.0.1:$fport" -insecure-no-auth -push=false \
+  -state-dir "$tmp/state-fb" -host-name uitest >"$out/comebye-fb.log" 2>&1 &
+for _ in $(seq 50); do curl -sf "http://127.0.0.1:$fport/api/agents" >/dev/null && break; sleep 0.1; done
+node falseblocked.mjs "http://127.0.0.1:$fport" "$out" || rc=1
 # The Peers screen and the host defaults: real servers (a hub, a peer, a peer that is down) on the same fake herdr.
 FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node peers.mjs "$out" || rc=1
 exit $rc

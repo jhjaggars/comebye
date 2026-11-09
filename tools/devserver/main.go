@@ -71,6 +71,7 @@ func main() {
 	noStatus := flag.Bool("no-status", false, "never report working/idle: the status stays idle, as when herdr misses or delays a transition")
 	fixtures := flag.Bool("fixtures", false, "add the dev-harness fixture agents (worker, coordinator, home, blocked, long names, ...) after alpha and bravo")
 	hostTag := flag.String("fixture-host", "", "with -fixtures: a tag that makes the fixture agents a second host's (a peer): a few agents named <tag>-*")
+	falseBlocked := flag.Bool("false-blocked", false, "add a Claude agent that herdr reports as blocked while its screen shows a running command and no dialog")
 	trust := flag.Bool("trust-prompt", false, "add a Pi agent that herdr reports as idle while its screen shows the \"Trust project folder?\" prompt (any Enter answers it)")
 	recallFixture := flag.String("recall-fixture", "", "write a synthetic transcript index to this file and exit")
 	flag.Parse()
@@ -111,6 +112,9 @@ func main() {
 	}
 	if *trust && !*fixtures {
 		f.addTrustPrompt()
+	}
+	if *falseBlocked && !*fixtures {
+		f.addLongCommand()
 	}
 	_ = os.Remove(*sock)
 	l, err := net.Listen("unix", *sock)

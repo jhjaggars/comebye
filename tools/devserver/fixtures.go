@@ -146,3 +146,24 @@ func (f *fake) addTrustPrompt() {
 		repo: "notes", checkout: "/home/u/.worktrees/notes/fix-gateway-creator", linked: true,
 		trust: true, screen: trustScreen})
 }
+
+// addLongCommand adds a Claude agent that herdr calls blocked (a dialog phrase
+// in recent command output matched one of its rules) while nobody is asked
+// anything: a long command runs under a spinner. comebye shows it as working.
+func (f *fake) addLongCommand() {
+	f.agents = append(f.agents, &agent{Name: "long-command", PaneID: "w8:p1", Workspace: "w8", TabID: "w8:t1", Agent: "claude", Display: "Claude",
+		Status: "blocked", Title: "watching a run", CWD: "/home/u/code/rollout", Ready: true,
+		repo: "notes", checkout: "/home/u/code/notes",
+		screen: []string{
+			"● Bash(gh run watch 42669596484 --exit-status)",
+			"  ⎿  Run CI (42669596484) · main",
+			"     Do you want to proceed? (printed by the job, not asked of you)",
+			"",
+			"✻ Running… (3m 2s · ↓ 2.1k tokens)",
+			"",
+			"────────────────────────────────────────",
+			" >",
+			"────────────────────────────────────────",
+			"  ⏵⏵ auto mode on (shift+tab to cycle)",
+		}})
+}

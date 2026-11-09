@@ -121,6 +121,10 @@ type Config struct {
 	// agent (default the home directory). It need not lie in a launch
 	// root; only that preset may use it.
 	CoordinatorDir string
+	// RelayBlocked, when positive, is how long an agent that has a
+	// coordinator must be blocked before the coordinator is told (the
+	// blocked relay, blockedrelay.go). Hub only: it needs the ledger.
+	RelayBlocked time.Duration
 	// CoordinatorArgs are extra arguments per agent kind that the
 	// Coordinator preset appends to the preset's own (e.g. pi: --auto,
 	// a flag only some Pi installs have).
@@ -196,6 +200,7 @@ type Server struct {
 	pq         *promptQueue
 	todos      *todoStore
 	auto       *autoTodo
+	relay      *blockedRelay
 	rel        *relState
 	pages      *pageStore
 	briefSched *briefSchedStore
@@ -282,6 +287,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				s.todos = newTodoStore("") // in memory: never overwrite the unreadable file
 			}
 			s.initAutoTodo(cfg.AutoTodo)
+			s.initBlockedRelay(cfg.RelayBlocked)
 			if s.pages, err = openPageStore(filepath.Join(cfg.StateDir, "pages")); err != nil {
 				log.Printf("pages: %v (published pages are off)", err)
 				s.pages = nil // never overwrite the unreadable index
@@ -509,7 +515,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"agents": s.fleet.Agents(), "hosts": s.fleet.Hosts()})
 		return
 	}
-	writeJSON(w, map[string]any{"agents": slimAgents(s.fleet.Agents()), "hosts": slimHosts(s.fleet.Hosts())})
+	writeJSON(w, map[string]any{"agents": s.slimAgents(s.fleet.Agents()), "hosts": slimHosts(s.fleet.Hosts())})
 }
 
 // fullRecords reports whether the caller (a hub reading a peer) asked for
@@ -825,7 +831,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		if full {
 			payload, err = json.Marshal(ev)
 		} else {
-			payload, err = json.Marshal(slimEvent(ev))
+			payload, err = json.Marshal(s.slimEvent(ev))
 		}
 		if err != nil {
 			return

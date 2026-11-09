@@ -30,6 +30,12 @@ type browserAgent struct {
 	StatusSince   *time.Time          `json:"status_since,omitempty"`
 	// Instance is the host's incarnation (the hub's peer registry).
 	Instance string `json:"instance,omitempty"`
+	// BlockedOn says what a blocked agent is blocked on, once the hub has
+	// read its dialog.
+	BlockedOn *blockedOn `json:"blocked_on,omitempty"`
+	// StatusNote: herdr said blocked, the screen shows no dialog and a
+	// running spinner, so the agent is reported as working (state.verifyBlocked).
+	StatusNote string `json:"status_note,omitempty"`
 }
 
 // browserHost drops LastSeen, which changes with every peer ping and is
@@ -61,7 +67,7 @@ type browserEvent struct {
 	Version string         `json:"version,omitempty"`
 }
 
-func slimAgents(agents []herdr.AgentInfo) []browserAgent {
+func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 	out := make([]browserAgent, len(agents))
 	for i, a := range agents {
 		out[i] = browserAgent{
@@ -69,6 +75,7 @@ func slimAgents(agents []herdr.AgentInfo) []browserAgent {
 			Agent: a.Agent, DisplayAgent: a.DisplayAgent, Status: a.Status,
 			StateLabels: a.StateLabels, CWD: a.CWD, TerminalTitle: a.TitleStripped,
 			Worktree: a.Worktree, LastActive: a.LastActive, StatusSince: a.StatusSince, Instance: a.Instance,
+			BlockedOn: s.blockedOnOf(a), StatusNote: a.StatusNote,
 		}
 	}
 	return out
@@ -82,10 +89,10 @@ func slimHosts(hosts []state.HostStatus) []browserHost {
 	return out
 }
 
-func slimEvent(ev state.Event) browserEvent {
+func (s *Server) slimEvent(ev state.Event) browserEvent {
 	out := browserEvent{Type: ev.Type, Reason: ev.Reason, Version: ev.Version}
 	if ev.Agents != nil {
-		out.Agents = slimAgents(ev.Agents)
+		out.Agents = s.slimAgents(ev.Agents)
 	}
 	if ev.Hosts != nil {
 		out.Hosts = slimHosts(ev.Hosts)

@@ -110,6 +110,7 @@ func main() {
 		releaseDeploy = flag.String("release-deploy-cmd", getenv("COMEBYE_RELEASE_DEPLOY_CMD"), "on the host that owns -release-repo: a command (absolute program path and arguments, no shell) that the release item's second button runs once the build passed, with the version appended as the last argument and in COMEBYE_RELEASE_VERSION. Approve release never runs it. For example a script that commits the version to a deployment repository; empty: no such button")
 		releaseDepLbl = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
 		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
+		relayBlocked  = flag.Duration("relay-blocked-after", envDuration("COMEBYE_RELAY_BLOCKED_AFTER", server.DefaultRelayBlocked), "how long an agent that has a coordinator must be blocked at a dialog before the hub tells that coordinator (once, and once more when it clears); 0 turns the relay off. Hub only")
 		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on a question past -auto-todo-question-after, filed as a suggestion to keep or dismiss); off for none")
 		autoBlocked   = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
 		autoQuestion  = flag.Duration("auto-todo-question-after", envDuration("COMEBYE_AUTO_TODO_QUESTION_AFTER", server.DefaultAutoQuestion), "how long an agent must sit idle or done on a question, with no device viewing it, before -auto-todo suggests an item")
@@ -429,6 +430,7 @@ func main() {
 		WhoIs:           localAPI,
 		SelfRegister:    *selfRegister,
 		HubOnly:         *hubOnly,
+		RelayBlocked:    *relayBlocked,
 		LockErr:         lock.Err,
 	}, client, manager)
 	if allowCap != "" {
@@ -439,6 +441,7 @@ func main() {
 	}
 	go srv.RunLedger(context.Background())
 	go srv.RunAutoTodo(context.Background())
+	go srv.RunBlockedRelay(context.Background())
 	go srv.RunRepoHealth(context.Background())
 	go srv.RunBriefSchedule(context.Background())
 
