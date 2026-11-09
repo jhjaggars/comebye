@@ -67,6 +67,8 @@ func init() {
 		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
 		{"todo", "add QUESTION [--kind decision|action|followup|release --version vX.Y.Z --commit REF] [--option LABEL[|DETAIL] ... [--recommend N[,M]]] [--context FILE|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT | --no-wait] | list [--all | --state S] | show ID | answer ID TEXT|- | done ID | drop ID [--reason R]  [--json]", "the to-do list beside the briefing: questions and follow-ups the user has to deal with, with context; any agent adds, the user answers in the app, the coordinator relays answers (answer, done and drop are the coordinator's)", cmdTodo},
+		{"publish", "FILE|- [--title T] [--kind html|md] [--key K | --update ID] [--if-version N] [--handoff ID] [--json]", "publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages. --update ID or --key K adds a version to the same link", cmdPublish},
+		{"pages", "list [--mine] [--handoff ID] | show ID [--body [--version N]] | link ID | rm ID  [--json]", "the published pages: list them, show one (with its source), print its link, or delete one of yours", cmdPages},
 		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
@@ -2208,7 +2210,7 @@ func cmdWhoami(e *Env, args []string) error {
 	}
 	if *asJSON {
 		return jsonOut(e, map[string]any{
-			"agent": w.Agent, "by": w.By, "host": w.Host, "role": w.Role, "hub": w.Hub, "ledger": w.Ledger, "version": w.Version,
+			"agent": w.Agent, "by": w.By, "host": w.Host, "role": w.Role, "hub": w.Hub, "public_url": w.PublicURL, "ledger": w.Ledger, "version": w.Version,
 			"pane": c.pane, "url": c.base, "token_file": c.tokenPath,
 		})
 	}

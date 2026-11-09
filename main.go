@@ -88,6 +88,7 @@ func main() {
 		announceURL   = flag.String("announce-url", getenv("COMEBYE_ANNOUNCE_URL"), "the Serve URL to announce (default https://<this node's MagicDNS name>)")
 		ledgerOn      = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
 		coordDir      = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
+		publicURL     = flag.String("public-url", getenv("COMEBYE_PUBLIC_URL"), "the https URL this hub is reached at (https://hub.tailnet.ts.net); `comebye publish` prints links built from it")
 		allowHosts    = hostList{getenv("COMEBYE_ALLOW_HOSTS")}
 		launchRoots   = hostList{envOr("COMEBYE_LAUNCH_ROOTS", "")}
 		coordArgs     = hostList{getenv("COMEBYE_COORDINATOR_ARGS")}
@@ -393,6 +394,7 @@ func main() {
 		// end up open by accident either.
 		InsecureNoAuth: *noAuth,
 		AllowHosts:     server.SplitHosts(allowHosts...),
+		PublicURL:      strings.TrimRight(strings.TrimSpace(*publicURL), "/"),
 		ReadLines:      1000,
 		Push:           pushSvc,
 		Presence:       presence,

@@ -57,6 +57,10 @@ type Config struct {
 	// InsecureNoAuth lets ListenAndServe run without AllowLogins, serving
 	// an unauthenticated API to anyone who reaches it. Off by default.
 	InsecureNoAuth bool
+	// PublicURL is the https URL this hub is reached at (the Tailscale Serve
+	// name, no trailing slash); links to published pages are built from it.
+	// Empty: the API gives paths only.
+	PublicURL string
 	// AllowHosts are extra Host names (lowercase, no port) the server
 	// answers to besides localhost, loopback IPs and *.ts.net; any other
 	// Host is refused as possible DNS rebinding (see hostAllowed).
@@ -184,6 +188,7 @@ type Server struct {
 	todos      *todoStore
 	auto       *autoTodo
 	rel        *relState
+	pages      *pageStore
 	briefSched *briefSchedStore
 	roles      *roleStore
 	// kinds remembers the agent kinds that worked on this host (nil
@@ -265,6 +270,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				s.todos = newTodoStore("") // in memory: never overwrite the unreadable file
 			}
 			s.initAutoTodo(cfg.AutoTodo)
+			if s.pages, err = openPageStore(filepath.Join(cfg.StateDir, "pages")); err != nil {
+				log.Printf("pages: %v (published pages are off)", err)
+				s.pages = nil // never overwrite the unreadable index
+			}
 			s.endStaleAsks()
 			s.trackInstances()
 			s.recoverTagging()
@@ -383,6 +392,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/release/{id}/approve", s.auth(s.handleReleaseApprove))
 	s.mux.HandleFunc("POST /api/release/{id}/deploy", s.auth(s.handleReleaseDeploy))
 	s.mux.HandleFunc("POST /api/hosts/{host}/release/upgrade", s.auth(s.handleHostUpgrade))
+	s.pageRoutes()
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("POST /api/sweep", s.authAgent(s.handleSweep))
@@ -437,7 +447,7 @@ func (s *Server) ListenAndServe() error {
 // unsafe requests via Sec-Fetch-Site/Origin; requiring a JSON content type
 // also forces a CORS preflight on browsers too old to send those headers.
 func (s *Server) Handler() http.Handler {
-	app := s.checkHost(s.capPeers(s.base()))
+	app := pagesHeaders(s.checkHost(s.capPeers(s.base())))
 	// The health probes come first: no Host check (a kubelet probes the pod
 	// IP), no login, nothing secret in the answer (see health.go).
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

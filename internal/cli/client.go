@@ -253,13 +253,14 @@ type agentsResp struct {
 }
 
 type whoamiResp struct {
-	Host    string `json:"host"`
-	Role    string `json:"role"`
-	Agent   string `json:"agent"`
-	By      string `json:"by"`
-	Hub     string `json:"hub"`
-	Ledger  bool   `json:"ledger"`
-	Version string `json:"version"`
+	Host      string `json:"host"`
+	Role      string `json:"role"`
+	Agent     string `json:"agent"`
+	By        string `json:"by"`
+	Hub       string `json:"hub"`
+	PublicURL string `json:"public_url"`
+	Ledger    bool   `json:"ledger"`
+	Version   string `json:"version"`
 }
 
 type apiMark struct {
