@@ -978,6 +978,22 @@
     .rv-list.ok li::before { content: "✓"; position: absolute; left: 2px; }
     .rv-list.info li { color: var(--muted); }
     .rv-list.info li::before { content: "•"; position: absolute; left: 6px; }
+    .rv-ask { margin-top: 8px; padding: 8px 10px; border-radius: 10px; font-size: 13px; border: 1px solid var(--border); background: var(--panel2); }
+    .rv-ask.holds { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
+    .rv-ask-h { color: var(--muted); }
+    .rv-ask-h b { color: var(--orange); letter-spacing: 0.04em; }
+    .rv-ask.resolved .rv-ask-h b { color: var(--green); }
+    .rv-ask-n { color: var(--muted); margin-top: 6px; }
+    .rv-items { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .rv-ai { display: flex; align-items: flex-start; gap: 8px; }
+    .rv-ai-t { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+    .rv-ai .rv-chip { flex: none; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; margin-top: 2px; }
+    .rv-ai.resolved .rv-chip { color: var(--green); }
+    .rv-ai.unresolved .rv-chip { color: var(--orange); }
+    .rv-ai.unchecked .rv-chip { color: var(--muted); }
+    .rv-say { color: var(--muted); }
+    .btn.rv-reask { flex: none; min-height: 32px; padding: 0 10px; font-size: 12.5px; }
+    .rv-list li .btn.rv-reask { margin-left: 6px; }
     .rv-report { margin-top: 6px; }
     .rv-report > summary { cursor: pointer; color: var(--blue); font-size: 13.5px; font-weight: 600; min-height: 40px; display: flex; align-items: center; }
     .rv-report .md { font-size: 14px; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; padding: 4px 2px; }

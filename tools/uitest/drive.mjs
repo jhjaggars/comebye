@@ -2823,6 +2823,76 @@ await check("remove page: Discard all delivered (N) asks once, lists each item w
   } finally { for (const re of [/\/api\/removals$/, /\/api\/removals\/confirm$/]) await page.unroute(re); }
 });
 
+// The safety answers: how old each is, what an UNSAFE named as the hub re-checked it, and a Re-ask per item.
+const ASK_ITEMS = () => {
+  const hoursAgo = (h) => new Date(Date.now() - h * 3600e3).toISOString();
+  const mark = (by, at, ask) => ({ by, at: hoursAgo(at), reason: "both PRs merged at 14:02", ask });
+  const base = (id, name, branch, m, extra) => ({ id, name, host: "uitest", branch, repo: "webapp", safe: true, coordinator: false,
+    live: { present: true, agent_status: "idle" }, mark: m, checks: { exists: true, primary: false, dirty: false, unmerged_commits: 0, base_used: "origin/main", branch }, warnings: [], notes: [], ...extra });
+  const item = (type, label, state, now, text, more) => ({ type, label, state, now, text, ...more });
+  return [
+    // Fresh: the session re-checked and said SAFE two minutes ago.
+    base("uitest/w9:p1", "release-simple", "release/simple", mark("coordinator", 0.05, { state: "safe", reason: "both PRs merged, nothing running", at: hoursAgo(0.03) }),
+      { ask_review: { state: "safe", answered_at: hoursAgo(0.03) } }),
+    // Stale, and everything it named has since resolved: a note, counted as safe.
+    base("uitest/w9:p2", "rollout-v0-5-16", "rollout/v0.5.16", mark("coordinator", 7, { state: "unsafe", reason: "PR homelab#343; to-do t972236dfee", at: hoursAgo(6) }),
+      { notes: ["the session said UNSAFE at 08:12 UTC (6 h ago), but PR jhjaggars/homelab#343 merged 5 h ago and to-do t972236dfee is done 2 h ago"],
+        ask_review: { state: "unsafe", answered_at: hoursAgo(6), resolved: true, event: true, items: [
+          item("pr", "PR jhjaggars/homelab#343", "resolved", "merged 5 h ago", "I am watching it until it merges", { repo: "jhjaggars/homelab", number: 343 }),
+          item("todo", "to-do t972236dfee", "resolved", "is done 2 h ago", "asked the user which cluster", { id: "t972236dfee" })] } }),
+    // Still UNSAFE: an open PR, a cluster nobody can check, and free text, each its own warning.
+    base("uitest/w9:p3", "metrics-spike", "spike/metrics", mark("coordinator", 3, { state: "unsafe", reason: "open PR", at: hoursAgo(2.5) }),
+      { safe: false, warnings: ["the session says UNSAFE: PR jhjaggars/webapp#88 is still open (waiting for review) (answered 2 h ago)", "the session says UNSAFE: a loop I run every 10 minutes (answered 2 h ago)"],
+        notes: ["the session said UNSAFE about PR jhjaggars/webapp#87, but it merged 1 h ago"],
+        ask_review: { state: "unsafe", answered_at: hoursAgo(2.5), items: [
+          item("pr", "PR jhjaggars/webapp#88", "unresolved", "is still open", "waiting for review", { repo: "jhjaggars/webapp", number: 88 }),
+          item("pr", "PR jhjaggars/webapp#87", "resolved", "merged 1 h ago", "", { repo: "jhjaggars/webapp", number: 87 }),
+          item("resource", "k3d-cluster dev on uitest", "unchecked", "can't check: k3d is not installed", "", { kind: "k3d-cluster", name: "dev" }),
+          item("other", "something else", "unchecked", "can't check: free text", "a loop I run every 10 minutes", {})] } }),
+  ];
+};
+await check("remove page: the safety answer shows its age, each item's re-checked state and a Re-ask; a resolved UNSAFE is a note", async () => {
+  const items = ASK_ITEMS();
+  const reasks = [];
+  await page.route(/\/api\/removals$/, (r) => r.fulfill({ json: { removals: items } }));
+  await page.route(/\/api\/marks\/reask$/, (r) => { reasks.push(JSON.parse(r.request().postData() || "{}")); r.fulfill({ json: { asking: true } }); });
+  try {
+    for (const w of [1280, 390]) {
+      reasks.length = 0;
+      await page.setViewportSize({ width: w, height: w < 500 ? 844 : 900 });
+      await page.goto("about:blank");
+      await page.goto(base + "/#/remove", { waitUntil: "load" });
+      await page.waitForSelector("#rv-list .rv-item", { timeout: 5000 });
+      const row = (n) => page.locator(`#rv-list .rv-item[data-id="uitest/w9:p${n}"]`);
+      // fresh
+      const t1 = await row(1).innerText();
+      if (!/The session says SAFE/.test(t1) || !/answered just now/.test(t1) || !(await row(1).locator('[data-act="reask"]').count())) throw new Error("fresh row: " + t1);
+      if ((await row(1).locator(".rv-list.warn li").count()) !== 0) throw new Error("the fresh row warns");
+      // stale and resolved
+      const t2 = await row(2).innerText();
+      for (const want of ["UNSAFE answered 6 h ago", "every item has since resolved", "merged 5 h ago", "is done 2 h ago", "I am watching it until it merges", "08:12 UTC (6 h ago), but PR"]) if (!t2.includes(want)) throw new Error(`stale row lacks "${want}": ${t2}`);
+      if ((await row(2).locator(".rv-list.warn li").count()) !== 0 || (await row(2).locator(".rv-ai.resolved").count()) !== 2) throw new Error("the resolved row warns or lacks resolved items");
+      if (!/Remove all safe \(2\)/.test(await page.locator("#rv-all-safe").innerText())) throw new Error("the resolved row is not counted safe: " + (await page.locator("#rv-all-safe").innerText()));
+      // still unsafe
+      const r3 = row(3);
+      const t3 = await r3.innerText();
+      for (const want of ["UNSAFE answered 2 h ago", "still holds", "PR jhjaggars/webapp#88 is still open", "waiting for review", "k3d is not installed", "a loop I run every 10 minutes"]) if (!t3.includes(want)) throw new Error(`unsafe row lacks "${want}": ${t3}`);
+      if ((await r3.locator(".rv-ai").count()) !== 4 || (await r3.locator(".rv-ai.unresolved").count()) !== 1 || (await r3.locator(".rv-ai.unchecked").count()) !== 2 || (await r3.locator(".rv-ai.resolved").count()) !== 1) throw new Error("item states");
+      if ((await r3.locator("button.rv-reask").count()) !== 4) throw new Error("one Re-ask per item");
+      await reviewFits();
+      for (const sel of ["#rv-list .rv-item[data-id=\"uitest/w9:p3\"] .rv-ai:nth-child(1) button.rv-reask", "#rv-list .rv-item[data-id=\"uitest/w9:p1\"] button.rv-reask"]) {
+        const g = await geo(sel);
+        if (!g.shown || g.x < 0 || g.x + g.w > w + 0.5) throw new Error(`${sel} is not on screen at ${w}: ${JSON.stringify(g)}`);
+      }
+      await page.screenshot({ path: `${out}/remove-asks-${w}.png`, fullPage: false });
+      await r3.locator(".rv-ai:nth-child(3) button.rv-reask").click();
+      await page.waitForFunction(() => true);
+      await new Promise((ok) => setTimeout(ok, 300));
+      if (reasks.length !== 1 || reasks[0].agent_id !== "uitest/w9:p3" || reasks[0].item !== 3) throw new Error("reask body " + JSON.stringify(reasks));
+    }
+  } finally { for (const re of [/\/api\/removals$/, /\/api\/marks\/reask$/]) await page.unroute(re); }
+});
+
 // The prompt bar and the keybar keep one row at every width (a long placeholder is cut, not wrapped). run.sh runs this in both colour schemes.
 await check("prompt bar: one row at 390, 1100, 1280, 1440 and 2000, for both placeholders, with the hint on one line", async () => {
   for (const w of [390, 1100, 1280, 1440, 2000]) {

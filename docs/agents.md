@@ -174,7 +174,8 @@ knows: an open PR it is watching, a loop it runs, work it was told to
 keep, a follow-up it owes you. So marking a session that is idle or done
 (from the app or `comebye mark`) also sends it a short prompt asking
 whether it is safe to remove, and to take no other action. The question
-includes the hub's own check of its worktree, run on its host just before
+carries the mark's reason, tells the session to check the live state (PRs,
+git, to-dos, processes) before it answers, and includes the hub's own check of its worktree, run on its host just before
 asking ("the worktree is clean and every commit of feat/x is in
 origin/main (landed on origin/main as bf50213)", or the warnings), and
 tells it to trust that over its memory: work rebased or cherry-picked onto
@@ -184,13 +185,20 @@ reply and shows it in the review:
 
 - **SAFE**: a green line, "The session says SAFE";
 - **UNSAFE**: a warning with its reason, so the session is not removed
-  with one tap ("Remove anyway…", and left out of "Remove all safe");
+  with one tap ("Remove anyway…", and left out of "Remove all safe"). The
+  session lists what holds it (PRs, to-dos, commits, resources, other), and
+  Comebye checks each again when the review opens: when all of them have
+  resolved (the PR merged, the to-do done) the UNSAFE is only a note. The
+  review says how old the answer is and has a **Re-ask** on every item;
+  Comebye also asks again by itself when an item changes or a day-old
+  answer still holds (see `docs/lifecycle.md`, "Evidence, not memory");
 - no reply within two minutes, a reply that is neither, or a restart while
   asking: a note ("did not answer", never counted as safe);
 - a working or blocked session is not asked (nor one marked with
   `comebye mark --no-ask`), and the review says so.
 
-Answering does not send you a notification. Marking again asks again.
+Answering does not send you a notification. Marking again asks again; so
+does `comebye reask AGENT [--item N]`.
 
 Removing:
 
@@ -424,6 +432,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye peer show NAME` | One peer as the hub sees it (status, version, address), its installed agent kinds and models, and its settings. `peer list` has a DEFAULT column with each peer's default agent (`?`: the peer is down or too old to have settings). |
 | `comebye models [--host H] [--kind K]` | The models each installed agent kind can start with on a host (default: this one), where the list came from and which is the default (`GET /api/models`). |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. TEXT is sent as is: a TEXT that is an existing file is refused (send a file with `comebye prompt AGENT - < file`). If the agent has a dialog open (permission prompt, question, menu) the prompt is refused with `dialog_open` (exit non-zero) and nothing is typed: the host that owns the pane checks the screen right before sending. It is refused rather than held automatically, so the caller always knows the message did not arrive; use `--queue` to hold it. |
+| `comebye reask AGENT [--item N]` | Ask a marked session again whether it is safe to remove. The old answer stands until it replies; `comebye ledger` shows each UNSAFE answer's items as the hub last checked them, with the answer's age. |
 | `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
 | `comebye sweep [--dry-run] [--idle-after D] [--notify] [--mark-delivered] [--json]` | Sweep for finished workers (see [Sweeping](#sweeping-for-finished-agents)): mark the ones with nothing to lose as ready to remove, list the others with why. `--dry-run` marks nothing; `--notify` also tells an idle coordinator. |
 | `comebye todo add "QUESTION" [--kind decision\|action\|followup] [--option "LABEL\|DETAIL" ... [--recommend N[,M]]] [--context FILE\|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT \| --no-wait]` | Put a question, a decision, something only the user can do, or a follow-up on the to-do list, with a little context (why, what yes and no do, links to the PR or report). It shows in the app's To do panel beside the briefing, so it is not lost while you field other agents' feedback. Any agent may add; a worker is by default the agent waiting on its own item, a coordinator by default names none (`--waiting AGENT` for the agent blocked on it). A question with choices takes `--option "label\|detail"` (2 to 9, repeatable) and `--recommend N[,M]`; the hub also writes the numbered list and a "My recommendation: ok N" line into the context, and the app draws its buttons from the fields. |

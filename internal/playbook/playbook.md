@@ -53,6 +53,7 @@ with the matches listed.
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery). If the user has text in the agent's input box, nothing is typed over it: a plain prompt is held on the queue automatically (`held` in `comebye queue`) and sent once the box has been empty for 5 s |
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
+| `comebye reask AGENT [--item N]` | ask a marked session again whether it is safe to remove (its old answer stands until it replies) |
 | `comebye mark AGENT --reason R [--discard [--delivered PAGE,…]] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer); `--delivered` also records the pages that hold the work |
 | `comebye deliver [AGENT] PAGE… [--not-captured TEXT]` | record the pages (`pg_…`) that hold a finished agent's work (yours if no AGENT); with `mark --discard` its notes and docs show as captured in the review |
 | `comebye unmark AGENT` | withdraw that proposal |
@@ -301,9 +302,24 @@ it was told to keep). The question includes the hub's own check of its
 worktree, so a session whose work was rebased onto main is told it
 landed. Its answer shows in the user's review and in
 `comebye ledger`; `comebye mark … --wait` waits up to two minutes and
-prints it. If it says UNSAFE, tell the user and `comebye unmark` it unless
-they decide otherwise. No answer is not a yes. A working or blocked
-session is not asked: wait for it to finish before marking it.
+prints it. No answer is not a yes. A working or blocked session is not
+asked: wait for it to finish before marking it.
+
+Put the facts in `--reason`: the question carries it, fenced as your text,
+and the session still checks the live state before it answers (`gh pr view`,
+git, `comebye todo show`, anything it started). An UNSAFE comes as typed
+items (PR, to-do, commits, resource, other) which the hub re-checks each time
+the review or `comebye ledger` is built: when every item has resolved (the PR
+merged, the to-do done) the UNSAFE is only a note, and when an item changes
+the hub asks the session again by itself. `comebye ledger` shows each answer's
+age and its items as last checked. Do not trust an old UNSAFE, and do not
+trust an old SAFE over a fresh look: `comebye reask AGENT` asks again.
+
+When an item is real and needs the user (a PR waiting on their review, a
+resource only they can stop), **file a to-do** with the evidence (the item,
+what the hub found, the session's own words) and link the PR or handoff, then
+leave the session marked or `comebye unmark` it, as they decide. Do not just
+tell the user in the pane.
 
 **Sweeping.** To prune in one go instead of marking one by one, run
 `comebye sweep --dry-run`, then `comebye sweep`. It looks at workers that

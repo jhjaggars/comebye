@@ -946,3 +946,37 @@ func TestLand(t *testing.T) {
 		t.Fatalf("not cancelled: %s", last)
 	}
 }
+
+// comebye ledger lists each UNSAFE answer's items as the hub re-checked
+// them, with the answer's age; comebye reask asks the session again.
+func TestLedgerShowsRecheckedAnswersAndReask(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["GET /api/ledger"] = answer{body: `{"entries":[],"marks":[{"agent_id":"kube/w5:p2","name":"solo","at":"2026-10-22T09:00:00Z","ask":{"state":"unsafe","reason":"PR o/r#343","at":"2026-10-22T09:01:00Z"}}],
+		"asks":{"kube/w5:p2":{"state":"unsafe","answered_at":"2026-10-22T09:01:00Z","resolved":false,"event":true,"reask_note":"the re-ask got no answer","items":[
+			{"type":"pr","label":"PR o/r#343","state":"resolved","now":"merged 5 h ago","text":"watching"},
+			{"type":"todo","label":"to-do t0123456789","state":"unresolved","now":"is still open"},
+			{"type":"other","label":"something else","state":"unchecked","now":"can't check: free text","text":"a loop I run"}]}}}`}
+	if code := run(e, "ledger"); code != 0 {
+		t.Fatalf("ledger: %d %s", code, errb)
+	}
+	for _, want := range []string{
+		"UNSAFE answers, each item re-checked by the hub just now:", "kube/w5:p2: answered ", "still holds",
+		"- PR o/r#343 merged 5 h ago (watching) [resolved]", "- to-do t0123456789 is still open [unresolved]",
+		"- a loop I run (can't check: free text) [unchecked]", "an item changed after the answer", "the re-ask got no answer",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("ledger lacks %q:\n%s", want, out)
+		}
+	}
+	// --json is the hub's own body, asks included.
+	out.Reset()
+	if code := run(e, "ledger", "--json"); code != 0 || !strings.Contains(out.String(), `"asks"`) || !strings.Contains(out.String(), `"merged 5 h ago"`) {
+		t.Fatalf("ledger --json: %d %s", code, out)
+	}
+	f.answers["POST /api/marks/reask"] = answer{body: `{"asking":true}`}
+	out.Reset()
+	if code := run(e, "reask", "kube/w5:p2", "--item", "2"); code != 0 || !strings.Contains(out.String(), "again whether it is safe to remove") ||
+		!strings.Contains(f.find("POST", "/api/marks/reask").body, `"item":2`) {
+		t.Fatalf("reask: %d %s %s", code, out, errb)
+	}
+}

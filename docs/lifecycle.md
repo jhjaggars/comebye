@@ -477,6 +477,66 @@ that check over its memory of the SHAs it committed. It answers SAFE, or
 UNSAFE with a reason only it knows: an open PR it watches, a loop it runs,
 a follow-up it owes the user. No answer is not a yes.
 
+**Evidence, not memory.** A session answers from its memory, and the answer
+is frozen when it is recorded, so it goes stale: two sessions once answered
+UNSAFE, twice, about PRs that had merged hours before. The question therefore
+(1) **includes the mark's reason**, fenced and labelled as the coordinator's
+text, not an instruction (the session cannot see the reason otherwise), and
+(2) tells the session to **look at the live state before it answers**:
+`gh pr view` for every PR it opened, `git status` and the branch and remote
+state, `comebye todo show` for every to-do it filed, any process or resource
+it started. Read-only commands for that are allowed; nothing else is.
+
+**Structured UNSAFE.** The reply is machine-readable. `SAFE`, or `UNSAFE`
+followed by one line per thing that must be dealt with, each typed:
+
+```
+UNSAFE
+- pr jhjaggars/homelab#343 open, I am watching it
+- todo t972236dfee waiting on the user's answer
+- commits feat/x pushed to origin
+- resource k3d-cluster dev on desk
+- resource pid 4242 on desk
+- other a loop I run every 10 minutes
+```
+
+The parser is lenient (bullets or numbers, markdown around the words, a
+reason on the `UNSAFE` line, a PR as a URL); text it cannot type becomes an
+`other` item. An answer recorded before items existed counts as one `other`
+item.
+
+**The hub re-checks the items** each time the review (or `comebye ledger`)
+is built, with the results cached for a minute:
+
+| item | looked at | resolved when |
+|---|---|---|
+| `pr` | `gh pr view` on the session's host (a peer is asked through its `probe` host op) | merged or closed |
+| `todo` | the hub's own to-do list | done or dropped |
+| `commits` | the branch checks (`Unmerged`, `Equivalent`, pushed) | all in the base, squash-merged, or all on a remote |
+| `resource` | a `pid` alive on the host, a `k3d-cluster` in `k3d cluster list` | the pid is dead, the cluster gone; any other kind: "can't check" |
+| `other` | nothing | never |
+
+When **every** item has resolved, the UNSAFE becomes a note, and the session
+counts as safe: "the session said UNSAFE at 14:12 UTC (6 h ago), but PR
+jhjaggars/homelab#343 merged 5 h ago and to-do t972236dfee is done". Any
+item that is unresolved, or that the hub cannot check, stays a warning, one
+line per item. The review shows **when the answer was given** ("answered 6 h
+ago") and each item's re-checked state, and gives **each item a Re-ask**.
+
+**Asking again.** A re-ask (the button, `comebye reask AGENT [--item N]`,
+`POST /api/marks/reask`) keeps the old answer standing, and re-checked, until
+the session replies; a re-ask that gets no answer leaves it with a note. The
+hub also re-asks by itself, once an idle session is free, when an UNSAFE
+answer is **older than an event that touches one of its items** (a PR merged,
+a to-do closed after the answer) or, while still unresolved, **older than 12
+hours**. It is rate limited: at most one ask of a mark per 30 minutes and
+three automatic re-asks per mark. A working or blocked session waits until
+it is idle. A SAFE answer is not re-asked on its own.
+
+*Limits:* a pid is only "alive" or "dead"; a reused pid reads as alive (the
+item stays a warning). `gh` must be logged in on the session's host or the PR
+reads "can't check".
+
 **The removal review** (the app) re-runs the checks and shows the session's
 answer. The user confirms each removal. Removing closes the session,
 removes the worktree only when it is clean and merged, and never deletes

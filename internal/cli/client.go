@@ -275,8 +275,9 @@ type apiMark struct {
 
 // apiAsk is a marked session's answer about its own removal.
 type apiAsk struct {
-	State  string `json:"state"`
-	Reason string `json:"reason"`
+	State  string    `json:"state"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
 }
 
 type apiEntry struct {
@@ -341,6 +342,27 @@ type ledgerResp struct {
 	Entries []apiEntry         `json:"entries"`
 	Marks   []apiMark          `json:"marks"`
 	Roles   map[string]apiRole `json:"roles"`
+	// Asks are the marked sessions' answers with their items re-checked,
+	// by agent id.
+	Asks map[string]*apiAskReview `json:"asks"`
+}
+
+// apiAskReview is an answer with its items re-checked by the hub.
+type apiAskReview struct {
+	State      string    `json:"state"`
+	AnsweredAt time.Time `json:"answered_at"`
+	Items      []struct {
+		Type  string `json:"type"`
+		Label string `json:"label"`
+		State string `json:"state"`
+		Now   string `json:"now"`
+		Text  string `json:"text"`
+	} `json:"items"`
+	Resolved  bool       `json:"resolved"`
+	Event     bool       `json:"event"`
+	Reasking  *time.Time `json:"reasking"`
+	ReaskNote string     `json:"reask_note"`
+	Reasks    int        `json:"reasks"`
 }
 
 func (c *client) getAgents() (*agentsResp, error) {

@@ -3159,10 +3159,39 @@ async function loadReview(quiet) {
   if (review.confirm && !review.confirm.ids.every((id) => ids.has(id))) review.confirm = null;
   if (!quiet) setReviewBusy(false);
   renderReview();
-  if (review.items.some((it) => it.mark && it.mark.ask && it.mark.ask.state === "asking")) {
+  if (review.items.some((it) => it.mark && it.mark.ask && (it.mark.ask.state === "asking" || it.mark.ask.reasked_at))) {
     clearTimeout(review.askTimer);
     review.askTimer = setTimeout(() => loadReview(true), 6000);
   }
+}
+
+// askAge says how long ago an answer was given ("6 h ago"), as the hub's own notes do.
+function askAge(iso) {
+  const m = Math.floor((Date.now() - Date.parse(iso)) / 60000);
+  if (!(m >= 0)) return "";
+  if (m < 1) return "just now";
+  if (m < 60) return m + " min ago";
+  if (m < 48 * 60) return Math.floor(m / 60) + " h ago";
+  return Math.floor(m / 1440) + " d ago";
+}
+
+// reviewAskHTML is a marked session's answer to "is it safe to remove you?", with the age it was given and, for an
+// UNSAFE, each item it named as the hub re-checked it just now (resolved, still holding, or not checkable) and a
+// Re-ask for the item. Its text is the session's, escaped.
+const ASK_ITEM_CHIP = { resolved: "resolved", unresolved: "holds", unchecked: "can’t check" };
+function reviewAskHTML(it, dis) {
+  const ar = it.ask_review;
+  if (!ar || ar.state !== "unsafe") return "";
+  const id = esc(it.id);
+  const re = ar.reasking ? " · asking it again…" : "";
+  const hold = ar.resolved ? "every item has since resolved" : "still holds";
+  const rows = (ar.items || []).map((x, i) => {
+    const text = x.type === "other" ? esc(x.text || "(no reason given)") : `<b>${esc(x.label)}</b> ${esc(x.now)}${x.text ? ` <span class="rv-say">“${esc(x.text)}”</span>` : ""}`;
+    return `<li class="rv-ai ${esc(x.state)}"><span class="rv-chip">${esc(ASK_ITEM_CHIP[x.state] || x.state)}</span><span class="rv-ai-t">${text}</span>` +
+      `<button type="button" class="btn rv-reask" data-act="reask" data-id="${id}" data-item="${i + 1}" aria-label="Re-ask the session about item ${i + 1}"${dis || ar.reasking ? " disabled" : ""}>Re-ask</button></li>`;
+  }).join("");
+  const note = ar.reask_note ? `<div class="rv-ask-n">${esc(ar.reask_note)}</div>` : "";
+  return `<div class="rv-ask ${ar.resolved ? "resolved" : "holds"}"><div class="rv-ask-h"><b>UNSAFE</b> answered <span class="rv-age">${esc(askAge(ar.answered_at))}</span>${re} · ${hold}</div><ul class="rv-items">${rows}</ul>${note}</div>`;
 }
 
 const reviewDone = (it) => !!(review.results.get(it.id) || {}).ok;
@@ -3184,9 +3213,11 @@ function reviewItemHTML(it) {
     ? `<li>Clean, and merged into ${esc(c.base_used || "its base")}: the worktree will be removed (the branch is kept)</li>` : "";
   const ask = m.ask || {};
   const said = ask.state === "safe"
-    ? `<li>The session says SAFE${ask.reason ? ": " + esc(ask.reason) : ""}</li>` : "";
-  const warnings = (it.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
-  const notes = (it.notes || []).map((w) => `<li>${esc(w)}</li>`).join("");
+    ? `<li>The session says SAFE${ask.reason ? ": " + esc(ask.reason) : ""} · answered <span class="rv-age">${esc(askAge(ask.at))}</span> <button type="button" class="btn rv-reask" data-act="reask" data-id="${esc(it.id)}"${review.busy || ask.reasked_at ? " disabled" : ""}>Re-ask</button></li>` : "";
+  // An UNSAFE answer's items are rows of their own below (reviewAskHTML): their warnings and per-item notes are not repeated.
+  const askRows = !!(it.ask_review && it.ask_review.state === "unsafe");
+  const warnings = (it.warnings || []).filter((w) => !(askRows && w.startsWith("the session says UNSAFE"))).map((w) => `<li>${esc(w)}</li>`).join("");
+  const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session said UNSAFE about"))).map((w) => `<li>${esc(w)}</li>`).join("");
   const report = it.final_report
     ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary><div class="md"></div></details>` : "";
   const loss = it.discardable && !done ? lossHTML(it) : "";
@@ -3230,6 +3261,7 @@ function reviewItemHTML(it) {
     <ul class="rv-list warn">${done ? "" : warnings}</ul>
     <ul class="rv-list ok">${done ? "" : ok + said}</ul>
     <ul class="rv-list info">${done ? "" : notes}</ul>
+    ${done ? "" : reviewAskHTML(it, review.busy ? " disabled" : "")}
     ${loss}${report}${actions}${result}
   </div>`;
 }
@@ -3381,8 +3413,20 @@ async function confirmRemovals(ids, allowWorking, coordinators = [], discard = {
   refreshAgents().catch(() => {});
 }
 
-async function reviewAction(act, id) {
+async function reviewAction(act, id, item) {
   if (review.busy) return;
+  if (act === "reask") {
+    // The old answer stays on the row until the session replies; the list reloads while it is asked.
+    try {
+      await api("/api/marks/reask", { method: "POST", body: JSON.stringify({ agent_id: id, item: Number(item) || 0 }) });
+      toast("Asked the session again");
+    } catch (e) {
+      toast("Could not ask it again: " + e.message, true);
+      return;
+    }
+    loadReview(true);
+    return;
+  }
   if (act === "bulk") {
     const ids = reviewBulkIds();
     if (ids.length) { review.confirm = { ids, kind: "bulk" }; renderReview(); }
@@ -8311,7 +8355,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("rv-list").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-act]");
-    if (b) reviewAction(b.dataset.act, b.dataset.id);
+    if (b) reviewAction(b.dataset.act, b.dataset.id, b.dataset.item);
   });
   $("rv-bulk").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-act]");

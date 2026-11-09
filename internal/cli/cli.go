@@ -75,6 +75,7 @@ func init() {
 		{"deliver", "[AGENT] PAGE… [--not-captured TEXT] [--json]", "record the Pages (pg_… ids from `publish`) that capture an agent's work; yours by default. When the agent is marked --discard, its uncommitted notes and local commits then show as captured in the removal review, and the user discards every such session with one confirmation", cmdDeliver},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
+		{"reask", "AGENT [--item N] [--json]", "ask a marked session again whether it is safe to remove", cmdReask},
 		{"brief", "set FILE|- [--no-check] | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"settings", "[show | set [--default-kind K] [--allow K,K|any] [--model KIND=M] [--thinking pi=LEVEL] | clear [--field default-kind|allowed|models]] [--host H] [--login L] [--json]", "a host's agent settings: the kind, model and thinking level a start uses when none is asked for, and the kinds it may start. Anyone reads them; setting is the user's alone", cmdSettings},
 		{"peer", "list | show NAME | add NAME URL[|URL...] [--tag T] | remove NAME  [--login L] [--json]", "(hub, the user's alone) the hub's peers: list them with their status and version, add one live, or remove a dynamic one; peers set with -peers are listed but only changed by editing the hub's environment", cmdPeer},
@@ -604,6 +605,7 @@ func cmdLedger(e *Env, args []string) error {
 			}
 		}
 	}
+	printAsks(e, lg)
 	return nil
 }
 
@@ -1629,6 +1631,78 @@ func askText(a *apiAsk) string {
 		return "the session was not asked" + why
 	}
 	return "session answer: " + a.State
+}
+
+// printAsks lists the answers whose items the hub re-checked: what each
+// UNSAFE named, how it stands now, and how old the answer is.
+func printAsks(e *Env, lg *ledgerResp) {
+	var ids []string
+	for id, ar := range lg.Asks {
+		if ar != nil && ar.State == "unsafe" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	sort.Strings(ids)
+	fmt.Fprintln(e.Stdout, "\nUNSAFE answers, each item re-checked by the hub just now:")
+	for _, id := range ids {
+		ar := lg.Asks[id]
+		verdict := "still holds"
+		if ar.Resolved {
+			verdict = "every item has resolved: counts as safe"
+		}
+		fmt.Fprintf(e.Stdout, "  %s: answered %s; %s\n", id, dash(ago(e, ar.AnsweredAt)), verdict)
+		for _, it := range ar.Items {
+			line := it.Label + " " + it.Now
+			if it.Type == "other" {
+				line = dash(it.Text) + " (" + it.Now + ")"
+			} else if it.Text != "" {
+				line += " (" + it.Text + ")"
+			}
+			fmt.Fprintf(e.Stdout, "    - %s [%s]\n", line, it.State)
+		}
+		if ar.Event {
+			fmt.Fprintln(e.Stdout, "    an item changed after the answer: the hub will ask the session again")
+		}
+		if ar.Reasking != nil {
+			fmt.Fprintln(e.Stdout, "    asking the session again…")
+		}
+		if ar.ReaskNote != "" {
+			fmt.Fprintf(e.Stdout, "    %s\n", ar.ReaskNote)
+		}
+	}
+}
+
+func cmdReask(e *Env, args []string) error {
+	fs := flag.NewFlagSet("reask", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	item := fs.Int("item", 0, "look again at this item (1-based, as `comebye ledger --json` lists them)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one AGENT")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/marks/reask", nil, map[string]any{"agent_id": t.ID, "item": *item})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	fmt.Fprintf(e.Stdout, "Asked %s again whether it is safe to remove. Its old answer stands until it replies; see comebye ledger.\n", t.label())
+	return nil
 }
 
 func upperFirst(s string) string {
