@@ -397,6 +397,16 @@ node that can reach Serve. For the trust model, see
   sends it prompts and trusts its agent list, so only tag machines you trust.
   See [Security](security.md#tagged-nodes-through-serve).
 
+### Which agent each host starts (host settings)
+
+Each host decides which agent a start uses when nothing is asked for: the launch sheet, `comebye handoff` without `--kind`, a queued plan step. Set it once per host, for example pi on the VMs and the laptop and claude on the desktop:
+
+- In the app: **Peers** (the Fleet menu, or the nav on a desktop) lists every host with its status and version. Open one to see its installed agents and models and to set the **default agent**, the **allowed agents**, and a **model and thinking level per agent**. Save writes the host's own `settings.json`; the hub reaches a peer's through its proxy, so you can edit every host from the hub.
+- From a shell: `comebye settings --host csb-vm`, `comebye settings set --host csb-vm --default-kind pi --allow pi --model pi=anthropic/sonnet --thinking pi=high --login you@example.com`, `comebye peer show csb-vm`.
+- At creation, for a host that is rebuilt (a spot worker): `COMEBYE_DEFAULT_KIND=pi` and `COMEBYE_ALLOWED_KINDS=pi` seed the values that `settings.json` does not have.
+
+Order for one start: what the request names, then `settings.json`, then those flags, then the old guess (the kind most running agents use). A request that names another kind than the host's default still starts, with a warning, and the ledger records `kind_source: request`; a kind outside the allowed list is refused with `kind_not_allowed`, whoever asks. Only you change settings (the app, or the CLI with your login); coordinators read them (`comebye settings --host H`) and cannot write, and a tagged worker node reads only its own host's. The settings live on the host that starts the agent, so they follow it when the hub moves, work for peers set with `-peers`, and apply to a peer used without a hub. A peer on an older version has none: the Peers screen says to upgrade it, and its starts keep the old guess. A peer that is down cannot be edited until it is back.
+
 ### Re-pointing a peer after a Tailscale rename
 
 When a host re-registers in the tailnet it gets a new name (`laharl` ->
@@ -546,6 +556,7 @@ backups private.
 | `vapid.pem` *(secret)* | The Web Push signing key | **Required.** A new key invalidates every phone's subscription: each must turn notifications on again. |
 | `push-subscriptions.json` | Phones subscribed to push | **Required**, or each phone re-subscribes. |
 | `handoff-template.md` | Your handoff template, if you made one | **Required** if present. |
+| `settings.json` | The host's agent settings: default kind, model and thinking level per kind, allowed kinds (set in the app's Peers screen or with `comebye settings set`; the hub edits a peer's through the proxy) | Re-enter them (or seed with `-default-kind` / `-allowed-kinds`); starts fall back to the guess until then. |
 | `kinds.json` | When each agent kind last worked here (orders the launch form) | Rebuildable; refills as agents work. |
 | `agent-token` *(secret)* | The local CLI's token | Rebuildable: a new one is made at start. Only the `comebye` CLI run on this host needs to read the new one. |
 | `repo-health.json` | Damaged repositories git reported | Rebuildable (the daily fsck refills it); meaningless on a hub-only hub. |
@@ -751,6 +762,8 @@ to the home screen again.
 | `-pages-url` | `COMEBYE_PAGES_URL` | (none) | That listener as the browser reaches it (`https://hub.tailnet.ts.net:8443`): the app frames pages from it (its Content-Security-Policy names it), and page links use it. |
 | `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL (a tagged node uses it too). The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers` and `-hub-mode`. See [Coordinators](agents.md#coordinators). |
 | `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |
+| `-default-kind` | `COMEBYE_DEFAULT_KIND` | (none) | The agent kind a start on this host uses when the request names none (a launch, a handoff, a plan step). A seed: a value saved in `settings.json` (the app's Peers screen, `comebye settings set`) wins. Empty: the kind most of the running agents use. Use it to give an ephemeral host (a spot worker) a rule at creation: `COMEBYE_DEFAULT_KIND=pi`. |
+| `-allowed-kinds` | `COMEBYE_ALLOWED_KINDS` | (none) | The only agent kinds this host starts, comma-separated (`pi`, or `pi,codex`); anything else is refused (`kind_not_allowed`) and the launch sheet does not offer it. A seed that `settings.json` overrides. Empty: every installed kind. |
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
 | `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |
 | `-hub-only` | `COMEBYE_HUB_ONLY` | `false` | Run as a hub that hosts no agents: no herdr, nothing waits for a socket; implies `-hub-mode`, turns launching off here. An explicitly empty `-sock=` means the same. See [A hub with no herdr](#a-hub-with-no-herdr-containers-kubernetes). |

@@ -46,6 +46,7 @@ with the matches listed.
 | `comebye inspect AGENT [--diff]` | its git state on its own host: uncommitted files, unmerged and unpushed commits, an unfinished rebase, the diff |
 | `comebye handoff --host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] --brief FILE` | start a worker (`--brief -` reads stdin) |
 | `comebye model AGENT [MODEL] [--thinking T]` | switch a running claude or pi agent's model (it must be idle) |
+| `comebye settings [--host H]` | a host's agent settings: the default kind, the model and thinking level each kind starts with, the allowed kinds (read only for you) |
 | `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
 | `comebye land AGENT --note "<the user's OK>" [--base main] [--deploy] [--queue]` | after the user OKs it, record their OK and tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
@@ -83,12 +84,19 @@ user's.
    instead of starting another.
 3. Pick a short branch name that says what the work is: `fix/login-timeout`,
    `feat/export-csv`, `docs/setup`. One branch per task.
-4. Pick the agent kind (`--kind`) only when the user asked for one or the
-   task clearly needs it; otherwise leave the host's default. The same goes
-   for the model (`--model`, from `comebye models --host H --kind K`; pi
-   also takes `--thinking off|minimal|low|medium|high|xhigh|max`): choose
-   one only when the user named it or the task needs more (or less) than
-   the default. `comebye ledger` shows what each worker was started with.
+4. Leave the agent kind, the model and the thinking level to the host. Each
+   host has settings the user keeps (which agent it starts by default, with
+   which model and thinking level, and which agents it may start at all);
+   a handoff with no `--kind`, `--model` or `--thinking` follows them. Read
+   them with `comebye settings --host H` if you need to know what a worker
+   will get. Pass `--kind` only when the user named a kind for this task;
+   the host then still prints a warning that it is not its default, and it
+   refuses a kind outside its allowed list (`kind_not_allowed`): do not
+   work around that, ask the user. The same goes for `--model` (from
+   `comebye models --host H --kind K`; pi also takes `--thinking
+   off|minimal|low|medium|high|xhigh|max`): name one only when the user
+   did. `comebye ledger` shows what each worker was started with and where
+   its kind came from. You cannot change the settings; they are the user's.
 5. Write a **strong brief** to a file and pass it with `--brief`. A worker
    starts with nothing but the brief, so it must stand alone:
    - **Goal**: what should be true when the work is done, in a sentence or
