@@ -70,6 +70,11 @@ type Entry struct {
 	PreviousBranches []string `json:"previous_branches,omitempty"`
 	Base             string   `json:"base,omitempty"`
 	Kind             string   `json:"kind,omitempty"`
+	// Purpose says what the work is for when the branch is not meant to
+	// merge: "research", "plan", "review" or "spike" (see
+	// DisposablePurposes). Its output is the worker's report; the sweep
+	// lists such a worker apart once it has reported, instead of "unmerged".
+	Purpose string `json:"purpose,omitempty"`
 	// Model and Thinking are what the handoff asked for (empty: the
 	// agent's default).
 	Model    string `json:"model,omitempty"`
@@ -952,4 +957,18 @@ func Truncate(s string, n int) string {
 		cut--
 	}
 	return s[:cut] + "\n\n[… truncated]"
+}
+
+// DisposablePurposes are the handoff purposes whose branch is not meant to
+// merge: the report is the deliverable.
+var DisposablePurposes = []string{"research", "plan", "review", "spike"}
+
+// DisposablePurpose reports whether p is one of them.
+func DisposablePurpose(p string) bool {
+	for _, d := range DisposablePurposes {
+		if p == d {
+			return true
+		}
+	}
+	return false
 }

@@ -358,12 +358,12 @@ func TestPromptMarkBrief(t *testing.T) {
 		t.Fatalf("a refused prompt reached the hub: %v", f.reqs[n:])
 	}
 
-	f.answers["POST /api/sweep"] = answer{body: `{"dry_run":true,"ready":[{"id":"laharl/w3:p1","name":"fix","branch":"fix/a","reason":"Sweep: clean"}],"needs_look":[{"id":"laharl/w4:p1","name":"feat","branch":"feat/b","reason":"pushed but not merged"}],"skipped":[]}`}
+	f.answers["POST /api/sweep"] = answer{body: `{"dry_run":true,"ready":[{"id":"laharl/w3:p1","name":"fix","branch":"fix/a","reason":"Sweep: clean"}],"needs_look":[{"id":"laharl/w4:p1","name":"feat","branch":"feat/b","reason":"pushed but not merged"}],"delivered":[{"id":"laharl/w5:p1","name":"res","branch":"research/x","reason":"work delivered in the report; branch has 2 local commits (on no remote)"}],"gone":[{"id":"arch1/w1:p1","name":"smoke","branch":"smoke/x","reason":"host arch1 is not in this hub's fleet any more","ad_hoc":true}],"skipped":[]}`}
 	out.Reset()
-	if code := run(e, "sweep", "--dry-run"); code != 0 || !strings.Contains(out.String(), "Would mark ready to remove (dry run) (1)") || !strings.Contains(out.String(), "pushed but not merged") || strings.Contains(out.String(), "confirms removal") {
+	if code := run(e, "sweep", "--dry-run"); code != 0 || !strings.Contains(out.String(), "Work delivered in the report; branch has local commits (not marked; mark with --mark-delivered) (1)") || !strings.Contains(out.String(), "Gone: nothing left to lose or check (not marked; mark with --mark-gone) (1)") || !strings.Contains(out.String(), "(no handoff)") || !strings.Contains(out.String(), "Would mark ready to remove (dry run) (1)") || !strings.Contains(out.String(), "pushed but not merged") || strings.Contains(out.String(), "confirms removal") {
 		t.Fatalf("sweep --dry-run: %d %s %s", code, out, errb)
 	}
-	if b := f.find("POST", "/api/sweep").body; b != `{"dry_run":true,"idle_after":"","notify":false}` {
+	if b := f.find("POST", "/api/sweep").body; b != `{"dry_run":true,"idle_after":"","mark_delivered":false,"mark_gone":false,"notify":false}` {
 		t.Fatalf("sweep body %s", b)
 	}
 	out.Reset()

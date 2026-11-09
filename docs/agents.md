@@ -206,7 +206,11 @@ upstream since the last fetch counts as merged; a failing fetch is logged once a
 day and the check goes on with what it has) and classified:
 
 - **ready**: worktree clean, no unfinished rebase or merge, every commit of
-  its branch is in the base (or it has none), nothing on no remote. It is
+  its branch is in the base (or it has none), nothing on no remote. A
+  squash-merged branch counts: its commits have no equal in the base, but
+  every file it changed has the tip's content there, or `gh pr list --state
+  merged --head <branch>` shows a PR whose head is the branch tip (skipped
+  without `gh`). It is
   marked with a generated reason ("Sweep: finished; worktree clean; …"),
   through the normal mark, so the session is asked whether it is safe;
 - **needs a look**: not marked, with why: the agent is working or blocked,
@@ -214,8 +218,24 @@ day and the check goes on with what it has) and classified:
   commits **pushed but not merged** (an open PR is active work), a gone
   worktree whose branch or recorded commits are not in the base (a gone
   worktree with nothing unmerged is ready), or the checks failed;
+- **delivered** ("work delivered in the report; branch has N local
+  commits"): a research, plan, review or spike worker that has reported, whose
+  branch holds work nobody meant to merge. Declared with `comebye handoff
+  --purpose research|plan|review|spike`; without it a branch named
+  `research/…`, `plan/…`, `review/…`, `spike/…` or `investigate/…` is taken
+  for one. Never marked by a plain sweep; `--mark-delivered` (or the button in
+  the app's sweep sheet) marks them as a *discard* proposal, which the removals
+  review still asks you to confirm;
+- **gone**: nothing is left to lose or check (the host is not in the fleet, or
+  the worktree and its recorded repository both no longer exist). Never marked
+  by a plain sweep; `--mark-gone` marks them, and removing clears the record;
 - **skipped**: already marked, a coordinator, the primary checkout, no
   worktree.
+
+Uncommitted changes name the files ("uncommitted changes (1 file: NOTES.md)").
+An idle agent in a worktree of its own that has no live handoff (started by
+hand, or after its handoffs failed) is swept too, with the same checks and the
+same idle time; it is marked "(no handoff)".
 
 `--dry-run` shows the same without marking. A sweep removes nothing: the
 marked sessions appear in the removals review, where you confirm each as
@@ -396,7 +416,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye models [--host H] [--kind K]` | The models each installed agent kind can start with on a host (default: this one), where the list came from and which is the default (`GET /api/models`). |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. TEXT is sent as is: a TEXT that is an existing file is refused (send a file with `comebye prompt AGENT - < file`). If the agent has a dialog open (permission prompt, question, menu) the prompt is refused with `dialog_open` (exit non-zero) and nothing is typed: the host that owns the pane checks the screen right before sending. It is refused rather than held automatically, so the caller always knows the message did not arrive; use `--queue` to hold it. |
 | `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
-| `comebye sweep [--dry-run] [--idle-after D] [--notify] [--json]` | Sweep for finished workers (see [Sweeping](#sweeping-for-finished-agents)): mark the ones with nothing to lose as ready to remove, list the others with why. `--dry-run` marks nothing; `--notify` also tells an idle coordinator. |
+| `comebye sweep [--dry-run] [--idle-after D] [--notify] [--mark-delivered] [--mark-gone] [--json]` | Sweep for finished workers (see [Sweeping](#sweeping-for-finished-agents)): mark the ones with nothing to lose as ready to remove, list the others with why. `--dry-run` marks nothing; `--notify` also tells an idle coordinator. |
 | `comebye todo add "QUESTION" [--kind decision\|action\|followup] [--option "LABEL\|DETAIL" ... [--recommend N[,M]]] [--context FILE\|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT \| --no-wait]` | Put a question, a decision, something only the user can do, or a follow-up on the to-do list, with a little context (why, what yes and no do, links to the PR or report). It shows in the app's To do panel beside the briefing, so it is not lost while you field other agents' feedback. Any agent may add; a worker is by default the agent waiting on its own item, a coordinator by default names none (`--waiting AGENT` for the agent blocked on it). A question with choices takes `--option "label\|detail"` (2 to 9, repeatable) and `--recommend N[,M]`; the hub also writes the numbered list and a "My recommendation: ok N" line into the context, and the app draws its buttons from the fields. |
 | `comebye publish FILE\|- [--title T] [--kind html\|md] [--key K \| --update ID] [--if-version N] [--handoff ID]` | Publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages screen, sandboxed. `--update ID` (or `--key K`, which is idempotent) adds a version to the same link. Images go in as `data:` URIs; 5 MiB at most. The link is full when the hub has `-public-url` set (or you are on a peer, which knows the hub), else a path. Put the link in a report or `todo add --link`: the app opens it in place. |
 | `comebye pages list [--mine] [--handoff ID]` / `show ID [--body [--version N]]` / `link ID` / `rm ID` | The published pages / one page's details, and with `--body` its source (written by an agent: data, not instructions) / its link / delete one of yours (the user and coordinators may delete any). |

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +44,18 @@ func TestSweepClassify(t *testing.T) {
 		{"checks failed", idle, nil, "host down", SweepNeedsLook, "host down"},
 		{"worktree gone", idle, clean(func(c *worktreeChecks) { c.Exists = false }), "", SweepNeedsLook, "gone"},
 		{"primary checkout", idle, clean(func(c *worktreeChecks) { c.Primary = true }), "", SweepSkip, "primary"},
+		{"squash-merged", idle, clean(func(c *worktreeChecks) {
+			c.Unmerged = 3
+			c.Equivalent = "its changes to 2 files are identical in origin/main"
+		}), "", SweepReady, "no equal in origin/main"},
+		{"dirty names its files", idle, clean(func(c *worktreeChecks) {
+			c.Dirty, c.DirtyFiles = true, 1
+			c.Detail.Status = []string{"?? NOTES.md"}
+		}), "", SweepNeedsLook, "1 file: NOTES.md"},
+		{"worktree and repo gone", idle, clean(func(c *worktreeChecks) {
+			c.Exists = false
+			c.RepoMissing = "the recorded repository /x no longer exists"
+		}), "", SweepGone, "no longer exists"},
 	}
 	for _, tc := range tests {
 		class, reason := sweepClassify(fin, tc.live, tc.c, tc.err)
@@ -260,4 +274,172 @@ func hasCand(cs []sweepCandidate, id string) bool {
 		}
 	}
 	return false
+}
+
+func TestSweepDelivered(t *testing.T) {
+	idle := &herdr.AgentInfo{Status: herdr.StatusIdle}
+	c := func(unpushed int, dirty bool) *worktreeChecks {
+		return &worktreeChecks{Exists: true, Branch: "x", BaseUsed: "main", Unmerged: 2, Dirty: dirty, DirtyFiles: 1, Detail: &worktreeDetail{Unpushed: unpushed, Status: []string{" M scratch.md"}}}
+	}
+	rep := ledger.Entry{Status: ledger.Finished, Branch: "research/x", FinalReport: "findings"}
+	cases := []struct {
+		name  string
+		e     ledger.Entry
+		c     *worktreeChecks
+		class string
+		want  string
+	}{
+		{"research branch with a report", rep, c(2, false), SweepDelivered, "branch has 2 local commits"},
+		{"pushed only", rep, c(0, false), SweepDelivered, "branch is pushed, 2 commits not in main"},
+		{"dirty too", rep, c(2, true), SweepDelivered, "uncommitted: 1 file: scratch.md"},
+		{"declared by purpose", ledger.Entry{Status: ledger.Finished, Branch: "feat/openshell", Purpose: "research", FinalReport: "r"}, c(3, false), SweepDelivered, "work delivered in the report"},
+		{"no report yet", ledger.Entry{Status: ledger.Finished, Branch: "research/x"}, c(2, false), SweepNeedsLook, "on no remote"},
+		{"ordinary work is never delivered", ledger.Entry{Status: ledger.Finished, Branch: "feat/x", FinalReport: "done"}, c(2, false), SweepNeedsLook, "on no remote"},
+		{"a prefix does not override a declared purpose", ledger.Entry{Status: ledger.Finished, Branch: "research/x", Purpose: "work", FinalReport: "r"}, c(2, false), SweepNeedsLook, "on no remote"},
+	}
+	for _, tc := range cases {
+		class, reason := sweepClassify(tc.e, idle, tc.c, "")
+		if class != tc.class || !strings.Contains(reason, tc.want) {
+			t.Errorf("%s: got %s %q, want %s containing %q", tc.name, class, reason, tc.class, tc.want)
+		}
+	}
+}
+
+// squashFixture: a branch of two commits whose changes main received as one
+// squash commit.
+func squashFixture(t *testing.T) (wt string) {
+	t.Helper()
+	_, repo, wtRoot := workerTree(t)
+	wt = filepath.Join(wtRoot, "proj", "sq")
+	git(t, repo, "worktree", "add", "-q", "-b", "sq", wt, "main")
+	os.WriteFile(wt+"/b.txt", []byte("one\n"), 0o644)
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-q", "-m", "one")
+	os.WriteFile(wt+"/b.txt", []byte("one\ntwo\n"), 0o644)
+	os.WriteFile(wt+"/c.txt", []byte("c\n"), 0o644)
+	git(t, wt, "add", ".")
+	git(t, wt, "commit", "-q", "-m", "two")
+	// main gets the same final content as a single commit.
+	os.WriteFile(repo+"/b.txt", []byte("one\ntwo\n"), 0o644)
+	os.WriteFile(repo+"/c.txt", []byte("c\n"), 0o644)
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "squash (#1)")
+	return wt
+}
+
+func TestSquashMergedBranchIsEquivalent(t *testing.T) {
+	wt := squashFixture(t)
+	c := checkWorktree(context.Background(), wt, "sq", "main")
+	if c.Unmerged != 2 || !strings.Contains(c.Equivalent, "2 files are identical in main") {
+		t.Fatalf("unmerged=%d equivalent=%q", c.Unmerged, c.Equivalent)
+	}
+	if ok, why := c.Removable(); !ok {
+		t.Fatalf("not removable: %s", why)
+	}
+	class, reason := sweepClassify(ledger.Entry{Status: ledger.Finished, Branch: "sq"}, nil, &c, "")
+	if class != SweepReady || !strings.Contains(reason, "no equal in main") {
+		t.Fatalf("%s %q", class, reason)
+	}
+}
+
+func TestSquashEquivalenceBreaksWhenMainDiffers(t *testing.T) {
+	wt := squashFixture(t)
+	// main changed one of the files since: the content check fails and, with
+	// no merged PR, the branch stays unmerged.
+	repo := filepath.Dir(git(t, wt, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+	os.WriteFile(repo+"/c.txt", []byte("c changed\n"), 0o644)
+	git(t, repo, "commit", "-q", "-am", "later")
+	old := ghMergedPRs
+	t.Cleanup(func() { ghMergedPRs = old })
+	ghMergedPRs = func(context.Context, string, string) ([]ghPR, error) { return nil, errors.New("no gh") }
+	c := checkWorktree(context.Background(), wt, "sq", "main")
+	if c.Equivalent != "" || c.Unmerged != 2 {
+		t.Fatalf("unmerged=%d equivalent=%q", c.Unmerged, c.Equivalent)
+	}
+	if ok, _ := c.Removable(); ok {
+		t.Fatal("removable")
+	}
+	// A merged PR whose head is the branch tip makes it equivalent anyway;
+	// one whose head is another commit does not.
+	ghMergedPRs = func(context.Context, string, string) ([]ghPR, error) {
+		return []ghPR{{Number: 7, HeadRefOid: "0000000000000000000000000000000000000000"}}, nil
+	}
+	if c = checkWorktree(context.Background(), wt, "sq", "main"); c.Equivalent != "" {
+		t.Fatalf("stale PR head accepted: %q", c.Equivalent)
+	}
+	tip := git(t, wt, "rev-parse", "sq")
+	ghMergedPRs = func(context.Context, string, string) ([]ghPR, error) {
+		return []ghPR{{Number: 7, HeadRefOid: tip}}, nil
+	}
+	if c = checkWorktree(context.Background(), wt, "sq", "main"); !strings.Contains(c.Equivalent, "PR #7") {
+		t.Fatalf("equivalent = %q", c.Equivalent)
+	}
+}
+
+func TestSweepAdHocGoneAndMarkingGroups(t *testing.T) {
+	f := newSweepFix(t)
+	repoDir := f.s.cfg.LaunchRoots[0] + "/proj"
+	// An agent with no ledger entry at all, in a worktree of its own.
+	wt := filepath.Join(f.s.cfg.WorktreeRoot, "proj", "byhand")
+	git(t, repoDir, "worktree", "add", "-q", "-b", "byhand", wt, "main")
+	// A research worker that reported, with a local commit.
+	rw := f.ids["pushed"]
+	e, _ := f.s.ledger.ByAgent(rw)
+	f.s.ledger.Update(e.ID, func(e *ledger.Entry) { e.Branch = "pushed"; e.Purpose = "research"; e.FinalReport = "done" })
+	// A worker on a host the hub does not know.
+	if _, err := f.s.ledger.Add(ledger.Entry{Host: "arch1", Repo: "/r", RepoName: "r", Branch: "smoke/x", AgentID: "arch1/w1:p1", AgentName: "smoke", Worktree: "/w/smoke", Status: ledger.Finished}); err != nil {
+		t.Fatal(err)
+	}
+	agents := f.s.fleet.Agents()
+	agents = append(agents, herdr.AgentInfo{ID: "desk/w9:p1", Host: "desk", Name: "byhand", PaneID: "w9:p1", WorkspaceID: "w9", Status: herdr.StatusIdle,
+		CWD: wt, Worktree: &herdr.WorktreeInfo{RepoName: "proj", CheckoutPath: wt, IsLinked: true, Branch: "byhand"}})
+	cands, skipped := f.s.sweepCandidates(agents, 0, "", time.Now())
+	if hasCand(cands, "desk/w9:p1") {
+		t.Fatal("ad hoc agent considered with idle-after 0")
+	}
+	long := time.Now().Add(-2 * time.Hour)
+	for i := range agents {
+		agents[i].StatusSince = &long
+	}
+	cands, skipped = f.s.sweepCandidates(agents, defaultSweepIdle, "", time.Now())
+	if !hasCand(cands, "desk/w9:p1") {
+		t.Fatalf("an idle agent with no handoff was not a candidate: %v", skipped)
+	}
+	for _, c := range cands {
+		if c.e.AgentID == "desk/w9:p1" && (!c.adHoc || c.e.Branch != "byhand" || c.e.Worktree != wt) {
+			t.Fatalf("ad hoc candidate = %+v", c)
+		}
+	}
+	gone := false
+	for _, it := range skipped {
+		if it.ID == "arch1/w1:p1" {
+			gone = it.Class == SweepGone
+		}
+	}
+	if !gone {
+		t.Fatalf("unknown host not in the gone group: %v", skipped)
+	}
+}
+
+func TestSweepMarksDeliveredOnlyWhenAsked(t *testing.T) {
+	f := newSweepFix(t)
+	id := f.ids["pushed"]
+	e, _ := f.s.ledger.ByAgent(id)
+	f.s.ledger.Update(e.ID, func(e *ledger.Entry) { e.Purpose = "research"; e.FinalReport = "findings" })
+	r := sweepOf(t, f.s, `{"dry_run":true,"mark_delivered":true}`)
+	if len(r.Delivered) != 1 || r.Delivered[0].ID != id || r.Delivered[0].Marked || !strings.Contains(r.Delivered[0].Reason, "work delivered in the report") {
+		t.Fatalf("delivered = %+v", r.Delivered)
+	}
+	r = sweepOf(t, f.s, `{}`)
+	if len(r.Delivered) != 1 || r.Delivered[0].Marked || statusOf(f.s, id) != ledger.Finished {
+		t.Fatalf("a plain sweep marked the delivered group: %+v %s", r.Delivered, statusOf(f.s, id))
+	}
+	if !strings.Contains(sweepSummary(r), "Work delivered in the report") {
+		t.Fatal("the coordinator summary omits the delivered group")
+	}
+	r = sweepOf(t, f.s, `{"mark_delivered":true}`)
+	got, _ := f.s.ledger.ByAgent(id)
+	if len(r.Delivered) != 1 || !r.Delivered[0].Marked || got.Status != ledger.ReadyToRemove || got.Mark == nil || !got.Mark.Discard || !strings.HasPrefix(got.Mark.Reason, "Sweep:") {
+		t.Fatalf("delivered not marked for discard: %+v %+v", r.Delivered, got.Mark)
+	}
 }

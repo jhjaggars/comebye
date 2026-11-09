@@ -310,7 +310,10 @@ type handoffBody struct {
 	Branch string `json:"branch"`
 	Base   string `json:"base"`
 	Kind   string `json:"kind"`
-	Name   string `json:"name"`
+	// Purpose: "research", "plan", "review" or "spike" for a branch that is
+	// not meant to merge (see ledger.Entry.Purpose); empty for ordinary work.
+	Purpose string `json:"purpose"`
+	Name    string `json:"name"`
 	// Model and Thinking choose the worker's model (see launchBody): they
 	// are recorded on the entry.
 	Model    string `json:"model"`
@@ -369,6 +372,9 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	case !filepath.IsAbs(b.Repo):
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_path", "message": "the repository must be an absolute path"})
+		return
+	case b.Purpose != "" && !ledger.DisposablePurpose(b.Purpose):
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_purpose", "message": "purpose must be one of " + strings.Join(ledger.DisposablePurposes, ", ")})
 		return
 	}
 	from := s.by(r, b.From)
@@ -509,7 +515,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 	}
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking),
+		Kind: b.Kind, Purpose: b.Purpose, Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking),
 		Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply, PlanID: b.Plan,
 	}
 	if lerr != nil {
@@ -976,14 +982,16 @@ func (s *Server) checkRemoval(ctx context.Context, it *removal) {
 				if c.Dirty {
 					it.Warnings = append(it.Warnings, "uncommitted changes ("+itoa(c.DirtyFiles)+" files): the worktree will be kept")
 				}
-				if c.Unmerged > 0 {
+				if c.Unmerged > 0 && c.Equivalent != "" {
+					it.Notes = append(it.Notes, itoa(c.Unmerged)+" commits have no equal in "+c.BaseUsed+", but "+c.Equivalent)
+				} else if c.Unmerged > 0 {
 					it.Warnings = append(it.Warnings, itoa(c.Unmerged)+" commits not in "+c.BaseUsed+": the worktree will be kept")
 				} else if c.Unmerged == 0 && len(c.Landed) > 0 {
 					it.Notes = append(it.Notes, "every commit is in "+c.BaseUsed+" ("+landedText(c.BaseUsed, c.Landed)+")")
 				} else if c.Unmerged < 0 || c.Error != "" {
 					it.Warnings = append(it.Warnings, "could not check the branch ("+c.Error+"): the worktree will be kept")
 				}
-				it.Discardable = c.Tip != "" && (c.Dirty || c.InProgress != "" || c.Unmerged != 0)
+				it.Discardable = c.Tip != "" && (c.Dirty || c.InProgress != "" || (c.Unmerged != 0 && c.Equivalent == ""))
 			}
 		}
 	}

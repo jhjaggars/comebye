@@ -21,6 +21,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/playbook"
 )
 
@@ -1028,6 +1029,7 @@ func cmdHandoff(e *Env, args []string) error {
 	branch := fs.String("branch", "", "the worker's branch (created from --base when new)")
 	base := fs.String("base", "", "the base branch (default: the repository's default branch)")
 	kind := fs.String("kind", "", "the agent kind (default: the host's most used)")
+	purpose := fs.String("purpose", "", "research, plan, review or spike when the branch is not meant to merge (its report is the deliverable; the sweep then lists it apart)")
 	name := fs.String("name", "", "the worker's name (default: from the branch)")
 	model := fs.String("model", "", "the worker's model (see `comebye models`; default: the agent's own)")
 	thinking := fs.String("thinking", "", "pi's thinking level: "+strings.Join(thinkingLevels, ", ")+" (default: pi's own)")
@@ -1048,6 +1050,8 @@ func cmdHandoff(e *Env, args []string) error {
 		return usageErr("--repo must be an absolute path on the host")
 	case len(after) > 0 && *plan == "":
 		return usageErr("--after needs --plan")
+	case *purpose != "" && !ledger.DisposablePurpose(*purpose):
+		return usageErr("--purpose must be one of %s", strings.Join(ledger.DisposablePurposes, ", "))
 	}
 	text, err := readInput(e, *brief, 1<<20)
 	if err != nil {
@@ -1064,7 +1068,7 @@ func cmdHandoff(e *Env, args []string) error {
 	if len(after) > 0 {
 		body["after"] = []string(after)
 	}
-	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name, "plan": *plan, "model": *model, "thinking": *thinking} {
+	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name, "plan": *plan, "model": *model, "thinking": *thinking, "purpose": *purpose} {
 		if v != "" {
 			body[k] = v
 		}
@@ -1389,6 +1393,18 @@ type apiSweepItem struct {
 	Branch string `json:"branch"`
 	Reason string `json:"reason"`
 	Marked bool   `json:"marked"`
+	AdHoc  bool   `json:"ad_hoc"`
+}
+
+// sweepGroupNote says what happened to a group a flag opts into.
+func sweepGroupNote(on, dry bool, hint string) string {
+	switch {
+	case on && !dry:
+		return "marked"
+	case on:
+		return "would mark"
+	}
+	return "not marked; " + hint
 }
 
 func cmdSweep(e *Env, args []string) error {
@@ -1397,6 +1413,8 @@ func cmdSweep(e *Env, args []string) error {
 	dry := fs.Bool("dry-run", false, "list what would be marked, mark nothing")
 	idle := fs.String("idle-after", "", "also count a worker still recorded as running whose agent has been idle this long (default 30m; 0 turns it off)")
 	notify := fs.Bool("notify", false, "tell an idle coordinator the outcome (not with --dry-run)")
+	markDelivered := fs.Bool("mark-delivered", false, "also mark the research/plan/review/spike workers that reported, to discard their local commits (the user confirms each)")
+	markGone := fs.Bool("mark-gone", false, "also mark the workers whose host or repository is gone (removing clears the record)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1408,7 +1426,7 @@ func cmdSweep(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := c.raw("POST", "/api/sweep", nil, map[string]any{"dry_run": *dry, "idle_after": *idle, "notify": *notify})
+	data, err := c.raw("POST", "/api/sweep", nil, map[string]any{"dry_run": *dry, "idle_after": *idle, "notify": *notify, "mark_delivered": *markDelivered, "mark_gone": *markGone})
 	if err != nil {
 		return err
 	}
@@ -1419,6 +1437,8 @@ func cmdSweep(e *Env, args []string) error {
 		DryRun      bool           `json:"dry_run"`
 		Ready       []apiSweepItem `json:"ready"`
 		NeedsLook   []apiSweepItem `json:"needs_look"`
+		Delivered   []apiSweepItem `json:"delivered"`
+		Gone        []apiSweepItem `json:"gone"`
 		Skipped     []apiSweepItem `json:"skipped"`
 		Notified    string         `json:"notified"`
 		NotifyError string         `json:"notify_error"`
@@ -1433,11 +1453,17 @@ func cmdSweep(e *Env, args []string) error {
 	section := func(title string, items []apiSweepItem) {
 		fmt.Fprintf(e.Stdout, "%s (%d)\n", title, len(items))
 		for _, it := range items {
-			fmt.Fprintf(e.Stdout, "  %s  %s  %s\n    %s\n", it.ID, it.Name, it.Branch, it.Reason)
+			tag := ""
+			if it.AdHoc {
+				tag = "  (no handoff)"
+			}
+			fmt.Fprintf(e.Stdout, "  %s  %s  %s%s\n    %s\n", it.ID, it.Name, it.Branch, tag, it.Reason)
 		}
 	}
 	section(verb, r.Ready)
 	section("Needs a look (not marked)", r.NeedsLook)
+	section("Work delivered in the report; branch has local commits ("+sweepGroupNote(*markDelivered, r.DryRun, "mark with --mark-delivered")+")", r.Delivered)
+	section("Gone: nothing left to lose or check ("+sweepGroupNote(*markGone, r.DryRun, "mark with --mark-gone")+")", r.Gone)
 	fmt.Fprintf(e.Stdout, "Skipped: %d\n", len(r.Skipped))
 	if r.Notified != "" {
 		fmt.Fprintf(e.Stdout, "Told %s.\n", r.Notified)

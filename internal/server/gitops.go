@@ -225,6 +225,11 @@ type worktreeChecks struct {
 	// SHA (a cherry-pick, a rebase, a squash of one commit: same patch-id),
 	// with the base commit they landed as where it was found.
 	Landed []landedCommit `json:"landed,omitempty"`
+	// Equivalent says why a branch whose commits git cherry could not match
+	// still has nothing the base lacks (a squash merge: its files are
+	// identical in the base, or a merged PR's head is its tip). Unmerged
+	// still counts the commits; "" when not shown (see equivalence).
+	Equivalent string `json:"equivalent,omitempty"`
 	// Gone: the worktree does not exist, so the checks fell back to the
 	// repository: Records names what was checked (the branch if it is
 	// still there, commits the ledger recorded); none means nothing of the
@@ -319,6 +324,8 @@ func (c worktreeChecks) Removable() (bool, string) {
 		return false, "a " + c.InProgress + " is in progress in it"
 	case c.Dirty:
 		return false, fmt.Sprintf("it has uncommitted changes (%d files)", c.DirtyFiles)
+	case c.Unmerged > 0 && c.Equivalent != "":
+		return true, ""
 	case c.Unmerged != 0:
 		if c.Unmerged < 0 {
 			return false, "could not tell whether its branch is merged"
@@ -452,6 +459,9 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 	if best.n >= 0 {
 		c.Unmerged, c.BaseUsed, c.baseRef = best.n, best.name, best.ref
 		c.Landed = best.landed
+		if best.n > 0 {
+			c.Equivalent = equivalence(ctx, path, branch, c.Tip, best.ref, best.name)
+		}
 	}
 	return c
 }
