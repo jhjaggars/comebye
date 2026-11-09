@@ -3342,23 +3342,54 @@ function renderSweep() {
   const d = sweep.data;
   if (!d) { box.innerHTML = `<div class="sw-box"><div class="ln-empty">${esc(sweep.err || "The sweep did not run.")}</div><div class="sw-row"><button type="button" class="btn" data-act="sw-dismiss">Dismiss</button></div></div>`; return; }
   const item = (it) => `<div class="rv-item" data-sweep="${esc(it.id)}">
-      <div class="rv-top"><span class="rv-name">${esc(it.name || it.id)}</span>${it.host ? `<span class="status">${esc(it.host)}</span>` : ""}</div>
+      <div class="rv-top"><span class="rv-name">${esc(it.name || it.id)}</span>${it.host ? `<span class="status">${esc(it.host)}</span>` : ""}${it.ad_hoc ? `<span class="status" title="started by hand: no live handoff">no handoff</span>` : ""}</div>
       ${it.branch ? `<div class="rv-sub">${esc(it.branch)}</div>` : ""}
       <div class="rv-reason">${esc(it.reason)}</div></div>`;
   const ready = d.ready || [], look = d.needs_look || [], skipped = d.skipped || [];
-  let h = `<div class="sw-box"><div class="sw-row"><b class="rv-grow">${ready.length || look.length ? "Finished agents" : "Sweep"}</b><button type="button" class="btn" data-act="sw-dismiss">${sweep.marked ? "Dismiss" : "Not now"}</button></div>`;
-  if (!ready.length && !look.length) h += `<div class="ln-empty">No finished workers to sweep.</div>`;
+  const delivered = d.delivered || [], gone = d.gone || [];
+  // Gone rows have nothing to lose: a plain sweep marks them with the ready ones.
+  const toMark = ready.length + gone.length;
+  let h = `<div class="sw-box"><div class="sw-row"><b class="rv-grow">${toMark || look.length || delivered.length ? "Finished agents" : "Sweep"}</b><button type="button" class="btn" data-act="sw-dismiss">${sweep.marked ? "Dismiss" : "Not now"}</button></div>`;
+  if (!toMark && !look.length && !delivered.length) h += `<div class="ln-empty">No finished workers to sweep.</div>`;
   if (ready.length) h += `<div class="sw-h">${sweep.marked ? "Marked ready to remove" : "Ready to remove"} (${ready.length})</div>` + ready.map(item).join("");
+  if (gone.length) h += `<div class="sw-h">Gone: nothing left to lose or check, ${sweep.marked ? "marked" : "marked with the ready ones"} (${gone.length})</div>` + gone.map(item).join("");
+  // Delivered rows hold unpushed commits: never marked by the sweep itself,
+  // only by this button, after the user has read them.
+  if (delivered.length) h += `<div class="sw-h">Work delivered in the report; branch has local commits (${delivered.length})</div>` + delivered.map(item).join("") +
+    `<div class="sw-row"><button type="button" class="btn" data-act="sw-delivered">Mark for discard: ${delivered.length}</button></div>`;
   if (look.length) h += `<div class="sw-h">Needs a look, not marked (${look.length})</div>` + look.map(item).join("");
   if (skipped.length) h += `<div class="ln-note">${skipped.length} skipped (already marked, coordinators, primary checkouts).</div>`;
-  if (sweep.marked) h += `<div class="sw-done">${ready.length ? `Marked ${ready.length} ready to remove. They are in the list below.` : "Nothing was marked."}</div>`;
-  else if (ready.length) h += `<div class="sw-row" style="margin-top:8px"><button type="button" class="btn go" id="sw-mark" data-act="sw-mark">Mark ${ready.length} ready to remove</button></div>`;
+  if (sweep.marked) h += `<div class="sw-done">${toMark ? `Marked ${toMark} ready to remove. They are in the list below.` : "Nothing was marked."}</div>`;
+  else if (toMark) h += `<div class="sw-row" style="margin-top:8px"><button type="button" class="btn go" id="sw-mark" data-act="sw-mark">Mark ${toMark} ready to remove</button></div>`;
   box.innerHTML = h + "</div>";
 }
 
 function sweepAction(act) {
   if (act === "sw-dismiss") { sweep.seq++; Object.assign(sweep, { shown: false, busy: false, data: null, marked: false }); renderSweep(); renderReview(); return; }
   if (act === "sw-mark" && !sweep.busy) runSweep(false);
+  if (act === "sw-delivered") sweepMarkDelivered();
+}
+
+// sweepMarkDelivered marks every row of the delivered group for discard, one
+// mark each (what `comebye mark --discard` does). Removal stays the list's:
+// the row asks the user to confirm the tip.
+async function sweepMarkDelivered() {
+  const items = (sweep.data && sweep.data.delivered) || [];
+  if (sweep.busy || !items.length) return;
+  const seq = sweep.seq;
+  sweep.busy = true;
+  $("review").classList.add("busy");
+  renderSweep();
+  for (const it of items) {
+    try {
+      await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: it.id, reason: "Sweep: " + it.reason, discard: true }) });
+    } catch (e) { /* the refreshed sweep still lists it */ }
+  }
+  sweep.busy = false;
+  $("review").classList.toggle("busy", review.busy);
+  if (seq !== sweep.seq) return;
+  ledger.loadedAt = 0; loadLedger(); loadReview(true);
+  runSweep(true);
 }
 
 /* ---------- detail view ---------- */

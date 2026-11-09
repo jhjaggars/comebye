@@ -294,7 +294,9 @@ await page.route(/\/api\/sweep/, (r) => {
   sweepPosts.push(body);
   const ready = { id: "uitest/w9:p1", host: "uitest", name: "fix-login", branch: "fix/login", class: "ready", reason: "Sweep: finished; worktree clean; every commit of fix/login is in origin/main; nothing unpushed" };
   const look = { id: "uitest/w8:p1", host: "uitest", name: "feat-search", branch: "feat/search", class: "needs_look", reason: "pushed but not merged: 2 commits not in origin/main (an open PR?)" };
-  r.fulfill({ json: { dry_run: !!body.dry_run, ready: [{ ...ready, marked: !body.dry_run }], needs_look: [look], skipped: [{ id: "x" }] } });
+  const delivered = { id: "uitest/w7:p1", host: "uitest", name: "stt-research", branch: "research/stt", class: "delivered", reason: "work delivered in the report; branch has 5 local commits (on no remote)" };
+  const gone = { id: "arch1/w1:p1", host: "arch1", name: "smoke", branch: "smoke/x", class: "gone", reason: "host arch1 is not in this hub's fleet any more", ad_hoc: true };
+  r.fulfill({ json: { dry_run: !!body.dry_run, ready: [{ ...ready, marked: !body.dry_run }], needs_look: [look], delivered: [delivered], gone: [{ ...gone, marked: !body.dry_run }], skipped: [{ id: "x" }] } });
 });
 
 await check("remove page: sweep: the button on Ready to remove runs a dry run listing ready and needs-a-look", async () => {
@@ -305,18 +307,67 @@ await check("remove page: sweep: the button on Ready to remove runs a dry run li
   const t = await page.locator("#rv-sweepbox").innerText();
   if (!t.includes("feat-search") || !t.includes("open PR")) throw new Error("list " + t);
   if (!sweepPosts.length || sweepPosts[0].dry_run !== true) throw new Error("first call was not a dry run: " + JSON.stringify(sweepPosts));
-  if ((await page.locator("#sw-mark").innerText()).trim() !== "Mark 1 ready to remove") throw new Error("button " + (await page.locator("#sw-mark").innerText()));
+  // ready + gone: a plain sweep marks both; delivered is never in that count
+  if ((await page.locator("#sw-mark").innerText()).trim() !== "Mark 2 ready to remove") throw new Error("button " + (await page.locator("#sw-mark").innerText()));
   await noOverflow();
+});
+
+await check("remove page: sweep: delivered rows have their own button (a discard mark); gone rows are listed with the ready ones", async () => {
+  const t = (await page.locator("#rv-sweepbox").innerText()).toLowerCase(); // status chips are upper-cased by CSS
+  if (!t.includes("stt-research") || !t.includes("5 local commits") || !t.includes("smoke") || !t.includes("no handoff")) throw new Error("list " + t.replace(/\s+/g, " "));
+  if (!/gone: nothing left to lose or check, marked with the ready ones/.test(t)) throw new Error("gone heading " + t.replace(/\s+/g, " "));
+  if (await page.locator('#rv-sweepbox [data-act="sw-gone"]').count()) throw new Error("gone has a button of its own");
+  const marks = [];
+  await page.route(/\/api\/marks$/, (r) => {
+    const b = JSON.parse(r.request().postData() || "{}");
+    if (b.agent_id !== "uitest/w7:p1") return r.fallback();
+    marks.push(b);
+    r.fulfill({ json: { mark: {} } });
+  });
+  const btn = page.locator('#rv-sweepbox [data-act="sw-delivered"]');
+  const bb = await btn.boundingBox();
+  if (!bb || bb.height < 30) throw new Error("button too small " + JSON.stringify(bb));
+  await noOverflow();
+  const before = sweepPosts.length;
+  await btn.click();
+  await page.waitForTimeout(800);
+  if (marks.length !== 1 || marks[0].discard !== true || !marks[0].reason.startsWith("Sweep: work delivered")) throw new Error("marks " + JSON.stringify(marks));
+  if (sweepPosts.length !== before + 1 || sweepPosts[before].dry_run !== true) throw new Error("no refresh after marking: " + JSON.stringify(sweepPosts));
 });
 
 await check("remove page: sweep: confirming marks, and the result stays on the page", async () => {
   await page.locator("#sw-mark").click();
-  await page.waitForFunction(() => document.querySelector("#rv-sweepbox")?.innerText.includes("Marked 1 ready to remove"), null, { timeout: 5000 });
-  if (sweepPosts.length !== 2 || sweepPosts[1].dry_run !== false) throw new Error("second call " + JSON.stringify(sweepPosts));
+  await page.waitForFunction(() => document.querySelector("#rv-sweepbox")?.innerText.includes("Marked 2 ready to remove"), null, { timeout: 5000 });
+  if (sweepPosts.length !== 3 || sweepPosts[2].dry_run !== false) throw new Error("marking call " + JSON.stringify(sweepPosts));
   if (!(await page.locator("#rv-sweepbox").innerText()).toLowerCase().includes("marked ready to remove")) throw new Error("no marked heading");
   if (!(await page.evaluate(() => location.hash === "#/remove"))) throw new Error("left the page");
   await page.locator("#rv-close").click();
   await page.waitForSelector("#review", { state: "hidden" });
+});
+
+// A marked "gone" row (host not in the fleet): the review says there is
+// nothing left to check, counts it as safe, and removing it posts a confirm.
+await check("remove page: a gone row is safe, says it only clears the record, and removing it confirms", async () => {
+  const gone = { id: "arch1/w1:p1", host: "arch1", name: "smoke", branch: "smoke/x", worktree: "/w/smoke", mark: { agent_id: "arch1/w1:p1", by: "sweep", reason: "Sweep: host arch1 is not in this hub's fleet any more", at: new Date().toISOString() },
+    live: { present: false }, warnings: [], notes: ["host arch1 is not in this hub's fleet: nothing there can be checked or removed; confirming only clears the record"], safe: true };
+  const confirms = [];
+  let removed = false;
+  await page.route(/\/api\/removals(\/confirm)?$/, (r) => {
+    if (r.request().method() === "POST") { confirms.push(JSON.parse(r.request().postData() || "{}")); removed = true; return r.fulfill({ json: { results: [{ id: gone.id, ok: true, result: { closed: "", worktree_removed: false, kept: "host arch1 is not in this hub's fleet: only the record was cleared" } }] } }); }
+    r.fulfill({ json: { removals: removed ? [] : [gone] } });
+  });
+  await page.goto(base + "/#/remove", { waitUntil: "load" });
+  await page.waitForFunction(() => document.querySelector("#rv-list")?.innerText.includes("smoke"), null, { timeout: 5000 });
+  const t = await page.locator("#rv-list").innerText();
+  if (!t.includes("confirming only clears the record")) throw new Error("no note: " + t);
+  if (t.toLowerCase().includes("checks failed")) throw new Error("checks failed shown: " + t);
+  if (!/Remove all safe \(1\)/.test(await page.locator("#rv-all-safe").innerText())) throw new Error("not counted as safe");
+  await noOverflow();
+  await page.locator('#rv-list [data-act="remove"]').first().click();
+  await page.locator('#rv-list [data-act="confirm-yes"]').first().click();
+  await page.waitForFunction(() => /removed|Removed/.test(document.querySelector("#rv-list")?.innerText || "") || !document.querySelector("#rv-list")?.innerText.includes("smoke/x"), null, { timeout: 5000 });
+  if (confirms.length !== 1 || confirms[0].ids?.[0] !== gone.id) throw new Error("confirm " + JSON.stringify(confirms));
+  await page.unroute(/\/api\/removals(\/confirm)?$/);
 });
 
 // The briefing card: collapsed by default, a new briefing keeps it collapsed,

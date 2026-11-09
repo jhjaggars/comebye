@@ -67,6 +67,7 @@ func TestSweepClassify(t *testing.T) {
 
 // sweepFixture is a hub with real worktrees for several ledger workers.
 type sweepFix struct {
+	fh  *fakeLaunchHerdr
 	s   *Server
 	ids map[string]string // name -> agent id
 }
@@ -96,7 +97,7 @@ func newSweepFix(t *testing.T) *sweepFix {
 	s := New(Config{ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), LaunchRoots: []string{root}, WorktreeRoot: wtRoot, AllowLogins: []string{"me@example.com"}, AgentToken: testToken}, client, m)
 	s.askPoll, s.askWait = 10_000_000, 50_000_000
 	t.Cleanup(s.asking.Wait) // before the temp dirs go: asks run git in the worktrees
-	f := &sweepFix{s: s, ids: map[string]string{}}
+	f := &sweepFix{fh: fh, s: s, ids: map[string]string{}}
 	for i, n := range names {
 		id := "desk/w" + itoa(i+1) + ":p1"
 		f.ids[n] = id
@@ -130,7 +131,7 @@ func sweepOf(t *testing.T, s *Server, body string) sweepResult {
 }
 
 func classOf(r sweepResult, id string) (string, string) {
-	for _, l := range [][]sweepItem{r.Ready, r.NeedsLook, r.Skipped} {
+	for _, l := range [][]sweepItem{r.Ready, r.NeedsLook, r.Delivered, r.Gone, r.Skipped} {
 		for _, it := range l {
 			if it.ID == id {
 				return it.Class, it.Reason
@@ -493,5 +494,57 @@ func TestConfirmingAGoneRowClearsTheRecord(t *testing.T) {
 	e, _ := f.s.ledger.Get(it.EntryID)
 	if e.Status != ledger.Removed || len(f.s.ledger.Marks()) != 0 {
 		t.Fatalf("record not cleared: %s %v", e.Status, f.s.ledger.Marks())
+	}
+}
+
+// A worker whose worktree and repository are both gone (on a host the hub
+// knows): the sweep calls it gone and marks it, the review says nothing is
+// left to check or delete, and confirming drops the record.
+func TestConfirmingARowWhoseRepositoryIsGone(t *testing.T) {
+	f := newSweepFix(t)
+	wt := filepath.Join(f.s.cfg.WorktreeRoot, "orphan", "vanished")
+	if _, err := f.s.ledger.Add(ledger.Entry{Host: "desk", Repo: filepath.Join(f.s.cfg.LaunchRoots[0], "no-such-repo"), RepoName: "no-such-repo", Branch: "scratch/x", AgentID: "desk/w42:p1", AgentName: "vanished", Worktree: wt, Status: ledger.Finished}); err != nil {
+		t.Fatal(err)
+	}
+	// herdr has no workspace for the vanished worker; the removal asks.
+	f.fh.set(func(h *fakeLaunchHerdr) {
+		h.hook = func(method string, p map[string]any) (any, *herdr.Error, bool) {
+			switch method {
+			case "workspace.list":
+				return map[string]any{"type": "workspace_list", "workspaces": []any{}}, nil, true
+			case "worktree.list":
+				return map[string]any{"type": "worktree_list", "worktrees": []any{}}, nil, true
+			}
+			return nil, nil, false
+		}
+	})
+	r := sweepOf(t, f.s, `{}`)
+	if c, why := classOf(r, "desk/w42:p1"); c != SweepGone || !strings.Contains(why, "no longer exists") {
+		t.Fatalf("class = %s %q", c, why)
+	}
+	w := do(f.s, "GET", "/api/removals", userHdr, "")
+	var rv struct {
+		Removals []removal `json:"removals"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &rv)
+	var it *removal
+	for i := range rv.Removals {
+		if rv.Removals[i].ID == "desk/w42:p1" {
+			it = &rv.Removals[i]
+		}
+	}
+	if it == nil || !it.Safe || len(it.Warnings) != 0 || !strings.Contains(strings.Join(it.Notes, " "), "confirming only drops the record") {
+		t.Fatalf("review: %+v", it)
+	}
+	w = do(f.s, "POST", "/api/removals/confirm", userHdr, `{"ids":["desk/w42:p1"]}`)
+	var cr struct {
+		Results []removalOutcome `json:"results"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &cr)
+	if w.Code != 200 || len(cr.Results) != 1 || !cr.Results[0].OK {
+		t.Fatalf("confirm = %d %s", w.Code, w.Body)
+	}
+	if e, _ := f.s.ledger.Get(it.EntryID); e.Status != ledger.Removed {
+		t.Fatalf("status = %s", e.Status)
 	}
 }

@@ -967,6 +967,10 @@ func (s *Server) checkRemoval(ctx context.Context, it *removal) {
 				it.Branch = c.Branch
 			}
 			switch {
+			case !c.Exists && !c.Gone && c.RepoMissing != "":
+				// The worktree and the repository it came from are both gone:
+				// nothing is left to check or delete on disk.
+				it.Notes = append(it.Notes, "the worktree and its repository are gone ("+c.RepoMissing+"): nothing is left to check or delete; confirming only drops the record and closes the agent")
 			case !c.Exists:
 				if warn, msg := c.goneVerdict(); !c.Gone {
 					it.Notes = append(it.Notes, "the worktree is already gone")
