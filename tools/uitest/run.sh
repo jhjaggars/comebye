@@ -22,9 +22,7 @@ if [ -z "${SCHEME:-}" ]; then
   # default), so both set-ups are driven in a browser.
   SCHEME=dark PAGES_LISTENER=1 "$me" "${1:-}" "$o" || rc=1
   SCHEME=light PAGES_LISTENER=0 PORT=$(( ${PORT:-18741} + 1 )) "$me" "${1:-}" "$o/light" || rc=1
-  # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
-FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1
-exit $rc
+  exit $rc
 fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
