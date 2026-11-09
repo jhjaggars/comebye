@@ -64,7 +64,7 @@ type DeployRecord struct {
 	// of a failed run, the bump: ok line of a good one, the latest line while
 	// it runs. The hub derives it too, so a peer without it still shows one.
 	Headline string `json:"headline,omitempty"`
-	Error    string     `json:"error,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 type deployStatus struct {
