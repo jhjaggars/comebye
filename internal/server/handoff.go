@@ -952,7 +952,9 @@ func (s *Server) checkRemoval(ctx context.Context, it *removal) {
 	if it.Worktree == "" {
 		it.Notes = append(it.Notes, "no worktree of its own: only the session is closed")
 	} else if !s.knownHost(it.Host) {
-		it.ChecksError = "unknown host " + it.Host
+		// Nothing on that host can be checked or touched from here: it is
+		// not a failure of the checks, and confirming only clears the record.
+		it.Notes = append(it.Notes, "host "+it.Host+" is not in this hub's fleet: nothing there can be checked or removed; confirming only clears the record")
 	} else {
 		opts := it.opts
 		opts.Detail = true
@@ -1119,7 +1121,22 @@ func (s *Server) handleConfirmRemovals(w http.ResponseWriter, r *http.Request) {
 func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool, discardTip string) removalOutcome {
 	o := removalOutcome{ID: it.ID}
 	if !s.knownHost(it.Host) {
-		o.Code, o.Message = "unknown_host", "no such host: "+it.Host
+		// Nothing to close or remove on a host this hub does not know (a
+		// "gone" row of a sweep): clear the record, touch nothing.
+		res := &removeResult{Kept: "host " + it.Host + " is not in this hub's fleet: only the record was cleared"}
+		raw, _ := json.Marshal(res)
+		if _, err := s.ledger.Removed(it.ID, raw, time.Now()); err != nil {
+			log.Printf("ledger: %v", err)
+		}
+		if it.Coordinator {
+			if err := s.recordRole(it.ID, "", "", ""); err != nil {
+				log.Printf("roles: %v", err)
+			}
+		}
+		s.coord.mu.Lock()
+		delete(s.coord.checks, it.EntryID)
+		s.coord.mu.Unlock()
+		o.OK, o.Result = true, res
 		return o
 	}
 	s.findWorktree(ctx, it)

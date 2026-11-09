@@ -459,3 +459,39 @@ func TestSweepMarksGoneRowsItself(t *testing.T) {
 		t.Fatalf("gone not marked by a plain sweep: %+v %+v", r.Gone, got.Mark)
 	}
 }
+
+// A gone row (host not in the fleet) is reviewed without a failed-checks
+// warning, and confirming it clears the record without calling any host.
+func TestConfirmingAGoneRowClearsTheRecord(t *testing.T) {
+	f := newSweepFix(t)
+	if _, err := f.s.ledger.Add(ledger.Entry{Host: "arch1", Repo: "/r", RepoName: "r", Branch: "smoke/x", AgentID: "arch1/w1:p1", AgentName: "smoke", Worktree: "/w/smoke", Status: ledger.Finished}); err != nil {
+		t.Fatal(err)
+	}
+	sweepOf(t, f.s, `{}`)
+	w := do(f.s, "GET", "/api/removals", userHdr, "")
+	var rv struct {
+		Removals []removal `json:"removals"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &rv)
+	var it *removal
+	for i := range rv.Removals {
+		if rv.Removals[i].ID == "arch1/w1:p1" {
+			it = &rv.Removals[i]
+		}
+	}
+	if it == nil || !it.Safe || it.ChecksError != "" || len(it.Warnings) != 0 || !strings.Contains(strings.Join(it.Notes, " "), "only clears the record") {
+		t.Fatalf("review of a gone row: %+v", it)
+	}
+	w = do(f.s, "POST", "/api/removals/confirm", userHdr, `{"ids":["arch1/w1:p1"]}`)
+	var cr struct {
+		Results []removalOutcome `json:"results"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &cr)
+	if w.Code != 200 || len(cr.Results) != 1 || !cr.Results[0].OK {
+		t.Fatalf("confirm = %d %s", w.Code, w.Body)
+	}
+	e, _ := f.s.ledger.Get(it.EntryID)
+	if e.Status != ledger.Removed || len(f.s.ledger.Marks()) != 0 {
+		t.Fatalf("record not cleared: %s %v", e.Status, f.s.ledger.Marks())
+	}
+}
