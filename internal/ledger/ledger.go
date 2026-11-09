@@ -345,6 +345,37 @@ type Ask struct {
 	At      time.Time  `json:"at"`
 }
 
+// PageRef names a published Page that captures an agent's work.
+type PageRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"`
+}
+
+// Delivery records that an agent's work is captured in Pages: what its
+// uncommitted notes and local commits said now lives there. It is the
+// ground for treating those files and commits as safe to discard (the user
+// still confirms). NotCaptured is what the recorder says the Pages do NOT
+// hold (code, say): while it is set the work is not treated as captured.
+type Delivery struct {
+	AgentID string `json:"agent_id"`
+	// EntryID is the ledger worker's entry; Name the agent's name then: a
+	// pane id can be reused by another agent, whose work the record must
+	// not vouch for.
+	EntryID     string    `json:"entry_id,omitempty"`
+	Name        string    `json:"name,omitempty"`
+	Pages       []PageRef `json:"pages"`
+	NotCaptured []string  `json:"not_captured,omitempty"`
+	By          string    `json:"by,omitempty"`
+	At          time.Time `json:"at"`
+}
+
+func copyDelivery(d *Delivery) *Delivery {
+	c := *d
+	c.Pages = append([]PageRef(nil), d.Pages...)
+	c.NotCaptured = append([]string(nil), d.NotCaptured...)
+	return &c
+}
+
 func copyMark(m *Mark) *Mark {
 	c := *m
 	if m.Ask != nil {
@@ -356,11 +387,13 @@ func copyMark(m *Mark) *Mark {
 
 // file is the on-disk format.
 type file struct {
-	Version int           `json:"version"`
-	Entries []*Entry      `json:"entries"`
-	Marks   []*Mark       `json:"marks"`
-	Plans   []*Plan       `json:"plans,omitempty"`
-	Audit   []*AuditEvent `json:"audit,omitempty"`
+	Version int      `json:"version"`
+	Entries []*Entry `json:"entries"`
+	Marks   []*Mark  `json:"marks"`
+	// Deliveries are the records of work captured in Pages, one per agent.
+	Deliveries []*Delivery   `json:"deliveries,omitempty"`
+	Plans      []*Plan       `json:"plans,omitempty"`
+	Audit      []*AuditEvent `json:"audit,omitempty"`
 }
 
 // Store is the ledger. Methods are safe for concurrent use and return
@@ -660,6 +693,48 @@ func (s *Store) SetMark(m Mark) (*Entry, error) {
 	return nil, s.save()
 }
 
+// SetDelivery records pages as capturing an agent's work. A record for the
+// same agent (and entry) adds the pages and replaces NotCaptured; one for
+// a different incarnation replaces it. It returns the record.
+func (s *Store) SetDelivery(d Delivery) (Delivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d.At = time.Now().UTC()
+	d = *copyDelivery(&d)
+	for i, old := range s.data.Deliveries {
+		if old.AgentID != d.AgentID {
+			continue
+		}
+		if old.EntryID == d.EntryID && (old.Name == d.Name || old.Name == "" || d.Name == "") {
+			seen := map[string]bool{}
+			var pages []PageRef
+			for _, p := range append(append([]PageRef(nil), old.Pages...), d.Pages...) {
+				if !seen[p.ID] {
+					seen[p.ID] = true
+					pages = append(pages, p)
+				}
+			}
+			d.Pages = pages
+		}
+		s.data.Deliveries[i] = &d
+		return d, s.save()
+	}
+	s.data.Deliveries = append(s.data.Deliveries, &d)
+	return d, s.save()
+}
+
+// DeliveryOf returns an agent's delivery record, if any.
+func (s *Store) DeliveryOf(agentID string) (Delivery, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.data.Deliveries {
+		if d.AgentID == agentID {
+			return *copyDelivery(d), true
+		}
+	}
+	return Delivery{}, false
+}
+
 // SetAsk changes the answer on the agent's mark made at markedAt; a mark
 // replaced or cleared since is left alone. It reports whether it changed.
 func (s *Store) SetAsk(agentID string, markedAt time.Time, a Ask) (bool, error) {
@@ -736,6 +811,13 @@ func (s *Store) Removed(agentID string, removal json.RawMessage, now time.Time) 
 		}
 	}
 	s.data.Marks = kept
+	dk := s.data.Deliveries[:0]
+	for _, d := range s.data.Deliveries {
+		if d.AgentID != agentID {
+			dk = append(dk, d)
+		}
+	}
+	s.data.Deliveries = dk
 	return out, s.save()
 }
 

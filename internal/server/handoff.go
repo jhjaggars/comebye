@@ -881,6 +881,14 @@ type removal struct {
 	// changes, unmerged commits, an unfinished rebase); the user may
 	// confirm discarding it, with the tip in checks.tip.
 	Discardable bool `json:"discardable,omitempty"`
+	// Delivered: the Pages that capture the session's work (see captured.go).
+	// DeliveredDiscard: they hold, and the dirty files and local commits
+	// that stop a plain removal are only notes: the item can be discarded
+	// in bulk, with the user's one confirmation.
+	Delivered        *deliveredView `json:"delivered,omitempty"`
+	DeliveredDiscard bool           `json:"delivered_discard,omitempty"`
+	// captured: set before checkRemoval when the delivery holds.
+	captured bool
 	// Coordinator: the agent is a coordinator; removing it needs its id
 	// in the confirmation's coordinators as well.
 	Coordinator bool              `json:"coordinator,omitempty"`
@@ -936,9 +944,16 @@ func (s *Server) review(ctx context.Context, it *removal) {
 	case it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked:
 		it.Warnings = append(it.Warnings, "the agent is "+string(it.Live.Status)+": closing it interrupts it")
 	}
+	it.Delivered, it.captured = s.deliveryHolds(it)
 	s.checkRemoval(ctx, it)
 	if it.Mark.Discard {
 		it.Notes = append(it.Notes, "proposed: discard the work (worktree and branch)")
+	}
+	if v := it.Delivered; v != nil && !v.Holds {
+		it.Warnings = append(it.Warnings, "pages are recorded for this work, but "+v.Why+": its files and commits still count")
+	}
+	for _, n := range it.Delivered.notCaptured() {
+		it.Warnings = append(it.Warnings, "not captured in a page: "+n)
 	}
 	if a := it.Mark.Ask; a != nil {
 		switch a.State {
@@ -946,6 +961,10 @@ func (s *Server) review(ctx context.Context, it *removal) {
 			why := a.Reason
 			if why == "" {
 				why = "(no reason given)"
+			}
+			if it.captured {
+				it.Notes = append(it.Notes, "the session said UNSAFE before its pages were recorded: "+why)
+				break
 			}
 			it.Warnings = append(it.Warnings, "the session says UNSAFE: "+why)
 		case ledger.AskAsking:
@@ -1002,11 +1021,17 @@ func (s *Server) checkRemoval(ctx context.Context, it *removal) {
 				if c.InProgress != "" {
 					it.Warnings = append(it.Warnings, "a "+c.InProgress+" is in progress: the worktree will be kept")
 				}
-				if c.Dirty {
+				// Work captured in Pages is a note, not a warning, but only when
+				// the discard can be offered (a tip to confirm against).
+				down := it.captured && c.Tip != "" && c.InProgress == "" && c.Error == "" && c.Unmerged >= 0
+				if c.Dirty && !down {
 					it.Warnings = append(it.Warnings, "uncommitted changes ("+itoa(c.DirtyFiles)+" files): the worktree will be kept")
 				}
+				lostCommits := false
 				if c.Unmerged > 0 && c.Equivalent != "" {
 					it.Notes = append(it.Notes, itoa(c.Unmerged)+" commits have no equal in "+c.BaseUsed+", but "+c.Equivalent)
+				} else if c.Unmerged > 0 && down {
+					lostCommits = true
 				} else if c.Unmerged > 0 {
 					it.Warnings = append(it.Warnings, itoa(c.Unmerged)+" commits not in "+c.BaseUsed+": the worktree will be kept")
 				} else if c.Unmerged == 0 && len(c.Landed) > 0 {
@@ -1015,6 +1040,10 @@ func (s *Server) checkRemoval(ctx context.Context, it *removal) {
 					it.Warnings = append(it.Warnings, "could not check the branch ("+c.Error+"): the worktree will be kept")
 				}
 				it.Discardable = c.Tip != "" && (c.Dirty || c.InProgress != "" || (c.Unmerged != 0 && c.Equivalent == ""))
+				if down && it.Discardable {
+					it.Notes = append(it.Notes, it.Delivered.recordLost(c, lostCommits))
+					it.DeliveredDiscard = true
+				}
 			}
 		}
 	}
@@ -1161,6 +1190,12 @@ func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool,
 		return o
 	}
 	s.findWorktree(ctx, it)
+	var lost *lostWork
+	if discardTip != "" {
+		// What this discard drops, as the checks see it now, for the record.
+		s.review(ctx, it)
+		lost = lostOf(it)
+	}
 	body := removeBody{
 		Agent: it.PaneID, Name: it.Name, WorkspaceID: it.WorkspaceID, Worktree: it.Worktree,
 		Branch: it.Branch, Base: it.Base, RemoveWorktree: it.Worktree != "", AllowWorking: allowWorking,
@@ -1172,6 +1207,9 @@ func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool,
 		return o
 	}
 	raw, _ := json.Marshal(res)
+	if lost != nil && res.Discarded {
+		raw = withLost(raw, lost)
+	}
 	if _, err := s.ledger.Removed(it.ID, raw, time.Now()); err != nil {
 		log.Printf("ledger: %v", err)
 	}

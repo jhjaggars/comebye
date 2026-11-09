@@ -71,7 +71,8 @@ func init() {
 		{"publish", "FILE|- [--title T] [--kind html|md] [--key K | --update ID] [--if-version N] [--handoff ID] [--json]", "publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages. --update ID or --key K adds a version to the same link", cmdPublish},
 		{"pages", "list [--mine] [--handoff ID] | show ID [--body [--version N]] | link ID | rm ID  [--json] | guide | new [--type doc|mockup|deck|dashboard] [--title T]", "the published pages: list them, show one (with its source), print its link, or delete one of yours; guide prints how to make a good page (the comebye-pages skill), new prints a starter page built on the Comebye page template", cmdPages},
 		{"skill", "install|status [--claude] [--pi] [--force] [--json]", "install the comebye-pages skill (how to make a good page) where claude (~/.claude/skills) and pi (~/.pi/agent/skills) find it, or say whether it is there and current; never replaces a copy you edited unless --force", cmdSkill},
-		{"mark", "AGENT --reason R [--discard] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app)", cmdMark},
+		{"mark", "AGENT --reason R [--discard [--delivered PAGE,… [--not-captured TEXT]]] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app). --delivered records the Pages that capture the work, so its notes and docs are listed as captured, not as warnings", cmdMark},
+		{"deliver", "[AGENT] PAGE… [--not-captured TEXT] [--json]", "record the Pages (pg_… ids from `publish`) that capture an agent's work; yours by default. When the agent is marked --discard, its uncommitted notes and local commits then show as captured in the removal review, and the user discards every such session with one confirmation", cmdDeliver},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"brief", "set FILE|- [--no-check] | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
@@ -1496,6 +1497,10 @@ func cmdMark(e *Env, args []string) error {
 	discard := fs.Bool("discard", false, "propose discarding its work too: the worktree even if dirty or unmerged, and the branch")
 	noAsk := fs.Bool("no-ask", false, "do not ask the session whether it is safe to remove")
 	wait := fs.Bool("wait", false, "wait (up to about 2 minutes) for the session's answer and print it")
+	var delivered stringList
+	fs.Var(&delivered, "delivered", "with --discard: the Pages (pg_… ids) that capture the work, so its notes and docs are not kept as warnings (repeat or comma-separate)")
+	var notCaptured multiText
+	fs.Var(&notCaptured, "not-captured", "with --delivered: something the pages do NOT hold (repeatable); it stays a warning")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1513,6 +1518,15 @@ func cmdMark(e *Env, args []string) error {
 	t, err := c.resolve(pos[0])
 	if err != nil {
 		return err
+	}
+	if len(delivered) > 0 && !*discard {
+		return usageErr("--delivered goes with --discard: pages capture work that is thrown away")
+	}
+	if len(delivered) > 0 {
+		// Recorded first, so the session's answer is judged against it.
+		if _, err := recordDelivery(c, t.ID, delivered, notCaptured); err != nil {
+			return err
+		}
 	}
 	data, err := c.raw("POST", "/api/marks", nil, map[string]any{"agent_id": t.ID, "reason": *reason, "discard": *discard, "no_ask": *noAsk})
 	if err != nil {
