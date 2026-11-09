@@ -117,6 +117,8 @@ type workerPeer struct {
 	hits   []string
 	worker []byte
 	remove []byte
+	// probe is the answer to GET /api/probe ("" : not found).
+	probe string
 }
 
 func (p *workerPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +140,15 @@ func (p *workerPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"agent":{"id":"kube/wS:p9","host":"kube","pane_id":"wS:p9","name":"feat-x","agent":"claude","agent_status":"idle"},"workspace_id":"wS","worktree":"/home/k/.worktrees/proj/feat-x","branch":"feat/x","base":"main","repo":"/home/k/code/proj","reused":false}`)
 	case "/api/checks":
 		fmt.Fprintf(w, `{"path":%q,"exists":true,"primary":false,"branch":"feat/x","dirty":false,"dirty_files":0,"unmerged_commits":0,"base_used":"main"}`, r.URL.Query().Get("path"))
+	case "/api/probe":
+		p.mu.Lock()
+		pr := p.probe
+		p.mu.Unlock()
+		if pr == "" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, pr)
 	case "/api/remove":
 		p.mu.Lock()
 		p.remove = body

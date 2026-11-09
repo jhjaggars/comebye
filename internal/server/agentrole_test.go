@@ -92,6 +92,7 @@ func TestAgentRoleAllowlist(t *testing.T) {
 		{"POST", "/api/hosts/desk/launch", `{}`},
 		{"GET", "/api/repos", ""},
 		{"GET", "/api/checks?path=/x", ""},
+		{"GET", "/api/probe?kind=pid&pid=1234", ""},
 		{"POST", "/api/worker", `{}`},
 		{"POST", "/api/remove", `{}`},
 		{"GET", "/api/hosts/desk/repos", ""},

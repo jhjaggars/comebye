@@ -594,3 +594,41 @@ func TestUndeliveredNoticeIsNotLost(t *testing.T) {
 		t.Fatal("undelivered notice dropped")
 	}
 }
+
+func TestUpdateAskKeepsTheMarkAndItsItems(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	m := Mark{AgentID: "desk/w1:p1", At: at, Ask: &Ask{State: AskUnsafe, At: at, Items: []AskItem{{Type: ItemPR, Repo: "o/r", Number: 3}}}}
+	if _, err := s.SetMark(m); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if ok, err := s.UpdateAsk(m.AgentID, at, func(a *Ask) bool { a.ReaskedAt = &now; a.Items[0].Number = 9; return true }); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	got := s.Marks()[0].Ask
+	if got.ReaskedAt == nil || got.State != AskUnsafe || got.Items[0].Number != 9 {
+		t.Fatalf("ask = %+v", got)
+	}
+	// A different mark, an fn that declines, and a mark with no answer are left alone.
+	if ok, _ := s.UpdateAsk(m.AgentID, at.Add(time.Second), func(a *Ask) bool { a.State = AskSafe; return true }); ok {
+		t.Error("changed another mark's answer")
+	}
+	if ok, _ := s.UpdateAsk(m.AgentID, at, func(a *Ask) bool { a.State = AskSafe; return false }); ok || s.Marks()[0].Ask.State != AskUnsafe {
+		t.Error("declined update applied")
+	}
+	if _, err := s.SetMark(Mark{AgentID: "desk/w2:p1", At: at}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.UpdateAsk("desk/w2:p1", at, func(a *Ask) bool { return true }); ok {
+		t.Error("updated a mark with no answer")
+	}
+	// Copies: editing a returned mark does not reach the store.
+	s.Marks()[0].Ask.Items[0].Number = 77
+	if s.Marks()[0].Ask.Items[0].Number != 9 {
+		t.Error("Marks() shares items with the store")
+	}
+}

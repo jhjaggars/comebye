@@ -185,6 +185,15 @@ type Server struct {
 	// asking counts the asks under way (they run git checks in the
 	// session's worktree), so tests can wait for them before cleaning up.
 	asking sync.WaitGroup
+	// probes caches the removals review's re-checks (see askcheck.go);
+	// probeTTL is how long one lives (tests shrink it).
+	probes   *probeCache
+	probeTTL time.Duration
+	// reaskGap, reaskCap and reaskMax pace the hub's automatic re-asks
+	// (tests change them); reaskEvery is how often RunReask looks.
+	reaskGap, reaskCap time.Duration
+	reaskMax           int
+	reaskEvery         time.Duration
 	// releasing counts the releaseQueued passes started by queueing a step,
 	// so tests can wait for them before asserting or cleaning up.
 	releasing sync.WaitGroup
@@ -245,7 +254,8 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	}
 	s := &Server{cfg: cfg, recall: archive.NewReader(cfg.RecallIndex), client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond,
-		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait}
+		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait,
+		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
 	s.typing = newTypingTracker()
 	s.rel = newRelState()
 	switch rc := &s.cfg.Release; {
@@ -375,6 +385,7 @@ func (s *Server) routes() {
 	// Workers, on this host: the hub calls a peer's through fleet.CallHost.
 	s.mux.HandleFunc("GET /api/repos", s.auth(s.handleRepos))
 	s.mux.HandleFunc("GET /api/checks", s.auth(s.handleChecks))
+	s.mux.HandleFunc("GET /api/probe", s.auth(s.handleProbe))
 	s.mux.HandleFunc("POST /api/worker", s.auth(s.handleWorker))
 	s.mux.HandleFunc("POST /api/remove", s.auth(s.handleRemove))
 	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
@@ -418,6 +429,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/release/{id}/deploy", s.auth(s.handleReleaseDeploy))
 	s.mux.HandleFunc("POST /api/hosts/{host}/release/upgrade", s.auth(s.handleHostUpgrade))
 	s.pageRoutes()
+	s.mux.HandleFunc("POST /api/marks/reask", s.authAgent(s.handleReask))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("POST /api/deliveries", s.authAgent(s.handleDeliver))

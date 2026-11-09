@@ -713,7 +713,31 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"entries": taggedEntries(views, c.host), "marks": taggedMarks(s.ledger.Marks(), c.host), "plans": []planView{}, "roles": s.liveRoles()})
 		return
 	}
-	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks(), "plans": s.planViews(), "roles": s.liveRoles()})
+	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks(), "plans": s.planViews(), "roles": s.liveRoles(), "asks": s.askReviews(r.Context())})
+}
+
+// askReviews re-checks the answers of every marked session, by agent id
+// (comebye ledger shows them). The re-checks are cached, so a polled ledger
+// does not run gh each time.
+func (s *Server) askReviews(ctx context.Context) map[string]*askReview {
+	out := map[string]*askReview{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, it := range s.marked() {
+		if it.Mark.Ask == nil {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ar := s.askReviewOf(ctx, it)
+			mu.Lock()
+			out[it.ID] = ar
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // cachedChecks returns an entry's cached checks, refreshing them in the
@@ -859,17 +883,20 @@ func (s *Server) handleUnmark(w http.ResponseWriter, r *http.Request) {
 // removal is one session marked ready to remove, as the review list shows
 // it.
 type removal struct {
-	ID          string          `json:"id"` // the host-qualified agent id
-	Host        string          `json:"host"`
-	PaneID      string          `json:"pane_id,omitempty"`
-	Name        string          `json:"name,omitempty"`
-	EntryID     string          `json:"entry_id,omitempty"` // a ledger worker's entry
-	Repo        string          `json:"repo,omitempty"`
-	Branch      string          `json:"branch,omitempty"`
-	Base        string          `json:"base,omitempty"`
-	WorkspaceID string          `json:"workspace_id,omitempty"`
-	Worktree    string          `json:"worktree,omitempty"`
-	Mark        ledger.Mark     `json:"mark"`
+	ID          string      `json:"id"` // the host-qualified agent id
+	Host        string      `json:"host"`
+	PaneID      string      `json:"pane_id,omitempty"`
+	Name        string      `json:"name,omitempty"`
+	EntryID     string      `json:"entry_id,omitempty"` // a ledger worker's entry
+	Repo        string      `json:"repo,omitempty"`
+	Branch      string      `json:"branch,omitempty"`
+	Base        string      `json:"base,omitempty"`
+	WorkspaceID string      `json:"workspace_id,omitempty"`
+	Worktree    string      `json:"worktree,omitempty"`
+	Mark        ledger.Mark `json:"mark"`
+	// AskReview is the session's answer with its items re-checked (see
+	// askcheck.go).
+	AskReview   *askReview      `json:"ask_review,omitempty"`
 	Live        liveInfo        `json:"live"`
 	Checks      *worktreeChecks `json:"checks,omitempty"`
 	ChecksError string          `json:"checks_error,omitempty"`
@@ -956,17 +983,10 @@ func (s *Server) review(ctx context.Context, it *removal) {
 		it.Warnings = append(it.Warnings, "not captured in a page: "+n)
 	}
 	if a := it.Mark.Ask; a != nil {
+		it.AskReview = s.askReviewOf(ctx, it)
 		switch a.State {
 		case ledger.AskUnsafe:
-			why := a.Reason
-			if why == "" {
-				why = "(no reason given)"
-			}
-			if it.captured {
-				it.Notes = append(it.Notes, "the session said UNSAFE before its pages were recorded: "+why)
-				break
-			}
-			it.Warnings = append(it.Warnings, "the session says UNSAFE: "+why)
+			it.AskReview.reviewLines(it, it.captured)
 		case ledger.AskAsking:
 			it.Notes = append(it.Notes, "asking the session whether it is safe to remove…")
 		case ledger.AskNoAnswer:

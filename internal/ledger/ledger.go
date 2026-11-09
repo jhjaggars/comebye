@@ -343,6 +343,42 @@ type Ask struct {
 	Reason  string     `json:"reason,omitempty"`
 	AskedAt *time.Time `json:"asked_at,omitempty"`
 	At      time.Time  `json:"at"`
+	// Items are what an UNSAFE answer lists, each typed so the hub can
+	// re-check it later (see AskItem). Empty for an answer recorded before
+	// items existed: its Reason stands for one "other" item.
+	Items []AskItem `json:"items,omitempty"`
+	// ReaskedAt is set while a re-ask is in flight: the standing answer
+	// stays (and keeps being re-checked) until the new one replaces it.
+	ReaskedAt *time.Time `json:"reasked_at,omitempty"`
+	// Reasks counts the hub's automatic re-asks of this mark (a person's
+	// click is not counted); ReaskNote is how the last re-ask ended when it
+	// left the old answer standing ("did not answer").
+	Reasks    int    `json:"reasks,omitempty"`
+	ReaskNote string `json:"reask_note,omitempty"`
+}
+
+// AskItem types.
+const (
+	ItemPR       = "pr"       // Repo "owner/name", Number
+	ItemTodo     = "todo"     // ID, a to-do's id
+	ItemCommits  = "commits"  // Branch, Remote when pushed
+	ItemResource = "resource" // Kind (pid, k3d-cluster, container, ...), Name or ID, Host
+	ItemOther    = "other"    // Text only: nothing the hub can check
+)
+
+// AskItem is one thing an UNSAFE answer says keeps the session from being
+// removed. Text is the session's own words about it.
+type AskItem struct {
+	Type   string `json:"type"`
+	Repo   string `json:"repo,omitempty"`
+	Number int    `json:"number,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	Remote string `json:"remote,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Host   string `json:"host,omitempty"`
+	Text   string `json:"text,omitempty"`
 }
 
 // PageRef names a published Page that captures an agent's work.
@@ -380,6 +416,7 @@ func copyMark(m *Mark) *Mark {
 	c := *m
 	if m.Ask != nil {
 		a := *m.Ask
+		a.Items = append([]AskItem(nil), m.Ask.Items...)
 		c.Ask = &a
 	}
 	return &c
@@ -754,6 +791,34 @@ func (s *Store) SetAsk(agentID string, markedAt time.Time, a Ask) (bool, error) 
 	}
 	if a.At.IsZero() {
 		a.At = time.Now().UTC()
+	}
+	m.Ask = &a
+	return true, s.save()
+}
+
+// UpdateAsk changes the answer on the agent's mark made at markedAt in
+// place with fn (given a copy; fn returns false to leave it alone). A mark
+// replaced or cleared since, or one with no answer, is left alone. It
+// reports whether it changed.
+func (s *Store) UpdateAsk(agentID string, markedAt time.Time, fn func(a *Ask) bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var m *Mark
+	if e := s.byAgent(agentID); e != nil && e.Status == ReadyToRemove && e.Mark != nil {
+		m = e.Mark
+	}
+	for _, sm := range s.data.Marks {
+		if sm.AgentID == agentID {
+			m = sm
+		}
+	}
+	if m == nil || m.Ask == nil || !m.At.Equal(markedAt) {
+		return false, nil
+	}
+	a := *m.Ask
+	a.Items = append([]AskItem(nil), m.Ask.Items...)
+	if !fn(&a) {
+		return false, nil
 	}
 	m.Ask = &a
 	return true, s.save()
