@@ -15,31 +15,41 @@ import (
 // default on a host that has the unit). exit sends the running server
 // SIGTERM, which makes it exit 0, and relies on a supervisor that starts it
 // again (the init loop of a sandbox host, which has no systemd). auto picks
-// systemd when the unit exists and exit otherwise.
+// systemd when the unit exists, launchd on a Mac whose agent is loaded, and
+// exit otherwise.
 const (
 	RestartAuto    = "auto"
 	RestartSystemd = "systemd"
 	RestartExit    = "exit"
+	// RestartLaunchd restarts the macOS launchd user agent with
+	// launchctl kickstart -k.
+	RestartLaunchd = "launchd"
 )
 
 // resolveMode settles o.Restart to RestartSystemd or RestartExit.
 func resolveMode(o *Options) error {
 	switch o.Restart {
 	case "", RestartAuto:
-		if _, err := exec.LookPath(o.Systemctl); err != nil {
-			o.Restart = RestartExit
+		if _, err := exec.LookPath(o.Systemctl); err == nil {
+			cmd := exec.Command(o.Systemctl, "--user", "cat", o.Service)
+			cmd.Env = o.Env
+			if cmd.Run() == nil {
+				o.Restart = RestartSystemd
+				return nil
+			}
+		}
+		if resolveLaunchdAuto(o) {
+			o.Restart = RestartLaunchd
 			return nil
 		}
-		cmd := exec.Command(o.Systemctl, "--user", "cat", o.Service)
-		cmd.Env = o.Env
-		if err := cmd.Run(); err != nil {
-			o.Restart = RestartExit
-			return nil
+		o.Restart = RestartExit
+	case RestartLaunchd:
+		if o.LaunchdLabel == "" {
+			o.LaunchdLabel = findLaunchdLabel(o)
 		}
-		o.Restart = RestartSystemd
 	case RestartSystemd, RestartExit:
 	default:
-		return fmt.Errorf("unknown restart mode %q (want auto, systemd or exit)", o.Restart)
+		return fmt.Errorf("unknown restart mode %q (want auto, systemd, launchd or exit)", o.Restart)
 	}
 	return nil
 }
@@ -51,11 +61,17 @@ func restartCmdHint(o *Options) string {
 	if o.exitMode() {
 		return "send the comebye server SIGTERM (its supervisor starts it again)"
 	}
+	if o.launchdMode() {
+		return "launchctl kickstart -k " + o.launchdTarget()
+	}
 	return "systemctl --user restart " + o.Service
 }
 
 // restartServer restarts the server in the chosen mode.
 func restartServer(o *Options) error {
+	if o.launchdMode() {
+		return restartLaunchd(o)
+	}
 	if !o.exitMode() {
 		return systemctl(o, "restart", o.Service)
 	}
@@ -97,6 +113,9 @@ func restartServer(o *Options) error {
 // the supervisor's restart, seen as the local server answering again (it
 // takes a few seconds: the supervisor waits before it starts the server).
 func waitUp(o *Options) error {
+	if o.launchdMode() {
+		return waitLaunchd(o)
+	}
 	if !o.exitMode() {
 		return waitActive(o)
 	}

@@ -49,12 +49,20 @@ type Options struct {
 	Rollback bool // restore Bin.prev instead of upgrading
 
 	// Restart is how the server is restarted: "systemd" (the user unit),
-	// "exit" (SIGTERM to the running server, restarted by a supervisor such
+	// "launchd" (the macOS user agent, launchctl kickstart -k), "exit" (SIGTERM to the running server, restarted by a supervisor such
 	// as a sandbox's init loop) or "auto" (the default: systemd when the
 	// unit exists). PID names the server to stop in exit mode when there is
 	// more than one.
 	Restart string
 	PID     int
+	// LaunchdLabel is the launchd agent (default: the label of the plist in
+	// ~/Library/LaunchAgents that runs Bin, else com.jhjaggars.comebye).
+	// Launchctl, LaunchAgentsDir, UID and HostOS are test seams.
+	LaunchdLabel    string
+	Launchctl       string
+	LaunchAgentsDir string
+	UID             int
+	HostOS          string
 	// ProcRoot, Kill and Alive replace /proc and signals (tests).
 	ProcRoot string
 	Kill     func(pid int) error
@@ -93,6 +101,9 @@ func (o *Options) defaults() {
 	}
 	if o.Service == "" {
 		o.Service = "comebye"
+	}
+	if o.Launchctl == "" {
+		o.Launchctl = "launchctl"
 	}
 	if o.Systemctl == "" {
 		o.Systemctl = "systemctl"
@@ -233,6 +244,9 @@ func Run(o Options) error {
 func (o *Options) restartTarget() string {
 	if o.exitMode() {
 		return "the running server (SIGTERM; a supervisor starts it again)"
+	}
+	if o.launchdMode() {
+		return o.launchdTarget() + " (launchctl kickstart -k)"
 	}
 	return o.Service
 }

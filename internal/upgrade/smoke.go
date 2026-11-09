@@ -155,6 +155,8 @@ func smoke(o *Options, since time.Time, beforeTag, target string) error {
 	}
 	if o.exitMode() {
 		o.printf("smoke: the local server answers again\n")
+	} else if o.launchdMode() {
+		o.printf("smoke: %s is running\n", o.launchdTarget())
 	} else {
 		o.printf("smoke: %s is active\n", o.Service)
 	}
@@ -249,6 +251,10 @@ func smoke(o *Options, since time.Time, beforeTag, target string) error {
 
 	if o.exitMode() {
 		o.printf("smoke: no journal check (exit-restart mode: the supervisor keeps the server's log)\n")
+		return nil
+	}
+	if o.launchdMode() {
+		o.printf("smoke: no journal check (launchd keeps the server's log in the plist's StandardOutPath)\n")
 		return nil
 	}
 	jc := exec.Command(o.Journalctl, "--user", "-u", o.Service, "--since", since.Format("2006-01-02 15:04:05"), "-p", "err", "-q", "--no-pager")
