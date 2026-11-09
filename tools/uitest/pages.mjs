@@ -233,6 +233,63 @@ await check("markdown: rendered in the sandbox, its script and handler do nothin
   await shot("pages-markdown-1280");
 });
 
+// ---- the theme message: the app sends its colours into the frame ----
+// The page carries the listener of the page template (the same code): it applies
+// a known --token with a colour value and ignores everything else.
+const themePage = `<!doctype html><html><head><meta charset="utf-8"><title>Theme probe</title>
+<style>body{background:var(--bg,#fff);color:var(--text,#000);font:16px system-ui;padding:24px}</style></head><body><h1>Theme probe</h1><p id="p">waiting</p>
+<script>(function () {
+  var KNOWN = ["bg","panel","text","muted","blue","border"];
+  var ok = {}; KNOWN.forEach(function (k) { ok["--" + k] = 1; });
+  var COLOUR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\\(\\s*[0-9.%\\s,\\/-]+\\))$/i;
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || typeof d !== "object" || d.type !== "comebye-theme" || !d.tokens || typeof d.tokens !== "object") return;
+    var root = document.documentElement;
+    Object.keys(d.tokens).forEach(function (k) { var v = d.tokens[k]; if (ok[k] === 1 && typeof v === "string" && v.length <= 64 && COLOUR.test(v)) root.style.setProperty(k, v); });
+    if (d.scheme === "light" || d.scheme === "dark") root.style.colorScheme = d.scheme;
+  });
+})();</script></body></html>`;
+await check("theme: the page gets the app's theme after load and again when the theme changes; bad tokens are ignored", async () => {
+  pages.theme = idOf(publish([file("theme.html", themePage)]));
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.goto(base + `/#/pages/${pages.theme}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.theme); if (!fr) await page.waitForTimeout(100); }
+  const appTok = (id, k) => page.evaluate(([id, k]) => ComebyeThemes.byId[id].vars[k], [id, k]);
+  const frameVars = () => fr.evaluate(() => { const c = getComputedStyle(document.documentElement); return { bg: c.getPropertyValue("--bg").trim(), blue: c.getPropertyValue("--blue").trim(), scheme: document.documentElement.style.colorScheme, body: getComputedStyle(document.body).backgroundColor }; });
+  const rgb = (h) => "rgb(" + [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(", ") + ")";
+  const want = async (id, why) => {
+    const bg = await appTok(id, "bg"), blue = await appTok(id, "blue");
+    const mode = await page.evaluate((id) => ComebyeThemes.byId[id].mode, id);
+    let v;
+    for (let i = 0; i < 40; i++) { v = await frameVars(); if (v.bg === bg) break; await page.waitForTimeout(100); }
+    if (v.bg !== bg || v.blue !== blue || v.scheme !== mode || v.body !== rgb(bg)) throw new Error(`${why}: page has ${JSON.stringify(v)}, app theme ${id} has bg=${bg} blue=${blue} ${mode}`);
+  };
+  const first = await page.evaluate(() => ComebyeThemes.resolve()); // System: the OS scheme's Comebye theme
+  await want(first, "after load");
+  await shot("pages-theme-" + first + "-1280");
+  // switching the theme in the app (as the picker does) repaints the page
+  await page.evaluate(() => ComebyeThemes.set("gruvbox-light"));
+  await want("gruvbox-light", "after switching to Gruvbox Light");
+  await shot("pages-theme-gruvbox-light-1280");
+  await page.evaluate(() => ComebyeThemes.set("dracula"));
+  await want("dracula", "after switching to Dracula");
+  // the page ignores what is not a known token with a colour: nothing here may stick
+  const dracula = await frameVars();
+  await fr.evaluate(() => {
+    const send = (data) => window.postMessage(data, "*");
+    send({ type: "comebye-theme", tokens: { "--bg": "url(https://evil.example/x)", "--text": "red; background: red", "--evil": "#ff0000", "evil": "#00ff00", "--panel": 5 }, scheme: "sepia" });
+    send({ type: "other", tokens: { "--bg": "#123456" } });
+    send("comebye-theme");
+  });
+  await page.waitForTimeout(300);
+  const after = await fr.evaluate(() => { const r = document.documentElement; return { bg: r.style.getPropertyValue("--bg"), text: r.style.getPropertyValue("--text"), evil: r.style.getPropertyValue("--evil"), scheme: r.style.colorScheme }; });
+  if (after.bg !== dracula.bg || after.text === "red; background: red" || after.evil || after.scheme === "sepia") throw new Error("a bad theme message got through: " + JSON.stringify(after));
+  await page.evaluate(() => ComebyeThemes.set("system"));
+});
+
 // ---- the pages listener: its own origin, and nothing but /p ----
 await check(pagesUrl ? "listener: pages come from an origin of their own that has no /api, no app, no way in" : "listener: not configured in this pass (pages share the app's origin)", async () => {
   if (!pagesUrl) {
