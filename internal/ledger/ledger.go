@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,11 @@ const MaxReport = 20000
 // `comebye report` ends within moments. Past it, a worker seen working has
 // been given more to do.
 const reportTurnGrace = 2 * time.Minute
+
+// landReportWait is how long a landing the hub found done before the
+// worker's report is still expected to get one (Observe then treats the
+// worker as any reported one again).
+const landReportWait = 2 * time.Hour
 
 // maxReportTries bounds how often an empty final report is looked for.
 const maxReportTries = 3
@@ -134,9 +140,17 @@ type Entry struct {
 	// Approval is the user's OK to land, as relayed by `comebye land`
 	// (kept after it landed, until the next landing replaces it).
 	Approval *Approval `json:"approval,omitempty"`
-	// LandCheck is the hub's check after the landing report.
+	// LandCheck is the hub's latest check of the landing (see LandCheck).
 	LandCheck *LandCheck `json:"land_check,omitempty"`
-	RemovedAt *time.Time `json:"removed_at,omitempty"`
+	// Progress is the worker's latest progress note (`comebye report
+	// --progress`): it says what the worker is doing and is not a report,
+	// so it never finishes or lands anything.
+	Progress *Progress `json:"progress,omitempty"`
+	// AwaitLandReport: the hub found the work on the base before the worker
+	// filed its landing report (so the entry is landed already); that report,
+	// when it comes, is the landing turn's, not a new round's.
+	AwaitLandReport bool       `json:"await_land_report,omitempty"`
+	RemovedAt       *time.Time `json:"removed_at,omitempty"`
 	// LostAt is when the entry became Lost (Error says why).
 	LostAt *time.Time `json:"lost_at,omitempty"`
 	// Removal is the owning host's account of the removal (what was
@@ -157,6 +171,48 @@ type Approval struct {
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
 }
 
+// Progress is a worker's note on what it is doing now.
+type Progress struct {
+	Text  string    `json:"text"`
+	Phase string    `json:"phase,omitempty"` // one of ProgressPhases
+	At    time.Time `json:"at"`
+}
+
+// ProgressPhases are the steps of landing a worker can name in a progress
+// note: the card shows "landing: rebasing", "landing: tests running",
+// "landing: pushing", "landing: pushed, CI running".
+var ProgressPhases = []string{"rebase", "tests", "push", "ci"}
+
+// ValidPhase reports whether p is empty or one of ProgressPhases.
+func ValidPhase(p string) bool {
+	if p == "" {
+		return true
+	}
+	for _, x := range ProgressPhases {
+		if x == p {
+			return true
+		}
+	}
+	return false
+}
+
+// MaxProgress caps a progress note (bytes).
+const MaxProgress = 500
+
+// Landing check states.
+const (
+	// LandLanded: every approved commit is in the base.
+	LandLanded = "landed"
+	// LandPending: not on the base yet, and nothing says the worker has
+	// stopped trying (it is still working, or running a background task, or
+	// has not said it is done): a neutral state, checked again later.
+	LandPending = "pending"
+	// LandFailed: the worker said it was done or stopped (nothing running),
+	// and the work is still not on the base, or a push or CI failure was
+	// reported.
+	LandFailed = "failed"
+)
+
 // LandCheck is the hub's verdict on a landing: OK when the worktree is
 // clean and every approved commit is in the base.
 type LandCheck struct {
@@ -164,8 +220,58 @@ type LandCheck struct {
 	OK      bool      `json:"ok"`
 	Base    string    `json:"base,omitempty"` // the base checked against ("origin/main")
 	Verdict string    `json:"verdict"`
+	// Reason says why the check is pending or failed in the worker's terms
+	// ("the worker is still working", "the worker said it was done, ...").
+	Reason string `json:"reason,omitempty"`
+	// State is LandLanded, LandPending or LandFailed (empty on checks from
+	// before states: OK says landed, else failed).
+	State string `json:"state,omitempty"`
 	// Landed lists the base commits the work landed as, where found.
 	Landed []string `json:"landed,omitempty"`
+	// Unmerged counts the commits not in the base, Unpushed those of them
+	// on no remote (-1: not known).
+	Unmerged int `json:"unmerged"`
+	Unpushed int `json:"unpushed"`
+	// Stopped: the hub gave up re-checking (a landing open for too long).
+	Stopped bool `json:"stopped,omitempty"`
+	// CI is the state of the landed commit's CI runs, once landed.
+	CI *CI `json:"ci,omitempty"`
+}
+
+// StateOf is the check's state, reading the older shape.
+func (c LandCheck) StateOf() string {
+	switch {
+	case c.State != "":
+		return c.State
+	case c.OK:
+		return LandLanded
+	}
+	return LandFailed
+}
+
+// CI states.
+const (
+	CIRunning = "running"
+	CISuccess = "success"
+	CIFailure = "failure"
+	// CINone: no run was found for the commit (yet).
+	CINone = "none"
+)
+
+// CI is the CI state of a landed commit (gh run list --commit).
+type CI struct {
+	State string    `json:"state"`
+	SHA   string    `json:"sha,omitempty"`
+	URL   string    `json:"url,omitempty"`
+	Runs  int       `json:"runs,omitempty"`
+	At    time.Time `json:"at"`
+	// Told: the requester was told how CI ended.
+	Told bool `json:"told,omitempty"`
+}
+
+// Settled reports whether CI is over (or there is none to wait for).
+func (c *CI) Settled() bool {
+	return c != nil && (c.State == CISuccess || c.State == CIFailure)
 }
 
 // Ref addresses an agent: its host-qualified id and the name it had then
@@ -345,8 +451,16 @@ func copyEntry(e *Entry) Entry {
 		a := *e.Approval
 		c.Approval = &a
 	}
+	if e.Progress != nil {
+		p := *e.Progress
+		c.Progress = &p
+	}
 	if e.LandCheck != nil {
 		l := *e.LandCheck
+		if l.CI != nil {
+			ci := *l.CI
+			l.CI = &ci
+		}
 		l.Landed = append([]string(nil), l.Landed...)
 		c.LandCheck = &l
 	}
@@ -649,6 +763,9 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 		if a == nil {
 			continue
 		}
+		if e.AwaitLandReport && e.Status == Landed && e.LandCheck != nil && now.Sub(e.LandCheck.At) > landReportWait {
+			e.AwaitLandReport, changed = false, true
+		}
 		if e.HostInstance != "" && a.Instance != "" && a.Instance != e.HostInstance {
 			// The host name now belongs to another machine: this agent is not
 			// the entry's. An unfinished entry is lost; a reported one stays.
@@ -681,6 +798,11 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 					capture = append(capture, copyEntry(e))
 				}
 			}
+			continue
+		}
+		if e.AwaitLandReport && e.Status == Landed {
+			// The work reached the base before the worker said so: it is
+			// still on its landing turn (watching CI, writing the report).
 			continue
 		}
 		switch a.Status {
@@ -801,6 +923,14 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		e.AwaitIdle, e.SawWorking = true, false
 		return copyEntry(e), true, s.save()
 	}
+	if e.Status == Landed && e.AwaitLandReport {
+		// The landing report of a landing the hub already found on the
+		// base: it completes that turn, it does not start a new round.
+		e.AwaitLandReport, e.AwaitIdle, e.SawWorking = false, true, false
+		e.FinishedAt = &t
+		e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
+		return copyEntry(e), true, s.save()
+	}
 	if e.Status == Landed {
 		if e.AwaitIdle {
 			// Still the landing turn (a corrected landing report).
@@ -814,6 +944,22 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 	queueNotice(e, t)
 	e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
 	e.AwaitIdle, e.SawWorking = true, false
+	return copyEntry(e), true, s.save()
+}
+
+// Note records a worker's progress note: what it is doing now, not a
+// report. It never finishes, lands or fails an entry and queues no notice
+// (so `comebye report --progress` is safe to use at any point of landing).
+// ok is false when the agent has no entry that is running, landing or
+// finished.
+func (s *Store) Note(agentID, text, phase string, now time.Time) (Entry, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byAgent(agentID)
+	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != Finished && e.Status != Landed) {
+		return Entry{}, false, nil
+	}
+	e.Progress = &Progress{Text: Truncate(strings.TrimSpace(text), MaxProgress), Phase: phase, At: now.UTC()}
 	return copyEntry(e), true, s.save()
 }
 
@@ -866,6 +1012,7 @@ func (s *Store) StartLanding(agentID string, a Approval) (Entry, bool, error) {
 	}
 	e.Status, e.Approval, e.FinishedAt = Landing, &a, nil
 	e.SawWorking, e.AwaitIdle = false, false
+	e.LandCheck, e.Progress, e.AwaitLandReport = nil, nil, false
 	return copyEntry(e), true, s.save()
 }
 
@@ -883,49 +1030,115 @@ func (s *Store) CancelLanding(agentID string) (bool, error) {
 	return true, s.save()
 }
 
-// LandingsToCheck lists the landings whose report is in and whose check
-// is due.
+// LandingsToCheck lists the entries whose landing is still open: landings
+// not settled yet (reported or not: the work may reach the base before the
+// worker says so), and landed entries whose CI has not ended.
 func (s *Store) LandingsToCheck() []Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []Entry
 	for _, e := range s.data.Entries {
-		if e.Status == Landing && e.FinishedAt != nil {
+		switch {
+		case e.Status == Landing && e.Approval != nil:
+			out = append(out, copyEntry(e))
+		case e.Status == Landed && e.LandCheck != nil && e.LandCheck.OK && !e.LandCheck.CI.Settled():
 			out = append(out, copyEntry(e))
 		}
 	}
 	return out
 }
 
-// SetLandCheck settles a landing that reported at finishedAt: landed when
-// the check is OK, else back to finished with the verdict. The requester
-// is told now, with the outcome. A landing that went back to work or was
-// marked since is left alone.
-func (s *Store) SetLandCheck(id string, finishedAt time.Time, c LandCheck) (bool, error) {
+// SetLandCheck applies a check of a landing. sig is the report the check
+// was made for (the entry's FinishedAt then; nil: none yet): a check made
+// for an older report than the entry's now is dropped.
+//
+//   - OK: the entry is landed now (even before the worker's own landing
+//     report) and the requester is told.
+//   - Not OK, and c.State is LandFailed: back to finished with the verdict,
+//     and the requester is told.
+//   - Not OK otherwise (LandPending): the entry stays landing; the check
+//     is recorded for the card, and nothing is sent.
+//
+// A landing that went back to work or was marked since is left alone.
+func (s *Store) SetLandCheck(id string, sig *time.Time, c LandCheck) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range s.data.Entries {
 		if e.ID != id {
 			continue
 		}
-		if e.Status != Landing || e.FinishedAt == nil || !e.FinishedAt.Equal(finishedAt) {
+		if e.Status != Landing || !sameTime(e.FinishedAt, sig) {
 			return false, nil
 		}
 		if c.At.IsZero() {
 			c.At = time.Now().UTC()
 		}
 		c.Landed = append([]string(nil), c.Landed...)
-		e.LandCheck = &c
-		e.Status = Finished
-		if c.OK {
-			e.Status = Landed
+		switch {
+		case c.OK:
+			c.State = LandLanded
+			e.Status, e.Progress = Landed, nil
+			e.AwaitLandReport = e.FinishedAt == nil
+		case c.StateOf() == LandFailed:
+			c.State = LandFailed
+			e.Status = Finished
+			if e.FinishedAt == nil {
+				// stopped without ever reporting: the failure is as of now
+				t := c.At
+				e.FinishedAt = &t
+			}
+			e.Progress = nil
+		default:
+			if old := e.LandCheck; old != nil && old.State == LandPending && old.Verdict == c.Verdict && old.Unmerged == c.Unmerged && old.Unpushed == c.Unpushed && old.Stopped == c.Stopped {
+				// nothing new: keep the entry as it is, but note the time
+				old.At, old.Reason = c.At, c.Reason
+				return true, s.save()
+			}
 		}
-		if e.ReplyTo != nil {
+		e.LandCheck = &c
+		if c.StateOf() != LandPending && e.ReplyTo != nil {
 			e.Callback = &Callback{State: CallbackPending, At: c.At, Seq: e.ReportSeq}
 		}
 		return true, s.save()
 	}
 	return false, nil
+}
+
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+// SetLandCI records the CI state of a landed entry's commit. When CI has
+// just ended (success or failure) the requester is told once more.
+func (s *Store) SetLandCI(id string, ci CI) (Entry, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID != id || e.Status != Landed || e.LandCheck == nil {
+			continue
+		}
+		if ci.At.IsZero() {
+			ci.At = time.Now().UTC()
+		}
+		old := e.LandCheck.CI
+		if old != nil {
+			ci.Told = old.Told
+		}
+		changed := old == nil || old.State != ci.State || old.URL != ci.URL || old.SHA != ci.SHA
+		if ci.Settled() && !ci.Told && e.ReplyTo != nil {
+			ci.Told = true
+			e.Callback = &Callback{State: CallbackPending, At: ci.At, Seq: e.ReportSeq}
+		}
+		e.LandCheck.CI = &ci
+		if !changed && ci.Told == (old != nil && old.Told) {
+			return copyEntry(e), false, nil
+		}
+		return copyEntry(e), true, s.save()
+	}
+	return Entry{}, false, nil
 }
 
 // SetReport stores a captured final report for an entry that is still

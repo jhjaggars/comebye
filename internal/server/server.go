@@ -253,7 +253,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	if cfg.StateDir != "" {
 		s.health = &healthProbe{dir: cfg.StateDir, now: time.Now}
 	}
-	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}}
+	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}, landSched: map[string]landSched{}, bg: map[string]bgCache{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
 		s.settings = openSettings(settingsPath(cfg.StateDir))

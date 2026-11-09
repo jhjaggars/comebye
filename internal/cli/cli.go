@@ -63,7 +63,7 @@ func init() {
 		{"plan", "create --title T --size N | show ID | list [--json]", "group handoffs into one change: the user is told once when all of them are done", cmdPlan},
 		{"release", "ID [--json]", "start a handoff that is waiting for earlier steps now (e.g. a step that went idle without reporting)", cmdRelease},
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
-		{"report", "FILE|-", "(workers) declare yourself done and send your final report to whoever handed you the task", cmdReport},
+		{"report", "FILE|- | --progress [--phase rebase|tests|push|ci] TEXT|-", "(workers) declare yourself done and send your final report to whoever handed you the task; --progress sends a short note on what you are doing instead, which is not a report and finishes nothing", cmdReport},
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
 		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
@@ -1210,6 +1210,7 @@ func landPrompt(base string, deploy bool) string {
 	fmt.Fprintf(&b, "3. Push as a fast-forward of `%s` (`git push origin HEAD:%s`). Never force-push, never rewrite pushed history. If the push is rejected because %s moved, fetch, rebase again and re-test; do not force.\n", base, base, base)
 	fmt.Fprintf(&b, "4. Watch CI for the pushed commit until it finishes: `gh run list --branch %s --limit 1` gives the run ID for your push (check that it is your commit's run), then `gh run watch ID --exit-status`. If the watch might outlast a tool timeout, run it in the background and wait for it to finish. Confirm the result with `gh run view ID --json conclusion`: do not pipe the watch through `tail` or the like, which hides its exit status. If CI fails, report the failure; do not push fixes unasked.\n", base)
 	fmt.Fprintf(&b, "5. Clean up your branch: detach your worktree first (`git switch --detach origin/%s`), then delete the local branch (`git branch -D BRANCH`; it is merged, but your SHAs may differ from the pushed ones). Delete the remote branch only if `git ls-remote --heads origin BRANCH` shows it; if you never pushed it, there is nothing to delete. The worktree stays; the session is removed separately.\n", base)
+	b.WriteString("\nWhile a long step runs (rebase, tests, CI), tell the hub what you are doing with `comebye report --progress --phase rebase|tests|push|ci \"<what you are doing>\"`. That is a progress note: it finishes nothing, and the card shows \"landing: tests running\". Never send `comebye report -` for it, nor before you have pushed: a report is you saying you are done, and the hub then checks that your work is on `origin/" + base + "`. If you wait on a background task, say so in a note first; the task ending wakes you.\n")
 	b.WriteString("\nDo all of this in your own worktree. Never touch the repository's primary checkout, or any other checkout: it may hold the user's uncommitted work.\n")
 	if deploy {
 		b.WriteString("\n6. Deploy as the project's docs describe, once CI is green.\n")
@@ -1218,7 +1219,7 @@ func landPrompt(base string, deploy bool) string {
 		b.WriteString("\nDo not deploy: that is a separate step, done only when asked.\n")
 		b.WriteString("\nThen report with `comebye report -`, in the same format as your first report (Summary, Changes, Verification grouped as Verified live / Unit tests only / Not verified, Follow-ups): the landed commit hashes and the test and CI results.\n")
 	}
-	b.WriteString("\nAfter that report the hub checks your worktree: the entry counts as landed only if every commit you were approved to land is in `origin/" + base + "`.\n")
+	b.WriteString("\nThe hub watches `origin/" + base + "` while you land: the entry counts as landed only if every commit you were approved to land is in `origin/" + base + "`, and it shows landed as soon as they are. It is shown as failed only if you report that you are done (or stop) and they are not.\n")
 	return b.String()
 }
 
@@ -1773,12 +1774,20 @@ func queuedAction(e *Env, args []string, verb string) error {
 func cmdReport(e *Env, args []string) error {
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
+	progress := fs.Bool("progress", false, "send a progress note, not a report: it never finishes or lands anything")
+	phase := fs.String("phase", "", "with --progress, the step of landing you are on: rebase, tests, push or ci")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 1 {
 		return usageErr("want report FILE (or - for stdin)")
+	}
+	if *phase != "" && !*progress {
+		return usageErr("--phase goes with --progress")
+	}
+	if *progress {
+		return cmdProgress(e, pos[0], *phase, *asJSON)
 	}
 	text, err := readInput(e, pos[0], 64<<10)
 	if err != nil {
@@ -1808,6 +1817,32 @@ func cmdReport(e *Env, args []string) error {
 		return nil
 	}
 	fmt.Fprintf(e.Stdout, "Report recorded for %s (%s). You can stop now.\n", r.Entry.Branch, r.Entry.ID)
+	return nil
+}
+
+// cmdProgress sends a progress note: what the worker is doing now. The hub
+// keeps it for the card ("landing: tests running") and does not take it as
+// a report, so it is the right thing to send while a long step runs.
+func cmdProgress(e *Env, src, phase string, asJSON bool) error {
+	text, err := readInput(e, src, 4<<10)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return usageErr("the note is empty")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/report", nil, map[string]any{"text": text, "progress": true, "phase": phase})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return rawJSON(e, data)
+	}
+	fmt.Fprintln(e.Stdout, "Progress noted. It is not a report: nothing is finished or landed by it. Keep going, and send your report with `comebye report -` when you are done.")
 	return nil
 }
 

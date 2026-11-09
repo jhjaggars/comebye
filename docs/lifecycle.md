@@ -50,8 +50,8 @@ stateDiagram-v2
     running --> finished: comebye report (or idle after working)
     finished --> running: more work (follow-up)
     finished --> landing: comebye land (user OKed)
-    landing --> landed: landing report + hub check: every commit in origin/main
-    landing --> finished: landing report, but commits not in origin/main
+    landing --> landed: hub check (polled, or after the landing report): every commit in origin/main
+    landing --> finished: the worker said it was done or stopped, nothing running, commits still not in origin/main
     landed --> running: more work (follow-up round)
     finished --> ready_to_remove: mark / sweep
     landed --> ready_to_remove: mark / sweep
@@ -77,8 +77,8 @@ same call that moves the entry to `landing`.
 | `waiting` | `comebye handoff --after STEP` | coordinator | every STEP reported (hub starts it), `comebye release`, or `cancel`/a failed step |
 | `running` | the handoff started the worker; or a finished/landed worker got more work | hub | the worker runs `comebye report`, or goes idle after working (hub takes its last reply) |
 | `finished` | the worker reported | worker, hub | `comebye land` → `landing`; more work → `running`; mark → `ready_to_remove` |
-| `landing` | `comebye land WORKER --note "<the user's OK>"` | coordinator, after the user OKs | the worker reports again: the hub checks the branch, then `landed` or back to `finished` |
-| `landed` | the landing report came in and the hub's check found every commit in `origin/<base>` | hub | mark/sweep → `ready_to_remove`; more work → `running` (a new round) |
+| `landing` | `comebye land WORKER --note "<the user's OK>"` | coordinator, after the user OKs | the hub finds every approved commit in `origin/<base>` (`landed`), or the worker has said it is done or stopped with nothing running and the work is not there (back to `finished`, "land failed") |
+| `landed` | the hub's check found every approved commit in `origin/<base>` (it polls while the entry is landing; the worker's landing report is not needed) | hub | mark/sweep → `ready_to_remove`; more work → `running` (a new round) |
 | `ready_to_remove` | `comebye mark`, `comebye sweep`, or the app | coordinator, user | unmark → back; the user confirms → `removed` |
 | `removed` | the user confirmed the removal in the app | user | (final) |
 | `failed` | the worker never started | hub | (final) |
@@ -598,3 +598,41 @@ Next, each as its own handoff (*decided:* foundations first):
 
 The beads bridge (an import, or `on_close` hooks into comebye) stays
 optional and later.
+
+## Landing: what the card says
+
+A landing is judged by the base, not by what the worker says. While an
+entry is `landing` the hub checks it on a schedule (15 seconds, backing off
+to 5 minutes, for 6 hours; at once on a report or when the worker goes
+idle), and flips it to `landed` the moment every approved commit is in
+`origin/<base>`, telling the requester. It then reads CI for the landed
+commit (`gh run list --commit`, every 30 to 120 seconds, up to 45 minutes)
+and tells the requester again when CI ends.
+
+A worker reports progress with `comebye report --progress [--phase
+rebase|tests|push|ci] "<text>"`. A progress note is not a report: it
+finishes nothing, queues no notice and triggers no landing check. A plain
+`comebye report -` means "I am done".
+
+The card shows only what is true:
+
+| Card | Meaning |
+| --- | --- |
+| `landing` | approved; no check yet |
+| `landing: rebasing` / `tests running` / `pushing` / `pushed, CI running` | the worker's latest progress note |
+| `landing: not pushed yet` | checked: the work is on no remote yet; the worker has not said it is done, or is working or waiting on a background task |
+| `landing: not on main yet` | checked: pushed (a backup branch) but not in `origin/<base>` yet |
+| `landing: waiting on a background task` | the worker's turn ended with a task running in the background (it wakes when the task ends) |
+| `landed` / `landed, CI running` / `landed, CI green` / `landed, CI failed` | in `origin/<base>`; the second part is the CI of the landed commit |
+| `land failed: <reason>` | the worker said it was done (or went idle after working), a grace of two minutes passed, nothing was running (pane not working or blocked; no background task where the session can say), and the work is still not in `origin/<base>` |
+
+**Background tasks.** herdr reports only the pane's status, and Claude Code
+shows idle once a turn ends even while a `run_in_background` task runs; the
+agent wakes when it ends. The session file says so: the launch result
+("Command running in background with ID", "Async agent launched",
+"Monitor started") opens a task, and a `<task-notification>` with a final
+status (or TaskStop) closes it. The hub reads the tail of the session
+(1 MiB) of workers that are idle or done; open tasks show as `working
+(background)` on the card. It cannot see tasks launched before that window,
+tasks of other agent kinds (Pi), or tasks a restarted session lost (ignored
+after 12 hours), and says nothing rather than guess in those cases.

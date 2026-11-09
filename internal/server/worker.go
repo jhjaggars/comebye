@@ -396,6 +396,9 @@ type checkOpts struct {
 	// its worktree and deleted its branch without pushing must not look
 	// landed.
 	Also []string
+	// CI asks for the CI state of this commit (a landed commit's SHA): the
+	// answer's CI field.
+	CI string
 }
 
 func (o checkOpts) query() url.Values {
@@ -417,6 +420,9 @@ func (o checkOpts) query() url.Values {
 	if len(o.Also) > 0 {
 		q.Set("also", strings.Join(o.Also, ","))
 	}
+	if o.CI != "" {
+		q.Set("ci", o.CI)
+	}
 	return q
 }
 
@@ -426,7 +432,7 @@ func (o checkOpts) query() url.Values {
 func (s *Server) handleChecks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	opts := checkOpts{Detail: q.Get("detail") == "1", Diff: q.Get("diff") == "1", Within: q.Get("within") == "1",
-		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints")), Also: splitList(q.Get("also"))}
+		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints")), Also: splitList(q.Get("also")), CI: hexSHA(q.Get("ci"))}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	c, lerr := s.localChecks(ctx, q.Get("path"), q.Get("branch"), q.Get("base"), opts)
@@ -456,6 +462,9 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 			if repo != "" {
 				c = checkGone(ctx, filepath.Clean(path), repo, branch, opts.Prev, hexOnly(append(opts.Hints, opts.Also...)), base)
 				c.RepoNote = note
+				if opts.CI != "" {
+					c.CI = ciOf(ctx, repo, opts.CI)
+				}
 			} else {
 				c.RepoMissing = why
 			}
@@ -474,6 +483,9 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 	}
 	c := checkWorktree(ctx, p, branch, base)
 	checkAlso(ctx, &c, hexOnly(opts.Also))
+	if opts.CI != "" {
+		c.CI = ciOf(ctx, p, opts.CI)
+	}
 	if opts.Detail || opts.Diff {
 		inspectWorktree(ctx, &c, opts.Diff)
 	}
@@ -837,4 +849,13 @@ func hexOnly(in []string) []string {
 		}
 	}
 	return out
+}
+
+// hexSHA returns s when it is a commit SHA (7 to 40 lower-case hex digits),
+// else "".
+func hexSHA(s string) string {
+	if h := hexOnly([]string{s}); len(h) == 1 {
+		return h[0]
+	}
+	return ""
 }

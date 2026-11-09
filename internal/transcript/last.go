@@ -16,6 +16,12 @@ type Latest struct {
 	Text    string        `json:"text,omitempty"`
 	Time    string        `json:"time,omitempty"`
 	Pending []PendingTool `json:"pending,omitempty"`
+	// Background lists the tasks the session started with run_in_background
+	// that have not ended (Claude sessions only; see background.go).
+	Background []BackgroundTask `json:"background,omitempty"`
+	// BackgroundKnown: the session format records background tasks, so an
+	// empty Background means there are none (a Pi session cannot say).
+	BackgroundKnown bool `json:"background_known,omitempty"`
 }
 
 // PendingTool is a tool call still waiting for its result.

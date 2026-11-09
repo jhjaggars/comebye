@@ -53,6 +53,7 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 - After you report, {{from}} may come back and ask you to land your work (for example: rebase it onto the latest main as plain commits, re-run the tests, push to main and watch CI). Treat that message as your authorisation for exactly those steps.
 - Grade your evidence honestly in the report's Verification section, and say for each item how you checked it. **Verified live**: the real, built program exercised the way a user or client would (the CLI binary, HTTP requests to a running server, the dev harness in a browser, a pty script); calling a function directly is not live. **Unit tests only**: covered by automated tests but not exercised live. **Not verified**: everything else. A screenshot counts only if you opened it and say in one line what it shows.
 - Do not use ` + "`tmux`" + ` (it breaks inside herdr panes and leaves stray sessions): to exercise an interactive program, drive it from a script over a pty (Python pty, or script).
+- A long step (tests, a build, a landing's CI) is not a reason to report. Tell {{from}} how it is going with ` + "`comebye report --progress \"<what you are doing>\"`" + ` (a note: it finishes nothing and the card shows it). A report is you saying you are done.
 - End by running ` + "`comebye report -`" + ` with your final report on its standard input (a quoted heredoc is easiest), in exactly this markdown format, and then stop. That is how {{from}} learns you are done; if the command is not available, make the report your last message instead.
 
 ## Summary
@@ -99,6 +100,8 @@ type coord struct {
 	started   map[string]time.Time // entry id -> when its worker was (re)started
 	quiet     map[string]time.Time // agent id -> no notifications until
 	calling   map[string]time.Time // entry id -> last callback attempt
+	landSched map[string]landSched // entry id -> when its landing is checked next
+	bg        map[string]bgCache   // agent id -> its background tasks, as last read
 }
 
 type cachedChecks struct {
@@ -643,6 +646,11 @@ func (s *Server) RunLedger(ctx context.Context) {
 type liveInfo struct {
 	Present bool              `json:"present"`
 	Status  herdr.AgentStatus `json:"agent_status,omitempty"`
+	// Background lists the tasks the worker's session started in the
+	// background and has not seen end (Claude sessions; see
+	// transcript/background.go). BackgroundKnown says the session can tell.
+	Background      []transcript.BackgroundTask `json:"background,omitempty"`
+	BackgroundKnown bool                        `json:"background_known,omitempty"`
 }
 
 // entryView is a ledger entry with live hints.
@@ -689,6 +697,9 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		v := entryView{Entry: e}
 		if a, ok := live[e.AgentID]; ok && e.AgentID != "" {
 			v.Live = liveInfo{Present: true, Status: a.Status}
+			if e.Active() && (a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone) {
+				v.Live.Background, v.Live.BackgroundKnown = s.backgroundOf(r.Context(), e, false)
+			}
 		}
 		if e.Reported() && e.Worktree != "" {
 			if c := s.cachedChecks(e); c != nil {

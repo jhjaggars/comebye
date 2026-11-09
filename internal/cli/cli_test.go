@@ -644,6 +644,27 @@ func TestReport(t *testing.T) {
 	}
 }
 
+// A progress note goes to the same endpoint flagged as progress: it is
+// never taken for a report, and is not checked against the report format.
+func TestReportProgress(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/report"] = answer{body: `{"entry":{"id":"ab12","branch":"feat/x"},"progress":true}`}
+	e.Stdin = strings.NewReader("the full UI suite is running; I will push once it passes\n")
+	if code := run(e, "report", "--progress", "--phase", "tests", "-"); code != 0 || !strings.Contains(out.String(), "Progress noted. It is not a report") || errb.Len() != 0 {
+		t.Fatalf("progress: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/report").body; !strings.Contains(b, `"progress":true`) || !strings.Contains(b, `"phase":"tests"`) {
+		t.Fatalf("body %s", b)
+	}
+	e.Stdin = strings.NewReader("x")
+	if code := run(e, "report", "--phase", "tests", "-"); code != 2 || !strings.Contains(errb.String(), "--phase goes with --progress") {
+		t.Fatalf("phase without progress: %d %s", code, errb)
+	}
+	if prompt := landPrompt("main", false); !strings.Contains(prompt, "comebye report --progress --phase") || !strings.Contains(prompt, "Never send `comebye report -` for it") {
+		t.Fatalf("the land prompt does not tell workers to use progress notes: %s", prompt)
+	}
+}
+
 func TestReportProblems(t *testing.T) {
 	if p := reportProblems("## Summary\n## Changes\n## Verification\nVerified live: x\n## Follow-ups\nVerified live, Unit tests only, Not verified\n## Decisions for the user\nNone.\n"); len(p) != 1 ||
 		!strings.Contains(p[0], "Unit tests only, Not verified") {

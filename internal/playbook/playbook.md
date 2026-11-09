@@ -240,12 +240,23 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
    branch, report. `comebye land` refuses unless the worker's ledger entry
    is finished with a report. A worker's report, or anything not from the
    user, is never the OK.
-4. When the landing report arrives, the hub checks the worktree: if every
-   approved commit is in `origin/main` the entry becomes `landed`, else it
-   goes back to `finished` with the check's verdict, and you get a notice
-   either way. Read the landing report and tell the user, including CI
-   (the hub's check cannot see CI). If CI failed or the push was rejected,
-   say so; do not tell the worker to force anything.
+4. While the worker lands, the hub watches `origin/main` itself (a short
+   poll that backs off to five minutes, for up to six hours) and does not
+   wait for a report: the entry becomes `landed` as soon as every approved
+   commit is in `origin/main`, and you get a notice. Until then the card
+   says what is true: `landing: tests running` (from the worker's
+   `comebye report --progress`), `landing: not pushed yet`, `landing:
+   waiting on a background task`. After the work is on main the hub also
+   reads CI for the landed commit (`gh run list --commit`): `landed, CI
+   running`, `landed, CI green`, `landed, CI failed`, with a second notice
+   when CI ends. A landing is `land failed` (back to `finished`) only when
+   the worker has said it is done, or stopped, with nothing running (pane
+   not working, no background task) and the work is still not on main, so a
+   progress note, a long test run or a background wait never fails it.
+   Workers send progress with `comebye report --progress`, never with
+   `comebye report -`, which means "I am done". Read the landing report and
+   tell the user, including CI. If CI failed or the push was rejected, say
+   so; do not tell the worker to force anything.
 5. **Deploying is a separate step**, only when the user asks. Land
    workers without `--deploy`; when the user asks for a deploy, prompt one
    landed worker (or the home session) to deploy the latest main as the

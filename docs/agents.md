@@ -132,10 +132,14 @@ pi's thinking level, when the handoff chose them), worktree, brief, who asked, a
 - `landing`: the user OKed landing (`comebye land`; the `approval`
   records who relayed it, the user's words and the approved tip) and the
   worker is landing its work;
-- `landed`: its landing report came in and the hub's check found every
-  approved commit in the base (`land_check`, with the SHAs it landed as).
-  A failed check returns it to `finished`. More work makes it `running`
-  again, as a new round;
+- `landed`: the hub's check found every approved commit in the base
+  (`land_check`, with the SHAs it landed as and, once read, the CI of the
+  landed commit). The hub checks a landing on a schedule, so this does not
+  wait for the worker's report. A worker that said it was done, or stopped,
+  with nothing running and its work still not in the base goes back to
+  `finished` (`land_check.state` `failed`, with the reason). More work
+  makes it `running` again, as a new round (see lifecycle.md, "Landing:
+  what the card says");
 - `ready_to_remove`: you marked it (who, when, why);
 - `removed`: you confirmed its removal (what was closed and removed is
   recorded);

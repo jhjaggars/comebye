@@ -37,10 +37,11 @@ func land(t *testing.T, s *Server, body string) (int, map[string]any) {
 	return w.Code, out
 }
 
-// settle sends the landing report and waits for the hub's check.
+// settle sends the landing report (filed 10 minutes ago, so the hub's grace
+// for a worker that just reported is over) and waits for the hub's check.
 func settle(t *testing.T, s *Server, id string) ledger.Entry {
 	t.Helper()
-	if _, ok, _ := s.ledger.Report("desk/w2:p1", "landed", time.Now()); !ok {
+	if _, ok, _ := s.ledger.Report("desk/w2:p1", "landed", time.Now().Add(-10*time.Minute)); !ok {
 		t.Fatal("landing report refused")
 	}
 	var e ledger.Entry

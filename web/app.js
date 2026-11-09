@@ -682,14 +682,15 @@ function agentRow(a, worker) {
   const nm = a.name || a.pane_id || id;
   return `
     <div class="agent ${esc(a.agent_status)}${worker ? " worker" : ""}${marked ? " marked" : ""}" role="button" tabindex="0" data-id="${esc(id)}">
-      <span class="dot ${esc(a.agent_status)}"></span>
+      <span class="dot ${esc(a.agent_status)}${bgRunning(a) ? " bg" : ""}"></span>
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
           isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
         ${subLine(a)}
       </div>
-      <span class="status ${esc(a.agent_status)}">${esc(a.agent_status)}${
-        activeMs(a) && (a.agent_status === "idle" || a.agent_status === "done")
+      <span class="status ${esc(agentStatusText(a))}${bgRunning(a) ? " bg" : ""}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
+        bgRunning(a) ? `<br><span class="ago">background</span>`
+        : activeMs(a) && (a.agent_status === "idle" || a.agent_status === "done")
           ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>`
           : a.agent_status === "working" && sinceMs(a)
             ? `<br><span class="ago">for ${fmtAgo(sinceMs(a))}</span>` : ""}</span>${
@@ -789,23 +790,74 @@ function scheduleLedger() {
   ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, wait);
 }
 
+// A worker's tasks started in the background (the hub reads them from its
+// session while it is idle or done): the agent is not finished while one
+// runs, it wakes when the task ends.
+function bgTasks(a) {
+  const e = a && ledger.byAgent.get(agentId(a));
+  return (e && e.live && e.live.background) || [];
+}
+function bgRunning(a) {
+  return !!a && (a.agent_status === "idle" || a.agent_status === "done") && bgTasks(a).length > 0;
+}
+function bgTitle(a) {
+  const t = bgTasks(a);
+  return `Idle, but ${t.length} task${t.length === 1 ? "" : "s"} running in the background (it wakes when ${t.length === 1 ? "it ends" : "they end"}): ` +
+    t.map((x) => `${x.tool}${x.desc ? " " + x.desc : ""}`).join("; ");
+}
+// agentStatusHtml is the status word of an agent: "working" with a note
+// when the agent only waits on a background task.
+function agentStatusText(a) {
+  return bgRunning(a) ? "working" : a.agent_status;
+}
+
+const LAND_PHASE = { rebase: "rebasing", tests: "tests running", push: "pushing", ci: "pushed, CI running" };
+const LAND_NOTE_STALE_MS = 20 * 60 * 1000;
+
+// landLabel says what a handoff's landing is doing, from what the hub saw
+// and what the worker said, and nothing it did not: {cls, text, title}.
+function landLabel(e, a) {
+  const lc = e.land_check;
+  const state = lc && (lc.state || (lc.ok ? "landed" : "failed"));
+  if (e.status === "landed") {
+    const as = lc && lc.landed && lc.landed.length ? ` as ${lc.landed.map((x) => x.slice(0, 7)).join(", ")}` : "";
+    const where = `Landed on ${(lc && lc.base) || "its base"}${as}`;
+    const ci = lc && lc.ci;
+    if (ci && ci.state === "running") return { cls: "landing", text: "landed, CI running", title: `${where}. CI is running for the landed commit.` };
+    if (ci && ci.state === "success") return { cls: "candidate", text: "landed, CI green", title: `${where}. CI passed (${ci.runs} run${ci.runs === 1 ? "" : "s"}).` };
+    if (ci && ci.state === "failure") return { cls: "failed", text: "landed, CI failed", title: `${where}. CI failed${ci.url ? ": " + ci.url : ""}.` };
+    return { cls: "candidate", text: "landed", title: where + (ci && ci.state === "none" ? ". No CI run was found for the landed commit." : ".") };
+  }
+  if (e.status === "finished" && lc && state === "failed" && e.approval && Date.parse(lc.at) >= Date.parse(e.finished_at || 0)) {
+    const why = (lc.reason || lc.verdict || "").replace(/\s+/g, " ");
+    return { cls: "failed", text: "land failed" + (why ? ": " + (why.length > 64 ? why.slice(0, 63) + "…" : why) : ""), title: "The landing failed: " + (lc.verdict || why) };
+  }
+  if (e.status !== "landing") return null;
+  const approved = e.approval ? `Landing, approved by ${e.approval.by || "?"}: ${e.approval.note || ""}` : "Landing";
+  const p = e.progress;
+  const idle = a && (a.agent_status === "idle" || a.agent_status === "done");
+  const checked = lc ? ` Last checked ${fmtAgo(Date.now() - Date.parse(lc.at))} ago${lc.stopped ? "; the hub stopped re-checking" : ""}.` : "";
+  const why = lc && lc.reason ? ` ${lc.reason}.` : "";
+  if (a && bgRunning(a))
+    return { cls: "landing", text: "landing: waiting on a background task", title: `${approved}. ${bgTitle(a)}.${checked}` };
+  if (p && !(idle && Date.now() - Date.parse(p.at) > LAND_NOTE_STALE_MS)) {
+    const t = LAND_PHASE[p.phase] || p.text.replace(/\s+/g, " ").slice(0, 60);
+    return { cls: "landing", text: "landing: " + t, title: `${approved}. The worker's note ${fmtAgo(Date.now() - Date.parse(p.at))} ago: ${p.text}.${checked}` };
+  }
+  if (lc && state === "pending") {
+    const t = lc.unpushed > 0 ? "not pushed yet" : lc.unmerged > 0 ? "not on main yet" : "checking";
+    return { cls: "landing", text: "landing: " + t, title: `${approved}.${why}${checked}` };
+  }
+  return { cls: "landing", text: "landing", title: approved };
+}
+
 function ledgerChip(a) {
   const id = agentId(a);
   if (ledger.marked.has(id)) return '<span class="lg-chip rtr">ready to remove</span>';
   const e = ledger.byAgent.get(id);
   if (!e) return "";
-  const lc = e.land_check;
-  if (e.status === "landing") {
-    const why = e.approval ? `Landing, approved by ${e.approval.by || "?"}: ${e.approval.note || ""}` : "Landing";
-    return `<span class="lg-chip landing" title="${esc(why)}">landing</span>`;
-  }
-  if (e.status === "landed") {
-    const as = lc && lc.landed && lc.landed.length ? ` as ${lc.landed.map((s) => s.slice(0, 7)).join(", ")}` : "";
-    return `<span class="lg-chip candidate" title="${esc(`Landed on ${(lc && lc.base) || "its base"}${as}`)}">landed</span>`;
-  }
-  if (e.status === "finished" && lc && !lc.ok && e.approval && Date.parse(lc.at) >= Date.parse(e.finished_at || 0)) {
-    return `<span class="lg-chip failed" title="${esc("The landing check failed: " + (lc.verdict || ""))}">land failed</span>`;
-  }
+  const l = landLabel(e, a);
+  if (l) return `<span class="lg-chip ${l.cls}" title="${esc(l.title)}">${esc(l.text)}</span>`;
   if (e.status === "finished") {
     return e.candidate
       ? '<span class="lg-chip candidate" title="Finished; its worktree is clean and merged">finished · merged</span>'
@@ -4604,7 +4656,7 @@ function statusHTML(desktop) {
       `<div class="st-row"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="st-n">${esc(t.question)}</span>${desktop ? `<span class="st-r"><button type="button" class="st-link" data-go="todo">To do</button></span>` : ""}</div>`).join("");
     if (p.progress.length) h += `<div class="st-g prog">In progress</div>` + p.progress.map(({ e, ag }) => {
       const at = Date.parse(e.created_at);
-      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? "landing" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${open(ag)}</span></div>`;
+      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "running (background task)" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${open(ag)}</span></div>`;
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
@@ -5169,8 +5221,9 @@ function renderDetail() {
   if (multiHost() && a.host) sub = a.host + " · " + sub;
   $("d-subtitle").textContent = sub;
   const st = $("d-status");
-  st.textContent = a.agent_status;
-  st.className = "status " + a.agent_status;
+  st.textContent = bgRunning(a) ? "working (background)" : a.agent_status;
+  st.className = "status " + agentStatusText(a) + (bgRunning(a) ? " bg" : "");
+  st.title = bgRunning(a) ? bgTitle(a) : "";
   updateAnswerCard();
   updateSendButton();
   renderActivity();

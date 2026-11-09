@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jhjaggars/comebye/internal/gitfetch"
+	"github.com/jhjaggars/comebye/internal/ledger"
 	"log"
 	"os"
 	"os/exec"
@@ -250,6 +251,8 @@ type worktreeChecks struct {
 	Error      string `json:"error,omitempty"`
 	// Detail is filled in for an inspection (checks?detail=1).
 	Detail *worktreeDetail `json:"detail,omitempty"`
+	// CI is the CI state of the commit asked for (checks?ci=SHA).
+	CI *ledger.CI `json:"ci,omitempty"`
 }
 
 // worktreeDetail is what a coordinator inspects before proposing to keep

@@ -109,7 +109,7 @@ func feedLines(r *bufio.Reader, fn func([]byte)) (int64, error) {
 // and the tool calls of the current assistant message still lacking a
 // result (Claude's permission prompt blocks on one of those).
 func claudeLatestFrom(r io.Reader, skipFirst bool) (*Latest, error) {
-	st := &claudeLatest{out: &Latest{}, pending: map[string]PendingTool{}}
+	st := &claudeLatest{out: &Latest{}, pending: map[string]PendingTool{}, bg: newBgTracker()}
 	br := bufio.NewReaderSize(r, 256*1024)
 	first := true
 	for {
@@ -130,6 +130,7 @@ func claudeLatestFrom(r io.Reader, skipFirst bool) (*Latest, error) {
 			st.out.Pending = append(st.out.Pending, p)
 		}
 	}
+	st.out.Background, st.out.BackgroundKnown = st.bg.tasks(time.Now()), true
 	return st.out, nil
 }
 
@@ -138,6 +139,7 @@ type claudeLatest struct {
 	curMsgID string
 	order    []string
 	pending  map[string]PendingTool
+	bg       *bgTracker
 }
 
 func (st *claudeLatest) reset() {
@@ -149,6 +151,10 @@ func (st *claudeLatest) line(line []byte) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 || line[0] != '{' {
 		return
+	}
+	if bytes.Contains(line, []byte("<task-notification>")) {
+		// queue-operation, attachment or user record: all say a task ended
+		st.bg.notification(line)
 	}
 	var rec claudeRecord
 	if json.Unmarshal(line, &rec) != nil || rec.IsSidechain || rec.IsMeta || rec.Message == nil {
@@ -171,6 +177,7 @@ func (st *claudeLatest) line(line []byte) {
 					st.out.Text, st.out.Time = t, rec.Timestamp
 				}
 			case "tool_use":
+				st.bg.call(b.ID, b.Name, b.Input)
 				if b.ID != "" {
 					st.order = append(st.order, b.ID)
 					st.pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)}
@@ -186,6 +193,7 @@ func (st *claudeLatest) line(line []byte) {
 			if b.Type == "tool_result" {
 				delete(st.pending, b.ToolUseID)
 				results = true
+				st.bg.result(b.ToolUseID, toolResultText(b.Content), rec.Timestamp)
 			}
 		}
 		if !results {
@@ -194,4 +202,13 @@ func (st *claudeLatest) line(line []byte) {
 			st.reset()
 		}
 	}
+}
+
+// toolResultText is a tool_result's content as one string.
+func toolResultText(raw json.RawMessage) string {
+	blocks, s, isStr := decodeClaudeBlocks(raw)
+	if isStr {
+		return s
+	}
+	return claudeText(blocks)
 }
