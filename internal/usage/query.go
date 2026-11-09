@@ -50,6 +50,15 @@ type Group struct {
 	Total
 	Series []int64 `json:"series"`          // fresh tokens per bucket (cache reads for the cache-read group)
 	Apart  bool    `json:"apart,omitempty"` // by=token: cache reads, drawn apart from the fresh stack
+	// Prompt and Replies are per bucket (not by=token): the prompt side
+	// (input + cache writes + cache reads) and the replies, whose quotient is
+	// the context sent per request.
+	Prompt  []int64 `json:"prompt,omitempty"`
+	Replies []int64 `json:"replies,omitempty"`
+	// CRSeries is cache reads per bucket and USDSeries the estimated dollars
+	// per bucket, for drawing "all tokens" and "dollars" without asking again.
+	CRSeries  []int64   `json:"cr_series,omitempty"`
+	USDSeries []float64 `json:"usd_series,omitempty"`
 }
 
 // SessionRow is a session in the top list.
@@ -287,6 +296,16 @@ func (st *Store) Run(q Query) (*Result, error) {
 			g := grp(f.dim(q.By))
 			addTo(&g.Total, f.t, f.model)
 			g.Series[i] += f.t.Fresh()
+			if g.Prompt == nil {
+				g.Prompt, g.Replies, g.CRSeries = make([]int64, len(buckets)), make([]int64, len(buckets)), make([]int64, len(buckets))
+				g.USDSeries = make([]float64, len(buckets))
+			}
+			g.CRSeries[i] += f.t.CR
+			if usd, ok := q.Prices.USD(f.model, f.t); ok {
+				g.USDSeries[i] += usd
+			}
+			g.Prompt[i] += f.t.In + f.t.CW + f.t.CR
+			g.Replies[i] += f.t.Calls
 			if q.By == "handoff" && g.Label == "" && f.sess != nil {
 				g.Label = f.sess.L.Name
 			}
@@ -354,13 +373,17 @@ func (st *Store) Run(q Query) (*Result, error) {
 		return a.Key < b.Key
 	})
 	if q.By != "token" && len(res.Groups) > 8 {
-		other := Group{Key: "other", Series: make([]int64, len(buckets))}
+		other := Group{Key: "other", Series: make([]int64, len(buckets)), Prompt: make([]int64, len(buckets)), Replies: make([]int64, len(buckets)), CRSeries: make([]int64, len(buckets)), USDSeries: make([]float64, len(buckets))}
 		for _, g := range res.Groups[7:] {
 			other.Total.Tokens.Add(g.Tokens)
 			other.USD += g.USD
 			other.Unpriced += g.Unpriced
 			for i, v := range g.Series {
 				other.Series[i] += v
+				other.Prompt[i] += g.Prompt[i]
+				other.Replies[i] += g.Replies[i]
+				other.CRSeries[i] += g.CRSeries[i]
+				other.USDSeries[i] += g.USDSeries[i]
 			}
 		}
 		other.finish()

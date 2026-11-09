@@ -104,6 +104,7 @@ func main() {
 		archiveEnc    = flag.String("archive-encryption", getenv("COMEBYE_ARCHIVE_ENCRYPTION"), "the archive's mode: age or none (plaintext; only where something else encrypts the copy); required with -archive-dir or -archive-s3")
 		archiveRcpt   = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
 		usageOn       = flag.Bool("usage", envBool("COMEBYE_USAGE", true), "count the tokens this host's agents spend (Claude Code and Pi transcripts: counts and labels only, never text) for the Usage screen and `comebye usage`; needs the state directory")
+		usageEvery    = flag.Duration("usage-interval", envDuration("COMEBYE_USAGE_INTERVAL", 2*time.Minute), "how often to scan the session files for token counts (and, on a hub, to gather the peers')")
 		recallIndex   = flag.String("recall-index", getenv("COMEBYE_RECALL_INDEX"), "the transcript index the app searches, read-only (default ~/.local/state/comebye/recall/index.db; see `comebye archive index`)")
 		releaseRepo   = flag.String("release-repo", getenv("COMEBYE_RELEASE_REPO"), "a dedicated comebye clone this host tags releases from, with its own git and gh credentials (see docs/security.md). On a hub it backs the app's \"Approve release\" button; on a peer (-hub) it lets the hub tag through this host (-release-host there); empty: off")
 		releaseHost   = flag.String("release-host", getenv("COMEBYE_RELEASE_HOST"), "on the hub: the peer whose -release-repo the \"Approve release\" button tags through (the hub asks it to check, tag and report the build; it keeps no clone or credentials of its own); not with -release-repo")
@@ -400,7 +401,7 @@ func main() {
 		Version:        buildVersion(),
 		Archive:        arch,
 		ArchiveSources: acfg.Sources(),
-		Usage:          server.UsageConfig{Off: !*usageOn, Sources: usageSources(acfg.Sources())},
+		Usage:          server.UsageConfig{Off: !*usageOn, Interval: *usageEvery, Sources: usageSources(acfg.Sources())},
 		RecallIndex:    (&archive.Config{Index: *recallIndex}).IndexPath(),
 		Addr:           *addr,
 		AllowLogins:    logins,

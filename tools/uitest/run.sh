@@ -22,7 +22,9 @@ if [ -z "${SCHEME:-}" ]; then
   # default), so both set-ups are driven in a browser.
   SCHEME=dark PAGES_LISTENER=1 "$me" "${1:-}" "$o" || rc=1
   SCHEME=light PAGES_LISTENER=0 PORT=$(( ${PORT:-18741} + 1 )) "$me" "${1:-}" "$o/light" || rc=1
-  exit $rc
+  # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
+FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1
+exit $rc
 fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -99,4 +101,6 @@ for _ in $(seq 50); do curl -sf "http://127.0.0.1:$fport/api/agents" >/dev/null 
 node falseblocked.mjs "http://127.0.0.1:$fport" "$out" || rc=1
 # The Peers screen and the host defaults: real servers (a hub, a peer, a peer that is down) on the same fake herdr.
 FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node peers.mjs "$out" || rc=1
+# The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
+FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1
 exit $rc

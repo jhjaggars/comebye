@@ -4703,6 +4703,7 @@ function route() {
   syncRecall();
   syncPages();
   syncPeers();
+  syncUsage();
   syncBriefs();
   syncSubview();
   syncLaunch();
@@ -5298,6 +5299,386 @@ function refreshDirty() {
   if (n) n.textContent = dirty ? "Unsaved changes" : "";
 }
 
+/* ---------- Usage: tokens spent by agents ---------- */
+//
+// A screen of its own (#/usage), like Peers. The numbers come from GET
+// /api/usage: counts and labels the hub gathered from every host's session
+// files, never their text. "Fresh" tokens are input + output + cache writes;
+// cache reads are 10x cheaper and 98% of the volume, so they are shown
+// apart (and only added in by the "All tokens" measure). Charts are drawn
+// here as inline SVG from theme tokens: nothing is loaded from elsewhere.
+//   #/usage?r=14&d=kind&m=fresh&p=<project>&h=<handoff>
+// r: days back (1, 7, 14, 30, 90), d: what the chart splits by, m: fresh|all|cost,
+// p, h: the drill-down (project, then handoff, then its sessions).
+
+const US_RANGES = [[1, "24h"], [7, "7 days"], [14, "14 days"], [30, "30 days"], [90, "90 days"]];
+const US_DIMS = [["kind", "Agent"], ["model", "Model"], ["host", "Host"], ["project", "Project"], ["role", "Role"], ["purpose", "Purpose"], ["token", "Token type"]];
+const US_MEAS = [["fresh", "Fresh tokens"], ["all", "All tokens"], ["cost", "Est. dollars"]];
+const US_COLORS = ["--blue", "--purple", "--green", "--orange", "--teal", "--yellow", "--red"];
+const US_TOKEN_COLOR = { input: "--blue", output: "--orange", "cache write": "--purple", "cache read": "--teal" };
+const US_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const us = {
+  route: null, timer: null, seq: 0, r: 14, d: "kind", m: "fresh", p: "", h: "",
+  status: "loading", err: "",           // loading | ok | off | err
+  main: null, prev: null, drill: null, roles: null, models: null,
+  hosts: [], asOf: 0, picked: -1, prices: null, pricesMsg: "", hLabel: "",
+};
+
+function parseUsageRoute() {
+  const m = location.hash.match(/^#\/usage(?:\?(.*))?$/);
+  if (!m) return null;
+  const q = new URLSearchParams(m[1] || "");
+  const r = +q.get("r");
+  return {
+    r: US_RANGES.some((x) => x[0] === r) ? r : 14,
+    d: US_DIMS.some((x) => x[0] === q.get("d")) ? q.get("d") : "kind",
+    m: US_MEAS.some((x) => x[0] === q.get("m")) ? q.get("m") : "fresh",
+    p: (q.get("p") || "").slice(0, 200), h: (q.get("h") || "").slice(0, 200),
+  };
+}
+
+function usageHash() {
+  const q = new URLSearchParams();
+  if (us.r !== 14) q.set("r", us.r);
+  if (us.d !== "kind") q.set("d", us.d);
+  if (us.m !== "fresh") q.set("m", us.m);
+  if (us.p) q.set("p", us.p);
+  if (us.h) q.set("h", us.h);
+  const s = q.toString();
+  return "#/usage" + (s ? "?" + s : "");
+}
+
+// usageSet changes the screen's state, keeps the URL in step (no history entry) and reloads what moved.
+function usageSet(patch, reload) {
+  Object.assign(us, patch);
+  us.picked = -1;
+  if (location.hash !== usageHash()) history.replaceState(null, "", usageHash());
+  if (reload) usageLoad(); else renderUsage();
+}
+
+// usNice rounds a chart's top up to a round number with four even gridlines (4, 8, 12, 16, 20 ... of a unit).
+function usNice(v) {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const k of [1, 1.2, 1.6, 2, 2.4, 3, 4, 5, 6, 8, 10]) if (k * p >= v) return k * p;
+  return 10 * p;
+}
+const usFmtN = (n) => { const a = Math.abs(n); return a >= 1e9 ? (n / 1e9).toFixed(a >= 1e10 ? 1 : 2) + "B" : a >= 1e6 ? (n / 1e6).toFixed(a >= 1e8 ? 0 : 1) + "M" : a >= 1e3 ? (n / 1e3).toFixed(a >= 1e5 ? 0 : 1) + "k" : String(Math.round(n)); };
+const usFmtD = (n) => "$" + (n >= 1000 ? Math.round(n).toLocaleString("en-US") : n.toFixed(n >= 100 ? 0 : n >= 10 ? 1 : 2));
+const usPct = (x) => (x * 100 >= 99.95 ? "100" : (x * 100).toFixed(x * 100 >= 10 ? 0 : 1)) + "%";
+// value of a group (or the totals) in the chosen measure
+function usVal(t, m = us.m) { return m === "cost" ? (t.usd || 0) : m === "all" ? (t.fresh || 0) + (t.cr || 0) : (t.fresh || 0); }
+const usFmt = (v, m = us.m) => (m === "cost" ? usFmtD(v) : usFmtN(v));
+function usBucketVal(g, i, m = us.m) { return m === "cost" ? (g.usd_series ? g.usd_series[i] : 0) : m === "all" ? g.series[i] + (g.cr_series ? g.cr_series[i] : 0) : g.series[i]; }
+
+function usQuery(extra) {
+  const q = new URLSearchParams({ since: us.r + "d", tz: String(-new Date().getTimezoneOffset()), ...extra });
+  if (us.r === 1) { q.set("since", "24h"); q.set("bucket", "hour"); }
+  return "/api/usage?" + q;
+}
+
+async function usageLoad() {
+  const seq = ++us.seq;
+  const d = us.d === "token" && us.m === "cost" ? "kind" : us.d;
+  const drill = us.h ? { by: "session", project: us.p, handoff: us.h } : us.p ? { by: "handoff", project: us.p } : { by: "project" };
+  try {
+    const [main, prev, dr, roles, models] = await Promise.all([
+      api(usQuery({ by: d })),
+      api("/api/usage?" + new URLSearchParams({ since: us.r * 2 + "d", to: us.r + "d", by: "kind", bucket: "day" })),
+      api(usQuery({ ...drill, limit: "25" })),
+      api(usQuery({ by: "role" })),
+      api(usQuery({ by: "model" })),
+    ]);
+    if (seq !== us.seq) return;
+    Object.assign(us, { main, prev, drill: dr, roles, models, hosts: main.hosts || [], asOf: main.as_of, status: "ok", err: "" });
+  } catch (e) {
+    if (seq !== us.seq) return;
+    us.status = e.status === 404 ? "off" : "err";
+    us.err = e.message;
+  }
+  renderUsage();
+}
+
+function usageTiles() {
+  const t = us.main.totals, pt = us.prev.totals;
+  const tot = (t.fresh || 0), ptot = (pt.fresh || 0);
+  let delta = "";
+  if (ptot > 0) {
+    const ch = (tot - ptot) / ptot;
+    delta = `<div class="d ${ch > 0.005 ? "up" : ch < -0.005 ? "down" : ""}">${ch > 0.005 ? "▲" : ch < -0.005 ? "▼" : "▬"} ${Math.abs(Math.round(ch * 100))}% vs the ${us.r === 1 ? "day" : us.r + " days"} before</div>`;
+  } else delta = '<div class="d">nothing before this to compare</div>';
+  const parts = [["input", t.in], ["output", t.out], ["cache write", t.cw]];
+  const stack = tot ? `<div class="us-stack" role="img" aria-label="${parts.map(([n, v]) => `${n} ${usPct(v / tot)}`).join(", ")}">${parts.map(([n, v]) => `<i style="width:${(v / tot) * 100}%;background:var(${US_TOKEN_COLOR[n]})"></i>`).join("")}</div><div class="d">${parts.map(([n, v]) => `<span style="color:var(${US_TOKEN_COLOR[n]})">■</span> ${n} ${usPct(v / tot)}`).join(" &nbsp;")}</div>` : "";
+  const unp = t.unpriced ? ` · ${usFmtN(t.unpriced)} fresh tokens have no price` : "";
+  return `<div class="us-tiles">
+    <div class="us-tile"><span class="k">Fresh tokens</span><span class="v">${usFmtN(tot)}</span>${delta}${stack}</div>
+    <div class="us-tile"><span class="k">Cache reads</span><span class="v">${usFmtN(t.cr || 0)}</span><div class="d">shown apart; ${usFmtN(t.calls || 0)} replies</div></div>
+    <div class="us-tile"><span class="k">Cache hit</span><span class="v">${usPct(t.hit || 0)}</span><div class="d">of the prompt side came from the cache · ${(us.main.cache.read_per_write || 0).toFixed(1)} reads per write</div></div>
+    <div class="us-tile"><span class="k">Est. cost</span><span class="v">${usFmtD(t.usd || 0)}</span><div class="d">list prices, an estimate${esc(unp)}</div></div>
+  </div>`;
+}
+
+// usageChart draws the stacked bars for the main query in the chosen measure.
+function usageChart() {
+  const r = us.main, el = $("us-chart");
+  let groups = r.groups.filter((g) => us.m === "all" || !g.apart);
+  if (r.by === "token" && us.m === "cost") groups = groups.filter((g) => !g.apart);
+  const n = r.buckets.length;
+  const color = (g, i) => (g.key === "other" ? "--muted" : r.by === "token" ? US_TOKEN_COLOR[g.key] || US_COLORS[i % 7] : US_COLORS[i % US_COLORS.length]);
+  const rows = r.buckets.map((_, i) => groups.map((g) => usBucketVal(g, i)));
+  const W = Math.max(300, Math.floor(el.clientWidth) || 900), H = W < 500 ? 230 : 280, L = 46, R = 6, T = 8, B = 28;
+  const max = Math.max(0, ...rows.map((row) => row.reduce((a, b) => a + b, 0)));
+  const top = usNice(max), y = (v) => H - B - (v / top) * (H - B - T);
+  const slot = (W - L - R) / Math.max(1, n), bw = Math.max(2, slot * 0.7);
+  const hourly = r.bucket === "hour";
+  const lab = (i) => { const d = new Date(r.buckets[i] * 1000); return hourly ? String(d.getHours()).padStart(2, "0") + ":00" : US_MON[d.getMonth()] + " " + d.getDate(); };
+  const every = Math.max(1, Math.ceil(46 / slot));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens per ${hourly ? "hour" : "day"}, stacked by ${esc(r.by)}">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = (top * i) / 4;
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${usFmt(v)}</text>`;
+  }
+  for (let i = 0; i < n; i++) {
+    const cx = L + slot * i + slot / 2;
+    let acc = 0, bars = "";
+    rows[i].forEach((v, j) => {
+      if (v <= 0) return;
+      bars += `<rect x="${cx - bw / 2}" y="${y(acc + v)}" width="${bw}" height="${Math.max(0.6, y(acc) - y(acc + v))}" fill="var(${color(groups[j], j)})"/>`;
+      acc += v;
+    });
+    const sel = us.picked === i;
+    svg += `<g tabindex="0" data-i="${i}" role="button" aria-label="${esc(lab(i))}: ${usFmt(acc)}">${sel ? `<rect x="${cx - slot / 2}" y="${T}" width="${slot}" height="${H - B - T}" fill="var(--panel2)"/>` : ""}${bars}<rect x="${cx - slot / 2}" y="${T}" width="${slot}" height="${H - B - T}" fill="transparent"/></g>`;
+    if (i % every === 0) svg += `<text x="${cx}" y="${H - B + 16}" text-anchor="middle" font-size="11" fill="var(--muted)">${esc(lab(i))}</text>`;
+  }
+  svg += "</svg>";
+  el.innerHTML = svg;
+  el._groups = groups; el._lab = lab; el._color = color;
+  $("us-legend").innerHTML = groups.map((g, j) => `<span><i style="background:var(${color(g, j)})"></i>${esc(g.label && g.key !== g.label ? g.label : g.key)} <b>${usFmt(usVal(g.key === "cache read" ? { cr: g.cr, fresh: 0 } : g, g.key === "cache read" ? "all" : us.m))}</b></span>`).join("");
+  usageReadout();
+}
+
+function usageReadout() {
+  const el = $("us-chart"), box = $("us-read");
+  const i = us.picked;
+  if (i < 0 || !el._groups) { box.textContent = "Tap or focus a bar for its numbers."; return; }
+  const parts = el._groups.map((g) => [g.label && g.key !== g.label ? g.label : g.key, usBucketVal(g, i)]).filter(([, v]) => v > 0);
+  const total = parts.reduce((a, [, v]) => a + v, 0);
+  box.textContent = `${el._lab(i)}: ${usFmt(total)}${parts.length ? " — " + parts.map(([k, v]) => `${k} ${usFmt(v)}`).join(", ") : ""}`;
+}
+
+function usageDrill() {
+  const r = us.drill;
+  const level = us.h ? 2 : us.p ? 1 : 0;
+  const crumbs = [`<button type="button" data-us-crumb="0">All projects</button>`];
+  if (us.p) crumbs.push(`<span class="sep">›</span><button type="button" data-us-crumb="1">${esc(us.p)}</button>`);
+  if (us.h) crumbs.push(`<span class="sep">›</span><button type="button" data-us-crumb="2">${esc(us.hLabel || us.h)}</button>`);
+  const total = r.groups.reduce((a, g) => a + usVal(g), 0) || 1;
+  const maxv = Math.max(1, ...r.groups.map((g) => usVal(g)));
+  const noun = ["project", "handoff", "session"][level];
+  const rows = r.groups.map((g) => {
+    let name = g.label && g.label !== g.key ? g.label : g.key;
+    let sub = `cache ${usPct(g.hit || 0)} · ${usFmtN(g.calls || 0)} replies · ${g.usd || !g.unpriced ? usFmtD(g.usd || 0) + (g.unpriced ? "+" : "") : "no price"}`;
+    let clickable = level < 2 && g.key !== "(none)" && g.key !== "other";
+    if (level === 2) {
+      const [host, kind, id] = g.key.split("/");
+      name = (g.label ? g.label + " · " : "") + (id ? id.slice(-8) : g.key);
+      sub = `${host || ""} ${kind || ""} · ` + sub;
+    }
+    if (level === 1 && g.key === "(none)") name = "(no handoff)";
+    const data = clickable ? ` data-us-down="${escAttr(g.key)}" data-us-label="${escAttr(name)}"` : "";
+    const inner = `<span class="nm">${esc(name)}</span><span class="val">${usFmt(usVal(g))} <span class="us-lab">${(usVal(g) / total * 100).toFixed(0)}%</span></span><span class="bar"><i style="width:${(usVal(g) / maxv) * 100}%"></i></span><span class="sub">${esc(sub)}</span>`;
+    return clickable ? `<button type="button" class="us-row"${data}>${inner}</button>` : `<div class="us-row">${inner}</div>`;
+  }).join("");
+  return `<section class="us-card" aria-label="Where it went"><h2>Where it went: project › handoff › session</h2>
+    <div class="us-crumbs">${crumbs.join("")}</div>
+    <div class="us-rows">${rows || `<div class="us-empty">Nothing in this window.</div>`}</div>
+    <p class="us-note">By ${noun}, in ${esc(US_MEAS.find((x) => x[0] === us.m)[1].toLowerCase())}. ${level < 2 ? "Click a name to go down a level." : "Sessions are shown by their last 8 characters; a handoff's name is the worker it started."}${r.sessions_from && r.from < r.sessions_from ? " Hours older than 180 days are rollups: no sessions or handoffs." : ""}</p></section>`;
+}
+
+function usageCoordinator() {
+  const g = (us.roles.groups || []).find((x) => x.key === "coordinator");
+  const wk = (us.roles.groups || []).find((x) => x.key === "worker");
+  if (!g) return `<section class="us-card us-coord" aria-label="Coordinator"><h2>The coordinator's own usage</h2><div class="us-empty">No coordinator sessions in this window.</div></section>`;
+  const ctx = (x) => (x && x.replies && x.replies.reduce((a, b) => a + b, 0) ? x.prompt.reduce((a, b) => a + b, 0) / x.replies.reduce((a, b) => a + b, 0) : 0);
+  const totalFresh = us.roles.totals.fresh || 1;
+  const line = usageLines(us.roles.buckets, [
+    { name: "Coordinator", color: "--purple", v: g.prompt.map((p, i) => (g.replies[i] ? p / g.replies[i] : null)) },
+    ...(wk ? [{ name: "Workers", color: "--blue", v: wk.prompt.map((p, i) => (wk.replies[i] ? p / wk.replies[i] : null)) }] : []),
+  ]);
+  return `<section class="us-card us-coord" aria-label="Coordinator"><h2>The coordinator's own usage</h2>
+    <div class="us-kv"><div><b>${usFmtN(g.fresh)}</b><span>fresh tokens (${usPct(g.fresh / totalFresh)} of all)</span></div>
+    <div><b>${usFmtN(g.calls || 0)}</b><span>replies</span></div>
+    <div><b>${usFmtN(ctx(g))}</b><span>context sent per request${wk ? `, workers ${usFmtN(ctx(wk))}` : ""}</span></div>
+    <div><b>${usPct(g.hit || 0)}</b><span>cache hit</span></div></div>
+    <b style="font-size:13px">Average context per request, by ${us.roles.bucket}</b>
+    <div class="us-chart" role="img" aria-label="Average context sent per request for the coordinator and for workers">${line}</div>
+    <div class="us-legend"><span><i style="background:var(--purple)"></i>Coordinator</span>${wk ? '<span><i style="background:var(--blue)"></i>Workers</span>' : ""}</div>
+    <p class="us-note">A coordinator is a session in the directory a running coordinator agent works in; it is a guess for sessions seen while none ran.</p></section>`;
+}
+
+function usageLines(buckets, lines) {
+  const W = Math.max(280, Math.floor(($("us-view").clientWidth || 600) / ($("us-view").clientWidth > 820 ? 2 : 1)) - 30), H = 170, L = 46, R = 8, T = 8, B = 24;
+  const max = Math.max(1, ...lines.flatMap((l) => l.v.filter((x) => x != null)));
+  const top = usNice(max);
+  const y = (v) => H - B - (v / top) * (H - B - T), x = (i) => L + (i * (W - L - R)) / Math.max(1, buckets.length - 1);
+  let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+  for (let i = 0; i <= 4; i++) svg += `<line x1="${L}" x2="${W - R}" y1="${y((top * i) / 4)}" y2="${y((top * i) / 4)}" stroke="var(--border)"/><text x="${L - 6}" y="${y((top * i) / 4) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${usFmtN((top * i) / 4)}</text>`;
+  const every = Math.max(1, Math.ceil(buckets.length / 6));
+  buckets.forEach((b, i) => { if (i % every === 0) { const d = new Date(b * 1000); svg += `<text x="${x(i)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--muted)">${US_MON[d.getMonth()]} ${d.getDate()}</text>`; } });
+  for (const l of lines) {
+    let seg = [];
+    const flush = () => { if (seg.length > 1) svg += `<polyline points="${seg.join(" ")}" fill="none" stroke="var(${l.color})" stroke-width="2.2"/>`; seg = []; };
+    l.v.forEach((v, i) => { if (v == null) { flush(); return; } seg.push(`${x(i)},${y(v)}`); svg += `<circle cx="${x(i)}" cy="${y(v)}" r="3" fill="var(${l.color})"><title>${esc(l.name)}: ${usFmtN(v)}</title></circle>`; });
+    flush();
+  }
+  return svg + "</svg>";
+}
+
+function usageCache() {
+  const gs = (us.models.groups || []).filter((g) => g.key !== "other" || g.cr);
+  const rows = gs.map((g) => {
+    const rw = g.cw ? g.cr / g.cw : 0;
+    const bad = g.hit < 0.8 && g.cr + g.cw + g.in > 5000;
+    return `<div class="us-row"><span class="nm">${esc(g.key)}</span><span class="val" style="${bad ? "color:var(--yellow)" : ""}">${usPct(g.hit || 0)}</span><span class="bar"><i style="width:${(g.hit || 0) * 100}%;background:var(${bad ? "--yellow" : "--green"})"></i></span><span class="sub">${usFmtN(g.cr)} read · ${g.cw ? `${usFmtN(g.cw)} written · ${rw.toFixed(1)} reads per write` : "no cache writes recorded"}</span></div>`;
+  }).join("");
+  const c = us.main.cache, sv = c.saved_usd ? ` Cache reads saved an estimated ${usFmtD(c.saved_usd)} against paying the input price.` : "";
+  return `<section class="us-card" aria-label="Cache efficiency"><h2>Cache efficiency</h2><div class="us-rows">${rows || '<div class="us-empty">No models in this window.</div>'}</div>
+    <p class="us-note">Hit = cache reads ÷ (input + cache writes + cache reads). Under 80% turns yellow.${esc(sv)}</p></section>`;
+}
+
+function usagePricesCard() {
+  return `<section class="us-card us-prices" aria-label="Prices"><details id="us-pricedet"><summary>Prices (estimates)</summary><div id="us-pricebody"><div class="us-empty">Loading…</div></div></details></section>`;
+}
+
+async function usageLoadPrices() {
+  try { us.prices = await api("/api/usage/prices"); } catch (e) { us.prices = { error: e.message }; }
+  renderUsagePrices();
+}
+
+function renderUsagePrices() {
+  const box = $("us-pricebody");
+  if (!box) return;
+  const p = us.prices;
+  if (!p) { box.innerHTML = '<div class="us-empty">Loading…</div>'; return; }
+  if (p.error) { box.innerHTML = `<div class="us-empty">${esc(p.error)}</div>`; return; }
+  const seen = (us.models ? us.models.groups : []).filter((g) => g.unpriced).map((g) => g.key);
+  const names = [...new Set([...Object.keys(p.defaults), ...Object.keys(p.custom || {}), ...seen])].sort();
+  const cell = (m, f) => { const v = (p.custom && p.custom[m]) || p.defaults[m]; return v ? v[f] : ""; };
+  const rows = names.map((m) => `<tr data-model="${escAttr(m)}"><td>${esc(m)}${seen.includes(m) ? ' <span class="us-lab">no price</span>' : ""}</td>${["in", "out", "cw", "cr"].map((f) => `<td><input type="number" min="0" step="any" inputmode="decimal" data-f="${f}" value="${cell(m, f)}" aria-label="${esc(m)} ${f}"></td>`).join("")}</tr>`).join("");
+  box.innerHTML = `<p class="us-note">Dollars per million tokens. The defaults are Anthropic's list prices for the Claude models (cache writes at the 5-minute rate): an estimate, not an invoice. Models with no price — Pi's — count tokens only until you add one.</p>
+    <div class="tw"><table><thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Cache write</th><th>Cache read</th></tr></thead><tbody>${rows}
+    <tr id="us-newrow"><td><input class="mn" type="text" id="us-newmodel" placeholder="add a model name" aria-label="Model name to add" maxlength="120" autocomplete="off" autocapitalize="off" spellcheck="false"></td>${["in", "out", "cw", "cr"].map((f) => `<td><input type="number" min="0" step="any" inputmode="decimal" data-f="${f}" aria-label="New model ${f}"></td>`).join("")}</tr></tbody></table></div>
+    <div class="pr-acts" style="margin-top:8px"><button type="button" class="btn primary" id="us-saveprices">Save prices</button><button type="button" class="btn" id="us-resetprices">Reset to defaults</button><span class="us-note" id="us-pricemsg">${esc(us.pricesMsg)}</span></div>`;
+}
+
+async function usageSavePrices(reset) {
+  const p = us.prices;
+  if (!p || p.error) return;
+  const custom = {};
+  if (!reset) {
+    const num = (v) => (v === "" || v == null ? 0 : +v);
+    for (const tr of $("us-pricebody").querySelectorAll("tr[data-model], #us-newrow")) {
+      const m = tr.id === "us-newrow" ? $("us-newmodel").value.trim() : tr.dataset.model;
+      if (!m) continue;
+      const v = {};
+      tr.querySelectorAll("input[data-f]").forEach((i) => { v[i.dataset.f] = num(i.value); });
+      const d = p.defaults[m];
+      if (d ? ["in", "out", "cw", "cr"].every((f) => d[f] === v[f]) : ["in", "out", "cw", "cr"].every((f) => !v[f])) continue;
+      custom[m] = v;
+    }
+    // a default model whose prices were all cleared stays removed
+  }
+  try {
+    us.prices = await api("/api/usage/prices", { method: "PUT", body: JSON.stringify({ custom }) });
+    us.pricesMsg = reset ? "Back to the defaults." : "Saved.";
+    usageLoad();
+  } catch (e) { us.pricesMsg = e.message; }
+  renderUsagePrices();
+}
+
+function usageHosts() {
+  const bad = us.hosts.filter((h) => h.err);
+  const warn = bad.length ? `<div class="us-warn" role="status">${bad.map((h) => `<b>${esc(h.name)}</b>: ${esc(h.err)}`).join("<br>")}<br>Its tokens are missing or stale until it answers.</div>` : "";
+  return warn;
+}
+
+function renderUsage() {
+  if (!us.route) return;
+  const el = $("us-view");
+  $("us-fresh").textContent = us.status === "ok" ? "as of " + new Date(us.asOf * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + (us.hosts.length > 1 ? ` · ${us.hosts.length} hosts` : "") : "";
+  if (us.status === "loading") { el.innerHTML = '<div class="us-empty">Loading…</div>'; return; }
+  if (us.status === "off") { el.innerHTML = '<div class="us-empty">Token counting is off on this instance (it needs the state directory and <code>-usage</code>).</div>'; return; }
+  if (us.status === "err") { el.innerHTML = `<div class="us-empty">${esc(us.err)}</div>`; return; }
+  const seg = (name, items, cur, attr, dis) => `<span class="us-seg" role="group" aria-label="${name}">${items.map(([v, l]) => `<button type="button" ${attr}="${v}" aria-pressed="${cur === v}"${dis && dis(v) ? " disabled" : ""}>${esc(l)}</button>`).join("")}</span>`;
+  const open = $("us-pricedet") && $("us-pricedet").open;
+  const keep = $("us-body").scrollTop;
+  el.innerHTML = `${usageHosts()}
+    <div class="us-ctl"><span class="us-lab">Range</span>${seg("Range", US_RANGES, us.r, "data-us-r")}<span class="us-lab">Measure</span>${seg("Measure", US_MEAS, us.m, "data-us-m")}</div>
+    ${usageTiles()}
+    <section class="us-card" aria-label="Over time"><h2>Over time, split by</h2>
+      <div class="us-ctl" style="margin-bottom:8px">${seg("Split by", US_DIMS, us.d, "data-us-d")}</div>
+      <div class="us-chart" id="us-chart"></div><div class="us-legend" id="us-legend"></div><div class="us-read" id="us-read" aria-live="polite"></div></section>
+    ${usageDrill()}
+    <div class="us-two">${usageCoordinator()}${usageCache()}</div>
+    ${usagePricesCard()}`;
+  usageChart();
+  if (open) { $("us-pricedet").open = true; renderUsagePrices(); }
+  $("us-body").scrollTop = keep;
+}
+
+function usageClick(ev) {
+  const t = ev.target;
+  let b;
+  if ((b = t.closest("[data-us-r]"))) return usageSet({ r: +b.dataset.usR }, true);
+  if ((b = t.closest("[data-us-m]"))) return usageSet({ m: b.dataset.usM }, false);
+  if ((b = t.closest("[data-us-d]"))) return usageSet({ d: b.dataset.usD }, true);
+  if ((b = t.closest("[data-us-crumb]"))) {
+    const l = +b.dataset.usCrumb;
+    return usageSet({ p: l >= 1 ? us.p : "", h: l >= 2 ? us.h : "", hLabel: l >= 2 ? us.hLabel : "" }, true);
+  }
+  if ((b = t.closest("[data-us-down]"))) {
+    if (!us.p) return usageSet({ p: b.dataset.usDown, h: "", hLabel: "" }, true);
+    return usageSet({ h: b.dataset.usDown, hLabel: b.dataset.usLabel }, true);
+  }
+  if ((b = t.closest("g[data-i]"))) { us.picked = +b.dataset.i; usageChart(); return; }
+  if (t.closest("#us-saveprices")) return usageSavePrices(false);
+  if (t.closest("#us-resetprices")) return usageSavePrices(true);
+}
+
+function syncUsage() {
+  const r = parseUsageRoute();
+  const el = $("usage");
+  const was = !el.hidden;
+  us.route = r;
+  el.hidden = !r;
+  document.body.classList.toggle("has-usage", !!r);
+  if (!r) { clearInterval(us.timer); us.timer = null; return; }
+  const moved = r.r !== us.r || r.d !== us.d || r.m !== us.m || r.p !== us.p || r.h !== us.h;
+  Object.assign(us, r);
+  if (!was || moved) { if (!was) us.status = "loading"; us.picked = -1; usageLoad(); }
+  if (!was) us.timer = setInterval(usageLoad, 60000);
+  renderUsage();
+}
+
+function closeUsage() {
+  history.replaceState(null, "", location.pathname + location.search);
+  route();
+}
+
+function initUsage() {
+  $("us-back").addEventListener("click", closeUsage);
+  $("usage").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.stopPropagation(); closeUsage(); return; }
+    const g = ev.target.closest && ev.target.closest("g[data-i]");
+    if (g && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); us.picked = +g.dataset.i; usageChart(); const again = document.querySelector(`#us-chart g[data-i="${us.picked}"]`); if (again) again.focus(); }
+  });
+  $("us-view").addEventListener("click", usageClick);
+  $("us-view").addEventListener("toggle", (ev) => { if (ev.target.id === "us-pricedet" && ev.target.open && !us.prices) usageLoadPrices(); else if (ev.target.id === "us-pricedet" && ev.target.open) renderUsagePrices(); }, true);
+  let t = null;
+  window.addEventListener("resize", () => { if (!us.route || us.status !== "ok") return; clearTimeout(t); t = setTimeout(renderUsage, 150); });
+}
+
 /* ---------- the page rows above the agent list (desktop) ---------- */
 //
 // One table; a row is a page (openPage) or an action (a dialog). The
@@ -5310,6 +5691,7 @@ const NAV_ICON = {
   todo: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
   pages: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>',
+  usage: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>',
   peers: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>',
   removals: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
 };
@@ -5318,6 +5700,7 @@ const NAV_ROWS = [
   { key: "todo", label: "To do", show: () => todos.on === true, count: () => todos.open },
   { key: "search", label: "Search", show: () => true, open: () => openRecall(), on: () => !!rc.route },
   { key: "pages", label: "Pages", show: () => ledger.on === true, open: () => { location.hash = "#/pages"; }, on: () => !!pgs.route }, // a screen of its own, like Transcripts
+  { key: "usage", label: "Usage", show: () => ledger.on === true, open: () => { location.hash = "#/usage"; }, on: () => !!us.route }, // tokens spent, by kind, model, project and handoff
   { key: "peers", label: "Peers", show: () => ledger.on === true && multiHost(), open: () => { location.hash = "#/peers"; }, on: () => !!prs.route }, // the hosts and what each starts by default
   // Hidden at zero, except while you are on it.
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && (ledger.marked.size > 0 || review.open), count: () => ledger.marked.size, open: () => openReview(), on: () => review.open },
@@ -8341,6 +8724,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initPlans();
   initPages();
   initPeers();
+  initUsage();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     // One-way escape hatch for debugging: show the raw pane.

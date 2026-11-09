@@ -78,13 +78,20 @@ func (s *Server) RunUsage(ctx context.Context) {
 	if iv <= 0 {
 		iv = defaultUsageInterval
 	}
+	// A second pass soon after the first: the hub has not reached its peers
+	// yet when it starts.
+	wait := 10 * time.Second
+	if iv < wait {
+		wait = iv
+	}
 	for {
 		s.usageOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(iv):
+		case <-time.After(wait):
 		}
+		wait = iv
 	}
 }
 
