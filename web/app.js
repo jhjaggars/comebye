@@ -4330,7 +4330,32 @@ function renderPageView() {
   view.dataset.id = p.id;
   pgs.frameKey = key;
   view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
+  const fr = view.querySelector("iframe.pgs-frame");
+  fr.addEventListener("load", sendPageTheme);
 }
+
+// The page's frame is an opaque origin, so it cannot read this app's theme.
+// The app hands it the colours instead: a message {type:"comebye-theme",
+// scheme:"light"|"dark", tokens:{"--bg":"#...", ...}} after the frame loads
+// and whenever the theme changes. Colours only, nothing else; the target
+// origin is "*" because an opaque origin cannot be named. A page that does not
+// listen ignores it.
+function pageThemeMessage() {
+  const t = window.ComebyeThemes && ComebyeThemes.byId[document.documentElement.getAttribute("data-theme")];
+  if (!t) return null;
+  const tokens = {};
+  for (const k of Object.keys(t.vars)) tokens["--" + k] = String(t.vars[k]);
+  return { type: "comebye-theme", scheme: t.mode, tokens };
+}
+
+function sendPageTheme() {
+  const fr = document.querySelector("#pgs-view iframe.pgs-frame");
+  const m = fr && fr.contentWindow && pageThemeMessage();
+  if (m) fr.contentWindow.postMessage(m, "*");
+}
+
+// Every theme change (picker, preview, the OS scheme under System) sets data-theme.
+new MutationObserver(sendPageTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
 // syncPages follows the hash: route() calls it.
 function syncPages() {
