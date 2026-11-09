@@ -1,0 +1,66 @@
+/* deck: one slide per screen. 16:9 cards on wide screens, plain stacked sections on a phone; arrow keys move between slides. */
+.wrap { max-width: 1000px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.deck { display: flex; flex-direction: column; gap: 22px; counter-reset: s; }
+.slide { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 6px 22px var(--sh-md);
+  padding: clamp(18px, 4vw, 44px); padding-bottom: clamp(36px, 5vw, 52px); display: flex; flex-direction: column; justify-content: center; gap: 14px; min-width: 0; scroll-margin-top: 16px; }
+@media (min-width: 700px) { .slide { aspect-ratio: 16 / 9; } }
+.slide::after { counter-increment: s; content: counter(s); position: absolute; right: 16px; bottom: 12px; font: 600 12px var(--mono); color: var(--muted); }
+.slide h2 { margin: 0; font-size: clamp(22px, 3.4vw, 36px); line-height: 1.15; border: 0; padding: 0; }
+.slide p, .slide li { font-size: clamp(15px, 1.9vw, 20px); margin: 0; max-width: 60ch; }
+.slide ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.slide.title { background: var(--chip-blue); }
+.slide.title h2 { font-size: clamp(28px, 5vw, 52px); }
+.kicker { font: 600 12px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--blue); }
+.big { font-size: clamp(40px, 8vw, 88px); font-weight: 750; line-height: 1; color: var(--green); font-variant-numeric: tabular-nums; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.cols > div { background: var(--panel2); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.hint { color: var(--muted); font-size: 13px; text-align: center; margin: 12px 0 0; }
+<!-- body -->
+<div class="wrap">
+<main class="deck md" id="deck">
+  <section class="slide title" tabindex="-1">
+    <span class="kicker">Example deck · replace it</span>
+    <h2>{{TITLE}}</h2>
+    <p>One line on what the reader will know at the end.</p>
+  </section>
+  <section class="slide" tabindex="-1">
+    <span class="kicker">The result</span>
+    <div class="big">41 s</div>
+    <p>Writes resumed 41 seconds after the leader stopped. No data was lost.</p>
+  </section>
+  <section class="slide" tabindex="-1">
+    <span class="kicker">What we saw</span>
+    <div class="cols">
+      <div><b>g1</b><br><span class="chip red">down</span> the old leader</div>
+      <div><b>g2</b><br><span class="chip green">leader</span> after 41 s</div>
+      <div><b>g3</b><br><span class="chip green">ok</span> 3 s behind</div>
+    </div>
+  </section>
+  <section class="slide" tabindex="-1">
+    <span class="kicker">Decision</span>
+    <h2>Keep the 30 s lease?</h2>
+    <ul><li>1. Keep 30 s (recommended)</li><li>2. Shorten to 15 s</li></ul>
+  </section>
+</main>
+<p class="hint">← → or Page Up / Page Down move between slides.</p>
+</div>
+<script>
+// Slide navigation. Keep page scripts separate from the theme script below.
+(function () {
+  var slides = [].slice.call(document.querySelectorAll(".slide"));
+  function current() {
+    var best = 0, d = Infinity;
+    slides.forEach(function (s, i) { var t = Math.abs(s.getBoundingClientRect().top); if (t < d) { d = t; best = i; } });
+    return best;
+  }
+  document.addEventListener("keydown", function (e) {
+    var step = { ArrowRight: 1, ArrowDown: 1, PageDown: 1, " ": 1, ArrowLeft: -1, ArrowUp: -1, PageUp: -1 }[e.key];
+    if (!step || e.altKey || e.ctrlKey || e.metaKey) return;
+    var n = Math.max(0, Math.min(slides.length - 1, current() + step));
+    e.preventDefault();
+    slides[n].scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    slides[n].focus({ preventScroll: true });
+  });
+})();
+</script>

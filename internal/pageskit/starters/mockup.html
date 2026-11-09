@@ -1,0 +1,102 @@
+/* mockup: proposed UI as real HTML/CSS, framed and labelled, with numbered callouts. */
+.wrap { max-width: 1080px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mock { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; box-shadow: 0 8px 28px var(--sh-md); margin: 0 0 12px; }
+.mock-cap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
+.mock-cap b { color: var(--text); }
+.tag { font: 700 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; background: var(--chip-purple); color: var(--purple); padding: 2px 7px; border-radius: 5px; }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.screen { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 380px; min-width: 760px; font-size: 13px; }
+.side { background: var(--bg); border-right: 1px solid var(--border); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.search { border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; color: var(--muted); background: var(--panel2); }
+.item { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel); display: flex; flex-direction: column; gap: 2px; }
+.item.cur { border-color: var(--blue); }
+.item small { color: var(--muted); }
+.detail { display: flex; flex-direction: column; min-width: 0; }
+.bar { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: var(--panel); }
+.bar h3 { margin: 0 auto 0 0; font-size: 15px; }
+.btn { font: 600 12.5px var(--sans); border: 1px solid var(--border); background: var(--btn-bg); color: var(--text); border-radius: 9px; padding: 5px 10px; min-height: 30px; cursor: pointer; }
+.btn.pri { background: var(--blue); color: var(--on-accent); border-color: transparent; }
+.btn[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
+.body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.panel { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
+.num { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--orange); color: var(--on-orange); font: 800 10.5px var(--mono); flex: none; }
+.notes { list-style: none; padding: 0; margin: 0 0 1.4em; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 18px; }
+.notes li { display: flex; gap: 8px; margin: 0; min-width: 0; }
+.pair { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+.pair > * { min-width: 0; }
+.phone { width: 300px; max-width: 100%; border: 1px solid var(--border); border-radius: 28px; padding: 10px; background: var(--panel2); box-shadow: 0 8px 28px var(--sh-md); }
+.phone-screen { border-radius: 20px; overflow: hidden; background: var(--bg); border: 1px solid var(--border); font-size: 12.5px; display: flex; flex-direction: column; }
+.phone-head { display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.phone-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.wire { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 8px; }
+.wire svg { display: block; width: 100%; height: auto; }
+<!-- body -->
+<div class="wrap">
+<header class="hero">
+  <h1>{{TITLE}}</h1>
+  <p class="what">What changes on which screen, and why. (Example content: replace it.)</p>
+  <ul class="meta"><li class="date"><b>Date</b>2026-11-09</li><li class="by"><b>Published by</b>your-name (host/pane)</li></ul>
+</header>
+<main class="md">
+<h2 id="desktop">Desktop</h2>
+<div class="mock">
+  <div class="mock-cap"><span><span class="tag">Mockup</span> <b>Pages screen, desktop</b> · example data</span>
+    <button type="button" class="btn" id="toggle" aria-pressed="true">Hide comments</button></div>
+  <div class="scroll"><div class="screen">
+    <aside class="side">
+      <div class="search">Filter pages</div>
+      <div class="item cur"><b>Garage failover drill</b><small>html · v3 · ops-agent · 2m</small></div>
+      <div class="item"><b>KubeVirt POC review</b><small>html · v1 · kubevirt-review · 1h</small></div>
+      <div class="item"><b>Structural to-dos plan</b><small>html · v2 · todo-plan · 3h</small></div>
+    </aside>
+    <section class="detail">
+      <div class="bar"><h3>Garage failover drill</h3><span class="num">1</span><button type="button" class="btn">Phone width</button><span class="num">2</span><button type="button" class="btn pri">Comments · 2</button></div>
+      <div class="body">
+        <div class="panel">The page renders here, in the app's theme.</div>
+        <div class="panel" id="comments"><b>Comments</b><br>you · 4m: Keep the 30 s lease.<br>ops-agent · 1m: Agreed; v4 says so.</div>
+      </div>
+    </section>
+  </div></div>
+</div>
+<ul class="notes">
+  <li><span class="num">1</span><span><b>Phone width</b> frames the page at 390 px, so you see the phone layout on a desktop.</span></li>
+  <li><span class="num">2</span><span><b>Comments</b> open beside the page, outside its sandbox.</span></li>
+</ul>
+
+<h2 id="phone">Phone, and a wireframe</h2>
+<div class="pair">
+  <div class="phone" role="img" aria-label="Mockup: the same screen on a phone">
+    <div class="phone-screen">
+      <div class="phone-head"><b>Garage failover drill</b></div>
+      <div class="phone-body">
+        <div class="panel">The page fills the screen.</div>
+        <div class="panel"><b>Comments · 2</b> open as a sheet from the bottom.</div>
+      </div>
+    </div>
+  </div>
+  <figure class="wire" style="flex:1;min-width:240px;margin:0">
+    <svg viewBox="0 0 320 200" role="img" aria-label="Wireframe: list on the left, page in the middle, comments on the right">
+      <rect x="1" y="1" width="318" height="198" rx="10" fill="var(--bg)" stroke="var(--border)"/>
+      <rect x="10" y="10" width="80" height="180" rx="6" fill="var(--panel2)" stroke="var(--border)"/>
+      <rect x="100" y="10" width="130" height="180" rx="6" fill="var(--panel)" stroke="var(--border)"/>
+      <rect x="240" y="10" width="70" height="180" rx="6" fill="var(--chip-yellow)" stroke="var(--border)"/>
+      <text x="50" y="104" text-anchor="middle" font-size="11" fill="var(--muted)">list</text>
+      <text x="165" y="104" text-anchor="middle" font-size="11" fill="var(--muted)">page</text>
+      <text x="275" y="104" text-anchor="middle" font-size="11" fill="var(--yellow)">comments</text>
+    </svg>
+    <figcaption style="font-size:13px;color:var(--muted)">An inline SVG wireframe: fills and strokes are tokens, so it follows the theme.</figcaption>
+  </figure>
+</div>
+</main>
+<footer>Example content from the <code>mockup</code> starter (<code>comebye pages new --type mockup</code>). Replace it, and keep the token blocks and the theme script.</footer>
+</div>
+<script>
+// The mockup's own interaction. Keep page scripts separate from the theme script below.
+document.getElementById("toggle").addEventListener("click", function (e) {
+  var b = e.currentTarget, on = b.getAttribute("aria-pressed") !== "true";
+  b.setAttribute("aria-pressed", String(on));
+  b.textContent = on ? "Hide comments" : "Show comments";
+  document.getElementById("comments").hidden = !on;
+});
+</script>

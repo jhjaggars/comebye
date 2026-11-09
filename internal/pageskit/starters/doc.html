@@ -1,0 +1,46 @@
+/* doc: a plan, review or report. The template's .hero, .md, .tablewrap, .callout and .chip do most of the work. */
+.decisions { list-style: none; padding: 0; margin: 0 0 1em; display: flex; flex-direction: column; gap: 10px; counter-reset: d; }
+.decisions > li { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 0; }
+.decisions > li > b::before { counter-increment: d; content: counter(d) ". "; color: var(--blue); }
+.decisions ol { margin: 6px 0; }
+.rec { font: 600 13px var(--mono); color: var(--green); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+<!-- body -->
+<div class="wrap">
+<header class="hero">
+  <h1>{{TITLE}}</h1>
+  <p class="what">One sentence on what this page is and what you need from the reader. (Example content: replace it.)</p>
+  <ul class="meta">
+    <li class="date"><b>Date</b>2026-11-09</li>
+    <li class="repo"><b>Repo</b>comebye</li>
+    <li class="by"><b>Published by</b>your-name (host/pane)</li>
+  </ul>
+</header>
+<main class="md">
+<div class="callout ok"><p><b>Result:</b> writes resumed 41 s after the leader stopped. No data was lost. Recommend keeping the 30 s lease.</p></div>
+
+<h2 id="what-happened">What happened</h2>
+<p>Put the answer first, then the evidence. Write short sentences in the user's words. Mark state with chips: <span class="chip green">ok</span> <span class="chip yellow">draft</span> <span class="chip red">blocked</span>.</p>
+
+<div class="tablewrap"><table>
+<thead><tr><th>Node</th><th>Role before</th><th>Role after</th><th align="right">Lag</th><th>State</th></tr></thead>
+<tbody>
+<tr><td>g1</td><td>leader</td><td>stopped</td><td align="right">–</td><td><span class="chip red">down</span></td></tr>
+<tr><td>g2</td><td>follower</td><td>leader</td><td align="right">0 s</td><td><span class="chip green">ok</span></td></tr>
+<tr><td>g3</td><td>follower</td><td>follower</td><td align="right">3 s</td><td><span class="chip green">ok</span></td></tr>
+</tbody></table></div>
+
+<h2 id="how">How it was checked</h2>
+<pre><code>$ garage status
+g2  leader   up 41s
+g3  follower lag 3s</code></pre>
+
+<div class="callout warn"><p><b>Risk:</b> the alert fired after 90 s, not 30 s. See the follow-up below.</p></div>
+
+<h2 id="decisions">Decisions</h2>
+<ol class="decisions">
+  <li><b>Lease length</b><ol><li>Keep 30 s</li><li>Shorten to 15 s</li></ol><span class="rec">Recommend: 1</span></li>
+</ol>
+</main>
+<footer>Example content from the <code>doc</code> starter (<code>comebye pages new</code>). Replace it, and keep the token blocks and the theme script.</footer>
+</div>

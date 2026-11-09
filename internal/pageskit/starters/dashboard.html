@@ -1,0 +1,98 @@
+/* dashboard: summary tiles, a chart drawn as inline SVG from inline data, a status table. Every colour is a token, so the chart follows the theme without a redraw. */
+.wrap { max-width: 1080px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 0 0 22px; }
+.tile { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tile .k { font: 600 11.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.tile .v { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.tile .d { font-size: 13px; }
+.tile .d.up { color: var(--green); } .tile .d.down { color: var(--red); }
+.tile svg { width: 100%; height: 32px; display: block; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin: 0 0 22px; min-width: 0; }
+.card h2 { margin-top: 0 !important; border: 0 !important; }
+.chart { overflow-x: auto; }
+.chart svg { display: block; width: 100%; min-width: 480px; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+<!-- body -->
+<div class="wrap">
+<header class="hero">
+  <h1>{{TITLE}}</h1>
+  <p class="what">What these numbers are, where they come from, and when they were taken. (Example data: replace it.)</p>
+  <ul class="meta"><li class="date"><b>Taken</b>2026-11-09 14:00 UTC</li><li class="by"><b>Published by</b>your-name (host/pane)</li></ul>
+</header>
+<main class="md">
+<div class="tiles" id="tiles"></div>
+<section class="card">
+  <h2 id="chart-title">Publishes per day</h2>
+  <div class="chart" id="chart" role="img" aria-labelledby="chart-title"></div>
+  <div class="legend"><span><i style="background:var(--blue)"></i>HTML</span><span><i style="background:var(--purple)"></i>Markdown</span></div>
+</section>
+<section class="card">
+  <h2 id="status">Status</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Host</th><th>State</th><th align="right">Pages</th><th align="right">Size</th></tr></thead>
+    <tbody>
+      <tr><td>laharl</td><td><span class="chip green">ok</span></td><td class="num">41</td><td class="num">2.1 MiB</td></tr>
+      <tr><td>mac</td><td><span class="chip yellow">behind</span></td><td class="num">7</td><td class="num">0.4 MiB</td></tr>
+      <tr><td>jjaggars-kubevirt</td><td><span class="chip green">ok</span></td><td class="num">19</td><td class="num">1.3 MiB</td></tr>
+    </tbody>
+  </table></div>
+</section>
+</main>
+<footer>Example data from the <code>dashboard</code> starter (<code>comebye pages new --type dashboard</code>). Replace it, and keep the token blocks and the theme script.</footer>
+</div>
+<script type="application/json" id="data">
+{"days": ["Nov 3", "Nov 4", "Nov 5", "Nov 6", "Nov 7", "Nov 8", "Nov 9"],
+ "html": [2, 3, 1, 4, 6, 5, 9],
+ "md":   [5, 4, 6, 3, 2, 2, 1]}
+</script>
+<script>
+// Draws the tiles and the chart from #data. Fills are var(--token), so a theme change needs no redraw.
+// Keep page scripts separate from the theme script below.
+(function () {
+  var d = JSON.parse(document.getElementById("data").textContent);
+  var NS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, parent) { var e = document.createElementNS(NS, name); for (var k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function sum(a) { return a.reduce(function (x, y) { return x + y; }, 0); }
+
+  // tiles, each with a sparkline
+  var tiles = [
+    { k: "HTML pages", v: sum(d.html), series: d.html, tok: "--blue", delta: "+80% on last week", up: true },
+    { k: "Markdown pages", v: sum(d.md), series: d.md, tok: "--purple", delta: "−80% on last week", up: false },
+    { k: "Share HTML", v: Math.round(100 * sum(d.html) / (sum(d.html) + sum(d.md))) + "%", series: d.html.map(function (h, i) { return h / (h + d.md[i]); }), tok: "--green", delta: "rising", up: true }
+  ];
+  var box = document.getElementById("tiles");
+  tiles.forEach(function (t) {
+    var div = document.createElement("div"); div.className = "tile";
+    div.innerHTML = '<span class="k"></span><span class="v"></span><span class="d"></span>';
+    div.children[0].textContent = t.k; div.children[1].textContent = t.v;
+    div.children[2].textContent = t.delta; div.children[2].className = "d " + (t.up ? "up" : "down");
+    var max = Math.max.apply(null, t.series), min = Math.min.apply(null, t.series), w = 100, h = 32;
+    var pts = t.series.map(function (v, i) { return [i * w / (t.series.length - 1), h - 3 - (max === min ? 0 : (v - min) / (max - min)) * (h - 6)]; });
+    var svg = el("svg", { viewBox: "0 0 " + w + " " + h, preserveAspectRatio: "none", "aria-hidden": "true" }, div);
+    el("polyline", { points: pts.map(function (p) { return p.join(","); }).join(" "), fill: "none", stroke: "var(" + t.tok + ")", "stroke-width": 2, "vector-effect": "non-scaling-stroke" }, svg);
+    box.appendChild(div);
+  });
+
+  // grouped bars, drawn to scale with labelled axes
+  var W = 640, H = 260, L = 36, R = 10, T = 12, B = 30;
+  var max = Math.max.apply(null, d.html.concat(d.md)), top = Math.ceil(max / 2) * 2;
+  var svg = el("svg", { viewBox: "0 0 " + W + " " + H }, document.getElementById("chart"));
+  var y = function (v) { return H - B - v / top * (H - B - T); };
+  for (var t = 0; t <= top; t += 2) {
+    el("line", { x1: L, x2: W - R, y1: y(t), y2: y(t), stroke: "var(--border)", "stroke-width": 1 }, svg);
+    el("text", { x: L - 6, y: y(t) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, svg).textContent = t;
+  }
+  var slot = (W - L - R) / d.days.length, bw = Math.min(18, slot / 3);
+  d.days.forEach(function (day, i) {
+    var cx = L + slot * i + slot / 2;
+    [[d.html[i], "--blue", -bw - 1], [d.md[i], "--purple", 1]].forEach(function (b) {
+      var r = el("rect", { x: cx + b[2], y: y(b[0]), width: bw, height: H - B - y(b[0]), rx: 2, fill: "var(" + b[1] + ")" }, svg);
+      el("title", {}, r).textContent = day + ": " + b[0];
+    });
+    el("text", { x: cx, y: H - B + 16, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, svg).textContent = day;
+  });
+})();
+</script>

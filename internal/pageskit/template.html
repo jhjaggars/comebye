@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{TITLE}}</title>
+<!--
+  Comebye page template. Self-contained: no network, no runtime Markdown.
+  Every colour is a token from the app's web/themes.js (Comebye Light / Dark);
+  the page follows prefers-color-scheme until the app sends its theme
+  ({type:"comebye-theme", scheme, tokens}), see the script at the end.
+  Placeholders: {{TITLE}} {{WHAT}} {{DATE}} {{REPO}} {{BRANCH}} {{PUBLISHER}}
+  {{TOC}} {{BODY}}. A chip whose value is empty is dropped by the builder.
+-->
+<style>
+:root {
+  color-scheme: light;
+    --bg:#f3f4f7;
+    --panel:#ffffff;
+    --panel2:#eceef3;
+    --border:#d3d7e0;
+    --text:#1a1d26;
+    --muted:#596072;
+    --blue:#1c58b8;
+    --orange:#a84a06;
+    --green:#136f33;
+    --purple:#7e32c4;
+    --red:#c42323;
+    --yellow:#8a5a00;
+    --teal:#0f766e;
+    --on-accent:#fff;
+    --on-red:#fff;
+    --on-orange:#fff;
+    --code-bg:#eef0f5;
+    --code-text:#272b36;
+    --quote:#4a5163;
+    --snip:#3b4152;
+    --th-bg:#e6e9f0;
+    --btn-bg:#e4e7ee;
+    --blocked-bg:#fff4e8;
+    --blocked-name:#7a3305;
+    --bubble:#d6e6fb;
+    --rc-user:#dbe8fa;
+    --rc-out:#eef0f5;
+    --mark-bg:#fde68a;
+    --rcmark-bg:#fde68a;
+    --rcmark-text:#3d2c00;
+    --chip-blue:#e3edfb;
+    --chip-purple:#f0e6fb;
+    --chip-red:#fbe6e6;
+    --chip-green:#e0f3e6;
+    --chip-finished:#efe6fb;
+    --chip-cand:#e0f3e6;
+    --chip-rtr:#fcebdb;
+    --chip-landing:#dcf3f0;
+    --chip-yellow:#fbf0d0;
+    --secret-bg:rgba(168,74,6,.1);
+    --sh-md:rgba(30, 40, 70, 0.14);
+    --sh-lg:rgba(30, 40, 70, 0.22);
+    --selection:#d6e6fb;
+    --focus:#1c58b8;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg:#101218;
+    --panel:#181a20;
+    --panel2:#1f222b;
+    --border:#2a2e3a;
+    --text:#e6e8ee;
+    --muted:#8b91a0;
+    --blue:#60a5fa;
+    --orange:#fb923c;
+    --green:#4ade80;
+    --purple:#c084fc;
+    --red:#f87171;
+    --yellow:#e5c07b;
+    --teal:#5eead4;
+    --on-accent:#0b0d11;
+    --on-red:#0b0d11;
+    --on-orange:#111;
+    --code-bg:#0b0d11;
+    --code-text:#cdd3e0;
+    --quote:#b9bfcc;
+    --snip:#c6cad5;
+    --th-bg:#262a35;
+    --btn-bg:#2a2e3a;
+    --blocked-bg:#231a12;
+    --blocked-name:#ffd2a8;
+    --bubble:#2b4a7a;
+    --rc-user:#1e3a5f;
+    --rc-out:#0c0e13;
+    --mark-bg:#4a3f12;
+    --rcmark-bg:#5b4a12;
+    --rcmark-text:#ffe9a8;
+    --chip-blue:#14202f;
+    --chip-purple:#241a30;
+    --chip-red:#2f1414;
+    --chip-green:#12261c;
+    --chip-finished:#1d1730;
+    --chip-cand:#132a1c;
+    --chip-rtr:#2e1d10;
+    --chip-landing:#102a2c;
+    --chip-yellow:#2a2412;
+    --secret-bg:rgba(251,146,60,.12);
+    --sh-md:rgba(0, 0, 0, 0.35);
+    --sh-lg:rgba(0, 0, 0, 0.5);
+    --selection:#2b4a7a;
+    --focus:#60a5fa;
+  }
+}
+* { box-sizing: border-box; }
+::selection { background: var(--selection); }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 16px; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 var(--sans); overflow-wrap: anywhere;
+}
+.wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+
+/* heading block */
+.hero { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 0 0 24px; box-shadow: 0 2px 10px var(--sh-md); }
+.hero h1 { margin: 0 0 6px; font-size: 1.6em; line-height: 1.25; font-weight: 700; }
+.hero .what { margin: 0 0 14px; color: var(--muted); }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
+.meta li { background: var(--chip-blue); color: var(--blue); border-radius: 6px; padding: 2px 8px; }
+.meta li b { font-weight: 600; opacity: .8; margin-right: 4px; }
+.meta li.repo { background: var(--chip-purple); color: var(--purple); }
+.meta li.date { background: var(--chip-yellow); color: var(--yellow); }
+.meta li.by { background: var(--chip-green); color: var(--green); }
+
+/* table of contents */
+nav.toc { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; margin: 0 0 28px; padding: 0; }
+nav.toc summary { cursor: pointer; padding: 10px 16px; font-weight: 600; list-style-position: inside; }
+nav.toc ol, nav.toc ul { margin: 0; padding: 0 16px 12px 36px; font-size: 14.5px; }
+nav.toc ul ul, nav.toc ol ol { padding: 2px 0 2px 18px; }
+nav.toc li { margin: 3px 0; }
+nav.toc a { color: var(--blue); text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+/* content */
+.md > :first-child { margin-top: 0; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { line-height: 1.3; font-weight: 650; margin: 1.6em 0 .5em; }
+.md h1 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.md h2 { font-size: 1.3em; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+.md h3 { font-size: 1.12em; }
+.md h4, .md h5, .md h6 { font-size: 1em; color: var(--quote); }
+.md p, .md ul, .md ol, .md pre, .md table, .md blockquote, .md .callout { margin: 0 0 1em; }
+.md ul, .md ol { padding-left: 1.5em; }
+.md li > ul, .md li > ol { margin: .25em 0; }
+.md li { margin: .2em 0; }
+.md a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 1.8em 0; }
+.md strong { font-weight: 650; }
+.md mark { background: var(--mark-bg); color: var(--text); padding: 0 2px; border-radius: 3px; }
+.md img { max-width: 100%; height: auto; }
+.md blockquote, .md .callout {
+  background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--blue);
+  border-radius: 8px; padding: 10px 14px; color: var(--quote);
+}
+.md blockquote > :last-child, .md .callout > :last-child { margin-bottom: 0; }
+.md .callout.warn { border-left-color: var(--orange); background: var(--blocked-bg); color: var(--text); }
+.md .callout.ok { border-left-color: var(--green); background: var(--chip-green); color: var(--text); }
+.md .callout.err { border-left-color: var(--red); background: var(--chip-red); color: var(--text); }
+.md .callout.note { border-left-color: var(--purple); background: var(--chip-purple); color: var(--text); }
+
+/* code: long blocks scroll inside themselves */
+.md code {
+  font: .88em var(--mono); background: var(--code-bg); color: var(--code-text);
+  border-radius: 5px; padding: .1em .35em; overflow-wrap: anywhere;
+}
+.md pre {
+  background: var(--code-bg); color: var(--code-text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px; max-height: 70vh; overflow: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain; tab-size: 4;
+}
+.md pre code { background: none; padding: 0; font: 12.5px/1.55 var(--mono); border-radius: 0; white-space: pre; overflow-wrap: normal; }
+
+/* tables scroll sideways inside their own box, never the page */
+.tablewrap { overflow-x: auto; margin: 0 0 1em; border: 1px solid var(--border); border-radius: 8px; -webkit-overflow-scrolling: touch; }
+.tablewrap table { border-collapse: collapse; font-size: 13.5px; margin: 0; min-width: 100%; }
+.md th, .md td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; overflow-wrap: normal; word-break: normal; }
+.tablewrap th:first-child, .tablewrap td:first-child { border-left: 0; }
+.tablewrap th:last-child, .tablewrap td:last-child { border-right: 0; }
+.tablewrap tr:first-child > * { border-top: 0; }
+.tablewrap tr:last-child > * { border-bottom: 0; }
+.md th { background: var(--th-bg); font-weight: 600; white-space: nowrap; }
+.md tbody tr:nth-child(even) td { background: var(--panel); }
+.md th[align="center"], .md td[align="center"] { text-align: center; }
+.md th[align="right"], .md td[align="right"] { text-align: right; }
+.md input[type="checkbox"] { margin-right: .4em; accent-color: var(--blue); }
+
+/* chips for inline use: <span class="chip green">ok</span> */
+.chip { display: inline-block; font-size: 12px; border-radius: 6px; padding: 1px 8px; background: var(--chip-blue); color: var(--blue); }
+.chip.green { background: var(--chip-green); color: var(--green); }
+.chip.red { background: var(--chip-red); color: var(--red); }
+.chip.yellow { background: var(--chip-yellow); color: var(--yellow); }
+.chip.orange { background: var(--chip-rtr); color: var(--orange); }
+.chip.purple { background: var(--chip-purple); color: var(--purple); }
+.chip.teal { background: var(--chip-landing); color: var(--teal); }
+
+footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+@media (max-width: 520px) {
+  .wrap { padding-top: 16px; }
+  .hero { padding: 16px; }
+  .hero h1 { font-size: 1.35em; }
+}
+@media print { .wrap { max-width: none; } .md pre { max-height: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <h1>{{TITLE}}</h1>
+  <p class="what">{{WHAT}}</p>
+  <ul class="meta">
+    <li class="date"><b>Date</b>{{DATE}}</li>
+    <li class="repo"><b>Repo</b>{{REPO}}</li>
+    <li class="repo"><b>Branch</b>{{BRANCH}}</li>
+    <li class="by"><b>Published by</b>{{PUBLISHER}}</li>
+  </ul>
+</header>
+{{TOC}}
+<main class="md">
+{{BODY}}
+</main>
+</div>
+<script>
+/* Theme from the Comebye app. The app posts
+     {type:"comebye-theme", scheme:"light"|"dark", tokens:{"--bg":"#fff", ...}}
+   into this frame on load and whenever the user changes theme. Only a known
+   token name with a plain colour value is applied; nothing is evaluated;
+   anything else is ignored. */
+(function () {
+  var KNOWN = ["bg", "panel", "panel2", "border", "text", "muted", "blue", "orange", "green", "purple", "red", "yellow", "teal", "on-accent", "on-red", "on-orange", "code-bg", "code-text", "quote", "snip", "th-bg", "btn-bg", "blocked-bg", "blocked-name", "bubble", "rc-user", "rc-out", "mark-bg", "rcmark-bg", "rcmark-text", "chip-blue", "chip-purple", "chip-red", "chip-green", "chip-finished", "chip-cand", "chip-rtr", "chip-landing", "chip-yellow", "secret-bg", "sh-md", "sh-lg", "selection", "focus"];
+  var ok = {}; KNOWN.forEach(function (k) { ok["--" + k] = 1; });
+  var COLOUR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\(\s*[0-9.%\s,\/-]+\))$/i;
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || typeof d !== "object" || d.type !== "comebye-theme" || !d.tokens || typeof d.tokens !== "object") return;
+    var root = document.documentElement;
+    Object.keys(d.tokens).forEach(function (k) {
+      var v = d.tokens[k];
+      if (ok[k] === 1 && typeof v === "string" && v.length <= 64 && COLOUR.test(v)) root.style.setProperty(k, v);
+    });
+    if (d.scheme === "light" || d.scheme === "dark") root.style.colorScheme = d.scheme;
+  });
+})();
+</script>
+</body>
+</html>
