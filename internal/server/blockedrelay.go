@@ -558,6 +558,9 @@ func describeBlocked(d *dialog.Dialog, err error) (blockedOn, string) {
 	if det := strings.TrimSpace(d.Detail); det != "" {
 		b.WriteString(det + "\n")
 	}
+	if n := strings.TrimSpace(d.Note); n != "" {
+		b.WriteString("Note: " + oneLine(n, 400) + "\n")
+	}
 	for i, o := range d.Options {
 		if i >= 9 {
 			break
