@@ -343,6 +343,14 @@ func (s *Server) relayRead(a herdr.AgentInfo, spell, at time.Time) {
 	d, err := r.readDialog(ctx, a)
 	id := state.AgentKey(&a)
 	info, text := describeBlocked(d, err)
+	if info.Kind == "unknown" {
+		// Say which cause it was; a screen saved on this host is named.
+		if err != nil {
+			info.Label = "dialog (read failed)"
+		} else if f := s.unrec.savedScreen(id); f != "" {
+			info.Label = "dialog (not recognised; screen saved on " + s.unrec.host + " as " + f + ")"
+		}
+	}
 	r.mu.Lock()
 	cur := r.dialogs[id]
 	if cur == nil || !cur.spell.Equal(spell) {

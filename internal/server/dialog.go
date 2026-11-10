@@ -156,7 +156,7 @@ func (s *Server) handleDialog(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	d, err := currentDialog(ctx, s.client, *agent, s.pendingAsk(*agent))
+	d, err := s.currentDialogCaptured(ctx, *agent, s.pendingAsk(*agent))
 	if err != nil {
 		writeError(w, err)
 		return

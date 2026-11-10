@@ -230,6 +230,8 @@ type Server struct {
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
+	// unrec saves the raw screen of a blocked agent whose dialog is not recognised.
+	unrec *unrecCapture
 	// pins: the documents agents declared (comebye show), see panelpin.go.
 	pins *pinStore
 	// settings is this host's settings.json (see settings.go); nil without a state directory.
@@ -288,6 +290,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s.coord = coord{checks: map[string]cachedChecks{}, checking: map[string]bool{}, reporting: map[string]time.Time{}, starting: map[string]bool{}, started: map[string]time.Time{}, quiet: map[string]time.Time{}, calling: map[string]time.Time{}, landSched: map[string]landSched{}, bg: map[string]bgCache{}}
 	if cfg.StateDir != "" {
 		s.kinds = openKinds(kindsPath(cfg.StateDir))
+		s.unrec = newUnrecCapture(cfg.StateDir, s.fleet.LocalName())
 		s.settings = openSettings(settingsPath(cfg.StateDir))
 		s.pins = openPins(pinsPath(cfg.StateDir))
 	} else {

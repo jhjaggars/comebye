@@ -604,6 +604,16 @@ approve.
   hours. **(planned)** When a queued prompt expires undelivered, the hub
   tells its sender; for a `land` prompt it says the worker is still
   `finished`, so the coordinator asks the user again or retries.
+- **Blocked on a dialog the app does not recognise:** the hub's notice says
+  `Blocked on: dialog (not recognised; screen saved on HOST as FILE)` or
+  `dialog (read failed)`, so the two causes can be told apart. The agent's
+  own host saves the raw visible text (the last 80 lines, at most 8 KB, mode
+  0600) in `<state dir>/dialog-unrecognised/` as
+  `<time>-<agent>-screen.txt`, or `...-readerror.txt` for a failed read:
+  one file of each kind per agent per occurrence, the newest 20 kept for 7
+  days. The text stays on that host: it is not sent through the hub or into
+  notices. Attach the file to a bug report so the screen can be added as a
+  fixture in `internal/dialog/testdata/`.
 - **Landing failed:** see [Landing](#4-landing): the entry goes back to
   `finished` with the check's verdict.
 

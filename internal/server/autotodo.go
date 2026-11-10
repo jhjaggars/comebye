@@ -275,7 +275,7 @@ func (s *Server) autoReadDialog(ctx context.Context, a herdr.AgentInfo) (*dialog
 	ctx, cancel := context.WithTimeout(ctx, autoReadTimeout)
 	defer cancel()
 	if s.isLocalAgent(a) {
-		return currentDialog(ctx, s.client, a, nil)
+		return s.currentDialogCaptured(ctx, a, nil)
 	}
 	status, data, err := s.fleet.CallAgent(ctx, a.Host, a.PaneID, "dialog", nil)
 	if err != nil {
