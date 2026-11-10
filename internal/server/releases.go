@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
@@ -196,6 +198,9 @@ func (s *Server) pickCurrent(items []Todo, hosts []relHost, now time.Time) (Todo
 	var open, tagged *Todo
 	for i := range items {
 		it := &items[i]
+		if it.Release.Dismissed {
+			continue
+		}
 		switch {
 		case it.Release.State == relTagged:
 			if tagged == nil || taggedAt(*it).After(taggedAt(*tagged)) {
@@ -277,7 +282,7 @@ func (s *Server) sweepReleasesWith(hosts []relHost) {
 		return
 	}
 	for _, it := range s.todos.list("") {
-		if it.Release == nil || it.Release.State != relTagged {
+		if it.Release == nil || it.Release.State != relTagged || it.Release.Dismissed {
 			continue
 		}
 		cp := append([]relHost(nil), hosts...)
@@ -352,4 +357,62 @@ func relS(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+type dismissBody struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
+// handleReleaseDismiss: POST /api/release/{id}/dismiss {version, commit}. The
+// user abandons a tagged release's rollout: the item is marked dismissed (and
+// closed as dropped if still open), the release leaves the tab, the badge and
+// the auto-close sweep, and the audit log says who did it. Nothing is undone on
+// any host. The user alone, with the page's CSRF token, naming what the page
+// showed.
+func (s *Server) handleReleaseDismiss(w http.ResponseWriter, r *http.Request) {
+	if !s.relGuard(w, r, true) || s.todoOff(w, r) {
+		return
+	}
+	var b dismissBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&b); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	it, ok := s.releaseItem(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if it.Release.State != relTagged {
+		relErr(w, http.StatusConflict, "not_released", "only a tagged release can be dismissed; drop a proposal that was never tagged")
+		return
+	}
+	if it.Release.Dismissed {
+		relErr(w, http.StatusConflict, "already_dismissed", "this release is already dismissed")
+		return
+	}
+	if b.Version != it.Release.Version || strings.ToLower(b.Commit) != it.Release.Commit {
+		relErr(w, http.StatusConflict, "confirm_mismatch", "the version and commit you confirmed are not this item's: reload the page")
+		return
+	}
+	by := s.by(r, "")
+	now := time.Now().UTC()
+	out, err := s.todos.mutate(it.ID, func(t *Todo) error {
+		if t.Release == nil || t.Release.Dismissed {
+			return errTodoClosed
+		}
+		rel := *t.Release
+		rel.Dismissed, rel.DismissedBy, rel.DismissedAt = true, by, &now
+		t.Release = &rel
+		if t.active() {
+			t.State, t.ClosedBy, t.ClosedAt, t.DropReason, t.Notice = TodoDropped, by, &now, "release dismissed", nil
+		}
+		return nil
+	})
+	if err != nil {
+		todoErr(w, err)
+		return
+	}
+	s.audit(r, ledger.AuditEvent{Action: "release.dismiss", Todo: it.ID, OK: true, Detail: it.Release.Version + ": rollout abandoned by the user; nothing was changed on any host"})
+	writeJSON(w, map[string]any{"todo": s.todoGone(out)})
 }

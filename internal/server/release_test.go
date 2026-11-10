@@ -186,8 +186,8 @@ func TestReleaseRoutesAreUserOnly(t *testing.T) {
 			t.Errorf("a release route is not user-only: %s", strings.TrimSpace(line))
 		}
 	}
-	if n != 12 { // 7 for the page, the tab, deploy and upgrades, 5 hub-only peer ops (release_remote.go, release_deploy.go)
-		t.Fatalf("found %d release routes, want 12: update this test with the route", n)
+	if n != 13 { // 8 for the page, the tab, deploy and upgrades, 5 hub-only peer ops (release_remote.go, release_deploy.go)
+		t.Fatalf("found %d release routes, want 13: update this test with the route", n)
 	}
 }
 
@@ -200,6 +200,7 @@ func TestReleaseRefusesAgentsAndPeers(t *testing.T) {
 	calls := []struct{ method, path, body string }{
 		{"GET", "/api/release/" + it.ID, ""},
 		{"GET", "/api/releases", ""},
+		{"POST", "/api/release/" + it.ID + "/dismiss", approveBody},
 		{"POST", "/api/release/" + it.ID + "/approve", approveBody},
 		{"GET", "/api/release/upgrade", ""},
 		{"POST", "/api/release/upgrade", `{"version":"v0.5.9"}`},

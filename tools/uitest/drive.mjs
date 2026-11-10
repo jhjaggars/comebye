@@ -4134,6 +4134,50 @@ await check(`releases live at ${width}: Approve needs a confirm naming the versi
   }
 });
 }
+// Dismiss: the user abandons a tagged release's rollout. A confirm first, then it is out of the tab and the badge.
+for (const width of [1280, 390]) {
+await check(`releases dismiss at ${width}: Dismiss release asks for a confirm, then the release leaves the tab and the badge, its item is dropped, and it stays in the history`, async () => {
+  const V = width === 1280 ? "v9.6.1" : "v9.5.1";
+  // Earlier checks left tagged releases behind (their items dropped, the hub not on their version): dismiss them, as a user would.
+  await page.evaluate(async () => {
+    const all = (await (await fetch("/api/todos?state=all")).json()).todos.filter((x) => x.release && x.release.state === "tagged" && !x.release.dismissed);
+    for (const x of all) {
+      const d = await (await fetch("/api/release/" + x.id)).json();
+      await fetch(`/api/release/${x.id}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json", "X-Comebye-Csrf": d.csrf }, body: JSON.stringify({ version: x.release.version, commit: x.release.commit }) });
+    }
+  });
+  const t = await relPost({ question: "", kind: "release", no_wait: true, release: { version: V, commit: REL_SHA } });
+  if (!t) throw new Error("not raised");
+  try {
+    await page.evaluate(async ([id, v, c]) => {
+      const d = await (await fetch("/api/release/" + id)).json();
+      await fetch("/api/release/" + id + "/approve", { method: "POST", headers: { "Content-Type": "application/json", "X-Comebye-Csrf": d.csrf }, body: JSON.stringify({ version: v, commit: c }) });
+    }, [t.id, V, REL_SHA]);
+    await page.waitForFunction(async (id) => (await (await fetch("/api/todos/" + id)).json()).todo.release.state === "tagged", t.id, { timeout: 15000 });
+    await openReleases(width);
+    await page.waitForSelector("#pr-releases [data-rel=dismiss]");
+    // no token, no dismissal
+    const noTok = await page.evaluate(async ([id, v, c]) => (await fetch(`/api/release/${id}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: v, commit: c }) })).status, [t.id, V, REL_SHA]);
+    if (noTok !== 403) throw new Error("dismiss without the CSRF token = " + noTok);
+    await page.locator("#pr-releases [data-rel=dismiss]").click();
+    const ct = await page.locator("#pr-releases .rel-confirm").innerText();
+    if (!ct.includes(V) || !/Nothing is changed on any host/.test(ct)) throw new Error("confirm: " + ct);
+    await page.locator("#pr-releases .rel-confirm [data-rel=cancel]").click();
+    await page.waitForSelector("#pr-releases .rel-confirm", { state: "detached" });
+    if ((await page.evaluate(async (id) => (await (await fetch("/api/todos/" + id)).json()).todo.release.dismissed, t.id))) throw new Error("Cancel dismissed it");
+    await page.locator("#pr-releases [data-rel=dismiss]").click();
+    await page.locator("#pr-releases .rel-confirm .rel-go").click();
+    await page.waitForFunction((v) => /No release pending/.test(document.querySelector("#pr-releases").innerText) && !document.querySelector("#pr-releases").innerText.includes("Dismiss release"), V, { timeout: 10000 });
+    if (await page.locator("#pr-dot:visible").count()) throw new Error("the badge stayed");
+    const it = await page.evaluate(async (id) => (await (await fetch("/api/todos/" + id)).json()).todo, t.id);
+    if (!it.release.dismissed || it.state !== "dropped") throw new Error("item: " + JSON.stringify(it.release) + it.state);
+    if (!(await page.locator("#pr-releases .rl-hist").innerText()).includes(V)) throw new Error("history lacks " + V);
+    const au = await page.evaluate(async (id) => JSON.stringify((await (await fetch("/api/release/" + id)).json()).audit), t.id);
+    if (!au.includes("release.dismiss")) throw new Error("not in the audit log");
+    const h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1]) throw new Error("sideways scroll " + JSON.stringify(h));
+  } finally { await relDrop(t.id); }
+});
+}
 await browser.close();
 let failed = 0;
 for (const [name, ok, why] of results) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : "  -- " + why}`); if (!ok) failed++; }

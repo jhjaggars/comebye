@@ -72,6 +72,12 @@ type TodoRelease struct {
 	Host   string `json:"host,omitempty"`
 	RunURL string `json:"run_url,omitempty"`
 	Error  string `json:"error,omitempty"`
+	// Dismissed: the user abandoned this tagged release's rollout. It is out of
+	// the Releases tab, the badge and the auto-close sweep (the tag stays and
+	// the release stays in the history).
+	Dismissed   bool       `json:"dismissed,omitempty"`
+	DismissedBy string     `json:"dismissed_by,omitempty"`
+	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
 	// DryRun is the last dry run's output (a server run with
 	// -release-dry-run never tags).
 	DryRun string `json:"dry_run,omitempty"`

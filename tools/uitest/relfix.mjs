@@ -11,6 +11,7 @@
 //   partial   tagged; hub and peerbox upgraded, kubevirt-1 behind, mac-mini offline
 //   partial3  tagged; three of four upgraded, mac-mini offline (the user's "3 of 4, 1 offline")
 //   failed    tagged; the hub's deploy failed, peerbox's upgrade was rolled back
+//   dismissed the user abandoned v0.5.22: nothing pending, v0.5.22 first in the history
 //   done      tagged and every host upgraded; the item was closed by the hub
 
 const V = "v0.5.22", PREV = "v0.5.21";
@@ -21,12 +22,12 @@ const HIST = [
   ["v0.5.19", 6, "Answered box readable in light mode"], ["v0.5.18", 9, "Mark button reads Unmark"], ["v0.5.17", 12, "Briefings skip a slot when nothing changed"],
 ];
 
-export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "done"];
+export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "done", "dismissed"];
 
 export function releaseView(name) {
   const tagged = ["tagged", "partial", "partial3", "failed", "done"].includes(name);
   const vers = {
-    none: [PREV, PREV, PREV, PREV], ci: [PREV, PREV, PREV, PREV], green: [PREV, PREV, PREV, PREV], red: [PREV, PREV, PREV, PREV],
+    none: [PREV, PREV, PREV, PREV], dismissed: [PREV, PREV, PREV, PREV], ci: [PREV, PREV, PREV, PREV], green: [PREV, PREV, PREV, PREV], red: [PREV, PREV, PREV, PREV],
     tagged: [PREV, PREV, PREV, PREV], partial: [V, V, PREV, "v0.5.20"], partial3: [V, V, V, "v0.5.20"],
     failed: [PREV, PREV, V, V], done: [V, V, V, V],
   }[name];
@@ -51,6 +52,10 @@ export function releaseView(name) {
     ...(name === "done" ? { closed_by: "comebye", closed_at: ago(60000) } : {}) };
   const history = HIST.map(([version, d]) => ({ version, commit: SHA.replace(/^.{7}/, "b" + version.slice(-2).replace(".", "0") + "0000").slice(0, 40), tagged_at: ago(d * 86400000), notes_url: `https://github.com/jhjaggars/comebye/releases/tag/${version}`, todo: "t" + version.slice(1).replace(/\./g, "") }));
   const out = { csrf: "fixture", can_tag: true, simulated: false, dry_run: false, release_host: "laharl", hosts, history, audit: [] };
+  if (name === "dismissed") {
+    out.history = [{ version: V, commit: SHA, tagged_at: ago(3000000), notes_url: `https://github.com/jhjaggars/comebye/releases/tag/${V}`, todo: "tfixture01" }, ...out.history].slice(0, 5);
+    return { ...out, current: false, needs_you: false, needs_text: "" };
+  }
   if (name === "none") return { ...out, current: false, needs_you: false, needs_text: "" };
   out.current = true; out.todo = todo;
   if (!tagged) {

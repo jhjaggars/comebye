@@ -2035,6 +2035,16 @@ function relCardHtml(d) {
     }
   }
   if (rl.state === "tagging") h += `<div class="rel-note">The tag is being pushed…</div>`;
+  if (tagged && ro && !ro.complete) {
+    if (rls.confirm && rls.confirm.k === "dismiss") {
+      h += `<div class="rel-confirm" role="group" aria-label="Confirm dismissing the release">
+        <div>Dismiss <b>${esc(rl.version)}</b>? The rollout is abandoned: the release leaves this tab, the badge and the automatic close, and the hub stops watching it. Nothing is changed on any host and the tag stays. Recorded in the audit log.</div>
+        <div class="td-acts"><button type="button" class="rel-go rel-dismiss-go" data-rel="confirm-dismiss"${rls.busy ? " disabled" : ""}>Confirm: dismiss ${esc(rl.version)}</button>
+        <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
+    } else {
+      h += `<div class="td-acts"><button type="button" class="rel-dismiss" data-rel="dismiss"${rls.busy ? " disabled" : ""}>Dismiss release…</button></div>`;
+    }
+  }
   if (tagged && ro) {
     if (ro.complete) h += `<div class="rl-line"><span class="rel-chip rel-ok">all upgraded</span> <span class="rel-note">${ro.total} of ${ro.total} hosts run ${esc(rl.version)}</span></div>`;
     else h += `<div class="rl-line rel-note">${esc(relCount(ro))} on ${esc(rl.version)}${ro.offline ? ". The release is not done until the offline host is back and upgraded" : ". Buttons stay until each host matches"}.</div>`;
@@ -2114,6 +2124,13 @@ async function relClick(act, host) {
     case "up": rls.confirm = { k: "up", host, rollback: false }; break;
     case "rollback": rls.confirm = { k: "up", host, rollback: true }; break;
     case "deploy": rls.confirm = { k: "deploy" }; break;
+    case "dismiss": rls.confirm = { k: "dismiss" }; break;
+    case "confirm-dismiss":
+      if (await relPost(`/api/release/${id}/dismiss`, { version: t.release.version, commit: t.release.commit })) toast(`${t.release.version} dismissed.`);
+      todos.loadedAt = 0;
+      loadTodos();
+      await loadReleases(true);
+      return;
     case "cancel": rls.confirm = null; break;
     case "confirm-deploy":
       if (await relPost(`/api/release/${id}/deploy`, { version: t.release.version, commit: t.release.commit })) toast("Started.");

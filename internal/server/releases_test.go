@@ -298,3 +298,63 @@ func TestReleasesAreReadOnlyFromAnotherSite(t *testing.T) {
 		t.Fatalf("cross-site GET = %d", w.Code)
 	}
 }
+
+func TestReleaseDismissAbandonsATaggedRollout(t *testing.T) {
+	s, _ := relHubWithPeer(t, "v0.5.8", "v0.5.8", false)
+	it := tagOnServer(t, s, "v0.5.9", relSHA)
+	body := `{"version":"v0.5.9","commit":"` + relSHA + `"}`
+	tok := getReleases(t, s).CSRF
+	// Needs the page's token and the right version/commit.
+	if w := do(s, "POST", "/api/release/"+it.ID+"/dismiss", userHdr, body); w.Code != 403 {
+		t.Fatalf("no token = %d", w.Code)
+	}
+	if w := do(s, "POST", "/api/release/"+it.ID+"/dismiss", withCSRF(tok), `{"version":"v0.5.1","commit":"`+relSHA+`"}`); w.Code != 409 || !strings.Contains(w.Body.String(), "confirm_mismatch") {
+		t.Fatalf("mismatch = %d %s", w.Code, w.Body)
+	}
+	if v := getReleases(t, s); !v.Current || !v.NeedsYou {
+		t.Fatalf("before = %+v", v)
+	}
+	if w := do(s, "POST", "/api/release/"+it.ID+"/dismiss", withCSRF(tok), body); w.Code != 200 {
+		t.Fatalf("dismiss = %d %s", w.Code, w.Body)
+	}
+	got, _ := s.todos.get(it.ID)
+	if !got.Release.Dismissed || got.Release.DismissedBy == "" || got.State != TodoDropped || got.DropReason != "release dismissed" {
+		t.Fatalf("item = %+v %+v", got, got.Release)
+	}
+	found := false
+	for _, a := range actions(s) {
+		found = found || a == "release.dismiss"
+	}
+	if !found {
+		t.Fatalf("not audited: %v", actions(s))
+	}
+	// Out of the tab and the badge; still in the history.
+	v := getReleases(t, s)
+	if v.Current || v.NeedsYou || len(v.History) != 1 || v.History[0].Version != "v0.5.9" {
+		t.Fatalf("after = %+v", v)
+	}
+	if w := do(s, "POST", "/api/release/"+it.ID+"/dismiss", withCSRF(tok), body); w.Code != 409 {
+		t.Fatalf("twice = %d", w.Code)
+	}
+}
+
+func TestReleaseDismissIsOutOfTheSweepAndOnlyForTagged(t *testing.T) {
+	s, _ := relHubWithPeer(t, "v0.5.9", "v0.5.9", false)
+	pend := todoOf(t, do(s, "POST", "/api/todos", userHdr, relBody("v0.5.10", relSHA2)).Body.Bytes())
+	tok := token(t, s, pend.ID)
+	if w := do(s, "POST", "/api/release/"+pend.ID+"/dismiss", withCSRF(tok), `{"version":"v0.5.10","commit":"`+relSHA2+`"}`); w.Code != 409 || !strings.Contains(w.Body.String(), "not_released") {
+		t.Fatalf("pending = %d %s", w.Code, w.Body)
+	}
+	// A dismissed release the fleet runs is not closed or reported by the sweep (its item is already closed).
+	it := tagOnServer(t, s, "v0.5.9", relSHA)
+	do(s, "POST", "/api/release/"+it.ID+"/dismiss", withCSRF(tok), `{"version":"v0.5.9","commit":"`+relSHA+`"}`)
+	s.sweepReleases(context.Background())
+	for _, a := range actions(s) {
+		if a == "release.complete" {
+			t.Fatal("the sweep completed a dismissed release")
+		}
+	}
+	if v := getReleases(t, s); v.Todo.ID == it.ID {
+		t.Fatal("a dismissed release is current")
+	}
+}
