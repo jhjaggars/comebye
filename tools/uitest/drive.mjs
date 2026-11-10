@@ -678,9 +678,11 @@ async function freshList() {
   await page.waitForSelector("#agents .agent", { timeout: 8000 });
 }
 await check("briefings: history is kept and listed, newest first, the latest on top", async () => {
-  await publishBrief("## History one\n\nbody one");
-  await publishBrief("## History two\n\nbody two");
-  await publishBrief("## History three\n\nbody three");
+  // The hub merges briefings published within 15 minutes unless the Needs you
+  // lines differ, so each of these says something different there.
+  await publishBrief("## History one\n\nbody one\n\n## Needs you\nNothing open.");
+  await publishBrief("## History two\n\nbody two\n\n## Needs you\nNone.");
+  await publishBrief("## History three\n\nbody three\n\n## Needs you\nAll clear.");
   const h = await (await fetch(base + "/api/brief/history")).json();
   if (h.briefs.length < 3 || !h.briefs[0].markdown.includes("three") || !h.briefs[1].markdown.includes("two")) throw new Error(JSON.stringify(h).slice(0, 300));
   await freshList();
@@ -835,7 +837,7 @@ async function desktopList(width, start = "#/briefings") {
 }
 for (const width of [1280, 1920]) {
   await check(`desktop: at ${width}px the list and the Briefing page sit side by side, two columns`, async () => {
-    await publishBrief("## Status\n\nDesktop panel check\n\nlong detail");
+    await publishBrief("## Status\n\nDesktop panel check\n\nlong detail\n\n## Needs you\nNo decisions.");
     await desktopList(width);
     await page.waitForSelector("body.view-briefing #briefs.open .br-card");
     const [l, d, e, b, c, pg, td] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefs"), geo("#briefing"), geo("#pager"), geo("#todo")]);
