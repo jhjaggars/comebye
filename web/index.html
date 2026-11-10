@@ -1540,9 +1540,26 @@
        Pure CSS plus a few hooks in app.js (state.view and the body classes
        view-briefing / view-todo / has-detail): #list and its <main> become
        display:contents so each piece can take its own grid cell. */
+    /* Collapsing the list (desktop): the left column shrinks to a thin rail
+       with one expand button and what needs the user. The list stays in the
+       DOM (hidden), so the selection and the open agent are untouched. */
+    #btn-collapse, #list-rail { display: none; }
     #detail-empty { display: none; }
     @media (min-width: 1100px) {
       :root { --list-w: 360px; }
+      body.list-collapsed { --list-w: 56px; }
+      #btn-collapse { display: inline-flex; }
+      body.list-collapsed #list header, body.list-collapsed #notify-panel, body.list-collapsed #nav, body.list-collapsed #host-filter,
+      body.list-collapsed #plans, body.list-collapsed #agents, body.list-collapsed #f-menu { display: none !important; }
+      body.list-collapsed #list-rail {
+        grid-column: 1; grid-row: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 10px;
+        padding: 14px 0; min-width: 0; border: 0; border-radius: 0; background: var(--bg); color: var(--muted); font: inherit; cursor: pointer;
+      }
+      body.list-collapsed #list-rail:hover { color: var(--text); background: var(--panel); }
+      #list-rail:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+      .lr-badge { min-width: 24px; padding: 1px 6px; border-radius: 99px; font-size: 12px; font-weight: 650; line-height: 1.4; text-align: center; color: var(--bg); }
+      .lr-need { background: var(--orange); }
+      .lr-todo { background: var(--blue); }
       body {
         display: grid; height: 100vh; height: 100dvh; overflow: hidden;
         grid-template-columns: var(--list-w) minmax(0, 1fr);
@@ -2105,6 +2122,9 @@
       <h1>Comebye</h1>
       <span class="count" id="count"></span>
       <button type="button" class="bell launch" id="btn-cmds" aria-label="Commands" aria-haspopup="dialog" aria-controls="palette"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="m5 8 5 4-5 4M12 17h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button type="button" class="bell launch" id="btn-collapse" aria-label="Collapse the list" aria-controls="agents" aria-expanded="true" title="Collapse the list ( [ )">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M16 9.5l-2.5 2.5 2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <button type="button" class="bell launch" id="btn-recall" aria-label="Search transcripts">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       </button>
@@ -2156,6 +2176,11 @@
       <span class="pg-dots" aria-hidden="true"><i class="on"></i><i></i></span>
       <span class="pg-label">Briefings</span><span class="pg-todo" id="pager-todo" title="Open to-do items" hidden></span><span class="pg-new" id="pager-new" hidden></span>
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button type="button" id="list-rail" class="list-rail" aria-label="Expand the list" aria-controls="agents" aria-expanded="false" title="Expand the list ( [ )">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M13 9.5l2.5 2.5-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="lr-badge lr-need" id="lr-need" hidden></span>
+      <span class="lr-badge lr-todo" id="lr-todo" hidden></span>
     </button>
   </div>
 

@@ -3849,6 +3849,64 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
   });
 }
 
+// Collapsing the left column (desktop): a rail with the expand button and the counts, the
+// choice kept per browser, the "[" key, and the phone untouched.
+await check("collapse: the list folds to a rail, keeps its state, and expands again", async () => {
+  await desktopList(1280, "");
+  await page.locator("#agents .agent[data-id]").first().click();
+  await page.waitForSelector("body.has-detail #detail");
+  await page.locator("#prompt-text").fill("half typed");
+  const before = await geo("#detail");
+  await page.evaluate(() => { document.getElementById("agents").scrollTop = 7; });
+  await page.locator("#btn-collapse").click();
+  const [r, d, l] = await Promise.all([geo("#list-rail"), geo("#detail"), geo("#agents")]);
+  if (!r.shown || r.w > 80) throw new Error("rail: " + JSON.stringify(r));
+  if (l.shown) throw new Error("the list still shows");
+  if (d.w < before.w + 250 || Math.abs(d.x + d.w - 1280) > 1) throw new Error("detail did not take the width: " + JSON.stringify([before, d]));
+  if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("scrolls sideways collapsed");
+  if (await page.locator("#prompt-text").innerText() !== "half typed") throw new Error("prompt lost");
+  if (await page.evaluate(() => localStorage.getItem("comebye-list-collapsed")) !== "1") throw new Error("not remembered");
+  await page.reload({ waitUntil: "load" });
+  await page.waitForSelector("body.list-collapsed");
+  if (!(await visible("#list-rail"))) throw new Error("rail missing after reload");
+  await page.locator("#list-rail").click();
+  if (await page.evaluate(() => document.body.classList.contains("list-collapsed"))) throw new Error("still collapsed");
+  const l2 = await geo("#agents");
+  if (!l2.shown || l2.w < 300) throw new Error("list not back: " + JSON.stringify(l2));
+  if (!(await page.locator("#agents .agent.selected").count())) throw new Error("selection lost");
+  if (await page.evaluate(() => localStorage.getItem("comebye-list-collapsed")) !== "0") throw new Error("expanded not remembered");
+});
+await check("collapse: the rail shows how many agents need input and open to-dos", async () => {
+  await desktopList(1280, "");
+  await page.evaluate(() => { todos.on = true; todos.open = 3; state.agents = state.agents.map((a, i) => i < 2 ? { ...a, agent_status: "blocked" } : a); renderList(); renderTodos(true); });
+  await page.locator("#btn-collapse").click();
+  const need = await page.locator("#lr-need").innerText(), td = await page.locator("#lr-todo").innerText();
+  if (need !== "2" || td !== "3") throw new Error("badges: " + need + "/" + td);
+});
+await check("collapse: [ toggles it, but not while typing", async () => {
+  await desktopList(1280, "");
+  const col = () => page.evaluate(() => document.body.classList.contains("list-collapsed"));
+  await page.locator("body").press("[");
+  if (!(await col())) throw new Error("[ did not collapse");
+  await page.locator("body").press("[");
+  if (await col()) throw new Error("[ did not expand");
+  await page.locator("#agents .agent[data-id]").first().click();
+  await page.locator("#prompt-text").click();
+  await page.keyboard.type("a[b");
+  if (await col()) throw new Error("[ toggled while typing");
+  if (await page.locator("#prompt-text").innerText() !== "a[b") throw new Error("[ not typed");
+});
+await check("collapse: the phone keeps the list as it was, even with the choice stored", async () => {
+  await desktopList(1280, "");
+  await page.locator("#btn-collapse").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
+  if (await visible("#btn-collapse") || await visible("#list-rail")) throw new Error("collapse controls on the phone");
+  if (!(await visible("#agents")) || !(await visible("#list header"))) throw new Error("list hidden on the phone");
+  await page.evaluate(() => { try { localStorage.clear(); } catch {} });
+});
+
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
 // Last among the to-do checks: it adds an item, and the server allows 20 adds a minute.
 await check("release: a release to-do shows the commit, CI and changes; approving needs a confirm naming the version and commit; the hosts then offer Upgrade with its own confirm", async () => {

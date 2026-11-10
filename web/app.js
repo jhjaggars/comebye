@@ -579,6 +579,7 @@ function renderListRows() {
     agentId(a).localeCompare(agentId(b)));
   const nBlocked = agents.filter((a) => a.agent_status === "blocked").length;
   const nWorking = agents.filter((a) => a.agent_status === "working").length;
+  syncRail();
   // The tab title carries the count, so a background tab shows it.
   document.title = nBlocked ? `(${nBlocked}) Comebye` : "Comebye";
   // The long form on wide screens; a short one (no "agents" word, "need")
@@ -662,6 +663,37 @@ function renderListRows() {
 const desktopMQ = window.matchMedia("(min-width: 1100px)");
 const isDesktop = () => desktopMQ.matches;
 const rowFor = (id) => [...document.querySelectorAll("#agents .agent[data-id]")].find((r) => r.dataset.id === id);
+
+/* Collapse the left column to a rail (desktop). Remembered per browser. The
+   list is only hidden: the selected agent, a half-typed prompt and the list's
+   scroll position (restored below) are kept. */
+const LIST_COLLAPSED_KEY = "comebye-list-collapsed";
+function syncRail() {
+  const need = state.agents.filter((a) => a.agent_status === "blocked").length;
+  const n = $("lr-need"), t = $("lr-todo");
+  if (n) { n.hidden = !need; n.textContent = String(need); n.title = `${need} agent${need === 1 ? "" : "s"} need input`; }
+  if (t) { const open = todos.on === true ? todos.open || 0 : 0; t.hidden = !open; t.textContent = String(open); t.title = `${open} to do`; }
+  const r = $("list-rail");
+  if (r) r.setAttribute("aria-label", "Expand the list" + (need ? `, ${need} need input` : "") + (todos.on === true && todos.open ? `, ${todos.open} to do` : ""));
+}
+function setListCollapsed(on, remember = true) {
+  const ag = $("agents"), top = ag ? ag.scrollTop : 0;
+  document.body.classList.toggle("list-collapsed", on);
+  $("btn-collapse")?.setAttribute("aria-expanded", String(!on));
+  $("list-rail")?.setAttribute("aria-expanded", String(!on));
+  if (remember) lsSet(LIST_COLLAPSED_KEY, on ? "1" : "0");
+  if (!on && ag) ag.scrollTop = top; // display:none loses it in some browsers
+  if (on) syncRail();
+  const f = on ? $("list-rail") : $("btn-collapse");
+  if (isDesktop() && remember && f && (document.activeElement === document.body || !document.activeElement?.offsetParent)) f.focus({ preventScroll: true });
+}
+function onCollapseKey(ev) {
+  if (!isDesktop() || ev.key !== "[" || ev.altKey || ev.ctrlKey || ev.metaKey || ev.repeat || ev.defaultPrevented) return;
+  if (ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
+  if (anotherLayerOpen()) return;
+  ev.preventDefault();
+  setListCollapsed(!document.body.classList.contains("list-collapsed"));
+}
 
 function markSelectedRow() {
   document.querySelectorAll("#agents .agent.selected").forEach((r) => {
@@ -1501,6 +1533,7 @@ function renderTodos(force) {
   }
   renderNav();
   renderStatus();
+  syncRail();
   // The desktop page: the same items without the fold, and an empty note.
   if (page) {
     $("pt-count").textContent = show ? todoCountText() : "";
@@ -8707,6 +8740,10 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
   document.addEventListener("keydown", onTodoKey);
+  document.addEventListener("keydown", onCollapseKey);
+  $("btn-collapse").addEventListener("click", () => setListCollapsed(true));
+  $("list-rail").addEventListener("click", () => setListCollapsed(false));
+  if (lsGet(LIST_COLLAPSED_KEY) === "1") setListCollapsed(true, false);
   desktopMQ.addEventListener("change", () => { setView(viewFromHash()); renderList(); renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
   window.addEventListener("offline", () => setConn(false));
 
