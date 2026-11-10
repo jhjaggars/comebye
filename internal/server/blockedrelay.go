@@ -143,7 +143,7 @@ func (s *Server) initBlockedRelay(delay time.Duration) {
 	s.relay = &blockedRelay{
 		delay: delay, dialogs: map[string]*dlgState{}, eps: map[string]*relayEp{}, lastOpen: map[string]time.Time{},
 		readDialog: s.autoReadDialog,
-		send:       s.promptAgent,
+		send:       s.promptNotice,
 		changed:    func() { s.fleet.Changed() },
 	}
 }

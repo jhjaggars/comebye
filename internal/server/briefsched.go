@@ -538,7 +538,7 @@ func fmtEvery(d time.Duration) string {
 func (s *Server) promptBrief(ctx context.Context, a herdr.AgentInfo, plan schedPlan, last time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	return s.promptAgent(ctx, a, briefPrompt(plan, last))
+	return s.promptNotice(ctx, a, briefPrompt(plan, last))
 }
 
 // promptAgent sends text to an agent on any host.

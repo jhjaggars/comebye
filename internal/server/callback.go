@@ -227,7 +227,7 @@ func safeText(s string) string {
 func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
-	if err := s.promptAgent(ctx, target, j.text(standIn)); err != nil {
+	if err := s.promptNotice(ctx, target, j.text(standIn)); err != nil {
 		if isInputBusy(err) {
 			// The user is typing in that pane: hold the notice and try
 			// again in a few seconds (typing.go); not a failed attempt.
@@ -244,10 +244,13 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 		j.tried()
 		return
 	}
+	// Settle the callback before releasing the in-flight guard: a pass
+	// between the two would see it pending and not in flight, and send the
+	// notice again.
+	j.done(ledger.CallbackDelivered, target.ID)
 	s.coord.mu.Lock()
 	delete(s.coord.calling, j.key)
 	s.coord.mu.Unlock()
-	j.done(ledger.CallbackDelivered, target.ID)
 }
 
 // maxReportBody bounds POST /api/report: the CLI sends up to 64 KiB of

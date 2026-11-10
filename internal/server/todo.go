@@ -873,17 +873,19 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 		defer cancel()
 		send := t.send
 		if send == nil {
-			send = s.promptAgent
+			send = s.promptNotice
 		}
 		err := send(ctx, target, todoNoticeText(ids))
+		if err != nil {
+			t.noticeTried(ids)
+		} else {
+			// Settled before the guard is released, or a pass between
+			// the two would send the same notice again.
+			t.settleNotices(ids, todoNoticeSent)
+		}
 		t.mu.Lock()
 		t.sending = false
 		t.mu.Unlock()
-		if err != nil {
-			t.noticeTried(ids)
-			return
-		}
-		t.settleNotices(ids, todoNoticeSent)
 	}(*target)
 }
 

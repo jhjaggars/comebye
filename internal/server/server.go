@@ -184,6 +184,9 @@ type Server struct {
 	briefWait    time.Duration
 	briefTries   int
 	briefBackoff time.Duration
+	// notices and noticeArriveWait: see notice.go.
+	notices          noticeBook
+	noticeArriveWait time.Duration
 	// askPoll and askWait pace asking a marked session whether it is safe
 	// to remove (tests shrink them); latest, when set, replaces latestOf.
 	askPoll time.Duration

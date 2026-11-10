@@ -1047,7 +1047,7 @@ func (s *Store) setCallback(id string, at time.Time, fn func(*Callback)) error {
 // Report records a worker's explicit report: the agent's active entry is
 // finished now with the report (capped), without waiting to see it go idle.
 // A second report while still finished replaces the text and queues no
-// second callback. ok is false when the agent has no running or finished
+// second callback; the very same text again changes nothing. ok is false when the agent has no running or finished
 // entry.
 func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error) {
 	s.mu.Lock()
@@ -1056,6 +1056,7 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != ReadyToRemove && !e.Reported()) {
 		return Entry{}, false, nil
 	}
+	again := e.Status == Finished && e.ReportSource == "explicit" && e.FinalReport == Truncate(text, MaxReport)
 	if e.Status == ReadyToRemove {
 		// A marked worker that reports again is at work again: the mark
 		// no longer holds, and this is a new round's report.
@@ -1085,6 +1086,10 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 			return copyEntry(e), true, s.save()
 		}
 		e.Status = Finished // a report after landing is a new round's
+	}
+	if again {
+		// The same report again: nothing new to tell the requester.
+		return copyEntry(e), true, nil
 	}
 	e.ReportSeq++
 	e.Status, e.FinishedAt = Finished, &t

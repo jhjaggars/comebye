@@ -632,3 +632,30 @@ func TestUpdateAskKeepsTheMarkAndItsItems(t *testing.T) {
 		t.Error("Marks() shares items with the store")
 	}
 }
+
+// A worker that files the very same report again (a retried command, a
+// second `comebye report` for one turn) has said nothing new: the
+// requester is not told twice. A changed report is a new notice.
+func TestResentSameReportIsNotANewNotice(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+	e, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1"}})
+	now := time.Now()
+	if _, ok, _ := s.Report(e.AgentID, "done: all green", now); !ok {
+		t.Fatal("report refused")
+	}
+	settle(t, s, e.ID)
+	for i := 0; i < 2; i++ {
+		now = now.Add(time.Minute)
+		if _, ok, _ := s.Report(e.AgentID, "done: all green", now); !ok {
+			t.Fatal("re-report refused")
+		}
+	}
+	if n := len(s.PendingCallbacks()); n != 0 {
+		t.Fatalf("same report again queued %d notices", n)
+	}
+	now = now.Add(time.Minute)
+	s.Report(e.AgentID, "done: all green, plus a follow-up", now)
+	if n := len(s.PendingCallbacks()); n != 1 {
+		t.Fatalf("a changed report queued %d notices, want 1", n)
+	}
+}
