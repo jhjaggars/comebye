@@ -372,6 +372,9 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 			return
 		}
 		files := splitDiff(out)
+		if files == nil {
+			files = []panelFile{} // JSON [], not null: the browser maps over it
+		}
 		if trunc && len(files) > 0 {
 			files = files[:len(files)-1]
 			note = "the diff is large: some files are not listed"
@@ -385,7 +388,7 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 	section("unstaged", "Unstaged")
 	section("staged", "Staged", "--cached")
 	if out, _, err := panelGit(ctx, top, 4<<20, "ls-files", "--others", "--exclude-standard", "-z"); err == nil {
-		var files []panelFile
+		files := []panelFile{} // JSON [], not null
 		skipped := 0
 		for _, rel := range strings.Split(string(out), "\x00") {
 			if rel == "" || strings.HasSuffix(rel, "/") {

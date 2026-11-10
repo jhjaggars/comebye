@@ -581,3 +581,23 @@ func TestPanelThroughAPeer(t *testing.T) {
 		t.Errorf("proxying the host op: %d", st)
 	}
 }
+
+// An empty section is JSON [], never null: the browser maps over every
+// section's files, and a null threw there, leaving the panel on "Reading the
+// changes…" with only the file count drawn.
+func TestPanelDiffEmptySectionsAreEmptyLists(t *testing.T) {
+	_, wt := panelHome(t)
+	gitIn(t, wt, "checkout", "-q", "--", "a.go")                    // unstaged now empty
+	gitIn(t, wt, "reset", "-q", "b.go")                             // staged now empty
+	if err := os.Remove(filepath.Join(wt, "new.txt")); err != nil { // untracked now empty
+		t.Fatal(err)
+	}
+	status, out := panelServer(t).panelRun(context.Background(), "diff", url.Values{"dir": {wt}})
+	if status != 200 {
+		t.Fatalf("diff: %d %v", status, out)
+	}
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), `"files":null`) {
+		t.Fatalf("an empty section is null in the answer: %s", b)
+	}
+}

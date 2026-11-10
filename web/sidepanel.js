@@ -182,6 +182,7 @@
       if (id !== st.id) return;
       st.diffErr = "";
       if (d.unchanged) { renderBar(); return; }
+      d.sections = (d.sections || []).map((s) => ({ ...s, files: s.files || [] })); // an empty section may arrive as null
       const first = !st.diff;
       st.diff = d;
       st.diffAt = Date.now();
