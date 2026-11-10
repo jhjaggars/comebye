@@ -28,6 +28,7 @@ case "$1" in
 -version) echo "comebye $V"; exit 0;;
 whoami) if [ -f "$S/peer" ]; then echo '{"host":"h1","hub":"https://hub.example","ledger":false}'; else echo '{"host":"h1","hub":"self","ledger":true}'; fi; exit 0;;
 agents) echo '{"agents":[{"host":"h1","id":"h1/w1:p1"}]}'; exit 0;;
+mod) echo "$@" >> "$S/mod.log"; if [ -f "$S/fail_mod" ]; then echo "mod boom" >&2; exit 1; fi; echo "mods refreshed"; exit 0;;
 *) if [ -f "$S/fail_$1" ]; then cat "$S/fail_$1" >&2; exit 1; fi; echo ok; exit 0;;
 esac
 `
@@ -532,4 +533,44 @@ func TestServedVersionCheck(t *testing.T) {
 			t.Fatal("not upgraded")
 		}
 	})
+}
+
+func TestUpgradeRefreshesInstalledMods(t *testing.T) {
+	e := newEnv(t, "v0.1.0")
+	if err := Run(e.opts()); err != nil {
+		t.Fatalf("%v\n%s\n%s", err, e.out.String(), e.err.String())
+	}
+	b, _ := os.ReadFile(filepath.Join(e.state, "mod.log"))
+	if strings.TrimSpace(string(b)) != "mod install --if-installed" {
+		t.Fatalf("mod.log = %q", b)
+	}
+	if !strings.Contains(e.out.String(), "mods: mods refreshed") {
+		t.Fatalf("out: %s", e.out.String())
+	}
+}
+
+func TestUpgradeSucceedsWhenTheModRefreshFails(t *testing.T) {
+	e := newEnv(t, "v0.1.0")
+	e.set("fail_mod", "x")
+	if err := Run(e.opts()); err != nil {
+		t.Fatalf("the upgrade failed because of the mods: %v", err)
+	}
+	if got := e.version(e.bin); got != "comebye v0.2.0" {
+		t.Fatalf("installed: %s", got)
+	}
+	if !strings.Contains(e.err.String(), "warning: comebye mod install --if-installed failed") {
+		t.Fatalf("err: %s", e.err.String())
+	}
+}
+
+func TestDryRunLeavesTheMods(t *testing.T) {
+	e := newEnv(t, "v0.1.0")
+	o := e.opts()
+	o.DryRun = true
+	if err := Run(o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(e.state, "mod.log")); err == nil {
+		t.Fatal("a dry run touched the mods")
+	}
 }

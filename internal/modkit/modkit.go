@@ -160,6 +160,10 @@ type Options struct {
 	With     []string // plugins to install besides the default; Install only
 	Force    bool     // Install: replace an edited file (kept as .bak)
 	NoClaude bool     // write the folder only; do not run claude at all
+	// IfInstalled: Install refreshes the files of a folder comebye wrote
+	// before and does nothing where there is none; it never runs claude.
+	// `comebye upgrade` uses it.
+	IfInstalled bool
 }
 
 func (o *Options) claude() Claude {
@@ -275,6 +279,12 @@ func Status(o Options) (*Report, error) {
 // files it wrote before, and leaves a file the user edited (unless Force,
 // which keeps the edited one as .bak).
 func Install(o Options) (*Report, error) {
+	if o.IfInstalled {
+		if _, err := os.Stat(filepath.Join(o.Dir, recordName)); err != nil {
+			return &Report{Dir: o.Dir, Marketplace: "unknown", Notes: []string{"mods are not installed here; nothing done"}}, nil
+		}
+		o.NoClaude = true
+	}
 	plugins, err := wantPlugins(o.With)
 	if err != nil {
 		return nil, err

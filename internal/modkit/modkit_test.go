@@ -288,3 +288,56 @@ func TestClaudePluginTest(t *testing.T) {
 		}
 	}
 }
+
+func TestIfInstalledDoesNothingWithoutMods(t *testing.T) {
+	c := &fakeClaude{}
+	o := opts(t, c)
+	o.IfInstalled = true
+	r, err := Install(o)
+	if err != nil || len(r.Files) != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if _, err := os.Stat(o.Dir); !os.IsNotExist(err) {
+		t.Fatalf("a folder was made where no mods were installed: %v", err)
+	}
+	if len(c.calls) != 0 {
+		t.Fatalf("claude was run: %v", c.calls)
+	}
+}
+
+func TestIfInstalledRefreshesFilesOnly(t *testing.T) {
+	c := &fakeClaude{}
+	o := opts(t, c)
+	if _, err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+	band := filepath.Join(o.Dir, "comebye-hub", "hooks", "band-model.ts")
+	guard := filepath.Join(o.Dir, "comebye-hub", "hooks", "guard-rules.ts")
+	old := []byte("// older comebye\n")
+	os.WriteFile(band, old, 0o644)
+	rec := readRecord(o.Dir)
+	rec.Files["comebye-hub/hooks/band-model.ts"] = sum(old)
+	writeRecord(o.Dir, rec)
+	os.WriteFile(guard, []byte("// mine\n"), 0o644)
+
+	c.calls = nil
+	o.IfInstalled = true
+	r, err := Install(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.calls) != 0 {
+		t.Fatalf("claude was run: %v", c.calls)
+	}
+	if b, _ := os.ReadFile(band); string(b) == string(old) {
+		t.Fatal("the outdated file was not refreshed")
+	}
+	if b, _ := os.ReadFile(guard); string(b) != "// mine\n" {
+		t.Fatal("an edited file was replaced")
+	}
+	for _, f := range r.Files {
+		if f.Rel == "comebye-hub/hooks/guard-rules.ts" && f.State != Edited {
+			t.Fatalf("guard state %s", f.State)
+		}
+	}
+}

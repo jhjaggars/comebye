@@ -137,3 +137,51 @@ func TestHeadline(t *testing.T) {
 		t.Fatal("empty")
 	}
 }
+
+func TestModInstallIfInstalled(t *testing.T) {
+	_, e, out, errb := newFake(t)
+	home := t.TempDir()
+	env := e.Getenv
+	e.Getenv = func(k string) string {
+		switch k {
+		case "HOME":
+			return home
+		case "XDG_DATA_HOME":
+			return ""
+		}
+		return env(k)
+	}
+	rc := &recClaude{}
+	old := modClaude
+	modClaude = rc
+	t.Cleanup(func() { modClaude = old })
+	dir := filepath.Join(home, ".local", "share", "comebye", "mods")
+
+	if code := run(e, "mod", "install", "--if-installed"); code != 0 {
+		t.Fatalf("%d %s", code, errb)
+	}
+	if !strings.Contains(out.String(), "not installed here") {
+		t.Fatalf("out: %s", out)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) || len(rc.calls) != 0 {
+		t.Fatalf("something was done on a host without mods: %v %v", err, rc.calls)
+	}
+	if code := run(e, "mod", "install", "--if-installed", "--with", "coord-window"); code != 2 {
+		t.Fatalf("with: %d", code)
+	}
+	if code := run(e, "mod", "status", "--if-installed"); code != 2 {
+		t.Fatalf("status: %d", code)
+	}
+	// Installed, then refreshed: no claude calls the second time.
+	if code := run(e, "mod", "install"); code != 0 {
+		t.Fatalf("install: %d %s", code, errb)
+	}
+	rc.calls = nil
+	out.Reset()
+	if code := run(e, "mod", "install", "--if-installed"); code != 0 || len(rc.calls) != 0 {
+		t.Fatalf("refresh: %d %v %s", code, rc.calls, errb)
+	}
+	if !strings.Contains(out.String(), "files current") {
+		t.Fatalf("out: %s", out)
+	}
+}

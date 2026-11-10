@@ -11,7 +11,7 @@ comebye mod status                        # files current/outdated/edited, marke
 comebye mod uninstall                     # only what comebye wrote
 ```
 
-`install` writes the embedded mods to `~/.local/share/comebye/mods` (`--dir`, or `$XDG_DATA_HOME/comebye/mods`), adds that folder as the local marketplace **`comebye-mods`** and installs `comebye-hub@comebye-mods` with `claude plugin …`. Claude reads a plugin whose marketplace entry is a relative path from the folder itself, so after `comebye upgrade` a second `comebye mod install` only rewrites files; run `/reload-plugins` in a running Claude.
+`install` writes the embedded mods to `~/.local/share/comebye/mods` (`--dir`, or `$XDG_DATA_HOME/comebye/mods`), adds that folder as the local marketplace **`comebye-mods`** and installs `comebye-hub@comebye-mods` with `claude plugin …`. Claude reads a plugin whose marketplace entry is a relative path from the folder itself, so a newer comebye only rewrites files; run `/reload-plugins` in a running Claude. `comebye upgrade` does that itself, with the **new** binary, through `comebye mod install --if-installed`: it refreshes the files only where mods were installed before (a folder comebye wrote), runs no `claude` command, never installs anything on a host that has none, and keeps edited copies. A failure there is a warning; the upgrade stands.
 
 - Idempotent. A file you edited is left alone (`--force` replaces it and keeps yours as `.bak`); a file an older comebye wrote is updated.
 - It only touches its own folder, the marketplace `comebye-mods` and the plugins `…@comebye-mods`. Other plugins and marketplaces are never listed for change, updated or removed. `--no-claude` writes or reads the folder only.

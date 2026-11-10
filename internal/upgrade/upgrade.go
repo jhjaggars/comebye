@@ -234,6 +234,7 @@ func Run(o Options) error {
 	}
 	after, _ := binVersion(&o, o.Bin)
 	o.printf("upgraded %s -> %s\n", orUnknown(cur, curErr), after)
+	refreshMods(&o)
 	if haveOld {
 		o.printf("to roll back: comebye upgrade --rollback   (or: cp %s %s && %s)\n", prev, o.Bin, restartCmdHint(&o))
 	}
@@ -351,6 +352,23 @@ func parseVer(s string) ([4]int, bool) {
 		v[i-1], _ = strconv.Atoi(m[i]) // empty (no -N- part) is 0
 	}
 	return v, true
+}
+
+// refreshMods asks the NEW binary (it carries the new embedded mods) to
+// bring the Claude Code mods up to date, but only where they are already
+// installed: `mod install --if-installed` writes nothing on a host that has
+// none, never touches claude's settings and keeps edited copies. A failure
+// is a warning: the upgrade itself has succeeded.
+func refreshMods(o *Options) {
+	cmd := exec.Command(o.Bin, "mod", "install", "--if-installed")
+	cmd.Env = o.Env
+	out, err := cmd.CombinedOutput()
+	if t := strings.TrimSpace(string(out)); t != "" {
+		o.printf("mods: %s\n", strings.ReplaceAll(t, "\n", "\n      "))
+	}
+	if err != nil {
+		fmt.Fprintf(o.Err, "warning: comebye mod install --if-installed failed: %v (run it by hand)\n", err)
+	}
 }
 
 // binVersion runs "<bin> -version" ("comebye v0.2.0").

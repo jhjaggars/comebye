@@ -18,6 +18,7 @@ func cmdMod(e *Env, args []string) error {
 	dirF := fs.String("dir", "", "the mods folder (default $XDG_DATA_HOME/comebye/mods, else ~/.local/share/comebye/mods)")
 	with := fs.String("with", "", "install: also install these early-access mods (coord-window)")
 	force := fs.Bool("force", false, "install: replace a file you edited (kept as .bak)")
+	ifInstalled := fs.Bool("if-installed", false, "install: refresh the files of mods installed here before, and do nothing where there are none (`comebye upgrade` runs this; it never runs claude)")
 	noClaude := fs.Bool("no-claude", false, "write or read the folder only; do not run claude")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	pos, err := parse(fs, args)
@@ -44,16 +45,19 @@ func cmdMod(e *Env, args []string) error {
 			return err
 		}
 	}
-	o := modkit.Options{Dir: dir, Claude: modClaude, Force: *force, NoClaude: *noClaude}
+	o := modkit.Options{Dir: dir, Claude: modClaude, Force: *force, NoClaude: *noClaude, IfInstalled: *ifInstalled}
 	if *with != "" {
 		o.With = strings.Split(*with, ",")
 	}
 	var r *modkit.Report
 	switch pos[0] {
 	case "install":
+		if *ifInstalled && *with != "" {
+			return usageErr("--if-installed changes only what is installed: it takes no --with")
+		}
 		r, err = modkit.Install(o)
 	case "status":
-		if *force || *with != "" {
+		if *force || *with != "" || *ifInstalled {
 			return usageErr("--force and --with are for install")
 		}
 		r, err = modkit.Status(o)
@@ -75,6 +79,10 @@ func cmdMod(e *Env, args []string) error {
 }
 
 func printMod(e *Env, action string, r *modkit.Report) {
+	if action == "install" && len(r.Files) == 0 && len(r.Notes) > 0 {
+		fmt.Fprintln(e.Stdout, r.Notes[0])
+		return
+	}
 	fmt.Fprintf(e.Stdout, "folder: %s\n", r.Dir)
 	counts := map[string]int{}
 	for _, f := range r.Files {
