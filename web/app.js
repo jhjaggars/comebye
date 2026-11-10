@@ -587,8 +587,8 @@ function renderListRows() {
   $("count").innerHTML = agents.length
     ? `<span class="long">${nBlocked ? `<span class="need">${nBlocked} need${nBlocked === 1 ? "s" : ""} input</span> · ` : ""}` +
       `${nWorking ? `<span class="run">${nWorking} working</span> · ` : ""}${agents.length} agent${agents.length === 1 ? "" : "s"}</span>` +
-      `<span class="short">${nBlocked ? `<span class="need">${nBlocked} need</span> · ` : ""}` +
-      `${nWorking ? `<span class="run">${nWorking} working</span> · ` : ""}${agents.length}</span>`
+      `<span class="short">${nBlocked ? `<span class="need">${nBlocked} need</span><span class="sep"> · </span>` : ""}` +
+      `${nWorking ? `<span class="run">${nWorking} working</span><span class="sep"> · </span>` : ""}<span class="tot">${agents.length}</span></span>`
     : "";
   // Peers the hub cannot reach right now: one collapsed row each, saying
   // what broke (dns, tcp, tls, http) and since when - the hub's health
@@ -687,13 +687,7 @@ function setListCollapsed(on, remember = true) {
   const f = on ? $("list-rail") : $("btn-collapse");
   if (isDesktop() && remember && f && (document.activeElement === document.body || !document.activeElement?.offsetParent)) f.focus({ preventScroll: true });
 }
-function onCollapseKey(ev) {
-  if (!isDesktop() || ev.key !== "[" || ev.altKey || ev.ctrlKey || ev.metaKey || ev.repeat || ev.defaultPrevented) return;
-  if (ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
-  if (anotherLayerOpen()) return;
-  ev.preventDefault();
-  setListCollapsed(!document.body.classList.contains("list-collapsed"));
-}
+const toggleList = () => setListCollapsed(!document.body.classList.contains("list-collapsed"));
 
 function markSelectedRow() {
   document.querySelectorAll("#agents .agent.selected").forEach((r) => {
@@ -8740,7 +8734,6 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
   document.addEventListener("keydown", onTodoKey);
-  document.addEventListener("keydown", onCollapseKey);
   $("btn-collapse").addEventListener("click", () => setListCollapsed(true));
   $("list-rail").addEventListener("click", () => setListCollapsed(false));
   if (lsGet(LIST_COLLAPSED_KEY) === "1") setListCollapsed(true, false);

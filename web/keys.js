@@ -129,6 +129,7 @@
     { id: "g-notify", label: "Notifications…", run: () => toggleNotifyPanel(true) },
     { id: "g-refresh", label: "Refresh", run: () => fleetRefresh() },
     { id: "g-hist", label: "Briefing history", run: () => openBriefs(true), show: () => ledger.on !== false },
+    { id: "g-list", label: (document.body.classList.contains("list-collapsed") ? "Expand" : "Collapse") + " the list", keys: ["["], run: () => toggleList(), show: () => isDesktop() },
     { id: "g-keys", label: "Keyboard shortcuts", keys: ["?"], run: () => openCheats() },
   ];
 
@@ -487,7 +488,7 @@
     cols.append(
       sec("Everywhere", [["Command palette", [MOD, "K"]], ["This sheet", ["?"]], ["Leave the prompt box", ["Esc"]], ["Send a prompt", ["Enter"]]]),
       sec("Agents", [["Next / previous agent", ["j", "k"]], ["Next agent that needs you", ["n"]], ["Previous that needs you", ["Shift", "N"]], ["Agent 1–9 in the list", ["Alt", "1–9"]],
-        ["Focus the prompt", ["i"]], ["Doc and diff panel", ["d"]], ["Mark / unmark", ["m"]], ["Rename (Claude agents)", ["r"]], ["Switch model", ["Shift", "M"]]]),
+        ["Focus the prompt", ["i"]], ["Doc and diff panel", ["d"]], ["Collapse / expand the list", ["["]], ["Mark / unmark", ["m"]], ["Rename (Claude agents)", ["r"]], ["Switch model", ["Shift", "M"]]]),
       sec("Go to", [["Search", ["/"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Briefing", ["g", "b"]], ["Agent list", ["g", "a"]]]),
       sec("To do page", [["Next / previous item", ["j", "k"]], ["Open the answer box", ["Enter"]], ["Pick an option", ["1–9"]], ["Close the item", ["Esc"]], ["Send an answer", [MOD, "Enter"]]]),
     );
@@ -575,6 +576,7 @@
         ev.preventDefault(); moveAgent(k === "j" ? 1 : -1); return;
       case "n": if (isDesktop()) { ev.preventDefault(); nextNeeds(1); } return;
       case "N": if (isDesktop()) { ev.preventDefault(); nextNeeds(-1); } return;
+      case "[": if (isDesktop()) { ev.preventDefault(); toggleList(); } return;
       case "d": if (state.selected && window.SP) { ev.preventDefault(); window.SP.toggle(); } return;
       case "m": if (state.selected && hasLedger()) { ev.preventDefault(); toggleMark(); } return;
       case "M": if (state.selected && switchable(cur())) { ev.preventDefault(); openSwitch(); } return;

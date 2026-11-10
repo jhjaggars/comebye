@@ -3896,6 +3896,37 @@ await check("collapse: [ toggles it, but not while typing", async () => {
   if (await col()) throw new Error("[ toggled while typing");
   if (await page.locator("#prompt-text").innerText() !== "a[b") throw new Error("[ not typed");
 });
+await check("collapse: the palette has Collapse/Expand the list and the shortcut sheet lists [", async () => {
+  await desktopList(1280, "");
+  const col = () => page.evaluate(() => document.body.classList.contains("list-collapsed"));
+  await page.locator("body").press("Control+k");
+  await page.keyboard.type("collapse the list");
+  await page.waitForSelector("#palette .pal-it");
+  await page.keyboard.press("Enter");
+  if (!(await col())) throw new Error("palette command did not collapse");
+  await page.locator("body").press("Control+k");
+  await page.keyboard.type("expand the list");
+  await page.waitForSelector("#palette .pal-it");
+  await page.keyboard.press("Enter");
+  if (await col()) throw new Error("palette command did not expand");
+  await page.locator("body").press("?");
+  const t = await page.locator("#cheats").innerText();
+  if (!/Collapse \/ expand the list/.test(t)) throw new Error("sheet: " + t.slice(0, 200));
+  await page.keyboard.press("Escape");
+});
+await check("collapse: with the Diff panel open the chat and panel share the full width", async () => {
+  await desktopList(1280, "");
+  await page.locator("#agents .agent[data-id]").first().click();
+  await page.waitForSelector("body.has-detail #detail");
+  await page.locator("body").press("d");
+  await page.waitForSelector("#detail.sp-open #sp");
+  await page.locator("body").press("[");
+  const [sp, d] = await Promise.all([geo("#sp"), geo("#detail")]);
+  if (!sp.shown || Math.abs(sp.x + sp.w - 1280) > 1 || d.x > 60) throw new Error("layout: " + JSON.stringify([sp, d]));
+  if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("scrolls sideways");
+  await page.locator("body").press("[");
+  await page.locator("body").press("d");
+});
 await check("collapse: the phone keeps the list as it was, even with the choice stored", async () => {
   await desktopList(1280, "");
   await page.locator("#btn-collapse").click();

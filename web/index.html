@@ -1577,9 +1577,11 @@
       #list { min-height: 0; }
       .br-body { max-width: 820px; margin: 0; }
       #list, #list main { display: contents !important; }
-      #list header { grid-column: 1; grid-row: 1; }
+      #list header { grid-column: 1; grid-row: 1; gap: 4px; padding-left: 14px; padding-right: 14px; }
       header .count .long { display: none; }
       header .count .short { display: inline; }
+      /* Five icons share the 360px header: the count keeps "N need" (the totals are in the chips and the list). */
+      #list header .count .run, #list header .count .sep, #list header .count .tot { display: none; }
       #nav { grid-column: 1; grid-row: 3; display: flex; flex-direction: column; padding: 6px 8px; border-bottom: 1px solid var(--border); }
       #nav:empty { display: none; }
       #host-filter { grid-column: 1; grid-row: 4; margin: 10px 0 0; padding: 0 12px 2px; }
