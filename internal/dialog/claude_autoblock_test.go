@@ -52,3 +52,14 @@ func TestClaudeAutoBlockWarning(t *testing.T) {
 		t.Errorf("keys %v %v", keys, err)
 	}
 }
+
+// Non-breaking spaces in place of the blanks around the marker and numbers
+// must not hide the dialog. Not seen in a capture; a hardening.
+func TestClaudePermissionNBSP(t *testing.T) {
+	screen := readFixture(t, "claude_autoblock.txt")
+	screen = strings.Replace(screen, "❯ 1. Yes", "❯\u00a01.\u00a0Yes", 1)
+	screen = strings.Replace(screen, "  2. No", "\u00a0\u00a02.\u00a0No", 1)
+	if d := Detect(screen, "claude"); d == nil || d.Kind != KindClaudePermission || len(d.Options) != 2 {
+		t.Errorf("%+v", d)
+	}
+}
