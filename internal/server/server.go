@@ -375,6 +375,7 @@ func (s *Server) routes() {
 	// calls (the user's identity), never an agent's.
 	s.mux.HandleFunc("GET /api/agents/{target}/context", s.auth(s.handleContext))
 	s.mux.HandleFunc("POST /api/agents/{target}/reset", s.auth(s.handleResetAgent))
+	s.mux.HandleFunc("POST /api/agents/{target}/noticeseen", s.auth(s.handleNoticeSeen))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
 	s.mux.HandleFunc("GET /api/agents/{target}/activity", s.auth(s.handleActivity))

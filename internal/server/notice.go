@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
+	"net/http"
 	"os"
+	"regexp"
 	"sync"
 	"time"
 
@@ -86,9 +89,8 @@ func noticeID(text string) string {
 // noticeTag is what promptNotice appends to a notice.
 func noticeTag(id string) string { return " [notice " + id + "]" }
 
-// noticeTranscript is the target's session file, "" when it is on another
-// host or cannot be resolved (then no arrival check is possible and a
-// failed send is retried as before).
+// noticeTranscript is the target's session file on this host, "" when the
+// agent is on another host or its session cannot be resolved.
 func (s *Server) noticeTranscript(a herdr.AgentInfo) string {
 	if a.Host != "" && a.Host != s.fleet.LocalName() {
 		return ""
@@ -98,6 +100,62 @@ func (s *Server) noticeTranscript(a herdr.AgentInfo) string {
 		return ""
 	}
 	return p
+}
+
+// noticeProbe is the answer of a transcript look-up: whether tag follows
+// offset, and where the transcript ends now. ok is false when the
+// transcript cannot be looked at (no session, a peer that did not answer).
+type noticeProbe struct {
+	Seen bool  `json:"seen"`
+	Size int64 `json:"size"`
+	OK   bool  `json:"ok"`
+}
+
+// probeNotice looks at the agent's transcript, here or on its peer. off < 0
+// asks only for the size.
+func (s *Server) probeNotice(ctx context.Context, a herdr.AgentInfo, id string, off int64) noticeProbe {
+	if s.isLocalAgent(a) {
+		return probeFile(s.noticeTranscript(a), id, off)
+	}
+	body, _ := json.Marshal(noticeSeenBody{ID: id, Offset: off})
+	status, data, err := s.fleet.CallAgent(ctx, a.Host, a.PaneID, "noticeseen", body)
+	var p noticeProbe
+	if err != nil || status != http.StatusOK || json.Unmarshal(data, &p) != nil {
+		return noticeProbe{}
+	}
+	return p
+}
+
+func probeFile(path, id string, off int64) noticeProbe {
+	if path == "" {
+		return noticeProbe{}
+	}
+	return noticeProbe{OK: true, Size: fileSize(path), Seen: off >= 0 && noticeSeen(path, off, noticeTag(id))}
+}
+
+// noticeSeenBody is the request of a peer's noticeseen route.
+type noticeSeenBody struct {
+	ID     string `json:"id"`
+	Offset int64  `json:"offset"`
+}
+
+var noticeIDRe = regexp.MustCompile(`^[0-9a-f]{6}$`)
+
+// handleNoticeSeen is the hub asking this host whether a notice's id is in
+// the transcript of one local agent since an offset. Read-only; the answer
+// is a boolean and a size, never transcript text.
+func (s *Server) handleNoticeSeen(w http.ResponseWriter, r *http.Request) {
+	var b noticeSeenBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&b); err != nil || !noticeIDRe.MatchString(b.ID) {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	a := s.resolveAgent(r.PathValue("target"))
+	if a == nil {
+		writeJSON(w, noticeProbe{})
+		return
+	}
+	writeJSON(w, probeFile(s.noticeTranscript(*a), b.ID, b.Offset))
 }
 
 func fileSize(path string) int64 {
@@ -139,24 +197,29 @@ func noticeSeen(path string, off int64, tag string) bool {
 // text reached the agent even though herdr's answer was an error, so the
 // caller does not send it again. A notice that did not arrive returns the
 // error, and a later attempt first checks whether this one arrived late.
+// The look-up is made where the agent runs (a peer answers from its own
+// transcript); where none is possible the error stands and the send is
+// retried as before.
 func (s *Server) promptNotice(ctx context.Context, a herdr.AgentInfo, text string) error {
 	id := noticeID(text)
 	tag := noticeTag(id)
-	path := s.noticeTranscript(a)
-	start := fileSize(path)
-	if prev, ok := s.notices.get(id); ok && prev.path == path && path != "" {
-		if noticeSeen(path, prev.off, tag) {
+	where := a.ID
+	start := int64(-1)
+	if prev, ok := s.notices.get(id); ok && prev.path == where {
+		if p := s.probeNotice(ctx, a, id, prev.off); p.Seen {
 			s.notices.forget(id) // the earlier attempt arrived after all
 			return nil
 		}
 		start = prev.off
+	} else if p := s.probeNotice(ctx, a, id, -1); p.OK {
+		start = p.Size
 	}
 	err := s.promptAgent(ctx, a, text+tag)
 	if err == nil {
 		s.notices.forget(id)
 		return nil
 	}
-	if isInputBusy(err) || path == "" {
+	if isInputBusy(err) || start < 0 {
 		return err // not sent / cannot check
 	}
 	wait := s.noticeArriveWait
@@ -165,7 +228,7 @@ func (s *Server) promptNotice(ctx context.Context, a herdr.AgentInfo, text strin
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		if noticeSeen(path, start, tag) {
+		if s.probeNotice(ctx, a, id, start).Seen {
 			s.notices.forget(id)
 			return nil
 		}
@@ -174,6 +237,6 @@ func (s *Server) promptNotice(ctx context.Context, a herdr.AgentInfo, text strin
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	s.notices.put(id, noticeSent{path: path, off: start, at: time.Now()})
+	s.notices.put(id, noticeSent{path: where, off: start, at: time.Now()})
 	return err
 }

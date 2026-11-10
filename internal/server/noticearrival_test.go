@@ -2,9 +2,16 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/jhjaggars/comebye/internal/fleet"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,3 +104,107 @@ func TestCallbackRetriedWhenSendErrorsWithoutArrival(t *testing.T) {
 }
 
 var _ = context.Background
+
+// A target on a peer: the hub asks the peer's noticeseen route, which
+// answers from the peer's own transcript.
+type noticePeer struct {
+	mu         sync.Mutex
+	transcript string
+	arrive     bool // the first prompt's text lands, then the call errors
+	prompts    int
+	probes     int
+}
+
+func (p *noticePeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	switch r.URL.Path {
+	case "/api/events":
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: agents\ndata: {\"type\":\"agents\",\"agents\":[]}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	case "/api/agents/w2:p1/prompt":
+		p.prompts++
+		var b struct{ Text string }
+		json.Unmarshal(body, &b)
+		if p.arrive && p.prompts == 1 {
+			p.transcript += b.Text + "\n"
+			http.Error(w, `{"code":"internal_error"}`, http.StatusInternalServerError)
+			return
+		}
+		if p.prompts == 1 {
+			http.Error(w, `{"code":"internal_error"}`, http.StatusInternalServerError)
+			return
+		}
+		p.transcript += b.Text + "\n"
+		fmt.Fprint(w, `{"ok":true}`)
+	case "/api/agents/w2:p1/noticeseen":
+		p.probes++
+		var b noticeSeenBody
+		json.Unmarshal(body, &b)
+		if b.Offset < 0 {
+			fmt.Fprintf(w, `{"ok":true,"size":%d}`, len(p.transcript))
+			return
+		}
+		fmt.Fprintf(w, `{"ok":true,"seen":%v,"size":%d}`, strings.Contains(p.transcript[b.Offset:], "[notice "+b.ID+"]"), len(p.transcript))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func noticeHub(t *testing.T, p *noticePeer) *Server {
+	t.Helper()
+	pu, _ := url.Parse(httptestServer(t, p))
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
+	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s.noticeArriveWait = 20 * time.Millisecond
+	return s
+}
+
+func TestNoticeToPeerArrivedAfterErrorIsNotRetried(t *testing.T) {
+	p := &noticePeer{arrive: true, transcript: "earlier\n"}
+	s := noticeHub(t, p)
+	a := herdr.AgentInfo{ID: "kube/w2:p1", Host: "kube", PaneID: "w2:p1", Name: "coordinator", Agent: "claude", Status: herdr.StatusIdle}
+	if err := s.promptNotice(context.Background(), a, "Comebye (hub notice): a worker finished."); err != nil {
+		t.Fatalf("arrived but reported failed: %v", err)
+	}
+	if p.prompts != 1 {
+		t.Fatalf("prompts = %d, want 1", p.prompts)
+	}
+}
+
+func TestNoticeToPeerNotArrivedIsRetried(t *testing.T) {
+	p := &noticePeer{transcript: "earlier\n"}
+	s := noticeHub(t, p)
+	a := herdr.AgentInfo{ID: "kube/w2:p1", Host: "kube", PaneID: "w2:p1", Name: "coordinator", Agent: "claude", Status: herdr.StatusIdle}
+	text := "Comebye (hub notice): a worker finished."
+	if err := s.promptNotice(context.Background(), a, text); err == nil {
+		t.Fatal("a notice that did not arrive reported success")
+	}
+	if err := s.promptNotice(context.Background(), a, text); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if p.prompts != 2 || strings.Count(p.transcript, "[notice ") != 1 {
+		t.Fatalf("prompts = %d, transcript:\n%s", p.prompts, p.transcript)
+	}
+}
+
+// The peer's own route answers from a local transcript, bounded to one id.
+func TestNoticeSeenRoute(t *testing.T) {
+	s, _, _ := coordServer(t)
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	os.WriteFile(path, []byte("aaaa [notice 0a1b2c] bbbb\n"), 0o600)
+	probe := probeFile(path, "0a1b2c", 0)
+	if !probe.OK || !probe.Seen || probe.Size == 0 {
+		t.Fatalf("probe = %+v", probe)
+	}
+	if p := probeFile(path, "0a1b2c", probe.Size); p.Seen {
+		t.Fatal("seen after the offset")
+	}
+	if w := do(s, "POST", "/api/agents/w1:p1/noticeseen", userHdr, `{"id":"../etc","offset":0}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad id = %d", w.Code)
+	}
+}
