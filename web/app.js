@@ -2039,7 +2039,8 @@ function relCardHtml(d) {
     if (ro.complete) h += `<div class="rl-line"><span class="rel-chip rel-ok">all upgraded</span> <span class="rel-note">${ro.total} of ${ro.total} hosts run ${esc(rl.version)}</span></div>`;
     else h += `<div class="rl-line rel-note">${esc(relCount(ro))} on ${esc(rl.version)}${ro.offline ? ". The release is not done until the offline host is back and upgraded" : ". Buttons stay until each host matches"}.</div>`;
   }
-  if (t.state === "dropped" || t.state === "done") h += `<div class="rel-note">Its to-do item is ${t.state === "dropped" ? "dropped" : "closed"}; the release stays here until every host runs it.</div>`;
+  if (allDone && t.state === "done") h += `<div class="rel-note">The hub closed its to-do item when the last host upgraded.</div>`;
+  else if (t.state === "dropped" || t.state === "done") h += `<div class="rel-note">Its to-do item is ${t.state === "dropped" ? "dropped" : "closed"}; the release stays here until every host runs it.</div>`;
 
   // Who did what.
   const au = d.audit || [];
