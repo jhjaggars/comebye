@@ -89,7 +89,12 @@ type Dialog struct {
 	Question string `json:"question,omitempty"`
 	// Detail is context shown above the question (the command a permission
 	// prompt is about), already dedented.
-	Detail  string   `json:"detail,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Note is a live warning shown with the dialog (Claude's "will
+	// automatically block this request in 1:17" and the classifier's
+	// reason). It changes while the dialog stands, so it is not part of
+	// the fingerprint.
+	Note    string   `json:"note,omitempty"`
 	Options []Option `json:"options"`
 	// Insert is set when the highlighted row is a free-text field in vim
 	// INSERT mode: it swallows arrows and Enter until one Esc leaves it.

@@ -312,7 +312,7 @@ func isRule(l string) bool {
 	n := 0
 	for _, ch := range t {
 		switch ch {
-		case '─', '━', '═', '╭', '╮', '╰', '╯', '┌', '┐', '└', '┘', '-', '▔', '▁':
+		case '─', '━', '═', '╌', '┄', '┈', '╭', '╮', '╰', '╯', '┌', '┐', '└', '┘', '-', '▔', '▁':
 			n++
 		}
 	}
@@ -604,6 +604,14 @@ func detectNumbered(lines []string, i, c int, agentKind string) *Dialog {
 				}
 			}
 			if qi >= 0 {
+				// Auto mode adds a classifier reason and a live "will
+				// automatically block this request in 1:17" warning between
+				// the command and the question. They are a note, not part
+				// of the command, and the countdown must not move the
+				// fingerprint.
+				var note []string
+				qi, note = splitAutoBlockNote(lines, qi)
+				d.Note = strings.Join(note, "\n")
 				d.Detail = detailAbove(lines, qi, nil)
 			}
 		}
@@ -614,6 +622,55 @@ func detectNumbered(lines []string, i, c int, agentKind string) *Dialog {
 		}
 	}
 	return d
+}
+
+// splitAutoBlockNote finds Claude Code's auto-mode warning above the
+// question on line qi: a "⚠ Claude Code will automatically block this
+// request in …" line, preceded (below the command box's rule) by the
+// classifier's reason. It returns the line index the command's context ends
+// at (where detail collection should start from) and the note lines. With
+// no warning it returns qi and nil.
+func splitAutoBlockNote(lines []string, qi int) (int, []string) {
+	wi := -1
+	for j := qi - 1; j >= 0 && j >= qi-8; j-- {
+		t := strings.TrimSpace(lines[j])
+		if isRule(lines[j]) {
+			break
+		}
+		if strings.Contains(t, "automatically block") && strings.HasPrefix(t, "⚠") {
+			wi = j
+			break
+		}
+	}
+	if wi < 0 {
+		return qi, nil
+	}
+	// Lines between the warning and the question (a wrapped warning) belong
+	// to it. Lines above it up to a rule are the classifier's reason; with
+	// no rule above we cannot tell them from the command, so leave them.
+	start := wi
+	for j := wi - 1; j >= 0 && j >= wi-4; j-- {
+		if strings.TrimSpace(lines[j]) == "" {
+			break
+		}
+		if isRule(lines[j]) {
+			start = j + 1
+			break
+		}
+	}
+	var note []string
+	for _, l := range lines[start:qi] {
+		if t := strings.TrimSpace(l); t != "" {
+			note = append(note, t)
+		}
+	}
+	// The command box ends in a rule just above the note; the command is
+	// above that.
+	end := start
+	if end > 0 && isRule(lines[end-1]) {
+		end--
+	}
+	return end, note
 }
 
 // detectPiSelect handles Pi's built-in selector: a "→ " list framed by rules

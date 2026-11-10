@@ -107,6 +107,14 @@ fport=$((port + 200))
   -state-dir "$tmp/state-fb" -host-name uitest >"$out/comebye-fb.log" 2>&1 &
 for _ in $(seq 50); do curl -sf "http://127.0.0.1:$fport/api/agents" >/dev/null && break; sleep 0.1; done
 node falseblocked.mjs "http://127.0.0.1:$fport" "$out" || rc=1
+# Claude's auto-mode prompt with the "will automatically block" countdown: its own fake herdr and hub.
+"$tmp/fake-herdr" -sock "$tmp/ab.sock" -dir "$tmp/ab" -autoblock >"$out/fake-herdr-ab.log" 2>&1 &
+for _ in $(seq 50); do [ -S "$tmp/ab.sock" ] && break; sleep 0.1; done
+abport=$((port + 250))
+"$tmp/comebye" -sock "$tmp/ab.sock" -addr "127.0.0.1:$abport" -insecure-no-auth -push=false \
+  -state-dir "$tmp/state-ab" -host-name uitest >"$out/comebye-ab.log" 2>&1 &
+for _ in $(seq 50); do curl -sf "http://127.0.0.1:$abport/api/agents" >/dev/null && break; sleep 0.1; done
+node autoblock.mjs "http://127.0.0.1:$abport" "$out" || rc=1
 # The Doc and Diff side panels: an agent in a real git worktree (a temp HOME, under a dot-directory), declaring its document
 # with the real CLI; its own fake herdr and hub so the shared fleet's agent count is untouched.
 pdir="$tmp/phome"; mkdir -p "$pdir"

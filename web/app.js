@@ -7037,6 +7037,9 @@ function renderAnswerCard(a) {
   const d = answer.dialog;
   const sig = JSON.stringify([answer.loaded, d && d.fingerprint, d && d.selected, d && d.insert, d && d.options && d.options.map((o) => (o.checked ? 1 : 0)).join(""),
     answer.queue.map((q) => q.action + q.index), answer.hold && answer.hold.index, answer.err, a.agent_status, a.state_labels, state.ask && state.ask.tool_call_id]);
+  // A live note (the auto-block countdown) ticks without re-rendering the card.
+  const noteEl = el.querySelector(".ans-note");
+  if (noteEl && d && d.note && noteEl.textContent !== d.note) noteEl.textContent = d.note;
   if (answer.shown && sig === answer.sig) return;
   answer.sig = sig;
   el.innerHTML = answerCardHTML(a, d);
@@ -7058,6 +7061,7 @@ function answerCardHTML(a, d) {
     if (d.header) html += `<span class="ans-chip">${esc(d.header)}</span>`;
     if (d.title) html += `<div class="ans-title">${esc(d.title)}</div>`;
     if (d.detail) html += `<pre class="ans-detail">${esc(d.detail)}</pre>`;
+    if (d.note) html += `<div class="ans-note" role="status">${esc(d.note)}</div>`;
     if (d.question) html += `<div class="ans-q">${esc(d.question)}</div>`;
     const h = dialogHints(d);
     if (h.set) html += `<div class="ans-hint">${esc(h.set)}</div>`;

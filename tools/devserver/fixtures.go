@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // workspaces is session.snapshot's workspace list: the fixture agents that
@@ -194,3 +195,39 @@ func (f *fake) addLongCommand() {
 			"  ⏵⏵ auto mode on (shift+tab to cycle)",
 		}})
 }
+
+// addAutoBlock adds a Claude agent on an auto-mode permission prompt: a
+// classifier reason and a live "will automatically block this request"
+// countdown sit between the command and the question. Same screen as
+// internal/dialog/testdata/claude_autoblock.txt.
+func (f *fake) addAutoBlock() {
+	f.agents = append(f.agents, &agent{Name: "auto-block", PaneID: "w11:p1", Workspace: "w11", TabID: "w11:t1", Agent: "claude", Display: "Claude",
+		Status: "blocked", Title: "clean up the live worktree", CWD: "/home/u/code/comebye", Ready: true,
+		repo: "comebye", checkout: "/home/u/code/comebye",
+		screen: strings.Split(autoBlockScreen, "\n")})
+}
+
+const autoBlockScreen = `    kill $(cat $T/cbpid) $(sed -n 1p $T/pids) 2>/dev/null; rm -rf $(cat $T/sd)
+    git worktree remove --force $T/home/.worktrees/comebye/hc && git branch -D h…
+
+
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Run shell command
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ S=/tmp/claude-1000/scratchpad; T=$S/live
+ │ kill $(cat $T/cbpid) $(sed -n 1p $T/pids) 2>/dev/null; rm -rf $(cat $T/sd)
+ │ git worktree remove --force $T/home/.worktrees/comebye/hc && git branch -D hubcheck-live -q; git worktree list | head -3
+ │ sed -i 's/"no commits missing from a remote"/"every commit is on a remote"/' internal/server/hubcheck.go
+ │ git add internal/server/hubcheck.go && git commit -q -m "hubcheck: say 'every commit is on a remote' when there is no upstream
+ │
+ │ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+ │ git fetch -q origin && git rebase origin/main 2>&1 | tail -2; git log --oneline origin/main..HEAD
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ Dangerous rm operation on statically-unresolvable target: command substitution output
+ ⚠ Claude Code will automatically block this request in 1:17, to avoid holding up an unattended session
+
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No`
