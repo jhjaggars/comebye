@@ -5124,7 +5124,7 @@ function statusHTML(desktop) {
     return `<div class="st-row"><span class="st-n">${esc(multiHost() ? `${host} · ${d.repo}` : d.repo)}</span><span class="st-m warn">${esc(d.reason)}${d.ref ? ` at <code>${esc(d.ref)}</code>` : ""}</span><span class="st-r">${Number.isNaN(since) ? "" : "since " + esc(fmtAgo(since)) + " ago"}</span>` +
       `<div class="st-hint">${esc(d.hint)}</div><div class="st-m">${esc(d.path)} · found by ${esc(d.source)}${n ? ` · ${n} ${n === 1 ? "agent works" : "agents work"} in it` : ""}</div></div>`;
   }).join("")}</section>` : "";
-  return `<div class="st">${boardHtml()}<p class="st-sum">${esc(sum)}</p>${repair}${briefCardHtml()}${ps.map(card).join("")}${
+  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${boardHtml()}${briefCardHtml()}${ps.map(card).join("")}${
     desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
 }
 
