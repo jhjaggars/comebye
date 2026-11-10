@@ -279,7 +279,8 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
    keeps it open ("3 of 4, 1 offline") until it is back and upgraded. Tell the
    user to open the Releases tab. The hub refuses a manual `todo done` while a
    host is behind or offline (`release_pending`, naming the hosts); drop the
-   item only to abandon the release.
+   item only to abandon the release (the user's Dismiss release button on
+   the card does that properly; a dropped tagged release still shows in the tab).
 6. Then mark the session ready to remove (below), unless the user wants
    follow-ups from it or it is watching a PR.
 
