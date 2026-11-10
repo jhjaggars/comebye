@@ -67,6 +67,9 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # llm_rpm=30
 
 
+# Which instance families `worker catalog` fetches prices for (aws); default: a short list.
+# allowed_families=t3,t3a,m5,m6i,c5,c6i
+
 # OpenShell sandboxes (provider=openshell, instead of the gcp/aws settings above; project, zone and
 # ssh_source_cidr are not needed). The sandbox is a worker on the OpenShell gateway's Kubernetes driver.
 # The gateway login is the openshell CLI's own (`openshell gateway login NAME`); nothing secret is here.

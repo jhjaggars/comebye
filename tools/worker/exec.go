@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Runner runs external programs (gcloud, ssh, ssh-keygen, stty). Secrets go
@@ -108,4 +109,22 @@ type env struct {
 	Getenv   func(string) string
 	// ReadSecret reads one hidden line from the terminal (tests replace it).
 	ReadSecret func(prompt string) (string, error)
+
+	// NoPrompt turns every terminal prompt (the destroy confirmation, the
+	// hidden auth-key prompt, an interactive login) into a needs_input error.
+	NoPrompt bool
+	// Events, when set, receives one JSON line per stage transition; Out is
+	// then the human text's stream, which main points at stderr.
+	Events  *eventSink
+	stages  *stageTracker
+	secrets []string
+	// Now is the clock (tests replace it).
+	Now func() time.Time
+}
+
+func (e *env) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
 }

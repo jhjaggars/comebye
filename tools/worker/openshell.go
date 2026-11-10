@@ -362,7 +362,7 @@ func (e *env) createSandbox(ctx context.Context, name string, o createOpts) erro
 	pv.Image = sandboxImage(e.Cfg, version)
 	w("worker %s (openshell): comebye %s, image %s\n", name, version, pv.Image)
 
-	w("1/4 sandbox\n")
+	e.begin(1, "1/4 sandbox\n")
 	inst, err := pv.Describe(ctx, name)
 	if err != nil {
 		return err
@@ -386,12 +386,12 @@ func (e *env) createSandbox(ctx context.Context, name string, o createOpts) erro
 		return err
 	}
 
-	w("2/4 tailnet\n")
+	e.begin(2, "2/4 tailnet\n")
 	if err := e.enrollSandbox(ctx, name); err != nil {
 		return err
 	}
 
-	w("3/4 comebye settings\n")
+	e.begin(3, "3/4 comebye settings\n")
 	home, err := e.sh(ctx, name, `printf %s "$HOME"`, nil)
 	if err != nil {
 		return err
@@ -408,7 +408,7 @@ func (e *env) createSandbox(ctx context.Context, name string, o createOpts) erro
 		return fmt.Errorf("writing the settings file: %w", err)
 	}
 
-	w("4/4 hub\n")
+	e.begin(4, "4/4 hub\n")
 	return e.awaitJoin(ctx, name)
 }
 
@@ -430,6 +430,7 @@ func (e *env) enrollSandbox(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	e.addSecret(key)
 	if usedFile != "" {
 		defer os.Remove(usedFile)
 	}

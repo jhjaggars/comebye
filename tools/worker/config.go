@@ -38,6 +38,17 @@ type Config struct {
 	VPCRange   string // aws: CIDR of the dedicated VPC; SubnetRange lies inside it
 
 	machineSet, diskSet bool
+	baseAZ              string // aws_az as the config file has it; a per-request zone differs from it
+
+	// Per-request settings (a --spec): zero means not set. They are recorded
+	// as instance tags (aws) so the cloud, not only the hub, knows what a host
+	// may cost.
+	BudgetCapUSD      float64
+	DestroyAfterHours int
+
+	// AllowedFamilies narrows what `catalog` fetches prices for (aws). Empty
+	// means defaultFamilies.
+	AllowedFamilies []string
 
 	Project     string // GCP project id
 	Zone        string
@@ -186,6 +197,37 @@ func parseKV(path string) (map[string]string, error) {
 
 // LoadConfig reads path over the defaults and validates the result.
 func LoadConfig(path string) (*Config, error) {
+	c, err := loadConfigRaw(path)
+	if err != nil {
+		return nil, err
+	}
+	return c, c.Validate()
+}
+
+// finish fills the defaults that depend on the provider. It runs again after
+// a spec has changed the kind.
+func (c *Config) finish() {
+	switch c.Provider {
+	case "aws":
+		if !c.machineSet {
+			c.MachineType = "t3.xlarge"
+		}
+		if !c.diskSet {
+			c.DiskType = "gp3"
+		}
+	default:
+		if !c.machineSet {
+			c.MachineType = "e2-standard-4"
+		}
+		if !c.diskSet {
+			c.DiskType = "pd-balanced"
+		}
+	}
+}
+
+// loadConfigRaw reads the file over the defaults without validating, so that
+// a spec can be laid over it first.
+func loadConfigRaw(path string) (*Config, error) {
 	c := defaults()
 	c.path = path
 	kv, err := parseKV(path)
@@ -198,15 +240,9 @@ func LoadConfig(path string) (*Config, error) {
 	if err := c.apply(kv); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if c.Provider == "aws" {
-		if !c.machineSet {
-			c.MachineType = "t3.xlarge"
-		}
-		if !c.diskSet {
-			c.DiskType = "gp3"
-		}
-	}
-	return &c, c.Validate()
+	c.finish()
+	c.baseAZ = c.AWSAZ
+	return &c, nil
 }
 
 func expand(p string) string {
@@ -341,6 +377,8 @@ func (c *Config) apply(kv map[string]string) error {
 			c.LLMRPM, err = strconv.Atoi(v)
 		case "state_dir":
 			c.StateDir = expand(v)
+		case "allowed_families":
+			c.AllowedFamilies = splitList(v)
 		default:
 			return fmt.Errorf("unknown setting %q", k)
 		}
@@ -449,6 +487,8 @@ func (c *Config) Validate() error {
 		chk(tagRe.MatchString(c.Tag), "bad tag %q (want tag:name)", c.Tag),
 		chk(c.TSAllowLogin == "" || loginRe.MatchString(c.TSAllowLogin), "bad ts_allow_login %q", c.TSAllowLogin),
 		chk(c.HerdrSHA256 == "" || regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(c.HerdrSHA256), "herdr_install_sha256 must be 64 hex digits"),
+		chk(c.BudgetCapUSD >= 0 && c.BudgetCapUSD <= 10000, "budget_cap_usd must be 0..10000"),
+		chk(c.DestroyAfterHours >= 0 && c.DestroyAfterHours <= 8760, "destroy_after_hours must be 0..8760"),
 		chk(c.HubVersion == "" || versionRe.MatchString(c.HubVersion), "hub_version %q is not a release tag like v0.3.0", c.HubVersion),
 	} {
 		if e != nil {

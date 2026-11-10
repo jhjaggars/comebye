@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -65,9 +67,48 @@ type awsProv struct {
 
 func (p *awsProv) Kind() string { return "aws" }
 
-func (p *awsProv) sgName() string     { return p.cfg.Network + "-ssh" }
-func (p *awsProv) subnetName() string { return p.cfg.Network + "-subnet" }
-func (p *awsProv) rtName() string     { return p.cfg.Network + "-rt" }
+func (p *awsProv) sgName() string { return p.cfg.Network + "-ssh" }
+
+// subnetName is the subnet for the zone being built in. The zone the config
+// names keeps the name it always had; any other zone (a per-request zone) gets
+// its own subnet, made on demand, named for the zone.
+func (p *awsProv) subnetName() string {
+	if p.cfg.baseAZ == "" || p.cfg.AWSAZ == p.cfg.baseAZ {
+		return p.cfg.Network + "-subnet"
+	}
+	return p.cfg.Network + "-subnet-" + p.cfg.AWSAZ
+}
+
+// subnetRange is that subnet's CIDR: subnet_range for the config's zone, else
+// the /24 at a fixed offset by zone letter inside vpc_range (never subnet_range
+// itself), so the same zone always gets the same range.
+func (p *awsProv) subnetRange() (string, error) {
+	c := p.cfg
+	if c.baseAZ == "" || c.AWSAZ == c.baseAZ {
+		return c.SubnetRange, nil
+	}
+	_, vpc, err := net.ParseCIDR(c.VPCRange)
+	if err != nil {
+		return "", err
+	}
+	ones, bits := vpc.Mask.Size()
+	letter := int(c.AWSAZ[len(c.AWSAZ)-1] - 'a')
+	if bits != 32 || ones > 17 || letter < 0 || letter > 25 {
+		return "", fmt.Errorf("vpc_range %s is too small to hold a subnet for zone %s: use a /16", c.VPCRange, c.AWSAZ)
+	}
+	base := binary.BigEndian.Uint32(vpc.IP.To4())
+	cidr := func(block uint32) string {
+		var ip [4]byte
+		binary.BigEndian.PutUint32(ip[:], base+block<<8)
+		return fmt.Sprintf("%s/24", net.IP(ip[:]))
+	}
+	got := cidr(uint32(16 + letter))
+	if got == c.SubnetRange {
+		got = cidr(uint32(48 + letter))
+	}
+	return got, nil
+}
+func (p *awsProv) rtName() string { return p.cfg.Network + "-rt" }
 
 // ---- lookups (each returns "" when the resource is absent) ----
 
@@ -169,7 +210,11 @@ func (p *awsProv) EnsureNetwork(ctx context.Context, w logf) error {
 		return err
 	}
 	if sn == "" {
-		if sn, err = create("subnet "+p.subnetName(), a.text("ec2", "create-subnet", "--vpc-id", vpc, "--cidr-block", c.SubnetRange,
+		rng, err := p.subnetRange()
+		if err != nil {
+			return err
+		}
+		if sn, err = create("subnet "+p.subnetName(), a.text("ec2", "create-subnet", "--vpc-id", vpc, "--cidr-block", rng,
 			"--availability-zone", c.AWSAZ, "--tag-specifications", a.tagSpec("subnet", p.subnetName()), "--query", "Subnet.SubnetId")); err != nil {
 			return err
 		}
@@ -678,10 +723,14 @@ func (p *awsProv) CleanupNetwork(ctx context.Context, w logf) error {
 			return err
 		}
 	}
-	if sn, err := p.inVPC(ctx, "describe-subnets", "Subnets[0].SubnetId", p.subnetName(), vpc); err != nil {
+	// Every subnet this tool made in the VPC, one per zone ever built in.
+	sns, err := a.runText(ctx, a.text("ec2", "describe-subnets", "--filters", "Name=tag:"+labelKey+",Values="+labelVal,
+		"Name=vpc-id,Values="+vpc, "--query", "Subnets[].SubnetId"))
+	if err != nil {
 		return err
-	} else if sn != "" {
-		if err := del("subnet "+p.subnetName(), a.text("ec2", "delete-subnet", "--subnet-id", sn)); err != nil {
+	}
+	for _, sn := range strings.Fields(sns) {
+		if err := del("subnet "+sn, a.text("ec2", "delete-subnet", "--subnet-id", sn)); err != nil {
 			return err
 		}
 	}
@@ -702,12 +751,16 @@ func (p *awsProv) CleanupNetwork(ctx context.Context, w logf) error {
 
 func (p *awsProv) Plan(name, pub string, w logf) {
 	a, c := p.a, p.cfg
+	planRange, err := p.subnetRange()
+	if err != nil {
+		planRange = "<" + err.Error() + ">"
+	}
 	w("   profile %s, region %s, zone %s; credentials are your AWS CLI profile's, never read by this tool\n", orDefault(c.AWSProfile), c.AWSRegion, c.AWSAZ)
 	w("   network, each piece created only if missing and tagged %s=%s:\n", labelKey, labelVal)
 	for _, args := range [][]string{
 		a.text("ec2", "create-vpc", "--cidr-block", c.VPCRange, "--tag-specifications", a.tagSpec("vpc", c.Network), "--query", "Vpc.VpcId"),
 		a.text("ec2", "create-internet-gateway", "--tag-specifications", a.tagSpec("internet-gateway", c.Network)),
-		a.text("ec2", "create-subnet", "--vpc-id", "<vpc>", "--cidr-block", c.SubnetRange, "--availability-zone", c.AWSAZ),
+		a.text("ec2", "create-subnet", "--vpc-id", "<vpc>", "--cidr-block", planRange, "--availability-zone", c.AWSAZ),
 		a.text("ec2", "create-route-table", "--vpc-id", "<vpc>"),
 		a.text("ec2", "create-route", "--route-table-id", "<rt>", "--destination-cidr-block", "0.0.0.0/0", "--gateway-id", "<igw>"),
 		a.text("ec2", "create-security-group", "--group-name", p.sgName(), "--vpc-id", "<vpc>"),

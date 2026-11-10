@@ -20,12 +20,49 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
 
 | Command | What it does |
 |---|---|
-| `create NAME [--dry-run] [--comebye-version vX.Y.Z]` | Builds the VM, enrols it, bootstraps it, waits for the hub. Safe to re-run: it resumes where it stopped and never mints a second key for a node that is already enrolled. `--dry-run` prints the plan and touches nothing. |
+| `create NAME [--dry-run] [--comebye-version vX.Y.Z] [--spec FILE\|-] [--events]` | Builds the VM, enrols it, bootstraps it, waits for the hub. Safe to re-run: it resumes where it stopped and never mints a second key for a node that is already enrolled. `--dry-run` prints the plan and touches nothing. `--spec` and `--events` are for a caller that is a program: see [Driving the tool from a program](#driving-the-tool-from-a-program). |
 | `status [NAME]` | One worker: GCE state, tailnet address, comebye version and units, the tailnet device, the hub's view (with a version-mismatch warning). Without a name: every labelled instance and disk and every `tag:worker` device. |
 | `stop NAME` / `start NAME` | Stop or start the VM. The tailnet node and the hub's peer entry stay (the hub shows it unreachable). `start` re-reads the host key from GCE (the external IP changes) and waits for comebye. |
 | `archive NAME` / `archive --all` | Copies a running worker's sessions to the transcript archive, and verifies them. Safe to repeat, and leaves the agents running. `--all` covers every running worker and skips stopped ones. See [Sessions and the archive](#sessions-and-the-archive). |
-| `destroy NAME [--delete-data-disk] [--no-archive]` | Asks you to type the name. Saves the worker's sessions to the archive, and **refuses** if it cannot. Then signs the agents out, `tailscale logout`, deletes the tailnet device (only one with the exact hostname **and** the tag), removes the hub's peer entry, deletes the VM. The data disk is kept unless you pass the flag. `--no-archive` skips the save, and the sessions are lost. |
+| `destroy NAME [--delete-data-disk] [--no-archive] [--yes]` | Asks you to type the name (`--yes`: the caller has already confirmed, so it does not ask). Saves the worker's sessions to the archive, and **refuses** if it cannot. Then signs the agents out, `tailscale logout`, deletes the tailnet device (only one with the exact hostname **and** the tag), removes the hub's peer entry, deletes the VM. The data disk is kept unless you pass the flag. `--no-archive` skips the save, and the sessions are lost. |
 | `login NAME claude\|codex` | Runs the agent's own sign-in on the VM over ssh. You open the printed URL in your browser; the credential is created on the VM and nothing is copied from your machine. |
+
+## Driving the tool from a program
+
+Everything below is opt-in; with none of these flags the tool behaves as before.
+
+- **`--events`** (create, destroy): stdout carries one JSON line per stage
+  transition and nothing else; the text a person reads moves to stderr.
+  `{"v":1,"seq":12,"stage":"instance","step":"4/9","state":"running","msg":"..."}`.
+  `state` is `running`, `ok`, `failed`, or `planned` (a `--dry-run` lists every
+  stage that would run). The stages of a VM are `network`, `ssh_key`,
+  `data_disk`, `instance`, `ssh`, `bootstrap`, `tailnet`, `agents`, `hub`; a
+  sandbox has `sandbox`, `tailnet`, `settings`, `hub`. A `failed` event carries a
+  `class` the caller can act on: `spot_capacity` (with the `zone`),
+  `creds_expired`, `quota`, `bootstrap_failed`, `needs_input` or `other`. Only
+  those fields exist, every message is one short line, and keys, tokens and
+  bearer strings are removed before a line is written. A problem found before
+  any stage (a bad spec or config) is a `failed` event for the stage `config`.
+- **`--spec FILE|-`** (create): one JSON request laid over the config. Fields
+  (all optional): `kind` (`gcp`, `aws`, `openshell`), `name`, `type`, `spot`,
+  `zone`, `boot_disk_gb`, `data_disk_gb`, `idle_minutes`, `max_run` (`"24h"`, or
+  `""` for none), `agents`, `llm_key` (`false` leaves the gateway key out; `true`
+  needs `llm_gateway_url` in the config), `budget_cap_usd`,
+  `destroy_after_hours`. **Unknown fields are refused**, and the result passes the
+  same checks as the config file. What is per node stays in the config: profile,
+  project, `hub_url`, `ts_allow_login`, `ssh_source_cidr`. The name may come from
+  the spec (`create --spec -`); if both are given they must match. A sandbox has no
+  machine, zone or disks, so those fields are refused for `kind: openshell`.
+- **A zone per request (AWS).** `zone` need not be `aws_az`. The zone the config
+  names keeps its subnet `comebye-worker-subnet` (`subnet_range`); any other zone
+  gets its own subnet, made on first use, named `comebye-worker-subnet-<zone>` in
+  a /24 inside `vpc_range` (needs a /17 or larger; the default /16 is fine). A data
+  disk is bound to its zone, so a host built in one zone resumes there. `destroy`
+  removes every subnet the tool made once nothing uses the network.
+- **`--no-prompt`** (global, or after the command): nothing reads a terminal.
+  The destroy confirmation, the hidden Tailscale-key prompt and the interactive
+  `login` become a `needs_input` error. `destroy --yes` is the way for a caller
+  that did its own confirmation; with neither flag the prompts work as before.
 
 ## Before the first run
 

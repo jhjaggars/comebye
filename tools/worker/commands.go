@@ -80,15 +80,26 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
+	names := vmStages
 	if e.Cfg.Provider == "openshell" {
-		if e.DryRun {
-			return e.createSandboxPlan(name, o)
-		}
-		return e.createSandbox(ctx, name, o)
+		names = sandboxStages
 	}
 	if e.DryRun {
+		e.planEvents(names)
+		if e.Cfg.Provider == "openshell" {
+			return e.createSandboxPlan(name, o)
+		}
 		return e.createPlan(name, o)
 	}
+	return e.track(names, func() error {
+		if e.Cfg.Provider == "openshell" {
+			return e.createSandbox(ctx, name, o)
+		}
+		return e.createVM(ctx, name, o)
+	})
+}
+
+func (e *env) createVM(ctx context.Context, name string, o createOpts) error {
 	pv := e.prov()
 	w := e.printf
 
@@ -102,23 +113,23 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 		return err
 	}
 
-	w("1/8 network\n")
+	e.begin(1, "1/8 network\n")
 	if err := pv.EnsureNetwork(ctx, w); err != nil {
 		return err
 	}
 
-	w("2/8 ssh key\n")
+	e.begin(2, "2/8 ssh key\n")
 	pub, err := ensureKey(ctx, e)
 	if err != nil {
 		return err
 	}
 
-	w("3/8 data disk\n")
+	e.begin(3, "3/8 data disk\n")
 	if err := pv.EnsureDataDisk(ctx, name, w); err != nil {
 		return err
 	}
 
-	w("4/8 instance\n")
+	e.begin(4, "4/8 instance\n")
 	inst, err := pv.Describe(ctx, name)
 	if err != nil {
 		return err
@@ -142,12 +153,12 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 		return err
 	}
 
-	w("5/8 verified ssh\n")
+	e.begin(5, "5/8 verified ssh\n")
 	if err := e.connect(ctx, name); err != nil {
 		return err
 	}
 
-	w("6/8 packages, tailscale, idle timer\n")
+	e.begin(6, "6/8 packages, tailscale, idle timer\n")
 	rs, err := rootScript(e.Cfg)
 	if err != nil {
 		return err
@@ -159,12 +170,12 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 		return fmt.Errorf("installing the idle check: %w", err)
 	}
 
-	w("7/8 tailnet\n")
+	e.begin(7, "7/8 tailnet\n")
 	if err := e.enroll(ctx, name); err != nil {
 		return err
 	}
 
-	w("8/8 herdr, agent CLIs, comebye %s\n", version)
+	e.begin(8, "8/8 herdr, agent CLIs, comebye %s\n", version)
 	us, err := userScript(e.Cfg, name, version)
 	if err != nil {
 		return err
@@ -176,6 +187,7 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 		return err
 	}
 
+	e.begin(9, "")
 	return e.awaitJoin(ctx, name)
 }
 
@@ -301,6 +313,9 @@ func (e *env) authKey(ctx context.Context, name string) (key, usedFile string, e
 		} else if !os.IsNotExist(err) {
 			return "", "", err
 		}
+		if e.NoPrompt {
+			return "", "", needsInput("a Tailscale auth key: there is no OAuth client at %s and no key file at %s", e.Cfg.TSOAuthFile, kf)
+		}
 		e.printf("  no OAuth client at %s: a single-use key tagged %s, minted by hand in the admin console, is needed\n", e.Cfg.TSOAuthFile, e.Cfg.Tag)
 		if k, err := e.ReadSecret("Tailscale auth key: "); err == nil && strings.TrimSpace(k) != "" {
 			return strings.TrimSpace(k), "", nil
@@ -354,6 +369,7 @@ func (e *env) enroll(ctx context.Context, name string) error {
 		if err != nil {
 			return err
 		}
+		e.addSecret(key)
 		if usedFile != "" {
 			// A single-use key is spent by the first `up`, success or not;
 			// never leave it on disk.
@@ -656,6 +672,7 @@ func (e *env) start(ctx context.Context, name string) error {
 type destroyOpts struct {
 	DeleteDataDisk bool
 	NoArchive      bool // lose the worker's sessions rather than save them first
+	Yes            bool // the caller has confirmed (comebye does its own type-the-name): do not ask
 }
 
 func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
@@ -687,9 +704,17 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	} else {
 		e.printf("This removes worker %s: the VM, its tailnet node, and the hub's peer entry. Data disk: %s.\nType the worker's name to confirm: ", name, disk)
 	}
-	line, _ := bufio.NewReader(e.In).ReadString('\n')
-	if strings.TrimSpace(line) != name {
-		return fmt.Errorf("confirmation did not match: nothing was changed")
+	switch {
+	case o.Yes:
+		e.printf("--yes: confirmed by the caller\n")
+	case e.NoPrompt:
+		e.printf("\n")
+		return needsInput("destroy asks for the worker's name to be typed; pass --yes when the caller has confirmed, nothing was changed")
+	default:
+		line, _ := bufio.NewReader(e.In).ReadString('\n')
+		if strings.TrimSpace(line) != name {
+			return fmt.Errorf("confirmation did not match: nothing was changed")
+		}
 	}
 	switch {
 	case archiving:
@@ -796,6 +821,9 @@ func (e *env) login(ctx context.Context, name, agent string) error {
 		cmd = "pi"
 	default:
 		return fmt.Errorf("agent %q: want pi, claude or codex", agent)
+	}
+	if e.NoPrompt {
+		return needsInput("login is interactive")
 	}
 	if err := e.owned(ctx, name); err != nil {
 		return err
