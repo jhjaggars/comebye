@@ -765,11 +765,18 @@ func readReport(e *Env, c *client, arg string, asJSON, summary bool) error {
 	if found == nil {
 		return lastReply(e, c, arg, asJSON)
 	}
-	if asJSON {
-		return jsonOut(e, map[string]any{"entry": found.ID, "agent_id": found.AgentID, "branch": found.Branch, "status": found.Status, "final_report": found.FinalReport})
-	}
-	if found.FinalReport == "" {
+	if found.FinalReport == "" && !asJSON {
 		return fmt.Errorf("%s (%s) has no final report yet (status %s)", found.Branch, found.ID, found.Status)
+	}
+	var hub *apiHubCheck
+	if found.FinalReport != "" {
+		var h apiHubCheck
+		if err := c.call("GET", "/api/ledger/"+url.PathEscape(found.ID)+"/hubcheck", nil, nil, &h); err == nil {
+			hub = &h
+		}
+	}
+	if asJSON {
+		return jsonOut(e, map[string]any{"entry": found.ID, "agent_id": found.AgentID, "branch": found.Branch, "status": found.Status, "final_report": found.FinalReport, "hub_checked": hub})
 	}
 	body := strings.TrimRight(found.FinalReport, "\n")
 	title := "Final report"
@@ -777,7 +784,42 @@ func readReport(e *Env, c *client, arg string, asJSON, summary bool) error {
 		body, title = summarizeReport(body, found.ID), "Summary of the final report"
 	}
 	fmt.Fprintf(e.Stdout, "%s of %s on %s/%s (%s, %s):\n\n%s\n", title, dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, body)
+	printHubCheck(e.Stdout, hub)
 	return nil
+}
+
+// apiHubCheck is the hub's check of a report (GET /api/ledger/ID/hubcheck).
+type apiHubCheck struct {
+	Items []struct {
+		Kind  string `json:"kind"`
+		State string `json:"state"`
+		Text  string `json:"text"`
+	} `json:"items"`
+	Contradictions int    `json:"contradictions"`
+	Note           string `json:"note"`
+}
+
+// printHubCheck prints the hub-checked block that goes beside a report: facts
+// the hub looked up itself, and the report's claims that they contradict.
+func printHubCheck(w io.Writer, h *apiHubCheck) {
+	if h == nil || (len(h.Items) == 0 && h.Note == "") {
+		return
+	}
+	title := "Hub-checked (the hub looked these up; the report above is the worker's own word)"
+	if h.Contradictions > 0 {
+		title = fmt.Sprintf("Hub-checked: %d claim(s) in the report CONTRADICT what the hub found", h.Contradictions)
+	}
+	fmt.Fprintf(w, "\n── %s\n", title)
+	if h.Note != "" {
+		fmt.Fprintf(w, "   %s\n", h.Note)
+	}
+	for _, it := range h.Items {
+		mark := map[string]string{"ok": "✓", "warn": "!", "bad": "✗"}[it.State]
+		if mark == "" {
+			mark = "·"
+		}
+		fmt.Fprintf(w, " %s %s\n", mark, it.Text)
+	}
 }
 
 // summarizeReport keeps what a coordinator needs to decide whether to read

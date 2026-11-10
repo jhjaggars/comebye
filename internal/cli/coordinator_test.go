@@ -279,3 +279,26 @@ func TestReadSummaryFlag(t *testing.T) {
 }
 
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+func TestReadReportShowsHubChecked(t *testing.T) {
+	ledger := `{"entries":[{"id":"h1","agent_id":"laharl/w9:p1","agent_name":"w","repo_name":"r","branch":"b","status":"finished","final_report":"## Summary\nPushed. CI green."}]}`
+	hub := `{"id":"h1","items":[{"kind":"pushed","state":"bad","text":"the report says pushed, but 2 commit(s) are on no remote"},{"kind":"worktree","state":"ok","text":"the worktree is clean"}],"contradictions":1}`
+	e, out, _, _ := peerEnv(t, nil, map[string]answer{"GET /api/ledger": {200, ledger}, "GET /api/ledger/h1/hubcheck": {200, hub}})
+	if code := run(e, "read", "h1", "--report"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	for _, want := range []string{"Pushed. CI green.", "Hub-checked: 1 claim(s) in the report CONTRADICT", "✗ the report says pushed, but 2 commit(s)", "✓ the worktree is clean"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// A hub that cannot answer leaves the report as it was.
+	e, out, _, _ = peerEnv(t, nil, map[string]answer{"GET /api/ledger": {200, ledger}})
+	if code := run(e, "read", "h1", "--report"); code != 0 || strings.Contains(out.String(), "Hub-checked") || !strings.Contains(out.String(), "Pushed. CI green.") {
+		t.Fatalf("no hubcheck route: %d\n%s", code, out)
+	}
+	e, out, _, _ = peerEnv(t, nil, map[string]answer{"GET /api/ledger": {200, ledger}, "GET /api/ledger/h1/hubcheck": {200, hub}})
+	if code := run(e, "read", "h1", "--report", "--json"); code != 0 || !strings.Contains(out.String(), `"hub_checked"`) || !strings.Contains(out.String(), `"contradictions": 1`) {
+		t.Fatalf("json: %d\n%s", code, out)
+	}
+}

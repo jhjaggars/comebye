@@ -257,6 +257,11 @@ func entryHints(e ledger.Entry) []string {
 			text += " " + e.Mark.Ask.Reason
 		}
 	}
+	return shasIn(text)
+}
+
+// shasIn lists the commit-looking words of text (at most 20, in order).
+func shasIn(text string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, h := range shaRe.FindAllString(text, -1) {

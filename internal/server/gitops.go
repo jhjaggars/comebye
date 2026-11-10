@@ -253,6 +253,8 @@ type worktreeChecks struct {
 	Detail *worktreeDetail `json:"detail,omitempty"`
 	// CI is the CI state of the commit asked for (checks?ci=SHA).
 	CI *ledger.CI `json:"ci,omitempty"`
+	// Verified answers checks?verify=SHA,...: where each named commit is.
+	Verified []commitFact `json:"verified,omitempty"`
 }
 
 // worktreeDetail is what a coordinator inspects before proposing to keep

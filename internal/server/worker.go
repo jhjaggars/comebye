@@ -399,6 +399,11 @@ type checkOpts struct {
 	// CI asks for the CI state of this commit (a landed commit's SHA): the
 	// answer's CI field.
 	CI string
+	// Verify lists commits a report names: the answer's Verified says for
+	// each whether it exists and where it is. CIHead asks for the CI state
+	// of the branch's tip.
+	Verify []string
+	CIHead bool
 }
 
 func (o checkOpts) query() url.Values {
@@ -423,6 +428,12 @@ func (o checkOpts) query() url.Values {
 	if o.CI != "" {
 		q.Set("ci", o.CI)
 	}
+	if len(o.Verify) > 0 {
+		q.Set("verify", strings.Join(o.Verify, ","))
+	}
+	if o.CIHead {
+		q.Set("cihead", "1")
+	}
 	return q
 }
 
@@ -432,7 +443,8 @@ func (o checkOpts) query() url.Values {
 func (s *Server) handleChecks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	opts := checkOpts{Detail: q.Get("detail") == "1", Diff: q.Get("diff") == "1", Within: q.Get("within") == "1",
-		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints")), Also: splitList(q.Get("also")), CI: hexSHA(q.Get("ci"))}
+		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints")), Also: splitList(q.Get("also")), CI: hexSHA(q.Get("ci")),
+		Verify: hexOnly(splitList(q.Get("verify"))), CIHead: q.Get("cihead") == "1"}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	c, lerr := s.localChecks(ctx, q.Get("path"), q.Get("branch"), q.Get("base"), opts)
@@ -465,6 +477,7 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 				if opts.CI != "" {
 					c.CI = ciOf(ctx, repo, opts.CI)
 				}
+				addVerified(ctx, &c, repo, opts)
 			} else {
 				c.RepoMissing = why
 			}
@@ -489,6 +502,7 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 	if opts.Detail || opts.Diff {
 		inspectWorktree(ctx, &c, opts.Diff)
 	}
+	addVerified(ctx, &c, p, opts)
 	return &c, nil
 }
 

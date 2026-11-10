@@ -432,6 +432,7 @@ func (s *Server) routes() {
 	// The handoff ledger (hub side).
 	s.mux.HandleFunc("GET /api/ledger", s.authWorker(s.handleLedger))
 	s.mux.HandleFunc("GET /api/inspect", s.authWorker(s.handleInspect))
+	s.mux.HandleFunc("GET /api/ledger/{id}/hubcheck", s.authWorker(s.handleHubCheck))
 	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))
 	s.mux.HandleFunc("POST /api/handoffs/{id}/release", s.authAgent(s.handleReleaseHandoff))
 	s.mux.HandleFunc("POST /api/handoffs/{id}/cancel", s.authAgent(s.handleCancelHandoff))
