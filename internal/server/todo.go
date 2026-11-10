@@ -795,6 +795,15 @@ func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string)
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "release_busy", "message": "the tag is being pushed: wait for it to finish"})
 		return
 	}
+	if state == TodoDone {
+		if it, ok := s.todos.get(r.PathValue("id")); ok {
+			if pend := s.releasePending(r.Context(), it); len(pend) > 0 {
+				writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "release_pending", "message": "release " + it.Release.Version +
+					" is not deployed everywhere yet: " + strings.Join(pend, ", ") + ". Keep this item open until the hub and every host are upgraded (drop it instead to abandon the release)"})
+				return
+			}
+		}
+	}
 	var b struct {
 		Reason string `json:"reason"`
 	}

@@ -916,3 +916,49 @@ func (s *Server) reconcileTagged(it Todo, ck release.Check) bool {
 	s.rel.cmu.Unlock()
 	return true
 }
+
+// releasePending names the hosts (the hub among them) still running an older
+// version than a tagged release item's, so closing the item as done cannot
+// hide the Bump hub and upgrade buttons while a deploy is outstanding. A
+// host that cannot be asked, or whose version is not vMAJOR.MINOR.PATCH, is
+// not counted: only a known older version blocks.
+func (s *Server) releasePending(ctx context.Context, it Todo) []string {
+	if it.Release == nil || it.Release.State != relTagged || s.fleet == nil {
+		return nil
+	}
+	want, ok := parseSemver(it.Release.Version)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var out []string
+	for _, h := range s.relHosts(ctx) {
+		if have, ok := parseSemver(h.Version); ok && semverLess(have, want) {
+			name := h.Name
+			if h.Local && s.fleet.IsHub() {
+				name = "the hub (" + h.Name + ")"
+			}
+			out = append(out, name+" is on "+h.Version)
+		}
+	}
+	return out
+}
+
+func parseSemver(v string) ([3]int, bool) {
+	var out [3]int
+	if !release.VersionRE.MatchString(v) {
+		return out, false
+	}
+	_, err := fmt.Sscanf(v, "v%d.%d.%d", &out[0], &out[1], &out[2])
+	return out, err == nil
+}
+
+func semverLess(a, b [3]int) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
+}

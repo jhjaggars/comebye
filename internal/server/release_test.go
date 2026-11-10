@@ -915,3 +915,40 @@ func TestInFlightFlagIsSetWhileTaggingAndClearedAfter(t *testing.T) {
 	waitRel(t, s, b.ID, relFailed)
 	waitUntil(t, "flag cleared after failure", func() bool { return !s.tagInFlight(b.ID) })
 }
+
+func TestReleaseCannotBeClosedBeforeEveryHostRunsIt(t *testing.T) {
+	s, _, _ := relServer(t)
+	s.cfg.Version = "v0.5.8"
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	// Not tagged yet: nothing is pending, closing is the old behaviour.
+	tok := token(t, s, it.ID)
+	if code, body := approve(s, it.ID, tok, "v0.5.9", relSHA); code != 202 {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	waitRel(t, s, it.ID, relTagged)
+	waitUntil(t, "flag cleared", func() bool { return !s.tagInFlight(it.ID) })
+	w := do(s, "POST", "/api/todos/"+it.ID+"/done", userHdr, `{}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "release_pending") || !strings.Contains(w.Body.String(), "v0.5.8") {
+		t.Fatalf("done on an old hub = %d %s", w.Code, w.Body)
+	}
+	if got, _ := s.todos.get(it.ID); !got.active() {
+		t.Fatal("the refused close still closed the item")
+	}
+	s.cfg.Version = "v0.5.9"
+	if w := do(s, "POST", "/api/todos/"+it.ID+"/done", userHdr, `{}`); w.Code != 200 {
+		t.Fatalf("done once deployed = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestReleaseCanBeDroppedWhilePending(t *testing.T) {
+	s, _, _ := relServer(t)
+	s.cfg.Version = "v0.5.8"
+	it := newRelease(t, s, "v0.5.9", relSHA)
+	tok := token(t, s, it.ID)
+	approve(s, it.ID, tok, "v0.5.9", relSHA)
+	waitRel(t, s, it.ID, relTagged)
+	waitUntil(t, "flag cleared", func() bool { return !s.tagInFlight(it.ID) })
+	if w := do(s, "POST", "/api/todos/"+it.ID+"/drop", userHdr, `{}`); w.Code != 200 {
+		t.Fatalf("drop = %d %s", w.Code, w.Body)
+	}
+}
