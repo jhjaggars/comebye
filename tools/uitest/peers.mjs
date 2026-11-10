@@ -183,8 +183,8 @@ try {
       try {
         await page.goto(base + "/", { waitUntil: "load" });
         const dot = '#nav .nv[data-page="peers"] .bdot-o';
-        await page.waitForSelector('#nav .nv[data-page="peers"]');
-        await page.waitForSelector(dot, { timeout: 12000 });
+        await page.waitForSelector('#nav .nv[data-page="peers"]', { state: "attached" }); // the phone hides the rail: its way in is the fleet menu
+        await page.waitForSelector(dot, { state: "attached", timeout: 12000 });
         if (!/a release needs you: Approve v0\.5\.22/.test(await page.locator(dot).getAttribute("aria-label"))) throw new Error("dot label");
         const c = await page.locator(dot).evaluate((e) => getComputedStyle(e).backgroundColor);
         const o = await page.evaluate(() => { const d = document.createElement("i"); d.style.background = "var(--orange)"; document.body.append(d); const v = getComputedStyle(d).backgroundColor; d.remove(); return v; });
