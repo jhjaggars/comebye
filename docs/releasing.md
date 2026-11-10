@@ -48,6 +48,8 @@ blocks that**: the tab says "3 of 4, 1 offline", the release is not done and the
 item stays open until the host is back and upgraded. Closing the item by hand
 while a host is behind or offline is refused (`release_pending`); drop it only to
 abandon the release, and the tab still shows a tagged one until it is rolled out.
+The same orange dot shows on the Peers entry of the navigation, the phone's fleet menu and the palette's "Releases" entry whenever a release needs you (the app looks every minute, not only inside Peers).
+
 **Dismiss release** on the card (with a confirm) abandons a tagged rollout you will not finish: it leaves the tab, the badge and the automatic close, its item is dropped, nothing is changed on any host, the tag stays and it keeps its place in the history. It is the user's alone (CSRF token, audit line `release.dismiss`).
 History comes from the to-do items, which are kept 14 days after they close.
 

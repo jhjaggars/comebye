@@ -8,6 +8,7 @@
 //
 // Each check runs at 1280 (two panes) and at 390 (a list, then one host).
 import { launch } from "./lib.mjs";
+import { releaseView } from "./relfix.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -175,6 +176,35 @@ try {
       await page.locator('#ln-kinds [data-kind="pi"]').click();
       await page.waitForFunction(() => document.querySelector("#ln-model-think")?.textContent === "high", null, { timeout: 5000 });
       await page.locator("#ln-close").click();
+    });
+    await check(`${tag}: the Peers entry of the navigation (and the palette) shows an orange dot while a release needs you, and not otherwise`, async () => {
+      let state = "green";
+      await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(state) }));
+      try {
+        await page.goto(base + "/", { waitUntil: "load" });
+        const dot = '#nav .nv[data-page="peers"] .bdot-o';
+        await page.waitForSelector('#nav .nv[data-page="peers"]');
+        await page.waitForSelector(dot, { timeout: 12000 });
+        if (!/a release needs you: Approve v0\.5\.22/.test(await page.locator(dot).getAttribute("aria-label"))) throw new Error("dot label");
+        const c = await page.locator(dot).evaluate((e) => getComputedStyle(e).backgroundColor);
+        const o = await page.evaluate(() => { const d = document.createElement("i"); d.style.background = "var(--orange)"; document.body.append(d); const v = getComputedStyle(d).backgroundColor; d.remove(); return v; });
+        if (c !== o) throw new Error(`the dot is ${c}, not orange ${o}`);
+        await page.evaluate(() => { document.querySelector("#btn-cmds, #kb-open").click(); });
+        await page.locator("#pal-q").fill("releases");
+        await page.waitForFunction(() => /Releases \(Peers tab\) · needs you/.test(document.querySelector("#palette")?.innerText || ""));
+        await page.keyboard.press("Escape");
+        await shot("nav-dot");
+        // the fleet menu (the phone's way to Peers) carries it too
+        await page.locator("#btn-fleet").click();
+        await page.waitForSelector("#f-peers .nv-dot:not([hidden])");
+        await page.keyboard.press("Escape");
+        const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+        if (w[0] > w[1]) throw new Error("horizontal overflow " + w);
+        // nothing needs the user: no dot
+        state = "done";
+        await page.evaluate(() => loadReleases(false));
+        await page.waitForFunction(() => !document.querySelector('#nav .nv[data-page="peers"] .bdot-o'));
+      } finally { await page.unroute(/\/api\/releases(\?.*)?$/); }
     });
     await page.close();
     await browser.close();

@@ -1760,6 +1760,29 @@ async function loadReleases(refresh) {
   const d = rls.data, mine = d && d.todo && todos.items.find((x) => x.id === d.todo.id);
   if (mine && mine.state !== d.todo.state) { todos.loadedAt = 0; loadTodos(); }
   renderPeers();
+  renderReleaseDots();
+}
+
+// Does a release need the user? Drives the dots on the Peers entries.
+function relNeedsYou() { return !!(rls.data && rls.data.needs_you); }
+
+// The orange dot on the Peers entry of the navigation and of the fleet menu,
+// so a release that needs the user shows wherever they are.
+function renderReleaseDots() {
+  renderNav();
+  const f = $("f-peers");
+  if (!f) return;
+  const need = relNeedsYou();
+  let d = f.querySelector(".nv-dot");
+  if (need && !d) { d = document.createElement("span"); d.className = "nv-dot"; f.append(d); }
+  if (d) { d.hidden = !need; d.setAttribute("aria-label", need ? "a release needs you: " + (rls.data.needs_text || "") : ""); }
+}
+
+// Outside Peers nobody loads the releases, so look now and then (a hub with
+// peers only: that is where releases are managed).
+function relBackground() {
+  if (document.hidden || ledger.on !== true || !multiHost() || (prs.route && prs.route.tab === "releases")) return;
+  if (Date.now() - rls.loadedAt > 55000) loadReleases(false);
 }
 
 // While a tag, a build or an upgrade is moving, refresh the tab often; now
@@ -5895,7 +5918,7 @@ const NAV_ROWS = [
   { key: "search", label: "Search", show: () => true, open: () => openRecall(), on: () => !!rc.route },
   { key: "pages", label: "Pages", show: () => ledger.on === true, open: () => { location.hash = "#/pages"; }, on: () => !!pgs.route }, // a screen of its own, like Transcripts
   { key: "usage", label: "Usage", show: () => ledger.on === true, open: () => { location.hash = "#/usage"; }, on: () => !!us.route }, // tokens spent, by kind, model, project and handoff
-  { key: "peers", label: "Peers", show: () => ledger.on === true && multiHost(), open: () => { location.hash = "#/peers"; }, on: () => !!prs.route }, // the hosts and what each starts by default
+  { key: "peers", label: "Peers", show: () => ledger.on === true && multiHost(), open: () => { location.hash = "#/peers"; }, on: () => !!prs.route, odot: () => relNeedsYou() }, // the hosts and what each starts by default
   // Hidden at zero, except while you are on it.
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && (ledger.marked.size > 0 || review.open), count: () => ledger.marked.size, open: () => openReview(), on: () => review.open },
 ];
@@ -5908,7 +5931,7 @@ function renderNav() {
     const n = r.count ? r.count() : 0;
     const on = r.on ? r.on() : state.view === r.key;
     return `<button type="button" class="nv${on ? " on" : ""}" data-page="${r.key}"${on ? ' aria-current="page"' : ""}>${NAV_ICON[r.key]}<span>${esc(r.label)}</span>${
-      n ? `<span class="badge" aria-label="${n} open">${n}</span>` : r.dot && r.dot() ? '<span class="bdot" aria-label="new"></span>' : ""}</button>`;
+      n ? `<span class="badge" aria-label="${n} open">${n}</span>` : r.odot && r.odot() ? `<span class="bdot bdot-o" role="img" aria-label="a release needs you: ${escAttr((rls.data && rls.data.needs_text) || "")}"></span>` : r.dot && r.dot() ? '<span class="bdot" aria-label="new"></span>' : ""}</button>`;
   }).join("");
   if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; }
 }
@@ -9097,6 +9120,8 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("sw-go").addEventListener("click", submitSwitch);
   setInterval(relTick, 2000);
+  setInterval(relBackground, 15000);
+  setTimeout(relBackground, 4000);
   $("d-role").addEventListener("click", toggleRole);
   $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);
