@@ -98,6 +98,7 @@
     { id: "go-status", label: "Status", keys: ["g", "s"], run: () => openPage("status"), show: () => ledger.on !== false },
     { id: "go-todo", label: "To do", keys: ["g", "t"], run: () => openPage("todo"), show: () => todos.on !== false },
     { id: "go-search", label: "Search", keys: ["/"], run: () => goSearch() },
+    { id: "go-releases", label: "Releases (Peers tab)", run: () => { location.hash = RELEASES_HASH; }, show: () => ledger.on !== false },
     { id: "go-remove", label: "Ready to remove", keys: ["g", "r"], run: () => openReview(), show: () => ledger.on !== false },
     { id: "go-brief", label: "Briefing", keys: ["g", "b"], run: () => openPage("briefing"), show: () => ledger.on !== false && isDesktop() },
     { id: "go-agents", label: "Agent list (focus it)", keys: ["g", "a"], run: () => (rows()[0] && focusRow(state.selected && rowFor(state.selected) ? state.selected : rows()[0].dataset.id)) },

@@ -96,6 +96,9 @@ node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1
 PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # The page starters (comebye pages new): published by the real CLI, opened in the viewer under the real CSP.
 COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node starters.mjs "http://127.0.0.1:$port" "$out" || rc=1
+# A release item closes itself once the fleet runs its version: a second build with a version stamped in, its own state.
+(cd "$app" && go build -ldflags "-X main.version=v100.0.0" -o "$tmp/comebye-stamped" .)
+COMEBYE_STAMPED_BIN="$tmp/comebye-stamped" FAKE_SOCK="$tmp/h.sock" AUTO_PORT=$((port + 300)) node releaseauto.mjs "$out" || rc=1
 # herdr calls a busy agent blocked: its own fake herdr and hub, so the shared fleet's agent count is untouched.
 "$tmp/fake-herdr" -sock "$tmp/fb.sock" -dir "$tmp/fb" -false-blocked >"$out/fake-herdr-fb.log" 2>&1 &
 for _ in $(seq 50); do [ -S "$tmp/fb.sock" ] && break; sleep 0.1; done

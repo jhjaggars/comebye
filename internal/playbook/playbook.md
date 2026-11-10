@@ -271,12 +271,15 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
    unreleased main; it smoke-checks and rolls back by itself. Run it on
    the peer first, then the hub, and report the versions it printed.
    `comebye land WORKER --deploy` still deploys a single landing.
-   A release to-do item (`--kind release`) carries the app's Bump hub and
-   per-host upgrade buttons: keep it open until the hub and every host
-   run the released version, and only then `comebye todo done ID`. The
-   hub refuses to close a tagged release whose version is still pending
-   somewhere (`release_pending`, naming the hosts); do not drop the item
-   to get around that unless the release is abandoned.
+   A release to-do item (`--kind release`) is only a one-line ping with
+   "Open in Peers": the release itself (Approve, Bump hub, per-host Upgrade,
+   history) lives on the Releases tab of the Peers screen, which keeps showing
+   a tagged release until the hub and every host run it. Do not close the
+   item: the hub closes it by itself once they all do, and an offline host
+   keeps it open ("3 of 4, 1 offline") until it is back and upgraded. Tell the
+   user to open the Releases tab. The hub refuses a manual `todo done` while a
+   host is behind or offline (`release_pending`, naming the hosts); drop the
+   item only to abandon the release.
 6. Then mark the session ready to remove (below), unless the user wants
    follow-ups from it or it is watching a PR.
 

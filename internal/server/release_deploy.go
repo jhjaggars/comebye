@@ -383,11 +383,13 @@ func (s *Server) handleReleaseDeploy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !it.active() {
-		todoErr(w, errTodoClosed)
-		return
-	}
+	// A tagged release is deployed while it rolls out, whether or not its
+	// item is still open.
 	if it.Release.State != relTagged {
+		if !it.active() {
+			todoErr(w, errTodoClosed)
+			return
+		}
 		relErr(w, http.StatusConflict, "not_released", "this release has not been tagged")
 		return
 	}

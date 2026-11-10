@@ -1274,11 +1274,11 @@
     .rel-hs { flex: 1 1 14ch; min-width: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
     .rel-ha { margin-left: auto; }
     .rel-confirm { padding: 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--orange) 50%, var(--border)); background: color-mix(in srgb, var(--orange) 8%, var(--panel)); font-size: 13.5px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
-    .rel button:not(.rel-refresh) { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; min-height: 32px; }
-    .rel button:disabled { opacity: 0.5; cursor: default; }
-    .rel .rel-approve, .rel .rel-go, .rel .rel-up, .rel .rel-dep-btn { border-color: var(--blue); color: var(--blue); }
-    .rel .rel-go { background: color-mix(in srgb, var(--blue) 12%, var(--panel)); font-weight: 600; }
-    .rel button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .rel button:not(.rel-refresh), .rl-card button:not(.rel-refresh) { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; min-height: 32px; }
+    .rel button:disabled, .rl-card button:disabled { opacity: 0.5; cursor: default; }
+    .rel .rel-approve, .rel .rel-go, .rel .rel-up, .rel .rel-dep-btn, .rl-card .rel-approve, .rl-card .rel-go, .rl-card .rel-up, .rl-card .rel-dep-btn { border-color: var(--blue); color: var(--blue); }
+    .rel .rel-go, .rl-card .rel-go { background: color-mix(in srgb, var(--blue) 12%, var(--panel)); font-weight: 600; }
+    .rel button:focus-visible, .rl-card button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
     .td-kept { flex: none; margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip-yellow); border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); font-size: 13.5px; }
     .td-kept-h { color: var(--text); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
     .td-kept-t {
@@ -1906,6 +1906,59 @@
       #peers .pr-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
       #peers .pr-view { display: flex !important; }
     }
+    /* The Releases tab: the current release, the fleet's versions with their Upgrade buttons, and the last five releases. */
+    .pr-tabs { flex: none; display: flex; gap: 4px; padding: 6px calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px)); background: var(--panel); border-bottom: 1px solid var(--border); }
+    .pr-tabs button { font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; }
+    .pr-tabs button[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--blue); }
+    .pr-tabs button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .pr-dot { display: inline-block; min-width: 18px; height: 18px; line-height: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--orange); color: var(--on-orange); font-size: 11px; font-weight: 700; text-align: center; }
+    .pr-dot[hidden] { display: none; }
+    #peers.in-peer .pr-tabs { display: none; }
+    .pr-panes[hidden], .rl-pane[hidden] { display: none; }
+    .pr-nudge { display: block; margin: 2px 2px 12px; padding: 10px 12px; border: 1px solid var(--orange); border-radius: 12px; color: var(--text); text-decoration: none; font-size: 14px; background: color-mix(in srgb, var(--orange) 10%, var(--panel)); overflow-wrap: anywhere; }
+    .rl-pane { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px calc(12px + env(safe-area-inset-right, 0px)) calc(20px + var(--safe-bottom)) calc(12px + env(safe-area-inset-left, 0px)); min-width: 0; }
+    .rl-wrap { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "card" "fleet" "hist"; max-width: 1240px; margin: 0 auto; }
+    .rl-a-card { grid-area: card; } .rl-a-fleet { grid-area: fleet; } .rl-a-hist { grid-area: hist; }
+    .rl-a-card, .rl-a-fleet, .rl-a-hist { min-width: 0; }
+    @media (min-width: 900px) { .rl-wrap { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "card fleet" "hist fleet"; align-items: start; } }
+    .rl-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; min-width: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+    .rl-card.rl-attn { border-color: var(--orange); } .rl-card.rl-bad { border-color: var(--red); } .rl-card.rl-good { border-color: var(--green); }
+    .rl-card h3 { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+    .rl-big { font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
+    .rl-muted { margin: 0; color: var(--muted); font-size: 13.5px; }
+    .rl-chips { display: flex; flex-wrap: wrap; gap: 6px; } .rl-chips:empty { display: none; }
+    .rl-line { margin-top: 2px; }
+    .rl-card .rel-h { flex-wrap: wrap; }
+    .rl-prog { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; }
+    .rl-prog i { display: block; height: 100%; background: var(--green); }
+    @media (prefers-reduced-motion: no-preference) { .rl-prog i { transition: width 0.3s; } }
+    .rl-done { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--green); background: var(--chip-green); color: var(--green); font-size: 13.5px; }
+    .rl-hosts { display: flex; flex-direction: column; min-width: 0; }
+    .rl-host { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); min-width: 0; }
+    .rl-host:first-child { border-top: 0; }
+    .rl-hl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+    .rl-host .rel-ha { margin-left: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .rl-sub { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; flex: none; }
+    .rl-sub.rl-err { color: var(--red); }
+    .rl-host > .rel-depout { grid-column: 1 / -1; }
+    .rl-tag { font-size: 11px; padding: 0 7px; border-radius: 6px; background: var(--chip-blue); color: var(--blue); }
+    .rl-tag-off { background: var(--panel2); color: var(--muted); }
+    .rl-ver { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 7px; border-radius: 6px; }
+    .rl-v-cur { background: var(--chip-green); color: var(--green); } .rl-v-old { background: var(--chip-yellow); color: var(--yellow); } .rl-v-off { background: var(--panel2); color: var(--muted); }
+    .rl-to { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); } .rl-to b { color: var(--text); }
+    .rl-ok { color: var(--green); font-weight: 600; font-size: 13px; }
+    .rl-hist { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .rl-hist td { padding: 6px 6px; border-top: 1px solid var(--border); vertical-align: top; }
+    .rl-hist tr:first-child td { border-top: 0; }
+    .rl-hv { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; } .rl-hd { color: var(--muted); white-space: nowrap; } .rl-hn2 { color: var(--muted); overflow-wrap: anywhere; }
+    .rl-hn2 a { color: var(--blue); }
+    .rl-wrap button:not(.rel-refresh), .rl-wrap button.rel-up, .rl-wrap button.rel-dep-btn, .rl-wrap button.rel-rb { min-height: 36px; }
+    .rl-wrap .rel-up:not(:disabled), .rl-wrap .rel-dep-btn { border-color: var(--orange); color: var(--orange); }
+    /* The to-do item for a release: one line and a way to the Releases tab. */
+    .rel-pingrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 14px; }
+    .rel-pingtxt { flex: 1 1 18ch; min-width: 0; overflow-wrap: anywhere; }
+    .rel-open { display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border: 1px solid var(--blue); border-radius: 8px; color: var(--blue); text-decoration: none; font-size: 13px; font-weight: 600; }
+    .rel-open:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
     /* Usage: tokens by kind, model, project and handoff. A screen of its own, like Peers and Pages. Charts are drawn by hand as inline SVG from theme tokens. */
     #usage {
       position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg);
@@ -2085,10 +2138,15 @@
       <h1>Peers</h1>
       <span class="rc-fresh" id="pr-count"></span>
     </header>
+    <div class="pr-tabs" id="pr-tabs" role="tablist" aria-label="Peers sections">
+      <button type="button" role="tab" id="pr-tab-hosts" data-tab="hosts" aria-selected="true">Hosts</button>
+      <button type="button" role="tab" id="pr-tab-rel" data-tab="releases" aria-selected="false" aria-controls="pr-releases">Releases<span class="pr-dot" id="pr-dot" hidden></span></button>
+    </div>
     <div class="pr-panes">
       <section class="pr-list" aria-label="Hosts"><div id="pr-items" aria-live="polite"></div></section>
       <section class="pr-view" id="pr-view" aria-label="Host"></section>
     </div>
+    <section class="rl-pane" id="pr-releases" role="tabpanel" aria-labelledby="pr-tab-rel" aria-live="polite" hidden></section>
   </div>
 
   <!-- Usage: tokens spent by agents, counted from their session files (counts and labels only) -->

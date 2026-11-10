@@ -1404,7 +1404,7 @@ function todoItemHtml(t, pfx) {
         ${dhead}
         <div class="td-scroll">
           ${meta ? `<div class="td-meta">${esc(meta)}</div>` : ""}
-          ${isRel ? relHtml(t) : ""}
+          ${isRel ? relPingHtml(t) : ""}
           ${t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
           ${answered}${kept}
@@ -1516,7 +1516,7 @@ function renderTodos(force) {
   if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
   const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()],
-    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question]), rel.rev]);
+    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question]), rls.loadedAt]);
   // The age moves between renders; a typed answer must not be lost to one.
   const typing = (el) => el && el.contains(document.activeElement) && document.activeElement.classList.contains("td-text");
   if (show && main && (again || (main.dataset.sig !== sig && !typing(main)))) {
@@ -1551,7 +1551,6 @@ function todoExpand(id, to) {
   todos.openId = id;
   if (id) todos.lastId = id;
   renderTodos(true);
-  if (id && todos.items.some((x) => x.id === id && x.kind === "release")) loadRelease(id, false);
   const el = todoListEl();
   const row = el && todoRowIn(el, id);
   if (!row) return;
@@ -1731,59 +1730,54 @@ function todoCopy(ta) {
 }
 
 // ---- releases ----
-// A "release" to-do carries a version and a full commit id. Everything the
-// page shows about it that matters (the commit, CI, the changes) comes from
-// the server's own check of the hub's checkout and GitHub, never from the
-// item's text. Approving asks for a confirm step that names the version and
-// the commit; the server runs the release script and each host's Upgrade runs
+// A "release" to-do carries a version and a full commit id, and is only a
+// one-line ping now: its "Open in Peers" button goes to the Releases tab on
+// the Peers screen (#/peers/~releases), which holds everything else: the
+// release card, the fleet table with its Bump hub and Upgrade buttons, and the
+// history. The tab is fed by GET /api/releases. It shows a tagged release
+// until every host runs it, even if its item was closed, and the hub closes
+// the item itself when they do. Everything the tab shows about a release
+// (the commit, CI, the changes) comes from the server's own check of the hub's
+// checkout and GitHub, never from the item's text. Approving asks for a
+// confirm step that names the version and the commit; each host's Upgrade runs
 // `comebye upgrade` there. Agents cannot do either: only this page can.
-const rel = { map: new Map(), rev: 0 };
+const RELEASES_HASH = "#/peers/~releases";
+const rls = { data: null, err: "", loadedAt: 0, inflight: false, confirm: null, busy: false };
 
-function relOf(id) {
-  let r = rel.map.get(id);
-  if (!r) { r = { data: null, err: "", loadedAt: 0, inflight: false, confirm: null, busy: false }; rel.map.set(id, r); }
-  return r;
-}
-
-async function loadRelease(id, refresh) {
-  const r = relOf(id);
-  if (r.inflight) return;
-  r.inflight = true;
+async function loadReleases(refresh) {
+  if (rls.inflight) return;
+  rls.inflight = true;
   try {
-    r.data = await api(`/api/release/${encodeURIComponent(id)}${refresh ? "?refresh=1" : ""}`, { timeout: 120000 });
-    r.err = "";
+    rls.data = await api(`/api/releases${refresh ? "?refresh=1" : ""}`, { timeout: 120000 });
+    rls.err = "";
   } catch (e) {
-    r.err = e.message || "failed";
+    rls.err = e.message || "failed";
   } finally {
-    r.inflight = false;
-    r.loadedAt = Date.now();
+    rls.inflight = false;
+    rls.loadedAt = Date.now();
   }
-  rel.rev++;
-  renderTodos(true);
+  // The hub may have closed the item itself: bring the To do list along.
+  const d = rls.data, mine = d && d.todo && todos.items.find((x) => x.id === d.todo.id);
+  if (mine && mine.state !== d.todo.state) { todos.loadedAt = 0; loadTodos(); }
+  renderPeers();
 }
 
-// While a release item is open: refresh it as the tag, the build or an
-// upgrade moves on, and now and then otherwise.
-function relActive(t, d) {
-  if (!t.release) return false;
-  if (t.release.state === "tagging") return true;
-  if (t.release.state !== "tagged") return false;
-  if (!d) return true;
+// While a tag, a build or an upgrade is moving, refresh the tab often; now
+// and then otherwise.
+function relActive(d) {
+  if (!d || !d.current || !d.todo.release) return false;
+  const st = d.todo.release.state;
+  if (st === "tagging") return true;
+  if (st !== "tagged") return false;
   if (d.build && d.build.state !== "success" && d.build.state !== "failure") return true;
   if (d.deploy && d.deploy.record && d.deploy.record.state === "running") return true;
   return (d.hosts || []).some((h) => h.record && h.record.state === "running");
 }
 
 function relTick() {
-  if (document.hidden || todos.on !== true) return;
-  const t = todos.items.find((x) => x.id === todos.openId && x.kind === "release");
-  if (!t) return;
-  const r = relOf(t.id);
-  const age = Date.now() - r.loadedAt;
-  if (!r.data && !r.err ? age > 1500 : age > (relActive(t, r.data) ? 4000 : 30000)) {
-    if (relActive(t, r.data)) loadTodos();
-    loadRelease(t.id, false);
-  }
+  if (document.hidden || !prs.route || prs.route.tab !== "releases") return;
+  const age = Date.now() - rls.loadedAt;
+  if (!rls.data && !rls.err ? age > 1500 : age > (relActive(rls.data) ? 4000 : 30000)) loadReleases(false);
 }
 
 function relShort(sha) { return (sha || "").slice(0, 7); }
@@ -1872,105 +1866,183 @@ function relDeployOut(rc, label) {
   return h + `</div>`;
 }
 
-function relDeployHtml(t, r, d, green) {
-  const rl = t.release, dp = d && d.deploy;
-  if (!dp || !dp.enabled) return d && d.deploy_error ? `<div class="rel-note">Deploy status unknown: ${esc(d.deploy_error)}</div>` : "";
-  const label = dp.label || "Deploy";
-  // The host keeps only its last run: it belongs to this item only if it is for this version.
-  const last = dp.record, rc = last && last.version === rl.version ? last : null;
-  const running = !!(last && last.state === "running");
-  const doneHere = !!(rc && rc.state === "ok");
-  let h = `<div class="rel-sub">${esc(label)}</div><div class="rel-deps"><div class="rel-dephost" data-deploy>
-    <span class="rel-hn">${esc(d.release_host || "")}</span><span class="rel-hv">${esc(rl.version)}${doneHere ? " ✓" : ""}</span><span class="rel-hs">${esc(rc ? relDeployText(dp, rl.version) : running ? `another deploy (${last.version}) is running…` : "")}</span>`;
-  if (green && !running && !doneHere) h += `<span class="rel-ha"><button type="button" class="rel-dep-btn" data-rel="deploy"${r.busy ? " disabled" : ""}>${esc(label)}</button></span>`;
-  h += `</div></div>`;
-  if (!green) h += `<div class="rel-note">${esc(label)} is offered once the release build has passed. Approve release never runs it.</div>`;
-  h += relDeployOut(rc, label);
-  const c = r.confirm;
-  if (c && c.k === "deploy") {
-    h += `<div class="rel-confirm" role="group" aria-label="Confirm the deploy"><div>Run <code>${esc(dp.command || "the deploy command")}</code> on ${esc(d.release_host || "the release host")} for <b>${esc(rl.version)}</b>${dp.dry_run ? " (dry run: nothing will run)" : ""}? This is a separate step from the release: it changes what is running.</div>
-      <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-deploy"${r.busy ? " disabled" : ""}>Confirm: ${esc(label.toLowerCase())} ${esc(rl.version)}</button>
-      <button type="button" data-rel="cancel"${r.busy ? " disabled" : ""}>Cancel</button></div></div>`;
-  }
-  return h;
+// "3 of 4, 1 offline": how far a rollout has got. An offline host that has
+// not upgraded is counted apart and holds the release open.
+function relCount(ro) {
+  return ro ? `${ro.current} of ${ro.total}${ro.offline ? `, ${ro.offline} offline` : ""}` : "";
 }
 
-function relHtml(t) {
-  const rl = t.release, r = relOf(t.id), d = r.data;
-  const ck = d && d.check;
+function relWhen(iso) {
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? "" : fmtAgo(at) + " ago";
+}
+
+// The to-do item: one line and a way to the real thing.
+function relPingHtml(t) {
+  const rl = t.release, v = esc(rl.version);
+  const d = rls.data, live = d && d.todo && d.todo.id === t.id && d.needs_text ? d.needs_text : "";
+  const TEXT = {
+    pending: `Release ${v} is proposed: approve it in Peers.`,
+    tagging: `Tagging ${v}…`,
+    failed: `Tagging ${v} failed: see Peers.`,
+    tagged: `${v} is tagged: roll it out from Peers. This item closes by itself once the hub and every host run it.`,
+  };
+  const txt = t.state === "done" || t.state === "dropped" ? `${v} (${esc(t.state)})` : live ? esc(live) : TEXT[rl.state] || v;
+  return `<div class="rel rel-ping" data-rel-id="${escAttr(t.id)}">
+    <div class="rel-pingrow"><span class="rel-pingtxt">${txt}</span>
+    <a class="rel-open" href="${RELEASES_HASH}">Open in Peers</a></div></div>`;
+}
+
+function relDeployConfirmHtml(d) {
+  const c = rls.confirm, rl = d.todo.release, dp = d.deploy;
+  if (!c || c.k !== "deploy" || !dp) return "";
+  const label = dp.label || "Deploy";
+  return `<div class="rel-confirm" role="group" aria-label="Confirm the deploy"><div>Run <code>${esc(dp.command || "the deploy command")}</code> on ${esc(d.release_host || "the release host")} for <b>${esc(rl.version)}</b>${dp.dry_run ? " (dry run: nothing will run)" : ""}? This is a separate step from the release: it changes what is running.</div>
+    <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-deploy"${rls.busy ? " disabled" : ""}>Confirm: ${esc(label.toLowerCase())} ${esc(rl.version)}</button>
+    <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
+}
+
+// One row of the fleet table.
+function relRowHtml(x, d) {
+  const cur = d.current ? d.todo.release : null;
+  const tagged = !!cur && cur.state === "tagged";
+  const green = !!(tagged && d.build && d.build.state === "success");
+  const dp = tagged && d.deploy && d.deploy.enabled ? d.deploy : null;
+  const isDeploy = !!dp && x.name === d.release_host;
+  const rc = x.record && cur && x.record.version === cur.version ? x.record : null;
+  const drec = isDeploy && dp.record && dp.record.version === cur.version ? dp.record : null;
+  const running = !!(x.record && x.record.state === "running") || !!(isDeploy && dp.record && dp.record.state === "running");
+  const btn = (act, label, cls) => `<button type="button" class="${cls}" data-rel="${act}" data-host="${escAttr(x.name)}"${rls.busy ? " disabled" : ""}>${esc(label)}</button>`;
+  let act = "", sub = "", err = false, out = "", rowcls = "";
+  if (tagged) {
+    if (x.current) {
+      rowcls = " rl-h-cur";
+      act = `<span class="rl-ok">✓ ${esc(x.version)}</span>`;
+      if (x.enabled && green && !running && !isDeploy && rc && rc.state === "ok" && !rc.rollback) act += " " + btn("rollback", "Roll back", "rel-rb");
+      if (isDeploy && drec) sub = relDeployText(dp, cur.version);
+      else if (rc) sub = relRecordText(x);
+    } else if (x.offline) {
+      rowcls = " rl-h-off";
+      act = `<button type="button" class="rel-up" disabled>Upgrade</button>`;
+      sub = `not reachable${x.since ? " since " + relWhen(x.since) : ""}; upgrade when it is back`;
+    } else if (running) {
+      sub = isDeploy && dp.record && dp.record.state === "running" ? relDeployText(dp, dp.record.version) : relRecordText(x);
+    } else if (isDeploy) {
+      const failed = !!drec && drec.state === "failed";
+      if (failed) { rowcls = " rl-h-fail"; err = true; }
+      if (green && !(drec && drec.state === "ok")) act = `<button type="button" class="rel-dep-btn" data-rel="deploy"${rls.busy ? " disabled" : ""}>${esc(failed ? "Retry" : dp.label || "Deploy")}</button>`;
+      sub = drec ? relDeployText(dp, cur.version) : dp.record && dp.record.state === "running" ? `another deploy (${dp.record.version}) is running…` : "";
+      out = relDeployOut(drec, dp.label || "Deploy");
+    } else if (!x.enabled) {
+      sub = relRecordText(x);
+    } else {
+      const failed = !!rc && (rc.state === "failed" || rc.state === "rolled_back");
+      if (failed) { rowcls = " rl-h-fail"; err = true; }
+      if (green) act = btn("up", failed ? "Retry" : "Upgrade", "rel-up");
+      sub = rc ? relRecordText(x) : "";
+    }
+  } else if (x.offline) {
+    rowcls = " rl-h-off";
+  }
+  const vcls = x.offline && !x.current ? "off" : !cur || x.current || !tagged ? "cur" : "old";
+  const to = tagged && !x.current ? ` <span class="rl-to">→ <b>${esc(cur.version)}</b></span>` : "";
+  return `<div class="rl-host rel-host${rowcls}" data-host="${escAttr(x.name)}"${isDeploy ? " data-deploy" : ""}>
+    <div class="rl-hl"><span class="rel-hn">${esc(x.name)}</span>${x.hub ? '<span class="rl-tag">hub</span>' : ""}${x.offline ? '<span class="rl-tag rl-tag-off">offline</span>' : ""}<span class="rl-ver rl-v-${vcls}">${esc(x.version || "?")}</span>${to}</div>
+    ${act ? `<div class="rel-ha">${act}</div>` : ""}
+    ${sub ? `<div class="rl-sub rel-hs${err ? " rl-err" : ""}">${esc(sub)}</div>` : ""}${out}</div>`;
+}
+
+function relFleetHtml(d) {
+  const cur = d.current ? d.todo.release : null;
+  const tagged = !!cur && cur.state === "tagged";
+  const ro = d.rollout, hosts = d.hosts || [];
+  const green = !!(tagged && d.build && d.build.state === "success");
+  let h = `<div class="rl-card" data-fleet><h3>Fleet${tagged && ro ? ` · <span class="rl-count">${esc(relCount(ro))}</span>` : ""}</h3>`;
+  if (tagged && ro) {
+    const pct = ro.total ? Math.round((ro.current * 100) / ro.total) : 0;
+    h += `<div class="rl-prog" role="progressbar" aria-label="Hosts on ${escAttr(cur.version)}: ${escAttr(relCount(ro))}" aria-valuemin="0" aria-valuemax="${ro.total}" aria-valuenow="${ro.current}"><i style="width:${pct}%"></i></div>`;
+    if (ro.complete) h += `<div class="rl-done" role="status"><b>All upgraded</b> · ${ro.total} of ${ro.total} on ${esc(cur.version)}</div>`;
+    else if (!green) h += `<div class="rel-note">Hosts can be upgraded once the release build has passed.</div>`;
+  }
+  if (!hosts.length) h += `<div class="rel-note">${rls.data ? "No hosts." : "Loading…"}</div>`;
+  h += `<div class="rl-hosts">${hosts.map((x) => relRowHtml(x, d)).join("")}</div>`;
+  const c = rls.confirm;
+  if (c && c.k === "up" && tagged) {
+    const x = hosts.find((y) => y.name === c.host);
+    h += `<div class="rel-confirm" role="group" aria-label="Confirm the upgrade"><div>${c.rollback
+      ? `Roll back <b>${esc(c.host)}</b> from ${esc(cur.version)} to the binary it had before? comebye restarts on that host.`
+      : `Upgrade <b>${esc(c.host)}</b> from ${esc((x && x.version) || "?")} to <b>${esc(cur.version)}</b>? It checks the download, restarts comebye there, and rolls back by itself if the new one fails its checks.`}</div>
+      <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-up"${rls.busy ? " disabled" : ""}>Confirm: ${c.rollback ? "roll back" : "upgrade"} ${esc(c.host)}</button>
+      <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
+  }
+  if (tagged) h += relDeployConfirmHtml(d);
+  return h + `</div>`;
+}
+
+function relCardHtml(d) {
+  if (!d.current) {
+    const hosts = d.hosts || [], vs = [...new Set(hosts.map((x) => x.version).filter(Boolean))];
+    const runs = vs.length === 1 && hosts.length ? `Everything runs <b>${esc(vs[0])}</b>.` : vs.length ? `Hosts run ${vs.map(esc).join(", ")}.` : "";
+    return `<div class="rl-card" data-card="none"><h3>Current release</h3><div class="rel-h"><span class="rl-big">No release pending</span>
+      <button type="button" class="rel-refresh" data-rel="refresh" aria-label="Check again"${rls.inflight ? " disabled" : ""}>↻</button></div>
+      <p class="rl-muted">${runs} A coordinator proposes the next one with <code>comebye todo add --kind release</code>.</p></div>`;
+  }
+  const t = d.todo, rl = t.release, ck = d.check, ro = d.rollout;
+  const tagged = rl.state === "tagged";
+  const allDone = tagged && ro && ro.complete;
+  const failed = rl.state === "failed" || (ck && !ck.ok && ck.ci_conclusion && ck.ci_conclusion !== "success") || (d.build && d.build.state === "failure");
+  const cls = allDone ? " rl-good" : failed ? " rl-bad" : d.needs_you ? " rl-attn" : "";
   const STATE = { pending: "waiting for you", tagging: "tagging…", tagged: "tagged", failed: "failed" };
-  let h = `<div class="rel" data-rel-id="${escAttr(t.id)}">`;
-  h += `<div class="rel-h">Release <b>${esc(rl.version)}</b><span class="rel-state rel-s-${esc(rl.state)}">${esc(STATE[rl.state] || rl.state)}</span>
-    <button type="button" class="rel-refresh" data-rel="refresh" aria-label="Check again"${r.inflight ? " disabled" : ""}>↻</button></div>`;
-  if (d && d.simulated) h += `<div class="rel-block" role="alert">SIMULATED: this server runs no git, no GitHub and no upgrade. Nothing below is real.</div>`;
-  if (d && d.dry_run) h += `<div class="rel-note rel-dry">Dry run: the checks run for real, but nothing is tagged or installed.</div>`;
+  let h = `<div class="rl-card${cls}" data-card="release" data-rel-id="${escAttr(t.id)}"><h3>${tagged ? "Release" : "Proposed release"}</h3>
+    <div class="rel-h"><span class="rl-big">${esc(rl.version)}</span><code class="rel-sha" title="${escAttr(rl.commit)}">${esc(relShort(rl.commit))}</code>
+    <span class="rel-state rel-s-${esc(rl.state)}">${esc(STATE[rl.state] || rl.state)}</span>
+    <button type="button" class="rel-refresh" data-rel="refresh" aria-label="Check again"${rls.inflight ? " disabled" : ""}>↻</button></div>`;
+  h += `<div class="rl-chips">`;
+  if (ck) h += relCiChip(ck);
+  if (tagged) h += relBuildChip(d) + (d.notes_url ? " " + relChip("none", "release notes", d.notes_url) : "");
+  h += `</div>`;
+  if (d.simulated) h += `<div class="rel-block" role="alert">SIMULATED: this server runs no git, no GitHub and no upgrade. Nothing below is real.</div>`;
+  if (d.dry_run) h += `<div class="rel-note rel-dry">Dry run: the checks run for real, but nothing is tagged or installed.</div>`;
   h += `<dl class="rel-facts"><dt>Commit</dt><dd><code class="rel-sha">${esc(rl.commit)}</code></dd>`;
   if (ck && ck.subject) h += `<dt>Subject</dt><dd>${esc(ck.subject)}</dd>`;
-  const rhost = rl.host || (d && d.release_host);
-  if (rhost) h += `<dt>${rl.state === "tagged" ? "Tagged on" : "Tags from"}</dt><dd>${esc(rhost)}</dd>`;
-  if (ck) h += `<dt>Last tag</dt><dd>${esc(ck.previous || "none yet")}</dd><dt>CI</dt><dd>${relCiChip(ck)}</dd>`;
-  if (rl.state === "tagged") h += `<dt>Build</dt><dd>${relBuildChip(d)}${rl.run_url ? ` ${relChip("none", "workflow run", rl.run_url)}` : ""}</dd>`;
+  const rhost = rl.host || d.release_host;
+  if (rhost) h += `<dt>${tagged ? "Tagged on" : "Tags from"}</dt><dd>${esc(rhost)}</dd>`;
+  if (ck) h += `<dt>Last tag</dt><dd>${esc(ck.previous || "none yet")}</dd>`;
   h += `</dl>`;
-  if (!d && !r.err) h += `<div class="rel-note">Checking the commit with GitHub…</div>`;
-  if (r.err) h += `<div class="rel-block" role="alert">Could not load the release page: ${esc(r.err)}</div>`;
-  if (d && d.check_error) h += `<div class="rel-block" role="alert">Could not check the commit: ${esc(d.check_error)}</div>`;
-  if (ck && ck.problem) h += `<div class="rel-block" role="alert">Blocked: ${esc(ck.problem)}</div>`;
+  if (!d.check && !d.check_error && (rl.state === "pending" || rl.state === "failed")) h += `<div class="rel-note">Checking the commit with GitHub…</div>`;
+  if (d.check_error) h += `<div class="rel-block" role="alert">Could not check the commit: ${esc(d.check_error)}</div>`;
+  if (ck && ck.problem) h += `<div class="rel-block" role="alert">Blocked: ${esc(ck.problem)}${ck.ci_conclusion && ck.ci_conclusion !== "success" ? ". Fix CI first." : ""}</div>`;
   if (ck && ck.changes && ck.changes.length) {
-    h += `<details class="rel-changes"><summary>Changes since ${esc(ck.previous || "the start")} (${ck.changes.length})</summary><ul>${ck.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details>`;
+    h += `<details class="rel-changes"><summary>Release notes: ${ck.changes.length} change${ck.changes.length === 1 ? "" : "s"} since ${esc(ck.previous || "the start")}</summary><ul>${ck.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details>`;
   }
   if (rl.state === "failed" && rl.error) h += `<div class="rel-block" role="alert">The last try failed: ${esc(rl.error)}</div>`;
   if (rl.dry_run) h += `<details class="rel-changes"><summary>Last dry run</summary><pre>${esc(rl.dry_run)}</pre></details>`;
+  if (d.build_error) h += `<div class="rel-note">Build status unknown: ${esc(d.build_error)}</div>`;
+  if (d.deploy_error) h += `<div class="rel-note">Deploy status unknown: ${esc(d.deploy_error)}</div>`;
 
   // Approve.
   if (rl.state === "pending" || rl.state === "failed") {
-    if (d && !d.can_tag) {
+    if (!d.can_tag) {
       h += `<div class="rel-note">This host is not set up to tag releases (it needs <code>-release-repo</code>). Run <code>tools/release/tag ${esc(rl.version)} ${esc(rl.commit)}</code> yourself.</div>`;
-    } else if (r.confirm && r.confirm.k === "tag") {
+    } else if (rls.confirm && rls.confirm.k === "tag") {
       h += `<div class="rel-confirm" role="group" aria-label="Confirm the release">
-        <div>Tag <b>${esc(rl.version)}</b> at <code>${esc(rl.commit)}</code> and push the tag${d && d.dry_run ? " (dry run: nothing will be pushed)" : ""}? The Release workflow then builds and publishes it.</div>
-        <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-tag"${r.busy ? " disabled" : ""}>Confirm: release ${esc(rl.version)}</button>
-        <button type="button" data-rel="cancel"${r.busy ? " disabled" : ""}>Cancel</button></div></div>`;
+        <div>Tag <b>${esc(rl.version)}</b> at <code>${esc(rl.commit)}</code> and push the tag${d.dry_run ? " (dry run: nothing will be pushed)" : ""}? The Release workflow then builds and publishes it.</div>
+        <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-tag"${rls.busy ? " disabled" : ""}>Confirm: release ${esc(rl.version)}</button>
+        <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
     } else {
       const ok = !!(ck && ck.ok);
-      h += `<div class="td-acts"><button type="button" class="rel-approve" data-rel="approve"${ok && !r.busy ? "" : " disabled"}>Approve release</button></div>`;
+      h += `<div class="td-acts"><button type="button" class="rel-approve" data-rel="approve"${ok && !rls.busy ? "" : " disabled"}>Approve release</button></div>`;
     }
   }
   if (rl.state === "tagging") h += `<div class="rel-note">The tag is being pushed…</div>`;
-
-  // Hosts.
-  if (rl.state === "tagged") {
-    const hosts = (d && d.hosts) || [];
-    const green = !!(d && d.build && d.build.state === "success");
-    h += `<div class="rel-sub">Hosts</div>`;
-    if (!green) h += `<div class="rel-note">Hosts can be upgraded once the release build has passed.</div>`;
-    h += `<div class="rel-hosts">`;
-    for (const x of hosts) {
-      const running = x.record && x.record.state === "running";
-      const there = x.version === rl.version;
-      let btn = "";
-      if (x.enabled && green && !running && x.status === "ok") {
-        if (!there) btn = `<button type="button" class="rel-up" data-rel="up" data-host="${escAttr(x.name)}"${r.busy ? " disabled" : ""}>Upgrade</button>`;
-        else if (x.record && x.record.state === "ok" && !x.record.rollback) btn = `<button type="button" class="rel-rb" data-rel="rollback" data-host="${escAttr(x.name)}"${r.busy ? " disabled" : ""}>Roll back</button>`;
-      }
-      h += `<div class="rel-host" data-host="${escAttr(x.name)}"><span class="rel-hn">${esc(x.name)}</span>
-        <span class="rel-hv">${esc(x.version || "?")}${there ? " ✓" : ""}</span><span class="rel-hs">${esc(relRecordText(x))}</span>${btn ? `<span class="rel-ha">${btn}</span>` : ""}</div>`;
-    }
-    h += `</div>`;
-    const c = r.confirm;
-    if (c && c.k === "up") {
-      const x = hosts.find((y) => y.name === c.host);
-      h += `<div class="rel-confirm" role="group" aria-label="Confirm the upgrade"><div>${c.rollback
-        ? `Roll back <b>${esc(c.host)}</b> from ${esc(rl.version)} to the binary it had before? comebye restarts on that host.`
-        : `Upgrade <b>${esc(c.host)}</b> from ${esc((x && x.version) || "?")} to <b>${esc(rl.version)}</b>? It checks the download, restarts comebye there, and rolls back by itself if the new one fails its checks.`}</div>
-        <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-up"${r.busy ? " disabled" : ""}>Confirm: ${c.rollback ? "roll back" : "upgrade"} ${esc(c.host)}</button>
-        <button type="button" data-rel="cancel"${r.busy ? " disabled" : ""}>Cancel</button></div></div>`;
-    }
+  if (tagged && ro) {
+    if (ro.complete) h += `<div class="rl-line"><span class="rel-chip rel-ok">all upgraded</span> <span class="rel-note">${ro.total} of ${ro.total} hosts run ${esc(rl.version)}</span></div>`;
+    else h += `<div class="rl-line rel-note">${esc(relCount(ro))} on ${esc(rl.version)}${ro.offline ? ". The release is not done until the offline host is back and upgraded" : ". Buttons stay until each host matches"}.</div>`;
   }
-
-  if (rl.state === "tagged") h += relDeployHtml(t, r, d, !!(d && d.build && d.build.state === "success"));
+  if (t.state === "dropped" || t.state === "done") h += `<div class="rel-note">Its to-do item is ${t.state === "dropped" ? "dropped" : "closed"}; the release stays here until every host runs it.</div>`;
 
   // Who did what.
-  const au = (d && d.audit) || [];
+  const au = d.audit || [];
   if (au.length) {
     h += `<details class="rel-changes rel-audit"><summary>Record (${au.length})</summary><ul>${au.slice(-12).reverse().map((e) => {
       const at = Date.parse(e.at);
@@ -1980,54 +2052,88 @@ function relHtml(t) {
   return h + `</div>`;
 }
 
-async function relPost(id, path, body) {
-  const r = relOf(id);
-  r.busy = true;
-  rel.rev++;
-  renderTodos(true);
-  try {
-    await api(path, { method: "POST", headers: { "X-Comebye-Csrf": (r.data && r.data.csrf) || "" }, body: JSON.stringify(body), timeout: 60000 });
-    r.confirm = null;
-    return true;
-  } catch (e) {
-    if (e.code === "csrf") { await loadRelease(id, false); toast("The page was out of date. Check the details and try again.", true); }
-    else toast(e.message, true);
-    return false;
-  } finally {
-    r.busy = false;
+function relHistoryHtml(d) {
+  const hist = d.history || [];
+  let h = `<div class="rl-card" data-history><h3>History</h3>`;
+  if (!hist.length) return h + `<div class="rel-note">No releases yet.</div></div>`;
+  h += `<table class="rl-hist"><tbody>`;
+  for (const r of hist) {
+    const at = r.tagged_at ? new Date(r.tagged_at) : null;
+    const date = at && !Number.isNaN(at.getTime()) ? at.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+    const link = r.notes_url && todoLinkHref(r.notes_url) ? `<a href="${escAttr(r.notes_url)}" target="_blank" rel="noopener noreferrer">notes ↗</a>` : "";
+    h += `<tr><td class="rl-hv">${esc(r.version)}</td><td class="rl-hd">${esc(date)}</td><td class="rl-hn2"><code>${esc(relShort(r.commit))}</code> ${link}</td></tr>`;
+  }
+  return h + `</tbody></table></div>`;
+}
+
+function relPaneHtml() {
+  const d = rls.data;
+  if (!d) return rls.err ? `<div class="rel-block" role="alert">Could not load the releases: ${esc(rls.err)}</div>` : '<div class="pr-empty">Loading…</div>';
+  return `${rls.err ? `<div class="rel-block rl-err-top" role="alert">Could not refresh: ${esc(rls.err)}</div>` : ""}
+    <div class="rl-wrap"><div class="rl-a-card">${relCardHtml(d)}</div><div class="rl-a-fleet">${relFleetHtml(d)}</div><div class="rl-a-hist">${relHistoryHtml(d)}</div></div>`;
+}
+
+function renderReleases() {
+  const el = $("pr-releases");
+  const html = relPaneHtml();
+  if (el._html === html) return;
+  // Keep the scroll and the focused button across a redraw.
+  const ae = document.activeElement, keep = ae && el.contains(ae) && ae.dataset.rel ? { rel: ae.dataset.rel, host: ae.dataset.host || "" } : null;
+  el._html = html;
+  el.innerHTML = html;
+  if (keep) {
+    const b = [...el.querySelectorAll("[data-rel]")].find((x) => x.dataset.rel === keep.rel && (x.dataset.host || "") === keep.host);
+    if (b && !b.disabled) b.focus({ preventScroll: true });
   }
 }
 
-async function relClick(t, act, host) {
-  const r = relOf(t.id);
+async function relPost(path, body) {
+  rls.busy = true;
+  renderReleases();
+  try {
+    await api(path, { method: "POST", headers: { "X-Comebye-Csrf": (rls.data && rls.data.csrf) || "" }, body: JSON.stringify(body), timeout: 60000 });
+    rls.confirm = null;
+    return true;
+  } catch (e) {
+    if (e.code === "csrf") { await loadReleases(false); toast("The page was out of date. Check the details and try again.", true); }
+    else toast(e.message, true);
+    return false;
+  } finally {
+    rls.busy = false;
+  }
+}
+
+async function relClick(act, host) {
+  const d = rls.data;
+  if (!d || !d.todo) { if (act === "refresh") loadReleases(true); return; }
+  const t = d.todo, id = encodeURIComponent(t.id);
   switch (act) {
-    case "refresh": loadRelease(t.id, true); return;
-    case "approve": r.confirm = { k: "tag" }; break;
-    case "up": r.confirm = { k: "up", host, rollback: false }; break;
-    case "rollback": r.confirm = { k: "up", host, rollback: true }; break;
-    case "deploy": r.confirm = { k: "deploy" }; break;
-    case "cancel": r.confirm = null; break;
+    case "refresh": loadReleases(true); return;
+    case "approve": rls.confirm = { k: "tag" }; break;
+    case "up": rls.confirm = { k: "up", host, rollback: false }; break;
+    case "rollback": rls.confirm = { k: "up", host, rollback: true }; break;
+    case "deploy": rls.confirm = { k: "deploy" }; break;
+    case "cancel": rls.confirm = null; break;
     case "confirm-deploy":
-      if (await relPost(t.id, `/api/release/${encodeURIComponent(t.id)}/deploy`, { version: t.release.version, commit: t.release.commit })) toast("Started.");
-      await loadRelease(t.id, true);
+      if (await relPost(`/api/release/${id}/deploy`, { version: t.release.version, commit: t.release.commit })) toast("Started.");
+      await loadReleases(true);
       return;
     case "confirm-tag":
-      if (await relPost(t.id, `/api/release/${encodeURIComponent(t.id)}/approve`, { version: t.release.version, commit: t.release.commit })) toast("Approved. Tagging…");
+      if (await relPost(`/api/release/${id}/approve`, { version: t.release.version, commit: t.release.commit })) toast("Approved. Tagging…");
       todos.loadedAt = 0;
-      await loadTodos();
-      await loadRelease(t.id, true);
+      loadTodos();
+      await loadReleases(true);
       return;
     case "confirm-up": {
-      const c = r.confirm;
+      const c = rls.confirm;
       if (!c) return;
-      if (await relPost(t.id, `/api/hosts/${encodeURIComponent(c.host)}/release/upgrade`, { todo: t.id, version: t.release.version, rollback: !!c.rollback })) toast(`${c.rollback ? "Rolling back" : "Upgrading"} ${c.host}…`);
-      await loadRelease(t.id, true);
+      if (await relPost(`/api/hosts/${encodeURIComponent(c.host)}/release/upgrade`, { todo: t.id, version: t.release.version, rollback: !!c.rollback })) toast(`${c.rollback ? "Rolling back" : "Upgrading"} ${c.host}…`);
+      await loadReleases(true);
       return;
     }
     default: return;
   }
-  rel.rev++;
-  renderTodos(true);
+  renderReleases();
 }
 
 function onTodoClick(ev) {
@@ -2080,8 +2186,6 @@ function onTodoClick(ev) {
   }
   const t = todos.items.find((x) => x.id === id);
   if (!t) return;
-  const rb = ev.target.closest("[data-rel]");
-  if (rb && t.release) { relClick(t, rb.dataset.rel, rb.dataset.host); return; }
   if (ev.target.closest(".td-answer-btn")) {
     todoAnswer(id, item.querySelector(".td-text"));
   } else if (ev.target.closest(".td-keep")) {
@@ -5047,7 +5151,9 @@ const PEER_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 function parsePeersRoute() {
   const m = location.hash.match(/^#\/peers(?:\/([^/]+))?$/);
   if (!m) return null;
-  return { name: m[1] && PEER_NAME_RE.test(m[1]) ? m[1] : "" };
+  // "~releases" cannot be a host name (PEER_NAME_RE), so the tab shares the route.
+  if (m[1] === "~releases") return { name: "", tab: "releases" };
+  return { name: m[1] && PEER_NAME_RE.test(m[1]) ? m[1] : "", tab: "hosts" };
 }
 function peerHash(name) { return "#/peers" + (name ? "/" + name : ""); }
 function isLocalHostName(name) { return !!state.localHost && name === state.localHost; }
@@ -5090,6 +5196,7 @@ async function peersLoadCats(name) {
 }
 
 function peersLoadAll() {
+  loadReleases(false);
   peersLoadInfo().then(renderPeers);
   for (const h of state.hosts) peersLoadCfg(h.name);
 }
@@ -5140,7 +5247,30 @@ function renderPeersList() {
       <span class="pr-meta">${esc(peerStatusText(h))} · ${esc(h.version || "version unknown")}${mis} · ${h.no_agents ? "no agents here" : (h.agents || 0) + " agent" + (h.agents === 1 ? "" : "s")}</span>
       ${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}</a>`;
   }).join("");
-  if ($("pr-items")._html !== html) { $("pr-items")._html = html; $("pr-items").innerHTML = html; }
+  const nudge = rls.data && rls.data.needs_you && rls.data.todo
+    ? `<a class="pr-nudge" href="${RELEASES_HASH}">${esc(rls.data.todo.release.version)} needs you: ${esc(rls.data.needs_text || "see the Releases tab")} →</a>` : "";
+  const all = html + nudge;
+  if ($("pr-items")._html !== all) { $("pr-items")._html = all; $("pr-items").innerHTML = all; }
+}
+
+// The Hosts | Releases tabs. The Releases tab carries an orange dot while a
+// release needs the user.
+function renderPeerTabs() {
+  const r = prs.route, rel = r.tab === "releases";
+  $("peers").classList.toggle("tab-rel", rel);
+  for (const b of document.querySelectorAll("#pr-tabs [data-tab]")) {
+    const on = (b.dataset.tab === "releases") === rel;
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  const need = !!(rls.data && rls.data.needs_you);
+  const dot = $("pr-dot");
+  dot.hidden = !need;
+  dot.textContent = need ? "1" : "";
+  dot.setAttribute("aria-label", need ? "a release needs you: " + (rls.data.needs_text || "") : "");
+  $("pr-tab-rel").title = need ? (rls.data.needs_text || "") : "";
+  $("pr-releases").hidden = !rel;
+  document.querySelector("#peers .pr-panes").hidden = rel;
 }
 
 function fmtWhen(t) { const at = Date.parse(t); return Number.isNaN(at) ? "" : fmtAgo(at) + " ago"; }
@@ -5240,6 +5370,8 @@ function renderPeerView() {
 
 function renderPeers() {
   if (!prs.route) return;
+  renderPeerTabs();
+  if (prs.route.tab === "releases") { renderReleases(); return; }
   renderPeersList();
   renderPeerView();
 }
@@ -5254,6 +5386,7 @@ function syncPeers() {
   if (!r) { clearInterval(prs.timer); prs.timer = null; return; }
   if (!was) {
     prs.cfg = {}; prs.cats = {}; prs.draft = null; $("pr-view").dataset.name = ""; $("pr-view")._html = "";
+    rls.confirm = null; $("pr-releases")._html = "";
     prs.timer = setInterval(peersLoadAll, 20000);
     peersLoadAll();
   }
@@ -5292,6 +5425,20 @@ async function peersSave() {
 
 function initPeers() {
   $("pr-back").addEventListener("click", peersBack);
+  $("pr-tabs").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-tab]");
+    if (b) location.hash = b.dataset.tab === "releases" ? RELEASES_HASH : "#/peers";
+  });
+  $("pr-tabs").addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    ev.preventDefault();
+    location.hash = ev.key === "ArrowRight" ? RELEASES_HASH : "#/peers";
+    $(ev.key === "ArrowRight" ? "pr-tab-rel" : "pr-tab-hosts").focus();
+  });
+  $("pr-releases").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-rel]");
+    if (b && !b.disabled) relClick(b.dataset.rel, b.dataset.host);
+  });
   $("peers").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); peersBack(); } });
   const v = $("pr-view");
   const touch = () => { v._html = ""; /* the dirty marks change; the fields keep what was typed */ };

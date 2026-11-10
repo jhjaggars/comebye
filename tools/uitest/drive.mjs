@@ -3,6 +3,7 @@
 // the agent, in the chat view and in the raw terminal view, and switching
 // agents must not show the previous agent's view.
 import { launch, mockLaunchRoutes } from "./lib.mjs";
+import { releaseView } from "./relfix.mjs";
 import fs from "node:fs";
 
 const [base, out] = process.argv.slice(2);
@@ -3939,213 +3940,197 @@ await check("collapse: the phone keeps the list as it was, even with the choice 
 });
 
 fs.writeFileSync(`${out}/browser.log`, log.join("\n") + "\n");
-// Last among the to-do checks: it adds an item, and the server allows 20 adds a minute.
-await check("release: a release to-do shows the commit, CI and changes; approving needs a confirm naming the version and commit; the hosts then offer Upgrade with its own confirm", async () => {
-  const SHA = "0123456789abcdef0123456789abcdef01234567", VER = "v9.9.9";
-  // The server allows 20 to-do adds a minute and the checks before this one use them: wait for room.
-  const post = async (b) => {
-    for (let i = 0; i < 14; i++) {
-      const r = await page.evaluate(async (b) => { const x = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }); return { code: x.status, body: await x.json() }; }, b);
-      if (r.code !== 429) return r.body.todo;
-      await page.waitForTimeout(5000);
-    }
-    return undefined;
-  };
-  await desktopList(1280, "#/todo");
-  const t = await post({ question: "", kind: "release", no_wait: true, release: { version: VER, commit: SHA } });
-  if (!t || !t.release || t.release.state !== "pending") throw new Error("not raised: " + JSON.stringify(t));
-  try {
-  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
-  const item = `#p-todo .td-item[data-id="${t.id}"]`;
-  await page.waitForSelector(item);
-  await page.locator(item + " > .td-row").click();
-  const rel = item + " .rel";
-  await page.waitForSelector(rel + " .rel-facts dd .rel-chip.rel-ok");
-  const txt = async () => (await page.locator(rel).innerText());
-  let tx = await txt();
-  if (!tx.includes(SHA) || !tx.includes("v0.0.0") || !/CI passed/.test(tx) || !/Changes since v0\.0\.0 \(2\)/.test(tx)) throw new Error("facts missing: " + tx);
-  if (await page.locator(item + " .td-text, " + item + " .td-answer-btn").count()) throw new Error("a release item offers a free-text answer");
-  // The confirm step names the version and the whole commit, and Cancel backs out.
-  await page.locator(rel + " .rel-approve").click();
-  const conf = rel + " .rel-confirm";
-  await page.waitForSelector(conf);
-  const ct = await page.locator(conf).innerText();
-  if (!ct.includes(VER) || !ct.includes(SHA)) throw new Error("confirm does not name the version and commit: " + ct);
-  await page.locator(conf + " [data-rel=cancel]").click();
-  await page.waitForSelector(conf, { state: "detached" });
-  // Without the page's token the server refuses.
-  const noTok = await page.evaluate(async ([id, v, c]) => (await fetch(`/api/release/${id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: v, commit: c }) })).status, [t.id, VER, SHA]);
-  if (noTok !== 403) throw new Error("approve without the CSRF token = " + noTok);
-  if ((await page.evaluate((id) => todos.items.find((x) => x.id === id).release.state, t.id)) !== "pending") throw new Error("state moved without a confirm");
-  // Approve, confirm.
-  await page.locator(rel + " .rel-approve").click();
-  await page.locator(conf + " .rel-go").click();
-  await page.waitForSelector(rel + " .rel-s-tagged", { timeout: 15000 });
-  await page.waitForSelector(rel + " .rel-hosts .rel-host .rel-up", { timeout: 15000 });
-  tx = await txt();
-  if (!/build passed/.test(tx) || !/uitest/.test(tx)) throw new Error("tagged view: " + tx);
-  // Upgrade the one host: its own confirm names the host and version.
-  await page.locator(rel + " .rel-host .rel-up").click();
-  await page.waitForSelector(conf);
-  const ut = await page.locator(conf).innerText();
-  if (!ut.includes("uitest") || !ut.includes(VER)) throw new Error("upgrade confirm: " + ut);
-  await page.locator(conf + " .rel-go").click();
-  await page.waitForFunction((s) => /dry run v9\.9\.9/.test(document.querySelector(s).innerText), rel, { timeout: 15000 });
-  // The record says who did what.
-  await page.locator(rel + " .rel-audit summary").click();
-  const au = await page.locator(rel + " .rel-audit").innerText();
-  for (const a of ["release.approve", "release.tagged", "upgrade.request"]) if (!au.includes(a)) throw new Error("record lacks " + a + ": " + au);
-  await page.screenshot({ path: `${out}/release-1280.png` });
-  // Nothing in the item scrolls sideways, here or on the phone.
-  const hscroll = (sel) => page.evaluate((sel) => [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth), sel);
-  let bad = await hscroll(item);
-  if (bad.length) throw new Error("1280: sideways scroll: " + bad.join("; "));
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(base + "/", { waitUntil: "load" });
-  await page.waitForSelector("#agents .agent");
-  await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
-  const pitem = `#todo .td-item[data-id="${t.id}"]`;
-  await page.waitForSelector(pitem);
-  if (!(await page.locator(pitem + ".open").count())) await page.locator(pitem + " > .td-row").click();
-  await page.waitForSelector(pitem + " .rel .rel-host");
-  await page.locator(pitem + " .rel .rel-rb, " + pitem + " .rel .rel-up").first().click().catch(() => {});
-  bad = await hscroll(pitem);
-  const o = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
-  if (bad.length || o[0] > o[1]) throw new Error("390: sideways scroll: " + bad.join("; ") + " " + o);
-  await page.screenshot({ path: `${out}/release-390.png` });
-  } finally {
-    await page.evaluate((id) => fetch("/api/todos/" + id + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), t.id).catch(() => {});
+// ---- the Releases tab on Peers ----
+const REL_SHA = "0123456789abcdef0123456789abcdef01234567";
+const relPost = async (b) => {
+  // The server allows 20 to-do adds a minute and the checks before use them: wait for room.
+  for (let i = 0; i < 14; i++) {
+    const r = await page.evaluate(async (b) => { const x = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }); return { code: x.status, body: await x.json() }; }, b);
+    if (r.code !== 429) return r.body.todo;
+    await page.waitForTimeout(5000);
   }
+  return undefined;
+};
+const relDrop = (id) => page.evaluate((id) => fetch("/api/todos/" + id + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id).catch(() => {});
+const relHscroll = () => page.evaluate(() => {
+  const sel = "#pr-releases";
+  const bad = [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline" && !e.closest("pre")).map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth);
+  return { bad, page: [document.documentElement.scrollWidth, innerWidth], pane: [document.querySelector(sel).scrollWidth, document.querySelector(sel).clientWidth] };
 });
-// The deploy block ("Bump hub"): offered only after the build passed, never run by Approve release, its own
-// confirm, then running / passed / failed, and the page's recovery when the hub it runs on is replaced.
-// The simulated deploy takes 2 s and fails for a patch number of 13 (internal/server/release_deploy.go).
+const openReleases = async (width) => {
+  await page.setViewportSize({ width, height: width < 500 ? 844 : 800 });
+  await page.goto(base + "/#/peers/~releases", { waitUntil: "load" });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForSelector("#pr-releases .rl-card", { timeout: 20000 });
+};
+
+// Every state of the tab, from canned answers (relfix.mjs), at both widths.
 for (const width of [1280, 390]) {
-await check(`release deploy at ${width}: Bump hub is offered once tagged, needs its own confirm, then shows running, passed, failed and the page recovers after a hub restart`, async () => {
-  const SHA = "0123456789abcdef0123456789abcdef01234567";
-  const OK = width === 1280 ? "v9.8.1" : "v9.7.1", BAD = width === 1280 ? "v9.8.13" : "v9.7.13";
-  const post = async (b) => {
-    for (let i = 0; i < 14; i++) {
-      const r = await page.evaluate(async (b) => { const x = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }); return { code: x.status, body: await x.json() }; }, b);
-      if (r.code !== 429) return r.body.todo;
-      await page.waitForTimeout(5000);
+await check(`releases tab at ${width}: tabs and badge, and the card and fleet table in every state; nothing scrolls sideways`, async () => {
+  let state = "none";
+  await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(state) }));
+  try {
+    const txt = () => page.locator("#pr-releases").innerText();
+    const reload = async (s) => { state = s; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => document.querySelector("#pr-releases").innerText.length > 0 && rls.data && rls.data.history, null); await page.waitForTimeout(100); };
+    await openReleases(width);
+    // the tabs
+    if ((await page.locator("#pr-tabs [role=tab]").allInnerTexts()).map((t) => t.trim().replace(/\s+\d$/, "")).join("|") !== "Hosts|Releases") throw new Error("tabs");
+    if ((await page.locator("#pr-tab-rel").getAttribute("aria-selected")) !== "true") throw new Error("the deep link did not select Releases");
+    // nothing pending
+    let t = await txt();
+    if (!/No release pending/.test(t) || !/Everything runs v0\.5\.21/.test(t) || (await page.locator("#pr-dot:visible").count())) throw new Error("none: " + t);
+    if ((await page.locator("#pr-releases .rl-hist tr").count()) !== 5) throw new Error("history is not capped at 5");
+    for (const s of ["ci", "green", "red"]) {
+      await reload(s); t = await txt();
+      const dis = await page.locator("#pr-releases .rel-approve").isDisabled();
+      if (!t.includes("v0.5.22") || !t.includes("a3f9c1e")) throw new Error(s + ": " + t);
+      if (s === "ci" && !(/CI in progress/.test(t) && dis)) throw new Error("ci running: " + t);
+      if (s === "ci" && (await page.locator("#pr-dot:visible").count())) throw new Error("badge while CI runs");
+      if (s === "green" && (dis || !/CI passed/.test(t) || !/4 changes since v0\.5\.21/.test(t) || !(await page.locator("#pr-dot:visible").count()))) throw new Error("green: " + t);
+      if (s === "red" && (!dis || !/CI failure/.test(t) || !/Fix CI first/.test(t) || !(await page.locator("#pr-dot:visible").count()))) throw new Error("red: " + t);
+      if (!(await page.locator("#pr-releases .rl-host").count())) throw new Error(s + ": no fleet");
+      if (await page.locator("#pr-releases .rl-host button").count()) throw new Error(s + ": a host button before the tag");
     }
-    return undefined;
-  };
-  const approveApi = (id, v) => page.evaluate(async ([id, v, c]) => {
-    const d = await (await fetch("/api/release/" + id)).json();
-    return (await fetch("/api/release/" + id + "/approve", { method: "POST", headers: { "Content-Type": "application/json", "X-Comebye-Csrf": d.csrf }, body: JSON.stringify({ version: v, commit: c }) })).status;
-  }, [id, v, SHA]);
-  const raise = async (v) => {
-    const t = await post({ question: "", kind: "release", no_wait: true, release: { version: v, commit: SHA } });
-    if (!t || t.release.state !== "pending") throw new Error("not raised: " + JSON.stringify(t));
-    if ((await approveApi(t.id, v)) !== 202) throw new Error("approve failed");
-    await page.waitForFunction(async (id) => (await (await fetch("/api/todos/" + id)).json()).todo.release.state === "tagged", t.id, { timeout: 15000 });
-    return t;
-  };
+    // tagged: the hub is behind, every row offers its button
+    await reload("tagged"); t = await txt();
+    const up = await page.locator("#pr-releases .rl-host button").allInnerTexts();
+    if (!/0 of 4/.test(t) || up.join("|") !== "Bump hub|Upgrade|Upgrade|Upgrade") throw new Error("tagged: " + up + " " + t);
+    if ((await page.locator("#pr-releases .rl-host").first().innerText()).indexOf("hub") < 0) throw new Error("hub row");
+    // partial, with an offline host: 2 of 4, 1 offline; the offline row's button is disabled; no "all upgraded"
+    await reload("partial"); t = await txt();
+    if (!/2 of 4, 1 offline/.test(t) || /all upgraded/i.test(t)) throw new Error("partial: " + t);
+    const off = page.locator('#pr-releases .rl-host[data-host="mac-mini"]');
+    if (!(await off.locator("button").isDisabled()) || !/not reachable since 2d ago/.test(await off.innerText())) throw new Error("offline row: " + (await off.innerText()));
+    if (!(await page.locator('#pr-releases .rl-host[data-host="kubevirt-1"] .rel-up:not(:disabled)').count())) throw new Error("kubevirt-1 has no Upgrade");
+    if ((await page.locator("#pr-releases .rl-prog").getAttribute("aria-valuenow")) !== "2") throw new Error("progress");
+    await page.screenshot({ path: `${out}/releases-partial-${width}.png` });
+    let h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1] || h.pane[0] > h.pane[1]) throw new Error("partial: sideways scroll " + JSON.stringify(h));
+    await reload("partial3"); t = await txt();
+    if (!/3 of 4, 1 offline/.test(t) || /all upgraded/i.test(t)) throw new Error("partial3: " + t);
+    // deploy failed: its error and a Retry
+    await reload("failed"); t = await txt();
+    const hub = page.locator('#pr-releases .rl-host[data-host="laharl"]');
+    if (!/FAILED phase=reconcile/.test(await hub.innerText()) || (await hub.locator("button").innerText()).trim() !== "Retry") throw new Error("deploy failed: " + (await hub.innerText()));
+    const pb = page.locator('#pr-releases .rl-host[data-host="peerbox"]');
+    if (!/rolled back/.test(await pb.innerText()) || (await pb.locator("button").innerText()).trim() !== "Retry") throw new Error("upgrade failed: " + (await pb.innerText()));
+    if (!(await page.locator("#pr-dot:visible").count())) throw new Error("no badge on a failure");
+    await page.screenshot({ path: `${out}/releases-failed-${width}.png` });
+    h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1] || h.pane[0] > h.pane[1]) throw new Error("failed: sideways scroll " + JSON.stringify(h));
+    // all done: green end state, no buttons but Roll back, no badge
+    await reload("done"); t = await txt();
+    if (!/All upgraded/.test(t) || !/4 of 4/.test(t) || (await page.locator("#pr-dot:visible").count())) throw new Error("done: " + t);
+    const left = (await page.locator("#pr-releases .rl-host button").allInnerTexts()).filter((x) => !/Roll back/.test(x));
+    if (left.length) throw new Error("done: buttons left " + left);
+    await page.screenshot({ path: `${out}/releases-done-${width}.png` });
+    h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1] || h.pane[0] > h.pane[1]) throw new Error("done: sideways scroll " + JSON.stringify(h));
+    // the Hosts tab still lists the hosts, and nudges while a release needs you
+    await reload("tagged");
+    await page.locator("#pr-tab-hosts").click();
+    await page.waitForSelector("#pr-items .pr-card");
+    if (!(await page.locator("#pr-items .pr-nudge").count()) || (await page.locator("#pr-releases:visible").count())) throw new Error("hosts tab");
+    h = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+    if (h[0] > h[1]) throw new Error("hosts tab: sideways scroll " + h);
+  } finally { await page.unroute(/\/api\/releases(\?.*)?$/); }
+});
+}
+
+// The palette opens the tab; the to-do item is a one-line ping that links to it.
+await check("releases: the command palette has an entry for the tab, and the release to-do is a ping with Open in Peers", async () => {
+  await desktopList(1280, "#/todo");
+  await page.keyboard.press("Control+k");
+  await page.locator("#pal-q").fill("releases");
+  await page.waitForSelector("#palette .pal-item, #palette [role=option]");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => location.hash === "#/peers/~releases");
+  const t = await relPost({ question: "", kind: "release", no_wait: true, release: { version: "v9.1.0", commit: REL_SHA } });
+  if (!t) throw new Error("not raised");
+  try {
+    await desktopList(1280, "#/todo");
+    await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+    const item = `#p-todo .td-item[data-id="${t.id}"]`;
+    await page.waitForSelector(item);
+    if (!(await page.locator(item + ".open").count())) await page.locator(item + " > .td-row").click();
+    const ping = item + " .rel-ping";
+    await page.waitForSelector(ping);
+    if (await page.locator(item + " .rel-approve, " + item + " .rel-up, " + item + " .rel-dep-btn").count()) throw new Error("the ping carries release buttons");
+    await page.locator(ping + " .rel-open").click();
+    await page.waitForFunction(() => location.hash === "#/peers/~releases");
+    await page.waitForSelector('#pr-releases [data-card=release]');
+  } finally { await relDrop(t.id); }
+});
+
+// The real flow against the simulated server: raise, Approve with its confirm, tag, build, Bump hub (running, passed,
+// failed, retry), the item's ping, and the hub closing the item itself.
+for (const width of [1280, 390]) {
+await check(`releases live at ${width}: Approve needs a confirm naming the version and commit; Bump hub is offered once tagged, runs, fails and retries; history lists the tagged release`, async () => {
+  const OK = width === 1280 ? "v9.8.1" : "v9.7.1", BAD = width === 1280 ? "v9.8.13" : "v9.7.13";
   const items = [];
   try {
-    const a = await raise(OK), b = await raise(BAD);
-    items.push(a, b);
-    // open an item the way this width shows the list
-    const open = async (t) => {
-      if (width === 1280) await desktopList(1280, "#/todo");
-      else { await page.setViewportSize({ width, height: 844 }); await page.goto(base + "/", { waitUntil: "load" }); await page.waitForSelector("#agents .agent"); }
-      await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
-      const item = `${width === 1280 ? "#p-todo" : "#todo"} .td-item[data-id="${t.id}"]`;
-      await page.waitForSelector(item);
-      if (!(await page.locator(item + ".open").count())) await page.locator(item + " > .td-row").click();
-      await page.waitForSelector(item + " .rel .rel-dephost", { timeout: 20000 });
-      return item + " .rel";
-    };
-    const snap = async (rel, name) => { await page.locator(rel).scrollIntoViewIfNeeded(); await page.locator(rel).screenshot({ path: `${out}/bump-${name}-${width}.png` }); };
-    const hscroll = (rel) => page.evaluate((sel) => [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth), rel);
-    const noSideways = async (rel, what) => { const bad = await hscroll(rel); if (bad.length) throw new Error(`${width}: sideways scroll in ${what}: ` + bad.join("; ")); };
-    const dep = (rel) => rel + " .rel-dephost";
-
-    // offered: tagged, build passed, and Approve release has run nothing
-    let rel = await open(a);
-    let tx = await page.locator(rel).innerText();
-    if (!tx.includes("Bump hub") || !(await page.locator(dep(rel) + " .rel-dep-btn").count())) throw new Error("not offered: " + tx);
-    if ((await page.locator(dep(rel) + " .rel-hs").innerText()).trim() !== "") throw new Error("Approve release already ran a deploy: " + tx);
-    await noSideways(rel, "offered"); await snap(rel, "1-offered");
-    // confirm: names the version and says it is a separate step; Cancel backs out; no token, no deploy
-    await page.locator(dep(rel) + " .rel-dep-btn").click();
-    await page.waitForSelector(rel + " .rel-confirm");
-    const ct = await page.locator(rel + " .rel-confirm").innerText();
-    if (!ct.includes(OK) || !/separate step/.test(ct)) throw new Error("confirm: " + ct);
-    await noSideways(rel, "confirm"); await snap(rel, "2-confirm");
-    await page.locator(rel + " .rel-confirm [data-rel=cancel]").click();
-    await page.waitForSelector(rel + " .rel-confirm", { state: "detached" });
-    const noTok = await page.evaluate(async ([id, v, c]) => (await fetch(`/api/release/${id}/deploy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: v, commit: c }) })).status, [a.id, OK, SHA]);
-    if (noTok !== 403) throw new Error("deploy without the CSRF token = " + noTok);
-    if ((await page.locator(dep(rel) + " .rel-hs").innerText()).trim() !== "") throw new Error("a refused deploy left a record");
-    // running -> passed
-    await page.locator(dep(rel) + " .rel-dep-btn").click();
-    await page.locator(rel + " .rel-confirm .rel-go").click();
-    await page.waitForFunction((s) => /running/.test(document.querySelector(s).innerText), dep(rel), { timeout: 10000 });
-    if (await page.locator(dep(rel) + " .rel-dep-btn").count()) throw new Error("the button is still offered while it runs");
-    await noSideways(rel, "running"); await snap(rel, "3-running");
-    await page.waitForFunction((s) => /done/.test(document.querySelector(s).innerText), dep(rel), { timeout: 20000 });
-    tx = await page.locator(dep(rel)).innerText();
-    if (!tx.includes(OK + " ✓") || await page.locator(dep(rel) + " .rel-dep-btn").count()) throw new Error("passed: " + tx);
-    await page.locator(rel + " summary", { hasText: "output" }).first().click();
-    if (!/is serving/.test(await page.locator(rel).innerText())) throw new Error("the output is not shown");
-    // the ok line leads, the full output sits behind the toggle (here open), and nothing is HTML
-    const okHead = (await page.locator(rel + " .rel-dephead").innerText()).trim();
-    if (!okHead.startsWith("bump: ok version=" + OK)) throw new Error("passed headline: " + okHead);
-    if (!(await page.locator(rel + " .rel-depout-ok summary", { hasText: "Show bump hub output" }).count())) throw new Error("no Show output toggle");
-    await noSideways(rel, "passed"); await snap(rel, "4-passed");
-    // failed, with the reason and the button back for a retry
-    rel = await open(b);
-    await page.locator(dep(rel) + " .rel-dep-btn").click();
-    await page.locator(rel + " .rel-confirm .rel-go").click();
-    await page.waitForFunction((s) => /failed/.test(document.querySelector(s).innerText), dep(rel), { timeout: 20000 });
-    tx = await page.locator(dep(rel)).innerText();
-    if (!/failed/.test(tx) || !(await page.locator(dep(rel) + " .rel-dep-btn").count())) throw new Error("failed: " + tx);
-    // the reason is on the page: the FAILED line as the headline, the last lines in a monospace block
-    const fHead = (await page.locator(rel + " .rel-dephead").innerText()).trim();
-    if (fHead !== "bump: FAILED phase=reconcile reason=flux: command not found") throw new Error("failed headline: " + fHead);
-    const fTail = await page.locator(rel + " pre.rel-deptail").innerText();
-    if (!fTail.includes("bump: push") || !fTail.includes("flux: command not found")) throw new Error("failed tail: " + fTail);
-    if ((await page.locator(rel + " pre.rel-deptail").evaluate((e) => getComputedStyle(e).fontFamily)).indexOf("monospace") < 0) throw new Error("the tail is not monospace");
-    await noSideways(rel, "failed");
-    for (const cs of ["light", "dark"]) { await page.emulateMedia({ colorScheme: cs }); await snap(rel, `5-failed-${cs}`); }
-    await page.emulateMedia({ colorScheme: "light" });
-    // output is text, never HTML: a hostile line from the command is shown as typed
-    await page.route(new RegExp(`/api/release/${b.id}(\\?.*)?$`), async (route) => {
-      const resp = await route.fetch(), j = await resp.json();
-      if (j.deploy && j.deploy.record) { delete j.deploy.record.headline; j.deploy.record.output = "\u001b[31mred\u001b[0m\n<img src=x onerror=window.__xss=1>\nbump: FAILED phase=x reason=<b>bold</b>"; }
-      return route.fulfill({ response: resp, json: j });
-    });
-    try {
-      await page.evaluate((id) => loadRelease(id, true), b.id);
-      await page.waitForFunction((s) => /<b>bold<\/b>/.test(document.querySelector(s).innerText), rel, { timeout: 10000 });
-      if (await page.evaluate(() => window.__xss)) throw new Error("output ran as HTML");
-      if (await page.locator(rel + " .rel-depout img, " + rel + " .rel-depout b").count()) throw new Error("output became elements");
-    } finally { await page.unroute(new RegExp(`/api/release/${b.id}(\\?.*)?$`)); }
-    await page.evaluate((id) => loadRelease(id, true), b.id);
-    await snap(rel, "5-failed");
-    // the hub is replaced while a deploy runs: the page cannot load for a while, then reads the record the release host kept
-    const id = b.id;
-    let mode = "down";
-    await page.route(new RegExp(`/api/release/${id}(\\?.*)?$`), async (route) => {
-      if (mode === "down") return route.abort("connectionrefused");
-      const resp = await route.fetch(), j = await resp.json();
-      if (j.deploy) j.deploy.record = { version: BAD, state: "failed", started: new Date(Date.now() - 60000).toISOString(), finished: new Date().toISOString(), error: "the deploy stopped without a verdict (this server restarted while it ran)" };
-      return route.fulfill({ response: resp, json: j });
-    });
-    try {
-      await page.evaluate((id) => loadRelease(id, true), id);
-      await page.waitForFunction((s) => /Could not load the release page/.test(document.querySelector(s).innerText), rel, { timeout: 10000 });
-      await noSideways(rel, "hub down"); await snap(rel, "6a-hub-down");
-      mode = "up";
-      await page.evaluate((id) => loadRelease(id, true), id);
-      await page.waitForFunction((s) => /restarted while it ran/.test(document.querySelector(s).innerText) && !/Could not load/.test(document.querySelector(s).innerText), rel, { timeout: 10000 });
-      await noSideways(rel, "after restart"); await snap(rel, "6b-after-restart");
-    } finally { await page.unroute(new RegExp(`/api/release/${id}(\\?.*)?$`)); }
+    const a = await relPost({ question: "", kind: "release", no_wait: true, release: { version: OK, commit: REL_SHA } });
+    if (!a) throw new Error("not raised"); items.push(a);
+    await openReleases(width);
+    const card = "#pr-releases [data-card=release]", fleet = "#pr-releases [data-fleet]";
+    await page.waitForSelector(card + " .rel-facts");
+    const pane = () => page.locator("#pr-releases").innerText();
+    let tx = await pane();
+    if (!tx.includes(REL_SHA) || !/CI passed/.test(tx) || !/2 changes since v0\.0\.0/.test(tx)) throw new Error("facts: " + tx);
+    if (!(await page.locator("#pr-dot:visible").count())) throw new Error("no badge for a release waiting for approval");
+    await page.locator(card + " .rel-approve").click();
+    let ct = await page.locator("#pr-releases .rel-confirm").innerText();
+    if (!ct.includes(OK) || !ct.includes(REL_SHA)) throw new Error("confirm: " + ct);
+    await page.locator("#pr-releases .rel-confirm [data-rel=cancel]").click();
+    await page.waitForSelector("#pr-releases .rel-confirm", { state: "detached" });
+    const noTok = await page.evaluate(async ([id, v, c]) => (await fetch(`/api/release/${id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: v, commit: c }) })).status, [a.id, OK, REL_SHA]);
+    if (noTok !== 403) throw new Error("approve without the CSRF token = " + noTok);
+    await page.locator(card + " .rel-approve").click();
+    await page.locator("#pr-releases .rel-confirm .rel-go").click();
+    await page.waitForSelector(card + " .rel-s-tagged", { timeout: 15000 });
+    // tagged: the Bump hub button, never run by Approve
+    const dep = fleet + " .rl-host[data-deploy]";
+    await page.waitForSelector(dep + " .rel-dep-btn", { timeout: 15000 });
+    if (!/Bump hub/.test(await page.locator(dep + " .rel-dep-btn").innerText())) throw new Error("label");
+    await page.locator(dep + " .rel-dep-btn").click();
+    ct = await page.locator("#pr-releases .rel-confirm").innerText();
+    if (!ct.includes(OK) || !/separate step/.test(ct)) throw new Error("deploy confirm: " + ct);
+    await page.locator("#pr-releases .rel-confirm [data-rel=cancel]").click();
+    const noTok2 = await page.evaluate(async ([id, v, c]) => (await fetch(`/api/release/${id}/deploy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: v, commit: c }) })).status, [a.id, OK, REL_SHA]);
+    if (noTok2 !== 403) throw new Error("deploy without the token = " + noTok2);
+    await page.locator(dep + " .rel-dep-btn").click();
+    await page.locator("#pr-releases .rel-confirm .rel-go").click();
+    await page.waitForFunction((s) => /running/.test(document.querySelector(s).innerText), dep, { timeout: 10000 });
+    if (await page.locator(dep + " .rel-dep-btn").count()) throw new Error("button offered while it runs");
+    await page.waitForFunction((s) => /done/.test(document.querySelector(s).innerText), dep, { timeout: 20000 });
+    let h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1]) throw new Error("sideways scroll " + JSON.stringify(h));
+    await page.screenshot({ path: `${out}/releases-live-${width}.png` });
+    // the hub is not on the release's version (a dev build), so the item stays open and the tab keeps it
+    const st = await page.evaluate(async (id) => (await (await fetch("/api/todos/" + id)).json()).todo.state, a.id);
+    if (st !== "open") throw new Error("the item closed although the hub does not run " + OK + ": " + st);
+    // dropping the ping does not take the release away from the tab
+    await relDrop(a.id);
+    await page.evaluate(() => loadReleases(true));
+    await page.waitForFunction((v) => rls.data && rls.data.current && rls.data.todo.release.version === v && rls.data.todo.state === "dropped", OK, { timeout: 10000 });
+    tx = await pane();
+    if (!tx.includes(OK) || !/to-do item is dropped/.test(tx) || !(await page.locator(dep).count())) throw new Error("dropped item took the release away: " + tx);
+    // a failing deploy shows its words and a Retry
+    const b = await relPost({ question: "", kind: "release", no_wait: true, release: { version: BAD, commit: REL_SHA } });
+    if (!b) throw new Error("not raised b"); items.push(b);
+    await page.evaluate(async ([id, v, c]) => {
+      const d = await (await fetch("/api/release/" + id)).json();
+      await fetch("/api/release/" + id + "/approve", { method: "POST", headers: { "Content-Type": "application/json", "X-Comebye-Csrf": d.csrf }, body: JSON.stringify({ version: v, commit: c }) });
+    }, [b.id, BAD, REL_SHA]);
+    await page.waitForFunction(async (id) => (await (await fetch("/api/todos/" + id)).json()).todo.release.state === "tagged", b.id, { timeout: 15000 });
+    await page.evaluate(() => loadReleases(true));
+    await page.waitForFunction((v) => rls.data && rls.data.todo.release.version === v && document.querySelector("#pr-releases .rel-dep-btn"), BAD, { timeout: 10000 });
+    await page.locator(dep + " .rel-dep-btn").click();
+    await page.locator("#pr-releases .rel-confirm .rel-go").click();
+    await page.waitForFunction((s) => /failed/.test(document.querySelector(s).innerText), dep, { timeout: 20000 });
+    if ((await page.locator(dep + " .rel-dep-btn").innerText()).trim() !== "Retry") throw new Error("no Retry");
+    if ((await page.locator(dep + " .rel-dephead").innerText()).trim() !== "bump: FAILED phase=reconcile reason=flux: command not found") throw new Error("failed headline");
+    h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1]) throw new Error("failed: sideways scroll " + JSON.stringify(h));
+    // the history lists the earlier release (not the current one)
+    if (!(await page.locator("#pr-releases .rl-hist").innerText()).includes(OK)) throw new Error("history lacks " + OK);
   } finally {
-    for (const t of items) await page.evaluate((id) => fetch("/api/todos/" + id + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), t.id).catch(() => {});
+    for (const t of items) await relDrop(t.id);
   }
 });
 }

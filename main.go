@@ -448,6 +448,7 @@ func main() {
 	go srv.RunLedger(context.Background())
 	go srv.RunUsage(context.Background())
 	go srv.RunAutoTodo(context.Background())
+	go srv.RunReleaseSweep(context.Background())
 	go srv.RunBlockedRelay(context.Background())
 	go srv.RunReask(context.Background())
 	go srv.RunRepoHealth(context.Background())

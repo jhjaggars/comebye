@@ -255,6 +255,14 @@ type relHost struct {
 	Unknown bool            `json:"unknown,omitempty"` // the host could not be asked
 	DryRun  bool            `json:"dry_run,omitempty"`
 	Record  *upgrade.Record `json:"record,omitempty"`
+	// Hub marks the local host of a hub. Offline: the host is not answering
+	// (down, still connecting, or it did not answer the status call). Current:
+	// it runs the release's version or a newer one. Since is when an offline
+	// host went quiet. All three are set by markRollout.
+	Hub     bool       `json:"hub,omitempty"`
+	Offline bool       `json:"offline,omitempty"`
+	Current bool       `json:"current"`
+	Since   *time.Time `json:"since,omitempty"`
 }
 
 // How old an answer from git or GitHub the page may be shown. The refresh
@@ -315,26 +323,41 @@ func (s *Server) releaseItem(w http.ResponseWriter, id string) (Todo, bool) {
 // handleReleaseView: GET /api/release/{id}. What the page shows: the live
 // check of the commit (CI from GitHub, the changes since the last tag), the
 // release build once tagged, every host with its version, the audit trail
-// and the CSRF token.
+// and the CSRF token. The Releases tab reads GET /api/releases instead, which
+// returns the same view for the current release.
 func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
-	if !s.relGuard(w, r, false) || s.todoOff(w, r) {
-		return
-	}
-	// A GET is not covered by the cross-origin rule, and this one runs git
-	// and gh: a page that is not this one cannot have it done.
-	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" && sfs != "none" {
-		relErr(w, http.StatusForbidden, "cross_site", "not from another site")
+	if !s.relReadGuard(w, r) {
 		return
 	}
 	it, ok := s.releaseItem(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	cfg := s.cfg.Release
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
+	writeJSON(w, s.releaseViewOf(ctx, r, it, r.URL.Query().Get("refresh") == "1", nil))
+}
+
+// relReadGuard is relGuard for the two GETs that run git and gh: a GET is not
+// covered by the cross-origin rule, so a page that is not this one cannot have
+// it done.
+func (s *Server) relReadGuard(w http.ResponseWriter, r *http.Request) bool {
+	if !s.relGuard(w, r, false) || s.todoOff(w, r) {
+		return false
+	}
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" && sfs != "none" {
+		relErr(w, http.StatusForbidden, "cross_site", "not from another site")
+		return false
+	}
+	return true
+}
+
+// releaseViewOf builds what the page shows for one release item. hosts, when
+// not nil, is a list the caller already fetched (and marked).
+func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, refresh bool, hosts []relHost) map[string]any {
+	cfg := s.cfg.Release
 	checkAge, buildAge := relCheckTTL, relBuildTTL
-	if r.URL.Query().Get("refresh") == "1" {
+	if refresh {
 		checkAge, buildAge = relForceGap, relForceGap
 	}
 	if cfg.Tool != nil && it.active() && it.Release.State == relFailed {
@@ -350,30 +373,44 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 		"release_host": s.releaseHost(),
 		"audit":        s.ledger.AuditLog(it.ID),
 	}
-	if cfg.Tool != nil && it.active() {
-		// While the tag is being pushed the page shows the stored state: a
-		// check now would fetch in the clone the push is using.
-		if it.Release.State == relTagging {
-			// nothing to ask
-		} else if it.Release.State != relTagged {
-			ck, err := s.relCheck(ctx, it, checkAge)
-			if err != nil {
-				out["check_error"] = err.Error()
-			} else {
-				out["check"] = ck
-			}
-		} else {
-			bd, err := s.relBuild(ctx, it, buildAge)
+	var ck *release.Check
+	var bd *release.Build
+	if cfg.Tool != nil {
+		switch {
+		case it.Release.State == relTagging:
+			// While the tag is being pushed the page shows the stored state: a
+			// check now would fetch in the clone the push is using.
+		case it.Release.State == relTagged:
+			// A tagged release is shown while it rolls out, whether or not
+			// its to-do item is still open.
+			b, err := s.relBuild(ctx, it, buildAge)
 			if err != nil {
 				out["build_error"] = err.Error()
 			} else {
-				out["build"] = bd
+				out["build"], bd = b, &b
+			}
+		case it.active():
+			c, err := s.relCheck(ctx, it, checkAge)
+			if err != nil {
+				out["check_error"] = err.Error()
+			} else {
+				out["check"], ck = c, &c
 			}
 		}
 	}
 	out["dry_run"] = cfg.DryRun || s.remoteDry() // after the check: the release host reports its mode with it
+	var dep *deployStatus
 	if it.Release.State == relTagged {
-		out["hosts"] = s.relHosts(ctx)
+		if hosts == nil {
+			hosts = s.relHosts(ctx)
+			markRollout(hosts, it.Release.Version)
+		}
+		out["hosts"] = hosts
+		if u := notesURL(it.Release); u != "" {
+			out["notes_url"] = u
+		}
+		ro := rolloutOf(hosts)
+		out["rollout"] = ro
 		if cfg.Tool != nil {
 			// The deploy command lives on the host that owns the clone.
 			dctx, dcancel := context.WithTimeout(ctx, 8*time.Second)
@@ -381,12 +418,16 @@ func (s *Server) handleReleaseView(w http.ResponseWriter, r *http.Request) {
 				out["deploy_error"] = oneLine(err.Error(), 200)
 			} else if st.Enabled {
 				out["deploy"] = st
+				dep = &st
 				s.settleDeployAudit(st)
 			}
 			dcancel()
 		}
+		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, hosts, ro, dep)
+	} else {
+		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, nil, relRollout{}, nil)
 	}
-	writeJSON(w, out)
+	return out
 }
 
 // relHosts lists every host with its version and what the app's last
@@ -397,7 +438,7 @@ func (s *Server) relHosts(ctx context.Context) []relHost {
 	out := make([]relHost, len(hosts))
 	var wg sync.WaitGroup
 	for i, h := range hosts {
-		out[i] = relHost{Name: h.Name, Local: h.Local, Status: h.Status, Version: h.Version}
+		out[i] = relHost{Name: h.Name, Local: h.Local, Status: h.Status, Version: h.Version, Since: h.Since, Hub: h.Local && s.fleet.IsHub()}
 		wg.Add(1)
 		go func(i int, h string, local bool) {
 			defer wg.Done()
@@ -917,28 +958,45 @@ func (s *Server) reconcileTagged(it Todo, ck release.Check) bool {
 	return true
 }
 
-// releasePending names the hosts (the hub among them) still running an older
-// version than a tagged release item's, so closing the item as done cannot
-// hide the Bump hub and upgrade buttons while a deploy is outstanding. A
-// host that cannot be asked, or whose version is not vMAJOR.MINOR.PATCH, is
-// not counted: only a known older version blocks.
+// releasePending names the hosts (the hub among them) that do not run a
+// tagged release item's version yet, so closing the item as done cannot hide
+// the Bump hub and upgrade buttons while a rollout is outstanding. An offline
+// host counts: the release is not done until it has upgraded. The hub closes
+// the item itself once none is left (sweepReleases); this is the refusal for a
+// person who tries sooner.
 func (s *Server) releasePending(ctx context.Context, it Todo) []string {
 	if it.Release == nil || it.Release.State != relTagged || s.fleet == nil {
 		return nil
 	}
-	want, ok := parseSemver(it.Release.Version)
-	if !ok {
+	if _, ok := parseSemver(it.Release.Version); !ok {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	hosts := s.relHosts(ctx)
+	markRollout(hosts, it.Release.Version)
+	return s.pendingLines(hosts)
+}
+
+// pendingLines says, for each marked host that is not current, what holds it.
+func (s *Server) pendingLines(hosts []relHost) []string {
 	var out []string
-	for _, h := range s.relHosts(ctx) {
-		if have, ok := parseSemver(h.Version); ok && semverLess(have, want) {
-			name := h.Name
-			if h.Local && s.fleet.IsHub() {
-				name = "the hub (" + h.Name + ")"
-			}
+	for _, h := range hosts {
+		if h.Current {
+			continue
+		}
+		name := h.Name
+		if h.Hub {
+			name = "the hub (" + h.Name + ")"
+		}
+		switch {
+		case h.Offline && h.Version != "":
+			out = append(out, name+" is offline (last seen on "+h.Version+")")
+		case h.Offline:
+			out = append(out, name+" is offline")
+		case h.Version == "":
+			out = append(out, name+" reports no version")
+		default:
 			out = append(out, name+" is on "+h.Version)
 		}
 	}

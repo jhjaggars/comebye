@@ -61,7 +61,7 @@ start_servers() { # uses $d, $port, $peerport
   spawn herdr "$d/herdr.log" "$d/fake-herdr" -sock "$d/h.sock" -dir "$d/tx" -fixtures
   wait_for "the fake herdr" test -S "$d/h.sock"
   COMEBYE_ARCHIVE_CLAUDE_DIR="$d/usage/hub/claude" COMEBYE_ARCHIVE_PI_DIR="$d/usage/hub/pi" COMEBYE_USAGE_INTERVAL=5s COMEBYE_DEV_WEB_DIR="$web" COMEBYE_TEST_INSECURE_PEERS=1 spawn comebye "$d/comebye.log" "$d/comebye" -sock "$d/h.sock" \
-    -addr "127.0.0.1:$port" -insecure-no-auth -push=false -state-dir "$d/state" -host-name devbox -peers "peerbox=$peer_url" -recall-index "$d/recall.db"
+    -addr "127.0.0.1:$port" -insecure-no-auth -push=false -state-dir "$d/state" -host-name devbox -peers "peerbox=$peer_url" -recall-index "$d/recall.db" -release-simulate
   wait_for "comebye" curl -sf "http://127.0.0.1:$port/api/agents"
   # the peer's agents arrive on the hub's next poll
   wait_for "the peer's agents" bash -c "curl -sf http://127.0.0.1:$port/api/agents | grep -q peerbox-build"

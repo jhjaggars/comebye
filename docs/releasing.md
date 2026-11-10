@@ -32,7 +32,25 @@ asking you to run the script:
 comebye todo add --kind release --version v0.5.9 --commit <ref>   # the ref is resolved to the full id
 ```
 
-The To do page shows the item with what matters, taken from the hub's own
+The item in the To do list is a one-line ping with **Open in Peers**. Releases
+live on the **Releases** tab of the Peers screen (`#/peers/~releases`, or
+"Releases" in the command palette), next to **Hosts**; the tab shows an orange
+badge while a release needs you (approve it, a build or upgrade failed, a host
+is behind and can be upgraded). It holds the release card, the fleet table
+(the hub and each host: running version, the release version, a progress bar,
+and **Bump hub** / **Upgrade** buttons that stay until the version matches; a
+failed deploy or upgrade shows its error and **Retry**) and the last five
+releases (version, date, link to the notes). A tagged release stays in the tab
+until every host runs it, even if its item was closed or dropped. Closing the
+item is not your job: the hub closes it itself once the hub and every host run
+the version (it checks every 30 s and whenever the tab loads). An **offline host
+blocks that**: the tab says "3 of 4, 1 offline", the release is not done and the
+item stays open until the host is back and upgraded. Closing the item by hand
+while a host is behind or offline is refused (`release_pending`); drop it only to
+abandon the release, and the tab still shows a tagged one until it is rolled out.
+History comes from the to-do items, which are kept 14 days after they close.
+
+The tab shows what matters, taken from the hub's own
 checkout and GitHub rather than from the item's text: the full commit id, the
 last tag, the CI result of that commit, and the commits since the last tag.
 **Approve release** asks you to confirm, naming the version and the commit.
@@ -52,7 +70,7 @@ a peer is asked by the hub, and must run with `-hub` (or `-ledger=false`), since
 hub-only route it answers is refused on a host that keeps a ledger). It runs
 `comebye upgrade --version vX.Y.Z` on that host, with the same checksum and
 smoke checks, and keeps `comebye.prev`; the result and the host's version show
-in the item, and **Roll back** runs `comebye upgrade --rollback`. The upgrade
+in the fleet table, and **Roll back** runs `comebye upgrade --rollback`. The upgrade
 runs as a transient `comebye-upgrade-*` user unit, because it restarts the
 service that started it; its verdict is kept in
 `<state-dir>/release/upgrade.json`.

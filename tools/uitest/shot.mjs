@@ -23,12 +23,15 @@
 //   --a11y SEL           print the element's accessibility tree (default body)
 //   --base URL           dev server URL (default: $COMEBYE_URL, else the one
 //                        dev.sh recorded for this checkout)
+//   --release STATE      serve a canned GET /api/releases for the Releases tab (relfix.mjs
+//                        lists the states: none ci green red tagged partial failed done)
 //   --settle MS          wait this long after the steps (default 400)
 //
 // Prints: the PNG path, console errors/warnings, failed requests, and for
 // each --inspect selector `visible x y w h` (or `missing`). Exit 1 if the
 // page raised an error.
 import { launch } from "./lib.mjs";
+import { releaseView } from "./relfix.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,6 +84,8 @@ page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") 
 page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
 page.on("requestfailed", (r) => r.failure()?.errorText !== "net::ERR_ABORTED" && problems.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`));
 page.on("response", (r) => { if (r.status() >= 400) problems.push(`http ${r.status()}: ${r.request().method()} ${r.url()}`); });
+
+if (opt.release) await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(opt.release) }));
 
 let code = 0;
 try {

@@ -460,6 +460,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/release/build", s.auth(s.handlePeerBuild))
 	s.mux.HandleFunc("POST /api/release/deploy", s.auth(s.handlePeerDeploy))
 	s.mux.HandleFunc("GET /api/release/deploy", s.auth(s.handlePeerDeployStatus))
+	s.mux.HandleFunc("GET /api/releases", s.auth(s.handleReleases))
 	s.mux.HandleFunc("GET /api/release/{id}", s.auth(s.handleReleaseView))
 	s.mux.HandleFunc("POST /api/release/{id}/approve", s.auth(s.handleReleaseApprove))
 	s.mux.HandleFunc("POST /api/release/{id}/deploy", s.auth(s.handleReleaseDeploy))

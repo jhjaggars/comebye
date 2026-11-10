@@ -186,8 +186,8 @@ func TestReleaseRoutesAreUserOnly(t *testing.T) {
 			t.Errorf("a release route is not user-only: %s", strings.TrimSpace(line))
 		}
 	}
-	if n != 11 { // 6 for the page, deploy and upgrades, 5 hub-only peer ops (release_remote.go, release_deploy.go)
-		t.Fatalf("found %d release routes, want 11: update this test with the route", n)
+	if n != 12 { // 7 for the page, the tab, deploy and upgrades, 5 hub-only peer ops (release_remote.go, release_deploy.go)
+		t.Fatalf("found %d release routes, want 12: update this test with the route", n)
 	}
 }
 
@@ -199,6 +199,7 @@ func TestReleaseRefusesAgentsAndPeers(t *testing.T) {
 	hostBody := `{"todo":"` + it.ID + `","version":"v0.5.9"}`
 	calls := []struct{ method, path, body string }{
 		{"GET", "/api/release/" + it.ID, ""},
+		{"GET", "/api/releases", ""},
 		{"POST", "/api/release/" + it.ID + "/approve", approveBody},
 		{"GET", "/api/release/upgrade", ""},
 		{"POST", "/api/release/upgrade", `{"version":"v0.5.9"}`},
@@ -244,6 +245,7 @@ func TestReleaseRefusesTaggedNodes(t *testing.T) {
 	r.addPeer("vm1", r.workerURL(), "tag:worker") // a registered peer: admitted, as the forwarded agent
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/release/tx", ""},
+		{"GET", "/api/releases", ""},
 		{"POST", "/api/release/tx/approve", `{"version":"v0.5.9","commit":"` + relSHA + `"}`},
 		{"POST", "/api/release/upgrade", `{"version":"v0.5.9"}`},
 		{"GET", "/api/release/upgrade", ""},
