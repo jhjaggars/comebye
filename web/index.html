@@ -1345,6 +1345,19 @@
     .st details > summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; cursor: pointer; list-style: none; min-height: 28px; }
     .st details > summary::-webkit-details-marker { display: none; }
     .st .st-rep { margin: 6px 0 4px; font-size: 13.5px; overflow-wrap: anywhere; }
+    .hubchk { margin: 8px 0 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+    .hubchk[hidden] { display: none; }
+    .hubchk.bad { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
+    .hubchk .hc-h { font-weight: 600; color: var(--muted); font-size: 12.5px; margin-bottom: 4px; }
+    .hubchk.bad .hc-h { color: var(--red); }
+    .hubchk .hc-n { color: var(--muted); margin-bottom: 4px; }
+    .hubchk ul { list-style: none; margin: 0; padding: 0; }
+    .hubchk li { display: flex; gap: 8px; align-items: baseline; padding: 1px 0; }
+    .hubchk .hc-m { flex: none; width: 1em; text-align: center; font-weight: 700; color: var(--muted); }
+    .hubchk li.ok .hc-m { color: var(--green); }
+    .hubchk li.warn .hc-m { color: var(--orange); }
+    .hubchk li.bad .hc-m, .hubchk li.bad .vh { color: var(--red); font-weight: 600; }
+    .hubchk .vh { font-weight: 600; }
     .st-more { margin: 4px 2px; font-size: 13px; color: var(--muted); }
     .st-repair { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
     .st-repair .st-ph { color: var(--red); }

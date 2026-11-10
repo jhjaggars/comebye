@@ -3482,7 +3482,7 @@ function reviewItemHTML(it) {
   const warnings = (it.warnings || []).filter((w) => !(askRows && w.startsWith("the session says UNSAFE"))).map((w) => `<li>${esc(w)}</li>`).join("");
   const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session said UNSAFE about"))).map((w) => `<li>${esc(w)}</li>`).join("");
   const report = it.final_report
-    ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary><div class="md"></div></details>` : "";
+    ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary><div class="md"></div><div class="hubchk" data-id="${esc(it.id)}" hidden></div></details>` : "";
   const loss = it.discardable && !done ? lossHTML(it) : "";
   const dd = !!it.delivered_discard && !done;
   let result = "";
@@ -3605,6 +3605,7 @@ function renderReview() {
   list.querySelectorAll(".rv-report").forEach((d) => {
     const it = review.items.find((x) => x.id === d.dataset.id);
     if (it) mdOnOpen(d, d.querySelector(".md"), it.final_report, "report:" + it.id);
+    d.addEventListener("toggle", () => { if (d.open) fillHubChecks(d); });
   });
   renderReviewBulk();
   $("rv-sweep").disabled = review.busy || sweep.busy;
@@ -5030,7 +5031,7 @@ function statusHTML(desktop) {
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
-      const body = e.final_report ? `<div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
+      const body = e.final_report ? `<div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div><div class="hubchk st-rep" data-id="${escAttr(e.id)}" hidden></div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
       return `<details class="st-row" data-id="${escAttr(e.id)}"${statusUi.open.has(e.id) ? " open" : ""}><summary><span class="st-n">${esc(statusWho(e))}</span><span class="lg-chip ${chip[0]}">${chip[1]}</span><span class="st-r">${esc(fmtAgo(at))} ago</span></summary>${statusUi.open.has(e.id) ? body : ""}</details>`;
     }).join("");
     return `<section class="st-proj${p.blocked.length || p.todos.length ? " hot" : ""}" aria-label="${escAttr(p.name)}"><div class="st-ph">${esc(p.name)}</div>${h}</section>`;
@@ -5126,6 +5127,45 @@ function briefHistory() {
   else document.querySelector("#br-body .br-h")?.scrollIntoView?.({ block: "start" });
 }
 
+/* ---------- hub-checked block beside a report ---------- */
+// What the hub could look up about a worker's work (commits named, pushed, CI of the head, the worktree), and the
+// claims of the report that contradict it. Fetched when a report is opened, kept for a minute.
+const hubChk = new Map(); // entry id -> { at, data, busy }
+const HUBCHK_MARK = { ok: "✓", warn: "!", bad: "✗", info: "·" };
+
+function hubChkHTML(h) {
+  if (!h || (!h.items.length && !h.note)) return "";
+  const n = h.contradictions || 0;
+  const head = n ? `${n} claim${n === 1 ? "" : "s"} in the report contradict${n === 1 ? "s" : ""} what the hub found` : "Hub-checked";
+  const rows = h.items.map((i) => `<li class="${escAttr(i.state)}"><span class="hc-m" aria-hidden="true">${HUBCHK_MARK[i.state] || "·"}</span><span>${i.state === "bad" ? '<span class="vh">Contradicts: </span>' : ""}${esc(i.text)}</span></li>`).join("");
+  return `<div class="hc-h">${esc(head)}</div>${h.note ? `<div class="hc-n">${esc(h.note)}</div>` : ""}<ul>${rows}</ul>`;
+}
+
+function showHubChk(id) {
+  const c = hubChk.get(id);
+  const html = c && c.data ? hubChkHTML(c.data) : "";
+  const bad = c && c.data && c.data.contradictions > 0;
+  for (const el of document.querySelectorAll(`.hubchk[data-id="${CSS.escape(id)}"]`)) {
+    el.innerHTML = html;
+    el.classList.toggle("bad", !!bad);
+    el.hidden = !html;
+  }
+}
+
+function fillHubChecks(root) {
+  for (const el of root.querySelectorAll(".hubchk[data-id]")) {
+    const id = el.dataset.id;
+    const c = hubChk.get(id);
+    if (c && c.data) showHubChk(id);
+    if (c && (c.busy || Date.now() - c.at < 60000)) continue;
+    hubChk.set(id, { ...c, busy: true });
+    api(`/api/ledger/${encodeURIComponent(id)}/hubcheck`)
+      .then((data) => hubChk.set(id, { at: Date.now(), data }))
+      .catch(() => hubChk.set(id, { at: Date.now(), data: c && c.data }))
+      .finally(() => showHubChk(id));
+  }
+}
+
 // renderStatus fills the desktop page and, on the phone, the top of the briefings screen.
 function renderStatus() {
   for (const [el, desktop] of [[$("ps-body"), true], [$("br-status"), false]]) {
@@ -5139,6 +5179,7 @@ function renderStatus() {
     const y = sc ? sc.scrollTop : 0;
     const key = el.contains(document.activeElement) ? document.activeElement.dataset.bk : "";
     el.innerHTML = html;
+    fillHubChecks(el);
     if (sc) sc.scrollTop = y;
     if (key) el.querySelector(`[data-bk="${key}"]`)?.focus({ preventScroll: true });
   }

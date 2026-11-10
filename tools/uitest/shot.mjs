@@ -25,6 +25,9 @@
 //                        dev.sh recorded for this checkout)
 //   --release STATE      serve a canned GET /api/releases for the Releases tab (relfix.mjs
 //                        lists the states: none ci green red tagged partial failed done)
+//   --hubcheck bad|ok    add a finished worker with a report to the ledger and serve a canned hub-checked block for it
+//                        (bad: the report's claims contradict what the hub found); open it with
+//                        --click on '#/status' rows, e.g. route '#/status' --click 'details.st-row > summary'
 //   --settle MS          wait this long after the steps (default 400)
 //
 // Prints: the PNG path, console errors/warnings, failed requests, and for
@@ -86,6 +89,28 @@ page.on("requestfailed", (r) => r.failure()?.errorText !== "net::ERR_ABORTED" &&
 page.on("response", (r) => { if (r.status() >= 400) problems.push(`http ${r.status()}: ${r.request().method()} ${r.url()}`); });
 
 if (opt.release) await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(opt.release) }));
+
+if (opt.hubcheck) {
+  const report = "## Summary\nFixed the rail dot. Pushed to origin; CI green on the head; the worktree is clean.\n\n## Verification\nCommit 0badc0de1 holds the fix.";
+  const bad = opt.hubcheck === "bad";
+  await page.route(/\/api\/ledger$/, async (r) => {
+    const j = await (await r.fetch()).json();
+    j.entries = [...(j.entries || []), { id: "hcfx", host: "uitest", repo_name: "comebye", branch: "fix/rail-dot", agent_name: "fix-rail-dot", status: "finished",
+      created_at: new Date(Date.now() - 3600e3).toISOString(), finished_at: new Date(Date.now() - 600e3).toISOString(), final_report: report, live: { present: false } }];
+    r.fulfill({ json: j });
+  });
+  await page.route(/\/api\/ledger\/hcfx\/hubcheck$/, (r) => r.fulfill({ json: bad
+    ? { id: "hcfx", contradictions: 3, items: [
+      { kind: "commit", state: "bad", text: "0badc0de1: the report names it, but it is not a commit in this repository" },
+      { kind: "pushed", state: "bad", text: "the report says pushed, but 2 commit(s) are on no remote" },
+      { kind: "ci", state: "warn", text: "CI failed for the head 9f3c2a1d7e4b" },
+      { kind: "worktree", state: "bad", text: "the report says the worktree is clean, but it has 3 uncommitted file(s)" }] }
+    : { id: "hcfx", contradictions: 0, items: [
+      { kind: "commit", state: "ok", text: "0badc0de1: on the branch, not in origin/main" },
+      { kind: "pushed", state: "ok", text: "pushed: nothing is missing from origin/fix/rail-dot" },
+      { kind: "ci", state: "ok", text: "CI is green for the head 9f3c2a1d7e4b" },
+      { kind: "worktree", state: "ok", text: "the worktree is clean" }] } }));
+}
 
 let code = 0;
 try {
