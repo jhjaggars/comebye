@@ -80,6 +80,7 @@ func normalizeScreen(screen string) []string {
 	out := make([]string, len(raw))
 	for i, l := range raw {
 		l = strings.ReplaceAll(l, "\t", "    ")
+		l = strings.ReplaceAll(l, "\u00a0", " ") // a terminal may print non-breaking spaces
 		l = strings.TrimRight(l, "  ")
 		trimmed := strings.TrimLeft(l, " ")
 		if strings.HasPrefix(trimmed, "│") {
