@@ -13,6 +13,7 @@ type State = {
   ran: boolean
   lastTrimAt: number
   trims: number
+  lastSizes: string
   keep: number
   trimTokens: number
   cooldownMs: number
@@ -32,12 +33,12 @@ async function maybeTrim($: Engine, st: State) {
   if (st.off || now - st.lastTrimAt < st.cooldownMs) return
   const usage = await $.session.usage()
   if ((usage.context.tokens ?? 0) <= st.trimTokens) return
-  const before = (await $.session.messages()).length
-  if (before < 2) return
+  const msgs = await $.session.messages()
+  const before = msgs.length
+  if (turnCount(msgs) <= st.keep) return
   st.armed = true
   st.answered = false
   st.ran = false
-  st.lastTrimAt = now
   let done: Awaited<ReturnType<Engine['session']['compact']>> | undefined
   try {
     done = await $.session.compact()
@@ -46,6 +47,8 @@ async function maybeTrim($: Engine, st: State) {
   }
   if (done && 'messages' in done && done.messages && st.answered) {
     st.trims += 1
+    st.lastTrimAt = now
+    st.lastSizes = `${before} → ${done.messages.length} messages`
     $.ui.toast(`Window trimmed in place: ${before} → ${done.messages.length} messages`)
   } else if (!st.ran) {
     // The engine compacted by itself, or a guard above skipped our hook:
@@ -63,8 +66,9 @@ export const register: Register = (on, options) => {
     ran: false,
     lastTrimAt: 0,
     trims: 0,
+    lastSizes: 'none yet',
     keep: Math.max(1, Number(options?.keep_turns ?? 10)),
-    trimTokens: Math.max(20000, Number(options?.trim_tokens ?? 120000)),
+    trimTokens: Math.max(1000, Number(options?.trim_tokens ?? 120000)),
     cooldownMs: Math.max(1, Number(options?.cooldown_minutes ?? 20)) * 60_000,
   }
 
@@ -111,6 +115,7 @@ export const register: Register = (on, options) => {
       st.off ? `off: ${st.off}` : 'on',
       `context ${usage.context.tokens ?? '?'} tokens; ${n} turns`,
       `trims above ${st.trimTokens} tokens, keeps ${st.keep} turns; ${st.trims} trims so far`,
+      `last trim: ${st.lastSizes}`,
     ].join('\n')
 
     return { text, isTextDisplayOnly: true }
