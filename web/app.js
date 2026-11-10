@@ -2829,7 +2829,7 @@ function renderFleetMenu() {
   const note = $("f-note");
   note.hidden = !off;
   note.textContent = off ? "Removals and briefings are not available on this hub" : "";
-  for (const id of ["f-brief", "f-briefs", "f-peers"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  for (const id of ["f-brief", "f-briefs", "f-pages", "f-usage", "f-peers"]) { $(id).hidden = off; $(id).disabled = !lon; }
   $("f-peers").hidden = off || !multiHost();
   const st = briefingUiState();
   $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (see the Briefing page)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
@@ -8875,6 +8875,8 @@ window.addEventListener("DOMContentLoaded", () => {
   }
   $("f-brief").addEventListener("click", fleetAction(fleetBrief));
   $("f-briefs").addEventListener("click", fleetAction(() => openBriefs(true)));
+  $("f-pages").addEventListener("click", fleetAction(() => { location.hash = "#/pages"; }));
+  $("f-usage").addEventListener("click", fleetAction(() => { location.hash = "#/usage"; }));
   $("f-peers").addEventListener("click", fleetAction(() => { location.hash = "#/peers"; }));
   $("f-notify").addEventListener("click", fleetAction(() => toggleNotifyPanel(true)));
   $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));

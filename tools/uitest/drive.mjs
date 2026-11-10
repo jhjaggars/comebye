@@ -441,8 +441,8 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
   if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
   const t = (await page.locator("#f-menu button:visible:not(.pop-x)").allInnerTexts()).map((x) => x.trim().replace(/\s+/g, " "));
-  // View (Theme, Notifications), Hub (the briefing item when there is one, History, Refresh): the schedule lives on Status; sweep and removals are the Ready to remove page.
-  const want = [/^Theme /, /^Notifications/, /briefing/i, /^History/, /^Refresh/];
+  // View (Theme, Notifications), Hub (the briefing item when there is one, History, Pages, Usage, Refresh): the schedule lives on Status; sweep and removals are the Ready to remove page.
+  const want = [/^Theme /, /^Notifications/, /briefing/i, /^History/, /^Pages/, /^Usage/, /^Refresh/];
   if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
   if (/schedule/i.test(t.join("|"))) throw new Error("the schedule is still in the menu");
   const grp = await page.locator("#f-menu .m-grp").allInnerTexts();
@@ -452,6 +452,16 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   await page.keyboard.press("Escape");
   await page.waitForSelector("#f-menu", { state: "hidden", timeout: 2000 });
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "false") throw new Error("aria-expanded not reset");
+});
+await check("fleet menu: Pages and Usage open their screens on a phone", async () => {
+  for (const [id, hash, screen] of [["f-pages", "#/pages", "#pages"], ["f-usage", "#/usage", "#usage"]]) {
+    await fleetMenuOpen();
+    await page.locator("#" + id).click();
+    await page.waitForSelector("#f-menu", { state: "hidden", timeout: 2000 });
+    await page.waitForSelector(screen, { state: "visible", timeout: 3000 });
+    if (!(await page.evaluate(() => location.hash)).startsWith(hash)) throw new Error(id + ": hash " + await page.evaluate(() => location.hash));
+    await toList();
+  }
 });
 await check("theme: System paints the OS scheme (Comebye Light/Dark) on load; the menu item opens the theme panel", async () => {
   const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
