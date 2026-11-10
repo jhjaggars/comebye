@@ -601,3 +601,105 @@ func TestPanelDiffEmptySectionsAreEmptyLists(t *testing.T) {
 		t.Fatalf("an empty section is null in the answer: %s", b)
 	}
 }
+
+// age sets the mtime of every file outside .git to a fixed time long ago, so
+// the fingerprint trusts them (a change within two seconds is distrusted).
+func age(t *testing.T, wt string) {
+	t.Helper()
+	old := time.Unix(1700000000, 0) // a fixed time, long ago: aging twice leaves the mtime alone
+	_ = filepath.Walk(wt, func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi.IsDir() && fi.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if err == nil && !fi.IsDir() {
+			_ = os.Chtimes(p, old, old)
+		}
+		return nil
+	})
+}
+
+func TestPanelDiffAnswersFromTheFingerprintAndSeesEveryChange(t *testing.T) {
+	_, wt := panelHome(t)
+	s := panelServer(t)
+	age(t, wt)
+	first := runDiff(t, s, wt, "")
+	again := runDiff(t, s, wt, first.Sig)
+	if !again.Unchanged || again.Sig != first.Sig {
+		t.Fatalf("an unchanged checkout: %+v", again)
+	}
+	// Proof that the second answer came from the fingerprint, not a re-read:
+	// a swap that keeps the size and the mtime cannot be seen by it (and is
+	// why a recent change is never trusted: see the racy test below).
+	a := filepath.Join(wt, "a.go")
+	body, _ := os.ReadFile(a)
+	swapped := strings.Replace(string(body), "println(1)", "println(2)", 1)
+	if len(swapped) != len(body) {
+		t.Fatal("test setup: the swap changes the size")
+	}
+	put(t, a, swapped)
+	age(t, wt)
+	if r := runDiff(t, s, wt, first.Sig); !r.Unchanged {
+		t.Fatalf("expected the fingerprint to answer, got %+v", r)
+	}
+	changes := map[string]func(){
+		"a longer file":             func() { put(t, a, swapped+"// more\n"); age(t, wt) },
+		"a new untracked file":      func() { put(t, filepath.Join(wt, "n2.txt"), "x\n"); age(t, wt) },
+		"a staged file":             func() { gitIn(t, wt, "add", "a.go") },
+		"a commit":                  func() { gitIn(t, wt, "commit", "-q", "-m", "more"); age(t, wt) },
+		"an untracked file removed": func() { _ = os.Remove(filepath.Join(wt, "n2.txt")) },
+	}
+	for _, name := range []string{"a longer file", "a new untracked file", "a staged file", "a commit", "an untracked file removed"} {
+		prev := runDiff(t, s, wt, "")
+		changes[name]()
+		r := runDiff(t, s, wt, prev.Sig)
+		if r.Unchanged || r.Sig == prev.Sig {
+			t.Fatalf("%s was not seen", name)
+		}
+	}
+	// A same-size edit with a newer mtime is seen too.
+	prev := runDiff(t, s, wt, "")
+	put(t, a, strings.Replace(string(mustRead(t, a)), "// more", "// MORE", 1))
+	future := time.Now().Add(-5 * time.Second)
+	_ = os.Chtimes(a, future, future)
+	if r := runDiff(t, s, wt, prev.Sig); r.Unchanged {
+		t.Fatal("a same-size edit with a new mtime was not seen")
+	}
+}
+
+func mustRead(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// A file changed a moment ago may change again without its size or mtime
+// moving, so such an answer is never kept: two quick same-size edits are both
+// seen.
+func TestPanelDiffDistrustsAFreshChange(t *testing.T) {
+	_, wt := panelHome(t)
+	s := panelServer(t)
+	a := filepath.Join(wt, "a.go")
+	first := runDiff(t, s, wt, "")
+	put(t, a, "package a\n\nfunc A() { println(2) }\n")
+	second := runDiff(t, s, wt, first.Sig)
+	put(t, a, "package a\n\nfunc A() { println(3) }\n") // same size, same second
+	third := runDiff(t, s, wt, second.Sig)
+	if second.Unchanged || third.Unchanged || third.Sig == second.Sig {
+		t.Fatalf("a quick second edit was missed: %+v / %+v", second.Unchanged, third.Unchanged)
+	}
+}
+
+func TestStatusPaths(t *testing.T) {
+	out := "# branch.oid abc\x00# branch.head main\x00" +
+		"1 .M N... 100644 100644 100644 h1 h2 dir/a b.go\x00" +
+		"2 R. N... 100644 100644 100644 h1 h2 R100 new name.go\x00old name.go\x00" +
+		"u UU N... 1 2 3 4 h1 h2 h3 conflict.go\x00" +
+		"? untracked file.txt\x00! ignored.o\x00"
+	got := strings.Join(statusPaths([]byte(out)), "|")
+	if want := "dir/a b.go|new name.go|conflict.go|untracked file.txt"; got != want {
+		t.Fatalf("paths %q, want %q", got, want)
+	}
+}

@@ -363,6 +363,19 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 		return d
 	}
 	d.Dir = top
+	base, mb := panelBase(ctx, top)
+	// Nothing changed since the last answer: say so without running the diffs.
+	fp, fpOK := panelFingerprint(ctx, top, base, mb)
+	if fpOK {
+		if c, hit := panelCacheGet(top, fp); hit {
+			if since != "" && since == c.Sig {
+				return panelDiff{Sig: c.Sig, Unchanged: true}
+			}
+			return c
+		}
+	} else {
+		panelCacheDrop(top)
+	}
 	d.Branch, _ = runGit(ctx, top, "rev-parse", "--abbrev-ref", "HEAD")
 	total := 0
 	var note string
@@ -422,23 +435,17 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 		d.Sections = append(d.Sections, panelSection{Key: "untracked", Title: "Untracked", Files: files})
 	}
 	// Commits since the base.
-	if b := defaultBranch(ctx, top); b != "" {
-		base := b
-		if refExists(ctx, top, "origin/"+b) {
-			base = "origin/" + b
-		}
-		if mb, err := runGit(ctx, top, "merge-base", "HEAD", base); err == nil && mb != "" {
-			d.Base = base
-			if lg, err := runGit(ctx, top, "log", "--format=%h%x09%s", "-n", "50", mb+"..HEAD"); err == nil && lg != "" {
-				for _, l := range strings.Split(lg, "\n") {
-					if sha, subj, ok := strings.Cut(l, "\t"); ok {
-						d.Commits = append(d.Commits, panelCommit{SHA: sha, Subject: subj})
-					}
+	if base != "" {
+		d.Base = base
+		if lg, err := runGit(ctx, top, "log", "--format=%h%x09%s", "-n", "50", mb+"..HEAD"); err == nil && lg != "" {
+			for _, l := range strings.Split(lg, "\n") {
+				if sha, subj, ok := strings.Cut(l, "\t"); ok {
+					d.Commits = append(d.Commits, panelCommit{SHA: sha, Subject: subj})
 				}
 			}
-			if len(d.Commits) > 0 {
-				section("commits", "Commits since "+base, mb, "HEAD")
-			}
+		}
+		if len(d.Commits) > 0 {
+			section("commits", "Commits since "+base, mb, "HEAD")
 		}
 	}
 	d.Note = note
@@ -452,10 +459,31 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 	}
 	d.Files = len(seen)
 	d.Sig = panelSig(&d)
+	if fpOK { // the fingerprint was taken before the read, so an edit during it shows at the next poll
+		panelCachePut(top, fp, d)
+	}
 	if since != "" && since == d.Sig {
 		return panelDiff{Sig: d.Sig, Unchanged: true}
 	}
 	return d
+}
+
+// panelBase is the branch a checkout's commits are counted from (origin's, when
+// it has one) and the merge base with it; "" when there is none.
+func panelBase(ctx context.Context, top string) (base, mb string) {
+	b := defaultBranch(ctx, top)
+	if b == "" {
+		return "", ""
+	}
+	base = b
+	if refExists(ctx, top, "origin/"+b) {
+		base = "origin/" + b
+	}
+	mb, err := runGit(ctx, top, "merge-base", "HEAD", base)
+	if err != nil || mb == "" {
+		return "", ""
+	}
+	return base, mb
 }
 
 func panelSig(d *panelDiff) string {

@@ -257,6 +257,25 @@ for (const width of [1440, 390]) {
     if (small.some((s) => s < 40)) throw new Error("a touch target under 40px: " + small.join());
   });
 
+  await check(`${tag}: a click on the Diff tab that lands while a Doc load is in flight is not dropped until the next poll`, async () => {
+    await page.locator("#sp-tab-doc").click();
+    await page.waitForSelector("#sp-doc", { timeout: 10000 });
+    const held = [];
+    await page.route(/\/file(\?|$)/, (r) => held.push(r)); // hold the Doc loads: one is then in flight
+    fs.appendFileSync(path.join(wt, "c.go"), "// race-marker\n");
+    const t0 = Date.now();
+    while (!held.length && Date.now() - t0 < 6000) await sleep(50); // the Doc poll
+    if (!held.length) throw new Error("no Doc load came in 6 s");
+    await page.locator("#sp-tab-diff").click(); // the click lands during that load
+    const t1 = Date.now();
+    await page.unroute(/\/file(\?|$)/);
+    for (const r of held) await r.continue();
+    await page.waitForFunction(() => /race-marker/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 9000 });
+    const ms = Date.now() - t1;
+    // Dropped, it waited for the next poll (up to 3 s); queued, it runs when the load ends.
+    if (ms > 800) throw new Error(`the Diff took ${ms} ms to load after the Doc load ended`);
+  });
+
   await check(`${tag}: no console errors`, async () => {
     const bad = consoleErrs.filter((e) => !/favicon|Failed to load resource: the server responded with a status of (403|404|415|413)/.test(e));
     if (bad.length) throw new Error(bad.join("\n"));

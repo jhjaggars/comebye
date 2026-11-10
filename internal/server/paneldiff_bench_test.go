@@ -156,10 +156,24 @@ func benchPanelDiff(b *testing.B, dir string) {
 	}
 	b.Logf("files=%d add=%d del=%d json=%dKB gzip=%dKB git procs=%d (sum of git wall %.0fms)%s",
 		d.Files, d.Add, d.Del, len(raw)>>10, gz>>10, procs, float64(sum)/1e6, sb.String())
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		panelDiffOf(ctx, dir, "")
-	}
+	// "repeat": the same checkout asked again without a signature (a second
+	// viewer, a reload). "unchanged": a poll that already has the signature.
+	// The checkout is left alone between runs, as when an agent is thinking.
+	b.Run("repeat", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			panelDiffOf(ctx, dir, "")
+		}
+	})
+	b.Run("unchanged", func(b *testing.B) {
+		time.Sleep(3 * time.Second) // a real poll comes seconds after the last edit
+		panelDiffOf(ctx, dir, d.Sig)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if r := panelDiffOf(ctx, dir, d.Sig); !r.Unchanged {
+				b.Fatal("the answer changed between polls")
+			}
+		}
+	})
 }
 
 func BenchmarkPanelDiffSmall(b *testing.B) {

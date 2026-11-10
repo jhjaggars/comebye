@@ -36,6 +36,7 @@
     closed: new Set(), // collapsed files (section|path)
     opened: new Set(), // files opened by the user although they started collapsed
     busy: false,
+    again: false,      // a click arrived while a load was in flight: run it when that one ends
   };
 
   // ---- per-agent memory of the panel (open, tab, width) ----
@@ -165,7 +166,11 @@
   function stop() { clearInterval(st.timer); st.timer = null; }
 
   async function tick(now) {
-    if (!st.open || !st.id || document.hidden || st.busy) return;
+    if (!st.open || !st.id || document.hidden) return;
+    // A load is in flight. A poll just waits for the next one, but a click (a
+    // tab, another file, another agent: now) must not be lost until the next
+    // poll 3 s later, so it runs the moment this load ends.
+    if (st.busy) { if (now) st.again = true; return; }
     const a = agentById(st.id);
     if (!a) return;
     st.busy = true;
@@ -173,7 +178,10 @@
     try {
       if (st.tab === "diff") await loadDiff(a, id, now);
       else await loadDoc(a, id, now);
-    } finally { st.busy = false; }
+    } finally {
+      st.busy = false;
+      if (st.again) { st.again = false; tick(true); }
+    }
   }
 
   async function loadDiff(a, id, force) {
