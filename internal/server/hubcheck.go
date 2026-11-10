@@ -163,7 +163,7 @@ func hubCheckOf(e ledger.Entry, c *worktreeChecks, now time.Time) hubCheck {
 	case c.Unmerged == 0:
 		add("pushed", "ok", "nothing to push: every commit is in %s", orDefault(c.BaseUsed, "the base"))
 	default:
-		add("pushed", "info", "no commits missing from a remote")
+		add("pushed", "info", "every commit is on a remote")
 	}
 
 	// CI of the head.
