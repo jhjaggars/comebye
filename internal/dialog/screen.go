@@ -401,7 +401,59 @@ func detectChevron(lines []string, i, c int, agentKind string) *Dialog {
 			return d
 		}
 	}
+	if agentKind == "claude" {
+		if d := detectClaudeTrust(lines, i, c); d != nil {
+			return d
+		}
+	}
 	return detectPiGate(lines, i, c)
+}
+
+// detectClaudeTrust handles Claude Code's startup "trust this folder"
+// dialog: an unnumbered "❯ " list ("No, exit" is the default highlight,
+// "Yes, I trust this folder") under a "Accessing workspace:" heading and
+// a "Quick safety check" paragraph, with an "Enter to confirm · Esc to
+// cancel" footer. There are no digit shortcuts, so it is answered with
+// arrows and Enter. Esc exits Claude, like "No, exit".
+func detectClaudeTrust(lines []string, i, c int) *Dialog {
+	rows, start, end := collectRows(lines, i, c, markerChevron, false, nil)
+	if len(rows) < 2 {
+		return nil
+	}
+	if n, _ := activeIndex(rows); n != 1 {
+		return nil
+	}
+	header := -1
+	for j := start - 1; j >= 0 && j >= start-contextAbove; j-- {
+		if strings.Contains(strings.ToLower(lines[j]), "accessing workspace") {
+			header = j
+			break
+		}
+	}
+	if header < 0 {
+		return nil
+	}
+	if !containsAny(window(lines, end, end+4), "enter to confirm") {
+		return nil
+	}
+	d := &Dialog{Kind: KindClaudeTrust, Source: "screen", Title: "Trust this folder?", Keys: KeysArrows, Answerable: true, CancelLabel: "Exit"}
+	_, d.Selected = activeIndex(rows)
+	for _, r := range rows {
+		d.Options = append(d.Options, Option{Label: r.text})
+	}
+	// The folder (and, for some folders, an extra warning) follows the
+	// heading; the safety-check paragraph is the question.
+	var body []string
+	for _, l := range lines[header+1 : start] {
+		if t := strings.TrimSpace(l); t != "" && !isRule(l) && !strings.Contains(t, "Security guide") {
+			body = append(body, t)
+		}
+	}
+	if len(body) > 0 {
+		d.Detail = body[0]
+		d.Question = strings.Join(body[1:], " ")
+	}
+	return d
 }
 
 func detectPiGate(lines []string, i, c int) *Dialog {

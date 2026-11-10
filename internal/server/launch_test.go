@@ -579,6 +579,24 @@ func TestLaunchFailures(t *testing.T) {
 		t.Fatalf("never active calls = %s", got)
 	}
 
+	// An agent that is blocked before it is ready sits at a startup dialog
+	// (Claude's trust-this-folder prompt: herdr keeps the launch pending
+	// until it is answered). The launch succeeds so the app can show the
+	// dialog, instead of failing after the wait with the agent stuck.
+	fh.set(func(f *fakeLaunchHerdr) {
+		f.calls = nil
+		f.agents = nil
+		f.hook = func(method string, params map[string]any) (res any, err *herdr.Error, ok bool) {
+			if method == "agent.get" {
+				return map[string]any{"type": "agent_info", "agent": herdr.AgentInfo{Name: params["target"].(string), PaneID: "w9:p1", Agent: "claude", Status: herdr.StatusBlocked}}, nil, true
+			}
+			return nil, nil, false
+		}
+	})
+	if code, r := launch(t, s, `{"dir":"`+root+`/Notes","kind":"pi"}`); code != 200 || r.Agent.Name != "notes" {
+		t.Fatalf("blocked at a startup dialog = %d %+v", code, r)
+	}
+
 	// The name resolving is not enough: herdr answers agent.get as soon
 	// as the launch is registered, so the brief must wait for the agent
 	// to report ready for input before the prompt is sent.

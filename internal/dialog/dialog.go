@@ -35,6 +35,10 @@ const (
 	// KindClaudeQuestion is Claude Code's AskUserQuestion dialog (numbered
 	// rows plus "Type something.", or checkboxes).
 	KindClaudeQuestion = "claude_question"
+	// KindClaudeTrust is Claude Code's startup "trust this folder"
+	// dialog: unnumbered "❯ " rows ("No, exit" is the default), arrows +
+	// Enter, Esc exits Claude.
+	KindClaudeTrust = "claude_trust"
 	// KindSelect is a numbered "❯ 1." list from any other agent.
 	KindSelect = "select"
 	// KindConfirm is a generic line prompt ending in [y/N], (y/n), ….

@@ -720,7 +720,9 @@ func (s *Server) startAgent(ctx context.Context, name, kind, pane string, args .
 // launch to have activated, a few seconds later, once the agent is
 // detected in its pane. herdr drops a launch that never activates, so
 // the wait is also where a broken launch is reported instead of every
-// later prompt failing with "is not an active named agent".
+// later prompt failing with "is not an active named agent". An agent
+// blocked at a startup dialog ends the wait too: it will not activate
+// until the dialog is answered, which only the user can do.
 func (s *Server) waitForNamedAgent(ctx context.Context, name string) error {
 	waitCtx, cancel := context.WithTimeout(ctx, s.agentReadyWait)
 	defer cancel()
@@ -728,6 +730,13 @@ func (s *Server) waitForNamedAgent(ctx context.Context, name string) error {
 		a, err := s.client.GetAgent(waitCtx, name)
 		switch {
 		case err == nil && a.InteractiveReady:
+			return nil
+		case err == nil && a.Status == herdr.StatusBlocked:
+			// Blocked before it is ready: the harness stopped at a startup
+			// dialog (Claude's trust-this-folder prompt) and herdr keeps the
+			// launch pending until it is answered. The launch worked; the
+			// user answers the dialog in the app, and a first prompt that
+			// cannot be typed over it is queued by deliverOrQueue.
 			return nil
 		case err != nil:
 			var he *herdr.Error
