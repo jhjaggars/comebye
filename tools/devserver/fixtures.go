@@ -45,6 +45,27 @@ var dialogScreen = []string{
 	" Enter to select · ↑/↓ to navigate · Esc to cancel",
 }
 
+// Claude Code's startup "trust this folder" dialog, as drawn by 2.1.x.
+var claudeTrustScreen = []string{
+	"──────────────────────────────────────────────────────────────────────",
+	" Accessing workspace:",
+	"",
+	" /home/u/code/scratch",
+	"",
+	" Quick safety check: Is this a project you created or one you trust? (Like",
+	" your own code, a well-known open source project, or work from your team).",
+	" If not, take a moment to review what's in this folder first.",
+	"",
+	" Claude Code'll be able to read, edit, and execute files here.",
+	"",
+	" Security guide",
+	"",
+	" ❯ No, exit",
+	"   Yes, I trust this folder",
+	"",
+	" Enter to confirm · Esc to cancel",
+}
+
 // addFixtures appends the agents the dev harness looks at, one per kind of
 // row the list and the agent view draw differently. With a tag they are a
 // second host's (a peer): a short list named after the tag.
@@ -103,6 +124,12 @@ func (f *fake) addFixtures(dir, tag string) {
 	b.screen = dialogScreen
 
 	f.addTrustPrompt()
+
+	// Claude at its startup "trust this folder" dialog (herdr: blocked).
+	ct := mk("claude-trust", "w10:p1", "claude", "Claude", "blocked", "trust this folder", "/home/u/code/scratch")
+	ct.repo, ct.checkout = "scratch", ct.CWD
+	chat(ct, "set up the scratch repo", "Starting in /home/u/code/scratch.")
+	ct.screen = claudeTrustScreen
 
 	// Marked ready to remove (dev.sh marks it through the API).
 	m := mk("old-worker", "w7:p1", "claude", "Claude", "idle", "done", "/home/u/.worktrees/comebye/old-worker")

@@ -6905,6 +6905,10 @@ function dialogHints(d) {
       h.cancel = "Esc · Cancel the question";
       h.pad = "↑/↓ move (wraps), Enter picks, Space ticks in multi-select, Tab switches questions, Esc cancels.";
       break;
+    case "claude_trust":
+      h.cancel = "Esc · Exit Claude";
+      h.pad = "↑/↓ choose, Enter confirms, Esc exits Claude.";
+      break;
     case "claude_permission":
       h.cancel = "Esc · Tell Claude what to do instead";
       h.pad = "Press an option's number, or ↑/↓ then Enter; Esc cancels.";
