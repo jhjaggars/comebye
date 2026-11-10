@@ -395,8 +395,30 @@ lines of text, never more than 20. Format:
 - t0123456789: <the decision or action, and why now, in a few words>
 
 ## Notes
-- **<name>:** <only what the cards cannot say>
+- **<id>:** <only what the cards cannot say>
 ```
+
+**The board and the note.** The app draws a **board** above your briefing
+from the hub's own records (`GET /api/board`): the lanes needs you, running,
+waiting on others, ready to land or landing, and landed (recent), each with
+a count, and a by-status / by-project switch. So you write only what the
+board cannot know, and never retype state:
+
+- **Line 1** is the board's headline (the only line you must write).
+- **"Needs you"** is pulled from the to-do list by id. The text after the
+  id on each line is shown as the *why now* under that item, so keep it to
+  the reason, not the question again.
+- **Notes** attach to an item when a list item starts with that item's id,
+  in bold, in backticks or bare, then a colon or a dash: `- **h45500d313d85:**
+  waits for the RFC, on purpose`. The id is a handoff id (`h` and 12 hex), a
+  to-do id (`t` and 10 hex) or a worker's name (`oc-pr-4025`). The board
+  shows the note inside the lane, under that item. A note whose `h`/`t` id
+  the board does not know is counted as "a note names an unknown id": fix or
+  drop it. Anything else you write stays in the Markdown under the board.
+- Waiting on others is only what the records say: a handoff queued behind
+  another step, or a tagged release rolling out. A PR waiting for /lgtm, an
+  RFC that must come first, or a parked idea is not a field, so say it in a
+  keyed note on the handoff or the to-do that stands for it.
 
 **Link, do not list.** The app already shows what is running, what landed,
 what is ready to remove, and the versions. Do not write "landed, not

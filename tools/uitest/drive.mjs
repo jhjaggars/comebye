@@ -4,6 +4,7 @@
 // agents must not show the previous agent's view.
 import { launch, mockLaunchRoutes } from "./lib.mjs";
 import { releaseView } from "./relfix.mjs";
+import { boardView } from "./boardfix.mjs";
 import fs from "node:fs";
 
 const [base, out] = process.argv.slice(2);
@@ -1373,8 +1374,9 @@ const SYN_TODOS = { open: 1, answered: 0, todos: [{ id: "t1", kind: "decision", 
 async function mockStatusData() {
   await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: SYN_LEDGER }));
   await page.route(/\/api\/todos$/, (r) => r.fulfill({ json: SYN_TODOS }));
+  await page.route(/\/api\/board$/, (r) => r.fulfill({ json: boardView("t1", "Keep old session cookies for 30 days?") }));
 }
-async function unmockStatusData() { await page.unroute(/\/api\/ledger$/); await page.unroute(/\/api\/todos$/); }
+async function unmockStatusData() { await page.unroute(/\/api\/ledger$/); await page.unroute(/\/api\/todos$/); await page.unroute(/\/api\/board$/); }
 await check("status: the page groups the ledger, to-dos and agents by project, with reports and no Needs you section", async () => {
   await mockStatusData();
   try {
@@ -1383,7 +1385,8 @@ await check("status: the page groups the ledger, to-dos and agents by project, w
     const t = await page.locator("#ps-body").innerText();
     for (const want of ["webapp", "ci-tools", "fix-login", "fix/login-timeout", "running 12m", "queued behind 1 step", "Keep old session cookies", "ready to remove", "landed", "failed"]) if (!t.includes(want)) throw new Error(`missing "${want}" in: ${t.slice(0, 400)}`);
     if (t.includes("Too old to show") || t.includes("ancient")) throw new Error("an entry older than 2 days is shown");
-    if (/needs you/i.test(t)) throw new Error("a Needs you section");
+    const cards = await page.locator("#ps-body .st-proj").allInnerTexts();
+    if (cards.some((c) => /needs you/i.test(c))) throw new Error("a Needs you section in the project cards");
     if (!(await page.locator("#ps-body .st-g.blocked").count()) || !(await page.locator("#ps-body .st-g.you").count()) || !(await page.locator("#ps-body .st-g.prog").count())) throw new Error("groups missing");
     // A report opens in place and stays open across a re-render.
     await page.locator('#ps-body details[data-id="h3"] summary').click();
@@ -1415,6 +1418,80 @@ await check("status: readable on the phone, at the top of the briefings screen, 
     await noOverflow();
     await page.screenshot({ path: `${out}/status-390.png` });
   } finally { await unmockStatusData(); }
+});
+
+// ---- the briefing board (mocked GET /api/board): lanes with counts, the switch, Needs you linking to its to-do ----
+const boardSummary = (box) => page.evaluate((b) => {
+  const root = document.querySelector(b + " .bd");
+  if (!root) return null;
+  return {
+    lanes: [...root.querySelectorAll(".bd-lane")].map((d) => ({ lane: d.dataset.lane, count: d.querySelector(".bd-chip").textContent, open: d.open })),
+    head: (root.querySelector(".bd-head") || {}).textContent || "",
+    pressed: [...root.querySelectorAll("[data-bd-mode]")].filter((x) => x.getAttribute("aria-pressed") === "true").map((x) => x.dataset.bdMode),
+    wide: document.documentElement.scrollWidth > innerWidth,
+    todo: root.querySelector("[data-bd-todo]") ? root.querySelector("[data-bd-todo]").dataset.bdTodo : "",
+    h: root.querySelector("[data-bd-todo]") ? root.querySelector("[data-bd-todo]").getBoundingClientRect().height : 0,
+  };
+}, box);
+for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-status", "#/briefings"]]) {
+  await check(`board: lanes, counts, the switch and the Needs you link at ${width}px`, async () => {
+    await mockStatusData();
+    try {
+      await page.evaluate(() => { try { localStorage.removeItem("comebye-board-mode"); } catch {} });
+      await desktopList(width, start);
+      if (width < 1100) await page.goto(base + start, { waitUntil: "load" });
+      await page.waitForSelector(`${box} .bd .bd-lane`, { timeout: 8000 });
+      let b = await boardSummary(box);
+      const want = ["needs_you:3", "running:2", "waiting:2", "landing:2", "landed:2"];
+      if (b.lanes.map((l) => l.lane + ":" + l.count).join() !== want.join()) throw new Error("lanes " + JSON.stringify(b.lanes));
+      if (!b.lanes[0].open || b.lanes.slice(1).some((l) => l.open)) throw new Error("only Needs you is open at first: " + JSON.stringify(b.lanes));
+      if (!b.head.startsWith("Tue 20:11. v0.5.20 is rolling out")) throw new Error("headline " + b.head);
+      if (b.pressed.join() !== "status" || b.wide) throw new Error(JSON.stringify(b));
+      if (b.h < 44) throw new Error("the Needs you row is only " + b.h + "px tall");
+      // A lane opens, and stays open across a re-render.
+      await page.locator(`${box} .bd-lane[data-lane="waiting"] summary`).click();
+      await page.evaluate(() => { board.at = 0; return loadBoard(); });
+      if (!(await page.locator(`${box} .bd-lane[data-lane="waiting"]`).evaluate((d) => d.open))) throw new Error("a lane closed on re-render");
+      const t = await page.locator(`${box} .bd`).innerText();
+      for (const w of ["Release v0.5.20", "Waits for the RFC, on purpose.", "the rollout is waiting on the hub."]) if (!t.includes(w)) throw new Error("no " + w);
+      await page.screenshot({ path: `${out}/board-status-${width}.png` });
+      // By project: Needs you stays, the other lanes regroup with a lane tag per item.
+      await page.locator(`${box} [data-bd-mode="project"]`).click();
+      b = await boardSummary(box);
+      const keys = b.lanes.map((l) => l.lane);
+      if (keys[0] !== "needs_you" || !keys.includes("p:comebye") || !keys.includes("p:openclaw-enterprise") || keys.includes("running")) throw new Error("projects " + keys);
+      const comebye = b.lanes.find((l) => l.lane === "p:comebye");
+      if (comebye.count !== "5") throw new Error("comebye count " + comebye.count);
+      if (b.pressed.join() !== "project") throw new Error("pressed " + b.pressed);
+      await page.locator(`${box} .bd-lane[data-lane="p:comebye"] summary`).click();
+      if (!(await page.locator(`${box} .bd-lane[data-lane="p:comebye"] .bd-tag`).count())) throw new Error("no lane tags by project");
+      await page.screenshot({ path: `${out}/board-project-${width}.png` });
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(`${box} .bd .bd-lane`, { timeout: 8000 });
+      if ((await boardSummary(box)).pressed.join() !== "project") throw new Error("the grouping is not remembered");
+      await page.locator(`${box} [data-bd-mode="status"]`).click();
+      // Needs you links to its to-do.
+      await page.locator(`${box} [data-bd-todo="t1"]`).click();
+      if (width >= 1100) {
+        await page.waitForSelector("#p-todo", { state: "visible" });
+        if (!(await page.locator("#pt-body .td-item.open").count())) throw new Error("the to-do is not open on the To do page");
+        const q = await page.locator("#pt-body .td-item.open").innerText();
+        if (!q.includes("Keep old session cookies")) throw new Error("opened " + q.slice(0, 80));
+      } else {
+        await page.waitForSelector("#todo:not([hidden])", { timeout: 5000 });
+        if (await page.evaluate(() => document.querySelector("#briefs").classList.contains("open"))) throw new Error("the briefings screen stays open");
+      }
+    } finally { await unmockStatusData(); }
+  });
+}
+await check("board: empty lanes are left out, and no board shows without one", async () => {
+  await page.route(/\/api\/board$/, (r) => r.fulfill({ json: { at: ago(0), lanes: [{ key: "needs_you", name: "Needs you", rule: "r", count: 0, items: [] }, { key: "running", name: "Running", rule: "r", count: 0, items: [] }], loose: {} } }));
+  try {
+    await desktopList(1280, "#/status");
+    await page.waitForSelector("#ps-body .bd", { timeout: 8000 });
+    const t = await page.locator("#ps-body .bd").innerText();
+    if (!t.includes("Nothing needs you") || !t.includes("Nothing else in flight") || (await page.locator("#ps-body .bd-lane").count())) throw new Error(t);
+  } finally { await page.unroute(/\/api\/board$/); }
 });
 
 // A host reports a damaged repository: the Status page says how to repair it, and

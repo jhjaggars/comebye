@@ -28,6 +28,7 @@
 //   --hubcheck bad|ok    add a finished worker with a report to the ledger and serve a canned hub-checked block for it
 //                        (bad: the report's claims contradict what the hub found); open it with
 //                        --click on '#/status' rows, e.g. route '#/status' --click 'details.st-row > summary'
+//   --board              serve a canned GET /api/board (boardfix.mjs), every lane filled
 //   --settle MS          wait this long after the steps (default 400)
 //
 // Prints: the PNG path, console errors/warnings, failed requests, and for
@@ -35,6 +36,7 @@
 // page raised an error.
 import { launch } from "./lib.mjs";
 import { releaseView } from "./relfix.mjs";
+import { boardView } from "./boardfix.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,6 +50,7 @@ for (let i = 0; i < argv.length; i++) {
   if (a === "--dark") opt.dark = true;
   else if (a === "--light") opt.dark = false;
   else if (a === "--full") opt.full = true;
+  else if (a === "--board") opt.board = true;
   else if (a.startsWith("--")) {
     const k = a.slice(2);
     const v = argv[++i];
@@ -88,6 +91,7 @@ page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
 page.on("requestfailed", (r) => r.failure()?.errorText !== "net::ERR_ABORTED" && problems.push(`requestfailed: ${r.url()} ${r.failure()?.errorText}`));
 page.on("response", (r) => { if (r.status() >= 400) problems.push(`http ${r.status()}: ${r.request().method()} ${r.url()}`); });
 
+if (opt.board) await page.route(/\/api\/board$/, (r) => r.fulfill({ json: boardView() }));
 if (opt.release) await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(opt.release) }));
 
 if (opt.hubcheck) {

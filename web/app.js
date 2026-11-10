@@ -4966,6 +4966,88 @@ function openToSomething() {
   }
 }
 
+/* ---------- The briefing board: lanes from GET /api/board, above the coordinator's briefing ---------- */
+//
+// Everything on it comes from the hub's records (to-dos, ledger, agents,
+// releases); the coordinator's headline, reasons and notes are parsed from the
+// latest briefing by the hub. Read-only. Needs you is open at first and is the
+// same in both groupings; the rest is by status (the lanes) or by project.
+
+const BOARD_MODE_KEY = "comebye-board-mode";
+const board = { data: null, at: 0, inflight: false, mode: lsGet(BOARD_MODE_KEY) === "project" ? "project" : "status", open: new Set(["needs_you"]), projOpen: new Set() };
+const BOARD_LANE_LABEL = { running: "running", waiting: "waiting", landing: "to land", landed: "landed" };
+
+async function loadBoard() {
+  if (board.inflight || ledger.on !== true) return;
+  board.inflight = true;
+  try {
+    const d = await api("/api/board");
+    if (d && Array.isArray(d.lanes)) board.data = d;
+  } catch { /* keep what we had */ } finally {
+    board.inflight = false;
+    board.at = Date.now();
+  }
+  renderStatus();
+}
+
+function boardItemHtml(it, laneKey, showLane) {
+  const note = it.note ? `<div class="bd-note">${esc(it.note)}</div>` : "";
+  const why = it.why ? `<div class="bd-note">${esc(it.why)}</div>` : "";
+  const open = it.agent && isDesktop() && state.agents.some((a) => agentId(a) === it.agent) ? ` <button type="button" class="st-link" data-agent="${escAttr(it.agent)}">open</button>` : "";
+  const when = it.since && fmtWhen(it.since) ? `<span class="bd-age">${esc(fmtWhen(it.since))}</span>` : "";
+  const lane = showLane ? `<span class="bd-tag">${esc(BOARD_LANE_LABEL[laneKey] || "")}</span>` : "";
+  if (it.type === "todo") {
+    return `<li><button type="button" class="bd-todo" data-bd-todo="${escAttr(it.id)}" aria-label="Open to-do ${escAttr(it.id)}: ${escAttr(it.title)}"><span class="td-kind">${esc(TODO_KIND[it.kind] || it.kind || "")}</span> <span class="bd-q">${esc(it.title)}</span><code class="bd-id">${esc(it.id)}</code></button>${why}${note}</li>`;
+  }
+  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${lane}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${note}</li>`;
+}
+
+function boardLaneHtml(key, name, count, items, open, showLane, extra) {
+  if (!count) return "";
+  const names = items.slice(0, 3).map((i) => i.title).join(", ") + (count > 3 ? ", …" : "");
+  return `<details class="bd-lane${key === "needs_you" ? " need" : ""}" data-lane="${escAttr(key)}"${open ? " open" : ""}><summary><span class="bd-chip">${count}</span><span class="bd-name">${esc(name)}</span><span class="bd-names">${esc(names)}</span></summary>` +
+    `<ul>${items.map((i) => boardItemHtml(i, i.lane || key, showLane)).join("")}</ul>${extra || ""}</details>`;
+}
+
+function boardHtml() {
+  const d = board.data;
+  if (!d) return "";
+  const lanes = d.lanes || [];
+  const needs = lanes.find((l) => l.key === "needs_you") || { count: 0, items: [] };
+  const rest = lanes.filter((l) => l.key !== "needs_you");
+  const total = rest.reduce((n, l) => n + l.count, 0);
+  const head = d.headline ? `<p class="bd-head">${esc(d.headline)}<span class="bd-by">${d.brief_at && fmtWhen(d.brief_at) ? esc(`${d.brief_by || "coordinator"}, ${fmtWhen(d.brief_at)}`) : ""}</span></p>` : "";
+  const sw = ["status", "project"].map((m) => `<button type="button" data-bd-mode="${m}" aria-pressed="${board.mode === m}">${m === "status" ? "By status" : "By project"}</button>`).join("");
+  let body = "";
+  if (board.mode === "status") {
+    body = rest.map((l) => boardLaneHtml(l.key, l.name, l.count, l.items, board.open.has(l.key), false)).join("");
+  } else {
+    const by = new Map();
+    for (const l of rest) for (const it of l.items) { if (!by.has(it.project)) by.set(it.project, []); by.get(it.project).push({ ...it, lane: l.key }); }
+    body = [...by.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+      .map(([p, items]) => boardLaneHtml("p:" + p, p, items.length, items, board.open.has("p:" + p), true)).join("");
+  }
+  const loose = d.loose || {};
+  const foot = [loose.reports ? `${loose.reports} ${loose.reports === 1 ? "report" : "reports"} to read` : "", loose.ready_to_remove ? `${loose.ready_to_remove} ready to remove` : "",
+    (d.unkeyed_notes || []).length ? `${d.unkeyed_notes.length} ${d.unkeyed_notes.length === 1 ? "note names" : "notes name"} an unknown id` : ""].filter(Boolean).join(" · ");
+  const counts = rest.map((l) => `${l.count} ${BOARD_LANE_LABEL[l.key] || l.name}`).join(" · ");
+  return `<section class="bd" aria-label="Briefing board">${head}` +
+    (needs.count ? boardLaneHtml("needs_you", "Needs you", needs.count, needs.items, board.open.has("needs_you"), false) : `<p class="bd-clear">Nothing needs you.</p>`) +
+    `<div class="bd-bar"><span class="bd-sum">${esc(total ? counts : "Nothing else in flight.")}</span><span class="bd-seg" role="group" aria-label="Group by">${sw}</span></div>${body}` +
+    (foot ? `<p class="bd-foot">${esc(foot)}</p>` : "") + `</section>`;
+}
+
+function boardGoTodo(id) {
+  todos.openId = id;
+  todos.follow = true;
+  if (isDesktop()) openPage("todo");
+  else {
+    closeBriefs();
+    $("todo")?.scrollIntoView?.({ block: "start" });
+  }
+  renderTodos(true);
+}
+
 /* ---------- Status: a page generated from the ledger, the to-do list and the agents ---------- */
 //
 // Nothing here is written by anyone: it is the same data the list and the
@@ -5042,7 +5124,7 @@ function statusHTML(desktop) {
     return `<div class="st-row"><span class="st-n">${esc(multiHost() ? `${host} · ${d.repo}` : d.repo)}</span><span class="st-m warn">${esc(d.reason)}${d.ref ? ` at <code>${esc(d.ref)}</code>` : ""}</span><span class="st-r">${Number.isNaN(since) ? "" : "since " + esc(fmtAgo(since)) + " ago"}</span>` +
       `<div class="st-hint">${esc(d.hint)}</div><div class="st-m">${esc(d.path)} · found by ${esc(d.source)}${n ? ` · ${n} ${n === 1 ? "agent works" : "agents work"} in it` : ""}</div></div>`;
   }).join("")}</section>` : "";
-  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${briefCardHtml()}${ps.map(card).join("")}${
+  return `<div class="st">${boardHtml()}<p class="st-sum">${esc(sum)}</p>${repair}${briefCardHtml()}${ps.map(card).join("")}${
     desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
 }
 
@@ -5172,6 +5254,7 @@ function renderStatus() {
     if (!el) continue;
     if (desktop && state.view !== "status") continue; // only the page on screen
     if (!desktop && !briefs.open) continue;
+    if (Date.now() - board.at > 20000) loadBoard();
     const html = statusHTML(desktop);
     if (el._html === html) continue;
     el._html = html;
@@ -5187,7 +5270,14 @@ function renderStatus() {
 
 function onStatusClick(ev) {
   const g = ev.target.closest("[data-go]"), a = ev.target.closest("[data-agent]"), bi = ev.target.closest("[data-bi]");
-  if (bi) setBriefInterval(bi.dataset.bi);
+  const bm = ev.target.closest("[data-bd-mode]"), bt = ev.target.closest("[data-bd-todo]");
+  if (bm) {
+    board.mode = bm.dataset.bdMode === "project" ? "project" : "status";
+    lsSet(BOARD_MODE_KEY, board.mode);
+    for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+    renderStatus();
+  } else if (bt) boardGoTodo(bt.dataset.bdTodo);
+  else if (bi) setBriefInterval(bi.dataset.bi);
   else if (ev.target.closest("[data-bpub]")) briefNow();
   else if (ev.target.closest("[data-bhist]")) briefHistory();
   else if (g) openPage(g.dataset.go);
@@ -5203,6 +5293,13 @@ function onStatusChange(ev) {
 // An opened report is kept across re-renders, and rendered when first opened.
 function onStatusToggle(ev) {
   const d = ev.target;
+  if (d.matches && d.matches("details.bd-lane")) {
+    if (d.open === board.open.has(d.dataset.lane)) return;
+    if (d.open) board.open.add(d.dataset.lane); else board.open.delete(d.dataset.lane);
+    for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+    renderStatus();
+    return;
+  }
   if (!d.matches || !d.matches("details.st-row")) return;
   if (d.open === statusUi.open.has(d.dataset.id)) return; // a re-rendered <details open> fires toggle too: not a change
   if (d.open) statusUi.open.add(d.dataset.id); else statusUi.open.delete(d.dataset.id);

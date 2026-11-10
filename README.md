@@ -102,6 +102,7 @@ connecting several machines, and every setting.
 - [Security model](docs/security.md) and [SECURITY.md](SECURITY.md) (reporting
   vulnerabilities)
 - [API](docs/api.md): the JSON API behind the app
+- [The briefing board](docs/board.md): the lanes in the app's Status page, their rules, and how the coordinator's notes attach
 
 ## Development
 
