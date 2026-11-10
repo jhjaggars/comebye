@@ -32,6 +32,10 @@ type Brief struct {
 	Markdown string    `json:"markdown"`
 	By       string    `json:"by"`
 	At       time.Time `json:"at"`
+	// Since is set on a history entry that stands for several briefings
+	// published close together: when the first of them was published (At is
+	// the last). The window for merging runs from Since.
+	Since time.Time `json:"since,omitempty"`
 }
 
 // briefStore keeps brief.json in the state directory.
@@ -62,6 +66,30 @@ func (b *briefStore) get() (*Brief, error) {
 // app can page back through earlier (say hourly) ones. About 3 MB at most.
 const maxBriefHistory = 48
 
+// briefMergeWindow: briefings published within this long of the history's
+// newest entry are merged into it (the entry becomes the latest text), unless
+// the "Needs you" section changed. A coordinator that publishes at every
+// event would otherwise fill the 48 entries with near copies in a couple of
+// hours. The current briefing (brief.json) is never merged: it is always the
+// last one published.
+const briefMergeWindow = 15 * time.Minute
+
+// briefNeedsSame reports whether two briefings have the same "Needs you"
+// section (or both have none), compared line by line.
+func briefNeedsSame(a, b string) bool {
+	ea, fa := briefNeedsEntries(a)
+	eb, fb := briefNeedsEntries(b)
+	if fa != fb || len(ea) != len(eb) {
+		return false
+	}
+	for i := range ea {
+		if strings.TrimSpace(ea[i]) != strings.TrimSpace(eb[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (b *briefStore) historyPath() string {
 	return filepath.Join(filepath.Dir(b.path), "brief-history.json")
 }
@@ -75,6 +103,16 @@ func (b *briefStore) set(v Brief) error {
 	// The history is a convenience: the briefing is already published, so a
 	// history that cannot be read or written does not fail the publish.
 	h, _ := b.readHistory()
+	if len(h) > 0 {
+		anchor := h[0].At
+		if !h[0].Since.IsZero() {
+			anchor = h[0].Since
+		}
+		if d := v.At.Sub(anchor); d >= 0 && d < briefMergeWindow && briefNeedsSame(h[0].Markdown, v.Markdown) {
+			v.Since = anchor
+			h = h[1:]
+		}
+	}
 	h = append([]Brief{v}, h...)
 	if len(h) > maxBriefHistory {
 		h = h[:maxBriefHistory]

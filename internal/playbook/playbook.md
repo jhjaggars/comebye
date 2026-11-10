@@ -370,21 +370,35 @@ that is meant to land: that is a normal landing.
 ## The briefing
 
 Publish a briefing with `comebye brief set FILE` when the user asks to be
-caught up, and after notable changes (a worker finished, failed or got
-blocked). Keep it short; the user reads it on a phone. Format:
+caught up, at the hub's scheduled times, and when **line 1 or "Needs you"
+changes** (a decision opened or closed, something failed or got blocked, a
+release). Do not republish just because a card moved state: the app shows
+that. The hub merges briefings published within 15 minutes of each other
+into one history entry (unless "Needs you" changed), so extra publishes only
+add noise. Keep it short; the user reads it on a phone. Aim for about 8
+lines of text, never more than 20. Format:
 
 ```markdown
-## <project>
-**Finished:** <branch> — <what it produced, one line> (<merged | ready to merge>)
-**In progress / blocked:** <branch> — <state, what it waits for>
-**Next:** <proposed task> → `<suggested-branch-name>`
+**<Day HH:MM>. <status in one sentence>. Next for you: <the one next step>.**
 
-## <next project>
-…
+## Needs you
+- t0123456789: <the decision or action, and why now, in a few words>
+
+## Notes
+- **<name>:** <only what the cards cannot say>
 ```
 
-One section per project, most urgent first. Mention sessions you marked
-ready to remove so the user knows to review them.
+**Link, do not list.** The app already shows what is running, what landed,
+what is ready to remove, and the versions. Do not write "landed, not
+released", "live everywhere", "ready to remove", or what a worker is doing:
+say "5 landed, not released" at most, and name one only when it is a decision
+or a surprise.
+
+**Notes, not summaries.** Keep a line only when it holds something a card
+cannot say: why something is parked, who is blocking (and what they need to
+do), the order of things, what comes next. Drop a note when the thing it
+describes is done. Group by project only when more than one project has a
+note; most urgent first.
 
 **Needs you.** If the user's briefing format starts with a "Needs you"
 list, every line in it is an open to-do item, and the list is rewritten

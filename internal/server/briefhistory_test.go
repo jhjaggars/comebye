@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 type historyResp struct {
@@ -31,10 +32,11 @@ func TestBriefHistoryKeepsTheLastBriefings(t *testing.T) {
 	if r := getHistory(t, s, ""); r.Briefs == nil || len(r.Briefs) != 0 {
 		t.Fatalf("empty history = %+v", r)
 	}
+	// Spaced past the merge window, so each one is its own entry.
+	t0 := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
 	for i := 1; i <= maxBriefHistory+5; i++ {
-		body := fmt.Sprintf(`{"markdown":"briefing %d"}`, i)
-		if w := do(s, "POST", "/api/brief", userHdr, body); w.Code != 200 {
-			t.Fatal(w.Body)
+		if err := s.brief.set(Brief{Markdown: fmt.Sprintf("briefing %d", i), By: "c", At: t0.Add(time.Duration(i) * 20 * time.Minute)}); err != nil {
+			t.Fatal(err)
 		}
 	}
 	r := getHistory(t, s, "")
@@ -60,5 +62,59 @@ func TestBriefHistoryIsForTheUser(t *testing.T) {
 	s, _, _ := coordServer(t)
 	if w := do(s, "GET", "/api/brief/history", map[string]string{}, ""); w.Code == 200 {
 		t.Fatalf("anonymous got %d", w.Code)
+	}
+}
+
+const needsA = "## Needs you\n- t0123456789: decide A\n\n## Work\n"
+const needsB = "## Needs you\n- t0123456789: decide A\n- tabcdef0123: decide B\n\n## Work\n"
+
+func TestBriefHistoryMergesBriefingsWithinTheWindow(t *testing.T) {
+	s, _, _ := coordServer(t)
+	t0 := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
+	pub := func(md string, min int) {
+		t.Helper()
+		if err := s.brief.set(Brief{Markdown: md, By: "c", At: t0.Add(time.Duration(min) * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pub(needsA+"one", 0)
+	pub(needsA+"two", 3)   // merged into the entry from 0
+	pub(needsA+"three", 9) // merged
+	pub(needsA+"four", 14) // still inside 15 min of the first
+	h := getHistory(t, s, "").Briefs
+	if len(h) != 1 || h[0].Markdown != needsA+"four" || !h[0].At.Equal(t0.Add(14*time.Minute)) || !h[0].Since.Equal(t0) {
+		t.Fatalf("after 4 close publishes: %+v", h)
+	}
+	// The window runs from the first publish, so a steady stream still
+	// yields an entry about every 15 minutes (not one forever).
+	pub(needsA+"five", 16)
+	h = getHistory(t, s, "").Briefs
+	if len(h) != 2 || h[0].Markdown != needsA+"five" || h[1].Markdown != needsA+"four" {
+		t.Fatalf("after the window: %+v", h)
+	}
+	// A change in "Needs you" is never merged, even a minute later.
+	pub(needsB+"six", 17)
+	h = getHistory(t, s, "").Briefs
+	if len(h) != 3 || h[0].Markdown != needsB+"six" || h[1].Markdown != needsA+"five" {
+		t.Fatalf("after a Needs you change: %+v", h)
+	}
+	// The current briefing is always the latest publish.
+	if b, _ := s.brief.get(); b == nil || b.Markdown != needsB+"six" {
+		t.Fatalf("current = %+v", b)
+	}
+}
+
+func TestBriefHistoryMergeWithoutNeedsSection(t *testing.T) {
+	s, _, _ := coordServer(t)
+	t0 := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
+	s.brief.set(Brief{Markdown: "plain one", At: t0})
+	s.brief.set(Brief{Markdown: "plain two", At: t0.Add(time.Minute)})
+	// Gaining a Needs you section is a change, so it gets its own entry.
+	s.brief.set(Brief{Markdown: needsA, At: t0.Add(2 * time.Minute)})
+	// A clock that went backwards does not merge.
+	s.brief.set(Brief{Markdown: needsA + "x", At: t0.Add(-time.Hour)})
+	h := getHistory(t, s, "").Briefs
+	if len(h) != 3 || h[2].Markdown != "plain two" {
+		t.Fatalf("history = %+v", h)
 	}
 }

@@ -2247,7 +2247,7 @@ function editBriefSchedule() {
 //
 // A page to the right of the list: the latest briefing in full, the
 // schedule and any missed-briefing note, and the earlier briefings the hub
-// kept (GET /api/brief/history, the last 48). Reached by swiping left on the
+// kept (GET /api/brief/history, the last 48; briefings within 15 minutes merge). Reached by swiping left on the
 // list (the panel follows the finger, then snaps on distance or velocity),
 // by the pill at the bottom of the list, or by the ⋯ menu. Swiping right,
 // the back button, or the browser's back returns. The URL is #/briefings, so
@@ -2321,7 +2321,7 @@ function renderBriefs() {
     </section>
     <h3 class="br-h">Earlier</h3>
     ${earlier.length ? earlier.map(briefItem).join("")
-      : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48." : "Loading…"}</p>`}`;
+      : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48, at most one per 15 minutes unless the Needs you list changed." : "Loading…"}</p>`}`;
   el.scrollTop = top;
   renderStatus();
   if (key) el.querySelector(`[data-bk="${key}"]`)?.focus({ preventScroll: true });
