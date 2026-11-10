@@ -11,7 +11,9 @@
 # and network logs land in OUT_DIR (default: a temp dir). Exit 1 on failure.
 set -euo pipefail
 
-# SCHEME=dark|light picks the emulated prefers-color-scheme. Unset, the whole
+# SCHEME=dark|light picks the emulated prefers-color-scheme (CI runs one per
+# job; dark also serves pages from a second listener unless PAGES_LISTENER
+# says otherwise, light from the app's origin). Unset, the whole
 # run happens twice on fresh servers (state left by one pass would skew the
 # other): dark in OUT_DIR, then light in OUT_DIR/light.
 if [ -z "${SCHEME:-}" ]; then
@@ -23,6 +25,11 @@ if [ -z "${SCHEME:-}" ]; then
   SCHEME=dark PAGES_LISTENER=1 "$me" "${1:-}" "$o" || rc=1
   SCHEME=light PAGES_LISTENER=0 PORT=$(( ${PORT:-18741} + 1 )) "$me" "${1:-}" "$o/light" || rc=1
   exit $rc
+fi
+
+# Set up for the pass picked above: the dark pass uses the pages listener.
+if [ -z "${PAGES_LISTENER:-}" ]; then
+  [ "$SCHEME" = dark ] && PAGES_LISTENER=1 || PAGES_LISTENER=0
 fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
