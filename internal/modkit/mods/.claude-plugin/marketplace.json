@@ -1,0 +1,17 @@
+{
+  "name": "comebye-mods",
+  "owner": { "name": "Comebye" },
+  "metadata": { "description": "Claude Code mods for agents run by Comebye. Written by `comebye mod install`; do not edit by hand." },
+  "plugins": [
+    {
+      "name": "comebye-hub",
+      "source": "./comebye-hub",
+      "description": "A quiet status band above the prompt, instant /todo /handoff /show commands, and warn-only guard notices."
+    },
+    {
+      "name": "comebye-coord-window",
+      "source": "./comebye-coord-window",
+      "description": "Early access, for a coordinator: keep the digest plus the last turns in place of /clear."
+    }
+  ]
+}

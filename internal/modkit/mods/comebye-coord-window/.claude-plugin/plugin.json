@@ -1,0 +1,25 @@
+{
+  "name": "comebye-coord-window",
+  "version": "0.1.0",
+  "description": "Early access, for a coordinator: past a size, keep the comebye digest plus the last turns in place, with no /clear. Beside coord-reset, which stays the fallback.",
+  "userConfig": {
+    "keep_turns": {
+      "type": "number",
+      "title": "Turns to keep",
+      "description": "How many of the latest prompts (with everything after them) stay when the window is trimmed.",
+      "default": 10
+    },
+    "trim_tokens": {
+      "type": "number",
+      "title": "Trim above (tokens)",
+      "description": "Trim when the last request read more than this many tokens. Each trim rewrites the prompt cache once, so this is a step, not a per-turn cost.",
+      "default": 120000
+    },
+    "cooldown_minutes": {
+      "type": "number",
+      "title": "Minutes between trims",
+      "description": "Never trim twice within this long.",
+      "default": 20
+    }
+  }
+}

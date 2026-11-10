@@ -1,0 +1,20 @@
+{
+  "name": "comebye-hub",
+  "version": "0.1.0",
+  "description": "Comebye in Claude Code: a status band above the prompt, instant /todo /handoff /show commands (no model turn) and warn-only guard notices.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "own_owners": {
+      "type": "string",
+      "title": "Your GitHub owners",
+      "description": "Comma-separated GitHub users and orgs you push to. A git push to any other owner gets a warning. Empty: warn only for a remote named upstream.",
+      "default": ""
+    },
+    "poll_seconds": {
+      "type": "number",
+      "title": "Band refresh (seconds)",
+      "description": "How often the band asks Comebye for its state; 30 or more.",
+      "default": 30
+    }
+  }
+}
