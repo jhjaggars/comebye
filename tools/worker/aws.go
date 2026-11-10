@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -52,7 +53,80 @@ func (a *awsCLI) runText(ctx context.Context, args []string) (string, error) {
 
 // tags renders the tag list for --tag-specifications and filters.
 func (a *awsCLI) tagSpec(resource, name string) string {
-	return fmt.Sprintf("ResourceType=%s,Tags=[{Key=%s,Value=%s},{Key=Name,Value=%s}]", resource, labelKey, labelVal, name)
+	return a.tagSpecExtra(resource, name, nil)
+}
+
+// The caps and the launch price are written on the instance, so that the
+// cloud, not only a caller's memory, records what a host is allowed to cost.
+const (
+	tagBudgetCap    = "comebye-budget-cap-usd"
+	tagDestroyAfter = "comebye-destroy-after-hours"
+	tagLaunchPrice  = "comebye-launch-price-usd-hour"
+)
+
+func (a *awsCLI) tagSpecExtra(resource, name string, extra [][2]string) string {
+	s := fmt.Sprintf("ResourceType=%s,Tags=[{Key=%s,Value=%s},{Key=Name,Value=%s}", resource, labelKey, labelVal, name)
+	for _, kv := range extra {
+		s += fmt.Sprintf(",{Key=%s,Value=%s}", kv[0], kv[1])
+	}
+	return s + "]"
+}
+
+func fmtUSD(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+
+// capTags are the tags for a request that carries caps; none for one that does not.
+// The launch price is read just before launch (spot: the zone's current price,
+// else the lowest zone's; on demand: the list price) and left out if it cannot be read.
+func (p *awsProv) capTags(ctx context.Context) [][2]string {
+	c := p.cfg
+	if c.BudgetCapUSD == 0 && c.DestroyAfterHours == 0 {
+		return nil
+	}
+	var tags [][2]string
+	if c.BudgetCapUSD > 0 {
+		tags = append(tags, [2]string{tagBudgetCap, fmtUSD(c.BudgetCapUSD)})
+	}
+	if c.DestroyAfterHours > 0 {
+		tags = append(tags, [2]string{tagDestroyAfter, strconv.Itoa(c.DestroyAfterHours)})
+	}
+	if price, ok := p.launchPrice(ctx); ok {
+		tags = append(tags, [2]string{tagLaunchPrice, fmtUSD(price)})
+	}
+	return tags
+}
+
+func (p *awsProv) launchPrice(ctx context.Context) (float64, bool) {
+	c := p.cfg
+	if c.AWSSpot {
+		raw, err := fetchSpotPrices(ctx, p.a, time.Now(), []string{c.MachineType})
+		if err != nil {
+			return 0, false
+		}
+		var m map[string]map[string]float64
+		if json.Unmarshal(raw, &m) != nil || len(m[c.MachineType]) == 0 {
+			return 0, false
+		}
+		if v, ok := m[c.MachineType][c.AWSAZ]; ok {
+			return v, true
+		}
+		lo := 0.0
+		for _, v := range m[c.MachineType] {
+			if lo == 0 || v < lo {
+				lo = v
+			}
+		}
+		return lo, lo > 0
+	}
+	raw, err := fetchOnDemand(ctx, p.a, c.AWSRegion, []string{c.MachineType})
+	if err != nil {
+		return 0, false
+	}
+	var m map[string]float64
+	if json.Unmarshal(raw, &m) != nil {
+		return 0, false
+	}
+	v, ok := m[c.MachineType]
+	return v, ok
 }
 
 func (a *awsCLI) managedFilters(name string, extra ...string) []string {
@@ -300,6 +374,7 @@ func (p *awsProv) createVolume(name string) []string {
 type awsInstance struct {
 	InstanceID   string `json:"InstanceId"`
 	InstanceType string
+	LaunchTime   string
 	PublicIP     string `json:"PublicIpAddress"`
 	State        struct{ Name string }
 	Lifecycle    string `json:"InstanceLifecycle"`
@@ -353,13 +428,37 @@ func (p *awsProv) Describe(ctx context.Context, name string) (*Inst, error) {
 	if err != nil || i == nil {
 		return nil, err
 	}
+	return toInst(i, name), nil
+}
+
+var stopTimeRe = regexp.MustCompile(`\((\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) GMT\)`)
+
+// toInst reads an instance as the commands see it.
+func toInst(i *awsInstance, name string) *Inst {
 	managed := false
+	tags := map[string]string{}
 	for _, t := range i.Tags {
+		tags[t.Key] = t.Value
 		if t.Key == labelKey && t.Value == labelVal {
 			managed = true
 		}
+		if t.Key == "Name" && name == "" {
+			name = t.Value
+		}
 	}
 	st := strings.ToUpper(i.State.Name)
+	mode := "on-demand"
+	if i.Lifecycle == "spot" {
+		mode = "spot"
+	}
+	launched, _ := time.Parse(time.RFC3339, i.LaunchTime)
+	var stopped time.Time
+	if st == "STOPPED" || st == "STOPPING" {
+		// "User initiated (2024-05-01 12:34:56 GMT)": the only place EC2 keeps it.
+		if m := stopTimeRe.FindStringSubmatch(i.Reason); m != nil {
+			stopped, _ = time.Parse("2006-01-02 15:04:05", m[1])
+		}
+	}
 	note := ""
 	if i.Lifecycle == "spot" {
 		note = "spot instance (persistent request, stops when AWS reclaims the capacity)"
@@ -367,7 +466,33 @@ func (p *awsProv) Describe(ctx context.Context, name string) (*Inst, error) {
 			note = "spot instance, stopped by AWS (" + i.Reason + "): it restarts by itself when capacity returns"
 		}
 	}
-	return &Inst{Name: name, ID: i.InstanceID, State: st, Type: i.InstanceType, IP: i.PublicIP, Managed: managed, Note: note, Created: i.created()}, nil
+	return &Inst{Name: name, ID: i.InstanceID, State: st, Type: i.InstanceType, IP: i.PublicIP, Managed: managed, Note: note, Created: i.created(),
+		Launched: launched.UTC(), Stopped: stopped, Mode: mode, Tags: tags}
+}
+
+// AllInst describes every live instance the tool made, in one call.
+func (p *awsProv) AllInst(ctx context.Context) ([]Inst, error) {
+	out, _, err := p.a.r.Run(ctx, "aws", p.a.json("ec2", "describe-instances", "--filters", "Name=tag:"+labelKey+",Values="+labelVal,
+		"Name=instance-state-name,Values=pending,running,stopping,stopped"), nil)
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Reservations []struct{ Instances []awsInstance }
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, nil
+	}
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		return nil, fmt.Errorf("parsing instances: %w", err)
+	}
+	var all []Inst
+	for _, rv := range r.Reservations {
+		for k := range rv.Instances {
+			all = append(all, *toInst(&rv.Instances[k], ""))
+		}
+	}
+	return all, nil
 }
 
 func (p *awsProv) Instances(ctx context.Context) ([]Inst, error) {
@@ -400,7 +525,7 @@ func (p *awsProv) imageID(ctx context.Context) (string, error) {
 // runInstances is the launch command. Nothing in it is a secret; there is
 // no instance profile, IMDSv2 is required with hop limit 1, the root volume
 // is encrypted, and a guest poweroff stops the instance.
-func (p *awsProv) runInstances(name, ami, rootDev, subnet, sg, userDataFile string) []string {
+func (p *awsProv) runInstances(name, ami, rootDev, subnet, sg, userDataFile string, instTags ...[2]string) []string {
 	c := p.cfg
 	var spot []string
 	if c.AWSSpot {
@@ -415,7 +540,7 @@ func (p *awsProv) runInstances(name, ami, rootDev, subnet, sg, userDataFile stri
 		"--block-device-mappings", fmt.Sprintf("DeviceName=%s,Ebs={VolumeSize=%d,VolumeType=%s,Encrypted=true,DeleteOnTermination=true}", rootDev, c.BootDiskGB, c.DiskType),
 		"--metadata-options", "HttpTokens=required,HttpPutResponseHopLimit=1,HttpEndpoint=enabled",
 		"--instance-initiated-shutdown-behavior", "stop",
-		"--tag-specifications", p.a.tagSpec("instance", name), p.a.tagSpec("volume", name+"-root"),
+		"--tag-specifications", p.a.tagSpecExtra("instance", name, instTags), p.a.tagSpec("volume", name+"-root"),
 		"--user-data", "file://"+userDataFile,
 		"--query", "Instances[0].InstanceId")
 	return p.a.text(args...)
@@ -459,7 +584,7 @@ func (p *awsProv) Create(ctx context.Context, name, pubKey string) error {
 		return err
 	}
 	f.Close()
-	id, err := p.a.runText(ctx, p.runInstances(name, ami, rootDev, sn, sg, f.Name()))
+	id, err := p.a.runText(ctx, p.runInstances(name, ami, rootDev, sn, sg, f.Name(), p.capTags(ctx)...))
 	if err != nil || id == "" {
 		return fmt.Errorf("launching the instance: %v", err)
 	}
@@ -778,6 +903,9 @@ func (p *awsProv) Plan(name, pub string, w logf) {
 	w("   then: aws ec2 wait instance-running; aws ec2 attach-volume --device /dev/sdf\n")
 	w("   host key, printed by the VM to its console (marker COMEBYE-HOSTKEY) and read through the EC2 API:\n     %s\n",
 		cmdLine("aws", a.text("ec2", "get-console-output", "--instance-id", "<id>", "--latest", "--query", "Output")))
+	if c.BudgetCapUSD > 0 || c.DestroyAfterHours > 0 {
+		w("   the caps are also written as instance tags (%s, %s) with the launch price (%s), read just before launch\n", tagBudgetCap, tagDestroyAfter, tagLaunchPrice)
+	}
 	if c.AWSSpot {
 		w("   spot: persistent request, interruption behaviour stop (AWS stops a reclaimed instance and restarts it when capacity returns; no max price, so up to on-demand)\n")
 	}

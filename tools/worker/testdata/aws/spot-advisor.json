@@ -1,0 +1,133 @@
+{
+ "global_rate": "<10%",
+ "instance_types": {
+  "c5.xlarge": {
+   "cores": 4,
+   "emr": true,
+   "ram_gb": 8.0
+  },
+  "g4dn.xlarge": {
+   "cores": 4,
+   "emr": true,
+   "ram_gb": 16.0
+  },
+  "m5.large": {
+   "cores": 2,
+   "emr": false,
+   "ram_gb": 8.0
+  },
+  "m5.xlarge": {
+   "cores": 4,
+   "emr": true,
+   "ram_gb": 16.0
+  },
+  "m6g.large": {
+   "cores": 2,
+   "emr": false,
+   "ram_gb": 8.0
+  },
+  "m6i.large": {
+   "cores": 2,
+   "emr": false,
+   "ram_gb": 8.0
+  },
+  "t3.large": {
+   "cores": 2,
+   "emr": false,
+   "ram_gb": 8.0
+  },
+  "t3.xlarge": {
+   "cores": 4,
+   "emr": false,
+   "ram_gb": 16.0
+  },
+  "t3a.large": {
+   "cores": 2,
+   "emr": false,
+   "ram_gb": 8.0
+  },
+  "t4g.large": {
+   "cores": 2,
+   "emr": false,
+   "ram_gb": 8.0
+  }
+ },
+ "ranges": [
+  {
+   "dots": 0,
+   "index": 0,
+   "label": "<5%",
+   "max": 5
+  },
+  {
+   "dots": 1,
+   "index": 1,
+   "label": "5-10%",
+   "max": 11
+  },
+  {
+   "dots": 2,
+   "index": 2,
+   "label": "10-15%",
+   "max": 16
+  },
+  {
+   "dots": 3,
+   "index": 3,
+   "label": "15-20%",
+   "max": 22
+  },
+  {
+   "dots": 4,
+   "index": 4,
+   "label": ">20%",
+   "max": 100
+  }
+ ],
+ "spot_advisor": {
+  "us-east-1": {
+   "Linux": {
+    "c5.xlarge": {
+     "r": 2,
+     "s": 58
+    },
+    "g4dn.xlarge": {
+     "r": 2,
+     "s": 60
+    },
+    "m5.large": {
+     "r": 4,
+     "s": 59
+    },
+    "m5.xlarge": {
+     "r": 4,
+     "s": 68
+    },
+    "m6g.large": {
+     "r": 4,
+     "s": 57
+    },
+    "m6i.large": {
+     "r": 4,
+     "s": 61
+    },
+    "t3.large": {
+     "r": 0,
+     "s": 53
+    },
+    "t3.xlarge": {
+     "r": 0,
+     "s": 61
+    },
+    "t3a.large": {
+     "r": 4,
+     "s": 61
+    },
+    "t4g.large": {
+     "r": 3,
+     "s": 58
+    }
+   }
+  }
+ }
+}

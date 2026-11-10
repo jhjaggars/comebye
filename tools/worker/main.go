@@ -273,7 +273,7 @@ func run(args []string, e *env) int {
 	case "preflight":
 		err = e.preflight(ctx, *asJSON)
 	case "catalog":
-		err = e.catalog(ctx, catalogOpts{Kind: *kind, Region: *region, Families: splitList(*families), Types: splitList(*types), Score: splitList(*score), Refresh: *refresh})
+		err = e.catalog(ctx, catalogOpts{Kind: *kind, Region: *region, Families: splitList(*families), Types: splitList(*types), Score: splitList(*score), Refresh: *refresh, JSON: *asJSON})
 	case "stop":
 		err = e.stop(ctx, name)
 	case "start":

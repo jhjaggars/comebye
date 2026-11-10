@@ -1,0 +1,240 @@
+{
+ "v": 1,
+ "kind": "aws",
+ "region": "us-east-1",
+ "generated_at": "2026-11-10T12:00:00Z",
+ "sources": {
+  "on_demand": {
+   "fetched_at": "2026-11-10T12:00:00Z",
+   "state": "fresh",
+   "source": "pricing get-products"
+  },
+  "placement": {
+   "fetched_at": "2026-11-10T12:00:00Z",
+   "state": "fresh",
+   "source": "ec2 get-spot-placement-scores"
+  },
+  "spot_advisor": {
+   "fetched_at": "2026-11-10T12:00:00Z",
+   "state": "fresh",
+   "source": "AWS Spot Advisor (public data file)"
+  },
+  "spot_price": {
+   "fetched_at": "2026-11-10T12:00:00Z",
+   "state": "fresh",
+   "source": "ec2 describe-spot-price-history"
+  },
+  "types": {
+   "fetched_at": "2026-11-10T12:00:00Z",
+   "state": "fresh",
+   "source": "ec2 describe-instance-types"
+  }
+ },
+ "estimate": {
+  "ipv4_usd_hour": 0.005,
+  "disk_usd_gb_month": 0.08,
+  "disk_gb": 70
+ },
+ "rows": [
+  {
+   "type": "t3a.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0752,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0281,
+    "us-east-1b": 0.029
+   },
+   "spot_min_usd_hour": 0.0281,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0408,
+   "estimate_on_demand_usd_hour": 0.0879,
+   "selectable": true
+  },
+  {
+   "type": "t3.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0832,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0312,
+    "us-east-1b": 0.0298,
+    "us-east-1c": 0.0335
+   },
+   "spot_min_usd_hour": 0.0298,
+   "interruption": "<5%",
+   "estimate_spot_usd_hour": 0.0425,
+   "estimate_on_demand_usd_hour": 0.0959,
+   "selectable": true
+  },
+  {
+   "type": "m5.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.096,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0399,
+    "us-east-1b": 0.0412,
+    "us-east-1c": 0.0388
+   },
+   "spot_min_usd_hour": 0.0388,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0515,
+   "estimate_on_demand_usd_hour": 0.1087,
+   "selectable": true
+  },
+  {
+   "type": "m6i.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.096,
+   "spot_usd_hour": {
+    "us-east-1a": 0.042,
+    "us-east-1b": 0.0433
+   },
+   "spot_min_usd_hour": 0.042,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0547,
+   "estimate_on_demand_usd_hour": 0.1087,
+   "selectable": true
+  },
+  {
+   "type": "t3.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.1664,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0624,
+    "us-east-1b": 0.061,
+    "us-east-1c": 0.0702
+   },
+   "spot_min_usd_hour": 0.061,
+   "interruption": "<5%",
+   "estimate_spot_usd_hour": 0.0737,
+   "estimate_on_demand_usd_hour": 0.1791,
+   "selectable": true
+  },
+  {
+   "type": "c5.xlarge",
+   "vcpu": 4,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.17,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0671,
+    "us-east-1b": 0.066,
+    "us-east-1c": 0.0688
+   },
+   "spot_min_usd_hour": 0.066,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.0787,
+   "estimate_on_demand_usd_hour": 0.1827,
+   "selectable": true
+  },
+  {
+   "type": "m5.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.192,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0802,
+    "us-east-1b": 0.079,
+    "us-east-1c": 0.0815
+   },
+   "spot_min_usd_hour": 0.079,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0917,
+   "estimate_on_demand_usd_hour": 0.2047,
+   "selectable": true
+  },
+  {
+   "type": "g4dn.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 1,
+   "on_demand_usd_hour": 0.526,
+   "spot_usd_hour": {
+    "us-east-1a": 0.19,
+    "us-east-1b": 0.21
+   },
+   "spot_min_usd_hour": 0.19,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.2027,
+   "estimate_on_demand_usd_hour": 0.5387,
+   "selectable": true
+  },
+  {
+   "type": "t4g.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0672,
+   "spot_usd_hour": {
+    "us-east-1a": 0.025,
+    "us-east-1b": 0.0244,
+    "us-east-1c": 0.026
+   },
+   "spot_min_usd_hour": 0.0244,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0371,
+   "estimate_on_demand_usd_hour": 0.0799,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "m6g.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.077,
+   "spot_usd_hour": {
+    "us-east-1a": 0.034,
+    "us-east-1b": 0.0331
+   },
+   "spot_min_usd_hour": 0.0331,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0458,
+   "estimate_on_demand_usd_hour": 0.0897,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  }
+ ],
+ "placement": {
+  "types": [
+   "m5.large",
+   "t3.large"
+  ],
+  "scores": [
+   {
+    "zone_id": "use1-az1",
+    "score": 9
+   },
+   {
+    "zone_id": "use1-az2",
+    "score": 6
+   },
+   {
+    "zone_id": "use1-az4",
+    "score": 3
+   }
+  ],
+  "fetched_at": "2026-11-10T12:00:00Z",
+  "source": "ec2 get-spot-placement-scores"
+ }
+}

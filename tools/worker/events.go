@@ -169,6 +169,11 @@ type needsInputError struct{ what string }
 
 func (n *needsInputError) Error() string { return "needs input: " + n.what }
 
+// classedError is an error whose class is already known.
+type classedError struct{ class, msg string }
+
+func (c *classedError) Error() string { return c.msg }
+
 func needsInput(format string, a ...any) error {
 	return &needsInputError{what: fmt.Sprintf(format, a...)}
 }
@@ -183,7 +188,10 @@ var (
 // matters only for bootstrap, which is an ssh script failing on the new host.
 func classify(err error, stage string) string {
 	var ni *needsInputError
+	var ce *classedError
 	switch msg := err.Error(); {
+	case errors.As(err, &ce):
+		return ce.class
 	case errors.As(err, &ni):
 		return classNeedsInput
 	case reExpired.MatchString(msg):
@@ -223,4 +231,15 @@ func (e *env) addSecret(s string) {
 	if s != "" {
 		e.secrets = append(e.secrets, s)
 	}
+}
+
+// marshalJSON indents and does not escape < > & (the interruption band "<5%"
+// stays readable).
+func marshalJSON(v any) []byte {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", " ")
+	enc.Encode(v)
+	return []byte(strings.TrimRight(b.String(), "\n"))
 }

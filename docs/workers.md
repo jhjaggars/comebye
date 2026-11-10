@@ -25,6 +25,9 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
 | `stop NAME` / `start NAME` | Stop or start the VM. The tailnet node and the hub's peer entry stay (the hub shows it unreachable). `start` re-reads the host key from GCE (the external IP changes) and waits for comebye. |
 | `archive NAME` / `archive --all` | Copies a running worker's sessions to the transcript archive, and verifies them. Safe to repeat, and leaves the agents running. `--all` covers every running worker and skips stopped ones. See [Sessions and the archive](#sessions-and-the-archive). |
 | `destroy NAME [--delete-data-disk] [--no-archive] [--yes]` | Asks you to type the name (`--yes`: the caller has already confirmed, so it does not ask). Saves the worker's sessions to the archive, and **refuses** if it cannot. Then signs the agents out, `tailscale logout`, deletes the tailnet device (only one with the exact hostname **and** the tag), removes the hub's peer entry, deletes the VM. The data disk is kept unless you pass the flag. `--no-archive` skips the save, and the sessions are lost. |
+| `preflight [--json]` | Read-only. Are the credentials this config needs usable: `aws`, `gcp`, `tailnet`, `openshell`, `ssh`, each `ok`, `missing`, `expired` or `error` with a one-line note (a profile or gateway name, never a key, token or account id). |
+| `catalog [--kind aws] [--region R] [--families f1,f2] [--types t1,t2] [--score t1,t2] [--refresh] [--json]` | Read-only. The instance table: vCPU, memory, arch, GPUs, spot price per zone, on-demand price, AWS Spot Advisor interruption band, and an estimate (price + $0.005/h IPv4 + disks at $0.08/GB-month). Arm rows are listed but `selectable: false`. See [Prices](#prices-and-the-read-only-commands). |
+| `status --json [NAME]` | Read-only, cloud API only: state, launch time, last stop, type, mode (spot/on-demand) and the caps, for one worker or all of them. |
 | `login NAME claude\|codex` | Runs the agent's own sign-in on the VM over ssh. You open the printed URL in your browser; the credential is created on the VM and nothing is copied from your machine. |
 
 ## Driving the tool from a program
@@ -63,6 +66,35 @@ Everything below is opt-in; with none of these flags the tool behaves as before.
   The destroy confirmation, the hidden Tailscale-key prompt and the interactive
   `login` become a `needs_input` error. `destroy --yes` is the way for a caller
   that did its own confirmation; with neither flag the prompts work as before.
+
+## Prices and the read-only commands
+
+`preflight`, `catalog` and `status --json` make only read calls, so a node can
+use them with a narrow IAM policy: `tools/worker/iam/readonly-policy.json` is a
+draft (nothing in this repo creates it). `catalog` runs, for one region:
+`ec2 describe-instance-types` (24 h cache), `ec2 describe-spot-price-history`
+(15 min), `pricing get-products` (7 d; the Pricing API endpoint is in
+us-east-1 whatever region is priced), the public Spot Advisor data file
+(24 h; it is not an API with a contract, so the column may be empty), and, with
+`--score`, `ec2 get-spot-placement-scores` for a shortlist of at most 10 types
+(30 min). Each source is cached in `<state_dir>/provision/catalog-aws-<region>.json`
+with its own `fetched_at`; a refresh that fails (login expired, no network)
+serves the cache and sets `degraded` (`creds_expired` or `error`) with the
+source marked `stale`; with no cache at all it fails. One refresh runs at a
+time. Which families are priced: `--families`, else `allowed_families`, else a
+short default list.
+
+`tools/worker/testdata/aws-shim/aws` is a recording shim: put its directory on
+`PATH` with `AWS_SHIM_LOG=FILE` and it logs every call, refuses (exit 99) any
+call that is not a read, and passes the rest to the real `aws` (or, with
+`AWS_SHIM_FIXTURES=DIR`, answers from canned files, which is how the tests and
+a no-account run use it).
+
+With `budget_cap_usd` or `destroy_after_hours` in a spec, `create` also writes
+the caps and the launch price as tags on the AWS instance
+(`comebye-budget-cap-usd`, `comebye-destroy-after-hours`,
+`comebye-launch-price-usd-hour`), and `status --json` reads them back. The
+price is read just before launch and left out if it cannot be read.
 
 ## Before the first run
 

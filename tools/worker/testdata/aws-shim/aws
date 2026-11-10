@@ -1,0 +1,46 @@
+#!/bin/bash
+# A recording aws shim for checking that a command makes only read calls.
+#
+#   AWS_SHIM_LOG=/tmp/aws.log PATH=<this dir>:$PATH worker catalog --json ...
+#
+# It appends every call to $AWS_SHIM_LOG, refuses (exit 99, "REFUSED" in the
+# log) anything that is not a read, and then either
+#   - runs the real aws CLI (default; $AWS_REAL, else the first aws on PATH
+#     outside this directory), recording a golden run on a logged-in machine; or
+#   - with AWS_SHIM_FIXTURES=DIR, answers from DIR/<service>-<operation>.json
+#     (pricing get-products: DIR/pricing-get-products-<instance type>.json),
+#     so the real worker binary can be exercised with no AWS account.
+# AWS_SHIM_FAIL=expired makes every call fail as an expired login does.
+set -u
+log="${AWS_SHIM_LOG:?set AWS_SHIM_LOG}"
+svc="${1:-}"; op="${2:-}"
+echo "$svc $op $*" >> "$log"
+case "$svc $op" in
+  "sts get-caller-identity" | "ssm get-parameters" | "pricing get-products" | "ec2 describe-"* | "ec2 get-"*) ;;
+  *) echo "REFUSED $svc $op" >> "$log"; echo "aws shim: refused a call that is not a read: $svc $op" >&2; exit 99 ;;
+esac
+if [ "${AWS_SHIM_FAIL:-}" = expired ]; then
+  echo "Your session has expired. Please reauthenticate using 'aws login'." >&2
+  exit 255
+fi
+if [ -n "${AWS_SHIM_FIXTURES:-}" ]; then
+  f="$AWS_SHIM_FIXTURES/$svc-$op.json"
+  if [ "$svc $op" = "pricing get-products" ]; then
+    for a in "$@"; do
+      case "$a" in *Field=instanceType,Value=*) f="$AWS_SHIM_FIXTURES/pricing-get-products-${a##*Value=}.json" ;; esac
+    done
+  fi
+  if [ -f "$f" ]; then cat "$f"; exit 0; fi
+  echo "aws shim: no fixture $f" >&2; exit 254
+fi
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+real="${AWS_REAL:-}"
+if [ -z "$real" ]; then
+  IFS=: read -ra dirs <<< "$PATH"
+  for d in "${dirs[@]}"; do
+    [ "$(cd "$d" 2>/dev/null && pwd)" = "$here" ] && continue
+    [ -x "$d/aws" ] && { real="$d/aws"; break; }
+  done
+fi
+[ -n "$real" ] || { echo "aws shim: no real aws found" >&2; exit 127; }
+exec "$real" "$@"

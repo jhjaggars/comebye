@@ -56,6 +56,17 @@ type Inst struct {
 	Managed  bool      // carries managed-by=comebye-worker
 	Note     string    // extra status line, e.g. "spot, reclaimed by AWS"
 	Created  time.Time // when the VM was first created (not its latest boot); zero if unknown
+
+	// Read by status --json; zero when the cloud does not say (only aws fills them).
+	Launched time.Time         // the latest boot
+	Stopped  time.Time         // when it was last stopped, while it is stopped
+	Mode     string            // spot or on-demand
+	Tags     map[string]string // the instance's own tags (caps and launch price)
+}
+
+// fullLister is a provider that can describe every live instance in one call.
+type fullLister interface {
+	AllInst(ctx context.Context) ([]Inst, error)
 }
 
 func newProvider(r Runner, c *Config) Provider {
