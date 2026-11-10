@@ -516,8 +516,8 @@ func briefPrompt(plan schedPlan, last time.Time) string {
 		since = "The last briefing was published " + last.In(plan.loc).Format("Mon Jan 2 15:04 MST") + "."
 	}
 	return "Scheduled briefing (sent by the Comebye hub, every " + fmtEvery(plan.every) + "). " + since +
-		" Catch up from the ledger (`comebye ledger`) and the workers' reports since then, and publish a fresh" +
-		" briefing with `comebye brief set` in the playbook's format. If nothing changed, publish a short one that says so." +
+		" Catch up from the ledger (`comebye ledger`) and the workers' reports since then. Publish a fresh" +
+		" briefing with `comebye brief set` in the playbook's format, but only when line 1 or \"Needs you\" changed; if neither did, publish nothing." +
 		" First run `comebye todo list`: relay answered items to the agents waiting on them and close them (`comebye todo done ID`)," +
 		" and write the briefing's \"Needs you\" from the open items, one short line each with its item id (every Needs-you line is an open to-do item; `comebye brief set` refuses a line without the id of an active item, and \"Nothing open.\" is fine when nothing is)."
 }
