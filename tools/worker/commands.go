@@ -699,14 +699,17 @@ func (e *env) destroy(ctx context.Context, name string, o destroyOpts) error {
 	if o.DeleteDataDisk {
 		disk = "DELETED (" + dataDiskName(name) + ")"
 	}
+	ask := "Type the worker's name to confirm: "
+	if o.Yes {
+		ask = "Confirmed by the caller (--yes).\n"
+	}
 	if e.Cfg.Provider == "openshell" {
-		e.printf("This removes worker %s: the sandbox and its volume, its tailnet node, and the hub's peer entry.\nType the worker's name to confirm: ", name)
+		e.printf("This removes worker %s: the sandbox and its volume, its tailnet node, and the hub's peer entry.\n%s", name, ask)
 	} else {
-		e.printf("This removes worker %s: the VM, its tailnet node, and the hub's peer entry. Data disk: %s.\nType the worker's name to confirm: ", name, disk)
+		e.printf("This removes worker %s: the VM, its tailnet node, and the hub's peer entry. Data disk: %s.\n%s", name, disk, ask)
 	}
 	switch {
 	case o.Yes:
-		e.printf("--yes: confirmed by the caller\n")
 	case e.NoPrompt:
 		e.printf("\n")
 		return needsInput("destroy asks for the worker's name to be typed; pass --yes when the caller has confirmed, nothing was changed")
