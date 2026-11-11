@@ -279,8 +279,8 @@ try {
       await page.locator("#az-done").click();
       await page.waitForSelector("#az-add");
     });
+    fs.rmSync(path.join(wdir, "create.fail"), { force: true });
     await check(`${tag}: a spot-capacity failure names the zone, and switching to on-demand starts a new job`, async () => {
-      fs.writeFileSync(path.join(wdir, "create.fail"), JSON.stringify({ v: 1, seq: 99, stage: "instance", step: "4/9", state: "failed", class: "spot_capacity", zone: "us-east-2a", msg: "no spot capacity in us-east-2a" }) + "\n");
       await page.locator("#az-add").click();
       await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 }).catch(async () => { await next().click(); await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 }); });
       await page.locator('[data-az-pick="t3.xlarge"]').click();
@@ -289,6 +289,8 @@ try {
       await next().click();
       await page.waitForSelector("#az-ack", { timeout: 30000 });
       await page.locator("#az-ack").check();
+      // the plan is made; now the build fails (the stand-in fails a create after the plan)
+      fs.writeFileSync(path.join(wdir, "create.fail"), JSON.stringify({ v: 1, seq: 99, stage: "instance", step: "4/9", state: "failed", class: "spot_capacity", zone: "us-east-2a", msg: "no spot capacity in us-east-2a" }) + "\n");
       await next().click();
       await page.waitForFunction(() => /no spot capacity/i.test(document.querySelector("#pr-prices").innerText), null, { timeout: 30000 });
       const t = await page.locator("#pr-prices").innerText();

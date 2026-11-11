@@ -115,6 +115,8 @@ func main() {
 		releaseHost   = flag.String("release-host", getenv("COMEBYE_RELEASE_HOST"), "on the hub: the peer whose -release-repo the \"Approve release\" button tags through (the hub asks it to check, tag and report the build; it keeps no clone or credentials of its own); not with -release-repo")
 		provisionCfg  = flag.String("provision-config", getenv("COMEBYE_PROVISION_CONFIG"), "on a peer: make it a provisioner, the host the hub asks which cloud credentials are present and for a price list. The worker tool's config file (tools/worker/config.example; AWS profile, region); the tool runs here as a subprocess and its credentials never leave this host. Needs -ledger=false and -hub; empty: off")
 		provisionBin  = flag.String("provision-worker", envOr("COMEBYE_PROVISION_WORKER", "comebye-worker"), "with -provision-config: the worker tool binary (a name looked up on PATH, or a path)")
+		provisionReal = flag.Bool("provision-create", envBool("COMEBYE_PROVISION_CREATE", false), "with -provision-config: let the app's Add host create cloud resources. Off (the default), every job runs the worker tool's create --dry-run: the plan, nothing created")
+		provisionMax  = flag.Float64("provision-max-usd-hour", envFloat("COMEBYE_PROVISION_MAX_USD_HOUR", 1.0), "with -provision-config: the most one host may cost an hour, checked on this host from its own price list")
 		provisionHost = flag.String("provision-host", getenv("COMEBYE_PROVISION_HOST"), "on the hub: the default provisioner peer, the one the app's price browser asks first (the others that answer stay selectable); the hub holds no cloud credential. Not with -provision-config")
 		releaseUp     = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
 		releaseDry    = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
@@ -381,7 +383,12 @@ func main() {
 		if st, err := os.Stat(c); err != nil || st.IsDir() {
 			log.Fatalf("-provision-config %q: not a file", c)
 		}
-		provCfg.Tool = &provision.Tool{Bin: strings.TrimSpace(*provisionBin), Config: c}
+		provCfg.Tool = &provision.Tool{Bin: strings.TrimSpace(*provisionBin), Config: c, Real: *provisionReal, MaxUSDHour: *provisionMax}
+		if *provisionReal {
+			log.Printf("provision: the real create path is ON: the app can build hosts that cost money (at most $%.2f an hour each)", *provisionMax)
+		} else {
+			log.Printf("provision: dry-run only: the app's Add host plans and walks the stages but creates nothing (-provision-create turns the real path on)")
+		}
 		log.Printf("provision: this host is a provisioner (worker tool %s, config %s); the hub may ask it for credentials' presence and prices", *provisionBin, filepath.Base(c))
 	}
 	if h := strings.TrimSpace(*provisionHost); h != "" {
@@ -670,6 +677,16 @@ var warnedLegacy sync.Map
 func envOr(key, def string) string {
 	if v := getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envFloat(key string, def float64) float64 {
+	if v := getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return f
+		}
+		log.Printf("ignoring %s=%q: not a positive number", key, v)
 	}
 	return def
 }

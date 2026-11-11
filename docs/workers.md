@@ -71,13 +71,18 @@ Everything below is opt-in; with none of these flags the tool behaves as before.
 
 `preflight`, `catalog` and `status --json` make only read calls, so a node can
 use them with a narrow IAM policy: `tools/worker/iam/readonly-policy.json` is a
-draft (nothing in this repo creates it). `catalog` runs, for one region:
-`ec2 describe-instance-types` (24 h cache), `ec2 describe-spot-price-history`
-(15 min), `pricing get-products` (7 d; the Pricing API endpoint is in
-us-east-1 whatever region is priced), the public Spot Advisor data file
-(24 h; it is not an API with a contract, so the column may be empty), and, with
-`--score`, `ec2 get-spot-placement-scores` for a shortlist of at most 10 types
-(30 min). Each source is cached in `<state_dir>/provision/catalog-aws-<region>.json`
+draft (nothing in this repo creates it). `catalog` needs no AWS login for its
+main columns, which come from public data and are labelled so in the app:
+specs and on-demand prices from AWS's Price List bulk file for the region
+(streamed: a few hundred MB are downloaded and only Linux shared-tenancy
+instances of the allowed families are kept; 24 h cache), the region-wide spot
+price from the feed behind AWS's spot-pricing page (`spot.js`, undocumented, so
+the column is empty rather than wrong if its shape changes; 15 min) and the
+public Spot Advisor data file (24 h; also not an API with a contract). With a
+login it adds `ec2 describe-spot-price-history` for per-zone prices (15 min)
+and, with `--score`, `ec2 get-spot-placement-scores` for a shortlist of at most
+10 types (30 min); those are optional sources, and their failure does not mark
+the catalog degraded. Each source is cached in `<state_dir>/provision/catalog-aws-<region>.json`
 with its own `fetched_at`; a refresh that fails (login expired, no network)
 serves the cache and sets `degraded` (`creds_expired` or `error`) with the
 source marked `stale`; with no cache at all it fails. One refresh runs at a
@@ -605,3 +610,20 @@ you never pay more than on-demand).
   with `herdr_install_sha256`; the agent installers are not pinned.
 - `destroy` signs the agents out only if the VM is running. A stopped VM (which
   takes `--no-archive`) is deleted with its node removed through the API.
+
+## Creating a host from the app (dry run first)
+
+The app's Add host (Peers → Prices) sends a closed spec (`kind`, `name`, `type`,
+`spot`, `zone`, `boot_disk_gb`, `data_disk_gb`, `idle_minutes`, `max_run`,
+`budget_cap_usd`, `destroy_after_hours`) to the provisioner, which validates it
+again, holds it to its ceilings (`allowed_families`, `max_budget_cap_usd`, and
+on the comebye side `-provision-max-usd-hour` from its own price list) and runs
+`worker create --events --spec -` as a subprocess, one job at a time, in its
+own process group with a 30 minute limit. The journal of each job (the stage
+events and the tool's log lines, secrets removed) is a file in the state
+directory. **Until the provisioner is started with `-provision-create` (or
+`COMEBYE_PROVISION_CREATE=true`) every job runs `create --dry-run`**: the plan
+as events, nothing created, no credential needed. A real create needs the write
+policy in `tools/worker/iam/write-policy.json` (a draft: EC2 only, resources
+tagged `managed-by=comebye-worker`, the allowed regions and instance families)
+and the user's go-ahead.

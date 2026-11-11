@@ -6190,8 +6190,8 @@ function azBody() {
     main = azProgress();
     next = ""; back = "";
   }
-  const foot = `<div class="az-foot"><div class="az-cost" id="az-cost">${azFoot()}</div><div class="az-acts">
-    ${az.step < 5 ? `<button type="button" class="btn" id="az-cancel">Cancel</button>` : ""}${back ? `<button type="button" class="btn" id="az-back">${back}</button>` : ""}
+  const foot = az.step === 5 ? "" : `<div class="az-foot"><div class="az-cost" id="az-cost">${azFoot()}</div><div class="az-acts">
+    <button type="button" class="btn" id="az-cancel">Cancel</button>${back ? `<button type="button" class="btn" id="az-back">${back}</button>` : ""}
     ${next ? `<button type="button" class="btn primary" id="az-next"${can ? "" : " disabled"}>${next}</button>` : ""}</div></div>`;
   return `<div class="pz-wrap az-wrap"><div class="pz-card az-head"><h3>Add a host${azDry() ? " · dry run" : ""}</h3>${azSteps()}</div>${main}${az.err ? `<div class="pz-card pz-warn"><p class="pz-note warn" role="alert">${esc(az.err)}</p></div>` : ""}${foot}</div>`;
 }
