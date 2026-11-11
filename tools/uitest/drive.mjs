@@ -822,6 +822,67 @@ await check("briefings: no swipe while an agent or the launch sheet is open", as
   if (st.open) throw new Error("opened over an agent");
 });
 
+// ---- the Briefings chip stays at the bottom of the screen (phone) ----
+await check("pager: at 390px the chip stays at the bottom of the screen while a long To do item scrolls, clear of its last button", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  const ctx = Array.from({ length: 40 }, (_, i) => `- line ${i} of the context, long enough to wrap on a narrow screen`).join("\n");
+  const id = await page.evaluate(async (c) => {
+    const r = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "Pager check: pick one?", kind: "decision", context: c, no_wait: true }) }).then((x) => x.json());
+    return r.todo.id;
+  }, ctx);
+  try {
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector("#pager", { state: "visible" });
+    await page.waitForSelector("#todo .td-toggle", { state: "visible" });
+    if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
+    await page.locator(`#todo .td-item[data-id="${id}"] .td-row`).click();
+    await page.waitForSelector(`#todo .td-item.open[data-id="${id}"] .td-acts button`);
+    const geoOf = () => page.evaluate((i) => {
+      const r = document.getElementById("pager").getBoundingClientRect();
+      const bs = [...document.querySelectorAll(`#todo .td-item[data-id="${i}"] button`)], b = bs[bs.length - 1].getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, vh: innerHeight, vw: innerWidth, btnTop: b.top, btnBottom: b.bottom, sy: scrollY, max: document.documentElement.scrollHeight - innerHeight };
+    }, id);
+    const pinned = (g, at) => {
+      if (g.bottom > g.vh + 0.5 || g.bottom < g.vh - 60) throw new Error(`${at}: the chip is not at the bottom: ${JSON.stringify(g)}`);
+      if (Math.abs((g.left + g.right) / 2 - g.vw / 2) > 1.5) throw new Error(`${at}: the chip is not centred: ${JSON.stringify(g)}`);
+    };
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.evaluate((i) => document.querySelector(`#todo .td-item[data-id="${i}"]`).scrollIntoView(), id);
+    pinned(await geoOf(), "top of the item");
+    await page.evaluate(() => scrollBy(0, 500));
+    const mid = await geoOf(); pinned(mid, "mid-scroll");
+    await page.screenshot({ path: `${out}/pager-mid.png` });
+    await page.evaluate(() => scrollTo(0, 1e7));
+    await page.waitForTimeout(150);
+    const end = await geoOf(); pinned(end, "end of the page");
+    if (end.sy < end.max - 2) throw new Error("did not reach the end: " + JSON.stringify(end));
+    await page.screenshot({ path: `${out}/pager-end.png` });
+    // The last button scrolls clear of the chip: it ends above the chip's top edge.
+    if (end.btnBottom > end.top) throw new Error("the chip covers the last button: " + JSON.stringify(end));
+  } finally {
+    await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id).catch(() => {});
+  }
+});
+await check("pager: when the visual viewport differs from the layout one (pinch-zoomed), the chip follows the visible bottom", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#pager", { state: "visible" });
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1.5 });
+    await page.evaluate(() => { visualViewport.dispatchEvent(new Event("resize")); });
+    await page.waitForTimeout(150);
+    const g = await page.evaluate(() => { const r = document.getElementById("pager").getBoundingClientRect(), v = visualViewport; return { bottom: r.bottom, vvBottom: v.offsetTop + v.height, scale: v.scale, mid: (r.left + r.right) / 2, vvMid: v.offsetLeft + v.width / 2 }; });
+    if (Math.abs(g.scale - 1.5) > 0.01) throw new Error("page scale not applied: " + JSON.stringify(g)); // emulation broke
+    if (g.bottom > g.vvBottom + 0.5 || g.bottom < g.vvBottom - 20) throw new Error("the chip is not at the visible bottom: " + JSON.stringify(g));
+    if (Math.abs(g.mid - g.vvMid) > 2) throw new Error("the chip is not centred in the visible area: " + JSON.stringify(g));
+  } finally {
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 }).catch(() => {});
+    await cdp.detach().catch(() => {});
+  }
+});
+
 // ---- desktop view (>= 1100px): two columns, the list and one pane ----
 const geo = (sel) => page.evaluate((s) => {
   const e = document.querySelector(s); if (!e) return null;

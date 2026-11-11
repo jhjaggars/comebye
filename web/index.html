@@ -20,6 +20,7 @@
     :root {
       color-scheme: dark;
       --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --pg-x: 0px; --pg-y: 0px; --pg-s: 1; /* the Briefings chip's offsets from the visual viewport (pinPager in app.js) */
     }
     ::selection { background: var(--selection); }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -1073,7 +1074,7 @@
     #list { min-height: 100vh; min-height: 100dvh; }
     #list > main { padding-bottom: calc(64px + var(--safe-bottom)); }
     .pager {
-      position: fixed; z-index: 15; left: 50%; bottom: calc(10px + var(--safe-bottom)); transform: translateX(-50%);
+      position: fixed; z-index: 15; left: 50%; bottom: calc(10px + var(--safe-bottom)); transform: translate(calc(-50% + var(--pg-x, 0px)), var(--pg-y, 0px)) scale(var(--pg-s, 1)); transform-origin: 50% 100%;
       display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px;
       background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--border); border-radius: 999px;
       color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;

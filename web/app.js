@@ -2658,8 +2658,33 @@ function installBriefsGesture() {
   document.addEventListener("pointercancel", (ev) => end(ev, true));
 }
 
+// pinPager keeps the Briefings chip at the bottom of what the user sees. A
+// fixed element is placed against the layout viewport; on iOS (zoomed, or
+// with the layout viewport taller than the visible one) the two differ and
+// the chip floats mid-screen. The offsets below carry it back to the visual
+// viewport's bottom centre; they are 0 whenever the two agree.
+function pinPager() {
+  const vv = window.visualViewport, p = $("pager");
+  if (!vv || !p) return;
+  const set = () => {
+    const off = isDesktop();
+    // The chip's own size changes with the zoom: undo it so it stays the same on screen.
+    const s = vv.scale || 1;
+    const dy = off ? 0 : vv.offsetTop + vv.height - window.innerHeight;
+    const dx = off ? 0 : vv.offsetLeft + vv.width / 2 - window.innerWidth / 2;
+    p.style.setProperty("--pg-x", Math.abs(dx) < 0.5 ? "0px" : dx + "px");
+    p.style.setProperty("--pg-y", Math.abs(dy) < 0.5 ? "0px" : dy + "px");
+    p.style.setProperty("--pg-s", off || Math.abs(s - 1) < 0.01 ? "1" : String(1 / s));
+  };
+  vv.addEventListener("resize", set);
+  vv.addEventListener("scroll", set);
+  window.addEventListener("resize", set);
+  set();
+}
+
 function initBriefs() {
   briefs.inited = true;
+  pinPager();
   $("pager").addEventListener("click", () => openBriefs(true));
   $("br-back").addEventListener("click", closeBriefs);
   $("briefs").addEventListener("click", onBriefClick);
