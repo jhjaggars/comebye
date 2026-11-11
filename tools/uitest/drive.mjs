@@ -1092,10 +1092,10 @@ for (const width of [390, 1280]) {
       const on = { status: document.getElementById("d-status").textContent, cls: document.getElementById("d-status").className, why: document.getElementById("d-why").textContent, whyHidden: document.getElementById("d-why").hidden };
       return on;
     });
-    if (!/^waiting · 4m$/.test(r.status) || !/waiting/.test(r.cls) || r.why !== "Running in the background: race + uitest" || r.whyHidden) throw new Error("detail: " + JSON.stringify(r));
+    if (!/^waiting · 4m$/.test(r.status) || !/waiting/.test(r.cls) || r.why !== "race + uitest" || r.whyHidden) throw new Error("detail: " + JSON.stringify(r));
     for (const cs of ["dark", "light"]) {
       await page.emulateMedia({ colorScheme: cs });
-      await page.locator("#detail header").screenshot({ path: `${out}/background-detail-${width}-${cs}.png` });
+      await page.locator("#detail header").first().screenshot({ path: `${out}/background-detail-${width}-${cs}.png` });
     }
     await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
     const off = await page.evaluate(() => { const a = state.agents.find((x) => x.pane_id === "w1:p1"); a.background = undefined; renderDetail(); return document.getElementById("d-status").textContent; });

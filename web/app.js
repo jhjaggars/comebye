@@ -7114,10 +7114,10 @@ function renderDetail() {
   st.textContent = bgRunning(a) ? "waiting" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
   st.className = "status " + agentStatusText(a);
   st.title = bgRunning(a) ? bgTitle(a) : "";
-  const why = $("d-why"), wt = whyBlocked(a) || noteOf(a) || (bgRunning(a) ? "Running in the background: " + bgLabel(a) : "");
+  const why = $("d-why"), wt = whyBlocked(a) || noteOf(a) || (bgRunning(a) ? bgLabel(a) : "");
   why.classList.toggle("quiet", !whyBlocked(a));
   why.textContent = wt;
-  why.title = wt;
+  why.title = bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? bgTitle(a) : wt;
   why.hidden = !wt;
   updateAnswerCard();
   updateSendButton();
