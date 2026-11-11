@@ -136,8 +136,14 @@ class Overlay {
   add(key, entry) { this.m.set(key, { ...entry, until: Infinity }); }
   // settle: the request was confirmed; keep covering refreshes that were
   // already on the wire for a while longer.
-  settle(key) { const e = this.m.get(key); if (e) e.until = Date.now() + SETTLE_MS; }
-  drop(key) { this.m.delete(key); }
+  settle(key) { const e = this.m.get(key); if (e) e.until = Date.now() + SETTLE_MS; this.wake(key); }
+  drop(key) { this.m.delete(key); this.wake(key); }
+  // idle resolves once nothing for the key is on the wire (at once if nothing is).
+  idle(key) {
+    if (!this.busy(key)) return Promise.resolve();
+    return new Promise((res) => { (this.w || (this.w = new Map())).set(key, [...((this.w.get(key)) || []), res]); });
+  }
+  wake(key) { const ws = this.w && this.w.get(key); if (ws) { this.w.delete(key); ws.forEach((r) => r()); } }
   each(fn) {
     const now = Date.now();
     for (const [k, e] of this.m) {
@@ -3160,9 +3166,20 @@ function toggleMark() {
   else openMark(id);
 }
 
+const unmarkWaiting = new Set(); // agents whose Unmark is waiting for their mark request
+
 async function unmarkAgent(id) {
   const key = "mark:" + id;
-  if (ledgerOpt.busy(key)) return;
+  // Unmark tapped while the mark's request is still on the wire: wait for it (the badge is already
+  // showing) rather than dropping the tap, then unmark if the mark held. A second tap during the wait
+  // is the same wait, so only the first goes on.
+  if (ledgerOpt.busy(key)) {
+    if (unmarkWaiting.has(id)) return;
+    unmarkWaiting.add(id);
+    await ledgerOpt.idle(key);
+    unmarkWaiting.delete(id);
+    if (!ledger.marked.has(id) || ledgerOpt.busy(key)) return;
+  }
   const was = ledger.marked.get(id);
   const apply = () => ledger.marked.delete(id);
   ledgerOpt.add(key, { apply });
