@@ -137,6 +137,7 @@ type provPlanBody struct {
 	Region string          `json:"region"`
 	Spec   json.RawMessage `json:"spec"`
 	Key    string          `json:"key"`
+	Ack    bool            `json:"ack"`
 }
 
 func (s *Server) decodeProvBody(w http.ResponseWriter, r *http.Request, needKey bool) (provPlanBody, provision.Spec, bool) {
@@ -166,10 +167,14 @@ func (s *Server) decodeProvBody(w http.ResponseWriter, r *http.Request, needKey 
 		specErr(w, err)
 		return b, spec, false
 	}
-	if b.Region == "" { // the node's own
-		if n := s.probeNode(r.Context(), b.Via, false); n.Role && n.Preflight != nil {
-			b.Region = n.Preflight.Region
+	// A host is built in the node's own region: a request for another is
+	// refused rather than priced for one region and built in a different one.
+	if n := s.probeNode(r.Context(), b.Via, false); n.Role && n.Preflight != nil && n.Preflight.Region != "" {
+		if b.Region != "" && b.Region != n.Preflight.Region {
+			relErr(w, http.StatusUnprocessableEntity, "bad_region", b.Via+" builds only in "+n.Preflight.Region)
+			return b, spec, false
 		}
+		b.Region = n.Preflight.Region
 	}
 	return b, spec, true
 }
@@ -343,6 +348,10 @@ func (s *Server) handleProvisionCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	b, spec, ok := s.decodeProvBody(w, r, true)
 	if !ok {
+		return
+	}
+	if n := s.probeNode(r.Context(), b.Via, false); n.Preflight != nil && !n.Preflight.DryRun && !b.Ack {
+		relErr(w, http.StatusConflict, "ack_required", "a real create needs the review step's acknowledgement of the cost")
 		return
 	}
 	s.hjobs.mu.Lock()

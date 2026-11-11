@@ -6241,7 +6241,7 @@ async function azSubmit() {
   az.submitting = true; az.err = "";
   renderPeers();
   try {
-    const j = await api("/api/provision", { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: pz.via, region: pz.region, spec: azSpecOut(), key: az.key }), timeout: 120000 });
+    const j = await api("/api/provision", { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: pz.via, region: pz.region, spec: azSpecOut(), key: az.key, ack: az.ack }), timeout: 120000 });
     azTakeJob(j, true);
     az.step = 5;
     try { localStorage.setItem(AZ_JOB_KEY, j.id); } catch (e) { /* storage may be unavailable */ }

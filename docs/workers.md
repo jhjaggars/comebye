@@ -623,7 +623,16 @@ own process group with a 30 minute limit. The journal of each job (the stage
 events and the tool's log lines, secrets removed) is a file in the state
 directory. **Until the provisioner is started with `-provision-create` (or
 `COMEBYE_PROVISION_CREATE=true`) every job runs `create --dry-run`**: the plan
-as events, nothing created, no credential needed. A real create needs the write
-policy in `tools/worker/iam/write-policy.json` (a draft: EC2 only, resources
-tagged `managed-by=comebye-worker`, the allowed regions and instance families)
-and the user's go-ahead.
+as events, nothing created, no credential needed. The limits live in comebye
+and the worker tool, not in AWS: the provisioner uses the node's existing AWS
+profile, so there is no separate IAM policy. For a real create the guards are:
+every resource the tool makes is tagged `managed-by=comebye-worker` and
+destroy refuses anything without it; the instance family must be in
+`allowed_families` and the region is the node's own (a request naming another
+is refused); the budget cap is required and held to `max_budget_cap_usd`; the
+estimated cost per hour is checked against `-provision-max-usd-hour` from the
+node's own price list, and a cost that cannot be priced is refused; at most
+`-provision-max-hosts` (default 3) real hosts per provisioner; one job at a
+time; and the app's review step shows the cost and needs an acknowledgement
+that the hub requires again server-side (`ack`). Turning the real path on
+(`-provision-create`) is the user's separate decision.

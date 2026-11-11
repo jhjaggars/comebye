@@ -15,6 +15,8 @@ func hubSetup(t *testing.T) (*Server, *provPeer, *fakeWorkerDir, map[string]stri
 	wk := newFakeWorker(t)
 	wk.set(t, "create.events", plannedEvents())
 	wk.set(t, "create.stderr", "DRY RUN: nothing is created\n")
+	// the node's own region is the one the catalog fixture is for
+	wk.set(t, "preflight.json", strings.Replace(string(mustRead(t, "../provision/testdata/preflight.json")), "us-east-2", "us-east-1", -1))
 	prov := newProvPeer(t, wk)
 	s := provHub(t, "prov", map[string]*provPeer{"prov": prov})
 	var n nodesResp
@@ -150,6 +152,7 @@ func TestHubRefusesARealCreateWhenCredentialsAreMissingButNotADryRun(t *testing.
 	s, prov, wk, hdr := hubSetup(t)
 	// the node is in dry-run mode: missing credentials do not block the dry run
 	pf := string(mustRead(t, "../provision/testdata/preflight.json"))
+	pf = strings.Replace(pf, "us-east-2", "us-east-1", -1)
 	wk.set(t, "preflight.json", strings.Replace(pf, `"state": "ok"`, `"state": "missing"`, 1))
 	rec := do(s, "POST", "/api/provision", hdr, `{"spec":`+okSpec+`,"region":"us-east-1","key":"hub-key-dry1"}`)
 	if rec.Code != http.StatusAccepted {
@@ -273,5 +276,47 @@ func TestHubKeepsJobsAcrossARestartAndShowsAnOfflineNode(t *testing.T) {
 	getJSON(t, s, "/api/provision/jobs/"+v.ID, userHdr, &out)
 	if out.State != jobRunning || !strings.Contains(out.Offline, "not answering") {
 		t.Errorf("offline: %+v", out)
+	}
+}
+
+// The guards a real create relies on live in comebye: the node's own region,
+// the acknowledgement, a cost that must be priced, and a ceiling on hosts.
+func TestHubGuardsForARealCreate(t *testing.T) {
+	s, prov, wk, hdr := hubSetup(t)
+	prov.peer.cfg.Provision.Tool.Real = true
+	prov.peer.cfg.Provision.Tool.MaxHosts = 1
+	s.probeNode(t.Context(), "prov", true) // the hub learns the node is not in dry-run mode
+	body := func(name, extra string) string {
+		return `{"spec":` + strings.Replace(okSpec, "demo1", name, 1) + `,` + extra + `}`
+	}
+	// no acknowledgement: refused before the node hears of it
+	rec := do(s, "POST", "/api/provision", hdr, body("real1", `"key":"real-key-0001"`))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ack_required") {
+		t.Fatalf("without ack = %d %s", rec.Code, rec.Body)
+	}
+	// a region other than the node's own
+	rec = do(s, "POST", "/api/provision", hdr, body("real1", `"region":"us-west-2","ack":true,"key":"real-key-0002"`))
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "bad_region") {
+		t.Fatalf("other region = %d %s", rec.Code, rec.Body)
+	}
+	if prov.asked("/api/provisioner/jobs") != 0 {
+		t.Fatalf("a refused request reached the node: %v", prov.paths)
+	}
+	// acknowledged, in the node's region: a real create (no --dry-run)
+	rec = do(s, "POST", "/api/provision", hdr, body("real1", `"ack":true,"key":"real-key-0003"`))
+	var v hubJobResp
+	json.Unmarshal(rec.Body.Bytes(), &v)
+	if rec.Code != http.StatusAccepted || v.Dry {
+		t.Fatalf("real create = %d %s", rec.Code, rec.Body)
+	}
+	hubWait(t, s, v.ID, jobOK)
+	last := wk.argvLines()
+	if strings.Contains(last[len(last)-1], "--dry-run") || !strings.Contains(last[len(last)-1], "create --events --spec -") {
+		t.Errorf("argv: %v", last)
+	}
+	// the node has built as many hosts as it may
+	rec = do(s, "POST", "/api/provision", hdr, body("real2", `"ack":true,"key":"real-key-0004"`))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "too_many_hosts") {
+		t.Fatalf("over the host ceiling = %d %s", rec.Code, rec.Body)
 	}
 }

@@ -158,6 +158,7 @@ func (m *provJobs) byKey(key string) *pjob {
 }
 
 var errBusy = errors.New("another job is running on this provisioner")
+var errTooMany = errors.New("this provisioner has built as many hosts as it is allowed")
 
 // start adds a job and runs it. A key already seen returns that job (existing).
 func (m *provJobs) start(tool *provision.Tool, spec provision.Spec, key, region string) (j *pjob, existing bool, err error) {
@@ -168,6 +169,20 @@ func (m *provJobs) start(tool *provision.Tool, spec provision.Spec, key, region 
 	}
 	if m.busy != "" {
 		return nil, false, errBusy
+	}
+	if tool.Real {
+		max, built := tool.MaxHosts, 0
+		if max <= 0 {
+			max = 3
+		}
+		for _, o := range m.jobs {
+			if !o.Dry && o.State == jobOK {
+				built++
+			}
+		}
+		if built >= max {
+			return nil, false, errTooMany
+		}
 	}
 	j = &pjob{ID: newJobID(), Key: key, Spec: spec, Region: region, Dry: !tool.Real, State: jobRunning, Attempt: 1, Started: m.now()}
 	m.jobs[j.ID] = j
@@ -453,6 +468,10 @@ func (s *Server) handlePeerJobCreate(w http.ResponseWriter, r *http.Request) {
 	j, existing, err := s.pjobs.start(tool, spec, q.Key, q.Region)
 	if errors.Is(err, errBusy) {
 		relErr(w, http.StatusConflict, "busy", "this provisioner is already building a host: wait for it to finish")
+		return
+	}
+	if errors.Is(err, errTooMany) {
+		relErr(w, http.StatusConflict, "too_many_hosts", "this provisioner has built as many hosts as it is allowed (-provision-max-hosts)")
 		return
 	}
 	if err != nil {

@@ -29,6 +29,9 @@ type Tool struct {
 	// MaxUSDHour is the ceiling on a host's estimated cost per hour, checked on
 	// this node from its own price list (default 1.00).
 	MaxUSDHour float64
+	// MaxHosts is how many real (not dry-run) hosts this node's jobs may have
+	// built and kept (default 3).
+	MaxHosts int
 	// PreflightWait and CatalogWait override the timeouts (tests).
 	PreflightWait, CatalogWait time.Duration
 
