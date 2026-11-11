@@ -950,6 +950,7 @@ async function loadLedger() {
     ledger.inflight = false;
     ledger.loadedAt = Date.now();
   }
+  peersHostsChanged();
   renderList();
   if (state.selected) renderDetailMenu();
   if (launch.open) renderLaunchForm();
@@ -5747,6 +5748,18 @@ async function peersLoadCats(name) {
   renderPeers();
 }
 
+// A hosts list that arrives (or changes) while Peers is open: draw it now, and load the settings of a host that
+// was not reachable (or not known yet) when the screen opened, instead of waiting for the 20 s tick.
+function peersHostsChanged() {
+  if (!prs.route) return;
+  for (const h of state.hosts || []) {
+    const c = prs.cfg[h.name];
+    if (!c || (c.state === "down" && peerStatusOf(h) === "ok")) peersLoadCfg(h.name, true);
+  }
+  if (!pz.nodes) loadProvNodes(false); // skipped at open while the ledger or the hosts were not loaded yet
+  renderPeers();
+}
+
 function peersLoadAll() {
   loadReleases(false);
   loadProvNodes(false);
@@ -8870,6 +8883,7 @@ function refreshAgents() {
     .then((d) => {
       state.unauthorized = false;
       setAgents(d);
+      peersHostsChanged();
       renderList();
       if (state.selected) renderDetail();
       applyPendingRoute();
@@ -8893,6 +8907,7 @@ function connectEvents() {
     noteVersion(data.version);
     state.unauthorized = false;
     setAgents(data);
+    peersHostsChanged();
     renderList();
     scheduleLedger();
     if (state.selected) {

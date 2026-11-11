@@ -81,13 +81,13 @@ try {
     const card = (n) => page.locator(`.pr-card[data-name="${n}"]`);
     const get = (p) => fetch(base + p).then((r) => r.json());
 
-    await check(`${tag}: the list shows every host with its status and version`, async () => {
+    await check(`${tag}: the list shows every host with its status and version, within 3 s of opening (not on the 20 s refresh)`, async () => {
       await page.goto(base + "/#/peers", { waitUntil: "load" });
       await page.waitForSelector("#peers", { state: "visible" });
-      await card("kube").waitFor();
+      await card("kube").waitFor({ timeout: 3000 });
       const t = await page.locator("#pr-items").innerText();
       for (const want of ["hub", "(this host)", "kube", "ghost", "Connected", "Down"]) if (!t.includes(want)) throw new Error(`list lacks ${want}: ${t}`);
-      await page.waitForFunction(() => document.querySelector("#pr-items").innerText.includes("default: not set"), null, { timeout: 5000 });
+      await page.waitForFunction(() => document.querySelector("#pr-items").innerText.includes("default: not set"), null, { timeout: 3000 });
       if (width < 1100 && await page.locator("#pr-view").isVisible()) throw new Error("the phone shows a detail before one is picked");
       if (width >= 1100 && !(await page.locator("#pr-view").isVisible())) throw new Error("the desktop has no second pane");
       await shot("list");

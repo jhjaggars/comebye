@@ -124,7 +124,7 @@ try {
 
     await check(`${tag}: Hosts offers Browse prices, and it opens the Prices tab`, async () => {
       await page.goto(base + "/#/peers", { waitUntil: "load" });
-      await page.waitForSelector("#pr-browse");
+      await page.waitForSelector("#pr-browse", { timeout: 3000 }); // the Hosts list offers it on opening, not on the 20 s refresh
       if (!(await page.locator("#pr-browse").innerText()).includes("prov")) throw new Error("the entry does not name the default node");
       await shot("hosts");
       await page.locator("#pr-browse").click();
