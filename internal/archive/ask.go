@@ -8,7 +8,7 @@ import (
 
 // Outcome is one fact about how a piece of work ended, with its source.
 type Outcome struct {
-	Kind   string `json:"kind"` // report, commit-landed, commit-notinmain, commit-unchecked, pr-merged, pr-open, pr-closed, doc, deploy, decision, abandoned, unmerged, handoff
+	Kind   string `json:"kind"` // report, commit-landed, commit-notinmain, commit-unknown, commit-unchecked, pr-merged, pr-open, pr-closed, doc, deploy, decision, abandoned, unmerged, handoff
 	Ref    string `json:"ref,omitempty"`
 	Text   string `json:"text"`
 	Source string `json:"source"`

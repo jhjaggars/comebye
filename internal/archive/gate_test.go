@@ -273,7 +273,9 @@ func TestGateGitPassIsHourly(t *testing.T) {
 	if kind, _ := commitOutcome(t, ix, first[:10]); kind != "commit-landed" {
 		t.Errorf("a verdict was lost between passes: %s", kind)
 	}
-	if kind, _ := commitOutcome(t, ix, unlanded[:10]); kind != "commit-notinmain" {
+	// Not on main, and no PR lookup: git cannot say it is unmerged (it could be a
+	// squash with no PR), so it says it does not know.
+	if kind, _ := commitOutcome(t, ix, unlanded[:10]); kind != "commit-unknown" {
 		t.Errorf("a new commit is asked about locally: %s", kind)
 	}
 	// It lands on origin, by subject, as the land step's rebase would. No fetch and
@@ -283,7 +285,7 @@ func TestGateGitPassIsHourly(t *testing.T) {
 	if res = tick(5); !res.Ran || res.GitPass {
 		t.Fatalf("%+v", res)
 	}
-	if kind, _ := commitOutcome(t, ix, unlanded[:10]); kind != "commit-notinmain" {
+	if kind, _ := commitOutcome(t, ix, unlanded[:10]); kind != "commit-unknown" {
 		t.Errorf("no pass, so no new verdict: %s", kind)
 	}
 	if res = tick(5); res.Ran {

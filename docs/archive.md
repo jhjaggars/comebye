@@ -197,8 +197,9 @@ to its handoff from `comebye ledger --json`, and groups sessions into
 **threads**: one piece of work, linked by handoff, plan, backlog ref, or repo
 plus a non-default branch. A thread's outcome comes from structured sources
 and every line names its source: the ledger (status, report, discard marks,
-commits unmerged at removal), git (is each commit on main, by ancestry or by
-subject, because landing rebases), `gh` (PR state, only with `--gh`, cached),
+commits unmerged at removal), git (is each commit on main: by ancestry, then by a
+commit on main with the same patch-id, because landing rebases), `gh` (PR state, and
+which PR carried each commit, only with `--gh`, cached),
 and the tool calls (docs written). A deploy branch and the user's decision
 lines are labelled heuristics; "how it ended" with no ledger report is the
 agent's own last reply, labelled as such. Verdicts: landed, abandoned, open,
@@ -211,6 +212,48 @@ summaries) and against the raw messages, then fuses the two rankings. An
 agent that wants more reads the top threads with `recall show`.
 `recall todo` lists threads with no summary, for an agent to summarise with
 `archive summary`.
+
+### What a session produced
+
+The index keeps a `produced` table: one row per thing a session made, tied to the
+message that shows it (`seq`, and the subagent, tool call and time). The kinds:
+`commit`, `page` (from `comebye publish`), `pr` and `issue` (the URL `gh pr create` /
+`gh issue create` prints), `comment` (`gh pr|issue comment`), `release` (`gh release
+create|edit`) and `image` (a pushed image's digest: `build.sh --push`, `docker push`,
+`podman push`). It is read from the transcript only, so nothing is written into any
+repository, and a Page, PR or issue is only counted when the command that made it
+succeeded and printed what only that command prints. A URL that is mentioned in prose,
+a `gh pr view`, and a failed call make nothing. A release whose output went to
+`/dev/null` is read from the command, and says so. The old `commits` table is now a
+view of the `commit` rows. This was schema version 3, so the first `archive index`
+after the upgrade rebuilds the index aside from the archive.
+
+### Where a commit ended up
+
+A session records a commit's SHA when it makes it, and landing rewrites commits. Each
+commit is asked, in order, and the answer names its source:
+
+1. **Ancestry:** is it an ancestor of main?
+2. **Patch-id:** is a commit on main the same change? The patch-id is computed here
+   from git when the index is built (`git patch-id --stable`, with no context lines, so
+   a rebase over other work still matches), over main's newest 3,000 commits and no
+   further back than the oldest commit asked about. A rebase or a reworded message
+   matches; a squash does not. It is not stored in the repository; the index keeps it
+   on the `produced` row.
+3. **GitHub:** with `--gh`, which PR contains the commit (`gh api
+   repos/OWNER/REPO/commits/SHA/pulls`, against the checkout's `origin` and `upstream`
+   remotes, at most 300 lookups a pass)? A merged PR into main settles it, and its merge
+   commit is shown as the commit on main. An open PR, or one closed without merging, is
+   "not in main". This is how a squash merge is found. It sends commit SHAs and
+   repository names to GitHub, as well as the branch names it sent before.
+
+Otherwise the answer is **unknown**: the commit may be unmerged, or squashed with no PR,
+and git cannot tell which. "Not in main" is only said when GitHub names an unmerged PR.
+It is the same in every repository: no trailer, note or hook is written anywhere. It
+cannot place a squash with no PR, a commit rewritten and dropped before this machine
+fetched it, or a rewrite that changes the diff (a conflict resolved, a fixup that edits
+code). Without `--gh` it says so. A commit made outside an agent session, or by a script
+whose output the agent never saw, is not in any transcript, so it has no row at all.
 
 A thread can span hosts: its sessions are grouped across the whole index, whichever
 hosts they ran on. A thread's id comes from its first session's host, kind and id,

@@ -125,6 +125,7 @@ type thread struct {
 type builtThreads struct {
 	threads []*thread
 	sums    map[string]string
+	res     map[string]resolution // commits' patch-id and PR, to record on their produced rows
 }
 
 // threadID names a thread after its first session. The thread keeps the id
@@ -218,7 +219,7 @@ func (ix *Index) gatherThreads(thisHost string, links []Link, opt SyncOptions, s
 		return threads[i].id < threads[j].id
 	})
 
-	g := &gitCtx{host: thisHost, enabled: opt.Git, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &st.Errors}
+	g := &gitCtx{host: thisHost, enabled: opt.Git, gh: opt.GH, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &st.Errors, res: map[string]resolution{}}
 	if opt.Git && opt.GitCached {
 		g.noFetch, g.known = true, ix.knownCommits()
 	}
@@ -234,6 +235,11 @@ func (ix *Index) gatherThreads(thisHost string, links []Link, opt SyncOptions, s
 	if err != nil {
 		return nil, err
 	}
+	var allCommits []map[string]any
+	for _, rs := range in.commits {
+		allCommits = append(allCommits, rs...)
+	}
+	g.prime(allCommits, byLedger)
 
 	// document frequency for keywords
 	var texts []map[string]int
@@ -254,11 +260,20 @@ func (ix *Index) gatherThreads(thisHost string, links []Link, opt SyncOptions, s
 		}
 		t.finish()
 	}
-	return &builtThreads{threads: threads, sums: sums}, nil
+	return &builtThreads{threads: threads, sums: sums, res: g.res}, nil
 }
 
 func (bt *builtThreads) write(w *stmtWriter, st *ThreadStats) {
 	sums := bt.sums
+	shas := make([]string, 0, len(bt.res))
+	for sha := range bt.res {
+		shas = append(shas, sha)
+	}
+	sort.Strings(shas)
+	for _, sha := range shas {
+		r := bt.res[sha]
+		w.exec(fmt.Sprintf("UPDATE produced SET patch_id=%s, pr=%s WHERE type='commit' AND ref=%s;", q(r.patchID), q(r.pr), q(sha)))
+	}
 	for _, t := range bt.threads {
 		st.Threads++
 		first := t.ss[0]
@@ -497,9 +512,15 @@ func (t *thread) gather(in *threadInputs, byLedger map[string]*Link, sums map[st
 		if l := sget(r, "ledger_id"); l != "" {
 			link = byLedger[l]
 		}
-		state, how := g.landed(sget(r, "host"), sget(r, "cwd"), sget(r, "repo"), link, sha, sget(r, "subject"))
+		rs := g.resolve(sget(r, "host"), sget(r, "cwd"), sget(r, "repo"), link, sha)
 		txt := fmt.Sprintf("%s %s", sha[:min(8, len(sha))], clip(sget(r, "subject"), 80))
-		t.outs = append(t.outs, outcome{"commit-" + state, sha, txt, how, ""})
+		if rs.landedAs != "" {
+			txt += " (on main as " + rs.landedAs[:min(8, len(rs.landedAs))] + ")"
+		}
+		if rs.patchID != "" || rs.pr != "" {
+			g.res[sha] = rs
+		}
+		t.outs = append(t.outs, outcome{"commit-" + rs.state, sha, txt, rs.how, ""})
 	}
 	// Pull requests (cached gh results).
 	for _, s := range t.ss {
@@ -667,10 +688,18 @@ func (t *thread) finish() {
 		parts = append(parts, fmt.Sprintf("%d commits not on main", notIn))
 	case t.hasReport():
 		t.verdict = "reported"
-		parts = append(parts, "the worker finished and reported; no commit or PR found")
+		if unknown > 0 {
+			parts = append(parts, fmt.Sprintf("the worker finished and reported; %d commits could not be placed on main", unknown))
+		} else {
+			parts = append(parts, "the worker finished and reported; no commit or PR found")
+		}
 	default:
 		t.verdict = "unknown"
-		parts = append(parts, "no landed commit or PR found")
+		if unknown > 0 {
+			parts = append(parts, fmt.Sprintf("%d commits could not be placed on main (unmerged, or squashed with no PR)", unknown))
+		} else {
+			parts = append(parts, "no landed commit or PR found")
+		}
 	}
 	if len(has("deploy")) > 0 {
 		parts = append(parts, "deploy branch")
@@ -692,6 +721,11 @@ func (t *thread) finish() {
 type repoInfo struct {
 	dir, base string
 	ok        bool
+	// The patch-ids on main, scanned once (see resolve.go), and the GitHub remotes.
+	scanned   bool
+	pids      map[string]string
+	slugs     []string
+	slugsDone bool
 }
 
 type gitCtx struct {
@@ -702,6 +736,10 @@ type gitCtx struct {
 	errs    *[]string
 	noFetch bool
 	known   map[string]knownCommit // verdicts to keep, by full sha
+	gh      bool                   // ask GitHub which PR carried a commit (--gh)
+	ghCalls int
+	since   map[string]int64      // by checkout: the oldest commit time this pass asks about
+	res     map[string]resolution // what the pass learned, by the sha as the session recorded it
 }
 
 // knownCommit is a verdict from an earlier git pass.
@@ -711,7 +749,7 @@ type knownCommit struct{ state, how string }
 // thread tables yet has none.
 func (ix *Index) knownCommits() map[string]knownCommit {
 	out := map[string]knownCommit{}
-	rows, err := ix.Query("SELECT ref, kind, source FROM outcomes WHERE kind IN ('commit-landed','commit-notinmain');")
+	rows, err := ix.Query("SELECT ref, kind, source FROM outcomes WHERE kind IN ('commit-landed','commit-notinmain','commit-unknown');")
 	if err != nil {
 		return out
 	}
@@ -813,37 +851,6 @@ const gitFetchTimeout = gitfetch.DefaultTimeout
 // gitFetchWait is how long the git pass waits for another fetch of the same
 // repository (the server's merge checks) to finish.
 var gitFetchWait = gitFetchTimeout
-
-// landed says whether a commit is on the default branch of a local checkout:
-// "landed" (an ancestor, or a commit on main with the same subject: the
-// land step rebases, which changes SHAs), "notinmain", or "unchecked".
-func (g *gitCtx) landed(host, cwd, repo string, l *Link, sha, subject string) (state, how string) {
-	if !g.enabled {
-		return "unchecked", "git not consulted"
-	}
-	if k, ok := g.known[sha]; ok {
-		return k.state, k.how
-	}
-	dir := g.repoDir(host, cwd, repo, l)
-	if dir == "" {
-		return "unchecked", "no local checkout"
-	}
-	ri := g.info(dir)
-	if !ri.ok {
-		return "unchecked", "no main branch in " + filepath.Base(dir)
-	}
-	if _, code, _ := run(dir, 10*time.Second, "git", "cat-file", "-e", sha+"^{commit}"); code == 0 {
-		if _, code, _ := run(dir, 10*time.Second, "git", "merge-base", "--is-ancestor", sha, ri.base); code == 0 {
-			return "landed", "git: ancestor of " + ri.base
-		}
-	}
-	if len(subject) >= 12 {
-		if out, _, _ := run(dir, 20*time.Second, "git", "log", ri.base, "--fixed-strings", "--grep="+subject, "--format=%h", "-n1"); out != "" {
-			return "landed", "git: a commit on " + ri.base + " with the same subject (" + out + ")"
-		}
-	}
-	return "notinmain", "git: not on " + ri.base + " in " + filepath.Base(dir)
-}
 
 // ----- gh -----
 
