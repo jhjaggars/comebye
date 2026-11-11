@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -100,8 +99,9 @@ type ReleaseConfig struct {
 	Simulated bool
 	// Bin is the installed binary `comebye upgrade` replaces.
 	Bin string
-	// Runner starts an upgrade (default: a transient systemd user unit,
-	// which survives the restart of this service).
+	// Runner starts an upgrade (default: a transient systemd user unit on
+	// Linux, a one-shot LaunchAgent on macOS; either survives the restart of
+	// this service).
 	Runner UpgradeRunner
 	// DeployCmd is the operator's own command (an absolute program path and
 	// its arguments) that the item's second button runs on this host, with
@@ -703,7 +703,7 @@ func (s *Server) startUpgrade(by, version string, rollback bool) (upgrade.Record
 	}
 	runner := cfg.Runner
 	if runner == nil {
-		runner = &systemdRunner{Bin: cfg.Bin, URL: "http://" + s.cfg.Addr}
+		runner = defaultUpgradeRunner(cfg.Bin, "http://"+s.cfg.Addr)
 	}
 	if err := runner.Start(context.Background(), rec, path, rollback, cfg.DryRun); err != nil {
 		rec.State, rec.Error, rec.Finished = upgrade.RecFailed, "could not start: "+err.Error(), time.Now().UTC()
@@ -823,33 +823,14 @@ type systemdRunner struct {
 }
 
 func (s *systemdRunner) Start(ctx context.Context, rec upgrade.Record, path string, rollback, dry bool) error {
-	bin := s.Bin
-	if bin == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		bin = strings.TrimSuffix(exe, " (deleted)") // the binary was replaced while this server ran
+	bin, err := upgradeBinary(s.Bin)
+	if err != nil {
+		return err
 	}
-	args := []string{"upgrade", "--bin", bin, "--record", path}
-	switch {
-	case rollback:
-		args = append(args, "--rollback")
-	default:
-		args = append(args, "--version", rec.Version)
-	}
-	if dry {
-		args = append(args, "--dry-run")
-	}
+	args := upgradeArgs(bin, path, rec.Version, rollback, dry)
 	if dry && !rollback {
 		// Nothing is installed or restarted: no need for a unit that outlives us.
-		cmd := exec.Command(bin, args...)
-		cmd.Env = append(os.Environ(), "COMEBYE_URL="+s.URL)
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-		go func() { _ = cmd.Wait() }()
-		return nil
+		return startDetachedDry(bin, s.URL, args)
 	}
 	sr, err := exec.LookPath("systemd-run")
 	if err != nil {

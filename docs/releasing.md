@@ -74,9 +74,16 @@ hub-only route it answers is refused on a host that keeps a ledger). It runs
 `comebye upgrade --version vX.Y.Z` on that host, with the same checksum and
 smoke checks, and keeps `comebye.prev`; the result and the host's version show
 in the fleet table, and **Roll back** runs `comebye upgrade --rollback`. The upgrade
-runs as a transient `comebye-upgrade-*` user unit, because it restarts the
-service that started it; its verdict is kept in
-`<state-dir>/release/upgrade.json`.
+runs detached, because it restarts the service that started it: on Linux as a
+transient `comebye-upgrade-*` systemd user unit (needs `systemd-run`); on macOS as
+a one-shot LaunchAgent `com.jhjaggars.comebye-upgrade.<id>` in the user's GUI
+domain (needs `launchctl`), started with `launchctl bootstrap` from a plist in
+`<state-dir>/release/`, which removes itself and its plist when the run ends (its
+output stays in the `.log` beside it). Its verdict is kept in
+`<state-dir>/release/upgrade.json`. On a Mac, set `COMEBYE_RELEASE_UPGRADE` in the
+launchd plist's `EnvironmentVariables` and reload the agent with
+`launchctl bootout` then `bootstrap`: `kickstart -k` restarts the process but keeps
+the environment launchd loaded earlier.
 
 Every approval, refusal, tag, upgrade request and result is written to the
 ledger's audit log (who, what, when, how it went) and to the journal as
