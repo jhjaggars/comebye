@@ -229,6 +229,7 @@ type Server struct {
 	brief      *briefStore
 	pq         *promptQueue
 	todos      *todoStore
+	outbox     *outbox
 	auto       *autoTodo
 	relay      *blockedRelay
 	rel        *relState
@@ -316,6 +317,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			log.Printf("handoff ledger disabled: %v", err)
 		} else {
 			s.ledger = l
+			s.outbox = openOutbox(outboxPath(cfg.StateDir))
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
 			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
 				log.Printf("brief schedule: %v (starting with none)", err)

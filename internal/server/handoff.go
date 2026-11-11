@@ -575,6 +575,8 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 	s.releaseQueued()
 	s.evalPlans()
 	defer s.deliverCallbacks(agents)
+	defer s.flushOutbox(agents)
+	defer s.autoCleanup(agents)
 	defer s.deliverQueue(agents)
 	defer s.deliverTodoNotices(agents)
 	for _, e := range captures {
@@ -632,10 +634,18 @@ func (s *Server) RunLedger(ctx context.Context) {
 	}
 	events, cancel := s.fleet.Hub().Subscribe()
 	defer cancel()
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-tick.C:
+			// Timed work that no fleet update triggers: the outbox, and the
+			// look at landed entries.
+			agents := s.fleet.Agents()
+			s.autoCleanup(agents)
+			s.flushOutbox(agents)
 		case ev, ok := <-events:
 			if !ok {
 				return

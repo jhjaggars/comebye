@@ -255,6 +255,27 @@ type worktreeChecks struct {
 	CI *ledger.CI `json:"ci,omitempty"`
 	// Verified answers checks?verify=SHA,...: where each named commit is.
 	Verified []commitFact `json:"verified,omitempty"`
+	// RemoteGone answers checks?remote=1: whether origin no longer has the
+	// branch (nil: not asked, or origin could not be asked).
+	RemoteGone *bool `json:"remote_gone,omitempty"`
+}
+
+// remoteBranchGone asks origin whether it still has branch: true when it
+// does not, nil when that cannot be told (no branch, no origin, offline).
+func remoteBranchGone(ctx context.Context, dir, branch string) *bool {
+	if branch == "" || !validBranch(branch) {
+		return nil
+	}
+	out, err := runGit(ctx, dir, "ls-remote", "--heads", "--exit-code", "origin", "refs/heads/"+branch)
+	switch {
+	case err == nil && strings.TrimSpace(out) != "":
+		f := false
+		return &f
+	case err != nil && strings.Contains(err.Error(), "exit status 2"):
+		t := true // --exit-code: 2 when no ref matches
+		return &t
+	}
+	return nil
 }
 
 // worktreeDetail is what a coordinator inspects before proposing to keep
