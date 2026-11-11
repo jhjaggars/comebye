@@ -12,7 +12,7 @@ import (
 // fake `gh` on PATH that answers from a file and logs how it was asked.
 
 func newGit(gh bool) *gitCtx {
-	return &gitCtx{host: "h", enabled: true, gh: gh, noFetch: true, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &[]string{}, res: map[string]resolution{}}
+	return &gitCtx{host: "h", enabled: true, gh: gh, noFetch: true, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &[]string{}, res: map[string]resolution{}, prCache: map[string]ghEntry{}, prNew: map[string]ghEntry{}}
 }
 
 // commitFile writes a file in dir, commits it and returns the SHA.

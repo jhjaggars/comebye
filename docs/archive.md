@@ -244,8 +244,17 @@ commit is asked, in order, and the answer names its source:
    repos/OWNER/REPO/commits/SHA/pulls`, against the checkout's `origin` and `upstream`
    remotes, at most 300 lookups a pass)? A merged PR into main settles it, and its merge
    commit is shown as the commit on main. An open PR, or one closed without merging, is
-   "not in main". This is how a squash merge is found. It sends commit SHAs and
-   repository names to GitHub, as well as the branch names it sent before.
+   "not in main". This is how a squash merge is found. A PR is named by its base
+   repository: on a fork the lookup also returns the parent's PRs. It sends commit SHAs
+   and repository names to GitHub, as well as the branch names it sent before.
+
+   Each answer is kept in the index (`gh_commit_prs`), so that a pass spends its 300
+   lookups on commits it has not asked about. A merged PR is kept for good. "No PR", and
+   a PR that is open or closed unmerged, are believed for a day and then asked again,
+   because an open PR may be squash-merged meanwhile. "GitHub never had the commit" (a
+   422: it was never pushed) is believed until a remote-tracking ref of the checkout
+   contains the commit. An error, such as the network or a rate limit, is not kept. The
+   cache does not survive an index rebuild (a schema change).
 
 Otherwise the answer is **unknown**: the commit may be unmerged, or squashed with no PR,
 and git cannot tell which. "Not in main" is only said when GitHub names an unmerged PR.

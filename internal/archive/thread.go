@@ -65,6 +65,7 @@ CREATE TABLE outcomes(thread_id TEXT, kind TEXT, ref TEXT, text TEXT, source TEX
 CREATE INDEX outcomes_t ON outcomes(thread_id);
 CREATE VIRTUAL TABLE thread_fts USING fts5(title, brief, outcome, keywords, digest, decisions, thread_id UNINDEXED, tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS gh_prs(repo TEXT, branch TEXT, fetched TEXT, json TEXT, PRIMARY KEY(repo,branch));
+CREATE TABLE IF NOT EXISTS gh_commit_prs(repo TEXT, sha TEXT, state TEXT, fetched TEXT, body TEXT, PRIMARY KEY(repo,sha));
 `
 
 type sess struct {
@@ -126,6 +127,7 @@ type builtThreads struct {
 	threads []*thread
 	sums    map[string]string
 	res     map[string]resolution // commits' patch-id and PR, to record on their produced rows
+	prNew   map[string]ghEntry    // GitHub's answers from this pass, to keep
 }
 
 // threadID names a thread after its first session. The thread keeps the id
@@ -219,7 +221,10 @@ func (ix *Index) gatherThreads(thisHost string, links []Link, opt SyncOptions, s
 		return threads[i].id < threads[j].id
 	})
 
-	g := &gitCtx{host: thisHost, enabled: opt.Git, gh: opt.GH, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &st.Errors, res: map[string]resolution{}}
+	g := &gitCtx{host: thisHost, enabled: opt.Git, gh: opt.GH, cache: map[string]*repoInfo{}, fetched: map[string]bool{}, errs: &st.Errors, res: map[string]resolution{}, prCache: map[string]ghEntry{}, prNew: map[string]ghEntry{}}
+	if opt.GH {
+		g.loadPRCache(ix)
+	}
 	if opt.Git && opt.GitCached {
 		g.noFetch, g.known = true, ix.knownCommits()
 	}
@@ -260,7 +265,7 @@ func (ix *Index) gatherThreads(thisHost string, links []Link, opt SyncOptions, s
 		}
 		t.finish()
 	}
-	return &builtThreads{threads: threads, sums: sums, res: g.res}, nil
+	return &builtThreads{threads: threads, sums: sums, res: g.res, prNew: g.prNew}, nil
 }
 
 func (bt *builtThreads) write(w *stmtWriter, st *ThreadStats) {
@@ -270,6 +275,15 @@ func (bt *builtThreads) write(w *stmtWriter, st *ThreadStats) {
 		shas = append(shas, sha)
 	}
 	sort.Strings(shas)
+	keys := make([]string, 0, len(bt.prNew))
+	for k := range bt.prNew {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		e := bt.prNew[k]
+		w.exec(fmt.Sprintf("INSERT OR REPLACE INTO gh_commit_prs VALUES(%s,%s,%s,%s,%s);", q(e.slug), q(e.sha), q(e.state), q(e.at.UTC().Format(time.RFC3339)), q(e.body)))
+	}
 	for _, sha := range shas {
 		r := bt.res[sha]
 		w.exec(fmt.Sprintf("UPDATE produced SET patch_id=%s, pr=%s WHERE type='commit' AND ref=%s;", q(r.patchID), q(r.pr), q(sha)))
@@ -740,6 +754,10 @@ type gitCtx struct {
 	ghCalls int
 	since   map[string]int64      // by checkout: the oldest commit time this pass asks about
 	res     map[string]resolution // what the pass learned, by the sha as the session recorded it
+	// GitHub's answers about which PRs hold a commit, by "owner/repo@sha": those kept in
+	// the index, and the ones this pass asked for (written back at the end).
+	prCache map[string]ghEntry
+	prNew   map[string]ghEntry
 }
 
 // knownCommit is a verdict from an earlier git pass.
@@ -913,7 +931,8 @@ func (g *gitCtx) loadGH(ix *Index) {
 	_ = w.close()
 }
 
-const threadSchema0 = `CREATE TABLE IF NOT EXISTS gh_prs(repo TEXT, branch TEXT, fetched TEXT, json TEXT, PRIMARY KEY(repo,branch));`
+const threadSchema0 = `CREATE TABLE IF NOT EXISTS gh_prs(repo TEXT, branch TEXT, fetched TEXT, json TEXT, PRIMARY KEY(repo,branch));
+CREATE TABLE IF NOT EXISTS gh_commit_prs(repo TEXT, sha TEXT, state TEXT, fetched TEXT, body TEXT, PRIMARY KEY(repo,sha));`
 
 // ----- keywords -----
 

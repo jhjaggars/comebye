@@ -305,22 +305,17 @@ func (g *gitCtx) prFor(dir string, ri *repoInfo, sha string) (pr, state, how, la
 	var elsewhereSlug string
 	missing := 0
 	for _, slug := range slugs {
-		if g.ghCalls >= ghCommitLookups {
+		ps, st := g.pullsFor(dir, slug, sha)
+		switch st {
+		case "limit":
 			return "", "", "the limit of PR lookups for one pass was reached", ""
-		}
-		g.ghCalls++
-		out, code, _ := run(dir, 30*time.Second, "gh", "api", "-H", "Accept: application/vnd.github+json", "repos/"+slug+"/commits/"+sha+"/pulls")
-		if code != 0 {
-			if strings.Contains(out, "No commit found") { // a 422: GitHub never had the commit
-				missing++
-			}
+		case "missing":
+			missing++
+			continue
+		case "error":
 			continue
 		}
 		asked = true
-		var ps []ghPull
-		if json.Unmarshal([]byte(out), &ps) != nil {
-			continue
-		}
 		for i := range ps {
 			p := &ps[i]
 			// The lookup on a fork also answers with the parent's PRs, so the PR's own
@@ -361,4 +356,103 @@ func (g *gitCtx) prFor(dir string, ri *repoInfo, sha string) (pr, state, how, la
 		return "", "", "GitHub could not be asked about a PR", ""
 	}
 	return "", "", "GitHub names no PR for it", ""
+}
+
+// ----- the answers GitHub gave, kept in the index -----
+
+// ghEntry is GitHub's answer about one commit in one repository.
+type ghEntry struct {
+	slug, sha string
+	state     string // pulls (a PR holds it) | none (no PR) | missing (GitHub never had the commit)
+	body      string // the JSON list of PRs, for pulls
+	at        time.Time
+}
+
+// ghRetry is how long "no PR", and a PR not yet merged, are believed. A merged PR does
+// not change, so it is kept for good. A PR that is open now may be squash-merged
+// tomorrow, so it is asked again like "no PR". A commit GitHub never had is believed
+// until it shows up on a remote of the checkout (see onRemote).
+const ghRetry = 24 * time.Hour
+
+func (g *gitCtx) loadPRCache(ix *Index) {
+	rows, err := ix.Query("SELECT repo, sha, state, fetched, body FROM gh_commit_prs;")
+	if err != nil { // an index from before the cache
+		return
+	}
+	for _, r := range rows {
+		at, _ := time.Parse(time.RFC3339, sget(r, "fetched"))
+		g.prCache[sget(r, "repo")+"@"+sget(r, "sha")] = ghEntry{slug: sget(r, "repo"), sha: sget(r, "sha"), state: sget(r, "state"), body: sget(r, "body"), at: at}
+	}
+}
+
+func decodePulls(body string) []ghPull {
+	var ps []ghPull
+	if json.Unmarshal([]byte(body), &ps) != nil {
+		return nil
+	}
+	return ps
+}
+
+func (g *gitCtx) fresh(dir, sha string, e ghEntry) bool {
+	switch e.state {
+	case "missing":
+		return !onRemote(dir, sha)
+	case "none":
+		return time.Since(e.at) < ghRetry
+	}
+	for _, p := range decodePulls(e.body) {
+		if p.MergedAt != "" {
+			return true
+		}
+	}
+	return time.Since(e.at) < ghRetry
+}
+
+// onRemote says whether a remote-tracking ref of the checkout contains the commit,
+// that is whether it has been pushed (or fetched) since GitHub last said it had none.
+func onRemote(dir, sha string) bool {
+	out, code, _ := run(dir, 20*time.Second, "git", "for-each-ref", "--count=1", "--contains", sha, "refs/remotes", "--format=%(refname)")
+	return code == 0 && out != ""
+}
+
+// pullsFor is the PRs that hold the commit in one repository, from the kept answer
+// when it is still believed, otherwise from GitHub (counted against the pass's limit).
+// st is ok, missing (GitHub never had the commit), error, or limit.
+func (g *gitCtx) pullsFor(dir, slug, sha string) (ps []ghPull, st string) {
+	key := slug + "@" + sha
+	if e, ok := g.prCache[key]; ok && g.fresh(dir, sha, e) {
+		switch e.state {
+		case "missing":
+			return nil, "missing"
+		case "none":
+			return nil, "ok"
+		}
+		return decodePulls(e.body), "ok"
+	}
+	if g.ghCalls >= ghCommitLookups {
+		return nil, "limit"
+	}
+	g.ghCalls++
+	out, code, _ := run(dir, 30*time.Second, "gh", "api", "-H", "Accept: application/vnd.github+json", "repos/"+slug+"/commits/"+sha+"/pulls")
+	keep := func(state, body string) {
+		e := ghEntry{slug: slug, sha: sha, state: state, body: body, at: time.Now()}
+		g.prCache[key], g.prNew[key] = e, e
+	}
+	if code != 0 {
+		if strings.Contains(out, "No commit found") { // a 422: GitHub never had the commit
+			keep("missing", "")
+			return nil, "missing"
+		}
+		return nil, "error" // not kept: asked again next time
+	}
+	var all []ghPull
+	if json.Unmarshal([]byte(out), &all) != nil {
+		return nil, "error"
+	}
+	if len(all) == 0 {
+		keep("none", "")
+	} else {
+		keep("pulls", out)
+	}
+	return all, "ok"
 }
