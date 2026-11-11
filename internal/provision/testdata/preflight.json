@@ -1,0 +1,11 @@
+{
+ "v": 1,
+ "checked_at": "2026-11-11T12:16:00Z",
+ "aws": {"state": "ok", "note": "profile comebye-provision"},
+ "gcp": {"state": "missing", "note": "no active gcloud account"},
+ "tailnet": {"state": "ok", "note": "OAuth client accepted for tag:worker"},
+ "openshell": {"state": "missing", "note": "no openshell gateway, workspace and image in the config"},
+ "ssh": {"state": "ok", "note": "ssh key present"},
+ "region": "us-east-2",
+ "regions": ["us-east-2", "us-east-1", "us-west-2"]
+}

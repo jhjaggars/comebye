@@ -69,6 +69,9 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 
 # Which instance families `worker catalog` fetches prices for (aws); default: a short list.
 # allowed_families=t3,t3a,m5,m6i,c5,c6i
+# Which regions `worker catalog` (and the app's price browser) may be asked about. Default: aws_region,
+# us-east-1, us-east-2 and us-west-2.
+# allowed_regions=us-east-1,us-east-2
 
 # OpenShell sandboxes (provider=openshell, instead of the gcp/aws settings above; project, zone and
 # ssh_source_cidr are not needed). The sandbox is a worker on the OpenShell gateway's Kubernetes driver.

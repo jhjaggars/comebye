@@ -1983,6 +1983,61 @@
       #peers .pr-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
       #peers .pr-view { display: flex !important; }
     }
+    /* Prices: a read-only browser of the instance types a provisioner can build, with what each would cost. */
+    .pr-browse { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 10px; padding: 10px 12px; min-height: 44px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; font-weight: 600; }
+    .pr-browse span { color: var(--muted); font-weight: 400; font-size: 12.5px; }
+    .pr-browse:hover { background: var(--panel2); } .pr-browse:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+    .pz-wrap { display: flex; flex-direction: column; gap: 12px; max-width: 1240px; margin: 0 auto; min-width: 0; }
+    .pz-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; min-width: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+    .pz-card h3 { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+    .pz-card.pz-warn { border-color: var(--orange); background: color-mix(in srgb, var(--orange) 8%, var(--panel)); }
+    .pz-bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; }
+    .pz-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 150px; }
+    .pz-field > label { font-size: 12.5px; color: var(--muted); }
+    .pz-field select { min-height: 44px; padding: 8px 10px; font: inherit; font-size: 15px; color: var(--text); width: 100%; min-width: 0; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; }
+    .pz-field select:focus-visible, .pz-check input:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
+    .pz-bar .btn { min-height: 44px; padding: 0 14px; }
+    .pz-check { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; cursor: pointer; }
+    .pz-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); }
+    .pz-creds { display: grid; grid-template-columns: max-content max-content 1fr; gap: 6px 12px; font-size: 14px; margin: 0; align-items: baseline; min-width: 0; }
+    .pz-creds > * { min-width: 0; overflow-wrap: anywhere; margin: 0; }
+    .pz-state { font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+    .pz-state::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+    .pz-state.ok::before { background: var(--green); } .pz-state.expired::before, .pz-state.error::before { background: var(--red); } .pz-state.missing::before { background: var(--orange); }
+    .pz-state.expired, .pz-state.error { color: var(--red); } .pz-state.missing { color: var(--orange); }
+    .pz-note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .pz-note.warn { color: var(--orange); }
+    .pz-head, .pz-row { display: grid; grid-template-columns: minmax(130px, 1.4fr) 54px 76px 62px 92px 92px 72px 92px; gap: 4px 10px; align-items: center; min-width: 0; }
+    .pz-head { padding: 0 12px 6px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
+    .pz-head span:nth-child(n+2) { text-align: right; }
+    .pz-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .pz-item { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); min-width: 0; }
+    .pz-item.off { opacity: 0.72; }
+    .pz-row { width: 100%; padding: 8px 12px; min-height: 44px; font: inherit; font-size: 14px; color: var(--text); background: none; border: 0; text-align: left; cursor: pointer; border-radius: 10px; }
+    .pz-row:hover { background: var(--panel2); } .pz-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .pz-type { font-weight: 600; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+    .pz-tag { font-weight: 400; font-size: 11.5px; padding: 1px 7px; border-radius: 8px; border: 1px solid var(--border); color: var(--muted); }
+    .pz-tag.arm { border-color: var(--orange); color: var(--orange); }
+    .pz-cell { display: block; text-align: right; font-variant-numeric: tabular-nums; min-width: 0; }
+    .pz-lb { display: none; }
+    .pz-detail { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); }
+    .pz-zones { display: flex; flex-wrap: wrap; gap: 6px; }
+    .pz-zone { padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); font-size: 13px; font-variant-numeric: tabular-nums; }
+    .pz-detail .btn { min-height: 44px; align-self: flex-start; padding: 0 14px; }
+    @media (max-width: 560px) {
+      .pz-field, .pz-bar .btn { flex-basis: 100%; }
+      .pz-creds { grid-template-columns: minmax(0, 1fr) max-content; gap: 2px 12px; }
+      .pz-creds dt { grid-column: 1; margin-top: 8px; }
+      .pz-creds dd.pz-state { grid-column: 2; margin-top: 8px; justify-self: end; }
+      .pz-creds dd.pz-note { grid-column: 1 / -1; margin: 0; }
+    }
+    @media (max-width: 760px) {
+      .pz-head { display: none; }
+      .pz-row { grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); padding: 10px 12px; }
+      .pz-row .pz-type { grid-column: 1 / -1; }
+      .pz-cell { display: flex; flex-direction: column; text-align: left; }
+      .pz-lb { display: block; font-size: 11px; color: var(--muted); }
+    }
     /* The Releases tab: the current release, the fleet's versions with their Upgrade buttons, and the last five releases. */
     .pr-tabs { flex: none; display: flex; gap: 4px; padding: 6px calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px)); background: var(--panel); border-bottom: 1px solid var(--border); }
     .pr-tabs button { font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; }
@@ -2218,12 +2273,14 @@
     </header>
     <div class="pr-tabs" id="pr-tabs" role="tablist" aria-label="Peers sections">
       <button type="button" role="tab" id="pr-tab-hosts" data-tab="hosts" aria-selected="true">Hosts</button>
+      <button type="button" role="tab" id="pr-tab-prices" data-tab="prices" aria-selected="false" aria-controls="pr-prices" hidden>Prices</button>
       <button type="button" role="tab" id="pr-tab-rel" data-tab="releases" aria-selected="false" aria-controls="pr-releases">Releases<span class="pr-dot" id="pr-dot" hidden></span></button>
     </div>
     <div class="pr-panes">
       <section class="pr-list" aria-label="Hosts"><div id="pr-items" aria-live="polite"></div></section>
       <section class="pr-view" id="pr-view" aria-label="Host"></section>
     </div>
+    <section class="rl-pane pz-pane" id="pr-prices" role="tabpanel" aria-labelledby="pr-tab-prices" aria-live="polite" hidden></section>
     <section class="rl-pane" id="pr-releases" role="tabpanel" aria-labelledby="pr-tab-rel" aria-live="polite" hidden></section>
   </div>
 

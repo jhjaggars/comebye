@@ -32,6 +32,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/hublock"
+	"github.com/jhjaggars/comebye/internal/provision"
 	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/release"
 	"github.com/jhjaggars/comebye/internal/scratch"
@@ -112,6 +113,9 @@ func main() {
 		recallIndex   = flag.String("recall-index", getenv("COMEBYE_RECALL_INDEX"), "the transcript index the app searches, read-only (default ~/.local/state/comebye/recall/index.db; see `comebye archive index`)")
 		releaseRepo   = flag.String("release-repo", getenv("COMEBYE_RELEASE_REPO"), "a dedicated comebye clone this host tags releases from, with its own git and gh credentials (see docs/security.md). On a hub it backs the app's \"Approve release\" button; on a peer (-hub) it lets the hub tag through this host (-release-host there); empty: off")
 		releaseHost   = flag.String("release-host", getenv("COMEBYE_RELEASE_HOST"), "on the hub: the peer whose -release-repo the \"Approve release\" button tags through (the hub asks it to check, tag and report the build; it keeps no clone or credentials of its own); not with -release-repo")
+		provisionCfg  = flag.String("provision-config", getenv("COMEBYE_PROVISION_CONFIG"), "on a peer: make it a provisioner, the host the hub asks which cloud credentials are present and for a price list. The worker tool's config file (tools/worker/config.example; AWS profile, region); the tool runs here as a subprocess and its credentials never leave this host. Needs -ledger=false and -hub; empty: off")
+		provisionBin  = flag.String("provision-worker", envOr("COMEBYE_PROVISION_WORKER", "comebye-worker"), "with -provision-config: the worker tool binary (a name looked up on PATH, or a path)")
+		provisionHost = flag.String("provision-host", getenv("COMEBYE_PROVISION_HOST"), "on the hub: the default provisioner peer, the one the app's price browser asks first (the others that answer stay selectable); the hub holds no cloud credential. Not with -provision-config")
 		releaseUp     = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
 		releaseDry    = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
 		releaseDeploy = flag.String("release-deploy-cmd", getenv("COMEBYE_RELEASE_DEPLOY_CMD"), "on the host that owns -release-repo: a command (absolute program path and arguments, no shell) that the release item's second button runs once the build passed, with the version appended as the last argument and in COMEBYE_RELEASE_VERSION. Approve release never runs it. For example a script that commits the version to a deployment repository; empty: no such button")
@@ -367,6 +371,25 @@ func main() {
 	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseHost, *releaseUp, *releaseSim, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != ""); err != nil {
 		log.Fatal(err)
 	}
+	if err := provisionFlagError(*noAuth, *provisionCfg, *provisionHost, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != "", insecureTestPeers); err != nil {
+		log.Fatal(err)
+	}
+	var provCfg server.ProvisionConfig
+	if c := strings.TrimSpace(*provisionCfg); c != "" {
+		c = expandHome(c)
+		if st, err := os.Stat(c); err != nil || st.IsDir() {
+			log.Fatalf("-provision-config %q: not a file", c)
+		}
+		provCfg.Tool = &provision.Tool{Bin: strings.TrimSpace(*provisionBin), Config: c}
+		log.Printf("provision: this host is a provisioner (worker tool %s, config %s); the hub may ask it for credentials' presence and prices", *provisionBin, filepath.Base(c))
+	}
+	if h := strings.TrimSpace(*provisionHost); h != "" {
+		if err := provisionHostError(h, *hostName, fl.HasPeer); err != nil {
+			log.Fatal(err)
+		}
+		provCfg.Host = h
+		log.Printf("provision: the default provisioner is the peer %s", h)
+	}
 	deployCmd, err := releaseDeployCmd(*releaseDeploy, *releaseRepo, *releaseHost, *releaseSim)
 	if err != nil {
 		log.Fatal(err)
@@ -408,6 +431,7 @@ func main() {
 	}
 	srv := server.New(server.Config{
 		Release:        relCfg,
+		Provision:      provCfg,
 		Version:        buildVersion(),
 		Archive:        arch,
 		ArchiveSources: acfg.Sources(),
@@ -777,6 +801,35 @@ func releaseFlagError(noAuth bool, repo, host string, upgrade, simulate bool, ad
 		return errors.New("-release-upgrade with -ledger=false needs -hub: a host with no ledger is a peer, upgraded by its hub")
 	case simulate && (real || !isLoopbackListen(addr)):
 		return errors.New("-release-simulate is for demos and tests: not with -release-repo, -release-host or -release-upgrade, and only on a loopback address")
+	}
+	return nil
+}
+
+// provisionFlagError refuses the provisioner flags in combinations that would
+// leave a cloud-facing route open or make no sense. They act with the user's
+// cloud credentials, so like the release flags they need an identity allowlist:
+// with -insecure-no-auth anyone who reaches the port could ask. The browser
+// tests are the one exception (COMEBYE_TEST_INSECURE_PEERS=1, loopback only).
+func provisionFlagError(noAuth bool, cfg, host, addr string, noLedger, hasHub, testInsecure bool) error {
+	cfg, host = strings.TrimSpace(cfg), strings.TrimSpace(host)
+	switch {
+	case cfg != "" && host != "":
+		return errors.New("-provision-config and -provision-host together are ambiguous: a hub asks a peer; the peer that holds the credentials sets -provision-config")
+	case noAuth && (cfg != "" || host != "") && !(testInsecure && isLoopbackListen(addr)):
+		return errors.New("-provision-config / -provision-host need -ts-allow-login: they cannot be combined with -insecure-no-auth")
+	case host != "" && (noLedger || hasHub):
+		return errors.New("-provision-host is for the hub (it keeps the ledger and has no -hub): the peer that holds the credentials sets -provision-config")
+	case cfg != "" && !(noLedger && hasHub):
+		return errors.New("-provision-config needs -ledger=false and -hub: a provisioner is a peer, answering its hub")
+	}
+	return nil
+}
+
+// provisionHostError refuses a -provision-host that is not a peer this hub
+// knows (a typo, this host itself, a peer not added yet).
+func provisionHostError(host, local string, hasPeer func(string) bool) error {
+	if !fleet.ValidName(host) || host == local || !hasPeer(host) {
+		return fmt.Errorf("-provision-host %q: not a peer of this hub (add the peer first; this host is %s)", host, local)
 	}
 	return nil
 }

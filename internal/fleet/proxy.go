@@ -111,6 +111,13 @@ var hostProxyOps = map[string]struct {
 	// once; the command runs on in the background) and read its last record.
 	"release-deploy":        {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 50 * time.Second}, []string{"api", "release", "deploy"}, true},
 	"release-deploy-status": {proxyOp{method: http.MethodGet, timeout: 10 * time.Second}, []string{"api", "release", "deploy"}, true},
+	// Provisioning (the hub's -provision-host, or any peer started with
+	// -provision-config): read-only. The preflight says which cloud credentials
+	// the node holds (present or missing, never a value) and the catalog is its
+	// price list. Hub-only: never a browser's forward, never an agent's. A peer
+	// that does not provision answers 404.
+	"provision-preflight": {proxyOp{method: http.MethodGet, timeout: 50 * time.Second}, []string{"api", "provisioner", "preflight"}, true},
+	"provision-catalog":   {proxyOp{method: http.MethodGet, query: []string{"kind", "region", "score", "refresh"}, timeout: 150 * time.Second}, []string{"api", "provisioner", "catalog"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

@@ -218,6 +218,9 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 	if !regionRe.MatchString(region) {
 		return nil, fmt.Errorf("catalog: region %q is not a region like us-east-1", region)
 	}
+	if !e.Cfg.regionAllowed(region) {
+		return nil, fmt.Errorf("catalog: region %s is not allowed here (allowed_regions: %s)", region, strings.Join(e.Cfg.RegionsAllowed(), ", "))
+	}
 	fams := o.Families
 	if len(fams) == 0 {
 		fams = e.Cfg.AllowedFamilies

@@ -662,3 +662,49 @@ func TestAWSShimRecordsAndRefusesWrites(t *testing.T) {
 		t.Errorf("log:\n%s", b)
 	}
 }
+
+// ---- allowed regions ----
+
+func TestCatalogRefusesARegionThatIsNotAllowed(t *testing.T) {
+	e, f, _, _ := catalogEnv(t)
+	e.Cfg.AllowedRegions = []string{"us-east-1"}
+	if err := e.catalog(context.Background(), catalogOpts{Region: "eu-west-1"}); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("%v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("a refused region still made calls: %v", f.ops())
+	}
+	if err := e.catalog(context.Background(), catalogOpts{Region: "us-east-1", JSON: true}); err != nil {
+		t.Errorf("an allowed region: %v", err)
+	}
+}
+
+func TestRegionsAllowedDefaults(t *testing.T) {
+	c := testAWSCfg(t)
+	c.AWSRegion = "us-east-2"
+	if got := strings.Join(c.RegionsAllowed(), ","); got != "us-east-2,us-east-1,us-west-2" {
+		t.Errorf("default %s", got)
+	}
+	c.AllowedRegions = []string{"eu-west-1"}
+	if got := strings.Join(c.RegionsAllowed(), ","); got != "eu-west-1" {
+		t.Errorf("set %s", got)
+	}
+	c.AllowedRegions = []string{"nowhere"}
+	if c.Validate() == nil {
+		t.Error("a bad region in allowed_regions accepted")
+	}
+}
+
+func TestPreflightSaysWhereItMayBuild(t *testing.T) {
+	f := &fixtureAWS{dir: "testdata/aws"}
+	e, out := pfEnv(t, f)
+	os.Remove(e.Cfg.TSOAuthFile) // no OAuth client: no Tailscale request
+	e.Cfg.AWSRegion = "us-east-2"
+	if err := e.preflight(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	var d pfDoc
+	if err := json.Unmarshal(out.Bytes(), &d); err != nil || d.Region != "us-east-2" || len(d.Regions) != 3 {
+		t.Errorf("%v %+v", err, d)
+	}
+}

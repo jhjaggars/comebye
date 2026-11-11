@@ -123,6 +123,9 @@ type Config struct {
 	AutoTodo AutoTodoConfig
 	// Release turns on the release and upgrade buttons (release.go).
 	Release ReleaseConfig
+	// Provision turns on adding hosts: on a peer, the provisioner role; on a hub,
+	// the default provisioner (provision.go).
+	Provision ProvisionConfig
 	// AgentToken is the local agent token (see agenttoken); requests that
 	// carry it get the agent role. Empty disables the agent role.
 	AgentToken string
@@ -229,6 +232,7 @@ type Server struct {
 	auto       *autoTodo
 	relay      *blockedRelay
 	rel        *relState
+	prov       *provState
 	pages      *pageStore
 	briefSched *briefSchedStore
 	resets     *resetStore
@@ -286,6 +290,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
 	s.typing = newTypingTracker()
 	s.rel = newRelState()
+	s.prov = newProvState()
 	switch rc := &s.cfg.Release; {
 	case rc.Host != "" && rc.Tool != nil:
 		log.Printf("release: both a local release tool and -release-host %s are set: tagging is off", rc.Host)
@@ -485,6 +490,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/release/{id}/dismiss", s.auth(s.handleReleaseDismiss))
 	s.mux.HandleFunc("POST /api/release/{id}/deploy", s.auth(s.handleReleaseDeploy))
 	s.mux.HandleFunc("POST /api/hosts/{host}/release/upgrade", s.auth(s.handleHostUpgrade))
+	s.provisionRoutes()
 	s.pageRoutes()
 	s.mux.HandleFunc("POST /api/marks/reask", s.authAgent(s.handleReask))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))

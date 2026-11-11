@@ -96,6 +96,47 @@ the caps and the launch price as tags on the AWS instance
 `comebye-launch-price-usd-hour`), and `status --json` reads them back. The
 price is read just before launch and left out if it cannot be read.
 
+## Browsing prices from the app (a provisioner)
+
+Peers → Prices in the app shows what a provisioner can build and what it
+would cost, read-only. Nothing there creates a cloud resource; adding a host
+from the app comes later.
+
+- **The provisioner** is a peer that holds the cloud login. Build the tool
+  (`go build -o ~/.local/bin/comebye-worker ./tools/worker`), give it a config
+  (`~/.config/comebye-worker/config`, see `tools/worker/config.example`:
+  `aws_profile` should be a dedicated narrow profile, `aws_region` its own
+  region, `allowed_regions` the regions the app may ask about), and start the
+  peer's comebye with `-provision-config ~/.config/comebye-worker/config`
+  (`COMEBYE_PROVISION_CONFIG`; `-provision-worker` or `COMEBYE_PROVISION_WORKER`
+  names the binary, default `comebye-worker` on `PATH`). It needs `-ledger=false`
+  and `-hub` like every peer, and `-ts-allow-login`. The tool runs there as a
+  subprocess with a filtered environment (PATH, HOME, `AWS_*`, `CLOUDSDK_*`
+  and the like; none of comebye's own variables), in its own process group,
+  with a timeout.
+- **The hub** sets `-provision-host NAME` (`COMEBYE_PROVISION_HOST`), the default
+  provisioner, which must be a peer it already knows (as for `-release-host`).
+  Every other peer that answers is listed too and can be picked in the app;
+  with no setting and no peer that answers, the Prices tab is hidden. The hub
+  holds no cloud credential.
+- **What the app shows**: per credential on the chosen node, `present`,
+  `missing`, `expired` or `could not check` with a one-line note (a profile or
+  gateway name), never a value; a region picker (the node's own region first,
+  then `allowed_regions`); the instance table with the price of each type, spot
+  and on-demand, the AWS Spot Advisor band and an estimate per hour. Sizes
+  under 2 vCPU or 4 GiB are hidden unless "Show small sizes" is ticked, and a
+  row opens to its spot price per zone and a "Check capacity" button (AWS's
+  placement score for that type). Arm types are listed and marked "needs work".
+- **Caching**: the node caches each source on disk (types 24 h, spot 15 min,
+  on-demand 7 d, advisor 24 h; see above) and the hub caches each answer for 5
+  minutes. If the node cannot refresh (an expired login), the app keeps showing
+  the last prices with their age and says what to run (`aws login` on that
+  node). "Recheck" and "Refresh prices" ask again now (a POST with the page's
+  CSRF token; one forced refresh per 20 s).
+- **Who may ask**: the user role only. An agent token, a peer forwarding for an
+  agent and a tagged node get 403 on every route; the peer answers only its hub.
+  See [security.md](security.md).
+
 ## Before the first run
 
 1. **A cloud account**, one of:

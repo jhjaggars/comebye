@@ -208,3 +208,36 @@ func TestParseKinds(t *testing.T) {
 		t.Fatal("empty values are no kinds")
 	}
 }
+
+func TestProvisionFlagError(t *testing.T) {
+	for name, c := range map[string]struct {
+		noAuth                 bool
+		cfg, host, addr        string
+		noLedger, hasHub, test bool
+		bad                    string
+	}{
+		"nothing set":                      {addr: "127.0.0.1:8740"},
+		"a provisioner peer":               {cfg: "/c", addr: "127.0.0.1:8740", noLedger: true, hasHub: true},
+		"the hub's default":                {host: "laharl", addr: "127.0.0.1:8740"},
+		"both on one process":              {cfg: "/c", host: "laharl", addr: "127.0.0.1:8740", noLedger: true, hasHub: true, bad: "ambiguous"},
+		"open provisioner":                 {noAuth: true, cfg: "/c", addr: "127.0.0.1:8740", noLedger: true, hasHub: true, bad: "-ts-allow-login"},
+		"open hub":                         {noAuth: true, host: "laharl", addr: "127.0.0.1:8740", bad: "-ts-allow-login"},
+		"open, in the browser tests":       {noAuth: true, cfg: "/c", addr: "127.0.0.1:8740", noLedger: true, hasHub: true, test: true},
+		"open on a public address, a test": {noAuth: true, cfg: "/c", addr: "0.0.0.0:8740", noLedger: true, hasHub: true, test: true, bad: "-ts-allow-login"},
+		"default on a peer":                {host: "laharl", addr: "127.0.0.1:8740", noLedger: true, hasHub: true, bad: "hub"},
+		"provisioner that keeps a ledger":  {cfg: "/c", addr: "127.0.0.1:8740", bad: "-ledger=false"},
+		"provisioner with no hub":          {cfg: "/c", addr: "127.0.0.1:8740", noLedger: true, bad: "-hub"},
+	} {
+		err := provisionFlagError(c.noAuth, c.cfg, c.host, c.addr, c.noLedger, c.hasHub, c.test)
+		switch {
+		case c.bad == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad)):
+			t.Errorf("%s: %v, want %q", name, err, c.bad)
+		}
+	}
+	has := func(n string) bool { return n == "laharl" }
+	if provisionHostError("laharl", "desk", has) != nil || provisionHostError("nobody", "desk", has) == nil || provisionHostError("desk", "desk", func(string) bool { return true }) == nil {
+		t.Error("-provision-host must be a known peer other than this host")
+	}
+}

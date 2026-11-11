@@ -254,6 +254,25 @@ Treat access to it like SSH access to that machine.
     last release, and an upgrade needs a tagged release with a passed build. And an
     agent with a shell can run `git push` of a tag or `comebye upgrade` itself, as it
     always could, so the harness rule against agents pushing tags still matters.
+  - **Provisioning (the Prices tab).** A peer started with `-provision-config` runs
+    the worker tool for two read-only questions, which credentials it holds and its
+    price list, and the hub (`-provision-host`) relays them to the app. The
+    credentials never leave that peer: the answers carry only `present` or `missing`
+    and a profile or gateway name, and the hub decodes them into fixed types,
+    bounds them and scrubs anything shaped like a key, token, account id or email
+    before it caches or shows them. The routes are the user role only (an agent
+    token, a peer forwarding for an agent and a tagged node get 403; a table test
+    walks them), the peer answers only the hub's own call (the same
+    `X-Comebye-Hub-Call` guard as release tagging; `ProxyHost` refuses the ops) and
+    only on a host with no ledger, a peer started without the role answers 404, and
+    the one route that makes the hub ask again (`POST /api/provision/refresh`) needs
+    the CSRF token and is limited to one forced refresh per 20 s. Both flags refuse
+    `-insecure-no-auth`. The tool runs as a subprocess with an allow-listed
+    environment, argv built from validated values (no shell), its own process group
+    and a timeout. This slice makes no cloud write: the AWS identity it uses needs
+    only the read actions in `tools/worker/iam/readonly-policy.json`, and as for
+    tagging, an agent running on the provisioner as the same unix user can still
+    read that profile directly, which is why it should be a dedicated narrow one.
   - **Tagging through a peer** (`-release-host NAME` on the hub; the peer sets
     `-release-repo`). Then **the peer, not the hub, holds the git and `gh`
     credentials** and the clone; the hub holds none for releases and runs no

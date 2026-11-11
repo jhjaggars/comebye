@@ -36,6 +36,10 @@ type pfDoc struct {
 	Tailnet   pfCheck `json:"tailnet"`
 	OpenShell pfCheck `json:"openshell"`
 	SSH       pfCheck `json:"ssh"`
+	// What this node is set up to build in (settings, not credentials): the
+	// config's aws_region, and the regions a caller may pick.
+	Region  string   `json:"region,omitempty"`
+	Regions []string `json:"regions,omitempty"`
 }
 
 var (
@@ -55,6 +59,7 @@ func (e *env) preflight(ctx context.Context, asJSON bool) error {
 	d.Tailnet = e.pfTailnet(ctx)
 	d.OpenShell = e.pfOpenShell(ctx)
 	d.SSH = e.pfSSH()
+	d.Region, d.Regions = e.Cfg.AWSRegion, e.Cfg.RegionsAllowed()
 	if asJSON {
 		b := marshalJSON(d)
 		e.printf("%s\n", b)

@@ -1,0 +1,1103 @@
+{
+ "v": 1,
+ "kind": "aws",
+ "region": "us-east-1",
+ "generated_at": "2026-11-11T12:16:01Z",
+ "sources": {
+  "on_demand": {
+   "fetched_at": "2026-11-11T12:16:01Z",
+   "state": "fresh",
+   "source": "pricing get-products"
+  },
+  "placement": {
+   "fetched_at": "2026-11-11T12:16:01Z",
+   "state": "fresh",
+   "source": "ec2 get-spot-placement-scores"
+  },
+  "spot_advisor": {
+   "fetched_at": "2026-11-11T12:16:01Z",
+   "state": "fresh",
+   "source": "AWS Spot Advisor (public data file)"
+  },
+  "spot_price": {
+   "fetched_at": "2026-11-11T12:16:01Z",
+   "state": "fresh",
+   "source": "ec2 describe-spot-price-history"
+  },
+  "types": {
+   "fetched_at": "2026-11-11T12:16:01Z",
+   "state": "fresh",
+   "source": "ec2 describe-instance-types"
+  }
+ },
+ "estimate": {
+  "ipv4_usd_hour": 0.005,
+  "disk_usd_gb_month": 0.08,
+  "disk_gb": 70
+ },
+ "rows": [
+  {
+   "type": "t3.nano",
+   "vcpu": 2,
+   "memory_gib": 0.5,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0052,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0005,
+    "us-east-1b": 0.0005,
+    "us-east-1c": 0.0005,
+    "us-east-1d": 0.0005,
+    "us-east-1f": 0.0007
+   },
+   "spot_min_usd_hour": 0.0005,
+   "interruption": "5-10%",
+   "estimate_spot_usd_hour": 0.0132,
+   "estimate_on_demand_usd_hour": 0.0179,
+   "selectable": true
+  },
+  {
+   "type": "t3a.nano",
+   "vcpu": 2,
+   "memory_gib": 0.5,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0047,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0015,
+    "us-east-1b": 0.0008,
+    "us-east-1c": 0.0009,
+    "us-east-1d": 0.0008,
+    "us-east-1f": 0.0006
+   },
+   "spot_min_usd_hour": 0.0006,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.0133,
+   "estimate_on_demand_usd_hour": 0.0174,
+   "selectable": true
+  },
+  {
+   "type": "t3.micro",
+   "vcpu": 2,
+   "memory_gib": 1,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0104,
+   "spot_usd_hour": {
+    "us-east-1a": 0.003,
+    "us-east-1b": 0.003,
+    "us-east-1c": 0.0026,
+    "us-east-1d": 0.0029,
+    "us-east-1f": 0.0026
+   },
+   "spot_min_usd_hour": 0.0026,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0153,
+   "estimate_on_demand_usd_hour": 0.0231,
+   "selectable": true
+  },
+  {
+   "type": "t3a.micro",
+   "vcpu": 2,
+   "memory_gib": 1,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0094,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0043,
+    "us-east-1b": 0.0045,
+    "us-east-1c": 0.0028,
+    "us-east-1d": 0.0032,
+    "us-east-1f": 0.0036
+   },
+   "spot_min_usd_hour": 0.0028,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.0155,
+   "estimate_on_demand_usd_hour": 0.0221,
+   "selectable": true
+  },
+  {
+   "type": "t3a.small",
+   "vcpu": 2,
+   "memory_gib": 2,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0188,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0075,
+    "us-east-1b": 0.0064,
+    "us-east-1c": 0.0048,
+    "us-east-1d": 0.0055,
+    "us-east-1f": 0.008
+   },
+   "spot_min_usd_hour": 0.0048,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0175,
+   "estimate_on_demand_usd_hour": 0.0315,
+   "selectable": true
+  },
+  {
+   "type": "t3.small",
+   "vcpu": 2,
+   "memory_gib": 2,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0208,
+   "spot_usd_hour": {
+    "us-east-1a": 0.005,
+    "us-east-1b": 0.0073,
+    "us-east-1c": 0.0056,
+    "us-east-1d": 0.0062,
+    "us-east-1f": 0.0062
+   },
+   "spot_min_usd_hour": 0.005,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0177,
+   "estimate_on_demand_usd_hour": 0.0335,
+   "selectable": true
+  },
+  {
+   "type": "t3a.medium",
+   "vcpu": 2,
+   "memory_gib": 4,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0376,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0184,
+    "us-east-1b": 0.0153,
+    "us-east-1c": 0.0126,
+    "us-east-1d": 0.014,
+    "us-east-1f": 0.0185
+   },
+   "spot_min_usd_hour": 0.0126,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0253,
+   "estimate_on_demand_usd_hour": 0.0503,
+   "selectable": true
+  },
+  {
+   "type": "t3.medium",
+   "vcpu": 2,
+   "memory_gib": 4,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0416,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0154,
+    "us-east-1b": 0.0142,
+    "us-east-1c": 0.0154,
+    "us-east-1d": 0.0143,
+    "us-east-1f": 0.0151
+   },
+   "spot_min_usd_hour": 0.0142,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0269,
+   "estimate_on_demand_usd_hour": 0.0543,
+   "selectable": true
+  },
+  {
+   "type": "t3a.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0752,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0261,
+    "us-east-1b": 0.0233,
+    "us-east-1c": 0.022,
+    "us-east-1d": 0.0232,
+    "us-east-1f": 0.0257
+   },
+   "spot_min_usd_hour": 0.022,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0347,
+   "estimate_on_demand_usd_hour": 0.0879,
+   "selectable": true
+  },
+  {
+   "type": "t3.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0832,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0325,
+    "us-east-1b": 0.0293,
+    "us-east-1c": 0.0257,
+    "us-east-1d": 0.027,
+    "us-east-1f": 0.0231
+   },
+   "spot_min_usd_hour": 0.0231,
+   "interruption": "<5%",
+   "estimate_spot_usd_hour": 0.0358,
+   "estimate_on_demand_usd_hour": 0.0959,
+   "selectable": true
+  },
+  {
+   "type": "c5.large",
+   "vcpu": 2,
+   "memory_gib": 4,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.085,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0279,
+    "us-east-1b": 0.0258,
+    "us-east-1c": 0.0271,
+    "us-east-1d": 0.0318,
+    "us-east-1f": 0.0306
+   },
+   "spot_min_usd_hour": 0.0258,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.0385,
+   "estimate_on_demand_usd_hour": 0.0977,
+   "selectable": true
+  },
+  {
+   "type": "c6i.large",
+   "vcpu": 2,
+   "memory_gib": 4,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.085,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0335,
+    "us-east-1b": 0.0335,
+    "us-east-1c": 0.0316,
+    "us-east-1d": 0.031,
+    "us-east-1f": 0.0274
+   },
+   "spot_min_usd_hour": 0.0274,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0401,
+   "estimate_on_demand_usd_hour": 0.0977,
+   "selectable": true
+  },
+  {
+   "type": "m6i.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.096,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0343,
+    "us-east-1b": 0.0377,
+    "us-east-1c": 0.0351,
+    "us-east-1d": 0.0398,
+    "us-east-1f": 0.0315
+   },
+   "spot_min_usd_hour": 0.0315,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0442,
+   "estimate_on_demand_usd_hour": 0.1087,
+   "selectable": true
+  },
+  {
+   "type": "t3.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.1664,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0565,
+    "us-east-1b": 0.053,
+    "us-east-1c": 0.0485,
+    "us-east-1d": 0.0448,
+    "us-east-1f": 0.0357
+   },
+   "spot_min_usd_hour": 0.0357,
+   "interruption": "<5%",
+   "estimate_spot_usd_hour": 0.0484,
+   "estimate_on_demand_usd_hour": 0.1791,
+   "selectable": true
+  },
+  {
+   "type": "r5.large",
+   "vcpu": 2,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.126,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0364,
+    "us-east-1b": 0.0573,
+    "us-east-1c": 0.0395,
+    "us-east-1d": 0.046,
+    "us-east-1f": 0.0428
+   },
+   "spot_min_usd_hour": 0.0364,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0491,
+   "estimate_on_demand_usd_hour": 0.1387,
+   "selectable": true
+  },
+  {
+   "type": "m5.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.096,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0457,
+    "us-east-1b": 0.0388,
+    "us-east-1c": 0.0412,
+    "us-east-1d": 0.0377,
+    "us-east-1f": 0.0441
+   },
+   "spot_min_usd_hour": 0.0377,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0504,
+   "estimate_on_demand_usd_hour": 0.1087,
+   "selectable": true
+  },
+  {
+   "type": "t3a.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.1504,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0559,
+    "us-east-1b": 0.0481,
+    "us-east-1c": 0.0438,
+    "us-east-1d": 0.0471,
+    "us-east-1f": 0.0387
+   },
+   "spot_min_usd_hour": 0.0387,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0514,
+   "estimate_on_demand_usd_hour": 0.1631,
+   "selectable": true
+  },
+  {
+   "type": "m5.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.192,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0561,
+    "us-east-1b": 0.0604,
+    "us-east-1c": 0.0491,
+    "us-east-1d": 0.0511,
+    "us-east-1f": 0.0402
+   },
+   "spot_min_usd_hour": 0.0402,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0529,
+   "estimate_on_demand_usd_hour": 0.2047,
+   "selectable": true
+  },
+  {
+   "type": "c5.xlarge",
+   "vcpu": 4,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.17,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0633,
+    "us-east-1b": 0.0666,
+    "us-east-1c": 0.0746,
+    "us-east-1d": 0.0707,
+    "us-east-1f": 0.0532
+   },
+   "spot_min_usd_hour": 0.0532,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.0659,
+   "estimate_on_demand_usd_hour": 0.1827,
+   "selectable": true
+  },
+  {
+   "type": "r5.xlarge",
+   "vcpu": 4,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.252,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0746,
+    "us-east-1b": 0.0717,
+    "us-east-1c": 0.0905,
+    "us-east-1d": 0.0854,
+    "us-east-1f": 0.058
+   },
+   "spot_min_usd_hour": 0.058,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0707,
+   "estimate_on_demand_usd_hour": 0.2647,
+   "selectable": true
+  },
+  {
+   "type": "c6i.xlarge",
+   "vcpu": 4,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.17,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0799,
+    "us-east-1b": 0.0812,
+    "us-east-1c": 0.0801,
+    "us-east-1d": 0.0812,
+    "us-east-1f": 0.0588
+   },
+   "spot_min_usd_hour": 0.0588,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0715,
+   "estimate_on_demand_usd_hour": 0.1827,
+   "selectable": true
+  },
+  {
+   "type": "t3a.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.3008,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1122,
+    "us-east-1b": 0.0951,
+    "us-east-1c": 0.0926,
+    "us-east-1d": 0.0865,
+    "us-east-1f": 0.0642
+   },
+   "spot_min_usd_hour": 0.0642,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0769,
+   "estimate_on_demand_usd_hour": 0.3135,
+   "selectable": true
+  },
+  {
+   "type": "t3.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.3328,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0973,
+    "us-east-1b": 0.1046,
+    "us-east-1c": 0.0984,
+    "us-east-1d": 0.0904,
+    "us-east-1f": 0.0669
+   },
+   "spot_min_usd_hour": 0.0669,
+   "interruption": "5-10%",
+   "estimate_spot_usd_hour": 0.0796,
+   "estimate_on_demand_usd_hour": 0.3455,
+   "selectable": true
+  },
+  {
+   "type": "m6i.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.192,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1183,
+    "us-east-1b": 0.0855,
+    "us-east-1c": 0.0867,
+    "us-east-1d": 0.0914,
+    "us-east-1f": 0.0934
+   },
+   "spot_min_usd_hour": 0.0855,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0982,
+   "estimate_on_demand_usd_hour": 0.2047,
+   "selectable": true
+  },
+  {
+   "type": "c6i.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.34,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1456,
+    "us-east-1b": 0.1498,
+    "us-east-1c": 0.1667,
+    "us-east-1d": 0.1515,
+    "us-east-1f": 0.1191
+   },
+   "spot_min_usd_hour": 0.1191,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.1318,
+   "estimate_on_demand_usd_hour": 0.3527,
+   "selectable": true
+  },
+  {
+   "type": "c5.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.34,
+   "spot_usd_hour": {
+    "us-east-1a": 0.123,
+    "us-east-1b": 0.1351,
+    "us-east-1c": 0.151,
+    "us-east-1d": 0.1406,
+    "us-east-1f": 0.1293
+   },
+   "spot_min_usd_hour": 0.123,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.1357,
+   "estimate_on_demand_usd_hour": 0.3527,
+   "selectable": true
+  },
+  {
+   "type": "m6i.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.384,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1285,
+    "us-east-1b": 0.1852,
+    "us-east-1c": 0.1786,
+    "us-east-1d": 0.1643,
+    "us-east-1f": 0.2189
+   },
+   "spot_min_usd_hour": 0.1285,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.1412,
+   "estimate_on_demand_usd_hour": 0.3967,
+   "selectable": true
+  },
+  {
+   "type": "r5.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 64,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.504,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1304,
+    "us-east-1b": 0.1448,
+    "us-east-1c": 0.1683,
+    "us-east-1d": 0.1614,
+    "us-east-1f": 0.1539
+   },
+   "spot_min_usd_hour": 0.1304,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.1431,
+   "estimate_on_demand_usd_hour": 0.5167,
+   "selectable": true
+  },
+  {
+   "type": "m5.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.384,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1532,
+    "us-east-1b": 0.1404,
+    "us-east-1c": 0.1441,
+    "us-east-1d": 0.1347,
+    "us-east-1f": 0.1865
+   },
+   "spot_min_usd_hour": 0.1347,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.1474,
+   "estimate_on_demand_usd_hour": 0.3967,
+   "selectable": true
+  },
+  {
+   "type": "m6i.4xlarge",
+   "vcpu": 16,
+   "memory_gib": 64,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.768,
+   "spot_usd_hour": {
+    "us-east-1a": 0.2506,
+    "us-east-1b": 0.1989,
+    "us-east-1c": 0.2373,
+    "us-east-1d": 0.2104,
+    "us-east-1f": 0.1505
+   },
+   "spot_min_usd_hour": 0.1505,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.1632,
+   "estimate_on_demand_usd_hour": 0.7807,
+   "selectable": true
+  },
+  {
+   "type": "m5.4xlarge",
+   "vcpu": 16,
+   "memory_gib": 64,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.768,
+   "spot_usd_hour": {
+    "us-east-1a": 0.3156,
+    "us-east-1b": 0.2813,
+    "us-east-1c": 0.2871,
+    "us-east-1d": 0.262,
+    "us-east-1f": 0.1619
+   },
+   "spot_min_usd_hour": 0.1619,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.1746,
+   "estimate_on_demand_usd_hour": 0.7807,
+   "selectable": true
+  },
+  {
+   "type": "c5.4xlarge",
+   "vcpu": 16,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.68,
+   "spot_usd_hour": {
+    "us-east-1a": 0.2337,
+    "us-east-1b": 0.2284,
+    "us-east-1c": 0.2277,
+    "us-east-1d": 0.2378,
+    "us-east-1f": 0.2686
+   },
+   "spot_min_usd_hour": 0.2277,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.2404,
+   "estimate_on_demand_usd_hour": 0.6927,
+   "selectable": true
+  },
+  {
+   "type": "c6i.4xlarge",
+   "vcpu": 16,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.68,
+   "spot_usd_hour": {
+    "us-east-1a": 0.5627,
+    "us-east-1b": 0.5442,
+    "us-east-1c": 0.3921,
+    "us-east-1d": 0.4599,
+    "us-east-1f": 0.2853
+   },
+   "spot_min_usd_hour": 0.2853,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.298,
+   "estimate_on_demand_usd_hour": 0.6927,
+   "selectable": true
+  },
+  {
+   "type": "r5.4xlarge",
+   "vcpu": 16,
+   "memory_gib": 128,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 1.008,
+   "spot_usd_hour": {
+    "us-east-1a": 0.3519,
+    "us-east-1b": 0.3527,
+    "us-east-1c": 0.3329,
+    "us-east-1d": 0.3405,
+    "us-east-1f": 0.3471
+   },
+   "spot_min_usd_hour": 0.3329,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.3456,
+   "estimate_on_demand_usd_hour": 1.0207,
+   "selectable": true
+  },
+  {
+   "type": "m6i.8xlarge",
+   "vcpu": 32,
+   "memory_gib": 128,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 1.536,
+   "spot_usd_hour": {
+    "us-east-1a": 1.0065,
+    "us-east-1b": 0.4572,
+    "us-east-1c": 0.4523,
+    "us-east-1d": 0.3715,
+    "us-east-1f": 0.716
+   },
+   "spot_min_usd_hour": 0.3715,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.3842,
+   "estimate_on_demand_usd_hour": 1.5487,
+   "selectable": true
+  },
+  {
+   "type": "m5.8xlarge",
+   "vcpu": 32,
+   "memory_gib": 128,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 1.536,
+   "spot_usd_hour": {
+    "us-east-1a": 0.3873,
+    "us-east-1b": 0.4114,
+    "us-east-1c": 0.4421,
+    "us-east-1d": 0.4366,
+    "us-east-1f": 0.432
+   },
+   "spot_min_usd_hour": 0.3873,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.4,
+   "estimate_on_demand_usd_hour": 1.5487,
+   "selectable": true
+  },
+  {
+   "type": "r5.8xlarge",
+   "vcpu": 32,
+   "memory_gib": 256,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 2.016,
+   "spot_usd_hour": {
+    "us-east-1a": 0.6004,
+    "us-east-1b": 0.5727,
+    "us-east-1c": 0.5088,
+    "us-east-1d": 0.4988,
+    "us-east-1f": 0.4148
+   },
+   "spot_min_usd_hour": 0.4148,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.4275,
+   "estimate_on_demand_usd_hour": 2.0287,
+   "selectable": true
+  },
+  {
+   "type": "c6i.8xlarge",
+   "vcpu": 32,
+   "memory_gib": 64,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 1.36,
+   "spot_usd_hour": {
+    "us-east-1a": 0.4408,
+    "us-east-1b": 0.8502,
+    "us-east-1c": 1.0353,
+    "us-east-1d": 0.8938,
+    "us-east-1f": 1.0738
+   },
+   "spot_min_usd_hour": 0.4408,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.4535,
+   "estimate_on_demand_usd_hour": 1.3727,
+   "selectable": true
+  },
+  {
+   "type": "t4g.nano",
+   "vcpu": 2,
+   "memory_gib": 0.5,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0042,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0018,
+    "us-east-1b": 0.0021,
+    "us-east-1c": 0.0023,
+    "us-east-1d": 0.0025,
+    "us-east-1f": 0.002
+   },
+   "spot_min_usd_hour": 0.0018,
+   "interruption": "5-10%",
+   "estimate_spot_usd_hour": 0.0145,
+   "estimate_on_demand_usd_hour": 0.0169,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "t4g.micro",
+   "vcpu": 2,
+   "memory_gib": 1,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0084,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0035,
+    "us-east-1b": 0.0042,
+    "us-east-1c": 0.0038,
+    "us-east-1d": 0.0055,
+    "us-east-1f": 0.0043
+   },
+   "spot_min_usd_hour": 0.0035,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0162,
+   "estimate_on_demand_usd_hour": 0.0211,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "t4g.small",
+   "vcpu": 2,
+   "memory_gib": 2,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0168,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0073,
+    "us-east-1b": 0.0086,
+    "us-east-1c": 0.0065,
+    "us-east-1d": 0.0097,
+    "us-east-1f": 0.0102
+   },
+   "spot_min_usd_hour": 0.0065,
+   "interruption": "5-10%",
+   "estimate_spot_usd_hour": 0.0192,
+   "estimate_on_demand_usd_hour": 0.0295,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "m6g.medium",
+   "vcpu": 1,
+   "memory_gib": 4,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0385,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0274,
+    "us-east-1b": 0.021,
+    "us-east-1c": 0.0222,
+    "us-east-1d": 0.0149,
+    "us-east-1f": 0.013
+   },
+   "spot_min_usd_hour": 0.013,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0257,
+   "estimate_on_demand_usd_hour": 0.0512,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "t4g.medium",
+   "vcpu": 2,
+   "memory_gib": 4,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0336,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0207,
+    "us-east-1b": 0.0203,
+    "us-east-1c": 0.0142,
+    "us-east-1d": 0.0166,
+    "us-east-1f": 0.0168
+   },
+   "spot_min_usd_hour": 0.0142,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0269,
+   "estimate_on_demand_usd_hour": 0.0463,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "t4g.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0672,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0352,
+    "us-east-1b": 0.0303,
+    "us-east-1c": 0.0261,
+    "us-east-1d": 0.0232,
+    "us-east-1f": 0.0237
+   },
+   "spot_min_usd_hour": 0.0232,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0359,
+   "estimate_on_demand_usd_hour": 0.0799,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "m6g.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.077,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0329,
+    "us-east-1b": 0.0605,
+    "us-east-1c": 0.0583,
+    "us-east-1d": 0.048,
+    "us-east-1f": 0.0394
+   },
+   "spot_min_usd_hour": 0.0329,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0456,
+   "estimate_on_demand_usd_hour": 0.0897,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "t4g.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.1344,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0786,
+    "us-east-1b": 0.0721,
+    "us-east-1c": 0.0675,
+    "us-east-1d": 0.0759,
+    "us-east-1f": 0.0437
+   },
+   "spot_min_usd_hour": 0.0437,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.0564,
+   "estimate_on_demand_usd_hour": 0.1471,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "t4g.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 32,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.2688,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1124,
+    "us-east-1b": 0.1239,
+    "us-east-1c": 0.1199,
+    "us-east-1d": 0.1248,
+    "us-east-1f": 0.0671
+   },
+   "spot_min_usd_hour": 0.0671,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0798,
+   "estimate_on_demand_usd_hour": 0.2815,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "m6g.xlarge",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.154,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1105,
+    "us-east-1b": 0.0926,
+    "us-east-1c": 0.0967,
+    "us-east-1d": 0.0843,
+    "us-east-1f": 0.1056
+   },
+   "spot_min_usd_hour": 0.0843,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.097,
+   "estimate_on_demand_usd_hour": 0.1667,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "m6g.2xlarge",
+   "vcpu": 8,
+   "memory_gib": 32,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.308,
+   "spot_usd_hour": {
+    "us-east-1a": 0.1114,
+    "us-east-1b": 0.1363,
+    "us-east-1c": 0.1607,
+    "us-east-1d": 0.1434,
+    "us-east-1f": 0.116
+   },
+   "spot_min_usd_hour": 0.1114,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.1241,
+   "estimate_on_demand_usd_hour": 0.3207,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "m6g.4xlarge",
+   "vcpu": 16,
+   "memory_gib": 64,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.616,
+   "spot_usd_hour": {
+    "us-east-1a": 0.2646,
+    "us-east-1b": 0.2901,
+    "us-east-1c": 0.2761,
+    "us-east-1d": 0.2043,
+    "us-east-1f": 0.2895
+   },
+   "spot_min_usd_hour": 0.2043,
+   "interruption": "5-10%",
+   "estimate_spot_usd_hour": 0.217,
+   "estimate_on_demand_usd_hour": 0.6287,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  },
+  {
+   "type": "m6g.8xlarge",
+   "vcpu": 32,
+   "memory_gib": 128,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 1.232,
+   "spot_usd_hour": {
+    "us-east-1a": 0.4437,
+    "us-east-1b": 0.6809,
+    "us-east-1c": 0.5816,
+    "us-east-1d": 0.5392,
+    "us-east-1f": 0.51
+   },
+   "spot_min_usd_hour": 0.4437,
+   "interruption": "<5%",
+   "estimate_spot_usd_hour": 0.4564,
+   "estimate_on_demand_usd_hour": 1.2447,
+   "selectable": false,
+   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+  }
+ ],
+ "placement": {
+  "types": [
+   "m5.large",
+   "t3.large"
+  ],
+  "scores": [
+   {
+    "zone_id": "use1-az6",
+    "score": 3
+   },
+   {
+    "zone_id": "use1-az2",
+    "score": 3
+   },
+   {
+    "zone_id": "use1-az1",
+    "score": 3
+   },
+   {
+    "zone_id": "use1-az5",
+    "score": 3
+   },
+   {
+    "zone_id": "use1-az4",
+    "score": 3
+   }
+  ],
+  "fetched_at": "2026-11-11T12:16:01Z",
+  "source": "ec2 get-spot-placement-scores"
+ }
+}

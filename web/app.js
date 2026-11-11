@@ -1876,6 +1876,7 @@ function todoCopy(ta) {
 // confirm step that names the version and the commit; each host's Upgrade runs
 // `comebye upgrade` there. Agents cannot do either: only this page can.
 const RELEASES_HASH = "#/peers/~releases";
+const PRICES_HASH = "#/peers/~prices";
 const rls = { data: null, err: "", loadedAt: 0, inflight: false, confirm: null, busy: false };
 
 async function loadReleases(refresh) {
@@ -5491,8 +5492,10 @@ function parsePeersRoute() {
   if (!m) return null;
   // "~releases" cannot be a host name (PEER_NAME_RE), so the tab shares the route.
   if (m[1] === "~releases") return { name: "", tab: "releases" };
+  if (m[1] === "~prices") return { name: "", tab: "prices" };
   return { name: m[1] && PEER_NAME_RE.test(m[1]) ? m[1] : "", tab: "hosts" };
 }
+function tabHash(tab) { return tab === "releases" ? RELEASES_HASH : tab === "prices" ? PRICES_HASH : "#/peers"; }
 function peerHash(name) { return "#/peers" + (name ? "/" + name : ""); }
 function isLocalHostName(name) { return !!state.localHost && name === state.localHost; }
 function settingsBase(name) { return isLocalHostName(name) ? "/api/settings" : `/api/hosts/${encodeURIComponent(name)}/settings`; }
@@ -5535,6 +5538,7 @@ async function peersLoadCats(name) {
 
 function peersLoadAll() {
   loadReleases(false);
+  loadProvNodes(false);
   peersLoadInfo().then(renderPeers);
   for (const h of state.hosts) peersLoadCfg(h.name);
 }
@@ -5587,17 +5591,21 @@ function renderPeersList() {
   }).join("");
   const nudge = rls.data && rls.data.needs_you && rls.data.todo
     ? `<a class="pr-nudge" href="${RELEASES_HASH}">${esc(rls.data.todo.release.version)} needs you: ${esc(rls.data.needs_text || "see the Releases tab")} →</a>` : "";
-  const all = html + nudge;
+  const browse = pz.nodes && pz.nodes.enabled
+    ? `<a class="pr-browse" href="${PRICES_HASH}" id="pr-browse">Browse prices<span>${esc(pzDefaultNode() || "")}</span></a>` : "";
+  const all = browse + html + nudge;
   if ($("pr-items")._html !== all) { $("pr-items")._html = all; $("pr-items").innerHTML = all; }
 }
 
 // The Hosts | Releases tabs. The Releases tab carries an orange dot while a
 // release needs the user.
 function renderPeerTabs() {
-  const r = prs.route, rel = r.tab === "releases";
+  const r = prs.route, tab = r.tab || "hosts", rel = tab === "releases", prz = tab === "prices";
   $("peers").classList.toggle("tab-rel", rel);
+  // The Prices tab exists only where a provisioner is set up (or while it is open).
+  $("pr-tab-prices").hidden = !(pz.nodes && pz.nodes.enabled) && !prz;
   for (const b of document.querySelectorAll("#pr-tabs [data-tab]")) {
-    const on = (b.dataset.tab === "releases") === rel;
+    const on = b.dataset.tab === tab;
     b.setAttribute("aria-selected", String(on));
     b.tabIndex = on ? 0 : -1;
   }
@@ -5608,7 +5616,8 @@ function renderPeerTabs() {
   dot.setAttribute("aria-label", need ? "a release needs you: " + (rls.data.needs_text || "") : "");
   $("pr-tab-rel").title = need ? (rls.data.needs_text || "") : "";
   $("pr-releases").hidden = !rel;
-  document.querySelector("#peers .pr-panes").hidden = rel;
+  $("pr-prices").hidden = !prz;
+  document.querySelector("#peers .pr-panes").hidden = rel || prz;
 }
 
 function fmtWhen(t) { const at = Date.parse(t); return Number.isNaN(at) ? "" : fmtAgo(at) + " ago"; }
@@ -5710,6 +5719,7 @@ function renderPeers() {
   if (!prs.route) return;
   renderPeerTabs();
   if (prs.route.tab === "releases") { renderReleases(); return; }
+  if (prs.route.tab === "prices") { renderPrices(); return; }
   renderPeersList();
   renderPeerView();
 }
@@ -5724,7 +5734,7 @@ function syncPeers() {
   if (!r) { clearInterval(prs.timer); prs.timer = null; return; }
   if (!was) {
     prs.cfg = {}; prs.cats = {}; prs.draft = null; $("pr-view").dataset.name = ""; $("pr-view")._html = "";
-    rls.confirm = null; $("pr-releases")._html = "";
+    rls.confirm = null; $("pr-releases")._html = ""; $("pr-prices")._html = "";
     prs.timer = setInterval(peersLoadAll, 20000);
     peersLoadAll();
   }
@@ -5765,14 +5775,18 @@ function initPeers() {
   $("pr-back").addEventListener("click", peersBack);
   $("pr-tabs").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-tab]");
-    if (b) location.hash = b.dataset.tab === "releases" ? RELEASES_HASH : "#/peers";
+    if (b) location.hash = tabHash(b.dataset.tab);
   });
   $("pr-tabs").addEventListener("keydown", (ev) => {
     if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
     ev.preventDefault();
-    location.hash = ev.key === "ArrowRight" ? RELEASES_HASH : "#/peers";
-    $(ev.key === "ArrowRight" ? "pr-tab-rel" : "pr-tab-hosts").focus();
+    const tabs = [...document.querySelectorAll("#pr-tabs [data-tab]")].filter((b) => !b.hidden);
+    const at = tabs.findIndex((b) => b.getAttribute("aria-selected") === "true");
+    const next = tabs[Math.max(0, Math.min(tabs.length - 1, at + (ev.key === "ArrowRight" ? 1 : -1)))];
+    location.hash = tabHash(next.dataset.tab);
+    next.focus();
   });
+  initPrices();
   $("pr-releases").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-rel]");
     if (b && !b.disabled) relClick(b.dataset.rel, b.dataset.host);
@@ -5811,6 +5825,216 @@ function refreshDirty() {
   if (rev) rev.disabled = !dirty;
   const n = $("pr-dirty");
   if (n) n.textContent = dirty ? "Unsaved changes" : "";
+}
+
+
+/* ---------- Prices: what a provisioner can build, and what it costs (read-only) ---------- */
+//
+// Peers → Prices. The hub asks a provisioner (a peer that holds cloud
+// credentials; -provision-host sets the default) for two things and shows them:
+// which credentials it has (present or missing, never a value) and its price
+// list. Nothing here creates anything. The hub caches both for five minutes;
+// Recheck and Refresh ask again now.
+const pz = {
+  nodes: null, nodesErr: "", loadingNodes: false,
+  via: "", region: "", small: false, sort: "price",
+  cat: null, catErr: "", catKey: "", loading: false, loadingKey: "", seq: 0,
+  open: "", score: {}, scoring: "",
+};
+const PZ_CREDS = [
+  ["aws", "AWS", "aws login"], ["gcp", "Google Cloud", "gcloud auth login"], ["tailnet", "Tailscale OAuth client", ""],
+  ["openshell", "OpenShell gateway", "openshell gateway login"], ["ssh", "ssh key", ""],
+];
+const PZ_BANDS = { "<5%": 0, "5-10%": 1, "10-15%": 2, "15-20%": 3, ">20%": 4 };
+
+function pzDefaultNode() { const n = pz.nodes; return n ? (n.default || ((n.nodes || [])[0] || {}).name || "") : ""; }
+function pzNode(name) { return ((pz.nodes && pz.nodes.nodes) || []).find((n) => n.name === name); }
+
+async function loadProvNodes(force) {
+  if (pz.loadingNodes || ledger.on !== true || !multiHost()) return;
+  pz.loadingNodes = true;
+  try {
+    pz.nodes = force
+      ? await api("/api/provision/refresh", { method: "POST", headers: { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }, body: JSON.stringify({ what: "nodes" }), timeout: 70000 })
+      : await api("/api/provision/nodes", { timeout: 70000 });
+    pz.nodesErr = "";
+    if (!pz.via || !pzNode(pz.via)) pz.via = pzDefaultNode();
+    const n = pzNode(pz.via);
+    if (n && !pz.region) pz.region = (n.preflight && n.preflight.region) || "";
+  } catch (e) {
+    pz.nodesErr = e.message || "failed";
+    if (e.code === "csrf") { pz.nodes = null; }
+  } finally { pz.loadingNodes = false; }
+  if (prs.route && prs.route.tab === "prices") loadProvCatalog(false);
+  renderPeers();
+}
+
+function pzCatPath(extra) {
+  const q = new URLSearchParams({ kind: "aws", via: pz.via, region: pz.region });
+  if (pz.small) q.set("small", "1");
+  if (extra) for (const [k, v] of Object.entries(extra)) q.set(k, v);
+  return "/api/provision/catalog?" + q;
+}
+
+async function loadProvCatalog(force) {
+  const n = pzNode(pz.via);
+  if (!n || !pz.region) return;
+  const key = [pz.via, pz.region, pz.small].join("|");
+  if (!force && pz.catKey === key && pz.cat && Date.now() - pz.cat._at < 60000) return;
+  if (pz.loading && pz.loadingKey === key) return; // already asking this very question
+  const seq = ++pz.seq; // an answer to a question the user has moved on from is dropped
+  pz.loading = true; pz.loadingKey = key; pz.catErr = "";
+  renderPeers();
+  let res = null, err = null;
+  try {
+    res = force
+      ? await api("/api/provision/refresh", { method: "POST", headers: { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }, body: JSON.stringify({ what: "catalog", via: pz.via, kind: "aws", region: pz.region, small: pz.small }), timeout: 170000 })
+      : await api(pzCatPath(), { timeout: 170000 });
+  } catch (e) { err = e; }
+  if (seq !== pz.seq) return;
+  if (res) { res._at = Date.now(); pz.cat = res; pz.catKey = key; }
+  else {
+    pz.catErr = err.code === "too_soon" ? "Prices were refreshed a moment ago: wait a few seconds." : err.code === "creds_expired" ? "creds_expired" : (err.message || "failed");
+    if (err.code !== "too_soon") { pz.cat = null; pz.catKey = ""; }
+  }
+  pz.loading = false; pz.loadingKey = "";
+  renderPeers();
+}
+
+async function pzCheckCapacity(type) {
+  pz.scoring = type;
+  renderPeers();
+  try {
+    const d = await api(pzCatPath({ score: type }), { timeout: 170000 });
+    pz.score[pz.via + "|" + pz.region + "|" + type] = (d.catalog && d.catalog.placement) || { scores: [] };
+  } catch (e) { pz.score[pz.via + "|" + pz.region + "|" + type] = { error: e.message || "failed" }; }
+  pz.scoring = "";
+  renderPeers();
+}
+
+function pzMoney(p) { return p == null ? "–" : "$" + (p >= 0.1 ? p.toFixed(3) : p.toFixed(4)); }
+function pzAge(iso) { const t = Date.parse(iso); return Number.isNaN(t) ? "" : fmtAgo(t) + " ago"; }
+
+function pzCredRows(n) {
+  const pf = n.preflight;
+  if (!pf) return `<p class="pz-note warn">${n.state === "offline" ? esc(n.name) + " is offline." : "No answer yet."} ${esc(n.error || "")}</p>`;
+  return `<dl class="pz-creds">${PZ_CREDS.map(([k, label, fix]) => {
+    const c = pf[k] || { state: "error" };
+    const word = ({ ok: "present", missing: "missing", expired: "expired", error: "could not check" })[c.state] || c.state;
+    const hint = c.state === "expired" && fix ? ` On ${esc(n.name)}, run <code>${esc(fix)}</code>.` : "";
+    return `<dt>${esc(label)}</dt><dd class="pz-state ${esc(c.state)}">${esc(word)}</dd><dd class="pz-note">${esc(c.note || "")}${hint}</dd>`;
+  }).join("")}</dl>`;
+}
+
+function pzSortRows(rows) {
+  const by = {
+    price: (a, b) => (a.estimate_spot_usd_hour ?? 9e9) - (b.estimate_spot_usd_hour ?? 9e9),
+    ondemand: (a, b) => (a.on_demand_usd_hour ?? 9e9) - (b.on_demand_usd_hour ?? 9e9),
+    vcpu: (a, b) => b.vcpu - a.vcpu, memory: (a, b) => b.memory_gib - a.memory_gib,
+    stops: (a, b) => (PZ_BANDS[a.interruption] ?? 9) - (PZ_BANDS[b.interruption] ?? 9),
+  }[pz.sort] || (() => 0);
+  return [...rows].sort((a, b) => (b.selectable - a.selectable) || by(a, b) || a.type.localeCompare(b.type));
+}
+
+function pzRow(r, n) {
+  const open = pz.open === r.type;
+  const spec = `<span class="pz-cell"><span class="pz-lb">vCPU</span>${r.vcpu}</span><span class="pz-cell"><span class="pz-lb">Memory</span>${r.memory_gib} GiB</span><span class="pz-cell"><span class="pz-lb">Arch</span>${esc(r.arch || "?")}</span>`;
+  const prices = `<span class="pz-cell"><span class="pz-lb">Spot from</span>${pzMoney(r.spot_min_usd_hour)}</span><span class="pz-cell"><span class="pz-lb">On-demand</span>${pzMoney(r.on_demand_usd_hour)}</span><span class="pz-cell"><span class="pz-lb">Stops</span>${esc(r.interruption || "–")}</span><span class="pz-cell"><span class="pz-lb">≈ per hour</span><b>${pzMoney(r.estimate_spot_usd_hour)}</b></span>`;
+  const tags = (r.gpus ? `<span class="pz-tag">${r.gpus} GPU</span>` : "") + (r.selectable ? "" : `<span class="pz-tag arm">needs work</span>`);
+  const zones = Object.entries(r.spot_usd_hour || {}).sort().map(([z, p]) => `<span class="pz-zone">${esc(z)} ${pzMoney(p)}</span>`).join("");
+  const sc = pz.score[pz.via + "|" + pz.region + "|" + r.type];
+  const scoreHtml = sc ? (sc.error ? `<span class="pz-note warn">${esc(sc.error)}</span>`
+    : (sc.scores || []).length ? `<div class="pz-zones" aria-label="Capacity score by zone, 1 to 10">${sc.scores.map((z) => `<span class="pz-zone">${esc(z.zone_id)} · ${z.score}/10</span>`).join("")}</div>` : '<span class="pz-note">No capacity score came back.</span>') : "";
+  const detail = open ? `<div class="pz-detail">
+      <div><div class="pz-note">Spot price per zone (the market price, up to on-demand; not a bid)</div><div class="pz-zones">${zones || '<span class="pz-note">No spot price.</span>'}</div></div>
+      <div><button type="button" class="btn" data-pz-score="${escAttr(r.type)}"${pz.scoring ? " disabled" : ""}>${pz.scoring === r.type ? "Checking…" : "Check capacity"}</button>
+      <span class="pz-note"> AWS's score for getting one ${esc(r.type)}, by zone id (10 is best).</span></div>${scoreHtml}
+      ${r.note ? `<div class="pz-note warn">${esc(r.note)}</div>` : ""}</div>` : "";
+  return `<div class="pz-item${r.selectable ? "" : " off"}"><button type="button" class="pz-row" data-pz-type="${escAttr(r.type)}" aria-expanded="${open}">
+    <span class="pz-type">${esc(r.type)}${tags}</span>${spec}${prices}</button>${detail}</div>`;
+}
+
+function renderPrices() {
+  const el = $("pr-prices");
+  let html;
+  if (ledger.on !== true || !multiHost()) html = '<div class="pr-empty">Prices are browsed on a hub with peers.</div>';
+  else if (!pz.nodes) html = `<div class="pr-empty">${pz.nodesErr ? "Could not load: " + esc(pz.nodesErr) : "Loading…"}</div>`;
+  else if (!pz.nodes.enabled) html = `<div class="pz-wrap"><div class="pz-card"><h3>No provisioner</h3><p class="pz-note">No peer here can browse prices yet. Start a peer that holds the cloud login with <code>-provision-config</code> (the worker tool's config), and set <code>COMEBYE_PROVISION_HOST</code> on the hub to make it the default.</p></div></div>`;
+  else {
+    html = pzBody();
+    // Opening the tab, or choosing another node or region, fetches the list.
+    if (!pz.cat && !pz.loading && !pz.catErr && pz.via && pz.region) setTimeout(() => loadProvCatalog(false), 0);
+  }
+  if (el._html !== html) {
+    const keep = document.activeElement && el.contains(document.activeElement) ? document.activeElement.id || document.activeElement.dataset.pzType || document.activeElement.dataset.pzScore : "";
+    const top = el.scrollTop;
+    el._html = html; el.innerHTML = html; el.scrollTop = top;
+    if (keep) {
+      const f = el.querySelector("#" + CSS.escape(keep)) || el.querySelector(`[data-pz-type="${CSS.escape(keep)}"]`) || el.querySelector(`[data-pz-score="${CSS.escape(keep)}"]`);
+      if (f) f.focus({ preventScroll: true });
+    }
+  }
+}
+
+function pzBody() {
+  const nodes = pz.nodes.nodes || [], n = pzNode(pz.via) || nodes[0];
+  const pf = n && n.preflight;
+  const regions = (pf && pf.regions && pf.regions.length ? pf.regions : [pz.region]).filter(Boolean);
+  if (pz.region && !regions.includes(pz.region)) regions.unshift(pz.region);
+  const sel = `<div class="pz-card"><h3>Provisioner</h3><div class="pz-bar">
+    <div class="pz-field"><label for="pz-via">Node</label><select id="pz-via">${nodes.map((x) => `<option value="${escAttr(x.name)}"${x.name === pz.via ? " selected" : ""}>${esc(x.name)}${x.default ? " (default)" : ""}${x.state === "ok" ? "" : " · " + esc(x.state)}</option>`).join("")}</select></div>
+    <div class="pz-field"><label for="pz-region">Region</label><select id="pz-region">${regions.map((r) => `<option value="${escAttr(r)}"${r === pz.region ? " selected" : ""}>${esc(r)}${pf && r === pf.region ? " (this node's own)" : ""}</option>`).join("")}</select></div>
+    <button type="button" class="btn" id="pz-recheck"${pz.loadingNodes ? " disabled" : ""}>${pz.loadingNodes ? "Checking…" : "Recheck"}</button></div>
+    ${n ? pzCredRows(n) : ""}
+    <p class="pz-note">Credentials stay on ${esc(n ? n.name : "the node")}: this page shows only whether each is present. Nothing here creates anything.</p></div>`;
+  let list = "";
+  if (!n) list = "";
+  else if (pz.loading && !pz.cat) list = '<div class="pz-card"><p class="pz-note">Fetching prices from ' + esc(n.name) + '… the first fetch for a region takes about ten seconds.</p></div>';
+  else if (pz.catErr === "creds_expired" && !pz.cat) list = `<div class="pz-card pz-warn"><h3>Prices unavailable</h3><p class="pz-note warn">${esc(n.name)}'s AWS login expired. On ${esc(n.name)}, run <code>aws login</code>, then Recheck.</p></div>`;
+  else if (pz.catErr && !pz.cat) list = `<div class="pz-card pz-warn"><h3>Prices unavailable</h3><p class="pz-note warn">${esc(pz.catErr)}</p><div class="pz-bar"><button type="button" class="btn" id="pz-refresh">Try again</button></div></div>`;
+  else if (pz.cat) list = pzCatalog(n);
+  return `<div class="pz-wrap">${sel}${list}</div>`;
+}
+
+function pzCatalog(n) {
+  const d = pz.cat, c = d.catalog;
+  const stale = d.stale || c.degraded;
+  const expired = (d.stale || "").startsWith("creds_expired") || c.degraded === "creds_expired";
+  const banner = stale ? `<div class="pz-card pz-warn"><p class="pz-note warn">Prices from ${esc(pzAge(d.fetched_at) || "earlier")}: ${expired ? esc(n.name) + "'s AWS login expired. On " + esc(n.name) + ", run <code>aws login</code>, then Refresh." : "the last refresh failed (" + esc((d.stale || c.degraded).replace(/^creds_expired: ?/, "")) + ")."}</p></div>` : "";
+  const rows = pzSortRows(c.rows || []);
+  const src = c.sources || {};
+  const srcLine = ["types", "spot_price", "on_demand", "spot_advisor"].filter((k) => src[k]).map((k) => `${({ types: "types", spot_price: "spot prices", on_demand: "on-demand prices", spot_advisor: "interruption bands" })[k]} ${src[k].state === "missing" ? "unavailable" : pzAge(src[k].fetched_at)}`).join(" · ");
+  const est = c.estimate || {};
+  return `${banner}<div class="pz-card"><h3>Instance types · ${esc(c.region)}</h3>
+    <div class="pz-bar">
+      <div class="pz-field"><label for="pz-sort">Sort by</label><select id="pz-sort">${[["price", "Cheapest (spot, estimated)"], ["ondemand", "Lowest on-demand"], ["vcpu", "Most vCPU"], ["memory", "Most memory"], ["stops", "Fewest interruptions"]].map(([v, l]) => `<option value="${v}"${pz.sort === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+      <label class="pz-check"><input type="checkbox" id="pz-small"${pz.small ? " checked" : ""}>Show small sizes${d.hidden_small ? ` (${d.hidden_small} hidden)` : ""}</label>
+      <button type="button" class="btn" id="pz-refresh"${pz.loading ? " disabled" : ""}>${pz.loading ? "Refreshing…" : "Refresh prices"}</button></div>
+    <p class="pz-note">Hidden by default: under ${d.min_vcpu} vCPU or ${d.min_memory_gib} GiB, too small for an agent host. ≈ per hour is the lowest spot price plus ${pzMoney(est.ipv4_usd_hour)} for the public IPv4 and ${est.disk_gb || 0} GB of disk. Spot is the market price and sessions do not survive a stop. Arm types are listed but cannot be built yet.</p>
+    <div class="pz-head" aria-hidden="true"><span>Type</span><span>vCPU</span><span>Memory</span><span>Arch</span><span>Spot from</span><span>On-demand</span><span>Stops</span><span>≈ per hour</span></div>
+    <div class="pz-list">${rows.map((r) => pzRow(r, n)).join("") || '<p class="pz-note">No sizes match.</p>'}</div>
+    <p class="pz-note">Fetched ${esc(pzAge(d.fetched_at))} through ${esc(n.name)} · ${esc(srcLine)}. "Stops" is AWS's monthly spot interruption band (the public Spot Advisor data; it may be missing).</p></div>`;
+}
+
+function initPrices() {
+  const el = $("pr-prices");
+  el.addEventListener("change", (ev) => {
+    const t = ev.target;
+    if (t.id === "pz-via") { pz.via = t.value; const n = pzNode(pz.via); pz.region = (n && n.preflight && n.preflight.region) || pz.region; pz.cat = null; pz.catKey = ""; pz.open = ""; loadProvCatalog(false); }
+    else if (t.id === "pz-region") { pz.region = t.value; pz.cat = null; pz.catKey = ""; pz.open = ""; loadProvCatalog(false); }
+    else if (t.id === "pz-sort") pz.sort = t.value;
+    else if (t.id === "pz-small") { pz.small = t.checked; loadProvCatalog(false); }
+    else return;
+    renderPeers();
+  });
+  el.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.id === "pz-recheck") loadProvNodes(true);
+    else if (b.id === "pz-refresh") loadProvCatalog(true);
+    else if (b.dataset.pzType) { pz.open = pz.open === b.dataset.pzType ? "" : b.dataset.pzType; renderPeers(); }
+    else if (b.dataset.pzScore) pzCheckCapacity(b.dataset.pzScore);
+  });
 }
 
 /* ---------- Usage: tokens spent by agents ---------- */

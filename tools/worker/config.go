@@ -49,6 +49,9 @@ type Config struct {
 	// AllowedFamilies narrows what `catalog` fetches prices for (aws). Empty
 	// means defaultFamilies.
 	AllowedFamilies []string
+	// AllowedRegions are the regions `catalog` may be asked about (and, later,
+	// the regions a host may be built in). Empty: RegionsAllowed' short default.
+	AllowedRegions []string
 
 	Project     string // GCP project id
 	Zone        string
@@ -379,6 +382,8 @@ func (c *Config) apply(kv map[string]string) error {
 			c.StateDir = expand(v)
 		case "allowed_families":
 			c.AllowedFamilies = splitList(v)
+		case "allowed_regions":
+			c.AllowedRegions = splitList(v)
 		default:
 			return fmt.Errorf("unknown setting %q", k)
 		}
@@ -397,6 +402,35 @@ func splitList(v string) []string {
 		}
 	}
 	return out
+}
+
+// defaultRegions are offered when allowed_regions is not set, besides aws_region.
+var defaultRegions = []string{"us-east-1", "us-east-2", "us-west-2"}
+
+// RegionsAllowed is the regions a caller may pick: allowed_regions, else
+// aws_region and a short list of common ones.
+func (c *Config) RegionsAllowed() []string {
+	if len(c.AllowedRegions) > 0 {
+		return append([]string(nil), c.AllowedRegions...)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range append([]string{c.AWSRegion}, defaultRegions...) {
+		if r != "" && !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func (c *Config) regionAllowed(r string) bool {
+	for _, a := range c.RegionsAllowed() {
+		if a == r {
+			return true
+		}
+	}
+	return false
 }
 
 // validateAgents and validateLLM are split out of Validate.
@@ -487,6 +521,8 @@ func (c *Config) Validate() error {
 		chk(tagRe.MatchString(c.Tag), "bad tag %q (want tag:name)", c.Tag),
 		chk(c.TSAllowLogin == "" || loginRe.MatchString(c.TSAllowLogin), "bad ts_allow_login %q", c.TSAllowLogin),
 		chk(c.HerdrSHA256 == "" || regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(c.HerdrSHA256), "herdr_install_sha256 must be 64 hex digits"),
+		chk(c.regionsValid(), "allowed_regions: every entry must be a region like us-east-1"),
+		chk(c.familiesValid(), "allowed_families: every entry must be a family like t3"),
 		chk(c.BudgetCapUSD >= 0 && c.BudgetCapUSD <= 10000, "budget_cap_usd must be 0..10000"),
 		chk(c.DestroyAfterHours >= 0 && c.DestroyAfterHours <= 8760, "destroy_after_hours must be 0..8760"),
 		chk(c.HubVersion == "" || versionRe.MatchString(c.HubVersion), "hub_version %q is not a release tag like v0.3.0", c.HubVersion),
@@ -675,4 +711,22 @@ func (c *Config) validateProvider(chk func(bool, string, ...any) error) error {
 		return fmt.Errorf("provider %q: want gcp, aws or openshell", c.Provider)
 	}
 	return nil
+}
+
+func (c *Config) regionsValid() bool {
+	for _, r := range c.AllowedRegions {
+		if !regionRe.MatchString(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Config) familiesValid() bool {
+	for _, f := range c.AllowedFamilies {
+		if !familyRe.MatchString(f) {
+			return false
+		}
+	}
+	return true
 }

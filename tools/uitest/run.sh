@@ -131,6 +131,8 @@ for _ in $(seq 50); do curl -sf "http://127.0.0.1:$pport/api/agents" >/dev/null 
 PANEL_HOME="$pdir" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-panel" node sidepanel.mjs "http://127.0.0.1:$pport" "$out" || rc=1
 # The Peers screen and the host defaults: real servers (a hub, a peer, a peer that is down) on the same fake herdr.
 FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node peers.mjs "$out" || rc=1
+# Adding a host, slice 1: a hub with a default provisioner (a peer running a stand-in for the worker tool) and the price browser.
+FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provision.mjs "$out" || rc=1
 # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
 FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1
 exit $rc
