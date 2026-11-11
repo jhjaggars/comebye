@@ -179,6 +179,46 @@ for (const width of [1440, 390]) {
     await page.waitForFunction(() => /fresh-untracked\.txt/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 9000 });
   });
 
+  await check(`${tag}: a file skipped for size says why and a Load button fetches it; the change set over the total cap does the same, hand-written files first`, async () => {
+    const line = "0123456789abcdef0123456789abcdef0123\n";
+    w("bigfile.txt", line.repeat(2000));                                    // ~74 KB: over the per-file cap
+    for (let i = 0; i < 24; i++) w(`vendor/pkg/g${String(i).padStart(2, "0")}.txt`, line.repeat(1000)); // ~37 KB each, ~880 KB: over the total
+    w("late-handwritten.go", "package late\n\nvar Late = 1 // hand-written-marker\n");
+    try {
+      await page.waitForFunction(() => /Not loaded: the change set is large/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 12000 });
+      const big = page.locator('#sp-body details.df[data-key$="|bigfile.txt"]');
+      if (!(await big.evaluate((e) => e.open))) await big.locator("summary").click();
+      const txt = await body().innerText();
+      if (!/Too big for the panel \(\d+ KB, 2000 lines\)/.test(txt)) throw new Error("no per-file reason:\n" + txt.slice(0, 600));
+      if (!/files? not loaded: the change set is large \(over 768 KB\)/.test(txt)) throw new Error("no note");
+      if (/Too big to show here/.test(txt)) throw new Error("the old vague message is back");
+      // the hand-written file kept its text although it is listed after the vendored ones
+      const late = page.locator('#sp-body details.df[data-key$="|late-handwritten.go"]');
+      if (!(await late.locator(".ln.add").count())) throw new Error("the hand-written file lost the budget to generated ones");
+      // vendored files start collapsed
+      const v = page.locator('#sp-body details.df[data-key$="|vendor/pkg/g23.txt"]');
+      if (await v.evaluate((e) => e.open)) throw new Error("a generated file starts open");
+      await v.locator("summary").click();
+      const btn = v.locator("button.ld");
+      if (!(await btn.isVisible())) throw new Error("no Load diff button");
+      await noOverflow("load placeholder");
+      await page.screenshot({ path: `${out}/sidepanel-load-before-${tag}.png` });
+      if (desk) { await page.setViewportSize({ width: 1280, height: 900 }); await page.screenshot({ path: `${out}/sidepanel-load-before-1280.png` }); await page.setViewportSize({ width, height: 900 }); }
+      await btn.click();
+      await v.locator(".ln.add").first().waitFor({ timeout: 8000 });
+      if ((await v.locator(".ln.add").count()) !== 1000) throw new Error("loaded " + (await v.locator(".ln.add").count()) + " lines");
+      await big.locator("button.ld").click();
+      await big.locator(".ln.add").first().waitFor({ timeout: 8000 });
+      await noOverflow("loaded diff");
+      await page.screenshot({ path: `${out}/sidepanel-load-after-${tag}.png` });
+      if (desk) { await page.setViewportSize({ width: 1280, height: 900 }); await page.screenshot({ path: `${out}/sidepanel-load-after-1280.png` }); await page.setViewportSize({ width, height: 900 }); }
+    } finally {
+      fs.rmSync(path.join(wt, "vendor"), { recursive: true, force: true });
+      for (const f of ["bigfile.txt", "late-handwritten.go"]) fs.rmSync(path.join(wt, f), { force: true });
+    }
+    await page.waitForFunction(() => !/vendor\/pkg|bigfile/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 12000 });
+  });
+
   await check(`${tag}: files collapse one by one and all at once, and the list of files jumps to one`, async () => {
     if (/Expand all/.test(await page.locator("#sp-fold").innerText())) await page.locator("#sp-fold").click();
     await page.locator("#sp-fold").click();

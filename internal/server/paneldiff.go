@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -34,6 +35,8 @@ const (
 	panelFileCap = 48 << 10
 	// panelTotalCap is the most diff text one answer carries.
 	panelTotalCap = 768 << 10
+	// panelLoadCap is the most diff text one "Load diff" fetch returns.
+	panelLoadCap = 1 << 20
 	// panelMaxFiles is the most files listed per section.
 	panelMaxFiles = 300
 	// panelGitRead is the most output read from one git command.
@@ -56,10 +59,19 @@ type panelFile struct {
 	Del    int    `json:"del"`
 	Binary bool   `json:"binary,omitempty"`
 	// Withheld says why the contents are not here (a secret file); Lines is
-	// then the size of the change. TooBig: over the per-file or total cap.
+	// then the size of the change. TooBig: the text is not here; Skip says
+	// why: "size" (over the per-file cap), "total" (the answer's budget was
+	// spent on other files) or "load" (over even the one-off cap of a fetch).
+	// Bytes is the size of the diff text, 0 when not known. Both kinds can be
+	// fetched on their own (GET <agent>/diff?file=).
 	Withheld string `json:"withheld,omitempty"`
 	TooBig   bool   `json:"too_big,omitempty"`
+	Skip     string `json:"skip,omitempty"`
+	Bytes    int    `json:"bytes,omitempty"`
 	Lines    int    `json:"lines,omitempty"`
+	// Generated marks output that is not hand-written (see generatedPath):
+	// it is served last when the budget runs out and starts collapsed.
+	Generated bool `json:"generated,omitempty"`
 	// Redacted counts the secrets replaced in Diff.
 	Redacted int `json:"redacted,omitempty"`
 	// Diff holds the hunks (from the first @@), "" when withheld or too big.
@@ -267,39 +279,89 @@ func splitDiff(raw []byte) []panelFile {
 	return files
 }
 
-// shapeFiles applies the secret rules and the size caps to files; *total is
-// the diff text already carried. It returns the count of secrets replaced.
-func shapeFiles(files []panelFile, total *int, note *string) (redacted int) {
-	if len(files) > panelMaxFiles {
-		*note = "only the first " + strconv.Itoa(panelMaxFiles) + " files of a section are listed"
-		files = files[:panelMaxFiles]
+// generatedPath reports whether a path is machine output that people rarely
+// read line by line: generated code, vendored code, CRD manifests, lock files
+// and the like. They spend the answer's size budget last and start collapsed.
+func generatedPath(p string) bool {
+	p = strings.ToLower(filepath.ToSlash(p))
+	b := path.Base(p)
+	switch {
+	case strings.Contains(p, "zz_generated"), strings.Contains(b, ".generated."), strings.HasSuffix(b, "_generated.go"),
+		strings.HasSuffix(b, ".pb.go"), strings.HasSuffix(b, ".pb.gw.go"), strings.HasSuffix(b, "_gen.go"), strings.HasSuffix(b, ".gen.go"),
+		strings.HasSuffix(b, ".min.js"), strings.HasSuffix(b, ".min.css"), strings.HasSuffix(b, ".map"),
+		b == "go.sum", b == "package-lock.json", b == "yarn.lock", b == "pnpm-lock.yaml", b == "cargo.lock", b == "poetry.lock",
+		strings.HasSuffix(p, "docs/content/reference/aggregated-docs.md"):
+		return true
 	}
-	for i := range files {
-		f := &files[i]
-		lines := f.Add + f.Del
-		switch {
-		case secretFileName(f.Path) != "":
-			f.Withheld, f.Lines, f.Diff = secretFileName(f.Path), lines, ""
-		case f.Binary:
-			f.Diff = ""
-		case len(f.Diff) > panelFileCap:
-			f.TooBig, f.Lines, f.Diff = true, strings.Count(f.Diff, "\n")+1, ""
-		case *total+len(f.Diff) > panelTotalCap:
-			f.TooBig, f.Lines, f.Diff = true, strings.Count(f.Diff, "\n")+1, ""
-			*note = "the diff is large: some files are listed without their text"
-		default:
-			var n int
-			f.Diff, n = redactDiff(f.Diff)
-			f.Redacted = n
-			redacted += n
-			*total += len(f.Diff)
+	for _, seg := range strings.Split(path.Dir(p), "/") {
+		switch seg {
+		case "vendor", "node_modules", "generated", "crds":
+			return true
 		}
+	}
+	return false
+}
+
+// shapeFile applies the secret rules and a cap to one file. total is the diff
+// text already carried and budget the most the answer may carry (0: no limit).
+// It returns the secrets replaced.
+func shapeFile(f *panelFile, total *int, budget, fileCap int) (redacted int) {
+	lines := f.Add + f.Del
+	f.Generated = generatedPath(f.Path)
+	switch {
+	case secretFileName(f.Path) != "":
+		f.Withheld, f.Lines, f.Diff = secretFileName(f.Path), lines, ""
+	case f.Binary:
+		f.Diff = ""
+	case len(f.Diff) > fileCap:
+		f.TooBig, f.Skip, f.Bytes, f.Lines, f.Diff = true, "size", len(f.Diff), strings.Count(f.Diff, "\n")+1, ""
+	case budget > 0 && *total+len(f.Diff) > budget:
+		f.TooBig, f.Skip, f.Bytes, f.Lines, f.Diff = true, "total", len(f.Diff), strings.Count(f.Diff, "\n")+1, ""
+	default:
+		var n int
+		f.Diff, n = redactDiff(f.Diff)
+		f.Redacted = n
+		redacted += n
+		*total += len(f.Diff)
 	}
 	return redacted
 }
 
+// shapeAll shapes every file of every section. The budget goes to the files
+// people read first: hand-written before generated, then in the order shown
+// (sections as listed, files as listed). The lists keep their order.
+func shapeAll(secs []panelSection) (redacted, skipped int) {
+	type ref struct{ s, i int }
+	var hand, gen []ref
+	for si := range secs {
+		for i := range secs[si].Files {
+			if generatedPath(secs[si].Files[i].Path) {
+				gen = append(gen, ref{si, i})
+			} else {
+				hand = append(hand, ref{si, i})
+			}
+		}
+	}
+	total := 0
+	for _, r := range append(hand, gen...) {
+		f := &secs[r.s].Files[r.i]
+		if f.TooBig { // untrackedFile already set it aside
+			f.Generated = generatedPath(f.Path)
+			continue
+		}
+		redacted += shapeFile(f, &total, panelTotalCap, panelFileCap)
+		if f.Skip == "total" {
+			skipped++
+		}
+	}
+	return redacted, skipped
+}
+
 // untrackedFile builds an all-added entry for a file git does not track.
-func untrackedFile(top, rel string) panelFile {
+func untrackedFile(top, rel string) panelFile { return untrackedFileCap(top, rel, panelFileCap) }
+
+// untrackedFileCap is untrackedFile with its own size cap.
+func untrackedFileCap(top, rel string, fileCap int) panelFile {
 	f := panelFile{Path: rel, Status: "untracked"}
 	abs := filepath.Join(top, filepath.FromSlash(rel))
 	fi, err := os.Lstat(abs)
@@ -333,7 +395,7 @@ func untrackedFile(top, rel string) panelFile {
 		line, err := r.ReadString('\n')
 		if line != "" {
 			n++
-			if !secret && sb.Len() <= panelFileCap {
+			if !secret && sb.Len() <= fileCap {
 				sb.WriteString("+" + strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r") + "\n")
 			}
 		}
@@ -345,8 +407,8 @@ func untrackedFile(top, rel string) panelFile {
 	switch {
 	case secret:
 		f.Withheld, f.Lines = secretFileName(rel), n
-	case sb.Len() > panelFileCap:
-		f.TooBig, f.Lines = true, n
+	case sb.Len() > fileCap:
+		f.TooBig, f.Skip, f.Bytes, f.Lines = true, "size", int(fi.Size())+n, n
 	default:
 		f.Diff = "@@ -0,0 +1," + strconv.Itoa(n) + " @@\n" + strings.TrimSuffix(sb.String(), "\n")
 	}
@@ -377,7 +439,6 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 		panelCacheDrop(top)
 	}
 	d.Branch, _ = runGit(ctx, top, "rev-parse", "--abbrev-ref", "HEAD")
-	total := 0
 	var note string
 	section := func(key, title string, args ...string) {
 		out, trunc, err := panelGit(ctx, top, panelGitRead, append([]string{"diff", "--no-color", "--no-ext-diff", "-M", "--src-prefix=a/", "--dst-prefix=b/"}, args...)...)
@@ -392,8 +453,8 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 			files = files[:len(files)-1]
 			note = "the diff is large: some files are not listed"
 		}
-		d.Redacted += shapeFiles(files, &total, &note)
 		if len(files) > panelMaxFiles {
+			note = "only the first " + strconv.Itoa(panelMaxFiles) + " files of a section are listed"
 			files = files[:panelMaxFiles]
 		}
 		d.Sections = append(d.Sections, panelSection{Key: key, Title: title, Files: files})
@@ -416,22 +477,6 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 		if skipped > 0 {
 			note = strconv.Itoa(skipped) + " more untracked files are not shown"
 		}
-		// Untracked files go through the same caps and redaction as the rest.
-		for i := range files {
-			f := &files[i]
-			if f.Diff == "" {
-				continue
-			}
-			if total+len(f.Diff) > panelTotalCap {
-				f.TooBig, f.Lines, f.Diff = true, strings.Count(f.Diff, "\n")+1, ""
-				note = "the diff is large: some files are listed without their text"
-				continue
-			}
-			var n int
-			f.Diff, n = redactDiff(f.Diff)
-			f.Redacted, d.Redacted = n, d.Redacted+n
-			total += len(f.Diff)
-		}
 		d.Sections = append(d.Sections, panelSection{Key: "untracked", Title: "Untracked", Files: files})
 	}
 	// Commits since the base.
@@ -447,6 +492,11 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 		if len(d.Commits) > 0 {
 			section("commits", "Commits since "+base, mb, "HEAD")
 		}
+	}
+	redacted, skipped := shapeAll(d.Sections)
+	d.Redacted += redacted
+	if skipped > 0 && note == "" {
+		note = strconv.Itoa(skipped) + " " + plural(skipped, "file", "files") + " not loaded: the change set is large (over " + strconv.Itoa(panelTotalCap>>10) + " KB). Each has a Load diff button."
 	}
 	d.Note = note
 	seen := map[string]bool{}
@@ -490,4 +540,75 @@ func panelSig(d *panelDiff) string {
 	b, _ := json.Marshal(d)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:8])
+}
+
+// panelFileOf is the "Load diff" fetch: one file of one section, read again
+// with the one-off cap (panelLoadCap) and the same secret rules and redaction
+// as the whole answer. old is the file's former path when it was renamed.
+// An error has the HTTP status and code to answer with.
+func panelFileOf(ctx context.Context, dir, section, file, old string) (panelFile, *fileErr) {
+	clean := func(p string) bool {
+		p = filepath.ToSlash(p)
+		return p != "" && !strings.HasPrefix(p, "/") && !strings.ContainsRune(p, 0) && !strings.HasPrefix(p, ":") &&
+			path.Clean(p) == p && p != "." && p != ".." && !strings.HasPrefix(p, "../")
+	}
+	if !clean(file) || (old != "" && !clean(old)) {
+		return panelFile{}, ferr(http.StatusBadRequest, "bad_path", "not a path inside the checkout")
+	}
+	top, _, _, err := gitDirs(ctx, dir)
+	if err != nil {
+		return panelFile{}, ferr(http.StatusNotFound, "not_git", "this directory is not a git checkout")
+	}
+	gone := ferr(http.StatusNotFound, "no_change", "this file has no change here any more")
+	lit := func(p string) string { return ":(top,literal)" + p }
+	var f panelFile
+	switch section {
+	case "untracked":
+		out, _, err := panelGit(ctx, top, 4<<20, "ls-files", "--others", "--exclude-standard", "-z", "--", lit(file))
+		if err != nil || strings.TrimRight(string(out), "\x00") != file {
+			return panelFile{}, gone
+		}
+		f = untrackedFileCap(top, file, panelLoadCap)
+	case "unstaged", "staged", "commits":
+		args := []string{"diff", "--no-color", "--no-ext-diff", "-M", "--src-prefix=a/", "--dst-prefix=b/"}
+		switch section {
+		case "staged":
+			args = append(args, "--cached")
+		case "commits":
+			_, mb := panelBase(ctx, top)
+			if mb == "" {
+				return panelFile{}, gone
+			}
+			args = append(args, mb, "HEAD")
+		}
+		args = append(args, "--", lit(file))
+		if old != "" && old != file {
+			args = append(args, lit(old))
+		}
+		out, trunc, err := panelGit(ctx, top, panelLoadCap*4, args...)
+		if err != nil {
+			return panelFile{}, ferr(http.StatusBadGateway, "git_failed", "git could not read this file's diff")
+		}
+		files := splitDiff(out)
+		for i := range files {
+			if files[i].Path == file {
+				f = files[i]
+				break
+			}
+		}
+		if f.Path == "" {
+			return panelFile{}, gone
+		}
+		if trunc {
+			f.Diff = strings.Repeat("x", panelLoadCap+1) // over the read limit: shapeFile calls it too big
+		}
+	default:
+		return panelFile{}, ferr(http.StatusBadRequest, "bad_section", "unknown section")
+	}
+	total := 0
+	shapeFile(&f, &total, 0, panelLoadCap)
+	if f.TooBig {
+		f.Skip = "load"
+	}
+	return f, nil
 }

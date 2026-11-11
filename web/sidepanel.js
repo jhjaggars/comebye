@@ -35,6 +35,10 @@
     diffAt: 0,
     closed: new Set(), // collapsed files (section|path)
     opened: new Set(), // files opened by the user although they started collapsed
+    known: new Set(),  // files already seen (so a generated file starts collapsed once, not on every poll)
+    loaded: new Map(), // "Load diff" answers: section|path -> the file, in full
+    loading: new Set(), // fetches in flight
+    loadErr: new Map(), // section|path -> why a fetch failed
     busy: false,
     again: false,      // a click arrived while a load was in flight: run it when that one ends
   };
@@ -149,7 +153,7 @@
     if (id === st.id) return;
     stop();
     st.id = id;
-    Object.assign(st, { pick: null, doc: null, pin: null, pinSeen: "", list: null, docErr: "", diff: null, diffErr: "", closed: new Set(), opened: new Set() });
+    Object.assign(st, { pick: null, doc: null, pin: null, pinSeen: "", list: null, docErr: "", diff: null, diffErr: "", closed: new Set(), opened: new Set(), known: new Set(), loaded: new Map(), loading: new Set(), loadErr: new Map() });
     const det = $("detail");
     if (!id) { st.open = false; det.classList.remove("sp-open"); $("sp-btn").hidden = true; return; }
     const m = recall();
@@ -198,6 +202,11 @@
         const files = (d.sections || []).reduce((n, s) => n + s.files.length, 0);
         if (files > 8) for (const s of d.sections) for (const f of s.files) st.closed.add(s.key + "|" + f.path);
       }
+      for (const s of d.sections) for (const f of s.files) { // generated files start collapsed, once
+        const k = s.key + "|" + f.path;
+        if (!st.known.has(k)) { st.known.add(k); if (f.generated) st.closed.add(k); }
+      }
+      refreshLoaded(a, id);
       renderBar();
       renderBody();
     } catch (e) {
@@ -249,6 +258,45 @@
     const s = Math.max(0, Math.round((Date.now() - t) / 1000));
     return s < 5 ? "just now" : s < 60 ? s + " s ago" : s < 3600 ? Math.round(s / 60) + " min ago" : Math.round(s / 3600) + " h ago";
   };
+
+  // ---- "Load diff": one file the panel left out, fetched on its own ----
+  const findFile = (key) => {
+    const [sec, ...rest] = key.split("|"), p = rest.join("|");
+    const s = st.diff && st.diff.sections.find((x) => x.key === sec);
+    return s ? s.files.find((x) => x.path === p) : null;
+  };
+  async function loadFile(key) {
+    const a = agentById(st.id), id = st.id, f = findFile(key);
+    if (!a || !f || st.loading.has(key)) return;
+    const sec = key.split("|")[0];
+    st.loading.add(key); st.loadErr.delete(key);
+    renderBody({ keepScroll: true });
+    try {
+      const q = new URLSearchParams({ file: f.path, section: sec });
+      if (f.old_path) q.set("old", f.old_path);
+      const r = await api(`${agentPath(a)}/diff?${q}`);
+      if (id !== st.id) return;
+      st.loaded.set(key, r.file);
+    } catch (e) {
+      if (id !== st.id) return;
+      st.loadErr.set(key, e.message || "could not load this file");
+    } finally {
+      if (id === st.id) { st.loading.delete(key); renderBody({ keepScroll: true }); }
+    }
+  }
+  // The checkout changed: what was loaded is read again (the old text stays until the new arrives).
+  function refreshLoaded(a, id) {
+    for (const key of [...st.loaded.keys()]) {
+      const f = findFile(key);
+      if (!f || !f.too_big) { st.loaded.delete(key); continue; }
+      const sec = key.split("|")[0], q = new URLSearchParams({ file: f.path, section: sec });
+      if (f.old_path) q.set("old", f.old_path);
+      api(`${agentPath(a)}/diff?${q}`).then((r) => {
+        if (id === st.id && st.loaded.has(key)) { st.loaded.set(key, r.file); renderBody({ keepScroll: true }); }
+      }).catch(() => {});
+    }
+  }
+  const kb = (n) => n >= 1024 * 1024 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
 
   function renderBar() {
     const bar = $("sp-bar");
@@ -447,15 +495,28 @@
         s.files.map((f) => fileHtml(s.key, f)).join("")}</section>`).join("");
   }
 
-  function fileHtml(sec, f) {
-    const key = sec + "|" + f.path;
+  // The placeholder for a file whose text is not here, with the true reason.
+  function skippedHtml(key, f) {
+    const size = (f.bytes ? kb(f.bytes) + ", " : "") + f.lines + " lines";
+    const err = st.loadErr.get(key) ? ` <span class="err">${esc(st.loadErr.get(key))}</span>` : "";
+    const busy = st.loading.has(key);
+    const btn = (label) => `<button type="button" class="ld" data-load="${escAttr(key)}"${busy ? " disabled" : ""}>${busy ? "Loading…" : label}</button>`;
+    if (f.skip === "total") return `<div class="ph">Not loaded: the change set is large (over ${panelTotalKB} KB). ${size}. ${btn("Load diff")}${err}</div>`;
+    if (f.skip === "load") return `<div class="ph">Too big to show even when loaded: ${size}.</div>`;
+    return `<div class="ph">Too big for the panel (${size}). ${btn("Load anyway")}${err}</div>`;
+  }
+  const panelTotalKB = 768;
+
+  function fileHtml(sec, f0) {
+    const key = sec + "|" + f0.path;
+    const f = f0.too_big && st.loaded.has(key) ? st.loaded.get(key) : f0; // the fetched file replaces the placeholder whole
     const open = !st.closed.has(key);
     const tag = f.status === "added" || f.status === "untracked" ? `<span class="tg nw">${f.status === "added" ? "new" : "untracked"}</span>`
       : f.status === "deleted" ? '<span class="tg dd">deleted</span>' : f.status === "renamed" ? '<span class="tg rn">renamed</span>' : "";
     let inner;
     if (f.withheld) inner = `<div class="ph">Contents withheld (${esc(f.withheld)}): ${f.lines} changed line${f.lines === 1 ? "" : "s"}.</div>`;
     else if (f.binary) inner = `<div class="ph">Binary file.</div>`;
-    else if (f.too_big) inner = `<div class="ph">Too big to show here: ${f.lines} lines.</div>`;
+    else if (f.too_big) inner = skippedHtml(key, f);
     else if (!f.diff) inner = `<div class="ph">No text changes.</div>`;
     else inner = parseHunks(f.diff).map((h, j) => `<div class="hk"><span>${esc(h.head)}</span><button type="button" data-send="${escAttr(key)}:${j}">Send to agent</button></div><div class="code">${
       h.rows.map((r) => r.t === "\\" ? `<div class="ln nl"><i></i><i></i><b>${esc(r.s)}</b></div>`
@@ -473,6 +534,8 @@
     body.addEventListener("click", (e) => {
       const cite = e.target.closest("[data-act=cite]");
       if (cite) { const h = st.pin && findHeading(st.pin.section); if (h) jumpTo(h); return; }
+      const ld = e.target.closest("[data-load]");
+      if (ld) { loadFile(ld.dataset.load); return; }
       const send = e.target.closest("[data-send]");
       if (send) sendHunk(send.dataset.send);
     });
@@ -492,7 +555,8 @@
     const i = ref.lastIndexOf(":");
     const key = ref.slice(0, i), j = +ref.slice(i + 1);
     const [sec, ...rest] = key.split("|");
-    const f = st.diff && st.diff.sections.filter((s) => s.key === sec).flatMap((s) => s.files).find((x) => x.path === rest.join("|"));
+    const f0 = st.diff && st.diff.sections.filter((s) => s.key === sec).flatMap((s) => s.files).find((x) => x.path === rest.join("|"));
+    const f = f0 && st.loaded.has(key) ? st.loaded.get(key) : f0;
     const h = f && f.diff ? parseHunks(f.diff)[j] : null;
     if (!h) return;
     const txt = `About this change in ${f.path} (${h.head.replace(/ @@.*/, " @@")}):\n` + h.rows.map((r) => (r.t === "\\" ? "\\ " : r.t) + r.s).join("\n") + "\n\n";

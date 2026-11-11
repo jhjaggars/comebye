@@ -19,6 +19,7 @@ import (
 // The browser (or the agent itself, for its own) asks the hub:
 //
 //	GET /api/[hosts/H/]agents/T/diff   per-file diffs of the agent's checkout
+//	                                   (?file=P&section=S: one file, with a bigger cap)
 //	GET /api/[hosts/H/]agents/T/file   its pinned document, a file it names,
 //	                                   or (?list=1) the documents it may pick
 //	POST /api/show                     `comebye show`: declare / clear the doc
@@ -79,8 +80,10 @@ func (s *Server) handlePanelDiff(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	q := url.Values{"dir": {agentDir(a)}}
-	if v := r.URL.Query().Get("since"); v != "" {
-		q.Set("since", v)
+	for _, k := range []string{"since", "file", "section", "old"} {
+		if v := r.URL.Query().Get(k); v != "" {
+			q.Set(k, v)
+		}
 	}
 	status, out := s.panelCall(ctx, host, "diff", q)
 	writeJSONStatus(w, status, out)
@@ -154,6 +157,13 @@ func (s *Server) panelRun(ctx context.Context, op string, q url.Values) (int, ma
 		d, ok := realDir(dir)
 		if !ok || !(withinHome(d) || withinAny(d, s.checkRoots())) {
 			return fail(ferr(http.StatusNotFound, "no_dir", "this agent's directory is not readable here"))
+		}
+		if q.Get("file") != "" { // "Load diff": one file, with the one-off cap
+			f, e := panelFileOf(ctx, d, q.Get("section"), q.Get("file"), q.Get("old"))
+			if e != nil {
+				return fail(e)
+			}
+			return http.StatusOK, map[string]any{"file": toMap(f)}
 		}
 		return http.StatusOK, toMap(panelDiffOf(ctx, d, q.Get("since")))
 	case "file":
