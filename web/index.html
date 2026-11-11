@@ -19,6 +19,16 @@
        var() of those tokens only. themes.js sets data-theme on <html> before first paint. */
     :root {
       color-scheme: dark;
+      /* Design tokens (docs/design-tokens.md). Colour tokens live in themes.js; these are the
+         non-colour scales. CSS uses var() of them for padding, margin, gap, border-radius and
+         font-size; tools/uitest/tokens.mjs fails if a new off-scale value is added. */
+      --sp-2: 2px; --sp-4: 4px; --sp-6: 6px; --sp-8: 8px; --sp-10: 10px; --sp-12: 12px;
+      --sp-14: 14px; --sp-16: 16px; --sp-20: 20px; --sp-24: 24px; --sp-32: 32px;
+      --r-2: 2px; --r-4: 4px; --r-6: 6px; --r-8: 8px; --r-10: 10px; --r-12: 12px; --r-14: 14px; --r-16: 16px; --r-pill: 999px;
+      --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px; --fs-15: 15px; --fs-16: 16px;
+      --fs-18: 18px; --fs-20: 20px; --fs-22: 22px; --fs-24: 24px;
+      --hit-32: 32px; --hit-36: 36px; --hit-40: 40px; --hit-44: 44px; --hit-48: 48px; /* touch/click target heights; adopted per component in a later slice */
+      --elev-1: 0 2px 10px var(--sh-md); --elev-2: 0 6px 24px var(--sh-lg);
       --safe-bottom: env(safe-area-inset-bottom, 0px);
       --pg-x: 0px; --pg-y: 0px; --pg-s: 1; /* the Briefings chip's offsets from the visual viewport (pinPager in app.js) */
     }

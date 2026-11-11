@@ -25,6 +25,8 @@ welcome.
   tools/uitest/run.sh
   # every theme in web/themes.js: WCAG AA contrast + all tokens defined
   node tools/uitest/contrast.mjs
+  # spacing, radius and type use the tokens in docs/design-tokens.md; counts may only go down
+  node tools/uitest/tokens.mjs
   ```
 
   CI runs the same checks.
