@@ -28,6 +28,7 @@ function engine(on: any, stdout = RAW, calls: string[][] = [], toasts: string[] 
     toasts.push(JSON.stringify(e))
     return { value: undefined }
   })
+  on('classic.Stop', () => ({}))
   on('process.run', (_: any, e: any) => {
     calls.push(e.argv ?? e)
     return { value: { exitCode: 0, stdout, stderr: '' } }
@@ -90,6 +91,28 @@ test('the guard warns in the band and never blocks', async ($, on) => {
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /gh pr merge/ }))?.text).toContain('needs the user')
   await ui.unmount()
+})
+
+test('the Stop hook asks once for the questions to be filed', async ($, on) => {
+  const calls: string[][] = []
+  const reply = JSON.stringify({ decision: 'block', reason: 'file 2 questions' })
+  engine(on, reply, calls)
+  const base = { transcript_path: '/t.jsonl', last_assistant_message: 'Which one?\n\n1. a\n2. b' }
+  const first: any = await $.classic.Stop({ ...base, stop_hook_active: false })
+  expect(first.block).toBe('file 2 questions')
+  expect(calls.filter(c => c[1] === 'hook' && c[2] === 'stop').length).toBe(1)
+  // The Stop after the reminder (stop_hook_active) and a repeat of the same message: silence, no call.
+  const again: any = await $.classic.Stop({ ...base, stop_hook_active: true })
+  const same: any = await $.classic.Stop({ ...base, stop_hook_active: false })
+  expect(again.block).toBeUndefined()
+  expect(same.block).toBeUndefined()
+  expect(calls.filter(c => c[1] === 'hook').length).toBe(1)
+})
+
+test('the Stop hook says nothing when the CLI has nothing to add', async ($, on) => {
+  engine(on, '')
+  const out: any = await $.classic.Stop({ transcript_path: '/t', last_assistant_message: 'Done.', stop_hook_active: false })
+  expect(out.block).toBeUndefined()
 })
 
 test('splitArgs reads quotes', () => {

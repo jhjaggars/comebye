@@ -23,6 +23,8 @@ comebye mod uninstall                     # only what comebye wrote
 
 **Instant commands**, no model turn; the comebye CLI's output is shown to you: `/todo` (list; `/todo add …`, `/todo show ID`), `/handoff …`, `/show FILE`, `/queue`, `/ledger`, `/brief`. Arguments are split with shell-like quoting and passed as they are, with no shell. Output is cut at 6,000 characters.
 
+**The Stop reminder.** When a turn ends with questions or decisions for the user (`comebye hook stop` reads the last message the way the hub's idle detector does) and the agent did not run `comebye todo add` in that turn, the Stop hook blocks the stop once with a short note listing what it found, so the agent files one To do item per question (choices as `--option`, its pick as `--recommend`) before it stops. The Stop that follows a reminder (`stop_hook_active`) is never blocked, so it cannot loop; a message without questions, a failing `comebye` or a transcript it cannot read gives silence. `comebye hook stop` also works as a plain settings hook (`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"comebye hook stop"}]}]}}`), and is what a Pi extension would call from its end-of-turn event with `{"last_assistant_message": "..."}` on stdin (Pi has no equivalent in this repository; its extension API is outside it).
+
 **The guard** warns, never blocks: a toast and a line in the band for 2 minutes. Intent rules the sandbox cannot see: `git add -A` / `.`, a force-push, `gh pr comment|merge`, and a push to an owner that is not yours (`own_owners`, comma-separated; empty: only a remote named `upstream`). Quoted text is ignored.
 
 ## comebye-coord-window (early access, a coordinator)

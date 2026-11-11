@@ -81,6 +81,33 @@ export const register: Register = (on, options) => {
     return { text: text || '(no output)', isTextDisplayOnly: true }
   })
 
+  // ---- the Stop reminder: questions for the user go to the To do list ----
+  // `comebye hook stop` judges the turn (a question or decision left for the
+  // user, no `comebye todo add` run in it) and answers a block that asks the
+  // agent to file them. It speaks once: the Stop after a block carries
+  // stop_hook_active, and the mod remembers the message it reminded about.
+  let reminded = ''
+  on('classic.Stop', async ($, e, next) => {
+    try {
+      const text = e.last_assistant_message ?? ''
+      if (!e.stop_hook_active && text && text !== reminded) {
+        const r = await $.process.run(['comebye', 'hook', 'stop'], { stdin: JSON.stringify(e), timeoutMs: 10_000 })
+        if (r.exitCode === 0 && r.stdout.trim()) {
+          const out = JSON.parse(r.stdout) as { decision?: string; reason?: string }
+          if (out.decision === 'block' && out.reason) {
+            reminded = text
+
+            return { ...(await next(e)), block: out.reason }
+          }
+        }
+      }
+    } catch {
+      // A reminder that cannot be judged is not given.
+    }
+
+    return next(e)
+  })
+
   // ---- warn-only guard: never denies, never rewrites ----
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     try {
