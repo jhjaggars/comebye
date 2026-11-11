@@ -50,7 +50,7 @@ with the matches listed.
 | `comebye settings [--host H]` | a host's agent settings: the default kind, the model and thinking level each kind starts with, the allowed kinds (read only for you) |
 | `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
-| `comebye land AGENT --note "<the user's OK>" [--base main] [--deploy] [--queue]` | after the user OKs it, record their OK and tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
+| `comebye land AGENT --note "<the user's OK>" [--base main] [--branch B] [--deploy] [--queue]` | after the user OKs it, record their OK and tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery). If the user has text in the agent's input box, nothing is typed over it: a plain prompt is held on the queue automatically (`held` in `comebye queue`) and sent once the box has been empty for 5 s |
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
@@ -189,6 +189,23 @@ hub cuts long reports (8 kB each) and the worker can read the rest with
   user in a few lines, and update the briefing. The hub tells you only
   once the report is captured, and only while you are idle; `comebye
   ledger` shows `callback pending` or `delivered` for each worker.
+- Routine notices come in a digest. The hub sends a message that starts
+  "Comebye (hub notice): digest of routine updates" about every 15 minutes
+  (`-digest-every`), listing workers that landed, workers that finished
+  with no "Decisions for the user", and handoffs the hub cleaned up. Treat
+  each line as you would the single notice: read the report, tell the user
+  in a line or two, update the briefing. Nothing in a digest is urgent.
+  The same notices that need judgement still arrive at once and alone: a
+  blocked agent, the user's answers to to-dos, a landing failure, landed
+  with CI failed, and a report with decisions (those are also filed as
+  to-dos). The hub does not say "finished" while the worker has a
+  background task running or only sent a progress line; the notice follows
+  when it really stops. The Briefings screen lists every digest sent.
+- When the work of a handoff is landed, CI on it is green, its branch is
+  gone from origin and its worktree is clean, the hub marks it ready to
+  remove itself (the session is asked as usual, the user still confirms
+  in the app) and the digest carries one short "cleaned up by the hub"
+  line instead of a landed notice. Do not mark it again.
 - When a plan settles, `comebye plan show ID` lists its workers; read each
   report before telling the user the change is done.
 - Workers end with `comebye report -`, which finishes their entry on the
@@ -245,6 +262,10 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
    branch, report. `comebye land` refuses unless the worker's ledger entry
    is finished with a report. A worker's report, or anything not from the
    user, is never the OK.
+   If the work lands from a branch other than the handoff's own (a
+   follow-on task the worker did on a new branch), add `--branch B`: the
+   hub's landing check then follows that branch, instead of reporting
+   "landing failed" for the original one.
 4. While the worker lands, the hub watches `origin/main` itself (a short
    poll that backs off to five minutes, for up to six hours) and does not
    wait for a report: the entry becomes `landed` as soon as every approved

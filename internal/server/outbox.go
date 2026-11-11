@@ -88,8 +88,11 @@ func (o *outbox) saveLocked() {
 func (o *outbox) add(l outLine) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for _, x := range o.data.Lines {
+	for i, x := range o.data.Lines {
 		if x.Key == l.Key {
+			// A repeat (landed, then CI green) updates the waiting line.
+			o.data.Lines[i].Text = l.Text
+			o.saveLocked()
 			return false
 		}
 	}
@@ -97,6 +100,16 @@ func (o *outbox) add(l outLine) bool {
 		if k == l.Key {
 			return false
 		}
+	}
+	// A cleanup line stands in for the entry's earlier "landed" line.
+	if l.Kind == "cleanup" {
+		kept := o.data.Lines[:0]
+		for _, x := range o.data.Lines {
+			if !(x.Entry == l.Entry && x.Kind == "landed") {
+				kept = append(kept, x)
+			}
+		}
+		o.data.Lines = kept
 	}
 	if len(l.Text) > outboxLineMax {
 		l.Text = l.Text[:outboxLineMax]
@@ -153,7 +166,7 @@ func outboxText(lines []outLine) string {
 		b.WriteString("Comebye (hub notice): " + lines[0].Text)
 		return b.String()
 	}
-	b.WriteString("Comebye (hub notice): routine updates, nothing here needs a reply unless you want to follow up.\n")
+	b.WriteString("Comebye (hub notice): digest of routine updates; nothing here needs a reply unless you want to follow up.\n")
 	for _, l := range lines {
 		b.WriteString("- " + l.Text + "\n")
 	}
@@ -196,14 +209,17 @@ func (s *Server) flushOutbox(agents []herdr.AgentInfo) {
 			return
 		}
 		o.settle(lines)
-		s.recordDigest(lines)
+		s.recordDigest(target.ID, lines)
 	}(*target)
 }
 
-// outboxDue says whether the queued lines go out now.
-func (s *Server) outboxDue(lines []outLine, now time.Time) bool { return true }
-
-// recordDigest keeps what was sent (for the app's history).
-func (s *Server) recordDigest(lines []outLine) {}
+// outboxDue says whether the queued lines go out now: with no digest
+// interval at once, else when the oldest has waited that long.
+func (s *Server) outboxDue(lines []outLine, now time.Time) bool {
+	if s.digestEvery <= 0 {
+		return true
+	}
+	return now.Sub(lines[0].At) >= s.digestEvery
+}
 
 func outboxPath(dir string) string { return filepath.Join(dir, "notice-outbox.json") }

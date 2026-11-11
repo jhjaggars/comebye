@@ -141,6 +141,10 @@ type Config struct {
 	// coordinator must be blocked before the coordinator is told (the
 	// blocked relay, blockedrelay.go). Hub only: it needs the ledger.
 	RelayBlocked time.Duration
+	// DigestEvery is how long routine coordinator notices (landed,
+	// finished with no decisions, cleanup lines) wait to go out together in
+	// one digest; 0 sends each as it comes. Urgent notices are never held.
+	DigestEvery time.Duration
 	// CoordinatorArgs are extra arguments per agent kind that the
 	// Coordinator preset appends to the preset's own (e.g. pi: --auto,
 	// a flag only some Pi installs have).
@@ -226,17 +230,19 @@ type Server struct {
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
 	// brief and roles live next to the ledger (nil when it is).
-	brief      *briefStore
-	pq         *promptQueue
-	todos      *todoStore
-	outbox     *outbox
-	auto       *autoTodo
-	relay      *blockedRelay
-	rel        *relState
-	prov       *provState
-	pages      *pageStore
-	briefSched *briefSchedStore
-	resets     *resetStore
+	brief       *briefStore
+	pq          *promptQueue
+	todos       *todoStore
+	outbox      *outbox
+	digests     *digestStore
+	digestEvery time.Duration
+	auto        *autoTodo
+	relay       *blockedRelay
+	rel         *relState
+	prov        *provState
+	pages       *pageStore
+	briefSched  *briefSchedStore
+	resets      *resetStore
 	// resetPoll and resetWait pace a reset's wait for the new session
 	// (tests shrink them).
 	resetPoll, resetWait time.Duration
@@ -318,6 +324,8 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		} else {
 			s.ledger = l
 			s.outbox = openOutbox(outboxPath(cfg.StateDir))
+			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
+			s.digestEvery = cfg.DigestEvery
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
 			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
 				log.Printf("brief schedule: %v (starting with none)", err)
@@ -506,6 +514,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/brief", s.authAgent(s.handleGetBrief))
 	s.mux.HandleFunc("POST /api/brief", s.authAgent(s.handleSetBrief))
 	s.mux.HandleFunc("GET /api/brief/history", s.auth(s.handleGetBriefHistory))
+	s.mux.HandleFunc("GET /api/digests", s.auth(s.handleGetDigests))
 	s.mux.HandleFunc("GET /api/brief/schedule", s.authAgent(s.handleGetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule", s.authAgent(s.handleSetBriefSchedule))
 	s.mux.HandleFunc("POST /api/brief/schedule/dismiss", s.authAgent(s.handleDismissBriefMiss))

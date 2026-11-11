@@ -2579,7 +2579,7 @@ function editBriefSchedule() {
 // scrolling, of the screen edges (the OS back gestures) and of anything that
 // scrolls sideways itself.
 
-const briefs = { open: false, pushed: false, history: [], histAt: 0, histLoaded: false, inflight: false, openAts: new Set(), sig: "" };
+const briefs = { open: false, pushed: false, history: [], digests: [], histAt: 0, histLoaded: false, inflight: false, openAts: new Set(), sig: "" };
 const BRIEFS_HASH = "#/briefings";
 const BRIEF_SEEN_KEY = "comebye-brief-seen"; // the `at` of the latest briefing seen on the screen
 const SWIPE = { lock: 10, edge: 20, fraction: 0.33, velocity: 0.45 }; // px, px, of the width, px/ms
@@ -2595,6 +2595,10 @@ async function loadBriefHistory() {
     const d = await api("/api/brief/history");
     briefs.history = d && Array.isArray(d.briefs) ? d.briefs.filter((b) => b && typeof b.markdown === "string") : [];
     briefs.histLoaded = true;
+    try {
+      const dg = await api("/api/digests");
+      briefs.digests = dg && Array.isArray(dg.digests) ? dg.digests.filter((x) => x && Array.isArray(x.lines)) : [];
+    } catch { /* an older hub has none */ }
   } catch {
     // Keep what we had.
   } finally {
@@ -2625,13 +2629,24 @@ function briefItem(h) {
     </details>`;
 }
 
+// digestItem is one digest the hub sent the coordinator: the routine
+// notices it batched (landed, finished with no decisions, cleanups).
+function digestItem(d) {
+  const at = Date.parse(d.at);
+  const n = d.lines.length;
+  return `<details class="br-item" data-digest="${esc(d.at)}">
+      <summary><span class="br-when">${esc(Number.isNaN(at) ? "" : fmtAgo(at) + " ago · " + fmtWhen(d.at))}</span><span class="br-pre">${n} routine update${n === 1 ? "" : "s"}</span></summary>
+      <ul class="br-md br-digest">${d.lines.map((l) => `<li>${esc(l.text)}</li>`).join("")}</ul>
+    </details>`;
+}
+
 function renderBriefs() {
   const el = $("br-body");
   if (!el || !briefs.open) return;
   const b = briefing.data && briefing.data.markdown.trim() ? briefing.data : null;
   const miss = briefMiss();
   const earlier = briefs.history.filter((h) => !b || h.at !== b.at);
-  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefChecked(), earlier.map((h) => h.at).join(","), Math.floor(Date.now() / 60000)].join("|");
+  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefChecked(), earlier.map((h) => h.at).join(","), briefs.digests.map((d) => d.at).join(","), Math.floor(Date.now() / 60000)].join("|");
   if (sig === briefs.sig) return;
   briefs.sig = sig;
   const top = el.scrollTop;
@@ -2645,7 +2660,8 @@ function renderBriefs() {
     </section>
     <h3 class="br-h">Earlier</h3>
     ${earlier.length ? earlier.map(briefItem).join("")
-      : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48, at most one per 15 minutes unless the Needs you list changed." : "Loading…"}</p>`}`;
+      : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48, at most one per 15 minutes unless the Needs you list changed." : "Loading…"}</p>`}
+    ${briefs.digests.length ? `<h3 class="br-h">Routine updates sent to the coordinator</h3>${briefs.digests.map(digestItem).join("")}` : ""}`;
   el.scrollTop = top;
   renderStatus();
   if (key) el.querySelector(`[data-bk="${key}"]`)?.focus({ preventScroll: true });

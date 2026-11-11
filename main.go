@@ -122,6 +122,7 @@ func main() {
 		releaseDepLbl = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
 		releaseSim    = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		relayBlocked  = flag.Duration("relay-blocked-after", envDuration("COMEBYE_RELAY_BLOCKED_AFTER", server.DefaultRelayBlocked), "how long an agent that has a coordinator must be blocked at a dialog before the hub tells that coordinator (once, and once more when it clears); 0 turns the relay off. Hub only")
+		digestEvery   = flag.Duration("digest-every", envDuration("COMEBYE_DIGEST_EVERY", 15*time.Minute), "hub: routine notices for the coordinator (a worker landed, finished with no decisions for the user, a handoff the hub cleaned up) wait up to this long and go out together in one digest, also shown in the app's Briefings history; urgent ones (a blocked agent, the user's to-do answers, a landing failure, a report with decisions) always go at once. 0 sends every notice at once")
 		resetTokens   = flag.Int("coordinator-reset-tokens", envInt("COMEBYE_COORDINATOR_RESET_TOKENS", server.DefaultResetTokens), "hub: the context size, in tokens, past which the first briefing after it marks the coordinator's in-place reset due (the hub sends /clear into its pane when it is idle with nothing queued, and a SessionStart hook injects a digest; needs `comebye coordinator install-hook`); 0 turns the automatic reset off. The app's Fresh start works either way")
 		autoTodo      = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on a question past -auto-todo-question-after, filed as a suggestion to keep or dismiss); off for none")
 		autoBlocked   = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
@@ -474,6 +475,7 @@ func main() {
 		SelfRegister:           *selfRegister,
 		HubOnly:                *hubOnly,
 		RelayBlocked:           *relayBlocked,
+		DigestEvery:            *digestEvery,
 		LockErr:                lock.Err,
 	}, client, manager)
 	if allowCap != "" {
