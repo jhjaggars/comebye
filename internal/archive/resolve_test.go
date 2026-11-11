@@ -137,7 +137,7 @@ func TestResolveSquashWithAPR(t *testing.T) {
 	gitDo(t, clone, "commit", "-q", "-m", "Add c (#12)")
 	squash := gitDo(t, clone, "rev-parse", "HEAD")
 	gitDo(t, clone, "push", "-q", "origin", "main")
-	log := fakePRs(t, `[{"number":12,"state":"closed","merged_at":"2026-11-10T10:00:00Z","merge_commit_sha":"`+squash+`","base":{"ref":"main"}}]`)
+	log := fakePRs(t, `[{"number":12,"state":"closed","merged_at":"2026-11-10T10:00:00Z","merge_commit_sha":"`+squash+`","base":{"ref":"main","repo":{"full_name":"acme/widgets"}}}]`)
 
 	// Without --gh git cannot tell: unknown, and it says why.
 	if r := newGit(false).resolve("h", clone, "widgets", nil, a); r.state != "unknown" || !strings.Contains(r.how, "--gh") {
@@ -146,7 +146,7 @@ func TestResolveSquashWithAPR(t *testing.T) {
 	g := newGit(true)
 	for _, sha := range []string{a, b} {
 		r := g.resolve("h", clone, "widgets", nil, sha)
-		if r.state != "landed" || r.pr != "acme/widgets#12" || r.landedAs != squash || !strings.Contains(r.how, "PR #12 merged into main") {
+		if r.state != "landed" || r.pr != "acme/widgets#12" || r.landedAs != squash || !strings.Contains(r.how, "PR acme/widgets#12 merged into main") {
 			t.Fatalf("%s: %+v", sha[:8], r)
 		}
 	}
@@ -194,13 +194,13 @@ func TestResolveOpenPR(t *testing.T) {
 	f := commitFile(t, clone, "d.txt", "d\n", "an open change")
 	fakePRs(t, `[{"number":40,"state":"open","merged_at":"","merge_commit_sha":"","base":{"ref":"main"}}]`)
 	r := newGit(true).resolve("h", clone, "widgets", nil, f)
-	if r.state != "notinmain" || r.pr != "acme/widgets#40" || !strings.Contains(r.how, "is open") {
+	if r.state != "notinmain" || r.pr != "acme/widgets#40" || !strings.Contains(r.how, "PR acme/widgets#40 is open") {
 		t.Fatalf("%+v", r)
 	}
 	// Merged into some other branch is not landing on main.
 	fakePRs(t, `[{"number":41,"state":"closed","merged_at":"2026-11-10T10:00:00Z","merge_commit_sha":"abc","base":{"ref":"release-1"}}]`)
 	r = newGit(true).resolve("h", clone, "widgets", nil, f)
-	if r.state != "unknown" || r.pr != "acme/widgets#41" || !strings.Contains(r.how, "merged into release-1, not main") {
+	if r.state != "unknown" || r.pr != "acme/widgets#41" || !strings.Contains(r.how, "PR acme/widgets#41 merged into release-1, not main") {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -264,5 +264,41 @@ func TestIndexResolvesARebasedCommit(t *testing.T) {
 	pr, err := ix.Query("SELECT patch_id, pr FROM produced WHERE type='commit' AND ref=" + q(f[:10]) + ";")
 	if err != nil || len(pr) != 1 || sget(pr[0], "patch_id") == "" {
 		t.Errorf("the patch-id is kept with the produced row: %v %v", pr, err)
+	}
+}
+
+// GitHub's lookup on a fork answers with the parent's PRs: the PR belongs to the
+// repository of its base, not the remote that was asked. (Found by a spot-check on the
+// real archive: openshift/hypershift#8337 had been recorded as jhjaggars/hypershift#8337.)
+func TestResolvePRBelongsToItsBaseRepository(t *testing.T) {
+	hasGit(t)
+	_, clone := gitWorld(t)
+	gitDo(t, clone, "remote", "add", "upstream", "https://github.com/me/widgets.git")
+	gitDo(t, clone, "checkout", "-q", "-b", "feat")
+	f := commitFile(t, clone, "e.txt", "e\n", "a change in a parent's PR")
+	fakePRs(t, `[{"number":8337,"state":"closed","merged_at":"2026-11-10T10:00:00Z","merge_commit_sha":"abc","base":{"ref":"main","repo":{"full_name":"parent/widgets"}}}]`)
+	r := newGit(true).resolve("h", clone, "widgets", nil, f)
+	if r.state != "landed" || r.pr != "parent/widgets#8337" || !strings.Contains(r.how, "PR parent/widgets#8337 merged into main") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// A commit that was never pushed gets GitHub's 422 "No commit found": say that, not
+// that GitHub could not be asked.
+func TestResolveACommitGitHubNeverHad(t *testing.T) {
+	hasGit(t)
+	_, clone := gitWorld(t)
+	gitDo(t, clone, "remote", "add", "upstream", "https://github.com/me/widgets.git")
+	gitDo(t, clone, "checkout", "-q", "-b", "feat")
+	f := commitFile(t, clone, "g.txt", "g\n", "never pushed")
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho '{\"message\":\"No commit found for SHA: x\",\"status\":\"422\"}'\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := newGit(true).resolve("h", clone, "widgets", nil, f)
+	if r.state != "unknown" || !strings.Contains(r.how, "GitHub has no such commit") {
+		t.Fatalf("%+v", r)
 	}
 }

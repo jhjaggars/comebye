@@ -264,7 +264,10 @@ type ghPull struct {
 	MergedAt string `json:"merged_at"`
 	MergeSHA string `json:"merge_commit_sha"`
 	Base     struct {
-		Ref string `json:"ref"`
+		Ref  string `json:"ref"`
+		Repo struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"base"`
 }
 
@@ -300,6 +303,7 @@ func (g *gitCtx) prFor(dir string, ri *repoInfo, sha string) (pr, state, how, la
 	var openSlug string
 	var elsewhere *ghPull
 	var elsewhereSlug string
+	missing := 0
 	for _, slug := range slugs {
 		if g.ghCalls >= ghCommitLookups {
 			return "", "", "the limit of PR lookups for one pass was reached", ""
@@ -307,6 +311,9 @@ func (g *gitCtx) prFor(dir string, ri *repoInfo, sha string) (pr, state, how, la
 		g.ghCalls++
 		out, code, _ := run(dir, 30*time.Second, "gh", "api", "-H", "Accept: application/vnd.github+json", "repos/"+slug+"/commits/"+sha+"/pulls")
 		if code != 0 {
+			if strings.Contains(out, "No commit found") { // a 422: GitHub never had the commit
+				missing++
+			}
 			continue
 		}
 		asked = true
@@ -316,18 +323,24 @@ func (g *gitCtx) prFor(dir string, ri *repoInfo, sha string) (pr, state, how, la
 		}
 		for i := range ps {
 			p := &ps[i]
-			ref := slug + "#" + strconv.Itoa(p.Number)
+			// The lookup on a fork also answers with the parent's PRs, so the PR's own
+			// repository is the base's, not the remote that was asked.
+			prRepo := slug
+			if p.Base.Repo.FullName != "" {
+				prRepo = p.Base.Repo.FullName
+			}
+			ref := prRepo + "#" + strconv.Itoa(p.Number)
 			switch {
 			case p.MergedAt != "" && p.Base.Ref == mainBranch:
 				as := p.MergeSHA
 				if as == sha {
 					as = ""
 				}
-				return ref, "landed", fmt.Sprintf("github: PR #%d merged into %s", p.Number, mainBranch), as
+				return ref, "landed", fmt.Sprintf("github: PR %s merged into %s", ref, mainBranch), as
 			case p.MergedAt != "" && elsewhere == nil:
-				elsewhere, elsewhereSlug = p, slug
+				elsewhere, elsewhereSlug = p, prRepo
 			case p.MergedAt == "" && open == nil:
-				open, openSlug = p, slug
+				open, openSlug = p, prRepo
 			}
 		}
 	}
@@ -337,9 +350,13 @@ func (g *gitCtx) prFor(dir string, ri *repoInfo, sha string) (pr, state, how, la
 		if open.State == "closed" {
 			verb = "was closed without merging"
 		}
-		return openSlug + "#" + strconv.Itoa(open.Number), "notinmain", fmt.Sprintf("github: PR #%d %s", open.Number, verb), ""
+		ref := openSlug + "#" + strconv.Itoa(open.Number)
+		return ref, "notinmain", fmt.Sprintf("github: PR %s %s", ref, verb), ""
 	case elsewhere != nil:
-		return elsewhereSlug + "#" + strconv.Itoa(elsewhere.Number), "", fmt.Sprintf("github: PR #%d merged into %s, not %s", elsewhere.Number, elsewhere.Base.Ref, mainBranch), ""
+		ref := elsewhereSlug + "#" + strconv.Itoa(elsewhere.Number)
+		return ref, "", fmt.Sprintf("github: PR %s merged into %s, not %s", ref, elsewhere.Base.Ref, mainBranch), ""
+	case !asked && missing > 0:
+		return "", "", "GitHub has no such commit (it was never pushed there)", ""
 	case !asked:
 		return "", "", "GitHub could not be asked about a PR", ""
 	}
