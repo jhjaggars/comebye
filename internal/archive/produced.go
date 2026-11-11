@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -66,6 +67,30 @@ var (
 	pushTag    = regexp.MustCompile(`build\.sh\s+(v?[0-9][A-Za-z0-9._-]*)`)
 	maxProduce = 40 // a session's findings from one result
 )
+
+// maxCommand bounds the command kept for reading a result: scripts that file an issue
+// or push an image are long, and the command's name can sit deep in one.
+const maxCommand = 64 << 10
+
+// relevantCommand is the full command of a call when it makes something worth
+// finding, so that it is read whole, and otherwise the short summary the index keeps.
+// The index never stores it: it is only read, in memory, with the call's result.
+func relevantCommand(args json.RawMessage, sum string) string {
+	var in struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(args, &in) != nil || len(in.Command) <= len(sum) {
+		return sum
+	}
+	c := in.Command
+	if len(c) > maxCommand {
+		c = c[:maxCommand]
+	}
+	if cmdPRCreate.MatchString(c) || cmdIssueCreate.MatchString(c) || cmdComment.MatchString(c) || cmdRelease.MatchString(c) || cmdImagePush.MatchString(c) || strings.Contains(c, "publish") {
+		return c
+	}
+	return sum
+}
 
 // producedIn finds what a tool call made, from the command and its result.
 // The result is trusted only for what only that command prints: a PR URL on a

@@ -190,7 +190,7 @@ func (p *Parsed) blocks(role, ts string, bs []block, sub, argField string) {
 				m.ToolID = b.ID
 				a = at{seq: m.Seq, sub: sub, id: b.ID, ts: ts}
 			}
-			p.noteCall(b.ID, sum, a)
+			p.noteCall(b.ID, relevantCommand(args, sum), a)
 			p.commitsIn(sum, a)
 		case "tool_result":
 			p.result(ts, textOf(b.Content), sub, b.ToolUseID, b.IsError)

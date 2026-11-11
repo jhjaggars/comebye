@@ -90,6 +90,21 @@ func TestProducedGitHubOutput(t *testing.T) {
 	}
 }
 
+// A script that files an issue is long: `gh issue create` is far past the short
+// summary the index keeps of a command, and the issue must still be found. (This was
+// NVIDIA/OpenShell#5491, missed in a first run on the real archive.)
+func TestProducedFromALongCommand(t *testing.T) {
+	long := "cd /tmp/s && python3 - <<'EOF'\n" + strings.Repeat("body = body + 'x' * 80\n", 60) + "EOF\ncd /home/u/.worktrees/OpenShell/r && gh issue create --repo NVIDIA/OpenShell --title \"bug(kubernetes): a ResourceQuota blocks the sandbox\" --body-file issue-body.md 2>&1 | tail -3"
+	if len(long) < 1500 {
+		t.Fatal("the fixture must be long")
+	}
+	p := parseSession(t, tuLine("a", long), trLine("a", "https://github.com/NVIDIA/OpenShell/issues/5491\n", false))
+	is := find(p, "issue", "NVIDIA/OpenShell#5491")
+	if is == nil || is.Title != "bug(kubernetes): a ResourceQuota blocks the sandbox" || is.Seq != 1 {
+		t.Fatalf("%+v", p.Produced)
+	}
+}
+
 func TestProducedPages(t *testing.T) {
 	p := parseSession(t,
 		tuLine("a", `comebye publish page.html --key design-artifact-provenance-mockups`),
