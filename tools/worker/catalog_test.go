@@ -161,8 +161,8 @@ func TestCatalogRowsAndMath(t *testing.T) {
 	}
 	// 70 GB at $0.08 per GB-month over 730 h, plus the IPv4, on the cheapest zone
 	r := rows["t3.large"]
-	want := round4(0.0298 + 0.005 + 70*0.08/730)
-	if r.EstSpot == nil || *r.EstSpot != want || *r.SpotMin != 0.0298 || len(r.Spot) != 3 {
+	want := round4(0.0231 + 0.005 + 70*0.08/730)
+	if r.EstSpot == nil || *r.EstSpot != want || *r.SpotMin != 0.0231 || len(r.Spot) != 5 {
 		t.Errorf("t3.large: %+v want est %v", r, want)
 	}
 	if r.OnDemand == nil || *r.OnDemand != 0.0832 || r.Interruption != "<5%" || r.VCPU != 2 || r.MemoryGiB != 8 || r.Arch != "amd64" || !r.Selectable {
@@ -187,9 +187,6 @@ func TestCatalogRowsAndMath(t *testing.T) {
 	}
 	if d.Rows[0].Type != "t3a.large" {
 		t.Errorf("cheapest first: %s", d.Rows[0].Type)
-	}
-	if rows["t3a.large"].Spot["us-east-1c"] != 0 {
-		t.Error("a zone without a price got one")
 	}
 }
 

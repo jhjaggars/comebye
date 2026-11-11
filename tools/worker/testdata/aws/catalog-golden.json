@@ -44,12 +44,15 @@
    "gpus": 0,
    "on_demand_usd_hour": 0.0752,
    "spot_usd_hour": {
-    "us-east-1a": 0.0281,
-    "us-east-1b": 0.029
+    "us-east-1a": 0.0261,
+    "us-east-1b": 0.0233,
+    "us-east-1c": 0.022,
+    "us-east-1d": 0.0232,
+    "us-east-1f": 0.0257
    },
-   "spot_min_usd_hour": 0.0281,
+   "spot_min_usd_hour": 0.022,
    "interruption": ">20%",
-   "estimate_spot_usd_hour": 0.0408,
+   "estimate_spot_usd_hour": 0.0347,
    "estimate_on_demand_usd_hour": 0.0879,
    "selectable": true
   },
@@ -61,32 +64,16 @@
    "gpus": 0,
    "on_demand_usd_hour": 0.0832,
    "spot_usd_hour": {
-    "us-east-1a": 0.0312,
-    "us-east-1b": 0.0298,
-    "us-east-1c": 0.0335
+    "us-east-1a": 0.0325,
+    "us-east-1b": 0.0293,
+    "us-east-1c": 0.0257,
+    "us-east-1d": 0.027,
+    "us-east-1f": 0.0231
    },
-   "spot_min_usd_hour": 0.0298,
+   "spot_min_usd_hour": 0.0231,
    "interruption": "<5%",
-   "estimate_spot_usd_hour": 0.0425,
+   "estimate_spot_usd_hour": 0.0358,
    "estimate_on_demand_usd_hour": 0.0959,
-   "selectable": true
-  },
-  {
-   "type": "m5.large",
-   "vcpu": 2,
-   "memory_gib": 8,
-   "arch": "amd64",
-   "gpus": 0,
-   "on_demand_usd_hour": 0.096,
-   "spot_usd_hour": {
-    "us-east-1a": 0.0399,
-    "us-east-1b": 0.0412,
-    "us-east-1c": 0.0388
-   },
-   "spot_min_usd_hour": 0.0388,
-   "interruption": ">20%",
-   "estimate_spot_usd_hour": 0.0515,
-   "estimate_on_demand_usd_hour": 0.1087,
    "selectable": true
   },
   {
@@ -97,12 +84,15 @@
    "gpus": 0,
    "on_demand_usd_hour": 0.096,
    "spot_usd_hour": {
-    "us-east-1a": 0.042,
-    "us-east-1b": 0.0433
+    "us-east-1a": 0.0343,
+    "us-east-1b": 0.0377,
+    "us-east-1c": 0.0351,
+    "us-east-1d": 0.0398,
+    "us-east-1f": 0.0315
    },
-   "spot_min_usd_hour": 0.042,
+   "spot_min_usd_hour": 0.0315,
    "interruption": ">20%",
-   "estimate_spot_usd_hour": 0.0547,
+   "estimate_spot_usd_hour": 0.0442,
    "estimate_on_demand_usd_hour": 0.1087,
    "selectable": true
   },
@@ -114,32 +104,36 @@
    "gpus": 0,
    "on_demand_usd_hour": 0.1664,
    "spot_usd_hour": {
-    "us-east-1a": 0.0624,
-    "us-east-1b": 0.061,
-    "us-east-1c": 0.0702
+    "us-east-1a": 0.0565,
+    "us-east-1b": 0.053,
+    "us-east-1c": 0.0485,
+    "us-east-1d": 0.0448,
+    "us-east-1f": 0.0357
    },
-   "spot_min_usd_hour": 0.061,
+   "spot_min_usd_hour": 0.0357,
    "interruption": "<5%",
-   "estimate_spot_usd_hour": 0.0737,
+   "estimate_spot_usd_hour": 0.0484,
    "estimate_on_demand_usd_hour": 0.1791,
    "selectable": true
   },
   {
-   "type": "c5.xlarge",
-   "vcpu": 4,
+   "type": "m5.large",
+   "vcpu": 2,
    "memory_gib": 8,
    "arch": "amd64",
    "gpus": 0,
-   "on_demand_usd_hour": 0.17,
+   "on_demand_usd_hour": 0.096,
    "spot_usd_hour": {
-    "us-east-1a": 0.0671,
-    "us-east-1b": 0.066,
-    "us-east-1c": 0.0688
+    "us-east-1a": 0.0457,
+    "us-east-1b": 0.0388,
+    "us-east-1c": 0.0412,
+    "us-east-1d": 0.0377,
+    "us-east-1f": 0.0441
    },
-   "spot_min_usd_hour": 0.066,
-   "interruption": "10-15%",
-   "estimate_spot_usd_hour": 0.0787,
-   "estimate_on_demand_usd_hour": 0.1827,
+   "spot_min_usd_hour": 0.0377,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0504,
+   "estimate_on_demand_usd_hour": 0.1087,
    "selectable": true
   },
   {
@@ -150,14 +144,36 @@
    "gpus": 0,
    "on_demand_usd_hour": 0.192,
    "spot_usd_hour": {
-    "us-east-1a": 0.0802,
-    "us-east-1b": 0.079,
-    "us-east-1c": 0.0815
+    "us-east-1a": 0.0561,
+    "us-east-1b": 0.0604,
+    "us-east-1c": 0.0491,
+    "us-east-1d": 0.0511,
+    "us-east-1f": 0.0402
    },
-   "spot_min_usd_hour": 0.079,
+   "spot_min_usd_hour": 0.0402,
    "interruption": ">20%",
-   "estimate_spot_usd_hour": 0.0917,
+   "estimate_spot_usd_hour": 0.0529,
    "estimate_on_demand_usd_hour": 0.2047,
+   "selectable": true
+  },
+  {
+   "type": "c5.xlarge",
+   "vcpu": 4,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.17,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0633,
+    "us-east-1b": 0.0666,
+    "us-east-1c": 0.0746,
+    "us-east-1d": 0.0707,
+    "us-east-1f": 0.0532
+   },
+   "spot_min_usd_hour": 0.0532,
+   "interruption": "10-15%",
+   "estimate_spot_usd_hour": 0.0659,
+   "estimate_on_demand_usd_hour": 0.1827,
    "selectable": true
   },
   {
@@ -168,12 +184,15 @@
    "gpus": 1,
    "on_demand_usd_hour": 0.526,
    "spot_usd_hour": {
-    "us-east-1a": 0.19,
-    "us-east-1b": 0.21
+    "us-east-1a": 0.2129,
+    "us-east-1b": 0.2549,
+    "us-east-1c": 0.2436,
+    "us-east-1d": 0.2425,
+    "us-east-1f": 0.2411
    },
-   "spot_min_usd_hour": 0.19,
+   "spot_min_usd_hour": 0.2129,
    "interruption": "10-15%",
-   "estimate_spot_usd_hour": 0.2027,
+   "estimate_spot_usd_hour": 0.2256,
    "estimate_on_demand_usd_hour": 0.5387,
    "selectable": true
   },
@@ -185,13 +204,15 @@
    "gpus": 0,
    "on_demand_usd_hour": 0.0672,
    "spot_usd_hour": {
-    "us-east-1a": 0.025,
-    "us-east-1b": 0.0244,
-    "us-east-1c": 0.026
+    "us-east-1a": 0.0352,
+    "us-east-1b": 0.0303,
+    "us-east-1c": 0.0261,
+    "us-east-1d": 0.0232,
+    "us-east-1f": 0.0237
    },
-   "spot_min_usd_hour": 0.0244,
+   "spot_min_usd_hour": 0.0232,
    "interruption": "15-20%",
-   "estimate_spot_usd_hour": 0.0371,
+   "estimate_spot_usd_hour": 0.0359,
    "estimate_on_demand_usd_hour": 0.0799,
    "selectable": false,
    "note": "needs work: arm64, the bootstrap is tested on amd64 only"
@@ -204,12 +225,15 @@
    "gpus": 0,
    "on_demand_usd_hour": 0.077,
    "spot_usd_hour": {
-    "us-east-1a": 0.034,
-    "us-east-1b": 0.0331
+    "us-east-1a": 0.0329,
+    "us-east-1b": 0.0605,
+    "us-east-1c": 0.0583,
+    "us-east-1d": 0.048,
+    "us-east-1f": 0.0394
    },
-   "spot_min_usd_hour": 0.0331,
+   "spot_min_usd_hour": 0.0329,
    "interruption": ">20%",
-   "estimate_spot_usd_hour": 0.0458,
+   "estimate_spot_usd_hour": 0.0456,
    "estimate_on_demand_usd_hour": 0.0897,
    "selectable": false,
    "note": "needs work: arm64, the bootstrap is tested on amd64 only"
@@ -222,15 +246,23 @@
   ],
   "scores": [
    {
-    "zone_id": "use1-az1",
-    "score": 9
+    "zone_id": "use1-az4",
+    "score": 3
    },
    {
     "zone_id": "use1-az2",
-    "score": 6
+    "score": 3
    },
    {
-    "zone_id": "use1-az4",
+    "zone_id": "use1-az1",
+    "score": 3
+   },
+   {
+    "zone_id": "use1-az6",
+    "score": 3
+   },
+   {
+    "zone_id": "use1-az5",
     "score": 3
    }
   ],
