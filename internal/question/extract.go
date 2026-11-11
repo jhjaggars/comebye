@@ -288,7 +288,7 @@ func fromRegion(lines []line, from, to int, headed bool) (Extraction, bool) {
 			continue
 		}
 		for _, q := range questionsIn(p, headed) {
-			add(Item{Question: oneLine(leadOrRE.ReplaceAllString(q, ""), questionMax), Detail: p})
+			add(Item{Question: upperFirst(oneLine(leadOrRE.ReplaceAllString(q, ""), questionMax)), Detail: p})
 		}
 	}
 	if len(ex.Items) == 0 {
@@ -587,4 +587,11 @@ func Key(q string) string {
 		}
 	}
 	return sb.String()
+}
+
+func upperFirst(s string) string {
+	for i, r := range s {
+		return string(unicode.ToUpper(r)) + s[i+len(string(r)):]
+	}
+	return s
 }

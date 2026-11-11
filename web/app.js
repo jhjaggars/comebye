@@ -6724,6 +6724,7 @@ function renderTranscript(t, reset) {
     if (m.kind === "user") settlePending(m.text);
   }
   renderPending();
+  markLastReply();
 
   if (t.messages.length) {
     chat.last = t.messages[t.messages.length - 1];
@@ -7287,6 +7288,45 @@ function settlePending(text) {
   const t = normText(text);
   const i = chat.pending.findIndex((p) => normText(p.text) === t);
   if (i >= 0) chat.pending.splice(i, 1);
+}
+
+// "Send to To do" sits under the agent's last reply: the same extraction the
+// hub runs on an idle agent, on demand (POST /api/todos/from-last).
+function markLastReply() {
+  const chatEl = $("chat");
+  if (!chatEl || !state.chat || state.chat.terminal) return;
+  const replies = chatEl.querySelectorAll(".msg.assistant");
+  const last = replies[replies.length - 1];
+  chatEl.querySelectorAll(".msg-todo").forEach((b) => { if (b.closest(".msg") !== last) b.remove(); });
+  if (!last || last.querySelector(".msg-todo")) return;
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "msg-todo";
+  b.textContent = "Send to To do";
+  b.title = "File the questions and decisions in this message on your To do list";
+  b.addEventListener("click", () => sendLastToTodo(b));
+  last.appendChild(b);
+}
+
+async function sendLastToTodo(btn) {
+  const a = agentById(state.selected);
+  if (!a || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const r = await api("/api/todos/from-last", { method: "POST", body: JSON.stringify({ agent: agentId(a) }) });
+    if (r.filed > 0) {
+      toastAction(`Sent ${r.filed} ${r.filed === 1 ? "question" : "questions"} to To do`, "Open", () => { location.hash = "#/todo"; }, 6000);
+      if (typeof loadTodos === "function") loadTodos();
+    } else if (r.found > 0) {
+      toast("Already on your To do list");
+    } else {
+      toast("No questions or decisions found in that message");
+    }
+  } catch (e) {
+    toast("Could not send to To do: " + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function renderPending() {

@@ -74,6 +74,9 @@ test('a command runs the comebye CLI and shows its output, no model turn', async
   const bare = await $.command.run({ command: 'todo', args: '' })
   expect(calls.filter(c => c[1] === 'todo').pop()).toEqual(['comebye', 'todo', 'list'])
   expect(bare.text).toBe('plain output')
+  // /todo from-last sends the questions in this agent's last message to the To do list.
+  await $.command.run({ command: 'todo', args: 'from-last' })
+  expect(calls.filter(c => c[1] === 'todo').pop()).toEqual(['comebye', 'todo', 'from-last'])
 })
 
 test('the guard warns in the band and never blocks', async ($, on) => {

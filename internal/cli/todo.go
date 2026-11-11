@@ -136,7 +136,7 @@ func cmdTodo(e *Env, args []string) error {
 		return err
 	}
 	if len(pos) == 0 {
-		return usageErr("want add, list, show, answer, done or drop")
+		return usageErr("want add, from-last, list, show, answer, done or drop")
 	}
 	sub, pos := pos[0], pos[1:]
 	c, err := newClient(e)
@@ -234,6 +234,56 @@ func cmdTodo(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Added %s (%s); it shows in the app's To do panel. Waiting: %s.\n", r.Todo.ID, r.Todo.Kind, r.Todo.waiter())
 		if r.Hint != "" {
 			fmt.Fprintf(e.Stdout, "Hint: %s.\n", r.Hint)
+		}
+		return nil
+	case "from-last":
+		// File one item per question in an agent's last message: yours by
+		// default (an agent), or the AGENT named (the user).
+		if len(pos) > 1 {
+			return usageErr("want todo from-last [AGENT]")
+		}
+		body := map[string]any{}
+		if len(pos) == 1 {
+			t, err := c.resolve(pos[0])
+			if err != nil {
+				return err
+			}
+			body["agent"] = t.ID
+		}
+		data, err := c.raw("POST", "/api/todos/from-last", nil, body)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		var r struct {
+			Todos    []apiTodo `json:"todos"`
+			Filed    int       `json:"filed"`
+			Existing int       `json:"existing"`
+			Found    int       `json:"found"`
+		}
+		if err := json.Unmarshal(data, &r); err != nil {
+			return err
+		}
+		switch {
+		case r.Found == 0:
+			fmt.Fprintln(e.Stdout, "No questions or decisions found in the last message.")
+		case r.Filed == 0:
+			fmt.Fprintf(e.Stdout, "Nothing new: the %d question(s) in the last message are on the list already.\n", r.Existing)
+		default:
+			fmt.Fprintf(e.Stdout, "Sent %d question(s) to the To do list", r.Filed)
+			if r.Existing > 0 {
+				fmt.Fprintf(e.Stdout, " (%d already there)", r.Existing)
+			}
+			fmt.Fprintln(e.Stdout, ":")
+			for _, t := range r.Todos {
+				q := t.Question
+				if rs := []rune(q); len(rs) > 100 {
+					q = string(rs[:100]) + "…"
+				}
+				fmt.Fprintf(e.Stdout, "  %s  %s\n", t.ID, q)
+			}
 		}
 		return nil
 	case "list":

@@ -176,3 +176,22 @@ func TestBriefSetNoCheck(t *testing.T) {
 		t.Fatalf("--no-check on get: %d", code)
 	}
 }
+
+func TestTodoFromLast(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/todos/from-last"] = answer{code: 200, body: `{"todos":[{"id":"t1","question":"home asks: Keep the CSV format?","kind":"decision","state":"open"}],"filed":1,"existing":1,"found":2}`}
+	if code := run(e, "todo", "from-last"); code != 0 || !strings.Contains(out.String(), "Sent 1 question(s)") || !strings.Contains(out.String(), "(1 already there)") || !strings.Contains(out.String(), "t1  home asks") {
+		t.Fatalf("from-last: %d %s %s", code, out, errb)
+	}
+	if body := f.find("POST", "/api/todos/from-last").body; strings.Contains(body, "agent") {
+		t.Fatalf("no agent named: body %q", body)
+	}
+	f.answers["POST /api/todos/from-last"] = answer{code: 200, body: `{"todos":[],"filed":0,"existing":0,"found":0}`}
+	out.Reset()
+	if code := run(e, "todo", "from-last"); code != 0 || !strings.Contains(out.String(), "No questions") {
+		t.Fatalf("none: %d %s", code, out)
+	}
+	if code := run(e, "todo", "from-last", "a", "b"); code != 2 {
+		t.Fatalf("two agents: %d", code)
+	}
+}

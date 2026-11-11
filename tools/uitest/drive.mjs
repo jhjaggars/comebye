@@ -43,6 +43,21 @@ await check("chat: reply shows after send without re-selecting", async () => {
   await page.waitForFunction(() => document.querySelector("#chat")?.innerText.includes("reply to: ping1"), null, { timeout: WAIT });
 });
 
+await check("chat: Send to To do sits under the last reply only, and says what it found", async () => {
+  await openAgent("alpha");
+  await page.waitForSelector("#chat .msg.assistant .msg-todo", { timeout: 5000 });
+  const n = await page.locator("#chat .msg-todo").count();
+  if (n !== 1) throw new Error(`${n} Send to To do buttons, want 1 (the last reply's)`);
+  const underLast = await page.evaluate(() => {
+    const replies = document.querySelectorAll("#chat .msg.assistant");
+    return !!replies[replies.length - 1].querySelector(".msg-todo");
+  });
+  if (!underLast) throw new Error("the button is not under the last reply");
+  // The fake agent's replies ask nothing: the hub says so.
+  await page.locator("#chat .msg-todo").click();
+  await page.waitForFunction(() => /No questions/.test(document.querySelector("#toast")?.textContent || ""), null, { timeout: WAIT });
+});
+
 await check("raw: reply shows after send without re-selecting", async () => {
   await openAgent("bravo");
   await page.waitForFunction(() => document.querySelector("#output")?.innerText.includes("bravo ready"), null, { timeout: 5000 });

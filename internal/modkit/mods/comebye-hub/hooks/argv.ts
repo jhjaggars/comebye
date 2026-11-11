@@ -34,8 +34,8 @@ export function splitArgs(s: string): string[] {
 // The comebye argv a slash command stands for.
 export const COMMANDS: Record<string, { description: string; hint?: string; argv: (args: string[]) => string[] }> = {
   todo: {
-    description: 'Comebye to-dos: list, show ID, add …',
-    hint: '[list | show ID | add QUESTION …]',
+    description: 'Comebye to-dos: list, show ID, add …, from-last (send the questions in my last message to the To do list)',
+    hint: '[list | show ID | from-last | add QUESTION …]',
     argv: a => ['todo', ...(a.length ? a : ['list'])],
   },
   handoff: {

@@ -306,6 +306,14 @@
     .md summary { cursor: pointer; }
     .md .md-plain { white-space: pre-wrap; }
     .msgtime { font-size: 11px; color: var(--muted); padding: 0 var(--sp-4); }
+    .msg-todo {
+      align-self: flex-start; margin: 0 var(--sp-4); padding: var(--sp-4) var(--sp-10); min-height: var(--hit-32);
+      font: inherit; font-size: var(--fs-12); color: var(--muted); background: transparent;
+      border: 1px solid var(--border); border-radius: var(--r-pill); cursor: pointer;
+    }
+    .msg-todo:hover, .msg-todo:focus-visible { color: var(--text); border-color: var(--muted); }
+    .msg-todo:disabled { opacity: 0.5; cursor: default; }
+    @media (pointer: coarse) { .msg-todo { min-height: var(--hit-40); padding: var(--sp-6) var(--sp-14); font-size: var(--fs-13); } }
 
     .thinking { align-self: flex-start; max-width: 88%; }
     .thinking summary {

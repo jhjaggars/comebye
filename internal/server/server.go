@@ -476,6 +476,7 @@ func (s *Server) routes() {
 	// The to-do list: any agent adds and reads; answering, finishing and
 	// dropping are the user's or a coordinator's (checked in the handler).
 	s.mux.HandleFunc("POST /api/todos", s.authWorker(s.handleTodoAdd))
+	s.mux.HandleFunc("POST /api/todos/from-last", s.authWorker(s.handleTodoFromLast))
 	s.mux.HandleFunc("GET /api/todos", s.authWorker(s.handleTodoList))
 	s.mux.HandleFunc("GET /api/todos/{id}", s.authWorker(s.handleTodoGet))
 	s.mux.HandleFunc("POST /api/todos/{id}/answer", s.authAgent(s.handleTodoAnswer))

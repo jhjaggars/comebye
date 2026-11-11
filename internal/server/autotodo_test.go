@@ -570,7 +570,7 @@ func TestAutoQuestionOneItemPerQuestion(t *testing.T) {
 	if len(first.Links) != 1 || first.Links[0].URL != "/#/agent/w2:p1" {
 		t.Fatalf("links = %+v", first.Links)
 	}
-	if !strings.Contains(got[3].Question, "should I change any of the mockups first?") {
+	if !strings.Contains(got[3].Question, "Should I change any of the mockups first?") {
 		t.Fatalf("the trailing question is item 4: %q", got[3].Question)
 	}
 	// Later ticks refile nothing and read nothing more.

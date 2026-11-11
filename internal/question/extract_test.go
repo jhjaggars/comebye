@@ -48,7 +48,7 @@ func TestExtractProvenanceThread(t *testing.T) {
 	if !strings.Contains(c.Question, "keep provenance") || !strings.Contains(c.Question, "They have no record") {
 		t.Fatalf("item 3 question = %q", c.Question)
 	}
-	if got := ex.Items[5].Question; got != "should I change any of the mockups first?" {
+	if got := ex.Items[5].Question; got != "Should I change any of the mockups first?" {
 		t.Fatalf("tail question = %q", got)
 	}
 }
