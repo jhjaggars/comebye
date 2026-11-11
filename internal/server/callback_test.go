@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -209,8 +210,11 @@ func TestFinishedNoticeHeldWhileBackgroundRuns(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	idle := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
 	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, idle)
+	var bgMu sync.Mutex
 	bg := []transcript.BackgroundTask{{ID: "b1", Tool: "Bash", Desc: "uitest"}}
 	s.latest = func(context.Context, string, string) *transcript.Latest {
+		bgMu.Lock()
+		defer bgMu.Unlock()
 		return &transcript.Latest{Text: "x", Background: bg, BackgroundKnown: true}
 	}
 	s.coord.mu.Lock()
@@ -225,7 +229,9 @@ func TestFinishedNoticeHeldWhileBackgroundRuns(t *testing.T) {
 		t.Fatalf("callback = %+v", g.Callback)
 	}
 	// The task ended and the session said nothing more: the notice goes.
+	bgMu.Lock()
 	bg = nil
+	bgMu.Unlock()
 	s.coord.mu.Lock()
 	delete(s.coord.bg, "desk/w9:p1")
 	s.coord.calling = map[string]time.Time{}
