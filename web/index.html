@@ -130,7 +130,7 @@
     .dot.done { background: var(--purple); }
     .dot.unknown { background: var(--red); }
     @keyframes pulse { 50% { opacity: 0.35; } }
-    @media (prefers-reduced-motion: reduce) { .dot.working { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .dot.working, .dot.waiting { animation: none; } }
     .agent .meta { min-width: 0; flex: 1; }
     .agent .name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .agent .sub { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-6); min-width: 0; }
@@ -172,7 +172,9 @@
     .status.blocked { color: var(--orange); }
     .status.working { color: var(--blue); }
     .status.done { color: var(--purple); }
-    .dot.bg { animation: none; }
+    /* Idle or done, but a background task is running: a hollow ring that breathes slowly. */
+    .dot.waiting { background: transparent; box-sizing: border-box; border: 2px solid var(--blue); animation: pulse 2.4s ease-in-out infinite; }
+    .status.waiting { color: var(--blue); }
     .agent .status { text-align: right; line-height: 1.25; }
     .agent .status .ago { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11px; color: var(--muted); }
     /* One empty state everywhere: muted, centred in its pane, with its own padding (never flush to an edge),
@@ -522,7 +524,7 @@
       .msg, .thinking, .toolcard { max-width: 94%; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .dot.working { animation: none; }
+      .dot.working, .dot.waiting { animation: none; }
       #detail header.busy::after { animation: none; width: 100%; opacity: 0.6; }
     }
 

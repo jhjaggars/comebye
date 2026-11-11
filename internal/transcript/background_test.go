@@ -100,3 +100,14 @@ func TestBackgroundOldTaskIgnored(t *testing.T) {
 		t.Errorf("a task from 13h ago is believed: %+v", l.Background)
 	}
 }
+
+func TestBackgroundMarksCommandAsLabel(t *testing.T) {
+	l := bgLines(t,
+		bgCall("a", "Bash", `{"command":"go test ./...","description":"suite","run_in_background":true}`),
+		bgResult("a", "Command running in background with ID: d1."),
+		bgCall("b", "Bash", `{"command":"gh run watch 9","run_in_background":true}`),
+		bgResult("b", "Command running in background with ID: c1."))
+	if len(l.Background) != 2 || l.Background[0].Cmd || !l.Background[1].Cmd {
+		t.Errorf("Cmd flag: %+v", l.Background)
+	}
+}

@@ -706,7 +706,7 @@ function renderListRows() {
   const filter = activeHostFilter();
   // A host filter never hides an agent that is waiting on you.
   const agents = state.agents.filter((a) => filter === "all" || a.host === filter || a.agent_status === "blocked").sort((a, b) =>
-    (STATUS_ORDER[a.agent_status] ?? 9) - (STATUS_ORDER[b.agent_status] ?? 9) ||
+    statusRank(a) - statusRank(b) ||
     // Within a status, most recently active first, so the agents that just
     // went idle sit above the ones that have been idle for days.
     activeMs(b) - activeMs(a) ||
@@ -855,14 +855,14 @@ function agentRow(a, worker) {
   const nm = a.name || a.pane_id || id;
   return `
     <div class="agent ${esc(a.agent_status)}${worker ? " worker" : ""}${marked ? " marked" : ""}" role="button" tabindex="0" data-id="${esc(id)}">
-      <span class="dot ${esc(a.agent_status)}${bgRunning(a) ? " bg" : ""}"></span>
+      <span class="dot ${esc(bgRunning(a) ? "waiting" : a.agent_status)}"></span>
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
           isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
-        ${subLine(a)}${whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
+        ${subLine(a)}${bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgLabel(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
       </div>
-      <span class="status ${esc(agentStatusText(a))}${bgRunning(a) ? " bg" : ""}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
-        bgRunning(a) ? `<br><span class="ago">background</span>`
+      <span class="status ${esc(agentStatusText(a))}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
+        bgRunning(a) ? (bgSinceMs(a) ? `<br><span class="ago">${fmtAgo(bgSinceMs(a))}</span>` : "")
         : activeMs(a) && (a.agent_status === "idle" || a.agent_status === "done")
           ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>`
           : a.agent_status === "working" && sinceMs(a)
@@ -964,25 +964,41 @@ function scheduleLedger() {
   ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, wait);
 }
 
-// A worker's tasks started in the background (the hub reads them from its
-// session while it is idle or done): the agent is not finished while one
-// runs, it wakes when the task ends.
+// An idle or done agent's tasks started in the background (a test run, a CI
+// watch, a Monitor): the hub reads them from its session and sends them with
+// the agent (a.background: kind, a short label, start). The agent is not
+// finished while one runs; it wakes when the task ends.
 function bgTasks(a) {
-  const e = a && ledger.byAgent.get(agentId(a));
-  return (e && e.live && e.live.background) || [];
+  return (a && a.background) || [];
 }
 function bgRunning(a) {
   return !!a && (a.agent_status === "idle" || a.agent_status === "done") && bgTasks(a).length > 0;
 }
+// bgLabel names what the agent waits on: "race + uitest", "gh run +1".
+function bgLabel(a) {
+  const t = bgTasks(a);
+  const first = t.find((x) => x.label) || t[0];
+  const name = (first && first.label) || (first && first.kind) || "background task";
+  return t.length > 1 ? `${name} +${t.length - 1}` : name;
+}
+// bgSinceMs is when the oldest running task started (0 when unknown).
+function bgSinceMs(a) {
+  const ts = bgTasks(a).map((x) => Date.parse(x.since)).filter((n) => !Number.isNaN(n));
+  return ts.length ? Math.min(...ts) : 0;
+}
 function bgTitle(a) {
   const t = bgTasks(a);
-  return `Idle, but ${t.length} task${t.length === 1 ? "" : "s"} running in the background (it wakes when ${t.length === 1 ? "it ends" : "they end"}): ` +
-    t.map((x) => `${x.tool}${x.desc ? " " + x.desc : ""}`).join("; ");
+  return `Not finished: ${t.length} task${t.length === 1 ? "" : "s"} running in the background (the agent wakes when ${t.length === 1 ? "it ends" : "they end"}): ` +
+    t.map((x) => `${x.kind}${x.label ? " " + x.label : ""}${x.since && !Number.isNaN(Date.parse(x.since)) ? " (" + fmtAgo(Date.parse(x.since)) + ")" : ""}`).join("; ");
 }
-// agentStatusHtml is the status word of an agent: "working" with a note
-// when the agent only waits on a background task.
+// agentStatusText is the status word of an agent: "waiting" while it only
+// waits on a background task.
 function agentStatusText(a) {
-  return bgRunning(a) ? "working" : a.agent_status;
+  return bgRunning(a) ? "waiting" : a.agent_status;
+}
+// statusRank orders the list: waiting agents sit between working and done.
+function statusRank(a) {
+  return bgRunning(a) ? 1.5 : STATUS_ORDER[a.agent_status] ?? 9;
 }
 
 const LAND_PHASE = { rebase: "rebasing", tests: "tests running", push: "pushing", ci: "pushed, CI running" };
@@ -1067,7 +1083,7 @@ function projectGroups(agents) {
     if (!groups.has(p)) groups.set(p, []);
     groups.get(p).push(a);
   }
-  const rank = (list) => Math.min(...list.map((a) => STATUS_ORDER[a.agent_status] ?? 9));
+  const rank = (list) => Math.min(...list.map(statusRank));
   const recent = (list) => Math.max(...list.map(activeMs));
   return [...groups.entries()].sort(([na, la], [nb, lb]) =>
     (na === "") - (nb === "") || rank(la) - rank(lb) || recent(lb) - recent(la) || na.localeCompare(nb));
@@ -5481,7 +5497,7 @@ function statusHTML(desktop) {
       `<div class="st-row"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="st-n">${esc(t.question)}</span>${desktop ? `<span class="st-r"><button type="button" class="st-link" data-go="todo">To do</button></span>` : ""}</div>`).join("");
     if (p.progress.length) h += `<div class="st-g prog">In progress</div>` + p.progress.map(({ e, ag }) => {
       const at = Date.parse(e.created_at);
-      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "running (background task)" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${open(ag)}</span></div>`;
+      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${open(ag)}</span></div>`;
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
@@ -7095,10 +7111,10 @@ function renderDetail() {
   if (multiHost() && a.host) sub = a.host + " · " + sub;
   $("d-subtitle").textContent = sub;
   const st = $("d-status");
-  st.textContent = bgRunning(a) ? "working (background)" : a.agent_status;
-  st.className = "status " + agentStatusText(a) + (bgRunning(a) ? " bg" : "");
+  st.textContent = bgRunning(a) ? "waiting" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
+  st.className = "status " + agentStatusText(a);
   st.title = bgRunning(a) ? bgTitle(a) : "";
-  const why = $("d-why"), wt = whyBlocked(a) || noteOf(a);
+  const why = $("d-why"), wt = whyBlocked(a) || noteOf(a) || (bgRunning(a) ? "Running in the background: " + bgLabel(a) : "");
   why.classList.toggle("quiet", !whyBlocked(a));
   why.textContent = wt;
   why.title = wt;

@@ -982,13 +982,13 @@ for (const width of [390, 1280]) {
         e: { status, approval: { by: "coordinator", note: "ok" }, finished_at: iso0(3600e3), live: { present: true }, ...over },
       });
       const lc = (o) => ({ at: iso0(5e3), base: "origin/main", verdict: "1 commits not in origin/main", unmerged: 1, unpushed: 0, ...o });
-      const bg = [{ id: "b1", tool: "Bash", desc: "full UI suite" }];
+      const bg = [{ kind: "bash", label: "full UI suite", since: iso0(240e3) }];
       const cases = [
         ["landing", mk(1, "landing", { finished_at: undefined })],
         ["landing: tests running", mk(2, "landing", { finished_at: undefined, progress: { text: "the full UI suite is running", phase: "tests", at: iso0(60e3) } }, { agent_status: "working" })],
         ["landing: not pushed yet", mk(3, "landing", { finished_at: undefined, land_check: lc({ state: "pending", unpushed: 1, reason: "the worker is working" }) }, { agent_status: "working" })],
         ["landing: not on main yet", mk(4, "landing", { finished_at: undefined, land_check: lc({ state: "pending" }) }, { agent_status: "working" })],
-        ["landing: waiting on a background task", mk(5, "landing", { finished_at: undefined, live: { present: true, background: bg, background_known: true }, land_check: lc({ state: "pending", unpushed: 1 }) })],
+        ["landing: waiting on a background task", mk(5, "landing", { finished_at: undefined, live: { present: true }, land_check: lc({ state: "pending", unpushed: 1 }) }, { background: bg })],
         ["landed", mk(6, "landed", { land_check: lc({ ok: true, state: "landed", landed: ["64c1774aaaa"] }) })],
         ["landed, CI running", mk(7, "landed", { land_check: lc({ ok: true, state: "landed", ci: { state: "running", runs: 2 } }) })],
         ["landed, CI green", mk(8, "landed", { land_check: lc({ ok: true, state: "landed", ci: { state: "success", runs: 2 } }) })],
@@ -1000,7 +1000,7 @@ for (const width of [390, 1280]) {
         ["queued #3", mk(15, "landing", { finished_at: undefined, queue: { position: 3, ahead: 2, total: 3, turn: false } })],
         ["landing now", mk(16, "landing", { finished_at: undefined, queue: { position: 1, ahead: 0, total: 3, turn: true, turn_at: iso0(60e3), expires_at: iso0(-44 * 60e3) } })],
         ["landing: tests running", mk(17, "landing", { finished_at: undefined, queue: { position: 1, ahead: 0, total: 2, turn: true }, progress: { text: "tests", phase: "tests", at: iso0(60e3) } }, { agent_status: "working" })],
-        ["bg", mk(13, "running", { finished_at: undefined, approval: undefined, live: { present: true, background: bg, background_known: true } })],
+        ["bg", mk(13, "running", { finished_at: undefined, approval: undefined, live: { present: true } }, { background: bg })],
       ];
       for (const [, c] of cases) ledger.byAgent.set(c.a.id, c.e);
       const wrap = document.getElementById("agents");
@@ -1008,13 +1008,13 @@ for (const width of [390, 1280]) {
       return cases.map(([want, c]) => {
         const row = wrap.querySelector(`[data-id="${c.a.id}"]`), chip = row.querySelector(".lg-chip");
         const st = row.querySelector(".status");
-        return { want, chip: chip && getComputedStyle(chip).display !== "none" ? chip.textContent : null, status: st.textContent, statusBg: st.classList.contains("bg"),
-          dotBg: row.querySelector(".dot").classList.contains("bg"), cut: chip ? chip.scrollWidth > chip.clientWidth + 1 || chip.getBoundingClientRect().right > row.querySelector('.sub').getBoundingClientRect().right + 1 : false, rowEnd: row.getBoundingClientRect().right };
+        return { want, chip: chip && getComputedStyle(chip).display !== "none" ? chip.textContent : null, status: st.textContent, statusBg: st.classList.contains("waiting"),
+          dotWaiting: row.querySelector(".dot").classList.contains("waiting"), cut: chip ? chip.scrollWidth > chip.clientWidth + 1 || chip.getBoundingClientRect().right > row.querySelector('.sub').getBoundingClientRect().right + 1 : false, rowEnd: row.getBoundingClientRect().right };
       });
     });
     for (const r of rows) {
       if (r.want === "bg") {
-        if (!/^working/.test(r.status) || !r.statusBg || !r.dotBg) throw new Error("an idle agent with a background task is not shown working (background): " + JSON.stringify(r));
+        if (!/^waiting/.test(r.status) || !r.dotWaiting) throw new Error("an idle agent with a background task is not shown waiting: " + JSON.stringify(r));
         continue;
       }
       if (r.want === "running") { if (!/^working/.test(r.status)) throw new Error("a running worker: " + JSON.stringify(r)); continue; }
@@ -1025,7 +1025,7 @@ for (const width of [390, 1280]) {
       if (r.rowEnd > width + 1) throw new Error("a row runs off the screen: " + JSON.stringify(r));
     }
     const bgRow = rows.find((r) => r.want === "landing: waiting on a background task");
-    if (!/^working/.test(bgRow.status) || !bgRow.statusBg) throw new Error("the waiting worker's status is not working (background): " + JSON.stringify(bgRow));
+    if (!/^waiting/.test(bgRow.status) || !bgRow.statusBg) throw new Error("the waiting worker's status is not waiting: " + JSON.stringify(bgRow));
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
     for (const cs of ["dark", "light"]) {
       await page.emulateMedia({ colorScheme: cs });
@@ -1033,6 +1033,73 @@ for (const width of [390, 1280]) {
     }
     await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
     await page.evaluate(() => { for (let i = 1; i <= 17; i++) ledger.byAgent.delete(`uit/w${i}:p1`); });
+  });
+}
+
+// An idle or done agent with a task running in the background reads "waiting" with the task's label and
+// age, not "done"; it sorts between working and done, is not counted as working or as needing you, and
+// goes back to normal when the task ends. A working agent is unchanged.
+for (const width of [390, 1280]) {
+  await check(`background: at ${width}px an idle agent with a running task shows waiting, and clears when it ends`, async () => {
+    await desktopList(width);
+    const r = await page.evaluate(() => {
+      const iso0 = (ms) => new Date(Date.now() - ms).toISOString();
+      const saved = state.agents;
+      const mk = (i, st, bg) => ({ id: `uit/w${i}:p1`, host: "uit", pane_id: `w${i}:p1`, name: `agent-${i}`, agent: "claude", agent_status: st, cwd: "/x", ...(bg ? { background: bg } : {}) });
+      const wait = [{ kind: "bash", label: "race + uitest", since: iso0(4 * 60e3 + 5e3) }, { kind: "monitor", label: "gh run watch", since: iso0(60e3) }];
+      state.agents = [mk(1, "done"), mk(2, "done", wait), mk(3, "idle", [wait[0]]), mk(4, "working", wait), mk(5, "working")];
+      renderListRows();
+      const row = (i) => document.querySelector(`#agents [data-id="uit/w${i}:p1"]`);
+      const read = (i) => { const r = row(i); return { status: [...r.querySelector(".status").childNodes].map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim(), cls: r.querySelector(".status").className, dot: r.querySelector(".dot").className, why: (r.querySelector(".why") || {}).textContent || "", title: r.querySelector(".status").title, end: r.getBoundingClientRect().right }; };
+      const out = { w2: read(2), w3: read(3), w1: read(1), w4: read(4), count: document.getElementById("count").textContent,
+        order: [...document.querySelectorAll("#agents .agent")].map((e) => e.dataset.id.split("/")[1].split(":")[0]).join(",") };
+      state.agents = state.agents.map((a) => (a.id === "uit/w2:p1" ? { ...a, background: undefined } : a));
+      renderListRows();
+      out.cleared = read(2);
+      state.agents = saved;
+      return out;
+    });
+    if (!/^waiting 4m$/i.test(r.w2.status) || !/waiting/.test(r.w2.dot) || !/waiting/.test(r.w2.cls)) throw new Error("done + tasks is not waiting 4m: " + JSON.stringify(r.w2));
+    if (r.w2.why !== "race + uitest +1" || !/race \+ uitest/.test(r.w2.title) || !/gh run watch/.test(r.w2.title)) throw new Error("label/title: " + JSON.stringify(r.w2));
+    if (!/^waiting/.test(r.w3.status)) throw new Error("idle + task is not waiting: " + JSON.stringify(r.w3));
+    if (r.w1.status !== "done" || /waiting/.test(r.w1.dot)) throw new Error("a plain done agent changed: " + JSON.stringify(r.w1));
+    if (r.w4.status.startsWith("waiting") || !/working/.test(r.w4.cls)) throw new Error("a working agent changed: " + JSON.stringify(r.w4));
+    if (!/\b1\b.*working|2 working/.test(r.count) || /waiting|need/.test(r.count)) throw new Error("count line: " + r.count);
+    if (!/^w[45],w[45],w[23],w[23],w1$/.test(r.order)) throw new Error("order, want working, waiting, done: " + r.order);
+    if (r.cleared.status !== "done" || /waiting/.test(r.cleared.dot) || r.cleared.why) throw new Error("did not clear when the task ended: " + JSON.stringify(r.cleared));
+    if (r.w2.end > width + 1) throw new Error("row runs off the screen");
+    for (const cs of ["dark", "light"]) {
+      await page.emulateMedia({ colorScheme: cs });
+      await page.evaluate(() => { const iso0 = (ms) => new Date(Date.now() - ms).toISOString(); state.agents = [
+        { id: "uit/w2:p1", host: "uit", pane_id: "w2:p1", name: "feat-add-host-slice2", agent: "claude", agent_status: "done", cwd: "/x", background: [{ kind: "bash", label: "race + uitest", since: iso0(4 * 60e3) }] },
+        { id: "uit/w1:p1", host: "uit", pane_id: "w1:p1", name: "feat-other", agent: "claude", agent_status: "done", cwd: "/x" },
+        { id: "uit/w4:p1", host: "uit", pane_id: "w4:p1", name: "feat-busy", agent: "claude", agent_status: "working", cwd: "/x" }]; renderListRows(); });
+      await page.locator("#agents").screenshot({ path: `${out}/background-waiting-${width}-${cs}.png` });
+    }
+    await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
+  });
+}
+
+for (const width of [390, 1280]) {
+  await check(`background: at ${width}px the agent's detail says waiting, with its label and age`, async () => {
+    await page.setViewportSize({ width, height: width < 600 ? 780 : 800 });
+    await openAgent("alpha");
+    const r = await page.evaluate(() => {
+      const a = state.agents.find((x) => x.pane_id === "w1:p1");
+      a.agent_status = "done";
+      a.background = [{ kind: "bash", label: "race + uitest", since: new Date(Date.now() - 4 * 60e3).toISOString() }];
+      renderDetail();
+      const on = { status: document.getElementById("d-status").textContent, cls: document.getElementById("d-status").className, why: document.getElementById("d-why").textContent, whyHidden: document.getElementById("d-why").hidden };
+      return on;
+    });
+    if (!/^waiting · 4m$/.test(r.status) || !/waiting/.test(r.cls) || r.why !== "Running in the background: race + uitest" || r.whyHidden) throw new Error("detail: " + JSON.stringify(r));
+    for (const cs of ["dark", "light"]) {
+      await page.emulateMedia({ colorScheme: cs });
+      await page.locator("#detail header").screenshot({ path: `${out}/background-detail-${width}-${cs}.png` });
+    }
+    await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
+    const off = await page.evaluate(() => { const a = state.agents.find((x) => x.pane_id === "w1:p1"); a.background = undefined; renderDetail(); return document.getElementById("d-status").textContent; });
+    if (/waiting/.test(off)) throw new Error("detail still waiting after the task ended: " + off);
   });
 }
 

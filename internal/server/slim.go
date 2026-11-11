@@ -37,6 +37,9 @@ type browserAgent struct {
 	// StatusNote: herdr said blocked, the screen shows no dialog and a
 	// running spinner, so the agent is reported as working (state.verifyBlocked).
 	StatusNote string `json:"status_note,omitempty"`
+	// Background: an idle or done agent's running background tasks (a test
+	// run, a CI watch, a Monitor), which will wake it when they end.
+	Background []bgBrief `json:"background,omitempty"`
 }
 
 // browserHost drops LastSeen, which changes with every peer ping and is
@@ -77,7 +80,7 @@ func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 			Agent: a.Agent, DisplayAgent: a.DisplayAgent, Status: a.Status,
 			StateLabels: a.StateLabels, CWD: a.CWD, TerminalTitle: a.TitleStripped,
 			Worktree: a.Worktree, LastActive: a.LastActive, StatusSince: a.StatusSince, Instance: a.Instance,
-			BlockedOn: s.blockedOnOf(a), StatusNote: a.StatusNote,
+			BlockedOn: s.blockedOnOf(a), StatusNote: a.StatusNote, Background: s.backgroundOfAgent(a),
 		}
 	}
 	return out

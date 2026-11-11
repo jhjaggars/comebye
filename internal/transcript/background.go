@@ -35,6 +35,9 @@ type BackgroundTask struct {
 	Tool  string `json:"tool"` // Bash, Agent or Monitor
 	Desc  string `json:"desc,omitempty"`
 	Since string `json:"since,omitempty"`
+	// Cmd: Desc is the command line (the call had no description), which
+	// can hold secrets; show only a short label made from it.
+	Cmd bool `json:"cmd,omitempty"`
 }
 
 // maxBackgroundAge is how long an unfinished task is believed.
@@ -49,7 +52,10 @@ var (
 	taskStateRE = regexp.MustCompile(`<status>\s*([a-z]+)\s*</status>`)
 )
 
-type bgLaunch struct{ tool, desc string }
+type bgLaunch struct {
+	tool, desc string
+	cmd        bool
+}
 
 // bgTracker follows launches and endings through a stream of records.
 type bgTracker struct {
@@ -88,10 +94,11 @@ func (t *bgTracker) call(id, name string, input json.RawMessage) {
 		tool = "Agent"
 	}
 	desc := strings.TrimSpace(in.Description)
+	cmd := false
 	if desc == "" {
-		desc = strings.TrimSpace(in.Command)
+		desc, cmd = strings.TrimSpace(in.Command), true
 	}
-	t.calls[id] = bgLaunch{tool: tool, desc: Excerpt(desc, 120)}
+	t.calls[id] = bgLaunch{tool: tool, desc: Excerpt(desc, 120), cmd: cmd}
 	if len(t.calls) > 200 { // keep the map small on a long window
 		for k := range t.calls {
 			delete(t.calls, k)
@@ -134,7 +141,7 @@ func (t *bgTracker) result(toolUseID, text, at string) {
 	if _, dup := t.open[id]; !dup {
 		t.order = append(t.order, id)
 	}
-	t.open[id] = BackgroundTask{ID: id, Tool: call.tool, Desc: call.desc, Since: at}
+	t.open[id] = BackgroundTask{ID: id, Tool: call.tool, Desc: call.desc, Since: at, Cmd: call.cmd}
 }
 
 // notification applies a raw record that holds a <task-notification>.

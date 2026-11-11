@@ -187,6 +187,8 @@ type Server struct {
 	version string
 	// streams counts open /api/events streams (see maxStreams).
 	streams atomic.Int32
+	// bgAgents caches each idle agent's background tasks (bgagents.go).
+	bgAgents bgAgents
 	// health tests that the state directory is writable (nil without one);
 	// shuttingDown fails /readyz.
 	health       *healthProbe
@@ -624,7 +626,7 @@ func isLoopbackAddr(addr string) bool {
 // and each host's status. It is served from cache and never dials.
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	if fullRecords(r) && !callerOf(r).tagged {
-		writeJSON(w, map[string]any{"agents": s.fleet.Agents(), "hosts": s.fleet.Hosts()})
+		writeJSON(w, map[string]any{"agents": s.withBackground(s.fleet.Agents()), "hosts": s.fleet.Hosts()})
 		return
 	}
 	writeJSON(w, map[string]any{"agents": s.slimAgents(s.fleet.Agents()), "hosts": slimHosts(s.fleet.Hosts())})
@@ -940,6 +942,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		var payload []byte
 		var err error
+		if full && ev.Agents != nil {
+			ev.Agents = s.withBackground(ev.Agents)
+		}
 		if full {
 			payload, err = json.Marshal(ev)
 		} else {

@@ -186,11 +186,24 @@ type AgentInfo struct {
 	// agent's spinner is running, so it is working ("running a long
 	// command"). Empty otherwise.
 	StatusNote string `json:"status_note,omitempty"`
+	// Background lists the running background tasks of an idle or done
+	// agent (a test run, a CI watch, a Monitor), read from its session by the
+	// host that owns it. Not from herdr: comebye stamps it on the full
+	// records a hub reads, and the hub passes a peer's through.
+	Background []BackgroundTask `json:"background,omitempty"`
 	// Host names the comebye instance that owns the agent and ID is the
 	// host-qualified "<host>/<pane_id>". Pane IDs are only unique per host.
 	// Neither comes from herdr: comebye stamps them before broadcasting.
 	Host string `json:"host,omitempty"`
 	ID   string `json:"id,omitempty"`
+}
+
+// BackgroundTask is one running background task: its kind (bash, monitor
+// or agent), a short harmless label and when it started.
+type BackgroundTask struct {
+	Kind  string `json:"kind"`
+	Label string `json:"label,omitempty"`
+	Since string `json:"since,omitempty"`
 }
 
 // WorktreeInfo describes the repository checkout hosting a workspace.

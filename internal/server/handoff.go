@@ -616,7 +616,10 @@ func (s *Server) latestOf(ctx context.Context, host, pane string) *transcript.La
 		return s.latest(ctx, host, pane)
 	}
 	if host == "" || host == s.fleet.LocalName() {
-		if a := s.resolveAgent(pane); a != nil && s.manager != nil {
+		if s.manager == nil {
+			return nil
+		}
+		if a := s.resolveAgent(pane); a != nil {
 			if path, err := transcript.SessionPath(*a, s.manager.Agents()); err == nil {
 				latest, _ := transcript.LatestOf(path)
 				return latest
