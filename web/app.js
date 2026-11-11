@@ -447,6 +447,113 @@ function escAttr(s) {
 const mdCache = new Map();
 const MD_CACHE_MAX = 400;
 
+// ---- copy buttons on code blocks ----
+//
+// Every fenced block gets a strip above it: the language on the left, a Copy
+// button on the right. The strip is added to the already sanitized HTML (so
+// DOMPurify needs no <button>), and the cached HTML keeps it. The button
+// copies the block's own text when it is pressed (never the label, never a
+// line number): see codeBlockText.
+const COPY_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.2A1.3 1.3 0 0 0 9.2 2H3.8A1.8 1.8 0 0 0 2 3.8v5.4A1.3 1.3 0 0 0 3.3 10.5h.2"/></svg>';
+const COPY_SHELLS = /^(sh|bash|shell|console|zsh)$/;
+
+function addCopyStrips(html) {
+  if (!html.includes("<pre")) return html;
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  for (const pre of t.content.querySelectorAll("pre")) {
+    const code = pre.firstElementChild;
+    if (!code || code.tagName !== "CODE" || pre.parentElement && pre.parentElement.classList.contains("cb")) continue;
+    const lang = ((/(?:^|\s)language-([\w+#.-]+)/.exec(code.className) || [])[1] || "").toLowerCase();
+    const box = document.createElement("div");
+    box.className = "cb";
+    if (lang) box.dataset.lang = lang;
+    box.innerHTML = `<div class="cb-bar"><span class="cb-lang">${esc(lang)}</span>` +
+      `<button type="button" class="cb-copy" aria-label="Copy ${lang ? esc(lang) + " " : ""}code">${COPY_ICON}<span class="cb-t">Copy</span></button></div>`;
+    pre.replaceWith(box);
+    box.append(pre);
+  }
+  return t.innerHTML;
+}
+
+// codeBlockText is exactly what the block holds: its text with one trailing
+// newline dropped. In a shell block, a leading "$ " is removed only when every
+// non-blank line has one, so a block that mixes commands and output is copied whole.
+function codeBlockText(box) {
+  const code = box.querySelector("pre > code") || box.querySelector("pre");
+  let t = code.textContent.replace(/\n$/, "");
+  if (COPY_SHELLS.test(box.dataset.lang || "")) {
+    const lines = t.split("\n"), real = lines.filter((l) => l.trim() !== "");
+    if (real.length && real.every((l) => l.startsWith("$ "))) t = lines.map((l) => (l.startsWith("$ ") ? l.slice(2) : l)).join("\n");
+  }
+  return t;
+}
+
+// copyText writes text to the clipboard from inside a tap or key press:
+// navigator.clipboard where it exists (https or localhost) and is allowed, then
+// execCommand("copy") on an off-screen textarea (font-size 16px so iOS does not
+// zoom; setSelectionRange because select() alone does nothing there).
+// Resolves true or false; never rejects.
+function copyText(text) {
+  const legacy = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.readOnly = true; ta.setAttribute("aria-hidden", "true");
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px";
+    document.body.append(ta);
+    const keep = document.activeElement;
+    ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch { ok = false; }
+    ta.remove();
+    if (keep && keep.focus) try { keep.focus({ preventScroll: true }); } catch {}
+    return ok;
+  };
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    let p;
+    try { p = navigator.clipboard.writeText(text); } catch { p = null; }
+    if (p) return p.then(() => true, () => legacy());
+  }
+  return Promise.resolve(legacy());
+}
+
+let copyLive = null;
+function copyAnnounce(msg) {
+  if (!copyLive) {
+    copyLive = document.createElement("div");
+    copyLive.className = "sr-only";
+    copyLive.setAttribute("role", "status");
+    copyLive.setAttribute("aria-live", "polite");
+    document.body.append(copyLive);
+  }
+  copyLive.textContent = "";
+  setTimeout(() => { copyLive.textContent = msg; }, 30); // a change, so a repeat is read again
+}
+
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest && ev.target.closest(".cb-copy");
+  if (!btn) return;
+  const box = btn.closest(".cb");
+  if (!box) return;
+  const label = btn.querySelector(".cb-t");
+  const reset = () => { delete btn.dataset.state; label.textContent = "Copy"; };
+  copyText(codeBlockText(box)).then((ok) => {
+    clearTimeout(btn._t);
+    if (ok) {
+      btn.dataset.state = "ok"; label.textContent = "Copied";
+      copyAnnounce("Copied to clipboard");
+      btn._t = setTimeout(reset, 1500);
+    } else {
+      // Select the block so the system Copy menu is one tap away.
+      const r = document.createRange(); r.selectNodeContents(box.querySelector("pre"));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      btn.dataset.state = "fail"; label.textContent = "Not copied";
+      toast("Could not copy: the code is selected, use Copy from the menu", true);
+      copyAnnounce("Could not copy. The code is selected.");
+      btn._t = setTimeout(reset, 2500);
+    }
+  });
+});
+
 // renderMarkdown returns sanitized HTML for untrusted markdown text.
 // max raises the size limit for a caller that shows a whole document (the
 // Doc panel); chat text keeps MD_MAX_CHARS.
@@ -460,7 +567,7 @@ function renderMarkdown(src, key, max = MD_MAX_CHARS) {
     html = `<div class="md-plain">${esc(src)}</div>`;
   } else {
     try {
-      html = lib.P.sanitize(lib.m.parse(src), MD_PURIFY);
+      html = addCopyStrips(lib.P.sanitize(lib.m.parse(src), MD_PURIFY));
     } catch {
       html = `<div class="md-plain">${esc(src)}</div>`;
     }
