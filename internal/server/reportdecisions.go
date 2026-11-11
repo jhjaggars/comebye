@@ -237,6 +237,12 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent) []Todo {
 		}}
 	}
 	var out []Todo
+	// Two or more decisions with choices become one decision set (todoset.go):
+	// one card, one answer. The rest stay loose items.
+	if set, rest := reportSet(e, ds, who, from, summary, w, link); set != nil {
+		out = append(out, *set)
+		ds = rest
+	}
 	for i, d := range ds {
 		if i >= reportMaxDecisions {
 			break
@@ -386,4 +392,64 @@ func sameHandoff(a, b Todo) bool {
 		}
 	}
 	return false
+}
+
+// reportSet makes one set item of the decisions that carry 2 to 9 choices,
+// when there are at least two of them (at most setMaxDecisions). It returns
+// the item and the decisions left over; nil when the report does not make a
+// set.
+func reportSet(e ledger.Entry, ds []reportDecision, who, from, summary string, w *TodoAgent, link []TodoLink) (*Todo, []reportDecision) {
+	var chosen, rest []reportDecision
+	var opts [][]TodoOption
+	var recs [][]int
+	for _, d := range ds {
+		o, rc, err := cleanOptions(d.Options, d.Rec)
+		if err != nil || len(o) == 0 || len(chosen) >= setMaxDecisions || oneLine(strings.ReplaceAll(d.Question, "**", ""), todoMaxQuestion) == "" {
+			rest = append(rest, d)
+			continue
+		}
+		chosen = append(chosen, d)
+		opts, recs = append(opts, o), append(recs, rc)
+	}
+	if len(chosen) < 2 {
+		return nil, ds
+	}
+	ts := &TodoSet{}
+	var keys []string
+	for i, d := range chosen {
+		q := strings.TrimSpace(strings.ReplaceAll(d.Question, "**", ""))
+		dec := SetDecision{ID: fmt.Sprintf("D%d", i+1), Title: oneLine(q, 120), Question: oneLine(q, 300)}
+		if dec.Title == dec.Question {
+			dec.Question = ""
+		}
+		for _, o := range opts[i] {
+			dec.Options = append(dec.Options, SetOption{Label: o.Label, Detail: o.Detail})
+		}
+		if len(recs[i]) == 1 { // a set suggests one answer per decision
+			dec.Recommend = recs[i][0]
+		}
+		ts.Decisions = append(ts.Decisions, dec)
+		keys = append(keys, d.Question)
+	}
+	set, err := cleanSet(ts)
+	if err != nil {
+		return nil, ds
+	}
+	ctx := []string{from}
+	if summary != "" {
+		ctx = append(ctx, "**What the report says it did:** "+summary)
+	}
+	it := Todo{
+		Question:  oneLine(fmt.Sprintf("%s's report asks %d decisions of you", who, len(chosen)), todoMaxQuestion),
+		Kind:      "decision",
+		Links:     link,
+		Waiting:   w,
+		CreatedBy: AutoCreator,
+		Source:    SourceReport,
+		AutoKey:   reportKey(e.ID, "set", strings.Join(keys, "\n")),
+		Set:       set,
+	}
+	list := set.setMarkdown(false)
+	it.Context = block(block(strings.Join(ctx, "\n\n"), todoMaxContext-len(list)-2)+"\n\n"+list, todoMaxContext)
+	return &it, rest
 }

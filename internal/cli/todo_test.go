@@ -195,3 +195,51 @@ func TestTodoFromLast(t *testing.T) {
 		t.Fatalf("two agents: %d", code)
 	}
 }
+
+func TestTodoSetCreate(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/todos"] = answer{code: 201, body: `{"todo":` + todoJSON + `}`}
+	e.Stdin = strings.NewReader(`{"question":"Which path?","context":"why","decided":["x"],"decisions":[{"id":"D1","title":"t","options":[{"label":"a"},{"label":"b"}]}]}`)
+	if code := run(e, "todo", "set", "create", "--from", "-", "--no-wait", "--link", "PR=https://example.com/p"); code != 0 {
+		t.Fatalf("create: %d %s", code, errb)
+	}
+	if !strings.Contains(out.String(), "Added decision set t1") {
+		t.Fatalf("out = %q", out)
+	}
+	var body map[string]any
+	json.Unmarshal([]byte(f.find("POST", "/api/todos").body), &body)
+	set, _ := body["set"].(map[string]any)
+	if body["question"] != "Which path?" || body["context"] != "why" || body["kind"] != "decision" || body["no_wait"] != true ||
+		set == nil || set["decided"] == nil || set["question"] != nil || set["context"] != nil {
+		t.Fatalf("body = %v", body)
+	}
+	for name, args := range map[string][]string{
+		"no from":      {"todo", "set", "create"},
+		"unknown verb": {"todo", "set", "nope", "--from", "-"},
+		"both waits":   {"todo", "set", "create", "--from", "-", "--no-wait", "--waiting", "home"},
+	} {
+		e.Stdin = strings.NewReader(`{}`)
+		if code := run(e, args...); code != 2 {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+	e.Stdin = strings.NewReader(`not json`)
+	if code := run(e, "todo", "set", "create", "--from", "-"); code != 2 {
+		t.Errorf("bad json: %d", code)
+	}
+	e.Stdin = strings.NewReader(`{"decisions":[]}`)
+	if code := run(e, "todo", "set", "create", "--from", "-"); code != 2 {
+		t.Errorf("no question: %d", code)
+	}
+}
+
+func TestTodoShowDecisionSet(t *testing.T) {
+	f, e, out, _ := newFake(t)
+	f.answers["GET /api/todos/t9"] = answer{body: `{"todo":{"id":"t9","question":"q","kind":"decision","state":"open","created_by":"x","set":{"decisions":[{"id":"D1"},{"id":"D2","release_early":true}],"draft":{"choices":{"D1":{"option":1,"confirmed":true},"D2":{"option":2}}},"released":["D1"]}}}`}
+	if code := run(e, "todo", "show", "t9"); code != 0 {
+		t.Fatal(code)
+	}
+	if !strings.Contains(out.String(), "Decision set: 1 of 2 confirmed in the draft. Settled ahead of Submit: D1.") {
+		t.Fatalf("out = %q", out)
+	}
+}

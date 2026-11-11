@@ -51,6 +51,20 @@ type apiTodo struct {
 	Notice     *struct {
 		State string `json:"state"`
 	} `json:"notice"`
+	Set *struct {
+		Decisions []struct {
+			ID    string `json:"id"`
+			Early bool   `json:"release_early"`
+		} `json:"decisions"`
+		Draft struct {
+			Choices map[string]struct {
+				Option    int  `json:"option"`
+				Confirmed bool `json:"confirmed"`
+			} `json:"choices"`
+		} `json:"draft"`
+		Released    []string `json:"released"`
+		SubmittedAt *string  `json:"submitted_at"`
+	} `json:"set"`
 	Release *struct {
 		Version    string `json:"version"`
 		Commit     string `json:"commit"`
@@ -131,12 +145,13 @@ func cmdTodo(e *Env, args []string) error {
 	all := fs.Bool("all", false, "list: every item, closed ones too")
 	state := fs.String("state", "", "list: only open, answered, done or dropped items")
 	reason := fs.String("reason", "", "drop: why")
+	from := fs.String("from", "", "set create: the set as JSON: a file, or - for stdin")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) == 0 {
-		return usageErr("want add, from-last, list, show, answer, done or drop")
+		return usageErr("want add, set create, from-last, list, show, answer, done or drop")
 	}
 	sub, pos := pos[0], pos[1:]
 	c, err := newClient(e)
@@ -235,6 +250,71 @@ func cmdTodo(e *Env, args []string) error {
 		if r.Hint != "" {
 			fmt.Fprintf(e.Stdout, "Hint: %s.\n", r.Hint)
 		}
+		return nil
+	case "set":
+		// A decision set: many decisions answered in one go (internal/server/todoset.go).
+		if len(pos) != 1 || pos[0] != "create" || *from == "" {
+			return usageErr("want todo set create --from FILE|- [--waiting AGENT | --no-wait] [--link URL] (the file is JSON: question, context, decided, risks, decisions, facts, rules, plan)")
+		}
+		if *waiting != "" && *noWait {
+			return usageErr("--waiting and --no-wait exclude each other")
+		}
+		text, err := readInput(e, *from, 64<<10)
+		if err != nil {
+			return err
+		}
+		var set map[string]any
+		if err := json.Unmarshal([]byte(text), &set); err != nil {
+			return usageErr("%s is not JSON: %v", *from, err)
+		}
+		body := map[string]any{"kind": "decision", "no_wait": *noWait}
+		for _, k := range []string{"question", "context"} {
+			if v, ok := set[k]; ok {
+				body[k] = v
+				delete(set, k)
+			}
+		}
+		if q, _ := body["question"].(string); strings.TrimSpace(q) == "" {
+			return usageErr("the set needs a \"question\"")
+		}
+		body["set"] = set
+		var ls []map[string]string
+		for _, l := range links {
+			if m := linkLabelRE.FindStringSubmatch(l); m != nil && !strings.Contains(m[1], "://") {
+				ls = append(ls, map[string]string{"label": m[1], "url": m[2]})
+			} else {
+				ls = append(ls, map[string]string{"url": l})
+			}
+		}
+		if len(ls) > 0 {
+			body["links"] = ls
+		}
+		if *waiting != "" {
+			t, err := c.resolve(*waiting)
+			if err != nil {
+				return err
+			}
+			body["waiting"] = t.ID
+		}
+		data, err := c.raw("POST", "/api/todos", nil, body)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		var r struct {
+			Todo      apiTodo `json:"todo"`
+			Duplicate bool    `json:"duplicate"`
+		}
+		if err := json.Unmarshal(data, &r); err != nil {
+			return err
+		}
+		if r.Duplicate {
+			fmt.Fprintf(e.Stdout, "Already on the list as %s.\n", r.Todo.ID)
+			return nil
+		}
+		fmt.Fprintf(e.Stdout, "Added decision set %s; it shows in the app's To do panel as one card. Waiting: %s.\n", r.Todo.ID, r.Todo.waiter())
 		return nil
 	case "from-last":
 		// File one item per question in an agent's last message: yours by
@@ -374,6 +454,22 @@ func cmdTodo(e *Env, args []string) error {
 			if rl.Error != "" {
 				fmt.Fprintf(e.Stdout, "Last error: %s\n", rl.Error)
 			}
+		}
+		if st := t.Set; st != nil {
+			n := 0
+			for _, c := range st.Draft.Choices {
+				if c.Confirmed {
+					n++
+				}
+			}
+			fmt.Fprintf(e.Stdout, "\nDecision set: %d of %d confirmed in the draft.", n, len(st.Decisions))
+			if len(st.Released) > 0 {
+				fmt.Fprintf(e.Stdout, " Settled ahead of Submit: %s.", strings.Join(st.Released, ", "))
+			}
+			if st.SubmittedAt != nil {
+				fmt.Fprint(e.Stdout, " Submitted.")
+			}
+			fmt.Fprintln(e.Stdout)
 		}
 		if a := t.Answer; a != nil {
 			fmt.Fprintf(e.Stdout, "\nAnswer (%s, %s, %s):\n%s\n", a.By, a.Via, ago(e, a.At), a.Text)

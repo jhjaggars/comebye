@@ -191,16 +191,62 @@ x
    My recommendation: ok 1
 `
 
+// Three decisions with choices are one decision set, not three loose items.
 func TestReportFilesNumberedDecisions(t *testing.T) {
 	s, _ := decisionsServer(t)
 	report(t, s, hubK8sSection)
 	items := activeItems(s)
-	if len(items) != 3 {
-		t.Fatalf("%d items, want 3: %+v", len(items), items)
+	if len(items) != 1 || items[0].Set == nil || len(items[0].Set.Decisions) != 3 {
+		t.Fatalf("want one set of 3: %+v", items)
 	}
-	for _, it := range items {
-		if strings.Contains(it.Question, "read the report") || len(it.Options) < 2 || len(it.Recommend) != 1 {
-			t.Errorf("item not split: %+v", it)
+	it := items[0]
+	if it.Source != SourceReport || it.Waiting == nil || len(it.Links) != 1 || !strings.Contains(it.Question, "3 decisions") {
+		t.Fatalf("set item = %+v", it)
+	}
+	d := it.Set.Decisions[0]
+	if d.ID != "D1" || d.Title != "Recall index refresh after the cutover (step M)?" || len(d.Options) != 3 || d.Recommend != 1 {
+		t.Fatalf("D1 = %+v", d)
+	}
+	if !strings.Contains(it.Context, "What the report says it did:** x") || !strings.Contains(it.Context, "D2 May I run") {
+		t.Fatalf("context = %q", it.Context)
+	}
+	// Re-sent, it is not filed again, even after the first is closed.
+	report(t, s, hubK8sSection)
+	s.todos.close(it.ID, TodoDropped, "me", "moot")
+	report(t, s, hubK8sSection)
+	if n := len(s.todos.list("all")); n != 1 {
+		t.Fatalf("re-sent report filed %d items", n)
+	}
+}
+
+// Decisions without choices stay loose items next to the set; a single
+// decision with choices stays a plain item.
+func TestReportSetAlongsideLooseItems(t *testing.T) {
+	s, _ := decisionsServer(t)
+	report(t, s, "## Decisions for the user\n- Open question with no choices?\n- First pick?\n  1. a\n  2. b\n  Recommend: 1+2\n- Second pick?\n  1. c\n  2. d\n")
+	items := activeItems(s)
+	if len(items) != 2 {
+		t.Fatalf("items = %+v", items)
+	}
+	var set, loose *Todo
+	for i := range items {
+		if items[i].Set != nil {
+			set = &items[i]
+		} else {
+			loose = &items[i]
+		}
+	}
+	if set == nil || loose == nil || loose.Question != "Open question with no choices?" || len(set.Set.Decisions) != 2 {
+		t.Fatalf("set %+v loose %+v", set, loose)
+	}
+	if set.Set.Decisions[0].Recommend != 0 {
+		t.Fatalf("a combined recommendation is not one suggestion: %+v", set.Set.Decisions[0])
+	}
+	s2, _ := decisionsServer(t)
+	report(t, s2, "## Decisions for the user\n- Only pick?\n  1. a\n  2. b\n- Another?\n")
+	for _, it := range activeItems(s2) {
+		if it.Set != nil {
+			t.Fatalf("one decision with choices made a set: %+v", it)
 		}
 	}
 }
