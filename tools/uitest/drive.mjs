@@ -3257,6 +3257,21 @@ await check("remove page: on the phone it is a full page with a Back arrow, no o
     } finally { await page.unroute(/\/api\/todos$/); }
   });
 
+  await check("keys: the palette finds an agent by its workspace (repo) name, hints why, and ranks it below a direct name match", async () => {
+    await keysDesk();
+    // One agent whose own name matches, next to agents that only live in the "notes" workspace.
+    await page.evaluate(() => { const b = state.agents.find((x) => x.name === "bravo"); state.agents.push({ ...b, name: "notes-taker", pane_id: "w99:p1", id: undefined, worktree: undefined, cwd: "/tmp/elsewhere" }); });
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("notes");
+    const rows = await page.locator("#pal-list .pal-it").evaluateAll((els) => els.filter((e) => e.querySelector(".dot")).map((e) => ({ name: e.querySelector(".pal-main").innerText, meta: e.querySelector(".pal-meta").innerText, why: e.querySelector(".pal-meta").classList.contains("ws-hit") })));
+    await page.screenshot({ path: `${out}/palette-workspace-${page.viewportSize().width}.png` });
+    if (rows.length < 2 || rows[0].name !== "notes-taker" || rows[0].why) throw new Error("a direct name match is not first, unhinted: " + JSON.stringify(rows));
+    const ws = rows.slice(1);
+    if (!ws.every((r) => r.why && /notes/.test(r.meta))) throw new Error("workspace matches have no hint: " + JSON.stringify(ws));
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => { state.agents = state.agents.filter((x) => x.name !== "notes-taker"); });
+  });
+
   await check("keys: second steps (rename, model, role) and Esc goes back one step, then closes", async () => {
     await keysDesk();
     await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();

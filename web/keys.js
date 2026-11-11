@@ -136,6 +136,21 @@
 
   /* ---------- fuzzy matching ---------- */
 
+  // workspaceMatch: how q matches where an agent lives, as {score, text} (text is the field that matched, shown as the row's hint), or null.
+  function workspaceMatch(x, q) {
+    const wt = x.worktree || {};
+    let repo = wt.repo || "", branch = wt.linked ? wt.branch : (wt.branch || "");
+    if (typeof repoLabel === "function") { const r = repoLabel(x); repo = repo || r.repo || ""; branch = branch || r.branch || ""; }
+    const dir = (x.cwd || "").split("/").filter(Boolean).pop() || "";
+    let best = null;
+    for (const t of [repo, dir, branch, x.host, agentId(x)]) {
+      if (!t) continue;
+      const f = fuzzy(q, t);
+      if (f && (!best || f.score > best.score)) best = { score: f.score, text: t, sub: t.toLowerCase().includes(q.toLowerCase()) };
+    }
+    return best;
+  }
+
   // A subsequence match: every letter of q in order. Runs, word starts and early hits score higher.
   function fuzzy(q, s) {
     q = q.toLowerCase();
@@ -305,14 +320,20 @@
         state.agents.forEach((x) => {
           const nm = agentName(x);
           const f = fuzzy(q, nm);
-          const meta = q && [agentId(x), x.host, x.worktree && x.worktree.repo].filter(Boolean).join(" ").toLowerCase().includes(q.toLowerCase()) ? { score: 6, idx: [] } : null;
-          if (!f && !meta) return;
+          // Not the name: the workspace it lives in (project/repo, checkout directory, branch), then its id and host.
+          // A scattered subsequence of the name loses to the workspace containing the query outright.
+          const tight = f && nm.toLowerCase().includes(q.toLowerCase());
+          let w = !tight && q ? workspaceMatch(x, q) : null;
+          if (f && w && !w.sub) w = null;
+          if (!f && !w) return;
+          // 2: the name contains the query; 1: the workspace does; 0: only a scattered subsequence.
+          const tier = tight || !q ? 2 : w && w.sub ? 1 : 0;
           const recent = x.last_active ? Date.parse(x.last_active) / 3.6e6 : 0; // hours: larger is newer
-          // With no query, who needs you leads; with one, the best match does.
-          const rank = (f || meta).score + (q ? 0 : (needsYou(x) ? 100 : 0) + recent / 1e5) - (x === a ? 2 : 0);
-          ag.push({ kind: "agent", a: x, rank, idx: f ? f.idx : [], recent });
+          // With no query, who needs you leads; with one, the best match does (a name match always above a workspace-only one).
+          const rank = (w || f).score + (q ? 0 : (needsYou(x) ? 100 : 0) + recent / 1e5) - (x === a ? 2 : 0);
+          ag.push({ kind: "agent", a: x, rank, tier, why: w ? w.text : "", idx: w ? [] : f.idx, recent });
         });
-        ag.sort((x, y) => y.rank - x.rank || y.recent - x.recent);
+        ag.sort((x, y) => (y.tier || 0) - (x.tier || 0) || y.rank - x.rank || y.recent - x.recent);
         groups.push([q || p ? "Agents" : "Agents: needs you first, then recent", p || q ? ag : ag.slice(0, 6)]);
       }
       if (p === "" || p === ">") {
@@ -392,7 +413,8 @@
       ic.append(dot);
       main.append(marked(agentName(x), it.idx));
       const where = [x.host && multiHost() ? x.host : "", x.worktree && x.worktree.repo].filter(Boolean).join(" · ");
-      meta.textContent = [where, statusLabel[x.agent_status] || x.agent_status].filter(Boolean).join(" · ");
+      meta.textContent = [it.why && !where.includes(it.why) ? it.why : "", where, statusLabel[x.agent_status] || x.agent_status].filter(Boolean).join(" · ");
+      if (it.why) meta.classList.add("ws-hit");
       d.append(ic, main, meta);
     } else if (it.kind === "todo") {
       ic.textContent = "☐";
