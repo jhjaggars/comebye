@@ -189,6 +189,8 @@ type Server struct {
 	streams atomic.Int32
 	// bgAgents caches each idle agent's background tasks (bgagents.go).
 	bgAgents bgAgents
+	// peerAgents replaces the fleet's agent list for peerBackground (tests).
+	peerAgents func() []herdr.AgentInfo
 	// health tests that the state directory is writable (nil without one);
 	// shuttingDown fails /readyz.
 	health       *healthProbe

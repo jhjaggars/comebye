@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"github.com/jhjaggars/comebye/internal/ledger"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,5 +143,41 @@ func TestHubPassesAPeersBackgroundTasks(t *testing.T) {
 	}
 	if reads.Load() != 1 {
 		t.Errorf("the hub read %d sessions; only its own agent's, once", reads.Load())
+	}
+}
+
+// The hub holds a peer worker's "finished" notice while the peer says the
+// worker has a background task running, and sends it once the task ends,
+// though the hub cannot read the peer's session file.
+func TestPeerBackgroundHoldsFinishedNotice(t *testing.T) {
+	s, _, _ := coordServer(t)
+	var mu sync.Mutex
+	var bg []herdr.BackgroundTask
+	s.peerAgents = func() []herdr.AgentInfo {
+		mu.Lock()
+		defer mu.Unlock()
+		a := bgAgent("kube", "w9:p1", herdr.StatusDone, time.Now())
+		a.Background = bg
+		return []herdr.AgentInfo{a}
+	}
+	s.latest = func(context.Context, string, string) *transcript.Latest {
+		t.Error("the hub read a peer's session")
+		return nil
+	}
+	e := ledger.Entry{Host: "kube", AgentID: "kube/w9:p1", PaneID: "w9:p1", Status: ledger.Finished, FinalReport: "Waiting for the race run to finish."}
+	now := time.Now()
+	e.FinishedAt = &now
+	mu.Lock()
+	bg = []herdr.BackgroundTask{{Kind: "bash", Label: "race + uitest", Since: "2026-11-11T16:00:00Z"}}
+	mu.Unlock()
+	if why := s.holdFinished(context.Background(), e, now); !strings.Contains(why, "background task still running (race + uitest)") {
+		t.Fatalf("a peer worker with a running task: hold = %q", why)
+	}
+	mu.Lock()
+	bg = nil
+	mu.Unlock()
+	e.FinalReport = "## Summary\nDone.\n\n## Verification\nok"
+	if why := s.holdFinished(context.Background(), e, now); why != "" {
+		t.Fatalf("task ended, notice still held: %q", why)
 	}
 }

@@ -466,6 +466,11 @@ func (s *Server) backgroundOf(ctx context.Context, e ledger.Entry, wait bool) (t
 	if e.AgentID == "" || e.PaneID == "" {
 		return nil, false
 	}
+	if !s.isLocalHost(e.Host) {
+		// A peer's session file cannot be read from here; the peer reads
+		// it and sends the tasks with its full agent records.
+		return s.peerBackground(e.AgentID)
+	}
 	read := func(ctx context.Context) {
 		l := s.latestOf(ctx, e.Host, e.PaneID)
 		c := bgCache{at: time.Now()}
@@ -499,4 +504,26 @@ func (s *Server) backgroundOf(ctx context.Context, e ledger.Entry, wait bool) (t
 	c = s.coord.bg[e.AgentID]
 	s.coord.mu.Unlock()
 	return c.tasks, c.known
+}
+
+// peerBackground is the background tasks a peer reported for one of its
+// agents, as transcript tasks. known is false when the agent is not in the
+// hub's list (or this hub has no fleet).
+func (s *Server) peerBackground(agentID string) (tasks []transcript.BackgroundTask, known bool) {
+	var agents []herdr.AgentInfo
+	if s.peerAgents != nil {
+		agents = s.peerAgents()
+	} else if s.fleet != nil {
+		agents = s.fleet.Agents()
+	}
+	for _, a := range agents {
+		if a.ID != agentID {
+			continue
+		}
+		for _, b := range a.Background {
+			tasks = append(tasks, transcript.BackgroundTask{ID: b.Since + b.Label, Tool: b.Kind, Desc: b.Label, Since: b.Since})
+		}
+		return tasks, true
+	}
+	return nil, false
 }
