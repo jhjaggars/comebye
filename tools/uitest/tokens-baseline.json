@@ -1,0 +1,14 @@
+{
+  "space": {
+    "literal": 902,
+    "offscale": 95
+  },
+  "radius": {
+    "literal": 168,
+    "offscale": 41
+  },
+  "font": {
+    "literal": 277,
+    "offscale": 121
+  }
+}

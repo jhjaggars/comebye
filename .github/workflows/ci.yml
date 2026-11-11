@@ -60,6 +60,10 @@ jobs:
         run: |
           for f in web/*.js; do node --check "$f"; done
 
+      # Spacing, radius and type use the tokens in docs/design-tokens.md; the counts may only go down.
+      - name: design tokens
+        run: node tools/uitest/tokens.mjs
+
   test:
     runs-on: ubuntu-latest
     steps:
