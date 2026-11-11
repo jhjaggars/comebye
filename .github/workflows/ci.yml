@@ -120,7 +120,8 @@ jobs:
           fi
           CHROME="$CHROME" tools/uitest/run.sh . "$RUNNER_TEMP/uitest"
 
-      # Screenshots and the console, network and server logs of the failed pass.
+      # Screenshots, the console, network and server logs of the failed pass, and failures/<check>.txt for each
+      # failed check: the error with its call log, the app's state and DOM, and the last console and network lines.
       - name: upload browser logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

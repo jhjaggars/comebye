@@ -2,7 +2,7 @@
 // herdr: after a prompt is sent, the reply must show without re-selecting
 // the agent, in the chat view and in the raw terminal view, and switching
 // agents must not show the previous agent's view.
-import { launch, mockLaunchRoutes } from "./lib.mjs";
+import { launch, mockLaunchRoutes, dumpFailure, stamped } from "./lib.mjs";
 import { releaseView } from "./relfix.mjs";
 import { boardView } from "./boardfix.mjs";
 import fs from "node:fs";
@@ -12,15 +12,18 @@ const WAIT = Number(process.env.REPLY_WAIT_MS || 9000);
 
 const { browser, page } = await launch({ dark: process.env.SCHEME !== "light" });
 const log = [];
-page.on("console", (m) => log.push(`console.${m.type()}: ${m.text()}`));
-page.on("pageerror", (e) => log.push(`pageerror: ${e.message}`));
-page.on("response", (r) => { if (r.url().includes("/api/") && !r.url().includes("/api/events")) log.push(`${r.status()} ${r.request().method()} ${r.url().replace(base, "")}`); });
+const note = stamped(log);
+page.on("console", (m) => note.push(`console.${m.type()}: ${m.text()}`));
+page.on("pageerror", (e) => note.push(`pageerror: ${e.message}`));
+page.on("response", (r) => { if (r.url().includes("/api/") && !r.url().includes("/api/events")) note.push(`${r.status()} ${r.request().method()} ${r.url().replace(base, "")}`); });
+page.on("requestfailed", (r) => { if (r.url().includes("/api/")) note.push(`FAILED ${r.method()} ${r.url().replace(base, "")}: ${r.failure()?.errorText}`); });
+page.on("framenavigated", (f) => { if (f === page.mainFrame()) note.push(`navigated ${f.url().replace(base, "")}`); });
 
 const results = [];
 async function check(name, fn) {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return; // ONLY=latency: run one group while iterating
   try { await fn(); results.push([name, true, ""]); }
-  catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); }
+  catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); await dumpFailure({ page, out, name, err: e, log }); }
   await page.screenshot({ path: `${out}/${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
 }
 const visible = (sel) => page.locator(sel).isVisible();
