@@ -6383,7 +6383,7 @@ function initAddHost() {
     if (!az.open || !az.spec) return;
     const n = (v) => (v === "" ? 0 : Number(v));
     if (t.id === "az-via") { pz.via = t.value; const nd = azNode(); pz.region = (nd && nd.preflight && nd.preflight.region) || pz.region; pz.cat = null; pz.catKey = ""; renderPeers(); return; }
-    if (t.id === "az-name") { az.spec.name = t.value.trim().toLowerCase(); t.classList.toggle("bad", !!az.spec.name && !AZ_NAME.test(az.spec.name)); const nb = $("az-next"); if (nb) nb.disabled = !(AZ_NAME.test(az.spec.name) && az.spec.budget_cap_usd >= 1); return; }
+    if (t.id === "az-name") { az.spec.name = t.value.trim().toLowerCase(); const nameBad = !!az.spec.name && !AZ_NAME.test(az.spec.name); t.classList.toggle("bad", nameBad); if (t.nextElementSibling) t.nextElementSibling.classList.toggle("warn", nameBad); const nb = $("az-next"); if (nb) nb.disabled = !(AZ_NAME.test(az.spec.name) && az.spec.budget_cap_usd >= 1); return; }
     if (t.id === "az-spot") az.spec.spot = t.value === "1";
     else if (t.id === "az-zone") az.spec.zone = t.value;
     else if (t.id === "az-boot") az.spec.boot_disk_gb = n(t.value);
