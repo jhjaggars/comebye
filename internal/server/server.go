@@ -500,6 +500,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/todos", s.authWorker(s.handleTodoList))
 	s.mux.HandleFunc("GET /api/todos/{id}", s.authWorker(s.handleTodoGet))
 	s.mux.HandleFunc("POST /api/todos/{id}/answer", s.authAgent(s.handleTodoAnswer))
+	s.mux.HandleFunc("PUT /api/todos/{id}/draft", s.authAgent(s.handleTodoDraft))
+	s.mux.HandleFunc("POST /api/todos/{id}/submit", s.authAgent(s.handleTodoSubmit))
 	s.mux.HandleFunc("POST /api/todos/{id}/done", s.authAgent(s.handleTodoDone))
 	s.mux.HandleFunc("POST /api/todos/{id}/drop", s.authAgent(s.handleTodoDrop))
 	s.mux.HandleFunc("POST /api/todos/{id}/keep", s.authAgent(s.handleTodoKeep))

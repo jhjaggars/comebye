@@ -129,6 +129,8 @@ type Todo struct {
 	// Release is set on a kind "release" item: the version and commit a
 	// coordinator proposes, and what the user's approval did (release.go).
 	Release *TodoRelease `json:"release,omitempty"`
+	// Set is a decision set: many decisions answered in one go (todoset.go).
+	Set *TodoSet `json:"set,omitempty"`
 	// Source says how the item came to be: "agent" (an agent added it),
 	// "hub-blocked" (the hub filed it, autotodo.go), or empty (a person).
 	// AutoKey is the hub's dedupe key; Suggested marks a guess the user has
@@ -136,6 +138,12 @@ type Todo struct {
 	Source    string `json:"source,omitempty"`
 	AutoKey   string `json:"auto_key,omitempty"`
 	Suggested bool   `json:"suggested,omitempty"`
+}
+
+// earlyPending: an open set with a decision settled ahead of Submit whose
+// notice has not gone out.
+func (t Todo) earlyPending() bool {
+	return t.State == TodoOpen && t.Set != nil && len(t.Set.EarlyPending) > 0
 }
 
 func (t Todo) active() bool { return t.State == TodoOpen || t.State == TodoAnswered }
@@ -344,7 +352,7 @@ func (t *todoStore) pendingNotices() []Todo {
 	defer t.mu.Unlock()
 	var out []Todo
 	for _, it := range t.data.Items {
-		if it.State == TodoAnswered && it.Notice != nil && it.Notice.State == todoNoticePending {
+		if (it.State == TodoAnswered || it.earlyPending()) && it.Notice != nil && it.Notice.State == todoNoticePending {
 			out = append(out, it)
 		}
 	}
@@ -366,6 +374,10 @@ func (t *todoStore) settleNotices(ids []string, state string) {
 			n := *it.Notice
 			n.State, n.At = state, t.now()
 			it.Notice = &n
+			if it.Set != nil && len(it.Set.EarlyPending) > 0 {
+				it.Set = it.Set.clone()
+				it.Set.EarlyPending = nil
+			}
 		}
 	}
 	if err := t.save(); err != nil {
@@ -604,6 +616,9 @@ type todoAddBody struct {
 	Links     []TodoLink   `json:"links"`
 	Waiting   string       `json:"waiting"` // fleet id of the agent waiting
 	NoWait    bool         `json:"no_wait"`
+	// Set makes the item a decision set (todoset.go); the kind is decision
+	// and options are refused.
+	Set *TodoSet `json:"set"`
 	// Release is required for kind "release" and refused for any other.
 	Release *struct {
 		Version string `json:"version"`
@@ -655,14 +670,30 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		bad("bad_options", err.Error())
 		return
 	}
+	var set *TodoSet
+	if b.Set != nil {
+		if len(opts) > 0 || b.Kind != "decision" {
+			bad("bad_set", "a decision set is a decision with no options of its own")
+			return
+		}
+		if set, err = cleanSet(b.Set); err != nil {
+			bad("bad_set", err.Error())
+			return
+		}
+	}
 	ctx := block(b.Context, todoMaxContext)
+	if set != nil {
+		list := set.setMarkdown(false)
+		ctx = block(b.Context, todoMaxContext-len(list)-2)
+		ctx = strings.TrimSpace(ctx + "\n\n" + list)
+	}
 	if len(opts) > 0 {
 		list := optionsMarkdown(opts, recs)
 		ctx = block(b.Context, todoMaxContext-len(list)-2)
 		ctx = strings.TrimSpace(ctx + "\n\n" + list)
 	}
 	c := callerOf(r)
-	it := Todo{Question: q, Context: ctx, Kind: b.Kind, Options: opts, Recommend: recs, Links: links, CreatedBy: s.by(r, ""), Release: rel}
+	it := Todo{Question: q, Context: ctx, Kind: b.Kind, Options: opts, Recommend: recs, Links: links, CreatedBy: s.by(r, ""), Release: rel, Set: set}
 	waiting := strings.TrimSpace(b.Waiting)
 	switch {
 	case waiting != "":
@@ -846,12 +877,20 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 	}
 	now := time.Now()
 	var ids []string
+	var answered []string
+	var early []string // notes for sets settled ahead of Submit
 	for _, it := range s.todos.pendingNotices() {
 		if now.Sub(it.Notice.At) > ledger.CallbackTTL {
 			s.todos.settleNotices([]string{it.ID}, todoNoticeExpired)
 			continue
 		}
+		if it.earlyPending() {
+			early = append(early, earlyNoticeText(it))
+			ids = append(ids, it.ID)
+			continue
+		}
 		ids = append(ids, it.ID)
+		answered = append(answered, it.ID)
 	}
 	if len(ids) == 0 {
 		return
@@ -875,7 +914,12 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 		if send == nil {
 			send = s.promptNotice
 		}
-		err := send(ctx, target, todoNoticeText(ids))
+		var texts []string
+		if len(answered) > 0 {
+			texts = append(texts, todoNoticeText(answered))
+		}
+		texts = append(texts, early...)
+		err := send(ctx, target, strings.Join(texts, "\n\n"))
 		if err != nil {
 			t.noticeTried(ids)
 		} else {
