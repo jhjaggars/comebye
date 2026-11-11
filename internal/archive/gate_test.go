@@ -221,18 +221,34 @@ func TestGateGitPassIsHourly(t *testing.T) {
 	origin, clone := gitWorld(t)
 	other := filepath.Join(t.TempDir(), "elsewhere")
 	gitDo(t, filepath.Dir(other), "clone", "-q", origin, other)
+	// A change is a file named for the subject, so that the same subject is the same
+	// change: landing rebases, and git places a commit by its change, not its message.
+	// (Empty commits have no change to match, and two of them made in the same second
+	// with one subject are even the same commit.)
+	change := func(subject string) {
+		t.Helper()
+		name := strings.ReplaceAll(subject, " ", "_") + ".txt"
+		if err := os.WriteFile(filepath.Join(other, name), []byte(subject+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitDo(t, other, "add", name)
+		gitDo(t, other, "commit", "-q", "-m", subject)
+	}
 	land := func(subject string) string {
 		t.Helper()
 		gitDo(t, other, "pull", "-q", "origin", "main")
-		gitDo(t, other, "commit", "-q", "--allow-empty", "-m", subject)
+		change(subject)
 		gitDo(t, other, "push", "-q", "origin", "HEAD:main")
 		return gitDo(t, other, "rev-parse", "HEAD")
 	}
 	branchCommit := func(subject string) string {
 		t.Helper()
 		gitDo(t, other, "checkout", "-q", "-B", "feat/x", "origin/main")
-		gitDo(t, other, "commit", "-q", "--allow-empty", "-m", subject)
+		change(subject)
 		sha := gitDo(t, other, "rev-parse", "HEAD")
+		// Workers push their branch as a backup, which is how this checkout comes to
+		// have the commit: a patch-id can only be taken of a commit it holds.
+		gitDo(t, other, "push", "-q", "-f", "origin", "feat/x")
 		gitDo(t, other, "checkout", "-q", "main")
 		return sha
 	}
