@@ -1972,11 +1972,20 @@ function relRecordText(h) {
   const verb = rc.rollback ? "roll back" : "upgrade";
   switch (rc.state) {
     case "running": return `${verb} to ${rc.version} running…`;
-    case "ok": return `${rc.rollback ? "rolled back" : "upgraded"} to ${rc.to || rc.version} by ${rc.by || "?"}${ago}`;
+    case "ok": return `${rc.rollback ? "rolled back" : "upgraded"} to ${rc.to || rc.version} by ${relBy(rc.by) || "?"}${ago}`;
     case "rolled_back": return `${verb} failed its checks and was rolled back${ago}: ${rc.error || ""}`;
     case "dry_run": return `dry run ${rc.version}: nothing installed${ago}`;
     default: return `${verb} failed${ago}: ${rc.error || ""}`;
   }
+}
+
+// "me (hub says: by me)" is one person said twice: say it once. A different
+// name on the hub's side stays, as "me (hub: them)".
+function relBy(by) {
+  const m = /^(.*?) \(hub says: (?:by )?(.*)\)$/.exec(String(by || ""));
+  if (!m) return String(by || "");
+  const a = m[1].trim(), b = m[2].trim();
+  return !b || b.toLowerCase() === a.toLowerCase() ? a : `${a} (hub: ${b})`;
 }
 
 function relDeployText(dp, version) {
@@ -1984,7 +1993,7 @@ function relDeployText(dp, version) {
   if (!rc || rc.version !== version) return "";
   const when = Date.parse(rc.finished || rc.started);
   const ago = Number.isNaN(when) ? "" : " " + fmtAgo(when) + " ago";
-  const by = rc.by ? " by " + rc.by : "";
+  const by = rc.by ? " by " + relBy(rc.by) : "";
   switch (rc.state) {
     case "running": return `${rc.version} running${by}…`;
     case "ok": return `${rc.version} done${by}${ago}`;
@@ -2066,7 +2075,13 @@ function relRowHtml(x, d) {
   const tagged = !!cur && cur.state === "tagged";
   const green = !!(tagged && d.build && d.build.state === "success");
   const dp = tagged && d.deploy && d.deploy.enabled ? d.deploy : null;
-  const isDeploy = !!dp && x.name === d.release_host;
+  // The deploy is the hub's upgrade, though its command runs on the release
+  // host: it belongs on the hub's row. The release host's own row is an
+  // ordinary host with its own Upgrade (unless it is the hub, as on a
+  // single-host setup). Without a hub row, the release host's row carries it.
+  const hubName = ((d.hosts || []).find((h) => h.hub) || {}).name || d.release_host;
+  const isDeploy = !!dp && x.name === hubName;
+  const deployRuns = isDeploy && d.release_host && d.release_host !== x.name ? `runs on ${d.release_host}` : "";
   const rc = x.record && cur && x.record.version === cur.version ? x.record : null;
   const drec = isDeploy && dp.record && dp.record.version === cur.version ? dp.record : null;
   const running = !!(x.record && x.record.state === "running") || !!(isDeploy && dp.record && dp.record.state === "running");
@@ -2077,8 +2092,10 @@ function relRowHtml(x, d) {
       rowcls = " rl-h-cur";
       act = `<span class="rl-ok">✓ ${esc(x.version)}</span>`;
       if (x.enabled && green && !running && !isDeploy && rc && rc.state === "ok" && !rc.rollback) act += " " + btn("rollback", "Roll back", "rel-rb");
-      if (isDeploy && drec) sub = relDeployText(dp, cur.version);
-      else if (rc) sub = relRecordText(x);
+      // An earlier failure for this version is history once the host runs it
+      // (it stays in the Record): only a success or a running job is status.
+      if (isDeploy && drec) { if (drec.state === "ok" || drec.state === "running") { sub = relDeployText(dp, cur.version); out = relDeployOut(drec, dp.label || "Deploy"); } }
+      else if (rc && (rc.state === "ok" || rc.state === "running")) sub = relRecordText(x);
     } else if (x.offline) {
       rowcls = " rl-h-off";
       act = `<button type="button" class="rel-up" disabled>Upgrade</button>`;
@@ -2107,7 +2124,7 @@ function relRowHtml(x, d) {
   return `<div class="rl-host rel-host${rowcls}" data-host="${escAttr(x.name)}"${isDeploy ? " data-deploy" : ""}>
     <div class="rl-hl"><span class="rel-hn">${esc(x.name)}</span>${x.hub ? '<span class="rl-tag">hub</span>' : ""}${x.offline ? '<span class="rl-tag rl-tag-off">offline</span>' : ""}<span class="rl-ver rl-v-${vcls}">${esc(x.version || "?")}</span>${to}</div>
     ${act ? `<div class="rel-ha">${act}</div>` : ""}
-    ${sub ? `<div class="rl-sub rel-hs${err ? " rl-err" : ""}">${esc(sub)}</div>` : ""}${out}</div>`;
+    ${sub ? `<div class="rl-sub rel-hs${err ? " rl-err" : ""}">${esc(sub)}</div>` : ""}${deployRuns && (act || drec) ? `<div class="rl-sub rel-runs">${esc(deployRuns)}</div>` : ""}${out}</div>`;
 }
 
 function relFleetHtml(d) {

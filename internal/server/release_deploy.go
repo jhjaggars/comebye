@@ -287,7 +287,10 @@ func (s *Server) handlePeerDeploy(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusConflict, "build_not_green", why)
 		return
 	}
-	by := fmt.Sprintf("%s (hub says: by %s)", s.by(r, ""), oneLine(b.By, 80))
+	by := s.by(r, "")
+	if hub := oneLine(b.By, 80); hub != "" && !strings.EqualFold(hub, by) {
+		by = fmt.Sprintf("%s (hub says: by %s)", by, hub) // said once when both are the same person
+	}
 	rec, code, msg := s.startDeployLocal(by, b.Todo, b.Version)
 	s.audit(r, ledger.AuditEvent{Action: "deploy.request", Todo: b.Todo, OK: code == http.StatusAccepted, Detail: fmt.Sprintf("%s -> %d", b.Version, code)})
 	if code != http.StatusAccepted {

@@ -12,6 +12,7 @@
 //   partial3  tagged; three of four upgraded, mac-mini offline (the user's "3 of 4, 1 offline")
 //   failed    tagged; the hub's deploy failed, peerbox's upgrade was rolled back
 //   dismissed the user abandoned v0.5.22: nothing pending, v0.5.22 first in the history
+//   rollout   the v0.5.24 rollout screenshot: hub comebye-hub bumped by laharl's deploy, laharl (the release host) still on v0.5.23, a Mac upgraded by hand after a failed app upgrade
 //   done      tagged and every host upgraded; the item was closed by the hub
 
 const V = "v0.5.22", PREV = "v0.5.21";
@@ -22,9 +23,35 @@ const HIST = [
   ["v0.5.19", 6, "Answered box readable in light mode"], ["v0.5.18", 9, "Mark button reads Unmark"], ["v0.5.17", 12, "Briefings skip a slot when nothing changed"],
 ];
 
-export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "done", "dismissed"];
+export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "rollout", "done", "dismissed"];
+
+// The v0.5.24 rollout as the user saw it. The deploy ran from laharl for the hub (comebye-hub);
+// laharl itself is on v0.5.23 and the Mac was upgraded by hand after its app upgrade failed.
+function rolloutView() {
+  const N = "v0.5.24", P = "v0.5.23", by = "jhjaggars@gmail.com";
+  const mk = (name, version, extra = {}) => ({ name, local: name === "comebye-hub", hub: name === "comebye-hub", status: "ok", version, enabled: true, offline: false, current: version === N, ...extra });
+  const hosts = [
+    mk("comebye-hub", N),
+    mk("laharl", P),
+    mk("mac", N, { record: { id: "m1", version: N, state: "failed", rollback: false, by, started: ago(120000), finished: ago(60000), error: "could not start: systemd-run is needed to upgrade from the app" } }),
+    mk("kubevirt-1", P),
+  ];
+  const cur = hosts.filter((h) => h.current).length;
+  const rollout = { total: 4, current: cur, offline: 0, behind: 4 - cur, complete: false };
+  const base = releaseView("tagged");
+  base.release_host = "laharl";
+  base.hosts = hosts;
+  base.rollout = rollout;
+  base.todo.release.version = N;
+  base.todo.question = `Release ${N} (a3f9c1e)?`;
+  base.deploy.record = { version: N, state: "ok", by: `${by} (hub says: by ${by})`, started: ago(900000), finished: ago(840000), headline: "bump: ok version=" + N + " is serving",
+    output: "bump: version=" + N + "\nbump: ok version=" + N + " is serving" };
+  base.needs_text = `Roll out ${N}: 2 hosts behind`;
+  return base;
+}
 
 export function releaseView(name) {
+  if (name === "rollout") return rolloutView();
   const tagged = ["tagged", "partial", "partial3", "failed", "done"].includes(name);
   const vers = {
     none: [PREV, PREV, PREV, PREV], dismissed: [PREV, PREV, PREV, PREV], ci: [PREV, PREV, PREV, PREV], green: [PREV, PREV, PREV, PREV], red: [PREV, PREV, PREV, PREV],

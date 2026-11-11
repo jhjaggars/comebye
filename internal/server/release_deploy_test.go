@@ -221,6 +221,36 @@ func TestPeerDeployRoutes(t *testing.T) {
 	})
 }
 
+// The deploy's "by" names a person once when the hub and the peer agree, and
+// keeps the hub's claim only when it differs.
+func TestPeerDeployByIsSaidOnce(t *testing.T) {
+	script, _ := deployScript(t, "echo ok")
+	for _, c := range []struct{ body, want string }{
+		{`{"version":"v0.5.9","by":"me@example.com"}`, "me@example.com"},
+		{`{"version":"v0.5.9","by":"Me@Example.com"}`, "me@example.com"},
+		{`{"version":"v0.5.9","by":"someone else"}`, "me@example.com (hub says: by someone else)"},
+	} {
+		s, _ := peerTagServer(t)
+		s.cfg.Release.DeployCmd = []string{script}
+		if w := do(s, "POST", "/api/release/deploy", hubCall, c.body); w.Code != 202 {
+			t.Fatalf("%s = %d %s", c.body, w.Code, w.Body)
+		}
+		var rec *DeployRecord
+		waitUntil(t, "peer deploy done", func() bool {
+			w := do(s, "GET", "/api/release/deploy", hubCall, "")
+			var st deployStatus
+			ok := w.Code == 200 && json.Unmarshal(w.Body.Bytes(), &st) == nil && st.Record != nil && st.Record.State == depOK
+			if ok {
+				rec = st.Record
+			}
+			return ok
+		})
+		if rec.By != c.want {
+			t.Errorf("by for %s = %q, want %q", c.body, rec.By, c.want)
+		}
+	}
+}
+
 // The hub asks its release host; the command runs there, the hub's page reads
 // the peer's record (also after the hub itself was replaced), and Approve
 // release alone ran nothing.

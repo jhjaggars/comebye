@@ -4295,6 +4295,36 @@ await check(`releases live at ${width}: Approve needs a confirm naming the versi
   }
 });
 }
+// Each host's row is its own: the Bump hub deploy sits on the hub's row, the release host keeps its own Upgrade, and a failure
+// from before a host reached the version is not its status (the v0.5.24 rollout screenshot, relfix.mjs "rollout").
+for (const width of [1280, 390]) {
+await check(`releases fleet rows at ${width}: Bump hub on the hub's row, Upgrade on the release host's, no stale failure beside a match, one "by"`, async () => {
+  await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView("rollout") }));
+  try {
+    await openReleases(width);
+    await page.waitForSelector("#pr-releases [data-fleet] .rl-host");
+    const row = (n) => page.locator(`#pr-releases [data-fleet] .rl-host[data-host="${n}"]`);
+    const txt = (n) => row(n).innerText();
+    // the hub's row: the deploy, its output, and where it runs; nothing doubled
+    const hub = await txt("comebye-hub");
+    if (!(await row("comebye-hub").getAttribute("data-deploy") !== null)) throw new Error("the deploy is not on the hub's row");
+    if (!/v0\.5\.24 done/.test(hub) || !/runs on laharl/.test(hub) || /hub says/.test(hub)) throw new Error("hub row: " + hub);
+    if (!(await row("comebye-hub").locator("[data-deploy-out]").count())) throw new Error("the bump output is not on the hub's row");
+    // laharl: still behind, with its own Upgrade, and none of the deploy
+    const lh = await txt("laharl");
+    if (!/v0\.5\.23/.test(lh) || !(await row("laharl").locator('[data-rel=up]').count()) || (await row("laharl").locator('[data-rel=deploy]').count())) throw new Error("laharl row: " + lh);
+    if (/bump|done by/.test(lh) || (await row("laharl").getAttribute("data-deploy")) !== null) throw new Error("laharl carries the deploy: " + lh);
+    // the Mac runs the version: no failure beside the check
+    const mac = await txt("mac");
+    if (!/✓ v0\.5\.24/.test(mac) || /failed|systemd-run/.test(mac)) throw new Error("mac row: " + mac);
+    // a host behind with no record has a plain Upgrade
+    if (!(await row("kubevirt-1").locator('[data-rel=up]').count())) throw new Error("kubevirt-1 has no Upgrade");
+    const h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1]) throw new Error("sideways scroll " + JSON.stringify(h));
+  } finally {
+    await page.unroute(/\/api\/releases(\?.*)?$/);
+  }
+});
+}
 // Dismiss: the user abandons a tagged release's rollout. A confirm first, then it is out of the tab and the badge.
 for (const width of [1280, 390]) {
 await check(`releases dismiss at ${width}: Dismiss release asks for a confirm, then the release leaves the tab and the badge, its item is dropped, and it stays in the history`, async () => {
