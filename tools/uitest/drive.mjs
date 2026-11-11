@@ -4127,7 +4127,7 @@ await check(`releases tab at ${width}: tabs and badge, and the card and fleet ta
     const reload = async (s) => { state = s; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => document.querySelector("#pr-releases").innerText.length > 0 && rls.data && rls.data.history, null); await page.waitForTimeout(100); };
     await openReleases(width);
     // the tabs
-    if ((await page.locator("#pr-tabs [role=tab]").allInnerTexts()).map((t) => t.trim().replace(/\s+\d$/, "")).join("|") !== "Hosts|Releases") throw new Error("tabs");
+    if ((await page.locator("#pr-tabs [role=tab]:not([hidden])").allInnerTexts()).map((t) => t.trim().replace(/\s+\d$/, "")).join("|") !== "Hosts|Releases") throw new Error("tabs");
     if ((await page.locator("#pr-tab-rel").getAttribute("aria-selected")) !== "true") throw new Error("the deep link did not select Releases");
     // nothing pending
     let t = await txt();

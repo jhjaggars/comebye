@@ -2042,6 +2042,7 @@
     .pr-tabs { flex: none; display: flex; gap: 4px; padding: 6px calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px)); background: var(--panel); border-bottom: 1px solid var(--border); }
     .pr-tabs button { font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; }
     .pr-tabs button[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--blue); }
+    .pr-tabs button[hidden] { display: none; }
     .pr-tabs button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
     .pr-dot { display: inline-block; min-width: 18px; height: 18px; line-height: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--orange); color: var(--on-orange); font-size: 11px; font-weight: 700; text-align: center; }
     .pr-dot[hidden] { display: none; }
