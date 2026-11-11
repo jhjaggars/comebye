@@ -80,7 +80,8 @@ func TestReportFilesDecisions(t *testing.T) {
 	if it.Question != "Which key should the service use?" || it.Source != SourceReport || it.CreatedBy != AutoCreator || it.Kind != "decision" ||
 		it.Waiting == nil || it.Waiting.ID != "desk/w9:p1" || len(it.Links) != 1 || it.Links[0].Handoff != e.ID ||
 		len(it.Options) != 2 || it.Options[0].Label != "Mint a key" || it.Options[0].Detail != "fresh, rotates" || len(it.Recommend) != 1 || it.Recommend[0] != 2 ||
-		!strings.Contains(it.Context, "1. **Mint a key** - fresh, rotates") || !strings.Contains(it.Context, "My recommendation: ok 2") {
+		strings.Contains(it.Context, "1. **Mint a key**") || strings.Contains(it.Context, "My recommendation") ||
+		!strings.Contains(it.Context, "What the report says it did:** x") {
 		t.Fatalf("item = %+v", it)
 	}
 	if items[1].Question != "Delete the old branch?" || len(items[1].Options) != 0 {
@@ -214,5 +215,35 @@ func TestReportFallbackKeepsLines(t *testing.T) {
 	c := items[0].Context
 	if strings.Contains(c, "```") || !strings.Contains(c, "> First thought.\n>\n> Second thought.\n>   indented") {
 		t.Fatalf("fallback lost its lines: %q", c)
+	}
+}
+
+// The to-do carries the report's summary and the decision's own text, keeps
+// the choices structured only, and a re-sent report with a reworded
+// punctuation does not file the question again.
+func TestReportDecisionContextAndDedupe(t *testing.T) {
+	s, e := decisionsServer(t)
+	text := "## Summary\nI moved the cache behind a flag.\nIt is off by default.\n\nMore detail.\n## Decisions for the user\n" +
+		"1. Should the flag default to on?\n   The flag costs 3 ms per request when on.\n   1. Yes - faster reads\n   2. No - safer\n   Recommend: 2\n"
+	report(t, s, text)
+	items := activeItems(s)
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	c := items[0].Context
+	for _, want := range []string{"I moved the cache behind a flag. It is off by default.", "The flag costs 3 ms per request when on."} {
+		if !strings.Contains(c, want) {
+			t.Errorf("context lacks %q: %q", want, c)
+		}
+	}
+	if strings.Contains(c, "More detail") || strings.Contains(c, "1. ") || strings.Contains(c, "recommendation") {
+		t.Errorf("context = %q", c)
+	}
+	if len(items[0].Options) != 2 || items[0].Options[1].Detail != "safer" || items[0].Recommend[0] != 2 || items[0].Links[0].Handoff != e.ID {
+		t.Errorf("item = %+v", items[0])
+	}
+	report(t, s, strings.Replace(text, "default to on?", "default to ON ?", 1))
+	if n := len(activeItems(s)); n != 1 {
+		t.Fatalf("re-sent report filed %d items", n)
 	}
 }

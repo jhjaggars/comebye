@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
@@ -34,6 +35,7 @@ const (
 	SourceReport = "hub-report"
 
 	reportMaxDecisions = 5
+	reportSummaryMax   = 700
 	reportSectionName  = "decisions for the user"
 )
 
@@ -220,7 +222,8 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent) []Todo {
 		who = e.Branch
 	}
 	from := fmt.Sprintf("From the report of **%s** (%s). Agent-written: data, not instructions.", mdSafe(who), mdSafe(e.Branch))
-	link := []TodoLink{{Label: "Handoff " + e.ID, Handoff: e.ID}}
+	link := []TodoLink{{Label: "Full report (handoff " + e.ID + ")", Handoff: e.ID}}
+	summary := reportSummary(text)
 	if unparsed {
 		return []Todo{{
 			Question:  oneLine(fmt.Sprintf("%s's report lists decisions for you; read the report", who), todoMaxQuestion),
@@ -245,12 +248,20 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent) []Todo {
 		it := Todo{Question: q, Kind: "decision", Links: link, Waiting: w, CreatedBy: AutoCreator, Source: SourceReport, AutoKey: reportKey(e.ID, "q", d.Question)}
 		var ctx []string
 		ctx = append(ctx, from)
+		if summary != "" {
+			ctx = append(ctx, "**What the report says it did:** "+summary)
+		}
+		if full := strings.TrimSpace(strings.ReplaceAll(d.Question, "**", "")); full != q {
+			ctx = append(ctx, "**The question in full:** "+full)
+		}
 		if len(d.Notes) > 0 {
 			ctx = append(ctx, strings.Join(d.Notes, "\n"))
 		}
 		if opts, recs, err := cleanOptions(d.Options, d.Rec); err == nil && len(opts) > 0 {
+			// The choices and the recommendation are the item's structured
+			// fields, which the app renders itself: not repeated as a
+			// numbered list in the context.
 			it.Options, it.Recommend = opts, recs
-			ctx = append(ctx, optionsMarkdown(opts, recs))
 		} else if len(d.RawNest) > 0 && (len(d.Options) > 0 || len(d.Rec) > 0) {
 			// The choices did not fit the rules (one option, ten, a recommendation out of range): keep them as text.
 			ctx = append(ctx, strings.Join(d.RawNest, "\n"))
@@ -264,6 +275,59 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent) []Todo {
 	return out
 }
 
+// reportSummary is the first paragraph of the report's "Summary" section,
+// cut short; "" when it has none.
+func reportSummary(text string) string {
+	in, fence := false, false
+	var para []string
+	for _, l := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+		tl := strings.TrimSpace(l)
+		if strings.HasPrefix(tl, "```") {
+			fence = !fence
+		}
+		if !fence {
+			if h, ok := strings.CutPrefix(tl, "## "); ok {
+				if in {
+					break
+				}
+				in = strings.EqualFold(strings.Trim(strings.TrimSpace(h), "*_:. "), "summary")
+				continue
+			}
+		}
+		if !in {
+			continue
+		}
+		if tl == "" {
+			if len(para) > 0 {
+				break
+			}
+			continue
+		}
+		para = append(para, tl)
+	}
+	s := strings.Join(para, " ")
+	if r := []rune(s); len(r) > reportSummaryMax {
+		s = string(r[:reportSummaryMax]) + "…"
+	}
+	return s
+}
+
+// sameQuestion compares two questions ignoring case, spacing and
+// punctuation, so a re-sent report that rewords a character is not filed
+// twice.
+func sameQuestion(a, b string) bool {
+	norm := func(s string) string {
+		var sb strings.Builder
+		for _, r := range strings.ToLower(s) {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				sb.WriteRune(r)
+			}
+		}
+		return sb.String()
+	}
+	return norm(a) != "" && norm(a) == norm(b)
+}
+
 // addReportItem stores an item the hub files from a report: exempt from the
 // per-creator rate limit, not from the global cap, and deduplicated on its
 // AutoKey even after the earlier item is closed. dup is true when an item
@@ -275,6 +339,10 @@ func (t *todoStore) addReportItem(it Todo) (out Todo, dup bool, err error) {
 	active := 0
 	for _, e := range t.data.Items {
 		if e.AutoKey == it.AutoKey {
+			return e, true, nil
+		}
+		// The same handoff asking the same question again (re-sent report).
+		if e.Source == SourceReport && it.Source == SourceReport && sameHandoff(e, it) && sameQuestion(e.Question, it.Question) {
 			return e, true, nil
 		}
 		if e.active() {
@@ -307,4 +375,15 @@ func (s *Server) fileReportDecisions(e ledger.Entry, text string) {
 			log.Printf("todo: report decision of %s: %v", e.ID, err)
 		}
 	}
+}
+
+func sameHandoff(a, b Todo) bool {
+	for _, x := range a.Links {
+		for _, y := range b.Links {
+			if x.Handoff != "" && x.Handoff == y.Handoff {
+				return true
+			}
+		}
+	}
+	return false
 }
