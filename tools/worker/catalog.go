@@ -20,9 +20,9 @@ import (
 // `worker catalog` is read-only. For aws it runs only the calls below, for one
 // region, and caches each source on disk in the state dir:
 //
-//	instance types   ec2 describe-instance-types            24 h
-//	spot price       ec2 describe-spot-price-history        15 min
-//	on-demand price  pricing get-products (us-east-1)        7 d
+//	specs, on-demand AWS public Price List bulk file (no login)   24 h
+//	spot (region)    the public spot-pricing feed (no login)       15 min
+//	spot per zone    ec2 describe-spot-price-history (login)       15 min
 //	typical stop     the public Spot Advisor data file       24 h  (may be missing)
 //	capacity score   ec2 get-spot-placement-scores           30 min, only with --score
 //
@@ -258,8 +258,10 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 		Estimate: estimateTerms{IPv4USDHour: ipv4USDHour, DiskUSDGBMonth: diskUSDGBMonth, DiskGB: e.Cfg.BootDiskGB + e.Cfg.DataDiskGB}}
 
 	// get serves a source from the cache while fresh, else refreshes it, else
-	// serves the stale copy. The key includes what the data depends on.
-	get := func(name, key, srcLabel string, ttl time.Duration, fetch func() (json.RawMessage, error)) (json.RawMessage, bool) {
+	// serves the stale copy. The key includes what the data depends on. An
+	// optional source (it needs a login) that fails is reported on its own and
+	// does not mark the whole catalog degraded.
+	get := func(name, key, srcLabel string, ttl time.Duration, optional bool, fetch func() (json.RawMessage, error)) (json.RawMessage, bool) {
 		ent, have := cache.Sources[key]
 		fresh := have && now.Sub(ent.FetchedAt) < ttl && !o.Refresh
 		info := sourceInfo{Source: srcLabel}
@@ -280,7 +282,7 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 			class = "error"
 		}
 		info.Error = class
-		if doc.Degraded == "" || class == "creds_expired" {
+		if !optional && (doc.Degraded == "" || class == "creds_expired") {
 			doc.Degraded = class
 		}
 		if have {
@@ -293,9 +295,10 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 		return nil, false
 	}
 
+	// Specs and on-demand prices: AWS's public price list, no login needed.
 	famKey := strings.Join(sortedCopy(fams), ",")
-	typesRaw, ok := get("types", "types:"+famKey, "ec2 describe-instance-types", ttlTypes, func() (json.RawMessage, error) {
-		return fetchInstanceTypes(ctx, cli, fams)
+	bulkRaw, ok := get("types", "bulk:"+region+":"+famKey, "AWS Price List (public bulk file)", ttlBulk, false, func() (json.RawMessage, error) {
+		return e.fetchBulk(ctx, region, fams)
 	})
 	if !ok {
 		cl := doc.Sources["types"].Error
@@ -304,39 +307,41 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 		}
 		return nil, &classedError{class: cl, msg: fmt.Sprintf("catalog: the instance types could not be read (%s)", doc.Sources["types"].Error)}
 	}
-	var types []typeInfo
-	if err := json.Unmarshal(typesRaw, &types); err != nil {
-		return nil, fmt.Errorf("catalog: cached instance types are unreadable: %v", err)
+	doc.Sources["on_demand"] = doc.Sources["types"]
+	var bulk bulkData
+	if err := json.Unmarshal(bulkRaw, &bulk); err != nil {
+		return nil, fmt.Errorf("catalog: cached price list is unreadable: %v", err)
 	}
-	// Prices are fetched, and cached, for every type the families give, so a
-	// narrowed view (--types) reuses them.
+	types := filterTypes(bulk.Types, o.Types)
+	od := bulk.OD
+
+	// Spot prices: one per type for the region from the public feed; with a
+	// login, per zone from the EC2 API (which then wins).
+	spotRegion := map[string]float64{}
+	if raw, ok := get("spot_price", "spotjs:"+region, "AWS spot-pricing feed (public, undocumented)", ttlSpotJS, false, func() (json.RawMessage, error) {
+		return e.fetchSpotJS(ctx, region)
+	}); ok {
+		json.Unmarshal(raw, &spotRegion)
+	}
+	spot := map[string]map[string]float64{}
 	var priceTypes []string
-	for _, t := range filterTypes(types, nil) {
+	for _, t := range filterTypes(bulk.Types, nil) {
 		priceTypes = append(priceTypes, t.Type)
 	}
-	types = filterTypes(types, o.Types)
-
-	spot := map[string]map[string]float64{}
-	if raw, ok := get("spot_price", "spot:"+famKey, "ec2 describe-spot-price-history", ttlSpot, func() (json.RawMessage, error) {
+	if raw, ok := get("spot_zones", "spot:"+famKey, "ec2 describe-spot-price-history (your AWS login)", ttlSpot, true, func() (json.RawMessage, error) {
 		return fetchSpotPrices(ctx, cli, e.now(), priceTypes)
 	}); ok {
 		json.Unmarshal(raw, &spot)
 	}
-	od := map[string]float64{}
-	if raw, ok := get("on_demand", "ondemand:"+famKey, "pricing get-products", ttlOnDemand, func() (json.RawMessage, error) {
-		return fetchOnDemand(ctx, cli, region, priceTypes)
-	}); ok {
-		json.Unmarshal(raw, &od)
-	}
 	adv := map[string]string{}
-	if raw, ok := get("spot_advisor", "advisor:"+region, "AWS Spot Advisor (public data file)", ttlAdvisor, func() (json.RawMessage, error) {
+	if raw, ok := get("spot_advisor", "advisor:"+region, "AWS Spot Advisor (public data file)", ttlAdvisor, false, func() (json.RawMessage, error) {
 		return e.fetchAdvisor(ctx, region)
 	}); ok {
 		json.Unmarshal(raw, &adv)
 	}
 	if len(o.Score) > 0 {
 		skey := "score:" + strings.Join(sortedCopy(o.Score), ",")
-		if raw, ok := get("placement", skey, "ec2 get-spot-placement-scores", ttlScore, func() (json.RawMessage, error) {
+		if raw, ok := get("placement", skey, "ec2 get-spot-placement-scores", ttlScore, true, func() (json.RawMessage, error) {
 			return fetchPlacement(ctx, cli, region, o.Score)
 		}); ok {
 			var sc []zoneScore
@@ -364,6 +369,9 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 			}
 			r.SpotMin = ptr(min)
 			r.EstSpot = ptr(round4(min + ipv4USDHour + diskMonth))
+		} else if p, ok := spotRegion[t.Type]; ok {
+			r.SpotMin = ptr(p)
+			r.EstSpot = ptr(round4(p + ipv4USDHour + diskMonth))
 		}
 		if gravitonRe.MatchString(t.Type) || t.Arch != "amd64" {
 			r.Selectable, r.Note = false, "needs work: arm64, the bootstrap is tested on amd64 only"
@@ -427,45 +435,6 @@ type typeInfo struct {
 	MiB  float64 `json:"mib"`
 	Arch string  `json:"arch"`
 	GPUs int     `json:"gpus"`
-}
-
-func fetchInstanceTypes(ctx context.Context, a *awsCLI, fams []string) (json.RawMessage, error) {
-	vals := make([]string, len(fams))
-	for i, f := range fams {
-		vals[i] = f + ".*"
-	}
-	out, _, err := a.r.Run(ctx, "aws", a.json("ec2", "describe-instance-types", "--filters", "Name=instance-type,Values="+strings.Join(vals, ","),
-		"--query", "InstanceTypes[].[InstanceType,VCpuInfo.DefaultVCpus,MemoryInfo.SizeInMiB,ProcessorInfo.SupportedArchitectures[0],GpuInfo.Gpus[0].Count]"), nil)
-	if err != nil {
-		return nil, err
-	}
-	var rows [][]any
-	if err := json.Unmarshal([]byte(out), &rows); err != nil {
-		return nil, fmt.Errorf("describe-instance-types: not JSON: %v", err)
-	}
-	var ts []typeInfo
-	for _, r := range rows {
-		if len(r) < 4 {
-			continue
-		}
-		name, _ := r[0].(string)
-		vcpu, _ := r[1].(float64)
-		mib, _ := r[2].(float64)
-		arch, _ := r[3].(string)
-		var gpus float64
-		if len(r) > 4 {
-			gpus, _ = r[4].(float64)
-		}
-		if !awsTypeRe.MatchString(name) {
-			continue
-		}
-		if arch == "x86_64" {
-			arch = "amd64"
-		}
-		ts = append(ts, typeInfo{Type: name, VCPU: int(vcpu), MiB: mib, Arch: arch, GPUs: int(gpus)})
-	}
-	b, _ := json.Marshal(ts)
-	return b, nil
 }
 
 // filterTypes drops what the picker never offers (metal, very large) and

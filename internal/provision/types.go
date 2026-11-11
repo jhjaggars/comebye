@@ -46,6 +46,9 @@ type Preflight struct {
 	SSH       Check    `json:"ssh"`
 	Region    string   `json:"region,omitempty"`
 	Regions   []string `json:"regions,omitempty"`
+	// DryRun is set by the node's comebye, not the tool: every job on this node
+	// runs create --dry-run (the real path is off).
+	DryRun bool `json:"dry_run"`
 }
 
 var (
@@ -220,7 +223,7 @@ func ParseCatalog(b []byte) (*Catalog, error) {
 	srcs := map[string]Source{}
 	for k, s := range c.Sources {
 		switch k {
-		case "types", "spot_price", "on_demand", "spot_advisor", "placement":
+		case "types", "spot_price", "spot_zones", "on_demand", "spot_advisor", "placement":
 		default:
 			continue
 		}

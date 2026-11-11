@@ -7,7 +7,7 @@
   "on_demand": {
    "fetched_at": "2026-11-10T12:00:00Z",
    "state": "fresh",
-   "source": "pricing get-products"
+   "source": "AWS Price List (public bulk file)"
   },
   "placement": {
    "fetched_at": "2026-11-10T12:00:00Z",
@@ -22,12 +22,17 @@
   "spot_price": {
    "fetched_at": "2026-11-10T12:00:00Z",
    "state": "fresh",
-   "source": "ec2 describe-spot-price-history"
+   "source": "AWS spot-pricing feed (public, undocumented)"
+  },
+  "spot_zones": {
+   "fetched_at": "2026-11-10T12:00:00Z",
+   "state": "fresh",
+   "source": "ec2 describe-spot-price-history (your AWS login)"
   },
   "types": {
    "fetched_at": "2026-11-10T12:00:00Z",
    "state": "fresh",
-   "source": "ec2 describe-instance-types"
+   "source": "AWS Price List (public bulk file)"
   }
  },
  "estimate": {

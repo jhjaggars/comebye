@@ -1,0 +1,1047 @@
+{
+ "disclaimer": "test fixture",
+ "formatVersion": "v1.0",
+ "offerCode": "AmazonEC2",
+ "products": {
+  "2JHUA6KZCU3782KE": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "2.5 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2780 Mbps",
+    "dedicatedEbsThroughputDescription": "695 Mbps",
+    "ecu": "NA",
+    "enhancedNetworkingSupported": "No",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "t4g.large",
+    "intelAvx2Available": "No",
+    "intelAvxAvailable": "No",
+    "intelTurboAvailable": "No",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 5 Gigabit",
+    "normalizationSizeFactor": "4",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "AWS Graviton2 Processor",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:t4g.large",
+    "vcpu": "2",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "2JHUA6KZCU3782KE"
+  },
+  "35AEEWH98DECPC35": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.4 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2250 Mbps",
+    "dedicatedEbsThroughputDescription": "800 Mbps",
+    "ecu": "20",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "Compute optimized",
+    "instanceFamilyCategory": "Compute Optimized",
+    "instanceType": "c5.xlarge",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "8",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8124M",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:c5.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "35AEEWH98DECPC35"
+  },
+  "5G4TA8Z4MUKE6MJB": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.1 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2120 Mbps",
+    "dedicatedEbsThroughputDescription": "850 Mbps",
+    "ecu": "16",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "m5.xlarge",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "16 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "8",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8175",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:m5.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "5G4TA8Z4MUKE6MJB"
+  },
+  "6C86BEPQVG73ZGGR": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.1 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2120 Mbps",
+    "dedicatedEbsThroughputDescription": "480 Mbps",
+    "ecu": "10",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "m5.large",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "4",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8175",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:m5.large",
+    "vcpu": "2",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "6C86BEPQVG73ZGGR"
+  },
+  "7TVXMFHQR6U7W5CV": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "2.5 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "3500 Mbps",
+    "dedicatedEbsThroughputDescription": "3500 Mbps",
+    "ecu": "NA",
+    "enhancedNetworkingSupported": "Yes",
+    "gpu": "1",
+    "gpuMemory": "16 GB",
+    "instanceFamily": "GPU instance",
+    "instanceFamilyCategory": "Accelerated Computing",
+    "instanceType": "g4dn.xlarge",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "16 GiB",
+    "networkPerformance": "Up to 25 Gigabit",
+    "normalizationSizeFactor": "1",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Family",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "125 GB NVMe SSD",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:g4dn.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "7TVXMFHQR6U7W5CV"
+  },
+  "B8JJ44GS8MG4RPR4": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.5 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 10000 Mbps",
+    "dedicatedEbsThroughputDescription": "650 Mbps",
+    "ecu": "NA",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "m6i.large",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 12500 Megabit",
+    "normalizationSizeFactor": "4",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon 8375C (Ice Lake)",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:m6i.large",
+    "vcpu": "2",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "B8JJ44GS8MG4RPR4"
+  },
+  "HBVJM3Q9S8K6MNPJ": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.1 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2780 Mbps",
+    "dedicatedEbsThroughputDescription": "695 Mbps",
+    "ecu": "NA",
+    "enhancedNetworkingSupported": "No",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "t3.large",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 5 Gigabit",
+    "normalizationSizeFactor": "4",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Skylake E5 2686 v5",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "AVX; AVX2; Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:t3.large",
+    "vcpu": "2",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "HBVJM3Q9S8K6MNPJ"
+  },
+  "M2GJ3PRXMAKETJ2R": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.1 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "12000 Mbps",
+    "dedicatedEbsThroughputDescription": "12000 Mbps",
+    "ecu": "345",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "m5.metal",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "384 GiB",
+    "networkPerformance": "25 Gigabit",
+    "normalizationSizeFactor": "192",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8175",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:m5.metal",
+    "vcpu": "96",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance (bare metal)",
+   "sku": "M2GJ3PRXMAKETJ2R"
+  },
+  "PB7MPZWURBQSPBJW": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.1 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "12000 Mbps",
+    "dedicatedEbsThroughputDescription": "12000 Mbps",
+    "ecu": "337",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "m5.24xlarge",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "384 GiB",
+    "networkPerformance": "25 Gigabit",
+    "normalizationSizeFactor": "192",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8175",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:m5.24xlarge",
+    "vcpu": "96",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "PB7MPZWURBQSPBJW"
+  },
+  "RSV572JURZ29ZMTS": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "600 Mbps",
+    "dedicatedEbsThroughputDescription": "600 Mbps",
+    "ecu": "NA",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "m6g.large",
+    "intelAvx2Available": "No",
+    "intelAvxAvailable": "No",
+    "intelTurboAvailable": "No",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "4",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "AWS Graviton2 Processor",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:m6g.large",
+    "vcpu": "2",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "RSV572JURZ29ZMTS"
+  },
+  "RUFVJ4KVTVSSSHEU": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.1 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2780 Mbps",
+    "dedicatedEbsThroughputDescription": "695 Mbps",
+    "ecu": "NA",
+    "enhancedNetworkingSupported": "No",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "t3.xlarge",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "16 GiB",
+    "networkPerformance": "Up to 5 Gigabit",
+    "normalizationSizeFactor": "8",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Skylake E5 2686 v5",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "AVX; AVX2; Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:t3.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "RUFVJ4KVTVSSSHEU"
+  },
+  "SKUBYOL": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.4 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2250 Mbps",
+    "dedicatedEbsThroughputDescription": "800 Mbps",
+    "ecu": "20",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "Compute optimized",
+    "instanceFamilyCategory": "Compute Optimized",
+    "instanceType": "m5.large",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "Bring your own license",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "8",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8124M",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:c5.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "SKUBYOL"
+  },
+  "SKUDEDICATED": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.4 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2250 Mbps",
+    "dedicatedEbsThroughputDescription": "800 Mbps",
+    "ecu": "20",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "Compute optimized",
+    "instanceFamilyCategory": "Compute Optimized",
+    "instanceType": "m5.large",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "8",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8124M",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Dedicated",
+    "usagetype": "BoxUsage:c5.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "SKUDEDICATED"
+  },
+  "SKUELSEWHERE": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.4 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2250 Mbps",
+    "dedicatedEbsThroughputDescription": "800 Mbps",
+    "ecu": "20",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "Compute optimized",
+    "instanceFamilyCategory": "Compute Optimized",
+    "instanceType": "m5.large",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "8",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8124M",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "eu-west-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:c5.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "SKUELSEWHERE"
+  },
+  "SKUWINDOWS": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "3.4 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2250 Mbps",
+    "dedicatedEbsThroughputDescription": "800 Mbps",
+    "ecu": "20",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "Compute optimized",
+    "instanceFamilyCategory": "Compute Optimized",
+    "instanceType": "m5.large",
+    "intelAvx2Available": "Yes",
+    "intelAvxAvailable": "Yes",
+    "intelTurboAvailable": "Yes",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 10 Gigabit",
+    "normalizationSizeFactor": "8",
+    "operatingSystem": "Windows",
+    "operation": "RunInstances",
+    "physicalProcessor": "Intel Xeon Platinum 8124M",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:c5.xlarge",
+    "vcpu": "4",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "SKUWINDOWS"
+  },
+  "WQ8X428F2YDYTBNK": {
+   "attributes": {
+    "availabilityzone": "NA",
+    "capacitystatus": "Used",
+    "classicnetworkingsupport": "false",
+    "clockSpeed": "2.5 GHz",
+    "currentGeneration": "Yes",
+    "dedicatedEbsThroughput": "Up to 2780 Mbps",
+    "dedicatedEbsThroughputDescription": "695 Mbps",
+    "ecu": "NA",
+    "enhancedNetworkingSupported": "Yes",
+    "gpuMemory": "NA",
+    "instanceFamily": "General purpose",
+    "instanceFamilyCategory": "General Purpose",
+    "instanceType": "t3a.large",
+    "intelAvx2Available": "No",
+    "intelAvxAvailable": "No",
+    "intelTurboAvailable": "No",
+    "licenseModel": "No License required",
+    "location": "US East (N. Virginia)",
+    "locationType": "AWS Region",
+    "marketoption": "OnDemand",
+    "memory": "8 GiB",
+    "networkPerformance": "Up to 5 Gigabit",
+    "normalizationSizeFactor": "4",
+    "operatingSystem": "Linux",
+    "operation": "RunInstances",
+    "physicalProcessor": "AMD EPYC 7571",
+    "preInstalledSw": "NA",
+    "processorArchitecture": "64-bit",
+    "processorFeatures": "AVX; AVX2; AMD Turbo",
+    "regionCode": "us-east-1",
+    "servicecode": "AmazonEC2",
+    "servicename": "Amazon Elastic Compute Cloud",
+    "storage": "EBS only",
+    "tenancy": "Shared",
+    "usagetype": "BoxUsage:t3a.large",
+    "vcpu": "2",
+    "vpcnetworkingsupport": "true"
+   },
+   "productFamily": "Compute Instance",
+   "sku": "WQ8X428F2YDYTBNK"
+  }
+ },
+ "publicationDate": "2026-11-01T00:00:00Z",
+ "terms": {
+  "OnDemand": {
+   "2JHUA6KZCU3782KE": {
+    "2JHUA6KZCU3782KE.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "2JHUA6KZCU3782KE.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.0672 per On Demand Linux t4g.large Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0672000000"
+       },
+       "rateCode": "2JHUA6KZCU3782KE.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "2JHUA6KZCU3782KE",
+     "termAttributes": {}
+    }
+   },
+   "35AEEWH98DECPC35": {
+    "35AEEWH98DECPC35.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.17 per On Demand Linux c5.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.1700000000"
+       },
+       "rateCode": "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "35AEEWH98DECPC35",
+     "termAttributes": {}
+    }
+   },
+   "5G4TA8Z4MUKE6MJB": {
+    "5G4TA8Z4MUKE6MJB.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "5G4TA8Z4MUKE6MJB.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.192 per On Demand Linux m5.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.1920000000"
+       },
+       "rateCode": "5G4TA8Z4MUKE6MJB.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "5G4TA8Z4MUKE6MJB",
+     "termAttributes": {}
+    }
+   },
+   "6C86BEPQVG73ZGGR": {
+    "6C86BEPQVG73ZGGR.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "6C86BEPQVG73ZGGR.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.096 per On Demand Linux m5.large Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0960000000"
+       },
+       "rateCode": "6C86BEPQVG73ZGGR.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "6C86BEPQVG73ZGGR",
+     "termAttributes": {}
+    }
+   },
+   "7TVXMFHQR6U7W5CV": {
+    "7TVXMFHQR6U7W5CV.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "7TVXMFHQR6U7W5CV.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.526 per On Demand Linux g4dn.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.5260000000"
+       },
+       "rateCode": "7TVXMFHQR6U7W5CV.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "7TVXMFHQR6U7W5CV",
+     "termAttributes": {}
+    }
+   },
+   "B8JJ44GS8MG4RPR4": {
+    "B8JJ44GS8MG4RPR4.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "B8JJ44GS8MG4RPR4.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.096 per On Demand Linux m6i.large Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0960000000"
+       },
+       "rateCode": "B8JJ44GS8MG4RPR4.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "B8JJ44GS8MG4RPR4",
+     "termAttributes": {}
+    }
+   },
+   "HBVJM3Q9S8K6MNPJ": {
+    "HBVJM3Q9S8K6MNPJ.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "HBVJM3Q9S8K6MNPJ.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.0832 per On Demand Linux t3.large Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0832000000"
+       },
+       "rateCode": "HBVJM3Q9S8K6MNPJ.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "HBVJM3Q9S8K6MNPJ",
+     "termAttributes": {}
+    }
+   },
+   "M2GJ3PRXMAKETJ2R": {
+    "M2GJ3PRXMAKETJ2R.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "M2GJ3PRXMAKETJ2R.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$4.608 per On Demand Linux m5.metal Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "4.6080000000"
+       },
+       "rateCode": "M2GJ3PRXMAKETJ2R.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "M2GJ3PRXMAKETJ2R",
+     "termAttributes": {}
+    }
+   },
+   "PB7MPZWURBQSPBJW": {
+    "PB7MPZWURBQSPBJW.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "PB7MPZWURBQSPBJW.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$4.608 per On Demand Linux m5.24xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "4.6080000000"
+       },
+       "rateCode": "PB7MPZWURBQSPBJW.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "PB7MPZWURBQSPBJW",
+     "termAttributes": {}
+    }
+   },
+   "RSV572JURZ29ZMTS": {
+    "RSV572JURZ29ZMTS.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "RSV572JURZ29ZMTS.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.077 per On Demand Linux m6g.large Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0770000000"
+       },
+       "rateCode": "RSV572JURZ29ZMTS.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "RSV572JURZ29ZMTS",
+     "termAttributes": {}
+    }
+   },
+   "RUFVJ4KVTVSSSHEU": {
+    "RUFVJ4KVTVSSSHEU.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "RUFVJ4KVTVSSSHEU.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.1664 per On Demand Linux t3.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.1664000000"
+       },
+       "rateCode": "RUFVJ4KVTVSSSHEU.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "RUFVJ4KVTVSSSHEU",
+     "termAttributes": {}
+    }
+   },
+   "SKUBYOL": {
+    "35AEEWH98DECPC35.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.17 per On Demand Linux c5.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.1700000000"
+       },
+       "rateCode": "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "35AEEWH98DECPC35",
+     "termAttributes": {}
+    }
+   },
+   "SKUDEDICATED": {
+    "35AEEWH98DECPC35.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.17 per On Demand Linux c5.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.1700000000"
+       },
+       "rateCode": "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "35AEEWH98DECPC35",
+     "termAttributes": {}
+    }
+   },
+   "SKUELSEWHERE": {
+    "35AEEWH98DECPC35.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.17 per On Demand Linux c5.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.1700000000"
+       },
+       "rateCode": "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "35AEEWH98DECPC35",
+     "termAttributes": {}
+    }
+   },
+   "SKUWINDOWS": {
+    "35AEEWH98DECPC35.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.17 per On Demand Linux c5.xlarge Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.1700000000"
+       },
+       "rateCode": "35AEEWH98DECPC35.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "35AEEWH98DECPC35",
+     "termAttributes": {}
+    }
+   },
+   "WQ8X428F2YDYTBNK": {
+    "WQ8X428F2YDYTBNK.JRTCKXETXF": {
+     "effectiveDate": "2026-11-01T00:00:00Z",
+     "offerTermCode": "JRTCKXETXF",
+     "priceDimensions": {
+      "WQ8X428F2YDYTBNK.JRTCKXETXF.6YS6EN2CT7": {
+       "appliesTo": [],
+       "beginRange": "0",
+       "description": "$0.0752 per On Demand Linux t3a.large Instance Hour",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0752000000"
+       },
+       "rateCode": "WQ8X428F2YDYTBNK.JRTCKXETXF.6YS6EN2CT7",
+       "unit": "Hrs"
+      }
+     },
+     "sku": "WQ8X428F2YDYTBNK",
+     "termAttributes": {}
+    }
+   }
+  },
+  "Reserved": {
+   "35AEEWH98DECPC35": {
+    "JRTCKXETXF.38NPMPTW36": {
+     "offerTermCode": "38NPMPTW36"
+    }
+   },
+   "7TVXMFHQR6U7W5CV": {
+    "JRTCKXETXF.38NPMPTW36": {
+     "offerTermCode": "38NPMPTW36"
+    }
+   }
+  }
+ },
+ "version": "20261101000000"
+}

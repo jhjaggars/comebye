@@ -87,19 +87,35 @@ func readOnly(svc, op string) bool {
 	return false
 }
 
+// advisorHTTP serves the three public sources from testdata: the price list,
+// the spot feed and the Spot Advisor. status and hits are the advisor's.
 func advisorHTTP(t *testing.T, status int, hits *int) httpDoer {
-	b, err := os.ReadFile("testdata/aws/spot-advisor.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return httpFunc(func(r *http.Request) (*http.Response, error) {
-		if hits != nil {
-			*hits++
+	read := func(n string) string {
+		b, err := os.ReadFile("testdata/aws/" + n)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if r.URL.String() != advisorURL || r.Method != "GET" {
+		return string(b)
+	}
+	advisor, bulk, spot := read("spot-advisor.json"), read("price-list-bulk.json"), read("spot.js")
+	return httpFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != "GET" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL)
 		}
-		return reply(status, string(b)), nil
+		switch u := r.URL.String(); {
+		case u == advisorURL:
+			if hits != nil {
+				*hits++
+			}
+			return reply(status, advisor), nil
+		case u == spotJSURL:
+			return reply(200, spot), nil
+		case strings.HasPrefix(u, "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/") && strings.HasSuffix(u, "/index.json"):
+			return reply(200, bulk), nil
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
+		}
+		return reply(404, ""), nil
 	})
 }
 
@@ -110,6 +126,7 @@ func (c *fixedClock) now() time.Time { return c.t }
 func catalogEnv(t *testing.T) (*env, *fixtureAWS, *fixedClock, *bytes.Buffer) {
 	c := testAWSCfg(t)
 	c.AWSProfile = "comebye-provision"
+	c.AllowedFamilies = []string{"t3", "t3a", "t4g", "m5", "m6i", "m6g", "c5", "g4dn"}
 	f := &fixtureAWS{dir: "testdata/aws"}
 	var out bytes.Buffer
 	clk := &fixedClock{time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)}
@@ -214,7 +231,7 @@ func TestCatalogMakesOnlyReadCalls(t *testing.T) {
 			t.Errorf("region: %s", l)
 		}
 	}
-	want := map[string]bool{"ec2 describe-instance-types": true, "ec2 describe-spot-price-history": true, "pricing get-products": true, "ec2 get-spot-placement-scores": true}
+	want := map[string]bool{"ec2 describe-spot-price-history": true, "ec2 get-spot-placement-scores": true}
 	for _, o := range f.ops() {
 		delete(want, o)
 	}
@@ -223,23 +240,87 @@ func TestCatalogMakesOnlyReadCalls(t *testing.T) {
 	}
 }
 
-func TestCatalogPricingEndpointIsUSEast1(t *testing.T) {
-	e, f, _, _ := catalogEnv(t)
-	e.Cfg.AWSRegion, e.Cfg.AWSAZ = "eu-west-1", "eu-west-1a"
-	if err := e.catalog(context.Background(), catalogOpts{Region: "us-east-1", Types: []string{"t3.large"}, JSON: true}); err != nil {
+// With no AWS login at all the catalog still has specs, on-demand prices, one
+// spot price per type and the interruption bands, and says which column came
+// from where; only the per-zone prices and the capacity scores need a login.
+func TestCatalogAnonymousNeedsNoLogin(t *testing.T) {
+	e, f, _, out := catalogEnv(t)
+	f.fail = "Unable to locate credentials. You can configure credentials by running \"aws login\"."
+	if err := e.catalog(context.Background(), catalogOpts{JSON: true}); err != nil {
 		t.Fatal(err)
 	}
+	var d catalogDoc
+	json.Unmarshal(out.Bytes(), &d)
+	if d.Degraded != "" {
+		t.Errorf("degraded %q although every public source answered", d.Degraded)
+	}
 	for _, c := range f.calls {
-		l := c.line()
-		if c.args[0] == "pricing" && !strings.Contains(l, "--region us-east-1") {
-			t.Errorf("pricing endpoint: %s", l)
+		if c.args[0] == "pricing" || c.args[1] == "describe-instance-types" {
+			t.Errorf("the public data was available but %s was called", c.line())
 		}
-		if c.args[0] == "pricing" && !strings.Contains(l, "Field=regionCode,Value=us-east-1") {
-			t.Errorf("priced the wrong region: %s", l)
+	}
+	var r *catalogRow
+	for i := range d.Rows {
+		if d.Rows[i].Type == "t3.large" {
+			r = &d.Rows[i]
 		}
-		if strings.Contains(l, "eu-west-1") {
-			t.Errorf("used the config's region instead of the requested one: %s", l)
+	}
+	if r == nil || r.OnDemand == nil || *r.OnDemand != 0.0832 || r.VCPU != 2 || r.MemoryGiB != 8 || r.Arch != "amd64" {
+		t.Fatalf("t3.large: %+v", r)
+	}
+	if r.SpotMin == nil || *r.SpotMin != 0.0231 || len(r.Spot) != 0 || r.EstSpot == nil || r.Interruption != "<5%" {
+		t.Errorf("t3.large spot: %+v", r)
+	}
+	if s := d.Sources["spot_zones"]; s.State != "missing" || s.Error != "creds_expired" {
+		t.Errorf("zones: %+v", s)
+	}
+	if s := d.Sources["types"]; s.State != "fresh" || !strings.Contains(s.Source, "public") {
+		t.Errorf("types: %+v", s)
+	}
+}
+
+func TestParseBulkKeepsOnlyLinuxSharedLicenseFree(t *testing.T) {
+	f, err := os.Open("testdata/aws/price-list-bulk.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	d, err := parseBulk(f, "us-east-1", []string{"m5", "t3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.OD["m5.large"] != 0.096 {
+		t.Errorf("m5.large: %v (a Windows, dedicated, BYOL or other-region product was taken?)", d.OD["m5.large"])
+	}
+	for _, ty := range d.Types {
+		if !strings.HasPrefix(ty.Type, "m5.") && !strings.HasPrefix(ty.Type, "t3.") {
+			t.Errorf("a family that was not asked for: %s", ty.Type)
 		}
+	}
+	if _, err := parseBulk(strings.NewReader(`{"products":{},"terms":{"OnDemand":{}}}`), "us-east-1", []string{"m5"}); err == nil {
+		t.Error("an empty file was accepted")
+	}
+	if _, err := parseBulk(strings.NewReader(`[1,2]`), "us-east-1", []string{"m5"}); err == nil {
+		t.Error("a file of another shape was accepted")
+	}
+}
+
+func TestParseSpotJS(t *testing.T) {
+	b, _ := os.ReadFile("testdata/aws/spot.js")
+	raw, err := parseSpotJS(b, "us-east-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]float64
+	json.Unmarshal(raw, &m)
+	if m["t3.large"] != 0.0231 || m["m5.large"] == 0.9999 {
+		t.Errorf("%v", m)
+	}
+	if _, err := parseSpotJS(b, "mars-north-1"); err == nil {
+		t.Error("a region that is not in the feed gave prices")
+	}
+	if _, err := parseSpotJS([]byte("<html>moved</html>"), "us-east-1"); err == nil {
+		t.Error("a page that is not the feed gave prices")
 	}
 }
 
@@ -276,27 +357,23 @@ func TestCatalogCacheAndTTLs(t *testing.T) {
 	if got := f.ops()[before:]; len(got) != 1 || got[0] != "ec2 describe-spot-price-history" {
 		t.Errorf("after 20 min refetched %v", got)
 	}
-	// 2 days: types, spot and the advisor; on-demand lives 7 days
+	// 2 days: the price list, the feed and the advisor are due too (the aws
+	// call that is left is the per-zone spot history); the price list never
+	// needs a login
 	clk.t = clk.t.Add(48 * time.Hour)
 	before = len(f.calls)
 	run(catalogOpts{})
-	if f.count("pricing") != 10 || hits != 2 {
-		t.Errorf("on-demand refetched too early (%d pricing calls), hits %d", f.count("pricing"), hits)
+	if hits != 2 {
+		t.Errorf("the advisor was not refreshed after 2 days: %d hits", hits)
 	}
-	if got := f.ops()[before:]; len(got) != 2 {
+	if got := f.ops()[before:]; len(got) != 1 || f.count("pricing") != 0 {
 		t.Errorf("after 2 days: %v", got)
-	}
-	// 8 days: on-demand again
-	clk.t = clk.t.Add(6 * 24 * time.Hour)
-	run(catalogOpts{})
-	if f.count("pricing") != 20 {
-		t.Errorf("on-demand not refreshed after 8 days: %d", f.count("pricing"))
 	}
 	// --refresh ignores the cache
 	before = len(f.calls)
 	run(catalogOpts{Refresh: true})
-	if len(f.calls)-before < 12 {
-		t.Errorf("--refresh fetched %d", len(f.calls)-before)
+	if len(f.calls)-before < 1 || hits != 3 {
+		t.Errorf("--refresh fetched %d, advisor hits %d", len(f.calls)-before, hits)
 	}
 }
 
@@ -314,11 +391,14 @@ func TestCatalogServesTheCacheWhenTheLoginExpires(t *testing.T) {
 	}
 	var d catalogDoc
 	json.Unmarshal(e.Out.(*bytes.Buffer).Bytes(), &d)
-	if d.Degraded != "creds_expired" {
-		t.Errorf("degraded %q", d.Degraded)
+	if d.Degraded != "" {
+		t.Errorf("degraded %q: only the optional per-zone prices need the login", d.Degraded)
 	}
-	if s := d.Sources["spot_price"]; s.State != "stale" || s.Error != "creds_expired" || s.FetchedAt != "2026-11-10T12:00:00Z" {
-		t.Errorf("spot source: %+v", s)
+	if s := d.Sources["spot_zones"]; s.State != "stale" || s.Error != "creds_expired" || s.FetchedAt != "2026-11-10T12:00:00Z" {
+		t.Errorf("zone source: %+v", s)
+	}
+	if s := d.Sources["spot_price"]; s.State != "fresh" {
+		t.Errorf("the public spot feed needs no login: %+v", s)
 	}
 	if s := d.Sources["on_demand"]; s.State != "cached" {
 		t.Errorf("on-demand is still fresh: %+v", s)
@@ -328,15 +408,15 @@ func TestCatalogServesTheCacheWhenTheLoginExpires(t *testing.T) {
 	}
 }
 
-func TestCatalogWithoutACacheAndNoLoginFails(t *testing.T) {
-	e, f, _, out := catalogEnv(t)
-	f.fail = "The security token included in the request is expired (ExpiredToken)"
+func TestCatalogWithoutACacheAndNoPriceListFails(t *testing.T) {
+	e, _, _, out := catalogEnv(t)
+	e.HTTP = httpFunc(func(r *http.Request) (*http.Response, error) { return reply(503, ""), nil })
 	err := e.catalog(context.Background(), catalogOpts{JSON: true})
 	if err == nil {
 		t.Fatal("no error")
 	}
 	var o struct{ Error struct{ Class, Msg string } }
-	if json.Unmarshal(out.Bytes(), &o) != nil || o.Error.Class != "creds_expired" {
+	if json.Unmarshal(out.Bytes(), &o) != nil || o.Error.Msg == "" {
 		t.Errorf("json error: %s", out)
 	}
 }
