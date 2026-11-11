@@ -97,6 +97,15 @@ type Config struct {
 	// <root>/<repo>/<branch> (default ~/.worktrees). Checks and removals
 	// may touch it besides the launch roots.
 	WorktreeRoot string
+	// ScratchDir is the temporary directory whose leftovers are cleaned up
+	// when a session is removed and by the periodic prune (/tmp). Empty
+	// turns all of that off.
+	ScratchDir string
+	// ScratchEvery is how often the prune runs (0: not at all);
+	// TmpMaxAge is how old a tmp.* directory must be to be pruned (0: the
+	// default of 48h; negative: tmp.* directories are left alone).
+	ScratchEvery time.Duration
+	TmpMaxAge    time.Duration
 	// StateDir holds the handoff ledger (ledger.json), the briefing
 	// (brief.json) and its schedule (brief-schedule.json), the roles (roles.json) and an optional
 	// handoff-template.md. Empty turns handoffs and marks off.
@@ -431,6 +440,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/probe", s.auth(s.handleProbe))
 	s.mux.HandleFunc("POST /api/worker", s.auth(s.handleWorker))
 	s.mux.HandleFunc("POST /api/remove", s.auth(s.handleRemove))
+	s.mux.HandleFunc("POST /api/scratch", s.authAgentLocal(s.handleScratch))
 	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
 	// The handoff ledger (hub side).

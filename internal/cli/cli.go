@@ -23,6 +23,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/playbook"
+	"github.com/jhjaggars/comebye/internal/scratch"
 )
 
 // Env is the CLI's environment (replaced in tests).
@@ -76,6 +77,7 @@ func init() {
 		{"mark", "AGENT --reason R [--discard [--delivered PAGE,… [--not-captured TEXT]]] [--no-ask] [--wait] [--json]", "propose removing a session, or discarding its work (asks the session first; the user confirms in the app). --delivered records the Pages that capture the work, so its notes and docs are listed as captured, not as warnings", cmdMark},
 		{"show", "FILE [--section HEADING] [--agent A] | --clear [--json]", "put a document (.md, .markdown, .txt, .html in your worktree or under home) in the Doc panel beside your chat, opened at a heading; --clear takes it away. The user sees it live as you edit it", cmdShow},
 		{"deliver", "[AGENT] PAGE… [--not-captured TEXT] [--json]", "record the Pages (pg_… ids from `publish`) that capture an agent's work; yours by default. When the agent is marked --discard, its uncommitted notes and local commits then show as captured in the removal review, and the user discards every such session with one confirmation", cmdDeliver},
+		{"scratch", "[--dry-run] [--json]", "prune this host's temporary directory: scratchpads whose worktree is gone, and old tmp.* / hl.* directories of yours (never a live agent's; --dry-run lists what would go and its size)", cmdScratch},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"reask", "AGENT [--item N] [--json]", "ask a marked session again whether it is safe to remove", cmdReask},
@@ -2666,4 +2668,88 @@ func switchSent(data []byte) string {
 	}
 	json.Unmarshal(data, &r)
 	return strings.Join(r.Commands, ", ")
+}
+
+func cmdScratch(e *Env, args []string) error {
+	fs := flag.NewFlagSet("scratch", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	dry := fs.Bool("dry-run", false, "list what would be removed and how big it is, remove and stop nothing")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/scratch", nil, map[string]any{"dry_run": *dry})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Report struct {
+			DryRun  bool  `json:"dry_run"`
+			Bytes   int64 `json:"bytes"`
+			Removed []struct {
+				Path   string `json:"path"`
+				Bytes  int64  `json:"bytes"`
+				Reason string `json:"reason"`
+			} `json:"removed"`
+			Kept []struct {
+				Path   string `json:"path"`
+				Reason string `json:"reason"`
+			} `json:"kept"`
+			Stopped []struct {
+				PID    int    `json:"pid"`
+				Name   string `json:"name"`
+				CWD    string `json:"cwd"`
+				Reason string `json:"reason"`
+			} `json:"stopped"`
+			Errors []string `json:"errors"`
+		} `json:"report"`
+		Usage *struct {
+			Path    string `json:"path"`
+			Tmpfs   bool   `json:"tmpfs"`
+			UsedPct int    `json:"used_pct"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	rep := r.Report
+	verb, sv := "Removed", "Stopped"
+	if rep.DryRun {
+		verb, sv = "Would remove (dry run)", "Would stop (dry run)"
+	}
+	fmt.Fprintf(e.Stdout, "%s: %d, %s\n", verb, len(rep.Removed), scratch.HumanBytes(rep.Bytes))
+	for _, it := range rep.Removed {
+		fmt.Fprintf(e.Stdout, "  %9s  %s\n            %s\n", scratch.HumanBytes(it.Bytes), it.Path, it.Reason)
+	}
+	fmt.Fprintf(e.Stdout, "%s: %d process(es)\n", sv, len(rep.Stopped))
+	for _, p := range rep.Stopped {
+		fmt.Fprintf(e.Stdout, "  pid %d  %s  %s\n", p.PID, p.Name, p.CWD)
+	}
+	if len(rep.Kept) > 0 {
+		fmt.Fprintf(e.Stdout, "Kept: %d\n", len(rep.Kept))
+		for _, k := range rep.Kept {
+			fmt.Fprintf(e.Stdout, "  %s  (%s)\n", k.Path, k.Reason)
+		}
+	}
+	for _, m := range rep.Errors {
+		fmt.Fprintf(e.Stdout, "Error: %s\n", m)
+	}
+	if u := r.Usage; u != nil {
+		kind := ""
+		if u.Tmpfs {
+			kind = " (RAM)"
+		}
+		fmt.Fprintf(e.Stdout, "%s%s is %d%% full\n", u.Path, kind, u.UsedPct)
+	}
+	return nil
 }

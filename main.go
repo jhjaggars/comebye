@@ -34,6 +34,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/hublock"
 	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/release"
+	"github.com/jhjaggars/comebye/internal/scratch"
 	"github.com/jhjaggars/comebye/internal/server"
 	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/tsauth"
@@ -77,6 +78,9 @@ func main() {
 		peersSpec     = flag.String("peers", getenv("COMEBYE_PEERS"), "make this instance a hub over other comebye instances: comma-separated name=https://host.tailnet.ts.net (name optional; several addresses per peer, tried in order, separated by |)")
 		noAuth        = flag.Bool("insecure-no-auth", false, "serve without -ts-allow-login: every device that reaches the port (your whole tailnet through Serve) can drive your agents")
 		launchOn      = flag.Bool("launch", envBool("COMEBYE_LAUNCH", true), "let the app start new agents in directories under -launch-root")
+		scratchDir    = flag.String("scratch-dir", envOr("COMEBYE_SCRATCH_DIR", "/tmp"), "the temporary directory agents leave scratchpads and tmp.* directories in (often RAM): removing a session cleans up its scratchpad, a periodic prune removes the rest, and Status reports how full it is; empty turns the cleanup off")
+		scratchEvery  = flag.Duration("scratch-prune-every", envDuration("COMEBYE_SCRATCH_PRUNE_EVERY", server.DefaultScratchEvery), "how often to prune scratchpads whose worktree is gone and old tmp.* directories (see `comebye scratch`); 0 turns the prune off")
+		tmpMaxAge     = flag.Duration("tmp-max-age", envDuration("COMEBYE_TMP_MAX_AGE", 48*time.Hour), "how long a tmp.* or hl.* directory of this user must be untouched before the prune removes it; negative leaves them alone")
 		worktreeRoot  = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
 		hubMode       = flag.Bool("hub-mode", envBool("COMEBYE_HUB_MODE", false), "make this instance a hub even with no peers yet, so peers can be added at runtime (comebye peer add); also implied by -peers or stored peers")
 		peerDomains   = flag.String("peer-domains", getenv("COMEBYE_PEER_DOMAINS"), "extra tailnet domain suffixes (comma-separated, e.g. mytailnet.example.com) allowed for peers added at runtime; *.ts.net is always allowed; tailnet IPs only as fallback addresses")
@@ -329,7 +333,13 @@ func main() {
 	// What git has reported as damaged in the repositories agents work in here,
 	// and the daily fsck that looks for it. Shown on the host, and to the hub.
 	repoHealth := gitfetch.OpenHealth(filepath.Join(expandHome(*stateDir), "repo-health.json"), log.Printf)
-	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List})
+	tmpUsage := func() *scratch.Usage {
+		if *scratchDir == "" {
+			return nil
+		}
+		return scratch.UsageOf(*scratchDir)
+	}
+	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List, Tmp: tmpUsage})
 	repoHealth.OnChange = fl.Changed
 	fl.AttachStore(peerStore, addrOpt)
 	go fl.Run(context.Background())
@@ -421,6 +431,9 @@ func main() {
 		LaunchRoots: launchRootList(*launchOn, launchRoots),
 		// Workers' worktrees: <root>/<repo>/<branch>.
 		WorktreeRoot: expandHome(*worktreeRoot),
+		ScratchDir:   *scratchDir,
+		ScratchEvery: *scratchEvery,
+		TmpMaxAge:    *tmpMaxAge,
 		// The handoff ledger, briefing, roles and handoff-template.md.
 		StateDir:               expandHome(*stateDir),
 		RepoHealth:             repoHealth,
@@ -452,6 +465,7 @@ func main() {
 	go srv.RunBlockedRelay(context.Background())
 	go srv.RunReask(context.Background())
 	go srv.RunRepoHealth(context.Background())
+	go srv.RunScratchPrune(context.Background())
 	go srv.RunBriefSchedule(context.Background())
 
 	go func() {

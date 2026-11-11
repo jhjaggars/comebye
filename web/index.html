@@ -1399,6 +1399,12 @@
     .hubchk li.bad .hc-m, .hubchk li.bad .vh { color: var(--red); font-weight: 600; }
     .hubchk .vh { font-weight: 600; }
     .st-more { margin: 4px 2px; font-size: 13px; color: var(--muted); }
+    .st-proj.tmp-hot { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
+    .tmp-hot .st-ph, .tmp-row .st-r.warn { color: var(--red); }
+    .tmp-meter { flex: 1 1 90px; min-width: 60px; max-width: 220px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; align-self: center; }
+    .tmp-meter i { display: block; height: 100%; background: var(--blue); }
+    .tmp-row.warn .tmp-meter i { background: var(--red); }
+    .tmp-row .st-r { margin-left: auto; }
     .st-repair { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
     .st-repair .st-ph { color: var(--red); }
     .st-repair .st-row { display: block; }

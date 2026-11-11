@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/jhjaggars/comebye/internal/scratch"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
@@ -57,6 +58,7 @@ type browserHost struct {
 	Agents          int                `json:"agents"`
 	NoAgents        bool               `json:"no_agents,omitempty"`
 	RepoDamage      []state.RepoDamage `json:"repo_damage,omitempty"`
+	Tmp             *scratch.Usage     `json:"tmp,omitempty"`
 }
 
 type browserEvent struct {
@@ -84,7 +86,7 @@ func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 func slimHosts(hosts []state.HostStatus) []browserHost {
 	out := make([]browserHost, len(hosts))
 	for i, h := range hosts {
-		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Class: h.Class, Since: h.Since, Addr: h.Addr, Version: h.Version, VersionMismatch: h.VersionMismatch, Agents: h.Agents, NoAgents: h.NoAgents, RepoDamage: h.RepoDamage}
+		out[i] = browserHost{Name: h.Name, Local: h.Local, Status: h.Status, Error: h.Error, Class: h.Class, Since: h.Since, Addr: h.Addr, Version: h.Version, VersionMismatch: h.VersionMismatch, Agents: h.Agents, NoAgents: h.NoAgents, RepoDamage: h.RepoDamage, Tmp: h.Tmp}
 	}
 	return out
 }

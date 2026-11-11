@@ -358,6 +358,15 @@ func TestPromptMarkBrief(t *testing.T) {
 		t.Fatalf("a refused prompt reached the hub: %v", f.reqs[n:])
 	}
 
+	f.answers["POST /api/scratch"] = answer{body: `{"report":{"dry_run":true,"bytes":5300,"removed":[{"path":"/tmp/claude-1000/-work-gone","bytes":5000,"reason":"scratchpad of a worktree that is gone"}],"stopped":[{"pid":42,"name":"devserver","cwd":"/work/gone"}],"kept":[{"path":"/tmp/claude-1000/-work-live","reason":"its worktree exists"}]},"usage":{"path":"/tmp","tmpfs":true,"used_pct":81}}`}
+	out.Reset()
+	if code := run(e, "scratch", "--dry-run"); code != 0 || !strings.Contains(out.String(), "Would remove (dry run): 1, 5.2 KB") || !strings.Contains(out.String(), "/tmp/claude-1000/-work-gone") || !strings.Contains(out.String(), "pid 42  devserver") || !strings.Contains(out.String(), "/tmp (RAM) is 81% full") {
+		t.Fatalf("scratch --dry-run: %d %s %s", code, out, errb)
+	}
+	if last := f.reqs[len(f.reqs)-1]; last.path != "/api/scratch" || !strings.Contains(last.body, `"dry_run":true`) {
+		t.Fatalf("last request %q", last)
+	}
+
 	f.answers["POST /api/sweep"] = answer{body: `{"dry_run":true,"ready":[{"id":"laharl/w3:p1","name":"fix","branch":"fix/a","reason":"Sweep: clean"}],"needs_look":[{"id":"laharl/w4:p1","name":"feat","branch":"feat/b","reason":"pushed but not merged"}],"delivered":[{"id":"laharl/w5:p1","name":"res","branch":"research/x","reason":"work delivered in the report; branch has 2 local commits (on no remote)"}],"gone":[{"id":"arch1/w1:p1","name":"smoke","branch":"smoke/x","reason":"host arch1 is not in this hub's fleet any more","ad_hoc":true}],"skipped":[]}`}
 	out.Reset()
 	if code := run(e, "sweep", "--dry-run"); code != 0 || !strings.Contains(out.String(), "Work delivered in the report; branch has local commits (not marked; mark with --mark-delivered) (1)") || !strings.Contains(out.String(), "Gone: nothing left to lose or check (would mark) (1)") || !strings.Contains(out.String(), "(no handoff)") || !strings.Contains(out.String(), "Would mark ready to remove (dry run) (1)") || !strings.Contains(out.String(), "pushed but not merged") || strings.Contains(out.String(), "confirms removal") {

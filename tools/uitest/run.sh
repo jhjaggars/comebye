@@ -38,6 +38,8 @@ app="$(cd "${1:-$root}" && pwd)"
 out="${2:-$(mktemp -d)}"
 port="${PORT:-18741}"
 tmp="$(mktemp -d)"
+# The servers started here must never prune the real /tmp (their fake herdr has no live agents).
+export COMEBYE_SCRATCH_DIR="$tmp/scratch"; mkdir -p "$COMEBYE_SCRATCH_DIR"
 mkdir -p "$out"
 trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$tmp"' EXIT
 

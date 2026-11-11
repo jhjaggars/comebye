@@ -59,6 +59,7 @@ with the matches listed.
 | `comebye show FILE [--section HEADING]` / `show --clear` | put a document (`.md`, `.markdown`, `.txt`, `.html` in your worktree or under home, up to 1 MB) in the Doc panel beside your chat, opened at a heading; the user reads it live as you edit it. A refused file is an error here. The Diff panel needs nothing from you: it shows your checkout's changes |
 | `comebye deliver [AGENT] PAGE… [--not-captured TEXT]` | record the pages (`pg_…`) that hold a finished agent's work (yours if no AGENT); with `mark --discard` its notes and docs show as captured in the review |
 | `comebye unmark AGENT` | withdraw that proposal |
+| `comebye scratch [--dry-run]` | prune this host's `/tmp`: scratchpads of removed worktrees and old `tmp.*` dirs (never a live agent's); removal already does this for the session removed |
 | `comebye sweep [--dry-run] [--notify]` | find finished workers on every host, check each on its own host and mark the ones with nothing to lose; lists the rest with why |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
 | `comebye todo add "QUESTION" [--kind K] [--option "LABEL\|DETAIL" ... --recommend N] [--context FILE\|-] [--link URL] [--waiting AGENT]` | put a question, decision or follow-up for the user on the to-do list |

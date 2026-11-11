@@ -204,6 +204,11 @@ func (f *fake) answer(method string, p map[string]any) (any, *rpcErr) {
 		return map[string]any{"type": "agent_list", "agents": f.agents}, nil
 	case "session.snapshot":
 		return map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"workspaces": f.workspaces()}}, nil
+	case "workspace.list":
+		// No git workspaces here: the agents' own directories are what keeps a scratchpad.
+		return map[string]any{"type": "workspace_list", "workspaces": []any{}}, nil
+	case "worktree.list":
+		return map[string]any{"type": "worktree_list", "worktrees": []any{}}, nil
 	case "agent.get":
 		if a := f.find(target); a != nil {
 			return map[string]any{"type": "agent_info", "agent": a}, nil

@@ -49,6 +49,8 @@ start_servers() { # uses $d, $port, $peerport
   # Token usage: session files for the hub and the peer (counts only), and the ledger entries of the hub's workers.
   node "$here/usagefix.mjs" "$d/usage" >/dev/null
   mkdir -p "$d/state" && cp "$d/usage/ledger.json" "$d/state/ledger.json"
+  # Never let a dev server prune the real /tmp: its fake herdr has no live agents.
+  export COMEBYE_SCRATCH_DIR="$d/scratch"; mkdir -p "$COMEBYE_SCRATCH_DIR"
   local web="$root/web" peer_url="http://127.0.0.1:$peerport"
   # The peer host first, so the hub can reach it.
   spawn peer-herdr "$d/peer-herdr.log" "$d/fake-herdr" -sock "$d/peer.sock" -dir "$d/peer" -fixtures -fixture-host peerbox

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jhjaggars/comebye/internal/scratch"
 	"io"
 	"log"
 	"net/http"
@@ -71,6 +72,9 @@ type Options struct {
 	// RepoDamage lists this host's damaged repositories, for its own entry in
 	// Hosts. Nil reports none.
 	RepoDamage func() []state.RepoDamage
+	// Tmp reports how full this host's temporary directory is, for its own
+	// entry in Hosts. Nil reports nothing.
+	Tmp func() *scratch.Usage
 }
 
 // Limits on what a peer may report about its repositories.
@@ -247,6 +251,9 @@ func (f *Fleet) Hosts() []state.HostStatus {
 	if f.opts.RepoDamage != nil {
 		out[0].RepoDamage = f.opts.RepoDamage()
 	}
+	if f.opts.Tmp != nil {
+		out[0].Tmp = f.opts.Tmp()
+	}
 	for _, p := range f.peerList() {
 		hs := p.hostStatus()
 		hs.VersionMismatch = f.opts.Version != "" && hs.Version != "" && hs.Version != f.opts.Version
@@ -307,6 +314,7 @@ func (f *Fleet) Run(ctx context.Context) {
 // peer is the hub's connection to one peer instance.
 type peer struct {
 	repoDamage []state.RepoDamage // what the peer last reported about its repositories
+	tmp        *scratch.Usage     // and about its temporary directory
 	f          *Fleet
 	name       string
 	// addrs are the peer's addresses, tried in order by attempt.
@@ -369,7 +377,7 @@ func validStatus(s herdr.AgentStatus) bool {
 func (p *peer) hostStatus() state.HostStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr, Version: p.version, RepoDamage: p.repoDamage}
+	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr, Version: p.version, RepoDamage: p.repoDamage, Tmp: p.tmp}
 	if p.status != StatusOK {
 		hs.Error = p.lastErr
 	}
@@ -637,10 +645,12 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	// includes other hosts, which must not be re-aggregated here.
 	own := ""
 	var damage []state.RepoDamage
+	var tmp *scratch.Usage
 	for _, h := range hosts {
 		if h.Local {
 			own = h.Name
 			damage = clipRepoDamage(h.RepoDamage)
+			tmp = clipTmp(h.Tmp)
 		}
 	}
 	inst := p.instance()
@@ -670,6 +680,7 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	now := time.Now()
 	p.mu.Lock()
 	p.repoDamage = damage
+	p.tmp = tmp
 	wasOK := p.status == StatusOK
 	transitions := p.tracker.Observe(kept, now)
 	p.agents = kept
@@ -842,4 +853,18 @@ func clipRepoDamage(in []state.RepoDamage) []state.RepoDamage {
 		out = append(out, d)
 	}
 	return out
+}
+
+// clipTmp bounds what a peer reports about its temporary directory.
+func clipTmp(u *scratch.Usage) *scratch.Usage {
+	if u == nil {
+		return nil
+	}
+	c := *u
+	if len(c.Path) > 200 {
+		c.Path = c.Path[:200]
+	}
+	c.UsedPct = min(max(c.UsedPct, 0), 100)
+	c.Warn = c.UsedPct >= scratch.WarnPct
+	return &c
 }

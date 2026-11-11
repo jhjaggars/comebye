@@ -222,6 +222,33 @@ function repoDamageList() {
   return out;
 }
 
+// Each host reports how full its temporary directory is (on many Linux hosts
+// /tmp is RAM, and agents' scratch files fill it). Shown on Status, red above
+// the host's own warning threshold.
+function tmpHosts() { return (state.hosts || []).filter((h) => h.tmp && h.tmp.total > 0); }
+
+function fmtBytes(n) {
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : String(n)) + " " + u[i];
+}
+
+function tmpCardHtml() {
+  const hs = tmpHosts();
+  if (!hs.length) return "";
+  const hot = hs.some((h) => h.tmp.warn);
+  const rows = hs.map((h) => {
+    const t = h.tmp;
+    const pct = Math.min(100, Math.max(0, t.used_pct));
+    return `<div class="st-row tmp-row${t.warn ? " warn" : ""}"><span class="st-n">${esc(multiHost() ? h.name : "This host")}</span><span class="st-m">${esc(t.path)}${t.tmpfs ? " (RAM)" : ""}</span>` +
+      `<span class="tmp-meter" role="img" aria-label="${pct}% used"><i style="width:${pct}%"></i></span>` +
+      `<span class="st-r${t.warn ? " warn" : ""}">${pct}% of ${esc(fmtBytes(t.total))}</span></div>`;
+  }).join("");
+  const hint = hot ? `<div class="st-hint">Nearly full: agents' scratch files are filling it. <code>comebye scratch --dry-run</code> lists what can go.</div>` : "";
+  return `<section class="st-proj${hot ? " hot tmp-hot" : ""}" aria-label="Temporary space"><div class="st-ph">${hot ? "Temporary space is nearly full" : "Temporary space"}</div>${rows}${hint}</section>`;
+}
+
 // repoDamageOf is the damaged repository an agent works in, if any.
 function repoDamageOf(a) {
   const h = (a.host && hostStatus(a.host)) || (state.hosts || []).find((x) => x.local);
@@ -5149,7 +5176,7 @@ function statusHTML(desktop) {
     return `<div class="st-row"><span class="st-n">${esc(multiHost() ? `${host} · ${d.repo}` : d.repo)}</span><span class="st-m warn">${esc(d.reason)}${d.ref ? ` at <code>${esc(d.ref)}</code>` : ""}</span><span class="st-r">${Number.isNaN(since) ? "" : "since " + esc(fmtAgo(since)) + " ago"}</span>` +
       `<div class="st-hint">${esc(d.hint)}</div><div class="st-m">${esc(d.path)} · found by ${esc(d.source)}${n ? ` · ${n} ${n === 1 ? "agent works" : "agents work"} in it` : ""}</div></div>`;
   }).join("")}</section>` : "";
-  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${boardHtml()}${briefCardHtml()}${ps.map(card).join("")}${
+  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${tmpCardHtml()}${boardHtml()}${briefCardHtml()}${ps.map(card).join("")}${
     desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
 }
 

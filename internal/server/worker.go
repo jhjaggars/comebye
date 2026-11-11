@@ -15,6 +15,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/playbook"
+	"github.com/jhjaggars/comebye/internal/scratch"
 	"github.com/jhjaggars/comebye/internal/state"
 )
 
@@ -544,6 +545,9 @@ type removeResult struct {
 	// is configured (see archive.go); a failure here never stops the removal.
 	Archived string          `json:"archived,omitempty"`
 	Checks   *worktreeChecks `json:"checks,omitempty"`
+	// Scratch is what was cleaned up in the temporary directory once the
+	// worktree was gone (its scratchpad, processes left running in it).
+	Scratch *scratch.Report `json:"scratch,omitempty"`
 }
 
 // handleRemove closes a session and, if asked and safe, removes its
@@ -728,6 +732,9 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 		if !res.WorktreeRemoved {
 			res.Kept = why
 		}
+	}
+	if res.WorktreeRemoved {
+		res.Scratch = s.cleanRemoved(wt, live, agent)
 	}
 	return res, nil
 }

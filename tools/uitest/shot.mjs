@@ -29,6 +29,7 @@
 //                        (bad: the report's claims contradict what the hub found); open it with
 //                        --click on '#/status' rows, e.g. route '#/status' --click 'details.st-row > summary'
 //   --board              serve a canned GET /api/board (boardfix.mjs), every lane filled
+//   --tmp ok|warn|full   show the Status page's temporary-space card with a canned /tmp usage (22% / 83% / 97% of 31 GB RAM)
 //   --settle MS          wait this long after the steps (default 400)
 //
 // Prints: the PNG path, console errors/warnings, failed requests, and for
@@ -134,6 +135,16 @@ try {
     await page.waitForTimeout(150);
   }
   await page.waitForTimeout(Number(opt.settle || 400));
+  if (opt.tmp) {
+    const pct = { ok: 22, warn: 83, full: 97 }[opt.tmp] ?? 83;
+    await page.evaluate((pct) => {
+      const total = 31 * 1024 ** 3;
+      for (const h of state.hosts) h.tmp = { path: "/tmp", tmpfs: true, total, used: Math.round(total * pct / 100), used_pct: pct, warn: pct >= 80 };
+      for (const el of [document.getElementById("ps-body"), document.getElementById("br-status")]) if (el) el._html = "";
+      renderStatus();
+    }, pct);
+    await page.waitForTimeout(200);
+  }
   await page.screenshot({ path: out, fullPage: !!opt.full });
   console.log(`screenshot: ${path.resolve(out)} (${width}x${height}, ${theme}) of ${page.url()}`);
 

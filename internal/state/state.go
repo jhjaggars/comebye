@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jhjaggars/comebye/internal/scratch"
 	"log"
 	"os"
 	"sort"
@@ -470,6 +471,9 @@ type HostStatus struct {
 	// RepoDamage lists the host's repositories whose object store git reports
 	// as damaged (see gitfetch.Health). A peer reports its own; the hub keeps it.
 	RepoDamage []RepoDamage `json:"repo_damage,omitempty"`
+	// Tmp is how full the host's temporary directory is (/tmp is RAM on
+	// many Linux hosts); a peer reports its own and the hub keeps it.
+	Tmp *scratch.Usage `json:"tmp,omitempty"`
 }
 
 // RepoDamage is a repository whose object store git reports as damaged: missing

@@ -434,6 +434,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. TEXT is sent as is: a TEXT that is an existing file is refused (send a file with `comebye prompt AGENT - < file`). If the agent has a dialog open (permission prompt, question, menu) the prompt is refused with `dialog_open` (exit non-zero) and nothing is typed: the host that owns the pane checks the screen right before sending. It is refused rather than held automatically, so the caller always knows the message did not arrive; use `--queue` to hold it. |
 | `comebye reask AGENT [--item N]` | Ask a marked session again whether it is safe to remove. The old answer stands until it replies; `comebye ledger` shows each UNSAFE answer's items as the hub last checked them, with the answer's age. |
 | `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
+| `comebye scratch [--dry-run] [--json]` | Prune this host's temporary directory (see [Scratch space](#scratch-space-tmp)): scratchpads whose worktree is gone and your old `tmp.*` / `hl.*` directories, never a live agent's. `--dry-run` lists what would go, how big it is and which processes would be stopped, and changes nothing. |
 | `comebye sweep [--dry-run] [--idle-after D] [--notify] [--mark-delivered] [--json]` | Sweep for finished workers (see [Sweeping](#sweeping-for-finished-agents)): mark the ones with nothing to lose as ready to remove, list the others with why. `--dry-run` marks nothing; `--notify` also tells an idle coordinator. |
 | `comebye todo add "QUESTION" [--kind decision\|action\|followup] [--option "LABEL\|DETAIL" ... [--recommend N[,M]]] [--context FILE\|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT \| --no-wait]` | Put a question, a decision, something only the user can do, or a follow-up on the to-do list, with a little context (why, what yes and no do, links to the PR or report). It shows in the app's To do panel beside the briefing, so it is not lost while you field other agents' feedback. Any agent may add; a worker is by default the agent waiting on its own item, a coordinator by default names none (`--waiting AGENT` for the agent blocked on it). A question with choices takes `--option "label\|detail"` (2 to 9, repeatable) and `--recommend N[,M]`; the hub also writes the numbered list and a "My recommendation: ok N" line into the context, and the app draws its buttons from the fields. |
 | `comebye publish FILE\|- [--title T] [--kind html\|md] [--key K \| --update ID] [--if-version N] [--handoff ID]` | Publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages screen, sandboxed. `--update ID` (or `--key K`, which is idempotent) adds a version to the same link. Images go in as `data:` URIs; 5 MiB at most. The link is full when the hub has `-public-url` set (or you are on a peer, which knows the hub), else a path. Put the link in a report or `todo add --link`: the app opens it in place. |
@@ -690,3 +691,35 @@ command (`/model <name>`; pi also `/thinking <level>`). The agent must be
 idle with no dialog open, and a pi model must be one pi lists on that host,
 since pi opens its selector for a name it does not know. The switch is not
 read back from the agent; the new model shows on the worker's ledger entry.
+
+## Scratch space (`/tmp`)
+
+On many Linux hosts `/tmp` is a tmpfs, that is RAM. Agents fill it: Claude
+Code keeps a scratchpad per session in `/tmp/claude-<uid>/<project>/<session>/`,
+tests leave `tmp.*` / `hl.*` directories (screenshots, browser profiles,
+dev-server state can be gigabytes), and a dev server started by a worker can
+outlive its worktree. A full `/tmp` gets the desktop session killed by the OOM
+killer, so Comebye cleans up after sessions:
+
+- **On removal.** When a removal takes the worktree away, the session's
+  scratchpad project goes too, and processes of yours still running in the
+  worktree or the scratchpad (by working directory, or a path on their
+  command line, such as a browser's `--user-data-dir`) are stopped, first
+  with SIGTERM, then SIGKILL. Shells, `herdr`, `comebye`, `claude`, `pi` and
+  `sshd` are never stopped. The removal result carries a `scratch` report. A
+  worktree that stays (dirty, unmerged, in use) keeps its scratchpad.
+- **Periodically** (`-scratch-prune-every`, hourly) and on demand
+  (`comebye scratch`): scratchpad projects whose worktree no longer exists
+  and that nothing touched for 6 hours, and your `tmp.*` / `hl.*` directories
+  untouched for `-tmp-max-age` (48 hours). A directory a shell or an agent
+  sits in is kept. If Comebye cannot list the live agents and worktrees,
+  nothing is pruned.
+- **Safety.** Only paths owned by the user running Comebye, never a symlink,
+  never anything under a live agent's working directory or an existing
+  worktree. Every removal is logged with its size (`scratch: …`);
+  `comebye scratch --dry-run` shows what a prune would do.
+- **Status** shows each host's `/tmp` usage and turns red from 80 % full.
+
+What is not done: agents' `TMPDIR` is not redirected to disk. herdr's
+`agent.start` takes no environment, so Comebye cannot set it per worker; to do
+it for all of them, set `TMPDIR` in the environment herdr is started from.
