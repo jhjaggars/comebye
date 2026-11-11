@@ -52,6 +52,9 @@ type Config struct {
 	// AllowedRegions are the regions `catalog` may be asked about (and, later,
 	// the regions a host may be built in). Empty: RegionsAllowed' short default.
 	AllowedRegions []string
+	// MaxBudgetCapUSD is the ceiling a request's budget_cap_usd may not pass
+	// (a ceiling the hub cannot raise); 0 means the default, 25.
+	MaxBudgetCapUSD float64
 
 	Project     string // GCP project id
 	Zone        string
@@ -384,6 +387,8 @@ func (c *Config) apply(kv map[string]string) error {
 			c.AllowedFamilies = splitList(v)
 		case "allowed_regions":
 			c.AllowedRegions = splitList(v)
+		case "max_budget_cap_usd":
+			c.MaxBudgetCapUSD, err = strconv.ParseFloat(v, 64)
 		default:
 			return fmt.Errorf("unknown setting %q", k)
 		}
@@ -524,6 +529,7 @@ func (c *Config) Validate() error {
 		chk(c.regionsValid(), "allowed_regions: every entry must be a region like us-east-1"),
 		chk(c.familiesValid(), "allowed_families: every entry must be a family like t3"),
 		chk(c.BudgetCapUSD >= 0 && c.BudgetCapUSD <= 10000, "budget_cap_usd must be 0..10000"),
+		chk(c.MaxBudgetCapUSD >= 0 && c.MaxBudgetCapUSD <= 10000, "max_budget_cap_usd must be 0..10000"),
 		chk(c.DestroyAfterHours >= 0 && c.DestroyAfterHours <= 8760, "destroy_after_hours must be 0..8760"),
 		chk(c.HubVersion == "" || versionRe.MatchString(c.HubVersion), "hub_version %q is not a release tag like v0.3.0", c.HubVersion),
 	} {
@@ -720,6 +726,32 @@ func (c *Config) regionsValid() bool {
 		}
 	}
 	return true
+}
+
+// budgetCeiling is the largest budget cap a request may ask for.
+func (c *Config) budgetCeiling() float64 {
+	if c.MaxBudgetCapUSD > 0 {
+		return c.MaxBudgetCapUSD
+	}
+	return 25
+}
+
+// familyAllowed: the instance type's family is one this node may build.
+func (c *Config) familyAllowed(t string) bool {
+	fam, _, ok := strings.Cut(t, ".")
+	if !ok {
+		return false
+	}
+	list := c.AllowedFamilies
+	if len(list) == 0 {
+		list = defaultFamilies
+	}
+	for _, f := range list {
+		if f == fam {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) familiesValid() bool {

@@ -100,6 +100,9 @@ func (s *Spec) Apply(c *Config) error {
 		}
 	}
 	if s.Type != "" {
+		if c.Provider == "aws" && !c.familyAllowed(s.Type) {
+			return fmt.Errorf("spec: type %q is not in an allowed family (allowed_families)", s.Type)
+		}
 		c.MachineType, c.machineSet = s.Type, true
 	}
 	if s.Spot != nil {
@@ -140,6 +143,9 @@ func (s *Spec) Apply(c *Config) error {
 		}
 	}
 	if s.BudgetCapUSD != nil {
+		if *s.BudgetCapUSD > c.budgetCeiling() {
+			return fmt.Errorf("spec: budget_cap_usd %.2f is over this node's ceiling of %.2f (max_budget_cap_usd)", *s.BudgetCapUSD, c.budgetCeiling())
+		}
 		c.BudgetCapUSD = *s.BudgetCapUSD
 	}
 	if s.DestroyAfterHours != nil {

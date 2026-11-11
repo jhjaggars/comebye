@@ -36,20 +36,22 @@ func TestSpecRefusesUnknownFields(t *testing.T) {
 
 func TestSpecRefusesWhatTheConfigWould(t *testing.T) {
 	for name, in := range map[string]string{
-		"bad name":            `{"name":"W 1"}`,
-		"graviton":            `{"kind":"aws","type":"t4g.large"}`,
-		"type with a space":   `{"kind":"aws","type":"t3.large --foo"}`,
-		"zone outside region": `{"kind":"aws","zone":"eu-west-1a"}`,
-		"spot on gcp":         `{"kind":"gcp","spot":true}`,
-		"tiny disk":           `{"data_disk_gb":1}`,
-		"idle too short":      `{"idle_minutes":1}`,
-		"bad max run":         `{"max_run":"1 day"}`,
-		"unknown agent":       `{"agents":["rm"]}`,
-		"no agents":           `{"agents":[]}`,
-		"negative cap":        `{"budget_cap_usd":-1}`,
-		"huge destroy":        `{"destroy_after_hours":100000}`,
-		"llm on, none set":    `{"llm_key":true}`,
-		"kind unknown":        `{"kind":"azure"}`,
+		"bad name":             `{"name":"W 1"}`,
+		"graviton":             `{"kind":"aws","type":"t4g.large"}`,
+		"type with a space":    `{"kind":"aws","type":"t3.large --foo"}`,
+		"zone outside region":  `{"kind":"aws","zone":"eu-west-1a"}`,
+		"spot on gcp":          `{"kind":"gcp","spot":true}`,
+		"tiny disk":            `{"data_disk_gb":1}`,
+		"idle too short":       `{"idle_minutes":1}`,
+		"bad max run":          `{"max_run":"1 day"}`,
+		"unknown agent":        `{"agents":["rm"]}`,
+		"no agents":            `{"agents":[]}`,
+		"negative cap":         `{"budget_cap_usd":-1}`,
+		"huge destroy":         `{"destroy_after_hours":100000}`,
+		"llm on, none set":     `{"llm_key":true}`,
+		"kind unknown":         `{"kind":"azure"}`,
+		"family not allowed":   `{"kind":"aws","type":"p4d.24xlarge"}`,
+		"cap over the ceiling": `{"budget_cap_usd":26}`,
 	} {
 		c := testAWSCfg(t)
 		c.baseAZ = c.AWSAZ

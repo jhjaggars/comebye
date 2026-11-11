@@ -91,3 +91,6 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # from the tailnet soon after it goes offline: for tests only.
 # ts_key_ephemeral=false
 # ts_key_minutes=10                          # 1..60
+
+# Ceilings the app's Add host request cannot raise (a request over one is refused before anything is built).
+# max_budget_cap_usd=25                      # the largest budget cap a request may ask for
