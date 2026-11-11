@@ -54,8 +54,11 @@ type cbJob struct {
 	cb      *ledger.Callback
 	ready   bool // what the notice points at exists (a captured report)
 	text    func(standIn bool) string
-	tried   func()
-	done    func(state, to string)
+	// hold says why the notice should wait now ("" to send it): see
+	// premature.go. Nil for jobs that are never held.
+	hold  func(ctx context.Context) string
+	tried func()
+	done  func(state, to string)
 }
 
 // deliverCallbacks sends the "your worker finished" and "your plan
@@ -72,6 +75,7 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 		jobs = append(jobs, cbJob{
 			key: e.ID, replyTo: e.ReplyTo, cb: e.Callback, ready: !e.ReportPending(),
 			text:  func(standIn bool) string { return callbackText(e, standIn) },
+			hold:  func(ctx context.Context) string { return s.holdFinished(ctx, e, time.Now()) },
 			tried: func() { s.logLedger(s.ledger.CallbackTried(e.ID, e.Callback.At)) },
 			done: func(state, to string) {
 				s.logLedger(s.ledger.CallbackDone(e.ID, e.Callback.At, state, to, time.Now()))
@@ -227,6 +231,18 @@ func safeText(s string) string {
 func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
+	if j.hold != nil {
+		if why := j.hold(ctx); why != "" {
+			// Not a finish yet: look again after callbackRetry. If the
+			// worker goes back to work the notice is dropped; a later idle
+			// makes a fresh one.
+			_ = why
+			s.coord.mu.Lock()
+			s.coord.calling[j.key] = time.Now()
+			s.coord.mu.Unlock()
+			return
+		}
+	}
 	if err := s.promptNotice(ctx, target, j.text(standIn)); err != nil {
 		if isInputBusy(err) {
 			// The user is typing in that pane: hold the notice and try

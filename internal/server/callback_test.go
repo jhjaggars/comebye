@@ -201,3 +201,71 @@ func TestWorkerArgsAreNarrow(t *testing.T) {
 		t.Fatal("pi has no allow list")
 	}
 }
+
+// A worker idle with a backgrounded task still running did not finish: its
+// notice is held until the task ends (the session then wakes, which drops
+// the notice) and a progress-looking guess is held for a bounded time.
+func TestFinishedNoticeHeldWhileBackgroundRuns(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	idle := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
+	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, idle)
+	bg := []transcript.BackgroundTask{{ID: "b1", Tool: "Bash", Desc: "uitest"}}
+	s.latest = func(context.Context, string, string) *transcript.Latest {
+		return &transcript.Latest{Text: "x", Background: bg, BackgroundKnown: true}
+	}
+	s.coord.mu.Lock()
+	delete(s.coord.bg, e.AgentID)
+	s.coord.mu.Unlock()
+	s.deliverCallbacks([]herdr.AgentInfo{idle})
+	time.Sleep(150 * time.Millisecond)
+	if n := promptCount(fh); n != 0 {
+		t.Fatalf("notice sent while a background task runs: %d", n)
+	}
+	if g, _ := s.ledger.Get(e.ID); g.Callback == nil || g.Callback.State != ledger.CallbackPending {
+		t.Fatalf("callback = %+v", g.Callback)
+	}
+	// The task ended and the session said nothing more: the notice goes.
+	bg = nil
+	s.coord.mu.Lock()
+	delete(s.coord.bg, "desk/w9:p1")
+	s.coord.calling = map[string]time.Time{}
+	s.coord.mu.Unlock()
+	s.deliverCallbacks([]herdr.AgentInfo{idle})
+	waitFor(t, func() bool { g, _ := s.ledger.Get(e.ID); return g.Callback.State == ledger.CallbackDelivered })
+}
+
+func TestLooksLikeProgress(t *testing.T) {
+	for text, want := range map[string]bool{
+		"The uitest run is still going; I'll report when it finishes.": true,
+		"Waiting for the background monitor to finish.":                true,
+		"## Summary\nstill running things\n## Verification\nok":        false,
+		"Done. The fix is pushed.":                                     false,
+		"":                                                             false,
+		"a\nb\nc\nd\ne is still running":                               false,
+	} {
+		if got := looksLikeProgress(text); got != want {
+			t.Errorf("looksLikeProgress(%q) = %v", text, got)
+		}
+	}
+}
+
+func TestProgressGuessHeldThenSent(t *testing.T) {
+	s, _, _ := coordServer(t)
+	e, _ := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "p", Branch: "b", AgentID: "desk/w9:p1", PaneID: "w9:p1", Status: ledger.Running})
+	now := time.Now()
+	s.ledger.Update(e.ID, func(x *ledger.Entry) {
+		x.Status, x.FinishedAt, x.FinalReport = ledger.Finished, &now, "The uitest run is still going."
+	})
+	s.latest = func(context.Context, string, string) *transcript.Latest { return &transcript.Latest{} }
+	g, _ := s.ledger.Get(e.ID)
+	if s.holdFinished(context.Background(), g, now.Add(time.Minute)) == "" {
+		t.Fatal("a progress line was not held")
+	}
+	if s.holdFinished(context.Background(), g, now.Add(progressHold+time.Minute)) != "" {
+		t.Fatal("hold must be bounded")
+	}
+	g.ReportSource = "explicit"
+	if s.holdFinished(context.Background(), g, now.Add(time.Minute)) != "" {
+		t.Fatal("an explicit report must never be held")
+	}
+}
