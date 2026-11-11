@@ -40,7 +40,7 @@ func (ix *Index) bin() string {
 
 // schemaVersion is PRAGMA user_version. An index with another version is rebuilt
 // from the archive, into a new file that replaces it when it is complete.
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schema = `
 PRAGMA journal_mode=WAL;
@@ -53,10 +53,18 @@ CREATE TABLE IF NOT EXISTS sessions(
   PRIMARY KEY(host,kind,id));
 CREATE INDEX IF NOT EXISTS sessions_started ON sessions(started);
 CREATE TABLE IF NOT EXISTS artifacts(host TEXT, kind TEXT, session_id TEXT, path TEXT);
-CREATE TABLE IF NOT EXISTS commits(
-  host TEXT, kind TEXT, session_id TEXT, sha TEXT, rel TEXT, branch TEXT, subject TEXT);
-CREATE INDEX IF NOT EXISTS commits_sha ON commits(sha);
-CREATE INDEX IF NOT EXISTS commits_session ON commits(host,kind,session_id);
+-- produced: what each session made (a commit, Page, PR, issue, comment, release or
+-- image), tied to the message that made it. patch_id and pr are filled in by the git
+-- pass for a commit: the diff's identity, which survives a rebase, and the PR it shipped in.
+CREATE TABLE IF NOT EXISTS produced(
+  host TEXT, kind TEXT, session_id TEXT, seq INT, sub TEXT, tool_id TEXT, ts TEXT,
+  type TEXT, ref TEXT, url TEXT, repo TEXT, branch TEXT, title TEXT, rel TEXT,
+  patch_id TEXT, pr TEXT, detail TEXT);
+CREATE INDEX IF NOT EXISTS produced_ref ON produced(ref);
+CREATE INDEX IF NOT EXISTS produced_session ON produced(host,kind,session_id,seq);
+CREATE INDEX IF NOT EXISTS produced_patch ON produced(patch_id) WHERE patch_id<>'';
+CREATE VIEW IF NOT EXISTS commits AS
+  SELECT host, kind, session_id, ref AS sha, rel, branch, title AS subject FROM produced WHERE type='commit';
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY, host TEXT, kind TEXT, session_id TEXT, seq INT, role TEXT, sub TEXT, ts TEXT,
   stream TEXT, off INT, tool_id TEXT, is_err INT, secret INT, full_len INT,
@@ -71,7 +79,7 @@ CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
 END;
 CREATE TABLE IF NOT EXISTS gh_prs(repo TEXT, branch TEXT, fetched TEXT, json TEXT, PRIMARY KEY(repo,branch));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
-PRAGMA user_version=2;
+PRAGMA user_version=3;
 `
 
 func q(s string) string {
@@ -552,7 +560,7 @@ func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, 
 		}
 		where := "host=" + q(a.Host) + " AND kind=" + q(g.Kind)
 		w.exec("DELETE FROM sessions WHERE " + where + " AND id=" + q(g.SID) + ";")
-		w.exec("DELETE FROM commits WHERE " + where + " AND session_id=" + q(g.SID) + ";")
+		w.exec("DELETE FROM produced WHERE " + where + " AND session_id=" + q(g.SID) + ";")
 		w.exec("DELETE FROM artifacts WHERE " + where + " AND session_id=" + q(g.SID) + ";")
 		w.exec("DELETE FROM messages WHERE host=" + q(a.Host) + " AND kind=" + q(g.Kind) + " AND session_id=" + q(g.SID) + ";")
 		nsub := 0
@@ -566,7 +574,10 @@ func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, 
 			q(a.Host), q(g.Kind), q(g.SID), q(g.Slug), q(p.Cwd), q(repo), q(p.Branch), q(p.Title), q(p.FirstPrompt), q(p.Version),
 			q(p.Start), q(p.End), len(p.Msgs)-nsub, nsub, g.Bytes, g.Segs, g.Streams, p.Secrets))
 		for _, c := range p.Commits {
-			w.exec(fmt.Sprintf("INSERT INTO commits VALUES(%s,%s,%s,%s,%s,%s,%s);", q(a.Host), q(g.Kind), q(g.SID), q(c.SHA), q(c.Rel), q(c.Branch), q(c.Subject)))
+			w.exec(producedInsert(a.Host, g.Kind, g.SID, Produced{Type: "commit", Ref: c.SHA, Rel: c.Rel, Branch: c.Branch, Title: c.Subject, Seq: c.Seq, Sub: c.Sub, ToolID: c.ToolID, TS: c.TS}))
+		}
+		for _, x := range p.Produced {
+			w.exec(producedInsert(a.Host, g.Kind, g.SID, x))
 		}
 		for _, d := range p.Docs {
 			w.exec(fmt.Sprintf("INSERT INTO artifacts VALUES(%s,%s,%s,%s);", q(a.Host), q(g.Kind), q(g.SID), q(d)))
@@ -586,7 +597,7 @@ func (ix *Index) syncHost(a *Archiver, o Opener, links []Link, opt SyncOptions, 
 		if !live[id] {
 			kind, sid := fmt.Sprint(r["kind"]), fmt.Sprint(r["id"])
 			w.exec("DELETE FROM sessions WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND id=" + q(sid) + ";")
-			w.exec("DELETE FROM commits WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
+			w.exec("DELETE FROM produced WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
 			w.exec("DELETE FROM artifacts WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
 			w.exec("DELETE FROM messages WHERE host=" + q(a.Host) + " AND kind=" + q(kind) + " AND session_id=" + q(sid) + ";")
 			ss.Removed++
@@ -892,6 +903,6 @@ func (ix *Index) DeleteSession(host, kind, id string) error {
 		return nil // the rebuild that replaces it leaves out what was deleted
 	}
 	w := " WHERE host=" + q(host) + " AND kind=" + q(kind)
-	_, err := ix.run("BEGIN; DELETE FROM sessions"+w+" AND id="+q(id)+"; DELETE FROM commits"+w+" AND session_id="+q(id)+"; DELETE FROM artifacts"+w+" AND session_id="+q(id)+"; DELETE FROM messages"+w+" AND session_id="+q(id)+"; COMMIT;", false)
+	_, err := ix.run("BEGIN; DELETE FROM sessions"+w+" AND id="+q(id)+"; DELETE FROM produced"+w+" AND session_id="+q(id)+"; DELETE FROM artifacts"+w+" AND session_id="+q(id)+"; DELETE FROM messages"+w+" AND session_id="+q(id)+"; COMMIT;", false)
 	return err
 }

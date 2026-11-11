@@ -409,7 +409,7 @@ func (ix *Index) loadThreadInputs() (*threadInputs, error) {
 		return out, nil
 	}
 	var err error
-	if in.commits, err = load("SELECT c.host AS host, c.kind AS kind, c.session_id AS sid, c.sha, c.rel, c.branch, c.subject, s.cwd, s.repo, s.ledger_id FROM commits c JOIN sessions s ON s.host=c.host AND s.kind=c.kind AND s.id=c.session_id WHERE c.rel IN ('made','pushed') ORDER BY c.rowid;"); err != nil {
+	if in.commits, err = load("SELECT c.host AS host, c.kind AS kind, c.session_id AS sid, c.ref AS sha, c.rel, c.branch, c.title AS subject, s.cwd, s.repo, s.ledger_id FROM produced c JOIN sessions s ON s.host=c.host AND s.kind=c.kind AND s.id=c.session_id WHERE c.type='commit' AND c.rel IN ('made','pushed') ORDER BY c.rowid;"); err != nil {
 		return nil, err
 	}
 	if in.docs, err = load("SELECT host, kind, session_id AS sid, path FROM artifacts;"); err != nil {

@@ -36,6 +36,11 @@ type CommitRef struct {
 	Rel     string // made | pushed | seen
 	Branch  string
 	Subject string
+	// The message the Rel came from (see Produced).
+	Seq    int
+	Sub    string
+	ToolID string
+	TS     string
 }
 
 // Parsed is what the index learns from one session's files.
@@ -43,6 +48,9 @@ type Parsed struct {
 	Cwd, Branch, Title, FirstPrompt, Version, Start, End, AgentSessionID string
 	Msgs                                                                 []Msg
 	Commits                                                              []CommitRef
+	// Produced is everything else the session made that the tool results show:
+	// Pages, PRs, issues, comments, releases, pushed images (see produced.go).
+	Produced []Produced
 	// Docs are markdown files under a docs/ directory that the session wrote
 	// or edited (from the tool call, so: what it did, not what it claimed).
 	Docs []string
@@ -51,6 +59,13 @@ type Parsed struct {
 	Secrets int
 	stream  string
 	off     int64
+	calls   map[string]call // tool calls so far, by id: a result is read with its command
+}
+
+// call is a tool call: what it ran and which message holds it.
+type call struct {
+	cmd string
+	at  at
 }
 
 const (
@@ -170,16 +185,45 @@ func (p *Parsed) blocks(role, ts string, bs []block, sub, argField string) {
 				p.doc(b.Name, args)
 			}
 			sum := argSummary(args)
+			a := at{seq: -1}
 			if m := p.push("tool", ts, b.Name+" "+sum, sub); m != nil {
 				m.ToolID = b.ID
+				a = at{seq: m.Seq, sub: sub, id: b.ID, ts: ts}
 			}
-			p.commitsIn(sum, "")
+			p.noteCall(b.ID, sum, a)
+			p.commitsIn(sum, a)
 		case "tool_result":
-			t := textOf(b.Content)
-			p.commitsIn(t, "")
-			p.addResult(ts, t, sub, b.ToolUseID, b.IsError)
+			p.result(ts, textOf(b.Content), sub, b.ToolUseID, b.IsError)
 		}
 	}
+}
+
+func (p *Parsed) noteCall(id, cmd string, a at) {
+	if id == "" {
+		return
+	}
+	if p.calls == nil {
+		p.calls = map[string]call{}
+	}
+	p.calls[id] = call{cmd, a}
+}
+
+// result adds a tool's output and reads what it made. A result with no text is
+// not kept as a message, so what the call made is tied to the call's message.
+func (p *Parsed) result(ts, text, sub, toolID string, isErr bool) {
+	a := at{seq: -1}
+	if m := p.addResult(ts, text, sub, toolID, isErr); m != nil {
+		a = at{seq: m.Seq, sub: sub, id: toolID, ts: ts}
+	}
+	p.commitsIn(text, a)
+	if isErr {
+		return
+	}
+	c := p.calls[toolID]
+	if a.none() {
+		a = c.at
+	}
+	p.producedIn(c.cmd, text, a)
 }
 
 func (p *Parsed) stamp(ts string) {
@@ -216,17 +260,17 @@ func (p *Parsed) push(role, ts, text, sub string) *Msg {
 }
 
 // addResult adds a tool's output: both of its ends, masked.
-func (p *Parsed) addResult(ts, text, sub, toolID string, isErr bool) {
+func (p *Parsed) addResult(ts, text, sub, toolID string, isErr bool) *Msg {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return
+		return nil
 	}
 	full := len(text)
 	masked, secret, clipped := maskEnds(text, maxResultText)
 	if !clipped {
 		full = 0
 	}
-	p.append(Msg{Role: "result", TS: ts, Text: masked, Sub: sub, ToolID: toolID, IsErr: isErr, Secret: secret, FullLen: full})
+	return p.append(Msg{Role: "result", TS: ts, Text: masked, Sub: sub, ToolID: toolID, IsErr: isErr, Secret: secret, FullLen: full})
 }
 
 // highlightMarks are what the API and its queries use to mark a match inside a
@@ -341,7 +385,7 @@ func (p *Parsed) ParsePi(r io.Reader) error {
 						var s string
 						_ = json.Unmarshal(c, &s)
 						if role == "result" {
-							p.addResult(rec.Timestamp, s, "", rec.Message.ToolCallID, rec.Message.IsError)
+							p.result(rec.Timestamp, s, "", rec.Message.ToolCallID, rec.Message.IsError)
 						} else {
 							p.add(role, rec.Timestamp, s, "")
 						}
@@ -355,8 +399,7 @@ func (p *Parsed) ParsePi(r io.Reader) error {
 										sb.WriteString(b.Text + "\n")
 									}
 								}
-								p.commitsIn(sb.String(), "")
-								p.addResult(rec.Timestamp, sb.String(), "", rec.Message.ToolCallID, rec.Message.IsError)
+								p.result(rec.Timestamp, sb.String(), "", rec.Message.ToolCallID, rec.Message.IsError)
 							} else {
 								p.blocks(role, rec.Timestamp, bs, "", "arguments")
 							}
@@ -386,18 +429,18 @@ var (
 // commitsIn looks for commits in git's own output: "[branch sha] subject"
 // after a commit, "old..new branch -> branch" after a push, and
 // "commit <sha>" in git log/show.
-func (p *Parsed) commitsIn(text, _ string) {
+func (p *Parsed) commitsIn(text string, a at) {
 	if len(text) < 10 {
 		return
 	}
 	for _, m := range commitMadeRE.FindAllStringSubmatch(text, 8) {
-		p.commit(CommitRef{SHA: m[2], Rel: "made", Branch: m[1], Subject: strings.TrimSpace(m[3])})
+		p.commit(CommitRef{SHA: m[2], Rel: "made", Branch: m[1], Subject: strings.TrimSpace(m[3]), Seq: a.seq, Sub: a.sub, ToolID: a.id, TS: a.ts})
 	}
 	for _, m := range pushRE.FindAllStringSubmatch(text, 8) {
-		p.commit(CommitRef{SHA: m[1], Rel: "pushed", Branch: m[2]})
+		p.commit(CommitRef{SHA: m[1], Rel: "pushed", Branch: m[2], Seq: a.seq, Sub: a.sub, ToolID: a.id, TS: a.ts})
 	}
 	for _, m := range seenRE.FindAllStringSubmatch(text, 8) {
-		p.commit(CommitRef{SHA: m[1], Rel: "seen"})
+		p.commit(CommitRef{SHA: m[1], Rel: "seen", Seq: a.seq, Sub: a.sub, ToolID: a.id, TS: a.ts})
 	}
 }
 
@@ -409,8 +452,11 @@ func (p *Parsed) commit(c CommitRef) {
 			if len(c.SHA) > len(o.SHA) {
 				o.SHA = c.SHA
 			}
-			if rank(c.Rel) > rank(o.Rel) {
-				o.Rel = c.Rel
+			if rank(c.Rel) > rank(o.Rel) || o.Seq < 0 && c.Seq >= 0 {
+				if rank(c.Rel) > rank(o.Rel) {
+					o.Rel = c.Rel
+				}
+				o.Seq, o.Sub, o.ToolID, o.TS = c.Seq, c.Sub, c.ToolID, c.TS
 			}
 			if o.Branch == "" {
 				o.Branch = c.Branch
