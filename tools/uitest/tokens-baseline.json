@@ -1,11 +1,11 @@
 {
   "space": {
-    "literal": 902,
-    "offscale": 95
+    "literal": 2,
+    "offscale": 25
   },
   "radius": {
-    "literal": 168,
-    "offscale": 41
+    "literal": 0,
+    "offscale": 5
   },
   "font": {
     "literal": 277,
