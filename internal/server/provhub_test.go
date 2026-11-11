@@ -158,6 +158,10 @@ func TestHubRefusesARealCreateWhenCredentialsAreMissingButNotADryRun(t *testing.
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("dry run with a missing credential = %d %s", rec.Code, rec.Body)
 	}
+	// the job runs on after the response: let it finish before the temp dirs go
+	var dj hubJobResp
+	json.Unmarshal(rec.Body.Bytes(), &dj)
+	hubWait(t, s, dj.ID, jobOK)
 	// a node with the real switch on does not accept it
 	prov.peer.cfg.Provision.Tool.Real = true
 	rec = do(s, "POST", "/api/provision", hdr, `{"spec":`+strings.Replace(okSpec, "demo1", "demo2", 1)+`,"region":"us-east-1","key":"hub-key-real"}`)
