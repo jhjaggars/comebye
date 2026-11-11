@@ -20,7 +20,7 @@
         "ec2:DescribeSpotInstanceRequests"
       ],
       "Resource": "*",
-      "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["us-east-1", "us-east-2", "us-west-2"] } }
     },
     {
       "Sid": "ReadPriceList",
@@ -32,7 +32,11 @@
       "Sid": "ReadDebianAmiParameter",
       "Effect": "Allow",
       "Action": "ssm:GetParameters",
-      "Resource": "arn:aws:ssm:us-east-1::parameter/aws/service/debian/release/12/latest/amd64"
+      "Resource": [
+        "arn:aws:ssm:us-east-1::parameter/aws/service/debian/release/12/latest/amd64",
+        "arn:aws:ssm:us-east-2::parameter/aws/service/debian/release/12/latest/amd64",
+        "arn:aws:ssm:us-west-2::parameter/aws/service/debian/release/12/latest/amd64"
+      ]
     }
   ]
 }
