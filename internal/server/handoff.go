@@ -572,6 +572,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 	}
 	captures := s.ledger.Observe(agents, time.Now())
 	s.checkLandings()
+	s.advanceLandQueues()
 	s.releaseQueued()
 	s.evalPlans()
 	defer s.deliverCallbacks(agents)
@@ -677,6 +678,8 @@ type entryView struct {
 	// checks at most checksTTL old). Comebye never marks on its own.
 	Candidate bool            `json:"candidate"`
 	Checks    *worktreeChecks `json:"checks,omitempty"`
+	// Queue is the entry's place in its landing queue (landqueue.go).
+	Queue *queueState `json:"queue,omitempty"`
 }
 
 // handleLedger lists the handoffs (removed and failed ones: the latest
@@ -705,11 +708,15 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	views := []entryView{}
+	qstates := s.queueStates()
 	for i, e := range entries {
 		if skip[i] {
 			continue
 		}
 		v := entryView{Entry: e}
+		if q, ok := qstates[e.AgentID]; ok && e.Status == ledger.Landing && e.Approval != nil && e.Approval.Queued {
+			v.Queue = &q
+		}
 		if a, ok := live[e.AgentID]; ok && e.AgentID != "" {
 			v.Live = liveInfo{Present: true, Status: a.Status}
 			if e.Active() && (a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone) {

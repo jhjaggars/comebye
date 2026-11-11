@@ -996,6 +996,10 @@ for (const width of [390, 1280]) {
         ["land failed", mk(10, "finished", { finished_at: iso0(60e3), land_check: lc({ state: "failed", reason: "the worker said it was done, but its work is not on the base" }) })],
         ["finished", mk(11, "finished", { finished_at: iso0(60e3), approval: undefined })],
         ["running", mk(12, "running", { finished_at: undefined, approval: undefined }, { agent_status: "working" })],
+        ["queued #2", mk(14, "landing", { finished_at: undefined, queue: { position: 2, ahead: 1, total: 3, turn: false } })],
+        ["queued #3", mk(15, "landing", { finished_at: undefined, queue: { position: 3, ahead: 2, total: 3, turn: false } })],
+        ["landing now", mk(16, "landing", { finished_at: undefined, queue: { position: 1, ahead: 0, total: 3, turn: true, turn_at: iso0(60e3), expires_at: iso0(-44 * 60e3) } })],
+        ["landing: tests running", mk(17, "landing", { finished_at: undefined, queue: { position: 1, ahead: 0, total: 2, turn: true }, progress: { text: "tests", phase: "tests", at: iso0(60e3) } }, { agent_status: "working" })],
         ["bg", mk(13, "running", { finished_at: undefined, approval: undefined, live: { present: true, background: bg, background_known: true } })],
       ];
       for (const [, c] of cases) ledger.byAgent.set(c.a.id, c.e);
@@ -1028,7 +1032,7 @@ for (const width of [390, 1280]) {
       await page.locator("#agents").screenshot({ path: `${out}/landing-states-${width}-${cs}.png` });
     }
     await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
-    await page.evaluate(() => { for (let i = 1; i <= 13; i++) ledger.byAgent.delete(`uit/w${i}:p1`); });
+    await page.evaluate(() => { for (let i = 1; i <= 17; i++) ledger.byAgent.delete(`uit/w${i}:p1`); });
   });
 }
 

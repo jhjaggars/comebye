@@ -141,6 +141,10 @@ type Config struct {
 	// coordinator must be blocked before the coordinator is told (the
 	// blocked relay, blockedrelay.go). Hub only: it needs the ledger.
 	RelayBlocked time.Duration
+	// LandTurnTimeout is how long a worker may hold its turn in a landing
+	// queue before the slot is released and its coordinator told (0: the
+	// default, 45 minutes; negative: never). Hub only.
+	LandTurnTimeout time.Duration
 	// DigestEvery is how long routine coordinator notices (landed,
 	// finished with no decisions, cleanup lines) wait to go out together in
 	// one digest; 0 sends each as it comes. Urgent notices are never held.
@@ -200,6 +204,8 @@ type Server struct {
 	briefWait    time.Duration
 	briefTries   int
 	briefBackoff time.Duration
+	// landTurn is the landing queue's turn timeout (0: never).
+	landTurn time.Duration
 	// notices and noticeArriveWait: see notice.go.
 	notices          noticeBook
 	noticeArriveWait time.Duration
@@ -297,6 +303,12 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond, resetPoll: 500 * time.Millisecond, resetWait: 30 * time.Second,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait,
 		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
+	switch {
+	case cfg.LandTurnTimeout == 0:
+		s.landTurn = DefaultLandTurnTimeout
+	case cfg.LandTurnTimeout > 0:
+		s.landTurn = cfg.LandTurnTimeout
+	}
 	s.typing = newTypingTracker()
 	s.rel = newRelState()
 	s.prov = newProvState()
@@ -473,6 +485,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/handoffs/{id}/cancel", s.authAgent(s.handleCancelHandoff))
 	s.mux.HandleFunc("POST /api/report", s.authWorker(s.handleReport))
 	s.mux.HandleFunc("POST /api/landings", s.authAgent(s.handleLanding))
+	s.mux.HandleFunc("GET /api/landings/queue", s.authAgent(s.handleLandQueue))
+	s.mux.HandleFunc("POST /api/landings/queue", s.authAgent(s.handleLandQueueEdit))
 	s.mux.HandleFunc("POST /api/plans", s.authAgent(s.handleCreatePlan))
 	s.mux.HandleFunc("GET /api/plans", s.authAgent(s.handleListPlans))
 	s.mux.HandleFunc("GET /api/plans/{id}", s.authAgent(s.handleGetPlan))

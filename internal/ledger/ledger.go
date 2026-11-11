@@ -173,6 +173,14 @@ type Approval struct {
 	// ReportedAt is when the worker had reported the work being landed
 	// (the entry's FinishedAt then), restored if the landing is cancelled.
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
+	// The landing queue (landqueue.go): Queued says the landing is in its
+	// repo+base queue, QueueSeq is its place in the order, and TurnAt is
+	// when the hub told the worker "you're up" (nil: still waiting).
+	// QueueEnd says why a landing left the queue while still open.
+	Queued   bool       `json:"queued,omitempty"`
+	QueueSeq int64      `json:"queue_seq,omitempty"`
+	TurnAt   *time.Time `json:"turn_at,omitempty"`
+	QueueEnd string     `json:"queue_end,omitempty"`
 }
 
 // Progress is a worker's note on what it is doing now.
@@ -523,6 +531,10 @@ func copyEntry(e *Entry) Entry {
 	}
 	if e.Approval != nil {
 		a := *e.Approval
+		if a.TurnAt != nil {
+			t := *a.TurnAt
+			a.TurnAt = &t
+		}
 		c.Approval = &a
 	}
 	if e.Progress != nil {
@@ -1166,7 +1178,13 @@ func (s *Store) StartLanding(agentID string, a Approval) (Entry, bool, error) {
 	if a.At.IsZero() {
 		a.At = time.Now().UTC()
 	}
+	if old := e.Approval; e.Status == Landing && old != nil && old.Queued && old.Base == a.Base {
+		a.Queued, a.QueueSeq, a.TurnAt = true, old.QueueSeq, old.TurnAt // a retry keeps its place
+	} else {
+		a.Queued, a.QueueSeq, a.TurnAt = true, s.nextSeq(), nil
+	}
 	e.Status, e.Approval, e.FinishedAt = Landing, &a, nil
+	s.grantLocked(a.Base, e, a.At)
 	e.SawWorking, e.AwaitIdle = false, false
 	e.LandCheck, e.Progress, e.AwaitLandReport = nil, nil, false
 	return copyEntry(e), true, s.save()

@@ -116,7 +116,13 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	case !ok:
 		writeJSONStatus(w, http.StatusConflict, map[string]any{"code": "not_ready", "message": "not ready to land: its ledger entry is " + string(got.Status), "entry": got})
 	default:
-		writeJSON(w, map[string]any{"entry": got, "retry": retry})
+		s.advanceLandQueues() // a queue whose holder is gone gets a new one now
+		got, _ = s.ledger.ByAgent(b.AgentID)
+		resp := map[string]any{"entry": got, "retry": retry}
+		if q := s.queueStateOf(b.AgentID); q != nil {
+			resp["queue"] = q
+		}
+		writeJSON(w, resp)
 	}
 }
 
@@ -136,6 +142,7 @@ func reportPhrase(e ledger.Entry) string {
 const (
 	landFirst     = 15 * time.Second // the first re-check after a check
 	landMax       = 5 * time.Minute  // the longest wait between checks
+	landQueueMax  = 30 * time.Second // ... while another landing waits for the turn
 	landGrace     = 2 * time.Minute  // a report this old, and nothing running: failed
 	landStopAfter = 6 * time.Hour    // stop re-checking a landing open this long
 	ciPoll        = 30 * time.Second // CI of a landed commit
@@ -191,6 +198,9 @@ func (s *Server) checkLandings() {
 	for _, e := range s.ledger.LandingsToCheck() {
 		if e.Status == ledger.Landing && e.FinishedAt == nil && (e.Approval == nil || e.Approval.Tip == "") {
 			continue // no report, and no approved tip to look for
+		}
+		if a := e.Approval; e.Status == ledger.Landing && a != nil && a.Queued && a.TurnAt == nil {
+			continue // waiting for its turn: nothing to find on the base yet
 		}
 		if e.Status == ledger.Landed && ciOver(e, now) {
 			continue
@@ -261,7 +271,11 @@ func (s *Server) checkLanding(e ledger.Entry) {
 	if _, err := s.ledger.SetLandCheck(e.ID, e.FinishedAt, lc); err != nil {
 		log.Printf("ledger: %v", err)
 	}
-	s.landNext(e, now, landFirst, landMax, stop)
+	max := landMax
+	if q := s.queueStateOf(e.AgentID); q != nil && q.Turn && q.Total > 1 {
+		max = landQueueMax // others wait for this slot: notice it freeing quickly
+	}
+	s.landNext(e, now, landFirst, max, stop)
 }
 
 // checkCI reads the CI of a landed entry's commit and records it.

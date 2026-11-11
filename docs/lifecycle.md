@@ -415,6 +415,31 @@ The check also covers the **approved tip**, the branch's commit when
 `comebye land` ran. A worker that detached its worktree and deleted its
 branch without pushing would otherwise look clean.
 
+**The landing queue.** Landings into the same base branch of the same
+repository (on one host) take turns, so a worker is not made to rebase and
+re-run a slow test suite because another landing pushed mid-run. The queue
+is the open landings of one repo+base, ordered by when `comebye land` was
+run; it lives in the ledger (`approval.queued`, `queue_seq`, `turn_at`) and
+so survives a restart of the hub. `comebye land` returns the worker's place:
+the first landing in an empty queue is up at once and gets the land prompt
+above; a later one gets it prefixed "queued, N ahead: do not push until the
+hub says *You're up*" (it may rebase and test meanwhile). When the landing
+ahead leaves `landing` (landed on the base, failed, cancelled, marked), the
+hub sends the next one "You're up": it fetches, rebases and re-tests only if
+the base moved since its last test, and fast-forward pushes. A turn lasts at
+most `-land-turn-timeout` (45 minutes): after that the slot is released, the
+worker is told to stop, the requester is told, and the next worker is up
+(the timed-out landing stays open and is still checked). The check of a
+landing that others wait on runs at least every 30 seconds so a slot frees
+quickly. A coordinator can `comebye land WORKER --skip` (to the back; the
+turn passes on) or `--move N`; `comebye land --status` lists the queues,
+and the ledger entry's `queue` has `{position, ahead, total, turn}` (the app
+shows `queued #2` and `landing now`). *Decided:* the hub orders and
+announces turns, the worker still lands its own plain commits; no merge
+queue and no merge commits. Not done (v1): a worker whose session vanished
+holds its slot until the timeout; waiting workers prepare by rebasing and
+running the full tests, not a subset.
+
 **Signed commits.** The worker signs as the repository's git config says
 (`commit.gpgsign`). If signing fails, it stops and reports rather than
 pushing unsigned commits or adding merge commits to carry a signature.

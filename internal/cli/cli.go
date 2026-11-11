@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1320,8 +1321,15 @@ func sendPrompt(e *Env, c *client, t target, text string, queue, asJSON bool) er
 // ---- land ----
 
 // landPrompt is the standard land request sent to a finished worker.
-func landPrompt(base string, deploy bool, branch string) string {
+//
+// ahead is how many landings into the same base the worker has to wait
+// for: when it is more than 0 the prompt says to wait for the hub's "you're
+// up" first (the landing queue, docs/lifecycle.md).
+func landPrompt(base string, deploy bool, branch string, ahead int) string {
 	var b strings.Builder
+	if ahead > 0 {
+		fmt.Fprintf(&b, "Your landing on `%s` is QUEUED: %d landing(s) are ahead of yours. Landings take turns so nobody rebases and retests because another push moved the base. Do NOT push, and do not start step 3 or later, until the hub sends you a message that starts \"You're up\". Until then you may prepare: rebase onto `origin/%s` and run the tests, so your turn is quick, but do not push, and do not report. Then wait (go idle). When you are up, `git fetch origin`: if `origin/%s` is still the commit you last rebased and tested on, push at once; if it moved, rebase again and re-run the tests (the full ones) before pushing. If you cannot land, report that with `comebye report -`: it frees the slot.\n\nThe steps, for when it is your turn:\n\n", base, ahead, base, base)
+	}
 	fmt.Fprintf(&b, "Your report is accepted and the user has OKed landing your work. This message is your authorisation to do exactly these steps, and nothing beyond them:\n\n")
 	fmt.Fprintf(&b, "1. `git fetch origin`, then rebase (or cherry-pick) your commits onto the latest `origin/%s` as plain commits: no merge commits, and no merge commits that exist only to carry a signature. Resolve conflicts in your own work; if one is not obviously yours to resolve, stop and report. Before pushing, check that `git log --merges origin/%s..HEAD` prints nothing. Sign commits only as the repository's git config says (`commit.gpgsign`); if signing fails, stop and report: never push unsigned commits to a repository that wants them signed, and never add a merge commit to carry a signature.\n", base, base)
 	b.WriteString("2. Re-run the tests (and vet/format checks) on the rebased result: all of the project's tests, including its documented UI or browser tests (see its docs or CLAUDE.md), not only the Go or unit ones. If they fail, stop and report; do not push.\n")
@@ -1329,6 +1337,9 @@ func landPrompt(base string, deploy bool, branch string) string {
 	fmt.Fprintf(&b, "4. Watch CI for the pushed commit until it finishes: `gh run list --branch %s --limit 1` gives the run ID for your push (check that it is your commit's run), then `gh run watch ID --exit-status`. If the watch might outlast a tool timeout, run it in the background and wait for it to finish. Confirm the result with `gh run view ID --json conclusion`: do not pipe the watch through `tail` or the like, which hides its exit status. If CI fails, report the failure; do not push fixes unasked.\n", base)
 	fmt.Fprintf(&b, "5. Clean up your branch: detach your worktree first (`git switch --detach origin/%s`), then delete the local branch (`git branch -D BRANCH`; it is merged, but your SHAs may differ from the pushed ones). Delete the remote branch only if `git ls-remote --heads origin BRANCH` shows it; if you never pushed it, there is nothing to delete. The worktree stays; the session is removed separately.\n", base)
 	b.WriteString("\nWhile a long step runs (rebase, tests, CI), tell the hub what you are doing with `comebye report --progress --phase rebase|tests|push|ci \"<what you are doing>\"`. That is a progress note: it finishes nothing, and the card shows \"landing: tests running\". Never send `comebye report -` for it, nor before you have pushed: a report is you saying you are done, and the hub then checks that your work is on `origin/" + base + "`. If you wait on a background task, say so in a note first; the task ending wakes you.\n")
+	if ahead == 0 {
+		b.WriteString("\nYou hold the landing slot for `" + base + "`: other landings wait for you, so keep going, and tell the hub if you cannot finish (`comebye report -`). The slot is released if you hold it too long.\n")
+	}
 	b.WriteString("\nDo all of this in your own worktree. Never touch the repository's primary checkout, or any other checkout: it may hold the user's uncommitted work.\n")
 	if branch != "" {
 		fmt.Fprintf(&b, "\nThe work to land is on branch `%s` (a follow-on to your first task): land that branch, and the hub checks that one.\n", branch)
@@ -1352,9 +1363,24 @@ func cmdLand(e *Env, args []string) error {
 	deploy := fs.Bool("deploy", false, "also deploy after CI is green (only when the user asked for it)")
 	note := fs.String("note", "", "how the user OKed landing, in their words (required)")
 	branch := fs.String("branch", "", "the branch the work lands from, when it is not the handoff's own (a follow-on task on a new branch); the hub's landing check follows it")
+	status := fs.Bool("status", false, "show the landing queues (who is landing, who waits) instead of landing")
+	move := fs.Int("move", 0, "move AGENT's landing to this place in its queue (1 is the front; the one landing now keeps the front)")
+	skip := fs.Bool("skip", false, "send AGENT's landing to the back of its queue; if it is landing now, its turn passes to the next worker")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
+	}
+	if *status {
+		if len(pos) != 0 {
+			return usageErr("--status takes no AGENT")
+		}
+		return landStatus(e, *asJSON)
+	}
+	if *move > 0 || *skip {
+		if len(pos) != 1 || (*move > 0 && *skip) {
+			return usageErr("want exactly one AGENT, and one of --move N or --skip")
+		}
+		return landQueueEdit(e, pos[0], *move, *skip, *asJSON)
 	}
 	if len(pos) != 1 {
 		return usageErr("want exactly one AGENT")
@@ -1400,14 +1426,119 @@ func cmdLand(e *Env, args []string) error {
 	}
 	// Record the approval first (the entry becomes landing), then send the
 	// prompt; if it cannot be sent, the landing is undone.
-	if _, err := c.raw("POST", "/api/landings", nil, map[string]string{"agent_id": t.ID, "note": *note, "base": *base, "branch": strings.TrimSpace(*branch)}); err != nil {
+	data, err := c.raw("POST", "/api/landings", nil, map[string]string{"agent_id": t.ID, "note": *note, "base": *base, "branch": strings.TrimSpace(*branch)})
+	if err != nil {
 		return err
 	}
-	if err := sendPrompt(e, c, t, landPrompt(*base, *deploy, strings.TrimSpace(*branch)), *queue, *asJSON); err != nil {
+	var lr struct {
+		Queue *struct {
+			Ahead int  `json:"ahead"`
+			Turn  bool `json:"turn"`
+		} `json:"queue"`
+	}
+	_ = json.Unmarshal(data, &lr)
+	ahead := 0
+	if lr.Queue != nil && !lr.Queue.Turn {
+		ahead = max(lr.Queue.Ahead, 1)
+	}
+	if ahead > 0 && !*asJSON {
+		fmt.Fprintf(e.Stdout, "Queued: %d landing(s) ahead on %s. The hub tells %s when it is up.\n", ahead, *base, t.label())
+	}
+	if err := sendPrompt(e, c, t, landPrompt(*base, *deploy, strings.TrimSpace(*branch), ahead), *queue, *asJSON); err != nil {
 		if _, cerr := c.raw("POST", "/api/landings", nil, map[string]any{"agent_id": t.ID, "cancel": true}); cerr != nil {
 			return fmt.Errorf("%w (and undoing the landing failed: %v; its entry still says landing)", err, cerr)
 		}
 		return fmt.Errorf("%w (the landing was not recorded)", err)
+	}
+	return nil
+}
+
+type apiLandQueue struct {
+	Queues []struct {
+		Host  string `json:"host"`
+		Repo  string `json:"repo"`
+		Base  string `json:"base"`
+		Items []struct {
+			AgentID   string     `json:"agent_id"`
+			AgentName string     `json:"agent_name"`
+			Branch    string     `json:"branch"`
+			Position  int        `json:"position"`
+			Turn      bool       `json:"turn"`
+			TurnAt    *time.Time `json:"turn_at"`
+		} `json:"items"`
+	} `json:"queues"`
+	TurnTimeoutSeconds int `json:"turn_timeout_seconds"`
+}
+
+// landStatus prints the landing queues.
+func landStatus(e *Env, asJSON bool) error {
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("GET", "/api/landings/queue", nil, nil)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return rawJSON(e, data)
+	}
+	var q apiLandQueue
+	if err := json.Unmarshal(data, &q); err != nil {
+		return err
+	}
+	if len(q.Queues) == 0 {
+		fmt.Fprintln(e.Stdout, "No landings are queued or in progress.")
+		return nil
+	}
+	for _, v := range q.Queues {
+		fmt.Fprintf(e.Stdout, "%s %s -> %s\n", v.Host, filepath.Base(v.Repo), v.Base)
+		for _, it := range v.Items {
+			who := it.AgentName
+			if who == "" {
+				who = it.AgentID
+			}
+			state := fmt.Sprintf("queued #%d", it.Position)
+			if it.Turn {
+				state = "landing now"
+				if it.TurnAt != nil {
+					state += " since " + it.TurnAt.Local().Format("15:04")
+				}
+			}
+			fmt.Fprintf(e.Stdout, "  %d. %s  %s  %s\n", it.Position, who, state, it.Branch)
+		}
+	}
+	if q.TurnTimeoutSeconds > 0 {
+		fmt.Fprintf(e.Stdout, "A turn is released after %d minutes.\n", q.TurnTimeoutSeconds/60)
+	}
+	return nil
+}
+
+// landQueueEdit moves or skips an agent's landing in its queue.
+func landQueueEdit(e *Env, agent string, move int, skip, asJSON bool) error {
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	t, err := c.resolve(agent)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{"agent_id": t.ID, "action": "skip"}
+	if move > 0 {
+		body["action"], body["to"] = "move", move
+	}
+	data, err := c.raw("POST", "/api/landings/queue", nil, body)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return rawJSON(e, data)
+	}
+	if skip {
+		fmt.Fprintf(e.Stdout, "Skipped %s: its landing is at the back of the queue.\n", t.label())
+	} else {
+		fmt.Fprintf(e.Stdout, "Moved %s to place %d (or as far forward as it may go).\n", t.label(), move)
 	}
 	return nil
 }

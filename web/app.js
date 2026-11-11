@@ -1011,17 +1011,22 @@ function landLabel(e, a) {
   const idle = a && (a.agent_status === "idle" || a.agent_status === "done");
   const checked = lc ? ` Last checked ${fmtAgo(Date.now() - Date.parse(lc.at))} ago${lc.stopped ? "; the hub stopped re-checking" : ""}.` : "";
   const why = lc && lc.reason ? ` ${lc.reason}.` : "";
+  const q = e.queue;
+  if (q && !q.turn)
+    return { cls: "queued", text: `queued #${q.position}`, title: `${approved}. Waiting for its turn to land: ${q.ahead} landing${q.ahead === 1 ? "" : "s"} ahead of it in the queue (${q.total} in all). The hub tells the worker when it is up.` };
+  const now = q && q.turn ? "landing now" : "landing";
+  const turnNote = q && q.turn ? ` It holds the landing slot${q.total > 1 ? `; ${q.total - 1} more wait` : ""}${q.expires_at ? `, released at ${new Date(q.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} at the latest` : ""}.` : "";
   if (a && bgRunning(a))
     return { cls: "landing", text: "landing: waiting on a background task", title: `${approved}. ${bgTitle(a)}.${checked}` };
   if (p && !(idle && Date.now() - Date.parse(p.at) > LAND_NOTE_STALE_MS)) {
     const t = LAND_PHASE[p.phase] || p.text.replace(/\s+/g, " ").slice(0, 60);
-    return { cls: "landing", text: "landing: " + t, title: `${approved}. The worker's note ${fmtAgo(Date.now() - Date.parse(p.at))} ago: ${p.text}.${checked}` };
+    return { cls: "landing", text: "landing: " + t, title: `${approved}. The worker's note ${fmtAgo(Date.now() - Date.parse(p.at))} ago: ${p.text}.${turnNote}${checked}` };
   }
   if (lc && state === "pending") {
     const t = lc.unpushed > 0 ? "not pushed yet" : lc.unmerged > 0 ? "not on main yet" : "checking";
-    return { cls: "landing", text: "landing: " + t, title: `${approved}.${why}${checked}` };
+    return { cls: "landing", text: q && q.turn && t !== "not pushed yet" && t !== "not on main yet" ? now : "landing: " + t, title: `${approved}.${turnNote}${why}${checked}` };
   }
-  return { cls: "landing", text: "landing", title: approved };
+  return { cls: "landing", text: now, title: approved + "." + turnNote };
 }
 
 function ledgerChip(a) {

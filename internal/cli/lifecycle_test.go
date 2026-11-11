@@ -15,7 +15,7 @@ func TestTemplateAndLandPromptAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmpl := string(src)
-	land := landPrompt("main", false, "")
+	land := landPrompt("main", false, "", 0)
 	for _, rule := range []struct{ template, land string }{
 		{"fast-forward pushes only", "Push as a fast-forward"},
 		{"never force-push", "Never force-push"},
@@ -38,6 +38,19 @@ func TestTemplateAndLandPromptAgree(t *testing.T) {
 	for _, want := range []string{"Verified live", "Unit tests only", "Not verified", "fast-forward", "never force", "plain"} {
 		if !strings.Contains(string(doc), want) {
 			t.Errorf("docs/lifecycle.md lacks %q", want)
+		}
+	}
+}
+
+func TestLandPromptWaitsWhenQueued(t *testing.T) {
+	up := landPrompt("main", false, "", 0)
+	if strings.Contains(up, "QUEUED") || !strings.Contains(up, "You hold the landing slot") {
+		t.Fatalf("first in line should land now: %q", up)
+	}
+	q := landPrompt("main", false, "", 2)
+	for _, want := range []string{"QUEUED: 2 landing(s) are ahead", "You're up", "Do NOT push", "moved, rebase again"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("queued prompt lacks %q", want)
 		}
 	}
 }

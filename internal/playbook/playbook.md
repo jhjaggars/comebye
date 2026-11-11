@@ -50,6 +50,7 @@ with the matches listed.
 | `comebye settings [--host H]` | a host's agent settings: the default kind, the model and thinking level each kind starts with, the allowed kinds (read only for you) |
 | `comebye models [--host H] [--kind K]` | the models an agent kind can start with on a host (for `--model`) |
 | `comebye plan create --title T --size N` / `plan show ID` / `plan list` | group handoffs that make up one change |
+| `comebye land --status` / `comebye land AGENT --skip` / `--move N` | show the landing queues (who is landing now, who waits), send a worker's landing to the back, or move it up or down (see Landing) |
 | `comebye land AGENT --note "<the user's OK>" [--base main] [--branch B] [--deploy] [--queue]` | after the user OKs it, record their OK and tell a finished worker to land its own work (see Landing); refused unless its ledger entry is finished with a report |
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery). If the user has text in the agent's input box, nothing is typed over it: a plain prompt is held on the queue automatically (`held` in `comebye queue`) and sent once the box has been empty for 5 s |
@@ -266,6 +267,26 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
    follow-on task the worker did on a new branch), add `--branch B`: the
    hub's landing check then follows that branch, instead of reporting
    "landing failed" for the original one.
+   **Landings take turns.** The hub keeps one landing queue per repository
+   and base branch, so one worker's rebase and test run is not spoiled by
+   another's push. `comebye land` enqueues: the first landing in an empty
+   queue is told to land at once; the others get the same prompt with
+   "queued, N ahead, do not push until the hub says *You're up*" (they may
+   prepare: rebase and test, then wait). When the landing ahead is on the
+   base (or failed, or was cancelled), the hub tells the next worker
+   "You're up"; it rebases only if the base moved since it last tested,
+   re-runs the tests, pushes, and reports. The slot is held until the hub
+   sees the commits on the base, the landing fails, or **45 minutes** pass
+   (`-land-turn-timeout`, `COMEBYE_LAND_TURN_TIMEOUT`): then the hub frees
+   the slot, tells the worker to stop and tells you, and the next worker
+   goes. Landing is still plain fast-forward pushes; the queue only orders
+   them. The ledger and the app show `queued #2` or `landing now`;
+   `comebye land --status` shows every queue. If a worker is stuck or
+   should wait, `comebye land WORKER --skip` sends it to the back (its turn
+   passes on at once); `comebye land WORKER --move N` reorders a waiting
+   landing (the one landing now keeps the front). Run `comebye land` for
+   several finished workers in a row without waiting for each to land: that
+   is what the queue is for.
 4. While the worker lands, the hub watches `origin/main` itself (a short
    poll that backs off to five minutes, for up to six hours) and does not
    wait for a report: the entry becomes `landed` as soon as every approved
