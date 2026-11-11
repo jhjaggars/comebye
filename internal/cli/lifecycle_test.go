@@ -15,7 +15,7 @@ func TestTemplateAndLandPromptAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmpl := string(src)
-	land := landPrompt("main", false)
+	land := landPrompt("main", false, "")
 	for _, rule := range []struct{ template, land string }{
 		{"fast-forward pushes only", "Push as a fast-forward"},
 		{"never force-push", "Never force-push"},

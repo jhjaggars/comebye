@@ -66,7 +66,7 @@ func init() {
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
 		{"report", "FILE|- | --progress [--phase rebase|tests|push|ci] TEXT|-", "(workers) declare yourself done and send your final report to whoever handed you the task; --progress sends a short note on what you are doing instead, which is not a report and finishes nothing", cmdReport},
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
-		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
+		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--branch B] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
 		{"todo", "add QUESTION [--kind decision|action|followup|release --version vX.Y.Z --commit REF] [--option LABEL[|DETAIL] ... [--recommend N[,M]]] [--context FILE|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT | --no-wait] | list [--all | --state S] | show ID | answer ID TEXT|- | done ID | drop ID [--reason R]  [--json]", "the to-do list beside the briefing: questions and follow-ups the user has to deal with, with context; any agent adds, the user answers in the app, the coordinator relays answers (answer, done and drop are the coordinator's)", cmdTodo},
 		{"publish", "FILE|- [--title T] [--kind html|md] [--key K | --update ID] [--if-version N] [--handoff ID] [--json]", "publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages. --update ID or --key K adds a version to the same link", cmdPublish},
@@ -1319,7 +1319,7 @@ func sendPrompt(e *Env, c *client, t target, text string, queue, asJSON bool) er
 // ---- land ----
 
 // landPrompt is the standard land request sent to a finished worker.
-func landPrompt(base string, deploy bool) string {
+func landPrompt(base string, deploy bool, branch string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your report is accepted and the user has OKed landing your work. This message is your authorisation to do exactly these steps, and nothing beyond them:\n\n")
 	fmt.Fprintf(&b, "1. `git fetch origin`, then rebase (or cherry-pick) your commits onto the latest `origin/%s` as plain commits: no merge commits, and no merge commits that exist only to carry a signature. Resolve conflicts in your own work; if one is not obviously yours to resolve, stop and report. Before pushing, check that `git log --merges origin/%s..HEAD` prints nothing. Sign commits only as the repository's git config says (`commit.gpgsign`); if signing fails, stop and report: never push unsigned commits to a repository that wants them signed, and never add a merge commit to carry a signature.\n", base, base)
@@ -1329,6 +1329,9 @@ func landPrompt(base string, deploy bool) string {
 	fmt.Fprintf(&b, "5. Clean up your branch: detach your worktree first (`git switch --detach origin/%s`), then delete the local branch (`git branch -D BRANCH`; it is merged, but your SHAs may differ from the pushed ones). Delete the remote branch only if `git ls-remote --heads origin BRANCH` shows it; if you never pushed it, there is nothing to delete. The worktree stays; the session is removed separately.\n", base)
 	b.WriteString("\nWhile a long step runs (rebase, tests, CI), tell the hub what you are doing with `comebye report --progress --phase rebase|tests|push|ci \"<what you are doing>\"`. That is a progress note: it finishes nothing, and the card shows \"landing: tests running\". Never send `comebye report -` for it, nor before you have pushed: a report is you saying you are done, and the hub then checks that your work is on `origin/" + base + "`. If you wait on a background task, say so in a note first; the task ending wakes you.\n")
 	b.WriteString("\nDo all of this in your own worktree. Never touch the repository's primary checkout, or any other checkout: it may hold the user's uncommitted work.\n")
+	if branch != "" {
+		fmt.Fprintf(&b, "\nThe work to land is on branch `%s` (a follow-on to your first task): land that branch, and the hub checks that one.\n", branch)
+	}
 	if deploy {
 		b.WriteString("\n6. Deploy as the project's docs describe, once CI is green.\n")
 		b.WriteString("\nThen report with `comebye report -`, in the same format as your first report (Summary, Changes, Verification grouped as Verified live / Unit tests only / Not verified, Follow-ups): the landed commit hashes, the test and CI results, and the deploy result.\n")
@@ -1347,6 +1350,7 @@ func cmdLand(e *Env, args []string) error {
 	base := fs.String("base", "main", "the branch to land on")
 	deploy := fs.Bool("deploy", false, "also deploy after CI is green (only when the user asked for it)")
 	note := fs.String("note", "", "how the user OKed landing, in their words (required)")
+	branch := fs.String("branch", "", "the branch the work lands from, when it is not the handoff's own (a follow-on task on a new branch); the hub's landing check follows it")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1356,6 +1360,9 @@ func cmdLand(e *Env, args []string) error {
 	}
 	if strings.TrimSpace(*base) == "" || strings.HasPrefix(*base, "-") || strings.ContainsAny(*base, " \t\n`$\\") {
 		return usageErr("bad --base %q", *base)
+	}
+	if br := strings.TrimSpace(*branch); br != "" && (strings.HasPrefix(br, "-") || strings.ContainsAny(br, " \t\n`$\\")) {
+		return usageErr("bad --branch %q", *branch)
 	}
 	if strings.TrimSpace(*note) == "" {
 		return usageErr("say how the user OKed landing: --note \"<their words>\" (land only after they did)")
@@ -1392,10 +1399,10 @@ func cmdLand(e *Env, args []string) error {
 	}
 	// Record the approval first (the entry becomes landing), then send the
 	// prompt; if it cannot be sent, the landing is undone.
-	if _, err := c.raw("POST", "/api/landings", nil, map[string]string{"agent_id": t.ID, "note": *note, "base": *base}); err != nil {
+	if _, err := c.raw("POST", "/api/landings", nil, map[string]string{"agent_id": t.ID, "note": *note, "base": *base, "branch": strings.TrimSpace(*branch)}); err != nil {
 		return err
 	}
-	if err := sendPrompt(e, c, t, landPrompt(*base, *deploy), *queue, *asJSON); err != nil {
+	if err := sendPrompt(e, c, t, landPrompt(*base, *deploy, strings.TrimSpace(*branch)), *queue, *asJSON); err != nil {
 		if _, cerr := c.raw("POST", "/api/landings", nil, map[string]any{"agent_id": t.ID, "cancel": true}); cerr != nil {
 			return fmt.Errorf("%w (and undoing the landing failed: %v; its entry still says landing)", err, cerr)
 		}

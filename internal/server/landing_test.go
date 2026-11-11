@@ -131,3 +131,43 @@ func TestLandingRefusedAndCancelled(t *testing.T) {
 		t.Fatalf("cancelled = %+v", g)
 	}
 }
+
+// A worker that lands a follow-on task from a new branch is checked on that
+// branch (named by `comebye land --branch`), not on the handoff's own.
+func TestLandingFollowsTheLandedBranch(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		s, r, e, _ := landingFix(t)
+		// The first task's branch w stays as it is, unlanded; the follow-on
+		// is done on a new branch from main.
+		git(t, r.wt, "switch", "-q", "-c", "follow", "main")
+		follow := r.edit(t, r.wt, 5, "the follow-on change")
+		body := `{"agent_id":"desk/w2:p1","note":"ok","branch":"follow"}`
+		if !named {
+			body = `{"agent_id":"desk/w2:p1","note":"ok"}`
+		}
+		code, out := land(t, s, body)
+		if code != 200 {
+			t.Fatalf("land = %d %v", code, out)
+		}
+		g, _ := s.ledger.Get(e.ID)
+		if named && (g.Approval.Branch != "follow" || g.Approval.Tip != follow) {
+			t.Fatalf("approval = %+v, want branch follow tip %s", g.Approval, follow)
+		}
+		r.edit(t, r.repo, 38, "someone else's work")
+		git(t, r.repo, "cherry-pick", "follow")
+		git(t, r.repo, "push", "-q", "origin", "main")
+		git(t, r.wt, "fetch", "-q", "origin")
+		git(t, r.wt, "switch", "-q", "--detach", "origin/main")
+		git(t, r.wt, "branch", "-q", "-D", "follow")
+		g = settle(t, s, e.ID)
+		if named && (g.Status != ledger.Landed || g.LandCheck == nil || !g.LandCheck.OK) {
+			t.Fatalf("named branch: settled = %s %+v", g.Status, g.LandCheck)
+		}
+		if !named && g.Status == ledger.Landed {
+			t.Fatalf("without --branch the entry's own branch is still what is checked, got %s", g.Status)
+		}
+		if code, out := land(t, s, `{"agent_id":"desk/w2:p1","note":"x","branch":"bad branch"}`); code != 400 && g.Status == ledger.Finished {
+			t.Fatalf("bad branch = %d %v", code, out)
+		}
+	}
+}

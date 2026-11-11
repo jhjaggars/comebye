@@ -166,6 +166,10 @@ type Approval struct {
 	At   time.Time `json:"at"`
 	Base string    `json:"base,omitempty"`
 	Tip  string    `json:"tip,omitempty"`
+	// Branch is the branch the work lands from when it is not the entry's
+	// own (a follow-on task the worker did on a new branch): the landing
+	// check looks at it instead of the entry's branch.
+	Branch string `json:"branch,omitempty"`
 	// ReportedAt is when the worker had reported the work being landed
 	// (the entry's FinishedAt then), restored if the landing is cancelled.
 	ReportedAt *time.Time `json:"reported_at,omitempty"`

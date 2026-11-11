@@ -27,6 +27,10 @@ type landBody struct {
 	// Note is the user's OK as the coordinator relays it.
 	Note string `json:"note"`
 	Base string `json:"base"`
+	// Branch names the branch the work lands from when it is not the
+	// handoff's own (a follow-on task on a new branch); the landing check
+	// then follows it.
+	Branch string `json:"branch"`
 	// Cancel undoes a landing whose prompt could not be sent.
 	Cancel bool `json:"cancel"`
 }
@@ -69,6 +73,11 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusBadRequest, apiErr("bad_branch", "invalid base"))
 		return
 	}
+	b.Branch = strings.TrimSpace(b.Branch)
+	if b.Branch != "" && !validBranch(b.Branch) {
+		writeJSONStatus(w, http.StatusBadRequest, apiErr("bad_branch", "invalid branch"))
+		return
+	}
 	note := strings.TrimSpace(b.Note)
 	if note == "" {
 		writeJSONStatus(w, http.StatusBadRequest, apiErr("note_required", "say how the user OKed landing (--note), in their words"))
@@ -85,10 +94,13 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	}
 	// The tip being approved, so the landing check can tell that it, not
 	// just whatever the worktree holds then, reached the base.
+	if retry && b.Branch == "" && e.Approval != nil {
+		b.Branch = e.Approval.Branch
+	}
 	tip := ""
 	if e.Worktree != "" && s.knownHost(e.Host) {
 		ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
-		c, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, b.Base, checkOpts{}.forEntry(e))
+		c, lerr := s.checksOn(ctx, e.Host, e.Worktree, orDefault(b.Branch, e.Branch), b.Base, checkOpts{}.forEntry(e))
 		cancel()
 		if lerr == nil && c.Exists && !c.Primary {
 			tip = c.Tip
@@ -97,7 +109,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	if retry && tip == "" && e.Approval != nil {
 		tip = e.Approval.Tip
 	}
-	got, ok, err := s.ledger.StartLanding(b.AgentID, ledger.Approval{By: s.by(r, ""), Note: note, Base: b.Base, Tip: tip})
+	got, ok, err := s.ledger.StartLanding(b.AgentID, ledger.Approval{By: s.by(r, ""), Note: note, Base: b.Base, Tip: tip, Branch: b.Branch})
 	switch {
 	case err != nil:
 		writeJSONStatus(w, http.StatusInternalServerError, apiErr("ledger_error", err.Error()))
@@ -265,13 +277,22 @@ func (s *Server) checkCI(ctx context.Context, e ledger.Entry, now time.Time) {
 	if e.Approval != nil && e.Approval.Base != "" {
 		base = e.Approval.Base
 	}
-	c, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, base, opts)
+	c, lerr := s.checksOn(ctx, e.Host, e.Worktree, landBranch(e), base, opts)
 	if lerr == nil && c.CI != nil {
 		if _, _, err := s.ledger.SetLandCI(e.ID, *c.CI); err != nil {
 			log.Printf("ledger: %v", err)
 		}
 	}
 	s.landNext(e, now, ciPoll, ciPollMax, false)
+}
+
+// landBranch is the branch a landing is checked on: the one the approval
+// names (work landed from a follow-on branch), else the entry's own.
+func landBranch(e ledger.Entry) string {
+	if e.Approval != nil && e.Approval.Branch != "" {
+		return e.Approval.Branch
+	}
+	return e.Branch
 }
 
 // landedSHA is the commit whose CI says how the landing went: the newest
@@ -383,7 +404,7 @@ func (s *Server) landingChecks(ctx context.Context, e ledger.Entry) *removal {
 			opts.Also = []string{a.Tip}
 		}
 	}
-	it := &removal{ID: e.AgentID, Host: e.Host, EntryID: e.ID, Repo: e.RepoName, Branch: e.Branch, Base: base,
+	it := &removal{ID: e.AgentID, Host: e.Host, EntryID: e.ID, Repo: e.RepoName, Branch: landBranch(e), Base: base,
 		Worktree: e.Worktree, Warnings: []string{}, Notes: []string{}, opts: opts}
 	s.checkRemoval(ctx, it)
 	return it

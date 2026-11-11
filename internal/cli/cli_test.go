@@ -669,7 +669,7 @@ func TestReportProgress(t *testing.T) {
 	if code := run(e, "report", "--phase", "tests", "-"); code != 2 || !strings.Contains(errb.String(), "--phase goes with --progress") {
 		t.Fatalf("phase without progress: %d %s", code, errb)
 	}
-	if prompt := landPrompt("main", false); !strings.Contains(prompt, "comebye report --progress --phase") || !strings.Contains(prompt, "Never send `comebye report -` for it") {
+	if prompt := landPrompt("main", false, ""); !strings.Contains(prompt, "comebye report --progress --phase") || !strings.Contains(prompt, "Never send `comebye report -` for it") {
 		t.Fatalf("the land prompt does not tell workers to use progress notes: %s", prompt)
 	}
 }
