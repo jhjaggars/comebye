@@ -680,6 +680,12 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 			bad("bad_set", err.Error())
 			return
 		}
+		if set.Plan != "" && s.ledger != nil {
+			if _, ok := s.ledger.GetPlan(set.Plan); !ok {
+				bad("unknown_plan", "the set names a plan that does not exist: make it with `comebye plan create`")
+				return
+			}
+		}
 	}
 	ctx := block(b.Context, todoMaxContext)
 	if set != nil {
@@ -849,6 +855,9 @@ func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string)
 	if err != nil {
 		todoErr(w, err)
 		return
+	}
+	if it.Set != nil && it.Set.Plan != "" {
+		s.kickQueued() // a dropped set fails the plan's waiting handoffs
 	}
 	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
 }

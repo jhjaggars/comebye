@@ -397,7 +397,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(b.After) > 0 {
+	if len(b.After) > 0 || s.planHeld(b.Plan) {
 		status, payload := s.queueHandoff(b, from, s.replyRef(r))
 		writeJSONStatus(w, status, payload)
 		return

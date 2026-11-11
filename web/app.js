@@ -1622,7 +1622,7 @@ function setFixLabel(t, fix) {
 function setStatusHtml(t) {
   const n = setDone(t), N = t.set.decisions.length, bl = setBlockers(t).length, wn = setConflicts(t).length - bl;
   return `<span class="td-chip ${n === N ? "st-answered" : "st-open"}">${n}/${N} decided</span><span class="td-chip ${bl ? "st-err" : wn ? "st-warn" : "st-answered"}">${bl ? `${bl} blocking` : wn ? `${wn} warning${wn > 1 ? "s" : ""}` : "0 conflicts"}</span>` +
-    `<span class="td-chip">${t.state !== "open" ? "submitted" : "draft saved on the hub"}</span>`;
+    `<span class="td-chip">${t.state !== "open" ? "submitted" : "draft saved on the hub"}</span>${t.set.plan && !t.set.submitted_at ? `<span class="td-chip st-surf" title="The plan's waiting handoffs start when you submit">plan waits on this</span>` : ""}`;
 }
 
 function setBarHtml(t) {

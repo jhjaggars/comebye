@@ -114,6 +114,10 @@ func (s *Server) stepsState(e ledger.Entry) (state, why string) {
 			state = "wait"
 		}
 	}
+	if state == "go" && e.PlanID != "" && s.todos != nil {
+		// The plan's decision set (todoset.go) is answered first.
+		return s.todos.planGate(e.PlanID)
+	}
 	return state, ""
 }
 

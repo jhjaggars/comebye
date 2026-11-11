@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
 const setBody = `{"question":"How do we add the backend?","kind":"decision","set":{
@@ -226,5 +228,62 @@ func TestSetRelayedSubmitSendsNoNotice(t *testing.T) {
 		if strings.Contains(m, "answered to-do") {
 			t.Fatalf("notice after a relayed submit: %v", *sent)
 		}
+	}
+}
+
+// A set that names a plan holds the plan's handoffs until it is submitted.
+func TestSetPlanHoldsHandoffsUntilSubmit(t *testing.T) {
+	s, peer := afterServer(t)
+	if s.todos == nil {
+		t.Fatal("no todo store")
+	}
+	p := newPlanOn(t, s, `{"title":"Build it","size":2}`)
+	body := strings.Replace(setBody, `"set":{`, `"set":{"plan":"`+p.ID+`",`, 1)
+	if w := do(s, "POST", "/api/todos", userHdr, strings.Replace(setBody, `"set":{`, `"set":{"plan":"pnope",`, 1)); w.Code != 400 || !strings.Contains(w.Body.String(), "unknown_plan") {
+		t.Fatalf("unknown plan = %d %s", w.Code, w.Body)
+	}
+	w := do(s, "POST", "/api/todos", userHdr, body)
+	if w.Code != 201 {
+		t.Fatalf("add = %d %s", w.Code, w.Body)
+	}
+	set := todoOf(t, w.Body.Bytes())
+	// A handoff of the plan with no --after queues anyway.
+	code, q := queue(t, s, p.ID, "feat/x", ``)
+	if code != 200 || q.Status != ledger.Waiting {
+		t.Fatalf("queued = %d %+v", code, q)
+	}
+	s.observeLedger(nil)
+	s.releasing.Wait()
+	if g, _ := s.ledger.Get(q.ID); g.Status != ledger.Waiting || len(peer.saw("POST /api/worker")) != 0 {
+		t.Fatalf("started before the set was submitted: %+v", g)
+	}
+	// Submit it: the handoff starts.
+	if w := do(s, "PUT", "/api/todos/"+set.ID+"/draft", userHdr, `{"choices":{"D1":{"option":1,"confirmed":true},"D3":{"option":1,"confirmed":true},"D6":{"option":1,"confirmed":true}}}`); w.Code != 200 {
+		t.Fatalf("draft = %d %s", w.Code, w.Body)
+	}
+	if w := do(s, "POST", "/api/todos/"+set.ID+"/submit", userHdr, ``); w.Code != 200 {
+		t.Fatalf("submit = %d %s", w.Code, w.Body)
+	}
+	waitFor(t, func() bool { g, _ := s.ledger.Get(q.ID); return g.Status == ledger.Running })
+	// With the set submitted, a new handoff of the plan starts at once.
+	if st, _ := s.todos.planGate(p.ID); st != "go" {
+		t.Fatalf("gate = %s", st)
+	}
+}
+
+// Dropping the set unanswered fails the plan's waiting handoffs.
+func TestSetPlanDropFailsHandoffs(t *testing.T) {
+	s, peer := afterServer(t)
+	p := newPlanOn(t, s, `{"title":"Build it","size":2}`)
+	body := strings.Replace(setBody, `"set":{`, `"set":{"plan":"`+p.ID+`",`, 1)
+	set := todoOf(t, do(s, "POST", "/api/todos", userHdr, body).Body.Bytes())
+	_, q := queue(t, s, p.ID, "feat/x", ``)
+	if w := do(s, "POST", "/api/todos/"+set.ID+"/drop", userHdr, `{"reason":"moot"}`); w.Code != 200 {
+		t.Fatalf("drop = %d", w.Code)
+	}
+	s.releasing.Wait()
+	g, _ := s.ledger.Get(q.ID)
+	if g.Status != ledger.Failed || !strings.Contains(g.Error, "dropped") || len(peer.saw("POST /api/worker")) != 0 {
+		t.Fatalf("entry = %+v", g)
 	}
 }

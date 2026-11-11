@@ -409,6 +409,53 @@ func (ts *TodoSet) setMarkdown(withDraft bool) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+// ---- plans ----
+
+// planGate says whether the handoffs of a plan may start: "wait" while a
+// decision set naming the plan is open and not submitted, "fail" (with why)
+// when such a set was dropped unanswered, else "go".
+func (t *todoStore) planGate(plan string) (state, why string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state = "go"
+	for _, it := range t.data.Items {
+		if it.Set == nil || it.Set.Plan != plan {
+			continue
+		}
+		switch {
+		case it.Set.SubmittedAt != nil:
+		case it.State == TodoOpen:
+			state = "wait"
+		case it.State == TodoDropped:
+			return "fail", "the decision set it waited on was dropped without an answer"
+		}
+	}
+	return state, ""
+}
+
+// planHeld: the plan has a decision set that is not submitted yet, so a new
+// handoff of the plan queues instead of starting.
+func (s *Server) planHeld(plan string) bool {
+	if plan == "" || s.todos == nil {
+		return false
+	}
+	st, _ := s.todos.planGate(plan)
+	return st == "wait"
+}
+
+// kickQueued starts or fails the waiting handoffs that a set's Submit or
+// drop just changed the answer for.
+func (s *Server) kickQueued() {
+	if s.ledger == nil {
+		return
+	}
+	s.releasing.Add(1)
+	go func() {
+		defer s.releasing.Done()
+		s.releaseQueued()
+	}()
+}
+
 // ---- API ----
 
 // todoReqErr is a refused request with its own status.
@@ -613,6 +660,9 @@ func (s *Server) handleTodoSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if via == "app" {
 		s.deliverTodoNotices(s.fleet.Agents())
+	}
+	if it.Set.Plan != "" {
+		s.kickQueued() // the plan's handoffs waited on this answer
 	}
 	writeJSON(w, map[string]any{"todo": s.todoGone(it)})
 }
