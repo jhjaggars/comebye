@@ -3603,25 +3603,33 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         await p.route(/\/api\/ledger$/, (r) => r.fulfill({ json: EMPTY_LEDGER }));
         await p.route(/\/api\/todos$/, (r) => r.fulfill({ json: NO_TODOS }));
         await p.goto(base + "/" + (mobile ? "" : "#/todo"), { waitUntil: "load" });
-        await p.waitForTimeout(600);
+        // Wait for the fleet to arrive (the list drawn, the event stream open): the first "agents" event can land any time
+        // after load, and one landing after the list is forced empty below redraws it with the fleet.
+        await p.waitForFunction(() => document.querySelector("#agents .agent") && state.es && state.es.readyState === 1);
+        await p.waitForTimeout(300);
         // Each state is forced, then its box is measured: non-zero left padding, text centred, inside its pane.
         const states = [
-          ["list", "state.agents = []; renderList()", "#agents .empty"],
+          ["list", "state.agents = []; renderList()", "#agents .empty", true], // measured in the same task: an "agents" event (or a resume refresh) landing in a wait would redraw the fleet
           ["search none", "location.hash = '#/search?q=zzzqqqnomatch'", ".rc-empty"],
           ["ready to remove", "openReview(); await new Promise(r => setTimeout(r, 500)); review.items = []; renderReview()", "#rv-list .ln-empty"],
           ["sweep", "openReview(); await new Promise(r => setTimeout(r, 500)); Object.assign(sweep, { shown: true, busy: false, data: { ready: [], needs_look: [] } }); renderSweep()", "#rv-sweepbox .ln-empty"],
           ...(mobile ? [] : [["To do none", "location.hash = '#/todo'; todos.loadedAt = 0; await loadTodos()", "#pt-body .empty"]]),
         ];
         const bad = [];
-        for (const [name, js, sel] of states) {
-          await p.evaluate(`(async () => { ${js} })()`);
-          await p.waitForTimeout(700);
-          const m = await p.evaluate((sel) => {
-            const el = [...document.querySelectorAll(sel)].find((e) => e.offsetParent !== null);
-            if (!el) return null;
-            const cs = getComputedStyle(el), r = el.getBoundingClientRect(), pr = el.parentElement.getBoundingClientRect();
-            return { padL: parseFloat(cs.paddingLeft), padR: parseFloat(cs.paddingRight), align: cs.textAlign, inside: r.left >= pr.left - 0.5 && r.right <= pr.right + 0.5 };
-          }, sel);
+        const measure = (sel) => {
+          const el = [...document.querySelectorAll(sel)].find((e) => e.offsetParent !== null);
+          if (!el) return null;
+          const cs = getComputedStyle(el), r = el.getBoundingClientRect(), pr = el.parentElement.getBoundingClientRect();
+          return { padL: parseFloat(cs.paddingLeft), padR: parseFloat(cs.paddingRight), align: cs.textAlign, inside: r.left >= pr.left - 0.5 && r.right <= pr.right + 0.5 };
+        };
+        for (const [name, js, sel, now] of states) {
+          let m;
+          if (now) m = await p.evaluate(`(async () => { ${js}; return (${measure.toString()})(${JSON.stringify(sel)}); })()`);
+          else {
+            await p.evaluate(`(async () => { ${js} })()`);
+            await p.waitForTimeout(700);
+            m = await p.evaluate(measure, sel);
+          }
           if (!m) bad.push(`${name}: not shown (${sel})`);
           else if (!(m.padL > 0 && m.padR > 0) || m.align !== "center" || !m.inside) bad.push(`${name}: ${JSON.stringify(m)}`);
           await p.evaluate(() => { document.getElementById("rv-close")?.click(); });

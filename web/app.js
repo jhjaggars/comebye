@@ -6395,7 +6395,9 @@ function syncUsage() {
   const moved = r.r !== us.r || r.d !== us.d || r.m !== us.m || r.p !== us.p || r.h !== us.h;
   Object.assign(us, r);
   if (!was || moved) { if (!was) us.status = "loading"; us.picked = -1; usageLoad(); }
-  if (!was) us.timer = setInterval(usageLoad, 60000);
+  // The Escape handler hears only keys pressed inside the screen, so focus goes in as the screen opens;
+  // without it Escape worked only while focus happened to be left on Back from an earlier visit.
+  if (!was) { us.timer = setInterval(usageLoad, 60000); $("us-back").focus({ preventScroll: true }); }
   renderUsage();
 }
 
