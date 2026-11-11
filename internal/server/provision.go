@@ -114,6 +114,7 @@ func (s *Server) handlePeerPreflight(w http.ResponseWriter, r *http.Request) {
 		relErr(w, code, "preflight_failed", oneLine(provision.Text(err.Error(), 300), 300))
 		return
 	}
+	p.DryRun = !s.cfg.Provision.Tool.Real
 	writeJSON(w, p)
 }
 
@@ -529,4 +530,16 @@ func (s *Server) provisionRoutes() {
 	s.mux.HandleFunc("GET /api/provision/nodes", s.auth(s.handleProvisionNodes))
 	s.mux.HandleFunc("GET /api/provision/catalog", s.auth(s.handleProvisionCatalog))
 	s.mux.HandleFunc("POST /api/provision/refresh", s.auth(s.handleProvisionRefresh))
+	// slice 2: adding a host
+	s.mux.HandleFunc("POST /api/provisioner/plan", s.auth(s.handlePeerPlan))
+	s.mux.HandleFunc("POST /api/provisioner/jobs", s.auth(s.handlePeerJobCreate))
+	s.mux.HandleFunc("GET /api/provisioner/job", s.auth(s.handlePeerJob))
+	s.mux.HandleFunc("POST /api/provisioner/job/retry", s.auth(s.handlePeerJobRetry))
+	s.mux.HandleFunc("POST /api/provisioner/job/cleanup", s.auth(s.handlePeerJobCleanup))
+	s.mux.HandleFunc("POST /api/provision/plan", s.auth(s.handleProvisionPlan))
+	s.mux.HandleFunc("POST /api/provision", s.auth(s.handleProvisionCreate))
+	s.mux.HandleFunc("GET /api/provision/jobs/{id}", s.auth(s.handleProvisionJob))
+	s.mux.HandleFunc("POST /api/provision/jobs/{id}/retry", s.auth(s.handleProvisionJobRetry))
+	s.mux.HandleFunc("POST /api/provision/jobs/{id}/cleanup", s.auth(s.handleProvisionJobCleanup))
+	s.mux.HandleFunc("POST /api/provision/jobs/{id}/change", s.auth(s.handleProvisionJobChange))
 }

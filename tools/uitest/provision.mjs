@@ -38,12 +38,22 @@ echo "$*" >> $d/argv
 case "$4" in
   preflight)
     if [ -f $d/expired ]; then sed 's/"aws": {[^}]*}/"aws": {"state": "expired", "note": "profile comebye-provision: the login expired; run aws login"}/' $d/preflight.json; else cat $d/preflight.json; fi ;;
+  create)
+    cat > $d/spec.in
+    echo "DRY RUN: nothing is created, no key is minted" >&2
+    echo "worker      demo1" >&2
+    [ -f $d/create.sleep ] && sleep $(cat $d/create.sleep)
+    cat $d/create.events
+    [ -f $d/create.fail ] && { cat $d/create.fail; exit 1; }
+    exit 0 ;;
   catalog)
     if [ -f $d/expired ]; then echo '{"v":1,"error":{"class":"creds_expired","msg":"catalog: the instance types could not be read (creds_expired)"}}'; exit 1; fi
     r=us-east-1; prev=""; for a in "$@"; do [ "$prev" = --region ] && r=$a; prev=$a; done
     sed "s/\\"region\\": \\"[^\\"]*\\"/\\"region\\": \\"$r\\"/" $d/catalog.json ;;
 esac
 `, { mode: 0o755 });
+const stages = ["network", "ssh_key", "data_disk", "instance", "ssh", "bootstrap", "tailnet", "agents", "hub"];
+fs.writeFileSync(path.join(wdir, "create.events"), stages.map((st, i) => JSON.stringify({ v: 1, seq: i + 1, stage: st, step: `${i + 1}/9`, state: "planned" })).join("\n") + "\n");
 fs.writeFileSync(path.join(work, "worker.conf"), "# stand-in config\n");
 
 async function serve(name, port, extra = []) {
@@ -86,7 +96,7 @@ try {
     if (/tskey|AKIA|641875867446|@/.test(JSON.stringify(n))) throw new Error("the answer holds something credential-shaped");
   });
   await check("an agent token is refused on every route, and refresh needs the page's token", async () => {
-    for (const [m, p] of [["GET", "/api/provision/nodes"], ["GET", "/api/provision/catalog?kind=aws&region=us-east-1"], ["POST", "/api/provision/refresh"]]) {
+    for (const [m, p] of [["GET", "/api/provision/nodes"], ["GET", "/api/provision/catalog?kind=aws&region=us-east-1"], ["POST", "/api/provision/refresh"], ["POST", "/api/provision/plan"], ["POST", "/api/provision"], ["GET", "/api/provision/jobs/hj_0123456789abcdef"]]) {
       const r = await j(m, p, m === "POST" ? { what: "nodes" } : undefined, { "X-Comebye-Agent-Token": "nope" });
       if (r.status === 200) throw new Error(m + " " + p + " answered 200 to a wrong token");
     }
@@ -199,6 +209,104 @@ try {
       await shot("expired");
       await noHScroll();
       fs.rmSync(path.join(wdir, "expired"), { force: true });
+    });
+
+
+    // ---- Add host: the wizard, a dry run end to end, then a failure and a way out ----
+    const next = () => page.locator("#az-next");
+    const step = async () => (await page.locator(".az-steps li.on").innerText()).trim();
+    await check(`${tag}: Add host opens the wizard on the node step, saying it is a dry run, with the cost footer`, async () => {
+      await page.locator("#az-add").click();
+      await page.waitForSelector(".az-steps");
+      if (!(await step()).startsWith("1.")) throw new Error("step " + await step());
+      const t = await page.locator("#pr-prices").innerText();
+      if (!/Dry run/.test(t) || !/nothing is created/.test(t)) throw new Error("the dry-run notice is missing");
+      if (!(await page.locator("#az-cost").innerText()).includes("choose a size")) throw new Error("footer: " + await page.locator("#az-cost").innerText());
+      await shot("wizard-node");
+      await noHScroll();
+    });
+    await check(`${tag}: choosing a size shows its cost in the footer; an Arm size cannot be chosen`, async () => {
+      await next().click();
+      await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 });
+      if (!(await step()).startsWith("2.")) throw new Error("step " + await step());
+      if (!(await next().isDisabled())) throw new Error("Next is enabled before a size is chosen");
+      if (!(await page.locator('[data-az-pick="t4g.large"]').isDisabled().catch(() => true))) throw new Error("an Arm size can be chosen");
+      await page.locator('[data-az-pick="t3.xlarge"]').click();
+      const c = await page.locator("#az-cost").innerText();
+      if (!/≈ \$0\.\d+\/h/.test(c) || !/day/.test(c)) throw new Error("footer: " + c);
+      await page.evaluate(() => { const p = document.querySelector("#pr-prices"), l = p.querySelector(".pz-list"); p.scrollTop = l.offsetTop - 140; });
+      await shot("wizard-size");
+      await noHScroll();
+    });
+    await check(`${tag}: options validate the name and move the cost`, async () => {
+      await next().click();
+      await page.waitForSelector("#az-name");
+      if (!(await next().isDisabled())) throw new Error("Next is enabled without a name");
+      await page.fill("#az-name", "Bad Name!");
+      if (!(await next().isDisabled())) throw new Error("Next accepts a bad name");
+      if (!(await page.locator("#az-name").evaluate((e) => e.classList.contains("bad")))) throw new Error("the bad name is not marked");
+      const spot = await page.locator("#az-cost b").innerText();
+      await page.selectOption("#az-spot", "0");
+      await page.waitForFunction((x) => document.querySelector("#az-cost b")?.innerText !== x, spot, { timeout: 5000 });
+      await page.selectOption("#az-spot", "1");
+      await page.fill("#az-name", "build-box");
+      if (await next().isDisabled()) throw new Error("Next is disabled with a good name");
+      await shot("wizard-options");
+      await noHScroll();
+    });
+    await check(`${tag}: review asks the provisioner for the plan and needs an acknowledgement`, async () => {
+      await next().click();
+      await page.waitForSelector("#az-ack", { timeout: 30000 });
+      const t = await page.locator("#pr-prices").innerText();
+      if (!/Dry run\./.test(t) || !/build-box/.test(t) || !/\$\d+\.\d\d\/day/.test(t)) throw new Error("review: " + t.slice(0, 300));
+      if (!(await next().isDisabled())) throw new Error("Create is enabled before the acknowledgement");
+      if (!argv().includes("create --dry-run --events --spec -")) throw new Error("the plan was not the tool's dry run: " + argv());
+      const spec = fs.readFileSync(path.join(wdir, "spec.in"), "utf8");
+      if (!spec.includes('"name":"build-box"') || !spec.includes('"type":"t3.xlarge"') || !spec.includes('"budget_cap_usd":10')) throw new Error("spec: " + spec);
+      await page.locator("#az-ack").check();
+      await shot("wizard-review");
+      await noHScroll();
+    });
+    await check(`${tag}: the dry run walks all nine stages, says nothing was created, and creates nothing`, async () => {
+      await next().click();
+      await page.waitForFunction(() => /Dry run finished/.test(document.querySelector("#pr-prices").innerText), null, { timeout: 30000 });
+      const n = await page.locator(".az-st.plan").count();
+      if (n !== 9) throw new Error("planned stages: " + n);
+      if (/(^|\n)worker create (?!.*--dry-run)/.test(argv())) throw new Error("a real create ran");
+      for (const l of argv().split("\n")) if (/ create /.test(" " + l + " ") && !l.includes("--dry-run")) throw new Error("create without --dry-run: " + l);
+      await shot("wizard-done");
+      await noHScroll();
+      await page.locator("#az-done").click();
+      await page.waitForSelector("#az-add");
+    });
+    await check(`${tag}: a spot-capacity failure names the zone, and switching to on-demand starts a new job`, async () => {
+      fs.writeFileSync(path.join(wdir, "create.fail"), JSON.stringify({ v: 1, seq: 99, stage: "instance", step: "4/9", state: "failed", class: "spot_capacity", zone: "us-east-2a", msg: "no spot capacity in us-east-2a" }) + "\n");
+      await page.locator("#az-add").click();
+      await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 }).catch(async () => { await next().click(); await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 }); });
+      await page.locator('[data-az-pick="t3.xlarge"]').click();
+      await next().click();
+      await page.fill("#az-name", "retry-box");
+      await next().click();
+      await page.waitForSelector("#az-ack", { timeout: 30000 });
+      await page.locator("#az-ack").check();
+      await next().click();
+      await page.waitForFunction(() => /no spot capacity/i.test(document.querySelector("#pr-prices").innerText), null, { timeout: 30000 });
+      const t = await page.locator("#pr-prices").innerText();
+      if (!t.includes("us-east-2a") || !/Failed/.test(t)) throw new Error("failure: " + t.slice(0, 300));
+      if (!(await page.locator('[data-az-act="retry"]').count()) || !(await page.locator('[data-az-act="ondemand"]').count()) || !(await page.locator('[data-az-act="cleanup"]').count())) throw new Error("no way out is offered");
+      await shot("wizard-failed");
+      await noHScroll();
+      fs.rmSync(path.join(wdir, "create.fail"), { force: true });
+      await page.locator('[data-az-act="ondemand"]').click();
+      await page.waitForFunction(() => /Dry run finished/.test(document.querySelector("#pr-prices").innerText), null, { timeout: 30000 });
+      const spec = fs.readFileSync(path.join(wdir, "spec.in"), "utf8");
+      if (!spec.includes('"spot":false')) throw new Error("the new job is not on-demand: " + spec);
+    });
+    await check(`${tag}: Clean up on a dry run runs nothing`, async () => {
+      // a finished job offers Close, not Clean up; leave the wizard
+      await page.locator("#az-done").click();
+      await page.waitForSelector("#az-add");
+      if (argv().includes(" destroy ")) throw new Error("destroy ran");
     });
 
     await check(`${tag}: no console errors, no CSP violations`, async () => {

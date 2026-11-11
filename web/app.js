@@ -5820,6 +5820,7 @@ function initPeers() {
     next.focus();
   });
   initPrices();
+  initAddHost();
   $("pr-releases").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-rel]");
     if (b && !b.disabled) relClick(b.dataset.rel, b.dataset.host);
@@ -5899,6 +5900,7 @@ async function loadProvNodes(force) {
     if (e.code === "csrf") { pz.nodes = null; }
   } finally { pz.loadingNodes = false; }
   if (prs.route && prs.route.tab === "prices") loadProvCatalog(false);
+  if (pz.nodes && pz.nodes.enabled) azResume();
   renderPeers();
 }
 
@@ -5921,8 +5923,8 @@ async function loadProvCatalog(force) {
   let res = null, err = null;
   try {
     res = force
-      ? await api("/api/provision/refresh", { method: "POST", headers: { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }, body: JSON.stringify({ what: "catalog", via: pz.via, kind: "aws", region: pz.region, small: pz.small }), timeout: 170000 })
-      : await api(pzCatPath(), { timeout: 170000 });
+      ? await api("/api/provision/refresh", { method: "POST", headers: { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }, body: JSON.stringify({ what: "catalog", via: pz.via, kind: "aws", region: pz.region, small: pz.small }), timeout: 340000 })
+      : await api(pzCatPath(), { timeout: 340000 });
   } catch (e) { err = e; }
   if (seq !== pz.seq) return;
   if (res) { res._at = Date.now(); pz.cat = res; pz.catKey = key; }
@@ -5938,7 +5940,7 @@ async function pzCheckCapacity(type) {
   pz.scoring = type;
   renderPeers();
   try {
-    const d = await api(pzCatPath({ score: type }), { timeout: 170000 });
+    const d = await api(pzCatPath({ score: type }), { timeout: 340000 });
     pz.score[pz.via + "|" + pz.region + "|" + type] = (d.catalog && d.catalog.placement) || { scores: [] };
   } catch (e) { pz.score[pz.via + "|" + pz.region + "|" + type] = { error: e.message || "failed" }; }
   pz.scoring = "";
@@ -5969,8 +5971,8 @@ function pzSortRows(rows) {
   return [...rows].sort((a, b) => (b.selectable - a.selectable) || by(a, b) || a.type.localeCompare(b.type));
 }
 
-function pzRow(r, n) {
-  const open = pz.open === r.type;
+function pzRow(r, n, pick) {
+  const open = !pick && pz.open === r.type;
   const spec = `<span class="pz-cell"><span class="pz-lb">vCPU</span>${r.vcpu}</span><span class="pz-cell"><span class="pz-lb">Memory</span>${r.memory_gib} GiB</span><span class="pz-cell"><span class="pz-lb">Arch</span>${esc(r.arch || "?")}</span>`;
   const prices = `<span class="pz-cell"><span class="pz-lb">Spot from</span>${pzMoney(r.spot_min_usd_hour)}</span><span class="pz-cell"><span class="pz-lb">On-demand</span>${pzMoney(r.on_demand_usd_hour)}</span><span class="pz-cell"><span class="pz-lb">Stops</span>${esc(r.interruption || "–")}</span><span class="pz-cell"><span class="pz-lb">≈ per hour</span><b>${pzMoney(r.estimate_spot_usd_hour)}</b></span>`;
   const tags = (r.gpus ? `<span class="pz-tag">${r.gpus} GPU</span>` : "") + (r.selectable ? "" : `<span class="pz-tag arm">needs work</span>`);
@@ -5979,10 +5981,12 @@ function pzRow(r, n) {
   const scoreHtml = sc ? (sc.error ? `<span class="pz-note warn">${esc(sc.error)}</span>`
     : (sc.scores || []).length ? `<div class="pz-zones" aria-label="Capacity score by zone, 1 to 10">${sc.scores.map((z) => `<span class="pz-zone">${esc(z.zone_id)} · ${z.score}/10</span>`).join("")}</div>` : '<span class="pz-note">No capacity score came back.</span>') : "";
   const detail = open ? `<div class="pz-detail">
-      <div><div class="pz-note">Spot price per zone (the market price, up to on-demand; not a bid)</div><div class="pz-zones">${zones || '<span class="pz-note">No spot price.</span>'}</div></div>
+      <div><div class="pz-note">Spot price per zone (the market price, up to on-demand; not a bid)</div><div class="pz-zones">${zones || '<span class="pz-note">No per-zone prices: they need an AWS login on ${esc(n.name)}. The region-wide spot price is in the row.</span>'}</div></div>
       <div><button type="button" class="btn" data-pz-score="${escAttr(r.type)}"${pz.scoring ? " disabled" : ""}>${pz.scoring === r.type ? "Checking…" : "Check capacity"}</button>
       <span class="pz-note"> AWS's score for getting one ${esc(r.type)}, by zone id (10 is best).</span></div>${scoreHtml}
       ${r.note ? `<div class="pz-note warn">${esc(r.note)}</div>` : ""}</div>` : "";
+  if (pick) return `<div class="pz-item${r.selectable ? "" : " off"}"><button type="button" class="pz-row" data-az-pick="${escAttr(r.type)}" aria-pressed="${az.type === r.type}"${r.selectable ? "" : " disabled"}>
+    <span class="pz-type">${esc(r.type)}${tags}</span>${spec}${prices}</button></div>`;
   return `<div class="pz-item${r.selectable ? "" : " off"}"><button type="button" class="pz-row" data-pz-type="${escAttr(r.type)}" aria-expanded="${open}">
     <span class="pz-type">${esc(r.type)}${tags}</span>${spec}${prices}</button>${detail}</div>`;
 }
@@ -5990,7 +5994,10 @@ function pzRow(r, n) {
 function renderPrices() {
   const el = $("pr-prices");
   let html;
-  if (ledger.on !== true || !multiHost()) html = '<div class="pr-empty">Prices are browsed on a hub with peers.</div>';
+  if (az.open && pz.nodes && pz.nodes.enabled) {
+    html = azBody();
+    if (az.step === 2 && !pz.cat && !pz.loading && !pz.catErr && pz.via && pz.region) setTimeout(() => loadProvCatalog(false), 0);
+  } else if (ledger.on !== true || !multiHost()) html = '<div class="pr-empty">Prices are browsed on a hub with peers.</div>';
   else if (!pz.nodes) html = `<div class="pr-empty">${pz.nodesErr ? "Could not load: " + esc(pz.nodesErr) : "Loading…"}</div>`;
   else if (!pz.nodes.enabled) html = `<div class="pz-wrap"><div class="pz-card"><h3>No provisioner</h3><p class="pz-note">No peer here can browse prices yet. Start a peer that holds the cloud login with <code>-provision-config</code> (the worker tool's config), and set <code>COMEBYE_PROVISION_HOST</code> on the hub to make it the default.</p></div></div>`;
   else {
@@ -6017,9 +6024,10 @@ function pzBody() {
   const sel = `<div class="pz-card"><h3>Provisioner</h3><div class="pz-bar">
     <div class="pz-field"><label for="pz-via">Node</label><select id="pz-via">${nodes.map((x) => `<option value="${escAttr(x.name)}"${x.name === pz.via ? " selected" : ""}>${esc(x.name)}${x.default ? " (default)" : ""}${x.state === "ok" ? "" : " · " + esc(x.state)}</option>`).join("")}</select></div>
     <div class="pz-field"><label for="pz-region">Region</label><select id="pz-region">${regions.map((r) => `<option value="${escAttr(r)}"${r === pz.region ? " selected" : ""}>${esc(r)}${pf && r === pf.region ? " (this node's own)" : ""}</option>`).join("")}</select></div>
-    <button type="button" class="btn" id="pz-recheck"${pz.loadingNodes ? " disabled" : ""}>${pz.loadingNodes ? "Checking…" : "Recheck"}</button></div>
+    <button type="button" class="btn" id="pz-recheck"${pz.loadingNodes ? " disabled" : ""}>${pz.loadingNodes ? "Checking…" : "Recheck"}</button>
+    <button type="button" class="btn primary" id="az-add"${n && n.state === "ok" ? "" : " disabled"}>Add host…</button></div>
     ${n ? pzCredRows(n) : ""}
-    <p class="pz-note">Credentials stay on ${esc(n ? n.name : "the node")}: this page shows only whether each is present. Nothing here creates anything.</p></div>`;
+    <p class="pz-note">Credentials stay on ${esc(n ? n.name : "the node")}: this page shows only whether each is present. Browsing prices creates nothing.${pf && pf.dry_run ? " This provisioner is in dry-run mode: Add host plans and walks through the stages but creates nothing." : ""}</p></div>`;
   let list = "";
   if (!n) list = "";
   else if (pz.loading && !pz.cat) list = '<div class="pz-card"><p class="pz-note">Fetching prices from ' + esc(n.name) + '… the first fetch for a region takes about ten seconds.</p></div>';
@@ -6029,24 +6037,30 @@ function pzBody() {
   return `<div class="pz-wrap">${sel}${list}</div>`;
 }
 
-function pzCatalog(n) {
+function pzCatalog(n, pick) {
   const d = pz.cat, c = d.catalog;
   const stale = d.stale || c.degraded;
   const expired = (d.stale || "").startsWith("creds_expired") || c.degraded === "creds_expired";
   const banner = stale ? `<div class="pz-card pz-warn"><p class="pz-note warn">Prices from ${esc(pzAge(d.fetched_at) || "earlier")}: ${expired ? esc(n.name) + "'s AWS login expired. On " + esc(n.name) + ", run <code>aws login</code>, then Refresh." : "the last refresh failed (" + esc((d.stale || c.degraded).replace(/^creds_expired: ?/, "")) + ")."}</p></div>` : "";
   const rows = pzSortRows(c.rows || []);
   const src = c.sources || {};
-  const srcLine = ["types", "spot_price", "on_demand", "spot_advisor"].filter((k) => src[k]).map((k) => `${({ types: "types", spot_price: "spot prices", on_demand: "on-demand prices", spot_advisor: "interruption bands" })[k]} ${src[k].state === "missing" ? "unavailable" : pzAge(src[k].fetched_at)}`).join(" · ");
+  const SRC = { types: "Specs", on_demand: "On-demand", spot_price: "Spot (region)", spot_zones: "Spot per zone", spot_advisor: "Stops", placement: "Capacity" };
+  const srcLine = ["types", "on_demand", "spot_price", "spot_zones", "spot_advisor"].filter((k) => src[k]).map((k) => {
+    const x = src[k], gone = x.state === "missing";
+    const why = gone && x.error === "creds_expired" ? ` (needs an AWS login on ${n.name})` : gone && k === "spot_zones" ? ` (needs an AWS login on ${n.name})` : "";
+    return `<li><b>${SRC[k]}</b>: ${esc(x.source || "")}${gone ? " · unavailable" + esc(why) : " · " + esc(pzAge(x.fetched_at))}</li>`;
+  }).join("");
   const est = c.estimate || {};
-  return `${banner}<div class="pz-card"><h3>Instance types · ${esc(c.region)}</h3>
+  return `${banner}<div class="pz-card"><h3>${pick ? "Choose a size" : "Instance types"} · ${esc(c.region)}</h3>
     <div class="pz-bar">
       <div class="pz-field"><label for="pz-sort">Sort by</label><select id="pz-sort">${[["price", "Cheapest (spot, estimated)"], ["ondemand", "Lowest on-demand"], ["vcpu", "Most vCPU"], ["memory", "Most memory"], ["stops", "Fewest interruptions"]].map(([v, l]) => `<option value="${v}"${pz.sort === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
       <label class="pz-check"><input type="checkbox" id="pz-small"${pz.small ? " checked" : ""}>Show small sizes${d.hidden_small ? ` (${d.hidden_small} hidden)` : ""}</label>
       <button type="button" class="btn" id="pz-refresh"${pz.loading ? " disabled" : ""}>${pz.loading ? "Refreshing…" : "Refresh prices"}</button></div>
     <p class="pz-note">Hidden by default: under ${d.min_vcpu} vCPU or ${d.min_memory_gib} GiB, too small for an agent host. ≈ per hour is the lowest spot price plus ${pzMoney(est.ipv4_usd_hour)} for the public IPv4 and ${est.disk_gb || 0} GB of disk. Spot is the market price and sessions do not survive a stop. Arm types are listed but cannot be built yet.</p>
     <div class="pz-head" aria-hidden="true"><span>Type</span><span>vCPU</span><span>Memory</span><span>Arch</span><span>Spot from</span><span>On-demand</span><span>Stops</span><span>≈ per hour</span></div>
-    <div class="pz-list">${rows.map((r) => pzRow(r, n)).join("") || '<p class="pz-note">No sizes match.</p>'}</div>
-    <p class="pz-note">Fetched ${esc(pzAge(d.fetched_at))} through ${esc(n.name)} · ${esc(srcLine)}. "Stops" is AWS's monthly spot interruption band (the public Spot Advisor data; it may be missing).</p></div>`;
+    <div class="pz-list">${rows.map((r) => pzRow(r, n, pick)).join("") || '<p class="pz-note">No sizes match.</p>'}</div>
+    <details class="pz-src"><summary>Where each column comes from (through ${esc(n.name)}, ${esc(pzAge(d.fetched_at))})</summary><ul class="pz-note">${srcLine}</ul>
+    <p class="pz-note">Specs, on-demand prices and the interruption band need no AWS login: they are AWS's public data. The region-wide spot price is from the feed behind AWS's spot-pricing page, which AWS does not document. Per-zone spot prices and capacity scores come from ${esc(n.name)}'s AWS login when it has one.</p></details></div>`;
 }
 
 function initPrices() {
@@ -6068,6 +6082,322 @@ function initPrices() {
     else if (b.dataset.pzType) { pz.open = pz.open === b.dataset.pzType ? "" : b.dataset.pzType; renderPeers(); }
     else if (b.dataset.pzScore) pzCheckCapacity(b.dataset.pzScore);
   });
+}
+
+/* ---------- Add host: the wizard (Peers → Prices → Add host…) ---------- */
+//
+// node → size → options → review → progress, with the cost on every step.
+// The hub validates and forwards to the provisioner (POST /api/provision/plan,
+// POST /api/provision, GET /api/provision/jobs/{id}); credentials never come
+// here. On a provisioner in dry-run mode every step runs, the stages are
+// listed as planned, and nothing is created.
+const az = {
+  open: false, step: 1, type: "", spec: null, plan: null, planErr: "", planning: false, ack: false,
+  key: "", submitting: false, err: "", job: null, cursor: 0, items: [], timer: null, polling: false, acting: false,
+};
+const AZ_STEPS = ["Node", "Size", "Options", "Review", "Progress"];
+const AZ_STAGES = { network: "Network", ssh_key: "ssh key", data_disk: "Data disk", instance: "Instance", ssh: "ssh reach", bootstrap: "Bootstrap", tailnet: "Tailnet", agents: "Agents", hub: "Joins the hub", destroy: "Clean up", create: "Create", config: "Config" };
+const AZ_NAME = /^[a-z][a-z0-9-]{0,28}[a-z0-9]$/;
+const AZ_JOB_KEY = "comebye.addhost.job";
+
+function azDefaults(type) {
+  return { kind: "aws", name: "", type: type || "", spot: true, zone: "", boot_disk_gb: 20, data_disk_gb: 50, idle_minutes: 120, max_run: "24h", budget_cap_usd: 10, destroy_after_hours: 72 };
+}
+function azCsrf() { return { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }; }
+function azRow() { const c = pz.cat && pz.cat.catalog; return c ? (c.rows || []).find((r) => r.type === az.spec.type) : null; }
+function azNode() { return pzNode(pz.via); }
+function azDry() { const n = azNode(); return !!(n && n.preflight && n.preflight.dry_run); }
+
+function azStart(type) {
+  az.open = true; az.step = type ? 3 : 1; az.type = type || "";
+  az.spec = azDefaults(type); az.plan = null; az.planErr = ""; az.ack = false; az.key = ""; az.err = ""; az.job = null; az.cursor = 0; az.items = [];
+  const n = azNode();
+  if (n && n.preflight && n.preflight.region) pz.region = n.preflight.region;
+  renderPeers();
+}
+function azClose() {
+  az.open = false; azStopPoll();
+  try { localStorage.removeItem(AZ_JOB_KEY); } catch (e) { /* storage may be unavailable */ }
+  renderPeers();
+}
+
+// The estimate of the cost footer, from the cached price list (the review step
+// shows the provisioner's own figure).
+function azCost() {
+  const r = azRow(), c = pz.cat && pz.cat.catalog, sp = az.spec;
+  if (!r || !c) return null;
+  const e = c.estimate || {};
+  const extra = (e.ipv4_usd_hour || 0) + (sp.boot_disk_gb + sp.data_disk_gb) * (e.disk_usd_gb_month || 0) / 730;
+  let base = sp.spot ? ((sp.zone && r.spot_usd_hour && r.spot_usd_hour[sp.zone] != null) ? r.spot_usd_hour[sp.zone] : r.spot_min_usd_hour) : r.on_demand_usd_hour;
+  if (base == null) return null;
+  const hour = base + extra;
+  return { hour, day: hour * 24, hours: sp.budget_cap_usd / hour };
+}
+function azFoot() {
+  const c = azCost(), sp = az.spec;
+  const cost = c
+    ? `<b>≈ ${pzMoney(c.hour)}/h · $${c.day.toFixed(2)}/day</b><small>${sp.spot ? "spot, market price" : "on-demand"} · the $${sp.budget_cap_usd} cap lasts about ${c.hours >= 100 ? Math.round(c.hours) : c.hours.toFixed(1)} h</small>`
+    : `<b>≈ – /h</b><small>${sp.type ? "no price for " + esc(sp.type) : "choose a size to see the cost"}</small>`;
+  return cost;
+}
+function azUpdateFoot() { const el = $("az-cost"); if (el) el.innerHTML = azFoot(); }
+
+function azSteps() {
+  return `<ol class="az-steps" aria-label="Steps">${AZ_STEPS.map((l, i) => `<li class="${i + 1 === az.step ? "on" : i + 1 < az.step ? "done" : ""}"${i + 1 === az.step ? ' aria-current="step"' : ""}>${i + 1}. ${l}</li>`).join("")}</ol>`;
+}
+
+function azBody() {
+  const n = azNode(), sp = az.spec;
+  let main = "", next = "", back = "", can = true;
+  if (az.step === 1) {
+    const nodes = (pz.nodes && pz.nodes.nodes) || [];
+    const dry = azDry();
+    main = `<div class="pz-card"><h3>Which node builds it</h3><div class="pz-bar"><div class="pz-field"><label for="az-via">Node</label><select id="az-via">${nodes.map((x) => `<option value="${escAttr(x.name)}"${x.name === pz.via ? " selected" : ""}>${esc(x.name)}${x.default ? " (default)" : ""}${x.state === "ok" ? "" : " · " + esc(x.state)}</option>`).join("")}</select></div>
+      <button type="button" class="btn" id="pz-recheck"${pz.loadingNodes ? " disabled" : ""}>${pz.loadingNodes ? "Checking…" : "Recheck"}</button></div>
+      ${n ? pzCredRows(n) : ""}
+      <p class="pz-note">Builds in <b>${esc((n && n.preflight && n.preflight.region) || pz.region || "?")}</b>, this node's own region. The credentials stay on ${esc(n ? n.name : "the node")}; this page only learns whether each is present.</p>
+      ${dry ? `<div class="az-dry"><b>Dry run.</b> ${esc(n.name)} is set to plan only: every step below works, and the stages show as planned, but nothing is created and no cost is incurred.</div>` : ""}</div>`;
+    can = !!n && n.state === "ok";
+    next = "Size →";
+  } else if (az.step === 2) {
+    back = "← Node"; next = "Options →"; can = !!az.type;
+    if (pz.loading && !pz.cat) main = `<div class="pz-card"><p class="pz-note">Fetching prices from ${esc(n ? n.name : "the node")}… the first fetch downloads AWS's public price list and can take a minute.</p></div>`;
+    else if (pz.catErr && !pz.cat) main = `<div class="pz-card pz-warn"><h3>Prices unavailable</h3><p class="pz-note warn">${esc(pz.catErr === "creds_expired" ? "the price list could not be read" : pz.catErr)}</p><div class="pz-bar"><button type="button" class="btn" id="pz-refresh">Try again</button></div></div>`;
+    else if (pz.cat && n) main = pzCatalog(n, true);
+    else main = '<div class="pz-card"><p class="pz-note">Loading…</p></div>';
+  } else if (az.step === 3) {
+    back = "← Size"; next = "Review →";
+    const r = azRow();
+    const zones = r && r.spot_usd_hour ? Object.keys(r.spot_usd_hour).sort() : [];
+    const bad = sp.name && !AZ_NAME.test(sp.name);
+    can = AZ_NAME.test(sp.name) && sp.budget_cap_usd >= 1;
+    const num = (id, label, v, min, max, hint) => `<div class="pz-field"><label for="${id}">${label}</label><input class="az-in" id="${id}" type="number" inputmode="decimal" min="${min}" max="${max}" value="${escAttr(v)}"><small class="pz-note">${hint}</small></div>`;
+    main = `<div class="pz-card"><h3>${esc(sp.type)} on ${esc(pz.via)}</h3><div class="az-grid">
+      <div class="pz-field az-wide"><label for="az-name">Name</label><input class="az-in${bad ? " bad" : ""}" id="az-name" value="${escAttr(sp.name)}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. build-box"><small class="pz-note${bad ? " warn" : ""}">2 to 30 lowercase letters, digits and dashes. It becomes the host's name in Comebye.</small></div>
+      <div class="pz-field"><label for="az-spot">Pricing</label><select id="az-spot"><option value="1"${sp.spot ? " selected" : ""}>Spot (cheaper, can be reclaimed)</option><option value="0"${sp.spot ? "" : " selected"}>On-demand</option></select><small class="pz-note">${sp.spot ? "A reclaim stops the host (disks kept) and agent sessions end." : "Full price, not reclaimed."}</small></div>
+      <div class="pz-field"><label for="az-zone">Zone</label><select id="az-zone"><option value="">The node's default</option>${zones.map((z) => `<option value="${escAttr(z)}"${sp.zone === z ? " selected" : ""}>${esc(z)} · ${pzMoney(r.spot_usd_hour[z])}</option>`).join("")}</select><small class="pz-note">${zones.length ? "Spot price per zone." : "Zone prices need an AWS login on the node."}</small></div>
+      ${num("az-boot", "Boot disk (GB)", sp.boot_disk_gb, 10, 200, "10 to 200")}
+      ${num("az-data", "Data disk (GB)", sp.data_disk_gb, 10, 1000, "Kept when the host is destroyed unless you delete it.")}
+      ${num("az-idle", "Stop after idle (minutes)", sp.idle_minutes, 5, 1440, "Default 120. Disks are kept.")}
+      ${num("az-budget", "Budget cap ($)", sp.budget_cap_usd, 1, 100, "Required. The provisioner stops the host at the cap.")}
+      ${num("az-destroy", "Destroy after stopped (hours)", sp.destroy_after_hours, 1, 720, "Default 72 (3 days).")}
+      </div></div>`;
+  } else if (az.step === 4) {
+    back = "← Options"; next = azDry() ? "Run dry run" : "Create host";
+    main = azReview();
+    can = !!az.plan && az.plan.ok && az.plan.ready && az.ack && !az.submitting;
+  } else {
+    main = azProgress();
+    next = ""; back = "";
+  }
+  const foot = `<div class="az-foot"><div class="az-cost" id="az-cost">${azFoot()}</div><div class="az-acts">
+    ${az.step < 5 ? `<button type="button" class="btn" id="az-cancel">Cancel</button>` : ""}${back ? `<button type="button" class="btn" id="az-back">${back}</button>` : ""}
+    ${next ? `<button type="button" class="btn primary" id="az-next"${can ? "" : " disabled"}>${next}</button>` : ""}</div></div>`;
+  return `<div class="pz-wrap az-wrap"><div class="pz-card az-head"><h3>Add a host${azDry() ? " · dry run" : ""}</h3>${azSteps()}</div>${main}${az.err ? `<div class="pz-card pz-warn"><p class="pz-note warn" role="alert">${esc(az.err)}</p></div>` : ""}${foot}</div>`;
+}
+
+function azReview() {
+  const sp = az.spec, n = azNode(), p = az.plan;
+  const kv = `<dl class="az-kv"><dt>Node</dt><dd>${esc(pz.via)} · ${esc(pz.region)}</dd><dt>Name</dt><dd>${esc(sp.name)}</dd><dt>Size</dt><dd>${esc(sp.type)}, ${sp.spot ? "spot" : "on-demand"}${sp.zone ? ", " + esc(sp.zone) : ""}</dd>
+    <dt>Disks</dt><dd>${sp.boot_disk_gb} GB boot + ${sp.data_disk_gb} GB data</dd><dt>Safety</dt><dd>stops after ${sp.idle_minutes} min idle · budget cap $${sp.budget_cap_usd} · destroyed ${sp.destroy_after_hours} h after it stops</dd></dl>`;
+  let body;
+  if (az.planning) body = '<p class="pz-note">Asking ' + esc(pz.via) + ' for the plan…</p>';
+  else if (az.planErr) body = `<p class="pz-note warn" role="alert">${esc(az.planErr)}</p><div class="pz-bar"><button type="button" class="btn" id="az-replan">Try again</button></div>`;
+  else if (p) {
+    const c = p.cost;
+    body = `${p.dry_run ? '<div class="az-dry"><b>Dry run.</b> This runs the tool\'s plan and reports every stage as planned. Nothing is created.</div>' : ""}
+      ${c ? `<div class="az-big"><b>≈ ${pzMoney(c.usd_hour)}/h · $${Number(c.usd_day).toFixed(2)}/day</b><span class="pz-note"> ${esc(c.basis || "")}${c.mode === "spot" && c.on_demand_usd_hour ? ` · on-demand would be ${pzMoney(c.on_demand_usd_hour)}/h` : ""}</span></div>` : '<p class="pz-note warn">The provisioner could not price this size.</p>'}
+      ${(p.warnings || []).map((w) => `<p class="pz-note warn">${esc(w)}</p>`).join("")}
+      ${p.refused ? `<p class="pz-note warn" role="alert"><b>Refused:</b> ${esc(p.refused)}</p>` : ""}
+      ${!p.ready ? `<p class="pz-note warn" role="alert">${esc(pz.via)} cannot build now: ${esc((p.missing || []).join(", "))}. Fix it on ${esc(pz.via)} and Recheck.</p>` : ""}
+      <details class="pz-src"><summary>The plan, in the tool's words</summary><pre class="az-plan">${esc(p.plan && p.plan.text || "")}</pre></details>
+      <label class="pz-check az-ack"><input type="checkbox" id="az-ack"${az.ack ? " checked" : ""}>${p.dry_run ? "I understand this is a dry run." : `I understand this creates cloud resources that cost money${c ? " (up to about $" + Number(c.usd_day).toFixed(2) + " a day)" : ""}.`}</label>`;
+  } else body = "";
+  return `<div class="pz-card"><h3>Review</h3>${kv}${body}</div>`;
+}
+
+async function azPlan() {
+  if (az.planning) return;
+  az.planning = true; az.planErr = ""; az.plan = null; az.ack = false;
+  renderPeers();
+  try {
+    const sp = azSpecOut();
+    const r = await api("/api/provision/plan", { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: pz.via, region: pz.region, spec: sp }), timeout: 120000 });
+    az.plan = r; if (r.csrf && pz.nodes) pz.nodes.csrf = r.csrf;
+  } catch (e) { az.planErr = e.field ? `${e.message}` : (e.message || "failed"); }
+  az.planning = false;
+  renderPeers();
+}
+
+function azSpecOut() {
+  const s = az.spec, o = { ...s };
+  if (!o.zone) delete o.zone;
+  return o;
+}
+
+async function azSubmit() {
+  if (az.submitting) return;
+  if (!az.key) az.key = "k" + Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
+  az.submitting = true; az.err = "";
+  renderPeers();
+  try {
+    const j = await api("/api/provision", { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: pz.via, region: pz.region, spec: azSpecOut(), key: az.key }), timeout: 120000 });
+    azTakeJob(j, true);
+    az.step = 5;
+    try { localStorage.setItem(AZ_JOB_KEY, j.id); } catch (e) { /* storage may be unavailable */ }
+    azStartPoll();
+  } catch (e) { az.err = e.message || "failed"; }
+  az.submitting = false;
+  renderPeers();
+}
+
+function azTakeJob(j, reset) {
+  if (reset) { az.items = []; az.cursor = 0; }
+  if (j.csrf && pz.nodes) pz.nodes.csrf = j.csrf;
+  az.job = j;
+  for (const it of j.items || []) { if (it.seq > az.cursor) { az.items.push(it); az.cursor = it.seq; } }
+  if (j.spec && (!az.spec || az.spec.name !== j.spec.name)) az.spec = { ...azDefaults(), ...j.spec, zone: j.spec.zone || "" };
+}
+function azStopPoll() { if (az.timer) { clearInterval(az.timer); az.timer = null; } }
+function azStartPoll() {
+  azStopPoll();
+  az.timer = setInterval(azPoll, 1500);
+}
+async function azPoll() {
+  if (az.polling || !az.job || !az.open) return;
+  az.polling = true;
+  try {
+    const j = await api(`/api/provision/jobs/${encodeURIComponent(az.job.id)}?after=${az.cursor}`, { timeout: 20000 });
+    azTakeJob(j, false);
+    if (j.state !== "running" && j.state !== "cleaning") azStopPoll();
+    renderPeers();
+  } catch (e) { /* the next tick asks again */ }
+  az.polling = false;
+}
+
+// Stage states from the journal: the last event of each stage.
+function azStageStates() {
+  const m = {};
+  let attempt = az.job ? az.job.attempt : 1;
+  for (const it of az.items) if (it.kind === "event" && it.attempt === attempt) m[it.stage] = it;
+  return m;
+}
+const AZ_FAIL = {
+  spot_capacity: "AWS has no spot capacity for this size right now.",
+  creds_expired: "The AWS login on the provisioner expired. Run aws login on it, then Retry.",
+  quota: "The AWS account's quota for this size is used up.",
+  bootstrap_failed: "The host was created but setting it up failed.",
+  needs_input: "The tool wanted to ask a question, and it cannot here.",
+  other: "The build failed.",
+};
+function azProgress() {
+  const j = az.job;
+  if (!j) return '<div class="pz-card"><p class="pz-note">Starting…</p></div>';
+  const st = azStageStates();
+  const stages = (j.stages || []).filter((s) => !(s === "data_disk" && false));
+  const rows = stages.map((s) => {
+    const e = st[s];
+    const cls = !e ? "" : e.state === "ok" ? "ok" : e.state === "failed" ? "fail" : e.state === "planned" ? "plan" : "run";
+    const word = !e ? "waiting" : ({ ok: "done", failed: "failed", planned: "planned (dry run)", running: "running" })[e.state];
+    return `<li class="az-st ${cls}"><span class="az-ic" aria-hidden="true">${cls === "ok" ? "✓" : cls === "fail" ? "!" : cls === "plan" ? "·" : cls === "run" ? "…" : ""}</span><b>${esc(AZ_STAGES[s] || s)}</b><small>${esc(word)}${e && e.msg ? " · " + esc(e.msg) : ""}</small></li>`;
+  }).join("");
+  const log = az.items.filter((i) => i.kind === "log").slice(-80).map((i) => esc(i.msg)).join("\n");
+  let head, acts = "";
+  const running = j.state === "running" || j.state === "cleaning";
+  if (running) head = `<p class="pz-note" role="status">${j.state === "cleaning" ? "Cleaning up…" : j.dry_run ? "Planning (dry run)…" : "Building…"}</p>`;
+  else if (j.state === "ok") head = j.dry_run
+    ? `<div class="az-dry" role="status"><b>Dry run finished.</b> Every stage was planned; nothing was created. The real create is off on ${esc(j.via)}.</div>`
+    : `<div class="pz-card az-ok" role="status"><b>${esc(j.name)} is built.</b> It joins the hub as a peer in a moment.</div>`;
+  else if (j.state === "cleaned") head = `<div class="az-dry" role="status"><b>Cleaned up.</b> ${j.dry_run ? "Nothing had been created." : "What the failed attempt made was removed."}</div>`;
+  else {
+    const alt = j.alternatives, zs = (alt && alt.zones) || [];
+    head = `<div class="pz-card pz-warn" role="alert"><b>${j.state === "interrupted" ? "Interrupted." : "Failed."}</b> ${esc(AZ_FAIL[j.class] || AZ_FAIL.other)}${j.zone ? " (" + esc(j.zone) + ")" : ""}<br><span class="pz-note">${esc(j.msg || "")}</span></div>`;
+    acts = `<div class="pz-bar az-recover">
+      ${j.can_retry ? '<button type="button" class="btn primary" data-az-act="retry">Retry</button>' : ""}
+      ${j.class === "spot_capacity" && zs.length ? `<div class="pz-field"><label for="az-altzone">Try another zone</label><select id="az-altzone">${zs.map((z) => `<option>${esc(z)}</option>`).join("")}</select></div><button type="button" class="btn" data-az-act="zone">Use it</button>` : ""}
+      ${j.class === "spot_capacity" && alt && alt.on_demand ? '<button type="button" class="btn" data-az-act="ondemand">Switch to on-demand</button>' : ""}
+      ${j.can_cleanup ? '<button type="button" class="btn danger" data-az-act="cleanup">Clean up</button>' : ""}</div>`;
+  }
+  const off = j.offline ? `<p class="pz-note warn">${esc(j.offline)}</p>` : "";
+  const done = !running;
+  return `<div class="pz-card"><h3>${esc(j.name)} · ${esc(j.via)}${j.attempt > 1 ? " · attempt " + j.attempt : ""}</h3>${head}${off}<ol class="az-stages">${rows}</ol>${acts}
+    <details class="pz-src"${log && !done ? " open" : ""}><summary>The provisioner's log</summary><pre class="az-plan">${log || "(nothing yet)"}</pre></details>
+    ${done ? '<div class="pz-bar"><button type="button" class="btn" id="az-done">Close</button></div>' : ""}</div>`;
+}
+
+async function azAct(act) {
+  if (az.acting || !az.job) return;
+  az.acting = true; az.err = "";
+  const id = encodeURIComponent(az.job.id);
+  try {
+    let j;
+    if (act === "retry" || act === "cleanup") j = await api(`/api/provision/jobs/${id}/${act}`, { method: "POST", headers: azCsrf(), body: "{}", timeout: 60000 });
+    else {
+      const body = act === "ondemand" ? { spot: false } : { zone: ($("az-altzone") || {}).value || "" };
+      j = await api(`/api/provision/jobs/${id}/change`, { method: "POST", headers: azCsrf(), body: JSON.stringify(body), timeout: 60000 });
+      az.spec = { ...azDefaults(), ...j.spec, zone: j.spec.zone || "" };
+      azTakeJob(j, true);
+      try { localStorage.setItem(AZ_JOB_KEY, j.id); } catch (e) { /* storage may be unavailable */ }
+    }
+    if (act === "retry" || act === "cleanup") azTakeJob(j, false);
+    azStartPoll();
+  } catch (e) { az.err = e.message || "failed"; }
+  az.acting = false;
+  renderPeers();
+}
+
+function azResume() {
+  let id = "";
+  try { id = localStorage.getItem(AZ_JOB_KEY) || ""; } catch (e) { return; }
+  if (!id || az.open) return;
+  api(`/api/provision/jobs/${encodeURIComponent(id)}`, { timeout: 20000 }).then((j) => {
+    az.open = true; az.step = 5; az.spec = { ...azDefaults(), ...j.spec, zone: j.spec.zone || "" };
+    pz.via = j.via; azTakeJob(j, true);
+    if (j.state === "running" || j.state === "cleaning") azStartPoll();
+    renderPeers();
+  }).catch(() => { try { localStorage.removeItem(AZ_JOB_KEY); } catch (e) { /* ignore */ } });
+}
+
+function initAddHost() {
+  const el = $("pr-prices");
+  el.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.id === "az-add") azStart("");
+    else if (b.id === "az-cancel" || b.id === "az-done") azClose();
+    else if (b.id === "az-back") {
+      az.step = Math.max(1, az.step - 1); az.err = ""; renderPeers();
+    } else if (b.id === "az-next") {
+      az.err = "";
+      if (az.step === 4) { azSubmit(); return; }
+      az.step++;
+      if (az.step === 4) { renderPeers(); azPlan(); return; }
+      renderPeers();
+    } else if (b.id === "az-replan") azPlan();
+    else if (b.dataset.azPick) {
+      az.type = b.dataset.azPick; az.spec.type = az.type; az.spec.zone = ""; renderPeers();
+    } else if (b.dataset.azAct) azAct(b.dataset.azAct);
+  });
+  const edit = (ev) => {
+    const t = ev.target;
+    if (!az.open || !az.spec) return;
+    const n = (v) => (v === "" ? 0 : Number(v));
+    if (t.id === "az-via") { pz.via = t.value; const nd = azNode(); pz.region = (nd && nd.preflight && nd.preflight.region) || pz.region; pz.cat = null; pz.catKey = ""; renderPeers(); return; }
+    if (t.id === "az-name") { az.spec.name = t.value.trim().toLowerCase(); t.classList.toggle("bad", !!az.spec.name && !AZ_NAME.test(az.spec.name)); const nb = $("az-next"); if (nb) nb.disabled = !(AZ_NAME.test(az.spec.name) && az.spec.budget_cap_usd >= 1); return; }
+    if (t.id === "az-spot") az.spec.spot = t.value === "1";
+    else if (t.id === "az-zone") az.spec.zone = t.value;
+    else if (t.id === "az-boot") az.spec.boot_disk_gb = n(t.value);
+    else if (t.id === "az-data") az.spec.data_disk_gb = n(t.value);
+    else if (t.id === "az-idle") az.spec.idle_minutes = n(t.value);
+    else if (t.id === "az-budget") az.spec.budget_cap_usd = n(t.value);
+    else if (t.id === "az-destroy") az.spec.destroy_after_hours = n(t.value);
+    else if (t.id === "az-ack") { az.ack = t.checked; const nb = $("az-next"); if (nb) nb.disabled = !(az.plan && az.plan.ok && az.plan.ready && az.ack && !az.submitting); return; }
+    else return;
+    azUpdateFoot();
+    if (t.tagName === "SELECT") renderPeers();
+  };
+  el.addEventListener("input", edit);
+  el.addEventListener("change", edit);
 }
 
 /* ---------- Usage: tokens spent by agents ---------- */

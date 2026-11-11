@@ -43,6 +43,15 @@ case "$4" in
  catalog)
    if [ -f ` + d + `/catalog.fail ]; then cat ` + d + `/catalog.fail; exit 1; fi
    cat ` + d + `/catalog.json ;;
+ create)
+   cat > ` + d + `/spec.in
+   [ -f ` + d + `/create.stderr ] && cat ` + d + `/create.stderr >&2
+   [ -f ` + d + `/create.events ] && cat ` + d + `/create.events
+   [ -f ` + d + `/create.sleep ] && sleep $(cat ` + d + `/create.sleep)
+   exit $(cat ` + d + `/create.exit 2>/dev/null || echo 0) ;;
+ destroy)
+   [ -f ` + d + `/destroy.events ] && cat ` + d + `/destroy.events
+   exit $(cat ` + d + `/destroy.exit 2>/dev/null || echo 0) ;;
 esac
 `
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
@@ -87,6 +96,11 @@ func provPeerServer(t *testing.T, w *fakeWorkerDir) *Server {
 var peerProvCalls = []struct{ name, method, path string }{
 	{"preflight", "GET", "/api/provisioner/preflight"},
 	{"catalog", "GET", "/api/provisioner/catalog?kind=aws&region=us-east-1"},
+	{"plan", "POST", "/api/provisioner/plan"},
+	{"job create", "POST", "/api/provisioner/jobs"},
+	{"job", "GET", "/api/provisioner/job?id=pj_0123456789abcdef"},
+	{"retry", "POST", "/api/provisioner/job/retry"},
+	{"cleanup", "POST", "/api/provisioner/job/cleanup"},
 }
 
 func TestPeerProvisionOpsAnswerOnlyAHub(t *testing.T) {
@@ -187,14 +201,14 @@ func TestProvisionRoutesAreUserOnly(t *testing.T) {
 			}
 		}
 	}
-	if n != 5 {
-		t.Fatalf("found %d provisioning routes, want 5: update this test with the route", n)
+	if n != 16 {
+		t.Fatalf("found %d provisioning routes, want 16: update this test with the route", n)
 	}
 	if strings.Contains(string(src), "/api/provision") {
 		t.Error("provisioning routes belong in provision.go, where this test checks them")
 	}
 	// ...and a browser cannot have the peer ops forwarded.
-	for _, op := range []string{"provision-preflight", "provision-catalog"} {
+	for _, op := range []string{"provision-preflight", "provision-catalog", "provision-plan", "provision-job-create", "provision-job", "provision-job-retry", "provision-job-cleanup"} {
 		rec := httptest.NewRecorder()
 		fleet.New(nil, "desk", nil, fleet.Options{}).ProxyHost(rec, httptest.NewRequest("GET", "/", nil), "kube", op)
 		if rec.Code != 404 {
@@ -609,6 +623,12 @@ func TestProvisionHubRoutesRefuseAgentsAndTaggedNodes(t *testing.T) {
 		{"GET", "/api/provision/nodes", ""},
 		{"GET", "/api/provision/catalog?kind=aws&region=us-east-1", ""},
 		{"POST", "/api/provision/refresh", `{"what":"nodes"}`},
+		{"POST", "/api/provision/plan", `{}`},
+		{"POST", "/api/provision", `{}`},
+		{"GET", "/api/provision/jobs/hj_0123456789abcdef", ""},
+		{"POST", "/api/provision/jobs/hj_0123456789abcdef/retry", ""},
+		{"POST", "/api/provision/jobs/hj_0123456789abcdef/cleanup", ""},
+		{"POST", "/api/provision/jobs/hj_0123456789abcdef/change", `{"zone":"us-east-1c"}`},
 	}
 	callers := map[string]map[string]string{
 		"coordinator token": {HeaderAgentToken: testToken, HeaderAgent: "w1:p1"},
@@ -645,6 +665,13 @@ func TestProvisionRoutesRefuseTaggedNodes(t *testing.T) {
 		{"POST", "/api/provision/refresh", `{"what":"nodes"}`},
 		{"GET", "/api/provisioner/preflight", ""},
 		{"GET", "/api/provisioner/catalog?kind=aws&region=us-east-1", ""},
+		{"POST", "/api/provisioner/plan", `{}`},
+		{"POST", "/api/provisioner/jobs", `{}`},
+		{"GET", "/api/provisioner/job?id=pj_0123456789abcdef", ""},
+		{"POST", "/api/provisioner/job/retry", `{}`},
+		{"POST", "/api/provisioner/job/cleanup", `{}`},
+		{"POST", "/api/provision/plan", `{}`},
+		{"POST", "/api/provision", `{}`},
 	} {
 		code, body := r.serve(c.method, c.path, c.body, map[string]string{HeaderCSRF: "x", fleet.HeaderHubCall: "1"})
 		if code != http.StatusForbidden || !strings.Contains(body, "agent_forbidden") {

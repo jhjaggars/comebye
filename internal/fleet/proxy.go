@@ -117,7 +117,15 @@ var hostProxyOps = map[string]struct {
 	// price list. Hub-only: never a browser's forward, never an agent's. A peer
 	// that does not provision answers 404.
 	"provision-preflight": {proxyOp{method: http.MethodGet, timeout: 50 * time.Second}, []string{"api", "provisioner", "preflight"}, true},
-	"provision-catalog":   {proxyOp{method: http.MethodGet, query: []string{"kind", "region", "score", "refresh"}, timeout: 150 * time.Second}, []string{"api", "provisioner", "catalog"}, true},
+	"provision-catalog":   {proxyOp{method: http.MethodGet, query: []string{"kind", "region", "score", "refresh"}, timeout: 330 * time.Second}, []string{"api", "provisioner", "catalog"}, true},
+	// Adding a host (slice 2): the plan (a dry run), a job, its journal, retry
+	// and clean-up. Hub-only like the two above; they act only on the user's
+	// click at the hub, which checks the CSRF token first.
+	"provision-plan":        {proxyOp{method: http.MethodPost, maxBody: 8 << 10, timeout: 100 * time.Second}, []string{"api", "provisioner", "plan"}, true},
+	"provision-job-create":  {proxyOp{method: http.MethodPost, maxBody: 8 << 10, timeout: 100 * time.Second}, []string{"api", "provisioner", "jobs"}, true},
+	"provision-job":         {proxyOp{method: http.MethodGet, query: []string{"id", "after"}, timeout: 20 * time.Second}, []string{"api", "provisioner", "job"}, true},
+	"provision-job-retry":   {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "job", "retry"}, true},
+	"provision-job-cleanup": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "job", "cleanup"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

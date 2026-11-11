@@ -240,6 +240,8 @@ type Server struct {
 	relay       *blockedRelay
 	rel         *relState
 	prov        *provState
+	pjobs       *provJobs // on a provisioner: the jobs it runs
+	hjobs       *hubJobs  // on a hub: the jobs it has asked provisioners to run
 	pages       *pageStore
 	briefSched  *briefSchedStore
 	resets      *resetStore
@@ -298,6 +300,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s.typing = newTypingTracker()
 	s.rel = newRelState()
 	s.prov = newProvState()
+	if cfg.Provision.Tool != nil {
+		s.pjobs = openProvJobs(cfg.StateDir)
+	}
+	s.hjobs = openHubJobs(cfg.StateDir)
 	switch rc := &s.cfg.Release; {
 	case rc.Host != "" && rc.Tool != nil:
 		log.Printf("release: both a local release tool and -release-host %s are set: tagging is off", rc.Host)

@@ -23,6 +23,12 @@ type Tool struct {
 	Config string
 	// Environ is the process environment to filter (default os.Environ).
 	Environ func() []string
+	// Real turns the real create path on. Off (the default), every job runs
+	// `create --dry-run`: the plan and its events, nothing created.
+	Real bool
+	// MaxUSDHour is the ceiling on a host's estimated cost per hour, checked on
+	// this node from its own price list (default 1.00).
+	MaxUSDHour float64
 	// PreflightWait and CatalogWait override the timeouts (tests).
 	PreflightWait, CatalogWait time.Duration
 
@@ -33,7 +39,7 @@ type Tool struct {
 // Timeouts for the two reads. A cold catalog is about ten seconds of calls.
 const (
 	PreflightTimeout = 40 * time.Second
-	CatalogTimeout   = 140 * time.Second
+	CatalogTimeout   = 5 * time.Minute
 	maxOutput        = 8 << 20
 )
 
