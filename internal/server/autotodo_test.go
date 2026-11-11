@@ -10,6 +10,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/dialog"
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
@@ -523,5 +524,143 @@ func TestAutoQuestionStubForInteractiveSessions(t *testing.T) {
 	r.step(autoT0.Add(5*time.Minute), autoAgent("desk/w1:p1", "coordinator", herdr.StatusIdle, autoT0.Add(time.Minute)))
 	if !strings.Contains(list(agentHdr("w1:p1")), "Should I push") {
 		t.Fatal("the coordinator's suggestion should be readable by agents")
+	}
+}
+
+// ---- one item per question ----
+
+const provenanceText = "I put three mockups on the Pages screen. They share one data model.\n\n" +
+	"## Decisions for the user\n\n" +
+	"1. **Where should the provenance live?** In the artifact header, or as a footer line?\n" +
+	"   1. Header chip - always visible, costs a row\n" +
+	"   2. Footer line - quieter, easy to miss\n" +
+	"   Recommend: 1\n" +
+	"2. **Should the chip show the full commit SHA or seven characters?**\n" +
+	"3. Which hosts get the badge: only remote ones, or every host?\n\n" +
+	"Or should I change any of the mockups first?"
+
+func TestAutoQuestionOneItemPerQuestion(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = provenanceText
+	a := autoAgent("desk/w2:p1", "provenance", herdr.StatusIdle, autoT0)
+	r.step(autoT0.Add(4*time.Minute), a)
+	got := r.items("")
+	if len(got) != 4 || r.lreads != 1 {
+		t.Fatalf("%d items, %d reads; want 4 and 1: %+v", len(got), r.lreads, got)
+	}
+	first := got[0]
+	if !strings.Contains(first.Question, "Where should the provenance live?") || !first.Suggested || first.Source != SourceQuestion {
+		t.Fatalf("first = %+v", first)
+	}
+	if len(first.Options) != 2 || first.Options[0].Label != "Header chip" || len(first.Recommend) != 1 || first.Recommend[0] != 1 {
+		t.Fatalf("options %+v recommend %v", first.Options, first.Recommend)
+	}
+	// The choices are buttons, not a numbered list in the text; the
+	// agent's own words and the session link are there.
+	for _, bad := range []string{"1. ", "Header chip", "Recommend"} {
+		if strings.Contains(first.Context, bad) {
+			t.Errorf("context repeats the options (%q):\n%s", bad, first.Context)
+		}
+	}
+	for _, want := range []string{"They share one data model", "What it said before asking"} {
+		if !strings.Contains(first.Context, want) {
+			t.Errorf("context lacks %q:\n%s", want, first.Context)
+		}
+	}
+	if len(first.Links) != 1 || first.Links[0].URL != "/#/agent/w2:p1" {
+		t.Fatalf("links = %+v", first.Links)
+	}
+	if !strings.Contains(got[3].Question, "should I change any of the mockups first?") {
+		t.Fatalf("the trailing question is item 4: %q", got[3].Question)
+	}
+	// Later ticks refile nothing and read nothing more.
+	r.step(autoT0.Add(30*time.Minute), a)
+	if len(r.items("")) != 4 || r.lreads != 1 {
+		t.Fatalf("later: %d items, %d reads", len(r.items("")), r.lreads)
+	}
+	// A hub restart forgets what it read; the items already filed are not
+	// filed twice, per agent and question.
+	r.s.auto.checked = map[string]string{}
+	r.s.todos.mu.Lock()
+	for i := range r.s.todos.data.Items {
+		r.s.todos.data.Items[i].Waiting.ID = "desk/w2:p1"
+	}
+	r.s.todos.mu.Unlock()
+	r.step(autoT0.Add(31*time.Minute), a)
+	if n := len(r.items("")); n != 4 {
+		t.Fatalf("after a restart: %d items, want the same 4", n)
+	}
+	// Closing the agent's episode closes the suggestions with it.
+	at := autoT0.Add(40 * time.Minute)
+	r.step(at, autoAgent("desk/w2:p1", "provenance", herdr.StatusWorking, at))
+	if n := len(r.items("")); n != 0 {
+		t.Fatalf("%d still open after the agent went on", n)
+	}
+}
+
+func TestAutoQuestionSingleOneItemWithOptions(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = "The level test needs a baseline. Should I record it from the current build, or from the last release tag?\n\n1. Current build - fastest\n2. Last release tag - clean\n\nRecommend: 2"
+	r.step(autoT0.Add(4*time.Minute), autoAgent("desk/w2:p1", "mac pi", herdr.StatusIdle, autoT0))
+	got := r.items("")
+	if len(got) != 1 || len(got[0].Options) != 2 || len(got[0].Recommend) != 1 || got[0].Recommend[0] != 2 ||
+		!strings.Contains(got[0].Context, "needs a baseline") {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestAutoQuestionDedupesPerQuestionAcrossWordings(t *testing.T) {
+	st := newTodoStore("")
+	w := &TodoAgent{ID: "desk/w9:p1"}
+	if _, err := st.addAuto(Todo{Question: "home asks: Should I commit?", CreatedBy: "hub", Source: SourceQuestion, AutoKey: "k1", Waiting: w}); err != nil {
+		t.Fatal(err)
+	}
+	if !st.activeQuestion("desk/w9:p1", "home asks:  should I COMMIT ?") || st.activeQuestion("desk/w8:p1", "home asks: Should I commit?") ||
+		st.activeQuestion("desk/w9:p1", "Should I push?") {
+		t.Fatal("same agent and question only")
+	}
+}
+
+func TestAutoQuestionSkipsAnAgentTheUserIsChattingIn(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = askText
+	a := autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0)
+	r.s.auto.active = r.s.userActive
+	pres := push.NewPresence()
+	r.s.cfg.Presence = pres
+	// The user had the agent open 5 minutes ago and closed the tab.
+	pres.Update("tab", "w2:p1", true)
+	pres.Update("tab", "", false)
+	now := time.Now()
+	r.step(now.Add(4*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, now))
+	if len(r.items("all")) != 0 || r.lreads != 0 {
+		t.Fatalf("viewed moments ago: %d items, %d reads", len(r.items("all")), r.lreads)
+	}
+	// Typing in its input box counts too.
+	pres2 := push.NewPresence()
+	r.s.cfg.Presence = pres2
+	r.s.typing = newTypingTracker()
+	r.s.typing.observe("w2:p1", dialog.Input{Known: true, Busy: true})
+	r.step(now.Add(5*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, now))
+	if len(r.items("all")) != 0 || r.lreads != 0 {
+		t.Fatalf("typing: %d items, %d reads", len(r.items("all")), r.lreads)
+	}
+	// Long after (past the window) the agent is fair game.
+	r.s.typing = newTypingTracker()
+	r.s.cfg.Presence = push.NewPresence()
+	_ = a
+	r.step(now.Add(20*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, now))
+	if len(r.items("")) != 1 {
+		t.Fatalf("no suggestion once the user was away: %d", len(r.items("")))
+	}
+}
+
+func TestAutoQuestionManyItemsStubbedForAgentReaders(t *testing.T) {
+	r := newAutoRig(t)
+	r.text = provenanceText + " The key is sk-secret-123."
+	r.step(autoT0.Add(4*time.Minute), autoAgent("desk/w2:p1", "home", herdr.StatusIdle, autoT0))
+	body := do(r.s, "GET", "/api/todos", agentHdr("w1:p1"), "").Body.String()
+	if strings.Contains(body, "secret") || strings.Contains(body, "provenance live") || strings.Count(body, "session home is waiting on you") != 4 {
+		t.Fatalf("agents see only stubs: %s", body)
 	}
 }

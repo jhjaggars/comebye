@@ -43,3 +43,16 @@
 {"ask": false, "text": "Was that the right call? Probably, since the numbers agree, so I'm moving on to the next step."}
 {"ask": false, "text": "How did it get here? A retry loop re-queued the job after each timeout."}
 {"ask": false, "text": "Open question for later: how should retries back off? Noting it in the follow-ups; nothing is needed from you now."}
+{"ask": true, "text": "I put three mockups on the Pages screen: the header chip, the footer line and the hover card. They share one data model.\n\n## Decisions for the user\n\n1. **Where should the provenance live?** In the artifact header, or as a footer line?\n   1. Header chip - always visible, costs a row\n   2. Footer line - quieter, easy to miss\n   Recommend: 1\n2. **Should the chip show the full commit SHA or seven characters?**\n3. **Do we keep provenance for artifacts published before this change?** They have no record.\n   1. Backfill from git log\n   2. Show \"unknown\"\n   My recommendation: ok 2\n4. Which hosts get the badge: only remote ones, or every host?\n5. Should clicking the chip open the source artifact in a new tab?\n\nOr should I change any of the mockups first?", "items": 6}
+{"ask": true, "text": "The level test needs a baseline to compare against. Should I record it from the current build, or from the last release tag?\n\n1. Current build - fastest, but it includes today's changes\n2. Last release tag - a clean reference, needs a rebuild\n\nRecommend: 2", "items": 1}
+{"ask": true, "text": "Two things before I continue:\n\n1. Should the cache be per user, or shared by the whole team?\n2. Do you want the TTL to be configurable?\n\nI'll start on the parser meanwhile.", "items": 2}
+{"ask": true, "text": "Everything builds. Some details are open.\n\n**Questions**\n\n- Which region does staging run in?\n- Is the staging database shared with the other team?\n- Can I delete the old migration files?\n\nLet me know when you have a moment.", "items": 3}
+{"ask": true, "text": "I changed the retry logic.\n\nShould I commit these changes? Should I also push the branch?", "items": 2}
+{"ask": true, "text": "## What changed\n\nThe exporter now streams.\n\n## Decisions for the user\n\n1. Keep the old CSV format for one more release?\n2. Which compression should the new format use, gzip or zstd?\n\n## Next steps\n\nI will wait.", "items": 2}
+{"ask": true, "text": "Which one do you want: the quick patch or the proper refactor?\n\n- Quick patch - ships today\n- Proper refactor - two days\n\nMy recommendation: ok 1", "items": 1}
+{"ask": true, "text": "Three questions:\n\n1. Does the staging cluster need the new CRD?\n2. Is the old webhook still in use?\n3. Do you want the metrics split per tenant?", "items": 3}
+{"ask": false, "text": "## Decisions for the user\n\nNone."}
+{"ask": false, "text": "Steps I took:\n\n1. Ran the migration\n2. Rebuilt the index\n3. Restarted the worker\n\nAll done."}
+{"ask": false, "text": "Results:\n\n1. Build passes\n2. Lint passes\n3. Why did the integration test fail? Found: a stale cache\n\nFixed and pushed."}
+{"ask": false, "text": "> Should I delete the old files?\n> Which one do you want?"}
+{"ask": false, "text": "## Questions answered\n\nThe earlier questions are settled and the work is merged."}

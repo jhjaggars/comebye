@@ -112,7 +112,7 @@ func lastBlock(s string) string {
 		return ""
 	}
 	i := len(keep) - 1
-	for steps := 0; i > 0 && isList(keep[i]) && steps < 2; steps++ {
+	for steps := 0; i > 0 && (isList(keep[i]) || isRecLine(keep[i])) && steps < 3; steps++ {
 		i--
 	}
 	return strings.Join(keep[i:], "\n\n")

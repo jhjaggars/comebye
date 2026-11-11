@@ -86,6 +86,15 @@ func newTypingTracker() *typingTracker {
 		quiet: typingQuiet, poll: typingPoll, now: time.Now}
 }
 
+// recentlyBusy reports that the pane's box held text within window (a pane
+// is remembered for typingMemory after a delivery last looked at it).
+func (t *typingTracker) recentlyBusy(pane string, window time.Duration) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p := t.panes[pane]
+	return p != nil && t.now().Sub(p.touched) < window
+}
+
 // observe folds one reading of pane's box into its record and returns
 // whether a message may be typed now.
 func (t *typingTracker) observe(pane string, in dialog.Input) (ok bool, typingFor time.Duration) {

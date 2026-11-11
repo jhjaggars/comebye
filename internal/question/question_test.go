@@ -10,6 +10,9 @@ import (
 type sample struct {
 	Ask  bool   `json:"ask"`
 	Text string `json:"text"`
+	// Items is how many questions the message leaves (default 1 for an
+	// ask): scored for Extract only.
+	Items int `json:"items,omitempty"`
 }
 
 func load(t *testing.T, path string) []sample {
@@ -35,10 +38,14 @@ func load(t *testing.T, path string) []sample {
 // score runs the classifier over a labelled corpus and reports precision
 // and recall of "asks the user".
 func score(t *testing.T, name string, rows []sample) (prec, rec float64) {
+	return scoreWith(t, name, rows, func(s string) bool { return Classify(s).Ask })
+}
+
+func scoreWith(t *testing.T, name string, rows []sample, ask func(string) bool) (prec, rec float64) {
 	t.Helper()
 	tp, fp, fn, tn := 0, 0, 0, 0
 	for _, r := range rows {
-		got := Classify(r.Text).Ask
+		got := ask(r.Text)
 		switch {
 		case got && r.Ask:
 			tp++
@@ -69,6 +76,35 @@ func TestCorpus(t *testing.T) {
 	p, r := score(t, "corpus", load(t, "testdata/corpus.jsonl"))
 	if p < 0.95 || r < 0.9 {
 		t.Errorf("precision %.2f recall %.2f: want at least 0.95 and 0.90", p, r)
+	}
+}
+
+// Extract must keep Classify's precision and recall on the same corpus and
+// find the right number of questions in each message. "before" is Classify
+// (the last paragraph only), "after" is Extract.
+func TestExtractCorpus(t *testing.T) {
+	rows := load(t, "testdata/corpus.jsonl")
+	bp, br := scoreWith(t, "before (Classify)", rows, func(s string) bool { return Classify(s).Ask })
+	ap, ar := scoreWith(t, "after  (Extract)", rows, func(s string) bool { return len(Extract(s).Items) > 0 })
+	right, asks := 0, 0
+	for _, r := range rows {
+		if !r.Ask {
+			continue
+		}
+		asks++
+		want := max(r.Items, 1)
+		if got := len(Extract(r.Text).Items); got == want {
+			right++
+		} else {
+			t.Logf("item count: want %d, got %d: %q", want, got, r.Text)
+		}
+	}
+	t.Logf("items: %d of %d asking messages have the right number of questions (Classify always yields at most 1)", right, asks)
+	if ap < 0.95 || ar < 0.9 || ap < bp || ar < br {
+		t.Errorf("extract precision %.2f recall %.2f (before %.2f / %.2f)", ap, ar, bp, br)
+	}
+	if right != asks {
+		t.Errorf("%d of %d asking messages got the wrong question count", asks-right, asks)
 	}
 }
 
