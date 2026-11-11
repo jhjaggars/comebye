@@ -5922,7 +5922,7 @@ function pzCredRows(n) {
     const c = pf[k] || { state: "error" };
     const word = ({ ok: "present", missing: "missing", expired: "expired", error: "could not check" })[c.state] || c.state;
     const hint = c.state === "expired" && fix ? ` On ${esc(n.name)}, run <code>${esc(fix)}</code>.` : "";
-    return `<dt>${esc(label)}</dt><dd class="pz-state ${esc(c.state)}">${esc(word)}</dd><dd class="pz-note">${esc(c.note || "")}${hint}</dd>`;
+    return `<dt>${esc(label)}</dt><dd class="pz-state ${esc(c.state)}">${esc(word)}</dd><dd class="pz-note">${esc(c.note || "")}${c.note && hint ? "." : ""}${hint}</dd>`;
   }).join("")}</dl>`;
 }
 
