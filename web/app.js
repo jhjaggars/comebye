@@ -1544,11 +1544,11 @@ function todoItemHtml(t, pfx) {
         <div class="td-scroll">
           ${meta ? `<div class="td-meta">${esc(meta)}</div>` : ""}
           ${isRel ? relPingHtml(t) : ""}
-          ${t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
+          ${t.set ? setBodyHtml(t) : t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
           ${answered}${kept}
         </div>
-        <div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
+        ${t.set ? setBarHtml(t) : `<div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
           ${ans || isRel ? "" : sttStatusHtml("todo:" + t.id)}
           <div class="td-acts">
             ${ans || isRel ? "" : sttMicHtml("todo:" + t.id)}
@@ -1557,7 +1557,7 @@ function todoItemHtml(t, pfx) {
             <button type="button" class="td-done"${busy}>Done</button>
             <button type="button" class="td-drop"${busy}>Drop</button>
           </div>${after}
-        </div>
+        </div>`}
       </div>`;
   }
   return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}${todos.pend.busy(t.id) ? " sending" : ""}" data-id="${escAttr(t.id)}">
@@ -1567,6 +1567,177 @@ function todoItemHtml(t, pfx) {
         <span class="td-chev" aria-hidden="true"></span>
       </button>${panel}
     </div>`;
+}
+
+// ---- decision sets (todoset.go) ----
+// One item with N decisions. The draft lives on the hub (t.set.draft) so the
+// phone and the desktop agree; every change is saved at once, in order. The
+// rules are evaluated here as the hub does (the hub has the last word on
+// Submit). On a phone the set is a stepper with a review screen; on the
+// desktop it is the whole list.
+todos.setStep = new Map(); // item id -> index; D.length is the review screen
+todos.setQ = new Map();    // item id -> promise chain of saves
+todos.setBusy = new Set();
+
+function setChoices(t) { return (t.set.draft && t.set.draft.choices) || {}; }
+function setFacts(t) { return (t.set.draft && t.set.draft.facts) || {}; }
+function setConflicts(t) {
+  const ch = setChoices(t);
+  return (t.set.rules || []).filter((r) => Object.entries(r.when).every(([d, o]) => (ch[d] || {}).option === o));
+}
+function setMissing(t) {
+  const ch = setChoices(t);
+  return t.set.decisions.filter((d) => !(ch[d.id] && ch[d.id].option && ch[d.id].confirmed));
+}
+function setDone(t) { return t.set.decisions.length - setMissing(t).length; }
+function setLocked(t) { return t.state !== "open" || !!t.set.submitted_at; }
+function setBlockers(t) { return setConflicts(t).filter((r) => r.level === "block"); }
+
+function setOptHtml(t, d, i) {
+  const c = setChoices(t)[d.id], sel = c && c.option === i + 1, pend = sel && !c.confirmed, o = d.options[i];
+  return `<button type="button" class="ds-opt${sel ? " on" : ""}${pend ? " pend" : ""}" role="radio" aria-checked="${!!sel}" data-d="${escAttr(d.id)}" data-o="${i + 1}"${setLocked(t) ? " disabled" : ""}>
+      <span class="ds-dot" aria-hidden="true"></span><span class="ds-ot"><b>${esc(o.label)}</b>${o.detail ? `<small>${esc(o.detail)}</small>` : ""}</span>
+      <span class="ds-oc">${i + 1 === d.recommend ? `<span class="td-chip st-answered">suggested</span>` : ""}${pend ? `<span class="td-chip td-draft">confirm</span>` : ""}</span></button>`;
+}
+
+function setDecHtml(t, d, compact) {
+  const ch = setChoices(t)[d.id], rules = setConflicts(t).filter((r) => d.id in r.when);
+  const bad = rules.some((r) => r.level === "block");
+  const facts = (t.set.facts || []).filter((f) => (f.affects || []).includes(d.id) && !setFacts(t)[f.id]);
+  const notes = rules.map((r) => `<div class="ds-note ${r.level}"><span><b>${r.level === "block" ? "Conflict" : "Heads up"}:</b> ${esc(r.say)}</span>${r.fix && !setLocked(t) ? `<button type="button" class="ds-fix" data-r="${escAttr(r.id)}">${esc(setFixLabel(t, r.fix))}</button>` : ""}</div>`).join("") +
+    facts.map((f) => `<div class="ds-note fact"><span><b>Fact ${esc(f.id)} unknown.</b> ${esc(f.text)}</span></div>`).join("") +
+    (ch && ch.option && !ch.confirmed && d.one_way ? `<div class="ds-note warn"><span>Suggested, not yet confirmed. A one-way door needs your explicit yes.</span><button type="button" class="ds-confirm" data-d="${escAttr(d.id)}"${setLocked(t) ? " disabled" : ""}>Confirm</button></div>` : "");
+  return `<div class="ds-dec${bad ? " bad" : rules.length ? " warn" : ""}${ch && ch.confirmed ? " done" : ""}" data-dec="${escAttr(d.id)}">
+      <h4><span class="ds-id">${esc(d.id)}</span>${esc(d.title)}</h4>
+      <div class="ds-chips">${d.one_way ? `<span class="td-chip st-warn">one-way door</span>` : ""}${d.release_early ? `<span class="td-chip st-answered">unblocks now${(t.set.released || []).includes(d.id) ? " · sent" : ""}</span>` : ""}${(d.after || []).length ? `<span class="td-chip">after ${esc(d.after.join(", "))}</span>` : ""}${d.surface ? `<span class="td-chip st-surf">changes: ${esc(d.surface)}</span>` : ""}</div>
+      ${!compact && d.question ? `<div class="ds-q">${esc(d.question)}</div>` : ""}
+      <div class="ds-opts" role="radiogroup" aria-label="${escAttr(d.title)}">${d.options.map((_, i) => setOptHtml(t, d, i)).join("")}</div>${notes}</div>`;
+}
+
+function setFixLabel(t, fix) {
+  const d = t.set.decisions.find((x) => x.id === fix.decision);
+  return d ? `Set ${d.id} to “${d.options[fix.option - 1].short || d.options[fix.option - 1].label}”` : "Fix";
+}
+
+function setStatusHtml(t) {
+  const n = setDone(t), N = t.set.decisions.length, bl = setBlockers(t).length, wn = setConflicts(t).length - bl;
+  return `<span class="td-chip ${n === N ? "st-answered" : "st-open"}">${n}/${N} decided</span><span class="td-chip ${bl ? "st-err" : wn ? "st-warn" : "st-answered"}">${bl ? `${bl} blocking` : wn ? `${wn} warning${wn > 1 ? "s" : ""}` : "0 conflicts"}</span>` +
+    `<span class="td-chip">${t.state !== "open" ? "submitted" : "draft saved on the hub"}</span>`;
+}
+
+function setBarHtml(t) {
+  const lock = setLocked(t), miss = setMissing(t), bl = setBlockers(t);
+  const why = lock ? "" : miss.length ? `${miss.length} still to decide or confirm` : bl.length ? "Fix the blocking conflict first" : "";
+  return `<div class="td-form ds-bar"><div class="ds-st">${setStatusHtml(t)}</div>
+    <div class="td-acts"><button type="button" class="ds-all"${lock ? " disabled" : ""}>Accept all suggestions</button>
+    <button type="button" class="ds-submit td-answer-btn"${lock || why ? " disabled" : ""}${why ? ` title="${escAttr(why)}"` : ""}>Submit to agent</button>
+    <button type="button" class="td-done">Done</button><button type="button" class="td-drop">Drop</button></div>${why ? `<div class="td-after">${esc(why)}. Held-back one-way doors wait for you; warnings do not stop Submit.</div>` : ""}</div>`;
+}
+
+function setBodyHtml(t) {
+  const S = t.set, risks = (S.risks || []).map((r) => `<div class="ds-risk"><b>${esc(r.id)}</b><span>${esc(r.text)}</span>${(r.decisions || []).map((x) => `<button type="button" class="ds-rk" data-go="${escAttr(x)}">${esc(x)}</button>`).join("")}</div>`).join("");
+  const decided = (S.decided || []).length ? `<div class="ds-h">Already decided</div><ul class="ds-ul">${S.decided.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  const facts = (S.facts || []).length ? `<div class="ds-h">Facts nobody has yet</div>` + S.facts.map((f) => {
+    const known = !!setFacts(t)[f.id];
+    return `<div class="ds-fact${known ? " known" : ""}"><div><b>${esc(f.id)}</b> ${esc(f.text)} <span class="td-chip ${known ? "st-answered" : "st-warn"}">${known ? "known" : "unknown"}</span></div>
+      ${f.test ? `<div class="ds-q">Cheapest test: ${esc(f.test)}</div>` : ""}<div class="ds-chips">${(f.affects || []).length ? `<span class="td-chip td-sug">affects ${esc(f.affects.join(", "))}</span>` : ""}<button type="button" class="ds-fk" data-f="${escAttr(f.id)}"${setLocked(t) ? " disabled" : ""}>${known ? "Mark unknown" : "Mark known"}</button></div></div>`;
+  }).join("") : "";
+  const step = todos.setStep.get(t.id) ?? 0, N = S.decisions.length;
+  let decs;
+  if (isDesktop()) decs = `<div class="ds-h">Decisions</div><div class="ds-list">${S.decisions.map((d) => setDecHtml(t, d, false)).join("")}</div>`;
+  else if (step >= N) decs = `<div class="ds-dots">${setDotsHtml(t, step)}</div><div class="ds-h">Review</div><div class="ds-review">${S.decisions.map((d, i) => {
+    const c = setChoices(t)[d.id];
+    return `<button type="button" class="ds-rv" data-step="${i}"><b>${esc(d.id)}</b><span>${c && c.option ? esc(d.options[c.option - 1].short || d.options[c.option - 1].label) + (c.confirmed ? "" : " (confirm)") : "<i>open</i>"}</span></button>`;
+  }).join("")}</div>${setConflicts(t).map((r) => `<div class="ds-note ${r.level}"><span><b>${r.level === "block" ? "Conflict" : "Heads up"}:</b> ${esc(r.say)}</span></div>`).join("")}`;
+  else decs = `<div class="ds-dots">${setDotsHtml(t, step)}</div>${setDecHtml(t, S.decisions[step], true)}
+      <div class="ds-nav"><button type="button" class="ds-back" data-step="${step - 1}"${step ? "" : " disabled"}>Back</button><button type="button" class="ds-next" data-step="${step + 1}">${step === N - 1 ? "Review" : "Next"}</button></div>`;
+  const wide = isDesktop() || step >= N;
+  return `<div class="ds-set">${isDesktop() || step === 0 ? `${decided}${risks ? `<div class="ds-h">Biggest risks</div>${risks}` : ""}` : ""}${decs}${wide ? facts : ""}</div>`;
+}
+
+function setDotsHtml(t, step) {
+  const ch = setChoices(t);
+  return t.set.decisions.map((d, i) => `<button type="button" aria-label="Go to ${escAttr(d.id)}" data-step="${i}" class="${i === step ? "cur" : ch[d.id] && ch[d.id].confirmed ? "ok" : ""}"></button>`).join("") +
+    `<button type="button" aria-label="Review" data-step="${t.set.decisions.length}" class="${step >= t.set.decisions.length ? "cur" : ""}"></button>`;
+}
+
+// Saves the draft: the whole choices and facts, in order per item.
+function setSave(t, body) {
+  const q = (todos.setQ.get(t.id) || Promise.resolve()).then(async () => {
+    try {
+      const r = await api(`/api/todos/${encodeURIComponent(t.id)}/draft`, { method: "PUT", body: JSON.stringify(body) });
+      const i = todos.items.findIndex((x) => x.id === t.id);
+      if (i >= 0 && r.todo && !todos.setQ.get(t.id + ":next")) { todos.items[i] = r.todo; }
+    } catch (e) {
+      toast("Not saved: " + e.message, true);
+      todos.loadedAt = 0; await loadTodos();
+    }
+    renderTodos(true);
+  });
+  todos.setQ.set(t.id, q);
+  return q;
+}
+
+// Applies fn to a copy of the draft, shows it now and saves it.
+function setEdit(t, fn) {
+  const ch = JSON.parse(JSON.stringify(setChoices(t))), fa = JSON.parse(JSON.stringify(setFacts(t)));
+  fn(ch, fa);
+  t.set.draft = { ...t.set.draft, choices: ch, facts: fa };
+  renderTodos(true);
+  return setSave(t, { choices: ch, facts: fa });
+}
+
+function setAcceptAll(t) {
+  setEdit(t, (ch) => { for (const d of t.set.decisions) if (!ch[d.id] && d.recommend) ch[d.id] = { option: d.recommend, confirmed: !d.one_way }; });
+}
+
+async function setSubmit(t) {
+  if (todos.setBusy.has(t.id)) return;
+  todos.setBusy.add(t.id);
+  try {
+    await (todos.setQ.get(t.id) || Promise.resolve());
+    await api(`/api/todos/${encodeURIComponent(t.id)}/submit`, { method: "POST", body: "{}" });
+    toast("Submitted. The coordinator will pass it on.");
+  } catch (e) {
+    toast("Not submitted: " + e.message, true);
+  } finally {
+    todos.setBusy.delete(t.id);
+  }
+  todos.loadedAt = 0; await loadTodos();
+}
+
+// Clicks inside a set. Returns true when it handled one.
+function setClick(ev, t) {
+  const el = ev.target;
+  const opt = el.closest(".ds-opt");
+  if (opt) { if (!opt.disabled) setEdit(t, (ch) => { ch[opt.dataset.d] = { option: Number(opt.dataset.o), confirmed: true }; }); return true; }
+  const cf = el.closest(".ds-confirm");
+  if (cf) { setEdit(t, (ch) => { if (ch[cf.dataset.d]) ch[cf.dataset.d].confirmed = true; }); return true; }
+  const fix = el.closest(".ds-fix");
+  if (fix) {
+    const r = t.set.rules.find((x) => x.id === fix.dataset.r);
+    if (r && r.fix) setEdit(t, (ch) => { ch[r.fix.decision] = { option: r.fix.option, confirmed: true }; });
+    return true;
+  }
+  const fk = el.closest(".ds-fk");
+  if (fk) { setEdit(t, (ch, fa) => { if (fa[fk.dataset.f]) delete fa[fk.dataset.f]; else fa[fk.dataset.f] = true; }); return true; }
+  if (el.closest(".ds-all")) { setAcceptAll(t); return true; }
+  if (el.closest(".ds-submit")) { setSubmit(t); return true; }
+  const st = el.closest("[data-step]");
+  if (st) { todos.setStep.set(t.id, Math.max(0, Math.min(t.set.decisions.length, Number(st.dataset.step)))); renderTodos(true); return true; }
+  const go = el.closest(".ds-rk");
+  if (go) {
+    const i = t.set.decisions.findIndex((d) => d.id === go.dataset.go);
+    if (!isDesktop() && i >= 0) { todos.setStep.set(t.id, i); renderTodos(true); return true; }
+    const card = el.closest(".td-item").querySelector(`.ds-dec[data-dec="${CSS.escape(go.dataset.go)}"]`);
+    if (card) {
+      card.classList.add("flash");
+      card.scrollIntoView?.({ block: "nearest" });
+      setTimeout(() => card.classList.remove("flash"), 1400);
+    }
+    return true;
+  }
+  return false;
 }
 
 function todoListHtml(pfx) {
@@ -2363,6 +2534,8 @@ function onTodoClick(ev) {
   const id = item.dataset.id;
   const ag = ev.target.closest(".td-agent");
   if (ag) { openDetail(ag.dataset.agent); return; }
+  const setT = todos.items.find((x) => x.id === id);
+  if (setT && setT.set && !ev.target.closest(".td-row, .td-agent, .td-done, .td-drop") && setClick(ev, setT)) return;
   const opt = ev.target.closest(".td-opt");
   if (opt) {
     if (!item.querySelector(".td-text")) return;

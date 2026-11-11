@@ -1219,6 +1219,61 @@
     .td-age { flex: none; }
     .td-chips { flex: none; display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-left: auto; }
     .td-chip { padding: 1px var(--sp-8); border-radius: var(--r-8); font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+
+    /* Decision sets (todoset.go): the card's body, shared by the desktop list and the phone stepper. */
+    .td-chip.st-warn { background: var(--chip-yellow); color: var(--orange); }
+    .td-chip.st-err { background: var(--chip-red); color: var(--red); }
+    .td-chip.st-surf { background: var(--chip-landing); color: var(--teal); }
+    .ds-set { display: flex; flex-direction: column; gap: var(--sp-10); min-width: 0; }
+    .ds-h { font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-top: var(--sp-4); }
+    .ds-ul { margin: 0; padding-left: var(--sp-16); font-size: var(--fs-13); }
+    .ds-risk { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8); border: 1px solid var(--border); border-radius: var(--r-10); padding: var(--sp-6) var(--sp-10); background: var(--panel); font-size: var(--fs-13); }
+    .ds-risk span { flex: 1; min-width: 140px; }
+    .ds-rk { min-height: 28px; padding: 0 var(--sp-8); border: 0; border-radius: var(--r-6); background: var(--chip-purple); color: var(--purple); font: 600 var(--fs-12) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; cursor: pointer; }
+    .ds-list { display: flex; flex-direction: column; gap: var(--sp-10); }
+    .ds-dec { display: flex; flex-direction: column; gap: var(--sp-8); border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel); padding: var(--sp-10) var(--sp-12); min-width: 0; }
+    .ds-dec.done { border-left: 4px solid var(--green); }
+    .ds-dec.warn { border-color: var(--orange); }
+    .ds-dec.bad { border-color: var(--red); }
+    .ds-dec.flash { outline: 2px solid var(--purple); outline-offset: 2px; }
+    .ds-dec h4 { margin: 0; font-size: var(--fs-14); display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: baseline; }
+    .ds-id { font: 700 var(--fs-12) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); }
+    .ds-chips { display: flex; flex-wrap: wrap; gap: var(--sp-6); align-items: center; }
+    .ds-q { color: var(--muted); font-size: var(--fs-12); }
+    .ds-opts { display: grid; gap: var(--sp-6); }
+    .ds-opt { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: var(--sp-8); min-height: 44px; padding: var(--sp-8) var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .ds-opt small { display: block; color: var(--muted); font-size: var(--fs-12); font-weight: 400; }
+    .ds-ot { min-width: 0; overflow-wrap: anywhere; }
+    .ds-oc { display: flex; flex-wrap: wrap; gap: var(--sp-4); align-items: flex-start; justify-content: flex-end; }
+    .ds-dot { width: 16px; height: 16px; margin-top: var(--sp-2); border-radius: 50%; border: 2px solid var(--muted); }
+    .ds-opt.on { border-color: var(--blue); background: var(--chip-blue); }
+    .ds-opt.on .ds-dot { border-color: var(--blue); background: radial-gradient(var(--blue) 0 45%, transparent 50%); }
+    .ds-opt.pend { border-style: dashed; border-color: var(--yellow); background: var(--chip-yellow); }
+    .ds-opt.pend .ds-dot { border-color: var(--yellow); background: radial-gradient(var(--yellow) 0 45%, transparent 50%); }
+    .ds-opt:disabled { cursor: default; opacity: 0.8; }
+    .ds-opt:focus-visible, .ds-fix:focus-visible, .ds-confirm:focus-visible, .ds-fk:focus-visible, .ds-rk:focus-visible, .ds-rv:focus-visible, .ds-nav button:focus-visible, .ds-dots button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .ds-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8); border-radius: var(--r-8); padding: var(--sp-6) var(--sp-10); font-size: var(--fs-13); border-left: 4px solid var(--border); }
+    .ds-note.block { background: var(--chip-red); border-left-color: var(--red); }
+    .ds-note.warn { background: var(--chip-yellow); border-left-color: var(--orange); }
+    .ds-note.fact { background: var(--chip-yellow); border-left-color: var(--yellow); }
+    .ds-fix, .ds-confirm, .ds-fk, .ds-nav button { min-height: 36px; padding: 0 var(--sp-12); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel2); color: var(--text); font: inherit; font-size: var(--fs-13); cursor: pointer; }
+    .ds-note .ds-fix, .ds-note .ds-confirm { margin-left: auto; }
+    .ds-confirm { border-color: var(--blue); color: var(--blue); }
+    .ds-fact { display: flex; flex-direction: column; gap: var(--sp-4); border: 1px dashed var(--border); border-radius: var(--r-10); padding: var(--sp-8) var(--sp-10); background: var(--panel); font-size: var(--fs-13); }
+    .ds-fact.known { border-style: solid; border-left: 4px solid var(--green); }
+    .ds-bar { display: flex; flex-direction: column; gap: var(--sp-8); }
+    .ds-st { display: flex; flex-wrap: wrap; gap: var(--sp-6); }
+    .ds-nav { display: flex; gap: var(--sp-8); }
+    .ds-nav button:last-child { margin-left: auto; border-color: var(--blue); color: var(--blue); }
+    .ds-nav button:disabled, .ds-fk:disabled, .ds-confirm:disabled { opacity: 0.5; cursor: default; }
+    .ds-dots { display: flex; gap: var(--sp-4); justify-content: center; }
+    .ds-dots button { width: 22px; height: 12px; padding: 0; border: 0; border-radius: var(--r-4); background: var(--border); cursor: pointer; }
+    .ds-dots button.cur { background: var(--blue); }
+    .ds-dots button.ok { background: var(--green); }
+    .ds-review { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 var(--sp-12); font-size: var(--fs-13); }
+    .ds-rv { display: contents; background: none; border: 0; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .ds-rv b, .ds-rv span { padding: var(--sp-8) 0; border-bottom: 1px solid var(--border); }
+    @media (prefers-reduced-motion: no-preference) { .ds-dec { transition: outline-color 0.2s; } }
     .td-chip.st-open { background: var(--chip-blue); color: var(--blue); }
     .td-chip.st-answered { background: var(--chip-green); color: var(--green); }
     .td-chip.td-src { background: var(--chip-yellow); color: var(--yellow); }

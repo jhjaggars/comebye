@@ -96,6 +96,8 @@ node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1
 
 # The Copy strip on code blocks (clipboard read back in headless Chrome).
 node copycode.mjs "http://127.0.0.1:$port" "$out" || rc=1
+# Decision sets in the To do panel: the card, the phone stepper, conflicts, drafts and Submit.
+node decisionsets.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # The Pages checks publish with the real CLI, so they need the binary and its state.
 PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # The page starters (comebye pages new): published by the real CLI, opened in the viewer under the real CSP.
