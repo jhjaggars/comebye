@@ -68,7 +68,9 @@ func TestPanelEventsPushAndShare(t *testing.T) {
 	}
 	a, stopA := r.stream(t, "/api/agents/w9:p1/panel/events?path=docs/plan.md")
 	b, stopB := r.stream(t, "/api/agents/w9:p1/panel/events?path=docs/plan.md")
-	awaitPanel(t, "both ready", func() bool { return strings.Contains(a.text(), "event: ready") && strings.Contains(b.text(), "event: ready") })
+	awaitPanel(t, "both ready", func() bool {
+		return strings.Contains(a.text(), "event: ready") && strings.Contains(b.text(), "event: ready")
+	})
 	if n := r.s.panels.count(); n != 1 {
 		t.Fatalf("two tabs on one document share %d watchers, want 1", n)
 	}
@@ -77,7 +79,9 @@ func TestPanelEventsPushAndShare(t *testing.T) {
 		t.Fatalf("pushed with no change: %q", a.text())
 	}
 	put(t, filepath.Join(r.wt, "c.go"), "package c\n\nvar C = 2\n")
-	awaitPanel(t, "diff push", func() bool { return strings.Contains(a.text(), "event: diff") && strings.Contains(b.text(), "event: diff") })
+	awaitPanel(t, "diff push", func() bool {
+		return strings.Contains(a.text(), "event: diff") && strings.Contains(b.text(), "event: diff")
+	})
 	put(t, filepath.Join(r.wt, "docs", "plan.md"), "# Plan\n\nmore\n")
 	awaitPanel(t, "doc push", func() bool { return strings.Contains(a.text(), "event: doc") })
 	stopA()
