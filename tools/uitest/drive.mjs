@@ -1654,6 +1654,42 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
     } finally { await unmockStatusData(); }
   });
 }
+for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-status", "#/briefings"]]) {
+  await check(`board: the new mark: none on a first visit, new and moved after a change, cleared by Mark seen, at ${width}px`, async () => {
+    await mockStatusData();
+    try {
+      const marks = () => page.evaluate((b) => [...document.querySelectorAll(b + " .bd .bd-new")].map((x) => x.textContent).join("|"), box);
+      const go = async () => { await desktopList(width, start); if (width < 1100) await page.goto(base + start, { waitUntil: "load" }); await page.waitForSelector(`${box} .bd .bd-lane`, { timeout: 8000 }); };
+      await page.evaluate(() => { try { localStorage.removeItem("comebye-board-seen"); localStorage.removeItem("comebye-board-mode"); } catch {} });
+      await go();
+      if (await marks()) throw new Error("marks on a first visit: " + await marks());
+      if (await page.locator(`${box} [data-bd-seen]`).count()) throw new Error("Mark seen on a first visit");
+      const snap = await page.evaluate(() => JSON.parse(localStorage.getItem("comebye-board-seen")));
+      if (!snap || snap.items.t1 !== "needs_you" || snap.items.h888888888888 !== "landed") throw new Error("snapshot " + JSON.stringify(snap));
+      // An older snapshot: one item missing (new), one in another lane (moved).
+      await page.evaluate(() => { const v = JSON.parse(localStorage.getItem("comebye-board-seen")); delete v.items.h333333333333; v.items.h111111111111 = "waiting"; localStorage.setItem("comebye-board-seen", JSON.stringify(v)); });
+      await page.reload({ waitUntil: "load" }); // desktopList would clear the snapshot just written
+      await page.waitForSelector(`${box} .bd .bd-lane`, { timeout: 8000 });
+      const m = await marks();
+      if (!/new/.test(m) || !/moved/.test(m)) throw new Error("marks " + m);
+      const btn = await page.locator(`${box} [data-bd-seen]`).innerText();
+      if (!btn.startsWith("2 new or moved")) throw new Error("button " + btn);
+      if ((await page.locator(`${box} [data-bd-seen]`).evaluate((b) => b.getBoundingClientRect().height)) < 44) throw new Error("Mark seen is under 44px");
+      await page.locator(`${box} .bd-lane[data-lane="running"] summary`).click();
+      await page.screenshot({ path: `${out}/board-new-${width}.png` });
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls sideways");
+      // By project keeps the marks.
+      await page.locator(`${box} [data-bd-mode="project"]`).click();
+      if (!/new/.test(await marks())) throw new Error("no marks by project");
+      await page.locator(`${box} [data-bd-mode="status"]`).click();
+      await page.locator(`${box} [data-bd-seen]`).click();
+      if (await marks() || (await page.locator(`${box} [data-bd-seen]`).count())) throw new Error("Mark seen left marks: " + await marks());
+      await page.reload({ waitUntil: "load" });
+      await page.waitForSelector(`${box} .bd .bd-lane`, { timeout: 8000 });
+      if (await marks()) throw new Error("marks came back after a reload");
+    } finally { await unmockStatusData(); }
+  });
+}
 await check("board: empty lanes are left out, and no board shows without one", async () => {
   await page.route(/\/api\/board$/, (r) => r.fulfill({ json: { at: ago(0), lanes: [{ key: "needs_you", name: "Needs you", rule: "r", count: 0, items: [] }, { key: "running", name: "Running", rule: "r", count: 0, items: [] }], loose: {} } }));
   try {

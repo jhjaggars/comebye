@@ -5587,12 +5587,51 @@ const BOARD_MODE_KEY = "comebye-board-mode";
 const board = { data: null, at: 0, inflight: false, mode: lsGet(BOARD_MODE_KEY) === "project" ? "project" : "status", open: new Set(["needs_you"]), projOpen: new Set() };
 const BOARD_LANE_LABEL = { running: "running", waiting: "waiting", landing: "to land", landed: "landed" };
 
+// The "new" mark: this browser remembers which item was in which lane when the
+// board was last marked seen (BOARD_SEEN_KEY, {items: {id: lane}}). An item
+// that is not in that snapshot is "new"; one that is in another lane is
+// "moved". The first board this browser ever loads becomes the snapshot
+// silently, so nothing is new on a first visit. "Mark seen" takes a new one.
+const BOARD_SEEN_KEY = "comebye-board-seen";
+function boardSeenLoad() {
+  try {
+    const v = JSON.parse(lsGet(BOARD_SEEN_KEY) || "null");
+    return v && typeof v.items === "object" && v.items ? v : null;
+  } catch { return null; }
+}
+board.seen = boardSeenLoad();
+
+// boardSnapshot is every item of the board and its lane.
+function boardSnapshot(d) {
+  const items = {};
+  for (const l of (d && d.lanes) || []) for (const it of l.items || []) items[it.id] = l.key;
+  return { at: new Date().toISOString(), items };
+}
+
+// boardMark is "new", "moved" or "" for an item now in laneKey.
+function boardMark(id, laneKey) {
+  if (!board.seen) return "";
+  const was = board.seen.items[id];
+  return was === undefined ? "new" : was !== laneKey ? "moved" : "";
+}
+
+function boardMarkSeen() {
+  if (!board.data) return;
+  board.seen = boardSnapshot(board.data);
+  lsSet(BOARD_SEEN_KEY, JSON.stringify(board.seen));
+  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  renderStatus();
+}
+
 async function loadBoard() {
   if (board.inflight || ledger.on !== true) return;
   board.inflight = true;
   try {
     const d = await api("/api/board");
-    if (d && Array.isArray(d.lanes)) board.data = d;
+    if (d && Array.isArray(d.lanes)) {
+      board.data = d;
+      if (!board.seen) { board.seen = boardSnapshot(d); lsSet(BOARD_SEEN_KEY, JSON.stringify(board.seen)); }
+    }
   } catch { /* keep what we had */ } finally {
     board.inflight = false;
     board.at = Date.now();
@@ -5606,16 +5645,19 @@ function boardItemHtml(it, laneKey, showLane) {
   const open = it.agent && isDesktop() && state.agents.some((a) => agentId(a) === it.agent) ? ` <button type="button" class="st-link" data-agent="${escAttr(it.agent)}">open</button>` : "";
   const when = it.since && fmtWhen(it.since) ? `<span class="bd-age">${esc(fmtWhen(it.since))}</span>` : "";
   const lane = showLane ? `<span class="bd-tag">${esc(BOARD_LANE_LABEL[laneKey] || "")}</span>` : "";
+  const mk = boardMark(it.id, laneKey);
+  const mark = mk ? `<span class="bd-new" title="${mk === "new" ? "Not on the board when you last marked it seen" : "In another lane when you last marked it seen"}">${mk}</span>` : "";
   if (it.type === "todo") {
-    return `<li><button type="button" class="bd-todo" data-bd-todo="${escAttr(it.id)}" aria-label="Open to-do ${escAttr(it.id)}: ${escAttr(it.title)}"><span class="td-kind">${esc(TODO_KIND[it.kind] || it.kind || "")}</span> <span class="bd-q">${esc(it.title)}</span><code class="bd-id">${esc(it.id)}</code></button>${why}${note}</li>`;
+    return `<li><button type="button" class="bd-todo" data-bd-todo="${escAttr(it.id)}" aria-label="Open to-do ${escAttr(it.id)}: ${escAttr(it.title)}"><span class="td-kind">${esc(TODO_KIND[it.kind] || it.kind || "")}</span> <span class="bd-q">${esc(it.title)}</span>${mark}<code class="bd-id">${esc(it.id)}</code></button>${why}${note}</li>`;
   }
-  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${lane}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${note}</li>`;
+  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${mark}${lane}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${note}</li>`;
 }
 
 function boardLaneHtml(key, name, count, items, open, showLane, extra) {
   if (!count) return "";
   const names = items.slice(0, 3).map((i) => i.title).join(", ") + (count > 3 ? ", …" : "");
-  return `<details class="bd-lane${key === "needs_you" ? " need" : ""}" data-lane="${escAttr(key)}"${open ? " open" : ""}><summary><span class="bd-chip">${count}</span><span class="bd-name">${esc(name)}</span><span class="bd-names">${esc(names)}</span></summary>` +
+  const fresh = items.filter((i) => boardMark(i.id, i.lane || key)).length;
+  return `<details class="bd-lane${key === "needs_you" ? " need" : ""}" data-lane="${escAttr(key)}"${open ? " open" : ""}><summary><span class="bd-chip">${count}</span><span class="bd-name">${esc(name)}</span>${fresh ? `<span class="bd-new">${fresh} new</span>` : ""}<span class="bd-names">${esc(names)}</span></summary>` +
     `<ul>${items.map((i) => boardItemHtml(i, i.lane || key, showLane)).join("")}</ul>${extra || ""}</details>`;
 }
 
@@ -5641,9 +5683,12 @@ function boardHtml() {
   const foot = [loose.reports ? `${loose.reports} ${loose.reports === 1 ? "report" : "reports"} to read` : "", loose.ready_to_remove ? `${loose.ready_to_remove} ready to remove` : "",
     (d.unkeyed_notes || []).length ? `${d.unkeyed_notes.length} ${d.unkeyed_notes.length === 1 ? "note names" : "notes name"} an unknown id` : ""].filter(Boolean).join(" · ");
   const counts = rest.map((l) => `${l.count} ${BOARD_LANE_LABEL[l.key] || l.name}`).join(" · ");
+  let fresh = 0;
+  for (const l of lanes) for (const it of l.items || []) if (boardMark(it.id, l.key)) fresh++;
+  const seen = fresh ? `<button type="button" class="bd-seen" data-bd-seen>${fresh} new or moved · Mark seen</button>` : "";
   return `<section class="bd" aria-label="Briefing board">${head}` +
     (needs.count ? boardLaneHtml("needs_you", "Needs you", needs.count, needs.items, board.open.has("needs_you"), false) : `<p class="bd-clear">Nothing needs you.</p>`) +
-    `<div class="bd-bar"><span class="bd-sum">${esc(total ? counts : "Nothing else in flight.")}</span><span class="bd-seg" role="group" aria-label="Group by">${sw}</span></div>${body}` +
+    `<div class="bd-bar"><span class="bd-sum">${esc(total ? counts : "Nothing else in flight.")}</span><span class="bd-seg" role="group" aria-label="Group by">${sw}</span>${seen}</div>${body}` +
     (foot ? `<p class="bd-foot">${esc(foot)}</p>` : "") + `</section>`;
 }
 
@@ -5886,7 +5931,8 @@ function onStatusClick(ev) {
     lsSet(BOARD_MODE_KEY, board.mode);
     for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
     renderStatus();
-  } else if (bt) boardGoTodo(bt.dataset.bdTodo);
+  } else if (ev.target.closest("[data-bd-seen]")) boardMarkSeen();
+  else if (bt) boardGoTodo(bt.dataset.bdTodo);
   else if (bi) setBriefInterval(bi.dataset.bi);
   else if (ev.target.closest("[data-bpub]")) briefNow();
   else if (ev.target.closest("[data-bhist]")) briefHistory();
