@@ -190,7 +190,9 @@ try {
       await page.waitForFunction((x) => document.querySelector("#pr-prices .pz-item .pz-type")?.innerText.split("\n")[0].trim() !== x, a, { timeout: 5000 });
       await page.selectOption("#pz-sort", "price");
       const t = await page.locator("#pr-prices").innerText();
-      if (!t.includes("needs work")) throw new Error("no Arm type is marked");
+      if (!t.includes("arm64 · not supported yet")) throw new Error("no Arm type is marked with its reason");
+      const why = await page.locator("#pr-prices .pz-tag.arm").first().getAttribute("title");
+      if (!/bootstrap is tested on amd64 only/.test(why || "")) throw new Error("the tag's hover text is " + JSON.stringify(why));
     });
 
     await check(`${tag}: an expired login is said plainly, with what to run, and the old prices stay`, async () => {
