@@ -255,9 +255,12 @@ func TestPeerRunsOneJobAtATime(t *testing.T) {
 		t.Errorf("second job = %d, want 409", code)
 	}
 	waitJob(t, s, v.ID, jobOK)
-	if code, _ := startPeerJob(t, s, "key-third-1234"); code != http.StatusAccepted {
-		t.Errorf("job after the first finished = %d", code)
+	code, third := startPeerJob(t, s, "key-third-1234")
+	if code != http.StatusAccepted {
+		t.Fatalf("job after the first finished = %d", code)
 	}
+	// it journals to the state dir after the response: let it finish before the temp dir goes
+	waitJob(t, s, third.ID, jobOK)
 }
 
 func TestPeerRestartMarksARunningJobInterrupted(t *testing.T) {
