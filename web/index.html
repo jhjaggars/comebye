@@ -2104,19 +2104,33 @@
     .pgs-title { font-weight: 600; font-size: var(--fs-15); overflow-wrap: anywhere; }
     .pgs-meta { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .pgs-empty code { font: var(--fs-13) var(--ff-code); color: var(--text); }
-    .pgs-bar { flex: none; padding: var(--sp-8) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) var(--sp-8) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-6); min-width: 0; }
-    .pgs-bar h2 { margin: 0; font-size: var(--fs-16); font-weight: 650; overflow-wrap: anywhere; }
+    /* The viewer's bar: one row, so the page gets the height. Who made it and the sandbox note are behind (i), the actions behind the three dots. */
+    #pages.in-page > header { display: none; }
+    .pgs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-6); min-height: var(--hit-48); padding: 0 calc(var(--sp-6) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-6) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
+    .pgs-ib { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: var(--hit-44); min-height: var(--hit-44); padding: 0; background: none; border: 0; border-radius: var(--r-10); color: var(--muted); cursor: pointer; }
+    .pgs-ib[aria-pressed="true"], .pgs-ib[aria-expanded="true"] { background: var(--panel2); color: var(--text); }
+    .pgs-ib:focus-visible { outline-offset: -2px; }
+    @media (hover: hover) { .pgs-ib:hover { background: var(--panel2); color: var(--text); } }
+    .pgs-t { margin: 0; min-width: 0; font-size: var(--fs-16); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pgs-sp { flex: 1 1 0; }
+    .pgs-focusb { display: none; }
+    @media (min-width: 1100px) { .pgs-focusb { display: inline-flex; } }
+    .pgs-bar .pgs-pill { flex: none; }
+    .pgs-pill.cur { color: var(--text); }
+    .pgs-bar .pgs-new { flex: none; white-space: nowrap; border-color: var(--blue); background: var(--chip-blue); color: var(--blue); font-weight: 600; }
+    .pgs-infobody { display: flex; flex-direction: column; gap: var(--sp-8); padding: var(--sp-4) var(--sp-14) var(--sp-14); font-size: var(--fs-13); }
+    .pgs-note { color: var(--muted); }
+    .pgs-prov { overflow-wrap: anywhere; }
     .pgs-made { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6) var(--sp-10); padding: var(--sp-6) var(--sp-10); background: var(--panel2); border-radius: var(--r-8); font-size: var(--fs-12); min-width: 0; }
     .pgs-made[hidden] { display: none; }
     .pgs-madetxt { flex: 1 1 200px; min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
     .pgs-opensess { flex: none; text-decoration: none; min-height: var(--hit-36); display: inline-flex; align-items: center; }
-    .pgs-prov { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
-    .pgs-acts { display: flex; flex-wrap: wrap; gap: var(--sp-6); align-items: center; }
-    .pgs-acts .btn, .pgs-acts select { min-height: var(--hit-36); font-size: var(--fs-13); }
-    .pgs-acts select { padding: 0 var(--sp-8); color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); font: inherit; font-size: var(--fs-13); }
-    .pgs-acts a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: var(--text); }
-    .pgs-acts .pgs-new { flex: 1 1 100%; white-space: nowrap; border-color: var(--blue); background: var(--chip-blue); color: var(--blue); font-weight: 600; }
-    .pgs-acts .danger { margin-left: auto; }
+    .pgs-vrow { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-10); padding: var(--sp-6) var(--sp-14); color: var(--muted); font-size: var(--fs-13); }
+    .pgs-vrow[hidden] { display: none; }
+    .pgs-vrow select { min-height: var(--hit-36); padding: 0 var(--sp-8); color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); font: inherit; font-size: var(--fs-13); min-width: 0; }
+    .attach-menu a.pgs-mi { display: flex; align-items: center; min-height: var(--hit-44); padding: 0 var(--sp-14); color: var(--text); text-decoration: none; font-size: var(--fs-15); border-top: 1px solid var(--border); }
+    .attach-menu a.pgs-mi:focus-visible { outline-offset: -2px; }
+    .attach-menu button.danger { color: var(--red); }
     .pgs-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: white; } /* a page that sets no background is drawn for light paper, in any theme */
     .pgs-pick { margin: auto; padding: var(--sp-24); text-align: center; color: var(--muted); }
     /* In the pane (1100px and up) the gallery has room to breathe; with a page open, the viewer replaces it, as on a phone. */
@@ -2573,6 +2587,24 @@
         <div id="pgs-items" class="pgs-grid" aria-live="polite"></div>
       </section>
       <section class="pgs-view" id="pgs-view" aria-label="Page"></section>
+    </div>
+    <!-- The viewer bar's two popovers (app.js POPS: Escape, a click outside, arrow keys; a bottom sheet on a phone) -->
+    <div id="pgs-infopop" class="attach-menu pop" role="dialog" aria-label="About this page" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><span class="pop-title">About this page</span><button type="button" class="pop-x" aria-label="Close">&times;</button></div>
+      <div class="pgs-infobody">
+        <div class="pgs-prov" id="pgs-prov"></div>
+        <div class="pgs-note">Agent-written page, shown in a sandbox: its scripts run, but it cannot reach Comebye, your data or the network.</div>
+        <div class="pgs-made" id="pgs-made" hidden></div>
+      </div>
+    </div>
+    <div id="pgs-menu" class="attach-menu pop" role="menu" aria-label="Page actions" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><span class="pop-title">Page</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
+      <label class="pgs-vrow" id="pgs-vrow" hidden><span>Version</span><select id="pgs-ver" aria-label="Version"></select></label>
+      <button type="button" role="menuitem" id="pgs-copy">Copy link</button>
+      <a role="menuitem" class="pgs-mi" id="pgs-open" href="#" target="_blank" rel="noopener">Open in tab</a>
+      <button type="button" role="menuitem" class="danger" id="pgs-del">Delete…</button>
     </div>
   </div>
 

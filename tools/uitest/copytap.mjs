@@ -227,6 +227,8 @@ await check("pages: Copy link uses the shared helper, and a page's own copy butt
   if (!pgid) throw new Error("publish: " + JSON.stringify(pub));
   await page.goto("about:blank");
   await page.goto(base + "/#/pages/" + pgid, { waitUntil: "load" });
+  await page.locator("#pgs-menub").waitFor({ timeout: 8000 });
+  await page.locator("#pgs-menub").click();
   const cl = page.locator("#pgs-copy");
   await cl.waitFor({ timeout: 8000 });
   same(await page.locator("iframe.pgs-frame").getAttribute("allow"), "clipboard-write", "frame allow");

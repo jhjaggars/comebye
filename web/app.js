@@ -3599,6 +3599,8 @@ const POPS = {
   cheats: { id: "cheats", noSheet: true, close: () => window.CMDK && CMDK.closeCheats(false), trigger: () => window.CMDK && CMDK.cheatFrom() },
   theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => $("btn-fleet") },
   font: { id: "font-panel", close: () => toggleFontPanel(false), trigger: () => $("btn-fleet") },
+  pgsmenu: { id: "pgs-menu", close: () => pgsPop("pgsmenu", false), trigger: () => $("pgs-menub") },
+  pgsinfo: { id: "pgs-infopop", close: () => pgsPop("pgsinfo", false), trigger: () => $("pgs-infob") },
   notify: { id: "notify-panel", close: () => toggleNotifyPanel(false), trigger: () => $("btn-notify") },
 };
 const sheetMQ = window.matchMedia("(max-width: 600px)");
@@ -5657,7 +5659,7 @@ function initRecall() {
 // clicked link (a new tab, which is not this app), and forbids navigating this window. Everything about it that this screen
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
-const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
+const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, focus: false, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
   view: lsGet("comebye.pgs.view") === "list" ? "list" : "grid", sort: ["updated", "opened", "title"].includes(lsGet("comebye.pgs.sort")) ? lsGet("comebye.pgs.sort") : "updated",
   chip: "all", opened: null, prev: new Map(), prevQ: [], prevBusy: 0, io: null, prevRaf: 0 };
 
@@ -5882,10 +5884,39 @@ function renderPages() {
   renderPageView();
 }
 
+// The two popovers of the viewer bar are static elements (index.html), registered with the shared popover rules (POPS).
+function pgsFillPops(p, ver, r, opts, many) {
+  $("pgs-prov").textContent = `Published by ${p.by}${p.host ? " on " + p.host : ""}${p.tagged ? " (a worker node)" : ""} · ${pageAgo(p.created_at)}${p.updated_at !== p.created_at ? ", updated " + pageAgo(p.updated_at) : ""} · ${p.kind} · ${pageSize(p.size)}${p.handoff ? " · handoff " + p.handoff : ""}`;
+  const v = $("pgs-vrow"), sel = $("pgs-ver");
+  v.hidden = !many;
+  if (sel._html !== opts) { sel._html = opts; sel.innerHTML = opts; }
+  $("pgs-open").href = pgs.pagesUrl + "/p/" + p.id + (r.ver ? "/" + r.ver : "");
+}
+
+function pgsPop(name, show) {
+  const el = $(POPS[name].id), btn = POPS[name].trigger();
+  const open = show ?? el.hidden;
+  if (open === !el.hidden) return;
+  el.hidden = !open;
+  if (open) { popOpened(name); placePop(name, btn); popItems(el)[0]?.focus(); }
+  else popClosed(name);
+  if (btn) btn.setAttribute("aria-expanded", String(open));
+}
+
+// Focus: read with the list out of the way. It reuses the list's own collapse (the [ key and its rail), but only for as long
+// as the reader stays on a page: the browser's remembered choice is never touched, and leaving the page puts the list back.
+function pagesFocus(on) {
+  if (on === pgs.focus || !isDesktop()) return;
+  pgs.focus = on;
+  setListCollapsed(on ? true : lsGet(LIST_COLLAPSED_KEY) === "1", false);
+  $("pgs-focus")?.setAttribute("aria-pressed", String(on));
+}
+
 function renderPageView() {
   const r = pgs.route, view = $("pgs-view");
   $("pages").classList.toggle("in-page", !!(r && r.id));
   if (!r || !r.id) {
+    pgsPop("pgsmenu", false); pgsPop("pgsinfo", false); pagesFocus(false);
     if (view.dataset.id) { view.replaceChildren(); view.dataset.id = ""; pgs.frameKey = ""; }
     if (!view.firstChild) view.innerHTML = `<div class="pgs-pick">Pick a page from the list.</div>`;
     return;
@@ -5907,19 +5938,30 @@ function renderPageView() {
   const key = p.id + "/" + ver;
   const vers = (p.versions || []).slice().reverse();
   const opts = vers.map((v) => `<option value="${v.n}"${v.n === ver ? " selected" : ""}>v${v.n}${v.n === p.version ? " (latest)" : ""} · ${esc(pageAgo(v.at))}</option>`).join("");
-  const bar = `<div class="pgs-bar"><h2>${esc(p.title)}</h2>
-    <div class="pgs-prov">Published by ${esc(p.by)}${p.host ? " on " + esc(p.host) : ""}${p.tagged ? " (a worker node)" : ""} · ${esc(pageAgo(p.created_at))}${p.updated_at !== p.created_at ? ", updated " + esc(pageAgo(p.updated_at)) : ""} · ${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}<br>Agent-written page, shown in a sandbox: its scripts run, but it cannot reach Comebye, your data or the network.</div>
-    <div class="pgs-made" id="pgs-made" hidden></div>
-    <div class="pgs-acts">${newer ? `<button type="button" class="btn pgs-new" id="pgs-new">v${newer} is out · reload</button>` : ""}${vers.length > 1 ? `<select id="pgs-ver" aria-label="Version">${opts}</select>` : ""}
-      <button type="button" class="btn" id="pgs-copy">Copy link</button>
-      <a class="btn" id="pgs-open" href="${esc(pgs.pagesUrl + "/p/" + p.id + (r.ver ? "/" + r.ver : ""))}" target="_blank" rel="noopener">Open in tab</a>
-      <button type="button" class="btn danger" id="pgs-del">Delete</button></div></div>`;
+  // The slim bar: back, title, version, then (i) for who made it and the sandbox note, focus, and ⋯ for the actions. What the
+  // two popovers hold is filled in below (they are static, so a refresh of the bar does not close one).
+  const ICON = {
+    back: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    info: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v5M12 8h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    focus: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M16 9.5l-2.5 2.5 2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    more: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg>',
+  };
+  const bar = `<div class="pgs-bar">
+    <button type="button" class="pgs-ib" id="pgs-vback" aria-label="Back to Pages">${ICON.back}</button>
+    <h2 class="pgs-t">${esc(p.title)}</h2>
+    ${newer ? `<button type="button" class="btn sm pgs-new" id="pgs-new">v${newer} is out · reload</button>` : `<span class="pgs-pill${ver === p.version ? " cur" : ""}" id="pgs-vpill">v${ver}${ver < p.version ? " · older" : ""}</span>`}
+    <span class="pgs-sp"></span>
+    <button type="button" class="pgs-ib" id="pgs-infob" aria-label="About this page" aria-haspopup="dialog" aria-controls="pgs-infopop" aria-expanded="${!$("pgs-infopop").hidden}">${ICON.info}</button>
+    <button type="button" class="pgs-ib pgs-focusb" id="pgs-focus" aria-label="Focus: hide the list" aria-pressed="${pgs.focus}" title="Focus: hide the list ( [ )">${ICON.focus}</button>
+    <button type="button" class="pgs-ib" id="pgs-menub" aria-label="More" aria-haspopup="menu" aria-controls="pgs-menu" aria-expanded="${!$("pgs-menu").hidden}">${ICON.more}</button></div>`;
+  pgsFillPops(p, ver, r, opts, vers.length > 1);
   if (view.dataset.id === p.id && pgs.frameKey === key) {
     // Same page and version: refresh the bar only, so the page keeps its state.
     view.querySelector(".pgs-bar").outerHTML = bar;
     pagesMade(p.id, ver);
     return;
   }
+  pgsPop("pgsmenu", false); pgsPop("pgsinfo", false);
   view.dataset.id = p.id;
   pgs.frameKey = key;
   pgs.frameVer = ver;
@@ -6000,6 +6042,7 @@ function syncPages() {
   pgs.route = r;
   el.hidden = !r;
   if (!r) {
+    pgsPop("pgsmenu", false); pgsPop("pgsinfo", false); pagesFocus(false);
     clearInterval(pgs.timer); pgs.timer = null;
     $("pgs-view").replaceChildren(); $("pgs-view").dataset.id = ""; pgs.frameKey = "";
     return;
@@ -6052,19 +6095,26 @@ function initPages() {
     pgs.chip = b.dataset.chip; renderPages();
   });
   $("pages").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && (!$("pgs-menu").hidden || !$("pgs-infopop").hidden)) return; // the popover answers it
     if (ev.key === "Escape") { ev.stopPropagation(); pagesBack(); }
   });
-  $("pgs-view").addEventListener("change", (ev) => {
+  $("pages").addEventListener("change", (ev) => {
     if (ev.target.id !== "pgs-ver" || !pgs.route) return;
+    pgsPop("pgsmenu", false);
     const p = pgs.items.find((x) => x.id === pgs.route.id), n = Number(ev.target.value);
     history.replaceState(null, "", pageHash(pgs.route.id, p && n === p.version ? 0 : n));
     pgs.reload = true; // an explicit pick loads that version, pill or not
     route();
   });
-  $("pgs-view").addEventListener("click", async (ev) => {
-    if (ev.target.closest("#pgs-del")) { pagesDelete(); return; }
+  $("pages").addEventListener("click", async (ev) => {
+    if (ev.target.closest("#pgs-vback")) { pagesBack(); return; }
+    if (ev.target.closest("#pgs-menub")) { pgsPop("pgsmenu"); return; }
+    if (ev.target.closest("#pgs-infob")) { pgsPop("pgsinfo"); return; }
+    if (ev.target.closest("#pgs-focus")) { pagesFocus(!pgs.focus); return; }
+    if (ev.target.closest("#pgs-del")) { pgsPop("pgsmenu", false); pagesDelete(); return; }
     if (ev.target.closest("#pgs-new")) { pgs.reload = true; renderPageView(); return; }
     if (!ev.target.closest("#pgs-copy")) return;
+    pgsPop("pgsmenu", false);
     const r = pgs.route, base = pgs.pagesUrl || pgs.publicUrl || location.origin;
     const link = base + "/p/" + r.id + (r.ver ? "/" + r.ver : "");
     if (await copyText(link)) toast("Link copied"); else toast(link);

@@ -231,7 +231,7 @@ await check("markdown: rendered in the sandbox, its script and handler do nothin
   const lk = await fr.locator('#out a[href^="https://example.com"]').evaluate((a) => [a.target, a.rel, a.textContent]);
   if (lk[0] !== "_blank" || !/noopener/.test(lk[1]) || lk[2] !== "the dashboard") throw new Error("external link: " + lk);
   // two versions were published: the picker shows both
-  const opts = await page.locator("#pgs-ver option").allInnerTexts();
+  const opts = await page.locator("#pgs-ver option").allTextContents();
   if (opts.length !== 2 || !/latest/.test(opts[0])) throw new Error("versions: " + opts);
   await shot("pages-markdown-1280");
 });
@@ -411,6 +411,7 @@ await check("version pill: a newer version shows as a pill that reloads the fram
   for (let i = 0; i < 60 && !f2; i++) { f2 = frameOf(pages.live); if (f2 && !(await f2.evaluate(() => document.getElementById("v")?.textContent === "version three").catch(() => false))) f2 = null; if (!f2) await page.waitForTimeout(100); }
   if (!f2) throw new Error("the frame did not load version three");
   // a reader who picked version 1 is not moved by a version 3
+  await page.locator("#pgs-menub").click();
   await page.locator("#pgs-ver").selectOption("1");
   await until(page, () => /\/1$/.test(document.querySelector("iframe.pgs-frame").src), null, 5000);
   publish(["-", "--key", "livepage", "--kind", "html"], v1.replace("version one", "version four"));
@@ -511,8 +512,13 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.chart); if (!fr) await page.waitForTimeout(100); }
   await fr.waitForSelector(".bar", { timeout: 8000 });
   await page.waitForTimeout(300);
-  const prov = await page.locator(".pgs-prov").innerText();
+  // Who made it and the sandbox note are behind the (i) button: closed at first, one tap away.
+  if (await page.locator("#pgs-infopop").isVisible()) throw new Error("the info popover opened by itself");
+  await page.locator("#pgs-infob").click();
+  const prov = await page.locator("#pgs-infopop").innerText();
   if (!/Published by .*w2:p1/.test(prov) || !/sandbox/.test(prov)) throw new Error("provenance: " + prov);
+  await page.keyboard.press("Escape");
+  if (await page.locator("#pgs-infopop").isVisible()) throw new Error("Escape did not close the info popover");
   await shot("pages-open-1280");
   // filter
   await page.locator("#pgs-q").fill("failover");
@@ -593,6 +599,8 @@ await check("open session: a Page made in an indexed session names it per versio
     await page.setViewportSize({ width: w, height: h });
     await page.goto("about:blank");
     await page.goto(base + "/#/pages/" + pages.chart, { waitUntil: "load" });
+    await page.waitForSelector("#pgs-infob", { timeout: 8000 });
+    await page.locator("#pgs-infob").click();
     await page.waitForSelector("#pgs-opensess", { timeout: 8000 });
     const t = await page.locator("#pgs-made").innerText();
     if (!/Made in Retry the upgrade smoke check/.test(t) || !/turn 22/.test(t) || !/Open session/.test(t)) throw new Error("strip: " + t);
@@ -602,6 +610,7 @@ await check("open session: a Page made in an indexed session names it per versio
     await page.screenshot({ path: `${out}/pages-opensession-${tag}.png` });
   }
   await page.setViewportSize({ width: 1280, height: 800 });
+  if (!(await page.locator("#pgs-opensess").isVisible())) await page.locator("#pgs-infob").click();
   await page.locator("#pgs-opensess").click();
   // (waitForFunction evals a string, which this page's CSP refuses: poll with evaluate.)
   const poll = async (fn, what) => { for (let i = 0; i < 80; i++) { if (await page.evaluate(fn)) return; await page.waitForTimeout(100); } throw new Error("timed out: " + what); };
@@ -740,6 +749,7 @@ await check("links: a to-do link to a page opens it in the app; delete asks and 
   // delete: the app asks first
   let asked = "";
   page.once("dialog", (d) => { asked = d.message(); d.accept(); });
+  await page.locator("#pgs-menub").click();
   await page.locator("#pgs-del").click();
   await until(page, (id) => !document.querySelector(`.pgs-card[data-id="${id}"]`), pages.secret, 5000);
   if (!/Delete/.test(asked)) throw new Error("no confirmation: " + asked);
