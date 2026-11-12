@@ -120,6 +120,10 @@
     v["secret-bg"] = rgba(v.orange, 0.12);
     v["sh-md"] = dark ? "rgba(0, 0, 0, 0.35)" : "rgba(30, 40, 70, 0.14)";
     v["sh-lg"] = dark ? "rgba(0, 0, 0, 0.5)" : "rgba(30, 40, 70, 0.22)";
+    // Scrollbar thumb: a quiet mix of muted and the page, but never under 3:1 (UI level) on the page or the cards.
+    { let t = 0.55, c = mix(v.muted, bg, t);
+      while (t < 1 && (contrast(c, bg) < 3.2 || contrast(c, panel) < 3.2)) { t += 0.05; c = mix(v.muted, bg, t); }
+      v["scroll-thumb"] = c; }
     // Selection and the focus ring follow the primary accent.
     v.selection = tint(v.blue, bg, dark ? 0.35 : 0.25, text);
     v.focus = v.blue;
@@ -139,7 +143,7 @@
     "chip-blue": "#14202f", "chip-purple": "#241a30", "chip-red": "#2f1414", "chip-green": "#12261c",
     "chip-finished": "#1d1730", "chip-cand": "#132a1c", "chip-rtr": "#2e1d10", "chip-landing": "#102a2c", "chip-yellow": "#2a2412",
     "secret-bg": "rgba(251,146,60,.12)", "sh-md": "rgba(0, 0, 0, 0.35)", "sh-lg": "rgba(0, 0, 0, 0.5)",
-    selection: "#2b4a7a", focus: "#60a5fa",
+    selection: "#2b4a7a", focus: "#60a5fa", "scroll-thumb": "#666b77",
   };
   const comebyeLight = {
     bg: "#f3f4f7", panel: "#ffffff", panel2: "#eceef3", border: "#d3d7e0", text: "#1a1d26", muted: "#596072",
@@ -153,7 +157,7 @@
     "chip-blue": "#e3edfb", "chip-purple": "#f0e6fb", "chip-red": "#fbe6e6", "chip-green": "#e0f3e6",
     "chip-finished": "#efe6fb", "chip-cand": "#e0f3e6", "chip-rtr": "#fcebdb", "chip-landing": "#dcf3f0", "chip-yellow": "#fbf0d0",
     "secret-bg": "rgba(168,74,6,.1)", "sh-md": "rgba(30, 40, 70, 0.14)", "sh-lg": "rgba(30, 40, 70, 0.22)",
-    selection: "#d6e6fb", focus: "#1c58b8",
+    selection: "#d6e6fb", focus: "#1c58b8", "scroll-thumb": "#7f8593",
   };
 
   const THEMES = [

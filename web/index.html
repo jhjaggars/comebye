@@ -62,6 +62,16 @@
     html[data-font="geist"] :is(pre, code, kbd, samp) { font-family: var(--ff-code); }
     ::selection { background: var(--selection); }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    /* Scrollbars: thin, a quiet thumb and no track, wherever the OS draws classic ones (a Mac with "Show scroll bars: Always", or a mouse).
+       Overlay scrollbars (a trackpad) are not touched. A strip that hides its own scrollbar keeps doing so (it is more specific). */
+    * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+    @supports not (scrollbar-color: auto) {
+      ::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+      ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+      ::-webkit-scrollbar-button { display: none; }
+      ::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: var(--r-pill); border: 2px solid transparent; background-clip: padding-box; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: padding-box; }
+    }
     html, body { margin: 0; height: 100%; }
     :focus-visible { outline: var(--ring); outline-offset: var(--ring-off); }
     body {

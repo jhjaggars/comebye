@@ -44,6 +44,7 @@ const TEXT = [
   ...["blue", "orange", "green", "purple", "red", "yellow", "teal"].flatMap((c) => [[c, "bg", AA, c + " text"], [c, "panel", AA, c + " text on cards"], [c, "panel2", AA, c + " text on raised"]]),
   // Non-text: the focus ring and the status dots (working=blue, idle=muted, blocked=orange, done=green, error=red).
   ["focus", "bg", UI, "focus ring"], ["focus", "panel", UI, "focus ring on cards"],
+  ["scroll-thumb", "bg", UI, "scrollbar thumb"], ["scroll-thumb", "panel", UI, "scrollbar thumb on cards"],
   ...["blue", "orange", "green", "red"].flatMap((c) => [[c, "bg", UI, c + " status dot"], [c, "panel", UI, c + " status dot on cards"]]),
   ["muted", "bg", UI, "idle status dot"],
 ];
