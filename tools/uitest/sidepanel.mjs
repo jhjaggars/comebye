@@ -159,8 +159,8 @@ for (const width of [1440, 390]) {
   await check(`${tag}: Copy file and Copy path copy the document and where it lives`, async () => {
     const clip = () => page.evaluate(() => navigator.clipboard.readText());
     await page.locator("#sp-cpfile:not([disabled])").waitFor();
-    const h = await page.locator("#sp-cpfile").evaluate((e) => e.getBoundingClientRect().height);
-    if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+    await page.locator("#sp-cpfile").waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.querySelector("#sp-cpfile").getBoundingClientRect().height >= 35.5, null, { timeout: 4000 }).catch(() => { throw new Error("tap target never reached 36px high: " + "#sp-cpfile"); });
     await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
     await page.locator("#sp-cpfile").click();
     await page.waitForFunction(() => document.querySelector("#sp-cpfile").textContent === "Copied");
@@ -197,8 +197,8 @@ for (const width of [1440, 390]) {
     if (!(await df.evaluate((d) => d.open))) await df.locator("summary").click();
     const b = df.locator(".hk-cp").first();
     await b.waitFor();
-    const h = await b.evaluate((e) => e.getBoundingClientRect().height);
-    if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+    await b.waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.querySelector(".hk-cp").getBoundingClientRect().height >= 35.5, null, { timeout: 4000 }).catch(() => { throw new Error("hunk Copy never reached 36px high"); });
     await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
     await b.click();
     await page.waitForFunction(() => [...document.querySelectorAll(".hk-cp")].some((x) => x.textContent === "Copied"));
