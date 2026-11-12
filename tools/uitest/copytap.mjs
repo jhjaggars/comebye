@@ -145,6 +145,46 @@ await check("chat: Copy under a message copies its Markdown source (yours and th
   same(sz, false, "page scrolls sideways");
 });
 
+// ---- slice 4: copy what a tool ran, a hub check, a terminal snapshot ----
+await check("chat: a tool card copies the command and the result", async () => {
+  const msgs = [
+    { id: "tc1", kind: "tool", tool: "Bash", args: "go test ./internal/upgrade/", result: "ok  \tgithub.com/x/upgrade\t0.412s\nok  \tgithub.com/x/other\t0.2s", ms: 412 },
+    { id: "tc2", kind: "tool", tool: "Bash", args: "comebye upgrade --smoke-only", result: "smoke: dial tcp 10.0.0.7:443: connection refused", err: true, ms: 9 },
+  ];
+  await page.route(/\/transcript\?/, (r) => r.fulfill({ json: { messages: msgs, total: 2, more: false, format: "claude" } }));
+  await page.goto(base + "/#/agent/" + encodeURIComponent("w1:p1"), { waitUntil: "load" });
+  const card = page.locator('#chat .toolcard[data-id="tc1"]');
+  await card.waitFor({ timeout: 8000 });
+  await card.locator("summary").click();
+  const cmd = card.locator('.cpb[data-copy-target=".toolargs"]');
+  const h = await cmd.evaluate((e) => e.getBoundingClientRect().height);
+  if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+  await sentinel(); await cmd.click(); await page.waitForTimeout(300);
+  same(await clip(), "go test ./internal/upgrade/", "command");
+  await page.waitForTimeout(1600);
+  await sentinel(); await card.locator('.cpb[data-copy-target=".toolresult"]').click(); await page.waitForTimeout(300);
+  same(await clip(), "ok  \tgithub.com/x/upgrade\t0.412s\nok  \tgithub.com/x/other\t0.2s", "result, with its line break and tab");
+  same(await card.evaluate((d) => d.open), true, "the card stays open");
+  await page.unroute(/\/transcript\?/);
+});
+
+await check("answer card: Copy screen copies the terminal snapshot", async () => {
+  const agents = await fetch(base + "/api/agents").then((r) => r.json());
+  const list = Array.isArray(agents) ? agents : agents.agents || [];
+  const blocked = list.find((a) => a.name === "needs-input" || /needs-input/.test(a.workspace_label || a.label || ""));
+  if (!blocked) throw new Error("no needs-input agent in the fake fleet: " + JSON.stringify(list.map((a) => a.name || a.id)));
+  await page.goto("about:blank");
+  await page.goto(base + "/#/agent/" + encodeURIComponent(blocked.pane_id || blocked.id.split("/").pop()), { waitUntil: "load" });
+  await page.waitForSelector("#answer-snap", { state: "attached", timeout: 8000 });
+  const b = page.locator('.cpb[data-copy-target="#answer-snap"]');
+  if (!(await b.isVisible())) await page.locator(".ans-more summary").click();
+  await b.waitFor({ state: "visible" });
+  const want = (await page.locator("#answer-snap").evaluate((e) => e.innerText)).replace(/\n+$/, "");
+  if (!want) throw new Error("the snapshot is empty");
+  await sentinel(); await b.click(); await page.waitForTimeout(300);
+  same(await clip(), want, "snapshot");
+});
+
 // ---- the same on a desktop-size window ----
 const desk = await launch({ width: 1280, height: 800, dark });
 await desk.ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(base).origin });
@@ -170,6 +210,28 @@ await dcheck("the To do item id and an inline path copy", async (pg) => {
 });
 
 const REPORT = "## Summary\nFixed the **rail dot**.\n\n```sh\ngo test ./...\n```\n\nCommit `0badc0de1`.";
+await dcheck("the hub-check block copies its lines", async (pg) => {
+  await pg.route(/\/api\/ledger$/, async (r) => {
+    const j = await (await r.fetch()).json();
+    j.entries = [...(j.entries || []), { id: "cpfx", host: "uitest", repo_name: "comebye", branch: "fix/rail-dot", agent_name: "fix-rail-dot", status: "finished",
+      created_at: new Date(Date.now() - 3600e3).toISOString(), finished_at: new Date(Date.now() - 600e3).toISOString(), final_report: "Pushed.", live: { present: false } }];
+    r.fulfill({ json: j });
+  });
+  await pg.route(/\/api\/ledger\/cpfx\/hubcheck$/, (r) => r.fulfill({ json: { id: "cpfx", contradictions: 1, items: [
+    { kind: "pushed", state: "bad", text: "the report says pushed, but 2 commit(s) are on no remote" },
+    { kind: "ci", state: "ok", text: "CI is green for the head 9f3c2a1d7e4b" }] } }));
+  await pg.goto("about:blank");
+  await pg.goto(base + "/#/status", { waitUntil: "load" });
+  await pg.locator('#ps-body details[data-id="cpfx"] summary').click();
+  const b = pg.locator('#ps-body details[data-id="cpfx"] .hubchk .cpb');
+  await b.waitFor();
+  await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
+  await b.click(); await pg.waitForTimeout(300);
+  const got = await dclip();
+  if (!/1 claim in the report contradicts what the hub found\n/.test(got) || !/the report says pushed, but 2 commit\(s\) are on no remote\n/.test(got) || !/CI is green/.test(got) || /Copy|[✓✗]/.test(got)) throw new Error("hub check text: " + JSON.stringify(got));
+  await pg.unroute(/\/api\/ledger$/); await pg.unroute(/\/api\/ledger\/cpfx\/hubcheck$/);
+});
+
 await dcheck("a Status report has Copy report that copies its Markdown", async (pg) => {
   await pg.route(/\/api\/ledger$/, async (r) => {
     const j = await (await r.fetch()).json();
@@ -177,9 +239,12 @@ await dcheck("a Status report has Copy report that copies its Markdown", async (
       created_at: new Date(Date.now() - 3600e3).toISOString(), finished_at: new Date(Date.now() - 600e3).toISOString(), final_report: REPORT, live: { present: false } }];
     r.fulfill({ json: j });
   });
+  await pg.goto("about:blank");
   await pg.goto(base + "/#/status", { waitUntil: "load" });
-  await pg.locator('#ps-body details[data-id="cpfx"] summary').click();
-  const b = pg.locator('#ps-body details[data-id="cpfx"] .cpb');
+  const sm = pg.locator('#ps-body details[data-id="cpfx"] summary');
+  await sm.waitFor();
+  if (!(await pg.locator('#ps-body details[data-id="cpfx"]').evaluate((d) => d.open))) await sm.click();
+  const b = pg.locator('#ps-body details[data-id="cpfx"] .cpb-rep');
   await b.waitFor();
   const open = await pg.locator('#ps-body details[data-id="cpfx"]').evaluate((d) => d.open);
   same(open, true, "pressing Copy report must not close the report");

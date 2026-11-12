@@ -70,7 +70,8 @@ await check(`the real CLI declares the document (${(PLAN_SIZE / 1024).toFixed(0)
 
 for (const width of [1440, 390]) {
   const desk = width > 500;
-  const { browser, page } = await launch({ width, height: desk ? 900 : 844, dark });
+  const { browser, ctx, page } = await launch({ width, height: desk ? 900 : 844, dark });
+  await ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(base).origin });
   const consoleErrs = [];
   page.on("console", (m) => { if (m.type() === "error") consoleErrs.push(m.text()); });
   page.on("pageerror", (e) => consoleErrs.push(String(e)));
@@ -155,6 +156,24 @@ for (const width of [1440, 390]) {
     await noOverflow("doc after picks");
   });
 
+  await check(`${tag}: Copy file and Copy path copy the document and where it lives`, async () => {
+    const clip = () => page.evaluate(() => navigator.clipboard.readText());
+    await page.locator("#sp-cpfile:not([disabled])").waitFor();
+    const h = await page.locator("#sp-cpfile").evaluate((e) => e.getBoundingClientRect().height);
+    if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+    await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
+    await page.locator("#sp-cpfile").click();
+    await page.waitForFunction(() => document.querySelector("#sp-cpfile").textContent === "Copied");
+    const got = await clip();
+    if (got !== plan) throw new Error(`Copy file: ${got.length} bytes, want the ${plan.length} of the file; starts ${JSON.stringify(got.slice(0, 40))}`);
+    await page.waitForFunction(() => document.querySelector("#sp-cpfile").textContent === "Copy file", null, { timeout: 4000 });
+    await page.locator("#sp-cppath").click();
+    await page.waitForFunction(() => document.querySelector("#sp-cppath").textContent === "Copied");
+    const p = await clip();
+    if (!/docs\/plan\.md$/.test(p)) throw new Error("Copy path: " + JSON.stringify(p));
+    await page.screenshot({ path: `${out}/sidepanel-copydoc-${tag}.png` });
+  });
+
   await check(`${tag}: the Diff tab lists unstaged, staged, untracked and committed files; secrets are hidden, .env is withheld`, async () => {
     await page.locator("#sp-tab-diff").click();
     await page.waitForSelector("#sp-body details.df", { timeout: 10000 });
@@ -170,6 +189,20 @@ for (const width of [1440, 390]) {
     if (!/\d+/.test(await page.locator("#sp-n").innerText())) throw new Error("no badge");
     await noOverflow("diff");
     await page.screenshot({ path: `${out}/sidepanel-diff-${tag}.png` });
+  });
+
+  await check(`${tag}: Copy on a hunk copies its unified diff`, async () => {
+    const df = page.locator('#sp-body details.df[data-key$="|a.go"]');
+    if (!(await df.evaluate((d) => d.open))) await df.locator("summary").click();
+    const b = df.locator(".hk-cp").first();
+    await b.waitFor();
+    const h = await b.evaluate((e) => e.getBoundingClientRect().height);
+    if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+    await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
+    await b.click();
+    await page.waitForFunction(() => [...document.querySelectorAll(".hk-cp")].some((x) => x.textContent === "Copied"));
+    const got = await page.evaluate(() => navigator.clipboard.readText());
+    if (!/^@@ -\d+(,\d+)? \+\d+(,\d+)? @@\n/.test(got) || !/^\+.*func A\(\) \{ println/m.test(got) || !/^-func A\(\) \{\}$/m.test(got)) throw new Error("hunk text: " + JSON.stringify(got.slice(0, 200)));
   });
 
   await check(`${tag}: editing a file shows in the open Diff within seconds`, async () => {

@@ -357,6 +357,7 @@
       html = `<select id="sp-file" aria-label="Document">${opts}</select>
         <select id="sp-toc" aria-label="Jump to a section"${heads.length ? "" : " disabled"}><option value="">Sections…</option>${heads.map((h, i) => `<option value="${i}">${esc("\u00a0\u00a0".repeat(Math.max(0, +h.tagName[1] - 1)) + hText(h))}</option>`).join("")}</select>
         <form id="sp-path-form" class="sp-pathf"><input id="sp-path" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Open a file: docs/plan.md" aria-label="Path of a file in the worktree"><button type="submit">Open</button></form>
+        <button type="button" id="sp-cpfile"${st.doc ? "" : " disabled"}>Copy file</button><button type="button" id="sp-cppath"${st.doc ? "" : " disabled"}>Copy path</button>
         <span class="live${st.docErr ? " off" : ""}" id="sp-live" data-push="${st.live ? 1 : 0}">${st.docErr ? "not updating" : st.doc ? "live · " + (Date.now() - st.docAt < 4000 ? "just updated" : "checked " + ago(st.docAt)) : "live"}</span>`;
     } else {
       const d = st.diff;
@@ -421,6 +422,12 @@
         st.split = !st.split;
         remember({ split: st.split });
         renderBar(); renderBody({ keepScroll: true });
+        return;
+      }
+      const cp = e.target.closest("#sp-cpfile, #sp-cppath");
+      if (cp && st.doc) {
+        const txt = cp.id === "sp-cpfile" ? st.doc.content || "" : st.doc.rel || st.doc.path || "";
+        flashCopy(cp, txt);
         return;
       }
       if (e.target.id === "sp-fold" && st.diff) {
@@ -660,7 +667,7 @@
     else {
       const split = st.split && st.wide;
       if (open) hlWant([langOf(f.path)]);
-      inner = parseHunks(f.diff).map((h, j) => { if (open) colour(f.path, h); return `<div class="hk"><span>${esc(h.head)}</span><button type="button" data-send="${escAttr(key)}:${j}" aria-label="Send this hunk of ${escAttr(f.path)} to the agent">Send to agent</button></div><div class="code${split ? " split" : ""}">${hunkRows(h, split)}</div>`; }).join("");
+      inner = parseHunks(f.diff).map((h, j) => { if (open) colour(f.path, h); return `<div class="hk"><span>${esc(h.head)}</span><button type="button" class="hk-cp" data-copyhunk="${escAttr(key)}:${j}" aria-label="Copy this hunk of ${escAttr(f.path)}">Copy</button><button type="button" data-send="${escAttr(key)}:${j}" aria-label="Send this hunk of ${escAttr(f.path)} to the agent">Send to agent</button></div><div class="code${split ? " split" : ""}">${hunkRows(h, split)}</div>`; }).join("");
     }
     return `<details class="df" data-key="${escAttr(key)}"${open ? " open" : ""}><summary><span class="p" title="${escAttr(f.path)}">${esc(f.path)}</span>${tag}<span class="ad">+${f.add}</span><span class="dl">−${f.del}</span></summary>${inner}</details>`;
   }
@@ -680,6 +687,8 @@
       if (ld) { loadFile(ld.dataset.load); return; }
       const send = e.target.closest("[data-send]");
       if (send) sendHunk(send.dataset.send);
+      const cph = e.target.closest("[data-copyhunk]");
+      if (cph) { const h = hunkOf(cph.dataset.copyhunk); if (h) flashCopy(cph, hunkBody(h.h)); }
     });
   }
 
@@ -708,17 +717,34 @@
     setTimeout(() => el.classList.remove("flash"), 1700);
   }
 
-  function sendHunk(ref) {
+  // Copy: the button says Copied (or Not copied) for 1.5 s. copyText is app.js's.
+  function flashCopy(btn, txt) {
+    if (btn.dataset.label == null) btn.dataset.label = btn.textContent;
+    copyText(txt).then((ok) => {
+      clearTimeout(btn._t);
+      btn.textContent = ok ? "Copied" : "Not copied";
+      if (!ok) toast("Could not copy", true);
+      btn._t = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1500);
+    });
+  }
+  function hunkOf(ref) {
     const i = ref.lastIndexOf(":");
     const key = ref.slice(0, i), j = +ref.slice(i + 1);
     const [sec, ...rest] = key.split("|");
     const f0 = st.diff && st.diff.sections.filter((s) => s.key === sec).flatMap((s) => s.files).find((x) => x.path === rest.join("|"));
     const f = f0 && st.loaded.has(key) ? st.loaded.get(key) : f0;
     const h = f && f.diff ? parseHunks(f.diff)[j] : null;
-    if (!h) return;
+    return h ? { f, h } : null;
+  }
+  const hunkBody = (h) => h.head.replace(/ @@.*/, " @@") + "\n" + h.rows.map((r) => (r.t === "\\" ? "\\ " : r.t) + r.s).join("\n");
+
+  function sendHunk(ref) {
+    const x = hunkOf(ref);
+    if (!x) return;
+    const { f, h } = x;
     const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(h.head);
     const range = m ? (+(m[4] ?? 1) > 1 ? `lines ${m[3]}\u2013${+m[3] + +m[4] - 1}` : `line ${m[3]}`) : "";
-    const body = h.head.replace(/ @@.*/, " @@") + "\n" + h.rows.map((r) => (r.t === "\\" ? "\\ " : r.t) + r.s).join("\n");
+    const body = hunkBody(h);
     const txt = `About this change in ${f.path}${range ? " (" + range + ")" : ""}:\n\`\`\`diff\n${body}\n\`\`\`\n\n`;
     const box = $("prompt-text");
     if (!box) return;

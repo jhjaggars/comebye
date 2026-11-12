@@ -363,11 +363,15 @@
     .cp[data-state="fail"] { color: var(--red); }
     /* Copy button for a bigger piece (copyBtnHtml in app.js): a message, a report, a to-do. 36px tall, always visible. */
     .cpb { font-family: inherit; font-weight: 600; font-size: var(--fs-12); color: var(--blue); background: none; border: 0; border-radius: var(--r-8); padding: 0 var(--sp-10); min-height: 36px; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .cpb[hidden] { display: none; }
     .cpb:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
     .cpb[data-state="ok"] { color: var(--green); }
     .cpb[data-state="fail"] { color: var(--red); }
     .cpb-msg { font-size: var(--fs-11); margin: -10px 0; padding: 0 var(--sp-8); }
     .cpb-rep { margin: 0 0 var(--sp-4) calc(var(--sp-10) * -1); }
+    .cpb-out { display: block; margin: 0 0 var(--sp-2); }
+    .tool-cp { display: flex; flex-wrap: wrap; margin: 0 0 var(--sp-2); }
+    .hc-cp { margin: var(--sp-2) 0 0; }
     .td-cprow { margin: var(--sp-4) 0 0 calc(var(--sp-10) * -1); }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     .md a { color: var(--blue); overflow-wrap: anywhere; }
@@ -2469,6 +2473,7 @@
     #sp .ph .err { color: var(--red); }
     #sp .hk { display: flex; align-items: center; gap: var(--sp-8); padding: var(--sp-2) var(--sp-10); background: var(--panel2); color: var(--muted); font: var(--fs-12) ui-monospace, Menlo, monospace; }
     #sp .hk span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sp .hk button.hk-cp { min-height: var(--hit-36); }
     #sp .hk button { font: inherit; font-size: var(--fs-11); color: var(--blue); background: none; border: 1px solid var(--border); border-radius: var(--r-6); padding: var(--sp-2) var(--sp-8); min-height: 28px; cursor: pointer; }
     #sp .code { overflow-x: auto; }
     #sp .ln { display: grid; grid-template-columns: 38px 38px 1fr; font: var(--fs-12)/1.5 ui-monospace, Menlo, monospace; white-space: pre; min-width: max-content; }

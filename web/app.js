@@ -618,12 +618,30 @@ function copyBtnHtml(key, text, label, aria, cls) {
   if (copySrc.size > 3000) copySrc.delete(copySrc.keys().next().value);
   return `<button type="button" class="cpb${cls ? " " + cls : ""}" data-copy-key="${escAttr(key)}" aria-label="${escAttr(aria || label)}">${esc(label)}</button>`;
 }
+// cpOut: a Copy button for text that is already on the page (a tool call, a
+// log, a snapshot). sel is a CSS selector, looked up from the button outwards:
+// the nearest ancestor that is, or contains, a match. The text is what the user
+// sees (innerText: line breaks and all), minus the button itself.
+function cpOut(sel, label, aria) {
+  return `<button type="button" class="cpb cpb-out" data-copy-target="${escAttr(sel)}" aria-label="${escAttr(aria || label)}">${esc(label)}</button>`;
+}
+function copyTargetText(b) {
+  let el = null;
+  for (let n = b.parentElement; n && !el; n = n.parentElement) el = n.matches(b.dataset.copyTarget) ? n : n.querySelector(b.dataset.copyTarget);
+  if (!el) return null;
+  const hid = [...el.querySelectorAll('.cpb, [aria-hidden="true"]')].filter((x) => !x.hidden);
+  hid.forEach((x) => { x.hidden = true; });
+  const t = el.innerText;
+  hid.forEach((x) => { x.hidden = false; });
+  return t.replace(/\n+$/, "");
+}
 document.addEventListener("click", (ev) => {
   const b = ev.target.closest && ev.target.closest(".cpb");
   if (!b) return;
   ev.preventDefault(); ev.stopPropagation(); // inside a <summary> this must not toggle it
-  const text = copySrc.get(b.dataset.copyKey);
+  const text = b.dataset.copyTarget ? copyTargetText(b) : copySrc.get(b.dataset.copyKey);
   if (text == null) { toast("Nothing to copy: reload the page", true); return; }
+  if (text === "") { toast("Nothing to copy yet"); return; }
   if (b.dataset.label == null) b.dataset.label = b.textContent;
   copyText(text).then((ok) => {
     clearTimeout(b._t);
@@ -2326,10 +2344,10 @@ function relDeployOut(rc, label) {
     const nm = esc(label.toLowerCase());
     if (rc.state === "failed") {
       const tail = lines.slice(-15), more = lines.length > tail.length;
-      h += `<pre class="rel-deptail">${esc(tail.join("\n"))}</pre>`;
-      if (more) h += `<details class="rel-changes"><summary>Show all ${nm} output (${lines.length} lines)</summary><pre>${esc(lines.join("\n"))}</pre></details>`;
+      h += cpOut(".rel-deptail", "Copy", "Copy the output") + `<pre class="rel-deptail">${esc(tail.join("\n"))}</pre>`;
+      if (more) h += `<details class="rel-changes"><summary>Show all ${nm} output (${lines.length} lines)</summary>${cpOut("pre", "Copy", "Copy the output")}<pre>${esc(lines.join("\n"))}</pre></details>`;
     } else if (lines.length > 1 || lines[0] !== head) {
-      h += `<details class="rel-changes"><summary>Show ${nm} output</summary><pre>${esc(lines.join("\n"))}</pre></details>`;
+      h += `<details class="rel-changes"><summary>Show ${nm} output</summary>${cpOut("pre", "Copy", "Copy the output")}<pre>${esc(lines.join("\n"))}</pre></details>`;
     }
   }
   return h + `</div>`;
@@ -2493,7 +2511,7 @@ function relCardHtml(d) {
     h += `<details class="rel-changes"><summary>Release notes: ${ck.changes.length} change${ck.changes.length === 1 ? "" : "s"} since ${esc(ck.previous || "the start")}</summary><ul>${ck.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details>`;
   }
   if (rl.state === "failed" && rl.error) h += `<div class="rel-block" role="alert">The last try failed: ${esc(rl.error)}</div>`;
-  if (rl.dry_run) h += `<details class="rel-changes"><summary>Last dry run</summary><pre>${esc(rl.dry_run)}</pre></details>`;
+  if (rl.dry_run) h += `<details class="rel-changes"><summary>Last dry run</summary>${cpOut("pre", "Copy", "Copy the dry run output")}<pre>${esc(rl.dry_run)}</pre></details>`;
   if (d.build_error) h += `<div class="rel-note">Build status unknown: ${esc(d.build_error)}</div>`;
   if (d.deploy_error) h += `<div class="rel-note">Deploy status unknown: ${esc(d.deploy_error)}</div>`;
 
@@ -6449,7 +6467,7 @@ function hubChkHTML(h) {
   const n = h.contradictions || 0;
   const head = n ? `${n} claim${n === 1 ? "" : "s"} in the report contradict${n === 1 ? "s" : ""} what the hub found` : "Hub-checked";
   const rows = h.items.map((i) => `<li class="${escAttr(i.state)}"><span class="hc-m" aria-hidden="true">${HUBCHK_MARK[i.state] || "·"}</span><span>${i.state === "bad" ? '<span class="vh">Contradicts: </span>' : ""}${esc(i.text)}</span></li>`).join("");
-  return `<div class="hc-h">${esc(head)}</div>${h.note ? `<div class="hc-n">${esc(h.note)}</div>` : ""}<ul>${rows}</ul>`;
+  return `<div class="hc-h">${esc(head)}</div>${h.note ? `<div class="hc-n">${esc(h.note)}</div>` : ""}<ul>${rows}</ul><div class="hc-cp">${cpOut(".hubchk", "Copy", "Copy the hub's checks")}</div>`;
 }
 
 function showHubChk(id) {
@@ -9010,6 +9028,7 @@ function renderMessage(m) {
         `<summary><span class="toolname">${esc(m.tool || "tool")}</span>` +
         `<span class="toolargs">${esc(m.args || "")}</span>` +
         `<span class="toolmeta">${esc(meta)}</span></summary>` +
+        `<div class="tool-cp">${cpOut(".toolargs", "Copy command", "Copy what the agent ran")}${cpOut(".toolresult", "Copy result", "Copy the result")}</div>` +
         `<div class="toolresult">${esc(toolResultText(m))}</div>`;
       return d;
     }
@@ -9240,7 +9259,7 @@ function answerCardHTML(a, d) {
   if (usable) {
     if (d.header) html += `<span class="ans-chip">${esc(d.header)}</span>`;
     if (d.title) html += `<div class="ans-title">${esc(d.title)}</div>`;
-    if (d.detail) html += `<pre class="ans-detail">${esc(d.detail)}</pre>`;
+    if (d.detail) html += cpOut(".ans-detail", "Copy", "Copy the details") + `<pre class="ans-detail">${esc(d.detail)}</pre>`;
     if (d.note) html += `<div class="ans-note" role="status">${esc(d.note)}</div>`;
     if (d.question) html += `<div class="ans-q">${esc(d.question)}</div>`;
     const h = dialogHints(d);
@@ -9305,7 +9324,7 @@ function answerCardHTML(a, d) {
   html += `<div class="ans-hint">${esc(dialogHints(usable ? d : null).pad)}</div>`;
   html += '<div class="pad">' + PAD_KEYS.map(([label, key]) =>
     `<button type="button" class="btn${key === "esc" ? " warn" : ""}" data-key="${esc(key)}">${esc(label)}</button>`).join("") + "</div>";
-  html += `<pre class="snap" id="answer-snap">${esc(answer.snapText)}</pre></details>`;
+  html += cpOut("#answer-snap", "Copy screen", "Copy what the agent's terminal shows") + `<pre class="snap" id="answer-snap">${esc(answer.snapText)}</pre></details>`;
   return html;
 }
 
