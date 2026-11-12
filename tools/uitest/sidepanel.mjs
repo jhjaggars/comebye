@@ -303,6 +303,7 @@ for (const width of [1440, 390]) {
     const held = [];
     await page.route(/\/file(\?|$)/, (r) => held.push(r)); // hold the Doc loads: one is then in flight
     fs.appendFileSync(path.join(wt, "c.go"), "// race-marker\n");
+    fs.appendFileSync(path.join(wt, "docs/plan.md"), "\n<!-- race-marker -->\n"); // a push for the Doc tab too (polls are slow while the push stream is up)
     const t0 = Date.now();
     while (!held.length && Date.now() - t0 < 6000) await sleep(50); // the Doc poll
     if (!held.length) throw new Error("no Doc load came in 6 s");
@@ -316,8 +317,103 @@ for (const width of [1440, 390]) {
     if (ms > 800) throw new Error(`the Diff took ${ms} ms to load after the Doc load ended`);
   });
 
+  await check(`${tag}: the hub pushes changes: the panel is "live", sits idle between pushes, and an edit shows before a 3 s poll could`, async () => {
+    await page.locator("#sp-tab-diff").click();
+    await page.waitForSelector("#sp-body details.df", { timeout: 10000 });
+    await page.waitForSelector('#sp-live[data-push="1"]', { timeout: 8000 });
+    let reads = 0;
+    const count = (req) => { if (/\/(diff|file)(\?|$)/.test(req.url())) reads++; };
+    page.on("request", count);
+    await sleep(7000); // two polls and more would have been made without the stream
+    page.off("request", count);
+    if (reads > 0) throw new Error(`${reads} reads while nothing changed and the push stream was up`);
+    const t0 = Date.now();
+    fs.appendFileSync(path.join(wt, "c.go"), "// pushed-marker\n");
+    await page.waitForFunction(() => /pushed-marker/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 5000 });
+    const ms = Date.now() - t0;
+    if (ms > 2800) throw new Error(`the edit took ${ms} ms to show`);
+    console.log(`     (push latency ${ms} ms)`);
+  });
+
+  await check(`${tag}: when the push stream is cut the panel says so and falls back to its 3 s poll`, async () => {
+    await page.route(/\/panel\/events/, (r) => r.abort());
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector("#detail", { state: "visible" }); // on a phone the reload keeps the agent open
+    await page.waitForSelector("#sp-body details.df", { timeout: 10000 });
+    await sleep(600);
+    if ((await page.locator("#sp-live").getAttribute("data-push")) !== "0") throw new Error("still says pushed");
+    fs.appendFileSync(path.join(wt, "c.go"), "// polled-marker\n");
+    await page.waitForFunction(() => /polled-marker/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 9000 });
+    await page.unroute(/\/panel\/events/);
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForSelector('#sp-live[data-push="1"]', { timeout: 10000 });
+  });
+
+  await check(`${tag}: Go in the diff is syntax-coloured (vendored highlighter, from our own origin), with the text unchanged and nothing from the file run as HTML`, async () => {
+    w("evil.go", 'package evil\n\nfunc Bad() string { return "<img src=x onerror=window.pwned=1>" } // <script>window.pwned=1</script>\n');
+    await page.waitForSelector('#sp-body details.df[data-key$="|evil.go"]', { timeout: 9000 });
+    const d = page.locator('#sp-body details.df[data-key$="|evil.go"]');
+    if (!(await d.evaluate((e) => e.open))) await d.locator("summary").click();
+    await d.locator(".hljs-keyword").first().waitFor({ timeout: 8000 });
+    const colours = await d.evaluate((e) => { const k = e.querySelector(".hljs-keyword"), c = e.querySelector(".hljs-comment"); return [k && getComputedStyle(k).color, c && getComputedStyle(c).color, getComputedStyle(e.querySelector(".ln.add b")).color]; });
+    if (!colours[0] || colours[0] === colours[2]) throw new Error("keyword colour is not distinct: " + colours.join());
+    const line = await d.locator(".ln.add b").nth(2).innerText();
+    if (!line.includes('func Bad() string { return "<img src=x onerror=window.pwned=1>" }')) throw new Error("text changed: " + line);
+    if (await page.evaluate(() => !!window.pwned || !!document.querySelector("#sp-body img, #sp-body script"))) throw new Error("file text ran as HTML");
+    await noOverflow("coloured diff");
+    await page.screenshot({ path: `${out}/sidepanel-hl-${tag}.png` });
+    fs.rmSync(path.join(wt, "evil.go"), { force: true });
+  });
+
+  if (desk) {
+    await check(`${tag}: side by side appears when the panel is wide: old text left, new text right, on the same rows`, async () => {
+      if (await page.locator("#sp-split").count()) throw new Error("offered in a narrow panel");
+      await page.setViewportSize({ width: 1800, height: 900 });
+      await page.evaluate(() => { document.querySelector("#detail").style.setProperty("--sp-w", "70%"); });
+      await page.waitForSelector("#sp-split", { timeout: 4000 });
+      await page.locator("#sp-split").click();
+      await page.waitForSelector("#sp-body .code.split .sr", { state: "attached", timeout: 4000 });
+      const a = page.locator('#sp-body details.df[data-key$="|a.go"]');
+      if (!(await a.evaluate((e) => e.open))) await a.locator("summary").click();
+      const pair = await a.evaluate((e) => [...e.querySelectorAll(".sr")].map((r) => [...r.querySelectorAll("b")].map((b) => b.className.split(" ")[0] + ":" + b.textContent.slice(0, 18))).find((p) => p[0].startsWith("del:") && p[1].startsWith("add:")));
+      if (!pair) throw new Error("no row with a removed line left and its replacement right");
+      await noOverflow("split diff");
+      await page.screenshot({ path: `${out}/sidepanel-split-${tag}.png` });
+      await page.evaluate(() => { document.querySelector("#detail").style.setProperty("--sp-w", "30%"); });
+      await sleep(400);
+      if (await page.locator("#sp-body .code.split").count()) throw new Error("two columns in a narrow panel");
+      await page.evaluate(() => { document.querySelector("#detail").style.setProperty("--sp-w", "70%"); });
+      await page.waitForSelector("#sp-body .code.split", { timeout: 4000 });
+      await page.locator("#sp-split").click(); // back to unified
+      await page.waitForSelector("#sp-body .code:not(.split)", { timeout: 4000 });
+      await page.evaluate(() => { document.querySelector("#detail").style.setProperty("--sp-w", "44%"); });
+      await page.setViewportSize({ width, height: 900 });
+    });
+  } else {
+    await check(`${tag}: the phone sheet stays unified (no side-by-side button)`, async () => {
+      if (await page.locator("#sp-split").count()) throw new Error("offered on a phone");
+      if (await page.locator("#sp-body .code.split").count()) throw new Error("two columns on a phone");
+    });
+  }
+
+  await check(`${tag}: "Send to agent" on a hunk puts the file, the line range and the hunk in the prompt, after what was already typed`, async () => {
+    if (await page.locator("#sp-tab-diff").getAttribute("aria-selected") !== "true") await page.locator("#sp-tab-diff").click();
+    await page.locator("#prompt-text").evaluate((e) => { e.textContent = "my note"; e.dispatchEvent(new Event("input", { bubbles: true })); });
+    const a = page.locator('#sp-body details.df[data-key$="|a.go"]');
+    await a.waitFor({ timeout: 8000 });
+    if (!(await a.evaluate((e) => e.open))) await a.locator("summary").click();
+    await a.locator("button[data-send]").first().click();
+    const txt = await page.locator("#prompt-text").innerText();
+    if (!/^my note\n+About this change in a\.go \(lines 1\u20133\):/.test(txt)) throw new Error("prompt: " + JSON.stringify(txt.slice(0, 200)));
+    if (!/```diff\n@@ -1,3 \+1,3 @@/.test(txt) || !/\n-func A\(\) \{\}\n\+func A\(\) \{ println/.test(txt)) throw new Error("hunk missing: " + JSON.stringify(txt.slice(0, 400)));
+    if (!desk && await page.locator("#sp").isVisible()) throw new Error("the sheet still covers the prompt");
+    await page.locator("#prompt-text").evaluate((e) => { e.textContent = ""; e.dispatchEvent(new Event("input", { bubbles: true })); });
+    if (!desk) { await page.locator("#sp-btn").click(); await page.waitForSelector("#sp", { state: "visible" }); }
+  });
+
   await check(`${tag}: no console errors`, async () => {
-    const bad = consoleErrs.filter((e) => !/favicon|Failed to load resource: the server responded with a status of (403|404|415|413)/.test(e));
+    const bad = consoleErrs.filter((e) => !/favicon|net::ERR_FAILED|Failed to load resource: the server responded with a status of (403|404|415|413)/.test(e));
     if (bad.length) throw new Error(bad.join("\n"));
   });
   await browser.close();

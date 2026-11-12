@@ -12,6 +12,10 @@
 (function () {
   "use strict";
   const POLL_MS = 3000;
+  // While the push stream is up, a poll is only a safety net.
+  const SAFETY_MS = 30000;
+  // Side by side needs about this much width in the body (two code columns).
+  const SPLIT_MIN = 760;
   // The Doc panel renders Markdown up to the host's own 1 MB cap (chat bubbles stop at MD_MAX_CHARS).
   const DOC_MD_MAX = 1100000;
   const reduced = () => matchMedia("(prefers-reduced-motion:reduce)").matches;
@@ -21,6 +25,12 @@
     open: false,
     tab: "doc",
     timer: null,
+    es: null,          // EventSource of live pushes (panel/events)
+    esKey: "",
+    live: false,       // the push stream is connected: polls slow down
+    fetchedAt: 0,
+    split: false,      // the user's side-by-side choice (shown only when the panel is wide)
+    wide: false,       // the panel body is wide enough for two columns
     // doc
     pick: null,        // a path the user chose (null: follow the agent's document)
     doc: null,         // last answer of /file for the shown document
@@ -85,7 +95,15 @@
     bindBar($("sp-bar"));
     bindBody($("sp-body"));
     bindGrip($("sp-grip"), det);
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(true); });
+    if (typeof ResizeObserver !== "undefined") { // two columns only when the body is wide enough
+      new ResizeObserver(() => {
+        const w = $("sp-body").clientWidth >= SPLIT_MIN;
+        if (w === st.wide) return;
+        st.wide = w;
+        if (st.open && st.tab === "diff") { renderBar(); if (st.split) renderBody({ keepScroll: true }); }
+      }).observe($("sp-body"));
+    }
+    document.addEventListener("visibilitychange", () => { if (document.hidden) closeStream(); else tick(true); });
   }
 
   // ---- the divider (desktop) ----
@@ -159,6 +177,7 @@
     const m = recall();
     st.open = !!m.open;
     st.tab = m.tab === "diff" ? "diff" : "doc";
+    st.split = !!m.split;
     det.style.setProperty("--sp-w", (m.w || 44) + "%");
     $("sp-grip").setAttribute("aria-valuenow", String(Math.round(m.w || 44)));
     sync();
@@ -167,10 +186,35 @@
 
   // ---- polling: every 3 s while the panel is open, the shown tab only ----
   function start() { if (!st.timer && st.open && st.id) st.timer = setInterval(() => tick(false), POLL_MS); }
-  function stop() { clearInterval(st.timer); st.timer = null; }
+  function stop() { clearInterval(st.timer); st.timer = null; closeStream(); }
+
+  // ---- live push: the hub tells us when the checkout or the document changed ----
+  function closeStream() {
+    if (st.es) { st.es.onopen = st.es.onerror = null; st.es.close(); }
+    st.es = null; st.esKey = "";
+    if (st.live) { st.live = false; renderBar(); }
+  }
+  function syncStream() {
+    const a = st.id && agentById(st.id);
+    if (!st.open || !a || document.hidden || typeof EventSource === "undefined") { closeStream(); return; }
+    const key = st.id + "|" + (st.pick || "");
+    if (st.es && st.esKey === key) return;
+    closeStream();
+    st.esKey = key;
+    const es = new EventSource(`${agentPath(a)}/panel/events` + (st.pick ? "?path=" + encodeURIComponent(st.pick) : ""));
+    st.es = es;
+    es.addEventListener("ready", () => { if (st.es === es) { st.live = true; renderBar(); } });
+    // A push is a reason to look now; the answer is still the usual cheap "unchanged?" read.
+    es.addEventListener("diff", () => { if (st.es === es && st.tab === "diff") tick(true); });
+    es.addEventListener("doc", () => { if (st.es === es && st.tab === "doc") tick(true); });
+    es.onerror = () => { if (st.es === es && st.live) { st.live = false; renderBar(); } }; // EventSource reconnects by itself; the 3 s poll covers the gap
+  }
 
   async function tick(now) {
+    syncStream();
     if (!st.open || !st.id || document.hidden) return;
+    // With the push stream up, a poll is only a safety net.
+    if (!now && st.live && Date.now() - st.fetchedAt < SAFETY_MS) return;
     // A load is in flight. A poll just waits for the next one, but a click (a
     // tab, another file, another agent: now) must not be lost until the next
     // poll 3 s later, so it runs the moment this load ends.
@@ -178,6 +222,7 @@
     const a = agentById(st.id);
     if (!a) return;
     st.busy = true;
+    st.fetchedAt = Date.now();
     const id = st.id;
     try {
       if (st.tab === "diff") await loadDiff(a, id, now);
@@ -312,7 +357,7 @@
       html = `<select id="sp-file" aria-label="Document">${opts}</select>
         <select id="sp-toc" aria-label="Jump to a section"${heads.length ? "" : " disabled"}><option value="">Sections…</option>${heads.map((h, i) => `<option value="${i}">${esc("\u00a0\u00a0".repeat(Math.max(0, +h.tagName[1] - 1)) + hText(h))}</option>`).join("")}</select>
         <form id="sp-path-form" class="sp-pathf"><input id="sp-path" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Open a file: docs/plan.md" aria-label="Path of a file in the worktree"><button type="submit">Open</button></form>
-        <span class="live${st.docErr ? " off" : ""}" id="sp-live">${st.docErr ? "not updating" : st.doc ? "live · " + (Date.now() - st.docAt < 4000 ? "just updated" : "checked " + ago(st.docAt)) : "live"}</span>`;
+        <span class="live${st.docErr ? " off" : ""}" id="sp-live" data-push="${st.live ? 1 : 0}">${st.docErr ? "not updating" : st.doc ? "live · " + (Date.now() - st.docAt < 4000 ? "just updated" : "checked " + ago(st.docAt)) : "live"}</span>`;
     } else {
       const d = st.diff;
       const flat = d ? d.sections.flatMap((s) => s.files.map((f) => ({ key: s.key + "|" + f.path, path: f.path }))) : [];
@@ -322,8 +367,9 @@
         ? `<span class="sp-tot"><b>${d.files} file${d.files === 1 ? "" : "s"}</b> <span class="ad">+${d.add}</span> <span class="dl">−${d.del}</span>${d.base ? ` <span class="muted">vs ${esc(d.base)}</span>` : ""}</span>
           <select id="sp-jump" aria-label="Jump to a file"${jump.length ? "" : " disabled"}><option value="">Files…</option>${jump.map((f) => `<option value="${escAttr(f.key)}">${esc(f.path)}</option>`).join("")}</select>
           <button type="button" id="sp-fold" ${jump.length ? "" : "disabled"}>${st.diff && allClosed() ? "Expand all" : "Collapse all"}</button>
-          <span class="live${st.diffErr ? " off" : ""}" id="sp-live">${st.diffErr ? "not updating" : "live"}</span>`
-        : `<span class="sp-tot muted">${st.diffErr ? esc(st.diffErr) : "Changes in this agent's checkout"}</span><span class="live${st.diffErr ? " off" : ""}" id="sp-live">${st.diffErr ? "not updating" : "live"}</span>`;
+          ${st.wide ? `<button type="button" id="sp-split" aria-pressed="${st.split}" title="Old and new text in two columns">Side by side</button>` : ""}
+          <span class="live${st.diffErr ? " off" : ""}" id="sp-live" data-push="${st.live ? 1 : 0}">${st.diffErr ? "not updating" : "live"}</span>`
+        : `<span class="sp-tot muted">${st.diffErr ? esc(st.diffErr) : "Changes in this agent's checkout"}</span><span class="live${st.diffErr ? " off" : ""}" id="sp-live" data-push="${st.live ? 1 : 0}">${st.diffErr ? "not updating" : "live"}</span>`;
     }
     const focus = document.activeElement && document.activeElement.closest("#sp-bar") ? document.activeElement.id : "";
     const pathVal = $("sp-path") ? $("sp-path").value : "";
@@ -371,6 +417,12 @@
       }
     });
     bar.addEventListener("click", (e) => {
+      if (e.target.id === "sp-split") {
+        st.split = !st.split;
+        remember({ split: st.split });
+        renderBar(); renderBody({ keepScroll: true });
+        return;
+      }
       if (e.target.id === "sp-fold" && st.diff) {
         const close = !allClosed();
         for (const s of st.diff.sections) for (const f of s.files) close ? st.closed.add(s.key + "|" + f.path) : st.closed.delete(s.key + "|" + f.path);
@@ -481,6 +533,93 @@
     return hunks;
   }
 
+  // ---- syntax colours (highlight.js, vendored; loaded the first time a diff is drawn) ----
+  const LANG_EXT = { go: "go", js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript", py: "python",
+    sh: "bash", bash: "bash", zsh: "bash", json: "json", yml: "yaml", yaml: "yaml", md: "markdown", markdown: "markdown", css: "css", html: "xml", htm: "xml",
+    xml: "xml", svg: "xml", diff: "diff", patch: "diff", rs: "rust", sql: "sql", mk: "makefile" };
+  const LANG_NAME = { makefile: "makefile", dockerfile: "dockerfile", gnumakefile: "makefile" };
+  const langOf = (path) => {
+    const b = base(path).toLowerCase();
+    if (LANG_NAME[b]) return LANG_NAME[b];
+    const i = b.lastIndexOf(".");
+    return i > 0 ? LANG_EXT[b.slice(i + 1)] || "" : "";
+  };
+  const hl = { lib: null, loading: null, langs: new Map(), cache: new Map() }; // langs: name -> true | "failed" | Promise
+  function hlReady(lang) { return !!(hl.lib && hl.langs.get(lang) === true); }
+  // Asks for the highlighter and the languages the shown files use; redraws once when they arrive.
+  function hlWant(langs) {
+    const need = [...langs].filter((l) => l && !hl.langs.has(l));
+    if (!need.length) return;
+    if (!hl.loading) hl.loading = import("./vendor/hljs/core.min.js").then((m) => { hl.lib = m.default; }).catch(() => { hl.lib = null; hl.failed = true; });
+    for (const l of need) {
+      hl.langs.set(l, "loading");
+      hl.loading.then(() => hl.lib ? import(`./vendor/hljs/${l}.min.js`).then((m) => { hl.lib.registerLanguage(l, m.default); hl.langs.set(l, true); }) : null)
+        .catch(() => hl.langs.set(l, "failed"))
+        .then(() => { if (st.open && st.tab === "diff") renderBody({ keepScroll: true }); });
+    }
+  }
+  // Highlighted HTML of text, one string per line, with spans closed and reopened at each line break.
+  function hlLines(text, lang) {
+    const html = hl.lib.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    const out = [], open = [];
+    let cur = "";
+    for (const part of html.split(/(<span[^>]*>|<\/span>|\n)/)) {
+      if (part === "\n") { out.push(cur + "</span>".repeat(open.length)); cur = open.join(""); }
+      else if (part.startsWith("<span")) { open.push(part); cur += part; }
+      else if (part === "</span>") { open.pop(); cur += part; }
+      else cur += part;
+    }
+    out.push(cur + "</span>".repeat(open.length));
+    return out;
+  }
+  const MAX_HL_LINES = 1500;
+  // Gives each row of a hunk its coloured text (r.h), or leaves it plain. Cached per hunk text.
+  function colour(path, h) {
+    const lang = langOf(path);
+    if (!lang || !hlReady(lang) || h.rows.length > MAX_HL_LINES) return;
+    const key = lang + "\n" + h.head + "\n" + h.rows.map((r) => r.t + r.s).join("\n");
+    let hit = hl.cache.get(key);
+    if (!hit) {
+      try {
+        const oldT = [], newT = [];
+        for (const r of h.rows) { if (r.t === "\\") continue; if (r.t !== "+") oldT.push(r.s); if (r.t !== "-") newT.push(r.s); }
+        hit = { o: hlLines(oldT.join("\n"), lang), n: hlLines(newT.join("\n"), lang) };
+      } catch { hit = "plain"; }
+      if (hl.cache.size > 300) hl.cache.clear();
+      hl.cache.set(key, hit);
+    }
+    if (hit === "plain") return;
+    let o = 0, n = 0;
+    for (const r of h.rows) {
+      if (r.t === "\\") continue;
+      if (r.t === "-") r.h = hit.o[o++];
+      else if (r.t === "+") r.h = hit.n[n++];
+      else { r.h = hit.n[n++]; o++; }
+    }
+  }
+  const cell = (r) => r.h !== undefined ? r.h : esc(r.s);
+
+  // One hunk as rows. Unified: old and new numbers, one text column. Split: a removed run and
+  // the added run that replaces it sit on the same rows, left and right.
+  function hunkRows(h, split) {
+    if (!split) {
+      return h.rows.map((r) => r.t === "\\" ? `<div class="ln nl"><i></i><i></i><b>${esc(r.s)}</b></div>`
+        : `<div class="ln ${r.t === "+" ? "add" : r.t === "-" ? "del" : ""}${r.h !== undefined ? " hl" : ""}"><i>${r.a ?? ""}</i><i>${r.b ?? ""}</i><b><u>${esc(r.t)}</u>${cell(r)}</b></div>`).join("");
+    }
+    const out = [], rows = h.rows.filter((r) => r.t !== "\\");
+    const half = (r, side) => r
+      ? `<i>${(side === "l" ? r.a : r.b) ?? ""}</i><b class="${r.t === "+" ? "add" : r.t === "-" ? "del" : ""}${r.h !== undefined ? " hl" : ""}">${cell(r)}</b>`
+      : `<i></i><b class="void"></b>`;
+    for (let i = 0; i < rows.length;) {
+      if (rows[i].t === " ") { out.push(`<div class="sr">${half(rows[i], "l")}${half(rows[i], "r")}</div>`); i++; continue; }
+      const dels = [], adds = [];
+      while (i < rows.length && rows[i].t === "-") dels.push(rows[i++]);
+      while (i < rows.length && rows[i].t === "+") adds.push(rows[i++]);
+      for (let k = 0; k < Math.max(dels.length, adds.length); k++) out.push(`<div class="sr">${half(dels[k], "l")}${half(adds[k], "r")}</div>`);
+    }
+    return out.join("");
+  }
+
   function diffHtml() {
     const d = st.diff;
     if (!d) return st.diffErr ? `<div class="empty" role="status">${esc(st.diffErr)}</div>` : `<div class="empty" role="status">Reading the changes…</div>`;
@@ -518,9 +657,11 @@
     else if (f.binary) inner = `<div class="ph">Binary file.</div>`;
     else if (f.too_big) inner = skippedHtml(key, f);
     else if (!f.diff) inner = `<div class="ph">No text changes.</div>`;
-    else inner = parseHunks(f.diff).map((h, j) => `<div class="hk"><span>${esc(h.head)}</span><button type="button" data-send="${escAttr(key)}:${j}">Send to agent</button></div><div class="code">${
-      h.rows.map((r) => r.t === "\\" ? `<div class="ln nl"><i></i><i></i><b>${esc(r.s)}</b></div>`
-        : `<div class="ln ${r.t === "+" ? "add" : r.t === "-" ? "del" : ""}"><i>${r.a ?? ""}</i><i>${r.b ?? ""}</i><b>${esc(r.t)}${esc(r.s)}</b></div>`).join("")}</div>`).join("");
+    else {
+      const split = st.split && st.wide;
+      if (open) hlWant([langOf(f.path)]);
+      inner = parseHunks(f.diff).map((h, j) => { if (open) colour(f.path, h); return `<div class="hk"><span>${esc(h.head)}</span><button type="button" data-send="${escAttr(key)}:${j}" aria-label="Send this hunk of ${escAttr(f.path)} to the agent">Send to agent</button></div><div class="code${split ? " split" : ""}">${hunkRows(h, split)}</div>`; }).join("");
+    }
     return `<details class="df" data-key="${escAttr(key)}"${open ? " open" : ""}><summary><span class="p" title="${escAttr(f.path)}">${esc(f.path)}</span>${tag}<span class="ad">+${f.add}</span><span class="dl">−${f.del}</span></summary>${inner}</details>`;
   }
 
@@ -559,9 +700,20 @@
     const f = f0 && st.loaded.has(key) ? st.loaded.get(key) : f0;
     const h = f && f.diff ? parseHunks(f.diff)[j] : null;
     if (!h) return;
-    const txt = `About this change in ${f.path} (${h.head.replace(/ @@.*/, " @@")}):\n` + h.rows.map((r) => (r.t === "\\" ? "\\ " : r.t) + r.s).join("\n") + "\n\n";
+    const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(h.head);
+    const range = m ? (+(m[4] ?? 1) > 1 ? `lines ${m[3]}\u2013${+m[3] + +m[4] - 1}` : `line ${m[3]}`) : "";
+    const body = h.head.replace(/ @@.*/, " @@") + "\n" + h.rows.map((r) => (r.t === "\\" ? "\\ " : r.t) + r.s).join("\n");
+    const txt = `About this change in ${f.path}${range ? " (" + range + ")" : ""}:\n\`\`\`diff\n${body}\n\`\`\`\n\n`;
     const box = $("prompt-text");
-    if (box) { box.textContent = txt; box.focus(); }
+    if (!box) return;
+    // What the user already typed stays: the hunk goes after it.
+    const had = box.textContent.trim();
+    box.textContent = had ? box.textContent.replace(/\s*$/, "") + "\n\n" + txt : txt;
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    box.focus();
+    const sel = getSelection(), r = document.createRange();
+    r.selectNodeContents(box); r.collapse(false); sel.removeAllRanges(); sel.addRange(r);
+    toast("Hunk added to the prompt");
     if (matchMedia("(max-width:1099px)").matches) toggle(false); // the sheet covers the prompt
   }
 

@@ -76,7 +76,18 @@ func TestVendoredLibraries(t *testing.T) {
 			t.Errorf("vendor/README.md does not record %s", want)
 		}
 	}
-	for _, lic := range []string{"vendor/LICENSE-marked.txt", "vendor/LICENSE-dompurify.txt"} {
+	hl, err := FS.ReadDir("vendor/hljs")
+	if err != nil || len(hl) < 2 {
+		t.Fatalf("vendor/hljs: %v", err)
+	}
+	for _, e := range hl {
+		b, _ := FS.ReadFile("vendor/hljs/" + e.Name())
+		sum := sha256.Sum256(b)
+		if want := "`" + e.Name() + "` " + hex.EncodeToString(sum[:]); !strings.Contains(string(readme), want) {
+			t.Errorf("vendor/README.md does not record %s", want)
+		}
+	}
+	for _, lic := range []string{"vendor/LICENSE-marked.txt", "vendor/LICENSE-dompurify.txt", "vendor/LICENSE-highlightjs.txt"} {
 		if _, err := FS.ReadFile(lic); err != nil {
 			t.Errorf("missing %s: %v", lic, err)
 		}

@@ -187,6 +187,8 @@ type Server struct {
 	version string
 	// streams counts open /api/events streams (see maxStreams).
 	streams atomic.Int32
+	// panels holds the side-panel change watchers (panelwatch.go).
+	panels panelHub
 	// bgAgents caches each idle agent's background tasks (bgagents.go).
 	bgAgents bgAgents
 	// peerAgents replaces the fleet's agent list for peerBackground (tests).
@@ -468,6 +470,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/agents/{target}/file", s.authAgent(s.handlePanelFile))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/diff", s.authAgent(s.handlePanelDiff))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/file", s.authAgent(s.handlePanelFile))
+	s.mux.HandleFunc("GET /api/agents/{target}/panel/events", s.authAgent(s.handlePanelEvents))
+	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/panel/events", s.authAgent(s.handlePanelEvents))
 	s.mux.HandleFunc("POST /api/show", s.authAgent(s.handleShow))
 	s.mux.HandleFunc("GET /api/panel/diff", s.auth(s.handlePanelHost("diff")))
 	s.mux.HandleFunc("GET /api/panel/file", s.auth(s.handlePanelHost("file")))

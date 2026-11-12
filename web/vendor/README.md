@@ -11,6 +11,7 @@ edited, so the hashes below can be re-checked against the registry.
 | `marked.umd.js` | [marked](https://github.com/markedjs/marked) 18.1.1, `lib/marked.umd.js` | MIT (`LICENSE-marked.txt`) | CommonMark + GFM to HTML |
 | `purify.min.js` | [DOMPurify](https://github.com/cure53/DOMPurify) 3.4.17, `dist/purify.min.js` | Apache-2.0 (dual MPL-2.0/Apache-2.0; used under Apache-2.0, `LICENSE-dompurify.txt`) | sanitizing that HTML |
 | `transformers.bundle.js` | [@huggingface/transformers](https://github.com/huggingface/transformers.js) 4.3.2 with onnxruntime-web 1.31.0-dev.20260914-8d85527a0 bundled in (**built**, see below) | Apache-2.0 and MIT (`LICENSE-transformers-bundle.txt`) | speech to text in the browser (`stt-worker.js`) |
+| `hljs/*.min.js` | [highlight.js](https://github.com/highlightjs/highlight.js) 11.11.1 from the `@highlightjs/cdn-assets` package, `es/core.min.js` and 15 `es/languages/*.min.js` (go, javascript, typescript, python, bash, json, yaml, markdown, css, xml, diff, rust, sql, shell, makefile, dockerfile) | BSD-3-Clause (`LICENSE-highlightjs.txt`) | syntax colours in the Diff panel; loaded on demand by `sidepanel.js` as ES modules |
 
 ## Provenance
 
@@ -25,6 +26,29 @@ DOMPurify 3.4.17
 - registry `dist.integrity`: `sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==` (matched)
 - registry `dist.shasum` (sha1): `074bbb24eaa419535ac19ffe7f663104b0e1543d` (matched)
 - file sha256: `purify.min.js` cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31
+
+highlight.js 11.11.1 (`hljs/`, one ES module per file, unedited)
+- tarball: https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.11.1.tgz
+- registry `dist.integrity`: `sha512-VEPdHzwelZ12hEX18BHduqxMZGolcUsrbeokHYxOUIm8X2+M7nx5QPtPeQgRxR9XjhdLv4/7DD5BWOlSrJ3k7Q==` (matched)
+- registry `dist.shasum` (sha1): `136984ae467865e22080b3a4b65398a086e1ae7b` (matched)
+- why this package: the highlight.js package itself ships CommonJS, whose top-level names would leak into the app's globals; the CDN build is real ES modules, which the CSP allows (`import()` from our own origin).
+- file sha256: `bash.min.js` d2290ecb0b7d522df0d91d54ee216c673e0c504decd48ef15197b3cab5cb7474
+- file sha256: `core.min.js` bfcca5550cb9d62482162e1d1fb90c822d2d35036b556544817441b795b7103c
+- file sha256: `css.min.js` 8024c97edb80335f7aded04543de058770eab34939b9b2db8334fb8aa16f0e45
+- file sha256: `diff.min.js` 259e0a75cbaa5ce6769259ac647cec904a4c6b5cdc6e8d66f7820b01213a4492
+- file sha256: `dockerfile.min.js` bd40da2c7d1b727dcd4e76f197f176e3d45ed61d167ef5d82a1f15e38a929de5
+- file sha256: `go.min.js` 364487e8fca398a6548efbeae11a6d4e28f35ae908c5324c0efd628e5359ddc5
+- file sha256: `javascript.min.js` d893654be08f10fe656739ec83cf2cdeb7ea82a26b332b9fea88d4d215c00d89
+- file sha256: `json.min.js` 7dd0922802ac593d34da3466175377c9efb4612ee2ea97ddafa1fce618a510d9
+- file sha256: `makefile.min.js` 13f6006b2b59fe2f156cc2c38ebfe481878833502f9423748fd5c9ea4e7e0b93
+- file sha256: `markdown.min.js` e8f544abc25490c51ff4bea5687a02ef4a65f1edc83dd208b6664d2672b3e3d5
+- file sha256: `python.min.js` 4112a5c44dc7a4c56a772347bd318f246aa1ea51e0d6cb6aba78b25c3e60d524
+- file sha256: `rust.min.js` 9985e07ffd86b7172ce1499fadb1ae76677875b823fbc966009f324bffbb386e
+- file sha256: `shell.min.js` 2ecd002378469afc6edc09d06310f30bb5e4a3c44e82d281d16e5395dea70afa
+- file sha256: `sql.min.js` eadde8cadf1c469031abc0c6afd9767dfa8aacf9a7f9ab739ee6edfe635e300e
+- file sha256: `typescript.min.js` 60f542a05921072df100b34ea9a20a765617c518f8ac11d1c2c238ae11d83fcc
+- file sha256: `xml.min.js` 2d843265c0bdd3e50f107e6473196b5f525c0ea68de83c40f9f30ffbbea6896f
+- file sha256: `yaml.min.js` 3d227e0d347021b99da5c7b8de86ec8ce647f2f15d3b97100b34f9d2507ec2e7
 
 `web/app_test.go` checks the file sha256 lines above against the files, so
 an edit to a vendored file without updating this record fails the tests.
