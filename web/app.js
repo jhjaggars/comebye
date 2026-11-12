@@ -5179,7 +5179,7 @@ function initRecall() {
 // and navigating this window too. Everything about it that this screen
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
-const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "" };
+const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", made: new Map() };
 
 function parsePagesRoute() {
   const m = location.hash.match(/^#\/pages(?:\/([^/]+)(?:\/(\d+))?)?$/);
@@ -5265,6 +5265,7 @@ function renderPageView() {
   const opts = vers.map((v) => `<option value="${v.n}"${v.n === ver ? " selected" : ""}>v${v.n}${v.n === p.version ? " (latest)" : ""} · ${esc(pageAgo(v.at))}</option>`).join("");
   const bar = `<div class="pgs-bar"><h2>${esc(p.title)}</h2>
     <div class="pgs-prov">Published by ${esc(p.by)}${p.host ? " on " + esc(p.host) : ""}${p.tagged ? " (a worker node)" : ""} · ${esc(pageAgo(p.created_at))}${p.updated_at !== p.created_at ? ", updated " + esc(pageAgo(p.updated_at)) : ""} · ${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}<br>Agent-written page, shown in a sandbox: its scripts run, but it cannot reach Comebye, your data or the network.</div>
+    <div class="pgs-made" id="pgs-made" hidden></div>
     <div class="pgs-acts">${vers.length > 1 ? `<select id="pgs-ver" aria-label="Version">${opts}</select>` : ""}
       <button type="button" class="btn" id="pgs-copy">Copy link</button>
       <a class="btn" id="pgs-open" href="${esc(pgs.pagesUrl + "/p/" + p.id + (r.ver ? "/" + r.ver : ""))}" target="_blank" rel="noopener">Open in tab</a>
@@ -5272,6 +5273,7 @@ function renderPageView() {
   if (view.dataset.id === p.id && pgs.frameKey === key) {
     // Same page and version: refresh the bar only, so the page keeps its state.
     view.querySelector(".pgs-bar").outerHTML = bar;
+    pagesMade(p.id, ver);
     return;
   }
   view.dataset.id = p.id;
@@ -5279,6 +5281,45 @@ function renderPageView() {
   view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
   const fr = view.querySelector("iframe.pgs-frame");
   fr.addEventListener("load", sendPageTheme);
+  pagesMade(p.id, ver);
+}
+
+// The session that made a version of a page: the transcript index knows, from the
+// publish command's output, so this works for old pages too. The strip is the app's, outside the
+// page's sandbox, and stays hidden when the index has nothing (or is off): the page reads the same.
+const PGS_MADE_TTL = 60000;
+async function pagesMade(id, ver) {
+  let c = pgs.made.get(id);
+  if (!c || Date.now() - c.at > PGS_MADE_TTL) {
+    c = { at: Date.now(), items: [] };
+    pgs.made.set(id, c);
+    try { c.items = ((await api("/api/recall/produced?ref=" + encodeURIComponent(id))).produced || []).filter((x) => x.type === "page" && x.ref === id); } catch { c.items = []; }
+  }
+  const box = $("pgs-made");
+  const r = pgs.route;
+  if (!box || !r || r.id !== id || ((r.ver || (pgs.items.find((x) => x.id === id) || {}).version) !== ver)) return;
+  if (!c.items.length) { box.hidden = true; box.replaceChildren(); return; }
+  // Each version names its own session: a key can gather versions from several.
+  const want = "version " + ver;
+  const it = c.items.find((x) => x.detail === want);
+  const kids = [];
+  if (it) {
+    const t = document.createElement("span");
+    t.className = "pgs-madetxt";
+    t.textContent = `Made in ${it.session.title || it.session.id} · ${it.session.host} · turn ${it.seq} · ${pageAgo(it.ts)}`;
+    const a = document.createElement("a");
+    a.className = "btn pgs-opensess"; a.id = "pgs-opensess";
+    a.href = rcSessionHash(it.session, { seq: it.seq, sub: it.sub });
+    a.textContent = "Open session ▸";
+    kids.push(t, a);
+  } else {
+    const t = document.createElement("span");
+    t.className = "pgs-madetxt";
+    t.textContent = "No session found for this version. Other versions: " + c.items.map((x) => (x.detail || "").replace("version ", "v")).filter(Boolean).join(", ") + ".";
+    kids.push(t);
+  }
+  box.replaceChildren(...kids);
+  box.hidden = false;
 }
 
 // The page's frame is an opaque origin, so it cannot read this app's theme.

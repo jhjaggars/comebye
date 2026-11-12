@@ -376,6 +376,48 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   await phone.browser.close();
 });
 
+await check("open session: a Page made in an indexed session names it per version and opens the transcript at the turn", async () => {
+  // The Pages here are published with random ids, so the index fixture cannot hold them: the
+  // lookup answers as the real route does (tests in internal/server cover the route itself).
+  const SMOKE = { host: "devbox", kind: "claude", id: "11111111-aaaa-4aaa-8aaa-111111111111", title: "Retry the upgrade smoke check" };
+  const ver = (await (await fetch(base + "/api/pages/" + pages.chart)).json()).page.version;
+  const item = (id, n, seq) => ({ session: SMOKE, type: "page", ref: id, detail: "version " + n, seq, ts: new Date(Date.now() - 120000).toISOString() });
+  await page.route(/\/api\/recall\/produced\?ref=/, (r) => {
+    const id = new URL(r.request().url()).searchParams.get("ref");
+    if (id === pages.chart) return r.fulfill({ json: { produced: [item(id, ver, 22)] } });
+    if (id === pages.secret) return r.fulfill({ json: { produced: [item(id, 99, 24)] } }); // another version's
+    return r.fulfill({ json: { produced: [] } });
+  });
+  for (const [w, h, tag] of [[1280, 800, "desktop"], [390, 844, "phone"]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await page.goto("about:blank");
+    await page.goto(base + "/#/pages/" + pages.chart, { waitUntil: "load" });
+    await page.waitForSelector("#pgs-opensess", { timeout: 8000 });
+    const t = await page.locator("#pgs-made").innerText();
+    if (!/Made in Retry the upgrade smoke check/.test(t) || !/turn 22/.test(t) || !/Open session/.test(t)) throw new Error("strip: " + t);
+    const over = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-bar").scrollWidth, document.querySelector(".pgs-bar").clientWidth]);
+    if (over[0] > over[1] || over[2] > over[3]) throw new Error("sideways " + over);
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: `${out}/pages-opensession-${tag}.png` });
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.locator("#pgs-opensess").click();
+  // (waitForFunction evals a string, which this page's CSP refuses: poll with evaluate.)
+  const poll = async (fn, what) => { for (let i = 0; i < 80; i++) { if (await page.evaluate(fn)) return; await page.waitForTimeout(100); } throw new Error("timed out: " + what); };
+  await poll(() => location.hash.startsWith("#/search/devbox/claude/11111111-aaaa-4aaa-8aaa-111111111111") && location.hash.includes("seq=22"), "hash");
+  await poll(() => /Retry the upgrade/.test(document.querySelector(".rc-stitle")?.textContent || ""), "transcript");
+  // A page with no session in the index shows no strip; one whose other versions only were made there says so.
+  await page.goto("about:blank");
+  await page.goto(base + "/#/pages/" + pages.md, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  await page.waitForTimeout(400);
+  if (await page.locator("#pgs-made").isVisible()) throw new Error("a strip for a page the index does not know");
+  await page.goto("about:blank");
+  await page.goto(base + "/#/pages/" + pages.secret, { waitUntil: "load" });
+  await poll(() => /No session found for this version/.test(document.querySelector("#pgs-made")?.textContent || ""), "other versions note");
+  await page.unroute(/\/api\/recall\/produced\?ref=/);
+});
+
 await check("links: a to-do link to a page opens it in the app; delete asks and removes", async () => {
   // a to-do item whose link is the page's URL
   const link = base + "/p/" + pages.secret;

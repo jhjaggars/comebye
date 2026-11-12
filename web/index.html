@@ -1998,6 +1998,10 @@
     .pgs-empty code { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); }
     .pgs-bar { flex: none; padding: var(--sp-8) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) var(--sp-8) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-6); min-width: 0; }
     .pgs-bar h2 { margin: 0; font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+    .pgs-made { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6) var(--sp-10); padding: var(--sp-6) var(--sp-10); background: var(--panel2); border-radius: var(--r-8); font-size: 12.5px; min-width: 0; }
+    .pgs-made[hidden] { display: none; }
+    .pgs-madetxt { flex: 1 1 200px; min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+    .pgs-opensess { flex: none; text-decoration: none; min-height: 34px; display: inline-flex; align-items: center; }
     .pgs-prov { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
     .pgs-acts { display: flex; flex-wrap: wrap; gap: var(--sp-6); align-items: center; }
     .pgs-acts .btn, .pgs-acts select { min-height: 36px; font-size: 13px; }
