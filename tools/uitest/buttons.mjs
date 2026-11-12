@@ -61,6 +61,43 @@ for (const width of [390, 1280]) {
     if (small.length) throw new Error("buttons under 32px: " + JSON.stringify(small));
   });
 
+  await check(page, `${tag}: action buttons on every screen share one look (12px radius, 600 weight, hairline, 32/40/44px)`, async () => {
+    // the folded per-surface buttons (design language finish): one base look, three sizes
+    const SEL = ".btn, .td-acts button, .ds-fix, .ds-confirm, .ds-fk, .ds-nav button, .br-sched button, .bf-stale-acts button, .empty button.empty-act, .tds-none button, .rel button:not(.rel-refresh), .rl-card button:not(.rel-refresh), #sp .cite button, #sp .hk button, .us-crumbs button";
+    const seen = [], bad = [];
+    for (const hash of ["#/todo", "#/status", "#/briefings", "#/usage", "#/peers", "#/pages"]) {
+      await page.goto(base + "/" + hash, { waitUntil: "load" });
+      await page.waitForTimeout(800);
+      if (hash === "#/todo") { const row = page.locator(".td-row").first(); if (await row.count()) await row.click().catch(() => {}); await page.waitForTimeout(300); }
+      const r = await page.evaluate((sel) => [...document.querySelectorAll(sel)].filter((b) => b.offsetParent).map((b) => {
+        const cs = getComputedStyle(b);
+        return { c: b.className.toString().slice(0, 30) || b.tagName, r: cs.borderTopLeftRadius, w: cs.fontWeight, bw: cs.borderTopWidth, h: Math.round(b.getBoundingClientRect().height) };
+      }), SEL);
+      for (const b of r) { seen.push(b); if (b.r !== "12px" || Number(b.w) < 600 || b.bw !== "1px" || ![32, 40, 44].includes(b.h)) bad.push(hash + " " + JSON.stringify(b)); }
+    }
+    if (!seen.length) throw new Error("no action button on any screen");
+    if (bad.length) throw new Error(bad.slice(0, 4).join("\n"));
+  });
+
+  await check(page, `${tag}: segmented controls share one look (pressed = accent, 36/40/44px)`, async () => {
+    const bad = [];
+    let n = 0;
+    for (const hash of ["#/usage", "#/briefings", "#/pages"]) {
+      await page.goto(base + "/" + hash, { waitUntil: "load" });
+      await page.waitForTimeout(800);
+      const r = await page.evaluate(() => [...document.querySelectorAll(".seg button, .bd-seg button, .bc-seg button, .pgs-seg button, .us-seg button")].filter((b) => b.offsetParent).map((b) => {
+        const cs = getComputedStyle(b);
+        return { c: b.parentElement.className, p: b.getAttribute("aria-pressed"), bg: cs.backgroundColor, h: Math.round(b.getBoundingClientRect().height), w: cs.fontWeight };
+      }));
+      n += r.length;
+      for (const b of r) if (![36, 40, 44].includes(b.h) || (b.p === "true" && Number(b.w) < 600)) bad.push(hash + " " + JSON.stringify(b));
+      const pressed = r.filter((b) => b.p === "true").map((b) => b.bg), off = r.filter((b) => b.p === "false").map((b) => b.bg);
+      if (pressed.length && off.length && pressed.some((p) => off.includes(p))) bad.push(hash + " pressed and unpressed look the same");
+    }
+    if (!n) throw new Error("no segmented control on any screen");
+    if (bad.length) throw new Error(bad.slice(0, 4).join("\n"));
+  });
+
   await check(page, `${tag}: no page errors`, async () => { if (errs.length) throw new Error(errs.join("; ")); });
   await browser.close();
 }
