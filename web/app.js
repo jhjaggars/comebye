@@ -8124,7 +8124,7 @@ function syncUsage() {
   if (!was || moved) { if (!was) us.status = "loading"; us.picked = -1; usageLoad(); }
   // The Escape handler hears only keys pressed inside the screen, so focus goes in as the screen opens;
   // without it Escape worked only while focus happened to be left on Back from an earlier visit.
-  if (!was) { us.timer = setInterval(usageLoad, 60000); $("us-back").focus({ preventScroll: true }); }
+  if (!was) { us.timer = setInterval(usageLoad, 60000); ($("us-back").offsetParent ? $("us-back") : $("us-body")).focus({ preventScroll: true }); }
   renderUsage();
 }
 

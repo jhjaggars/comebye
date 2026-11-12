@@ -520,7 +520,8 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   await page.keyboard.press("Escape");
   if (await page.locator("#pgs-infopop").isVisible()) throw new Error("Escape did not close the info popover");
   await shot("pages-open-1280");
-  // filter
+  // filter (the gallery is behind the viewer's back arrow)
+  await page.locator("#pgs-vback").click();
   await page.locator("#pgs-q").fill("failover");
   if ((await page.locator(".pgs-card").count()) !== 1) throw new Error("filter left " + (await page.locator(".pgs-card").count()));
   await page.locator("#pgs-q").fill("");
@@ -543,7 +544,7 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   if (over2[0] > over2[1] || over2[2] > over2[3]) throw new Error("page view scrolls sideways " + over2);
   await m.screenshot({ path: `${out}/pages-open-390.png` });
   // back returns to the list, and back again to the app
-  await m.locator("#pgs-back").click();
+  await m.locator("#pgs-vback").click();
   await m.waitForSelector(".pgs-card", { state: "visible" });
   await m.locator("#pgs-back").click();
   await m.waitForSelector("#pages", { state: "hidden" });
@@ -572,7 +573,8 @@ await check("search: page text is searched on the hub, hits show under the title
   await page.locator(".pgs-hit").first().click();
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
   if (!(await page.evaluate(() => location.hash)).startsWith("#/pages/" + evil)) throw new Error("hit did not open the page");
-  // Nothing in any body: the usual empty notice; one letter is not searched.
+  // Nothing in any body: the usual empty notice; one letter is not searched. (The filter is in the gallery, behind the back arrow.)
+  await page.locator("#pgs-vback").click();
   await page.locator("#pgs-q").fill("zzzznotthere");
   await page.waitForTimeout(900);
   if (!/No page matches/.test(await page.locator("#pgs-items").innerText()) || await page.locator(".pgs-hit").count()) throw new Error("empty search");
@@ -668,10 +670,10 @@ await check("gallery: grid and list, chips, sort, and the new/updated dot", asyn
   // (shown only now) returns to the gallery.
   const c = await page.evaluate(() => {
     const vis = (s) => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== "hidden"; };
-    return { list: vis(".pgs-list"), view: vis("#pgs-view"), nav: vis("#nav"), pagesRow: !!document.querySelector('#nav .nv.on[data-page="pages"]'), back: vis("#pgs-back"), pane: Math.round(document.querySelector("#pages").getBoundingClientRect().left) };
+    return { list: vis(".pgs-list"), view: vis("#pgs-view"), nav: vis("#nav"), pagesRow: !!document.querySelector('#nav .nv.on[data-page="pages"]'), back: vis("#pgs-vback"), pane: Math.round(document.querySelector("#pages").getBoundingClientRect().left) };
   });
   if (c.list || !c.view || !c.nav || !c.pagesRow || !c.back || c.pane < 300) throw new Error("open page in the pane " + JSON.stringify(c));
-  await page.locator("#pgs-back").click();
+  await page.locator("#pgs-vback").click();
   await page.waitForSelector("#pages:not(.in-page) .pgs-card");
   if (await card().locator(".pgs-dot").count()) throw new Error("dot stays after the page was opened");
   publish(["-", "--key", "dotprobe", "--title", "Dot probe"], "# Dot probe\n\nsecond\n", "w1:p1");
@@ -681,7 +683,7 @@ await check("gallery: grid and list, chips, sort, and the new/updated dot", asyn
   // Sort by recently opened puts the page just opened first among those opened.
   await card().click();
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
-  await page.locator("#pgs-back").click();
+  await page.locator("#pgs-vback").click();
   await page.locator("#pgs-sort").selectOption("opened");
   if (!/Dot probe/.test((await page.locator(".pgs-title").first().innerText()))) throw new Error("opened sort");
   await page.locator("#pgs-sort").selectOption("updated");
@@ -736,11 +738,11 @@ await check("previews: a card shows its page's skeleton, escaped, per version, f
   await page.reload({ waitUntil: "load" });
   await card().locator(".pgs-lead", { hasText: "second version" }).waitFor({ timeout: 8000 });
   if (!reqs.some((u) => /[?]v=2$/.test(u))) throw new Error("no request for v2: " + reqs.join(" "));
-  // With a page open the narrow column carries no thumbnails.
+  // With a page open the viewer replaces the gallery: no card is on screen to carry a thumbnail.
   await card().click();
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
-  const shown = await page.evaluate(() => [location.hash, document.getElementById("pages").className, innerWidth, getComputedStyle(document.querySelector(".pgs-thumb")).display]);
-  if (shown[3] !== "none") throw new Error("thumbnails in the narrow column " + shown);
+  const shown = await page.evaluate(() => [location.hash, document.getElementById("pages").className, innerWidth, document.querySelector(".pgs-list").getBoundingClientRect().width]);
+  if (shown[3] !== 0) throw new Error("the gallery shows beside an open page " + shown);
   page.off("request", onReq);
   const ph = await launch({ width: 390, height: 844, dark, bypassCSP: false });
   await ph.page.goto(base + "/#/pages", { waitUntil: "load" });

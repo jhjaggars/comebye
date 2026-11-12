@@ -2125,7 +2125,7 @@
     @media (min-width: 1100px) { .pgs-focusb { display: inline-flex; } }
     .pgs-bar .pgs-pill { flex: none; }
     .pgs-pill.cur { color: var(--text); }
-    .pgs-bar .pgs-new { flex: none; white-space: nowrap; border-color: var(--blue); background: var(--chip-blue); color: var(--blue); font-weight: 600; }
+    .pgs-bar .pgs-new { flex: none; min-height: var(--hit-36); white-space: nowrap; border-color: var(--blue); background: var(--chip-blue); color: var(--blue); font-weight: 600; }
     .pgs-infobody { display: flex; flex-direction: column; gap: var(--sp-8); padding: var(--sp-4) var(--sp-14) var(--sp-14); font-size: var(--fs-13); }
     .pgs-note { color: var(--muted); }
     .pgs-prov { overflow-wrap: anywhere; }
@@ -2360,6 +2360,7 @@
     .rel-open:focus-visible { outline-offset: 1px; }
     /* Usage: tokens by kind, model, project and handoff. A screen of its own, like Peers and Pages. Charts are drawn by hand as inline SVG from theme tokens. */
     #us-back { margin: -10px 0 -10px -10px; color: var(--text); }
+    #us-body:focus { outline: 0; }
     #us-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
     .us-wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-14); min-width: 0; }
     .us-ctl { display: flex; flex-wrap: wrap; gap: var(--sp-8) var(--sp-14); align-items: center; }
@@ -2571,7 +2572,7 @@
       <h1>Usage</h1>
       <span class="rc-fresh" id="us-fresh"></span>
     </header>
-    <div id="us-body"><div class="us-wrap" id="us-view" aria-live="polite"></div></div>
+    <div id="us-body" tabindex="-1"><div class="us-wrap" id="us-view" aria-live="polite"></div></div>
   </div>
 
   <!-- Pages: reports agents publish with `comebye publish` -->
