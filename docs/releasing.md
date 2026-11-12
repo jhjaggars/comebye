@@ -132,6 +132,32 @@ A peer finishes a push it started even if the hub stopped waiting, and does one
 tagging at a time. The hub's upgrade gate reads the release build from the same
 peer, so the hub needs neither `gh` nor a clone for it.
 
+## Rolling out to all hosts
+
+On the Releases tab, **Roll out to all** upgrades the fleet in one go, run by the hub, so closing the tab or
+restarting the hub loses nothing. The confirm names the version, the commit, the hosts in order and the hub wave.
+
+- **Order:** one canary peer first (the first in the list; `-release-canary NAME` sets the default and the confirm
+  lets you pick another), a 2-minute soak, then the other peers one at a time, then the hub last. The hub wave is
+  the deploy command (Bump hub) when one is set, else the hub's own upgrade; it changes what is running in the
+  cluster and has no automatic undo, which is why it only follows proven peers.
+- **Gates:** a host's own upgrade record says ok (its smoke check ran, and it put the old binary back if not), then
+  the hub sees it back online on the version (5 minutes). Any failure stops the whole rollout at once: the rest are
+  not touched, hosts already done stay done. **Retry** runs the failed step again; **Cancel** ends it and reverts
+  nothing.
+- **Offline hosts** are skipped after 2 minutes and listed; the rollout finishes "done, 1 skipped" and the release
+  stays open, with **Roll out again** for just those hosts.
+- **Pause** takes effect when the step in flight ends; it never interrupts an install or a restart. While a rollout
+  is live the per-host Upgrade, Roll back and Bump hub buttons are locked.
+- **State:** `<state-dir>/release/rollout.json`, written atomically and read by a loop on the ledger host every few
+  seconds. Each step is derived from the file, the hosts' upgrade records and the fleet's versions, so a restart of
+  the hub, including the one the hub wave itself causes, carries on where it was. Every step is in the audit log
+  (`rollout.start`, `.step`, `.gate`, `.skip`, `.pause`, `.resume`, `.resume-after-restart`, `.stop`, `.cancel`,
+  `.finish`) with the rollout id. A stopped rollout, a cancelled one and a skipped host leave a line on the
+  release's to-do item.
+- Only the user starts one (user role and the page's CSRF token; the body repeats version, commit and the ordered
+  hosts); there is no automatic option.
+
 ## Deploying a release: your own command
 
 Some deployments of comebye are not upgraded by `comebye upgrade` on the host: a

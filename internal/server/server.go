@@ -383,6 +383,9 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.ledger = l
 			s.rollout = newRolloutEngine(filepath.Join(cfg.StateDir, "release", "rollout.json"), serverRolloutOps{s}, s.auditBy)
 			s.rollout.onState = s.noteRollout
+			if cfg.Release.Simulated {
+				s.rollout.soak = 8 * time.Second // a demo does not wait two minutes
+			}
 			s.outbox = openOutbox(outboxPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.digestEvery = cfg.DigestEvery

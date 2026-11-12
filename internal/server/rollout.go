@@ -93,6 +93,10 @@ type RolloutStep struct {
 	OfflineSince *time.Time `json:"offline_since,omitempty"`
 	TryingSince  *time.Time `json:"trying_since,omitempty"`
 	Attempt      int        `json:"attempt,omitempty"`
+	// Mode "deploy": the step is the hub wave's deploy command, not an
+	// upgrade of the host itself (rollout_hub.go). Dry: it was a dry run.
+	Mode string `json:"mode,omitempty"`
+	Dry  bool   `json:"dry,omitempty"`
 	// Detail is the one line the card shows beside the phase (why it waits,
 	// why it was skipped, what failed).
 	Detail string `json:"detail,omitempty"`
@@ -142,6 +146,11 @@ type rolloutOps interface {
 	// StartUpgrade tells the host to upgrade to the job's version. A refusal
 	// the host itself gave is a *peerFault.
 	StartUpgrade(ctx context.Context, job Rollout, host string) (upgrade.Record, error)
+	// StartDeploy starts the hub wave's deploy command (on the release host)
+	// and returns the start time that names its record.
+	StartDeploy(ctx context.Context, job Rollout) (string, error)
+	// DeployStatus is the deploy record, as the release host keeps it.
+	DeployStatus(ctx context.Context) (deployStatus, error)
 }
 
 // rolloutEngine drives the job file.
@@ -151,6 +160,8 @@ type rolloutEngine struct {
 	ops   rolloutOps
 	now   func() time.Time
 	audit func(ledger.AuditEvent)
+	// hosts is the fleet answer of the tick in progress (guarded by mu).
+	hosts []relHost
 	// Timings; tests shorten them.
 	soak, backWait, offlineGrace, runWait, startRetry time.Duration
 	// onState is told, after the file was written, whenever the job's state
@@ -235,7 +246,7 @@ func planRollout(hosts []relHost, order []string, canary string) ([]RolloutStep,
 			peers = append(peers, h.Name)
 		}
 	}
-	if len(order) == 0 {
+	if order == nil {
 		for _, n := range peers {
 			if !by[n].Current {
 				order = append(order, n)
@@ -348,7 +359,7 @@ func (e *rolloutEngine) Resume(by string) (Rollout, error) {
 			for i := range j.Plan {
 				if st := &j.Plan[i]; st.Phase == roFailed {
 					host = st.Host
-					*st = RolloutStep{Host: st.Host, Wave: st.Wave, Phase: roPending, Attempt: st.Attempt + 1}
+					*st = RolloutStep{Host: st.Host, Wave: st.Wave, Mode: st.Mode, Phase: roPending, Attempt: st.Attempt + 1}
 				}
 			}
 			j.State, j.Stop, j.Note = roRunning, nil, "retrying "+host
@@ -462,6 +473,7 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 		return
 	}
 	j = cur
+	e.hosts = hosts
 	before := j
 	for n := 0; n <= 2*len(j.Plan)+2; n++ {
 		if !e.advance(ctx, &j, hosts) || j.State != roRunning {
@@ -543,8 +555,14 @@ func (e *rolloutEngine) advance(ctx context.Context, j *Rollout, hosts []relHost
 			j.State, j.PauseRequested, j.Note = roPaused, false, "paused"
 			return false
 		}
+		if st.Mode == stepModeDeploy {
+			return e.beginHub(ctx, j, st, h, found, now)
+		}
 		return e.begin(ctx, j, st, h, found, now)
 	case roUpgrading:
+		if st.Mode == stepModeDeploy {
+			return e.watchHub(ctx, j, st, h, found, now)
+		}
 		return e.watchRun(j, st, h, found, now)
 	case roVerifying:
 		return e.verify(j, st, h, found, now)
@@ -671,8 +689,8 @@ func (e *rolloutEngine) watchRun(j *Rollout, st *RolloutStep, h relHost, found b
 // verify: the record is ok; the hub must see the host back on the version.
 func (e *rolloutEngine) verify(j *Rollout, st *RolloutStep, h relHost, found bool, now time.Time) bool {
 	j.Note = "verifying " + st.Host
-	dry := found && h.DryRun && h.Record != nil && h.Record.State == upgrade.RecDryRun
-	if found && hostUp(h) && (h.Current || dry) {
+	dry := st.Dry || (found && h.DryRun && h.Record != nil && h.Record.State == upgrade.RecDryRun)
+	if found && hostUp(h) && (h.Current || dry) && (st.Mode != stepModeDeploy || e.peersBack(*j, st)) {
 		st.To = h.Version
 		if st.Wave == waveCanary && e.soak > 0 {
 			st.Phase, st.At, st.Detail = roSoaking, now, ""

@@ -63,8 +63,10 @@ function rolloutJobView(name) {
   const step = (host, wave, phase, extra = {}) => ({ host, wave, phase, at: ago(60000), ...extra });
   out.rollout_enabled = true;
   out.csrf = "fixture";
-  const plan = [step("peerbox", "canary", "pending"), step("kubevirt-1", "peers", "pending"), step("mac-mini", "peers", "pending")];
+  const hub = () => step("laharl", "hub", "pending", { mode: "deploy" });
+  const plan = [step("peerbox", "canary", "pending"), step("kubevirt-1", "peers", "pending"), step("mac-mini", "peers", "pending"), hub()];
   out.rollout_plan = plan;
+  out.rollout_hub_label = "Bump hub";
   if (name === "ro-before") return out;
   delete out.rollout_plan;
   const job = { id: "r7f3a1", todo: out.todo.id, version: V, commit: SHA, state: "running", by: "me", canary: "peerbox", plan, started: ago(300000), updated: ago(2000), rev: 4, note: "" };
@@ -73,31 +75,33 @@ function rolloutJobView(name) {
   set("peerbox", { version: V, current: true, record: { id: "run-peerbox", version: V, state: "ok", from: PREV, to: V, by: "me", started: ago(280000), finished: ago(240000) } });
   const n = (c) => { out.rollout = { total: 4, current: c, offline: 0, behind: 4 - c, complete: false }; };
   if (name === "ro-running") {
-    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "upgrading", { run: "run-kv", from: PREV }), step("mac-mini", "peers", "pending")];
+    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "upgrading", { run: "run-kv", from: PREV }), step("mac-mini", "peers", "pending"), hub()];
     job.note = "upgrading kubevirt-1";
     set("kubevirt-1", { record: { id: "run-kv", version: V, state: "running", by: "me", started: ago(30000) } });
     n(1);
     out.needs_you = false; out.needs_text = `Rolling out ${V}: upgrading kubevirt-1`;
   } else if (name === "ro-paused") {
     job.state = "paused"; job.note = "paused after peerbox";
-    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "pending"), step("mac-mini", "peers", "pending")];
+    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "pending"), step("mac-mini", "peers", "pending"), hub()];
     n(1);
     out.needs_you = true; out.needs_text = `Rollout of ${V} is paused`;
   } else if (name === "ro-failed") {
     job.state = "stopped"; job.note = "stopped at kubevirt-1";
     const why = "rolled_back: smoke check failed: journal has errors";
     job.stop = { host: "kubevirt-1", reason: why, at: ago(40000) };
-    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "failed", { run: "run-kv", from: PREV, detail: why, output: "fetch ok\nverify ok\ninstall ok\nrestart ok\nsmoke: journal has errors\nrolled back to " + PREV }), step("mac-mini", "peers", "pending")];
+    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "failed", { run: "run-kv", from: PREV, detail: why, output: "fetch ok\nverify ok\ninstall ok\nrestart ok\nsmoke: journal has errors\nrolled back to " + PREV }), step("mac-mini", "peers", "pending"), hub()];
     set("kubevirt-1", { record: { id: "run-kv", version: V, state: "rolled_back", by: "me", started: ago(200000), finished: ago(60000), error: "smoke check failed: journal has errors" } });
     n(1);
     out.needs_you = true; out.needs_text = `Rollout of ${V} stopped at kubevirt-1`;
   } else if (name === "ro-skipped") {
     job.state = "done"; job.finished = ago(20000);
-    job.plan = [done("peerbox", "canary", PREV), done("kubevirt-1", "peers", PREV), step("mac-mini", "peers", "skipped", { detail: "offline for 2m0s" })];
+    job.plan = [done("peerbox", "canary", PREV), done("kubevirt-1", "peers", PREV), step("mac-mini", "peers", "skipped", { detail: "offline for 2m0s" }), done("laharl", "hub", PREV)];
+    set("laharl", { version: V, current: true });
     set("kubevirt-1", { version: V, current: true });
     set("mac-mini", { status: "down", offline: true, unknown: true, enabled: false, since: ago(3 * 3600000) });
-    n(2); out.rollout.offline = 1; out.rollout.behind = 1;
+    n(3); out.rollout.offline = 1; out.rollout.behind = 0;
     out.rollout_plan = [step("mac-mini", "peers", "pending")];
+    delete out.rollout_hub_label;
     out.needs_you = false; out.needs_text = `${V}: 3 of 4, 1 offline`;
   }
   return out;

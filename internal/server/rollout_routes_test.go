@@ -232,3 +232,38 @@ func TestRolloutNoteAndAuditFollowTheJob(t *testing.T) {
 		t.Fatalf("audit %v", acts)
 	}
 }
+
+func TestRolloutStartWithTheHubWave(t *testing.T) {
+	s, f, _, it, tok := rolloutRouteRig(t, "a", "hub")
+	f.set("hub", func(h *relHost) { h.Hub, h.Local = true, true })
+	post := func(path, body string) *httpRec { return rec(do(s, "POST", path, withCSRF(tok), body)) }
+	// peers only, and no hosts at all, are refused; the hub alone is a rollout
+	if w := post("/api/release/rollout", `{"todo":"`+it.ID+`","version":"v0.5.9","commit":"`+relSHA+`"}`); w.Code != 400 {
+		t.Fatalf("no hosts = %d %s", w.Code, w.Body)
+	}
+	if w := post("/api/release/rollout", startBody(it, `["hub"]`)); w.Code != 409 || !strings.Contains(w.Body, "own wave") {
+		t.Fatalf("hub as a peer = %d %s", w.Code, w.Body)
+	}
+	w := post("/api/release/rollout", `{"todo":"`+it.ID+`","version":"v0.5.9","commit":"`+relSHA+`","hosts":["a"],"hub":true}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("start = %d %s", w.Code, w.Body)
+	}
+	j, _ := s.rollout.Get()
+	if len(j.Plan) != 2 || j.Plan[1].Host != "hub" || j.Plan[1].Wave != waveHub || j.Plan[0].Wave != wavePeers {
+		t.Fatalf("plan %+v", j.Plan)
+	}
+	// The hub's own Bump hub is refused while the rollout does that wave.
+	if w := post("/api/release/"+it.ID+"/deploy", `{"version":"v0.5.9","commit":"`+relSHA+`"}`); w.Code != 409 || !strings.Contains(w.Body, "rollout_active") {
+		t.Fatalf("deploy = %d %s", w.Code, w.Body)
+	}
+	// only the hub: peers already there
+	s.rollout.Cancel("me")
+	f.set("a", func(h *relHost) { h.Version = "v0.5.9" })
+	w = post("/api/release/rollout", `{"todo":"`+it.ID+`","version":"v0.5.9","commit":"`+relSHA+`","hosts":[],"hub":true}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("hub only = %d %s", w.Code, w.Body)
+	}
+	if j, _ := s.rollout.Get(); len(j.Plan) != 1 || j.Plan[0].Host != "hub" {
+		t.Fatalf("plan %+v", j.Plan)
+	}
+}

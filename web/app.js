@@ -2431,8 +2431,8 @@ const RO_PHASE = { pending: "waiting", upgrading: "upgrading", verifying: "verif
 function roStepText(st, job) {
   switch (st.phase) {
     case "pending": return st.detail || (job.state === "stopped" ? "not touched" : "waiting for its turn");
-    case "upgrading": return "upgrading" + (st.detail ? " · " + st.detail : "…");
-    case "verifying": return "upgrade ok · " + (st.detail || "waiting for it to be back");
+    case "upgrading": return (st.mode === "deploy" ? "running the deploy; it restarts the hub" : "upgrading") + (st.detail ? " · " + st.detail : "…");
+    case "verifying": return (st.mode === "deploy" ? "deploy ok · " : "upgrade ok · ") + (st.detail || "waiting for it to be back");
     case "soaking": return st.detail || "soaking";
     case "ok": return st.detail || "";
     case "skipped": return "skipped · " + (st.detail || "");
@@ -2445,9 +2445,10 @@ function roStepText(st, job) {
 function roGatesHtml(st, version) {
   const past = (...ph) => ph.includes(st.phase);
   const g = (label, done, now) => `<span class="rl-gate ${done ? "rl-gate-ok" : now ? "rl-gate-now" : ""}">${done ? "✓" : now ? "…" : "○"} ${esc(label)}</span>`;
+  const dep = st.mode === "deploy";
   const gates = [
-    g("upgrade ok", past("verifying", "soaking", "ok"), st.phase === "upgrading"),
-    g("back online", past("soaking", "ok"), st.phase === "verifying"),
+    g(dep ? "deploy ok" : "upgrade ok", past("verifying", "soaking", "ok"), st.phase === "upgrading"),
+    g(dep ? "hub back" : "back online", past("soaking", "ok"), st.phase === "verifying"),
     g(version + " seen", past("soaking", "ok"), st.phase === "verifying"),
   ];
   if (st.wave === "canary") gates.push(g("soak", st.phase === "ok", st.phase === "soaking"));
@@ -2497,18 +2498,20 @@ function roConfirmHtml(d) {
   const c = rls.confirm;
   if (!c || c.k !== "rollout") return "";
   const rl = d.todo.release, by = new Map((d.hosts || []).map((h) => [h.name, h]));
-  const order = c.order || [];
+  const order = c.order || [], hubStep = c.hub ? (d.rollout_plan || []).find((st) => st.wave === "hub") : null, hubH = hubStep ? by.get(hubStep.host) || {} : null;
+  const total = order.length + (hubStep ? 1 : 0), hubLabel = d.rollout_hub_label || "Bump hub";
   const li = order.map((n, i) => {
     const h = by.get(n) || {};
     const role = i === 0 && order.length > 1 ? ' <span class="rl-tag">canary</span>' : "";
     const off = h.offline ? ' <span class="rl-tag rl-tag-off">offline</span>' : "";
     return `<li data-host="${escAttr(n)}"><b>${esc(n)}</b> <span class="rl-ver rl-v-old">${esc(h.version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span>${role}${off}</li>`;
   }).join("");
+  const hubLi = hubStep ? `<li class="rl-hubli" data-host="${escAttr(hubStep.host)}" data-wave="hub"><b>${esc(hubStep.host)}</b> <span class="rl-tag">hub</span> <span class="rl-ver rl-v-old">${esc(hubH.version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span><div class="rl-sub">${hubStep.mode === "deploy" ? `last: <b>${esc(hubLabel)}</b>${d.release_host && d.release_host !== hubStep.host ? ` runs on ${esc(d.release_host)}` : ""}. This changes what is running in the cluster and restarts the hub; it has no automatic undo.` : "last: the hub upgrades itself and restarts."}</div></li>` : "";
   const sel = order.length > 1 ? `<label class="rl-canary">Goes first (canary): <select data-ro-canary>${order.map((n) => `<option value="${escAttr(n)}"${n === order[0] ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : "";
   const soak = order.length > 1 ? ` The first host goes alone and soaks for 2 minutes; the rest follow one at a time only if it stays healthy.` : "";
-  return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${order.length} host${order.length === 1 ? "" : "s"}, in this order?${soak} The first failure stops everything and leaves the rest alone; a host that fails rolls itself back. Offline hosts are skipped and can be rolled out again later.</div>
-    <ol class="rl-order">${li}</ol>${sel}
-    <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-rollout"${rls.busy ? " disabled" : ""}>Confirm: roll out ${esc(rl.version)} to ${order.length} host${order.length === 1 ? "" : "s"}</button>
+  return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${total} host${total === 1 ? "" : "s"}${hubStep ? ", the hub last" : ""}, in this order?${soak} The first failure stops everything and leaves the rest alone; a host that fails rolls itself back. Offline hosts are skipped and can be rolled out again later.</div>
+    <ol class="rl-order">${li}${hubLi}</ol>${sel}
+    <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-rollout"${rls.busy ? " disabled" : ""}>Confirm: roll out ${esc(rl.version)} to ${total} host${total === 1 ? "" : "s"}</button>
     <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
 }
 
@@ -2788,18 +2791,18 @@ async function relClick(act, host) {
       await loadReleases(true);
       return;
     case "cancel": rls.confirm = null; break;
-    case "rollout": rls.confirm = { k: "rollout", order: (d.rollout_plan || []).map((st) => st.host) }; break;
+    case "rollout": rls.confirm = { k: "rollout", order: (d.rollout_plan || []).filter((st) => st.wave !== "hub").map((st) => st.host), hub: (d.rollout_plan || []).some((st) => st.wave === "hub") }; break;
     case "rollout-again": {
       // Only the hosts the last rollout skipped, still behind.
       const job = roJob(d), behind = new Set((d.hosts || []).filter((x) => !x.current).map((x) => x.name));
       const order = (job ? job.plan : []).filter((st) => st.phase === "skipped" && behind.has(st.host)).map((st) => st.host);
-      rls.confirm = { k: "rollout", order: order.length ? order : (d.rollout_plan || []).map((st) => st.host) };
+      rls.confirm = { k: "rollout", order, hub: (d.rollout_plan || []).some((st) => st.wave === "hub") };
       break;
     }
     case "confirm-rollout": {
       const c = rls.confirm;
-      if (!c || !c.order || !c.order.length) return;
-      if (await relPost("/api/release/rollout", { todo: t.id, version: t.release.version, commit: t.release.commit, hosts: c.order })) toast("Rolling out " + t.release.version + "…");
+      if (!c || !c.order || (!c.order.length && !c.hub)) return;
+      if (await relPost("/api/release/rollout", { todo: t.id, version: t.release.version, commit: t.release.commit, hosts: c.order, hub: !!c.hub })) toast("Rolling out " + t.release.version + "…");
       await loadReleases(true);
       return;
     }

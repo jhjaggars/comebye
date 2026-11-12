@@ -162,6 +162,8 @@ for _ in $(seq 300); do curl -sf "http://127.0.0.1:$pport/api/agents" >/dev/null
 if want sidepanel; then PANEL_HOME="$pdir" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-panel" node sidepanel.mjs "http://127.0.0.1:$pport" "$out" || rc=1 ; fi
 # The Peers screen and the host defaults: real servers (a hub, a peer, a peer that is down) on the same fake herdr.
 if want peers; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node peers.mjs "$out" || rc=1 ; fi
+# The rolling rollout end to end: a simulated hub and three simulated peers, the hub killed and restarted mid-rollout.
+if want rolloutlive; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node rolloutlive.mjs "$out" || rc=1 ; fi
 # Adding a host, slice 1: a hub with a default provisioner (a peer running a stand-in for the worker tool) and the price browser.
 if want provision; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provision.mjs "$out" || rc=1 ; fi
 # Slice 3: hosts built from the app, their spend, and Destroy… (the real path on, against a stand-in worker).

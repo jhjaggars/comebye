@@ -22,6 +22,11 @@ type fakeFleet struct {
 	starts   []string // hosts asked to start, in order
 	startErr map[string]error
 	nextID   int
+	// the hub wave
+	deploy    *DeployRecord
+	deploys   int
+	deployErr error
+	statusErr error
 }
 
 func newFakeFleet(target string, names ...string) *fakeFleet {
@@ -74,6 +79,46 @@ func (f *fakeFleet) finish(host, state, version string) {
 	h.Record = &r
 	if version != "" {
 		h.Version = version
+	}
+}
+
+func (f *fakeFleet) StartDeploy(_ context.Context, job Rollout) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deployErr != nil {
+		return "", f.deployErr
+	}
+	f.deploy = &DeployRecord{Version: job.Version, State: depRunning, Started: f.now.UTC()}
+	f.deploys++
+	return f.now.UTC().Format(time.RFC3339Nano), nil
+}
+
+func (f *fakeFleet) DeployStatus(context.Context) (deployStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.statusErr != nil {
+		return deployStatus{}, f.statusErr
+	}
+	st := deployStatus{Enabled: true}
+	if f.deploy != nil {
+		c := *f.deploy
+		st.Record = &c
+	}
+	return st, nil
+}
+
+// endDeploy finishes the deploy; hubVersion moves the hub's version (the new pod is up).
+func (f *fakeFleet) endDeploy(state, errText, hubVersion string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t := f.now
+	f.deploy.State, f.deploy.Finished, f.deploy.Error = state, &t, errText
+	if state == depFailed {
+		f.deploy.Output = "bump: FAILED phase=reconcile"
+		f.deploy.Headline = "bump: FAILED phase=reconcile"
+	}
+	if hubVersion != "" {
+		f.hosts["hub"].Version = hubVersion
 	}
 }
 
@@ -561,4 +606,245 @@ func TestPlanRollout(t *testing.T) {
 	if _, err := planRollout(hosts, nil, ""); err == nil || !strings.Contains(err.Error(), "b") {
 		t.Fatalf("not enabled: %v", err)
 	}
+}
+
+// ---- the hub wave ----
+
+func newHubRig(t *testing.T, peers ...string) *rolloutRig {
+	r := newRolloutRig(t, append(append([]string{}, peers...), "hub")...)
+	r.f.set("hub", func(h *relHost) { h.Hub = true; h.Local = true })
+	return r
+}
+
+func (r *rolloutRig) startWithHub(order ...string) {
+	r.t.Helper()
+	hosts := r.f.Hosts(context.Background(), "v0.6.4")
+	plan, err := planRollout(hosts, order, "")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	hub, err := hubWave(hosts, true)
+	if err != nil || hub == nil {
+		r.t.Fatal(hub, err)
+	}
+	if _, err := r.e.Start("t1", "v0.6.4", "", "jesse", append(plan, *hub)); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// peersDone runs the peers of the rig through their steps, with no soak.
+func (r *rolloutRig) peersDone(peers ...string) {
+	r.e.soak = 0
+	for _, p := range peers {
+		r.tick()
+		r.f.finish(p, upgrade.RecOK, "v0.6.4")
+		r.tick()
+	}
+}
+
+func TestHubWaveRunsLastAndFinishes(t *testing.T) {
+	r := newHubRig(t, "a", "b")
+	r.startWithHub("a", "b")
+	r.peersDone("a", "b")
+	r.want("running a=ok b=ok hub=upgrading") // the hub wave starts the moment the last peer is ok
+	if r.f.deploys != 1 || len(r.f.starts) != 2 {
+		t.Fatalf("deploys %d starts %v", r.f.deploys, r.f.starts)
+	}
+	r.tick() // the deploy is still running: nothing else happens
+	r.want("running a=ok b=ok hub=upgrading")
+	r.f.endDeploy(depOK, "", "")
+	r.tick()
+	r.want("running a=ok b=ok hub=verifying")
+	// the hub is not yet reporting the version: it waits
+	r.f.advance(time.Minute)
+	r.tick()
+	r.want("running a=ok b=ok hub=verifying")
+	r.f.set("hub", func(h *relHost) { h.Version = "v0.6.4" })
+	r.tick()
+	r.want("done a=ok b=ok hub=ok")
+	if r.f.deploys != 1 {
+		t.Fatal("deployed twice")
+	}
+}
+
+func TestHubWaveSurvivesTheHubRestartingInsideIt(t *testing.T) {
+	r := newHubRig(t, "a")
+	r.startWithHub("a")
+	r.peersDone("a")
+	r.want("running a=ok hub=upgrading")
+	// The deploy ends and the hub pod is replaced: a new process, the same file.
+	r.f.endDeploy(depOK, "", "v0.6.4")
+	r.e = r.engine()
+	r.e.resumeAfterRestart()
+	r.tick()
+	r.want("done a=ok hub=ok")
+	if r.f.deploys != 1 {
+		t.Fatalf("deploys %d", r.f.deploys)
+	}
+	if !strings.Contains(r.actions(), "rollout.resume-after-restart") {
+		t.Fatal(r.actions())
+	}
+	// And a restart before the deploy record has an answer (the release host
+	// is asked again) does not start a second deploy.
+	r2 := newHubRig(t, "a")
+	r2.startWithHub("a")
+	r2.peersDone("a")
+	r2.e = r2.engine()
+	r2.f.statusErr = context.DeadlineExceeded
+	r2.tick()
+	r2.want("running a=ok hub=upgrading")
+	r2.f.statusErr = nil
+	r2.tick()
+	if r2.f.deploys != 1 {
+		t.Fatalf("deploys %d", r2.f.deploys)
+	}
+}
+
+func TestHubWaveAdoptsARunningDeploy(t *testing.T) {
+	r := newHubRig(t, "a")
+	r.startWithHub("a")
+	r.e.soak = 0
+	r.tick()
+	r.f.deploy = &DeployRecord{Version: "v0.6.4", State: depRunning, Started: r.f.clock().Add(-10 * time.Second)}
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("running a=ok hub=upgrading")
+	if r.f.deploys != 0 {
+		t.Fatal("started a second deploy")
+	}
+}
+
+func TestHubWaveFailureStopsWithTheDeployOutput(t *testing.T) {
+	r := newHubRig(t, "a")
+	r.startWithHub("a")
+	r.peersDone("a")
+	r.f.endDeploy(depFailed, "exit status 1", "")
+	r.tick()
+	r.want("stopped a=ok hub=failed")
+	j, _ := r.e.Get()
+	if !strings.Contains(j.Stop.Reason, "the deploy failed: bump: FAILED") || j.Plan[1].Output == "" {
+		t.Fatalf("stop %+v / %q", j.Stop, j.Plan[1].Output)
+	}
+	// Retry runs the deploy again
+	if _, err := r.e.Resume("jesse"); err != nil {
+		t.Fatal(err)
+	}
+	r.tick()
+	r.want("running a=ok hub=upgrading")
+	if r.f.deploys != 2 {
+		t.Fatalf("deploys %d", r.f.deploys)
+	}
+}
+
+func TestHubWaveStopsWhenTheHubComesBackOnTheOldVersion(t *testing.T) {
+	r := newHubRig(t, "a")
+	r.startWithHub("a")
+	r.peersDone("a")
+	r.f.endDeploy(depOK, "", "")
+	r.tick()
+	r.f.advance(6 * time.Minute)
+	r.tick()
+	r.want("stopped a=ok hub=failed")
+	j, _ := r.e.Get()
+	if !strings.Contains(j.Stop.Reason, "not back online on v0.6.4") {
+		t.Fatalf("%q", j.Stop.Reason)
+	}
+}
+
+func TestHubWaveWaitsForAPeerThatWentAway(t *testing.T) {
+	r := newHubRig(t, "a", "b")
+	r.startWithHub("a", "b")
+	r.e.soak = 0
+	r.tick()
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.f.set("a", func(h *relHost) { h.Status = "down" })
+	r.f.finish("b", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("running a=ok b=ok hub=pending")
+	if r.f.deploys != 0 {
+		t.Fatal("deployed over a missing peer")
+	}
+	r.f.set("a", func(h *relHost) { h.Status = "ok" })
+	r.tick()
+	r.want("running a=ok b=ok hub=upgrading")
+	// and it does not wait forever
+	r2 := newHubRig(t, "a", "b")
+	r2.startWithHub("a", "b")
+	r2.e.soak = 0
+	r2.tick()
+	r2.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r2.tick()
+	r2.f.set("a", func(h *relHost) { h.Status = "down" })
+	r2.f.finish("b", upgrade.RecOK, "v0.6.4")
+	r2.tick()
+	r2.f.advance(6 * time.Minute)
+	r2.tick()
+	r2.want("stopped a=ok b=ok hub=failed")
+}
+
+func TestHubWaveStillRunsWhenAPeerWasSkipped(t *testing.T) {
+	r := newHubRig(t, "a", "b")
+	r.f.set("b", func(h *relHost) { h.Status = "down" })
+	r.startWithHub("a", "b")
+	r.e.soak = 0
+	r.tick()
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.f.advance(3 * time.Minute)
+	r.tick()
+	r.want("running a=ok b=skipped hub=upgrading")
+}
+
+func TestHubWaveRestartedDeployOnTheHubItselfDoesNotFailIt(t *testing.T) {
+	r := newHubRig(t, "a")
+	r.startWithHub("a")
+	r.peersDone("a")
+	r.f.endDeploy(depFailed, "the deploy stopped without a verdict (this server restarted while it ran)", "v0.6.4")
+	r.tick()
+	r.want("done a=ok hub=ok")
+}
+
+func TestHubWaveOnlyAndNoWave(t *testing.T) {
+	r := newHubRig(t, "a")
+	r.f.set("a", func(h *relHost) { h.Version = "v0.6.4" }) // the peer is there already
+	hosts := r.f.Hosts(context.Background(), "v0.6.4")
+	plan, _ := planRollout(hosts, []string{}, "")
+	hub, err := hubWave(hosts, true)
+	if len(plan) != 0 || err != nil || hub == nil || hub.Mode != stepModeDeploy || hub.Wave != waveHub {
+		t.Fatalf("%v %v %v", plan, hub, err)
+	}
+	// a hub already on the version has no wave
+	r.f.set("hub", func(h *relHost) { h.Version = "v0.6.4" })
+	if hub, err := hubWave(r.f.Hosts(context.Background(), "v0.6.4"), true); hub != nil || err != nil {
+		t.Fatalf("%v %v", hub, err)
+	}
+	// no deploy command and no -release-upgrade: refused, with the reason
+	r.f.set("hub", func(h *relHost) { h.Version = "v0.6.3"; h.Enabled = false })
+	if _, err := hubWave(r.f.Hosts(context.Background(), "v0.6.4"), false); err == nil {
+		t.Fatal("a hub that cannot be upgraded was planned")
+	}
+}
+
+func TestHubWaveAsAnOrdinaryHostUpgrade(t *testing.T) {
+	// A single-host hub with -release-upgrade: its step is an upgrade like any
+	// other, last, and survives its restart through the upgrade record.
+	r := newHubRig(t, "a")
+	hosts := r.f.Hosts(context.Background(), "v0.6.4")
+	plan, _ := planRollout(hosts, []string{"a"}, "")
+	hub, _ := hubWave(hosts, false)
+	if hub.Mode != "" {
+		t.Fatal(hub.Mode)
+	}
+	if _, err := r.e.Start("t1", "v0.6.4", "", "jesse", append(plan, *hub)); err != nil {
+		t.Fatal(err)
+	}
+	r.peersDone("a")
+	r.tick()
+	r.want("running a=ok hub=upgrading")
+	r.e = r.engine() // the hub restarted by its own upgrade
+	r.f.finish("hub", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.tick()
+	r.want("done a=ok hub=ok")
 }

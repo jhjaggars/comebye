@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -318,6 +319,10 @@ func (s *Server) relBuild(ctx context.Context, it Todo, maxAge time.Duration) (r
 	if err != nil {
 		return b, err
 	}
+	if s.cfg.Release.Simulated && it.Release.State == relTagged && b.State == "none" {
+		// The simulated tool forgets its tags when the server restarts; the item remembers.
+		b = release.Build{State: "success", URL: "https://example.invalid/release/" + it.Release.Version, At: time.Now().UTC()}
+	}
 	s.rel.cmu.Lock()
 	s.rel.checks[k] = relCached{at: time.Now(), build: b}
 	s.rel.cmu.Unlock()
@@ -441,7 +446,7 @@ func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, re
 			dcancel()
 		}
 		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, hosts, ro, dep)
-		s.rolloutView(out, it, hosts)
+		s.rolloutView(out, it, hosts, dep)
 	} else {
 		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, nil, relRollout{}, nil)
 	}
@@ -639,7 +644,36 @@ func (s *Server) upgradeStatus() upgradeStatus {
 			st.Record = &rec
 		}
 	}
+	if s.cfg.Release.Simulated {
+		// A simulated host "runs" what it last "upgraded" to, so a demo and the
+		// browser tests can watch a rollout move the versions.
+		if v := s.simulatedVersion(st.Record); v != "" {
+			st.Version = v
+		}
+	}
 	return st
+}
+
+// simulatedVersion is the version a -release-simulate host reports: the one
+// its last simulated upgrade or deploy ended on.
+func (s *Server) simulatedVersion(rec *upgrade.Record) string {
+	v := ""
+	if rec != nil && rec.State == upgrade.RecDryRun && rec.To != "" {
+		v = rec.To
+	}
+	if p := s.deployRecordPath(); p != "" && s.fleet != nil && s.fleet.IsHub() {
+		if data, err := os.ReadFile(p); err == nil {
+			var d DeployRecord
+			if json.Unmarshal(data, &d) == nil && d.State == depOK && d.Version != "" {
+				if pv, ok := parseSemver(d.Version); ok {
+					if cv, ok := parseSemver(v); !ok || semverLess(cv, pv) {
+						v = d.Version
+					}
+				}
+			}
+		}
+	}
+	return v
 }
 
 // handleUpgradeStatus: GET /api/release/upgrade, this host's side: whether
@@ -867,6 +901,11 @@ type SimulatedUpgrade struct{}
 func (SimulatedUpgrade) Start(_ context.Context, rec upgrade.Record, path string, rollback, _ bool) error {
 	rec.State, rec.Finished, rec.To = upgrade.RecDryRun, time.Now().UTC(), rec.Version
 	rec.Output = "simulated: nothing was installed"
+	if strings.HasSuffix(rec.Version, ".13") {
+		// Like the simulated deploy: patch 13 fails, so a demo sees a stop.
+		rec.State, rec.To, rec.Error = upgrade.RecRolledBack, "", "simulated smoke check failed: journal has errors"
+		rec.Output = "simulated: install ok\nsimulated: smoke check failed: journal has errors\nsimulated: the old binary is back"
+	}
 	return upgrade.WriteRecord(path, rec)
 }
 

@@ -143,3 +143,60 @@ func (s *Server) noteRollout(j Rollout) {
 }
 
 var errNoChange = errors.New("no change")
+
+// DeployStatus is the deploy record, as the release host keeps it.
+func (o serverRolloutOps) DeployStatus(ctx context.Context) (deployStatus, error) {
+	return o.s.deployStatusFor(ctx)
+}
+
+// StartDeploy is handleReleaseDeploy without the browser: the build must be
+// green, then the release host (this one, or the peer that owns the clone)
+// starts the deploy command. It returns the record's start time, which names
+// the run.
+func (o serverRolloutOps) StartDeploy(ctx context.Context, job Rollout) (string, error) {
+	s := o.s
+	cfg := s.cfg.Release
+	it, ok := s.todos.get(job.Todo)
+	if !ok || it.Release == nil || it.Release.State != relTagged || it.Release.Version != job.Version {
+		return "", &peerFault{host: s.releaseHost(), code: "not_released", msg: "the release item is gone or is not this version"}
+	}
+	if cfg.Tool == nil {
+		return "", &peerFault{host: s.releaseHost(), code: "release_disabled", msg: "this hub cannot check the release build"}
+	}
+	if bd, err := s.relBuild(ctx, it, relBuildTTL); err != nil {
+		return "", fmt.Errorf("the release build could not be checked: %w", err)
+	} else if bd.State != "success" {
+		s.auditBy(ledger.AuditEvent{By: "comebye", Action: "deploy.refused", Todo: it.ID, Detail: job.Version + ": the release build is " + bd.State})
+		return "", &peerFault{host: s.releaseHost(), code: "build_not_green", msg: "the release build is " + bd.State}
+	}
+	if cfg.Host == "" {
+		rec, code, msg := s.startDeployLocal(job.By, it.ID, job.Version)
+		s.auditBy(ledger.AuditEvent{By: job.By, Action: "deploy.request", Todo: it.ID, Host: s.releaseHost(), OK: code == http.StatusAccepted, Detail: fmt.Sprintf("%s rollout=%s -> %d", job.Version, job.ID, code)})
+		if code != http.StatusAccepted {
+			return "", &peerFault{host: s.releaseHost(), code: msg[0], msg: msg[1]}
+		}
+		return rec.Started.UTC().Format(time.RFC3339Nano), nil
+	}
+	inner, _ := json.Marshal(deployReq{Version: job.Version, Todo: it.ID, By: job.By})
+	code, body, err := s.fleet.CallHost(ctx, cfg.Host, "release-deploy", url.Values{}, inner)
+	if err != nil {
+		s.auditBy(ledger.AuditEvent{By: job.By, Action: "deploy.request", Todo: it.ID, Host: cfg.Host, Detail: job.Version + ": " + oneLine(err.Error(), 200)})
+		return "", err
+	}
+	s.auditBy(ledger.AuditEvent{By: job.By, Action: "deploy.request", Todo: it.ID, Host: cfg.Host, OK: code == http.StatusAccepted, Detail: fmt.Sprintf("%s rollout=%s -> %d", job.Version, job.ID, code)})
+	if code != http.StatusAccepted {
+		var e struct{ Code, Message string }
+		_ = json.Unmarshal(body, &e)
+		if e.Message == "" {
+			e.Message = fmt.Sprintf("answered %d", code)
+		}
+		return "", &peerFault{host: cfg.Host, code: e.Code, msg: oneLine(e.Message, 300)}
+	}
+	var resp struct {
+		Record DeployRecord `json:"record"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil || resp.Record.Started.IsZero() {
+		return "", fmt.Errorf("%s accepted the deploy but sent no record", cfg.Host)
+	}
+	return resp.Record.Started.UTC().Format(time.RFC3339Nano), nil
+}

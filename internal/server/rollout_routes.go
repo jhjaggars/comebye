@@ -26,6 +26,9 @@ type rolloutStartBody struct {
 	Version string   `json:"version"`
 	Commit  string   `json:"commit"`
 	Hosts   []string `json:"hosts"`
+	// Hub asks for the hub wave, last: the deploy (Bump hub), or the hub's own
+	// upgrade on a single-host setup.
+	Hub bool `json:"hub,omitempty"`
 }
 
 func (s *Server) rolloutOff(w http.ResponseWriter) bool {
@@ -67,7 +70,7 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusConflict, "confirm_mismatch", "the version and commit you confirmed are not this item's: reload the page")
 		return
 	}
-	if len(b.Hosts) == 0 {
+	if len(b.Hosts) == 0 && !b.Hub {
 		relErr(w, http.StatusBadRequest, "no_hosts", "name the hosts, in the order they are to be upgraded")
 		return
 	}
@@ -90,13 +93,31 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hosts := s.rollout.ops.Hosts(ctx, it.Release.Version)
+	if b.Hosts == nil {
+		b.Hosts = []string{}
+	}
 	plan, err := planRollout(hosts, b.Hosts, "")
 	if err != nil {
 		relErr(w, http.StatusConflict, "bad_plan", err.Error())
 		return
 	}
-	if st, err := s.deployStatusFor(ctx); err == nil && st.Record != nil && st.Record.State == depRunning {
+	dst, derr := s.deployStatusFor(ctx)
+	if derr == nil && dst.Record != nil && dst.Record.State == depRunning {
 		relErr(w, http.StatusConflict, "deploy_running", "a deploy is running: wait for it to finish")
+		return
+	}
+	if b.Hub {
+		hub, err := hubWave(hosts, derr == nil && dst.Enabled)
+		if err != nil {
+			relErr(w, http.StatusConflict, "bad_plan", err.Error())
+			return
+		}
+		if hub != nil {
+			plan = append(plan, *hub)
+		}
+	}
+	if len(plan) == 0 {
+		relErr(w, http.StatusConflict, "bad_plan", "every host in the plan already runs "+it.Release.Version)
 		return
 	}
 	job, err := s.rollout.Start(it.ID, it.Release.Version, it.Release.Commit, s.by(r, ""), plan)
@@ -164,7 +185,11 @@ func (s *Server) rolloutControl(op string, w http.ResponseWriter, r *http.Reques
 
 // rolloutView adds the rollout to a tagged release's view: the job when it
 // is this release's, and otherwise the plan the confirm would show.
-func (s *Server) rolloutView(out map[string]any, it Todo, hosts []relHost) {
+func (s *Server) rolloutView(out map[string]any, it Todo, hosts []relHost, dep *deployStatus) {
+	deployOn, label := dep != nil && dep.Enabled, "Bump hub"
+	if dep != nil && dep.Label != "" {
+		label = dep.Label
+	}
 	if s.rollout == nil || s.cfg.Release.Tool == nil {
 		return
 	}
@@ -192,6 +217,18 @@ func (s *Server) rolloutView(out map[string]any, it Todo, hosts []relHost) {
 	plan, err := planRollout(hosts, nil, s.cfg.Release.Canary)
 	if err != nil {
 		out["rollout_plan_error"] = err.Error()
+		return
+	}
+	// The hub is the last wave, named in the confirm.
+	if hub, herr := hubWave(hosts, deployOn); herr == nil && hub != nil {
+		plan = append(plan, *hub)
+		if deployOn {
+			out["rollout_hub_label"] = label
+		}
+	} else if herr != nil {
+		out["rollout_hub_error"] = herr.Error()
+	}
+	if len(plan) == 0 {
 		return
 	}
 	out["rollout_plan"] = plan

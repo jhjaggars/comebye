@@ -411,6 +411,10 @@ func (s *Server) handleReleaseDeploy(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusConflict, "build_not_green", why)
 		return
 	}
+	if s.rolloutLive() {
+		relErr(w, http.StatusConflict, "rollout_active", "a rollout is in progress and does the hub wave itself: pause or cancel it first")
+		return
+	}
 	by := s.by(r, "")
 	if cfg.Host == "" {
 		rec, code, msg := s.startDeployLocal(by, it.ID, b.Version)

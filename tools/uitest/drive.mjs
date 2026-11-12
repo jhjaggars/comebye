@@ -4745,17 +4745,18 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     let ct = await page.locator(fleet + " .rel-confirm").innerText();
     if (!/v0\.5\.22/.test(ct) || !/a3f9c1e/.test(ct) || !/2 minutes/.test(ct) || !/stops everything/.test(ct)) throw new Error("confirm text: " + ct);
     const order = () => page.locator(fleet + " .rl-order li").evaluateAll((l) => l.map((x) => x.dataset.host));
-    if ((await order()).join() !== "peerbox,kubevirt-1,mac-mini") throw new Error("order " + (await order()));
+    if ((await order()).join() !== "peerbox,kubevirt-1,mac-mini,laharl") throw new Error("order " + (await order()));
+    if (!/the hub last/.test(ct) || !/Bump hub/.test(await page.locator(fleet + " .rl-hubli").innerText()) || !/what is running in the cluster/.test(await page.locator(fleet + " .rl-hubli").innerText())) throw new Error("the hub wave is not named: " + ct);
     if (!/canary/.test(await page.locator(fleet + " .rl-order li").first().innerText())) throw new Error("the first host is not marked canary");
-    if (!/Confirm: roll out v0\.5\.22 to 3 hosts/.test(await page.locator(fleet + " .rel-go").innerText())) throw new Error("confirm button");
+    if (!/Confirm: roll out v0\.5\.22 to 4 hosts/.test(await page.locator(fleet + " .rel-go").innerText())) throw new Error("confirm button");
     await page.screenshot({ path: `${out}/rollout-confirm-${width}.png` });
     // the user picks another canary
     await page.locator(fleet + " select[data-ro-canary]").selectOption("kubevirt-1");
-    if ((await order()).join() !== "kubevirt-1,peerbox,mac-mini") throw new Error("canary not moved: " + (await order()));
+    if ((await order()).join() !== "kubevirt-1,peerbox,mac-mini,laharl") throw new Error("canary not moved: " + (await order()));
     await page.locator(fleet + " .rel-go").click();
     await page.waitForFunction(() => !document.querySelector("#pr-releases .rel-confirm"));
     const p0 = posts[0];
-    if (!p0 || p0.url !== "/api/release/rollout" || p0.body.version !== "v0.5.22" || p0.body.commit.length !== 40 || p0.body.hosts.join() !== "kubevirt-1,peerbox,mac-mini" || !p0.body.todo || p0.csrf !== "fixture") throw new Error("start request " + JSON.stringify(p0));
+    if (!p0 || p0.url !== "/api/release/rollout" || p0.body.version !== "v0.5.22" || p0.body.commit.length !== 40 || p0.body.hosts.join() !== "kubevirt-1,peerbox,mac-mini" || p0.body.hub !== true || !p0.body.todo || p0.csrf !== "fixture") throw new Error("start request " + JSON.stringify(p0));
     // Cancel in the confirm sends nothing
     await page.locator(fleet + " .rel-roll").click();
     await page.locator(fleet + " .rel-confirm [data-rel=cancel]").click();
@@ -4765,9 +4766,9 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     await reload("ro-running");
     const band = fleet + " .rl-band";
     let bt = await page.locator(band).innerText();
-    if (!/Rolling out v0\.5\.22/.test(bt) || !/1 of 3 done/.test(bt) || !/upgrading kubevirt-1/.test(bt)) throw new Error("running band: " + bt);
+    if (!/Rolling out v0\.5\.22/.test(bt) || !/1 of 4 done/.test(bt) || !/upgrading kubevirt-1/.test(bt)) throw new Error("running band: " + bt);
     if ((await page.locator(band + " button").allInnerTexts()).join() !== "Pause,Cancel") throw new Error("running controls");
-    if ((await page.locator(fleet + " .rl-wave-h").allInnerTexts()).join().toLowerCase() !== "canary,other peers,not in this rollout") throw new Error("waves " + (await page.locator(fleet + " .rl-wave-h").allInnerTexts()));
+    if ((await page.locator(fleet + " .rl-wave-h").allInnerTexts()).join().toLowerCase() !== "canary,other peers,hub") throw new Error("waves " + (await page.locator(fleet + " .rl-wave-h").allInnerTexts()));
     if (await page.locator(fleet + " .rel-roll").count()) throw new Error("Roll out to all while a rollout runs");
     const row = (n) => page.locator(`${fleet} .rl-host[data-host="${n}"]`);
     const pb = await row("peerbox").innerText();
@@ -4806,7 +4807,7 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     // done with one skipped: the release stays open, Roll out again for just that host
     await reload("ro-skipped");
     bt = await page.locator(band).innerText();
-    if (!/Rolled out/.test(bt) || !/2 of 3 hosts, 1 skipped \(mac-mini\)/.test(bt)) throw new Error("skipped band: " + bt);
+    if (!/Rolled out/.test(bt) || !/3 of 4 hosts, 1 skipped \(mac-mini\)/.test(bt)) throw new Error("skipped band: " + bt);
     if ((await page.locator(fleet + " .rel-roll").innerText()) !== "Roll out again") throw new Error("no Roll out again");
     if (!/skipped/.test(await row("mac-mini").innerText())) throw new Error("mac-mini not marked skipped");
     await page.screenshot({ path: `${out}/rollout-skipped-${width}.png` });
