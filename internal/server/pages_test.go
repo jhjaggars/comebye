@@ -349,13 +349,13 @@ func TestPagesEveryResponseIsSandboxed(t *testing.T) {
 			}
 		}
 	}
-	// The HTML is served as the agent wrote it; the Markdown through the
+	// The HTML is served as the agent wrote it, plus the comment reporter; the Markdown through the
 	// shell, whose source block cannot be closed by the page text.
-	if w := served(s, "GET", "/p/"+p.ID, userHdr, ""); w.Body.String() != "<script>1</script>" {
+	if w := served(s, "GET", "/p/"+p.ID, userHdr, ""); w.Body.String() != string(withReporter([]byte("<script>1</script>"))) {
 		t.Errorf("html body = %q", w.Body)
 	}
 	w := served(s, "GET", "/p/"+md.ID, userHdr, "")
-	if !strings.Contains(w.Body.String(), `\u003c/script\u003e\u003cb\u003ex`) || strings.Count(w.Body.String(), "</script>") != 4 {
+	if !strings.Contains(w.Body.String(), `\u003c/script\u003e\u003cb\u003ex`) || strings.Count(w.Body.String(), "</script>") != 5 {
 		t.Errorf("markdown shell = %s", w.Body)
 	}
 	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'unsafe-inline' 'self'") || strings.Contains(csp, "cdnjs") {
@@ -374,10 +374,10 @@ func TestPagesEveryResponseIsSandboxed(t *testing.T) {
 	}
 	// An old version stays addressable after an update.
 	do(s, "POST", "/api/pages", agentHdr("w2:p1"), pubJSON(map[string]any{"id": p.ID, "body": "<p>new"}))
-	if w := served(s, "GET", "/p/"+p.ID+"/v1", userHdr, ""); w.Body.String() != "<script>1</script>" {
+	if w := served(s, "GET", "/p/"+p.ID+"/v1", userHdr, ""); w.Body.String() != string(withReporter([]byte("<script>1</script>"))) {
 		t.Errorf("v1 = %q", w.Body)
 	}
-	if w := served(s, "GET", "/p/"+p.ID, userHdr, ""); w.Body.String() != "<p>new" {
+	if w := served(s, "GET", "/p/"+p.ID, userHdr, ""); w.Body.String() != string(withReporter([]byte("<p>new"))) {
 		t.Errorf("latest = %q", w.Body)
 	}
 	// And a page with CORS asked for gets none.
@@ -471,7 +471,7 @@ func TestPagesListenerServesOnlyPages(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w
 	}
-	if w := get("GET", "/p/"+p.ID, userHdr, "hub.t.ts.net:8443"); w.Code != 200 || w.Body.String() != "<p>hi" {
+	if w := get("GET", "/p/"+p.ID, userHdr, "hub.t.ts.net:8443"); w.Code != 200 || w.Body.String() != string(withReporter([]byte("<p>hi"))) {
 		t.Fatalf("page = %d %q", w.Code, w.Body)
 	}
 	for _, c := range []struct{ method, path string }{

@@ -277,6 +277,7 @@ type Server struct {
 	provObserveGap time.Duration // how often the provisioner asks (tests shorten it)
 	hjobs          *hubJobs      // on a hub: the jobs it has asked provisioners to run
 	pages          *pageStore
+	commentLim     commentLimiter
 	briefSched     *briefSchedStore
 	resets         *resetStore
 	// resetPoll and resetWait pace a reset's wait for the new session

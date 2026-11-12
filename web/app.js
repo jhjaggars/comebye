@@ -5983,9 +5983,10 @@ function renderPageView() {
   pgs.frameVer = ver;
   pgs.frameFollow = !r.ver;
   // allow="clipboard-write": a page's Copy button may write the clipboard (on a click; it can never read it).
-  view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
+  view.innerHTML = bar + `<div class="pgs-sel" id="pgs-sel" hidden></div><div class="pgs-body"><iframe class="pgs-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div>`;
   const fr = view.querySelector("iframe.pgs-frame");
   fr.addEventListener("load", sendPageTheme);
+  pgcOpen(p, ver);
   pagesMade(p.id, ver);
 }
 
@@ -6049,6 +6050,139 @@ function sendPageTheme() {
 
 // Every theme change (picker, preview, the OS scheme under System) sets data-theme.
 new MutationObserver(sendPageTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+// ---- Comments on a page ----
+// The page is untrusted code in a sandboxed frame. The hub adds a small script
+// to every page it serves that reports the text the user selects:
+//   {type:"comebye-selection", v:1, quote, before, after}   (all strings)
+// That is the only thing a page can tell this app, and it is checked here, not
+// believed: the message must come from the frame this app opened, carry exactly
+// these keys with strings within the limits, and arrive no faster than 10 a
+// second. It has no recipient and no page id: the comments go to the page the
+// viewer shows, and the hub sends them to that page's publisher. Page text is
+// put in the DOM with textContent only. See docs/security.md.
+const PGC = { quote: 500, around: 80, note: 1000, max: 20, burst: 10 };
+const pgc = { id: "", ver: 0, title: "", by: "", sel: null, composing: false, busy: false, drafts: new Map(), seen: [] };
+
+function pgcClean(s, n) {
+  return String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
+}
+
+// The strict schema: null for anything else.
+function pageSelectionMessage(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+  const keys = Object.keys(d);
+  if (keys.length !== 5 || !["type", "v", "quote", "before", "after"].every((k) => keys.includes(k))) return null;
+  if (d.type !== "comebye-selection" || d.v !== 1) return null;
+  if (typeof d.quote !== "string" || typeof d.before !== "string" || typeof d.after !== "string") return null;
+  if (d.quote.length > PGC.quote * 2 || d.before.length > PGC.around * 2 || d.after.length > PGC.around * 2) return null;
+  return { quote: pgcClean(d.quote, PGC.quote), before: pgcClean(d.before, PGC.around), after: pgcClean(d.after, PGC.around) };
+}
+
+function pgcFrame() { return document.querySelector("#pgs-view iframe.pgs-frame"); }
+
+window.addEventListener("message", (e) => {
+  const fr = pgcFrame();
+  if (!fr || !fr.contentWindow || e.source !== fr.contentWindow) return; // not the frame this app opened
+  // A sandboxed frame has the opaque origin "null"; one served from the pages origin may name it.
+  if (e.origin !== "null" && !(pgs.pagesUrl && e.origin === pgs.pagesUrl)) return;
+  const now = Date.now();
+  pgc.seen = pgc.seen.filter((t) => now - t < 1000);
+  if (pgc.seen.length >= PGC.burst) return;
+  pgc.seen.push(now);
+  const m = pageSelectionMessage(e.data);
+  if (!m) return;
+  if (pgc.composing) return; // keep the text being commented while the user types
+  pgc.sel = m.quote ? m : null;
+  pgcRender();
+});
+
+function pgcKey() { return pgc.id + "/" + pgc.ver; }
+function pgcItems() { return pgc.drafts.get(pgcKey()) || []; }
+
+function pgcOpen(p, ver) {
+  Object.assign(pgc, { id: p.id, ver, title: p.title, by: p.by, sel: null, composing: false, busy: false, seen: [] });
+  pgcRender();
+}
+
+function pgcEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function pgcRender() {
+  const strip = $("pgs-sel"), tray = $("pgs-tray");
+  if (!strip || !tray) return;
+  const items = pgcItems();
+  // The strip: the selected text and what to do with it.
+  strip.replaceChildren();
+  strip.hidden = !pgc.sel;
+  if (pgc.sel) {
+    const q = pgcEl("span", "pgs-selq", "“" + pgc.sel.quote + "”");
+    q.title = pgc.sel.quote;
+    if (!pgc.composing) {
+      const b = pgcEl("button", "btn primary", "Comment");
+      b.type = "button"; b.id = "pgs-addc";
+      b.addEventListener("click", () => { pgc.composing = true; pgcRender(); });
+      strip.append(q, b);
+    } else {
+      const ta = pgcEl("textarea");
+      ta.id = "pgs-note"; ta.maxLength = PGC.note; ta.rows = 3; ta.placeholder = "Your comment on this text";
+      ta.setAttribute("aria-label", "Your comment on the selected text");
+      const add = pgcEl("button", "btn primary", "Add"), cancel = pgcEl("button", "btn", "Cancel");
+      add.type = cancel.type = "button"; add.id = "pgs-noteadd"; cancel.id = "pgs-notecancel";
+      const done = () => {
+        const note = ta.value.trim();
+        if (!note || items.length >= PGC.max) return;
+        const list = pgcItems().slice();
+        list.push({ quote: pgc.sel.quote, before: pgc.sel.before, after: pgc.sel.after, note });
+        pgc.drafts.set(pgcKey(), list);
+        pgc.sel = null; pgc.composing = false; pgcRender();
+      };
+      add.addEventListener("click", done);
+      cancel.addEventListener("click", () => { pgc.composing = false; pgc.sel = null; pgcRender(); });
+      ta.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); done(); } });
+      const row = pgcEl("div", "pgs-selrow"); row.append(add, cancel);
+      strip.append(q, ta, row);
+      setTimeout(() => ta.focus(), 0);
+    }
+  }
+  // The tray: the comments so far, and Send.
+  tray.replaceChildren();
+  tray.hidden = items.length === 0;
+  if (!items.length) return;
+  tray.append(pgcEl("h3", "", "Comments · " + items.length));
+  items.forEach((c, i) => {
+    const card = pgcEl("div", "pgs-cmt");
+    const rm = pgcEl("button", "pgs-cmtx", "×");
+    rm.type = "button"; rm.setAttribute("aria-label", "Remove comment " + (i + 1));
+    rm.addEventListener("click", () => { const l = pgcItems().slice(); l.splice(i, 1); pgc.drafts.set(pgcKey(), l); pgcRender(); });
+    card.append(rm, pgcEl("div", "pgs-cmtq", "“" + c.quote + "”"), pgcEl("div", "pgs-cmtn", c.note));
+    tray.append(card);
+  });
+  const send = pgcEl("button", "btn primary", pgc.busy ? "Sending…" : "Send to " + (pgc.by || "publisher"));
+  send.type = "button"; send.id = "pgs-sendc"; send.disabled = pgc.busy;
+  send.addEventListener("click", pgcSend);
+  tray.append(send, pgcEl("div", "pgs-cmthint", "Files one To do item and messages the page’s publisher."));
+}
+
+async function pgcSend() {
+  const items = pgcItems();
+  if (!items.length || pgc.busy) return;
+  const key = pgcKey(), id = pgc.id, ver = pgc.ver;
+  pgc.busy = true; pgcRender();
+  try {
+    const r = await api("/api/pages/" + encodeURIComponent(id) + "/comments", { method: "POST", body: JSON.stringify({ version: ver, comments: items }) });
+    pgc.drafts.delete(key);
+    toast(r && r.sent === "queued" ? `Sent ${items.length} comment${items.length === 1 ? "" : "s"}: in To do and queued to the publisher` : (r && r.note) || "Saved in To do");
+  } catch (e) {
+    toast("Could not send the comments: " + (e && e.message ? e.message : e), true);
+  }
+  pgc.busy = false;
+  if (pgcKey() === key) pgcRender();
+}
 
 // syncPages follows the hash: route() calls it.
 function syncPages() {

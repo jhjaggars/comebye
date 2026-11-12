@@ -119,6 +119,8 @@ if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc
 if want pages; then PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The page starters (comebye pages new): published by the real CLI, opened in the viewer under the real CSP.
 if want starters; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node starters.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Comments on a page: select, comment, send; and what the viewer refuses from a hostile page.
+if want pagecomments; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagecomments.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # A release item closes itself once the fleet runs its version: a second build with a version stamped in, its own state.
 if want releaseauto; then
   (cd "$app" && go build -ldflags "-X main.version=v100.0.0" -o "$tmp/comebye-stamped" .)

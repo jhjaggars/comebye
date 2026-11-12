@@ -474,6 +474,28 @@ would be you. So a page never runs as the app:
   page that does not listen ignores it; one that does should apply only known
   `--` names with colour values and never evaluate the data (the page template
   does exactly that, and falls back to `prefers-color-scheme` without it).
+- **Comments (the page-to-app message).** The hub adds a small script to every
+  page it serves (the stored page is not changed). When the user selects text,
+  it posts `{type: "comebye-selection", v: 1, quote, before, after}` (strings)
+  to the app. A page is untrusted, so the app checks it rather than believing
+  it (`web/app.js`, `pageSelectionMessage`):
+  - **Source frame.** The message must come from the exact frame the app
+    opened (`e.source === frame.contentWindow`). A nested frame or a popup of
+    the page is dropped. `e.origin` is `"null"` for a sandboxed frame, so it is
+    only a second check (it must be `"null"` or the pages origin).
+  - **Strict schema.** Exactly those five keys, `type` and `v` exact, three
+    strings, a quote of up to 500 characters and its context up to 80; control
+    characters stripped. Anything else drops the message.
+  - **No recipient.** The message has no recipient, page id or version. The
+    comments go to the page the viewer shows, and the hub sends them to the
+    page's publisher from its own record. `POST /api/pages/{id}/comments`
+    refuses a body with any other field.
+  - **Rate limits.** The app takes at most 10 such messages a second. The hub
+    takes at most 10 batches a minute per page, 20 comments and 64 KiB a batch.
+  - **Rendering.** Page text is put in the DOM with `textContent` only, and goes
+    to the agent as a quoted excerpt that the message says is page text, not an
+    instruction. The endpoint is the user's alone (an agent token is refused)
+    and the page's `connect-src 'none'` still stops it calling the API.
 - **Markdown** is rendered in the sandboxed shell with DOMPurify: raw HTML is
   shown as text, no images, links shown as text with their URL.
 - **Limits:** 5 MiB a version, 10 versions a page, 500 MiB and 1000 pages in

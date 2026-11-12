@@ -450,6 +450,7 @@ func (s *Server) pageRoutes() {
 	s.mux.HandleFunc("GET /api/pages/{id}", s.authWorker(s.handlePageGet))
 	s.mux.HandleFunc("GET /api/pages/{id}/preview", s.authWorker(s.handlePagePreview))
 	s.mux.HandleFunc("DELETE /api/pages/{id}", s.authWorker(s.handlePageDelete))
+	s.mux.HandleFunc("POST /api/pages/{id}/comments", s.auth(s.handlePageComments))
 	s.pageViewRoutes(s.mux)
 }
 
@@ -880,7 +881,7 @@ func (s *Server) handlePageView(w http.ResponseWriter, r *http.Request) {
 		h.Set("Content-Security-Policy", s.pageCSP(true))
 		body = markdownShell(body)
 	}
-	_, _ = w.Write(body)
+	_, _ = w.Write(withReporter(body))
 }
 
 // handlePageMissing answers every other /p/ path.
