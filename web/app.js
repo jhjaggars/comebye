@@ -5209,7 +5209,46 @@ function initRecall() {
 // and navigating this window too. Everything about it that this screen
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
-const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0 };
+const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
+  view: lsGet("comebye.pgs.view") === "list" ? "list" : "grid", sort: ["updated", "opened", "title"].includes(lsGet("comebye.pgs.sort")) ? lsGet("comebye.pgs.sort") : "updated",
+  chip: "all", opened: null };
+
+// What the user has opened, per device: id -> { v: newest version seen, at: ms }.
+// The hub never learns it. The first time Pages loads, every page already there
+// counts as seen, so only pages published or republished after that carry the
+// "new" / "updated" dot. Capped at 500 ids; storage that throws is only a lost memory.
+const PGS_OPENED_KEY = "comebye.pgs.opened";
+function pgsOpenedInit() {
+  if (pgs.opened) return;
+  let o = null;
+  try { o = JSON.parse(lsGet(PGS_OPENED_KEY)); } catch {}
+  if (o && typeof o === "object" && !Array.isArray(o)) { pgs.opened = o; return; }
+  pgs.opened = {};
+  for (const p of pgs.items) pgs.opened[p.id] = { v: p.version, at: 0 };
+  pgsOpenedSave();
+}
+function pgsOpenedSave() {
+  const ids = Object.keys(pgs.opened);
+  if (ids.length > 500) {
+    ids.sort((x, y) => (pgs.opened[y].at || 0) - (pgs.opened[x].at || 0));
+    pgs.opened = Object.fromEntries(ids.slice(0, 500).map((id) => [id, pgs.opened[id]]));
+  }
+  lsSet(PGS_OPENED_KEY, JSON.stringify(pgs.opened));
+}
+// pgsMarkOpened: the newest version of a page was shown (an older version does not count).
+function pgsMarkOpened(p) {
+  pgsOpenedInit();
+  const o = pgs.opened[p.id];
+  if (o && o.v >= p.version && o.at) return;
+  pgs.opened[p.id] = { v: p.version, at: Date.now() };
+  pgsOpenedSave();
+}
+// pgsDot: "new" (never opened), "updated" (a newer version than the one opened), or "".
+function pgsDot(p) {
+  const o = pgs.opened && pgs.opened[p.id];
+  if (!pgs.opened) return "";
+  return !o ? "new" : o.v < p.version ? "updated" : "";
+}
 
 function parsePagesRoute() {
   const m = location.hash.match(/^#\/pages(?:\/([^/]+)(?:\/(\d+))?)?$/);
@@ -5237,6 +5276,7 @@ async function pagesLoad() {
     try { pgs.publicUrl = r.public_url ? new URL(r.public_url).origin : ""; } catch { pgs.publicUrl = ""; }
     pgs.pagesUrl = r.pages_url || ""; // pages served from an origin of their own (-pages-listen), or ""
     pgs.err = "";
+    pgsOpenedInit();
   } catch (e) {
     pgs.err = e.status === 503 ? "Pages are off on this hub." : e.message;
   }
@@ -5246,8 +5286,23 @@ async function pagesLoad() {
 
 function pagesFiltered() {
   const q = pgs.q.trim().toLowerCase();
-  if (!q) return pgs.items;
-  return pgs.items.filter((p) => [p.title, p.by, p.host, p.id, p.key, p.kind, p.handoff].some((v) => String(v || "").toLowerCase().includes(q)));
+  let a = pgs.items;
+  if (pgs.chip === "rev") a = a.filter((p) => p.version > 1);
+  else if (pgs.chip !== "all") a = a.filter((p) => p.host === pgs.chip);
+  if (q) a = a.filter((p) => [p.title, p.by, p.host, p.id, p.key, p.kind, p.handoff].some((v) => String(v || "").toLowerCase().includes(q)));
+  const upd = (p) => Date.parse(p.updated_at) || 0;
+  const at = (p) => (pgs.opened && pgs.opened[p.id] && pgs.opened[p.id].at) || 0;
+  if (pgs.sort === "title") return a.slice().sort((x, y) => String(x.title).localeCompare(String(y.title)) || upd(y) - upd(x));
+  if (pgs.sort === "opened") return a.slice().sort((x, y) => at(y) - at(x) || upd(y) - upd(x));
+  return a.slice().sort((x, y) => upd(y) - upd(x));
+}
+
+// The filter chips: all, the pages with more than one version, and one per host.
+function pagesChips() {
+  const hosts = [...new Set(pgs.items.map((p) => p.host).filter(Boolean))].sort();
+  if (pgs.chip !== "all" && pgs.chip !== "rev" && !hosts.includes(pgs.chip)) pgs.chip = "all";
+  const cs = [["all", "All " + pgs.items.length], ["rev", "Revised"], ...hosts.map((h) => [h, h])];
+  return cs.map(([k, label]) => `<button type="button" class="pgs-chip" data-chip="${esc(k)}" aria-pressed="${pgs.chip === k}">${esc(label)}</button>`).join("");
 }
 
 // pgsMarked is a snippet from the hub, as HTML: text with \x02 and \x03 around the matched words,
@@ -5293,10 +5348,13 @@ function renderPages() {
   else if (!pgs.loaded) html = `<div class="pgs-empty">Loading…</div>`;
   else if (!pgs.items.length) html = `<div class="pgs-empty">No pages yet. An agent publishes one with <code>comebye publish report.html</code> (or a <code>.md</code> file).</div>`;
   else {
-    const card = (p) => `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">
-      <span class="pgs-title">${esc(p.title)}</span>
-      <span class="pgs-meta">${esc(p.by)}${p.host ? " · " + esc(p.host) : ""} · ${esc(pageAgo(p.updated_at))}</span>
-      <span class="pgs-meta">${esc(p.kind)} · v${p.version} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></a>`;
+    const card = (p) => {
+      const dot = pgsDot(p), rev = p.updated_at !== p.created_at;
+      return `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">
+        <span class="pgs-title">${esc(p.title)}</span>
+        <span class="pgs-meta">${esc(p.by)}${p.host ? " · " + esc(p.host) : ""}</span>
+        <span class="pgs-meta pgs-line">${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-pill">v${p.version}</span><span class="pgs-sz">${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></span></a>`;
+    };
     const body = pgs.body && pgs.body.q === pgs.q.trim() ? pgs.body.matches.filter((m) => pgs.items.some((p) => p.id === m.id)) : [];
     const hit = (m) => {
       const p = pgs.items.find((x) => x.id === m.id);
@@ -5313,6 +5371,13 @@ function renderPages() {
       if (body.length) html += `<div class="pgs-sec" id="pgs-intext">In page text · ${body.length}${pgs.body.partial ? "+" : ""}</div>` + body.map(hit).join("");
     }
   }
+  const items = $("pgs-items");
+  items.className = pgs.view === "list" ? "pgs-rows" : "pgs-grid";
+  const chips = pgs.loaded && !pgs.err && pgs.items.length ? pagesChips() : "";
+  if ($("pgs-chips")._html !== chips) { $("pgs-chips")._html = chips; $("pgs-chips").innerHTML = chips; }
+  $("pgs-chips").hidden = !chips;
+  for (const b of document.querySelectorAll("#pgs-views button")) b.setAttribute("aria-pressed", String(b.dataset.view === pgs.view));
+  if ($("pgs-sort").value !== pgs.sort) $("pgs-sort").value = pgs.sort;
   if ($("pgs-items")._html !== html) { $("pgs-items")._html = html; $("pgs-items").innerHTML = html; }
   renderPageView();
 }
@@ -5338,6 +5403,7 @@ function renderPageView() {
   let ver = r.ver || p.version, newer = 0;
   if (view.dataset.id === p.id && pgs.frameFollow && !r.ver && !pgs.reload && pgs.frameVer && pgs.frameVer < p.version) { newer = p.version; ver = pgs.frameVer; }
   pgs.reload = false;
+  if (ver === p.version) pgsMarkOpened(p);
   const key = p.id + "/" + ver;
   const vers = (p.versions || []).slice().reverse();
   const opts = vers.map((v) => `<option value="${v.n}"${v.n === ver ? " selected" : ""}>v${v.n}${v.n === p.version ? " (latest)" : ""} · ${esc(pageAgo(v.at))}</option>`).join("");
@@ -5474,6 +5540,18 @@ async function pagesDelete() {
 function initPages() {
   $("pgs-back").addEventListener("click", pagesBack);
   $("pgs-q").addEventListener("input", (ev) => { pgs.q = ev.target.value; renderPages(); pagesBodySearch(); });
+  $("pgs-sort").addEventListener("change", (ev) => { pgs.sort = ev.target.value; lsSet("comebye.pgs.sort", pgs.sort); renderPages(); });
+  $("pgs-views").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-view]");
+    if (!b) return;
+    pgs.view = b.dataset.view; lsSet("comebye.pgs.view", pgs.view); renderPages();
+  });
+  $("pgs-chips").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-chip]");
+    if (!b) return;
+    pgs.chip = b.dataset.chip; renderPages();
+  });
+  $("pgs-gallery").addEventListener("click", () => { location.hash = "#/pages"; });
   $("pages").addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") { ev.stopPropagation(); pagesBack(); }
   });

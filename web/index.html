@@ -1992,10 +1992,30 @@
     .pgs-view { display: none; flex: 1; flex-direction: column; }
     #pages.in-page .pgs-list { display: none; }
     #pages.in-page .pgs-view { display: flex; }
+    .pgs-tools { display: flex; gap: var(--sp-8); align-items: center; margin-bottom: var(--sp-8); min-width: 0; }
     #pgs-q {
-      width: 100%; min-height: 44px; padding: var(--sp-8) var(--sp-12); font: inherit; font-size: 16px; color: var(--text);
-      background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); margin-bottom: var(--sp-10);
+      flex: 1; min-width: 0; min-height: 44px; padding: var(--sp-8) var(--sp-12); font: inherit; font-size: var(--fs-16); color: var(--text);
+      background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10);
     }
+    #pgs-sort { flex: none; min-height: 44px; padding: 0 var(--sp-8); font: inherit; font-size: var(--fs-14); color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); }
+    .pgs-seg { flex: none; display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-10); overflow: hidden; }
+    .pgs-seg button { min-width: 40px; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; background: var(--panel2); color: var(--muted); border: 0; border-right: 1px solid var(--border); cursor: pointer; }
+    .pgs-seg button:last-child { border-right: 0; }
+    .pgs-seg button[aria-pressed="true"] { background: var(--blue); color: var(--on-accent); }
+    .pgs-seg button:focus-visible, .pgs-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+    .pgs-chips { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-bottom: var(--sp-10); }
+    .pgs-chip { font: inherit; font-size: var(--fs-13); min-height: 32px; padding: 0 var(--sp-10); border-radius: var(--r-pill); border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; overflow-wrap: anywhere; }
+    .pgs-chip[aria-pressed="true"] { background: var(--chip-blue); color: var(--blue); border-color: var(--blue); }
+    .pgs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-10); align-items: stretch; }
+    .pgs-grid .pgs-card, .pgs-rows .pgs-card, .pgs-grid .pgs-hit, .pgs-rows .pgs-hit { margin-bottom: 0; }
+    .pgs-rows { display: flex; flex-direction: column; gap: var(--sp-10); }
+    .pgs-grid .pgs-empty, .pgs-grid .pgs-sec, .pgs-grid .pgs-hit { grid-column: 1 / -1; }
+    .pgs-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4) var(--sp-6); }
+    .pgs-dot { font-size: var(--fs-11); font-weight: 600; line-height: 16px; padding: 0 var(--sp-6); border-radius: var(--r-6); background: var(--blue); color: var(--on-accent); }
+    .pgs-pill { font-size: var(--fs-11); font-weight: 600; line-height: 16px; padding: 0 var(--sp-6); border: 1px solid var(--border); border-radius: var(--r-pill); }
+    .pgs-grid .pgs-sz { display: none; }
+    #pgs-gallery { display: none; }
+    @media (min-width: 700px) { .pgs-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); } }
     #pgs-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; }
     .pgs-card {
       display: flex; flex-direction: column; gap: var(--sp-4); margin-bottom: var(--sp-10); padding: var(--sp-10) var(--sp-12); min-width: 0;
@@ -2036,6 +2056,12 @@
     @media (min-width: 1100px) {
       #pages .pgs-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
       #pages .pgs-view { display: flex !important; }
+      /* No page open: the gallery takes the whole width. With one open, the narrow column is today's list. */
+      #pages:not(.in-page) .pgs-list { flex: 1 1 auto; border-right: 0; padding: var(--sp-20) var(--sp-24) var(--sp-24); }
+      #pages:not(.in-page) .pgs-view { display: none !important; }
+      #pages.in-page #pgs-items { display: flex; flex-direction: column; gap: var(--sp-10); }
+      #pages.in-page .pgs-sz { display: inline; }
+      #pages.in-page #pgs-gallery { display: inline-flex; margin-left: var(--sp-8); }
     }
     /* Peers: each host's status and its agent settings (default kind, model, thinking, allowed kinds). A screen of its own, like Pages. */
     #peers {
@@ -2475,11 +2501,20 @@
       <button type="button" class="bell" id="pgs-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Pages</h1>
       <span class="rc-fresh" id="pgs-count"></span>
+      <button type="button" class="btn" id="pgs-gallery">Gallery</button>
     </header>
     <div class="pgs-panes">
       <section class="pgs-list" aria-label="Pages">
-        <input id="pgs-q" type="search" placeholder="Filter pages and search their text" aria-label="Filter pages and search their text" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <div id="pgs-items" aria-live="polite"></div>
+        <div class="pgs-tools">
+          <input id="pgs-q" type="search" placeholder="Filter pages and search their text" aria-label="Filter pages and search their text" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <select id="pgs-sort" aria-label="Sort pages"><option value="updated">Updated</option><option value="opened">Opened</option><option value="title">Title</option></select>
+          <span class="pgs-seg" id="pgs-views" role="group" aria-label="View">
+            <button type="button" data-view="grid" aria-pressed="true" aria-label="Grid" title="Grid"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+            <button type="button" data-view="list" aria-pressed="false" aria-label="List" title="List"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+          </span>
+        </div>
+        <div class="pgs-chips" id="pgs-chips" role="group" aria-label="Filter by host" hidden></div>
+        <div id="pgs-items" class="pgs-grid" aria-live="polite"></div>
       </section>
       <section class="pgs-view" id="pgs-view" aria-label="Page"></section>
     </div>

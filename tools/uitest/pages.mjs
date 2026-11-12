@@ -577,6 +577,69 @@ await check("open session: a Page made in an indexed session names it per versio
   await page.unroute(/\/api\/recall\/produced\?ref=/);
 });
 
+await check("gallery: grid and list, chips, sort, and the new/updated dot", async () => {
+  await page.goto(base + "/#/pages", { waitUntil: "load" });
+  await page.waitForSelector(".pgs-card", { timeout: 8000 });
+  // Desktop, no page open: the gallery has the width, the viewer pane is gone, the cards are a grid.
+  const g = await page.evaluate(() => { const it = document.querySelector("#pgs-items"), cs = getComputedStyle(it); return [document.querySelector(".pgs-list").clientWidth, getComputedStyle(document.querySelector(".pgs-view")).display, cs.display, cs.gridTemplateColumns.split(" ").length, it.className]; });
+  if (g[0] < 900 || g[1] !== "none" || g[2] !== "grid" || g[3] < 3) throw new Error("gallery layout " + g);
+  await shot("pages-gallery-1280");
+  // Grid or list, remembered on this device.
+  await page.locator('#pgs-views [data-view="list"]').click();
+  if ((await page.locator("#pgs-items.pgs-rows").count()) !== 1) throw new Error("list view not shown");
+  await page.reload({ waitUntil: "load" });
+  await page.waitForSelector("#pgs-items.pgs-rows .pgs-card", { timeout: 8000 });
+  await page.locator('#pgs-views [data-view="grid"]').click();
+  if ((await page.locator("#pgs-items.pgs-grid").count()) !== 1) throw new Error("grid view not shown");
+  // Chips: Revised keeps only pages with more than one version; All brings them back.
+  const all = await page.locator(".pgs-card").count();
+  await page.locator('.pgs-chip[data-chip="rev"]').click();
+  const revCards = await page.locator(".pgs-card").count();
+  const pills = (await page.locator(".pgs-card .pgs-pill").allInnerTexts()).filter((x) => x === "v1").length;
+  if (revCards < 1 || revCards >= all || pills) throw new Error("revised chip: " + revCards + " of " + all + ", v1 pills " + pills);
+  await page.locator('.pgs-chip[data-chip="all"]').click();
+  if ((await page.locator(".pgs-card").count()) !== all) throw new Error("All chip did not restore the cards");
+  // Sort by title.
+  await page.locator("#pgs-sort").selectOption("title");
+  const titles = await page.locator(".pgs-title").allInnerTexts();
+  const sorted = titles.slice().sort((x, y) => x.localeCompare(y));
+  if (titles.join("|") !== sorted.join("|")) throw new Error("title sort: " + titles.join("|"));
+  await page.locator("#pgs-sort").selectOption("updated");
+  // The dot: a page published after the first look is "new" until it is opened; a republish is "updated".
+  publish(["-", "--key", "dotprobe", "--title", "Dot probe"], "# Dot probe\n\nfirst\n", "w1:p1");
+  await page.reload({ waitUntil: "load" });
+  const card = () => page.locator(".pgs-card", { hasText: "Dot probe" });
+  await card().waitFor({ timeout: 8000 });
+  if ((await card().locator(".pgs-dot").innerText().catch(() => "")) !== "new") throw new Error("no new dot on a page never opened");
+  await card().click();
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  // With a page open, the narrow column is today's list and a Gallery button returns to the grid.
+  const c = await page.evaluate(() => [document.querySelector(".pgs-list").clientWidth, getComputedStyle(document.querySelector("#pgs-items")).display, getComputedStyle(document.querySelector("#pgs-gallery")).display]);
+  if (c[0] > 420 || c[1] === "grid" || c[2] === "none") throw new Error("open-page column " + c);
+  await page.locator("#pgs-gallery").click();
+  await page.waitForSelector("#pages:not(.in-page) .pgs-card");
+  if (await card().locator(".pgs-dot").count()) throw new Error("dot stays after the page was opened");
+  publish(["-", "--key", "dotprobe", "--title", "Dot probe"], "# Dot probe\n\nsecond\n", "w1:p1");
+  await page.reload({ waitUntil: "load" });
+  await card().waitFor({ timeout: 8000 });
+  if ((await card().locator(".pgs-dot").innerText().catch(() => "")) !== "updated") throw new Error("no updated dot after a republish");
+  // Sort by recently opened puts the page just opened first among those opened.
+  await card().click();
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  await page.locator("#pgs-gallery").click();
+  await page.locator("#pgs-sort").selectOption("opened");
+  if (!/Dot probe/.test((await page.locator(".pgs-title").first().innerText()))) throw new Error("opened sort");
+  await page.locator("#pgs-sort").selectOption("updated");
+  // Phone: two columns, no sideways scroll.
+  const ph = await launch({ width: 390, height: 844, dark, bypassCSP: false });
+  await ph.page.goto(base + "/#/pages", { waitUntil: "load" });
+  await ph.page.waitForSelector(".pgs-card", { timeout: 8000 });
+  const cols = await ph.page.evaluate(() => [getComputedStyle(document.querySelector("#pgs-items")).gridTemplateColumns.split(" ").length, document.documentElement.scrollWidth, innerWidth]);
+  if (cols[0] !== 2 || cols[1] > cols[2]) throw new Error("phone grid " + cols);
+  await ph.page.screenshot({ path: `${out}/pages-gallery-390.png` });
+  await ph.browser.close();
+});
+
 await check("links: a to-do link to a page opens it in the app; delete asks and removes", async () => {
   // a to-do item whose link is the page's URL
   const link = base + "/p/" + pages.secret;
