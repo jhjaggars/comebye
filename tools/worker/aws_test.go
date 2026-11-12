@@ -968,3 +968,14 @@ func TestBackstopSeconds(t *testing.T) {
 		t.Error("no cap, no backstop")
 	}
 }
+
+func TestUntaggedInstancesAreNeverManaged(t *testing.T) {
+	untagged := toInst(&awsInstance{InstanceID: "i-1", State: struct{ Name string }{"running"}, Tags: []struct{ Key, Value string }{{"Name", "w1"}}}, "w1")
+	if err := checkOwned(untagged); err == nil || !strings.Contains(err.Error(), "refusing to manage") {
+		t.Errorf("an instance without the managed-by tag is managed: %v", err)
+	}
+	tagged := toInst(&awsInstance{InstanceID: "i-2", State: struct{ Name string }{"running"}, Tags: []struct{ Key, Value string }{{"Name", "w2"}, {"managed-by", "comebye-worker"}}}, "w2")
+	if err := checkOwned(tagged); err != nil {
+		t.Errorf("a tagged instance is refused: %v", err)
+	}
+}
