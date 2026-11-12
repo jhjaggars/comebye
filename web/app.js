@@ -6866,7 +6866,7 @@ function pzRow(r, n, pick) {
   const open = !pick && pz.open === r.type;
   const spec = `<span class="pz-cell"><span class="pz-lb">vCPU</span>${r.vcpu}</span><span class="pz-cell"><span class="pz-lb">Memory</span>${r.memory_gib} GiB</span><span class="pz-cell"><span class="pz-lb">Arch</span>${esc(r.arch || "?")}</span>`;
   const prices = `<span class="pz-cell"><span class="pz-lb">Spot from</span>${pzMoney(r.spot_min_usd_hour)}</span><span class="pz-cell"><span class="pz-lb">On-demand</span>${pzMoney(r.on_demand_usd_hour)}</span><span class="pz-cell"><span class="pz-lb">Stops</span>${esc(r.interruption || "–")}</span><span class="pz-cell"><span class="pz-lb">≈ per hour</span><b>${pzMoney(r.estimate_spot_usd_hour)}</b></span>`;
-  const tags = (r.gpus ? `<span class="pz-tag">${r.gpus} GPU</span>` : "") + (r.selectable ? "" : `<span class="pz-tag arm" title="${escAttr((r.note || "").replace(/^needs work:\s*/, ""))}">${r.arch && r.arch !== "amd64" ? esc(r.arch) + " · " : ""}not supported yet</span>`);
+  const tags = r.gpus ? `<span class="pz-tag">${r.gpus} GPU</span>` : "";
   const zones = Object.entries(r.spot_usd_hour || {}).sort().map(([z, p]) => `<span class="pz-zone">${esc(z)} ${pzMoney(p)}</span>`).join("");
   const sc = pz.score[pz.via + "|" + pz.region + "|" + r.type];
   const scoreHtml = sc ? (sc.error ? `<span class="pz-note warn">${esc(sc.error)}</span>`
