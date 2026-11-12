@@ -646,8 +646,8 @@ await check("gallery: grid and list, chips, sort, and the new/updated dot", asyn
   await card().click();
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
   // With a page open, the narrow column is today's list and a Gallery button returns to the grid.
-  const c = await page.evaluate(() => [document.querySelector(".pgs-list").clientWidth, getComputedStyle(document.querySelector("#pgs-items")).display, getComputedStyle(document.querySelector("#pgs-gallery")).display]);
-  if (c[0] > 420 || c[1] === "grid" || c[2] === "none") throw new Error("open-page column " + c);
+  const c = await page.evaluate(() => [document.querySelector(".pgs-list").clientWidth, getComputedStyle(document.querySelector("#pgs-items")).display, getComputedStyle(document.querySelector("#pgs-gallery")).display, document.querySelector("#pgs-gallery").getBoundingClientRect().width]);
+  if (c[0] > 420 || c[1] === "grid" || c[2] === "none" || c[3] > 200) throw new Error("open-page column " + c);
   await page.locator("#pgs-gallery").click();
   await page.waitForSelector("#pages:not(.in-page) .pgs-card");
   if (await card().locator(".pgs-dot").count()) throw new Error("dot stays after the page was opened");
@@ -698,7 +698,8 @@ await check("previews: a card shows its page's skeleton, escaped, per version, f
   // With a page open the narrow column carries no thumbnails.
   await card().click();
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
-  if ((await page.locator(".pgs-thumb").first().evaluate((el) => getComputedStyle(el).display)) !== "none") throw new Error("thumbnails in the narrow column");
+  const shown = await page.evaluate(() => [location.hash, document.getElementById("pages").className, innerWidth, getComputedStyle(document.querySelector(".pgs-thumb")).display]);
+  if (shown[3] !== "none") throw new Error("thumbnails in the narrow column " + shown);
   page.off("request", onReq);
   const ph = await launch({ width: 390, height: 844, dark, bypassCSP: false });
   await ph.page.goto(base + "/#/pages", { waitUntil: "load" });
