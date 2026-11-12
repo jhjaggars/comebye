@@ -175,7 +175,7 @@ func TestPeerProvisionOpsRunTheToolForAHubCall(t *testing.T) {
 		}
 	}
 	for name, path := range map[string]string{
-		"kind":      "/api/provisioner/catalog?kind=gcp&region=us-east-1",
+		"kind":      "/api/provisioner/catalog?kind=azure&region=us-east-1",
 		"region":    "/api/provisioner/catalog?kind=aws&region=us-east-1%20ls",
 		"no region": "/api/provisioner/catalog?kind=aws",
 		"score":     "/api/provisioner/catalog?kind=aws&region=us-east-1&score=t3.large%20--x",
@@ -508,7 +508,7 @@ func TestHubCatalogRejectsBadRequestsBeforeAskingTheNode(t *testing.T) {
 	prov := newProvPeer(t, wk)
 	s := provHub(t, "prov", map[string]*provPeer{"prov": prov})
 	for name, path := range map[string]string{
-		"gcp":          "/api/provision/catalog?kind=gcp&region=us-east-1",
+		"azure":        "/api/provision/catalog?kind=azure&region=us-east-1",
 		"bad region":   "/api/provision/catalog?kind=aws&region=us-east-1%20x",
 		"unknown node": "/api/provision/catalog?kind=aws&region=us-east-1&via=nobody",
 		"hub itself":   "/api/provision/catalog?kind=aws&region=us-east-1&via=desk",
