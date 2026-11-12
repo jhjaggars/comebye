@@ -492,10 +492,31 @@ const MD_CACHE_MAX = 400;
 const COPY_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.2A1.3 1.3 0 0 0 9.2 2H3.8A1.8 1.8 0 0 0 2 3.8v5.4A1.3 1.3 0 0 0 3.3 10.5h.2"/></svg>';
 const COPY_SHELLS = /^(sh|bash|shell|console|zsh)$/;
 
+// copyWorthy: does an inline code span hold a value worth a tap to copy? A SHA
+// (7-40 hex with a digit and a letter), a to-do or handoff id (t + 10 hex), a
+// path or branch (starts with / ~/ ./, or has a / and no space), or an error
+// line. Anything else (a word in code font) stays plain text.
+function copyWorthy(s) {
+  if (!s || s.length > 300 || /\n/.test(s)) return false;
+  if (/^[0-9a-f]{7,40}$/.test(s) && /\d/.test(s) && /[a-f]/.test(s)) return true;
+  if (/^t[0-9a-f]{10}$/.test(s)) return true;
+  if (/^(error|fatal|panic|warning)\b[: ]/i.test(s)) return true;
+  if (/\s/.test(s)) return false;
+  if (/^(\/|~\/|\.\/)[^/\s]/.test(s)) return true;
+  return /^[\w.@+-]+(\/[\w.@+%=,:~-]+)+\/?$/.test(s) || /^https?:\/\/\S+$/.test(s);
+}
+
 function addCopyStrips(html) {
-  if (!html.includes("<pre")) return html;
+  if (!html.includes("<pre") && !html.includes("<code")) return html;
   const t = document.createElement("template");
   t.innerHTML = html;
+  for (const c of t.content.querySelectorAll("code")) {
+    if (c.closest("pre, a, .cp") || !copyWorthy(c.textContent)) continue;
+    c.classList.add("cp");
+    c.tabIndex = 0;
+    c.setAttribute("role", "button");
+    c.setAttribute("aria-label", "Copy " + c.textContent);
+  }
   for (const pre of t.content.querySelectorAll("pre")) {
     const code = pre.firstElementChild;
     if (!code || code.tagName !== "CODE" || pre.parentElement && pre.parentElement.classList.contains("cb")) continue;
@@ -563,6 +584,29 @@ function copyAnnounce(msg) {
   copyLive.textContent = "";
   setTimeout(() => { copyLive.textContent = msg; }, 30); // a change, so a repeat is read again
 }
+
+// A value that copies on a tap: inline code that looks like a SHA, a path or an
+// id (copyWorthy), or any element with class "cp" (copies its data-copy, or its
+// text). It shows a check for 1.5 s.
+function copyTap(el) {
+  const text = el.dataset.copy != null ? el.dataset.copy : el.textContent.trim();
+  copyText(text).then((ok) => {
+    clearTimeout(el._t);
+    el.dataset.state = ok ? "ok" : "fail";
+    if (ok) copyAnnounce("Copied " + (text.length > 60 ? "to clipboard" : text));
+    else toast("Could not copy", true);
+    el._t = setTimeout(() => { delete el.dataset.state; }, 1500);
+  });
+}
+document.addEventListener("click", (ev) => {
+  const cp = ev.target.closest && ev.target.closest(".cp");
+  if (cp) { ev.preventDefault(); ev.stopPropagation(); copyTap(cp); }
+}, true);
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const cp = ev.target.closest && ev.target.closest(".cp");
+  if (cp && cp.getAttribute("role") === "button") { ev.preventDefault(); copyTap(cp); }
+});
 
 document.addEventListener("click", (ev) => {
   const btn = ev.target.closest && ev.target.closest(".cb-copy");
@@ -1564,7 +1608,7 @@ function todoItemHtml(t, pfx) {
     (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "");
   let panel = "";
   if (open) {
-    const meta = [who && `waiting: ${who}`, age, t.id].filter(Boolean).join(" · ");
+    const meta = [who && `waiting: ${who}`, age].filter(Boolean).map(esc).concat(`<span class="cp" role="button" tabindex="0" aria-label="Copy item id" data-copy="${escAttr(t.id)}">${esc(t.id)}</span>`).join(" · ");
     const links = (t.links || []).map((l) => {
       const href = todoLinkHref(l.url);
       const label = l.label || l.url || `handoff ${l.handoff}`;
@@ -1584,7 +1628,7 @@ function todoItemHtml(t, pfx) {
     const strip = `<div class="td-strip">
         ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}</span></div>` : ""}
         ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
-        <div><span class="td-sl">Item</span><span class="td-sv"><code>${esc(t.id)}</code></span></div>
+        <div><span class="td-sl">Item</span><span class="td-sv"><code class="cp" role="button" tabindex="0" aria-label="Copy item id">${esc(t.id)}</code></span></div>
         ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;
     const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
@@ -1597,7 +1641,7 @@ function todoItemHtml(t, pfx) {
     panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
         ${dhead}
         <div class="td-scroll">
-          ${meta ? `<div class="td-meta">${esc(meta)}</div>` : ""}
+          ${meta ? `<div class="td-meta">${meta}</div>` : ""}
           ${isRel ? relPingHtml(t) : ""}
           ${t.set ? setBodyHtml(t) : t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
@@ -2400,7 +2444,7 @@ function relCardHtml(d) {
   const cls = allDone ? " rl-good" : failed ? " rl-bad" : d.needs_you ? " rl-attn" : "";
   const STATE = { pending: "waiting for you", tagging: "tagging…", tagged: "tagged", failed: "failed" };
   let h = `<div class="rl-card${cls}" data-card="release" data-rel-id="${escAttr(t.id)}"><h3>${tagged ? "Release" : "Proposed release"}</h3>
-    <div class="rel-h"><span class="rl-big">${esc(rl.version)}</span><code class="rel-sha" title="${escAttr(rl.commit)}">${esc(relShort(rl.commit))}</code>
+    <div class="rel-h"><span class="rl-big">${esc(rl.version)}</span><code class="rel-sha cp" role="button" tabindex="0" aria-label="Copy commit" data-copy="${escAttr(rl.commit)}" title="${escAttr(rl.commit)}">${esc(relShort(rl.commit))}</code>
     <span class="rel-state rel-s-${esc(rl.state)}">${esc(STATE[rl.state] || rl.state)}</span>
     <button type="button" class="rel-refresh" data-rel="refresh" aria-label="Check again"${rls.inflight ? " disabled" : ""}>↻</button></div>`;
   h += `<div class="rl-chips">`;
@@ -2409,7 +2453,7 @@ function relCardHtml(d) {
   h += `</div>`;
   if (d.simulated) h += `<div class="rel-block" role="alert">SIMULATED: this server runs no git, no GitHub and no upgrade. Nothing below is real.</div>`;
   if (d.dry_run) h += `<div class="rel-note rel-dry">Dry run: the checks run for real, but nothing is tagged or installed.</div>`;
-  h += `<dl class="rel-facts"><dt>Commit</dt><dd><code class="rel-sha">${esc(rl.commit)}</code></dd>`;
+  h += `<dl class="rel-facts"><dt>Commit</dt><dd><code class="rel-sha cp" role="button" tabindex="0" aria-label="Copy commit">${esc(rl.commit)}</code></dd>`;
   if (ck && ck.subject) h += `<dt>Subject</dt><dd>${esc(ck.subject)}</dd>`;
   const rhost = rl.host || d.release_host;
   if (rhost) h += `<dt>${tagged ? "Tagged on" : "Tags from"}</dt><dd>${esc(rhost)}</dd>`;
@@ -6267,7 +6311,7 @@ function statusHTML(desktop) {
       `<div class="st-row"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="st-n">${esc(t.question)}</span>${desktop ? `<span class="st-r"><button type="button" class="st-link" data-go="todo">To do</button></span>` : ""}</div>`).join("");
     if (p.progress.length) h += `<div class="st-g prog">In progress</div>` + p.progress.map(({ e, ag }) => {
       const at = Date.parse(e.created_at);
-      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${usageChipHtml(e.id, true)}${open(ag)}</span></div>`;
+      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip cp" role="button" tabindex="0" aria-label="Copy branch" data-copy="${escAttr(e.branch)}">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${usageChipHtml(e.id, true)}${open(ag)}</span></div>`;
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];

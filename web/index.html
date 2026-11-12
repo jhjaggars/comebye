@@ -352,6 +352,15 @@
     .md .cb-copy[data-state="ok"] { color: var(--green); }
     .md .cb-copy[data-state="fail"] { color: var(--red); }
     .md .cb pre { margin: 0; border: 0; border-radius: 0; background: none; }
+    /* Tap-to-copy value (class "cp" in app.js): inline code that is a SHA, path or id, and the chips that carry one.
+       The pseudo-element makes the tap area 36px high for a chip and about 32px for inline code, without changing the line. */
+    .cp { position: relative; cursor: pointer; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; -webkit-tap-highlight-color: transparent; }
+    .cp::before { content: ""; position: absolute; inset: -9px -4px; }
+    .md .cp::before { inset: -7px -3px; }
+    .cp:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .cp[data-state="ok"] { color: var(--green); }
+    .cp[data-state="ok"]::after { content: " \2713"; }
+    .cp[data-state="fail"] { color: var(--red); }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     .md a { color: var(--blue); overflow-wrap: anywhere; }
     .md a:not([href]) { color: inherit; text-decoration: underline dotted; }
