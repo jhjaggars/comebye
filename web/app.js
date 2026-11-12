@@ -7002,10 +7002,11 @@ function phRow(h) {
   const sp = h.spend || {};
   const live = h.state !== "destroyed" && h.state !== "gone";
   const burn = live && sp.usd_hour ? ` · ≈ ${phMoney(sp.usd_hour)}/h now` : "";
-  const what = [h.type, h.mode === "spot" ? "spot" : "on-demand", h.via].filter(Boolean).join(" · ");
+  const pct = h.budget_cap_usd > 0 ? Math.round(100 * (sp.usd || 0) / h.budget_cap_usd) : 0;
+  const what = [h.type, h.mode === "spot" ? "spot" : "on-demand", h.via, h.budget_cap_usd > 0 && h.state !== "destroyed" ? `cap ${phMoney(h.budget_cap_usd)} · ${pct}% used` : ""].filter(Boolean).join(" · ");
   const note = h.state === "destroyed"
     ? `Destroyed ${pzAge(h.destroyed)}.${h.data_disk_kept ? ` Its ${h.data_disk_gb} GB data disk was kept and goes on costing about ${phMoney(h.data_disk_gb * (h.disk_usd_gb_month || 0.08))} a month (not in this bill).` : ""}`
-    : h.state === "stopped" ? `Stopped${h.stopped_at ? " " + pzAge(h.stopped_at) : ""}; only its disks cost now.${h.destroy_due ? " Destroyed automatically " + (Date.parse(h.destroy_due) > Date.now() ? "in " + fmtAgo(Date.now() - (Date.parse(h.destroy_due) - Date.now())) : "now") + "." : ""}`
+    : h.state === "stopped" ? `${h.cap_stopped ? "Stopped at its budget cap " + pzAge(h.cap_stopped) : "Stopped" + (h.stopped_at ? " " + pzAge(h.stopped_at) : "")}; only its disks cost now.${h.destroy_due ? " Destroyed automatically " + (Date.parse(h.destroy_due) > Date.now() ? "in " + fmtAgo(Date.now() - (Date.parse(h.destroy_due) - Date.now())) : "now") + "." : ""}`
     : "";
   const fail = h.destroy_failed ? `<p class="pz-note warn" role="alert">The last destroy did not finish: ${esc(h.destroy_failed)}</p>` : "";
   const dest = ph.dest && ph.dest.name === h.name ? phDestroyPanel(h) : "";
@@ -7206,8 +7207,8 @@ function azBody() {
       ${num("az-boot", "Boot disk (GB)", sp.boot_disk_gb, 10, 200, "10 to 200")}
       ${num("az-data", "Data disk (GB)", sp.data_disk_gb, 10, 1000, "Kept when the host is destroyed unless you delete it.")}
       ${num("az-idle", "Stop after idle (minutes)", sp.idle_minutes, 5, 1440, "Default 120. Disks are kept.")}
-      ${num("az-budget", "Budget cap ($)", sp.budget_cap_usd, 1, 100, "Required. The provisioner stops the host at the cap.")}
-      ${num("az-destroy", "Destroy after stopped (hours)", sp.destroy_after_hours, 1, 720, "Default 72 (3 days).")}
+      ${num("az-budget", "Budget cap ($)", sp.budget_cap_usd, 1, 100, "Required. You get a to-do at 80%; at 100% the provisioner stops the host, disks kept. A cap never destroys.")}
+      ${num("az-destroy", "Destroy after stopped (hours)", sp.destroy_after_hours, 1, 720, "Default 72 (3 days). The provisioner then starts it, saves its sessions and destroys it; if it cannot, nothing is destroyed.")}
       </div></div>`;
   } else if (az.step === 4) {
     back = "← Options"; next = azDry() ? "Run dry run" : "Create host";

@@ -946,3 +946,25 @@ func TestExtraTagsAreOnEveryResource(t *testing.T) {
 		}
 	}
 }
+
+func TestBackstopSeconds(t *testing.T) {
+	// $10 at $0.0208 + $0.005 an hour pays for about 388 h; a 24 h max run is stricter
+	if s, set := backstopSeconds(10, 0.0258, 24*3600); set || s != 24*3600 {
+		t.Errorf("a stricter max run was replaced: %d %v", s, set)
+	}
+	// $1 at $0.0928/h (t3.xlarge on demand + IPv4) pays for 10.78 h: stricter than 24 h
+	if s, set := backstopSeconds(1, 0.1328, 24*3600); !set || s != 27108 {
+		t.Errorf("the cap-equivalent run was not set: %d %v", s, set)
+	}
+	// no max run at all: the backstop is the only limit
+	if s, set := backstopSeconds(2, 0.5, 0); !set || s != 4*3600 {
+		t.Errorf("no max run: %d %v", s, set)
+	}
+	// a tiny cap still leaves time to boot
+	if s, set := backstopSeconds(0.01, 1, 0); !set || s != minBackstop {
+		t.Errorf("floor: %d %v", s, set)
+	}
+	if _, set := backstopSeconds(0, 1, 0); set {
+		t.Error("no cap, no backstop")
+	}
+}

@@ -137,12 +137,11 @@ func sessionsWord(lose bool) string {
 	return ""
 }
 
-// RunProvision is the provisioner's clock: every few minutes it asks the cloud
-// how its hosts are doing, so the ledger of what they cost keeps up.
+// RunProvision is the clock of both roles. On a provisioner, every few minutes
+// it asks the cloud how its hosts are doing (so the ledger of what they cost
+// keeps up) and does what the safety timers say is due. On a hub it reads what
+// the provisioners recorded and raises to-dos (provwatch.go).
 func (s *Server) RunProvision(ctx context.Context) {
-	if s.phosts == nil {
-		return
-	}
 	gap := s.provObserveGap
 	if gap <= 0 {
 		gap = provObserveGap
@@ -154,7 +153,12 @@ func (s *Server) RunProvision(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.observeHosts(ctx)
+			if s.phosts != nil { // a provisioner: look at the cloud, then do what is due
+				if s.observeHosts(ctx) == nil {
+					s.watchHosts(ctx)
+				}
+			}
+			s.hubProvisionStep(ctx) // a hub: raise the to-dos
 		}
 	}
 }

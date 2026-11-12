@@ -78,7 +78,8 @@ type pjob struct {
 type destroyReq struct {
 	DeleteDataDisk bool   `json:"delete_data_disk"`
 	LoseSessions   bool   `json:"lose_sessions"`
-	Why            string `json:"why,omitempty"` // set when a timer, not a person, asked
+	StartFirst     bool   `json:"start_first,omitempty"` // a timer's destroy of a stopped host starts it to save its sessions
+	Why            string `json:"why,omitempty"`         // set when a timer, not a person, asked
 }
 
 type provJobs struct {
@@ -276,6 +277,24 @@ func (m *provJobs) cleanup(tool *provision.Tool, id string) (*pjob, error) {
 	return j, nil
 }
 
+// hold takes the job slot for a short thing the node does by itself (a stop at
+// the cap); false when a job holds it.
+func (m *provJobs) hold() (release func(), ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.busy != "" {
+		return nil, false
+	}
+	m.busy = "watch"
+	return func() {
+		m.mu.Lock()
+		if m.busy == "watch" {
+			m.busy = ""
+		}
+		m.mu.Unlock()
+	}, true
+}
+
 // destroy starts the removal of a host this node built. One job at a time.
 func (m *provJobs) destroy(tool *provision.Tool, name string, req destroyReq) (*pjob, error) {
 	m.mu.Lock()
@@ -296,7 +315,7 @@ func (m *provJobs) destroy(tool *provision.Tool, name string, req destroyReq) (*
 	m.book.BeginDestroy(name, j.ID)
 	m.saveLocked(j)
 	go m.run(tool, j, func(ctx context.Context, emit func(provision.Item)) provision.JobResult {
-		return tool.RunDestroy(ctx, name, provision.DestroyOpts{DeleteDataDisk: req.DeleteDataDisk, LoseSessions: req.LoseSessions}, emit)
+		return tool.RunDestroy(ctx, name, provision.DestroyOpts{DeleteDataDisk: req.DeleteDataDisk, LoseSessions: req.LoseSessions, StartFirst: req.StartFirst}, emit)
 	}, jobOK)
 	return j, nil
 }

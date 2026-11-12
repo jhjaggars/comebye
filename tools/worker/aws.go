@@ -142,6 +142,24 @@ func (p *awsProv) launchPrice(ctx context.Context) (float64, bool) {
 	return v, ok
 }
 
+// OnDemandUSDHour is the most an hour of this host costs: its on-demand price
+// plus the public IPv4 (a spot host pays less).
+func (p *awsProv) OnDemandUSDHour(ctx context.Context) (float64, bool) {
+	raw, err := fetchOnDemand(ctx, p.a, p.cfg.AWSRegion, []string{p.cfg.MachineType})
+	if err != nil {
+		return 0, false
+	}
+	var m map[string]float64
+	if json.Unmarshal(raw, &m) != nil {
+		return 0, false
+	}
+	v, ok := m[p.cfg.MachineType]
+	if !ok || v <= 0 {
+		return 0, false
+	}
+	return v + ipv4USDHour, true
+}
+
 func (a *awsCLI) managedFilters(name string, extra ...string) []string {
 	f := []string{"--filters", "Name=tag:" + labelKey + ",Values=" + labelVal, "Name=tag:Name,Values=" + name}
 	return append(f, extra...)

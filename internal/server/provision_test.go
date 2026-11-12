@@ -49,6 +49,10 @@ case "$4" in
    [ -f ` + d + `/create.events ] && cat ` + d + `/create.events
    [ -f ` + d + `/create.sleep ] && sleep $(cat ` + d + `/create.sleep)
    exit $(cat ` + d + `/create.exit 2>/dev/null || echo 0) ;;
+ start)
+   [ -f ` + d + `/start.fail ] && { echo "the instance would not start" >&2; exit 1; }
+   exit 0 ;;
+ stop) exit 0 ;;
  status)
    [ -f ` + d + `/status.fail ] && { echo "status failed" >&2; exit 1; }
    cat ` + d + `/status.json 2>/dev/null || echo '{"v":1,"provider":"aws","workers":[]}' ;;

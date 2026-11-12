@@ -661,3 +661,25 @@ the LLM key, leaves the tailnet, removes the peer entry and deletes the instance
 The data disk is kept unless "also delete" is ticked. A stopped host cannot be
 read, so its sessions can only be saved by starting it first or by ticking
 "do not save its sessions" (they are lost). A node refuses a name it did not build.
+
+### Safety timers (budget cap, idle, destroy after stopped)
+
+Every host built from the app carries its limits in three places, and each one
+is enough on its own:
+
+| Control | Runs on | When the provisioner is offline |
+|---|---|---|
+| Stop after idle (default 2 h) | the host (a systemd timer) | works |
+| Longest single run (24 h) | the host's guest timer | works |
+| Budget backstop | the host's guest timer: at create the tool sets the max run to the smaller of `max_run` and cap ÷ the on-demand price + IPv4 (the highest rate a host of that size can pay; per boot, at least 30 min) | works |
+| Budget cap, exactly: to-do at 80%, **stop** at 100% | the provisioner, every 5 minutes, from its spend ledger; the cap is read from the instance's tag `comebye-budget-cap-usd` (the lower of the tag and what was asked for) | only the backstop applies; the hub raises a to-do after 15 minutes of silence |
+| Destroy after stopped (default 3 days) | the provisioner (`stopped_at` comes from the cloud's own stop time); it starts the host, saves its sessions, then destroys it, and does nothing if it cannot start | waits, and catches up on return |
+
+A stop never loses data (the disks stay); only destroy does, and a budget cap
+never destroys. A timer destroy that fails (the host would not start, the archive
+refused) leaves the host and is not repeated for 6 hours, since each try starts
+the host. The provisioner writes `provision.budget_warn`, `provision.budget_stop`
+and `provision.auto_destroy` lines to its journal. The hub reads what the
+provisioners recorded and raises one to-do each for: 80% of a cap, a stop at the
+cap, an automatic destroy (done or failed), and a provisioner with live hosts
+that has not answered for 15 minutes. A restart of the hub does not raise them again.

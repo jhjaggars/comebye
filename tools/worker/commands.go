@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,6 +100,67 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 	})
 }
 
+// minBackstop is the shortest run the budget backstop will set: a host that
+// powers off before it can finish booting helps nobody.
+const minBackstop = 30 * 60
+
+// backstopSeconds is how long a run the budget cap pays for at rate dollars an
+// hour (the highest rate the host can cost), and the limit to set: the smaller
+// of that and the max run already set (curSeconds, 0 for none). set is false
+// when the existing limit is already the stricter one.
+func backstopSeconds(capUSD, rate float64, curSeconds int) (secs int, set bool) {
+	if capUSD <= 0 || rate <= 0 {
+		return 0, false
+	}
+	secs = int(capUSD / rate * 3600)
+	if secs < minBackstop {
+		secs = minBackstop
+	}
+	if curSeconds > 0 && curSeconds <= secs {
+		return curSeconds, false
+	}
+	return secs, true
+}
+
+// onDemandRater is a provider that can say what an hour of its host costs at
+// the highest rate (the on-demand price plus the public IPv4).
+type onDemandRater interface {
+	OnDemandUSDHour(ctx context.Context) (float64, bool)
+}
+
+// budgetBackstop turns the budget cap into a limit on one run that the host
+// enforces by itself (the guest's max-run timer): cap divided by the highest
+// rate a host of this type can pay, so a host the provisioner cannot reach
+// still stops before it passes its cap. It is conservative on purpose (a spot
+// host pays less) and applies to each boot; the provisioner's own check of the
+// running total is the exact one.
+func (e *env) budgetBackstop(ctx context.Context) {
+	c := e.Cfg
+	if c.Provider != "aws" || c.BudgetCapUSD <= 0 {
+		return
+	}
+	rt, ok := e.prov().(onDemandRater)
+	if !ok {
+		return
+	}
+	rate, ok := rt.OnDemandUSDHour(ctx)
+	if !ok {
+		e.printf("  budget backstop: the on-demand price could not be read, so the guest keeps its max-run limit only\n")
+		return
+	}
+	cur := 0
+	if c.MaxRunDuration != "" {
+		n, _ := strconv.Atoi(c.MaxRunDuration[:len(c.MaxRunDuration)-1])
+		cur = n * map[byte]int{'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[c.MaxRunDuration[len(c.MaxRunDuration)-1]]
+	}
+	secs, set := backstopSeconds(c.BudgetCapUSD, rate, cur)
+	if !set {
+		return
+	}
+	c.MaxRunDuration = fmt.Sprintf("%ds", secs)
+	e.printf("  budget backstop: the guest powers off %d min after boot (cap $%g at the on-demand rate $%.4f/h)\n", secs/60, c.BudgetCapUSD, rate)
+}
+
 func (e *env) createVM(ctx context.Context, name string, o createOpts) error {
 	pv := e.prov()
 	w := e.printf
@@ -159,6 +221,7 @@ func (e *env) createVM(ctx context.Context, name string, o createOpts) error {
 	}
 
 	e.begin(6, "6/8 packages, tailscale, idle timer\n")
+	e.budgetBackstop(ctx)
 	rs, err := rootScript(e.Cfg)
 	if err != nil {
 		return err

@@ -58,11 +58,17 @@ type Host struct {
 	DataKept   bool       `json:"data_disk_kept,omitempty"`
 	Final      *float64   `json:"final_usd,omitempty"`
 
-	// Safety timers (slice 4).
-	Warned80      bool       `json:"warned_80,omitempty"`      // the 80% to-do was raised
-	CapStopped    *time.Time `json:"cap_stopped,omitempty"`    // the watchdog stopped it at the budget cap
-	AutoDestroy   string     `json:"auto_destroy,omitempty"`   // why a destroy was started by a timer
-	DestroyFailed string     `json:"destroy_failed,omitempty"` // the last failed destroy, one line
+	// Safety timers (slice 4). The caps are read back from the instance's tags
+	// at every look, so what the cloud records is what is enforced.
+	CapUSD          float64    `json:"cap_usd,omitempty"`           // the budget cap the cloud's tag says
+	DestroyAfterHrs int        `json:"destroy_after_hrs,omitempty"` // likewise the destroy-after hours
+	Warned80        bool       `json:"warned_80,omitempty"`
+	Warned80At      *time.Time `json:"warned_80_at,omitempty"`
+	CapStopped      *time.Time `json:"cap_stopped,omitempty"`    // the watchdog stopped it at the budget cap
+	AutoDestroy     string     `json:"auto_destroy,omitempty"`   // why a destroy was started by a timer
+	DestroyFailed   string     `json:"destroy_failed,omitempty"` // the last failed destroy, one line
+	DestroyFailedAt *time.Time `json:"destroy_failed_at,omitempty"`
+	NextAuto        time.Time  `json:"next_auto,omitempty"` // no timer destroy before this (after a failure)
 }
 
 // Spend is what a host has cost so far, or in all.
@@ -335,6 +341,12 @@ func (h *Host) apply(w StatusWorker, now time.Time) {
 			h.Mode = "on_demand"
 		}
 	}
+	if c := w.Caps.BudgetCapUSD; c != nil && *c > 0 && *c < 1e5 {
+		h.CapUSD = *c
+	}
+	if d := w.Caps.DestroyAfterHours; d != nil && *d > 0 && *d < 1e5 {
+		h.DestroyAfterHrs = *d
+	}
 	if p := w.Caps.LaunchPriceUSDHr; p != nil && *p > 0 && *p < 1000 {
 		h.Rate.ComputeUSDHour, h.Rate.FromTag = *p, true
 	}
@@ -438,7 +450,8 @@ func (b *HostBook) EndDestroy(name string, ok bool, dataKept bool, why string) {
 	}
 	h.Destroying = ""
 	if !ok {
-		h.DestroyFailed = Text(why, 200)
+		now := b.Now()
+		h.DestroyFailed, h.DestroyFailedAt = Text(why, 200), &now
 		b.saveLocked()
 		return
 	}
@@ -472,6 +485,8 @@ type HostView struct {
 	DestroyJob    string  `json:"destroy_job,omitempty"`
 	DestroyFailed string  `json:"destroy_failed,omitempty"`
 	CapStopped    string  `json:"cap_stopped,omitempty"`
+	Warned80At    string  `json:"warned_80_at,omitempty"`
+	DestroyFailAt string  `json:"destroy_failed_at,omitempty"`
 	AutoDestroy   string  `json:"auto_destroy,omitempty"`
 	DestroyDue    string  `json:"destroy_due,omitempty"` // when a stopped host will be destroyed
 	Warned80      bool    `json:"warned_80,omitempty"`
@@ -491,7 +506,7 @@ func (h *Host) view(now time.Time) HostView {
 	v := HostView{Name: h.Name, Type: h.Spec.Type, Region: h.Region, Mode: h.Mode, Created: h.Created.UTC().Format(time.RFC3339),
 		Destroyed: rfc(h.Destroyed), StoppedAt: rfc(h.StoppedAt), Spend: h.Spend(now), BudgetCapUSD: h.Spec.BudgetCapUSD,
 		DestroyAfterH: h.Spec.DestroyAfterHours, IdleMinutes: h.Spec.IdleMinutes, MaxRun: h.Spec.MaxRun, DataDiskGB: h.Spec.DataDiskGB,
-		DataKept: h.DataKept, DestroyJob: h.Destroying, DestroyFailed: h.DestroyFailed, CapStopped: rfc(h.CapStopped),
+		DataKept: h.DataKept, DestroyJob: h.Destroying, DestroyFailed: h.DestroyFailed, CapStopped: rfc(h.CapStopped), Warned80At: rfc(h.Warned80At), DestroyFailAt: rfc(h.DestroyFailedAt),
 		AutoDestroy: h.AutoDestroy, Warned80: h.Warned80, FromTag: h.Rate.FromTag, DiskUSDGBMon: h.Rate.DiskUSDGBMonth, AsOf: now.UTC().Format(time.RFC3339)}
 	switch {
 	case h.Destroyed != nil:
@@ -504,10 +519,10 @@ func (h *Host) view(now time.Time) HostView {
 			v.State = "unknown"
 		}
 	}
-	if h.State == "STOPPED" && h.Destroyed == nil && h.StoppedAt != nil && h.Spec.DestroyAfterHours > 0 {
-		due := h.StoppedAt.Add(time.Duration(h.Spec.DestroyAfterHours) * time.Hour)
+	if due, ok := h.destroyDue(); ok && h.State == "STOPPED" && h.Destroyed == nil {
 		v.DestroyDue = due.UTC().Format(time.RFC3339)
 	}
+	v.BudgetCapUSD = h.Cap()
 	return v
 }
 
@@ -611,6 +626,7 @@ func ParseHosts(b []byte) (*HostsView, error) {
 			h.Mode = "on_demand"
 		}
 		h.Created, h.Destroyed, h.StoppedAt, h.CapStopped, h.DestroyDue, h.AsOf = cleanTime(h.Created), cleanTime(h.Destroyed), cleanTime(h.StoppedAt), cleanTime(h.CapStopped), cleanTime(h.DestroyDue), cleanTime(h.AsOf)
+		h.Warned80At, h.DestroyFailAt = cleanTime(h.Warned80At), cleanTime(h.DestroyFailAt)
 		sp := &h.Spend
 		sp.USD, sp.Compute, sp.Disks, sp.Hours, sp.USDHour = finite(sp.USD, 1e7), finite(sp.Compute, 1e7), finite(sp.Disks, 1e7), finite(sp.Hours, 1e7), finite(sp.USDHour, 1e4)
 		h.BudgetCapUSD, h.DiskUSDGBMon = finite(h.BudgetCapUSD, 1e4), finite(h.DiskUSDGBMon, 10)

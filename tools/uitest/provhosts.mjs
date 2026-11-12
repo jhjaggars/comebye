@@ -123,7 +123,7 @@ try {
       await page.goto(base + "/#/peers/~prices", { waitUntil: "load" });
       await page.waitForSelector("#ph-card .ph-row", { timeout: 20000 });
       const t = await page.locator("#ph-card").innerText();
-      for (const want of ["plain", "running", "so far", "spent so far across 1 host", "t3.large", "spot"]) if (!t.includes(want)) throw new Error(`lacks ${want}: ${t}`);
+      for (const want of ["plain", "running", "so far", "spent so far across 1 host", "t3.large", "spot", "cap $10.00", "% used"]) if (!t.includes(want)) throw new Error(`lacks ${want}: ${t}`);
       if (!/≈ \$0\.\d+ so far/.test(t)) throw new Error("no figure: " + t);
       await shot("hosts-card");
       await noHScroll();

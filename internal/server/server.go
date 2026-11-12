@@ -258,8 +258,9 @@ type Server struct {
 	phostMu        sync.Mutex          // guards phostErr, phostAt
 	phostErr       string              // why the cloud could not be asked last time
 	phostAt        time.Time           // when it last was
-	provObserveGap time.Duration       // how often the provisioner asks (tests shorten it)
-	hjobs          *hubJobs            // on a hub: the jobs it has asked provisioners to run
+	pseen          *provSeen
+	provObserveGap time.Duration // how often the provisioner asks (tests shorten it)
+	hjobs          *hubJobs      // on a hub: the jobs it has asked provisioners to run
 	pages          *pageStore
 	briefSched     *briefSchedStore
 	resets         *resetStore
@@ -333,6 +334,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		}
 	}
 	s.hjobs = openHubJobs(cfg.StateDir)
+	s.pseen = openProvSeen(cfg.StateDir)
 	switch rc := &s.cfg.Release; {
 	case rc.Host != "" && rc.Tool != nil:
 		log.Printf("release: both a local release tool and -release-host %s are set: tagging is off", rc.Host)

@@ -177,6 +177,10 @@ type DestroyOpts struct {
 	// LoseSessions skips saving the worker's sessions to the archive first. Off,
 	// the tool archives them and refuses to destroy if it cannot.
 	LoseSessions bool
+	// StartFirst starts a stopped host before destroying it, so that its
+	// sessions can be saved (the tool cannot read a stopped host). If it will
+	// not start, nothing is destroyed.
+	StartFirst bool
 }
 
 // RunDestroy removes a host the tool made: it saves the worker's sessions to
@@ -186,6 +190,12 @@ type DestroyOpts struct {
 func (t *Tool) RunDestroy(ctx context.Context, name string, o DestroyOpts, emit func(Item)) JobResult {
 	if !nameRe.MatchString(name) {
 		return JobResult{Class: ClassOther, Msg: "bad name"}
+	}
+	if o.StartFirst && !o.LoseSessions {
+		if r := t.runJob(ctx, "create", nil, []string{"start", name}, emit); !r.OK {
+			r.Msg = "could not start the host to save its sessions first: " + r.Msg
+			return r
+		}
 	}
 	args := []string{"destroy", name, "--yes", "--events"}
 	if o.DeleteDataDisk {
@@ -197,10 +207,28 @@ func (t *Tool) RunDestroy(ctx context.Context, name string, o DestroyOpts, emit 
 	return t.runJob(ctx, "create", nil, args, emit)
 }
 
+// StopTimeout bounds a stop.
+const StopTimeout = 10 * time.Minute
+
+// RunStop stops a host, disks kept (the budget cap's action).
+func (t *Tool) RunStop(ctx context.Context, name string) error {
+	if !nameRe.MatchString(name) {
+		return errors.New("bad name")
+	}
+	if r := t.runJobFor(ctx, StopTimeout, nil, []string{"stop", name}, func(Item) {}); !r.OK {
+		return errors.New(Text(r.Msg, 200))
+	}
+	return nil
+}
+
 func (t *Tool) runJob(ctx context.Context, kind string, stdin []byte, args []string, emit func(Item)) JobResult {
+	return t.runJobFor(ctx, CreateTimeout, stdin, args, emit)
+}
+
+func (t *Tool) runJobFor(ctx context.Context, timeout time.Duration, stdin []byte, args []string, emit func(Item)) JobResult {
 	var failed *Item
 	var lastLine string
-	_, err := t.stream(ctx, kind, CreateTimeout, stdin, args, func(line []byte) {
+	_, err := t.stream(ctx, "create", timeout, stdin, args, func(line []byte) {
 		it, err := ParseEvent(line)
 		if err != nil {
 			return
