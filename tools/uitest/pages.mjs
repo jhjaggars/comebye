@@ -685,14 +685,32 @@ await check("gallery: grid and list, chips, sort, and the new/updated dot", asyn
   await page.locator("#pgs-sort").selectOption("opened");
   if (!/Dot probe/.test((await page.locator(".pgs-title").first().innerText()))) throw new Error("opened sort");
   await page.locator("#pgs-sort").selectOption("updated");
-  // Phone: two columns, no sideways scroll.
+  // Phone: rows by default (a title in full beside a small preview), two columns when the reader picks the grid; no sideways scroll.
   const ph = await launch({ width: 390, height: 844, dark, bypassCSP: false });
   await ph.page.goto(base + "/#/pages", { waitUntil: "load" });
   await ph.page.waitForSelector(".pgs-card", { timeout: 8000 });
+  if ((await ph.page.locator("#pgs-items.pgs-rows").count()) !== 1) throw new Error("the phone does not start on rows");
+  const wide = await ph.page.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-card").getBoundingClientRect().width]);
+  if (wide[0] > wide[1] || wide[2] < 300) throw new Error("phone rows " + wide);
+  await ph.page.screenshot({ path: `${out}/pages-rows-390.png` });
+  await ph.page.locator('#pgs-views button[data-view="grid"]').click();
   const cols = await ph.page.evaluate(() => [getComputedStyle(document.querySelector("#pgs-items")).gridTemplateColumns.split(" ").length, document.documentElement.scrollWidth, innerWidth]);
   if (cols[0] !== 2 || cols[1] > cols[2]) throw new Error("phone grid " + cols);
   await ph.page.screenshot({ path: `${out}/pages-gallery-390.png` });
   await ph.browser.close();
+});
+
+await check("pages: an empty gallery says so, with the command as a copy button, in the pane and on a phone", async () => {
+  for (const [w, h, tag] of [[1280, 800, "desktop"], [390, 844, "phone"]]) {
+    const e = await launch({ width: w, height: h, dark, bypassCSP: false });
+    await e.page.route(/\/api\/pages$/, (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ pages: [], pages_url: "", public_url: "" }) }));
+    await e.page.goto(base + "/#/pages", { waitUntil: "load" });
+    await e.page.waitForSelector(".pgs-zero", { timeout: 8000 });
+    const z = await e.page.evaluate(() => { const b = document.querySelector(".pgs-zero .cp"); return { text: document.querySelector(".pgs-zero").innerText, copy: b && b.dataset.copy, over: document.documentElement.scrollWidth > innerWidth }; });
+    if (!/No pages yet/.test(z.text) || z.copy !== "comebye publish report.html" || z.over) throw new Error("empty state " + JSON.stringify(z));
+    await e.page.screenshot({ path: `${out}/pages-empty-${tag}.png` });
+    await e.browser.close();
+  }
 });
 
 await check("previews: a card shows its page's skeleton, escaped, per version, fetched by version", async () => {

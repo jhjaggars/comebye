@@ -5660,7 +5660,7 @@ function initRecall() {
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
 const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, focus: false, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
-  view: lsGet("comebye.pgs.view") === "list" ? "list" : "grid", sort: ["updated", "opened", "title"].includes(lsGet("comebye.pgs.sort")) ? lsGet("comebye.pgs.sort") : "updated",
+  view: lsGet("comebye.pgs.view") === "list" || (lsGet("comebye.pgs.view") !== "grid" && matchMedia("(max-width: 699px)").matches) ? "list" : "grid", sort: ["updated", "opened", "title"].includes(lsGet("comebye.pgs.sort")) ? lsGet("comebye.pgs.sort") : "updated",
   chip: "all", opened: null, prev: new Map(), prevQ: [], prevBusy: 0, io: null, prevRaf: 0 };
 
 // What the user has opened, per device: id -> { v: newest version seen, at: ms }.
@@ -5834,6 +5834,20 @@ function pageSize(n) {
 
 function pageAgo(t) { const at = Date.parse(t); return Number.isNaN(at) ? "" : fmtAgo(at) + " ago"; }
 
+// pgsGroup splits a list sorted by "updated" into Today / Yesterday / Earlier. Under any other sort, or when everything falls in
+// one group, there are no headings: a lone "Today" says nothing.
+function pgsGroup(list) {
+  if (pgs.sort !== "updated") return [{ label: "", items: list }];
+  const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+  const t0 = d0.getTime(), day = 86400000, groups = [];
+  for (const p of list) {
+    const at = Date.parse(p.updated_at) || 0, label = at >= t0 ? "Today" : at >= t0 - day ? "Yesterday" : "Earlier";
+    const g = groups[groups.length - 1];
+    if (g && g.label === label) g.items.push(p); else groups.push({ label, items: [p] });
+  }
+  return groups.length > 1 ? groups : [{ label: "", items: list }];
+}
+
 function renderPages() {
   const r = pgs.route;
   if (!r) return;
@@ -5842,14 +5856,16 @@ function renderPages() {
   let html;
   if (pgs.err) html = `<div class="pgs-empty">${esc(pgs.err)}</div>`;
   else if (!pgs.loaded) html = `<div class="pgs-empty">Loading…</div>`;
-  else if (!pgs.items.length) html = `<div class="pgs-empty">No pages yet. An agent publishes one with <code>comebye publish report.html</code> (or a <code>.md</code> file).</div>`;
+  else if (!pgs.items.length) html = `<div class="pgs-empty pgs-zero"><span class="pgs-zsk" aria-hidden="true"><i class="a"></i><i></i><i></i><i></i></span><b>No pages yet</b><span>An agent publishes one when it has something to show you: a plan, a mockup, a report.</span><button type="button" class="btn cp" data-copy="comebye publish report.html" aria-label="Copy the command"><code>comebye publish report.html</code></button><span class="pgs-meta">A <code>.md</code> file works too.</span></div>`;
   else {
+    // A card reads top down: the preview, the title, who made it, when and which version. The "new" / "updated" dot sits on the
+    // card's corner; the size and kind are in the viewer's (i).
     const card = (p) => {
       const dot = pgsDot(p), rev = p.updated_at !== p.created_at;
-      return `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">${pgsThumb(p)}<span class="pgs-txt">
+      return `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">${pgsThumb(p)}${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span class="pgs-txt">
         <span class="pgs-title">${esc(p.title)}</span>
-        <span class="pgs-meta">${esc(p.by)}${p.host ? " · " + esc(p.host) : ""}</span>
-        <span class="pgs-meta pgs-line">${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-pill">v${p.version}</span><span class="pgs-sz">${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></span></span></a>`;
+        <span class="pgs-line"><span class="pgs-by">${esc(p.by)}</span>${p.host ? `<span class="pgs-meta">${esc(p.host)}</span>` : ""}</span>
+        <span class="pgs-line"><span class="pgs-meta" title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-pill">v${p.version}</span></span></span></a>`;
     };
     const body = pgs.body && pgs.body.q === pgs.q.trim() ? pgs.body.matches.filter((m) => pgs.items.some((p) => p.id === m.id)) : [];
     const hit = (m) => {
@@ -5863,7 +5879,7 @@ function renderPages() {
     else {
       html = "";
       if (body.length) html += `<div class="pgs-sec">Titles${list.length ? "" : ": none"}</div>`;
-      html += list.map(card).join("");
+      html += pgsGroup(list).map((g) => (g.label ? `<div class="pgs-sec">${esc(g.label)}</div>` : "") + g.items.map(card).join("")).join("");
       if (body.length) html += `<div class="pgs-sec" id="pgs-intext">In page text · ${body.length}${pgs.body.partial ? "+" : ""}</div>` + body.map(hit).join("");
     }
   }
