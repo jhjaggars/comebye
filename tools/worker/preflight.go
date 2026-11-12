@@ -48,6 +48,8 @@ type pfDoc struct {
 	// config's aws_region, and the regions a caller may pick.
 	Region  string   `json:"region,omitempty"`
 	Regions []string `json:"regions,omitempty"`
+	// The zone a gcp host is built in (the config's zone), a setting, not a credential.
+	GCPZone string `json:"gcp_zone,omitempty"`
 }
 
 var (
@@ -68,6 +70,7 @@ func (e *env) preflight(ctx context.Context, asJSON bool) error {
 	d.OpenShell = e.pfOpenShell(ctx)
 	d.SSH = e.pfSSH()
 	d.Region, d.Regions = e.Cfg.AWSRegion, e.Cfg.RegionsAllowed()
+	d.GCPZone = e.Cfg.Zone
 	if asJSON {
 		b := marshalJSON(d)
 		e.printf("%s\n", b)

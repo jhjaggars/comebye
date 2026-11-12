@@ -800,3 +800,87 @@ func TestPreflightOpenShellSaysWhatASandboxIsMadeFrom(t *testing.T) {
 		t.Errorf("a path reached the answer: %s", b)
 	}
 }
+
+// ---- kind gcp ----
+
+func gceCatalogEnv(t *testing.T, fail string) (*env, *fakeRunner) {
+	t.Helper()
+	c := testCfg(t) // provider gcp, project comebye-test-0001, zone us-central1-a
+	body, err := os.ReadFile("testdata/gcp/machine-types.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{handle: func(cl call, _ *fakeRunner) (string, string, error) {
+		if fail != "" {
+			return "", "", fmt.Errorf("%s", fail)
+		}
+		return string(body), "", nil
+	}}
+	clk := &fixedClock{time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)}
+	return &env{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, In: strings.NewReader(""), Run: r, Cfg: c, Now: clk.now}, r
+}
+
+func TestGCECatalogPricesMachineTypesFromTheBuiltInTable(t *testing.T) {
+	e, r := gceCatalogEnv(t, "")
+	d, err := e.buildCatalog(context.Background(), catalogOpts{Kind: "gcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Kind != "gcp" || d.Region != "us-central1" || len(r.calls) != 1 || !strings.Contains(r.calls[0].line(), "compute machine-types list --zones=us-central1-a") {
+		t.Fatalf("doc %s/%s calls %v", d.Kind, d.Region, r.calls)
+	}
+	rows := map[string]catalogRow{}
+	for _, row := range d.Rows {
+		rows[row.Type] = row
+	}
+	// only the default families, nothing too big, nothing the table cannot price
+	for _, absent := range []string{"c2-standard-4", "t2a-standard-1", "e2-standard-64"} {
+		if _, ok := rows[absent]; ok {
+			t.Errorf("%s listed", absent)
+		}
+	}
+	e2 := rows["e2-standard-4"]
+	wantOD := round4(4*0.021811 + 16*0.002923)
+	if e2.OnDemand == nil || *e2.OnDemand != wantOD || e2.VCPU != 4 || e2.MemoryGiB != 16 || e2.Arch != "amd64" || !e2.Selectable {
+		t.Errorf("e2-standard-4: %+v want %v", e2, wantOD)
+	}
+	if e2.SpotMin == nil || *e2.SpotMin != round4(wantOD*0.4) || e2.EstSpot == nil || *e2.EstSpot <= *e2.SpotMin {
+		t.Errorf("e2 spot: %+v", e2)
+	}
+	if m := rows["e2-medium"]; m.OnDemand == nil || *m.OnDemand != 0.0335 {
+		t.Errorf("shared core: %+v", m)
+	}
+	if !strings.Contains(d.Sources["on_demand"].Source, "not live") || d.Estimate.DiskUSDGBMonth != 0.10 {
+		t.Errorf("the table is not marked as not live: %+v %+v", d.Sources, d.Estimate)
+	}
+	for i := 1; i < len(d.Rows); i++ {
+		if a, b := d.Rows[i-1], d.Rows[i]; a.EstSpot != nil && b.EstSpot != nil && *a.EstSpot > *b.EstSpot {
+			t.Errorf("not cheapest first: %s %s", a.Type, b.Type)
+		}
+	}
+	// a write call is never made
+	for _, c := range r.calls {
+		if strings.Contains(c.line(), " create ") || strings.Contains(c.line(), " delete ") {
+			t.Errorf("a write call: %s", c.line())
+		}
+	}
+}
+
+func TestGCECatalogRefusesWhatItCannotAnswer(t *testing.T) {
+	e, _ := gceCatalogEnv(t, "")
+	for name, o := range map[string]catalogOpts{
+		"another region": {Kind: "gcp", Region: "europe-west4"},
+		"bad region":     {Kind: "gcp", Region: "us central1"},
+		"bad type":       {Kind: "gcp", Types: []string{"e2 standard"}},
+		"score":          {Kind: "gcp", Score: []string{"e2-standard-4"}},
+	} {
+		if _, err := e.buildCatalog(context.Background(), o); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	e2, _ := gceCatalogEnv(t, "ERROR: There was a problem refreshing your current auth tokens: ('invalid_grant: Bad Request')")
+	_, err := e2.buildCatalog(context.Background(), catalogOpts{Kind: "gcp"})
+	if err == nil || classify(err, "catalog") != classCredsExpired {
+		t.Errorf("an expired login: %v (%s)", err, classify(err, "catalog"))
+	}
+}

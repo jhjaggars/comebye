@@ -6755,7 +6755,7 @@ function refreshDirty() {
 // Recheck and Refresh ask again now.
 const pz = {
   nodes: null, nodesErr: "", loadingNodes: false,
-  via: "", region: "", small: false, sort: "price",
+  via: "", region: "", kind: "aws", small: false, sort: "price",
   cat: null, catErr: "", catKey: "", loading: false, loadingKey: "", seq: 0,
   open: "", score: {}, scoring: "",
 };
@@ -6765,6 +6765,13 @@ const PZ_CREDS = [
 ];
 const PZ_BANDS = { "<5%": 0, "5-10%": 1, "10-15%": 2, "15-20%": 3, ">20%": 4 };
 
+// The region a node builds a kind of host in: the AWS config's region, or the region of the gcp config's zone.
+function pzKindRegion(n, kind) {
+  const pf = n && n.preflight;
+  if (!pf) return "";
+  if (kind === "gcp") return pf.gcp_zone ? pf.gcp_zone.replace(/-[a-z]$/, "") : "";
+  return pf.region || "";
+}
 function pzDefaultNode() { const n = pz.nodes; return n ? (n.default || ((n.nodes || [])[0] || {}).name || "") : ""; }
 function pzNode(name) { return ((pz.nodes && pz.nodes.nodes) || []).find((n) => n.name === name); }
 
@@ -6789,7 +6796,7 @@ async function loadProvNodes(force) {
 }
 
 function pzCatPath(extra) {
-  const q = new URLSearchParams({ kind: "aws", via: pz.via, region: pz.region });
+  const q = new URLSearchParams({ kind: pz.kind, via: pz.via, region: pz.region });
   if (pz.small) q.set("small", "1");
   if (extra) for (const [k, v] of Object.entries(extra)) q.set(k, v);
   return "/api/provision/catalog?" + q;
@@ -6798,7 +6805,7 @@ function pzCatPath(extra) {
 async function loadProvCatalog(force) {
   const n = pzNode(pz.via);
   if (!n || !pz.region) return;
-  const key = [pz.via, pz.region, pz.small].join("|");
+  const key = [pz.via, pz.kind, pz.region, pz.small].join("|");
   if (!force && pz.catKey === key && pz.cat && Date.now() - pz.cat._at < 60000) return;
   if (pz.loading && pz.loadingKey === key) return; // already asking this very question
   const seq = ++pz.seq; // an answer to a question the user has moved on from is dropped
@@ -6807,7 +6814,7 @@ async function loadProvCatalog(force) {
   let res = null, err = null;
   try {
     res = force
-      ? await api("/api/provision/refresh", { method: "POST", headers: { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }, body: JSON.stringify({ what: "catalog", via: pz.via, kind: "aws", region: pz.region, small: pz.small }), timeout: 340000 })
+      ? await api("/api/provision/refresh", { method: "POST", headers: { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }, body: JSON.stringify({ what: "catalog", via: pz.via, kind: pz.kind, region: pz.region, small: pz.small }), timeout: 340000 })
       : await api(pzCatPath(), { timeout: 340000 });
   } catch (e) { err = e; }
   if (seq !== pz.seq) return;
@@ -6865,9 +6872,9 @@ function pzRow(r, n, pick) {
   const scoreHtml = sc ? (sc.error ? `<span class="pz-note warn">${esc(sc.error)}</span>`
     : (sc.scores || []).length ? `<div class="pz-zones" aria-label="Capacity score by zone, 1 to 10">${sc.scores.map((z) => `<span class="pz-zone">${esc(z.zone_id)} · ${z.score}/10</span>`).join("")}</div>` : '<span class="pz-note">No capacity score came back.</span>') : "";
   const detail = open ? `<div class="pz-detail">
-      <div><div class="pz-note">Spot price per zone (the market price, up to on-demand; not a bid)</div><div class="pz-zones">${zones || '<span class="pz-note">No per-zone prices: they need an AWS login on ${esc(n.name)}. The region-wide spot price is in the row.</span>'}</div></div>
+      ${pz.kind === "gcp" ? `<div class="pz-note">Prices for Google Cloud are estimates from a built-in list, not live: a Spot VM is priced at about 40% of on-demand and Google changes it without notice. Google reports no capacity score.</div>` : `<div><div class="pz-note">Spot price per zone (the market price, up to on-demand; not a bid)</div><div class="pz-zones">${zones || '<span class="pz-note">No per-zone prices: they need an AWS login on ${esc(n.name)}. The region-wide spot price is in the row.</span>'}</div></div>
       <div><button type="button" class="btn" data-pz-score="${escAttr(r.type)}"${pz.scoring ? " disabled" : ""}>${pz.scoring === r.type ? "Checking…" : "Check capacity"}</button>
-      <span class="pz-note"> AWS's score for getting one ${esc(r.type)}, by zone id (10 is best).</span></div>${scoreHtml}
+      <span class="pz-note"> AWS's score for getting one ${esc(r.type)}, by zone id (10 is best).</span></div>${scoreHtml}`}
       ${r.note ? `<div class="pz-note warn">${esc(r.note)}</div>` : ""}</div>` : "";
   if (pick) return `<div class="pz-item${r.selectable ? "" : " off"}"><button type="button" class="pz-row" data-az-pick="${escAttr(r.type)}" aria-pressed="${az.type === r.type}"${r.selectable ? "" : " disabled"}>
     <span class="pz-type">${esc(r.type)}${tags}</span>${spec}${prices}</button></div>`;
@@ -6940,7 +6947,7 @@ function pzCatalog(n, pick) {
       <div class="pz-field"><label for="pz-sort">Sort by</label><select id="pz-sort">${[["price", "Cheapest (spot, estimated)"], ["ondemand", "Lowest on-demand"], ["vcpu", "Most vCPU"], ["memory", "Most memory"], ["stops", "Fewest interruptions"]].map(([v, l]) => `<option value="${v}"${pz.sort === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
       <label class="pz-check"><input type="checkbox" id="pz-small"${pz.small ? " checked" : ""}>Show small sizes${d.hidden_small ? ` (${d.hidden_small} hidden)` : ""}</label>
       <button type="button" class="btn" id="pz-refresh"${pz.loading ? " disabled" : ""}>${pz.loading ? "Refreshing…" : "Refresh prices"}</button></div>
-    <p class="pz-note">Hidden by default: under ${d.min_vcpu} vCPU or ${d.min_memory_gib} GiB, too small for an agent host. ≈ per hour is the lowest spot price plus ${pzMoney(est.ipv4_usd_hour)} for the public IPv4 and ${est.disk_gb || 0} GB of disk. Spot is the market price and sessions do not survive a stop. Arm (Graviton) types boot the arm64 Debian image.</p>
+    <p class="pz-note">Hidden by default: under ${d.min_vcpu} vCPU or ${d.min_memory_gib} GiB, too small for an agent host. ≈ per hour is the lowest spot price plus ${pzMoney(est.ipv4_usd_hour)} for the public IPv4 and ${est.disk_gb || 0} GB of disk. ${pz.kind === "gcp" ? "Google Cloud prices are estimates from a built-in list, not live: a Spot VM is priced at about 40% of on-demand, and Google changes that without notice. Sessions do not survive a stop." : "Spot is the market price and sessions do not survive a stop. Arm (Graviton) types boot the arm64 Debian image."}</p>
     <div class="pz-head" aria-hidden="true"><span>Type</span><span>vCPU</span><span>Memory</span><span>Arch</span><span>Spot from</span><span>On-demand</span><span>Stops</span><span>≈ per hour</span></div>
     <div class="pz-list">${rows.map((r) => pzRow(r, n, pick)).join("") || '<p class="pz-note">No sizes match.</p>'}</div>
     <details class="pz-src"><summary>Where each column comes from (through ${esc(n.name)}, ${esc(pzAge(d.fetched_at))})</summary><ul class="pz-note">${srcLine}</ul>
@@ -7131,11 +7138,12 @@ const AZ_JOB_KEY = "comebye.addhost.job";
 
 function azDefaults(type, kind) {
   if (kind === "openshell") return { kind: "openshell", name: "", idle_minutes: 120, destroy_after_hours: 72 };
-  return { kind: "aws", name: "", type: type || "", spot: true, zone: "", boot_disk_gb: 20, data_disk_gb: 50, idle_minutes: 120, max_run: "24h", budget_cap_usd: 10, destroy_after_hours: 72 };
+  return { kind: kind === "gcp" ? "gcp" : "aws", name: "", type: type || "", spot: true, zone: "", boot_disk_gb: 20, data_disk_gb: 50, idle_minutes: 120, max_run: "24h", budget_cap_usd: 10, destroy_after_hours: 72 };
 }
 function azSandbox() { return !!(az.spec && az.spec.kind === "openshell"); }
 // What a node can build now: its kinds, from the preflight (a kind whose login is missing is disabled, with why).
 function azKinds(n) { return (n && n.kinds) || [{ kind: "aws", label: "AWS spot or on-demand VM", ok: true }]; }
+function azGCE() { return !!(az.spec && az.spec.kind === "gcp"); }
 function azCsrf() { return { "X-Comebye-Csrf": (pz.nodes && pz.nodes.csrf) || "" }; }
 function azRow() { const c = pz.cat && pz.cat.catalog; return c ? (c.rows || []).find((r) => r.type === az.spec.type) : null; }
 function azNode() { return pzNode(pz.via); }
@@ -7145,11 +7153,14 @@ function azStart(type) {
   az.open = true; az.step = type ? 3 : 1; az.type = type || "";
   az.spec = azDefaults(type, type ? "aws" : (az.spec && az.spec.kind) || "aws"); az.plan = null; az.planErr = ""; az.ack = false; az.key = ""; az.err = ""; az.job = null; az.cursor = 0; az.items = [];
   const n = azNode();
-  if (n && n.preflight && n.preflight.region) pz.region = n.preflight.region;
+  pz.kind = az.spec.kind === "gcp" ? "gcp" : "aws";
+  const own = pzKindRegion(n, pz.kind);
+  if (own) pz.region = own;
   renderPeers();
 }
 function azClose() {
   az.open = false; azStopPoll();
+  if (pz.kind !== "aws") { pz.kind = "aws"; pz.cat = null; pz.catKey = ""; const own = pzKindRegion(azNode(), "aws"); if (own) pz.region = own; }
   try { localStorage.removeItem(AZ_JOB_KEY); } catch (e) { /* storage may be unavailable */ }
   renderPeers();
 }
@@ -7170,7 +7181,7 @@ function azFoot() {
   if (azSandbox()) return `<b>no per-hour price</b><small>an OpenShell sandbox runs on the gateway's own capacity</small>`;
   const c = azCost(), sp = az.spec;
   const cost = c
-    ? `<b>≈ ${pzMoney(c.hour)}/h · $${c.day.toFixed(2)}/day</b><small>${sp.spot ? "spot, market price" : "on-demand"} · the $${sp.budget_cap_usd} cap lasts about ${c.hours >= 100 ? Math.round(c.hours) : c.hours.toFixed(1)} h</small>`
+    ? `<b>≈ ${pzMoney(c.hour)}/h · $${c.day.toFixed(2)}/day</b><small>${sp.spot ? (azGCE() ? "Spot VM, estimated" : "spot, market price") : "on-demand"} · the $${sp.budget_cap_usd} cap lasts about ${c.hours >= 100 ? Math.round(c.hours) : c.hours.toFixed(1)} h</small>`
     : `<b>≈ – /h</b><small>${sp.type ? "no price for " + esc(sp.type) : "choose a size to see the cost"}</small>`;
   return cost;
 }
@@ -7200,7 +7211,7 @@ function azBody() {
       <button type="button" class="btn" id="pz-recheck"${pz.loadingNodes ? " disabled" : ""}>${pz.loadingNodes ? "Checking…" : "Recheck"}</button></div>
       <fieldset class="az-kinds"><legend class="pz-note">What to build</legend>${azKinds(n).map((k) => `<label class="pz-check"><input type="radio" name="az-kind" value="${escAttr(k.kind)}"${sp.kind === k.kind ? " checked" : ""}${k.ok ? "" : " disabled"}>${esc(k.label)}${k.ok ? "" : ` <span class="pz-note warn">(${esc(k.why || "not available")})</span>`}</label>`).join("")}</fieldset>
       ${n ? pzCredRows(n) : ""}
-      <p class="pz-note">${azSandbox() ? "A sandbox is made on the node's OpenShell gateway, not in a cloud region." : `Builds in <b>${esc((n && n.preflight && n.preflight.region) || pz.region || "?")}</b>, this node's own region.`} The credentials stay on ${esc(n ? n.name : "the node")}; this page only learns whether each is present.</p>
+      <p class="pz-note">${azSandbox() ? "A sandbox is made on the node's OpenShell gateway, not in a cloud region." : `Builds in <b>${esc(pzKindRegion(n, azGCE() ? "gcp" : "aws") || pz.region || "?")}</b>, this node's own ${azGCE() ? "zone's region" : "region"}.`} The credentials stay on ${esc(n ? n.name : "the node")}; this page only learns whether each is present.</p>
       ${dry ? `<div class="az-dry"><b>Dry run.</b> ${esc(n.name)} is set to plan only: every step below works, and the stages show as planned, but nothing is created and no cost is incurred.</div>` : ""}</div>`;
     const kk = azKinds(n).find((k) => k.kind === sp.kind);
     can = !!n && n.state === "ok" && (!kk || kk.ok);
@@ -7233,8 +7244,8 @@ function azBody() {
     const num = (id, label, v, min, max, hint) => `<div class="pz-field"><label for="${id}">${label}</label><input class="az-in" id="${id}" type="number" inputmode="decimal" min="${min}" max="${max}" value="${escAttr(v)}"><small class="pz-note">${hint}</small></div>`;
     main = `<div class="pz-card"><h3>${esc(sp.type)} on ${esc(pz.via)}</h3><div class="az-grid">
       <div class="pz-field az-wide"><label for="az-name">Name</label><input class="az-in${bad ? " bad" : ""}" id="az-name" value="${escAttr(sp.name)}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. build-box"><small class="pz-note${bad ? " warn" : ""}">2 to 30 lowercase letters, digits and dashes. It becomes the host's name in Comebye.</small></div>
-      <div class="pz-field"><label for="az-spot">Pricing</label><select id="az-spot"><option value="1"${sp.spot ? " selected" : ""}>Spot (cheaper, can be reclaimed)</option><option value="0"${sp.spot ? "" : " selected"}>On-demand</option></select><small class="pz-note">${sp.spot ? "A reclaim stops the host (disks kept) and agent sessions end." : "Full price, not reclaimed."}</small></div>
-      <div class="pz-field"><label for="az-zone">Zone</label><select id="az-zone"><option value="">The node's default</option>${zones.map((z) => `<option value="${escAttr(z)}"${sp.zone === z ? " selected" : ""}>${esc(z)} · ${pzMoney(r.spot_usd_hour[z])}</option>`).join("")}</select><small class="pz-note">${zones.length ? "Spot price per zone." : "Zone prices need an AWS login on the node."}</small></div>
+      <div class="pz-field"><label for="az-spot">Pricing</label><select id="az-spot"><option value="1"${sp.spot ? " selected" : ""}>${azGCE() ? "Spot VM" : "Spot"} (cheaper, can be reclaimed)</option><option value="0"${sp.spot ? "" : " selected"}>On-demand</option></select><small class="pz-note">${sp.spot ? "A reclaim stops the host (disks kept) and agent sessions end." : "Full price, not reclaimed."}</small></div>
+      <div class="pz-field"><label for="az-zone">Zone</label><select id="az-zone"><option value="">The node's default</option>${zones.map((z) => `<option value="${escAttr(z)}"${sp.zone === z ? " selected" : ""}>${esc(z)} · ${pzMoney(r.spot_usd_hour[z])}</option>`).join("")}</select><small class="pz-note">${zones.length ? "Spot price per zone." : azGCE() ? "Leave it on the node's zone." : "Zone prices need an AWS login on the node."}</small></div>
       ${num("az-boot", "Boot disk (GB)", sp.boot_disk_gb, 10, 200, "10 to 200")}
       ${num("az-data", "Data disk (GB)", sp.data_disk_gb, 10, 1000, "Kept when the host is destroyed unless you delete it.")}
       ${num("az-idle", "Stop after idle (minutes)", sp.idle_minutes, 5, 1440, "Default 120. Disks are kept.")}
@@ -7346,9 +7357,9 @@ function azStageStates() {
   return m;
 }
 const AZ_FAIL = {
-  spot_capacity: "AWS has no spot capacity for this size right now.",
-  creds_expired: "The AWS login on the provisioner expired. Run aws login on it, then Retry.",
-  quota: "The AWS account's quota for this size is used up.",
+  spot_capacity: "The cloud has no spot capacity for this size right now.",
+  creds_expired: "The cloud login on the provisioner expired. Run aws login (or gcloud auth login, or openshell gateway login) on it, then Retry.",
+  quota: "The cloud account's quota for this size is used up.",
   bootstrap_failed: "The host was created but setting it up failed.",
   needs_input: "The tool wanted to ask a question, and it cannot here.",
   other: "The build failed.",
@@ -7445,8 +7456,13 @@ function initAddHost() {
     const t = ev.target;
     if (!az.open || !az.spec) return;
     const n = (v) => (v === "" ? 0 : Number(v));
-    if (t.name === "az-kind") { const keep = az.spec.name; az.spec = azDefaults("", t.value); az.spec.name = keep; az.type = ""; az.plan = null; renderPeers(); return; }
-    if (t.id === "az-via") { pz.via = t.value; const nd = azNode(); pz.region = (nd && nd.preflight && nd.preflight.region) || pz.region; pz.cat = null; pz.catKey = ""; renderPeers(); return; }
+    if (t.name === "az-kind") {
+      const keep = az.spec.name; az.spec = azDefaults("", t.value); az.spec.name = keep; az.type = ""; az.plan = null;
+      pz.kind = t.value === "gcp" ? "gcp" : "aws"; pz.cat = null; pz.catKey = ""; pz.catErr = "";
+      const own = pzKindRegion(azNode(), pz.kind); if (own) pz.region = own;
+      renderPeers(); return;
+    }
+    if (t.id === "az-via") { pz.via = t.value; const nd = azNode(); pz.region = pzKindRegion(nd, pz.kind) || pz.region; pz.cat = null; pz.catKey = ""; renderPeers(); return; }
     if (t.id === "az-name") { az.spec.name = t.value.trim().toLowerCase(); const nameBad = !!az.spec.name && !AZ_NAME.test(az.spec.name); t.classList.toggle("bad", nameBad); if (t.nextElementSibling) t.nextElementSibling.classList.toggle("warn", nameBad); const nb = $("az-next"); if (nb) nb.disabled = !(AZ_NAME.test(az.spec.name) && az.spec.budget_cap_usd >= 1); return; }
     if (t.id === "az-spot") az.spec.spot = t.value === "1";
     else if (t.id === "az-zone") az.spec.zone = t.value;

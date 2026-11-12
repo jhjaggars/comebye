@@ -53,16 +53,22 @@ type Preflight struct {
 	SSH       Check    `json:"ssh"`
 	Region    string   `json:"region,omitempty"`
 	Regions   []string `json:"regions,omitempty"`
+	// GCPRegion is the region of the zone a gcp host is built in.
+	GCPZone string `json:"gcp_zone,omitempty"`
 	// DryRun is set by the node's comebye, not the tool: every job on this node
 	// runs create --dry-run (the real path is off).
 	DryRun bool `json:"dry_run"`
 }
 
 var (
-	regionRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]$`)
-	typeRe   = regexp.MustCompile(`^[a-z][a-z0-9]*\.[a-z0-9]+$`)
-	zoneRe   = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9][a-z]$`)
-	zoneIDRe = regexp.MustCompile(`^[a-z]+[0-9]-az[0-9]+$`)
+	// The shapes of both clouds: an AWS region is us-east-1 and a type t3.large,
+	// a GCE region is us-central1 and a type e2-standard-4.
+	regionRe  = regexp.MustCompile(`^([a-z]{2}(-[a-z]+)+-[0-9]|[a-z]+-[a-z]+[0-9]+)$`)
+	typeRe    = regexp.MustCompile(`^[a-z][a-z0-9]*(\.[a-z0-9]+|(-[a-z0-9]+)+)$`)
+	zoneRe    = regexp.MustCompile(`^([a-z]{2}(-[a-z]+)+-[0-9][a-z]|[a-z]+-[a-z]+[0-9]+-[a-z])$`)
+	awsTypeRe = regexp.MustCompile(`^[a-z][a-z0-9]*\.[a-z0-9]+$`)
+	gceTypeRe = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)+$`)
+	zoneIDRe  = regexp.MustCompile(`^[a-z]+[0-9]-az[0-9]+$`)
 	// Anything shaped like a credential is removed from a note, whoever sent it.
 	secretShape = regexp.MustCompile(`tskey-[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{8,}|\b(AKIA|ASIA)[0-9A-Z]{16}\b|Bearer [A-Za-z0-9._~+/=-]+|\b[0-9]{12}\b|arn:aws[a-z-]*:[^ ]*|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}|(?i:secret|token|password|key)=\S+`)
 )
@@ -115,6 +121,9 @@ func ParsePreflight(b []byte) (Preflight, error) {
 	}
 	if !regionRe.MatchString(p.Region) {
 		p.Region = ""
+	}
+	if !zoneRe.MatchString(p.GCPZone) {
+		p.GCPZone = ""
 	}
 	var rs []string
 	for _, r := range p.Regions {
@@ -216,8 +225,8 @@ func ParseCatalog(b []byte) (*Catalog, error) {
 	if c.V != 1 {
 		return nil, fmt.Errorf("the catalog is version %d, not 1", c.V)
 	}
-	if c.Kind != "aws" {
-		return nil, fmt.Errorf("the catalog is for %q, not aws", Text(c.Kind, 20))
+	if c.Kind != KindAWS && c.Kind != KindGCP {
+		return nil, fmt.Errorf("the catalog is for %q, not aws or gcp", Text(c.Kind, 20))
 	}
 	if !regionRe.MatchString(c.Region) {
 		return nil, errors.New("the catalog names no valid region")

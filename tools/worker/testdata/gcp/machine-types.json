@@ -1,0 +1,11 @@
+[
+  {"name": "e2-standard-2", "guestCpus": 2, "memoryMb": 8192, "isSharedCpu": false, "zone": "us-central1-a"},
+  {"name": "e2-standard-4", "guestCpus": 4, "memoryMb": 16384, "isSharedCpu": false, "zone": "us-central1-a"},
+  {"name": "e2-medium", "guestCpus": 1, "memoryMb": 4096, "isSharedCpu": true, "zone": "us-central1-a"},
+  {"name": "e2-micro", "guestCpus": 2, "memoryMb": 1024, "isSharedCpu": true, "zone": "us-central1-a"},
+  {"name": "n2-standard-2", "guestCpus": 2, "memoryMb": 8192, "isSharedCpu": false, "zone": "us-central1-a"},
+  {"name": "n2d-standard-2", "guestCpus": 2, "memoryMb": 8192, "isSharedCpu": false, "zone": "us-central1-a"},
+  {"name": "c2-standard-4", "guestCpus": 4, "memoryMb": 16384, "isSharedCpu": false, "zone": "us-central1-a"},
+  {"name": "t2a-standard-1", "guestCpus": 1, "memoryMb": 4096, "isSharedCpu": false, "zone": "us-central1-a"},
+  {"name": "e2-standard-64", "guestCpus": 64, "memoryMb": 262144, "isSharedCpu": false, "zone": "us-central1-a"}
+]

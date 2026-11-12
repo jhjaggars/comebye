@@ -39,7 +39,6 @@ func TestSpecRefusesWhatTheConfigWould(t *testing.T) {
 		"bad name":             `{"name":"W 1"}`,
 		"type with a space":    `{"kind":"aws","type":"t3.large --foo"}`,
 		"zone outside region":  `{"kind":"aws","zone":"eu-west-1a"}`,
-		"spot on gcp":          `{"kind":"gcp","spot":true}`,
 		"tiny disk":            `{"data_disk_gb":1}`,
 		"idle too short":       `{"idle_minutes":1}`,
 		"bad max run":          `{"max_run":"1 day"}`,
@@ -58,7 +57,7 @@ func TestSpecRefusesWhatTheConfigWould(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if name == "spot on gcp" || name == "kind unknown" {
+		if name == "kind unknown" {
 			c.Project, c.Zone = "comebye-test-0001", "us-central1-a"
 		}
 		if err := s.Apply(c); err == nil {
@@ -555,5 +554,38 @@ func TestAWSDestroyDeletesEverySubnetItMade(t *testing.T) {
 		if strings.Contains(cl.line(), "describe-subnets") && strings.Contains(cl.line(), "Subnets[]") && strings.Contains(cl.line(), "tag:Name") {
 			t.Errorf("cleanup finds subnets by one name, not by label: %s", cl.line())
 		}
+	}
+}
+
+func TestGCESpotIsASpotVMThatStops(t *testing.T) {
+	c := testCfg(t) // provider gcp
+	s, _ := ParseSpec([]byte(`{"kind":"gcp","name":"w1","type":"e2-standard-4","spot":true,"zone":"us-central1-b"}`))
+	if err := s.Apply(c); err != nil || !c.GCESpot || c.AWSSpot {
+		t.Fatalf("apply: %v spot %v", err, c.GCESpot)
+	}
+	g := &gcloud{cfg: c}
+	line := strings.Join(g.instanceCreate("w1", "ssh-ed25519 AAAA", "/tmp/s"), " ")
+	for _, want := range []string{"--provisioning-model=SPOT", "--instance-termination-action=STOP", "--machine-type=e2-standard-4", "--zone=us-central1-b"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("no %s: %s", want, line)
+		}
+	}
+	if strings.Count(line, "--instance-termination-action") != 1 {
+		t.Errorf("the termination action is given twice: %s", line)
+	}
+	// on-demand: no spot flags, and the max-run backstop alone still stops it
+	c2 := testCfg(t)
+	s2, _ := ParseSpec([]byte(`{"kind":"gcp","name":"w1","spot":false}`))
+	if err := s2.Apply(c2); err != nil || c2.GCESpot {
+		t.Fatal(err)
+	}
+	if line := strings.Join((&gcloud{cfg: c2}).instanceCreate("w1", "ssh-ed25519 AAAA", "/tmp/s"), " "); strings.Contains(line, "SPOT") {
+		t.Errorf("on-demand asked for spot: %s", line)
+	}
+	// the AWS setting does not leak across
+	bad := testCfg(t)
+	bad.AWSSpot = true
+	if err := bad.Validate(); err == nil {
+		t.Error("aws_spot with provider gcp accepted")
 	}
 }

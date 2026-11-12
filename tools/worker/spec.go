@@ -106,10 +106,12 @@ func (s *Spec) Apply(c *Config) error {
 		c.MachineType, c.machineSet = s.Type, true
 	}
 	if s.Spot != nil {
-		if *s.Spot && c.Provider != "aws" {
-			return fmt.Errorf("spec: spot is only for kind aws")
+		switch c.Provider {
+		case "aws":
+			c.AWSSpot = *s.Spot
+		case "gcp":
+			c.GCESpot = *s.Spot
 		}
-		c.AWSSpot = *s.Spot
 	}
 	if s.Zone != "" {
 		switch c.Provider {

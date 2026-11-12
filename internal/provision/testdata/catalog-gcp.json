@@ -1,0 +1,66 @@
+{
+ "v": 1,
+ "kind": "gcp",
+ "region": "us-central1",
+ "generated_at": "2026-11-12T12:00:00Z",
+ "sources": {
+  "types": {
+   "fetched_at": "2026-11-12T12:00:00Z",
+   "state": "fresh",
+   "source": "gcloud compute machine-types list (us-central1-a)"
+  },
+  "on_demand": {
+   "fetched_at": "2026-11-12T12:00:00Z",
+   "state": "cached",
+   "source": "built-in list prices for us-central1 (2025), not live: an estimate"
+  },
+  "spot_price": {
+   "fetched_at": "2026-11-12T12:00:00Z",
+   "state": "cached",
+   "source": "a Spot VM is priced at about 40% (35% for n2) of the on-demand price: an estimate, Google changes it without notice"
+  }
+ },
+ "estimate": {
+  "ipv4_usd_hour": 0.005,
+  "disk_usd_gb_month": 0.1,
+  "disk_gb": 70
+ },
+ "rows": [
+  {
+   "type": "e2-standard-2",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.067,
+   "spot_min_usd_hour": 0.0268,
+   "estimate_spot_usd_hour": 0.0414,
+   "estimate_on_demand_usd_hour": 0.0816,
+   "selectable": true
+  },
+  {
+   "type": "e2-standard-4",
+   "vcpu": 4,
+   "memory_gib": 16,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.134,
+   "spot_min_usd_hour": 0.0536,
+   "estimate_spot_usd_hour": 0.0682,
+   "estimate_on_demand_usd_hour": 0.1486,
+   "selectable": true
+  },
+  {
+   "type": "e2-standard-8",
+   "vcpu": 8,
+   "memory_gib": 32,
+   "arch": "amd64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.268,
+   "spot_min_usd_hour": 0.1072,
+   "estimate_spot_usd_hour": 0.1218,
+   "estimate_on_demand_usd_hour": 0.2826,
+   "selectable": true
+  }
+ ]
+}

@@ -620,7 +620,7 @@ func ParseHosts(b []byte) (*HostsView, error) {
 		if !typeRe.MatchString(h.Type) {
 			h.Type = ""
 		}
-		if h.Kind != KindOpenShell {
+		if h.Kind != KindOpenShell && h.Kind != KindGCP {
 			h.Kind = KindAWS
 		}
 		if !regionRe.MatchString(h.Region) {

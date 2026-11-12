@@ -207,8 +207,11 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 	if kind == "" {
 		kind = e.Cfg.Provider
 	}
+	if kind == "gcp" {
+		return e.buildGCECatalog(ctx, o)
+	}
 	if kind != "aws" {
-		return nil, fmt.Errorf("catalog: kind %q is not built yet (aws only for now)", kind)
+		return nil, fmt.Errorf("catalog: kind %q has no price list (aws and gcp do)", kind)
 	}
 	region := o.Region
 	if region == "" {

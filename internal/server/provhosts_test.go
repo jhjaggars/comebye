@@ -350,3 +350,103 @@ func TestASandboxNeedsTheGatewayLoginNotAnAWSOne(t *testing.T) {
 		t.Errorf("a VM plan: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// ---- the Google Cloud kind ----
+
+const gceSpec = `{"kind":"gcp","name":"gbox1","type":"e2-standard-4","spot":true,"zone":"us-central1-b","boot_disk_gb":20,"data_disk_gb":50,"idle_minutes":120,"max_run":"24h","budget_cap_usd":10,"destroy_after_hours":72}`
+
+func gceHub(t *testing.T, gcpState string) (*Server, *provPeer, *fakeWorkerDir, map[string]string) {
+	t.Helper()
+	s, prov, wk, hdr := hubSetup(t)
+	prov.peer.cfg.Provision.Tool.Real = true
+	pf := strings.Replace(string(mustRead(t, "../provision/testdata/preflight.json")), "us-east-2", "us-east-1", -1)
+	pf = strings.Replace(pf, `"gcp": {"state": "missing", "note": "no active gcloud account"}`, `"gcp": {"state": "`+gcpState+`", "note": "an account is active"}`, 1)
+	pf = strings.Replace(pf, `"region":`, `"gcp_zone": "us-central1-a", "region":`, 1)
+	wk.set(t, "preflight.json", pf)
+	wk.set(t, "catalog.json", string(mustRead(t, "../provision/testdata/catalog-gcp.json")))
+	ev := ""
+	for i, st := range provision.Stages {
+		ev += `{"v":1,"seq":` + string(rune('1'+i)) + `,"stage":"` + st + `","step":"` + string(rune('1'+i)) + `/9","state":"ok"}` + "\n"
+	}
+	wk.set(t, "create.events", ev)
+	wk.set(t, "create.stderr", "")
+	wk.set(t, "status.json", `{"v":1,"provider":"gcp","workers":[{"name":"gbox1","state":"RUNNING","type":"e2-standard-4","mode":"spot","managed":true,"launched_at":"`+time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)+`","last_stop_at":null,"caps":{}}]}`)
+	tick(s)
+	do(s, "POST", "/api/provision/refresh", hdr, `{"what":"nodes"}`)
+	return s, prov, wk, hdr
+}
+
+func TestGCEPriceListComesFromTheNodesOwnZone(t *testing.T) {
+	s, _, wk, _ := gceHub(t, "ok")
+	var cv struct {
+		Region  string             `json:"region"`
+		Kind    string             `json:"kind"`
+		Catalog *provision.Catalog `json:"catalog"`
+	}
+	if code := getJSON(t, s, "/api/provision/catalog?kind=gcp&via=prov", userHdr, &cv); code != 200 {
+		t.Fatalf("catalog = %d", code)
+	}
+	if cv.Kind != "gcp" || cv.Region != "us-central1" || cv.Catalog.Kind != "gcp" || len(cv.Catalog.Rows) != 3 || cv.Catalog.Rows[1].Type != "e2-standard-4" {
+		t.Errorf("catalog: %+v", cv)
+	}
+	if !strings.Contains(strings.Join(wk.argvLines(), "\n"), "catalog --kind gcp --region us-central1 --json") {
+		t.Errorf("argv: %v", wk.argvLines())
+	}
+	if !strings.Contains(cv.Catalog.Sources["on_demand"].Source, "not live") {
+		t.Errorf("the table is not marked as not live: %+v", cv.Catalog.Sources)
+	}
+}
+
+func TestAGCEHostIsPlannedBuiltAndPriced(t *testing.T) {
+	s, _, wk, hdr := gceHub(t, "ok")
+	rec := do(s, "POST", "/api/provision/plan", hdr, `{"spec":`+gceSpec+`}`)
+	var pl struct {
+		OK     bool            `json:"ok"`
+		Ready  bool            `json:"ready"`
+		Region string          `json:"region"`
+		Cost   *provision.Cost `json:"cost"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &pl)
+	if rec.Code != 200 || !pl.OK || !pl.Ready || pl.Region != "us-central1" || pl.Cost == nil || pl.Cost.Mode != "spot" || pl.Cost.USDHour <= 0.03 {
+		t.Fatalf("plan = %d %s", rec.Code, rec.Body)
+	}
+	// a request for another region is refused, not priced for one and built in another
+	if rec := do(s, "POST", "/api/provision/plan", hdr, `{"spec":`+gceSpec+`,"region":"us-east1"}`); rec.Code != 422 || !strings.Contains(rec.Body.String(), "builds only in us-central1") {
+		t.Errorf("other region = %d %s", rec.Code, rec.Body)
+	}
+	rec = do(s, "POST", "/api/provision", hdr, `{"spec":`+gceSpec+`,"key":"gce-key-0001","ack":true}`)
+	var v hubJobResp
+	json.Unmarshal(rec.Body.Bytes(), &v)
+	if rec.Code != 202 || v.Dry {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body)
+	}
+	hubWait(t, s, v.ID, jobOK)
+	var in provision.Spec
+	json.Unmarshal(mustRead(t, wk.dir+"/spec.in"), &in)
+	if in.Kind != "gcp" || in.Type != "e2-standard-4" || !in.Spot || in.Zone != "us-central1-b" {
+		t.Errorf("the tool read %+v", in)
+	}
+	var h hostsResp
+	getJSON(t, s, "/api/provision/hosts?refresh=1", userHdr, &h)
+	if len(h.Hosts) != 1 || h.Hosts[0].Kind != "gcp" || h.Hosts[0].Mode != "spot" || h.Hosts[0].Spend.USD <= 0 || h.Hosts[0].Region != "us-central1" {
+		t.Fatalf("host: %+v", h.Hosts)
+	}
+}
+
+func TestAGCEHostNeedsTheGoogleLoginNotTheAWSOne(t *testing.T) {
+	s, _, wk, hdr := gceHub(t, "expired")
+	rec := do(s, "POST", "/api/provision", hdr, `{"spec":`+gceSpec+`,"key":"gce-key-0002","ack":true}`)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "gcp expired") {
+		t.Errorf("create = %d %s", rec.Code, rec.Body)
+	}
+	if wk.runs("create") != 0 {
+		t.Error("the tool ran")
+	}
+	// the type must be a machine type of its own cloud
+	if rec := do(s, "POST", "/api/provision/plan", hdr, `{"spec":`+strings.Replace(gceSpec, "e2-standard-4", "t3.large", 1)+`}`); rec.Code != 422 {
+		t.Errorf("an aws type for gcp = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(s, "POST", "/api/provision/plan", hdr, `{"spec":`+strings.Replace(okSpec, "t3.large", "e2-standard-4", 1)+`,"region":"us-east-1"}`); rec.Code != 422 {
+		t.Errorf("a gcp type for aws = %d %s", rec.Code, rec.Body)
+	}
+}

@@ -131,8 +131,8 @@ func (s *Server) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {
 	if req.Kind == "" {
 		req.Kind = "aws"
 	}
-	if req.Kind != "aws" {
-		relErr(w, http.StatusBadRequest, "kind_unsupported", "only aws has a price list so far")
+	if req.Kind != "aws" && req.Kind != "gcp" {
+		relErr(w, http.StatusBadRequest, "kind_unsupported", "only aws and gcp have a price list")
 		return
 	}
 	if !provRegionRE.MatchString(req.Region) {
@@ -165,7 +165,23 @@ func (s *Server) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, c)
 }
 
-var provRegionRE = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]$`)
+// A region of either cloud: us-east-1 (aws) or us-central1 (gcp).
+var provRegionRE = regexp.MustCompile(`^([a-z]{2}(-[a-z]+)+-[0-9]|[a-z]+-[a-z]+[0-9]+)$`)
+
+// nodeRegion is the region a node builds a kind of host in: the AWS config's
+// region, or the region of the gcp config's zone.
+func nodeRegion(pf *provision.Preflight, kind string) string {
+	if pf == nil {
+		return ""
+	}
+	if kind == provision.KindGCP {
+		if i := strings.LastIndexByte(pf.GCPZone, '-'); i > 0 {
+			return pf.GCPZone[:i]
+		}
+		return ""
+	}
+	return pf.Region
+}
 
 // ---- the hub's side ----
 
@@ -191,7 +207,7 @@ func nodeKinds(pf *provision.Preflight) []kindView {
 		return nil
 	}
 	var out []kindView
-	for _, k := range []struct{ kind, label string }{{provision.KindAWS, "AWS spot or on-demand VM"}, {provision.KindOpenShell, "OpenShell sandbox"}} {
+	for _, k := range []struct{ kind, label string }{{provision.KindAWS, "AWS spot or on-demand VM"}, {provision.KindGCP, "Google Cloud VM (Spot or on-demand)"}, {provision.KindOpenShell, "OpenShell sandbox"}} {
 		ok, miss := credsOK(pf, k.kind)
 		v := kindView{Kind: k.kind, Label: k.label, OK: ok || pf.DryRun}
 		if !v.OK {
@@ -358,7 +374,7 @@ func (s *Server) writeNodes(w http.ResponseWriter, r *http.Request, force bool) 
 		"default": s.cfg.Provision.Host,
 		"nodes":   nodes,
 		"csrf":    s.csrfToken(r),
-		"kinds":   []string{provision.KindAWS, provision.KindOpenShell},
+		"kinds":   []string{provision.KindAWS, provision.KindGCP, provision.KindOpenShell},
 	})
 }
 
@@ -397,8 +413,8 @@ func (s *Server) serveCatalog(w http.ResponseWriter, r *http.Request, via, kind,
 		kind = "aws"
 	}
 	switch {
-	case kind != "aws":
-		relErr(w, http.StatusBadRequest, "kind_unsupported", "only aws has a price list so far")
+	case kind != "aws" && kind != "gcp":
+		relErr(w, http.StatusBadRequest, "kind_unsupported", "only aws and gcp have a price list")
 		return
 	case via == "" || !fleet.ValidName(via) || !s.fleet.HasPeer(via):
 		relErr(w, http.StatusNotFound, "unknown_node", "no such provisioner")
@@ -412,7 +428,7 @@ func (s *Server) serveCatalog(w http.ResponseWriter, r *http.Request, via, kind,
 	}
 	if region == "" { // the node's own default
 		if n := s.probeNode(r.Context(), via, false); n.Role && n.Preflight != nil {
-			region = n.Preflight.Region
+			region = nodeRegion(n.Preflight, kind)
 		}
 		if region == "" {
 			relErr(w, http.StatusBadRequest, "bad_region", "choose a region")

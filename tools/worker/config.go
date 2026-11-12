@@ -35,6 +35,7 @@ type Config struct {
 	AWSProfile string // optional: a named profile of the user's AWS CLI config
 	ImageID    string // aws: an AMI id instead of the Debian SSM parameter
 	AWSSpot    bool   // aws: launch a persistent spot instance that stops (not terminates) when reclaimed
+	GCESpot    bool   // gcp: a Spot VM that stops (not deletes) when reclaimed
 	VPCRange   string // aws: CIDR of the dedicated VPC; SubnetRange lies inside it
 	// ExtraTags are more tags written on everything this tool makes in aws
 	// (aws_extra_tag=key=value, repeatable): how a test run marks its resources.
@@ -308,6 +309,15 @@ func (c *Config) apply(kv map[string]string) error {
 			} else {
 				c.ExtraTags = append(c.ExtraTags, [2]string{k, val})
 			}
+		case "gce_spot":
+			switch v {
+			case "true":
+				c.GCESpot = true
+			case "false":
+				c.GCESpot = false
+			default:
+				err = fmt.Errorf("gce_spot must be true or false, not %q", v)
+			}
 		case "image_id":
 			c.ImageID = v
 		case "vpc_range":
@@ -530,6 +540,7 @@ func (c *Config) Validate() error {
 		chk(resRe.MatchString(c.Network), "bad network name %q", c.Network),
 		chk(userRe.MatchString(c.SSHUser) && c.SSHUser != "root", "bad ssh_user %q", c.SSHUser),
 		chk(!c.AWSSpot || c.Provider == "aws", "aws_spot needs provider=aws"),
+		chk(!c.GCESpot || c.Provider == "gcp", "gce_spot needs provider=gcp"),
 		chk(c.IdleMinutes >= 5 && c.IdleMinutes <= 10080, "idle_minutes must be 5..10080"),
 		chk(c.MaxRunDuration == "" || durRe.MatchString(c.MaxRunDuration), "bad max_run_duration %q (want e.g. 24h, or empty)", c.MaxRunDuration),
 		chk(c.TSKeyMinutes >= 1 && c.TSKeyMinutes <= 60, "ts_key_minutes must be 1..60"),

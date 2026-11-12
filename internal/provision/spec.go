@@ -33,6 +33,7 @@ type Spec struct {
 // Kinds a host can be of.
 const (
 	KindAWS       = "aws"
+	KindGCP       = "gcp"
 	KindOpenShell = "openshell"
 )
 
@@ -78,7 +79,7 @@ func bad(field, format string, a ...any) error {
 
 // DefaultSpec is a spec with the defaults filled in, for a size and a name.
 func DefaultSpec(name, typ string) Spec {
-	return Spec{Kind: "aws", Name: name, Type: typ, Spot: true, BootDiskGB: DefaultBootGB, DataDiskGB: DefaultDataGB,
+	return Spec{Kind: KindAWS, Name: name, Type: typ, Spot: true, BootDiskGB: DefaultBootGB, DataDiskGB: DefaultDataGB,
 		IdleMinutes: DefaultIdleMinutes, MaxRun: DefaultMaxRun, BudgetCapUSD: DefaultBudgetUSD, DestroyAfterHours: DefaultDestroyHours}
 }
 
@@ -103,17 +104,21 @@ func (s *Spec) Validate() error {
 	switch s.Kind {
 	case KindOpenShell:
 		return s.validateSandbox()
-	case KindAWS:
+	case KindAWS, KindGCP:
 	default:
-		return bad("kind", "the kind is aws or openshell")
+		return bad("kind", "the kind is aws, gcp or openshell")
+	}
+	typeOK, typeHint := awsTypeRe.MatchString(s.Type), "choose an instance type like t3.xlarge"
+	if s.Kind == KindGCP {
+		typeOK, typeHint = gceTypeRe.MatchString(s.Type), "choose a machine type like e2-standard-4"
 	}
 	switch {
 	case !nameRe.MatchString(s.Name):
 		return bad("name", "the name is 2 to 30 lowercase letters, digits and dashes, starting with a letter")
-	case !typeRe.MatchString(s.Type):
-		return bad("type", "choose an instance type like t3.xlarge")
+	case !typeOK:
+		return bad("type", "%s", typeHint)
 	case s.Zone != "" && !zoneRe.MatchString(s.Zone):
-		return bad("zone", "the zone is like us-east-1b")
+		return bad("zone", "the zone is like us-east-1b (aws) or us-central1-a (gcp)")
 	case s.BootDiskGB < MinDisk || s.BootDiskGB > MaxBootDisk:
 		return bad("boot_disk_gb", "the boot disk is %d to %d GB", MinDisk, MaxBootDisk)
 	case s.DataDiskGB < MinDisk || s.DataDiskGB > MaxDataDisk:
@@ -152,6 +157,13 @@ func (s *Spec) validateSandbox() error {
 		return bad("destroy_after_hours", "destroy after is 1 to %d hours", MaxDestroyHrs)
 	}
 	return nil
+}
+
+// DefaultGCESpec is a Spot VM spec on Google Cloud with the defaults filled in.
+func DefaultGCESpec(name, typ string) Spec {
+	sp := DefaultSpec(name, typ)
+	sp.Kind = KindGCP
+	return sp
 }
 
 // DefaultSandboxSpec is a sandbox spec with the defaults filled in.

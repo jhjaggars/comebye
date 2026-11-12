@@ -27,16 +27,20 @@ const wdir = path.join(work, "worker");
 fs.mkdirSync(wdir);
 // the node holds an OpenShell login too, so the wizard offers a sandbox
 const pf = JSON.parse(fs.readFileSync(path.join(here, "fixtures/provision-preflight.json"), "utf8"));
+pf.gcp = { state: "ok", note: "an account is active" };
+pf.gcp_zone = "us-central1-a";
 pf.openshell = { state: "ok", note: "gateway answers", gateway: "homelab", workspace: "openshell-sandboxes", image: "registry.example/comebye-sandbox:{version}", policy: "sandbox-policy.yaml", cpu: "2", memory: "6Gi" };
 fs.writeFileSync(path.join(wdir, "preflight.json"), JSON.stringify(pf));
 fs.copyFileSync(path.join(here, "fixtures/provision-catalog.json"), path.join(wdir, "catalog.json"));
+fs.copyFileSync(path.join(here, "fixtures/provision-catalog-gcp.json"), path.join(wdir, "catalog-gcp.json"));
 fs.writeFileSync(path.join(wdir, "comebye-worker"), `#!/bin/sh
 d=${wdir}
 echo "$*" >> $d/argv
 case "$4" in
   preflight) cat $d/preflight.json ;;
   catalog)
-    r=us-east-1; prev=""; for a in "$@"; do [ "$prev" = --region ] && r=$a; prev=$a; done
+    r=us-east-1; k=aws; prev=""; for a in "$@"; do [ "$prev" = --region ] && r=$a; [ "$prev" = --kind ] && k=$a; prev=$a; done
+    if [ "$k" = gcp ]; then cat $d/catalog-gcp.json; exit 0; fi
     sed "s/\\"region\\": \\"[^\\"]*\\"/\\"region\\": \\"$r\\"/" $d/catalog.json ;;
   create) cat > $d/spec.in; if grep -q openshell $d/spec.in; then cat $d/create.sbx.events; else cat $d/create.events; fi ;;
   status) cat $d/status.json ;;
@@ -240,6 +244,40 @@ try {
       await noHScroll();
     });
 
+    await check(`${tag}: the wizard builds a Google Cloud Spot VM from the node's own zone, with an estimated price`, async () => {
+      await page.goto(base + "/#/peers/~prices", { waitUntil: "load" });
+      await page.waitForSelector("#az-add");
+      await page.locator("#az-add").click();
+      await page.waitForSelector('input[name="az-kind"][value="gcp"]');
+      await page.locator('input[name="az-kind"][value="gcp"]').check();
+      if (!/us-central1/.test(await page.locator("#pr-prices").innerText())) throw new Error("the node's gcp region is not shown");
+      await page.locator("#az-next").click();
+      await page.waitForSelector('[data-az-pick="e2-standard-4"]', { timeout: 30000 });
+      if (!/gcloud compute machine-types|not live|Google/i.test(await page.locator("#pr-prices").innerText())) throw new Error("the price list does not say where its prices come from");
+      if (!argv().includes("catalog --kind gcp --region us-central1 --json")) throw new Error("the node was not asked for its own gcp region: " + argv().split("\n").filter((l) => l.includes("catalog")).pop());
+      await shot("gce-sizes");
+      await noHScroll();
+      await page.locator('[data-az-pick="e2-standard-4"]').click();
+      const foot = await page.locator("#az-cost").innerText();
+      if (!/≈ \$0\.\d+\/h/.test(foot) || !/Spot VM, estimated/.test(foot)) throw new Error("footer: " + foot);
+      await page.locator("#az-next").click();
+      await page.waitForSelector("#az-name");
+      if (!/Spot VM/.test(await page.locator("#az-spot").innerText())) throw new Error("the pricing option is not called a Spot VM");
+      await page.fill("#az-name", "gbox1");
+      await page.locator("#az-next").click();
+      await page.waitForSelector("#az-ack", { timeout: 30000 });
+      await shot("gce-review");
+      await page.locator("#az-ack").check();
+      await page.locator("#az-next").click();
+      await page.waitForFunction(() => /gbox1 is built/.test(document.querySelector("#pr-prices").innerText), null, { timeout: 30000 });
+      const spec = JSON.parse(fs.readFileSync(path.join(wdir, "spec.in"), "utf8"));
+      if (spec.kind !== "gcp" || spec.type !== "e2-standard-4" || spec.spot !== true) throw new Error("the tool read " + JSON.stringify(spec));
+      await shot("gce-built");
+      await page.locator("#az-done").click();
+      await page.waitForSelector('#ph-card [data-ph="gbox1"]', { timeout: 20000 });
+      if (!/e2-standard-4/.test(await page.locator('#ph-card [data-ph="gbox1"]').innerText())) throw new Error("the host is not listed with its type");
+    });
+
     await check(`${tag}: no console errors, no CSP violations`, async () => {
       const bad = log.filter((l) => /^(pageerror|console\.(error|warning))/.test(l));
       if (bad.length) throw new Error(bad.slice(0, 3).join(" | "));
@@ -268,7 +306,7 @@ try {
     await check("phone: the list of live and destroyed hosts fits at 390 and Destroy… is a 44px target", async () => {
       await page.goto(base + "/#/peers/~prices", { waitUntil: "load" });
       await page.waitForSelector("#ph-card .ph-row", { timeout: 20000 });
-      if ((await page.locator("#ph-card .ph-row").count()) !== 3) throw new Error("rows: " + await page.locator("#ph-card .ph-row").count());
+      if ((await page.locator("#ph-card .ph-row").count()) !== 4) throw new Error("rows: " + await page.locator("#ph-card .ph-row").count());
       const box = await page.locator('[data-ph-destroy="phone1"]').boundingBox();
       if (!box || box.height < 44) throw new Error("target " + JSON.stringify(box));
       await shot("list");

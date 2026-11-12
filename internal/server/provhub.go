@@ -170,12 +170,14 @@ func (s *Server) decodeProvBody(w http.ResponseWriter, r *http.Request, needKey 
 	}
 	// A host is built in the node's own region: a request for another is
 	// refused rather than priced for one region and built in a different one.
-	if n := s.probeNode(r.Context(), b.Via, false); spec.Kind == provision.KindAWS && n.Role && n.Preflight != nil && n.Preflight.Region != "" {
-		if b.Region != "" && b.Region != n.Preflight.Region {
-			relErr(w, http.StatusUnprocessableEntity, "bad_region", b.Via+" builds only in "+n.Preflight.Region)
-			return b, spec, false
+	if n := s.probeNode(r.Context(), b.Via, false); spec.Kind != provision.KindOpenShell && n.Role && n.Preflight != nil {
+		if own := nodeRegion(n.Preflight, spec.Kind); own != "" {
+			if b.Region != "" && b.Region != own {
+				relErr(w, http.StatusUnprocessableEntity, "bad_region", b.Via+" builds only in "+own)
+				return b, spec, false
+			}
+			b.Region = own
 		}
-		b.Region = n.Preflight.Region
 	}
 	return b, spec, true
 }
@@ -216,6 +218,12 @@ func credsOK(pf *provision.Preflight, kind string) (bool, []string) {
 		n string
 		c provision.Check
 	}{{"aws", pf.AWS}, {"tailnet", pf.Tailnet}, {"ssh", pf.SSH}}
+	if kind == provision.KindGCP {
+		need[0] = struct {
+			n string
+			c provision.Check
+		}{"gcp", pf.GCP}
+	}
 	if kind == provision.KindOpenShell {
 		need = []struct {
 			n string
@@ -332,7 +340,7 @@ func (s *Server) hubView(j *hubJob, after int, r *http.Request) hubJobView {
 	if failed && j.Class == provision.ClassSpotCapacity {
 		alt := &jobAlternatives{OnDemand: j.Spec.Spot}
 		s.prov.mu.Lock()
-		c := s.prov.cats[catKey(j.Via, "aws", j.Region, "")]
+		c := s.prov.cats[catKey(j.Via, j.Spec.Kind, j.Region, "")]
 		s.prov.mu.Unlock()
 		if c != nil && c.Cat != nil {
 			for _, row := range c.Cat.Rows {

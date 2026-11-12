@@ -706,3 +706,34 @@ takes `--cpu` and `--memory` as the sandbox's own limits). A gateway that is ful
 fails the create, and the failure shows the gateway's own error. This kind has been
 built against the tool's dry run and stand-in tests only; it has not been run
 against a live gateway.
+
+### Google Cloud VMs from the app
+
+A node whose `gcp` preflight is ok (and which has the tailnet client and an ssh
+key) offers **Google Cloud VM** in the wizard. It builds in the config's `zone`
+(its region is `preflight.gcp_zone` without the zone letter; a request for
+another is refused, as with AWS), prices come from `catalog --kind gcp`, and the
+job, the stages, the safety timers, spend and Destroy… are the VM path's. The
+spec is the VM's: a machine type like `e2-standard-4`, `spot` (a **Spot VM**,
+`--provisioning-model=SPOT` with `--instance-termination-action=STOP`, so a
+reclaim stops the VM and keeps its disks, like a persistent AWS spot request),
+`zone`, the disks, `idle_minutes`, `max_run` (the platform's own
+`--max-run-duration`), the budget cap and `destroy_after_hours`. The config key
+`gce_spot` is the default for a request that does not say.
+
+**The prices are estimates, not live.** `catalog --kind gcp` lists the
+machine types of the zone with `gcloud compute machine-types list` (read-only)
+and prices them from a table built into the tool: Google's list prices for
+us-central1 for e2, n2, n2d and t2d, per vCPU and per GiB, a Spot VM at about
+40% (35% for n2) of on-demand, pd-balanced disks at $0.10 per GB-month and
+$0.005 an hour for the external IPv4. Google's real price list needs the Cloud
+Billing API and a login the tool does not ask for, and a Spot VM's price moves
+without notice, so the app says "estimated" and the catalog's `sources` say "not
+live". There is no capacity score (Google reports none), no budget tag on the
+instance (the cap is enforced from the spec and the provisioner's ledger), and
+spend uses the estimated launch price. Types of other families, and Arm
+(`t2a`, `c4a`), are not listed.
+
+This kind was built against the dry run and recorded `gcloud` output only: the
+gcloud login on the machine it was developed on had expired (`invalid_grant`), so
+nothing was created on Google Cloud.

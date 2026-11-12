@@ -211,8 +211,8 @@ func (e *CatalogError) Error() string { return e.Msg }
 
 // Catalog runs `catalog --json` for a validated request.
 func (t *Tool) Catalog(ctx context.Context, r CatalogReq) (*Catalog, error) {
-	if r.Kind != "aws" {
-		return nil, fmt.Errorf("kind %q has no price list yet", Text(r.Kind, 20))
+	if r.Kind != KindAWS && r.Kind != KindGCP {
+		return nil, fmt.Errorf("kind %q has no price list", Text(r.Kind, 20))
 	}
 	if !regionRe.MatchString(r.Region) {
 		return nil, errors.New("bad region")

@@ -67,8 +67,16 @@ func (g *gcloud) instanceCreate(name, pubKey, startupFile string) []string {
 			"ssh-keys="+g.cfg.SSHUser+":"+pubKey,
 		"--metadata-from-file=startup-script="+startupFile,
 	)
+	if g.cfg.GCESpot {
+		// A Spot VM that Google reclaims is stopped, not deleted: the disks and the
+		// host's place on the tailnet survive, and `start` brings it back.
+		a = append(a, "--provisioning-model=SPOT")
+	}
 	if g.cfg.MaxRunDuration != "" {
-		a = append(a, "--max-run-duration="+g.cfg.MaxRunDuration, "--instance-termination-action=STOP")
+		a = append(a, "--max-run-duration="+g.cfg.MaxRunDuration)
+	}
+	if g.cfg.GCESpot || g.cfg.MaxRunDuration != "" {
+		a = append(a, "--instance-termination-action=STOP")
 	}
 	return a
 }

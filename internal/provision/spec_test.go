@@ -128,3 +128,34 @@ func TestSandboxSpec(t *testing.T) {
 		t.Errorf("cost: %+v %v", c, err)
 	}
 }
+
+func TestGCESpec(t *testing.T) {
+	good := `{"kind":"gcp","name":"gbox1","type":"e2-standard-4","spot":true,"zone":"us-central1-b","boot_disk_gb":20,"data_disk_gb":50,"idle_minutes":120,"max_run":"24h","budget_cap_usd":10,"destroy_after_hours":72}`
+	if _, err := ParseSpec([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string]string{
+		"aws type":    strings.Replace(good, "e2-standard-4", "t3.large", 1),
+		"type space":  strings.Replace(good, "e2-standard-4", "e2 standard", 1),
+		"bad zone":    strings.Replace(good, "us-central1-b", "us central", 1),
+		"no cap":      strings.Replace(good, `"budget_cap_usd":10`, `"budget_cap_usd":0`, 1),
+		"gce for aws": strings.Replace(good, `"gcp"`, `"aws"`, 1),
+	} {
+		if _, err := ParseSpec([]byte(in)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	d := DefaultGCESpec("gbox1", "e2-standard-4")
+	if err := d.Validate(); err != nil || d.Kind != "gcp" || !d.Spot {
+		t.Errorf("default: %+v %v", d, err)
+	}
+	b, _ := os.ReadFile("testdata/catalog-gcp.json")
+	cat, err := ParseCatalog(b)
+	if err != nil || cat.Kind != "gcp" || len(cat.Rows) != 3 {
+		t.Fatalf("catalog: %v %+v", err, cat)
+	}
+	c, err := EstimateCost(d, cat)
+	if err != nil || c.Mode != "spot" || c.USDHour <= 0.03 || c.ComputeUSDHour <= 0 {
+		t.Errorf("cost: %+v %v", c, err)
+	}
+}

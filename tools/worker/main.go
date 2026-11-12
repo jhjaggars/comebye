@@ -45,7 +45,7 @@ Commands:
   preflight [--json]
         read-only: are the credentials this config needs usable (aws, gcloud, tailnet,
         openshell, ssh)? Never prints a key, token or account id
-  catalog [--kind aws] [--region R] [--families f1,f2] [--types t1,t2] [--score t1,t2] [--refresh] [--json]
+  catalog [--kind aws|gcp] [--region R] [--families f1,f2] [--types t1,t2] [--score t1,t2] [--refresh] [--json]
         read-only: instance types with vCPU, memory, prices and spot interruption bands,
         cached on disk in the state dir
   keys [--prune]
@@ -143,7 +143,7 @@ func run(args []string, e *env) int {
 	yes := cf.Bool("yes", false, "destroy: the caller has confirmed; do not ask")
 	cNoPrompt := cf.Bool("no-prompt", false, "never prompt: a prompt becomes a needs_input error")
 	asJSON := cf.Bool("json", false, "preflight, catalog, status: JSON output")
-	kind := cf.String("kind", "", "catalog: aws")
+	kind := cf.String("kind", "", "catalog: aws or gcp")
 	region := cf.String("region", "", "catalog: the region (default: aws_region)")
 	families := cf.String("families", "", "catalog: instance families to price (default: allowed_families)")
 	types := cf.String("types", "", "catalog: only these instance types")

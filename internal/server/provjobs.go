@@ -454,7 +454,7 @@ func (s *Server) provCeiling(ctx context.Context, spec provision.Spec, region st
 	}
 	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	cat, cerr := tool.Catalog(cctx, provision.CatalogReq{Kind: "aws", Region: region})
+	cat, cerr := tool.Catalog(cctx, provision.CatalogReq{Kind: spec.Kind, Region: region})
 	if cerr == nil {
 		cost, cerr = provision.EstimateCost(spec, cat)
 	}

@@ -110,7 +110,7 @@ func TestParseCatalogDropsWhatIsNotWellFormed(t *testing.T) {
 	if hidden != 1 || len(kept) != 2 {
 		t.Errorf("t3.nano should be hidden: kept %d hidden %d", len(kept), hidden)
 	}
-	for _, in := range []string{`{"v":1,"kind":"gcp","region":"us-east-1"}`, `{"v":1,"kind":"aws","region":"nope"}`, `{"v":3}`, `nope`} {
+	for _, in := range []string{`{"v":1,"kind":"azure","region":"us-east-1"}`, `{"v":1,"kind":"aws","region":"nope"}`, `{"v":3}`, `nope`} {
 		if _, err := ParseCatalog([]byte(in)); err == nil {
 			t.Errorf("accepted %s", in)
 		}
@@ -169,7 +169,7 @@ func TestToolCatalogArgvIsBuiltFromValidatedValues(t *testing.T) {
 		t.Errorf("argv %q", argv)
 	}
 	for name, r := range map[string]CatalogReq{
-		"gcp":        {Kind: "gcp", Region: "us-east-1"},
+		"azure":      {Kind: "azure", Region: "us-east-1"},
 		"bad region": {Kind: "aws", Region: "us-east-1; rm"},
 		"bad type":   {Kind: "aws", Region: "us-east-1", Score: []string{"t3.large --x"}},
 		"long score": {Kind: "aws", Region: "us-east-1", Score: strings.Fields("a.b c.d e.f g.h i.j k.l m.n o.p q.r s.t u.v")},
