@@ -43,10 +43,10 @@ let browser;
 try {
   start("herdr", [fakeHerdr, "-sock", path.join(work, "h.sock"), "-dir", path.join(work, "tx"), "-fixtures"]);
   for (let i = 0; i < 50 && !fs.existsSync(path.join(work, "h.sock")); i++) await sleep(100);
-  start("kube", [bin, "-sock", path.join(work, "h.sock"), "-addr", `127.0.0.1:${kubePort}`, "-insecure-no-auth", "-push=false", "-state-dir", path.join(work, "state-kube"), "-host-name", "kube", "-ledger=false"],
+  start("kube", [bin, "-sock", path.join(work, "h.sock"), "-addr", `127.0.0.1:${kubePort}`, "-insecure-no-auth", "-test-mode", "-push=false", "-state-dir", path.join(work, "state-kube"), "-host-name", "kube", "-ledger=false"],
     { COMEBYE_ARCHIVE_CLAUDE_DIR: path.join(work, "usage/peer/claude"), COMEBYE_ARCHIVE_PI_DIR: path.join(work, "usage/peer/pi") });
   await up(`http://127.0.0.1:${kubePort}/api/agents`);
-  start("hub", [bin, "-sock", path.join(work, "h.sock"), "-addr", `127.0.0.1:${hubPort}`, "-insecure-no-auth", "-push=false", "-state-dir", path.join(work, "state-hub"), "-host-name", "devbox", "-peers", `kube=http://127.0.0.1:${kubePort}`],
+  start("hub", [bin, "-sock", path.join(work, "h.sock"), "-addr", `127.0.0.1:${hubPort}`, "-insecure-no-auth", "-test-mode", "-push=false", "-state-dir", path.join(work, "state-hub"), "-host-name", "devbox", "-peers", `kube=http://127.0.0.1:${kubePort}`],
     { COMEBYE_ARCHIVE_CLAUDE_DIR: path.join(work, "usage/hub/claude"), COMEBYE_ARCHIVE_PI_DIR: path.join(work, "usage/hub/pi") });
   await up(base + "/api/agents");
   const j = (m, p, body) => fetch(base + p, { method: m, headers: { "Content-Type": "application/json" }, body: body && JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));

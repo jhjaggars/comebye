@@ -19,12 +19,24 @@ page.on("response", (r) => { if (r.url().includes("/api/") && !r.url().includes(
 page.on("requestfailed", (r) => { if (r.url().includes("/api/")) note.push(`FAILED ${r.method()} ${r.url().replace(base, "")}: ${r.failure()?.errorText}`); });
 page.on("framenavigated", (f) => { if (f === page.mainFrame()) note.push(`navigated ${f.url().replace(base, "")}`); });
 
+// The smoke set (SMOKE=1, tools/ci/browser.sh smoke): whole groups of checks, by the start of their names, covering
+// every screen's main action (about 90 of drive.mjs's 220 checks). Checks within a group, and some across groups, build on each other's state (the model
+// picker check opens the sheet the one before it set up), so a smoke set must keep a group whole or leave it out.
+const SMOKE_SET = [
+  "chat:", "raw:", "switch:", "model:",                                      // chat, raw terminals, the launch sheet, model switch
+  "mark:", "fleet menu:", "brief:", "status:", "board:",                      // marks, the fleet menu, the briefing, Status, the board
+  "desktop", "waiting:", "keys:", "phone:", "prompt bar:",                // the desktop and phone layouts, keys, the prompt bar
+  "to-do:", "to-do accordion", "to-do choices", "to-do markdown",             // To do
+  "search page:", "host chips:", "releases live at", "theme:",                // search, hosts, releases, themes
+];
 const results = [];
 async function check(name, fn) {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return; // ONLY=latency: run one group while iterating
+  if (process.env.SMOKE && !SMOKE_SET.some((p) => name.startsWith(p))) return; // SMOKE=1: the pre-submit set, one check per screen
   try { await fn(); results.push([name, true, ""]); }
   catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); await dumpFailure({ page, out, name, err: e, log }); }
-  await page.screenshot({ path: `${out}/${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
+  // A screenshot after every check (SHOTS=1, for looking around); a failed check already dumped its own in dumpFailure.
+  if (process.env.SHOTS) await page.screenshot({ path: `${out}/${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
 }
 const visible = (sel) => page.locator(sel).isVisible();
 const PANES = { alpha: "w1:p1", bravo: "w2:p1" };
@@ -1980,7 +1992,7 @@ await page.setViewportSize({ width: 390, height: 844 });
 // show its result in the next frame, a refresh while the request is out must
 // not undo it, and a failed request must roll it back with an error.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const SLOW = 1500, FRAME_MS = 120; // a frame is ~16ms; this leaves room for a loaded CI box
+const SLOW = 600, FRAME_MS = 120; // a frame is ~16ms; this leaves room for a loaded CI box
 // tapThen runs clickJs in the page, waits one frame and returns [snapJs(), ms since the tap].
 const tapThen = (clickJs, snapJs) => page.evaluate(([c, s]) => {
   const t0 = performance.now();

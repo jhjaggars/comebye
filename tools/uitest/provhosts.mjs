@@ -64,10 +64,10 @@ fs.writeFileSync(path.join(work, "worker.conf"), "# stand-in config\n");
 
 async function serve(name, port, extra = []) {
   const dir = path.join(work, "state-" + name);
-  const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-push=false", "-state-dir", dir, "-host-name", name, ...extra], {
+  const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-test-mode", "-push=false", "-state-dir", dir, "-host-name", name, ...extra], {
     env: { ...process.env, COMEBYE_TEST_INSECURE_PEERS: "1" }, stdio: ["ignore", fs.openSync(path.join(out, `provhosts-${name}.log`), "w"), fs.openSync(path.join(out, `provhosts-${name}.log`), "a")] });
   procs.push(p);
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 300; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/api/agents`)).ok) return; } catch {}
     await new Promise((r) => setTimeout(r, 100));
   }

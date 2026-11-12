@@ -172,11 +172,24 @@ type todoStore struct {
 	data todoFile
 	now  func() time.Time
 	rate map[string][]time.Time
+	// rateMax is the adds per creator per minute (todoRate); 0 here means the default, -1 no limit (test mode).
+	rateMax int
 	// last and sending pace the coordinator notice; send delivers it
 	// (default Server.promptAgent; tests replace it).
 	last    time.Time
 	sending bool
 	send    func(ctx context.Context, a herdr.AgentInfo, text string) error
+}
+
+// rateLimit is the most adds per creator per minute; 0 means unlimited.
+func (t *todoStore) rateLimit() int {
+	switch {
+	case t.rateMax < 0:
+		return 0
+	case t.rateMax == 0:
+		return todoRate
+	}
+	return t.rateMax
 }
 
 func newTodoStore(path string) *todoStore {
@@ -262,7 +275,7 @@ func (t *todoStore) add(it Todo) (out Todo, dup bool, err error) {
 			recent = append(recent, at)
 		}
 	}
-	if len(recent) >= todoRate {
+	if max := t.rateLimit(); max > 0 && len(recent) >= max {
 		t.rate[key] = recent
 		return it, false, errTodoRate
 	}

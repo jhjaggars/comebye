@@ -14,7 +14,7 @@ if (!bin || !sock || !port) { console.error("releaseauto.mjs: set COMEBYE_STAMPE
 const base = `http://127.0.0.1:${port}`;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relauto-"));
 const log = fs.openSync(path.join(out, "releaseauto.log"), "w");
-const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-push=false", "-state-dir", dir, "-host-name", "autohub", "-release-simulate"], { stdio: ["ignore", log, log] });
+const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-test-mode", "-push=false", "-state-dir", dir, "-host-name", "autohub", "-release-simulate"], { stdio: ["ignore", log, log] });
 const results = [];
 const check = async (name, fn) => { try { await fn(); results.push([name, true, ""]); } catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); } };
 const j = async (m, u, b, h = {}) => { const r = await fetch(base + u, { method: m, headers: { "Content-Type": "application/json", ...h }, body: b && JSON.stringify(b) }); return { code: r.status, body: await r.json().catch(() => ({})) }; };

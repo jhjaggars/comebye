@@ -185,7 +185,7 @@
   }
 
   // ---- polling: every 3 s while the panel is open, the shown tab only ----
-  function start() { if (!st.timer && st.open && st.id) st.timer = setInterval(() => tick(false), POLL_MS); }
+  function start() { if (!st.timer && st.open && st.id) st.timer = setInterval(() => tick(false), window.pollMs ? window.pollMs(POLL_MS, 1000) : POLL_MS); }
   function stop() { clearInterval(st.timer); st.timer = null; closeStream(); }
 
   // ---- live push: the hub tells us when the checkout or the document changed ----

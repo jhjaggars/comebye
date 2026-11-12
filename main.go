@@ -124,6 +124,7 @@ func main() {
 		releaseDry     = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
 		releaseDeploy  = flag.String("release-deploy-cmd", getenv("COMEBYE_RELEASE_DEPLOY_CMD"), "on the host that owns -release-repo: a command (absolute program path and arguments, no shell) that the release item's second button runs once the build passed, with the version appended as the last argument and in COMEBYE_RELEASE_VERSION. Approve release never runs it. For example a script that commits the version to a deployment repository; empty: no such button")
 		releaseDepLbl  = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
+		testMode       = flag.Bool("test-mode", false, "browser tests and the dev server: the app polls every 300 ms instead of every 3 to 20 s and the to-do list has no per-minute limit; nothing else changes")
 		releaseSim     = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		landTurn       = flag.Duration("land-turn-timeout", envDuration("COMEBYE_LAND_TURN_TIMEOUT", server.DefaultLandTurnTimeout), "how long a worker may hold its turn in a landing queue before the slot is released and its coordinator told; negative never. Hub only")
 		quietAfter     = flag.Duration("quiet-after", envDuration("COMEBYE_QUIET_AFTER", server.DefaultQuietAfter), "how long a working handoff worker may write nothing to its session file before the hub marks it quiet (in the app and `comebye agents`) and files one to-do for it, cleared when it writes again; not for a worker with a background task running. 0 turns it off. Hub only")
@@ -459,6 +460,7 @@ func main() {
 		PublicURL:      strings.TrimRight(strings.TrimSpace(*publicURL), "/"),
 		PagesURL:       strings.TrimRight(strings.TrimSpace(*pagesURL), "/"),
 		ReadLines:      1000,
+		TestMode:       *testMode,
 		Push:           pushSvc,
 		Presence:       presence,
 		AutoTodo:       autoCfg,

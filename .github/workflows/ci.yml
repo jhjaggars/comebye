@@ -64,6 +64,10 @@ jobs:
       - name: design tokens
         run: node tools/uitest/tokens.mjs
 
+      # Every theme in web/themes.js: WCAG AA contrast, and every token the page uses is defined.
+      - name: theme contrast
+        run: node tools/uitest/contrast.mjs
+
   test:
     runs-on: ubuntu-latest
     steps:

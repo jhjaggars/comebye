@@ -139,12 +139,14 @@ function inPage(fixture) {
   ok(qa("kbd").length === 2, "raw <kbd> kept");
   ok(q('a[href="mailto:a@example.com"]'), "mailto link kept");
 
-  // Sanitization.
+  // Sanitization. The Copy strip over each code block (.cb-bar) is added by the app after DOMPurify, so it is
+  // not the sanitizer's output: set it aside (its own checks are in copycode.mjs).
+  host.querySelectorAll(".cb-bar").forEach((e) => e.remove());
   ok(!q("script, style, iframe, object, embed, form, button, svg, math, img, link, meta, base, textarea, select"), "no dangerous elements");
   const all = qa("*");
   ok(all.every((el) => [...el.attributes].every((a) => !/^on/i.test(a.name))), "no event handler attributes");
   ok(all.every((el) => !el.hasAttribute("style") && !el.hasAttribute("id") && !el.hasAttribute("name")), "no style/id/name attributes");
-  ok(all.every((el) => !el.hasAttribute("class") || /^(language-[\w+#.-]+|md-table)( |$)/.test(el.getAttribute("class"))), "only renderer classes survive");
+  ok(all.every((el) => !el.hasAttribute("class") || /^(language-[\w+#.-]+|md-table|cb)( |$)/.test(el.getAttribute("class"))), "only renderer classes survive");
   ok(qa("[href]").every((el) => /^(https?:|mailto:)/i.test(el.getAttribute("href"))), "only http(s)/mailto hrefs");
   ok(qa("a[href]").every((a) => a.target === "_blank" && a.rel === "noopener noreferrer"), "links open in a new tab, noopener noreferrer");
   ok(qa("input").every((i) => i.type === "checkbox" && i.disabled), "only disabled checkboxes");

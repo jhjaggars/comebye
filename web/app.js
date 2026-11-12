@@ -44,6 +44,13 @@ function setUnauthorized(on) {
 // refreshOutput() pins the terminal view and a hung prompt POST leaves
 // state.sending set, so the send button stays dead until the app is killed.
 const API_TIMEOUT_MS = 30000;
+// Test mode (hub flag -test-mode, browser tests and the dev server): poll every 300 ms instead of
+// every 3 to 20 s. A normal hub answers {} and nothing changes. pollMs(n) is n unless test mode says otherwise.
+let TEST_POLL_MS = 0;
+const testReady = fetch("/api/test-mode").then((r) => (r.ok ? r.json() : {})).then((j) => { TEST_POLL_MS = (j && j.poll_ms) | 0; }).catch(() => {});
+// test is the interval to use in test mode when 300 ms is too fast for what the screen shows (the side panel's refusal message is cleared by the next poll).
+const pollMs = (n, test) => (TEST_POLL_MS ? test || TEST_POLL_MS : n);
+window.pollMs = pollMs;
 const POLL_AFTER_SEND_MS = 120000; // keep polling this long after a send, whatever the status says
 
 // anySignal aborts when any of the signals does (AbortSignal.any needs iOS 17.4).
@@ -6856,7 +6863,7 @@ function syncPeers() {
   if (!was) {
     prs.cfg = {}; prs.cats = {}; prs.draft = null; $("pr-view").dataset.name = ""; $("pr-view")._html = "";
     rls.confirm = null; $("pr-releases")._html = ""; $("pr-prices")._html = "";
-    prs.timer = setInterval(peersLoadAll, 20000);
+    prs.timer = setInterval(peersLoadAll, pollMs(20000));
     peersLoadAll();
   }
   renderPeers();
@@ -11395,8 +11402,10 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("sw-go").addEventListener("click", submitSwitch);
   setInterval(relTick, 2000);
-  setInterval(relBackground, 15000);
-  setTimeout(relBackground, 4000);
+  testReady.then(() => {
+    setInterval(relBackground, pollMs(15000));
+    setTimeout(relBackground, TEST_POLL_MS || 4000);
+  });
   $("d-role").addEventListener("click", toggleRole);
   $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);

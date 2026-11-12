@@ -124,6 +124,10 @@ type Config struct {
 	// Upstream, on a peer, is its hub: the agent role's requests are
 	// forwarded there, and the peer keeps no ledger of its own.
 	Upstream *fleet.Upstream
+	// TestMode is for the browser tests and the dev server (-test-mode): the app polls every
+	// TestPollMs instead of every 3 to 20 s, and the to-do list has no per-minute limit.
+	// It changes no other behaviour; off by default.
+	TestMode bool
 	// AutoTodo turns on the to-do items the hub files itself (autotodo.go).
 	AutoTodo AutoTodoConfig
 	// Release turns on the release and upgrade buttons (release.go).
@@ -394,6 +398,9 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				log.Printf("to-do list: %v (starting empty)", err)
 				s.todos = newTodoStore("") // in memory: never overwrite the unreadable file
 			}
+			if cfg.TestMode {
+				s.todos.rateMax = -1
+			}
 			s.initAutoTodo(cfg.AutoTodo)
 			s.initBlockedRelay(cfg.RelayBlocked)
 			s.initQuiet(cfg.QuietAfter)
@@ -435,6 +442,7 @@ func (s *Server) routes() {
 	s.recallRoutes()
 	s.usageRoutes()
 	s.mux.HandleFunc("GET /api/version", s.authAgentLocal(s.handleVersion))
+	s.mux.HandleFunc("GET /api/test-mode", s.auth(s.handleTestMode))
 	s.mux.HandleFunc("GET /api/stt", s.auth(s.handleSTT))
 	s.mux.HandleFunc("GET /stt/{version}/{path...}", s.serveSTT)
 	s.mux.HandleFunc("GET /api/whoami", s.authAgentLocal(s.handleWhoami))
@@ -668,6 +676,18 @@ func fullRecords(r *http.Request) bool { return r.URL.Query().Get("full") == "1"
 
 // handleVersion returns the app version, which every /api response also
 // carries in X-App-Version.
+// TestPollMs is the app's poll interval in test mode, in place of the 3 to 20 s ones.
+const TestPollMs = 300
+
+// handleTestMode tells the app whether to poll fast: {"poll_ms":300} in test mode, {} otherwise.
+func (s *Server) handleTestMode(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.TestMode {
+		writeJSON(w, map[string]int{"poll_ms": TestPollMs})
+		return
+	}
+	writeJSON(w, map[string]int{})
+}
+
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"version": s.version})
 }

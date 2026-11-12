@@ -33,11 +33,11 @@ fs.mkdirSync(path.join(work, "code/proj/.git"), { recursive: true });
 
 async function serve(name, port, extra = []) {
   const dir = path.join(work, "state-" + name);
-  const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-push=false", "-state-dir", dir, "-host-name", name,
+  const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-test-mode", "-push=false", "-state-dir", dir, "-host-name", name,
     "-launch-root", path.join(work, "code"), ...extra], {
     env: { ...process.env, PATH: binDir + ":" + process.env.PATH, COMEBYE_TEST_INSECURE_PEERS: "1" }, stdio: ["ignore", fs.openSync(path.join(out, `peers-${name}.log`), "w"), fs.openSync(path.join(out, `peers-${name}.log`), "a")] });
   procs.push(p);
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 300; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/api/agents`)).ok) return; } catch {}
     await new Promise((r) => setTimeout(r, 100));
   }
