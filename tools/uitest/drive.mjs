@@ -902,6 +902,33 @@ await check("pager: at 390px the chip stays at the bottom of the screen while a 
     await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id).catch(() => {});
   }
 });
+await check("pager: at 390px an opened To do item's last option button ends above the chip at the end of the page, and can be tapped", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(base + "/", { waitUntil: "load" });
+  const ctx = "Ways:\n\n1. **Rotate now.** wait\n2. **Rotate later.** no wait\n3. **Both.** why not\n\nMy recommendation: ok 1+3.";
+  const id = await page.evaluate(async (c) => (await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "Pager options: which?", kind: "decision", context: c, no_wait: true }) }).then((x) => x.json())).todo.id, ctx);
+  try {
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector("#pager", { state: "visible" });
+    await page.waitForSelector("#todo .td-toggle", { state: "visible" });
+    if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
+    await page.locator(`#todo .td-item[data-id="${id}"] .td-row`).click();
+    await page.waitForSelector(`#todo .td-item.open[data-id="${id}"] .td-opt`);
+    await page.evaluate(() => scrollTo(0, 1e7));
+    await page.waitForTimeout(150);
+    const g = await page.evaluate((i) => {
+      const p = document.getElementById("pager").getBoundingClientRect();
+      const bs = [...document.querySelectorAll(`#todo .td-item[data-id="${i}"] .td-opt, #todo .td-item[data-id="${i}"] button`)];
+      const b = bs.map((x) => x.getBoundingClientRect()).sort((x, y) => y.bottom - x.bottom)[0];
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.bottom - 4);
+      return { pagerTop: p.top, btnBottom: b.bottom, vh: innerHeight, coveredBy: hit && hit.closest("#pager") ? "pager" : "" };
+    }, id);
+    await page.screenshot({ path: `${out}/pager-options-end.png` });
+    if (g.btnBottom > g.pagerTop || g.coveredBy) throw new Error("the chip covers the last button: " + JSON.stringify(g));
+  } finally {
+    await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id).catch(() => {});
+  }
+});
 await check("pager: when the visual viewport differs from the layout one (pinch-zoomed), the chip follows the visible bottom", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(base + "/", { waitUntil: "load" });
