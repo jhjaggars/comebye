@@ -376,6 +376,39 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   await phone.browser.close();
 });
 
+await check("search: page text is searched on the hub, hits show under the titles with marked snippets that cannot become markup", async () => {
+  const evil = idOf(publish([file("evil.md", "# Notes\n\nthe <img src=x onerror=window.__pgx=1> needlezz is here and the <b>bold</b> lease"), "--title", "Plain notes"]));
+  for (const [w, h, tag] of [[1280, 800, "desktop"], [390, 844, "phone"]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await page.goto("about:blank");
+    await page.goto(base + "/#/pages", { waitUntil: "load" });
+    await page.waitForSelector(".pgs-card", { timeout: 8000 });
+    await page.locator("#pgs-q").fill("needlezz");
+    await page.waitForSelector(".pgs-hit", { timeout: 8000 });
+    const t = await page.locator("#pgs-items").innerText();
+    if (!/IN PAGE TEXT/i.test(t) || !t.includes("Plain notes") || !t.includes("<img src=x onerror=window.__pgx=1>") || !/1 match/.test(t)) throw new Error("hits: " + t);
+    const r = await page.evaluate(() => ({ imgs: document.querySelectorAll("#pgs-items img, #pgs-items b").length, x: window.__pgx, marked: document.querySelector("#pgs-items .pgs-snip mark")?.textContent }));
+    if (r.imgs || r.x !== undefined || r.marked !== "needlezz") throw new Error("markup: " + JSON.stringify(r));
+    const over = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+    if (over[0] > over[1]) throw new Error("sideways " + over);
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: `${out}/pages-bodysearch-${tag}.png` });
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.locator(".pgs-hit").first().click();
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  if (!(await page.evaluate(() => location.hash)).startsWith("#/pages/" + evil)) throw new Error("hit did not open the page");
+  // Nothing in any body: the usual empty notice; one letter is not searched.
+  await page.locator("#pgs-q").fill("zzzznotthere");
+  await page.waitForTimeout(900);
+  if (!/No page matches/.test(await page.locator("#pgs-items").innerText()) || await page.locator(".pgs-hit").count()) throw new Error("empty search");
+  await page.locator("#pgs-q").fill("");
+  await page.locator("#pgs-q").fill("a");
+  await page.waitForTimeout(700);
+  if (await page.locator(".pgs-hit").count()) throw new Error("one letter searched the bodies");
+  await page.locator("#pgs-q").fill("");
+});
+
 await check("open session: a Page made in an indexed session names it per version and opens the transcript at the turn", async () => {
   // The Pages here are published with random ids, so the index fixture cannot hold them: the
   // lookup answers as the real route does (tests in internal/server cover the route itself).

@@ -5179,7 +5179,7 @@ function initRecall() {
 // and navigating this window too. Everything about it that this screen
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
-const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", made: new Map() };
+const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", made: new Map(), body: null, bodyTimer: null, bodySeq: 0 };
 
 function parsePagesRoute() {
   const m = location.hash.match(/^#\/pages(?:\/([^/]+)(?:\/(\d+))?)?$/);
@@ -5220,6 +5220,33 @@ function pagesFiltered() {
   return pgs.items.filter((p) => [p.title, p.by, p.host, p.id, p.key, p.kind, p.handoff].some((v) => String(v || "").toLowerCase().includes(q)));
 }
 
+// pgsMarked is a snippet from the hub, as HTML: text with \x02 and \x03 around the matched words,
+// escaped first, so nothing in a page's text can become markup here.
+function pgsMarked(text) {
+  return String(text || "").split(/[\x02\x03]/).map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part))).join("");
+}
+
+// pagesBodySearch asks the hub which pages' text holds the words (the user's alone; it reads
+// each page's newest version). The list filter above works on the metadata we already have, so
+// this only adds the "In page text" section, a moment after typing stops.
+function pagesBodySearch() {
+  clearTimeout(pgs.bodyTimer);
+  const q = pgs.q.trim();
+  const seq = ++pgs.bodySeq;
+  if (q.length < 2) { if (pgs.body) { pgs.body = null; renderPages(); } return; }
+  pgs.bodyTimer = setTimeout(async () => {
+    try {
+      const d = await api("/api/pages?q=" + encodeURIComponent(q));
+      if (seq !== pgs.bodySeq) return;
+      pgs.body = { q, matches: d.matches || [], partial: !!d.partial };
+    } catch {
+      if (seq !== pgs.bodySeq) return;
+      pgs.body = null; // refused or too fast: the titles still filter
+    }
+    renderPages();
+  }, 350);
+}
+
 function pageSize(n) {
   return n >= 1048576 ? (n / 1048576).toFixed(1) + " MiB" : n >= 1024 ? (n / 1024).toFixed(1) + " KiB" : n + " B";
 }
@@ -5235,11 +5262,27 @@ function renderPages() {
   if (pgs.err) html = `<div class="pgs-empty">${esc(pgs.err)}</div>`;
   else if (!pgs.loaded) html = `<div class="pgs-empty">Loading…</div>`;
   else if (!pgs.items.length) html = `<div class="pgs-empty">No pages yet. An agent publishes one with <code>comebye publish report.html</code> (or a <code>.md</code> file).</div>`;
-  else if (!list.length) html = `<div class="pgs-empty">No page matches “${esc(pgs.q)}”.</div>`;
-  else html = list.map((p) => `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">
+  else {
+    const card = (p) => `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">
       <span class="pgs-title">${esc(p.title)}</span>
       <span class="pgs-meta">${esc(p.by)}${p.host ? " · " + esc(p.host) : ""} · ${esc(pageAgo(p.updated_at))}</span>
-      <span class="pgs-meta">${esc(p.kind)} · v${p.version} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></a>`).join("");
+      <span class="pgs-meta">${esc(p.kind)} · v${p.version} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></a>`;
+    const body = pgs.body && pgs.body.q === pgs.q.trim() ? pgs.body.matches.filter((m) => pgs.items.some((p) => p.id === m.id)) : [];
+    const hit = (m) => {
+      const p = pgs.items.find((x) => x.id === m.id);
+      return `<a class="pgs-hit${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id, m.version))}" data-id="${esc(p.id)}">
+      <span class="pgs-title">${esc(p.title)}</span>
+      <span class="pgs-meta">v${m.version} · ${m.count} ${m.count === 1 ? "match" : "matches"}</span>
+      <span class="pgs-snip">${pgsMarked(m.snippet)}</span></a>`;
+    };
+    if (!list.length && !body.length) html = `<div class="pgs-empty">No page matches “${esc(pgs.q)}”.</div>`;
+    else {
+      html = "";
+      if (body.length) html += `<div class="pgs-sec">Titles${list.length ? "" : ": none"}</div>`;
+      html += list.map(card).join("");
+      if (body.length) html += `<div class="pgs-sec" id="pgs-intext">In page text · ${body.length}${pgs.body.partial ? "+" : ""}</div>` + body.map(hit).join("");
+    }
+  }
   if ($("pgs-items")._html !== html) { $("pgs-items")._html = html; $("pgs-items").innerHTML = html; }
   renderPageView();
 }
@@ -5392,7 +5435,7 @@ async function pagesDelete() {
 
 function initPages() {
   $("pgs-back").addEventListener("click", pagesBack);
-  $("pgs-q").addEventListener("input", (ev) => { pgs.q = ev.target.value; renderPages(); });
+  $("pgs-q").addEventListener("input", (ev) => { pgs.q = ev.target.value; renderPages(); pagesBodySearch(); });
   $("pages").addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") { ev.stopPropagation(); pagesBack(); }
   });

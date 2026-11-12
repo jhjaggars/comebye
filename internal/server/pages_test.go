@@ -523,3 +523,85 @@ func TestPagesListenerServesOnlyPages(t *testing.T) {
 		t.Errorf("same address: %v", err)
 	}
 }
+
+func TestPagesBodySearch(t *testing.T) {
+	s, _, _ := todoServer(t)
+	pub := func(m map[string]any) Page {
+		w := do(s, "POST", "/api/pages", agentHdr("w2:p1"), pubJSON(m))
+		if w.Code != http.StatusCreated && w.Code != http.StatusOK {
+			t.Fatalf("publish = %d %s", w.Code, w.Body)
+		}
+		return pageOf(t, w.Body.Bytes())
+	}
+	drill := pub(map[string]any{"title": "Failover drill", "body": "<title>Failover drill</title><style>.lease{color:red}</style><script>var lease30s=1</script><p>Keep the 30 s lease so a stale leader can't write.</p><p>The lease is renewed.</p>"})
+	plan := pub(map[string]any{"body": "# Plan\n\nA lease of 30 s on the claim. <b>not markup</b>"})
+	pub(map[string]any{"body": "# Other\n\nnothing relevant"})
+	// A page's old version is not searched: its newest is.
+	w := do(s, "POST", "/api/pages", agentHdr("w2:p1"), pubJSON(map[string]any{"id": plan.ID, "body": "# Plan\n\nthe claim has no lease any more, only a zebra", "if_version": 1}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("update %d %s", w.Code, w.Body)
+	}
+	type resp struct {
+		Pages   []Page      `json:"pages"`
+		Matches []PageMatch `json:"matches"`
+		Partial bool        `json:"partial"`
+	}
+	search := func(q string, hdr map[string]string) (int, resp) {
+		w := do(s, "GET", "/api/pages?q="+q, hdr, "")
+		var r resp
+		json.Unmarshal(w.Body.Bytes(), &r)
+		return w.Code, r
+	}
+	code, r := search("lease+30", userHdr)
+	if code != 200 || len(r.Matches) != 1 || r.Matches[0].ID != drill.ID || r.Matches[0].Version != 1 || len(r.Pages) != 1 || r.Pages[0].ID != drill.ID {
+		t.Fatalf("lease 30: %d %+v", code, r)
+	}
+	if sn := r.Matches[0].Snippet; !strings.Contains(sn, "Keep the \x0230\x03 s \x02lease\x03 so") || strings.ContainsAny(sn, "<>") || strings.Contains(sn, "lease30s") {
+		t.Errorf("snippet %q", sn)
+	}
+	if r.Matches[0].Count != 2 {
+		t.Errorf("count %d", r.Matches[0].Count)
+	}
+	// "lease" alone: the drill (script and style text does not count) and the updated plan.
+	code, r = search("LEASE", userHdr)
+	if code != 200 || len(r.Matches) != 2 || r.Matches[0].Count != 2 && r.Matches[1].Count != 2 {
+		t.Fatalf("lease: %d %+v", code, r)
+	}
+	code, r = search("color", userHdr)
+	if code != 200 || len(r.Matches) != 0 || r.Pages == nil || r.Matches == nil {
+		t.Fatalf("style text matched or null lists: %d %+v", code, r)
+	}
+	// An agent may not read bodies through search; bad input; the rate limit.
+	if code, _ := search("lease", agentHdr("w2:p1")); code != http.StatusForbidden {
+		t.Errorf("agent search = %d", code)
+	}
+	if code, _ := search("", userHdr); code != http.StatusBadRequest {
+		t.Errorf("empty q = %d", code)
+	}
+	if code, _ := search(strings.Repeat("a", 300), userHdr); code != http.StatusBadRequest {
+		t.Errorf("long q = %d", code)
+	}
+	var last int
+	for i := 0; i < pageSearchRate+2; i++ {
+		last, _ = search("zebra", userHdr)
+	}
+	if last != http.StatusTooManyRequests {
+		t.Errorf("rate = %d", last)
+	}
+	// With no q the listing is as before and has no matches.
+	w = do(s, "GET", "/api/pages", userHdr, "")
+	if strings.Contains(w.Body.String(), `"matches"`) {
+		t.Errorf("matches without q: %s", w.Body)
+	}
+}
+
+func TestMatchPageTextSnippetKeepsRunes(t *testing.T) {
+	text := strings.Repeat("é", 100) + " needle " + strings.Repeat("ü", 300)
+	n, sn, ok := matchPageText(text, []string{"needle"})
+	if !ok || n != 1 || !utf8.ValidString(sn) || !strings.Contains(sn, "\x02needle\x03") || !strings.HasPrefix(sn, "…") || !strings.HasSuffix(sn, "…") {
+		t.Fatalf("%v %d %q", ok, n, sn)
+	}
+	if _, _, ok := matchPageText("abc", []string{"abc", "zzz"}); ok {
+		t.Error("every word must appear")
+	}
+}

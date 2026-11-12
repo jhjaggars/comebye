@@ -662,7 +662,37 @@ func (s *Server) handlePageList(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, p)
 	}
-	writeJSON(w, map[string]any{"pages": out, "public_url": s.cfg.PublicURL, "pages_url": s.pagesOrigin()})
+	res := map[string]any{"public_url": s.cfg.PublicURL, "pages_url": s.pagesOrigin()}
+	if text := strings.TrimSpace(q.Get("q")); q.Has("q") {
+		// Search the bodies: the user's alone, as reading a page is.
+		words := pageSearchWords(text)
+		switch {
+		case !who.user:
+			pageSearchBad(w, "read_forbidden", "only the user searches the text of pages", http.StatusForbidden)
+			return
+		case len(words) == 0 || len(text) > pageSearchMaxQ:
+			pageSearchBad(w, "bad_request", "q is words to find, up to 200 bytes", http.StatusBadRequest)
+			return
+		case !s.pages.searchRateOK():
+			pageSearchBad(w, "search_rate", "searching too fast: wait a moment", http.StatusTooManyRequests)
+			return
+		}
+		matches, partial := s.pages.search(out, words)
+		byID := map[string]bool{}
+		for _, m := range matches {
+			byID[m.ID] = true
+		}
+		hit := []Page{}
+		for _, p := range out {
+			if byID[p.ID] {
+				hit = append(hit, p)
+			}
+		}
+		out = hit
+		res["matches"], res["partial"] = matches, partial
+	}
+	res["pages"] = out
+	writeJSON(w, res)
 }
 
 // mayOwn is "mine" in a listing: published by this caller.
