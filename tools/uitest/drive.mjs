@@ -308,6 +308,26 @@ await check("mark: the detail's ⋯ menu marks and the row menu unmarks", async 
   await page.waitForFunction(() => /^Look for finished agents/.test(document.querySelector("#rtr-banner")?.textContent || ""), null, { timeout: 8000 }); // at zero the phone banner offers the sweep
 });
 
+// Unmark tapped while the mark is still being saved (the badge already shows from the optimistic state) must
+// wait for the save and then unmark, not be dropped. The save is held for 600 ms so the tap always lands inside it.
+await check("mark: Unmark tapped while the mark is still being saved is not dropped", async () => {
+  const slow = async (r) => { if (r.request().method() === "POST") await new Promise((x) => setTimeout(x, 600)); r.fallback(); };
+  await page.route(/\/api\/marks$/, slow);
+  try {
+    await toList();
+    await rowOf(PANES.alpha).locator(".row-more").click();
+    await page.locator("#row-mark").click();
+    await page.locator("#mk-go").click();
+    await page.waitForFunction(() => /Ready to remove \(1\)/.test(document.querySelector("#rtr-banner")?.textContent || ""), null, { timeout: 8000 });
+    await page.evaluate((p) => { location.hash = "#/agent/" + encodeURIComponent(p); }, PANES.alpha);
+    await page.waitForSelector("#d-markbar .lg-chip.rtr", { state: "visible", timeout: 8000 });
+    if (!(await page.evaluate(() => ledgerOpt.busyKeys().length))) throw new Error("the save was not on the wire: the check does not test what it says");
+    await page.locator('#d-markbar [data-mb="unmark"]').click();
+    await page.waitForFunction(() => document.querySelector("#d-markbar")?.hidden, null, { timeout: 8000 });
+  } finally { await page.unroute(/\/api\/marks$/, slow); }
+  await page.waitForFunction(() => !ledger.marked.size, null, { timeout: 8000 });
+});
+
 const sweepPosts = [];
 await page.route(/\/api\/sweep/, (r) => {
   const body = JSON.parse(r.request().postData() || "{}");
