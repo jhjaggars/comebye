@@ -1,0 +1,63 @@
+  ┃  ssh_host_ed25519_key.pub
+  ┃  …                                                                                                                                                                                     SSH config listing and temp file
+  ┃                                                                                                                                                                                        test
+  ┃  Click to expand
+  ┃                                                                                                                                                                                        Context
+                                                                                                                                                                                           12,465 tokens
+     done                                                                                                                                                                                  6% used
+                                                                                                                                                                                           $0.00 spent
+     ▣  Build · Big Pickle · 34.0s
+                                                                                                                                                                                           LSP
+  ┃                                                                                                                                                                                        LSPs are disabled
+  ┃  Use the bash tool to run exactly: touch /var/tmp/oc-perm-test2
+  ┃
+
+  ┃
+  ┃  $ touch /var/tmp/oc-perm-test2
+  ┃
+  ┃  (no output)
+  ┃
+
+     done
+
+     ▣  Build · Big Pickle · 1m 7s
+
+  ┃
+  ┃  Use the bash tool to run exactly: touch /var/tmp/oc-perm-test4
+  ┃
+
+     + Thought: 177ms
+
+  ┃
+  ┃  $ touch /var/tmp/oc-perm-test4
+  ┃
+  ┃  (no output)
+  ┃
+
+     done
+
+     ▣  Build · Big Pickle · 23.0s
+
+  ┃
+  ┃  Use the question tool to ask me: "Which colour?" with options Red, Green, Blue (header "Colour"). Wait for the answer.
+  ┃
+
+     + Thought: 206ms
+
+     → Asked 1 question
+
+     ▣  Build · Big Pickle
+
+  ┃
+  ┃  Which colour?
+  ┃
+  ┃  1. Red
+  ┃     Red
+  ┃  2. Green
+  ┃     Green
+  ┃  3. Blue                                                                                                                                                                               /tmp/claude-1000/-home-jhjaggars--
+  ┃     Blue                                                                                                                                                                               worktrees-comebye-feat-opencode-
+  ┃  4. Type your own answer                                                                                                                                                               support/7efd0587-0fbb-4d11-9f48-
+  ┃                                                                                                                                                                                        7f2a1c01ea02/scratchpad/repo:main
+  ┃  ↑↓ select  enter submit  esc dismiss
+  ┃                                                                                                                                                                                        • OpenCode 1.19.5

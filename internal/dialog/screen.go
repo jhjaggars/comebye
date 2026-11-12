@@ -47,6 +47,11 @@ type row struct {
 // decides which shortcut keys are safe. Returns nil when nothing is
 // recognized.
 func Detect(screen, agentKind string) *Dialog {
+	if agentKind == "opencode" {
+		if d := detectOpencode(screen); d != nil {
+			return d.finish()
+		}
+	}
 	lines := normalizeScreen(screen)
 	if agentKind == "claude" {
 		if d := detectClaudeMulti(lines); d != nil {

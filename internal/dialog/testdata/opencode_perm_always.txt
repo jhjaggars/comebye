@@ -1,0 +1,63 @@
+
+  ┃                                                                                                                                                                                        SSH config listing and temp file
+  ┃  Line one.                                                                                                                                                                             test
+  ┃  Line two: use the bash tool to run: ls /etc/ssh && touch /var/tmp/oc-perm-test. Then say done.
+  ┃                                                                                                                                                                                        Context
+                                                                                                                                                                                           12,264 tokens
+     + Thought: 654ms                                                                                                                                                                      6% used
+                                                                                                                                                                                           $0.00 spent
+  ┃
+  ┃  $ ls /etc/ssh && touch /var/tmp/oc-perm-test                                                                                                                                          LSP
+  ┃                                                                                                                                                                                        LSPs are disabled
+  ┃  moduli
+  ┃  ssh_config
+  ┃  ssh_config.d
+  ┃  sshd_config
+  ┃  sshd_config.d
+  ┃  sshd_config.rpmnew
+  ┃  ssh_host_ecdsa_key
+  ┃  ssh_host_ecdsa_key.pub
+  ┃  ssh_host_ed25519_key
+  ┃  ssh_host_ed25519_key.pub
+  ┃  …
+  ┃
+  ┃  Click to expand
+  ┃
+
+     done
+
+     ▣  Build · Big Pickle · 34.0s
+
+  ┃
+  ┃  Use the bash tool to run exactly: touch /var/tmp/oc-perm-test2
+  ┃
+
+     $ touch /var/tmp/oc-perm-test2
+
+     ▣  Build · Big Pickle
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  △ Permission required
+  ┃    ← Access external directory /var/tmp
+  ┃
+  ┃  Patterns
+  ┃                                                                                                                                                                                        /tmp/claude-1000/-home-jhjaggars--
+  ┃  - /var/tmp/*                                                                                                                                                                          worktrees-comebye-feat-opencode-
+  ┃                                                                                                                                                                                        support/7efd0587-0fbb-4d11-9f48-
+  ┃                                                                                                                                                                                        7f2a1c01ea02/scratchpad/repo:main
+  ┃   Allow once   Allow always   Reject                                                                                                  ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃                                                                                                                                                                                        • OpenCode 1.19.5

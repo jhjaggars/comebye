@@ -76,6 +76,18 @@ func (r *recordingIO) ReadPane(ctx context.Context, paneID, source string, lines
 	return res, err
 }
 
+// ReadPaneStyled keeps readDialogScreen's styled read working through the
+// wrapper (and records what it read like ReadPane does).
+func (r *recordingIO) ReadPaneStyled(ctx context.Context, paneID, source string, lines int) (herdr.ReadResult, error) {
+	sp, ok := r.paneIO.(styledPaneIO)
+	if !ok {
+		return r.ReadPane(ctx, paneID, source, lines)
+	}
+	res, err := sp.ReadPaneStyled(ctx, paneID, source, lines)
+	r.read, r.text, r.err = true, res.Text, err
+	return res, err
+}
+
 // currentDialogCaptured is currentDialog plus the capture above.
 func (s *Server) currentDialogCaptured(ctx context.Context, agent herdr.AgentInfo, ask *transcript.Ask) (*dialog.Dialog, error) {
 	if s.unrec == nil {

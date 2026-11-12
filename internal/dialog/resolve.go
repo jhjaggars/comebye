@@ -258,9 +258,13 @@ func ArrowKeys(d *Dialog, action string, index int) ([]string, error) {
 		return nil, bad("the highlighted option is unknown; use the key pad")
 	}
 	delta := index - d.Selected
-	key := "down"
+	down, up := "down", "up"
+	if d.Kind == KindOpencodePermission { // a row of buttons
+		down, up = "right", "left"
+	}
+	key := down
 	if delta < 0 {
-		key, delta = "up", -delta
+		key, delta = up, -delta
 	}
 	if delta > maxMoves {
 		return nil, bad("option too far from the highlight")

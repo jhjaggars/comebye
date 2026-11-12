@@ -29,6 +29,22 @@ type paneIO interface {
 	SendKeys(ctx context.Context, target string, keys []string) error
 }
 
+// styledPaneIO is a paneIO that can also read the screen with its styling.
+type styledPaneIO interface {
+	ReadPaneStyled(ctx context.Context, paneID, source string, lines int) (herdr.ReadResult, error)
+}
+
+// readDialogScreen reads the screen a dialog is parsed from. OpenCode draws
+// its selected button or row only with a background colour, which the text
+// screen drops, so its dialogs are read with the styling (the parser takes
+// both and gives the same dialog, the same fingerprint).
+func readDialogScreen(ctx context.Context, io paneIO, agent herdr.AgentInfo) (herdr.ReadResult, error) {
+	if sp, ok := io.(styledPaneIO); ok && agent.Agent == "opencode" {
+		return sp.ReadPaneStyled(ctx, agent.PaneID, "visible", 0)
+	}
+	return io.ReadPane(ctx, agent.PaneID, "visible", 0)
+}
+
 // answerDedupeWindow rejects a second answer to the same dialog content: the
 // screen can still show a just-answered dialog for a moment, and a double tap
 // would otherwise answer it (or the next identical one) twice.
@@ -97,7 +113,7 @@ func currentDialog(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *t
 	if agent.Status != herdr.StatusBlocked && ask == nil {
 		return nil, nil
 	}
-	read, err := io.ReadPane(ctx, agent.PaneID, "visible", 0)
+	read, err := readDialogScreen(ctx, io, agent)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +148,7 @@ func (s *Server) guardPrompt(ctx context.Context, agent herdr.AgentInfo) error {
 // promptGuard fails safe: a screen that cannot be read, or an agent that is
 // blocked on something no detector recognises, counts as a dialog.
 func promptGuard(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *transcript.Ask) error {
-	read, err := io.ReadPane(ctx, agent.PaneID, "visible", 0)
+	read, err := readDialogScreen(ctx, io, agent)
 	if err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -437,5 +438,58 @@ func TestResetOnlyLeavesInsertMode(t *testing.T) {
 	d, _ = currentDialog(context.Background(), io, done, multiAsk())
 	if s, _ := answerDialog(context.Background(), io, done, multiAsk(), answerBody{Action: "reset", Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now()); s != http.StatusBadRequest || len(io.sent) != 0 {
 		t.Fatalf("reset outside INSERT: %d sent=%v", s, io.sent)
+	}
+}
+
+// styledIO is a fakeIO that can also serve the screen with its styling,
+// the way herdr's client does.
+type styledIO struct {
+	fakeIO
+	styled string
+	text   string
+}
+
+func (s *styledIO) ReadPane(ctx context.Context, p, source string, n int) (herdr.ReadResult, error) {
+	return herdr.ReadResult{Text: s.text, Source: source}, nil
+}
+
+func (s *styledIO) ReadPaneStyled(_ context.Context, _, source string, _ int) (herdr.ReadResult, error) {
+	return herdr.ReadResult{Text: s.styled, Source: source}, nil
+}
+
+func readTestdata(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile("../dialog/testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// An OpenCode permission prompt is answered with the key that moves the
+// highlight (told apart only on the styled screen), through the wrapper the
+// auto to-do path uses too; a changed dialog gets nothing.
+func TestAnswerOpencodePermission(t *testing.T) {
+	ocBlocked := herdr.AgentInfo{PaneID: "w:p3", Agent: "opencode", Status: herdr.StatusBlocked}
+	styled := readTestdata(t, "opencode_perm_always.ansi") // "Allow always" is selected
+	io := &styledIO{styled: styled, text: readTestdata(t, "opencode_perm_always.txt")}
+	d, err := currentDialog(context.Background(), &recordingIO{paneIO: io}, ocBlocked, nil)
+	if err != nil || d == nil || !d.Answerable || d.Selected != 1 {
+		t.Fatalf("dialog through the recording wrapper: %+v %v", d, err)
+	}
+	status, body := answerDialog(context.Background(), io, ocBlocked, nil,
+		answerBody{Action: "select", Index: 2, Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now())
+	if status != http.StatusOK {
+		t.Fatalf("status %d %v", status, body)
+	}
+	if want := [][]string{{"right", "enter"}}; !reflect.DeepEqual(io.sent, want) {
+		t.Fatalf("sent %v, want %v", io.sent, want)
+	}
+	// Another prompt on screen: the old fingerprint sends nothing.
+	io2 := &styledIO{styled: readTestdata(t, "opencode_question.ansi"), text: readTestdata(t, "opencode_question.txt")}
+	status, body = answerDialog(context.Background(), io2, ocBlocked, nil,
+		answerBody{Action: "select", Index: 2, Fingerprint: d.Fingerprint}, newAnswerDedupe(), time.Now())
+	if m, _ := body.(map[string]any); status != http.StatusConflict || m["code"] != "dialog_changed" || len(io2.sent) != 0 {
+		t.Fatalf("changed: %d %v", status, body)
 	}
 }
