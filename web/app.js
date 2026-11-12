@@ -608,6 +608,32 @@ document.addEventListener("keydown", (ev) => {
   if (cp && cp.getAttribute("role") === "button") { ev.preventDefault(); copyTap(cp); }
 });
 
+// A button that copies something bigger than its neighbourhood: a whole message,
+// a report, a to-do's question and context. The Markdown source is kept here by
+// key (the page renders the key, not the text), so a long report is not
+// repeated in the DOM. copyBtnHtml registers the text and returns the button.
+const copySrc = new Map();
+function copyBtnHtml(key, text, label, aria, cls) {
+  copySrc.delete(key); copySrc.set(key, text);
+  if (copySrc.size > 3000) copySrc.delete(copySrc.keys().next().value);
+  return `<button type="button" class="cpb${cls ? " " + cls : ""}" data-copy-key="${escAttr(key)}" aria-label="${escAttr(aria || label)}">${esc(label)}</button>`;
+}
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest && ev.target.closest(".cpb");
+  if (!b) return;
+  ev.preventDefault(); ev.stopPropagation(); // inside a <summary> this must not toggle it
+  const text = copySrc.get(b.dataset.copyKey);
+  if (text == null) { toast("Nothing to copy: reload the page", true); return; }
+  if (b.dataset.label == null) b.dataset.label = b.textContent;
+  copyText(text).then((ok) => {
+    clearTimeout(b._t);
+    b.dataset.state = ok ? "ok" : "fail";
+    b.textContent = ok ? "Copied" : "Not copied";
+    if (ok) copyAnnounce("Copied to clipboard"); else toast("Could not copy", true);
+    b._t = setTimeout(() => { delete b.dataset.state; b.textContent = b.dataset.label; }, 1500);
+  });
+}, true);
+
 document.addEventListener("click", (ev) => {
   const btn = ev.target.closest && ev.target.closest(".cb-copy");
   if (!btn) return;
@@ -1343,7 +1369,7 @@ function planMemberHtml(m, p, open) {
   const e = open ? ledger.entries.find((x) => x.id === m.id) : null;
   const when = e && Date.parse(e.created_at) ? ` · started ${fmtAgo(Date.parse(e.created_at))} ago` : "";
   const trans = m.id && t.live ? ` · <a class="pm-tr" href="#/search/for?ledger=${encodeURIComponent(m.id)}">Transcript</a>` : "";
-  const detail = open ? `<div class="pm-detail">${esc(m.host || "")}${m.host ? " · " : ""}${esc(m.status)}${esc(when)}${trans}${e && e.final_report ? `<details class="pm-rep"><summary>Report</summary><div class="md">${renderMarkdown(e.final_report, "pm" + e.id)}</div></details>` : ""}</div>` : "";
+  const detail = open ? `<div class="pm-detail">${esc(m.host || "")}${m.host ? " · " : ""}${esc(m.status)}${esc(when)}${trans}${e && e.final_report ? `<details class="pm-rep"><summary>Report</summary>${copyBtnHtml("rep:" + e.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md">${renderMarkdown(e.final_report, "pm" + e.id)}</div></details>` : ""}</div>` : "";
   return `<li><a class="pm${t.live ? "" : " gone"}" href="${esc(t.hash)}" title="${esc(t.tip)}"><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span>${live}</a>${detail}</li>`;
 }
 
@@ -1645,6 +1671,7 @@ function todoItemHtml(t, pfx) {
           ${isRel ? relPingHtml(t) : ""}
           ${t.set ? setBodyHtml(t) : t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
+          <div class="td-cprow">${copyBtnHtml("todo:" + t.id, t.question + (t.context ? "\n\n" + t.context : ""), "Copy question and context", "Copy the question and its context as Markdown")}</div>
           ${answered}${kept}
         </div>
         ${t.set ? setBarHtml(t) : `<div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
@@ -4022,7 +4049,7 @@ function reviewItemHTML(it) {
   const warnings = (it.warnings || []).filter((w) => !(askRows && w.startsWith("the session says UNSAFE"))).map((w) => `<li>${esc(w)}</li>`).join("");
   const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session said UNSAFE about"))).map((w) => `<li>${esc(w)}</li>`).join("");
   const report = it.final_report
-    ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary><div class="md"></div><div class="hubchk" data-id="${esc(it.id)}" hidden></div></details>` : "";
+    ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary>${copyBtnHtml("rep:" + it.id, it.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md"></div><div class="hubchk" data-id="${esc(it.id)}" hidden></div></details>` : "";
   const loss = it.discardable && !done ? lossHTML(it) : "";
   const dd = !!it.delivered_discard && !done;
   let result = "";
@@ -6315,7 +6342,7 @@ function statusHTML(desktop) {
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
-      const body = e.final_report ? `<div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div><div class="hubchk st-rep" data-id="${escAttr(e.id)}" hidden></div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
+      const body = e.final_report ? `<div class="st-rep">${copyBtnHtml("rep:" + e.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}</div><div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div><div class="hubchk st-rep" data-id="${escAttr(e.id)}" hidden></div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
       return `<details class="st-row" data-id="${escAttr(e.id)}"${statusUi.open.has(e.id) ? " open" : ""}><summary><span class="st-n">${esc(statusWho(e))}</span><span class="lg-chip ${chip[0]}">${chip[1]}</span>${usageChipHtml(e.id, true)}<span class="st-r">${esc(fmtAgo(at))} ago</span></summary>${statusUi.open.has(e.id) ? body : ""}</details>`;
     }).join("");
     return `<section class="st-proj${p.blocked.length || p.todos.length ? " hot" : ""}" aria-label="${escAttr(p.name)}"><div class="st-ph">${esc(p.name)}</div>${h}</section>`;
@@ -8954,7 +8981,7 @@ function renderMessage(m) {
       const div = document.createElement("div");
       div.className = "msg user";
       div.innerHTML = `<div class="bubble">${esc(m.text)}</div>` +
-        (m.time ? `<div class="msgtime">${esc(fmtTime(m.time))}</div>` : "");
+        (m.time || m.text ? `<div class="msgtime">${m.time ? esc(fmtTime(m.time)) : ""}${m.text ? copyBtnHtml("msg:" + m.id, m.text, "Copy", "Copy message", "cpb-msg") : ""}</div>` : "");
       return div;
     }
     case "assistant": {
@@ -8969,7 +8996,7 @@ function renderMessage(m) {
       const div = document.createElement("div");
       div.className = "msg assistant";
       div.innerHTML = `<div class="bubble md">${renderMarkdown(m.text, "a:" + m.id)}</div>` +
-        (m.time ? `<div class="msgtime">${esc(fmtTime(m.time))}${m.model ? " · " + esc(m.model) : ""}</div>` : "");
+        (m.time || m.text ? `<div class="msgtime">${m.time ? esc(fmtTime(m.time)) + (m.model ? " · " + esc(m.model) : "") : ""}${m.text ? copyBtnHtml("msg:" + m.id, m.text, "Copy", "Copy message", "cpb-msg") : ""}</div>` : "");
       wrap.appendChild(div);
       return wrap;
     }

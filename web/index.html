@@ -361,6 +361,14 @@
     .cp[data-state="ok"] { color: var(--green); }
     .cp[data-state="ok"]::after { content: " \2713"; }
     .cp[data-state="fail"] { color: var(--red); }
+    /* Copy button for a bigger piece (copyBtnHtml in app.js): a message, a report, a to-do. 36px tall, always visible. */
+    .cpb { font-family: inherit; font-weight: 600; font-size: 12.5px; color: var(--blue); background: none; border: 0; border-radius: var(--r-8); padding: 0 var(--sp-10); min-height: 36px; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .cpb:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+    .cpb[data-state="ok"] { color: var(--green); }
+    .cpb[data-state="fail"] { color: var(--red); }
+    .cpb-msg { font-size: 11px; margin: -11px 0; padding: 0 var(--sp-8); }
+    .cpb-rep { margin: 0 0 var(--sp-4) calc(var(--sp-10) * -1); }
+    .td-cprow { margin: var(--sp-4) 0 0 calc(var(--sp-10) * -1); }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     .md a { color: var(--blue); overflow-wrap: anywhere; }
     .md a:not([href]) { color: inherit; text-decoration: underline dotted; }

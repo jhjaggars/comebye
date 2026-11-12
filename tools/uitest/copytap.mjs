@@ -33,6 +33,7 @@ const todo = await post("/api/todos", { question: "Copy tap " + Date.now(), kind
 const tid = todo.todo.id;
 
 async function openTodo() {
+  await page.goto("about:blank");
   await page.goto(base + "/#/todo", { waitUntil: "load" });
   await page.waitForSelector(".td-item", { timeout: 8000 });
   await page.locator(`.td-item[data-id="${tid}"] > .td-row:visible`).first().click();
@@ -98,6 +99,52 @@ await check("inline: the To do item id is tap-to-copy", async () => {
   same(await clip(), tid, "item id");
 });
 
+// ---- slice 3: copy a whole message, report or item ----
+await check("todo: Copy question and context copies the Markdown source", async () => {
+  await openTodo();
+  const b = page.locator(".td-item .td-cprow .cpb:visible").first();
+  await b.evaluate((e) => e.scrollIntoView({ block: "center" }));
+  const h = await b.evaluate((e) => e.getBoundingClientRect().height);
+  if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+  same(await b.getAttribute("aria-label"), "Copy the question and its context as Markdown", "aria-label");
+  await sentinel(); await b.click();
+  await page.waitForFunction(() => document.querySelector(".td-cprow .cpb")?.dataset.state === "ok");
+  same(await clip(), todo.todo.question + "\n\n" + CTX.trimEnd(), "question and context");
+  same((await b.innerText()).trim(), "Copied", "label");
+  await page.waitForFunction(() => !document.querySelector(".td-cprow .cpb").dataset.state, null, { timeout: 4000 });
+  same((await b.innerText()).trim(), "Copy question and context", "label resets");
+});
+
+const MARK = "q" + Date.now();
+const SENT = "run it\n```sh\necho " + MARK + "\n```";
+await check("chat: Copy under a message copies its Markdown source (yours and the reply)", async () => {
+  await page.goto(base + "/#/agent/" + encodeURIComponent("w1:p1"), { waitUntil: "load" });
+  await page.waitForSelector("#detail", { state: "visible" });
+  await page.locator("#prompt-text").click();
+  for (const [i, line] of SENT.split("\n").entries()) {
+    if (i) { await page.keyboard.down("Shift"); await page.keyboard.press("Enter"); await page.keyboard.up("Shift"); }
+    await page.keyboard.type(line);
+  }
+  await page.locator("#btn-send").click();
+  const reply = page.locator("#chat .msg.assistant", { has: page.locator(".cb", { hasText: MARK }) });
+  await reply.first().waitFor({ timeout: 9000 });
+  const mine = page.locator("#chat .msg.user", { hasText: MARK });
+  await mine.last().waitFor();
+  const ub = mine.last().locator(".cpb");
+  await ub.evaluate((e) => e.scrollIntoView({ block: "center" }));
+  same(await ub.getAttribute("aria-label"), "Copy message", "aria-label");
+  const h = await ub.evaluate((e) => e.getBoundingClientRect().height);
+  if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+  await sentinel(); await ub.click(); await page.waitForTimeout(300);
+  same(await clip(), SENT, "your message");
+  const ab = reply.last().locator(".cpb");
+  await sentinel(); await ab.click(); await page.waitForTimeout(300);
+  const got = await clip();
+  if (!got.includes("```sh") || !got.includes("echo " + MARK)) throw new Error("reply source lost its fence: " + JSON.stringify(got));
+  const sz = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  same(sz, false, "page scrolls sideways");
+});
+
 // ---- the same on a desktop-size window ----
 const desk = await launch({ width: 1280, height: 800, dark });
 await desk.ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(base).origin });
@@ -120,6 +167,27 @@ await dcheck("the To do item id and an inline path copy", async (pg) => {
   await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
   await pg.locator("#p-todo .td-ctx code.cp").nth(2).click(); await pg.waitForTimeout(250);
   same(await dclip(), "/tmp/shots/shot-390.png", "path");
+});
+
+const REPORT = "## Summary\nFixed the **rail dot**.\n\n```sh\ngo test ./...\n```\n\nCommit `0badc0de1`.";
+await dcheck("a Status report has Copy report that copies its Markdown", async (pg) => {
+  await pg.route(/\/api\/ledger$/, async (r) => {
+    const j = await (await r.fetch()).json();
+    j.entries = [...(j.entries || []), { id: "cpfx", host: "uitest", repo_name: "comebye", branch: "fix/rail-dot", agent_name: "fix-rail-dot", status: "finished",
+      created_at: new Date(Date.now() - 3600e3).toISOString(), finished_at: new Date(Date.now() - 600e3).toISOString(), final_report: REPORT, live: { present: false } }];
+    r.fulfill({ json: j });
+  });
+  await pg.goto(base + "/#/status", { waitUntil: "load" });
+  await pg.locator('#ps-body details[data-id="cpfx"] summary').click();
+  const b = pg.locator('#ps-body details[data-id="cpfx"] .cpb');
+  await b.waitFor();
+  const open = await pg.locator('#ps-body details[data-id="cpfx"]').evaluate((d) => d.open);
+  same(open, true, "pressing Copy report must not close the report");
+  await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
+  await b.click(); await pg.waitForTimeout(300);
+  same(await dclip(), REPORT, "report source");
+  same(await pg.locator('#ps-body details[data-id="cpfx"]').evaluate((d) => d.open), true, "report stays open after Copy");
+  await pg.unroute(/\/api\/ledger$/);
 });
 
 fs.writeFileSync(`${out}/copytap-console.log`, log.join("\n"));
