@@ -27,7 +27,8 @@ Beyond watching agents, it can:
 - read the **pages** agents publish: `comebye publish report.html` (or
   Markdown) from any agent, shown in the app inside a sandbox. Agents learn
   to make good ones (mockups, diagrams, charts in the app's theme) from the
-  `comebye-pages` skill: `comebye skill install`, `comebye pages new`.
+  `comebye-pages` skill: `comebye skill install`, `comebye pages new`. Page source is not
+  committed; the published page is the deliverable.
 
 Chat view works for Claude Code and Pi; other agents show their terminal output.
 

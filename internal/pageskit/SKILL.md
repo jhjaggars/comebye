@@ -14,6 +14,14 @@ The user reads pages in the Comebye app, in the theme they picked (Comebye
 Light or Dark, Gruvbox, Nord and so on), on a desktop or a phone. Every page
 is HTML built on the Comebye page template, so it looks like the app.
 
+## Never commit page source
+
+Page and mockup source (HTML, CSS, JS, build scripts, notes) is never
+committed or pushed. Write it in your scratch directory (or uncommitted in
+your worktree), `comebye publish` it, and record it with `comebye deliver`.
+The page is the deliverable, not the files. Committed page files bloat the
+repo and make a finished agent harder to clean up.
+
 ## When to make one
 
 - **Make a page for:**
@@ -209,6 +217,13 @@ comebye publish page.html --key <your-name>-<subject>                  # first t
 comebye publish page.html --key <your-name>-<subject> --if-version 3   # refuse if it changed since v3
 ```
 
+To change a page later, fetch the published copy and republish it, instead
+of keeping the source in git:
+
+```sh
+comebye pages show <id> --body > page.html     # then edit, and publish with the same --key
+```
+
 `comebye whoami` shows your name, and `--key` takes letters, digits, `.`,
 `_` and `-`. Every revision lands on the same link and keeps its version
 history. Put the printed link in your report.
@@ -235,6 +250,8 @@ in one click. So, in this order:
    `notes/`, `docs/investigations/`, drafts, exported data), but only inside
    your own worktree, and never code or anything you did not write. Do not
    leave notes in the worktree in the first place: write the page directly.
+   Page source is never committed or pushed. If you committed any, tell the
+   coordinator rather than pushing it.
 3. Say in your report which pages hold the work and which files, if any, you
    left on purpose.
 

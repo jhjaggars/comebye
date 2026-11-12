@@ -575,7 +575,10 @@ comebye publish page.html --key <agent-name>-pages-screen
 - **The skill.** It covers when to make a page, the page contract (tokens
   only, 390 px wide, no network, pinned cdnjs scripts, 5 MiB), mockup
   patterns, diagrams, charts and publishing with a stable `--key` that starts
-  with the agent's name. claude and pi load it by its description when a task
+  with the agent's name. Page and mockup source is never committed or
+  pushed: it lives in the scratch directory, and the page is the
+  deliverable (to change one, `comebye pages show ID --body`, edit,
+  republish). claude and pi load it by its description when a task
   calls for a page. `/skill:comebye-pages` in pi forces it.
 - **`skill install`** writes the skill only to those two `SKILL.md` files and
   records what it wrote in a `.comebye-installed` file beside each. So an
