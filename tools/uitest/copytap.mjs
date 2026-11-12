@@ -310,6 +310,27 @@ await dcheck("a Status report has Copy report that copies its Markdown", async (
   await pg.unroute(/\/api\/ledger$/);
 });
 
+// ---- the plain terminal view (an agent with no chat transcript) ----
+async function screenCheck(pg, rd, sent) {
+  await pg.route(/\/transcript\?/, (r) => r.fulfill({ status: 404, json: { error: "no session" } }));
+  const SCREEN = "$ go test ./...\nok  \tgithub.com/x/y\t0.4s\n\n  indented line\n";
+  await pg.route(/\/output\?lines=/, (r) => r.fulfill({ json: { text: SCREEN } }));
+  await pg.goto("about:blank");
+  await pg.goto(base + "/#/agent/" + encodeURIComponent("w1:p1"), { waitUntil: "load" });
+  const b = pg.locator("#btn-copy-screen");
+  await b.waitFor({ state: "visible" });
+  await pg.waitForFunction(() => document.querySelector("#output").textContent.includes("indented line"));
+  const box = await b.boundingBox(), out = await pg.locator("#output").boundingBox();
+  if (box.height < 35.5) throw new Error("tap target is " + box.height + "px high, want 36");
+  if (box.y + box.height > out.y + 1) throw new Error("Copy screen should sit above the terminal text");
+  await sent(); await b.click(); await pg.waitForTimeout(300);
+  same(await rd(), SCREEN.replace(/\n+$/, ""), "screen text, with no button label in it");
+  same(await b.textContent(), "Copied", "button feedback");
+  await pg.unroute(/\/transcript\?/); await pg.unroute(/\/output\?lines=/);
+}
+await check("terminal view: Copy screen copies the visible terminal text", () => screenCheck(page, clip, sentinel));
+await dcheck("terminal view: Copy screen copies the visible terminal text", (pg) => screenCheck(pg, dclip, () => pg.evaluate(() => navigator.clipboard.writeText("sentinel"))));
+
 fs.writeFileSync(`${out}/copytap-console.log`, log.join("\n"));
 await post(`/api/todos/${tid}/drop`, {}).catch(() => {});
 await browser.close();

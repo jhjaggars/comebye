@@ -379,6 +379,8 @@
     .cpb-msg { font-size: var(--fs-11); margin: -10px 0; padding: 0 var(--sp-8); }
     .cpb-rep { margin: 0 0 var(--sp-4) calc(var(--sp-10) * -1); }
     .cpb-out { display: block; margin: 0 0 var(--sp-2); }
+    #btn-copy-screen { align-self: flex-start; margin: var(--sp-4) 0 0; padding-left: 0; }
+    #btn-copy-screen[hidden] { display: none; }
     .tool-cp { display: flex; flex-wrap: wrap; margin: 0 0 var(--sp-2); }
     .hc-cp { margin: var(--sp-2) 0 0; }
     .td-cprow { margin: var(--sp-4) 0 0 calc(var(--sp-10) * -1); }
@@ -2869,6 +2871,7 @@
       <div id="d-markbar" class="markbar" hidden></div>
       <div id="chat"></div>
       <button class="btn" id="btn-terminal" style="display:none; margin-bottom:10px;">Show raw terminal</button>
+      <button type="button" class="cpb cpb-out" id="btn-copy-screen" data-copy-key="term-screen" aria-label="Copy what the terminal shows" hidden>Copy screen</button>
       <pre id="output" style="display:none"></pre>
       <section id="answer" style="display:none" aria-live="polite"></section>
       <section id="queued" hidden aria-label="Queued prompts"></section>

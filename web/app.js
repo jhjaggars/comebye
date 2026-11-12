@@ -8348,6 +8348,7 @@ function showTerminal() {
   $("chat").style.display = "none";
   $("btn-terminal").style.display = "none";
   $("output").style.display = "block";
+  $("btn-copy-screen").hidden = false;
 }
 
 function renderTranscript(t, reset) {
@@ -9111,6 +9112,8 @@ function resetTerminalView() {
   outputBusy = false;
   $("output").textContent = "";
   $("output").style.display = "none";
+  $("btn-copy-screen").hidden = true;
+  copySrc.delete("term-screen");
   $("chat").style.display = "";
   $("btn-terminal").style.display = "none";
 }
@@ -9129,6 +9132,7 @@ async function refreshOutput(force) {
     const el = $("output");
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     el.textContent = read.text || "(no output)";
+    copySrc.set("term-screen", (read.text || "").replace(/\n+$/, "")); // the plain text the hub read, for Copy screen
     setAutoKeys(screenWantsKeys(read.text));
     if (atBottom) el.scrollTop = el.scrollHeight;
   } catch (e) {
