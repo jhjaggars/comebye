@@ -139,3 +139,59 @@ func TestDefaultDirAgreesWithTheResolver(t *testing.T) {
 		t.Errorf("%q vs %q", DefaultDir(), transcript.DefaultOpencodeDir())
 	}
 }
+
+// The question tool's card previews the question, not the arguments' JSON.
+func TestQuestionToolCardPreviewsTheQuestion(t *testing.T) {
+	doc := `{"info":{"id":"ses_abcdefgh12","directory":"/x","time":{"created":1}},"messages":[
+ {"info":{"id":"m1","role":"user","time":{"created":2}},"parts":[{"type":"text","text":"ask"}]},
+ {"info":{"id":"m2","role":"assistant","modelID":"m","providerID":"p","time":{"created":3,"completed":4}},"parts":[
+  {"type":"tool","tool":"question","callID":"c1","state":{"status":"completed","input":{"questions":[{"question":"Which fruit?","options":[{"label":"Apple"}]}]},"output":"You chose Apple."}},
+  {"type":"tool","tool":"read","callID":"c2","state":{"status":"completed","input":{"filePath":"/x/a.go"},"output":"x"}}]}]}`
+	out, _, _, err := Convert([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := transcript.Read(path, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, m := range tr.Messages {
+		if m.Kind == "tool" {
+			got[m.Tool] = m.Args
+		}
+	}
+	if got["question"] != "Which fruit?" || got["read"] != "/x/a.go" {
+		t.Errorf("card previews: %v", got)
+	}
+}
+
+// A mirror written by an older converter (its earlier lines differ) keeps its
+// lines and gains only the new ones.
+func TestMirrorKeepsEarlierLinesWhenTheConverterChanged(t *testing.T) {
+	raw := fixture(t)
+	full, _, _, _ := Convert(raw)
+	lines := bytes.SplitAfter(full, []byte("\n"))
+	old := append([]byte(nil), lines[0]...)
+	old = append(old, []byte(`{"type":"message","id":"older","message":{"role":"user","content":[{"type":"text","text":"older converter"}]}}`+"\n")...)
+	m := &Mirror{Dir: t.TempDir(), MinGap: -1, Export: func(context.Context, string) ([]byte, error) { return raw, nil }}
+	id := "ses_e2e77bc70ffeS3b6deA1gr5A20"
+	p := filepath.Join(m.Dir, Slug("/tmp/claude-1000/-home-jhjaggars--worktrees-comebye-feat-opencode-support/7efd0587-0fbb-4d11-9f48-7f2a1c01ea02/scratchpad/repo"), id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Sync(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(p)
+	if !bytes.HasPrefix(got, old) || !bytes.HasSuffix(got, lines[len(lines)-2]) || len(got) <= len(old) {
+		t.Errorf("mirror: %d bytes, old %d", len(got), len(old))
+	}
+}

@@ -404,7 +404,7 @@ func firstText(blocks []block) string {
 }
 
 // argKeys is the order in which summarizeArgs looks for a preview field.
-var argKeys = []string{"command", "prompt", "path", "file_path", "query", "description", "pattern", "url", "name", "task"}
+var argKeys = []string{"command", "prompt", "path", "file_path", "filePath", "query", "description", "pattern", "url", "name", "task"}
 
 // toolArgKeys overrides argKeys for tools whose most informative field is
 // not the first one found: a subagent's prompt is long, its description

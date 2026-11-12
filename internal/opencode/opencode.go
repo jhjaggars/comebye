@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -150,6 +151,9 @@ func Convert(export []byte) (jsonl []byte, id, cwd string, err error) {
 					if len(args) == 0 {
 						args = json.RawMessage("{}")
 					}
+					if p.Tool == "question" {
+						args = withQuestionText(args)
+					}
 					blocks = append(blocks, obj{"type": "toolCall", "id": p.CallID, "name": p.Tool, "arguments": args})
 					switch p.State.Status {
 					case "completed", "error":
@@ -190,6 +194,34 @@ func Convert(export []byte) (jsonl []byte, id, cwd string, err error) {
 		}
 	}
 	return finish(&buf, &d)
+}
+
+// withQuestionText adds the asked question's text as "description", the
+// field a tool card previews, to the question tool's arguments (the card
+// would otherwise show their JSON).
+func withQuestionText(args json.RawMessage) json.RawMessage {
+	var a struct {
+		Questions []struct {
+			Question string `json:"question"`
+		} `json:"questions"`
+	}
+	var all map[string]json.RawMessage
+	if json.Unmarshal(args, &a) != nil || json.Unmarshal(args, &all) != nil || len(a.Questions) == 0 {
+		return args
+	}
+	var qs []string
+	for _, q := range a.Questions {
+		if q.Question != "" {
+			qs = append(qs, q.Question)
+		}
+	}
+	d, _ := json.Marshal(strings.Join(qs, " / "))
+	all["description"] = d
+	out, err := json.Marshal(all)
+	if err != nil {
+		return args
+	}
+	return out
 }
 
 func finish(buf *bytes.Buffer, d *exportDoc) ([]byte, string, string, error) {
@@ -321,10 +353,14 @@ func (m *Mirror) Sync(ctx context.Context, id string) (string, error) {
 		// Never shorten or rewrite what was written: the archive follows
 		// the file as an append-only stream.
 		if !bytes.HasPrefix(jsonl, old) {
-			if len(jsonl) <= len(old) {
+			// Written by an older converter, or the session was edited:
+			// keep what was written and add only the lines after it.
+			n := bytes.Count(old, []byte("\n"))
+			lines := bytes.SplitAfter(jsonl, []byte("\n"))
+			if len(lines) <= n+1 {
 				return path, nil
 			}
-			return path, errors.New("opencode session changed under its mirror; keeping the earlier copy")
+			jsonl = append(append([]byte(nil), old...), bytes.Join(lines[n:], nil)...)
 		}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {

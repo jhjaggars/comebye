@@ -78,7 +78,7 @@ func TestOpencodeQuestion(t *testing.T) {
 	if got, want := labelsOf(text), []string{"Red", "Green", "Blue", "Type your own answer"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("options %q", got)
 	}
-	if text.Options[0].Description != "Red" || text.Options[3].Role != RoleOther || text.Answerable {
+	if text.Options[0].Description != "" || text.Options[3].Role != RoleOther || text.Answerable {
 		t.Errorf("%+v", text.Options)
 	}
 	d := Detect(readFixture(t, "opencode_question.ansi"), "opencode")

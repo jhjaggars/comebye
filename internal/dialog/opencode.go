@@ -335,7 +335,8 @@ func detectOpencodeQuestion(lines []opencodeLine) *Dialog {
 		// The description is the indented line under the row.
 		for j := r.line + 1; j < foot && j <= r.line+1; j++ {
 			c := lines[j].content()
-			if c != "" && !opencodeNumbered.MatchString(c) {
+			// OpenCode repeats the label as the description when none was given.
+			if c != "" && !opencodeNumbered.MatchString(c) && c != r.text {
 				o.Description = c
 			}
 		}
