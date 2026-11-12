@@ -185,6 +185,56 @@ await check("answer card: Copy screen copies the terminal snapshot", async () =>
   same(await clip(), want, "snapshot");
 });
 
+// ---- slice 5: error toasts, the Pages viewer and a copy button inside a page ----
+await check("an error toast carries a Copy button that copies the message", async () => {
+  await page.goto("about:blank");
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForFunction(() => typeof toast === "function");
+  await page.evaluate(() => toast("could not send: gpg failed to sign the data", true));
+  const b = page.locator("#toast.error .toast-act");
+  await b.waitFor({ state: "visible" });
+  const h = await b.evaluate((e) => e.getBoundingClientRect().height);
+  if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
+  await page.waitForTimeout(3200); // longer than a plain toast
+  if (!(await b.isVisible())) throw new Error("the error toast was gone after 3.2 s");
+  await sentinel(); await b.click(); await page.waitForTimeout(300);
+  same(await clip(), "could not send: gpg failed to sign the data", "toast text, without the button label");
+  same((await b.innerText()).trim(), "Copied", "label");
+  await page.evaluate(() => toast("saved"));
+  same(await page.locator("#toast .toast-act").count(), 0, "a plain toast has no button");
+});
+
+const PG = `<!doctype html><html><head><meta charset="utf-8"><title>Copy page</title></head><body>
+<button type="button" id="b" style="min-height:44px">Copy</button><pre id="p">go test ./...</pre>
+<script>
+function copy(text) {
+  const old = () => { const t = document.createElement("textarea"); t.value = text; t.readOnly = true;
+    t.style.cssText = "position:fixed;top:0;opacity:0;font-size:16px"; document.body.append(t);
+    t.select(); t.setSelectionRange(0, text.length); let ok = false;
+    try { ok = document.execCommand("copy"); } catch {} t.remove(); return ok; };
+  return (navigator.clipboard ? navigator.clipboard.writeText(text).then(() => true, old) : Promise.resolve(old()));
+}
+document.getElementById("b").onclick = () => copy(document.getElementById("p").textContent).then((ok) => { document.title = ok ? "copied" : "failed"; document.getElementById("b").textContent = ok ? "Copied" : "Failed"; });
+</script></body></html>`;
+const pub = await post("/api/pages", { title: "Copy page " + Date.now(), body: PG, kind: "html" });
+const pgid = (pub.page || pub).id;
+await check("pages: Copy link uses the shared helper, and a page's own copy button works in the sandbox", async () => {
+  if (!pgid) throw new Error("publish: " + JSON.stringify(pub));
+  await page.goto("about:blank");
+  await page.goto(base + "/#/pages/" + pgid, { waitUntil: "load" });
+  const cl = page.locator("#pgs-copy");
+  await cl.waitFor({ timeout: 8000 });
+  same(await page.locator("iframe.pgs-frame").getAttribute("allow"), "clipboard-write", "frame allow");
+  await sentinel(); await cl.click(); await page.waitForTimeout(400);
+  const link = await clip();
+  if (!link.includes("/p/" + pgid)) throw new Error("link copied: " + JSON.stringify(link));
+  const fr = page.frameLocator("iframe.pgs-frame");
+  await fr.locator("#b").click();
+  await fr.locator("#b").filter({ hasText: "Copied" }).waitFor({ timeout: 4000 });
+  same(await clip(), "go test ./...", "the page's own copy");
+});
+await fetch(base + "/api/pages/" + pgid, { method: "DELETE" }).catch(() => {});
+
 // ---- the same on a desktop-size window ----
 const desk = await launch({ width: 1280, height: 800, dark });
 await desk.ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(base).origin });

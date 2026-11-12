@@ -121,6 +121,24 @@ type. Replace the example content, and keep the template's two pieces:
      cookies, forms that post, `alert`, `confirm`, `prompt`, `print()` and
      downloads all fail or do nothing. Keep data inline, for example in
      `<script type="application/json" id="data">`.
+   - **Copy buttons work, on a tap.** The app's frame allows clipboard
+     writes, but only inside a click or key handler, and a page can never
+     read the clipboard. Give a page a real `<button type="button">` (44 px
+     tall, an `aria-label`) and use this, which falls back to `execCommand`
+     where the API is refused:
+
+     ```js
+     function copy(text) {
+       const old = () => { const t = document.createElement("textarea"); t.value = text; t.readOnly = true;
+         t.style.cssText = "position:fixed;top:0;opacity:0;font-size:16px"; document.body.append(t);
+         t.select(); t.setSelectionRange(0, text.length); let ok = false;
+         try { ok = document.execCommand("copy"); } catch {} t.remove(); return ok; };
+       return (navigator.clipboard ? navigator.clipboard.writeText(text).then(() => true, old) : Promise.resolve(old()));
+     }
+     ```
+
+     Show "Copied" for a moment when it resolves true. Copy the text itself
+     (`textContent` of the block), never a label or a line number.
    - **Links to other sites** don't open from inside the app's frame yet.
      Write the URL as visible text next to the link. `#anchor` links inside
      the page work.

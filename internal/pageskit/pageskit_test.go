@@ -21,7 +21,7 @@ func TestGuideIsASkill(t *testing.T) {
 	}
 	for _, want := range []string{
 		"comebye pages new", "comebye-theme", "--key <your-name>-", // starters, the theme contract, keys prefixed with the agent's name
-		"390", "cdnjs.cloudflare.com", "5 MiB",
+		"390", "cdnjs.cloudflare.com", "5 MiB", "execCommand", // a page's copy button
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("guide lacks %q", want)

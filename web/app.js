@@ -99,7 +99,15 @@ function toast(msg, isError = false) {
   el.textContent = msg;
   el.className = "show" + (isError ? " error" : "");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.className = ""), 2600);
+  // An error stays longer and carries a Copy button: it is the text one pastes
+  // into a chat or an issue, and it is gone before it can be selected.
+  if (isError && msg) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "toast-act"; b.textContent = "Copy";
+    b.onclick = () => copyText(msg).then((ok) => { b.textContent = ok ? "Copied" : "Not copied"; clearTimeout(toastTimer); toastTimer = setTimeout(() => (el.className = ""), 1500); });
+    el.append(" ", b);
+  }
+  toastTimer = setTimeout(() => (el.className = ""), isError && msg ? 6000 : 2600);
 }
 
 // toastAction: a toast with one button (Undo), on screen for ms.
@@ -2178,9 +2186,10 @@ function todoAnswer(id, box) {
 }
 
 function todoCopy(ta) {
-  const fallback = () => { ta.focus(); ta.select(); toast("Selected: copy it with your keyboard"); };
-  if (!navigator.clipboard || !navigator.clipboard.writeText) { fallback(); return; }
-  navigator.clipboard.writeText(ta.value).then(() => toast("Copied"), fallback);
+  copyText(ta.value).then((ok) => {
+    if (ok) { toast("Copied"); return; }
+    ta.focus(); ta.select(); toast("Selected: copy it with your keyboard");
+  });
 }
 
 // ---- releases ----
@@ -6042,7 +6051,7 @@ function initPages() {
     if (!ev.target.closest("#pgs-copy")) return;
     const r = pgs.route, base = pgs.pagesUrl || pgs.publicUrl || location.origin;
     const link = base + "/p/" + r.id + (r.ver ? "/" + r.ver : "");
-    try { await navigator.clipboard.writeText(link); toast("Link copied"); } catch { toast(link); }
+    if (await copyText(link)) toast("Link copied"); else toast(link);
   });
   // A link in a report, briefing or to-do item to one of this hub's pages
   // opens it here.

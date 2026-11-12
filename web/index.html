@@ -813,6 +813,8 @@
     }
     #toast.show { opacity: 1; }
     #toast.act { pointer-events: auto; }
+    #toast.error.show { pointer-events: auto; }
+    #toast.error .toast-act { min-height: 36px; border-color: var(--red); background: none; color: var(--red); }
     #toast .toast-act { margin-left: var(--sp-4); min-height: 28px; padding: 0 var(--sp-10); border-radius: var(--r-8); border: 1px solid var(--blue); background: var(--chip-blue); color: var(--blue); font: inherit; font-weight: 600; cursor: pointer; }
     #update-banner {
       position: fixed; left: 50%; top: calc(8px + env(safe-area-inset-top, 0px));
