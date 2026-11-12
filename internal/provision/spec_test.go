@@ -93,3 +93,38 @@ func TestParseEventKeepsOnlyKnownThings(t *testing.T) {
 		}
 	}
 }
+
+func TestSandboxSpec(t *testing.T) {
+	good := `{"kind":"openshell","name":"box1","idle_minutes":120,"destroy_after_hours":72}`
+	s, err := ParseSpec([]byte(good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(s.JSON()); got != `{"destroy_after_hours":72,"idle_minutes":120,"kind":"openshell","name":"box1"}` {
+		t.Errorf("a sandbox spec carries only what a sandbox may have: %s", got)
+	}
+	for name, in := range map[string]string{
+		"type":         strings.Replace(good, `"name"`, `"type":"t3.large","name"`, 1),
+		"spot":         strings.Replace(good, `"name"`, `"spot":true,"name"`, 1),
+		"disk":         strings.Replace(good, `"name"`, `"data_disk_gb":50,"name"`, 1),
+		"zone":         strings.Replace(good, `"name"`, `"zone":"us-east-1a","name"`, 1),
+		"cap":          strings.Replace(good, `"name"`, `"budget_cap_usd":10,"name"`, 1),
+		"max_run":      strings.Replace(good, `"name"`, `"max_run":"24h","name"`, 1),
+		"bad name":     strings.Replace(good, "box1", "Box 1", 1),
+		"idle 1":       strings.Replace(good, `"idle_minutes":120`, `"idle_minutes":1`, 1),
+		"destroy 0":    strings.Replace(good, `"destroy_after_hours":72`, `"destroy_after_hours":0`, 1),
+		"unknown kind": strings.Replace(good, "openshell", "podman", 1),
+	} {
+		if _, err := ParseSpec([]byte(in)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	d := DefaultSandboxSpec("box1")
+	if err := d.Validate(); err != nil {
+		t.Errorf("default: %v", err)
+	}
+	c, err := EstimateCost(d, nil)
+	if err != nil || c.Mode != "sandbox" || c.USDHour != 0 || c.Basis == "" {
+		t.Errorf("cost: %+v %v", c, err)
+	}
+}

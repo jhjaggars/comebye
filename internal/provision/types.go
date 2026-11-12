@@ -32,6 +32,13 @@ type Check struct {
 	State   string `json:"state"`
 	Note    string `json:"note,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
+	// What a sandbox would be made from (openshell only): the node's own
+	// settings, shown in place of a size picker.
+	Workspace string `json:"workspace,omitempty"`
+	Image     string `json:"image,omitempty"`
+	Policy    string `json:"policy,omitempty"`
+	CPU       string `json:"cpu,omitempty"`
+	Memory    string `json:"memory,omitempty"`
 }
 
 // Preflight is what a node says about the credentials it holds and where it
@@ -88,6 +95,7 @@ func cleanCheck(c Check) Check {
 		c.State = StateError
 	}
 	c.Note, c.Gateway = Text(c.Note, 200), Text(c.Gateway, 64)
+	c.Workspace, c.Image, c.Policy, c.CPU, c.Memory = Text(c.Workspace, 64), Text(c.Image, 200), Text(c.Policy, 80), Text(c.CPU, 12), Text(c.Memory, 12)
 	return c
 }
 

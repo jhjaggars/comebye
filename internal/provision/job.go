@@ -28,6 +28,18 @@ const (
 // Stages of a VM build, in the order the tool reports them.
 var Stages = []string{"network", "ssh_key", "data_disk", "instance", "ssh", "bootstrap", "tailnet", "agents", "hub"}
 
+// SandboxStages are the stages of an OpenShell sandbox (it has no machine, disks
+// or ssh).
+var SandboxStages = []string{"sandbox", "tailnet", "settings", "hub"}
+
+// StagesFor is the stages a job of this kind reports.
+func StagesFor(kind string) []string {
+	if kind == KindOpenShell {
+		return SandboxStages
+	}
+	return Stages
+}
+
 // Item is one line of a job's journal: a stage transition of the tool, or a
 // line of its human text. Only these fields exist, so nothing else a peer
 // sends can reach a browser.

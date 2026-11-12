@@ -25,7 +25,10 @@ const freePort = () => new Promise((res) => { const s = net.createServer().liste
 
 const wdir = path.join(work, "worker");
 fs.mkdirSync(wdir);
-fs.copyFileSync(path.join(here, "fixtures/provision-preflight.json"), path.join(wdir, "preflight.json"));
+// the node holds an OpenShell login too, so the wizard offers a sandbox
+const pf = JSON.parse(fs.readFileSync(path.join(here, "fixtures/provision-preflight.json"), "utf8"));
+pf.openshell = { state: "ok", note: "gateway answers", gateway: "homelab", workspace: "openshell-sandboxes", image: "registry.example/comebye-sandbox:{version}", policy: "sandbox-policy.yaml", cpu: "2", memory: "6Gi" };
+fs.writeFileSync(path.join(wdir, "preflight.json"), JSON.stringify(pf));
 fs.copyFileSync(path.join(here, "fixtures/provision-catalog.json"), path.join(wdir, "catalog.json"));
 fs.writeFileSync(path.join(wdir, "comebye-worker"), `#!/bin/sh
 d=${wdir}
@@ -35,7 +38,7 @@ case "$4" in
   catalog)
     r=us-east-1; prev=""; for a in "$@"; do [ "$prev" = --region ] && r=$a; prev=$a; done
     sed "s/\\"region\\": \\"[^\\"]*\\"/\\"region\\": \\"$r\\"/" $d/catalog.json ;;
-  create) cat > $d/spec.in; cat $d/create.events ;;
+  create) cat > $d/spec.in; if grep -q openshell $d/spec.in; then cat $d/create.sbx.events; else cat $d/create.events; fi ;;
   status) cat $d/status.json ;;
   destroy)
     [ -f $d/destroy.sleep ] && sleep $(cat $d/destroy.sleep)
@@ -47,9 +50,11 @@ case "$4" in
 esac
 `, { mode: 0o755 });
 const stages = ["network", "ssh_key", "data_disk", "instance", "ssh", "bootstrap", "tailnet", "agents", "hub"];
+fs.writeFileSync(path.join(wdir, "create.sbx.events"), ["sandbox", "tailnet", "settings", "hub"].map((st, i) => JSON.stringify({ v: 1, seq: i + 1, stage: st, step: `${i + 1}/4`, state: "ok" })).join("\n") + "\n");
 fs.writeFileSync(path.join(wdir, "create.events"), stages.map((st, i) => JSON.stringify({ v: 1, seq: i + 1, stage: st, step: `${i + 1}/9`, state: "ok" })).join("\n") + "\n");
 const launched = new Date(Date.now() - 3 * 3600e3).toISOString().replace(/\.\d+Z$/, "Z");
-const status = (extra = {}) => JSON.stringify({ v: 1, provider: "aws", workers: [{ name: "plain", state: "RUNNING", type: "t3.large", mode: "spot", managed: true, launched_at: launched, last_stop_at: null, caps: { budget_cap_usd: 10, destroy_after_hours: 72, launch_price_usd_hour: 0.03 }, ...extra }] });
+const status = (extra = {}, more = []) => JSON.stringify({ v: 1, provider: "aws", workers: [{ name: "plain", state: "RUNNING", type: "t3.large", mode: "spot", managed: true, launched_at: launched, last_stop_at: null, caps: { budget_cap_usd: 10, destroy_after_hours: 72, launch_price_usd_hour: 0.03 }, ...extra }, ...more] });
+const sbx = { name: "box1", state: "RUNNING", type: "", managed: true, launched_at: launched, last_stop_at: null, caps: {} };
 fs.writeFileSync(path.join(wdir, "status.json"), status());
 fs.writeFileSync(path.join(work, "worker.conf"), "# stand-in config\n");
 
@@ -191,6 +196,50 @@ try {
       await noHScroll();
     });
 
+    await check(`${tag}: the wizard offers an OpenShell sandbox, shows what it is made from, and builds it with no price`, async () => {
+      fs.writeFileSync(path.join(wdir, "status.json"), status({}, [sbx]));
+      await page.goto(base + "/#/peers/~prices", { waitUntil: "load" });
+      await page.waitForSelector("#az-add");
+      await page.locator("#az-add").click();
+      await page.waitForSelector('input[name="az-kind"]');
+      const kinds = await page.locator(".az-kinds").innerText();
+      if (!/AWS/.test(kinds) || !/OpenShell sandbox/.test(kinds)) throw new Error("kinds: " + kinds);
+      await page.locator('input[name="az-kind"][value="openshell"]').check();
+      await shot("sandbox-kind");
+      await page.locator("#az-next").click();
+      await page.waitForFunction(() => /Sandbox/.test(document.querySelector(".az-steps li.on")?.innerText || ""), null, { timeout: 5000 });
+      const card = await page.locator("#pr-prices").innerText();
+      for (const want of ["homelab", "openshell-sandboxes", "registry.example/comebye-sandbox:{version}", "sandbox-policy.yaml", "reports no capacity"]) if (!card.includes(want)) throw new Error(`the sandbox card lacks ${want}`);
+      if (/Pricing|vCPU/.test(await page.locator(".az-wrap").innerText())) throw new Error("a size picker is shown for a sandbox");
+      if (!/no per-hour price/.test(await page.locator("#az-cost").innerText())) throw new Error("footer: " + await page.locator("#az-cost").innerText());
+      await shot("sandbox-card");
+      await noHScroll();
+      await page.locator("#az-next").click();
+      await page.waitForSelector("#az-name");
+      if (await page.locator("#az-budget, #az-boot, #az-data").count()) throw new Error("VM options are shown for a sandbox");
+      await page.fill("#az-name", "box1");
+      await page.locator("#az-next").click();
+      await page.waitForSelector("#az-ack", { timeout: 30000 });
+      const rv = await page.locator("#pr-prices").innerText();
+      if (!/no per-hour price/.test(rv) || !/no budget cap/.test(rv)) throw new Error("review: " + rv.slice(0, 300));
+      await shot("sandbox-review");
+      await page.locator("#az-ack").check();
+      await page.locator("#az-next").click();
+      await page.waitForFunction(() => /box1 is built/.test(document.querySelector("#pr-prices").innerText), null, { timeout: 30000 });
+      const prog = await page.locator("#pr-prices").innerText();
+      for (const want of ["Sandbox", "Settings", "Joins the hub"]) if (!prog.includes(want)) throw new Error("stages lack " + want);
+      if (/Data disk|ssh reach/.test(prog)) throw new Error("VM stages shown for a sandbox");
+      const spec = fs.readFileSync(path.join(wdir, "spec.in"), "utf8");
+      if (spec !== '{"destroy_after_hours":72,"idle_minutes":120,"kind":"openshell","name":"box1"}') throw new Error("the tool read " + spec);
+      await shot("sandbox-built");
+      await page.locator("#az-done").click();
+      await page.waitForSelector('#ph-card [data-ph="box1"]', { timeout: 20000 });
+      const row = await page.locator('#ph-card [data-ph="box1"]').innerText();
+      if (!/OpenShell sandbox/.test(row) || !/not priced/.test(row)) throw new Error("row: " + row);
+      await shot("sandbox-listed");
+      await noHScroll();
+    });
+
     await check(`${tag}: no console errors, no CSP violations`, async () => {
       const bad = log.filter((l) => /^(pageerror|console\.(error|warning))/.test(l));
       if (bad.length) throw new Error(bad.slice(0, 3).join(" | "));
@@ -216,10 +265,10 @@ try {
       const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector("#pr-prices").scrollWidth, document.querySelector("#pr-prices").clientWidth]);
       if (w[0] > w[1] || w[2] > w[3]) throw new Error("horizontal overflow " + w.join("/"));
     };
-    await check("phone: the list, one live and one destroyed host, fits at 390 and Destroy… is a 44px target", async () => {
+    await check("phone: the list of live and destroyed hosts fits at 390 and Destroy… is a 44px target", async () => {
       await page.goto(base + "/#/peers/~prices", { waitUntil: "load" });
       await page.waitForSelector("#ph-card .ph-row", { timeout: 20000 });
-      if ((await page.locator("#ph-card .ph-row").count()) !== 2) throw new Error("rows: " + await page.locator("#ph-card .ph-row").count());
+      if ((await page.locator("#ph-card .ph-row").count()) !== 3) throw new Error("rows: " + await page.locator("#ph-card .ph-row").count());
       const box = await page.locator('[data-ph-destroy="phone1"]').boundingBox();
       if (!box || box.height < 44) throw new Error("target " + JSON.stringify(box));
       await shot("list");

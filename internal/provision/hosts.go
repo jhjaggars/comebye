@@ -468,6 +468,7 @@ func (b *HostBook) EndDestroy(name string, ok bool, dataKept bool, why string) {
 // HostView is a host as the app reads it.
 type HostView struct {
 	Name          string  `json:"name"`
+	Kind          string  `json:"kind"`
 	State         string  `json:"state"` // running, stopped, starting, stopping, destroying, destroyed, gone, unknown
 	Type          string  `json:"type"`
 	Region        string  `json:"region,omitempty"`
@@ -503,7 +504,7 @@ func rfc(t *time.Time) string {
 }
 
 func (h *Host) view(now time.Time) HostView {
-	v := HostView{Name: h.Name, Type: h.Spec.Type, Region: h.Region, Mode: h.Mode, Created: h.Created.UTC().Format(time.RFC3339),
+	v := HostView{Name: h.Name, Kind: h.Spec.Kind, Type: h.Spec.Type, Region: h.Region, Mode: h.Mode, Created: h.Created.UTC().Format(time.RFC3339),
 		Destroyed: rfc(h.Destroyed), StoppedAt: rfc(h.StoppedAt), Spend: h.Spend(now), BudgetCapUSD: h.Spec.BudgetCapUSD,
 		DestroyAfterH: h.Spec.DestroyAfterHours, IdleMinutes: h.Spec.IdleMinutes, MaxRun: h.Spec.MaxRun, DataDiskGB: h.Spec.DataDiskGB,
 		DataKept: h.DataKept, DestroyJob: h.Destroying, DestroyFailed: h.DestroyFailed, CapStopped: rfc(h.CapStopped), Warned80At: rfc(h.Warned80At), DestroyFailAt: rfc(h.DestroyFailedAt),
@@ -619,10 +620,13 @@ func ParseHosts(b []byte) (*HostsView, error) {
 		if !typeRe.MatchString(h.Type) {
 			h.Type = ""
 		}
+		if h.Kind != KindOpenShell {
+			h.Kind = KindAWS
+		}
 		if !regionRe.MatchString(h.Region) {
 			h.Region = ""
 		}
-		if h.Mode != "spot" {
+		if h.Mode != "spot" && h.Mode != "sandbox" {
 			h.Mode = "on_demand"
 		}
 		h.Created, h.Destroyed, h.StoppedAt, h.CapStopped, h.DestroyDue, h.AsOf = cleanTime(h.Created), cleanTime(h.Destroyed), cleanTime(h.StoppedAt), cleanTime(h.CapStopped), cleanTime(h.DestroyDue), cleanTime(h.AsOf)

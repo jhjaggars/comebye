@@ -170,7 +170,7 @@ func (s *Server) decodeProvBody(w http.ResponseWriter, r *http.Request, needKey 
 	}
 	// A host is built in the node's own region: a request for another is
 	// refused rather than priced for one region and built in a different one.
-	if n := s.probeNode(r.Context(), b.Via, false); n.Role && n.Preflight != nil && n.Preflight.Region != "" {
+	if n := s.probeNode(r.Context(), b.Via, false); spec.Kind == provision.KindAWS && n.Role && n.Preflight != nil && n.Preflight.Region != "" {
 		if b.Region != "" && b.Region != n.Preflight.Region {
 			relErr(w, http.StatusUnprocessableEntity, "bad_region", b.Via+" builds only in "+n.Preflight.Region)
 			return b, spec, false
@@ -204,16 +204,25 @@ func (s *Server) callBody(ctx context.Context, via, op string, v any) (int, []by
 	return s.fleet.CallHost(ctx, via, op, nil, b)
 }
 
-// credsOK reports whether the node holds what a real create needs.
-func credsOK(pf *provision.Preflight) (bool, []string) {
+// credsOK reports whether the node holds what a real create of this kind needs:
+// the kind's own cloud login, the tailnet client, and (a VM is reached over ssh)
+// an ssh key.
+func credsOK(pf *provision.Preflight, kind string) (bool, []string) {
 	if pf == nil {
 		return false, []string{"no preflight"}
 	}
 	var miss []string
-	for _, c := range []struct {
+	need := []struct {
 		n string
 		c provision.Check
-	}{{"aws", pf.AWS}, {"tailnet", pf.Tailnet}, {"ssh", pf.SSH}} {
+	}{{"aws", pf.AWS}, {"tailnet", pf.Tailnet}, {"ssh", pf.SSH}}
+	if kind == provision.KindOpenShell {
+		need = []struct {
+			n string
+			c provision.Check
+		}{{"openshell", pf.OpenShell}, {"tailnet", pf.Tailnet}}
+	}
+	for _, c := range need {
 		if c.c.State != provision.StateOK {
 			miss = append(miss, c.n+" "+c.c.State)
 		}
@@ -268,7 +277,7 @@ func (s *Server) handleProvisionPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	a.Refused, a.RefusedCode = provision.Text(a.Refused, 200), provision.Text(a.RefusedCode, 30)
 	n := s.probeNode(r.Context(), b.Via, false)
-	ready, missing := credsOK(n.Preflight)
+	ready, missing := credsOK(n.Preflight, spec.Kind)
 	s.audit(r, ledger.AuditEvent{Action: "provision.plan", OK: a.OK, Host: b.Via, Detail: spec.Name + " " + spec.Type})
 	writeJSON(w, map[string]any{
 		"ok": a.OK, "dry_run": a.DryRun, "via": b.Via, "region": b.Region, "plan": a.Plan, "cost": a.Cost, "warnings": a.Warnings,
@@ -310,7 +319,7 @@ type jobAlternatives struct {
 
 func (s *Server) hubView(j *hubJob, after int, r *http.Request) hubJobView {
 	v := hubJobView{ID: j.ID, Via: j.Via, Name: j.Spec.Name, Op: j.Op, State: j.State, Dry: j.Dry, Attempt: j.Attempt, Class: j.Class, Zone: j.Zone, Msg: j.Msg,
-		Spec: j.Spec, Items: []provision.Item{}, Next: j.Next, Stages: provision.Stages, Offline: j.offline,
+		Spec: j.Spec, Items: []provision.Item{}, Next: j.Next, Stages: provision.StagesFor(j.Spec.Kind), Offline: j.offline,
 		Created: j.Created.UTC().Format(time.RFC3339), Superseded: j.Superseded, CSRFRefresh: s.csrfToken(r)}
 	for _, it := range j.Items {
 		if it.Seq > after {
@@ -386,7 +395,7 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request, via, region, 
 		return nil, 0, false
 	}
 	if !n.Preflight.DryRun {
-		if good, missing := credsOK(n.Preflight); !good {
+		if good, missing := credsOK(n.Preflight, spec.Kind); !good {
 			relErr(w, http.StatusConflict, "creds_missing", via+" cannot build now: "+strings.Join(missing, ", "))
 			return nil, 0, false
 		}

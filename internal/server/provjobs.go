@@ -328,7 +328,7 @@ func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, fu
 		defer m.mu.Unlock()
 		j.Next++
 		it.Seq, it.Attempt = j.Next, j.Attempt
-		if j.Op != opDestroy && !j.Dry && it.Kind == "event" && it.Stage == "instance" && it.State == "ok" {
+		if j.Op != opDestroy && !j.Dry && it.Kind == "event" && (it.Stage == "instance" || it.Stage == "sandbox") && it.State == "ok" {
 			// The instance exists from here on: it costs money, so it is on the books.
 			var est provision.Estimate
 			m.book.Add(j.Spec.Name, j.ID, j.Spec, j.Region, j.Cost, est)
@@ -446,6 +446,9 @@ func specErr(w http.ResponseWriter, err error) {
 // refusal in a real one: a cost that cannot be checked is not allowed to spend.
 func (s *Server) provCeiling(ctx context.Context, spec provision.Spec, region string) (cost *provision.Cost, warn string, err error) {
 	tool := s.cfg.Provision.Tool
+	if spec.Kind == provision.KindOpenShell {
+		return provision.SandboxCost(), "", nil // nothing here is priced, so no ceiling applies
+	}
 	if region == "" {
 		return nil, "the region was not given, so the cost could not be checked", s.ceilingUnknown("the region was not given")
 	}

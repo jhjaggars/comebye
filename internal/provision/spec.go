@@ -30,6 +30,12 @@ type Spec struct {
 	DestroyAfterHours int     `json:"destroy_after_hours"`
 }
 
+// Kinds a host can be of.
+const (
+	KindAWS       = "aws"
+	KindOpenShell = "openshell"
+)
+
 // Defaults the wizard starts from (accepted in the plan: spot by default,
 // stop after 2 h idle, destroy 3 days after, a $10 budget cap).
 const (
@@ -94,9 +100,14 @@ func ParseSpec(b []byte) (Spec, error) {
 // Validate checks every field against its range. A spec that passes can be
 // handed to the tool; the tool checks again against its config's ceilings.
 func (s *Spec) Validate() error {
+	switch s.Kind {
+	case KindOpenShell:
+		return s.validateSandbox()
+	case KindAWS:
+	default:
+		return bad("kind", "the kind is aws or openshell")
+	}
 	switch {
-	case s.Kind != "aws":
-		return bad("kind", "only aws can be built so far")
 	case !nameRe.MatchString(s.Name):
 		return bad("name", "the name is 2 to 30 lowercase letters, digits and dashes, starting with a letter")
 	case !typeRe.MatchString(s.Type):
@@ -126,8 +137,36 @@ func (s *Spec) Validate() error {
 	return nil
 }
 
-// JSON is the spec as the tool reads it (the same field names).
+// validateSandbox checks an OpenShell sandbox: it has a name, an idle stop and
+// a destroy-after, and nothing else (no machine, disks, zone, price or cap: the
+// worker tool refuses those fields for a sandbox, and so does this).
+func (s *Spec) validateSandbox() error {
+	switch {
+	case !nameRe.MatchString(s.Name):
+		return bad("name", "the name is 2 to 30 lowercase letters, digits and dashes, starting with a letter")
+	case s.Type != "" || s.Spot || s.Zone != "" || s.BootDiskGB != 0 || s.DataDiskGB != 0 || s.MaxRun != "" || s.BudgetCapUSD != 0:
+		return bad("kind", "a sandbox has no machine type, spot price, zone, disks, longest run or budget cap")
+	case s.IdleMinutes < MinIdle || s.IdleMinutes > MaxIdle:
+		return bad("idle_minutes", "stop after idle is %d to %d minutes", MinIdle, MaxIdle)
+	case s.DestroyAfterHours < 1 || s.DestroyAfterHours > MaxDestroyHrs:
+		return bad("destroy_after_hours", "destroy after is 1 to %d hours", MaxDestroyHrs)
+	}
+	return nil
+}
+
+// DefaultSandboxSpec is a sandbox spec with the defaults filled in.
+func DefaultSandboxSpec(name string) Spec {
+	return Spec{Kind: KindOpenShell, Name: name, IdleMinutes: DefaultIdleMinutes, DestroyAfterHours: DefaultDestroyHours}
+}
+
+// JSON is the spec as the tool reads it. A VM spec carries every field (an
+// absent one would leave the node config's value, spot among them); a sandbox
+// spec carries only the three it may have.
 func (s *Spec) JSON() []byte {
+	if s.Kind == KindOpenShell {
+		b, _ := json.Marshal(map[string]any{"kind": s.Kind, "name": s.Name, "idle_minutes": s.IdleMinutes, "destroy_after_hours": s.DestroyAfterHours})
+		return b
+	}
 	b, _ := json.Marshal(s)
 	return b
 }
@@ -153,9 +192,18 @@ type Cost struct {
 
 const hoursPerMonth = 730
 
+// SandboxCost is the "cost" of an OpenShell sandbox: none that comebye can
+// price. The gateway's own accounting, if any, is not read.
+func SandboxCost() *Cost {
+	return &Cost{Mode: "sandbox", Basis: "an OpenShell sandbox has no per-hour price here: it runs on the gateway's own capacity"}
+}
+
 // EstimateCost prices a spec from a catalog row: the lowest spot price (or the
 // on-demand price) plus the public IPv4 and the disks.
 func EstimateCost(s Spec, c *Catalog) (*Cost, error) {
+	if s.Kind == KindOpenShell {
+		return SandboxCost(), nil
+	}
 	if c == nil {
 		return nil, errors.New("no price list")
 	}

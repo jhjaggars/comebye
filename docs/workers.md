@@ -683,3 +683,26 @@ and `provision.auto_destroy` lines to its journal. The hub reads what the
 provisioners recorded and raises one to-do each for: 80% of a cap, a stop at the
 cap, an automatic destroy (done or failed), and a provisioner with live hosts
 that has not answered for 15 minutes. A restart of the hub does not raise them again.
+
+### OpenShell sandboxes from the app
+
+The Add host wizard offers a second kind, **OpenShell sandbox**, when the node's
+preflight says its gateway login works (`openshell` ok, plus the tailnet client; a
+sandbox needs no ssh key). A sandbox has no machine type, disks, zone, spot price or
+budget cap, so the spec holds only `kind`, `name`, `idle_minutes` and
+`destroy_after_hours` (the tool is handed exactly those four fields and refuses
+anything more), and the wizard's size step shows instead what the node will make it
+from, read from its own worker config through `preflight --json`: the gateway,
+workspace, image, the policy file's *name* (never its path), CPU and memory. The
+job is the same one a VM goes through (plan, journal, retry, clean-up) with the four
+sandbox stages (`sandbox`, `tailnet`, `settings`, `hub`); Destroy… and the destroy
+after stopped clock work as for a VM, and the sandbox's sessions are saved first.
+Nothing is priced: the Hosts list says "not priced" and the plan says there is no
+per-hour price.
+
+**No capacity figure.** The `openshell` CLI reports none (its `status`, `gateway
+info`, `sandbox list` and `whoami` show no quota or free capacity; `sandbox create`
+takes `--cpu` and `--memory` as the sandbox's own limits). A gateway that is full
+fails the create, and the failure shows the gateway's own error. This kind has been
+built against the tool's dry run and stand-in tests only; it has not been run
+against a live gateway.

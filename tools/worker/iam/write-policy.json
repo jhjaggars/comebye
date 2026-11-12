@@ -1,0 +1,196 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateNetworkAndDisksOnlyTaggedManagedBy",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateVpc",
+        "ec2:CreateInternetGateway",
+        "ec2:CreateSubnet",
+        "ec2:CreateRouteTable",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateVolume"
+      ],
+      "Resource": [
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:vpc/*",
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:internet-gateway/*",
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:subnet/*",
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:route-table/*",
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:security-group/*",
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:volume/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "PutASubnetRouteTableOrGroupInOurVpc",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateSubnet",
+        "ec2:CreateRouteTable",
+        "ec2:CreateSecurityGroup"
+      ],
+      "Resource": "arn:aws:ec2:us-east-1:ACCOUNT_ID:vpc/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "RunInstancesTaggedAndOnlyOfTheAllowedFamilies",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:us-east-1:ACCOUNT_ID:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/managed-by": "comebye-worker"
+        },
+        "StringLike": {
+          "ec2:InstanceType": [
+            "t3.*",
+            "t3a.*",
+            "t4g.*",
+            "m5.*",
+            "m6i.*",
+            "m6g.*",
+            "c5.*",
+            "c6i.*",
+            "r5.*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RunInstancesRootVolumeTagged",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:us-east-1:ACCOUNT_ID:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "RunInstancesItsNetworkInterfaceAndSpotRequest",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:network-interface/*",
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:spot-instances-request/*"
+      ]
+    },
+    {
+      "Sid": "RunInstancesIntoOurSubnetAndGroup",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:subnet/*",
+        "arn:aws:ec2:us-east-1:ACCOUNT_ID:security-group/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "TheDebianImages",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:us-east-1::image/*"
+    },
+    {
+      "Sid": "TagOnlyAtCreation",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:us-east-1:ACCOUNT_ID:*/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": [
+            "RunInstances",
+            "CreateVpc",
+            "CreateInternetGateway",
+            "CreateSubnet",
+            "CreateRouteTable",
+            "CreateSecurityGroup",
+            "CreateVolume"
+          ],
+          "aws:RequestTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "ChangeAndRemoveOnlyWhatCarriesTheTag",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances",
+        "ec2:AttachVolume",
+        "ec2:DeleteVolume",
+        "ec2:AttachInternetGateway",
+        "ec2:DetachInternetGateway",
+        "ec2:DeleteInternetGateway",
+        "ec2:CreateRoute",
+        "ec2:AssociateRouteTable",
+        "ec2:DisassociateRouteTable",
+        "ec2:DeleteRouteTable",
+        "ec2:DeleteSubnet",
+        "ec2:DeleteVpc",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:DeleteSecurityGroup"
+      ],
+      "Resource": "arn:aws:ec2:us-east-1:ACCOUNT_ID:*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "AttachAVolumeToAnInstanceAlsoNeedsTheInstance",
+      "Effect": "Allow",
+      "Action": "ec2:AttachVolume",
+      "Resource": "arn:aws:ec2:us-east-1:ACCOUNT_ID:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "CancelTheSpotRequestOfAnInstanceBeingDestroyed",
+      "Effect": "Allow",
+      "Action": "ec2:CancelSpotInstanceRequests",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadTheBootLogForTheHostKey",
+      "Effect": "Allow",
+      "Action": "ec2:GetConsoleOutput",
+      "Resource": "arn:aws:ec2:us-east-1:ACCOUNT_ID:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed-by": "comebye-worker"
+        }
+      }
+    },
+    {
+      "Sid": "TheSpotServiceLinkedRoleOnFirstUse",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "spot.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

@@ -785,3 +785,18 @@ func TestPreflightSaysWhereItMayBuild(t *testing.T) {
 		t.Errorf("%v %+v", err, d)
 	}
 }
+
+func TestPreflightOpenShellSaysWhatASandboxIsMadeFrom(t *testing.T) {
+	f := &fixtureAWS{dir: "testdata/aws"}
+	e, _ := pfEnv(t, f)
+	e.Cfg.OpenShellGateway, e.Cfg.OpenShellWorkspace, e.Cfg.SandboxImage = "homelab", "ws", "registry.example/sbx:{version}"
+	e.Cfg.SandboxPolicy, e.Cfg.SandboxCPU, e.Cfg.SandboxMemory = "/home/me/.config/comebye-worker/sandbox-policy.yaml", "2", "6Gi"
+	e.Run = &pfRunner{aws: f, osh: func() (string, error) { return `{"sandboxes":[]}`, nil }}
+	got := e.pfOpenShell(context.Background())
+	if got.State != "ok" || got.Gateway != "homelab" || got.Workspace != "ws" || got.Image != "registry.example/sbx:{version}" || got.Policy != "sandbox-policy.yaml" || got.CPU != "2" || got.Memory != "6Gi" {
+		t.Errorf("%+v", got)
+	}
+	if b, _ := json.Marshal(got); strings.Contains(string(b), "/home/me") {
+		t.Errorf("a path reached the answer: %s", b)
+	}
+}

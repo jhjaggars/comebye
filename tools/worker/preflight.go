@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -26,6 +27,13 @@ type pfCheck struct {
 	State   string `json:"state"`
 	Note    string `json:"note,omitempty"`
 	Gateway string `json:"gateway,omitempty"` // openshell only
+	// What a sandbox would be made from (settings, not credentials; openshell
+	// only): the app shows them in place of a size picker.
+	Workspace string `json:"workspace,omitempty"`
+	Image     string `json:"image,omitempty"`
+	Policy    string `json:"policy,omitempty"` // the policy file's name, not its path
+	CPU       string `json:"cpu,omitempty"`
+	Memory    string `json:"memory,omitempty"`
 }
 
 type pfDoc struct {
@@ -135,6 +143,16 @@ func (e *env) pfTailnet(ctx context.Context) pfCheck {
 }
 
 func (e *env) pfOpenShell(ctx context.Context) pfCheck {
+	pf := e.pfOpenShellState(ctx)
+	c := e.Cfg
+	pf.Workspace, pf.Image, pf.CPU, pf.Memory = c.OpenShellWorkspace, c.SandboxImage, c.SandboxCPU, c.SandboxMemory
+	if c.SandboxPolicy != "" {
+		pf.Policy = filepath.Base(c.SandboxPolicy)
+	}
+	return pf
+}
+
+func (e *env) pfOpenShellState(ctx context.Context) pfCheck {
 	c := e.Cfg
 	gw := c.OpenShellGateway
 	if c.OpenShellEndpoint != "" {

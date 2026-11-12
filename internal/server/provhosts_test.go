@@ -231,3 +231,122 @@ func TestACleanedUpFailedCreateEndsItsRecord(t *testing.T) {
 	waitJob(t, s, v.ID, jobCleaned)
 	waitUntil(t, "record ended", func() bool { h, _ := s.phosts.Get("demo1"); return h.Destroyed != nil })
 }
+
+// ---- the OpenShell kind ----
+
+const sandboxSpec = `{"kind":"openshell","name":"box1","idle_minutes":120,"destroy_after_hours":72}`
+
+func sandboxHub(t *testing.T, osState string) (*Server, *provPeer, *fakeWorkerDir, map[string]string) {
+	t.Helper()
+	s, prov, wk, hdr := hubSetup(t)
+	prov.peer.cfg.Provision.Tool.Real = true
+	pf := strings.Replace(string(mustRead(t, "../provision/testdata/preflight.json")), "us-east-2", "us-east-1", -1)
+	pf = strings.Replace(pf, `"openshell": {"state": "missing", "note": "no openshell gateway, workspace and image in the config"}`,
+		`"openshell": {"state": "`+osState+`", "note": "gateway answers", "gateway": "homelab", "workspace": "ws", "image": "registry.example/sbx:{version}", "policy": "sandbox-policy.yaml", "cpu": "2", "memory": "6Gi"}`, 1)
+	wk.set(t, "preflight.json", pf)
+	ev := ""
+	for i, st := range provision.SandboxStages {
+		ev += `{"v":1,"seq":` + string(rune('1'+i)) + `,"stage":"` + st + `","step":"` + string(rune('1'+i)) + `/4","state":"ok"}` + "\n"
+	}
+	wk.set(t, "create.events", ev)
+	wk.set(t, "create.stderr", "")
+	wk.set(t, "status.json", `{"v":1,"provider":"openshell","workers":[{"name":"box1","state":"RUNNING","type":"","managed":true,"launched_at":"`+time.Now().Add(-30*time.Minute).UTC().Format(time.RFC3339)+`","last_stop_at":null,"caps":{}}]}`)
+	tick(s)
+	do(s, "POST", "/api/provision/refresh", hdr, `{"what":"nodes"}`)
+	return s, prov, wk, hdr
+}
+
+func TestNodesOfferTheKindsTheirCredentialsAllow(t *testing.T) {
+	s, _, _, _ := sandboxHub(t, "ok")
+	var n nodesResp2
+	getJSON(t, s, "/api/provision/nodes", userHdr, &n)
+	got := map[string]kindView{}
+	for _, k := range n.Nodes[0].Kinds {
+		got[k.Kind] = k
+	}
+	if !got["aws"].OK || !got["openshell"].OK || n.Nodes[0].Preflight.OpenShell.Image == "" || n.Nodes[0].Preflight.OpenShell.Policy != "sandbox-policy.yaml" {
+		t.Errorf("kinds: %+v %+v", got, n.Nodes[0].Preflight.OpenShell)
+	}
+	s2, _, _, _ := sandboxHub(t, "expired")
+	getJSON(t, s2, "/api/provision/nodes", userHdr, &n)
+	for _, k := range n.Nodes[0].Kinds {
+		if k.Kind == "openshell" && (k.OK || !strings.Contains(k.Why, "openshell expired")) {
+			t.Errorf("an expired gateway login is offered: %+v", k)
+		}
+	}
+}
+
+type nodesResp2 struct {
+	Nodes []struct {
+		Name      string               `json:"name"`
+		Kinds     []kindView           `json:"kinds"`
+		Preflight *provision.Preflight `json:"preflight"`
+	} `json:"nodes"`
+}
+
+func TestASandboxIsPlannedBuiltAndDestroyedThroughTheSamePath(t *testing.T) {
+	s, _, wk, hdr := sandboxHub(t, "ok")
+	rec := do(s, "POST", "/api/provision/plan", hdr, `{"spec":`+sandboxSpec+`}`)
+	var pl struct {
+		OK    bool            `json:"ok"`
+		Ready bool            `json:"ready"`
+		Cost  *provision.Cost `json:"cost"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &pl)
+	if rec.Code != 200 || !pl.OK || !pl.Ready || pl.Cost == nil || pl.Cost.Mode != "sandbox" || pl.Cost.USDHour != 0 {
+		t.Fatalf("plan = %d %s", rec.Code, rec.Body)
+	}
+	// the tool is handed only the three fields a sandbox may have
+	if b := mustRead(t, wk.dir+"/spec.in"); false {
+		_ = b
+	}
+	rec = do(s, "POST", "/api/provision", hdr, `{"spec":`+sandboxSpec+`,"key":"sandbox-key-1","ack":true}`)
+	var v hubJobResp
+	json.Unmarshal(rec.Body.Bytes(), &v)
+	if rec.Code != 202 || v.Dry {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body)
+	}
+	var stages struct {
+		Stages []string `json:"stages"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &stages)
+	if strings.Join(stages.Stages, ",") != "sandbox,tailnet,settings,hub" {
+		t.Errorf("stages: %v", stages.Stages)
+	}
+	hubWait(t, s, v.ID, jobOK)
+	if in := string(mustRead(t, wk.dir+"/spec.in")); in != `{"destroy_after_hours":72,"idle_minutes":120,"kind":"openshell","name":"box1"}` {
+		t.Errorf("the tool read: %s", in)
+	}
+	var h hostsResp
+	getJSON(t, s, "/api/provision/hosts?refresh=1", userHdr, &h)
+	if len(h.Hosts) != 1 || h.Hosts[0].Kind != "openshell" || h.Hosts[0].Mode != "sandbox" || h.Hosts[0].Spend.USD != 0 || h.Hosts[0].State != "running" {
+		t.Fatalf("host: %+v", h.Hosts)
+	}
+	// a stopped sandbox is destroyed after its wait just like a VM; destroy goes through the same job
+	rec = do(s, "POST", "/api/provision/hosts/box1/destroy", hdr, `{"confirm":"box1"}`)
+	var j hubJobResp
+	json.Unmarshal(rec.Body.Bytes(), &j)
+	if rec.Code != 202 {
+		t.Fatalf("destroy = %d %s", rec.Code, rec.Body)
+	}
+	hubWait(t, s, j.ID, jobOK)
+	if !strings.Contains(strings.Join(wk.argvLines(), "\n"), "destroy box1 --yes --events") {
+		t.Errorf("argv: %v", wk.argvLines())
+	}
+}
+
+func TestASandboxNeedsTheGatewayLoginNotAnAWSOne(t *testing.T) {
+	s, _, wk, hdr := sandboxHub(t, "expired")
+	rec := do(s, "POST", "/api/provision", hdr, `{"spec":`+sandboxSpec+`,"key":"sandbox-key-2","ack":true}`)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "openshell expired") {
+		t.Errorf("create with an expired gateway login = %d %s", rec.Code, rec.Body)
+	}
+	if wk.runs("create") != 0 {
+		t.Error("the tool ran")
+	}
+	// a VM spec still needs aws, not the gateway: it is not held back by it
+	rec = do(s, "POST", "/api/provision/plan", hdr, `{"spec":`+okSpec+`,"region":"us-east-1"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"ready":true`) {
+		t.Errorf("a VM plan: %d %s", rec.Code, rec.Body)
+	}
+}

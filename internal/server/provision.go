@@ -175,8 +175,36 @@ func (s *Server) provCall(ctx context.Context, host, op string, q url.Values) (i
 	return s.fleet.CallHost(ctx, host, op, q, nil)
 }
 
+// kindView says whether a node can build one kind of host now, and why not.
+type kindView struct {
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	OK    bool   `json:"ok"`
+	Why   string `json:"why,omitempty"`
+}
+
+// nodeKinds is what a node can build, from its preflight: a kind is offered
+// when its own login and the tailnet client are present (a VM also needs its
+// ssh key); a dry-run node offers every kind it is set up for.
+func nodeKinds(pf *provision.Preflight) []kindView {
+	if pf == nil {
+		return nil
+	}
+	var out []kindView
+	for _, k := range []struct{ kind, label string }{{provision.KindAWS, "AWS spot or on-demand VM"}, {provision.KindOpenShell, "OpenShell sandbox"}} {
+		ok, miss := credsOK(pf, k.kind)
+		v := kindView{Kind: k.kind, Label: k.label, OK: ok || pf.DryRun}
+		if !v.OK {
+			v.Why = strings.Join(miss, ", ")
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 type provNodeView struct {
 	Name      string               `json:"name"`
+	Kinds     []kindView           `json:"kinds,omitempty"`
 	Default   bool                 `json:"default"`
 	State     string               `json:"state"` // ok, offline, error
 	Error     string               `json:"error,omitempty"`
@@ -287,6 +315,7 @@ func (s *Server) provNodes(ctx context.Context, force bool) []provNodeView {
 				return
 			}
 			v.State, v.Preflight, v.Error = "ok", n.Preflight, n.Err
+			v.Kinds = nodeKinds(n.Preflight)
 			if n.Err != "" {
 				v.State = "offline"
 				if up[h] {
@@ -329,7 +358,7 @@ func (s *Server) writeNodes(w http.ResponseWriter, r *http.Request, force bool) 
 		"default": s.cfg.Provision.Host,
 		"nodes":   nodes,
 		"csrf":    s.csrfToken(r),
-		"kinds":   []string{"aws"},
+		"kinds":   []string{provision.KindAWS, provision.KindOpenShell},
 	})
 }
 
