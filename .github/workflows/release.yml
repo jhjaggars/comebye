@@ -2,12 +2,27 @@ name: Release
 
 # Push a tag like v0.1.0 to build binaries and publish a GitHub release:
 #   git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
-# The tagged commit is vetted and tested again here (a tag need not be on a
-# commit CI passed), so a broken tag publishes nothing.
+# The tagged commit must have a green CI run (the merge tier tests everything on push) and the last nightly must
+# be green and under 36 hours old (tools/ci/releasegate.sh). A tag need not be on a commit CI passed: with no green
+# run for the commit, this workflow tests it itself, so a broken tag still publishes nothing.
+#
+# To release past a red or stale nightly (a hotfix), run this workflow by hand from the Actions tab with the tag
+# and force set; the override is logged as a warning on the run.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to release (it must already exist)"
+        required: true
+        type: string
+      force:
+        description: "Release past a red or stale nightly (a hotfix)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -17,11 +32,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release and upload its assets
+      actions: read   # read the CI and nightly runs for the gate
+    env:
+      VERSION: ${{ inputs.tag || github.ref_name }}
     steps:
       # Third-party actions are pinned by commit; the comment names the
       # release it was resolved from.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
       # go.mod's toolchain line picks the exact Go release.
@@ -29,37 +48,31 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: gate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: tools/ci/releasegate.sh "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Only when CI has not already tested this commit.
       - name: go vet
+        if: steps.gate.outputs.tested != 'true'
         run: go vet ./...
 
       - name: go test
+        if: steps.gate.outputs.tested != 'true'
         run: go test -race ./...
 
       # Static, reproducible-ish binaries: no cgo, no local paths, the tag
       # stamped in as the version (comebye -version). Archive names carry
       # no version, so releases/latest/download/<name> is a stable URL.
       - name: build
-        env:
-          VERSION: ${{ github.ref_name }}
-        run: |
-          mkdir -p dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            os=${target%/*} arch=${target#*/}
-            name="comebye_${os}_${arch}"
-            mkdir -p "build/$name"
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
-              -ldflags "-s -w -X main.version=$VERSION" \
-              -o "build/$name/comebye" .
-            cp LICENSE README.md deploy/comebye.service "build/$name/"
-            tar -C build -czf "dist/$name.tar.gz" "$name"
-          done
-          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
-          cat dist/SHA256SUMS
+        run: tools/ci/crossbuild.sh "$VERSION" dist
 
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
         run: |
           gh release create "$VERSION" dist/* \
             --repo "$GITHUB_REPOSITORY" \
