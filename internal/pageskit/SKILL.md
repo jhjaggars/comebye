@@ -68,12 +68,22 @@ type. Replace the example content, and keep the template's two pieces:
    `<title>` that names the page in two to five words. The title is a name,
    not a summary ("Garage failover drill", not "Report: what happened when
    we tested failover").
-2. **Colours come only from the tokens.** Use `var(--bg)`, `--panel`,
+2. **Colours come only from the tokens, and sizes from the scales.** Use `var(--bg)`, `--panel`,
    `--panel2`, `--border`, `--text`, `--muted`, the accents (`--blue`,
    `--green`, `--orange`, `--red`, `--purple`, `--yellow`, `--teal`),
    `--on-accent`, `--code-bg` and `--code-text`, the chips (`--chip-blue`,
    `--chip-green`, `--chip-red`, `--chip-yellow`, `--chip-purple`), `--th-bg`,
    `--mark-bg`, and `--sh-md` / `--sh-lg` for shadows.
+   - Sizes use the app's scales too: `var(--sp-4 … --sp-32)` for padding,
+     margin and gap, `var(--r-4 … --r-16)` / `--r-pill` for radius,
+     `var(--fs-11 … --fs-24)` for font size, `--hit-32 … --hit-48` for the
+     height of anything clickable, `--elev-1` / `--elev-2` for shadows, and
+     `var(--ring)` for a focus outline (the template already sets one
+     `:focus-visible` rule). Write the token, not the number.
+   - The template ships the app's components: `.chip` (+ `green red yellow
+     orange purple teal muted`), `.card` (+ `attn bad good`), `.btn` (+ `sm
+     primary warn danger`), `.seg` (a row of `button`s, `aria-pressed` on the
+     chosen one) and `.callout`. Use them instead of styling your own.
    - Never write a literal colour in a rule, an SVG `fill` or a script.
    - Use the accents by meaning: green is ok, red is an error or blocked,
      orange needs the user, yellow is a warning or draft, blue is the primary

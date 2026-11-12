@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -313,5 +314,69 @@ func TestInstallLeavesSymlinksAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(mine, recordName)); !os.IsNotExist(err) {
 		t.Fatal("wrote a record into the linked directory")
+	}
+}
+
+// The page template shares the app's design tokens: the non-colour scales
+// (space, radius, type, hit size, elevation, ring) must be the same numbers as
+// web/index.html's :root, and the template's own rules must use them.
+func TestTemplateSharesTheAppScales(t *testing.T) {
+	app := read(t, "../../web/index.html")
+	root := app[strings.Index(app, ":root {"):]
+	root = root[:strings.Index(root, "\n    }")]
+	scale := regexp.MustCompile(`--((?:sp|r|fs|hit)-[a-z0-9]+|elev-\d|ring-off):\s*([^;]+);`)
+	want := map[string]string{}
+	for _, m := range scale.FindAllStringSubmatch(root, -1) {
+		want[m[1]] = strings.TrimSpace(m[2])
+	}
+	if len(want) < 35 {
+		t.Fatalf("parsed only %d scale tokens from web/index.html", len(want))
+	}
+	got := map[string]string{}
+	for _, m := range scale.FindAllStringSubmatch(template, -1) {
+		got[m[1]] = strings.TrimSpace(m[2])
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("--%s: template %q, app %q", k, got[k], v)
+		}
+	}
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("template has --%s, the app does not", k)
+		}
+	}
+	if !strings.Contains(template, "--ring: 2px solid var(--focus)") || !strings.Contains(template, ":focus-visible { outline: var(--ring)") {
+		t.Error("template: no shared focus ring")
+	}
+	// The template's own rules write tokens, not numbers that are on the scale or within 1px of a step
+	// (a device frame's 28px radius or a 28px hero figure is its own size, so it is fine).
+	nearStep := func(kind string, px float64) bool {
+		steps := map[string][]float64{"border-radius": {2, 4, 6, 8, 10, 12, 14, 16}, "font-size": {11, 12, 13, 14, 15, 16, 18, 20, 22, 24}}[kind]
+		for _, st := range steps {
+			if px-st <= 1 && st-px <= 1 {
+				return true
+			}
+		}
+		return false
+	}
+	css := template[strings.Index(template, "* { box-sizing"):strings.Index(template, "</style>")]
+	lit := regexp.MustCompile(`(border-radius|font-size):\s*(\d+(?:\.\d+)?)px`)
+	for _, m := range lit.FindAllStringSubmatch(css, -1) {
+		if px, _ := strconv.ParseFloat(m[2], 64); !nearStep(m[1], px) {
+			continue
+		}
+		t.Errorf("template: %s: %spx is a literal; use the scale token", m[1], m[2])
+	}
+	// Every starter's own CSS too.
+	for _, typ := range Types {
+		src, _ := starters.ReadFile("starters/" + typ + ".html")
+		own := string(src)[:strings.Index(string(src), "<!-- body -->")]
+		for _, m := range lit.FindAllStringSubmatch(own, -1) {
+			if px, _ := strconv.ParseFloat(m[2], 64); !nearStep(m[1], px) {
+				continue
+			}
+			t.Errorf("starter %s: %s: %spx is a literal; use the scale token", typ, m[1], m[2])
+		}
 	}
 }

@@ -85,3 +85,11 @@ A control adds only its own sizing (`.us-seg` is the dense 36px one). The underl
 *Stacking:* `--z-raised 2, pop 5, bar 10, pill 15, view 30, backdrop 34, menu 35, popup 36, sheet 37, screen 40, scrim 70, toast 100, toast-over 101`.
 A two-digit literal `z-index` is a ratchet failure (`z.literal`).
 *Notice:* `#toast`, `.rtr-banner` and the briefing card (`.br-card`) share one 12px surface; `.notice.info|warn|err` sets the edge colour (and the warn tint).
+
+### Shared with Pages (slice 7)
+
+`internal/pageskit/template.html` (the Pages template and the four starters) now carries the same non-colour scales in a second `:root` block,
+the one `:focus-visible` rule, and the app's `.chip` (radius 6, 12px size), `.card`, `.btn`, `.seg` and `.callout`. `TestTemplateSharesTheAppScales`
+fails if the template's `--sp-/--r-/--fs-/--hit-/--elev-/--ring-off` values drift from `web/index.html`, or if the template or a starter writes a
+radius or font size that is on, or within 1px of, a scale step as a literal. The component reference is a Page (title "Design language components").
+Not shared (they need the app's scripts): the bottom sheet, toast, banner and rows.

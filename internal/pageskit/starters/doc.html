@@ -1,9 +1,9 @@
 /* doc: a plan, review or report. The template's .hero, .md, .tablewrap, .callout and .chip do most of the work. */
-.decisions { list-style: none; padding: 0; margin: 0 0 1em; display: flex; flex-direction: column; gap: 10px; counter-reset: d; }
-.decisions > li { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 0; }
+.decisions { list-style: none; padding: 0; margin: 0 0 1em; display: flex; flex-direction: column; gap: var(--sp-10); counter-reset: d; }
+.decisions > li { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-10); padding: var(--sp-12) var(--sp-14); margin: 0; }
 .decisions > li > b::before { counter-increment: d; content: counter(d) ". "; color: var(--blue); }
-.decisions ol { margin: 6px 0; }
-.rec { font: 600 13px var(--mono); color: var(--green); }
+.decisions ol { margin: var(--sp-6) 0; }
+.rec { font: 600 var(--fs-13) var(--mono); color: var(--green); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 <!-- body -->
 <div class="wrap">

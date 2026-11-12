@@ -1,35 +1,35 @@
 /* mockup: proposed UI as real HTML/CSS, framed and labelled, with numbered callouts. */
 .wrap { max-width: 1080px; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.mock { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; box-shadow: 0 8px 28px var(--sh-md); margin: 0 0 12px; }
-.mock-cap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
+.mock { border: 1px solid var(--border); border-radius: var(--r-14); background: var(--panel); overflow: hidden; box-shadow: 0 8px 28px var(--sh-md); margin: 0 0 var(--sp-12); }
+.mock-cap { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; justify-content: space-between; padding: var(--sp-8) var(--sp-12); border-bottom: 1px dashed var(--border); font-size: var(--fs-13); color: var(--muted); }
 .mock-cap b { color: var(--text); }
-.tag { font: 700 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; background: var(--chip-purple); color: var(--purple); padding: 2px 7px; border-radius: 5px; }
+.tag { font: 700 var(--fs-11) var(--mono); letter-spacing: .08em; text-transform: uppercase; background: var(--chip-purple); color: var(--purple); padding: var(--sp-2) var(--sp-8); border-radius: var(--r-6); }
 .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.screen { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 380px; min-width: 760px; font-size: 13px; }
-.side { background: var(--bg); border-right: 1px solid var(--border); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.search { border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; color: var(--muted); background: var(--panel2); }
-.item { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel); display: flex; flex-direction: column; gap: 2px; }
+.screen { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 380px; min-width: 760px; font-size: var(--fs-13); }
+.side { background: var(--bg); border-right: 1px solid var(--border); padding: var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-8); }
+.search { border: 1px solid var(--border); border-radius: var(--r-10); padding: var(--sp-8) var(--sp-10); color: var(--muted); background: var(--panel2); }
+.item { border: 1px solid var(--border); border-radius: var(--r-10); padding: var(--sp-8) var(--sp-10); background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-2); }
 .item.cur { border-color: var(--blue); }
 .item small { color: var(--muted); }
 .detail { display: flex; flex-direction: column; min-width: 0; }
-.bar { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: var(--panel); }
-.bar h3 { margin: 0 auto 0 0; font-size: 15px; }
-.btn { font: 600 12.5px var(--sans); border: 1px solid var(--border); background: var(--btn-bg); color: var(--text); border-radius: 9px; padding: 5px 10px; min-height: 30px; cursor: pointer; }
+.bar { padding: var(--sp-10) var(--sp-12); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: var(--sp-6); align-items: center; background: var(--panel); }
+.bar h3 { margin: 0 auto 0 0; font-size: var(--fs-15); }
+.btn { font: 600 var(--fs-13) var(--sans); border: 1px solid var(--border); background: var(--btn-bg); color: var(--text); border-radius: var(--r-10); padding: var(--sp-6) var(--sp-10); min-height: 30px; cursor: pointer; }
 .btn.pri { background: var(--blue); color: var(--on-accent); border-color: transparent; }
 .btn[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
-.body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-.panel { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
-.num { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--orange); color: var(--on-orange); font: 800 10.5px var(--mono); flex: none; }
-.notes { list-style: none; padding: 0; margin: 0 0 1.4em; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 18px; }
-.notes li { display: flex; gap: 8px; margin: 0; min-width: 0; }
+.body { padding: var(--sp-14); display: flex; flex-direction: column; gap: var(--sp-10); }
+.panel { border: 1px solid var(--border); border-radius: var(--r-10); padding: var(--sp-10) var(--sp-12); background: var(--panel2); }
+.num { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--orange); color: var(--on-orange); font: 800 var(--fs-11) var(--mono); flex: none; }
+.notes { list-style: none; padding: 0; margin: 0 0 1.4em; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-8) 18px; }
+.notes li { display: flex; gap: var(--sp-8); margin: 0; min-width: 0; }
 .pair { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
 .pair > * { min-width: 0; }
-.phone { width: 300px; max-width: 100%; border: 1px solid var(--border); border-radius: 28px; padding: 10px; background: var(--panel2); box-shadow: 0 8px 28px var(--sh-md); }
-.phone-screen { border-radius: 20px; overflow: hidden; background: var(--bg); border: 1px solid var(--border); font-size: 12.5px; display: flex; flex-direction: column; }
-.phone-head { display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
-.phone-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.wire { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 8px; }
+.phone { width: 300px; max-width: 100%; border: 1px solid var(--border); border-radius: 28px; padding: var(--sp-10); background: var(--panel2); box-shadow: 0 8px 28px var(--sh-md); }
+.phone-screen { border-radius: 20px; overflow: hidden; background: var(--bg); border: 1px solid var(--border); font-size: var(--fs-13); display: flex; flex-direction: column; }
+.phone-head { display: flex; gap: var(--sp-8); align-items: center; padding: var(--sp-10) var(--sp-12); background: var(--panel); border-bottom: 1px solid var(--border); }
+.phone-body { padding: var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-8); }
+.wire { border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel); padding: var(--sp-8); }
 .wire svg { display: block; width: 100%; height: auto; }
 <!-- body -->
 <div class="wrap">

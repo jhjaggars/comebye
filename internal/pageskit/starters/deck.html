@@ -2,20 +2,20 @@
 .wrap { max-width: 1000px; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .deck { display: flex; flex-direction: column; gap: 22px; counter-reset: s; }
-.slide { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 6px 22px var(--sh-md);
-  padding: clamp(18px, 4vw, 44px); padding-bottom: clamp(36px, 5vw, 52px); display: flex; flex-direction: column; justify-content: center; gap: 14px; min-width: 0; scroll-margin-top: 16px; }
+.slide { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-14); box-shadow: 0 6px 22px var(--sh-md);
+  padding: clamp(18px, 4vw, 44px); padding-bottom: clamp(36px, 5vw, 52px); display: flex; flex-direction: column; justify-content: center; gap: var(--sp-14); min-width: 0; scroll-margin-top: var(--sp-16); }
 @media (min-width: 700px) { .slide { aspect-ratio: 16 / 9; } }
-.slide::after { counter-increment: s; content: counter(s); position: absolute; right: 16px; bottom: 12px; font: 600 12px var(--mono); color: var(--muted); }
+.slide::after { counter-increment: s; content: counter(s); position: absolute; right: 16px; bottom: 12px; font: 600 var(--fs-12) var(--mono); color: var(--muted); }
 .slide h2 { margin: 0; font-size: clamp(22px, 3.4vw, 36px); line-height: 1.15; border: 0; padding: 0; }
 .slide p, .slide li { font-size: clamp(15px, 1.9vw, 20px); margin: 0; max-width: 60ch; }
-.slide ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.slide ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: var(--sp-6); }
 .slide.title { background: var(--chip-blue); }
 .slide.title h2 { font-size: clamp(28px, 5vw, 52px); }
-.kicker { font: 600 12px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--blue); }
+.kicker { font: 600 var(--fs-12) var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--blue); }
 .big { font-size: clamp(40px, 8vw, 88px); font-weight: 750; line-height: 1; color: var(--green); font-variant-numeric: tabular-nums; }
-.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
-.cols > div { background: var(--panel2); border-radius: 10px; padding: 12px 14px; min-width: 0; }
-.hint { color: var(--muted); font-size: 13px; text-align: center; margin: 12px 0 0; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--sp-14); }
+.cols > div { background: var(--panel2); border-radius: var(--r-10); padding: var(--sp-12) var(--sp-14); min-width: 0; }
+.hint { color: var(--muted); font-size: var(--fs-13); text-align: center; margin: var(--sp-12) 0 0; }
 <!-- body -->
 <div class="wrap">
 <main class="deck md" id="deck">
