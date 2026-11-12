@@ -636,7 +636,7 @@ func (a *Archiver) parseGroup(o Opener, g *group) (*Parsed, error) {
 				continue
 			}
 		}
-	case "pi":
+	case "pi", "opencode": // mirrored OpenCode sessions are in Pi's format
 		if err := p.ParsePi(&main); err != nil {
 			return nil, err
 		}

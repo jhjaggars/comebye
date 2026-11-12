@@ -475,3 +475,30 @@ func TestClaudeLatestThinking(t *testing.T) {
 		t.Fatalf("a new user turn should clear thinking: %+v", tr.Thinking)
 	}
 }
+
+// An OpenCode agent's session id (herdr reports it as an id) resolves to the
+// mirrored file <mirror>/<slug>/<id>.jsonl.
+func TestSessionPathOpencodeMirror(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_e2e77bc70ffeS3b6deA1gr5A20"
+	p := filepath.Join(dir, "-work-a", id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &Resolver{OpencodeDir: dir}
+	a := herdr.AgentInfo{PaneID: "p1", Agent: "opencode", AgentSession: &herdr.AgentSessionInfo{Kind: "id", Agent: "opencode", Value: id}}
+	if got, err := r.SessionPath(a, nil); err != nil || got != p {
+		t.Fatalf("%q %v", got, err)
+	}
+	a.AgentSession.Value = "ses_notmirrored1234"
+	if _, err := r.SessionPath(a, nil); !errors.Is(err, ErrNoSession) {
+		t.Errorf("not mirrored yet: %v", err)
+	}
+	a.AgentSession.Value = "../../etc/x"
+	if _, err := r.SessionPath(a, nil); !errors.Is(err, ErrNoSession) {
+		t.Errorf("bad id: %v", err)
+	}
+}

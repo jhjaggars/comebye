@@ -210,6 +210,20 @@ func TestPiSessions(t *testing.T) {
 	}
 }
 
+// Mirrored OpenCode sessions: Pi's format, named <session id>.jsonl.
+func TestOpencodeSessions(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "-home-u-work", "ses_abcdefgh12.jsonl"),
+		`{"type":"session","version":3,"id":"ses_abcdefgh12","timestamp":"2026-11-05T10:00:00.000Z","cwd":"/home/u/work"}`+"\n"+
+			`{"type":"message","id":"a","timestamp":"2026-11-05T10:01:00.000Z","message":{"role":"assistant","provider":"opencode","model":"big-pickle","usage":{"input":100,"output":10,"cacheRead":50,"cacheWrite":0}}}`+"\n")
+	st := newStore(t)
+	scan(t, st, Source{Kind: "opencode", Root: dir})
+	s := session(t, st, "opencode", "ses_abcdefgh12")
+	if s.Cwd != "/home/u/work" || s.Total() != (Tokens{In: 100, Out: 10, CR: 50, Calls: 1}) || s.Rows[0].M != "opencode/big-pickle" {
+		t.Fatalf("%+v", s)
+	}
+}
+
 func TestStoresCountsAndLabelsNeverText(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "p", "s.jsonl"), cl("a", "2026-11-05T10:00:00Z", "m", 1, 1, 0, 0, ""))

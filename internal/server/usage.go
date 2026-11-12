@@ -242,8 +242,9 @@ func (s *Server) usageLabeler() func(host, home string, sess *usage.Session) usa
 }
 
 func usageKindOf(agent string) string {
-	if agent == "pi" {
-		return "pi"
+	switch agent {
+	case "pi", "opencode":
+		return agent
 	}
 	return "claude"
 }

@@ -36,6 +36,10 @@ import (
 
 // Config configures the HTTP server.
 type Config struct {
+	// OpencodeDir is where OpenCode sessions are mirrored as files (default
+	// under the state directory); see internal/opencode.
+	OpencodeDir string
+
 	// Version is the binary's release version (comebye -version); every
 	// API response carries it in X-Comebye-Version, so `comebye upgrade`
 	// can tell the restarted service runs the binary it installed.
@@ -738,6 +742,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown agent", http.StatusNotFound)
 		return
 	}
+	s.syncOpencode(r.Context(), *agent, false)
 	path, err := transcript.SessionPath(*agent, s.manager.Agents())
 	if err != nil {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": err.Error()})

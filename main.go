@@ -38,6 +38,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/scratch"
 	"github.com/jhjaggars/comebye/internal/server"
 	"github.com/jhjaggars/comebye/internal/state"
+	"github.com/jhjaggars/comebye/internal/transcript"
 	"github.com/jhjaggars/comebye/internal/tsauth"
 	"github.com/jhjaggars/comebye/internal/usage"
 )
@@ -365,7 +366,7 @@ func main() {
 	acfg := archive.Config{
 		Encryption: *archiveEnc, Dir: *archiveDir, Recipient: *archiveRcpt, Host: *hostName,
 		S3: *archiveS3, S3Credentials: *archiveS3Cr, S3Region: getenv("COMEBYE_ARCHIVE_S3_REGION"), S3Plaintext: getenv("COMEBYE_ARCHIVE_S3_PLAINTEXT"),
-		ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR"),
+		ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR"), OpencodeDir: getenv("COMEBYE_OPENCODE_MIRROR_DIR"),
 	}
 	if acfg.Configured() {
 		var err error
@@ -446,6 +447,7 @@ func main() {
 		Version:        buildVersion(),
 		Archive:        arch,
 		ArchiveSources: acfg.Sources(),
+		OpencodeDir:    acfg.OpencodeDir,
 		Usage:          server.UsageConfig{Off: !*usageOn, Interval: *usageEvery, Sources: usageSources(acfg.Sources())},
 		RecallIndex:    (&archive.Config{Index: *recallIndex}).IndexPath(),
 		Addr:           *addr,
@@ -497,7 +499,9 @@ func main() {
 		go announceToHub(upstream, localAPI, *hostName, *announceURL)
 	}
 	go srv.RunLedger(context.Background())
+	transcript.DefaultResolver.OpencodeDir = acfg.OpencodeDir
 	go srv.RunUsage(context.Background())
+	go srv.RunOpencodeMirror(context.Background())
 	go srv.RunAutoTodo(context.Background())
 	go srv.RunReleaseSweep(context.Background())
 	go srv.RunProvision(context.Background())

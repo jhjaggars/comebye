@@ -38,6 +38,7 @@ func archiveFlags(e *Env, fs *flag.FlagSet) *archive.Config {
 	fs.StringVar(&c.Identity, "identity", env("COMEBYE_ARCHIVE_IDENTITY"), "age identity file, needed to read the archive back (COMEBYE_ARCHIVE_IDENTITY)")
 	fs.StringVar(&c.ClaudeDir, "claude-dir", env("COMEBYE_ARCHIVE_CLAUDE_DIR"), "Claude Code projects dir (default ~/.claude/projects)")
 	fs.StringVar(&c.PiDir, "pi-dir", env("COMEBYE_ARCHIVE_PI_DIR"), "pi sessions dir (default ~/.pi/agent/sessions)")
+	fs.StringVar(&c.OpencodeDir, "opencode-dir", env("COMEBYE_OPENCODE_MIRROR_DIR"), "where OpenCode sessions are mirrored as files (default ~/.local/state/comebye/opencode-sessions)")
 	fs.StringVar(&c.Index, "index", env("COMEBYE_RECALL_INDEX"), "index file (default ~/.local/state/comebye/recall/index.db)")
 	fs.StringVar(&c.Host, "host", env("COMEBYE_HOST_NAME"), "the host's name in archive keys (default this machine's short hostname; a worker's is NAME.INSTANCE_ID, shown by `comebye recall`)")
 	return c
@@ -738,7 +739,7 @@ func oneLine(s string, n int) string {
 }
 
 func shortID(kind, id string) string {
-	if kind == "pi" {
+	if kind == "pi" || kind == "opencode" {
 		if _, after, ok := strings.Cut(id, "_"); ok {
 			id = after
 		}

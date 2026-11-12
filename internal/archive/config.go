@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jhjaggars/comebye/internal/opencode"
 )
 
 // Config says where the archive is and how it is encrypted. The CLI reads
@@ -37,7 +39,10 @@ type Config struct {
 	Identity  string // AGE-SECRET-KEY-1... (or an unencrypted OpenSSH key), or a file holding it
 	ClaudeDir string // default $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects
 	PiDir     string // default ~/.pi/agent/sessions
-	Index     string // default ~/.local/state/comebye/recall/index.db
+	// OpencodeDir is where OpenCode sessions are mirrored as files (see
+	// internal/opencode); default under comebye's state directory.
+	OpencodeDir string
+	Index       string // default ~/.local/state/comebye/recall/index.db
 }
 
 // ErrNotConfigured means no archive location was given.
@@ -85,7 +90,11 @@ func (c Config) Sources() []Source {
 	if pi == "" {
 		pi = "~/.pi/agent/sessions"
 	}
-	return []Source{{Kind: "claude", Root: expand(claude)}, {Kind: "pi", Root: expand(pi)}}
+	oc := c.OpencodeDir
+	if oc == "" {
+		oc = opencode.DefaultDir()
+	}
+	return []Source{{Kind: "claude", Root: expand(claude)}, {Kind: "pi", Root: expand(pi)}, {Kind: opencode.Kind, Root: expand(oc)}}
 }
 
 // IndexPath is where the (plaintext) index lives.

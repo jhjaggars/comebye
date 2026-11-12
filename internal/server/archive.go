@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -28,6 +29,9 @@ func (s *Server) archiveFlush(agent *herdr.AgentInfo, live []herdr.AgentInfo) st
 		kind = "claude"
 	case "pi":
 		kind = "pi"
+	case "opencode":
+		kind = "opencode"
+		s.syncOpencode(context.Background(), *agent, true)
 	default:
 		return ""
 	}

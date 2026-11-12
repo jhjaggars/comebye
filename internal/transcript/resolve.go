@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,6 +22,11 @@ var ErrAmbiguousSession = errors.New("several Claude Code agents share this dire
 // claudeAgent is herdr's agent id for Claude Code.
 const claudeAgent = "claude"
 
+// opencodeAgent is herdr's agent id for OpenCode.
+const opencodeAgent = "opencode"
+
+var opencodeIDRe = regexp.MustCompile(`^ses_[A-Za-z0-9]{8,64}$`)
+
 // maxSlugLen is where Claude Code truncates long project directory names
 // (it then appends a hash suffix this package does not reproduce).
 const maxSlugLen = 200
@@ -30,6 +36,10 @@ type Resolver struct {
 	// ProjectsDir is Claude Code's projects directory. Empty means
 	// $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects.
 	ProjectsDir string
+	// OpencodeDir is where OpenCode sessions are mirrored as files (see
+	// internal/opencode). Empty means the default under comebye's state
+	// directory.
+	OpencodeDir string
 }
 
 // DefaultResolver is used by SessionPath.
@@ -127,6 +137,12 @@ func (r *Resolver) reported(a herdr.AgentInfo) (string, bool) {
 	case "path":
 		return s.Value, true
 	case "id":
+		if a.Agent == opencodeAgent || s.Agent == opencodeAgent {
+			if p := r.opencodeSessionByID(s.Value); p != "" {
+				return p, true
+			}
+			return "", false
+		}
 		if a.Agent != claudeAgent && s.Agent != claudeAgent {
 			return "", false
 		}
@@ -135,6 +151,35 @@ func (r *Resolver) reported(a herdr.AgentInfo) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// opencodeSessionByID finds the mirrored file of an OpenCode session:
+// <mirror>/<slug>/<id>.jsonl.
+func (r *Resolver) opencodeSessionByID(id string) string {
+	if !opencodeIDRe.MatchString(id) {
+		return ""
+	}
+	dir := r.OpencodeDir
+	if dir == "" {
+		dir = DefaultOpencodeDir()
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "*", id+".jsonl"))
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
+}
+
+// DefaultOpencodeDir is the default mirror directory.
+func DefaultOpencodeDir() string {
+	if d := os.Getenv("COMEBYE_STATE_DIR"); d != "" {
+		return filepath.Join(d, "opencode-sessions")
+	}
+	if x := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, "comebye", "opencode-sessions")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "comebye", "opencode-sessions")
 }
 
 // claudeSessionByID finds <projects>/<slug>/<id>.jsonl, trying the cwd's

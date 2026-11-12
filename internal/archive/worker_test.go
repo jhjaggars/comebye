@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -252,5 +253,35 @@ func TestVerifyDoesNotCountTombstonesOrEmptyFilesAsMissing(t *testing.T) {
 	r.a.B = &flakyBackend{Backend: r.a.B, failList: failTombs}
 	if _, err := r.a.Verify(r.op, r.sources()); !errors.Is(err, errBlip) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// OpenCode sessions are mirrored as Pi-format files (internal/opencode) and
+// archived, indexed and found by Search as kind "opencode".
+func TestOpencodeMirrorIsArchivedAndIndexed(t *testing.T) {
+	hasSqlite(t)
+	r := newRig(t)
+	sid := "ses_e2e77bc70ffeS3b6deA1gr5A20"
+	head, _ := json.Marshal(map[string]any{"type": "session", "version": 3, "id": sid, "timestamp": "2026-10-03T10:00:00.000Z", "cwd": "/home/u/oc"})
+	msg, _ := json.Marshal(map[string]any{"type": "message", "id": "m1", "timestamp": "2026-10-03T10:00:01.000Z",
+		"message": map[string]any{"role": "user", "content": []map[string]string{{"type": "text", "text": "find the okapi"}}}})
+	oc := filepath.Join(r.dir, "opencode")
+	r.write(filepath.Join(oc, "-home-u-oc", sid+".jsonl"), string(head)+"\n"+string(msg)+"\n", false)
+	srcs := append(r.sources(), Source{Kind: "opencode", Root: oc})
+	if _, err := r.a.Run(srcs); err != nil {
+		t.Fatal(err)
+	}
+	ix := &Index{Path: filepath.Join(r.dir, "i.db")}
+	if st, err := ix.Sync(r.a, r.op, nil, SyncOptions{}); err != nil || len(st.Errors) > 0 {
+		t.Fatalf("%v %v", err, st.Errors)
+	}
+	rows, err := ix.Query("SELECT kind,id,cwd FROM sessions WHERE kind='opencode';")
+	if err != nil || len(rows) != 1 || rows[0]["id"] != sid || rows[0]["cwd"] != "/home/u/oc" {
+		t.Fatalf("%v %v", rows, err)
+	}
+	rd := NewReader(ix.Path)
+	res, err := rd.Search(context.Background(), "okapi", Filter{Kind: "opencode"}, "", 0)
+	if err != nil || len(res.Hits) != 1 {
+		t.Fatalf("search: %+v %v", res, err)
 	}
 }

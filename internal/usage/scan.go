@@ -15,7 +15,7 @@ import (
 
 // Source is a directory of one agent kind's session files.
 type Source struct {
-	Kind string // claude or pi
+	Kind string // claude, pi or opencode
 	Root string
 	// SkipSubagents leaves out Claude's subagent transcripts (their tokens
 	// are real spend; this is for comparing with a count that missed them).
@@ -79,6 +79,12 @@ func listFiles(src Source) []fileJob {
 		a, _ := filepath.Glob(filepath.Join(src.Root, "*", "*.jsonl"))
 		for _, p := range a {
 			jobs = append(jobs, fileJob{p, "pi", PiSessionID(filepath.Base(p)), false})
+		}
+	case "opencode":
+		// Mirrored OpenCode sessions: Pi's file format, named <session id>.jsonl.
+		a, _ := filepath.Glob(filepath.Join(src.Root, "*", "*.jsonl"))
+		for _, p := range a {
+			jobs = append(jobs, fileJob{p, "opencode", strings.TrimSuffix(filepath.Base(p), ".jsonl"), false})
 		}
 	}
 	return jobs
@@ -151,7 +157,7 @@ func readFile(path string, fs FileState) (*fileResult, error) {
 			var s *Sample
 			var meta lineMeta
 			var ok bool
-			if fs.Kind == "pi" {
+			if fs.Kind == "pi" || fs.Kind == "opencode" {
 				s, meta, ok = ParsePi(line)
 			} else {
 				s, meta, ok = ParseClaude(line, fs.Sub)

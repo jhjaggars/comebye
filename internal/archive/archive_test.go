@@ -307,6 +307,7 @@ func TestSessionOf(t *testing.T) {
 		{"claude", "-p/sessions-index.json", "", "", false},
 		{"pi", "--x--/2026_" + sidB + ".jsonl", "--x--", "2026_" + sidB, true},
 		{"pi", "--x--/note.txt", "", "", false},
+		{"opencode", "-home-u/ses_abcdefgh12.jsonl", "-home-u", "ses_abcdefgh12", true},
 	}
 	for _, c := range cases {
 		slug, sid, ok := SessionOf(c.kind, c.rel)

@@ -21,7 +21,7 @@ import (
 
 // Source is one agent's session directory.
 type Source struct {
-	Kind string // "claude" or "pi"
+	Kind string // "claude", "pi" or "opencode"
 	Root string // ~/.claude/projects, ~/.pi/agent/sessions
 }
 
@@ -81,7 +81,7 @@ func SessionOf(kind, rel string) (slug, sid string, ok bool) {
 		if len(p) >= 3 && uuidRE.MatchString(p[1]) {
 			return p[0], p[1], true
 		}
-	case "pi":
+	case "pi", "opencode":
 		if len(p) == 2 && strings.HasSuffix(p[1], ".jsonl") {
 			return p[0], strings.TrimSuffix(p[1], ".jsonl"), true
 		}
