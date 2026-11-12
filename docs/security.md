@@ -431,12 +431,21 @@ ambient, like a cookie: a script that could call `/api/*` from your browser
 would be you. So a page never runs as the app:
 
 - **Opaque origin.** Every response under `/p/` carries
-  `Content-Security-Policy: sandbox allow-scripts; default-src 'none'; connect-src 'none'; form-action 'none'; ...`
+  `Content-Security-Policy: sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'none'; connect-src 'none'; form-action 'none'; ...`
   with no `allow-same-origin`, and the app shows a page only in
-  `<iframe sandbox="allow-scripts">`. The page's own scripts run, but with no
+  `<iframe sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">`. The page's own scripts run, but with no
   access to the app's cookies or storage, no way to read a response from `/api`
   or from another page (CORS fails, and `connect-src` is `none` besides), no
-  fetch, form post, popup, nested frame, or navigation of the top window.
+  fetch, form post, nested frame, or navigation of the top window.
+  **Links:** a link the reader clicks (`target="_blank"`) opens a new tab: `allow-popups`
+  lets it open and `allow-popups-to-escape-sandbox` makes the tab an ordinary page
+  (a sandboxed one could not work). The tab is not the app and cannot reach it: the
+  page is an opaque origin, the Markdown shell adds `rel="noopener noreferrer"`, and a plain
+  `target="_blank"` link gives the tab only the page's own window as opener. A script's
+  `window.open` with no click is left to the browser's popup blocker. Clicking a link to a
+  site is the same as clicking it anywhere: a page can show you a link to a lookalike,
+  and the link's address is its tooltip. There is still no `allow-top-navigation`,
+  `allow-forms`, `allow-modals` or `allow-same-origin`.
   Images and fonts must be `data:` URIs; scripts are inline or from cdnjs.
   `comebye publish` turns an HTML page's relative image references into `data:`
   URIs, reading only beside the page (no `..`, no symlink out) and only images.

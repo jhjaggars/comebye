@@ -5491,10 +5491,10 @@ function initRecall() {
 // #/pages                  the list
 // #/pages/<id>[/<n>]       one page (version n, default the newest)
 // A page is code an agent wrote, so it is only ever shown in an iframe with
-// sandbox="allow-scripts" (no allow-same-origin): its scripts run, but in an
+// sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" (no allow-same-origin): its scripts run, but in an
 // opaque origin that cannot read this app, its API, cookies or storage, and
-// the server's Content-Security-Policy on /p/ forbids fetches, forms, popups
-// and navigating this window too. Everything about it that this screen
+// the server's Content-Security-Policy on /p/ forbids fetches and forms, leaves popups to a
+// clicked link (a new tab, which is not this app), and forbids navigating this window. Everything about it that this screen
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
 const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
@@ -5713,7 +5713,7 @@ function renderPageView() {
   pgs.frameVer = ver;
   pgs.frameFollow = !r.ver;
   // allow="clipboard-write": a page's Copy button may write the clipboard (on a click; it can never read it).
-  view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
+  view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
   const fr = view.querySelector("iframe.pgs-frame");
   fr.addEventListener("load", sendPageTheme);
   pagesMade(p.id, ver);

@@ -329,7 +329,7 @@ func TestPagesEveryResponseIsSandboxed(t *testing.T) {
 			t.Errorf("%s: %d, want %d (%.80s)", c.name, w.Code, c.want, w.Body)
 		}
 		csp := h.Get("Content-Security-Policy")
-		if !strings.HasPrefix(csp, "sandbox allow-scripts;") || strings.Contains(csp, "allow-same-origin") || strings.Contains(csp, "allow-top-navigation") || strings.Contains(csp, "allow-popups") || strings.Contains(csp, "allow-forms") {
+		if !strings.HasPrefix(csp, "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox;") || strings.Contains(csp, "allow-same-origin") || strings.Contains(csp, "allow-top-navigation") || strings.Contains(csp, "allow-forms") || strings.Contains(csp, "allow-modals") {
 			t.Errorf("%s: CSP %q", c.name, csp)
 		}
 		if !strings.Contains(csp, "connect-src 'none'") || !strings.Contains(csp, "form-action 'none'") || !strings.Contains(csp, "default-src 'none'") {
@@ -479,7 +479,7 @@ func TestPagesListenerServesOnlyPages(t *testing.T) {
 		{"DELETE", "/api/pages/" + p.ID}, {"GET", "/api/events"}, {"GET", "/"}, {"GET", "/app.js"}, {"GET", "/vendor/marked.umd.js"}, {"GET", "/index.html"},
 	} {
 		w := get(c.method, c.path, userHdr, "localhost")
-		if w.Code != 404 || strings.Contains(w.Body.String(), "agents") || !strings.HasPrefix(w.Header().Get("Content-Security-Policy"), "sandbox allow-scripts;") {
+		if w.Code != 404 || strings.Contains(w.Body.String(), "agents") || !strings.HasPrefix(w.Header().Get("Content-Security-Policy"), "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox;") {
 			t.Errorf("%s %s = %d %.60q csp=%q", c.method, c.path, w.Code, w.Body, w.Header().Get("Content-Security-Policy"))
 		}
 	}

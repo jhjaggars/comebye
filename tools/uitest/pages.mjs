@@ -46,7 +46,8 @@ const PROBE = `async function probe(o) {
   await rec("fetch another page", async () => { const r = await fetch("/p/" + o.other); const t = await r.text(); if (!r.ok || !t) throw new Error("no"); return t; });
   if (o.frame) {
     await rec("parent.document", () => parent.document.title);
-    await rec("window.open", () => { const w = window.open(o.hub + "/api/agents"); if (!w) throw new DOMException("popup blocked", "NotAllowed"); return "opened"; });
+    // A tab may open now (allow-popups; the browser's blocker decides without a click), but the page can read nothing from it.
+    await rec("window.open: read the popup", () => { const w = window.open(o.hub + "/api/agents"); if (!w) throw new DOMException("popup blocked", "NotAllowed"); return String(w.document.body.innerText).slice(0, 40); });
     out["top.location"] = await (async () => { try { window.top.location.href = o.hub + "/api/agents"; return "no exception (the browser must still refuse)"; } catch (e) { return "threw " + e.name; } })();
     await rec("nested iframe on the API", () => new Promise((res, rej) => { const f = document.createElement("iframe"); f.src = "/api/agents"; f.onload = () => { try { res("loaded: " + f.contentDocument.body.innerText.slice(0, 40)); } catch (e) { rej(e); } }; document.body.append(f); setTimeout(() => rej(new DOMException("no load", "Timeout")), 800); }));
     await rec("script from the hub", () => new Promise((res, rej) => { const s = document.createElement("script"); s.src = "/api/agents"; s.onload = () => res("loaded"); s.onerror = () => rej(new DOMException("blocked", "ScriptError")); document.body.append(s); }));
@@ -161,7 +162,7 @@ await check("control: the same attacks from the hub's own origin all succeed", a
 
 const bad = (r, keys) => keys.filter((k) => !String(r[k]).startsWith("blocked")).map((k) => `${k}: ${r[k]}`);
 const NET = ["fetch /api/agents", "xhr /api/agents", "fetch absolute hub url", "post /api/todos", "document.cookie", "localStorage", "fetch another page"];
-const FRAME = ["parent.document", "window.open", "nested iframe on the API", "script from the hub", "form post"];
+const FRAME = ["parent.document", "window.open: read the popup", "nested iframe on the API", "script from the hub", "form post"];
 let probeResult = null;
 
 await check("sandbox: in the app's iframe nothing of the hub is reachable and the page's own script runs", async () => {
@@ -172,7 +173,7 @@ await check("sandbox: in the app's iframe nothing of the hub is reachable and th
   await page.goto(base + `/#/pages/${pages.probe}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   const sandbox = await page.locator("iframe.pgs-frame").getAttribute("sandbox");
-  if (sandbox !== "allow-scripts") throw new Error(`iframe sandbox=${sandbox}`);
+  if (sandbox !== "allow-scripts allow-popups allow-popups-to-escape-sandbox") throw new Error(`iframe sandbox=${sandbox}`);
   await page.evaluate(() => { window.__marker = "app window"; });
   let fr;
   for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.probe); if (!fr) await page.waitForTimeout(100); }
@@ -187,7 +188,8 @@ await check("sandbox: in the app's iframe nothing of the hub is reachable and th
   if (probeResult.violations < 3) throw new Error("the browser reported only " + probeResult.violations + " CSP violations");
   if (page.url() !== base + `/#/pages/${pages.probe}`) throw new Error("the app's window was navigated: " + page.url());
   if ((await page.evaluate(() => window.__marker)) !== "app window") throw new Error("the app's document was replaced");
-  if (popups !== 0) throw new Error(popups + " popup(s) opened");
+  // A scripted window.open may open a tab (headless Chrome has no popup blocker); it must not have navigated or replaced the app's window, checked above.
+  for (const pg of desktop.ctx.pages()) if (pg !== page) await pg.close().catch(() => {});
   if ((await todoCount()) !== before) throw new Error("the page managed to add a to-do item");
   if (/s3cret|secret-marker-4711/.test(JSON.stringify(probeResult))) throw new Error("the page saw hub data");
 });
@@ -199,7 +201,7 @@ await check("sandbox: opened directly in a tab the same header applies", async (
   const before = await todoCount();
   const resp = await p2.goto(base + "/p/" + pages.direct, { waitUntil: "load" });
   const csp = resp.headers()["content-security-policy"] || "";
-  if (!/^sandbox allow-scripts;/.test(csp) || /allow-same-origin/.test(csp)) throw new Error("CSP: " + csp);
+  if (!/^sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox;/.test(csp) || /allow-same-origin/.test(csp)) throw new Error("CSP: " + csp);
   if (Object.keys(resp.headers()).some((h) => h.startsWith("access-control-"))) throw new Error("CORS headers on a page");
   await until(p2, () => window.__done === true);
   const r = JSON.parse(await p2.locator("#result").innerText());
@@ -210,12 +212,12 @@ await check("sandbox: opened directly in a tab the same header applies", async (
   // the response headers of other /p/ answers, errors included
   for (const [u, status] of [["/p/pg_0000000000", 404], ["/p/_/nope.js", 404], ["/p/" + pages.md, 200]]) {
     const r2 = await fetch(base + u);
-    if (r2.status !== status || !/^sandbox allow-scripts;/.test(r2.headers.get("content-security-policy") || "") || [...r2.headers.keys()].some((h) => h.startsWith("access-control-"))) throw new Error(`${u}: ${r2.status} ${r2.headers.get("content-security-policy")}`);
+    if (r2.status !== status || !/^sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox;/.test(r2.headers.get("content-security-policy") || "") || [...r2.headers.keys()].some((h) => h.startsWith("access-control-"))) throw new Error(`${u}: ${r2.status} ${r2.headers.get("content-security-policy")}`);
   }
   await p2.close();
 });
 
-await check("markdown: rendered in the sandbox, its script and handler do nothing, links are text", async () => {
+await check("markdown: rendered in the sandbox, its script and handler do nothing, links open in a new tab", async () => {
   await page.goto(base + `/#/pages/${pages.md}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
@@ -225,8 +227,9 @@ await check("markdown: rendered in the sandbox, its script and handler do nothin
   if (!/Failover test: 3 of 3/.test(h1)) throw new Error("h1: " + h1);
   if ((await fr.locator("#out table tr").count()) !== 4) throw new Error("table rows " + (await fr.locator("#out table tr").count()));
   if (await fr.evaluate(() => window.__pwned)) throw new Error("script or handler in the markdown ran");
-  if (await fr.locator("#out script, #out img, #out a[href^=http]").count()) throw new Error("script, img or external link survived");
-  if (!/the dashboard \(https:\/\/example\.com\/dash\)/.test(await fr.locator("#out").innerText())) throw new Error("link text: " + (await fr.locator("#out").innerText()).slice(0, 200));
+  if (await fr.locator("#out script, #out img").count()) throw new Error("script or img survived");
+  const lk = await fr.locator('#out a[href^="https://example.com"]').evaluate((a) => [a.target, a.rel, a.textContent]);
+  if (lk[0] !== "_blank" || !/noopener/.test(lk[1]) || lk[2] !== "the dashboard") throw new Error("external link: " + lk);
   // two versions were published: the picker shows both
   const opts = await page.locator("#pgs-ver option").allInnerTexts();
   if (opts.length !== 2 || !/latest/.test(opts[0])) throw new Error("versions: " + opts);
@@ -362,7 +365,7 @@ await check("clipboard: the frame is allowed to write the clipboard (and the san
   await page.goto(base + `/#/pages/${pages.chart}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   const attrs = await page.locator("iframe.pgs-frame").evaluate((f) => [f.getAttribute("allow"), f.getAttribute("sandbox")]);
-  if (attrs[0] !== "clipboard-write" || attrs[1] !== "allow-scripts") throw new Error("iframe allow/sandbox: " + attrs);
+  if (attrs[0] !== "clipboard-write" || attrs[1] !== "allow-scripts allow-popups allow-popups-to-escape-sandbox") throw new Error("iframe allow/sandbox: " + attrs);
   let fr;
   for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.chart); if (!fr) await page.waitForTimeout(100); }
   await fr.waitForSelector(".bar", { timeout: 8000 });
@@ -416,6 +419,35 @@ await check("version pill: a newer version shows as a pill that reloads the fram
   if (await page.locator("#pgs-new").count() || !/\/1$/.test(await page.locator("iframe.pgs-frame").getAttribute("src"))) throw new Error("a pinned version was moved or got a pill");
 });
 
+await check("links: a click on a link in a page opens a new tab (not the app) with no opener; the page still reaches nothing of the app (the sandbox check above, with a scripted window.open, still passes)", async () => {
+  const target = base + "/p/" + pages.chart;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Links</title></head><body>
+<a id="l1" href="${target}" target="_blank" rel="noopener">noopener link</a><br><a id="l2" href="${target}" target="_blank">plain target=_blank link</a></body></html>`;
+  pages.links = idOf(publish([file("links.html", html)]));
+  await page.goto(base + "/", { waitUntil: "load" });
+  await page.goto(base + `/#/pages/${pages.links}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.links); if (!fr) await page.waitForTimeout(100); }
+  await fr.waitForSelector("#l1");
+  const appUrl = page.url();
+  for (const id of ["l1", "l2"]) {
+    const [pop] = await Promise.all([desktop.ctx.waitForEvent("page", { timeout: 8000 }), fr.locator("#" + id).click()]);
+    await pop.waitForLoadState("load");
+    if (!pop.url().includes("/p/" + pages.chart)) throw new Error(id + " opened " + pop.url());
+    const opener = await pop.evaluate(() => window.opener === null);
+    // the plain link's opener is the page's own window at most, never the app: it cannot reach the app either way
+    if (id === "l1" && !opener) throw new Error("window.opener is set with rel=noopener");
+    if (id === "l2" && !opener) {
+      const reach = await pop.evaluate(() => { try { return window.opener.parent === window.opener ? "page" : "app?"; } catch { return "blocked"; } });
+      if (reach === "app?") throw new Error("a popup could reach the app through its opener");
+    }
+    await pop.close();
+  }
+  if (page.url() !== appUrl) throw new Error("the app navigated: " + page.url());
+  await shot("pages-links-1280");
+});
+
 // ---- the pages listener: its own origin, and nothing but /p ----
 await check(pagesUrl ? "listener: pages come from an origin of their own that has no /api, no app, no way in" : "listener: not configured in this pass (pages share the app's origin)", async () => {
   if (!pagesUrl) {
@@ -437,7 +469,7 @@ await check(pagesUrl ? "listener: pages come from an origin of their own that ha
   for (const [m, p] of [["GET", "/api/agents"], ["GET", "/api/pages"], ["GET", "/api/whoami"], ["GET", "/api/events"], ["GET", "/"], ["GET", "/app.js"], ["GET", "/index.html"], ["POST", "/api/todos"], ["POST", "/api/pages"], ["DELETE", "/api/pages/" + pages.chart]]) {
     const r = await fetch(origin + p, { method: m, headers: m === "GET" ? {} : { "Content-Type": "application/json" }, body: m === "GET" || m === "DELETE" ? undefined : "{}" });
     const body = await r.text();
-    if (r.status !== 404 || /agents|todos|<html/i.test(body) || !/^sandbox allow-scripts;/.test(r.headers.get("content-security-policy") || "")) throw new Error(`${m} ${p} on the pages origin: ${r.status} ${body.slice(0, 40)}`);
+    if (r.status !== 404 || /agents|todos|<html/i.test(body) || !/^sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox;/.test(r.headers.get("content-security-policy") || "")) throw new Error(`${m} ${p} on the pages origin: ${r.status} ${body.slice(0, 40)}`);
   }
   // A page there reaches the pages origin's /api? It does not exist, and the hub's is unreachable.
   const tabs = await desktop.ctx.newPage();

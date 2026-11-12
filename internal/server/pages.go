@@ -30,15 +30,17 @@ import (
 // (one file per version, the last few kept).
 //
 // A page is agent-written code, so it is never trusted:
-//   - /p/... answers with Content-Security-Policy: sandbox allow-scripts and
+//   - /p/... answers with Content-Security-Policy: sandbox allow-scripts (plus
+//     allow-popups and allow-popups-to-escape-sandbox, for links) and
 //     no allow-same-origin, so a page runs in an opaque origin: no cookies,
 //     no storage, no reading of /api/* or of other pages (CORS fails, and
 //     connect-src is 'none' besides), no navigating the top window, no
-//     popups, no form posts. Its own scripts still run.
+//     form posts, popups only from a click on a link. Its own scripts still run.
 //   - no response here ever carries Access-Control-Allow-Origin: the
 //     Tailscale identity is ambient, so a CORS grant would let any site
 //     the user visits read their pages.
-//   - the app shows a page in <iframe sandbox="allow-scripts"> with a
+//   - the app shows a page in <iframe sandbox="allow-scripts allow-popups
+//     allow-popups-to-escape-sandbox"> with a
 //     provenance bar naming who published it; a page opened directly has the
 //     header but no bar.
 //
@@ -756,6 +758,14 @@ func (s *Server) handlePageDelete(w http.ResponseWriter, r *http.Request) {
 
 // ---- serving a page ----
 
+// pageSandbox: no allow-same-origin (opaque origin) and no top navigation or
+// forms. allow-popups lets a link the reader clicks (target=_blank) open a
+// tab, and allow-popups-to-escape-sandbox makes that tab an ordinary page, not
+// a sandboxed one that could not work. A script's window.open with no click is
+// left to the browser's popup blocker; a link's opener is the page's own window
+// (never the app's), and the Markdown shell adds rel=noopener anyway.
+const pageSandbox = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
+
 // The policy every /p/ response carries (errors too: see pagesHeaders).
 // sandbox without allow-same-origin gives the page an opaque origin;
 // allow-scripts lets its own code run. Nothing can be fetched or posted
@@ -796,9 +806,9 @@ func (s *Server) pageCSP(md bool) string {
 	if app := origin(s.cfg.PublicURL); app != "" && s.pagesOrigin() != "" {
 		fa = app
 	} else if s.pagesOrigin() != "" {
-		return "sandbox allow-scripts; " + body
+		return pageSandbox + "; " + body
 	}
-	return "sandbox allow-scripts; " + body + "; frame-ancestors " + fa
+	return pageSandbox + "; " + body + "; frame-ancestors " + fa
 }
 
 func (s *Server) setPageHeaders(h http.Header) {
@@ -920,7 +930,7 @@ var m=new marked.Marked({gfm:true});
 m.use({renderer:{html:function(t){return (t.text||"").replace(/&/g,"&amp;").replace(/</g,"&lt;")}}});
 out.innerHTML=DOMPurify.sanitize(m.parse(src),{ALLOWED_URI_REGEXP:/^(?:https?:|mailto:|#)/i,FORBID_TAGS:["style","form","input","button","textarea","select","img","svg","math"],ALLOW_DATA_ATTR:false});
 Array.prototype.forEach.call(out.querySelectorAll("a"),function(a){var h=a.getAttribute("href")||"";
- if(h.charAt(0)==="#")return;var s=document.createElement("span");s.textContent=a.textContent+(h?" ("+h+")":"");a.replaceWith(s)});
+ if(h.charAt(0)==="#")return;a.target="_blank";a.rel="noopener noreferrer";a.title=h});
 var h=out.querySelector("h1");if(h)document.title=h.textContent;
 // A mermaid fence becomes a diagram. The library is only fetched when the
 // page has one; its output is SVG drawn by Mermaid's strict mode (no click
