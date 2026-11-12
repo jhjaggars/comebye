@@ -65,3 +65,13 @@ the colour or width; the 40 that need a different offset set `outline-offset` al
 and the `--blue` rings now use the theme's `--focus`. Every `min-height` of 32/36/40/44/48px is `var(--hit-N)` (ratchet: `hit.literal`).
 `.btn` has one tone set (`.primary`, `.warn`, `.danger`) and a dense size (`.btn.sm`, 32px). Per-surface button rules (`.td-acts button`,
 `.bd-seg button`, ...) are not folded into `.btn` yet: they are different controls (segments, menu items) and belong to slices 5 and 6.
+
+### Chips, cards, empty states (slice 5)
+
+*Chip:* nine chip classes (`.wt-chip .host-chip .lg-chip .role-chip .us-chip .bd-tag .td-chip .rel-chip`, plus the new `.chip`) share one
+shape (6px radius, `1px 6px`, 11px, 600, no wrap; `.us-chip` and `.rel-chip` are 12px) and one tone table (blue default, `purple yellow green orange red teal muted`).
+A chip class only adds layout; a new one is `.chip.green`. Not folded in: the filter pills (`.hf-chip`, `.rc-chip`, buttons), the
+count badge `.bd-chip`, and the outlined `.rc-tag`/`.rv-chip` labels, which are different controls.
+*Card:* one surface (`.card`, 1px hairline, 12px radius; `.attn` `.bad` `.good` set the edge). `.bcard .pz-card .rl-card .us-card` and the four
+whole-card links (`.rc-card .pgs-card .pgs-hit .pr-card`) share it, and the link cards share one hover/ring/`.current` rule. `.bcard` went from 14px to 12px.
+*Empty state:* `.pal-empty .pgs-empty .pr-empty .us-empty` join `.empty` (centred, muted, 28px/20px padding); `.ap-empty` (an inline italic note) is left alone.
