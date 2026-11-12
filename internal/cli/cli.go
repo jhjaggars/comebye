@@ -259,6 +259,15 @@ func readInput(e *Env, arg string, limit int64) (string, error) {
 	return string(b), nil
 }
 
+// statusText is the STATUS column: the status, and for a working worker that
+// has written nothing for a long time, how long it has been quiet.
+func statusText(e *Env, r agentRow) string {
+	if r.QuietSince == nil {
+		return r.Status
+	}
+	return r.Status + " (quiet " + strings.TrimSuffix(ago(e, *r.QuietSince), " ago") + ")"
+}
+
 func ago(e *Env, t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -306,6 +315,9 @@ type agentRow struct {
 	// Instance is the host's incarnation: it differs when a host name has
 	// been taken over by another machine (--json only).
 	Instance string `json:"instance,omitempty"`
+	// QuietSince is set on a working worker whose session file has not been
+	// written since then (the hub's quiet mark).
+	QuietSince *time.Time `json:"quiet_since,omitempty"`
 }
 
 func baseName(p string) string {
@@ -367,6 +379,9 @@ func cmdAgents(e *Env, args []string) error {
 			continue
 		}
 		r := agentRow{ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name, Kind: a.Agent, Status: a.Status, CWD: a.CWD, Instance: a.Instance}
+		if a.Status == "working" {
+			r.QuietSince = a.QuietSince
+		}
 		en, isEntry := entries[a.ID]
 		if isEntry && en.HostInstance != "" && a.Instance != "" && en.HostInstance != a.Instance {
 			isEntry = false // an earlier machine of that name
@@ -429,7 +444,7 @@ func cmdAgents(e *Env, args []string) error {
 		if r.Self {
 			role = strings.TrimSpace(role + " (you)")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, dash(r.Name), dash(r.Kind), dash(modelLabel(r.Model, r.Thinking)), r.Status, dash(r.Project), dash(r.Branch), dash(role))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, dash(r.Name), dash(r.Kind), dash(modelLabel(r.Model, r.Thinking)), statusText(e, r), dash(r.Project), dash(r.Branch), dash(role))
 	}
 	tw.Flush()
 	for _, h := range ar.Hosts {

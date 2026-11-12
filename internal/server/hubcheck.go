@@ -84,7 +84,7 @@ type hubCheck struct {
 }
 
 var (
-	pushedRe    = regexp.MustCompile(`(?i)\bpushed\b`)
+	pushedRe = regexp.MustCompile(`(?i)\bpushed\b`)
 	// notPushedRe: a negation or a future/conditional reading on the same line
 	// ("Nothing is pushed", "isn't pushed", "will be pushed", "pushed: no").
 	notPushedRe = regexp.MustCompile(`(?i)\b(not|never|without|nothing|none|no|nowhere|neither|nor|yet to be|unpushed|un-pushed)\b.{0,40}\bpushed\b|n't\b.{0,40}\bpushed\b|\b(be|to be|will be|would be|should be|can be|could be|needs to be|once|until|before|after|if)\b.{0,20}\bpushed\b|\bpushed\b.{0,40}\b(not|never|no)\b|\bpushed\s*[:=-]\s*(no|false|none)\b`)

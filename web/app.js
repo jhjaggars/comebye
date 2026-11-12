@@ -990,7 +990,7 @@ function agentRow(a, worker) {
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
           isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
-        ${subLine(a)}${bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgLabel(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
+        ${subLine(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgLabel(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
       </div>
       <span class="status ${esc(agentStatusText(a))}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
         bgRunning(a) ? (bgSinceMs(a) ? `<br><span class="ago">${fmtAgo(bgSinceMs(a))}</span>` : "")
@@ -1102,6 +1102,16 @@ function scheduleLedger() {
 // finished while one runs; it wakes when the task ends.
 function bgTasks(a) {
   return (a && a.background) || [];
+}
+// quietMs is when a working worker last wrote anything (0 when it is not marked quiet): the hub marks a
+// worker "working" that has produced nothing for a long time (a.quiet_since), see quiet.go.
+function quietMs(a) {
+  const t = a && a.agent_status === "working" && a.quiet_since ? Date.parse(a.quiet_since) : 0;
+  return Number.isNaN(t) ? 0 : t;
+}
+function quietText(a) { return quietMs(a) ? "quiet " + fmtAgo(quietMs(a)) : ""; }
+function quietTitle(a) {
+  return `Marked working, but it has written nothing to its session for ${fmtAgo(quietMs(a))} and no background task is known. It may be stuck: open it to see.`;
 }
 function bgRunning(a) {
   return !!a && (a.agent_status === "idle" || a.agent_status === "done") && bgTasks(a).length > 0;
@@ -1482,7 +1492,7 @@ const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight
 
 function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/agent\/[^\s]+$/.test(u || "") ? u : ""; }
 // The provenance chip: items the hub filed itself say so (and why).
-const TODO_SOURCE = { "hub-blocked": "auto · blocked", "hub-question": "auto · question", "hub-report": "from report" };
+const TODO_SOURCE = { "hub-quiet": "auto · quiet", "hub-blocked": "auto · blocked", "hub-question": "auto · question", "hub-report": "from report" };
 function todoSrcChip(t) {
   const label = TODO_SOURCE[t.source];
   return (label ? `<span class="td-chip td-src" title="Filed by the hub, not by an agent or a person">${esc(label)}</span>` : "") +
@@ -6365,7 +6375,7 @@ function statusHTML(desktop) {
       `<div class="st-row"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="st-n">${esc(t.question)}</span>${desktop ? `<span class="st-r"><button type="button" class="st-link" data-go="todo">To do</button></span>` : ""}</div>`).join("");
     if (p.progress.length) h += `<div class="st-g prog">In progress</div>` + p.progress.map(({ e, ag }) => {
       const at = Date.parse(e.created_at);
-      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip cp" role="button" tabindex="0" aria-label="Copy branch" data-copy="${escAttr(e.branch)}">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${usageChipHtml(e.id, true)}${open(ag)}</span></div>`;
+      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip cp" role="button" tabindex="0" aria-label="Copy branch" data-copy="${escAttr(e.branch)}">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : quietMs(ag) ? "running · " + quietText(ag) : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${usageChipHtml(e.id, true)}${open(ag)}</span></div>`;
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
@@ -8229,10 +8239,11 @@ function renderDetail() {
   st.textContent = bgRunning(a) ? "waiting" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
   st.className = "status " + agentStatusText(a);
   st.title = bgRunning(a) ? bgTitle(a) : "";
-  const why = $("d-why"), wt = whyBlocked(a) || noteOf(a) || (bgRunning(a) ? bgLabel(a) : "");
-  why.classList.toggle("quiet", !whyBlocked(a));
+  const why = $("d-why"), wt = whyBlocked(a) || (quietMs(a) ? quietText(a) : "") || noteOf(a) || (bgRunning(a) ? bgLabel(a) : "");
+  why.classList.toggle("quiet", !whyBlocked(a) && !quietMs(a));
+  why.classList.toggle("stuck", !whyBlocked(a) && !!quietMs(a));
   why.textContent = wt;
-  why.title = bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? bgTitle(a) : wt;
+  why.title = quietMs(a) && !whyBlocked(a) ? quietTitle(a) : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? bgTitle(a) : wt;
   why.hidden = !wt;
   updateAnswerCard();
   updateSendButton();

@@ -142,6 +142,10 @@ type Config struct {
 	// coordinator must be blocked before the coordinator is told (the
 	// blocked relay, blockedrelay.go). Hub only: it needs the ledger.
 	RelayBlocked time.Duration
+	// QuietAfter, when positive, is how long a working handoff worker may
+	// leave its session file untouched before the hub marks it quiet and
+	// files one to-do (quiet.go). Hub only.
+	QuietAfter time.Duration
 	// LandTurnTimeout is how long a worker may hold its turn in a landing
 	// queue before the slot is released and its coordinator told (0: the
 	// default, 45 minutes; negative: never). Hub only.
@@ -192,6 +196,8 @@ type Server struct {
 	panels panelHub
 	// bgAgents caches each idle agent's background tasks (bgagents.go).
 	bgAgents bgAgents
+	// quiet follows working workers that stopped writing (quiet.go).
+	quiet *quietMon
 	// peerAgents replaces the fleet's agent list for peerBackground (tests).
 	peerAgents func() []herdr.AgentInfo
 	// health tests that the state directory is writable (nil without one);
@@ -386,6 +392,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			}
 			s.initAutoTodo(cfg.AutoTodo)
 			s.initBlockedRelay(cfg.RelayBlocked)
+			s.initQuiet(cfg.QuietAfter)
 			if s.pages, err = openPageStore(filepath.Join(cfg.StateDir, "pages")); err != nil {
 				log.Printf("pages: %v (published pages are off)", err)
 				s.pages = nil // never overwrite the unreadable index

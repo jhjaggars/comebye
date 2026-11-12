@@ -191,6 +191,10 @@ type AgentInfo struct {
 	// host that owns it. Not from herdr: comebye stamps it on the full
 	// records a hub reads, and the hub passes a peer's through.
 	Background []BackgroundTask `json:"background,omitempty"`
+	// QuietSince is set when a working handoff worker has written nothing to
+	// its session file since then and runs no background task the hub knows
+	// of (quiet.go). The hub stamps it; herdr does not report it.
+	QuietSince *time.Time `json:"quiet_since,omitempty"`
 	// Host names the comebye instance that owns the agent and ID is the
 	// host-qualified "<host>/<pane_id>". Pane IDs are only unique per host.
 	// Neither comes from herdr: comebye stamps them before broadcasting.

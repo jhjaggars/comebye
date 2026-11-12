@@ -125,6 +125,7 @@ func main() {
 		releaseDepLbl  = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
 		releaseSim     = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		landTurn       = flag.Duration("land-turn-timeout", envDuration("COMEBYE_LAND_TURN_TIMEOUT", server.DefaultLandTurnTimeout), "how long a worker may hold its turn in a landing queue before the slot is released and its coordinator told; negative never. Hub only")
+		quietAfter     = flag.Duration("quiet-after", envDuration("COMEBYE_QUIET_AFTER", server.DefaultQuietAfter), "how long a working handoff worker may write nothing to its session file before the hub marks it quiet (in the app and `comebye agents`) and files one to-do for it, cleared when it writes again; not for a worker with a background task running. 0 turns it off. Hub only")
 		relayBlocked   = flag.Duration("relay-blocked-after", envDuration("COMEBYE_RELAY_BLOCKED_AFTER", server.DefaultRelayBlocked), "how long an agent that has a coordinator must be blocked at a dialog before the hub tells that coordinator (once, and once more when it clears); 0 turns the relay off. Hub only")
 		digestEvery    = flag.Duration("digest-every", envDuration("COMEBYE_DIGEST_EVERY", 15*time.Minute), "hub: routine notices for the coordinator (a worker landed, finished with no decisions for the user, a handoff the hub cleaned up) wait up to this long and go out together in one digest, also shown in the app's Briefings history; urgent ones (a blocked agent, the user's to-do answers, a landing failure, a report with decisions) always go at once. 0 sends every notice at once")
 		resetTokens    = flag.Int("coordinator-reset-tokens", envInt("COMEBYE_COORDINATOR_RESET_TOKENS", server.DefaultResetTokens), "hub: the context size, in tokens, past which the first briefing after it marks the coordinator's in-place reset due (the hub sends /clear into its pane when it is idle with nothing queued, and a SessionStart hook injects a digest; needs `comebye coordinator install-hook`); 0 turns the automatic reset off. The app's Fresh start works either way")
@@ -484,6 +485,7 @@ func main() {
 		SelfRegister:           *selfRegister,
 		HubOnly:                *hubOnly,
 		RelayBlocked:           *relayBlocked,
+		QuietAfter:             *quietAfter,
 		LandTurnTimeout:        *landTurn,
 		DigestEvery:            *digestEvery,
 		LockErr:                lock.Err,
@@ -500,6 +502,7 @@ func main() {
 	go srv.RunReleaseSweep(context.Background())
 	go srv.RunProvision(context.Background())
 	go srv.RunBlockedRelay(context.Background())
+	go srv.RunQuiet(context.Background())
 	go srv.RunReask(context.Background())
 	go srv.RunRepoHealth(context.Background())
 	go srv.RunScratchPrune(context.Background())

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // Latest summarizes the tail of a session for notifications: the most
@@ -22,6 +23,9 @@ type Latest struct {
 	// BackgroundKnown: the session format records background tasks, so an
 	// empty Background means there are none (a Pi session cannot say).
 	BackgroundKnown bool `json:"background_known,omitempty"`
+	// Mtime is when the session file was last written (RFC 3339): the sign
+	// that the agent is producing something, which herdr's status is not.
+	Mtime string `json:"mtime,omitempty"`
 }
 
 // PendingTool is a tool call still waiting for its result.
@@ -57,10 +61,16 @@ func LatestOf(path string) (*Latest, error) {
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, err
 	}
+	var l *Latest
 	if format == FormatClaude {
-		return claudeLatestFrom(r, partial)
+		l, err = claudeLatestFrom(r, partial)
+	} else {
+		l, err = latestFrom(r, partial)
 	}
-	return latestFrom(r, partial)
+	if l != nil {
+		l.Mtime = fi.ModTime().UTC().Format(time.RFC3339Nano)
+	}
+	return l, err
 }
 
 func latestFrom(r io.Reader, skipFirst bool) (*Latest, error) {

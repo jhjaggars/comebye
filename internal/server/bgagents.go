@@ -105,6 +105,7 @@ func (s *Server) withBackground(agents []herdr.AgentInfo) []herdr.AgentInfo {
 			out[i].Background = s.backgroundOfAgent(out[i])
 		}
 	}
+	s.stampQuiet(out)
 	return out
 }
 

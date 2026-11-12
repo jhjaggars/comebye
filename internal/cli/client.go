@@ -228,6 +228,7 @@ type apiAgent struct {
 	Worktree   *worktreeInfo `json:"worktree"`
 	LastActive *time.Time    `json:"last_active"`
 	Instance   string        `json:"instance"`
+	QuietSince *time.Time    `json:"quiet_since"`
 }
 
 type apiHost struct {
