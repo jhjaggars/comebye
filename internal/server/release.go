@@ -406,12 +406,16 @@ func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, re
 	}
 	out["dry_run"] = cfg.DryRun || s.remoteDry() // after the check: the release host reports its mode with it
 	var dep *deployStatus
-	if it.Release.State == relTagged {
-		if hosts == nil {
-			hosts = s.relHosts(ctx)
+	if hosts == nil {
+		hosts = s.relHosts(ctx)
+		if it.Release.State == relTagged {
 			markRollout(hosts, it.Release.Version)
 		}
-		out["hosts"] = hosts
+	}
+	// The fleet is listed whatever the release's state; only a tagged release
+	// has a rollout to track.
+	out["hosts"] = hosts
+	if it.Release.State == relTagged {
 		if u := notesURL(it.Release); u != "" {
 			out["notes_url"] = u
 		}

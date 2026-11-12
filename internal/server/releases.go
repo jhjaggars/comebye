@@ -252,7 +252,7 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 		if cur.Release.State == relTagged {
 			markRollout(hosts, cur.Release.Version)
 		}
-		out = s.releaseViewOf(ctx, r, cur, r.URL.Query().Get("refresh") == "1", hostsIf(cur, hosts))
+		out = s.releaseViewOf(ctx, r, cur, r.URL.Query().Get("refresh") == "1", hosts)
 		out["current"] = true
 	} else {
 		cfg := s.cfg.Release
@@ -264,15 +264,6 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 	}
 	out["history"] = s.releaseHistory(items, cur.ID)
 	writeJSON(w, out)
-}
-
-// hostsIf passes the fetched hosts on only for a tagged release, which is the
-// one whose view lists them.
-func hostsIf(it Todo, hosts []relHost) []relHost {
-	if it.Release.State == relTagged {
-		return hosts
-	}
-	return nil
 }
 
 // sweepReleasesWith closes every open tagged release item whose version the

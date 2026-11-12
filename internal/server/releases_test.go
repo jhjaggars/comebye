@@ -142,6 +142,31 @@ func TestReleasesShowsAProposedReleaseAndNeedsYouWhenCIIsDone(t *testing.T) {
 	}
 }
 
+func TestReleasesPendingReleaseStillListsTheFleet(t *testing.T) {
+	s, _ := relHubWithPeer(t, "v0.5.8", "v0.5.8", false)
+	it := todoOf(t, do(s, "POST", "/api/todos", userHdr, relBody("v0.5.9", relSHA)).Body.Bytes())
+	v := getReleases(t, s)
+	if !v.Current || v.Todo.Release.State != relPending {
+		t.Fatalf("view = %+v", v)
+	}
+	if len(v.Hosts) != 2 {
+		t.Fatalf("a pending release lists the fleet, got %+v", v.Hosts)
+	}
+	for _, h := range v.Hosts {
+		if h.Version != "v0.5.8" || h.Current {
+			t.Fatalf("host %+v", h)
+		}
+	}
+	// The per-item view lists them too.
+	var item struct {
+		Hosts []relHost `json:"hosts"`
+	}
+	w := do(s, "GET", "/api/release/"+it.ID, userHdr, "")
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &item) != nil || len(item.Hosts) != 2 {
+		t.Fatalf("item view = %d %s", w.Code, w.Body)
+	}
+}
+
 func TestReleasesTaggedHubBehind(t *testing.T) {
 	s, _ := relHubWithPeer(t, "v0.5.8", "v0.5.8", false)
 	it := tagOnServer(t, s, "v0.5.9", relSHA)
