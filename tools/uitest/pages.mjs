@@ -655,10 +655,14 @@ await check("gallery: grid and list, chips, sort, and the new/updated dot", asyn
   if ((await card().locator(".pgs-dot").innerText().catch(() => "")) !== "new") throw new Error("no new dot on a page never opened");
   await card().click();
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
-  // With a page open, the narrow column is today's list and a Gallery button returns to the grid.
-  const c = await page.evaluate(() => [document.querySelector(".pgs-list").clientWidth, getComputedStyle(document.querySelector("#pgs-items")).display, getComputedStyle(document.querySelector("#pgs-gallery")).display, document.querySelector("#pgs-gallery").getBoundingClientRect().width]);
-  if (c[0] > 420 || c[1] === "grid" || c[2] === "none" || c[3] > 200) throw new Error("open-page column " + c);
-  await page.locator("#pgs-gallery").click();
+  // In the pane: the viewer replaces the gallery (no column beside it), the nav and the agent list stay, and the back arrow
+  // (shown only now) returns to the gallery.
+  const c = await page.evaluate(() => {
+    const vis = (s) => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== "hidden"; };
+    return { list: vis(".pgs-list"), view: vis("#pgs-view"), nav: vis("#nav"), pagesRow: !!document.querySelector('#nav .nv.on[data-page="pages"]'), back: vis("#pgs-back"), pane: Math.round(document.querySelector("#pages").getBoundingClientRect().left) };
+  });
+  if (c.list || !c.view || !c.nav || !c.pagesRow || !c.back || c.pane < 300) throw new Error("open page in the pane " + JSON.stringify(c));
+  await page.locator("#pgs-back").click();
   await page.waitForSelector("#pages:not(.in-page) .pgs-card");
   if (await card().locator(".pgs-dot").count()) throw new Error("dot stays after the page was opened");
   publish(["-", "--key", "dotprobe", "--title", "Dot probe"], "# Dot probe\n\nsecond\n", "w1:p1");
@@ -668,7 +672,7 @@ await check("gallery: grid and list, chips, sort, and the new/updated dot", asyn
   // Sort by recently opened puts the page just opened first among those opened.
   await card().click();
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
-  await page.locator("#pgs-gallery").click();
+  await page.locator("#pgs-back").click();
   await page.locator("#pgs-sort").selectOption("opened");
   if (!/Dot probe/.test((await page.locator(".pgs-title").first().innerText()))) throw new Error("opened sort");
   await page.locator("#pgs-sort").selectOption("updated");

@@ -264,9 +264,15 @@ try {
 
     await check(`${tag}: Back leaves the screen and Escape does too`, async () => {
       await open("#/usage");
-      await page.locator("#us-back").click();
-      await page.waitForSelector("#usage", { state: "hidden" });
-      await open("#/usage");
+      if (width >= 1100) {
+        // In the pane: the nav and the agent list stay, Usage is the active row, and there is no back arrow to need.
+        const s = await page.evaluate(() => { const v = (q) => { const e = document.querySelector(q); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }; return { nav: v("#nav"), list: v("#agents"), row: !!document.querySelector('#nav .nv.on[data-page="usage"]'), back: v("#us-back"), left: Math.round(document.querySelector("#usage").getBoundingClientRect().left) }; });
+        if (!s.nav || !s.list || !s.row || s.back || s.left < 300) throw new Error("Usage does not sit in the pane: " + JSON.stringify(s));
+      } else {
+        await page.locator("#us-back").click();
+        await page.waitForSelector("#usage", { state: "hidden" });
+        await open("#/usage");
+      }
       await page.keyboard.press("Escape");
       await page.waitForSelector("#usage", { state: "hidden" });
     });

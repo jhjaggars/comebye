@@ -5999,7 +5999,6 @@ function syncPages() {
   const was = !el.hidden;
   pgs.route = r;
   el.hidden = !r;
-  document.body.classList.toggle("has-pages", !!r);
   if (!r) {
     clearInterval(pgs.timer); pgs.timer = null;
     $("pgs-view").replaceChildren(); $("pgs-view").dataset.id = ""; pgs.frameKey = "";
@@ -6020,9 +6019,10 @@ function closePages() {
   route();
 }
 
+// Back from a page is the gallery; back from the gallery is the way out, on a phone. In the pane (desktop) the nav is the way out.
 function pagesBack() {
-  if (pgs.route && pgs.route.id && !isDesktop()) location.hash = "#/pages";
-  else closePages();
+  if (pgs.route && pgs.route.id) location.hash = "#/pages";
+  else if (!isDesktop()) closePages();
 }
 
 async function pagesDelete() {
@@ -6051,7 +6051,6 @@ function initPages() {
     if (!b) return;
     pgs.chip = b.dataset.chip; renderPages();
   });
-  $("pgs-gallery").addEventListener("click", () => { location.hash = "#/pages"; });
   $("pages").addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") { ev.stopPropagation(); pagesBack(); }
   });
@@ -6102,15 +6101,24 @@ function routedAgent(r) {
 
 // route syncs the view to the URL hash. An agent that is not in the list
 // yet (cold start from a notification) is opened once the list arrives.
-function route() {
+// syncScreens follows the hash for every screen (.screen: Search, Pages, Peers, Usage, Ready to remove). The one place that
+// knows the set: route(), openDetail and openPage call it, so an agent or a page replacing a screen in the pane (and the other
+// way round) never leaves one showing. has-screen is what #detail-empty waits for; the nav's active row follows.
+function syncScreens() {
   syncRecall();
   syncPages();
   syncPeers();
   syncUsage();
+  syncReview();
+  document.body.classList.toggle("has-screen", !!(rc.route || pgs.route || prs.route || us.route || review.open));
+  renderNav();
+}
+
+function route() {
+  syncScreens();
   syncBriefs();
   syncSubview();
   syncLaunch();
-  syncReview();
   syncMark();
   syncFresh();
   syncSwitch();
@@ -6169,8 +6177,7 @@ function openPage(v) {
   if (state.selected != null) closeDetail();
   const hash = PAGE_HASH[v] || "";
   if (location.hash !== hash && (hash || location.hash)) history.pushState(null, "", hash || location.pathname + location.search);
-  syncRecall();
-  syncReview();
+  syncScreens();
   setView(v);
   // Focus left on the row or button that was in use (an agent row, say) stays there when the page
   // replaces the agent, so a key such as j lands outside the page and the page's own keys
@@ -6858,7 +6865,6 @@ function syncPeers() {
   const was = !el.hidden;
   prs.route = r;
   el.hidden = !r;
-  document.body.classList.toggle("has-peers", !!r);
   if (!r) { clearInterval(prs.timer); prs.timer = null; return; }
   if (!was) {
     prs.cfg = {}; prs.cats = {}; prs.draft = null; $("pr-view").dataset.name = ""; $("pr-view")._html = "";
@@ -8046,7 +8052,6 @@ function syncUsage() {
   const was = !el.hidden;
   us.route = r;
   el.hidden = !r;
-  document.body.classList.toggle("has-usage", !!r);
   if (!r) { clearInterval(us.timer); us.timer = null; return; }
   const moved = r.r !== us.r || r.d !== us.d || r.m !== us.m || r.p !== us.p || r.h !== us.h;
   Object.assign(us, r);
@@ -8114,8 +8119,16 @@ function initUsage() {
   });
   $("us-view").addEventListener("click", usageClick);
   $("us-view").addEventListener("toggle", (ev) => { if (ev.target.id === "us-pricedet" && ev.target.open && !us.prices) usageLoadPrices(); else if (ev.target.id === "us-pricedet" && ev.target.open) renderUsagePrices(); }, true);
-  let t = null;
-  window.addEventListener("resize", () => { if (!us.route || us.status !== "ok") return; clearTimeout(t); t = setTimeout(renderUsage, 150); });
+  // The charts are drawn to the width they have, and that is the pane's now, not the window's: the list collapsing or the
+  // window resizing both change it.
+  let t = null, w = 0;
+  new ResizeObserver(() => {
+    const nw = $("us-body").clientWidth;
+    if (nw === w) return;
+    w = nw;
+    if (!us.route || us.status !== "ok") return;
+    clearTimeout(t); t = setTimeout(renderUsage, 150);
+  }).observe($("us-body"));
 }
 
 /* ---------- the page rows above the agent list (desktop) ---------- */
@@ -8175,8 +8188,7 @@ function openDetail(id) {
     // A history entry, so the phone's back gesture returns to the list.
     history.pushState(null, "", hash);
     state.pushedRoute = true;
-    syncRecall(); // a page that follows the hash gives way
-    syncReview();
+    syncScreens(); // a screen that follows the hash gives way
   }
   state.selected = id;
   state.chat = null;

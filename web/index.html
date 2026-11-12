@@ -1844,19 +1844,21 @@
       #detail, #detail-empty { grid-column: 2; grid-row: 1 / -1; border-left: 1px solid var(--border); min-width: 0; min-height: 0; }
       #detail { display: none !important; height: auto; contain: layout; } /* contain: its fixed sub-view and menu stay inside the pane */
       body.has-detail #detail { display: flex !important; }
-      body:not(.has-detail):not(.has-page):not(.has-recall):not(.has-remove) #detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-6); color: var(--muted); text-align: center; padding: var(--sp-24); }
+      body:not(.has-detail):not(.has-page):not(.has-screen) #detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-6); color: var(--muted); text-align: center; padding: var(--sp-24); }
       #detail-empty b { color: var(--text); font-weight: 650; }
       #detail-empty kbd { font: var(--fs-12) var(--ff-code); border: 1px solid var(--border); border-radius: var(--r-6); padding: 1px var(--sp-6); background: var(--panel); }
       #detail header .back { display: none; }
       #detail main { max-width: none; margin: 0; } /* the agent pane fills the space beside the list */
     }
     /* Transcripts */
-    #recall {
+    /* A screen (.screen: Search, Pages, Peers, Usage and Ready to remove) is a full-window overlay on a phone. From 1100px
+       it takes the detail cell instead and the nav and the agent list stay (see the media rule below). */
+    .screen {
       position: fixed; inset: 0; z-index: var(--z-screen); display: flex; flex-direction: column; background: var(--bg);
-      /* Over the desktop grid too: it is a screen of its own. */
     }
-    #recall[hidden] { display: none; }
-    #recall header { position: static; flex: none; }
+    .screen[hidden] { display: none; }
+    .screen header { position: static; flex: none; }
+    #peers, #usage { container-type: inline-size; } /* their layouts follow the pane, not the window */
     #recall #rc-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .rc-fresh { margin-left: auto; color: var(--muted); font-size: var(--fs-13); white-space: nowrap; }
     .rc-fresh.warn { color: var(--orange); }
@@ -1957,13 +1959,13 @@
     #recall #rc-form { flex: 1 1 100%; order: 5; min-width: 0; }
     #recall.in-session #rc-form { display: none; }
     @media (min-width: 1100px) {
-      /* The page takes the detail cell, beside the agent list. */
-      #recall, #review {
+      /* The screen takes the detail cell, beside the agent list. #review keeps an id rule of its own, so it is named too. */
+      .screen, #review {
         position: static; grid-column: 2; grid-row: 1 / -1; z-index: auto; min-width: 0; min-height: 0; overflow: hidden;
         border-left: 1px solid var(--border);
       }
-      #recall header, #review header { padding-left: var(--sp-20); min-height: calc(var(--hit-48) + var(--sp-8)); }
-      #recall #rc-back, #review #rv-close { display: none; }
+      .screen header, #review header { padding-left: var(--sp-20); min-height: calc(var(--hit-48) + var(--sp-8)); }
+      #recall #rc-back, #review #rv-close, #pr-back, #us-back, #pages:not(.in-page) #pgs-back { display: none; }
       #recall #rc-form, #recall.in-session #rc-form { display: block; flex: 1 1 280px; order: 0; max-width: 640px; }
       #recall .rc-list { flex: 0 0 clamp(320px, 40%, 460px); display: block !important; border-right: 1px solid var(--border); }
       #recall .rc-session { display: block !important; }
@@ -2049,11 +2051,6 @@
       .td-opt:active, #answer button.opt:active, .hf-chip:active, .tp-opt:active { transform: none; }
     }
     /* Pages: reports agents publish (comebye publish). A screen of its own, like Transcripts. */
-    #pages {
-      position: fixed; inset: 0; z-index: var(--z-screen); display: flex; flex-direction: column; background: var(--bg);
-    }
-    #pages[hidden] { display: none; }
-    #pages header { position: static; flex: none; }
     #pgs-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .pgs-panes { flex: 1; min-height: 0; display: flex; }
     .pgs-list, .pgs-view { min-width: 0; min-height: 0; }
@@ -2080,7 +2077,6 @@
     .pgs-dot { font-size: var(--fs-11); font-weight: 600; line-height: 16px; padding: 0 var(--sp-6); border-radius: var(--r-6); background: var(--blue); color: var(--on-accent); }
     .pgs-pill { font-size: var(--fs-11); font-weight: 600; line-height: 16px; padding: 0 var(--sp-6); border: 1px solid var(--border); border-radius: var(--r-pill); }
     .pgs-grid .pgs-sz { display: none; }
-    #pgs-gallery { display: none; flex: none; min-height: var(--hit-36); padding: 0 var(--sp-12); font-size: var(--fs-13); }
     @media (min-width: 700px) { .pgs-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); } }
     #pgs-q:focus-visible { outline-offset: 0; }
     .pgs-card { padding: 0; gap: 0; overflow: hidden; } /* a card with a preview: the text block has the padding */
@@ -2105,8 +2101,6 @@
     .pgs-rows .pgs-lead { font-size: var(--fs-11); -webkit-line-clamp: 5; }
     .pgs-rows .pgs-heads, .pgs-rows .pgs-flags, .pgs-rows .pgs-nopv { display: none; }
     @media (max-width: 699px) { .pgs-grid .pgs-heads { display: none; } .pgs-grid .pgs-lead { -webkit-line-clamp: 4; } }
-    #pages.in-page .pgs-thumb { display: none; }
-    #pages.in-page .pgs-rows .pgs-card, #pages.in-page .pgs-grid .pgs-card { flex-direction: column; align-items: stretch; }
     .pgs-title { font-weight: 600; font-size: var(--fs-15); overflow-wrap: anywhere; }
     .pgs-meta { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .pgs-empty code { font: var(--fs-13) var(--ff-code); color: var(--text); }
@@ -2125,22 +2119,9 @@
     .pgs-acts .danger { margin-left: auto; }
     .pgs-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: white; } /* a page that sets no background is drawn for light paper, in any theme */
     .pgs-pick { margin: auto; padding: var(--sp-24); text-align: center; color: var(--muted); }
-    @media (min-width: 1100px) {
-      #pages .pgs-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
-      #pages .pgs-view { display: flex !important; }
-      /* No page open: the gallery takes the whole width. With one open, the narrow column is today's list. */
-      #pages:not(.in-page) .pgs-list { flex: 1 1 auto; border-right: 0; padding: var(--sp-20) var(--sp-24) var(--sp-24); }
-      #pages:not(.in-page) .pgs-view { display: none !important; }
-      #pages.in-page #pgs-items { display: flex; flex-direction: column; gap: var(--sp-10); }
-      #pages.in-page .pgs-sz { display: inline; }
-      #pages.in-page #pgs-gallery { display: inline-flex; margin-left: var(--sp-8); }
-    }
+    /* In the pane (1100px and up) the gallery has room to breathe; with a page open, the viewer replaces it, as on a phone. */
+    @media (min-width: 1100px) { #pages .pgs-list { padding: var(--sp-20) var(--sp-24) var(--sp-24); } }
     /* Peers: each host's status and its agent settings (default kind, model, thinking, allowed kinds). A screen of its own, like Pages. */
-    #peers {
-      position: fixed; inset: 0; z-index: var(--z-screen); display: flex; flex-direction: column; background: var(--bg);
-    }
-    #peers[hidden] { display: none; }
-    #peers header { position: static; flex: none; }
     #pr-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .pr-panes { flex: 1; min-height: 0; display: flex; }
     .pr-list, .pr-view { min-width: 0; min-height: 0; }
@@ -2182,7 +2163,7 @@
     .pr-acts .btn { min-height: var(--hit-44); padding: 0 18px; }
     .pr-acts .btn.primary { border-color: var(--blue); background: var(--chip-blue); color: var(--blue); font-weight: 600; }
     @media (min-width: 600px) { .pr-row { grid-template-columns: 2fr 1fr; } }
-    @media (min-width: 1100px) {
+    @container (min-width: 860px) {
       #peers .pr-list { flex: 0 0 390px; display: block !important; border-right: 1px solid var(--border); }
       #peers .pr-view { display: flex !important; }
     }
@@ -2317,7 +2298,7 @@
     .rl-wrap { display: grid; gap: var(--sp-12); grid-template-columns: minmax(0, 1fr); grid-template-areas: "card" "fleet" "hist"; max-width: 1240px; margin: 0 auto; }
     .rl-a-card { grid-area: card; } .rl-a-fleet { grid-area: fleet; } .rl-a-hist { grid-area: hist; }
     .rl-a-card, .rl-a-fleet, .rl-a-hist { min-width: 0; }
-    @media (min-width: 900px) { .rl-wrap { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "card fleet" "hist fleet"; align-items: start; } }
+    @container (min-width: 900px) { .rl-wrap { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "card fleet" "hist fleet"; align-items: start; } }
     .rl-card { display: flex; flex-direction: column; gap: var(--sp-8); padding: var(--sp-12); min-width: 0; }
     .rl-card h3 { margin: 0; font-size: var(--fs-12); font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
     .rl-big { font-size: var(--fs-20); font-weight: 700; overflow-wrap: anywhere; }
@@ -2356,11 +2337,6 @@
     .rel-open { display: inline-flex; align-items: center; min-height: var(--hit-36); padding: 0 var(--sp-14); border: 1px solid var(--blue); border-radius: var(--r-8); color: var(--blue); text-decoration: none; font-size: var(--fs-13); font-weight: 600; }
     .rel-open:focus-visible { outline-offset: 1px; }
     /* Usage: tokens by kind, model, project and handoff. A screen of its own, like Peers and Pages. Charts are drawn by hand as inline SVG from theme tokens. */
-    #usage {
-      position: fixed; inset: 0; z-index: var(--z-screen); display: flex; flex-direction: column; background: var(--bg);
-    }
-    #usage[hidden] { display: none; }
-    #usage header { position: static; flex: none; }
     #us-back { margin: -10px 0 -10px -10px; color: var(--text); }
     #us-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
     .us-wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-14); min-width: 0; }
@@ -2416,7 +2392,7 @@
     .us-prices td:first-child { text-align: left; }
     .us-prices .tw { overflow-x: auto; }
     .us-prices summary { cursor: pointer; font-weight: 650; font-size: var(--fs-15); min-height: var(--hit-36); display: flex; align-items: center; }
-    @media (max-width: 820px) { .us-two { grid-template-columns: 1fr; } }
+    @container (max-width: 820px) { .us-two { grid-template-columns: 1fr; } }
     /* Side panels (Doc and Diff) beside an agent's chat: web/sidepanel.js.
        Desktop: a resizable split inside #detail; narrower: a bottom sheet. */
     :root { --sp-w: 44%; }
@@ -2524,7 +2500,7 @@
 </head>
 <body>
   <!-- Transcripts: search and read archived sessions -->
-  <div id="recall" hidden role="region" aria-label="Search">
+  <div id="recall" class="screen" hidden role="region" aria-label="Search">
     <header>
       <button type="button" class="bell" id="rc-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Search</h1>
@@ -2547,7 +2523,7 @@
   </div>
 
   <!-- Peers: each host's status and agent settings -->
-  <div id="peers" hidden>
+  <div id="peers" class="screen" hidden>
     <header>
       <button type="button" class="bell" id="pr-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Peers</h1>
@@ -2567,7 +2543,7 @@
   </div>
 
   <!-- Usage: tokens spent by agents, counted from their session files (counts and labels only) -->
-  <div id="usage" hidden>
+  <div id="usage" class="screen" hidden>
     <header>
       <button type="button" class="bell" id="us-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Usage</h1>
@@ -2577,12 +2553,11 @@
   </div>
 
   <!-- Pages: reports agents publish with `comebye publish` -->
-  <div id="pages" hidden>
+  <div id="pages" class="screen" hidden>
     <header>
       <button type="button" class="bell" id="pgs-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Pages</h1>
       <span class="rc-fresh" id="pgs-count"></span>
-      <button type="button" class="btn" id="pgs-gallery">Gallery</button>
     </header>
     <div class="pgs-panes">
       <section class="pgs-list" id="pgs-list-pane" aria-label="Pages">
@@ -2837,7 +2812,7 @@
   </section>
 
   <!-- Ready to remove: a page (#/remove), with the sweep as a button -->
-  <section id="review" hidden role="region" aria-labelledby="rv-title">
+  <section id="review" class="screen" hidden role="region" aria-labelledby="rv-title">
     <header>
       <button type="button" class="back" id="rv-close" aria-label="Back">&#8592;</button>
       <h2 id="rv-title">Ready to remove</h2>

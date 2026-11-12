@@ -154,8 +154,14 @@ try {
       await page.goto(base + "/#/peers/hub", { waitUntil: "load" });
       await page.waitForSelector("#pr-form");
       if (!(await page.locator("#pr-view").innerText()).includes("This host")) throw new Error("not marked as this host");
+      if (width >= 1100) {
+        // In the pane: the nav and the agent list stay, Peers is the active row, and there is no back arrow.
+        const s = await page.evaluate(() => { const v = (q) => { const e = document.querySelector(q); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }; return { nav: v("#nav"), list: v("#agents"), row: !!document.querySelector('#nav .nv.on[data-page="peers"]'), back: v("#pr-back"), left: Math.round(document.querySelector("#peers").getBoundingClientRect().left) }; });
+        if (!s.nav || !s.list || !s.row || s.back || s.left < 300) throw new Error("Peers does not sit in the pane: " + JSON.stringify(s));
+        return;
+      }
       await page.locator("#pr-back").click();
-      if (width < 1100) await page.waitForFunction(() => document.querySelector("#pr-items").offsetParent !== null);
+      await page.waitForFunction(() => document.querySelector("#pr-items").offsetParent !== null);
       await page.locator("#pr-back").click().catch(() => {});
     });
 
