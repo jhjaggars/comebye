@@ -94,3 +94,38 @@ func TestVerifyCommits(t *testing.T) {
 		t.Errorf("made-up sha exists: %+v", f)
 	}
 }
+
+func TestClaimedPushedFalsePositives(t *testing.T) {
+	for _, no := range []string{
+		"Nothing is pushed.", "Nothing has been pushed yet.", "None of it is pushed.",
+		"The branch isn't pushed.", "Not pushed (the user lands it).", "Will be pushed after review.",
+		"Needs to be pushed by the coordinator.", "I have not pushed.", "Push it once approved; pushed: no",
+	} {
+		if claimed(no, pushedRe, notPushedRe) {
+			t.Errorf("read as a pushed claim: %q", no)
+		}
+	}
+	for _, yes := range []string{"Pushed to origin.", "All commits pushed.", "Branch pushed: feat/x"} {
+		if !claimed(yes, pushedRe, notPushedRe) {
+			t.Errorf("missed a pushed claim: %q", yes)
+		}
+	}
+}
+
+func TestHubCheckLandedClaim(t *testing.T) {
+	c := &worktreeChecks{Exists: true, BaseUsed: "origin/main", Unmerged: 2, Detail: &worktreeDetail{Unpushed: 0, Upstream: "origin/x"}}
+	h := hubCheckOf(ledger.Entry{ID: "l1", FinalReport: "All done and landed on main."}, c, time.Now())
+	if !strings.Contains(hubText(h), "landed/bad") || h.Contradictions != 1 {
+		t.Fatalf("landed claim with 2 commits not in the base not flagged:\n%s", hubText(h))
+	}
+	for _, honest := range []string{"Do not land. Ready to land when you say.", "Not landed yet.", "File a To do: Land feat/x?", "Will be merged by the coordinator."} {
+		h := hubCheckOf(ledger.Entry{ID: "l2", FinalReport: honest}, c, time.Now())
+		if h.Contradictions != 0 {
+			t.Errorf("flagged %q:\n%s", honest, hubText(h))
+		}
+	}
+	c.Unmerged = 0
+	if h := hubCheckOf(ledger.Entry{ID: "l3", FinalReport: "landed"}, c, time.Now()); h.Contradictions != 0 {
+		t.Fatalf("flagged a true landed claim:\n%s", hubText(h))
+	}
+}

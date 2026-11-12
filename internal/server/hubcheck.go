@@ -85,7 +85,14 @@ type hubCheck struct {
 
 var (
 	pushedRe    = regexp.MustCompile(`(?i)\bpushed\b`)
-	notPushedRe = regexp.MustCompile(`(?i)(\bnot|n't|\bun|\bnever|\bwithout|\bno)[ -]?(been |yet )?pushed|\bpushed\b.*\b(not|never)\b`)
+	// notPushedRe: a negation or a future/conditional reading on the same line
+	// ("Nothing is pushed", "isn't pushed", "will be pushed", "pushed: no").
+	notPushedRe = regexp.MustCompile(`(?i)\b(not|never|without|nothing|none|no|nowhere|neither|nor|yet to be|unpushed|un-pushed)\b.{0,40}\bpushed\b|n't\b.{0,40}\bpushed\b|\b(be|to be|will be|would be|should be|can be|could be|needs to be|once|until|before|after|if)\b.{0,20}\bpushed\b|\bpushed\b.{0,40}\b(not|never|no)\b|\bpushed\s*[:=-]\s*(no|false|none)\b`)
+	// landedRe: the report says the work reached the base branch. Negations
+	// and future readings on the line cancel it ("Do not land", "ready to
+	// land", "Land feat/x?").
+	landedRe    = regexp.MustCompile(`(?i)\b(landed|merged|fast-forwarded)\b`)
+	notLandedRe = regexp.MustCompile(`(?i)\b(not|n't|never|nothing|none|no|yet|un\w+|pending|awaiting|waiting|once|until|before|after|if|when|ready|to be|will be|would be|should be|can be|could be|needs? to be|go|goes|going|then)\b|\?`)
 	ciGreenRe   = regexp.MustCompile(`(?i)\bCI\b.{0,40}\b(green|passing|passed|succe\w+)\b|\b(green|passing)\b.{0,20}\bCI\b`)
 	ciNegRe     = regexp.MustCompile(`(?i)\b(not|n't|fail\w*|red|pending|running|unknown|no)\b`)
 	cleanRe     = regexp.MustCompile(`(?i)(worktree|working tree|work tree)\b.{0,12}\bclean\b|\bclean (worktree|working tree)`)
@@ -164,6 +171,14 @@ func hubCheckOf(e ledger.Entry, c *worktreeChecks, now time.Time) hubCheck {
 		add("pushed", "ok", "nothing to push: every commit is in %s", orDefault(c.BaseUsed, "the base"))
 	default:
 		add("pushed", "info", "every commit is on a remote")
+	}
+
+	// Landed: the report says the work is in the base, and the hub finds
+	// commits there is no equivalent of in it. Only an entry the hub does
+	// not already know as landed is checked, and only with a worktree to
+	// look at.
+	if claimed(report, landedRe, notLandedRe) && !c.Gone && c.Exists && c.Unmerged > 0 && e.Status != ledger.Landed {
+		add("landed", "bad", "the report says it landed, but %d commit(s) have no equivalent in %s", c.Unmerged, orDefault(c.BaseUsed, "the base"))
 	}
 
 	// CI of the head.
