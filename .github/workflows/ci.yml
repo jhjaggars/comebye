@@ -1,5 +1,13 @@
 name: CI
 
+# Three tiers (docs/test-tiers.md). A pull request is the quick pre-submit tier: lint, the Go packages the
+# change touches, and a browser smoke set. A push to main is the merge tier: everything once, in short parallel
+# jobs. The nightly workflow runs the full matrix. tools/ci/select.sh decides from the changed paths what each
+# tier needs; a path it does not know means everything.
+#
+# Every run ends in ci-status, which is green when every job that was needed passed. Read that one
+# (gh run list --commit reports the workflow's conclusion, which follows it).
+
 on:
   push:
     branches: [main]
@@ -8,22 +16,55 @@ on:
 permissions:
   contents: read
 
-# Three independent jobs, so the slow ones run side by side. The workflow's
-# conclusion (what `gh run list --commit` reports) is success only when all
-# of them pass.
+# A newer push to a pull request supersedes the older one. Never on main: every landed commit gets its run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # gofmt, vet, build, vulnerabilities and JS syntax: fast.
+  # Which checks does this change need? (tools/ci/select.sh; the table is in docs/test-tiers.md)
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      lint: ${{ steps.sel.outputs.lint }}
+      go: ${{ steps.sel.outputs.go }}
+      scripts: ${{ steps.sel.outputs.scripts }}
+      smoke: ${{ steps.sel.outputs.smoke }}
+      visual: ${{ steps.sel.outputs.visual }}
+      merge_go: ${{ steps.sel.outputs.merge_go }}
+      merge_browser: ${{ steps.sel.outputs.merge_browser }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - id: sel
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # A new branch or a forced push has no usable "before": test everything.
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo ".github/workflows/ci.yml" | tools/ci/select.sh >> "$GITHUB_OUTPUT"
+          else
+            tools/ci/select.sh --base "$BASE" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+  # gofmt, vet, build, vulnerabilities, JS syntax, tokens and contrast: fast.
   lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
     runs-on: ubuntu-latest
     steps:
-      # Third-party actions are pinned by commit; the comment names the
-      # release it was resolved from.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # go.mod's toolchain line picks the exact Go release; setup-go caches
-      # the module and build caches keyed on go.sum.
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
@@ -47,10 +88,8 @@ jobs:
       - name: go build
         run: go build ./...
 
-      # Known vulnerabilities in the toolchain's standard library or in
-      # dependencies that the code actually reaches. Installed rather than
-      # run with `go run`, which may switch to a newer toolchain to build
-      # it and would then scan that toolchain's standard library.
+      # Known vulnerabilities in the toolchain's standard library or in dependencies the code reaches. Installed
+      # rather than run with `go run`, which may switch to a newer toolchain to build it.
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -68,41 +107,64 @@ jobs:
       - name: theme contrast
         run: node tools/uitest/contrast.mjs
 
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
+      # Entries on the flaky list that have run out (tools/ci/flaky.tsv) block again.
+      - name: flaky list
+        run: tools/ci/flakes.sh expired
 
-      # go.mod's toolchain line picks the exact Go release; setup-go caches
-      # the module and build caches keyed on go.sum.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version-file: go.mod
-
-      - name: go test
-        run: go test -race ./...
-
-  # The app in headless Chrome against a fake herdr (tools/uitest), one
-  # prefers-color-scheme per job. Dev/CI only: its playwright-core is pinned
-  # by package-lock.json and drives the runner's own Chrome, so nothing is
-  # downloaded or shipped. Each job has its own runner, so run.sh's default
-  # ports cannot clash.
-  browser:
-    name: browser (${{ matrix.scheme }})
+  # Merge tier: every Go test, in two halves of about equal length (tools/ci/gotest.sh).
+  go-full:
+    name: go test (${{ matrix.shard }}/2)
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.merge_go == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        scheme: [dark, light]
+        shard: ["1", "2"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # go.mod's toolchain line picks the exact Go release; setup-go caches
-      # the module and build caches keyed on go.sum.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - name: go test -race
+        run: tools/ci/gotest.sh --shard ${{ matrix.shard }}/2
+
+  # Pre-submit tier: only the packages the change touches and the packages that import them.
+  go-changed:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.go != 'none'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - name: go test -race
+        env:
+          PKGS: ${{ needs.changes.outputs.go }}
+        run: |
+          if [ "$PKGS" = all ]; then tools/ci/gotest.sh; else tools/ci/gotest.sh $PKGS; fi
+
+  # The app in headless Chrome against a fake herdr (tools/uitest). Dev/CI only: its playwright-core is pinned by
+  # package-lock.json and drives the runner's own Chrome, so nothing is downloaded or shipped.
+  # Pre-submit: the smoke set (about 160 checks covering every screen, 2 minutes), plus the scripts for the paths the change touches.
+  browser-smoke:
+    needs: changes
+    if: github.event_name == 'pull_request' && (needs.changes.outputs.smoke == 'true' || needs.changes.outputs.scripts != '')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
@@ -113,23 +175,129 @@ jobs:
           cache: npm
           cache-dependency-path: tools/uitest/package-lock.json
 
-      - name: browser checks (${{ matrix.scheme }})
+      - name: browser smoke checks
         env:
-          SCHEME: ${{ matrix.scheme }}
+          SCRIPTS: ${{ needs.changes.outputs.scripts }}
         run: |
-          CHROME="$(command -v google-chrome || command -v chromium || true)"
-          if [ -z "$CHROME" ]; then
-            echo "::warning::no google-chrome or chromium on this runner; skipping browser checks"
-            exit 0
+          if [ "$SCRIPTS" = all ]; then
+            tools/ci/browser.sh full dark "$RUNNER_TEMP/uitest"
+          else
+            EXTRA="$SCRIPTS" tools/ci/browser.sh smoke dark "$RUNNER_TEMP/uitest"
           fi
-          CHROME="$CHROME" tools/uitest/run.sh . "$RUNNER_TEMP/uitest"
-
-      # Screenshots, the console, network and server logs of the failed pass, and failures/<check>.txt for each
-      # failed check: the error with its call log, the app's state and DOM, and the last console and network lines.
       - name: upload browser logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: uitest-${{ matrix.scheme }}
+          name: uitest-smoke
           path: ${{ runner.temp }}/uitest
           if-no-files-found: ignore
+
+  # Merge tier, behaviour, dark only: drive.mjs (the main app) beside every other script.
+  browser-drive:
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: browser checks (drive)
+        run: tools/ci/browser.sh drive dark "$RUNNER_TEMP/uitest"
+      - name: upload browser logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: uitest-drive
+          path: ${{ runner.temp }}/uitest
+          if-no-files-found: ignore
+
+  browser-rest:
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: browser checks (the other scripts)
+        run: tools/ci/browser.sh rest dark "$RUNNER_TEMP/uitest"
+      - name: upload browser logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: uitest-rest
+          path: ${{ runner.temp }}/uitest
+          if-no-files-found: ignore
+
+  # The visual pass in both colour schemes: the design-language scripts (focus ring, chips, controls, fonts,
+  # decision-set card, page starters). Behaviour is checked once, above; colour is checked twice, here.
+  visual:
+    name: visual (${{ matrix.scheme }})
+    needs: changes
+    if: (github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true') || (github.event_name == 'pull_request' && needs.changes.outputs.visual == 'true')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [dark, light]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: visual checks (${{ matrix.scheme }})
+        run: tools/ci/browser.sh visual ${{ matrix.scheme }} "$RUNNER_TEMP/uitest"
+      - name: upload browser logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: uitest-visual-${{ matrix.scheme }}
+          path: ${{ runner.temp }}/uitest
+          if-no-files-found: ignore
+
+  # One job to read. Green when every job this change needed passed; a skipped job is one it did not need.
+  ci-status:
+    if: always()
+    needs: [changes, lint, go-full, go-changed, browser-smoke, browser-drive, browser-rest, visual]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every needed job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
