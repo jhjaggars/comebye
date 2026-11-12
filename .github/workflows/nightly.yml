@@ -1,0 +1,171 @@
+name: Nightly
+
+# The full matrix, once a day on main's head (docs/test-tiers.md): what a push does not run.
+# Both colour schemes of every browser check, Go in a shuffled order, a fresh govulncheck, the release
+# cross-build, and each flaky-list check five times. When it is red, it opens or updates one issue titled
+# "Nightly is red" with the label nightly-red, and comments on it for each further red night; the coordinator
+# files a To do from that. A red nightly stops the next release (tools/ci/releasegate.sh).
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: gofmt, vet, build
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go build ./...
+
+      # The newest advisory database, on purpose: this is where a new advisory first shows up.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: JS, tokens, contrast, flaky list
+        run: |
+          for f in web/*.js; do node --check "$f"; done
+          node tools/uitest/tokens.mjs
+          node tools/uitest/contrast.mjs
+          tools/ci/flakes.sh expired
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      # A shuffled order and no test cache: tests that only pass in file order, or from a cached result, fail here.
+      - name: go test -race -shuffle=on
+        run: go test -race -shuffle=on -count=1 ./...
+
+  browser:
+    name: browser (${{ matrix.scheme }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [dark, light]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: every browser check (${{ matrix.scheme }})
+        run: tools/ci/browser.sh full ${{ matrix.scheme }} "$RUNNER_TEMP/uitest"
+
+      - name: upload browser logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: uitest-${{ matrix.scheme }}
+          path: ${{ runner.temp }}/uitest
+          if-no-files-found: ignore
+
+  # Each flaky-list check five times. It fails only when a check fails every time: the point is the pass counts
+  # in the log, which tell its owner whether the flake is getting better.
+  flaky:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: flaky-list checks, five runs each
+        run: |
+          export CHROME="$(command -v google-chrome || command -v chromium)"
+          OUT_DIR="$RUNNER_TEMP/flaky" tools/ci/flakes.sh stress 5
+
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - name: the release builds for all four targets
+        run: tools/ci/crossbuild.sh v0.0.0-nightly "$RUNNER_TEMP/dist"
+
+  # One issue for a red stretch of nights, closed when the nightly is green again.
+  report:
+    if: always()
+    needs: [lint, go, browser, flaky, release-build]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: open, update or close the nightly-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          open="$(gh issue list --repo "$GITHUB_REPOSITORY" --label nightly-red --state open --json number --jq '.[0].number // empty')"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*)
+              body="The nightly failed on $SHA: $RUN_URL
+
+          Job results: $RESULTS"
+              if [ -n "$open" ]; then
+                gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Red again. $body"
+              else
+                gh label create nightly-red --repo "$GITHUB_REPOSITORY" --color B60205 --description "the nightly run is red" --force
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "Nightly is red" --label nightly-red --body "$body"
+              fi
+              exit 1 ;;
+            *)
+              if [ -n "$open" ]; then
+                gh issue close "$open" --repo "$GITHUB_REPOSITORY" --comment "Green again: $RUN_URL"
+              fi ;;
+          esac
