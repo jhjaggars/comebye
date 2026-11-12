@@ -357,14 +357,13 @@
     .cp { position: relative; cursor: pointer; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; -webkit-tap-highlight-color: transparent; }
     .cp::before { content: ""; position: absolute; inset: -9px 0; }
     .md .cp::before { inset: -7px 0; }
-    .cp:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .cp[data-state="ok"] { color: var(--green); }
     .cp[data-state="ok"]::after { content: " \2713"; }
     .cp[data-state="fail"] { color: var(--red); }
     /* Copy button for a bigger piece (copyBtnHtml in app.js): a message, a report, a to-do. 36px tall, always visible. */
-    .cpb { font-family: inherit; font-weight: 600; font-size: var(--fs-12); color: var(--blue); background: none; border: 0; border-radius: var(--r-8); padding: 0 var(--sp-10); min-height: 36px; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .cpb { font-family: inherit; font-weight: 600; font-size: var(--fs-12); color: var(--blue); background: none; border: 0; border-radius: var(--r-8); padding: 0 var(--sp-10); min-height: var(--hit-36); cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
     .cpb[hidden] { display: none; }
-    .cpb:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+    .cpb:focus-visible { outline-offset: -2px; }
     .cpb[data-state="ok"] { color: var(--green); }
     .cpb[data-state="fail"] { color: var(--red); }
     .cpb-msg { font-size: var(--fs-11); margin: -10px 0; padding: 0 var(--sp-8); }
@@ -814,7 +813,7 @@
     #toast.show { opacity: 1; }
     #toast.act { pointer-events: auto; }
     #toast.error.show { pointer-events: auto; }
-    #toast.error .toast-act { min-height: 36px; border-color: var(--red); background: none; color: var(--red); }
+    #toast.error .toast-act { min-height: var(--hit-36); border-color: var(--red); background: none; color: var(--red); }
     #toast .toast-act { margin-left: var(--sp-4); min-height: 28px; padding: 0 var(--sp-10); border-radius: var(--r-8); border: 1px solid var(--blue); background: var(--chip-blue); color: var(--blue); font: inherit; font-weight: 600; cursor: pointer; }
     #update-banner {
       position: fixed; left: 50%; top: calc(8px + env(safe-area-inset-top, 0px));
