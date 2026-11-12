@@ -267,6 +267,7 @@ type Server struct {
 	auto           *autoTodo
 	relay          *blockedRelay
 	rel            *relState
+	rollout        *rolloutEngine // the rolling rollout; only on the ledger host (see rollout.go)
 	prov           *provState
 	pjobs          *provJobs           // on a provisioner: the jobs it runs
 	phosts         *provision.HostBook // on a provisioner: the hosts it built and what they cost
@@ -380,6 +381,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			log.Printf("handoff ledger disabled: %v", err)
 		} else {
 			s.ledger = l
+			s.rollout = newRolloutEngine(filepath.Join(cfg.StateDir, "release", "rollout.json"), serverRolloutOps{s}, s.auditBy)
 			s.outbox = openOutbox(outboxPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.digestEvery = cfg.DigestEvery
