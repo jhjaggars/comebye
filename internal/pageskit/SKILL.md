@@ -101,7 +101,12 @@ type. Replace the example content, and keep the template's two pieces:
      esm.sh and ES module imports from a CDN do not load.
    - **Styles:** inline only. There are no external stylesheets and no Google
      Fonts. Use the template's `--sans` and `--mono` stacks.
-   - **Images and fonts:** `data:` URIs or inline SVG.
+   - **Images and fonts:** `data:` URIs or inline SVG. For an HTML page,
+     `comebye publish` inlines the images it references by a relative path
+     (`<img src="shots/a.png">`, `srcset`, CSS `url()`; png, jpeg, webp, gif,
+     svg) from beside the file, and refuses a path that leaves its directory.
+     The page and its images together must stay under 5 MiB. Fonts you embed
+     yourself.
    - **Blocked:** `fetch`, XHR, WebSocket, `localStorage`, `sessionStorage`,
      cookies, forms that post, `alert`, `confirm`, `prompt`, `print()` and
      downloads all fail or do nothing. Keep data inline, for example in
@@ -162,7 +167,8 @@ number in a list below it.
   (`mermaid/10.9.1/mermaid.min.js`). Call `mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default"})`,
   then `mermaid.run()` on `<pre class="mermaid">` blocks, and render again on
   a theme change. Keep the source text so the diagram still reads if the
-  script fails.
+  script fails. In a **Markdown** page, a fenced ```` ```mermaid ```` block is
+  drawn for you (the app serves Mermaid; strict mode, no click callbacks).
 
 ## Charts
 

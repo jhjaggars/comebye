@@ -874,7 +874,8 @@ func (s *Server) handlePageMissing(w http.ResponseWriter, r *http.Request) {
 }
 
 // pageLibs are the vendored libraries a Markdown page loads.
-var pageLibs = map[string]string{"marked.js": "vendor/marked.umd.js", "purify.js": "vendor/purify.min.js"}
+// mermaid.js is only requested by a page that has a mermaid block.
+var pageLibs = map[string]string{"marked.js": "vendor/marked.umd.js", "purify.js": "vendor/purify.min.js", "mermaid.js": "vendor/mermaid.min.js"}
 
 // handlePageLib: GET /p/_/{name}. Public like the app's own assets.
 func (s *Server) handlePageLib(w http.ResponseWriter, r *http.Request) {
@@ -906,6 +907,7 @@ code{background:var(--code);padding:1px 4px;border-radius:3px;font-size:.92em}pr
 table{border-collapse:collapse;display:block;overflow-x:auto}th,td{border:1px solid var(--line);padding:5px 9px}
 blockquote{margin-left:0;padding-left:12px;border-left:3px solid var(--line);color:var(--mut)}
 .u{color:var(--mut);font-size:.9em}
+.mmd{overflow-x:auto;margin:1em 0;text-align:center}.mmd svg{max-width:100%;height:auto}
 </style></head><body><main id="out"><noscript>This page needs scripts to render.</noscript></main>
 `
 
@@ -920,6 +922,19 @@ out.innerHTML=DOMPurify.sanitize(m.parse(src),{ALLOWED_URI_REGEXP:/^(?:https?:|m
 Array.prototype.forEach.call(out.querySelectorAll("a"),function(a){var h=a.getAttribute("href")||"";
  if(h.charAt(0)==="#")return;var s=document.createElement("span");s.textContent=a.textContent+(h?" ("+h+")":"");a.replaceWith(s)});
 var h=out.querySelector("h1");if(h)document.title=h.textContent;
+// A mermaid fence becomes a diagram. The library is only fetched when the
+// page has one; its output is SVG drawn by Mermaid's strict mode (no click
+// callbacks, labels sanitized by Mermaid, no HTML labels), and if it fails
+// the source stays readable.
+var mm=out.querySelectorAll("pre > code.language-mermaid");
+if(mm.length){var s2=document.createElement("script");s2.src="/p/_/mermaid.js";
+ s2.onload=function(){if(!window.mermaid)return;
+  var dark=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:dark?"dark":"default",flowchart:{htmlLabels:false},fontFamily:"system-ui,sans-serif"});
+  Array.prototype.forEach.call(mm,function(c,i){var pre=c.parentNode;
+   mermaid.render("mmd"+i,c.textContent).then(function(r){var d=document.createElement("div");d.className="mmd";d.innerHTML=r.svg;pre.replaceWith(d)},
+    function(){var e=document.querySelector("#dmmd"+i);if(e)e.remove();var n=document.createElement("div");n.className="u";n.textContent="This diagram could not be drawn; its source is shown.";pre.parentNode.insertBefore(n,pre)})})};
+ document.head.appendChild(s2)}
 })();
 </script></body></html>`
 

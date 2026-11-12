@@ -65,7 +65,7 @@ func TestVendoredLibraries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"marked.umd.js", "purify.min.js"} {
+	for _, name := range []string{"marked.umd.js", "purify.min.js", "mermaid.min.js"} {
 		b, err := FS.ReadFile("vendor/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -87,7 +87,7 @@ func TestVendoredLibraries(t *testing.T) {
 			t.Errorf("vendor/README.md does not record %s", want)
 		}
 	}
-	for _, lic := range []string{"vendor/LICENSE-marked.txt", "vendor/LICENSE-dompurify.txt", "vendor/LICENSE-highlightjs.txt"} {
+	for _, lic := range []string{"vendor/LICENSE-marked.txt", "vendor/LICENSE-dompurify.txt", "vendor/LICENSE-highlightjs.txt", "vendor/LICENSE-mermaid.txt"} {
 		if _, err := FS.ReadFile(lic); err != nil {
 			t.Errorf("missing %s: %v", lic, err)
 		}

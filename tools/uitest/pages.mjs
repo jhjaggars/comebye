@@ -290,6 +290,132 @@ await check("theme: the page gets the app's theme after load and again when the 
   await page.evaluate(() => ComebyeThemes.set("system"));
 });
 
+// ---- images inlined at publish, Mermaid in Markdown, the version pill, clipboard-write ----
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8Dwn4EIwESMolGFxCsEABhYAhHYAxhTAAAAAElFTkSuQmCC", "base64");
+await check("images: publish inlines a page's local images, and the frame shows them", async () => {
+  fs.mkdirSync(path.join(work, "img"), { recursive: true });
+  fs.writeFileSync(path.join(work, "img", "shot.png"), PNG);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Shots</title><style>.bg{width:20px;height:20px;background:url(img/shot.png)}</style></head><body>
+<img id="a" src="img/shot.png" alt="a"><img id="b" srcset="img/shot.png 1x, img/shot.png 2x" alt="b"><div id="c" class="bg"></div><img id="d" src="img/missing.png" alt="d"></body></html>`;
+  const f = file("shots.html", html);
+  const out2 = execFileSync(bin, ["publish", f], { env: { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w2:p1" }, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  pages.shots = idOf(out2);
+  const body = await (await fetch(base + "/api/pages/" + pages.shots + "?body=1")).text().catch(() => "");
+  await page.goto(base + `/#/pages/${pages.shots}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.shots); if (!fr) await page.waitForTimeout(100); }
+  await until(fr, () => document.getElementById("a").complete);
+  const st = await fr.evaluate(() => ({ a: document.getElementById("a").naturalWidth, a_src: document.getElementById("a").src.slice(0, 22), b: document.getElementById("b").currentSrc.slice(0, 22), c: getComputedStyle(document.getElementById("c")).backgroundImage.slice(0, 26), d: document.getElementById("d").src }));
+  if (st.a !== 2 || !st.a_src.startsWith("data:image/png") || !st.b.startsWith("data:image/png") || !st.c.startsWith('url("data:image/png')) throw new Error("not inlined: " + JSON.stringify(st) + body.slice(0, 80));
+  if (!st.d.endsWith("img/missing.png") && !/missing/.test(st.d)) throw new Error("the missing image was rewritten: " + st.d);
+});
+
+await check("images: a reference that leaves the page's directory is refused by the CLI", async () => {
+  const f = file("escape.html", `<img src="../../../etc/hostname">`);
+  let err = "";
+  try { publish([f]); } catch (e) { err = String(e.stderr || e.message); }
+  if (!/outside the page's directory/.test(err)) throw new Error("publish said: " + err);
+});
+
+const mermaidMd = "# Flow\n\n```mermaid\nflowchart LR\n  A[Start] --> B{Ok?}\n  B -->|yes| C[Done]\n```\n\nafter the diagram\n";
+const hostileMd = "# Hostile\n\n```mermaid\nflowchart LR\n  A[\"<img src=x onerror=window.__pwned=1>\"] --> B\n  click A callback \"window.__pwned=2\"\n  click B href \"javascript:window.__pwned=3\"\n```\n\n```mermaid\nthis is not a diagram\n```\n";
+await check("mermaid: a mermaid block draws an SVG in the Markdown page; a page without one never loads Mermaid", async () => {
+  pages.mmd = idOf(publish(["-", "--kind", "md", "--title", "Flow"], mermaidMd));
+  const asked = [];
+  const onReq = (rq) => { if (/\/p\/_\/mermaid\.js/.test(rq.url())) asked.push(rq.url()); };
+  page.on("request", onReq);
+  await page.goto(base + `/#/pages/${pages.md}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let plain;
+  for (let i = 0; i < 60 && !plain; i++) { plain = frameOf(pages.md); if (!plain) await page.waitForTimeout(100); }
+  await plain.waitForSelector("#out h1", { timeout: 8000 });
+  await page.waitForTimeout(500);
+  if (asked.length) throw new Error("Mermaid was loaded by a page without a diagram: " + asked);
+  await page.goto(base + `/#/pages/${pages.mmd}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.mmd); if (!fr) await page.waitForTimeout(100); }
+  await fr.waitForSelector("#out .mmd svg", { timeout: 15000 });
+  page.off("request", onReq);
+  if (asked.length !== 1) throw new Error("mermaid.js requests: " + asked.length);
+  const st = await fr.evaluate(() => ({ nodes: document.querySelectorAll("#out .mmd svg .node").length, text: document.querySelector("#out .mmd svg").textContent, rest: document.getElementById("out").innerText, w: document.querySelector("#out .mmd svg").getBoundingClientRect().width }));
+  if (st.nodes < 3 || !/Start/.test(st.text) || !/after the diagram/.test(st.rest)) throw new Error("diagram: " + JSON.stringify(st));
+  await page.waitForTimeout(200);
+  await shot("pages-mermaid-1280");
+});
+
+await check("mermaid: a hostile diagram (html label, click callbacks, javascript: link) runs nothing, a broken one shows its source", async () => {
+  pages.mmdBad = idOf(publish(["-", "--kind", "md", "--title", "Hostile diagram"], hostileMd));
+  await page.goto(base + `/#/pages/${pages.mmdBad}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.mmdBad); if (!fr) await page.waitForTimeout(100); }
+  await until(fr, () => !!document.querySelector("#out .u") || document.querySelectorAll("#out .mmd").length > 1, null, 15000);
+  await page.waitForTimeout(500);
+  const st = await fr.evaluate(() => ({ pwned: window.__pwned || 0, img: document.querySelectorAll("#out img").length, js: document.querySelectorAll("#out [href^=javascript], #out [onclick], #out [onerror]").length, note: (document.querySelector("#out .u") || {}).textContent || "", pres: document.querySelectorAll("#out pre").length }));
+  if (st.pwned || st.img || st.js) throw new Error("hostile diagram ran or left markup: " + JSON.stringify(st));
+  if (!/could not be drawn/.test(st.note) || st.pres < 1) throw new Error("broken diagram: " + JSON.stringify(st));
+});
+
+await check("clipboard: the frame is allowed to write the clipboard (and the sandbox is unchanged)", async () => {
+  await page.goto(base + `/#/pages/${pages.chart}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  const attrs = await page.locator("iframe.pgs-frame").evaluate((f) => [f.getAttribute("allow"), f.getAttribute("sandbox")]);
+  if (attrs[0] !== "clipboard-write" || attrs[1] !== "allow-scripts") throw new Error("iframe allow/sandbox: " + attrs);
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.chart); if (!fr) await page.waitForTimeout(100); }
+  await fr.waitForSelector(".bar", { timeout: 8000 });
+  const allowed = await fr.evaluate(() => [document.featurePolicy.allowsFeature("clipboard-write"), document.featurePolicy.allowsFeature("clipboard-read"), document.featurePolicy.allowsFeature("camera")]);
+  if (!allowed[0] || allowed[1] || allowed[2]) throw new Error("permissions policy in the frame (write, read, camera): " + allowed);
+});
+
+await check("version pill: a newer version shows as a pill that reloads the frame on click; a pinned version stays", async () => {
+  const v1 = '<!doctype html><html><head><meta charset="utf-8"><title>Live</title></head><body><h1 id="v">version one</h1><script>window.__mark=1</script></body></html>';
+  pages.live = idOf(publish(["-", "--key", "livepage", "--kind", "html"], v1));
+  await page.goto(base + `/#/pages/${pages.live}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  let fr;
+  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.live); if (!fr) await page.waitForTimeout(100); }
+  await fr.waitForSelector("#v");
+  if (await page.locator("#pgs-new").count()) throw new Error("a pill with no newer version");
+  publish(["-", "--key", "livepage", "--kind", "html"], v1.replace("version one", "version two"));
+  await page.evaluate(() => pagesLoad());
+  await page.waitForSelector("#pgs-new", { timeout: 8000 });
+  const txt = await page.locator("#pgs-new").innerText();
+  if (!/v2 is out/.test(txt)) throw new Error("pill text: " + txt);
+  if ((await fr.evaluate(() => document.getElementById("v").textContent)) !== "version one" || !(await fr.evaluate(() => window.__mark === 1))) throw new Error("the page was swapped under the reader");
+  // a phone that opened version 2, then version 3 comes out: the pill fits at 390
+  const phone = await launch({ width: 390, height: 844, dark, bypassCSP: false });
+  const m = phone.page;
+  await m.goto(base + `/#/pages/${pages.live}`, { waitUntil: "load" });
+  await m.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
+  await m.waitForTimeout(500);
+  publish(["-", "--key", "livepage", "--kind", "html"], v1.replace("version one", "version three"));
+  await m.evaluate(() => pagesLoad());
+  await page.evaluate(() => pagesLoad());
+  await m.waitForSelector("#pgs-new", { timeout: 8000 });
+  const over = await m.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-bar").scrollWidth, document.querySelector(".pgs-bar").clientWidth, document.getElementById("pgs-new").getBoundingClientRect().height]);
+  if (over[0] > over[1] || over[2] > over[3] || over[4] < 36) throw new Error("pill at 390: " + over);
+  await m.screenshot({ path: `${out}/pages-pill-390.png` });
+  await phone.browser.close();
+  await page.waitForFunction(() => /v3 is out/.test(document.getElementById("pgs-new")?.textContent || ""), null, { timeout: 8000 });
+  await page.waitForTimeout(150);
+  await shot("pages-pill-1280");
+  await page.locator("#pgs-new").click();
+  await until(page, () => !document.querySelector("#pgs-new") && /\/p\/pg_[0-9a-f]{10}\/3$/.test(document.querySelector("iframe.pgs-frame").src), null, 5000);
+  let f2;
+  for (let i = 0; i < 60 && !f2; i++) { f2 = frameOf(pages.live); if (f2 && !(await f2.evaluate(() => document.getElementById("v")?.textContent === "version three").catch(() => false))) f2 = null; if (!f2) await page.waitForTimeout(100); }
+  if (!f2) throw new Error("the frame did not load version three");
+  // a reader who picked version 1 is not moved by a version 3
+  await page.locator("#pgs-ver").selectOption("1");
+  await until(page, () => /\/1$/.test(document.querySelector("iframe.pgs-frame").src), null, 5000);
+  publish(["-", "--key", "livepage", "--kind", "html"], v1.replace("version one", "version four"));
+  await page.evaluate(() => pagesLoad());
+  await until(page, () => document.querySelectorAll("#pgs-ver option").length === 4, null, 5000);
+  if (await page.locator("#pgs-new").count() || !/\/1$/.test(await page.locator("iframe.pgs-frame").getAttribute("src"))) throw new Error("a pinned version was moved or got a pill");
+});
+
 // ---- the pages listener: its own origin, and nothing but /p ----
 await check(pagesUrl ? "listener: pages come from an origin of their own that has no /api, no app, no way in" : "listener: not configured in this pass (pages share the app's origin)", async () => {
   if (!pagesUrl) {

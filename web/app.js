@@ -5209,7 +5209,7 @@ function initRecall() {
 // and navigating this window too. Everything about it that this screen
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
-const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", made: new Map(), body: null, bodyTimer: null, bodySeq: 0 };
+const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0 };
 
 function parsePagesRoute() {
   const m = location.hash.match(/^#\/pages(?:\/([^/]+)(?:\/(\d+))?)?$/);
@@ -5332,14 +5332,19 @@ function renderPageView() {
     view.innerHTML = `<div class="pgs-pick">${pgs.loaded ? "That page is gone." : "Loading…"}</div>`;
     return;
   }
-  const ver = r.ver || p.version;
-  const key = p.id + "/" + ver + "/" + p.updated_at;
+  // The frame keeps the version it opened. When the agent publishes a newer
+  // one while the viewer follows the latest, a pill offers it instead of
+  // swapping the page under the reader; clicking it reloads the frame.
+  let ver = r.ver || p.version, newer = 0;
+  if (view.dataset.id === p.id && pgs.frameFollow && !r.ver && !pgs.reload && pgs.frameVer && pgs.frameVer < p.version) { newer = p.version; ver = pgs.frameVer; }
+  pgs.reload = false;
+  const key = p.id + "/" + ver;
   const vers = (p.versions || []).slice().reverse();
   const opts = vers.map((v) => `<option value="${v.n}"${v.n === ver ? " selected" : ""}>v${v.n}${v.n === p.version ? " (latest)" : ""} · ${esc(pageAgo(v.at))}</option>`).join("");
   const bar = `<div class="pgs-bar"><h2>${esc(p.title)}</h2>
     <div class="pgs-prov">Published by ${esc(p.by)}${p.host ? " on " + esc(p.host) : ""}${p.tagged ? " (a worker node)" : ""} · ${esc(pageAgo(p.created_at))}${p.updated_at !== p.created_at ? ", updated " + esc(pageAgo(p.updated_at)) : ""} · ${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}<br>Agent-written page, shown in a sandbox: its scripts run, but it cannot reach Comebye, your data or the network.</div>
     <div class="pgs-made" id="pgs-made" hidden></div>
-    <div class="pgs-acts">${vers.length > 1 ? `<select id="pgs-ver" aria-label="Version">${opts}</select>` : ""}
+    <div class="pgs-acts">${newer ? `<button type="button" class="btn pgs-new" id="pgs-new">v${newer} is out · reload</button>` : ""}${vers.length > 1 ? `<select id="pgs-ver" aria-label="Version">${opts}</select>` : ""}
       <button type="button" class="btn" id="pgs-copy">Copy link</button>
       <a class="btn" id="pgs-open" href="${esc(pgs.pagesUrl + "/p/" + p.id + (r.ver ? "/" + r.ver : ""))}" target="_blank" rel="noopener">Open in tab</a>
       <button type="button" class="btn danger" id="pgs-del">Delete</button></div></div>`;
@@ -5351,7 +5356,10 @@ function renderPageView() {
   }
   view.dataset.id = p.id;
   pgs.frameKey = key;
-  view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
+  pgs.frameVer = ver;
+  pgs.frameFollow = !r.ver;
+  // allow="clipboard-write": a page's Copy button may write the clipboard (on a click; it can never read it).
+  view.innerHTML = bar + `<iframe class="pgs-frame" sandbox="allow-scripts" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe>`;
   const fr = view.querySelector("iframe.pgs-frame");
   fr.addEventListener("load", sendPageTheme);
   pagesMade(p.id, ver);
@@ -5473,10 +5481,12 @@ function initPages() {
     if (ev.target.id !== "pgs-ver" || !pgs.route) return;
     const p = pgs.items.find((x) => x.id === pgs.route.id), n = Number(ev.target.value);
     history.replaceState(null, "", pageHash(pgs.route.id, p && n === p.version ? 0 : n));
+    pgs.reload = true; // an explicit pick loads that version, pill or not
     route();
   });
   $("pgs-view").addEventListener("click", async (ev) => {
     if (ev.target.closest("#pgs-del")) { pagesDelete(); return; }
+    if (ev.target.closest("#pgs-new")) { pgs.reload = true; renderPageView(); return; }
     if (!ev.target.closest("#pgs-copy")) return;
     const r = pgs.route, base = pgs.pagesUrl || pgs.publicUrl || location.origin;
     const link = base + "/p/" + r.id + (r.ver ? "/" + r.ver : "");

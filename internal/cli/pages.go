@@ -81,6 +81,13 @@ func kindOfFile(name string) string {
 	return ""
 }
 
+// looksHTML: a page of unknown kind that starts like HTML (the hub guesses
+// the same way).
+func looksHTML(body string) bool {
+	h := strings.ToLower(strings.TrimSpace(body))
+	return strings.HasPrefix(h, "<!doctype html") || strings.HasPrefix(h, "<html")
+}
+
 func cmdPublish(e *Env, args []string) error {
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
@@ -113,6 +120,26 @@ func cmdPublish(e *Env, args []string) error {
 	k := strings.ToLower(*kind)
 	if k == "" && pos[0] != "-" {
 		k = kindOfFile(pos[0])
+	}
+	if k == "html" || (k == "" && looksHTML(body)) {
+		dir := "."
+		if pos[0] != "-" {
+			dir = filepath.Dir(pos[0])
+		}
+		out, done, notes, err := inlineImages(body, dir)
+		if err != nil {
+			return err
+		}
+		body = out
+		if int64(len(body)) > maxPageBytes {
+			return fmt.Errorf("%s is %s with its images inlined; a page is at most %s", pos[0], humanSize(int64(len(body))), humanSize(maxPageBytes))
+		}
+		if len(done) > 0 {
+			fmt.Fprintf(e.Stderr, "Inlined %d image(s): %s\n", len(done), strings.Join(done, ", "))
+		}
+		for _, n := range notes {
+			fmt.Fprintf(e.Stderr, "Not inlined: %s\n", n)
+		}
 	}
 	req := map[string]any{"body": body, "kind": k, "title": *title, "key": *key, "id": *update, "handoff": *handoff}
 	if *ifVersion > 0 {

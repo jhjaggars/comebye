@@ -299,6 +299,7 @@ func TestPagesEveryResponseIsSandboxed(t *testing.T) {
 		{"version number", "GET", "/p/" + p.ID + "/1", userHdr, "", 200},
 		{"markdown", "GET", "/p/" + md.ID, userHdr, "", 200},
 		{"lib", "GET", "/p/_/marked.js", nil, "", 200},
+		{"lib, mermaid", "GET", "/p/_/mermaid.js", nil, "", 200},
 		{"lib, unknown", "GET", "/p/_/other.js", nil, "", 404},
 		{"unknown id", "GET", "/p/pg_0000000000", userHdr, "", 404},
 		{"bad id", "GET", "/p/..%2f..%2fetc%2fpasswd", userHdr, "", 404},
@@ -342,7 +343,7 @@ func TestPagesEveryResponseIsSandboxed(t *testing.T) {
 				t.Errorf("%s: CORS header %s on a page response", c.name, k)
 			}
 		}
-		if c.want == 200 && c.path != "/p/_/marked.js" {
+		if c.want == 200 && !strings.HasPrefix(c.path, "/p/_/") {
 			if h.Get("Cache-Control") != "no-store" || h.Get("Content-Type") != "text/html; charset=utf-8" || h.Get("Cross-Origin-Resource-Policy") != "same-origin" {
 				t.Errorf("%s: headers %v", c.name, h)
 			}

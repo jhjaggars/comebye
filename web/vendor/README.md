@@ -10,6 +10,7 @@ edited, so the hashes below can be re-checked against the registry.
 |------|---------|---------|----------|
 | `marked.umd.js` | [marked](https://github.com/markedjs/marked) 18.1.1, `lib/marked.umd.js` | MIT (`LICENSE-marked.txt`) | CommonMark + GFM to HTML |
 | `purify.min.js` | [DOMPurify](https://github.com/cure53/DOMPurify) 3.4.17, `dist/purify.min.js` | Apache-2.0 (dual MPL-2.0/Apache-2.0; used under Apache-2.0, `LICENSE-dompurify.txt`) | sanitizing that HTML |
+| `mermaid.min.js` | [mermaid](https://github.com/mermaid-js/mermaid) 10.9.5, `dist/mermaid.min.js` | MIT (`LICENSE-mermaid.txt`) | diagrams in Markdown pages (the page shell loads it only when a page has a `mermaid` block; not loaded by the app) |
 | `transformers.bundle.js` | [@huggingface/transformers](https://github.com/huggingface/transformers.js) 4.3.2 with onnxruntime-web 1.31.0-dev.20260914-8d85527a0 bundled in (**built**, see below) | Apache-2.0 and MIT (`LICENSE-transformers-bundle.txt`) | speech to text in the browser (`stt-worker.js`) |
 | `hljs/*.min.js` | [highlight.js](https://github.com/highlightjs/highlight.js) 11.11.1 from the `@highlightjs/cdn-assets` package, `es/core.min.js` and 15 `es/languages/*.min.js` (go, javascript, typescript, python, bash, json, yaml, markdown, css, xml, diff, rust, sql, shell, makefile, dockerfile) | BSD-3-Clause (`LICENSE-highlightjs.txt`) | syntax colours in the Diff panel; loaded on demand by `sidepanel.js` as ES modules |
 
@@ -49,6 +50,13 @@ highlight.js 11.11.1 (`hljs/`, one ES module per file, unedited)
 - file sha256: `typescript.min.js` 60f542a05921072df100b34ea9a20a765617c518f8ac11d1c2c238ae11d83fcc
 - file sha256: `xml.min.js` 2d843265c0bdd3e50f107e6473196b5f525c0ea68de83c40f9f30ffbbea6896f
 - file sha256: `yaml.min.js` 3d227e0d347021b99da5c7b8de86ec8ce647f2f15d3b97100b34f9d2507ec2e7
+
+mermaid 10.9.5 (the last 10.x; 10.9.1 was what the pages plan tried, and this is its patch line)
+- tarball: https://registry.npmjs.org/mermaid/-/mermaid-10.9.5.tgz
+- registry `dist.integrity`: `sha512-eRlKEjzak4z1rcXeCd1OAlyawhrptClQDo8OuI8n6bSVqJ9oMfd5Lrf3Q+TdJHewi/9AIOc3UmEo8Fz+kNzzuQ==` (matched)
+- registry `dist.shasum` (sha1): `b10606abb323d34154751b5358ebe325a78c94e5` (matched)
+- file sha256: `mermaid.min.js` 616a109f19cd186842e11d45b35ac07456b3a75513310f6ea075351aa430b1e2
+- 3.3 MB, so it is served only at `/p/_/mermaid.js` to a Markdown page that asks, drawn with `securityLevel: "strict"`.
 
 `web/app_test.go` checks the file sha256 lines above against the files, so
 an edit to a vendored file without updating this record fails the tests.

@@ -438,6 +438,12 @@ would be you. So a page never runs as the app:
   or from another page (CORS fails, and `connect-src` is `none` besides), no
   fetch, form post, popup, nested frame, or navigation of the top window.
   Images and fonts must be `data:` URIs; scripts are inline or from cdnjs.
+  `comebye publish` turns an HTML page's relative image references into `data:`
+  URIs, reading only beside the page (no `..`, no symlink out) and only images.
+  The app's frame has `allow="clipboard-write"` (a page's Copy button works on
+  a click; a page can never read the clipboard). A Markdown page's `mermaid`
+  fence is drawn by the vendored Mermaid (`/p/_/mermaid.js`, loaded only for a
+  page that has one, `securityLevel: "strict"`).
 - **The header is on everything under `/p/`:** pages, 404s, auth failures, a
   wrong Host, and any path that matches no route.
 - **No CORS, ever.** No page or asset response carries
