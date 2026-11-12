@@ -4272,7 +4272,7 @@ const rc = {
   q: "", filters: {}, res: null, loading: false, facets: null, status: null, err: "",
   ctl: null, timer: null, more: false, route: null,
   sess: null, sessKey: "", msgs: [], before: false, after: false, sessErr: "", sessLoading: false,
-  hits: [], hitAt: -1, open: new Set(),
+  hits: [], hitAt: -1, open: new Set(), prod: new Map(),
 };
 
 function rcLoadFilters() {
@@ -4507,6 +4507,25 @@ function rcVerdictTag(v) {
   return v && v !== "unknown" && RC_VERDICT[v] ? rcTag(v, RC_VERDICT[v]) : null;
 }
 
+// What a session made, as the words a chip says.
+const RC_PRODUCED = { commit: ["commit", "commits"], page: ["Page", "Pages"], pr: ["PR", "PRs"], issue: ["issue", "issues"], comment: ["comment", "comments"], release: ["release", "releases"], image: ["image", "images"] };
+const RC_PRODUCED_ORDER = ["page", "pr", "issue", "commit", "release", "image", "comment"];
+
+function rcProducedLabel(type, n) {
+  const w = RC_PRODUCED[type];
+  return w ? (n === undefined ? w[0] : `${n} ${w[n === 1 ? 0 : 1]}`) : String(type);
+}
+
+// rcProducedChips is the chip line of a result row: what the session made.
+function rcProducedChips(counts) {
+  const kinds = RC_PRODUCED_ORDER.filter((t) => counts && counts[t]);
+  if (!kinds.length) return null;
+  const d = document.createElement("div");
+  d.className = "rc-foot rc-made";
+  for (const t of kinds) d.append(rcTag(rcProducedLabel(t, counts[t]), "t-purple"));
+  return d;
+}
+
 function rcCard(h) {
   const a = document.createElement("a");
   a.className = "rc-card";
@@ -4536,6 +4555,45 @@ function rcCard(h) {
   const v = rcVerdictTag(h.verdict);
   if (v) foot.append(v);
   if (h.secrets) foot.append(rcTag("possible secret", "t-orange"));
+  a.append(foot);
+  const made = rcProducedChips(h.produced);
+  if (made) a.append(made);
+  return a;
+}
+
+// rcProducedCard is an artifact a query named, with the session and turn that made it.
+function rcProducedCard(it) {
+  const a = document.createElement("a");
+  a.className = "rc-card rc-prod";
+  a.href = rcSessionHash(it.session, { seq: it.seq, sub: it.sub });
+  a.dataset.key = `${it.session.host}/${it.session.kind}/${it.session.id}`;
+  const title = document.createElement("div");
+  title.className = "rc-title";
+  const ref = it.type === "commit" ? it.ref.slice(0, 12) : it.ref;
+  title.append(rcTag(rcProducedLabel(it.type), "t-purple"), document.createTextNode(" " + ref));
+  if (it.type === "commit" && it.rel && it.rel !== "made") title.append(document.createTextNode(` (${it.rel})`));
+  a.append(title);
+  if (it.title) {
+    const t = document.createElement("div");
+    t.className = "rc-snip";
+    t.textContent = it.title;
+    a.append(t);
+  }
+  const by = document.createElement("div");
+  by.className = "rc-meta";
+  by.textContent = `by ${it.session.title || it.session.id} · turn ${it.seq} · ${rcMetaLine(it.session)}`;
+  a.append(by);
+  const foot = document.createElement("div");
+  foot.className = "rc-meta rc-foot";
+  if (it.type === "commit" && it.verdict && it.verdict !== "unchecked") {
+    const v = it.verdict === "landed" ? "landed" + (it.landed_as ? " as " + it.landed_as.slice(0, 8) : "") : it.verdict === "notinmain" ? "not on main" : it.verdict;
+    foot.append(rcTag(v, it.verdict === "landed" ? "t-green" : it.verdict === "notinmain" ? "t-orange" : "t-muted"));
+  }
+  if (it.pr) foot.append(rcTag("PR " + it.pr, "t-blue"));
+  const open = document.createElement("span");
+  open.className = "rc-openat";
+  open.textContent = `Open at turn ${it.seq} ▸`;
+  foot.append(open);
   a.append(foot);
   return a;
 }
@@ -4596,9 +4654,22 @@ function renderRecallResults() {
       kids.push(tip);
     }
     kids.push(count);
-    for (const c of rc.res.commits || []) kids.push(rcCommitCard(c));
+    const made = rc.res.produced || [];
+    if (made.length) {
+      const sec = document.createElement("div");
+      sec.className = "rc-sec"; sec.id = "rc-produced";
+      sec.textContent = "Produced";
+      kids.push(sec);
+      for (const it of made) kids.push(rcProducedCard(it));
+      if (rc.res.hits.length) {
+        const h2 = document.createElement("div");
+        h2.className = "rc-sec";
+        h2.textContent = "Sessions that mention it";
+        kids.push(h2);
+      }
+    } else for (const c of rc.res.commits || []) kids.push(rcCommitCard(c));
     for (const h of rc.res.hits) kids.push(rcCard(h));
-    if (!rc.res.total && !(rc.res.commits || []).length) kids.push(rcNotice(rc.res.recent ? "No sessions match these filters." : "Nothing matches. Filters narrow this too, and only the start and end of long output is indexed."));
+    if (!rc.res.total && !(rc.res.commits || []).length && !made.length) kids.push(rcNotice(rc.res.recent ? "No sessions match these filters." : "Nothing matches. Filters narrow this too, and only the start and end of long output is indexed."));
     if (rc.res.hits.length < rc.res.total) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "btn rc-more"; b.id = "rc-more";
@@ -4640,7 +4711,7 @@ async function rcOpenSession(r) {
     return;
   }
   rc.sessKey = key;
-  rc.sess = null; rc.msgs = []; rc.hits = []; rc.hitAt = -1; rc.sessErr = ""; rc.open = new Set();
+  rc.sess = null; rc.msgs = []; rc.hits = []; rc.hitAt = -1; rc.sessErr = ""; rc.open = new Set(); rc.prod = new Map();
   rc.sessLoading = true;
   renderRecallSession();
   try {
@@ -4653,6 +4724,7 @@ async function rcOpenSession(r) {
   }
   rc.sessLoading = false;
   renderRecallSession();
+  if (!rc.sessErr) rcLoadProduced(r, key);
   if (r.q && !rc.sessErr) {
     try {
       const d = await api(rcSessionURL(r) + "/hits?q=" + encodeURIComponent(r.q));
@@ -4664,6 +4736,27 @@ async function rcOpenSession(r) {
     renderRecallFind();
   }
   if (r.seq !== null) rcShowSeq(r.seq);
+}
+
+// rcLoadProduced fetches what the session made and marks the turns that made it. The
+// transcript reads fine without it: a failure leaves the turns as they were.
+async function rcLoadProduced(r, key) {
+  try {
+    const d = await api(rcSessionURL(r) + "/produced");
+    if (rc.sessKey !== key) return;
+    const by = new Map();
+    for (const it of d.produced || []) {
+      if ((it.sub || "") !== r.sub || (it.type === "commit" && it.rel === "seen")) continue;
+      if (!by.has(it.seq)) by.set(it.seq, []);
+      by.get(it.seq).push(it);
+    }
+    rc.prod = by;
+    renderRecallMessages();
+    if (r.seq !== null && rc.current === r.seq) {
+      const el = document.querySelector(`#rc-session [data-seq="${r.seq}"]`);
+      if (el) el.scrollIntoView({ block: "center" });
+    }
+  } catch {}
 }
 
 function rcMerge(list, older) {
@@ -4943,7 +5036,35 @@ function rcToolCard(call, result) {
     if (s) det.append(s);
   }
   det.addEventListener("toggle", () => { if (det.open) rc.open.add(id); else rc.open.delete(id); });
-  return det;
+  const made = [call, result].filter(Boolean).flatMap((m) => rc.prod.get(m.seq) || []);
+  if (!made.length) return det;
+  const wrap = document.createElement("div");
+  wrap.append(det);
+  const line = document.createElement("div");
+  line.className = "rc-made rc-madeline";
+  for (const it of made) line.append(rcMadeChip(it));
+  wrap.append(line);
+  return wrap;
+}
+
+// rcMadeChip is what a turn made: a Page opens in Pages, a PR or issue on GitHub (by the
+// URL its own output gave); a commit says where it landed.
+function rcMadeChip(it) {
+  let el;
+  if (it.type === "page") {
+    el = document.createElement("a");
+    el.href = pageHash(it.ref);
+  } else if (it.url && /^https:\/\/github\.com\//.test(it.url)) {
+    el = document.createElement("a");
+    el.href = it.url; el.target = "_blank"; el.rel = "noopener noreferrer";
+  } else el = document.createElement("span");
+  el.className = "rc-pchip";
+  let t = `${rcProducedLabel(it.type)} ${it.type === "commit" ? it.ref.slice(0, 8) : it.ref}`;
+  if (it.type === "page" && it.detail) t += ` · ${it.detail}`;
+  if (it.type === "commit" && it.verdict && it.verdict !== "unchecked") t += it.verdict === "landed" ? ` · landed${it.landed_as ? " as " + it.landed_as.slice(0, 8) : ""}` : it.verdict === "notinmain" ? " · not on main" : ` · ${it.verdict}`;
+  if (it.type === "commit" && it.pr) t += ` · ${it.pr}`;
+  el.textContent = t;
+  return el;
 }
 
 function renderRecallMessages() {

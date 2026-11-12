@@ -2833,7 +2833,57 @@ await check("transcripts: a subagent opens as its own thread", async () => {
 await check("transcripts: a commit's SHA finds the session", async () => {
   await page.goto(base + "/#/search?q=1a2b3c4d", { waitUntil: "load" });
   await page.waitForSelector(".rc-card", { timeout: 5000 });
-  if (!(await page.locator("#rc-results").innerText()).includes("made 1a2b3c4d")) throw new Error("no commit card");
+  const t = await page.locator("#rc-results").innerText();
+  if (!/PRODUCED/i.test(t) || !t.includes("1a2b3c4d")) throw new Error("no commit in the Produced section: " + t);
+});
+
+await check("transcripts: Produced section above the sessions, chip lines, Open at turn N, chips in the transcript", async () => {
+  for (const [w, h, tag] of [[390, 844, "phone"], [1280, 800, "desktop"]]) {
+    await page.setViewportSize({ width: w, height: h });
+    // A Page's id finds the Page and the turn that published it.
+    await page.goto(base + "/#/search?q=pg_5a0e7e1b2c", { waitUntil: "load" });
+    await page.waitForSelector(".rc-prod", { timeout: 5000 });
+    const sec = await page.locator("#rc-produced").innerText();
+    if (!/produced/i.test(sec)) throw new Error("section " + sec);
+    const card = await page.locator(".rc-prod").first().innerText();
+    if (!/Page/.test(card) || !card.includes("pg_5a0e7e1b2c") || !/turn 22/.test(card) || !card.includes("Open at turn 22")) throw new Error("card " + card);
+    if (await page.locator("#rc-produced ~ .rc-card").evaluateAll((l) => l.length && l[0].classList.contains("rc-prod")) !== true) throw new Error("the Produced card is not under its heading");
+    await noSideways();
+    await page.screenshot({ path: `${out}/search-produced-${tag}.png` });
+    // A PR ref (owner/repo#N) too, and the session rows carry what they made.
+    await page.locator("#rc-q").fill("acme/comebye-fixture#42");
+    await page.waitForFunction(() => /turn 26/.test(document.querySelector(".rc-prod")?.textContent || ""), null, { timeout: 5000 });
+    await page.locator("#rc-q").fill("smoke");
+    await page.waitForSelector(".rc-card .rc-made", { timeout: 5000 });
+    const chips = await page.locator(".rc-card .rc-made").first().innerText();
+    for (const want of ["1 Page", "1 PR", "1 issue", "1 commit"]) if (!chips.includes(want)) throw new Error("chip line " + chips);
+    if (await page.locator(".rc-prod").count()) throw new Error("a Produced card for plain words");
+    await noSideways();
+    await page.screenshot({ path: `${out}/search-chipline-${tag}.png` });
+    // Open at turn N lands on the turn, whose chips say what it made.
+    await page.locator("#rc-q").fill("pg_5a0e7e1b2c");
+    await page.waitForSelector(".rc-prod", { timeout: 5000 });
+    await page.locator(".rc-prod").first().click();
+    await page.waitForSelector(".rc-pchip", { timeout: 5000 });
+    await page.waitForFunction(() => document.querySelector("#rc-session .rc-out.cur, #rc-session .rc-args.cur"), null, { timeout: 5000 });
+    const line = await page.locator(".rc-pchip").allInnerTexts();
+    if (!line.some((x) => x.includes("Page pg_5a0e7e1b2c"))) throw new Error("chips " + line);
+    const href = await page.locator("a.rc-pchip", { hasText: "pg_5a0e7e1b2c" }).getAttribute("href");
+    if (href !== "#/pages/pg_5a0e7e1b2c") throw new Error("page chip href " + href);
+    await noSideways();
+    await page.screenshot({ path: `${out}/transcript-chips-${tag}.png` });
+  }
+  // The other turns of that session: a PR and an issue link to GitHub, a commit says where it stands.
+  await page.goto(base + "/" + SMOKE + "?seq=26", { waitUntil: "load" });
+  await page.waitForSelector(".rc-pchip", { timeout: 5000 });
+  const all = await page.locator(".rc-pchip").allInnerTexts();
+  if (!all.some((x) => x.startsWith("PR acme/comebye-fixture#42"))) throw new Error("chips " + all);
+  const gh = await page.locator("a.rc-pchip", { hasText: "#42" }).getAttribute("href");
+  if (gh !== "https://github.com/acme/comebye-fixture/pull/42") throw new Error("pr chip " + gh);
+  // Nothing in the index for a ref: a notice, not a blank.
+  await page.goto(base + "/#/search?q=pg_0000000000", { waitUntil: "load" });
+  await page.waitForFunction(() => /Nothing matches/.test(document.querySelector("#rc-results")?.textContent || ""), null, { timeout: 5000 });
+  await page.setViewportSize({ width: 390, height: 844 });
 });
 
 await check("transcripts: at desktop width, results and session side by side", async () => {
