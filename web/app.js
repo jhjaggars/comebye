@@ -1970,7 +1970,7 @@ async function todoAct(id, what, body, opts = {}) {
     try {
       await api(`/api/todos/${encodeURIComponent(id)}/${what}`, { method: "POST", body: JSON.stringify(body || {}), keepalive: !!keepalive });
       todos.pend.settle(id);
-      toast(what === "answer" ? "Answered. The coordinator will pass it on." : what === "done" ? "Marked done" : what === "dismiss" ? "Dismissed" : "Dropped");
+      toast(what === "answer" ? (prev.item.dialog ? "Sent to the agent's dialog." : "Answered. The coordinator will pass it on.") : what === "done" ? "Marked done" : what === "dismiss" ? "Dismissed" : "Dropped");
     } catch (e) {
       // Put it back as it was, with the typed answer, so a second try is one tap.
       restore(true);

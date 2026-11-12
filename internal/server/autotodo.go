@@ -339,6 +339,7 @@ func (s *Server) autoBlockedItem(ctx context.Context, a herdr.AgentInfo, since, 
 	name := autoName(a)
 	var b strings.Builder
 	var opts []TodoOption
+	var bind *TodoDialog
 	fmt.Fprintf(&b, "**%s** has been blocked for %s (since %s) and nobody has had it open.\n\n",
 		mdSafe(name), roundMinutes(now.Sub(since)), since.Local().Format("15:04"))
 	d, err := s.auto.readDialog(ctx, a)
@@ -349,15 +350,23 @@ func (s *Server) autoBlockedItem(ctx context.Context, a herdr.AgentInfo, since, 
 		b.WriteString("Blocked, no dialog recognised on its screen. Open the agent to see what it is waiting for.")
 	default:
 		b.WriteString(dialogContext(d))
-		if opts = dialogOptions(d); len(opts) > 0 {
+		var rows []int
+		if opts, rows = dialogOptions(d); len(opts) > 0 {
 			// The same numbered list `todo add --option` writes, for readers of the text.
-			b.WriteString("\n\n" + optionsMarkdown(opts, nil) + "\n\nThese are the dialog's own options. Answering here does not answer the dialog: open the agent (link above) and answer it in its pane.")
+			b.WriteString("\n\n" + optionsMarkdown(opts, nil))
+			if d.Answerable && !d.Multi && d.Fingerprint != "" {
+				bind = &TodoDialog{Fingerprint: d.Fingerprint, Rows: rows}
+				b.WriteString("\n\nThese are the dialog's own options. Choosing one here answers the dialog in its pane, if it is still open.")
+			} else {
+				b.WriteString("\n\nThese are the dialog's own options. Answering here does not answer the dialog: open the agent (link above) and answer it in its pane.")
+			}
 		}
 	}
 	it := Todo{
 		Question:  oneLine(name+" is blocked at a dialog and waiting for you", todoMaxQuestion),
 		Context:   block(b.String(), todoMaxContext),
 		Options:   opts,
+		Dialog:    bind,
 		Kind:      "action",
 		Links:     []TodoLink{{Label: "Open " + oneLine(name, 60), URL: s.autoAgentLink(a)}},
 		Waiting:   &TodoAgent{ID: state.AgentKey(&a), Name: a.Name, Instance: s.hostInstance(a.Host)},
@@ -415,20 +424,23 @@ func dialogContext(d *dialog.Dialog) string {
 }
 
 // dialogOptions are the dialog's own rows as the item's structured options
-// (none when there are fewer than two or more than nine).
-func dialogOptions(d *dialog.Dialog) []TodoOption {
+// (none when there are fewer than two or more than nine), and the dialog
+// row each one is: rows[i] is the index of option i+1 in d.Options.
+func dialogOptions(d *dialog.Dialog) ([]TodoOption, []int) {
 	var in []TodoOption
-	for _, o := range d.Options {
+	var rows []int
+	for i, o := range d.Options {
 		if o.Role == dialog.RoleOther || o.Role == dialog.RoleChat || o.Role == dialog.RoleNext || strings.TrimSpace(o.Label) == "" {
 			continue
 		}
 		in = append(in, TodoOption{Label: o.Label, Detail: o.Description})
+		rows = append(rows, i)
 	}
 	opts, _, err := cleanOptions(in, nil)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return opts
+	return opts, rows
 }
 
 // ---- the store side ----

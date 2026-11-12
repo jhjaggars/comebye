@@ -86,6 +86,13 @@ type TodoAgent struct {
 	Gone bool `json:"gone,omitempty"`
 }
 
+// TodoDialog is the dialog a hub-blocked item stands for: its fingerprint
+// when filed, and Rows[i] the dialog row of the item's option i+1.
+type TodoDialog struct {
+	Fingerprint string `json:"fingerprint"`
+	Rows        []int  `json:"rows"`
+}
+
 // TodoAnswer is the answer to an item. Via is "app" (the user typed it in
 // the app) or "relay" (a coordinator recorded the user's words).
 type TodoAnswer struct {
@@ -135,9 +142,12 @@ type Todo struct {
 	// "hub-blocked" (the hub filed it, autotodo.go), or empty (a person).
 	// AutoKey is the hub's dedupe key; Suggested marks a guess the user has
 	// yet to keep.
-	Source    string `json:"source,omitempty"`
-	AutoKey   string `json:"auto_key,omitempty"`
-	Suggested bool   `json:"suggested,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Dialog binds a hub-blocked item to the dialog it was filed for, so an
+	// answer chosen from its Options is sent to the pane (todoanswer.go).
+	Dialog    *TodoDialog `json:"dialog,omitempty"`
+	AutoKey   string      `json:"auto_key,omitempty"`
+	Suggested bool        `json:"suggested,omitempty"`
 }
 
 // earlyPending: an open set with a decision settled ahead of Submit whose
@@ -806,6 +816,9 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	via := "app"
 	if callerOf(r).agent() {
 		via = "relay"
+	}
+	if via == "app" && s.answerBlockedTodo(w, r, text) {
+		return
 	}
 	it, err := s.todos.answer(r.PathValue("id"), TodoAnswer{Text: text, By: s.by(r, ""), Via: via})
 	if err != nil {

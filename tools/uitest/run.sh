@@ -121,6 +121,14 @@ abport=$((port + 250))
   -state-dir "$tmp/state-ab" -host-name uitest >"$out/comebye-ab.log" 2>&1 &
 for _ in $(seq 50); do curl -sf "http://127.0.0.1:$abport/api/agents" >/dev/null && break; sleep 0.1; done
 node autoblock.mjs "http://127.0.0.1:$abport" "$out" || rc=1
+# Answering that kind of to-do from the To do panel: a hub that files the item after 2 s, on its own fake herdr.
+"$tmp/fake-herdr" -sock "$tmp/ta.sock" -dir "$tmp/ta" -autoblock >"$out/fake-herdr-ta.log" 2>&1 &
+for _ in $(seq 50); do [ -S "$tmp/ta.sock" ] && break; sleep 0.1; done
+taport=$((port + 260))
+"$tmp/comebye" -sock "$tmp/ta.sock" -addr "127.0.0.1:$taport" -insecure-no-auth -push=false -auto-todo-blocked-after 2s \
+  -state-dir "$tmp/state-ta" -host-name uitest >"$out/comebye-ta.log" 2>&1 &
+for _ in $(seq 50); do curl -sf "http://127.0.0.1:$taport/api/agents" >/dev/null && break; sleep 0.1; done
+node todoanswer.mjs "http://127.0.0.1:$taport" "$out" || rc=1
 # The Doc and Diff side panels: an agent in a real git worktree (a temp HOME, under a dot-directory), declaring its document
 # with the real CLI; its own fake herdr and hub so the shared fleet's agent count is untouched.
 pdir="$tmp/phome"; mkdir -p "$pdir"
