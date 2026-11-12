@@ -182,6 +182,9 @@ func DefaultOpencodeDir() string {
 	return filepath.Join(home, ".local", "state", "comebye", "opencode-sessions")
 }
 
+// SessionFileByID is the Claude session file for a session id ("" when there is none).
+func (r *Resolver) SessionFileByID(id, cwd string) string { return r.claudeSessionByID(id, cwd) }
+
 // claudeSessionByID finds <projects>/<slug>/<id>.jsonl, trying the cwd's
 // project directory first.
 func (r *Resolver) claudeSessionByID(id, cwd string) string {

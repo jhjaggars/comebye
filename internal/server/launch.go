@@ -700,6 +700,9 @@ func (s *Server) startAgent(ctx context.Context, name, kind, pane string, args .
 	for {
 		a, err := s.client.StartAgent(ctx, name, kind, pane, launchStartTimeout.Milliseconds(), args...)
 		if err == nil {
+			if ps := s.parkStore(); ps != nil {
+				ps.NoteLaunch(name, kind, args, time.Now()) // so a park can resume it the same way
+			}
 			return a, s.waitForNamedAgent(ctx, name)
 		}
 		var he *herdr.Error

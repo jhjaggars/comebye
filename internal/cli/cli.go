@@ -81,6 +81,9 @@ func init() {
 		{"show", "FILE [--section HEADING] [--agent A] | --clear [--json]", "put a document (.md, .markdown, .txt, .html in your worktree or under home) in the Doc panel beside your chat, opened at a heading; --clear takes it away. The user sees it live as you edit it", cmdShow},
 		{"deliver", "[AGENT] PAGE… [--not-captured TEXT] [--json]", "record the Pages (pg_… ids from `publish`) that capture an agent's work; yours by default. When the agent is marked --discard, its uncommitted notes and local commits then show as captured in the removal review, and the user discards every such session with one confirmation", cmdDeliver},
 		{"scratch", "[--dry-run] [--json]", "prune this host's temporary directory: scratchpads whose worktree is gone, and old tmp.* / hl.* directories of yours (never a live agent's; --dry-run lists what would go and its size)", cmdScratch},
+		{"park", "AGENT [--dirty] [--login L] [--json]", "close an idle agent but keep its worktree, branch and session, and write a park record on its host (claude, pi, opencode); --dirty confirms parking a worktree with uncommitted edits, which stay in place. Bring it back with `resume`", cmdPark},
+		{"parked", "[--host H] [--all] [--json]", "the agents parked on a host (this one by default); --all includes the resumed ones, kept 30 days as history", cmdParked},
+		{"resume", "ID|NAME [--host H] [--no-note] [--login L] [--json]", "start a parked agent again: a new pane in the same worktree on its own session (claude --resume, pi --session, opencode -s), its scratchpad moved back, and a catch-up note", cmdResume},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"reask", "AGENT [--item N] [--json]", "ask a marked session again whether it is safe to remove", cmdReask},
@@ -2939,6 +2942,218 @@ func cmdScratch(e *Env, args []string) error {
 			kind = " (RAM)"
 		}
 		fmt.Fprintf(e.Stdout, "%s%s is %d%% full\n", u.Path, kind, u.UsedPct)
+	}
+	return nil
+}
+
+// cmdPark closes an idle agent, keeping its worktree and session.
+func cmdPark(e *Env, args []string) error {
+	fs := flag.NewFlagSet("park", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	dirty := fs.Bool("dirty", false, "park even though the worktree has uncommitted edits (they stay in place)")
+	login := fs.String("login", "", "the Tailscale login to act as (default $COMEBYE_LOGIN, else the first of $COMEBYE_TS_ALLOW_LOGIN)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want one AGENT")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	// Closing an agent is the user's alone: the call goes out as the user's login.
+	if c.user = peerLogin(e, *login); c.user == "" {
+		return usageErr("park needs the user's login: pass --login you@example.com (or set COMEBYE_LOGIN)")
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/hosts/"+url.PathEscape(t.Host)+"/park", nil, map[string]any{"agent": t.Pane, "name": t.Name, "dirty": *dirty})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Record struct {
+			ID, Name, Kind, Worktree, Branch string
+			Dirty                            bool
+		} `json:"record"`
+		Scratch string `json:"scratch"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	fmt.Fprintf(e.Stdout, "Parked %s (%s) as %s. Worktree and branch %s kept at %s.\n", r.Record.Name, r.Record.Kind, r.Record.ID, r.Record.Branch, r.Record.Worktree)
+	if r.Scratch != "" {
+		fmt.Fprintf(e.Stdout, "Scratchpad: %s.\n", r.Scratch)
+	}
+	fmt.Fprintf(e.Stdout, "Bring it back with: comebye resume %s --host %s\n", r.Record.ID, t.Host)
+	return nil
+}
+
+type parkedRow struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Kind        string     `json:"kind"`
+	Branch      string     `json:"branch"`
+	Worktree    string     `json:"worktree"`
+	ParkedAt    time.Time  `json:"parked_at"`
+	ResumedAt   *time.Time `json:"resumed_at"`
+	Dirty       bool       `json:"dirty"`
+	ScratchTo   string     `json:"scratch_to"`
+	ScratchByte int64      `json:"scratch_bytes"`
+}
+
+// parkedHost is the host a --host flag names, else this agent's own.
+func parkedHost(c *client, flag string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	w, err := c.getWhoami()
+	if err != nil {
+		return "", err
+	}
+	return w.Host, nil
+}
+
+func listParked(c *client, host string, all bool) ([]byte, []parkedRow, error) {
+	q := url.Values{}
+	if all {
+		q.Set("all", "1")
+	}
+	data, err := c.raw("GET", "/api/hosts/"+url.PathEscape(host)+"/parked", q, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var r struct {
+		Parked []parkedRow `json:"parked"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, nil, err
+	}
+	return data, r.Parked, nil
+}
+
+func cmdParked(e *Env, args []string) error {
+	fs := flag.NewFlagSet("parked", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	all := fs.Bool("all", false, "include agents already resumed")
+	host := fs.String("host", "", "the host (default: this one)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 0 {
+		return usageErr("unexpected argument %q", pos[0])
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	h, err := parkedHost(c, *host)
+	if err != nil {
+		return err
+	}
+	data, rows, err := listParked(c, h, *all)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	if len(rows) == 0 {
+		fmt.Fprintf(e.Stdout, "Nothing is parked on %s.\n", h)
+		return nil
+	}
+	for _, r := range rows {
+		state := "parked " + r.ParkedAt.Local().Format("2006-01-02 15:04")
+		if r.ResumedAt != nil {
+			state = "resumed " + r.ResumedAt.Local().Format("2006-01-02 15:04")
+		}
+		extra := ""
+		if r.Dirty {
+			extra = "  (had uncommitted edits)"
+		}
+		fmt.Fprintf(e.Stdout, "%s  %-24s %-8s %s  %s%s\n", r.ID, r.Name, r.Kind, state, r.Branch, extra)
+	}
+	return nil
+}
+
+func cmdResume(e *Env, args []string) error {
+	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	noNote := fs.Bool("no-note", false, "do not send the catch-up note")
+	host := fs.String("host", "", "the host (default: this one)")
+	login := fs.String("login", "", "the Tailscale login to act as (default $COMEBYE_LOGIN, else the first of $COMEBYE_TS_ALLOW_LOGIN)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want a park ID (pk_…) or the agent's NAME")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	if c.user = peerLogin(e, *login); c.user == "" {
+		return usageErr("resume needs the user's login: pass --login you@example.com (or set COMEBYE_LOGIN)")
+	}
+	h, err := parkedHost(c, *host)
+	if err != nil {
+		return err
+	}
+	id := pos[0]
+	if !strings.HasPrefix(id, "pk_") {
+		_, rows, err := listParked(c, h, false)
+		if err != nil {
+			return err
+		}
+		var hit []parkedRow
+		for _, r := range rows {
+			if r.Name == id {
+				hit = append(hit, r)
+			}
+		}
+		switch len(hit) {
+		case 0:
+			return fmt.Errorf("nothing parked on %s is called %q (see `comebye parked`)", h, id)
+		case 1:
+			id = hit[0].ID
+		default:
+			return fmt.Errorf("%d parked agents are called %q: use a park ID (see `comebye parked`)", len(hit), id)
+		}
+	}
+	data, err := c.raw("POST", "/api/hosts/"+url.PathEscape(h)+"/resume", nil, map[string]any{"id": id, "no_note": *noNote})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Agent   struct{ ID, Name string } `json:"agent"`
+		Note    string                    `json:"note"`
+		Scratch string                    `json:"scratch"`
+		Warning string                    `json:"warning"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	fmt.Fprintf(e.Stdout, "Resumed %s as %s.\n", r.Agent.Name, r.Agent.ID)
+	if r.Scratch != "" {
+		fmt.Fprintf(e.Stdout, "Scratchpad: %s.\n", r.Scratch)
+	}
+	if r.Note != "" {
+		fmt.Fprintf(e.Stdout, "Told it: %s\n", r.Note)
+	}
+	if r.Warning != "" {
+		fmt.Fprintf(e.Stdout, "Note: %s\n", r.Warning)
 	}
 	return nil
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/park"
 	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/transcript"
@@ -291,6 +292,10 @@ type Server struct {
 	pins *pinStore
 	// settings is this host's settings.json (see settings.go); nil without a state directory.
 	settings *settingsStore
+	// parks is the park record store (parked.json); see park.go. Opened on first use.
+	parkOnce sync.Once
+	parks    *park.Store
+	parkErr  error
 	// switchGap is the pause between the slash commands of one model
 	// switch (tests shrink it).
 	switchGap time.Duration
@@ -514,6 +519,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/worker", s.auth(s.handleWorker))
 	s.mux.HandleFunc("POST /api/remove", s.auth(s.handleRemove))
 	s.mux.HandleFunc("POST /api/scratch", s.authAgentLocal(s.handleScratch))
+	// Park and resume (park.go): the user's alone. The host writes the record.
+	s.mux.HandleFunc("POST /api/park", s.auth(s.handlePark))
+	s.mux.HandleFunc("POST /api/resume", s.auth(s.handleResume))
+	s.mux.HandleFunc("GET /api/parked", s.authAgent(s.handleParked))
+	s.mux.HandleFunc("POST /api/hosts/{host}/park", s.auth(s.onHostLaunch("park", s.handlePark)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/resume", s.auth(s.onHostLaunch("resume", s.handleResume)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/parked", s.authAgent(s.onHostLaunch("parked", s.handleParked)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
 	// The handoff ledger (hub side).
