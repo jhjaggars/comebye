@@ -4718,6 +4718,108 @@ await check(`releases fleet rows at ${width}: Bump hub on the hub's row, Upgrade
   }
 });
 }
+// The rolling rollout on the Fleet card (relfix.mjs ro-* states): the button and its confirm, the band, the waves, a host's gates,
+// the controls. The hub's answers are canned; the POSTs are caught and read.
+for (const width of [1280, 390]) {
+await check(`releases rolling rollout at ${width}: Roll out to all confirms version, commit, order and canary; the band, waves and gates follow the job; Upgrade is locked while it runs`, async () => {
+  let state = "ro-before";
+  const posts = [];
+  await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(state) }));
+  await page.route(/\/api\/release\/rollout(\/\w+)?$/, async (r) => {
+    posts.push({ url: new URL(r.request().url()).pathname, body: JSON.parse(r.request().postData() || "{}"), csrf: r.request().headers()["x-comebye-csrf"] });
+    await r.fulfill({ status: 202, json: { rollout: { id: "r7f3a1" } } });
+  });
+  try {
+    const fleet = "#pr-releases [data-fleet]";
+    const reload = async (st) => { state = st; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before" ? !rls.data.rollout_job : rls.data.rollout_job), st); await page.waitForTimeout(100); };
+    await openReleases(width);
+    await reload("ro-before");
+    // before: the button sits with the per-host Upgrade buttons, which stay usable
+    if ((await page.locator(fleet + " .rel-roll").innerText()) !== "Roll out to all") throw new Error("no Roll out to all");
+    if (!(await page.locator(fleet + " .rl-host .rel-up:not(:disabled)").count())) throw new Error("the host Upgrade buttons are gone before a rollout");
+    if (await page.locator(fleet + " .rl-band").count()) throw new Error("a band without a rollout");
+    await page.screenshot({ path: `${out}/rollout-before-${width}.png` });
+    // the confirm
+    await page.locator(fleet + " .rel-roll").click();
+    await page.waitForSelector(fleet + " [aria-label='Confirm the rollout']");
+    let ct = await page.locator(fleet + " .rel-confirm").innerText();
+    if (!/v0\.5\.22/.test(ct) || !/a3f9c1e/.test(ct) || !/2 minutes/.test(ct) || !/stops everything/.test(ct)) throw new Error("confirm text: " + ct);
+    const order = () => page.locator(fleet + " .rl-order li").evaluateAll((l) => l.map((x) => x.dataset.host));
+    if ((await order()).join() !== "peerbox,kubevirt-1,mac-mini") throw new Error("order " + (await order()));
+    if (!/canary/.test(await page.locator(fleet + " .rl-order li").first().innerText())) throw new Error("the first host is not marked canary");
+    if (!/Confirm: roll out v0\.5\.22 to 3 hosts/.test(await page.locator(fleet + " .rel-go").innerText())) throw new Error("confirm button");
+    await page.screenshot({ path: `${out}/rollout-confirm-${width}.png` });
+    // the user picks another canary
+    await page.locator(fleet + " select[data-ro-canary]").selectOption("kubevirt-1");
+    if ((await order()).join() !== "kubevirt-1,peerbox,mac-mini") throw new Error("canary not moved: " + (await order()));
+    await page.locator(fleet + " .rel-go").click();
+    await page.waitForFunction(() => !document.querySelector("#pr-releases .rel-confirm"));
+    const p0 = posts[0];
+    if (!p0 || p0.url !== "/api/release/rollout" || p0.body.version !== "v0.5.22" || p0.body.commit.length !== 40 || p0.body.hosts.join() !== "kubevirt-1,peerbox,mac-mini" || !p0.body.todo || p0.csrf !== "fixture") throw new Error("start request " + JSON.stringify(p0));
+    // Cancel in the confirm sends nothing
+    await page.locator(fleet + " .rel-roll").click();
+    await page.locator(fleet + " .rel-confirm [data-rel=cancel]").click();
+    if (posts.length !== 1) throw new Error("cancel sent something");
+
+    // running: the band, the waves, the gates; the per-host buttons are locked; no new rollout
+    await reload("ro-running");
+    const band = fleet + " .rl-band";
+    let bt = await page.locator(band).innerText();
+    if (!/Rolling out v0\.5\.22/.test(bt) || !/1 of 3 done/.test(bt) || !/upgrading kubevirt-1/.test(bt)) throw new Error("running band: " + bt);
+    if ((await page.locator(band + " button").allInnerTexts()).join() !== "Pause,Cancel") throw new Error("running controls");
+    if ((await page.locator(fleet + " .rl-wave-h").allInnerTexts()).join().toLowerCase() !== "canary,other peers,not in this rollout") throw new Error("waves " + (await page.locator(fleet + " .rl-wave-h").allInnerTexts()));
+    if (await page.locator(fleet + " .rel-roll").count()) throw new Error("Roll out to all while a rollout runs");
+    const row = (n) => page.locator(`${fleet} .rl-host[data-host="${n}"]`);
+    const pb = await row("peerbox").innerText();
+    if (!/done/.test(pb) || !/✓ upgrade ok/.test(pb) || !/✓ back online/.test(pb) || !/✓ v0\.5\.22 seen/.test(pb) || !/✓ soak/.test(pb)) throw new Error("peerbox: " + pb);
+    const kv = await row("kubevirt-1").innerText();
+    if (!/upgrading/.test(kv) || !/… upgrade ok/.test(kv) || !/○ back online/.test(kv)) throw new Error("kubevirt-1: " + kv);
+    if (!/waiting for its turn/.test(await row("mac-mini").innerText())) throw new Error("mac-mini: " + (await row("mac-mini").innerText()));
+    if (await page.locator(fleet + " .rl-host button:not(.cpb):not(:disabled)").filter({ hasText: /Upgrade|Retry|Roll back/ }).count()) throw new Error("a host button is usable during a rollout");
+    await page.screenshot({ path: `${out}/rollout-running-${width}.png` });
+    await page.locator(band + " [data-rel=ro-pause]").click();
+    await page.waitForFunction(() => 1);
+    await page.waitForTimeout(150);
+    const p1 = posts[posts.length - 1];
+    if (p1.url !== "/api/release/rollout/pause" || p1.body.id !== "r7f3a1" || p1.csrf !== "fixture") throw new Error("pause request " + JSON.stringify(p1));
+
+    // paused: Resume and Cancel
+    await reload("ro-paused");
+    if ((await page.locator(band + " button").allInnerTexts()).join() !== "Resume,Cancel" || !/Paused/.test(await page.locator(band).innerText())) throw new Error("paused band");
+    await page.screenshot({ path: `${out}/rollout-paused-${width}.png` });
+    await page.locator(band + " [data-rel=ro-resume]").click();
+    await page.waitForTimeout(150);
+    if (posts[posts.length - 1].url !== "/api/release/rollout/resume") throw new Error("resume request");
+
+    // failed: the host's reason and output, what was not touched, Retry and Cancel
+    await reload("ro-failed");
+    bt = await page.locator(band).innerText();
+    if ((await page.locator(band).getAttribute("role")) !== "alert" || !/Stopped at kubevirt-1/.test(bt) || !/rolled_back: smoke check failed/.test(bt) || !/Not touched: mac-mini/.test(bt)) throw new Error("failed band: " + bt);
+    if ((await page.locator(band + " button").allInnerTexts()).join() !== "Retry,Cancel") throw new Error("failed controls");
+    if (!/failed/.test(await row("kubevirt-1").innerText()) || !(await row("kubevirt-1").locator("details pre").count())) throw new Error("failed row: " + (await row("kubevirt-1").innerText()));
+    if (!/not touched/.test(await row("mac-mini").innerText())) throw new Error("mac-mini after a stop");
+    await page.screenshot({ path: `${out}/rollout-failed-${width}.png` });
+    await page.locator(band + " [data-rel=ro-resume]").click();
+    await page.waitForTimeout(150);
+    if (posts[posts.length - 1].url !== "/api/release/rollout/resume") throw new Error("retry request");
+
+    // done with one skipped: the release stays open, Roll out again for just that host
+    await reload("ro-skipped");
+    bt = await page.locator(band).innerText();
+    if (!/Rolled out/.test(bt) || !/2 of 3 hosts, 1 skipped \(mac-mini\)/.test(bt)) throw new Error("skipped band: " + bt);
+    if ((await page.locator(fleet + " .rel-roll").innerText()) !== "Roll out again") throw new Error("no Roll out again");
+    if (!/skipped/.test(await row("mac-mini").innerText())) throw new Error("mac-mini not marked skipped");
+    await page.screenshot({ path: `${out}/rollout-skipped-${width}.png` });
+    await page.locator(fleet + " .rel-roll").click();
+    if ((await order()).join() !== "mac-mini" || /canary|2 minutes/.test(await page.locator(fleet + " .rel-confirm").innerText()) || await page.locator(fleet + " select[data-ro-canary]").count()) throw new Error("again confirm: " + (await order()));
+    await page.locator(fleet + " .rel-confirm [data-rel=cancel]").click();
+    const h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1]) throw new Error("sideways scroll " + JSON.stringify(h));
+  } finally {
+    await page.unroute(/\/api\/releases(\?.*)?$/);
+    await page.unroute(/\/api\/release\/rollout(\/\w+)?$/);
+  }
+});
+}
 // Dismiss: the user abandons a tagged release's rollout. A confirm first, then it is out of the tab and the badge.
 for (const width of [1280, 390]) {
 await check(`releases dismiss at ${width}: Dismiss release asks for a confirm, then the release leaves the tab and the badge, its item is dropped, and it stays in the history`, async () => {

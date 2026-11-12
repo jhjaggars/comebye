@@ -2372,6 +2372,27 @@
     .rl-hn2 a { color: var(--blue); }
     .rl-card .rel-dismiss { color: var(--muted); }
     .rl-wrap .rel-up:not(:disabled), .rl-wrap .rel-dep-btn { border-color: var(--orange); color: var(--orange); }
+    /* The rolling rollout on the Fleet card: the button, the band, the waves, a host's gates. */
+    .rl-roll { display: flex; }
+    .rl-band { padding: var(--sp-10); border-radius: var(--r-10); border: 1px solid color-mix(in srgb, var(--blue) 45%, var(--border)); background: color-mix(in srgb, var(--blue) 8%, var(--panel)); font-size: var(--fs-14); display: flex; flex-direction: column; gap: var(--sp-6); overflow-wrap: anywhere; }
+    .rl-band-paused, .rl-band-cancelled { border-color: color-mix(in srgb, var(--orange) 50%, var(--border)); background: color-mix(in srgb, var(--orange) 8%, var(--panel)); }
+    .rl-band-stopped { border-color: var(--red); background: var(--chip-red); }
+    .rl-band-done { border-color: var(--green); background: var(--chip-green); }
+    .rl-band-t { font-weight: 650; }
+    .rl-band-s { color: var(--muted); font-size: var(--fs-13); }
+    .rl-wave { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+    .rl-wave-h { font-size: var(--fs-12); font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin-top: var(--sp-6); }
+    .rl-phase { font-size: var(--fs-12); font-weight: 600; padding: 0 var(--sp-8); border-radius: var(--r-6); background: var(--panel2); color: var(--muted); white-space: nowrap; }
+    .rl-ph-upgrading, .rl-ph-verifying, .rl-ph-soaking { background: var(--chip-blue); color: var(--blue); }
+    .rl-ph-ok { background: var(--chip-green); color: var(--green); }
+    .rl-ph-failed { background: var(--chip-red); color: var(--red); }
+    .rl-ph-skipped { background: var(--chip-yellow); color: var(--yellow); }
+    .rl-gates { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-10); font-size: var(--fs-12); color: var(--muted); }
+    .rl-gate-ok { color: var(--green); } .rl-gate-now { color: var(--blue); }
+    .rl-order { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: var(--sp-4); }
+    .rl-order li { overflow-wrap: anywhere; }
+    .rl-canary { font-size: var(--fs-13); display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6); }
+    .rl-canary select { font: inherit; font-size: var(--fs-13); min-height: var(--hit-36); max-width: 100%; border: 1px solid var(--border); border-radius: var(--r-8); background: var(--panel); color: var(--text); padding: 0 var(--sp-8); }
     /* The to-do item for a release: one line and a way to the Releases tab. */
     .rel-pingrow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6) var(--sp-12); font-size: var(--fs-14); }
     .rel-pingtxt { flex: 1 1 18ch; min-width: 0; overflow-wrap: anywhere; }

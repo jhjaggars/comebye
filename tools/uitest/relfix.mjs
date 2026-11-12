@@ -14,6 +14,11 @@
 //   dismissed the user abandoned v0.5.22: nothing pending, v0.5.22 first in the history
 //   rollout   the v0.5.24 rollout screenshot: hub comebye-hub bumped by laharl's deploy, laharl (the release host) still on v0.5.23, a Mac upgraded by hand after a failed app upgrade
 //   done      tagged and every host upgraded; the item was closed by the hub
+//   ro-before   tagged, build green: the "Roll out to all" button and the plan it would confirm
+//   ro-running  a rollout: the canary is done, the next peer is upgrading, one waits
+//   ro-paused   paused after the canary
+//   ro-failed   stopped at the second peer (its upgrade was rolled back); the third was not touched
+//   ro-skipped  done, one peer skipped (offline): "Roll out again"
 
 const V = "v0.5.22", PREV = "v0.5.21";
 const SHA = "a3f9c1e5d2b7480cf6e1a9b34d70c8e2f15a6b09";
@@ -23,7 +28,7 @@ const HIST = [
   ["v0.5.19", 6, "Answered box readable in light mode"], ["v0.5.18", 9, "Mark button reads Unmark"], ["v0.5.17", 12, "Briefings skip a slot when nothing changed"],
 ];
 
-export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "rollout", "done", "dismissed"];
+export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "rollout", "done", "dismissed", "ro-before", "ro-running", "ro-paused", "ro-failed", "ro-skipped"];
 
 // The v0.5.24 rollout as the user saw it. The deploy ran from laharl for the hub (comebye-hub);
 // laharl itself is on v0.5.23 and the Mac was upgraded by hand after its app upgrade failed.
@@ -50,7 +55,56 @@ function rolloutView() {
   return base;
 }
 
+// The rolling rollout on the Fleet card: laharl is the hub, three peers behind it.
+function rolloutJobView(name) {
+  const out = releaseView("tagged");
+  const hosts = out.hosts;
+  const set = (n, o) => Object.assign(hosts.find((h) => h.name === n), o);
+  const step = (host, wave, phase, extra = {}) => ({ host, wave, phase, at: ago(60000), ...extra });
+  out.rollout_enabled = true;
+  out.csrf = "fixture";
+  const plan = [step("peerbox", "canary", "pending"), step("kubevirt-1", "peers", "pending"), step("mac-mini", "peers", "pending")];
+  out.rollout_plan = plan;
+  if (name === "ro-before") return out;
+  delete out.rollout_plan;
+  const job = { id: "r7f3a1", todo: out.todo.id, version: V, commit: SHA, state: "running", by: "me", canary: "peerbox", plan, started: ago(300000), updated: ago(2000), rev: 4, note: "" };
+  out.rollout_job = job;
+  const done = (host, wave, from) => step(host, wave, "ok", { from, to: V, run: "run-" + host, done: ago(120000), detail: "" });
+  set("peerbox", { version: V, current: true, record: { id: "run-peerbox", version: V, state: "ok", from: PREV, to: V, by: "me", started: ago(280000), finished: ago(240000) } });
+  const n = (c) => { out.rollout = { total: 4, current: c, offline: 0, behind: 4 - c, complete: false }; };
+  if (name === "ro-running") {
+    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "upgrading", { run: "run-kv", from: PREV }), step("mac-mini", "peers", "pending")];
+    job.note = "upgrading kubevirt-1";
+    set("kubevirt-1", { record: { id: "run-kv", version: V, state: "running", by: "me", started: ago(30000) } });
+    n(1);
+    out.needs_you = false; out.needs_text = `Rolling out ${V}: upgrading kubevirt-1`;
+  } else if (name === "ro-paused") {
+    job.state = "paused"; job.note = "paused after peerbox";
+    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "pending"), step("mac-mini", "peers", "pending")];
+    n(1);
+    out.needs_you = true; out.needs_text = `Rollout of ${V} is paused`;
+  } else if (name === "ro-failed") {
+    job.state = "stopped"; job.note = "stopped at kubevirt-1";
+    const why = "rolled_back: smoke check failed: journal has errors";
+    job.stop = { host: "kubevirt-1", reason: why, at: ago(40000) };
+    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "failed", { run: "run-kv", from: PREV, detail: why, output: "fetch ok\nverify ok\ninstall ok\nrestart ok\nsmoke: journal has errors\nrolled back to " + PREV }), step("mac-mini", "peers", "pending")];
+    set("kubevirt-1", { record: { id: "run-kv", version: V, state: "rolled_back", by: "me", started: ago(200000), finished: ago(60000), error: "smoke check failed: journal has errors" } });
+    n(1);
+    out.needs_you = true; out.needs_text = `Rollout of ${V} stopped at kubevirt-1`;
+  } else if (name === "ro-skipped") {
+    job.state = "done"; job.finished = ago(20000);
+    job.plan = [done("peerbox", "canary", PREV), done("kubevirt-1", "peers", PREV), step("mac-mini", "peers", "skipped", { detail: "offline for 2m0s" })];
+    set("kubevirt-1", { version: V, current: true });
+    set("mac-mini", { status: "down", offline: true, unknown: true, enabled: false, since: ago(3 * 3600000) });
+    n(2); out.rollout.offline = 1; out.rollout.behind = 1;
+    out.rollout_plan = [step("mac-mini", "peers", "pending")];
+    out.needs_you = false; out.needs_text = `${V}: 3 of 4, 1 offline`;
+  }
+  return out;
+}
+
 export function releaseView(name) {
+  if (name.startsWith("ro-")) return rolloutJobView(name);
   if (name === "rollout") return rolloutView();
   const tagged = ["tagged", "partial", "partial3", "failed", "done"].includes(name);
   const vers = {
