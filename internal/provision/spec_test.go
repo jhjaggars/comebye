@@ -21,7 +21,6 @@ func TestParseSpecIsStrict(t *testing.T) {
 		"one letter":    strings.Replace(good, "demo1", "d", 1),
 		"dash end":      strings.Replace(good, "demo1", "demo-", 1),
 		"quote":         strings.Replace(good, "demo1", `a"b`, 1),
-		"graviton":      strings.Replace(good, "t3.large", "m6gd.large", 1),
 		"type flag":     strings.Replace(good, "t3.large", "t3.large --x", 1),
 		"zone":          strings.Replace(good, `"spot":true`, `"spot":true,"zone":"nope"`, 1),
 		"cap 0":         strings.Replace(good, `"budget_cap_usd":10`, `"budget_cap_usd":0`, 1),
@@ -35,7 +34,7 @@ func TestParseSpecIsStrict(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// the g4dn GPU family is Intel, not Graviton
+	// the g4dn GPU family is Intel and the g5g one is Arm: both are accepted now
 	if _, err := ParseSpec([]byte(strings.Replace(good, "t3.large", "g4dn.xlarge", 1))); err != nil {
 		t.Errorf("g4dn refused: %v", err)
 	}

@@ -186,20 +186,17 @@ func TestCatalogRowsAndMath(t *testing.T) {
 		t.Errorf("t3.large: %+v", r)
 	}
 	for _, n := range []string{"t4g.large", "m6g.large"} {
-		if r := rows[n]; r.Selectable || r.Arch != "arm64" || !strings.Contains(r.Note, "needs work") {
+		if r := rows[n]; !r.Selectable || r.Arch != "arm64" || r.Note != "" {
 			t.Errorf("%s: %+v", n, r)
 		}
 	}
 	if rows["g4dn.xlarge"].GPUs != 1 {
 		t.Errorf("gpu: %+v", rows["g4dn.xlarge"])
 	}
-	// selectable rows come first, cheapest first
-	seenArm := false
+	// every row is selectable now, cheapest first
 	for _, r := range d.Rows {
 		if !r.Selectable {
-			seenArm = true
-		} else if seenArm {
-			t.Errorf("selectable %s after a row that is not", r.Type)
+			t.Errorf("%s is not selectable", r.Type)
 		}
 	}
 	if d.Rows[0].Type != "t3a.large" {

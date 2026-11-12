@@ -46,8 +46,7 @@ const (
 )
 
 // defaultFamilies are priced when neither --families nor allowed_families says
-// otherwise. The Arm ones are listed so the table can show them as not
-// selectable; the bootstrap is tested on amd64 only.
+// otherwise. The Arm ones (t4g, m6g) use the arm64 Debian image.
 var defaultFamilies = []string{"t3", "t3a", "t4g", "m5", "m6i", "m6g", "c5", "c6i", "r5"}
 
 var familyRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,15}$`)
@@ -372,9 +371,6 @@ func (e *env) buildCatalog(ctx context.Context, o catalogOpts) (*catalogDoc, err
 		} else if p, ok := spotRegion[t.Type]; ok {
 			r.SpotMin = ptr(p)
 			r.EstSpot = ptr(round4(p + ipv4USDHour + diskMonth))
-		}
-		if gravitonRe.MatchString(t.Type) || t.Arch != "amd64" {
-			r.Selectable, r.Note = false, "needs work: arm64, the bootstrap is tested on amd64 only"
 		}
 		doc.Rows = append(doc.Rows, r)
 	}

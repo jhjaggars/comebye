@@ -225,8 +225,13 @@ func TestAWSConfig(t *testing.T) {
 		t.Fatalf("load: %+v %v", lc, err)
 	}
 	os.WriteFile(p, []byte("provider=aws\nmachine_type=m6g.large\naws_region=eu-west-1\naws_az=eu-west-1b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"), 0o600)
-	if _, err := LoadConfig(p); err == nil || !strings.Contains(err.Error(), "Graviton") {
-		t.Errorf("Arm type accepted: %v", err)
+	if lc, err := LoadConfig(p); err != nil || lc.MachineType != "m6g.large" {
+		t.Errorf("Arm type refused: %v", err)
+	}
+	for typ, want := range map[string]string{"t4g.small": ssmDebianArm64, "m6g.large": ssmDebianArm64, "c7gn.xlarge": ssmDebianArm64, "t3.small": ssmDebian, "g4dn.xlarge": ssmDebian, "m6i.large": ssmDebian} {
+		if got := ssmDebianFor(typ); got != want {
+			t.Errorf("image for %s: %s, want %s", typ, got, want)
+		}
 	}
 	bad := map[string]func(*Config){
 		"unknown provider": func(c *Config) { c.Provider = "azure" },
@@ -236,7 +241,6 @@ func TestAWSConfig(t *testing.T) {
 		"ami":              func(c *Config) { c.ImageID = "debian" },
 		"disk type":        func(c *Config) { c.DiskType = "pd-balanced" },
 		"vpc range":        func(c *Config) { c.VPCRange = "192.168.0.0/16" },
-		"graviton":         func(c *Config) { c.MachineType = "c7g.xlarge" },
 	}
 	for name, mut := range bad {
 		cc := *c
@@ -245,7 +249,7 @@ func TestAWSConfig(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	for _, ok := range []string{"t3.xlarge", "t3a.large", "m5.xlarge", "g5.xlarge", "c6in.large"} {
+	for _, ok := range []string{"t3.xlarge", "t3a.large", "m5.xlarge", "g5.xlarge", "c6in.large", "c7g.xlarge", "t4g.small"} {
 		cc := *c
 		cc.MachineType = ok
 		if err := cc.Validate(); err != nil {
@@ -917,5 +921,28 @@ func TestSSHTimeoutHintGCE(t *testing.T) {
 	h := sshTimeoutHint(c)
 	if !strings.Contains(h, "203.0.113.7/32") || !strings.Contains(h, "gcloud compute firewall-rules update "+c.Network+"-ssh --source-ranges=<new-ip>/32") {
 		t.Errorf("gce hint:\n%s", h)
+	}
+}
+
+func TestExtraTagsAreOnEveryResource(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config")
+	base := "provider=aws\naws_region=eu-west-1\naws_az=eu-west-1b\nssh_source_cidr=198.51.100.1/32\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"
+	os.WriteFile(p, []byte(base+"aws_extra_tag=comebye-test=slice3\n"), 0o600)
+	c, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &awsCLI{cfg: c}
+	pv := &awsProv{a: a, cfg: c}
+	for _, got := range []string{a.tagSpec("vpc", "n"), strings.Join(pv.createVolume("w1"), " "), a.tagSpecExtra("instance", "w1", [][2]string{{"x", "1"}})} {
+		if !strings.Contains(got, "{Key=comebye-test,Value=slice3}") || !strings.Contains(got, "{Key=managed-by,Value=comebye-worker}") {
+			t.Errorf("tags: %s", got)
+		}
+	}
+	for _, bad := range []string{"aws_extra_tag=Name=x", "aws_extra_tag=managed-by=x", "aws_extra_tag=aws:x=1", "aws_extra_tag=a b=c", "aws_extra_tag=novalue"} {
+		os.WriteFile(p, []byte(base+bad+"\n"), 0o600)
+		if _, err := LoadConfig(p); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
 	}
 }

@@ -36,6 +36,9 @@ type Config struct {
 	ImageID    string // aws: an AMI id instead of the Debian SSM parameter
 	AWSSpot    bool   // aws: launch a persistent spot instance that stops (not terminates) when reclaimed
 	VPCRange   string // aws: CIDR of the dedicated VPC; SubnetRange lies inside it
+	// ExtraTags are more tags written on everything this tool makes in aws
+	// (aws_extra_tag=key=value, repeatable): how a test run marks its resources.
+	ExtraTags [][2]string
 
 	machineSet, diskSet bool
 	baseAZ              string // aws_az as the config file has it; a per-request zone differs from it
@@ -297,6 +300,13 @@ func (c *Config) apply(kv map[string]string) error {
 				c.AWSSpot = false
 			default:
 				err = fmt.Errorf("aws_spot must be true or false, not %q", v)
+			}
+		case "aws_extra_tag":
+			k, val, ok := strings.Cut(v, "=")
+			if !ok || !extraTagRe.MatchString(k) || !extraTagRe.MatchString(val) || strings.HasPrefix(k, "aws:") || k == "Name" || k == labelKey || len(c.ExtraTags) >= 8 {
+				err = fmt.Errorf("aws_extra_tag must be key=value of letters, digits and -_., not %q (at most 8; not Name or %s)", v, labelKey)
+			} else {
+				c.ExtraTags = append(c.ExtraTags, [2]string{k, val})
 			}
 		case "image_id":
 			c.ImageID = v
@@ -632,6 +642,7 @@ const (
 var (
 	regionRe   = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]$`)
 	profileRe  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+	extraTagRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 	amiRe      = regexp.MustCompile(`^ami-[0-9a-f]{8,17}$`)
 	gravitonRe = regexp.MustCompile(`^[a-z]+[0-9]+g[a-z]*\.`)
 	awsTypeRe  = regexp.MustCompile(`^[a-z][a-z0-9]*\.[a-z0-9]+$`)
@@ -704,7 +715,6 @@ func (c *Config) validateProvider(chk func(bool, string, ...any) error) error {
 			chk(c.AWSProfile == "" || profileRe.MatchString(c.AWSProfile), "bad aws_profile %q", c.AWSProfile),
 			chk(c.ImageID == "" || amiRe.MatchString(c.ImageID), "bad image_id %q", c.ImageID),
 			chk(awsTypeRe.MatchString(c.MachineType), "bad machine_type %q for aws (like t3.xlarge)", c.MachineType),
-			chk(!gravitonRe.MatchString(c.MachineType), "machine_type %q is Arm (Graviton): the bootstrap is tested on amd64 only", c.MachineType),
 			chk(c.DiskType == "gp3" || c.DiskType == "gp2", "bad disk_type %q for aws (gp3 or gp2)", c.DiskType),
 		} {
 			if e != nil {

@@ -22,7 +22,20 @@ type awsCLI struct {
 	cfg *Config
 }
 
-const ssmDebian = "/aws/service/debian/release/12/latest/amd64"
+// The Debian 12 image for each architecture, from the public SSM parameters.
+const (
+	ssmDebian      = "/aws/service/debian/release/12/latest/amd64"
+	ssmDebianArm64 = "/aws/service/debian/release/12/latest/arm64"
+)
+
+// ssmDebianFor is the image parameter for an instance type: the arm64 image for
+// a Graviton type, the amd64 one for the rest.
+func ssmDebianFor(machineType string) string {
+	if gravitonRe.MatchString(machineType) {
+		return ssmDebianArm64
+	}
+	return ssmDebian
+}
 
 func (a *awsCLI) argv(parts ...string) []string {
 	out := append([]string{}, parts...)
@@ -66,7 +79,7 @@ const (
 
 func (a *awsCLI) tagSpecExtra(resource, name string, extra [][2]string) string {
 	s := fmt.Sprintf("ResourceType=%s,Tags=[{Key=%s,Value=%s},{Key=Name,Value=%s}", resource, labelKey, labelVal, name)
-	for _, kv := range extra {
+	for _, kv := range append(append([][2]string{}, a.cfg.ExtraTags...), extra...) {
 		s += fmt.Sprintf(",{Key=%s,Value=%s}", kv[0], kv[1])
 	}
 	return s + "]"
@@ -515,9 +528,10 @@ func (p *awsProv) imageID(ctx context.Context) (string, error) {
 	if p.cfg.ImageID != "" {
 		return p.cfg.ImageID, nil
 	}
-	id, err := p.a.runText(ctx, p.a.text("ssm", "get-parameters", "--names", ssmDebian, "--query", "Parameters[0].Value"))
+	param := ssmDebianFor(p.cfg.MachineType)
+	id, err := p.a.runText(ctx, p.a.text("ssm", "get-parameters", "--names", param, "--query", "Parameters[0].Value"))
 	if err != nil || !amiRe.MatchString(id) {
-		return "", fmt.Errorf("resolving the Debian 12 AMI from %s: %v %q", ssmDebian, err, id)
+		return "", fmt.Errorf("resolving the Debian 12 AMI from %s: %v %q", param, err, id)
 	}
 	return id, nil
 }

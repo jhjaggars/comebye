@@ -34,8 +34,11 @@
       "Action": "ssm:GetParameters",
       "Resource": [
         "arn:aws:ssm:us-east-1::parameter/aws/service/debian/release/12/latest/amd64",
+        "arn:aws:ssm:us-east-1::parameter/aws/service/debian/release/12/latest/arm64",
         "arn:aws:ssm:us-east-2::parameter/aws/service/debian/release/12/latest/amd64",
-        "arn:aws:ssm:us-west-2::parameter/aws/service/debian/release/12/latest/amd64"
+        "arn:aws:ssm:us-east-2::parameter/aws/service/debian/release/12/latest/arm64",
+        "arn:aws:ssm:us-west-2::parameter/aws/service/debian/release/12/latest/amd64",
+        "arn:aws:ssm:us-west-2::parameter/aws/service/debian/release/12/latest/arm64"
       ]
     }
   ]

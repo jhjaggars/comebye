@@ -244,8 +244,8 @@ from the app comes later.
    its version and remove the peer entry) and `hub_peer_url`, which becomes
    `COMEBYE_HUB` on the worker: the same Serve URL
    (`https://hub.<tailnet>.ts.net`). Everything else has a default: `e2-standard-4` (GCP) or `t3.xlarge` (AWS),
-   20 GB boot, 50 GB data disk (`pd-balanced` or `gp3`), Debian 12 amd64
-   (Arm/Graviton types are refused), auto-stop after 120 idle minutes.
+   20 GB boot, 50 GB data disk (`pd-balanced` or `gp3`), Debian 12 (amd64, or
+   arm64 for a Graviton type such as `t4g.medium`), auto-stop after 120 idle minutes.
 6. **The hub must run a release** (`vX.Y.Z`). The worker installs the hub's
    version from the release tarball; a hub on a development build is refused
    (pass `--comebye-version` or pin `hub_version`).
@@ -603,7 +603,10 @@ you never pay more than on-demand).
 
 ## Limits
 
-- The bootstrap is written for Debian and Ubuntu images (apt), amd64 only.
+- The bootstrap is written for Debian and Ubuntu images (apt). On AWS a
+  Graviton type (`t4g`, `m6g`, `c7g` ...) boots the arm64 Debian 12 image
+  (`/aws/service/debian/release/12/latest/arm64`); any other type boots amd64.
+  GCE stays amd64.
 - On AWS, the host key comes from the console, which can lag by a few minutes
   after boot; `create` and `start` poll for it.
 - The herdr, Claude and Codex installers are third-party scripts. Pin herdr's

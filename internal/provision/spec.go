@@ -56,7 +56,6 @@ const (
 var (
 	nameRe   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,28}[a-z0-9]$`)
 	maxRunRe = regexp.MustCompile(`^[1-9][0-9]{0,2}h$`)
-	gravRe   = regexp.MustCompile(`^[a-z]+[0-9]+[a-z]*g[a-z]*\.`)
 )
 
 // SpecError is a refused request: Field names what to fix.
@@ -99,8 +98,6 @@ func (s *Spec) Validate() error {
 		return bad("name", "the name is 2 to 30 lowercase letters, digits and dashes, starting with a letter")
 	case !typeRe.MatchString(s.Type):
 		return bad("type", "choose an instance type like t3.xlarge")
-	case gravRe.MatchString(s.Type):
-		return bad("type", "Arm (Graviton) types cannot be built yet")
 	case s.Zone != "" && !zoneRe.MatchString(s.Zone):
 		return bad("zone", "the zone is like us-east-1b")
 	case s.BootDiskGB < MinDisk || s.BootDiskGB > MaxBootDisk:

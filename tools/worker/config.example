@@ -31,7 +31,8 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # disk_type=pd-balanced           # aws default: gp3
 # image_project=debian-cloud      # gcp
 # image_family=debian-12          # gcp
-# image_id=ami-...                # aws: instead of the Debian 12 SSM parameter
+# image_id=ami-...                # aws: instead of the Debian 12 SSM parameter (its architecture must match machine_type)
+# aws_extra_tag=comebye-test=me   # aws: more tag(s) on everything the tool makes (repeatable, at most 8)
 # vpc_range=10.77.0.0/16          # aws; subnet_range must lie inside it
 # network=comebye-worker
 # subnet_range=10.77.0.0/24

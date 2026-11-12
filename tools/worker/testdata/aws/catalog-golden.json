@@ -82,6 +82,26 @@
    "selectable": true
   },
   {
+   "type": "t4g.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.0672,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0352,
+    "us-east-1b": 0.0303,
+    "us-east-1c": 0.0261,
+    "us-east-1d": 0.0232,
+    "us-east-1f": 0.0237
+   },
+   "spot_min_usd_hour": 0.0232,
+   "interruption": "15-20%",
+   "estimate_spot_usd_hour": 0.0359,
+   "estimate_on_demand_usd_hour": 0.0799,
+   "selectable": true
+  },
+  {
    "type": "m6i.large",
    "vcpu": 2,
    "memory_gib": 8,
@@ -99,6 +119,26 @@
    "interruption": ">20%",
    "estimate_spot_usd_hour": 0.0442,
    "estimate_on_demand_usd_hour": 0.1087,
+   "selectable": true
+  },
+  {
+   "type": "m6g.large",
+   "vcpu": 2,
+   "memory_gib": 8,
+   "arch": "arm64",
+   "gpus": 0,
+   "on_demand_usd_hour": 0.077,
+   "spot_usd_hour": {
+    "us-east-1a": 0.0329,
+    "us-east-1b": 0.0605,
+    "us-east-1c": 0.0583,
+    "us-east-1d": 0.048,
+    "us-east-1f": 0.0394
+   },
+   "spot_min_usd_hour": 0.0329,
+   "interruption": ">20%",
+   "estimate_spot_usd_hour": 0.0456,
+   "estimate_on_demand_usd_hour": 0.0897,
    "selectable": true
   },
   {
@@ -200,48 +240,6 @@
    "estimate_spot_usd_hour": 0.2256,
    "estimate_on_demand_usd_hour": 0.5387,
    "selectable": true
-  },
-  {
-   "type": "t4g.large",
-   "vcpu": 2,
-   "memory_gib": 8,
-   "arch": "arm64",
-   "gpus": 0,
-   "on_demand_usd_hour": 0.0672,
-   "spot_usd_hour": {
-    "us-east-1a": 0.0352,
-    "us-east-1b": 0.0303,
-    "us-east-1c": 0.0261,
-    "us-east-1d": 0.0232,
-    "us-east-1f": 0.0237
-   },
-   "spot_min_usd_hour": 0.0232,
-   "interruption": "15-20%",
-   "estimate_spot_usd_hour": 0.0359,
-   "estimate_on_demand_usd_hour": 0.0799,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
-  },
-  {
-   "type": "m6g.large",
-   "vcpu": 2,
-   "memory_gib": 8,
-   "arch": "arm64",
-   "gpus": 0,
-   "on_demand_usd_hour": 0.077,
-   "spot_usd_hour": {
-    "us-east-1a": 0.0329,
-    "us-east-1b": 0.0605,
-    "us-east-1c": 0.0583,
-    "us-east-1d": 0.048,
-    "us-east-1f": 0.0394
-   },
-   "spot_min_usd_hour": 0.0329,
-   "interruption": ">20%",
-   "estimate_spot_usd_hour": 0.0456,
-   "estimate_on_demand_usd_hour": 0.0897,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
   }
  ],
  "placement": {

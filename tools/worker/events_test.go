@@ -37,7 +37,6 @@ func TestSpecRefusesUnknownFields(t *testing.T) {
 func TestSpecRefusesWhatTheConfigWould(t *testing.T) {
 	for name, in := range map[string]string{
 		"bad name":             `{"name":"W 1"}`,
-		"graviton":             `{"kind":"aws","type":"t4g.large"}`,
 		"type with a space":    `{"kind":"aws","type":"t3.large --foo"}`,
 		"zone outside region":  `{"kind":"aws","zone":"eu-west-1a"}`,
 		"spot on gcp":          `{"kind":"gcp","spot":true}`,
