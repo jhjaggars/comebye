@@ -34,6 +34,9 @@ type pfCheck struct {
 	Policy    string `json:"policy,omitempty"` // the policy file's name, not its path
 	CPU       string `json:"cpu,omitempty"`
 	Memory    string `json:"memory,omitempty"`
+	// Sandboxes is how many the gateway lists in the workspace: the only load
+	// figure the openshell CLI offers (it reports no capacity or quota).
+	Sandboxes *int `json:"sandboxes,omitempty"`
 }
 
 type pfDoc struct {
@@ -165,7 +168,8 @@ func (e *env) pfOpenShellState(ctx context.Context) pfCheck {
 		return pfCheck{State: "missing", Note: "no openshell gateway, workspace and image in the config", Gateway: gw}
 	}
 	cli := &osCLI{r: e.Run, cfg: c}
-	if _, err := cli.list(ctx, ""); err != nil {
+	sbs, err := cli.list(ctx, "")
+	if err != nil {
 		switch {
 		case reNoCreds.MatchString(err.Error()):
 			return pfCheck{State: "missing", Note: "the openshell CLI is not installed", Gateway: gw}
@@ -174,7 +178,8 @@ func (e *env) pfOpenShellState(ctx context.Context) pfCheck {
 		}
 		return pfCheck{State: "error", Note: "the gateway did not answer a sandbox listing", Gateway: gw}
 	}
-	return pfCheck{State: "ok", Note: "gateway answers", Gateway: gw}
+	n := len(sbs)
+	return pfCheck{State: "ok", Note: "gateway answers", Gateway: gw, Sandboxes: &n}
 }
 
 func (e *env) pfSSH() pfCheck {

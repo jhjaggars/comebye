@@ -29,7 +29,7 @@ fs.mkdirSync(wdir);
 const pf = JSON.parse(fs.readFileSync(path.join(here, "fixtures/provision-preflight.json"), "utf8"));
 pf.gcp = { state: "ok", note: "an account is active" };
 pf.gcp_zone = "us-central1-a";
-pf.openshell = { state: "ok", note: "gateway answers", gateway: "homelab", workspace: "openshell-sandboxes", image: "registry.example/comebye-sandbox:{version}", policy: "sandbox-policy.yaml", cpu: "2", memory: "6Gi" };
+pf.openshell = { state: "ok", note: "gateway answers", gateway: "homelab", workspace: "openshell-sandboxes", image: "registry.example/comebye-sandbox:{version}", policy: "sandbox-policy.yaml", cpu: "2", memory: "6Gi", sandboxes: 3 };
 fs.writeFileSync(path.join(wdir, "preflight.json"), JSON.stringify(pf));
 fs.copyFileSync(path.join(here, "fixtures/provision-catalog.json"), path.join(wdir, "catalog.json"));
 fs.copyFileSync(path.join(here, "fixtures/provision-catalog-gcp.json"), path.join(wdir, "catalog-gcp.json"));
@@ -213,7 +213,7 @@ try {
       await page.locator("#az-next").click();
       await page.waitForFunction(() => /Sandbox/.test(document.querySelector(".az-steps li.on")?.innerText || ""), null, { timeout: 5000 });
       const card = await page.locator("#pr-prices").innerText();
-      for (const want of ["homelab", "openshell-sandboxes", "registry.example/comebye-sandbox:{version}", "sandbox-policy.yaml", "reports no capacity"]) if (!card.includes(want)) throw new Error(`the sandbox card lacks ${want}`);
+      for (const want of ["homelab", "openshell-sandboxes", "registry.example/comebye-sandbox:{version}", "sandbox-policy.yaml", "3 sandboxes on the gateway", "no capacity or quota"]) if (!card.includes(want)) throw new Error(`the sandbox card lacks ${want}`);
       if (/Pricing|vCPU/.test(await page.locator(".az-wrap").innerText())) throw new Error("a size picker is shown for a sandbox");
       if (!/no per-hour price/.test(await page.locator("#az-cost").innerText())) throw new Error("footer: " + await page.locator("#az-cost").innerText());
       await shot("sandbox-card");

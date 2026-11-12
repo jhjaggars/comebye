@@ -39,6 +39,7 @@ type Check struct {
 	Policy    string `json:"policy,omitempty"`
 	CPU       string `json:"cpu,omitempty"`
 	Memory    string `json:"memory,omitempty"`
+	Sandboxes *int   `json:"sandboxes,omitempty"`
 }
 
 // Preflight is what a node says about the credentials it holds and where it
@@ -102,6 +103,10 @@ func cleanCheck(c Check) Check {
 	}
 	c.Note, c.Gateway = Text(c.Note, 200), Text(c.Gateway, 64)
 	c.Workspace, c.Image, c.Policy, c.CPU, c.Memory = Text(c.Workspace, 64), Text(c.Image, 200), Text(c.Policy, 80), Text(c.CPU, 12), Text(c.Memory, 12)
+	if c.Sandboxes != nil {
+		n := clampInt(*c.Sandboxes, 0, 100000)
+		c.Sandboxes = &n
+	}
 	return c
 }
 

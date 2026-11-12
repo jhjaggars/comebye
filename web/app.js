@@ -7021,7 +7021,7 @@ function phRow(h) {
   const btn = live && h.state !== "destroying" && !dest ? `<button type="button" class="btn danger" data-ph-destroy="${escAttr(h.name)}">Destroy…</button>` : "";
   return `<li class="ph-row" data-ph="${escAttr(h.name)}"><div class="ph-line"><span class="ph-name">${esc(h.name)}</span><span class="ph-chip ${esc(h.state)}">${esc(h.state)}</span>
     <span class="ph-spend">${esc(phSpendText(h))}</span></div>
-    <div class="ph-meta">${esc(what)}${esc(burn)}${h.price_from_cloud ? "" : " · price estimated"}</div>
+    <div class="ph-meta">${esc(what)}${esc(burn)}${h.price_from_cloud || h.kind === "openshell" ? "" : " · price estimated"}</div>
     ${note ? `<div class="ph-meta">${esc(note)}</div>` : ""}${fail}${btn}${dest}</li>`;
 }
 
@@ -7197,8 +7197,8 @@ function azSandboxCard(n) {
   const os = (n && n.preflight && n.preflight.openshell) || {};
   const row = (k, v) => (v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "");
   return `<div class="pz-card"><h3>OpenShell sandbox on ${esc(n ? n.name : "the node")}</h3>
-    <dl class="az-kv">${row("Gateway", os.gateway)}${row("Workspace", os.workspace)}${row("Image", os.image)}${row("Policy", os.policy)}${row("CPU", os.cpu)}${row("Memory", os.memory)}</dl>
-    <p class="pz-note">These are ${esc(n ? n.name : "the node")}'s own settings; the gateway and the image are chosen in its worker config, not here. A sandbox has no machine type, disks or price, and the OpenShell CLI reports no capacity: if the gateway is full, the create fails with the gateway's own error. Its sessions are saved before it is destroyed, like a VM's.</p></div>`;
+    <dl class="az-kv">${row("Gateway", os.gateway)}${row("Workspace", os.workspace)}${row("Image", os.image)}${row("Policy", os.policy)}${row("CPU", os.cpu)}${row("Memory", os.memory)}${os.sandboxes != null ? row("Already there", os.sandboxes + " sandbox" + (os.sandboxes === 1 ? "" : "es") + " on the gateway") : ""}</dl>
+    <p class="pz-note">These are ${esc(n ? n.name : "the node")}'s own settings; the gateway and the image are chosen in its worker config, not here. A sandbox has no machine type, disks or price, and the gateway reports its health and version but no capacity or quota (the count above is all it offers): if it is full, the create fails with the gateway's own error. Its sessions are saved before it is destroyed, like a VM's.</p></div>`;
 }
 
 function azBody() {

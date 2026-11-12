@@ -700,12 +700,15 @@ after stopped clock work as for a VM, and the sandbox's sessions are saved first
 Nothing is priced: the Hosts list says "not priced" and the plan says there is no
 per-hour price.
 
-**No capacity figure.** The `openshell` CLI reports none (its `status`, `gateway
-info`, `sandbox list` and `whoami` show no quota or free capacity; `sandbox create`
-takes `--cpu` and `--memory` as the sandbox's own limits). A gateway that is full
-fails the create, and the failure shows the gateway's own error. This kind has been
-built against the tool's dry run and stand-in tests only; it has not been run
-against a live gateway.
+**No capacity figure.** After a gateway login (read-only, 2026-11-12) the
+`openshell` CLI reports the gateway's health, version, auth, compute driver and
+extensions (`status`, `gateway info`) and the sandboxes of the workspace
+(`sandbox list`), and nothing about capacity, quota or free resources. The app
+therefore shows the one load figure there is, how many sandboxes are already on
+the gateway (from the preflight), and says it has no capacity number; a gateway
+that is full fails the create and the failure shows the gateway's own error. The
+create, plan and destroy of this kind were exercised against the tool's dry run
+and stand-ins; no sandbox was created on the live gateway.
 
 ### Google Cloud VMs from the app
 
