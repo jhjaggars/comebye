@@ -39,18 +39,31 @@ for (const width of [390, 1280]) {
     if (g.bg === "rgba(0, 0, 0, 0)" || g.color === g.bg) throw new Error("chip colours " + JSON.stringify(g));
     if (!/stuck|written nothing/.test(g.title)) throw new Error("no explanation on hover: " + g.title);
     await page.locator(sel).first().screenshot({ path: `${out}/quiet-row-${width}.png` });
-    await page.locator(sel).first().click();
+  });
+  await check(`quiet mark at ${width}px: the opened agent's header says "quiet" too`, async () => {
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent", { timeout: 15000 });
+    const row = page.locator("#agents .agent").first();
+    await row.click();
     await page.waitForSelector("#detail", { state: "visible" });
-    await page.evaluate((i) => { const a = state.agents.find((x) => agentId(x) === i); a.quiet_since = new Date(Date.now() - 47 * 60000).toISOString(); renderDetail(); }, id);
-    await page.waitForFunction(() => { const w = document.querySelector("#d-why"); return w && !w.hidden && /^quiet 4[67]m/.test(w.textContent) && w.classList.contains("stuck"); }, null, { timeout: 5000 });
+    const got = await page.evaluate(() => {
+      const a = state.agents.find((x) => agentId(x) === state.selected) || state.agents[0];
+      a.agent_status = "working";
+      a.quiet_since = new Date(Date.now() - 47 * 60000).toISOString();
+      renderDetail();
+      const w = document.querySelector("#d-why");
+      return { hidden: w.hidden, text: w.textContent, stuck: w.classList.contains("stuck") };
+    });
+    if (got.hidden || !/^quiet 4[67]m/.test(got.text) || !got.stuck) throw new Error("header: " + JSON.stringify(got));
     await page.screenshot({ path: `${out}/quiet-open-${width}.png` });
   });
   await check(`quiet mark at ${width}px: an idle agent with quiet_since shows nothing`, async () => {
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent", { timeout: 15000 });
     const n = await page.evaluate(() => {
-      const a = state.agents.find((x) => x.agent_status !== "working" && x.pane_id !== "w98:p1") || { ...state.agents[0], pane_id: "w97:p1", id: "w97:p1", agent_status: "idle", name: "idle-one" };
-      if (!state.agents.includes(a)) state.agents.push(a);
-      a.agent_status = "idle";
-      a.quiet_since = new Date(Date.now() - 47 * 60000).toISOString();
+      const mk = (pane, st) => ({ ...state.agents[0], pane_id: pane, id: (state.agents[0].host ? state.agents[0].host + "/" : "") + pane, name: pane,
+        agent_status: st, quiet_since: new Date(Date.now() - 47 * 60000).toISOString(), background: undefined, blocked_on: undefined });
+      state.agents = [mk("w96:p1", "working"), mk("w97:p1", "idle")];
       renderList();
       return document.querySelectorAll("#agents .why.stuck").length;
     });
