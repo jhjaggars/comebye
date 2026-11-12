@@ -165,7 +165,8 @@ for (const width of [1440, 390]) {
     await page.locator("#sp-cpfile").click();
     await page.waitForFunction(() => document.querySelector("#sp-cpfile").textContent === "Copied");
     const got = await clip();
-    if (got !== plan) throw new Error(`Copy file: ${got.length} bytes, want the ${plan.length} of the file; starts ${JSON.stringify(got.slice(0, 40))}`);
+    const onDisk = fs.readFileSync(path.join(wt, "docs/plan.md"), "utf8"); // an earlier check appended a marker to it
+    if (got !== onDisk) throw new Error(`Copy file: ${got.length} chars, want the ${onDisk.length} on disk; starts ${JSON.stringify(got.slice(0, 40))}`);
     await page.waitForFunction(() => document.querySelector("#sp-cpfile").textContent === "Copy file", null, { timeout: 4000 });
     await page.locator("#sp-cppath").click();
     await page.waitForFunction(() => document.querySelector("#sp-cppath").textContent === "Copied");

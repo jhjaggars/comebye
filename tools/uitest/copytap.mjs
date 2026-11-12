@@ -171,8 +171,8 @@ await check("chat: a tool card copies the command and the result", async () => {
 await check("answer card: Copy screen copies the terminal snapshot", async () => {
   const agents = await fetch(base + "/api/agents").then((r) => r.json());
   const list = Array.isArray(agents) ? agents : agents.agents || [];
-  const blocked = list.find((a) => a.name === "needs-input" || /needs-input/.test(a.workspace_label || a.label || ""));
-  if (!blocked) throw new Error("no needs-input agent in the fake fleet: " + JSON.stringify(list.map((a) => a.name || a.id)));
+  const blocked = list.find((a) => a.name === "trust-prompt" || /trust-prompt/.test(a.workspace_label || a.label || ""));
+  if (!blocked) throw new Error("no trust-prompt agent in the fake fleet: " + JSON.stringify(list.map((a) => a.name || a.id)));
   await page.goto("about:blank");
   await page.goto(base + "/#/agent/" + encodeURIComponent(blocked.pane_id || blocked.id.split("/").pop()), { waitUntil: "load" });
   await page.waitForSelector("#answer-snap", { state: "attached", timeout: 8000 });

@@ -355,8 +355,8 @@
     /* Tap-to-copy value (class "cp" in app.js): inline code that is a SHA, path or id, and the chips that carry one.
        The pseudo-element makes the tap area 36px high for a chip and about 32px for inline code, without changing the line. */
     .cp { position: relative; cursor: pointer; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; -webkit-tap-highlight-color: transparent; }
-    .cp::before { content: ""; position: absolute; inset: -9px -4px; }
-    .md .cp::before { inset: -7px -3px; }
+    .cp::before { content: ""; position: absolute; inset: -9px 0; }
+    .md .cp::before { inset: -7px 0; }
     .cp:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .cp[data-state="ok"] { color: var(--green); }
     .cp[data-state="ok"]::after { content: " \2713"; }
