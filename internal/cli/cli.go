@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -833,8 +834,9 @@ func printHubCheck(w io.Writer, h *apiHubCheck) {
 // those headings is cut to its first lines.
 func summarizeReport(report, id string) string {
 	type section struct {
-		name string
-		body []string
+		name   string
+		body   []string
+		closed bool
 	}
 	var secs []*section
 	var cur *section
@@ -845,6 +847,12 @@ func summarizeReport(report, id string) string {
 			continue
 		}
 		if cur != nil {
+			// Decisions end at the next heading of any level, and a section
+			// whose first sentence says "None" has nothing to show.
+			if strings.HasPrefix(strings.ToLower(cur.name), "decisions") && (cur.closed || sumHeadingRE.MatchString(strings.TrimSpace(l))) {
+				cur.closed = true
+				continue
+			}
 			cur.body = append(cur.body, l)
 		}
 	}
@@ -861,7 +869,7 @@ func summarizeReport(report, id string) string {
 	for _, s := range secs {
 		low := strings.ToLower(s.name)
 		switch {
-		case low == "summary", strings.HasPrefix(low, "decisions") && !strings.EqualFold(strings.TrimRight(trim(s), "."), "none"):
+		case low == "summary", strings.HasPrefix(low, "decisions") && !saysNone(trim(s)):
 			out = append(out, "## "+s.name+"\n"+trim(s))
 		default:
 			t := trim(s)
@@ -869,7 +877,7 @@ func summarizeReport(report, id string) string {
 			if t != "" {
 				n = len(strings.Split(t, "\n"))
 			}
-			if strings.EqualFold(strings.TrimRight(t, "."), "none") {
+			if saysNone(t) {
 				rest = append(rest, s.name+": none")
 			} else {
 				rest = append(rest, fmt.Sprintf("%s: %d lines", s.name, n))
@@ -881,6 +889,22 @@ func summarizeReport(report, id string) string {
 		text += "\n\n(not shown: " + strings.Join(rest, "; ") + ")"
 	}
 	return text + more
+}
+
+var (
+	sumHeadingRE = regexp.MustCompile(`^#{1,6}(?:\s|$)`)
+	sumNoneRE    = regexp.MustCompile(`(?i)^(none|nothing|no decisions?|n/a)\s*(?:[.!]|[,;:\x{2013}\x{2014}-]\s|$)`)
+)
+
+// saysNone reports whether a section's first line opens with "None" as its
+// first sentence, whatever follows.
+func saysNone(body string) bool {
+	for _, l := range strings.Split(body, "\n") {
+		if t := strings.Trim(strings.TrimSpace(l), "*_ "); t != "" {
+			return sumNoneRE.MatchString(t)
+		}
+	}
+	return false
 }
 
 // lastReply stands in for the final report of an agent that is not a

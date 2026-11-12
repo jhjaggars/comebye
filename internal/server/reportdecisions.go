@@ -40,13 +40,17 @@ const (
 )
 
 var (
-	repBulletRE  = regexp.MustCompile(`^(?:[-*+]|\d{1,2}[.)])\s+(.*\S.*)$`)
-	repNestedRE  = regexp.MustCompile(`^(?:\s{2,}|\t)(\S.*)$`)
-	repOptionRE  = regexp.MustCompile(`^(\d{1,2})[.)]\s+(.*\S.*)$`)
-	repRecRE     = regexp.MustCompile(`(?i)^(?:my\s+)?recommend(?:ation|ed)?\s*[:=-]?\s*(?:is\s+)?(?:ok\s+|option\s+)?(\d+(?:\s*(?:\+|,|&|and)\s*\d+)*)\s*\.?\s*$`)
-	repNoneRE    = regexp.MustCompile(`(?i)^(none|nothing|no decisions?|n/a)\b[\s.!]*$`)
-	repItemIDRE  = regexp.MustCompile(`\bt[0-9a-f]{10}\b`)
-	repBoldLabel = regexp.MustCompile(`^\*\*([^*]+)\*\*\s*[-–—:]?\s*(.*)$`)
+	repBulletRE = regexp.MustCompile(`^(?:[-*+]|\d{1,2}[.)])\s+(.*\S.*)$`)
+	repNestedRE = regexp.MustCompile(`^(?:\s{2,}|\t)(\S.*)$`)
+	repOptionRE = regexp.MustCompile(`^(\d{1,2})[.)]\s+(.*\S.*)$`)
+	repRecRE    = regexp.MustCompile(`(?i)^(?:my\s+)?recommend(?:ation|ed)?\s*[:=-]?\s*(?:is\s+)?(?:ok\s+|option\s+)?(\d+(?:\s*(?:\+|,|&|and)\s*\d+)*)\s*\.?\s*$`)
+	repNoneRE   = regexp.MustCompile(`(?i)^(none|nothing|no decisions?|n/a)\b[\s.!]*$`)
+	// repNoneLeadRE matches a line whose first sentence says there is nothing
+	// to decide, whatever follows ("None. All are decided (t8fa20f7215).").
+	repNoneLeadRE = regexp.MustCompile(`(?i)^(none|nothing|no decisions?|n/a)\s*(?:[.!]|[,;:\x{2013}\x{2014}-]\s|$)`)
+	repHeadingRE  = regexp.MustCompile(`^#{1,6}(?:\s|$)`)
+	repItemIDRE   = regexp.MustCompile(`\bt[0-9a-f]{10}\b`)
+	repBoldLabel  = regexp.MustCompile(`^\*\*([^*]+)\*\*\s*[-–—:]?\s*(.*)$`)
 )
 
 // reportDecision is one parsed bullet.
@@ -74,11 +78,13 @@ func parseReportDecisions(text string) (ds []reportDecision, found, none, unpars
 			continue
 		}
 		if !fence {
-			if h, ok := strings.CutPrefix(strings.TrimSpace(l), "## "); ok {
+			tl := strings.TrimSpace(l)
+			if repHeadingRE.MatchString(tl) {
+				// A heading of any level ends the section.
 				if in {
 					break
 				}
-				if strings.EqualFold(strings.Trim(strings.TrimSpace(h), "*_:. "), reportSectionName) {
+				if h, ok := strings.CutPrefix(tl, "## "); ok && strings.EqualFold(strings.Trim(strings.TrimSpace(h), "*_:. "), reportSectionName) {
 					in, found = true, true
 				}
 				continue
@@ -94,6 +100,14 @@ func parseReportDecisions(text string) (ds []reportDecision, found, none, unpars
 	raw = strings.TrimSpace(strings.Join(sec, "\n"))
 	if raw == "" {
 		return nil, true, false, true, 0, raw
+	}
+	for _, l := range sec {
+		if t := strings.Trim(strings.TrimSpace(l), "*_ "); t != "" {
+			if !strings.HasPrefix(strings.TrimSpace(l), "```") && repNoneLeadRE.MatchString(t) {
+				return nil, true, true, false, 0, raw
+			}
+			break
+		}
 	}
 	var cur *reportDecision
 	flush := func() {

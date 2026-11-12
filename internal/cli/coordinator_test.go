@@ -261,6 +261,19 @@ func TestReadReportSummary(t *testing.T) {
 	if g := summarizeReport("## Summary\nok\n\n## Decisions for the user\nNone.\n", "h3"); strings.Contains(g, "## Decisions") || !strings.Contains(g, "Decisions for the user: none") {
 		t.Errorf("none decisions = %q", g)
 	}
+	// "None." with more text, and a sub-heading with a list after it: still none.
+	for _, body := range []string{
+		"None. All are decided (t8fa20f7215 and the earlier answers).\n",
+		"None.\n\n### Answers\n1. one\n2. two\n",
+	} {
+		if g := summarizeReport("## Summary\nok\n\n## Decisions for the user\n"+body, "h4"); strings.Contains(g, "## Decisions") || strings.Contains(g, "Answers") || !strings.Contains(g, "Decisions for the user: none") {
+			t.Errorf("none decisions %q = %q", body, g)
+		}
+	}
+	// A sub-heading ends the decisions; what came before it is still shown.
+	if g := summarizeReport("## Decisions for the user\n1. Which?\n### Notes\nx\n", "h5"); !strings.Contains(g, "1. Which?") || strings.Contains(g, "Notes") {
+		t.Errorf("decisions cut at sub-heading = %q", g)
+	}
 }
 
 func TestReadSummaryFlag(t *testing.T) {

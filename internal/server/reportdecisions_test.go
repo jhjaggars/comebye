@@ -32,6 +32,10 @@ func TestParseReportDecisions(t *testing.T) {
 		{"ends at next heading", head + "- A?\n## Follow-ups\n- not a decision\n", true, false, false, 1, 0, "A?", 0, 0},
 		{"fenced heading ignored", "```\n## Decisions for the user\n- fake?\n```\n## Summary\nx\n", false, false, false, 0, 0, "", 0, 0},
 		{"numbered top level", head + "1. Which key?\n   1. Mint a key\n   2. Reuse it\n   My recommendation: ok 2\n2. Second?\n   1. a\n   2. b\n   My recommendation: ok 1\n", true, false, false, 2, 0, "Which key?", 2, 1},
+		// Real reports: research-rolling-rollout, and the tracking probe.
+		{"None. then prose", head + "None. All are decided (t8fa20f7215 and the earlier answers).\n", true, true, false, 0, 0, "", 0, 0},
+		{"None then sub-heading list", head + "None.\n\n### Answers\n\n1. The probe is read-only.\n2. It files nothing.\n3. Third.\n4. Fourth.\n5. Fifth.\n", true, true, false, 0, 0, "", 0, 0},
+		{"sub-heading ends section", head + "- A?\n### Notes\n- not a decision\n", true, false, false, 1, 0, "A?", 0, 0},
 		{"case and colon", "## decisions for the user:\n- A?\n", true, false, false, 1, 0, "A?", 0, 0},
 	}
 	for _, c := range cases {
