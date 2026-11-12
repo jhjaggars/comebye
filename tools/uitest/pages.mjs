@@ -672,6 +672,43 @@ await check("gallery: grid and list, chips, sort, and the new/updated dot", asyn
   await ph.browser.close();
 });
 
+await check("previews: a card shows its page's skeleton, escaped, per version, fetched by version", async () => {
+  const doc = (lead) => `<!doctype html><title>Preview probe</title><body><h1>Preview probe</h1><p>${lead}</p><h2>Heading one</h2><h2>Heading two</h2><table></table><script>document.title="X"</script>`;
+  publish(["-", "--key", "pvprobe", "--title", "Preview probe"], doc("First paragraph quotes &lt;img src=x onerror=window.__pv=1&gt; as text, and is long enough to lead."), "w1:p1");
+  const reqs = [];
+  const onReq = (r) => { if (/\/preview\?/.test(r.url())) reqs.push(r.url()); };
+  page.on("request", onReq);
+  await page.goto("about:blank");
+  await page.goto(base + "/#/pages", { waitUntil: "load" });
+  const card = () => page.locator(".pgs-card", { hasText: "Preview probe" });
+  await card().locator(".pgs-lead").waitFor({ timeout: 8000 });
+  const lead = await card().locator(".pgs-lead").innerText();
+  if (!lead.includes("<img src=x onerror=window.__pv=1>")) throw new Error("the page's text is not shown as text: " + lead);
+  if ((await card().locator(".pgs-thumb img").count()) || (await page.evaluate(() => window.__pv))) throw new Error("page text became markup");
+  const heads = await card().locator(".pgs-heads span").allInnerTexts();
+  const flags = await card().locator(".pgs-flags span").allInnerTexts();
+  if (heads.join("|") !== "Heading one|Heading two" || flags.join("|") !== "table") throw new Error("skeleton " + heads + " / " + flags);
+  if (!reqs.length || reqs.some((u) => !/[?]v=\d+$/.test(u))) throw new Error("preview requests are not by version: " + reqs.join(" "));
+  await shot("pages-previews-1280");
+  // A republish is a new version with its own preview.
+  publish(["-", "--key", "pvprobe", "--title", "Preview probe"], doc("The second version leads with different words that are long enough to read."), "w1:p1");
+  await page.reload({ waitUntil: "load" });
+  await card().locator(".pgs-lead", { hasText: "second version" }).waitFor({ timeout: 8000 });
+  if (!reqs.some((u) => /[?]v=2$/.test(u))) throw new Error("no request for v2: " + reqs.join(" "));
+  // With a page open the narrow column carries no thumbnails.
+  await card().click();
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  if ((await page.locator(".pgs-thumb").first().evaluate((el) => getComputedStyle(el).display)) !== "none") throw new Error("thumbnails in the narrow column");
+  page.off("request", onReq);
+  const ph = await launch({ width: 390, height: 844, dark, bypassCSP: false });
+  await ph.page.goto(base + "/#/pages", { waitUntil: "load" });
+  await ph.page.locator(".pgs-card .pgs-lead").first().waitFor({ timeout: 8000 });
+  const o = await ph.page.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-list").scrollWidth, document.querySelector(".pgs-list").clientWidth]);
+  if (o[0] > o[1] || o[2] > o[3]) throw new Error("previews scroll sideways " + o);
+  await ph.page.screenshot({ path: `${out}/pages-previews-390.png` });
+  await ph.browser.close();
+});
+
 await check("links: a to-do link to a page opens it in the app; delete asks and removes", async () => {
   // a to-do item whose link is the page's URL
   const link = base + "/p/" + pages.secret;

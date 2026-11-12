@@ -5499,7 +5499,7 @@ function initRecall() {
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
 const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
   view: lsGet("comebye.pgs.view") === "list" ? "list" : "grid", sort: ["updated", "opened", "title"].includes(lsGet("comebye.pgs.sort")) ? lsGet("comebye.pgs.sort") : "updated",
-  chip: "all", opened: null };
+  chip: "all", opened: null, prev: new Map(), prevQ: [], prevBusy: 0, io: null, prevRaf: 0 };
 
 // What the user has opened, per device: id -> { v: newest version seen, at: ms }.
 // The hub never learns it. The first time Pages loads, every page already there
@@ -5536,6 +5536,52 @@ function pgsDot(p) {
   const o = pgs.opened && pgs.opened[p.id];
   if (!pgs.opened) return "";
   return !o ? "new" : o.v < p.version ? "updated" : "";
+}
+
+// The preview of a page: its skeleton (title is the card's own), made by the hub
+// once per version and fetched when the card scrolls into view. The text is the
+// page's own, so it is escaped here like every other agent text. Keyed by
+// id@version: a republish is a new key, and the old one is never asked again.
+function pgsSkelHtml(sk) {
+  if (!sk || sk === "loading") return "";
+  if (sk === "none" || (!sk.lead && !(sk.heads || []).length && !(sk.flags || []).length)) return `<span class="pgs-nopv">No preview</span>`;
+  return `<span class="pgs-sk">${sk.lead ? `<span class="pgs-lead">${esc(sk.lead)}</span>` : ""}${(sk.heads || []).length ? `<span class="pgs-heads">${sk.heads.slice(0, 3).map((h) => `<span>${esc(h)}</span>`).join("")}</span>` : ""}${(sk.flags || []).length ? `<span class="pgs-flags">${sk.flags.map((f) => `<span>${esc(f)}</span>`).join("")}</span>` : ""}</span>`;
+}
+function pgsThumb(p) {
+  const key = p.id + "@" + p.version, sk = pgs.prev.get(key);
+  const empty = !sk || sk === "loading" || sk === "none";
+  return `<span class="pgs-thumb${empty ? " empty" : ""}" data-prev="${esc(key)}" aria-hidden="true">${pgsSkelHtml(sk)}</span>`;
+}
+function pgsWantPreview(key) {
+  if (pgs.prev.has(key)) return;
+  pgs.prev.set(key, "loading");
+  pgs.prevQ.push(key);
+  pgsPump();
+}
+function pgsPump() {
+  while (pgs.prevBusy < 4 && pgs.prevQ.length) {
+    const key = pgs.prevQ.shift(), [id, v] = key.split("@");
+    pgs.prevBusy++;
+    api("/api/pages/" + encodeURIComponent(id) + "/preview?v=" + encodeURIComponent(v))
+      .then((r) => pgs.prev.set(key, r && r.preview ? r.preview : "none"))
+      .catch(() => pgs.prev.set(key, "none"))
+      .finally(() => {
+        pgs.prevBusy--;
+        if (!pgs.prevRaf) pgs.prevRaf = requestAnimationFrame(() => { pgs.prevRaf = 0; if (pgs.route) renderPages(); });
+        pgsPump();
+      });
+  }
+}
+// pgsWatch: ask for the preview of every card on screen (and a screenful beyond), and no other.
+function pgsWatch() {
+  const thumbs = document.querySelectorAll("#pgs-items .pgs-thumb");
+  if (typeof IntersectionObserver !== "function") { thumbs.forEach((el) => pgsWantPreview(el.dataset.prev)); return; }
+  if (!pgs.io) {
+    pgs.io = new IntersectionObserver((es) => {
+      for (const e of es) if (e.isIntersecting) { pgs.io.unobserve(e.target); pgsWantPreview(e.target.dataset.prev); }
+    }, { root: $("pgs-list-pane"), rootMargin: "300px 0px" });
+  }
+  thumbs.forEach((el) => { if (!pgs.prev.has(el.dataset.prev)) pgs.io.observe(el); });
 }
 
 function parsePagesRoute() {
@@ -5638,10 +5684,10 @@ function renderPages() {
   else {
     const card = (p) => {
       const dot = pgsDot(p), rev = p.updated_at !== p.created_at;
-      return `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">
+      return `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">${pgsThumb(p)}<span class="pgs-txt">
         <span class="pgs-title">${esc(p.title)}</span>
         <span class="pgs-meta">${esc(p.by)}${p.host ? " · " + esc(p.host) : ""}</span>
-        <span class="pgs-meta pgs-line">${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-pill">v${p.version}</span><span class="pgs-sz">${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></span></a>`;
+        <span class="pgs-meta pgs-line">${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-pill">v${p.version}</span><span class="pgs-sz">${esc(p.kind)} · ${esc(pageSize(p.size))}${p.handoff ? " · handoff " + esc(p.handoff) : ""}</span></span></span></a>`;
     };
     const body = pgs.body && pgs.body.q === pgs.q.trim() ? pgs.body.matches.filter((m) => pgs.items.some((p) => p.id === m.id)) : [];
     const hit = (m) => {
@@ -5666,7 +5712,13 @@ function renderPages() {
   $("pgs-chips").hidden = !chips;
   for (const b of document.querySelectorAll("#pgs-views button")) b.setAttribute("aria-pressed", String(b.dataset.view === pgs.view));
   if ($("pgs-sort").value !== pgs.sort) $("pgs-sort").value = pgs.sort;
-  if ($("pgs-items")._html !== html) { $("pgs-items")._html = html; $("pgs-items").innerHTML = html; }
+  if (items._html !== html) {
+    // A card that has focus keeps it across a redraw (previews arriving redraw the list).
+    const f = document.activeElement, fid = f && items.contains(f) && f.dataset ? f.dataset.id : "", fcls = f && f.classList && f.classList.contains("pgs-hit") ? ".pgs-hit" : ".pgs-card";
+    items._html = html; items.innerHTML = html;
+    if (fid) { const again = items.querySelector(fcls + '[data-id="' + fid + '"]'); if (again) again.focus({ preventScroll: true }); }
+  }
+  pgsWatch();
   renderPageView();
 }
 

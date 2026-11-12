@@ -311,6 +311,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 	if st.dir != "" {
 		for _, v := range drop {
 			_ = os.Remove(st.bodyPath(p.ID, v.N, v.Kind))
+			_ = os.Remove(st.previewPath(p.ID, v.N))
 		}
 	}
 	return p, created, nil
@@ -447,6 +448,7 @@ func (s *Server) pageRoutes() {
 	s.mux.HandleFunc("POST /api/pages", s.authWorker(s.handlePageCreate))
 	s.mux.HandleFunc("GET /api/pages", s.authWorker(s.handlePageList))
 	s.mux.HandleFunc("GET /api/pages/{id}", s.authWorker(s.handlePageGet))
+	s.mux.HandleFunc("GET /api/pages/{id}/preview", s.authWorker(s.handlePagePreview))
 	s.mux.HandleFunc("DELETE /api/pages/{id}", s.authWorker(s.handlePageDelete))
 	s.pageViewRoutes(s.mux)
 }
@@ -636,6 +638,9 @@ func (s *Server) handlePageCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		pageErr(w, err)
 		return
+	}
+	if s.pages.dir != "" {
+		s.pages.preview(p.ID, p.Version) // keep this version's preview now, so the gallery never waits for it
 	}
 	m := s.pageJSON(p)
 	m["created"] = created

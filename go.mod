@@ -7,6 +7,7 @@ toolchain go1.26.11
 require (
 	filippo.io/age v1.3.2
 	github.com/klauspost/compress v1.20.3
+	golang.org/x/net v0.60.0
 )
 
 require (
