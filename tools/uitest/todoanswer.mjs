@@ -47,6 +47,19 @@ for (const width of [390, 1280]) {
         if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls sideways");
         await page.screenshot({ path: `${out}/todoanswer-card-${width}.png` });
       });
+      await check(`to do at ${width}px: the Briefings chip does not cover the card's last option button at the end of the page`, async () => {
+        await page.evaluate(() => scrollTo(0, 1e7));
+        await page.waitForTimeout(200);
+        const g = await page.evaluate((i) => {
+          const p = document.getElementById("pager").getBoundingClientRect();
+          const bs = [...document.querySelectorAll(`#todo .td-item[data-id="${i}"] .td-opt`)];
+          const b = bs.map((x) => x.getBoundingClientRect()).sort((x, y) => y.bottom - x.bottom)[0];
+          const hit = document.elementFromPoint(b.left + b.width / 2, b.bottom - 4);
+          return { pagerTop: p.top, btnBottom: b.bottom, coveredBy: hit && hit.closest("#pager") ? "pager" : "" };
+        }, id);
+        await page.screenshot({ path: `${out}/todoanswer-end-${width}.png` });
+        if (g.btnBottom > g.pagerTop || g.coveredBy) throw new Error("the chip covers the last button: " + JSON.stringify(g));
+      });
     } else {
       await check(`to do at ${width}px: Yes answers the dialog in the pane and closes the item`, async () => {
         await page.goto(base + "/#/todo", { waitUntil: "load" });
