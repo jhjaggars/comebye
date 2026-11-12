@@ -1,0 +1,16 @@
+# Known-flaky browser checks. Tab-separated; blank lines and # lines are ignored.
+#
+# script  check  owner  added  expires  note
+#
+# check is a substring of the check name as run.sh prints it after FAIL. While an entry is active (today <= expires) the
+# check still runs and shows red, but a red run.sh with only these failing is not a failed push (tools/ci/flakes.sh judge).
+# The nightly runs each entry 5 times. An entry lasts 14 days: renew it with a new expires date and a note saying what
+# was found, or fix the check and delete the line. An expired entry blocks again. See docs/test-tiers.md.
+#
+drive	usage	coordinator	2026-11-12	2026-11-26	named flaky in CI round two (2026-11-11)
+drive	empty states	coordinator	2026-11-12	2026-11-26	named flaky in CI round two
+drive	remove page	coordinator	2026-11-12	2026-11-26	named flaky in CI round two
+drive	mark:	coordinator	2026-11-12	2026-11-26	named flaky in CI round two
+drive	fleet menu	coordinator	2026-11-12	2026-11-26	named flaky in CI round two
+drive	latency:	coordinator	2026-11-12	2026-11-26	failed once with three suites on one machine (timing under load)
+drive	pi trust prompt	coordinator	2026-11-12	2026-11-26	failed once with three suites on one machine (8 s wait)
