@@ -50,3 +50,9 @@ changes). Values within 1px of a step moved to it (ties round up): spacing 3/5/7
 4/6/8/10/12/14, radius 3/5/7/9/11 to 4/6/8/10/12 and 99px to the pill, type 10.5/11.5/12.5/13.5/14.5
 to 11/12/13/14/15 and 10/17/19/21 to 11/18/20/22. Anything 2px or more from a step (for example
 `padding: 18px`, `font-size: 9px`, `border-radius: 22px`) was left alone and counts as `offscale`.
+
+### Type snap (slice 3b)
+
+Every `font-size` and `font:` size in the stylesheet now uses `--fs-N`. Same rule as above: 10.5/11.5/12.5/13.5/14.5
+went up to 11/12/13/14/15, 10/17/19/21 to 11/18/20/22. Only 9px and 26px stay literal (offscale 2). The font family
+was not touched.
