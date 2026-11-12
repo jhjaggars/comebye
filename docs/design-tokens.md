@@ -12,6 +12,7 @@ next to `--safe-bottom`. There is no build step: they are plain CSS custom prope
 | Radius | `--r-N`, `--r-pill` | 2 4 6 8 10 12 14 16, pill (999) | `border-radius` |
 | Type | `--fs-N` | 11 12 13 14 15 16 18 20 22 24 | `font-size` (and the size in `font:`) |
 | Hit size | `--hit-N` | 32 36 40 44 48 | `min-height` of anything you tap or click |
+| Focus ring | `--ring`, `--ring-off` | 2px solid in the theme's `--focus`, 2px offset | one global `:focus-visible` rule; a component only overrides `outline-offset` (inset `-1px`/`-2px` where the ring would be clipped) |
 | Elevation | `--elev-1`, `--elev-2` | card shadow, popover shadow | `box-shadow` |
 
 The names are the pixel value, so a token reads the same as the number it replaces:
@@ -56,3 +57,11 @@ to 11/12/13/14/15 and 10/17/19/21 to 11/18/20/22. Anything 2px or more from a st
 Every `font-size` and `font:` size in the stylesheet now uses `--fs-N`. Same rule as above: 10.5/11.5/12.5/13.5/14.5
 went up to 11/12/13/14/15, 10/17/19/21 to 11/18/20/22. Only 9px and 26px stay literal (offscale 2). The font family
 was not touched.
+
+### Buttons and the focus ring (slice 4)
+
+`:focus-visible` has one rule at the top of the stylesheet (`outline: var(--ring)`). Component rules no longer repeat
+the colour or width; the 40 that need a different offset set `outline-offset` alone, the 12 that matched the default are gone,
+and the `--blue` rings now use the theme's `--focus`. Every `min-height` of 32/36/40/44/48px is `var(--hit-N)` (ratchet: `hit.literal`).
+`.btn` has one tone set (`.primary`, `.warn`, `.danger`) and a dense size (`.btn.sm`, 32px). Per-surface button rules (`.td-acts button`,
+`.bd-seg button`, ...) are not folded into `.btn` yet: they are different controls (segments, menu items) and belong to slices 5 and 6.

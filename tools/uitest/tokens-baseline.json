@@ -10,5 +10,9 @@
   "font": {
     "literal": 0,
     "offscale": 2
+  },
+  "hit": {
+    "literal": 0,
+    "offscale": 21
   }
 }

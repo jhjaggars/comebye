@@ -30,11 +30,12 @@ const SCALES = {
   space: { set: scale("sp"), re: /^(padding|margin|gap|row-gap|column-gap)(-(top|bottom|left|right|inline|block)(-(start|end))?)?$/, tok: "--sp-N" },
   radius: { set: scale("r"), re: /^border(-(top|bottom)-(left|right))?-radius$/, tok: "--r-N", pill: [99, 999] },
   font: { set: scale("fs"), re: /^font-size$/, tok: "--fs-N" },
+  hit: { set: scale("hit"), re: /^min-height$/, tok: "--hit-N" },
 };
 for (const [k, s] of Object.entries(SCALES)) if (s.set.size < 5) { console.error(`tokens: the ${k} scale has only ${s.set.size} steps in :root; is the token block gone?`); process.exit(2); }
 
 const TOK = /(env|var|color-mix)\((?:[^()]|\([^()]*\))*\)|(?<![\w.#-])(-?\d*\.?\d+)px\b/g;
-const found = { space: { literal: [], offscale: [] }, radius: { literal: [], offscale: [] }, font: { literal: [], offscale: [] } };
+const found = { space: { literal: [], offscale: [] }, radius: { literal: [], offscale: [] }, font: { literal: [], offscale: [] }, hit: { literal: [], offscale: [] } };
 let sel = "";
 for (const m of nc.matchAll(/[^{};]+\{|\}|[^{};]+(?:;|(?=\}))/g)) {
   const t = m[0];
