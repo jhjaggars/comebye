@@ -257,7 +257,7 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 			return
 		}
 	}
-	if err := s.promptNotice(ctx, target, j.text(standIn)); err != nil {
+	if err := s.promptNoticeOnce(ctx, target, j.text(standIn)); err != nil {
 		if isInputBusy(err) {
 			// The user is typing in that pane: hold the notice and try
 			// again in a few seconds (typing.go); not a failed attempt.

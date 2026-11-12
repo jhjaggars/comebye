@@ -208,3 +208,79 @@ func TestNoticeSeenRoute(t *testing.T) {
 		t.Fatalf("bad id = %d", w.Code)
 	}
 }
+
+// A worker that files several explicit reports gets a callback per report,
+// and the notice text is the same each time ("handoff X finished"): the
+// coordinator saw "[notice 7bb054]" twice, minutes apart, though no send had
+// failed. The same text is not delivered to the same agent twice.
+func TestSameNoticeTextIsDeliveredOncePerRecipient(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	coord := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
+	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, coord)
+	s.deliverCallbacks([]herdr.AgentInfo{coord})
+	waitFor(t, func() bool {
+		g, _ := s.ledger.Get(e.ID)
+		return g.Callback != nil && g.Callback.State == ledger.CallbackDelivered
+	})
+	if n := promptCount(fh); n != 1 {
+		t.Fatalf("first notice: prompts = %d, want 1", n)
+	}
+	// The worker reports again (a second round / a corrected report).
+	if _, ok, err := s.ledger.Report("desk/w9:p1", "second report, different words", time.Now()); err != nil || !ok {
+		t.Fatalf("report: %v %v", ok, err)
+	}
+	g, _ := s.ledger.Get(e.ID)
+	if g.Callback == nil || g.Callback.State != ledger.CallbackPending || g.ReportSeq != 1 && g.Callback.Seq != g.ReportSeq {
+		t.Fatalf("second report did not queue a notice: %+v seq %d", g.Callback, g.ReportSeq)
+	}
+	s.deliverCallbacks([]herdr.AgentInfo{coord})
+	waitFor(t, func() bool {
+		g, _ := s.ledger.Get(e.ID)
+		return g.Callback != nil && g.Callback.State == ledger.CallbackDelivered && g.Callback.Seq == g.ReportSeq
+	})
+	if n := promptCount(fh); n != 1 {
+		t.Fatalf("same notice text sent again: prompts = %d, want 1", n)
+	}
+}
+
+func TestPromptNoticeOnceWindowAndRecipient(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	a := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
+	b := cbAgent("w2:p1", "other", herdr.StatusIdle)
+	ctx := context.Background()
+	s.notices.window = 80 * time.Millisecond
+	for _, c := range []struct {
+		to   herdr.AgentInfo
+		text string
+		want int
+	}{{a, "worker X finished", 1}, {a, "worker X finished", 1}, {b, "worker X finished", 2}, {a, "worker Y finished", 3}} {
+		if err := s.promptNoticeOnce(ctx, c.to, c.text); err != nil {
+			t.Fatal(err)
+		}
+		if n := promptCount(fh); n != c.want {
+			t.Fatalf("after %q to %s: prompts = %d, want %d", c.text, c.to.ID, n, c.want)
+		}
+	}
+	time.Sleep(120 * time.Millisecond)
+	s.promptNoticeOnce(ctx, a, "worker X finished")
+	if n := promptCount(fh); n != 4 {
+		t.Fatalf("after the window: prompts = %d, want 4", n)
+	}
+}
+
+// A failed send is not remembered as delivered.
+func TestPromptNoticeOnceFailureIsRetried(t *testing.T) {
+	s, fh, _ := coordServer(t)
+	s.noticeArriveWait = 10 * time.Millisecond
+	a := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
+	onPrompt(fh, map[int]promptAnswer{1: {err: &herdr.Error{Code: "internal_error", Message: "x"}}, 0: {status: herdr.StatusWorking}}, nil)
+	if err := s.promptNoticeOnce(context.Background(), a, "worker Z finished"); err == nil {
+		t.Fatal("first send should fail")
+	}
+	if err := s.promptNoticeOnce(context.Background(), a, "worker Z finished"); err != nil {
+		t.Fatal(err)
+	}
+	if n := promptCount(fh); n != 2 {
+		t.Fatalf("prompts = %d, want 2", n)
+	}
+}

@@ -89,7 +89,10 @@ func (o *outbox) add(l outLine) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for i, x := range o.data.Lines {
-		if x.Key == l.Key {
+		// The same line again under another key (a worker that reports
+		// twice has a "finished" key per report, and the line reads the
+		// same) is one line.
+		if x.Key == l.Key || (x.Entry != "" && x.Entry == l.Entry && x.Kind == l.Kind && x.Text == l.Text) {
 			// A repeat (landed, then CI green) updates the waiting line.
 			o.data.Lines[i].Text = l.Text
 			o.saveLocked()
@@ -161,6 +164,16 @@ func (s *Server) queueLine(kind, entry, key, text string) {
 // outboxText is the notice for a batch of lines. The lines are written by
 // the hub from safe fields only.
 func outboxText(lines []outLine) string {
+	// Lines that read the same say it once (older outbox files hold repeats).
+	seen := map[string]bool{}
+	uniq := lines[:0:0]
+	for _, l := range lines {
+		if !seen[l.Text] {
+			seen[l.Text] = true
+			uniq = append(uniq, l)
+		}
+	}
+	lines = uniq
 	var b strings.Builder
 	if len(lines) == 1 {
 		b.WriteString("Comebye (hub notice): " + lines[0].Text)
@@ -198,7 +211,7 @@ func (s *Server) flushOutbox(agents []herdr.AgentInfo) {
 	go func(target herdr.AgentInfo) {
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
-		err := s.promptNotice(ctx, target, outboxText(lines))
+		err := s.promptNoticeOnce(ctx, target, outboxText(lines))
 		o.mu.Lock()
 		o.sending = false
 		o.mu.Unlock()
