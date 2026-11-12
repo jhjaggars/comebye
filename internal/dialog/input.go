@@ -208,8 +208,15 @@ func detectOpencodeInput(screen string) Input {
 		lines = append([]string{body}, lines...)
 	}
 	text := strings.TrimSpace(strings.Join(lines, "\n"))
+	if opencodePlaceholder.MatchString(text) {
+		text = "" // a new session's hint, drawn grey, not text anyone typed
+	}
 	return Input{Known: true, Busy: text != "", Text: clip(text)}
 }
+
+// opencodePlaceholder is the empty box's hint in a new session
+// (Ask anything… "What is the tech stack of this project?").
+var opencodePlaceholder = regexp.MustCompile(`^Ask anything… "[^"\n]*"$`)
 
 // opencodeModeLine is the box's last line: the agent mode, the model and
 // "OpenCode", with the sidebar's text possibly after a wide gap.

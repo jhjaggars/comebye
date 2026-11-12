@@ -1,0 +1,63 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                  ▄
+                                                                                                 █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                                                                                 █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                                                                                 ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+                                                                                                   /update to upgrade to OpenCode 2.0
+
+                                                                               ┃
+                                                                               ┃  Ask anything… "What is the tech stack of this project?"
+                                                                               ┃
+                                                                               ┃  Build · Big Pickle OpenCode
+                                                                               ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                               tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /tmp/claude-1000/-home-jhjaggars--worktrees-comebye-feat-opencode-support/7efd0587-0fbb-4d11-9f48-7f2a1c01ea02/scratchpad/repo2:main                                                                                           1.19.5
