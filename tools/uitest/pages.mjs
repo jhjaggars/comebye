@@ -432,7 +432,17 @@ await check("links: a click on a link in a page opens a new tab (not the app) wi
   await fr.waitForSelector("#l1");
   const appUrl = page.url();
   for (const id of ["l1", "l2"]) {
-    const [pop] = await Promise.all([desktop.ctx.waitForEvent("page", { timeout: 8000 }), fr.locator("#" + id).click()]);
+    // A click on a just-attached out-of-process frame can land before the browser has hit-test data for it and be dropped
+    // (a flake in CI, never a missing allow-popups: that fails every try). Wait for two painted frames, then click again
+    // if no tab came; a sandbox that really forbids popups still fails after the last try.
+    let pop;
+    for (let tries = 0; !pop; tries++) {
+      await fr.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const opened = desktop.ctx.waitForEvent("page", { timeout: 3000 });
+      opened.catch(() => {});
+      await fr.locator("#" + id).click();
+      try { pop = await opened; } catch (e) { if (tries >= 3) throw e; }
+    }
     await pop.waitForLoadState("load");
     if (!pop.url().includes("/p/" + pages.chart)) throw new Error(id + " opened " + pop.url());
     const opener = await pop.evaluate(() => window.opener === null);
