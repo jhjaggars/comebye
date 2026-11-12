@@ -66,7 +66,7 @@ var userBinDirs = []string{
 	"~/.local/bin", "~/.npm-global/bin", "~/.bun/bin", "~/go/bin", "~/.cargo/bin", "/usr/local/bin", "/opt/homebrew/bin",
 	"~/.nvm/versions/node/*/bin", "~/.local/share/fnm/node-versions/*/installation/bin", "~/.fnm/node-versions/*/installation/bin",
 	"~/.local/share/mise/installs/node/*/bin", "~/.local/share/mise/shims", "~/.asdf/shims", "~/.volta/bin",
-	"~/.local/share/pnpm", "~/.yarn/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin",
+	"~/.opencode/bin", "~/.local/share/pnpm", "~/.yarn/bin", "/home/linuxbrew/.linuxbrew/bin", "/snap/bin",
 }
 
 // installed reports whether an executable named name is on PATH or in one

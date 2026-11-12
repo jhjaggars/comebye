@@ -707,7 +707,8 @@ func TestInDirsFindsAgentsUnderNodeVersionManagers(t *testing.T) {
 	put(".nvm/versions/node/v22.4.0/bin/pi", 0o755)
 	put(".local/share/fnm/node-versions/v20.1.0/installation/bin/codex", 0o755)
 	put(".nvm/versions/node/v22.4.0/bin/claude", 0o644) // not executable
-	for name, want := range map[string]bool{"pi": true, "codex": true, "claude": false, "droid": false} {
+	put(".opencode/bin/opencode", 0o755)                // opencode's own installer
+	for name, want := range map[string]bool{"pi": true, "codex": true, "claude": false, "droid": false, "opencode": true} {
 		if got := inDirs(name, home, userBinDirs); got != want {
 			t.Errorf("inDirs(%q) = %v, want %v", name, got, want)
 		}
