@@ -169,21 +169,27 @@ func TestUpstreamWithoutProxyGoesDirectOrFails(t *testing.T) {
 func TestUpstreamHTTPProxyConnect(t *testing.T) {
 	env := map[string]string{}
 	hub, up := hubServer(t, env)
+	var mu sync.Mutex
 	var gotHost string
 	px := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
 			http.Error(w, "connect only", 405)
 			return
 		}
+		mu.Lock()
 		gotHost = r.Host
+		mu.Unlock()
 		dst, err := net.Dial("tcp", strings.TrimPrefix(hub.URL, "https://"))
 		if err != nil {
 			http.Error(w, err.Error(), 502)
 			return
 		}
 		w.WriteHeader(200)
-		c, _, _ := w.(http.Hijacker).Hijack()
-		go io.Copy(dst, c)
+		c, buf, _ := w.(http.Hijacker).Hijack()
+		// The server flushes the 200 before it stops its background read, so
+		// the client's first TLS bytes can already sit in buf's reader: read
+		// the tunnel through buf, not c, or they are lost ("hub unreachable").
+		go io.Copy(dst, buf.Reader)
 		io.Copy(c, dst)
 		c.Close()
 		dst.Close()
@@ -191,6 +197,8 @@ func TestUpstreamHTTPProxyConnect(t *testing.T) {
 	t.Cleanup(px.Close)
 	env["HTTPS_PROXY"] = px.URL
 	call(t, up)
+	mu.Lock()
+	defer mu.Unlock()
 	if gotHost != "hub.tail1234.ts.net:"+portOf(hub) {
 		t.Fatalf("CONNECT %q", gotHost)
 	}
