@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -35,9 +34,6 @@ const (
 	noticeRead = 1 << 20
 	// noticeKeep is how long an unverified attempt is remembered.
 	noticeKeep = time.Hour
-	// noticeOnceWindow is how long a notice that was delivered to an agent
-	// is not delivered to it again with the same text (promptNoticeOnce).
-	noticeOnceWindow = 30 * time.Minute
 )
 
 // noticeSent is an earlier send of a notice that errored without being seen
@@ -51,32 +47,6 @@ type noticeSent struct {
 type noticeBook struct {
 	mu   sync.Mutex
 	sent map[string]noticeSent
-	// done is when each notice (recipient and id) was last delivered.
-	done map[string]time.Time
-	// window overrides noticeOnceWindow (tests).
-	window time.Duration
-}
-
-// delivered says whether the notice id reached recipient within window.
-func (b *noticeBook) delivered(to, id string, window time.Duration) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	t, ok := b.done[to+"|"+id]
-	return ok && time.Since(t) < window
-}
-
-func (b *noticeBook) markDelivered(to, id string, window time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.done == nil {
-		b.done = map[string]time.Time{}
-	}
-	for k, t := range b.done {
-		if time.Since(t) > window {
-			delete(b.done, k)
-		}
-	}
-	b.done[to+"|"+id] = time.Now()
 }
 
 func (b *noticeBook) get(id string) (noticeSent, bool) {
@@ -269,28 +239,4 @@ func (s *Server) promptNotice(ctx context.Context, a herdr.AgentInfo, text strin
 	}
 	s.notices.put(id, noticeSent{path: where, off: start, at: time.Now()})
 	return err
-}
-
-// promptNoticeOnce is promptNotice for a notice whose text is the whole of
-// its meaning (a worker finished: the same words every time the worker
-// reports again): the same text is not delivered to the same agent twice
-// within noticeOnceWindow. The report it points at is always the newest, so
-// the second notice would tell the coordinator nothing. It returns nil for
-// a suppressed repeat, so the caller settles the notice as delivered.
-// Scheduled briefings do not use it: they repeat on purpose.
-func (s *Server) promptNoticeOnce(ctx context.Context, a herdr.AgentInfo, text string) error {
-	id := noticeID(text)
-	window := s.notices.window
-	if window <= 0 {
-		window = noticeOnceWindow
-	}
-	if s.notices.delivered(a.ID, id, window) {
-		log.Printf("notice %s to %s: already delivered within %s, not sent again", id, a.ID, window)
-		return nil
-	}
-	if err := s.promptNotice(ctx, a, text); err != nil {
-		return err
-	}
-	s.notices.markDelivered(a.ID, id, window)
-	return nil
 }

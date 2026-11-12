@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -657,5 +658,26 @@ func TestResentSameReportIsNotANewNotice(t *testing.T) {
 	s.Report(e.AgentID, "done: all green, plus a follow-up", now)
 	if n := len(s.PendingCallbacks()); n != 1 {
 		t.Fatalf("a changed report queued %d notices, want 1", n)
+	}
+}
+
+func TestNoticeKeysSurviveRestartAndAreBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.json")
+	s, _ := Open(path)
+	e, err := s.Add(Entry{Host: "h", Branch: "b", AgentID: "h/w1:p1", Status: Running})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxNoticeKeys+3; i++ {
+		if err := s.AddNoticeKey(e.ID, fmt.Sprintf("k%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.HasNoticeKey(e.ID, fmt.Sprintf("k%d", maxNoticeKeys+2)) || again.HasNoticeKey(e.ID, "k0") {
+		t.Fatal("keys after a restart: the newest must be kept and the oldest dropped")
 	}
 }

@@ -134,6 +134,11 @@ type Entry struct {
 	Noticed   bool  `json:"noticed,omitempty"`
 	NoticeSeq int   `json:"notice_seq,omitempty"`
 	Mark      *Mark `json:"mark,omitempty"`
+	// NoticeKeys are the last notices delivered for this entry, each a key
+	// of recipient, report content and notice text (the hub's callbacks):
+	// the same report is never announced to the same agent twice, and a
+	// report with new content always is. Survives a restart.
+	NoticeKeys []string `json:"notice_keys,omitempty"`
 	// MarkedFrom is the status the entry had when it was marked, which
 	// unmarking restores.
 	MarkedFrom Status `json:"marked_from,omitempty"`
@@ -1056,6 +1061,47 @@ func (s *Store) setCallback(id string, at time.Time, fn func(*Callback)) error {
 			}
 			return s.save()
 		}
+	}
+	return nil
+}
+
+const maxNoticeKeys = 8
+
+// HasNoticeKey reports whether the entry was already announced under key.
+func (s *Store) HasNoticeKey(id, key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID == id {
+			for _, k := range e.NoticeKeys {
+				if k == key {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// AddNoticeKey remembers that the entry was announced under key.
+func (s *Store) AddNoticeKey(id, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID != id {
+			continue
+		}
+		for _, k := range e.NoticeKeys {
+			if k == key {
+				return nil
+			}
+		}
+		keys := append(append([]string(nil), e.NoticeKeys...), key)
+		if len(keys) > maxNoticeKeys {
+			keys = keys[len(keys)-maxNoticeKeys:]
+		}
+		e.NoticeKeys = keys
+		return s.save()
 	}
 	return nil
 }
