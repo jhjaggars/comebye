@@ -35,6 +35,9 @@ type Input struct {
 // both draw as a reverse-video blank, never counts as text. Vim mode makes
 // no difference: normal and insert mode show the same text.
 func DetectInput(screen, agentKind string) Input {
+	if agentKind == "opencode" {
+		return detectOpencodeInput(screen)
+	}
 	if agentKind != "claude" && agentKind != "pi" {
 		return Input{}
 	}
@@ -164,3 +167,52 @@ func splitStyled(l string) (plain, live string, styled bool) {
 	}
 	return p.String(), v.String(), styled
 }
+
+// detectOpencodeInput reads OpenCode's prompt box: the "┃" lines just above
+// the mode line ("Build · Big Pickle OpenCode"), which sits above the "╹▀▀▀"
+// rule that closes the box. A blank box is blank (no placeholder to tell
+// apart), so the styling is not needed.
+func detectOpencodeInput(screen string) Input {
+	raw := strings.Split(strings.ReplaceAll(screen, "\r", ""), "\n")
+	plain := make([]string, len(raw))
+	for i, l := range raw {
+		plain[i], _, _ = splitStyled(l)
+	}
+	border := func(l string) (string, bool) {
+		return strings.CutPrefix(strings.TrimLeftFunc(l, unicode.IsSpace), "┃")
+	}
+	mode := -1
+	for i := len(plain) - 2; i >= 0; i-- {
+		body, ok := border(plain[i])
+		if ok && opencodeModeLine.MatchString(body) &&
+			strings.HasPrefix(strings.TrimLeftFunc(plain[i+1], unicode.IsSpace), "╹▀▀") {
+			mode = i
+			break
+		}
+	}
+	if mode < 0 {
+		return Input{}
+	}
+	var lines []string
+	for i := mode - 1; i >= 0; i-- {
+		body, ok := border(plain[i])
+		if !ok {
+			break
+		}
+		// The sidebar shares these rows: it starts after a wide gap.
+		if len(body)-len(strings.TrimLeft(body, " ")) >= 12 {
+			body = ""
+		} else if loc := wideGap.FindStringIndex(body); loc != nil {
+			body = body[:loc[0]]
+		}
+		lines = append([]string{body}, lines...)
+	}
+	text := strings.TrimSpace(strings.Join(lines, "\n"))
+	return Input{Known: true, Busy: text != "", Text: clip(text)}
+}
+
+// opencodeModeLine is the box's last line: the agent mode, the model and
+// "OpenCode", with the sidebar's text possibly after a wide gap.
+var opencodeModeLine = regexp.MustCompile(`\S+ OpenCode(\s{3,}.*)?$`)
+
+var wideGap = regexp.MustCompile(`\s{8,}`)

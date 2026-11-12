@@ -26,6 +26,12 @@ func TestDetectInputFixtures(t *testing.T) {
 		busy       bool
 		text       string // substring of Text when busy
 	}{
+		// OpenCode, with and without styling.
+		{"opencode_empty.ansi", "opencode", false, ""},
+		{"opencode_empty.txt", "opencode", false, ""},
+		{"opencode_typed.ansi", "opencode", true, "hello"},
+		{"opencode_typed.txt", "opencode", true, "hello"},
+		{"opencode_multi.ansi", "opencode", true, "hello world"},
 		// Claude Code, with styling.
 		{"claude_empty.ansi", "claude", false, ""},
 		{"claude_empty2.ansi", "claude", false, ""},
