@@ -2957,6 +2957,39 @@ await check("transcripts: no index, an old index, a stale one, a deleted session
   await page.waitForFunction(() => /isn't in the index/.test(document.querySelector("#rc-session").textContent), null, { timeout: 5000 });
 });
 
+for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-status", "#/briefings"]]) {
+  await check(`status: the transcript index line says ok, stale, missing, and hides when unreadable, at ${width}px`, async () => {
+    const card = () => page.evaluate((b) => (document.querySelector(b + ' [aria-label="Transcript index"]') || {}).innerText || "", box);
+    const show = async (route) => {
+      await page.route(/\/api\/recall\/status$/, route);
+      await desktopList(width, start);
+      if (width < 1100) await page.goto(base + start, { waitUntil: "load" });
+      await page.waitForSelector(`${box} .st-proj`, { timeout: 8000 });
+    };
+    const ago = (ms) => new Date(Date.now() - ms).toISOString();
+    try {
+      await show((r) => r.fulfill({ json: { state: "ok", built_at: ago(3 * 86400000), checked_at: ago(240000), sessions: 12, messages: 90, hosts: ["devbox", "kube"] } }));
+      await page.waitForFunction((b) => /indexed 4m ago/.test((document.querySelector(b + ' [aria-label="Transcript index"]') || {}).innerText || ""), box, { timeout: 6000 });
+      let t = await card();
+      if (!t.includes("12 sessions on 2 hosts") || await page.locator(`${box} [aria-label="Transcript index"].hot`).count()) throw new Error("ok: " + t);
+      await page.unroute(/\/api\/recall\/status$/);
+      await show((r) => r.fulfill({ json: { state: "stale", built_at: ago(5 * 3600000), sessions: 12, messages: 90 } }));
+      await page.waitForFunction((b) => /timer may have stopped/.test((document.querySelector(b + ' [aria-label="Transcript index"]') || {}).innerText || ""), box, { timeout: 6000 });
+      t = await card();
+      if (!/last indexed 5h ago/.test(t) || !(await page.locator(`${box} [aria-label="Transcript index"].hot`).count())) throw new Error("stale: " + t);
+      await page.screenshot({ path: `${out}/status-index-stale-${width}.png` });
+      await page.unroute(/\/api\/recall\/status$/);
+      await show((r) => r.fulfill({ json: { state: "missing", sessions: 0, messages: 0 } }));
+      await page.waitForFunction((b) => /No transcript index/.test((document.querySelector(b + ' [aria-label="Transcript index"]') || {}).innerText || ""), box, { timeout: 6000 });
+      await page.unroute(/\/api\/recall\/status$/);
+      await show((r) => r.fulfill({ status: 500, json: {} }));
+      await page.waitForTimeout(800);
+      if (await card()) throw new Error("a card shows with no status");
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("sideways scroll");
+    } finally { await page.unroute(/\/api\/recall\/status$/).catch(() => {}); }
+  });
+}
+
 // ---- Search and Ready to remove as pages (#/search, #/remove) ----
 await check("search page: old #/transcripts and #/session links redirect to #/search", async () => {
   await page.setViewportSize({ width: 1280, height: 800 });

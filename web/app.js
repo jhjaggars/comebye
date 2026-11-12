@@ -240,6 +240,35 @@ function fmtBytes(n) {
   return (i ? n.toFixed(1) : String(n)) + " " + u[i];
 }
 
+// The transcript index's state, on the Status page too, so a timer that has
+// stopped shows without opening Search (GET /api/recall/status, the same state
+// the Search screen's "indexed N min ago" reads).
+const idx = { st: null, at: 0, inflight: false };
+
+async function loadIdx() {
+  if (idx.inflight || Date.now() - idx.at < 30000) return;
+  idx.inflight = true;
+  try { idx.st = await api("/api/recall/status"); } catch { idx.st = null; } finally { idx.inflight = false; idx.at = Date.now(); }
+  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  renderStatus();
+}
+
+function idxCardHtml() {
+  const st = idx.st;
+  if (!st || !st.state || st.state === "unavailable") return "";
+  const at = typeof rcLastSeen === "function" ? rcLastSeen(st) : NaN;
+  const ago = Number.isNaN(at) ? "" : fmtAgo(at) + " ago";
+  let msg, bad = true, head = "Transcript index";
+  if (st.state === "ok") {
+    bad = false;
+    const hosts = (st.hosts || []).length;
+    msg = `indexed ${ago || "just now"} · ${st.sessions} ${st.sessions === 1 ? "session" : "sessions"}${hosts ? ` on ${hosts} ${hosts === 1 ? "host" : "hosts"}` : ""}`;
+  } else if (st.state === "stale") { head = "Transcript index is not updating"; msg = `last indexed ${ago || "a long time ago"}: the timer may have stopped. Search shows older results.`; }
+  else if (st.state === "missing") { head = "No transcript index"; msg = "This host has not built one yet. The timer (comebye archive index --all-hosts --if-changed) builds it."; }
+  else { head = "Transcript index is out of date"; msg = "It is an older version: the next comebye archive index rebuilds it."; }
+  return `<section class="st-proj${bad ? " hot" : ""}" aria-label="Transcript index"><div class="st-ph">${esc(head)}</div><div class="st-row idx-row"><span class="st-m${bad ? " warn" : ""}">${esc(msg)}</span></div></section>`;
+}
+
 function tmpCardHtml() {
   const hs = tmpHosts();
   if (!hs.length) return "";
@@ -5780,7 +5809,7 @@ function statusHTML(desktop) {
     return `<div class="st-row"><span class="st-n">${esc(multiHost() ? `${host} · ${d.repo}` : d.repo)}</span><span class="st-m warn">${esc(d.reason)}${d.ref ? ` at <code>${esc(d.ref)}</code>` : ""}</span><span class="st-r">${Number.isNaN(since) ? "" : "since " + esc(fmtAgo(since)) + " ago"}</span>` +
       `<div class="st-hint">${esc(d.hint)}</div><div class="st-m">${esc(d.path)} · found by ${esc(d.source)}${n ? ` · ${n} ${n === 1 ? "agent works" : "agents work"} in it` : ""}</div></div>`;
   }).join("")}</section>` : "";
-  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${tmpCardHtml()}${boardHtml()}${briefCardHtml()}${ps.map(card).join("")}${
+  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${tmpCardHtml()}${idxCardHtml()}${boardHtml()}${briefCardHtml()}${ps.map(card).join("")}${
     desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
 }
 
@@ -5911,6 +5940,7 @@ function renderStatus() {
     if (desktop && state.view !== "status") continue; // only the page on screen
     if (!desktop && !briefs.open) continue;
     if (Date.now() - board.at > 20000) loadBoard();
+    loadIdx();
     const html = statusHTML(desktop);
     if (el._html === html) continue;
     el._html = html;
