@@ -737,3 +737,22 @@ spend uses the estimated launch price. Types of other families, and Arm
 This kind was built against the dry run and recorded `gcloud` output only: the
 gcloud login on the machine it was developed on had expired (`invalid_grant`), so
 nothing was created on Google Cloud.
+
+### Limits live in comebye; a narrow AWS profile is optional
+
+The provisioner uses the node's existing AWS profile (`aws_profile`, the default
+one if unset). The decision (2026-11-12) is not to require a narrower IAM profile,
+so the limits are comebye's own, and each has a test: `-provision-max-usd-hour`
+(priced from the node's own list, a cost that cannot be priced is refused), the
+allowed instance families (`allowed_families`), the region (the node's own),
+`max_budget_cap_usd` and the required budget cap, at most `-provision-max-hosts`
+real hosts, the `managed-by=comebye-worker` tag that destroy, stop and cleanup
+insist on (`checkOwned`), one job at a time, and the typed name for Destroy.
+Preflight never asks for a particular profile.
+
+As an **optional extra layer**, `tools/worker/iam/write-policy.json` (with
+`readonly-policy.json`) is a draft IAM policy for a dedicated profile: tagged
+creates only, `RunInstances` only for the allowed families, changes only to tagged
+resources, us-east-1 only (edit the region and `ACCOUNT_ID`). It was checked with
+`aws iam simulate-custom-policy` (a read-only call) but has not been attached to
+anything, and nothing here depends on it.
