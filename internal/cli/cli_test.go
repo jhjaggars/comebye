@@ -674,6 +674,52 @@ func TestReportProgress(t *testing.T) {
 	}
 }
 
+// --progress TEXT is the note itself, never a file name; unquoted words are
+// joined; and every failure prints an error and exits non-zero.
+func TestReportProgressText(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/report"] = answer{body: `{"entry":{"id":"ab12","branch":"feat/x"},"progress":true}`}
+	if code := run(e, "report", "--progress", "running the tests now"); code != 0 || errb.Len() != 0 || !strings.Contains(out.String(), "Progress noted") {
+		t.Fatalf("text: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/report").body; !strings.Contains(b, `"text":"running the tests now"`) || !strings.Contains(b, `"progress":true`) {
+		t.Fatalf("body %s", b)
+	}
+	if code := run(e, "report", "--progress", "two", "words", "--phase", "ci"); code != 0 {
+		t.Fatalf("words: %d %s", code, errb)
+	}
+	if b := f.find("POST", "/api/report").body; !strings.Contains(b, `"text":"two words"`) {
+		t.Fatalf("joined body %s", b)
+	}
+}
+
+func TestReportProgressErrors(t *testing.T) {
+	_, e, _, errb := newFake(t)
+	if code := run(e, "report", "--progress"); code != 2 || !strings.Contains(errb.String(), "TEXT") {
+		t.Fatalf("no text: %d %s", code, errb)
+	}
+	errb.Reset()
+	e.Stdin = strings.NewReader("  \n")
+	if code := run(e, "report", "--progress", "-"); code != 2 || !strings.Contains(errb.String(), "empty") {
+		t.Fatalf("empty stdin: %d %s", code, errb)
+	}
+	errb.Reset()
+	if code := run(e, "report", "--progress", " "); code != 2 || !strings.Contains(errb.String(), "empty") {
+		t.Fatalf("blank text: %d %s", code, errb)
+	}
+}
+
+func TestReportMissingFileIsLoud(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	if code := run(e, "report", "/nonexistent/report.md"); code != 1 || out.Len() != 0 ||
+		!strings.Contains(errb.String(), "cannot read the report") || !strings.Contains(errb.String(), "nothing was sent") {
+		t.Fatalf("missing file: %d %s %s", code, out, errb)
+	}
+	if f.find("POST", "/api/report") != nil {
+		t.Fatal("a report was sent")
+	}
+}
+
 func TestReportProblems(t *testing.T) {
 	if p := reportProblems("## Summary\n## Changes\n## Verification\nVerified live: x\n## Follow-ups\nVerified live, Unit tests only, Not verified\n## Decisions for the user\nNone.\n"); len(p) != 1 ||
 		!strings.Contains(p[0], "Unit tests only, Not verified") {

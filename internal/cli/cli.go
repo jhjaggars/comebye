@@ -65,7 +65,7 @@ func init() {
 		{"plan", "create --title T --size N | show ID | list [--json]", "group handoffs into one change: the user is told once when all of them are done", cmdPlan},
 		{"release", "ID [--json]", "start a handoff that is waiting for earlier steps now (e.g. a step that went idle without reporting)", cmdRelease},
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
-		{"report", "FILE|- | --progress [--phase rebase|tests|push|ci] TEXT|-", "(workers) declare yourself done and send your final report to whoever handed you the task; --progress sends a short note on what you are doing instead, which is not a report and finishes nothing", cmdReport},
+		{"report", "FILE|- | --progress [--phase rebase|tests|push|ci] TEXT|-", "(workers) declare yourself done and send your final report to whoever handed you the task; --progress sends a short note on what you are doing instead, which is not a report and finishes nothing; its TEXT is the note itself (a lone - reads it from stdin, never a file name), and a failure prints an error and exits non-zero", cmdReport},
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
 		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--branch B] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
@@ -2121,18 +2121,23 @@ func cmdReport(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(pos) != 1 {
-		return usageErr("want report FILE (or - for stdin)")
-	}
 	if *phase != "" && !*progress {
 		return usageErr("--phase goes with --progress")
 	}
 	if *progress {
-		return cmdProgress(e, pos[0], *phase, *asJSON)
+		if len(pos) == 0 {
+			return usageErr("--progress wants the note's TEXT (or - for stdin)")
+		}
+		// The note is literal text; only a lone "-" means stdin. Words
+		// left unquoted are joined, never taken for file names.
+		return cmdProgress(e, strings.Join(pos, " "), *phase, *asJSON)
+	}
+	if len(pos) != 1 {
+		return usageErr("want report FILE (or - for stdin)")
 	}
 	text, err := readInput(e, pos[0], 64<<10)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot read the report from %q: %v (nothing was sent; to send text, use `comebye report -` with it on stdin, or `comebye report --progress \"text\"` for a note)", pos[0], err)
 	}
 	if strings.TrimSpace(text) == "" {
 		return usageErr("the report is empty")
@@ -2165,9 +2170,15 @@ func cmdReport(e *Env, args []string) error {
 // keeps it for the card ("landing: tests running") and does not take it as
 // a report, so it is the right thing to send while a long step runs.
 func cmdProgress(e *Env, src, phase string, asJSON bool) error {
-	text, err := readInput(e, src, 4<<10)
-	if err != nil {
-		return err
+	text := src
+	if src == "-" {
+		var err error
+		if text, err = readInput(e, src, 4<<10); err != nil {
+			return fmt.Errorf("cannot read the note from stdin: %v (nothing was sent)", err)
+		}
+	}
+	if len(text) > 4<<10 {
+		return fmt.Errorf("the note is larger than %d bytes (nothing was sent)", 4<<10)
 	}
 	if strings.TrimSpace(text) == "" {
 		return usageErr("the note is empty")

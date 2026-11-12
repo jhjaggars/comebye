@@ -705,7 +705,9 @@ commit (`gh run list --commit`, every 30 to 120 seconds, up to 45 minutes)
 and tells the requester again when CI ends.
 
 A worker reports progress with `comebye report --progress [--phase
-rebase|tests|push|ci] "<text>"`. A progress note is not a report: it
+rebase|tests|push|ci] "<text>"`. The text is the note itself (a lone `-` reads it from stdin; it
+is never a file name, and words left unquoted are joined); a failure prints
+an error and exits non-zero. A progress note is not a report: it
 finishes nothing, queues no notice and triggers no landing check. A plain
 `comebye report -` means "I am done".
 

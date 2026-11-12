@@ -84,7 +84,11 @@ the owning host:
    the real program driven as a user would, not a function called
    directly), `## Follow-ups`, `## Decisions for the user` (each bullet becomes a to-do item
    waiting on the worker; see docs/lifecycle.md). `comebye report` warns the worker, without
-   refusing the report, when a section or a Verification group is missing. The
+   refusing the report, when a section or a Verification group is missing.
+`comebye report --progress "TEXT"` sends a progress note: TEXT is the note
+itself (a lone `-` reads it from stdin; it is never taken for a file name), and
+any failure prints an error and exits non-zero. The final `comebye report FILE|-`
+names the file it could not read and says nothing was sent. The
    template also tells the worker that the coordinator may ask it to land its
    work after the report, and that this message authorises exactly those
    steps (see **Landing**). A
