@@ -240,6 +240,10 @@ type SearchHit struct {
 	// Snippet holds \x02 and \x03 around each matched term. Stored text cannot
 	// contain them. A client splits on them and never treats this as markup.
 	Snippet string `json:"snippet"`
+	// Produced counts what the session made, by type (commit, page, pr, issue,
+	// comment, release, image), for the chip line of a result row. Commits it
+	// only saw are not counted.
+	Produced map[string]int `json:"produced,omitempty"`
 }
 
 // CommitHit is a session tied to a commit whose SHA was searched for.
@@ -255,6 +259,10 @@ type SearchResult struct {
 	Total   int         `json:"total"`
 	Hits    []SearchHit `json:"hits"`
 	Commits []CommitHit `json:"commits,omitempty"`
+	// Produced is set when the query names an artifact (a SHA, a pg_ id,
+	// owner/repo#N, owner/repo@tag, a digest, or a GitHub URL): what it is and
+	// the session and message that made it. A SHA also fills Commits, as before.
+	Produced []ProducedItem `json:"produced,omitempty"`
 }
 
 var (
@@ -313,6 +321,28 @@ ORDER BY %s LIMIT %d OFFSET %d;`, q(match), f.where(), f.roles(), metaCols, meta
 	}
 	for _, x := range rows {
 		res.Hits = append(res.Hits, SearchHit{SessionMeta: metaOf(x), Matches: num(x, "matches"), Seq: num(x, "seq"), Sub: sget(x, "sub"), Role: sget(x, "role"), Snippet: snips[num(x, "mid")]})
+	}
+	if len(res.Hits) > 0 {
+		metas := make([]SessionMeta, len(res.Hits))
+		for i, h := range res.Hits {
+			metas[i] = h.SessionMeta
+		}
+		if pc, err := r.producedCounts(ctx, metas); err == nil {
+			for i := range res.Hits {
+				res.Hits[i].Produced = pc[countKey(res.Hits[i].SessionMeta)]
+			}
+		} else if ctx.Err() != nil {
+			return res, err
+		}
+	}
+	if skip == 0 {
+		items, ok, err := r.ProducedRef(ctx, text, f, 20)
+		if err != nil {
+			return res, err
+		}
+		if ok {
+			res.Produced = items
+		}
 	}
 	if t := strings.TrimSpace(text); skip == 0 && shaRE.MatchString(t) {
 		cs, err := r.query(ctx, fmt.Sprintf(`SELECT %s, c.sha AS sha, c.rel AS rel, c.subject AS subject FROM commits c JOIN sessions s ON s.host=c.host AND s.kind=c.kind AND s.id=c.session_id %s

@@ -59,7 +59,8 @@ comebye archive rewrap --to-dir DIR --to-encryption none                      # 
 
 comebye recall ask "a vague description of the work"   # the short answer
 comebye recall threads | todo | list | search WORDS | commit SHA
-comebye recall show THREAD|SESSION [--text N]
+comebye recall produced REF       # which session made a commit, Page, PR, issue, release or image
+comebye recall show THREAD|SESSION [--text N]   # a session also lists what it produced
 ```
 
 Every `recall` command takes `--json` and filters `--since`, `--until`,

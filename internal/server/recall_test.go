@@ -54,7 +54,7 @@ func recallIndex(t *testing.T) string {
 
 func recallPaths() []string {
 	s := "/api/recall/sessions/desk/claude/" + recallSID
-	return []string{"/api/recall/status", "/api/recall/facets", "/api/recall/search?q=zebra", "/api/recall/recent", s, s + "/hits?q=zebra"}
+	return []string{"/api/recall/status", "/api/recall/facets", "/api/recall/search?q=zebra", "/api/recall/recent", s, s + "/hits?q=zebra", s + "/produced", "/api/recall/produced?ref=pg_0123456789"}
 }
 
 // The API is the user's alone. An agent with the local token, a request a peer
@@ -211,5 +211,80 @@ func TestRecallDoesNotLogQueries(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "sekritquery") {
 		t.Errorf("logged: %s", buf.String())
+	}
+}
+
+// withProduced adds rows to the index as the extractor would have left them.
+func withProduced(t *testing.T, path string) {
+	t.Helper()
+	sql := `INSERT INTO produced(host,kind,session_id,seq,sub,tool_id,ts,type,ref,url,repo,branch,title,rel,patch_id,pr,detail) VALUES
+('desk','claude','` + recallSID + `',0,'','t1','2026-10-03T08:01:00Z','page','pg_0123456789','','','','Drill','','','','version 2'),
+('desk','claude','` + recallSID + `',0,'','t2','2026-10-03T08:02:00Z','commit','9c1e4ab0000000000000000000000000000000aa','','','ops/x','Add notes','made','','Acme/widget#212',''),
+('desk','claude','` + recallSID + `',0,'','t3','2026-10-03T08:03:00Z','issue','Acme/widget#5491','https://github.com/Acme/widget/issues/5491','Acme/widget','','Bug','','','',''),
+('desk','claude','` + recallSID + `',0,'','t4','2026-10-03T08:04:00Z','commit','9c1e4ab0000000000000000000000000000000aa','','','','seen','seen','','','');
+INSERT INTO outcomes VALUES('t-x','commit-landed','9c1e4ab0000000000000000000000000000000aa','9c1e4ab0 Add notes (on main as 4d02f170)','patch-id','');`
+	cmd := exec.Command("sqlite3", path)
+	cmd.Stdin = strings.NewReader(sql)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+}
+
+func TestRecallProduced(t *testing.T) {
+	r := newReadRig(t)
+	path := recallIndex(t)
+	withProduced(t, path)
+	r.s.recall = archive.NewReader(path)
+	hdr := map[string]string{"Tailscale-User-Login": "me@example.com"}
+	get := func(p string, into any) int {
+		code, body := r.call(r.main, "GET", p, "", hdr)
+		if code == http.StatusOK && into != nil {
+			if err := json.Unmarshal([]byte(body), into); err != nil {
+				t.Fatalf("%s: %v: %s", p, err, body)
+			}
+		}
+		return code
+	}
+	type resp struct {
+		Produced []archive.ProducedItem `json:"produced"`
+	}
+	var got resp
+	if c := get("/api/recall/sessions/desk/claude/"+recallSID+"/produced", &got); c != 200 || len(got.Produced) != 4 {
+		t.Fatalf("session produced: %d %+v", c, got)
+	}
+	if got.Produced[0].Type != "page" || got.Produced[0].Session.ID != recallSID {
+		t.Errorf("first: %+v", got.Produced[0])
+	}
+	if c := get("/api/recall/sessions/desk/claude/nope/produced", nil); c != http.StatusNotFound {
+		t.Errorf("unknown session: %d", c)
+	}
+	// By page id, SHA prefix, issue ref, PR ref (finds the commit that shipped in it), URL.
+	for ref, want := range map[string]string{
+		"pg_0123456789": "page", "9c1e4ab": "commit", "Acme/widget%235491": "issue", "Acme/widget%23212": "commit",
+		"https://github.com/Acme/widget/pull/212": "commit", "https://github.com/Acme/widget/issues/5491": "issue",
+	} {
+		got = resp{}
+		if c := get("/api/recall/produced?ref="+ref, &got); c != 200 || len(got.Produced) == 0 || got.Produced[0].Type != want {
+			t.Errorf("ref %s: %d %+v", ref, c, got)
+		}
+	}
+	got = resp{}
+	get("/api/recall/produced?ref=9c1e4ab", &got)
+	if len(got.Produced) != 2 || got.Produced[0].Rel != "made" || got.Produced[0].Verdict != "landed" || got.Produced[0].How != "patch-id" || got.Produced[0].LandedAs != "4d02f170" || got.Produced[0].PR != "Acme/widget#212" {
+		t.Errorf("commit: %+v", got.Produced)
+	}
+	if c := get("/api/recall/produced?ref=zebra", nil); c != http.StatusBadRequest {
+		t.Errorf("not a ref: %d", c)
+	}
+	// Search returns the artifact above the sessions, and the session row's counts.
+	var sr archive.SearchResult
+	get("/api/recall/search?q=pg_0123456789", &sr)
+	if len(sr.Produced) != 1 || sr.Produced[0].Ref != "pg_0123456789" {
+		t.Errorf("search by page id: %+v", sr.Produced)
+	}
+	sr = archive.SearchResult{}
+	get("/api/recall/search?q=zebra", &sr)
+	if len(sr.Hits) != 1 || sr.Hits[0].Produced["page"] != 1 || sr.Hits[0].Produced["commit"] != 1 || sr.Hits[0].Produced["issue"] != 1 || len(sr.Produced) != 0 {
+		t.Errorf("counts: %+v", sr)
 	}
 }

@@ -498,7 +498,7 @@ func human(n int64) string {
 
 func cmdRecall(e *Env, args []string) error {
 	if len(args) == 0 {
-		return usageErr("recall needs a subcommand: ask, threads, list, search, show, commit, todo")
+		return usageErr("recall needs a subcommand: ask, threads, list, search, show, commit, produced, todo")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("recall "+sub, flag.ContinueOnError)
@@ -519,7 +519,7 @@ func cmdRecall(e *Env, args []string) error {
 	fs.IntVar(&f.Limit, "limit", 0, "most rows (default 30; search 15)")
 	text := fs.Int("text", 0, "show: also print the first N indexed messages")
 	switch sub {
-	case "ask", "threads", "todo", "list", "search", "show", "commit":
+	case "ask", "threads", "todo", "list", "search", "show", "commit", "produced":
 	default:
 		return usageErr("unknown recall subcommand %q", sub)
 	}
@@ -592,6 +592,27 @@ func cmdRecall(e *Env, args []string) error {
 			printSession(e, r)
 		}
 		return nil
+	case "produced":
+		if len(pos) != 1 {
+			return usageErr("usage: comebye recall produced REF  (a commit SHA, pg_ id, owner/repo#N, owner/repo@tag, GitHub URL or sha256: digest)")
+		}
+		items, known, err := ix.ProducedRef(pos[0], f, max(f.Limit, 20))
+		if err != nil {
+			return err
+		}
+		if !known {
+			return usageErr("%q is not an artifact reference: give a commit SHA (7+ hex), a pg_ id, owner/repo#N, owner/repo@tag, a GitHub URL or a sha256: digest", pos[0])
+		}
+		if *asJSON {
+			return jsonOut(e, items)
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(e.Stdout, "nothing found")
+		}
+		for _, it := range items {
+			printProduced(e, it, true)
+		}
+		return nil
 	case "show":
 		if len(pos) != 1 {
 			return usageErr("usage: comebye recall show THREAD|SESSION [--text N]")
@@ -638,8 +659,13 @@ func cmdRecall(e *Env, args []string) error {
 			}
 		}
 		fmt.Fprintf(e.Stdout, "    %-12s %v messages, %v from subagents, %v bytes archived in %v files\n", "size", s["n_msgs"], s["n_sub"], s["n_bytes"], s["n_streams"])
-		for _, c := range cs {
-			fmt.Fprintf(e.Stdout, "    commit %-8s %-7s %s %s\n", str(c["sha"])[:min(8, len(str(c["sha"])))], str(c["rel"]), str(c["branch"]), str(c["subject"]))
+		if prod, err := ix.ProducedBySession(str(s["host"]), str(s["kind"]), str(s["id"])); err == nil {
+			for _, it := range prod {
+				if it.Type == "commit" && it.Rel == "seen" {
+					continue
+				}
+				printProduced(e, it, false)
+			}
 		}
 		for _, m := range msgs {
 			who := str(m["role"])
@@ -651,6 +677,44 @@ func cmdRecall(e *Env, args []string) error {
 		return nil
 	}
 	return nil
+}
+
+// printProduced prints one artifact: with its session when it answers a lookup,
+// and without it in a session's own list.
+func printProduced(e *Env, it archive.ProducedItem, withSession bool) {
+	ref := it.Ref
+	if it.Type == "commit" {
+		ref = ref[:min(8, len(ref))]
+	}
+	line := fmt.Sprintf("    %-7s %s", it.Type, ref)
+	if it.Type == "commit" {
+		line += " " + it.Rel
+		if it.Verdict != "" {
+			line += ", " + it.Verdict
+			if it.LandedAs != "" {
+				line += " as " + it.LandedAs
+			}
+			if it.How != "" {
+				line += " by " + it.How
+			}
+		}
+		if it.PR != "" {
+			line += ", " + it.PR
+		}
+	}
+	if it.Detail != "" && it.Type != "commit" {
+		line += " (" + it.Detail + ")"
+	}
+	if it.Title != "" {
+		line += "  " + oneLine(it.Title, 80)
+	}
+	line += fmt.Sprintf("  [turn %d]", it.Seq)
+	if !withSession {
+		fmt.Fprintln(e.Stdout, line)
+		return
+	}
+	m := it.Session
+	fmt.Fprintf(e.Stdout, "%s  %s  %s  %s\n%s\n", strings.Replace(m.Started[:min(16, len(m.Started))], "T", " ", 1), m.Kind, shortID(m.Kind, m.ID), m.Host, line)
 }
 
 func str(v any) string {

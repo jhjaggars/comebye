@@ -45,6 +45,8 @@ func (s *Server) recallRoutes() {
 	s.mux.HandleFunc("GET /api/recall/search", s.auth(s.recallOnly(s.handleRecallSearch)))
 	s.mux.HandleFunc("GET /api/recall/recent", s.auth(s.recallOnly(s.handleRecallRecent)))
 	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}", s.auth(s.recallOnly(s.handleRecallSession)))
+	s.mux.HandleFunc("GET /api/recall/produced", s.auth(s.recallOnly(s.handleRecallProduced)))
+	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}/produced", s.auth(s.recallOnly(s.handleRecallSessionProduced)))
 	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}/hits", s.auth(s.recallOnly(s.handleRecallHits)))
 }
 
@@ -262,4 +264,48 @@ func (s *Server) handleRecallHits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"hits": hits, "capped": len(hits) >= archive.HitsCap})
+}
+
+// handleRecallProduced answers "where did this come from?": the sessions that made
+// the artifact that ref names, and the message of each.
+func (s *Server) handleRecallProduced(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query()
+	ref := strings.TrimSpace(v.Get("ref"))
+	if ref == "" || len(ref) > recallMaxQ {
+		recallBad(w, "ref is required, up to 500 bytes")
+		return
+	}
+	f, ok := recallFilter(w, v)
+	if !ok {
+		return
+	}
+	limit, ok := recallInt(v.Get("limit"), 20, recallMaxSessions)
+	if !ok {
+		recallBad(w, "limit is a whole number")
+		return
+	}
+	items, known, err := s.recall.ProducedRef(r.Context(), ref, f, limit)
+	if err != nil {
+		recallErr(w, "produced", err)
+		return
+	}
+	if !known {
+		recallBad(w, "ref is a commit SHA (7 to 40 hex), a pg_ id, owner/repo#N, owner/repo@tag, a GitHub PR, issue or release URL, or a sha256: digest")
+		return
+	}
+	writeJSON(w, map[string]any{"produced": items})
+}
+
+// handleRecallSessionProduced answers "what did this session make?", in order.
+func (s *Server) handleRecallSessionProduced(w http.ResponseWriter, r *http.Request) {
+	host, kind, id, ok := recallSessionPath(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.recall.ProducedBySession(r.Context(), host, kind, id)
+	if err != nil {
+		recallErr(w, "session produced", err)
+		return
+	}
+	writeJSON(w, map[string]any{"produced": items})
 }

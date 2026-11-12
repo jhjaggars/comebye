@@ -91,6 +91,10 @@ func writeRecallFixture(index string) error {
 	smoke.tool("Edit", map[string]any{"file_path": "internal/upgrade/smoke.go"}, "The file has been updated.", false)
 	smoke.tool("Bash", map[string]any{"command": "git commit -am 'upgrade: retry the smoke check'"}, "[fix/smoke-retry 1a2b3c4d] upgrade: retry the smoke check's transient failures\n 1 file changed, 12 insertions(+)", false)
 	smoke.say("Done: three attempts with backoff.")
+	// What the session produced besides the commit: a Page, an issue and a PR.
+	smoke.tool("Bash", map[string]any{"command": "comebye publish smoke-retry.html --key smoke-retry-writeup"}, "Published pg_5a0e7e1b2c (html, 3.1 KiB).\nhttps://devbox.example.ts.net/p/pg_5a0e7e1b2c", false)
+	smoke.tool("Bash", map[string]any{"command": "gh issue create --repo acme/comebye-fixture --title \"Smoke check flakes right after a restart\" --body-file issue.md"}, "https://github.com/acme/comebye-fixture/issues/41\n", false)
+	smoke.tool("Bash", map[string]any{"command": "gh pr create --repo acme/comebye-fixture --head fix/smoke-retry --title \"upgrade: retry the smoke check\" --body-file pr.md"}, "https://github.com/acme/comebye-fixture/pull/42\n", false)
 	smokeDir := filepath.Join(claudeDir, "-home-dev-.worktrees-comebye-fix-smoke-retry")
 	if err := smoke.write(filepath.Join(smokeDir, smokeID+".jsonl")); err != nil {
 		return err
