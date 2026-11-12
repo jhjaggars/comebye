@@ -100,6 +100,8 @@ node copycode.mjs "http://127.0.0.1:$port" "$out" || rc=1
 node buttons.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # Chips, cards and empty states share one shape (design language slice 5).
 node chips.mjs "http://127.0.0.1:$port" "$out" || rc=1
+# Segmented controls, menus and sheets, notices, stacking order (design language slice 6).
+node controls.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # Decision sets in the To do panel: the card, the phone stepper, conflicts, drafts and Submit.
 node decisionsets.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # The Pages checks publish with the real CLI, so they need the binary and its state.

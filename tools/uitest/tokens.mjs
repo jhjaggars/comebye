@@ -11,6 +11,7 @@
 //   offscale - a px value that is on no scale (pick a scale step; add one only with a reason)
 // 0, 1px and negative margins (which cannot be a var()) are exempt from "literal".
 // The counts may only go down: a new offender fails, a fixed one asks you to lower the baseline.
+// z-index: a literal of two digits or more must be a var(--z-name) (counted as z.literal).
 // Colours are not checked here: contrast.mjs owns them.
 import fs from "node:fs";
 import path from "node:path";
@@ -35,7 +36,7 @@ const SCALES = {
 for (const [k, s] of Object.entries(SCALES)) if (s.set.size < 5) { console.error(`tokens: the ${k} scale has only ${s.set.size} steps in :root; is the token block gone?`); process.exit(2); }
 
 const TOK = /(env|var|color-mix)\((?:[^()]|\([^()]*\))*\)|(?<![\w.#-])(-?\d*\.?\d+)px\b/g;
-const found = { space: { literal: [], offscale: [] }, radius: { literal: [], offscale: [] }, font: { literal: [], offscale: [] }, hit: { literal: [], offscale: [] } };
+const found = { space: { literal: [], offscale: [] }, radius: { literal: [], offscale: [] }, font: { literal: [], offscale: [] }, hit: { literal: [], offscale: [] }, z: { literal: [], offscale: [] } };
 let sel = "";
 for (const m of nc.matchAll(/[^{};]+\{|\}|[^{};]+(?:;|(?=\}))/g)) {
   const t = m[0];
@@ -44,6 +45,7 @@ for (const m of nc.matchAll(/[^{};]+\{|\}|[^{};]+(?:;|(?=\}))/g)) {
   const d = t.match(/^\s*([\w-]+)\s*:\s*([\s\S]*?)\s*;?\s*$/);
   if (!d) continue;
   const [, prop, val] = d;
+  if (prop === "z-index") { if (/^\d{2,}$/.test(val.trim())) found.z.literal.push(`${sel} { z-index: ${val.trim()} }`); continue; } // use var(--z-*): the stacking order is in :root
   let kind = Object.keys(SCALES).find((k) => SCALES[k].re.test(prop));
   let firstOnly = false;
   if (!kind && prop === "font" && /\dpx/.test(val)) { kind = "font"; firstOnly = true; }

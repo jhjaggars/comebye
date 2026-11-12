@@ -5,7 +5,7 @@
   },
   "radius": {
     "literal": 0,
-    "offscale": 5
+    "offscale": 3
   },
   "font": {
     "literal": 0,
@@ -13,6 +13,10 @@
   },
   "hit": {
     "literal": 0,
-    "offscale": 21
+    "offscale": 20
+  },
+  "z": {
+    "literal": 0,
+    "offscale": 0
   }
 }
