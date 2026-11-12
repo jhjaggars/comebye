@@ -203,7 +203,7 @@
     st.esKey = key;
     const es = new EventSource(`${agentPath(a)}/panel/events` + (st.pick ? "?path=" + encodeURIComponent(st.pick) : ""));
     st.es = es;
-    es.addEventListener("ready", () => { if (st.es === es) { st.live = true; renderBar(); } });
+    es.addEventListener("ready", () => { if (st.es === es) { st.live = true; renderBar(); tick(true); } }); // the hub has its baseline now; look once, in case a change landed before it
     // A push is a reason to look now; the answer is still the usual cheap "unchanged?" read.
     es.addEventListener("diff", () => { if (st.es === es && st.tab === "diff") tick(true); });
     es.addEventListener("doc", () => { if (st.es === es && st.tab === "doc") tick(true); });
@@ -671,6 +671,7 @@
       if (!el.matches || !el.matches("details.df")) return;
       if (el.open) st.closed.delete(el.dataset.key); else st.closed.add(el.dataset.key);
       renderBar();
+      if (el.open && !el.querySelector(".ln.hl, .sr .hl")) redrawFile(el);
     }, true);
     body.addEventListener("click", (e) => {
       const cite = e.target.closest("[data-act=cite]");
@@ -680,6 +681,21 @@
       const send = e.target.closest("[data-send]");
       if (send) sendHunk(send.dataset.send);
     });
+  }
+
+  // A file drawn while closed has plain text and its language was never asked for; when it is opened,
+  // draw just that file again so it is coloured now, not at the next change.
+  function redrawFile(el) {
+    const key = el.dataset.key, i = key.indexOf("|");
+    const f0 = st.diff && st.diff.sections.filter((s) => s.key === key.slice(0, i)).flatMap((s) => s.files).find((x) => x.path === key.slice(i + 1));
+    if (!f0 || !langOf(f0.path)) return;
+    const focus = document.activeElement && el.contains(document.activeElement);
+    const tpl = document.createElement("template");
+    tpl.innerHTML = fileHtml(key.slice(0, i), f0);
+    const fresh = tpl.content.firstElementChild;
+    if (!fresh) return;
+    el.replaceWith(fresh);
+    if (focus) fresh.querySelector("summary").focus();
   }
 
   function jumpToFile(key) {

@@ -33,6 +33,7 @@ type panelWatcher struct {
 	mu     sync.Mutex
 	subs   map[chan panelPing]struct{}
 	cancel context.CancelFunc
+	based  chan struct{} // closed once the first look has set the baseline
 }
 
 // panelHub holds the running watchers, keyed by agent and document.
@@ -43,7 +44,10 @@ type panelHub struct {
 
 // subscribe joins (starting if needed) the watcher for key. check is called
 // every tick to see what changed; it is only the first subscriber's closure.
-func (h *panelHub) subscribe(key string, check func(ctx context.Context, last map[string]string, emit func(panelPing))) (chan panelPing, func()) {
+// The returned channel closes when the watcher has its baseline: a change made
+// before that is not announced (the baseline already contains it), so a stream
+// must not tell its browser it is live until then.
+func (h *panelHub) subscribe(key string, check func(ctx context.Context, last map[string]string, emit func(panelPing))) (chan panelPing, <-chan struct{}, func()) {
 	h.mu.Lock()
 	if h.m == nil {
 		h.m = map[string]*panelWatcher{}
@@ -51,7 +55,7 @@ func (h *panelHub) subscribe(key string, check func(ctx context.Context, last ma
 	w := h.m[key]
 	if w == nil {
 		ctx, cancel := context.WithCancel(context.Background())
-		w = &panelWatcher{subs: map[chan panelPing]struct{}{}, cancel: cancel}
+		w = &panelWatcher{subs: map[chan panelPing]struct{}{}, cancel: cancel, based: make(chan struct{})}
 		h.m[key] = w
 		go w.run(ctx, check)
 	}
@@ -60,7 +64,7 @@ func (h *panelHub) subscribe(key string, check func(ctx context.Context, last ma
 	w.subs[ch] = struct{}{}
 	w.mu.Unlock()
 	h.mu.Unlock()
-	return ch, func() {
+	return ch, w.based, func() {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		w.mu.Lock()
@@ -98,6 +102,7 @@ func (w *panelWatcher) run(ctx context.Context, check func(context.Context, map[
 	t := time.NewTicker(panelWatchEvery)
 	defer t.Stop()
 	check(ctx, last, func(panelPing) {}) // the first look sets the baseline; the browser fetches on its own
+	close(w.based)
 	for {
 		select {
 		case <-ctx.Done():
@@ -181,12 +186,17 @@ func (s *Server) handlePanelEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		note("doc", token)
 	}
-	ch, leave := s.panels.subscribe(key, check)
+	ch, based, leave := s.panels.subscribe(key, check)
 	defer leave()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
+	select { // "ready" means a change from now on is announced
+	case <-based:
+	case <-r.Context().Done():
+		return
+	}
 	fmt.Fprint(w, "event: ready\ndata: {}\n\n")
 	flusher.Flush()
 	hb := time.NewTicker(s.cfg.PingInterval)

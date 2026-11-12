@@ -88,3 +88,29 @@ func TestPanelEventsPushAndShare(t *testing.T) {
 	stopB()
 	awaitPanel(t, "the watcher to stop", func() bool { return r.s.panels.count() == 0 })
 }
+
+// "ready" is only sent once the watcher has its baseline: a change made after the
+// browser sees "ready" is announced, never folded into the baseline unseen.
+func TestPanelSubscribeBasedBeforeReady(t *testing.T) {
+	var h panelHub
+	release := make(chan struct{})
+	check := func(ctx context.Context, last map[string]string, emit func(panelPing)) {
+		if _, ok := last["x"]; !ok {
+			<-release // the first look is slow
+			last["x"] = "1"
+		}
+	}
+	_, based, leave := h.subscribe("k", check)
+	defer leave()
+	select {
+	case <-based:
+		t.Fatal("based before the first look finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-based:
+	case <-time.After(2 * time.Second):
+		t.Fatal("never based")
+	}
+}
