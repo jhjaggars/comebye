@@ -45,6 +45,8 @@ func (s *Server) recallRoutes() {
 	s.mux.HandleFunc("GET /api/recall/search", s.auth(s.recallOnly(s.handleRecallSearch)))
 	s.mux.HandleFunc("GET /api/recall/recent", s.auth(s.recallOnly(s.handleRecallRecent)))
 	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}", s.auth(s.recallOnly(s.handleRecallSession)))
+	s.mux.HandleFunc("GET /api/recall/threads/{id}", s.auth(s.recallOnly(s.handleRecallThread)))
+	s.mux.HandleFunc("GET /api/recall/sessions", s.auth(s.recallOnly(s.handleRecallLink)))
 	s.mux.HandleFunc("GET /api/recall/produced", s.auth(s.recallOnly(s.handleRecallProduced)))
 	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}/produced", s.auth(s.recallOnly(s.handleRecallSessionProduced)))
 	s.mux.HandleFunc("GET /api/recall/sessions/{host}/{kind}/{id}/hits", s.auth(s.recallOnly(s.handleRecallHits)))
@@ -70,6 +72,8 @@ func recallErr(w http.ResponseWriter, what string, err error) {
 		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]string{"code": "no_index", "message": "this host has no transcript index yet"})
 	case errors.Is(err, archive.ErrNoSession):
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": "that session is not in the index: it was deleted, or has not been indexed yet"})
+	case errors.Is(err, archive.ErrNoThread):
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_thread", "message": "that piece of work is not in the index: it was rebuilt, or has not been indexed yet"})
 	case errors.Is(err, context.DeadlineExceeded):
 		writeJSONStatus(w, http.StatusGatewayTimeout, map[string]string{"code": "timeout", "message": "the search took too long; try fewer or rarer words"})
 	case errors.Is(err, context.Canceled):
@@ -115,8 +119,8 @@ func recallInt(v string, def, max int) (int, bool) {
 
 // recallFilter reads the filters a listing and a search share.
 func recallFilter(w http.ResponseWriter, v url.Values) (archive.Filter, bool) {
-	f := archive.Filter{Host: v.Get("host"), Kind: v.Get("kind"), Project: v.Get("project"), Branch: v.Get("branch"), Ledger: v.Get("ledger"), Since: v.Get("since"), Until: v.Get("until")}
-	for _, x := range []string{f.Host, f.Kind, f.Project, f.Branch, f.Ledger} {
+	f := archive.Filter{Host: v.Get("host"), Kind: v.Get("kind"), Project: v.Get("project"), Branch: v.Get("branch"), Ledger: v.Get("ledger"), Agent: v.Get("agent"), Since: v.Get("since"), Until: v.Get("until")}
+	for _, x := range []string{f.Host, f.Kind, f.Project, f.Branch, f.Ledger, f.Agent} {
 		if len(x) > recallMaxValue {
 			recallBad(w, "a filter value is too long")
 			return f, false
@@ -163,8 +167,9 @@ func (s *Server) handleRecallSearch(w http.ResponseWriter, r *http.Request) {
 		recallBad(w, "q is too long")
 		return
 	}
-	if m := v.Get("mode"); m != "" && m != "messages" {
-		recallBad(w, "unknown mode")
+	mode := v.Get("mode")
+	if mode != "" && mode != "messages" && mode != "work" {
+		recallBad(w, "mode is messages or work")
 		return
 	}
 	f, ok := recallFilter(w, v)
@@ -190,6 +195,15 @@ func (s *Server) handleRecallSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.Limit = limit
+	if mode == "work" {
+		res, err := s.recall.Work(r.Context(), text, f, skip)
+		if err != nil {
+			recallErr(w, "work", err)
+			return
+		}
+		writeJSON(w, res)
+		return
+	}
 	res, err := s.recall.Search(r.Context(), text, f, sortBy, skip)
 	if err != nil {
 		recallErr(w, "search", err)
@@ -308,4 +322,39 @@ func (s *Server) handleRecallSessionProduced(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, map[string]any{"produced": items})
+}
+
+var recallThreadRE = regexp.MustCompile(`^t-[0-9a-f]{8}$`)
+
+// handleRecallThread answers one piece of work: its brief, how it ended with the
+// source of each fact, and the sessions that did it.
+func (s *Server) handleRecallThread(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !recallThreadRE.MatchString(id) {
+		recallBad(w, "not a thread")
+		return
+	}
+	t, err := s.recall.Thread(r.Context(), id)
+	if err != nil {
+		recallErr(w, "thread", err)
+		return
+	}
+	writeJSON(w, t)
+}
+
+// handleRecallLink resolves a handoff (ledger) or an agent to its sessions and thread,
+// for the links that other screens carry.
+func (s *Server) handleRecallLink(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query()
+	f := archive.Filter{Ledger: v.Get("ledger"), Agent: v.Get("agent")}
+	if (f.Ledger == "") == (f.Agent == "") || len(f.Ledger) > recallMaxValue || len(f.Agent) > recallMaxValue {
+		recallBad(w, "give a ledger or an agent")
+		return
+	}
+	res, err := s.recall.ForLink(r.Context(), f)
+	if err != nil {
+		recallErr(w, "link", err)
+		return
+	}
+	writeJSON(w, res)
 }

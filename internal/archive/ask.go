@@ -102,6 +102,9 @@ func (f Filter) threadWhere() string {
 	if f.Ledger != "" {
 		c = append(c, "EXISTS(SELECT 1 FROM thread_sessions x JOIN sessions s ON s.host=x.host AND s.kind=x.kind AND s.id=x.session_id WHERE x.thread_id=t.id AND s.ledger_id="+q(f.Ledger)+")")
 	}
+	if f.Agent != "" {
+		c = append(c, "EXISTS(SELECT 1 FROM thread_sessions x JOIN sessions s ON s.host=x.host AND s.kind=x.kind AND s.id=x.session_id WHERE x.thread_id=t.id AND s.ledger_agent="+q(f.Agent)+")")
+	}
 	return strings.Join(c, " AND ")
 }
 

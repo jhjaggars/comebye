@@ -1287,7 +1287,7 @@ function planAllGone(p) {
 function planMemberTarget(m) {
   const a = m.agent_id ? agentById(m.agent_id) : null;
   if (a) return { hash: agentHash(a), live: a, tip: `Open ${m.repo_name || "?"}/${m.branch}` };
-  return { hash: rcSearchHash(m.branch || m.repo_name || ""), live: null, tip: "This agent is gone: search its archived session" };
+  return { hash: m.id ? "#/search/for?ledger=" + encodeURIComponent(m.id) : rcSearchHash(m.branch || m.repo_name || "", {}), live: null, tip: "This agent is gone: open its archived transcript" };
 }
 
 function planMemberHtml(m, p, open) {
@@ -1298,7 +1298,8 @@ function planMemberHtml(m, p, open) {
   else if (t.live && t.live.agent_status === "working" && m.outcome !== "pending") live = `<span class="pm-live working">working</span>`;
   const e = open ? ledger.entries.find((x) => x.id === m.id) : null;
   const when = e && Date.parse(e.created_at) ? ` · started ${fmtAgo(Date.parse(e.created_at))} ago` : "";
-  const detail = open ? `<div class="pm-detail">${esc(m.host || "")}${m.host ? " · " : ""}${esc(m.status)}${esc(when)}${e && e.final_report ? `<details class="pm-rep"><summary>Report</summary><div class="md">${renderMarkdown(e.final_report, "pm" + e.id)}</div></details>` : ""}</div>` : "";
+  const trans = m.id && t.live ? ` · <a class="pm-tr" href="#/search/for?ledger=${encodeURIComponent(m.id)}">Transcript</a>` : "";
+  const detail = open ? `<div class="pm-detail">${esc(m.host || "")}${m.host ? " · " : ""}${esc(m.status)}${esc(when)}${trans}${e && e.final_report ? `<details class="pm-rep"><summary>Report</summary><div class="md">${renderMarkdown(e.final_report, "pm" + e.id)}</div></details>` : ""}</div>` : "";
   return `<li><a class="pm${t.live ? "" : " gone"}" href="${esc(t.hash)}" title="${esc(t.tip)}"><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span>${live}</a>${detail}</li>`;
 }
 
@@ -1569,7 +1570,8 @@ function todoItemHtml(t, pfx) {
       const label = l.label || l.url || `handoff ${l.handoff}`;
       return href
         ? (href.startsWith("/#/") ? `<a href="${escAttr(href)}">${esc(label)}</a>` : `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`)
-        : `<span>${esc(l.handoff ? `handoff ${l.handoff}` : label)}</span>`;
+        : l.handoff ? `<a class="td-tr" href="#/search/for?ledger=${encodeURIComponent(l.handoff)}" title="Open that handoff's transcript">${esc(l.label ? `${l.label} (handoff ${l.handoff})` : `handoff ${l.handoff}`)}</a>`
+        : `<span>${esc(label)}</span>`;
     });
     const a = t.answer;
     const aAt = a ? Date.parse(a.at) : NaN;
@@ -3116,6 +3118,7 @@ function renderDetailMenu() {
   const off = ledger.on === false;
   $("d-model").hidden = !can;
   for (const id of ["d-mark", "d-role"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  $("d-transcript").hidden = !lon;
   const st = $("d-mark-state");
   if (!lon) {
     $("d-sched").hidden = true;
@@ -3186,6 +3189,12 @@ function renderMarkBar(m) {
   if (!show) { bar.innerHTML = ""; return; }
   // Marking lives in the "⋯" menu; the bar only appears once marked.
   bar.innerHTML = `<span class="lg-chip rtr">ready to remove</span><span class="mb-why">${esc(m.reason || "no reason given")}</span><button type="button" class="btn" data-mb="unmark">Unmark</button>`;
+}
+
+function detailTranscript() {
+  const id = state.selected;
+  toggleDetailMenu(false);
+  if (id) location.hash = rcWorkHash(id);
 }
 
 function toggleMark() {
@@ -3391,6 +3400,7 @@ function openRowMenu(btn) {
   const menu = $("row-menu");
   if (!menu.hidden && menu.dataset.id === id) { closeRowMenu(); return; }
   menu.dataset.id = id;
+  $("row-transcript").dataset.hash = rcWorkHash(id);
   $("row-mark").textContent = ledger.marked.has(id) ? "Unmark (keep this session)" : "Mark ready to remove…";
   menu.hidden = false;
   popOpened("row");
@@ -3403,6 +3413,12 @@ function openRowMenu(btn) {
 }
 
 function closeRowMenu() { const m = $("row-menu"); if (m.hidden) return; m.hidden = true; popClosed("row"); }
+
+function rowMenuTranscript() {
+  const hash = $("row-transcript").dataset.hash;
+  closeRowMenu();
+  if (hash) location.hash = hash;
+}
 
 function rowMenuMark() {
   const id = $("row-menu").dataset.id;
@@ -3955,6 +3971,7 @@ function reviewItemHTML(it) {
   return `<div class="rv-item${it.safe ? "" : " warn"}${done ? " done" : ""}" data-id="${esc(it.id)}">
     <div class="rv-top">${chk}<span class="rv-name">${name}</span>${role}${host}${branch}${status}</div>
     ${where ? `<div class="rv-sub">${where}</div>` : ""}
+    <div class="rv-sub"><a class="rv-tr" href="${esc(rcWorkHash(it.id))}">Open the work: its transcript</a></div>
     <div class="rv-reason">${marked}</div>
     <ul class="rv-list warn">${done ? "" : warnings}</ul>
     <ul class="rv-list ok">${done ? "" : ok + said}</ul>
@@ -4303,6 +4320,7 @@ const rc = {
   ctl: null, timer: null, more: false, route: null,
   sess: null, sessKey: "", msgs: [], before: false, after: false, sessErr: "", sessLoading: false,
   hits: [], hitAt: -1, open: new Set(), prod: new Map(),
+  scope: {}, scopeKey: "", thread: null, threadErr: "",
 };
 
 function rcLoadFilters() {
@@ -4318,7 +4336,16 @@ function parseRecallRoute() {
   const p = new URLSearchParams(qs || "");
   // #/transcripts and #/session/... are the old forms of these two: saved links and
   // notifications still carry them, and syncRecall rewrites them.
-  if (path === "/search" || path === "/transcripts") return { q: p.get("q") || "", legacy: path === "/transcripts" };
+  // agent= and ledger= narrow the list to one agent's or one handoff's sessions.
+  if (path === "/search" || path === "/transcripts") return { q: p.get("q") || "", agent: p.get("agent") || "", ledger: p.get("ledger") || "", legacy: path === "/transcripts" };
+  // #/search/for?ledger=<handoff> or ?agent=<id> is a link from another screen: it goes to the
+  // one session that work made, or to its thread when there are several.
+  if (path === "/search/for") {
+    const link = { agent: p.get("agent") || "", ledger: p.get("ledger") || "" };
+    return link.agent || link.ledger ? { q: "", link } : null;
+  }
+  const tm = path.match(/^\/search\/thread\/(t-[0-9a-f]{8})$/);
+  if (tm) return { q: p.get("q") || "", thread: tm[1] };
   const m = path.match(/^\/(search|session)\/([^/]+)\/([^/]+)\/([^/]+)$/);
   if (!m) return null;
   try {
@@ -4328,7 +4355,21 @@ function parseRecallRoute() {
   } catch { return null; }
 }
 
-function rcSearchHash(q) { return "#/search" + (q ? "?q=" + encodeURIComponent(q) : ""); }
+function rcSearchHash(q, scope = rc.scope) {
+  const parts = [];
+  if (q) parts.push("q=" + encodeURIComponent(q));
+  if (scope && scope.agent) parts.push("agent=" + encodeURIComponent(scope.agent));
+  if (scope && scope.ledger) parts.push("ledger=" + encodeURIComponent(scope.ledger));
+  return "#/search" + (parts.length ? "?" + parts.join("&") : "");
+}
+function rcThreadHash(id, q) { return "#/search/thread/" + encodeURIComponent(id) + (q ? "?q=" + encodeURIComponent(q) : ""); }
+// rcWorkHash is the link to an agent's transcript. An agent id is reused for later work, so the
+// agent's latest handoff is the better key when the ledger knows it.
+function rcWorkHash(agentId) {
+  const mine = (ledger.entries || []).filter((e) => e.agent_id === agentId).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  return "#/search/for?" + (mine.length ? "ledger=" + encodeURIComponent(mine[0].id) : "agent=" + encodeURIComponent(agentId));
+}
+const rcDetail = (r) => !!(r && (r.session || r.thread || r.link));
 function rcSessionHash(s, o = {}) {
   const p = new URLSearchParams();
   if (o.seq !== undefined && o.seq !== null) p.set("seq", o.seq);
@@ -4342,7 +4383,7 @@ function rcSessionHash(s, o = {}) {
 function syncRecall() {
   let r = parseRecallRoute();
   if (r && r.legacy) {
-    const h = r.session ? rcSessionHash(r.session, { seq: r.seq, sub: r.sub, q: r.q }) : rcSearchHash(r.q);
+    const h = r.session ? rcSessionHash(r.session, { seq: r.seq, sub: r.sub, q: r.q }) : rcSearchHash(r.q, {});
     history.replaceState(history.state, "", location.pathname + location.search + h);
     r = parseRecallRoute();
   }
@@ -4357,22 +4398,30 @@ function syncRecall() {
     rc.sess = null; rc.sessKey = ""; rc.msgs = []; rc.hits = [];
     return;
   }
-  el.classList.toggle("in-session", !!r.session);
+  const detail = rcDetail(r);
+  el.classList.toggle("in-session", detail);
+  // The list keeps the narrowing of the last list route while a session or thread is read.
+  if (!detail) rc.scope = { agent: r.agent || "", ledger: r.ledger || "" };
+  else if (!was) rc.scope = {};
+  const scopeKey = (rc.scope.agent || "") + "|" + (rc.scope.ledger || "");
   if (!was) {
     rc.filters = rcLoadFilters();
     rcLoadMeta();
-    renderRecallFilters();
   }
+  if (!was || scopeKey !== rc.scopeKey) renderRecallFilters();
   const input = $("rc-q");
   if (document.activeElement !== input || !was) input.value = r.q;
   // Opened afresh with no query, the list of recent sessions may have moved on.
-  if (r.q !== rc.q || !rc.res || (!was && !r.q)) {
+  if (r.q !== rc.q || !rc.res || (!was && !r.q) || scopeKey !== rc.scopeKey) {
     rc.q = r.q;
+    rc.scopeKey = scopeKey;
     rcSearch();
   }
   if (r.session) rcOpenSession(r);
+  else if (r.thread) rcOpenThread(r);
+  else if (r.link) rcOpenLink(r);
   else { $("rc-session").replaceChildren(rcEmptySession()); rc.sessKey = ""; }
-  if (!was && !r.session && isDesktop()) input.focus();
+  if (!was && !detail && isDesktop()) input.focus();
 }
 
 function rcEmptySession() {
@@ -4440,7 +4489,16 @@ function rcSelect(key, label, options) {
 function renderRecallFilters() {
   const f = rc.facets || { hosts: [], kinds: [], projects: [] };
   const opt = (all, list) => [["", all], ...list.map((x) => [x.value, `${x.value} (${x.n})`])];
+  const scope = [];
+  if (rc.scope.agent || rc.scope.ledger) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "rc-chip on"; b.id = "rc-unscope";
+    b.textContent = (rc.scope.ledger ? "This handoff only" : "This agent only") + " ×";
+    b.title = "Show every session again";
+    scope.push(b);
+  }
   $("rc-filters").replaceChildren(
+    ...scope,
     rcSelect("role", "Where the words are", Object.entries(RC_IN)),
     rcSelect("when", "When", Object.entries(RC_WHEN)),
     rcSelect("host", "Host", opt("Any host", f.hosts)),
@@ -4451,16 +4509,25 @@ function renderRecallFilters() {
   rcSyncFilters();
 }
 
-// Where the words are, and best match, mean nothing until there are words.
+// rcWork says whether the list shows threads (Work) rather than messages.
+const rcWork = () => !!rc.q && rc.filters.mode === "work";
+
+// Where the words are, and best match, mean nothing until there are words, and a thread has neither.
 function rcSyncFilters() {
-  for (const s of $("rc-filters").querySelectorAll('[data-key="role"], [data-key="sort"]')) s.hidden = !rc.q;
+  for (const s of $("rc-filters").querySelectorAll('[data-key="role"], [data-key="sort"]')) s.hidden = !rc.q || rcWork();
+  const tabs = $("rc-tabs");
+  tabs.hidden = !rc.q;
+  for (const b of tabs.querySelectorAll("button")) b.setAttribute("aria-selected", String((b.dataset.mode === "work") === rcWork()));
 }
 
 function rcParams(skip) {
   const p = new URLSearchParams({ limit: "20" });
   if (rc.q) p.set("q", rc.q);
+  if (rcWork()) p.set("mode", "work");
   const f = rc.filters;
-  for (const k of rc.q ? ["role", "host", "kind", "project", "sort"] : ["host", "kind", "project"]) if (f[k]) p.set(k, f[k]);
+  for (const k of rc.q ? (rcWork() ? ["host", "kind", "project"] : ["role", "host", "kind", "project", "sort"]) : ["host", "kind", "project"]) if (f[k]) p.set(k, f[k]);
+  if (rc.scope.agent) p.set("agent", rc.scope.agent);
+  if (rc.scope.ledger) p.set("ledger", rc.scope.ledger);
   if (f.when) p.set("since", new Date(Date.now() - Number(f.when) * 86400000).toISOString().slice(0, 10));
   if (skip) p.set("skip", String(skip));
   return p;
@@ -4474,11 +4541,12 @@ async function rcSearch(more = false) {
   rc.loading = !more; rc.more = more; rc.err = "";
   if (!more) renderRecallResults();
   try {
-    const d = await api((rc.q ? "/api/recall/search?" : "/api/recall/recent?") + rcParams(more ? rc.res.hits.length : 0), { signal: ctl.signal });
+    const have = more ? (rc.res.threads || rc.res.hits).length : 0;
+    const d = await api((rc.q ? "/api/recall/search?" : "/api/recall/recent?") + rcParams(have), { signal: ctl.signal });
     if (rc.ctl !== ctl) return;
     d.recent = !rc.q;
     if (more) {
-      rc.res.hits.push(...d.hits);
+      if (d.threads) rc.res.threads.push(...d.threads); else rc.res.hits.push(...d.hits);
       rc.res.total = d.total;
     } else rc.res = d;
   } catch (e) {
@@ -4684,6 +4752,7 @@ function renderRecallResults() {
       kids.push(tip);
     }
     kids.push(count);
+    if (rc.res.threads) count.textContent = rc.res.total === 1 ? "1 piece of work" : `${rc.res.total} pieces of work`;
     const made = rc.res.produced || [];
     if (made.length) {
       const sec = document.createElement("div");
@@ -4698,9 +4767,10 @@ function renderRecallResults() {
         kids.push(h2);
       }
     } else for (const c of rc.res.commits || []) kids.push(rcCommitCard(c));
-    for (const h of rc.res.hits) kids.push(rcCard(h));
-    if (!rc.res.total && !(rc.res.commits || []).length && !made.length) kids.push(rcNotice(rc.res.recent ? "No sessions match these filters." : "Nothing matches. Filters narrow this too, and only the start and end of long output is indexed."));
-    if (rc.res.hits.length < rc.res.total) {
+    for (const t of rc.res.threads || []) kids.push(rcThreadCard(t));
+    for (const h of rc.res.hits || []) kids.push(rcCard(h));
+    if (!rc.res.total && !(rc.res.commits || []).length && !made.length) kids.push(rcNotice(rc.res.recent ? "No sessions match these filters." : rc.res.threads ? "No piece of work is about those words. Work looks for any of the topic words, in a brief, a report or the messages; Messages needs all of them." : "Nothing matches. Filters narrow this too, and only the start and end of long output is indexed."));
+    if ((rc.res.threads || rc.res.hits).length < rc.res.total) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "btn rc-more"; b.id = "rc-more";
       b.textContent = rc.more ? "Loading…" : "More";
@@ -4714,8 +4784,209 @@ function renderRecallResults() {
 
 function rcMarkCurrent() {
   const r = rc.route;
-  const key = r && r.session ? `${r.session.host}/${r.session.kind}/${r.session.id}` : "";
+  const key = r && r.session ? `${r.session.host}/${r.session.kind}/${r.session.id}` : r && r.thread ? "thread/" + r.thread : "";
   for (const c of document.querySelectorAll("#rc-results .rc-card")) c.classList.toggle("current", !!key && c.dataset.key === key);
+}
+
+// rcSpan says how long a piece of work took: "2 h 10 min".
+function rcSpan(a, b) {
+  const ms = Date.parse(b || "") - Date.parse(a || "");
+  if (!(ms > 60000)) return "";
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m} min`;
+  if (m < 2880) return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
+  return `${Math.round(m / 1440)} days`;
+}
+
+// rcThreadCard is one piece of work in the Work tab.
+function rcThreadCard(t) {
+  const a = document.createElement("a");
+  a.className = "rc-card rc-thread";
+  a.href = rcThreadHash(t.id, rc.q);
+  a.dataset.key = "thread/" + t.id;
+  const title = document.createElement("div");
+  title.className = "rc-title";
+  title.textContent = t.title || t.id;
+  const meta = document.createElement("div");
+  meta.className = "rc-meta";
+  meta.textContent = [t.hosts, t.branches, rcDate(t.started)].filter(Boolean).join(" · ");
+  a.append(title, meta);
+  const text = t.outcome || t.brief;
+  if (text) {
+    const sn = document.createElement("div");
+    sn.className = "rc-snip";
+    sn.textContent = text;
+    a.append(sn);
+  }
+  const foot = document.createElement("div");
+  foot.className = "rc-meta rc-foot";
+  foot.append(document.createTextNode(`${t.sessions} ${t.sessions === 1 ? "session" : "sessions"}`));
+  const v = rcVerdictTag(t.verdict);
+  if (v) foot.append(v);
+  a.append(foot);
+  return a;
+}
+
+/* thread page and links */
+
+// How an outcome's kind reads as a chip. Every outcome also says where it came from.
+const RC_OUTCOME = {
+  report: ["report", "t-blue"], "commit-landed": ["landed", "t-green"], "commit-notinmain": ["not on main", "t-orange"],
+  "commit-unknown": ["commit", "t-muted"], "commit-unchecked": ["commit", "t-muted"], "pr-merged": ["PR merged", "t-green"],
+  "pr-open": ["PR open", "t-blue"], "pr-closed": ["PR closed", "t-muted"], doc: ["Page", "t-purple"], deploy: ["deploy", "t-blue"],
+  decision: ["decision", "t-blue"], abandoned: ["abandoned", "t-muted"], unmerged: ["unmerged", "t-orange"], handoff: ["handoff", "t-muted"],
+};
+
+async function rcOpenThread(r) {
+  rcMarkCurrent();
+  const key = "thread|" + r.thread;
+  if (key === rc.sessKey) return;
+  rc.sessKey = key;
+  rc.sess = null; rc.msgs = []; rc.hits = []; rc.thread = null; rc.threadErr = "";
+  $("rc-session").replaceChildren(rcNotice("Loading…"));
+  try {
+    const d = await api("/api/recall/threads/" + encodeURIComponent(r.thread));
+    if (rc.sessKey !== key) return;
+    rc.thread = d;
+  } catch (e) {
+    if (rc.sessKey !== key) return;
+    rc.threadErr = e.code === "no_thread" ? "This piece of work isn't in the index. It was rebuilt since the link was made, or it hasn't been indexed yet." : (e.message || "the thread could not be read");
+  }
+  renderRecallThread();
+}
+
+function renderRecallThread() {
+  const box = $("rc-session");
+  const r = rc.route;
+  if (!r || !r.thread) return;
+  if (rc.threadErr) { box.replaceChildren(rcNotice(rc.threadErr)); return; }
+  const t = rc.thread;
+  if (!t) return;
+  const body = document.createElement("div");
+  body.className = "rc-sbody rc-threadpage";
+  const title = document.createElement("h2");
+  title.className = "rc-stitle"; title.textContent = t.title || t.id;
+  const meta = document.createElement("div");
+  meta.className = "rc-meta";
+  meta.textContent = [t.hosts, t.branches, rcDate(t.started), rcSpan(t.started, t.ended)].filter(Boolean).join(" · ");
+  const v = rcVerdictTag(t.verdict);
+  if (v) { meta.append(" "); meta.append(v); }
+  body.append(title, meta);
+  const sec = (name) => {
+    const h = document.createElement("div");
+    h.className = "rc-sec"; h.textContent = name;
+    body.append(h);
+  };
+  if (t.brief) {
+    sec("Brief · from the handoff");
+    const md = document.createElement("div");
+    md.className = "md rc-brief";
+    md.innerHTML = renderMarkdown(t.brief, "rcb" + t.id);
+    body.append(md);
+  }
+  const outs = t.outcomes || [];
+  if (outs.length) {
+    sec("How it ended");
+    const ul = document.createElement("ul");
+    ul.className = "rc-outcomes";
+    for (const o of outs) {
+      const li = document.createElement("li");
+      const [label, cls] = RC_OUTCOME[o.kind] || [o.kind, "t-muted"];
+      const head = document.createElement("div");
+      head.className = "rc-ohead";
+      head.append(rcTag(label, cls));
+      if (o.ref) {
+        const c = document.createElement("code");
+        c.textContent = /^[0-9a-f]{40}$/.test(o.ref) ? o.ref.slice(0, 12) : o.ref;
+        head.append(" ", c);
+      }
+      li.append(head);
+      if (o.kind === "report" && o.text) {
+        const d = document.createElement("details");
+        d.className = "rc-report";
+        const sm = document.createElement("summary");
+        sm.textContent = "Final report";
+        const md = document.createElement("div");
+        md.className = "md";
+        md.innerHTML = renderMarkdown(o.text, "rco" + t.id);
+        d.append(sm, md);
+        li.append(d);
+      } else if (o.text) {
+        const x = document.createElement("div");
+        x.className = "rc-otext"; x.textContent = o.text;
+        li.append(x);
+      }
+      if (o.source) {
+        const src = document.createElement("div");
+        src.className = "rc-meta";
+        src.textContent = "source: " + o.source;
+        li.append(src);
+      }
+      ul.append(li);
+    }
+    body.append(ul);
+  } else if (t.outcome) {
+    sec("How it ended");
+    const x = document.createElement("div");
+    x.className = "rc-otext"; x.textContent = t.outcome;
+    body.append(x);
+  }
+  const sessions = t.sessions || [];
+  sec(sessions.length === 1 ? "Session" : `Sessions (${sessions.length})`);
+  for (const s of sessions) {
+    const a = document.createElement("a");
+    a.className = "rc-card";
+    a.href = rcSessionHash(s, { q: r.q });
+    const st = document.createElement("div");
+    st.className = "rc-title"; st.textContent = s.title || s.id;
+    const sm = document.createElement("div");
+    sm.className = "rc-meta"; sm.textContent = [s.host, s.kind, rcWhen(s.started)].filter(Boolean).join(" · ");
+    a.append(st, sm);
+    body.append(a);
+  }
+  box.replaceChildren(body);
+  box.scrollTop = 0;
+}
+
+// rcOpenLink follows a link from another screen: to the session that work made, to its thread when
+// several did, and otherwise says it is not there yet. The link's own history entry is replaced.
+async function rcOpenLink(r) {
+  const key = "for|" + r.link.agent + "|" + r.link.ledger;
+  if (key === rc.sessKey) return;
+  rc.sessKey = key;
+  rc.sess = null; rc.msgs = []; rc.hits = [];
+  const box = $("rc-session");
+  box.replaceChildren(rcNotice("Finding the transcript…"));
+  let d;
+  try {
+    d = await api("/api/recall/sessions?" + (r.link.ledger ? "ledger=" + encodeURIComponent(r.link.ledger) : "agent=" + encodeURIComponent(r.link.agent)));
+  } catch (e) {
+    if (rc.sessKey !== key) return;
+    box.replaceChildren(rcNotice(e.code === "no_index" ? "This host has no transcript index yet." : (e.message || "the transcript could not be looked up")));
+    return;
+  }
+  if (rc.sessKey !== key) return;
+  const list = d.sessions || [];
+  let h = "";
+  if (list.length === 1) h = rcSessionHash(list[0]);
+  else if (list.length > 1 && d.thread_id) h = rcThreadHash(d.thread_id);
+  else if (list.length > 1) h = rcSearchHash("", r.link);
+  if (h) {
+    history.replaceState(history.state, "", location.pathname + location.search + h);
+    syncRecall();
+    return;
+  }
+  const entry = r.link.ledger ? (ledger.entries || []).find((e) => e.id === r.link.ledger) : null;
+  const live = agentById(r.link.agent || (entry && entry.agent_id) || "");
+  const kids = [rcNotice("This work isn't in the transcript index yet. A session is indexed after it has been archived, which happens about every hour.")];
+  if (live) {
+    const open = document.createElement("button");
+    open.type = "button"; open.className = "btn rc-openagent"; open.id = "rc-open";
+    open.dataset.hash = agentHash(live);
+    open.textContent = "Open the live agent";
+    kids.push(open);
+  }
+  box.replaceChildren(...kids);
 }
 
 /* session view */
@@ -4903,9 +5174,9 @@ function renderRecallSession() {
     open.textContent = "Open agent";
     body.append(open);
   }
-  if (rc.sess.subs.length) {
+  if (rc.sess.subs.length || s.thread_id) {
     const subs = document.createElement("nav");
-    subs.className = "rc-subs"; subs.setAttribute("aria-label", "Subagents");
+    subs.className = "rc-subs"; subs.setAttribute("aria-label", rc.sess.subs.length ? "Subagents and thread" : "Thread");
     const link = (label, sub) => {
       const a = document.createElement("a");
       a.href = rcSessionHash(s, { sub, q: r.q });
@@ -4913,7 +5184,14 @@ function renderRecallSession() {
       a.className = "rc-chip" + (sub === r.sub ? " on" : "");
       return a;
     };
-    subs.append(link("Main thread", ""));
+    if (s.thread_id) {
+      const t = document.createElement("a");
+      t.href = rcThreadHash(s.thread_id, r.q);
+      t.className = "rc-chip"; t.id = "rc-thread-link";
+      t.textContent = "The whole piece of work ▸";
+      subs.append(t);
+    }
+    if (rc.sess.subs.length) subs.append(link("Main thread", ""));
     for (const x of rc.sess.subs) subs.append(link(`Subagent ${x.id.slice(0, 8)} (${x.messages})`, x.id));
     body.append(subs);
   }
@@ -5125,7 +5403,7 @@ function renderRecallMessages() {
 }
 
 // openRecall opens the Transcripts screen, at the last search if there was one.
-function openRecall() { location.hash = rcSearchHash(rc.q); }
+function openRecall() { location.hash = rcSearchHash(rc.q, {}); }
 
 function closeRecall() {
   history.replaceState(null, "", location.pathname + location.search);
@@ -5134,7 +5412,7 @@ function closeRecall() {
 
 function rcBack() {
   const r = rc.route;
-  if (r && r.session && !isDesktop()) location.hash = rcSearchHash(r.q);
+  if (rcDetail(r) && !isDesktop()) location.hash = rcSearchHash(r.q);
   else closeRecall();
 }
 
@@ -5150,7 +5428,7 @@ function initRecall() {
       if (v.length > 500) return;
       rc.q = v.trim();
       // Replaces the entry, so back leaves the search rather than stepping through each word.
-      if (!r.session) history.replaceState(null, "", location.pathname + location.search + rcSearchHash(rc.q));
+      if (!rcDetail(r)) history.replaceState(null, "", location.pathname + location.search + rcSearchHash(rc.q));
       rcSearch();
     }, 300);
   });
@@ -5158,9 +5436,19 @@ function initRecall() {
     ev.preventDefault();
     clearTimeout(rc.timer);
     const v = $("rc-q").value.trim();
-    if (rc.route && rc.route.session && !isDesktop()) { location.hash = rcSearchHash(v); return; }
+    if (rcDetail(rc.route) && !isDesktop()) { location.hash = rcSearchHash(v); return; }
     if (v !== rc.q) { rc.q = v; history.replaceState(null, "", location.pathname + location.search + rcSearchHash(rc.q)); rcSearch(); }
     $("rc-q").blur();
+  });
+  $("rc-filters").addEventListener("click", (ev) => {
+    if (ev.target.closest("#rc-unscope")) location.hash = rcSearchHash(rc.q, {});
+  });
+  $("rc-tabs").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-mode]");
+    if (!b || (b.dataset.mode === "work") === rcWork()) return;
+    if (b.dataset.mode === "work") rc.filters.mode = "work"; else delete rc.filters.mode;
+    rcSaveFilters();
+    rcSearch();
   });
   $("rc-filters").addEventListener("change", (ev) => {
     const k = ev.target.dataset.key;
@@ -5189,7 +5477,7 @@ function initRecall() {
     clearTimeout(rc.timer);
     q.value = "";
     rc.q = "";
-    if (rc.route && !rc.route.session) history.replaceState(null, "", location.pathname + location.search + rcSearchHash(""));
+    if (rc.route && !rcDetail(rc.route)) history.replaceState(null, "", location.pathname + location.search + rcSearchHash(""));
     rcSearch();
   });
   $("rc-session").addEventListener("click", (ev) => {
@@ -10647,12 +10935,14 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-refresh").addEventListener("click", refreshView);
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
+  $("d-transcript").addEventListener("click", detailTranscript);
   $("d-markbar").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-mb]");
     if (!b || !state.selected) return;
     if (b.dataset.mb === "unmark") unmarkAgent(state.selected);
   });
   $("row-mark").addEventListener("click", rowMenuMark);
+  $("row-transcript").addEventListener("click", rowMenuTranscript);
   initPopovers();
   $("mk-close").addEventListener("click", closeMark);
   $("mk-go").addEventListener("click", submitMark);

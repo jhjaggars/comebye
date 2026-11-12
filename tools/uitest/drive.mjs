@@ -1738,7 +1738,7 @@ const PLAN_LEDGER = { marks: [], roles: {}, entries: [
   { id: "m2", host: "uitest", repo_name: "infra", branch: "feat/removed-one", agent_id: "uitest/w77:p1", pane_id: "w77:p1", status: "removed", outcome: "ok", reported: false },
 ] }] };
 for (const width of [1280, 390]) {
-  await check(`plan card: at ${width}px a member opens its agent, a gone one falls back to Search, a long title stays on one line, keys work`, async () => {
+  await check(`plan card: at ${width}px a member opens its agent, a gone one opens its transcript, a long title stays on one line, keys work`, async () => {
     await page.route(/\/api\/ledger$/, (r) => r.fulfill({ json: PLAN_LEDGER }));
     try {
       await desktopList(width, "#/status");
@@ -1759,7 +1759,7 @@ for (const width of [1280, 390]) {
       await page.keyboard.press("Enter");
       await page.waitForSelector("#detail", { state: "visible" });
       if (!/#\/agent\/w1(:|%3A)p1/.test(await page.evaluate(() => location.hash))) throw new Error("hash " + await page.evaluate(() => location.hash));
-      // The gone one: a tooltip says so and the click lands in Search.
+      // The gone one: a tooltip says so and the click lands on that handoff's transcript.
       await page.goto(base + "/#/status", { waitUntil: "load" });
       await page.waitForSelector("#plans a.pm.gone", { state: "visible" });
       const tip = await page.locator("#plans a.pm.gone").getAttribute("title");
@@ -1767,7 +1767,8 @@ for (const width of [1280, 390]) {
       await page.locator("#plans a.pm.gone").click();
       await page.waitForSelector("#recall", { state: "visible" });
       const h = await page.evaluate(() => decodeURIComponent(location.hash));
-      if (!h.startsWith("#/search") || !h.includes("feat/removed-one")) throw new Error("hash " + h);
+      if (!h.startsWith("#/search/for?ledger=")) throw new Error("hash " + h);
+      await page.waitForFunction(() => /isn't in the transcript index yet/.test(document.querySelector("#rc-session")?.textContent || ""), null, { timeout: 5000 });
     } finally { await page.unroute(/\/api\/ledger$/); }
   });
 }
@@ -2982,6 +2983,129 @@ await check("transcripts: no index, an old index, a stale one, a deleted session
   await page.unroute(/\/api\/recall\/status$/);
   await page.goto(base + "/#/search/devbox/claude/gone-session", { waitUntil: "load" });
   await page.waitForFunction(() => /isn't in the index/.test(document.querySelector("#rc-session").textContent), null, { timeout: 5000 });
+});
+
+/* ---------- threads and links (R2) ---------- */
+const THREAD_HASH = async () => {
+  const d = await page.evaluate(() => fetch("/api/recall/search?mode=work&q=smoke").then((r) => r.json()));
+  return "#/search/thread/" + d.threads.find((t) => /smoke/i.test(t.title)).id;
+};
+
+for (const [w, h, tag] of [[390, 844, "phone"], [1280, 800, "desktop"]]) {
+  await check(`threads: the Work tab finds a piece of work, and its page says how it ended with sources, at ${w}px`, async () => {
+    await page.setViewportSize({ width: w, height: h });
+    await page.goto("about:blank");
+    await page.goto(base + "/#/search", { waitUntil: "load" });
+    await page.evaluate(() => localStorage.removeItem("comebye.recall.filters"));
+    await page.goto("about:blank");
+    await page.goto(base + "/#/search?q=smoke", { waitUntil: "load" });
+    await page.waitForSelector(".rc-card", { timeout: 5000 });
+    if (!(await visible("#rc-tabs"))) throw new Error("no Messages/Work tabs with words");
+    if ((await page.locator('#rc-tabs [aria-selected="true"]').innerText()) !== "Messages") throw new Error("Messages is not the default");
+    await page.locator('#rc-tabs [data-mode="work"]').click();
+    await page.waitForSelector(".rc-thread", { timeout: 5000 });
+    if (await visible('#rc-filters select[data-key="role"]')) throw new Error("the where-the-words-are filter shows for threads");
+    if (!/piece(s)? of work/.test(await page.locator(".rc-count").innerText())) throw new Error("count " + await page.locator(".rc-count").innerText());
+    const card = await page.locator(".rc-thread").first().innerText();
+    if (!/Retry the upgrade smoke check/.test(card) || !/1 session/.test(card) || !/reported/.test(card)) throw new Error("card " + card);
+    await noSideways();
+    await page.screenshot({ path: `${out}/threads-work-${tag}.png` });
+    // The choice is remembered.
+    await page.goto("about:blank");
+    await page.goto(base + "/#/search?q=smoke", { waitUntil: "load" });
+    await page.waitForSelector(".rc-thread", { timeout: 5000 });
+    await page.locator(".rc-thread").first().click();
+    await page.waitForSelector(".rc-threadpage .rc-outcomes", { timeout: 5000 });
+    const t = await page.locator("#rc-session").innerText();
+    for (const want of ["Retry the upgrade smoke check", "BRIEF", "tolerate a server that is still restarting", "HOW IT ENDED", "source: ledger", "SESSION"]) {
+      if (!t.toUpperCase().includes(want.toUpperCase())) throw new Error("the thread page lacks " + want + ": " + t);
+    }
+    if (!/source: git not consulted/.test(t)) throw new Error("a commit outcome has no source: " + t);
+    await page.locator(".rc-report summary").click();
+    await page.waitForFunction(() => /Three attempts with backoff/.test(document.querySelector(".rc-report")?.textContent || ""), null, { timeout: 3000 });
+    await noSideways();
+    await page.screenshot({ path: `${out}/threads-page-${tag}.png` });
+    // From the page to the session, and from the session back to the whole piece of work.
+    await page.locator("#rc-session .rc-card", { hasText: "Retry the upgrade" }).click();
+    await page.waitForSelector("#rc-thread-link", { timeout: 5000 });
+    await page.locator("#rc-thread-link").click();
+    await page.waitForSelector(".rc-threadpage", { timeout: 5000 });
+    // Back to Messages.
+    if (w >= 1100) {
+      await page.locator('#rc-tabs [data-mode="messages"]').click();
+      await page.waitForSelector(".rc-card:not(.rc-thread)", { timeout: 5000 });
+      if (await page.locator(".rc-thread").count()) throw new Error("threads still listed under Messages");
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+  });
+}
+
+await check("threads: a handoff or an agent leads to its session; none yet says so; several lead to the thread", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const q of ["ledger=h-fixture1", "agent=" + encodeURIComponent("devbox/w3:p1")]) {
+    await page.goto(base + "/#/search/for?" + q, { waitUntil: "load" });
+    await page.waitForFunction(() => location.hash.startsWith("#/search/devbox/claude/11111111-aaaa"), null, { timeout: 5000 });
+    await page.waitForSelector(".rc-stitle", { timeout: 5000 });
+  }
+  // The link's own history entry was replaced: Back leaves the screen it came from.
+  await page.goto(base + "/#/status", { waitUntil: "load" });
+  await page.evaluate(() => { location.hash = "#/search/for?ledger=h-fixture1"; });
+  await page.waitForSelector(".rc-stitle", { timeout: 5000 });
+  await page.goBack();
+  await page.waitForFunction(() => location.hash === "#/status", null, { timeout: 5000 });
+  // No session yet.
+  await page.goto(base + "/#/search/for?ledger=h-nothing-yet", { waitUntil: "load" });
+  await page.waitForFunction(() => /isn't in the transcript index yet/.test(document.querySelector("#rc-session")?.textContent || ""), null, { timeout: 5000 });
+  await noSideways();
+  // Several sessions with a thread: the thread.
+  const th = await THREAD_HASH();
+  const tid = th.split("/").pop();
+  await page.route(/\/api\/recall\/sessions\?ledger=h-two$/, (r) => r.fulfill({ json: { thread_id: tid, sessions: [
+    { host: "devbox", kind: "claude", id: "a", title: "A" }, { host: "devbox", kind: "claude", id: "b", title: "B" }] } }));
+  await page.goto(base + "/#/search/for?ledger=h-two", { waitUntil: "load" });
+  await page.waitForFunction((h) => location.hash === h, th, { timeout: 5000 });
+  await page.waitForSelector(".rc-threadpage", { timeout: 5000 });
+  await page.unroute(/\/api\/recall\/sessions\?ledger=h-two$/);
+  // A thread that is gone.
+  await page.goto(base + "/#/search/thread/t-00000000", { waitUntil: "load" });
+  await page.waitForFunction(() => /isn't in the index/.test(document.querySelector("#rc-session")?.textContent || ""), null, { timeout: 5000 });
+});
+
+await check("threads: a list narrowed to one handoff says so, and the chip lifts it", async () => {
+  await page.goto(base + "/#/search?ledger=h-fixture1", { waitUntil: "load" });
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 1, null, { timeout: 5000 });
+  if (!/This handoff only/.test(await page.locator("#rc-unscope").innerText())) throw new Error("no chip");
+  await page.locator("#rc-unscope").click();
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length >= 3 && !document.querySelector("#rc-unscope"), null, { timeout: 5000 });
+  const hash = await page.evaluate(() => location.hash);
+  if (hash.includes("ledger")) throw new Error("hash " + hash);
+});
+
+await check("threads: View transcript on an agent's row menu, and the to-do link, go to its transcript", async () => {
+  for (const [w, h] of [[390, 844], [1280, 800]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await toList();
+    await rowOf(PANES.alpha).locator(".row-more").click();
+    await page.waitForSelector("#row-menu", { state: "visible" });
+    await page.locator("#row-transcript").click();
+    await page.waitForFunction(() => location.hash.startsWith("#/search/for?"), null, { timeout: 5000 });
+    // This agent has no archived session: the page says so and offers the live one.
+    await page.waitForFunction(() => /isn't in the transcript index yet/.test(document.querySelector("#rc-session")?.textContent || ""), null, { timeout: 5000 });
+    await page.waitForSelector("#rc-open", { timeout: 5000 });
+    await page.screenshot({ path: `${out}/threads-link-${w}.png` });
+    await page.locator("#rc-open").click();
+    await page.waitForFunction(() => location.hash.startsWith("#/agent/"), null, { timeout: 5000 });
+  }
+  // A to-do link that carries a handoff id leads to that handoff's transcript.
+  const href = await page.evaluate(() => {
+    const t = { id: "tx", created_at: new Date().toISOString(), state: "open", kind: "decision", question: "q?", links: [{ handoff: "h-fixture1" }], waiting: null };
+    todos.openId = "tx";
+    const d = document.createElement("div");
+    d.innerHTML = todoItemHtml(t, "x");
+    return d.querySelector("a.td-tr")?.getAttribute("href");
+  });
+  if (href !== "#/search/for?ledger=h-fixture1") throw new Error("to-do link " + href);
+  await page.setViewportSize({ width: 390, height: 844 });
 });
 
 for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-status", "#/briefings"]]) {

@@ -755,6 +755,7 @@ type Filter struct {
 	Project      string // matches repo, cwd, branch, or the handoff's branch
 	Branch       string
 	Ledger       string // handoff id
+	Agent        string // the agent that ran the handoff (its id, host/pane)
 	Role         string // said, commands or output (Search only)
 	Limit        int
 }
@@ -796,6 +797,9 @@ func (f Filter) where() string {
 	}
 	if f.Ledger != "" {
 		c = append(c, "s.ledger_id = "+q(f.Ledger))
+	}
+	if f.Agent != "" {
+		c = append(c, "s.ledger_agent = "+q(f.Agent))
 	}
 	return strings.Join(c, " AND ")
 }

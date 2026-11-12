@@ -36,6 +36,7 @@ func NewReader(path string) *Reader {
 var (
 	ErrNoIndex   = errors.New("no index")
 	ErrNoSession = errors.New("no such session")
+	ErrNoThread  = errors.New("no such thread")
 )
 
 func (r *Reader) query(ctx context.Context, sql string) ([]map[string]any, error) {

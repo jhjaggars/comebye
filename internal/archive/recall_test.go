@@ -416,3 +416,57 @@ func TestMarksSurviveAnOlderSqliteShell(t *testing.T) {
 		t.Errorf("%v %+v", err, p.Msgs)
 	}
 }
+
+// Work finds the threads a question is about; Thread and ForLink lead to the sessions.
+func TestReaderWorkThreadAndLinks(t *testing.T) {
+	r := newRecallRig(t)
+	ctx := context.Background()
+	w, err := r.rd.Work(ctx, "zebra", Filter{}, 0)
+	if err != nil || w.Total < 1 || len(w.Threads) < 1 {
+		t.Fatalf("%v %+v", err, w)
+	}
+	var th ThreadRow
+	for _, x := range w.Threads {
+		if x.Sessions >= 1 && strings.Contains(x.Brief, "zebra") {
+			th = x
+		}
+	}
+	if th.ID == "" || th.Verdict == "" || strings.Contains(th.Brief, fakeAWS) {
+		t.Fatalf("%+v", w)
+	}
+	// Filters apply: another agent has no such work, this one does.
+	if n, _ := r.rd.Work(ctx, "zebra", Filter{Agent: "laharl/w9:p9"}, 0); n.Total != 0 || len(n.Threads) != 0 {
+		t.Errorf("%+v", n)
+	}
+	if n, _ := r.rd.Work(ctx, "zebra", Filter{Agent: "laharl/w1:p1"}, 0); n.Total < 1 {
+		t.Errorf("%+v", n)
+	}
+	if n, _ := r.rd.Work(ctx, "zebra", Filter{}, 99); n.Total != w.Total || len(n.Threads) != 0 {
+		t.Errorf("skip past the end: %+v", n)
+	}
+	if n, err := r.rd.Work(ctx, "the and", Filter{}, 0); err != nil || n.Total != 0 || n.Threads == nil {
+		t.Errorf("a question with no topic word: %v %+v", err, n)
+	}
+	v, err := r.rd.Thread(ctx, th.ID)
+	if err != nil || v.ID != th.ID || len(v.Sessions) == 0 || v.Sessions[0].Handoff == "" {
+		t.Fatalf("%v %+v", err, v)
+	}
+	if strings.Contains(fmt.Sprint(v), fakeAWS) || strings.Contains(fmt.Sprint(v), fakeTS) {
+		t.Errorf("a masked value reached the thread: %+v", v)
+	}
+	if _, err := r.rd.Thread(ctx, "t-00000000"); err != ErrNoThread {
+		t.Errorf("%v", err)
+	}
+	if _, err := r.rd.Thread(ctx, "t-%"); err != ErrNoThread {
+		t.Errorf("a pattern in an id: %v", err)
+	}
+	for _, f := range []Filter{{Ledger: "h-9"}, {Agent: "laharl/w1:p1"}} {
+		l, err := r.rd.ForLink(ctx, f)
+		if err != nil || len(l.Sessions) != 1 || l.Sessions[0].ID != sidR || l.Thread != th.ID {
+			t.Errorf("%+v: %v %+v", f, err, l)
+		}
+	}
+	if l, err := r.rd.ForLink(ctx, Filter{Ledger: "h-nope"}); err != nil || len(l.Sessions) != 0 || l.Sessions == nil {
+		t.Errorf("%v %+v", err, l)
+	}
+}

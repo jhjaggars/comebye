@@ -54,7 +54,7 @@ func recallIndex(t *testing.T) string {
 
 func recallPaths() []string {
 	s := "/api/recall/sessions/desk/claude/" + recallSID
-	return []string{"/api/recall/status", "/api/recall/facets", "/api/recall/search?q=zebra", "/api/recall/recent", s, s + "/hits?q=zebra", s + "/produced", "/api/recall/produced?ref=pg_0123456789"}
+	return []string{"/api/recall/sessions?agent=x/w1:p1", "/api/recall/search?q=zebra&mode=work", "/api/recall/status", "/api/recall/facets", "/api/recall/search?q=zebra", "/api/recall/recent", s, s + "/hits?q=zebra", s + "/produced", "/api/recall/produced?ref=pg_0123456789"}
 }
 
 // The API is the user's alone. An agent with the local token, a request a peer
@@ -151,7 +151,7 @@ func TestRecallRefusesBadInput(t *testing.T) {
 	for _, p := range []string{
 		"/api/recall/search",
 		"/api/recall/search?q=" + long,
-		"/api/recall/search?q=a&mode=work",
+		"/api/recall/search?q=a&mode=threads",
 		"/api/recall/search?q=a&role=everything",
 		"/api/recall/search?q=a&sort=random",
 		"/api/recall/search?q=a&limit=-1",
@@ -286,5 +286,25 @@ func TestRecallProduced(t *testing.T) {
 	get("/api/recall/search?q=zebra", &sr)
 	if len(sr.Hits) != 1 || sr.Hits[0].Produced["page"] != 1 || sr.Hits[0].Produced["commit"] != 1 || sr.Hits[0].Produced["issue"] != 1 || len(sr.Produced) != 0 {
 		t.Errorf("counts: %+v", sr)
+	}
+}
+
+// Work mode, the thread page and the link lookup answer, and refuse bad input.
+func TestRecallWorkAndLinks(t *testing.T) {
+	ts := recallServer(t, recallIndex(t))
+	code, _, body := recallGet(t, ts, "/api/recall/search?q=zebra&mode=work")
+	if code != 200 || !strings.Contains(body, `"threads"`) {
+		t.Errorf("%d %s", code, body)
+	}
+	for _, p := range []string{"/api/recall/search?q=zebra&mode=nope", "/api/recall/threads/zzz", "/api/recall/threads/t-%25%25%25%25%25%25%25%25", "/api/recall/sessions", "/api/recall/sessions?ledger=a&agent=b"} {
+		if code, _, body := recallGet(t, ts, p); code != 400 {
+			t.Errorf("%s: %d %s", p, code, body)
+		}
+	}
+	if code, _, body := recallGet(t, ts, "/api/recall/threads/t-00000000"); code != 404 || !strings.Contains(body, "no_thread") {
+		t.Errorf("%d %s", code, body)
+	}
+	if code, _, body := recallGet(t, ts, "/api/recall/sessions?ledger=h-none"); code != 200 || !strings.Contains(body, `"sessions":[]`) {
+		t.Errorf("%d %s", code, body)
 	}
 }

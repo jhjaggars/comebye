@@ -1809,6 +1809,20 @@
       background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-pill); text-decoration: none;
       display: inline-flex; align-items: center;
     }
+    .rc-tabs { display: flex; gap: var(--sp-6); margin: var(--sp-8) 0 0; }
+    .rc-tabs[hidden] { display: none; }
+    .rc-tabs button { flex: 1; min-height: 40px; font: inherit; font-size: var(--fs-14); font-weight: 600; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-8); cursor: pointer; }
+    .rc-tabs button[aria-selected="true"] { color: var(--blue); border-color: var(--blue); }
+    .rc-tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .rc-threadpage .rc-sec { margin-left: 0; }
+    .rc-brief { font-size: var(--fs-14); overflow-wrap: anywhere; }
+    .rc-outcomes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-8); }
+    .rc-outcomes li { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-10); padding: var(--sp-8) var(--sp-12); min-width: 0; }
+    .rc-ohead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6); }
+    .rc-ohead code { font: var(--fs-12) ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+    .rc-otext { font-size: var(--fs-14); margin-top: var(--sp-4); overflow-wrap: anywhere; white-space: pre-wrap; }
+    .rc-report summary { color: var(--muted); font-size: var(--fs-13); cursor: pointer; margin-top: var(--sp-4); }
+    .rc-threadpage .rc-card { margin-bottom: var(--sp-8); }
     .rc-chip.on { color: var(--blue); border-color: var(--blue); }
     .rc-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
     .rc-chip[hidden] { display: none; }
@@ -2458,6 +2472,10 @@
     </header>
     <div class="rc-panes">
       <section class="rc-list" aria-label="Results">
+        <div id="rc-tabs" class="rc-tabs" role="tablist" aria-label="What to search" hidden>
+          <button type="button" role="tab" data-mode="messages" aria-selected="true">Messages</button>
+          <button type="button" role="tab" data-mode="work" aria-selected="false">Work</button>
+        </div>
         <div id="rc-filters" class="rc-filters"></div>
         <div id="rc-results" aria-live="polite"></div>
       </section>
@@ -2712,7 +2730,7 @@
   </section>
 
   <!-- A list row's menu -->
-  <div id="row-menu" class="attach-menu pop" role="menu" aria-label="Agent actions" hidden><div class="grab" aria-hidden="true"><i></i></div><div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div><button type="button" role="menuitem" id="row-mark"></button></div>
+  <div id="row-menu" class="attach-menu pop" role="menu" aria-label="Agent actions" hidden><div class="grab" aria-hidden="true"><i></i></div><div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div><button type="button" role="menuitem" id="row-transcript">View transcript</button><button type="button" role="menuitem" id="row-mark"></button></div>
 
   <!-- Mark one session ready to remove (optional reason) -->
   <section id="mk" hidden role="dialog" aria-modal="true" aria-labelledby="mk-title">
@@ -2784,6 +2802,7 @@
       <div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
       <div class="mark-state" id="d-mark-state" hidden></div>
       <button type="button" role="menuitem" id="d-model" hidden>Switch model…</button>
+      <button type="button" role="menuitem" id="d-transcript" hidden>View transcript</button>
       <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>
       <button type="button" role="menuitem" id="d-role">Make coordinator</button>
       <button type="button" role="menuitem" id="d-sched" hidden>Briefing schedule…</button>
