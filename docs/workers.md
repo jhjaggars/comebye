@@ -639,3 +639,25 @@ node's own price list, and a cost that cannot be priced is refused; at most
 time; and the app's review step shows the cost and needs an acknowledgement
 that the hub requires again server-side (`ack`). Turning the real path on
 (`-provision-create`) is the user's separate decision.
+
+### Spend and Destroy…
+
+A real create puts the host on the provisioner's books (`<state-dir>/provision/hosts.json`)
+as soon as the instance exists, and keeps the record after destroy for the final
+bill. Every five minutes the provisioner asks the cloud (`worker status --json`)
+for each host's launch time, last stop time and the launch price recorded in the
+instance's tags, and the app's Prices tab shows, per host and in total, what it has
+cost: the running hours (launch to stop, as the cloud reports them) times the
+compute price plus the public IPv4, plus the disks from creation to destroy. It
+is an estimate labelled "about", never the cloud's bill (Cost Explorer lags a
+day and each call costs). After a destroy the figure is frozen, and a data disk
+that was kept is shown as still costing about its monthly price (not part of the
+bill).
+
+**Destroy…** asks for the host's name to be typed, then the node that built the
+host runs `worker destroy NAME --yes --events`: it saves the worker's sessions
+to the archive first and refuses, changing nothing, if it cannot; then it revokes
+the LLM key, leaves the tailnet, removes the peer entry and deletes the instance.
+The data disk is kept unless "also delete" is ticked. A stopped host cannot be
+read, so its sessions can only be saved by starting it first or by ticking
+"do not save its sessions" (they are lost). A node refuses a name it did not build.

@@ -48,6 +48,8 @@ const (
 	jobCleaned     = "cleaned"
 )
 
+const opDestroy = "destroy"
+
 var keyRe = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 var jobIDRe = regexp.MustCompile(`^pj_[0-9a-f]{16}$`)
 
@@ -58,6 +60,9 @@ type pjob struct {
 	Spec    provision.Spec   `json:"spec"`
 	Region  string           `json:"region,omitempty"`
 	Dry     bool             `json:"dry_run"`
+	Op      string           `json:"op,omitempty"` // "" or create: build a host; destroy: remove one
+	Cost    *provision.Cost  `json:"cost,omitempty"`
+	Destroy *destroyReq      `json:"destroy,omitempty"`
 	State   string           `json:"state"`
 	Attempt int              `json:"attempt"`
 	Class   string           `json:"class,omitempty"`
@@ -69,16 +74,26 @@ type pjob struct {
 	Items   []provision.Item `json:"items"`
 }
 
+// destroyReq is what a destroy job was asked to do.
+type destroyReq struct {
+	DeleteDataDisk bool   `json:"delete_data_disk"`
+	LoseSessions   bool   `json:"lose_sessions"`
+	Why            string `json:"why,omitempty"` // set when a timer, not a person, asked
+}
+
 type provJobs struct {
+	book *provision.HostBook // the hosts this node has built
 	mu   sync.Mutex
 	dir  string
 	jobs map[string]*pjob
 	busy string // the id of the job whose tool is running
 	now  func() time.Time
+
+	interruptedDestroy []string // destroys a restart cut short: their hosts are marked at start-up
 }
 
 func openProvJobs(stateDir string) *provJobs {
-	m := &provJobs{jobs: map[string]*pjob{}, now: time.Now}
+	m := &provJobs{jobs: map[string]*pjob{}, now: time.Now, book: provision.OpenHostBook("")}
 	if stateDir == "" {
 		return m
 	}
@@ -102,6 +117,9 @@ func openProvJobs(stateDir string) *provJobs {
 			j.Msg = "the provisioner restarted while this was running"
 			j.Ended = m.now()
 			m.saveLocked(&j)
+			if j.Op == opDestroy {
+				m.interruptedDestroy = append(m.interruptedDestroy, j.Spec.Name)
+			}
 		}
 		m.jobs[j.ID] = &j
 	}
@@ -161,7 +179,7 @@ var errBusy = errors.New("another job is running on this provisioner")
 var errTooMany = errors.New("this provisioner has built as many hosts as it is allowed")
 
 // start adds a job and runs it. A key already seen returns that job (existing).
-func (m *provJobs) start(tool *provision.Tool, spec provision.Spec, key, region string) (j *pjob, existing bool, err error) {
+func (m *provJobs) start(tool *provision.Tool, spec provision.Spec, key, region string, cost *provision.Cost) (j *pjob, existing bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if old := m.byKey(key); old != nil {
@@ -176,7 +194,10 @@ func (m *provJobs) start(tool *provision.Tool, spec provision.Spec, key, region 
 			max = 3
 		}
 		for _, o := range m.jobs {
-			if !o.Dry && o.State == jobOK {
+			if !o.Dry && o.State == jobOK && o.Op != opDestroy {
+				if h, ok := m.book.Get(o.Spec.Name); ok && h.Destroyed != nil {
+					continue // destroyed since: its place is free again
+				}
 				built++
 			}
 		}
@@ -184,7 +205,7 @@ func (m *provJobs) start(tool *provision.Tool, spec provision.Spec, key, region 
 			return nil, false, errTooMany
 		}
 	}
-	j = &pjob{ID: newJobID(), Key: key, Spec: spec, Region: region, Dry: !tool.Real, State: jobRunning, Attempt: 1, Started: m.now()}
+	j = &pjob{ID: newJobID(), Key: key, Spec: spec, Region: region, Cost: cost, Dry: !tool.Real, State: jobRunning, Attempt: 1, Started: m.now()}
 	m.jobs[j.ID] = j
 	m.pruneLocked()
 	m.busy = j.ID
@@ -207,6 +228,8 @@ func (m *provJobs) again(tool *provision.Tool, id string) (*pjob, error) {
 		return nil, errBusy
 	case j.State != jobFailed && j.State != jobInterrupted:
 		return nil, errors.New("only a failed or interrupted job can be retried")
+	case j.Op == opDestroy:
+		return nil, errors.New("a destroy is asked for again from the host, not retried")
 	}
 	j.State, j.Class, j.Zone, j.Msg, j.Ended = jobRunning, "", "", "", time.Time{}
 	j.Attempt++
@@ -233,6 +256,8 @@ func (m *provJobs) cleanup(tool *provision.Tool, id string) (*pjob, error) {
 		return nil, errBusy
 	case j.State != jobFailed && j.State != jobInterrupted:
 		return nil, errors.New("only a failed or interrupted job can be cleaned up")
+	case j.Op == opDestroy:
+		return nil, errors.New("a destroy has nothing to clean up")
 	}
 	if j.Dry {
 		j.Next++
@@ -251,6 +276,31 @@ func (m *provJobs) cleanup(tool *provision.Tool, id string) (*pjob, error) {
 	return j, nil
 }
 
+// destroy starts the removal of a host this node built. One job at a time.
+func (m *provJobs) destroy(tool *provision.Tool, name string, req destroyReq) (*pjob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h, ok := m.book.Get(name)
+	switch {
+	case !ok:
+		return nil, os.ErrNotExist
+	case m.busy != "":
+		return nil, errBusy
+	case h.Destroyed != nil:
+		return nil, errors.New("this host is already destroyed")
+	}
+	j := &pjob{ID: newJobID(), Key: "d-" + newJobID(), Spec: h.Spec, Region: h.Region, Op: opDestroy, Destroy: &req, Dry: false, State: jobRunning, Attempt: 1, Started: m.now()}
+	m.jobs[j.ID] = j
+	m.pruneLocked()
+	m.busy = j.ID
+	m.book.BeginDestroy(name, j.ID)
+	m.saveLocked(j)
+	go m.run(tool, j, func(ctx context.Context, emit func(provision.Item)) provision.JobResult {
+		return tool.RunDestroy(ctx, name, provision.DestroyOpts{DeleteDataDisk: req.DeleteDataDisk, LoseSessions: req.LoseSessions}, emit)
+	}, jobOK)
+	return j, nil
+}
+
 // run executes one attempt and records how it ended; okState is the state a
 // clean exit leaves the job in.
 func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, func(provision.Item)) provision.JobResult, okState string) {
@@ -259,6 +309,11 @@ func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, fu
 		defer m.mu.Unlock()
 		j.Next++
 		it.Seq, it.Attempt = j.Next, j.Attempt
+		if j.Op != opDestroy && !j.Dry && it.Kind == "event" && it.Stage == "instance" && it.State == "ok" {
+			// The instance exists from here on: it costs money, so it is on the books.
+			var est provision.Estimate
+			m.book.Add(j.Spec.Name, j.ID, j.Spec, j.Region, j.Cost, est)
+		}
 		j.Items = append(j.Items, it)
 		if len(j.Items) > pjMaxItems {
 			j.Items = append([]provision.Item(nil), j.Items[len(j.Items)-pjMaxItems+100:]...)
@@ -273,6 +328,12 @@ func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, fu
 	} else {
 		j.State, j.Class, j.Zone, j.Msg = jobFailed, res.Class, res.Zone, res.Msg
 	}
+	switch {
+	case j.Op == opDestroy:
+		m.book.EndDestroy(j.Spec.Name, res.OK, res.OK && !j.Destroy.DeleteDataDisk, res.Msg)
+	case okState == jobCleaned && res.OK:
+		m.book.EndDestroy(j.Spec.Name, true, false, "") // a failed create, cleaned up with its data disk
+	}
 	if m.busy == j.ID {
 		m.busy = ""
 	}
@@ -282,6 +343,7 @@ func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, fu
 // view is a job and the items after a cursor, as the hub reads it.
 type pjobView struct {
 	ID      string           `json:"id"`
+	Op      string           `json:"op,omitempty"`
 	State   string           `json:"state"`
 	Dry     bool             `json:"dry_run"`
 	Attempt int              `json:"attempt"`
@@ -306,7 +368,7 @@ func (m *provJobs) view(id string, after int) (*pjobView, bool) {
 }
 
 func (m *provJobs) viewLocked(j *pjob, after int) *pjobView {
-	v := &pjobView{ID: j.ID, State: j.State, Dry: j.Dry, Attempt: j.Attempt, Class: j.Class, Zone: j.Zone, Msg: j.Msg, Spec: j.Spec,
+	v := &pjobView{ID: j.ID, Op: j.Op, State: j.State, Dry: j.Dry, Attempt: j.Attempt, Class: j.Class, Zone: j.Zone, Msg: j.Msg, Spec: j.Spec,
 		Started: j.Started.UTC().Format(time.RFC3339), Next: j.Next, Items: []provision.Item{}}
 	if !j.Ended.IsZero() {
 		v.Ended = j.Ended.UTC().Format(time.RFC3339)
@@ -454,8 +516,10 @@ func (s *Server) handlePeerJobCreate(w http.ResponseWriter, r *http.Request) {
 	s.pjobs.mu.Lock()
 	old := s.pjobs.byKey(q.Key)
 	s.pjobs.mu.Unlock()
+	var cost *provision.Cost
 	if old == nil {
-		if _, _, err := s.provCeiling(r.Context(), spec, q.Region); err != nil {
+		var err error
+		if cost, _, err = s.provCeiling(r.Context(), spec, q.Region); err != nil {
 			code := "over_ceiling"
 			var ue *unpricedError
 			if errors.As(err, &ue) {
@@ -465,7 +529,7 @@ func (s *Server) handlePeerJobCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	j, existing, err := s.pjobs.start(tool, spec, q.Key, q.Region)
+	j, existing, err := s.pjobs.start(tool, spec, q.Key, q.Region, cost)
 	if errors.Is(err, errBusy) {
 		relErr(w, http.StatusConflict, "busy", "this provisioner is already building a host: wait for it to finish")
 		return

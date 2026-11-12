@@ -126,6 +126,11 @@ var hostProxyOps = map[string]struct {
 	"provision-job":         {proxyOp{method: http.MethodGet, query: []string{"id", "after"}, timeout: 20 * time.Second}, []string{"api", "provisioner", "job"}, true},
 	"provision-job-retry":   {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "job", "retry"}, true},
 	"provision-job-cleanup": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "job", "cleanup"}, true},
+	// Slice 3: the hosts a provisioner built with what they have cost, and
+	// removing one. Hub-only like the rest; the destroy acts on the user's typed
+	// confirmation at the hub.
+	"provision-hosts":        {proxyOp{method: http.MethodGet, query: []string{"refresh"}, timeout: 100 * time.Second}, []string{"api", "provisioner", "hosts"}, true},
+	"provision-host-destroy": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "host", "destroy"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

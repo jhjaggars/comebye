@@ -49,6 +49,9 @@ case "$4" in
    [ -f ` + d + `/create.events ] && cat ` + d + `/create.events
    [ -f ` + d + `/create.sleep ] && sleep $(cat ` + d + `/create.sleep)
    exit $(cat ` + d + `/create.exit 2>/dev/null || echo 0) ;;
+ status)
+   [ -f ` + d + `/status.fail ] && { echo "status failed" >&2; exit 1; }
+   cat ` + d + `/status.json 2>/dev/null || echo '{"v":1,"provider":"aws","workers":[]}' ;;
  destroy)
    [ -f ` + d + `/destroy.events ] && cat ` + d + `/destroy.events
    exit $(cat ` + d + `/destroy.exit 2>/dev/null || echo 0) ;;
@@ -101,6 +104,8 @@ var peerProvCalls = []struct{ name, method, path string }{
 	{"job", "GET", "/api/provisioner/job?id=pj_0123456789abcdef"},
 	{"retry", "POST", "/api/provisioner/job/retry"},
 	{"cleanup", "POST", "/api/provisioner/job/cleanup"},
+	{"hosts", "GET", "/api/provisioner/hosts"},
+	{"destroy", "POST", "/api/provisioner/host/destroy"},
 }
 
 func TestPeerProvisionOpsAnswerOnlyAHub(t *testing.T) {
@@ -201,14 +206,14 @@ func TestProvisionRoutesAreUserOnly(t *testing.T) {
 			}
 		}
 	}
-	if n != 16 {
-		t.Fatalf("found %d provisioning routes, want 16: update this test with the route", n)
+	if n != 20 {
+		t.Fatalf("found %d provisioning routes, want 20: update this test with the route", n)
 	}
 	if strings.Contains(string(src), "/api/provision") {
 		t.Error("provisioning routes belong in provision.go, where this test checks them")
 	}
 	// ...and a browser cannot have the peer ops forwarded.
-	for _, op := range []string{"provision-preflight", "provision-catalog", "provision-plan", "provision-job-create", "provision-job", "provision-job-retry", "provision-job-cleanup"} {
+	for _, op := range []string{"provision-preflight", "provision-catalog", "provision-plan", "provision-job-create", "provision-job", "provision-job-retry", "provision-job-cleanup", "provision-hosts", "provision-host-destroy"} {
 		rec := httptest.NewRecorder()
 		fleet.New(nil, "desk", nil, fleet.Options{}).ProxyHost(rec, httptest.NewRequest("GET", "/", nil), "kube", op)
 		if rec.Code != 404 {

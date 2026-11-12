@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/jhjaggars/comebye/internal/archive"
 	"github.com/jhjaggars/comebye/internal/gitfetch"
+	"github.com/jhjaggars/comebye/internal/provision"
 	"log"
 	"net"
 	"net/http"
@@ -242,21 +243,26 @@ type Server struct {
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
 	// brief and roles live next to the ledger (nil when it is).
-	brief       *briefStore
-	pq          *promptQueue
-	todos       *todoStore
-	outbox      *outbox
-	digests     *digestStore
-	digestEvery time.Duration
-	auto        *autoTodo
-	relay       *blockedRelay
-	rel         *relState
-	prov        *provState
-	pjobs       *provJobs // on a provisioner: the jobs it runs
-	hjobs       *hubJobs  // on a hub: the jobs it has asked provisioners to run
-	pages       *pageStore
-	briefSched  *briefSchedStore
-	resets      *resetStore
+	brief          *briefStore
+	pq             *promptQueue
+	todos          *todoStore
+	outbox         *outbox
+	digests        *digestStore
+	digestEvery    time.Duration
+	auto           *autoTodo
+	relay          *blockedRelay
+	rel            *relState
+	prov           *provState
+	pjobs          *provJobs           // on a provisioner: the jobs it runs
+	phosts         *provision.HostBook // on a provisioner: the hosts it built and what they cost
+	phostMu        sync.Mutex          // guards phostErr, phostAt
+	phostErr       string              // why the cloud could not be asked last time
+	phostAt        time.Time           // when it last was
+	provObserveGap time.Duration       // how often the provisioner asks (tests shorten it)
+	hjobs          *hubJobs            // on a hub: the jobs it has asked provisioners to run
+	pages          *pageStore
+	briefSched     *briefSchedStore
+	resets         *resetStore
 	// resetPoll and resetWait pace a reset's wait for the new session
 	// (tests shrink them).
 	resetPoll, resetWait time.Duration
@@ -320,6 +326,11 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s.prov = newProvState()
 	if cfg.Provision.Tool != nil {
 		s.pjobs = openProvJobs(cfg.StateDir)
+		s.phosts = provision.OpenHostBook(cfg.StateDir)
+		s.pjobs.book = s.phosts
+		for _, name := range s.pjobs.interruptedDestroy {
+			s.phosts.EndDestroy(name, false, false, "the provisioner restarted while this was being destroyed: destroy it again")
+		}
 	}
 	s.hjobs = openHubJobs(cfg.StateDir)
 	switch rc := &s.cfg.Release; {

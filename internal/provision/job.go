@@ -167,7 +167,34 @@ func (t *Tool) RunCleanup(ctx context.Context, name string, emit func(Item)) Job
 	if !nameRe.MatchString(name) {
 		return JobResult{Class: ClassOther, Msg: "bad name"}
 	}
-	return t.runJob(ctx, "create", nil, []string{"destroy", name, "--yes", "--no-archive", "--events"}, emit)
+	return t.runJob(ctx, "create", nil, []string{"destroy", name, "--yes", "--no-archive", "--delete-data-disk", "--events"}, emit)
+}
+
+// DestroyOpts says what a destroy keeps and loses.
+type DestroyOpts struct {
+	// DeleteDataDisk deletes the data disk as well; off, it is kept.
+	DeleteDataDisk bool
+	// LoseSessions skips saving the worker's sessions to the archive first. Off,
+	// the tool archives them and refuses to destroy if it cannot.
+	LoseSessions bool
+}
+
+// RunDestroy removes a host the tool made: it saves the worker's sessions to
+// the archive first (and refuses if it cannot), revokes its LLM key, leaves the
+// tailnet, removes the peer entry and deletes the instance. The caller has
+// checked the typed name; --yes only says so to the tool.
+func (t *Tool) RunDestroy(ctx context.Context, name string, o DestroyOpts, emit func(Item)) JobResult {
+	if !nameRe.MatchString(name) {
+		return JobResult{Class: ClassOther, Msg: "bad name"}
+	}
+	args := []string{"destroy", name, "--yes", "--events"}
+	if o.DeleteDataDisk {
+		args = append(args, "--delete-data-disk")
+	}
+	if o.LoseSessions {
+		args = append(args, "--no-archive")
+	}
+	return t.runJob(ctx, "create", nil, args, emit)
 }
 
 func (t *Tool) runJob(ctx context.Context, kind string, stdin []byte, args []string, emit func(Item)) JobResult {

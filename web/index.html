@@ -2191,6 +2191,25 @@
       .pz-cell { display: flex; flex-direction: column; text-align: left; }
       .pz-lb { display: block; font-size: 11px; color: var(--muted); }
     }
+    /* Hosts built from the app: spend per host and in total, and Destroy…. */
+    .ph-total { font-size: var(--fs-14); } .ph-total b { font-size: var(--fs-20); font-variant-numeric: tabular-nums; }
+    .ph-list { display: flex; flex-direction: column; gap: var(--sp-8); list-style: none; margin: 0; padding: 0; }
+    .ph-row { display: flex; flex-direction: column; gap: var(--sp-6); padding: var(--sp-10) var(--sp-12); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel); min-width: 0; }
+    .ph-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-4) var(--sp-12); min-width: 0; }
+    .ph-name { font-weight: 650; overflow-wrap: anywhere; }
+    .ph-chip { font-size: var(--fs-12); padding: 1px var(--sp-8); border-radius: var(--r-pill); border: 1px solid var(--border); color: var(--muted); }
+    .ph-chip.running { color: var(--green); border-color: var(--green); } .ph-chip.destroying, .ph-chip.stopping, .ph-chip.starting { color: var(--orange); border-color: var(--orange); } .ph-chip.gone { color: var(--red); border-color: var(--red); }
+    .ph-spend { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .ph-meta { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
+    .ph-row .btn { min-height: 44px; align-self: flex-start; padding: 0 var(--sp-14); }
+    .ph-row .btn.danger, .ph-dest .btn.danger { color: var(--red); border-color: var(--red); }
+    .ph-dest { display: flex; flex-direction: column; gap: var(--sp-8); padding-top: var(--sp-8); border-top: 1px solid var(--border); }
+    .ph-dest label.pz-check { align-items: flex-start; }
+    .ph-dest .az-in { max-width: 360px; }
+    .ph-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
+    .ph-acts .btn { min-height: 44px; padding: 0 var(--sp-16); }
+    .ph-log { max-height: 180px; }
+    .pr-spend { color: var(--text); font-variant-numeric: tabular-nums; }
     /* Add host: the wizard in the Prices pane (steps, a sticky cost footer, the progress list). */
     .pz-row[aria-pressed="true"] { background: color-mix(in srgb, var(--blue) 12%, var(--panel)); box-shadow: inset 3px 0 0 var(--blue); }
     .pz-row[disabled] { cursor: not-allowed; }

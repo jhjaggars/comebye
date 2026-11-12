@@ -110,7 +110,7 @@ func TestPeerRefusesBadSpecsBeforeTheTool(t *testing.T) {
 	bad := map[string]string{
 		"unknown field": `{"spec":{"kind":"aws","name":"demo1","type":"t3.large","shell":"x"}}`,
 		"shell name":    strings.Replace(okSpec, `"demo1"`, `"a;rm -rf"`, 1),
-		"arm":           strings.Replace(okSpec, "t3.large", "t4g.large", 1),
+		"type shape":    strings.Replace(okSpec, "t3.large", "t4g", 1),
 		"huge budget":   strings.Replace(okSpec, `"budget_cap_usd":10`, `"budget_cap_usd":100000`, 1),
 		"no budget":     strings.Replace(okSpec, `"budget_cap_usd":10`, `"budget_cap_usd":0`, 1),
 		"huge disk":     strings.Replace(okSpec, `"data_disk_gb":50`, `"data_disk_gb":999999`, 1),
@@ -210,7 +210,7 @@ func TestPeerRealSwitchRunsCreateWithoutDryRunAndCleanupDestroys(t *testing.T) {
 		t.Fatalf("cleanup = %d %s", rec.Code, rec.Body)
 	}
 	waitJob(t, s, v.ID, jobCleaned)
-	if !strings.Contains(strings.Join(w.argvLines(), "\n"), "destroy demo1 --yes --no-archive --events") {
+	if !strings.Contains(strings.Join(w.argvLines(), "\n"), "destroy demo1 --yes --no-archive --delete-data-disk --events") {
 		t.Errorf("argv: %v", w.argvLines())
 	}
 }

@@ -71,11 +71,12 @@ type provState struct {
 	mu    sync.Mutex
 	nodes map[string]*provNode
 	cats  map[string]*provCat
+	hosts map[string]*provHostsCache
 	now   func() time.Time
 }
 
 func newProvState() *provState {
-	return &provState{nodes: map[string]*provNode{}, cats: map[string]*provCat{}, now: time.Now}
+	return &provState{nodes: map[string]*provNode{}, cats: map[string]*provCat{}, hosts: map[string]*provHostsCache{}, now: time.Now}
 }
 
 // ---- the peer's side ----
@@ -542,4 +543,9 @@ func (s *Server) provisionRoutes() {
 	s.mux.HandleFunc("POST /api/provision/jobs/{id}/retry", s.auth(s.handleProvisionJobRetry))
 	s.mux.HandleFunc("POST /api/provision/jobs/{id}/cleanup", s.auth(s.handleProvisionJobCleanup))
 	s.mux.HandleFunc("POST /api/provision/jobs/{id}/change", s.auth(s.handleProvisionJobChange))
+	// slice 3: the hosts built, their spend, and destroy
+	s.mux.HandleFunc("GET /api/provisioner/hosts", s.auth(s.handlePeerHosts))
+	s.mux.HandleFunc("POST /api/provisioner/host/destroy", s.auth(s.handlePeerHostDestroy))
+	s.mux.HandleFunc("GET /api/provision/hosts", s.auth(s.handleProvisionHosts))
+	s.mux.HandleFunc("POST /api/provision/hosts/{name}/destroy", s.auth(s.handleProvisionHostDestroy))
 }

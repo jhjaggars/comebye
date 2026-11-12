@@ -33,7 +33,7 @@ type Tool struct {
 	// built and kept (default 3).
 	MaxHosts int
 	// PreflightWait and CatalogWait override the timeouts (tests).
-	PreflightWait, CatalogWait time.Duration
+	PreflightWait, CatalogWait, StatusWait time.Duration
 
 	mu   sync.Mutex
 	slot map[string]chan struct{} // one run of each kind at a time; the next waits its turn
@@ -180,6 +180,20 @@ func (t *Tool) Preflight(ctx context.Context) (Preflight, error) {
 		return Preflight{}, err
 	}
 	return ParsePreflight(out)
+}
+
+// StatusTimeout bounds the read of the cloud's view of the hosts.
+const StatusTimeout = 60 * time.Second
+
+// Status runs `status --json`: the cloud's view of every host the tool made
+// (state, launch time, last stop, the caps recorded on the instance). It asks
+// the cloud API only.
+func (t *Tool) Status(ctx context.Context) ([]StatusWorker, error) {
+	out, err := t.run(ctx, "status", orDur(t.StatusWait, StatusTimeout), "status", "--json")
+	if err != nil {
+		return nil, err
+	}
+	return ParseStatus(out)
 }
 
 // CatalogReq is a request for the instance table.

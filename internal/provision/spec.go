@@ -58,6 +58,9 @@ var (
 	maxRunRe = regexp.MustCompile(`^[1-9][0-9]{0,2}h$`)
 )
 
+// ValidName reports whether s is a host name the app may build or destroy.
+func ValidName(s string) bool { return nameRe.MatchString(s) }
+
 // SpecError is a refused request: Field names what to fix.
 type SpecError struct{ Field, Msg string }
 
@@ -141,6 +144,11 @@ type Cost struct {
 	BudgetHours   float64 `json:"budget_hours,omitempty"` // how long the cap lasts at this rate
 	Basis         string  `json:"basis"`
 	PricesFetched string  `json:"prices_fetched_at,omitempty"`
+	// The parts of the hourly figure, kept so the spend ledger can price the
+	// hours a host runs (compute and IPv4) and the disks apart.
+	ComputeUSDHour float64 `json:"compute_usd_hour"`
+	IPv4USDHour    float64 `json:"ipv4_usd_hour"`
+	DiskUSDGBMonth float64 `json:"disk_usd_gb_month"`
 }
 
 const hoursPerMonth = 730
@@ -185,6 +193,7 @@ func EstimateCost(s Spec, c *Catalog) (*Cost, error) {
 		return nil, fmt.Errorf("no %s price for %s", strings.ReplaceAll(out.Mode, "_", "-"), s.Type)
 	}
 	out.USDHour = round4(*base + extra)
+	out.ComputeUSDHour, out.IPv4USDHour, out.DiskUSDGBMonth = round4(*base), c.Estimate.IPv4USDHour, c.Estimate.DiskUSDGBMonth
 	out.USDDay = round2(out.USDHour * 24)
 	if out.USDHour > 0 {
 		out.BudgetHours = round2(s.BudgetCapUSD / out.USDHour)

@@ -6454,6 +6454,7 @@ function peersHostsChanged() {
 function peersLoadAll() {
   loadReleases(false);
   loadProvNodes(false);
+  if (pz.nodes && pz.nodes.enabled) loadProvHosts(false);
   peersLoadInfo().then(renderPeers);
   for (const h of state.hosts) peersLoadCfg(h.name);
 }
@@ -6502,7 +6503,7 @@ function renderPeersList() {
     return `<a class="pr-card${r.name === h.name ? " current" : ""}" href="${esc(peerHash(h.name))}" data-name="${esc(h.name)}">
       <span class="pr-name"><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}${h.local ? ' <span class="pr-meta">(this host)</span>' : ""}</span>
       <span class="pr-meta">${esc(peerStatusText(h))} · ${esc(h.version || "version unknown")}${mis} · ${h.no_agents ? "no agents here" : (h.agents || 0) + " agent" + (h.agents === 1 ? "" : "s")}</span>
-      ${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}</a>`;
+      ${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>`;
   }).join("");
   const nudge = rls.data && rls.data.needs_you && rls.data.todo
     ? `<a class="pr-nudge" href="${RELEASES_HASH}">${esc(rls.data.todo.release.version)} needs you: ${esc(rls.data.needs_text || "see the Releases tab")} →</a>` : "";
@@ -6703,6 +6704,7 @@ function initPeers() {
   });
   initPrices();
   initAddHost();
+  initProvHosts();
   $("pr-releases").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-rel]");
     if (b && !b.disabled) relClick(b.dataset.rel, b.dataset.host);
@@ -6782,7 +6784,7 @@ async function loadProvNodes(force) {
     if (e.code === "csrf") { pz.nodes = null; }
   } finally { pz.loadingNodes = false; }
   if (prs.route && prs.route.tab === "prices") loadProvCatalog(false);
-  if (pz.nodes && pz.nodes.enabled) azResume();
+  if (pz.nodes && pz.nodes.enabled) { azResume(); if (!ph.data) loadProvHosts(false); }
   renderPeers();
 }
 
@@ -6916,7 +6918,7 @@ function pzBody() {
   else if (pz.catErr === "creds_expired" && !pz.cat) list = `<div class="pz-card pz-warn"><h3>Prices unavailable</h3><p class="pz-note warn">${esc(n.name)}'s AWS login expired. On ${esc(n.name)}, run <code>aws login</code>, then Recheck.</p></div>`;
   else if (pz.catErr && !pz.cat) list = `<div class="pz-card pz-warn"><h3>Prices unavailable</h3><p class="pz-note warn">${esc(pz.catErr)}</p><div class="pz-bar"><button type="button" class="btn" id="pz-refresh">Try again</button></div></div>`;
   else if (pz.cat) list = pzCatalog(n);
-  return `<div class="pz-wrap">${sel}${list}</div>`;
+  return `<div class="pz-wrap">${phCard()}${sel}${list}</div>`;
 }
 
 function pzCatalog(n, pick) {
@@ -6938,7 +6940,7 @@ function pzCatalog(n, pick) {
       <div class="pz-field"><label for="pz-sort">Sort by</label><select id="pz-sort">${[["price", "Cheapest (spot, estimated)"], ["ondemand", "Lowest on-demand"], ["vcpu", "Most vCPU"], ["memory", "Most memory"], ["stops", "Fewest interruptions"]].map(([v, l]) => `<option value="${v}"${pz.sort === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
       <label class="pz-check"><input type="checkbox" id="pz-small"${pz.small ? " checked" : ""}>Show small sizes${d.hidden_small ? ` (${d.hidden_small} hidden)` : ""}</label>
       <button type="button" class="btn" id="pz-refresh"${pz.loading ? " disabled" : ""}>${pz.loading ? "Refreshing…" : "Refresh prices"}</button></div>
-    <p class="pz-note">Hidden by default: under ${d.min_vcpu} vCPU or ${d.min_memory_gib} GiB, too small for an agent host. ≈ per hour is the lowest spot price plus ${pzMoney(est.ipv4_usd_hour)} for the public IPv4 and ${est.disk_gb || 0} GB of disk. Spot is the market price and sessions do not survive a stop. Arm types are listed but cannot be built yet.</p>
+    <p class="pz-note">Hidden by default: under ${d.min_vcpu} vCPU or ${d.min_memory_gib} GiB, too small for an agent host. ≈ per hour is the lowest spot price plus ${pzMoney(est.ipv4_usd_hour)} for the public IPv4 and ${est.disk_gb || 0} GB of disk. Spot is the market price and sessions do not survive a stop. Arm (Graviton) types boot the arm64 Debian image.</p>
     <div class="pz-head" aria-hidden="true"><span>Type</span><span>vCPU</span><span>Memory</span><span>Arch</span><span>Spot from</span><span>On-demand</span><span>Stops</span><span>≈ per hour</span></div>
     <div class="pz-list">${rows.map((r) => pzRow(r, n, pick)).join("") || '<p class="pz-note">No sizes match.</p>'}</div>
     <details class="pz-src"><summary>Where each column comes from (through ${esc(n.name)}, ${esc(pzAge(d.fetched_at))})</summary><ul class="pz-note">${srcLine}</ul>
@@ -6963,6 +6965,149 @@ function initPrices() {
     else if (b.id === "pz-refresh") loadProvCatalog(true);
     else if (b.dataset.pzType) { pz.open = pz.open === b.dataset.pzType ? "" : b.dataset.pzType; renderPeers(); }
     else if (b.dataset.pzScore) pzCheckCapacity(b.dataset.pzScore);
+  });
+}
+
+
+/* ---------- Hosts built from the app: spend, and Destroy… ---------- */
+//
+// GET /api/provision/hosts: every host a provisioner built, with what it has
+// cost so far (the provisioner's estimate from the cloud's launch and stop
+// times, never the cloud's bill) and a total. Destroy… asks the node that
+// built the host to save its sessions, then remove the VM, its tailnet node
+// and its peer entry; the name is typed to confirm.
+const ph = { data: null, err: "", loading: false, dest: null, timer: null, polling: false };
+
+function phMoney(v) { return v == null ? "–" : "$" + (v >= 100 ? v.toFixed(0) : v >= 0.1 ? v.toFixed(2) : v.toFixed(3)); }
+function phHost(name) { return ph.data && (ph.data.hosts || []).find((h) => h.name === name && h.state !== "destroyed") || null; }
+
+async function loadProvHosts(force) {
+  if (ph.loading || ledger.on !== true || !multiHost() || !(pz.nodes && pz.nodes.enabled)) return;
+  ph.loading = true;
+  try {
+    ph.data = await api("/api/provision/hosts" + (force ? "?refresh=1" : ""), { timeout: 120000 });
+    ph.err = "";
+  } catch (e) { ph.err = e.message || "failed"; }
+  ph.loading = false;
+  if (prs.route) renderPeers();
+}
+
+function phSpendText(h) {
+  const sp = h.spend || {};
+  if (h.state === "destroyed") return `final bill ≈ ${phMoney(sp.usd)}`;
+  return `≈ ${phMoney(sp.usd)} so far`;
+}
+
+function phRow(h) {
+  const sp = h.spend || {};
+  const live = h.state !== "destroyed" && h.state !== "gone";
+  const burn = live && sp.usd_hour ? ` · ≈ ${phMoney(sp.usd_hour)}/h now` : "";
+  const what = [h.type, h.mode === "spot" ? "spot" : "on-demand", h.via].filter(Boolean).join(" · ");
+  const note = h.state === "destroyed"
+    ? `Destroyed ${pzAge(h.destroyed)}.${h.data_disk_kept ? ` Its ${h.data_disk_gb} GB data disk was kept and goes on costing about ${phMoney(h.data_disk_gb * (h.disk_usd_gb_month || 0.08))} a month (not in this bill).` : ""}`
+    : h.state === "stopped" ? `Stopped${h.stopped_at ? " " + pzAge(h.stopped_at) : ""}; only its disks cost now.${h.destroy_due ? " Destroyed automatically " + (Date.parse(h.destroy_due) > Date.now() ? "in " + fmtAgo(Date.now() - (Date.parse(h.destroy_due) - Date.now())) : "now") + "." : ""}`
+    : "";
+  const fail = h.destroy_failed ? `<p class="pz-note warn" role="alert">The last destroy did not finish: ${esc(h.destroy_failed)}</p>` : "";
+  const dest = ph.dest && ph.dest.name === h.name ? phDestroyPanel(h) : "";
+  const btn = live && h.state !== "destroying" && !dest ? `<button type="button" class="btn danger" data-ph-destroy="${escAttr(h.name)}">Destroy…</button>` : "";
+  return `<li class="ph-row" data-ph="${escAttr(h.name)}"><div class="ph-line"><span class="ph-name">${esc(h.name)}</span><span class="ph-chip ${esc(h.state)}">${esc(h.state)}</span>
+    <span class="ph-spend">${esc(phSpendText(h))}</span></div>
+    <div class="ph-meta">${esc(what)}${esc(burn)}${h.price_from_cloud ? "" : " · price estimated"}</div>
+    ${note ? `<div class="ph-meta">${esc(note)}</div>` : ""}${fail}${btn}${dest}</li>`;
+}
+
+function phDestroyPanel(h) {
+  const d = ph.dest;
+  if (d.job) return phDestroyProgress(h);
+  const ok = d.confirm === h.name && !d.busy;
+  const stopped = h.state === "stopped";
+  return `<div class="ph-dest" role="group" aria-label="Destroy ${escAttr(h.name)}">
+    <p class="pz-note">This saves ${esc(h.name)}'s sessions to the archive, then removes the VM, its tailnet node and its entry on the hub. If the sessions cannot be saved, nothing is destroyed. A destroyed host cannot be brought back.</p>
+    <label class="pz-check"><input type="checkbox" id="ph-del"${d.del ? " checked" : ""}>Also delete the ${h.data_disk_gb} GB data disk (kept, it costs about ${phMoney(h.data_disk_gb * (h.disk_usd_gb_month || 0.08))} a month)</label>
+    <label class="pz-check"><input type="checkbox" id="ph-lose"${d.lose ? " checked" : ""}>Do not save its sessions: they are lost${stopped ? ". A stopped host cannot be read, so this is needed" : ""}</label>
+    <div class="pz-field"><label for="ph-confirm">Type <b>${esc(h.name)}</b> to confirm</label><input class="az-in" id="ph-confirm" value="${escAttr(d.confirm)}" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+    ${d.err ? `<p class="pz-note warn" role="alert">${esc(d.err)}</p>` : ""}
+    <div class="ph-acts"><button type="button" class="btn" id="ph-cancel">Cancel</button><button type="button" class="btn danger" id="ph-go"${ok ? "" : " disabled"}>${d.busy ? "Starting…" : "Destroy " + esc(h.name)}</button></div></div>`;
+}
+
+function phDestroyProgress(h) {
+  const j = ph.dest.job;
+  const running = j.state === "running";
+  const log = (ph.dest.items || []).slice(-60).map((i) => esc(i.msg || "")).filter(Boolean).join("\n");
+  let head;
+  if (running) head = `<p class="pz-note" role="status">Destroying ${esc(h.name)}… saving its sessions first.</p>`;
+  else if (j.state === "ok") head = `<div class="az-dry" role="status"><b>${esc(h.name)} is destroyed.</b> Its bill is final.</div>`;
+  else head = `<div class="pz-card pz-warn" role="alert"><b>Not destroyed.</b> ${esc(j.msg || "The destroy did not finish.")}<br><span class="pz-note">Nothing more is billed than before; ${esc(h.name)} is still on the list. Fix the cause and try again.</span></div>`;
+  return `<div class="ph-dest">${head}<details class="pz-src"${running ? " open" : ""}><summary>The provisioner's log</summary><pre class="az-plan ph-log">${log || "(nothing yet)"}</pre></details>
+    ${running ? "" : '<div class="ph-acts"><button type="button" class="btn" id="ph-close">Close</button></div>'}</div>`;
+}
+
+function phCard() {
+  if (!pz.nodes || !pz.nodes.enabled) return "";
+  const d = ph.data;
+  if (!d) return ph.err ? `<div class="pz-card pz-warn"><h3>Hosts built here</h3><p class="pz-note warn">Could not load: ${esc(ph.err)}</p></div>` : "";
+  const hosts = d.hosts || [];
+  if (!hosts.length && !ph.err) return "";
+  const t = d.total || {};
+  const old = (d.nodes || []).filter((n) => n.error);
+  const age = Math.max(0, ...(d.nodes || []).map((n) => n.age_s || 0));
+  const stale = (d.nodes || []).filter((n) => n.stale).map((n) => `${esc(n.name)}: ${esc(n.stale)}`);
+  return `<div class="pz-card" id="ph-card"><h3>Hosts built here</h3>
+    <div class="ph-total" role="status"><b>≈ ${phMoney(t.usd)}</b> spent so far across ${hosts.length} host${hosts.length === 1 ? "" : "s"}${t.usd_hour ? ` · running now ≈ ${phMoney(t.usd_hour)}/h` : ""}</div>
+    ${old.map((n) => `<p class="pz-note warn">${esc(n.name)}: ${esc(n.error)}. These figures are ${age >= 90 ? Math.round(age / 60) + " minutes" : "a moment"} old.</p>`).join("")}
+    ${stale.length ? `<p class="pz-note warn">Not refreshed from the cloud: ${stale.join("; ")}</p>` : ""}
+    <ul class="ph-list">${hosts.map(phRow).join("")}</ul>
+    <p class="pz-note">Spend is about right, not a bill: the cloud's launch and stop times, times the price recorded when the host launched, plus the public IPv4 while it runs and the disks. Updated every few minutes${age ? " (this view is " + (age >= 90 ? Math.round(age / 60) + " min" : age + " s") + " old)" : ""}.</p>
+    <div class="pz-bar"><button type="button" class="btn" id="ph-refresh"${ph.loading ? " disabled" : ""}>${ph.loading ? "Refreshing…" : "Refresh spend"}</button></div></div>`;
+}
+
+async function phSubmit() {
+  const d = ph.dest;
+  if (!d || d.busy) return;
+  d.busy = true; d.err = ""; renderPeers();
+  try {
+    const j = await api(`/api/provision/hosts/${encodeURIComponent(d.name)}/destroy`, { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: (phHost(d.name) || {}).via || "", confirm: d.confirm, delete_data_disk: !!d.del, lose_sessions: !!d.lose }), timeout: 60000 });
+    d.job = j; d.items = j.items || []; d.cursor = j.next || 0;
+    phStartPoll();
+  } catch (e) { d.err = e.message || "failed"; }
+  d.busy = false;
+  renderPeers();
+}
+
+function phStartPoll() { if (!ph.timer) ph.timer = setInterval(phPoll, 1500); }
+async function phPoll() {
+  const d = ph.dest;
+  if (!d || !d.job || ph.polling) { if (!d || !d.job) { clearInterval(ph.timer); ph.timer = null; } return; }
+  ph.polling = true;
+  try {
+    const j = await api(`/api/provision/jobs/${encodeURIComponent(d.job.id)}?after=${d.cursor}`, { timeout: 20000 });
+    d.items = d.items.concat(j.items || []); d.cursor = j.next; d.job = { ...d.job, state: j.state, msg: j.msg };
+    if (j.state !== "running") {
+      clearInterval(ph.timer); ph.timer = null;
+      ph.polling = false;
+      await loadProvHosts(true);
+    }
+  } catch (e) { /* the next tick tries again */ }
+  ph.polling = false;
+  renderPeers();
+}
+
+function initProvHosts() {
+  const el = $("pr-prices");
+  el.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.dataset.phDestroy) { ph.dest = { name: b.dataset.phDestroy, confirm: "", del: false, lose: (phHost(b.dataset.phDestroy) || {}).state === "stopped", busy: false, err: "", job: null, items: [], cursor: 0 }; renderPeers(); const c = $("ph-confirm"); if (c) c.focus(); }
+    else if (b.id === "ph-cancel" || b.id === "ph-close") { ph.dest = null; renderPeers(); }
+    else if (b.id === "ph-go") phSubmit();
+    else if (b.id === "ph-refresh") loadProvHosts(true);
+  });
+  el.addEventListener("input", (ev) => {
+    const t = ev.target;
+    if (!ph.dest || ph.dest.job) return;
+    if (t.id === "ph-confirm") { ph.dest.confirm = t.value; const go = $("ph-go"); if (go) go.disabled = !(ph.dest.confirm === ph.dest.name && !ph.dest.busy); }
+    else if (t.id === "ph-del") ph.dest.del = t.checked;
+    else if (t.id === "ph-lose") ph.dest.lose = t.checked;
   });
 }
 

@@ -49,6 +49,7 @@ type hubJob struct {
 	PeerID     string           `json:"peer_id"`
 	Spec       provision.Spec   `json:"spec"`
 	Region     string           `json:"region"`
+	Op         string           `json:"op,omitempty"` // create (empty) or destroy
 	Dry        bool             `json:"dry_run"`
 	State      string           `json:"state"`
 	Attempt    int              `json:"attempt"`
@@ -282,6 +283,7 @@ type hubJobView struct {
 	ID          string           `json:"id"`
 	Via         string           `json:"via"`
 	Name        string           `json:"name"`
+	Op          string           `json:"op,omitempty"`
 	State       string           `json:"state"`
 	Dry         bool             `json:"dry_run"`
 	Attempt     int              `json:"attempt"`
@@ -307,7 +309,7 @@ type jobAlternatives struct {
 }
 
 func (s *Server) hubView(j *hubJob, after int, r *http.Request) hubJobView {
-	v := hubJobView{ID: j.ID, Via: j.Via, Name: j.Spec.Name, State: j.State, Dry: j.Dry, Attempt: j.Attempt, Class: j.Class, Zone: j.Zone, Msg: j.Msg,
+	v := hubJobView{ID: j.ID, Via: j.Via, Name: j.Spec.Name, Op: j.Op, State: j.State, Dry: j.Dry, Attempt: j.Attempt, Class: j.Class, Zone: j.Zone, Msg: j.Msg,
 		Spec: j.Spec, Items: []provision.Item{}, Next: j.Next, Stages: provision.Stages, Offline: j.offline,
 		Created: j.Created.UTC().Format(time.RFC3339), Superseded: j.Superseded, CSRFRefresh: s.csrfToken(r)}
 	for _, it := range j.Items {
@@ -316,8 +318,8 @@ func (s *Server) hubView(j *hubJob, after int, r *http.Request) hubJobView {
 		}
 	}
 	failed := j.State == jobFailed || j.State == jobInterrupted
-	v.CanRetry = failed && j.Superseded == ""
-	v.CanCleanup = failed && j.Superseded == ""
+	v.CanRetry = failed && j.Superseded == "" && j.Op != opDestroy
+	v.CanCleanup = failed && j.Superseded == "" && j.Op != opDestroy
 	if failed && j.Class == provision.ClassSpotCapacity {
 		alt := &jobAlternatives{OnDemand: j.Spec.Spot}
 		s.prov.mu.Lock()
@@ -432,6 +434,9 @@ func parsePeerJob(b []byte) (*pjobView, bool) {
 // the node sends are decoded into the Item type only and cleaned again.
 func applyPeerJob(j *hubJob, v *pjobView) {
 	j.State, j.Attempt, j.Dry = v.State, v.Attempt, v.Dry
+	if v.Op == opDestroy {
+		j.Op = opDestroy
+	}
 	j.Class, j.Zone, j.Msg = v.Class, v.Zone, provision.Text(v.Msg, 300)
 	switch j.Class {
 	case "", provision.ClassSpotCapacity, provision.ClassCredsExpired, provision.ClassQuota, provision.ClassBootstrap, provision.ClassNeedsInput, provision.ClassOther:
@@ -488,6 +493,13 @@ func (s *Server) refreshJob(ctx context.Context, j *hubJob) {
 			j.offline = ""
 			applyPeerJob(j, pv)
 			s.hjobs.saveLocked()
+			if j.Op == opDestroy && !open(j.State) {
+				s.prov.mu.Lock()
+				if c := s.prov.hosts[via]; c != nil {
+					c.At = time.Time{} // the host is gone (or still here): look again
+				}
+				s.prov.mu.Unlock()
+			}
 		}
 	}
 }
@@ -530,7 +542,7 @@ func (s *Server) jobAct(w http.ResponseWriter, r *http.Request, act string) {
 		return
 	}
 	s.hjobs.mu.Lock()
-	failed := j.State == jobFailed || j.State == jobInterrupted
+	failed := (j.State == jobFailed || j.State == jobInterrupted) && j.Op != opDestroy
 	via, pid := j.Via, j.PeerID
 	s.hjobs.mu.Unlock()
 	if !failed {
@@ -600,9 +612,9 @@ func (s *Server) handleProvisionJobChange(w http.ResponseWriter, r *http.Request
 	}
 	s.hjobs.mu.Lock()
 	state, spec, via, region, super := j.State, j.Spec, j.Via, j.Region, j.Superseded
-	dry := j.Dry
+	dry, isDestroy := j.Dry, j.Op == opDestroy
 	s.hjobs.mu.Unlock()
-	if (state != jobFailed && state != jobInterrupted && state != jobCleaned) || super != "" {
+	if (state != jobFailed && state != jobInterrupted && state != jobCleaned) || super != "" || isDestroy {
 		relErr(w, http.StatusConflict, "bad_state", "only a failed job can be changed")
 		return
 	}

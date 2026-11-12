@@ -183,16 +183,15 @@ try {
       await noHScroll();
     });
 
-    await check(`${tag}: sorting changes the order, and Arm types are listed but marked`, async () => {
+    await check(`${tag}: sorting changes the order, and Arm types are listed with their arch and can be chosen`, async () => {
       const first = async () => (await items().first().locator(".pz-type").innerText()).split("\n")[0].trim();
       const a = await first();
       await page.selectOption("#pz-sort", "vcpu");
       await page.waitForFunction((x) => document.querySelector("#pr-prices .pz-item .pz-type")?.innerText.split("\n")[0].trim() !== x, a, { timeout: 5000 });
       await page.selectOption("#pz-sort", "price");
       const t = await page.locator("#pr-prices").innerText();
-      if (!t.includes("arm64 · not supported yet")) throw new Error("no Arm type is marked with its reason");
-      const why = await page.locator("#pr-prices .pz-tag.arm").first().getAttribute("title");
-      if (!/bootstrap is tested on amd64 only/.test(why || "")) throw new Error("the tag's hover text is " + JSON.stringify(why));
+      if (t.includes("not supported yet")) throw new Error("an Arm type is still marked as unbuildable");
+      if (!(await page.locator('#pr-prices .pz-row[data-pz-type="t4g.large"]:not([disabled])').count())) throw new Error("t4g.large is not selectable");
     });
 
     await check(`${tag}: an expired login is said plainly, with what to run, and the old prices stay`, async () => {
@@ -227,12 +226,12 @@ try {
       await shot("wizard-node");
       await noHScroll();
     });
-    await check(`${tag}: choosing a size shows its cost in the footer; an Arm size cannot be chosen`, async () => {
+    await check(`${tag}: choosing a size shows its cost in the footer; Arm sizes are chosen like any other`, async () => {
       await next().click();
       await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 });
       if (!(await step()).startsWith("2.")) throw new Error("step " + await step());
       if (!(await next().isDisabled())) throw new Error("Next is enabled before a size is chosen");
-      if (!(await page.locator('[data-az-pick="t4g.large"]').isDisabled().catch(() => true))) throw new Error("an Arm size can be chosen");
+      if (await page.locator('[data-az-pick="t4g.large"]').isDisabled().catch(() => false)) throw new Error("an Arm size cannot be chosen");
       await page.locator('[data-az-pick="t3.xlarge"]').click();
       const c = await page.locator("#az-cost").innerText();
       if (!/≈ \$0\.\d+\/h/.test(c) || !/day/.test(c)) throw new Error("footer: " + c);

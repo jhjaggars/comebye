@@ -814,8 +814,7 @@
    "interruption": "5-10%",
    "estimate_spot_usd_hour": 0.0145,
    "estimate_on_demand_usd_hour": 0.0169,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "t4g.micro",
@@ -835,8 +834,7 @@
    "interruption": ">20%",
    "estimate_spot_usd_hour": 0.0162,
    "estimate_on_demand_usd_hour": 0.0211,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "t4g.small",
@@ -856,8 +854,7 @@
    "interruption": "5-10%",
    "estimate_spot_usd_hour": 0.0192,
    "estimate_on_demand_usd_hour": 0.0295,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "m6g.medium",
@@ -877,8 +874,7 @@
    "interruption": "15-20%",
    "estimate_spot_usd_hour": 0.0257,
    "estimate_on_demand_usd_hour": 0.0512,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "t4g.medium",
@@ -898,8 +894,7 @@
    "interruption": "15-20%",
    "estimate_spot_usd_hour": 0.0269,
    "estimate_on_demand_usd_hour": 0.0463,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "t4g.large",
@@ -919,8 +914,7 @@
    "interruption": "15-20%",
    "estimate_spot_usd_hour": 0.0359,
    "estimate_on_demand_usd_hour": 0.0799,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "m6g.large",
@@ -940,8 +934,7 @@
    "interruption": ">20%",
    "estimate_spot_usd_hour": 0.0456,
    "estimate_on_demand_usd_hour": 0.0897,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "t4g.xlarge",
@@ -961,8 +954,7 @@
    "interruption": "10-15%",
    "estimate_spot_usd_hour": 0.0564,
    "estimate_on_demand_usd_hour": 0.1471,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "t4g.2xlarge",
@@ -982,8 +974,7 @@
    "interruption": ">20%",
    "estimate_spot_usd_hour": 0.0798,
    "estimate_on_demand_usd_hour": 0.2815,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "m6g.xlarge",
@@ -1003,8 +994,7 @@
    "interruption": ">20%",
    "estimate_spot_usd_hour": 0.097,
    "estimate_on_demand_usd_hour": 0.1667,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "m6g.2xlarge",
@@ -1024,8 +1014,7 @@
    "interruption": ">20%",
    "estimate_spot_usd_hour": 0.1241,
    "estimate_on_demand_usd_hour": 0.3207,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "m6g.4xlarge",
@@ -1045,8 +1034,7 @@
    "interruption": "5-10%",
    "estimate_spot_usd_hour": 0.217,
    "estimate_on_demand_usd_hour": 0.6287,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   },
   {
    "type": "m6g.8xlarge",
@@ -1066,8 +1054,7 @@
    "interruption": "<5%",
    "estimate_spot_usd_hour": 0.4564,
    "estimate_on_demand_usd_hour": 1.2447,
-   "selectable": false,
-   "note": "needs work: arm64, the bootstrap is tested on amd64 only"
+   "selectable": true
   }
  ],
  "placement": {
