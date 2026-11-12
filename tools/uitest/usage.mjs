@@ -220,6 +220,48 @@ try {
       await page.waitForFunction(() => /defaults/.test(document.querySelector("#us-pricemsg")?.textContent || ""), null, { timeout: 5000 });
     });
 
+    await check(`${tag}: an agent and the Status page carry the handoff's usage chip, and it opens the drilled screen`, async () => {
+      const th = (await api("/api/usage?by=kind&since=14d&limit=100")).top_handoffs;
+      const row = th.find((h) => h.name === "usage-collector");
+      if (!row) throw new Error("no usage-collector handoff in the API");
+      const { agents } = await api("/api/agents");
+      const live = agents.find((x) => x.name !== "laharl");
+      // The fixture ledger only holds removed workers: make one of them the live agent's running handoff, in the browser only.
+      await page.route(/\/api\/ledger$/, async (r) => {
+        const resp = await r.fetch(); const j = await resp.json();
+        const e = j.entries.find((x) => x.id === row.handoff);
+        if (e) { e.agent_id = live.id; e.status = "running"; e.finished_at = null; e.created_at = new Date(Date.now() - 3600000).toISOString(); }
+        await r.fulfill({ response: resp, json: j });
+      });
+      const want = (n) => (n >= 1e6 ? (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + "M" : (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + "k");
+      await page.goto(base + "/", { waitUntil: "load" });
+      await page.waitForFunction((id) => document.querySelector(`#agents .agent[data-id="${id}"] .us-chip`), live.id, { timeout: 15000 });
+      const rowChip = await page.locator(`#agents .agent[data-id="${live.id}"] .us-chip`).innerText();
+      if (!rowChip.startsWith(want(row.fresh) + " tokens")) throw new Error(`row chip "${rowChip}" vs ${want(row.fresh)}`);
+      if (!/cache \d+%/.test(rowChip)) throw new Error("no cache hit in " + rowChip);
+      if (await page.locator(`#agents .agent[data-id="${live.id}"] a.us-chip`).count()) throw new Error("a link inside a row that is itself a button");
+      await shot("chip-row");
+      await page.locator(`#agents .agent[data-id="${live.id}"]`).click();
+      await page.waitForSelector("#d-usage a.us-chip", { state: "visible" });
+      const box = await page.locator("#d-usage a.us-chip").boundingBox();
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls sideways");
+      await shot("chip-detail");
+      await page.locator("#d-usage a.us-chip").click();
+      await page.waitForSelector("#us-chart svg");
+      const crumbs = await page.locator(".us-crumbs").innerText();
+      if (!crumbs.includes("comebye") || !crumbs.includes("usage-collector")) throw new Error("crumbs " + crumbs);
+      const val = (await page.locator(".us-rows .us-row .val").first().innerText()).split(/\s/)[0];
+      if (val !== want(row.fresh)) throw new Error(`the drill row says ${val}, the chip ${want(row.fresh)}`);
+      await noHScroll();
+      // The same chip links from the Status page.
+      if (width >= 1100) {
+        await page.goto(base + "/#/status", { waitUntil: "load" });
+        await page.waitForSelector("#ps-body a.us-chip", { timeout: 15000 });
+        await shot("chip-status");
+      }
+      await page.unroute(/\/api\/ledger$/);
+    });
+
     await check(`${tag}: Back leaves the screen and Escape does too`, async () => {
       await open("#/usage");
       await page.locator("#us-back").click();

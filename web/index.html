@@ -909,6 +909,15 @@
     .lg-chip.failed { background: var(--chip-red); color: var(--red); }
     /* landing states are sentences: they wrap inside the row instead of running off it */
     .agent .sub .lg-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+    .us-chip { display: inline-block; max-width: 100%; padding: 0 var(--sp-6); border-radius: var(--r-6); background: var(--chip-blue); color: var(--blue); font-size: var(--fs-12); line-height: 20px; text-decoration: none; white-space: nowrap; }
+    .us-chip.low { background: var(--chip-yellow); color: var(--yellow); }
+    a.us-chip { min-height: 24px; }
+    a.us-chip:hover { text-decoration: underline; }
+    a.us-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .d-usage { margin-top: var(--sp-2); }
+    /* a 44px tap area around the 24px chip, without a 44px chip */
+    @media (pointer: coarse) { a.us-chip { position: relative; } a.us-chip::after { content: ""; position: absolute; inset: -10px 0; } }
+    .agent .sub:has(.us-chip) { flex-wrap: wrap; }
     .lg-chip.landing { background: var(--chip-landing); color: var(--teal); }
     .lg-chip.queued { background: var(--chip-rtr); color: var(--orange); }
     .rtr-banner {
@@ -2728,6 +2737,7 @@
         <div class="title" id="d-title"></div>
         <div class="subtitle" id="d-subtitle"></div>
         <div class="why" id="d-why" hidden></div>
+        <div class="d-usage" id="d-usage" hidden></div>
       </div>
       <span class="status" id="d-status"></span>
       <button type="button" class="more" id="d-refresh" aria-label="Refresh this view">&#8635;</button>

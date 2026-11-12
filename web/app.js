@@ -213,7 +213,7 @@ function subLine(a) {
   const chip = branch ? `<span class="wt-chip">⑂ ${esc(branch)}</span>` : "";
   const d = repoDamageOf(a);
   const dmg = d ? `<span class="lg-chip failed rd-chip" title="${escAttr(`${d.repo}: ${d.reason}. ${d.hint}`)}">repo damaged</span>` : "";
-  return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${dmg}${ledgerChip(a)}</div>`;
+  return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${dmg}${ledgerChip(a)}${(ledgerEntry(a) && usageChipHtml(ledgerEntry(a).id, false)) || ""}</div>`;
 }
 
 /* ---------- damaged repositories ---------- */
@@ -942,6 +942,7 @@ async function loadLedger() {
     // The briefing rides along, at most every 20 seconds.
     if (Date.now() - briefing.loadedAt > 20000) loadBrief();
     if (Date.now() - todos.loadedAt > 8000) loadTodos();
+    loadUsageChips();
     // The server checks finished workers' worktrees in the background
     // (for the "merged" hint): look again shortly until they are in.
     const waiting = ledger.entries.some((e) => (e.status === "finished" || e.status === "landed") && e.worktree && !e.checks);
@@ -5759,17 +5760,17 @@ function statusHTML(desktop) {
   const card = (p) => {
     let h = "";
     if (p.blocked.length) h += `<div class="st-g blocked">Blocked</div>` + p.blocked.map(({ e, ag, why }) =>
-      `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span><span class="st-m warn">${esc(why)}</span><span class="st-r">${esc(e.branch || "")}${open(ag)}</span></div>`).join("");
+      `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span><span class="st-m warn">${esc(why)}</span><span class="st-r">${esc(e.branch || "")}${usageChipHtml(e.id, true)}${open(ag)}</span></div>`).join("");
     if (p.todos.length) h += `<div class="st-g you">Waiting on you</div>` + p.todos.map((t) =>
       `<div class="st-row"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="st-n">${esc(t.question)}</span>${desktop ? `<span class="st-r"><button type="button" class="st-link" data-go="todo">To do</button></span>` : ""}</div>`).join("");
     if (p.progress.length) h += `<div class="st-g prog">In progress</div>` + p.progress.map(({ e, ag }) => {
       const at = Date.parse(e.created_at);
-      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${open(ag)}</span></div>`;
+      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${usageChipHtml(e.id, true)}${open(ag)}</span></div>`;
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
       const body = e.final_report ? `<div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div><div class="hubchk st-rep" data-id="${escAttr(e.id)}" hidden></div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
-      return `<details class="st-row" data-id="${escAttr(e.id)}"${statusUi.open.has(e.id) ? " open" : ""}><summary><span class="st-n">${esc(statusWho(e))}</span><span class="lg-chip ${chip[0]}">${chip[1]}</span><span class="st-r">${esc(fmtAgo(at))} ago</span></summary>${statusUi.open.has(e.id) ? body : ""}</details>`;
+      return `<details class="st-row" data-id="${escAttr(e.id)}"${statusUi.open.has(e.id) ? " open" : ""}><summary><span class="st-n">${esc(statusWho(e))}</span><span class="lg-chip ${chip[0]}">${chip[1]}</span>${usageChipHtml(e.id, true)}<span class="st-r">${esc(fmtAgo(at))} ago</span></summary>${statusUi.open.has(e.id) ? body : ""}</details>`;
     }).join("");
     return `<section class="st-proj${p.blocked.length || p.todos.length ? " hot" : ""}" aria-label="${escAttr(p.name)}"><div class="st-ph">${esc(p.name)}</div>${h}</section>`;
   };
@@ -6967,6 +6968,7 @@ async function usageLoad() {
       api(usQuery({ by: "model" })),
     ]);
     if (seq !== us.seq) return;
+    if (us.h && !us.hLabel && dr.groups && dr.groups[0] && dr.groups[0].label) us.hLabel = dr.groups[0].label; // arrived by a link
     Object.assign(us, { main, prev, drill: dr, roles, models, hosts: main.hosts || [], asOf: main.as_of, status: "ok", err: "" });
   } catch (e) {
     if (seq !== us.seq) return;
@@ -7244,6 +7246,49 @@ function closeUsage() {
   route();
 }
 
+/* ---------- Usage chips: a handoff's tokens, on its agent and in Status ---------- */
+//
+// One query (GET /api/usage, the last 14 days, the top 100 handoffs) gives every
+// handoff its fresh tokens and cache hit, the same numbers as the Usage screen's
+// drill-down row for a 14-day range; a chip links to that row
+// (#/usage?p=<project>&h=<handoff>). An agent shows its handoff's chip. In the
+// agent list the row is itself a button, so the chip there is only a label; the
+// agent's detail and the Status page carry the link. The cache chip turns
+// yellow below 80%. Nothing shows where the hub counts no tokens.
+
+const uchip = { rows: new Map(), at: 0, inflight: false, off: false };
+
+async function loadUsageChips() {
+  if (uchip.inflight || uchip.off || ledger.on !== true || Date.now() - uchip.at < 60000) return;
+  uchip.inflight = true;
+  try {
+    const d = await api("/api/usage?" + new URLSearchParams({ since: "14d", by: "kind", limit: "100", tz: String(-new Date().getTimezoneOffset()) }));
+    uchip.rows = new Map((d.top_handoffs || []).map((h) => [h.handoff, h]));
+  } catch (e) {
+    if (e.status === 404 || e.status === 403) { uchip.off = true; uchip.rows = new Map(); }
+  } finally {
+    uchip.inflight = false;
+    uchip.at = Date.now();
+  }
+  renderList();
+  if (state.selected) renderDetail();
+  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  renderStatus();
+}
+
+// usageChipHtml is the chip of a ledger entry ("" without tokens); link: an <a> to its usage.
+function usageChipHtml(entryId, link) {
+  const r = uchip.rows.get(entryId);
+  if (!r || !(r.fresh > 0)) return "";
+  const hit = r.hit || 0;
+  const cls = "us-chip" + (hit < 0.8 ? " low" : "");
+  const text = `${usFmtN(r.fresh)} tokens · cache ${usPct(hit)}`;
+  const title = `${r.fresh.toLocaleString()} fresh tokens over 14 days in ${r.sessions} ${r.sessions === 1 ? "session" : "sessions"}; ${usPct(hit)} of the prompt came from the cache${hit < 0.8 ? " (below 80%)" : ""}`;
+  if (!link) return `<span class="${cls}" title="${escAttr(title)}">${esc(text)}</span>`;
+  const q = new URLSearchParams({ p: r.project || "", h: entryId });
+  return `<a class="${cls}" href="#/usage?${q}" title="${escAttr(title)}" aria-label="Usage of this handoff: ${escAttr(text)}">${esc(text)}</a>`;
+}
+
 function initUsage() {
   $("us-back").addEventListener("click", closeUsage);
   $("usage").addEventListener("keydown", (ev) => {
@@ -7378,6 +7423,9 @@ function renderDetail() {
   }
   if (multiHost() && a.host) sub = a.host + " · " + sub;
   $("d-subtitle").textContent = sub;
+  const ue = ledgerEntry(a), uc = $("d-usage");
+  uc.innerHTML = ue ? usageChipHtml(ue.id, true) : "";
+  uc.hidden = !uc.innerHTML;
   const st = $("d-status");
   st.textContent = bgRunning(a) ? "waiting" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
   st.className = "status " + agentStatusText(a);
