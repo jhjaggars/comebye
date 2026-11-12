@@ -4529,18 +4529,18 @@ await check(`releases tab at ${width}: tabs and badge, and the card and fleet ta
       if (s === "green" && (dis || !/CI passed/.test(t) || !/4 changes since v0\.5\.21/.test(t) || !(await page.locator("#pr-dot:visible").count()))) throw new Error("green: " + t);
       if (s === "red" && (!dis || !/CI failure/.test(t) || !/Fix CI first/.test(t) || !(await page.locator("#pr-dot:visible").count()))) throw new Error("red: " + t);
       if (!(await page.locator("#pr-releases .rl-host").count())) throw new Error(s + ": no fleet");
-      if (await page.locator("#pr-releases .rl-host button").count()) throw new Error(s + ": a host button before the tag");
+      if (await page.locator("#pr-releases .rl-host button:not(.cpb)").count()) throw new Error(s + ": a host button before the tag");
     }
     // tagged: the hub is behind, every row offers its button
     await reload("tagged"); t = await txt();
-    const up = await page.locator("#pr-releases .rl-host button").allInnerTexts();
+    const up = await page.locator("#pr-releases .rl-host button:not(.cpb)").allInnerTexts();
     if (!/0 of 4/.test(t) || up.join("|") !== "Bump hub|Upgrade|Upgrade|Upgrade") throw new Error("tagged: " + up + " " + t);
     if ((await page.locator("#pr-releases .rl-host").first().innerText()).indexOf("hub") < 0) throw new Error("hub row");
     // partial, with an offline host: 2 of 4, 1 offline; the offline row's button is disabled; no "all upgraded"
     await reload("partial"); t = await txt();
     if (!/2 of 4, 1 offline/.test(t) || /all upgraded/i.test(t)) throw new Error("partial: " + t);
     const off = page.locator('#pr-releases .rl-host[data-host="mac-mini"]');
-    if (!(await off.locator("button").isDisabled()) || !/not reachable since 2d ago/.test(await off.innerText())) throw new Error("offline row: " + (await off.innerText()));
+    if (!(await off.locator("button:not(.cpb)").isDisabled()) || !/not reachable since 2d ago/.test(await off.innerText())) throw new Error("offline row: " + (await off.innerText()));
     if (!(await page.locator('#pr-releases .rl-host[data-host="kubevirt-1"] .rel-up:not(:disabled)').count())) throw new Error("kubevirt-1 has no Upgrade");
     if ((await page.locator("#pr-releases .rl-prog").getAttribute("aria-valuenow")) !== "2") throw new Error("progress");
     await page.screenshot({ path: `${out}/releases-partial-${width}.png` });
@@ -4550,9 +4550,9 @@ await check(`releases tab at ${width}: tabs and badge, and the card and fleet ta
     // deploy failed: its error and a Retry
     await reload("failed"); t = await txt();
     const hub = page.locator('#pr-releases .rl-host[data-host="laharl"]');
-    if (!/FAILED phase=reconcile/.test(await hub.innerText()) || (await hub.locator("button").innerText()).trim() !== "Retry") throw new Error("deploy failed: " + (await hub.innerText()));
+    if (!/FAILED phase=reconcile/.test(await hub.innerText()) || (await hub.locator("button:not(.cpb)").innerText()).trim() !== "Retry") throw new Error("deploy failed: " + (await hub.innerText()));
     const pb = page.locator('#pr-releases .rl-host[data-host="peerbox"]');
-    if (!/rolled back/.test(await pb.innerText()) || (await pb.locator("button").innerText()).trim() !== "Retry") throw new Error("upgrade failed: " + (await pb.innerText()));
+    if (!/rolled back/.test(await pb.innerText()) || (await pb.locator("button:not(.cpb)").innerText()).trim() !== "Retry") throw new Error("upgrade failed: " + (await pb.innerText()));
     if (!(await page.locator("#pr-dot:visible").count())) throw new Error("no badge on a failure");
     await page.screenshot({ path: `${out}/releases-failed-${width}.png` });
     h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1] || h.pane[0] > h.pane[1]) throw new Error("failed: sideways scroll " + JSON.stringify(h));

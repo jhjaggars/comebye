@@ -171,11 +171,16 @@ await check("chat: a tool card copies the command and the result", async () => {
 await check("answer card: Copy screen copies the terminal snapshot", async () => {
   const agents = await fetch(base + "/api/agents").then((r) => r.json());
   const list = Array.isArray(agents) ? agents : agents.agents || [];
-  const blocked = list.find((a) => a.name === "trust-prompt" || /trust-prompt/.test(a.workspace_label || a.label || ""));
-  if (!blocked) throw new Error("no trust-prompt agent in the fake fleet: " + JSON.stringify(list.map((a) => a.name || a.id)));
-  await page.goto("about:blank");
-  await page.goto(base + "/#/agent/" + encodeURIComponent(blocked.pane_id || blocked.id.split("/").pop()), { waitUntil: "load" });
-  await page.waitForSelector("#answer-snap", { state: "attached", timeout: 8000 });
+  const cands = list.filter((a) => ["needs-input", "trust-prompt", "claude-trust"].includes(a.name));
+  if (!cands.length) throw new Error("no blocked agent in the fake fleet: " + JSON.stringify(list.map((a) => a.name || a.id)));
+  let found = false;
+  for (const blocked of cands) {
+    await page.goto("about:blank");
+    await page.goto(base + "/#/agent/" + encodeURIComponent(blocked.pane_id || blocked.id.split("/").pop()), { waitUntil: "load" });
+    found = await page.waitForSelector("#answer-snap", { state: "attached", timeout: 4000 }).then(() => true, () => false);
+    if (found) break;
+  }
+  if (!found) throw new Error("no answer card with a snapshot for " + cands.map((a) => a.name));
   const b = page.locator('.cpb[data-copy-target="#answer-snap"]');
   if (!(await b.isVisible())) await page.locator(".ans-more summary").click();
   await b.waitFor({ state: "visible" });
