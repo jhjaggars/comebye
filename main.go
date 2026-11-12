@@ -123,6 +123,7 @@ func main() {
 		releaseUp      = flag.Bool("release-upgrade", envBool("COMEBYE_RELEASE_UPGRADE", false), "let the app's Upgrade button run `comebye upgrade --version` on this host (a transient systemd user unit)")
 		releaseDry     = flag.Bool("release-dry-run", envBool("COMEBYE_RELEASE_DRY_RUN", false), "the release and upgrade buttons do every check and change nothing (no tag, no install)")
 		releaseDeploy  = flag.String("release-deploy-cmd", getenv("COMEBYE_RELEASE_DEPLOY_CMD"), "on the host that owns -release-repo: a command (absolute program path and arguments, no shell) that the release item's second button runs once the build passed, with the version appended as the last argument and in COMEBYE_RELEASE_VERSION. Approve release never runs it. For example a script that commits the version to a deployment repository; empty: no such button")
+		releaseCanary  = flag.String("release-canary", getenv("COMEBYE_RELEASE_CANARY"), "the peer a rolling rollout upgrades first (default: the first peer behind; the confirm can pick another)")
 		releaseDepLbl  = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
 		testMode       = flag.Bool("test-mode", false, "browser tests and the dev server: the app polls every 300 ms instead of every 3 to 20 s and the to-do list has no per-minute limit; nothing else changes")
 		releaseSim     = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
@@ -421,7 +422,7 @@ func main() {
 		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, Simulated: true, Runner: server.SimulatedUpgrade{}}
 		log.Printf("release: SIMULATED (canned results, nothing runs)")
 	default:
-		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry, DeployCmd: deployCmd, DeployLabel: strings.TrimSpace(*releaseDepLbl)}
+		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry, DeployCmd: deployCmd, DeployLabel: strings.TrimSpace(*releaseDepLbl), Canary: strings.TrimSpace(*releaseCanary)}
 		if h := strings.TrimSpace(*releaseHost); h != "" {
 			// The hub asks that peer to tag; it must be a peer we know now.
 			if err := releaseHostError(h, *hostName, fl.HasPeer); err != nil {

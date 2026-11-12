@@ -84,12 +84,12 @@ func (f *fakeFleet) set(host string, fn func(h *relHost)) {
 }
 
 type rolloutRig struct {
-	t     *testing.T
-	f     *fakeFleet
-	e     *rolloutEngine
-	path  string
-	audit []ledger.AuditEvent
-	ended []Rollout
+	t      *testing.T
+	f      *fakeFleet
+	e      *rolloutEngine
+	path   string
+	audit  []ledger.AuditEvent
+	states []Rollout
 }
 
 func newRolloutRig(t *testing.T, names ...string) *rolloutRig {
@@ -103,7 +103,7 @@ func newRolloutRig(t *testing.T, names ...string) *rolloutRig {
 func (r *rolloutRig) engine() *rolloutEngine {
 	e := newRolloutEngine(r.path, r.f, func(ev ledger.AuditEvent) { r.audit = append(r.audit, ev) })
 	e.now = r.f.clock
-	e.onEnd = func(j Rollout) { r.ended = append(r.ended, j) }
+	e.onState = func(j Rollout) { r.states = append(r.states, j) }
 	return e
 }
 
@@ -140,6 +140,14 @@ func (r *rolloutRig) want(s string) {
 	if got := r.phases(); got != s {
 		r.t.Fatalf("got  %s\nwant %s", got, s)
 	}
+}
+
+func (r *rolloutRig) stateSeq() string {
+	var a []string
+	for _, j := range r.states {
+		a = append(a, j.State)
+	}
+	return strings.Join(a, ",")
 }
 
 func (r *rolloutRig) actions() string {
@@ -180,8 +188,8 @@ func TestRolloutHappyPath(t *testing.T) {
 	r.f.finish("c", upgrade.RecOK, "v0.6.4")
 	j := r.tick()
 	r.want("done a=ok b=ok c=ok")
-	if j.Finished == nil || len(r.ended) != 1 || r.ended[0].State != roDone {
-		t.Fatalf("finish not reported: %+v %v", j.Finished, r.ended)
+	if j.Finished == nil || r.stateSeq() != "running,done" {
+		t.Fatalf("finish not reported: %+v %v", j.Finished, r.stateSeq())
 	}
 	if got, want := strings.Join(r.f.starts, ","), "a,b,c"; got != want {
 		t.Fatalf("order %s", got)
@@ -230,8 +238,8 @@ func TestRolloutStopsAtFirstFailureAndRetries(t *testing.T) {
 		if len(r.f.starts) != 2 {
 			t.Fatalf("a stopped rollout started more: %v", r.f.starts)
 		}
-		if len(r.ended) != 1 || r.ended[0].State != roStopped {
-			t.Fatalf("stop not reported: %v", r.ended)
+		if r.stateSeq() != "running,stopped" {
+			t.Fatalf("stop not reported: %s", r.stateSeq())
 		}
 		// Resume retries b, not a
 		if _, err := r.e.Resume("jesse"); err != nil {
@@ -460,8 +468,8 @@ func TestRolloutCancelLeavesHostsAlone(t *testing.T) {
 	if _, err := r.e.Cancel("jesse"); err == nil {
 		t.Fatal("cancelling twice")
 	}
-	if len(r.ended) != 1 {
-		t.Fatalf("ended %v", r.ended)
+	if r.stateSeq() != "running,cancelled" {
+		t.Fatalf("states %s", r.stateSeq())
 	}
 	// a cancelled rollout is not live: a new one may start
 	r.start()
@@ -539,6 +547,10 @@ func TestPlanRollout(t *testing.T) {
 	p, err = planRollout(hosts, []string{"b", "a"}, "")
 	if err != nil || names(p) != "b/canary a/peers" {
 		t.Fatalf("explicit: %s %v", names(p), err)
+	}
+	p, _ = planRollout(hosts, []string{"b"}, "") // one host is no canary: no soak for it
+	if names(p) != "b/peers" {
+		t.Fatalf("lone host: %s", names(p))
 	}
 	for _, bad := range [][]string{{"zz"}, {"a", "a"}, {"hubhost"}} {
 		if _, err := planRollout(hosts, bad, ""); err == nil {

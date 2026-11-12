@@ -186,8 +186,8 @@ func TestReleaseRoutesAreUserOnly(t *testing.T) {
 			t.Errorf("a release route is not user-only: %s", strings.TrimSpace(line))
 		}
 	}
-	if n != 13 { // 8 for the page, the tab, deploy and upgrades, 5 hub-only peer ops (release_remote.go, release_deploy.go)
-		t.Fatalf("found %d release routes, want 13: update this test with the route", n)
+	if n != 15 { // 8 for the page, the tab, deploy and upgrades, 5 hub-only peer ops (release_remote.go, release_deploy.go), 2 for the rollout (start; pause, resume and cancel in one loop line)
+		t.Fatalf("found %d release routes, want 15: update this test with the route", n)
 	}
 }
 
@@ -205,6 +205,10 @@ func TestReleaseRefusesAgentsAndPeers(t *testing.T) {
 		{"GET", "/api/release/upgrade", ""},
 		{"POST", "/api/release/upgrade", `{"version":"v0.5.9"}`},
 		{"POST", "/api/hosts/desk/release/upgrade", hostBody},
+		{"POST", "/api/release/rollout", `{"todo":"` + it.ID + `","version":"v0.5.9","commit":"` + relSHA + `","hosts":["desk"]}`},
+		{"POST", "/api/release/rollout/pause", `{"id":"r1"}`},
+		{"POST", "/api/release/rollout/resume", `{"id":"r1"}`},
+		{"POST", "/api/release/rollout/cancel", `{"id":"r1"}`},
 	}
 	callers := map[string]map[string]string{
 		// A coordinator, with the agent token and even the page's token.

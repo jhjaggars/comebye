@@ -153,9 +153,10 @@ type rolloutEngine struct {
 	audit func(ledger.AuditEvent)
 	// Timings; tests shorten them.
 	soak, backWait, offlineGrace, runWait, startRetry time.Duration
-	// onFinish is told, after the file was written, when a job ends or stops
-	// (slice 4: the release item's notice).
-	onEnd func(Rollout)
+	// onState is told, after the file was written, whenever the job's state
+	// changed (started, paused, resumed, stopped, done, cancelled): the
+	// release item's note follows it.
+	onState func(Rollout)
 }
 
 func newRolloutEngine(path string, ops rolloutOps, audit func(ledger.AuditEvent)) *rolloutEngine {
@@ -267,7 +268,7 @@ func planRollout(hosts []relHost, order []string, canary string) ([]RolloutStep,
 			notEnabled = append(notEnabled, n)
 		}
 		wave := wavePeers
-		if len(plan) == 0 {
+		if len(plan) == 0 && len(order) > 1 { // a lone host is not a canary: there is nothing to hold back
 			wave = waveCanary
 		}
 		plan = append(plan, RolloutStep{Host: n, Wave: wave, Phase: roPending})
@@ -312,6 +313,9 @@ func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutSt
 		}
 	}
 	e.emit(j, "", "rollout.start", true, fmt.Sprintf("%s plan=[%s] canary=%s id=%s", version, strings.Join(names, " "), j.Canary, j.ID), by)
+	if e.onState != nil {
+		e.onState(j)
+	}
 	return j, nil
 }
 
@@ -382,8 +386,8 @@ func (e *rolloutEngine) control(by string, fn func(*Rollout) (action, detail str
 		return j, err
 	}
 	e.emit(j, "", action, true, detail, by)
-	if j.State == roCancelled && e.onEnd != nil {
-		e.onEnd(j)
+	if e.onState != nil {
+		e.onState(j)
 	}
 	return j, nil
 }
@@ -471,8 +475,8 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 		log.Printf("rollout: %v", err)
 		return
 	}
-	if (j.State == roStopped || j.State == roDone) && e.onEnd != nil {
-		e.onEnd(j)
+	if j.State != before.State && e.onState != nil {
+		e.onState(j)
 	}
 }
 

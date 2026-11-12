@@ -77,6 +77,10 @@ type TodoRelease struct {
 	Dismissed   bool       `json:"dismissed,omitempty"`
 	DismissedBy string     `json:"dismissed_by,omitempty"`
 	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
+	// RolloutNote is what the rolling rollout last left to say on this item
+	// (stopped at a host, done with a skipped host, cancelled); empty while it
+	// runs or when it finished cleanly.
+	RolloutNote string `json:"rollout_note,omitempty"`
 	// DryRun is the last dry run's output (a server run with
 	// -release-dry-run never tags).
 	DryRun string `json:"dry_run,omitempty"`
@@ -111,6 +115,9 @@ type ReleaseConfig struct {
 	DeployCmd []string
 	// DeployLabel names that button (default "Deploy").
 	DeployLabel string
+	// Canary names the peer a rollout upgrades first (default: the first
+	// peer behind). The confirm lets the user pick another.
+	Canary string
 }
 
 // UpgradeRunner starts an upgrade run that outlives this server.
@@ -434,6 +441,7 @@ func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, re
 			dcancel()
 		}
 		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, hosts, ro, dep)
+		s.rolloutView(out, it, hosts)
 	} else {
 		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, nil, relRollout{}, nil)
 	}
@@ -774,6 +782,10 @@ func (s *Server) handleHostUpgrade(w http.ResponseWriter, r *http.Request) {
 			relErr(w, http.StatusConflict, "build_not_green", why)
 			return
 		}
+	}
+	if s.rolloutLive() {
+		relErr(w, http.StatusConflict, "rollout_active", "a rollout is in progress: pause or cancel it before upgrading a host by hand")
+		return
 	}
 	by := s.by(r, "")
 	inner, _ := json.Marshal(upgradeBody{Version: b.Version, Rollback: b.Rollback})

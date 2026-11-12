@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
@@ -82,3 +85,61 @@ func (s *Server) RunRollout(ctx context.Context) {
 	}
 	s.rollout.Run(ctx)
 }
+
+// rolloutNoteOf is the line a release item keeps about its rollout: why it
+// stopped, which hosts were skipped, who cancelled it. Empty when there is
+// nothing to say (running, paused, or done with every host).
+func rolloutNoteOf(j Rollout) string {
+	switch j.State {
+	case roStopped:
+		if j.Stop != nil {
+			return fmt.Sprintf("%s stopped at %s: %s", j.Version, j.Stop.Host, oneLine(j.Stop.Reason, 160))
+		}
+		return j.Version + " stopped"
+	case roDone:
+		var skipped []string
+		for _, st := range j.Plan {
+			if st.Phase == roSkipped {
+				skipped = append(skipped, st.Host)
+			}
+		}
+		if len(skipped) > 0 {
+			return fmt.Sprintf("%s rolled out; %s skipped (%s): roll it out again from Peers", j.Version, strings.Join(skipped, ", "), skippedWhy(j))
+		}
+	case roCancelled:
+		return j.Version + " rollout cancelled: hosts keep the version they have"
+	}
+	return ""
+}
+
+func skippedWhy(j Rollout) string {
+	for _, st := range j.Plan {
+		if st.Phase == roSkipped {
+			return st.Detail
+		}
+	}
+	return ""
+}
+
+// noteRollout keeps the release item's note in step with the job: the item
+// is what the user's to-do list and the Peers badge show.
+func (s *Server) noteRollout(j Rollout) {
+	if s.todos == nil || j.Todo == "" {
+		return
+	}
+	note := rolloutNoteOf(j)
+	_, err := s.todos.mutate(j.Todo, func(t *Todo) error {
+		if t.Release == nil || t.Release.RolloutNote == note {
+			return errNoChange
+		}
+		rel := *t.Release
+		rel.RolloutNote = note
+		t.Release = &rel
+		return nil
+	})
+	if err != nil && err != errNoChange {
+		log.Printf("rollout: note on %s: %v", j.Todo, err)
+	}
+}
+
+var errNoChange = errors.New("no change")

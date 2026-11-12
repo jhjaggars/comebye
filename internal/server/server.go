@@ -382,6 +382,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		} else {
 			s.ledger = l
 			s.rollout = newRolloutEngine(filepath.Join(cfg.StateDir, "release", "rollout.json"), serverRolloutOps{s}, s.auditBy)
+			s.rollout.onState = s.noteRollout
 			s.outbox = openOutbox(outboxPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.digestEvery = cfg.DigestEvery
@@ -578,6 +579,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/release/{id}/dismiss", s.auth(s.handleReleaseDismiss))
 	s.mux.HandleFunc("POST /api/release/{id}/deploy", s.auth(s.handleReleaseDeploy))
 	s.mux.HandleFunc("POST /api/hosts/{host}/release/upgrade", s.auth(s.handleHostUpgrade))
+	s.mux.HandleFunc("POST /api/release/rollout", s.auth(s.handleRolloutStart))
+	for _, op := range []string{"pause", "resume", "cancel"} {
+		s.mux.HandleFunc("POST /api/release/rollout/"+op, s.auth(s.handleRolloutControl(op)))
+	}
 	s.provisionRoutes()
 	s.pageRoutes()
 	s.mux.HandleFunc("POST /api/marks/reask", s.authAgent(s.handleReask))
