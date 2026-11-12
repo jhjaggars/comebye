@@ -9,11 +9,11 @@
   },
   "font": {
     "literal": 0,
-    "offscale": 2
+    "offscale": 0
   },
   "hit": {
     "literal": 0,
-    "offscale": 16
+    "offscale": 0
   },
   "z": {
     "literal": 0,
