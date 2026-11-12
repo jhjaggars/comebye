@@ -33,8 +33,10 @@ const results = [];
 async function check(name, fn) {
   if (process.env.ONLY && !name.includes(process.env.ONLY)) return; // ONLY=latency: run one group while iterating
   if (process.env.SMOKE && !SMOKE_SET.some((p) => name.startsWith(p))) return; // SMOKE=1: the pre-submit set, one check per screen
+  const t0 = Date.now();
   try { await fn(); results.push([name, true, ""]); }
   catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); await dumpFailure({ page, out, name, err: e, log }); }
+  if (process.env.TIMES) console.log(`  ${((Date.now() - t0) / 1000).toFixed(1)}s ${name.slice(0, 110)}`); // TIMES=1: how long each check took
   // A screenshot after every check (SHOTS=1, for looking around); a failed check already dumped its own in dumpFailure.
   if (process.env.SHOTS) await page.screenshot({ path: `${out}/${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
 }

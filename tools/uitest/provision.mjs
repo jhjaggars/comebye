@@ -283,7 +283,9 @@ try {
     fs.rmSync(path.join(wdir, "create.fail"), { force: true });
     await check(`${tag}: a spot-capacity failure names the zone, and switching to on-demand starts a new job`, async () => {
       await page.locator("#az-add").click();
-      await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 }).catch(async () => { await next().click(); await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 }); });
+      // The wizard opens on the node step: Next shows the sizes. (This used to wait out a 30 s timeout for the sizes first, then press Next.)
+      await next().click();
+      await page.waitForSelector("#pr-prices [data-az-pick]", { timeout: 30000 });
       await page.locator('[data-az-pick="t3.xlarge"]').click();
       await next().click();
       await page.fill("#az-name", "retry-box");
