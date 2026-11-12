@@ -96,6 +96,7 @@ node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1
 
 # The Copy strip on code blocks (clipboard read back in headless Chrome).
 node copycode.mjs "http://127.0.0.1:$port" "$out" || rc=1
+node fontsetting.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # Buttons and the one focus ring (design language slice 4).
 node buttons.mjs "http://127.0.0.1:$port" "$out" || rc=1
 # Chips, cards and empty states share one shape (design language slice 5).

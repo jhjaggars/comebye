@@ -13,6 +13,7 @@ edited, so the hashes below can be re-checked against the registry.
 | `mermaid.min.js` | [mermaid](https://github.com/mermaid-js/mermaid) 10.9.5, `dist/mermaid.min.js` | MIT (`LICENSE-mermaid.txt`) | diagrams in Markdown pages (the page shell loads it only when a page has a `mermaid` block; not loaded by the app) |
 | `transformers.bundle.js` | [@huggingface/transformers](https://github.com/huggingface/transformers.js) 4.3.2 with onnxruntime-web 1.31.0-dev.20260914-8d85527a0 bundled in (**built**, see below) | Apache-2.0 and MIT (`LICENSE-transformers-bundle.txt`) | speech to text in the browser (`stt-worker.js`) |
 | `hljs/*.min.js` | [highlight.js](https://github.com/highlightjs/highlight.js) 11.11.1 from the `@highlightjs/cdn-assets` package, `es/core.min.js` and 15 `es/languages/*.min.js` (go, javascript, typescript, python, bash, json, yaml, markdown, css, xml, diff, rust, sql, shell, makefile, dockerfile) | BSD-3-Clause (`LICENSE-highlightjs.txt`) | syntax colours in the Diff panel; loaded on demand by `sidepanel.js` as ES modules |
+| `fonts/*.woff2` | [geist](https://github.com/vercel/geist-font) 1.9.2 (npm; Vercel with basement.studio), `dist/fonts/` | SIL OFL 1.1 (`LICENSE-geist.txt`) | **experiment (branch exp/geist-serif):** Geist Serif Regular, Geist Sans variable, Geist Mono variable, loaded only when `?font=` / `comebye.font` selects a variant (`web/themes.js`) |
 
 ## Provenance
 
@@ -81,3 +82,13 @@ transformers.bundle.js (the one file here that is built, not copied; 550 KB, abo
 - file sha256: `transformers.bundle.js` 0dde9f140a99dd235e54bb961d1ae1e0c8dcd1fcb3fa6856066c23cdf2263e37
 - the ONNX runtime it loads (`ort-wasm-simd-threaded.asyncify.mjs` and `.wasm`) is not in the binary or here: it is 27 MB, comes from the data directory (`comebye stt fetch`, pinned in `internal/stt/stt.go`), and must be the same onnxruntime-web build as the one inside this bundle.
 - to rebuild at another version: change `tools/stt/package.json`, run `tools/stt/build.sh`, record the new hash here, and update the runtime pin and the `Version` in `internal/stt/stt.go` (a new version path makes browsers fetch afresh).
+
+Geist fonts 1.9.2 (experiment)
+- tarball: https://registry.npmjs.org/geist/-/geist-1.9.2.tgz
+- registry `dist.integrity`: `sha512-UU1x2q5Khob0+i4csFvXk1Ki4DePdu7xISuXyEcj1tzQMg64oN7Kbuy4e5z5QhcUWbbvOMJNs3ZxYQqpsEMV3w==` (matched against `npm view`)
+- registry `dist.shasum` (sha1): `5cd889dd412ce1c80c27927d46f89a160f4e6447`
+- files, byte for byte from the tarball (`package/dist/fonts/...`):
+  - `GeistSerif-Regular.woff2` (geist-serif/) 46,904 bytes, sha256 `98979c19f111bc48d731702d40b8707845b667def7f722ee1b49346a75151dad`
+  - `GeistSans-Variable.woff2` is `geist-sans/Geist-Variable.woff2` (renamed), 69,488 bytes, sha256 `3626eba547294501c8a4d662c7d9ea3b49734409a4c5a1ccf12fa86429b1687e`
+  - `GeistMono-Variable.woff2` (geist-mono/) 71,212 bytes, sha256 `5d93ee62680bbec1abc5405c2658311f9396f6f9a821ef8551ec463887e600d4`
+  - `../LICENSE-geist.txt` is the package's `LICENSE.txt` (SIL OFL 1.1, Copyright (c) 2023 Vercel, in collaboration with basement.studio), sha256 `930853ee1daa68554d9e35c8a9175affb74f699fad9a5da6ee5ebe76379d9137`

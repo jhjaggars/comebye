@@ -17,7 +17,7 @@ import (
 // worker); it permits compiling WebAssembly and nothing else: JavaScript
 // eval and new Function stay blocked.
 const contentSecurityPolicy = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
-	"img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
+	"img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
 	"frame-src 'self'%s; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // appCSP is the app's policy; pagesOrigin, when pages are served on their
@@ -94,6 +94,9 @@ func newStaticHandler(fsys fs.FS) (*staticHandler, error) {
 			f.cache = "public, max-age=86400"
 		case ".png":
 			f.ctype = "image/png"
+			f.cache = "public, max-age=86400"
+		case ".woff2":
+			f.ctype = "font/woff2"
 			f.cache = "public, max-age=86400"
 		case ".txt":
 			f.ctype = "text/plain; charset=utf-8"

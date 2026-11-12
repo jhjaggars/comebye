@@ -3483,6 +3483,7 @@ const POPS = {
   palette: { id: "palette", noSheet: true, close: () => window.CMDK && CMDK.close(false), trigger: () => window.CMDK && CMDK.from(), esc: () => !!(window.CMDK && CMDK.back()) },
   cheats: { id: "cheats", noSheet: true, close: () => window.CMDK && CMDK.closeCheats(false), trigger: () => window.CMDK && CMDK.cheatFrom() },
   theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => $("btn-fleet") },
+  font: { id: "font-panel", close: () => toggleFontPanel(false), trigger: () => $("btn-fleet") },
   notify: { id: "notify-panel", close: () => toggleNotifyPanel(false), trigger: () => $("btn-notify") },
 };
 const sheetMQ = window.matchMedia("(max-width: 600px)");
@@ -3734,6 +3735,50 @@ function initThemePanel() {
   const sync = () => { applyTheme(); if (!$("theme-panel").hidden) renderThemePanel(); };
   window.addEventListener("storage", sync);
   window.matchMedia?.("(prefers-color-scheme: light)").addEventListener?.("change", sync);
+}
+
+/* ---------- font: the Font setting, next to Theme (themes.js owns the saved choice) ---------- */
+
+function fontLabel() { return CT.FONTS.find((f) => f.id === CT.fontChoice()).name; }
+
+function renderFontPanel() {
+  const cur = CT.fontChoice();
+  $("fp-list").innerHTML = CT.FONTS.map((f) =>
+    '<button type="button" class="tp-opt" role="menuitemradio" aria-checked="' + (f.id === cur) + '" data-font-id="' + f.id + '">' +
+    '<span class="tp-name">' + esc(f.name) + '</span><span class="tp-mode">' + esc(f.sub) + "</span></button>").join("");
+}
+
+function applyFont() {
+  CT.fontApply();
+  const v = $("f-font-val");
+  if (v) v.textContent = fontLabel();
+}
+
+function toggleFontPanel(show) {
+  const p = $("font-panel");
+  const open = show ?? p.hidden;
+  if (open === !p.hidden) return;
+  p.hidden = !open;
+  if (open) {
+    renderFontPanel();
+    placePop("font", $("btn-fleet"));
+    popOpened("font");
+    (p.querySelector('[aria-checked="true"]') || popItems(p)[0])?.focus();
+  } else {
+    popClosed("font");
+  }
+}
+
+function initFontPanel() {
+  $("fp-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-font-id]");
+    if (!b) return;
+    CT.fontSet(b.dataset.fontId);
+    applyFont();
+    toast("Font: " + fontLabel());
+    closePop("font", true);
+  });
+  window.addEventListener("storage", () => { applyFont(); if (!$("font-panel").hidden) renderFontPanel(); });
 }
 
 function toggleFleetMenu(show, focus) {
@@ -11218,6 +11263,9 @@ window.addEventListener("DOMContentLoaded", () => {
   $("f-theme").addEventListener("click", fleetAction(() => toggleThemePanel(true)));
   initThemePanel();
   applyTheme();
+  $("f-font").addEventListener("click", fleetAction(() => toggleFontPanel(true)));
+  initFontPanel();
+  applyFont();
   $("btn-fleet").addEventListener("keydown", (ev) => { if (ev.key === "ArrowDown" && $("f-menu").hidden) { ev.preventDefault(); toggleFleetMenu(true); } });
   $("d-model").addEventListener("click", openSwitch);
   $("sw-close").addEventListener("click", closeSwitch);

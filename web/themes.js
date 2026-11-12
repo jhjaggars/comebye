@@ -292,7 +292,29 @@
   API.set = (choice) => { ls.set(API.KEY, choice); API.apply(); };
   API.setSystem = (mode, id) => { ls.set(mode === "light" ? API.KEY_LIGHT : API.KEY_DARK, id); API.apply(); };
 
+  // The Font setting: localStorage "comebye.font" holds "" (system sans, the default) or one of FONTS' ids;
+  // fontApply puts it on <html data-font> before first paint, like the theme. A stored value this build does
+  // not know is ignored, so the default shows.
+  API.FONTS = [
+    { id: "", name: "System sans", sub: "default" },
+    { id: "serif-heads", name: "Serif headings", sub: "big headings only" },
+    { id: "serif-reading", name: "Serif reading", sub: "briefing, To do, Markdown" },
+    { id: "geist", name: "Geist Sans + Mono", sub: "UI and code" },
+  ];
+  API.KEY_FONT = "comebye.font";
+  API.fontChoice = () => {
+    let v = "";
+    try { v = ls.get(API.KEY_FONT) || ""; } catch (e) { /* no storage: the default */ }
+    return API.FONTS.some((f) => f.id === v) ? v : "";
+  };
+  API.fontApply = () => {
+    const v = API.fontChoice(), el = document.documentElement;
+    if (v) el.setAttribute("data-font", v); else el.removeAttribute("data-font");
+    return v;
+  };
+  API.fontSet = (id) => { try { ls.set(API.KEY_FONT, id); } catch (e) { /* not saved */ } API.fontApply(); };
+  API.fontApply();
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
-  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); });
+  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); });
 })(typeof window !== "undefined" ? window : globalThis);

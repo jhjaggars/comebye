@@ -481,8 +481,8 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
   if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
   const t = (await page.locator("#f-menu button:visible:not(.pop-x)").allInnerTexts()).map((x) => x.trim().replace(/\s+/g, " "));
-  // View (Theme, Notifications), Hub (the briefing item when there is one, History, Pages, Usage, Refresh): the schedule lives on Status; sweep and removals are the Ready to remove page.
-  const want = [/^Theme /, /^Notifications/, /briefing/i, /^History/, /^Pages/, /^Usage/, /^Refresh/];
+  // View (Theme, Font, Notifications), Hub (the briefing item when there is one, History, Pages, Usage, Refresh): the schedule lives on Status; sweep and removals are the Ready to remove page.
+  const want = [/^Theme /, /^Font /, /^Notifications/, /briefing/i, /^History/, /^Pages/, /^Usage/, /^Refresh/];
   if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
   if (/schedule/i.test(t.join("|"))) throw new Error("the schedule is still in the menu");
   const grp = await page.locator("#f-menu .m-grp").allInnerTexts();
