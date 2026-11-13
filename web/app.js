@@ -2282,7 +2282,7 @@ function relActive(d) {
 function relTick() {
   if (document.hidden || !prs.route || prs.route.tab !== "releases") return;
   const age = Date.now() - rls.loadedAt;
-  if (!rls.data && !rls.err ? age > 1500 : age > (relActive(rls.data) ? 4000 : 30000)) loadReleases(false);
+  if (!rls.data && !rls.err ? age > pollMs(1500) : age > pollMs(relActive(rls.data) ? 4000 : 30000)) loadReleases(false);
 }
 
 function relShort(sha) { return (sha || "").slice(0, 7); }
@@ -11782,8 +11782,8 @@ window.addEventListener("DOMContentLoaded", () => {
     if (b && !sw.busy) { sw.thinking = sw.thinking === b.dataset.think ? "" : b.dataset.think; renderSwitch(); }
   });
   $("sw-go").addEventListener("click", submitSwitch);
-  setInterval(relTick, 2000);
   testReady.then(() => {
+    setInterval(relTick, pollMs(2000));
     setInterval(relBackground, pollMs(15000));
     setTimeout(relBackground, TEST_POLL_MS || 4000);
   });

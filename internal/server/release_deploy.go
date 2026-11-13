@@ -92,6 +92,9 @@ func (s *Server) deployEnabled() bool {
 // can see both verdicts. Nothing is executed.
 const simDeployDelay = 2 * time.Second
 
+// simDeployDelayTest is the same in -test-mode: the app polls every 300 ms there, so it sees "running" first.
+const simDeployDelayTest = 800 * time.Millisecond
+
 func (s *Server) deployRecordPath() string {
 	if s.cfg.StateDir == "" {
 		return ""
@@ -212,7 +215,11 @@ func (s *Server) startDeployLocal(by, todo, version string) (DeployRecord, int, 
 // simDeployDelay, and fails for a patch number of 13.
 func (s *Server) simulateDeploy(rec DeployRecord) {
 	defer s.rel.deploying.Store(false)
-	time.Sleep(simDeployDelay)
+	d := simDeployDelay
+	if s.cfg.TestMode {
+		d = simDeployDelayTest
+	}
+	time.Sleep(d)
 	now := time.Now().UTC()
 	rec.Finished = &now
 	if strings.HasSuffix(rec.Version, ".13") {
