@@ -632,3 +632,5 @@
     from: () => pal.from, cheatFrom: () => cheat.from };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
 })();
+
+// probe: a comment, to time the pre-submit tier on a web change (not for merging)
