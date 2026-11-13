@@ -106,6 +106,22 @@ for (const width of [390, 1280]) {
     if (p.length !== 2 || p[0].body.dirty || p[1].body.dirty !== true || p[0].body.agent !== "w91:p1" || p[0].body.name !== "park-me") throw new Error("park posts " + JSON.stringify(p));
     posts.dirtyOnce = false;
   });
+  if (width > 1000) await check("a to-do waiting on a parked agent says parked (it is not gone) at 1280px", async () => {
+    const p2 = await ctx.newPage();
+    await p2.setViewportSize({ width, height: 800 });
+    await p2.route(/\/api\/ledger$/, (r) => r.fulfill({ json: { plans: [], entries: [], marks: [], roles: {} } }));
+    await p2.route(/\/api\/parked\/all$/, (r) => r.fulfill({ json: { hosts: HOSTS } }));
+    await p2.route(/\/api\/todos$/, (r) => r.fulfill({ json: { open: 1, answered: 0, todos: [{ id: "t4f1a000001", kind: "decision", question: "Should the guard also cover egress rules?", state: "open",
+      context: "", agent_name: "netpol-guard-impl", created_at: ago(3), waiting: { id: "uitest/w5:p1", name: "netpol-guard-impl", parked: true, park_id: "pk_aaaaaaaaaa" } }] } }));
+    await p2.goto(base + "/#/todo", { waitUntil: "load" });
+    await p2.waitForSelector(".td-row", { state: "attached", timeout: 15000 });
+    await p2.locator(".td-row:visible").first().click();
+    await p2.waitForSelector(".td-strip .chip.teal", { state: "attached", timeout: 15000 });
+    const g = await p2.evaluate(() => { const c = [...document.querySelectorAll(".td-strip .chip.teal")].find((x) => x.offsetParent); return { t: c && c.textContent, title: c && c.title, scroll: document.documentElement.scrollWidth > innerWidth }; });
+    if (g.t !== "parked" || !/resumed/.test(g.title) || g.scroll) throw new Error(JSON.stringify(g));
+    await p2.screenshot({ path: `${out}/parked-todo-${width}.png` });
+    await p2.close();
+  });
   await browser.close();
 }
 const bad = results.filter((r) => !r.ok).length;

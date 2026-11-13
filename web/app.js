@@ -1698,7 +1698,7 @@ function todoItemHtml(t, pfx) {
     const nx = todos.nxt && todos.nxt !== t.id ? todos.items.find((x) => x.id === todos.nxt) : null;
     const agentId = t.waiting && t.waiting.id;
     const strip = `<div class="td-strip">
-        ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}</span></div>` : ""}
+        ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}${t.waiting && t.waiting.parked ? ' <span class="chip teal" title="Its pane is closed. Whatever is sent to it waits and is delivered when it is resumed.">parked</span>' : ""}</span></div>` : ""}
         ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
         <div><span class="td-sl">Item</span><span class="td-sv"><code class="cp" role="button" tabindex="0" aria-label="Copy item id">${esc(t.id)}</code></span></div>
         ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;

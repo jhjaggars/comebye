@@ -301,6 +301,8 @@ type Server struct {
 	parkOnce sync.Once
 	parks    *park.Store
 	parkErr  error
+	// pcache is the hub's view of every host's park records (parkhub.go).
+	pcache parkCache
 	// switchGap is the pause between the slash commands of one model
 	// switch (tests shrink it).
 	switchGap time.Duration

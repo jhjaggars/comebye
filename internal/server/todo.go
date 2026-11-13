@@ -84,6 +84,10 @@ type TodoAgent struct {
 	// Gone is computed when the item is served: the host is no longer that
 	// incarnation, so the agent that asked is not the one now at that id.
 	Gone bool `json:"gone,omitempty"`
+	// Parked is computed when the item is served: the agent was parked (its pane
+	// is closed). The item stays open; what is sent to it waits for a resume.
+	Parked bool   `json:"parked,omitempty"`
+	ParkID string `json:"park_id,omitempty"`
 }
 
 // TodoDialog is the dialog a hub-blocked item stands for: its fingerprint
@@ -914,6 +918,7 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 	var ids []string
 	var answered []string
 	var early []string // notes for sets settled ahead of Submit
+	parkedNote := ""
 	for _, it := range s.todos.pendingNotices() {
 		if now.Sub(it.Notice.At) > ledger.CallbackTTL {
 			s.todos.settleNotices([]string{it.ID}, todoNoticeExpired)
@@ -929,6 +934,13 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 	}
 	if len(ids) == 0 {
 		return
+	}
+	for _, id := range answered {
+		if it, ok := s.todos.get(id); ok {
+			if it = s.todoParked(it); it.Waiting != nil && it.Waiting.Parked {
+				parkedNote += fmt.Sprintf(" %s is waiting on %s, which is parked: send the answer with `comebye prompt %s --queue`, it is delivered when the agent is resumed.", safeText(id), safeText(it.Waiting.Name), safeText(it.Waiting.Name))
+			}
+		}
 	}
 	target, _ := s.briefCoordinator()
 	if target == nil {
@@ -951,7 +963,7 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 		}
 		var texts []string
 		if len(answered) > 0 {
-			texts = append(texts, todoNoticeText(answered))
+			texts = append(texts, todoNoticeText(answered)+parkedNote)
 		}
 		texts = append(texts, early...)
 		err := send(ctx, target, strings.Join(texts, "\n\n"))
@@ -972,12 +984,31 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 // incarnation the item was added under (the peer was removed, or its name
 // taken over by another machine). Items from before instances never are.
 func (s *Server) todoGone(it Todo) Todo {
-	if it.Waiting == nil || it.Waiting.Instance == "" {
+	if it.Waiting == nil {
 		return it
+	}
+	if it.Waiting.Instance == "" {
+		return s.todoParked(it)
 	}
 	w := *it.Waiting
 	w.Gone = s.hostInstance(idHost(w.ID)) != w.Instance
 	it.Waiting = &w
+	return s.todoParked(it)
+}
+
+// todoParked marks the waiting agent parked: the item is not gone, it waits for a resume.
+func (s *Server) todoParked(it Todo) Todo {
+	if it.Waiting == nil || !it.active() {
+		return it
+	}
+	if pr, ok := parkLookup(s.parkSnapshot(), it.Waiting.ID, it.Waiting.Name); ok && pr.Rec.Parked() {
+		w := *it.Waiting
+		w.Parked, w.ParkID, w.Gone = true, pr.Rec.ID, false
+		if w.Name == "" {
+			w.Name = pr.Rec.Name
+		}
+		it.Waiting = &w
+	}
 	return it
 }
 

@@ -63,3 +63,33 @@ func TestParkResumeCommands(t *testing.T) {
 		t.Fatalf("unknown name: %d %s", code, errb)
 	}
 }
+
+func TestPromptQueueToParkedAgent(t *testing.T) {
+	answers := map[string]answer{
+		"GET /api/agents":     {200, agentsJSON},
+		"GET /api/whoami":     {200, `{"host":"laharl","role":"agent"}`},
+		"GET /api/parked/all": {200, `{"hosts":[{"host":"laharl","online":true,"parked":[{"id":"pk_0123456789","name":"sleepy","kind":"claude","pane_id":"w5:p1"}]}]}`},
+		"POST /api/queue":     {202, `{"queued":{"id":"q1"},"parked":true,"note":"sleepy is parked: your prompt waits (up to 7 days) and is delivered after it is resumed."}`},
+	}
+	e, out, errb, reqs := peerEnv(t, nil, answers)
+	// Without --queue a parked agent is not prompted; the error says what to do.
+	if code := run(e, "prompt", "sleepy", "hello"); code != 1 || !strings.Contains(errb.String(), "is parked") || !strings.Contains(errb.String(), "--queue") {
+		t.Fatalf("no queue: %d %s", code, errb)
+	}
+	if lastReq(reqs, "POST", "/api/queue") != nil {
+		t.Fatal("queued without --queue")
+	}
+	if code := run(e, "prompt", "sleepy", "hello", "--queue"); code != 0 || !strings.Contains(out.String(), "is parked: your prompt waits") {
+		t.Fatalf("queue: %d %s %s", code, out, errb)
+	}
+	var body map[string]string
+	json.Unmarshal([]byte(lastReq(reqs, "POST", "/api/queue").body), &body)
+	if body["agent"] != "laharl/w5:p1" || body["name"] != "sleepy" || body["text"] != "hello" {
+		t.Fatalf("body = %v", body)
+	}
+	// An unknown name is still the usual error.
+	errb.Reset()
+	if code := run(e, "prompt", "nobody", "hi", "--queue"); code != 1 || strings.Contains(errb.String(), "is parked") {
+		t.Fatalf("unknown: %d %s", code, errb)
+	}
+}

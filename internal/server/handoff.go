@@ -575,6 +575,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 	s.advanceLandQueues()
 	s.releaseQueued()
 	s.evalPlans()
+	s.rebindParked(agents)
 	defer s.deliverCallbacks(agents)
 	defer s.flushOutbox(agents)
 	defer s.autoCleanup(agents)

@@ -80,6 +80,12 @@ type QueuedPrompt struct {
 	Held        string     `json:"held,omitempty"`
 	HeldSince   *time.Time `json:"held_since,omitempty"`
 	HeldNoticed bool       `json:"held_noticed,omitempty"`
+	// Parked: the target is a parked agent (its pane is closed); the prompt waits
+	// up to parkQueueTTL for it to resume, then goes to its new pane.
+	Parked bool `json:"parked,omitempty"`
+	// Resumed is when the prompt was handed to the pane its agent resumed in; the
+	// normal wait runs from then, not from when it was queued.
+	Resumed *time.Time `json:"resumed_at,omitempty"`
 }
 
 type queueFile struct {
@@ -206,6 +212,35 @@ func (q *promptQueue) list(agent string, settledToo bool) []QueuedPrompt {
 		out = append(out, it)
 	}
 	return out
+}
+
+// rebind points pending id at another agent id (a parked agent that resumed in a new pane).
+func (q *promptQueue) rebind(id, agent string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.data.Items {
+		it := &q.data.Items[i]
+		if it.ID == id && it.State == QueuePending {
+			now := q.now()
+			it.Agent, it.Parked, it.Resumed = agent, false, &now
+			return q.save()
+		}
+	}
+	return errQueueNoMatch
+}
+
+// markParked records whether the target of pending id is parked.
+func (q *promptQueue) markParked(id string, parked bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.data.Items {
+		it := &q.data.Items[i]
+		if it.ID == id && it.State == QueuePending && it.Parked != parked {
+			it.Parked = parked
+			_ = q.save()
+			return
+		}
+	}
 }
 
 // settle moves pending id to state, queueing the sender notice when
@@ -350,6 +385,9 @@ func queueText(p QueuedPrompt) string {
 // noticeText is the fixed note to a sender whose prompt did not arrive.
 func noticeText(p QueuedPrompt) string {
 	why := "expired after 2 hours"
+	if p.Parked {
+		why = "expired after 7 days: the agent was parked and was not resumed"
+	}
 	if p.State == QueueGone {
 		why = "was dropped because the agent is gone or its pane has another name now"
 	}
@@ -366,6 +404,7 @@ func (s *Server) deliverQueue(agents []herdr.AgentInfo) {
 	}
 	now := q.now()
 	pending := q.list("", true)
+	parkRecs := s.parkSnapshot()
 	headDone := map[string]bool{}
 	for _, it := range pending {
 		if it.State != QueuePending {
@@ -374,7 +413,25 @@ func (s *Server) deliverQueue(agents []herdr.AgentInfo) {
 			}
 			continue
 		}
-		if now.Sub(it.At) > queueTTL {
+		// A parked agent has no pane: its prompts wait (longer) for a resume, and
+		// are never dropped as "gone" because its old pane id is free or reused.
+		parkedTarget := false
+		if pr, ok := parkLookup(parkRecs, it.Agent, it.Name); ok {
+			if pr.Rec.Parked() {
+				parkedTarget = true
+				q.markParked(it.ID, true)
+				it.Parked = true
+			}
+		}
+		ttl := queueTTL
+		if parkedTarget {
+			ttl = parkQueueTTL
+		}
+		since := it.At
+		if it.Resumed != nil {
+			since = *it.Resumed
+		}
+		if now.Sub(since) > ttl {
 			if p, err := q.settle(it.ID, QueueExpired, true); err != nil {
 				logQueueErr(err)
 			} else {
@@ -384,6 +441,9 @@ func (s *Server) deliverQueue(agents []herdr.AgentInfo) {
 		}
 		if it.Held != "" && it.FromID != "" && !it.HeldNoticed && it.HeldSince != nil && now.Sub(*it.HeldSince) > typingNotice {
 			s.sendHeldNotice(agents, it, now)
+		}
+		if parkedTarget {
+			continue
 		}
 		a, replaced := findAgent(agents, it.Agent, it.Name)
 		if replaced {
@@ -612,6 +672,11 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if target == nil {
+		// A parked agent has no pane: the prompt waits for its resume (parkhub.go).
+		if pr, ok := s.parkedTarget(b.Agent, b.Name); ok {
+			s.queueForParked(w, r, b, pr)
+			return
+		}
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "agent_not_found", "message": "unknown agent"})
 		return
 	}
@@ -680,3 +745,24 @@ func (s *Server) handleQueueCancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func queuePath(dir string) string { return filepath.Join(dir, "queue.json") }
+
+// queueForParked queues a prompt for a parked agent. It is delivered after the
+// agent is resumed (to whatever pane it gets); the answer tells the sender so.
+func (s *Server) queueForParked(w http.ResponseWriter, r *http.Request, b queueBody, pr parkedRecord) {
+	c := callerOf(r)
+	if c.tagged && !sameHost(pr.Host, c.host) && !s.isCoordinator(pr.Host+"/"+pr.Rec.PaneID, pr.Rec.Name) {
+		promptForbidden(w)
+		return
+	}
+	p := QueuedPrompt{Agent: pr.Host + "/" + pr.Rec.PaneID, Name: pr.Rec.Name, Text: b.Text, From: s.by(r, ""), Parked: true}
+	if c.agent() {
+		p.FromID = s.replyID(c)
+	}
+	out, dup, err := s.pq.add(p)
+	if err != nil {
+		queueErr(w, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"queued": out, "duplicate": dup, "parked": true, "park_id": pr.Rec.ID,
+		"note": pr.Rec.Name + " is parked: your prompt waits (up to 7 days) and is delivered after it is resumed. Resume it in the app, or with `comebye resume " + pr.Rec.ID + " --host " + pr.Host + "`."})
+}

@@ -1290,7 +1290,7 @@ func cmdHandoff(e *Env, args []string) error {
 func cmdPrompt(e *Env, args []string) error {
 	fs := flag.NewFlagSet("prompt", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	queue := fs.Bool("queue", false, "hold the prompt on the hub and send it once the agent is idle with no question open (up to 2 hours) instead of failing")
+	queue := fs.Bool("queue", false, "hold the prompt on the hub and send it once the agent is idle with no question open (up to 2 hours) instead of failing; for a parked agent it is held up to 7 days and sent after it is resumed")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1320,7 +1320,16 @@ func cmdPrompt(e *Env, args []string) error {
 	}
 	t, err := c.resolve(pos[0])
 	if err != nil {
-		return err
+		// Not running: a parked agent can still be sent a queued prompt, delivered after a resume.
+		pt, ok := parkedTarget(c, pos[0])
+		switch {
+		case ok && *queue:
+			t, err = pt, nil
+		case ok:
+			return fmt.Errorf("%s is parked (its pane is closed): resume it with `comebye resume %s`, or add --queue to hold the prompt until it is resumed", pos[0], pos[0])
+		default:
+			return err
+		}
 	}
 	if c.pane != "" {
 		if w, err := c.getWhoami(); err == nil && w.Agent == t.ID {
@@ -1609,9 +1618,15 @@ func queuePrompt(e *Env, c *client, t target, text string, asJSON bool) error {
 	var r struct {
 		Queued    apiQueued `json:"queued"`
 		Duplicate bool      `json:"duplicate"`
+		Parked    bool      `json:"parked"`
+		Note      string    `json:"note"`
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
 		return err
+	}
+	if r.Parked {
+		fmt.Fprintf(e.Stdout, "Queued %s for %s. %s Withdraw it with `comebye queue --cancel %s`.\n", r.Queued.ID, t.label(), r.Note, r.Queued.ID)
+		return nil
 	}
 	if r.Duplicate {
 		fmt.Fprintf(e.Stdout, "Already queued for %s as %s; nothing new added.\n", t.label(), r.Queued.ID)
@@ -3156,4 +3171,37 @@ func cmdResume(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Note: %s\n", r.Warning)
 	}
 	return nil
+}
+
+// parkedTarget finds a parked agent by name or park id across the hosts, as the
+// target a queued prompt is addressed to (its pane when it was parked).
+func parkedTarget(c *client, arg string) (target, bool) {
+	data, err := c.raw("GET", "/api/parked/all", nil, nil)
+	if err != nil {
+		return target{}, false
+	}
+	var r struct {
+		Hosts []struct {
+			Host   string `json:"host"`
+			Parked []struct {
+				ID, Name string
+				PaneID   string `json:"pane_id"`
+			} `json:"parked"`
+		} `json:"hosts"`
+	}
+	if json.Unmarshal(data, &r) != nil {
+		return target{}, false
+	}
+	var hit []target
+	for _, h := range r.Hosts {
+		for _, p := range h.Parked {
+			if p.PaneID != "" && (p.ID == arg || p.Name == arg) {
+				hit = append(hit, target{ID: h.Host + "/" + p.PaneID, Host: h.Host, Pane: p.PaneID, Name: p.Name})
+			}
+		}
+	}
+	if len(hit) != 1 {
+		return target{}, false
+	}
+	return hit[0], true
 }
