@@ -362,6 +362,8 @@ func (s *Server) handlePagePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Query().Get("v") != "" {
 		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		// The browser replays this for a year: the build that served it is not the build serving later.
+		w.Header().Del("X-App-Version")
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
