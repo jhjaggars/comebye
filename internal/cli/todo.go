@@ -131,7 +131,7 @@ func parseAskOptions(options, recommends []string) ([]map[string]string, []int, 
 func cmdTodo(e *Env, args []string) error {
 	fs := flag.NewFlagSet("todo", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	kind := fs.String("kind", "", "add: decision (default), action (the user has to do something), followup, or release (coordinators: ask the user to approve a release in the app; needs --version and --commit)")
+	kind := fs.String("kind", "", "add: decision (default), action (the user has to do something), followup, review (the user gives a verdict on --page), or release (coordinators: ask the user to approve a release in the app; needs --version and --commit)")
 	version := fs.String("version", "", "add --kind release: the tag to create, vMAJOR.MINOR.PATCH")
 	commit := fs.String("commit", "", "add --kind release: the commit to tag (resolved here with git rev-parse, so run it in the checkout)")
 	ctxFile := fs.String("context", "", "add: the context as markdown: a file, or - for stdin")
@@ -142,6 +142,9 @@ func cmdTodo(e *Env, args []string) error {
 	fs.Var(&recommends, "recommend", "add: the option number(s) you recommend, e.g. 2 or 1,3 (needs --option)")
 	fs.Var(&links, "link", "add: a PR, artifact or report URL, as URL or LABEL=URL (repeatable)")
 	fs.Var(&handoffs, "handoff", "add: a ledger handoff id this is about (repeatable)")
+	pageRef := fs.String("page", "", "add, set create: the Page this is about, pg_ID or pg_ID@vN (default: the newest version)")
+	note := fs.String("note", "", "verdict: the user's note")
+	noteKind := fs.String("note-kind", "", "verdict changes: fix (default), idea or looks_off")
 	all := fs.Bool("all", false, "list: every item, closed ones too")
 	state := fs.String("state", "", "list: only open, answered, done or dropped items")
 	reason := fs.String("reason", "", "drop: why")
@@ -227,6 +230,9 @@ func cmdTodo(e *Env, args []string) error {
 			}
 			body["waiting"] = t.ID
 		}
+		if err := addPageRef(body, *pageRef); err != nil {
+			return err
+		}
 		data, err := c.raw("POST", "/api/todos", nil, body)
 		if err != nil {
 			return err
@@ -295,6 +301,9 @@ func cmdTodo(e *Env, args []string) error {
 				return err
 			}
 			body["waiting"] = t.ID
+		}
+		if err := addPageRef(body, *pageRef); err != nil {
+			return err
 		}
 		data, err := c.raw("POST", "/api/todos", nil, body)
 		if err != nil {
@@ -497,6 +506,33 @@ func cmdTodo(e *Env, args []string) error {
 		}
 		fmt.Fprintf(e.Stdout, "Recorded the user's answer to %s. Relay it to the agent waiting on it, then `comebye todo done %s`.\n", pos[0], pos[0])
 		return nil
+	case "verdict":
+		if len(pos) != 2 || (pos[1] != "good" && pos[1] != "changes") {
+			return usageErr(`want todo verdict ID good|changes [--note "..."] [--note-kind fix|idea|looks_off]`)
+		}
+		data, err := c.raw("POST", "/api/todos/"+url.PathEscape(pos[0])+"/verdict", nil, map[string]string{"verdict": pos[1], "note": *note, "kind": *noteKind})
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		fmt.Fprintf(e.Stdout, "Recorded the verdict on %s (%s); the review is closed.\n", pos[0], pos[1])
+		return nil
+	case "undo":
+		id, err := one("ID")
+		if err != nil {
+			return err
+		}
+		data, err := c.raw("POST", "/api/todos/"+url.PathEscape(id)+"/undo", nil, map[string]string{})
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		fmt.Fprintf(e.Stdout, "%s is open again.\n", id)
+		return nil
 	case "done", "drop":
 		id, err := one("ID")
 		if err != nil {
@@ -516,7 +552,7 @@ func cmdTodo(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "%s: %s.\n", id, map[string]string{"done": "done", "drop": "dropped"}[sub])
 		return nil
 	}
-	return usageErr("unknown todo command %q: want add, list, show, answer, done or drop", sub)
+	return usageErr("unknown todo command %q: want add, list, show, answer, verdict, undo, done or drop", sub)
 }
 
 var fullSHARE = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -532,4 +568,24 @@ func resolveCommit(ref string) (string, error) {
 		return "", usageErr("--commit %q is not a commit here: run this in the checkout, or pass the full 40-character id", ref)
 	}
 	return sha, nil
+}
+
+var cliPageRefRE = regexp.MustCompile(`^(pg_[0-9a-f]{10})(?:@v?(\d+))?$`)
+
+// addPageRef puts --page into an add body.
+func addPageRef(body map[string]any, ref string) error {
+	if ref == "" {
+		return nil
+	}
+	m := cliPageRefRE.FindStringSubmatch(strings.TrimSpace(ref))
+	if m == nil {
+		return usageErr("--page %q: want pg_ID or pg_ID@vN", ref)
+	}
+	pg := map[string]any{"id": m[1]}
+	if m[2] != "" {
+		n, _ := strconv.Atoi(m[2])
+		pg["version"] = n
+	}
+	body["page"] = pg
+	return nil
 }
