@@ -14,7 +14,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 suite="${1:?suite: smoke|drive|rest|visual|full}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"
 
 VISUAL="buttons chips controls fontsetting decisionsets starters"
-ALL="drive stt copycode fontsetting buttons chips controls copytap decisionsets pages starters releaseauto falseblocked autoblock todoanswer sidepanel peers provision provhosts usage markdown"
+# Every script run.sh knows (its "want NAME" lines), so a script added there is in "rest" and "full" without editing this file.
+ALL="$(grep -o 'want [a-z]*;' "$here/../uitest/run.sh" | awk '{print $2}' | tr -d ';' | tr '\n' ' ')"
 rest=""
 for s in $ALL; do
   case " drive $VISUAL " in *" $s "*) ;; *) rest="$rest $s";; esac
