@@ -173,6 +173,9 @@ type Config struct {
 	// finished with no decisions, cleanup lines) wait to go out together in
 	// one digest; 0 sends each as it comes. Urgent notices are never held.
 	DigestEvery time.Duration
+	// AutoRemove lets the hub remove a worker marked ready to remove, without
+	// the user's tap, when every check is clean (see autoremove.go). Hub only.
+	AutoRemove bool
 	// CoordinatorArgs are extra arguments per agent kind that the
 	// Coordinator preset appends to the preset's own (e.g. pi: --auto,
 	// a flag only some Pi installs have).
@@ -279,6 +282,7 @@ type Server struct {
 	outbox         *outbox
 	digests        *digestStore
 	digestEvery    time.Duration
+	autoRemove     bool
 	auto           *autoTodo
 	relay          *blockedRelay
 	rel            *relState
@@ -419,6 +423,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.outbox = openOutbox(outboxPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.digestEvery = cfg.DigestEvery
+			s.autoRemove = cfg.AutoRemove
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
 			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
 				log.Printf("brief schedule: %v (starting with none)", err)
@@ -630,6 +635,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/removals", s.auth(s.handleRemovals))
 	// Removal confirmation is the user's alone, always.
 	s.mux.HandleFunc("POST /api/removals/confirm", s.auth(s.handleConfirmRemovals))
+	s.mux.HandleFunc("POST /api/removals/undo", s.auth(s.handleUndoAutoRemove))
 	// The briefing and the coordinator roles (hub side).
 	s.mux.HandleFunc("GET /api/brief", s.authAgent(s.handleGetBrief))
 	s.mux.HandleFunc("POST /api/brief", s.authAgent(s.handleSetBrief))

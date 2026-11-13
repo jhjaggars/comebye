@@ -133,6 +133,7 @@ func main() {
 		parkRetention  = flag.Duration("park-retention", envDuration("COMEBYE_PARK_RETENTION", server.DefaultParkRetention), "how long a parked agent is kept before the hub proposes removing it (it goes into the Ready to remove review; you confirm, nothing is deleted by retention alone); a pinned (kept) one is never proposed. 0 keeps parked agents for ever. Hub only")
 		quietAfter     = flag.Duration("quiet-after", envDuration("COMEBYE_QUIET_AFTER", server.DefaultQuietAfter), "how long a working handoff worker may write nothing to its session file before the hub marks it quiet (in the app and `comebye agents`) and files one to-do for it, cleared when it writes again; not for a worker with a background task running. 0 turns it off. Hub only")
 		relayBlocked   = flag.Duration("relay-blocked-after", envDuration("COMEBYE_RELAY_BLOCKED_AFTER", server.DefaultRelayBlocked), "how long an agent that has a coordinator must be blocked at a dialog before the hub tells that coordinator (once, and once more when it clears); 0 turns the relay off. Hub only")
+		autoRemove     = flag.Bool("auto-remove", envBool("COMEBYE_AUTO_REMOVE", true), "hub: remove a worker marked ready to remove without the user's tap when every check is clean (its work is in origin's default branch, nothing unpushed or uncommitted, the session answered SAFE, nothing waits on it, it is idle); the removals review lists recent ones for a day with an Undo. -auto-remove=false leaves every removal to the user")
 		digestEvery    = flag.Duration("digest-every", envDuration("COMEBYE_DIGEST_EVERY", 15*time.Minute), "hub: routine notices for the coordinator (a worker landed, finished with no decisions for the user, a handoff the hub cleaned up) wait up to this long and go out together in one digest, also shown in the app's Briefings history; urgent ones (a blocked agent, the user's to-do answers, a landing failure, a report with decisions) always go at once. 0 sends every notice at once")
 		resetTokens    = flag.Int("coordinator-reset-tokens", envInt("COMEBYE_COORDINATOR_RESET_TOKENS", server.DefaultResetTokens), "hub: the context size, in tokens, past which the first briefing after it marks the coordinator's in-place reset due (the hub sends /clear into its pane when it is idle with nothing queued, and a SessionStart hook injects a digest; needs `comebye coordinator install-hook`); 0 turns the automatic reset off. The app's Fresh start works either way")
 		autoTodo       = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on questions past -auto-todo-question-after, one suggestion per question to keep or dismiss; skipped for 10 minutes after the user viewed or typed in the agent); off for none")
@@ -509,6 +510,7 @@ func main() {
 		ParkRetention:          *parkRetention,
 		LandTurnTimeout:        *landTurn,
 		DigestEvery:            *digestEvery,
+		AutoRemove:             *autoRemove,
 		LockErr:                lock.Err,
 	}, client, manager)
 	if allowCap != "" {

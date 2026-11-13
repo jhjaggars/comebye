@@ -255,6 +255,9 @@ type worktreeChecks struct {
 	CI *ledger.CI `json:"ci,omitempty"`
 	// Verified answers checks?verify=SHA,...: where each named commit is.
 	Verified []commitFact `json:"verified,omitempty"`
+	// Origin answers checks?origin=1: the strict comparison with origin's
+	// default branch that an automatic removal relies on (see autoremove.go).
+	Origin *originCheck `json:"origin,omitempty"`
 	// RemoteGone answers checks?remote=1: whether origin no longer has the
 	// branch (nil: not asked, or origin could not be asked).
 	RemoteGone *bool `json:"remote_gone,omitempty"`
@@ -332,6 +335,68 @@ type commitInfo struct {
 	Subject string `json:"subject"`
 }
 
+// originCheck compares a branch with origin's copy of the repository's
+// default branch only, after a fetch that worked: not with the local branch
+// (a checkout's own main may be stale or hold commits nobody pushed).
+type originCheck struct {
+	// Ref is "origin/<default>"; "" when it could not be compared.
+	Ref string `json:"ref,omitempty"`
+	// Fetched: a fetch of origin succeeded, so Ref is as fresh as origin.
+	Fetched bool `json:"fetched"`
+	// Unmerged counts the branch's commits with no equivalent in Ref
+	// (git cherry), -1 when unknown. MergedPR is the number of a merged pull
+	// request whose head is the branch's tip (0: none or not asked).
+	Unmerged int `json:"unmerged_commits"`
+	MergedPR int `json:"merged_pr,omitempty"`
+	// Why says what stopped the comparison.
+	Why string `json:"why,omitempty"`
+}
+
+// checkOrigin fills c.Origin.
+func checkOrigin(ctx context.Context, c *worktreeChecks) {
+	o := &originCheck{Unmerged: -1}
+	c.Origin = o
+	if c.Tip == "" {
+		o.Why = "the branch's tip is unknown"
+		return
+	}
+	res := fetchOrigin(ctx, c.Path)
+	switch {
+	case res.NoRepo:
+		o.Why = "the repository has no origin"
+		return
+	case !res.Fetched:
+		o.Why = "origin could not be fetched"
+		if res.Reason != "" {
+			o.Why += " (" + res.Reason + ")"
+		}
+		return
+	}
+	o.Fetched = true
+	def := defaultBranch(ctx, c.Path)
+	if def == "" || !refExists(ctx, c.Path, "refs/remotes/origin/"+def) {
+		o.Why = "origin has no default branch to compare with"
+		return
+	}
+	ref := "refs/remotes/origin/" + def
+	out, err := runGit(ctx, c.Path, "cherry", "--end-of-options", ref, c.Tip)
+	if err != nil {
+		o.Why = "could not compare with origin/" + def
+		return
+	}
+	o.Ref, o.Unmerged = "origin/"+def, 0
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "+ ") {
+			o.Unmerged++
+		}
+	}
+	if o.Unmerged > 0 {
+		if pr := mergedPRAtTip(ctx, c.Path, c.Branch, c.Tip); pr != nil {
+			o.MergedPR = pr.Number
+		}
+	}
+}
+
 const (
 	maxDetailLines = 100
 	maxDiffBytes   = 128 << 10
@@ -370,8 +435,8 @@ func (c worktreeChecks) Removable() (bool, string) {
 // arrive together, and two fetches into one object store at once can leave a
 // ref pointing at an object that never arrived, after which every fetch fails.
 // A failure is logged at most once a day for each repository.
-func fetchOrigin(ctx context.Context, path string) {
-	originFetcher.Fetch(ctx, path)
+func fetchOrigin(ctx context.Context, path string) gitfetch.Result {
+	return originFetcher.Fetch(ctx, path)
 }
 
 // originFetcher serves fetchOrigin. A fetch within fetchFresh counts for every

@@ -3466,6 +3466,46 @@ await check("remove page: Discard all delivered (N) asks once, lists each item w
   } finally { for (const re of [/\/api\/removals$/, /\/api\/removals\/confirm$/]) await page.unroute(re); }
 });
 
+// Automatic removal: the review lists what the hub removed on its own in the last day, with an Undo that starts a worker on the kept branch.
+await check("remove page: automatically removed workers are listed with the reason and an Undo; Undo posts the entry and the row says so", async () => {
+  const dialogs0 = nativeDialogs;
+  const posts = [];
+  const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
+  const auto = [
+    { entry_id: "h1a", host: "uitest", name: "tidy-docs", repo: "webapp", branch: "docs/tidy", at: ago(12.5), reason: "landed, clean, SAFE", landed: "every commit is in origin/main", worktree_removed: true, can_undo: true },
+    { entry_id: "h1b", host: "uitest", name: "bump-go", repo: "webapp", branch: "chore/go", at: ago(600), reason: "landed, clean, SAFE", landed: "merged as PR #41", worktree_removed: true, can_undo: false },
+  ];
+  const items = [RM_ITEMS()[1]];
+  await page.route(/\/api\/removals$/, (r) => r.fulfill({ json: { removals: items, auto_removed: auto, auto_remove: true } }));
+  await page.route(/\/api\/removals\/undo$/, (r) => {
+    posts.push(JSON.parse(r.request().postData() || "{}"));
+    auto[0].undone_at = new Date().toISOString(); auto[0].undo_note = "a new worker started on branch docs/tidy";
+    r.fulfill({ json: { ok: true, note: auto[0].undo_note } });
+  });
+  try {
+    for (const w of [1440, 390]) {
+      posts.length = 0; delete auto[0].undone_at;
+      await page.setViewportSize({ width: w, height: w < 500 ? 844 : 900 });
+      await page.goto("about:blank");
+      await page.goto(base + "/#/remove", { waitUntil: "load" });
+      await page.waitForSelector("#rv-auto .rv-auto-item", { timeout: 5000 });
+      if ((await page.locator("#rv-list .rv-item").count()) !== 1) throw new Error("the review lost its own row");
+      const t = await page.locator("#rv-auto").innerText();
+      for (const want of ["Removed automatically", "tidy-docs", "docs/tidy", "landed, clean, SAFE", "merged as PR #41", "12 min ago"]) if (!t.includes(want)) throw new Error(`lacks "${want}": ${t}`);
+      if ((await page.locator('#rv-auto [data-act="autoundo"]').count()) !== 1) throw new Error("one Undo expected (the other cannot be undone)");
+      if (!/Undo is not possible/.test(await page.locator('#rv-auto [data-id="h1b"]').innerText())) throw new Error("no note on the row that cannot be undone");
+      await reviewFits();
+      await page.screenshot({ path: `${out}/remove-auto-${w}.png` });
+      await page.locator('#rv-auto [data-act="autoundo"]').click();
+      await page.waitForFunction(() => /Undone/.test(document.getElementById("rv-auto").innerText), null, { timeout: 5000 });
+      if (JSON.stringify(posts) !== '[{"entry_id":"h1a"}]') throw new Error("body " + JSON.stringify(posts));
+      if ((await page.locator('#rv-auto [data-act="autoundo"]').count()) !== 0) throw new Error("Undo stays after it was done");
+      await reviewFits();
+    }
+    if (nativeDialogs !== dialogs0) throw new Error("a native dialog opened");
+  } finally { for (const re of [/\/api\/removals$/, /\/api\/removals\/undo$/]) await page.unroute(re); }
+});
+
 // The safety answers: how old each is, what an UNSAFE named as the hub re-checked it, and a Re-ask per item.
 const ASK_ITEMS = () => {
   const hoursAgo = (h) => new Date(Date.now() - h * 3600e3).toISOString();

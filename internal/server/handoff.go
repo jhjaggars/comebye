@@ -650,6 +650,9 @@ func (s *Server) RunLedger(ctx context.Context) {
 			// look at landed entries.
 			agents := s.fleet.Agents()
 			s.autoCleanup(agents)
+			if s.autoRemove {
+				go s.autoRemoveStep(ctx, time.Now())
+			}
 			s.flushOutbox(agents)
 		case ev, ok := <-events:
 			if !ok {
@@ -1144,7 +1147,7 @@ func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []*removal{}
 	}
-	writeJSON(w, map[string]any{"removals": items})
+	writeJSON(w, map[string]any{"removals": items, "auto_removed": s.recentAutoRemovals(time.Now()), "auto_remove": s.autoRemove})
 }
 
 // confirmBody is the JSON body of a removal confirmation.
