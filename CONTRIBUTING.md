@@ -91,6 +91,12 @@ baseline that always works.
 
 ## Notes
 
+- **The playbook has a word limit.** `internal/playbook/playbook.md` plus the
+  built-in handoff template are read in full by every coordinator and worker.
+  `TestPlaybookWordLimit` (`internal/server/wordlimit_test.go`) fails when the
+  two together pass `maxPlaybookWords`, so a change that adds rules has to
+  prune or move detail into `docs/`. Raise the ceiling only on purpose, in a
+  change that says why.
 - The only third-party code is the two vendored browser libraries in
   `web/vendor/`; its README has their versions, hashes, licenses and how to
   update them (`go test` checks the hashes).
