@@ -1485,6 +1485,40 @@
     .rv-foot { display: flex; align-items: center; gap: var(--sp-10); justify-content: space-between; }
     .rv-foot .rv-route { flex: 1 1 0; min-width: 0; }
     .rv-foot .td-acts .td-drop { margin-left: 0; }
+    /* split review mode: the Page beside the item (tabs on a phone). On the desktop it covers the To do page, on a phone the screen. */
+    #p-todo { position: relative; }
+    .rs { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+    .rs[hidden] { display: none; }
+    #p-todo > .rs { position: absolute; inset: 0; z-index: var(--z-view); } /* above the page header (z-bar) */
+    .rs.on-phone { position: fixed; inset: 0; z-index: var(--z-screen); padding-bottom: var(--safe-bottom); }
+    .rs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-8); min-height: calc(var(--hit-48) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-8) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
+    .rs-back { flex: none; display: inline-flex; align-items: center; gap: var(--sp-4); }
+    .rs-title { margin: 0; min-width: 0; flex: 0 1 auto; font-size: var(--fs-16); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rs-bar .pgs-pill { flex: none; }
+    .rs-open { flex: none; margin-left: auto; font-size: var(--fs-14); font-weight: 600; color: var(--blue); text-decoration: none; }
+    .rs-tabs { display: none; flex: none; }
+    .rs-n { margin-left: var(--sp-6); padding: 0 var(--sp-6); border-radius: var(--r-pill); background: var(--blue); color: var(--on-accent); font-size: var(--fs-11); line-height: 16px; }
+    .rs-tabs button[aria-pressed="true"] .rs-n { background: var(--on-accent); color: var(--blue); }
+    .rs-cols { flex: 1 1 0; min-height: 0; display: flex; }
+    .rs-page { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+    .rs-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+    .rs-side { flex: 0 0 clamp(22rem, 34%, 30rem); min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border); }
+    .rs-side > .td-item { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; border: 0; margin: 0; }
+    .rs-side .td-panel { flex: 1 1 0; min-height: 0; padding-bottom: var(--sp-12); }
+    .rs-side .td-dh { display: flex; flex-direction: column; flex: none; gap: var(--sp-6); padding: var(--sp-12) 0 var(--sp-4); }
+    .rs-side .td-form { flex: none; }
+    .rs-side .td-dtitle { font-size: var(--fs-16); }
+    .rs-side .td-strip { display: none; } /* the meta line under the title says who waits and since when */
+    .rs-side .td-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+    .rs-notes { margin: var(--sp-8) 0; padding: var(--sp-6) var(--sp-10); border-radius: var(--r-8); background: var(--chip-blue); color: var(--blue); font-size: var(--fs-13); }
+    .rs-notes[hidden] { display: none; }
+    @media (max-width: 1099px) {
+      .rs-tabs { display: inline-flex; margin-left: auto; }
+      .rs-open { margin-left: 0; }
+      .rs-backt { display: none; }
+      .rs-side { flex: 1 1 0; border-left: 0; }
+      .rs[data-tab="page"] .rs-side, .rs[data-tab="decide"] .rs-page { display: none; }
+    }
     .rel { display: flex; flex-direction: column; gap: var(--sp-8); margin: var(--sp-6) 0; min-width: 0; }
     .rel-h { display: flex; align-items: center; gap: var(--sp-8); font-size: var(--fs-14); }
     .rel-state { padding: 1px var(--sp-8); border-radius: var(--r-8); font-size: var(--fs-11); font-weight: 600; background: var(--chip-blue); color: var(--blue); }

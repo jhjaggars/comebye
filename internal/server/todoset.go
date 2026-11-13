@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -609,6 +610,17 @@ func (s *Server) handleTodoSubmit(w http.ResponseWriter, r *http.Request) {
 		via = "relay"
 	}
 	by := s.by(r, "")
+	// An optional note goes with the answer: the user's comments on the Page the set is about (split review mode).
+	var body struct {
+		Note string `json:"note"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+	}
+	note := block(body.Note, todoMaxNote)
 	it, err := s.todos.mutate(r.PathValue("id"), func(it *Todo) error {
 		if it.Set == nil {
 			return reqErr(http.StatusBadRequest, "not_a_set", "that item is not a decision set")
@@ -644,7 +656,11 @@ func (s *Server) handleTodoSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		now := s.todos.now()
 		ts.Result, ts.SubmittedAt = res, &now
-		text := block(ts.setMarkdown(true), todoMaxAnswer)
+		md := ts.setMarkdown(true)
+		if note != "" {
+			md += "\n\nThe user's notes (their own words):\n\n" + note
+		}
+		text := block(md, todoMaxAnswer)
 		ts.EarlyPending = nil
 		it.Set = ts
 		it.State, it.Answer = TodoAnswered, &TodoAnswer{Text: text, By: by, Via: via, At: now}

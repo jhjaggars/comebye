@@ -287,3 +287,19 @@ func TestSetPlanDropFailsHandoffs(t *testing.T) {
 		t.Fatalf("entry = %+v", g)
 	}
 }
+
+// Submit takes an optional note (the user's comments on the Page, from the split review mode); it goes into the
+// answer text, and a body that is not JSON is refused.
+func TestSetSubmitNoteGoesWithTheAnswer(t *testing.T) {
+	s, _, _ := todoServer(t)
+	it := setAdd(t, s, setBody)
+	putDraft(s, it.ID, `{"accept_suggestions":true,"choices":{"D1":{"option":1,"confirmed":true},"D3":{"option":1,"confirmed":true},"D6":{"option":1,"confirmed":true}}}`)
+	if w := do(s, "POST", "/api/todos/"+it.ID+"/submit", userHdr, `not json`); w.Code != 400 {
+		t.Fatalf("bad body = %d %s", w.Code, w.Body)
+	}
+	w := do(s, "POST", "/api/todos/"+it.ID+"/submit", userHdr, `{"note":"On the Page (v2):\n- \"the quote\": please check this"}`)
+	g := todoOf(t, w.Body.Bytes())
+	if w.Code != 200 || g.Answer == nil || !strings.Contains(g.Answer.Text, "please check this") || !strings.Contains(g.Answer.Text, "own words") {
+		t.Fatalf("submit with a note = %d %+v", w.Code, g.Answer)
+	}
+}
