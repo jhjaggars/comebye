@@ -56,6 +56,14 @@ func New(client *herdr.Client, notifier *Notifier) *Manager {
 	return m
 }
 
+// SetDebounce sets how long a burst of refresh requests is coalesced (400 ms by default). Tests set it low so a
+// Refresh does not cost 400 ms. Call before Run.
+func (m *Manager) SetDebounce(d time.Duration) {
+	m.mu.Lock()
+	m.debounce = d
+	m.mu.Unlock()
+}
+
 // SetPush enables Web Push delivery and foreground suppression (which
 // also applies to ntfy). Call before Run.
 func (m *Manager) SetPush(p Pusher, v Viewer) {

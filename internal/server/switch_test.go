@@ -50,6 +50,7 @@ func switchServer(t *testing.T, agents []herdr.AgentInfo) (*Server, *fakeLaunchH
 	fh, client := startFakeLaunchHerdr(t)
 	fh.set(func(f *fakeLaunchHerdr) { f.agents = agents })
 	m := state.New(client, nil)
+	m.SetDebounce(5 * time.Millisecond)
 	m.SetHost("desk")
 	m.Refresh()
 	for deadline := time.Now().Add(5 * time.Second); len(m.Agents()) < len(agents) && time.Now().Before(deadline); {

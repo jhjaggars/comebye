@@ -37,6 +37,7 @@ var userHdr = map[string]string{"Tailscale-User-Login": "me@example.com"}
 func managerWith(t *testing.T, client *herdr.Client, host string, n int) *state.Manager {
 	t.Helper()
 	m := state.New(client, nil)
+	m.SetDebounce(5 * time.Millisecond) // the default 400 ms would be the whole cost of this helper
 	m.SetHost(host)
 	waitAgents(t, m, n)
 	return m

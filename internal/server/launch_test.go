@@ -248,6 +248,7 @@ func TestLaunchOptions(t *testing.T) {
 		}
 	})
 	m := state.New(client, nil)
+	m.SetDebounce(5 * time.Millisecond)
 	m.SetHost("desk")
 	m.Refresh()
 	deadline := time.Now().Add(5 * time.Second)
