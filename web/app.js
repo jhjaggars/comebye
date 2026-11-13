@@ -6514,7 +6514,7 @@ new MutationObserver(sendPageTheme).observe(document.documentElement, { attribut
 // viewer shows, and the hub sends them to that page's publisher. Page text is
 // put in the DOM with textContent only. See docs/security.md.
 const PGC = { quote: 500, around: 80, note: 1000, max: 20, burst: 10 };
-const pgc = { id: "", ver: 0, title: "", by: "", sel: null, composing: false, busy: false, drafts: new Map(), seen: [], sent: [] };
+const pgc = { id: "", ver: 0, title: "", by: "", sel: null, composing: false, busy: false, drafts: new Map(), seen: [], sent: [], revs: 0, chg: false };
 
 function pgcClean(s, n) {
   return String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
@@ -6531,6 +6531,32 @@ function pageSelectionMessage(d) {
   return { quote: pgcClean(d.quote, PGC.quote), before: pgcClean(d.before, PGC.around), after: pgcClean(d.after, PGC.around) };
 }
 
+// {type:"comebye-revisions", v:1, count}: how many blocks of the page carry a
+// data-revision mark (an agent's note of what it changed). Exactly those keys.
+function pageRevisionsMessage(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+  const keys = Object.keys(d);
+  if (keys.length !== 3 || !["type", "v", "count"].every((k) => keys.includes(k))) return null;
+  if (d.type !== "comebye-revisions" || d.v !== 1 || !Number.isInteger(d.count) || d.count < 0 || d.count > 10000) return null;
+  return { count: d.count };
+}
+
+// The Page menu offers to outline what the agent marked as changed in this version.
+function pgcChgItem() {
+  const b = $("pgs-chg");
+  if (!b) return;
+  b.hidden = !(pgc.revs > 0 && pgc.ver > 1);
+  b.textContent = pgc.chg ? "Hide change highlights" : "Highlight what changed in v" + pgc.ver;
+}
+
+function pgcToggleChanges() {
+  const fr = pgcFrame();
+  if (!fr || !fr.contentWindow) return;
+  pgc.chg = !pgc.chg;
+  fr.contentWindow.postMessage({ type: "comebye-changes", v: 1, on: pgc.chg, since: Math.max(0, pgc.ver - 1) }, "*");
+  pgcChgItem();
+}
+
 function pgcFrame() { return document.querySelector("#pgs-view iframe.pgs-frame"); }
 
 window.addEventListener("message", (e) => {
@@ -6542,6 +6568,8 @@ window.addEventListener("message", (e) => {
   pgc.seen = pgc.seen.filter((t) => now - t < 1000);
   if (pgc.seen.length >= PGC.burst) return;
   pgc.seen.push(now);
+  const rv = pageRevisionsMessage(e.data);
+  if (rv) { pgc.revs = rv.count; pgcChgItem(); return; }
   const m = pageSelectionMessage(e.data);
   if (!m) return;
   if (pgc.composing) return; // keep the text being commented while the user types
@@ -6553,9 +6581,10 @@ function pgcKey() { return pgc.id + "/" + pgc.ver; }
 function pgcItems() { return pgc.drafts.get(pgcKey()) || []; }
 
 function pgcOpen(p, ver) {
-  Object.assign(pgc, { id: p.id, ver, title: p.title, by: p.by, sel: null, composing: false, busy: false, seen: [], sent: [] });
+  Object.assign(pgc, { id: p.id, ver, title: p.title, by: p.by, sel: null, composing: false, busy: false, seen: [], sent: [], revs: 0, chg: false });
   pgcRender();
   pgcLoad();
+  pgcChgItem();
 }
 
 // The comments already sent on this page, with their status (hub: open, or
@@ -6766,6 +6795,7 @@ function initPages() {
     if (ev.target.closest("#pgs-menub")) { pgsPop("pgsmenu"); return; }
     if (ev.target.closest("#pgs-infob")) { pgsPop("pgsinfo"); return; }
     if (ev.target.closest("#pgs-focus")) { pagesFocus(!pgs.focus); return; }
+    if (ev.target.closest("#pgs-chg")) { pgsPop("pgsmenu", false); pgcToggleChanges(); return; }
     if (ev.target.closest("#pgs-del")) { pgsPop("pgsmenu", false); pagesDelete(); return; }
     if (ev.target.closest("#pgs-new")) { pgs.reload = true; renderPageView(); return; }
     if (!ev.target.closest("#pgs-copy")) return;

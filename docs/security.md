@@ -497,6 +497,12 @@ would be you. So a page never runs as the app:
     the quoted text (the CSS Custom Highlight API: no DOM change) and scrolls to
     it. The reporter takes them only from `window.parent`, at most 40 quotes of
     500 characters, as text to find (regex-escaped), never as markup.
+  - **Revision marks.** The page may also tell the app how many blocks carry a
+    `data-revision` mark: `{type: "comebye-revisions", v: 1, count}` (an integer
+    from 0 to 10000, exactly those three keys, same frame and rate checks). The
+    app answers with `{type: "comebye-changes", v: 1, on, since}` (a boolean and an
+    integer), which the reporter takes only from the window's parent; it sets an
+    attribute on the marked blocks in the page's own memory, nothing is stored.
   - **Rendering.** Page text is put in the DOM with `textContent` only, and goes
     to the agent as a quoted excerpt that the message says is page text, not an
     instruction. The endpoint is the user's alone (an agent token is refused)

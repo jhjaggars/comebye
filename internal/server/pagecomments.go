@@ -52,7 +52,14 @@ var a=m.index,b=a+m[0].length,i=nodes.length-1,j,r=document.createRange();while(
 r.setStart(nodes[i].n,a-nodes[i].s);r.setEnd(nodes[j].n,b-nodes[j].s);return r}
 var st;function marks(qs){if(!window.CSS||!CSS.highlights||typeof Highlight!=="function")return;if(!st){st=document.createElement("style");st.textContent="::highlight(comebye-comment){background-color:rgba(255,196,0,.45);color:inherit}";document.head.appendChild(st)}
 var rs=[];qs.forEach(function(q){try{var r=find(q);if(r)rs.push(r)}catch(e){}});if(rs.length)CSS.highlights.set("comebye-comment",new Highlight(...rs));else CSS.highlights.delete("comebye-comment")}
+function revs(){return document.querySelectorAll("[data-revision]")}
+function revn(el){var m=/^v?(\d{1,6})$/.exec(el.getAttribute("data-revision")||"");return m?+m[1]:0}
+function announce(){try{parent.postMessage({type:"comebye-revisions",v:1,count:Math.min(revs().length,10000)},"*")}catch(e){}}
+var cs;function changes(on,since){if(!cs){cs=document.createElement("style");cs.textContent="[data-comebye-changed]{outline:2px dashed var(--blue,#3b82f6);outline-offset:3px;border-radius:2px}";document.head.appendChild(cs)}
+Array.prototype.forEach.call(revs(),function(el){if(on&&revn(el)>since)el.setAttribute("data-comebye-changed","");else el.removeAttribute("data-comebye-changed")})}
+announce();window.addEventListener("load",announce);
 window.addEventListener("message",function(e){if(e.source!==parent)return;var d=e.data;if(!d||typeof d!=="object"||d.v!==1)return;
+if(d.type==="comebye-changes"){if(typeof d.on==="boolean"&&Number.isInteger(d.since)&&d.since>=0&&d.since<=100000)changes(d.on,d.since);return}
 if(d.type==="comebye-marks"&&Array.isArray(d.quotes))marks(d.quotes.slice(0,40).filter(function(q){return typeof q==="string"}).map(function(q){return q.slice(0,500)}));
 else if(d.type==="comebye-reveal"&&typeof d.quote==="string"){try{var r=find(d.quote.slice(0,500)),el=r&&r.startContainer.parentElement;if(el)el.scrollIntoView({block:"center",behavior:"smooth"})}catch(e){}}})})();`
 

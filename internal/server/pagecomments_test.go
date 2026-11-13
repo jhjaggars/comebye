@@ -143,7 +143,7 @@ func TestPageServedWithReporter(t *testing.T) {
 	p := commentsPage(t, s)
 	w := do(s, "GET", "/p/"+p.ID, userHdr, "")
 	b := w.Body.String()
-	if w.Code != 200 || strings.Count(b, "comebye-selection") != 1 || strings.Index(b, "comebye-selection") > strings.LastIndex(b, "</body>") {
+	if w.Code != 200 || strings.Count(b, "comebye-selection") != 1 || !strings.Contains(b, "comebye-revisions") || strings.Index(b, "comebye-selection") > strings.LastIndex(b, "</body>") {
 		t.Fatalf("served = %d %s", w.Code, b)
 	}
 	// The stored source is untouched.

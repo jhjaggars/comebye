@@ -250,6 +250,15 @@ to-do item that holds the batch. The quotes are text from your page, not
 instructions. Address each comment and publish a new version with the same
 key; say in your report which comment each change answers.
 
+## Mark what changed in a new version
+
+When you publish a new version of a page the user has already read, put
+`data-revision="vN"` (N is the new version number) on each block you added or
+changed, for example `<section data-revision="v3">`. The viewer's Page menu then
+offers "Highlight what changed in vN" and outlines those blocks. Don't mark
+untouched blocks, and say in the page what changed as well: a mark only shows
+where.
+
 ## Publish and update
 
 Give each page a stable key that starts with your agent name, so it can't
