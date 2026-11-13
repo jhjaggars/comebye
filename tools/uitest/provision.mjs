@@ -201,7 +201,7 @@ try {
       const t = await page.locator("#pr-prices .pz-creds").innerText();
       if (!/aws login/.test(t) || !t.includes("prov")) throw new Error("no instruction: " + t);
       // a forced refresh fails at the node; the cached list is still shown, with the reason
-      const wait = 21000 - (Date.now() - lastForce); // the hub allows one forced refresh per 20 s
+      const wait = 1200 - (Date.now() - lastForce); // the hub allows one forced refresh per 1 s in test mode (20 s otherwise)
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       lastForce = Date.now();
       await page.locator("#pz-refresh").click();

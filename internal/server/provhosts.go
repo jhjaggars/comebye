@@ -223,7 +223,7 @@ func (s *Server) askHosts(ctx context.Context, node string, force bool) {
 		}
 	}
 	fresh := c.View != nil && now.Sub(c.At) < ttl
-	if fresh && !force || force && !c.Forced.IsZero() && now.Sub(c.Forced) < 2*time.Second {
+	if fresh && !force || force && !c.Forced.IsZero() && now.Sub(c.Forced) < s.prov.hostsGap {
 		s.prov.mu.Unlock()
 		return
 	}

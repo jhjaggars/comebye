@@ -349,6 +349,9 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s.typing = newTypingTracker()
 	s.rel = newRelState()
 	s.prov = newProvState()
+	if cfg.TestMode { // browser tests: a forced refresh may repeat after a moment, not after 20 s
+		s.prov.catGap, s.prov.hostsGap = time.Second, 300*time.Millisecond
+	}
 	if cfg.Provision.Tool != nil {
 		s.pjobs = openProvJobs(cfg.StateDir)
 		s.phosts = provision.OpenHostBook(cfg.StateDir)

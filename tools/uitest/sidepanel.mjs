@@ -360,7 +360,7 @@ for (const width of [1440, 390]) {
     let reads = 0;
     const count = (req) => { if (/\/(diff|file)(\?|$)/.test(req.url())) reads++; };
     page.on("request", count);
-    await sleep(7000); // two polls and more would have been made without the stream
+    await sleep(1500); // the panel polls every 300 ms in test mode: a dozen reads would show if the stream did not hold them back
     page.off("request", count);
     if (reads > 0) throw new Error(`${reads} reads while nothing changed and the push stream was up`);
     const t0 = Date.now();
@@ -376,8 +376,7 @@ for (const width of [1440, 390]) {
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector("#detail", { state: "visible" }); // on a phone the reload keeps the agent open
     await page.waitForSelector("#sp-body details.df", { timeout: 10000 });
-    await sleep(600);
-    if ((await page.locator("#sp-live").getAttribute("data-push")) !== "0") throw new Error("still says pushed");
+    await page.waitForSelector('#sp-live[data-push="0"]', { timeout: 5000 });
     fs.appendFileSync(path.join(wt, "c.go"), "// polled-marker\n");
     await page.waitForFunction(() => /polled-marker/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 9000 });
     await page.unroute(/\/panel\/events/);

@@ -192,7 +192,7 @@ try {
       const t = await page.locator("#ph-card").innerText();
       if (!/destroyed/.test(t) || !/data disk was kept/.test(t) || /Destroy…/.test(t)) throw new Error(t);
       const fin = t.match(/final bill ≈ (\$[\d.]+)/)[1];
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 400)); // the hub holds back a repeated refresh for 300 ms in test mode
       await page.locator("#ph-refresh").click();
       await page.waitForFunction(() => !/Refreshing/.test(document.querySelector("#ph-card").innerText), null, { timeout: 20000 });
       if (!(await page.locator("#ph-card").innerText()).includes(fin)) throw new Error("the final bill moved from " + fin);
@@ -292,7 +292,7 @@ try {
     const r = await j("POST", "/api/provision", { spec: { ...spec, name: "phone1" }, region: "us-east-2", key: "uitest-key-0002", ack: true }, { "X-Comebye-Csrf": await csrf() });
     for (let i = 0; i < 100; i++) { const s = await j("GET", "/api/provision/jobs/" + r.body.id); if (s.body.state === "ok") break; await new Promise((x) => setTimeout(x, 100)); }
     fs.writeFileSync(path.join(wdir, "status.json"), status({ name: "phone1" }));
-    await new Promise((x) => setTimeout(x, 2500)); // the hub holds back a repeated refresh for 2 s
+    await new Promise((x) => setTimeout(x, 400)); // the hub holds back a repeated refresh for 300 ms in test mode
     await j("GET", "/api/provision/hosts?refresh=1");
     const { browser: b, page } = await launch({ width: 390, height: 844, dark });
     browser = b;

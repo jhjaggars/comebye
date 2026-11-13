@@ -2607,7 +2607,7 @@ const serverTodo = (id) => page.evaluate(async (id) => { const d = await fetch("
 // One to-do per call (the server rate-limits adds to 20 a minute); two when the queue's next line is under test.
 const openChoices = async (q, two = false) => {
   await desktopList(1280, "#/todo");
-  await page.evaluate(() => { CHOICE_UNDO_MS = 1200; });
+  await page.evaluate(() => { CHOICE_UNDO_MS = 700; });
   const ids = await postTodos([{ question: q, kind: "decision", context: CHOICE_CTX }, ...(two ? [{ question: q + " (other)", kind: "action" }] : [])]);
   const it = `#pt-body .td-item[data-id="${ids[0]}"]`;
   await page.locator(it + " > .td-row").click();
@@ -2626,14 +2626,14 @@ await check("to-do choices (desktop): a numbered list in the context becomes cho
   if ((await box.inputValue()) !== "ok 1+2" || (await page.locator(it + " .td-opt.on").count()) !== 2) throw new Error("two picks: " + await box.inputValue());
   await page.locator(it + " .td-opt[data-n='2']").click({ modifiers: ["Shift"] });
   if ((await box.inputValue()) !== "ok 1") throw new Error("unpick: " + await box.inputValue());
-  await page.waitForTimeout(1600);
+  await page.waitForTimeout(1000); // past the 700 ms undo window
   if ((await serverTodo(ids[0])).state !== "open") throw new Error("a shift-click sent the answer");
   // Typed text that did not come from a button is not replaced and not sent.
   await box.fill("because the old key leaks");
   await page.locator(it + " .td-opt[data-n='3']").click();
   if ((await box.inputValue()) !== "ok 3 because the old key leaks") throw new Error("front: " + await box.inputValue());
   if (!/to the front of your answer/.test(await page.locator("#toast").innerText())) throw new Error("no toast saying so: " + await page.locator("#toast").innerText());
-  await page.waitForTimeout(1600);
+  await page.waitForTimeout(1000); // past the 700 ms undo window
   if ((await serverTodo(ids[0])).state !== "open") throw new Error("typed text was sent by a choice click");
   await box.fill("");
   if (!(await page.locator("#pt-body .td-nx").count())) throw new Error("no Next up mark");
@@ -2662,7 +2662,7 @@ await check("to-do choices: Undo inside the window puts the item back, with its 
   await page.waitForFunction((i) => { const e = document.querySelector(`#pt-body .td-item[data-id="${i}"]`); return todos.items.find((x) => x.id === i)?.state === "open" && e && !e.classList.contains("answered"); }, ids[0], { timeout: 2000 });
   await page.locator(it + " > .td-row").evaluate((r) => { if (!r.closest(".td-item").classList.contains("open")) r.click(); });
   if ((await page.locator(it + " .td-text").inputValue()) !== "ok 1") throw new Error("draft after undo: " + await page.locator(it + " .td-text").inputValue());
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(1000); // past the undo window
   if ((await serverTodo(ids[0])).state !== "open") throw new Error("an undone choice was sent");
   await dropTodos(ids);
 });
@@ -4068,22 +4068,24 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         });
         const look = (sel) => p.evaluate((sel) => { const cs = getComputedStyle(document.querySelector(sel)); return [cs.backgroundColor, cs.borderTopColor, cs.transform, cs.cursor].join("|"); }, sel);
         const bad = [];
+        // The look once its transition has finished: two reads 40 ms apart agree.
+        const still = async (sel) => { let prev = ""; for (let i = 0; i < 25; i++) { const v = await look(sel); if (v === prev) return v; prev = v; await p.waitForTimeout(40); } return prev; };
         for (const sel of ["#zz-a", "#zz-b", "#zz-c"]) {
-          await p.mouse.move(700, 600); await p.waitForTimeout(250);
-          const rest = await look(sel);
-          await p.hover(sel); await p.waitForTimeout(250);
-          const hover = await look(sel);
-          await p.mouse.down(); await p.waitForTimeout(250);
-          const press = await look(sel);
+          await p.mouse.move(700, 600);
+          const rest = await still(sel);
+          await p.hover(sel);
+          const hover = await still(sel);
+          await p.mouse.down();
+          const press = await still(sel);
           await p.mouse.up();
           if (hover === rest) bad.push(`${sel}: hover looks like rest`);
           if (press === hover) bad.push(`${sel}: pressed looks like hover`);
           if (!rest.endsWith("|pointer")) bad.push(`${sel}: cursor is not pointer`);
         }
-        await p.mouse.move(700, 600); await p.waitForTimeout(250);
-        const selRest = await look("#zz-b");
-        await p.hover("#zz-a"); await p.waitForTimeout(250);
-        const plainHover = await look("#zz-a");
+        await p.mouse.move(700, 600);
+        const selRest = await still("#zz-b");
+        await p.hover("#zz-a");
+        const plainHover = await still("#zz-a");
         if (plainHover.split("|").slice(0, 2).join() === selRest.split("|").slice(0, 2).join()) bad.push("hovered plain option looks like the selected one");
         // Only (hover: hover) devices get hover rules: none outside such a media block.
         const ok = await p.evaluate(() => {

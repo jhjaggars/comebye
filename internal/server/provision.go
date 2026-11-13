@@ -73,10 +73,13 @@ type provState struct {
 	cats  map[string]*provCat
 	hosts map[string]*provHostsCache
 	now   func() time.Time
+	// The least time between two forced refreshes of a price list, and of a
+	// node's host list (-test-mode makes both short).
+	catGap, hostsGap time.Duration
 }
 
 func newProvState() *provState {
-	return &provState{nodes: map[string]*provNode{}, cats: map[string]*provCat{}, hosts: map[string]*provHostsCache{}, now: time.Now}
+	return &provState{nodes: map[string]*provNode{}, cats: map[string]*provCat{}, hosts: map[string]*provHostsCache{}, now: time.Now, catGap: provRefreshGap, hostsGap: 2 * time.Second}
 }
 
 // ---- the peer's side ----
@@ -555,7 +558,7 @@ func (s *Server) handleProvisionRefresh(w http.ResponseWriter, r *http.Request) 
 		key := catKey(via, kind, b.Region, b.Score)
 		s.prov.mu.Lock()
 		c := s.prov.cats[key]
-		recent := c != nil && s.prov.now().Sub(c.Forced) < provRefreshGap
+		recent := c != nil && s.prov.now().Sub(c.Forced) < s.prov.catGap
 		s.prov.mu.Unlock()
 		if recent {
 			relErr(w, http.StatusTooManyRequests, "too_soon", "prices were refreshed a moment ago: wait a few seconds")
