@@ -1774,7 +1774,9 @@ async function reviewVerdict(id, verdict, item) {
   if (!t || t.state !== "open" || todos.rvBusy.has(id)) return;
   const box = item && item.querySelector(".rv-text");
   const st = todos.rv.get(id);
-  const body = { verdict, note: box ? box.value.trim() : todoDraft(id).trim() };
+  const note = rsJoin(t, box ? box.value.trim() : todoDraft(id).trim(), RS_LIMIT.note);
+  if (note === null) return;
+  const body = { verdict, note };
   if (verdict === "changes") body.kind = (st && st.kind) || "fix";
   const next = todoNextOpen(id, todoOrder().map((x) => x.id));
   const hadFocus = todoHasFocus();
@@ -1792,6 +1794,7 @@ async function reviewVerdict(id, verdict, item) {
   todos.rvBusy.delete(id);
   todos.rv.delete(id);
   todos.drafts.delete(id); saveTodoDrafts();
+  rsNotesSent(t);
   if (todos.openId === id) { todos.openId = next; if (next) todos.lastId = next; todos.follow = hadFocus; }
   const i = todos.items.findIndex((x) => x.id === id);
   if (i >= 0 && r && r.todo) todos.items[i] = r.todo;
@@ -1816,6 +1819,123 @@ async function reviewUndo(id) {
   todos.loadedAt = 0;
   await loadTodos();
 }
+
+// ---- split review mode (issue #17, slice 3b) ----
+// An item about a Page (a review, or a decision set from a report) opens with the Page beside it: the Page in a frame on
+// the left, the item's own panel (the verdict, the decisions or the answer box) on the right. On a phone the two are
+// tabs of one full-screen card. The frame opens the version the item was filed with (t.page.version). The Pages
+// comments strip and tray (pgc*) work on that frame, and what the user selected and noted goes with the answer: into
+// the verdict's note, the answer's text or the set's submit. On the desktop the card covers the To do page; the open
+// item is still todos.openId, so j and k step through the items and Escape closes it (see onTodoKey).
+const rs = { el: null, key: "", tab: "page", sig: "", loading: false };
+const RS_LIMIT = { note: 1900, answer: 3800 }; // bytes: the hub cuts a verdict note at 2 KiB and an answer at 4 KiB
+function rsWants(t) { return !!t && !!t.page && todos.on === true && (!isDesktop() || state.view === "todo"); }
+function rsItem() { const t = todos.openId && todos.items.find((x) => x.id === todos.openId); return rsWants(t) ? t : null; }
+function rsActive() { return !!rs.el && !rs.el.hidden; }
+
+// The comments the user selected on this item's Page version and has not sent yet.
+function rsNotes(t) {
+  if (!t || !t.page || pgc.id !== t.page.id || pgc.ver !== t.page.version) return [];
+  return pgcItems();
+}
+function rsNotesText(t) {
+  const n = rsNotes(t);
+  if (!n.length) return "";
+  const q = (x) => (x.length > 90 ? x.slice(0, 89) + "…" : x);
+  return `On the Page (v${t.page.version}):\n` + n.map((c) => `- “${q(c.quote)}”: ${c.note}`).join("\n");
+}
+const rsBytes = (x) => new TextEncoder().encode(x).length;
+// withNotes joins the typed text and the Page notes; null (and a toast) when they will not fit.
+function rsJoin(t, typed, limit) {
+  const n = rsNotesText(t);
+  const all = typed && n ? typed + "\n\n" + n : typed || n;
+  if (rsBytes(all) > limit) { toast("Too long to send with the answer: shorten the notes, or send the comments on their own from the Page.", true); return null; }
+  return all;
+}
+function rsNotesSent(t) {
+  if (!t || !t.page || pgc.id !== t.page.id) return;
+  pgc.drafts.delete(pgcKey());
+  pgcRender();
+}
+function rsNotesHtml(t) {
+  const n = rsNotes(t).length;
+  return `<div class="rs-notes" id="rs-notes"${n ? "" : " hidden"}>${n ? `${n} comment${n === 1 ? "" : "s"} on the Page ${n === 1 ? "goes" : "go"} with your answer.` : ""}</div>`;
+}
+// Called when the comments change: refresh the line in the side panel without a redraw.
+function rsNotesRefresh() {
+  const el = $("rs-notes"), t = rsItem();
+  if (!el || !t) return;
+  const n = rsNotes(t).length;
+  el.hidden = !n;
+  el.textContent = n ? `${n} comment${n === 1 ? "" : "s"} on the Page ${n === 1 ? "goes" : "go"} with your answer.` : "";
+  const tab = rs.el && rs.el.querySelector('[data-rs-tab="decide"] .rs-n');
+  if (tab) { tab.hidden = !n; tab.textContent = String(n); }
+}
+
+function rsEnsure() {
+  if (rs.el) return rs.el;
+  const el = document.createElement("div");
+  el.id = "rs"; el.className = "rs"; el.hidden = true;
+  el.setAttribute("role", "region"); el.setAttribute("aria-label", "Review with the Page");
+  el.addEventListener("click", (ev) => {
+    if (ev.target.closest(".rs-back")) { todoCollapse(); return; }
+    const tb = ev.target.closest("[data-rs-tab]");
+    if (tb) { rs.tab = tb.dataset.rsTab; el.dataset.tab = rs.tab; for (const b of el.querySelectorAll("[data-rs-tab]")) b.setAttribute("aria-pressed", String(b === tb)); return; }
+    onTodoClick(ev);
+  });
+  el.addEventListener("input", onTodoInput);
+  rs.el = el;
+  return el;
+}
+
+function rsTeardown() {
+  if (!rs.el) return;
+  if (!rs.el.hidden) { rs.el.hidden = true; rs.el.replaceChildren(); rs.key = ""; rs.sig = ""; pgc.split = false; }
+}
+
+function renderSplit(force) {
+  const t = rsItem();
+  if (!t) { rsTeardown(); return; }
+  const el = rsEnsure(), p = t.page, ver = p.version, key = p.id + "/" + ver;
+  const host = isDesktop() ? $("p-todo") : document.body;
+  if (el.parentElement !== host) { host.append(el); rs.key = ""; }
+  el.classList.toggle("on-phone", !isDesktop());
+  if (!pgs.loaded) {
+    // pgs.pagesUrl (a separate origin for pages, if any) comes with the Pages list.
+    if (!rs.loading) { rs.loading = true; pagesLoad().finally(() => { rs.loading = false; renderSplit(true); }); }
+    if (el.hidden) { el.hidden = false; el.innerHTML = `<div class="pgs-pick">Loading…</div>`; rs.key = ""; }
+    return;
+  }
+  const first = el.hidden || rs.key !== key;
+  if (first) {
+    el.hidden = false;
+    rs.key = key; rs.sig = "";
+    el.dataset.tab = rs.tab;
+    const href = todoLinkHref(p.url);
+    const title = esc(p.title || p.id);
+    el.innerHTML = `<div class="rs-bar">
+        <button type="button" class="rs-back btn sm" aria-label="Back to the list" title="Back to the list (Esc)"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="rs-backt">To do</span></button>
+        <h2 class="rs-title">${title}</h2><span class="pgs-pill">v${ver}</span>
+        ${href ? `<a class="rs-open" href="${escAttr(href)}" target="_blank" rel="noopener" title="Open the Page on its own">Open ↗</a>` : ""}
+        <span class="seg sm rs-tabs" role="group" aria-label="Show"><button type="button" data-rs-tab="page" aria-pressed="${rs.tab === "page"}">Page</button><button type="button" data-rs-tab="decide" aria-pressed="${rs.tab === "decide"}">${esc(t.set ? "Decide" : t.kind === "review" ? "Verdict" : "Answer")}<span class="rs-n" hidden></span></button></span>
+      </div>
+      <div class="rs-cols"><section class="rs-page" aria-label="The Page"><div class="pgs-sel" id="pgs-sel" hidden></div><div class="rs-body"><iframe class="pgs-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${escAttr(p.title || p.id)}" src="${escAttr((pgs.pagesUrl || "") + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div></section>
+        <section class="rs-side" id="rs-side" aria-label="${escAttr(TODO_KIND[t.kind] || "item")}"></section></div>`;
+    const fr = el.querySelector("iframe.pgs-frame");
+    fr.addEventListener("load", sendPageTheme);
+    fr.addEventListener("load", pgcMarks);
+    pgcOpen(p, ver, true);
+  }
+  const side = $("rs-side");
+  const typing = side.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName);
+  const sig = JSON.stringify([t, todos.rv.get(t.id), todos.rvBusy.has(t.id), todoDraft(t.id), todos.pend.busy(t.id), [...(todos.setBusy.has(t.id) ? [1] : [])], todos.setStep.get(t.id), pgsScheme(), rs.tab]);
+  if (first || force === true || (sig !== rs.sig && !typing)) {
+    rs.sig = sig;
+    todoPaint(side, todoItemHtml(t, "rs", true));
+    rsNotesRefresh();
+  }
+}
+
 // A thumbnail that fails to load gives way to the placeholder.
 document.addEventListener("error", (ev) => {
   const im = ev.target;
@@ -1825,11 +1945,13 @@ document.addEventListener("error", (ev) => {
   if (box) box.classList.remove("has-img");
 }, true);
 
-function todoItemHtml(t, pfx) {
+// asPanel: only the panel, for the split review mode's side (the Page is beside it, so no row and no thumbnail).
+function todoItemHtml(t, pfx, asPanel) {
   const at = Date.parse(t.created_at);
   const age = Number.isNaN(at) ? "" : fmtAgo(at);
   const who = t.waiting ? t.waiting.name || t.waiting.id : "";
-  const open = todos.openId === t.id;
+  const open = asPanel || todos.openId === t.id;
+  const inSplit = !asPanel && rsWants(t); // the panel is in the split view, not under the row
   const ans = t.state !== "open";
   const draft = todoDraft(t.id).trim() !== "";
   const rid = `${pfx}-row-${t.id}`, pid = `${pfx}-panel-${t.id}`;
@@ -1838,7 +1960,7 @@ function todoItemHtml(t, pfx) {
     (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "") +
     (t.kind === "review" && !ans && t.review && t.review.stale ? `<span class="td-chip st-warn" title="Open for 3 days or more">stale</span>` : "");
   let panel = "";
-  if (open) {
+  if (open && !inSplit) {
     const meta = [who && `waiting: ${who}`, age].filter(Boolean).map(esc).join(" · ");
     const repEntry = (l) => (ledger.entries || []).find((x) => x.id === l.handoff);
     // "Full report" is the hub's stored final report, shown in place; the transcript is a link of its own.
@@ -1886,7 +2008,8 @@ function todoItemHtml(t, pfx) {
         <div class="td-scroll">
           ${meta ? `<div class="td-meta">${meta}</div>` : ""}
           ${isRel ? relPingHtml(t) : ""}
-          ${isRev ? reviewThumbHtml(t) : ""}
+          ${asPanel ? rsNotesHtml(t) : ""}
+          ${isRev && !asPanel ? reviewThumbHtml(t) : ""}
           ${isRev && t.context ? `<div class="rv-tryh">What to try</div>` : ""}
           ${t.set ? setBodyHtml(t) : t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
@@ -1906,8 +2029,9 @@ function todoItemHtml(t, pfx) {
         </div>`}
       </div>`;
   }
+  if (asPanel) return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""} open" data-id="${escAttr(t.id)}">${panel}</div>`;
   return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}${todos.pend.busy(t.id) ? " sending" : ""}" data-id="${escAttr(t.id)}">
-      <button type="button" class="td-row" id="${escAttr(rid)}" aria-expanded="${open}"${open ? ` aria-controls="${escAttr(pid)}"` : ""}>
+      <button type="button" class="td-row" id="${escAttr(rid)}" aria-expanded="${open}"${open && !inSplit ? ` aria-controls="${escAttr(pid)}"` : ""}>
         <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</span>${!open && !ans && todos.nxt === t.id ? `<span class="td-nx">Next up</span>` : ""}
         <span class="td-rm"><span class="td-who">${esc(who)}</span><span class="td-age">${esc(age)}</span><span class="td-chips">${chips}</span></span>
         <span class="td-chev" aria-hidden="true"></span>
@@ -2042,7 +2166,10 @@ async function setSubmit(t) {
   todos.setBusy.add(t.id);
   try {
     await (todos.setQ.get(t.id) || Promise.resolve());
-    await api(`/api/todos/${encodeURIComponent(t.id)}/submit`, { method: "POST", body: "{}" });
+    const note = rsJoin(t, "", RS_LIMIT.note);
+    if (note === null) return;
+    await api(`/api/todos/${encodeURIComponent(t.id)}/submit`, { method: "POST", body: JSON.stringify(note ? { note } : {}) });
+    rsNotesSent(t);
     toast("Submitted. The coordinator will pass it on.");
   } catch (e) {
     toast("Not submitted: " + e.message, true);
@@ -2195,6 +2322,7 @@ function renderTodos(force) {
       todoPaint(page, show ? `<div class="td-list">${todoListHtml("tdp")}</div><div class="tds-none"><b>${todos.open ? `${todos.open} waiting on you` : "Nothing is waiting on you"}</b><span>Pick a question on the left, or press <kbd>j</kbd>.</span>${todos.nxt ? `<button type="button" class="td-start">Start with the first</button>` : ""}</div>` : emptyHtml("Nothing is waiting on you", "When a coordinator needs an answer, the question appears here."));
     }
   }
+  renderSplit(!!force);
   todos.follow = false;
 }
 
@@ -2207,6 +2335,13 @@ function todoExpand(id, to) {
   todos.openId = id;
   if (id) todos.lastId = id;
   renderTodos(true);
+  if (rsActive()) {
+    // The item is in the split view: its answer box, or the Back button.
+    const box = to === "box" && rs.el.querySelector(".td-text");
+    const f = box || rs.el.querySelector(".rs-back");
+    if (f) f.focus({ preventScroll: true });
+    return;
+  }
   const el = todoListEl();
   const row = el && todoRowIn(el, id);
   if (!row) return;
@@ -2385,9 +2520,12 @@ function reviewNote(id, item) {
 function todoAnswer(id, box) {
   const it = box && box.closest(".td-item"), rt = it && todos.items.find((x) => x.id === it.dataset.id);
   if (rt && todoIsReview(rt)) { reviewVerdict(rt.id, "changes", it); return; }
-  const text = box ? box.value.trim() : "";
+  const t = todos.items.find((x) => x.id === id);
+  const text = rsJoin(t, box ? box.value.trim() : "", RS_LIMIT.answer);
+  if (text === null) return;
   if (!text) { toast("Write your answer first", true); return; }
-  todoAct(id, "answer", { text });
+  todoAct(id, "answer", { text }); // on a failed send the text comes back in the box, the notes in it
+  rsNotesSent(t);
 }
 
 function todoCopy(ta) {
@@ -3052,7 +3190,7 @@ function onTodoClick(ev) {
   if (!item) return;
   const id = item.dataset.id;
   const ag = ev.target.closest(".td-agent");
-  if (ag) { openDetail(ag.dataset.agent); return; }
+  if (ag) { if (rsActive()) { todos.openId = null; renderTodos(true); } openDetail(ag.dataset.agent); return; }
   if (ev.target.closest(".td-reptog")) {
     ev.preventDefault();
     const d = item.querySelector("details.td-rep");
@@ -3130,11 +3268,18 @@ function onTodoKey(ev) {
     todoAnswer(box.closest(".td-item").dataset.id, box);
     return;
   }
+  const sp = rsActive() ? rs.el : null; // the split review mode is open: its side panel is where the item is
+  if (sp && ev.key === "Escape" && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !anotherLayerOpen() && sp.contains(el)) {
+    // Escape in order: the comment being written, then the answer box, then the card.
+    if (el.id === "pgs-note") { ev.preventDefault(); $("pgs-notecancel")?.click(); sp.querySelector(".rs-back")?.focus(); return; }
+    if (box) { ev.preventDefault(); sp.querySelector(".rs-back")?.focus(); return; }
+  }
   if (!isDesktop() || state.view !== "todo" || anotherLayerOpen()) return;
   if (ev.altKey || ev.ctrlKey || ev.metaKey || (ev.shiftKey && !/^Digit[1-9]$/.test(ev.code))) return;
   const page = $("pt-body");
-  if (!page || !(el === document.body || page.contains(el))) return;
+  if (!page || !(el === document.body || page.contains(el) || (sp && sp.contains(el)))) return;
   const k = ev.key;
+  const cont = sp || page; // where the open item's buttons are
   if (box) {
     if (k === "Escape") {
       ev.preventDefault();
@@ -3157,12 +3302,12 @@ function onTodoKey(ev) {
   } else if ((k === "1" || k === "2") && todos.openId && !ev.shiftKey && (() => { const t = todos.items.find((x) => x.id === todos.openId); return t && t.state === "open" && todoIsReview(t); })()) {
     // On a review, 1 is Looks good and 2 opens the Needs changes note.
     ev.preventDefault();
-    const it = page.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"]`);
+    const it = cont.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"]`);
     if (k === "1") reviewVerdict(todos.openId, "good", it); else reviewNote(todos.openId, it);
   } else if ((/^[1-9]$/.test(k) || (ev.shiftKey && /^Digit[1-9]$/.test(ev.code))) && todos.openId) {
     // 1-9 sends that choice; Shift+1-9 adds it to a pending combination.
     const d = ev.shiftKey ? ev.code.slice(5) : k;
-    const b = page.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"] .td-opt[data-n="${d}"]`);
+    const b = cont.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"] .td-opt[data-n="${d}"]`);
     if (b) { ev.preventDefault(); todoKeyPick = true; try { b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: ev.shiftKey })); } finally { todoKeyPick = false; } }
   } else if (k === "Enter") {
     if (el.closest(".td-acts, .td-g, .td-kept")) return; // a button does what it says
@@ -6816,7 +6961,7 @@ function sendPageTheme() {
   if (pgs.route) pgsImgs();
   const m = pageThemeMessage();
   if (!m) return;
-  for (const fr of document.querySelectorAll("#pgs-view iframe.pgs-frame")) if (fr.contentWindow) fr.contentWindow.postMessage(m, "*");
+  for (const fr of document.querySelectorAll("#pgs-view iframe.pgs-frame, #rs iframe.pgs-frame")) if (fr.contentWindow) fr.contentWindow.postMessage(m, "*");
 }
 
 // Every theme change (picker, preview, the OS scheme under System) sets data-theme.
@@ -6833,7 +6978,7 @@ new MutationObserver(sendPageTheme).observe(document.documentElement, { attribut
 // viewer shows, and the hub sends them to that page's publisher. Page text is
 // put in the DOM with textContent only. See docs/security.md.
 const PGC = { quote: 500, around: 80, note: 1000, max: 20, burst: 10 };
-const pgc = { id: "", ver: 0, title: "", by: "", sel: null, composing: false, busy: false, drafts: new Map(), seen: [], sent: [], revs: 0, chg: false };
+const pgc = { split: false, id: "", ver: 0, title: "", by: "", sel: null, composing: false, busy: false, drafts: new Map(), seen: [], sent: [], revs: 0, chg: false };
 
 function pgcClean(s, n) {
   return String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
@@ -6876,7 +7021,7 @@ function pgcToggleChanges() {
   pgcChgItem();
 }
 
-function pgcFrame() { return document.querySelector("#pgs-view iframe.pgs-frame"); }
+function pgcFrame() { return document.querySelector("#rs:not([hidden]) iframe.pgs-frame") || document.querySelector("#pgs-view iframe.pgs-frame"); }
 
 window.addEventListener("message", (e) => {
   const fr = pgcFrame();
@@ -6899,8 +7044,8 @@ window.addEventListener("message", (e) => {
 function pgcKey() { return pgc.id + "/" + pgc.ver; }
 function pgcItems() { return pgc.drafts.get(pgcKey()) || []; }
 
-function pgcOpen(p, ver) {
-  Object.assign(pgc, { id: p.id, ver, title: p.title, by: p.by, sel: null, composing: false, busy: false, seen: [], sent: [], revs: 0, chg: false });
+function pgcOpen(p, ver, split) {
+  Object.assign(pgc, { id: p.id, ver, title: p.title, by: p.by, split: !!split, sel: null, composing: false, busy: false, seen: [], sent: [], revs: 0, chg: false });
   pgcRender();
   pgcLoad();
   pgcChgItem();
@@ -6980,6 +7125,7 @@ function pgcRender() {
   // The tray: the comments to send, Send, and below them what was sent.
   tray.replaceChildren();
   tray.hidden = items.length === 0 && pgc.sent.length === 0;
+  rsNotesRefresh();
   pgcMarks();
   if (tray.hidden) return;
   if (items.length) tray.append(pgcEl("h3", "", "To send · " + items.length));
@@ -6995,7 +7141,7 @@ function pgcRender() {
     const send = pgcEl("button", "btn primary", pgc.busy ? "Sending…" : "Send to " + (pgc.by || "publisher"));
     send.type = "button"; send.id = "pgs-sendc"; send.disabled = pgc.busy;
     send.addEventListener("click", pgcSend);
-    tray.append(send, pgcEl("div", "pgs-cmthint", "Files one To do item and messages the page’s publisher."));
+    tray.append(send, pgcEl("div", "pgs-cmthint", pgc.split ? "Or leave them: they go with your answer on the right. Send files one To do item and messages the page’s publisher." : "Files one To do item and messages the page’s publisher."));
   }
   if (pgc.sent.length) {
     tray.append(pgcEl("h3", "pgs-senth", "Sent · " + pgc.sent.length));
@@ -7219,7 +7365,7 @@ function setView(v) {
   syncDesktopBriefs();
   renderNav();
   renderStatus();
-  if (state.view === "todo") renderTodos();
+  if (state.view === "todo") renderTodos(); else rsTeardown();
 }
 
 // openPage replaces the agent in the main pane with a page. Leaving the
@@ -12727,6 +12873,9 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-role").addEventListener("click", toggleRole);
   $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);
+  // The split review mode closes when the app goes somewhere else, and starts over when the layout changes.
+  window.addEventListener("hashchange", () => { if (rsActive() && !(isDesktop() && location.hash === PAGE_HASH.todo)) { todos.openId = null; renderTodos(true); } });
+  desktopMQ.addEventListener("change", () => { rsTeardown(); renderTodos(true); });
   for (const id of ["todo", "pt-body"]) {
     const el = $(id);
     if (!el) continue;

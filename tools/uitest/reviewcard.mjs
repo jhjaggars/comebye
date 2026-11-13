@@ -1,7 +1,8 @@
-// The review card in the To do panel (internal/server/review.go): a kind "review" item about a Page shows the
-// hub's thumbnail of that version, what to try and two buttons. Looks good closes at once with an Undo toast
-// driven by the hub's undo_until; Needs changes takes a kind and a note and files a Fix item; keys 1 and 2 on
-// desktop. Pages are published with the real CLI so the thumbnails are Chrome's own.
+// The review card (internal/server/review.go) in the split review mode (issue #17, slice 3b): a kind "review"
+// item about a Page opens with the Page in a frame beside it (tabs on a phone), at the version it was filed with;
+// the side has what to try and two buttons. Looks good closes at once with an Undo toast driven by the hub's
+// undo_until; Needs changes takes a kind and a note and files a Fix item; comments selected on the Page go with the
+// verdict; keys 1 and 2 and Escape on desktop. Pages are published with the real CLI.
 //
 //   node reviewcard.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
 import { launch } from "./lib.mjs";
@@ -48,7 +49,8 @@ const withPic = publish("rc-pic", "Gallery thumbnails demo"), noPic = publish("r
 
 for (const width of [1280, 390]) {
   const tag = `${width}px ${dark ? "dark" : "light"}`;
-  const L = width > 500 ? "#p-todo" : "#todo";
+  const LIST = width > 500 ? "#p-todo" : "#todo";
+  const L = "#rs"; // the split view holds the open review
   const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark, bypassCSP: false });
   const errs = [];
   page.on("pageerror", (e) => errs.push(String(e)));
@@ -56,9 +58,14 @@ for (const width of [1280, 390]) {
   const item = (id) => page.locator(`${L} .td-item[data-id="${id}"]`);
   const open = async (id) => {
     await page.evaluate(async () => { todos.loadedAt = 0; todos.openId = null; await loadTodos(); renderTodos(true); });
-    await page.waitForSelector(`${L} .td-item[data-id="${id}"] .td-row`, { state: "visible" });
-    if (!(await item(id).evaluate((e) => e.classList.contains("open")))) await item(id).locator(".td-row").click();
-    await page.waitForSelector(`${L} .td-item.open[data-id="${id}"] .rv-bar`);
+    await page.waitForSelector(`${LIST} .td-item[data-id="${id}"] .td-row`, { state: "visible" });
+    if (!(await page.locator(`${L} .td-item.open[data-id="${id}"]`).count())) {
+      if (await page.locator("#rs:not([hidden])").count()) await page.locator("#rs .rs-back").click();
+      await page.locator(`${LIST} .td-item[data-id="${id}"] .td-row`).click();
+    }
+    await page.waitForSelector(`${L} .td-item.open[data-id="${id}"] .rv-bar`, { state: "attached" });
+    if (width < 500) await page.locator('#rs [data-rs-tab="decide"]').click();
+    await page.waitForSelector(`${L} .td-item.open[data-id="${id}"] .rv-bar`, { state: "visible" });
   };
   try {
     const r1 = await addReview(`Review: Gallery thumbnails ${width}`, withPic); ids.push(r1.id);
@@ -68,44 +75,64 @@ for (const width of [1280, 390]) {
       await page.waitForSelector("#todo .td-toggle", { state: "visible", timeout: 15000 });
       if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
     }
-    await check(`review card at ${tag}: thumbnail, what to try, two buttons, where it goes`, async () => {
+    await check(`review card at ${tag}: the Page beside it at the version it was filed with, what to try, two buttons, where it goes`, async () => {
       await open(r1.id);
-      const g = await page.evaluate(async (sel) => {
-        const it = document.querySelector(sel);
-        const im = it.querySelector("img.rv-img");
-        if (im) for (let i = 0; i < 60 && !(im.complete && im.naturalWidth); i++) await new Promise((r) => setTimeout(r, 100));
-        return { src: im && im.getAttribute("src"), w: im && im.naturalWidth, text: it.innerText, btns: [...it.querySelectorAll(".rv-btns button")].map((b) => ({ t: b.innerText, h: b.getBoundingClientRect().height })),
-          open: !!it.querySelector("a.rv-open"), noAnswerBox: !it.querySelector(".td-answer-btn"), scroll: document.documentElement.scrollWidth > innerWidth };
+      const g = await page.evaluate((sel) => {
+        const it = document.querySelector(sel), fr = document.querySelector("#rs iframe.pgs-frame");
+        return { src: fr && fr.getAttribute("src"), text: it.innerText, btns: [...it.querySelectorAll(".rv-btns button")].map((b) => ({ t: b.innerText, h: b.getBoundingClientRect().height })),
+          noThumb: !it.querySelector(".rv-thumb"), noAnswerBox: !it.querySelector(".td-answer-btn"), scroll: document.documentElement.scrollWidth > innerWidth,
+          bar: document.querySelector("#rs .rs-title")?.textContent, listPanel: !!document.querySelector("#pt-body .td-panel, #todo .td-panel") };
       }, `${L} .td-item[data-id="${r1.id}"]`);
-      const want = dark ? "dark" : "light";
-      if (!g.src || !g.src.includes(`scheme=${want}`) || !g.w) throw new Error("thumbnail: " + JSON.stringify(g.src) + " w=" + g.w);
-      if (!/what to try/i.test(g.text) || !/Gallery thumbnails demo/i.test(g.text) || !/Open demo/i.test(g.text)) throw new Error("text: " + g.text.slice(0, 300));
+      if (!g.src || !new RegExp(`/p/${withPic}/1$`).test(g.src)) throw new Error("frame src: " + g.src);
+      if (!/what to try/i.test(g.text)) throw new Error("text: " + g.text.slice(0, 300));
+      if (!/Gallery thumbnails demo/.test(g.bar || "")) throw new Error("title in the bar: " + g.bar);
       if (g.btns.length !== 2 || !/Looks good/.test(g.btns[0].t) || !/Needs changes/.test(g.btns[1].t)) throw new Error("buttons: " + JSON.stringify(g.btns));
       if (g.btns.some((b) => b.h < 44 - 0.5)) throw new Error("buttons under 44px: " + JSON.stringify(g.btns));
       if (!/goes to|no longer running/i.test(g.text)) throw new Error("no routing line: " + g.text.slice(0, 400));
+      if (!g.noThumb) throw new Error("a thumbnail next to the real Page");
       if (!g.noAnswerBox) throw new Error("the free-text Answer button is on a review");
+      if (g.listPanel) throw new Error("the panel is in the list too");
       if (g.scroll) throw new Error("page scrolls sideways");
-      await page.screenshot({ path: `${out}/reviewcard-${width}-${dark ? "dark" : "light"}.png` });
+      await page.screenshot({ path: `${out}/split-${width}-decide-${dark ? "dark" : "light"}.png` });
+      if (width < 500) {
+        await page.locator('#rs [data-rs-tab="page"]').click();
+        const v = await page.evaluate(() => { const f = document.querySelector("#rs iframe.pgs-frame").getBoundingClientRect(), s = document.querySelector("#rs-side").getBoundingClientRect(); return { fh: f.height, fw: f.width, sideShown: s.width > 0 }; });
+        if (v.sideShown || v.fw < 300 || v.fh < 300) throw new Error("page tab: " + JSON.stringify(v));
+      } else {
+        const v = await page.evaluate(() => { const f = document.querySelector("#rs iframe.pgs-frame").getBoundingClientRect(), s = document.querySelector("#rs-side").getBoundingClientRect(); return { fl: f.left, fr: f.right, fw: f.width, sl: s.left, sw: s.width }; });
+        if (v.fw < 500 || v.sw < 330 || v.fr > v.sl + 1) throw new Error("not side by side: " + JSON.stringify(v));
+      }
+      await page.screenshot({ path: `${out}/split-${width}-page-${dark ? "dark" : "light"}.png` });
     });
-    await check(`review card at ${tag}: the row says review; a page with no thumbnail shows a placeholder and the link`, async () => {
+    await check(`review card at ${tag}: the Page link is first and the item id is not shown`, async () => {
       const r2 = await addReview(`Review: Plain demo ${width}`, noPic); ids.push(r2.id);
       await open(r2.id);
-      const t = await item(r2.id).innerText();
-      if (!/no preview yet/i.test(t) || !/Open demo/i.test(t)) throw new Error(t.slice(0, 300));
-      if (await item(r2.id).locator("img.rv-img").count()) throw new Error("an image with no thumbnail");
-      const kind = await item(r2.id).locator(".td-row .td-kind").innerText();
-      if (!/review/i.test(kind)) throw new Error("kind label: " + kind);
-      const pl = await item(r2.id).evaluate((e, id) => {
+      const pl = await item(r2.id).evaluate((e) => {
         const a = [...e.querySelectorAll(".td-links a, .td-dlinks a")].find((x) => x.offsetParent);
         return { first: a && a.innerText, href: a && a.getAttribute("href"), n: e.querySelectorAll('a[href^="/#/pages/"].td-pglink').length, ids: (e.innerText.match(/\bt[0-9a-f]{10}\b/g) || []).length, cp: e.querySelectorAll("[aria-label='Copy item id']").length };
-      }, r2.id);
+      });
       if (!/^Page: Plain demo/.test(pl.first || "") || !/^\/#\/pages\/pg_[0-9a-f]{10}$/.test(pl.href || "") || pl.n < 1) throw new Error("page link: " + JSON.stringify(pl));
       if (pl.ids || pl.cp) throw new Error("item id still shown: " + JSON.stringify(pl));
-      await page.screenshot({ path: `${out}/reviewcard-nopic-${width}-${dark ? "dark" : "light"}.png` });
       await item(r2.id).locator("a.td-pglink:visible").first().click();
       await page.waitForFunction(() => /#\/pages\/pg_/.test(location.hash), null, { timeout: 5000 });
       await page.goto(base + (width > 500 ? "/#/todo" : "/"), { waitUntil: "load" });
       await drop(r2.id);
+    });
+    await check(`review card at ${tag}: a newer version of the Page does not change the version under review`, async () => {
+      const key = "rc-ver-" + width, pid = publish(key, "Versioned demo");
+      const r = await addReview(`Review: Versioned ${width}`, pid); ids.push(r.id);
+      publish(key, "Versioned demo two"); // v2
+      await open(r.id);
+      await page.locator('#rs [data-rs-tab="page"]').click().catch(() => {});
+      const src = await page.locator("#rs iframe.pgs-frame").getAttribute("src");
+      if (!new RegExp(`/p/${pid}/1$`).test(src)) throw new Error("frame src: " + src);
+      await drop(r.id);
+    });
+    await check(`review card at ${tag}: Back closes the split and the list is as it was`, async () => {
+      await open(r1.id);
+      await page.locator("#rs .rs-back").click();
+      await page.waitForSelector("#rs", { state: "hidden" });
+      if (await page.locator("#rs iframe").count()) throw new Error("the frame stays after Back");
     });
     await check(`review card at ${tag}: Looks good closes it with an Undo toast; Undo opens it again`, async () => {
       await open(r1.id);
@@ -133,7 +160,63 @@ for (const width of [1280, 390]) {
       if (!fix || fix.review_of !== r1.id || fix.kind !== "followup") throw new Error("fix item: " + JSON.stringify(fix));
       await drop(fix.id);
     });
+    await check(`review card at ${tag}: comments selected on the Page go with the verdict`, async () => {
+      const r5 = await addReview(`Review: comments ${width}`, withPic); ids.push(r5.id);
+      await open(r5.id);
+      if (width < 500) await page.locator('#rs [data-rs-tab="page"]').click();
+      let fr; for (let i = 0; i < 60 && !fr; i++) { fr = page.frames().find((x) => x.url().includes("/p/" + withPic + "/")); if (!fr) await page.waitForTimeout(100); }
+      if (!fr) throw new Error("no frame");
+      await fr.evaluate(() => parent.postMessage({ type: "comebye-selection", v: 1, quote: "Each card shows a picture", before: "", after: " of its page." }, "*"));
+      await page.locator("#pgs-addc").click();
+      await page.locator("#pgs-note").fill("Make the picture bigger");
+      await page.locator("#pgs-noteadd").click();
+      await page.waitForSelector("#pgs-tray .pgs-cmt", { state: "attached" });
+      await page.screenshot({ path: `${out}/split-${width}-comment-${dark ? "dark" : "light"}.png` });
+      if (width < 500) await page.locator('#rs [data-rs-tab="decide"]').click();
+      const note = await page.locator("#rs-notes").innerText();
+      if (!/1 comment on the Page goes with your answer/.test(note)) throw new Error("notes line: " + note);
+      await item(r5.id).locator(".rv-chg").click();
+      await item(r5.id).locator(".rv-text").fill("Also fix the colours");
+      await item(r5.id).locator(".rv-send").click();
+      const t = await until(async () => { const x = await get(r5.id); return x.state === "done" ? x : null; }, "the review to close");
+      const n = t.review.verdict.note;
+      if (!/Also fix the colours/.test(n) || !/On the Page \(v1\)/.test(n) || !/Each card shows a picture/.test(n) || !/Make the picture bigger/.test(n)) throw new Error("note: " + n);
+      const c = await (await fetch(base + "/api/pages/" + withPic + "/comments")).json();
+      if ((c.comments || []).length) throw new Error("the comments were also filed on their own");
+    });
     if (width > 500) {
+      await check(`split at ${tag}: a decision set about a Page opens beside it; Submit sends the comments in a note`, async () => {
+        const set = { decisions: [
+          { id: "D1", title: "Where tenants live", recommend: 1, options: [{ label: "One bucket", short: "1 bucket" }, { label: "A bucket each", short: "each" }] },
+          { id: "D2", title: "Rollout", recommend: 1, options: [{ label: "Flag per tenant", short: "flag" }, { label: "All at once", short: "all" }] }] };
+        const r = await fetch(base + "/api/todos", { method: "POST", headers: J, body: JSON.stringify({ question: "Decisions from the report", kind: "decision", no_wait: true, set, page: { id: withPic } }) });
+        const t = (await r.json()).todo; ids.push(t.id);
+        await fetch(base + `/api/todos/${t.id}/draft`, { method: "PUT", headers: J, body: JSON.stringify({ accept_suggestions: true, choices: { D1: { option: 1, confirmed: true }, D2: { option: 1, confirmed: true } } }) });
+        await page.evaluate(async () => { todos.loadedAt = 0; todos.openId = null; await loadTodos(); renderTodos(true); });
+        await page.locator(`${LIST} .td-item[data-id="${t.id}"] .td-row`).click();
+        await page.waitForSelector(`#rs .td-item.open[data-id="${t.id}"] .ds-set`);
+        let fr; for (let i = 0; i < 60 && !fr; i++) { fr = page.frames().find((x) => x.url().includes("/p/" + withPic + "/")); if (!fr) await page.waitForTimeout(100); }
+        await fr.evaluate(() => parent.postMessage({ type: "comebye-selection", v: 1, quote: "Each card shows", before: "", after: " a picture" }, "*"));
+        await page.locator("#pgs-addc").click();
+        await page.locator("#pgs-note").fill("Is one bucket enough?");
+        await page.locator("#pgs-noteadd").click();
+        await page.waitForSelector("#rs-notes:not([hidden])");
+        await page.screenshot({ path: `${out}/split-set-${width}-${dark ? "dark" : "light"}.png` });
+        await page.locator("#rs .ds-submit").click();
+        const x = await until(async () => { const y = await get(t.id); return y.state === "answered" ? y : null; }, "the set to be submitted");
+        if (!/Is one bucket enough\?/.test(x.answer.text) || !/own words/.test(x.answer.text)) throw new Error("answer: " + x.answer.text);
+      });
+      await check(`review card at ${tag}: Escape leaves the note box, then closes the split`, async () => {
+        const r6 = await addReview("Review: escape", withPic); ids.push(r6.id);
+        await open(r6.id);
+        await item(r6.id).locator(".rv-chg").click();
+        await page.waitForSelector("#rs .rv-text");
+        await page.keyboard.press("Escape");
+        if (!(await page.evaluate(() => document.activeElement.classList.contains("rs-back")))) throw new Error("focus after the first Escape: " + (await page.evaluate(() => document.activeElement.className)));
+        if (await page.locator("#rs").isHidden()) throw new Error("closed on the first Escape");
+        await page.keyboard.press("Escape");
+        await page.waitForSelector("#rs", { state: "hidden" });
+      });
       await check(`review card at ${tag}: key 1 is Looks good, key 2 opens the note`, async () => {
         const r3 = await addReview("Review: keys A", withPic), r4 = await addReview("Review: keys B", withPic); ids.push(r3.id, r4.id);
         await open(r3.id);
@@ -141,7 +224,7 @@ for (const width of [1280, 390]) {
         await page.keyboard.press("2");
         await page.waitForSelector(`${L} .td-item[data-id="${r3.id}"] .rv-text`);
         await item(r3.id).locator(".rv-cancel").click();
-        await page.locator(`${L} .td-item[data-id="${r3.id}"] .td-row`).focus();
+        await page.locator(`${LIST} .td-item[data-id="${r3.id}"] .td-row`).focus();
         await page.keyboard.press("1");
         await until(async () => (await get(r3.id)).state === "done", "key 1 to close the review");
       });
