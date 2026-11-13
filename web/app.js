@@ -1515,7 +1515,7 @@ function initPlans() {
 // that is closed or answered elsewhere until the user discards them.
 const TODO_FOLDED_KEY = "comebye-todo-folded";
 const TODO_DRAFTS_KEY = "comebye.todo.drafts";
-const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up", release: "release" };
+const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up", release: "release", review: "review" };
 const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false,
   openId: null, lastId: null, nxt: null, ansOpen: false, seen: new Map(), order: [], follow: false,
   drafts: loadTodoDrafts(), pend: new Overlay() };
@@ -1688,6 +1688,114 @@ function todoFill(item, text, focus = !todoKeyPick) {
 
 // pfx keeps element ids apart: the same item is drawn in the phone card
 // and on the desktop page.
+// ---- review cards (kind "review", internal/server/review.go) ----
+// A review is about a Page version: the card shows the hub's thumbnail of it, what to try, and two buttons. Looks good
+// closes the item at once and the hub holds the message to the worker for the Undo window (review.verdict.undo_until,
+// the hub's clock, not a timer here); Needs changes takes a note and a kind and files a Fix item.
+const REVIEW_KINDS = [["fix", "Fix: it is wrong"], ["idea", "Idea for later"], ["looks_off", "Looks off"]];
+todos.rv = new Map();      // item id -> { kind } while the Needs changes note is open
+todos.rvBusy = new Set();  // item ids whose verdict is on the wire
+function todoIsReview(t) { return t.kind === "review" && !!t.page; }
+function reviewThumbHtml(t) {
+  const p = t.page, sc = pgsScheme(), have = p.thumbs || [];
+  const use = have.includes(sc) ? sc : have[0];
+  const src = use && p.thumb_url ? p.thumb_url.replace("{scheme}", use) : "";
+  const href = todoLinkHref(p.url);
+  const pic = src ? `<img class="rv-img" src="${escAttr(src)}" alt="" decoding="async" loading="lazy">` : `<span class="rv-nopic">No preview yet</span>`;
+  const title = esc(p.title || p.id);
+  const tag = href ? `a href="${escAttr(href)}" title="Open the demo"` : "div";
+  return `<div class="rv-page"><${tag} class="rv-thumb${src ? " has-img" : ""}">${pic}</${href ? "a" : "div"}>
+      <div class="rv-pinfo"><b class="rv-ptitle">${title}</b><span class="rv-pver">v${p.version}${p.by ? ` · by ${esc(p.by)}` : ""}</span>${href ? `<a class="rv-open" href="${escAttr(href)}">Open demo ↗</a>` : ""}</div></div>`;
+}
+// Where the verdict goes, in words (the hub's rule: the publisher if its pane is in the fleet, else a coordinator).
+function reviewRouteLine(t) {
+  const p = t.page, ag = p.agent && agentById(p.agent);
+  const who = p.by || "the worker";
+  return ag
+    ? `Goes to ${esc(who)}, who is still running. If that worker is gone, it goes to the coordinator.`
+    : `${esc(who)} is no longer running, so this goes to the coordinator.`;
+}
+function reviewDoneHtml(t) {
+  const rv = t.review || {}, v = rv.verdict, r = rv.route;
+  if (!v) return "";
+  let line = "";
+  if (r) {
+    const to = r.name ? esc(r.name) : "the " + esc(r.via || "coordinator");
+    line = r.state === "sent" ? `Told ${to}.` : r.state === "expired" ? "Nobody could be told. The verdict is on record." : "Telling " + (r.name ? to : "the worker or the coordinator") + " when the Undo time ends.";
+  }
+  const fix = rv.fix_id ? ` A Fix item (${esc(rv.fix_id)}) is filed for the coordinator.` : "";
+  return `<div class="rv-done">${line}${fix}</div>`;
+}
+function reviewBarHtml(t) {
+  const st = todos.rv.get(t.id), busy = todos.rvBusy.has(t.id) ? " disabled" : "";
+  const stale = t.review && t.review.stale ? `<div class="rv-stale">Waiting for 3 days or more.</div>` : "";
+  const kinds = st ? `<div class="rv-note"><div class="seg sm rv-kinds" role="group" aria-label="What kind of note">${REVIEW_KINDS.map(([k, l]) => `<button type="button" class="rv-kind" data-k="${k}" aria-pressed="${st.kind === k}">${esc(l)}</button>`).join("")}</div>
+      <textarea class="td-text rv-text" id="rv-note-${escAttr(t.id)}" rows="3" maxlength="4000" placeholder="What should change? (optional)" aria-label="Note for the worker">${esc(todoDraft(t.id))}</textarea>
+      <div class="td-acts"><button type="button" class="rv-send"${busy}>Send: Needs changes</button><button type="button" class="rv-cancel">Cancel</button></div></div>` : "";
+  return `<div class="td-form rv-bar">${stale}
+      <div class="rv-btns"><button type="button" class="btn primary rv-good"${busy} title="Closes the item. You can undo for a few seconds. Key: 1"><kbd>1</kbd> ✓ Looks good</button><button type="button" class="btn warn rv-chg" aria-expanded="${!!st}"${busy} title="Add a note and file a Fix item. Key: 2"><kbd>2</kbd> ✎ Needs changes</button></div>
+      ${kinds}
+      <div class="rv-foot"><div class="rv-route">${reviewRouteLine(t)}</div><div class="td-acts"><button type="button" class="td-drop">Drop</button></div></div></div>`;
+}
+
+// reviewVerdict sends the verdict. The hub closes the item and holds the message to the worker until the Undo window
+// ends, so Undo is a second request inside that window; the toast counts down to review.verdict.undo_until.
+async function reviewVerdict(id, verdict, item) {
+  const t = todos.items.find((x) => x.id === id);
+  if (!t || t.state !== "open" || todos.rvBusy.has(id)) return;
+  const box = item && item.querySelector(".rv-text");
+  const st = todos.rv.get(id);
+  const body = { verdict, note: box ? box.value.trim() : todoDraft(id).trim() };
+  if (verdict === "changes") body.kind = (st && st.kind) || "fix";
+  const next = todoNextOpen(id, todoOrder().map((x) => x.id));
+  const hadFocus = todoHasFocus();
+  todos.rvBusy.add(id);
+  renderTodos(true);
+  let r;
+  try {
+    r = await api(`/api/todos/${encodeURIComponent(id)}/verdict`, { method: "POST", body: JSON.stringify(body) });
+  } catch (e) {
+    todos.rvBusy.delete(id);
+    renderTodos(true);
+    toast("Not sent: " + e.message, true);
+    return;
+  }
+  todos.rvBusy.delete(id);
+  todos.rv.delete(id);
+  todos.drafts.delete(id); saveTodoDrafts();
+  if (todos.openId === id) { todos.openId = next; if (next) todos.lastId = next; todos.follow = hadFocus; }
+  const i = todos.items.findIndex((x) => x.id === id);
+  if (i >= 0 && r && r.todo) todos.items[i] = r.todo;
+  todos.loadedAt = 0;
+  const done = r && r.todo, until = done && done.review && done.review.verdict && done.review.verdict.undo_until ? Date.parse(done.review.verdict.undo_until) : NaN;
+  if (verdict === "good" && !Number.isNaN(until) && until > Date.now()) {
+    flushChoiceUndo();
+    toastAction("Looks good. The worker is told in a moment", "Undo", () => reviewUndo(id), until - Date.now());
+  } else {
+    toast(verdict === "good" ? "Looks good" : "Needs changes sent. A Fix item is filed.");
+  }
+  await loadTodos();
+}
+async function reviewUndo(id) {
+  try {
+    await api(`/api/todos/${encodeURIComponent(id)}/undo`, { method: "POST", body: "{}" });
+    toast("Taken back. The review is open again.");
+    todos.openId = id; todos.lastId = id;
+  } catch (e) {
+    toast("Too late to undo: " + e.message, true);
+  }
+  todos.loadedAt = 0;
+  await loadTodos();
+}
+// A thumbnail that fails to load gives way to the placeholder.
+document.addEventListener("error", (ev) => {
+  const im = ev.target;
+  if (!im || !im.classList || !im.classList.contains("rv-img")) return;
+  const box = im.parentElement;
+  im.replaceWith(Object.assign(document.createElement("span"), { className: "rv-nopic", textContent: "No preview yet" }));
+  if (box) box.classList.remove("has-img");
+}, true);
+
 function todoItemHtml(t, pfx) {
   const at = Date.parse(t.created_at);
   const age = Number.isNaN(at) ? "" : fmtAgo(at);
@@ -1698,7 +1806,8 @@ function todoItemHtml(t, pfx) {
   const rid = `${pfx}-row-${t.id}`, pid = `${pfx}-panel-${t.id}`;
   const chips = `<span class="td-chip td-draft"${draft ? "" : " hidden"}>draft</span>` + todoSrcChip(t) +
     (ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`) +
-    (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "");
+    (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "") +
+    (t.kind === "review" && !ans && t.review && t.review.stale ? `<span class="td-chip st-warn" title="Open for 3 days or more">stale</span>` : "");
   let panel = "";
   if (open) {
     const meta = [who && `waiting: ${who}`, age].filter(Boolean).map(esc).concat(`<span class="cp" role="button" tabindex="0" aria-label="Copy item id" data-copy="${escAttr(t.id)}">${esc(t.id)}</span>`).join(" · ");
@@ -1735,23 +1844,26 @@ function todoItemHtml(t, pfx) {
     const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
     const isRel = t.kind === "release" && !!t.release;
-    const after = ans || isRel ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
+    const after = ans || isRel || todoIsReview(t) ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
     const kept = ans && draft ? todoKeptHtml(t.id, todoDraft(t.id), "Not sent: this was answered before you sent yours.") : "";
     const busy = "";
-    const form = ans || isRel ? ""
+    const isRev = todoIsReview(t);
+    const form = ans || isRel || isRev ? ""
       : `<textarea class="td-text" id="${pfx}-answer-${escAttr(t.id)}" rows="2" maxlength="4000" placeholder="Your answer" aria-label="Your answer">${esc(todoDraft(t.id))}</textarea>`;
     panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
         ${dhead}
         <div class="td-scroll">
           ${meta ? `<div class="td-meta">${meta}</div>` : ""}
           ${isRel ? relPingHtml(t) : ""}
+          ${isRev ? reviewThumbHtml(t) : ""}
+          ${isRev && t.context ? `<div class="rv-tryh">What to try</div>` : ""}
           ${t.set ? setBodyHtml(t) : t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
           ${repBody}
           <div class="td-cprow">${copyBtnHtml("todo:" + t.id, t.question + (t.context ? "\n\n" + t.context : ""), "Copy question and context", "Copy the question and its context as Markdown")}</div>
-          ${answered}${kept}
+          ${answered}${kept}${isRev && ans ? reviewDoneHtml(t) : ""}
         </div>
-        ${t.set ? setBarHtml(t) : `<div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
+        ${t.set ? setBarHtml(t) : isRev && !ans ? reviewBarHtml(t) : `<div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
           ${ans || isRel ? "" : sttStatusHtml("todo:" + t.id)}
           <div class="td-acts">
             ${ans || isRel ? "" : sttMicHtml("todo:" + t.id)}
@@ -2029,7 +2141,7 @@ function renderTodos(force) {
   if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
   const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()],
-    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question]), rls.loadedAt]);
+    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
   // The age moves between renders; a typed answer must not be lost to one.
   const typing = (el) => el && el.contains(document.activeElement) && document.activeElement.classList.contains("td-text");
   if (show && main && (again || (main.dataset.sig !== sig && !typing(main)))) {
@@ -2230,7 +2342,18 @@ async function todoKeep(id) {
   await loadTodos();
 }
 
+// reviewNote opens the Needs changes note (a second press closes it).
+function reviewNote(id, item) {
+  if (todos.rv.has(id)) { todos.rv.delete(id); renderTodos(true); return; }
+  todos.rv.set(id, { kind: "fix" });
+  renderTodos(true);
+  const box = document.querySelector(`.td-item[data-id="${CSS.escape(id)}"] .rv-text`);
+  if (box) box.focus();
+}
+
 function todoAnswer(id, box) {
+  const it = box && box.closest(".td-item"), rt = it && todos.items.find((x) => x.id === it.dataset.id);
+  if (rt && todoIsReview(rt)) { reviewVerdict(rt.id, "changes", it); return; }
   const text = box ? box.value.trim() : "";
   if (!text) { toast("Write your answer first", true); return; }
   todoAct(id, "answer", { text });
@@ -2906,6 +3029,12 @@ function onTodoClick(ev) {
     return;
   }
   if (ev.target.closest(".td-rep > summary")) { const d = ev.target.closest(".td-rep"); if (d.open) todoRepOpen.delete(id); else todoRepOpen.add(id); }
+  if (ev.target.closest(".rv-good")) { reviewVerdict(id, "good", item); return; }
+  if (ev.target.closest(".rv-chg")) { reviewNote(id, item); return; }
+  const rk = ev.target.closest(".rv-kind");
+  if (rk) { const st = todos.rv.get(id); if (st) { st.kind = rk.dataset.k; renderTodos(true); } return; }
+  if (ev.target.closest(".rv-send")) { reviewVerdict(id, "changes", item); return; }
+  if (ev.target.closest(".rv-cancel")) { todos.rv.delete(id); renderTodos(true); return; }
   const setT = todos.items.find((x) => x.id === id);
   if (setT && setT.set && !ev.target.closest(".td-row, .td-agent, .td-done, .td-drop") && setClick(ev, setT)) return;
   const opt = ev.target.closest(".td-opt");
@@ -2994,6 +3123,11 @@ function onTodoKey(ev) {
     if (i < 0) i = ids.indexOf(todos.openId || todos.lastId);
     i = i < 0 ? (down ? 0 : rows.length - 1) : i + (down ? 1 : -1);
     if (i >= 0 && i < rows.length) todoExpand(ids[i]);
+  } else if ((k === "1" || k === "2") && todos.openId && !ev.shiftKey && (() => { const t = todos.items.find((x) => x.id === todos.openId); return t && t.state === "open" && todoIsReview(t); })()) {
+    // On a review, 1 is Looks good and 2 opens the Needs changes note.
+    ev.preventDefault();
+    const it = page.querySelector(`.td-item[data-id="${CSS.escape(todos.openId)}"]`);
+    if (k === "1") reviewVerdict(todos.openId, "good", it); else reviewNote(todos.openId, it);
   } else if ((/^[1-9]$/.test(k) || (ev.shiftKey && /^Digit[1-9]$/.test(ev.code))) && todos.openId) {
     // 1-9 sends that choice; Shift+1-9 adds it to a pending combination.
     const d = ev.shiftKey ? ev.code.slice(5) : k;
