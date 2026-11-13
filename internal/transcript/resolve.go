@@ -172,6 +172,9 @@ func (r *Resolver) opencodeSessionByID(id string) string {
 
 // DefaultOpencodeDir is the default mirror directory.
 func DefaultOpencodeDir() string {
+	if d := os.Getenv("COMEBYE_OPENCODE_MIRROR_DIR"); d != "" {
+		return d
+	}
 	if d := os.Getenv("COMEBYE_STATE_DIR"); d != "" {
 		return filepath.Join(d, "opencode-sessions")
 	}

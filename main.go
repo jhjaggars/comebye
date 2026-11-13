@@ -369,6 +369,11 @@ func main() {
 		S3: *archiveS3, S3Credentials: *archiveS3Cr, S3Region: getenv("COMEBYE_ARCHIVE_S3_REGION"), S3Plaintext: getenv("COMEBYE_ARCHIVE_S3_PLAINTEXT"),
 		ClaudeDir: getenv("COMEBYE_ARCHIVE_CLAUDE_DIR"), PiDir: getenv("COMEBYE_ARCHIVE_PI_DIR"), OpencodeDir: getenv("COMEBYE_OPENCODE_MIRROR_DIR"),
 	}
+	if acfg.OpencodeDir == "" && *stateDir != defaultStateDir() {
+		// A hub on its own state directory (a throwaway one, a test) keeps
+		// its OpenCode mirror there, never in the user's real one.
+		acfg.OpencodeDir = filepath.Join(expandHome(*stateDir), "opencode-sessions")
+	}
 	if acfg.Configured() {
 		var err error
 		if arch, err = acfg.OpenDeferred(); err != nil {

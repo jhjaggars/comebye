@@ -241,6 +241,9 @@ func Slug(cwd string) string {
 
 // DefaultDir is where the mirror lives when none is configured.
 func DefaultDir() string {
+	if d := os.Getenv("COMEBYE_OPENCODE_MIRROR_DIR"); d != "" {
+		return d
+	}
 	if d := os.Getenv("COMEBYE_STATE_DIR"); d != "" {
 		return filepath.Join(d, "opencode-sessions")
 	}
