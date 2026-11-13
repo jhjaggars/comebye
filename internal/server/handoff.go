@@ -46,6 +46,7 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 
 ## How to work
 
+- If the task has an Intent and a Spec, the Intent is the user's own ask and the acceptance criteria: the Spec says how to build it, and where they differ, the Intent wins. Do not widen the work beyond the Intent or into what the Spec rules out of scope.
 - Work only in this git worktree, {{worktree}} (your current directory), on branch ` + "`{{branch}}`" + ` (started from ` + "`{{base}}`" + `). Do not check out other branches or edit other checkouts.
 - When you are done, commit your work on ` + "`{{branch}}`" + `. Do not merge or rebase, and push only as the next rule says, unless your task, or a later message from {{from}}, explicitly tells you to. If it does, do exactly what it says: fast-forward pushes only, never force-push, never rewrite pushed history.
 - The repository's object store is shared with other worktrees and agents. Never run ` + "`git gc --prune=now`" + `, ` + "`git prune --expire=now`" + `, ` + "`git reflog expire --expire=now`" + `, or ` + "`git repack -ad`" + ` followed by a prune in it: they can delete objects that another worktree, or a fetch in progress, still needs.
@@ -57,7 +58,7 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 - End by running ` + "`comebye report -`" + ` with your final report on its standard input (a quoted heredoc is easiest), in exactly this markdown format, and then stop. That is how {{from}} learns you are done; if the command is not available, make the report your last message instead.
 
 ## Summary
-<what you did and the outcome, in a short paragraph>
+<what you did and the outcome, in a short paragraph; say which Intent it met, or which part it did not>
 
 ## Changes
 <the commits and the files changed, as a list>

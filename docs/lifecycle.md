@@ -306,8 +306,10 @@ coordinator adds prose; the coordinator files follow-ups.
 Sections 1 to 6 describe the `feature` workflow in full. The other
 workflows use the same steps, minus the ones the table above leaves out.
 
-The coordinator writes a brief (goal, context, constraints, definition of
-done), picks the workflow, and runs `comebye handoff --workflow TYPE`
+The coordinator writes a brief with two headed fields, Intent (the user's
+own ask, the acceptance criteria) and Spec (goal, context, constraints, what
+is out of scope, definition of done); the worker's report says in its Summary
+which intent it met. The coordinator picks the workflow, and runs `comebye handoff --workflow TYPE`
 (usually as `comebye backlog start ID`). The hub creates the worktree
 `~/.worktrees/<repo>/<branch>`, starts the agent and sends the brief
 wrapped in the handoff template. A handoff for a branch that already has an

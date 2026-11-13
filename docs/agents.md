@@ -79,7 +79,8 @@ the owning host:
    when done, don't merge, push or rebase unless the task or a later message
    from the coordinator says to (then exactly that, fast-forward only, never
    force, never rewriting history), and end with a final report in a fixed
-   format: `## Summary`, `## Changes`, `## Verification` (grouped as
+   format (its Summary says which Intent the work met; the brief's Intent is
+   the acceptance criteria and wins over its Spec): `## Summary`, `## Changes`, `## Verification` (grouped as
    Verified live / Unit tests only / Not verified, each defined: live is
    the real program driven as a user would, not a function called
    directly), `## Follow-ups`, `## Decisions for the user` (each bullet becomes a to-do item

@@ -105,16 +105,17 @@ user's.
    did. `comebye ledger` shows what each worker was started with and where
    its kind came from. You cannot change the settings; they are the user's.
 5. Write a **strong brief** to a file and pass it with `--brief`. A worker
-   starts with nothing but the brief, so it must stand alone:
-   - **Goal**: what should be true when the work is done, in a sentence or
-     two.
-   - **Context**: why, what the user said, links, issue numbers, the files
-     and functions involved, earlier attempts or reports to read.
-   - **Constraints**: what not to touch, compatibility, style, tools to use
-     or avoid.
-   - **Definition of done**: the tests, builds or checks that must pass and
-     what to commit. Workers commit on their branch and end with a report;
-     they land it themselves only after the user OKs it (see Landing).
+   starts with nothing but the brief, so it must stand alone. Head it with
+   two fields:
+   - `## Intent`: the user's own ask, in their words. It is the acceptance
+     criteria: the work is done when it is met, and a worker must not widen
+     it.
+   - `## Spec`: your build instructions: the goal, context (why, links,
+     issues, files, earlier reports), constraints, and **out of scope**
+     (required when the ask is narrow), and the definition of done: the
+     checks that must pass and what to commit. Workers commit on their
+     branch and end with a report; they land it themselves only after the
+     user OKs it (see Landing).
    - For any change to the phone app's UI (`web/`), the definition of done
      includes **seeing it**: the worker starts `tools/uitest/dev.sh start`,
      takes before and after screenshots with `tools/uitest/shot.mjs` at

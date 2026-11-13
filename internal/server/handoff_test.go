@@ -352,3 +352,27 @@ func TestHostOpAllowlist(t *testing.T) {
 		t.Fatalf("peer got %d POSTs", n)
 	}
 }
+
+// TestTemplateAndPlaybookAgreeOnIntentSpec keeps the handoff template, the
+// coordinator playbook and the lifecycle doc in step on the Intent/Spec brief.
+func TestTemplateAndPlaybookAgreeOnIntentSpec(t *testing.T) {
+	for _, want := range []string{"Intent", "Spec", "acceptance criteria", "say which Intent it met"} {
+		if !strings.Contains(defaultHandoffTemplate, want) {
+			t.Errorf("handoff template lacks %q", want)
+		}
+	}
+	for file, wants := range map[string][]string{
+		"../playbook/playbook.md": {"`## Intent`", "`## Spec`", "out of scope"},
+		"../../docs/lifecycle.md": {"Intent", "Spec", "which intent it met"},
+	} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range wants {
+			if !strings.Contains(string(b), w) {
+				t.Errorf("%s lacks %q", file, w)
+			}
+		}
+	}
+}
