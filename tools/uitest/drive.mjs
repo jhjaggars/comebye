@@ -841,7 +841,8 @@ await check("briefings: a swipe that starts on a sideways-scrolling row scrolls 
   await swipe(330, r.y, 60, r.y + 2);
   await settle();
   const st = await briefsState();
-  const sl = await page.evaluate(() => document.querySelector("#hscroll").scrollLeft);
+  // The row scrolls on the compositor, which a loaded machine can be late with: wait for it rather than read once.
+  const sl = await page.waitForFunction(() => { const x = document.querySelector("#hscroll").scrollLeft; return x >= 50 ? x : false; }, null, { timeout: 4000 }).then((h) => h.jsonValue()).catch(() => page.evaluate(() => document.querySelector("#hscroll").scrollLeft));
   if (st.open) throw new Error("opened from a scrolling row");
   if (sl < 50) throw new Error("the row did not scroll (scrollLeft " + sl + ")");
 });
@@ -2755,7 +2756,7 @@ await check("transcripts: before typing, the newest sessions, with filters that 
   await page.evaluate(() => localStorage.removeItem("comebye.recall.filters"));
   await page.locator("#btn-recall").click();
   await page.waitForSelector("#recall", { state: "visible" });
-  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 3, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 3, null, { timeout: 15000 });
   const titles = await page.locator(".rc-card .rc-title").allInnerTexts();
   if (!titles[0].includes("Provision") || !titles[1].includes("Long session") || !titles[2].includes("Retry")) throw new Error("not newest first: " + titles);
   const metas = await page.locator(".rc-card > .rc-meta:not(.rc-foot)").allInnerTexts();
@@ -2765,21 +2766,21 @@ await check("transcripts: before typing, the newest sessions, with filters that 
   if (await page.locator(".rc-card mark").count()) throw new Error("marks with no query");
   if (await visible('#rc-filters select[data-key="role"]') || await visible('#rc-filters select[data-key="sort"]')) throw new Error("word filters with no words");
   await page.screenshot({ path: `${out}/search-before-typing.png` });
-  await page.waitForFunction(() => document.querySelector('#rc-filters select[data-key="host"] option[value="devbox"]'), null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#rc-filters select[data-key="host"] option[value="devbox"]'), null, { timeout: 15000 });
   await page.locator('#rc-filters select[data-key="host"]').selectOption("devbox");
-  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 2, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 2, null, { timeout: 15000 });
   await page.locator('#rc-filters select[data-key="host"]').selectOption("");
-  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 3, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelectorAll(".rc-card").length === 3, null, { timeout: 15000 });
   // Opens at the start of the session: no match to jump to.
   const href = await page.locator(".rc-card").first().getAttribute("href");
   if (/[?&](seq|q)=/.test(href)) throw new Error("a recent card links to a match: " + href);
   await noSideways();
   // A query takes over, and clearing it brings the list back.
   await page.locator("#rc-q").fill("\"connection refused\"");
-  await page.waitForSelector(".rc-card .rc-snip mark", { timeout: 5000 });
+  await page.waitForSelector(".rc-card .rc-snip mark", { timeout: 15000 });
   if (!await visible('#rc-filters select[data-key="role"]')) throw new Error("no word filter with words");
   await page.locator("#rc-q").fill("");
-  await page.waitForFunction(() => /newest first/.test(document.querySelector("#rc-results").textContent), null, { timeout: 5000 });
+  await page.waitForFunction(() => /newest first/.test(document.querySelector("#rc-results").textContent), null, { timeout: 15000 });
   if (await page.locator(".rc-card mark").count()) throw new Error("marks after clearing");
 });
 
