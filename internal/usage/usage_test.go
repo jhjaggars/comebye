@@ -472,3 +472,23 @@ func TestPricesOverlay(t *testing.T) {
 		t.Fatal("an unpriced model got a price")
 	}
 }
+
+func TestContextWindow(t *testing.T) {
+	for _, c := range []struct {
+		model  string
+		tokens int
+		want   int
+	}{
+		{"claude-opus-5-5", 5000, 1_000_000},
+		{"claude-sonnet-5-5", 900_000, 1_000_000},
+		{"claude-opus-4-6", 50_000, 200_000},
+		{"claude-opus-4-6", 250_000, 1_000_000},
+		{"claude-haiku-5-5", 10, 0},
+		{"gpt-5.5", 10, 0},
+		{"?", 10, 0},
+	} {
+		if got := ContextWindow(c.model, c.tokens); got != c.want {
+			t.Errorf("%s %d: got %d want %d", c.model, c.tokens, got, c.want)
+		}
+	}
+}

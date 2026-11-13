@@ -52,6 +52,10 @@ type agent struct {
 	screen     []string // pane text (bravo; alpha mirrors its transcript here)
 	transcript string   // JSONL path ("" for none)
 	n          int
+
+	ctxTok, ctxStep int    // the context in use, written as usage on each reply and grown by ctxStep per reply (0: no usage)
+	ctxModel        string // the model those replies name
+	ctxPi           bool   // the transcript is a Pi session (usage under message.usage with input/cacheRead)
 }
 
 type fake struct {
@@ -71,6 +75,7 @@ func main() {
 	noStatus := flag.Bool("no-status", false, "never report working/idle: the status stays idle, as when herdr misses or delays a transition")
 	fixtures := flag.Bool("fixtures", false, "add the dev-harness fixture agents (worker, coordinator, home, blocked, long names, ...) after alpha and bravo")
 	hostTag := flag.String("fixture-host", "", "with -fixtures: a tag that makes the fixture agents a second host's (a peer): a few agents named <tag>-*")
+	ctxAgents := flag.Bool("context", false, "add agents whose sessions carry context usage (the chip in the agent view)")
 	falseBlocked := flag.Bool("false-blocked", false, "add a Claude agent that herdr reports as blocked while its screen shows a running command and no dialog")
 	autoBlock := flag.Bool("autoblock", false, "add a Claude agent blocked on an auto-mode permission prompt with the \"will automatically block this request\" warning")
 	trust := flag.Bool("trust-prompt", false, "add a Pi agent that herdr reports as idle while its screen shows the \"Trust project folder?\" prompt (any Enter answers it)")
@@ -111,6 +116,9 @@ func main() {
 	f.record(f.agents[0], "assistant", "alpha says hi")
 	if *fixtures {
 		f.addFixtures(*dir, *hostTag)
+	}
+	if *ctxAgents && !*fixtures {
+		f.addContextAgents(*dir, "")
 	}
 	if *trust && !*fixtures {
 		f.addTrustPrompt()
@@ -297,10 +305,21 @@ func (f *fake) record(a *agent, role, text string) {
 	if role == "user" {
 		rec = map[string]any{"type": "user", "uuid": fmt.Sprintf("u%d", a.n), "timestamp": ts,
 			"message": map[string]any{"role": "user", "content": text}}
+	} else if a.ctxPi {
+		a.ctxTok += a.ctxStep
+		rec = map[string]any{"type": "message", "id": fmt.Sprintf("p%d", a.n), "timestamp": ts,
+			"message": map[string]any{"role": "assistant", "provider": "fixture", "model": a.ctxModel,
+				"content": []any{map[string]any{"type": "text", "text": text}},
+				"usage":   map[string]any{"input": a.ctxTok / 10, "output": 9, "cacheRead": a.ctxTok - a.ctxTok/10, "cacheWrite": 0}}}
 	} else {
-		rec = map[string]any{"type": "assistant", "uuid": fmt.Sprintf("a%d", a.n), "timestamp": ts,
-			"message": map[string]any{"id": fmt.Sprintf("msg_%d", a.n), "model": "fake",
-				"content": []any{map[string]any{"type": "text", "text": text}}}}
+		msg := map[string]any{"id": fmt.Sprintf("msg_%d", a.n), "model": "fake",
+			"content": []any{map[string]any{"type": "text", "text": text}}}
+		if a.ctxTok > 0 {
+			a.ctxTok += a.ctxStep
+			msg["model"] = a.ctxModel
+			msg["usage"] = map[string]any{"input_tokens": 3, "output_tokens": 9, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": a.ctxTok - 1003}
+		}
+		rec = map[string]any{"type": "assistant", "uuid": fmt.Sprintf("a%d", a.n), "timestamp": ts, "message": msg}
 	}
 	b, _ := json.Marshal(rec)
 	fh, err := os.OpenFile(a.transcript, os.O_APPEND|os.O_WRONLY, 0o644)

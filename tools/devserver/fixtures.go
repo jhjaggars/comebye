@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // workspaces is session.snapshot's workspace list: the fixture agents that
@@ -99,6 +100,7 @@ func (f *fake) addFixtures(dir, tag string) {
 		a := mk(tag+"-build", "w21:p1", "claude", "Claude", "idle", tag+"-build", "/srv/"+tag+"/build")
 		chat(a, "status of the nightly?", "The nightly finished green on "+tag+".")
 		mk(tag+"-docs", "w22:p1", "codex", "Codex", "working", tag+"-docs", "/srv/"+tag+"/docs")
+		f.addContextAgents(dir, tag)
 		return
 	}
 
@@ -143,6 +145,55 @@ func (f *fake) addFixtures(dir, tag string) {
 		"/home/u/.worktrees/some-very-long-repository-name-for-testing/feature-branch-with-a-very-long-descriptive-name")
 	l.repo, l.checkout, l.linked = "some-very-long-repository-name-for-testing", l.CWD, true
 	chat(l, "go", "A long reply: "+longText)
+	f.addContextAgents(dir, "")
+}
+
+// addContextAgents adds agents whose sessions carry context usage, one per
+// look of the chip in the agent view: below the warning, warning, danger, a
+// model whose window is not known (tokens only), no usage at all, a Pi
+// session, and a session compacted after its last reply (hidden). Their
+// replies grow the context by ctxStep, so the chip moves while a test talks to them.
+func (f *fake) addContextAgents(dir, tag string) {
+	mk := func(name, pane, kind, model string, tok, step int, pi bool) *agent {
+		ws := pane[:len(pane)-3]
+		a := &agent{Name: name, PaneID: pane, Workspace: ws, TabID: ws + ":t1", Agent: kind, Display: kind,
+			Status: "idle", Title: name, CWD: "/home/u/code/ctx", Ready: true, screen: []string{name + " ready"},
+			ctxTok: tok, ctxStep: step, ctxModel: model, ctxPi: pi}
+		file := filepath.Join(dir, name+".jsonl")
+		var head []byte
+		if pi {
+			head = []byte(`{"type":"session","version":3,"id":"01a1b1d1-3cf9-753f-b736-4219294a78a3","timestamp":"2026-11-06T17:04:02.298Z","cwd":"/home/u/code/ctx"}` + "\n")
+		}
+		if err := os.WriteFile(file, head, 0o644); err != nil {
+			log.Fatal(err)
+		}
+		a.transcript = file
+		a.Session = map[string]string{"source": "fake", "agent": kind, "kind": "path", "value": file}
+		f.agents = append(f.agents, a)
+		return a
+	}
+	ask := func(a *agent) {
+		f.record(a, "user", "how full are you?")
+		f.record(a, "assistant", "Quite.")
+	}
+	if tag != "" { // a peer host has one, to see the chip on an agent of another host
+		ask(mk(tag+"-ctx", "w23:p1", "claude", "claude-sonnet-4-6", 124000-20000, 20000, false))
+		return
+	}
+	ask(mk("ctx-ok", "w31:p1", "claude", "claude-sonnet-4-6", 124000-20000, 20000, false))
+	ask(mk("ctx-warn", "w32:p1", "claude", "claude-opus-5-5", 830000-5000, 5000, false))
+	ask(mk("ctx-danger", "w33:p1", "claude", "claude-sonnet-4-6", 192000-1000, 1000, false))
+	ask(mk("ctx-live", "w38:p1", "claude", "claude-sonnet-4-6", 60000-20000, 20000, false)) // the test talks to this one
+	ask(mk("ctx-nowindow", "w34:p1", "claude", "claude-haiku-5-5", 40000-1000, 1000, false))
+	ask(mk("ctx-pi", "w35:p1", "pi", "m1", 64000-4000, 4000, true))
+	none := mk("ctx-none", "w36:p1", "claude", "", 0, 0, false)
+	ask(none)
+	st := mk("ctx-compacted", "w37:p1", "claude", "claude-sonnet-4-6", 100000-1000, 1000, false)
+	ask(st)
+	if fh, err := os.OpenFile(st.transcript, os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		fh.WriteString(`{"type":"system","subtype":"compact_boundary","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","content":"Conversation compacted"}` + "\n")
+		fh.Close()
+	}
 }
 
 const longText = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. " +

@@ -65,6 +65,10 @@ type Transcript struct {
 	// before a tool call that no bubble carries, and both formats record
 	// it a step before the next reply. Nil when none was recorded.
 	Thinking *Thought `json:"thinking,omitempty"`
+	// Context is how full the agent's context window is, set by the server
+	// for the session's own transcript (not a subagent's) when the file
+	// says; see LastContext.
+	Context *Context `json:"context,omitempty"`
 }
 
 // askToolName is the tool registered by the @juicesharp/rpiv-ask-user-question
