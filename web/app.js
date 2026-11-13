@@ -1890,7 +1890,15 @@ function rsEnsure() {
 
 function rsTeardown() {
   if (!rs.el) return;
-  if (!rs.el.hidden) { rs.el.hidden = true; rs.el.replaceChildren(); rs.key = ""; rs.sig = ""; pgc.split = false; }
+  if (!rs.el.hidden) {
+    rs.el.hidden = true; rs.el.replaceChildren(); rs.key = ""; rs.sig = ""; pgc.split = false;
+    if (history.state && history.state.rs) history.back(); // the entry the split pushed
+  }
+}
+// The split pushes one history entry when it opens, so the phone's Back closes it (route() calls this). Stepping to another
+// item with j and k keeps the one entry.
+function syncSplit() {
+  if (rsActive() && !(history.state && history.state.rs)) todoCollapse();
 }
 
 function renderSplit(force) {
@@ -1908,6 +1916,7 @@ function renderSplit(force) {
   }
   const first = el.hidden || rs.key !== key;
   if (first) {
+    if (el.hidden && !(history.state && history.state.rs)) history.pushState({ rs: true }, "", location.href);
     el.hidden = false;
     rs.key = key; rs.sig = "";
     el.dataset.tab = rs.tab;
@@ -2356,6 +2365,7 @@ function todoExpand(id, to) {
   row.scrollIntoView?.({ block: isDesktop() ? "nearest" : "start" });
 }
 function todoCollapse() {
+  if (rsActive() && history.state && history.state.rs) { history.back(); return; } // popstate closes it, see syncSplit
   if (todos.openId) todos.lastId = todos.openId;
   todos.openId = null;
   renderTodos(true);
@@ -7320,6 +7330,7 @@ function route() {
   syncMark();
   syncParkSheet();
   syncParkAll();
+  syncSplit();
   syncFresh();
   syncSwitch();
   const r = parseRoute();

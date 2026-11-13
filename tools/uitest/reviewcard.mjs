@@ -134,6 +134,20 @@ for (const width of [1280, 390]) {
       await page.waitForSelector("#rs", { state: "hidden" });
       if (await page.locator("#rs iframe").count()) throw new Error("the frame stays after Back");
     });
+    await check(`review card at ${tag}: Back (history) closes the split once, from either tab, and entries do not pile up`, async () => {
+      await open(r1.id);
+      const n0 = await page.evaluate(() => history.length);
+      if (!(await page.evaluate(() => !!(history.state && history.state.rs)))) throw new Error("the split pushed no history entry");
+      if (width < 500) await page.locator('#rs [data-rs-tab="page"]').click();
+      await page.goBack();
+      await page.waitForSelector("#rs", { state: "hidden" });
+      if (!page.url().startsWith(base)) throw new Error("Back left the app: " + page.url());
+      if (await page.locator(LIST).isHidden()) throw new Error("the To do list is gone after Back");
+      for (let i = 0; i < 3; i++) { await open(r1.id); await page.locator("#rs .rs-back").click(); await page.waitForSelector("#rs", { state: "hidden" }); }
+      await sleep(300);
+      const n1 = await page.evaluate(() => history.length);
+      if (n1 > n0) throw new Error(`history grew from ${n0} to ${n1}`);
+    });
     await check(`review card at ${tag}: Looks good closes it with an Undo toast; Undo opens it again`, async () => {
       await open(r1.id);
       await item(r1.id).locator(".rv-good").click();

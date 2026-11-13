@@ -311,14 +311,14 @@ var errNoUndo = fmt.Errorf("cannot_undo")
 func reviewNoticeText(it Todo) string {
 	v := it.Review.Verdict
 	var sb strings.Builder
-	title := safeText(oneLine(it.Page.Title, 80))
+	title := oneLine(it.Page.Title, 80)
 	if v.Verdict == VerdictGood {
 		fmt.Fprintf(&sb, "Comebye (hub notice): the user reviewed your Page %s (%s v%d) in the app: Looks good.", title, it.Page.ID, it.Page.Version)
 	} else {
 		fmt.Fprintf(&sb, "Comebye (hub notice): the user reviewed the Page %s (%s v%d) in the app: Needs changes (%s).", title, it.Page.ID, it.Page.Version, reviewKinds[v.Kind])
 	}
 	if v.Note != "" {
-		fmt.Fprintf(&sb, " Their note: %s", safeText(oneLine(v.Note, 500)))
+		fmt.Fprintf(&sb, " Their note: %s", oneLine(v.Note, 500))
 	}
 	if it.Review.FixID != "" {
 		fmt.Fprintf(&sb, " It is filed as to-do item %s: run `comebye todo show %s`.", safeText(it.Review.FixID), safeText(it.Review.FixID))

@@ -260,3 +260,21 @@ func TestReviewVerdictValidationAndRoles(t *testing.T) {
 		t.Errorf("missing = %d", w.Code)
 	}
 }
+
+// The notice keeps the Page title and the user's note readable: spaces and
+// non-ASCII stay, control characters become spaces.
+func TestReviewNoticeKeepsTitleReadable(t *testing.T) {
+	it := Todo{
+		Page:   &TodoPage{ID: "pg_0123456789", Version: 2, Title: "Terminal toggle in the agent header — café\x1b[31m"},
+		Review: &TodoReview{Verdict: &ReviewVerdict{Verdict: VerdictGood, Note: "Looks fine, naïve\nline two"}},
+	}
+	got := reviewNoticeText(it)
+	for _, want := range []string{"Page Terminal toggle in the agent header — café [31m (pg_0123456789 v2)", "Their note: Looks fine, naïve line two"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("notice lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "?") || strings.ContainsRune(got, 0x1b) {
+		t.Errorf("notice has a ? or an escape:\n%s", got)
+	}
+}
