@@ -39,9 +39,11 @@ const (
 	// reaskGap is the least time between asks of one mark by the hub;
 	// reaskCap is how old an unresolved answer gets before the hub asks
 	// again; reaskMax caps the hub's automatic re-asks of one mark.
-	reaskGap   = 30 * time.Minute
-	reaskCap   = 12 * time.Hour
-	reaskMax   = 3
+	reaskGap = 30 * time.Minute
+	// openGap is the least time between asks when the review is opened.
+	openGap    = 2 * time.Minute
+	reaskCap   = time.Hour // an answer older than this is not trusted: the session is asked again
+	reaskMax   = 12
 	reaskEvery = 2 * time.Minute
 	// recheckWait bounds the re-checks of one answer.
 	recheckWait = 25 * time.Second

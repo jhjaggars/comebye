@@ -436,6 +436,40 @@ func (s *Server) RunReask(ctx context.Context) {
 	}
 }
 
+// unsafeStale says whether an UNSAFE answer should not be trusted any more: an
+// item resolved after it was given (the thing it named changed), or it is
+// older than reaskCap with something still unresolved.
+func (s *Server) unsafeStale(a *ledger.Ask, ar *askReview, now time.Time) bool {
+	return ar.Event || (!ar.Resolved && now.Sub(a.At) >= s.reaskCap)
+}
+
+// reaskStale is the review being opened: an UNSAFE answer that is stale (see
+// unsafeStale) of an idle session is asked again now, not at the next tick of
+// the hub's loop, so a stale answer does not sit in the review until someone
+// types into the session. At most one ask per openGap, and the hub's own limit
+// does not apply (a person is looking). It reports whether it asked.
+func (s *Server) reaskStale(it *removal, now time.Time) bool {
+	a := it.Mark.Ask
+	if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || it.AskReview == nil || !s.unsafeStale(a, it.AskReview, now) {
+		return false
+	}
+	last := a.At
+	if a.AskedAt != nil && a.AskedAt.After(last) {
+		last = *a.AskedAt
+	}
+	if now.Sub(last) < s.openGap {
+		return false
+	}
+	if err := s.reask(it.Mark, false, ""); err != nil {
+		return false
+	}
+	t := now.UTC()
+	a.ReaskedAt = &t // the response shows it, so the app polls for the new answer
+	it.AskReview.Reasking = &t
+	it.Notes = append(it.Notes, "the session's UNSAFE answer was "+agoText(now, it.AskReview.AnsweredAt)+" and is not trusted: asking it again…")
+	return true
+}
+
 // reaskStep asks again each marked session whose UNSAFE answer an event has
 // overtaken (an item resolved after it was given) or that is still
 // unresolved after reaskCap. A mark is asked at most once per reaskGap and
@@ -459,10 +493,7 @@ func (s *Server) reaskStep(ctx context.Context, now time.Time) []string {
 			continue
 		}
 		ar := s.askReviewOf(ctx, it)
-		switch {
-		case ar == nil:
-			continue
-		case !ar.Event && (ar.Resolved || now.Sub(a.At) < s.reaskCap):
+		if ar == nil || !s.unsafeStale(a, ar, now) {
 			continue
 		}
 		if err := s.reask(it.Mark, true, ""); err != nil {

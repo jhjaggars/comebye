@@ -263,6 +263,7 @@ type Server struct {
 	// reaskGap, reaskCap and reaskMax pace the hub's automatic re-asks
 	// (tests change them); reaskEvery is how often RunReask looks.
 	reaskGap, reaskCap time.Duration
+	openGap            time.Duration
 	reaskMax           int
 	reaskEvery         time.Duration
 	// releasing counts the releaseQueued passes started by queueing a step,
@@ -362,7 +363,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s := &Server{cfg: cfg, recall: archive.NewReader(cfg.RecallIndex), client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond, resetPoll: 500 * time.Millisecond, resetWait: 30 * time.Second,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait,
-		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
+		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, openGap: openGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
 	switch {
 	case cfg.LandTurnTimeout == 0:
 		s.landTurn = DefaultLandTurnTimeout

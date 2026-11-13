@@ -52,6 +52,10 @@ type autoFacts struct {
 	TodoWaiting bool
 	Queued      int
 	Background  int
+	// AnswerTTL, with Now, makes an old SAFE answer not clean: the session is
+	// asked again instead (autoRemoveOne). Zero turns it off.
+	AnswerTTL time.Duration
+	Now       time.Time
 }
 
 // autoRemoveVerdict says whether a reviewed removal (review has run, with the
@@ -76,6 +80,8 @@ func autoRemoveVerdict(it *removal, f autoFacts) (ok bool, why string) {
 		return false, "the mark proposes discarding the work"
 	case m.Ask == nil || m.Ask.State != ledger.AskSafe:
 		return false, "the session has not answered SAFE"
+	case f.AnswerTTL > 0 && !m.Ask.At.IsZero() && f.Now.Sub(m.Ask.At) >= f.AnswerTTL:
+		return false, "the SAFE answer is " + agoText(f.Now, m.Ask.At) + ": too old to trust"
 	case m.Ask.ReaskedAt != nil:
 		return false, "the session is being asked again"
 	case it.Worktree == "" || it.ChecksError != "" || c == nil:
@@ -126,7 +132,7 @@ func inBaseHow(c *worktreeChecks) string {
 
 // autoFactsOf gathers the outside facts about an agent id.
 func (s *Server) autoFactsOf(it *removal) autoFacts {
-	var f autoFacts
+	f := autoFacts{AnswerTTL: s.reaskCap, Now: time.Now()}
 	if s.todos != nil {
 		for _, t := range s.todos.list("") {
 			if t.active() && t.Waiting != nil && t.Waiting.ID == it.ID {
@@ -192,7 +198,15 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	defer cancel()
 	it.opts.Origin = true
 	s.review(ctx, it)
-	if ok, _ := autoRemoveVerdict(it, s.autoFactsOf(it)); !ok {
+	f := s.autoFactsOf(it)
+	if ok, _ := autoRemoveVerdict(it, f); !ok {
+		// A SAFE answer that went old is asked again (it stays until the new
+		// one replaces it); the next look decides on the fresh answer.
+		if a := it.Mark.Ask; a != nil && a.State == ledger.AskSafe && a.ReaskedAt == nil && f.AnswerTTL > 0 && f.Now.Sub(a.At) >= f.AnswerTTL {
+			if err := s.reask(it.Mark, true, ""); err != nil {
+				log.Printf("auto remove: re-ask %s: %v", it.ID, err)
+			}
+		}
 		return false
 	}
 	// The mark may have been withdrawn or replaced while the checks ran.

@@ -370,3 +370,68 @@ func TestUndoAutoRemove(t *testing.T) {
 		t.Fatalf("agent undo = %d", w.Code)
 	}
 }
+
+// A stale UNSAFE answer (real case: it named one remote branch, the branch was
+// deleted hours later, and the review kept showing it) is not trusted: opening
+// the review asks the idle session again, and the new answer replaces it.
+func TestStaleUnsafeIsAskedAgainWhenTheReviewOpens(t *testing.T) {
+	s, fh := askServer(t, "SAFE")
+	other := ledger.AskItem{Type: "other", Text: "remote branch research/x still exists"}
+	review := func() (reasking bool, notes string) {
+		w := do(s, "GET", "/api/removals", userHdr, "")
+		var rv struct{ Removals []removal }
+		if json.Unmarshal(w.Body.Bytes(), &rv); len(rv.Removals) != 1 {
+			t.Fatalf("review = %s", w.Body)
+		}
+		it := rv.Removals[0]
+		return it.AskReview != nil && it.AskReview.Reasking != nil && it.Mark.Ask.ReaskedAt != nil, strings.Join(it.Notes, "|")
+	}
+	// Young: shown as it is, nobody is asked.
+	markUnsafe(t, s, 20*time.Minute, other)
+	if re, _ := review(); re || promptCount(fh) != 0 {
+		t.Fatalf("a young answer was asked again (%d prompts)", promptCount(fh))
+	}
+	// Two hours old, free text the hub cannot check: asked again at once.
+	markUnsafe(t, s, 2*time.Hour, other)
+	re, notes := review()
+	if !re || !strings.Contains(notes, "not trusted") {
+		t.Fatalf("stale answer not asked again: reasking=%v notes=%q", re, notes)
+	}
+	waitFor(t, func() bool {
+		a := markOf(t, s, "desk/w2:p1").Ask
+		return a.State == ledger.AskSafe && a.ReaskedAt == nil
+	})
+	if promptCount(fh) != 1 {
+		t.Fatalf("prompts = %d", promptCount(fh))
+	}
+	// Opening the review again (within the gap) asks nobody.
+	markUnsafe(t, s, 2*time.Hour, other)
+	s.ledger.UpdateAsk("desk/w2:p1", markOf(t, s, "desk/w2:p1").At, func(a *ledger.Ask) bool {
+		n := time.Now().Add(-30 * time.Second)
+		a.AskedAt = &n
+		return true
+	})
+	if re, _ := review(); re || promptCount(fh) != 1 {
+		t.Fatalf("asked again inside the gap (%d prompts)", promptCount(fh))
+	}
+}
+
+// A SAFE answer older than the cap is not enough for an automatic removal:
+// the session is asked again, and the worker stays until the new answer.
+func TestAutoRemoveDoesNotTrustAnOldSafeAnswer(t *testing.T) {
+	s, r, _ := autoFix(t)
+	old := time.Now().UTC().Add(-2 * time.Hour)
+	setAsk(t, s, &ledger.Ask{State: ledger.AskSafe, At: old})
+	if got := s.autoRemoveStep(context.Background(), time.Now()); len(got) != 0 {
+		t.Fatalf("removed on an old SAFE answer: %v", got)
+	}
+	if _, err := os.Stat(r.wt); err != nil {
+		t.Fatal(err)
+	}
+	if a := entryOf(t, s).Mark.Ask; a.ReaskedAt == nil && a.AskedAt == nil {
+		t.Fatalf("the old answer was not asked again: %+v", a)
+	}
+	if ok, why := autoRemoveVerdict(&removal{EntryID: "e", Worktree: "/w", Mark: ledger.Mark{Ask: &ledger.Ask{State: ledger.AskSafe, At: old}}}, autoFacts{AnswerTTL: time.Hour, Now: time.Now()}); ok || !strings.Contains(why, "too old") {
+		t.Fatalf("verdict = %v %q", ok, why)
+	}
+}

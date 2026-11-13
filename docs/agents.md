@@ -276,7 +276,7 @@ unmerged and never deletes a branch. Each one writes an audit entry
 (`worker.auto_remove`), puts "removed X automatically: landed, clean, SAFE" in
 the coordinator's digest, and is listed in the review for a day with an
 **Undo**: the branch was kept, so the worktree is created again and a fresh
-worker starts on it (the old conversation is not restored). `-auto-remove=false`
+worker starts on it (the old conversation is not restored). A safety answer is not trusted for more than an hour: opening the review asks an idle session again when its UNSAFE answer is older than that (or an item it named has since changed), and an automatic removal waits for a fresh SAFE. `-auto-remove=false`
 (`COMEBYE_AUTO_REMOVE=false`) turns it off. Workers on a peer host go through
 the same host routes; a peer too old to answer the origin check stays in the
 review.

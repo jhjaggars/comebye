@@ -356,7 +356,7 @@ func TestAutoReaskTriggersAndRateLimit(t *testing.T) {
 
 	// Nothing has moved and the answer is young: no re-ask.
 	stubProbes(t, map[int]*probeResult{344: {State: "open"}}, nil, nil)
-	markUnsafe(t, s, 2*time.Hour, pending)
+	markUnsafe(t, s, 30*time.Minute, pending)
 	if got := s.reaskStep(ctx, now); len(got) != 0 {
 		t.Fatalf("young answer re-asked: %v", got)
 	}

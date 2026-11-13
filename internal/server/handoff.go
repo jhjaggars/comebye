@@ -1140,6 +1140,7 @@ func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			s.review(ctx, it)
+			s.reaskStale(it, time.Now())
 		}()
 	}
 	wg.Wait()
