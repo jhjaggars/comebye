@@ -869,6 +869,80 @@ await check("links: a to-do link to a page opens it in the app; delete asks and 
   if (r.status !== 404) throw new Error("deleted page answers " + r.status);
 });
 
+// A phone (an installed app draws under the status bar and the notch): a long page touch-scrolls to its end, and the
+// viewer's back arrow stays below the notch and gets back to the gallery. The inset is emulated (CDP), 47px like an iPhone.
+await check("phone: a long page scrolls to its end and the back arrow clears the notch", async () => {
+  const para = (i) => `<p>Paragraph ${i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor.</p>`;
+  const longHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Long page</title></head><body style="margin:16px;font:16px system-ui;background:#fff;color:#111"><h1>Long page</h1>${Array.from({ length: 220 }, (_, i) => para(i)).join("")}<h2 id="end">THE END</h2><table style="min-width:900px">${Array.from({ length: 30 }, (_, i) => `<tr><td>${i}</td><td>wide cell</td></tr>`).join("")}</table></body></html>`;
+  const id = idOf(publish([file("long.html", longHtml), "--title", "Long page"]));
+  const inset = 47;
+  const ph = await launch({ width: 390, height: 844, dark, bypassCSP: false });
+  const m = ph.page;
+  const cdp = await ph.ctx.newCDPSession(m);
+  await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: inset, bottom: 34, left: 0, right: 0 } });
+  await m.goto(base + "/#/pages", { waitUntil: "load" });
+  await m.waitForSelector(".pgs-card", { timeout: 8000 });
+  await m.locator(`.pgs-card[data-id="${id}"]`).click();
+  await m.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  let f;
+  for (let i = 0; i < 60 && !f; i++) { f = m.frames().find((x) => x.url().includes("/p/" + id)); if (!f) await m.waitForTimeout(100); }
+  await until(f, () => !!document.getElementById("end"));
+  const geo = () => m.evaluate(() => {
+    const r = (s) => document.querySelector(s).getBoundingClientRect();
+    const b = r(".pgs-bar"), a = r("#pgs-vback"), fr = r(".pgs-frame");
+    return { barTop: b.top, backTop: a.top, backBottom: a.bottom, frameTop: fr.top, frameBottom: fr.bottom, scrollY, vh: innerHeight };
+  });
+  let g = await geo();
+  // every control of the bar is under the status bar's inset, not behind it, and the page fills the rest
+  if (g.backTop < inset - 0.5) throw new Error("the back arrow is behind the notch: " + JSON.stringify(g));
+  if (g.frameTop < inset + 40 || g.frameBottom > g.vh + 0.5) throw new Error("page frame " + JSON.stringify(g));
+  await m.screenshot({ path: `${out}/pages-long-390-top.png` });
+  // real touch swipes (finger moving up) over the page until its end
+  const swipe = async () => {
+    const pt = (y) => [{ x: 200, y, id: 1 }];
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(700) });
+    for (let i = 1; i <= 8; i++) { await m.waitForTimeout(16); await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(700 - 60 * i) }); }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await m.waitForTimeout(250);
+  };
+  const atEnd = () => f.evaluate(() => Math.ceil(scrollY + innerHeight) >= document.documentElement.scrollHeight - 2).catch(() => false);
+  for (let i = 0; i < 120 && !(await atEnd()); i++) await swipe();
+  if (!(await atEnd())) throw new Error("touch scrolling never reached the end of the page");
+  g = await geo();
+  if (g.scrollY !== 0 || g.backTop < inset - 0.5) throw new Error("after scrolling the bar moved: " + JSON.stringify(g));
+  await m.screenshot({ path: `${out}/pages-long-390-end.png` });
+  // comment strip with its note editor and a tray of two comments, on a short screen (the keyboard up): the page keeps room and still scrolls
+  const sel = (t) => f.evaluate((t) => { const r = document.createRange(); const p = [...document.querySelectorAll("p")].find((x) => x.textContent.includes(t)); r.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }, t);
+  for (const n of [3, 4]) {
+    await sel("Paragraph " + n + ".");
+    await m.waitForSelector("#pgs-sel:not([hidden])", { timeout: 4000 });
+    await m.locator("#pgs-addc").tap();
+    await m.locator("#pgs-note").fill("A long comment on paragraph " + n + ". ".repeat(1) + "x".repeat(120));
+    await m.locator("#pgs-noteadd").tap();
+    await m.waitForTimeout(1100); // the viewer takes at most 10 selection messages a second
+  }
+  await sel("Paragraph 5.");
+  await m.waitForSelector("#pgs-sel:not([hidden])", { timeout: 4000 });
+  await m.locator("#pgs-addc").tap();
+  await m.setViewportSize({ width: 390, height: 520 });
+  await m.waitForTimeout(300);
+  g = await geo();
+  const room = await m.evaluate(() => ({ frame: document.querySelector(".pgs-frame").getBoundingClientRect().height, sel: document.getElementById("pgs-sel").getBoundingClientRect().height, tray: document.getElementById("pgs-tray").getBoundingClientRect().height, sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
+  await m.screenshot({ path: `${out}/pages-long-390-note.png` });
+  if (room.frame < 135 || room.sw > room.cw) throw new Error("with the comment strip, its note and the tray open the page has no room: " + JSON.stringify(room));
+  await m.locator("#pgs-notecancel").tap();
+  await m.setViewportSize({ width: 390, height: 844 });
+  // the back arrow, tapped: the gallery
+  await m.locator("#pgs-vback").tap();
+  await m.waitForSelector(".pgs-card", { state: "visible", timeout: 4000 });
+  // and the browser's own back from an open page lands on the gallery
+  await m.locator(`.pgs-card[data-id="${id}"]`).tap();
+  await m.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  await m.goBack();
+  await m.waitForSelector(".pgs-card", { state: "visible", timeout: 4000 });
+  await ph.browser.close();
+});
+
 fs.writeFileSync(`${out}/pages-browser.log`, log.join("\n") + "\n");
 fs.writeFileSync(`${out}/pages-probe.json`, JSON.stringify(probeResult, null, 2) + "\n");
 await desktop.browser.close();
