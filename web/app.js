@@ -4430,7 +4430,7 @@ function fleetRefresh() {
 // the list below it.
 
 const REMOVE_HASH = "#/remove";
-const review = { open: false, items: [], results: new Map(), busy: false, seq: 0, askTimer: 0, sel: new Set(), confirm: null };
+const review = { open: false, items: [], auto: [], results: new Map(), busy: false, seq: 0, askTimer: 0, sel: new Set(), confirm: null };
 const sweep = { busy: false, seq: 0, data: null, marked: false, shown: false, err: "" };
 
 // openReview goes to the page; the hash change shows it.
@@ -4506,6 +4506,7 @@ async function loadReview(quiet) {
   }
   if (seq !== review.seq) return;
   review.items = Array.isArray(d.removals) ? d.removals : [];
+  review.auto = Array.isArray(d.auto_removed) ? d.auto_removed : [];
   const ids = new Set(review.items.map((it) => it.id));
   for (const id of [...review.sel]) if (!ids.has(id)) review.sel.delete(id);
   if (review.confirm && !review.confirm.ids.every((id) => ids.has(id))) review.confirm = null;
@@ -4698,7 +4699,33 @@ function renderReview() {
     d.addEventListener("toggle", () => { if (d.open) fillHubChecks(d); });
   });
   renderReviewBulk();
+  renderReviewAuto();
   $("rv-sweep").disabled = review.busy || sweep.busy;
+}
+
+// The workers the hub removed on its own in the last day (every check was clean), each with an Undo that starts a
+// fresh worker on the kept branch.
+function renderReviewAuto() {
+  const box = $("rv-auto");
+  const rows = review.auto || [];
+  box.hidden = !rows.length;
+  if (!rows.length) { box.innerHTML = ""; return; }
+  const dis = review.busy ? " disabled" : "";
+  box.innerHTML = `<h3 class="rv-autoh">Removed automatically · last day</h3>` + rows.map((a) => {
+    const name = esc(a.name || a.entry_id);
+    const host = multiHost() && a.host ? `<span class="host-chip">${esc(a.host)}</span>` : "";
+    const branch = a.branch ? `<span class="wt-chip">⑂ ${esc(a.branch)}</span>` : "";
+    const when = a.at ? esc(askAge(a.at)) : "";
+    const how = [a.reason, a.landed].filter(Boolean).map(esc).join(" · ");
+    const kept = !a.worktree_removed && a.kept ? `<div class="rv-sub">Kept the worktree: ${esc(a.kept)}</div>` : "";
+    let act;
+    if (a.undone_at) act = `<div class="rv-sub">Undone ${esc(askAge(a.undone_at))}${a.undo_note ? ": " + esc(a.undo_note) : ""}</div>`;
+    else if (a.can_undo) act = `<div class="rv-actions"><button type="button" class="btn" data-act="autoundo" data-id="${esc(a.entry_id)}" aria-label="Undo the removal of ${name}"${dis}>Undo</button></div>`;
+    else act = `<div class="rv-sub">Undo is not possible any more.</div>`;
+    return `<div class="rv-item rv-auto-item" data-id="${esc(a.entry_id)}">
+      <div class="rv-top"><span class="rv-name">${name}</span>${host}${branch}<span class="status">${when}</span></div>
+      <div class="rv-reason">Removed automatically: ${how}</div>${kept}${act}</div>`;
+  }).join("");
 }
 
 // The select-all bar: it counts the selection and removes the safe rows in it.
@@ -4778,6 +4805,19 @@ async function reviewAction(act, id, item) {
       toast("Could not ask it again: " + e.message, true);
       return;
     }
+    loadReview(true);
+    return;
+  }
+  if (act === "autoundo") {
+    setReviewBusy(true, "Starting a worker on the branch again…");
+    try {
+      const d = await api("/api/removals/undo", { method: "POST", body: JSON.stringify({ entry_id: id }) });
+      toast(d.note || "Undone");
+    } catch (e) {
+      toast("Could not undo: " + e.message, true);
+    }
+    setReviewBusy(false);
+    refreshAgents().catch(() => {});
     loadReview(true);
     return;
   }
@@ -12309,6 +12349,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("rv-list").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-act]");
     if (b) reviewAction(b.dataset.act, b.dataset.id, b.dataset.item);
+  });
+  $("rv-auto").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-act]");
+    if (b) reviewAction(b.dataset.act, b.dataset.id);
   });
   $("rv-bulk").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-act]");

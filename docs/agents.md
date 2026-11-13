@@ -261,6 +261,26 @@ marked sessions appear in the removals review, where you confirm each as
 usual. `--notify` (not with `--dry-run`) also prompts an idle coordinator
 with the summary, so it can judge the "needs a look" ones.
 
+**Automatic removal.** A marked worker that passes every check is removed by
+the hub without your tap, so the review shows only the ones that need you.
+All of these must hold, rechecked at removal time: its work is in the base
+(every commit has an equivalent on `origin/<default branch>` after a fetch
+that worked, or it has no commits, or its pull request was merged; the
+checkout's own `main` is not trusted); nothing is unpushed and the worktree
+has no uncommitted or untracked files (ignored files do not count); the
+session answered SAFE (not "did not answer", UNSAFE or unchecked); no open
+to-do waits on it and it has no queued prompts; it is not a coordinator and
+is not working, blocked or running a background task. Anything else stays in
+the review as before. The removal keeps the worktree whenever anything is
+unmerged and never deletes a branch. Each one writes an audit entry
+(`worker.auto_remove`), puts "removed X automatically: landed, clean, SAFE" in
+the coordinator's digest, and is listed in the review for a day with an
+**Undo**: the branch was kept, so the worktree is created again and a fresh
+worker starts on it (the old conversation is not restored). `-auto-remove=false`
+(`COMEBYE_AUTO_REMOVE=false`) turns it off. Workers on a peer host go through
+the same host routes; a peer too old to answer the origin check stays in the
+review.
+
 **Discarding.** When a marked session's worktree has work a removal would
 keep (uncommitted changes, unmerged commits, an unfinished rebase or
 merge), the review lists what would be lost: the unmerged commits (and how

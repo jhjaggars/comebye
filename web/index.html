@@ -1140,6 +1140,8 @@
     .rv-item { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-14); padding: var(--sp-12) var(--sp-14); margin-bottom: var(--sp-10); }
     .rv-item.warn { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
     .rv-item.done { opacity: 0.8; }
+    .rv-autoh { margin: var(--sp-16) 0 var(--sp-8); font-size: var(--fs-13); font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .rv-auto-item .rv-top .status { text-transform: none; letter-spacing: 0; }
     .rv-top { display: flex; align-items: center; gap: var(--sp-6); flex-wrap: wrap; }
     .rv-top .rv-name { font-weight: 650; font-size: var(--fs-15); margin-right: auto; min-width: 0; overflow-wrap: anywhere; }
     .rv-top .status { flex: none; font-size: var(--fs-12); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
@@ -2967,6 +2969,7 @@
       <div id="rv-sweepbox" aria-live="polite" hidden></div>
       <div id="rv-bulk" class="rv-bulk" hidden></div>
       <div id="rv-list" aria-live="polite"></div>
+      <div id="rv-auto" class="rv-auto" hidden></div>
       <div class="ln-status" id="rv-status" aria-live="polite"></div>
     </div>
   </section>

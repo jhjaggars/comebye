@@ -164,6 +164,27 @@ type Entry struct {
 	// Removal is the owning host's account of the removal (what was
 	// closed, whether the worktree went and why not).
 	Removal json.RawMessage `json:"removal,omitempty"`
+	// AutoRemoved is set when the hub removed the worker itself (see the
+	// server's autoremove.go): the removals review lists it for a day, with
+	// an Undo.
+	AutoRemoved *AutoRemoval `json:"auto_removed,omitempty"`
+}
+
+// AutoRemoval records a removal the hub made without the user's tap.
+type AutoRemoval struct {
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason"` // "landed, clean, SAFE"
+	// Landed says how the work was found in the base: "in origin/main" or
+	// "merged as PR #N" or "no commits".
+	Landed string `json:"landed,omitempty"`
+	// WorktreeRemoved: the worktree went (the branch is never deleted);
+	// false means it was kept, with Kept saying why.
+	WorktreeRemoved bool   `json:"worktree_removed"`
+	Kept            string `json:"kept,omitempty"`
+	// UndoneAt is set once the user undid it (a worker was started on the
+	// branch again); UndoNote says how that went.
+	UndoneAt *time.Time `json:"undone_at,omitempty"`
+	UndoNote string     `json:"undo_note,omitempty"`
 }
 
 // Approval records who relayed the user's OK to land, when, and what
@@ -549,6 +570,14 @@ func copyEntry(e *Entry) Entry {
 	if e.Progress != nil {
 		p := *e.Progress
 		c.Progress = &p
+	}
+	if e.AutoRemoved != nil {
+		a := *e.AutoRemoved
+		if a.UndoneAt != nil {
+			t := *a.UndoneAt
+			a.UndoneAt = &t
+		}
+		c.AutoRemoved = &a
 	}
 	if e.LandCheck != nil {
 		l := *e.LandCheck

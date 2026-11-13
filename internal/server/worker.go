@@ -408,6 +408,9 @@ type checkOpts struct {
 	// Remote asks whether the branch is gone from origin (the answer's
 	// RemoteGone); a host too old to know leaves it unset.
 	Remote bool
+	// Origin asks for the strict comparison with origin's default branch
+	// (the answer's Origin): what an automatic removal trusts.
+	Origin bool
 }
 
 func (o checkOpts) query() url.Values {
@@ -441,6 +444,9 @@ func (o checkOpts) query() url.Values {
 	if o.Remote {
 		q.Set("remote", "1")
 	}
+	if o.Origin {
+		q.Set("origin", "1")
+	}
 	return q
 }
 
@@ -451,7 +457,7 @@ func (s *Server) handleChecks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	opts := checkOpts{Detail: q.Get("detail") == "1", Diff: q.Get("diff") == "1", Within: q.Get("within") == "1",
 		Repo: q.Get("repo"), Prev: splitList(q.Get("prev")), Hints: splitList(q.Get("hints")), Also: splitList(q.Get("also")), CI: hexSHA(q.Get("ci")),
-		Verify: hexOnly(splitList(q.Get("verify"))), CIHead: q.Get("cihead") == "1", Remote: q.Get("remote") == "1"}
+		Verify: hexOnly(splitList(q.Get("verify"))), CIHead: q.Get("cihead") == "1", Remote: q.Get("remote") == "1", Origin: q.Get("origin") == "1"}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	c, lerr := s.localChecks(ctx, q.Get("path"), q.Get("branch"), q.Get("base"), opts)
@@ -515,6 +521,9 @@ func (s *Server) localChecks(ctx context.Context, path, branch, base string, opt
 	addVerified(ctx, &c, p, opts)
 	if opts.Remote {
 		c.RemoteGone = remoteBranchGone(ctx, p, branch)
+	}
+	if opts.Origin && c.Exists && c.Error == "" {
+		checkOrigin(ctx, &c)
 	}
 	return &c, nil
 }

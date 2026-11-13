@@ -101,6 +101,7 @@ func TestAgentRoleAllowlist(t *testing.T) {
 		{"GET", "/api/hosts/desk/checks", ""},
 		{"GET", "/api/removals", ""},
 		{"POST", "/api/removals/confirm", `{"ids":["desk/w2:p1"]}`},
+		{"POST", "/api/removals/undo", `{"entry_id":"h1"}`},
 		{"POST", "/api/roles", `{"agent_id":"desk/w2:p1","role":"coordinator"}`},
 		{"POST", "/api/coordinator/reset", `{}`},
 		{"POST", "/api/agents/w1:p1/reset", `{}`},
