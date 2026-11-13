@@ -158,6 +158,10 @@ type Config struct {
 	// ParkSuggestAfter, when positive, is how long an agent must have been idle
 	// before the hub suggests parking it (at least an hour). Suggest only: nothing is parked by itself.
 	ParkSuggestAfter time.Duration
+	// ParkMode is "auto" (the default: the hub parks an agent idle for a day
+	// with a clean worktree and every guard passing), "suggest" (a chip and a
+	// review only) or "off".
+	ParkMode string
 	// ParkRetention, when positive, is how long a parked agent is kept before the
 	// hub proposes removing it in the removal review (the user confirms).
 	ParkRetention time.Duration
@@ -362,7 +366,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		s.landTurn = cfg.LandTurnTimeout
 	}
 	s.typing = newTypingTracker()
-	s.initParkSuggest(cfg.ParkSuggestAfter)
+	s.initParkMode(cfg.ParkSuggestAfter, cfg.ParkMode)
 	s.rel = newRelState()
 	s.prov = newProvState()
 	if cfg.TestMode { // browser tests: a forced refresh may repeat after a moment, not after 20 s

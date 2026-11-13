@@ -69,7 +69,7 @@ type parkBody struct {
 	Name  string `json:"name"`
 	// Dirty confirms parking a worktree with uncommitted edits (they stay in place).
 	Dirty bool `json:"dirty"`
-	// Why: "manual" (default) or "suggested".
+	// Why: "manual" (default), "suggested" or "auto" (the hub's own park).
 	Why string `json:"why"`
 }
 
@@ -162,13 +162,25 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 		return nil, lerr
 	}
 
+	if b.Why == "auto" && kind == "claude" {
+		// The hub parks by itself only when nothing is scheduled to wake the session.
+		path := transcript.DefaultResolver.SessionFileByID(sv, agent.CWD)
+		pend, err := pendingSchedule(path, time.Now())
+		switch {
+		case path == "" || err != nil:
+			return nil, &launchError{status: http.StatusConflict, code: "auto_uncertain", message: "the session could not be read for a loop or wakeup; nothing was closed"}
+		case pend:
+			return nil, &launchError{status: http.StatusConflict, code: "auto_loop", message: "the session has a loop or wakeup scheduled; nothing was closed"}
+		}
+	}
+
 	ps := s.parkStore()
 	launch, _ := ps.LaunchOf(name)
 	if launch.Kind != "" && launch.Kind != kind {
 		launch = park.Launch{} // another kind lived under this name before
 	}
 	why := b.Why
-	if why != "suggested" {
+	if why != "suggested" && why != "auto" {
 		why = "manual"
 	}
 	rec := park.Record{

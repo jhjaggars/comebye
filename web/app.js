@@ -3837,7 +3837,7 @@ function renderParkSheet() {
     ["Worktree", r.worktree],
     ["Branch", r.branch || "—"],
     ["Session", r.kind === "pi" ? r.session.split("/").pop() : r.session],
-    ["Closed", `${when} · ${r.why === "suggested" ? "suggested, then you parked it" : "you parked it"}`],
+    ["Closed", `${when} · ${r.why === "auto" ? "parked automatically" : r.why === "suggested" ? "suggested, then you parked it" : "you parked it"}`],
   ];
   if (r.dirty) rows.push(["Edits", `${r.dirty_files || "Some"} uncommitted file${r.dirty_files === 1 ? "" : "s"}, left in place`]);
   if (r.scratch_bytes) rows.push(["Scratchpad", `${(r.scratch_bytes / 1e6).toFixed(1)} MB, on disk until it resumes`]);

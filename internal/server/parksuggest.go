@@ -2,10 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/park"
 	"github.com/jhjaggars/comebye/internal/state"
 )
@@ -31,6 +35,20 @@ const (
 	parkSugTick    = time.Minute
 	parkSugRecheck = 10 * time.Minute // between worktree checks of one agent
 	parkSugReads   = 6                // worktree checks one step may start
+
+	// Automatic parking (mode "auto"): an agent that is a candidate, with a clean
+	// worktree, and idle for a full day is parked by the hub.
+	autoParkIdle    = 24 * time.Hour
+	autoParkPerStep = 2         // parks one step may start
+	autoParkPerHour = 10        // parks in any hour
+	autoParkRetry   = time.Hour // before a refused agent is tried again
+)
+
+// Park modes.
+const (
+	ParkModeAuto    = "auto"
+	ParkModeSuggest = "suggest"
+	ParkModeOff     = "off"
 )
 
 type parkSugState struct {
@@ -39,6 +57,7 @@ type parkSugState struct {
 	clean   bool
 	ok      bool // every guard passed at the last step
 	since   time.Time
+	tried   time.Time // the last automatic park attempt
 }
 
 type parkSuggest struct {
@@ -46,13 +65,25 @@ type parkSuggest struct {
 	mu    sync.Mutex
 	m     map[string]*parkSugState
 	now   func() time.Time
+	// auto parks by itself (mode auto); otherwise it only suggests.
+	auto   bool
+	parked []time.Time // when the hub parked, within the last hour
+	// parkOne parks a candidate (tests replace it); it returns the park's
+	// record id, or the reason it did not.
+	parkOne func(ctx context.Context, a herdr.AgentInfo) (string, error)
 	// checkClean answers whether the agent's worktree has no uncommitted edits
 	// (tests replace it).
 	checkClean func(ctx context.Context, a herdr.AgentInfo) (clean, known bool)
 }
 
 func (s *Server) initParkSuggest(after time.Duration) {
-	if after <= 0 {
+	s.initParkMode(after, ParkModeSuggest)
+}
+
+// initParkMode starts the monitor in mode: "auto" (the default when empty),
+// "suggest" or "off".
+func (s *Server) initParkMode(after time.Duration, mode string) {
+	if after <= 0 || mode == ParkModeOff {
 		return
 	}
 	if after < minParkSuggestAfter {
@@ -60,6 +91,24 @@ func (s *Server) initParkSuggest(after time.Duration) {
 	}
 	s.parkSug = &parkSuggest{after: after, m: map[string]*parkSugState{}, now: time.Now}
 	s.parkSug.checkClean = s.worktreeClean
+	s.parkSug.auto = (mode == "" || mode == ParkModeAuto) && s.fleet != nil && s.fleet.IsHub() // the hub parks, a peer only answers
+	s.parkSug.parkOne = s.autoParkOne
+}
+
+// autoParkOne parks a on its own host.
+func (s *Server) autoParkOne(ctx context.Context, a herdr.AgentInfo) (string, error) {
+	body := parkBody{Agent: a.PaneID, Name: a.Name, Why: "auto"}
+	var res parkResult
+	if s.isLocalHost(a.Host) {
+		r, lerr := s.parkAgent(ctx, body, "hub")
+		if lerr != nil {
+			return "", errors.New(lerr.message)
+		}
+		res = *r
+	} else if lerr := s.callHost(ctx, a.Host, "park", nil, body, &res); lerr != nil {
+		return "", errors.New(lerr.message)
+	}
+	return res.Record.ID, nil
 }
 
 func (s *Server) worktreeClean(ctx context.Context, a herdr.AgentInfo) (clean, known bool) {
@@ -123,6 +172,8 @@ func (s *Server) parkBlock(a herdr.AgentInfo, after time.Duration, now time.Time
 		return "a background task is running"
 	case openTodos[a.ID]:
 		return "it has an open question for the user"
+	case s.pq != nil && len(s.pq.list(a.ID, false)) > 0:
+		return "a prompt is queued for it"
 	case s.typing != nil && s.typing.recentlyBusy(a.PaneID, 10*time.Minute):
 		return "someone is typing in its input box"
 	}
@@ -152,7 +203,17 @@ func (s *Server) parkSuggestStep(ctx context.Context, agents []herdr.AgentInfo, 
 		}
 	}
 	live := map[string]bool{}
-	reads := 0
+	reads, auto := 0, 0
+	p.mu.Lock()
+	cut := now.Add(-time.Hour)
+	kept := p.parked[:0]
+	for _, t := range p.parked {
+		if t.After(cut) {
+			kept = append(kept, t)
+		}
+	}
+	p.parked = kept
+	p.mu.Unlock()
 	for _, a := range agents {
 		if ctx.Err() != nil {
 			return
@@ -197,7 +258,17 @@ func (s *Server) parkSuggestStep(ctx context.Context, agents []herdr.AgentInfo, 
 		if since != nil {
 			st.since = *since
 		}
+		ok := st.ok
+		tryAuto := p.auto && ok && since != nil && now.Sub(*since) >= autoParkIdle && now.Sub(st.tried) >= autoParkRetry &&
+			auto < autoParkPerStep && len(p.parked) < autoParkPerHour
+		if tryAuto {
+			st.tried = now
+		}
 		p.mu.Unlock()
+		if tryAuto {
+			auto++
+			s.autoPark(ctx, a, key, now)
+		}
 	}
 	p.mu.Lock()
 	for k := range p.m {
@@ -219,4 +290,24 @@ func (s *Server) parkSuggestCount() int {
 		}
 	}
 	return n
+}
+
+// autoPark parks a for good reason: the audit entry and the digest line say so.
+// A refusal leaves the suggestion where it was.
+func (s *Server) autoPark(ctx context.Context, a herdr.AgentInfo, key string, now time.Time) {
+	p := s.parkSug
+	cctx, cancel := context.WithTimeout(ctx, removeTimeout)
+	defer cancel()
+	id, err := p.parkOne(cctx, a)
+	if err != nil {
+		log.Printf("park: automatic park of %s declined: %v", a.Name, err)
+		return
+	}
+	p.mu.Lock()
+	p.parked = append(p.parked, now)
+	delete(p.m, key)
+	p.mu.Unlock()
+	s.auditBy(ledger.AuditEvent{Action: "park.auto", By: "hub", OK: true, Host: a.Host,
+		Detail: fmt.Sprintf("%s parked automatically after a day idle with a clean worktree (record %s)", a.Name, id)})
+	s.queueLine("park", id, id, fmt.Sprintf("%s was parked automatically (idle for a day, clean worktree); resume it from Recently closed.", a.Name))
 }

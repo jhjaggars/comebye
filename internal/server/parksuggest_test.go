@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -141,5 +144,98 @@ func TestParkSuggestReachesBrowsersAndTheBriefing(t *testing.T) {
 	}
 	if got := parkLine(6); !strings.Contains(got, "6 agents can be parked") {
 		t.Fatalf("line = %q", got)
+	}
+}
+
+func TestAutoPark(t *testing.T) {
+	r := newSugRig(t)
+	var parked []string
+	fail := map[string]bool{}
+	r.s.parkSug.auto = true
+	r.s.parkSug.parkOne = func(_ context.Context, a herdr.AgentInfo) (string, error) {
+		if fail[a.Name] {
+			return "", errors.New("a loop is scheduled")
+		}
+		parked = append(parked, a.Name)
+		return "pk_" + a.Name, nil
+	}
+	dirty := r.idleFor("w7:p1", "dirty", 30*time.Hour)
+	r.dirty[dirty.ID] = true
+	queued := r.idleFor("w8:p1", "queued", 30*time.Hour)
+	if _, _, err := r.s.pq.add(QueuedPrompt{Agent: queued.ID, Text: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	loopy := r.idleFor("w9:p1", "loopy", 30*time.Hour)
+	fail["loopy"] = true
+	r.hinted(r.idleFor("w1:p1", "ok", 25*time.Hour), r.idleFor("w2:p1", "young", 5*time.Hour), dirty, queued, loopy)
+	if len(parked) != 1 || parked[0] != "ok" {
+		t.Fatalf("parked %v, want only ok", parked)
+	}
+	// The refused one stays suggested and is not retried at once.
+	if !r.hinted(loopy)["loopy"] {
+		t.Error("a refused agent should stay suggested")
+	}
+	r.hinted(loopy)
+	delete(fail, "loopy")
+	r.hinted(loopy)
+	if len(parked) != 1 {
+		t.Errorf("retried too soon: %v", parked)
+	}
+	r.now = r.now.Add(2 * time.Hour)
+	loopy.StatusSince = ptrTime(r.now.Add(-30 * time.Hour))
+	r.hinted(loopy)
+	if len(parked) != 2 {
+		t.Errorf("no retry after the wait: %v", parked)
+	}
+	// Suggest mode parks nothing.
+	r2 := newSugRig(t)
+	n := 0
+	r2.s.parkSug.parkOne = func(context.Context, herdr.AgentInfo) (string, error) { n++; return "x", nil }
+	r2.hinted(r2.idleFor("w1:p1", "ok", 48*time.Hour))
+	if n != 0 {
+		t.Error("suggest mode parked an agent")
+	}
+	// The per-step limit.
+	r3 := newSugRig(t)
+	r3.s.parkSug.auto = true
+	m := 0
+	r3.s.parkSug.parkOne = func(context.Context, herdr.AgentInfo) (string, error) { m++; return "x", nil }
+	r3.hinted(r3.idleFor("a:p1", "a", 30*time.Hour), r3.idleFor("b:p1", "b", 30*time.Hour), r3.idleFor("c:p1", "c", 30*time.Hour))
+	if m != autoParkPerStep {
+		t.Errorf("parked %d in one step, want %d", m, autoParkPerStep)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }
+
+func TestPendingSchedule(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	use := func(ts time.Time, name, input string) string {
+		return `{"type":"assistant","timestamp":"` + ts.Format(time.RFC3339) + `","message":{"content":[{"type":"tool_use","name":"` + name + `","input":` + input + `}]}}` + "\n"
+	}
+	old := now.Add(-30 * time.Hour)
+	for name, tc := range map[string]struct {
+		body string
+		want bool
+	}{
+		"nothing":        {"{\"type\":\"user\"}\n", false},
+		"cron":           {use(old, "CronCreate", `{"cron":"*/5 * * * *","prompt":"x"}`), true},
+		"cron deleted":   {use(old, "CronCreate", `{"cron":"* * * * *"}`) + use(old, "CronDelete", `{"id":"1"}`), false},
+		"one-shot cron":  {use(old, "CronCreate", `{"recurring":false}`), false},
+		"wakeup fired":   {use(old, "ScheduleWakeup", `{"delaySeconds":1200}`), false},
+		"wakeup pending": {use(now.Add(-time.Minute), "ScheduleWakeup", `{"delaySeconds":1200}`), true},
+		"loop stopped":   {use(now.Add(-time.Minute), "ScheduleWakeup", `{"delaySeconds":1200}`) + use(now, "ScheduleWakeup", `{"stop":true}`), false},
+	} {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		if err := os.WriteFile(p, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := pendingSchedule(p, now)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: pending=%v err=%v, want %v", name, got, err, tc.want)
+		}
+	}
+	if _, err := pendingSchedule(filepath.Join(t.TempDir(), "none"), now); err == nil {
+		t.Error("a missing file should be an error (uncertain)")
 	}
 }

@@ -128,6 +128,7 @@ func main() {
 		testMode       = flag.Bool("test-mode", false, "browser tests and the dev server: the app polls every 300 ms instead of every 3 to 20 s and the to-do list has no per-minute limit; nothing else changes")
 		releaseSim     = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		landTurn       = flag.Duration("land-turn-timeout", envDuration("COMEBYE_LAND_TURN_TIMEOUT", server.DefaultLandTurnTimeout), "how long a worker may hold its turn in a landing queue before the slot is released and its coordinator told; negative never. Hub only")
+		parkMode       = flag.String("park-mode", envOr("COMEBYE_PARK_MODE", server.ParkModeAuto), "auto: the hub parks an agent idle for a day whose worktree is clean (no edits, no untracked files) and that has no open question, queued prompt, background task, loop or wakeup; it shows under Recently closed as parked automatically. suggest: only the \"can park\" chip and review. off: neither")
 		parkSuggest    = flag.Duration("park-suggest-after", envDuration("COMEBYE_PARK_SUGGEST_AFTER", server.DefaultParkSuggestAfter), "how long an agent must have been idle before the app suggests parking it (a \"can park\" chip and a one-tap review; nothing is parked by itself), at least 1h. 0 turns the suggestions off")
 		parkRetention  = flag.Duration("park-retention", envDuration("COMEBYE_PARK_RETENTION", server.DefaultParkRetention), "how long a parked agent is kept before the hub proposes removing it (it goes into the Ready to remove review; you confirm, nothing is deleted by retention alone); a pinned (kept) one is never proposed. 0 keeps parked agents for ever. Hub only")
 		quietAfter     = flag.Duration("quiet-after", envDuration("COMEBYE_QUIET_AFTER", server.DefaultQuietAfter), "how long a working handoff worker may write nothing to its session file before the hub marks it quiet (in the app and `comebye agents`) and files one to-do for it, cleared when it writes again; not for a worker with a background task running. 0 turns it off. Hub only")
@@ -147,6 +148,11 @@ func main() {
 	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
 	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
 	flag.Parse()
+	switch *parkMode {
+	case server.ParkModeAuto, server.ParkModeSuggest, server.ParkModeOff:
+	default:
+		log.Fatalf("-park-mode must be auto, suggest or off, not %q", *parkMode)
+	}
 	if *showVersion {
 		fmt.Println("comebye", buildVersion())
 		return
@@ -499,6 +505,7 @@ func main() {
 		RelayBlocked:           *relayBlocked,
 		QuietAfter:             *quietAfter,
 		ParkSuggestAfter:       *parkSuggest,
+		ParkMode:               *parkMode,
 		ParkRetention:          *parkRetention,
 		LandTurnTimeout:        *landTurn,
 		DigestEvery:            *digestEvery,
