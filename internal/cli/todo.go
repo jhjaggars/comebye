@@ -244,6 +244,7 @@ func cmdTodo(e *Env, args []string) error {
 			Todo      apiTodo `json:"todo"`
 			Duplicate bool    `json:"duplicate"`
 			Hint      string  `json:"hint"`
+			Warning   string  `json:"warning"`
 		}
 		if err := json.Unmarshal(data, &r); err != nil {
 			return err
@@ -255,6 +256,9 @@ func cmdTodo(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Added %s (%s); it shows in the app's To do panel. Waiting: %s.\n", r.Todo.ID, r.Todo.Kind, r.Todo.waiter())
 		if r.Hint != "" {
 			fmt.Fprintf(e.Stdout, "Hint: %s.\n", r.Hint)
+		}
+		if r.Warning != "" {
+			fmt.Fprintf(e.Stdout, "Warning: %s. The item is filed; reword it with `comebye todo` if you can.\n", r.Warning)
 		}
 		return nil
 	case "set":

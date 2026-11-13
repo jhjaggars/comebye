@@ -795,6 +795,11 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 	if !dup && len(opts) == 0 && looksLikeChoices(b.Context) {
 		resp["hint"] = "the context has a numbered list: pass each choice as --option \"label|detail\" (and --recommend N) so the app shows exact buttons"
 	}
+	if !dup {
+		if wn := jargonWarning(q, b.Context); wn != "" {
+			resp["warning"] = wn
+		}
+	}
 	writeJSONStatus(w, http.StatusCreated, resp)
 }
 

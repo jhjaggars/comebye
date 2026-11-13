@@ -58,7 +58,7 @@ func stopReminder(in stopInput) string {
 	var b strings.Builder
 	n := len(ex.Items)
 	fmt.Fprintf(&b, "Comebye: your last message leaves %d question%s for the user, and this turn did not run `comebye todo add`. A question left only in the chat pane is easily missed. ", n, map[bool]string{true: "", false: "s"}[n == 1])
-	b.WriteString("File each one now, one item per question, in your own words: `comebye todo add \"<question>\" --kind decision --waiting \"$me\" --option \"label|detail\" ... --recommend N --context -` (the choices as --option, your pick as --recommend; $me is your agent id from `comebye whoami --json`). Then stop. This reminder comes once; do not repeat the questions in chat.\n\nWhat I found:\n")
+	b.WriteString("File each one now, one item per question, in plain words (it is read cold on a phone: no worktree, ledger, teardown or handoff), one that stands alone: `comebye todo add \"<question>\" --kind decision --waiting \"$me\" --option \"label|detail\" ... --recommend N --context -` (the choices as --option, your pick as --recommend; $me is your agent id from `comebye whoami --json`). Then stop. This reminder comes once; do not repeat the questions in chat.\n\nWhat I found:\n")
 	for i, it := range ex.Items {
 		fmt.Fprintf(&b, "%d. %s", i+1, it.Question)
 		if len(it.Options) > 0 {

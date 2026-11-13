@@ -358,3 +358,20 @@ func TestTodoHintsAtUnstructuredChoices(t *testing.T) {
 		t.Errorf("hint with options: %s", w.Body)
 	}
 }
+
+func TestTodoWarnsAboutJargonButFiles(t *testing.T) {
+	s, _, _ := todoServer(t)
+	w := do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"Remove the worktree after teardown?","context":"the ledger says ready_to_remove"}`)
+	if w.Code != 201 {
+		t.Fatalf("jargon must not block: %d %s", w.Code, w.Body)
+	}
+	for _, want := range []string{`"warning"`, "local copy", "cleanup", "ready to remove"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("warning lacks %q: %s", want, w.Body)
+		}
+	}
+	w = do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"Delete the old copy?","context":"My worktrees-free plain text"}`)
+	if w.Code != 201 || strings.Contains(w.Body.String(), `"warning"`) {
+		t.Errorf("plain text warned: %d %s", w.Code, w.Body)
+	}
+}

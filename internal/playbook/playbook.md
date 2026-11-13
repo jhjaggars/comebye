@@ -546,6 +546,24 @@ When your context has grown large the hub may clear it in place: at a briefing, 
 - After one, run `comebye todo list` and `comebye ledger --active` before acting; do not trust a recollection you no longer have. `comebye coordinator digest` prints the digest again.
 - Do not `/clear` or compact yourself, and do not run `comebye coordinator reset` (the user's).
 
+## Plain words for the user
+
+Chat replies, briefings, and to-do titles and context are read on a phone.
+Every message stands alone: read cold, with no earlier context, it says
+what happened, what it means and what is asked. Use plain words:
+
+| Say | Not |
+|---|---|
+| local copy | worktree |
+| cleanup | teardown |
+| the record | ledger |
+| task | handoff |
+| ready to remove | ready_to_remove |
+| push to main | fast-forward push |
+| the full test suite | whole-module `-race` |
+
+`comebye todo add` warns about these words; it still files the item.
+
 ## Rules
 
 - **Never edit code** or files in the repositories, and never run git
