@@ -256,18 +256,20 @@ for (const width of [1440, 390]) {
   await check(`${tag}: files collapse one by one and all at once, and the list of files jumps to one`, async () => {
     if (/Expand all/.test(await page.locator("#sp-fold").innerText())) await page.locator("#sp-fold").click();
     await page.locator("#sp-fold").click();
-    if (await page.locator("#sp-body details.df[open]").count()) throw new Error("not all collapsed");
+    // Each state is waited for, not read once: the panel redraws on the push stream and on its poll.
+    await page.waitForFunction(() => !document.querySelector("#sp-body details.df[open]"), null, { timeout: 4000 }).catch(() => { throw new Error("not all collapsed"); });
     if (!/Expand all/.test(await page.locator("#sp-fold").innerText())) throw new Error("button label");
     // one file by its own header
     await page.locator('#sp-body details.df summary').first().click();
-    if ((await page.locator("#sp-body details.df[open]").count()) !== 1) throw new Error("opening one file");
+    await page.waitForFunction(() => document.querySelectorAll("#sp-body details.df[open]").length === 1, null, { timeout: 4000 }).catch(() => { throw new Error("opening one file"); });
     await page.locator('#sp-body details.df summary').first().click();
+    await page.waitForFunction(() => !document.querySelector("#sp-body details.df[open]"), null, { timeout: 4000 });
     await page.locator("#sp-jump").selectOption({ label: "c.go" });
     await page.waitForFunction(() => { const d = [...document.querySelectorAll("#sp-body details.df")].find((x) => x.dataset.key.endsWith("|c.go")); return d && d.open; }, null, { timeout: 4000 });
     if (!(await inView('#sp-body details.df[open] .p[title="c.go"]'))) throw new Error("c.go is not in view after the jump");
     if (/Collapse all/.test(await page.locator("#sp-fold").innerText())) await page.locator("#sp-fold").click();
     await page.locator("#sp-fold").click(); // expand all
-    if (await page.locator("#sp-body details.df:not([open])").count()) throw new Error("not all expanded");
+    await page.waitForFunction(() => !document.querySelector("#sp-body details.df:not([open])"), null, { timeout: 4000 }).catch(() => { throw new Error("not all expanded"); });
     // a long line scrolls inside its box, not the page
     await noOverflow("diff after folding");
   });
