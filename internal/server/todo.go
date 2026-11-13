@@ -58,7 +58,7 @@ const (
 	todoNoticeExpired = "expired"
 )
 
-var todoKinds = map[string]bool{"decision": true, "action": true, "followup": true, "release": true}
+var todoKinds = map[string]bool{"decision": true, "action": true, "followup": true, "release": true, "review": true}
 
 // TodoLink points at something the item is about: a URL (PR, artifact,
 // report) and/or a handoff entry.
@@ -156,6 +156,12 @@ type Todo struct {
 	Dialog    *TodoDialog `json:"dialog,omitempty"`
 	AutoKey   string      `json:"auto_key,omitempty"`
 	Suggested bool        `json:"suggested,omitempty"`
+	// Page is the Page version the item is about (any kind; review.go).
+	// Review is the state of a kind "review" item; ReviewOf, on the Fix
+	// item a Needs changes filed, is the id of that review.
+	Page     *TodoPage   `json:"page,omitempty"`
+	Review   *TodoReview `json:"review,omitempty"`
+	ReviewOf string      `json:"review_of,omitempty"`
 }
 
 // earlyPending: an open set with a decision settled ahead of Submit whose
@@ -187,6 +193,8 @@ type todoStore struct {
 	last    time.Time
 	sending bool
 	send    func(ctx context.Context, a herdr.AgentInfo, text string) error
+	// routing: reviews whose verdict is being sent (review.go).
+	routing map[string]bool
 }
 
 // rateLimit is the most adds per creator per minute; 0 means unlimited.
@@ -649,7 +657,12 @@ type todoAddBody struct {
 	Recommend []int        `json:"recommend"`
 	Links     []TodoLink   `json:"links"`
 	Waiting   string       `json:"waiting"` // fleet id of the agent waiting
-	NoWait    bool         `json:"no_wait"`
+	// Page names the Page version the item is about; a review needs one.
+	Page *struct {
+		ID      string `json:"id"`
+		Version int    `json:"version"`
+	} `json:"page"`
+	NoWait bool `json:"no_wait"`
 	// Set makes the item a decision set (todoset.go); the kind is decision
 	// and options are refused.
 	Set *TodoSet `json:"set"`
@@ -687,7 +700,7 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		b.Kind = "decision"
 	}
 	if !todoKinds[b.Kind] {
-		bad("bad_kind", "kind is decision, action, followup or release")
+		bad("bad_kind", "kind is decision, action, followup, release or review")
 		return
 	}
 	if len(b.Context) > todoMaxContext*2 {
@@ -702,6 +715,17 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 	opts, recs, err := cleanOptions(b.Options, b.Recommend)
 	if err != nil {
 		bad("bad_options", err.Error())
+		return
+	}
+	var page *TodoPage
+	if b.Page != nil {
+		if page, err = s.pageFor(b.Page.ID, b.Page.Version); err != nil {
+			bad("bad_page", err.Error())
+			return
+		}
+	}
+	if b.Kind == "review" && (page == nil || b.Set != nil || len(opts) > 0) {
+		bad("bad_review", "a review needs a Page (--page pg_…) and takes no options or set: it is answered Looks good or Needs changes")
 		return
 	}
 	var set *TodoSet
@@ -733,7 +757,7 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 		ctx = strings.TrimSpace(ctx + "\n\n" + list)
 	}
 	c := callerOf(r)
-	it := Todo{Question: q, Context: ctx, Kind: b.Kind, Options: opts, Recommend: recs, Links: links, CreatedBy: s.by(r, ""), Release: rel, Set: set}
+	it := Todo{Question: q, Context: ctx, Kind: b.Kind, Options: opts, Recommend: recs, Links: links, CreatedBy: s.by(r, ""), Release: rel, Set: set, Page: page}
 	waiting := strings.TrimSpace(b.Waiting)
 	switch {
 	case waiting != "":
@@ -921,6 +945,7 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 	if s.todos == nil {
 		return
 	}
+	s.deliverReviewRoutes(agents)
 	now := time.Now()
 	var ids []string
 	var answered []string
@@ -991,6 +1016,7 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 // incarnation the item was added under (the peer was removed, or its name
 // taken over by another machine). Items from before instances never are.
 func (s *Server) todoGone(it Todo) Todo {
+	it = s.withReviewFlags(s.withPageThumbs(it))
 	if it.Waiting == nil {
 		return it
 	}
