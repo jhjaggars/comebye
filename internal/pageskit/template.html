@@ -60,6 +60,7 @@
     --sh-lg:rgba(30, 40, 70, 0.22);
     --selection:#d6e6fb;
     --focus:#1c58b8;
+    --scroll-thumb:#7f8593;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -110,6 +111,7 @@
     --sh-lg:rgba(0, 0, 0, 0.5);
     --selection:#2b4a7a;
     --focus:#60a5fa;
+    --scroll-thumb:#666b77;
   }
 }
 /* Non-colour tokens: the same scales as the app's :root in web/index.html (pageskit_test.go keeps them equal).
@@ -124,7 +126,7 @@
   --elev-1: 0 2px 10px var(--sh-md); --elev-2: 0 6px 24px var(--sh-lg);
   --ring: 2px solid var(--focus); --ring-off: 2px;
 }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 :focus-visible { outline: var(--ring); outline-offset: var(--ring-off); }
 ::selection { background: var(--selection); }
 html { -webkit-text-size-adjust: 100%; scroll-padding-top: var(--sp-16); }
@@ -263,7 +265,7 @@ footer { margin-top: 40px; padding-top: var(--sp-12); border-top: 1px solid var(
    token name with a plain colour value is applied; nothing is evaluated;
    anything else is ignored. */
 (function () {
-  var KNOWN = ["bg", "panel", "panel2", "border", "text", "muted", "blue", "orange", "green", "purple", "red", "yellow", "teal", "on-accent", "on-red", "on-orange", "code-bg", "code-text", "quote", "snip", "th-bg", "btn-bg", "blocked-bg", "blocked-name", "bubble", "rc-user", "rc-out", "mark-bg", "rcmark-bg", "rcmark-text", "chip-blue", "chip-purple", "chip-red", "chip-green", "chip-finished", "chip-cand", "chip-rtr", "chip-landing", "chip-yellow", "secret-bg", "sh-md", "sh-lg", "selection", "focus"];
+  var KNOWN = ["bg", "panel", "panel2", "border", "text", "muted", "blue", "orange", "green", "purple", "red", "yellow", "teal", "on-accent", "on-red", "on-orange", "code-bg", "code-text", "quote", "snip", "th-bg", "btn-bg", "blocked-bg", "blocked-name", "bubble", "rc-user", "rc-out", "mark-bg", "rcmark-bg", "rcmark-text", "chip-blue", "chip-purple", "chip-red", "chip-green", "chip-finished", "chip-cand", "chip-rtr", "chip-landing", "chip-yellow", "secret-bg", "sh-md", "sh-lg", "selection", "focus", "scroll-thumb"];
   var ok = {}; KNOWN.forEach(function (k) { ok["--" + k] = 1; });
   var COLOUR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\(\s*[0-9.%\s,\/-]+\))$/i;
   window.addEventListener("message", function (e) {
