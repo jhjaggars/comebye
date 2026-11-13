@@ -106,6 +106,33 @@ for (const width of [390, 1280]) {
     if (p.length !== 2 || p[0].body.dirty || p[1].body.dirty !== true || p[0].body.agent !== "w91:p1" || p[0].body.name !== "park-me") throw new Error("park posts " + JSON.stringify(p));
     posts.dirtyOnce = false;
   });
+  await check(`suggest at ${width}px: a "can park" chip, a banner, and one tap parks the listed agents`, async () => {
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent[data-id]", { timeout: 15000 });
+    await page.evaluate(() => {
+      const mk = (pane, name, hint) => ({ ...state.agents[0], pane_id: pane, id: (state.agents[0].host ? state.agents[0].host + "/" : "") + pane, name, agent: "claude", agent_status: "idle",
+        background: undefined, blocked_on: undefined, park_hint: hint ? { since: new Date(Date.now() - 30 * 3600e3).toISOString() } : undefined });
+      state.agents = [mk("w81:p1", "idle-a", true), mk("w82:p1", "idle-b", true), mk("w83:p1", "fresh-c", false)];
+      renderList();
+    });
+    const g = await page.evaluate(() => ({ chips: [...document.querySelectorAll("#agents .can-park")].length, banner: document.querySelector("#park-banner")?.textContent.trim(),
+      scroll: document.documentElement.scrollWidth > innerWidth, bh: document.querySelector("#park-banner")?.getBoundingClientRect().height }));
+    if (g.chips !== 2 || !/2 idle agents can be parked/.test(g.banner || "") || g.scroll || g.bh < 44) throw new Error("banner " + JSON.stringify(g));
+    posts.length = 0;
+    await page.click("#park-banner");
+    await page.waitForSelector("#ps", { state: "visible" });
+    const l = await page.evaluate(() => ({ rows: document.querySelectorAll("#ps-list .ps-row").length, go: document.querySelector("#ps-go").textContent, scroll: document.documentElement.scrollWidth > innerWidth }));
+    if (l.rows !== 2 || l.go !== "Park 2 agents" || l.scroll) throw new Error("list " + JSON.stringify(l));
+    await page.screenshot({ path: `${out}/parked-suggest-${width}.png` });
+    await page.click('#ps-list .ps-row:first-child input');   // untick one
+    await page.waitForFunction(() => document.querySelector("#ps-go").textContent === "Park 1 agent");
+    await page.click("#ps-go");
+    await page.waitForFunction(() => /Parked 1/.test(document.querySelector("#ps-status").textContent), null, { timeout: 8000 });
+    const p = posts.filter((x) => x.url.endsWith("/park"));
+    if (p.length !== 1 || p[0].body.name !== "idle-b" || p[0].body.why !== "suggested") throw new Error("park posts " + JSON.stringify(p));
+    await page.click("#ps-close");
+    await page.waitForFunction(() => document.querySelector("#ps").hidden);
+  });
   if (width > 1000) await check("a to-do waiting on a parked agent says parked (it is not gone) at 1280px", async () => {
     const p2 = await ctx.newPage();
     await p2.setViewportSize({ width, height: 800 });

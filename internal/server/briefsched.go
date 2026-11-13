@@ -510,7 +510,7 @@ func (s *Server) briefCoordinator() (*herdr.AgentInfo, string) {
 }
 
 // briefPrompt is what the scheduled run asks of the coordinator.
-func briefPrompt(plan schedPlan, last time.Time) string {
+func briefPrompt(plan schedPlan, last time.Time, parkable int) string {
 	since := "No briefing has been published yet."
 	if !last.IsZero() {
 		since = "The last briefing was published " + last.In(plan.loc).Format("Mon Jan 2 15:04 MST") + "."
@@ -519,7 +519,16 @@ func briefPrompt(plan schedPlan, last time.Time) string {
 		" Catch up from the ledger (`comebye ledger`) and the workers' reports since then. Publish a fresh" +
 		" briefing with `comebye brief set` in the playbook's format, but only when line 1 or \"Needs you\" changed; if neither did, publish nothing." +
 		" First run `comebye todo list`: relay answered items to the agents waiting on them and close them (`comebye todo done ID`)," +
-		" and write the briefing's \"Needs you\" from the open items, one short line each with its item id (every Needs-you line is an open to-do item; `comebye brief set` refuses a line without the id of an active item, and \"Nothing open.\" is fine when nothing is)."
+		" and write the briefing's \"Needs you\" from the open items, one short line each with its item id (every Needs-you line is an open to-do item; `comebye brief set` refuses a line without the id of an active item, and \"Nothing open.\" is fine when nothing is)." +
+		parkLine(parkable)
+}
+
+// parkLine tells the coordinator how many agents the hub suggests parking.
+func parkLine(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" %d agent%s can be parked (idle for a day, nothing running, clean worktree; `comebye agents --json` marks them with park_hint): say so in one short line in the briefing, outside \"Needs you\". Do not park them yourself: the user parks, from the app.", n, map[bool]string{true: "", false: "s"}[n == 1])
 }
 
 // fmtEvery prints an interval the way people write it: 24h, 90m, 1h30m.
@@ -538,7 +547,7 @@ func fmtEvery(d time.Duration) string {
 func (s *Server) promptBrief(ctx context.Context, a herdr.AgentInfo, plan schedPlan, last time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	return s.promptNotice(ctx, a, briefPrompt(plan, last))
+	return s.promptNotice(ctx, a, briefPrompt(plan, last, s.parkSuggestCount()))
 }
 
 // promptAgent sends text to an agent on any host.

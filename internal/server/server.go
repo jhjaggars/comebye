@@ -155,6 +155,9 @@ type Config struct {
 	// leave its session file untouched before the hub marks it quiet and
 	// files one to-do (quiet.go). Hub only.
 	QuietAfter time.Duration
+	// ParkSuggestAfter, when positive, is how long an agent must have been idle
+	// before the hub suggests parking it (at least an hour). Suggest only: nothing is parked by itself.
+	ParkSuggestAfter time.Duration
 	// LandTurnTimeout is how long a worker may hold its turn in a landing
 	// queue before the slot is released and its coordinator told (0: the
 	// default, 45 minutes; negative: never). Hub only.
@@ -210,6 +213,8 @@ type Server struct {
 	bgAgents bgAgents
 	// quiet follows working workers that stopped writing (quiet.go).
 	quiet *quietMon
+	// parkSug suggests parking long-idle agents (parksuggest.go); nil when off.
+	parkSug *parkSuggest
 	// peerAgents replaces the fleet's agent list for peerBackground (tests).
 	peerAgents func() []herdr.AgentInfo
 	// health tests that the state directory is writable (nil without one);
@@ -351,6 +356,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		s.landTurn = cfg.LandTurnTimeout
 	}
 	s.typing = newTypingTracker()
+	s.initParkSuggest(cfg.ParkSuggestAfter)
 	s.rel = newRelState()
 	s.prov = newProvState()
 	if cfg.TestMode { // browser tests: a forced refresh may repeat after a moment, not after 20 s

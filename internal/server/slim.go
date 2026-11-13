@@ -40,6 +40,10 @@ type browserAgent struct {
 	// Background: an idle or done agent's running background tasks (a test
 	// run, a CI watch, a Monitor), which will wake it when they end.
 	Background []bgBrief `json:"background,omitempty"`
+	// QuietSince: a working handoff worker has written nothing for a long time (quiet.go).
+	QuietSince *time.Time `json:"quiet_since,omitempty"`
+	// ParkHint: the hub suggests parking this agent (parksuggest.go).
+	ParkHint *herdr.ParkHint `json:"park_hint,omitempty"`
 }
 
 // browserHost drops LastSeen, which changes with every peer ping and is
@@ -74,6 +78,9 @@ type browserEvent struct {
 
 func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 	out := make([]browserAgent, len(agents))
+	agents = append([]herdr.AgentInfo(nil), agents...) // stamped below; the fleet's copy stays as it is
+	s.stampQuiet(agents)
+	s.stampPark(agents)
 	for i, a := range agents {
 		out[i] = browserAgent{
 			ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name,
@@ -81,6 +88,7 @@ func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 			StateLabels: a.StateLabels, CWD: a.CWD, TerminalTitle: a.TitleStripped,
 			Worktree: a.Worktree, LastActive: a.LastActive, StatusSince: a.StatusSince, Instance: a.Instance,
 			BlockedOn: s.blockedOnOf(a), StatusNote: a.StatusNote, Background: s.backgroundOfAgent(a),
+			QuietSince: a.QuietSince, ParkHint: a.ParkHint,
 		}
 	}
 	return out

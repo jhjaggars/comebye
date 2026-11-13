@@ -106,6 +106,7 @@ func (s *Server) withBackground(agents []herdr.AgentInfo) []herdr.AgentInfo {
 		}
 	}
 	s.stampQuiet(out)
+	s.stampPark(out)
 	return out
 }
 

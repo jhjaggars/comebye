@@ -195,6 +195,9 @@ type AgentInfo struct {
 	// its session file since then and runs no background task the hub knows
 	// of (quiet.go). The hub stamps it; herdr does not report it.
 	QuietSince *time.Time `json:"quiet_since,omitempty"`
+	// ParkHint is set when the hub suggests parking this agent: idle for long
+	// enough and every guard passes (see the server's parksuggest.go).
+	ParkHint *ParkHint `json:"park_hint,omitempty"`
 	// Host names the comebye instance that owns the agent and ID is the
 	// host-qualified "<host>/<pane_id>". Pane IDs are only unique per host.
 	// Neither comes from herdr: comebye stamps them before broadcasting.
@@ -208,6 +211,13 @@ type BackgroundTask struct {
 	Kind  string `json:"kind"`
 	Label string `json:"label,omitempty"`
 	Since string `json:"since,omitempty"`
+}
+
+// ParkHint says an agent can be parked: it has been idle since Since and nothing
+// stands in the way (no open question, background task, half-typed text or
+// uncommitted edits).
+type ParkHint struct {
+	Since time.Time `json:"since"`
 }
 
 // WorktreeInfo describes the repository checkout hosting a workspace.
