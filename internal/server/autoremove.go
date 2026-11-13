@@ -68,6 +68,8 @@ func autoRemoveVerdict(it *removal, f autoFacts) (ok bool, why string) {
 		return false, "not a handoff worker"
 	case it.Coordinator:
 		return false, "it is a coordinator"
+	case !it.Live.Present:
+		return false, "the session is not running: there is nothing to keep a record of for a resume"
 	case it.Live.Present && (it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked):
 		return false, "the agent is " + string(it.Live.Status)
 	case f.Background > 0:
@@ -97,6 +99,8 @@ func autoRemoveVerdict(it *removal, f autoFacts) (ok bool, why string) {
 	switch {
 	case o == nil:
 		return false, "the host did not compare with origin"
+	case !o.Records:
+		return false, "the host cannot keep a record to resume the session from"
 	case !o.Fetched || o.Ref == "":
 		return false, "not compared with origin: " + o.Why
 	case o.Unmerged < 0:
@@ -214,6 +218,7 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 		return false
 	}
 	how := inBaseHow(it.Checks)
+	it.recordPark = "auto_removed"
 	o := s.confirmOne(ctx, it, false, "")
 	if !o.OK {
 		log.Printf("auto remove of %s: %s: %s", it.ID, o.Code, o.Message)
@@ -223,7 +228,7 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	}
 	rec := ledger.AutoRemoval{At: time.Now().UTC(), Reason: autoRemoveReason, Landed: how}
 	if o.Result != nil {
-		rec.WorktreeRemoved, rec.Kept = o.Result.WorktreeRemoved, o.Result.Kept
+		rec.WorktreeRemoved, rec.Kept, rec.ParkID = o.Result.WorktreeRemoved, o.Result.Kept, o.Result.ParkID
 	}
 	if _, _, err := s.ledger.Update(it.EntryID, func(e *ledger.Entry) { e.AutoRemoved = &rec }); err != nil {
 		log.Printf("ledger: %v", err)
@@ -259,6 +264,8 @@ type autoRemovedView struct {
 	// CanUndo: the branch can be set up again (a repository and a branch
 	// are recorded, the host is known, and it was not undone already).
 	CanUndo bool `json:"can_undo"`
+	// InRecent: the session is in Recently closed and can be resumed from there.
+	InRecent bool `json:"in_recent,omitempty"`
 }
 
 // recentAutoRemovals lists the auto-removals of the last AutoRemoveWindow,
@@ -276,7 +283,7 @@ func (s *Server) recentAutoRemovals(now time.Time) []autoRemovedView {
 		out = append(out, autoRemovedView{
 			EntryID: e.ID, Host: e.Host, Name: e.AgentName, Repo: e.RepoName, Branch: e.Branch, At: a.At,
 			Reason: a.Reason, Landed: a.Landed, WorktreeRemoved: a.WorktreeRemoved, Kept: a.Kept,
-			UndoneAt: a.UndoneAt, UndoNote: a.UndoNote,
+			UndoneAt: a.UndoneAt, UndoNote: a.UndoNote, InRecent: a.ParkID != "",
 			CanUndo: a.UndoneAt == nil && e.Repo != "" && e.Branch != "" && s.knownHost(e.Host),
 		})
 	}
@@ -316,17 +323,47 @@ func (s *Server) handleUndoAutoRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), removeTimeout)
 	defer cancel()
-	body := workerBody{Repo: e.Repo, Branch: e.Branch, Base: e.Base, Kind: e.Kind, Name: e.AgentName, Model: e.Model, Thinking: e.Thinking}
-	res, lerr := s.workerOn(ctx, e.Host, body)
-	if lerr != nil && lerr.code == "agent_name_taken" {
-		body.Name = ""
-		res, lerr = s.workerOn(ctx, e.Host, body)
+	var note, worktree string
+	var agentOut any
+	if id := e.AutoRemoved.ParkID; id != "" {
+		// The record the removal left: resume the session itself (the host
+		// recreates the worktree from its branch, or from where the work landed).
+		var res *resumeResult
+		var lerr *launchError
+		if e.Host == s.fleet.LocalName() {
+			res, lerr = s.resumeAgent(ctx, resumeBody{ID: id})
+		} else {
+			res = &resumeResult{}
+			if lerr = s.callHost(ctx, e.Host, "resume", nil, resumeBody{ID: id}, res); lerr != nil {
+				res = nil
+			}
+		}
+		if lerr == nil {
+			note = "the session was resumed"
+			if res.Recreated != "" {
+				note += ": " + res.Recreated
+			}
+			worktree, agentOut = res.Record.Worktree, res.Agent
+		} else if lerr.code != "session_gone" && lerr.code != "no_such_record" && lerr.code != "not_parked" {
+			relErr(w, lerr.status, "not_feasible", "undo is not possible: "+lerr.message)
+			return
+		}
 	}
-	if lerr != nil {
-		relErr(w, lerr.status, "not_feasible", "undo is not possible: "+lerr.message)
-		return
+	if note == "" {
+		// No record, or its session is gone: start a fresh worker on the branch.
+		body := workerBody{Repo: e.Repo, Branch: e.Branch, Base: e.Base, Kind: e.Kind, Name: e.AgentName, Model: e.Model, Thinking: e.Thinking}
+		res, lerr := s.workerOn(ctx, e.Host, body)
+		if lerr != nil && lerr.code == "agent_name_taken" {
+			body.Name = ""
+			res, lerr = s.workerOn(ctx, e.Host, body)
+		}
+		if lerr != nil {
+			relErr(w, lerr.status, "not_feasible", "undo is not possible: "+lerr.message)
+			return
+		}
+		note = "a new worker started on branch " + res.Branch + " in " + res.Worktree + "; the old conversation is not restored"
+		worktree, agentOut = res.Worktree, res.Agent
 	}
-	note := "a new worker started on branch " + res.Branch + " in " + res.Worktree + "; the old conversation is not restored"
 	now := time.Now().UTC()
 	if _, _, err := s.ledger.Update(e.ID, func(x *ledger.Entry) {
 		if x.AutoRemoved != nil {
@@ -336,5 +373,5 @@ func (s *Server) handleUndoAutoRemove(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ledger: %v", err)
 	}
 	s.audit(r, ledger.AuditEvent{Action: "worker.auto_remove_undo", Host: e.Host, OK: true, Detail: e.AgentName + " (" + e.ID + "): " + note})
-	writeJSON(w, map[string]any{"ok": true, "note": note, "agent": res.Agent, "worktree": res.Worktree})
+	writeJSON(w, map[string]any{"ok": true, "note": note, "agent": agentOut, "worktree": worktree})
 }

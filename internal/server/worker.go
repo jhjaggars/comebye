@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/park"
 	"github.com/jhjaggars/comebye/internal/playbook"
 	"github.com/jhjaggars/comebye/internal/scratch"
 	"github.com/jhjaggars/comebye/internal/state"
@@ -549,6 +551,11 @@ type removeBody struct {
 	// the user reviewed; if the branch moved since, nothing is done.
 	Discard    bool   `json:"discard"`
 	DiscardTip string `json:"discard_tip"`
+	// RecordPark ("auto_removed"): before the pane is closed, write a park
+	// record (internal/park) with the session and launch arguments, so the
+	// session can be resumed from Recently closed. The removal is refused,
+	// and nothing closed, when no record can be made.
+	RecordPark string `json:"record_park,omitempty"`
 }
 
 // removeResult says what a removal did.
@@ -564,8 +571,10 @@ type removeResult struct {
 	Kept            string `json:"kept,omitempty"`           // why the worktree stayed
 	// Archived says what the final transcript flush did, when an archive
 	// is configured (see archive.go); a failure here never stops the removal.
-	Archived string          `json:"archived,omitempty"`
-	Checks   *worktreeChecks `json:"checks,omitempty"`
+	Archived string `json:"archived,omitempty"`
+	// ParkID is the park record a RecordPark removal left.
+	ParkID string          `json:"park_id,omitempty"`
+	Checks *worktreeChecks `json:"checks,omitempty"`
 	// Scratch is what was cleaned up in the temporary directory once the
 	// worktree was gone (its scratchpad, processes left running in it).
 	Scratch *scratch.Report `json:"scratch,omitempty"`
@@ -664,6 +673,22 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 		}
 	}
 
+	// The park record before anything is closed; dropped again if the removal fails.
+	var rec *park.Record
+	ok := false
+	if b.RecordPark != "" {
+		var lerr *launchError
+		if rec, lerr = s.recordForRemoval(ctx, agent, live, checks, b.RecordPark); lerr != nil {
+			return nil, lerr
+		}
+		defer func() {
+			if !ok {
+				_ = s.parkStore().Delete(rec.ID)
+			}
+		}()
+		res.ParkID = rec.ID
+	}
+
 	// The agent's transcript is copied to the archive before its pane goes:
 	// once the pane is closed the session file can no longer be found from it.
 	res.Archived = s.archiveFlush(agent, live)
@@ -758,11 +783,22 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 		res.Scratch = s.cleanRemoved(wt, live, agent)
 		// A parked agent whose worktree is gone cannot be resumed: its record goes with it.
 		if ps := s.parkStore(); ps != nil {
-			for _, r := range ps.DeleteForWorktree(wt) {
+			keep := []string{}
+			if rec != nil {
+				keep = append(keep, rec.ID)
+			}
+			for _, r := range ps.DeleteForWorktree(wt, keep...) {
 				s.dropParkedScratch(r)
 			}
 		}
 	}
+	if rec != nil {
+		gone := res.WorktreeRemoved
+		if _, err := s.parkStore().Update(rec.ID, func(r *park.Record) { r.WorktreeGone = gone }); err != nil {
+			log.Printf("park: record %s: %v", rec.ID, err)
+		}
+	}
+	ok = true
 	return res, nil
 }
 

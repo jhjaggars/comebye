@@ -350,11 +350,15 @@ type originCheck struct {
 	MergedPR int `json:"merged_pr,omitempty"`
 	// Why says what stopped the comparison.
 	Why string `json:"why,omitempty"`
+	// Records: this host leaves a park record when asked to (a removal with
+	// record_park); an older host does not, and the hub then removes nothing
+	// by itself there.
+	Records bool `json:"records,omitempty"`
 }
 
 // checkOrigin fills c.Origin.
 func checkOrigin(ctx context.Context, c *worktreeChecks) {
-	o := &originCheck{Unmerged: -1}
+	o := &originCheck{Unmerged: -1, Records: true}
 	c.Origin = o
 	if c.Tip == "" {
 		o.Why = "the branch's tip is unknown"

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -58,6 +59,17 @@ type Record struct {
 	ResumedAt   *time.Time `json:"resumed_at,omitempty"`
 	ResumedPane string     `json:"resumed_pane,omitempty"`
 	Pinned      bool       `json:"pinned,omitempty"`
+	// An automatic removal (Why "auto_removed") closes the pane and removes the
+	// worktree of a worker whose work had landed, and leaves this record so the
+	// session can be resumed later. WorktreeGone says the worktree went with
+	// it; Repo is its primary checkout, BaseRef the default branch on origin
+	// ("origin/main") and Landed that branch's commit at the removal. Resume
+	// recreates the worktree from Branch when it is still there, else from
+	// Landed (or BaseRef).
+	Repo         string `json:"repo,omitempty"`
+	WorktreeGone bool   `json:"worktree_gone,omitempty"`
+	BaseRef      string `json:"base_ref,omitempty"`
+	Landed       string `json:"landed,omitempty"`
 }
 
 // Parked reports whether the agent is still closed.
@@ -350,14 +362,15 @@ func TreeSize(p string, limit time.Duration) int64 {
 	return n
 }
 
-// DeleteForWorktree drops the parked records whose worktree is wt (it was removed).
-func (s *Store) DeleteForWorktree(wt string) []Record {
+// DeleteForWorktree drops the parked records whose worktree is wt (it was
+// removed), except the records with an id in keep (the removal's own).
+func (s *Store) DeleteForWorktree(wt string, keep ...string) []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	kept := s.f.Records[:0]
 	var gone []Record
 	for _, r := range s.f.Records {
-		if r.Parked() && r.Worktree == wt {
+		if r.Parked() && r.Worktree == wt && !slices.Contains(keep, r.ID) {
 			gone = append(gone, r)
 			continue
 		}

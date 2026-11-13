@@ -3788,7 +3788,7 @@ function parkedRowHTML(e) {
     <div class="meta"><div class="name">${esc(r.name)}${r.pinned ? '<span class="role-chip" title="Kept: never suggested for removal">kept</span>' : ""}</div>
       <div class="sub">${esc(e.host)} · ${esc(r.kind)} · closed ${esc(when)} ago</div>
       <div class="sub">${kept}${e.online ? "" : ' <span class="chip muted">host offline</span>'}</div></div>
-    <span class="status">parked</span></div>`;
+    <span class="status">${r.why === "auto_removed" ? "removed" : "parked"}</span></div>`;
 }
 
 function parkedSectionHTML() {
@@ -3855,7 +3855,7 @@ function renderParkSheet() {
     ["Worktree", r.worktree],
     ["Branch", r.branch || "—"],
     ["Session", r.kind === "pi" ? r.session.split("/").pop() : r.session],
-    ["Closed", `${when} · ${r.why === "auto" ? "parked automatically" : r.why === "suggested" ? "suggested, then you parked it" : "you parked it"}`],
+    ["Closed", `${when} · ${r.why === "auto_removed" ? "removed automatically (landed, clean, SAFE); resume recreates the worktree" : r.why === "auto" ? "parked automatically" : r.why === "suggested" ? "suggested, then you parked it" : "you parked it"}`],
   ];
   if (r.dirty) rows.push(["Edits", `${r.dirty_files || "Some"} uncommitted file${r.dirty_files === 1 ? "" : "s"}, left in place`]);
   if (r.scratch_bytes) rows.push(["Scratchpad", `${(r.scratch_bytes / 1e6).toFixed(1)} MB, on disk until it resumes`]);
@@ -4742,7 +4742,7 @@ function renderReviewAuto() {
     else act = `<div class="rv-sub">Undo is not possible any more.</div>`;
     return `<div class="rv-item rv-auto-item" data-id="${esc(a.entry_id)}">
       <div class="rv-top"><span class="rv-name">${name}</span>${host}${branch}<span class="status">${when}</span></div>
-      <div class="rv-reason">Removed automatically: ${how}</div>${kept}${act}</div>`;
+      <div class="rv-reason">Removed automatically: ${how}</div>${a.in_recent ? '<div class="rv-sub">Its session is in Recently closed: resume it from there any time.</div>' : ""}${kept}${act}</div>`;
   }).join("");
 }
 

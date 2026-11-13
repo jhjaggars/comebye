@@ -275,8 +275,15 @@ the review as before. The removal keeps the worktree whenever anything is
 unmerged and never deletes a branch. Each one writes an audit entry
 (`worker.auto_remove`), puts "removed X automatically: landed, clean, SAFE" in
 the coordinator's digest, and is listed in the review for a day with an
-**Undo**: the branch was kept, so the worktree is created again and a fresh
-worker starts on it (the old conversation is not restored). A safety answer is not trusted for more than an hour: opening the review asks an idle session again when its UNSAFE answer is older than that (or an item it named has since changed), and an automatic removal waits for a fresh SAFE. `-auto-remove=false`
+**Undo**. Every
+automatic removal also leaves a record in Recently closed (the park record store on
+the worker's host, `why: auto_removed`) with the session and launch arguments, so
+you can resume the session later. Resume recreates the worktree: from the
+worker's branch if it is still there, else on a new branch at the commit the
+work landed in (`origin/<default>` at the removal). Undo is that resume; for an
+older removal with no record it starts a fresh worker on the branch. A worker
+whose session cannot be recorded (no session file, not running, or a host too
+old to keep records) is never removed by itself. A safety answer is not trusted for more than an hour: opening the review asks an idle session again when its UNSAFE answer is older than that (or an item it named has since changed), and an automatic removal waits for a fresh SAFE. `-auto-remove=false`
 (`COMEBYE_AUTO_REMOVE=false`) turns it off. Workers on a peer host go through
 the same host routes; a peer too old to answer the origin check stays in the
 review.

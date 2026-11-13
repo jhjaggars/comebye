@@ -952,6 +952,9 @@ type removal struct {
 	// opts carries the ledger entry's repository, earlier branch names
 	// and recorded SHAs to the checks (for a worktree that is gone).
 	opts checkOpts
+	// recordPark asks the host to leave a park record with the removal (see
+	// removeBody.RecordPark); set by the automatic removal only.
+	recordPark string
 }
 
 // marked lists the marked sessions (without checks).
@@ -1249,7 +1252,7 @@ func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool,
 	body := removeBody{
 		Agent: it.PaneID, Name: it.Name, WorkspaceID: it.WorkspaceID, Worktree: it.Worktree,
 		Branch: it.Branch, Base: it.Base, RemoveWorktree: it.Worktree != "", AllowWorking: allowWorking,
-		Discard: discardTip != "", DiscardTip: discardTip,
+		Discard: discardTip != "", DiscardTip: discardTip, RecordPark: it.recordPark,
 	}
 	res, lerr := s.removeOn(ctx, it.Host, body)
 	if lerr != nil {

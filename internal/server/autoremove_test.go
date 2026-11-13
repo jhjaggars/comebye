@@ -13,6 +13,9 @@ import (
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
+// lastSession is the pi session file of the last workerFix.
+var lastSession string
+
 const arAgent = "desk/w2:p1"
 
 // autoFix is a worker whose branch w holds one commit, landed on origin/main
@@ -36,6 +39,11 @@ func workerFix(t *testing.T) (*Server, landedRepo, ledger.Entry) {
 	s, fh, _ := coordServer(t)
 	s.cfg.LaunchRoots = []string{filepath.Dir(r.repo)}
 	s.cfg.WorktreeRoot = filepath.Join(filepath.Dir(r.repo), "wts")
+	session := filepath.Join(t.TempDir(), "s1.jsonl")
+	if err := os.WriteFile(session, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lastSession = session
 	var wts []map[string]any
 	wh := worktreeHook(t, &wts, nil)
 	fh.set(func(f *fakeLaunchHerdr) {
@@ -59,10 +67,16 @@ func workerFix(t *testing.T) (*Server, landedRepo, ledger.Entry) {
 		}
 		for i := range f.agents {
 			f.agents[i].WorkspaceID = "w" + string(f.agents[i].PaneID[1])
+			if f.agents[i].PaneID == "w2:p1" {
+				f.agents[i].CWD = r.wt
+				f.agents[i].AgentSession = &herdr.AgentSessionInfo{Agent: "pi", Kind: "path", Value: session}
+			}
 		}
 	})
 	s.autoRemove = true
 	s.outbox = openOutbox("")
+	s.askPoll, s.askWait = 10*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(s.asking.Wait)
 	e, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: r.repo, RepoName: "proj", Branch: "w", Base: "main", Kind: "pi", AgentID: arAgent, PaneID: "w2:p1", AgentName: "home", WorkspaceID: "w2", Worktree: r.wt, Status: ledger.Running, ReplyTo: &ledger.Ref{AgentID: "desk/w1:p1"}})
 	if err != nil {
 		t.Fatal(err)
@@ -297,10 +311,10 @@ func TestAutoRemoveGuardsKeepTheWorkerInTheReview(t *testing.T) {
 func TestAutoRemoveVerdict(t *testing.T) {
 	clean := func() *removal {
 		return &removal{
-			ID: arAgent, EntryID: "e1", Worktree: "/wt",
+			ID: arAgent, EntryID: "e1", Worktree: "/wt", Live: liveInfo{Present: true, Status: herdr.StatusIdle},
 			Mark: ledger.Mark{Ask: &ledger.Ask{State: ledger.AskSafe}},
 			Checks: &worktreeChecks{Exists: true, Unmerged: 0, Detail: &worktreeDetail{},
-				Origin: &originCheck{Ref: "origin/main", Fetched: true}},
+				Origin: &originCheck{Ref: "origin/main", Fetched: true, Records: true}},
 		}
 	}
 	if ok, why := autoRemoveVerdict(clean(), autoFacts{}); !ok {
@@ -343,7 +357,7 @@ func TestAutoRemoveVerdict(t *testing.T) {
 }
 
 func TestUndoAutoRemove(t *testing.T) {
-	s, _, e := autoFix(t)
+	s, r, e := autoFix(t)
 	if got := s.autoRemoveStep(context.Background(), time.Now()); len(got) != 1 {
 		t.Fatalf("not removed: %v", got)
 	}
@@ -356,11 +370,14 @@ func TestUndoAutoRemove(t *testing.T) {
 	}
 	var out struct{ Worktree string }
 	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.Worktree != r.wt {
+		t.Fatalf("resumed in %q, want the old worktree %q", out.Worktree, r.wt)
+	}
 	if git(t, out.Worktree, "symbolic-ref", "--short", "HEAD") != "w" {
 		t.Fatalf("worktree not recreated on its branch: %s", w.Body)
 	}
 	g, _ := s.ledger.Get(e.ID)
-	if g.AutoRemoved.UndoneAt == nil || !strings.Contains(g.AutoRemoved.UndoNote, "new worker started") {
+	if g.AutoRemoved.UndoneAt == nil || !strings.Contains(g.AutoRemoved.UndoNote, "session was resumed") {
 		t.Fatalf("not recorded: %+v", g.AutoRemoved)
 	}
 	if w := do(s, "POST", "/api/removals/undo", userHdr, `{"entry_id":"`+e.ID+`"}`); w.Code != 409 {
@@ -431,7 +448,83 @@ func TestAutoRemoveDoesNotTrustAnOldSafeAnswer(t *testing.T) {
 	if a := entryOf(t, s).Mark.Ask; a.ReaskedAt == nil && a.AskedAt == nil {
 		t.Fatalf("the old answer was not asked again: %+v", a)
 	}
-	if ok, why := autoRemoveVerdict(&removal{EntryID: "e", Worktree: "/w", Mark: ledger.Mark{Ask: &ledger.Ask{State: ledger.AskSafe, At: old}}}, autoFacts{AnswerTTL: time.Hour, Now: time.Now()}); ok || !strings.Contains(why, "too old") {
+	if ok, why := autoRemoveVerdict(&removal{EntryID: "e", Worktree: "/w", Mark: ledger.Mark{Ask: &ledger.Ask{State: ledger.AskSafe, At: old}}, Live: liveInfo{Present: true}}, autoFacts{AnswerTTL: time.Hour, Now: time.Now()}); ok || !strings.Contains(why, "too old") {
 		t.Fatalf("verdict = %v %q", ok, why)
+	}
+}
+
+// Every automatic removal leaves a record in Recently closed (the park store)
+// with the session and launch arguments, kept although its worktree went.
+func TestAutoRemoveLeavesAResumableRecord(t *testing.T) {
+	s, r, e := autoFix(t)
+	s.parkStore().NoteLaunch("home", "pi", []string{"--model", "m1", "--", "first prompt"}, time.Now())
+	if got := s.autoRemoveStep(context.Background(), time.Now()); len(got) != 1 {
+		t.Fatalf("not removed: %v", got)
+	}
+	g, _ := s.ledger.Get(e.ID)
+	recs := s.parkStore().List(true)
+	if len(recs) != 1 || g.AutoRemoved.ParkID != recs[0].ID {
+		t.Fatalf("records = %+v, entry %+v", recs, g.AutoRemoved)
+	}
+	rec := recs[0]
+	if rec.Why != "auto_removed" || rec.Name != "home" || rec.Kind != "pi" || rec.Session == "" || rec.SessionKind != "path" ||
+		rec.Branch != "w" || rec.Worktree != r.wt || rec.Repo != r.repo || !rec.WorktreeGone || rec.BaseRef != "origin/main" ||
+		rec.Landed != git(t, r.repo, "rev-parse", "refs/remotes/origin/main") {
+		t.Fatalf("record = %+v", rec)
+	}
+	if a, _ := json.Marshal(rec.LaunchArgs); string(a) != `["--model","m1"]` {
+		t.Fatalf("launch args = %s", a)
+	}
+	if !rec.Parked() {
+		t.Fatal("the record must be listed as closed, not resumed")
+	}
+	// It is listed by the host for the Recently closed section.
+	w := do(s, "GET", "/api/parked", userHdr, "")
+	if !strings.Contains(w.Body.String(), rec.ID) {
+		t.Fatalf("not in /api/parked: %s", w.Body)
+	}
+}
+
+// Without a session to keep, nothing is closed: the worker stays in the review.
+func TestAutoRemoveNeedsARecord(t *testing.T) {
+	s, r, _ := autoFix(t)
+	os.Remove(lastSession) // pi's session file is gone
+	stays(t, s, r, "no session to record")
+	if n := len(s.parkStore().List(true)); n != 0 {
+		t.Fatalf("%d records left behind", n)
+	}
+}
+
+// Resume recreates a removed worktree: from its branch while that is there,
+// else on a new branch at the commit the work landed in.
+func TestResumeRecreatesTheWorktree(t *testing.T) {
+	for _, branchGone := range []bool{false, true} {
+		s, r, _ := autoFix(t)
+		if got := s.autoRemoveStep(context.Background(), time.Now()); len(got) != 1 {
+			t.Fatalf("not removed: %v", got)
+		}
+		rec := s.parkStore().List(true)[0]
+		if branchGone {
+			git(t, r.repo, "branch", "-q", "-D", "w")
+		}
+		w := do(s, "POST", "/api/resume", userHdr, `{"id":"`+rec.ID+`"}`)
+		if w.Code != 200 {
+			t.Fatalf("branchGone=%v: resume = %d %s", branchGone, w.Code, w.Body)
+		}
+		if git(t, r.wt, "symbolic-ref", "--short", "HEAD") != "w" {
+			t.Fatalf("branchGone=%v: not on its branch", branchGone)
+		}
+		var out resumeResult
+		json.Unmarshal(w.Body.Bytes(), &out)
+		want := "recreated on your branch"
+		if branchGone {
+			want = "at " + shortSHA(rec.Landed)
+			if git(t, r.wt, "rev-parse", "HEAD") != rec.Landed {
+				t.Fatalf("not at the landed commit")
+			}
+		}
+		if !strings.Contains(out.Recreated, want) || !strings.Contains(out.Note, "worktree") {
+			t.Fatalf("branchGone=%v: recreated %q note %q", branchGone, out.Recreated, out.Note)
+		}
 	}
 }

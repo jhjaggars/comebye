@@ -219,6 +219,100 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 	return out, nil
 }
 
+// recordForRemoval writes the park record of an agent that is about to be
+// closed and have its worktree removed (an automatic removal): its session and
+// launch arguments, and where its work landed, so Resume can bring it back.
+func (s *Server) recordForRemoval(ctx context.Context, agent *herdr.AgentInfo, live []herdr.AgentInfo, c worktreeChecks, why string) (*park.Record, *launchError) {
+	no := func(code, msg string) (*park.Record, *launchError) {
+		return nil, &launchError{status: http.StatusConflict, code: code, message: msg + "; nothing was closed"}
+	}
+	if lerr := s.parkUnavailable(); lerr != nil {
+		return nil, lerr
+	}
+	switch {
+	case agent == nil:
+		return no("no_record", "no agent runs there, so there is no session to keep a record of")
+	case !park.Supported(agent.Agent):
+		return no("no_record", "only claude, pi and opencode sessions can be resumed, not "+agent.Agent)
+	case agent.Name == "":
+		return no("no_record", "the agent has no name to resume it under")
+	case !c.Exists || c.Path == "" || c.Primary:
+		return no("no_record", "there is no worktree of its own")
+	}
+	sk, sv, lerr := s.sessionRef(ctx, *agent, live)
+	if lerr != nil {
+		return nil, lerr
+	}
+	ps := s.parkStore()
+	launch, _ := ps.LaunchOf(agent.Name)
+	if launch.Kind != "" && launch.Kind != agent.Agent {
+		launch = park.Launch{}
+	}
+	rec := park.Record{
+		ID: park.NewID(), Name: agent.Name, Kind: agent.Agent, Host: s.fleet.LocalName(),
+		SessionKind: sk, Session: sv, CWD: c.Path, Worktree: c.Path, Branch: c.Branch, Repo: c.Repo,
+		LaunchArgs: launch.Args, PaneID: agent.PaneID, Why: why, By: AutoCreator, LastStatus: string(agent.Status),
+		ParkedAt: time.Now().UTC(),
+	}
+	if def := defaultBranch(ctx, c.Repo); def != "" {
+		rec.BaseRef = "origin/" + def
+		rec.Landed, _ = runGit(ctx, c.Repo, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/remotes/origin/"+def+"^{commit}")
+	}
+	if _, err := park.ResumeArgs(rec.Kind, sk, sv, rec.LaunchArgs); err != nil {
+		return no("not_resumable", err.Error())
+	}
+	rec.SessionBytes = s.sessionBytes(rec, c.Path)
+	if err := ps.Add(rec); err != nil {
+		return nil, &launchError{status: http.StatusInternalServerError, code: "record_failed", message: "could not write the park record: " + err.Error() + "; nothing was closed"}
+	}
+	return &rec, nil
+}
+
+// recreateWorktree makes a removed worktree again for a resume: on its branch
+// when that is still there, else on a new branch of that name at the commit
+// the work landed in (origin's default branch then).
+func (s *Server) recreateWorktree(ctx context.Context, rec park.Record, roots []string) (string, *launchError) {
+	bad := func(code, msg string) (string, *launchError) {
+		return "", &launchError{status: http.StatusConflict, code: code, message: msg}
+	}
+	repo, lerr := resolveLaunchDir(rec.Repo, roots)
+	if lerr != nil || rec.Repo == "" || !primaryCheckout(ctx, repo) {
+		return bad("repo_gone", "the repository "+homeLabel(rec.Repo)+" is gone; the worktree cannot be recreated")
+	}
+	path := filepath.Clean(rec.Worktree)
+	if !withinAny(path, roots) || !validBranch(rec.Branch) {
+		return bad("not_resumable", "the record's worktree or branch is not one comebye can recreate")
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return bad("path_exists", path+" exists again but is not a worktree of the record's repository")
+	}
+	fetchOrigin(ctx, repo)
+	var out string
+	var err error
+	var note string
+	if refExists(ctx, repo, "refs/heads/"+rec.Branch) {
+		out, err = runGit(ctx, repo, "worktree", "add", "--", path, rec.Branch)
+		note = "Your worktree was removed when your work had landed; it was recreated on your branch " + rec.Branch + "."
+	} else {
+		start := ""
+		for _, c := range []string{rec.Landed, "refs/remotes/" + rec.BaseRef} {
+			if c != "" && refExists(ctx, repo, c) {
+				start = c
+				break
+			}
+		}
+		if start == "" {
+			return bad("not_resumable", "the branch "+rec.Branch+" and the commit its work landed in are both gone")
+		}
+		out, err = runGit(ctx, repo, "worktree", "add", "-b", rec.Branch, "--", path, start)
+		note = "Your worktree and branch were removed when your work had landed; they were recreated as branch " + rec.Branch + " at " + shortSHA(start) + " (" + orDefault(rec.BaseRef, "origin's default branch") + ", where your work is)."
+	}
+	if err != nil {
+		return bad("worktree_failed", "could not recreate the worktree: "+clip(out+" "+err.Error(), 300))
+	}
+	return note, nil
+}
+
 // sessionRef captures what the agent kind needs to resume: a claude session id,
 // a pi session file, an opencode session id.
 func (s *Server) sessionRef(ctx context.Context, a herdr.AgentInfo, live []herdr.AgentInfo) (kind, value string, lerr *launchError) {
@@ -372,6 +466,8 @@ type resumeResult struct {
 	Note    string       `json:"note,omitempty"`
 	Scratch string       `json:"scratch,omitempty"`
 	Warn    string       `json:"warning,omitempty"`
+	// Recreated says how a removed worktree was made again.
+	Recreated string `json:"recreated,omitempty"`
 }
 
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
@@ -407,6 +503,14 @@ func (s *Server) resumeAgent(ctx context.Context, b resumeBody) (*resumeResult, 
 		return nil, errLaunchDisabled
 	}
 	dir, lerr := resolveLaunchDir(rec.Worktree, roots)
+	recreated := ""
+	if lerr != nil && lerr.code == "not_found" && rec.WorktreeGone {
+		var rerr *launchError
+		if recreated, rerr = s.recreateWorktree(ctx, rec, roots); rerr != nil {
+			return nil, rerr
+		}
+		dir, lerr = resolveLaunchDir(rec.Worktree, roots)
+	}
 	if lerr != nil {
 		if lerr.code == "not_found" {
 			lerr.message = "the worktree " + homeLabel(rec.Worktree) + " is gone; it cannot be resumed"
@@ -471,10 +575,13 @@ func (s *Server) resumeAgent(ctx context.Context, b resumeBody) (*resumeResult, 
 	host := s.fleet.LocalName()
 	res := &resumeResult{
 		Agent:  browserAgent{ID: state.QualifiedID(host, agent.PaneID), Host: host, PaneID: agent.PaneID, Name: rec.Name, Agent: rec.Kind, Status: agent.Status, CWD: dir},
-		Record: upd, Scratch: scratchNote,
+		Record: upd, Scratch: scratchNote, Recreated: recreated,
 	}
 	if !b.NoNote {
 		res.Note = s.catchUpNote(ctx, rec, dir, now)
+		if recreated != "" {
+			res.Note = recreated + " " + res.Note
+		}
 		if queued, err := s.deliverOrQueue(ctx, res.Agent.ID, rec.Name, res.Note); err != nil {
 			res.Warn = "the agent started, but the catch-up note was not delivered: " + err.Error()
 		} else if queued {

@@ -181,6 +181,9 @@ type AutoRemoval struct {
 	// false means it was kept, with Kept saying why.
 	WorktreeRemoved bool   `json:"worktree_removed"`
 	Kept            string `json:"kept,omitempty"`
+	// ParkID is the park record the host left (Recently closed), so the
+	// session can be resumed; "" when none was made.
+	ParkID string `json:"park_id,omitempty"`
 	// UndoneAt is set once the user undid it (a worker was started on the
 	// branch again); UndoNote says how that went.
 	UndoneAt *time.Time `json:"undone_at,omitempty"`
