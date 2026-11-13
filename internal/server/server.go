@@ -282,6 +282,8 @@ type Server struct {
 	hjobs          *hubJobs      // on a hub: the jobs it has asked provisioners to run
 	pages          *pageStore
 	commentLim     commentLimiter
+	cmtOnce        sync.Once
+	pageCmts       *commentStore
 	briefSched     *briefSchedStore
 	resets         *resetStore
 	// resetPoll and resetWait pace a reset's wait for the new session

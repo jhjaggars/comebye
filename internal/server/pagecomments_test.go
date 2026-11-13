@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -172,5 +173,63 @@ func TestCommentsPromptFits(t *testing.T) {
 	}
 	if md := commentsMarkdown(cs, todoMaxContext-512); len(md) > todoMaxContext {
 		t.Fatalf("markdown %d bytes", len(md))
+	}
+}
+
+func TestPageCommentsKeptAndStatus(t *testing.T) {
+	s, _, _ := todoServer(t)
+	quietQueue(t, s)
+	w := do(s, "POST", "/api/pages", agentHdr("w2:p1"), pubJSON(map[string]any{"key": "plan", "body": "<title>Plan</title><p>We will cut over on Friday.</p><p>Cost is about 4 GB.</p>"}))
+	p := pageOf(t, w.Body.Bytes())
+	do(s, "POST", "/api/pages/"+p.ID+"/comments", userHdr, `{"version":1,"comments":[{"quote":"cut over on Friday","note":"dry run?"},{"quote":"about 4 GB","note":"with versions?"}]}`)
+	type row struct {
+		ID, Quote, Status string
+		Version           int
+	}
+	list := func() []row {
+		w := do(s, "GET", "/api/pages/"+p.ID+"/comments", userHdr, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("list = %d %s", w.Code, w.Body)
+		}
+		var r struct {
+			Comments []row `json:"comments"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+			t.Fatal(err)
+		}
+		return r.Comments
+	}
+	got := list()
+	if len(got) != 2 || got[0].Status != "open" || got[1].Status != "open" || got[0].Version != 1 {
+		t.Fatalf("v1 list = %+v", got)
+	}
+	// An agent may not read or drop them.
+	if w := do(s, "GET", "/api/pages/"+p.ID+"/comments", agentHdr("w2:p1"), ""); w.Code != http.StatusForbidden {
+		t.Fatalf("agent list = %d", w.Code)
+	}
+	// A new version that changes the first quote addresses it; the second stays open.
+	do(s, "POST", "/api/pages", agentHdr("w2:p1"), pubJSON(map[string]any{"key": "plan", "body": "<title>Plan</title><p>We will do a dry run, then cut over.</p><p>Cost is about 4 GB.</p>"}))
+	got = list()
+	if got[0].Status != "addressed" || got[1].Status != "open" {
+		t.Fatalf("v2 list = %+v", got)
+	}
+	// Dropping one leaves the other; they survive a reopened store.
+	if w := do(s, "DELETE", "/api/pages/"+p.ID+"/comments/"+got[0].ID, userHdr, ""); w.Code != http.StatusOK {
+		t.Fatalf("drop = %d %s", w.Code, w.Body)
+	}
+	if w := do(s, "DELETE", "/api/pages/"+p.ID+"/comments/"+got[0].ID, userHdr, ""); w.Code != http.StatusNotFound {
+		t.Fatalf("drop again = %d", w.Code)
+	}
+	if w := do(s, "DELETE", "/api/pages/"+p.ID+"/comments/"+got[1].ID, agentHdr("w2:p1"), ""); w.Code != http.StatusForbidden {
+		t.Fatalf("agent drop = %d", w.Code)
+	}
+	re := openCommentStore(s.pages.dir)
+	if l := re.list(p.ID); len(l) != 1 || l[0].Quote != "about 4 GB" {
+		t.Fatalf("reopened = %+v", l)
+	}
+	// Deleting the page forgets its comments.
+	do(s, "DELETE", "/api/pages/"+p.ID, userHdr, "")
+	if l := openCommentStore(s.pages.dir).list(p.ID); len(l) != 0 {
+		t.Fatalf("after delete = %+v", l)
 	}
 }

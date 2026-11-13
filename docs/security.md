@@ -492,6 +492,11 @@ would be you. So a page never runs as the app:
     refuses a body with any other field.
   - **Rate limits.** The app takes at most 10 such messages a second. The hub
     takes at most 10 batches a minute per page, 20 comments and 64 KiB a batch.
+  - **The other way (marks).** The app also posts `{type: "comebye-marks", v: 1, quotes: [...]}`
+    and `{type: "comebye-reveal", v: 1, quote}` into the frame so the page marks
+    the quoted text (the CSS Custom Highlight API: no DOM change) and scrolls to
+    it. The reporter takes them only from `window.parent`, at most 40 quotes of
+    500 characters, as text to find (regex-escaped), never as markup.
   - **Rendering.** Page text is put in the DOM with `textContent` only, and goes
     to the agent as a quoted excerpt that the message says is page text, not an
     instruction. The endpoint is the user's alone (an agent token is refused)

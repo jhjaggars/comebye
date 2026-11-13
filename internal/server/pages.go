@@ -464,6 +464,8 @@ func (s *Server) pageRoutes() {
 	s.mux.HandleFunc("GET /api/pages/{id}/preview", s.authWorker(s.handlePagePreview))
 	s.mux.HandleFunc("DELETE /api/pages/{id}", s.authWorker(s.handlePageDelete))
 	s.mux.HandleFunc("POST /api/pages/{id}/comments", s.auth(s.handlePageComments))
+	s.mux.HandleFunc("GET /api/pages/{id}/comments", s.auth(s.handlePageCommentsList))
+	s.mux.HandleFunc("DELETE /api/pages/{id}/comments/{cid}", s.auth(s.handlePageCommentDrop))
 	s.pageViewRoutes(s.mux)
 }
 
@@ -773,6 +775,7 @@ func (s *Server) handlePageDelete(w http.ResponseWriter, r *http.Request) {
 		pageErr(w, err)
 		return
 	}
+	s.commentsStore().dropPage(id)
 	writeJSON(w, map[string]any{"deleted": id})
 }
 

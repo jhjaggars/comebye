@@ -6411,6 +6411,7 @@ function renderPageView() {
   view.innerHTML = bar + `<div class="pgs-sel" id="pgs-sel" hidden></div><div class="pgs-body"><iframe class="pgs-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div>`;
   const fr = view.querySelector("iframe.pgs-frame");
   fr.addEventListener("load", sendPageTheme);
+  fr.addEventListener("load", pgcMarks);
   pgcOpen(p, ver);
   pagesMade(p.id, ver);
 }
@@ -6513,7 +6514,7 @@ new MutationObserver(sendPageTheme).observe(document.documentElement, { attribut
 // viewer shows, and the hub sends them to that page's publisher. Page text is
 // put in the DOM with textContent only. See docs/security.md.
 const PGC = { quote: 500, around: 80, note: 1000, max: 20, burst: 10 };
-const pgc = { id: "", ver: 0, title: "", by: "", sel: null, composing: false, busy: false, drafts: new Map(), seen: [] };
+const pgc = { id: "", ver: 0, title: "", by: "", sel: null, composing: false, busy: false, drafts: new Map(), seen: [], sent: [] };
 
 function pgcClean(s, n) {
   return String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
@@ -6552,8 +6553,36 @@ function pgcKey() { return pgc.id + "/" + pgc.ver; }
 function pgcItems() { return pgc.drafts.get(pgcKey()) || []; }
 
 function pgcOpen(p, ver) {
-  Object.assign(pgc, { id: p.id, ver, title: p.title, by: p.by, sel: null, composing: false, busy: false, seen: [] });
+  Object.assign(pgc, { id: p.id, ver, title: p.title, by: p.by, sel: null, composing: false, busy: false, seen: [], sent: [] });
   pgcRender();
+  pgcLoad();
+}
+
+// The comments already sent on this page, with their status (hub: open, or
+// addressed once a newer version no longer has the quoted text).
+async function pgcLoad() {
+  const id = pgc.id;
+  try {
+    const r = await api("/api/pages/" + encodeURIComponent(id) + "/comments");
+    if (pgc.id !== id) return;
+    pgc.sent = Array.isArray(r.comments) ? r.comments : [];
+  } catch { return; }
+  pgcRender();
+}
+
+// Tell the page which quotes to mark. The page does the marking (it alone can
+// see its own text); it takes these only from this app's window and treats
+// them as text to find, never as markup.
+function pgcMarks() {
+  const fr = pgcFrame();
+  if (!fr || !fr.contentWindow) return;
+  const quotes = pgc.sent.filter((c) => c.status === "open").map((c) => c.quote).concat(pgcItems().map((c) => c.quote)).slice(0, 40);
+  fr.contentWindow.postMessage({ type: "comebye-marks", v: 1, quotes }, "*");
+}
+
+function pgcReveal(quote) {
+  const fr = pgcFrame();
+  if (fr && fr.contentWindow) fr.contentWindow.postMessage({ type: "comebye-reveal", v: 1, quote }, "*");
 }
 
 function pgcEl(tag, cls, text) {
@@ -6600,11 +6629,12 @@ function pgcRender() {
       setTimeout(() => ta.focus(), 0);
     }
   }
-  // The tray: the comments so far, and Send.
+  // The tray: the comments to send, Send, and below them what was sent.
   tray.replaceChildren();
-  tray.hidden = items.length === 0;
-  if (!items.length) return;
-  tray.append(pgcEl("h3", "", "Comments · " + items.length));
+  tray.hidden = items.length === 0 && pgc.sent.length === 0;
+  pgcMarks();
+  if (tray.hidden) return;
+  if (items.length) tray.append(pgcEl("h3", "", "To send · " + items.length));
   items.forEach((c, i) => {
     const card = pgcEl("div", "pgs-cmt");
     const rm = pgcEl("button", "pgs-cmtx", "×");
@@ -6613,10 +6643,31 @@ function pgcRender() {
     card.append(rm, pgcEl("div", "pgs-cmtq", "“" + c.quote + "”"), pgcEl("div", "pgs-cmtn", c.note));
     tray.append(card);
   });
-  const send = pgcEl("button", "btn primary", pgc.busy ? "Sending…" : "Send to " + (pgc.by || "publisher"));
-  send.type = "button"; send.id = "pgs-sendc"; send.disabled = pgc.busy;
-  send.addEventListener("click", pgcSend);
-  tray.append(send, pgcEl("div", "pgs-cmthint", "Files one To do item and messages the page’s publisher."));
+  if (items.length) {
+    const send = pgcEl("button", "btn primary", pgc.busy ? "Sending…" : "Send to " + (pgc.by || "publisher"));
+    send.type = "button"; send.id = "pgs-sendc"; send.disabled = pgc.busy;
+    send.addEventListener("click", pgcSend);
+    tray.append(send, pgcEl("div", "pgs-cmthint", "Files one To do item and messages the page’s publisher."));
+  }
+  if (pgc.sent.length) {
+    tray.append(pgcEl("h3", "pgs-senth", "Sent · " + pgc.sent.length));
+    pgc.sent.slice().reverse().forEach((c) => {
+      const card = pgcEl("div", "pgs-cmt sent");
+      const rm = pgcEl("button", "pgs-cmtx", "×");
+      rm.type = "button"; rm.setAttribute("aria-label", "Forget this comment");
+      rm.addEventListener("click", async () => {
+        try { await api("/api/pages/" + encodeURIComponent(pgc.id) + "/comments/" + encodeURIComponent(c.id), { method: "DELETE" }); } catch (e) { toast("Could not remove it: " + (e && e.message ? e.message : e), true); return; }
+        pgc.sent = pgc.sent.filter((x) => x.id !== c.id); pgcRender();
+      });
+      const q = pgcEl("button", "pgs-cmtq link", "“" + c.quote + "”");
+      q.type = "button"; q.title = "Show it in the page";
+      q.addEventListener("click", () => pgcReveal(c.quote));
+      const meta = pgcEl("div", "pgs-cmtmeta");
+      meta.append(pgcEl("span", "chip " + (c.status === "addressed" ? "green" : "yellow"), c.status === "addressed" ? "addressed" : "open"), pgcEl("span", "", "v" + c.version));
+      card.append(rm, q, pgcEl("div", "pgs-cmtn", c.note), meta);
+      tray.append(card);
+    });
+  }
 }
 
 async function pgcSend() {
@@ -6627,6 +6678,7 @@ async function pgcSend() {
   try {
     const r = await api("/api/pages/" + encodeURIComponent(id) + "/comments", { method: "POST", body: JSON.stringify({ version: ver, comments: items }) });
     pgc.drafts.delete(key);
+    pgcLoad();
     toast(r && r.sent === "queued" ? `Sent ${items.length} comment${items.length === 1 ? "" : "s"}: in To do and queued to the publisher` : (r && r.note) || "Saved in To do");
   } catch (e) {
     toast("Could not send the comments: " + (e && e.message ? e.message : e), true);

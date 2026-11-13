@@ -18,7 +18,7 @@ if (!bin || !stateDir) { console.error("pagecomments.mjs: set COMEBYE_BIN and CO
 const dark = process.env.SCHEME !== "light";
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "pagecomments-ui-"));
 const results = [];
-const env = { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w2:p1" };
+const env = { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w4:p1" };
 const cli = (args) => execFileSync(bin, args, { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 
 async function check(name, fn) {
@@ -31,11 +31,14 @@ fs.writeFileSync(f, `<!doctype html><html><head><meta charset="utf-8"><title>Com
 <body style="font:16px/1.5 sans-serif;margin:16px"><h1>Plan: move the archive</h1>
 <p id="a">We will cut over on Friday without a dry run. Reads fall back to the old store for seven days.</p>
 <p id="b">The cost is about four gigabytes a month at today's volume.</p></body></html>`);
-const id = cli(["publish", f, "--key", "uitest-comments"]).match(/pg_[0-9a-f]{10}/)[0];
+const SRC = fs.readFileSync(f, "utf8");
 
 const GOOD = { type: "comebye-selection", v: 1, quote: "cut over on Friday", before: "We will ", after: " without a dry run" };
 
 for (const width of [1280, 390]) {
+  fs.writeFileSync(f, SRC);
+  const key = "uitest-comments-" + width + "-" + Date.now();
+  const id = cli(["publish", f, "--key", key]).match(/pg_[0-9a-f]{10}/)[0];
   const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark, bypassCSP: false });
   const tag = `${width} (${dark ? "dark" : "light"})`;
   const log = [];
@@ -94,7 +97,7 @@ for (const width of [1280, 390]) {
     await page.click("#pgs-addc");
     await page.fill("#pgs-note", "Is this with seven versions kept?");
     await page.click("#pgs-noteadd");
-    const n = await page.locator("#pgs-tray .pgs-cmt").count();
+    const n = await page.locator("#pgs-tray .pgs-cmt:not(.sent)").count();
     if (n !== 2) throw new Error("tray has " + n + " comments");
     const sw = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
     if (sw.sw > sw.cw) throw new Error("the app scrolls sideways");
@@ -110,12 +113,44 @@ for (const width of [1280, 390]) {
 
   await check(`comments: Send files one To do item at ${tag}`, async () => {
     await page.click("#pgs-sendc");
-    await page.waitForSelector("#pgs-tray[hidden]", { state: "attached", timeout: 6000 });
+    await page.waitForSelector("#pgs-tray .pgs-cmt.sent", { timeout: 6000 });
+    await page.waitForSelector("#pgs-sendc", { state: "detached", timeout: 4000 }).catch(() => { throw new Error("Send is still offered with nothing to send"); });
     const todos = await page.evaluate(async () => (await (await fetch("/api/todos?state=all")).json()).todos);
-    const mine = todos.filter((t) => t.question.startsWith("Comments on Comment plan (v1)"));
+    const mine = todos.filter((t) => t.question.startsWith("Comments on Comment plan (v1)") && t.context.includes("Do a dry run first."));
     if (mine.length < 1) throw new Error("no to-do item: " + JSON.stringify(todos.map((t) => t.question)));
     const t = mine[mine.length - 1];
     if (!t.context.includes("> We will cut over on Friday") || !t.context.includes("Do a dry run first.") || t.kind !== "followup") throw new Error("item: " + JSON.stringify(t));
+  });
+
+  await check(`comments: sent comments are kept, marked in the page and open at ${tag}`, async () => {
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector("#pgs-tray .pgs-cmt.sent", { timeout: 6000 });
+    let fr2 = null;
+    for (let i = 0; i < 50 && !fr2; i++) { fr2 = page.frames().find((x) => x.url().includes("/p/" + id)); if (!fr2) await page.waitForTimeout(100); }
+    await fr2.waitForLoadState("load");
+    await page.waitForTimeout(500);
+    const chips = await page.locator("#pgs-tray .pgs-cmt.sent .chip").allTextContents();
+    if (!chips.length || chips.some((c) => c !== "open")) throw new Error("status chips: " + chips);
+    const marks = await fr2.evaluate(() => (window.CSS && CSS.highlights && CSS.highlights.get("comebye-comment") ? CSS.highlights.get("comebye-comment").size : -1));
+    if (marks < 1) throw new Error("the page marked " + marks + " ranges");
+    await page.screenshot({ path: `${out}/comments-sent-${width}.png` });
+  });
+
+  await check(`comments: a new version that changes the quote marks the comment addressed at ${tag}`, async () => {
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("We will cut over on Friday without a dry run.", "We will do a dry run, then cut over."));
+    cli(["publish", f, "--key", key]);
+    await page.reload({ waitUntil: "load" });
+    await page.waitForSelector("#pgs-tray .pgs-cmt.sent .chip", { timeout: 6000 });
+    const chips = await page.locator("#pgs-tray .pgs-cmt.sent .chip").allTextContents();
+    if (!chips.includes("addressed") || !chips.includes("open")) throw new Error("status chips: " + chips);
+    await page.screenshot({ path: `${out}/comments-addressed-${width}.png` });
+  });
+
+  await check(`comments: a sent comment can be forgotten at ${tag}`, async () => {
+    const n = await page.locator("#pgs-tray .pgs-cmt.sent").count();
+    await page.locator("#pgs-tray .pgs-cmt.sent .pgs-cmtx").first().click();
+    for (let i = 0; i < 40 && (await page.locator("#pgs-tray .pgs-cmt.sent").count()) !== n - 1; i++) await page.waitForTimeout(100);
+    if ((await page.locator("#pgs-tray .pgs-cmt.sent").count()) !== n - 1) throw new Error("the comment was not removed");
   });
 
   if (log.length) throw new Error("console: " + log.join("\n"));

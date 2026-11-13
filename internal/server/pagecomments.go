@@ -1,12 +1,16 @@
 package server
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +43,18 @@ const pageReporterJS = `(function(){var last="",t=0;function send(q,b,a){try{par
 function report(){var s=window.getSelection(),q=s&&!s.isCollapsed?s.toString().replace(/\s+/g," ").trim().slice(0,500):"";if(q===last)return;last=q;if(!q){send("","","");return}
 var c="";try{c=(s.getRangeAt(0).commonAncestorContainer.textContent||"").replace(/\s+/g," ")}catch(e){}
 var i=c.indexOf(q);send(q,i>0?c.slice(Math.max(0,i-80),i):"",i>=0?c.slice(i+q.length,i+q.length+80):"")}
-document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(report,200)})})();`
+document.addEventListener("selectionchange",function(){clearTimeout(t);t=setTimeout(report,200)});
+function find(q){var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:function(n){var p=n.parentNode&&n.parentNode.nodeName;return p==="SCRIPT"||p==="STYLE"?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT}}),nodes=[],text="",n;
+while((n=w.nextNode())){nodes.push({n:n,s:text.length});text+=n.nodeValue}
+var words=q.trim().split(/\s+/);if(!words[0]||!nodes.length)return null;
+var m=new RegExp(words.map(function(x){return x.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}).join("\\s+")).exec(text);if(!m)return null;
+var a=m.index,b=a+m[0].length,i=nodes.length-1,j,r=document.createRange();while(i>0&&nodes[i].s>a)i--;j=i;while(j<nodes.length-1&&nodes[j+1].s<b)j++;
+r.setStart(nodes[i].n,a-nodes[i].s);r.setEnd(nodes[j].n,b-nodes[j].s);return r}
+var st;function marks(qs){if(!window.CSS||!CSS.highlights||typeof Highlight!=="function")return;if(!st){st=document.createElement("style");st.textContent="::highlight(comebye-comment){background-color:rgba(255,196,0,.45);color:inherit}";document.head.appendChild(st)}
+var rs=[];qs.forEach(function(q){try{var r=find(q);if(r)rs.push(r)}catch(e){}});if(rs.length)CSS.highlights.set("comebye-comment",new Highlight(...rs));else CSS.highlights.delete("comebye-comment")}
+window.addEventListener("message",function(e){if(e.source!==parent)return;var d=e.data;if(!d||typeof d!=="object"||d.v!==1)return;
+if(d.type==="comebye-marks"&&Array.isArray(d.quotes))marks(d.quotes.slice(0,40).filter(function(q){return typeof q==="string"}).map(function(q){return q.slice(0,500)}));
+else if(d.type==="comebye-reveal"&&typeof d.quote==="string"){try{var r=find(d.quote.slice(0,500)),el=r&&r.startContainer.parentElement;if(el)el.scrollIntoView({block:"center",behavior:"smooth"})}catch(e){}}})})();`
 
 // withReporter adds the reporter script to a page's HTML as it is served; the
 // stored page is untouched.
@@ -233,6 +248,14 @@ func (s *Server) handlePageComments(w http.ResponseWriter, r *http.Request) {
 		todoErr(w, err)
 		return
 	}
+	stored := make([]storedComment, 0, len(cs))
+	now := time.Now()
+	for _, c := range cs {
+		stored = append(stored, storedComment{ID: newCommentID(), Version: ver, Quote: c.Quote, Before: c.Before, After: c.After, Note: c.Note, Todo: out.ID, At: now})
+	}
+	if err := s.commentsStore().add(p.ID, stored); err != nil {
+		log.Printf("page comments: %v", err)
+	}
 	resp := map[string]any{"todo": out, "sent": "none"}
 	switch {
 	case p.Agent == "":
@@ -268,4 +291,183 @@ func publisherName(p Page) string {
 		return p.By
 	}
 	return "the publisher"
+}
+
+// ---- the comments the user has sent ----
+//
+// Kept on the hub, per page, so they survive a reload and the viewer can mark
+// them in the page and say whether the publisher has dealt with them. A
+// comment is "addressed" once a newer version of the page no longer contains
+// its quoted text; until then it is "open".
+
+const commentKeep = 200 // sent comments kept per page (the oldest go first)
+
+type storedComment struct {
+	ID      string    `json:"id"`
+	Version int       `json:"version"`
+	Quote   string    `json:"quote"`
+	Before  string    `json:"before,omitempty"`
+	After   string    `json:"after,omitempty"`
+	Note    string    `json:"note"`
+	Todo    string    `json:"todo,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+type commentStore struct {
+	mu   sync.Mutex
+	dir  string // "" keeps nothing on disk
+	data map[string][]storedComment
+}
+
+func openCommentStore(dir string) *commentStore {
+	cs := &commentStore{dir: dir, data: map[string][]storedComment{}}
+	if dir == "" {
+		return cs
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "comments.json")); err == nil {
+		var f struct {
+			Comments map[string][]storedComment `json:"comments"`
+		}
+		if json.Unmarshal(b, &f) == nil && f.Comments != nil {
+			cs.data = f.Comments
+		}
+	}
+	return cs
+}
+
+func (cs *commentStore) saveLocked() error {
+	if cs.dir == "" {
+		return nil
+	}
+	return writeFileAtomic(filepath.Join(cs.dir, "comments.json"), map[string]any{"version": 1, "comments": cs.data})
+}
+
+func (cs *commentStore) add(page string, items []storedComment) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	prev := cs.data[page]
+	all := append(append([]storedComment(nil), prev...), items...)
+	if len(all) > commentKeep {
+		all = all[len(all)-commentKeep:]
+	}
+	cs.data[page] = all
+	if err := cs.saveLocked(); err != nil {
+		cs.data[page] = prev
+		return err
+	}
+	return nil
+}
+
+func (cs *commentStore) list(page string) []storedComment {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return append([]storedComment(nil), cs.data[page]...)
+}
+
+func (cs *commentStore) drop(page, id string) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	prev := cs.data[page]
+	for i, c := range prev {
+		if c.ID != id {
+			continue
+		}
+		cs.data[page] = append(append([]storedComment(nil), prev[:i]...), prev[i+1:]...)
+		if len(cs.data[page]) == 0 {
+			delete(cs.data, page)
+		}
+		if err := cs.saveLocked(); err != nil {
+			cs.data[page] = prev
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (cs *commentStore) dropPage(page string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if _, ok := cs.data[page]; ok {
+		delete(cs.data, page)
+		_ = cs.saveLocked()
+	}
+}
+
+// commentsStore is the store, opened on first use beside the pages.
+func (s *Server) commentsStore() *commentStore {
+	s.cmtOnce.Do(func() {
+		dir := ""
+		if s.pages != nil {
+			dir = s.pages.dir
+		}
+		s.pageCmts = openCommentStore(dir)
+	})
+	return s.pageCmts
+}
+
+func newCommentID() string {
+	var b [5]byte
+	_, _ = rand.Read(b[:])
+	return "c" + hex.EncodeToString(b[:])
+}
+
+// commentStatus: "open" while the quoted text is still in the newest version
+// of the page; "addressed" once a newer version no longer has it.
+func commentStatus(c storedComment, latest int, latestText string) string {
+	if c.Version >= latest {
+		return "open"
+	}
+	if strings.Contains(latestText, strings.Join(strings.Fields(c.Quote), " ")) {
+		return "open"
+	}
+	return "addressed"
+}
+
+// handlePageCommentsList: GET /api/pages/{id}/comments (the user only).
+func (s *Server) handlePageCommentsList(w http.ResponseWriter, r *http.Request) {
+	if s.pagesOff(w, r) {
+		return
+	}
+	p, ok := s.pages.get(r.PathValue("id"))
+	if !ok {
+		pageErr(w, errPageNotFound)
+		return
+	}
+	items := s.commentsStore().list(p.ID)
+	latestText := ""
+	for _, c := range items {
+		if c.Version < p.Version {
+			if _, v, body, err := s.pages.body(p.ID, p.Version); err == nil {
+				latestText = pageText(v.Kind, body)
+			}
+			break
+		}
+	}
+	type view struct {
+		storedComment
+		Status string `json:"status"`
+	}
+	out := make([]view, 0, len(items))
+	for _, c := range items {
+		out = append(out, view{c, commentStatus(c, p.Version, latestText)})
+	}
+	writeJSON(w, map[string]any{"comments": out, "version": p.Version})
+}
+
+// handlePageCommentDrop: DELETE /api/pages/{id}/comments/{cid} (the user only).
+func (s *Server) handlePageCommentDrop(w http.ResponseWriter, r *http.Request) {
+	if s.pagesOff(w, r) {
+		return
+	}
+	p, ok := s.pages.get(r.PathValue("id"))
+	if !ok {
+		pageErr(w, errPageNotFound)
+		return
+	}
+	if !s.commentsStore().drop(p.ID, r.PathValue("cid")) {
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_comment", "message": "no such comment"})
+		return
+	}
+	writeJSON(w, map[string]any{"dropped": r.PathValue("cid")})
 }
