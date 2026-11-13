@@ -7649,6 +7649,11 @@ function renderPeerTabs() {
 
 function fmtWhen(t) { const at = Date.parse(t); return Number.isNaN(at) ? "" : fmtAgo(at) + " ago"; }
 
+function maxwNote(d, eff) {
+  if (eff.max_workers_per_repo == null) return "This host is too old to apply a cap.";
+  if (d.max_workers === "") return `Unset: the default of ${eff.max_workers_per_repo_source === "default" ? eff.max_workers_per_repo : 4} applies.`;
+  return d.max_workers === "0" ? "0: no cap." : "A handoff over this waits, and starts when a worker in that repository finishes.";
+}
 function peerSettingsForm(h, c, d) {
   const data = c.data;
   const installed = data.installed_kinds || [];
@@ -7678,7 +7683,7 @@ function peerSettingsForm(h, c, d) {
       <div class="pr-note">${d.allowed.length ? "Only these are started here; anything else is refused." : "None ticked: any installed agent may be started."}${eff.allowed_source === "flag" && !d.allowed.length ? " This host's -allowed-kinds applies." : ""}</div></div>
     <div class="pr-field"><label for="pr-maxw">Most running workers per repository</label>
       <input type="number" id="pr-maxw" min="0" max="1000" step="1" inputmode="numeric" value="${esc(d.max_workers)}" placeholder="${esc(eff.max_workers_per_repo_source === "default" || eff.max_workers_per_repo == null ? "4 (default)" : String(eff.max_workers_per_repo))}" autocomplete="off">
-      <div class="pr-note">${eff.max_workers_per_repo == null ? "This host is too old to apply a cap." : d.max_workers === "" ? `Unset: the default of ${eff.max_workers_per_repo} applies.` : d.max_workers === "0" ? "0: no cap." : "A handoff over this waits, and starts when a worker in that repository finishes."} Agents cannot change it.</div></div>
+      <div class="pr-note" id="pr-maxw-note">${maxwNote(d, eff)} Agents cannot change it.</div></div>
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
       <button type="button" class="btn" id="pr-revert"${dirty ? "" : " disabled"}>Revert</button>
@@ -7836,14 +7841,13 @@ function initPeers() {
   v.addEventListener("input", (ev) => {
     const d = prs.draft, t = ev.target;
     if (!d) return;
-    if (t.id === "pr-maxw") { d.max_workers = t.value.replace(/[^0-9]/g, ""); refreshDirty(); }
+    if (t.id === "pr-maxw") { d.max_workers = t.value.replace(/[^0-9]/g, ""); refreshDirty(); const n = $("pr-maxw-note"), c = prs.cfg[d.host]; if (n && c && c.data) n.textContent = maxwNote(d, c.data.effective || {}) + " Agents cannot change it."; }
     else if (t.dataset.model) { (d.kinds[t.dataset.model] ||= { model: "", thinking: "" }).model = t.value; refreshDirty(); }
   });
   v.addEventListener("change", (ev) => {
     const d = prs.draft, t = ev.target;
     if (!d) return;
     if (t.id === "pr-default") d.default_kind = t.value;
-    else if (t.id === "pr-maxw") d.max_workers = t.value.replace(/[^0-9]/g, "");
     else if (t.dataset.allow) d.allowed = t.checked ? [...new Set([...d.allowed, t.dataset.allow])] : d.allowed.filter((k) => k !== t.dataset.allow);
     else if (t.dataset.think) (d.kinds[t.dataset.think] ||= { model: "", thinking: "" }).thinking = t.value;
     else return;

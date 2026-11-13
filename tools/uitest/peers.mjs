@@ -130,26 +130,28 @@ try {
       const f = page.locator("#pr-maxw");
       if ((await f.inputValue()) !== "" || !(await f.getAttribute("placeholder")).startsWith("4")) throw new Error("the default 4 is not shown");
       if (!(await page.locator("#pr-form").innerText()).includes("default of 4")) throw new Error("no note naming the default");
+      // Saved: the button is back to "Save" and disabled (nothing unsaved), which follows the PUT's answer.
+      const saved = () => page.waitForFunction(() => { const b = document.querySelector("#pr-save"); return !!b && b.textContent === "Save" && b.disabled; }, null, { timeout: 15000 });
       const kube = () => fetch(`http://127.0.0.1:${kubePort}/api/settings`).then((r) => r.json());
       await f.fill("2");
       if (!(await page.locator("#pr-save").isEnabled())) throw new Error("Save stayed disabled after typing a cap");
       await shot("cap-edited");
       await page.locator("#pr-save").click();
-      await page.waitForFunction(() => /^Saved/.test(document.querySelector("#toast")?.textContent || ""), null, { timeout: 5000 });
+      await saved();
       let k = await kube();
       if (k.settings.max_workers_per_repo !== 2 || k.effective.max_workers_per_repo !== 2 || k.effective.max_workers_per_repo_source !== "setting") throw new Error("cap 2: " + JSON.stringify(k.effective));
       // Other settings are untouched by a cap edit.
       if (k.settings.default_kind !== "pi") throw new Error("the cap save lost the default agent");
       await f.fill("0");
       await page.locator("#pr-save").click();
-      await page.waitForFunction(() => document.querySelector("#pr-save")?.textContent === "Save" && document.querySelector("#pr-save").disabled, null, { timeout: 5000 });
+      await saved();
       k = await kube();
       if (k.settings.max_workers_per_repo !== 0 || k.effective.max_workers_per_repo !== 0) throw new Error("cap 0: " + JSON.stringify(k.effective));
       if (!(await page.locator("#pr-form").innerText()).includes("no cap")) throw new Error("no 'no cap' note");
       await shot("cap-zero");
       await f.fill("");
       await page.locator("#pr-save").click();
-      await page.waitForFunction(() => document.querySelector("#pr-save")?.textContent === "Save" && document.querySelector("#pr-save").disabled, null, { timeout: 5000 });
+      await saved();
       k = await kube();
       if (k.settings.max_workers_per_repo != null || k.effective.max_workers_per_repo !== 4) throw new Error("cleared: " + JSON.stringify(k.effective));
     });
