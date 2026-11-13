@@ -859,6 +859,8 @@
       z-index: var(--z-toast);
     }
     #toast.show { opacity: 1; }
+    #toast.refusal { bottom: calc(96px + var(--safe-bottom)); width: min(92vw, 440px); max-width: none; text-align: left; }
+    #toast.refusal .toast-act { margin: var(--sp-8) var(--sp-8) 0 0; }
     #toast.act { pointer-events: auto; }
     #toast.error.show { pointer-events: auto; }
     #toast.error .toast-act { min-height: var(--hit-36); border-color: var(--red); background: none; color: var(--red); }

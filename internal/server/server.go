@@ -929,6 +929,9 @@ type promptBody struct {
 	Text      string `json:"text"`
 	Wait      bool   `json:"wait"`
 	TimeoutMs int64  `json:"timeout_ms"`
+	// Force is the app's "Send anyway": skip the typing hold and the
+	// unrecognised-blocked refusal (a recognised dialog still refuses).
+	Force bool `json:"force,omitempty"`
 }
 
 // handlePrompt sends a prompt to an agent. By default it returns as soon as
@@ -973,7 +976,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if a != nil {
-		if err := s.guardPrompt(ctx, *a); err != nil {
+		if err := s.guardPromptForce(ctx, *a, body.Force); err != nil {
 			writeError(w, err)
 			return
 		}

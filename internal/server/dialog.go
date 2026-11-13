@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -138,8 +139,19 @@ var errDialogOpen = &herdr.Error{Code: "dialog_open", Message: "the agent is wai
 // dialog that just appeared, herdr only refuses while the agent reads as
 // blocked, and a permission prompt has no transcript question to find.
 func (s *Server) guardPrompt(ctx context.Context, agent herdr.AgentInfo) error {
-	if err := promptGuard(ctx, s.client, agent, s.pendingAsk(agent)); err != nil {
+	return s.guardPromptForce(ctx, agent, false)
+}
+
+// guardPromptForce is guardPrompt for a user who chose "Send anyway": the
+// half-typed-text hold and a "blocked" status with nothing recognised on
+// screen no longer refuse (herdr's own TUI would have typed it). A dialog
+// that is recognised on screen still does: the text and Enter would answer it.
+func (s *Server) guardPromptForce(ctx context.Context, agent herdr.AgentInfo, force bool) error {
+	if err := promptGuardOpts(ctx, s.client, agent, s.pendingAsk(agent), force); err != nil {
 		return err
+	}
+	if force {
+		return nil
 	}
 	// Then the user's own half-typed message (typing.go).
 	return s.inputGuard(ctx, agent)
@@ -148,6 +160,10 @@ func (s *Server) guardPrompt(ctx context.Context, agent herdr.AgentInfo) error {
 // promptGuard fails safe: a screen that cannot be read, or an agent that is
 // blocked on something no detector recognises, counts as a dialog.
 func promptGuard(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *transcript.Ask) error {
+	return promptGuardOpts(ctx, io, agent, ask, false)
+}
+
+func promptGuardOpts(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *transcript.Ask, force bool) error {
 	read, err := readDialogScreen(ctx, io, agent)
 	if err != nil {
 		return err
@@ -158,7 +174,8 @@ func promptGuard(ctx context.Context, io paneIO, agent herdr.AgentInfo, ask *tra
 	}
 	// A transcript question that is not on screen is not typed into; the
 	// agent being blocked with nothing recognised is an unknown dialog.
-	if agent.Status == herdr.StatusBlocked {
+	if agent.Status == herdr.StatusBlocked && !force {
+		log.Printf("prompt guard: %s (%s) is blocked and no dialog is recognised on its screen; refusing", agent.PaneID, agent.Agent)
 		return errDialogOpen
 	}
 	return nil

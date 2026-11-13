@@ -117,6 +117,22 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => (el.className = ""), isError && msg ? 6000 : 2600);
 }
 
+// toastActions: a toast with several buttons, on screen for ms.
+function toastActions(msg, actions, ms) {
+  const el = $("toast");
+  el.textContent = "";
+  el.append(msg);
+  for (const a of actions) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "toast-act"; b.textContent = a.label;
+    b.onclick = () => { el.className = ""; a.fn(); };
+    el.append(" ", b);
+  }
+  el.className = "show act error refusal";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.className = ""), ms);
+}
+
 // toastAction: a toast with one button (Undo), on screen for ms.
 function toastAction(msg, label, onClick, ms) {
   const el = $("toast");
@@ -10573,6 +10589,50 @@ function sendPrompt() {
   sendChain = sendChain.then(() => postPrompt({ text, pane, path, pending, terminal }));
 }
 
+// refusalNote: what a 409 from the prompt route means, said plainly. The
+// server's message names the cause (the text in the box, the dialog).
+function refusalNote(e) {
+  const m = e.message || "";
+  if (e.code === "input_busy") return "Not sent: " + m.replace(/^held: /, "");
+  if (e.code === "dialog_open") return "Not sent: the agent is waiting at a dialog. Answer it first, or queue the message.";
+  if (e.code === "agent_blocked") return "Not sent: the agent says it is waiting for input. Answer it, or queue the message.";
+  return "Not sent: " + (m || "the agent refused the message");
+}
+
+// refusalActions: "Send anyway" where the server allows it (a held box, an
+// unrecognised wait), and "Queue" (delivered when the agent is free).
+function refusalActions(e, job) {
+  const acts = [];
+  const forceable = e.code === "input_busy" || e.code === "agent_blocked" || e.code === "dialog_open";
+  if (forceable && e.code !== "dialog_open") acts.push({ label: "Send anyway", fn: () => resendPrompt(job, true) });
+  const a = agentById(job.pane);
+  if (a) acts.push({ label: "Queue", fn: () => queuePrompt(job, a) });
+  return acts;
+}
+
+async function resendPrompt(job, force) {
+  const { text, pane, path } = job;
+  try {
+    await api(`${path}/prompt`, { method: "POST", body: JSON.stringify({ text, force }) });
+    if (state.selected === pane && promptValue().trim() === text.trim()) setPromptValue("");
+    toast("sent");
+    state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
+  } catch (e) {
+    toast(refusalNote(e) + (e.status === 409 ? "" : " (" + e.message + ")"), true);
+  }
+}
+
+async function queuePrompt(job, a) {
+  try {
+    await api("/api/queue", { method: "POST", body: JSON.stringify({ agent: agentId(a), name: a.name || "", text: job.text }) });
+    if (state.selected === job.pane && promptValue().trim() === job.text.trim()) setPromptValue("");
+    toast("queued: it is sent when the agent is free");
+    refreshQueued(true);
+  } catch (e) {
+    toast("could not queue: " + e.message, true);
+  }
+}
+
 async function postPrompt(job) {
   const { text, pane, path, pending, terminal } = job;
   try {
@@ -10592,7 +10652,7 @@ async function postPrompt(job) {
       setPromptValue(now.trim() ? text + "\n" + now : text);
     }
     if (e.status === 409) {
-      toast("agent is waiting for input — answer the dialog or press Esc first", true);
+      toastActions(refusalNote(e), refusalActions(e, job), 20000);
     } else {
       toast("prompt failed: " + e.message + (state.selected === pane ? " — your message is back in the box" : ""), true);
     }

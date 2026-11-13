@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -163,9 +164,27 @@ func (s *Server) inputGuard(ctx context.Context, agent herdr.AgentInfo) error {
 		return nil
 	}
 	if ok, _ := t.observe(agent.PaneID, in); !ok {
-		return errInputBusy
+		log.Printf("input guard: held a message for %s (%s): box %s", agent.PaneID, agent.Agent, boxState(in))
+		return inputBusyError(in)
 	}
 	return nil
+}
+
+// boxState describes a reading of the input box for the log.
+func boxState(in dialog.Input) string {
+	if in.Busy {
+		return fmt.Sprintf("holds text %q", in.Text)
+	}
+	return "is empty but was not a few seconds ago"
+}
+
+// inputBusyError is errInputBusy saying what was found in the box, so the
+// refusal can tell the user why (and what "Send anyway" would type after).
+func inputBusyError(in dialog.Input) error {
+	if in.Busy {
+		return &herdr.Error{Code: "input_busy", Message: fmt.Sprintf("held: the input box in that pane has text in it (%q); a message sent now would be typed after it", in.Text)}
+	}
+	return &herdr.Error{Code: "input_busy", Message: "held: the input box in that pane was emptied a moment ago; wait a few seconds, or send anyway"}
 }
 
 // noteHeld records that a delivery to agentID was held because of typing

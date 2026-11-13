@@ -37,6 +37,9 @@ func TestDetectInputFixtures(t *testing.T) {
 		// Claude Code, with styling.
 		{"claude_empty.ansi", "claude", false, ""},
 		{"claude_empty2.ansi", "claude", false, ""},
+		// Regression (prompt refused, 2026-11-13): "Update installed" at the right edge above the rule, vim -- INSERT --, a pasted question above.
+		{"claude_update_notice.ansi", "claude", false, ""},
+		{"claude_update_notice.txt", "claude", false, ""},
 		{"claude_cleared.ansi", "claude", false, ""},
 		{"claude_afterpaste.ansi", "claude", false, ""},
 		{"claude_typed.ansi", "claude", true, "I think we should consider a way to"},
