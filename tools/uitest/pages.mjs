@@ -929,7 +929,7 @@ await check("phone: a long page scrolls to its end and the back arrow clears the
   g = await geo();
   const room = await m.evaluate(() => ({ frame: document.querySelector(".pgs-frame").getBoundingClientRect().height, sel: document.getElementById("pgs-sel").getBoundingClientRect().height, tray: document.getElementById("pgs-tray").getBoundingClientRect().height, sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
   await m.screenshot({ path: `${out}/pages-long-390-note.png` });
-  if (room.frame < 135 || room.sw > room.cw) throw new Error("with the comment strip, its note and the tray open the page has no room: " + JSON.stringify(room));
+  if (room.frame < 140 || room.sw > room.cw) throw new Error("with the comment strip, its note and the tray open the page has no room: " + JSON.stringify(room));
   await m.locator("#pgs-notecancel").tap();
   await m.setViewportSize({ width: 390, height: 844 });
   // the back arrow, tapped: the gallery

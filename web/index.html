@@ -2183,7 +2183,7 @@
       .pgs-body { flex-direction: row; }
       .pgs-tray { flex: 0 0 320px; max-height: none; border-top: 0; border-left: 1px solid var(--border); }
     }
-    .pgs-frame { flex: 1; min-height: 140px; width: 100%; border: 0; background: white; } /* a page that sets no background is drawn for light paper, in any theme */
+    .pgs-frame { flex: 1; min-height: calc(var(--hit-48) * 3); width: 100%; border: 0; background: white; } /* a page that sets no background is drawn for light paper, in any theme */
     .pgs-pick { margin: auto; padding: var(--sp-24); text-align: center; color: var(--muted); }
     /* In the pane (1100px and up) the gallery has room to breathe; with a page open, the viewer replaces it, as on a phone. */
     @media (min-width: 1100px) { #pages .pgs-list { padding: var(--sp-20) var(--sp-24) var(--sp-24); } }
