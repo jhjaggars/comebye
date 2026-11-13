@@ -187,7 +187,9 @@ await check("answer card: Copy screen copies the terminal snapshot", async () =>
   const want = (await page.locator("#answer-snap").evaluate((e) => e.innerText)).replace(/\n+$/, "");
   if (!want) throw new Error("the snapshot is empty");
   await sentinel(); await b.click(); await page.waitForTimeout(300);
-  same(await clip(), want, "snapshot");
+  // The snapshot is redrawn on each poll, and a redraw can add or drop a blank first line (a <pre> ignores one when it is
+  // parsed, not when it is set), so want, read just before the click, and the copy can differ by that line.
+  same((await clip()).replace(/^\n+/, ""), want.replace(/^\n+/, ""), "snapshot");
 });
 
 // ---- slice 5: error toasts, the Pages viewer and a copy button inside a page ----
