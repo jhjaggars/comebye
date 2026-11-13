@@ -87,7 +87,12 @@ the owning host:
    refusing the report, when a section or a Verification group is missing.
 `comebye report --progress "TEXT"` sends a progress note: TEXT is the note
 itself (a lone `-` reads it from stdin; it is never taken for a file name), and
-any failure prints an error and exits non-zero. The final `comebye report FILE|-`
+any failure prints an error and exits non-zero. Workers post a note at each
+milestone and at least hourly while working (the built-in template says so);
+the app shows the latest note, with its age, under the worker's name in the
+Agents list, in the opened agent's header and on the Status page. The note
+fades to muted once it is over 2 h old while the agent is still working, and a
+working handoff worker with no note in the last 90 min gets a "no update" hint. The final `comebye report FILE|-`
 names the file it could not read and says nothing was sent. The
    template also tells the worker that the coordinator may ask it to land its
    work after the report, and that this message authorises exactly those
@@ -451,7 +456,7 @@ success, 1 when a call failed, 2 for a usage error.
 
 | Command | What it does |
 | --- | --- |
-| `comebye agents [--host H]` | Every agent on every host: id, name, kind, model (ledger workers), status, project, branch, role (coordinator, worker, home; "(you)" for the caller). |
+| `comebye agents [--host H] [--long [--over 2h]]` | Every agent on every host: id, name, kind, model (ledger workers), status, project, branch, role (coordinator, worker, home; "(you)" for the caller). |
 | `comebye ledger [--active]` | The handoffs: status, host, repository, branch, worker, whether a final report was captured, marks, and hints (agent gone, uncommitted or unmerged, `candidate`). Then the other marked sessions. |
 | `comebye read AGENT [--lines N]` | The agent's last N messages (default 20) as text; the terminal's output for agents without a transcript. |
 | `comebye read AGENT --report` | A ledger worker's final report (AGENT may also be the entry id or branch); for any other agent, its last reply. |

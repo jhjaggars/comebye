@@ -39,7 +39,7 @@ with the matches listed.
 | Command | What it does |
 | --- | --- |
 | `comebye whoami` | who you are (your agent id, host, hub) |
-| `comebye agents` | every agent on every host: project, branch, status, role |
+| `comebye agents` | every agent on every host: project, branch, status, role; `--long [--over 2h]` lists only workers running longer, with their latest progress note and its age (quote them in the briefing) |
 | `comebye ledger` | the handoffs: status, branch, worker, report, marks, hints |
 | `comebye read AGENT [--lines N]` | an agent's recent messages |
 | `comebye read AGENT --report` | a worker's final report (any other agent: its last reply); add `--summary` for just its Summary and Decisions for the user, and read the rest only when you need it |

@@ -54,6 +54,7 @@ const defaultHandoffTemplate = `You are a worker agent on {{repo}}, handed this 
 - Grade your evidence honestly in the report's Verification section, and say for each item how you checked it. **Verified live**: the real, built program exercised the way a user or client would (the CLI binary, HTTP requests to a running server, the dev harness in a browser, a pty script); calling a function directly is not live. **Unit tests only**: covered by automated tests but not exercised live. **Not verified**: everything else. A screenshot counts only if you opened it and say in one line what it shows.
 - Do not use ` + "`tmux`" + ` (it breaks inside herdr panes and leaves stray sessions): to exercise an interactive program, drive it from a script over a pty (Python pty, or script).
 - A long step (tests, a build, a landing's CI) is not a reason to report. Tell {{from}} how it is going with ` + "`comebye report --progress \"<what you are doing>\"`" + ` (a note: it finishes nothing and the card shows it). A report is you saying you are done.
+- Post a progress note at each milestone and at least hourly while working: the app shows your latest note under your name, and a worker with no note for 90 minutes shows "no update".
 - End by running ` + "`comebye report -`" + ` with your final report on its standard input (a quoted heredoc is easiest), in exactly this markdown format, and then stop. That is how {{from}} learns you are done; if the command is not available, make the report your last message instead.
 
 ## Summary
