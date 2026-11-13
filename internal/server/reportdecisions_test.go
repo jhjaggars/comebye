@@ -325,6 +325,9 @@ func TestReportLinksPagesFirst(t *testing.T) {
 		l[3].Label != "Transcript" || l[3].Kind != "transcript" {
 		t.Fatalf("links = %+v", l)
 	}
+	if pg := items[0].Page; pg == nil || pg.ID != named.ID || pg.Version != 1 {
+		t.Fatalf("page ref = %+v", pg)
+	}
 	// A single "from report" item gets the same links.
 	s2, e2 := decisionsServer(t)
 	s2.pages = s.pages
@@ -332,5 +335,8 @@ func TestReportLinksPagesFirst(t *testing.T) {
 	it := activeItems(s2)[0]
 	if len(it.Links) < 3 || it.Links[0].Label != "Page: Review to-do UX" || it.Links[len(it.Links)-2].Handoff != e2.ID {
 		t.Fatalf("single item links = %+v", it.Links)
+	}
+	if it.Page == nil || it.Page.ID != named.ID {
+		t.Fatalf("single item page ref = %+v", it.Page)
 	}
 }
