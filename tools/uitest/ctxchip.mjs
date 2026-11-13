@@ -16,7 +16,7 @@ async function check(name, fn) {
   catch (e) { results.push({ name, ok: false }); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
 }
 
-const PANES = { ok: "w31:p1", warn: "w32:p1", danger: "w33:p1", nowindow: "w34:p1", pi: "w35:p1", live: "w38:p1", none: "w36:p1", compacted: "w37:p1" };
+const PANES = { ok: "w31:p1", warn: "w32:p1", danger: "w33:p1", nowindow: "w34:p1", pi: "w35:p1", live: "w38:p1", live2: "w39:p1", none: "w36:p1", compacted: "w37:p1" };
 
 for (const width of [390, 1280]) {
   const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark });
@@ -78,7 +78,7 @@ for (const width of [390, 1280]) {
   });
 
   await check(`chip at ${width}px: a tap says the exact numbers; it moves when the agent replies`, async () => {
-    await open(PANES.live);
+    await open(width > 500 ? PANES.live2 : PANES.live); // each viewport talks to its own agent: a reply moves it for good
     await page.waitForFunction(() => /^ctx 30%/.test(document.querySelector("#d-ctx").innerText), null, { timeout: 8000 });
     await page.locator("#d-ctx").click();
     await page.waitForFunction(() => /60,000 of 200,000 tokens/.test(document.querySelector("#toast")?.textContent || ""), null, { timeout: 3000 });

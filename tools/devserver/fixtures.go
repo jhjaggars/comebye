@@ -184,6 +184,7 @@ func (f *fake) addContextAgents(dir, tag string) {
 	ask(mk("ctx-warn", "w32:p1", "claude", "claude-opus-5-5", 830000-5000, 5000, false))
 	ask(mk("ctx-danger", "w33:p1", "claude", "claude-sonnet-4-6", 192000-1000, 1000, false))
 	ask(mk("ctx-live", "w38:p1", "claude", "claude-sonnet-4-6", 60000-20000, 20000, false)) // the test talks to this one
+	ask(mk("ctx-live2", "w39:p1", "claude", "claude-sonnet-4-6", 60000-20000, 20000, false)) // the same, for the second viewport
 	ask(mk("ctx-nowindow", "w34:p1", "claude", "claude-haiku-5-5", 40000-1000, 1000, false))
 	ask(mk("ctx-pi", "w35:p1", "pi", "m1", 64000-4000, 4000, true))
 	none := mk("ctx-none", "w36:p1", "claude", "", 0, 0, false)
