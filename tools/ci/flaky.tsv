@@ -14,3 +14,6 @@ drive	mark:	coordinator	2026-11-12	2026-11-26	named flaky in CI round two
 drive	fleet menu	coordinator	2026-11-12	2026-11-26	named flaky in CI round two
 drive	latency:	coordinator	2026-11-12	2026-11-26	failed once with three suites on one machine (timing under load)
 drive	pi trust prompt	coordinator	2026-11-12	2026-11-26	failed once with three suites on one machine (8 s wait)
+drive	briefings: a swipe that starts on a sideways-scrolling row	coordinator	2026-11-13	2026-11-27	failed in a dark run on main; a touch-swipe timing check
+sidepanel	files collapse one by one and all at once	coordinator	2026-11-13	2026-11-27	failed at 390 in a CI run on main
+drive	transcripts: before typing, the newest sessions	coordinator	2026-11-13	2026-11-27	a 5 s wait that times out under load
