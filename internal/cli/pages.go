@@ -98,12 +98,28 @@ func cmdPublish(e *Env, args []string) error {
 	update := fs.String("update", "", "the id of a page of yours to add a new version to (same link)")
 	ifVersion := fs.Int("if-version", 0, "with --update or --key: refuse unless the page is still at this version")
 	handoff := fs.String("handoff", "", "the ledger handoff this page is about")
+	review := fs.String("review", "", `also file a review for the user in To do, titled "Review: <this>" (what you built, e.g. the slice); needs a page with something to look at`)
+	try := fs.String("try", "", "with --review: what to try, as markdown: a file, or - for stdin (not the page itself)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 1 {
-		return usageErr(`want publish FILE|- [--title T] [--kind html|md] [--key K | --update ID] [--handoff ID]`)
+		return usageErr(`want publish FILE|- [--title T] [--kind html|md] [--key K | --update ID] [--handoff ID] [--review "SLICE" [--try FILE|-]]`)
+	}
+	if *try != "" && *review == "" {
+		return usageErr("--try goes with --review")
+	}
+	if *try == "-" && pos[0] == "-" {
+		return usageErr("the page and --try cannot both come from stdin")
+	}
+	tryText := ""
+	if *try != "" {
+		t, err := readInput(e, *try, 16<<10)
+		if err != nil {
+			return err
+		}
+		tryText = t
 	}
 	if *update != "" && *key != "" {
 		return usageErr("--update and --key exclude each other")
@@ -186,6 +202,40 @@ func cmdPublish(e *Env, args []string) error {
 		}
 		wg.Wait()
 	}
+	if *review != "" {
+		// After the thumbnails, so the card has its picture when it opens.
+		return fileReview(e, c, r.Page.ID, r.Page.Version, *review, tryText)
+	}
+	return nil
+}
+
+// fileReview files the To do item "Review: <slice>" about a published Page
+// version; the user answers it Looks good or Needs changes in the app.
+func fileReview(e *Env, c *client, id string, version int, slice, tryText string) error {
+	body := map[string]any{
+		"question": "Review: " + strings.TrimSpace(slice),
+		"kind":     "review",
+		"page":     map[string]any{"id": id, "version": version},
+	}
+	if tryText != "" {
+		body["context"] = tryText
+	}
+	data, err := c.raw("POST", "/api/todos", nil, body)
+	if err != nil {
+		return fmt.Errorf("the page is published, but filing the review failed: %w", err)
+	}
+	var r struct {
+		Todo      apiTodo `json:"todo"`
+		Duplicate bool    `json:"duplicate"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	if r.Duplicate {
+		fmt.Fprintf(e.Stderr, "A review is already on the list as %s.\n", r.Todo.ID)
+		return nil
+	}
+	fmt.Fprintf(e.Stderr, "Filed review %s for %s v%d; the user answers it in To do, and the verdict reaches you as a message.\n", r.Todo.ID, id, version)
 	return nil
 }
 

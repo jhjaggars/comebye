@@ -292,6 +292,31 @@ comebye pages show <id> --body > page.html     # then edit, and publish with the
 `_` and `-`. Every revision lands on the same link and keeps its version
 history. Put the printed link in your report.
 
+## Ask for a review of what you built
+
+When the page is a demo of something you built (a screenshot or GIF of a
+flow, a mockup to try), do not file a "Review" to-do by hand. Publish with
+`--review` and the hub files one for you, linked to this version of the page:
+
+```sh
+comebye publish demo.html --key <your-name>-demo --review "slice 3: worker flag" --try - <<'EOF2'
+1. Open the Pages screen and pick the demo.
+2. Press Needs changes and write a note.
+EOF2
+```
+
+The item is "Review: slice 3: worker flag". The user sees a thumbnail, the
+`--try` text under "What to try" (a short numbered list: what to open, what
+to press, what should happen), and two buttons, Looks good and Needs
+changes. The verdict comes back to you as a message, or goes to the
+coordinator if you have finished and your pane is gone. A Needs changes
+files a Fix item for the coordinator. While a review with the same title
+is still open it is not filed twice, so a new version of the page needs a
+new slice name or the old review closed first. Use it only for something
+the user can look at and judge; a report or plan that needs a choice
+belongs in your report's "Decisions for the user", and if that report is
+about a page, name the page id in it so the decisions link to it.
+
 ## After you publish: record the delivery, then tidy up
 
 Once your findings are in a page, the notes you wrote on the way are noise

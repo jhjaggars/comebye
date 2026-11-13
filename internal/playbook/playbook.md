@@ -64,7 +64,7 @@ with the matches listed.
 | `comebye sweep [--dry-run] [--notify]` | find finished workers on every host, check each on its own host and mark the ones with nothing to lose; lists the rest with why |
 | `comebye brief set FILE` / `comebye brief get` | publish / read the briefing |
 | `comebye todo add "QUESTION" [--kind K] [--option "LABEL\|DETAIL" ... --recommend N] [--context FILE\|-] [--link URL] [--waiting AGENT]` | put a question, decision or follow-up for the user on the to-do list |
-| `comebye publish FILE\|- [--title T] [--key K \| --update ID]` | publish an HTML or Markdown page to the hub and print its link; give the link in reports and `todo add --link` |
+| `comebye publish FILE\|- [--title T] [--key K \| --update ID] [--review "SLICE" [--try FILE\|-]]` | publish an HTML or Markdown page to the hub and print its link; give the link in reports and `todo add --link`. `--review` also files a "Review: SLICE" item for the user about that page version (thumbnail, what to try from `--try`, Looks good / Needs changes); tell a worker that built something visible to publish its demo that way instead of filing a followup by hand |
 | `comebye pages guide` / `pages new --type doc\|mockup\|deck\|dashboard` | how to make a good page, and a starter in the app's theme; for anything visual (a plan with mockups, a review, a chart) tell workers to publish HTML from a starter, not Markdown, with `--key <agent-name>-<subject>` |
 | `comebye pages list` / `show ID [--body]` / `rm ID` | the published pages, one page's details or source, delete one |
 | `comebye todo list` / `show ID` | the open and answered items / one item with its context |

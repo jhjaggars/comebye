@@ -119,3 +119,27 @@ func TestPagesSubcommands(t *testing.T) {
 		}
 	}
 }
+
+func TestPublishReviewFilesTheItem(t *testing.T) {
+	f, e, _, errb := newFake(t)
+	f.answers["POST /api/pages"] = answer{code: 201, body: `{"page":` + pageJSON + `,"path":"/p/pg_0123456789","created":true}`}
+	f.answers["POST /api/todos"] = answer{code: 201, body: `{"todo":{"id":"t0123456789","kind":"review"}}`}
+	e.Stdin = strings.NewReader("1. Open the card\n")
+	file := filepath.Join(t.TempDir(), "demo.md")
+	os.WriteFile(file, []byte("# demo\n"), 0o600)
+	if code := run(e, "publish", file, "--review", "slice 3", "--try", "-"); code != 0 {
+		t.Fatalf("publish: %d %s", code, errb)
+	}
+	var body map[string]any
+	json.Unmarshal([]byte(f.find("POST", "/api/todos").body), &body)
+	pg, _ := body["page"].(map[string]any)
+	if body["kind"] != "review" || body["question"] != "Review: slice 3" || body["context"] != "1. Open the card\n" || pg["id"] != "pg_0123456789" || pg["version"] != float64(2) {
+		t.Fatalf("todo body = %v", body)
+	}
+	for _, args := range [][]string{{"publish", file, "--try", "x"}, {"publish", "-", "--review", "s", "--try", "-"}} {
+		n := len(f.reqs)
+		if code := run(e, args...); code == 0 || len(f.reqs) != n {
+			t.Fatalf("%v: code %d, requests %d -> %d", args, code, n, len(f.reqs))
+		}
+	}
+}
