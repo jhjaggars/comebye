@@ -78,7 +78,9 @@ async function api(path, opts = {}) {
     if (e && e.name === "AbortError") { e.aborted = true; }
     throw e;
   }
-  noteVersion(res.headers.get("X-App-Version"));
+  // An "immutable" response (a page's preview for one version) is kept by the browser for a year and
+  // replayed with the X-App-Version of the build that first fetched it: not the server's version now.
+  if (!/\bimmutable\b/.test(res.headers.get("Cache-Control") || "")) noteVersion(res.headers.get("X-App-Version"));
   if (res.status === 401) {
     setUnauthorized(true);
     const err = new Error(UNAUTHORIZED_MSG);
