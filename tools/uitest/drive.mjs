@@ -13,6 +13,16 @@ const WAIT = Number(process.env.REPLY_WAIT_MS || 9000);
 const { browser, page } = await launch({ dark: process.env.SCHEME !== "light" });
 const log = [];
 const note = stamped(log);
+// TIMES=1 also names each wait of a second or more (waitForSelector, waitForFunction, waitForTimeout) and the line that made it.
+if (process.env.TIMES) {
+  for (const m of ["waitForSelector", "waitForFunction", "waitForTimeout"]) {
+    const orig = page[m].bind(page);
+    page[m] = async (...a) => {
+      const t0 = Date.now(), at = (new Error().stack.split("\n").filter((l) => l.includes("drive.mjs"))[1] || "").trim().replace(/^at /, "");
+      try { return await orig(...a); } finally { if (Date.now() - t0 >= 1000) console.log(`    wait ${((Date.now() - t0) / 1000).toFixed(1)}s ${m} ${at.slice(-60)}`); }
+    };
+  }
+}
 page.on("console", (m) => note.push(`console.${m.type()}: ${m.text()}`));
 page.on("pageerror", (e) => note.push(`pageerror: ${e.message}`));
 page.on("response", (r) => { if (r.url().includes("/api/") && !r.url().includes("/api/events")) note.push(`${r.status()} ${r.request().method()} ${r.url().replace(base, "")}`); });
@@ -1145,6 +1155,10 @@ for (const width of [390, 1280]) {
 for (const width of [390, 1280]) {
   await check(`background: at ${width}px the agent's detail says waiting, with its label and age`, async () => {
     await page.setViewportSize({ width, height: width < 600 ? 780 : 800 });
+    // The checks above swap in made-up agents; the route to this one is only resolved against the real list, which a
+    // fresh load brings back (without it the detail waited for the next fleet refresh, 13 to 16 s).
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent", { state: "attached", timeout: 8000 });
     await openAgent("alpha");
     const r = await page.evaluate(() => {
       const a = state.agents.find((x) => x.pane_id === "w1:p1");
@@ -3776,11 +3790,13 @@ await check("keys: stop and interrupt are in the palette only, behind a confirm"
     await page.evaluate(() => document.activeElement && document.activeElement.blur());
     const ids = await page.evaluate(() => [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent).map((r) => r.dataset.id));
     S("alt2 " + JSON.stringify(ids)); await page.keyboard.press("Alt+2");
-    await page.waitForFunction((x) => state.selected === x, ids[1], { timeout: 3000 });
+    // The list redraws on every fleet update, so the row at a position is read when the wait polls, not once before the key.
+    const atRow = (n) => page.waitForFunction((i) => { const r = [...document.querySelectorAll("#agents .agent[data-id]")].filter((x) => x.offsetParent)[i]; return r && state.selected === r.dataset.id; }, n, { timeout: 3000 });
+    await atRow(1);
     S("j " + (await sel())); await page.keyboard.press("j");
-    await page.waitForFunction((x) => state.selected === x, ids[2], { timeout: 3000 });
+    await atRow(2);
     S("k " + (await sel())); await page.keyboard.press("k");
-    await page.waitForFunction((x) => state.selected === x, ids[1], { timeout: 3000 });
+    await atRow(1);
     // Two agents that need you, whatever the earlier checks left answered (the next list update would undo it, so press at once).
     const blocked = await page.evaluate(() => {
       const rs = [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent);
@@ -4005,8 +4021,8 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         const states = [
           ["list", "state.agents = []; renderList()", "#agents .empty", true], // measured in the same task: an "agents" event (or a resume refresh) landing in a wait would redraw the fleet
           ["search none", "location.hash = '#/search?q=zzzqqqnomatch'", ".rc-empty"],
-          ["ready to remove", "openReview(); await new Promise(r => setTimeout(r, 500)); review.items = []; renderReview()", "#rv-list .ln-empty"],
-          ["sweep", "openReview(); await new Promise(r => setTimeout(r, 500)); Object.assign(sweep, { shown: true, busy: false, data: { ready: [], needs_look: [] } }); renderSweep()", "#rv-sweepbox .ln-empty"],
+          ["ready to remove", "openReview(); await new Promise(r => { const t0 = Date.now(); const k = () => review.open || Date.now() - t0 > 3000 ? r() : setTimeout(k, 20); k(); }); review.items = []; renderReview()", "#rv-list .ln-empty"],
+          ["sweep", "openReview(); await new Promise(r => { const t0 = Date.now(); const k = () => review.open || Date.now() - t0 > 3000 ? r() : setTimeout(k, 20); k(); }); Object.assign(sweep, { shown: true, busy: false, data: { ready: [], needs_look: [] } }); renderSweep()", "#rv-sweepbox .ln-empty"],
           ...(mobile ? [] : [["To do none", "location.hash = '#/todo'; todos.loadedAt = 0; await loadTodos()", "#pt-body .empty"]]),
         ];
         const bad = [];
@@ -4021,7 +4037,8 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
           if (now) m = await p.evaluate(`(async () => { ${js}; return (${measure.toString()})(${JSON.stringify(sel)}); })()`);
           else {
             await p.evaluate(`(async () => { ${js} })()`);
-            await p.waitForTimeout(700);
+            // Wait for the box itself, not a fixed 700 ms; a box that never shows is reported as "not shown" below.
+            await p.waitForFunction((q) => [...document.querySelectorAll(q)].some((e) => e.offsetParent !== null), sel, { timeout: 4000 }).catch(() => {});
             m = await p.evaluate(measure, sel);
           }
           if (!m) bad.push(`${name}: not shown (${sel})`);
