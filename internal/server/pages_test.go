@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 // served runs the full handler (host check, CSRF, and the page headers),
@@ -604,5 +606,58 @@ func TestMatchPageTextSnippetKeepsRunes(t *testing.T) {
 	}
 	if _, _, ok := matchPageText("abc", []string{"abc", "zzz"}); ok {
 		t.Error("every word must appear")
+	}
+}
+
+func TestPageSessionStamp(t *testing.T) {
+	cases := []struct {
+		name string
+		a    herdr.AgentInfo
+		want *PageSession
+	}{
+		{"claude id", herdr.AgentInfo{Agent: "claude", AgentSession: &herdr.AgentSessionInfo{Kind: "id", Value: "9f1c2d3e-aaaa-bbbb-cccc-0123456789ab"}}, &PageSession{Host: "desk", Kind: "claude", ID: "9f1c2d3e-aaaa-bbbb-cccc-0123456789ab"}},
+		{"pi path", herdr.AgentInfo{Agent: "pi", AgentSession: &herdr.AgentSessionInfo{Kind: "path", Value: "/home/u/.pi/agent/sessions/x/2026_abc.jsonl"}}, &PageSession{Host: "desk", Kind: "pi", ID: "2026_abc"}},
+		{"no session", herdr.AgentInfo{Agent: "claude"}, nil},
+		{"other agent", herdr.AgentInfo{Agent: "codex", AgentSession: &herdr.AgentSessionInfo{Kind: "id", Value: "abc"}}, nil},
+		{"odd id", herdr.AgentInfo{Agent: "claude", AgentSession: &herdr.AgentSessionInfo{Kind: "id", Value: "a b/../c"}}, nil},
+	}
+	for _, c := range cases {
+		got := sessionStamp(c.a, "desk")
+		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestPagePublishStampsTheCallersSession(t *testing.T) {
+	fh, client := startFakeLaunchHerdr(t)
+	fh.set(func(f *fakeLaunchHerdr) {
+		f.agents = []herdr.AgentInfo{
+			{Name: "w", PaneID: "w2:p1", Agent: "claude", Status: herdr.StatusIdle, AgentSession: &herdr.AgentSessionInfo{Kind: "id", Value: "sess-1"}},
+			{Name: "n", PaneID: "w3:p1", Agent: "claude", Status: herdr.StatusIdle},
+		}
+	})
+	m := managerWith(t, client, "desk", 2)
+	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, client, m)
+	t.Cleanup(s.waitBackground)
+	if s.pages == nil {
+		t.Skip("pages off")
+	}
+	last := func(w *httptest.ResponseRecorder) *PageSession {
+		if w.Code != http.StatusCreated {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		p := pageOf(t, w.Body.Bytes())
+		return p.History[len(p.History)-1].Session
+	}
+	body := pubJSON(map[string]any{"body": "# hi", "kind": "md"})
+	if got := last(served(s, "POST", "/api/pages", agentHdr("w2:p1"), body)); got == nil || *got != (PageSession{Host: "desk", Kind: "claude", ID: "sess-1"}) {
+		t.Fatalf("agent: %+v", got)
+	}
+	if got := last(served(s, "POST", "/api/pages", agentHdr("w3:p1"), body)); got != nil {
+		t.Fatalf("no session reported: %+v", got)
+	}
+	if got := last(served(s, "POST", "/api/pages", userHdr, body)); got != nil {
+		t.Fatalf("user: %+v", got)
 	}
 }

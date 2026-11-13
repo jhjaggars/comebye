@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/web"
 )
 
@@ -76,6 +77,17 @@ type PageVersion struct {
 	Kind string    `json:"kind"`
 	Size int64     `json:"size"`
 	At   time.Time `json:"at"`
+	// Session is the agent session that published this version, as the
+	// hub saw the pane at the time; empty for the user and for panes whose
+	// session herdr does not report.
+	Session *PageSession `json:"session,omitempty"`
+}
+
+// PageSession names a session as the transcript index does.
+type PageSession struct {
+	Host string `json:"host"`
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
 }
 
 // Page is one published page and its kept versions.
@@ -200,6 +212,7 @@ type pageIn struct {
 	ID, Key, Title, Kind, Handoff string
 	Body                          []byte
 	IfVersion                     *int
+	Session                       *PageSession
 }
 
 // publish stores a new page, or a new version of the page named by id or
@@ -284,7 +297,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 	if in.Handoff != "" {
 		p.Handoff = in.Handoff
 	}
-	p.History = append(p.History, PageVersion{N: p.Version, Kind: in.Kind, Size: p.Size, At: now})
+	p.History = append(p.History, PageVersion{N: p.Version, Kind: in.Kind, Size: p.Size, At: now, Session: in.Session})
 	if n := len(p.History) - pageMaxVersions; n > 0 {
 		p.History = p.History[n:]
 	}
@@ -631,6 +644,7 @@ func (s *Server) handlePageCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Kind = sniffKind(in.Body)
 	}
+	in.Session = s.pageSession(r)
 	p, created, err := s.pages.publish(in, s.pageCaller(r))
 	if err != nil {
 		if errors.Is(err, errPageConflict) {
@@ -960,4 +974,43 @@ if(mm.length){var s2=document.createElement("script");s2.src="/p/_/mermaid.js";
 func markdownShell(md []byte) []byte {
 	j, _ := json.Marshal(string(md))
 	return []byte(mdShellHead + `<script type="application/json" id="src">` + string(j) + "</script>\n" + mdShellTail)
+}
+
+// pageSession is the session of the pane that is publishing, from what herdr
+// reports for it: a claude or opencode id, or a pi session file (the index id
+// is its name without .jsonl). Nil when the caller is not an agent pane or
+// herdr reports nothing usable. Never taken from the request.
+func (s *Server) pageSession(r *http.Request) *PageSession {
+	c := callerOf(r)
+	if !c.agent() || c.pane == "" || c.tagged {
+		return nil
+	}
+	a, ok := s.findFleetAgent(s.replyID(c))
+	if !ok {
+		return nil
+	}
+	host := c.host
+	if host == "" {
+		host = s.fleet.LocalName()
+	}
+	return sessionStamp(a, host)
+}
+
+func sessionStamp(a herdr.AgentInfo, host string) *PageSession {
+	sess := a.AgentSession
+	if sess == nil || sess.Value == "" {
+		return nil
+	}
+	kind := a.Agent
+	if kind != "claude" && kind != "pi" && kind != "opencode" {
+		return nil
+	}
+	id := sess.Value
+	if sess.Kind == "path" {
+		id = strings.TrimSuffix(filepath.Base(id), ".jsonl")
+	}
+	if cleanID(id) == "" {
+		return nil
+	}
+	return &PageSession{Host: host, Kind: kind, ID: id}
 }

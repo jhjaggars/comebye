@@ -6165,12 +6165,36 @@ async function pagesMade(id, ver) {
   const box = $("pgs-made");
   const r = pgs.route;
   if (!box || !r || r.id !== id || ((r.ver || (pgs.items.find((x) => x.id === id) || {}).version) !== ver)) return;
-  if (!c.items.length) { box.hidden = true; box.replaceChildren(); return; }
+  const hasStamp = (((pgs.items.find((x) => x.id === id) || {}).versions || []).find((v) => v.n === ver) || {}).session;
+  if (!c.items.length && !hasStamp) { box.hidden = true; box.replaceChildren(); return; }
   // Each version names its own session: a key can gather versions from several.
   const want = "version " + ver;
   const it = c.items.find((x) => x.detail === want);
+  // The hub's publish stamp names the session when the index has not matched the publish command
+  // (a session not archived yet); the link is only offered once the index has that session.
+  const pg = pgs.items.find((x) => x.id === id);
+  const stamp = !it && pg && ((pg.versions || []).find((v) => v.n === ver) || {}).session;
+  if (stamp) {
+    c.stamps = c.stamps || new Map();
+    const k = stamp.host + "/" + stamp.kind + "/" + stamp.id;
+    if (!c.stamps.has(k)) {
+      c.stamps.set(k, null);
+      try { c.stamps.set(k, await api(rcSessionURL({ session: stamp }) + "?limit=1")); } catch { c.stamps.set(k, false); }
+      if ($("pgs-made") !== box || !pgs.route || pgs.route.id !== id) return;
+    }
+  }
+  const stamped = stamp && c.stamps.get(stamp.host + "/" + stamp.kind + "/" + stamp.id);
   const kids = [];
-  if (it) {
+  if (stamped) {
+    const t = document.createElement("span");
+    t.className = "pgs-madetxt";
+    t.textContent = `Made in ${(stamped.session && stamped.session.title) || stamp.id} · ${stamp.host} · ${pageAgo(pg.updated_at)}`;
+    const a = document.createElement("a");
+    a.className = "btn pgs-opensess"; a.id = "pgs-opensess";
+    a.href = rcSessionHash(stamp);
+    a.textContent = "Open session ▸";
+    kids.push(t, a);
+  } else if (it) {
     const t = document.createElement("span");
     t.className = "pgs-madetxt";
     t.textContent = `Made in ${it.session.title || it.session.id} · ${it.session.host} · turn ${it.seq} · ${pageAgo(it.ts)}`;
@@ -6179,6 +6203,8 @@ async function pagesMade(id, ver) {
     a.href = rcSessionHash(it.session, { seq: it.seq, sub: it.sub });
     a.textContent = "Open session ▸";
     kids.push(t, a);
+  } else if (!c.items.length) {
+    box.hidden = true; box.replaceChildren(); return;
   } else {
     const t = document.createElement("span");
     t.className = "pgs-madetxt";

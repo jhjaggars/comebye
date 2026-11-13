@@ -645,6 +645,34 @@ await check("open session: a Page made in an indexed session names it per versio
   await page.goto(base + "/#/pages/" + pages.secret, { waitUntil: "load" });
   await poll(() => /No session found for this version/.test(document.querySelector("#pgs-made")?.textContent || ""), "other versions note");
   await page.unroute(/\/api\/recall\/produced\?ref=/);
+  // The hub's publish stamp names the session when the index matched nothing; the link shows only
+  // if the index has that session (it does for devbox/claude/11111111…, not for the other id).
+  const STAMP = { host: "devbox", kind: "claude", id: "11111111-aaaa-4aaa-8aaa-111111111111" };
+  let stampWith = STAMP;
+  await page.route(/\/api\/pages(\?.*)?$/, async (r) => {
+    const resp = await r.fetch();
+    const j = await resp.json();
+    for (const p of j.pages || []) if (p.id === pages.md) p.versions[p.versions.length - 1].session = stampWith;
+    await r.fulfill({ response: resp, json: j });
+  });
+  await page.route(/\/api\/recall\/sessions\/devbox\/claude\/11111111[^/?]*\?limit=1$/, (r) => r.fulfill({ json: { session: { ...SMOKE }, messages: [] } }));
+  await page.route(/\/api\/recall\/sessions\/devbox\/claude\/gone[^/?]*\?limit=1$/, (r) => r.fulfill({ status: 404, json: { code: "no_session", message: "no such session" } }));
+  await page.route(/\/api\/recall\/produced\?ref=/, (r) => r.fulfill({ json: { produced: [] } }));
+  await page.goto("about:blank");
+  await page.goto(base + "/#/pages/" + pages.md, { waitUntil: "load" });
+  await poll(() => /Made in Retry the upgrade smoke check · devbox/.test(document.querySelector("#pgs-made")?.textContent || ""), "stamped strip");
+  if (await page.locator("#pgs-made").innerText().then((t) => /turn/.test(t))) throw new Error("a turn without the index match");
+  if (!/#\/search\/devbox\/claude\/11111111/.test(await page.locator("#pgs-opensess").getAttribute("href"))) throw new Error("stamp link");
+  if (!(await page.locator("#pgs-opensess").isVisible())) await page.locator("#pgs-infob").click();
+  await page.screenshot({ path: `${out}/pages-stamp-desktop.png` });
+  stampWith = { host: "devbox", kind: "claude", id: "gone-0000" };
+  await page.goto("about:blank");
+  await page.goto(base + "/#/pages/" + pages.md, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
+  await page.waitForTimeout(600);
+  if (await page.locator("#pgs-made").isVisible()) throw new Error("a strip for a session the index lacks");
+  await page.unroute(/\/api\/pages(\?.*)?$/);
+  await page.unroute(/\/api\/recall\/produced\?ref=/);
 });
 
 await check("gallery: grid and list, chips, sort, and the new/updated dot", async () => {
