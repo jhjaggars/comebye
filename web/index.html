@@ -170,6 +170,10 @@
     .dot.working { background: var(--blue); animation: pulse 1.6s ease-in-out infinite; }
     .dot.blocked { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
     .dot.done { background: var(--purple); }
+    .dot.park { background: transparent; border: 2px solid var(--teal); }
+    .agent.parked-row.offline { opacity: 0.65; }
+    .pk-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--sp-4) var(--sp-12); margin: var(--sp-10) 0; font-size: var(--fs-13); }
+    .pk-kv dt { color: var(--muted); } .pk-kv dd { margin: 0; overflow-wrap: anywhere; }
     .dot.unknown { background: var(--red); }
     @keyframes pulse { 50% { opacity: 0.35; } }
     @media (prefers-reduced-motion: reduce) { .dot.working, .dot.waiting { animation: none; } }
@@ -1106,18 +1110,18 @@
     @media (prefers-reduced-motion: reduce) { .pop, #sheet-bk { animation: none !important; } }
 
     /* Ready-to-remove review. */
-    #review, #switch, #mk, #fs { position: fixed; inset: 0; z-index: var(--z-screen); background: var(--bg); display: flex; flex-direction: column; }
-    #review[hidden], #switch[hidden], #mk[hidden], #fs[hidden] { display: none; }
-    #review header .back, #switch header .back, #mk header .back, #fs header .back {
+    #review, #switch, #mk, #fs, #pk { position: fixed; inset: 0; z-index: var(--z-screen); background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden], #switch[hidden], #mk[hidden], #fs[hidden], #pk[hidden] { display: none; }
+    #review header .back, #switch header .back, #mk header .back, #fs header .back, #pk header .back {
       font: inherit; font-size: var(--fs-20); line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: var(--r-10); padding: 0;
       min-width: 44px; min-height: var(--hit-44); margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #review header h2, #switch header h2, #mk header h2, #fs header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
+    #review header h2, #switch header h2, #mk header h2, #fs header h2, #pk header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
     #switch .ln-picker { margin-top: 0; }
     #switch .ln-mlist { max-height: 46vh; }
-    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #fs.busy .ln-status::before {
+    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #fs.busy .ln-status::before, #pk.busy .ln-status::before {
       content: ""; display: inline-block; width: 12px; height: 12px; margin-right: var(--sp-8); vertical-align: -1px;
       border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -2857,7 +2861,7 @@
   </section>
 
   <!-- A list row's menu -->
-  <div id="row-menu" class="attach-menu pop" role="menu" aria-label="Agent actions" hidden><div class="grab" aria-hidden="true"><i></i></div><div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div><button type="button" role="menuitem" id="row-transcript">View transcript</button><button type="button" role="menuitem" id="row-mark"></button></div>
+  <div id="row-menu" class="attach-menu pop" role="menu" aria-label="Agent actions" hidden><div class="grab" aria-hidden="true"><i></i></div><div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div><button type="button" role="menuitem" id="row-transcript">View transcript</button><button type="button" role="menuitem" id="row-park" hidden>Park… (close it, keep its worktree and session)</button><button type="button" role="menuitem" id="row-mark"></button></div>
 
   <!-- Mark one session ready to remove (optional reason) -->
   <section id="mk" hidden role="dialog" aria-modal="true" aria-labelledby="mk-title">
@@ -2874,6 +2878,24 @@
     <footer class="ln-foot">
       <div class="ln-status" id="mk-status" aria-live="polite"></div>
       <button type="button" class="btn ln-go" id="mk-go">Mark ready to remove</button>
+    </footer>
+  </section>
+
+  <!-- A parked agent: resume it, or keep it -->
+  <section id="pk" hidden role="dialog" aria-modal="true" aria-labelledby="pk-title">
+    <header>
+      <button type="button" class="back" id="pk-close" aria-label="Close">&#10005;</button>
+      <h2 id="pk-title">Parked</h2>
+    </header>
+    <div class="ln-body">
+      <div class="rv-name" id="pk-name"></div>
+      <dl class="pk-kv" id="pk-kv"></dl>
+      <div class="ln-note" id="pk-note"></div>
+    </div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="pk-status" aria-live="polite"></div>
+      <button type="button" class="btn" id="pk-pin">Keep (pin)</button>
+      <button type="button" class="btn ln-go" id="pk-go">Resume</button>
     </footer>
   </section>
 

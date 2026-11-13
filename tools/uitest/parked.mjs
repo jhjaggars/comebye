@@ -1,0 +1,113 @@
+// Park and resume in the app: the "Recently closed" section on the Agents screen (all hosts, an offline
+// host greyed), the sheet with Resume and Keep, and "Park…" in a row's menu (with the dirty-worktree confirm).
+//
+//   node parked.mjs BASE OUT_DIR       (env: SCHEME)
+// The hub's answers are mocked, so the check does not depend on the shared fleet.
+import { launch } from "./lib.mjs";
+
+const [base, out] = process.argv.slice(2);
+const dark = process.env.SCHEME !== "light";
+const results = [];
+async function check(name, fn) {
+  try { await fn(); results.push({ name, ok: true }); console.log("ok   " + name); }
+  catch (e) { results.push({ name, ok: false }); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
+}
+
+const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString();
+const rec = (id, name, kind, extra = {}) => ({ id, name, kind, session_kind: kind === "pi" ? "path" : "id", session: kind === "pi" ? "/home/u/.pi/agent/sessions/x/2026-11-10T09.jsonl" : "c3eb8f54-1111-4222-8333-444455556666",
+  worktree: `/home/u/.worktrees/proj/${name}`, branch: `feat/${name}`, why: "manual", parked_at: ago(50), ...extra });
+const HOSTS = [
+  { host: "uitest", online: true, local: true, parked: [rec("pk_aaaaaaaaaa", "netpol-guard-impl", "claude", { scratch_bytes: 330e6 }), rec("pk_bbbbbbbbbb", "openshell-homelab", "claude", { dirty: true, dirty_files: 3, parked_at: ago(120) })] },
+  { host: "peerbox", online: false, seen: ago(2), error: "dial failed", parked: [rec("pk_cccccccccc", "spike-sandbox", "opencode", { parked_at: ago(140) })] },
+];
+
+for (const width of [390, 1280]) {
+  const { browser, ctx, page } = await launch({ width, height: width > 500 ? 800 : 844, dark });
+  const posts = [];
+  await page.route(/\/api\/parked\/all$/, (r) => r.fulfill({ json: { hosts: HOSTS } }));
+  await page.route(/\/api\/hosts\/[^/]+\/(resume|park\/pin|park)$/, async (r) => {
+    const req = r.request();
+    const body = req.postDataJSON();
+    posts.push({ url: new URL(req.url()).pathname, body });
+    if (/\/park$/.test(req.url()) && !body.dirty && posts.dirtyOnce) return r.fulfill({ status: 409, json: { code: "dirty_worktree", message: "the worktree has 2 uncommitted file(s); parking keeps them in place. Confirm to park anyway" } });
+    if (/\/resume$/.test(req.url())) return r.fulfill({ json: { agent: { id: "uitest/w9:p1", name: "netpol-guard-impl" }, note: "n" } });
+    if (/\/park$/.test(req.url())) return r.fulfill({ json: { record: rec("pk_dddddddddd", "x", "claude"), closed: "pane", scratch: "moved 1.0 MB to disk" } });
+    return r.fulfill({ json: { record: {} } });
+  });
+
+  await check(`recently closed at ${width}px: all hosts in one section, the offline host greyed, no sideways scroll`, async () => {
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector(".parked-sec .parked-row", { timeout: 15000 });
+    const g = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll(".parked-sec .parked-row")];
+      const off = document.querySelector('.parked-row[data-pk="pk_cccccccccc"]');
+      const head = document.querySelector(".parked-sec .proj-head");
+      return { n: rows.length, names: rows.map((r) => r.querySelector(".name").textContent),
+        offOpacity: +getComputedStyle(off).opacity, offChip: /host offline/.test(off.textContent), head: head.textContent.replace(/\s+/g, " ").trim(),
+        edited: /3 files edited/.test(document.querySelector('[data-pk="pk_bbbbbbbbbb"]').textContent),
+        scroll: document.documentElement.scrollWidth > innerWidth,
+        inside: rows.every((r) => { const b = r.getBoundingClientRect(); return b.left >= 0 && b.right <= innerWidth + 1; }),
+        dot: getComputedStyle(rows[0].querySelector(".dot")).borderTopWidth };
+    });
+    if (g.n !== 3 || g.names[0] !== "netpol-guard-impl" || g.names[2] !== "spike-sandbox") throw new Error("rows " + JSON.stringify(g));
+    if (!(g.offOpacity < 1) || !g.offChip) throw new Error("offline row not greyed " + JSON.stringify(g));
+    if (!/Recently closed 3/.test(g.head) || !g.edited || g.scroll || !g.inside) throw new Error("section " + JSON.stringify(g));
+    await page.locator(".parked-sec").screenshot({ path: `${out}/parked-section-${width}.png` });
+  });
+
+  await check(`resume sheet at ${width}px: what is kept, Resume posts the record id`, async () => {
+    await page.click('.parked-row[data-pk="pk_aaaaaaaaaa"]');
+    await page.waitForSelector("#pk", { state: "visible" });
+    const g = await page.evaluate(() => ({ kv: document.querySelector("#pk-kv").textContent, go: document.querySelector("#pk-go").disabled,
+      scroll: document.documentElement.scrollWidth > innerWidth, goH: document.querySelector("#pk-go").getBoundingClientRect().height }));
+    if (!/\/home\/u\/\.worktrees\/proj\/netpol-guard-impl/.test(g.kv) || !/feat\/netpol-guard-impl/.test(g.kv) || !/330\.0 MB/.test(g.kv) || g.go || g.scroll) throw new Error("sheet " + JSON.stringify(g));
+    if (width < 500 && g.goH < 44) throw new Error("Resume is " + g.goH + "px tall on a phone");
+    await page.screenshot({ path: `${out}/parked-sheet-${width}.png` });
+    await page.click("#pk-go");
+    await page.waitForFunction(() => document.querySelector("#pk").hidden, null, { timeout: 5000 });
+    const p = posts.filter((x) => x.url.endsWith("/resume"));
+    if (p.length !== 1 || p[0].body.id !== "pk_aaaaaaaaaa" || !p[0].url.includes("/hosts/uitest/")) throw new Error("posts " + JSON.stringify(posts));
+  });
+
+  await check(`resume sheet at ${width}px: an offline host cannot be resumed and says why; Keep posts a pin`, async () => {
+    await page.click('.parked-row[data-pk="pk_cccccccccc"]');
+    await page.waitForSelector("#pk", { state: "visible" });
+    const g = await page.evaluate(() => ({ go: document.querySelector("#pk-go").disabled, note: document.querySelector("#pk-note").textContent }));
+    if (!g.go || !/peerbox is offline/.test(g.note)) throw new Error("offline sheet " + JSON.stringify(g));
+    await page.click("#pk-close");
+    await page.waitForFunction(() => document.querySelector("#pk").hidden);
+    await page.click('.parked-row[data-pk="pk_bbbbbbbbbb"]');
+    await page.waitForSelector("#pk", { state: "visible" });
+    await page.click("#pk-pin");
+    await page.waitForFunction(() => !document.querySelector("#pk-pin").disabled);
+    const p = posts.filter((x) => x.url.endsWith("/park/pin"));
+    if (p.length !== 1 || p[0].body.id !== "pk_bbbbbbbbbb" || p[0].body.pinned !== true) throw new Error("pin posts " + JSON.stringify(posts));
+    await page.click("#pk-close");
+  });
+
+  await check(`row menu at ${width}px: Park… only for an idle agent; a dirty worktree asks first, then parks with the confirm`, async () => {
+    await page.goto(base + "/", { waitUntil: "load" });
+    await page.waitForSelector("#agents .agent[data-id]", { timeout: 15000 });
+    const ids = await page.evaluate(() => {
+      const mk = (pane, st, name) => ({ ...state.agents[0], pane_id: pane, id: (state.agents[0].host ? state.agents[0].host + "/" : "") + pane, name, agent: "claude", agent_status: st, background: undefined, blocked_on: undefined });
+      const a = mk("w91:p1", "idle", "park-me"), b = mk("w92:p1", "working", "busy-one");
+      state.agents = [a, b]; renderList();
+      return [agentId(a), agentId(b)];
+    });
+    const shown = async (id) => page.evaluate((i) => { openRowMenu(document.querySelector(`#agents .agent[data-id="${i}"] .row-more`)); const v = !document.querySelector("#row-park").hidden; closeRowMenu(); return v; }, id);
+    if (!(await shown(ids[0]))) throw new Error("no Park… for an idle agent");
+    if (await shown(ids[1])) throw new Error("Park… offered for a working agent");
+    posts.length = 0; posts.dirtyOnce = true;
+    page.once("dialog", (d) => { if (!/Park it anyway/.test(d.message())) throw new Error("dialog: " + d.message()); d.accept(); });
+    await page.evaluate((i) => { openRowMenu(document.querySelector(`#agents .agent[data-id="${i}"] .row-more`)); }, ids[0]);
+    await page.click("#row-park");
+    await page.waitForFunction(() => /Parked park-me/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
+    const p = posts.filter((x) => x.url.endsWith("/park"));
+    if (p.length !== 2 || p[0].body.dirty || p[1].body.dirty !== true || p[0].body.agent !== "w91:p1" || p[0].body.name !== "park-me") throw new Error("park posts " + JSON.stringify(p));
+    posts.dirtyOnce = false;
+  });
+  await browser.close();
+}
+const bad = results.filter((r) => !r.ok).length;
+console.log(`parked: ${results.length - bad}/${results.length} passed`);
+process.exit(bad ? 1 : 0);

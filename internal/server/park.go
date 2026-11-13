@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
@@ -540,4 +541,142 @@ func (s *Server) handleParked(w http.ResponseWriter, r *http.Request) {
 		recs = []park.Record{}
 	}
 	writeJSON(w, map[string]any{"host": s.fleet.LocalName(), "parked": recs})
+}
+
+// parkPinBody is the body of POST /api/park/pin.
+type parkPinBody struct {
+	ID     string `json:"id"`
+	Pinned bool   `json:"pinned"`
+}
+
+// handleParkPin is POST /api/park/pin: keep (or stop keeping) a parked agent
+// out of park suggestions and retention clean-up.
+func (s *Server) handleParkPin(w http.ResponseWriter, r *http.Request) {
+	var b parkPinBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&b); err != nil || b.ID == "" {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if lerr := s.parkUnavailable(); lerr != nil {
+		writeLaunchError(w, lerr)
+		return
+	}
+	rec, err := s.parkStore().Update(b.ID, func(r *park.Record) { r.Pinned = b.Pinned })
+	if err != nil {
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_such_record", "message": "no parked agent has that id"})
+		return
+	}
+	writeJSON(w, map[string]any{"record": rec})
+}
+
+// parkedHost is one host's section of the hub's list of parked agents.
+type parkedHost struct {
+	Host string `json:"host"`
+	// Online is false when the host could not be asked just now: its entries
+	// are the hub's last copy (Seen) and cannot be resumed until it is back.
+	Online bool          `json:"online"`
+	Local  bool          `json:"local,omitempty"`
+	Seen   *time.Time    `json:"seen,omitempty"`
+	Error  string        `json:"error,omitempty"`
+	Parked []park.Record `json:"parked"`
+}
+
+// parkMirror is the hub's copy of the peers' records (parked-mirror.json),
+// the answer for a host that is down. The host stays the source of truth.
+type parkMirror struct {
+	Hosts map[string]parkMirrorHost `json:"hosts"`
+}
+
+type parkMirrorHost struct {
+	Seen   time.Time     `json:"seen"`
+	Parked []park.Record `json:"parked"`
+}
+
+func (s *Server) parkMirrorPath() string {
+	if s.cfg.StateDir == "" {
+		return ""
+	}
+	return filepath.Join(s.cfg.StateDir, "parked-mirror.json")
+}
+
+func (s *Server) loadParkMirror() parkMirror {
+	m := parkMirror{Hosts: map[string]parkMirrorHost{}}
+	if p := s.parkMirrorPath(); p != "" {
+		if b, err := os.ReadFile(p); err == nil {
+			_ = json.Unmarshal(b, &m)
+		}
+	}
+	if m.Hosts == nil {
+		m.Hosts = map[string]parkMirrorHost{}
+	}
+	return m
+}
+
+func (s *Server) saveParkMirror(m parkMirror) {
+	p := s.parkMirrorPath()
+	if p == "" {
+		return
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	tmp := p + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, p)
+	}
+}
+
+// handleParkedAll is GET /api/parked/all: every host's parked agents. The hub
+// asks each peer; a peer that does not answer shows the hub's last copy, marked
+// offline. Resumed records (history) are left out.
+func (s *Server) handleParkedAll(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	hosts := s.fleet.Hosts()
+	out := make([]parkedHost, len(hosts))
+	mirror := s.loadParkMirror()
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	changed := false
+	for i, h := range hosts {
+		out[i] = parkedHost{Host: h.Name, Local: h.Local, Parked: []park.Record{}}
+		if h.Local {
+			out[i].Online = true
+			if s.parkStore() != nil {
+				out[i].Parked = append(out[i].Parked, s.parkStore().List(true)...)
+			}
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var res struct {
+				Parked []park.Record `json:"parked"`
+			}
+			// Ask even a host reported down: it may be back, and a failure is quick.
+			hctx, hcancel := context.WithTimeout(ctx, 8*time.Second)
+			defer hcancel()
+			lerr := s.callHost(hctx, h.Name, "parked", nil, nil, &res)
+			mu.Lock()
+			defer mu.Unlock()
+			if lerr == nil {
+				now := time.Now().UTC()
+				out[i].Online, out[i].Parked = true, append(out[i].Parked, res.Parked...)
+				mirror.Hosts[h.Name] = parkMirrorHost{Seen: now, Parked: res.Parked}
+				changed = true
+				return
+			}
+			out[i].Error = lerr.message
+			if m, ok := mirror.Hosts[h.Name]; ok {
+				seen := m.Seen
+				out[i].Seen, out[i].Parked = &seen, append(out[i].Parked, m.Parked...)
+			}
+		}()
+	}
+	wg.Wait()
+	if changed {
+		s.saveParkMirror(mirror)
+	}
+	writeJSON(w, map[string]any{"hosts": out})
 }

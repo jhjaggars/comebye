@@ -898,7 +898,9 @@ function renderListRows() {
     wrap.innerHTML = (state.unauthorized ? `<div class="empty"><b>${esc(UNAUTHORIZED_MSG)}</b></div>`
       : hubOnly && here ? emptyHtml("No agents here", "This hub hosts none. Agents on its peers appear as they connect.")
       : f !== "all" ? emptyHtml(`No agents on ${f}`, "", ["Show all hosts", "all-hosts"])
-      : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + downRows;
+      : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + parkedSectionHTML() + downRows;
+    wrap.querySelectorAll(".proj-head").forEach((el) => el.addEventListener("click", () => toggleProject(el.dataset.proj)));
+    bindParkedRows(wrap);
     const act = wrap.querySelector(".empty-act");
     if (act) act.onclick = () => setHostFilter("all");
     return;
@@ -914,9 +916,10 @@ function renderListRows() {
     <div class="proj-head static"><span class="proj-name">Coordinators</span></div>
     <div class="proj-body">${coords.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
   const rest = agents.filter((a) => !isCoordinator(a) && !needs.includes(a));
-  wrap.innerHTML = needsSec + pinned + projectGroups(rest).map(([name, list]) => projectHTML(name, list)).join("") + downRows;
+  wrap.innerHTML = needsSec + pinned + projectGroups(rest).map(([name, list]) => projectHTML(name, list)).join("") + parkedSectionHTML() + downRows;
   wrap.querySelectorAll(".proj-head").forEach((el) =>
     el.addEventListener("click", () => toggleProject(el.dataset.proj)));
+  bindParkedRows(wrap);
   wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
     el.addEventListener("click", (e) => {
       const more = e.target.closest(".row-more");
@@ -3677,6 +3680,7 @@ function openRowMenu(btn) {
   if (!menu.hidden && menu.dataset.id === id) { closeRowMenu(); return; }
   menu.dataset.id = id;
   $("row-transcript").dataset.hash = rcWorkHash(id);
+  $("row-park").hidden = !canPark(agentById(id));
   $("row-mark").textContent = ledger.marked.has(id) ? "Unmark (keep this session)" : "Mark ready to remove…";
   menu.hidden = false;
   popOpened("row");
@@ -3702,6 +3706,189 @@ function rowMenuMark() {
   if (!id) return;
   if (ledger.marked.has(id)) unmarkAgent(id);
   else openMark(id);
+}
+
+/* ---------- Park and resume: "Recently closed" on the Agents screen ---------- */
+//
+// Parking closes an idle agent's pane and keeps its worktree, branch and session; the host
+// writes the record and the hub lists every host's (GET /api/parked/all), with a host that
+// is down shown greyed from the hub's last copy. A row opens a sheet with Resume and Keep.
+const parked = { hosts: [], loaded: false, sig: "", sheet: false, id: "", host: "", busy: false };
+const PARK_KINDS = ["claude", "pi", "opencode"];
+
+async function loadParked() {
+  try {
+    const d = await api("/api/parked/all");
+    const hosts = d.hosts || [];
+    const sig = JSON.stringify(hosts);
+    parked.loaded = true;
+    if (sig === parked.sig) return;
+    parked.hosts = hosts; parked.sig = sig;
+    renderList();
+    if (parked.sheet) renderParkSheet();
+  } catch { /* the list keeps what it had */ }
+}
+
+// parkedEntries are the records the host filter shows, newest first.
+function parkedEntries() {
+  const f = activeHostFilter();
+  const out = [];
+  for (const h of parked.hosts) {
+    if (f !== "all" && h.host !== f) continue;
+    for (const r of h.parked || []) out.push({ host: h.host, online: h.online, rec: r });
+  }
+  return out.sort((a, b) => Date.parse(b.rec.parked_at) - Date.parse(a.rec.parked_at));
+}
+
+function parkedRowHTML(e) {
+  const r = e.rec, kept = r.dirty ? `<span class="chip yellow">${r.dirty_files || "some"} file${r.dirty_files === 1 ? "" : "s"} edited</span>` : '<span class="chip green">clean</span>';
+  const when = fmtAgo(Date.parse(r.parked_at));
+  return `<div class="agent parked-row${e.online ? "" : " offline"}" role="button" tabindex="0" data-pk="${esc(r.id)}" data-host="${esc(e.host)}">
+    <span class="dot park"></span>
+    <div class="meta"><div class="name">${esc(r.name)}${r.pinned ? '<span class="role-chip" title="Kept: never suggested for removal">kept</span>' : ""}</div>
+      <div class="sub">${esc(e.host)} · ${esc(r.kind)} · closed ${esc(when)} ago</div>
+      <div class="sub">${kept}${e.online ? "" : ' <span class="chip muted">host offline</span>'}</div></div>
+    <span class="status">parked</span></div>`;
+}
+
+function parkedSectionHTML() {
+  const list = parkedEntries();
+  if (!list.length) return "";
+  const open = !collapsed().has("Recently closed");
+  return `<section class="proj parked-sec" aria-label="Recently closed">
+    <button type="button" class="proj-head" data-proj="Recently closed" aria-expanded="${open}">
+      <span class="proj-chev" aria-hidden="true"></span><span class="proj-name">Recently closed</span>
+      <span class="proj-counts"><span>${list.length}</span></span>
+    </button>
+    <div class="proj-body"${open ? "" : " hidden"}>${list.map(parkedRowHTML).join("")}</div></section>`;
+}
+
+function bindParkedRows(wrap) {
+  wrap.querySelectorAll(".agent[data-pk]").forEach((el) => {
+    const open = () => openParkSheet(el.dataset.pk, el.dataset.host);
+    el.addEventListener("click", open);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+  });
+}
+
+function parkEntry(id, host) {
+  const h = parked.hosts.find((x) => x.host === host);
+  const rec = h && (h.parked || []).find((r) => r.id === id);
+  return rec ? { host, online: h.online, rec } : null;
+}
+
+function openParkSheet(id, host) {
+  if (parked.sheet) return;
+  Object.assign(parked, { sheet: true, id, host, busy: false });
+  history.pushState({ park: true }, "", location.href);
+  $("pk-status").textContent = "";
+  renderParkSheet();
+  $("pk").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("pk-go").focus();
+}
+
+function renderParkSheet() {
+  const e = parkEntry(parked.id, parked.host);
+  if (!e) { if (parked.sheet) closeParkSheet(); return; }
+  const r = e.rec;
+  $("pk-name").textContent = r.name;
+  const when = new Date(r.parked_at).toLocaleString();
+  const rows = [
+    ["Host", e.host + (e.online ? "" : " (offline)")],
+    ["Agent", r.kind],
+    ["Worktree", r.worktree],
+    ["Branch", r.branch || "—"],
+    ["Session", r.kind === "pi" ? r.session.split("/").pop() : r.session],
+    ["Closed", `${when} · ${r.why === "suggested" ? "suggested, then you parked it" : "you parked it"}`],
+  ];
+  if (r.dirty) rows.push(["Edits", `${r.dirty_files || "Some"} uncommitted file${r.dirty_files === 1 ? "" : "s"}, left in place`]);
+  if (r.scratch_bytes) rows.push(["Scratchpad", `${(r.scratch_bytes / 1e6).toFixed(1)} MB, on disk until it resumes`]);
+  $("pk-kv").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  $("pk-note").textContent = e.online
+    ? "Resume opens a new pane in the same worktree on the same session, and tells the agent it was parked."
+    : `${e.host} is offline, so this cannot be resumed until it is back. This is the hub's last copy of its record.`;
+  $("pk-go").disabled = !e.online || parked.busy;
+  $("pk-pin").disabled = !e.online || parked.busy;
+  $("pk-pin").textContent = r.pinned ? "Stop keeping" : "Keep (pin)";
+}
+
+function hideParkSheet() {
+  parked.sheet = false;
+  $("pk").hidden = true;
+  document.body.classList.remove("sheet-open");
+  maybeReload();
+}
+function closeParkSheet() {
+  if (parked.busy) return;
+  if (history.state && history.state.park) history.back();
+  else hideParkSheet();
+}
+function syncParkSheet() {
+  if (parked.sheet && !(history.state && history.state.park)) hideParkSheet();
+}
+
+async function submitResume() {
+  if (parked.busy) return;
+  const { id, host } = parked, e = parkEntry(id, host);
+  if (!e || !e.online) return;
+  parked.busy = true; renderParkSheet();
+  $("pk").classList.add("busy");
+  $("pk-status").textContent = "Resuming…";
+  try {
+    const d = await api(`/api/hosts/${encodeURIComponent(host)}/resume`, { method: "POST", body: JSON.stringify({ id }), timeout: 100000 });
+    parked.busy = false;
+    $("pk").classList.remove("busy");
+    closeParkSheet();
+    toast(`Resumed ${e.rec.name}` + (d.warning ? ` — ${d.warning}` : ""));
+    loadParked();
+  } catch (err) {
+    parked.busy = false;
+    $("pk").classList.remove("busy");
+    $("pk-status").textContent = err.message;
+    renderParkSheet();
+  }
+}
+
+async function togglePin() {
+  if (parked.busy) return;
+  const { id, host } = parked, e = parkEntry(id, host);
+  if (!e) return;
+  parked.busy = true; renderParkSheet();
+  try {
+    await api(`/api/hosts/${encodeURIComponent(host)}/park/pin`, { method: "POST", body: JSON.stringify({ id, pinned: !e.rec.pinned }) });
+    parked.sig = "";
+    await loadParked();
+  } catch (err) {
+    $("pk-status").textContent = err.message;
+  }
+  parked.busy = false; renderParkSheet();
+}
+
+// canPark: an idle or done agent of a kind that can be resumed, not a coordinator.
+function canPark(a) {
+  return !!a && PARK_KINDS.includes(a.agent) && (a.agent_status === "idle" || a.agent_status === "done") && !isCoordinator(a) && !!a.name;
+}
+
+async function parkAgentUI(id) {
+  const a = agentById(id);
+  if (!canPark(a)) return;
+  const url = `/api/hosts/${encodeURIComponent(a.host)}/park`;
+  const body = { agent: a.pane_id, name: a.name };
+  try {
+    let d;
+    try {
+      d = await api(url, { method: "POST", body: JSON.stringify(body), timeout: 100000 });
+    } catch (err) {
+      if (err.code !== "dirty_worktree" || !confirm(`${a.name}: ${err.message}.\n\nPark it anyway? Its edits stay where they are.`)) throw err;
+      d = await api(url, { method: "POST", body: JSON.stringify({ ...body, dirty: true }), timeout: 100000 });
+    }
+    toast(`Parked ${a.name}` + (d.scratch ? ` · ${d.scratch}` : ""));
+    loadParked();
+  } catch (err) {
+    if (err.code === "dirty_worktree") return; // declined
+    toast(err.message, true);
+  }
 }
 
 /* ---------- the header's fleet menu ("⋯" at the top right of the list) ---------- */
@@ -6507,6 +6694,7 @@ function route() {
   syncSubview();
   syncLaunch();
   syncMark();
+  syncParkSheet();
   syncFresh();
   syncSwitch();
   const r = parseRoute();
@@ -11765,6 +11953,13 @@ window.addEventListener("DOMContentLoaded", () => {
     if (b.dataset.mb === "unmark") unmarkAgent(state.selected);
   });
   $("row-mark").addEventListener("click", rowMenuMark);
+  $("row-park").addEventListener("click", () => { const id = $("row-menu").dataset.id; closeRowMenu(); if (id) parkAgentUI(id); });
+  $("pk-close").addEventListener("click", closeParkSheet);
+  $("pk-go").addEventListener("click", submitResume);
+  $("pk-pin").addEventListener("click", togglePin);
+  $("pk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeParkSheet(); } });
+  loadParked();
+  setInterval(() => { if (!document.hidden) loadParked(); }, 30000);
   $("row-transcript").addEventListener("click", rowMenuTranscript);
   initPopovers();
   $("mk-close").addEventListener("click", closeMark);

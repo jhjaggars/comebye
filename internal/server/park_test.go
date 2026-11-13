@@ -2,12 +2,18 @@ package server
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/park"
 	"github.com/jhjaggars/comebye/internal/scratch"
@@ -244,3 +250,68 @@ func TestParkClaudeMovesScratchAndBack(t *testing.T) {
 }
 
 func timeNow() time.Time { return time.Now() }
+
+func TestParkedAllMirrorsOfflinePeers(t *testing.T) {
+	var up atomic.Bool
+	up.Store(true)
+	ps := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !up.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		if r.URL.Path == "/api/parked" {
+			io.WriteString(w, `{"host":"kube","parked":[{"id":"pk_kube000001","name":"far","kind":"pi","parked_at":"2026-11-10T10:00:00Z"}]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ps.Close()
+	pu, _ := url.Parse(ps.URL)
+	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
+	s := New(Config{AllowLogins: []string{"me@example.com"}, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	if err := s.parkStore().Add(park.Record{ID: "pk_local00001", Name: "near", Kind: "claude", ParkedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	get := func() []parkedHost {
+		w := do(s, "GET", "/api/parked/all", map[string]string{"Tailscale-User-Login": "me@example.com"}, "")
+		if w.Code != 200 {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		var r struct {
+			Hosts []parkedHost `json:"hosts"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+			t.Fatal(err)
+		}
+		return r.Hosts
+	}
+	hs := get()
+	if len(hs) != 2 || hs[0].Host != "desk" || !hs[0].Online || len(hs[0].Parked) != 1 || hs[0].Parked[0].Name != "near" ||
+		hs[1].Host != "kube" || !hs[1].Online || len(hs[1].Parked) != 1 || hs[1].Parked[0].Name != "far" {
+		t.Fatalf("hosts = %+v", hs)
+	}
+	// The peer goes away: its entries come from the hub's copy, marked offline.
+	up.Store(false)
+	hs = get()
+	if hs[1].Online || hs[1].Seen == nil || hs[1].Error == "" || len(hs[1].Parked) != 1 || hs[1].Parked[0].Name != "far" {
+		t.Fatalf("offline kube = %+v", hs[1])
+	}
+	if !hs[0].Online {
+		t.Fatal("local host not online")
+	}
+}
+
+func TestParkPin(t *testing.T) {
+	s, _, _, _ := parkSetup(t)
+	_, r := parkReq(t, s, "POST", "/api/park", `{"agent":"w9:p1","name":"w"}`)
+	id := r["record"].(map[string]any)["id"].(string)
+	if code, r := parkReq(t, s, "POST", "/api/park/pin", `{"id":"`+id+`","pinned":true}`); code != 200 || r["record"].(map[string]any)["pinned"] != true {
+		t.Fatalf("pin = %d %v", code, r)
+	}
+	if rec, _ := s.parkStore().Get(id); !rec.Pinned {
+		t.Fatal("pin not stored")
+	}
+	if code, _ := parkReq(t, s, "POST", "/api/park/pin", `{"id":"pk_nope","pinned":true}`); code != 404 {
+		t.Fatalf("unknown = %d", code)
+	}
+}

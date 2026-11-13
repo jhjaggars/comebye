@@ -91,10 +91,11 @@ var hostProxyOps = map[string]struct {
 	"worker":         {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
 	// Park and resume: close an agent keeping its worktree and session, and
 	// start it again (the user's click, through the hub).
-	"park":   {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "park"}, false},
-	"resume": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
-	"parked": {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
-	"remove": {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
+	"park":     {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "park"}, false},
+	"resume":   {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
+	"parked":   {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
+	"park-pin": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "park", "pin"}, false},
+	"remove":   {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
 	// The side panels: an agent's per-file diff and its documents, read on
 	// the agent's host (see the server's panel.go). Hub-only.
 	"panel-diff": {proxyOp{method: http.MethodGet, query: []string{"dir", "since"}, timeout: 40 * time.Second}, []string{"api", "panel", "diff"}, true},
