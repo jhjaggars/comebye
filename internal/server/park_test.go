@@ -260,6 +260,10 @@ func TestParkedAllMirrorsOfflinePeers(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/api/parked" {
+			if r.URL.Query().Get("all") != "1" { // the hub needs the resumed ones too, to follow a resume
+				http.Error(w, "all=1 was not forwarded", http.StatusBadRequest)
+				return
+			}
 			io.WriteString(w, `{"host":"kube","parked":[{"id":"pk_kube000001","name":"far","kind":"pi","parked_at":"2026-11-10T10:00:00Z"}]}`)
 			return
 		}

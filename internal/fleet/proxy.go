@@ -93,7 +93,7 @@ var hostProxyOps = map[string]struct {
 	// start it again (the user's click, through the hub).
 	"park":     {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "park"}, false},
 	"resume":   {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
-	"parked":   {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
+	"parked":   {proxyOp{method: http.MethodGet, query: []string{"all"}, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
 	"park-pin": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "park", "pin"}, false},
 	"remove":   {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
 	// The side panels: an agent's per-file diff and its documents, read on
