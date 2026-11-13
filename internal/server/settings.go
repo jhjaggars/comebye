@@ -41,9 +41,12 @@ type hostSettings struct {
 	DefaultKind  string                  `json:"default_kind,omitempty"`
 	AllowedKinds []string                `json:"allowed_kinds,omitempty"`
 	Kinds        map[string]kindSettings `json:"kinds,omitempty"`
-	Rev          int                     `json:"rev"`
-	UpdatedBy    string                  `json:"updated_by,omitempty"`
-	UpdatedAt    *time.Time              `json:"updated_at,omitempty"`
+	// MaxWorkersPerRepo is the most running workers this host keeps per
+	// repository: nil is the default (defaultMaxWorkersPerRepo), 0 no cap.
+	MaxWorkersPerRepo *int       `json:"max_workers_per_repo,omitempty"`
+	Rev               int        `json:"rev"`
+	UpdatedBy         string     `json:"updated_by,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 }
 
 // settingsStore keeps settings.json. Safe for concurrent use; a nil store
@@ -86,6 +89,10 @@ func normalizeSettings(h hostSettings) hostSettings {
 			kinds[k] = v
 		}
 	}
+	if h.MaxWorkersPerRepo != nil {
+		n := min(max(*h.MaxWorkersPerRepo, 0), maxWorkersCeiling)
+		h.MaxWorkersPerRepo = &n
+	}
 	h.Kinds = nil
 	if len(kinds) > 0 {
 		h.Kinds = kinds
@@ -114,6 +121,10 @@ func (st *settingsStore) get() hostSettings {
 }
 
 func copySettings(h hostSettings) hostSettings {
+	if h.MaxWorkersPerRepo != nil {
+		n := *h.MaxWorkersPerRepo
+		h.MaxWorkersPerRepo = &n
+	}
 	h.AllowedKinds = slices.Clone(h.AllowedKinds)
 	if h.Kinds != nil {
 		m := make(map[string]kindSettings, len(h.Kinds))
@@ -167,6 +178,22 @@ func (st *settingsStore) put(n hostSettings, rev *int, by string, now time.Time)
 	}
 	st.cur = n
 	return copySettings(n), nil
+}
+
+const (
+	// defaultMaxWorkersPerRepo is the cap on running workers per repository
+	// when the host's settings do not say; 0 in the settings means no cap.
+	defaultMaxWorkersPerRepo = 4
+	maxWorkersCeiling        = 1000
+)
+
+// maxWorkersPerRepo is the cap in force on this host (0: none) and
+// whether the user set it.
+func (s *Server) maxWorkersPerRepo() (n int, set bool) {
+	if v := s.settings.get().MaxWorkersPerRepo; v != nil {
+		return *v, true
+	}
+	return defaultMaxWorkersPerRepo, false
 }
 
 // effectiveSettings are the values in force: the file's, else the flags'.
@@ -280,6 +307,10 @@ type settingsView struct {
 		DefaultSource string   `json:"default_source"`
 		AllowedKinds  []string `json:"allowed_kinds"`
 		AllowedSource string   `json:"allowed_source"`
+		// MaxWorkersPerRepo is the cap on running workers per repository
+		// (0: none); its source is "setting" or "default".
+		MaxWorkersPerRepo       int    `json:"max_workers_per_repo"`
+		MaxWorkersPerRepoSource string `json:"max_workers_per_repo_source"`
 		// Notice says the default in force cannot be used right now.
 		Notice string `json:"notice,omitempty"`
 	} `json:"effective"`
@@ -296,6 +327,11 @@ func (s *Server) settingsView() settingsView {
 	eff := s.effective()
 	v.Effective.DefaultKind, v.Effective.DefaultSource = eff.DefaultKind, eff.DefaultSource
 	v.Effective.AllowedKinds, v.Effective.AllowedSource = eff.AllowedKinds, eff.AllowedSource
+	n, set := s.maxWorkersPerRepo()
+	v.Effective.MaxWorkersPerRepo, v.Effective.MaxWorkersPerRepoSource = n, "default"
+	if set {
+		v.Effective.MaxWorkersPerRepoSource = "setting"
+	}
 	if v.Effective.AllowedKinds == nil {
 		v.Effective.AllowedKinds = []string{}
 	}
@@ -341,6 +377,8 @@ type settingsBody struct {
 	DefaultKind  string                  `json:"default_kind"`
 	AllowedKinds []string                `json:"allowed_kinds"`
 	Kinds        map[string]kindSettings `json:"kinds"`
+	// MaxWorkersPerRepo: absent keeps the default; 0 lifts the cap.
+	MaxWorkersPerRepo *int `json:"max_workers_per_repo"`
 	// Rev, when given, must be the revision read; a later one is a 409.
 	Rev *int `json:"rev"`
 }
@@ -361,7 +399,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &b) {
 		return
 	}
-	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds})
+	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo})
+	if b.MaxWorkersPerRepo != nil && (*b.MaxWorkersPerRepo < 0 || *b.MaxWorkersPerRepo > maxWorkersCeiling) {
+		badSettings(w, fmt.Sprintf("max_workers_per_repo: want 0 (no cap) to %d", maxWorkersCeiling))
+		return
+	}
 	known := func(k string) bool { return slices.Contains(herdr.AgentKinds, k) }
 	for _, k := range n.AllowedKinds {
 		if !known(k) {

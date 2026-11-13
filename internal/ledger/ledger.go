@@ -119,6 +119,11 @@ type Entry struct {
 	// After lists the entries (ids) a waiting handoff is queued behind:
 	// it starts when all of them have reported. Kept after it starts.
 	After []string `json:"after,omitempty"`
+	// WaitKind and WaitNote say why a waiting handoff has not started
+	// beyond its After steps: "cap" is the host's limit on running workers
+	// in the repository (WaitNote is the sentence the app and CLI show).
+	WaitKind string `json:"wait_kind,omitempty"`
+	WaitNote string `json:"wait_note,omitempty"`
 	// PlanID is the plan this handoff is a member of, if any.
 	PlanID string `json:"plan_id,omitempty"`
 	// ReplyTo is who asked for the handoff, when it was an agent: the hub

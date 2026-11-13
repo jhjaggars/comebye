@@ -592,7 +592,9 @@ func cmdLedger(e *Env, args []string) error {
 		if en.PlanID != "" {
 			notes = append(notes, "plan "+en.PlanID)
 		}
-		if en.Status == "waiting" {
+		if en.Status == "waiting" && en.WaitKind == "cap" && len(en.After) == 0 {
+			notes = append(notes, en.WaitNote+" (`comebye release "+en.ID+"` starts it now)")
+		} else if en.Status == "waiting" {
 			notes = append(notes, "waiting for "+strings.Join(en.After, ", ")+" to report (`comebye release "+en.ID+"` starts it now)")
 		}
 		if en.Callback != nil {
@@ -1262,6 +1264,8 @@ func cmdHandoff(e *Env, args []string) error {
 	}
 	en := r.Entry
 	switch {
+	case r.Queued && en.WaitKind == "cap":
+		fmt.Fprintf(e.Stdout, "Queued %s on %s (%s): %s `comebye release %s` starts it now; `comebye cancel %s` gives up.\n", en.Branch, en.Host, en.ID, en.WaitNote, en.ID, en.ID)
 	case r.Queued:
 		fmt.Fprintf(e.Stdout, "Queued %s on %s (%s): it starts when %s has reported, with the report(s) quoted after its brief. `comebye release %s` starts it now; `comebye cancel %s` gives up.\n",
 			en.Branch, en.Host, en.ID, strings.Join(en.After, ", "), en.ID, en.ID)

@@ -402,6 +402,19 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, status, payload)
 		return
 	}
+	if over, note := s.overCap(b); over {
+		status, payload := s.queueHandoff(b, from, s.replyRef(r))
+		if m, ok := payload.(map[string]any); ok && status == http.StatusOK {
+			if e, ok := m["entry"].(ledger.Entry); ok {
+				s.setWait(e, waitCap, note)
+				e.WaitKind, e.WaitNote = waitCap, note
+				m["entry"] = e
+			}
+			m["note"] = note
+		}
+		writeJSONStatus(w, status, payload)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
 	defer cancel()
 	status, payload := s.doHandoff(ctx, b, from, s.replyRef(r), nil, "")

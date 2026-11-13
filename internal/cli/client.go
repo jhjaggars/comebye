@@ -318,6 +318,8 @@ type apiEntry struct {
 	} `json:"land_check"`
 	PlanID   string   `json:"plan_id"`
 	After    []string `json:"after"`
+	WaitKind string   `json:"wait_kind"`
+	WaitNote string   `json:"wait_note"`
 	Callback *struct {
 		State string `json:"state"`
 		To    string `json:"to"`

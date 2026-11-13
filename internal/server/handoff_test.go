@@ -119,6 +119,11 @@ type workerPeer struct {
 	remove []byte
 	// probe is the answer to GET /api/probe ("" : not found).
 	probe string
+	// settings is the answer to GET /api/settings ("": not found); numbered
+	// makes each started worker a different agent (kube/wS:p<n>).
+	settings string
+	numbered bool
+	started  int
 }
 
 func (p *workerPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -133,10 +138,28 @@ func (p *workerPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "event: agents\ndata: {\"type\":\"agents\",\"agents\":[]}\n\n")
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
+	case "/api/settings":
+		p.mu.Lock()
+		st := p.settings
+		p.mu.Unlock()
+		if st == "" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, st)
 	case "/api/worker":
 		p.mu.Lock()
 		p.worker = body
+		p.started++
+		n := p.started
+		numbered := p.numbered
 		p.mu.Unlock()
+		if numbered {
+			var wb workerBody
+			json.Unmarshal(body, &wb)
+			fmt.Fprintf(w, `{"agent":{"id":"kube/wS:p%d","host":"kube","pane_id":"wS:p%d","name":"w%d","agent":"claude","agent_status":"idle"},"workspace_id":"wS","worktree":"/home/k/.worktrees/proj/%d","branch":%q,"base":"main","repo":"/home/k/code/proj","reused":false}`, n+10, n+10, n, n, wb.Branch)
+			return
+		}
 		fmt.Fprint(w, `{"agent":{"id":"kube/wS:p9","host":"kube","pane_id":"wS:p9","name":"feat-x","agent":"claude","agent_status":"idle"},"workspace_id":"wS","worktree":"/home/k/.worktrees/proj/feat-x","branch":"feat/x","base":"main","repo":"/home/k/code/proj","reused":false}`)
 	case "/api/checks":
 		fmt.Fprintf(w, `{"path":%q,"exists":true,"primary":false,"branch":"feat/x","dirty":false,"dirty_files":0,"unmerged_commits":0,"base_used":"main"}`, r.URL.Query().Get("path"))

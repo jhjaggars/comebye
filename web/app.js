@@ -7241,7 +7241,7 @@ function statusModel() {
     const proj = P(e.repo_name || "Other");
     const ag = e.agent_id ? agentById(e.agent_id) : null;
     const at = Date.parse(e.finished_at || e.created_at);
-    if (e.status === "waiting") proj.blocked.push({ e, why: `queued behind ${(e.after || []).length || "earlier"} step${(e.after || []).length === 1 ? "" : "s"}` });
+    if (e.status === "waiting") proj.blocked.push({ e, why: e.wait_kind === "cap" && !(e.after || []).length ? (e.wait_note || "waiting for a free slot") : `queued behind ${(e.after || []).length || "earlier"} step${(e.after || []).length === 1 ? "" : "s"}` });
     else if (e.status === "running" || e.status === "landing") {
       if (ag && ag.agent_status === "blocked") proj.blocked.push({ e, ag, why: "waiting on a dialog" });
       else proj.progress.push({ e, ag });
@@ -7571,13 +7571,16 @@ function draftFrom(name, data) {
   const s = (data && data.settings) || {};
   const kinds = {};
   for (const [k, v] of Object.entries(s.kinds || {})) kinds[k] = { model: v.model || "", thinking: v.thinking || "" };
-  return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds };
+  return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds, max_workers: s.max_workers_per_repo == null ? "" : String(s.max_workers_per_repo) };
 }
 
 function draftBody(d) {
   const kinds = {};
   for (const [k, v] of Object.entries(d.kinds)) if ((v.model || "").trim() || (v.thinking || "").trim()) kinds[k] = { model: (v.model || "").trim(), thinking: (v.thinking || "").trim() };
-  return { default_kind: d.default_kind, allowed_kinds: d.allowed, kinds, rev: d.rev };
+  const body = { default_kind: d.default_kind, allowed_kinds: d.allowed, kinds, rev: d.rev };
+  const mw = String(d.max_workers == null ? "" : d.max_workers).trim();
+  if (/^\d+$/.test(mw)) body.max_workers_per_repo = Number(mw);
+  return body;
 }
 
 function draftDirty() {
@@ -7673,6 +7676,9 @@ function peerSettingsForm(h, c, d) {
     <div class="pr-field"><span class="pr-lbl" id="pr-allow-l">Allowed agents</span>
       <div class="pr-checks" role="group" aria-labelledby="pr-allow-l">${kindsAll.map((k) => `<label class="pr-check"><input type="checkbox" data-allow="${esc(k)}"${d.allowed.includes(k) ? " checked" : ""}>${esc(k)}</label>`).join("") || '<span class="pr-note">No agent is installed here.</span>'}</div>
       <div class="pr-note">${d.allowed.length ? "Only these are started here; anything else is refused." : "None ticked: any installed agent may be started."}${eff.allowed_source === "flag" && !d.allowed.length ? " This host's -allowed-kinds applies." : ""}</div></div>
+    <div class="pr-field"><label for="pr-maxw">Most running workers per repository</label>
+      <input type="number" id="pr-maxw" min="0" max="1000" step="1" inputmode="numeric" value="${esc(d.max_workers)}" placeholder="${esc(eff.max_workers_per_repo_source === "default" || eff.max_workers_per_repo == null ? "4 (default)" : String(eff.max_workers_per_repo))}" autocomplete="off">
+      <div class="pr-note">${eff.max_workers_per_repo == null ? "This host is too old to apply a cap." : d.max_workers === "" ? `Unset: the default of ${eff.max_workers_per_repo} applies.` : d.max_workers === "0" ? "0: no cap." : "A handoff over this waits, and starts when a worker in that repository finishes."} Agents cannot change it.</div></div>
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
       <button type="button" class="btn" id="pr-revert"${dirty ? "" : " disabled"}>Revert</button>
@@ -7830,12 +7836,14 @@ function initPeers() {
   v.addEventListener("input", (ev) => {
     const d = prs.draft, t = ev.target;
     if (!d) return;
-    if (t.dataset.model) { (d.kinds[t.dataset.model] ||= { model: "", thinking: "" }).model = t.value; refreshDirty(); }
+    if (t.id === "pr-maxw") { d.max_workers = t.value.replace(/[^0-9]/g, ""); refreshDirty(); }
+    else if (t.dataset.model) { (d.kinds[t.dataset.model] ||= { model: "", thinking: "" }).model = t.value; refreshDirty(); }
   });
   v.addEventListener("change", (ev) => {
     const d = prs.draft, t = ev.target;
     if (!d) return;
     if (t.id === "pr-default") d.default_kind = t.value;
+    else if (t.id === "pr-maxw") d.max_workers = t.value.replace(/[^0-9]/g, "");
     else if (t.dataset.allow) d.allowed = t.checked ? [...new Set([...d.allowed, t.dataset.allow])] : d.allowed.filter((k) => k !== t.dataset.allow);
     else if (t.dataset.think) (d.kinds[t.dataset.think] ||= { model: "", thinking: "" }).thinking = t.value;
     else return;

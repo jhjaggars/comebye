@@ -37,7 +37,7 @@ func apiErr(code, msg string) map[string]string {
 // queueHandoff records a handoff that waits for earlier steps of its plan.
 // The brief, host, repository and branch are already validated.
 func (s *Server) queueHandoff(b handoffBody, from string, reply *ledger.Ref) (int, any) {
-	if b.Plan == "" {
+	if b.Plan == "" && len(b.After) > 0 {
 		return http.StatusBadRequest, apiErr("after_needs_plan", "--after queues a step of a plan: make one with `comebye plan create` and pass --plan")
 	}
 	if len(b.After) > maxAfter {
@@ -133,9 +133,14 @@ func (s *Server) releaseQueued() {
 		case "fail":
 			s.failQueued(e.ID, "skipped: "+why)
 		case "go":
+			limit := s.capFor(e.Host)
 			s.coord.mu.Lock()
 			key := "queued/" + e.ID
 			busy := s.coord.starting[key]
+			if !busy && s.capHoldLocked(e, limit) {
+				s.coord.mu.Unlock()
+				continue
+			}
 			s.coord.starting[key] = true
 			s.coord.mu.Unlock()
 			if busy {

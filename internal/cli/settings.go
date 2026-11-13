@@ -20,6 +20,7 @@ type apiSettings struct {
 		DefaultKind  string                 `json:"default_kind"`
 		AllowedKinds []string               `json:"allowed_kinds"`
 		Kinds        map[string]apiKindConf `json:"kinds"`
+		MaxWorkers   *int                   `json:"max_workers_per_repo"`
 		Rev          int                    `json:"rev"`
 		UpdatedBy    string                 `json:"updated_by"`
 		UpdatedAt    *time.Time             `json:"updated_at"`
@@ -29,6 +30,8 @@ type apiSettings struct {
 		DefaultSource string   `json:"default_source"`
 		AllowedKinds  []string `json:"allowed_kinds"`
 		AllowedSource string   `json:"allowed_source"`
+		MaxWorkers    *int     `json:"max_workers_per_repo"`
+		MaxSource     string   `json:"max_workers_per_repo_source"`
 		Notice        string   `json:"notice"`
 	} `json:"effective"`
 	InstalledKinds []string `json:"installed_kinds"`
@@ -89,6 +92,13 @@ func printSettings(e *Env, s apiSettings) {
 	} else {
 		fmt.Fprintf(w, "  allowed:       %s  (%s)\n", strings.Join(s.Effective.AllowedKinds, ", "), settingsSource(s.Effective.AllowedSource))
 	}
+	if s.Effective.MaxWorkers != nil {
+		if n := *s.Effective.MaxWorkers; n == 0 {
+			fmt.Fprintf(w, "  worker cap:    none  (%s)\n", capSource(s.Effective.MaxSource))
+		} else {
+			fmt.Fprintf(w, "  worker cap:    %d running per repository; more wait  (%s)\n", n, capSource(s.Effective.MaxSource))
+		}
+	}
 	fmt.Fprintf(w, "  installed:     %s\n", dash(strings.Join(s.InstalledKinds, ", ")))
 	var kinds []string
 	for k := range s.Settings.Kinds {
@@ -106,6 +116,13 @@ func printSettings(e *Env, s apiSettings) {
 	if s.Effective.Notice != "" {
 		fmt.Fprintf(w, "  warning:       %s\n", s.Effective.Notice)
 	}
+}
+
+func capSource(src string) string {
+	if src == "setting" {
+		return "set in the app or with `comebye settings set`"
+	}
+	return "the default"
 }
 
 // kindSourceLabel says in words where a started agent's kind came from.
@@ -165,7 +182,8 @@ func cmdSettings(e *Env, args []string) error {
 	var models, thinkings kvList
 	fs.Var(&models, "model", "set: KIND=MODEL, the model that kind starts with (KIND= clears it; repeatable)")
 	fs.Var(&thinkings, "thinking", "set: KIND=LEVEL, pi's thinking level (KIND= clears it; repeatable)")
-	field := fs.String("field", "", "clear: only this one of default-kind, allowed, models (default: everything)")
+	maxWorkers := fs.Int("max-workers", -1, "set: the most workers running at once per repository on the host; more wait (0 = no cap)")
+	field := fs.String("field", "", "clear: only this one of default-kind, allowed, models, max-workers (default: everything)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -178,14 +196,14 @@ func cmdSettings(e *Env, args []string) error {
 		return usageErr("want settings, settings set ... or settings clear")
 	}
 	switch {
-	case verb == "set" && *defKind == "" && *allow == "" && len(models) == 0 && len(thinkings) == 0:
-		return usageErr("settings set wants --default-kind, --allow, --model or --thinking")
+	case verb == "set" && *defKind == "" && *allow == "" && len(models) == 0 && len(thinkings) == 0 && *maxWorkers < 0:
+		return usageErr("settings set wants --default-kind, --allow, --model, --thinking or --max-workers")
 	case verb != "clear" && *field != "":
 		return usageErr("--field goes with settings clear")
-	case verb == "clear" && *field != "" && *field != "default-kind" && *field != "allowed" && *field != "models":
-		return usageErr("--field is default-kind, allowed or models")
-	case verb != "set" && (*defKind != "" || *allow != "" || len(models) > 0 || len(thinkings) > 0):
-		return usageErr("--default-kind, --allow, --model and --thinking go with settings set")
+	case verb == "clear" && *field != "" && *field != "default-kind" && *field != "allowed" && *field != "models" && *field != "max-workers":
+		return usageErr("--field is default-kind, allowed, models or max-workers")
+	case verb != "set" && (*defKind != "" || *allow != "" || len(models) > 0 || len(thinkings) > 0 || *maxWorkers >= 0):
+		return usageErr("--default-kind, --allow, --model, --thinking and --max-workers go with settings set")
 	}
 	c, err := newClient(e)
 	if err != nil {
@@ -225,6 +243,7 @@ func cmdSettings(e *Env, args []string) error {
 		kinds[k] = v
 	}
 	dk, allowed := cur.Settings.DefaultKind, cur.Settings.AllowedKinds
+	capSet := cur.Settings.MaxWorkers
 	switch verb {
 	case "set":
 		if *defKind != "" {
@@ -240,6 +259,9 @@ func cmdSettings(e *Env, args []string) error {
 				}
 			}
 		}
+		if *maxWorkers >= 0 {
+			capSet = maxWorkers
+		}
 		for k, m := range models {
 			v := kinds[k]
 			v.Model = m
@@ -253,16 +275,19 @@ func cmdSettings(e *Env, args []string) error {
 	case "clear":
 		switch *field {
 		case "":
-			dk, allowed, kinds = "", nil, map[string]apiKindConf{}
+			dk, allowed, kinds, capSet = "", nil, map[string]apiKindConf{}, nil
 		case "default-kind":
 			dk = ""
 		case "allowed":
 			allowed = nil
 		case "models":
 			kinds = map[string]apiKindConf{}
+		case "max-workers":
+			capSet = nil
 		}
 	}
 	body["default_kind"], body["allowed_kinds"], body["kinds"] = dk, allowed, kinds
+	body["max_workers_per_repo"] = capSet
 	var out apiSettings
 	if err := c.call("PUT", path, nil, body, &out); err != nil {
 		return err

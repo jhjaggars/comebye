@@ -316,6 +316,9 @@ type Server struct {
 	pins *pinStore
 	// settings is this host's settings.json (see settings.go); nil without a state directory.
 	settings *settingsStore
+	// capSeen caches peers' per-repository worker caps (cap.go).
+	capMu   sync.Mutex
+	capSeen map[string]capCacheEntry
 	// parks is the park record store (parked.json); see park.go. Opened on first use.
 	parkOnce sync.Once
 	parks    *park.Store
