@@ -129,6 +129,7 @@ func main() {
 		releaseSim     = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		landTurn       = flag.Duration("land-turn-timeout", envDuration("COMEBYE_LAND_TURN_TIMEOUT", server.DefaultLandTurnTimeout), "how long a worker may hold its turn in a landing queue before the slot is released and its coordinator told; negative never. Hub only")
 		parkSuggest    = flag.Duration("park-suggest-after", envDuration("COMEBYE_PARK_SUGGEST_AFTER", server.DefaultParkSuggestAfter), "how long an agent must have been idle before the app suggests parking it (a \"can park\" chip and a one-tap review; nothing is parked by itself), at least 1h. 0 turns the suggestions off")
+		parkRetention  = flag.Duration("park-retention", envDuration("COMEBYE_PARK_RETENTION", server.DefaultParkRetention), "how long a parked agent is kept before the hub proposes removing it (it goes into the Ready to remove review; you confirm, nothing is deleted by retention alone); a pinned (kept) one is never proposed. 0 keeps parked agents for ever. Hub only")
 		quietAfter     = flag.Duration("quiet-after", envDuration("COMEBYE_QUIET_AFTER", server.DefaultQuietAfter), "how long a working handoff worker may write nothing to its session file before the hub marks it quiet (in the app and `comebye agents`) and files one to-do for it, cleared when it writes again; not for a worker with a background task running. 0 turns it off. Hub only")
 		relayBlocked   = flag.Duration("relay-blocked-after", envDuration("COMEBYE_RELAY_BLOCKED_AFTER", server.DefaultRelayBlocked), "how long an agent that has a coordinator must be blocked at a dialog before the hub tells that coordinator (once, and once more when it clears); 0 turns the relay off. Hub only")
 		digestEvery    = flag.Duration("digest-every", envDuration("COMEBYE_DIGEST_EVERY", 15*time.Minute), "hub: routine notices for the coordinator (a worker landed, finished with no decisions for the user, a handoff the hub cleaned up) wait up to this long and go out together in one digest, also shown in the app's Briefings history; urgent ones (a blocked agent, the user's to-do answers, a landing failure, a report with decisions) always go at once. 0 sends every notice at once")
@@ -498,6 +499,7 @@ func main() {
 		RelayBlocked:           *relayBlocked,
 		QuietAfter:             *quietAfter,
 		ParkSuggestAfter:       *parkSuggest,
+		ParkRetention:          *parkRetention,
 		LandTurnTimeout:        *landTurn,
 		DigestEvery:            *digestEvery,
 		LockErr:                lock.Err,
@@ -519,6 +521,7 @@ func main() {
 	go srv.RunBlockedRelay(context.Background())
 	go srv.RunQuiet(context.Background())
 	go srv.RunParkSuggest(context.Background())
+	go srv.RunParkRetention(context.Background())
 	go srv.RunReask(context.Background())
 	go srv.RunRepoHealth(context.Background())
 	go srv.RunScratchPrune(context.Background())

@@ -181,6 +181,8 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 	if _, err := park.ResumeArgs(kind, sk, sv, rec.LaunchArgs); err != nil {
 		return nil, &launchError{status: http.StatusConflict, code: "not_resumable", message: err.Error()}
 	}
+	rec.WorktreeBytes = park.TreeSize(wt, 3*time.Second)
+	rec.SessionBytes = s.sessionBytes(rec, wt)
 	// The record first: a park is never closed without one.
 	if err := ps.Add(rec); err != nil {
 		return nil, &launchError{status: http.StatusInternalServerError, code: "record_failed", message: "could not write the park record: " + err.Error()}
@@ -600,5 +602,35 @@ func (s *Server) saveParkMirror(m parkMirror) {
 	tmp := p + ".tmp"
 	if os.WriteFile(tmp, b, 0o600) == nil {
 		_ = os.Rename(tmp, p)
+	}
+}
+
+// sessionBytes is the size of the session file a record keeps (0 when unknown).
+func (s *Server) sessionBytes(r park.Record, wt string) int64 {
+	p := ""
+	switch r.Kind {
+	case "pi":
+		p = r.Session
+	case "claude":
+		p = transcript.DefaultResolver.SessionFileByID(r.Session, wt)
+	}
+	if fi, err := os.Stat(p); p != "" && err == nil {
+		return fi.Size()
+	}
+	return 0
+}
+
+// dropParkedScratch deletes the scratchpad a removed record kept on disk (only
+// ever inside this host's parked-scratch directory).
+func (s *Server) dropParkedScratch(r park.Record) {
+	if r.ScratchTo == "" || s.cfg.StateDir == "" {
+		return
+	}
+	root := filepath.Join(s.cfg.StateDir, "parked-scratch")
+	if !within(filepath.Clean(r.ScratchTo), root) || filepath.Clean(r.ScratchTo) == root {
+		return
+	}
+	if err := os.RemoveAll(r.ScratchTo); err != nil {
+		log.Printf("park: removing %s: %v", r.ScratchTo, err)
 	}
 }

@@ -158,6 +158,9 @@ type Config struct {
 	// ParkSuggestAfter, when positive, is how long an agent must have been idle
 	// before the hub suggests parking it (at least an hour). Suggest only: nothing is parked by itself.
 	ParkSuggestAfter time.Duration
+	// ParkRetention, when positive, is how long a parked agent is kept before the
+	// hub proposes removing it in the removal review (the user confirms).
+	ParkRetention time.Duration
 	// LandTurnTimeout is how long a worker may hold its turn in a landing
 	// queue before the slot is released and its coordinator told (0: the
 	// default, 45 minutes; negative: never). Hub only.
@@ -310,6 +313,9 @@ type Server struct {
 	parkErr  error
 	// pcache is the hub's view of every host's park records (parkhub.go).
 	pcache parkCache
+	// prop remembers the parked agents already proposed for removal (parkretain.go).
+	propOnce sync.Once
+	prop     *parkProposed
 	// switchGap is the pause between the slash commands of one model
 	// switch (tests shrink it).
 	switchGap time.Duration
@@ -552,6 +558,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/parked", s.authAgent(s.handleParked))
 	s.mux.HandleFunc("POST /api/hosts/{host}/park", s.auth(s.onHostLaunch("park", s.handlePark)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/resume", s.auth(s.onHostLaunch("resume", s.handleResume)))
+	s.mux.HandleFunc("POST /api/park/mark", s.auth(s.handleParkMark))
 	s.mux.HandleFunc("POST /api/park/pin", s.auth(s.handleParkPin))
 	s.mux.HandleFunc("POST /api/hosts/{host}/park/pin", s.auth(s.onHostLaunch("park-pin", s.handleParkPin)))
 	s.mux.HandleFunc("GET /api/parked/all", s.authAgent(s.handleParkedAll))

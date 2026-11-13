@@ -17,7 +17,7 @@ const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString();
 const rec = (id, name, kind, extra = {}) => ({ id, name, kind, session_kind: kind === "pi" ? "path" : "id", session: kind === "pi" ? "/home/u/.pi/agent/sessions/x/2026-11-10T09.jsonl" : "c3eb8f54-1111-4222-8333-444455556666",
   worktree: `/home/u/.worktrees/proj/${name}`, branch: `feat/${name}`, why: "manual", parked_at: ago(50), ...extra });
 const HOSTS = [
-  { host: "uitest", online: true, local: true, parked: [rec("pk_aaaaaaaaaa", "netpol-guard-impl", "claude", { scratch_bytes: 330e6 }), rec("pk_bbbbbbbbbb", "openshell-homelab", "claude", { dirty: true, dirty_files: 3, parked_at: ago(120) })] },
+  { host: "uitest", online: true, local: true, parked: [rec("pk_aaaaaaaaaa", "netpol-guard-impl", "claude", { scratch_bytes: 330e6, worktree_bytes: 22e6, session_bytes: 412e3 }), rec("pk_bbbbbbbbbb", "openshell-homelab", "claude", { dirty: true, dirty_files: 3, parked_at: ago(120), worktree_bytes: 1.1e9, session_bytes: 30e6 })] },
   { host: "peerbox", online: false, seen: ago(2), error: "dial failed", parked: [rec("pk_cccccccccc", "spike-sandbox", "opencode", { parked_at: ago(140) })] },
 ];
 
@@ -25,6 +25,10 @@ for (const width of [390, 1280]) {
   const { browser, ctx, page } = await launch({ width, height: width > 500 ? 800 : 844, dark });
   const posts = [];
   await page.route(/\/api\/parked\/all$/, (r) => r.fulfill({ json: { hosts: HOSTS } }));
+  await page.route(/\/api\/park\/mark$/, async (r) => {
+    posts.push({ url: new URL(r.request().url()).pathname, body: r.request().postDataJSON() });
+    return r.fulfill({ json: { marked: true } });
+  });
   await page.route(/\/api\/hosts\/[^/]+\/(resume|park\/pin|park)$/, async (r) => {
     const req = r.request();
     const body = req.postDataJSON();
@@ -52,6 +56,8 @@ for (const width of [390, 1280]) {
     if (g.n !== 3 || g.names[0] !== "netpol-guard-impl" || g.names[2] !== "spike-sandbox") throw new Error("rows " + JSON.stringify(g));
     if (!(g.offOpacity < 1) || !g.offChip) throw new Error("offline row not greyed " + JSON.stringify(g));
     if (!/Recently closed 3/.test(g.head) || !g.edited || g.scroll || !g.inside) throw new Error("section " + JSON.stringify(g));
+    const cost = await page.evaluate(() => document.querySelector(".parked-sec .pk-cost")?.textContent || "");
+    if (!/3 kept: 1\.1 GB of worktrees, 30 MB of sessions, 330 MB of scratchpads moved off \/tmp/.test(cost)) throw new Error("cost line: " + cost);
     await page.locator(".parked-sec").screenshot({ path: `${out}/parked-section-${width}.png` });
   });
 
@@ -67,6 +73,19 @@ for (const width of [390, 1280]) {
     await page.waitForFunction(() => document.querySelector("#pk").hidden, null, { timeout: 5000 });
     const p = posts.filter((x) => x.url.endsWith("/resume"));
     if (p.length !== 1 || p[0].body.id !== "pk_aaaaaaaaaa" || !p[0].url.includes("/hosts/uitest/")) throw new Error("posts " + JSON.stringify(posts));
+  });
+
+  await check(`resume sheet at ${width}px: Remove… sends the parked agent to the removal review (nothing is deleted)`, async () => {
+    await page.click('.parked-row[data-pk="pk_bbbbbbbbbb"]');
+    await page.waitForSelector("#pk", { state: "visible" });
+    const h = await page.evaluate(() => document.querySelector("#pk-rm").getBoundingClientRect().height);
+    if (width < 500 && h < 44) throw new Error("Remove… is " + h + "px tall");
+    posts.length = 0;
+    await page.click("#pk-rm");
+    await page.waitForFunction(() => document.querySelector("#pk").hidden, null, { timeout: 5000 });
+    const p = posts.filter((x) => x.url.endsWith("/park/mark"));
+    if (p.length !== 1 || p[0].body.id !== "pk_bbbbbbbbbb" || p[0].body.host !== "uitest") throw new Error("mark posts " + JSON.stringify(posts));
+    await page.waitForFunction(() => /Ready to remove/.test(document.querySelector("#toast").textContent));
   });
 
   await check(`resume sheet at ${width}px: an offline host cannot be resumed and says why; Keep posts a pin`, async () => {

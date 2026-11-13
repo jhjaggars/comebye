@@ -139,6 +139,9 @@ type Entry struct {
 	// the same report is never announced to the same agent twice, and a
 	// report with new content always is. Survives a restart.
 	NoticeKeys []string `json:"notice_keys,omitempty"`
+	// ParkHistory is when the worker was parked (its pane closed, worktree and session
+	// kept) and resumed (a new pane, which the entry then follows).
+	ParkHistory []ParkEvent `json:"park_history,omitempty"`
 	// MarkedFrom is the status the entry had when it was marked, which
 	// unmarking restores.
 	MarkedFrom Status `json:"marked_from,omitempty"`
@@ -523,6 +526,7 @@ func newID() string {
 
 func copyEntry(e *Entry) Entry {
 	c := *e
+	c.ParkHistory = append([]ParkEvent(nil), e.ParkHistory...)
 	if e.ReplyTo != nil {
 		r := *e.ReplyTo
 		c.ReplyTo = &r
@@ -556,6 +560,48 @@ func copyEntry(e *Entry) Entry {
 		c.LandCheck = &l
 	}
 	return c
+}
+
+// ParkEvent is one park or resume of a worker. ID is the park record's id.
+type ParkEvent struct {
+	ID    string    `json:"id"`
+	Event string    `json:"event"` // "parked" or "resumed"
+	At    time.Time `json:"at"`
+	Pane  string    `json:"pane,omitempty"` // the pane it left, or the one it resumed in
+}
+
+// NotePark records a park or resume on the entry that follows agentID (once per
+// record and event). For a resume, to is the agent's new identity: the entry
+// follows it from then on, so its work is observed and reported as before.
+// It returns whether anything changed.
+func (s *Store) NotePark(agentID string, ev ParkEvent, to *Where) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byAgent(agentID)
+	if e == nil {
+		return false, nil
+	}
+	for _, h := range e.ParkHistory {
+		if h.ID == ev.ID && h.Event == ev.Event {
+			return false, nil
+		}
+	}
+	e.ParkHistory = append(e.ParkHistory, ev)
+	if len(e.ParkHistory) > 40 {
+		e.ParkHistory = e.ParkHistory[len(e.ParkHistory)-40:]
+	}
+	if to != nil {
+		e.AgentID, e.PaneID = to.AgentID, to.PaneID
+		if to.WorkspaceID != "" {
+			e.WorkspaceID = to.WorkspaceID
+		}
+	}
+	return true, s.save()
+}
+
+// Where is where an agent lives now.
+type Where struct {
+	AgentID, PaneID, WorkspaceID string
 }
 
 // Entries returns every entry, oldest first.

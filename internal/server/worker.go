@@ -747,6 +747,12 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 	}
 	if res.WorktreeRemoved {
 		res.Scratch = s.cleanRemoved(wt, live, agent)
+		// A parked agent whose worktree is gone cannot be resumed: its record goes with it.
+		if ps := s.parkStore(); ps != nil {
+			for _, r := range ps.DeleteForWorktree(wt) {
+				s.dropParkedScratch(r)
+			}
+		}
 	}
 	return res, nil
 }

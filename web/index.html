@@ -172,6 +172,7 @@
     .dot.done { background: var(--purple); }
     .dot.park { background: transparent; border: 2px solid var(--teal); }
     .agent.parked-row.offline { opacity: 0.65; }
+    .pk-cost { color: var(--muted); font-size: var(--fs-12); margin: 0 var(--sp-4) var(--sp-8); }
     .pk-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--sp-4) var(--sp-12); margin: var(--sp-10) 0; font-size: var(--fs-13); }
     .ps-list { display: flex; flex-direction: column; gap: var(--sp-8); margin-top: var(--sp-10); }
     .ps-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2) var(--sp-10); align-items: center; padding: var(--sp-10) var(--sp-12); min-height: var(--hit-44);
@@ -2913,6 +2914,7 @@
     </div>
     <footer class="ln-foot">
       <div class="ln-status" id="pk-status" aria-live="polite"></div>
+      <button type="button" class="btn danger" id="pk-rm">Remove…</button>
       <button type="button" class="btn" id="pk-pin">Keep (pin)</button>
       <button type="button" class="btn ln-go" id="pk-go">Resume</button>
     </footer>

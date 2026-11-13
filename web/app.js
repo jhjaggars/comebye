@@ -3764,7 +3764,22 @@ function parkedSectionHTML() {
       <span class="proj-chev" aria-hidden="true"></span><span class="proj-name">Recently closed</span>
       <span class="proj-counts"><span>${list.length}</span></span>
     </button>
-    <div class="proj-body"${open ? "" : " hidden"}>${list.map(parkedRowHTML).join("")}</div></section>`;
+    <div class="proj-body"${open ? "" : " hidden"}>${parkCostHTML(list)}${list.map(parkedRowHTML).join("")}</div></section>`;
+}
+
+function fmtBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + " GB";
+  if (n >= 1e6) return Math.round(n / 1e6) + " MB";
+  return Math.max(1, Math.round(n / 1e3)) + " KB";
+}
+
+// parkCostHTML is what the closed agents keep on disk, so keeping them is a number you can see.
+function parkCostHTML(list) {
+  const sum = (k) => list.reduce((n, e) => n + (e.rec[k] || 0), 0);
+  const wt = sum("worktree_bytes"), ses = sum("session_bytes"), pad = sum("scratch_bytes");
+  if (!wt && !ses && !pad) return "";
+  const parts = [wt && `${fmtBytes(wt)} of worktrees`, ses && `${fmtBytes(ses)} of sessions`, pad && `${fmtBytes(pad)} of scratchpads moved off /tmp`].filter(Boolean);
+  return `<div class="pk-cost" title="What these closed agents keep on disk. Removal is proposed after they have been closed for a while (14 days by default), and you confirm it under Ready to remove.">${esc(list.length)} kept: ${esc(parts.join(", "))}</div>`;
 }
 
 function bindParkedRows(wrap) {
@@ -3815,6 +3830,7 @@ function renderParkSheet() {
   $("pk-go").disabled = !e.online || parked.busy;
   $("pk-pin").disabled = !e.online || parked.busy;
   $("pk-pin").textContent = r.pinned ? "Stop keeping" : "Keep (pin)";
+  $("pk-rm").disabled = parked.busy;
 }
 
 function hideParkSheet() {
@@ -3849,6 +3865,24 @@ async function submitResume() {
   } catch (err) {
     parked.busy = false;
     $("pk").classList.remove("busy");
+    $("pk-status").textContent = err.message;
+    renderParkSheet();
+  }
+}
+
+async function sendParkToRemoval() {
+  if (parked.busy) return;
+  const { id, host } = parked, e = parkEntry(id, host);
+  if (!e) return;
+  parked.busy = true; renderParkSheet();
+  try {
+    await api("/api/park/mark", { method: "POST", body: JSON.stringify({ host, id }) });
+    parked.busy = false;
+    closeParkSheet();
+    toast(`${e.rec.name} is in Ready to remove: review it there. Nothing is deleted until you confirm.`);
+    loadLedger();
+  } catch (err) {
+    parked.busy = false;
     $("pk-status").textContent = err.message;
     renderParkSheet();
   }
@@ -3917,7 +3951,8 @@ const parkAll = { open: false, busy: false, list: [] };
 function openParkAll() {
   if (parkAll.open) return;
   parkAll.open = true; parkAll.busy = false;
-  parkAll.list = parkSuggestions().map((a) => ({ id: agentId(a), on: true, state: "" }));
+  // A snapshot of each agent: the list behind the sheet refreshes while it is open.
+  parkAll.list = parkSuggestions().map((a) => ({ id: agentId(a), a: { host: a.host, pane_id: a.pane_id, name: a.name, agent: a.agent, since: a.park_hint.since }, on: true, state: "" }));
   history.pushState({ parkall: true }, "", location.href);
   $("ps-status").textContent = "";
   renderParkAll();
@@ -3927,11 +3962,11 @@ function openParkAll() {
 }
 function renderParkAll() {
   $("ps-list").innerHTML = parkAll.list.map((it, i) => {
-    const a = agentById(it.id);
-    const nm = a ? (a.name || a.pane_id) : it.id;
-    const since = a && a.park_hint ? fmtAgo(Date.parse(a.park_hint.since)) : "";
+    const a = it.a;
+    const nm = a.name || a.pane_id;
+    const since = fmtAgo(Date.parse(a.since));
     return `<label class="ps-row"><input type="checkbox" data-i="${i}"${it.on ? " checked" : ""}${parkAll.busy || it.state === "ok" ? " disabled" : ""}>
-      <span class="ps-name">${esc(nm)}</span><span class="ps-sub">${esc(a ? a.host + " · " + a.agent + " · idle " + since : "")}</span>
+      <span class="ps-name">${esc(nm)}</span><span class="ps-sub">${esc(a.host + " · " + a.agent + " · idle " + since)}</span>
       <span class="ps-state${it.state && it.state !== "ok" ? " bad" : ""}">${esc(it.state === "ok" ? "parked" : it.state)}</span></label>`;
   }).join("") || '<div class="ln-note">Nothing to park now.</div>';
   const n = parkAll.list.filter((x) => x.on && x.state !== "ok").length;
@@ -3951,8 +3986,7 @@ async function submitParkAll() {
   let ok = 0;
   for (const it of parkAll.list) {
     if (!it.on || it.state === "ok") continue;
-    const a = agentById(it.id);
-    if (!a) { it.state = "gone"; continue; }
+    const a = it.a;
     $("ps-status").textContent = `Parking ${a.name}…`;
     try {
       await api(`/api/hosts/${encodeURIComponent(a.host)}/park`, { method: "POST", body: JSON.stringify({ agent: a.pane_id, name: a.name, why: "suggested" }), timeout: 100000 });
@@ -12165,6 +12199,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("pk-close").addEventListener("click", closeParkSheet);
   $("pk-go").addEventListener("click", submitResume);
   $("pk-pin").addEventListener("click", togglePin);
+  $("pk-rm").addEventListener("click", sendParkToRemoval);
   $("pk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeParkSheet(); } });
   loadParked();
   setInterval(() => { if (!document.hidden) loadParked(); }, 30000);

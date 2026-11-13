@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/park"
 )
 
@@ -251,6 +253,7 @@ func (s *Server) rebindParked(agents []herdr.AgentInfo) {
 	if len(recs) == 0 {
 		return
 	}
+	s.parkLedger(recs, agents)
 	if s.pq != nil {
 		for _, it := range s.pq.list("", false) {
 			if pr, ok := parkLookup(recs, it.Agent, it.Name); ok {
@@ -281,6 +284,41 @@ func (s *Server) rebindParked(agents []herdr.AgentInfo) {
 					return nil
 				})
 			}
+		}
+	}
+}
+
+// parkLedger records parks and resumes on the ledger entry of the worker that
+// went through them, and points the entry at the pane the worker resumed in
+// (an entry follows its agent's id, and a resumed agent has a new one).
+func (s *Server) parkLedger(recs []parkedRecord, agents []herdr.AgentInfo) {
+	if s.ledger == nil {
+		return
+	}
+	for _, pr := range recs {
+		r := pr.Rec
+		old := pr.Host + "/" + r.PaneID
+		if _, ok := s.ledger.ByAgent(old); !ok {
+			continue
+		}
+		var err error
+		if r.Parked() {
+			_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "parked", At: r.ParkedAt, Pane: r.PaneID}, nil)
+		} else if id, live := resumedID(pr, agents); live {
+			to := &ledger.Where{AgentID: id, PaneID: r.ResumedPane}
+			for _, a := range agents {
+				if a.ID == id {
+					to.WorkspaceID = a.WorkspaceID
+				}
+			}
+			// The parked event first, so the history reads in order whatever the hub saw.
+			_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "parked", At: r.ParkedAt, Pane: r.PaneID}, nil)
+			if err == nil {
+				_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "resumed", At: *r.ResumedAt, Pane: r.ResumedPane}, to)
+			}
+		}
+		if err != nil {
+			log.Printf("ledger: park history: %v", err)
 		}
 	}
 }

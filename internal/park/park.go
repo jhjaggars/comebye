@@ -50,6 +50,10 @@ type Record struct {
 	ScratchTo    string `json:"scratch_to,omitempty"`
 	ScratchBytes int64  `json:"scratch_bytes,omitempty"`
 	ScratchNote  string `json:"scratch_note,omitempty"`
+	// What parking keeps on disk, measured at park (a worktree walk is cut off
+	// after a few seconds, so the figure may be a floor): for the "disk cost" line.
+	WorktreeBytes int64 `json:"worktree_bytes,omitempty"`
+	SessionBytes  int64 `json:"session_bytes,omitempty"`
 	// Resume history: the record is kept after a resume as history.
 	ResumedAt   *time.Time `json:"resumed_at,omitempty"`
 	ResumedPane string     `json:"resumed_pane,omitempty"`
@@ -325,6 +329,45 @@ func MoveTree(src, dst string) (int64, error) {
 		return n, fmt.Errorf("copied, but could not remove %s: %w", src, err)
 	}
 	return n, nil
+}
+
+// TreeSize is the bytes of the regular files under p, counting for at most limit
+// (the figure is a floor when the walk was cut off).
+func TreeSize(p string, limit time.Duration) int64 {
+	var n int64
+	stop := time.Now().Add(limit)
+	_ = filepath.WalkDir(p, func(_ string, d fs.DirEntry, err error) error {
+		if time.Now().After(stop) {
+			return filepath.SkipAll
+		}
+		if err == nil && d.Type().IsRegular() {
+			if fi, e := d.Info(); e == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
+}
+
+// DeleteForWorktree drops the parked records whose worktree is wt (it was removed).
+func (s *Store) DeleteForWorktree(wt string) []Record {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.f.Records[:0]
+	var gone []Record
+	for _, r := range s.f.Records {
+		if r.Parked() && r.Worktree == wt {
+			gone = append(gone, r)
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if len(gone) > 0 {
+		s.f.Records = kept
+		_ = s.save()
+	}
+	return gone
 }
 
 func treeSize(p string) int64 {
