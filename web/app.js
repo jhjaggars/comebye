@@ -1839,12 +1839,15 @@ function todoItemHtml(t, pfx) {
     (t.kind === "review" && !ans && t.review && t.review.stale ? `<span class="td-chip st-warn" title="Open for 3 days or more">stale</span>` : "");
   let panel = "";
   if (open) {
-    const meta = [who && `waiting: ${who}`, age].filter(Boolean).map(esc).concat(`<span class="cp" role="button" tabindex="0" aria-label="Copy item id" data-copy="${escAttr(t.id)}">${esc(t.id)}</span>`).join(" · ");
+    const meta = [who && `waiting: ${who}`, age].filter(Boolean).map(esc).join(" · ");
     const repEntry = (l) => (ledger.entries || []).find((x) => x.id === l.handoff);
     // "Full report" is the hub's stored final report, shown in place; the transcript is a link of its own.
     const isRep = (l) => l.handoff && !l.url && (l.kind === "report" || (!l.kind && /^Full report/.test(l.label || "")));
     let repLink = null;
-    const links = (t.links || []).map((l) => {
+    // An item's Page comes first, in every layout, unless links already has it.
+    const pgHref = t.page ? todoLinkHref(t.page.url) : "";
+    const pgLink = pgHref && !(t.links || []).some((l) => l.url === t.page.url || l.url === pgHref) ? `<a class="td-pglink" href="${escAttr(pgHref)}">${esc("Page: " + (t.page.title || t.page.id))}</a>` : "";
+    const links = (pgLink ? [pgLink] : []).concat((t.links || []).map((l) => {
       if (isRep(l)) {
         const e = repEntry(l);
         if (e && e.final_report) { repLink = { l, e }; return `<a href="#" class="td-reptog" role="button">${esc(l.label.replace(/\s*\(handoff [^)]*\)/g, "") || "Full report")}</a>`; }
@@ -1855,7 +1858,7 @@ function todoItemHtml(t, pfx) {
         ? (href.startsWith("/#/") ? `<a href="${escAttr(href)}">${esc(label)}</a>` : `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`)
         : l.handoff ? `<a class="td-tr" href="#/search/for?ledger=${encodeURIComponent(l.handoff)}" title="Open that handoff's transcript">${esc(l.kind === "transcript" || isRep(l) ? (l.kind === "transcript" ? label : "Transcript") : label.includes(l.handoff) ? label : `${label} (handoff ${l.handoff})`)}</a>`
         : `<span>${esc(label)}</span>`;
-    });
+    }));
     const repBody = repLink ? `<details class="td-rep"${todoRepOpen.has(t.id) ? " open" : ""}><summary>Full report</summary>${copyBtnHtml("rep:" + repLink.e.id, repLink.e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md">${renderMarkdown(repLink.e.final_report, "todorep:" + t.id)}</div></details>` : "";
     const a = t.answer;
     const aAt = a ? Date.parse(a.at) : NaN;
@@ -1868,7 +1871,6 @@ function todoItemHtml(t, pfx) {
     const strip = `<div class="td-strip">
         ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}${t.waiting && t.waiting.parked ? ' <span class="chip teal" title="Its pane is closed. Whatever is sent to it waits and is delivered when it is resumed.">parked</span>' : ""}</span></div>` : ""}
         ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
-        <div><span class="td-sl">Item</span><span class="td-sv"><code class="cp" role="button" tabindex="0" aria-label="Copy item id">${esc(t.id)}</code></span></div>
         ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;
     const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;

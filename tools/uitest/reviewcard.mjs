@@ -95,7 +95,16 @@ for (const width of [1280, 390]) {
       if (await item(r2.id).locator("img.rv-img").count()) throw new Error("an image with no thumbnail");
       const kind = await item(r2.id).locator(".td-row .td-kind").innerText();
       if (!/review/i.test(kind)) throw new Error("kind label: " + kind);
+      const pl = await item(r2.id).evaluate((e, id) => {
+        const a = [...e.querySelectorAll(".td-links a, .td-dlinks a")].find((x) => x.offsetParent);
+        return { first: a && a.innerText, href: a && a.getAttribute("href"), n: e.querySelectorAll('a[href^="/#/pages/"].td-pglink').length, ids: (e.innerText.match(/\bt[0-9a-f]{10}\b/g) || []).length, cp: e.querySelectorAll("[aria-label='Copy item id']").length };
+      }, r2.id);
+      if (!/^Page: Plain demo/.test(pl.first || "") || !/^\/#\/pages\/pg_[0-9a-f]{10}$/.test(pl.href || "") || pl.n < 1) throw new Error("page link: " + JSON.stringify(pl));
+      if (pl.ids || pl.cp) throw new Error("item id still shown: " + JSON.stringify(pl));
       await page.screenshot({ path: `${out}/reviewcard-nopic-${width}-${dark ? "dark" : "light"}.png` });
+      await item(r2.id).locator("a.td-pglink:visible").first().click();
+      await page.waitForFunction(() => /#\/pages\/pg_/.test(location.hash), null, { timeout: 5000 });
+      await page.goto(base + (width > 500 ? "/#/todo" : "/"), { waitUntil: "load" });
       await drop(r2.id);
     });
     await check(`review card at ${tag}: Looks good closes it with an Undo toast; Undo opens it again`, async () => {

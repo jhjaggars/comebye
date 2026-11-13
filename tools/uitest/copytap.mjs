@@ -91,12 +91,9 @@ await check("inline: Enter and Space copy from the keyboard", async () => {
   same(await clip(), "research/copy-buttons", "Space");
 });
 
-await check("inline: the To do item id is tap-to-copy", async () => {
-  const id = page.locator(".td-item .td-meta .cp:visible").first();
-  await id.waitFor();
-  same(await id.evaluate((e) => e.getAttribute("aria-label")), "Copy item id", "label");
-  await sentinel(); await id.click(); await page.waitForTimeout(250);
-  same(await clip(), tid, "item id");
+await check("inline: the To do detail shows no item id", async () => {
+  await page.locator(".td-item .td-panel").first().waitFor();
+  same(await page.locator(".td-item .td-panel").first().evaluate((e, id) => e.innerText.includes(id) || !!e.querySelector("[aria-label='Copy item id']"), tid), false, "item id shown");
 });
 
 // ---- slice 3: copy a whole message, report or item ----
@@ -254,15 +251,11 @@ async function dcheck(name, fn) {
   await desk.page.screenshot({ path: `${out}/copytap-desktop-${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
 }
 const dclip = () => desk.page.evaluate(() => navigator.clipboard.readText());
-await dcheck("the To do item id and an inline path copy", async (pg) => {
+await dcheck("the To do detail has no item id; an inline path copies", async (pg) => {
   await pg.goto(base + "/#/todo", { waitUntil: "load" });
   await pg.waitForSelector(`#p-todo .td-item[data-id="${tid}"] .td-row`, { state: "visible", timeout: 8000 });
   await pg.locator(`#p-todo .td-item[data-id="${tid}"] .td-row`).first().click();
-  const id = pg.locator(".td-panel .td-sv .cp:visible").first();
-  await id.waitFor();
-  await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
-  await id.click(); await pg.waitForTimeout(250);
-  same(await dclip(), tid, "item id");
+  same(await pg.locator(".td-panel").first().evaluate((e, id) => e.innerText.includes(id), tid), false, "item id shown");
   await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
   await pg.locator("#p-todo .td-ctx code.cp").nth(2).click(); await pg.waitForTimeout(250);
   same(await dclip(), "/tmp/shots/shot-390.png", "path");
