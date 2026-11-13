@@ -74,3 +74,50 @@ func TestFileContains(t *testing.T) {
 		t.Fatal("missed a needle that spans two reads")
 	}
 }
+
+func piAsst(ts, provider, model string, in, cr, cw int) string {
+	return fmt.Sprintf(`{"type":"message","timestamp":%q,"message":{"role":"assistant","provider":%q,"model":%q,"usage":{"input":%d,"output":5,"cacheRead":%d,"cacheWrite":%d}}}`, ts, provider, model, in, cr, cw)
+}
+
+// Pi's (and OpenCode's mirror's) format: input plus cache read and write.
+func TestLastContextPi(t *testing.T) {
+	p := write(t,
+		piAsst("2026-11-06T17:00:00Z", "homelab", "thinking", 10, 100, 0),
+		piAsst("2026-11-06T17:04:03Z", "homelab", "thinking", 15, 7827, 3),
+		`{"type":"message","message":{"role":"user","content":"x"}}`,
+	)
+	c, ok, _ := LastContext(p)
+	if !ok || c.Tokens != 7845 || c.Provider != "homelab" || c.Model != "thinking" || c.At != "2026-11-06T17:04:03Z" {
+		t.Fatalf("got %+v ok=%v", c, ok)
+	}
+}
+
+// A compaction after the newest figure makes it stale: nothing is reported. One before it is reported as when.
+func TestLastContextCompaction(t *testing.T) {
+	stale := write(t,
+		asst("m", 1, 2, 3, false),
+		`{"type":"system","subtype":"compact_boundary","timestamp":"2026-11-07T10:00:00Z"}`,
+		`{"type":"user","message":{"content":"summary"}}`,
+	)
+	if _, ok, _ := LastContext(stale); ok {
+		t.Fatal("a figure from before the compaction must not be shown")
+	}
+	fresh := write(t,
+		asst("m", 90, 90, 90, false),
+		`{"type":"system","subtype":"compact_boundary","timestamp":"2026-11-07T10:00:00Z"}`,
+		asst("m", 1, 2, 3, false),
+	)
+	c, ok, _ := LastContext(fresh)
+	if !ok || c.Tokens != 6 || c.Compacted != "2026-11-07T10:00:00Z" {
+		t.Fatalf("got %+v ok=%v", c, ok)
+	}
+	pi := write(t,
+		piAsst("2026-11-06T17:00:00Z", "p", "m", 900, 0, 0),
+		`{"type":"compaction","timestamp":"2026-11-06T17:30:00Z"}`,
+		piAsst("2026-11-06T17:31:00Z", "p", "m", 40, 0, 0),
+	)
+	c, ok, _ = LastContext(pi)
+	if !ok || c.Tokens != 40 || c.Compacted != "2026-11-06T17:30:00Z" {
+		t.Fatalf("got %+v ok=%v", c, ok)
+	}
+}

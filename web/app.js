@@ -9157,6 +9157,7 @@ function renderDetail() {
   st.textContent = bgRunning(a) ? "waiting" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
   st.className = "status " + agentStatusText(a);
   st.title = bgRunning(a) ? bgTitle(a) : "";
+  renderCtxChip();
   const why = $("d-why"), wt = whyBlocked(a) || (quietMs(a) ? quietText(a) : "") || noteOf(a) || (bgRunning(a) ? bgLabel(a) : "");
   why.classList.toggle("quiet", !whyBlocked(a) && !quietMs(a));
   why.classList.toggle("stuck", !whyBlocked(a) && !!quietMs(a));
@@ -9170,6 +9171,57 @@ function renderDetail() {
   if (sw.open) renderSwitch(); // the agent may have gone idle (or busy) meanwhile
   refreshQueued();
 }
+
+/* ---------- context usage chip ---------- */
+//
+// The transcript response carries how full the agent's context window is
+// (the input plus cache tokens of its latest reply, and the model's window
+// when it is known). The chip rides on the chat's own poll, so it costs no
+// request of its own. Nothing known, nothing shown.
+
+const CTX_WARN = 0.8, CTX_DANGER = 0.95;
+
+function fmtCtxTokens(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, "") + "M";
+  return n >= 1000 ? Math.round(n / 1000) + "k" : String(n);
+}
+
+function ctxLevel(c) {
+  if (!c || !c.window) return "";
+  const f = c.tokens / c.window;
+  return f >= CTX_DANGER ? "red" : f >= CTX_WARN ? "yellow" : "muted";
+}
+
+function ctxDetail(c) {
+  const parts = [c.window
+    ? `Context: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens (${Math.round((c.tokens / c.window) * 100)}%)`
+    : `Context: ${c.tokens.toLocaleString()} tokens (the model's window is not known)`];
+  if (c.model) parts.push((c.provider ? c.provider + "/" : "") + c.model);
+  const comp = c.compacted ? Date.parse(c.compacted) : NaN;
+  if (!isNaN(comp)) parts.push(`compacted ${fmtAgo(comp)} ago (${new Date(comp).toLocaleString()})`);
+  return parts.join(" · ");
+}
+
+function renderCtxChip() {
+  const el = $("d-ctx");
+  const c = state.chat && state.chat.ctx;
+  if (!c || !(c.tokens > 0)) { el.hidden = true; el.textContent = ""; el.dataset.level = ""; return; }
+  const lvl = ctxLevel(c);
+  el.className = "chip d-ctx " + (lvl || "muted");
+  el.dataset.level = lvl;
+  const tok = fmtCtxTokens(c.tokens);
+  el.innerHTML = c.window
+    ? `ctx ${Math.round((c.tokens / c.window) * 100)}%<span class="ctx-tok"> · ${tok}</span>`
+    : `ctx ${tok}`;
+  el.title = ctxDetail(c);
+  el.setAttribute("aria-label", ctxDetail(c));
+  el.hidden = false;
+}
+
+$("d-ctx").addEventListener("click", () => {
+  const c = state.chat && state.chat.ctx;
+  if (c) toast(ctxDetail(c));
+});
 
 /* ---------- queued prompts ---------- */
 //
@@ -9237,8 +9289,9 @@ async function loadChat(reset = true) {
   if (!state.selected) return;
   const pane = state.selected;
   if (reset) {
-    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [], from: "", running: [] };
+    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [], from: "", running: [], ctx: null };
     $("chat").innerHTML = "";
+    renderCtxChip();
   }
   const chat = state.chat;
   try {
@@ -9259,6 +9312,8 @@ async function loadChat(reset = true) {
       // No Pi session (or it is gone): fall back to raw pane output.
       chat.terminal = true;
       chat.auto = true; // the automatic fallback: the transcript is retried until it exists
+      chat.ctx = null;
+      renderCtxChip();
       showTerminal();
       refreshOutput();
       scheduleChatRetry();
@@ -9400,6 +9455,8 @@ function renderTranscript(t, reset) {
   // partial response carries the current list.
   chat.running = t.running_subagents || [];
   chat.thinking = t.thinking || null;
+  chat.ctx = t.context || null;
+  renderCtxChip();
   renderActivity();
   ensureSubagentTicker();
 

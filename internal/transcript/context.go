@@ -14,8 +14,18 @@ type Context struct {
 	// Tokens is the last request's input_tokens plus its cache creation and
 	// cache read tokens.
 	Tokens int `json:"tokens"`
-	// Model is the model that answered it.
-	Model string `json:"model,omitempty"`
+	// Model is the model that answered it; Provider is Pi's (and
+	// OpenCode's) provider for it, empty for Claude.
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	// At is when that request was answered (RFC 3339), if the line says.
+	At string `json:"at,omitempty"`
+	// Compacted is when the session was last compacted, if that is within
+	// the part of the file read (RFC 3339).
+	Compacted string `json:"compacted,omitempty"`
+	// Window is the model's context window in tokens, 0 when not known.
+	// The reader does not know it; the server fills it in.
+	Window int `json:"window,omitempty"`
 }
 
 // contextTail is how much of the file's end is looked at first, and
@@ -61,8 +71,12 @@ func LastContext(path string) (Context, bool, error) {
 				buf = nil
 			}
 		}
-		if c, ok := lastContextIn(buf); ok {
+		c, ok, stale := lastContextIn(buf)
+		if ok {
 			return c, true, nil
+		}
+		if stale {
+			return Context{}, false, nil
 		}
 		if start == 0 || tail >= contextMaxTail {
 			return Context{}, false, nil
@@ -70,8 +84,13 @@ func LastContext(path string) (Context, bool, error) {
 	}
 }
 
-// lastContextIn finds the last usable assistant line in buf.
-func lastContextIn(buf []byte) (Context, bool) {
+// lastContextIn finds the last usable assistant line in buf, in either
+// session format: Claude's (input_tokens and the cache counts under
+// message.usage) or Pi's (input, cacheRead and cacheWrite; OpenCode's mirror
+// is Pi's format). A compaction after that line means the figure is from
+// before it, so nothing is reported rather than a stale number; a compaction
+// before it is reported as when the context last shrank.
+func lastContextIn(buf []byte) (c Context, found, stale bool) {
 	for len(buf) > 0 {
 		end := len(buf)
 		if buf[end-1] == '\n' {
@@ -80,32 +99,73 @@ func lastContextIn(buf []byte) (Context, bool) {
 		start := bytes.LastIndexByte(buf[:end], '\n') + 1
 		line := buf[start:end]
 		buf = buf[:start]
-		if len(line) == 0 || !bytes.Contains(line, []byte(`"usage"`)) {
+		if len(line) == 0 {
+			continue
+		}
+		if at, ok := compactionAt(line); ok {
+			if !found {
+				return Context{}, false, true // the newest figure predates this compaction
+			}
+			c.Compacted = at
+			return c, true, false
+		}
+		if found || !bytes.Contains(line, []byte(`"usage"`)) {
 			continue
 		}
 		var l struct {
 			Type        string `json:"type"`
 			IsSidechain bool   `json:"isSidechain"`
+			Timestamp   string `json:"timestamp"`
 			Message     struct {
-				Model string `json:"model"`
-				Usage struct {
+				Role     string `json:"role"`
+				Provider string `json:"provider"`
+				Model    string `json:"model"`
+				Usage    struct {
 					Input         int `json:"input_tokens"`
 					CacheCreation int `json:"cache_creation_input_tokens"`
 					CacheRead     int `json:"cache_read_input_tokens"`
+					PiInput       int `json:"input"`
+					PiCacheRead   int `json:"cacheRead"`
+					PiCacheWrite  int `json:"cacheWrite"`
 				} `json:"usage"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(line, &l) != nil || l.Type != "assistant" || l.IsSidechain {
+		if json.Unmarshal(line, &l) != nil || l.IsSidechain {
 			continue
 		}
-		u := l.Message.Usage
-		n := u.Input + u.CacheCreation + u.CacheRead
-		if n == 0 || l.Message.Model == "<synthetic>" {
+		m := l.Message
+		if !(l.Type == "assistant" || (l.Type == "message" && m.Role == "assistant")) {
 			continue
 		}
-		return Context{Tokens: n, Model: l.Message.Model}, true
+		u := m.Usage
+		n := u.Input + u.CacheCreation + u.CacheRead + u.PiInput + u.PiCacheRead + u.PiCacheWrite
+		if n == 0 || m.Model == "<synthetic>" {
+			continue
+		}
+		c = Context{Tokens: n, Model: m.Model, Provider: m.Provider, At: l.Timestamp}
+		found = true
 	}
-	return Context{}, false
+	return c, found, false
+}
+
+// compactionAt reports whether line marks a compaction (Claude's
+// compact_boundary system line, Pi's compaction record) and when.
+func compactionAt(line []byte) (string, bool) {
+	if !bytes.Contains(line, []byte(`"compact`)) {
+		return "", false
+	}
+	var l struct {
+		Type      string `json:"type"`
+		Subtype   string `json:"subtype"`
+		Timestamp string `json:"timestamp"`
+	}
+	if json.Unmarshal(line, &l) != nil {
+		return "", false
+	}
+	if l.Type == "compaction" || (l.Type == "system" && l.Subtype == "compact_boundary") {
+		return l.Timestamp, true
+	}
+	return "", false
 }
 
 // FileContains reports whether the file at path contains needle (a streamed

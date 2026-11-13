@@ -141,6 +141,16 @@ fport=$((port + 200))
   -state-dir "$tmp/state-fb" -host-name uitest >"$out/comebye-fb.log" 2>&1 &
 for _ in $(seq 300); do curl -sf "http://127.0.0.1:$fport/api/agents" >/dev/null && break; sleep 0.1; done
 if want falseblocked; then node falseblocked.mjs "http://127.0.0.1:$fport" "$out" || rc=1 ; fi
+# The context usage chip in the agent view: agents whose sessions carry usage, on their own fake herdr and hub (Pi's window comes from a fixture config).
+mkdir -p "$tmp/ctxhome/.pi/agent"
+echo '{"providers":{"fixture":{"models":[{"id":"m1","contextWindow":128000}]}}}' >"$tmp/ctxhome/.pi/agent/models.json"
+"$tmp/fake-herdr" -sock "$tmp/cx.sock" -dir "$tmp/cx" -context >"$out/fake-herdr-cx.log" 2>&1 &
+for _ in $(seq 300); do [ -S "$tmp/cx.sock" ] && break; sleep 0.1; done
+cxport=$((port + 270))
+COMEBYE_CTX_CONFIG_HOME="$tmp/ctxhome" "$tmp/comebye" -sock "$tmp/cx.sock" -addr "127.0.0.1:$cxport" -insecure-no-auth -test-mode -push=false \
+  -state-dir "$tmp/state-cx" -host-name uitest >"$out/comebye-cx.log" 2>&1 &
+for _ in $(seq 300); do curl -sf "http://127.0.0.1:$cxport/api/agents" >/dev/null && break; sleep 0.1; done
+if want ctxchip; then node ctxchip.mjs "http://127.0.0.1:$cxport" "$out" || rc=1 ; fi
 # Claude's auto-mode prompt with the "will automatically block" countdown: its own fake herdr and hub.
 "$tmp/fake-herdr" -sock "$tmp/ab.sock" -dir "$tmp/ab" -autoblock >"$out/fake-herdr-ab.log" 2>&1 &
 for _ in $(seq 300); do [ -S "$tmp/ab.sock" ] && break; sleep 0.1; done

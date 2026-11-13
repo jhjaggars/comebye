@@ -843,7 +843,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": err.Error()})
 		return
 	}
-	s.serveTranscript(w, r, path, transcript.Read)
+	s.serveTranscript(w, r, path, transcript.Read, func(t *transcript.Transcript) { t.Context = s.contextUsage(*agent, path) })
 }
 
 // handleSubagentTranscript renders the transcript of one of a Claude
@@ -874,12 +874,12 @@ func (s *Server) serveSubagent(w http.ResponseWriter, r *http.Request, session, 
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_subagent", "message": err.Error()})
 		return
 	}
-	s.serveTranscript(w, r, path, transcript.ReadSubagent)
+	s.serveTranscript(w, r, path, transcript.ReadSubagent, nil)
 }
 
 // serveTranscript answers a transcript request for the session file at
 // path, parsed by read (transcript.Read or transcript.ReadSubagent).
-func (s *Server) serveTranscript(w http.ResponseWriter, r *http.Request, path string, read func(string, int, int) (*transcript.Transcript, error)) {
+func (s *Server) serveTranscript(w http.ResponseWriter, r *http.Request, path string, read func(string, int, int) (*transcript.Transcript, error), decorate func(*transcript.Transcript)) {
 	limit, skip := queryInt(r, "limit", 100), queryInt(r, "skip", 0)
 	if limit < 1 || limit > 500 {
 		limit = 100
@@ -913,6 +913,9 @@ func (s *Server) serveTranscript(w http.ResponseWriter, r *http.Request, path st
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	if decorate != nil {
+		decorate(t)
 	}
 	// ?from=<id>: only that message and the ones after it. The app passes
 	// its oldest message that can still change (a tool call still waiting

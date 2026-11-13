@@ -52,6 +52,10 @@ start_servers() { # uses $d, $port, $peerport
   # Never let a dev server prune the real /tmp: its fake herdr has no live agents.
   export COMEBYE_SCRATCH_DIR="$d/scratch"; mkdir -p "$COMEBYE_SCRATCH_DIR"
   local web="$root/web" peer_url="http://127.0.0.1:$peerport"
+  # Context windows of the fixture Pi model (the agent's own config file is where comebye learns them).
+  mkdir -p "$d/ctxhome/.pi/agent"
+  echo '{"providers":{"fixture":{"models":[{"id":"m1","contextWindow":128000}]}}}' >"$d/ctxhome/.pi/agent/models.json"
+  export COMEBYE_CTX_CONFIG_HOME="$d/ctxhome"
   # The peer host first, so the hub can reach it.
   spawn peer-herdr "$d/peer-herdr.log" "$d/fake-herdr" -sock "$d/peer.sock" -dir "$d/peer" -fixtures -fixture-host peerbox
   wait_for "the peer's fake herdr" test -S "$d/peer.sock"

@@ -45,7 +45,7 @@ func TestTranscriptConditionalAndPartial(t *testing.T) {
 			r.Header.Set(k, v)
 		}
 		w := httptest.NewRecorder()
-		s.serveTranscript(w, r, path, transcript.Read)
+		s.serveTranscript(w, r, path, transcript.Read, nil)
 		return w
 	}
 	ids := func(w *httptest.ResponseRecorder) (out []string, partial bool) {
