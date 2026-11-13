@@ -312,6 +312,7 @@ func TestSimulatedDeploy(t *testing.T) {
 	for _, c := range []struct{ version, state string }{{"v0.5.9", depOK}, {"v0.5.13", depFailed}} {
 		s, _ := deployHub(t)
 		s.cfg.Release.Simulated = true
+		s.cfg.TestMode = true // the shorter simulated delay (0.8 s, not 2 s)
 		rec, code, _ := s.startDeployLocal("me", "t1", c.version)
 		if code != 202 || rec.State != depRunning {
 			t.Fatalf("%s: start = %d %+v", c.version, code, rec)
