@@ -81,6 +81,7 @@ func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 	agents = append([]herdr.AgentInfo(nil), agents...) // stamped below; the fleet's copy stays as it is
 	s.stampQuiet(agents)
 	s.stampPark(agents)
+	s.seenStore().apply(agents)
 	for i, a := range agents {
 		out[i] = browserAgent{
 			ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name,

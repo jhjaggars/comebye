@@ -260,6 +260,10 @@ func (f *fake) respond(a *agent, text string) {
 	f.mu.Lock()
 	f.record(a, "assistant", "reply to: "+text)
 	f.mu.Unlock()
+	if strings.HasPrefix(text, "[done]") { // a turn that ends unseen, as herdr reports a finished agent nobody has focused
+		f.setStatus(a, "done")
+		return
+	}
 	f.setStatus(a, "idle")
 }
 

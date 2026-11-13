@@ -9247,10 +9247,13 @@ async function loadChat(reset = true) {
     // a bodiless 304. The newest window is always skip=0: "Load earlier"
     // pages are fetched separately.
     const from = !reset && chat.from ? `&from=${encodeURIComponent(chat.from)}` : "";
+    const a0 = agentById(pane);
+    const doneAtStart = a0 && a0.agent_status === "done" ? a0.status_since || "" : null; // the final message cannot be older than this read
     const t = await api(`${pathFor(pane)}/transcript?limit=100${from}`);
     if (state.selected !== pane || !state.chat) return;
     renderTranscript(t, reset);
     syncTermButton();
+    if (doneAtStart !== null) markSeen(pane, doneAtStart);
   } catch (e) {
     if (e.status === 404) {
       // No Pi session (or it is gone): fall back to raw pane output.
@@ -9273,6 +9276,21 @@ function syncTermButton() {
   if (!chat || chat.auto) { b.style.display = "none"; return; }
   b.textContent = chat.terminal ? "Show chat" : "Show raw terminal";
   b.style.display = "";
+}
+
+// markSeen tells the hub the user has the finished agent's latest message on
+// screen, so it shows idle instead of done (herdr's "done" clears only when
+// its own TUI focuses the pane). Only from the visible tab, and only for a
+// read that began after the agent was done; once per done spell.
+const seenSent = new Map();
+function markSeen(id, stamp) {
+  if (document.hidden || state.selected !== id) return;
+  const a = agentById(id);
+  if (!a || a.agent_status !== "done" || (a.status_since || "") !== stamp) return;
+  if (seenSent.get(id) === stamp) return;
+  seenSent.set(id, stamp);
+  fetch(`${agentPath(a)}/seen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+    .catch(() => { if (seenSent.get(id) === stamp) seenSent.delete(id); });
 }
 
 function showTerminal() {

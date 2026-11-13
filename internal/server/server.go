@@ -325,6 +325,9 @@ type Server struct {
 	// prop remembers the parked agents already proposed for removal (parkretain.go).
 	propOnce sync.Once
 	prop     *parkProposed
+	// seen is the user's record of done agents they have looked at (seen.go).
+	seenOnce sync.Once
+	seen     *seenStore
 	// switchGap is the pause between the slash commands of one model
 	// switch (tests shrink it).
 	switchGap time.Duration
@@ -508,6 +511,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agents/{target}/reset", s.auth(s.handleResetAgent))
 	s.mux.HandleFunc("POST /api/agents/{target}/noticeseen", s.auth(s.handleNoticeSeen))
 	s.mux.HandleFunc("POST /api/agents/{target}/keys", s.auth(s.handleKeys))
+	s.mux.HandleFunc("POST /api/agents/{target}/seen", s.auth(s.handleSeen))
+	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/seen", s.auth(s.handleSeen))
 	s.mux.HandleFunc("GET /api/agents/{target}/dialog", s.auth(s.handleDialog))
 	s.mux.HandleFunc("GET /api/agents/{target}/activity", s.auth(s.handleActivity))
 	s.mux.HandleFunc("POST /api/agents/{target}/answer", s.auth(s.handleAnswer))

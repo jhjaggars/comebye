@@ -117,6 +117,7 @@ if want decisionsets; then node decisionsets.mjs "http://127.0.0.1:$port" "$out"
 if want chatswitch; then node chatswitch.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want versionbanner; then node versionbanner.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The Pages checks publish with the real CLI, so they need the binary and its state.
