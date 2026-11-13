@@ -71,7 +71,10 @@ try {
   await check("the plan offers the peers, then the hub last", async () => {
     const v = await view();
     const plan = v.rollout_plan || [];
-    if (plan.map((s) => s.host + "/" + s.wave).join() !== "p1/canary,p2/peers,p3/peers,hub/hub") throw new Error(JSON.stringify(plan));
+    // The canary is p1; the peers after it come in fleet order, the order they announced themselves, which is not
+    // fixed here; the hub is last.
+    const steps = plan.map((s) => s.host + "/" + s.wave);
+    if ([steps[0], ...steps.slice(1, -1).sort(), steps[steps.length - 1]].join() !== "p1/canary,p2/peers,p3/peers,hub/hub") throw new Error(JSON.stringify(plan));
   });
   await check("Roll out to all starts a rollout; the canary goes first and soaks while nothing else is touched", async () => {
     const s = await j("POST", "/api/release/rollout", { todo: r1.id, version: V1, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r1.csrf });
