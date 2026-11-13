@@ -9029,6 +9029,7 @@ function openDetail(id) {
   }
   state.selected = id;
   state.chat = null;
+  clearTimeout(chatRetryTimer);
   state.ask = null;
   state.lastStatus = a.agent_status || null;
   $("list").style.display = "none";
@@ -9054,6 +9055,7 @@ function closeDetail() {
   if (header) header.classList.remove("busy");
   state.selected = null;
   state.chat = null;
+  clearTimeout(chatRetryTimer);
   state.ask = null;
   state.pushedRoute = false;
   if (window.SP) window.SP.onAgent(null);
@@ -9188,23 +9190,86 @@ async function loadChat(reset = true) {
     const t = await api(`${pathFor(pane)}/transcript?limit=100${from}`);
     if (state.selected !== pane || !state.chat) return;
     renderTranscript(t, reset);
+    syncTermButton();
   } catch (e) {
     if (e.status === 404) {
       // No Pi session (or it is gone): fall back to raw pane output.
       chat.terminal = true;
+      chat.auto = true; // the automatic fallback: the transcript is retried until it exists
       showTerminal();
       refreshOutput();
+      scheduleChatRetry();
     } else {
       toast("transcript failed: " + e.message, true);
     }
   }
 }
 
+// One button flips between the views: "Show raw terminal" over a chat, "Show
+// chat" over a raw view chosen by hand. Hidden in the automatic fallback
+// (there is no transcript to go back to).
+function syncTermButton() {
+  const b = $("btn-terminal"), chat = state.chat;
+  if (!chat || chat.auto) { b.style.display = "none"; return; }
+  b.textContent = chat.terminal ? "Show chat" : "Show raw terminal";
+  b.style.display = "";
+}
+
 function showTerminal() {
   $("chat").style.display = "none";
-  $("btn-terminal").style.display = "none";
+  // "Show chat" only where a transcript exists: a raw view chosen by hand over a loaded chat.
+  syncTermButton();
   $("output").style.display = "block";
   $("btn-copy-screen").hidden = false;
+}
+
+// While a view sits in the automatic terminal fallback (no session yet, or an
+// agent just restarted), ask for the transcript again: every 3 s for the first
+// minute, then every 20 s, and at once when the agent's status changes. The
+// first 200 switches to the chat without a reselect. A terminal the user chose
+// by hand is never switched back.
+let chatRetryTimer = null;
+function scheduleChatRetry() {
+  clearTimeout(chatRetryTimer);
+  chatRetryTimer = null;
+  const chat = state.chat;
+  if (!state.selected || !chat || !chat.terminal || !chat.auto) return;
+  if (!chat.retryFrom) chat.retryFrom = Date.now();
+  const delay = Date.now() - chat.retryFrom < 60000 ? 3000 : 20000;
+  chatRetryTimer = setTimeout(() => retryTranscript(), delay);
+}
+
+async function retryTranscript() {
+  clearTimeout(chatRetryTimer);
+  chatRetryTimer = null;
+  const pane = state.selected;
+  const chat = state.chat;
+  if (!pane || !chat || !chat.terminal || !chat.auto) return;
+  if (document.hidden) return scheduleChatRetry();
+  try {
+    const t = await api(`${pathFor(pane)}/transcript?limit=100`);
+    if (state.selected !== pane || state.chat !== chat || !chat.terminal || !chat.auto) return;
+    // A session exists now: back to the chat view.
+    chat.terminal = false;
+    chat.auto = false;
+    if (outputAbort) outputAbort.abort();
+    outputAbort = null;
+    outputBusy = false;
+    $("output").style.display = "none";
+    $("output").textContent = "";
+    $("btn-copy-screen").hidden = true;
+    copySrc.delete("term-screen");
+    $("chat").style.display = "";
+    $("chat").innerHTML = "";
+    chat.rendered = new Set();
+    chat.from = "";
+    chat.skip = 0;
+    renderTranscript(t, true);
+    syncTermButton();
+    refreshStatusLine();
+  } catch (e) {
+    if (state.selected === pane && state.chat === chat) scheduleChatRetry();
+  }
 }
 
 function renderTranscript(t, reset) {
@@ -10966,6 +11031,7 @@ function connectEvents() {
       // messages are not left behind.
       const wasActive = prev === "working" || prev === "blocked";
       const isActive = a && (a.agent_status === "working" || a.agent_status === "blocked");
+      if (a && prev !== a.agent_status && state.chat && state.chat.terminal && state.chat.auto) retryTranscript();
       if (a && wasActive && !isActive && state.chat) {
         if (state.chat.terminal) refreshOutput();
         else loadChat(false);
@@ -12123,8 +12189,23 @@ window.addEventListener("DOMContentLoaded", () => {
   initUsage();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
-    // One-way escape hatch for debugging: show the raw pane.
-    if (state.chat) state.chat.terminal = true;
+    const chat = state.chat;
+    if (chat && chat.terminal && !chat.auto) {
+      // "Show chat": back from a raw view chosen by hand.
+      chat.terminal = false;
+      if (outputAbort) outputAbort.abort();
+      outputAbort = null;
+      outputBusy = false;
+      $("output").style.display = "none";
+      $("btn-copy-screen").hidden = true;
+      copySrc.delete("term-screen");
+      $("chat").style.display = "";
+      syncTermButton();
+      loadChat(false);
+      return;
+    }
+    // Show the raw pane by hand; the chat view stays behind it.
+    if (chat) { chat.terminal = true; chat.auto = false; }
     showTerminal();
     refreshOutput();
   });
