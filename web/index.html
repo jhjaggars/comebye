@@ -1459,6 +1459,28 @@
     .td-none { flex: none; }
     /* An unsent answer whose item was answered or closed elsewhere: kept until discarded. */
     .td-release .td-kind { color: var(--green); }
+    /* review cards: the demo's thumbnail, what to try, Looks good / Needs changes */
+    .td-review .td-kind { color: var(--purple); }
+    .rv-page { display: flex; flex-wrap: wrap; gap: var(--sp-10) var(--sp-14); align-items: flex-start; margin: var(--sp-6) 0; min-width: 0; }
+    .rv-thumb { flex: 0 1 280px; min-width: 0; aspect-ratio: 16 / 10; display: grid; place-items: center; overflow: hidden; border-radius: var(--r-10); border: 1px solid var(--border); background: var(--panel2); color: var(--muted); font-size: var(--fs-13); text-decoration: none; }
+    .rv-img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+    .rv-pinfo { flex: 1 1 140px; display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+    .rv-ptitle { font-size: var(--fs-14); font-weight: 650; overflow-wrap: anywhere; }
+    .rv-pver { color: var(--muted); font-size: var(--fs-13); }
+    .rv-open { font-size: var(--fs-14); font-weight: 600; color: var(--blue); }
+    .rv-tryh { margin-top: var(--sp-8); font-size: var(--fs-12); font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .rv-btns { display: flex; gap: var(--sp-8); }
+    .rv-btns .btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-8); }
+    .rv-btns kbd { font: var(--fs-11) var(--ff-code); padding: 1px var(--sp-6); border: 1px solid currentColor; border-radius: var(--r-6); opacity: 0.8; }
+    @media (hover: none) { .rv-btns kbd { display: none; } }
+    .rv-note { display: flex; flex-direction: column; gap: var(--sp-8); }
+    .rv-kinds { align-self: flex-start; max-width: 100%; flex-wrap: wrap; }
+    .rv-route, .rv-done, .rv-stale { color: var(--muted); font-size: var(--fs-13); }
+    .rv-stale { color: var(--orange); }
+    .rv-done { margin: var(--sp-6) 0; }
+    .rv-foot { display: flex; align-items: center; gap: var(--sp-10); justify-content: space-between; }
+    .rv-foot .rv-route { flex: 1 1 0; min-width: 0; }
+    .rv-foot .td-acts .td-drop { margin-left: 0; }
     .rel { display: flex; flex-direction: column; gap: var(--sp-8); margin: var(--sp-6) 0; min-width: 0; }
     .rel-h { display: flex; align-items: center; gap: var(--sp-8); font-size: var(--fs-14); }
     .rel-state { padding: 1px var(--sp-8); border-radius: var(--r-8); font-size: var(--fs-11); font-weight: 600; background: var(--chip-blue); color: var(--blue); }
