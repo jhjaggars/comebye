@@ -116,6 +116,7 @@ if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ;
 if want decisionsets; then node decisionsets.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The Pages checks publish with the real CLI, so they need the binary and its state.
 if want pages; then PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
