@@ -69,3 +69,5 @@ gh run list --workflow nightly.yml --limit 1 --json conclusion,databaseId,create
 `tools/ci/releasegate.sh` allows a release when CI is green on the tagged commit (otherwise the release workflow
 tests it itself) and the last nightly is green and under 36 hours old. To release past a red or stale nightly, run
 the Release workflow by hand from the Actions tab with the tag and **force** set; the override is logged on the run.
+
+This line is a probe for the pre-submit path selection and will not be merged.
