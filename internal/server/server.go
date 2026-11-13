@@ -189,6 +189,9 @@ type Config struct {
 
 // Server is the phone app HTTP server.
 type Server struct {
+	// bg counts the queued-prompt senders that run in the background, so a test can wait for them before its
+	// state directory is removed (waitBackground).
+	bg      sync.WaitGroup
 	cfg     Config
 	recall  *archive.Reader
 	client  *herdr.Client
@@ -696,6 +699,10 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 // fullRecords reports whether the caller (a hub reading a peer) asked for
 // herdr's full agent records instead of the browser's slim view.
 func fullRecords(r *http.Request) bool { return r.URL.Query().Get("full") == "1" }
+
+// waitBackground waits for the queued-prompt senders that are running. Tests call it before their temp directory
+// goes, so a sender that settles a prompt late does not write into a directory being removed.
+func (s *Server) waitBackground() { s.bg.Wait() }
 
 // handleVersion returns the app version, which every /api response also
 // carries in X-App-Version.

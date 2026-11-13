@@ -408,7 +408,8 @@ func (s *Server) deliverQueue(agents []herdr.AgentInfo) {
 		}
 		q.sending[it.ID], q.last[it.Agent] = true, now
 		q.mu.Unlock()
-		go s.sendQueued(it, *a)
+		s.bg.Add(1)
+		go func() { defer s.bg.Done(); s.sendQueued(it, *a) }()
 	}
 	q.prune()
 }
@@ -480,7 +481,9 @@ func (s *Server) sendNotice(agents []herdr.AgentInfo, it QueuedPrompt, now time.
 	}
 	s.pq.sending[key], s.pq.last[key] = true, now
 	s.pq.mu.Unlock()
+	s.bg.Add(1)
 	go func() {
+		defer s.bg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		send := s.pq.send
@@ -524,7 +527,9 @@ func (s *Server) sendHeldNotice(agents []herdr.AgentInfo, it QueuedPrompt, now t
 	}
 	s.pq.sending[key], s.pq.last[key] = true, now
 	s.pq.mu.Unlock()
+	s.bg.Add(1)
 	go func() {
+		defer s.bg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		send := s.pq.send

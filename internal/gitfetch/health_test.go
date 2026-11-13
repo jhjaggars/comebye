@@ -93,6 +93,10 @@ func TestFsckFindsMissingObjects(t *testing.T) {
 	if err := h.Fsck(context.Background(), common); err != nil || len(h.List()) != 0 {
 		t.Fatalf("a clean store: %v %+v", err, h.List())
 	}
+	loose, err := os.ReadFile(path) // kept to put back below, as `fetch --refetch` would
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -122,11 +126,13 @@ func TestFsckFindsMissingObjects(t *testing.T) {
 		h.FsckTimeout = 0
 	}
 	// The object comes back (as `fetch --refetch` would bring it): clear.
-	gitDo(t, w.wt1, "add", "--all")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitDo(t, w.wt1, "write-tree")
+	// The same bytes back, so the test does not depend on git rewriting the tree.
+	if err := os.WriteFile(path, loose, 0o444); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.Fsck(context.Background(), common); err != nil {
 		t.Fatal(err)
 	}
