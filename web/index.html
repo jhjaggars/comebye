@@ -1088,6 +1088,10 @@
       background: none; border: 0; border-radius: var(--r-10); color: var(--muted); font-size: var(--fs-22); line-height: 1; cursor: pointer;
     }
     #detail header .more[hidden] { display: none; }
+    /* The chat/raw-terminal switch sits right after the context chip; the 44px hit area overhangs the header's padding like the .more buttons. */
+    #detail header .d-term { margin: -8px -4px; }
+    #detail header .d-term[hidden] { display: none; }
+    #detail header .d-term svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     #detail header .more:focus-visible { outline-offset: 0; }
     .d-menu { position: fixed; z-index: var(--z-menu); left: auto; bottom: auto; right: calc(10px + env(safe-area-inset-right, 0px)); top: calc(58px + env(safe-area-inset-top, 0px)); max-width: 80vw; }
     .d-menu .mark-state { padding: var(--sp-8) var(--sp-14); font-size: var(--fs-13); color: var(--orange); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
@@ -3020,6 +3024,7 @@
         <div class="d-usage" id="d-usage" hidden></div>
       </div>
       <button type="button" class="chip d-ctx" id="d-ctx" hidden></button>
+      <button type="button" class="pgs-ib d-term" id="btn-terminal" aria-label="Show raw terminal" title="Show raw terminal" hidden></button>
       <span class="status" id="d-status"></span>
       <button type="button" class="more" id="d-refresh" aria-label="Refresh this view">&#8635;</button>
       <button type="button" class="more" id="d-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="d-menu">&#8942;</button>
@@ -3038,7 +3043,6 @@
     <main>
       <div id="d-markbar" class="markbar" hidden></div>
       <div id="chat"></div>
-      <button class="btn" id="btn-terminal" style="display:none; margin-bottom:10px;">Show raw terminal</button>
       <button type="button" class="cpb cpb-out" id="btn-copy-screen" data-copy-key="term-screen" aria-label="Copy what the terminal shows" hidden>Copy screen</button>
       <pre id="output" style="display:none"></pre>
       <section id="answer" style="display:none" aria-live="polite"></section>

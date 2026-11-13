@@ -37,16 +37,19 @@ for (const width of [390, 1280]) {
     await page.waitForFunction(() => document.querySelector("#chat")?.innerText.includes("the session is up"), null, { timeout: 10000 });
     if (await vis("#output")) throw new Error("raw output still visible");
     if (!(await vis("#chat"))) throw new Error("chat not visible");
-    const label = await page.locator("#btn-terminal").innerText();
+    const label = await page.locator("#btn-terminal").getAttribute("aria-label");
     if (!/raw terminal/i.test(label)) throw new Error("button label " + label);
     await page.screenshot({ path: `${out}/chatswitch-chat-${width}.png` });
+    const g = await page.evaluate(() => { const b = document.querySelector("#btn-terminal").getBoundingClientRect(), c = document.querySelector("#d-ctx"), h = document.querySelector("#detail header"), hr = h.getBoundingClientRect(); return { w: b.width, h: b.height, inHeader: h.contains(document.querySelector("#btn-terminal")), right: b.right <= hr.right + 1, left: b.left >= 0, ctxHidden: c.hidden, title: document.querySelector("#btn-terminal").title, hdrH: hr.height, scroll: document.documentElement.scrollWidth <= innerWidth }; });
+    if (!g.inHeader || g.w < 44 || g.h < 44 || !g.right || !g.left || !g.scroll) throw new Error("toggle geometry " + JSON.stringify(g));
+    if (g.hdrH > 80) throw new Error("header wrapped: " + g.hdrH);
   });
 
   await check(`a raw terminal chosen by hand sticks until Show chat at ${width}px`, async () => {
     await page.locator("#btn-terminal").click(); // chat -> raw
     await page.waitForFunction(() => document.querySelector("#output")?.innerText.includes("bravo ready"), null, { timeout: 5000 });
     if (await vis("#chat")) throw new Error("chat still visible after Show raw terminal");
-    const label = await page.locator("#btn-terminal").innerText();
+    const label = await page.locator("#btn-terminal").getAttribute("aria-label");
     if (!/show chat/i.test(label)) throw new Error("button label " + label);
     const before = hits;
     await page.waitForTimeout(5500); // past a retry interval and a poll

@@ -9472,11 +9472,19 @@ async function loadChat(reset = true) {
 // One button flips between the views: "Show raw terminal" over a chat, "Show
 // chat" over a raw view chosen by hand. Hidden in the automatic fallback
 // (there is no transcript to go back to).
+const TERM_ICON = {
+  term: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-5 4v-4h-.5A1.5 1.5 0 0 1 4 14.5z"/></svg>',
+};
 function syncTermButton() {
   const b = $("btn-terminal"), chat = state.chat;
-  if (!chat || chat.auto) { b.style.display = "none"; return; }
-  b.textContent = chat.terminal ? "Show chat" : "Show raw terminal";
-  b.style.display = "";
+  if (!chat || chat.auto) { b.hidden = true; return; }
+  const label = chat.terminal ? "Show chat" : "Show raw terminal";
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  const k = chat.terminal ? "chat" : "term";
+  if (b.dataset.icon !== k) { b.innerHTML = TERM_ICON[k]; b.dataset.icon = k; }
+  b.hidden = false;
 }
 
 // markSeen tells the hub the user has the finished agent's latest message on
@@ -10317,7 +10325,7 @@ function resetTerminalView() {
   $("btn-copy-screen").hidden = true;
   copySrc.delete("term-screen");
   $("chat").style.display = "";
-  $("btn-terminal").style.display = "none";
+  $("btn-terminal").hidden = true;
 }
 
 async function refreshOutput(force) {
