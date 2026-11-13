@@ -390,7 +390,18 @@ func (s *Server) fileReportDecisions(e ledger.Entry, text string) {
 			w.Name = a.Name
 		}
 	}
-	for _, it := range reportItems(e, text, w, s.reportPageLinks(e, text)) {
+	pages := s.reportPageLinks(e, text)
+	var ref *TodoPage // the first Page the report names, as the items' page reference
+	if len(pages) > 0 {
+		if id := reportPageRE.FindString(pages[0].URL); id != "" {
+			ref, _ = s.pageFor(id, 0)
+		}
+	}
+	for _, it := range reportItems(e, text, w, pages) {
+		if ref != nil {
+			pg := *ref
+			it.Page = &pg
+		}
 		if _, _, err := s.todos.addReportItem(it); err != nil {
 			log.Printf("todo: report decision of %s: %v", e.ID, err)
 		}
