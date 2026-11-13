@@ -305,8 +305,14 @@ type apiEntry struct {
 	RemovedAt    *time.Time `json:"removed_at"`
 	LostAt       *time.Time `json:"lost_at"`
 	FinalReport  string     `json:"final_report"`
-	Mark         *apiMark   `json:"mark"`
-	Approval     *struct {
+	// Progress is the worker's latest `comebye report --progress` note.
+	Progress *struct {
+		Text  string    `json:"text"`
+		Phase string    `json:"phase"`
+		At    time.Time `json:"at"`
+	} `json:"progress"`
+	Mark     *apiMark `json:"mark"`
+	Approval *struct {
 		By   string `json:"by"`
 		Note string `json:"note"`
 	} `json:"approval"`

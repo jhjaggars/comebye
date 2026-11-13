@@ -236,6 +236,58 @@ func TestAgentsCommand(t *testing.T) {
 	}
 }
 
+func TestAgentsLong(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	// Now is 2026-10-22T09:00Z. w2 has run 5h and noted 3h ago; w3 is idle;
+	// kube/w3 has run 30m only; kube/w5 has run 4h and never noted.
+	f.answers["GET /api/ledger"] = answer{body: `{"entries":[
+ {"id":"a","agent_id":"laharl/w2:p1","agent_name":"home","branch":"feat/a","status":"running","created_at":"2026-10-22T04:00:00Z","progress":{"text":"running the race tests","at":"2026-10-22T06:00:00Z"}},
+ {"id":"b","agent_id":"laharl/w3:p1","agent_name":"fix-a","branch":"fix/a","status":"running","created_at":"2026-10-22T01:00:00Z"},
+ {"id":"c","agent_id":"kube/w3:p1","agent_name":"fix-a","branch":"fix/c","status":"running","created_at":"2026-10-22T08:30:00Z"},
+ {"id":"d","agent_id":"kube/w5:p2","agent_name":"solo","branch":"feat/d","status":"running","created_at":"2026-10-22T05:00:00Z"}]}`}
+	f.answers["GET /api/agents"] = answer{body: strings.Replace(agentsJSON, `"id":"kube/w5:p2","host":"kube","pane_id":"w5:p2","name":"solo","agent":"codex","agent_status":"idle"`, `"id":"kube/w5:p2","host":"kube","pane_id":"w5:p2","name":"solo","agent":"codex","agent_status":"working"`, 1)}
+	if code := run(e, "agents", "--long"); code != 0 {
+		t.Fatalf("exit %d %s", code, errb)
+	}
+	s := out.String()
+	for _, want := range []string{"laharl/w2:p1", "running 5h", "note 3h ago: running the race tests"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("--long lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "kube/w3:p1") || strings.Contains(s, "laharl/w3:p1") {
+		t.Errorf("--long lists a short or idle worker:\n%s", s)
+	}
+	out.Reset()
+	run(e, "agents", "--long", "--over", "20m", "--json")
+	var v struct {
+		Agents []agentRow `json:"agents"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &v); err != nil || len(v.Agents) != 2 {
+		t.Fatalf("json: %v %s", err, out)
+	}
+	for _, r := range v.Agents {
+		if r.ID == "laharl/w2:p1" && (r.Note != "running the race tests" || r.NoteAgeSec != 3*3600 || r.RunningSec != 5*3600 || r.NoteAt == nil) {
+			t.Errorf("w2 row = %+v", r)
+		}
+		if r.ID == "kube/w5:p2" && (r.Note != "" || r.NoteAt != nil || r.RunningSec != 4*3600) {
+			t.Errorf("w5 row = %+v", r)
+		}
+	}
+	if !strings.Contains(s, "kube/w5:p2") || !strings.Contains(s, "no progress note yet") {
+		t.Errorf("a long worker without a note is listed as such:\n%s", s)
+	}
+	out.Reset()
+	if code := run(e, "agents", "--long", "--over", "bogus"); code == 0 {
+		t.Error("a bad --over was accepted")
+	}
+	out.Reset()
+	run(e, "agents", "--long", "--over", "99h")
+	if !strings.Contains(out.String(), "no workers running longer than 99h") {
+		t.Errorf("empty = %q", out)
+	}
+}
+
 func TestLedgerAndRead(t *testing.T) {
 	f, e, out, errb := newFake(t)
 	if code := run(e, "ledger"); code != 0 {

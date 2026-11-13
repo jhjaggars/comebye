@@ -1020,7 +1020,7 @@ function agentRow(a, worker) {
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
           isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
-        ${subLine(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgLabel(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
+        ${subLine(a)}${noteHtml(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgLabel(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
       </div>
       <span class="status ${esc(agentStatusText(a))}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
         bgRunning(a) ? (bgSinceMs(a) ? `<br><span class="ago">${fmtAgo(bgSinceMs(a))}</span>` : "")
@@ -1114,7 +1114,7 @@ async function loadLedger() {
   }
   peersHostsChanged();
   renderList();
-  if (state.selected) renderDetailMenu();
+  if (state.selected) { renderDetailMenu(); renderDetailNote(); }
   if (launch.open) renderLaunchForm();
 }
 
@@ -1216,6 +1216,35 @@ function landLabel(e, a) {
     return { cls: "landing", text: q && q.turn && t !== "not pushed yet" && t !== "not on main yet" ? now : "landing: " + t, title: `${approved}.${turnNote}${why}${checked}` };
   }
   return { cls: "landing", text: now, title: approved + "." + turnNote };
+}
+
+/* ---------- progress notes ---------- */
+//
+// A handoff worker's latest `comebye report --progress` note shows under its
+// name (list, opened agent, Status) with its age. It fades to muted when it is
+// over 2 h old while the agent is still working. A working handoff worker that
+// has run over 90 min with no note in the last 90 min gets a "no update" hint.
+const NOTE_OLD_MS = 2 * 3600 * 1000, NOTE_QUIET_MS = 90 * 60 * 1000;
+
+function progressNote(a) {
+  const e = a && ledger.on === true ? ledgerEntry(a) : null;
+  if (!e || (e.status !== "running" && e.status !== "landing")) return null;
+  const working = a.agent_status === "working";
+  const p = e.progress && e.progress.text ? e.progress : null;
+  const at = p ? Date.parse(p.at) : NaN;
+  const age = Number.isNaN(at) ? 0 : Math.max(0, Date.now() - at);
+  const since = Date.parse(e.created_at);
+  const last = p && !Number.isNaN(at) ? at : since;
+  const noUpdate = e.status === "running" && working && !Number.isNaN(last) && Date.now() - last > NOTE_QUIET_MS && Date.now() - since > NOTE_QUIET_MS;
+  if (!p && !noUpdate) return null;
+  return { text: p ? p.text.replace(/\s+/g, " ") : "", at, age, old: !!p && working && age > NOTE_OLD_MS, noUpdate };
+}
+function noteHtml(a) {
+  const n = progressNote(a);
+  if (!n) return "";
+  const hint = n.noUpdate ? `<span class="lg-chip nou" title="No progress note for over 90 minutes while it works. The coordinator's briefing covers it.">no update</span>` : "";
+  if (!n.text) return `<div class="pnote">${hint}</div>`;
+  return `<div class="pnote${n.old ? " old" : ""}" title="${escAttr(n.text)}"><span class="pn-t">${esc(n.text)}</span><span class="pn-a">${esc(fmtAgo(n.at))} ago</span>${hint}</div>`;
 }
 
 function ledgerChip(a) {
@@ -7412,7 +7441,7 @@ function statusHTML(desktop) {
       `<div class="st-row"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="st-n">${esc(t.question)}</span>${desktop ? `<span class="st-r"><button type="button" class="st-link" data-go="todo">To do</button></span>` : ""}</div>`).join("");
     if (p.progress.length) h += `<div class="st-g prog">In progress</div>` + p.progress.map(({ e, ag }) => {
       const at = Date.parse(e.created_at);
-      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip cp" role="button" tabindex="0" aria-label="Copy branch" data-copy="${escAttr(e.branch)}">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : quietMs(ag) ? "running · " + quietText(ag) : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${usageChipHtml(e.id, true)}${open(ag)}</span></div>`;
+      return `<div class="st-row"><span class="st-n">${esc(statusWho(e))}</span>${e.branch ? `<span class="wt-chip cp" role="button" tabindex="0" aria-label="Copy branch" data-copy="${escAttr(e.branch)}">⑂ ${esc(e.branch)}</span>` : ""}<span class="st-m">${e.status === "landing" ? esc((landLabel(e, ag) || { text: "landing" }).text) : bgRunning(ag) ? "waiting on a background task" : quietMs(ag) ? "running · " + quietText(ag) : "running"}${Number.isNaN(at) ? "" : " " + esc(fmtAgo(at))}</span><span class="st-r">${usageChipHtml(e.id, true)}${open(ag)}</span>${noteHtml(ag).replace("pnote", "pnote st-note")}</div>`;
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
@@ -9277,6 +9306,13 @@ function closeDetail() {
   maybeReload(); // a deploy noticed while on the detail view
 }
 
+function renderDetailNote() {
+  const el = $("d-note"), a = agentById(state.selected);
+  if (!el) return;
+  el.innerHTML = a ? noteHtml(a) : "";
+  el.hidden = !el.innerHTML;
+}
+
 function renderDetail() {
   const a = agentById(state.selected);
   if (!a) {
@@ -9310,6 +9346,7 @@ function renderDetail() {
   why.textContent = wt;
   why.title = quietMs(a) && !whyBlocked(a) ? quietTitle(a) : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? bgTitle(a) : wt;
   why.hidden = !wt;
+  renderDetailNote();
   updateAnswerCard();
   updateSendButton();
   renderActivity();

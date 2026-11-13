@@ -56,7 +56,7 @@ var commands []command
 
 func init() {
 	commands = []command{
-		{"agents", "[--host H] [--json]", "every agent on every host: project, branch, status, role", cmdAgents},
+		{"agents", "[--host H] [--long [--over 2h]] [--json]", "every agent on every host: project, branch, status, role; --long lists only workers running longer than --over, with their latest progress note and its age", cmdAgents},
 		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
 		{"read", "AGENT [--lines N] [--report [--summary]] [--json]", "an agent's recent messages, or its final report (--summary: just its Summary and Decisions for the user)", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
@@ -321,6 +321,12 @@ type agentRow struct {
 	// QuietSince is set on a working worker whose session file has not been
 	// written since then (the hub's quiet mark).
 	QuietSince *time.Time `json:"quiet_since,omitempty"`
+	// RunningSec, Note, NoteAt and NoteAgeSec are filled by --long: how long
+	// the handoff has run, and its latest progress note with its age.
+	RunningSec int64      `json:"running_sec,omitempty"`
+	Note       string     `json:"note,omitempty"`
+	NoteAt     *time.Time `json:"note_at,omitempty"`
+	NoteAgeSec int64      `json:"note_age_sec,omitempty"`
 }
 
 func baseName(p string) string {
@@ -349,12 +355,18 @@ func cmdAgents(e *Env, args []string) error {
 	fs := flag.NewFlagSet("agents", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	hostF := fs.String("host", "", "only this host's agents")
+	long := fs.Bool("long", false, "only workers that have run longer than --over, with their latest progress note and its age")
+	overF := fs.String("over", "2h", "with --long, how long a worker must have run (a duration such as 90m or 2h)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) > 0 {
 		return usageErr("unexpected argument %q", pos[0])
+	}
+	over, derr := time.ParseDuration(*overF)
+	if derr != nil || over < 0 {
+		return usageErr("--over wants a duration such as 90m or 2h, not %q", *overF)
 	}
 	c, err := newClient(e)
 	if err != nil {
@@ -377,6 +389,7 @@ func cmdAgents(e *Env, args []string) error {
 		roles = lg.Roles
 	}
 	var rows []agentRow
+	now := e.Now()
 	for _, a := range ar.Agents {
 		if *hostF != "" && a.Host != *hostF {
 			continue
@@ -406,6 +419,18 @@ func cmdAgents(e *Env, args []string) error {
 			if r.Branch == "" {
 				r.Branch = en.Branch
 			}
+			if *long {
+				if a.Status != "working" || en.CreatedAt.IsZero() || now.Sub(en.CreatedAt) < over {
+					continue
+				}
+				r.RunningSec = int64(now.Sub(en.CreatedAt).Seconds())
+				if en.Progress != nil && en.Progress.Text != "" {
+					at := en.Progress.At
+					r.Note, r.NoteAt, r.NoteAgeSec = en.Progress.Text, &at, int64(now.Sub(at).Seconds())
+				}
+			}
+		} else if *long {
+			continue
 		}
 		switch {
 		case roles[a.ID].Role == "coordinator" && (roles[a.ID].Name == "" || a.Name == "" || roles[a.ID].Name == a.Name):
@@ -436,6 +461,21 @@ func cmdAgents(e *Env, args []string) error {
 			rows = []agentRow{}
 		}
 		return jsonOut(e, map[string]any{"agents": rows, "hosts": ar.Hosts})
+	}
+	if *long {
+		if len(rows) == 0 {
+			fmt.Fprintf(e.Stdout, "(no workers running longer than %s)\n", *overF)
+			return nil
+		}
+		for _, r := range rows {
+			fmt.Fprintf(e.Stdout, "%s  %s  running %s  %s\n", r.ID, dash(r.Name), shortDur(time.Duration(r.RunningSec)*time.Second), dash(r.Branch))
+			if r.Note == "" {
+				fmt.Fprintln(e.Stdout, "  no progress note yet")
+			} else {
+				fmt.Fprintf(e.Stdout, "  note %s ago: %s\n", shortDur(time.Duration(r.NoteAgeSec)*time.Second), r.Note)
+			}
+		}
+		return nil
 	}
 	tw := tabwriter.NewWriter(e.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "AGENT\tNAME\tKIND\tMODEL\tSTATUS\tPROJECT\tBRANCH\tROLE")
@@ -490,6 +530,19 @@ func cmdAgents(e *Env, args []string) error {
 		fmt.Fprintln(e.Stdout, "(no agents)")
 	}
 	return nil
+}
+
+// shortDur renders a duration compactly: 45s, 12m, 3h, 2d.
+func shortDur(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
 // versionWarnings lists one line per reachable peer whose version differs
