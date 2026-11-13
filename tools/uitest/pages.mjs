@@ -798,6 +798,53 @@ await check("previews: a card shows its page's skeleton, escaped, per version, f
   await ph.browser.close();
 });
 
+await check("live previews: off by default and never on a phone; on, at most 4 sandboxed inert frames on the cards in view; off drops them", async () => {
+  for (let i = 0; i < 6; i++) publish(["-", "--key", "lv" + i, "--title", "Live probe " + i], `<!doctype html><title>Live probe ${i}</title><body style="background:#fed"><h1>Live probe ${i}</h1><p>The live preview shows this very page, scaled down.</p>`, "w1:p1");
+  const frames = (pg) => pg.evaluate(() => [...document.querySelectorAll("#pgs-items iframe.pgs-live")].map((f) => ({ sb: f.getAttribute("sandbox"), rp: f.getAttribute("referrerpolicy"), inert: f.hasAttribute("inert"), src: f.getAttribute("src"), pe: getComputedStyle(f).pointerEvents })));
+  const poll = async (pg, fn, what) => { for (let i = 0; i < 80; i++) { if (await pg.evaluate(fn)) return; await pg.waitForTimeout(100); } throw new Error("timed out: " + what); };
+  const d = await launch({ width: 1280, height: 900, dark, bypassCSP: false });
+  try {
+    await d.page.goto(base + "/#/pages", { waitUntil: "load" });
+    await d.page.waitForSelector(".pgs-card", { timeout: 8000 });
+    await d.page.waitForTimeout(500);
+    if ((await frames(d.page)).length) throw new Error("frames while the setting is off");
+    if ((await d.page.locator("#pgs-live").getAttribute("aria-pressed")) !== "false") throw new Error("pressed by default");
+    await d.page.locator("#pgs-live").click();
+    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length > 0, "frames after switching on");
+    await d.page.waitForTimeout(800);
+    const on = await frames(d.page);
+    const cards = await d.page.locator(".pgs-card").count();
+    if (cards < 5 || on.length !== 4) throw new Error(`${on.length} frames for ${cards} cards, want exactly 4`);
+    for (const f of on) {
+      if (f.sb !== "allow-scripts allow-popups allow-popups-to-escape-sandbox" || f.rp !== "no-referrer" || !f.inert || f.pe !== "none" || !/\/p\/pg_[0-9a-f]{10}\/\d+$/.test(f.src)) throw new Error("frame " + JSON.stringify(f));
+    }
+    const top = await d.page.evaluate(() => [...document.querySelectorAll("#pgs-items .pgs-card")].slice(0, 4).every((c) => c.querySelector("iframe.pgs-live")));
+    if (!top) throw new Error("the frames are not on the first four cards");
+    // The frame draws the page: its colour shows through, and the card stays the size of a card.
+    const box = await d.page.locator(".pgs-live").first().boundingBox();
+    const tb = await d.page.locator(".pgs-thumb").first().boundingBox();
+    if (!box || Math.abs(box.width - tb.width) > 2 || box.height > tb.height + 2) throw new Error("frame not scaled to the card " + JSON.stringify([box, tb]));
+    await d.page.screenshot({ path: `${out}/pages-live-1280.png` });
+    // The choice is kept on this device; scrolling a card away from view frees its frame.
+    await d.page.reload({ waitUntil: "load" });
+    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length > 0, "frames after a reload");
+    if ((await frames(d.page)).length > 4) throw new Error("more than 4 after reload");
+    await d.page.locator("#pgs-live").click();
+    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length === 0, "frames dropped when switched off");
+    await d.page.locator("#pgs-live").click();
+    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length > 0, "frames back on");
+    // A phone-sized window with the setting on: no button, no frames.
+    await d.page.setViewportSize({ width: 390, height: 844 });
+    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length === 0, "frames dropped on a phone width");
+    if (await d.page.locator("#pgs-live").isVisible()) throw new Error("the Live button shows on a phone");
+    await d.page.locator("#pgs-live").evaluate((b) => b.click()); // even a stray click
+    await d.page.waitForTimeout(400);
+    if ((await frames(d.page)).length) throw new Error("frames on a phone");
+    await d.page.screenshot({ path: `${out}/pages-live-390.png` });
+    await d.page.evaluate(() => localStorage.removeItem("comebye.pgs.live"));
+  } finally { await d.browser.close(); }
+});
+
 await check("links: a to-do link to a page opens it in the app; delete asks and removes", async () => {
   // a to-do item whose link is the page's URL
   const link = base + "/p/" + pages.secret;

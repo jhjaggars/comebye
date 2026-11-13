@@ -6009,7 +6009,8 @@ function initRecall() {
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
 const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, focus: false, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
   view: lsGet("comebye.pgs.view") === "list" || (lsGet("comebye.pgs.view") !== "grid" && matchMedia("(max-width: 699px)").matches) ? "list" : "grid", sort: ["updated", "opened", "title"].includes(lsGet("comebye.pgs.sort")) ? lsGet("comebye.pgs.sort") : "updated",
-  chip: "all", opened: null, prev: new Map(), prevQ: [], prevBusy: 0, io: null, prevRaf: 0 };
+  chip: "all", opened: null, prev: new Map(), prevQ: [], prevBusy: 0, io: null, prevRaf: 0,
+  live: lsGet("comebye.pgs.live") === "1", lio: null, liveSeen: [] };
 
 // What the user has opened, per device: id -> { v: newest version seen, at: ms }.
 // The hub never learns it. The first time Pages loads, every page already there
@@ -6057,10 +6058,19 @@ function pgsSkelHtml(sk) {
   if (sk === "none" || (!sk.lead && !(sk.heads || []).length && !(sk.flags || []).length)) return `<span class="pgs-nopv">No preview</span>`;
   return `<span class="pgs-sk">${sk.lead ? `<span class="pgs-lead">${esc(sk.lead)}</span>` : ""}${(sk.heads || []).length ? `<span class="pgs-heads">${sk.heads.slice(0, 3).map((h) => `<span>${esc(h)}</span>`).join("")}</span>` : ""}${(sk.flags || []).length ? `<span class="pgs-flags">${sk.flags.map((f) => `<span>${esc(f)}</span>`).join("")}</span>` : ""}</span>`;
 }
+// The card's html holds only an empty thumb: pgsFill puts the skeleton in after a draw. A skeleton arriving then never
+// redraws the list, so the live frames of the other cards are not reloaded.
 function pgsThumb(p) {
-  const key = p.id + "@" + p.version, sk = pgs.prev.get(key);
-  const empty = !sk || sk === "loading" || sk === "none";
-  return `<span class="pgs-thumb${empty ? " empty" : ""}" data-prev="${esc(key)}" aria-hidden="true">${pgsSkelHtml(sk)}</span>`;
+  return `<span class="pgs-thumb empty" data-prev="${esc(p.id + "@" + p.version)}" aria-hidden="true"><span class="pgs-skw"></span></span>`;
+}
+function pgsFill() {
+  for (const el of document.querySelectorAll("#pgs-items .pgs-thumb")) {
+    const sk = pgs.prev.get(el.dataset.prev);
+    const empty = !sk || sk === "loading" || sk === "none";
+    el.classList.toggle("empty", empty);
+    const h = pgsSkelHtml(sk);
+    if (el._sk !== h) { el._sk = h; el.firstElementChild.innerHTML = h; }
+  }
 }
 function pgsWantPreview(key) {
   if (pgs.prev.has(key)) return;
@@ -6077,7 +6087,7 @@ function pgsPump() {
       .catch(() => pgs.prev.set(key, "none"))
       .finally(() => {
         pgs.prevBusy--;
-        if (!pgs.prevRaf) pgs.prevRaf = requestAnimationFrame(() => { pgs.prevRaf = 0; if (pgs.route) renderPages(); });
+        if (!pgs.prevRaf) pgs.prevRaf = requestAnimationFrame(() => { pgs.prevRaf = 0; if (pgs.route) pgsFill(); });
         pgsPump();
       });
   }
@@ -6092,6 +6102,71 @@ function pgsWatch() {
     }, { root: $("pgs-list-pane"), rootMargin: "300px 0px" });
   }
   thumbs.forEach((el) => { if (!pgs.prev.has(el.dataset.prev)) pgs.io.observe(el); });
+}
+
+// Live previews (opt in, desktop only): the card's thumb shows the page itself, in the viewer's own sandbox and referrer
+// policy, scaled down and inert. A frame exists only for a thumb on screen, at most PGS_LIVE_MAX at once (the topmost ones;
+// the cards below show their skeleton), and a phone-sized or touch screen never gets one.
+const PGS_LIVE_MAX = 4;
+const pgsLiveOk = () => pgs.live && matchMedia("(min-width: 700px) and (hover: hover)").matches;
+function pgsLiveSrc(el) {
+  const [id, v] = el.dataset.prev.split("@");
+  return pgs.pagesUrl + "/p/" + id + "/" + v;
+}
+function pgsLiveDrop(el) {
+  const f = el.querySelector(".pgs-live");
+  if (f) f.remove();
+}
+function pgsLiveFit() {
+  for (const f of document.querySelectorAll("#pgs-items .pgs-live")) f.style.transform = `scale(${f.parentElement.clientWidth / 1280})`;
+}
+function pgsLiveAdd(el) {
+  if (el.querySelector(".pgs-live") || !el.isConnected) return;
+  const f = document.createElement("iframe");
+  f.className = "pgs-live";
+  f.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.setAttribute("loading", "lazy");
+  f.setAttribute("tabindex", "-1");
+  f.setAttribute("aria-hidden", "true");
+  f.setAttribute("inert", "");
+  f.title = "";
+  f.addEventListener("load", () => { const m = pageThemeMessage(); if (m && f.contentWindow) f.contentWindow.postMessage(m, "*"); });
+  f.src = pgsLiveSrc(el);
+  el.appendChild(f);
+  f.style.transform = `scale(${el.clientWidth / 1280})`;
+}
+// The thumbs on screen, in page order: the first PGS_LIVE_MAX of them have a frame, the rest show their skeleton.
+function pgsLiveSettle() {
+  const seen = [...pgs.liveSeen].filter((el) => el.isConnected).sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  seen.forEach((el, i) => { if (i < PGS_LIVE_MAX) pgsLiveAdd(el); else pgsLiveDrop(el); });
+  for (const f of document.querySelectorAll("#pgs-items .pgs-live")) if (!seen.slice(0, PGS_LIVE_MAX).includes(f.parentElement)) f.remove();
+}
+// pgsLive: follow the setting and the screen. Called after every draw.
+function pgsLive() {
+  const on = pgsLiveOk();
+  const b = $("pgs-live");
+  if (b) b.setAttribute("aria-pressed", String(pgs.live));
+  if (!on) {
+    if (pgs.lio) { pgs.lio.disconnect(); pgs.lio = null; }
+    $("pgs-items")._lioOn = false;
+    for (const f of document.querySelectorAll("#pgs-items .pgs-live")) f.remove();
+    pgs.liveSeen = [];
+    return;
+  }
+  if (typeof IntersectionObserver !== "function") return;
+  const items = $("pgs-items");
+  if (pgs.lio && items._lioHtml === items._html && items._lioOn) return; // the same thumbs, already watched
+  if (!pgs.lio) {
+    pgs.lio = new IntersectionObserver((es) => {
+      for (const e of es) { pgs.liveSeen = pgs.liveSeen.filter((x) => x !== e.target); if (e.isIntersecting) pgs.liveSeen.push(e.target); }
+      pgsLiveSettle();
+    }, { root: $("pgs-list-pane"), threshold: 0.2 });
+  }
+  items._lioHtml = items._html; items._lioOn = true;
+  pgs.liveSeen = [];
+  pgs.lio.disconnect(); // observe again: a redraw made new thumbs, and observing reports the current state
+  for (const el of document.querySelectorAll("#pgs-items .pgs-thumb")) pgs.lio.observe(el);
 }
 
 function parsePagesRoute() {
@@ -6244,7 +6319,9 @@ function renderPages() {
     items._html = html; items.innerHTML = html;
     if (fid) { const again = items.querySelector(fcls + '[data-id="' + fid + '"]'); if (again) again.focus({ preventScroll: true }); }
   }
+  pgsFill();
   pgsWatch();
+  pgsLive();
   renderPageView();
 }
 
@@ -6417,9 +6494,9 @@ function pageThemeMessage() {
 }
 
 function sendPageTheme() {
-  const fr = document.querySelector("#pgs-view iframe.pgs-frame");
-  const m = fr && fr.contentWindow && pageThemeMessage();
-  if (m) fr.contentWindow.postMessage(m, "*");
+  const m = pageThemeMessage();
+  if (!m) return;
+  for (const fr of document.querySelectorAll("#pgs-view iframe.pgs-frame, #pgs-items iframe.pgs-live")) if (fr.contentWindow) fr.contentWindow.postMessage(m, "*");
 }
 
 // Every theme change (picker, preview, the OS scheme under System) sets data-theme.
@@ -6613,6 +6690,8 @@ function initPages() {
     if (!b) return;
     pgs.view = b.dataset.view; lsSet("comebye.pgs.view", pgs.view); renderPages();
   });
+  $("pgs-live").addEventListener("click", () => { pgs.live = !pgs.live; lsSet("comebye.pgs.live", pgs.live ? "1" : "0"); pgsLive(); });
+  window.addEventListener("resize", () => { if (pgs.route) { pgsLive(); pgsLiveFit(); } });
   $("pgs-chips").addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-chip]");
     if (!b) return;
