@@ -81,6 +81,10 @@ type PageVersion struct {
 	// hub saw the pane at the time; empty for the user and for panes whose
 	// session herdr does not report.
 	Session *PageSession `json:"session,omitempty"`
+	// Thumbs names the gallery thumbnails kept for this version ("light",
+	// "dark"); none for a version published without a Chrome to render them.
+	Thumbs    []string `json:"thumbs,omitempty"`
+	ThumbSize int64    `json:"thumb_size,omitempty"`
 }
 
 // PageSession names a session as the transcript index does.
@@ -259,7 +263,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 	var total int64
 	for _, p := range st.data.Pages {
 		for _, v := range p.History {
-			total += v.Size
+			total += v.Size + v.ThumbSize
 		}
 	}
 	var drop []PageVersion
@@ -270,7 +274,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 		}
 	}
 	for _, v := range drop {
-		total -= v.Size
+		total -= v.Size + v.ThumbSize
 	}
 	if total+int64(len(in.Body)) > st.quota {
 		return Page{}, false, errPageQuota
@@ -325,6 +329,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 		for _, v := range drop {
 			_ = os.Remove(st.bodyPath(p.ID, v.N, v.Kind))
 			_ = os.Remove(st.previewPath(p.ID, v.N))
+			st.dropThumbs(p.ID, v.N)
 		}
 	}
 	return p, created, nil
@@ -462,6 +467,8 @@ func (s *Server) pageRoutes() {
 	s.mux.HandleFunc("GET /api/pages", s.authWorker(s.handlePageList))
 	s.mux.HandleFunc("GET /api/pages/{id}", s.authWorker(s.handlePageGet))
 	s.mux.HandleFunc("GET /api/pages/{id}/preview", s.authWorker(s.handlePagePreview))
+	s.mux.HandleFunc("PUT /api/pages/{id}/thumbs", s.authWorker(s.handlePageThumbsPut))
+	s.mux.HandleFunc("GET /api/pages/{id}/thumb", s.authWorker(s.handlePageThumb))
 	s.mux.HandleFunc("DELETE /api/pages/{id}", s.authWorker(s.handlePageDelete))
 	s.mux.HandleFunc("POST /api/pages/{id}/comments", s.auth(s.handlePageComments))
 	s.mux.HandleFunc("GET /api/pages/{id}/comments", s.auth(s.handlePageCommentsList))

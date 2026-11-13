@@ -247,6 +247,12 @@ stderr for sideways scroll and clipped text. These are warnings, the publish
 has already gone through. Fix them and publish a new version. With no Chrome
 the check is skipped silently; `COMEBYE_NO_LAYOUT_CHECK=1` turns it off.
 
+The same Chrome takes the gallery's thumbnail of an HTML page (one light, one
+dark, rendered at 1280 px with your page's own `prefers-color-scheme` rules) and
+sends it with the version. A page that looks right in both schemes gets a good
+card; with no Chrome the card shows a text skeleton instead.
+`COMEBYE_NO_THUMBNAILS=1` turns it off.
+
 ## Comments from the user
 
 The user can select text in your page in the app and comment on it. You then

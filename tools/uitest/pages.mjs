@@ -25,8 +25,8 @@ const results = [];
 const log = [];
 
 // The CLI as a pi worker has it: nothing but PATH, HOME and where the hub is.
-function publish(args, input, pane = "w2:p1") {
-  const env = { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: pane };
+function publish(args, input, pane = "w2:p1", more = {}) {
+  const env = { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: pane, ...more };
   return execFileSync(bin, ["publish", ...args], { env, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 const idOf = (link) => link.match(/pg_[0-9a-f]{10}/)[0];
@@ -772,7 +772,7 @@ await check("previews: a card shows its page's skeleton, escaped, per version, f
   await card().locator(".pgs-lead").waitFor({ timeout: 8000 });
   const lead = await card().locator(".pgs-lead").innerText();
   if (!lead.includes("<img src=x onerror=window.__pv=1>")) throw new Error("the page's text is not shown as text: " + lead);
-  if ((await card().locator(".pgs-thumb img").count()) || (await page.evaluate(() => window.__pv))) throw new Error("page text became markup");
+  if ((await card().locator(".pgs-thumb .pgs-sk img").count()) || (await page.evaluate(() => window.__pv))) throw new Error("page text became markup");
   const heads = await card().locator(".pgs-heads span").allInnerTexts();
   const flags = await card().locator(".pgs-flags span").allInnerTexts();
   if (heads.join("|") !== "Heading one|Heading two" || flags.join("|") !== "table") throw new Error("skeleton " + heads + " / " + flags);
@@ -798,51 +798,54 @@ await check("previews: a card shows its page's skeleton, escaped, per version, f
   await ph.browser.close();
 });
 
-await check("live previews: off by default and never on a phone; on, at most 4 sandboxed inert frames on the cards in view; off drops them", async () => {
-  for (let i = 0; i < 6; i++) publish(["-", "--key", "lv" + i, "--title", "Live probe " + i], `<!doctype html><title>Live probe ${i}</title><body style="background:#fed"><h1>Live probe ${i}</h1><p>The live preview shows this very page, scaled down.</p>`, "w1:p1");
-  const frames = (pg) => pg.evaluate(() => [...document.querySelectorAll("#pgs-items iframe.pgs-live")].map((f) => ({ sb: f.getAttribute("sandbox"), rp: f.getAttribute("referrerpolicy"), inert: f.hasAttribute("inert"), src: f.getAttribute("src"), pe: getComputedStyle(f).pointerEvents })));
-  const poll = async (pg, fn, what) => { for (let i = 0; i < 80; i++) { if (await pg.evaluate(fn)) return; await pg.waitForTimeout(100); } throw new Error("timed out: " + what); };
-  const d = await launch({ width: 1280, height: 900, dark, bypassCSP: false });
-  try {
-    await d.page.goto(base + "/#/pages", { waitUntil: "load" });
-    await d.page.waitForSelector(".pgs-card", { timeout: 8000 });
-    await d.page.waitForTimeout(500);
-    if ((await frames(d.page)).length) throw new Error("frames while the setting is off");
-    if ((await d.page.locator("#pgs-live").getAttribute("aria-pressed")) !== "false") throw new Error("pressed by default");
-    await d.page.locator("#pgs-live").click();
-    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length > 0, "frames after switching on");
-    await d.page.waitForTimeout(800);
-    const on = await frames(d.page);
-    const cards = await d.page.locator(".pgs-card").count();
-    if (cards < 5 || on.length !== 4) throw new Error(`${on.length} frames for ${cards} cards, want exactly 4`);
-    for (const f of on) {
-      if (f.sb !== "allow-scripts allow-popups allow-popups-to-escape-sandbox" || f.rp !== "no-referrer" || !f.inert || f.pe !== "none" || !/\/p\/pg_[0-9a-f]{10}\/\d+$/.test(f.src)) throw new Error("frame " + JSON.stringify(f));
-    }
-    const top = await d.page.evaluate(() => [...document.querySelectorAll("#pgs-items .pgs-card")].slice(0, 4).every((c) => c.querySelector("iframe.pgs-live")));
-    if (!top) throw new Error("the frames are not on the first four cards");
-    // The frame draws the page: its colour shows through, and the card stays the size of a card.
-    const box = await d.page.locator(".pgs-live").first().boundingBox();
-    const tb = await d.page.locator(".pgs-thumb").first().boundingBox();
-    if (!box || Math.abs(box.width - tb.width) > 2 || box.height > tb.height + 2) throw new Error("frame not scaled to the card " + JSON.stringify([box, tb]));
-    await d.page.screenshot({ path: `${out}/pages-live-1280.png` });
-    // The choice is kept on this device; scrolling a card away from view frees its frame.
-    await d.page.reload({ waitUntil: "load" });
-    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length > 0, "frames after a reload");
-    if ((await frames(d.page)).length > 4) throw new Error("more than 4 after reload");
-    await d.page.locator("#pgs-live").click();
-    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length === 0, "frames dropped when switched off");
-    await d.page.locator("#pgs-live").click();
-    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length > 0, "frames back on");
-    // A phone-sized window with the setting on: no button, no frames.
-    await d.page.setViewportSize({ width: 390, height: 844 });
-    await poll(d.page, () => document.querySelectorAll("#pgs-items iframe.pgs-live").length === 0, "frames dropped on a phone width");
-    if (await d.page.locator("#pgs-live").isVisible()) throw new Error("the Live button shows on a phone");
-    await d.page.locator("#pgs-live").evaluate((b) => b.click()); // even a stray click
-    await d.page.waitForTimeout(400);
-    if ((await frames(d.page)).length) throw new Error("frames on a phone");
-    await d.page.screenshot({ path: `${out}/pages-live-390.png` });
-    await d.page.evaluate(() => localStorage.removeItem("comebye.pgs.live"));
-  } finally { await d.browser.close(); }
+await check("thumbnails: Chrome's pictures of new pages, for the current theme; the skeleton for a page without one", async () => {
+  const body = (n) => `<!doctype html><title>Thumb probe ${n}</title><style>body{background:#ffeedd;color:#222;font:40px system-ui;margin:40px}@media(prefers-color-scheme:dark){body{background:#101820;color:#eee}}</style><h1>Thumb probe ${n}</h1><p>A picture of this page is the card.</p>`;
+  const withPic = idOf(publish(["-", "--key", "tp-pic", "--title", "Thumb probe pic"], body("pic"), "w1:p1"));
+  const noPic = idOf(publish(["-", "--key", "tp-none", "--title", "Thumb probe none"], body("none"), "w1:p1", { COMEBYE_NO_THUMBNAILS: "1" }));
+  const info = async (id) => (await (await fetch(base + "/api/pages/" + id)).json()).page;
+  const th = (await info(withPic)).versions.at(-1).thumbs;
+  if (!th || th.join() !== "light,dark") throw new Error("the hub has no thumbnails for a page published with Chrome: " + JSON.stringify(th));
+  if ((await info(noPic)).versions.at(-1).thumbs) throw new Error("thumbnails for a page published without");
+  for (const sc of ["light", "dark"]) {
+    const r = await fetch(`${base}/api/pages/${withPic}/thumb?v=1&scheme=${sc}`);
+    const b = Buffer.from(await r.arrayBuffer());
+    if (r.headers.get("content-type") !== "image/png" || r.headers.get("x-content-type-options") !== "nosniff" || b.length > 40000 || b.subarray(1, 4).toString() !== "PNG") throw new Error(`thumb ${sc}: ${r.headers.get("content-type")} ${b.length} bytes`);
+  }
+  const loaded = (pg, id) => pg.evaluate(async (id) => {
+    const card = document.querySelector(`.pgs-card[data-id="${id}"]`);
+    const img = card && card.querySelector("img.pgs-img");
+    if (!img) return null;
+    for (let i = 0; i < 60 && !(img.complete && img.naturalWidth); i++) await new Promise((r) => setTimeout(r, 100));
+    const c = document.createElement("canvas"); c.width = 4; c.height = 4;
+    const x = c.getContext("2d"); x.drawImage(img, 300, 200, 4, 4, 0, 0, 4, 4);
+    const d = x.getImageData(0, 0, 1, 1).data;
+    return { src: img.getAttribute("src"), w: img.naturalWidth, h: img.naturalHeight, lum: (d[0] + d[1] + d[2]) / 3, tag: img.tagName, iframes: document.querySelectorAll("#pgs-items iframe").length };
+  }, id);
+  for (const [w, h] of [[1280, 900], [390, 844]]) {
+    const d = await launch({ width: w, height: h, dark, bypassCSP: false });
+    try {
+      await d.page.goto(base + "/#/pages", { waitUntil: "load" });
+      await d.page.waitForSelector(".pgs-card", { timeout: 8000 });
+      const want = dark ? "dark" : "light";
+      let i = await loaded(d.page, withPic);
+      if (!i) throw new Error(w + ": no thumbnail image on the card");
+      if (!i.src.endsWith(`/thumb?v=1&scheme=${want}`) || i.w !== 400 || i.h !== 250 || i.iframes) throw new Error(w + ": " + JSON.stringify(i));
+      if (dark ? i.lum > 80 : i.lum < 200) throw new Error(`${w}: the ${want} thumbnail has the wrong colours (${i.lum})`);
+      await d.page.screenshot({ path: `${out}/pages-thumbs-${w}.png` });
+      // A theme change swaps the picture, without a reload.
+      await d.page.evaluate((id) => ComebyeThemes.set(id), dark ? "gruvbox-light" : "dracula");
+      await d.page.waitForFunction((id) => document.querySelector(`.pgs-card[data-id="${id}"] img.pgs-img`)?.getAttribute("src").endsWith(`scheme=${document.documentElement.getAttribute("data-theme") && ComebyeThemes.byId[document.documentElement.getAttribute("data-theme")].mode}`), withPic, { timeout: 5000 });
+      i = await loaded(d.page, withPic);
+      if (dark ? i.lum < 200 : i.lum > 80) throw new Error(`${w}: the picture did not follow the theme (${i.lum})`);
+      await d.page.screenshot({ path: `${out}/pages-thumbs-${w}-other.png` });
+      // The page published without one keeps its skeleton.
+      if (await d.page.locator(`.pgs-card[data-id="${noPic}"] img.pgs-img`).count()) throw new Error("an image on a card with no thumbnail");
+      if (!(await d.page.locator(`.pgs-card[data-id="${noPic}"] .pgs-thumb`).count())) throw new Error("no card for the page without a thumbnail");
+      // The Live switch is gone.
+      if (await d.page.locator("#pgs-live").count()) throw new Error("the Live button is still there");
+      await d.page.evaluate(() => ComebyeThemes.set("system"));
+    } finally { await d.browser.close(); }
+  }
 });
 
 await check("links: a to-do link to a page opens it in the app; delete asks and removes", async () => {

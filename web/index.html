@@ -2077,12 +2077,11 @@
     }
     #pgs-sort { flex: none; min-height: var(--hit-44); padding: 0 var(--sp-8); font: inherit; font-size: var(--fs-14); color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); }
     .pgs-seg { flex: none; }
-    #pgs-livewrap { display: none; }
-    @media (min-width: 700px) and (hover: hover) { #pgs-livewrap { display: inline-flex; } }
-    /* A live preview: the page itself at 1280 px, scaled to the card (set by the script), inert, over the skeleton it replaces. */
+    /* A thumbnail: the picture the publisher's Chrome made of the page, over the skeleton it replaces. */
     .pgs-thumb { position: relative; }
     .pgs-skw { display: block; height: 100%; }
-    .pgs-live { position: absolute; left: 0; top: 0; width: 1280px; height: 800px; border: 0; background: var(--bg); transform-origin: 0 0; transform: scale(.2); pointer-events: none; }
+    .pgs-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top left; background: var(--bg); }
+    .pgs-thumb.has-img { background: var(--bg); }
     .pgs-seg button { min-width: var(--hit-40); min-height: var(--hit-40); display: inline-flex; align-items: center; justify-content: center; }
     .pgs-seg button:focus-visible, .pgs-chip:focus-visible { outline-offset: -2px; }
     .pgs-chips { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-bottom: var(--sp-10); }
@@ -2656,7 +2655,6 @@
             <button type="button" data-view="grid" aria-pressed="true" aria-label="Grid" title="Grid"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
             <button type="button" data-view="list" aria-pressed="false" aria-label="List" title="List"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
           </span>
-          <span class="pgs-seg" id="pgs-livewrap"><button type="button" id="pgs-live" aria-pressed="false" title="Live previews: real pages in the cards, up to 4 at a time (desktop only)">Live</button></span>
         </div>
         <div class="pgs-chips" id="pgs-chips" role="group" aria-label="Filter by host" hidden></div>
         <div id="pgs-items" class="pgs-grid" aria-live="polite"></div>

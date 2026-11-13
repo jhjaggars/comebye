@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 	"unicode/utf8"
@@ -172,9 +173,18 @@ func cmdPublish(e *Env, args []string) error {
 		fmt.Fprintf(e.Stderr, "Updated %s to version %d (%s).\n", r.Page.ID, r.Page.Version, humanSize(r.Page.Size))
 	}
 	if isHTML {
+		// The gallery thumbnails render beside the layout check, so a publish
+		// waits for the slower of the two, not both.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sendThumbnails(e, c, r.Page.ID, r.Page.Version, body)
+		}()
 		for _, w := range layoutCheck(e, body) {
 			fmt.Fprintln(e.Stderr, w)
 		}
+		wg.Wait()
 	}
 	return nil
 }
