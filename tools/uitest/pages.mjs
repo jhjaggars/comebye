@@ -520,6 +520,23 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   await page.keyboard.press("Escape");
   if (await page.locator("#pgs-infopop").isVisible()) throw new Error("Escape did not close the info popover");
   await shot("pages-open-1280");
+  // Focus: the list collapses to its rail while the reader stays; the button toggles it back, and so does leaving the page.
+  const collapsed = () => page.evaluate(() => document.body.classList.contains("list-collapsed"));
+  const navShown = () => page.evaluate(() => { const r = document.querySelector("#agents")?.getBoundingClientRect(); return !!r && r.width > 100 && r.height > 0; });
+  if (await collapsed()) throw new Error("the list was collapsed before focus");
+  await page.locator("#pgs-focus").click();
+  if (!(await collapsed()) || (await page.locator("#pgs-focus").getAttribute("aria-pressed")) !== "true") throw new Error("focus did not collapse the list");
+  if (await navShown()) throw new Error("the list is still visible in focus mode");
+  if (!(await page.locator("iframe.pgs-frame").isVisible())) throw new Error("the page went away in focus mode");
+  await shot("pages-focus-1280");
+  await page.locator("#pgs-focus").click();
+  if ((await collapsed()) || (await page.locator("#pgs-focus").getAttribute("aria-pressed")) !== "false" || !(await navShown())) throw new Error("focus off did not bring the list back");
+  await page.locator("#pgs-focus").click();
+  await page.locator("#pgs-vback").click();
+  await page.waitForSelector(".pgs-card", { timeout: 8000 });
+  if ((await collapsed()) || !(await navShown())) throw new Error("leaving the page did not bring the list back");
+  await page.goto(base + `/#/pages/${pages.chart}`, { waitUntil: "load" });
+  await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
   // filter (the gallery is behind the viewer's back arrow)
   await page.locator("#pgs-vback").click();
   await page.locator("#pgs-q").fill("failover");
