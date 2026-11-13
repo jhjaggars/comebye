@@ -1502,7 +1502,8 @@ const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight
   openId: null, lastId: null, nxt: null, ansOpen: false, seen: new Map(), order: [], follow: false,
   drafts: loadTodoDrafts(), pend: new Overlay() };
 
-function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/agent\/[^\s]+$/.test(u || "") ? u : ""; }
+function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/(agent\/[^\s]+|pages\/pg_[0-9a-f]{10})$/.test(u || "") ? u : ""; }
+const todoRepOpen = new Set(); // items whose "Full report" is expanded: a redraw keeps it
 // The provenance chip: items the hub filed itself say so (and why).
 const TODO_SOURCE = { "hub-quiet": "auto · quiet", "hub-blocked": "auto · blocked", "hub-question": "auto · question", "hub-report": "from report" };
 function todoSrcChip(t) {
@@ -1683,14 +1684,23 @@ function todoItemHtml(t, pfx) {
   let panel = "";
   if (open) {
     const meta = [who && `waiting: ${who}`, age].filter(Boolean).map(esc).concat(`<span class="cp" role="button" tabindex="0" aria-label="Copy item id" data-copy="${escAttr(t.id)}">${esc(t.id)}</span>`).join(" · ");
+    const repEntry = (l) => (ledger.entries || []).find((x) => x.id === l.handoff);
+    // "Full report" is the hub's stored final report, shown in place; the transcript is a link of its own.
+    const isRep = (l) => l.handoff && !l.url && (l.kind === "report" || (!l.kind && /^Full report/.test(l.label || "")));
+    let repLink = null;
     const links = (t.links || []).map((l) => {
+      if (isRep(l)) {
+        const e = repEntry(l);
+        if (e && e.final_report) { repLink = { l, e }; return `<a href="#" class="td-reptog" role="button">${esc(l.label.replace(/\s*\(handoff [^)]*\)/g, "") || "Full report")}</a>`; }
+      }
       const href = todoLinkHref(l.url);
       const label = l.label || l.url || `handoff ${l.handoff}`;
       return href
         ? (href.startsWith("/#/") ? `<a href="${escAttr(href)}">${esc(label)}</a>` : `<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`)
-        : l.handoff ? `<a class="td-tr" href="#/search/for?ledger=${encodeURIComponent(l.handoff)}" title="Open that handoff's transcript">${esc(l.label ? `${l.label} (handoff ${l.handoff})` : `handoff ${l.handoff}`)}</a>`
+        : l.handoff ? `<a class="td-tr" href="#/search/for?ledger=${encodeURIComponent(l.handoff)}" title="Open that handoff's transcript">${esc(l.kind === "transcript" || isRep(l) ? (l.kind === "transcript" ? label : "Transcript") : label.includes(l.handoff) ? label : `${label} (handoff ${l.handoff})`)}</a>`
         : `<span>${esc(label)}</span>`;
     });
+    const repBody = repLink ? `<details class="td-rep"${todoRepOpen.has(t.id) ? " open" : ""}><summary>Full report</summary>${copyBtnHtml("rep:" + repLink.e.id, repLink.e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md">${renderMarkdown(repLink.e.final_report, "todorep:" + t.id)}</div></details>` : "";
     const a = t.answer;
     const aAt = a ? Date.parse(a.at) : NaN;
     const answered = a
@@ -1719,6 +1729,7 @@ function todoItemHtml(t, pfx) {
           ${isRel ? relPingHtml(t) : ""}
           ${t.set ? setBodyHtml(t) : t.context ? `<div class="md td-ctx">${renderMarkdown(t.context, "todo:" + t.id + ":" + t.updated_at)}</div>` : ""}
           ${links.length ? `<div class="td-links">${links.join("")}</div>` : ""}
+          ${repBody}
           <div class="td-cprow">${copyBtnHtml("todo:" + t.id, t.question + (t.context ? "\n\n" + t.context : ""), "Copy question and context", "Copy the question and its context as Markdown")}</div>
           ${answered}${kept}
         </div>
@@ -2870,6 +2881,13 @@ function onTodoClick(ev) {
   const id = item.dataset.id;
   const ag = ev.target.closest(".td-agent");
   if (ag) { openDetail(ag.dataset.agent); return; }
+  if (ev.target.closest(".td-reptog")) {
+    ev.preventDefault();
+    const d = item.querySelector("details.td-rep");
+    if (d) { d.open = true; todoRepOpen.add(id); d.scrollIntoView({ block: "nearest" }); }
+    return;
+  }
+  if (ev.target.closest(".td-rep > summary")) { const d = ev.target.closest(".td-rep"); if (d.open) todoRepOpen.delete(id); else todoRepOpen.add(id); }
   const setT = todos.items.find((x) => x.id === id);
   if (setT && setT.set && !ev.target.closest(".td-row, .td-agent, .td-done, .td-drop") && setClick(ev, setT)) return;
   const opt = ev.target.closest(".td-opt");

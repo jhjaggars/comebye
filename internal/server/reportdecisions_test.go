@@ -82,7 +82,7 @@ func TestReportFilesDecisions(t *testing.T) {
 	}
 	it := items[0]
 	if it.Question != "Which key should the service use?" || it.Source != SourceReport || it.CreatedBy != AutoCreator || it.Kind != "decision" ||
-		it.Waiting == nil || it.Waiting.ID != "desk/w9:p1" || len(it.Links) != 1 || it.Links[0].Handoff != e.ID ||
+		it.Waiting == nil || it.Waiting.ID != "desk/w9:p1" || len(it.Links) != 2 || it.Links[0].Handoff != e.ID || it.Links[0].Label != "Full report" ||
 		len(it.Options) != 2 || it.Options[0].Label != "Mint a key" || it.Options[0].Detail != "fresh, rotates" || len(it.Recommend) != 1 || it.Recommend[0] != 2 ||
 		strings.Contains(it.Context, "1. **Mint a key**") || strings.Contains(it.Context, "My recommendation") ||
 		!strings.Contains(it.Context, "What the report says it did:** x") {
@@ -204,7 +204,7 @@ func TestReportFilesNumberedDecisions(t *testing.T) {
 		t.Fatalf("want one set of 3: %+v", items)
 	}
 	it := items[0]
-	if it.Source != SourceReport || it.Waiting == nil || len(it.Links) != 1 || !strings.Contains(it.Question, "3 decisions") {
+	if it.Source != SourceReport || it.Waiting == nil || len(it.Links) != 2 || !strings.Contains(it.Question, "3 decisions") {
 		t.Fatalf("set item = %+v", it)
 	}
 	d := it.Set.Decisions[0]
@@ -295,5 +295,42 @@ func TestReportDecisionContextAndDedupe(t *testing.T) {
 	report(t, s, strings.Replace(text, "default to on?", "default to ON ?", 1))
 	if n := len(activeItems(s)); n != 1 {
 		t.Fatalf("re-sent report filed %d items", n)
+	}
+}
+
+// A report that names a Page makes a set whose first link is that Page; a
+// Page published by the worker is linked too; "Full report" opens the
+// stored report; ids that are not Pages are left out.
+func TestReportLinksPagesFirst(t *testing.T) {
+	s, e := decisionsServer(t)
+	s.pages = newPageStore(t.TempDir())
+	named, _, err := s.pages.publish(pageIn{Kind: "md", Title: "Review to-do UX", Body: []byte("# a")}, pageWho{user: true, by: "me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := s.pages.publish(pageIn{Kind: "md", Title: "Worker demo", Body: []byte("# b"), Handoff: e.ID}, pageWho{user: true, by: "me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := "## Summary\nMockup at http://hub/p/" + named.ID + " and pg_0000000000 (gone).\n## Decisions for the user\n- First pick?\n  1. a\n  2. b\n- Second pick?\n  1. c\n  2. d\n"
+	report(t, s, text)
+	items := activeItems(s)
+	if len(items) != 1 || items[0].Set == nil {
+		t.Fatalf("items = %+v", items)
+	}
+	l := items[0].Links
+	if len(l) != 4 || l[0].Label != "Page: Review to-do UX" || l[0].URL != "/#/pages/"+named.ID ||
+		l[1].Label != "Page: Worker demo" || l[1].URL != "/#/pages/"+other.ID ||
+		l[2].Label != "Full report" || l[2].Kind != "report" || l[2].Handoff != e.ID ||
+		l[3].Label != "Transcript" || l[3].Kind != "transcript" {
+		t.Fatalf("links = %+v", l)
+	}
+	// A single "from report" item gets the same links.
+	s2, e2 := decisionsServer(t)
+	s2.pages = s.pages
+	report(t, s2, "## Decisions for the user\n- Only question? see "+named.ID+"\n")
+	it := activeItems(s2)[0]
+	if len(it.Links) < 3 || it.Links[0].Label != "Page: Review to-do UX" || it.Links[len(it.Links)-2].Handoff != e2.ID {
+		t.Fatalf("single item links = %+v", it.Links)
 	}
 }
