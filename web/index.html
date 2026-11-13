@@ -1434,6 +1434,13 @@
     .td-acts button:disabled { opacity: 0.5; cursor: default; }
     .td-acts .td-drop { margin-left: auto; color: var(--muted); }
     .td-acts button:focus-visible { outline-offset: 1px; }
+    /* The decision set's bar sits in a column that can be narrow: the buttons share the row and shrink, never push past the edge. */
+    .ds-bar, .ds-bar .td-acts { min-width: 0; max-width: 100%; box-sizing: border-box; }
+    .ds-bar .td-acts button { flex: 1 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+    .ds-bar .td-acts .td-drop { margin-left: 0; }
+    .td-rep { margin: var(--sp-6) 0; font-size: var(--fs-13); }
+    .td-rep summary { cursor: pointer; padding: var(--sp-2) 0; color: var(--muted); }
+    .td-rep .md { color: var(--text); max-height: 60vh; overflow: auto; }
     /* Answered items wait in a group at the bottom, folded until opened. */
     .td-g {
       flex: none; display: flex; align-items: center; gap: var(--sp-8); width: 100%; min-height: var(--hit-40); margin-top: var(--sp-6); padding: 0 var(--sp-8);
@@ -1693,7 +1700,7 @@
       #pt-body .td-dh { padding: 22px 0 var(--sp-14); }
       #pt-body .td-dtitle { font-size: var(--fs-24); }
       #pt-body .td-scroll { grid-column: 1; padding: 0 0 var(--sp-24); }
-      #pt-body .td-form { grid-column: 2; align-self: start; margin: 0 0 var(--sp-20); padding: var(--sp-16); border: 1px solid var(--border); border-radius: var(--r-14); background: var(--panel); box-shadow: 0 2px 10px -4px var(--sh-md); max-height: calc(100% - 20px); }
+      #pt-body .td-form { grid-column: 2; min-width: 0; overflow-x: hidden; align-self: start; margin: 0 0 var(--sp-20); padding: var(--sp-16); border: 1px solid var(--border); border-radius: var(--r-14); background: var(--panel); box-shadow: 0 2px 10px -4px var(--sh-md); max-height: calc(100% - 20px); }
       #pt-body .td-opts { flex-direction: column; flex-wrap: nowrap; }
       #pt-body .td-opt { width: 100%; }
     }

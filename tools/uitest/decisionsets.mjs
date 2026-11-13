@@ -159,5 +159,54 @@ for (const dark of [false, true]) {
     await check(`${tag} phone: no script errors`, async () => { if (pmsgs.length) throw new Error(pmsgs.join("; ")); });
   } finally { await m.browser.close(); }
 }
+
+// A hub-made set from a report: its links (the Page first, "Full report" opens the stored report in place, the transcript last) and a
+// side panel that stays inside the window at common desktop widths and on a phone.
+const LINKSET = (q) => ({ ...SET(q), links: [
+  { label: "Page: Review to-do UX", url: "http://127.0.0.1:1/p/pg_454cbc823b" },
+  { label: "Full report", handoff: "hfb35bacd8016", kind: "report" },
+  { label: "Transcript", handoff: "hfb35bacd8016", kind: "transcript" }] });
+for (const dark of [false, true]) {
+  const tag = dark ? "dark" : "light";
+  for (const w of [390, 1280, 1440, 1600, 2000]) {
+    const { browser, page } = await launch({ width: w, height: w < 500 ? 844 : 900, dark });
+    const msgs = [];
+    page.on("pageerror", (e) => msgs.push(String(e)));
+    let id;
+    try {
+      const phone = w < 500, L = phone ? "#todo" : "#p-todo";
+      await page.goto(base + (phone ? "/" : "/#/todo"), { waitUntil: "load" });
+      await page.waitForSelector(L, { state: "attached" });
+      id = (await post(LINKSET(`Linked set ${tag} ${w}`))).id;
+      await page.evaluate(() => { (ledger.entries = ledger.entries || []).push({ id: "hfb35bacd8016", final_report: "## Summary\nMockup is the Page. REPORT-BODY-MARK" }); });
+      if (phone) {
+        await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
+        await page.waitForSelector("#todo .td-toggle", { state: "visible" });
+        if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
+      }
+      await openSet(page, id, L);
+      const it = `${L} .td-item[data-id="${id}"]`;
+      await check(`${tag} ${w}: links read Page first, "Full report" has no duplicated handoff, the report opens in place`, async () => {
+        const links = phone ? `${it} .td-links a` : `${it} .td-dlinks a`;
+        const txt = await page.locator(links).allInnerTexts();
+        eq(txt, ["Page: Review to-do UX", "Full report", "Transcript"], "link labels");
+        if ((await page.locator(it).innerText()).includes("(handoff")) throw new Error("a link still says (handoff …)");
+        await page.locator(`${links}`).nth(1).click(); await settle(page);
+        if (!(await page.locator(`${it} details.td-rep[open]`).innerText()).includes("REPORT-BODY-MARK")) throw new Error("the report did not open in place");
+      });
+      await check(`${tag} ${w}: the answer panel fits the window (Accept all, Submit, Done, Drop)`, async () => {
+        const r = await page.evaluate((sel) => {
+          const bar = document.querySelector(sel + " .ds-bar").getBoundingClientRect();
+          const bs = ["ds-all", "ds-submit", "td-done", "td-drop"].map((c) => { const e = document.querySelector(sel + " .ds-bar ." + c).getBoundingClientRect(); return [c, Math.round(e.left), Math.round(e.right)]; });
+          return { vw: innerWidth, sw: document.documentElement.scrollWidth, bar: [Math.round(bar.left), Math.round(bar.right)], bs };
+        }, it);
+        if (r.sw > r.vw) throw new Error("the page scrolls sideways " + JSON.stringify(r));
+        for (const [c, l, rt] of r.bs) if (l < r.bar[0] - 1 || rt > r.bar[1] + 1 || rt > r.vw) throw new Error(`${c} sticks out: ` + JSON.stringify(r));
+        await page.screenshot({ path: path.join(out, `decisionset-links-${tag}-${w}.png`) });
+      });
+      await check(`${tag} ${w}: no script errors`, async () => { if (msgs.length) throw new Error(msgs.join("; ")); });
+    } finally { if (id) drop(id); await browser.close(); }
+  }
+}
 for (const [n, ok, why] of results) console.log(`${ok ? "PASS" : "FAIL"}  ${n}${ok ? "" : "  -- " + why}`);
 process.exit(results.some((r) => !r[1]) ? 1 : 0);

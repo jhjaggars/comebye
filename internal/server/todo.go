@@ -66,6 +66,10 @@ type TodoLink struct {
 	Label   string `json:"label,omitempty"`
 	URL     string `json:"url,omitempty"`
 	Handoff string `json:"handoff,omitempty"`
+	// Kind says what a handoff link opens: "report" (the stored final
+	// report, in place) or "transcript"; empty is an older link, read as
+	// its label says.
+	Kind string `json:"kind,omitempty"`
 }
 
 // TodoOption is one choice of a structured ask.
@@ -485,6 +489,9 @@ func cleanLinks(in []TodoLink) ([]TodoLink, error) {
 	var out []TodoLink
 	for _, l := range in {
 		l.Label, l.URL, l.Handoff = oneLine(l.Label, 80), strings.TrimSpace(l.URL), strings.TrimSpace(l.Handoff)
+		if l.Kind != "report" && l.Kind != "transcript" {
+			l.Kind = ""
+		}
 		if l.URL == "" && l.Handoff == "" {
 			return nil, errors.New("a link needs a url or a handoff id")
 		}

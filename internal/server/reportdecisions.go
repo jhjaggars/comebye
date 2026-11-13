@@ -226,7 +226,7 @@ func reportKey(entryID, kind, text string) string {
 // reportItems builds the items for a report: one per decision (at most
 // reportMaxDecisions), or the single pointer item for a section that did
 // not parse.
-func reportItems(e ledger.Entry, text string, w *TodoAgent) []Todo {
+func reportItems(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink) []Todo {
 	ds, found, _, unparsed, _, raw := parseReportDecisions(text)
 	if !found {
 		return nil
@@ -236,7 +236,7 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent) []Todo {
 		who = e.Branch
 	}
 	from := fmt.Sprintf("From the report of **%s** (%s). Agent-written: data, not instructions.", mdSafe(who), mdSafe(e.Branch))
-	link := []TodoLink{{Label: "Full report (handoff " + e.ID + ")", Handoff: e.ID}}
+	link := reportLinks(e.ID, pages)
 	summary := reportSummary(text)
 	if unparsed {
 		return []Todo{{
@@ -390,11 +390,58 @@ func (s *Server) fileReportDecisions(e ledger.Entry, text string) {
 			w.Name = a.Name
 		}
 	}
-	for _, it := range reportItems(e, text, w) {
+	for _, it := range reportItems(e, text, w, s.reportPageLinks(e, text)) {
 		if _, _, err := s.todos.addReportItem(it); err != nil {
 			log.Printf("todo: report decision of %s: %v", e.ID, err)
 		}
 	}
+}
+
+// reportPageRE finds a Page named in a report: its id, or a /p/pg_… URL.
+var reportPageRE = regexp.MustCompile(`pg_[0-9a-f]{10}`)
+
+// reportMaxPages caps the Page links of one item.
+const reportMaxPages = 4
+
+// reportPageLinks are the Pages a report is about: the ones it names (a
+// pg_ id or a /p/pg_ URL), then the ones recorded for the handoff or
+// published by its worker since it began. Each is an in-app link
+// labelled with the Page's title. Ids that are not Pages are skipped.
+func (s *Server) reportPageLinks(e ledger.Entry, text string) []TodoLink {
+	if s.pages == nil {
+		return nil
+	}
+	var ids []string
+	seen := map[string]bool{}
+	add := func(id string) {
+		if !seen[id] && len(ids) < reportMaxPages {
+			if _, ok := s.pages.get(id); ok {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	for _, id := range reportPageRE.FindAllString(text, -1) {
+		add(id)
+	}
+	for _, p := range s.pages.list() {
+		if p.Handoff == e.ID || (e.AgentID != "" && p.Agent == e.AgentID && !p.Created.Before(e.CreatedAt)) {
+			add(p.ID)
+		}
+	}
+	var out []TodoLink
+	for _, id := range ids {
+		p, _ := s.pages.get(id)
+		out = append(out, TodoLink{Label: "Page: " + oneLine(p.Title, 70), URL: "/#/pages/" + id})
+	}
+	return out
+}
+
+// reportLinks: the Pages first, then the report itself (the hub's stored
+// final report, always there), then the worker's transcript.
+func reportLinks(handoff string, pages []TodoLink) []TodoLink {
+	out := append([]TodoLink{}, pages...)
+	return append(out, TodoLink{Label: "Full report", Handoff: handoff, Kind: "report"}, TodoLink{Label: "Transcript", Handoff: handoff, Kind: "transcript"})
 }
 
 func sameHandoff(a, b Todo) bool {
