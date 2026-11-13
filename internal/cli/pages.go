@@ -141,6 +141,7 @@ func cmdPublish(e *Env, args []string) error {
 			fmt.Fprintf(e.Stderr, "Not inlined: %s\n", n)
 		}
 	}
+	isHTML := k == "html" || (k == "" && looksHTML(body))
 	req := map[string]any{"body": body, "kind": k, "title": *title, "key": *key, "id": *update, "handoff": *handoff}
 	if *ifVersion > 0 {
 		req["if_version"] = *ifVersion
@@ -169,6 +170,11 @@ func cmdPublish(e *Env, args []string) error {
 		fmt.Fprintf(e.Stderr, "Published %s (%s, %s). Update it with `comebye publish FILE --update %s`.\n", r.Page.ID, r.Page.Kind, humanSize(r.Page.Size), r.Page.ID)
 	default:
 		fmt.Fprintf(e.Stderr, "Updated %s to version %d (%s).\n", r.Page.ID, r.Page.Version, humanSize(r.Page.Size))
+	}
+	if isHTML {
+		for _, w := range layoutCheck(e, body) {
+			fmt.Fprintln(e.Stderr, w)
+		}
 	}
 	return nil
 }

@@ -241,6 +241,12 @@ Then open the PNG. Add `--force-dark-mode` for dark. A `file://` page does
 not get the hub's sandbox, so also keep to the rules in "Self-contained".
 Fix what you see once, then publish.
 
+`comebye publish` also checks an HTML page for you when Chrome is on the
+machine: it renders the page at 390 and 1280 px and prints `Layout:` lines on
+stderr for sideways scroll and clipped text. These are warnings, the publish
+has already gone through. Fix them and publish a new version. With no Chrome
+the check is skipped silently; `COMEBYE_NO_LAYOUT_CHECK=1` turns it off.
+
 ## Comments from the user
 
 The user can select text in your page in the app and comment on it. You then
