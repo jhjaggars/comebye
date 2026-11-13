@@ -268,3 +268,5 @@ func (l *Lock) Release() {
 	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
 	_ = l.f.Close()
 }
+
+// probe: a one-line change to a leaf package, to see the pre-submit path selection (not for merging).
