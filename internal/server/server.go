@@ -389,6 +389,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			if cfg.Release.Simulated {
 				s.rollout.soak = 8 * time.Second // a demo does not wait two minutes
 			}
+			if cfg.TestMode { // browser tests: the rollout engine ticks and soaks in a second, not 5 and 8
+				s.rollout.tickEvery = TestPollMs * time.Millisecond
+				s.rollout.soak = time.Second
+			}
 			s.outbox = openOutbox(outboxPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.digestEvery = cfg.DigestEvery

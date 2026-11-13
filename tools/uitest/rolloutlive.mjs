@@ -25,7 +25,7 @@ const results = [];
 
 function start(name, port, extra) {
   const log = fs.openSync(path.join(out, `rollout-${name}.log`), "a");
-  const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-push=false", "-state-dir", path.join(work, "state-" + name), "-host-name", name, "-release-simulate", ...extra], {
+  const p = spawn(bin, ["-sock", sock, "-addr", `127.0.0.1:${port}`, "-insecure-no-auth", "-test-mode", "-push=false", "-state-dir", path.join(work, "state-" + name), "-host-name", name, "-release-simulate", ...extra], {
     env: { ...process.env, COMEBYE_TEST_INSECURE_PEERS: "1" }, stdio: ["ignore", log, log] });
   procs[name] = p;
   return p;

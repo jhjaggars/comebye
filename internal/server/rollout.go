@@ -164,6 +164,8 @@ type rolloutEngine struct {
 	hosts []relHost
 	// Timings; tests shorten them.
 	soak, backWait, offlineGrace, runWait, startRetry time.Duration
+	// tickEvery is how often Run ticks (rolloutTick; -test-mode makes it shorter).
+	tickEvery time.Duration
 	// onState is told, after the file was written, whenever the job's state
 	// changed (started, paused, resumed, stopped, done, cancelled): the
 	// release item's note follows it.
@@ -420,7 +422,11 @@ func inFlight(j Rollout) int {
 // that survived a restart of this server.
 func (e *rolloutEngine) Run(ctx context.Context) {
 	e.resumeAfterRestart()
-	t := time.NewTicker(rolloutTick)
+	every := rolloutTick
+	if e.tickEvery > 0 {
+		every = e.tickEvery
+	}
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
