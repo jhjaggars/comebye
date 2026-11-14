@@ -263,7 +263,12 @@ for (const width of [390, 1280]) {
     fs.rmSync(path.join(stateDir, "gpg-filed.json"), { force: true }); // the earlier asks in this script would hold the watcher back (its cooldown)
     const open = async () => (await (await fetch(`${base}/api/todos`)).json());
     const mine = async () => ((await open()).items || (await open()).todos || []).filter((i) => /^GPG is locked on uitest/.test(i.question) && i.state === "open");
-    const w1 = cli(["gpg", "watch", "--once"]);
+    // Earlier scripts leave the fixture's agents idle: start a turn, which keeps one working for a couple of seconds.
+    const ag = (await fetch(base + "/api/agents").then((r) => r.json())).agents[0];
+    const pr = await fetch(`${base}/api/agents/${encodeURIComponent(ag.pane_id)}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "work" }) });
+    if (![200, 202].includes(pr.status)) throw new Error("prompt: " + pr.status);
+    let w1 = { code: 0, out: "" };
+    for (const end = Date.now() + 6000; Date.now() < end && !/filed/.test(w1.out); await sleep(250)) w1 = cli(["gpg", "watch", "--once"]);
     if (w1.code !== 0 || !/filed/.test(w1.out)) throw new Error("first round: " + w1.code + " " + w1.out);
     const w2 = cli(["gpg", "watch", "--once"]);
     const u = cli(["gpg", "unlock"]);
