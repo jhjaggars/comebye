@@ -445,8 +445,12 @@ holds its slot until the timeout; waiting workers prepare by rebasing and
 running the full tests, not a subset.
 
 **Signed commits.** The worker signs as the repository's git config says
-(`commit.gpgsign`). If signing fails, it stops and reports rather than
-pushing unsigned commits or adding merge commits to carry a signature.
+(`commit.gpgsign`). If signing fails because the host's GPG key is locked,
+it runs `comebye gpg unlock` (one "GPG is locked on HOST" item for the user's
+Face ID, never a duplicate; see [security.md](security.md)), waits until
+`comebye gpg status` says unlocked and retries. If signing still fails, it
+stops and reports rather than pushing unsigned commits or adding merge commits
+to carry a signature.
 
 **Land modes (planned).** A repository can say how its work lands, in a
 file at its root (`.comebye.toml`, `land = "push" | "pr" | "none"`); with

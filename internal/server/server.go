@@ -629,6 +629,7 @@ func (s *Server) routes() {
 	// its own host); everything else is the user's, with the CSRF token.
 	s.mux.HandleFunc("POST /api/approvals", s.authWorker(s.handleApprovalCreate))
 	s.mux.HandleFunc("GET /api/passkeys", s.authWorker(s.handlePasskeyList))
+	s.mux.HandleFunc("POST /api/approvals/{id}/withdraw", s.authWorker(s.handleApprovalWithdraw))
 	s.mux.HandleFunc("GET /api/approvals/{id}", s.auth(s.handleApprovalGet))
 	s.mux.HandleFunc("POST /api/approvals/{id}/respond", s.auth(s.handleApprovalRespond))
 	// The hub relays an unlock answer to a peer host here (gpg.go).

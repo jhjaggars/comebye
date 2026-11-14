@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jhjaggars/comebye/internal/gpgunlock"
 	"github.com/jhjaggars/comebye/internal/passkey"
@@ -177,6 +178,58 @@ func TestGPGCommands(t *testing.T) {
 	}
 	if code := run(e, "gpg", "status", "--json"); code != 0 {
 		t.Fatal()
+	}
+	posts := func(path string) int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		n := 0
+		for _, r := range f.reqs {
+			if r.method == "POST" && r.path == path {
+				n++
+			}
+		}
+		return n
+	}
+	// One item per host: a second unlock while the request waits files nothing
+	// new, --force does.
+	before := posts("/api/approvals")
+	out.Reset()
+	if code := run(e, "gpg", "unlock"); code != 0 || !strings.Contains(out.String(), "Already asked") || posts("/api/approvals") != before {
+		t.Fatalf("second unlock: %d %q", code, out)
+	}
+	out.Reset()
+	if code := run(e, "gpg", "unlock", "--force"); code != 0 || posts("/api/approvals") != before+1 {
+		t.Fatalf("forced unlock: %d %q", code, out)
+	}
+	// The watcher: the request waits, so it files nothing; later, with an
+	// agent active (laharl/w2 is working) it files one; it withdraws that when
+	// pinentry unlocks the key.
+	now := e.Now()
+	e.Now = func() time.Time { return now }
+	h := gpgHost(e)
+	if code := run(e, "gpg", "watch", "--once"); code != 0 || posts("/api/approvals") != before+1 {
+		t.Fatalf("watch with a request waiting: %d", code)
+	}
+	now = now.Add(gpgunlock.Cooldown + time.Minute)
+	f.answers["GET /api/agents"] = answer{body: strings.ReplaceAll(agentsJSON, `"agent_status":"working"`, `"agent_status":"idle"`)}
+	out.Reset()
+	if code := run(e, "gpg", "watch", "--once"); code != 0 || out.String() != "" || posts("/api/approvals") != before+1 {
+		t.Fatalf("watch on an idle host: %d %q", code, out)
+	}
+	f.answers["GET /api/agents"] = answer{body: agentsJSON}
+	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "filed") || posts("/api/approvals") != before+2 {
+		t.Fatalf("watch with an agent working: %d %q", code, out)
+	}
+	cfg, _ := h.Config()
+	for _, g := range cfg.Keygrips {
+		if err := h.GPG.Preset(g, []byte(pass)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.answers["POST /api/approvals/ap_1/withdraw"] = answer{body: `{}`}
+	out.Reset()
+	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "withdrawn") || posts("/api/approvals/ap_1/withdraw") != 1 {
+		t.Fatalf("watch after pinentry: %d %q", code, out)
 	}
 	if code := run(e, "gpg", "reset", "--yes"); code != 0 {
 		t.Fatalf("reset: %q", errb)

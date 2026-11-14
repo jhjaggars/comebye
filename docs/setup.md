@@ -19,7 +19,7 @@ Installing and running Comebye on a host, notifications, several hosts, and ever
 ## Install
 
 Each [release](https://github.com/jhjaggars/comebye/releases) has static
-binaries for Linux and macOS (amd64, arm64), packed with the systemd unit,
+binaries for Linux and macOS (amd64, arm64), packed with the systemd units,
 and a `SHA256SUMS` file:
 
 ```sh
@@ -197,6 +197,69 @@ ntfy.sh anyone who knows the topic can read them and the server caches them
 for hours; `-ntfy-excerpt 200` opts in, ideally only with a self-hosted
 ntfy (`COMEBYE_NTFY_URL`). On iOS a tap on an ntfy notification opens
 Safari rather than the installed app, another reason to prefer Web Push.
+
+## GPG unlock with Face ID
+
+Agents that sign commits need the host's GPG key unlocked. Instead of typing
+the passphrase into a pinentry on a headless host, you approve with Face ID in
+the app, and the host unlocks the key for a fixed **8 hours**. The passphrase
+is stored on the host only encrypted under a key that exists only after your
+passkey answers; the design and its limits are in
+[security.md](security.md#gpg-unlock-in-the-app-slice-3-of-issue-3). Each host
+that signs does this once, on its own.
+
+**You need:** `gpg`, `gpg-connect-agent`, `gpgconf` and `gpg-preset-passphrase`
+(a helper of gpg-agent: comebye looks in `/usr/lib/gnupg/`, `/usr/lib/gnupg2/` and
+`/usr/libexec/`), and one passkey in the app (Settings, Passkeys).
+
+1. **Set up, once per host.** On the host, as the user whose key signs:
+
+   ```sh
+   comebye gpg setup --key FPR      # FPR: gpg --list-secret-keys --with-colons
+   ```
+
+   It shows the hub's passkeys with fingerprints it computed itself; compare
+   them with Settings, Passkeys and answer `y` (or pass `--yes` if you compared
+   them another way). It pins only those passkeys, sets `allow-preset-passphrase`
+   and `max-cache-ttl 28800` in the agent's config, and files a **Set up GPG
+   unlock on HOST** item in To do (it waits 10 minutes; `comebye gpg unlock`
+   files it again).
+2. **Answer the item in the app.** Check that the host key fingerprint on the
+   card matches the one the terminal printed, type the key's passphrase
+   (once; it is encrypted in the page and never stored there) and approve with
+   Face ID. A wrong passphrase stores nothing.
+3. **Run the timer.** `comebye gpg watch` is a long-running service on the
+   host. It forgets the key when the 8 hours end (gpg-agent's own cache
+   alone does not guarantee the 8 hours), and while an agent is active on the
+   host and the key is locked it files **one** "GPG is locked on HOST" item.
+   When the key is unlocked by any means (Face ID, or you typed the passphrase
+   in a pinentry), it takes the item back. It files nothing for an idle host.
+
+   ```sh
+   cp deploy/comebye-gpg-watch.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now comebye-gpg-watch
+   journalctl --user -u comebye-gpg-watch -f
+   ```
+
+   It reads the same `~/.config/comebye/env` as the main unit and needs the
+   same state directory (a `COMEBYE_STATE_DIR` set for one is set for both).
+   The release tarball carries the unit. Without systemd (a sandbox host), run
+   `nohup comebye gpg watch >>~/.local/state/comebye/gpg-watch.log 2>&1 &` from the
+   host's startup; on a Mac, a launchd user agent running `comebye gpg watch`
+   with `KeepAlive` does the same. `comebye gpg watch --once` does one round
+   and exits (a cron job can use it); `--every 30s` changes how often it looks.
+
+**Every day.** A worker whose signed commit fails because the key is locked
+runs `comebye gpg unlock` (the one documented path; it never files a second
+item while one waits, and says so). You get **GPG is locked on HOST** in To
+do; tap **Unlock with Face ID**; the worker retries and the commit signs. The
+item waits 2 minutes, so the watcher asks again no sooner than 10 minutes
+after the last ask while an agent is still active. `comebye gpg status` says
+`locked` or `unlocked until HH:MM`; `comebye gpg lock` forgets the key now;
+`comebye gpg reset` deletes the stored passphrase, the pinned passkeys and the
+host key (lost passkey recovery: you still know the passphrase; run setup
+again).
 
 ## Multiple hosts
 
@@ -722,7 +785,7 @@ itself started: the kickstart would kill it.
 A binary that predates `comebye upgrade` cannot run it. On such a host,
 bootstrap once from the release tarball, then use the command from then on.
 The tarball extracts to a `comebye_<os>_<arch>/` directory (the binary,
-`comebye.service`, LICENSE and README), not to a bare `./comebye`:
+`comebye.service`, `comebye-gpg-watch.service`, LICENSE and README), not to a bare `./comebye`:
 
 ```sh
 d=$(mktemp -d) && cd "$d"

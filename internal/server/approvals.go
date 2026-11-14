@@ -588,6 +588,51 @@ func (s *Server) handleApprovalGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// handleApprovalWithdraw: POST /api/approvals/{id}/withdraw. The host that
+// asked takes the request back, as `comebye gpg watch` does when the key was
+// unlocked another way (pinentry): the item closes itself instead of waiting
+// for a Face ID nobody needs. An agent may withdraw only its own host's
+// request; a settled one answers 200 as it stands (safe to call twice).
+func (s *Server) handleApprovalWithdraw(w http.ResponseWriter, r *http.Request) {
+	if s.approvalsOff(w, r) {
+		return
+	}
+	c := callerOf(r)
+	s.sweepApprovals()
+	st := s.approvals
+	st.mu.Lock()
+	a := st.find(r.PathValue("id"))
+	if a == nil {
+		st.mu.Unlock()
+		apErr(w, http.StatusNotFound, "not_found", "no such approval")
+		return
+	}
+	if c.agent() && !sameHost(a.Host, c.host) {
+		st.mu.Unlock()
+		apErr(w, http.StatusForbidden, "host_forbidden", "an approval can be withdrawn only by the host that asked")
+		return
+	}
+	if a.relaying {
+		st.mu.Unlock()
+		apErr(w, http.StatusConflict, "not_pending", "this request is being answered now")
+		return
+	}
+	if a.State != apPending {
+		out := a.view()
+		st.mu.Unlock()
+		writeJSON(w, map[string]any{"approval": out})
+		return
+	}
+	now := st.now()
+	a.State, a.DecidedAt, a.Note = apExpired, &now, "withdrawn by the host"
+	_ = st.saveLocked()
+	cp := *a
+	st.mu.Unlock()
+	s.settleApprovalTodo(&cp, "withdrawn")
+	s.audit(r, ledger.AuditEvent{Action: "approval.withdraw", Todo: cp.TodoID, Host: cp.Host, OK: true, Detail: cp.Action + " " + cp.ID})
+	writeJSON(w, map[string]any{"approval": cp.view()})
+}
+
 // handleApprovalRespond: POST /api/approvals/{id}/respond (CSRF). Body
 // {"deny":true} or the assertion: {credential_id, client_data_json,
 // authenticator_data, signature, sealed?} (base64url).

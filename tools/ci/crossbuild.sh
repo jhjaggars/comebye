@@ -16,7 +16,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
     -ldflags "-s -w -X main.version=$version" \
     -o "$build/$name/comebye" .
-  cp LICENSE README.md deploy/comebye.service "$build/$name/"
+  cp LICENSE README.md deploy/comebye.service deploy/comebye-gpg-watch.service "$build/$name/"
   tar -C "$build" -czf "$dist/$name.tar.gz" "$name"
 done
 (cd "$dist" && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)

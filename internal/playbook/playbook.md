@@ -269,25 +269,14 @@ the context). Do not spawn a separate landing or merge agent. The cycle:
    hub's landing check then follows that branch, instead of reporting
    "landing failed" for the original one.
    **Landings take turns.** The hub keeps one landing queue per repository
-   and base branch, so one worker's rebase and test run is not spoiled by
-   another's push. `comebye land` enqueues: the first landing in an empty
-   queue is told to land at once; the others get the same prompt with
-   "queued, N ahead, do not push until the hub says *You're up*" (they may
-   prepare: rebase and test, then wait). When the landing ahead is on the
-   base (or failed, or was cancelled), the hub tells the next worker
-   "You're up"; it rebases only if the base moved since it last tested,
-   re-runs the tests, pushes, and reports. The slot is held until the hub
-   sees the commits on the base, the landing fails, or **45 minutes** pass
-   (`-land-turn-timeout`, `COMEBYE_LAND_TURN_TIMEOUT`): then the hub frees
-   the slot, tells the worker to stop and tells you, and the next worker
-   goes. Landing is still plain fast-forward pushes; the queue only orders
-   them. The ledger and the app show `queued #2` or `landing now`;
-   `comebye land --status` shows every queue. If a worker is stuck or
-   should wait, `comebye land WORKER --skip` sends it to the back (its turn
-   passes on at once); `comebye land WORKER --move N` reorders a waiting
-   landing (the one landing now keeps the front). Run `comebye land` for
-   several finished workers in a row without waiting for each to land: that
-   is what the queue is for.
+   and base branch. `comebye land` enqueues: the first landing is told to
+   land at once; the others are told to prepare (rebase, test) and not push
+   until the hub says *You're up*. The slot is held until the commits are on
+   the base, the landing fails, or **45 minutes** pass; then the hub frees
+   it, stops that worker and tells you. `comebye land --status` shows every
+   queue; `comebye land WORKER --skip` or `--move N` reorders. Run
+   `comebye land` for several finished workers in a row without waiting for
+   each (details: docs/lifecycle.md).
 4. While the worker lands, the hub watches `origin/main` itself (a short
    poll that backs off to five minutes, for up to six hours) and does not
    wait for a report: the entry becomes `landed` as soon as every approved
@@ -332,6 +321,10 @@ Repositories that cannot take a fast-forward push to main (a PR-only or
 protected main, no push rights) are not handled by `comebye land` yet. Ask
 the user, and send the worker specific steps with `comebye prompt` (for a
 PR: push the branch, open the PR, watch it until it merges).
+
+**A locked GPG key.** A worker whose signed commit fails runs `comebye gpg
+unlock`: one "GPG is locked on HOST" item for the user's Face ID (the host's
+`comebye gpg watch` shares it), then retries. File no action to-do for it.
 
 ## Marking sessions ready to remove
 

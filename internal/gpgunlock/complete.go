@@ -123,6 +123,7 @@ func sameGrips(a, b []string) bool {
 
 func (h *Host) armLocked(grips []string) (State, error) {
 	st := State{ExpiresAt: h.now().Add(h.lifetime()), Keygrips: grips}
+	h.clearFiled() // the hub closes the item itself on this answer
 	return st, h.writeJSON(fileState, st)
 }
 
@@ -186,7 +187,7 @@ func (h *Host) Reset() error {
 	if cfg, e := h.Config(); e == nil {
 		err = h.GPG.ForgetAll(cfg.Keygrips)
 	}
-	for _, n := range []string{fileConfig, filePinned, fileBlob, fileHostKey, fileState} {
+	for _, n := range []string{fileConfig, filePinned, fileBlob, fileHostKey, fileState, fileFiled} {
 		_ = os.Remove(h.path(n))
 	}
 	_ = os.RemoveAll(h.path(dirPending))

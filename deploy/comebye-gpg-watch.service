@@ -1,0 +1,17 @@
+[Unit]
+Description=Comebye GPG timer: forgets an unlock after its 8 hours and asks for Face ID when an agent needs the key
+Documentation=https://github.com/jhjaggars/comebye/blob/main/docs/setup.md#gpg-unlock-with-face-id
+After=network.target comebye.service
+# Install it only on a host where `comebye gpg setup` has been run; elsewhere it
+# does nothing but sleep.
+
+[Service]
+ExecStart=%h/.local/bin/comebye gpg watch
+# The same variables as the main unit (COMEBYE_URL, COMEBYE_STATE_DIR) and the
+# same state directory, where the unlock's files live.
+EnvironmentFile=-%h/.config/comebye/env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

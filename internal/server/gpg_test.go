@@ -272,3 +272,36 @@ func TestGPGPeerRoute(t *testing.T) {
 		t.Fatal("still locked")
 	}
 }
+
+// The host takes its request back when the key was unlocked another way
+// (pinentry): the item closes, the request is spent, a second call is safe,
+// and another host's agent cannot do it.
+func TestGPGWithdraw(t *testing.T) {
+	r := newGPGRig(t)
+	_, ap, req := r.file(t, false)
+	id := ap.Approval.ID
+	r.s.approvals.mu.Lock()
+	r.s.approvals.find(id).Host = "elsewhere"
+	r.s.approvals.mu.Unlock()
+	if w := do(r.s, "POST", "/api/approvals/"+id+"/withdraw", agentHdr("w2:p1"), `{}`); w.Code != 403 || !strings.Contains(w.Body.String(), "host_forbidden") {
+		t.Fatalf("another host's agent: %d %s", w.Code, w.Body)
+	}
+	r.s.approvals.mu.Lock()
+	r.s.approvals.find(id).Host = ap.Approval.Host
+	r.s.approvals.mu.Unlock()
+	if w := do(r.s, "POST", "/api/approvals/"+id+"/withdraw", agentHdr("w2:p1"), `{}`); w.Code != 200 {
+		t.Fatalf("withdraw: %d %s", w.Code, w.Body)
+	}
+	if it, _ := r.s.todos.get(ap.Todo.ID); it.State != TodoDropped {
+		t.Fatalf("the item is %q after the withdrawal", it.State)
+	}
+	if w := do(r.s, "POST", "/api/approvals/"+id+"/withdraw", agentHdr("w2:p1"), `{}`); w.Code != 200 {
+		t.Fatalf("withdraw twice: %d %s", w.Code, w.Body)
+	}
+	if code, body := r.answer(t, id, req, r.prf, "", false); code != 409 || !strings.Contains(body, "not_pending") {
+		t.Fatalf("answering a withdrawn request: %d %s", code, body)
+	}
+	if w := do(r.s, "POST", "/api/approvals/ap_nope/withdraw", agentHdr("w2:p1"), `{}`); w.Code != 404 {
+		t.Fatalf("unknown: %d", w.Code)
+	}
+}

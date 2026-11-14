@@ -178,6 +178,11 @@ func gpgFile(e *Env, h *gpgunlock.Host, c *client, host, fpr string) (reqID, app
 	err = c.call("POST", "/api/approvals", nil, map[string]any{
 		"action": action, "host": host, "subject": subject, "request": json.RawMessage(req),
 	}, &out)
+	if err == nil {
+		// Remembered so a second ask (a worker's, the watcher's) does not
+		// replace the request the user may have open.
+		_ = h.RecordFiled(out.Approval.ID, id, setup)
+	}
 	return id, out.Approval.ID, err
 }
 
@@ -256,6 +261,15 @@ func gpgUnlock(e *Env, args []string) error {
 			return nil
 		}
 	}
+	if w, ok := h.Waiting(); ok && !*force {
+		// One item per host: the request that waits is still good.
+		left := int(w.Exp.Sub(e.Now()).Seconds())
+		if *asJSON {
+			return jsonOut(e, map[string]any{"request": w.Request, "approval": w.Approval, "already_asked": true})
+		}
+		fmt.Fprintf(e.Stdout, "Already asked for Face ID on %s: approval %s (request %s), %d s left. Approve it in the app (To do); no second item was filed. Then retry the commit.\n", cfg.Host, w.Approval, w.Request, left)
+		return nil
+	}
 	c, err := newClient(e)
 	if err != nil {
 		return err
@@ -271,7 +285,7 @@ func gpgUnlock(e *Env, args []string) error {
 	if !h.HasBlob() {
 		wait = gpgunlock.SetupTTL
 	}
-	fmt.Fprintf(e.Stdout, "Asked for Face ID on %s: approval %s (request %s). It is valid for %d s.\n", cfg.Host, aid, id, int(wait.Seconds()))
+	fmt.Fprintf(e.Stdout, "Asked for Face ID on %s: approval %s (request %s). It is valid for %d s. Approve it in the app (To do), then retry the commit.\n", cfg.Host, aid, id, int(wait.Seconds()))
 	return nil
 }
 
@@ -359,10 +373,17 @@ func gpgReset(e *Env, args []string) error {
 	return nil
 }
 
-// gpgWatch runs the lifetime timer in the foreground: it ends an unlock at
-// its expiry and, on start, at once if it already passed.
+// gpgWatch is the host's GPG timer, meant to run as a service (deploy/
+// comebye-gpg-watch.service). It ends an unlock at its 8 hour expiry (and at
+// start, at once if it already passed) and, while an agent is active on this
+// host and the key is locked, files the one "GPG is locked on HOST" item. It
+// withdraws that item when the key is unlocked by any means. --once does one
+// round and exits.
 func gpgWatch(e *Env, args []string) error {
-	pos, err := parse(flag.NewFlagSet("gpg watch", flag.ContinueOnError), args)
+	fs := flag.NewFlagSet("gpg watch", flag.ContinueOnError)
+	once := fs.Bool("once", false, "do one round and exit")
+	every := fs.Duration("every", gpgunlock.WatchEvery, "how often to look")
+	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
@@ -373,8 +394,71 @@ func gpgWatch(e *Env, args []string) error {
 	if err := needGPG(h); err != nil {
 		return err
 	}
+	w := &gpgunlock.Watcher{Host: h, Every: *every}
+	w.File = func() (string, string, error) {
+		cfg, err := h.Config()
+		if err != nil {
+			return "", "", err
+		}
+		c, err := newClient(e)
+		if err != nil {
+			return "", "", err
+		}
+		id, aid, err := gpgFile(e, h, c, cfg.Host, cfg.FPR)
+		return aid, id, err
+	}
+	w.Withdraw = func(approval string) error {
+		c, err := newClient(e)
+		if err != nil {
+			return err
+		}
+		return c.call("POST", "/api/approvals/"+approval+"/withdraw", nil, struct{}{}, nil)
+	}
+	w.Active = func() (bool, error) {
+		cfg, err := h.Config()
+		if err != nil {
+			return false, err
+		}
+		c, err := newClient(e)
+		if err != nil {
+			return false, err
+		}
+		host := cfg.Host
+		if who, err := c.getWhoami(); err == nil && who.Host != "" {
+			host = who.Host // the hub's name for this host
+		}
+		ar, err := c.getAgents()
+		if err != nil {
+			return false, err
+		}
+		return agentActiveOn(ar.Agents, host), nil
+	}
+	if *once {
+		if _, err := h.Sweep(); err != nil {
+			return err
+		}
+		what, err := w.Check()
+		if err != nil {
+			return err
+		}
+		if what != "" {
+			fmt.Fprintln(e.Stdout, what)
+		}
+		return nil
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	h.Run(ctx, func(err error) { fmt.Fprintln(e.Stderr, "gpg watch:", err) })
+	w.Run(ctx, func(err error) { fmt.Fprintln(e.Stderr, "gpg watch:", err) })
 	return nil
+}
+
+// agentActiveOn: some agent of this host is working or waiting on someone (an
+// idle or finished one will not sign anything).
+func agentActiveOn(agents []apiAgent, host string) bool {
+	for _, a := range agents {
+		if strings.EqualFold(a.Host, host) && (a.Status == "working" || a.Status == "blocked") {
+			return true
+		}
+	}
+	return false
 }

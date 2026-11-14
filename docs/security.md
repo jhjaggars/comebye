@@ -467,6 +467,32 @@ passphrase under K and posts that blob.
 - **The host key's fingerprint is compared once**, at setup: the card shows the
   one computed from the request; the terminal printed the one it made.
 
+## When GPG is locked: the triggers (slice 4 of issue #3)
+
+Two things ask for Face ID, and they share one item per host.
+
+- **The host timer, `comebye gpg watch`** (a service; see
+  [setup.md](setup.md#gpg-unlock-with-face-id)). It sweeps at start and at each
+  expiry, so an unlock ends at its fixed 8 hours even though gpg-agent's cache
+  alone would only forget on its own schedule, and a restart cannot extend it.
+  It looks every 30 seconds. If the key is locked **and an agent is working or
+  blocked on this host**, it files the request (`POST /api/approvals`, for its
+  own host only, as before). An idle host files nothing.
+- **A worker**, whose signed commit failed, runs `comebye gpg unlock`.
+
+One item per host, three ways: the host remembers the request it filed
+(`gpg-filed.json` in the state directory, no secret in it) and neither the
+watcher nor `gpg unlock` files another while it waits (the request lasts
+120 s); the hub replaces a pending request of the same action and host rather
+than adding one; and after an unanswered request the watcher waits 10 minutes
+before asking again. When the key becomes unlocked, by Face ID (the hub closes
+the item) or by any other means such as pinentry, the watcher calls
+`POST /api/approvals/{id}/withdraw` and the item closes itself. The host's agent
+may withdraw only its own host's request, and a request being answered is not
+withdrawn. This changes nothing about what is trusted: a request is still
+checked by the host against the passkeys it pinned, and a withdrawal only
+removes a prompt.
+
 ## Token usage
 
 Each host counts the tokens its agents spend by reading their session files
