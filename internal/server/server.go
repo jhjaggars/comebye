@@ -785,7 +785,7 @@ func fullRecords(r *http.Request) bool { return r.URL.Query().Get("full") == "1"
 
 // waitBackground waits for the queued-prompt senders that are running. Tests call it before their temp directory
 // goes, so a sender that settles a prompt late does not write into a directory being removed.
-func (s *Server) waitBackground() { s.bg.Wait() }
+func (s *Server) waitBackground() { s.bg.Wait(); s.releasing.Wait() }
 
 // handleVersion returns the app version, which every /api response also
 // carries in X-App-Version.

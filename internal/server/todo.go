@@ -1004,7 +1004,9 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 	}
 	t.sending, t.last = true, now
 	t.mu.Unlock()
+	s.bg.Add(1)
 	go func(target herdr.AgentInfo) {
+		defer s.bg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
 		send := t.send
