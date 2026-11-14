@@ -1888,12 +1888,30 @@ function rsEnsure() {
   return el;
 }
 
-function rsTeardown() {
+// leave: the app is going somewhere else (a page, an agent), so the history entry the split pushed becomes an ordinary one
+// (replaceState) instead of being popped: a history.back() here would run after the navigation's own pushState and undo it.
+function rsTeardown(leave) {
   if (!rs.el) return;
   if (!rs.el.hidden) {
     rs.el.hidden = true; rs.el.replaceChildren(); rs.key = ""; rs.sig = ""; pgc.split = false;
-    if (history.state && history.state.rs) history.back(); // the entry the split pushed
+    if (history.state && history.state.rs) { // the entry the split pushed
+      if (leave) history.replaceState(null, "", location.href); else history.back();
+    }
   }
+}
+// rsLeave closes the split because something else is opening (an agent, another page). The item is closed too, so coming back to
+// the list does not put the split up again; the unsent answer and notes stay (todoDraft, the Page comments).
+function rsLeave() {
+  if (!rsActive()) return;
+  if (todos.openId) todos.lastId = todos.openId;
+  todos.openId = null;
+  rsTeardown(true);
+}
+// On a phone the split sits under the app's header, so the header's buttons (commands, search, the fleet menu) stay reachable.
+function rsPlace() {
+  if (!rs.el) return;
+  const h = !isDesktop() && document.querySelector("#list > header");
+  rs.el.style.top = h ? Math.max(0, Math.round(h.getBoundingClientRect().bottom)) + "px" : "";
 }
 // The split pushes one history entry when it opens, so the phone's Back closes it (route() calls this). Stepping to another
 // item with j and k keeps the one entry.
@@ -1908,15 +1926,20 @@ function renderSplit(force) {
   const host = isDesktop() ? $("p-todo") : document.body;
   if (el.parentElement !== host) { host.append(el); rs.key = ""; }
   el.classList.toggle("on-phone", !isDesktop());
+  rsPlace();
   if (!pgs.loaded) {
     // pgs.pagesUrl (a separate origin for pages, if any) comes with the Pages list.
     if (!rs.loading) { rs.loading = true; pagesLoad().finally(() => { rs.loading = false; renderSplit(true); }); }
-    if (el.hidden) { el.hidden = false; el.innerHTML = `<div class="pgs-pick">Loading…</div>`; rs.key = ""; }
+    if (el.hidden) {
+      if (!(history.state && history.state.rs)) history.pushState({ rs: true }, "", location.href); // Back closes it even while the Pages load
+      el.hidden = false; el.innerHTML = `<div class="pgs-pick">Loading…</div>`; rs.key = "";
+    }
+    rsPlace();
     return;
   }
   const first = el.hidden || rs.key !== key;
   if (first) {
-    if (el.hidden && !(history.state && history.state.rs)) history.pushState({ rs: true }, "", location.href);
+    if (!(history.state && history.state.rs)) history.pushState({ rs: true }, "", location.href);
     el.hidden = false;
     rs.key = key; rs.sig = "";
     el.dataset.tab = rs.tab;
@@ -7380,7 +7403,7 @@ function setView(v) {
   syncDesktopBriefs();
   renderNav();
   renderStatus();
-  if (state.view === "todo") renderTodos(); else rsTeardown();
+  if (state.view === "todo") renderTodos(); else rsLeave();
 }
 
 // openPage replaces the agent in the main pane with a page. Leaving the
@@ -13167,6 +13190,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // The split review mode closes when the app goes somewhere else, and starts over when the layout changes.
   window.addEventListener("hashchange", () => { if (rsActive() && !(isDesktop() && location.hash === PAGE_HASH.todo)) { todos.openId = null; renderTodos(true); } });
   desktopMQ.addEventListener("change", () => { rsTeardown(); renderTodos(true); });
+  window.addEventListener("resize", rsPlace);
   for (const id of ["todo", "pt-body"]) {
     const el = $(id);
     if (!el) continue;

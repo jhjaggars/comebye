@@ -129,6 +129,8 @@ if want starters; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state"
 if want pagecomments; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagecomments.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The review card in To do: a kind "review" item about a Page (thumbnail, Looks good with Undo, Needs changes and its Fix item, keys).
 if want reviewcard; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node reviewcard.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# An expanded To do item (and the split review mode) does not trap navigation: header, fleet menu, agent, Page link, Back.
+if want todonav; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node todonav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Passkeys (issue #3, slice 1): Settings, register with Chrome's virtual authenticator (PRF on), rename, remove, the approval item in To do.
 if want passkeys; then COMEBYE_STATE_DIR="$tmp/state" node passkeys.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Revision marks: data-revision blocks outlined from the Page menu.

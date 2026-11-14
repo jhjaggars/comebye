@@ -1500,7 +1500,8 @@
     .rs { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
     .rs[hidden] { display: none; }
     #p-todo > .rs { position: absolute; inset: 0; z-index: var(--z-view); } /* above the page header (z-bar) */
-    .rs.on-phone { position: fixed; inset: 0; z-index: var(--z-screen); padding-bottom: var(--safe-bottom); }
+    .rs.on-phone { position: fixed; inset: 0; z-index: var(--z-view); padding-bottom: var(--safe-bottom); } /* top is set under the app header (rsPlace), and below the menus, sheets and screens, so they open over it */
+    .rs.on-phone .rs-bar { padding-top: 0; min-height: var(--hit-48); }
     .rs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-8); min-height: calc(var(--hit-48) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-8) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
     .rs-back { flex: none; display: inline-flex; align-items: center; gap: var(--sp-4); }
     .rs-title { margin: 0; min-width: 0; flex: 0 1 auto; font-size: var(--fs-16); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
