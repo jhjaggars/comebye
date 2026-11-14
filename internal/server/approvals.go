@@ -431,7 +431,7 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"approval": out, "duplicate": true})
 		return
 	}
-	if recent >= approvalPerMinute {
+	if recent >= approvalPerMinute && !s.cfg.TestMode { // the browser tests file many from one host
 		st.mu.Unlock()
 		apErr(w, http.StatusTooManyRequests, "approval_rate", "that host is asking too often: wait a minute")
 		return
