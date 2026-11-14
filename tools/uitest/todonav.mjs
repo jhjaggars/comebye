@@ -58,14 +58,21 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) f
   const errs = [];
   page.on("pageerror", (e) => errs.push(String(e)));
   const scope = mode === "split" ? "#rs" : LIST;
-  const open = async (it) => {
-    await page.goto("about:blank"); // a fresh load: the same URL again would not reload, and the new item would not be in the list
+  // One page load per mode: a check starts from the To do list again (a hash change), and only the cold-start check loads afresh.
+  const toList = async () => { await page.evaluate((p) => { location.hash = p ? "" : "#/todo"; }, phone); };
+  const load = async () => {
+    await page.goto("about:blank"); // a fresh load: the same URL again would not reload, and a new item would not be in the list
     await page.goto(base + (phone ? "/" : "/#/todo"), { waitUntil: "load" });
     if (phone) {
       await page.waitForSelector("#todo .td-toggle", { state: "visible", timeout: 15000 });
       if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
     } else await page.waitForSelector("#p-todo", { state: "visible" });
-    await page.locator(`${LIST} .td-item[data-id="${it.id}"] .td-row`).click();
+  };
+  let loaded = false;
+  const open = async (it, fresh) => {
+    if (fresh || !loaded) { await load(); loaded = true; } else await toList();
+    await page.waitForSelector(`${LIST} .td-item[data-id="${it.id}"] .td-row`, { state: "visible" });
+    if (!(await page.locator(`${scope} .td-item.open[data-id="${it.id}"]`).count())) await page.locator(`${LIST} .td-item[data-id="${it.id}"] .td-row`).click();
     await page.waitForSelector(`${scope} .td-item.open[data-id="${it.id}"]`, { state: "attached" });
     if (mode === "split" && phone) await page.locator('#rs [data-rs-tab="decide"]').click();
     await page.waitForSelector(`${scope} .td-item.open[data-id="${it.id}"]`, { state: "visible" });
@@ -73,9 +80,10 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) f
   };
   try {
     const mk = async (q) => { const t = await add(mode === "split" ? { question: q, page: { id: pid }, context: "ctx" } : { question: q, context: "ctx" }); ids.push(t.id); return t; };
+    const main = await mk(`Nav ${mode} ${width}?`);
     for (const r of ROUTES(phone)) {
       await check(`${r.name} leaves an expanded item: ${tag}`, async () => {
-        const it = await mk(`Nav ${r.name} ${mode} ${width}?`);
+        const it = main;
         await open(it);
         if (mode === "split" && (await page.locator("#rs").isHidden())) throw new Error("the split did not open");
         await page.screenshot({ path: `${out}/todonav-${mode}-${width}-${dark ? "dark" : "light"}-open.png` });
@@ -83,7 +91,7 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) f
         if (r.screen) await page.waitForSelector(`${r.screen}:not([hidden])`, { timeout: 5000 });
         if (r.agent) await page.waitForFunction(() => state.selected, null, { timeout: 5000 });
         if (r.status) await page.waitForFunction(() => location.hash === "#/status", null, { timeout: 5000 });
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(150);
         if (mode === "split") {
           if (await page.locator("#rs").isVisible()) throw new Error("the split is still up");
           if (await page.evaluate((id) => todos.openId === id, it.id)) throw new Error("the item is still open behind the target");
@@ -91,7 +99,7 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) f
         if (r.screen && !(await page.locator(r.screen).isVisible())) throw new Error("the target is not showing");
         await page.screenshot({ path: `${out}/todonav-${mode}-${width}-${dark ? "dark" : "light"}-${r.name.replace(/\W+/g, "_")}.png` });
         // Back to To do: the unsent answer is still in the box.
-        await page.evaluate((p) => { location.hash = p ? "" : "#/todo"; }, phone);
+        await toList();
         await page.waitForSelector(`${LIST} .td-item[data-id="${it.id}"] .td-row`, { state: "visible", timeout: 5000 });
         if (!(await page.locator(`${scope} .td-item.open[data-id="${it.id}"]`).count())) await page.locator(`${LIST} .td-item[data-id="${it.id}"] .td-row`).click();
         if (mode === "split" && phone) await page.locator('#rs [data-rs-tab="decide"]').click();
@@ -102,17 +110,17 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) f
     }
     if (mode === "split") {
       await check(`the Page link leaves the split: ${tag}`, async () => {
-        const it = await mk(`Nav page link ${width}?`);
+        const it = main;
         await open(it);
         await page.evaluate(() => { document.activeElement && document.activeElement.blur(); });
         await page.locator('#rs a.td-pglink:visible').first().click({ timeout: 4000 });
         await page.waitForFunction(() => /#\/pages\/pg_/.test(location.hash), null, { timeout: 5000 });
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(150);
         if (await page.locator("#rs").isVisible()) throw new Error("the split is still up over the Page");
         if (!(await page.locator("#pages").isVisible())) throw new Error("the Pages screen is not showing");
       });
       await check(`browser Back closes the split once and stays in the app: ${tag}`, async () => {
-        const it = await mk(`Nav back ${width}?`);
+        const it = main;
         await open(it);
         await page.goBack();
         await page.waitForSelector("#rs", { state: "hidden", timeout: 5000 });
@@ -121,7 +129,7 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) f
       await check(`a cold start with the Pages not yet loaded still has the one history entry: ${tag}`, async () => {
         const it = await mk(`Nav cold ${width}?`);
         await page.route(/\/api\/pages(\?|$)/, async (r) => { await new Promise((x) => setTimeout(x, 800)); r.continue(); });
-        await open(it).catch(() => {});
+        await open(it, true).catch(() => {});
         await page.waitForTimeout(1500);
         if (!(await page.evaluate(() => !!(history.state && history.state.rs)))) throw new Error("no history entry for the split");
         await page.unroute(/\/api\/pages(\?|$)/);
