@@ -2282,7 +2282,7 @@ function todoFollowRefresh() {
       if (todos.openId) todos.lastId = todos.openId;
       todos.follow = todoHasFocus();
       moved = true;
-      const mine = !!(t && t.approval && apBusy.has(t.approval.id)); // closed by this page's own Face ID: no "elsewhere" notice
+      const mine = guItems.has(id); // closed by this page's own Face ID: no "elsewhere" notice
       if (!mine && (todos.follow || (isDesktop() && state.view === "todo"))) {
         toast((t ? "That item was answered elsewhere." : "That item was closed elsewhere.") + (kept ? " Your unsent answer is kept." : ""));
       }
@@ -9627,6 +9627,7 @@ async function approvalGo(id, item) {
 const GU_ACTIONS = new Set(["gpg-unlock", "gpg-setup"]);
 const GU_LIFE = "8 hours"; // fixed on the host; the card says so and has no picker
 const guIs = (a) => !!a && GU_ACTIONS.has(a.action);
+const guItems = new Set(); // to-do ids whose Face ID this page is answering now
 const gu = new Map(); // approval id -> { st: idle|loading|ready|err, d, info, err, ok, msg }
 
 function guState(id) {
@@ -9731,6 +9732,7 @@ async function guGo(apid, item, a) {
   if (!sxSupported()) { say("This browser cannot use a passkey here: it needs a secure (https) address."); return; }
   const btn = item.querySelector(".ap-go");
   apBusy.add(apid);
+  guItems.add(item.dataset.id);
   g.msg = "";
   if (btn) { btn.disabled = true; btn.textContent = "Waiting for Face ID…"; } // in place: a redraw would lose the typed passphrase
   let prf = null, k = null, pass = null;
@@ -9774,6 +9776,7 @@ async function guGo(apid, item, a) {
     CBUnlock.wipe(prf); CBUnlock.wipe(k); CBUnlock.wipe(pass);
     prf = k = pass = null; // the typed passphrase was emptied from its input when read; a cancelled Face ID keeps what was typed
     await loadTodos(); // still busy: the item this answer just closed is not "closed elsewhere"
+    guItems.delete(item.dataset.id);
     apBusy.delete(apid);
     guRepaint(apid);
   }

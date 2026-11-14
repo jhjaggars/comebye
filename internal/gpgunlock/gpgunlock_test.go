@@ -435,7 +435,7 @@ func TestCompleteRefusals(t *testing.T) {
 	// An expired request.
 	id, req, _ = r.h.NewRequest(testRP, true)
 	a = r.answer(t, id, req, r.pass, k, true)
-	r.now.Add(RequestTTL + time.Second)
+	r.now.Add(SetupTTL + time.Second)
 	if _, err := r.h.Complete(id, a); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired: %v", err)
 	}
