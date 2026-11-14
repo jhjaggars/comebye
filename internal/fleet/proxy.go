@@ -110,6 +110,9 @@ var hostProxyOps = map[string]struct {
 	// owns the release clone to check a commit, to tag and push it (git and
 	// gh, up to 3 minutes on the peer), or for the state of the tag's Release
 	// workflow run. Hub-only: never a browser's forward, never an agent's.
+	// The hub hands a peer host the app's answer to its GPG unlock request
+	// (the peer checks it all itself). Hub-only.
+	"gpg-complete":  {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 60 * time.Second}, []string{"api", "gpg", "complete"}, true},
 	"release-check": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "release", "check"}, true},
 	"release-tag":   {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 200 * time.Second}, []string{"api", "release", "tag"}, true},
 	"release-build": {proxyOp{method: http.MethodGet, query: []string{"version"}, timeout: 40 * time.Second}, []string{"api", "release", "build"}, true},

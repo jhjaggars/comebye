@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/fleet"
+	"github.com/jhjaggars/comebye/internal/gpgunlock"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/park"
@@ -38,6 +39,9 @@ import (
 
 // Config configures the HTTP server.
 type Config struct {
+	// GPGHost is this host's GPG unlock state; nil means the state
+	// directory's files and the user's gpg (tests set it).
+	GPGHost *gpgunlock.Host
 	// OpencodeDir is where OpenCode sessions are mirrored as files (default
 	// under the state directory); see internal/opencode.
 	OpencodeDir string
@@ -625,6 +629,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/passkeys", s.authWorker(s.handlePasskeyList))
 	s.mux.HandleFunc("GET /api/approvals/{id}", s.auth(s.handleApprovalGet))
 	s.mux.HandleFunc("POST /api/approvals/{id}/respond", s.auth(s.handleApprovalRespond))
+	// The hub relays an unlock answer to a peer host here (gpg.go).
+	s.mux.HandleFunc("POST /api/gpg/complete", s.auth(s.handleGPGComplete))
 	s.mux.HandleFunc("POST /api/passkeys/register/begin", s.auth(s.handlePasskeyBegin))
 	s.mux.HandleFunc("POST /api/passkeys/register/finish", s.auth(s.handlePasskeyFinish))
 	s.mux.HandleFunc("PUT /api/passkeys/{id}", s.auth(s.handlePasskeyRename))

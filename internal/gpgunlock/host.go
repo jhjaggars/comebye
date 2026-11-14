@@ -21,8 +21,13 @@ import (
 // field exists so tests can shorten it.
 const DefaultLifetime = 8 * time.Hour
 
-// RequestTTL is how long a request waits for the passkey.
-const RequestTTL = 120 * time.Second
+// RequestTTL is how long a request waits for the passkey. A setup request
+// waits longer (SetupTTL): the user compares the host fingerprint and types the
+// passphrase before Face ID.
+const (
+	RequestTTL = 120 * time.Second
+	SetupTTL   = 10 * time.Minute
+)
 
 // Config is what setup decided: which key, which host, which hub name.
 type Config struct {
@@ -235,7 +240,11 @@ func (h *Host) NewRequest(rpID string, setup bool) (id string, request []byte, e
 	_, _ = rand.Read(idb)
 	_, _ = rand.Read(nonce)
 	id = "gu_" + fmt.Sprintf("%x", idb)
-	exp := h.now().Add(RequestTTL)
+	ttl := RequestTTL
+	if setup {
+		ttl = SetupTTL
+	}
+	exp := h.now().Add(ttl)
 	obj := map[string]any{
 		"v": 1, "action": "gpg-unlock", "id": id, "host": c.Host, "rp": rpID, "keygrips": c.Keygrips,
 		"nonce": passkey.B64(nonce), "exp": exp.Unix(), "curve": CurveP256, "pub": passkey.B64(priv.PublicKey().Bytes()),

@@ -141,8 +141,44 @@ func gpgSetup(e *Env, args []string) error {
 		return err
 	}
 	hfp, _ := h.HostFingerprint()
-	fmt.Fprintf(e.Stdout, "Set up GPG unlock on %s for key %s (%d signing keygrip(s)).\nHost key fingerprint: %s\nNext: run `comebye gpg unlock`, then approve it in the app and type the passphrase once.\n", name, *key, len(grips), hfp)
+	fmt.Fprintf(e.Stdout, "Set up GPG unlock on %s for key %s (%d signing keygrip(s)).\nHost key fingerprint: %s\n", name, *key, len(grips), hfp)
+	if h.HasBlob() {
+		fmt.Fprintln(e.Stdout, "A passphrase is already stored here: run `comebye gpg reset` first to store a new one.")
+		return nil
+	}
+	// The "Set up GPG unlock" to-do: the app shows this fingerprint (computed
+	// from the request's host key), takes the passphrase and asks for Face ID.
+	id, aid, err := gpgFile(e, h, c, name, *key)
+	if err != nil {
+		fmt.Fprintf(e.Stdout, "The set-up item could not be filed (%v). Run `comebye gpg unlock` to file it again.\n", err)
+		return nil
+	}
+	fmt.Fprintf(e.Stdout, "Filed \"Set up GPG unlock on %s\" in To do (approval %s, request %s). Open it in the app, check that the host key fingerprint above matches, type the passphrase and approve with Face ID. It waits %d minutes; `comebye gpg unlock` files it again.\n", name, aid, id, int(gpgunlock.SetupTTL.Minutes()))
 	return nil
+}
+
+// gpgFile makes a request for this host and files it with the hub: a setup
+// request (the passphrase is not stored yet) as action gpg-setup, otherwise
+// gpg-unlock. It returns the request's id and the approval's.
+func gpgFile(e *Env, h *gpgunlock.Host, c *client, host, fpr string) (reqID, approvalID string, err error) {
+	setup := !h.HasBlob()
+	id, req, err := h.NewRequest(h.Pinned().RPID, setup)
+	if err != nil {
+		return "", "", err
+	}
+	action, subject := "gpg-unlock", "Unlock GPG key "+fpr
+	if setup {
+		action, subject = "gpg-setup", "Set up GPG unlock for key "+fpr
+	}
+	var out struct {
+		Approval struct {
+			ID string `json:"id"`
+		} `json:"approval"`
+	}
+	err = c.call("POST", "/api/approvals", nil, map[string]any{
+		"action": action, "host": host, "subject": subject, "request": json.RawMessage(req),
+	}, &out)
+	return id, out.Approval.ID, err
 }
 
 func gpgLifetime(h *gpgunlock.Host) time.Duration {
@@ -224,26 +260,18 @@ func gpgUnlock(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	rp := h.Pinned().RPID
-	id, req, err := h.NewRequest(rp, !h.HasBlob())
-	if err != nil {
-		return err
-	}
-	var out struct {
-		Approval struct {
-			ID string `json:"id"`
-		} `json:"approval"`
-	}
-	err = c.call("POST", "/api/approvals", nil, map[string]any{
-		"action": "gpg-unlock", "host": cfg.Host, "subject": "Unlock GPG key " + cfg.FPR, "request": json.RawMessage(req),
-	}, &out)
+	id, aid, err := gpgFile(e, h, c, cfg.Host, cfg.FPR)
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		return jsonOut(e, map[string]any{"request": id, "approval": out.Approval.ID})
+		return jsonOut(e, map[string]any{"request": id, "approval": aid})
 	}
-	fmt.Fprintf(e.Stdout, "Asked for Face ID on %s: approval %s (request %s). It is valid for %d s.\n", cfg.Host, out.Approval.ID, id, int(gpgunlock.RequestTTL.Seconds()))
+	wait := gpgunlock.RequestTTL
+	if !h.HasBlob() {
+		wait = gpgunlock.SetupTTL
+	}
+	fmt.Fprintf(e.Stdout, "Asked for Face ID on %s: approval %s (request %s). It is valid for %d s.\n", cfg.Host, aid, id, int(wait.Seconds()))
 	return nil
 }
 

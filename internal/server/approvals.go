@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/gpgunlock"
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/passkey"
 )
@@ -77,10 +78,22 @@ var approvalPerMinute = 10
 // host may file it; user: the user's own page may; todo: a to-do item is filed.
 var approvalActions = map[string]struct {
 	agent, user, todo bool
-	title             string // %s: the host
+	title             string        // %s: the host
+	ttl               time.Duration // approvalTTL when zero
+	gpg               bool          // the answer goes to the host (gpg.go)
 }{
-	"gpg-unlock":  {agent: true, todo: true, title: "GPG is locked on %s"},
+	"gpg-unlock": {agent: true, todo: true, title: "GPG is locked on %s", gpg: true},
+	// The first unlock of a host: the user compares the host key's
+	// fingerprint and types the passphrase, so the request waits longer.
+	"gpg-setup":   {agent: true, todo: true, title: "Set up GPG unlock on %s", ttl: gpgunlock.SetupTTL, gpg: true},
 	"passkey-add": {user: true},
+}
+
+func approvalLife(action string) time.Duration {
+	if t := approvalActions[action].ttl; t > 0 {
+		return t
+	}
+	return approvalTTL
 }
 
 // TodoApproval is the public part of a kind "approval" item: what is asked,
@@ -119,6 +132,7 @@ type approval struct {
 	Assertion   *apAssertion    `json:"assertion,omitempty"`
 	Sealed      string          `json:"sealed,omitempty"`
 	Used        bool            `json:"used,omitempty"` // a passkey-add approval was spent
+	relaying    bool            // the host is checking the answer now (not saved)
 	Note        string          `json:"note,omitempty"`
 }
 
@@ -399,7 +413,7 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 		reuse = old.TodoID
 	}
 	a := &approval{ID: newApprovalID(), Action: b.Action, Host: host, Subject: subject, RequestedBy: s.by(r, ""),
-		State: apPending, CreatedAt: now, ExpiresAt: now.Add(approvalTTL)}
+		State: apPending, CreatedAt: now, ExpiresAt: now.Add(approvalLife(b.Action))}
 	if reqBytes == nil {
 		nonce := make([]byte, 16)
 		_, _ = rand.Read(nonce)
@@ -493,7 +507,9 @@ func approvalContext(a *approval, agent bool) string {
 	var sb strings.Builder
 	switch a.Action {
 	case "gpg-unlock":
-		fmt.Fprintf(&sb, "Unlocking the GPG key on %s needs your passkey (Face ID).", a.Host)
+		fmt.Fprintf(&sb, "Unlocking the GPG key on %s needs your passkey (Face ID). The unlock lasts 8 hours.", a.Host)
+	case "gpg-setup":
+		fmt.Fprintf(&sb, "Setting up GPG unlock on %s: check the host key fingerprint against the terminal, type the key's passphrase once and approve with Face ID. The unlock lasts 8 hours.", a.Host)
 	default:
 		fmt.Fprintf(&sb, "%s on %s needs your passkey (Face ID).", a.Action, a.Host)
 	}
@@ -505,7 +521,7 @@ func approvalContext(a *approval, agent bool) string {
 		if !agent {
 			who = "Asked from"
 		}
-		fmt.Fprintf(&sb, "\n\n%s %s. The request lasts %d minutes.", who, a.RequestedBy, int(approvalTTL.Minutes()))
+		fmt.Fprintf(&sb, "\n\n%s %s. The request lasts %d minutes.", who, a.RequestedBy, int(approvalLife(a.Action).Minutes()))
 	}
 	return sb.String()
 }
@@ -547,12 +563,13 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b struct {
-		Deny              bool   `json:"deny"`
-		CredentialID      string `json:"credential_id"`
-		ClientDataJSON    string `json:"client_data_json"`
-		AuthenticatorData string `json:"authenticator_data"`
-		Signature         string `json:"signature"`
-		Sealed            string `json:"sealed"`
+		Deny              bool            `json:"deny"`
+		CredentialID      string          `json:"credential_id"`
+		ClientDataJSON    string          `json:"client_data_json"`
+		AuthenticatorData string          `json:"authenticator_data"`
+		Signature         string          `json:"signature"`
+		Sealed            string          `json:"sealed"`
+		Blob              *gpgunlock.Blob `json:"blob"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&b); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -565,6 +582,11 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		st.mu.Unlock()
 		apErr(w, http.StatusNotFound, "not_found", "no such approval")
+		return
+	}
+	if a.relaying {
+		st.mu.Unlock()
+		apErr(w, http.StatusConflict, "not_pending", "this request is being answered already")
 		return
 	}
 	if a.State != apPending {
@@ -638,6 +660,38 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		st.mu.Unlock()
 		s.settleApprovalTodo(&cp, "expired")
 		apErr(w, http.StatusConflict, "not_pending", "this request expired: ask again")
+		return
+	}
+	if approvalActions[a.Action].gpg {
+		// The host decides: it checks the assertion again against the passkeys
+		// it pinned, opens K and presets the passphrase. The answer passes
+		// through here once (the blob, at setup, is not kept); the request is
+		// spent on the host's first try, so a refusal ends this approval.
+		a.relaying = true
+		cp := *a
+		st.mu.Unlock()
+		ans := gpgunlock.Answer{CredentialID: b.CredentialID, ClientDataJSON: b.ClientDataJSON, AuthenticatorData: b.AuthenticatorData,
+			Signature: b.Signature, Sealed: b.Sealed, Blob: b.Blob}
+		until, rerr := s.relayGPG(r.Context(), &cp, ans)
+		st.mu.Lock()
+		a.relaying = false
+		if rerr != nil {
+			finish(apDenied, "the host refused: "+rerr.Error())
+			cp = *a
+			st.mu.Unlock()
+			s.settleApprovalTodo(&cp, "the host refused")
+			s.audit(r, ledger.AuditEvent{Action: "approval.refused", Todo: cp.TodoID, Host: cp.Host, Detail: cp.Action + " " + cp.ID + ": host: " + rerr.Error()})
+			writeJSONStatus(w, http.StatusConflict, map[string]any{"code": "host_refused", "message": rerr.Error(), "approval": cp.view()})
+			return
+		}
+		a.Credential = pk.ID
+		finish(apApproved, "")
+		cp = *a
+		st.mu.Unlock()
+		s.passkeys.Used(pk.ID, ctr)
+		s.settleApprovalTodo(&cp, "")
+		s.audit(r, ledger.AuditEvent{Action: "approval.approve", Todo: cp.TodoID, Host: cp.Host, OK: true, Detail: cp.Action + " " + cp.ID + " with " + pk.Name})
+		writeJSON(w, map[string]any{"approval": cp.view(), "unlocked_until": until})
 		return
 	}
 	a.Credential = pk.ID
