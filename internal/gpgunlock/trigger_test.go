@@ -196,3 +196,21 @@ func mustGrips(t *testing.T, h *Host) []string {
 	}
 	return c.Keygrips
 }
+
+// A request the host has taken an answer for is spent, so a new ask is not
+// held back by it (a refused answer leaves the item open for a new request).
+func TestWaitingEndsWhenTheRequestIsTaken(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	tr.active = true
+	tr.check(t)
+	last, _ := tr.h.LastFiled()
+	if _, ok := tr.h.Waiting(); !ok {
+		t.Fatal("not waiting right after filing")
+	}
+	if _, err := tr.h.takePending(last.Request); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tr.h.Waiting(); ok {
+		t.Fatal("still waiting on a spent request")
+	}
+}

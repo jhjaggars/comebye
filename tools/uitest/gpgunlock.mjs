@@ -256,6 +256,27 @@ for (const width of [390, 1280]) {
     if ((await todo(it.id)).state !== "dropped") throw new Error("item not dropped");
     if (!status().locked) throw new Error("unlocked by Not now");
   });
+
+  // The host timer, live: `comebye gpg watch --once` against the real hub, whose fake herdr has working agents.
+  await check(`${width}px: gpg watch files one item for a locked host, none twice, and withdraws it when pinentry unlocks`, async () => {
+    cli(["gpg", "lock"]);
+    fs.rmSync(path.join(stateDir, "gpg-filed.json"), { force: true }); // the earlier asks in this script would hold the watcher back (its cooldown)
+    const open = async () => (await (await fetch(`${base}/api/todos`)).json());
+    const mine = async () => ((await open()).items || (await open()).todos || []).filter((i) => /^GPG is locked on uitest/.test(i.question) && i.state === "open");
+    const w1 = cli(["gpg", "watch", "--once"]);
+    if (w1.code !== 0 || !/filed/.test(w1.out)) throw new Error("first round: " + w1.code + " " + w1.out);
+    const w2 = cli(["gpg", "watch", "--once"]);
+    const u = cli(["gpg", "unlock"]);
+    if (w2.code !== 0 || /filed/.test(w2.out) || !/Already asked/.test(u.out)) throw new Error("second round: " + w2.out + " / unlock: " + u.out);
+    if ((await mine()).length !== 1) throw new Error("items: " + JSON.stringify(await mine()));
+    // Unlock without the app: sign once with the passphrase typed to the agent, as pinentry would.
+    const sg = spawnSync("gpg", ["--batch", "--pinentry-mode", "loopback", "--passphrase", PASS, "-u", FPR, "--clearsign"], { env, input: "x", encoding: "utf8" });
+    if (sg.status !== 0) throw new Error("sign: " + sg.stderr);
+    if (status().locked) throw new Error("the agent did not cache the passphrase");
+    const w3 = cli(["gpg", "watch", "--once"]);
+    if (w3.code !== 0 || !/withdrawn/.test(w3.out)) throw new Error("third round: " + w3.out);
+    if ((await mine()).length !== 0) throw new Error("the item is still open");
+  });
   await browser.close();
 }
 

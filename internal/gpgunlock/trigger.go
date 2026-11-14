@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -59,6 +61,14 @@ func (h *Host) LastFiled() (Filed, bool) {
 func (h *Host) Waiting() (Filed, bool) {
 	f, ok := h.LastFiled()
 	if !ok || !h.now().Before(f.Exp) || f.Setup == h.HasBlob() {
+		return f, false
+	}
+	// A request the host has taken an answer for (a refusal included) is
+	// spent: its pending file is gone, and a new one is wanted.
+	if strings.ContainsAny(f.Request, "/\\.") {
+		return f, false
+	}
+	if _, err := os.Stat(h.path(filepath.Join(dirPending, f.Request+".json"))); err != nil {
 		return f, false
 	}
 	return f, true
