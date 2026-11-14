@@ -145,11 +145,26 @@ func (t *bgTracker) result(toolUseID, text, at string) {
 }
 
 // notification applies a raw record that holds a <task-notification>.
+//
+// Two notices need care, both seen in real sessions:
+//   - a Monitor that runs out its timeout says "<event>[Monitor expired
+//     after 30m ...]" and carries no <status>; without this it would read as
+//     running until maxBackgroundAge;
+//   - a background agent that stopped while work of its own still runs says
+//     "<status>completed</status>" with a summary "... is waiting on its own
+//     background work": it is not over, and the same task-id notifies again.
 func (t *bgTracker) notification(raw []byte) {
 	s := string(raw)
 	id := taskIDRE.FindStringSubmatch(s)
+	if id == nil {
+		return
+	}
+	if strings.Contains(s, "<event>[Monitor expired") {
+		t.end(id[1])
+		return
+	}
 	st := taskStateRE.FindStringSubmatch(s)
-	if id == nil || st == nil {
+	if st == nil || strings.Contains(s, "is waiting on its own background work") {
 		return
 	}
 	switch st[1] {

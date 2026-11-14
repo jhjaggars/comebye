@@ -2,6 +2,8 @@ package transcript
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -109,5 +111,75 @@ func TestBackgroundMarksCommandAsLabel(t *testing.T) {
 		bgResult("b", "Command running in background with ID: c1."))
 	if len(l.Background) != 2 || l.Background[0].Cmd || !l.Background[1].Cmd {
 		t.Errorf("Cmd flag: %+v", l.Background)
+	}
+}
+
+// fixture reads a trimmed excerpt of a real Claude Code session
+// (testdata/*.jsonl, paths and commands scrubbed). Timestamps are moved to
+// now so the age limit does not retire the task as the file gets old.
+func fixture(t *testing.T, name string) []string {
+	t.Helper()
+	b, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	re := regexp.MustCompile(`"timestamp": "[^"]*"`)
+	return strings.Split(strings.TrimSpace(re.ReplaceAllString(string(b), `"timestamp": "`+now+`"`)), "\n")
+}
+
+// A pre-landing run watched by a Monitor, as in a real session: open after
+// the launch, closed by the notice that the stream ended.
+func TestBackgroundRealMonitorOpenThenStreamEnded(t *testing.T) {
+	open := fixture(t, "monitor_open.jsonl")
+	l := bgLines(t, open...)
+	if len(l.Background) != 1 || l.Background[0].Tool != "Monitor" || l.Background[0].Desc != "Wait for prelanding.sh" {
+		t.Fatalf("watch not seen: %+v", l.Background)
+	}
+	l = bgLines(t, append(open, fixture(t, "monitor_stream_ended.jsonl")...)...)
+	if len(l.Background) != 0 {
+		t.Errorf("a Monitor whose stream ended is still listed: %+v", l.Background)
+	}
+}
+
+// A Monitor that runs out its timeout is announced with no <status>; it must
+// not stay "running" for hours.
+func TestBackgroundRealMonitorExpired(t *testing.T) {
+	rec := fixture(t, "monitor_expired.jsonl")
+	l := bgLines(t, rec[:2]...)
+	if len(l.Background) != 1 {
+		t.Fatalf("watch not seen before it expired: %+v", l.Background)
+	}
+	l = bgLines(t, rec...)
+	if len(l.Background) != 0 {
+		t.Errorf("an expired Monitor is still listed: %+v", l.Background)
+	}
+}
+
+// A mid-watch event is not the end of the watch.
+func TestBackgroundMonitorEventKeepsWatch(t *testing.T) {
+	ev := `{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>mon1</task-id>\n<summary>Monitor event: \"w\"</summary>\n<event>ssh not ready</event>\n</task-notification>"}`
+	l := bgLines(t,
+		bgCall("m", "Monitor", `{"command":"x","description":"w"}`),
+		bgResult("m", "Monitor started (task mon1, expires in 3m)"), ev)
+	if len(l.Background) != 1 {
+		t.Errorf("an event ended the watch: %+v", l.Background)
+	}
+}
+
+// A background agent that stopped with work of its own still running sends
+// "completed" yet is not over (its task-id notifies again).
+func TestBackgroundAgentWaitingOnItsOwnWorkStaysOpen(t *testing.T) {
+	launch := []string{
+		bgCall("a", "Agent", `{"description":"scale","prompt":"x","run_in_background":true}`),
+		bgResult("a", "Async agent launched successfully.\nagentId: a2e2fde92b124ad6b (internal ID)"),
+	}
+	waiting := `{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>a2e2fde92b124ad6b</task-id>\n<status>completed</status>\n<summary>Agent \"scale\" is waiting on its own background work</summary>\n<note>This agent stopped with background work of its own still running.</note>\n</task-notification>"}`
+	if l := bgLines(t, append(append([]string{}, launch...), waiting)...); len(l.Background) != 1 {
+		t.Errorf("an agent waiting on its own work was closed: %+v", l.Background)
+	}
+	done := strings.Replace(waiting, " is waiting on its own background work", " finished", 1)
+	if l := bgLines(t, append(append([]string{}, launch...), waiting, done)...); len(l.Background) != 0 {
+		t.Errorf("a finished agent is still listed: %+v", l.Background)
 	}
 }

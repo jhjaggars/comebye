@@ -1086,7 +1086,7 @@ for (const width of [390, 1280]) {
     });
     for (const r of rows) {
       if (r.want === "bg") {
-        if (!/^waiting/.test(r.status) || !r.dotWaiting) throw new Error("an idle agent with a background task is not shown waiting: " + JSON.stringify(r));
+        if (!/^running/.test(r.status) || !r.dotWaiting) throw new Error("an idle agent with a background task is not shown running: " + JSON.stringify(r));
         continue;
       }
       if (r.want === "running") { if (!/^working/.test(r.status)) throw new Error("a running worker: " + JSON.stringify(r)); continue; }
@@ -1097,7 +1097,7 @@ for (const width of [390, 1280]) {
       if (r.rowEnd > width + 1) throw new Error("a row runs off the screen: " + JSON.stringify(r));
     }
     const bgRow = rows.find((r) => r.want === "landing: waiting on a background task");
-    if (!/^waiting/.test(bgRow.status) || !bgRow.statusBg) throw new Error("the waiting worker's status is not waiting: " + JSON.stringify(bgRow));
+    if (!/^running/.test(bgRow.status) || !bgRow.statusBg) throw new Error("the waiting worker's status is not running: " + JSON.stringify(bgRow));
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
     for (const cs of ["dark", "light"]) {
       await page.emulateMedia({ colorScheme: cs });
@@ -1112,7 +1112,7 @@ for (const width of [390, 1280]) {
 // age, not "done"; it sorts between working and done, is not counted as working or as needing you, and
 // goes back to normal when the task ends. A working agent is unchanged.
 for (const width of [390, 1280]) {
-  await check(`background: at ${width}px an idle agent with a running task shows waiting, and clears when it ends`, async () => {
+  await check(`background: at ${width}px an idle agent with a running task shows running, and clears when it ends`, async () => {
     await desktopList(width);
     const r = await page.evaluate(() => {
       const iso0 = (ms) => new Date(Date.now() - ms).toISOString();
@@ -1131,11 +1131,11 @@ for (const width of [390, 1280]) {
       state.agents = saved;
       return out;
     });
-    if (!/^waiting 4m$/i.test(r.w2.status) || !/waiting/.test(r.w2.dot) || !/waiting/.test(r.w2.cls)) throw new Error("done + tasks is not waiting 4m: " + JSON.stringify(r.w2));
-    if (r.w2.why !== "race + uitest +1" || !/race \+ uitest/.test(r.w2.title) || !/gh run watch/.test(r.w2.title)) throw new Error("label/title: " + JSON.stringify(r.w2));
-    if (!/^waiting/.test(r.w3.status)) throw new Error("idle + task is not waiting: " + JSON.stringify(r.w3));
+    if (!/^running 4m$/i.test(r.w2.status) || !/waiting/.test(r.w2.dot) || !/waiting/.test(r.w2.cls)) throw new Error("done + tasks is not running 4m: " + JSON.stringify(r.w2));
+    if (r.w2.why !== "Running: race + uitest +1" || !/race \+ uitest/.test(r.w2.title) || !/gh run watch/.test(r.w2.title)) throw new Error("label/title: " + JSON.stringify(r.w2));
+    if (!/^running/.test(r.w3.status)) throw new Error("idle + task is not running: " + JSON.stringify(r.w3));
     if (r.w1.status !== "done" || /waiting/.test(r.w1.dot)) throw new Error("a plain done agent changed: " + JSON.stringify(r.w1));
-    if (r.w4.status.startsWith("waiting") || !/working/.test(r.w4.cls)) throw new Error("a working agent changed: " + JSON.stringify(r.w4));
+    if (r.w4.status.startsWith("running") || !/working/.test(r.w4.cls)) throw new Error("a working agent changed: " + JSON.stringify(r.w4));
     if (!/\b1\b.*working|2 working/.test(r.count) || /waiting|need/.test(r.count)) throw new Error("count line: " + r.count);
     if (!/^w[45],w[45],w[23],w[23],w1$/.test(r.order)) throw new Error("order, want working, waiting, done: " + r.order);
     if (r.cleared.status !== "done" || /waiting/.test(r.cleared.dot) || r.cleared.why) throw new Error("did not clear when the task ended: " + JSON.stringify(r.cleared));
@@ -1153,7 +1153,7 @@ for (const width of [390, 1280]) {
 }
 
 for (const width of [390, 1280]) {
-  await check(`background: at ${width}px the agent's detail says waiting, with its label and age`, async () => {
+  await check(`background: at ${width}px the agent's detail says running, with its label and age`, async () => {
     await page.setViewportSize({ width, height: width < 600 ? 780 : 800 });
     // The checks above swap in made-up agents; the route to this one is only resolved against the real list, which a
     // fresh load brings back (without it the detail waited for the next fleet refresh, 13 to 16 s).
@@ -1168,14 +1168,14 @@ for (const width of [390, 1280]) {
       const on = { status: document.getElementById("d-status").textContent, cls: document.getElementById("d-status").className, why: document.getElementById("d-why").textContent, whyHidden: document.getElementById("d-why").hidden };
       return on;
     });
-    if (!/^waiting · 4m$/.test(r.status) || !/waiting/.test(r.cls) || r.why !== "race + uitest" || r.whyHidden) throw new Error("detail: " + JSON.stringify(r));
+    if (!/^running · 4m$/.test(r.status) || !/waiting/.test(r.cls) || r.why !== "Running: race + uitest" || r.whyHidden) throw new Error("detail: " + JSON.stringify(r));
     for (const cs of ["dark", "light"]) {
       await page.emulateMedia({ colorScheme: cs });
       await page.locator("#detail header").first().screenshot({ path: `${out}/background-detail-${width}-${cs}.png` });
     }
     await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
     const off = await page.evaluate(() => { const a = state.agents.find((x) => x.pane_id === "w1:p1"); a.background = undefined; renderDetail(); return document.getElementById("d-status").textContent; });
-    if (/waiting/.test(off)) throw new Error("detail still waiting after the task ended: " + off);
+    if (/running/.test(off)) throw new Error("detail still running after the task ended: " + off);
   });
 }
 

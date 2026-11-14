@@ -1020,9 +1020,9 @@ function agentRow(a, worker) {
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
           isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
-        ${subLine(a)}${noteHtml(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgLabel(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
+        ${subLine(a)}${noteHtml(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgWhy(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
       </div>
-      <span class="status ${esc(agentStatusText(a))}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
+      <span class="status ${esc(agentStatusCls(a))}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
         bgRunning(a) ? (bgSinceMs(a) ? `<br><span class="ago">${fmtAgo(bgSinceMs(a))}</span>` : "")
         : activeMs(a) && (a.agent_status === "idle" || a.agent_status === "done")
           ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>`
@@ -1163,10 +1163,19 @@ function bgTitle(a) {
   return `Not finished: ${t.length} task${t.length === 1 ? "" : "s"} running in the background (the agent wakes when ${t.length === 1 ? "it ends" : "they end"}): ` +
     t.map((x) => `${x.kind}${x.label ? " " + x.label : ""}${x.since && !Number.isNaN(Date.parse(x.since)) ? " (" + fmtAgo(Date.parse(x.since)) + ")" : ""}`).join("; ");
 }
-// agentStatusText is the status word of an agent: "waiting" while it only
-// waits on a background task.
+// agentStatusText is the status word of an agent: "running" while only a
+// task it started in the background goes on ("waiting" is kept for an agent
+// that waits on the user).
 function agentStatusText(a) {
+  return bgRunning(a) ? "running" : a.agent_status;
+}
+// agentStatusCls styles it: the quiet blue "waiting" look (hollow dot), never the orange of an agent that needs you.
+function agentStatusCls(a) {
   return bgRunning(a) ? "waiting" : a.agent_status;
+}
+// bgWhy is the line under the name: "Running: prelanding.sh +1".
+function bgWhy(a) {
+  return "Running: " + bgLabel(a);
 }
 // statusRank orders the list: waiting agents sit between working and done.
 function statusRank(a) {
@@ -9981,11 +9990,11 @@ function renderDetail() {
   uc.innerHTML = ue ? usageChipHtml(ue.id, true) : "";
   uc.hidden = !uc.innerHTML;
   const st = $("d-status");
-  st.textContent = bgRunning(a) ? "waiting" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
-  st.className = "status " + agentStatusText(a);
+  st.textContent = bgRunning(a) ? "running" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
+  st.className = "status " + agentStatusCls(a);
   st.title = bgRunning(a) ? bgTitle(a) : "";
   renderCtxChip();
-  const why = $("d-why"), wt = whyBlocked(a) || (quietMs(a) ? quietText(a) : "") || noteOf(a) || (bgRunning(a) ? bgLabel(a) : "");
+  const why = $("d-why"), wt = whyBlocked(a) || (quietMs(a) ? quietText(a) : "") || noteOf(a) || (bgRunning(a) ? bgWhy(a) : "");
   why.classList.toggle("quiet", !whyBlocked(a) && !quietMs(a));
   why.classList.toggle("stuck", !whyBlocked(a) && !!quietMs(a));
   why.textContent = wt;
