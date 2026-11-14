@@ -53,7 +53,7 @@ func (h *Host) Complete(id string, a Answer) (State, error) {
 		return State{}, errors.New("the answer is malformed")
 	}
 	challenge := passkey.ApprovalChallenge(p.Request)
-	counter, err := passkey.VerifyAssertion(passkey.Options{RPID: pin.RPID}, key.PublicKey, key.Counter, challenge, cd, ad, sig)
+	counter, err := passkey.VerifyAssertion(passkey.Options{RPID: pin.RPID, AllowLocalhost: h.AllowLocalhost}, key.PublicKey, key.Counter, challenge, cd, ad, sig)
 	if err != nil {
 		return State{}, err
 	}

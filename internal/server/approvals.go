@@ -76,17 +76,32 @@ var approvalPerMinute = 10
 
 // approvalActions are the actions a request may name. agent: an agent or a
 // host may file it; user: the user's own page may; todo: a to-do item is filed.
-var approvalActions = map[string]struct {
+type approvalSpec struct {
 	agent, user, todo bool
 	title             string        // %s: the host
 	ttl               time.Duration // approvalTTL when zero
 	gpg               bool          // the answer goes to the host (gpg.go)
-}{
+}
+
+var approvalActions = map[string]approvalSpec{
 	"gpg-unlock": {agent: true, todo: true, title: "GPG is locked on %s", gpg: true},
 	// The first unlock of a host: the user compares the host key's
 	// fingerprint and types the passphrase, so the request waits longer.
 	"gpg-setup":   {agent: true, todo: true, title: "Set up GPG unlock on %s", ttl: gpgunlock.SetupTTL, gpg: true},
 	"passkey-add": {user: true},
+}
+
+// testApprove is an action that exists under -test-mode only: a plain
+// approval that does nothing when approved, for the browser tests of the
+// card that answers one.
+var testApprove = approvalSpec{agent: true, todo: true, title: "Approve a test on %s"}
+
+func (s *Server) approvalSpec(action string) (approvalSpec, bool) {
+	if action == "test-approve" && s.cfg.TestMode {
+		return testApprove, true
+	}
+	spec, ok := approvalActions[action]
+	return spec, ok
 }
 
 func approvalLife(action string) time.Duration {
@@ -106,6 +121,9 @@ type TodoApproval struct {
 	RequestedBy string    `json:"requested_by,omitempty"`
 	State       string    `json:"state"`
 	ExpiresAt   time.Time `json:"expires_at"`
+	// Note is why the host refused an answer (state denied): the item stays
+	// open so the user can read it, and a new request from that host reuses it.
+	Note string `json:"note,omitempty"`
 }
 
 type apAssertion struct {
@@ -137,8 +155,18 @@ type approval struct {
 }
 
 func (a *approval) todoView() *TodoApproval {
-	return &TodoApproval{ID: a.ID, Action: a.Action, Host: a.Host, Subject: a.Subject, RequestedBy: a.RequestedBy, State: a.State, ExpiresAt: a.ExpiresAt}
+	return &TodoApproval{ID: a.ID, Action: a.Action, Host: a.Host, Subject: a.Subject, RequestedBy: a.RequestedBy, State: a.State, ExpiresAt: a.ExpiresAt, Note: hostRefusal(a)}
 }
+
+// hostRefusal is the host's reason when it refused the answer, for the item.
+func hostRefusal(a *approval) string {
+	if a.State == apDenied && strings.HasPrefix(a.Note, hostRefusedPrefix) {
+		return strings.TrimPrefix(a.Note, hostRefusedPrefix)
+	}
+	return ""
+}
+
+const hostRefusedPrefix = "the host refused: "
 
 type approvalStore struct {
 	mu    sync.Mutex
@@ -320,7 +348,7 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	spec, ok := approvalActions[b.Action]
+	spec, ok := s.approvalSpec(b.Action)
 	if !ok {
 		apErr(w, http.StatusBadRequest, "bad_action", "the action is not one that can be approved")
 		return
@@ -382,7 +410,7 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 	expired := st.expireLocked()
 	now := st.now()
 	recent := 0
-	var old *approval
+	var old, stale *approval
 	for _, a := range st.items {
 		if !sameHost(a.Host, host) {
 			continue
@@ -392,6 +420,9 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		if a.State == apPending && a.Action == b.Action {
 			old = a
+		}
+		if hostRefusal(a) != "" && a.Action == b.Action && a.TodoID != "" {
+			stale = a // a refused answer's item still waits to be read
 		}
 	}
 	if old != nil && old.Subject == subject && (reqBytes == nil || bytes.Equal(old.Request, reqBytes)) {
@@ -411,6 +442,8 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 	if old != nil {
 		old.State, old.DecidedAt, old.Note = apExpired, &now, "replaced by a newer request"
 		reuse = old.TodoID
+	} else if stale != nil {
+		reuse = stale.TodoID
 	}
 	a := &approval{ID: newApprovalID(), Action: b.Action, Host: host, Subject: subject, RequestedBy: s.by(r, ""),
 		State: apPending, CreatedAt: now, ExpiresAt: now.Add(approvalLife(b.Action))}
@@ -507,9 +540,9 @@ func approvalContext(a *approval, agent bool) string {
 	var sb strings.Builder
 	switch a.Action {
 	case "gpg-unlock":
-		fmt.Fprintf(&sb, "Unlocking the GPG key on %s needs your passkey (Face ID). The unlock lasts 8 hours.", a.Host)
+		fmt.Fprintf(&sb, "Unlocking the GPG key on %s needs your passkey (Face ID).", a.Host)
 	case "gpg-setup":
-		fmt.Fprintf(&sb, "Setting up GPG unlock on %s: check the host key fingerprint against the terminal, type the key's passphrase once and approve with Face ID. The unlock lasts 8 hours.", a.Host)
+		fmt.Fprintf(&sb, "Setting up GPG unlock on %s needs the key's passphrase, typed once, and your passkey (Face ID).", a.Host)
 	default:
 		fmt.Fprintf(&sb, "%s on %s needs your passkey (Face ID).", a.Action, a.Host)
 	}
@@ -662,7 +695,7 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		apErr(w, http.StatusConflict, "not_pending", "this request expired: ask again")
 		return
 	}
-	if approvalActions[a.Action].gpg {
+	if approvalActions[a.Action].gpg && strings.HasPrefix(gpgRequestID(a.Request), "gu_") {
 		// The host decides: it checks the assertion again against the passkeys
 		// it pinned, opens K and presets the passphrase. The answer passes
 		// through here once (the blob, at setup, is not kept); the request is
@@ -676,10 +709,16 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		st.mu.Lock()
 		a.relaying = false
 		if rerr != nil {
-			finish(apDenied, "the host refused: "+rerr.Error())
+			finish(apDenied, hostRefusedPrefix+rerr.Error())
 			cp = *a
 			st.mu.Unlock()
-			s.settleApprovalTodo(&cp, "the host refused")
+			// The item stays open with the reason; the request is spent.
+			if cp.TodoID != "" && s.todos != nil {
+				_, _ = s.todos.mutate(cp.TodoID, func(it *Todo) error {
+					it.Approval = cp.todoView()
+					return nil
+				})
+			}
 			s.audit(r, ledger.AuditEvent{Action: "approval.refused", Todo: cp.TodoID, Host: cp.Host, Detail: cp.Action + " " + cp.ID + ": host: " + rerr.Error()})
 			writeJSONStatus(w, http.StatusConflict, map[string]any{"code": "host_refused", "message": rerr.Error(), "approval": cp.view()})
 			return

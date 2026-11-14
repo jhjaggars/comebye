@@ -439,6 +439,34 @@ a later slice. What this slice fixes:
 - The pending requests, challenges and assertions are in `approvals.json`
   (public by design; the sealed key a browser may attach is opaque to the hub).
 
+## GPG unlock in the app (slice 3 of issue #3)
+
+The Set up and Unlock cards (To do, kind `approval`) are the browser's half of
+`comebye gpg` (`web/unlockcrypto.js`; the formats are in `internal/gpgunlock`).
+The page checks what it can of the host's signed request (the hub's challenge is
+the hash of that very request, the host key's signature where the browser has
+Ed25519), asks the passkey for Face ID with a PRF salt that names the host and
+its keys, derives K from the PRF output, seals K to the request's one-use key
+and posts the assertion and the sealed K. At setup it also encrypts the typed
+passphrase under K and posts that blob.
+
+- **The hub relays and keeps nothing secret.** The passphrase, K and the PRF
+  output never leave the page in the clear; the hub sees the assertion, the
+  sealed K (it holds no key to open it) and, once at setup, the ciphertext blob,
+  which it passes to the host and does not store. A hub whose *code* is changed
+  can still serve JavaScript that copies the passphrase or K (see the plan's
+  limit above); this slice does not close that.
+- **The host decides.** It checks the request, the passkey it pinned, the
+  assertion and the sealed K again, and a request is spent on its first try. A
+  wrong passphrase at setup stores nothing.
+- **Nothing is left in the page.** The passphrase is read from its box once
+  Face ID has answered and the box is emptied; the PRF output and K are zeroed
+  after use. Nothing goes to storage, a draft or the DOM (checked by
+  `tools/uitest/gpgunlock.mjs`).
+- **The unlock lasts a fixed 8 hours.** The card says so and has no picker.
+- **The host key's fingerprint is compared once**, at setup: the card shows the
+  one computed from the request; the terminal printed the one it made.
+
 ## Token usage
 
 Each host counts the tokens its agents spend by reading their session files

@@ -63,6 +63,9 @@ type Host struct {
 	GPG      *GPG
 	Lifetime time.Duration // DefaultLifetime when zero
 	Now      func() time.Time
+	// AllowLocalhost lets an assertion made on http(s)://localhost verify
+	// for a hub named localhost: the hub's -test-mode only.
+	AllowLocalhost bool
 
 	mu sync.Mutex
 }

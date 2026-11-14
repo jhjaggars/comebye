@@ -2282,7 +2282,8 @@ function todoFollowRefresh() {
       if (todos.openId) todos.lastId = todos.openId;
       todos.follow = todoHasFocus();
       moved = true;
-      if (todos.follow || (isDesktop() && state.view === "todo")) {
+      const mine = !!(t && t.approval && apBusy.has(t.approval.id)); // closed by this page's own Face ID: no "elsewhere" notice
+      if (!mine && (todos.follow || (isDesktop() && state.view === "todo"))) {
         toast((t ? "That item was answered elsewhere." : "That item was closed elsewhere.") + (kept ? " Your unsent answer is kept." : ""));
       }
     }
@@ -2331,10 +2332,10 @@ function renderTodos(force) {
   if (main) main.hidden = !show;
   if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
-  const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()],
-    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
+  const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()], [...gu].map(([k, v]) => [k, v.st, v.msg, apBusy.has(k)]),
+    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.approval && t.approval.state, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
   // The age moves between renders; a typed answer must not be lost to one.
-  const typing = (el) => el && el.contains(document.activeElement) && document.activeElement.classList.contains("td-text");
+  const typing = (el) => el && ((el.contains(document.activeElement) && document.activeElement.classList.contains("td-text")) || [...el.querySelectorAll(".ap-pass")].some((p) => p.value));
   if (show && main && (again || (main.dataset.sig !== sig && !typing(main)))) {
     main.dataset.sig = sig;
     todoPaint(main, `<div class="td-head"><button type="button" class="td-toggle" aria-expanded="${!folded}">
@@ -3279,6 +3280,9 @@ function onTodoClick(ev) {
 
 // A typed answer is kept per item (and across reloads), and marks the row.
 function onTodoInput(ev) {
+  const ck = ev.target.closest && ev.target.closest(".ap-confirm");
+  if (ck) { const it = ck.closest(".td-item"); const ti = it && todos.items.find((x) => x.id === it.dataset.id); if (ti && ti.approval) guState(ti.approval.id).ok = ck.checked; return; }
+  if (ev.target.closest && ev.target.closest(".ap-pass")) return; // never a draft: the passphrase lives in its input and nowhere else
   const box = ev.target.closest && ev.target.closest(".td-text");
   const item = box && box.closest(".td-item");
   if (!item) return;
@@ -3298,6 +3302,10 @@ function onTodoInput(ev) {
 function onTodoKey(ev) {
   if (ev.defaultPrevented || ev.isComposing) return;
   const el = ev.target;
+  if (el.classList && el.classList.contains("ap-pass")) {
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); const it = el.closest(".td-item"); if (it) approvalGo(it.dataset.id, it); }
+    return;
+  }
   const box = el.closest && el.closest(".td-text");
   if (box && ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey) {
     ev.preventDefault();
@@ -9572,6 +9580,7 @@ const apBusy = new Set();
 
 function approvalBarHtml(t) {
   const a = t.approval;
+  if (guIs(a)) return guBarHtml(t);
   const left = Date.parse(a.expires_at) - Date.now();
   const line = a.state !== "pending" ? `This request is ${esc(a.state)}.` : left > 0 ? `Waiting for your passkey (Face ID). The request lasts until ${esc(new Date(a.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}.` : "This request expired. Ask again from the host.";
   const can = a.state === "pending" && left > 0 && !apBusy.has(a.id);
@@ -9583,6 +9592,8 @@ async function approvalGo(id, item) {
   const bar = item.querySelector("[data-ap]");
   const apid = bar && bar.dataset.ap;
   if (!apid || apBusy.has(apid)) return;
+  const ti = todos.items.find((x) => x.approval && x.approval.id === apid);
+  if (ti && guIs(ti.approval)) { guGo(apid, item, ti.approval); return; }
   apBusy.add(apid);
   renderTodos(true);
   try {
@@ -9594,6 +9605,177 @@ async function approvalGo(id, item) {
   } finally {
     apBusy.delete(apid);
     await loadTodos();
+  }
+}
+
+/* ---------- GPG unlock (issue #3, slice 3) ---------- */
+//
+// The items "GPG is locked on HOST" (action gpg-unlock) and "Set up GPG unlock
+// on HOST" (gpg-setup). The host made a signed request; this page checks what
+// it can of it (unlockcrypto.js), asks the passkey for Face ID with a PRF salt
+// that names the host and its keys, derives K from the PRF output, seals K to
+// the request's one-use key and posts the assertion and the sealed K. At setup
+// it also encrypts the typed passphrase under K (the blob) and posts that. The
+// hub relays everything to the host, which checks it again itself and unlocks.
+//
+// Secrets: the passphrase sits in its input until Face ID has answered, then
+// is read once and the input is emptied; the PRF output and K are typed arrays
+// that are zeroed as soon as they are used. Nothing is put in storage, in a
+// draft or in the DOM, and the hub is never sent any of them in the clear.
+// Apple Passwords only, PRF required: with no PRF result nothing is sent.
+
+const GU_ACTIONS = new Set(["gpg-unlock", "gpg-setup"]);
+const GU_LIFE = "8 hours"; // fixed on the host; the card says so and has no picker
+const guIs = (a) => !!a && GU_ACTIONS.has(a.action);
+const gu = new Map(); // approval id -> { st: idle|loading|ready|err, d, info, err, ok, msg }
+
+function guState(id) {
+  let g = gu.get(id);
+  if (!g) { g = { st: "idle", ok: false, msg: "", err: "" }; gu.set(id, g); }
+  return g;
+}
+
+async function guLoad(id) {
+  const g = guState(id);
+  if (g.st !== "idle") return;
+  g.st = "loading";
+  try {
+    const d = await api(`/api/approvals/${encodeURIComponent(id)}`);
+    g.d = d;
+    g.info = await CBUnlock.checkRequest(d.approval.request, d.challenge, d.approval.host, d.rp_id, Math.floor(Date.now() / 1000));
+    g.st = "ready";
+  } catch (e) { g.st = "err"; g.err = e.message || "The request could not be read."; }
+  for (const k of [...gu.keys()]) if (!todos.items.some((t) => t.approval && t.approval.id === k)) gu.delete(k);
+  renderTodos();
+}
+
+// guHostMsg words what a host refused, for the user and not a developer.
+function guHostMsg(m, host) {
+  m = String(m || "");
+  if (/does not unlock the key/.test(m)) return "That passphrase is not the key's, so nothing was stored or unlocked. Run `comebye gpg unlock` on " + host + " and try again.";
+  if (/not one this host trusts/.test(m)) return host + " does not trust that passkey. Run `comebye gpg setup` there to pin it.";
+  if (/unknown, already used|expired/.test(m)) return "This request is used up or has expired. Run `comebye gpg unlock` on " + host + " for a new one.";
+  if (/does not open the stored passphrase|cannot be read/.test(m)) return "This passkey is not the one the passphrase was stored with. Use that passkey, or run `comebye gpg reset` on " + host + " and set up again.";
+  if (/another address than this hub/.test(m)) return "The passkey was used on another address than the hub's. Open the app at the hub's own address and try again.";
+  if (/no passphrase is stored/.test(m)) return "No passphrase is stored on " + host + " yet. Run `comebye gpg setup` there.";
+  return m;
+}
+
+function guErrMsg(e, host) {
+  if (e && e.code === "host_refused") return guHostMsg(e.message, host);
+  if (e && (e.name === "NotAllowedError" || e.name === "AbortError" || e.name === "InvalidStateError")) return sxWebAuthnMsg(e);
+  return (e && e.message) || "Not unlocked.";
+}
+
+// guRich escapes a message and shows its `commands` as code.
+const guRich = (m) => esc(m).replace(/`([^`]+)`/g, "<code>$1</code>");
+
+function guBarHtml(t) {
+  const a = t.approval, g = guState(a.id), setup = a.action === "gpg-setup";
+  const left = Date.parse(a.expires_at) - Date.now();
+  const pending = a.state === "pending" && left > 0;
+  if (pending) guLoad(a.id);
+  const busy = apBusy.has(a.id);
+  const at = (iso) => esc(new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+  const host = esc(a.host);
+  let h = `<div class="td-form ap-card gu-card" data-ap="${escAttr(a.id)}" data-gu="${setup ? "setup" : "unlock"}">`;
+  h += `<p class="sx-note gu-life">${setup ? `Stores the passphrase of the GPG key on <b>${host}</b> sealed under your passkey, then unlocks it.` : `Unlocks the GPG key on <b>${host}</b>.`} The unlock lasts <b>${GU_LIFE}</b>, then it locks again.</p>`;
+  if (a.state === "denied" && a.note) {
+    h += `<p class="sx-msg err" role="alert">Not unlocked. ${guRich(guHostMsg(a.note, a.host))}</p>
+      <div class="td-acts"><button type="button" class="ap-no">Dismiss</button></div></div>`;
+    return h;
+  }
+  if (!pending) {
+    h += `<p class="sx-note" role="status">This request is ${esc(a.state === "pending" ? "expired" : a.state)}. Run <code>comebye gpg unlock</code> on ${host} for a new one.</p>
+      <div class="td-acts"><button type="button" class="ap-no">Dismiss</button></div></div>`;
+    return h;
+  }
+  if (g.st === "err") {
+    h += `<p class="sx-msg err" role="alert">${guRich(g.err)}</p><div class="td-acts"><button type="button" class="ap-no">Dismiss</button></div></div>`;
+    return h;
+  }
+  if (setup && g.st === "ready") {
+    h += `<div class="gu-fp"><span class="sx-note">Host key fingerprint (from the request)</span><code class="sx-fp gu-fpv">${esc(g.info.fingerprint)}</code></div>
+      <label class="gu-check"><input type="checkbox" class="ap-confirm"${g.ok ? " checked" : ""}> <span>It matches what <code>comebye gpg setup</code> printed on ${host}</span></label>
+      <label class="sx-note" for="gu-pass-${escAttr(a.id)}">Passphrase of the GPG key</label>
+      <input type="password" class="ap-pass" id="gu-pass-${escAttr(a.id)}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" maxlength="1024" aria-describedby="gu-pn-${escAttr(a.id)}">
+      <p class="sx-note" id="gu-pn-${escAttr(a.id)}">Typed once. It is encrypted here under a key only your passkey can make; neither this app nor the hub keeps it.</p>`;
+  }
+  h += `<div class="sx-note" role="status">${g.st === "loading" || g.st === "idle" ? "Reading the request…" : `Waiting for your passkey (Face ID). The request lasts until ${at(a.expires_at)}.`}</div>`;
+  if (g.msg) h += `<p class="sx-msg err" role="alert">${guRich(g.msg)}</p>`;
+  h += `<div class="td-acts"><button type="button" class="ap-go td-answer-btn"${g.st === "ready" && !busy ? "" : " disabled"}>${busy ? "Waiting for Face ID…" : setup ? "Set up with Face ID" : "Unlock with Face ID"}</button><button type="button" class="ap-no">Not now</button></div></div>`;
+  return h;
+}
+
+// guRepaint redraws the list and puts back what is typed in the passphrase
+// box (a redraw makes a new one): the secret moves from the old input to the
+// new, never anywhere else.
+function guRepaint(apid) {
+  const sel = `.gu-card[data-ap="${CSS.escape(apid)}"] .ap-pass`;
+  const typed = [...document.querySelectorAll(sel)].map((e) => e.value).find(Boolean) || "";
+  renderTodos(true);
+  if (typed) for (const e of document.querySelectorAll(sel)) e.value = typed;
+}
+
+async function guGo(apid, item, a) {
+  const g = guState(apid);
+  if (apBusy.has(apid)) return;
+  const setup = a.action === "gpg-setup";
+  const say = (m) => { g.msg = m; guRepaint(apid); };
+  if (g.st !== "ready") { say(g.st === "err" ? g.err : "Still reading the request: try again in a moment."); return; }
+  const box = item.querySelector(".ap-pass");
+  if (setup) {
+    if (!g.ok) { say("Compare the fingerprint with the terminal first, then tick the box."); return; }
+    if (!box || !box.value) { say("Type the passphrase of the GPG key."); return; }
+  }
+  if (!sxSupported()) { say("This browser cannot use a passkey here: it needs a secure (https) address."); return; }
+  const btn = item.querySelector(".ap-go");
+  apBusy.add(apid);
+  g.msg = "";
+  if (btn) { btn.disabled = true; btn.textContent = "Waiting for Face ID…"; } // in place: a redraw would lose the typed passphrase
+  let prf = null, k = null, pass = null;
+  try {
+    const { d, info } = g;
+    if (!sx.csrf) await sxLoad();
+    const salt = await CBUnlock.prfSalt(info.host, info.keygrips);
+    let cred;
+    try {
+      cred = await navigator.credentials.get({ publicKey: {
+        challenge: CBUnlock.unb64(d.challenge), rpId: d.rp_id, userVerification: "required", timeout: 60000,
+        allowCredentials: (d.credentials || []).map((c) => ({ type: "public-key", id: CBUnlock.unb64(c.id) })),
+        extensions: { prf: { eval: { first: salt } } },
+      } });
+    } catch (e) { throw new Error(sxWebAuthnMsg(e)); }
+    if (!cred) throw new Error("No passkey answered.");
+    const ext = cred.getClientExtensionResults ? cred.getClientExtensionResults() : {};
+    const first = ext.prf && ext.prf.results && ext.prf.results.first;
+    if (!first) throw new Error(SX_NO_PRF + " Nothing was sent.");
+    prf = new Uint8Array(first);
+    k = await CBUnlock.deriveK(prf);
+    CBUnlock.wipe(prf);
+    const body = {
+      credential_id: sxB64(cred.rawId), client_data_json: sxB64(cred.response.clientDataJSON),
+      authenticator_data: sxB64(cred.response.authenticatorData), signature: sxB64(cred.response.signature),
+      sealed: await CBUnlock.seal(info.curve, info.pub, info.challenge, k),
+    };
+    if (setup) {
+      pass = new TextEncoder().encode(box.value);
+      box.value = "";
+      body.blob = await CBUnlock.encryptBlob(k, info.host, info.keygrips, pass);
+    }
+    const res = await sxCall("POST", `/api/approvals/${encodeURIComponent(apid)}/respond`, body);
+    const until = res.unlocked_until ? new Date(res.unlocked_until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    toast(until ? `Unlocked until ${until}` : "Unlocked");
+    gu.delete(apid);
+  } catch (e) {
+    if (window.__guDebug) console.log("guGo failed:", e && e.name, e && e.message);
+    g.msg = guErrMsg(e, a.host);
+  } finally {
+    CBUnlock.wipe(prf); CBUnlock.wipe(k); CBUnlock.wipe(pass);
+    prf = k = pass = null; // the typed passphrase was emptied from its input when read; a cancelled Face ID keeps what was typed
+    await loadTodos(); // still busy: the item this answer just closed is not "closed elsewhere"
+    apBusy.delete(apid);
+    guRepaint(apid);
   }
 }
 

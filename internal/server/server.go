@@ -288,6 +288,8 @@ type Server struct {
 	// passkeys, approvals and reg are the hub's passkey list, its pending
 	// approvals and the open registrations (passkeys.go, approvals.go).
 	passkeys       *passkey.Store
+	gpg            *gpgunlock.Host // this host's GPG unlock state (gpg.go)
+	gpgMu          sync.Mutex
 	approvals      *approvalStore
 	reg            regState
 	outbox         *outbox

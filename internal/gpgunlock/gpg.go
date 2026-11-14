@@ -317,3 +317,9 @@ func SetAgentConf(conf string, lifetime time.Duration) string {
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
+
+// PresetAvailable reports whether gpg-preset-passphrase can be found.
+func (g *GPG) PresetAvailable() error {
+	_, err := g.presetTool()
+	return err
+}

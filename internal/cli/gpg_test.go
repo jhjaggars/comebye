@@ -76,6 +76,24 @@ func TestGPGCommands(t *testing.T) {
 	if strings.Contains(out.String(), "LIES") || !strings.Contains(out.String(), passkey.Fingerprint(reg.PublicKey)) || !strings.Contains(out.String(), "Host key fingerprint") {
 		t.Fatalf("setup output: %q", out)
 	}
+	// Setup files the "Set up GPG unlock" item: a setup request, with the longer wait.
+	if !strings.Contains(out.String(), `Filed "Set up GPG unlock on w1"`) {
+		t.Fatalf("setup did not file its item: %q", out)
+	}
+	var first struct {
+		Action, Host, Subject string
+		Request               json.RawMessage
+	}
+	_ = json.Unmarshal([]byte(f.find("POST", "/api/approvals").body), &first)
+	var firstReq struct {
+		Setup   bool   `json:"setup"`
+		HostKey string `json:"host_key"`
+	}
+	_ = json.Unmarshal(first.Request, &firstReq)
+	hfp, _ := gpgHost(e).HostFingerprint()
+	if first.Action != "gpg-setup" || first.Host != "w1" || !firstReq.Setup || passkey.Fingerprint(firstReq.HostKey) != hfp || !strings.Contains(out.String(), hfp) {
+		t.Fatalf("setup filed %+v (request %s), want a gpg-setup request signed by host key %s", first, first.Request, hfp)
+	}
 	if b, _ := os.ReadFile(home + "/gpg-agent.conf"); !strings.Contains(string(b), "allow-preset-passphrase") || !strings.Contains(string(b), "max-cache-ttl 28800") {
 		t.Fatalf("agent conf: %q", b)
 	}
@@ -95,7 +113,7 @@ func TestGPGCommands(t *testing.T) {
 		Request json.RawMessage `json:"request"`
 	}
 	_ = json.Unmarshal([]byte(f.find("POST", "/api/approvals").body), &posted)
-	if posted.Action != "gpg-unlock" || u.Approval != "ap_1" || !strings.Contains(string(posted.Request), u.Request) {
+	if posted.Action != "gpg-setup" || u.Approval != "ap_1" || !strings.Contains(string(posted.Request), u.Request) {
 		t.Fatalf("filed %+v, printed %+v", posted, u)
 	}
 
@@ -143,6 +161,19 @@ func TestGPGCommands(t *testing.T) {
 	out.Reset()
 	if code := run(e, "gpg", "lock"); code != 0 {
 		t.Fatalf("lock: %q", errb)
+	}
+	// With a passphrase stored, an unlock request is an unlock, not a setup.
+	out.Reset()
+	if code := run(e, "gpg", "unlock", "--json"); code != 0 {
+		t.Fatalf("unlock after setup: %q %q", out, errb)
+	}
+	_ = json.Unmarshal([]byte(f.find("POST", "/api/approvals").body), &posted)
+	var again struct {
+		Setup bool `json:"setup"`
+	}
+	_ = json.Unmarshal(posted.Request, &again)
+	if posted.Action != "gpg-unlock" || again.Setup {
+		t.Fatalf("filed %+v after setup, want gpg-unlock", posted)
 	}
 	if code := run(e, "gpg", "status", "--json"); code != 0 {
 		t.Fatal()

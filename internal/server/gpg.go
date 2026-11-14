@@ -24,7 +24,12 @@ func (s *Server) gpgHost() *gpgunlock.Host {
 	if s.cfg.GPGHost != nil {
 		return s.cfg.GPGHost
 	}
-	return &gpgunlock.Host{Dir: s.cfg.StateDir, GPG: &gpgunlock.GPG{}}
+	s.gpgMu.Lock()
+	defer s.gpgMu.Unlock()
+	if s.gpg == nil { // one value, so its mutex serialises the answers
+		s.gpg = &gpgunlock.Host{Dir: s.cfg.StateDir, GPG: &gpgunlock.GPG{}, AllowLocalhost: s.cfg.TestMode}
+	}
+	return s.gpg
 }
 
 // gpgRequestID is the id of the host's request inside an approval's request.

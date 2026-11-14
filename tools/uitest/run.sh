@@ -45,7 +45,9 @@ tmp="$(mktemp -d)"
 # The servers started here must never prune the real /tmp (their fake herdr has no live agents).
 export COMEBYE_SCRATCH_DIR="$tmp/scratch"; mkdir -p "$COMEBYE_SCRATCH_DIR"
 mkdir -p "$out"
-trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$tmp"' EXIT
+# GPG unlock checks (gpgunlock.mjs, and the hub's relay) use a throwaway GNUPGHOME: never the user's own ~/.gnupg.
+export GNUPGHOME="$tmp/gnupg"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
+trap 'gpgconf --kill gpg-agent 2>/dev/null || true; kill $(jobs -p) 2>/dev/null || true; rm -rf "$tmp"' EXIT
 
 (cd "$here" && [ -d node_modules/playwright-core ] || npm ci --no-audit --no-fund --silent)
 
@@ -133,6 +135,8 @@ if want reviewcard; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/stat
 if want todonav; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node todonav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Passkeys (issue #3, slice 1): Settings, register with Chrome's virtual authenticator (PRF on), rename, remove, the approval item in To do.
 if want passkeys; then COMEBYE_STATE_DIR="$tmp/state" node passkeys.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# GPG unlock (issue #3, slice 3): the Set up and Unlock cards, with the real CLI and gpg in a throwaway GNUPGHOME and the virtual authenticator's PRF.
+if want gpgunlock; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node gpgunlock.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Revision marks: data-revision blocks outlined from the Page menu.
 if want pagerevisions; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagerevisions.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # A release item closes itself once the fleet runs its version: a second build with a version stamped in, its own state.

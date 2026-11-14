@@ -28,7 +28,7 @@ async function check(name, fn) {
 const J = { "Content-Type": "application/json" };
 const listKeys = async () => (await fetch(base + "/api/passkeys").then((r) => r.json()));
 const fileApproval = async (subject) => {
-  const r = await fetch(base + "/api/approvals", { method: "POST", headers: { ...J, "X-Comebye-Agent-Token": token, "X-Comebye-Agent": "w4:p1" }, body: JSON.stringify({ action: "gpg-unlock", subject }) });
+  const r = await fetch(base + "/api/approvals", { method: "POST", headers: { ...J, "X-Comebye-Agent-Token": token, "X-Comebye-Agent": "w4:p1" }, body: JSON.stringify({ action: "test-approve", subject }) });
   const j = await r.json();
   if (!j.todo) throw new Error("file approval: " + r.status + " " + JSON.stringify(j));
   return j;
@@ -148,7 +148,7 @@ for (const width of [390, 1280]) {
     const { todo: it } = await fileApproval("signing key 62B4 " + width);
     await openTodo(it.id);
     const t = await page.locator(`${scope} .td-item[data-id="${it.id}"]`).innerText();
-    if (!/GPG is locked on uitest/.test(t) || !/Approve with Face ID/.test(t) || !/Not now/.test(t)) throw new Error("card text: " + t);
+    if (!/Approve a test on uitest/.test(t) || !/Approve with Face ID/.test(t) || !/Not now/.test(t)) throw new Error("card text: " + t);
     if (await page.locator(`${scope} .td-item[data-id="${it.id}"] .td-text`).count()) throw new Error("an approval has no answer box");
     await noScroll("approval card");
     await page.screenshot({ path: `${out}/passkeys-approval-${width}.png` });
