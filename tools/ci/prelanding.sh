@@ -15,8 +15,8 @@ cd "$root"
 t() { local s=$SECONDS; "$@"; local rc=$?; echo $((SECONDS - s)) > "$out/last-secs"; return $rc; }
 rc=0; res=()
 step() { # step LABEL CMD...
-  local label="$1"; shift
-  if t "$@" > "$out/$label.log" 2>&1; then res+=("$label: passed in $(cat "$out/last-secs") s"); else res+=("$label: FAILED after $(cat "$out/last-secs") s (log: $out/$label.log)"); rc=1; fi
+  local label="$1" f; f="${1//[^A-Za-z0-9._-]/_}"; shift
+  if t "$@" > "$out/$f.log" 2>&1; then res+=("$label: passed in $(cat "$out/last-secs") s"); else res+=("$label: FAILED after $(cat "$out/last-secs") s (log: $out/$f.log)"); rc=1; fi
 }
 step "go test -race ./..." go test -race ./...
 step "browser checks, both themes" tools/uitest/run.sh "$root" "$out/uitest"
