@@ -28,6 +28,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/park"
+	"github.com/jhjaggars/comebye/internal/passkey"
 	"github.com/jhjaggars/comebye/internal/push"
 	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/transcript"
@@ -277,9 +278,14 @@ type Server struct {
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
 	// brief and roles live next to the ledger (nil when it is).
-	brief          *briefStore
-	pq             *promptQueue
-	todos          *todoStore
+	brief *briefStore
+	pq    *promptQueue
+	todos *todoStore
+	// passkeys, approvals and reg are the hub's passkey list, its pending
+	// approvals and the open registrations (passkeys.go, approvals.go).
+	passkeys       *passkey.Store
+	approvals      *approvalStore
+	reg            regState
 	outbox         *outbox
 	digests        *digestStore
 	digestEvery    time.Duration
@@ -455,6 +461,15 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			if cfg.TestMode {
 				s.todos.rateMax = -1
 			}
+			s.reg.chals = map[string]regChal{}
+			if s.passkeys, err = passkey.Open(passkey.Path(cfg.StateDir)); err != nil {
+				log.Printf("passkeys: %v (passkeys are off)", err)
+				s.passkeys = nil // never overwrite the unreadable file
+			}
+			if s.approvals, err = openApprovals(approvalsPath(cfg.StateDir)); err != nil {
+				log.Printf("approvals: %v (starting empty)", err)
+				s.approvals = &approvalStore{now: time.Now} // in memory
+			}
 			s.initAutoTodo(cfg.AutoTodo)
 			s.initBlockedRelay(cfg.RelayBlocked)
 			s.initQuiet(cfg.QuietAfter)
@@ -603,6 +618,17 @@ func (s *Server) routes() {
 	// The to-do list: any agent adds and reads; answering, finishing and
 	// dropping are the user's or a coordinator's (checked in the handler).
 	s.mux.HandleFunc("POST /api/todos", s.authWorker(s.handleTodoAdd))
+	// Passkeys and approvals (passkeys.go, approvals.go). Filing a request and
+	// reading the public keys are open to agents and hosts (an agent only for
+	// its own host); everything else is the user's, with the CSRF token.
+	s.mux.HandleFunc("POST /api/approvals", s.authWorker(s.handleApprovalCreate))
+	s.mux.HandleFunc("GET /api/passkeys", s.authWorker(s.handlePasskeyList))
+	s.mux.HandleFunc("GET /api/approvals/{id}", s.auth(s.handleApprovalGet))
+	s.mux.HandleFunc("POST /api/approvals/{id}/respond", s.auth(s.handleApprovalRespond))
+	s.mux.HandleFunc("POST /api/passkeys/register/begin", s.auth(s.handlePasskeyBegin))
+	s.mux.HandleFunc("POST /api/passkeys/register/finish", s.auth(s.handlePasskeyFinish))
+	s.mux.HandleFunc("PUT /api/passkeys/{id}", s.auth(s.handlePasskeyRename))
+	s.mux.HandleFunc("DELETE /api/passkeys/{id}", s.auth(s.handlePasskeyRemove))
 	s.mux.HandleFunc("POST /api/todos/from-last", s.authWorker(s.handleTodoFromLast))
 	s.mux.HandleFunc("GET /api/todos", s.authWorker(s.handleTodoList))
 	s.mux.HandleFunc("GET /api/todos/{id}", s.authWorker(s.handleTodoGet))

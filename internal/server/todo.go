@@ -58,7 +58,7 @@ const (
 	todoNoticeExpired = "expired"
 )
 
-var todoKinds = map[string]bool{"decision": true, "action": true, "followup": true, "release": true, "review": true}
+var todoKinds = map[string]bool{"decision": true, "action": true, "followup": true, "release": true, "review": true, "approval": true}
 
 // TodoLink points at something the item is about: a URL (PR, artifact,
 // report) and/or a handoff entry.
@@ -144,6 +144,9 @@ type Todo struct {
 	// Release is set on a kind "release" item: the version and commit a
 	// coordinator proposes, and what the user's approval did (release.go).
 	Release *TodoRelease `json:"release,omitempty"`
+	// Approval is set on a kind "approval" item: the action that waits for the
+	// user's passkey and where it stands (approvals.go).
+	Approval *TodoApproval `json:"approval,omitempty"`
 	// Set is a decision set: many decisions answered in one go (todoset.go).
 	Set *TodoSet `json:"set,omitempty"`
 	// Source says how the item came to be: "agent" (an agent added it),
@@ -687,6 +690,10 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 	bad := func(code, msg string) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": code, "message": msg})
 	}
+	if b.Kind == "approval" {
+		bad("bad_kind", "an approval is filed with POST /api/approvals, which makes the item")
+		return
+	}
 	rel, ok := s.releaseFromAdd(w, r, &b)
 	if !ok {
 		return
@@ -816,6 +823,7 @@ func (s *Server) handleTodoList(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_state", "message": "state is open, answered, done, dropped or all"})
 		return
 	}
+	s.sweepApprovals()
 	items, active := s.todos.list(st), s.todos.list("")
 	if c := callerOf(r); c.tagged {
 		items, active = taggedTodos(items, c.host), taggedTodos(active, c.host)
@@ -859,6 +867,10 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&b); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if it, ok := s.todos.get(r.PathValue("id")); ok && it.Approval != nil {
+		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "approval_item", "message": "an approval is given with the passkey in the app, not answered with text"})
 		return
 	}
 	text := block(b.Text, todoMaxAnswer)
@@ -922,6 +934,7 @@ func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string)
 		todoErr(w, err)
 		return
 	}
+	s.approvalClosedByUser(it) // "Not now" denies a waiting approval
 	if it.Set != nil && it.Set.Plan != "" {
 		s.kickQueued() // a dropped set fails the plan's waiting handoffs
 	}

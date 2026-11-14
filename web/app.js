@@ -1544,7 +1544,7 @@ function initPlans() {
 // that is closed or answered elsewhere until the user discards them.
 const TODO_FOLDED_KEY = "comebye-todo-folded";
 const TODO_DRAFTS_KEY = "comebye.todo.drafts";
-const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up", release: "release", review: "review" };
+const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up", release: "release", review: "review", approval: "approve" };
 const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false,
   openId: null, lastId: null, nxt: null, ansOpen: false, seen: new Map(), order: [], follow: false,
   drafts: loadTodoDrafts(), pend: new Overlay() };
@@ -2006,11 +2006,12 @@ function todoItemHtml(t, pfx, asPanel) {
     const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
     const isRel = t.kind === "release" && !!t.release;
-    const after = ans || isRel || todoIsReview(t) ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
+    const after = ans || isRel || todoIsReview(t) || t.kind === "approval" ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
     const kept = ans && draft ? todoKeptHtml(t.id, todoDraft(t.id), "Not sent: this was answered before you sent yours.") : "";
     const busy = "";
     const isRev = todoIsReview(t);
-    const form = ans || isRel || isRev ? ""
+    const isAp = t.kind === "approval" && !!t.approval;
+    const form = ans || isRel || isRev || isAp ? ""
       : `<textarea class="td-text" id="${pfx}-answer-${escAttr(t.id)}" rows="2" maxlength="4000" placeholder="Your answer" aria-label="Your answer">${esc(todoDraft(t.id))}</textarea>`;
     panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
         ${dhead}
@@ -2026,7 +2027,7 @@ function todoItemHtml(t, pfx, asPanel) {
           <div class="td-cprow">${copyBtnHtml("todo:" + t.id, t.question + (t.context ? "\n\n" + t.context : ""), "Copy question and context", "Copy the question and its context as Markdown")}</div>
           ${answered}${kept}${isRev && ans ? reviewDoneHtml(t) : ""}
         </div>
-        ${t.set ? setBarHtml(t) : isRev && !ans ? reviewBarHtml(t) : `<div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
+        ${t.set ? setBarHtml(t) : isAp ? approvalBarHtml(t) : isRev && !ans ? reviewBarHtml(t) : `<div class="td-form">${ans || isRel ? "" : todoOptsHtml(t)}${form}
           ${ans || isRel ? "" : sttStatusHtml("todo:" + t.id)}
           <div class="td-acts">
             ${ans || isRel ? "" : sttMicHtml("todo:" + t.id)}
@@ -3208,6 +3209,8 @@ function onTodoClick(ev) {
     return;
   }
   if (ev.target.closest(".td-rep > summary")) { const d = ev.target.closest(".td-rep"); if (d.open) todoRepOpen.delete(id); else todoRepOpen.add(id); }
+  if (ev.target.closest(".ap-go")) { approvalGo(id, item); return; }
+  if (ev.target.closest(".ap-no")) { todoAct(id, "drop"); return; } // "Not now": no confirm box, the hub denies the request
   if (ev.target.closest(".rv-good")) { reviewVerdict(id, "good", item); return; }
   if (ev.target.closest(".rv-chg")) { reviewNote(id, item); return; }
   const rk = ev.target.closest(".rv-kind");
@@ -4381,7 +4384,7 @@ function renderFleetMenu() {
   const note = $("f-note");
   note.hidden = !off;
   note.textContent = off ? "Removals and briefings are not available on this hub" : "";
-  for (const id of ["f-brief", "f-briefs", "f-pages", "f-usage", "f-peers"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  for (const id of ["f-brief", "f-briefs", "f-pages", "f-usage", "f-peers", "f-settings"]) { $(id).hidden = off; $(id).disabled = !lon; }
   $("f-peers").hidden = off || !multiHost();
   const st = briefingUiState();
   $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (see the Briefing page)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
@@ -7317,8 +7320,9 @@ function syncScreens() {
   syncPages();
   syncPeers();
   syncUsage();
+  syncSettings();
   syncReview();
-  document.body.classList.toggle("has-screen", !!(rc.route || pgs.route || prs.route || us.route || review.open));
+  document.body.classList.toggle("has-screen", !!(rc.route || pgs.route || prs.route || us.route || sx.route || review.open));
   renderNav();
 }
 
@@ -9298,6 +9302,278 @@ function closeUsage() {
   route();
 }
 
+/* ---------- Settings: passkeys ---------- */
+//
+// A screen of its own (#/settings), like Usage. For now it holds the passkeys
+// that approve actions with Face ID: the hub's list (GET /api/passkeys), and
+// register, rename and remove (CSRF token from that list). Apple Passwords
+// passkeys only, and PRF is required: the browser makes the passkey, then does
+// one assertion asking for PRF; with no result it stops and says how to turn
+// Passwords on (the hub refuses such a registration as well). A second and
+// later passkey is approved by an existing one first (an approval of action
+// passkey-add, answered with Face ID). Nothing secret reaches this page: the
+// PRF output of the check is dropped at once and nothing is stored.
+
+const SX_NO_PRF = "This passkey cannot do PRF. In iOS, turn on Passwords under Settings, General, AutoFill & Passwords, AutoFill From.";
+const sx = { route: false, status: "loading", err: "", list: [], rp: "", csrf: "", max: 16, busy: "", msg: "", msgErr: false, confirm: "", rename: "", name: "" };
+
+const sxB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const sxUnb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+function sxSupported() { return !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext); }
+
+async function sxLoad() {
+  try {
+    const d = await api("/api/passkeys");
+    Object.assign(sx, { list: d.passkeys || [], rp: d.rp_id || "", csrf: d.csrf || "", max: d.max || 16, status: "ok", err: "" });
+  } catch (e) {
+    sx.status = e.status === 404 || e.status === 503 ? "off" : "err";
+    sx.err = e.message;
+  }
+  renderSettings();
+}
+
+const sxCall = (method, path, body) => api(path, { method, headers: { "X-Comebye-Csrf": sx.csrf }, body: JSON.stringify(body || {}) });
+
+function sxSay(msg, isErr) { sx.msg = msg; sx.msgErr = !!isErr; renderSettings(); }
+
+function sxAgo(iso) { const t = Date.parse(iso); return Number.isNaN(t) ? "" : fmtAgo(t) + " ago"; }
+
+function sxCard(p) {
+  const id = escAttr(p.id);
+  if (sx.confirm === p.id) {
+    return `<div class="card sx-card" data-id="${id}"><span class="sx-name">${esc(p.name)}</span>
+      <div class="sx-confirm" role="group" aria-label="Confirm removing ${escAttr(p.name)}"><div>Remove <b>${esc(p.name)}</b>? It can no longer approve anything here. Also delete it in the iOS Passwords app. Hosts that pinned it keep trusting it until they are told to drop it.</div>
+      <div class="sx-acts"><button type="button" class="btn danger" data-sx="remove-go"${sx.busy ? " disabled" : ""}>Remove ${esc(p.name)}</button><button type="button" class="btn" data-sx="cancel">Cancel</button></div></div></div>`;
+  }
+  if (sx.rename === p.id) {
+    return `<div class="card sx-card" data-id="${id}"><form class="sx-acts" data-sx-form="rename"><input type="text" id="sx-rename" value="${escAttr(p.name)}" maxlength="60" aria-label="Name of this passkey" autocomplete="off" enterkeyhint="done">
+      <button type="submit" class="btn primary"${sx.busy ? " disabled" : ""}>Save</button><button type="button" class="btn" data-sx="cancel">Cancel</button></form></div>`;
+  }
+  const meta = [
+    `<span>Fingerprint <span class="sx-fp">${esc(p.fingerprint)}</span></span>`,
+    p.created_at ? `<span>Added ${esc(sxAgo(p.created_at))}</span>` : "",
+    `<span>${p.last_used_at ? "Last used " + esc(sxAgo(p.last_used_at)) : "Not used yet"}</span>`,
+    p.backed_up ? `<span>Synced with iCloud</span>` : p.backup_eligible ? `<span>Can sync</span>` : `<span>This device only</span>`,
+  ].filter(Boolean).join("");
+  return `<div class="card sx-card" data-id="${id}" data-fp="${escAttr(p.fingerprint)}"><span class="sx-name">${esc(p.name)}</span><div class="sx-meta">${meta}</div>
+    <div class="sx-acts"><button type="button" class="btn sm" data-sx="rename"${sx.busy ? " disabled" : ""}>Rename</button><button type="button" class="btn sm danger" data-sx="remove"${sx.busy ? " disabled" : ""}>Remove</button></div></div>`;
+}
+
+function renderSettings() {
+  const el = $("sx-view");
+  if (!el || !sx.route) return;
+  let h = `<h2>Passkeys</h2><p class="sx-note">A passkey approves a sensitive action with Face ID. Only Apple Passwords passkeys work, and they must support PRF: in iOS, turn on Passwords under Settings, General, AutoFill &amp; Passwords, AutoFill From.</p>`;
+  if (sx.status === "loading") h += `<div class="empty">Loading…</div>`;
+  else if (sx.status === "off") h += `<div class="empty"><b>Passkeys live on the hub</b><span>Open the hub's app to manage them.</span></div>`;
+  else if (sx.status === "err") h += `<p class="sx-msg err" role="alert">${esc(sx.err)}</p>`;
+  else {
+    if (sx.rp && sx.rp !== location.hostname) h += `<p class="sx-note warn" role="alert">These passkeys belong to <b>${esc(sx.rp)}</b>. Open the app at that address to add or use one.</p>`;
+    h += sx.list.length ? sx.list.map(sxCard).join("") : `<div class="empty"><b>No passkeys yet</b><span>Add one to approve actions with Face ID.</span></div>`;
+    if (!sxSupported()) h += `<p class="sx-note warn">This browser cannot make passkeys here: they need a secure (https) address.</p>`;
+    else if (sx.list.length >= sx.max) h += `<p class="sx-note">The list is full: remove a passkey to add another.</p>`;
+    else h += `<form class="sx-add" data-sx-form="add"><label class="sx-note" for="sx-name">Name for the new passkey</label>
+      <div class="sx-acts"><input type="text" id="sx-name" value="${escAttr(sx.name)}" maxlength="60" placeholder="${escAttr("Passkey " + (sx.list.length + 1))}" autocomplete="off" enterkeyhint="done">
+      <button type="submit" class="btn primary" id="sx-add"${sx.busy ? " disabled" : ""}>${sx.busy === "add" ? "Waiting for Face ID…" : "Add a passkey"}</button></div>
+      ${sx.list.length ? `<p class="sx-note">An existing passkey approves the new one first (Face ID, twice).</p>` : ""}</form>`;
+  }
+  if (sx.msg) h += `<p class="sx-msg${sx.msgErr ? " err" : ""}" role="${sx.msgErr ? "alert" : "status"}">${esc(sx.msg)}</p>`;
+  if (el._html === h) return;
+  el._html = h;
+  const focus = document.activeElement && document.activeElement.id;
+  el.innerHTML = h;
+  const f = (sx.rename && $("sx-rename")) || (focus && $(focus));
+  if (f && f !== document.activeElement && (sx.rename || focus === "sx-name")) { f.focus({ preventScroll: true }); if (sx.rename) f.select(); }
+}
+
+// sxAssert asks for Face ID for an approval and posts the assertion. Resolves
+// with the approval's answer; throws a message fit for the user.
+async function sxAssert(approvalId, extra) {
+  const d = await api(`/api/approvals/${encodeURIComponent(approvalId)}`);
+  if (d.approval.state !== "pending") throw new Error("This request is no longer waiting: " + d.approval.state + ".");
+  let cred;
+  try {
+    cred = await navigator.credentials.get({ publicKey: {
+      challenge: sxUnb64(d.challenge), rpId: d.rp_id, userVerification: "required", timeout: 60000,
+      allowCredentials: (d.credentials || []).map((c) => ({ type: "public-key", id: sxUnb64(c.id) })),
+    } });
+  } catch (e) { throw new Error(sxWebAuthnMsg(e)); }
+  if (!cred) throw new Error("No passkey answered.");
+  const r = cred.response;
+  return sxCall("POST", `/api/approvals/${encodeURIComponent(approvalId)}/respond`, {
+    credential_id: sxB64(cred.rawId), client_data_json: sxB64(r.clientDataJSON), authenticator_data: sxB64(r.authenticatorData), signature: sxB64(r.signature), ...(extra || {}),
+  });
+}
+
+function sxWebAuthnMsg(e) {
+  if (e && (e.name === "NotAllowedError" || e.name === "AbortError")) return "Face ID was cancelled or timed out.";
+  if (e && e.name === "InvalidStateError") return "That passkey is already registered here.";
+  return (e && e.message) || "The passkey could not be used.";
+}
+
+async function sxAdd() {
+  if (sx.busy) return;
+  const name = ($("sx-name") ? $("sx-name").value : sx.name).trim();
+  sx.name = name;
+  sx.busy = "add"; sx.msg = ""; renderSettings();
+  try {
+    let approval = "";
+    if (sx.list.length) {
+      const a = await sxCall("POST", "/api/approvals", { action: "passkey-add", subject: "Add a passkey" });
+      approval = a.approval.id;
+      const res = await sxAssert(approval);
+      if (!res.approval || res.approval.state !== "approved") throw new Error("The existing passkey did not approve.");
+    }
+    const begin = await sxCall("POST", "/api/passkeys/register/begin", { approval });
+    const o = begin.publicKey;
+    // The salt only checks that PRF works: its output is dropped at once.
+    const salt = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("comebye-prf-register-check-v1"));
+    let cred;
+    try {
+      cred = await navigator.credentials.create({ publicKey: {
+        ...o, challenge: sxUnb64(o.challenge), user: { ...o.user, id: sxUnb64(o.user.id) },
+        extensions: { prf: { eval: { first: salt } } },
+      } });
+    } catch (e) { throw new Error(sxWebAuthnMsg(e)); }
+    if (!cred) throw new Error("No passkey was made.");
+    const ext = cred.getClientExtensionResults ? cred.getClientExtensionResults() : {};
+    let enabled = !!(ext.prf && ext.prf.enabled), result = !!(ext.prf && ext.prf.results && ext.prf.results.first);
+    if (enabled && !result) { // one assertion with PRF, as the plan says
+      try {
+        const g = await navigator.credentials.get({ publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: o.rp.id, userVerification: "required", timeout: 60000,
+          allowCredentials: [{ type: "public-key", id: cred.rawId }], extensions: { prf: { eval: { first: salt } } },
+        } });
+        const ge = g && g.getClientExtensionResults ? g.getClientExtensionResults() : {};
+        result = !!(ge.prf && ge.prf.results && ge.prf.results.first);
+      } catch (e) { throw new Error(sxWebAuthnMsg(e)); }
+    }
+    if (!enabled || !result) {
+      // Nothing is sent: the hub never hears of a passkey that cannot do PRF.
+      throw new Error(SX_NO_PRF + " Then delete the passkey that was just made in the iOS Passwords app.");
+    }
+    const fin = await sxCall("POST", "/api/passkeys/register/finish", {
+      challenge: o.challenge, id: sxB64(cred.rawId), client_data_json: sxB64(cred.response.clientDataJSON), attestation_object: sxB64(cred.response.attestationObject),
+      prf: { enabled, result }, name,
+    });
+    sx.name = "";
+    sx.busy = "";
+    await sxLoad();
+    sxSay(`Added ${fin.passkey.name}.`, false);
+  } catch (e) {
+    sx.busy = "";
+    sxSay(e.message || "Could not add the passkey.", true);
+  }
+}
+
+async function sxRenameSave() {
+  const input = $("sx-rename");
+  if (!input || sx.busy) return;
+  sx.busy = "rename";
+  try {
+    await sxCall("PUT", `/api/passkeys/${encodeURIComponent(sx.rename)}`, { name: input.value });
+    sx.rename = ""; sx.busy = "";
+    await sxLoad();
+    sxSay("Renamed.", false);
+  } catch (e) { sx.busy = ""; sxSay(e.message, true); }
+}
+
+async function sxRemoveGo() {
+  if (sx.busy || !sx.confirm) return;
+  sx.busy = "remove";
+  try {
+    await sxCall("DELETE", `/api/passkeys/${encodeURIComponent(sx.confirm)}`);
+    sx.confirm = ""; sx.busy = "";
+    await sxLoad();
+    sxSay("Removed. Delete it in the iOS Passwords app too.", false);
+  } catch (e) { sx.busy = ""; sxSay(e.message, true); }
+}
+
+function settingsClick(ev) {
+  const b = ev.target.closest("[data-sx]");
+  if (!b) return;
+  const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
+  switch (b.dataset.sx) {
+    case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
+    case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
+    case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
+    case "remove-go": sxRemoveGo(); break;
+  }
+}
+
+function settingsSubmit(ev) {
+  const f = ev.target.closest("[data-sx-form]");
+  if (!f) return;
+  ev.preventDefault();
+  if (f.dataset.sxForm === "add") sxAdd(); else if (f.dataset.sxForm === "rename") sxRenameSave();
+}
+
+function syncSettings() {
+  const on = location.hash === "#/settings";
+  const el = $("settings");
+  const was = !el.hidden;
+  sx.route = on;
+  el.hidden = !on;
+  if (!on) return;
+  if (!was) {
+    sx.status = "loading"; sx.msg = ""; sx.rename = ""; sx.confirm = ""; el._html = "";
+    sxLoad();
+    ($("sx-back").offsetParent ? $("sx-back") : $("sx-body")).focus({ preventScroll: true });
+  }
+  renderSettings();
+}
+
+function closeSettings() {
+  history.replaceState(null, "", location.pathname + location.search);
+  route();
+}
+
+function initSettings() {
+  $("sx-back").addEventListener("click", closeSettings);
+  $("settings").addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !(ev.target.closest && ev.target.closest("input"))) { ev.stopPropagation(); closeSettings(); }
+    else if (ev.key === "Escape") { ev.stopPropagation(); if (sx.rename) { sx.rename = ""; renderSettings(); } }
+  });
+  $("sx-view").addEventListener("click", settingsClick);
+  $("sx-view").addEventListener("submit", settingsSubmit);
+}
+
+/* ---------- approval items in To do ---------- */
+//
+// A to-do of kind "approval" waits for the user's passkey. Slice 1 shows what
+// is asked and the Approve with Face ID button, which answers the hub's
+// challenge. (What an unlock does with it comes later: the item closes when the
+// hub accepts the assertion.)
+
+const apBusy = new Set();
+
+function approvalBarHtml(t) {
+  const a = t.approval;
+  const left = Date.parse(a.expires_at) - Date.now();
+  const line = a.state !== "pending" ? `This request is ${esc(a.state)}.` : left > 0 ? `Waiting for your passkey (Face ID). The request lasts until ${esc(new Date(a.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}.` : "This request expired. Ask again from the host.";
+  const can = a.state === "pending" && left > 0 && !apBusy.has(a.id);
+  return `<div class="td-form ap-card" data-ap="${escAttr(a.id)}"><div class="sx-note" role="status">${line}</div>
+    <div class="td-acts"><button type="button" class="ap-go td-answer-btn"${can ? "" : " disabled"}>${apBusy.has(a.id) ? "Waiting for Face ID…" : "Approve with Face ID"}</button><button type="button" class="ap-no">Not now</button></div></div>`;
+}
+
+async function approvalGo(id, item) {
+  const bar = item.querySelector("[data-ap]");
+  const apid = bar && bar.dataset.ap;
+  if (!apid || apBusy.has(apid)) return;
+  apBusy.add(apid);
+  renderTodos(true);
+  try {
+    if (!sx.csrf) await sxLoad();
+    await sxAssert(apid);
+    toast("Approved");
+  } catch (e) {
+    toast(e.message || "Not approved", true);
+  } finally {
+    apBusy.delete(apid);
+    await loadTodos();
+  }
+}
+
 /* ---------- Usage chips: a handoff's tokens, on its agent and in Status ---------- */
 //
 // One query (GET /api/usage, the last 14 days, the top 100 handoffs) gives every
@@ -9375,6 +9651,7 @@ const NAV_ICON = {
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
   pages: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>',
   usage: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>',
   peers: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>',
   removals: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
 };
@@ -9385,6 +9662,7 @@ const NAV_ROWS = [
   { key: "pages", label: "Pages", show: () => ledger.on === true, open: () => { location.hash = "#/pages"; }, on: () => !!pgs.route }, // a screen of its own, like Transcripts
   { key: "usage", label: "Usage", show: () => ledger.on === true, open: () => { location.hash = "#/usage"; }, on: () => !!us.route }, // tokens spent, by kind, model, project and handoff
   { key: "peers", label: "Peers", show: () => ledger.on === true && multiHost(), open: () => { location.hash = "#/peers"; }, on: () => !!prs.route, odot: () => relNeedsYou() }, // the hosts and what each starts by default
+  { key: "settings", label: "Settings", show: () => ledger.on === true, open: () => { location.hash = "#/settings"; }, on: () => sx.route }, // the passkeys
   // Hidden at zero, except while you are on it.
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && (ledger.marked.size > 0 || review.open), count: () => ledger.marked.size, open: () => openReview(), on: () => review.open },
 ];
@@ -12672,6 +12950,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initPages();
   initPeers();
   initUsage();
+  initSettings();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     const chat = state.chat;
@@ -12854,6 +13133,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("f-pages").addEventListener("click", fleetAction(() => { location.hash = "#/pages"; }));
   $("f-usage").addEventListener("click", fleetAction(() => { location.hash = "#/usage"; }));
   $("f-peers").addEventListener("click", fleetAction(() => { location.hash = "#/peers"; }));
+  $("f-settings").addEventListener("click", fleetAction(() => { location.hash = "#/settings"; }));
   $("f-notify").addEventListener("click", fleetAction(() => toggleNotifyPanel(true)));
   $("f-refresh").addEventListener("click", fleetAction(fleetRefresh));
   $("f-theme").addEventListener("click", fleetAction(() => toggleThemePanel(true)));

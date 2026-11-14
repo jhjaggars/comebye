@@ -1958,7 +1958,7 @@
     }
     .screen[hidden] { display: none; }
     .screen header { position: static; flex: none; }
-    #peers, #usage { container-type: inline-size; } /* their layouts follow the pane, not the window */
+    #peers, #usage, #settings { container-type: inline-size; } /* their layouts follow the pane, not the window */
     #recall #rc-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .rc-fresh { margin-left: auto; color: var(--muted); font-size: var(--fs-13); white-space: nowrap; }
     .rc-fresh.warn { color: var(--orange); }
@@ -2065,7 +2065,7 @@
         border-left: 1px solid var(--border);
       }
       .screen header, #review header { padding-left: var(--sp-20); min-height: calc(var(--hit-48) + var(--sp-8)); }
-      #recall #rc-back, #review #rv-close, #pr-back, #us-back, #pages:not(.in-page) #pgs-back { display: none; }
+      #recall #rc-back, #review #rv-close, #pr-back, #us-back, #sx-back, #pages:not(.in-page) #pgs-back { display: none; }
       #recall #rc-form, #recall.in-session #rc-form { display: block; flex: 1 1 280px; order: 0; max-width: 640px; }
       #recall .rc-list { flex: 0 0 clamp(320px, 40%, 460px); display: block !important; border-right: 1px solid var(--border); }
       #recall .rc-session { display: block !important; }
@@ -2514,6 +2514,25 @@
     #us-back { margin: -10px 0 -10px -10px; color: var(--text); }
     #us-body:focus { outline: 0; }
     #us-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    /* Settings: the passkeys list. A screen of its own, like Usage. */
+    #sx-back { margin: -10px 0 -10px -10px; color: var(--text); }
+    #sx-body:focus { outline: 0; }
+    #sx-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    .sx-wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-12); min-width: 0; }
+    .sx-wrap h2 { margin: 0; font-size: var(--fs-16); font-weight: 650; }
+    .sx-note { color: var(--muted); font-size: var(--fs-13); line-height: 1.45; overflow-wrap: anywhere; margin: 0; }
+    .sx-note.warn, .sx-msg.err { color: var(--orange); }
+    .sx-msg { font-size: var(--fs-14); line-height: 1.45; overflow-wrap: anywhere; margin: 0; }
+    .sx-msg.err { color: var(--red); }
+    .sx-card { display: flex; flex-direction: column; gap: var(--sp-8); padding: var(--sp-12) var(--sp-14); min-width: 0; }
+    .sx-card .sx-name { font-weight: 600; font-size: var(--fs-15); overflow-wrap: anywhere; }
+    .sx-meta { display: flex; flex-wrap: wrap; gap: var(--sp-4) var(--sp-12); color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
+    .sx-fp { font-family: var(--ff-code); color: var(--text); letter-spacing: .02em; }
+    .sx-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; }
+    .sx-acts input[type="text"] { flex: 1 1 180px; min-width: 0; min-height: var(--hit-44); padding: 0 var(--sp-10); font: inherit; font-size: var(--fs-16); color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); }
+    .sx-confirm { border: 1px solid var(--red); border-radius: var(--r-10); padding: var(--sp-10) var(--sp-12); display: flex; flex-direction: column; gap: var(--sp-8); font-size: var(--fs-14); }
+    .sx-add { display: flex; flex-direction: column; gap: var(--sp-8); }
+    .ap-card { display: flex; flex-direction: column; gap: var(--sp-8); }
     .us-wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-14); min-width: 0; }
     .us-ctl { display: flex; flex-wrap: wrap; gap: var(--sp-8) var(--sp-14); align-items: center; }
     .us-lab { font: 600 var(--fs-12) var(--ff-code); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
@@ -2727,6 +2746,15 @@
     <div id="us-body" tabindex="-1"><div class="us-wrap" id="us-view" aria-live="polite"></div></div>
   </div>
 
+  <!-- Settings: for now, the passkeys that approve actions with Face ID -->
+  <div id="settings" class="screen" hidden>
+    <header>
+      <button type="button" class="bell" id="sx-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <h1>Settings</h1>
+    </header>
+    <div id="sx-body" tabindex="-1"><div class="sx-wrap" id="sx-view" aria-live="polite"></div></div>
+  </div>
+
   <!-- Pages: reports agents publish with `comebye publish` -->
   <div id="pages" class="screen" hidden>
     <header>
@@ -2807,6 +2835,7 @@
       <button type="button" role="menuitem" id="f-pages">Pages</button>
       <button type="button" role="menuitem" id="f-usage">Usage</button>
       <button type="button" role="menuitem" id="f-peers">Peers</button>
+      <button type="button" role="menuitem" id="f-settings">Settings</button>
       <button type="button" role="menuitem" id="f-refresh">Refresh</button>
     </div>
     <section id="notify-panel" class="attach-menu pop" role="dialog" aria-label="Notifications" aria-live="polite" hidden>

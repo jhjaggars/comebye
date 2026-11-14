@@ -405,6 +405,40 @@ Treat access to it like SSH access to that machine.
 See [SECURITY.md](../SECURITY.md) for the threat model and how to report a
 vulnerability.
 
+## Passkeys and approvals (slice 1 of issue #3)
+
+The hub keeps the user's passkeys (`passkeys.json` in its state directory:
+credential id, public key, RP ID hash, a name, the time; **no secret**). A
+passkey approves an action with Face ID; what an approval unlocks on a host is
+a later slice. What this slice fixes:
+
+- **Apple Passwords passkeys only, and PRF is required.** A registration
+  without `prf.enabled` and a result is refused, with the message that sends
+  the user to iOS Settings, General, AutoFill & Passwords, AutoFill From. The
+  hub cannot see the PRF output, so this is a check on an honest client; the
+  real enforcement is that a host's setup cannot make its blob without PRF.
+- **The RP ID is the hub's host name** (its `*.ts.net` name, the one the app
+  is opened on), recorded with the first passkey. The hub refuses to register
+  on any other name; an address is refused, and `localhost` is allowed only
+  under `-test-mode`.
+- **Checks, in code (`internal/passkey`, no dependency):** client data type,
+  challenge and https origin; attestation `none`; the RP ID hash; flags UP and
+  UV; ES256 on P-256 (the point must be on the curve); the signature over
+  `authData || SHA-256(clientData)`. Synced passkeys report counter 0, so the
+  counter is checked only when the stored and the new value are both above 0.
+  Replay protection is a nonce in the request, a 120 s expiry and a single use;
+  three failed tries kill a request.
+- **Who can ask.** Only the user changes passkeys or answers an approval (user
+  role, plus the CSRF token). An agent or a host may file a `gpg-unlock`
+  request for **its own host only**, and read the public keys (a host pins
+  them). The to-do item's wording is the server's, never the agent's. A second
+  passkey needs an approved `passkey-add` approval from an existing one.
+- **The hub's check is a first filter.** A host must check the assertion
+  itself against the passkeys it pinned during setup; a hub that is compromised
+  can add passkeys to its own list, not to a host's.
+- The pending requests, challenges and assertions are in `approvals.json`
+  (public by design; the sealed key a browser may attach is opaque to the hub).
+
 ## Token usage
 
 Each host counts the tokens its agents spend by reading their session files
