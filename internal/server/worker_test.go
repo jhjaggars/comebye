@@ -277,9 +277,9 @@ func TestRemoveCleanMerged(t *testing.T) {
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Fatal("the worktree is still there")
 	}
-	// The branch is never deleted.
-	if git(t, repo, "branch", "--list", "w") == "" {
-		t.Fatal("the branch was deleted")
+	// Its commits are in the base, so its local branch goes with the worktree.
+	if git(t, repo, "branch", "--list", "w") != "" || r["branch_deleted"] != "w" {
+		t.Fatalf("the branch is still there: %v", r)
 	}
 }
 
@@ -307,6 +307,9 @@ func TestRemoveKeepsDirtyOrUnmerged(t *testing.T) {
 	}
 	if code, r = removeReq(t, s, `{"worktree":"`+wt+`","branch":"w","remove_worktree":true}`); code != 200 || r["worktree_removed"] != true {
 		t.Fatalf("merged = %d %v", code, r)
+	}
+	if git(t, repo, "branch", "--list", "w") != "" || r["branch_deleted"] != "w" {
+		t.Fatalf("branch not deleted with the worktree: %v", r)
 	}
 }
 

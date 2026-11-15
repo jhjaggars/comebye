@@ -10,20 +10,25 @@ import (
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
-// The removal safety ask is answered in a small line format so the hub can
-// re-check what the session names (see askcheck.go):
+// The removal check asks "what is left to finish this work?". It is answered
+// in a small line format so the hub can re-check what the session names (see
+// askcheck.go):
 //
-//	SAFE
+//	NOTHING LEFT
 //
-//	UNSAFE
-//	- pr jhjaggars/homelab#343 open, I am watching it
+//	LEFT
+//	- pr jhjaggars/homelab#343 open, waiting on review
+//	- decision t972236dfee waiting on the user: which key to use
+//	- cleanup delete branch feat/x and its worktree (me, once told to go ahead)
 //	- todo t972236dfee waiting on the user's answer
 //	- commits feat/x pushed to origin
 //	- resource k3d-cluster dev on desk
 //	- resource pid 4242 on desk
 //	- other a loop I run every 10 minutes
 //
-// The parser is lenient: bullets or numbers, markdown around the words, a
+// NOTHING LEFT is the old SAFE, and LEFT the old UNSAFE: replies in the old
+// format (SAFE, UNSAFE) still parse, and the ledger keeps its "safe" and
+// "unsafe" states. The parser is lenient: bullets or numbers, markdown around the words, a
 // reason on the UNSAFE line itself, a PR as a URL, a to-do id anywhere in a
 // line. Whatever it cannot type becomes an "other" item.
 
@@ -34,17 +39,20 @@ const (
 )
 
 // askFormat is the part of the prompt that fixes the reply format.
-const askFormat = "Reply in exactly this format. First line: SAFE, or UNSAFE. After UNSAFE, one line per thing that must be dealt with before this session goes, each starting with \"- \" and a type:\n" +
+const askFormat = "Reply in exactly this format. First line: NOTHING LEFT, or LEFT. After LEFT, one line per thing still left to finish this work, " +
+	"each starting with \"- \" and a type, then in plain words what remains and who it waits on (you, the user, a reviewer, CI):\n" +
+	"- decision TODO_ID <what the answer decides; waiting on the user>\n" +
+	"- cleanup <what you can do yourself if told to go ahead: delete a branch or worktree, stop a process you started, close your PR, tick an issue box>\n" +
 	"- pr OWNER/REPO#NUMBER <your note>\n" +
 	"- todo TODO_ID <your note>\n" +
 	"- commits BRANCH [pushed to REMOTE] <your note>\n" +
 	"- resource KIND NAME_OR_ID [on HOST] <your note>   (KIND: pid, k3d-cluster, container, ...)\n" +
 	"- other <anything else: a loop you run, a request or follow-up you owe the user>\n" +
-	"No other text."
+	"Do not do the cleanup now: only list it. Say NOTHING LEFT only when nothing remains. No other text."
 
-// parseReply reads a session's reply to the ask: the state (SAFE, UNSAFE,
-// or unclear with the reply as its reason), the one-line reason, and the
-// typed items of an UNSAFE answer.
+// parseReply reads a session's reply to the ask: the state (safe: nothing
+// left; unsafe: something is left; or unclear with the reply as its reason),
+// the one-line reason, and the typed items of a "left" answer.
 func parseReply(text string) (state, reason string, items []ledger.AskItem) {
 	state, reason = parseAnswer(text)
 	if state != ledger.AskUnsafe {
@@ -134,6 +142,19 @@ func parseItem(line string) (ledger.AskItem, bool) {
 			return it, true
 		}
 		return other()
+	case "decision":
+		if id := todoIDRe.FindString(rest); id != "" {
+			return ledger.AskItem{Type: ledger.ItemDecision, ID: id, Text: noteAfter(rest, id)}, true
+		}
+		if rest == "" {
+			return ledger.AskItem{}, false
+		}
+		return ledger.AskItem{Type: ledger.ItemDecision, Text: clip(rest, maxItemText)}, true
+	case "cleanup", "clean-up":
+		if rest == "" {
+			return ledger.AskItem{}, false
+		}
+		return ledger.AskItem{Type: ledger.ItemCleanup, Text: clip(rest, maxItemText)}, true
 	case "other":
 		if rest == "" {
 			return ledger.AskItem{}, false
@@ -256,6 +277,13 @@ func itemLabel(it ledger.AskItem) string {
 			s += " (pushed to " + it.Remote + ")"
 		}
 		return s
+	case ledger.ItemDecision:
+		if it.ID == "" {
+			return "a decision"
+		}
+		return "decision (to-do " + it.ID + ")"
+	case ledger.ItemCleanup:
+		return "cleanup"
 	case ledger.ItemResource:
 		s := it.Kind + " " + it.Name
 		if it.Host != "" {

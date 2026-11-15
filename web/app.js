@@ -3982,7 +3982,7 @@ async function submitMark() {
     }, 200);
     return;
   }
-  if (d && d.mark && d.mark.ask && d.mark.ask.state === "asking") toast("Marked ready to remove; asking the session whether it is safe");
+  if (d && d.mark && d.mark.ask && d.mark.ask.state === "asking") toast("Marked ready to remove; asking the session what is left to finish");
   ledger.loadedAt = 0;
   await loadLedger();
 }
@@ -4799,7 +4799,7 @@ function fleetRefresh() {
 // host just now: uncommitted changes, commits its base lacks, an agent that
 // went back to work. Removing closes the session (its workspace, or only its
 // pane when others share it) and removes the worktree only when it is clean
-// and merged; the branch is kept. A session whose worktree has work a
+// and merged; its local branch goes with it. A session whose worktree has work a
 // removal would keep can instead be discarded: the row lists what would be
 // lost, and only an explicit confirmation removes the worktree anyway and
 // deletes its branch. A coordinator may propose that (mark --discard); only
@@ -4893,7 +4893,7 @@ async function loadReview(quiet) {
   if (review.confirm && !review.confirm.ids.every((id) => ids.has(id))) review.confirm = null;
   if (!quiet) setReviewBusy(false);
   renderReview();
-  if (review.items.some((it) => it.mark && it.mark.ask && (it.mark.ask.state === "asking" || it.mark.ask.reasked_at))) {
+  if (review.items.some((it) => it.mark && it.mark.ask && (it.mark.ask.state === "asking" || it.mark.ask.reasked_at || it.mark.ask.cleaning_at))) {
     clearTimeout(review.askTimer);
     review.askTimer = setTimeout(() => loadReview(true), 6000);
   }
@@ -4909,23 +4909,32 @@ function askAge(iso) {
   return Math.floor(m / 1440) + " d ago";
 }
 
-// reviewAskHTML is a marked session's answer to "is it safe to remove you?", with the age it was given and, for an
-// UNSAFE, each item it named as the hub re-checked it just now (resolved, still holding, or not checkable) and a
-// Re-ask for the item. Its text is the session's, escaped.
+// reviewAskHTML is a marked session's answer to "what is left to finish this work?", with the age it was given and,
+// when something is left, each item it named as the hub re-checked it just now (resolved, still holding, or not
+// checkable), who it waits on, and a Re-ask for the item. When only cleanup the session can do itself is left, a
+// "Let it clean up" button tells it to do exactly that. Its text is the session's, escaped.
 const ASK_ITEM_CHIP = { resolved: "resolved", unresolved: "holds", unchecked: "can’t check" };
+// Who an unresolved item of a type waits on, when the type says so.
+const ASK_WAITS = { decision: "waits on you", cleanup: "agent can do it" };
 function reviewAskHTML(it, dis) {
   const ar = it.ask_review;
   if (!ar || ar.state !== "unsafe") return "";
   const id = esc(it.id);
-  const re = ar.reasking ? " · asking it again…" : "";
-  const hold = ar.resolved ? "every item has since resolved" : "still holds";
+  const re = ar.cleaning ? " · cleaning up…" : ar.reasking ? " · asking it again…" : "";
+  const busy = !!(ar.reasking || ar.cleaning);
+  const hold = ar.resolved ? "all of it is done now" : "still left";
   const rows = (ar.items || []).map((x, i) => {
-    const text = x.type === "other" ? esc(x.text || "(no reason given)") : `<b>${esc(x.label)}</b> ${esc(x.now)}${x.text ? ` <span class="rv-say">“${esc(x.text)}”</span>` : ""}`;
-    return `<li class="rv-ai ${esc(x.state)}"><span class="rv-chip">${esc(ASK_ITEM_CHIP[x.state] || x.state)}</span><span class="rv-ai-t">${text}</span>` +
-      `<button type="button" class="btn rv-reask" data-act="reask" data-id="${id}" data-item="${i + 1}" aria-label="Re-ask the session about item ${i + 1}"${dis || ar.reasking ? " disabled" : ""}>Re-ask</button></li>`;
+    const text = x.type === "other" || x.type === "cleanup" ? esc(x.text || "(no detail given)") : `<b>${esc(x.label)}</b> ${esc(x.now)}${x.text ? ` <span class="rv-say">“${esc(x.text)}”</span>` : ""}`;
+    const waits = x.state !== "resolved" && ASK_WAITS[x.type] ? ASK_WAITS[x.type] : "";
+    const chip = waits || ASK_ITEM_CHIP[x.state] || x.state;
+    return `<li class="rv-ai ${esc(x.state)} t-${esc(x.type)}"><span class="rv-chip">${esc(chip)}</span><span class="rv-ai-t">${text}</span>` +
+      `<button type="button" class="btn rv-reask" data-act="reask" data-id="${id}" data-item="${i + 1}" aria-label="Re-ask the session about item ${i + 1}"${dis || busy ? " disabled" : ""}>Re-ask</button></li>`;
   }).join("");
+  const clean = ar.only_cleanup && !ar.resolved
+    ? `<div class="rv-ask-act"><button type="button" class="btn rv-cleanup" data-act="cleanup" data-id="${id}"${dis || busy ? " disabled" : ""}>Let it clean up</button>` +
+      `<span class="rv-ask-n">Tells the session to do exactly what is listed, then asks again what is left.</span></div>` : "";
   const note = ar.reask_note ? `<div class="rv-ask-n">${esc(ar.reask_note)}</div>` : "";
-  return `<div class="rv-ask ${ar.resolved ? "resolved" : "holds"}"><div class="rv-ask-h"><b>UNSAFE</b> answered <span class="rv-age">${esc(askAge(ar.answered_at))}</span>${re} · ${hold}</div><ul class="rv-items">${rows}</ul>${note}</div>`;
+  return `<div class="rv-ask ${ar.resolved ? "resolved" : "holds"}"><div class="rv-ask-h"><b>LEFT TO FINISH</b> · answered <span class="rv-age">${esc(askAge(ar.answered_at))}</span>${re} · ${hold}</div><ul class="rv-items">${rows}</ul>${clean}${note}</div>`;
 }
 
 const reviewDone = (it) => !!(review.results.get(it.id) || {}).ok;
@@ -4944,14 +4953,14 @@ function reviewItemHTML(it) {
   const marked = `Marked${m.by ? " by " + esc(m.by) : ""}${m.at ? " · " + esc(fmtAgo(Date.parse(m.at))) + " ago" : ""}${m.reason ? ": " + esc(m.reason) : ""}`;
   const c = it.checks;
   const ok = c && c.exists && !c.primary && !c.dirty && c.unmerged_commits === 0 && !c.error
-    ? `<li>Clean, and merged into ${esc(c.base_used || "its base")}: the worktree will be removed (the branch is kept)</li>` : "";
+    ? `<li>Clean, and merged into ${esc(c.base_used || "its base")}: the worktree and its local branch will be removed</li>` : "";
   const ask = m.ask || {};
   const said = ask.state === "safe"
-    ? `<li>The session says SAFE${ask.reason ? ": " + esc(ask.reason) : ""} · answered <span class="rv-age">${esc(askAge(ask.at))}</span> <button type="button" class="btn rv-reask" data-act="reask" data-id="${esc(it.id)}"${review.busy || ask.reasked_at ? " disabled" : ""}>Re-ask</button></li>` : "";
+    ? `<li>Nothing is left to finish${ask.reason ? ": " + esc(ask.reason) : ""} · answered <span class="rv-age">${esc(askAge(ask.at))}</span> <button type="button" class="btn rv-reask" data-act="reask" data-id="${esc(it.id)}"${review.busy || ask.reasked_at ? " disabled" : ""}>Re-ask</button></li>` : "";
   // An UNSAFE answer's items are rows of their own below (reviewAskHTML): their warnings and per-item notes are not repeated.
   const askRows = !!(it.ask_review && it.ask_review.state === "unsafe");
-  const warnings = (it.warnings || []).filter((w) => !(askRows && w.startsWith("the session says UNSAFE"))).map((w) => `<li>${esc(w)}</li>`).join("");
-  const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session said UNSAFE about"))).map((w) => `<li>${esc(w)}</li>`).join("");
+  const warnings = (it.warnings || []).filter((w) => !(askRows && w.startsWith("the session says this is left"))).map((w) => `<li>${esc(w)}</li>`).join("");
+  const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session listed ") && w.includes(" as left, but it "))).map((w) => `<li>${esc(w)}</li>`).join("");
   const report = it.final_report
     ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary>${copyBtnHtml("rep:" + it.id, it.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md"></div><div class="hubchk" data-id="${esc(it.id)}" hidden></div></details>` : "";
   const loss = it.discardable && !done ? lossHTML(it) : "";
@@ -4964,7 +4973,7 @@ function reviewItemHTML(it) {
     if (r.discarded) {
       wt = ". Discarded the worktree" + (r.branch_deleted ? ` and deleted the branch ${esc(r.branch_deleted)}.` : ".") +
         (r.kept ? `<span class="kept">${esc(r.kept)}</span>` : "");
-    } else if (r.worktree_removed) wt = ". Removed the worktree; the branch is kept.";
+    } else if (r.worktree_removed) wt = ". Removed the worktree" + (r.branch_deleted ? ` and its branch ${esc(r.branch_deleted)}.` : "; the branch is kept.");
     else if (r.kept) wt = `.<span class="kept">Kept the worktree: ${esc(r.kept)}</span>`;
     result = `<div class="rv-result ok">${closed}${wt}</div>`;
   } else if (res) {
@@ -5184,6 +5193,17 @@ async function reviewAction(act, id, item) {
       toast("Asked the session again");
     } catch (e) {
       toast("Could not ask it again: " + e.message, true);
+      return;
+    }
+    loadReview(true);
+    return;
+  }
+  if (act === "cleanup") {
+    try {
+      await api("/api/marks/cleanup", { method: "POST", body: JSON.stringify({ agent_id: id }) });
+      toast("Told the session to clean up; it will be asked what is left when it reports");
+    } catch (e) {
+      toast("Could not tell it to clean up: " + e.message, true);
       return;
     }
     loadReview(true);

@@ -1035,13 +1035,13 @@ func (s *Server) review(ctx context.Context, it *removal) {
 		case ledger.AskUnsafe:
 			it.AskReview.reviewLines(it, it.captured)
 		case ledger.AskAsking:
-			it.Notes = append(it.Notes, "asking the session whether it is safe to remove…")
+			it.Notes = append(it.Notes, "asking the session what is left to finish…")
 		case ledger.AskNoAnswer:
-			it.Notes = append(it.Notes, "the session did not answer whether it is safe to remove"+parenthesized(a.Reason))
+			it.Notes = append(it.Notes, "the session did not say what is left to finish"+parenthesized(a.Reason))
 		case ledger.AskUnclear:
-			it.Notes = append(it.Notes, "the session answered neither SAFE nor UNSAFE: "+a.Reason)
+			it.Notes = append(it.Notes, "the session answered neither NOTHING LEFT nor what is left: "+a.Reason)
 		case ledger.AskNotAsked:
-			it.Notes = append(it.Notes, "the session was not asked whether it is safe to remove"+parenthesized(a.Reason))
+			it.Notes = append(it.Notes, "the session was not asked what is left to finish"+parenthesized(a.Reason))
 		}
 	}
 	it.Safe = len(it.Warnings) == 0

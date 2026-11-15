@@ -226,9 +226,9 @@ func (s *Server) deliveryHolds(it *removal) (*deliveredView, bool) {
 	case len(d.NotCaptured) > 0:
 		v.Why = "its pages do not hold everything"
 	case a != nil && a.State == ledger.AskUnsafe && a.At.After(d.At):
-		v.Why = "the session answered UNSAFE after its pages were recorded"
+		v.Why = "the session listed work left after its pages were recorded"
 	case a != nil && a.State == ledger.AskAsking:
-		v.Why = "the session has not yet answered whether it is safe to remove"
+		v.Why = "the session has not yet said what is left to finish"
 	default:
 		v.Holds = true
 	}

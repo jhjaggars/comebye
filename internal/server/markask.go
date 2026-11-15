@@ -20,7 +20,7 @@ import (
 // live, idle session sends it askPrompt, followed by the hub's own check of
 // its worktree (askChecks, so it does not answer from stale memory of
 // rebased SHAs), and records the first word of its reply on the mark:
-// SAFE, or UNSAFE and why. No reply within askWait is
+// NOTHING LEFT (SAFE), or what is left (UNSAFE) and who it waits on. No reply within askWait is
 // "no answer", never safe. A working or blocked session is not asked.
 
 const (
@@ -42,7 +42,7 @@ const (
 // re-ask wants looked at again.
 func askPrompt(reason, by, focus string) string {
 	var b strings.Builder
-	b.WriteString("A coordinator proposes removing this session and its worktree.\n")
+	b.WriteString("A coordinator proposes removing this session and its worktree. What is left to finish this work?\n")
 	if reason = strings.TrimSpace(reason); reason != "" {
 		who := "the coordinator"
 		if by != "" {
@@ -59,7 +59,13 @@ func askPrompt(reason, by, focus string) string {
 		"`git status` and the branch and remote state of your worktree, " +
 		"`comebye todo show ID` for every to-do you filed, " +
 		"and any process, container or cluster you started that is still running. " +
-		"Read-only commands for those checks are fine. Do not take any other action: no commits, pushes, merges, cleanup or edits.\n")
+		"Read-only commands for those checks are fine. Do not take any other action now: no commits, pushes, merges, cleanup or edits. " +
+		"Say what is left, in plain words, and who each item waits on: a decision only the user can make is waiting on the user; " +
+		"cleanup you can do yourself (delete your branch or worktree, stop a process you started, close your PR, tick an issue box) " +
+		"is waiting on a go-ahead, and you will be told when to do it. " +
+		"Do not list your own local branch: it is checked out only in your worktree, which you cannot delete it from, " +
+		"and removing this session removes the worktree and deletes that branch when its commits are on the base (or its remote). " +
+		"A local branch whose commits are all there is nothing left.\n")
 	if focus = strings.TrimSpace(focus); focus != "" {
 		b.WriteString("Look again at this in particular: " + focus + "\n")
 	}
@@ -219,8 +225,9 @@ func orDefault(s, def string) string {
 	return s
 }
 
-// parseAnswer reads a reply's first word: SAFE, or UNSAFE and the rest
-// as the reason; anything else is unclear, with the reply as its reason.
+// parseAnswer reads a reply's first words: NOTHING LEFT (or the old SAFE)
+// is safe; LEFT (or the old UNSAFE) is unsafe, with the rest as the reason;
+// anything else is unclear, with the reply as its reason.
 func parseAnswer(text string) (state, reason string) {
 	t := strings.TrimSpace(text)
 	word, rest, _ := strings.Cut(t, " ")
@@ -228,12 +235,26 @@ func parseAnswer(text string) (state, reason string) {
 		word, rest = word[:i], word[i+1:]+" "+rest
 	}
 	word = strings.TrimFunc(word, func(r rune) bool { return !unicode.IsLetter(r) })
-	rest = strings.TrimLeftFunc(rest, func(r rune) bool { return unicode.IsSpace(r) || strings.ContainsRune(":-–—,.", r) })
+	clean := func(r string) string {
+		return strings.TrimLeftFunc(r, func(r rune) bool { return unicode.IsSpace(r) || strings.ContainsRune(":-–—,.", r) })
+	}
 	switch strings.ToUpper(word) {
+	case "NOTHING":
+		// "NOTHING LEFT", "Nothing is left".
+		w2, rest2, _ := strings.Cut(strings.TrimSpace(rest), " ")
+		if strings.EqualFold(strings.Trim(w2, "*_`:.,"), "is") {
+			w2, rest2, _ = strings.Cut(strings.TrimSpace(rest2), " ")
+		}
+		if i := strings.IndexAny(w2, "\n"); i >= 0 {
+			w2, rest2 = w2[:i], w2[i+1:]+" "+rest2
+		}
+		if strings.EqualFold(strings.TrimFunc(w2, func(r rune) bool { return !unicode.IsLetter(r) }), "left") {
+			return ledger.AskSafe, clip(clean(rest2), maxAskReason)
+		}
 	case "SAFE":
-		return ledger.AskSafe, clip(rest, maxAskReason)
-	case "UNSAFE":
-		return ledger.AskUnsafe, clip(rest, maxAskReason)
+		return ledger.AskSafe, clip(clean(rest), maxAskReason)
+	case "LEFT", "UNSAFE":
+		return ledger.AskUnsafe, clip(clean(rest), maxAskReason)
 	}
 	return ledger.AskUnclear, clip(t, maxAskReason)
 }
@@ -312,6 +333,14 @@ func (s *Server) endStaleAsks() {
 				log.Printf("ledger: %v", err)
 			}
 		}
+		if m.Ask != nil && m.Ask.CleaningAt != nil {
+			if _, err := s.ledger.UpdateAsk(m.AgentID, m.At, func(a *ledger.Ask) bool {
+				a.CleaningAt, a.ReaskNote = nil, "Comebye restarted while the session was cleaning up"
+				return true
+			}); err != nil {
+				log.Printf("ledger: %v", err)
+			}
+		}
 		if m.Ask != nil && m.Ask.State == ledger.AskAsking {
 			if _, err := s.ledger.SetAsk(m.AgentID, m.At, ledger.Ask{State: ledger.AskNoAnswer, Reason: "Comebye restarted while asking", AskedAt: m.Ask.AskedAt}); err != nil {
 				log.Printf("ledger: %v", err)
@@ -338,7 +367,7 @@ func (s *Server) reask(m ledger.Mark, auto bool, focus string) error {
 		return &errReask{"gone", "the session is gone"}
 	case a.Status != herdr.StatusIdle && a.Status != herdr.StatusDone:
 		return &errReask{"busy", "the session is " + string(a.Status) + ": ask it when it is idle"}
-	case m.Ask != nil && (m.Ask.State == ledger.AskAsking || m.Ask.ReaskedAt != nil):
+	case m.Ask != nil && (m.Ask.State == ledger.AskAsking || m.Ask.ReaskedAt != nil || m.Ask.CleaningAt != nil):
 		return &errReask{"asking", "the session is already being asked"}
 	}
 	now := time.Now().UTC()
@@ -466,7 +495,7 @@ func (s *Server) reaskStale(it *removal, now time.Time) bool {
 	t := now.UTC()
 	a.ReaskedAt = &t // the response shows it, so the app polls for the new answer
 	it.AskReview.Reasking = &t
-	it.Notes = append(it.Notes, "the session's UNSAFE answer was "+agoText(now, it.AskReview.AnsweredAt)+" and is not trusted: asking it again…")
+	it.Notes = append(it.Notes, "the session's answer listing what was left was "+agoText(now, it.AskReview.AnsweredAt)+" and is not trusted: asking it again…")
 	return true
 }
 

@@ -123,7 +123,7 @@ func TestDeliveredUnsafeAfterIsAWarning(t *testing.T) {
 		t.Fatalf("safe=%v delivered=%+v", it.Safe, it.Delivered)
 	}
 	all := strings.Join(it.Warnings, "\n")
-	for _, want := range []string{"the session says UNSAFE: there is code in src/", "uncommitted changes (2 files)", "1 commits not in"} {
+	for _, want := range []string{"the session says this is left: there is code in src/", "uncommitted changes (2 files)", "1 commits not in"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("warnings lack %q:\n%s", want, all)
 		}
@@ -140,7 +140,7 @@ func TestDeliveredUnsafeBeforeIsANote(t *testing.T) {
 	}
 	deliver(s, agentHdr("w9:p1"), "desk/w9:p1", "", page)
 	it := reviewOf(t, s, "desk/w9:p1")
-	if !it.Safe || !it.DeliveredDiscard || !strings.Contains(strings.Join(it.Notes, "\n"), "the session said UNSAFE before its pages were recorded: notes not saved yet") {
+	if !it.Safe || !it.DeliveredDiscard || !strings.Contains(strings.Join(it.Notes, "\n"), "the session listed what was left before its pages were recorded: notes not saved yet") {
 		t.Fatalf("safe=%v warnings=%v notes=%v", it.Safe, it.Warnings, it.Notes)
 	}
 }

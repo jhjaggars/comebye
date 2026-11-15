@@ -399,6 +399,9 @@ type Ask struct {
 	// ReaskedAt is set while a re-ask is in flight: the standing answer
 	// stays (and keeps being re-checked) until the new one replaces it.
 	ReaskedAt *time.Time `json:"reasked_at,omitempty"`
+	// CleaningAt is set while the session has been told to do the cleanup it
+	// listed ("Let it clean up"); it is asked again when it reports.
+	CleaningAt *time.Time `json:"cleaning_at,omitempty"`
 	// Reasks counts the hub's automatic re-asks of this mark (a person's
 	// click is not counted); ReaskNote is how the last re-ask ended when it
 	// left the old answer standing ("did not answer").
@@ -413,10 +416,15 @@ const (
 	ItemCommits  = "commits"  // Branch, Remote when pushed
 	ItemResource = "resource" // Kind (pid, k3d-cluster, container, ...), Name or ID, Host
 	ItemOther    = "other"    // Text only: nothing the hub can check
+	// ItemDecision is work waiting on the user's answer to a to-do (ID).
+	ItemDecision = "decision"
+	// ItemCleanup is work the session can do itself if told to go ahead
+	// (Text says what: delete a branch, stop a process, close a PR).
+	ItemCleanup = "cleanup"
 )
 
-// AskItem is one thing an UNSAFE answer says keeps the session from being
-// removed. Text is the session's own words about it.
+// AskItem is one thing an answer says is left to finish (an UNSAFE answer,
+// "something is left", keeps the session from being removed). Text is the session's own words about it.
 type AskItem struct {
 	Type   string `json:"type"`
 	Repo   string `json:"repo,omitempty"`

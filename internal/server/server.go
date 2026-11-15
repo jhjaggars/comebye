@@ -674,6 +674,7 @@ func (s *Server) routes() {
 	s.provisionRoutes()
 	s.pageRoutes()
 	s.mux.HandleFunc("POST /api/marks/reask", s.authAgent(s.handleReask))
+	s.mux.HandleFunc("POST /api/marks/cleanup", s.authAgent(s.handleLetCleanup))
 	s.mux.HandleFunc("POST /api/marks", s.authAgent(s.handleMark))
 	s.mux.HandleFunc("POST /api/marks/clear", s.authAgent(s.handleUnmark))
 	s.mux.HandleFunc("POST /api/deliveries", s.authAgent(s.handleDeliver))

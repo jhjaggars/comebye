@@ -51,8 +51,8 @@ with the matches listed.
 | `comebye prompt AGENT TEXT` | send an agent a message (`-` reads stdin) |
 | `comebye prompt --queue AGENT TEXT` | hold the message on the hub until the agent is idle with no question open (up to 2 h, max 5 per agent); use it when a plain prompt bounced with `dialog_open`/`agent_blocked` (a plain prompt never types into an open dialog; it is refused, not held; the queue re-checks the pane before each delivery). If the user has text in the agent's input box, nothing is typed over it: a plain prompt is held on the queue automatically (`held` in `comebye queue`) and sent once the box has been empty for 5 s |
 | `comebye queue [AGENT] [--all] [--cancel ID]` | list queued prompts, or withdraw one |
-| `comebye reask AGENT [--item N]` | ask a marked session again whether it is safe to remove (its old answer stands until it replies) |
-| `comebye mark AGENT --reason R [--discard [--delivered PAGE,…]] [--wait]` | propose removing a session, or discarding its work; asks the session first (`--wait` prints its answer); `--delivered` also records the pages that hold the work |
+| `comebye reask AGENT [--item N]` | ask a marked session again what is left to finish (its old answer stands until it replies) |
+| `comebye mark AGENT --reason R [--discard [--delivered PAGE,…]] [--wait]` | propose removing a session, or discarding its work; asks the session what is left to finish (`--wait` prints its answer); `--delivered` also records the pages that hold the work |
 | `comebye show FILE [--section HEADING]` / `show --clear` | put a document (`.md`, `.markdown`, `.txt`, `.html` in your worktree or under home, up to 1 MB) in the Doc panel beside your chat, opened at a heading; the user reads it live as you edit it. A refused file is an error here. The Diff panel needs nothing from you: it shows your checkout's changes |
 | `comebye deliver [AGENT] PAGE… [--not-captured TEXT]` | record the pages (`pg_…`) that hold a finished agent's work (yours if no AGENT); with `mark --discard` its notes and docs show as captured in the review |
 | `comebye unmark AGENT` | withdraw that proposal |
@@ -230,16 +230,18 @@ AGENT` first (works on any host): uncommitted files, commits not in the base
 or on no remote, an unfinished rebase; `merged: NO` means the review keeps
 the worktree. A squash-merged PR shows as not merged: check the PR.
 
-Marking an idle session asks it whether it is safe to remove (SAFE, or
-UNSAFE with typed items: PR, to-do, commits, resource, other); a working or
-blocked one is not asked. The answer shows in the ledger; `--wait` prints it.
-The hub re-checks the items and asks again when one changes; `comebye reask
-AGENT` asks now. No answer is not a yes; do not trust an old UNSAFE or an
-old SAFE. Put the facts in `--reason` ("merged into main, report complete").
+Marking an idle session asks it "what is left to finish this work?"
+(NOTHING LEFT, or a list of typed items: decision, cleanup, PR, to-do,
+commits, resource, other, each saying who it waits on); a working or blocked
+one is not asked. The answer shows in the ledger; `--wait` prints it. The hub
+re-checks the items and asks again when one changes; `comebye reask AGENT`
+asks now. When only `cleanup` is left (the session can do it itself), the
+user's review has "Let it clean up". No answer is not a yes; do not trust an
+old answer either way. Put the facts in `--reason` ("merged into main, report complete").
 Never mark yourself, another coordinator or a home agent unless the user
 asks. `comebye unmark` withdraws a mark.
 
-When an UNSAFE item needs the user (a PR awaiting their review), file a
+When a left-over item needs the user (a PR awaiting their review), file a
 to-do with the evidence and a link; do not just tell them in the pane.
 
 **Sweeping.** `comebye sweep --dry-run`, then `comebye sweep`, marks every

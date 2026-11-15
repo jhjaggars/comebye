@@ -34,7 +34,7 @@ decided but not built yet; see [What is not built yet](#what-is-not-built-yet).
   does the work, reports, and after the user's OK lands its own work.
 - **The hub** stores the ledger and the backlog, records the states and
   their history, captures reports, evaluates waits, runs the git checks,
-  asks sessions whether they are safe to remove, and notifies the
+  asks sessions what is left to finish before they are removed, and notifies the
   coordinator. It never marks, lands, approves or removes anything by
   itself.
 
@@ -498,17 +498,20 @@ coordinator marks it (`comebye mark WORKER --reason "landed as <sha>"`), or
 a sweep does. The session is kept instead when the user wants follow-ups
 from it, or it is watching a PR.
 
-**Asking the session.** Marking an idle session asks it whether it is
-safe to remove. The question **includes the hub's own check result**, run
-on the session's host just before asking, for example:
+**Asking the session.** Marking an idle session asks it one question:
+**"What is left to finish this work?"** The question **includes the hub's own
+check result**, run on the session's host just before asking, for example:
 
 > The hub's check of this worktree: every commit is in origin/main
 > (landed on origin/main as bf50213); the worktree is clean.
 
 A session whose work was rebased or cherry-picked onto main should trust
-that check over its memory of the SHAs it committed. It answers SAFE, or
-UNSAFE with a reason only it knows: an open PR it watches, a loop it runs,
-a follow-up it owes the user. No answer is not a yes.
+that check over its memory of the SHAs it committed. It answers `NOTHING
+LEFT`, or `LEFT` and a list of what remains, each item in plain words and
+saying who it waits on: a decision only the user can make, cleanup it can do
+itself, a PR open for review, a loop it runs. No answer is not a yes. The
+old `SAFE` / `UNSAFE` replies still parse (as nothing left / something
+left), and the ledger keeps the states `safe` and `unsafe`.
 
 **Evidence, not memory.** A session answers from its memory, and the answer
 is frozen when it is recorded, so it goes stale: two sessions once answered
@@ -520,12 +523,14 @@ text, not an instruction (the session cannot see the reason otherwise), and
 state, `comebye todo show` for every to-do it filed, any process or resource
 it started. Read-only commands for that are allowed; nothing else is.
 
-**Structured UNSAFE.** The reply is machine-readable. `SAFE`, or `UNSAFE`
-followed by one line per thing that must be dealt with, each typed:
+**The list.** The reply is machine-readable. `NOTHING LEFT`, or `LEFT`
+followed by one line per item, each typed:
 
 ```
-UNSAFE
-- pr jhjaggars/homelab#343 open, I am watching it
+LEFT
+- decision t972236dfee waiting on the user: which cluster to deploy to
+- cleanup delete branch feat/x and its worktree (me, once told to go ahead)
+- pr jhjaggars/homelab#343 open, waiting on review
 - todo t972236dfee waiting on the user's answer
 - commits feat/x pushed to origin
 - resource k3d-cluster dev on desk
@@ -533,8 +538,13 @@ UNSAFE
 - other a loop I run every 10 minutes
 ```
 
+`decision TODO_ID` is work waiting on the user's answer; `cleanup WHAT` is
+work the session can do itself if told to go ahead (delete a branch or
+worktree, stop a process it started, close its PR, tick an issue box).
+`NOTHING LEFT` is what lets the hub remove a landed, clean session by itself.
+
 The parser is lenient (bullets or numbers, markdown around the words, a
-reason on the `UNSAFE` line, a PR as a URL); text it cannot type becomes an
+reason on the `LEFT` line, a PR as a URL); text it cannot type becomes an
 `other` item. An answer recorded before items existed counts as one `other`
 item.
 
@@ -545,26 +555,37 @@ is built, with the results cached for a minute:
 |---|---|---|
 | `pr` | `gh pr view` on the session's host (a peer is asked through its `probe` host op) | merged or closed |
 | `todo` | the hub's own to-do list | done or dropped |
+| `decision` | the same to-do | done or dropped (answered: the session can go on, still open) |
+| `cleanup` | nothing: the session does it | never by itself; it resolves when the session is asked again |
 | `commits` | the branch checks (`Unmerged`, `Equivalent`, pushed) | all in the base, squash-merged, or all on a remote |
 | `resource` | a `pid` alive on the host, a `k3d-cluster` in `k3d cluster list` | the pid is dead, the cluster gone; any other kind: "can't check" |
 | `other` | nothing | never |
 
-When **every** item has resolved, the UNSAFE becomes a note, and the session
-counts as safe: "the session said UNSAFE at 14:12 UTC (6 h ago), but PR
+When **every** item has resolved, the list becomes a note, and the session
+counts as safe: "the session listed what was left at 14:12 UTC (6 h ago), but PR
 jhjaggars/homelab#343 merged 5 h ago and to-do t972236dfee is done". Any
 item that is unresolved, or that the hub cannot check, stays a warning, one
 line per item. The review shows **when the answer was given** ("answered 6 h
-ago") and each item's re-checked state, and gives **each item a Re-ask**.
+ago") and each item's re-checked state and who it waits on ("waits on
+you", "agent can do it"), and gives **each item a Re-ask**.
+
+**Let it clean up.** When the only items still left are `cleanup`, the review
+shows **Let it clean up** (`POST /api/marks/cleanup`). It sends the idle
+session a message telling it to do exactly the cleanup it listed and nothing
+else, and to report. When it is idle again with a new reply, the hub asks
+"what is left to finish this work?" once more; the row says "cleaning up…"
+meanwhile. With a decision or anything else beside the cleanup, the button
+is not offered: the user's answer, or the session's own work, comes first.
 
 **Asking again.** A re-ask (the button, `comebye reask AGENT [--item N]`,
 `POST /api/marks/reask`) keeps the old answer standing, and re-checked, until
 the session replies; a re-ask that gets no answer leaves it with a note. The
-hub also re-asks by itself, once an idle session is free, when an UNSAFE
+hub also re-asks by itself, once an idle session is free, when a LEFT
 answer is **older than an event that touches one of its items** (a PR merged,
 a to-do closed after the answer) or, while still unresolved, **older than 12
 hours**. It is rate limited: at most one ask of a mark per 30 minutes and
 three automatic re-asks per mark. A working or blocked session waits until
-it is idle. A SAFE answer is not re-asked on its own.
+it is idle. A NOTHING LEFT answer is not re-asked on its own.
 
 *Limits:* a pid is only "alive" or "dead"; a reused pid reads as alive (the
 item stays a warning). `gh` must be logged in on the session's host or the PR
@@ -572,8 +593,8 @@ reads "can't check".
 
 **The removal review** (the app) re-runs the checks and shows the session's
 answer. The user confirms each removal. Removing closes the session,
-removes the worktree only when it is clean and merged, and never deletes
-the branch; the land step has already deleted it. Discarding unmerged work
+removes the worktree only when it is clean and merged, and deletes
+its local branch with it when every commit is in the base. Discarding unmerged work
 is a separate, explicit choice in the review.
 
 *Decided:* mark once the entry is landed, and keep the session only on

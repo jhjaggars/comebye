@@ -197,7 +197,7 @@ func TestReviewTurnsAResolvedUnsafeIntoANote(t *testing.T) {
 	it := reviewOf(t, s, "desk/w2:p1")
 	notes := strings.Join(it.Notes, "|")
 	if !it.Safe || len(it.Warnings) != 0 ||
-		!strings.Contains(notes, "the session said UNSAFE at ") || !strings.Contains(notes, "(6 h ago), but PR o/r#343 merged 5 h ago and to-do "+td.ID+" is done") {
+		!strings.Contains(notes, "the session listed what was left at ") || !strings.Contains(notes, "(6 h ago), but PR o/r#343 merged 5 h ago and to-do "+td.ID+" is done") {
 		t.Fatalf("resolved: %+v", it)
 	}
 	if ar := it.AskReview; ar == nil || !ar.Resolved || !ar.Event || len(ar.Items) != 2 || ar.Items[0].State != itemResolved {
@@ -210,9 +210,9 @@ func TestReviewTurnsAResolvedUnsafeIntoANote(t *testing.T) {
 		ledger.AskItem{Type: "other", Text: "a loop I run"})
 	it = reviewOf(t, s, "desk/w2:p1")
 	if it.Safe || len(it.Warnings) != 2 ||
-		!strings.Contains(it.Warnings[0], "the session says UNSAFE: PR o/r#344 is still open (watching it) (answered 6 h ago)") ||
-		!strings.Contains(it.Warnings[1], "the session says UNSAFE: a loop I run (answered 6 h ago)") ||
-		!strings.Contains(strings.Join(it.Notes, "|"), "about PR o/r#343, but it merged 5 h ago") {
+		!strings.Contains(it.Warnings[0], "the session says this is left: PR o/r#344 is still open (watching it) (answered 6 h ago)") ||
+		!strings.Contains(it.Warnings[1], "the session says this is left: a loop I run (answered 6 h ago)") ||
+		!strings.Contains(strings.Join(it.Notes, "|"), "PR o/r#343 as left, but it merged 5 h ago") {
 		t.Fatalf("unresolved: %+v", it)
 	}
 
@@ -222,7 +222,7 @@ func TestReviewTurnsAResolvedUnsafeIntoANote(t *testing.T) {
 		t.Fatal(err)
 	}
 	it = reviewOf(t, s, "desk/w2:p1")
-	if it.Safe || len(it.Warnings) != 1 || !strings.Contains(it.Warnings[0], "the session says UNSAFE: old style reason (answered 1 h ago)") {
+	if it.Safe || len(it.Warnings) != 1 || !strings.Contains(it.Warnings[0], "the session says this is left: old style reason (answered 1 h ago)") {
 		t.Fatalf("legacy: %+v", it)
 	}
 }

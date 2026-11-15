@@ -87,7 +87,7 @@ func init() {
 		{"resume", "ID|NAME [--host H] [--no-note] [--login L] [--json]", "start a parked agent again: a new pane in the same worktree on its own session (claude --resume, pi --session, opencode -s), its scratchpad moved back, and a catch-up note", cmdResume},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
-		{"reask", "AGENT [--item N] [--json]", "ask a marked session again whether it is safe to remove", cmdReask},
+		{"reask", "AGENT [--item N] [--json]", "ask a marked session again what is left to finish", cmdReask},
 		{"brief", "set FILE|- [--no-check] | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"usage", "[--by kind|model|host|project|role|purpose|handoff|session|token] [--since 14d|DATE] [--until D] [--bucket hour|day] [--project P --handoff ID ...] [--limit N] [--login L] [--json]", "tokens spent by agents: fresh tokens (input + output + cache writes) with cache reads apart, by kind, model, host, project, role, purpose, handoff or session, with top handoffs and sessions and cache efficiency; dollars are list-price estimates. The user's, and a coordinator's", cmdUsage},
 		{"settings", "[show | set [--default-kind K] [--allow K,K|any] [--model KIND=M] [--thinking pi=LEVEL] | clear [--field default-kind|allowed|models]] [--host H] [--login L] [--json]", "a host's agent settings: the kind, model and thinking level a start uses when none is asked for, and the kinds it may start. Anyone reads them; setting is the user's alone", cmdSettings},
@@ -1866,7 +1866,7 @@ func cmdMark(e *Env, args []string) error {
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	reason := fs.String("reason", "", "why the session can go (required)")
 	discard := fs.Bool("discard", false, "propose discarding its work too: the worktree even if dirty or unmerged, and the branch")
-	noAsk := fs.Bool("no-ask", false, "do not ask the session whether it is safe to remove")
+	noAsk := fs.Bool("no-ask", false, "do not ask the session what is left to finish")
 	wait := fs.Bool("wait", false, "wait (up to about 2 minutes) for the session's answer and print it")
 	var delivered stringList
 	fs.Var(&delivered, "delivered", "with --discard: the Pages (pg_… ids) that capture the work, so its notes and docs are not kept as warnings (repeat or comma-separate)")
@@ -1931,7 +1931,7 @@ func cmdMark(e *Env, args []string) error {
 	switch {
 	case ask == nil:
 	case ask.State == "asking":
-		fmt.Fprintf(e.Stdout, "Asked the session whether it is safe to remove; its answer shows in the app's review and in comebye ledger (or use --wait).\n")
+		fmt.Fprintf(e.Stdout, "Asked the session what is left to finish; its answer shows in the app's review and in comebye ledger (or use --wait).\n")
 	default:
 		fmt.Fprintf(e.Stdout, "%s.\n", upperFirst(askText(ask)))
 	}
@@ -1987,13 +1987,13 @@ func askText(a *apiAsk) string {
 	}
 	switch a.State {
 	case "asking":
-		return "asking the session whether it is safe to remove"
+		return "asking the session what is left to finish"
 	case "safe":
-		return "the session says SAFE" + why
+		return "the session says nothing is left to finish" + why
 	case "unsafe":
-		return "the session says UNSAFE: " + dash(a.Reason)
+		return "the session says this is left to finish: " + dash(a.Reason)
 	case "unclear":
-		return "the session answered neither SAFE nor UNSAFE: " + dash(a.Reason)
+		return "the session answered neither NOTHING LEFT nor what is left: " + dash(a.Reason)
 	case "no_answer":
 		return "the session did not answer (not the same as safe)" + why
 	case "not_asked":
@@ -2003,7 +2003,7 @@ func askText(a *apiAsk) string {
 }
 
 // printAsks lists the answers whose items the hub re-checked: what each
-// UNSAFE named, how it stands now, and how old the answer is.
+// "left to finish" answer named, how it stands now, and how old the answer is.
 func printAsks(e *Env, lg *ledgerResp) {
 	var ids []string
 	for id, ar := range lg.Asks {
@@ -2015,12 +2015,12 @@ func printAsks(e *Env, lg *ledgerResp) {
 		return
 	}
 	sort.Strings(ids)
-	fmt.Fprintln(e.Stdout, "\nUNSAFE answers, each item re-checked by the hub just now:")
+	fmt.Fprintln(e.Stdout, "\nWhat is left to finish, each item re-checked by the hub just now:")
 	for _, id := range ids {
 		ar := lg.Asks[id]
 		verdict := "still holds"
 		if ar.Resolved {
-			verdict = "every item has resolved: counts as safe"
+			verdict = "every item is done: counts as safe"
 		}
 		fmt.Fprintf(e.Stdout, "  %s: answered %s; %s\n", id, dash(ago(e, ar.AnsweredAt)), verdict)
 		for _, it := range ar.Items {
@@ -2070,7 +2070,7 @@ func cmdReask(e *Env, args []string) error {
 	if *asJSON {
 		return rawJSON(e, data)
 	}
-	fmt.Fprintf(e.Stdout, "Asked %s again whether it is safe to remove. Its old answer stands until it replies; see comebye ledger.\n", t.label())
+	fmt.Fprintf(e.Stdout, "Asked %s again what is left to finish. Its old answer stands until it replies; see comebye ledger.\n", t.label())
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -153,8 +154,9 @@ func TestAutoRemoveHappyPath(t *testing.T) {
 	if _, err := os.Stat(r.wt); !os.IsNotExist(err) {
 		t.Fatalf("worktree still there: %v", err)
 	}
-	if git(t, r.repo, "rev-parse", "--verify", "refs/heads/w") == "" {
-		t.Fatal("the branch must be kept")
+	// Its commits are on origin/main, so its local branch went with the worktree.
+	if out, _ := exec.Command("git", "-C", r.repo, "rev-parse", "--verify", "-q", "refs/heads/w").Output(); len(out) != 0 {
+		t.Fatal("the merged local branch must be deleted with the worktree")
 	}
 	var audited bool
 	for _, a := range s.ledger.AuditLog("") {
@@ -504,8 +506,9 @@ func TestResumeRecreatesTheWorktree(t *testing.T) {
 			t.Fatalf("not removed: %v", got)
 		}
 		rec := s.parkStore().List(true)[0]
-		if branchGone {
-			git(t, r.repo, "branch", "-q", "-D", "w")
+		if !branchGone {
+			// The removal deleted the merged branch; a branch that is there (made again since) is resumed on.
+			git(t, r.repo, "branch", "-q", "w", rec.Landed)
 		}
 		w := do(s, "POST", "/api/resume", userHdr, `{"id":"`+rec.ID+`"}`)
 		if w.Code != 200 {

@@ -595,7 +595,7 @@ func TestStateDir(t *testing.T) {
 func TestMarkAsk(t *testing.T) {
 	f, e, out, errb := newFake(t)
 	f.answers["POST /api/marks"] = answer{body: `{"mark":{"agent_id":"kube/w5:p2","at":"2026-10-22T09:00:00Z","ask":{"state":"asking"}}}`}
-	if code := run(e, "mark", "solo", "--reason", "merged"); code != 0 || !strings.Contains(out.String(), "Asked the session whether it is safe") {
+	if code := run(e, "mark", "solo", "--reason", "merged"); code != 0 || !strings.Contains(out.String(), "Asked the session what is left to finish") {
 		t.Fatalf("mark: %d %s %s", code, out, errb)
 	}
 	asking := `{"entries":[],"marks":[{"agent_id":"kube/w5:p2","at":"2026-10-22T09:00:00Z","ask":{"state":"asking"}}]}`
@@ -609,7 +609,7 @@ func TestMarkAsk(t *testing.T) {
 	}
 	out.Reset()
 	if code := run(e, "mark", "solo", "--reason", "merged", "--wait"); code != 0 || sleeps != 1 ||
-		!strings.Contains(out.String(), "The session says UNSAFE: watching PR #12.") {
+		!strings.Contains(out.String(), "The session says this is left to finish: watching PR #12.") {
 		t.Fatalf("mark --wait: %d %d %s %s", code, sleeps, out, errb)
 	}
 	out.Reset()
@@ -620,7 +620,7 @@ func TestMarkAsk(t *testing.T) {
 		t.Fatalf("mark --no-ask: %d %s", code, errb)
 	}
 	out.Reset()
-	if code := run(e, "ledger"); code != 0 || !strings.Contains(out.String(), "the session says UNSAFE: watching PR #12") {
+	if code := run(e, "ledger"); code != 0 || !strings.Contains(out.String(), "the session says this is left to finish: watching PR #12") {
 		t.Fatalf("ledger: %d %s", code, out)
 	}
 	// A mark replaced meanwhile ends the wait.
@@ -1067,7 +1067,7 @@ func TestLedgerShowsRecheckedAnswersAndReask(t *testing.T) {
 		t.Fatalf("ledger: %d %s", code, errb)
 	}
 	for _, want := range []string{
-		"UNSAFE answers, each item re-checked by the hub just now:", "kube/w5:p2: answered ", "still holds",
+		"What is left to finish, each item re-checked by the hub just now:", "kube/w5:p2: answered ", "still holds",
 		"- PR o/r#343 merged 5 h ago (watching) [resolved]", "- to-do t0123456789 is still open [unresolved]",
 		"- a loop I run (can't check: free text) [unchecked]", "an item changed after the answer", "the re-ask got no answer",
 	} {
@@ -1082,7 +1082,7 @@ func TestLedgerShowsRecheckedAnswersAndReask(t *testing.T) {
 	}
 	f.answers["POST /api/marks/reask"] = answer{body: `{"asking":true}`}
 	out.Reset()
-	if code := run(e, "reask", "kube/w5:p2", "--item", "2"); code != 0 || !strings.Contains(out.String(), "again whether it is safe to remove") ||
+	if code := run(e, "reask", "kube/w5:p2", "--item", "2"); code != 0 || !strings.Contains(out.String(), "again what is left to finish") ||
 		!strings.Contains(f.find("POST", "/api/marks/reask").body, `"item":2`) {
 		t.Fatalf("reask: %d %s %s", code, out, errb)
 	}

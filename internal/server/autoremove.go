@@ -81,9 +81,9 @@ func autoRemoveVerdict(it *removal, f autoFacts) (ok bool, why string) {
 	case m.Discard:
 		return false, "the mark proposes discarding the work"
 	case m.Ask == nil || m.Ask.State != ledger.AskSafe:
-		return false, "the session has not answered SAFE"
+		return false, "the session has not said nothing is left"
 	case f.AnswerTTL > 0 && !m.Ask.At.IsZero() && f.Now.Sub(m.Ask.At) >= f.AnswerTTL:
-		return false, "the SAFE answer is " + agoText(f.Now, m.Ask.At) + ": too old to trust"
+		return false, "the NOTHING LEFT answer is " + agoText(f.Now, m.Ask.At) + ": too old to trust"
 	case m.Ask.ReaskedAt != nil:
 		return false, "the session is being asked again"
 	case it.Worktree == "" || it.ChecksError != "" || c == nil:

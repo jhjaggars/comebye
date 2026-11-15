@@ -20,13 +20,15 @@ import (
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
-// Re-checking what a session said keeps it. A session's UNSAFE answer is
+// Re-checking what a session said keeps it. A session's "something is left" (UNSAFE) answer is
 // frozen when it is recorded, but the things it names move on: the PR it
 // watched merges, the to-do it filed is closed. Each time the removals
 // review is built the hub looks at the typed items of the answer again:
 //
 //	pr        gh pr view on the session's host (merged or closed: resolved)
 //	todo      this hub's own to-do list (done or dropped: resolved)
+//	decision  the same, for a to-do waiting on the user's answer
+//	cleanup   work the session can do itself: never resolved by the hub
 //	commits   the branch checks (all in the base, or all on a remote)
 //	resource  a pid alive on the host, a k3d cluster still there
 //	other     free text: never resolved by the hub
@@ -251,9 +253,15 @@ type askReview struct {
 	Items      []itemView `json:"items,omitempty"`
 	// Resolved: an UNSAFE answer whose items have all resolved.
 	Resolved bool `json:"resolved,omitempty"`
+	// OnlyCleanup: items are left, and every one still unresolved is
+	// cleanup the session can do itself ("Let it clean up").
+	OnlyCleanup bool `json:"only_cleanup,omitempty"`
 	// Event: some item resolved after the answer was given.
-	Event     bool       `json:"event,omitempty"`
-	Reasking  *time.Time `json:"reasking,omitempty"`
+	Event    bool       `json:"event,omitempty"`
+	Reasking *time.Time `json:"reasking,omitempty"`
+	// Cleaning: the session was told to do its cleanup and has not
+	// reported yet.
+	Cleaning  *time.Time `json:"cleaning,omitempty"`
 	ReaskNote string     `json:"reask_note,omitempty"`
 	Reasks    int        `json:"reasks,omitempty"`
 }
@@ -279,7 +287,7 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 	if a == nil {
 		return nil
 	}
-	ar := &askReview{State: a.State, AnsweredAt: a.At, Reasking: a.ReaskedAt, ReaskNote: a.ReaskNote, Reasks: a.Reasks}
+	ar := &askReview{State: a.State, AnsweredAt: a.At, Reasking: a.ReaskedAt, Cleaning: a.CleaningAt, ReaskNote: a.ReaskNote, Reasks: a.Reasks}
 	if a.State != ledger.AskUnsafe {
 		return ar
 	}
@@ -302,14 +310,22 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 	}
 	wg.Wait()
 	ar.Resolved = true
+	cleanups := 0
+	ar.OnlyCleanup = true
 	for _, v := range ar.Items {
 		if v.State != itemResolved {
 			ar.Resolved = false
+			if v.Type != ledger.ItemCleanup {
+				ar.OnlyCleanup = false
+			} else {
+				cleanups++
+			}
 		}
 		if v.ChangedAt != nil && v.ChangedAt.After(a.At) {
 			ar.Event = true
 		}
 	}
+	ar.OnlyCleanup = ar.OnlyCleanup && cleanups > 0
 	return ar
 }
 
@@ -346,7 +362,10 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 			return itemOpen, "is still open", nil
 		}
 		return unchecked(orDefault(r.Detail, "gh said "+r.State))
-	case ledger.ItemTodo:
+	case ledger.ItemTodo, ledger.ItemDecision:
+		if item.ID == "" {
+			return unchecked("the answer names no to-do")
+		}
 		if s.todos == nil {
 			return unchecked("this hub has no to-do list")
 		}
@@ -362,6 +381,9 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 			}
 			return itemResolved, "is " + t.State + when, t.ClosedAt
 		case TodoAnswered:
+			if item.Type == ledger.ItemDecision {
+				return itemOpen, "is answered: the session can go on", nil
+			}
 			return itemOpen, "is answered but not yet done", nil
 		}
 		return itemOpen, "is still open", nil
@@ -407,7 +429,43 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 		}
 		return unchecked("the hub does not look for a " + orDefault(item.Kind, "resource") + " of that kind")
 	}
+	if item.Type == ledger.ItemCleanup || item.Type == ledger.ItemOther {
+		// "git branch -d my-branch" is not work left: the branch is checked
+		// out only in the session's own worktree, which cannot delete it, and
+		// removing the session removes both once its commits are in the base.
+		if ownBranchDeletion(item.Text, it.Branch) {
+			if st, now, at := s.recheckCommits(ctx, it, ledger.AskItem{Type: ledger.ItemCommits, Branch: it.Branch}); st == itemResolved {
+				return itemResolved, "is nothing left: its local branch goes with the worktree when the session is removed (its commits " + now + ")", at
+			}
+		}
+	}
+	if item.Type == ledger.ItemCleanup {
+		return unchecked("the session can do this itself")
+	}
 	return unchecked("free text")
+}
+
+var (
+	deleteVerbRe = regexp.MustCompile(`(?i)\b(delete|deleting|remove|removing|drop|dropping|prune|pruning)\b|git branch -[dD]\b`)
+	remoteWordRe = regexp.MustCompile(`(?i)\b(remote|origin|upstream|push|pushed|github)\b|\bgh\b`)
+)
+
+// ownBranchDeletion says whether an item's words are only about deleting the
+// session's own local branch (branch is its name, "" when unknown): a
+// deletion verb, the word "branch", no remote, and no other branch named.
+func ownBranchDeletion(text, branch string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" || !strings.Contains(strings.ToLower(t), "branch") || !deleteVerbRe.MatchString(t) || remoteWordRe.MatchString(t) {
+		return false
+	}
+	if branch == "" {
+		return false
+	}
+	if strings.Contains(t, branch) {
+		return true
+	}
+	// "delete my local branch" with no name at all.
+	return !regexp.MustCompile(`[\w.-]+/[\w./-]+`).MatchString(t) && regexp.MustCompile(`(?i)\b(my|its|the|own|local)\b`).MatchString(t)
 }
 
 // probeCached probes host, remembering the answer; r is nil with why when
@@ -492,7 +550,7 @@ func (ar *askReview) said() string {
 	for _, v := range ar.Items {
 		parts = append(parts, v.Label+" "+v.Now)
 	}
-	return "the session said UNSAFE at " + ar.AnsweredAt.UTC().Format("15:04 UTC") + " (" + agoText(time.Now(), ar.AnsweredAt) + "), but " + joinAnd(parts)
+	return "the session listed what was left at " + ar.AnsweredAt.UTC().Format("15:04 UTC") + " (" + agoText(time.Now(), ar.AnsweredAt) + "), but " + joinAnd(parts)
 }
 
 func joinAnd(p []string) string {
@@ -519,15 +577,15 @@ func (ar *askReview) reviewLines(it *removal, asCaptured bool) {
 		for _, v := range ar.Items {
 			parts = append(parts, strings.TrimSpace(itemText(v)))
 		}
-		it.Notes = append(it.Notes, "the session said UNSAFE before its pages were recorded: "+strings.Join(parts, "; ")+age)
+		it.Notes = append(it.Notes, "the session listed what was left before its pages were recorded: "+strings.Join(parts, "; ")+age)
 		return
 	}
 	for _, v := range ar.Items {
 		if v.State == itemResolved {
-			it.Notes = append(it.Notes, "the session said UNSAFE about "+v.Label+", but it "+v.Now)
+			it.Notes = append(it.Notes, "the session listed "+v.Label+" as left, but it "+v.Now)
 			continue
 		}
-		it.Warnings = append(it.Warnings, "the session says UNSAFE: "+itemText(v)+age)
+		it.Warnings = append(it.Warnings, "the session says this is left: "+itemText(v)+age)
 	}
 }
 

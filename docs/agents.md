@@ -183,22 +183,26 @@ are warnings), or "Remove all safe" for those without warnings.
 knows: an open PR it is watching, a loop it runs, work it was told to
 keep, a follow-up it owes you. So marking a session that is idle or done
 (from the app or `comebye mark`) also sends it a short prompt asking
-whether it is safe to remove, and to take no other action. The question
+"what is left to finish this work?", and to take no other action. The question
 carries the mark's reason, tells the session to check the live state (PRs,
 git, to-dos, processes) before it answers, and includes the hub's own check of its worktree, run on its host just before
 asking ("the worktree is clean and every commit of feat/x is in
 origin/main (landed on origin/main as bf50213)", or the warnings), and
 tells it to trust that over its memory: work rebased or cherry-picked onto
 the base has new SHAs, which a session may not know. It should reply
-with SAFE, or UNSAFE and the reason; Comebye reads the first word of its
-reply and shows it in the review:
+with NOTHING LEFT, or LEFT and a list of what remains in plain words, each
+saying who it waits on (the old SAFE / UNSAFE still parse); Comebye reads the
+first words of its reply and shows it in the review:
 
-- **SAFE**: a green line, "The session says SAFE";
-- **UNSAFE**: a warning with its reason, so the session is not removed
-  with one tap ("Remove anyway…", and left out of "Remove all safe"). The
-  session lists what holds it (PRs, to-dos, commits, resources, other), and
-  Comebye checks each again when the review opens: when all of them have
-  resolved (the PR merged, the to-do done) the UNSAFE is only a note. The
+- **NOTHING LEFT**: a green line, "Nothing is left to finish";
+- **LEFT**: a "LEFT TO FINISH" list, so the session is not removed
+  with one tap ("Remove anyway…", and left out of "Remove all safe"). Each
+  item (a decision waiting on you, cleanup the agent can do, a PR, a to-do,
+  commits, a resource, other) shows who it waits on, and Comebye checks each
+  again when the review opens: when all of them have
+  resolved (the PR merged, the to-do done) the list is only a note. When only
+  cleanup is left, **Let it clean up** tells the session to do exactly that
+  and report, then asks again. The
   review says how old the answer is and has a **Re-ask** on every item;
   Comebye also asks again by itself when an item changes or a day-old
   answer still holds (see `docs/lifecycle.md`, "Evidence, not memory");
@@ -217,7 +221,7 @@ Removing:
 - removes the worktree only if it is clean, fully merged, not the primary
   checkout, and no other agent or workspace uses it (`git worktree remove`
   without `--force`); otherwise the worktree stays and the review says why;
-- never deletes the branch.
+- deletes the session's local branch with the worktree when every commit is in the base (so a session never lists "delete my branch" as work left: it cannot delete the branch of its own worktree); a discard deletes it as before.
 
 **Sweeping for finished agents.** Instead of marking each finished worker
 by hand, sweep (`comebye sweep`, or "Sweep for finished agents" in the
@@ -237,7 +241,7 @@ day and the check goes on with what it has) and classified:
   merged --head <branch>` shows a PR whose head is the branch tip (skipped
   without `gh`). It is
   marked with a generated reason ("Sweep: finished; worktree clean; …"),
-  through the normal mark, so the session is asked whether it is safe;
+  through the normal mark, so the session is asked what is left to finish;
 - **needs a look**: not marked, with why: the agent is working or blocked,
   uncommitted changes, an unfinished rebase or merge, commits on no remote,
   commits **pushed but not merged** (an open PR is active work), a gone
@@ -514,7 +518,7 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye peer show NAME` | One peer as the hub sees it (status, version, address), its installed agent kinds and models, and its settings. `peer list` has a DEFAULT column with each peer's default agent (`?`: the peer is down or too old to have settings). |
 | `comebye models [--host H] [--kind K]` | The models each installed agent kind can start with on a host (default: this one), where the list came from and which is the default (`GET /api/models`). |
 | `comebye prompt AGENT TEXT\|-` | Send an agent a message. TEXT is sent as is: a TEXT that is an existing file is refused (send a file with `comebye prompt AGENT - < file`). If the agent has a dialog open (permission prompt, question, menu) the prompt is refused with `dialog_open` (exit non-zero) and nothing is typed: the host that owns the pane checks the screen right before sending. It is refused rather than held automatically, so the caller always knows the message did not arrive; use `--queue` to hold it. |
-| `comebye reask AGENT [--item N]` | Ask a marked session again whether it is safe to remove. The old answer stands until it replies; `comebye ledger` shows each UNSAFE answer's items as the hub last checked them, with the answer's age. |
+| `comebye reask AGENT [--item N]` | Ask a marked session again what is left to finish. The old answer stands until it replies; `comebye ledger` shows each UNSAFE answer's items as the hub last checked them, with the answer's age. |
 | `comebye mark AGENT --reason R [--discard] [--no-ask] [--wait]` / `comebye unmark AGENT` | Propose a session for removal (a reason is required), or discarding its work as well; or withdraw it. Marking an idle session asks it whether it is safe to remove (see below); `--wait` waits for and prints the answer, `--no-ask` skips asking. |
 | `comebye scratch [--dry-run] [--json]` | Prune this host's temporary directory (see [Scratch space](#scratch-space-tmp)): scratchpads whose worktree is gone and your old `tmp.*` / `hl.*` directories, never a live agent's. `--dry-run` lists what would go, how big it is and which processes would be stopped, and changes nothing. |
 | `comebye park AGENT [--dirty] [--login L]` | Close an idle agent but keep its worktree, branch and session (claude, pi, opencode). The host writes a park record (`parked.json` in its state directory) before it closes the pane. A claude agent's `/tmp` scratchpad moves to disk and comes back on resume. Refused while the agent works or is blocked, has a background task, has no known session, or its worktree has uncommitted edits (`--dirty` confirms; the edits stay in place). The user's alone: pass `--login`. |

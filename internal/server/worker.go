@@ -773,6 +773,16 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 				why = err.Error()
 			} else {
 				res.WorktreeRemoved = true
+				// Every commit is in the base (Removable), so its local branch
+				// is nothing left to finish: it goes with the worktree, which
+				// is the only place it was checked out (a session cannot
+				// delete the branch of its own worktree).
+				branch := checks.Branch
+				if branch != "" && branch != defaultBranch(ctx, checks.Repo) && branchExists(ctx, checks.Repo, branch) {
+					if _, err := runGit(ctx, checks.Repo, "branch", "-D", "--end-of-options", branch); err == nil {
+						res.BranchDeleted = branch
+					}
+				}
 			}
 		}
 		if !res.WorktreeRemoved {

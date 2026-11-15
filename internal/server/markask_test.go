@@ -102,7 +102,7 @@ func TestMarkAsksUnsafe(t *testing.T) {
 		t.Fatalf("ask = %+v", a)
 	}
 	it := reviewOf(t, s, "desk/w2:p1")
-	if it.Safe || !strings.Contains(strings.Join(it.Warnings, "|"), "the session says UNSAFE: I'm watching PR #12") {
+	if it.Safe || !strings.Contains(strings.Join(it.Warnings, "|"), "the session says this is left: I'm watching PR #12") {
 		t.Fatalf("review = %+v", it)
 	}
 }
@@ -120,7 +120,7 @@ func TestMarkAskNoAnswer(t *testing.T) {
 	}
 	// No answer is not safe, but it does not block one-tap removal either.
 	it := reviewOf(t, s, "desk/w2:p1")
-	if !it.Safe || !strings.Contains(strings.Join(it.Notes, "|"), "did not answer") {
+	if !it.Safe || !strings.Contains(strings.Join(it.Notes, "|"), "did not say what is left") {
 		t.Fatalf("review = %+v", it)
 	}
 }
