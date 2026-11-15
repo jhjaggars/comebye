@@ -322,7 +322,7 @@
     }
     .msg { max-width: 88%; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
     .msg.user { align-self: flex-end; align-items: flex-end; }
-    .msg.assistant { align-self: flex-start; }
+    .msg.assistant { align-self: stretch; max-width: 100%; }
     .bubble {
       max-width: 100%; min-width: 0;
       padding: var(--sp-10) var(--sp-14); border-radius: var(--r-16); font-size: var(--fs-15);
@@ -332,9 +332,8 @@
       background: var(--bubble); border-bottom-right-radius: var(--r-6);
       white-space: pre-wrap;
     }
-    .msg.assistant .bubble {
-      background: var(--panel2); border-bottom-left-radius: var(--r-6);
-    }
+    /* Agent replies are plain full-width text, no box (like the Claude phone app). */
+    .msg.assistant .bubble { background: none; border-radius: 0; padding: var(--sp-4) var(--sp-6); line-height: 1.55; }
     .bubble a { color: var(--blue); overflow-wrap: anywhere; }
 
     /* Rendered markdown (assistant bubbles, thinking, compaction summaries). */
@@ -641,7 +640,7 @@
     @media (max-width: 600px) {
       #chat { border-left: 0; border-right: 0; border-radius: 0; padding: var(--sp-12) var(--sp-6); margin-left: -12px; margin-right: -12px; }
       #sv-chat { border-left: 0; border-right: 0; border-radius: 0; padding: var(--sp-12) var(--sp-6); }
-      .msg, .thinking, .toolcard { max-width: 94%; }
+      .msg.user, .thinking, .toolcard { max-width: 94%; }
     }
     @media (prefers-reduced-motion: reduce) {
       .dot.working, .dot.waiting { animation: none; }
