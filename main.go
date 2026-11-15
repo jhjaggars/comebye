@@ -573,6 +573,11 @@ func main() {
 // a boot race). sleep paces the retries (tests shrink it).
 func waitForHerdr(client *herdr.Client, sockPath string, sleep func(time.Duration)) {
 	backoff := time.Second
+	// A socket file that exists but refuses a connection is also what a
+	// herdr looks like in the instant between bind and listen (or a dial
+	// that raced the bind), so only a socket that keeps failing is fatal.
+	const fatalAfter = 3
+	present := 0
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, err := client.ListAgents(ctx)
@@ -581,6 +586,11 @@ func waitForHerdr(client *herdr.Client, sockPath string, sleep func(time.Duratio
 			return
 		}
 		if _, statErr := os.Stat(sockPath); !os.IsNotExist(statErr) {
+			present++
+		} else {
+			present = 0
+		}
+		if present >= fatalAfter {
 			log.Fatalf("cannot reach herdr at %s: %v", sockPath, err)
 		}
 		log.Printf("waiting for herdr at %s (it starts when you connect remotely): %v", sockPath, err)

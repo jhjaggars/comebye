@@ -362,7 +362,9 @@ func (s *Server) deliverReviewRoutes(agents []herdr.AgentInfo) {
 		if !s.todos.claimRoute(it.ID) {
 			continue
 		}
+		s.bg.Add(1)
 		go func(it Todo, a herdr.AgentInfo, via string) {
+			defer s.bg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 			defer cancel()
 			send := s.todos.send

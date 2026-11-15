@@ -208,7 +208,9 @@ func (s *Server) flushOutbox(agents []herdr.AgentInfo) {
 	}
 	o.sending, o.last = true, time.Now()
 	o.mu.Unlock()
+	s.bg.Add(1)
 	go func(target herdr.AgentInfo) {
+		defer s.bg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
 		err := s.promptNotice(ctx, target, outboxText(lines))
