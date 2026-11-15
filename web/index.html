@@ -2122,9 +2122,9 @@
     .pgs-zsk i.a { width: 40%; background: var(--blue); }
     .pgs-meta { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .pgs-empty code { font: var(--fs-13) var(--ff-code); color: var(--text); }
-    /* The viewer's bar: one row, so the page gets the height. Who made it and the sandbox note are behind (i), the actions behind the three dots. */
+    /* The viewer's bar: one row, so the page gets the height. It replaces the screen's header, so it clears the status bar and notch itself (an installed app draws under them): without that the back arrow is out of reach. Who made it and the sandbox note are behind (i), the actions behind the three dots. */
     #pages.in-page > header { display: none; }
-    .pgs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-6); min-height: var(--hit-48); padding: 0 calc(var(--sp-6) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-6) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
+    .pgs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-6); min-height: calc(var(--hit-48) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) calc(var(--sp-6) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-6) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
     .pgs-ib { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: var(--hit-44); min-height: var(--hit-44); padding: 0; background: none; border: 0; border-radius: var(--r-10); color: var(--muted); cursor: pointer; }
     .pgs-ib[aria-pressed="true"], .pgs-ib[aria-expanded="true"] { background: var(--panel2); color: var(--text); }
     .pgs-ib:focus-visible { outline-offset: -2px; }
