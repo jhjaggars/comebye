@@ -40,7 +40,7 @@ func Render(harness string) (string, error) {
 // edit or write tools.
 const piFrontmatter = `---
 name: coordinator
-description: Comebye coordinator. Hands work to worker agents, follows them through the Comebye ledger, proposes cleanup and publishes briefings, all through the comebye CLI. Never codes.
+description: Comebye coordinator. Hands work to worker agents, follows them through the Comebye ledger and proposes cleanup, all through the comebye CLI. Never codes.
 tools: read, grep, find, ls, bash
 ---
 
@@ -126,7 +126,7 @@ const genericPreset = `Allow the coordinator's harness to run shell commands tha
 ` + "`comebye`" + ` without asking (an allow rule for the command prefix
 "comebye"). The CLI only talks to the local Comebye server, which limits
 agents to the coordinator workflow: reading, handing off, prompting,
-marking and the briefing. Nothing else needs to be allowed.
+marking and the state file. Nothing else needs to be allowed.
 `
 
 // PresetNote is printed after a preset on stderr (claude only).

@@ -15,13 +15,18 @@ func TestRender(t *testing.T) {
 	}
 	// The playbook covers the workflows and the rules.
 	for _, want := range []string{
-		"comebye handoff", "comebye ledger", "comebye read", "comebye mark", "--reason", "comebye brief set",
-		"## Intent", "## Spec", "out of scope", "definition of done", "branch name",
-		"Never edit code", "Never close, remove or launch", "Never prompt yourself", "confirms in the app",
-		"home agent", "concise", "comebye todo add", "comebye todo list", "Needs you", "todo answer", "docs/lifecycle.md", "--note", "landed", "Never land on your own",
+		"comebye handoff", "comebye ledger", "comebye read", "comebye mark", "--reason", 		"## Intent", "## Spec", "out of scope", "definition of done", "branch name",
+		"Never edit code", "Never close, remove or launch", "Never prompt yourself", "confirm in the app",
+		"home agent", "concise", "comebye todo add", "comebye todo list", "todo answer", "docs/lifecycle.md", "--note", "landed", "Never land on your own",
 	} {
 		if !strings.Contains(gen, want) {
 			t.Errorf("playbook lacks %q", want)
+		}
+	}
+
+	for _, bad := range []string{"briefing", "comebye brief ", "Needs you"} {
+		if strings.Contains(gen, bad) {
+			t.Errorf("playbook still mentions %q", bad)
 		}
 	}
 
