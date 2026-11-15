@@ -25,17 +25,44 @@ const (
 	// StateTailBytes is how much of the coordinator's state file is kept.
 	StateTailBytes = 8 << 10
 
-	briefBudget   = 5 << 10
+	boardBudget   = 5 << 10
 	todoBudget    = 4 << 10
 	handoffBudget = 4 << 10
 	eventBudget   = 3 << 10
 )
 
-// Brief is the published briefing.
-type Brief struct {
-	Markdown string
-	By       string
-	At       time.Time
+// LaneItem is one line of a board lane.
+type LaneItem struct {
+	Title  string
+	Status string // a handoff's state, a to-do's kind; "" when none
+	Since  time.Time
+}
+
+// Lane is one lane of the hub's board (GET /api/board): its name, the full
+// count and the items the hub listed.
+type Lane struct {
+	Key   string
+	Name  string
+	Count int
+	Items []LaneItem
+}
+
+// FormatLane prints a lane: a heading line with the count, then one short
+// line per item (title, status, age).
+func FormatLane(l Lane, now time.Time) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s (%d)\n", l.Name, l.Count)
+	for _, it := range l.Items {
+		line := "- " + oneLine(it.Title, 100)
+		if it.Status != "" {
+			line += " [" + it.Status + "]"
+		}
+		if !it.Since.IsZero() {
+			line += " " + Age(it.Since, now)
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }
 
 // Todo is an open (or answered, not yet relayed) to-do item.
@@ -70,10 +97,11 @@ type Event struct {
 // Input is everything a digest is made of. The caller gathers it; Build
 // only shapes it, so it is testable without a hub.
 type Input struct {
-	Now      time.Time
-	Agent    string // the coordinator's id
-	Harness  string // playbook harness: claude, pi, generic
-	Brief    *Brief
+	Now     time.Time
+	Agent   string // the coordinator's id
+	Harness string // playbook harness: claude, pi, generic
+	// Board holds the lanes to show (running, waiting, landing, landed).
+	Board    []Lane
 	Todos    []Todo
 	Handoffs []Handoff
 	Events   []Event
@@ -101,13 +129,13 @@ func Build(in Input) string {
 
 	b.WriteString("## Start here\n")
 	fmt.Fprintf(&b, "- Playbook: run `comebye playbook --harness %s` and follow it.\n", in.Harness)
-	b.WriteString("- Then `comebye whoami`, `comebye todo list`, `comebye ledger --active`, and `comebye brief get`.\n")
+	b.WriteString("- Then `comebye whoami`, `comebye todo list`, `comebye ledger --active` and `comebye board`.\n")
 	if in.MemoryIndex != "" {
 		fmt.Fprintf(&b, "- Memory index: `%s` (loaded with your context; read the entries it points to when they matter).\n", in.MemoryIndex)
 	}
 	b.WriteString("\n")
 
-	b.WriteString(section("## Briefing (current text)", briefing(in), briefBudget))
+	b.WriteString(section("## Board", board(in), boardBudget))
 	b.WriteString(section("## Open to-dos", todos(in), todoBudget))
 	b.WriteString(section("## Running and landing handoffs", handoffs(in), handoffBudget))
 	b.WriteString(section("## Ledger events since the last reset", events(in), eventBudget))
@@ -165,12 +193,15 @@ func section(title, body string, budget int) string {
 	return title + "\n" + body + "\n\n"
 }
 
-func briefing(in Input) string {
-	b := in.Brief
-	if b == nil || strings.TrimSpace(b.Markdown) == "" {
-		return "No briefing has been published. Publish one with `comebye brief set`."
+func board(in Input) string {
+	var parts []string
+	for _, l := range in.Board {
+		if l.Count == 0 && len(l.Items) == 0 {
+			continue
+		}
+		parts = append(parts, strings.TrimRight(FormatLane(l, in.Now), "\n"))
 	}
-	return fmt.Sprintf("Published %s ago by %s:\n\n%s", Age(b.At, in.Now), orDash(b.By), strings.TrimSpace(b.Markdown))
+	return strings.Join(parts, "\n\n")
 }
 
 func todos(in Input) string {

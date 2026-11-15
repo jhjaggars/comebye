@@ -353,7 +353,7 @@ func (s *Server) deliverReviewRoutes(agents []herdr.AgentInfo) {
 			}
 		}
 		if target == nil {
-			target, _ = s.briefCoordinator()
+			target, _ = s.pickCoordinator()
 			via = "coordinator"
 		}
 		if target == nil {

@@ -992,7 +992,7 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 			}
 		}
 	}
-	target, _ := s.briefCoordinator()
+	target, _ := s.pickCoordinator()
 	if target == nil {
 		return
 	}

@@ -204,7 +204,7 @@ func TestBriefScheduleBusyAndUnanswered(t *testing.T) {
 	fh.set(func(f *fakeLaunchHerdr) { f.agents[0].Status = herdr.StatusIdle })
 	s.manager.Refresh()
 	waitFor(t, func() bool {
-		a, _ := s.briefCoordinator()
+		a, _ := s.pickCoordinator()
 		return a != nil
 	})
 	s.briefTick(ctx, base.Add(2*time.Hour+30*time.Second))
@@ -294,7 +294,7 @@ func quietSetup(t *testing.T) (s *Server, fh *fakeLaunchHerdr, base time.Time) {
 	if err := s.recordRole("desk/w1:p1", "coordinator", RoleCoordinator, "me"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { a, _ := s.briefCoordinator(); return a != nil })
+	waitFor(t, func() bool { a, _ := s.pickCoordinator(); return a != nil })
 	base = time.Now().Truncate(time.Minute)
 	schedAt(t, s, base)
 	if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"## all quiet"}`); w.Code != 200 {
@@ -391,7 +391,7 @@ func TestBriefSchedulePromptsOnChange(t *testing.T) {
 			if _, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "b", AgentID: "desk/w9:p1", Status: ledger.Running}); err != nil {
 				t.Fatal(err)
 			}
-			waitFor(t, func() bool { a, _ := s.briefCoordinator(); return a != nil })
+			waitFor(t, func() bool { a, _ := s.pickCoordinator(); return a != nil })
 			base := time.Now().Truncate(time.Minute)
 			schedAt(t, s, base)
 			if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"## now"}`); w.Code != 200 {

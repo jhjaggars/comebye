@@ -484,7 +484,7 @@ func sweepSummary(res sweepResult) string {
 
 // notifySweep tells an idle coordinator the outcome.
 func (s *Server) notifySweep(ctx context.Context, res sweepResult) (to, errMsg string) {
-	a, why := s.briefCoordinator()
+	a, why := s.pickCoordinator()
 	if a == nil {
 		return "", "no idle coordinator to tell (" + why + ")"
 	}

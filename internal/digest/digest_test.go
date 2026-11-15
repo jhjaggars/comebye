@@ -12,7 +12,11 @@ var now = time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
 func full() Input {
 	in := Input{
 		Now: now, Agent: "laharl/w21:p1", Harness: "claude",
-		Brief:       &Brief{Markdown: "# Briefing\n\n- all well\n", By: "coordinator", At: now.Add(-30 * time.Minute)},
+		Board: []Lane{
+			{Key: "running", Name: "Running", Count: 1, Items: []LaneItem{{Title: "Slice 1 worker", Status: "running", Since: now.Add(-3 * time.Hour)}}},
+			{Key: "waiting", Name: "Waiting on others", Count: 0},
+			{Key: "landed", Name: "Landed, recent", Count: 1, Items: []LaneItem{{Title: "Passkey slice 4", Status: "landed", Since: now.Add(-26 * time.Hour)}}},
+		},
 		LastReset:   now.Add(-26 * time.Hour),
 		MemoryIndex: "/home/u/.claude/projects/p/memory/MEMORY.md",
 		StatePath:   "/home/u/.local/state/comebye/coordinator/state.md",
@@ -33,7 +37,7 @@ func full() Input {
 func TestBuildSections(t *testing.T) {
 	out := Build(full())
 	for _, want := range []string{
-		Marker, "comebye playbook --harness claude", "MEMORY.md", "## Briefing (current text)", "all well",
+		Marker, "comebye playbook --harness claude", "MEMORY.md", "## Board", "Running (1)", "- Slice 1 worker [running] 3h", "Landed, recent (1)", "comebye board",
 		"## Open to-dos", "t0000000000", "## Running and landing handoffs", "feat/a", "approved; hub checking",
 		"## Ledger events since the last reset", "h4 landed", "## Your state file", "All of `/home/u/.local/state/comebye/coordinator/state.md`",
 		"the previous fresh start was 26h ago",
@@ -46,6 +50,11 @@ func TestBuildSections(t *testing.T) {
 	if strings.Index(out, "feat/a") > strings.Index(out, "feat/b") {
 		t.Error("handoffs are not newest first")
 	}
+	for _, bad := range []string{"Briefing (current text)", "brief get", "Waiting on others"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("digest has %q", bad)
+		}
+	}
 	if strings.Contains(out, "<system-reminder>") {
 		t.Error("no transcript text belongs in a digest")
 	}
@@ -53,7 +62,7 @@ func TestBuildSections(t *testing.T) {
 
 func TestBuildEmpty(t *testing.T) {
 	out := Build(Input{Now: now})
-	for _, want := range []string{Marker, "No briefing has been published", "(none)", "(no state file)", "--harness generic"} {
+	for _, want := range []string{Marker, "(none)", "(no state file)", "--harness generic"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("empty digest lacks %q", want)
 		}
@@ -64,7 +73,9 @@ func TestBuildEmpty(t *testing.T) {
 // the end of the state file, not its start.
 func TestBuildSizeCap(t *testing.T) {
 	in := full()
-	in.Brief.Markdown = strings.Repeat("a long briefing line that goes on and on\n", 5000)
+	for i := 0; i < 400; i++ {
+		in.Board[0].Items = append(in.Board[0].Items, LaneItem{Title: strings.Repeat("board title ", 40), Status: "running", Since: now})
+	}
 	for i := 0; i < 400; i++ {
 		in.Todos = append(in.Todos, Todo{ID: fmt.Sprintf("x%010d", i), Kind: "action", State: "open", Question: strings.Repeat("q ", 400), At: now})
 		in.Handoffs = append(in.Handoffs, Handoff{ID: fmt.Sprintf("y%d", i), Repo: "r", Branch: "b", Status: "running", State: strings.Repeat("s", 500), Updated: now})

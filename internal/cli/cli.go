@@ -57,6 +57,7 @@ var commands []command
 func init() {
 	commands = []command{
 		{"agents", "[--host H] [--long [--over 2h]] [--json]", "every agent on every host: project, branch, status, role; --long lists only workers running longer than --over, with their latest progress note and its age", cmdAgents},
+		{"board", "[--json]", "the hub's board as plain text: needs you, running, waiting, landing and landed (recent), one short line per item with its status and age; the coordinator may read it", cmdBoard},
 		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
 		{"read", "AGENT [--lines N] [--report [--summary]] [--json]", "an agent's recent messages, or its final report (--summary: just its Summary and Decisions for the user)", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},

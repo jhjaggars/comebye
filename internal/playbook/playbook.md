@@ -188,7 +188,7 @@ hub cuts long reports (8 kB each) and the worker can read the rest with
 - When a worker you handed off finishes, the Comebye hub sends you a
   message that starts "Comebye (hub notice)" and names the branch and the
   handoff id. Run `comebye read ID --report`, summarize the result for the
-  user in a few lines, and update the briefing. The hub tells you only
+  user in a few lines, and note it in your state file. The hub tells you only
   once the report is captured, and only while you are idle; `comebye
   ledger` shows `callback pending` or `delivered` for each worker.
 - Routine notices come in a digest. The hub sends a message that starts
@@ -196,7 +196,7 @@ hub cuts long reports (8 kB each) and the worker can read the rest with
   (`-digest-every`), listing workers that landed, workers that finished
   with no "Decisions for the user", and handoffs the hub cleaned up. Treat
   each line as you would the single notice: read the report, tell the user
-  in a line or two, update the briefing. Nothing in a digest is urgent.
+  in a line or two, and note it in your state file. Nothing in a digest is urgent.
   The same notices that need judgement still arrive at once and alone: a
   blocked agent, the user's answers to to-dos, a landing failure, landed
   with CI failed, and a report with decisions (those are also filed as
@@ -534,9 +534,9 @@ that run to refresh your state file. The user can change this with
 
 ## Fresh starts
 
-When your context has grown large the hub may clear it in place: at a briefing, only while you are idle with nothing queued for you, it sends `/clear` into your own pane, and a hook loads a **digest** (the briefing, the open to-dos, the running and landing handoffs, the recent ledger events, the tail of your state file). You keep your pane, name and role. The user can also start one from the app.
+When your context has grown large the hub may clear it in place: when your context passes the threshold (the hub looks every 10 minutes), only while you are idle with nothing queued for you, it sends `/clear` into your own pane, and a hook loads a **digest** (the board, the open to-dos, the running and landing handoffs, the recent ledger events, the tail of your state file). You keep your pane, name and role. The user can also start one from the app.
 
-- **Keep `~/.local/state/comebye/coordinator/state.md` current** at every briefing: decisions, gotchas, what you are waiting for, newest last. After a fresh start its tail is all you remember of this session, besides the digest.
+- **Keep `~/.local/state/comebye/coordinator/state.md` current** as you work: decisions, gotchas, what you are waiting for, newest last. After a fresh start its tail is all you remember of this session, besides the digest.
 - After one, run `comebye todo list` and `comebye ledger --active` before acting; do not trust a recollection you no longer have. `comebye coordinator digest` prints the digest again.
 - Do not `/clear` or compact yourself, and do not run `comebye coordinator reset` (the user's).
 

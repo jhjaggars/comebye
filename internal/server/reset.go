@@ -30,21 +30,23 @@ import (
 // the role stay; only the session id changes (checked live: herdr follows
 // the new session, but drops the agent's name, which the hub gives back).
 //
-// The hub decides at a briefing: the first briefing published after the
-// coordinator's context passed the threshold marks a reset due, and the
-// reset runs as soon as the coordinator is idle with nothing queued for it.
+// The hub decides on its own ticker (every resetEvery): a coordinator whose
+// context is past the threshold gets a reset marked due, and the reset runs
+// as soon as the coordinator is idle with nothing queued for it.
 // The user can also start one by hand ("Fresh start", `comebye coordinator
 // reset`). Neither ever runs while the coordinator is working or blocked,
 // while a dialog or typed text is on its screen, or while the hub holds a
 // notice or prompt for it.
 
-// DefaultResetTokens is the context size at which a briefing marks the
+// DefaultResetTokens is the context size at which the hub marks the
 // coordinator's reset due.
 const DefaultResetTokens = 150000
 
 const (
+	// resetEvery is how often the hub looks at the coordinators' context.
+	resetEvery = 10 * time.Minute
 	// resetDueTTL is how long a due reset waits for a quiet moment before
-	// the next briefing decides again.
+	// the next look decides again.
 	resetDueTTL = 3 * time.Hour
 	// resetMinGap is the least time between two automatic resets of one
 	// coordinator: a reset that does not shrink the context (the hook is
@@ -64,7 +66,7 @@ type ResetRecord struct {
 	AgentID string    `json:"agent_id"`
 	Name    string    `json:"name,omitempty"`
 	By      string    `json:"by"`
-	// Trigger is "briefing" (the hub's own) or "manual".
+	// Trigger is "auto" (the hub's own; "briefing" in older records) or "manual".
 	Trigger       string `json:"trigger"`
 	Tokens        int    `json:"tokens"`
 	SessionBefore string `json:"session_before,omitempty"`
@@ -85,9 +87,10 @@ type resetDue struct {
 type resetFile struct {
 	Last    *ResetRecord  `json:"last,omitempty"`
 	History []ResetRecord `json:"history,omitempty"` // newest first
-	// CheckedBrief is the briefing whose context size was last looked at.
-	CheckedBrief time.Time           `json:"checked_brief,omitzero"`
-	Due          map[string]resetDue `json:"due,omitempty"`
+	// CheckedAt is when the coordinators' context size was last looked at.
+	// (Older files hold checked_brief instead; it is ignored.)
+	CheckedAt time.Time           `json:"checked_at,omitzero"`
+	Due       map[string]resetDue `json:"due,omitempty"`
 }
 
 // resetStore keeps coordinator-reset.json in the state directory.
@@ -527,7 +530,7 @@ func shortID(s string) string {
 // coordinatorState is GET /api/coordinator.
 type coordinatorState struct {
 	// Threshold is the context size, in tokens, that marks a reset due at
-	// the next briefing (0: the automatic reset is off).
+	// the next look (0: the automatic reset is off).
 	Threshold int                 `json:"threshold"`
 	Last      *ResetRecord        `json:"last,omitempty"`
 	History   []ResetRecord       `json:"history,omitempty"`
@@ -611,25 +614,33 @@ func (s *Server) handleCoordinatorReset(w http.ResponseWriter, r *http.Request) 
 	writeJSONStatus(w, status, out)
 }
 
-// ---- the briefing-driven reset ----
+// ---- the automatic reset ----
 
-// resetTick decides, once per new briefing, whether a coordinator's
-// context is over the threshold (marking its reset due), and runs a due
-// reset as soon as the coordinator can take it. The hub only; the scheduler
-// calls it every tick.
-func (s *Server) resetTick(ctx context.Context, now time.Time) {
-	if s.resets == nil || s.brief == nil || s.cfg.CoordinatorResetTokens <= 0 {
-		return
+// RunReset looks at the coordinators every resetEvery until ctx is done
+// (the hub only; resetTick returns at once elsewhere).
+func (s *Server) RunReset(ctx context.Context) {
+	t := time.NewTicker(resetEvery)
+	defer t.Stop()
+	for {
+		s.resetTick(ctx, time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
-	b, err := s.brief.get()
-	if err != nil || b == nil {
+}
+
+// resetTick looks at each coordinator's context size (marking its reset due
+// when it is over the threshold) and runs a due reset as soon as the
+// coordinator can take it. The hub only; RunReset calls it every tick.
+func (s *Server) resetTick(ctx context.Context, now time.Time) {
+	if s.resets == nil || s.cfg.CoordinatorResetTokens <= 0 {
 		return
 	}
 	f := s.resets.get()
 	agents := s.coordinatorAgents()
-	if b.At.After(f.CheckedBrief) {
-		// A briefing is the moment to look: the coordinator has just caught
-		// up and written its notes, so its context is as useful as it gets.
+	{
 		due := map[string]resetDue{}
 		for _, a := range agents {
 			ci, err := s.coordinatorContext(ctx, a)
@@ -645,7 +656,7 @@ func (s *Server) resetTick(ctx context.Context, now time.Time) {
 			}
 		}
 		if err := s.resets.update(func(f *resetFile) {
-			f.CheckedBrief = b.At
+			f.CheckedAt = now.UTC()
 			for id, d := range due {
 				if old, ok := f.Due[id]; ok {
 					d.Since = old.Since
@@ -675,7 +686,7 @@ func (s *Server) resetTick(ctx context.Context, now time.Time) {
 		if f.Last != nil && f.Last.AgentID == id && now.Sub(f.Last.At) < resetMinGap {
 			continue
 		}
-		status, out := s.freshStart(ctx, *a, "briefing", "the hub", s.cfg.CoordinatorResetTokens)
+		status, out := s.freshStart(ctx, *a, "auto", "the hub", s.cfg.CoordinatorResetTokens)
 		if status == http.StatusOK {
 			continue
 		}

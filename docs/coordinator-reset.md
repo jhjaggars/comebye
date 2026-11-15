@@ -10,7 +10,7 @@ A Markdown digest of at most 24 KB (about 7k tokens), made from records, never f
 
 - the playbook pointer (`comebye playbook --harness claude`) and the commands to start with;
 - the memory index it loads;
-- the briefing, in its current text;
+- the board (running, waiting, landing and landed handoffs, from `comebye board`);
 - the open to-dos, one line each with the id;
 - the running, waiting, landing and reported-but-not-landed handoffs, one line of state each;
 - the ledger events since the last fresh start (handoffs started, reported, removed, lost; newest 40, at most 48 hours back);
@@ -20,8 +20,8 @@ Every part has its own budget and is cut with a note when it does not fit. Run i
 
 ## What the hub does
 
-- **Trigger.** At each new briefing the hub reads the coordinator's context size from its transcript (the last request's input plus cache tokens). Past the threshold (`-coordinator-reset-tokens`, default **150000**; `0` turns the automatic reset off) the reset is *due*.
-- **When it runs.** As soon as the coordinator is idle (or done) with nothing queued for it. A due reset waits up to three hours; the next briefing decides again. Two automatic resets of one coordinator are at least 30 minutes apart.
+- **Trigger.** Every 10 minutes the hub reads the coordinator's context size from its transcript (the last request's input plus cache tokens). Past the threshold (`-coordinator-reset-tokens`, default **150000**; `0` turns the automatic reset off) the reset is *due*.
+- **When it runs.** As soon as the coordinator is idle (or done) with nothing queued for it. A due reset waits up to three hours; the next look decides again. Two automatic resets of one coordinator are at least 30 minutes apart.
 - **Never while** the coordinator is working or blocked; a dialog or half-typed text is on its screen; or the hub holds a message for it: a queued prompt (`comebye prompt --queue`), an undelivered worker notice, a to-do answer notice, or a blocked-agent notice.
 - **Never without the hook.** The hook leaves a short note (`comebye-hook:v1`) in a session when it starts; the hub clears a session only if the note is in it, so a coordinator started without the hook is never cleared into a blank session.
 - **After `/clear`.** The hub waits for the new session id, gives the agent its name back (herdr drops an agent's name when its session changes), and checks that the digest is in the new session's transcript. It then records the reset in the ledger's audit trail (`coordinator.reset`), logs it, and keeps it in `coordinator-reset.json` (the last 20). The hook also shows a one-line notice in the pane: "Comebye: fresh start — your context was cleared and a digest (N KB) was loaded."
@@ -48,7 +48,7 @@ When the coordinator runs on a peer (the usual case: the hub is another machine)
 
 ## Keeping `state.md` useful
 
-The digest carries the tail of the coordinator's `state.md`, so what the coordinator needs after a fresh start belongs at its end: update it at every briefing, newest entries last, and keep decisions and gotchas short. The playbook says so.
+The digest carries the tail of the coordinator's `state.md`, so what the coordinator needs after a fresh start belongs at its end: update it as you work, newest entries last, and keep decisions and gotchas short. The playbook says so.
 
 ## If something goes wrong
 

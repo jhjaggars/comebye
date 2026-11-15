@@ -197,7 +197,7 @@ func (s *Server) flushOutbox(agents []herdr.AgentInfo) {
 	if len(lines) == 0 || !s.outboxDue(lines, time.Now()) {
 		return
 	}
-	target, _ := s.briefCoordinator()
+	target, _ := s.pickCoordinator()
 	if target == nil {
 		return
 	}

@@ -11,11 +11,17 @@ import (
 )
 
 const (
-	whoamiMe        = `{"host":"laharl","role":"agent","agent":"laharl/w21:p1","ledger":false,"hub":"https://hub"}`
-	rolesCoord      = `{"roles":{"laharl/w21:p1":{"role":"coordinator","name":"coordinator"}}}`
-	rolesNone       = `{"roles":{"laharl/w99:p1":{"role":"coordinator"}}}`
-	coordState      = `{"threshold":150000,"last":{"at":"2026-11-02T09:00:00Z","name":"coordinator","trigger":"briefing","tokens":161000,"digest_landed":true},"coordinators":[]}`
-	briefJSON       = `{"brief":{"markdown":"# Briefing\n\nNeeds you: t1","by":"coordinator","at":"2026-11-03T08:00:00Z"}}`
+	whoamiMe   = `{"host":"laharl","role":"agent","agent":"laharl/w21:p1","ledger":false,"hub":"https://hub"}`
+	rolesCoord = `{"roles":{"laharl/w21:p1":{"role":"coordinator","name":"coordinator"}}}`
+	rolesNone  = `{"roles":{"laharl/w99:p1":{"role":"coordinator"}}}`
+	coordState = `{"threshold":150000,"last":{"at":"2026-11-02T09:00:00Z","name":"coordinator","trigger":"briefing","tokens":161000,"digest_landed":true},"coordinators":[]}`
+	boardJSON  = `{"at":"2026-11-03T09:00:00Z","headline":"old briefing text","lanes":[
+ {"key":"needs_you","name":"Needs you","count":1,"items":[{"id":"t1","type":"todo","title":"Which key?","kind":"decision","since":"2026-11-03T07:00:00Z"}]},
+ {"key":"running","name":"Running","count":1,"items":[{"id":"h1","type":"handoff","title":"comebye feat/a","state":"running","since":"2026-11-03T06:00:00Z"}]},
+ {"key":"waiting","name":"Waiting on others","count":0,"items":[]},
+ {"key":"landing","name":"Ready to land, or landing","count":1,"items":[{"id":"h2","type":"handoff","title":"comebye feat/b","state":"finished","since":"2026-11-03T05:00:00Z"}]},
+ {"key":"landed","name":"Landed, recent","count":1,"items":[{"id":"h9","type":"handoff","title":"comebye feat/done","state":"landed","since":"2026-11-02T09:00:00Z"}]}
+ ]}`
 	todosJSON       = `{"todos":[{"id":"t1","question":"Which key?","kind":"decision","state":"open","created_at":"2026-11-03T07:00:00Z","waiting":{"id":"laharl/w9:p1","name":"keysmith"}}]}`
 	coordLedgerJSON = `{"entries":[
  {"id":"h1","host":"laharl","repo_name":"comebye","branch":"feat/a","status":"running","agent_name":"alpha","created_at":"2026-11-03T06:00:00Z","live":{"present":true,"agent_status":"working"}},
@@ -27,7 +33,7 @@ const (
 func coordAnswers(roles string) map[string]answer {
 	return map[string]answer{
 		"GET /api/whoami": {200, whoamiMe}, "GET /api/roles": {200, roles}, "GET /api/coordinator": {200, coordState},
-		"GET /api/brief": {200, briefJSON}, "GET /api/todos": {200, todosJSON}, "GET /api/ledger": {200, coordLedgerJSON},
+		"GET /api/board": {200, boardJSON}, "GET /api/todos": {200, todosJSON}, "GET /api/ledger": {200, coordLedgerJSON},
 	}
 }
 
@@ -52,13 +58,23 @@ func TestCoordinatorDigestPrintsTheSections(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		digest.Marker, "comebye playbook --harness claude", "Needs you: t1", "`t1` [decision, open", "(waiting: keysmith)",
+		digest.Marker, "comebye playbook --harness claude", "## Board", "- comebye feat/a [running] 3h", "- comebye feat/done [landed] 24h", "Landed, recent (1)", "`t1` [decision, open", "(waiting: keysmith)",
 		"`h1` comebye feat/a — worker alpha — running: agent working", "`h2` comebye feat/b", "waiting for the user's OK to land",
 		"remember the keys", filepath.Join(dir, "state.md"), "the previous fresh start was",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("digest lacks %q:\n%s", want, got)
 		}
+	}
+	for _, bad := range []string{"Briefing (current text)", "brief get"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("digest has %q", bad)
+		}
+	}
+	// The board's lanes are running, waiting, landing and landed: the open
+	// to-dos have their own section.
+	if strings.Contains(got, "Needs you (") {
+		t.Error("the needs-you lane is in the digest")
 	}
 	// h3 was removed long before the last reset: not an event, not running.
 	if strings.Contains(got, "feat/old") {
@@ -313,5 +329,75 @@ func TestReadReportShowsHubChecked(t *testing.T) {
 	e, out, _, _ = peerEnv(t, nil, map[string]answer{"GET /api/ledger": {200, ledger}, "GET /api/ledger/h1/hubcheck": {200, hub}})
 	if code := run(e, "read", "h1", "--report", "--json"); code != 0 || !strings.Contains(out.String(), `"hub_checked"`) || !strings.Contains(out.String(), `"contradictions": 1`) {
 		t.Fatalf("json: %d\n%s", code, out)
+	}
+}
+
+func TestCoordinatorDigestWithoutABriefing(t *testing.T) {
+	// The digest does not ask the hub for the briefing at all.
+	e, out, _, reqs := peerEnv(t, map[string]string{"HOME": t.TempDir()}, coordAnswers(rolesCoord))
+	sb := &strings.Builder{}
+	e.Stdout = sb
+	_ = out
+	if code := run(e, "coordinator", "digest"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	for _, r := range *reqs {
+		if strings.HasPrefix(r.path, "/api/brief") {
+			t.Fatalf("the digest fetched %s", r.path)
+		}
+	}
+	if strings.Contains(sb.String(), "## Briefing") || strings.Contains(sb.String(), "brief get") {
+		t.Fatalf("the digest mentions the briefing:\n%s", sb)
+	}
+}
+
+func TestCoordinatorDigestBoardMissing(t *testing.T) {
+	a := coordAnswers(rolesCoord)
+	delete(a, "GET /api/board")
+	e, out, _ := coordEnvWithState(t, a, "notes\n")
+	if code := run(e, "coordinator", "digest", "--hook"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), "Not available: board") {
+		t.Fatalf("output = %s", out)
+	}
+}
+
+func TestBoardText(t *testing.T) {
+	e, out, _, reqs := peerEnv(t, map[string]string{}, map[string]answer{"GET /api/board": {200, boardJSON}})
+	if code := run(e, "board"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	got := out.String()
+	for _, want := range []string{"needs you (1)\n- Which key? [decision] 2h", "running (1)\n- comebye feat/a [running] 3h", "waiting on others (0)\n\n", "ready to land, or landing (1)\n- comebye feat/b [finished] 4h", "landed, recent (1)\n- comebye feat/done [landed] 24h"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("board lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "old briefing text") || strings.Contains(got, "{") {
+		t.Errorf("text board has a headline or JSON:\n%s", got)
+	}
+	if len(*reqs) != 1 || (*reqs)[0].path != "/api/board" {
+		t.Fatalf("requests = %+v", *reqs)
+	}
+}
+
+func TestBoardJSON(t *testing.T) {
+	e, out, _, _ := peerEnv(t, map[string]string{}, map[string]answer{"GET /api/board": {200, boardJSON}})
+	if code := run(e, "board", "--json"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	var v struct {
+		Lanes []struct{ Key string } `json:"lanes"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &v); err != nil || len(v.Lanes) != 5 || v.Lanes[0].Key != "needs_you" {
+		t.Fatalf("json = %v %s", err, out)
+	}
+}
+
+func TestBoardRejectsArguments(t *testing.T) {
+	e, _, _, _ := peerEnv(t, map[string]string{}, nil)
+	if code := run(e, "board", "extra"); code == 0 {
+		t.Fatal("an argument is a usage error")
 	}
 }

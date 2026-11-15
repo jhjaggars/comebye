@@ -9,6 +9,8 @@ for each "Needs you" item and a few notes; the board draws everything else,
 so the briefing no longer retypes state. The design is "A. Board plus note"
 from the briefing-UX spike (Page `pg_a1112e4cfd`).
 
+`comebye board [--json]` prints it as plain text lanes (one short line per item: title, status, age).
+
 Who may read it: the user, and agents with the agent role (the coordinator
 reads it before it writes a briefing); a tagged worker may not.
 

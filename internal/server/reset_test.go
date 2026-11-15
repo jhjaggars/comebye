@@ -280,20 +280,13 @@ func TestFreshStartOneAtATime(t *testing.T) {
 	}
 }
 
-// ---- the briefing tick ----
+// ---- the automatic reset (no briefing involved) ----
 
-func (r *resetRig) publishBrief(at time.Time) {
-	if err := r.s.brief.set(Brief{Markdown: "# b", By: "coordinator", At: at}); err != nil {
-		panic(err)
-	}
-}
-
-func TestResetTickAtTheBriefing(t *testing.T) {
+func TestResetTickWithoutABriefing(t *testing.T) {
 	r := newResetRig(t, 160000, true, true)
 	now := time.Now()
-	r.publishBrief(now.Add(-time.Minute))
 
-	// The coordinator is still working on its briefing: due, not run.
+	// The coordinator is still working: due, not run.
 	r.setStatus(herdr.StatusWorking)
 	r.s.resetTick(context.Background(), now)
 	f := r.s.resets.get()
@@ -322,40 +315,38 @@ func TestResetTickAtTheBriefing(t *testing.T) {
 		t.Fatalf("clears = %d", r.clears())
 	}
 	f = r.s.resets.get()
-	if len(f.Due) != 0 || f.Last == nil || f.Last.Trigger != "briefing" || f.Last.By != "the hub" {
+	if len(f.Due) != 0 || f.Last == nil || f.Last.Trigger != "auto" || f.Last.By != "the hub" {
 		t.Fatalf("after: due=%v last=%+v", f.Due, f.Last)
 	}
 	r.s.resetTick(context.Background(), now.Add(3*time.Minute))
 	if r.clears() != 1 {
-		t.Fatal("reset twice for one briefing")
+		t.Fatal("reset twice in a row")
 	}
 }
 
 func TestResetTickUnderThresholdOrOff(t *testing.T) {
 	r := newResetRig(t, 90000, true, true)
-	r.publishBrief(time.Now())
 	r.s.resetTick(context.Background(), time.Now())
 	if f := r.s.resets.get(); len(f.Due) != 0 || r.clears() != 0 {
 		t.Fatalf("90k is under 150k: due=%v", f.Due)
 	}
-	// The same briefing is not looked at again; a newer one is.
-	r.fh.set(func(f *fakeLaunchHerdr) {})
+	// The context grows past the threshold: the next look marks it due.
 	r.transcript("s1", usageLine(170000), `{"type":"attachment","text":"`+hookMarker+`"}`)
 	r.s.resetTick(context.Background(), time.Now())
-	if len(r.s.resets.get().Due) != 0 {
-		t.Fatal("looked twice at one briefing")
+	if r.clears() != 1 { // idle with nothing queued: marked due and run
+		t.Fatal("did not notice the context grew")
 	}
-	r.publishBrief(time.Now().Add(time.Second))
+	r.s.resets.update(func(f *resetFile) { f.Due = nil; f.Last = nil })
+	before := r.clears()
 	r.s.cfg.CoordinatorResetTokens = 0
 	r.s.resetTick(context.Background(), time.Now())
-	if r.clears() != 0 || len(r.s.resets.get().Due) != 0 {
+	if r.clears() != before || len(r.s.resets.get().Due) != 0 {
 		t.Fatal("threshold 0 is off")
 	}
 }
 
 func TestResetTickGivesUpWithoutTheHook(t *testing.T) {
 	r := newResetRig(t, 160000, false, true)
-	r.publishBrief(time.Now())
 	r.s.resetTick(context.Background(), time.Now())
 	if r.clears() != 0 {
 		t.Fatal("cleared a session that has no hook")
@@ -371,7 +362,6 @@ func TestResetTickMinGapAndTTL(t *testing.T) {
 	r.s.resets.update(func(f *resetFile) {
 		f.Last = &ResetRecord{At: now.Add(-5 * time.Minute), AgentID: "desk/w1:p1"}
 	})
-	r.publishBrief(now)
 	r.s.resetTick(context.Background(), now)
 	if r.clears() != 0 || len(r.s.resets.get().Due) != 1 {
 		t.Fatalf("a reset 5 minutes ago holds the next one back (clears %d)", r.clears())
@@ -484,8 +474,7 @@ func TestFreshStartOnAPeer(t *testing.T) {
 	if err := s.recordRole("kube/wC:p1", "coordinator", RoleCoordinator, "me"); err != nil {
 		t.Fatal(err)
 	}
-	// At a briefing: the context is read over there, the reset is due and runs.
-	s.brief.set(Brief{Markdown: "# b", By: "coordinator", At: time.Now()})
+	// On a look: the context is read over there, the reset is due and runs.
 	s.resetTick(ctx, time.Now())
 	mu.Lock()
 	got := strings.Join(hits, ",")
@@ -494,7 +483,7 @@ func TestFreshStartOnAPeer(t *testing.T) {
 	if got != "GET /api/agents/wC:p1/context,POST /api/agents/wC:p1/reset" {
 		t.Fatalf("the peer saw %s", got)
 	}
-	if !strings.Contains(rb, `"min_tokens":150000`) || !strings.Contains(rb, `"trigger":"briefing"`) {
+	if !strings.Contains(rb, `"min_tokens":150000`) || !strings.Contains(rb, `"trigger":"auto"`) {
 		t.Fatalf("reset body = %s", rb)
 	}
 	f := s.resets.get()
@@ -558,5 +547,29 @@ func TestCoordinatorPresetPassesTheHookSettings(t *testing.T) {
 		if strings.Contains(string(b), "--settings") {
 			t.Fatalf("a plain agent got the coordinator's settings: %s", b)
 		}
+	}
+}
+
+func TestResetStoreReadsAnOldStateFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "coordinator-reset.json")
+	old := `{"checked_brief":"2026-11-01T09:00:00Z","due":{"desk/w1:p1":{"since":"2026-11-01T09:00:00Z","tokens":160000}},"last":{"at":"2026-10-30T09:00:00Z","agent_id":"desk/w1:p1","by":"the hub","trigger":"briefing","tokens":161000,"digest_landed":true}}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := openResets(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := st.get()
+	if len(f.Due) != 1 || f.Last == nil || f.Last.Trigger != "briefing" || !f.CheckedAt.IsZero() {
+		t.Fatalf("old file read as %+v", f)
+	}
+	now := time.Now().UTC()
+	if err := st.update(func(f *resetFile) { f.CheckedAt = now }); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if strings.Contains(string(b), "checked_brief") || !strings.Contains(string(b), "checked_at") {
+		t.Fatalf("rewritten as %s", b)
 	}
 }

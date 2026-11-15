@@ -276,7 +276,6 @@ func (s *Server) RunBriefSchedule(ctx context.Context) {
 	defer t.Stop()
 	for {
 		s.briefTick(ctx, time.Now())
-		s.resetTick(ctx, time.Now())
 		select {
 		case <-ctx.Done():
 			return
@@ -358,7 +357,7 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 			return string(before) != string(after)
 		}
 		if r.PromptedAt == nil {
-			a, why := s.briefCoordinator()
+			a, why := s.pickCoordinator()
 			switch {
 			case a != nil:
 				target = a
@@ -459,56 +458,6 @@ func (s *Server) briefPublished(at time.Time) {
 	}
 }
 
-// briefCoordinator picks the coordinator to prompt: a running one that is
-// idle (or done), the hub's own first, then the most recently made one.
-// Without one it says why: no coordinator running, all busy, or unknown
-// (a recorded coordinator is not in the fleet: its host may be down or
-// still starting; never counted as a miss).
-func (s *Server) briefCoordinator() (*herdr.AgentInfo, string) {
-	roles := s.liveRoles()
-	agents := s.fleet.Agents()
-	seen := map[string]bool{}
-	type cand struct {
-		a  herdr.AgentInfo
-		at time.Time
-	}
-	var ready []cand
-	running := false
-	for _, a := range agents {
-		seen[a.ID] = true
-		r, ok := roles[a.ID]
-		if !ok || r.Role != RoleCoordinator || (r.Name != "" && a.Name != "" && a.Name != r.Name) {
-			continue
-		}
-		running = true
-		if a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone {
-			ready = append(ready, cand{a, r.At})
-		}
-	}
-	if len(ready) == 0 {
-		if running {
-			return nil, missBusy
-		}
-		if len(agents) == 0 {
-			return nil, waitUnknown
-		}
-		for id, r := range roles {
-			if r.Role == RoleCoordinator && !seen[id] {
-				return nil, waitUnknown
-			}
-		}
-		return nil, missNoCoordinator
-	}
-	local := s.fleet.LocalName()
-	sort.SliceStable(ready, func(i, j int) bool {
-		if li, lj := ready[i].a.Host == local, ready[j].a.Host == local; li != lj {
-			return li
-		}
-		return ready[i].at.After(ready[j].at)
-	})
-	return &ready[0].a, ""
-}
-
 // briefPrompt is what the scheduled run asks of the coordinator.
 func briefPrompt(plan schedPlan, last time.Time, parkable int) string {
 	since := "No briefing has been published yet."
@@ -548,26 +497,6 @@ func (s *Server) promptBrief(ctx context.Context, a herdr.AgentInfo, plan schedP
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	return s.promptNotice(ctx, a, briefPrompt(plan, last, s.parkSuggestCount()))
-}
-
-// promptAgent sends text to an agent on any host.
-func (s *Server) promptAgent(ctx context.Context, a herdr.AgentInfo, text string) error {
-	if a.Host == "" || a.Host == s.fleet.LocalName() {
-		if err := s.guardPrompt(ctx, a); err != nil {
-			return err
-		}
-		_, err := s.client.Prompt(ctx, a.PaneID, text, herdr.PromptOptions{})
-		return err
-	}
-	body, _ := json.Marshal(promptBody{Text: text})
-	status, data, err := s.fleet.CallAgent(ctx, a.Host, a.PaneID, "prompt", body)
-	if err != nil {
-		return err
-	}
-	if status != http.StatusOK {
-		return fmt.Errorf("%s answered %d: %s", a.Host, status, strings.TrimSpace(string(data)))
-	}
-	return nil
 }
 
 // briefSchedView is the schedule with its status, for the app and CLI.

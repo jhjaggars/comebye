@@ -22,7 +22,7 @@ import (
 // (startup, resume, compact): the hub looks for hookMarker (server/reset.go)
 // before it clears the session, so it never clears one that would come back
 // blank.
-const hookNote = "comebye-hook:v1 — this coordinator session was started with the Comebye reset hook. If the hub clears your context (a \"fresh start\"), it injects a digest of the briefing, to-dos, handoffs and your state file; `comebye coordinator digest` prints it any time."
+const hookNote = "comebye-hook:v1 — this coordinator session was started with the Comebye reset hook. If the hub clears your context (a \"fresh start\"), it injects a digest of the board, to-dos, handoffs and your state file; `comebye coordinator digest` prints it any time."
 
 // stateFileName is the coordinator's own notes, kept beside the hook's
 // settings.
@@ -145,17 +145,15 @@ func buildDigest(e *Env, harness string) (string, []string) {
 		} else if cs.Last != nil {
 			in.LastReset = cs.Last.At
 		}
-		var br struct {
-			Brief *struct {
-				Markdown string    `json:"markdown"`
-				By       string    `json:"by"`
-				At       time.Time `json:"at"`
-			} `json:"brief"`
-		}
-		if err := c.call("GET", "/api/brief", nil, nil, &br); err != nil {
-			problems = append(problems, "briefing")
-		} else if br.Brief != nil {
-			in.Brief = &digest.Brief{Markdown: br.Brief.Markdown, By: br.Brief.By, At: br.Brief.At}
+		if lanes, err := getBoard(c); err != nil {
+			problems = append(problems, "board")
+		} else {
+			for _, l := range lanes {
+				switch l.Key {
+				case "running", "waiting", "landing", "landed":
+					in.Board = append(in.Board, l.digestLane())
+				}
+			}
 		}
 		var td struct {
 			Todos []apiTodo `json:"todos"`
@@ -433,7 +431,7 @@ func cmdCoordStatus(e *Env, args []string) error {
 		return fmt.Errorf("unexpected answer: %v", err)
 	}
 	if st.Threshold > 0 {
-		fmt.Fprintf(e.Stdout, "automatic fresh start: at the first briefing after %dk tokens\n", st.Threshold/1000)
+		fmt.Fprintf(e.Stdout, "automatic fresh start: when a coordinator passes %dk tokens (looked at every 10 minutes)\n", st.Threshold/1000)
 	} else {
 		fmt.Fprintln(e.Stdout, "automatic fresh start: off (the hub's -coordinator-reset-tokens is 0)")
 	}
