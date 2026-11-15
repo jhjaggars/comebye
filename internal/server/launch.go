@@ -496,6 +496,41 @@ func (s *Server) coordinatorDir() string {
 	return real
 }
 
+// pullTimeout bounds the git pull of the coordinator directory.
+const pullTimeout = 30 * time.Second
+
+// pullCoordinatorDir brings the coordinator directory up to date with its
+// remote (git pull --ff-only) when it is a git repository with a remote.
+// It returns a notice when the pull failed (the coordinator then starts
+// with the copy on disk) and "" when it worked or there was nothing to
+// pull. Never fatal.
+func pullCoordinatorDir(ctx context.Context, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return ""
+	}
+	git := func(args ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, pullTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	if out, err := git("remote"); err != nil || out == "" {
+		return "" // no remote (or no git): nothing to pull
+	}
+	if out, err := git("pull", "--ff-only"); err != nil {
+		if len(out) > 300 {
+			out = out[:300] + "…"
+		}
+		return "could not update the coordinator directory " + dir + " (git pull --ff-only failed: " + strings.ReplaceAll(out, "\n", " ") + "); started with the existing copy"
+	}
+	return ""
+}
+
 // handleLaunch starts a new agent: a fresh workspace in the directory, the
 // agent started in its pane, then the first prompt. A failure after the
 // workspace exists leaves it open (with its shell) for the user to look
@@ -570,7 +605,12 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	}
 	// The model comes first: claude's --allowedTools swallows what follows.
 	args := choice.Args
+	var pullNotice string
 	if body.Coordinator {
+		pullNotice = pullCoordinatorDir(ctx, dir)
+		if pullNotice != "" {
+			log.Printf("coordinator launch: %s", pullNotice)
+		}
 		// The reset hook's settings (installed with `comebye coordinator
 		// install-hook`) go before --allowedTools, which swallows what follows.
 		if kind == "claude" && s.cfg.StateDir != "" {
@@ -578,9 +618,9 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 				args = append(args, "--settings", p)
 			}
 		}
-		args = append(append(args, playbook.AgentArgs(kind, name)...), s.cfg.CoordinatorArgs[kind]...)
+		args = append(append(args, playbook.AgentArgs(kind, name, dir)...), s.cfg.CoordinatorArgs[kind]...)
 		if strings.TrimSpace(body.Prompt) == "" {
-			body.Prompt = playbook.FirstPrompt(kind)
+			body.Prompt = playbook.FirstPrompt(kind, dir)
 		}
 	}
 
@@ -630,8 +670,12 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		"workspace_id": ws.WorkspaceID,
 	}
 	resp["kind_source"] = choice.KindSource
-	if len(choice.Warnings) > 0 {
-		resp["warnings"] = choice.Warnings
+	warnings := choice.Warnings
+	if pullNotice != "" {
+		warnings = append(append([]string(nil), warnings...), pullNotice)
+	}
+	if len(warnings) > 0 {
+		resp["warnings"] = warnings
 	}
 	if choice.Model != "" {
 		resp["model"] = choice.Model

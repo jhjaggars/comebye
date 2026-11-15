@@ -32,9 +32,11 @@ func coordinatorDir(e *Env) string { return filepath.Join(StateDir(e.Getenv), "c
 
 func cmdCoordinator(e *Env, args []string) error {
 	if len(args) == 0 {
-		return usageErr("want digest, install-hook, status or reset")
+		return usageErr("want init, digest, install-hook, status or reset")
 	}
 	switch args[0] {
+	case "init":
+		return cmdCoordInit(e, args[1:])
 	case "digest":
 		return cmdCoordDigest(e, args[1:])
 	case "install-hook":
@@ -44,7 +46,7 @@ func cmdCoordinator(e *Env, args []string) error {
 	case "reset":
 		return cmdCoordReset(e, args[1:])
 	}
-	return usageErr("unknown coordinator command %q (want digest, install-hook, status or reset)", args[0])
+	return usageErr("unknown coordinator command %q (want init, digest, install-hook, status or reset)", args[0])
 }
 
 // ---- digest ----
@@ -92,6 +94,9 @@ func coordHook(e *Env, note bool, harness string) error {
 	} else {
 		text, problems := buildDigest(e, harness)
 		ctx = text
+		if rules, note := agentsText(); rules != "" {
+			ctx += "\n\n---\n# AGENTS.md (your coordinator rules; they win over the playbook)\n\n" + rules + note
+		}
 		msg = fmt.Sprintf("Comebye: fresh start — your context was cleared and a digest (%.1f KB) was loaded.", float64(len(text))/1024)
 		if len(problems) > 0 {
 			msg += " Not available: " + strings.Join(problems, "; ") + "."
@@ -102,6 +107,44 @@ func coordHook(e *Env, note bool, harness string) error {
 		out["systemMessage"] = msg
 	}
 	return jsonOut(e, out)
+}
+
+// agentsMax is how much of AGENTS.md the hook injects (Claude's limit for a
+// hook's context is 10,000 characters).
+const agentsMax = 10000
+
+// agentsText is the AGENTS.md of the directory the hook runs in (the
+// coordinator's), cut at agentsMax with a note. "" when there is none.
+func agentsText() (text, note string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", ""
+	}
+	b, err := os.ReadFile(filepath.Join(cwd, playbook.AgentsFile))
+	if err != nil || len(strings.TrimSpace(string(b))) == 0 {
+		return "", ""
+	}
+	if len(b) > agentsMax {
+		return cutUTF8(string(b), agentsMax), "\n\n(AGENTS.md cut at 10,000 characters: read the rest in " + filepath.Join(cwd, playbook.AgentsFile) + ")"
+	}
+	return string(b), ""
+}
+
+// claudeUserMD is the user's own Claude memory file, which a coordinator
+// must not load (its rules are the directory's AGENTS.md).
+func claudeUserMD(e *Env) string {
+	root := e.Getenv("CLAUDE_CONFIG_DIR")
+	if root == "" {
+		home := e.Getenv("HOME")
+		if home == "" {
+			var err error
+			if home, err = os.UserHomeDir(); err != nil {
+				return ""
+			}
+		}
+		root = filepath.Join(home, ".claude")
+	}
+	return filepath.Join(root, "CLAUDE.md")
 }
 
 // isCoordinator reports whether this agent is a recorded coordinator. When
@@ -306,14 +349,20 @@ func memoryIndex(e *Env) string {
 // Claude coordinator (--settings). The "clear" matcher injects the digest;
 // the other start sources leave a short note, which is how the hub knows
 // the session has the hook.
-func hookSettings(bin string) map[string]any {
+func hookSettings(bin, excludeMD string) map[string]any {
 	cmd := func(extra string) map[string]any {
 		return map[string]any{"type": "command", "command": shellQuote(bin) + " coordinator digest --hook" + extra, "timeout": 30}
 	}
-	return map[string]any{"hooks": map[string]any{"SessionStart": []any{
+	m := map[string]any{"hooks": map[string]any{"SessionStart": []any{
 		map[string]any{"matcher": "clear", "hooks": []any{cmd("")}},
 		map[string]any{"matcher": "startup|resume|compact", "hooks": []any{cmd(" --note")}},
 	}}}
+	if excludeMD != "" {
+		// The coordinator's rules are its directory's AGENTS.md, not the
+		// user's own ~/.claude/CLAUDE.md.
+		m["claudeMdExcludes"] = []string{excludeMD}
+	}
+	return m
 }
 
 func shellQuote(s string) string {
@@ -351,7 +400,7 @@ func cmdCoordInstall(e *Env, args []string) error {
 	if !filepath.IsAbs(b) {
 		return usageErr("--bin must be an absolute path")
 	}
-	data, err := json.MarshalIndent(hookSettings(b), "", "  ")
+	data, err := json.MarshalIndent(hookSettings(b, claudeUserMD(e)), "", "  ")
 	if err != nil {
 		return err
 	}

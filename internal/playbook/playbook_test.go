@@ -2,6 +2,8 @@ package playbook
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -77,18 +79,52 @@ func TestPresets(t *testing.T) {
 }
 
 func TestLaunchPieces(t *testing.T) {
-	if got := strings.Join(AgentArgs("claude", "coordinator"), " "); got != "--allowedTools Bash(comebye:*)" {
+	if got := strings.Join(AgentArgs("claude", "coordinator", ""), " "); got != "--allowedTools Bash(comebye:*)" {
 		t.Fatalf("claude args %q", got)
 	}
-	if got := strings.Join(AgentArgs("pi", "coordinator-2"), " "); got != "--name coordinator-2 --no-skills --no-context-files --tools read,grep,find,ls,bash" {
+	if got := strings.Join(AgentArgs("pi", "coordinator-2", ""), " "); got != "--name coordinator-2 --no-skills --no-context-files --tools read,grep,find,ls,bash" {
 		t.Fatalf("pi args %q", got)
 	}
-	if AgentArgs("codex", "c") != nil {
+	if AgentArgs("codex", "c", "") != nil {
 		t.Fatal("codex args")
 	}
 	for kind, h := range map[string]string{"pi": "pi", "claude": "claude", "codex": "generic", "opencode": "generic"} {
-		p := FirstPrompt(kind)
+		p := FirstPrompt(kind, "")
 		if !strings.Contains(p, "comebye playbook --harness "+h) || len(p) > 300 {
+			t.Errorf("first prompt for %s: %q", kind, p)
+		}
+	}
+}
+
+func TestCoordinatorDirPieces(t *testing.T) {
+	dir := t.TempDir()
+	// An empty directory: today's arguments and prompt.
+	if got := strings.Join(AgentArgs("pi", "c", dir), " "); got != "--name c --no-skills --no-context-files --tools read,grep,find,ls,bash" {
+		t.Fatalf("pi args, empty dir: %q", got)
+	}
+	if p := FirstPrompt("claude", dir); !strings.Contains(p, "comebye playbook --harness claude") {
+		t.Fatalf("first prompt, empty dir: %q", p)
+	}
+	// AGENTS.md and skills/: pi is handed both next to --no-skills.
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("x"), 0o644)
+	os.Mkdir(filepath.Join(dir, "skills"), 0o755)
+	want := "--name c --no-skills --no-context-files --tools read,grep,find,ls,bash --append-system-prompt " + dir + "/AGENTS.md --skill " + dir + "/skills"
+	if got := strings.Join(AgentArgs("pi", "c", dir), " "); got != want {
+		t.Fatalf("pi args = %q\nwant      %q", got, want)
+	}
+	// Only the skills folder: only --skill.
+	os.Remove(filepath.Join(dir, "AGENTS.md"))
+	if got := strings.Join(AgentArgs("pi", "c", dir), " "); !strings.HasSuffix(got, "--skill "+dir+"/skills") || strings.Contains(got, "--append-system-prompt") {
+		t.Fatalf("pi args without AGENTS.md = %q", got)
+	}
+	// Claude's arguments do not depend on the directory (it starts there).
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("x"), 0o644)
+	if got := strings.Join(AgentArgs("claude", "c", dir), " "); got != "--allowedTools Bash(comebye:*)" {
+		t.Fatalf("claude args = %q", got)
+	}
+	for _, kind := range []string{"pi", "claude", "codex"} {
+		p := FirstPrompt(kind, dir)
+		if !strings.HasPrefix(p, "Read AGENTS.md, then run `comebye whoami`, `comebye todo list`, `comebye ledger --active`") {
 			t.Errorf("first prompt for %s: %q", kind, p)
 		}
 	}

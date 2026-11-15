@@ -268,6 +268,9 @@ func (s *Server) resetLocal(ctx context.Context, target string, b resetBody) (in
 		}
 		return failJSON(http.StatusBadGateway, "herdr_error", err.Error())
 	}
+	// The new session reads the directory's AGENTS.md: bring it up to date
+	// first (a failure only becomes a notice in the reply).
+	pullNotice := pullCoordinatorDir(ctx, s.coordinatorDir())
 	before, name := sessionOf(*a), a.Name
 	// The state may have moved since the list was cached.
 	if live, err := s.client.GetAgent(ctx, a.PaneID); err == nil {
@@ -322,10 +325,15 @@ func (s *Server) resetLocal(ctx context.Context, target string, b resetBody) (in
 		case <-time.After(s.resetPoll):
 		}
 	}
-	return http.StatusOK, map[string]any{
+	out := map[string]any{
 		"agent": map[string]string{"pane_id": a.PaneID, "name": name}, "tokens": c.Tokens,
 		"session_before": before, "session_after": sessionOf(after), "renamed": renamed, "digest_landed": landed,
 	}
+	if pullNotice != "" {
+		log.Printf("coordinator reset: %s", pullNotice)
+		out["warnings"] = []string{pullNotice}
+	}
+	return http.StatusOK, out
 }
 
 // handleContext is GET /api/agents/{target}/context (the user's, which the

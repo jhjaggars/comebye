@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jhjaggars/comebye/internal/digest"
 )
@@ -156,7 +157,8 @@ func TestCoordinatorInstallHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	var s struct {
-		Hooks struct {
+		ClaudeMdExcludes []string `json:"claudeMdExcludes"`
+		Hooks            struct {
 			SessionStart []struct {
 				Matcher string `json:"matcher"`
 				Hooks   []struct {
@@ -168,6 +170,11 @@ func TestCoordinatorInstallHook(t *testing.T) {
 	}
 	if err := json.Unmarshal(b, &s); err != nil {
 		t.Fatal(err)
+	}
+	// The user's own CLAUDE.md is left out of the coordinator's context.
+	home := e.Getenv("HOME")
+	if len(s.ClaudeMdExcludes) != 1 || s.ClaudeMdExcludes[0] != filepath.Join(home, ".claude", "CLAUDE.md") {
+		t.Fatalf("claudeMdExcludes = %v", s.ClaudeMdExcludes)
 	}
 	ss := s.Hooks.SessionStart
 	if len(ss) != 2 || ss[0].Matcher != "clear" || ss[1].Matcher != "startup|resume|compact" {
@@ -399,5 +406,110 @@ func TestBoardRejectsArguments(t *testing.T) {
 	e, _, _, _ := peerEnv(t, map[string]string{}, nil)
 	if code := run(e, "board", "extra"); code == 0 {
 		t.Fatal("an argument is a usage error")
+	}
+}
+
+func TestCoordinatorInit(t *testing.T) {
+	e, out, _ := coordEnvWithState(t, nil, "")
+	dir := filepath.Join(t.TempDir(), "coord")
+	if code := run(e, "coordinator", "init", dir); code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	for _, f := range []string{"AGENTS.md", "CLAUDE.md", "README.md", "skills/status/SKILL.md"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("no %s: %v", f, err)
+		}
+	}
+	agents, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if !strings.HasPrefix(string(agents), "Run `comebye playbook --harness") || !strings.Contains(string(agents), "this file wins on conflict") {
+		t.Errorf("AGENTS.md = %s", agents)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md")); string(b) != "@AGENTS.md\n" {
+		t.Errorf("CLAUDE.md = %q", b)
+	}
+	skill, _ := os.ReadFile(filepath.Join(dir, "skills/status/SKILL.md"))
+	for _, w := range []string{"name: status", "comebye board", "comebye todo list", "comebye ledger --active", "12 lines", "unit tests", "Never publish"} {
+		if !strings.Contains(string(skill), w) {
+			t.Errorf("status skill lacks %q", w)
+		}
+	}
+	if l, err := os.Readlink(filepath.Join(dir, ".claude", "skills")); err != nil || l != filepath.Join("..", "skills") {
+		t.Errorf(".claude/skills -> %q, %v", l, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		t.Errorf("not a git repo: %v", err)
+	}
+
+	// A second run, after the user edited their files, overwrites nothing.
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("mine\n"), 0o644)
+	os.Remove(filepath.Join(dir, "README.md"))
+	out.Reset()
+	if code := run(e, "coordinator", "init", dir); code != 0 {
+		t.Fatalf("second init: exit %d", code)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md")); string(b) != "mine\n" {
+		t.Fatalf("AGENTS.md overwritten: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
+		t.Error("a missing file is still created")
+	}
+	if !strings.Contains(out.String(), "kept     AGENTS.md") || !strings.Contains(out.String(), "already a git repository") {
+		t.Errorf("output = %s", out)
+	}
+}
+
+func TestCoordinatorInitDefaultsToHome(t *testing.T) {
+	e, _, _ := coordEnvWithState(t, nil, "")
+	if code := run(e, "coordinator", "init"); code != 0 {
+		t.Fatal("exit", code)
+	}
+	if _, err := os.Stat(filepath.Join(e.Getenv("HOME"), "coordinator", "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if code := run(e, "coordinator", "init", "a", "b"); code != 2 {
+		t.Fatalf("two dirs: exit %d", code)
+	}
+}
+
+// The clear hook also injects the directory's AGENTS.md, cut at 10,000
+// characters with a note.
+func TestCoordinatorHookInjectsAgents(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	e, out, _ := coordEnvWithState(t, coordAnswers(rolesCoord), "")
+	os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("Always say moo.\n"), 0o644)
+	if code := run(e, "coordinator", "digest", "--hook"); code != 0 {
+		t.Fatal("exit", code)
+	}
+	var h struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &h); err != nil {
+		t.Fatal(err)
+	}
+	if c := h.HookSpecificOutput.AdditionalContext; !strings.Contains(c, digest.Marker) || !strings.Contains(c, "Always say moo.") {
+		t.Fatalf("context lacks the digest or AGENTS.md: %.300s", c)
+	}
+
+	os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte(strings.Repeat("é", 8000)), 0o644)
+	out.Reset()
+	run(e, "coordinator", "digest", "--hook")
+	json.Unmarshal([]byte(out.String()), &h)
+	c := h.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(c, "AGENTS.md cut at 10,000") || !utf8.ValidString(c) {
+		t.Fatalf("no cut note / invalid UTF-8")
+	}
+	if _, after, _ := strings.Cut(c, "# AGENTS.md"); len(after) > 10000+600 {
+		t.Fatalf("AGENTS.md part is %d bytes", len(after))
+	}
+
+	// Without AGENTS.md, nothing changes.
+	os.Remove(filepath.Join(cwd, "AGENTS.md"))
+	out.Reset()
+	run(e, "coordinator", "digest", "--hook")
+	if strings.Contains(out.String(), "# AGENTS.md") {
+		t.Fatal("AGENTS.md section without a file")
 	}
 }

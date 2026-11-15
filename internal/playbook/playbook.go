@@ -6,6 +6,8 @@ package playbook
 import (
 	_ "embed"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -144,9 +146,29 @@ func HarnessForKind(kind string) string {
 	return "generic"
 }
 
+// AgentsFile is the coordinator directory's rules file; SkillsDir its
+// skills folder.
+const (
+	AgentsFile = "AGENTS.md"
+	SkillsDir  = "skills"
+)
+
+// HasDir reports whether dir is a coordinator directory (it has AGENTS.md).
+func HasDir(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(dir, AgentsFile))
+	return err == nil && fi.Mode().IsRegular()
+}
+
 // FirstPrompt is the coordinator's first prompt: short, so the playbook
-// stays the single source of truth.
-func FirstPrompt(kind string) string {
+// stays the single source of truth. In a coordinator directory (dir has
+// AGENTS.md) it points at AGENTS.md, which points at the playbook.
+func FirstPrompt(kind, dir string) string {
+	if HasDir(dir) {
+		return "Read AGENTS.md, then run `comebye whoami`, `comebye todo list`, `comebye ledger --active` and tell me briefly what you see."
+	}
 	return "You are the Comebye coordinator. Run `comebye playbook --harness " + HarnessForKind(kind) +
 		"` and follow it: it explains your role and the `comebye` commands you act with. Then run `comebye whoami` and `comebye ledger`, and tell me briefly what you see."
 }
@@ -163,7 +185,12 @@ func WorkerArgs(kind string) []string {
 
 // AgentArgs are the extra arguments the Coordinator launch preset passes
 // to the agent's executable (herdr agent.start args), nil when none.
-func AgentArgs(kind, name string) []string {
+//
+// dir is the coordinator directory: pi, which loads no context files or
+// skills of its own, is handed dir/AGENTS.md and dir/skills when they exist.
+// Claude starts with its working directory in dir and reads AGENTS.md
+// through CLAUDE.md there.
+func AgentArgs(kind, name, dir string) []string {
 	switch kind {
 	case "claude":
 		// claude --help: --allowedTools, --allowed-tools <tools...>.
@@ -174,7 +201,16 @@ func AgentArgs(kind, name string) []string {
 		// tools: the coordinator acts through comebye). These are all
 		// built into pi; extension flags (e.g. a permission gate's) are
 		// per-install, added with -coordinator-args.
-		return []string{"--name", name, "--no-skills", "--no-context-files", "--tools", "read,grep,find,ls,bash"}
+		args := []string{"--name", name, "--no-skills", "--no-context-files", "--tools", "read,grep,find,ls,bash"}
+		// pi --help: --append-system-prompt <text|file>, --skill <path>
+		// (works with --no-skills: the explicit path is still loaded).
+		if HasDir(dir) {
+			args = append(args, "--append-system-prompt", filepath.Join(dir, AgentsFile))
+		}
+		if fi, err := os.Stat(filepath.Join(dir, SkillsDir)); dir != "" && err == nil && fi.IsDir() {
+			args = append(args, "--skill", filepath.Join(dir, SkillsDir))
+		}
+		return args
 	}
 	return nil
 }

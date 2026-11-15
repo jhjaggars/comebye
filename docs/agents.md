@@ -356,9 +356,10 @@ picks up where the last one left off.
 
 **Starting one.** In the "+" sheet choose **Coordinator**, a host and an
 agent kind. Comebye starts an agent named `coordinator` (or
-`coordinator-2`, …) in your home directory on that host (`-coordinator-dir`,
-the one place outside the launch roots the app may start an agent, and
-only for this preset), with a short first prompt: run
+`coordinator-2`, …) in the coordinator directory on that host
+(`-coordinator-dir`: `~/coordinator` when it exists, else your home
+directory; the one place outside the launch roots the app may start an
+agent, and only for this preset), with a short first prompt: run
 `comebye playbook --harness <kind>` and follow it. The playbook is the
 single source of truth for the role. Claude Code is started with
 `--allowedTools "Bash(comebye:*)"`, Pi with pi-config's coordinator
@@ -366,6 +367,49 @@ arguments (`--name <name> --no-skills --no-context-files --tools
 read,grep,find,ls,bash`: no edit or write tools). The hub records the
 agent as a coordinator. Any agent can be made a coordinator (or not) from
 the ⋮ menu of its chat.
+
+### The coordinator directory
+
+A coordinator can start in a directory you own, a git repository, and load
+its rules and skills from there. Make one with
+
+```sh
+comebye coordinator init            # ~/coordinator
+comebye coordinator init ~/rules    # or another directory
+```
+
+It creates (never overwriting a file that is there) `AGENTS.md` (the rules:
+it starts "Run `comebye playbook --harness …` for the commands; this file
+wins on conflict"), `CLAUDE.md` (the one line `@AGENTS.md`),
+`skills/status/SKILL.md` (a short status for you), a `README.md`, and
+`.claude/skills` pointing to `skills/`; it runs `git init` when the
+directory is not a repository. Commit it and add a remote to carry it to
+other hosts.
+
+With `~/coordinator` in place (or `-coordinator-dir` pointing at it) the
+Coordinator preset:
+
+- **starts the agent there.** The first prompt becomes "Read AGENTS.md, then
+  run `comebye whoami`, `comebye todo list`, `comebye ledger --active` and
+  tell me briefly what you see." Without the directory nothing changes: the
+  home directory and the playbook prompt, as before.
+- **Claude** reads `CLAUDE.md` (so `AGENTS.md`) and the skills in
+  `.claude/skills` from its working directory. `comebye coordinator
+  install-hook` also writes `claudeMdExcludes` for your own
+  `~/.claude/CLAUDE.md` into the coordinator's settings, so your personal
+  rules for other work do not reach it. The fresh-start hook adds the text
+  of `AGENTS.md` (up to 10,000 characters, with a note when it is cut) to
+  the digest.
+- **Pi**, which is started with `--no-context-files --no-skills`, is also
+  given `--append-system-prompt <dir>/AGENTS.md` and `--skill <dir>/skills`
+  (each only when it exists), so it loads exactly these and nothing else.
+- **pulls first.** Before a start and before a fresh start the hub runs
+  `git pull --ff-only` in the directory when it is a repository with a
+  remote. If that fails (no network, diverged history) the coordinator
+  starts with the copy on disk and the launch reply carries a warning.
+
+Edit `AGENTS.md` and the skills in that repository like any code; changes
+take effect at the next start or fresh start.
 
 **Restoring the role.** The role is recorded on the hub (`roles.json`),
 keyed by the agent's pane id, with the herdr name it had then; it applies
