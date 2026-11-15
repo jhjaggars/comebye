@@ -15,7 +15,7 @@ func TestRender(t *testing.T) {
 	}
 	// The playbook covers the workflows and the rules.
 	for _, want := range []string{
-		"comebye handoff", "comebye ledger", "comebye read", "comebye mark", "--reason", 		"## Intent", "## Spec", "out of scope", "definition of done", "branch name",
+		"comebye handoff", "comebye ledger", "comebye read", "comebye mark", "--reason", "## Intent", "## Spec", "out of scope", "definition of done", "branch name",
 		"Never edit code", "Never close, remove or launch", "Never prompt yourself", "confirm in the app",
 		"home agent", "concise", "comebye todo add", "comebye todo list", "todo answer", "docs/lifecycle.md", "--note", "landed", "Never land on your own",
 	} {
