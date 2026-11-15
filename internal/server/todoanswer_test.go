@@ -13,6 +13,11 @@ import (
 // permission gate, with an auto item filed for it.
 func blockedRig(t *testing.T, screen string) (*Server, *fakeLaunchHerdr, Todo) {
 	t.Helper()
+	// The answer dedupe table is process-wide: a rerun (-count=N) inside its
+	// window would otherwise see the previous run's answer as a duplicate.
+	answers.mu.Lock()
+	clear(answers.seen)
+	answers.mu.Unlock()
 	s, fh, _ := coordServer(t)
 	if err := s.recordRole("desk/w1:p1", "coordinator", RoleCoordinator, "me"); err != nil {
 		t.Fatal(err)
@@ -51,6 +56,8 @@ func blockedRig(t *testing.T, screen string) (*Server, *fakeLaunchHerdr, Todo) {
 }
 
 func sentKeys(fh *fakeLaunchHerdr) int {
+	fh.mu.Lock()
+	defer fh.mu.Unlock()
 	n := 0
 	for _, c := range fh.calls {
 		if c.Method == "agent.send_keys" {
@@ -139,4 +146,21 @@ func TestTodoAnswerAgentGone(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "agent_gone") || sentKeys(fh) != 0 {
 		t.Fatalf("answer = %d %s", w.Code, w.Body)
 	}
+}
+
+// sentKeys is read while the fake herdr is still answering polls from the
+// hub's background loops; it must take the fake's lock (CI caught it racing).
+func TestSentKeysReadsUnderTheFakesLock(t *testing.T) {
+	fh := &fakeLaunchHerdr{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			fh.answer("agent.list", nil)
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		sentKeys(fh)
+	}
+	<-done
 }
