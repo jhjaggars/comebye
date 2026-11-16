@@ -1,0 +1,1 @@
+{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":108456,"foreground_processes":[{"argv":["pi"],"cmdline":"pi","cwd":"/tmp/claude-1000/-home-jhjaggars--worktrees-comebye-feat-restart-1-args/292fc2de-06f7-4bcd-b31b-a08d3684bf93/scratchpad/live","name":"pi","pid":108456}],"pane_id":"wCM:p2","shell_pid":108162},"type":"pane_process_info"}}

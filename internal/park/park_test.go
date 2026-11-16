@@ -135,3 +135,71 @@ func TestMoveTree(t *testing.T) {
 		t.Fatal("mode not kept")
 	}
 }
+
+func TestRestartArgs(t *testing.T) {
+	const cid = "d38c3c8d-3da1-402b-a995-95741b8d4ac6"
+	const pisess = "/home/u/.pi/agent/sessions/x/s.jsonl"
+	const ocid = "ses_1b3b67110ffeaYfw74rSFIG19q"
+	v := func(s ...string) []string { return s }
+	for _, c := range []struct {
+		name, kind, sk, sess string
+		argv, want           []string
+	}{
+		{"claude fresh with prompt", "claude", "id", cid,
+			v("claude", "--model", "claude-opus-5-5", "--permission-mode", "auto", "--", "say hi"),
+			v("--resume", cid, "--model", "claude-opus-5-5", "--permission-mode", "auto")},
+		{"claude fresh, no flags", "claude", "id", cid, v("claude"), v("--resume", cid)},
+		{"claude resumed", "claude", "id", cid,
+			v("/home/u/.local/bin/claude", "--resume", "c3eb8f54-6bdd-420f-87f6-90fbed29fffc", "--model", "claude-opus-5-5"),
+			v("--resume", cid, "--model", "claude-opus-5-5")},
+		{"claude resume=id and short -r", "claude", "id", cid,
+			v("claude", "--resume=abc", "-r", "def", "--model", "opus"),
+			v("--resume", cid, "--model", "opus")},
+		{"claude bare --resume before a flag", "claude", "id", cid,
+			v("claude", "--resume", "--model", "opus"),
+			v("--resume", cid, "--model", "opus")},
+		{"claude continue and session-id", "claude", "id", cid,
+			v("claude", "-c", "--session-id", "x-1", "--settings", "/s.json"),
+			v("--resume", cid, "--settings", "/s.json")},
+		{"claude variadic and long values kept", "claude", "id", cid,
+			v("claude", "--model", "opus", "--settings", "/a/settings.json", "--allowedTools", "Bash(comebye:*)", "Read", "--append-system-prompt", "be brief", "--", "You are the coordinator."),
+			v("--resume", cid, "--model", "opus", "--settings", "/a/settings.json", "--allowedTools", "Bash(comebye:*)", "Read", "--append-system-prompt", "be brief")},
+		{"pi fresh", "pi", "path", pisess,
+			v("pi", "--model", "sonnet", "--no-skills", "--", "say hi"),
+			v("--session", pisess, "--model", "sonnet", "--no-skills")},
+		{"pi resumed by session", "pi", "path", pisess,
+			v("pi", "--session", "/old/s.jsonl", "--model", "sonnet"),
+			v("--session", pisess, "--model", "sonnet")},
+		{"pi continue, fork, no-session", "pi", "path", pisess,
+			v("pi", "-c", "--fork", "abc", "--no-session", "--thinking", "high"),
+			v("--session", pisess, "--thinking", "high")},
+		{"pi argv is only its title", "pi", "path", pisess, v("pi"), v("--session", pisess)},
+		{"opencode fresh with prompt flag", "opencode", "id", ocid,
+			v("opencode", "--model", "anthropic/claude", "--prompt", "say hi"),
+			v("-s", ocid, "--model", "anthropic/claude")},
+		{"opencode resumed", "opencode", "id", ocid,
+			v("opencode", "-s", "ses_old", "--agent", "build"),
+			v("-s", ocid, "--agent", "build")},
+		{"opencode continue and --session=", "opencode", "id", ocid,
+			v("opencode", "--continue", "--session=ses_x", "--fork", "--port", "4096"),
+			v("-s", ocid, "--port", "4096")},
+		{"opencode prompt after --", "opencode", "id", ocid,
+			v("opencode", "--agent", "build", "--", "hello"),
+			v("-s", ocid, "--agent", "build")},
+		{"empty argv", "claude", "id", cid, nil, v("--resume", cid)},
+	} {
+		got, err := RestartArgs(c.kind, c.argv, c.sk, c.sess)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %q, %v; want %q", c.name, got, err, c.want)
+		}
+	}
+	for _, bad := range [][3]string{
+		{"codex", "id", "abc"},
+		{"claude", "id", "--dangerously-skip-permissions"},
+		{"pi", "id", "abc"},
+	} {
+		if _, err := RestartArgs(bad[0], []string{bad[0]}, bad[1], bad[2]); err == nil {
+			t.Errorf("RestartArgs(%v) accepted", bad)
+		}
+	}
+}

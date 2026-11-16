@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -471,6 +472,57 @@ func (c *Client) ListPanes(ctx context.Context, workspaceID string) ([]PaneInfo,
 		return nil, fmt.Errorf("parse pane.list: %w", err)
 	}
 	return res.Panes, nil
+}
+
+// Process is one foreground process of a pane.
+type Process struct {
+	Argv    []string `json:"argv"`
+	Cmdline string   `json:"cmdline"`
+	CWD     string   `json:"cwd"`
+	Name    string   `json:"name"`
+	PID     int      `json:"pid"`
+}
+
+// ProcessInfo is a pane's foreground process group (pane.process_info): the
+// agent and any children it has running (MCP servers and the like).
+type ProcessInfo struct {
+	PaneID       string    `json:"pane_id"`
+	ProcessGroup int       `json:"foreground_process_group_id"`
+	ShellPID     int       `json:"shell_pid"`
+	Processes    []Process `json:"foreground_processes"`
+}
+
+// Find returns the foreground process that is the agent of kind: the first one
+// whose name or program (argv[0] base name) is kind.
+func (p ProcessInfo) Find(kind string) (Process, bool) {
+	for _, pr := range p.Processes {
+		if pr.Name == kind || (len(pr.Argv) > 0 && filepath.Base(pr.Argv[0]) == kind) {
+			return pr, true
+		}
+	}
+	return Process{}, false
+}
+
+// ProcessInfo reads the foreground processes of one pane (pane.process_info),
+// with the argv each was started with.
+func (c *Client) ProcessInfo(ctx context.Context, paneID string) (ProcessInfo, error) {
+	raw, err := c.Call(ctx, "pane.process_info", struct {
+		PaneID string `json:"pane_id"`
+	}{PaneID: paneID})
+	if err != nil {
+		return ProcessInfo{}, err
+	}
+	return parseProcessInfo(raw)
+}
+
+func parseProcessInfo(raw json.RawMessage) (ProcessInfo, error) {
+	var res struct {
+		ProcessInfo ProcessInfo `json:"process_info"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return ProcessInfo{}, fmt.Errorf("parse pane.process_info: %w", err)
+	}
+	return res.ProcessInfo, nil
 }
 
 // ClosePane closes one pane (pane.close). A workspace's last pane closing

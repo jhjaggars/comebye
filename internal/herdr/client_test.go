@@ -2,7 +2,11 @@ package herdr
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -28,5 +32,54 @@ func TestClientWithNoSocketIsNoHerdr(t *testing.T) {
 	var he *Error
 	if _, err := c.Call(context.Background(), "ping", nil); !errors.As(err, &he) || he.Code != "no_herdr" {
 		t.Fatalf("Call = %v", err)
+	}
+}
+
+// The testdata files are `herdr pane process-info --pane <id>` output captured
+// from live panes (a claude launched with flags and a prompt, and a pi).
+func TestParseProcessInfo(t *testing.T) {
+	read := func(name string) ProcessInfo {
+		t.Helper()
+		b, err := os.ReadFile("testdata/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env struct {
+			Result json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal(b, &env); err != nil {
+			t.Fatal(err)
+		}
+		pi, err := parseProcessInfo(env.Result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pi
+	}
+
+	pi := read("process_info_claude.json")
+	if pi.PaneID != "wCM:p1" || len(pi.Processes) != 3 {
+		t.Fatalf("claude pane: %+v", pi)
+	}
+	p, ok := pi.Find("claude")
+	if !ok || p.PID != 108182 || !strings.HasSuffix(p.CWD, "/scratchpad/live") {
+		t.Fatalf("Find(claude) = %+v, %v", p, ok)
+	}
+	want := []string{"claude", "--model", "claude-opus-5-5", "--permission-mode", "auto", "--append-system-prompt", "be", "brief", "--", "say", "hi"}
+	if !reflect.DeepEqual(p.Argv, want) {
+		t.Errorf("argv = %q", p.Argv)
+	}
+	if _, ok := pi.Find("pi"); ok {
+		t.Error("Find(pi) matched in a claude pane")
+	}
+
+	pp := read("process_info_pi.json")
+	p, ok = pp.Find("pi")
+	if !ok || p.PID != 108456 || !reflect.DeepEqual(p.Argv, []string{"pi"}) {
+		t.Fatalf("Find(pi) = %+v, %v", p, ok)
+	}
+
+	if _, err := parseProcessInfo(json.RawMessage(`[1]`)); err == nil {
+		t.Error("parsed garbage")
 	}
 }

@@ -319,6 +319,61 @@ func ResumeArgs(kind, sessionKind, session string, launch []string) ([]string, e
 	return append([]string{flag, session}, LaunchArgs(launch)...), nil
 }
 
+// sessionFlags are, per kind, the flags that pick or continue a session. They are
+// dropped from a live command line before the resume flag is put in front.
+// value is true for a flag that takes a value; optional marks a value only taken
+// when the next argument is not itself a flag (claude's --resume [id]).
+var sessionFlags = map[string]map[string]struct{ value, optional bool }{
+	"claude": {
+		"--resume": {true, true}, "-r": {true, true},
+		"--continue": {}, "-c": {},
+		"--session-id": {true, false},
+	},
+	"pi": {
+		"--continue": {}, "-c": {}, "--resume": {}, "-r": {},
+		"--session": {true, false}, "--session-id": {true, false},
+		"--fork": {true, false}, "--no-session": {},
+	},
+	"opencode": {
+		"--continue": {}, "-c": {}, "--fork": {},
+		"--session": {true, false}, "-s": {true, false},
+		"--prompt": {true, false},
+	},
+}
+
+// RestartArgs are the arguments that start the same agent again on its session,
+// from the argv of the running process (argv[0], the program, is dropped). The
+// old resume or continue flag and any first prompt after "--" go; every other
+// flag (model, permissions, settings, system prompt) stays, in order, behind the
+// resume flag that ResumeArgs builds. Other flags' values are not known, so a
+// value that is itself spelled like a session flag (--append-system-prompt -r)
+// would be dropped; no real launch does that.
+func RestartArgs(kind string, argv []string, sessionKind, session string) ([]string, error) {
+	flags, ok := sessionFlags[kind]
+	if !ok {
+		return nil, fmt.Errorf("agent kind %q cannot be restarted", kind)
+	}
+	if len(argv) > 0 {
+		argv = argv[1:]
+	}
+	var keep []string
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		if a == "--" {
+			break
+		}
+		name, _, hasEq := strings.Cut(a, "=")
+		if f, ok := flags[name]; ok {
+			if f.value && !hasEq && (!f.optional || (i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-"))) {
+				i++
+			}
+			continue
+		}
+		keep = append(keep, a)
+	}
+	return ResumeArgs(kind, sessionKind, session, keep)
+}
+
 // MoveTree moves directory src to dst, across file systems if need be (a
 // RAM-backed /tmp to disk): a rename when it works, else a copy and a remove.
 // It returns the bytes moved. dst must not exist.
