@@ -28,7 +28,11 @@ type restartFake struct {
 	linger     int
 	lingerLeft map[string]int
 	exits      []string // what ended an agent: "/exit" or "ctrl+d"
-	starts     []map[string]any
+	// exitDialog, when set, is the screen claude shows in answer to /exit
+	// (its "stop tasks" dialog) instead of leaving; Esc puts back clean.
+	exitDialog, clean string
+	escs              int
+	starts            []map[string]any
 }
 
 func shellProc(pid int) map[string]any {
@@ -55,12 +59,23 @@ func (rf *restartFake) install(f *fakeLaunchHerdr) {
 			return map[string]any{"type": "pane_process_info", "process_info": map[string]any{
 				"pane_id": pane, "shell_pid": rf.shellPID, "foreground_process_group_id": pgid, "foreground_processes": procs}}, nil, true
 		case "agent.prompt":
+			if p["text"] == "/exit" && rf.exitDialog != "" {
+				f.screens[pane2(f, p)] = rf.exitDialog
+				return map[string]any{"type": "agent_prompted", "agent": map[string]any{"name": p["target"]}}, nil, true
+			}
 			if p["text"] == "/exit" {
 				rf.exit(f, p["target"].(string), "/exit")
 				return map[string]any{"type": "agent_prompted", "agent": map[string]any{"name": p["target"]}}, nil, true
 			}
 		case "agent.send_keys":
 			keys, _ := p["keys"].([]any)
+			if len(keys) == 1 && keys[0] == "esc" {
+				rf.escs++
+				if rf.exitDialog != "" {
+					f.screens[pane2(f, p)] = rf.clean
+				}
+				return map[string]any{"type": "ok"}, nil, true
+			}
 			if len(keys) == 1 && keys[0] == "ctrl+d" {
 				rf.exit(f, p["target"].(string), "ctrl+d")
 				return map[string]any{"type": "ok"}, nil, true
@@ -110,6 +125,17 @@ func (rf *restartFake) install(f *fakeLaunchHerdr) {
 		}
 		return nil, nil, false
 	}
+}
+
+// pane2 is the pane of the agent a request targets (by name or pane id).
+func pane2(f *fakeLaunchHerdr, p map[string]any) string {
+	t, _ := p["target"].(string)
+	for _, a := range f.agents {
+		if a.PaneID == t || a.Name == t {
+			return a.PaneID
+		}
+	}
+	return t
 }
 
 // exit ends the agent in target's pane when exitWorks.
