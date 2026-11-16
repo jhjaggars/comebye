@@ -318,7 +318,11 @@ type Server struct {
 	// resetPoll and resetWait pace a reset's wait for the new session
 	// (tests shrink them).
 	resetPoll, resetWait time.Duration
-	roles                *roleStore
+	// restart is the in-place restart's state (restart.go); restartPoll and
+	// restartWait pace its wait for the old process to end (tests shrink them).
+	restart                  restartState
+	restartPoll, restartWait time.Duration
+	roles                    *roleStore
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
@@ -380,6 +384,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	}
 	s := &Server{cfg: cfg, recall: archive.NewReader(cfg.RecallIndex), client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond, resetPoll: 500 * time.Millisecond, resetWait: 30 * time.Second,
+		restartPoll: 250 * time.Millisecond, restartWait: restartExitWait,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait,
 		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, openGap: openGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
 	switch {
@@ -597,6 +602,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/parked", s.authAgent(s.handleParked))
 	s.mux.HandleFunc("POST /api/hosts/{host}/park", s.auth(s.onHostLaunch("park", s.handlePark)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/resume", s.auth(s.onHostLaunch("resume", s.handleResume)))
+	// Restart in place (restart.go): the user's alone.
+	s.mux.HandleFunc("POST /api/restart", s.auth(s.handleRestart))
+	s.mux.HandleFunc("POST /api/hosts/{host}/restart", s.auth(s.onHostLaunch("restart", s.handleRestart)))
 	s.mux.HandleFunc("POST /api/park/mark", s.auth(s.handleParkMark))
 	s.mux.HandleFunc("POST /api/park/pin", s.auth(s.handleParkPin))
 	s.mux.HandleFunc("POST /api/hosts/{host}/park/pin", s.auth(s.onHostLaunch("park-pin", s.handleParkPin)))

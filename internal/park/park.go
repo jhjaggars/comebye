@@ -257,6 +257,16 @@ func (s *Store) NoteLaunch(name, kind string, args []string, at time.Time) {
 	_ = s.save()
 }
 
+// ForgetLaunch drops the launch remembered for name (a temporary name that is not an agent's own).
+func (s *Store) ForgetLaunch(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.f.Launches[name]; ok {
+		delete(s.f.Launches, name)
+		_ = s.save()
+	}
+}
+
 // LaunchOf returns how the agent called name was last started here.
 func (s *Store) LaunchOf(name string) (Launch, bool) {
 	s.mu.Lock()
