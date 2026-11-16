@@ -21,10 +21,14 @@ type restartFake struct {
 	procs     map[string][]map[string]any // pane -> foreground processes
 	sessions  map[string]*herdr.AgentSessionInfo
 	nextPID   int
-	exitWorks bool     // the exit command ends the process
-	startFail int      // agent.start fails this many times
-	exits     []string // what ended an agent: "/exit" or "ctrl+d"
-	starts    []map[string]any
+	exitWorks bool // the exit command ends the process
+	startFail int  // agent.start fails this many times
+	// linger is how many agent.list calls herdr keeps an exited agent (and its
+	// name) for: it lets go of it a moment after the process ends.
+	linger     int
+	lingerLeft map[string]int
+	exits      []string // what ended an agent: "/exit" or "ctrl+d"
+	starts     []map[string]any
 }
 
 func shellProc(pid int) map[string]any {
@@ -61,7 +65,25 @@ func (rf *restartFake) install(f *fakeLaunchHerdr) {
 				rf.exit(f, p["target"].(string), "ctrl+d")
 				return map[string]any{"type": "ok"}, nil, true
 			}
+		case "agent.list":
+			kept := f.agents[:0]
+			for _, a := range f.agents {
+				if n, ok := rf.lingerLeft[a.PaneID]; ok {
+					if n <= 0 {
+						delete(rf.lingerLeft, a.PaneID)
+						continue
+					}
+					rf.lingerLeft[a.PaneID] = n - 1
+				}
+				kept = append(kept, a)
+			}
+			f.agents = kept
 		case "agent.start":
+			for _, a := range f.agents {
+				if a.Name != "" && a.Name == p["name"] {
+					return nil, &herdr.Error{Code: "agent_name_in_use", Message: "agent name " + a.Name + " is already used"}, true
+				}
+			}
 			if rf.startFail > 0 {
 				rf.startFail--
 				return nil, &herdr.Error{Code: "agent_start_failed", Message: "boom"}, true
@@ -80,7 +102,7 @@ func (rf *restartFake) install(f *fakeLaunchHerdr) {
 			target, _ := p["target"].(string)
 			for i := range f.agents {
 				if f.agents[i].PaneID == target || f.agents[i].Name == target {
-					f.agents[i].Name, _ = p["name"].(string)
+					f.agents[i].Name, _ = p["name"].(string) // null clears
 					return map[string]any{"type": "ok"}, nil, true
 				}
 			}
@@ -100,6 +122,13 @@ func (rf *restartFake) exit(f *fakeLaunchHerdr, target, how string) {
 	for _, a := range f.agents {
 		if a.PaneID == target || a.Name == target {
 			rf.procs[a.PaneID] = []map[string]any{shellProc(rf.shellPID)}
+			if rf.linger > 0 {
+				if rf.lingerLeft == nil {
+					rf.lingerLeft = map[string]int{}
+				}
+				rf.lingerLeft[a.PaneID] = rf.linger
+				kept = append(kept, a)
+			}
 			continue
 		}
 		kept = append(kept, a)
@@ -207,6 +236,11 @@ func TestRestartNamedPiKeepsPaneAndSession(t *testing.T) {
 	if start["name"] != "w" || start["pane_id"] != "w1:p1" || start["kind"] != "pi" {
 		t.Fatalf("start = %v", start)
 	}
+	// The session-only start is not remembered as the launch: a second restart
+	// must again say its flags are unknown.
+	if l, ok := e.s.parkStore().LaunchOf("w"); ok {
+		t.Fatalf("a launch was recorded for an unrecovered restart: %+v", l)
+	}
 	note := e.fh.call("agent.prompt")
 	if note == nil || !strings.Contains(note.Params["text"].(string), "restarted in place") || !strings.Contains(note.Params["text"].(string), "could not be read back") {
 		t.Fatalf("catch-up note = %+v", note)
@@ -234,7 +268,8 @@ func TestRestartUnnamedUsesTemporaryName(t *testing.T) {
 	if !strings.HasPrefix(name, "restart-") {
 		t.Fatalf("started as %q, want a temporary name", name)
 	}
-	if rn := e.fh.call("agent.rename"); rn == nil || rn.Params["name"] != "" {
+	// Cleared as null: herdr refuses an empty string as a name.
+	if rn := e.fh.call("agent.rename"); rn == nil || rn.Params["name"] != nil {
 		t.Fatalf("the temporary name was not cleared: %+v", rn)
 	}
 	if len(left) != 1 || left[0] != "" {
@@ -450,6 +485,20 @@ func TestRestartFailedStartThenRetry(t *testing.T) {
 	// Nothing is left to retry.
 	if c, r := e.post(t, `{"agent":"w1:p9"}`); c != 404 {
 		t.Fatalf("after = %d %v", c, r)
+	}
+}
+
+func TestRestartWaitsForHerdrToLetGoOfTheAgent(t *testing.T) {
+	// herdr keeps an exited agent, and so its name, for a moment: a start in
+	// that window fails with "name is already used".
+	sess := piSession(t)
+	e := restartServer(t, herdr.AgentInfo{Name: "w", PaneID: "w1:p1", Agent: "pi", Status: herdr.StatusIdle, CWD: "/", AgentSession: sess})
+	e.fh.set(func(f *fakeLaunchHerdr) { e.rf.linger = 3 })
+	if code, r := e.post(t, `{"agent":"w1:p1"}`); code != 200 {
+		t.Fatalf("restart = %d %v", code, r)
+	}
+	if got := e.startArgs(t, 0); got != `["--session","`+sess.Value+`"]` {
+		t.Fatalf("args = %s", got)
 	}
 }
 

@@ -734,14 +734,19 @@ func (c *Client) GetAgent(ctx context.Context, target string) (AgentInfo, error)
 }
 
 // RenameAgent names the agent in target (a pane id or its current name).
-// An empty name clears it. herdr drops an agent's name when its session
+// An empty name clears it (sent as null: herdr refuses an empty string as
+// an invalid name, checked live). herdr drops an agent's name when its session
 // changes (Claude's /clear), so a caller that clears a session names the
 // agent again with this.
 func (c *Client) RenameAgent(ctx context.Context, target, name string) error {
+	var np *string
+	if name != "" {
+		np = &name
+	}
 	_, err := c.Call(ctx, "agent.rename", struct {
 		Target string  `json:"target"`
 		Name   *string `json:"name"`
-	}{Target: target, Name: &name})
+	}{Target: target, Name: np})
 	return err
 }
 

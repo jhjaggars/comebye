@@ -307,7 +307,10 @@ func (s *Server) restartAgent(ctx context.Context, b restartBody, by string) (*r
 	}
 	deadline := time.Now().Add(s.restartWait)
 	for {
-		if pi, err := s.client.ProcessInfo(ctx, agent.PaneID); err == nil && shellForeground(pi) {
+		// The shell is foreground again, and herdr has let go of the agent
+		// (it holds its name for a moment after the process ends: starting
+		// then fails with "agent name ... is already used").
+		if pi, err := s.client.ProcessInfo(ctx, agent.PaneID); err == nil && shellForeground(pi) && s.paneAgentGone(ctx, agent.PaneID) {
 			break
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
@@ -322,6 +325,20 @@ func (s *Server) restartAgent(ctx context.Context, b restartBody, by string) (*r
 	}
 	s.restart.setPending(agent.PaneID, p)
 	return s.restartStart(ctx, agent.PaneID, p, by)
+}
+
+// paneAgentGone reports whether herdr no longer lists an agent in the pane.
+func (s *Server) paneAgentGone(ctx context.Context, pane string) bool {
+	live, err := s.client.ListAgents(ctx)
+	if err != nil {
+		return false
+	}
+	for _, a := range live {
+		if a.PaneID == pane {
+			return false
+		}
+	}
+	return true
 }
 
 func errString(err error) string {
@@ -367,7 +384,9 @@ func (s *Server) restartStart(ctx context.Context, pane string, p *restartPendin
 	if ps != nil {
 		// startAgent noted the resume flags as the launch; a park later must
 		// keep the original arguments, not stack a second resume flag.
-		if temp {
+		if temp || p.unrecovered {
+			// Nothing real to remember: the launch's flags are unknown, and
+			// noting the session-only start would pass for them next time.
 			ps.ForgetLaunch(name)
 		} else {
 			ps.NoteLaunch(name, p.kind, p.base, time.Now())
