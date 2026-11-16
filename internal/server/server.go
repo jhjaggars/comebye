@@ -605,6 +605,10 @@ func (s *Server) routes() {
 	// Restart in place (restart.go): the user's alone.
 	s.mux.HandleFunc("POST /api/restart", s.auth(s.handleRestart))
 	s.mux.HandleFunc("POST /api/hosts/{host}/restart", s.auth(s.onHostLaunch("restart", s.handleRestart)))
+	// Bulk: the hub restarts a host's eligible agents of one kind one by one
+	// (restartbulk.go); coordinators are skipped.
+	s.mux.HandleFunc("POST /api/restart/bulk", s.auth(s.handleRestartBulk))
+	s.mux.HandleFunc("POST /api/hosts/{host}/restart/bulk", s.auth(s.handleRestartBulk))
 	s.mux.HandleFunc("POST /api/park/mark", s.auth(s.handleParkMark))
 	s.mux.HandleFunc("POST /api/park/pin", s.auth(s.handleParkPin))
 	s.mux.HandleFunc("POST /api/hosts/{host}/park/pin", s.auth(s.onHostLaunch("park-pin", s.handleParkPin)))

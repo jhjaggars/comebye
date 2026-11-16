@@ -104,3 +104,78 @@ func TestRestartUnrecoveredFlagsAndRefusals(t *testing.T) {
 		t.Errorf("unknown code: %d %s", c, errb)
 	}
 }
+
+func TestRestartAllCommand(t *testing.T) {
+	env := map[string]string{"COMEBYE_LOGIN": "me@example.com"}
+	bulk := `{"host":"laharl","kind":"pi","results":[
+	 {"agent":"laharl/w1:p1","pane_id":"w1:p1","name":"one","outcome":"restarted","old_pid":11,"new_pid":22,"flags_recovered":false},
+	 {"agent":"laharl/w2:p1","pane_id":"w2:p1","name":"busy","outcome":"refused","code":"agent_working","message":"x"},
+	 {"agent":"laharl/w3:p1","pane_id":"w3:p1","name":"boss","outcome":"skipped","code":"coordinator","message":"a coordinator is never restarted in bulk; restart it by name"},
+	 {"agent":"laharl/w4:p1","pane_id":"w4:p1","outcome":"restarted","old_pid":5,"new_pid":6,"flags_recovered":true}],
+	 "restarted":2,"would_restart":0,"refused":1,"failed":0,"skipped":1}`
+	answers := map[string]answer{
+		"GET /api/whoami":                     {200, `{"host":"laharl","role":"agent"}`},
+		"POST /api/hosts/laharl/restart/bulk": {200, bulk},
+	}
+	// Usage: --all needs kind and host and no agent; the other flags need --all.
+	e, _, errb, reqs := peerEnv(t, env, answers)
+	for _, a := range [][]string{
+		{"restart", "--all"}, {"restart", "--all", "--kind", "pi"}, {"restart", "--all", "--kind", "pi", "--host", "laharl", "x"},
+		{"restart", "--kind", "pi", "x"}, {"restart", "--dry-run", "x"},
+	} {
+		if code := run(e, a...); code != 2 {
+			t.Fatalf("%v = %d %s", a, code, errb)
+		}
+	}
+	if lastReq(reqs, "POST", "/api/hosts/laharl/restart/bulk") != nil {
+		t.Fatal("a usage error sent a request")
+	}
+	e, _, errb, _ = peerEnv(t, nil, answers)
+	if code := run(e, "restart", "--all", "--kind", "pi", "--host", "laharl"); code != 2 || !strings.Contains(errb.String(), "login") {
+		t.Fatalf("no login: %d %s", code, errb)
+	}
+
+	// One line per agent, then a total.
+	e, out, errb, reqs := peerEnv(t, env, answers)
+	if code := run(e, "restart", "--all", "--kind", "pi", "--host", "laharl", "--dry-run"); code != 0 {
+		t.Fatalf("bulk: %d %s", code, errb)
+	}
+	var body map[string]any
+	rr := lastReq(reqs, "POST", "/api/hosts/laharl/restart/bulk")
+	json.Unmarshal([]byte(rr.body), &body)
+	if body["kind"] != "pi" || body["dry_run"] != true || rr.hdr.Get("Tailscale-User-Login") != "me@example.com" {
+		t.Fatalf("body = %v, headers %v", body, rr.hdr)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("want 4 agent lines and a total: %q", out)
+	}
+	for i, w := range []string{
+		"restarted  laharl/w1:p1 (one): pid 11 -> 22, flags not recovered",
+		"refused  laharl/w2:p1 (busy): it is working or blocked",
+		"skipped  laharl/w3:p1 (boss): a coordinator",
+		"restarted  laharl/w4:p1: pid 5 -> 6",
+		"0 would restart, 1 refused, 0 failed, 1 skipped (4 pi agents on laharl)",
+	} {
+		if !strings.Contains(lines[i], w) {
+			t.Errorf("line %d = %q, want %q", i, lines[i], w)
+		}
+	}
+
+	// --json prints the raw answer.
+	out.Reset()
+	if code := run(e, "restart", "--all", "--kind", "pi", "--host", "laharl", "--json"); code != 0 {
+		t.Fatalf("json: %d", code)
+	}
+	var raw map[string]any
+	if json.Unmarshal(out.Bytes(), &raw) != nil || raw["restarted"] != float64(2) {
+		t.Fatalf("json output: %q", out)
+	}
+
+	// A failed agent makes the exit status 1.
+	answers["POST /api/hosts/laharl/restart/bulk"] = answer{200, `{"results":[{"agent":"laharl/w1:p1","outcome":"failed","code":"start_failed","message":"boom"}],"failed":1}`}
+	e, out, _, _ = peerEnv(t, env, answers)
+	if code := run(e, "restart", "--all", "--kind", "pi", "--host", "laharl"); code != 1 || !strings.Contains(out.String(), "FAILED  laharl/w1:p1: boom") {
+		t.Fatalf("failed: %d %q", code, out)
+	}
+}

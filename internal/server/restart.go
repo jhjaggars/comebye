@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,9 @@ type restartBody struct {
 	// ForceSchedule restarts a claude session that has a loop or wakeup
 	// scheduled (a restart ends it).
 	ForceSchedule bool `json:"force_schedule"`
+	// DryRun runs every check and works out the arguments, then stops: nothing
+	// is sent to the agent.
+	DryRun bool `json:"dry_run"`
 }
 
 // restartResult is the answer of a restart.
@@ -63,6 +67,8 @@ type restartResult struct {
 	ArgsFrom string   `json:"args_from"`
 	Note     string   `json:"note,omitempty"`
 	Warn     string   `json:"warning,omitempty"`
+	// DryRun: nothing was restarted; the agent would be.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // restartPending is a restart whose old process has ended but whose start did
@@ -242,6 +248,15 @@ func (s *Server) restartAgent(ctx context.Context, b restartBody, by string) (*r
 		}
 		return nil, restartRefusal(http.StatusBadGateway, "herdr_error", "could not check the pane: "+errMessage(err))
 	}
+	// Claude shows a running shell task in its footer even when herdr's list
+	// does not carry it; /exit would open claude's own "stop tasks" dialog.
+	if kind == "claude" {
+		if r, err := s.client.ReadPane(ctx, agent.PaneID, "visible", 0); err == nil {
+			if what := screenBackgroundTask(r.Text); what != "" {
+				return nil, restartRefusal(http.StatusConflict, "background_task", backgroundTaskMessage(what))
+			}
+		}
+	}
 	sk, sv, lerr := s.sessionRef(ctx, *agent, live)
 	if lerr != nil {
 		return nil, lerr
@@ -294,6 +309,13 @@ func (s *Server) restartAgent(ctx context.Context, b restartBody, by string) (*r
 		return nil, restartRefusal(http.StatusConflict, "agent_working", "the agent is "+string(cur.Status)+"; restart it when it is idle")
 	}
 
+	if b.DryRun {
+		return &restartResult{
+			Agent:   browserAgent{ID: state.QualifiedID(s.fleet.LocalName(), agent.PaneID), Host: s.fleet.LocalName(), PaneID: agent.PaneID, Name: agent.Name, Agent: kind, Status: agent.Status, CWD: agent.CWD},
+			Session: sv, OldPID: p.oldPID, Args: p.args, ArgsFrom: p.from, DryRun: true,
+		}, nil
+	}
+
 	// End the process with its own exit.
 	text, key := restartExit(kind)
 	var serr error
@@ -307,6 +329,14 @@ func (s *Server) restartAgent(ctx context.Context, b restartBody, by string) (*r
 	}
 	deadline := time.Now().Add(s.restartWait)
 	for {
+		// Claude can answer /exit with its own "Exit and stop tasks" dialog
+		// (a background task the footer did not show). Cancel it: the agent is
+		// left as it was.
+		if kind == "claude" {
+			if le := s.cancelExitDialog(ctx, agent, by, p); le != nil {
+				return nil, le
+			}
+		}
 		// The shell is foreground again, and herdr has let go of the agent
 		// (it holds its name for a moment after the process ends: starting
 		// then fails with "agent name ... is already used").
@@ -325,6 +355,73 @@ func (s *Server) restartAgent(ctx context.Context, b restartBody, by string) (*r
 	}
 	s.restart.setPending(agent.PaneID, p)
 	return s.restartStart(ctx, agent.PaneID, p, by)
+}
+
+// footerTask finds claude's footer count of running background work: "· 1
+// shell" at the end of its last line.
+var footerTask = regexp.MustCompile(`·\s*([1-9]\d*) (shells?|monitors?)\s*$`)
+
+// screenBackgroundTask reads a claude screen for background work: a shell or
+// monitor task counted in the footer. It returns "2 shells" or "", looking
+// only at the footer, the last two lines (a turn's summary above it can still
+// say "1 shell still running" after the shell ended).
+func screenBackgroundTask(screen string) string {
+	var lines []string
+	for _, l := range strings.Split(screen, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			lines = append(lines, t)
+		}
+	}
+	if len(lines) > 2 {
+		lines = lines[len(lines)-2:]
+	}
+	for _, l := range lines {
+		if m := footerTask.FindStringSubmatch(l); m != nil {
+			return m[1] + " " + m[2]
+		}
+	}
+	return ""
+}
+
+// exitDialogOpen reports whether claude's "stop tasks on exit" dialog is on
+// screen.
+func exitDialogOpen(screen string) bool {
+	return strings.Contains(screen, "Background work is running") && strings.Contains(screen, "Exit and stop tasks")
+}
+
+func backgroundTaskMessage(what string) string {
+	if what == "" {
+		return "a background task is running in the agent; a restart would stop it"
+	}
+	return "a background task is running (" + what + "); a restart would stop it"
+}
+
+// cancelExitDialog looks for claude's exit dialog after /exit was sent. When it
+// is open the Escape key cancels it (never a confirming choice), so claude
+// keeps running as it was, and the restart is refused.
+func (s *Server) cancelExitDialog(ctx context.Context, agent *herdr.AgentInfo, by string, p *restartPending) *launchError {
+	r, err := s.client.ReadPane(ctx, agent.PaneID, "visible", 0)
+	if err != nil || !exitDialogOpen(r.Text) {
+		return nil
+	}
+	if err := s.client.SendKeys(ctx, agent.PaneID, []string{"esc"}); err != nil {
+		s.auditRestart(by, *agent, p, false, "claude's exit dialog is open and could not be cancelled: "+errMessage(err))
+		return &launchError{status: http.StatusBadGateway, code: "exit_dialog_stuck",
+			message: "a background task is running, so claude opened its exit dialog, and it could not be cancelled: " + errMessage(err) + ". Press Esc in the pane"}
+	}
+	// Wait for the dialog to go, so the pane is left clean.
+	for i := 0; i < 20; i++ {
+		select {
+		case <-ctx.Done():
+			i = 20
+		case <-time.After(s.restartPoll):
+		}
+		if r, err := s.client.ReadPane(ctx, agent.PaneID, "visible", 0); err == nil && !exitDialogOpen(r.Text) {
+			break
+		}
+	}
+	s.auditRestart(by, *agent, p, false, "a background task is running; claude's exit dialog was cancelled")
+	return restartRefusal(http.StatusConflict, "background_task", backgroundTaskMessage("")+": claude asked to stop it on exit, so the exit was cancelled")
 }
 
 // paneAgentGone reports whether herdr no longer lists an agent in the pane.
