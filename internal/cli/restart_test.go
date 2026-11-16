@@ -112,7 +112,7 @@ func TestRestartAllCommand(t *testing.T) {
 	 {"agent":"laharl/w2:p1","pane_id":"w2:p1","name":"busy","outcome":"refused","code":"agent_working","message":"x"},
 	 {"agent":"laharl/w3:p1","pane_id":"w3:p1","name":"boss","outcome":"skipped","code":"coordinator","message":"a coordinator is never restarted in bulk; restart it by name"},
 	 {"agent":"laharl/w4:p1","pane_id":"w4:p1","outcome":"restarted","old_pid":5,"new_pid":6,"flags_recovered":true}],
-	 "restarted":2,"would_restart":0,"refused":1,"failed":0,"skipped":1}`
+	 "restarted":2,"would_restart":3,"refused":1,"failed":0,"skipped":1}`
 	answers := map[string]answer{
 		"GET /api/whoami":                     {200, `{"host":"laharl","role":"agent"}`},
 		"POST /api/hosts/laharl/restart/bulk": {200, bulk},
@@ -155,7 +155,7 @@ func TestRestartAllCommand(t *testing.T) {
 		"refused  laharl/w2:p1 (busy): it is working or blocked",
 		"skipped  laharl/w3:p1 (boss): a coordinator",
 		"restarted  laharl/w4:p1: pid 5 -> 6",
-		"0 would restart, 1 refused, 0 failed, 1 skipped (4 pi agents on laharl)",
+		"3 would restart, 1 refused, 0 failed, 1 skipped (4 pi agents on laharl)",
 	} {
 		if !strings.Contains(lines[i], w) {
 			t.Errorf("line %d = %q, want %q", i, lines[i], w)

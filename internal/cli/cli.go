@@ -3412,7 +3412,11 @@ func restartAll(e *Env, kind, host string, dry, asJSON bool, login string) error
 			FlagsRecovered *bool  `json:"flags_recovered"`
 			Warning        string `json:"warning"`
 		} `json:"results"`
-		Restarted, WouldRestart, Refused, Failed, Skipped int
+		Restarted    int `json:"restarted"`
+		WouldRestart int `json:"would_restart"`
+		Refused      int `json:"refused"`
+		Failed       int `json:"failed"`
+		Skipped      int `json:"skipped"`
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
 		return err
