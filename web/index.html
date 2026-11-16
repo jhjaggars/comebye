@@ -1015,6 +1015,8 @@
       background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
     .ln-note { color: var(--muted); font-size: var(--fs-13); margin-top: var(--sp-4); overflow-wrap: anywhere; }
     .ln-note:empty { display: none; }
+    #rt .ln-note.rt-ok, #rt .ln-note.rt-err, #rt .ln-note.rt-warn { font-size: var(--fs-14); font-weight: 600; margin-top: var(--sp-12); }
+    #rt .rt-ok { color: var(--green); } #rt .rt-warn { color: var(--orange); } #rt .rt-err { color: var(--red); }
 
     /* Projects: the agent list grouped by repository. */
     .proj { margin-bottom: var(--sp-6); }
@@ -1140,18 +1142,18 @@
     @media (prefers-reduced-motion: reduce) { .pop, #sheet-bk { animation: none !important; } }
 
     /* Ready-to-remove review. */
-    #review, #switch, #mk, #fs, #pk, #ps { position: fixed; inset: 0; z-index: var(--z-screen); background: var(--bg); display: flex; flex-direction: column; }
-    #review[hidden], #switch[hidden], #mk[hidden], #fs[hidden], #pk[hidden], #ps[hidden] { display: none; }
-    #review header .back, #switch header .back, #mk header .back, #fs header .back, #pk header .back, #ps header .back {
+    #review, #switch, #mk, #fs, #pk, #ps, #rt { position: fixed; inset: 0; z-index: var(--z-screen); background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden], #switch[hidden], #mk[hidden], #fs[hidden], #pk[hidden], #ps[hidden], #rt[hidden] { display: none; }
+    #review header .back, #switch header .back, #mk header .back, #fs header .back, #pk header .back, #ps header .back, #rt header .back {
       font: inherit; font-size: var(--fs-20); line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: var(--r-10); padding: 0;
       min-width: 44px; min-height: var(--hit-44); margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #review header h2, #switch header h2, #mk header h2, #fs header h2, #pk header h2, #ps header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
+    #review header h2, #switch header h2, #mk header h2, #fs header h2, #pk header h2, #ps header h2, #rt header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
     #switch .ln-picker { margin-top: 0; }
     #switch .ln-mlist { max-height: 46vh; }
-    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #fs.busy .ln-status::before, #pk.busy .ln-status::before, #ps.busy .ln-status::before {
+    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #fs.busy .ln-status::before, #pk.busy .ln-status::before, #ps.busy .ln-status::before, #rt.busy .ln-status::before {
       content: ""; display: inline-block; width: 12px; height: 12px; margin-right: var(--sp-8); vertical-align: -1px;
       border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -3006,7 +3008,7 @@
   </section>
 
   <!-- A list row's menu -->
-  <div id="row-menu" class="attach-menu pop" role="menu" aria-label="Agent actions" hidden><div class="grab" aria-hidden="true"><i></i></div><div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div><button type="button" role="menuitem" id="row-transcript">View transcript</button><button type="button" role="menuitem" id="row-park" hidden>Park… (close it, keep its worktree and session)</button><button type="button" role="menuitem" id="row-mark"></button></div>
+  <div id="row-menu" class="attach-menu pop" role="menu" aria-label="Agent actions" hidden><div class="grab" aria-hidden="true"><i></i></div><div class="pop-head"><span class="pop-title">Agent</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div><button type="button" role="menuitem" id="row-transcript">View transcript</button><button type="button" role="menuitem" id="row-park" hidden>Park… (close it, keep its worktree and session)</button><button type="button" role="menuitem" id="row-restart" hidden>Restart… (same pane, same conversation)</button><button type="button" role="menuitem" id="row-mark"></button></div>
 
   <!-- Mark one session ready to remove (optional reason) -->
   <section id="mk" hidden role="dialog" aria-modal="true" aria-labelledby="mk-title">
@@ -3058,6 +3060,23 @@
     <footer class="ln-foot">
       <div class="ln-status" id="ps-status" aria-live="polite"></div>
       <button type="button" class="btn ln-go" id="ps-go">Park</button>
+    </footer>
+  </section>
+
+  <!-- Restart an idle agent in its own pane, on the same session -->
+  <section id="rt" hidden role="dialog" aria-modal="true" aria-labelledby="rt-title">
+    <header>
+      <button type="button" class="back" id="rt-close" aria-label="Close">&#10005;</button>
+      <h2 id="rt-title">Restart</h2>
+    </header>
+    <div class="ln-body">
+      <div class="rv-name" id="rt-name"></div>
+      <div class="ln-note" id="rt-note">Ends this agent&rsquo;s program and starts it again in the same pane, on the same conversation. Use it to pick up a changed key or setting. Anything running in the background stops, and a loop or wakeup it had scheduled ends. It only works while the agent is idle.</div>
+      <div class="ln-note" id="rt-result" aria-live="polite"></div>
+    </div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="rt-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="rt-go">Restart</button>
     </footer>
   </section>
 

@@ -118,6 +118,7 @@ if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ;
 if want decisionsets; then node decisionsets.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want chatswitch; then node chatswitch.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want restart; then node restart.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want notes; then node notes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

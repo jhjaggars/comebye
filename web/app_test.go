@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -344,5 +345,49 @@ func TestKeysScriptLoadsAfterApp(t *testing.T) {
 	}
 	if regexp.MustCompile(`https?://`).Match(src) {
 		t.Error("keys.js names an absolute URL; everything must come from this origin")
+	}
+}
+
+// canRestart decides whether the row menu offers "Restart…". The function is cut out of app.js and run in
+// Node with the coordinator test stubbed, so the app's own code is what is checked.
+func TestCanRestart(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := regexp.MustCompile(`(?m)^const RESTART_KINDS = .*;$`).Find(src)
+	fn := regexp.MustCompile(`(?s)\nfunction canRestart\(a\) \{.*?\n\}\n`).Find(src)
+	if kinds == nil || fn == nil {
+		t.Fatal("RESTART_KINDS or canRestart not found in app.js")
+	}
+	js := string(kinds) + "\nconst isCoordinator = (a) => !!a && a.coord === true;\n" + string(fn) + `
+const cases = [
+  [{ agent: "claude", agent_status: "idle", name: "w" }, true],
+  [{ agent: "claude", agent_status: "done", name: "w" }, true],
+  [{ agent: "pi", agent_status: "idle", name: "w" }, true],
+  [{ agent: "opencode", agent_status: "done", name: "w" }, true],
+  [{ agent: "claude", agent_status: "idle" }, true], // unnamed: the hub names it for the moment
+  [{ agent: "claude", agent_status: "working", name: "w" }, false],
+  [{ agent: "claude", agent_status: "blocked", name: "w" }, false],
+  [{ agent: "claude", agent_status: "unknown", name: "w" }, false],
+  [{ agent: "codex", agent_status: "idle", name: "w" }, false],
+  [{ agent: "", agent_status: "idle", name: "w" }, false],
+  [{ agent: "claude", agent_status: "idle", name: "c", coord: true }, false],
+  [null, false],
+  [undefined, false],
+];
+const bad = cases.filter(([a, want]) => canRestart(a) !== want).map(([a]) => JSON.stringify(a));
+console.log(JSON.stringify(bad));
+`
+	out, err := exec.Command(node, "-e", js).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "[]" {
+		t.Fatalf("canRestart gave the wrong answer for: %s", out)
 	}
 }

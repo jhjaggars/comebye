@@ -3987,6 +3987,109 @@ async function submitMark() {
   await loadLedger();
 }
 
+/* ---------- restart in place: end the agent's program and start it again in its pane ---------- */
+//
+// POST /api/hosts/{host}/restart (internal/server/restart.go). Only an idle or done agent of a kind the hub can
+// start again. The hub refuses, and closes nothing, for a working agent, a background task, an open dialog
+// and (claude) a scheduled loop or wakeup; those come back as plain sentences, shown in the sheet.
+const RESTART_KINDS = ["claude", "pi", "opencode"];
+// canRestart: like canPark, but an unnamed agent can be restarted too (the hub names it for the moment).
+function canRestart(a) {
+  return !!a && RESTART_KINDS.includes(a.agent) && (a.agent_status === "idle" || a.agent_status === "done") && !isCoordinator(a);
+}
+
+// The sentences for the refusals; any other code shows the hub's own message.
+const RESTART_REFUSALS = {
+  agent_working: "It is working; restart it when it is idle",
+  background_task: "A background task is running, and a restart would stop it. Restart it when that has finished",
+  dialog_open: "A dialog is open in its pane; answer it first",
+  kind_not_restartable: "Only claude, pi and opencode agents can be restarted",
+  restart_running: "A restart of this pane is already under way",
+};
+function restartRefusalText(err) {
+  const known = RESTART_REFUSALS[err.code];
+  if (known) return known;
+  const m = String(err.message || "Could not restart");
+  return m.charAt(0).toUpperCase() + m.slice(1);
+}
+
+const rt = { open: false, id: "", busy: false, force: false, done: false };
+
+function openRestart(id) {
+  if (rt.open) return;
+  const a = agentById(id);
+  if (!canRestart(a)) return;
+  Object.assign(rt, { open: true, id, busy: false, force: false, done: false });
+  history.pushState({ restart: true }, "", location.href);
+  $("rt-name").textContent = a.name || a.pane_id || id;
+  $("rt-result").textContent = "";
+  $("rt-result").className = "ln-note";
+  $("rt-status").textContent = "";
+  $("rt-go").textContent = "Restart";
+  $("rt-go").disabled = false;
+  $("rt").classList.remove("busy");
+  $("rt").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("rt-go").focus();
+}
+
+function hideRestart() {
+  rt.open = false;
+  $("rt").hidden = true;
+  document.body.classList.remove("sheet-open");
+  maybeReload();
+}
+
+function closeRestart() {
+  if (rt.busy) return;
+  if (history.state && history.state.restart) history.back();
+  else hideRestart();
+}
+
+function syncRestart() {
+  if (rt.open && !(history.state && history.state.restart)) hideRestart();
+}
+
+async function submitRestart() {
+  if (rt.busy) return;
+  if (rt.done) { closeRestart(); return; }
+  const a = agentById(rt.id);
+  if (!a) { $("rt-status").textContent = "That agent is gone"; return; }
+  rt.busy = true;
+  $("rt").classList.add("busy");
+  $("rt-go").disabled = true;
+  $("rt-result").textContent = "";
+  $("rt-status").textContent = "Ending it and starting it again… this takes up to half a minute";
+  try {
+    const body = { agent: a.pane_id, name: a.name || "" };
+    if (rt.force) body.force_schedule = true;
+    const d = await api(`/api/hosts/${encodeURIComponent(a.host)}/restart`, { method: "POST", body: JSON.stringify(body), timeout: 60000 });
+    rt.busy = false; rt.done = true;
+    $("rt").classList.remove("busy");
+    $("rt-status").textContent = "";
+    const parts = ["Restarted in the same pane, on the same conversation."];
+    if (d && d.args_from === "session") parts.push("Its start flags could not be recovered, so it came back with the conversation alone: a model or setting it was started with may need setting again.");
+    if (d && d.warning) parts.push(d.warning);
+    $("rt-result").textContent = parts.join(" ");
+    $("rt-result").className = "ln-note rt-ok" + (d && d.args_from === "session" ? " rt-warn" : "");
+    $("rt-go").textContent = "Done";
+    $("rt-go").disabled = false;
+    $("rt-go").focus();
+  } catch (e) {
+    rt.busy = false;
+    $("rt").classList.remove("busy");
+    $("rt-status").textContent = "";
+    $("rt-result").textContent = restartRefusalText(e);
+    $("rt-result").className = "ln-note rt-err";
+    // A loop or wakeup is the user's call: offer to restart anyway, which ends it.
+    if (e.code === "schedule_pending" || e.code === "schedule_uncertain") {
+      rt.force = true;
+      $("rt-go").textContent = "Restart anyway";
+    }
+    $("rt-go").disabled = false;
+  }
+}
+
 /* ---------- fresh start: clear the coordinator's context in place ---------- */
 //
 // The hub sends /clear into the coordinator's pane and a SessionStart hook
@@ -4082,6 +4185,7 @@ function openRowMenu(btn) {
   menu.dataset.id = id;
   $("row-transcript").dataset.hash = rcWorkHash(id);
   $("row-park").hidden = !canPark(agentById(id));
+  $("row-restart").hidden = !canRestart(agentById(id));
   $("row-mark").textContent = ledger.marked.has(id) ? "Unmark (keep this session)" : "Mark ready to remove…";
   menu.hidden = false;
   popOpened("row");
@@ -7392,6 +7496,7 @@ function route() {
   syncSubview();
   syncLaunch();
   syncMark();
+  syncRestart();
   syncParkSheet();
   syncParkAll();
   syncSplit();
@@ -13337,6 +13442,10 @@ window.addEventListener("DOMContentLoaded", () => {
     if (b.dataset.mb === "unmark") unmarkAgent(state.selected);
   });
   $("row-mark").addEventListener("click", rowMenuMark);
+  $("row-restart").addEventListener("click", () => { const id = $("row-menu").dataset.id; closeRowMenu(); if (id) openRestart(id); });
+  $("rt-close").addEventListener("click", closeRestart);
+  $("rt-go").addEventListener("click", submitRestart);
+  $("rt").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeRestart(); } });
   $("row-park").addEventListener("click", () => { const id = $("row-menu").dataset.id; closeRowMenu(); if (id) parkAgentUI(id); });
   $("ps-close").addEventListener("click", closeParkAll);
   $("ps-go").addEventListener("click", submitParkAll);
