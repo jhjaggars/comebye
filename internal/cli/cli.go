@@ -83,6 +83,7 @@ func init() {
 		{"deliver", "[AGENT] PAGE… [--not-captured TEXT] [--json]", "record the Pages (pg_… ids from `publish`) that capture an agent's work; yours by default. When the agent is marked --discard, its uncommitted notes and local commits then show as captured in the removal review, and the user discards every such session with one confirmation", cmdDeliver},
 		{"scratch", "[--dry-run] [--json]", "prune this host's temporary directory: scratchpads whose worktree is gone, and old tmp.* / hl.* directories of yours (never a live agent's; --dry-run lists what would go and its size)", cmdScratch},
 		{"park", "AGENT [--dirty] [--login L] [--json]", "close an idle agent but keep its worktree, branch and session, and write a park record on its host (claude, pi, opencode); --dirty confirms parking a worktree with uncommitted edits, which stay in place. Bring it back with `resume`", cmdPark},
+		{"restart", "AGENT [--force-schedule] [--login L] [--json]", "restart an idle agent in its own pane on the same session, keeping its flags where they can be read (claude, pi, opencode); use it after a key or config change a running agent does not pick up", cmdRestart},
 		{"parked", "[--host H] [--all] [--json]", "the agents parked on a host (this one by default); --all includes the resumed ones, kept 30 days as history", cmdParked},
 		{"resume", "ID|NAME [--host H] [--no-note] [--login L] [--json]", "start a parked agent again: a new pane in the same worktree on its own session (claude --resume, pi --session, opencode -s), its scratchpad moved back, and a catch-up note", cmdResume},
 		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
@@ -3263,4 +3264,101 @@ func parkedTarget(c *client, arg string) (target, bool) {
 		return target{}, false
 	}
 	return hit[0], true
+}
+
+// restartRefusals say, in a plain sentence, why the host would not restart an
+// agent; the code is the one POST /api/restart answers with.
+var restartRefusals = map[string]string{
+	"agent_working":        "it is working or blocked on a question; try again when it is idle",
+	"background_task":      "it has a background task running, which a restart would kill",
+	"dialog_open":          "a dialog is open in its pane; answer it first",
+	"input_busy":           "something is typed at its prompt; clear it first",
+	"schedule_pending":     "its session has a loop or wakeup scheduled, which a restart ends; add --force-schedule to restart anyway",
+	"schedule_uncertain":   "its session could not be read for a loop or wakeup; add --force-schedule to restart anyway",
+	"no_session":           "it has no known session to come back on",
+	"kind_not_restartable": "only claude, pi and opencode agents can be restarted",
+	"not_restartable":      "its launch cannot be repeated",
+	"args_unknown":         "its command line could not be read, so its flags cannot be kept",
+	"agent_changed":        "another agent runs in that pane now",
+	"no_such_agent":        "no agent runs in that pane",
+	"restart_running":      "a restart of that pane is already under way",
+	"exit_not_confirmed":   "it did not leave in time; it is still running (nothing was killed)",
+	"exit_failed":          "the exit could not be sent to it",
+	"start_failed":         "the old process ended but the new one did not start; send the same restart again to carry on",
+	"herdr_error":          "herdr could not be reached to check the pane",
+}
+
+// cmdRestart ends an idle agent and starts it again in the same pane.
+func cmdRestart(e *Env, args []string) error {
+	fs := flag.NewFlagSet("restart", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	force := fs.Bool("force-schedule", false, "restart even though the session has a loop or wakeup scheduled (a restart ends it)")
+	login := fs.String("login", "", "the Tailscale login to act as (default $COMEBYE_LOGIN, else the first of $COMEBYE_TS_ALLOW_LOGIN)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want one AGENT")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	// Restarting an agent is the user's alone: the call goes out as the user's login.
+	if c.user = peerLogin(e, *login); c.user == "" {
+		return usageErr("restart needs the user's login: pass --login you@example.com (or set COMEBYE_LOGIN)")
+	}
+	t, err := c.resolve(pos[0])
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/hosts/"+url.PathEscape(t.Host)+"/restart", nil, map[string]any{"agent": t.Pane, "name": t.Name, "force_schedule": *force})
+	if err != nil {
+		var ae *apiError
+		if errors.As(err, &ae) {
+			if why, ok := restartRefusals[ae.code]; ok {
+				return fmt.Errorf("not restarted: %s: %s", pos[0], why)
+			}
+			if ae.status == http.StatusGatewayTimeout {
+				return fmt.Errorf("%s did not leave in time; it was left running (%s)", pos[0], ae.message)
+			}
+		}
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Agent struct {
+			ID     string `json:"id"`
+			PaneID string `json:"pane_id"`
+			Name   string `json:"name"`
+		} `json:"agent"`
+		Session  string   `json:"session"`
+		OldPID   int      `json:"old_pid"`
+		NewPID   int      `json:"new_pid"`
+		Args     []string `json:"args"`
+		ArgsFrom string   `json:"args_from"`
+		Warn     string   `json:"warning"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	who := r.Agent.Name
+	if who == "" {
+		who = r.Agent.PaneID
+	}
+	fmt.Fprintf(e.Stdout, "Restarted %s in pane %s on session %s", who, r.Agent.ID, r.Session)
+	if r.OldPID != 0 || r.NewPID != 0 {
+		fmt.Fprintf(e.Stdout, " (pid %d -> %d)", r.OldPID, r.NewPID)
+	}
+	fmt.Fprintln(e.Stdout, ".")
+	if r.ArgsFrom == "session" {
+		fmt.Fprintln(e.Stdout, "Its launch flags could not be recovered: it came back on the same session alone, so flags such as a model or system prompt may need setting again.")
+	}
+	if r.Warn != "" {
+		fmt.Fprintf(e.Stdout, "Warning: %s\n", r.Warn)
+	}
+	return nil
 }
