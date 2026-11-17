@@ -31,6 +31,7 @@ const (
 	laneWaiting = "waiting"
 	laneLanding = "landing"
 	laneLanded  = "landed"
+	laneHubDid  = "hub_did"
 )
 
 // BoardItem is one line of a lane.
@@ -315,6 +316,9 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 
 	view.At = now.UTC()
 	view.Lanes = []BoardLane{*needs, *running, *waiting, *landing, *landed}
+	if l := s.hubDidLane(now); l != nil {
+		view.Lanes = append(view.Lanes, *l)
+	}
 	if b, err := s.brief.get(); err == nil && b != nil && strings.TrimSpace(b.Markdown) != "" {
 		at := b.At
 		view.BriefAt, view.BriefBy = &at, b.By
@@ -335,4 +339,23 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, view)
+}
+
+// hubDidLane is the "Hub did" lane: what the hub handled itself in the last
+// 24 hours (events.go), as a count and the newest lines. Nil when there is
+// nothing, so a quiet day shows no lane.
+func (s *Server) hubDidLane(now time.Time) *BoardLane {
+	evs := s.events.query(now.Add(-hubDidWindow), nil, 0)
+	if len(evs) == 0 {
+		return nil
+	}
+	l := &BoardLane{Key: laneHubDid, Name: "Hub did", Count: len(evs), Items: []BoardItem{},
+		Rule: "What the hub handled itself in the last 24 hours (landed work, automatic parks and removals, cleanups, dialogs that cleared): a count and the newest five. `comebye log` lists them all."}
+	for i, ev := range evs {
+		if i >= hubDidLines {
+			break
+		}
+		l.Items = append(l.Items, BoardItem{ID: ev.ID, Type: "event", Title: ev.Text, Kind: ev.Kind, Since: ev.At.UTC().Format(time.RFC3339), Project: "Hub"})
+	}
+	return l
 }

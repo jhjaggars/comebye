@@ -16,7 +16,7 @@ import (
 func landedGreen(t *testing.T) (*Server, landedRepo, ledger.Entry) {
 	t.Helper()
 	s, r, e, _ := landingFix(t)
-	s.outbox = openOutbox("")
+	s.events = openEvents("")
 	s.askPoll, s.askWait = 10*time.Millisecond, 100*time.Millisecond
 	t.Cleanup(s.asking.Wait)
 	land(t, s, `{"agent_id":"desk/w2:p1","note":"ok"}`)
@@ -47,9 +47,9 @@ func TestAutoCleanupMarksLandedGreenDeletedClean(t *testing.T) {
 	if g.Status != ledger.ReadyToRemove || g.Mark == nil || g.Mark.By != AutoCreator || g.Mark.Reason == "" || g.Mark.Ask == nil {
 		t.Fatalf("not marked: %s %+v", g.Status, g.Mark)
 	}
-	ls := s.outbox.pending()
-	if len(ls) != 1 || ls[0].Kind != "cleanup" || !strings.Contains(ls[0].Text, "marked it ready to remove") || !strings.Contains(ls[0].Text, e.ID) {
-		t.Fatalf("outbox = %+v", ls)
+	ls := s.events.query(time.Time{}, []string{"cleanup"}, 0)
+	if len(ls) != 1 || !strings.Contains(ls[0].Text, "marked it ready to remove") || !strings.Contains(ls[0].Text, e.ID) {
+		t.Fatalf("events = %+v", ls)
 	}
 	// Marked once: it is no longer a candidate.
 	if autoCleanCandidate(g, time.Now()) {
@@ -63,7 +63,7 @@ func TestAutoCleanupLeavesUncertainEntries(t *testing.T) {
 	git(t, r.repo, "branch", "-q", "w", "main")
 	git(t, r.repo, "push", "-q", "origin", "w")
 	s.autoCleanOne(e)
-	if g, _ := s.ledger.Get(e.ID); g.Status != ledger.Landed || len(s.outbox.pending()) != 0 {
+	if g, _ := s.ledger.Get(e.ID); g.Status != ledger.Landed || len(s.events.query(time.Time{}, nil, 0)) != 0 {
 		t.Fatalf("marked with the remote branch still there: %s", g.Status)
 	}
 	// A dirty worktree.

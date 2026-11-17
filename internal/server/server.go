@@ -174,9 +174,8 @@ type Config struct {
 	// queue before the slot is released and its coordinator told (0: the
 	// default, 45 minutes; negative: never). Hub only.
 	LandTurnTimeout time.Duration
-	// DigestEvery is how long routine coordinator notices (landed,
-	// finished with no decisions, cleanup lines) wait to go out together in
-	// one digest; 0 sends each as it comes. Urgent notices are never held.
+	// DigestEvery is retired: the digest message is gone, and routine hub
+	// notices are events (events.go). Kept so the flag still parses.
 	DigestEvery time.Duration
 	// AutoRemove lets the hub remove a worker marked ready to remove, without
 	// the user's tap, when every check is clean (see autoremove.go). Hub only.
@@ -295,10 +294,9 @@ type Server struct {
 	gpgMu          sync.Mutex
 	approvals      *approvalStore
 	reg            regState
-	outbox         *outbox
-	sent           *sentStore // what the hub already told whom (sent.go)
+	events         *eventStore // what the hub handled itself (events.go)
+	sent           *sentStore  // what the hub already told whom (sent.go)
 	digests        *digestStore
-	digestEvery    time.Duration
 	autoRemove     bool
 	auto           *autoTodo
 	relay          *blockedRelay
@@ -450,10 +448,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				s.rollout.tickEvery = TestPollMs * time.Millisecond
 				s.rollout.soak = time.Second
 			}
-			s.outbox = openOutbox(outboxPath(cfg.StateDir))
+			s.events = openEvents(eventsPath(cfg.StateDir))
+			s.migrateOutbox(cfg.StateDir)
 			s.sent = openSent(sentPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
-			s.digestEvery = cfg.DigestEvery
 			s.autoRemove = cfg.AutoRemove
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
 			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
@@ -686,6 +684,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/release/deploy", s.auth(s.handlePeerDeployStatus))
 	s.mux.HandleFunc("GET /api/releases", s.auth(s.handleReleases))
 	s.mux.HandleFunc("GET /api/board", s.authAgent(s.handleBoard))
+	s.mux.HandleFunc("GET /api/log", s.authAgent(s.handleLog))
 	s.mux.HandleFunc("GET /api/release/{id}", s.auth(s.handleReleaseView))
 	s.mux.HandleFunc("POST /api/release/{id}/approve", s.auth(s.handleReleaseApprove))
 	s.mux.HandleFunc("POST /api/release/{id}/dismiss", s.auth(s.handleReleaseDismiss))

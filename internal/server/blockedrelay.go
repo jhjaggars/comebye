@@ -65,6 +65,10 @@ const (
 	// relayTTL drops a notice that could not be delivered this long after
 	// it was decided on (the coordinator stayed busy, or is gone).
 	relayTTL = 30 * time.Minute
+	// relayEscalate is how long an agent must stay blocked, with no to-do
+	// for it, before the coordinator is sent a message. Until then the hub
+	// only logs the episode (an event, and the board's Needs you lane).
+	relayEscalate = 30 * time.Minute
 	// relayRetry spaces the attempts to deliver one notice.
 	relayRetry = 15 * time.Second
 	// relayRefresh is how often a blocked agent's dialog is read again
@@ -124,6 +128,9 @@ type relayEp struct {
 
 type blockedRelay struct {
 	delay time.Duration
+	// escalate is how long an agent stays blocked, with no to-do for it,
+	// before the coordinator is messaged (relayEscalate).
+	escalate time.Duration
 
 	mu       sync.Mutex
 	dialogs  map[string]*dlgState
@@ -141,7 +148,7 @@ func (s *Server) initBlockedRelay(delay time.Duration) {
 		return
 	}
 	s.relay = &blockedRelay{
-		delay: delay, dialogs: map[string]*dlgState{}, eps: map[string]*relayEp{}, lastOpen: map[string]time.Time{},
+		delay: delay, escalate: relayEscalate, dialogs: map[string]*dlgState{}, eps: map[string]*relayEp{}, lastOpen: map[string]time.Time{},
 		readDialog: s.autoReadDialog,
 		send:       s.promptNotice,
 		changed:    func() { s.fleet.Changed() },
@@ -299,6 +306,7 @@ func (s *Server) relayStep(agents []herdr.AgentInfo, now time.Time) {
 					} else if last, ok := r.lastOpen[id]; !ok || now.Sub(last) >= relayGap {
 						ep.owed, ep.owedAt = true, now
 						r.lastOpen[id] = now
+						s.logEvent(evBlocked, ep.entryID, ep.name, ep.id+"/"+ep.since.UTC().Format(time.RFC3339), s.blockedEventText(ep))
 					}
 				}
 			}
@@ -316,10 +324,15 @@ func (s *Server) relayStep(agents []herdr.AgentInfo, now time.Time) {
 					end = now
 				}
 				ep.ended = &end
-				if ep.owed && s.relayCovered(ep, false) == "" {
+				if ep.owed {
+					s.logEvent(evUnblocked, ep.entryID, ep.name, ep.id+"/"+ep.since.UTC().Format(time.RFC3339), s.unblockedEventText(ep, end))
+				}
+				// The coordinator is told it cleared only if it was told
+				// the agent was blocked.
+				if ep.owed && ep.openSent && s.relayCovered(ep, false) == "" {
 					ep.clearOwed = true
 				}
-				if !ep.owed {
+				if !ep.clearOwed {
 					ep.done = true
 				}
 			}
@@ -418,6 +431,21 @@ func (s *Server) relayDeliver(byID map[string]herdr.AgentInfo, now time.Time) {
 		if ep.openSent && !ep.clearOwed {
 			continue
 		}
+		if !ep.openSent {
+			// A blocked agent is an event first; the coordinator gets a
+			// message only when it stays blocked with nobody told the user.
+			due := ep.since.Add(r.escalate)
+			if now.Before(due) {
+				continue
+			}
+			if why := s.relayCovered(ep, true); why != "" {
+				ep.owed, ep.skipReason = false, why
+				continue
+			}
+			if due.After(ep.owedAt) {
+				ep.owedAt = due
+			}
+		}
 		if now.Sub(ep.owedAt) > relayTTL {
 			log.Printf("blocked relay: dropped the notice for %s: undelivered for %s", ep.id, relayTTL)
 			ep.done = true
@@ -465,6 +493,21 @@ func (s *Server) relaySend(ep *relayEp, to herdr.AgentInfo, text string, clearin
 	if ep.ended != nil && !ep.clearOwed {
 		ep.done = true
 	}
+}
+
+// blockedEventText and unblockedEventText are the log lines of an episode.
+func (s *Server) blockedEventText(ep *relayEp) string {
+	t := fmt.Sprintf("%s (handoff %s, branch %s in %s on %s) is waiting on the user at a dialog since %s",
+		safeText(ep.name), safeText(ep.entryID), safeText(ep.branch), safeText(ep.repo), safeText(ep.host), ep.since.Local().Format("15:04:05"))
+	if ep.info.Label != "" {
+		t += ": " + mdSafe(ep.info.Label)
+	}
+	return t + "."
+}
+
+func (s *Server) unblockedEventText(ep *relayEp, end time.Time) string {
+	return fmt.Sprintf("%s (handoff %s) is no longer blocked: its dialog cleared after %s.",
+		safeText(ep.name), safeText(ep.entryID), roundSeconds(end.Sub(ep.since)))
 }
 
 func (s *Server) relayLink(a herdr.AgentInfo) string {

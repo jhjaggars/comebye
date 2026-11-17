@@ -29,6 +29,7 @@ const (
 	todoBudget    = 4 << 10
 	handoffBudget = 4 << 10
 	eventBudget   = 3 << 10
+	hubBudget     = 2 << 10
 )
 
 // LaneItem is one line of a board lane.
@@ -94,6 +95,13 @@ type Event struct {
 	Text string
 }
 
+// HubEvent is one thing the hub handled itself (comebye log).
+type HubEvent struct {
+	At   time.Time
+	Kind string
+	Text string
+}
+
 // Input is everything a digest is made of. The caller gathers it; Build
 // only shapes it, so it is testable without a hub.
 type Input struct {
@@ -105,6 +113,9 @@ type Input struct {
 	Todos    []Todo
 	Handoffs []Handoff
 	Events   []Event
+	// Hub is what the hub handled itself since the last reset (newest
+	// first): these notices were not typed into the pane.
+	Hub []HubEvent
 	// LastReset is when the coordinator was last reset (zero: never).
 	LastReset time.Time
 	// StateTail is the end of the coordinator's state file; StatePath is
@@ -139,6 +150,9 @@ func Build(in Input) string {
 	b.WriteString(section("## Open to-dos", todos(in), todoBudget))
 	b.WriteString(section("## Running and landing handoffs", handoffs(in), handoffBudget))
 	b.WriteString(section("## Ledger events since the last reset", events(in), eventBudget))
+	if len(in.Hub) > 0 {
+		b.WriteString(section("## The hub handled since your last turn", hubDid(in), hubBudget))
+	}
 
 	head := b.String()
 	// The state tail takes what is left, up to its own limit.
@@ -244,6 +258,38 @@ func events(in Input) string {
 	for _, e := range es {
 		out = append(out, fmt.Sprintf("- %s ago: %s", Age(e.At, in.Now), oneLine(e.Text, 160)))
 	}
+	return strings.Join(out, "\n")
+}
+
+// hubDidLines is how many of the newest hub events the digest lists.
+const hubDidLines = 8
+
+// hubDid is the counts by kind, the newest lines and where the rest is.
+func hubDid(in Input) string {
+	hs := append([]HubEvent(nil), in.Hub...)
+	sort.SliceStable(hs, func(i, j int) bool { return hs[i].At.After(hs[j].At) })
+	counts := map[string]int{}
+	var kinds []string
+	for _, h := range hs {
+		if counts[h.Kind] == 0 {
+			kinds = append(kinds, h.Kind)
+		}
+		counts[h.Kind]++
+	}
+	sort.Strings(kinds)
+	var parts []string
+	for _, k := range kinds {
+		parts = append(parts, fmt.Sprintf("%d %s", counts[k], k))
+	}
+	var out []string
+	out = append(out, fmt.Sprintf("%d things, handled without a message to you: %s.", len(hs), strings.Join(parts, ", ")))
+	for i, h := range hs {
+		if i >= hubDidLines {
+			break
+		}
+		out = append(out, fmt.Sprintf("- %s ago [%s] %s", Age(h.At, in.Now), h.Kind, oneLine(h.Text, 160)))
+	}
+	out = append(out, "`comebye log --since 24h` for the rest.")
 	return strings.Join(out, "\n")
 }
 

@@ -13,6 +13,16 @@ import (
 
 const maxDigestHistory = 100
 
+// outLine is one routine line of a digest an older hub sent. New routine
+// lines are events (events.go); the history keeps what was sent.
+type outLine struct {
+	Key   string    `json:"key"`
+	Kind  string    `json:"kind"`
+	Entry string    `json:"entry,omitempty"`
+	Text  string    `json:"text"`
+	At    time.Time `json:"at"`
+}
+
 // Digest is one sent batch of routine lines.
 type Digest struct {
 	At    time.Time `json:"at"`
@@ -62,11 +72,6 @@ func (d *digestStore) all() []Digest {
 	defer d.mu.Unlock()
 	d.load()
 	return append([]Digest{}, d.list...)
-}
-
-// recordDigest keeps what was sent.
-func (s *Server) recordDigest(to string, lines []outLine) {
-	s.digests.add(Digest{At: time.Now().UTC(), To: to, Lines: lines})
 }
 
 // handleGetDigests answers {digests: [...]}, newest first.

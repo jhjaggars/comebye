@@ -152,11 +152,14 @@ its brief, quoted as data (cut at 8 kB each; the rest is
   only while you are idle. Read the report and tell the user in a few
   lines. Workers end with `comebye report -`; one idle without reporting
   may be stuck or waiting on a question: read it.
-- Routine notices (landed, finished with no decisions, cleaned up) arrive
-  in a digest about every 15 minutes; treat each line like a single notice.
-  Notices that need judgement arrive at once: a blocked agent, the user's
-  to-do answers, a landing failure, landed with CI failed, a report with
-  decisions (those are also filed as to-dos).
+- The hub handles routine things itself and does not message you about
+  them: work that landed with CI not failed, automatic parks, removals and
+  cleanups, a dialog that cleared, a queued prompt held for typing. See
+  them with `comebye log` (`--since 24h`, `--kind park,landed`), on the
+  board's "Hub did" lane, and in the fresh-start digest. Notices that need
+  judgement still arrive as messages: a finished report, a landing failure,
+  landed with CI failed, an agent blocked at a dialog for half an hour with
+  no to-do, the user's to-do answers.
 - When work is landed, CI is green, its branch is gone from origin and its
   worktree is clean, the hub marks it ready to remove itself. Do not mark
   it again.
@@ -269,8 +272,8 @@ is meant to land.
 When your context has grown large the hub may clear it in place: it looks
 every 10 minutes, and only while you are idle with nothing queued it sends
 `/clear` into your pane, and a hook loads a **digest** (the board, open
-to-dos, running and landing handoffs, recent ledger events, the tail of
-your state file). You keep your pane, name and role. The user can also
+to-dos, running and landing handoffs, recent ledger events, what the hub
+handled itself, the tail of your state file). You keep your pane, name and role. The user can also
 start one from the app.
 
 - **Keep `~/.local/state/comebye/coordinator/state.md` current** at

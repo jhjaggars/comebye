@@ -592,7 +592,6 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 	s.evalPlans()
 	s.rebindParked(agents)
 	defer s.deliverCallbacks(agents)
-	defer s.flushOutbox(agents)
 	defer s.autoCleanup(agents)
 	defer s.deliverQueue(agents)
 	defer s.deliverTodoNotices(agents)
@@ -661,14 +660,13 @@ func (s *Server) RunLedger(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			// Timed work that no fleet update triggers: the outbox, and the
-			// look at landed entries.
+			// Timed work that no fleet update triggers: the look at landed
+			// entries.
 			agents := s.fleet.Agents()
 			s.autoCleanup(agents)
 			if s.autoRemove {
 				go s.autoRemoveStep(ctx, time.Now())
 			}
-			s.flushOutbox(agents)
 		case ev, ok := <-events:
 			if !ok {
 				return

@@ -225,6 +225,13 @@ func buildDigest(e *Env, harness string) (string, []string) {
 				}
 			}
 			in.Handoffs, in.Events = ledgerDigest(lg, since)
+			if evs, err := getLog(c, since.Format(time.RFC3339), "", 100); err != nil {
+				problems = append(problems, "hub log")
+			} else {
+				for _, ev := range evs {
+					in.Hub = append(in.Hub, digest.HubEvent{At: ev.At, Kind: ev.Kind, Text: ev.Text})
+				}
+			}
 		}
 	}
 	// The coordinator's own notes, and the memory index it loads.

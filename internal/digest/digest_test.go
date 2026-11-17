@@ -130,3 +130,38 @@ func TestAge(t *testing.T) {
 		}
 	}
 }
+
+func TestHubDidSection(t *testing.T) {
+	in := full()
+	for i := 0; i < 12; i++ {
+		kind := "park"
+		if i%3 == 0 {
+			kind = "landed"
+		}
+		in.Hub = append(in.Hub, HubEvent{At: now.Add(-time.Duration(i+1) * time.Minute), Kind: kind, Text: fmt.Sprintf("event number %d", i)})
+	}
+	out := Build(in)
+	i := strings.Index(out, "## The hub handled since your last turn")
+	if i < 0 {
+		t.Fatalf("no section:\n%s", out)
+	}
+	sec := out[i:]
+	if j := strings.Index(sec[3:], "\n## "); j >= 0 {
+		sec = sec[:j+3]
+	}
+	for _, want := range []string{"12 things", "4 landed, 8 park", "- 1m ago [landed] event number 0", "event number 7", "`comebye log --since 24h` for the rest"} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("section lacks %q:\n%s", want, sec)
+		}
+	}
+	if strings.Contains(sec, "event number 8") {
+		t.Errorf("more than 8 lines:\n%s", sec)
+	}
+	if len(sec) > hubBudget+200 {
+		t.Errorf("section is %d bytes", len(sec))
+	}
+	// Nothing handled: no section.
+	if strings.Contains(Build(full()), "The hub handled") {
+		t.Error("an empty section is shown")
+	}
+}

@@ -75,7 +75,7 @@ func workerFix(t *testing.T) (*Server, landedRepo, ledger.Entry) {
 		}
 	})
 	s.autoRemove = true
-	s.outbox = openOutbox("")
+	s.events = openEvents("")
 	s.askPoll, s.askWait = 10*time.Millisecond, 100*time.Millisecond
 	t.Cleanup(s.asking.Wait)
 	e, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: r.repo, RepoName: "proj", Branch: "w", Base: "main", Kind: "pi", AgentID: arAgent, PaneID: "w2:p1", AgentName: "home", WorkspaceID: "w2", Worktree: r.wt, Status: ledger.Running, ReplyTo: &ledger.Ref{AgentID: "desk/w1:p1"}})
@@ -132,7 +132,7 @@ func stays(t *testing.T, s *Server, r landedRepo, what string) {
 	if _, err := os.Stat(r.wt); err != nil {
 		t.Fatalf("%s: worktree gone: %v", what, err)
 	}
-	if n := len(s.outbox.pending()); n != 0 {
+	if n := len(s.events.query(time.Time{}, nil, 0)); n != 0 {
 		t.Fatalf("%s: %d digest lines", what, n)
 	}
 }
@@ -165,9 +165,9 @@ func TestAutoRemoveHappyPath(t *testing.T) {
 	if !audited {
 		t.Fatalf("no audit entry: %+v", s.ledger.AuditLog(""))
 	}
-	ls := s.outbox.pending()
+	ls := s.events.query(time.Time{}, []string{"autoremove"}, 0)
 	if len(ls) != 1 || ls[0].Text != "removed home automatically: landed, clean, SAFE." {
-		t.Fatalf("digest = %+v", ls)
+		t.Fatalf("events = %+v", ls)
 	}
 	// The review lists it, with an Undo.
 	w := do(s, "GET", "/api/removals", userHdr, "")

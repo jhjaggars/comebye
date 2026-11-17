@@ -23,6 +23,11 @@ const (
  {"key":"landing","name":"Ready to land, or landing","count":1,"items":[{"id":"h2","type":"handoff","title":"comebye feat/b","state":"finished","since":"2026-11-03T05:00:00Z"}]},
  {"key":"landed","name":"Landed, recent","count":1,"items":[{"id":"h9","type":"handoff","title":"comebye feat/done","state":"landed","since":"2026-11-02T09:00:00Z"}]}
  ]}`
+	logJSON = `{"events":[
+ {"id":"ev3","at":"2026-11-03T08:30:00Z","kind":"landed","subject":"h9","text":"handoff h9 landed on origin/main (CI is green)."},
+ {"id":"ev2","at":"2026-11-03T07:00:00Z","kind":"park","subject":"pk1","who":"home","text":"home was parked automatically (idle for a day, clean worktree)."},
+ {"id":"ev1","at":"2026-11-03T06:00:00Z","kind":"park","subject":"pk2","text":"old was parked automatically."}
+ ]}`
 	todosJSON       = `{"todos":[{"id":"t1","question":"Which key?","kind":"decision","state":"open","created_at":"2026-11-03T07:00:00Z","waiting":{"id":"laharl/w9:p1","name":"keysmith"}}]}`
 	coordLedgerJSON = `{"entries":[
  {"id":"h1","host":"laharl","repo_name":"comebye","branch":"feat/a","status":"running","agent_name":"alpha","created_at":"2026-11-03T06:00:00Z","live":{"present":true,"agent_status":"working"}},
@@ -35,6 +40,7 @@ func coordAnswers(roles string) map[string]answer {
 	return map[string]answer{
 		"GET /api/whoami": {200, whoamiMe}, "GET /api/roles": {200, roles}, "GET /api/coordinator": {200, coordState},
 		"GET /api/board": {200, boardJSON}, "GET /api/todos": {200, todosJSON}, "GET /api/ledger": {200, coordLedgerJSON},
+		"GET /api/log": {200, logJSON},
 	}
 }
 
@@ -511,5 +517,77 @@ func TestCoordinatorHookInjectsAgents(t *testing.T) {
 	run(e, "coordinator", "digest", "--hook")
 	if strings.Contains(out.String(), "# AGENTS.md") {
 		t.Fatal("AGENTS.md section without a file")
+	}
+}
+
+// The fresh-start digest tells a new coordinator what the hub handled
+// without a message to it.
+func TestCoordinatorDigestHasWhatTheHubHandled(t *testing.T) {
+	e, out, _ := coordEnvWithState(t, coordAnswers(rolesCoord), "notes\n")
+	if code := run(e, "coordinator", "digest"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	got := out.String()
+	for _, want := range []string{"## The hub handled since your last turn", "3 things", "1 landed, 2 park", "[landed] handoff h9 landed on origin/main", "`comebye log --since 24h` for the rest"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("digest lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Not available") {
+		t.Errorf("a problem was reported:\n%s", got)
+	}
+}
+
+func TestLogText(t *testing.T) {
+	e, out, _, reqs := peerEnv(t, map[string]string{}, map[string]answer{"GET /api/log": {200, logJSON}})
+	if code := run(e, "log", "--since", "2d", "--kind", "park,landed", "--limit", "9"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	got := out.String()
+	for _, want := range []string{"landed", "handoff h9 landed on origin/main (CI is green).", "park", "home was parked automatically"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "handoff h9") > strings.Index(got, "home was parked") {
+		t.Errorf("not newest first:\n%s", got)
+	}
+	if len(*reqs) != 1 || (*reqs)[0].path != "/api/log" || (*reqs)[0].query != "kind=park%2Clanded&limit=9&since=2d" {
+		t.Fatalf("requests = %+v", *reqs)
+	}
+}
+
+func TestLogJSON(t *testing.T) {
+	e, out, _, _ := peerEnv(t, map[string]string{}, map[string]answer{"GET /api/log": {200, logJSON}})
+	if code := run(e, "log", "--json"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	var v struct {
+		Events []struct{ ID, Kind, Text string } `json:"events"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &v); err != nil || len(v.Events) != 3 || v.Events[0].Kind != "landed" {
+		t.Fatalf("json = %v %s", err, out)
+	}
+}
+
+func TestLogEmptyAndArguments(t *testing.T) {
+	e, out, _, _ := peerEnv(t, map[string]string{}, map[string]answer{"GET /api/log": {200, `{"events":[]}`}})
+	if code := run(e, "log"); code != 0 || !strings.Contains(out.String(), "handled nothing") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if code := run(e, "log", "extra"); code == 0 {
+		t.Fatal("an argument is a usage error")
+	}
+}
+
+func TestBoardTextShowsTheHubDidLane(t *testing.T) {
+	board := `{"lanes":[{"key":"landed","name":"Landed, recent","count":0,"items":[]},
+ {"key":"hub_did","name":"Hub did","count":2,"items":[{"id":"ev2","type":"event","title":"home was parked automatically.","kind":"park","since":"2026-11-03T07:00:00Z"},{"id":"ev1","type":"event","title":"handoff h9 landed.","kind":"landed","since":"2026-11-03T06:00:00Z"}]}]}`
+	e, out, _, _ := peerEnv(t, map[string]string{}, map[string]answer{"GET /api/board": {200, board}})
+	if code := run(e, "board"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if got := out.String(); !strings.Contains(got, "hub did (2)\n- home was parked automatically. [park]") || !strings.Contains(got, "- handoff h9 landed. [landed]") {
+		t.Fatalf("board = %s", got)
 	}
 }

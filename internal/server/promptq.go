@@ -560,57 +560,27 @@ func (s *Server) sendNotice(agents []herdr.AgentInfo, it QueuedPrompt, now time.
 	}()
 }
 
-// heldNoticeText is the fixed note to a sender whose queued prompt has been
-// held a long time because the user has text in the target's input box.
-func heldNoticeText(p QueuedPrompt) string {
-	return fmt.Sprintf("Comebye (hub notice): your queued prompt %s to %s is still held: the user has had text in that agent's input box for over %d minutes, and nothing is typed over it. It stays queued and is sent when the box has been empty for a few seconds (it expires after 2 hours); withdraw it with `comebye queue --cancel %s`.", safeText(p.ID), safeText(p.Name), int(typingNotice/time.Minute), safeText(p.ID))
+// heldEventText is the log line for a queued prompt that has been held a
+// long time because the user has text in the target's input box.
+func heldEventText(p QueuedPrompt) string {
+	return fmt.Sprintf("queued prompt %s to %s is still held: the user has had text in that agent's input box for over %d minutes, and nothing is typed over it. It stays queued and is sent when the box has been empty for a few seconds (it expires after 2 hours); withdraw it with `comebye queue --cancel %s`.", safeText(p.ID), safeText(p.Name), int(typingNotice/time.Minute), safeText(p.ID))
 }
 
-// sendHeldNotice tells the sending agent, once, that its prompt is still
-// held for typing. It is told when it is idle or done; the flag is set only
-// when the notice went out.
+// sendHeldNotice logs, once, that a prompt is still held for typing. It
+// used to be a message to the sending agent; the sender can read the log
+// (`comebye log --kind held`) and the prompt stays queued either way.
 func (s *Server) sendHeldNotice(agents []herdr.AgentInfo, it QueuedPrompt, now time.Time) {
-	var from *herdr.AgentInfo
-	for i := range agents {
-		if agents[i].ID == it.FromID {
-			from = &agents[i]
-		}
-	}
-	if from == nil || !canTakePrompt(*from) {
-		return
-	}
+	s.logEvent(evHeld, it.ID, it.Name, it.ID, heldEventText(it))
 	s.pq.mu.Lock()
-	key := "held/" + it.ID
-	if s.pq.sending[key] || now.Sub(s.pq.last[key]) < queueRetry {
-		s.pq.mu.Unlock()
-		return
+	defer s.pq.mu.Unlock()
+	for i := range s.pq.data.Items {
+		if s.pq.data.Items[i].ID == it.ID {
+			s.pq.data.Items[i].HeldNoticed = true
+		}
 	}
-	s.pq.sending[key], s.pq.last[key] = true, now
-	s.pq.mu.Unlock()
-	s.bg.Add(1)
-	go func() {
-		defer s.bg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		send := s.pq.send
-		if send == nil {
-			send = s.promptAgent
-		}
-		err := send(ctx, *from, heldNoticeText(it))
-		s.pq.mu.Lock()
-		delete(s.pq.sending, key)
-		if err == nil {
-			for i := range s.pq.data.Items {
-				if s.pq.data.Items[i].ID == it.ID {
-					s.pq.data.Items[i].HeldNoticed = true
-				}
-			}
-			if serr := s.pq.save(); serr != nil {
-				log.Printf("prompt queue: %v", serr)
-			}
-		}
-		s.pq.mu.Unlock()
-	}()
+	if serr := s.pq.save(); serr != nil {
+		log.Printf("prompt queue: %v", serr)
+	}
 }
 
 // ---- API ----

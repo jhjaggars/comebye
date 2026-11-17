@@ -7590,7 +7590,7 @@ function openToSomething() {
 
 const BOARD_MODE_KEY = "comebye-board-mode";
 const board = { data: null, at: 0, inflight: false, mode: lsGet(BOARD_MODE_KEY) === "project" ? "project" : "status", open: new Set(["needs_you"]), projOpen: new Set() };
-const BOARD_LANE_LABEL = { running: "running", waiting: "waiting", landing: "to land", landed: "landed" };
+const BOARD_LANE_LABEL = { running: "running", waiting: "waiting", landing: "to land", landed: "landed", hub_did: "hub did" };
 
 // The "new" mark: this browser remembers which item was in which lane when the
 // board was last marked seen (BOARD_SEEN_KEY, {items: {id: lane}}). An item
