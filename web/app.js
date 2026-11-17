@@ -10382,6 +10382,7 @@ function renderTranscript(t, reset) {
   const chatEl = $("chat");
   const chat = state.chat;
   const atBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80;
+  const spot = reset ? null : readingSpot(chatEl); // the poll's own changes (a fold, a new marker) must not move it
 
   if (reset) chatEl.innerHTML = "";
   // More describes the newest window; once earlier pages are loaded it is
@@ -10435,6 +10436,7 @@ function renderTranscript(t, reset) {
 
   chatEl.appendChild(jumpAnchor()); // keep the jump button last
   if (appended && (atBottom || reset)) chatEl.scrollTop = chatEl.scrollHeight;
+  else if (spot) restoreReading(chatEl, spot);
   updateJump();
 }
 
@@ -10532,6 +10534,7 @@ function renderActivity() {
   const header = document.querySelector("#detail header");
   if (header) header.classList.toggle("busy", working);
   const chatEl = $("chat");
+  if (state.chat && !state.chat.terminal) syncLiveRuns(chatEl, working);
   let row = chatEl.querySelector(".activity");
   if (!working) { activity.seenAt = 0; activity.status = null; clearInterval(activity.timer); activity.timer = null; }
   if (!state.chat || state.chat.terminal || (!working && !subs)) {
@@ -10793,14 +10796,77 @@ function renderToolRun() {
   d.innerHTML =
     `<button type="button" class="tr-line" aria-expanded="false"><span class="tr-dot" aria-hidden="true"></span>` +
     `<span class="tr-txt"></span><span class="tr-bad"></span><span class="tr-chev" aria-hidden="true">›</span></button>` +
-    `<div class="tr-peek" hidden></div><div class="tr-list" hidden></div>`;
+    `<div class="tr-peek" hidden></div><div class="tr-list" hidden><button type="button" class="tr-row tr-more" hidden></button></div>`;
   const line = d.querySelector(".tr-line"), list = d.querySelector(".tr-list");
   line.addEventListener("click", () => {
-    const open = list.hidden;
-    list.hidden = !open;
-    line.setAttribute("aria-expanded", String(open));
+    // The user's own open or close is kept for this run and beats the live rule.
+    d._manual = list.hidden;
+    setRunOpen(d, list.hidden);
   });
+  d.querySelector(".tr-more").addEventListener("click", () => { d._all = true; applyRunCap(d); });
   return d;
+}
+
+// setRunOpen opens or closes a run's list.
+function setRunOpen(run, open) {
+  const list = run.querySelector(".tr-list"), line = run.querySelector(".tr-line");
+  list.hidden = !open;
+  line.setAttribute("aria-expanded", String(open));
+}
+
+// A run of more than TOOL_RUN_CAP calls lists only its newest TOOL_RUN_SHOW
+// (the live tail is the point), behind a "Show N more" for the rest.
+const TOOL_RUN_CAP = 25, TOOL_RUN_SHOW = 6;
+function applyRunCap(run) {
+  const items = run.querySelectorAll(".tr-item"), more = run.querySelector(".tr-more");
+  const hide = !run._all && items.length > TOOL_RUN_CAP ? items.length - TOOL_RUN_SHOW : 0;
+  items.forEach((it, i) => { it.hidden = i < hide; });
+  more.hidden = !hide;
+  more.textContent = hide ? "Show " + hide + " more" : "";
+}
+
+// isLiveRun: the run is the latest thing in the conversation and either a
+// call in it is running or the agent is still working (nothing but the
+// activity row, the queued messages and the jump button follow it).
+function isLiveRun(run, working) {
+  if (run._calls.some(toolRunning)) return true;
+  if (!working) return false;
+  for (let e = run.nextElementSibling; e; e = e.nextElementSibling) {
+    if (e.classList.contains("activity") || e.classList.contains("jump-anchor") || e.classList.contains("pending")) continue;
+    return false;
+  }
+  return true;
+}
+
+// syncLiveRuns opens the live run and folds the ones that are not live any
+// more, except where the user chose (run._manual). A fold keeps the reading
+// position: it follows the bottom when the user is there, else holds the
+// first message in view where it was.
+function readingSpot(chatEl) {
+  const top = chatEl.getBoundingClientRect().top;
+  let anchor = null;
+  // The first element that starts inside the view, so a change in the one cut by the top edge is
+  // compensated for too; failing that, the first one in view.
+  for (const el of chatEl.children) if (el.getBoundingClientRect().top >= top - 1) { anchor = el; break; }
+  if (!anchor) for (const el of chatEl.children) if (el.getBoundingClientRect().bottom > top + 1) { anchor = el; break; }
+  return { anchor, was: anchor ? anchor.getBoundingClientRect().top : 0 };
+}
+function restoreReading(chatEl, spot) {
+  if (spot.anchor && spot.anchor.isConnected) chatEl.scrollTop += spot.anchor.getBoundingClientRect().top - spot.was;
+}
+function syncLiveRuns(chatEl, working) {
+  const todo = [];
+  for (const run of chatEl.querySelectorAll(":scope > .toolrun")) {
+    const want = run._manual !== undefined ? run._manual : isLiveRun(run, working);
+    if (want !== !run.querySelector(".tr-list").hidden) todo.push([run, want]);
+  }
+  if (!todo.length) return;
+  const following = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80;
+  const spot = readingSpot(chatEl);
+  for (const [run, want] of todo) setRunOpen(run, want);
+  if (following) chatEl.scrollTop = chatEl.scrollHeight;
+  else restoreReading(chatEl, spot);
+  updateJump();
 }
 
 function toolRowEl(m) {
@@ -10856,7 +10922,8 @@ function updateToolRun(run) {
 function addRunCall(run, m, front) {
   const list = run.querySelector(".tr-list");
   const item = toolRowEl(m);
-  if (front) { list.prepend(item); run._calls.unshift(m); } else { list.appendChild(item); run._calls.push(m); }
+  if (front) { list.querySelector(".tr-more").after(item); run._calls.unshift(m); } else { list.appendChild(item); run._calls.push(m); }
+  applyRunCap(run);
   updateToolRun(run);
 }
 
