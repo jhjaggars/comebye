@@ -163,12 +163,12 @@ func waitSent(t *testing.T, sent *[]string, mu *sync.Mutex, n int) []string {
 func TestTodoUserAnswerNotifiesCoordinator(t *testing.T) {
 	s, sent, mu := todoServer(t)
 	it := todoOf(t, do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"SECRET-QUESTION?"}`).Body.Bytes())
-	w := do(s, "POST", "/api/todos/"+it.ID+"/answer", userHdr, `{"text":"SECRET-ANSWER yes"}`)
+	w := do(s, "POST", "/api/todos/"+it.ID+"/answer", userHdr, `{"text":"SECRET-ANSWER yes, merge it"}`)
 	if w.Code != 200 {
 		t.Fatalf("answer = %d %s", w.Code, w.Body)
 	}
 	got := todoOf(t, w.Body.Bytes())
-	if got.State != TodoAnswered || got.Answer.Via != "app" || got.Answer.By != "me@example.com" || got.Answer.Text != "SECRET-ANSWER yes" {
+	if got.State != TodoAnswered || got.Answer.Via != "app" || got.Answer.By != "me@example.com" || got.Answer.Text != "SECRET-ANSWER yes, merge it" {
 		t.Fatalf("answered = %+v", got)
 	}
 	msgs := waitSent(t, sent, mu, 1)
@@ -223,7 +223,7 @@ func TestTodoNoticeWaitsForCoordinatorAndExpires(t *testing.T) {
 	// No coordinator: the notice stays pending.
 	s.recordRole("desk/w1:p1", "coordinator", "", "me")
 	it := todoOf(t, do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"q"}`).Body.Bytes())
-	do(s, "POST", "/api/todos/"+it.ID+"/answer", userHdr, `{"text":"ok"}`)
+	do(s, "POST", "/api/todos/"+it.ID+"/answer", userHdr, `{"text":"ok, merge it"}`)
 	time.Sleep(60 * time.Millisecond)
 	mu.Lock()
 	if len(*sent) != 0 {

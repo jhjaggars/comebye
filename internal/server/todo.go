@@ -165,6 +165,8 @@ type Todo struct {
 	Page     *TodoPage   `json:"page,omitempty"`
 	Review   *TodoReview `json:"review,omitempty"`
 	ReviewOf string      `json:"review_of,omitempty"`
+	// Relay is where the hub's own relay of the answer stands (relay.go).
+	Relay *TodoRelay `json:"relay,omitempty"`
 }
 
 // earlyPending: an open set with a decision settled ahead of Submit whose
@@ -198,6 +200,13 @@ type todoStore struct {
 	send    func(ctx context.Context, a herdr.AgentInfo, text string) error
 	// routing: reviews whose verdict is being sent (review.go).
 	routing map[string]bool
+	// relaying: items whose answer the hub is relaying now; relayFail is
+	// when a relay last failed (relay.go). In memory only.
+	relaying  map[string]bool
+	relayFail map[string]time.Time
+	// relaySend delivers a relay to the waiting agent (default
+	// Server.promptNotice; tests replace it).
+	relaySend func(ctx context.Context, a herdr.AgentInfo, text string) error
 }
 
 // rateLimit is the most adds per creator per minute; 0 means unlimited.
@@ -974,13 +983,18 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 			s.todos.settleNotices([]string{it.ID}, todoNoticeExpired)
 			continue
 		}
+		if s.relayable(it) {
+			s.relayStart(it, agents) // the hub passes it on; the coordinator is not told
+			continue
+		}
 		if it.earlyPending() {
-			early = append(early, earlyNoticeText(it))
+			early = append(early, earlyNoticeText(it)+relayNote(it))
 			ids = append(ids, it.ID)
 			continue
 		}
 		ids = append(ids, it.ID)
 		answered = append(answered, it.ID)
+		parkedNote += relayNote(it)
 	}
 	if len(ids) == 0 {
 		return

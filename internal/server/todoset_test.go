@@ -165,6 +165,8 @@ func TestSetDraftValidatesAndGuardsRevision(t *testing.T) {
 func TestSetEarlyReleaseNoticesOnceThenSubmitNoticesAnswered(t *testing.T) {
 	s, sent, mu := todoServer(t)
 	it := setAdd(t, s, setBody)
+	// The coordinator is the one waiting: a gate, so the notices go to it (relay_test.go covers the relay).
+	s.todos.mutate(it.ID, func(i *Todo) error { i.Waiting = &TodoAgent{ID: "desk/w1:p1", Name: "coordinator"}; return nil })
 	got := func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), *sent...) }
 	// D1 is unconfirmed: nothing goes out.
 	putDraft(s, it.ID, `{"choices":{"D1":{"option":1}}}`)

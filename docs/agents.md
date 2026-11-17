@@ -643,11 +643,20 @@ answer with who gave it and when. It is stored in the hub's state directory
 (`todo.json`; a peer forwards to the hub as it does for the ledger).
 
 - The user reads, answers, finishes or drops items in the app (the To do panel
-  above the briefing; dropping asks first). An answer typed there sends the
-  coordinator one hub notice. **Delivering the answer to the waiting agent is
-  the coordinator's job**, in its own words, and then `comebye todo done ID`;
-  the hub never forwards it, because agent output is data and the coordinator
-  relays the user's words.
+  above the briefing; dropping asks first). An answer typed there is passed on
+  by the hub (relay.go): it types the user's words, labelled as the user's own
+  and as typed by the hub, into the waiting agent's pane and closes the item,
+  and logs a `relay` event (`comebye log`). The coordinator gets the one hub
+  notice, and relays by hand with `comebye todo done ID`, only for a gate: the
+  coordinator is the waiting agent; a release, approval or review item; a
+  decision set with a plan, or an item about a handoff awaiting landing; an
+  answer (or the option it chose) that says land, merge, push, approve, go ahead
+  or start; an item nobody waits on. It also gets it when the hub could not
+  relay: the agent is gone, three sends failed, or a relay queued for an agent
+  at a dialog (or parked) expired (2 hours, 7 days parked). The item then stays
+  answered, not closed, with a `relay-failed` event. A decision set relays the
+  decisions settled ahead of Submit at once (the item stays open) and the final
+  answer on Submit.
 - If the user answers in chat instead, the coordinator records their words with
   `comebye todo answer ID "…"` (no notice is sent for a relayed answer).
 - The playbook ties it to the briefing: every "Needs you" line is an open item,

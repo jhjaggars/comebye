@@ -109,12 +109,15 @@ func TestTodoWaitingOnParkedAgentIsParkedThenRebound(t *testing.T) {
 	if got.Waiting == nil || !got.Waiting.Parked || got.Waiting.ParkID != "pk_ghost00001" || got.Waiting.Gone || got.Waiting.Name != "ghost" {
 		t.Fatalf("waiting = %+v", got.Waiting)
 	}
-	// The user's answer reaches the coordinator with a hint to queue it for the parked agent.
-	do(s, "POST", "/api/todos/"+it.ID+"/answer", userHdr, `{"text":"yes"}`)
+	// A gated answer ("merge") reaches the coordinator with a hint to queue it for the parked agent.
+	gated := todoOf(t, do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"Land it?","waiting":"desk/w5:p1"}`).Body.Bytes())
+	do(s, "POST", "/api/todos/"+gated.ID+"/answer", userHdr, `{"text":"yes, merge"}`)
 	msgs := waitSent(t, sent, mu, 1)
 	if !strings.Contains(msgs[0], "is waiting on ghost, which is parked") || !strings.Contains(msgs[0], "comebye prompt ghost --queue") {
 		t.Fatalf("notice = %q", msgs[0])
 	}
+	// ... and an ordinary answer is queued by the hub itself (relay_test.go).
+	do(s, "POST", "/api/todos/"+it.ID+"/answer", userHdr, `{"text":"yes"}`)
 	// After the resume the item points at the new pane and is no longer parked.
 	now := time.Now()
 	s.parkStore().Update("pk_ghost00001", func(x *park.Record) { x.ResumedAt, x.ResumedPane = &now, "w8:p1" })

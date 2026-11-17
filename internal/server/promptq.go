@@ -376,8 +376,11 @@ func canTakePrompt(a herdr.AgentInfo) bool {
 // naming who queued it and when, so it is not mistaken for the user.
 func queueText(p QueuedPrompt) string {
 	from := "the user"
-	if p.FromID != "" {
+	switch {
+	case p.FromID != "":
 		from = safeText(p.From)
+	case p.From == "comebye": // the hub's own (deliverOrQueue, a relay)
+		from = "the hub"
 	}
 	return fmt.Sprintf("[Queued by %s via comebye at %s UTC; held while you could not take it]\n%s", from, p.At.UTC().Format("15:04"), p.Text)
 }
