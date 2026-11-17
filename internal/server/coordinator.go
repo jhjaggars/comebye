@@ -187,14 +187,20 @@ func writeFileAtomic(path string, v any) error {
 // Role is an agent's recorded role. Name, when set, must still be the
 // agent's name for the role to apply: herdr reuses pane ids.
 type Role struct {
-	Role string    `json:"role"` // "coordinator"
-	Name string    `json:"name,omitempty"`
+	Role string `json:"role"` // "coordinator" or "chat"
+	Name string `json:"name,omitempty"`
+	// Page is the Page a chat helper was started about.
+	Page string    `json:"page,omitempty"`
 	By   string    `json:"by,omitempty"`
 	At   time.Time `json:"at"`
 }
 
-// RoleCoordinator is the one role there is.
+// RoleCoordinator marks an agent that coordinates.
 const RoleCoordinator = "coordinator"
+
+// RoleChat marks a read-only helper started to talk about a Page (chat.go).
+// It is no worker: it has no ledger entry, so no sweep lists it.
+const RoleChat = "chat"
 
 // roleStore keeps roles.json: host-qualified agent id -> role.
 type roleStore struct {

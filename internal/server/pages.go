@@ -470,6 +470,7 @@ func (s *Server) pageRoutes() {
 	s.mux.HandleFunc("PUT /api/pages/{id}/thumbs", s.authWorker(s.handlePageThumbsPut))
 	s.mux.HandleFunc("GET /api/pages/{id}/thumb", s.authWorker(s.handlePageThumb))
 	s.mux.HandleFunc("DELETE /api/pages/{id}", s.authWorker(s.handlePageDelete))
+	s.mux.HandleFunc("POST /api/pages/{id}/chat", s.auth(s.handlePageChat))
 	s.mux.HandleFunc("POST /api/pages/{id}/comments", s.auth(s.handlePageComments))
 	s.mux.HandleFunc("GET /api/pages/{id}/comments", s.auth(s.handlePageCommentsList))
 	s.mux.HandleFunc("DELETE /api/pages/{id}/comments/{cid}", s.auth(s.handlePageCommentDrop))
@@ -752,7 +753,8 @@ func (s *Server) handlePageGet(w http.ResponseWriter, r *http.Request) {
 	}
 	m := s.pageJSON(p)
 	if r.URL.Query().Get("body") == "1" {
-		if !who.user && !who.coord && !sameHost(p.Host, who.host) {
+		// A chat helper reads the Page it was started about, whatever host it runs on.
+		if !who.user && !who.coord && !sameHost(p.Host, who.host) && !s.chats.helperOf(p.ID, who.agent) {
 			readForbidden(w)
 			return
 		}
@@ -763,6 +765,10 @@ func (s *Server) handlePageGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m["body"], m["body_version"], m["body_kind"] = string(b), v.N, v.Kind
+		if r.URL.Query().Get("text") == "1" {
+			// What a reader sees: no markup, scripts, styles or data: images.
+			m["body"], m["body_kind"] = pageText(v.Kind, b), "text"
+		}
 	}
 	writeJSON(w, m)
 }

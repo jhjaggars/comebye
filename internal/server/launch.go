@@ -470,6 +470,11 @@ type launchBody struct {
 	// permission arguments and a first prompt pointing it at the
 	// playbook, and is recorded as a coordinator on the hub.
 	Coordinator bool `json:"coordinator"`
+	// Chat is a Page id: the "Chat about this" helper (chat.go). The agent
+	// starts in a fresh scratch directory under <state>/chats (Dir is
+	// ignored; it need not be in a launch root), read-only where the
+	// harness has a mode for it.
+	Chat string `json:"chat,omitempty"`
 }
 
 // coordinatorDir is where the Coordinator preset starts agents, symlinks
@@ -547,14 +552,24 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var dir string
-	if body.Coordinator {
+	switch {
+	case body.Chat != "":
+		if !pageIDRE.MatchString(body.Chat) || body.Coordinator {
+			writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_chat", "message": "chat takes a Page id"})
+			return
+		}
+		if s.cfg.StateDir == "" {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "no_state_dir", "message": "this host keeps no state directory, so it has no place for a chat's scratch directory"})
+			return
+		}
+	case body.Coordinator:
 		// The one launch outside the roots: a fixed directory from the
 		// server's configuration, never one from the request.
 		if dir = s.coordinatorDir(); dir == "" {
 			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "no_coordinator_dir", "message": "the coordinator directory (-coordinator-dir) does not exist on this host"})
 			return
 		}
-	} else {
+	default:
 		var lerr *launchError
 		if dir, lerr = resolveLaunchDir(body.Dir, roots); lerr != nil {
 			writeLaunchError(w, lerr)
@@ -595,6 +610,8 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch {
+	case !named && body.Chat != "":
+		name = defaultAgentName(RoleChat, func(n string) bool { return taken[n] })
 	case !named && body.Coordinator:
 		name = defaultAgentName(RoleCoordinator, func(n string) bool { return taken[n] })
 	case !named:
@@ -624,13 +641,27 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if body.Chat != "" {
+		args = append(args, chatArgs(kind)...)
+	}
+
 	// The first prompt goes on the command line where the harness takes
 	// one; otherwise it is sent once the agent is up (below).
 	promptArgs := firstPromptArgs(kind, body.Prompt)
 	args = append(args, promptArgs...)
 
+	if body.Chat != "" {
+		// A fresh directory for each chat: nothing in it to damage, no
+		// branch, no worktree, and outside the launch roots like the
+		// coordinator directory.
+		var derr error
+		if dir, derr = s.makeChatDir(body.Chat); derr != nil {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "chat_dir", "message": "could not make the chat's scratch directory: " + derr.Error()})
+			return
+		}
+	}
 	label := filepath.Base(dir)
-	if named || body.Coordinator {
+	if named || body.Coordinator || body.Chat != "" {
 		label = name
 	}
 	ws, err := s.client.CreateWorkspace(ctx, dir, label, false)
@@ -682,6 +713,9 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	}
 	if choice.Thinking != "" {
 		resp["thinking"] = choice.Thinking
+	}
+	if body.Chat != "" {
+		resp["chat"] = map[string]any{"page": body.Chat, "dir": dir, "read_only": chatReadOnly(kind)}
 	}
 	if body.Coordinator {
 		resp["coordinator"] = true

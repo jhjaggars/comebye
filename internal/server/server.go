@@ -310,6 +310,8 @@ type Server struct {
 	provObserveGap time.Duration // how often the provisioner asks (tests shorten it)
 	hjobs          *hubJobs      // on a hub: the jobs it has asked provisioners to run
 	pages          *pageStore
+	chats          *chatStore // Page -> its chat helper (chat.go)
+	chatRate       chatLimiter
 	commentLim     commentLimiter
 	cmtOnce        sync.Once
 	pageCmts       *commentStore
@@ -487,6 +489,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			if s.pages, err = openPageStore(filepath.Join(cfg.StateDir, "pages")); err != nil {
 				log.Printf("pages: %v (published pages are off)", err)
 				s.pages = nil // never overwrite the unreadable index
+			}
+			if s.chats, err = openChats(filepath.Join(cfg.StateDir, "chats.json")); err != nil {
+				log.Printf("chats: %v (starting empty)", err)
+				s.chats = &chatStore{path: filepath.Join(cfg.StateDir, "chats.json"), data: map[string]ChatRec{}}
 			}
 			s.endStaleAsks()
 			s.trackInstances()
