@@ -76,11 +76,13 @@ func Starter(kind, title string) (string, error) {
 	s := strings.LastIndex(page, tmplStyleEnd)
 	w := strings.Index(page, tmplBody)
 	l := strings.Index(page, tmplListener)
-	if c0 < 0 || c1 < c0 || s < c1 || w < s || l < w {
+	e := strings.LastIndex(page, "</body>")
+	// The theme script sits in the head, after the style, so it runs before the first paint.
+	if c0 < 0 || c1 < c0 || s < c1 || l < s || w < l || e < w {
 		return "", errors.New("the page template changed shape: update pageskit.Starter")
 	}
 	note := "<!--\n  Comebye page starter: " + kind + " (comebye pages new). The token blocks at the top of\n" +
-		"  <style> and the theme script at the end are the Comebye page template:\n" +
+		"  <style> and the theme script after it are the Comebye page template:\n" +
 		"  keep both, and colour everything with var(--token). Replace the example\n" +
 		"  content. The rules: comebye pages guide.\n"
 	var out strings.Builder
@@ -91,7 +93,7 @@ func Starter(kind, title string) (string, error) {
 	out.WriteString(strings.TrimRight(css, "\n") + "\n")
 	out.WriteString(page[s:w])
 	out.WriteString(strings.TrimRight(body, "\n") + "\n")
-	out.WriteString(page[l:])
+	out.WriteString(page[e:])
 	return strings.ReplaceAll(out.String(), "{{TITLE}}", t), nil
 }
 

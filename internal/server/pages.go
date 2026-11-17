@@ -963,6 +963,22 @@ blockquote{margin-left:0;padding-left:12px;border-left:3px solid var(--line);col
 const mdShellTail = `<script src="/p/_/purify.js"></script><script src="/p/_/marked.js"></script>
 <script>
 (function(){
+var root=document.documentElement,shown=window.parent===window,scheme=null,mmd=[];
+function show(){if(!shown){shown=true;root.style.visibility=""}}
+if(!shown){root.style.visibility="hidden";setTimeout(show,400)}
+var MAP={"--bg":"--bg","--text":"--fg","--muted":"--mut","--border":"--line","--code-bg":"--code"},COLOUR=/^(#[0-9a-f]{3,8}|(rgb|hsl)a?\(\s*[0-9.%\s,\/-]+\))$/i;
+function mmTheme(){return (scheme||(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"))==="dark"?"dark":"default"}
+function drawAll(){if(!window.mermaid)return;mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:mmTheme(),flowchart:{htmlLabels:false},fontFamily:"system-ui,sans-serif"});
+ mmd.forEach(function(d,i){mermaid.render("mmr"+(++rid),d.src).then(function(r){d.el.innerHTML=r.svg},function(){})})}
+var rid=0;
+// The app's theme ({type:"comebye-theme"}): colours only, a few known names, plain colour values.
+window.addEventListener("message",function(e){var d=e.data;
+ if(!d||typeof d!=="object"||d.type!=="comebye-theme"||!d.tokens||typeof d.tokens!=="object")return;
+ var r=root;
+ Object.keys(MAP).forEach(function(k){var v=d.tokens[k];if(typeof v==="string"&&v.length<=64&&COLOUR.test(v))r.style.setProperty(MAP[k],v)});
+ if(d.scheme==="light"||d.scheme==="dark"){var ch=scheme!==null&&scheme!==d.scheme;scheme=d.scheme;r.style.colorScheme=d.scheme;if(ch)drawAll()}
+ show()});
+try{parent.postMessage({type:"comebye-page-ready"},"*")}catch(e){}
 var out=document.getElementById("out"),src=JSON.parse(document.getElementById("src").textContent);
 if(!window.marked||!window.DOMPurify){out.textContent=src;return}
 var m=new marked.Marked({gfm:true});
@@ -978,10 +994,9 @@ var h=out.querySelector("h1");if(h)document.title=h.textContent;
 var mm=out.querySelectorAll("pre > code.language-mermaid");
 if(mm.length){var s2=document.createElement("script");s2.src="/p/_/mermaid.js";
  s2.onload=function(){if(!window.mermaid)return;
-  var dark=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches;
-  mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:dark?"dark":"default",flowchart:{htmlLabels:false},fontFamily:"system-ui,sans-serif"});
+  mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:mmTheme(),flowchart:{htmlLabels:false},fontFamily:"system-ui,sans-serif"});
   Array.prototype.forEach.call(mm,function(c,i){var pre=c.parentNode;
-   mermaid.render("mmd"+i,c.textContent).then(function(r){var d=document.createElement("div");d.className="mmd";d.innerHTML=r.svg;pre.replaceWith(d)},
+   mermaid.render("mmd"+i,c.textContent).then(function(r){var d=document.createElement("div");d.className="mmd";d.innerHTML=r.svg;pre.replaceWith(d);mmd.push({el:d,src:c.textContent})},
     function(){var e=document.querySelector("#dmmd"+i);if(e)e.remove();var n=document.createElement("div");n.className="u";n.textContent="This diagram could not be drawn; its source is shown.";pre.parentNode.insertBefore(n,pre)})})};
  document.head.appendChild(s2)}
 })();

@@ -240,6 +240,36 @@ footer { margin-top: 40px; padding-top: var(--sp-12); border-top: 1px solid var(
 }
 @media print { .wrap { max-width: none; } .md pre { max-height: none; } }
 </style>
+<script>
+/* Theme from the Comebye app. The app posts
+     {type:"comebye-theme", scheme:"light"|"dark", tokens:{"--bg":"#fff", ...}}
+   into this frame as soon as this script says {type:"comebye-page-ready"}, again on load, and whenever the user changes theme. Only a known
+   token name with a plain colour value is applied; nothing is evaluated;
+   anything else is ignored. */
+(function () {
+  var KNOWN = ["bg", "panel", "panel2", "border", "text", "muted", "blue", "orange", "green", "purple", "red", "yellow", "teal", "on-accent", "on-red", "on-orange", "code-bg", "code-text", "quote", "snip", "th-bg", "btn-bg", "blocked-bg", "blocked-name", "bubble", "rc-user", "rc-out", "mark-bg", "rcmark-bg", "rcmark-text", "chip-blue", "chip-purple", "chip-red", "chip-green", "chip-finished", "chip-cand", "chip-rtr", "chip-landing", "chip-yellow", "secret-bg", "sh-md", "sh-lg", "selection", "focus", "scroll-thumb"];
+  var ok = {}; KNOWN.forEach(function (k) { ok["--" + k] = 1; });
+  var COLOUR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\(\s*[0-9.%\s,\/-]+\))$/i;
+  var root = document.documentElement;
+  /* In the app's frame, show nothing until its theme arrives (or 400 ms pass): a Page never paints once in the
+     device's colours and then flips. Opened on its own, it shows at once. */
+  var shown = window.parent === window;
+  function show() { if (!shown) { shown = true; root.style.visibility = ""; } }
+  if (!shown) { root.style.visibility = "hidden"; setTimeout(show, 400); }
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || typeof d !== "object" || d.type !== "comebye-theme" || !d.tokens || typeof d.tokens !== "object") return;
+    Object.keys(d.tokens).forEach(function (k) {
+      var v = d.tokens[k];
+      if (ok[k] === 1 && typeof v === "string" && v.length <= 64 && COLOUR.test(v)) root.style.setProperty(k, v);
+    });
+    if (d.scheme === "light" || d.scheme === "dark") root.style.colorScheme = d.scheme;
+    show();
+  });
+  /* Ask for the theme now, not when the frame has finished loading. */
+  try { parent.postMessage({ type: "comebye-page-ready" }, "*"); } catch (e) {}
+})();
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -258,27 +288,5 @@ footer { margin-top: 40px; padding-top: var(--sp-12); border-top: 1px solid var(
 {{BODY}}
 </main>
 </div>
-<script>
-/* Theme from the Comebye app. The app posts
-     {type:"comebye-theme", scheme:"light"|"dark", tokens:{"--bg":"#fff", ...}}
-   into this frame on load and whenever the user changes theme. Only a known
-   token name with a plain colour value is applied; nothing is evaluated;
-   anything else is ignored. */
-(function () {
-  var KNOWN = ["bg", "panel", "panel2", "border", "text", "muted", "blue", "orange", "green", "purple", "red", "yellow", "teal", "on-accent", "on-red", "on-orange", "code-bg", "code-text", "quote", "snip", "th-bg", "btn-bg", "blocked-bg", "blocked-name", "bubble", "rc-user", "rc-out", "mark-bg", "rcmark-bg", "rcmark-text", "chip-blue", "chip-purple", "chip-red", "chip-green", "chip-finished", "chip-cand", "chip-rtr", "chip-landing", "chip-yellow", "secret-bg", "sh-md", "sh-lg", "selection", "focus", "scroll-thumb"];
-  var ok = {}; KNOWN.forEach(function (k) { ok["--" + k] = 1; });
-  var COLOUR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\(\s*[0-9.%\s,\/-]+\))$/i;
-  window.addEventListener("message", function (e) {
-    var d = e.data;
-    if (!d || typeof d !== "object" || d.type !== "comebye-theme" || !d.tokens || typeof d.tokens !== "object") return;
-    var root = document.documentElement;
-    Object.keys(d.tokens).forEach(function (k) {
-      var v = d.tokens[k];
-      if (ok[k] === 1 && typeof v === "string" && v.length <= 64 && COLOUR.test(v)) root.style.setProperty(k, v);
-    });
-    if (d.scheme === "light" || d.scheme === "dark") root.style.colorScheme = d.scheme;
-  });
-})();
-</script>
 </body>
 </html>

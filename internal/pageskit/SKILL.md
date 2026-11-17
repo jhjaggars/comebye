@@ -54,10 +54,11 @@ type. Replace the example content, and keep the template's two pieces:
 1. **The token blocks.** These are the `:root` block and the
    `@media (prefers-color-scheme: dark)` block at the top of the `<style>`.
    They hold the app's own colours from `web/themes.js`.
-2. **The theme listener.** This is the `<script>` at the end of the page. In
-   the app, the Pages viewer posts
+2. **The theme listener.** This is the `<script>` in the page's `<head>`, which
+   runs before the first paint and says `{type: "comebye-page-ready"}` to the app. In
+   the app, the Pages viewer then posts
    `{type: "comebye-theme", scheme: "light"|"dark", tokens: {"--bg": "#1d2021", ...}}`
-   into the page when it loads and whenever the user changes theme. The
+   into the page at once, again when it loads, and whenever the user changes theme. The
    listener applies only the known token names with plain colour values, and
    sets `color-scheme`. Keep it as it is: don't edit it, and don't add a
    second listener.

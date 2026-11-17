@@ -50,7 +50,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 </script>
 <script>
 // Draws the tiles and the chart from #data. Fills are var(--token), so a theme change needs no redraw.
-// Keep page scripts separate from the theme script below.
+// Keep page scripts separate from the theme script in the head.
 (function () {
   var d = JSON.parse(document.getElementById("data").textContent);
   var NS = "http://www.w3.org/2000/svg";

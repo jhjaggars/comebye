@@ -1960,7 +1960,7 @@ function renderSplit(force) {
         ${href ? `<a class="rs-open" href="${escAttr(href)}" target="_blank" rel="noopener" title="Open the Page on its own">Open ↗</a>` : ""}
         <span class="seg sm rs-tabs" role="group" aria-label="Show"><button type="button" data-rs-tab="page" aria-pressed="${rs.tab === "page"}">Page</button><button type="button" data-rs-tab="decide" aria-pressed="${rs.tab === "decide"}">${esc(t.set ? "Decide" : t.kind === "review" ? "Verdict" : "Answer")}<span class="rs-n" hidden></span></button></span>
       </div>
-      <div class="rs-cols"><section class="rs-page" aria-label="The Page"><div class="pgs-sel" id="pgs-sel" hidden></div><div class="rs-body"><iframe class="pgs-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${escAttr(p.title || p.id)}" src="${escAttr((pgs.pagesUrl || "") + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div></section>
+      <div class="rs-cols"><section class="rs-page" aria-label="The Page"><div class="pgs-sel" id="pgs-sel" hidden></div><div class="rs-body"><iframe class="pgs-frame" style="color-scheme:${pgsScheme()}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${escAttr(p.title || p.id)}" src="${escAttr((pgs.pagesUrl || "") + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div></section>
         <section class="rs-side" id="rs-side" aria-label="${escAttr(TODO_KIND[t.kind] || "item")}"></section></div>`;
     const fr = el.querySelector("iframe.pgs-frame");
     fr.addEventListener("load", sendPageTheme);
@@ -7051,7 +7051,7 @@ function renderPageView() {
   pgs.frameVer = ver;
   pgs.frameFollow = !r.ver;
   // allow="clipboard-write": a page's Copy button may write the clipboard (on a click; it can never read it).
-  view.innerHTML = bar + `<div class="pgs-sel" id="pgs-sel" hidden></div><div class="pgs-body"><iframe class="pgs-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div>`;
+  view.innerHTML = bar + `<div class="pgs-sel" id="pgs-sel" hidden></div><div class="pgs-body"><iframe class="pgs-frame" style="color-scheme:${pgsScheme()}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div>`;
   const fr = view.querySelector("iframe.pgs-frame");
   fr.addEventListener("load", sendPageTheme);
   fr.addEventListener("load", pgcMarks);
@@ -7138,12 +7138,28 @@ function pageThemeMessage() {
   return { type: "comebye-theme", scheme: t.mode, tokens };
 }
 
+function pageFrames() { return document.querySelectorAll("#pgs-view iframe.pgs-frame, #rs iframe.pgs-frame"); }
+
 function sendPageTheme() {
   if (pgs.route) pgsImgs();
+  // The frame element's own color-scheme is what a browser takes as the frame's prefers-color-scheme: set it
+  // on every theme change, so a page that never listens (or has not yet) still paints in the app's mode.
+  const sc = pgsScheme();
+  for (const fr of pageFrames()) if (fr.style.colorScheme !== sc) fr.style.colorScheme = sc;
   const m = pageThemeMessage();
   if (!m) return;
-  for (const fr of document.querySelectorAll("#pgs-view iframe.pgs-frame, #rs iframe.pgs-frame")) if (fr.contentWindow) fr.contentWindow.postMessage(m, "*");
+  for (const fr of pageFrames()) if (fr.contentWindow) fr.contentWindow.postMessage(m, "*");
 }
+
+// A page says {type:"comebye-page-ready"} as soon as its script runs (before its images load), and gets the
+// theme at once; the send on the frame's load stays as the fallback. No data in the message: only the type is read.
+window.addEventListener("message", (e) => {
+  if (!e.data || typeof e.data !== "object" || e.data.type !== "comebye-page-ready") return;
+  if (e.origin !== "null" && !(pgs.pagesUrl && e.origin === pgs.pagesUrl)) return;
+  const m = pageThemeMessage();
+  if (!m) return;
+  for (const fr of pageFrames()) if (fr.contentWindow && e.source === fr.contentWindow) { fr.style.colorScheme = pgsScheme(); fr.contentWindow.postMessage(m, "*"); }
+});
 
 // Every theme change (picker, preview, the OS scheme under System) sets data-theme.
 new MutationObserver(sendPageTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });

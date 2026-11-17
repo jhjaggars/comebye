@@ -117,7 +117,8 @@ var (
 )
 
 func TestStarters(t *testing.T) {
-	listener := template[strings.Index(template, tmplListener):]
+	ls := strings.Index(template, tmplListener)
+	listener := template[ls : ls+strings.Index(template[ls:], "</script>")+len("</script>")]
 	tokens := template[strings.Index(template, ":root {"):strings.Index(template, "* { box-sizing")]
 	for _, typ := range Types {
 		page, err := Starter(typ, `Drill <1> & "two"`)
@@ -131,7 +132,7 @@ func TestStarters(t *testing.T) {
 			t.Errorf("%s: a placeholder is left: %s", typ, page[strings.Index(page, "{{"):][:30])
 		}
 		// One contract: the template's token blocks and listener, verbatim, once.
-		if !strings.Contains(page, tokens) || !strings.HasSuffix(page, listener) || strings.Count(page, `addEventListener("message"`) != 1 {
+		if !strings.Contains(page, tokens) || !strings.Contains(page, listener) || strings.Index(page, listener) > strings.Index(page, "<body>") || strings.Count(page, `addEventListener("message"`) != 1 {
 			t.Errorf("%s: the template's token blocks or theme listener are not there verbatim", typ)
 		}
 		if strings.Count(page, "<title>") != 1 || strings.Count(page, "<html") != 1 || !strings.Contains(page, `name="viewport"`) {
