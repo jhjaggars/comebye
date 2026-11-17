@@ -314,6 +314,17 @@
     html[data-col="wide"] { --col: 1120px; }
     html[data-col="wider"] { --col: 1480px; }
     html[data-col="full"] { --col: 100%; }
+    /* The text size: Settings > Appearance sets <html data-rs>. It scales the conversation only (#chat, #sv-chat, the
+       composer's text, the Appearance preview): those redefine --fs-11..18 from --rs, so every font-size in them
+       follows with no per-rule work. The header, the list and the menus keep the root tokens and their tap targets. */
+    :root { --rs: 1; }
+    html[data-rs="small"] { --rs: .93; }
+    html[data-rs="large"] { --rs: 1.15; }
+    html[data-rs="larger"] { --rs: 1.3; }
+    #chat, #sv-chat, .prompt .composer, .sx-prev {
+      --fs-11: calc(11px * var(--rs)); --fs-12: calc(12px * var(--rs)); --fs-13: calc(13px * var(--rs)); --fs-14: calc(14px * var(--rs));
+      --fs-15: calc(15px * var(--rs)); --fs-16: calc(16px * var(--rs)); --fs-18: calc(18px * var(--rs));
+    }
     #chat, #sv-chat {
       background: var(--bg);
       margin: var(--sp-12) 0 var(--sp-8);
@@ -2620,6 +2631,8 @@
     .sx-radio { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: var(--sp-2); min-height: var(--hit-44); padding: var(--sp-6) var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel2); color: var(--text); font: inherit; font-size: var(--fs-14); text-align: left; cursor: pointer; }
     .sx-radio small { color: var(--muted); font-size: var(--fs-12); }
     .sx-radio[aria-checked="true"] { border-color: var(--blue); background: var(--chip-blue); }
+    .sx-prev-wrap { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-10); background: var(--bg); }
+    .sx-prev { position: absolute; left: 0; top: 0; transform-origin: 0 0; display: flex; flex-direction: column; gap: var(--sp-10); padding: var(--sp-14) max(var(--sp-10), calc((100% - var(--col)) / 2)); box-sizing: border-box; pointer-events: none; }
     .sx-strip { position: relative; height: 22px; border: 1px solid var(--border); border-radius: var(--r-6); background: var(--panel2); overflow: hidden; }
     .sx-strip-col { position: absolute; top: 3px; bottom: 3px; border-radius: var(--r-4); background: var(--blue); opacity: .7; }
     .sx-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; }

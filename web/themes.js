@@ -319,28 +319,38 @@
   API.fontSet = (id) => { try { ls.set(API.KEY_FONT, id); } catch (e) { /* not saved */ } API.fontApply(); };
   API.fontApply();
 
-  // The reading width: localStorage "comebye.col" holds "" (Comfortable, the default) or one of COLS' ids;
-  // colApply puts it on <html data-col> before first paint, and web/index.html turns it into --col. A value
-  // this build does not know shows the default. Per device: a phone and a 3440 monitor want different widths.
+  // Device-level appearance choices (Settings > Appearance): localStorage "comebye.<name>" holds "" (the default)
+  // or one of the list's ids; apply puts it on <html data-<name>> before first paint, and web/index.html turns it
+  // into a CSS variable. A value this build does not know shows the default. Per device: a phone and a 3440
+  // monitor want different values. One helper builds the Choice/Apply/Set trio for each (COLS, RS).
+  const pref = (name, list) => {
+    const key = "comebye." + name, attr = "data-" + name;
+    const choice = () => { const v = ls.get(key) || ""; return list.some((c) => c.id === v) ? v : ""; };
+    const apply = () => { const v = choice(), el = document.documentElement; if (v) el.setAttribute(attr, v); else el.removeAttribute(attr); return v; };
+    const set = (id) => { ls.set(key, id); apply(); };
+    return { key, choice, apply, set };
+  };
+  // The reading width.
   API.COLS = [
     { id: "", name: "Comfortable", px: 820, sub: "820 px, the default" },
     { id: "wide", name: "Wide", px: 1120, sub: "1120 px" },
     { id: "wider", name: "Wider", px: 1480, sub: "1480 px" },
     { id: "full", name: "Full", px: 0, sub: "the whole pane" },
   ];
-  API.KEY_COL = "comebye.col";
-  API.colChoice = () => {
-    const v = ls.get(API.KEY_COL) || "";
-    return API.COLS.some((c) => c.id === v) ? v : "";
-  };
-  API.colApply = () => {
-    const v = API.colChoice(), el = document.documentElement;
-    if (v) el.setAttribute("data-col", v); else el.removeAttribute("data-col");
-    return v;
-  };
-  API.colSet = (id) => { ls.set(API.KEY_COL, id); API.colApply(); };
-  API.colApply();
+  const col = pref("col", API.COLS);
+  API.KEY_COL = col.key; API.colChoice = col.choice; API.colApply = col.apply; API.colSet = col.set;
+  col.apply();
+  // The text size: four steps, applied to the conversation only (web/index.html redefines --fs-11..18 there).
+  API.RSS = [
+    { id: "small", name: "Small", f: 0.93, sub: "93%" },
+    { id: "", name: "Default", f: 1, sub: "100%" },
+    { id: "large", name: "Large", f: 1.15, sub: "115%" },
+    { id: "larger", name: "Larger", f: 1.3, sub: "130%" },
+  ];
+  const rs = pref("rs", API.RSS);
+  API.KEY_RS = rs.key; API.rsChoice = rs.choice; API.rsApply = rs.apply; API.rsSet = rs.set;
+  rs.apply();
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
-  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); });
+  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); });
 })(typeof window !== "undefined" ? window : globalThis);

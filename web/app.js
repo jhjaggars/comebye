@@ -9567,23 +9567,57 @@ function sxAppearance() {
   return `<h2>Appearance</h2>
     <p class="sx-note">Saved on this device only.</p>
     <div class="sx-field"><div class="sx-lbl" id="sx-col-lbl">Reading width</div>
-      <div class="sx-radios" role="radiogroup" aria-labelledby="sx-col-lbl">${CT.COLS.map((c) => `<button type="button" class="sx-radio" role="radio" id="${sxColId(c.id)}" aria-checked="${c.id === cur}" tabindex="${c.id === cur ? 0 : -1}" data-sx="col" data-col="${c.id}"><span class="sx-rn">${esc(c.name)}</span><small>${esc(c.sub)}</small></button>`).join("")}</div>
+      ${sxRadios("col", "sx-col-lbl", CT.COLS, cur)}
       <div class="sx-strip" aria-hidden="true"><i class="sx-strip-col" style="left:${pct((pane - w) / 2)}%;width:${pct(w)}%"></i></div>
-      <p class="sx-note" role="status">${esc(caption)}</p></div>`;
+      <p class="sx-note" role="status">${esc(caption)}</p></div>
+    <div class="sx-field"><div class="sx-lbl" id="sx-rs-lbl">Text size</div>
+      ${sxRadios("rs", "sx-rs-lbl", CT.RSS, CT.rsChoice())}
+      <p class="sx-note">Scales the conversation and the box you type in. The header, the list and the menus stay as they are. Wide and Wider pair well with a larger size.</p>
+      <div class="sx-prev-wrap" aria-hidden="true"><div class="sx-prev" inert>
+        <div class="msg user"><div class="bubble">Can you make the text easier to read?</div></div>
+        <div class="msg assistant"><div class="bubble md"><p>This is how a reply reads on this window. A command such as <code>go test ./...</code> sits inside a sentence.</p><pre><code>func Scale(n int) int {\n\treturn n * 2\n}</code></pre></div></div>
+        <div class="toolrun"><span class="tr-line"><span class="tr-dot"></span><span class="tr-txt">Ran 3 commands</span><span class="tr-chev">›</span></span></div>
+      </div></div>
+      <p class="sx-note">A preview of the conversation at this window's width.</p></div>`;
+}
+
+function sxRadios(kind, lbl, list, cur) {
+  return `<div class="sx-radios" role="radiogroup" aria-labelledby="${lbl}">${list.map((c) => `<button type="button" class="sx-radio" role="radio" id="sx-${kind}-${c.id || "default"}" aria-checked="${c.id === cur}" tabindex="${c.id === cur ? 0 : -1}" data-sx="${kind}" data-val="${c.id}"><span class="sx-rn">${esc(c.name)}</span><small>${esc(c.sub)}</small></button>`).join("")}</div>`;
+}
+
+// The preview is a copy of the conversation drawn at the window's own pane width and scaled down to fit the screen.
+function sxFitPreview() {
+  const wrap = document.querySelector("#sx-view .sx-prev-wrap"), pv = wrap && wrap.firstElementChild;
+  if (!pv) return;
+  const pane = Math.max(1, Math.round($("settings").getBoundingClientRect().width || window.innerWidth));
+  const k = Math.min(1, wrap.clientWidth / pane);
+  pv.style.width = pane + "px"; pv.style.transform = k < 1 ? `scale(${k})` : "";
+  wrap.style.height = Math.ceil(pv.offsetHeight * k) + 2 + "px";
+}
+
+// The choice for a radio group by its kind ("col", "rs"): the list, and how to save it.
+const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet] });
+function sxPick(kind, val) {
+  const p = SX_PREFS()[kind];
+  if (!p) return;
+  p[1](val);
+  renderSettings();
+  const r = $("sx-view").querySelector(`#sx-${kind}-${val || "default"}`);
+  if (r) r.focus({ preventScroll: true });
 }
 
 function sxColKey(ev) {
   const b = ev.target.closest && ev.target.closest(".sx-radio");
-  if (!b) return;
-  const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
-  let i = CT.COLS.findIndex((c) => c.id === b.dataset.col);
-  if (ev.key in keys) i = (i + keys[ev.key] + CT.COLS.length) % CT.COLS.length;
+  const p = b && SX_PREFS()[b.dataset.sx];
+  if (!p) return;
+  const list = p[0], keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+  let i = list.findIndex((c) => c.id === b.dataset.val);
+  if (ev.key in keys) i = (i + keys[ev.key] + list.length) % list.length;
   else if (ev.key === "Home") i = 0;
-  else if (ev.key === "End") i = CT.COLS.length - 1;
+  else if (ev.key === "End") i = list.length - 1;
   else return;
   ev.preventDefault();
-  CT.colSet(CT.COLS[i].id);
-  renderSettings();
+  sxPick(b.dataset.sx, list[i].id);
 }
 
 function renderSettings() {
@@ -9609,7 +9643,8 @@ function renderSettings() {
   const focus = document.activeElement && document.activeElement.id;
   el.innerHTML = h;
   const f = (sx.rename && $("sx-rename")) || (focus && $(focus));
-  if (focus && focus.indexOf("sx-col-") === 0) { const r = el.querySelector('.sx-radio[aria-checked="true"]'); if (r) r.focus({ preventScroll: true }); }
+  if (focus && /^sx-(col|rs)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
+  sxFitPreview();
   if (f && f !== document.activeElement && (sx.rename || focus === "sx-name")) { f.focus({ preventScroll: true }); if (sx.rename) f.select(); }
 }
 
@@ -9721,7 +9756,7 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
-    case "col": CT.colSet(b.dataset.col); renderSettings(); { const r = $("sx-view").querySelector('.sx-radio[aria-checked="true"]'); if (r) r.focus({ preventScroll: true }); } break;
+    case "col": case "rs": sxPick(b.dataset.sx, b.dataset.val); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
     case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
@@ -9766,7 +9801,7 @@ function initSettings() {
   $("sx-view").addEventListener("keydown", sxColKey);
   // The strip is drawn for this window, and another tab can change the width: redraw the open screen.
   window.addEventListener("resize", () => { if (sx.route) renderSettings(); });
-  window.addEventListener("storage", (e) => { if (sx.route && e.key === CT.KEY_COL) renderSettings(); });
+  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS)) renderSettings(); });
   $("sx-view").addEventListener("submit", settingsSubmit);
 }
 
