@@ -249,7 +249,7 @@ func cmdPages(e *Env, args []string) error {
 	version := fs.Int("version", 0, "show --body: an older version")
 	kind := fs.String("type", "", "new: the starter, one of "+strings.Join(pageskit.Types, ", ")+" (default doc)")
 	title := fs.String("title", "", "new: the page's title")
-	ctxFile := fs.String("context", "", "note: the finding's details, a file or - for stdin")
+	ctxFile := fs.String("context", "", "note: the finding's details: - for stdin, else the text itself (never a file path)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -385,9 +385,18 @@ func cmdPages(e *Env, args []string) error {
 		}
 		body := map[string]any{"finding": pos[1]}
 		if *ctxFile != "" {
-			text, err := readInput(e, *ctxFile, 4<<10)
-			if err != nil {
-				return err
+			// Only stdin or the text itself: a file path is never opened, so
+			// a chat helper cannot attach a local file to a to-do.
+			text := *ctxFile
+			if text == "-" {
+				b, err := io.ReadAll(io.LimitReader(e.Stdin, 4<<10+1))
+				if err != nil {
+					return err
+				}
+				text = string(b)
+			}
+			if len(text) > 4<<10 {
+				return fmt.Errorf("the details are larger than 4096 bytes")
 			}
 			body["details"] = text
 		}

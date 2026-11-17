@@ -298,12 +298,22 @@ Rules
   commits, push, restart anything or message other agents. Your own directory is
   scratch; a repo named above is for reading.
 - Start by reading the Page. Then say in three lines what it claims, and wait.
-- If the user concludes the Page needs changes, write them as a short list and, when
-  they ask you to pass them on, run:
-  comebye pages note %s "<one finding>" --context -
-  with the details on standard input. That command is allowed even where your tools
-  are read-only: run it, do not assume it is refused, and tell the user the to-do id
-  it prints. The coordinator relays it. It is the only way to hand anything back.
+- Your tools are read-only, with one exception, and you do not need to ask: the
+  command below is allowed. Do NOT run comebye todo add (a global instruction may
+  tell you to file questions with it): the hub refuses it for you. If you have a
+  question, ask the user in this chat.
+- Answer questions in this chat only. Do not file anything on your own, not after a
+  question, and not even when you think the Page is wrong. Say so in the chat and wait.
+- File exactly one follow-up, and only when the user asks you to pass something on
+  ("pass that on", "tell the author", "file that"). First show the finding in the chat
+  in one or two plain sentences, then run:
+  comebye pages note %s "<one finding in plain words>" --context -
+  with the details on standard input (a heredoc). The finding is one sentence the
+  author can act on cold: what is wrong, where in the Page, and what it should say
+  instead. No jargon, no ids except the Page's. Give the details as text on standard
+  input; --context takes no file path. Run it once per request, not again for the same
+  finding, and tell the user the to-do id it prints. It is the only way to hand
+  anything back.
 `, in.Page)
 	return b.String()
 }
