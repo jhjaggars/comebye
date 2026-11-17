@@ -38,8 +38,8 @@ import (
 // while, or a background task. A short spell of working right after a nudge
 // is the nudge's own answer ("ok, restarting") and does not reset; a worker
 // that answers and goes idle again has not restarted its loop. The clock
-// stops for good when the handoff is no longer running (it reported, landed,
-// was removed or lost) and pauses while the agent is blocked at a dialog, is
+// stops for good when the worker has reported (comebye report), or the
+// handoff landed, was removed or lost (see loopWatched) and pauses while the agent is blocked at a dialog, is
 // gone from the fleet (parked) or its user is typing in its box. It lives in
 // memory: a hub restart starts the count again.
 
@@ -142,13 +142,30 @@ func (s *Server) RunLoopNudge(ctx context.Context) {
 	}
 }
 
-func loopNudgeText(e ledger.Entry, n int) string {
-	t := "Comebye (hub nudge): you are idle with nothing running, but your brief says to keep this going: " + cleanLoop(e.Loop) + ". " +
-		"Start it again now and keep it running between checks. If you are done, file your report with `comebye report -`."
-	if n == 2 {
-		t = "Comebye (hub nudge, second): you are still idle with nothing running after the first nudge. " + strings.TrimPrefix(t, "Comebye (hub nudge): ")
+// loopWatched says whether the clock runs for e: a handoff with a loop whose
+// worker has not said it is done. A worker whose turn ended without a
+// report reads as finished to the ledger (the hub took its last reply), and
+// that is exactly a dead loop; one that filed its report, landed, was
+// removed or is lost is over.
+func loopWatched(e ledger.Entry) bool {
+	if e.Loop == "" {
+		return false
 	}
-	return t
+	switch e.Status {
+	case ledger.Running:
+		return true
+	case ledger.Finished:
+		return e.ReportSource != "explicit"
+	}
+	return false
+}
+
+func loopNudgeText(e ledger.Entry, n int) string {
+	lead := "Comebye (hub nudge): you are idle with nothing running, but your brief says to keep this going: "
+	if n == 2 {
+		lead = "Comebye (hub nudge, second): you are still idle with nothing running, and the first nudge did not restart your loop. Your brief says to keep this going: "
+	}
+	return lead + cleanLoop(e.Loop) + ". Start it again now and keep it running between checks. If you are done, file your report with `comebye report -`."
 }
 
 func loopDeadText(e ledger.Entry, idle time.Duration) string {
@@ -205,7 +222,7 @@ func (s *Server) loopStep(ctx context.Context, agents []herdr.AgentInfo, now tim
 		if ctx.Err() != nil {
 			return
 		}
-		if e.Loop == "" || e.Status != ledger.Running {
+		if !loopWatched(e) {
 			continue
 		}
 		live[e.ID] = true

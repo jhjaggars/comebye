@@ -152,8 +152,8 @@ func TestLoopNudgeBackgroundTaskResets(t *testing.T) {
 
 func TestLoopNudgeStopsWhenTheHandoffIsOver(t *testing.T) {
 	for name, stop := range map[string]func(*loopRig){
-		"finished": func(r *loopRig) {
-			r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.Status = ledger.Finished })
+		"finished with a report": func(r *loopRig) {
+			r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.Status, e.ReportSource = ledger.Finished, "explicit" })
 		},
 		"removed": func(r *loopRig) {
 			r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.Status = ledger.Removed })
@@ -174,6 +174,16 @@ func TestLoopNudgeStopsWhenTheHandoffIsOver(t *testing.T) {
 			r.want(1, 0, "no more once it is "+name)
 		})
 	}
+}
+
+// A worker whose turn ended with no report reads as finished to the ledger:
+// that is the dead loop, so the clock runs on.
+func TestLoopNudgeRunsOnForAnImplicitFinish(t *testing.T) {
+	r := newLoopRig(t, "watch PR 118")
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.Status = ledger.Finished })
+	r.at(0, herdr.StatusIdle)
+	r.at(10, herdr.StatusIdle)
+	r.want(1, 0, "nudged though the ledger says finished")
 }
 
 func TestLoopNudgeNotWithoutLoop(t *testing.T) {
