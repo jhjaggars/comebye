@@ -47,7 +47,8 @@ const other = dark ? "gruvbox-light" : "gruvbox-dark";
 for (const width of [1280, 390]) {
   const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark, bypassCSP: false });
   const log = [];
-  page.on("console", (m) => { if (m.type() === "error" || /Content Security Policy|Refused to/.test(m.text())) log.push(m.text()); });
+  // A browser that does not know the webrtc directive says so once per page; the directive is there for those that do.
+  page.on("console", (m) => { if (/Unrecognized Content-Security-Policy directive 'webrtc'/.test(m.text())) return; if (m.type() === "error" || /Content Security Policy|Refused to/.test(m.text())) log.push(m.text()); });
   page.on("pageerror", (e) => log.push("pageerror: " + e.message));
   for (const t of TYPES) {
     await check(`starters: ${t} at ${width} (${dark ? "dark" : "light"}) renders clean and follows the theme`, async () => {

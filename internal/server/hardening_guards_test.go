@@ -171,7 +171,7 @@ func TestAnswerByAnAgentIsNeverRelayedAsTheUsers(t *testing.T) {
 }
 
 func TestApprovalSnoozeCoversEveryAgentRequest(t *testing.T) {
-	s, _, _ := passkeyServer(t)
+	s, h, _ := passkeyServer(t)
 	code, _ := fileApproval(t, s, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"Unlock GPG key ABCDEF0123456789"}`)
 	if code != 201 {
 		t.Fatalf("file = %d", code)
@@ -186,6 +186,23 @@ func TestApprovalSnoozeCoversEveryAgentRequest(t *testing.T) {
 	w := do(s, "POST", "/api/approvals", agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"again"}`)
 	if !strings.Contains(w.Body.String(), `"snoozed":true`) {
 		t.Fatalf("not snoozed: %d %s", w.Code, w.Body)
+	}
+	// Removing a passkey starts over.
+	l := do(s, "GET", "/api/passkeys", userHdr, "")
+	var pl struct {
+		Passkeys []struct {
+			ID string `json:"id"`
+		} `json:"passkeys"`
+	}
+	decodeJSON(t, l, &pl)
+	if w := do(s, "DELETE", "/api/passkeys/"+pl.Passkeys[0].ID, h, ""); w.Code != 200 {
+		t.Fatalf("remove = %d %s", w.Code, w.Body)
+	}
+	s.approvals.mu.Lock()
+	n := len(s.approvals.snooze)
+	s.approvals.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d snoozes after removing the passkey", n)
 	}
 }
 

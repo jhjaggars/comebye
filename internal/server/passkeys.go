@@ -306,6 +306,9 @@ func (s *Server) handlePasskeyRemove(w http.ResponseWriter, r *http.Request) {
 		apErr(w, http.StatusInternalServerError, "save_failed", capitalize(err.Error()))
 		return
 	}
+	s.approvals.mu.Lock()
+	clear(s.approvals.snooze) // a "Not now" was said under the old set of passkeys
+	s.approvals.mu.Unlock()
 	s.audit(r, ledger.AuditEvent{Action: "passkey.remove", OK: true, Detail: p.Name + " " + passkey.Fingerprint(p.PublicKey)})
 	writeJSON(w, map[string]any{"removed": id})
 }
