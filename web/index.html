@@ -452,6 +452,9 @@
       padding: var(--sp-4) var(--sp-6); min-height: var(--hit-32); -webkit-tap-highlight-color: transparent;
     }
     .tr-line:hover { color: var(--text); }
+    /* The chat scrolls, so the one focus ring sits inside the line (an outer one would be clipped at the edge). */
+    .tr-line:focus-visible, .tr-row:focus-visible { outline-offset: -2px; color: var(--text); }
+    .tr-pre:focus-visible, .sa-steps:focus-visible { outline-offset: 1px; }
     .tr-txt { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
     .tr-chev { flex: none; display: inline-block; font-size: 1.1em; line-height: 1; transition: transform .12s; }
     .tr-line[aria-expanded="true"] .tr-chev { transform: rotate(90deg); }
@@ -3189,6 +3192,7 @@
     <main>
       <div id="d-markbar" class="markbar" hidden></div>
       <div id="chat"></div>
+      <div id="tool-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
       <button type="button" class="cpb cpb-out" id="btn-copy-screen" data-copy-key="term-screen" aria-label="Copy what the terminal shows" hidden>Copy screen</button>
       <pre id="output" style="display:none"></pre>
       <section id="answer" style="display:none" aria-live="polite"></section>
