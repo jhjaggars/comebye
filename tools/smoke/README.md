@@ -46,6 +46,8 @@ also writes `state-FAIL-N.txt`: the agents, the ledger, the to-dos and every pro
 - **Fast:** the whole run, build included, is under a minute on a laptop; the budget is 5 minutes.
 - **A usability regression is reported, not worked around.** If a hardening change blocks a step, the step fails; do not
   loosen the step. Say which step and what blocked it.
+- The exit trap (`cleanup.sh`) stops a gpg-agent only for a `GNUPGHOME` inside the run's temp directory, and `GNUPGHOME` is set before
+  anything that can fail, so an aborted run cannot end the user's real unlock. `cleanup_test.sh` checks the guard (it runs in CI).
 - Everything lives under one temp directory (`HOME`, the hub's state, `GNUPGHOME`, the herdr socket, the repositories) and is
   removed at the end. CI sets `SMOKE_REQUIRE_GPG=1` so a runner without gpg fails step 6 instead of skipping it.
 

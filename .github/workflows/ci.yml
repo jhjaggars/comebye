@@ -310,6 +310,8 @@ jobs:
           cache: npm
           cache-dependency-path: tools/uitest/package-lock.json
 
+      - name: the smoke's cleanup never touches a real gpg-agent
+        run: tools/smoke/cleanup_test.sh
       - name: day in the life
         env:
           SMOKE_REQUIRE_GPG: "1"

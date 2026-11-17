@@ -17,7 +17,11 @@ out="${1:-$(mktemp -d)}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 tmp="$(mktemp -d)"
-trap 'gpgconf --kill gpg-agent 2>/dev/null || true; kill $(jobs -p) 2>/dev/null || true; rm -rf "$tmp"' EXIT
+# The throwaway GNUPGHOME comes first, before anything that can fail, and the exit trap stops a gpg-agent only for a GNUPGHOME inside
+# $tmp (cleanup.sh): a failure at any point must never kill the user's real agent and end a live unlock.
+export GNUPGHOME="$tmp/gnupg"; mkdir -m 700 "$GNUPGHOME"
+. "$here/cleanup.sh"
+trap 'smoke_cleanup "$tmp"' EXIT
 
 if [ -z "${CHROME:-}" ]; then
   CHROME="$(command -v google-chrome || command -v chromium || true)"
@@ -35,7 +39,6 @@ port="${PORT:-$(free_port)}"; pport="$(free_port)"
 
 # The throwaway world: HOME (git identity, agents' session files), the hub's state, GnuPG, a bare origin, a repository.
 export HOME="$tmp/home"; mkdir -p "$HOME"
-export GNUPGHOME="$tmp/gnupg"; mkdir -m 700 "$GNUPGHOME"
 export COMEBYE_STATE_DIR="$tmp/state"
 export COMEBYE_SCRATCH_DIR="$tmp/scratch"; mkdir -p "$COMEBYE_SCRATCH_DIR"
 unset XDG_CONFIG_HOME XDG_STATE_HOME HERDR_PANE_ID HERDR_SOCKET_PATH
