@@ -321,6 +321,11 @@
     html[data-rs="small"] { --rs: .93; }
     html[data-rs="large"] { --rs: 1.15; }
     html[data-rs="larger"] { --rs: 1.3; }
+    /* The spacing: <html data-sp> sets the line height of replies and thinking (--lh) and the gap between messages
+       (--gap) in the conversation only. Default is today's 1.55 and 10 px. */
+    :root { --lh: 1.55; --gap: 10px; }
+    html[data-sp="compact"] { --lh: 1.4; --gap: 6px; }
+    html[data-sp="roomy"] { --lh: 1.75; --gap: 16px; }
     #chat, #sv-chat, .prompt .composer, .sx-prev {
       --fs-11: calc(11px * var(--rs)); --fs-12: calc(12px * var(--rs)); --fs-13: calc(13px * var(--rs)); --fs-14: calc(14px * var(--rs));
       --fs-15: calc(15px * var(--rs)); --fs-16: calc(16px * var(--rs)); --fs-18: calc(18px * var(--rs));
@@ -333,7 +338,7 @@
          padding centres a --col-wide reading column. */
       padding: var(--sp-14) max(var(--sp-10), calc((100% - var(--col)) / 2));
       min-height: 0; overflow-y: auto;
-      display: flex; flex-direction: column; gap: var(--sp-10);
+      display: flex; flex-direction: column; gap: var(--gap);
     }
     .load-earlier {
       align-self: center; background: none; border: 1px solid var(--border);
@@ -353,7 +358,7 @@
       white-space: pre-wrap;
     }
     /* Agent replies are plain full-width text, no box (like the Claude phone app). */
-    .msg.assistant .bubble { background: none; border-radius: 0; padding: var(--sp-4) var(--sp-6); line-height: 1.55; }
+    .msg.assistant .bubble { background: none; border-radius: 0; padding: var(--sp-4) var(--sp-6); line-height: var(--lh); }
     .bubble a { color: var(--blue); overflow-wrap: anywhere; }
 
     /* Rendered markdown (assistant bubbles, thinking, compaction summaries). */
@@ -451,7 +456,7 @@
     /* Thinking: a quiet line like a tool run's ("Thought for 12s ›"); opened, the text in muted type, no bubble. */
     .thinking { align-self: stretch; min-width: 0; display: flex; flex-direction: column; }
     .thinking .think-body {
-      color: var(--muted); font-size: var(--fs-13); line-height: 1.5;
+      color: var(--muted); font-size: var(--fs-13); line-height: calc(var(--lh) - .05);
       border-left: 2px solid var(--border); padding: var(--sp-2) var(--sp-10); margin: 0 0 var(--sp-6) var(--sp-10);
       max-height: 300px; overflow-y: auto;
       -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
@@ -2632,7 +2637,7 @@
     .sx-radio small { color: var(--muted); font-size: var(--fs-12); }
     .sx-radio[aria-checked="true"] { border-color: var(--blue); background: var(--chip-blue); }
     .sx-prev-wrap { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-10); background: var(--bg); }
-    .sx-prev { position: absolute; left: 0; top: 0; transform-origin: 0 0; display: flex; flex-direction: column; gap: var(--sp-10); padding: var(--sp-14) max(var(--sp-10), calc((100% - var(--col)) / 2)); box-sizing: border-box; pointer-events: none; }
+    .sx-prev { position: absolute; left: 0; top: 0; transform-origin: 0 0; display: flex; flex-direction: column; gap: var(--gap); padding: var(--sp-14) max(var(--sp-10), calc((100% - var(--col)) / 2)); box-sizing: border-box; pointer-events: none; }
     .sx-strip { position: relative; height: 22px; border: 1px solid var(--border); border-radius: var(--r-6); background: var(--panel2); overflow: hidden; }
     .sx-strip-col { position: absolute; top: 3px; bottom: 3px; border-radius: var(--r-4); background: var(--blue); opacity: .7; }
     .sx-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; }

@@ -9578,7 +9578,10 @@ function sxAppearance() {
         <div class="msg assistant"><div class="bubble md"><p>This is how a reply reads on this window. A command such as <code>go test ./...</code> sits inside a sentence.</p><pre><code>func Scale(n int) int {\n\treturn n * 2\n}</code></pre></div></div>
         <div class="toolrun"><span class="tr-line"><span class="tr-dot"></span><span class="tr-txt">Ran 3 commands</span><span class="tr-chev">›</span></span></div>
       </div></div>
-      <p class="sx-note">A preview of the conversation at this window's width.</p></div>`;
+      <p class="sx-note">A preview of the conversation at this window's width.</p></div>
+    <div class="sx-field"><div class="sx-lbl" id="sx-sp-lbl">Spacing</div>
+      ${sxRadios("sp", "sx-sp-lbl", CT.SPS, CT.spChoice())}
+      <p class="sx-note">Line height in replies and thinking, and the space between messages. The preview above follows.</p></div>`;
 }
 
 function sxRadios(kind, lbl, list, cur) {
@@ -9595,8 +9598,8 @@ function sxFitPreview() {
   wrap.style.height = Math.ceil(pv.offsetHeight * k) + 2 + "px";
 }
 
-// The choice for a radio group by its kind ("col", "rs"): the list, and how to save it.
-const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet] });
+// The choice for a radio group by its kind ("col", "rs", "sp"): the list, and how to save it.
+const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet] });
 function sxPick(kind, val) {
   const p = SX_PREFS()[kind];
   if (!p) return;
@@ -9643,7 +9646,7 @@ function renderSettings() {
   const focus = document.activeElement && document.activeElement.id;
   el.innerHTML = h;
   const f = (sx.rename && $("sx-rename")) || (focus && $(focus));
-  if (focus && /^sx-(col|rs)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
+  if (focus && /^sx-(col|rs|sp)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
   sxFitPreview();
   if (f && f !== document.activeElement && (sx.rename || focus === "sx-name")) { f.focus({ preventScroll: true }); if (sx.rename) f.select(); }
 }
@@ -9756,7 +9759,7 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
-    case "col": case "rs": sxPick(b.dataset.sx, b.dataset.val); break;
+    case "col": case "rs": case "sp": sxPick(b.dataset.sx, b.dataset.val); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
     case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
@@ -9801,7 +9804,7 @@ function initSettings() {
   $("sx-view").addEventListener("keydown", sxColKey);
   // The strip is drawn for this window, and another tab can change the width: redraw the open screen.
   window.addEventListener("resize", () => { if (sx.route) renderSettings(); });
-  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS)) renderSettings(); });
+  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP)) renderSettings(); });
   $("sx-view").addEventListener("submit", settingsSubmit);
 }
 

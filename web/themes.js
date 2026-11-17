@@ -350,7 +350,16 @@
   const rs = pref("rs", API.RSS);
   API.KEY_RS = rs.key; API.rsChoice = rs.choice; API.rsApply = rs.apply; API.rsSet = rs.set;
   rs.apply();
+  // The spacing: line height and the gap between messages as one control (web/index.html sets --lh and --gap).
+  API.SPS = [
+    { id: "compact", name: "Compact", lh: 1.4, gap: 6, sub: "tight lines, 6 px between messages" },
+    { id: "", name: "Comfortable", lh: 1.55, gap: 10, sub: "the default" },
+    { id: "roomy", name: "Roomy", lh: 1.75, gap: 16, sub: "airy lines, 16 px between messages" },
+  ];
+  const sp = pref("sp", API.SPS);
+  API.KEY_SP = sp.key; API.spChoice = sp.choice; API.spApply = sp.apply; API.spSet = sp.set;
+  sp.apply();
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
-  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); });
+  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); });
 })(typeof window !== "undefined" ? window : globalThis);
