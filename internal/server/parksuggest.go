@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 // of its own that waits on the user nowhere, has no background task, nobody typing
 // in its box, and a clean worktree (uncommitted edits block a suggestion; a manual
 // park of a dirty tree is still allowed, after a confirm).
+//
+// A "Chat about this" helper (chat.go) has no checkout, so it needs no worktree
+// and has none to be dirty: it is a candidate once it has been idle long enough
+// and the other guards pass. Resuming it from Recently closed already works.
 //
 // The quiet-worker mark (quiet.go) is a signal for working agents; parking takes
 // idle ones, so it is not an input here.
@@ -166,7 +171,7 @@ func (s *Server) parkBlock(a herdr.AgentInfo, after time.Duration, now time.Time
 		return "not idle for long enough"
 	case s.isCoordinator(a.ID, a.Name):
 		return "a coordinator"
-	case a.Worktree == nil || !a.Worktree.IsLinked:
+	case !s.isChatHelper(a) && (a.Worktree == nil || !a.Worktree.IsLinked):
 		return "not in its own worktree (a home session)"
 	case len(a.Background) > 0 || s.bgRunning(a):
 		return "a background task is running"
@@ -178,6 +183,28 @@ func (s *Server) parkBlock(a herdr.AgentInfo, after time.Duration, now time.Time
 		return "someone is typing in its input box"
 	}
 	return ""
+}
+
+// isChatHelper: a is a "Chat about this" helper: the hub's role says so and it
+// runs in a scratch directory named like one (chat.go). Such a helper lives
+// outside any git checkout, so the worktree guards do not apply to it; the
+// host that parks it checks the directory again (park.go).
+func (s *Server) isChatHelper(a herdr.AgentInfo) bool {
+	if s.roles == nil || a.ID == "" {
+		return false
+	}
+	s.roles.mu.Lock()
+	r, ok := s.roles.data[a.ID]
+	s.roles.mu.Unlock()
+	if !ok || r.Role != RoleChat || (r.Name != "" && a.Name != "" && r.Name != a.Name) {
+		return false
+	}
+	if s.isLocalHost(a.Host) {
+		return s.isChatDirName(a.CWD)
+	}
+	// A peer's state directory is not known here; its host checks the
+	// directory properly when the hub asks it to park (park.go).
+	return filepath.Base(filepath.Dir(a.CWD)) == "chats" && chatDirRE.MatchString(filepath.Base(a.CWD))
 }
 
 func (s *Server) bgRunning(a herdr.AgentInfo) bool {
@@ -247,7 +274,10 @@ func (s *Server) parkSuggestStep(ctx context.Context, agents []herdr.AgentInfo, 
 		if stale && reads < parkSugReads {
 			reads++
 			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			clean, known := p.checkClean(cctx, a)
+			clean, known := true, true // a chat helper has no checkout: nothing to be dirty
+			if !s.isChatHelper(a) {
+				clean, known = p.checkClean(cctx, a)
+			}
 			cancel()
 			p.mu.Lock()
 			st.checked, st.known, st.clean = now, known, clean
@@ -307,7 +337,11 @@ func (s *Server) autoPark(ctx context.Context, a herdr.AgentInfo, key string, no
 	p.parked = append(p.parked, now)
 	delete(p.m, key)
 	p.mu.Unlock()
+	why := "idle for a day, clean worktree"
+	if s.isChatHelper(a) {
+		why = "a chat helper idle for a day"
+	}
 	s.auditBy(ledger.AuditEvent{Action: "park.auto", By: "hub", OK: true, Host: a.Host,
-		Detail: fmt.Sprintf("%s parked automatically after a day idle with a clean worktree (record %s)", a.Name, id)})
-	s.queueLine("park", id, id, fmt.Sprintf("%s was parked automatically (idle for a day, clean worktree); resume it from Recently closed.", a.Name))
+		Detail: fmt.Sprintf("%s parked automatically after a day idle (%s) (record %s)", a.Name, why, id)})
+	s.queueLine("park", id, id, fmt.Sprintf("%s was parked automatically (%s); resume it from Recently closed.", a.Name, why))
 }

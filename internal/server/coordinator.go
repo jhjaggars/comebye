@@ -321,6 +321,10 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 type roleBody struct {
 	AgentID string `json:"agent_id"`
 	Role    string `json:"role"` // "coordinator" or "" to clear
+	// Page, with role "chat", marks the agent a chat helper about that Page.
+	// Only a -test-mode hub takes it (the browser tests and the dev server have
+	// no real launch to make helpers with); chat.go makes the real ones.
+	Page string `json:"page,omitempty"`
 }
 
 // handleSetRole makes an agent a coordinator or not: POST {agent_id,
@@ -334,7 +338,16 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if b.Role != "" && b.Role != RoleCoordinator {
+	if b.Role == RoleChat && s.cfg.TestMode {
+		if s.pages == nil {
+			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "page_not_found", "message": "no pages here"})
+			return
+		}
+		if _, ok := s.pages.get(b.Page); !ok {
+			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "page_not_found", "message": "no such page"})
+			return
+		}
+	} else if b.Role != "" && b.Role != RoleCoordinator {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_role", "message": "the only role is coordinator"})
 		return
 	}
@@ -348,6 +361,15 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found && b.Role != "" {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "agent_not_found", "message": "no such agent"})
+		return
+	}
+	if b.Role == RoleChat {
+		err := s.roles.set(b.AgentID, Role{Role: RoleChat, Name: name, Page: b.Page, By: s.by(r, ""), At: time.Now().UTC()})
+		if err != nil {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "roles_error", "message": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"roles": s.liveRoles()})
 		return
 	}
 	if err := s.recordRole(b.AgentID, name, b.Role, s.by(r, "")); err != nil {

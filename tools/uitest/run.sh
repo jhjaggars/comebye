@@ -150,6 +150,8 @@ if want pagerevisions; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/s
 if want pagechat; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagechat.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # A Page paints in the app's mode from its first frame (device one way, app the other), Markdown and Mermaid too.
 if want pagetheme; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagetheme.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# A chat helper in the app: the `chat` chip in Agents, the strip over its conversation, the review card's "Chat about this".
+if want chatstrip; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node chatstrip.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # A release item closes itself once the fleet runs its version: a second build with a version stamped in, its own state.
 if want releaseauto; then
   (cd "$app" && go build -ldflags "-X main.version=v100.0.0" -o "$tmp/comebye-stamped" .)

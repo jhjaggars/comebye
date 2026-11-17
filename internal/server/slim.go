@@ -44,6 +44,38 @@ type browserAgent struct {
 	QuietSince *time.Time `json:"quiet_since,omitempty"`
 	// ParkHint: the hub suggests parking this agent (parksuggest.go).
 	ParkHint *herdr.ParkHint `json:"park_hint,omitempty"`
+	// Chat: this agent is a "Chat about this" helper (chat.go); the app shows
+	// the strip and the chip.
+	Chat *chatMark `json:"chat,omitempty"`
+}
+
+// chatMark says which Page a chat helper is about. Version is the Page's
+// version the chat has been told about (0 when unknown).
+type chatMark struct {
+	Page    string `json:"page"`
+	Title   string `json:"title,omitempty"`
+	Version int    `json:"version,omitempty"`
+}
+
+// chatMarkOf is the chat marker of a, from the hub's roles (nil when a is no
+// chat helper). A pane that now runs another agent has no mark.
+func (s *Server) chatMarkOf(a herdr.AgentInfo, roles map[string]Role) *chatMark {
+	r, ok := roles[a.ID]
+	if !ok || r.Role != RoleChat || r.Page == "" || (r.Name != "" && a.Name != "" && r.Name != a.Name) {
+		return nil
+	}
+	m := &chatMark{Page: r.Page}
+	if s.pages != nil {
+		if p, ok := s.pages.get(r.Page); ok {
+			m.Title = p.Title
+		}
+	}
+	if s.chats != nil {
+		if rec, ok := s.chats.get(r.Page); ok && rec.Agent == a.ID {
+			m.Version = rec.Version
+		}
+	}
+	return m
 }
 
 // browserHost drops LastSeen, which changes with every peer ping and is
@@ -82,6 +114,10 @@ func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 	s.stampQuiet(agents)
 	s.stampPark(agents)
 	s.seenStore().apply(agents)
+	var roles map[string]Role
+	if s.roles != nil {
+		roles = s.roles.all()
+	}
 	for i, a := range agents {
 		out[i] = browserAgent{
 			ID: a.ID, Host: a.Host, PaneID: a.PaneID, Name: a.Name,
@@ -90,6 +126,7 @@ func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 			Worktree: a.Worktree, LastActive: a.LastActive, StatusSince: a.StatusSince, Instance: a.Instance,
 			BlockedOn: s.blockedOnOf(a), StatusNote: a.StatusNote, Background: s.backgroundOfAgent(a),
 			QuietSince: a.QuietSince, ParkHint: a.ParkHint,
+			Chat: s.chatMarkOf(a, roles),
 		}
 	}
 	return out

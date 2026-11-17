@@ -246,8 +246,9 @@ function subLine(a) {
   const chip = branch ? `<span class="wt-chip">⑂ ${esc(branch)}</span>` : "";
   const d = repoDamageOf(a);
   const dmg = d ? `<span class="lg-chip failed rd-chip" title="${escAttr(`${d.repo}: ${d.reason}. ${d.hint}`)}">repo damaged</span>` : "";
+  const ch = a.chat ? `<span class="chip purple chat-chip" title="${escAttr("A read-only helper about " + (a.chat.title ? "“" + a.chat.title + "”" : "a Page"))}">chat</span>` : "";
   const pk = a.park_hint ? `<span class="chip teal can-park" title="${escAttr(parkHintTitle(a))}">can park</span>` : "";
-  return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${dmg}${pk}${ledgerChip(a)}${(ledgerEntry(a) && usageChipHtml(ledgerEntry(a).id, false)) || ""}</div>`;
+  return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${dmg}${ch}${pk}${ledgerChip(a)}${(ledgerEntry(a) && usageChipHtml(ledgerEntry(a).id, false)) || ""}</div>`;
 }
 
 /* ---------- damaged repositories ---------- */
@@ -1764,14 +1765,16 @@ function reviewDoneHtml(t) {
   const fix = rv.fix_id ? ` A Fix item (${esc(rv.fix_id)}) is filed for the coordinator.` : "";
   return `<div class="rv-done">${line}${fix}</div>`;
 }
+const RV_CHAT_TITLE = "Start a read-only chat with a helper that has read this Page";
 function reviewBarHtml(t) {
+  if (t.page && !pgsChatOff.has(t.page.id)) setTimeout(() => pgsChatGate(t.page.id), 0); // asked once per Page; a refused kind greys the button
   const st = todos.rv.get(t.id), busy = todos.rvBusy.has(t.id) ? " disabled" : "";
   const stale = t.review && t.review.stale ? `<div class="rv-stale">Waiting for 3 days or more.</div>` : "";
   const kinds = st ? `<div class="rv-note"><div class="seg sm rv-kinds" role="group" aria-label="What kind of note">${REVIEW_KINDS.map(([k, l]) => `<button type="button" class="rv-kind" data-k="${k}" aria-pressed="${st.kind === k}">${esc(l)}</button>`).join("")}</div>
       <textarea class="td-text rv-text" id="rv-note-${escAttr(t.id)}" rows="3" maxlength="4000" placeholder="What should change? (optional)" aria-label="Note for the worker">${esc(todoDraft(t.id))}</textarea>
       <div class="td-acts"><button type="button" class="rv-send"${busy}>Send: Needs changes</button><button type="button" class="rv-cancel">Cancel</button></div></div>` : "";
   return `<div class="td-form rv-bar">${stale}
-      <div class="rv-btns"><button type="button" class="btn primary rv-good"${busy} title="Closes the item. You can undo for a few seconds. Key: 1"><kbd>1</kbd> ✓ Looks good</button><button type="button" class="btn warn rv-chg" aria-expanded="${!!st}"${busy} title="Add a note and file a Fix item. Key: 2"><kbd>2</kbd> ✎ Needs changes</button></div>
+      <div class="rv-btns"><button type="button" class="btn primary rv-good"${busy} title="Closes the item. You can undo for a few seconds. Key: 1"><kbd>1</kbd> ✓ Looks good</button><button type="button" class="btn warn rv-chg" aria-expanded="${!!st}"${busy} title="Add a note and file a Fix item. Key: 2"><kbd>2</kbd> ✎ Needs changes</button><button type="button" class="btn rv-chat" data-page="${escAttr(t.page.id)}"${busy}${pgs.chatBusy ? ' aria-busy="true"' : ""}${pgsChatOff.get(t.page.id) ? ` aria-disabled="true" title="${escAttr(pgsChatOff.get(t.page.id))}"` : ` title="${RV_CHAT_TITLE}"`}>💬 Chat about this</button></div>
       ${kinds}
       <div class="rv-foot"><div class="rv-route">${reviewRouteLine(t)}</div><div class="td-acts"><button type="button" class="td-drop">Drop</button></div></div></div>`;
 }
@@ -3246,6 +3249,7 @@ function onTodoClick(ev) {
   if (ev.target.closest(".ap-no")) { todoAct(id, "drop"); return; } // "Not now": no confirm box, the hub denies the request
   if (ev.target.closest(".rv-good")) { reviewVerdict(id, "good", item); return; }
   if (ev.target.closest(".rv-chg")) { reviewNote(id, item); return; }
+  if (ev.target.closest(".rv-chat")) { const tt = todos.items.find((x) => x.id === id); if (tt && tt.page) pagesChat(false, tt.page.id); return; }
   const rk = ev.target.closest(".rv-kind");
   if (rk) { const st = todos.rv.get(id); if (st) { st.kind = rk.dataset.k; renderTodos(true); } return; }
   if (ev.target.closest(".rv-send")) { reviewVerdict(id, "changes", item); return; }
@@ -10110,6 +10114,18 @@ function closeDetail() {
   maybeReload(); // a deploy noticed while on the detail view
 }
 
+// A chat helper's conversation starts with a strip: what it is about, and the way back to the Page.
+function renderChatStrip(a) {
+  const el = $("d-chatstrip");
+  if (!el) return;
+  const c = a && a.chat && /^pg_[0-9a-f]{10}$/.test(a.chat.page || "") ? a.chat : null;
+  if (!c) { el.hidden = true; el.innerHTML = ""; return; }
+  const title = c.title || "this Page";
+  const html = `<span class="cs-ico" aria-hidden="true"></span><span class="cs-t">Chat about <b>${esc(title)}</b></span><span class="cs-sep" aria-hidden="true">·</span><a class="cs-open" href="#/pages/${escAttr(c.page)}">Open page</a>`;
+  if (el.innerHTML !== html) el.innerHTML = html;
+  el.hidden = false;
+}
+
 function renderDetailNote() {
   const el = $("d-note"), a = agentById(state.selected);
   if (!el) return;
@@ -10151,6 +10167,7 @@ function renderDetail() {
   why.title = quietMs(a) && !whyBlocked(a) ? quietTitle(a) : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? bgTitle(a) : wt;
   why.hidden = !wt;
   renderDetailNote();
+  renderChatStrip(a);
   updateAnswerCard();
   updateSendButton();
   renderActivity();
@@ -13558,6 +13575,10 @@ function pgsChatShow(id) {
     if (why) { b.setAttribute("aria-disabled", "true"); b.title = why; b.classList.add("pgs-chatoff"); }
     else { b.removeAttribute("aria-disabled"); b.classList.remove("pgs-chatoff"); }
   }
+  document.querySelectorAll(`.rv-chat[data-page="${id}"]`).forEach((b) => {
+    if (why) { b.setAttribute("aria-disabled", "true"); b.title = why; b.classList.add("pgs-chatoff"); }
+    else { b.removeAttribute("aria-disabled"); b.classList.remove("pgs-chatoff"); b.title = RV_CHAT_TITLE; }
+  });
   const main = $("pgs-chat");
   if (main && !why) main.title = "Chat about this page: start a read-only helper";
 }
@@ -13565,18 +13586,19 @@ function pgsChatGate(id) {
   if (pgsChatOff.has(id)) { pgsChatShow(id); return; }
   api("/api/pages/" + encodeURIComponent(id) + "/chat-options").then((o) => {
     pgsChatOff.set(id, o && o.ok === false ? (o.reason || "Chat is off for this page.") : "");
-    if (pgs.route && pgs.route.id === id) pgsChatShow(id);
+    pgsChatShow(id);
   }, () => {});
 }
-async function pagesChat(fresh) {
-  const route = pgs.route;
-  if (!route || pgs.chatBusy) return;
-  if (pgsChatOff.get(route.id)) { toast(pgsChatOff.get(route.id), true); return; }
+async function pagesChat(fresh, pageId) {
+  const pid = pageId || (pgs.route && pgs.route.id);
+  if (!pid || pgs.chatBusy) return;
+  if (pgsChatOff.get(pid)) { toast(pgsChatOff.get(pid), true); return; }
   pgs.chatBusy = true;
   $("pgs-chat")?.setAttribute("aria-busy", "true");
+  document.querySelectorAll(".rv-chat").forEach((b) => b.setAttribute("aria-busy", "true"));
   toast(fresh ? "Starting a new chat about this page…" : "Opening the chat about this page…");
   try {
-    const r = await api("/api/pages/" + encodeURIComponent(route.id) + "/chat", { method: "POST", body: fresh ? '{"new":true}' : "{}", timeout: 180000 });
+    const r = await api("/api/pages/" + encodeURIComponent(pid) + "/chat", { method: "POST", body: fresh ? '{"new":true}' : "{}", timeout: 180000 });
     const pane = r.agent && r.agent.pane_id;
     const label = r.name || "chat";
     let note = "";
@@ -13593,6 +13615,7 @@ async function pagesChat(fresh) {
   } finally {
     pgs.chatBusy = false;
     $("pgs-chat")?.removeAttribute("aria-busy");
+    document.querySelectorAll(".rv-chat").forEach((b) => b.removeAttribute("aria-busy"));
   }
 }
 

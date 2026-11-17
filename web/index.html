@@ -825,7 +825,7 @@
     }
     .prompt:focus-within { border-color: var(--blue); }
     /* The composer and the bars above it share the chat's reading column. */
-    #detail main > :is(.prompt, #queued, #d-markbar, #keypad) { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; box-sizing: border-box; }
+    #detail main > :is(.prompt, #queued, #d-markbar, #d-chatstrip, #keypad) { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; box-sizing: border-box; }
     .prompt .composer {
       flex: 1; min-width: 0; min-height: var(--hit-40);
       max-height: calc(6 * 1.4em + 20px); overflow-y: auto; overscroll-behavior: contain;
@@ -1140,6 +1140,15 @@
     .agent.marked { box-shadow: inset 3px 0 0 var(--orange); }
     #row-menu { position: fixed; bottom: auto; right: auto; z-index: var(--z-popup); min-width: 220px; max-width: 80vw; }
     #row-menu[hidden] { display: none; }
+    /* Over a chat helper's conversation: what it is about, and the way back to the Page. */
+    .chatstrip { display: flex; align-items: center; gap: var(--sp-8); min-height: var(--hit-40); padding: var(--sp-6) var(--sp-12); margin-bottom: var(--sp-10); border-radius: var(--r-10);
+      background: var(--chip-purple); color: var(--text); border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent); font-size: var(--fs-14); }
+    .chatstrip[hidden] { display: none; }
+    .chatstrip .cs-ico { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--purple); }
+    .chatstrip .cs-t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chatstrip .cs-t b { font-weight: 650; }
+    .chatstrip .cs-sep { flex: none; color: var(--muted); }
+    .chatstrip .cs-open { flex: none; font-weight: 600; color: var(--purple); min-height: var(--hit-32); display: inline-flex; align-items: center; }
     .markbar { display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; margin-bottom: var(--sp-10); font-size: var(--fs-13); }
     .markbar[hidden] { display: none; }
     .markbar .mb-why { flex: 1 1 140px; min-width: 0; color: var(--orange); overflow-wrap: anywhere; }
@@ -1542,8 +1551,10 @@
     .rv-pver { color: var(--muted); font-size: var(--fs-13); }
     .rv-open { font-size: var(--fs-14); font-weight: 600; color: var(--blue); }
     .rv-tryh { margin-top: var(--sp-8); font-size: var(--fs-12); font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-    .rv-btns { display: flex; gap: var(--sp-8); }
+    .rv-btns { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
     .rv-btns .btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-8); }
+    .rv-btns .rv-chat { flex: 1 1 100%; }
+    .rv-btns .rv-chat[aria-busy="true"] { opacity: .55; }
     .rv-btns kbd { font: var(--fs-11) var(--ff-code); padding: 1px var(--sp-6); border: 1px solid currentColor; border-radius: var(--r-6); opacity: 0.8; }
     @media (hover: none) { .rv-btns kbd { display: none; } }
     .rv-note { display: flex; flex-direction: column; gap: var(--sp-8); }
@@ -3206,6 +3217,7 @@
     </div>
     <main>
       <div id="d-markbar" class="markbar" hidden></div>
+      <div id="d-chatstrip" class="chatstrip" hidden></div>
       <div id="chat"></div>
       <div id="tool-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
       <button type="button" class="cpb cpb-out" id="btn-copy-screen" data-copy-key="term-screen" aria-label="Copy what the terminal shows" hidden>Copy screen</button>
