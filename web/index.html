@@ -2302,6 +2302,10 @@
     @media (hover: hover) { .pgs-ib:hover { background: var(--panel2); color: var(--text); } }
     .pgs-t { margin: 0; min-width: 0; font-size: var(--fs-16); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .pgs-sp { flex: 1 1 0; }
+    .pgs-chatb { gap: var(--sp-6); }
+    .pgs-chatb[aria-busy="true"] { opacity: .55; }
+    .pgs-chatl { display: none; font-size: var(--fs-14); font-weight: 600; }
+    @media (min-width: 700px) { .pgs-chatb { padding: 0 var(--sp-10); } .pgs-chatl { display: inline; } }
     .pgs-focusb { display: none; }
     @media (min-width: 1100px) { .pgs-focusb { display: inline-flex; } }
     .pgs-bar .pgs-pill { flex: none; }
@@ -2873,6 +2877,7 @@
       <div class="grab" aria-hidden="true"><i></i></div>
       <div class="pop-head"><span class="pop-title">Page</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
       <label class="pgs-vrow" id="pgs-vrow" hidden><span>Version</span><select id="pgs-ver" aria-label="Version"></select></label>
+      <button type="button" role="menuitem" id="pgs-chatmi">Chat about this</button>
       <button type="button" role="menuitem" id="pgs-chg" hidden>Highlight changes</button>
       <button type="button" role="menuitem" id="pgs-copy">Copy link</button>
       <a role="menuitem" class="pgs-mi" id="pgs-open" href="#" target="_blank" rel="noopener">Open in tab</a>

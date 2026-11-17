@@ -7025,6 +7025,7 @@ function renderPageView() {
     back: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     info: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v5M12 8h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     focus: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M16 9.5l-2.5 2.5 2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-5 4v-4h-.5A1.5 1.5 0 0 1 4 14.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
     more: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg>',
   };
   const bar = `<div class="pgs-bar">
@@ -7033,6 +7034,7 @@ function renderPageView() {
     ${newer ? `<button type="button" class="btn sm pgs-new" id="pgs-new">v${newer} is out · reload</button>` : `<span class="pgs-pill${ver === p.version ? " cur" : ""}" id="pgs-vpill">v${ver}${ver < p.version ? " · older" : ""}</span>`}
     <span class="pgs-sp"></span>
     <button type="button" class="pgs-ib" id="pgs-infob" aria-label="About this page" aria-haspopup="dialog" aria-controls="pgs-infopop" aria-expanded="${!$("pgs-infopop").hidden}">${ICON.info}</button>
+    <button type="button" class="pgs-ib pgs-chatb" id="pgs-chat" aria-label="Chat about this page" title="Chat about this page: start a read-only helper">${ICON.chat}<span class="pgs-chatl">Chat</span></button>
     <button type="button" class="pgs-ib pgs-focusb" id="pgs-focus" aria-label="Focus: hide the list" aria-pressed="${pgs.focus}" title="Focus: hide the list ( [ )">${ICON.focus}</button>
     <button type="button" class="pgs-ib" id="pgs-menub" aria-label="More" aria-haspopup="menu" aria-controls="pgs-menu" aria-expanded="${!$("pgs-menu").hidden}">${ICON.more}</button></div>`;
   pgsFillPops(p, ver, r, opts, vers.length > 1);
@@ -7435,6 +7437,7 @@ function initPages() {
     if (ev.target.closest("#pgs-menub")) { pgsPop("pgsmenu"); return; }
     if (ev.target.closest("#pgs-infob")) { pgsPop("pgsinfo"); return; }
     if (ev.target.closest("#pgs-focus")) { pagesFocus(!pgs.focus); return; }
+    if (ev.target.closest("#pgs-chat, #pgs-chatmi")) { pgsPop("pgsmenu", false); pagesChat(); return; }
     if (ev.target.closest("#pgs-chg")) { pgsPop("pgsmenu", false); pgcToggleChanges(); return; }
     if (ev.target.closest("#pgs-del")) { pgsPop("pgsmenu", false); pagesDelete(); return; }
     if (ev.target.closest("#pgs-new")) { pgs.reload = true; renderPageView(); return; }
@@ -13284,9 +13287,39 @@ async function submitCoordinator() {
   if (pane) openLaunched(host, pane, r.agent.name || "coordinator");
 }
 
+// pagesChat: "Chat about this" in the viewer. One tap starts the read-only
+// helper (POST /api/pages/{id}/chat) and opens its conversation. A second tap
+// while the first is starting does nothing.
+const PAGE_CHAT_SAYS = {
+  chat_no_host: "No host can start a chat right now. Check that a computer running agents is online, then try again.",
+  chat_rate: "You started several chats a moment ago. Wait a minute, then try again.",
+};
+async function pagesChat() {
+  const route = pgs.route;
+  if (!route || pgs.chatBusy) return;
+  pgs.chatBusy = true;
+  $("pgs-chat")?.setAttribute("aria-busy", "true");
+  toast("Starting a chat about this page…");
+  try {
+    const r = await api("/api/pages/" + encodeURIComponent(route.id) + "/chat", { method: "POST", body: "{}", timeout: 180000 });
+    const pane = r.agent && r.agent.pane_id;
+    const label = r.name || "chat";
+    let note = "";
+    if (r.prompt_error) note = "The chat started, but its first message did not go in: " + r.prompt_error;
+    else if (r.prompt_note) note = "The chat started but is waiting at a prompt. Open it and answer the prompt, and it will read the page.";
+    if (pane) openLaunched(r.host, pane, label, note);
+    else toast("The chat started, but its conversation could not be opened. Look for " + label + " in Agents.", true);
+  } catch (e) {
+    toast(PAGE_CHAT_SAYS[e.code] || (e.status === 429 ? PAGE_CHAT_SAYS.chat_rate : "Could not start a chat: " + (e.message || "the host did not answer") + "."), true);
+  } finally {
+    pgs.chatBusy = false;
+    $("pgs-chat")?.removeAttribute("aria-busy");
+  }
+}
+
 // openLaunched opens the new agent's chat as soon as the agent list (SSE)
-// has it; herdr reports it within a second or two.
-function openLaunched(host, pane, label) {
+// has it; herdr reports it within a second or two. A note replaces "Started".
+function openLaunched(host, pane, label, note) {
   const r = { host: host && host !== state.localHost ? host : null, pane };
   const until = Date.now() + 15000;
   const tick = () => {
@@ -13299,7 +13332,7 @@ function openLaunched(host, pane, label) {
     if (Date.now() > until - 10000) refreshAgents().catch(() => {});
     setTimeout(tick, 500);
   };
-  toast(`Started ${label}`);
+  toast(note || `Started ${label}`, !!note);
   tick();
 }
 
