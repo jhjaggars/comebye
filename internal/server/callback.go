@@ -97,9 +97,11 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 			done: func(state, to string) {
 				s.logLedger(s.ledger.CallbackDone(e.ID, e.Callback.At, state, to, time.Now()))
 			},
-			noticeKey: func(to, text string) string { return callbackNoticeKey(to, e.FinalReport, text) },
-			seen:      func(key string) bool { return s.ledger.HasNoticeKey(e.ID, key) },
-			remember:  func(key string) { s.logLedger(s.ledger.AddNoticeKey(e.ID, key)) },
+			noticeKey: func(to, text string) string {
+				return callbackNoticeKey(to, e.FinalReport, strings.Replace(text, roundNote(e), "", 1))
+			},
+			seen:     func(key string) bool { return s.ledger.HasNoticeKey(e.ID, key) },
+			remember: func(key string) { s.logLedger(s.ledger.AddNoticeKey(e.ID, key)) },
 		})
 	}
 	for _, p := range s.ledger.PendingPlanCallbacks() {
@@ -180,6 +182,9 @@ func callbackText(e ledger.Entry, standIn bool) string {
 	if _, found, _, unparsed, _, _ := parseReportDecisions(e.FinalReport); found && unparsed && e.Status == ledger.Finished {
 		t += " Its \"Decisions for the user\" section is prose with no numbered or bulleted decision, so the hub filed no to-do from it: read that section and file one yourself if it asks the user for something."
 	}
+	if e.Status == ledger.Finished {
+		t += roundNote(e)
+	}
 	switch l := e.LandCheck; {
 	case e.Status == ledger.Landed && l != nil:
 		t = fmt.Sprintf("Comebye (hub notice): the worker on branch %s in %s on %s (handoff %s) %s, and the hub's check found every approved commit in %s: it is landed%s. "+
@@ -199,6 +204,17 @@ func callbackText(e ledger.Entry, standIn bool) string {
 		t += " (You got this because the agent that requested the handoff is no longer available.)"
 	}
 	return t
+}
+
+// roundNote is the sentence a finished notice adds for a worker's second or
+// later report. The worker filed another, different report (the same text
+// again never gets here: the ledger ignores it), and the notice says so, or
+// it reads as the first finished notice delivered twice.
+func roundNote(e ledger.Entry) string {
+	if e.ReportSeq <= 1 {
+		return ""
+	}
+	return fmt.Sprintf(" This is its report %d: it replaces the one you were told about before, so read it again.", e.ReportSeq)
 }
 
 // landedHow says how the landing came to be known.

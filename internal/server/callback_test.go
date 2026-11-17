@@ -275,3 +275,23 @@ func TestProgressGuessHeldThenSent(t *testing.T) {
 		t.Fatal("an explicit report must never be held")
 	}
 }
+
+// A worker that files a second, different report (report_seq 2) gets a
+// second finished notice, by design; the notice must say so, or it reads as
+// the first one delivered twice (live: notices d49a25, fe0da0, bc8a64, each
+// with two notice keys and the same id).
+func TestSecondReportNoticeSaysItIsAnUpdate(t *testing.T) {
+	e := ledger.Entry{ID: "ab12", Host: "desk", RepoName: "proj", Branch: "feat/x", Status: ledger.Finished, ReportSeq: 1}
+	first := callbackText(e, false)
+	e.ReportSeq = 2
+	second := callbackText(e, false)
+	if noticeID(first) == noticeID(second) || first == second {
+		t.Fatalf("a second report's notice is the first one again:\n%s\n%s", first, second)
+	}
+	if !strings.Contains(second, "report 2") || !strings.Contains(second, "replaces the one") {
+		t.Fatalf("second notice does not say it is an update: %q", second)
+	}
+	if strings.Contains(first, "report 1") || strings.Contains(first, "replaces") {
+		t.Fatalf("first notice changed: %q", first)
+	}
+}
