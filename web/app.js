@@ -10796,14 +10796,90 @@ function toolRunSummary(calls) {
   return { text, failed, running, peek };
 }
 
+/* ---------- keyboard and screen readers for the lines ---------- */
+//
+// Every line (a run, a subagent, a thought) is a real <button> with aria-expanded and aria-controls. Up and Down
+// move between the lines and the rows of open runs, Home and End to the first and last, Enter and Space are the
+// button's own. Esc closes what is open and returns focus to its line; at a line that is shut it does nothing, so
+// the app's own Esc (leaving the prompt, closing a sheet) is untouched. Letter keys (j, k, g, ...) are keys.js's
+// and arrow keys outside these lines are not touched. Nothing here is a live region: a run changes every few
+// seconds, so one polite status line says only that a call failed or a subagent finished, at most once a moment.
+
+let trUid = 0;
+const trId = (p) => p + "-" + (++trUid);
+
+// toolStops: the focusable lines and rows of the chat, in reading order (those that are on screen).
+function toolStops(chatEl) {
+  return [...chatEl.querySelectorAll(".tr-line, .tr-row")].filter((b) => !b.closest("[hidden]") && !b.hidden);
+}
+
+function onToolKey(ev) {
+  if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.isComposing || ev.defaultPrevented) return;
+  const chatEl = ev.currentTarget, t = ev.target;
+  if (!t.closest) return;
+  const k = ev.key;
+  const stop = t.closest(".tr-line, .tr-row");
+  if (stop && (k === "ArrowDown" || k === "ArrowUp" || k === "Home" || k === "End")) {
+    const stops = toolStops(chatEl), i = stops.indexOf(stop);
+    if (i < 0) return;
+    const j = k === "Home" ? 0 : k === "End" ? stops.length - 1 : i + (k === "ArrowDown" ? 1 : -1);
+    // At either end the key is the page's: it scrolls.
+    if (j < 0 || j >= stops.length || j === i) return;
+    ev.preventDefault();
+    stops[j].focus();
+    stops[j].scrollIntoView?.({ block: "nearest" });
+    return;
+  }
+  if (k !== "Escape") return;
+  // Esc: the innermost open thing around the focus closes, and the focus goes to its own line.
+  const item = t.closest(".tr-item"), run = t.closest(".toolrun"), sub = t.closest(".subrun"), th = t.closest(".thinking");
+  if (item && !item.querySelector(".tr-detail").hidden) {
+    ev.preventDefault(); ev.stopPropagation();
+    toggleToolRow(item, false);
+    item.querySelector(".tr-row").focus();
+  } else if (run && !run.querySelector(".tr-list").hidden) {
+    ev.preventDefault(); ev.stopPropagation();
+    run._manual = false;
+    setRunOpen(run, false);
+    run.querySelector(".tr-line").focus();
+  } else if ((sub || th) && t.closest(".sa-body, .think-body, .tr-line")) {
+    const root = sub || th, line = root.querySelector(".tr-line");
+    if (line.getAttribute("aria-expanded") !== "true") return;
+    ev.preventDefault(); ev.stopPropagation();
+    line.click();
+    line.focus();
+  }
+}
+
+// The status line: calls that failed and subagents that finished, coalesced.
+let toolSay = [], toolSayTimer = null;
+function announceTools(text) {
+  toolSay.push(text);
+  if (toolSayTimer) return;
+  toolSayTimer = setTimeout(() => {
+    toolSayTimer = null;
+    const live = $("tool-live");
+    const t = toolSay.slice(-3).join(". ");
+    toolSay = [];
+    if (live) live.textContent = t;
+  }, 1200);
+}
+
+function toggleToolRow(item, open) {
+  const row = item.querySelector(".tr-row"), det = item.querySelector(".tr-detail");
+  det.hidden = !open;
+  row.setAttribute("aria-expanded", String(open));
+}
+
 function renderToolRun() {
   const d = document.createElement("div");
   d.className = "toolrun";
   d._calls = [];
+  const lid = trId("trl"), pid = trId("trp");
   d.innerHTML =
-    `<button type="button" class="tr-line" aria-expanded="false"><span class="tr-dot" aria-hidden="true"></span>` +
+    `<button type="button" class="tr-line" aria-expanded="false" aria-controls="${lid}"><span class="tr-dot" aria-hidden="true"></span>` +
     `<span class="tr-txt"></span><span class="tr-bad"></span><span class="tr-chev" aria-hidden="true">›</span></button>` +
-    `<div class="tr-peek" hidden></div><div class="tr-list" hidden><button type="button" class="tr-row tr-more" hidden></button></div>`;
+    `<div class="tr-peek" id="${pid}" hidden></div><div class="tr-list" id="${lid}" role="group" aria-label="Tool calls" hidden><button type="button" class="tr-row tr-more" hidden></button></div>`;
   const line = d.querySelector(".tr-line"), list = d.querySelector(".tr-list");
   line.addEventListener("click", () => {
     // The user's own open or close is kept for this run and beats the live rule.
@@ -10880,18 +10956,15 @@ function toolRowEl(m) {
   const item = document.createElement("div");
   item.className = "tr-item";
   item.dataset.id = m.id;
+  const did = trId("trd");
   item.innerHTML =
-    `<button type="button" class="tr-row" aria-expanded="false"><span class="tr-v"></span><span class="tr-o"></span><span class="tr-st"></span></button>` +
-    `<div class="tr-detail" hidden>` +
-    `<div class="tr-lab"><span>Input</span>${cpOut(".toolargs", "Copy", "Copy what the agent ran")}</div><pre class="tr-pre toolargs"></pre>` +
-    `<div class="tr-lab"><span>Output</span>${cpOut(".toolresult", "Copy", "Copy the result")}</div><pre class="tr-pre toolresult"></pre>` +
+    `<button type="button" class="tr-row" aria-expanded="false" aria-controls="${did}"><span class="tr-v"></span><span class="tr-o"></span><span class="tr-st"></span></button>` +
+    `<div class="tr-detail" id="${did}" role="group" aria-label="Call details" hidden>` +
+    `<div class="tr-lab"><span>Input</span>${cpOut(".toolargs", "Copy", "Copy what the agent ran")}</div><pre class="tr-pre toolargs" tabindex="0" role="region" aria-label="Input"></pre>` +
+    `<div class="tr-lab"><span>Output</span>${cpOut(".toolresult", "Copy", "Copy the result")}</div><pre class="tr-pre toolresult" tabindex="0" role="region" aria-label="Output"></pre>` +
     `</div>`;
   const row = item.querySelector(".tr-row"), det = item.querySelector(".tr-detail");
-  row.addEventListener("click", () => {
-    const open = det.hidden;
-    det.hidden = !open;
-    row.setAttribute("aria-expanded", String(open));
-  });
+  row.addEventListener("click", () => toggleToolRow(item, det.hidden));
   fillToolRow(item, m);
   return item;
 }
@@ -10923,6 +10996,8 @@ function updateToolRun(run) {
   set(peek, s.peek);
   peek.hidden = !s.peek;
   line.setAttribute("aria-label", s.text + (s.failed ? ", " + s.failed + " failed" : "") + (s.running ? ", still running" : ""));
+  // The red first line of the last call's error is read after the name, while it is shown.
+  if (s.peek) line.setAttribute("aria-describedby", peek.id); else line.removeAttribute("aria-describedby");
 }
 
 // addRunCall puts a call at the end (or, for earlier messages, the start) of a run.
@@ -10954,6 +11029,7 @@ function patchToolCard(m, root = $("chat")) {
   fillToolRow(el, m);
   if (run) {
     const i = run._calls.findIndex((c) => c.id === m.id);
+    if (i >= 0 && !run._calls[i].err && m.err) announceTools("A tool call failed: " + (m.args || m.tool || "tool"));
     if (i >= 0) run._calls[i] = m;
     updateToolRun(run);
   }
@@ -10975,10 +11051,11 @@ function renderThinking(text, ms, key, live) {
   d.className = "thinking" + (live ? " live" : "");
   d._key = key;
   d._text = text;
+  const bid = trId("thk");
   d.innerHTML =
-    '<button type="button" class="tr-line" aria-expanded="false"><span class="tr-dot" aria-hidden="true"></span>' +
+    `<button type="button" class="tr-line" aria-expanded="false" aria-controls="${bid}"><span class="tr-dot" aria-hidden="true"></span>` +
     '<span class="tr-txt"></span><span class="tr-chev" aria-hidden="true">›</span></button>' +
-    '<div class="think-body md" hidden></div>';
+    `<div class="think-body md" id="${bid}" hidden></div>`;
   d.querySelector(".tr-txt").textContent = live ? "Thinking…" : thoughtLabel(ms);
   d.querySelector(".tr-dot").className = "tr-dot" + (live ? " run" : "");
   const line = d.querySelector(".tr-line"), body = d.querySelector(".think-body");
@@ -11051,14 +11128,15 @@ function renderSubagentCard(m) {
   const d = document.createElement("div");
   d.className = "subrun";
   d.dataset.id = m.id;
+  const bid = trId("sab");
   d.innerHTML =
-    '<button type="button" class="tr-line sa-line" aria-expanded="false"><span class="tr-dot" aria-hidden="true"></span>' +
+    `<button type="button" class="tr-line sa-line" aria-expanded="false" aria-controls="${bid}"><span class="tr-dot" aria-hidden="true"></span>` +
     '<span class="sa-tag">agent</span><span class="tr-txt sa-desc"></span><span class="sa-meta"></span>' +
     '<span class="tr-chev" aria-hidden="true">›</span></button>' +
-    '<div class="sa-body" hidden><div class="sa-flags"></div><div class="sa-report"></div>' +
+    `<div class="sa-body" id="${bid}" role="group" aria-label="Subagent details" hidden><div class="sa-flags"></div><div class="sa-report"></div>' +
     '<button type="button" class="sa-steps" hidden>View steps ›</button>' +
     '<details class="sa-prompt"><summary>Prompt</summary><div class="sa-prompt-text"></div></details>' +
-    '<pre class="tr-pre toolresult err"></pre></div>';
+    '<pre class="tr-pre toolresult err" tabindex="0" role="region" aria-label="Error"></pre></div>`;
   // The report is rendered when the line is first opened (most never are).
   const line = d.querySelector(".sa-line"), body = d.querySelector(".sa-body");
   line.addEventListener("click", () => {
@@ -11073,8 +11151,10 @@ function renderSubagentCard(m) {
 
 function patchSubagentCard(el, m) {
   const s = subagentInfo(m);
+  const was = el._m ? subagentInfo(el._m).status : "";
   el._m = m; // for the ticker and "View steps"
   const running = s.status === "running";
+  if (was === "running" && !running) announceTools("Subagent " + (s.description || m.args || "") + " " + (s.status === "completed" ? "finished" : s.status));
   const bad = !!m.err || s.status === "failed" || s.status === "killed";
   el.classList.toggle("running", running);
   el.classList.toggle("err", bad);
@@ -13567,6 +13647,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) resume(); }); // skip the initial load
   window.addEventListener("online", resume);
   document.addEventListener("keydown", onListArrow);
+  $("chat").addEventListener("keydown", onToolKey);
   document.addEventListener("keydown", onTodoKey);
   $("btn-collapse").addEventListener("click", () => setListCollapsed(true));
   $("list-rail").addEventListener("click", () => setListCollapsed(false));
