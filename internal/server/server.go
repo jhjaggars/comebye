@@ -301,6 +301,7 @@ type Server struct {
 	approvals      *approvalStore
 	reg            regState
 	events         *eventStore // what the hub handled itself (events.go)
+	typed          *typedStore // what the hub typed into panes that is not the user's (typed.go)
 	sent           *sentStore  // what the hub already told whom (sent.go)
 	digests        *digestStore
 	autoRemove     bool
@@ -457,6 +458,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.events = openEvents(eventsPath(cfg.StateDir))
 			s.migrateOutbox(cfg.StateDir)
 			s.sent = openSent(sentPath(cfg.StateDir))
+			s.typed = openTyped(typedPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.autoRemove = cfg.AutoRemove
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
@@ -922,7 +924,16 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": err.Error()})
 		return
 	}
-	s.serveTranscript(w, r, path, transcript.Read, func(t *transcript.Transcript) { t.Context = s.contextUsage(*agent, path) })
+	s.serveTranscript(w, r, path, transcript.Read, s.transcriptDecorator(*agent, path))
+}
+
+// transcriptDecorator adds what the hub knows to a session's transcript:
+// the context usage, and each user message's origin from the typed record.
+func (s *Server) transcriptDecorator(agent herdr.AgentInfo, path string) func(*transcript.Transcript) {
+	return func(t *transcript.Transcript) {
+		t.Context = s.contextUsage(agent, path)
+		s.typed.markOrigins(agent.ID, t)
+	}
 }
 
 // handleSubagentTranscript renders the transcript of one of a Claude
@@ -1080,6 +1091,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
+	}
+	if a != nil && callerOf(r).agent() {
+		s.typed.record(originAgent, oneLine(s.by(r, ""), 100), a.ID, body.Text)
 	}
 	agent, err := s.client.Prompt(ctx, target, body.Text, opts)
 	if err != nil {

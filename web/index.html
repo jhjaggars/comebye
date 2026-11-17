@@ -583,6 +583,21 @@
       border-radius: var(--r-10); padding: var(--sp-6) var(--sp-12);
       white-space: pre-wrap;
     }
+    /* Text the hub typed or another agent sent: a quiet line with a chip, not the user's bubble. */
+    .msg.sys { align-self: stretch; max-width: 100%; gap: var(--sp-2); color: var(--muted); font-size: var(--fs-13); }
+    .msg.sys > summary { display: flex; align-items: baseline; gap: var(--sp-8); cursor: pointer; list-style: none; min-width: 0; }
+    .msg.sys > summary::-webkit-details-marker { display: none; }
+    .msg.sys .otxt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .msg.sys[open] .otxt { display: none; }
+    .msg.sys .obody { display: none; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: var(--sp-4); }
+    .msg.sys[open] .obody { display: block; }
+    .msg.sys .msgtime { align-self: flex-start; }
+    .ochip {
+      flex: none; font-size: var(--fs-11); font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+      color: var(--muted); background: var(--panel); border: 1px solid var(--border);
+      border-radius: var(--r-6); padding: var(--sp-2) var(--sp-6); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .msg.sys.origin-agent .ochip { color: var(--purple); background: var(--chip-purple); border-color: transparent; }
     .compaction { align-self: stretch; }
     .compaction > summary { display: table; margin: 0 auto; list-style: none; cursor: pointer; user-select: none; }
     .compaction > summary::-webkit-details-marker { display: none; }

@@ -118,6 +118,8 @@ if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ;
 if want toolruns; then node toolruns.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The same lines by keyboard only (arrows, Home/End, Enter/Space, Esc), the status line and a light axe-style audit.
 if want toolkeys; then node toolkeys.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Who said it: user bubbles, hub lines with a chip, agent chips, a spoofed prefix as a bubble.
+if want origins; then node origins.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Decision sets in the To do panel: the card, the phone stepper, conflicts, drafts and Submit.
 if want decisionsets; then node decisionsets.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want chatswitch; then node chatswitch.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

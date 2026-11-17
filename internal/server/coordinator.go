@@ -538,6 +538,7 @@ func (s *Server) promptAgent(ctx context.Context, a herdr.AgentInfo, text string
 		if err := s.guardPrompt(ctx, a); err != nil {
 			return err
 		}
+		s.recordTyped(ctx, a, text)
 		_, err := s.client.Prompt(ctx, a.PaneID, text, herdr.PromptOptions{})
 		return err
 	}

@@ -11493,9 +11493,36 @@ function renderPending() {
   }
 }
 
+// originChip: the label of a message the user did not write.
+function originChip(m) {
+  if (m.origin === "agent") {
+    const n = String(m.origin_name || "").replace(/\s*\(.*$/, "").trim();
+    return "agent" + (n ? " " + n : "");
+  }
+  return "hub";
+}
+
+// renderOriginLine: a hub, relay or agent-sent message as a quiet line that
+// opens to its full text.
+function renderOriginLine(m) {
+  const d = document.createElement("details");
+  d.className = "msg sys origin-" + m.origin;
+  const one = String(m.text || "").replace(/\s+/g, " ").trim();
+  d.innerHTML = `<summary><span class="ochip"></span><span class="otxt"></span></summary><div class="obody"></div>` +
+    (m.time ? `<div class="msgtime">${esc(fmtTime(m.time))}</div>` : "");
+  d.querySelector(".ochip").textContent = originChip(m);
+  d.querySelector(".otxt").textContent = one;
+  d.querySelector(".obody").textContent = m.text || "";
+  return d;
+}
+
 function renderMessage(m) {
   switch (m.kind) {
     case "user": {
+      // Text the hub typed (a notice, a relayed answer) or another agent sent
+      // is a quiet line with a chip, never the user's bubble. The server
+      // decides from its own record (m.origin), not from the text.
+      if (m.origin === "hub" || m.origin === "relay" || m.origin === "agent") return renderOriginLine(m);
       const div = document.createElement("div");
       div.className = "msg user";
       div.innerHTML = `<div class="bubble">${esc(m.text)}</div>` +

@@ -492,6 +492,13 @@ func (s *Server) sendQueued(it QueuedPrompt, target herdr.AgentInfo) {
 	if send == nil {
 		send = s.promptAgent
 	}
+	switch {
+	case it.FromID != "":
+		ctx = withOrigin(ctx, originAgent, it.From)
+	case it.From == "comebye":
+	default:
+		ctx = withOrigin(ctx, originApp, "")
+	}
 	err := send(ctx, target, queueText(it))
 	if isInputBusy(err) {
 		// Not a failure: the user is typing in that pane. Held, and tried
