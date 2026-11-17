@@ -127,7 +127,7 @@ for (const dark of [true, false]) {
         await store(page, null);
         await page.reload({ waitUntil: "load" });
         await page.waitForSelector("#sx-rs-default");
-        same(await page.locator("#sx-view [role=radiogroup]").count(), 3, "three radio groups");
+        same(await page.locator("#sx-view [role=radiogroup]").count(), 4, "four radio groups");
         same(await page.locator('[aria-labelledby="sx-rs-lbl"] .sx-radio[aria-checked="true"] .sx-rn').textContent(), "Default", "default checked");
         const prevPx = () => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector(".sx-prev .msg.assistant .bubble")).fontSize));
         const h2 = () => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector("#sx-view h2")).fontSize));

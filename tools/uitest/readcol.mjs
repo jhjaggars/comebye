@@ -133,7 +133,7 @@ for (const dark of [true, false]) {
       await page.waitForSelector('#sx-view .sx-radio');
       same(await page.locator("#sx-view h2").first().textContent(), "Appearance", "first section");
       if (!/Saved on this device only\./.test(await page.locator("#sx-view").textContent())) throw new Error("no device-only label");
-      same(await page.locator('#sx-view [role=radiogroup]').count(), 3, "three radio groups (width, text size, spacing)");
+      same(await page.locator('#sx-view [role=radiogroup]').count(), 4, "four radio groups (width, text size, spacing, wrap)");
       same(await page.locator('[aria-labelledby="sx-col-lbl"] .sx-radio[aria-checked="true"]').count(), 1, "one checked");
       same(await page.locator('[aria-labelledby="sx-col-lbl"] .sx-radio[aria-checked="true"] .sx-rn').textContent(), "Comfortable", "default checked");
       await page.locator('[aria-labelledby="sx-col-lbl"] .sx-radio[aria-checked="true"]').focus();

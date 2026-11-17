@@ -9575,13 +9575,17 @@ function sxAppearance() {
       <p class="sx-note">Scales the conversation and the box you type in. The header, the list and the menus stay as they are. Wide and Wider pair well with a larger size.</p>
       <div class="sx-prev-wrap" aria-hidden="true"><div class="sx-prev" inert>
         <div class="msg user"><div class="bubble">Can you make the text easier to read?</div></div>
-        <div class="msg assistant"><div class="bubble md"><p>This is how a reply reads on this window. A command such as <code>go test ./...</code> sits inside a sentence.</p><pre><code>func Scale(n int) int {\n\treturn n * 2\n}</code></pre></div></div>
+        <div class="msg assistant"><div class="bubble md"><p>This is how a reply reads on this window. A command such as <code>go test ./...</code> sits inside a sentence.</p><pre><code>func Scale(n int) int {\n\treturn n * 2 // a long comment on one line, longer than a phone is wide: scroll sideways to read it, or wrap it\n}</code></pre></div></div>
         <div class="toolrun"><span class="tr-line"><span class="tr-dot"></span><span class="tr-txt">Ran 3 commands</span><span class="tr-chev">›</span></span></div>
       </div></div>
       <p class="sx-note">A preview of the conversation at this window's width.</p></div>
     <div class="sx-field"><div class="sx-lbl" id="sx-sp-lbl">Spacing</div>
       ${sxRadios("sp", "sx-sp-lbl", CT.SPS, CT.spChoice())}
-      <p class="sx-note">Line height in replies and thinking, and the space between messages. The preview above follows.</p></div>`;
+      <p class="sx-note">Line height in replies and thinking, and the space between messages. The preview above follows.</p></div>
+    <h3 class="sx-grp">Code and conversation</h3>
+    <div class="sx-field"><div class="sx-lbl" id="sx-wrap-lbl">Wrap long code lines</div>
+      ${sxRadios("wrap", "sx-wrap-lbl", CT.WRAPS, CT.wrapChoice())}
+      <p class="sx-note">Off scrolls a long line sideways. On wraps it in code blocks and tool output. Copying gives the original text either way. The preview above follows.</p></div>`;
 }
 
 function sxRadios(kind, lbl, list, cur) {
@@ -9599,7 +9603,7 @@ function sxFitPreview() {
 }
 
 // The choice for a radio group by its kind ("col", "rs", "sp"): the list, and how to save it.
-const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet] });
+const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet] });
 function sxPick(kind, val) {
   const p = SX_PREFS()[kind];
   if (!p) return;
@@ -9646,7 +9650,7 @@ function renderSettings() {
   const focus = document.activeElement && document.activeElement.id;
   el.innerHTML = h;
   const f = (sx.rename && $("sx-rename")) || (focus && $(focus));
-  if (focus && /^sx-(col|rs|sp)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
+  if (focus && /^sx-(col|rs|sp|wrap)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
   sxFitPreview();
   if (f && f !== document.activeElement && (sx.rename || focus === "sx-name")) { f.focus({ preventScroll: true }); if (sx.rename) f.select(); }
 }
@@ -9759,7 +9763,7 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
-    case "col": case "rs": case "sp": sxPick(b.dataset.sx, b.dataset.val); break;
+    case "col": case "rs": case "sp": case "wrap": sxPick(b.dataset.sx, b.dataset.val); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
     case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
@@ -9804,7 +9808,7 @@ function initSettings() {
   $("sx-view").addEventListener("keydown", sxColKey);
   // The strip is drawn for this window, and another tab can change the width: redraw the open screen.
   window.addEventListener("resize", () => { if (sx.route) renderSettings(); });
-  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP)) renderSettings(); });
+  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP || e.key === CT.KEY_WRAP)) renderSettings(); });
   $("sx-view").addEventListener("submit", settingsSubmit);
 }
 

@@ -359,7 +359,15 @@
   const sp = pref("sp", API.SPS);
   API.KEY_SP = sp.key; API.spChoice = sp.choice; API.spApply = sp.apply; API.spSet = sp.set;
   sp.apply();
+  // Wrap long code lines: Off scrolls sideways as before, On wraps them (web/index.html reads <html data-wrap>).
+  API.WRAPS = [
+    { id: "", name: "Off", sub: "scroll sideways, the default" },
+    { id: "on", name: "On", sub: "wrap long lines" },
+  ];
+  const wrap = pref("wrap", API.WRAPS);
+  API.KEY_WRAP = wrap.key; API.wrapChoice = wrap.choice; API.wrapApply = wrap.apply; API.wrapSet = wrap.set;
+  wrap.apply();
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
-  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); });
+  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); if (e.key === API.KEY_WRAP) API.wrapApply(); });
 })(typeof window !== "undefined" ? window : globalThis);
