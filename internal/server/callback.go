@@ -51,7 +51,10 @@ func (s *Server) replyRef(r *http.Request) *ledger.Ref {
 // cbJob is one waiting notice: to the requester of a handoff, or to the
 // creator of a plan.
 type cbJob struct {
-	key     string
+	key string
+	// subject names what the notice is about, not who gets it (sent.go):
+	// it is claimed before a send, so one subject goes out once.
+	subject string
 	replyTo *ledger.Ref
 	cb      *ledger.Callback
 	ready   bool // what the notice points at exists (a captured report)
@@ -85,7 +88,7 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 	for _, e := range s.ledger.PendingCallbacks() {
 		e := e
 		jobs = append(jobs, cbJob{
-			key: e.ID, replyTo: e.ReplyTo, cb: e.Callback, ready: !e.ReportPending(),
+			key: e.ID, subject: finishSubject(e), replyTo: e.ReplyTo, cb: e.Callback, ready: !e.ReportPending(),
 			text:    func(standIn bool) string { return callbackText(e, standIn) },
 			hold:    func(ctx context.Context) string { return s.holdFinished(ctx, e, time.Now()) },
 			routine: func() (string, string, string, bool) { return routineLine(e) },
@@ -101,7 +104,7 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 	for _, p := range s.ledger.PendingPlanCallbacks() {
 		p := p
 		jobs = append(jobs, cbJob{
-			key: "plan/" + p.ID, replyTo: p.ReplyTo, cb: p.Callback, ready: true,
+			key: "plan/" + p.ID, subject: "plan/" + p.ID + "/" + itoa(int(p.Callback.At.Unix())), replyTo: p.ReplyTo, cb: p.Callback, ready: true,
 			text:  func(standIn bool) string { return s.planNoticeText(p, standIn) },
 			tried: func() { s.logLedger(s.ledger.PlanCallbackTried(p.ID, p.Callback.At)) },
 			done: func(state, to string) {
@@ -264,6 +267,10 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 	}
 	if j.routine != nil && s.digestOn() && s.isCoordinator(target.ID, target.Name) {
 		if kind, key, line, ok := j.routine(); ok {
+			if !s.sent.claim(j.subject, target.ID) {
+				s.settleSent(j, target.ID)
+				return
+			}
 			s.queueLine(kind, j.key, key, line)
 			j.done(ledger.CallbackDelivered, "digest")
 			s.coord.mu.Lock()
@@ -287,7 +294,15 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 			return
 		}
 	}
+	if !s.sent.claim(j.subject, target.ID) {
+		// Another send of this very notice (to the requester, or to the
+		// coordinator as its stand-in) went out or is going out.
+		log.Printf("callback for %s: already sent (%s), not sent again to %s", j.key, j.subject, target.ID)
+		s.settleSent(j, target.ID)
+		return
+	}
 	if err := s.promptNotice(ctx, target, text); err != nil {
+		s.sent.release(j.subject)
 		if isInputBusy(err) {
 			// The user is typing in that pane: hold the notice and try
 			// again in a few seconds (typing.go); not a failed attempt.
@@ -304,6 +319,7 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 		j.tried()
 		return
 	}
+	s.sent.confirm(j.subject)
 	if key != "" {
 		j.remember(key)
 	}
@@ -311,6 +327,17 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 	// between the two would see it pending and not in flight, and send the
 	// notice again.
 	j.done(ledger.CallbackDelivered, target.ID)
+	s.coord.mu.Lock()
+	delete(s.coord.calling, j.key)
+	s.coord.mu.Unlock()
+}
+
+// settleSent settles a callback whose notice was already sent.
+func (s *Server) settleSent(j cbJob, to string) {
+	if r, ok := s.sent.get(j.subject); ok && r.To != "" {
+		to = r.To
+	}
+	j.done(ledger.CallbackDelivered, to)
 	s.coord.mu.Lock()
 	delete(s.coord.calling, j.key)
 	s.coord.mu.Unlock()

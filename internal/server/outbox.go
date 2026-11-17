@@ -213,7 +213,17 @@ func (s *Server) flushOutbox(agents []herdr.AgentInfo) {
 		defer s.bg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
-		err := s.promptNotice(ctx, target, outboxText(lines))
+		text := outboxText(lines)
+		subject := "digest/" + noticeID(text)
+		var err error
+		if s.sent.claim(subject, target.ID) {
+			err = s.promptNotice(ctx, target, text)
+			if err != nil {
+				s.sent.release(subject)
+			} else {
+				s.sent.confirm(subject)
+			}
+		} // else: this very digest went out already; only settle the lines
 		o.mu.Lock()
 		o.sending = false
 		o.mu.Unlock()

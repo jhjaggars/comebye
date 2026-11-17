@@ -296,6 +296,7 @@ type Server struct {
 	approvals      *approvalStore
 	reg            regState
 	outbox         *outbox
+	sent           *sentStore // what the hub already told whom (sent.go)
 	digests        *digestStore
 	digestEvery    time.Duration
 	autoRemove     bool
@@ -450,6 +451,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				s.rollout.soak = time.Second
 			}
 			s.outbox = openOutbox(outboxPath(cfg.StateDir))
+			s.sent = openSent(sentPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.digestEvery = cfg.DigestEvery
 			s.autoRemove = cfg.AutoRemove

@@ -371,10 +371,21 @@ func (s *Server) deliverReviewRoutes(agents []herdr.AgentInfo) {
 			if send == nil {
 				send = s.promptNotice
 			}
+			subject := "review/" + it.ID + "/" + itoa(int(it.Review.Verdict.At.Unix()))
+			if !s.sent.claim(subject, a.ID) {
+				// The verdict was told already (a retry, a restart).
+				if r, ok := s.sent.get(subject); ok && r.To != "" {
+					a.ID = r.To
+				}
+				s.todos.settleRoute(it.ID, "sent", a.ID, a.Name, via)
+				return
+			}
 			if err := send(ctx, a, reviewNoticeText(it)); err != nil {
+				s.sent.release(subject)
 				s.todos.releaseRoute(it.ID, true)
 				return
 			}
+			s.sent.confirm(subject)
 			s.todos.settleRoute(it.ID, "sent", a.ID, a.Name, via)
 		}(it, *target, via)
 	}
