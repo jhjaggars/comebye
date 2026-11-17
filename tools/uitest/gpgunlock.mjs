@@ -245,19 +245,7 @@ for (const width of [390, 1280]) {
       .catch(async () => { throw new Error("toast: " + (await page.locator("#toast").innerText().catch(() => ""))); });
   });
 
-  await check(`${width}px: Not now denies an unlock request`, async () => {
-    cli(["gpg", "lock"]);
-    const r = cli(["gpg", "unlock", "--json"]);
-    if (r.code !== 0) throw new Error("unlock: " + r.out);
-    const it = await itemOf(/^GPG is locked on uitest/);
-    await openTodo(it.id);
-    await page.locator(`${itemSel(it.id)} .ap-no`).click();
-    for (const end = Date.now() + 8000; Date.now() < end; await sleep(150)) { if ((await todo(it.id)).state === "dropped") break; }
-    if ((await todo(it.id)).state !== "dropped") throw new Error("item not dropped");
-    if (!status().locked) throw new Error("unlocked by Not now");
-  });
-
-  // The host timer, live: `comebye gpg watch --once` against the real hub, whose fake herdr has working agents.
+  // The host timer, live (before "Not now": that one snoozes the watcher on the hub for a while): `comebye gpg watch --once` against the real hub, whose fake herdr has working agents.
   await check(`${width}px: gpg watch files one item for a locked host, none twice, and withdraws it when pinentry unlocks`, async () => {
     cli(["gpg", "lock"]);
     fs.rmSync(path.join(stateDir, "gpg-filed.json"), { force: true }); // the earlier asks in this script would hold the watcher back (its cooldown)
@@ -282,6 +270,19 @@ for (const width of [390, 1280]) {
     if (w3.code !== 0 || !/withdrawn/.test(w3.out)) throw new Error("third round: " + w3.out);
     if ((await mine()).length !== 0) throw new Error("the item is still open");
   });
+
+  await check(`${width}px: Not now denies an unlock request`, async () => {
+    cli(["gpg", "lock"]);
+    const r = cli(["gpg", "unlock", "--json"]);
+    if (r.code !== 0) throw new Error("unlock: " + r.out);
+    const it = await itemOf(/^GPG is locked on uitest/);
+    await openTodo(it.id);
+    await page.locator(`${itemSel(it.id)} .ap-no`).click();
+    for (const end = Date.now() + 8000; Date.now() < end; await sleep(150)) { if ((await todo(it.id)).state === "dropped") break; }
+    if ((await todo(it.id)).state !== "dropped") throw new Error("item not dropped");
+    if (!status().locked) throw new Error("unlocked by Not now");
+  });
+
   await browser.close();
 }
 

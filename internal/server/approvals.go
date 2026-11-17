@@ -711,6 +711,7 @@ func (s *Server) handleApprovalWithdraw(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	_ = st.saveLocked()
+	delete(st.snooze, snoozeKey(a.Host, a.Action)) // the key was unlocked another way
 	cp := *a
 	st.mu.Unlock()
 	s.settleApprovalTodo(&cp, "withdrawn")
@@ -855,6 +856,7 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		}
 		a.Credential = pk.ID
 		finish(apApproved, "")
+		delete(st.snooze, snoozeKey(a.Host, a.Action)) // unlocked: the next lock is a new ask
 		cp = *a
 		st.mu.Unlock()
 		s.passkeys.Used(pk.ID, ctr)
