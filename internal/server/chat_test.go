@@ -310,7 +310,7 @@ func TestPageNoteFilesOnlyAFollowUpAboutThatPage(t *testing.T) {
 	if w := notePost(s, page, helper, string(big)); w.Code != http.StatusBadRequest {
 		t.Errorf("big details: %d", w.Code)
 	}
-	if w := notePost(s, "pg_0000000000", helper, `{"finding":"x"}`); w.Code != http.StatusNotFound {
+	if w := notePost(s, "pg_0000000000", helper, `{"finding":"x"}`); w.Code != http.StatusForbidden { // the hub's chat role: only its own Page
 		t.Errorf("no page: %d", w.Code)
 	}
 }

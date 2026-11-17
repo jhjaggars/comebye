@@ -38,6 +38,9 @@ import (
 // reaches are limited to its own host and the recorded coordinators (see
 // taggedscope.go). New routes refuse it unless they say otherwise.
 //
+// A "Chat about this" helper (RoleChat) gets less again: only chatRoutes
+// (chatrole.go), whatever its own permission settings let it run.
+//
 // Other agents' text (output and transcripts) has its own rule: readGuard.
 //
 // This keeps a well-behaved coordinator inside the workflow and prevents
@@ -166,6 +169,10 @@ func (s *Server) guard(a access, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if c.agent() {
+			if role, ok := s.chatRoleOf(c); ok && !chatAllowed(role, r) {
+				chatRoleForbidden(w)
+				return
+			}
 			switch {
 			case a == userOnly:
 				writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "agent_forbidden", "message": "agents cannot do this through Comebye; it is left to the user in the app"})
