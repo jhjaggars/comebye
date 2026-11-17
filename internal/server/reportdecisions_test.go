@@ -36,6 +36,19 @@ func TestParseReportDecisions(t *testing.T) {
 		{"None. then prose", head + "None. All are decided (t8fa20f7215 and the earlier answers).\n", true, true, false, 0, 0, "", 0, 0},
 		{"None then sub-heading list", head + "None.\n\n### Answers\n\n1. The probe is read-only.\n2. It files nothing.\n3. Third.\n4. Fourth.\n5. Fifth.\n", true, true, false, 0, 0, "", 0, 0},
 		{"sub-heading ends section", head + "- A?\n### Notes\n- not a decision\n", true, false, false, 1, 0, "A?", 0, 0},
+		// Real endings that filed false items (t932694fcf5, t81bc3749c5, t3954eae0d0).
+		{"bulleted None.", head + "- None.\n", true, true, false, 0, 0, "", 0, 0},
+		{"bold bulleted none", head + "- **None.**\n", true, true, false, 0, 0, "", 0, 0},
+		{"numbered none", head + "1. None.\n", true, true, false, 0, 0, "", 0, 0},
+		{"None needed + prose", head + "None needed. The PR's remaining blocker is the maintainer decision on the RFC's four open questions (callback routing owner, storage ownership) - that is theirs, not the user's. One GPG unlock was needed mid-rebase.\n", true, true, false, 0, 0, "", 0, 0},
+		{"No decisions needed", head + "No decisions needed.\n", true, true, false, 0, 0, "", 0, 0},
+		{"bold No decisions needed", head + "**No decisions needed**\n", true, true, false, 0, 0, "", 0, 0},
+		{"Nothing to decide", head + "Nothing to decide.\n", true, true, false, 0, 0, "", 0, 0},
+		{"bullet Nothing to decide", head + "* Nothing to decide\n", true, true, false, 0, 0, "", 0, 0},
+		{"none, bullet then real", head + "- None needed: all decided.\n", true, true, false, 0, 0, "", 0, 0},
+		{"prose about tests", head + "The old .mjs test files were deleted on main and replaced with TypeScript case files. The PR's OIDC tests need porting after the rebase completes. This is significant work.\n", true, false, true, 0, 0, "", 0, 0},
+		{"None of these is not none", head + "None of the options is clearly better, pick one.\n", true, false, true, 0, 0, "", 0, 0},
+		{"real bullets after prose-free", head + "- Port the tests?\n- None.\n- Drop them?\n", true, false, false, 2, 0, "Port the tests?", 0, 0},
 		{"case and colon", "## decisions for the user:\n- A?\n", true, false, false, 1, 0, "A?", 0, 0},
 	}
 	for _, c := range cases {
@@ -137,15 +150,19 @@ func TestReportDecisionsCapAndFallback(t *testing.T) {
 	if last := items[len(items)-1]; !strings.Contains(last.Context, "3 more decisions") {
 		t.Fatalf("overflow not mentioned: %q", last.Context)
 	}
-	// A section that does not parse files one pointer item, once.
+	// A prose-only section files nothing (the finished notice says so).
 	s2, e2 := decisionsServer(t)
 	prose := "## Summary\nx\n## Decisions for the user\nYou should look at the key and decide.\n"
 	report(t, s2, prose)
-	report(t, s2, prose)
-	items = activeItems(s2)
-	if len(items) != 1 || !strings.Contains(items[0].Question, "read the report") || items[0].Links[0].Handoff != e2.ID ||
-		!strings.Contains(items[0].Context, "look at the key") {
-		t.Fatalf("fallback = %+v", items)
+	if items = activeItems(s2); len(items) != 0 {
+		t.Fatalf("prose filed %+v", items)
+	}
+	if got := callbackText(e2, false); strings.Contains(got, "no numbered") {
+		t.Fatalf("notice for an unreported entry: %q", got)
+	}
+	e2.Status, e2.FinalReport = ledger.Finished, prose
+	if got := callbackText(e2, false); !strings.Contains(got, "filed no to-do") {
+		t.Fatalf("finished notice lacks the prose line: %q", got)
 	}
 	// Choices that break the rules (one option) are kept as text, not dropped.
 	s3, _ := decisionsServer(t)
@@ -255,16 +272,11 @@ func TestReportSetAlongsideLooseItems(t *testing.T) {
 	}
 }
 
-func TestReportFallbackKeepsLines(t *testing.T) {
+func TestReportProseFilesNothing(t *testing.T) {
 	s, _ := decisionsServer(t)
 	report(t, s, "## Decisions for the user\nFirst thought.\n\nSecond thought.\n  indented\n")
-	items := activeItems(s)
-	if len(items) != 1 {
+	if items := activeItems(s); len(items) != 0 {
 		t.Fatalf("items = %+v", items)
-	}
-	c := items[0].Context
-	if strings.Contains(c, "```") || !strings.Contains(c, "> First thought.\n>\n> Second thought.\n>   indented") {
-		t.Fatalf("fallback lost its lines: %q", c)
 	}
 }
 

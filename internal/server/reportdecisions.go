@@ -39,15 +39,30 @@ const (
 	reportSectionName  = "decisions for the user"
 )
 
+// repNonePhrase is the opening words of a section that says there is
+// nothing to decide: "None", "None needed", "Nothing to decide", "No
+// decisions needed", "N/A".
+const repNonePhrase = `(none(?:\s+(?:needed|required))?|nothing(?:\s+(?:to\s+decide|needed|required|for\s+you(?:\s+to\s+decide)?))?|no\s+decisions?(?:\s+(?:needed|required|for\s+(?:the\s+)?user))?|n/a)`
+
+// noneText is a line as the none check reads it: without a bullet or
+// number marker and without bold or italic marks.
+func noneText(l string) string {
+	t := strings.TrimSpace(l)
+	if m := repBulletRE.FindStringSubmatch(t); m != nil {
+		t = m[1]
+	}
+	return strings.Trim(strings.TrimSpace(t), "*_ ")
+}
+
 var (
 	repBulletRE = regexp.MustCompile(`^(?:[-*+]|\d{1,2}[.)])\s+(.*\S.*)$`)
 	repNestedRE = regexp.MustCompile(`^(?:\s{2,}|\t)(\S.*)$`)
 	repOptionRE = regexp.MustCompile(`^(\d{1,2})[.)]\s+(.*\S.*)$`)
 	repRecRE    = regexp.MustCompile(`(?i)^(?:my\s+)?recommend(?:ation|ed)?\s*[:=-]?\s*(?:is\s+)?(?:ok\s+|option\s+)?(\d+(?:\s*(?:\+|,|&|and)\s*\d+)*)\s*\.?\s*$`)
-	repNoneRE   = regexp.MustCompile(`(?i)^(none|nothing|no decisions?|n/a)\b[\s.!]*$`)
+	repNoneRE   = regexp.MustCompile(`(?i)^` + repNonePhrase + `\b[\s.!]*$`)
 	// repNoneLeadRE matches a line whose first sentence says there is nothing
 	// to decide, whatever follows ("None. All are decided (t8fa20f7215).").
-	repNoneLeadRE = regexp.MustCompile(`(?i)^(none|nothing|no decisions?|n/a)\s*(?:[.!]|[,;:\x{2013}\x{2014}-]\s|$)`)
+	repNoneLeadRE = regexp.MustCompile(`(?i)^` + repNonePhrase + `\s*(?:[.!]|[,;:\x{2013}\x{2014}-]\s|$)`)
 	repHeadingRE  = regexp.MustCompile(`^#{1,6}(?:\s|$)`)
 	repItemIDRE   = regexp.MustCompile(`\bt[0-9a-f]{10}\b`)
 	repBoldLabel  = regexp.MustCompile(`^\*\*([^*]+)\*\*\s*[-–—:]?\s*(.*)$`)
@@ -102,7 +117,7 @@ func parseReportDecisions(text string) (ds []reportDecision, found, none, unpars
 		return nil, true, false, true, 0, raw
 	}
 	for _, l := range sec {
-		if t := strings.Trim(strings.TrimSpace(l), "*_ "); t != "" {
+		if t := noneText(l); t != "" {
 			if !strings.HasPrefix(strings.TrimSpace(l), "```") && repNoneLeadRE.MatchString(t) {
 				return nil, true, true, false, 0, raw
 			}
@@ -142,6 +157,10 @@ func parseReportDecisions(text string) (ds []reportDecision, found, none, unpars
 		if strings.TrimSpace(l) == "" {
 			continue
 		}
+		if m := repBulletRE.FindStringSubmatch(l); m != nil && repNoneRE.MatchString(noneText(l)) && !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "\t") {
+			flush() // "- None." is no decision
+			continue
+		}
 		if m := repBulletRE.FindStringSubmatch(l); m != nil && !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "\t") {
 			flush()
 			cur = &reportDecision{Question: strings.TrimSpace(m[1])}
@@ -161,7 +180,7 @@ func parseReportDecisions(text string) (ds []reportDecision, found, none, unpars
 				continue
 			}
 		}
-		if !repNoneRE.MatchString(strings.Trim(strings.TrimSpace(l), "*_ ")) {
+		if !repNoneRE.MatchString(noneText(l)) {
 			other++
 		}
 	}
@@ -227,7 +246,7 @@ func reportKey(entryID, kind, text string) string {
 // reportMaxDecisions), or the single pointer item for a section that did
 // not parse.
 func reportItems(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink) []Todo {
-	ds, found, _, unparsed, _, raw := parseReportDecisions(text)
+	ds, found, _, unparsed, _, _ := parseReportDecisions(text)
 	if !found {
 		return nil
 	}
@@ -239,16 +258,11 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink) []
 	link := reportLinks(e.ID, pages)
 	summary := reportSummary(text)
 	if unparsed {
-		return []Todo{{
-			Question:  oneLine(fmt.Sprintf("%s's report lists decisions for you; read the report", who), todoMaxQuestion),
-			Context:   block(from+"\n\nThe \"Decisions for the user\" section could not be read as numbered items or bullets, so nothing was split out of it. It says:\n\n"+quoted(raw, 1500), todoMaxContext),
-			Kind:      "decision",
-			Links:     link,
-			Waiting:   w,
-			CreatedBy: AutoCreator,
-			Source:    SourceReport,
-			AutoKey:   reportKey(e.ID, "unparsed", raw),
-		}}
+		// Prose that is not a none and has no bullet: no item (it may well
+		// say there is nothing to decide). The finished notice tells the
+		// coordinator to read the section.
+		log.Printf("todo: report %s: the decisions section has no numbered or bulleted decision; filed no item", e.ID)
+		return nil
 	}
 	var out []Todo
 	// Two or more decisions with choices become one decision set (todoset.go):
