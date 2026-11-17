@@ -10543,6 +10543,7 @@ function renderActivity() {
   let row = chatEl.querySelector(".activity");
   if (!working) { activity.seenAt = 0; activity.status = null; clearInterval(activity.timer); activity.timer = null; }
   if (!state.chat || state.chat.terminal || (!working && !subs)) {
+    syncLiveThinking(chatEl, false, null);
     if (row) row.remove();
     closeActivityPanel();
     return;
@@ -10573,6 +10574,7 @@ function renderActivity() {
   if (row.nextSibling !== anchor || row.parentNode !== chatEl) chatEl.insertBefore(row, anchor);
   row.classList.toggle("idle", !working);
   const step = working ? activityStep() : { verb: subagentCount(subs) + " running", what: "", detail: "" };
+  syncLiveThinking(chatEl, working && step.verb === "Thinking", row);
   row.querySelector(".act-verb").textContent = step.verb;
   row.querySelector(".act-what").textContent = step.what;
   row.querySelector(".act-detail").textContent = step.detail;
@@ -10837,7 +10839,7 @@ function isLiveRun(run, working) {
   if (run._calls.some(toolRunning)) return true;
   if (!working) return false;
   for (let e = run.nextElementSibling; e; e = e.nextElementSibling) {
-    if (e.classList.contains("activity") || e.classList.contains("jump-anchor") || e.classList.contains("pending")) continue;
+    if (e.classList.contains("activity") || e.classList.contains("live") || e.classList.contains("jump-anchor") || e.classList.contains("pending")) continue;
     return false;
   }
   return true;
@@ -10947,7 +10949,7 @@ function appendMessage(parent, m, ctx) {
 function patchToolCard(m, root = $("chat")) {
   const el = root.querySelector(`[data-id="${CSS.escape(m.id)}"]`);
   if (!el) return;
-  if (el.classList.contains("subagent")) { patchSubagentCard(el, m); return; }
+  if (el.classList.contains("subrun")) { patchSubagentCard(el, m); return; }
   const run = el.closest(".toolrun");
   fillToolRow(el, m);
   if (run) {
@@ -10957,11 +10959,64 @@ function patchToolCard(m, root = $("chat")) {
   }
 }
 
-/* ---------- subagent cards (Claude's Agent/Task calls) ---------- */
+/* ---------- thinking: a quiet line that opens to the thinking text ---------- */
+
+// thoughtLabel: "Thought for 12s" when the server could tell how long, else "Thought".
+function thoughtLabel(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  if (s < 1) return "Thought";
+  return "Thought for " + (s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s");
+}
+
+// renderThinking builds the line; the text is rendered as markdown the first
+// time it is opened. live: the agent is still thinking.
+function renderThinking(text, ms, key, live) {
+  const d = document.createElement("div");
+  d.className = "thinking" + (live ? " live" : "");
+  d._key = key;
+  d._text = text;
+  d.innerHTML =
+    '<button type="button" class="tr-line" aria-expanded="false"><span class="tr-dot" aria-hidden="true"></span>' +
+    '<span class="tr-txt"></span><span class="tr-chev" aria-hidden="true">›</span></button>' +
+    '<div class="think-body md" hidden></div>';
+  d.querySelector(".tr-txt").textContent = live ? "Thinking…" : thoughtLabel(ms);
+  d.querySelector(".tr-dot").className = "tr-dot" + (live ? " run" : "");
+  const line = d.querySelector(".tr-line"), body = d.querySelector(".think-body");
+  line.addEventListener("click", () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    line.setAttribute("aria-expanded", String(open));
+    if (open) fillThinking(d);
+  });
+  return d;
+}
+function fillThinking(d) {
+  const body = d.querySelector(".think-body");
+  if (body.dataset.md === d._text) return;
+  body.dataset.md = d._text;
+  body.innerHTML = renderMarkdown(d._text, d._key);
+}
+
+// syncLiveThinking keeps one "Thinking…" line above the activity row while the
+// agent is thinking, which opens to the latest thought; it goes when the agent
+// moves on (the finished thought is then the "Thought for Ns" line).
+function syncLiveThinking(chatEl, show, row) {
+  let el = chatEl.querySelector(":scope > .thinking.live");
+  const th = show && state.chat && state.chat.thinking;
+  if (!th || !th.text) { if (el) el.remove(); return; }
+  if (!el) el = renderThinking(th.text, 0, "live-thinking", true);
+  if (el._text !== th.text) {
+    el._text = th.text;
+    if (!el.querySelector(".think-body").hidden) fillThinking(el);
+  }
+  if (el.nextSibling !== row || el.parentNode !== chatEl) chatEl.insertBefore(el, row);
+}
+
+/* ---------- subagent lines (Claude's Agent/Task calls) ---------- */
 //
-// A subagent call gets its own card: what it is for (its description), its
-// type, whether it runs in the background or its own worktree, and its
-// status, ticking while it runs. Opened, it shows the agent's report as
+// A subagent call is its own grey line, in the tool runs' style, never part
+// of a run: an "agent" tag, what it is for (its description) and its status,
+// ticking while it runs. Opened, it shows its type, the agent's report as
 // markdown and the prompt it was given, and "View steps" opens the
 // subagent's own transcript.
 
@@ -10993,18 +11048,25 @@ function subagentMeta(m) {
 }
 
 function renderSubagentCard(m) {
-  const d = document.createElement("details");
-  d.className = "toolcard subagent";
+  const d = document.createElement("div");
+  d.className = "subrun";
   d.dataset.id = m.id;
   d.innerHTML =
-    '<summary><span class="toolname"></span><span class="sa-flags"></span>' +
-    '<span class="toolargs"></span><span class="toolmeta"></span></summary>' +
-    '<div class="sa-body"><div class="sa-report"></div>' +
-    '<button type="button" class="sa-steps" hidden>View steps</button>' +
+    '<button type="button" class="tr-line sa-line" aria-expanded="false"><span class="tr-dot" aria-hidden="true"></span>' +
+    '<span class="sa-tag">agent</span><span class="tr-txt sa-desc"></span><span class="sa-meta"></span>' +
+    '<span class="tr-chev" aria-hidden="true">›</span></button>' +
+    '<div class="sa-body" hidden><div class="sa-flags"></div><div class="sa-report"></div>' +
+    '<button type="button" class="sa-steps" hidden>View steps ›</button>' +
     '<details class="sa-prompt"><summary>Prompt</summary><div class="sa-prompt-text"></div></details>' +
-    '<div class="toolresult"></div></div>';
-  // The report is rendered when the card is first opened (most never are).
-  d.addEventListener("toggle", () => { if (d.open) fillSubagentReport(d); });
+    '<pre class="tr-pre toolresult err"></pre></div>';
+  // The report is rendered when the line is first opened (most never are).
+  const line = d.querySelector(".sa-line"), body = d.querySelector(".sa-body");
+  line.addEventListener("click", () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    line.setAttribute("aria-expanded", String(open));
+    if (open) fillSubagentReport(d);
+  });
   patchSubagentCard(d, m);
   return d;
 }
@@ -11013,30 +11075,30 @@ function patchSubagentCard(el, m) {
   const s = subagentInfo(m);
   el._m = m; // for the ticker and "View steps"
   const running = s.status === "running";
+  const bad = !!m.err || s.status === "failed" || s.status === "killed";
   el.classList.toggle("running", running);
-  el.classList.toggle("err", !!m.err || s.status === "failed" || s.status === "killed");
-  el.querySelector(".toolname").textContent = s.type || m.tool || "agent";
-  el.querySelector(".toolargs").textContent = s.description || m.args || "";
-  const flags = [];
-  if (s.background) flags.push("bg");
-  if (s.worktree) flags.push("⑂ worktree");
-  el.querySelector(".sa-flags").textContent = flags.join(" · ");
-  el.querySelector(".toolmeta").textContent = subagentMeta(m);
+  el.classList.toggle("err", bad);
+  el.querySelector(".tr-dot").className = "tr-dot" + (running ? " run" : "");
+  const desc = s.description || m.args || "";
+  const set = (e, t) => { if (e.textContent !== t) e.textContent = t; };
+  set(el.querySelector(".sa-desc"), desc || "Subagent");
+  const flags = [s.type || m.tool || "", s.background ? "bg" : "", s.worktree ? "⑂ worktree" : ""].filter(Boolean);
+  set(el.querySelector(".sa-flags"), flags.join(" · "));
+  set(el.querySelector(".sa-meta"), subagentMeta(m));
+  el.querySelector(".sa-line").setAttribute("aria-label", "Subagent: " + (desc || "subagent") + ", " + subagentMeta(m));
   el.querySelector(".sa-steps").hidden = !s.agent_id;
   const prompt = el.querySelector(".sa-prompt");
   prompt.hidden = !s.prompt;
   const promptText = prompt.querySelector(".sa-prompt-text");
   if (promptText.textContent !== (s.prompt || "")) promptText.textContent = s.prompt || "";
   // An errored call has no report, just the error.
-  const result = el.querySelector(".toolresult");
-  const errText = m.err ? m.result || "" : "";
-  if (result.textContent !== errText) result.textContent = errText;
+  set(el.querySelector(".toolresult"), m.err ? m.result || "" : "");
   const report = s.report || "";
   if (el._report !== report || el._running !== running) {
     el._report = report;
     el._running = running;
     el.querySelector(".sa-report").dataset.md = "";
-    if (el.open) fillSubagentReport(el);
+    if (!el.querySelector(".sa-body").hidden) fillSubagentReport(el);
   }
   for (const e of subview.stack) {
     if (e.id && e.id === s.agent_id) { e.info = s; if (e === subviewTop()) renderSubviewHeader(); }
@@ -11057,12 +11119,12 @@ function fillSubagentReport(el) {
 // A running subagent's clock ticks once a second while any is on screen.
 let subagentTimer = null;
 function ensureSubagentTicker() {
-  if (subagentTimer || !document.querySelector(".toolcard.subagent.running")) return;
+  if (subagentTimer || !document.querySelector(".subrun.running")) return;
   subagentTimer = setInterval(() => {
     if (document.hidden) return;
-    const cards = document.querySelectorAll(".toolcard.subagent.running");
+    const cards = document.querySelectorAll(".subrun.running");
     if (!cards.length) { clearInterval(subagentTimer); subagentTimer = null; return; }
-    for (const el of cards) if (el._m) el.querySelector(".toolmeta").textContent = subagentMeta(el._m);
+    for (const el of cards) if (el._m) el.querySelector(".sa-meta").textContent = subagentMeta(el._m);
   }, 1000);
 }
 
@@ -11241,11 +11303,7 @@ function renderMessage(m) {
     case "assistant": {
       const wrap = document.createDocumentFragment();
       if (m.think) {
-        const d = document.createElement("details");
-        d.className = "thinking";
-        d.innerHTML = `<summary>thought process</summary><div class="think-body md"></div>`;
-        mdOnOpen(d, d.querySelector(".think-body"), m.think, "t:" + m.id);
-        wrap.appendChild(d);
+        wrap.appendChild(renderThinking(m.think, m.think_ms, "t:" + m.id));
       }
       const div = document.createElement("div");
       div.className = "msg assistant";
@@ -13528,7 +13586,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest(".sa-steps");
-    const card = b && b.closest(".toolcard.subagent");
+    const card = b && b.closest(".subrun");
     if (card && card._m) openSubview(card._m);
   });
   window.addEventListener("popstate", route);

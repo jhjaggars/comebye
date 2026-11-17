@@ -432,57 +432,16 @@
     .md .md-plain { white-space: pre-wrap; }
     .msgtime { font-size: var(--fs-11); color: var(--muted); padding: 0 var(--sp-4); }
 
-    .thinking { align-self: flex-start; max-width: 88%; }
-    .thinking summary {
-      list-style: none; cursor: pointer; color: var(--muted);
-      font-size: var(--fs-13); padding: var(--sp-4) var(--sp-8); user-select: none;
-    }
-    .thinking summary::-webkit-details-marker { display: none; }
-    .thinking summary::before { content: "◆ "; font-size: var(--fs-11); }
-    .thinking[open] summary::before { content: "◇ "; }
+    /* Thinking: a quiet line like a tool run's ("Thought for 12s ›"); opened, the text in muted type, no bubble. */
+    .thinking { align-self: stretch; min-width: 0; display: flex; flex-direction: column; }
     .thinking .think-body {
       color: var(--muted); font-size: var(--fs-13); line-height: 1.5;
-      border-left: 2px solid var(--border); padding: var(--sp-2) var(--sp-10); margin: var(--sp-2) var(--sp-8);
+      border-left: 2px solid var(--border); padding: var(--sp-2) var(--sp-10); margin: 0 0 var(--sp-6) var(--sp-10);
       max-height: 300px; overflow-y: auto;
       -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
       overflow-wrap: anywhere;
     }
-
-    /* Only a subagent's call is still a card (.toolcard.subagent); plain tool calls are the quiet .toolrun lines below. */
-    .toolcard {
-      align-self: flex-start; max-width: 88%;
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: var(--r-12); overflow: hidden;
-    }
-    .toolcard { flex: none; }
-    .toolcard.err { border-color: var(--red); }
-    .toolcard > summary {
-      display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4) var(--sp-8); cursor: pointer;
-      padding: var(--sp-8) var(--sp-12); list-style: none; user-select: none;
-    }
-    .toolcard > summary::-webkit-details-marker { display: none; }
-    .toolcard .toolname {
-      font: var(--fs-12) var(--ff-code);
-      color: var(--blue); background: var(--chip-blue); border-radius: var(--r-6);
-      padding: var(--sp-2) var(--sp-6); flex: none;
-    }
-    .toolcard .toolargs { order: 3; flex: 1 1 100%; }
-    .toolcard.err .toolname { color: var(--red); background: var(--chip-red); }
-    .toolcard.err .toolmeta { color: var(--red); }
-    .toolcard .toolargs {
-      color: var(--muted); font-size: var(--fs-12); white-space: nowrap;
-      overflow: hidden; text-overflow: ellipsis; min-width: 0;
-      font-family: var(--ff-code);
-    }
-    .toolcard .toolmeta { margin-left: auto; color: var(--muted); font-size: var(--fs-11); flex: none; }
-    .toolcard .toolresult {
-      border-top: 1px solid var(--border); margin: 0; padding: var(--sp-8) var(--sp-12);
-      background: var(--code-bg); color: var(--code-text); max-height: 260px; overflow: auto;
-      -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-      font: var(--fs-12)/1.5 var(--ff-code);
-      white-space: pre-wrap; word-break: break-word;
-    }
-    .toolcard .toolresult:empty { display: none; }
+    .thinking .think-body[hidden] { display: none; }
 
     /* A run of tool calls: one quiet grey line, a compact list, then one call's input and output. */
     .toolrun { align-self: stretch; min-width: 0; display: flex; flex-direction: column; }
@@ -548,45 +507,43 @@
     }
     @media (prefers-reduced-motion: reduce) { .tr-dot.run { animation: none; } .tr-chev { transition: none; } }
 
-    /* Subagent cards: the description is the title, the type a badge. */
-    .toolcard.subagent { border-left: 3px solid var(--purple); align-self: stretch; max-width: none; }
-    .toolcard.subagent.err { border-color: var(--red); }
-    .toolcard.subagent .toolname { color: var(--purple); background: var(--chip-purple); }
-    .toolcard.subagent.err .toolname { color: var(--red); background: var(--chip-red); }
-    .toolcard.subagent .toolargs {
-      color: var(--text); font: 600 var(--fs-14)/1.35 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      white-space: normal; overflow-wrap: anywhere;
+    /* Subagent lines: the same quiet line with an "agent" tag; the description is the title. */
+    .subrun { align-self: stretch; min-width: 0; display: flex; flex-direction: column; }
+    .sa-tag {
+      flex: none; font-size: var(--fs-11); font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+      color: var(--purple); background: var(--chip-purple); border-radius: var(--r-6); padding: var(--sp-2) var(--sp-6);
     }
-    .toolcard.subagent.running .toolmeta { color: var(--purple); font-variant-numeric: tabular-nums; }
-    .toolcard .sa-flags { color: var(--muted); font-size: var(--fs-11); }
-    .toolcard .sa-flags:empty { display: none; }
-    .toolcard .sa-body { border-top: 1px solid var(--border); padding: var(--sp-8) var(--sp-12) var(--sp-10); font-size: var(--fs-14); }
-    .toolcard .sa-report {
-      max-height: 50vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    .sa-desc { color: var(--text); }
+    .sa-meta { flex: none; font-size: var(--fs-12); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .subrun.running .sa-meta { color: var(--purple); }
+    .subrun.err .sa-meta, .subrun.err .sa-desc { color: var(--red); }
+    .sa-line { flex-wrap: wrap; row-gap: 0; }
+    .sa-line .tr-txt { flex: 1 1 8em; }
+    .sa-flags { color: var(--muted); font-size: var(--fs-12); }
+    .sa-flags:empty { display: none; }
+    .sa-body {
+      margin: 0 0 var(--sp-6) var(--sp-10); padding: var(--sp-2) 0 0 var(--sp-10); border-left: 2px solid var(--border);
+      font-size: var(--fs-14); display: flex; flex-direction: column; gap: var(--sp-6); min-width: 0;
     }
-    .toolcard .sa-report.sa-none { color: var(--muted); font-size: var(--fs-13); }
-    .toolcard .sa-report:empty { display: none; }
-    .toolcard .sa-steps {
-      display: block; margin: var(--sp-10) 0 var(--sp-2); min-height: var(--hit-40); padding: 0 var(--sp-14);
-      background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10);
-      color: var(--blue); font: inherit; font-size: var(--fs-14); font-weight: 600; cursor: pointer;
+    .sa-body[hidden] { display: none; }
+    .sa-report { overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+    .sa-report.sa-none { color: var(--muted); font-size: var(--fs-13); }
+    .sa-report:empty { display: none; }
+    .sa-steps {
+      align-self: flex-start; background: none; border: 0; padding: var(--sp-4) var(--sp-6); min-height: var(--hit-32);
+      border-radius: var(--r-8); color: var(--blue); font: inherit; font-size: var(--fs-13); font-weight: 600; cursor: pointer;
     }
-    .toolcard .sa-steps[hidden], .toolcard .sa-prompt[hidden] { display: none; }
-    .toolcard .sa-prompt { margin-top: var(--sp-8); }
-    .toolcard .sa-prompt > summary {
-      cursor: pointer; color: var(--muted); font-size: var(--fs-13); min-height: var(--hit-32);
-      display: flex; align-items: center; user-select: none; list-style: none;
+    .sa-steps[hidden], .sa-prompt[hidden] { display: none; }
+    .sa-prompt > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-13); list-style: none; min-height: var(--hit-32); display: flex; align-items: center; }
+    .sa-prompt > summary::-webkit-details-marker { display: none; }
+    .sa-prompt > summary::before { content: "▸"; margin-right: var(--sp-6); }
+    .sa-prompt[open] > summary::before { content: "▾"; }
+    .sa-prompt-text {
+      white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: var(--fs-13);
+      max-height: 240px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
     }
-    .toolcard .sa-prompt > summary::-webkit-details-marker { display: none; }
-    .toolcard .sa-prompt > summary::before { content: "▸"; margin-right: var(--sp-6); }
-    .toolcard .sa-prompt[open] > summary::before { content: "▾"; }
-    .toolcard .sa-prompt-text {
-      color: var(--code-text); background: var(--code-bg); border-radius: var(--r-8); padding: var(--sp-6) var(--sp-8);
-      max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-      font: var(--fs-12)/1.5 var(--ff-code);
-      white-space: pre-wrap; overflow-wrap: anywhere;
-    }
-    .toolcard.subagent .toolresult { margin: var(--sp-8) -12px -10px; }
+    .sa-body .toolresult { max-height: 200px; }
+    @media (pointer: coarse) { .sa-steps, .sa-prompt > summary { min-height: var(--hit-44); } }
 
     /* "View steps": the subagent's transcript over the chat. */
     #subview {
@@ -701,7 +658,7 @@
     @media (max-width: 600px) {
       #chat { padding: var(--sp-12) var(--sp-6); margin-left: -12px; margin-right: -12px; }
       #sv-chat { padding: var(--sp-12) var(--sp-6); }
-      .msg.user, .thinking, .toolcard { max-width: 94%; }
+      .msg.user { max-width: 94%; }
     }
     @media (prefers-reduced-motion: reduce) {
       .dot.working, .dot.waiting { animation: none; }

@@ -7,7 +7,7 @@ export const A = (id, text) => ({ id, kind: "assistant", text, time: "2026-11-17
 // run with a call still running, and a subagent card between two runs.
 export const claude = [
   U("u1", "Fix the flaky upgrade test and tell me what you changed."),
-  A("a0", "On it. I'll start by reading the test."),
+  { ...A("a0", "On it. I'll start by reading the test."), think: "The test sleeps for a fixed 50ms.\n\nI should read it first.", think_ms: 12400 },
   T("c1", "Read", "internal/upgrade/upgrade_test.go", "package upgrade\n..."),
   T("c2", "Grep", "flaky|Sleep in internal/upgrade", "upgrade_test.go:44: time.Sleep(50 * time.Millisecond)"),
   T("c3", "Bash", "go test ./internal/upgrade/ -run Flaky -count=20", "--- FAIL: TestFlaky (0.05s)\n    upgrade_test.go:51: timeout", { err: true }),
@@ -18,11 +18,11 @@ export const claude = [
   T("c8", "Bash", "go vet ./...", "ok"),
   T("c9", "Read", "CHANGELOG.md", "# Changelog"),
   T("c10", "WebSearch", "go testing flaky timer", "10 results"),
-  A("a1", "Fixed: the test slept instead of waiting for the clock."),
+  { ...A("a1", "Fixed: the test slept instead of waiting for the clock."), think: "Nothing to add." },
   U("u2", "Now run the whole suite."),
   T("d1", "Bash", "go test ./... 2>&1 | tail -20", "ok  \tgithub.com/x/a\n--- FAIL: TestRestart (0.3s)\n    restart_test.go:88: exit status 2: no such file\nFAIL", { err: true }),
   T("d2", "Bash", "go test ./internal/restart/ -v", "restart_test.go:88: exit status 2: no such file or directory\n--- FAIL: TestRestart", { err: true }),
-  { id: "s1", kind: "tool", tool: "Agent", args: "review the diff", result: "Looks fine.", ms: 9000, subagent: { agent_id: "ag1", type: "reviewer", description: "Review the diff", status: "completed" } },
+  { id: "s1", kind: "tool", tool: "Agent", args: "review the diff", result: "Looks fine.", ms: 9000, subagent: { agent_id: "ag1", type: "reviewer", description: "Review the diff", status: "completed", report: "Looks fine.\n\nNo **blocking** issues.", dur_ms: 9000, tool_uses: 3 } },
   T("e1", "Read", "web/app.js", "// app"),
   T("e2", "Bash", "go build ./...", "", { ms: 0, result: "" }),
 ];

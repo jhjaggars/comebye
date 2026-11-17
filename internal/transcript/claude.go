@@ -160,6 +160,11 @@ type claudeParser struct {
 	curMsgID string
 	msgTools []string
 	think    string
+	// thinkMs is how long the thinking took: from the record before it to the
+	// thinking block's own record (an estimate that includes the request's
+	// latency); prevAt is the previous record's time.
+	thinkMs int64
+	prevAt  time.Time
 	// thought is the latest thinking since the user's last message.
 	thought *Thought
 	ask     *Ask
@@ -187,6 +192,9 @@ func (p *claudeParser) feed(line []byte) {
 	var r claudeRecord
 	if json.Unmarshal(line, &r) != nil || r.IsSidechain != p.sidechain {
 		return
+	}
+	if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
+		defer func() { p.prevAt = t }()
 	}
 	switch r.Type {
 	case "assistant":
@@ -248,6 +256,7 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 		p.curMsgID = r.Message.ID
 		p.msgTools = p.msgTools[:0]
 		p.think = ""
+		p.thinkMs = 0
 	}
 	model := r.Message.Model
 	if model == "<synthetic>" {
@@ -265,6 +274,10 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 					p.think += "\n\n"
 				}
 				p.think += b.Thinking
+				if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil && !p.prevAt.IsZero() && t.After(p.prevAt) {
+					p.thinkMs += t.Sub(p.prevAt).Milliseconds()
+					p.prevAt = t
+				}
 				p.thought = newThought(p.think, r.Timestamp)
 			}
 		case "text":
@@ -275,8 +288,8 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 			if i > 0 {
 				id = r.UUID + "#" + strconv.Itoa(i)
 			}
-			p.all = append(p.all, Message{ID: id, Kind: "assistant", Time: r.Timestamp, Model: model, Text: b.Text, Think: p.think})
-			p.think = ""
+			p.all = append(p.all, Message{ID: id, Kind: "assistant", Time: r.Timestamp, Model: model, Text: b.Text, Think: p.think, ThinkMs: p.thinkMs})
+			p.think, p.thinkMs = "", 0
 		case "tool_use":
 			if p.sidechain && b.Name == handbackTool {
 				// A subagent's last step: its report, shown as its answer.
@@ -284,8 +297,8 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 					Message string `json:"message"`
 				}
 				if json.Unmarshal(b.Input, &in) == nil && strings.TrimSpace(in.Message) != "" {
-					p.all = append(p.all, Message{ID: b.ID, Kind: "assistant", Time: r.Timestamp, Model: model, Text: in.Message, Think: p.think})
-					p.think = ""
+					p.all = append(p.all, Message{ID: b.ID, Kind: "assistant", Time: r.Timestamp, Model: model, Text: in.Message, Think: p.think, ThinkMs: p.thinkMs})
+					p.think, p.thinkMs = "", 0
 				}
 				continue
 			}

@@ -39,8 +39,8 @@ const run = (n) => page.locator("#chat .toolrun").nth(n);
 await check("claude: consecutive calls are one line each, in first-seen order; no card boxes", async () => {
   await open(claude);
   same(JSON.stringify(await lines()), JSON.stringify([RUN1, "Ran 2 commands", "Read a file, ran a command"]), "lines");
-  same(await page.locator("#chat .toolcard:not(.subagent)").count(), 0, "plain tool cards");
-  same(await page.locator("#chat .toolcard.subagent").count(), 1, "the subagent card stays a card");
+  same(await page.locator("#chat .toolcard").count(), 0, "tool cards");
+  same(await page.locator("#chat .subrun").count(), 1, "the subagent is its own line, between two runs");
   same(await page.locator("#chat .tr-list:visible").count(), 1, "only the live run (a call is running) starts open");
   same(await run(2).locator(".tr-list").isVisible(), true, "the live run is the last");
   same(await run(0).locator(".tr-line").getAttribute("aria-expanded"), "false", "aria-expanded");
@@ -269,6 +269,90 @@ await check("show more: a run over 25 calls lists its newest 6 and a Show N more
   await run(0).locator(".tr-line").click();
   same(await run(0).locator(".tr-item:visible").count(), 25, "25 rows");
   same(await run(0).locator(".tr-more").isVisible(), false, "no button at 25");
+});
+
+await check("subagent done: an agent-tagged line that opens to the report and View steps", async () => {
+  await open(claude);
+  const sa = page.locator("#chat .subrun");
+  same(await sa.locator(".sa-tag").textContent(), "agent", "tag");
+  same(await sa.locator(".sa-desc").textContent(), "Review the diff", "description");
+  same(await sa.locator(".sa-meta").textContent(), "done · 9.0s · 3 tools", "meta");
+  same(await sa.locator(".tr-dot.run").count(), 0, "no running dot");
+  same(await sa.locator(".sa-body").isVisible(), false, "starts closed");
+  await sa.locator(".sa-line").click();
+  same(await sa.locator(".sa-line").getAttribute("aria-expanded"), "true", "aria-expanded");
+  same(await sa.locator(".sa-report strong").textContent(), "blocking", "report as markdown");
+  await sa.locator(".sa-steps").click();
+  await page.waitForFunction(() => !document.getElementById("subview").hidden);
+  same(await page.locator("#sv-title").textContent(), "Review the diff", "steps title");
+});
+
+await check("subagent running: live clock and dot, then done and its summary, patched in place", async () => {
+  const running = claude.map((m) => m.id === "s1" ? { ...m, result: "", ms: 0, time: new Date(Date.now() - 65000).toISOString(), subagent: { agent_id: "ag1", type: "reviewer", description: "Review the diff", status: "running" } } : m);
+  await open(running);
+  const sa = page.locator("#chat .subrun");
+  same(await sa.evaluate((e) => e.classList.contains("running")), true, "running class");
+  same(await sa.locator(".tr-dot.run").count(), 1, "running dot");
+  if (!/^running · 1:0\d/.test(await sa.locator(".sa-meta").textContent())) throw new Error("meta " + await sa.locator(".sa-meta").textContent());
+  const t1 = await sa.locator(".sa-meta").textContent();
+  await sa.locator(".sa-line").click();
+  same(await sa.locator(".sa-report").textContent(), "Working… its report shows here when it finishes.", "placeholder");
+  await page.waitForTimeout(1300);
+  if (t1 === await sa.locator(".sa-meta").textContent()) throw new Error("the clock did not tick");
+  await page.evaluate(() => { const el = document.querySelector("#chat .subrun"); el.dataset.keep = "1"; patchToolCard({ id: "s1", kind: "tool", tool: "Agent", args: "review the diff", result: "Looks fine.", ms: 9000, subagent: { agent_id: "ag1", type: "reviewer", description: "Review the diff", status: "completed", report: "All **good**.", dur_ms: 9000, tool_uses: 2 } }); });
+  same(await page.locator("#chat .subrun[data-keep]").count(), 1, "same node");
+  same(await sa.locator(".sa-meta").textContent(), "done · 9.0s · 2 tools", "meta after");
+  same(await sa.locator(".tr-dot.run").count(), 0, "dot cleared");
+  same(await sa.locator(".sa-body").isVisible(), true, "open state kept");
+  same(await sa.locator(".sa-report strong").textContent(), "good", "summary shown");
+});
+
+await check("thinking: 'Thought for 12s' or 'Thought', opens to muted text with no bubble", async () => {
+  await open(claude);
+  const th = page.locator("#chat .thinking");
+  same(await th.count(), 2, "thinking lines");
+  same(await th.nth(0).locator(".tr-txt").textContent(), "Thought for 12s", "with a duration");
+  same(await th.nth(1).locator(".tr-txt").textContent(), "Thought", "without one");
+  same(await th.nth(0).locator(".think-body").isVisible(), false, "starts closed");
+  await th.nth(0).locator(".tr-line").click();
+  same(await th.nth(0).locator(".tr-line").getAttribute("aria-expanded"), "true", "aria-expanded");
+  same(await th.nth(0).locator(".think-body p").count(), 2, "text rendered");
+  const st = await th.nth(0).locator(".think-body").evaluate((e) => { const c = getComputedStyle(e); return { bg: c.backgroundColor, color: c.color, border: c.borderTopWidth }; });
+  same(st.bg, "rgba(0, 0, 0, 0)", "no bubble background");
+  const muted = await page.evaluate(() => { const e = document.createElement("span"); e.style.color = "var(--muted)"; document.body.append(e); const c = getComputedStyle(e).color; e.remove(); return c; });
+  same(st.color, muted, "muted type");
+});
+
+await check("thinking live: 'Thinking…' while the agent thinks, opening to the latest thought; gone when it moves on", async () => {
+  await open(claude);
+  await page.evaluate(() => { state.chat.thinking = { text: "Weighing the options." }; state.chat.last = { kind: "assistant", id: "x" }; });
+  await setWorking(true);
+  const live = page.locator("#chat .thinking.live");
+  if (await live.count() === 0) {
+    // the last message of the fixture is a running call: the agent is "running a tool", not thinking
+    await page.evaluate(() => { state.chat.last = { kind: "assistant", id: "x" }; renderActivity(); });
+  }
+  same(await live.count(), 1, "live line");
+  same(await live.locator(".tr-txt").textContent(), "Thinking…", "label");
+  same(await live.locator(".tr-dot.run").count(), 1, "pulsing dot");
+  same(await live.evaluate((e) => e.nextElementSibling.classList.contains("activity")), true, "sits above the activity row");
+  await live.locator(".tr-line").click();
+  same((await live.locator(".think-body").textContent()).trim(), "Weighing the options.", "text");
+  await page.evaluate(() => { state.chat.thinking = { text: "Weighing the options. Then deciding." }; renderActivity(); });
+  same((await live.locator(".think-body").textContent()).trim(), "Weighing the options. Then deciding.", "text follows the thought");
+  same(await live.locator(".think-body").isVisible(), true, "stays open");
+  await setWorking(false);
+  same(await page.locator("#chat .thinking.live").count(), 0, "gone when the agent stops");
+});
+
+await check("tap targets: the agent line, View steps and the thinking line are at least 44px on a phone", async () => {
+  await open(claude);
+  await page.locator("#chat .subrun .sa-line").click();
+  await page.locator("#chat .thinking").first().locator(".tr-line").click();
+  for (const [what, loc] of [["agent line", page.locator("#chat .subrun .sa-line")], ["View steps", page.locator("#chat .subrun .sa-steps")], ["thinking line", page.locator("#chat .thinking .tr-line").first()]]) {
+    const h = await loc.evaluate((e) => e.getBoundingClientRect().height);
+    if (h < 43.5) throw new Error(what + " is " + h + "px");
+  }
 });
 
 // ---- desktop: 1280 ----

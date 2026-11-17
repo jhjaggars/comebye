@@ -502,3 +502,31 @@ func TestSessionPathOpencodeMirror(t *testing.T) {
 		t.Errorf("bad id: %v", err)
 	}
 }
+
+// A thinking block's duration is the gap from the record before it; a
+// message with no thinking has none.
+func TestClaudeThinkMs(t *testing.T) {
+	path := writeSession(t, cMode, cUser, cThink, cText, cTool, cResult, cFinal)
+	tr, err := Read(path, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withThink, without *Message
+	for i := range tr.Messages {
+		m := &tr.Messages[i]
+		if m.Kind != "assistant" {
+			continue
+		}
+		if m.Think != "" {
+			withThink = m
+		} else {
+			without = m
+		}
+	}
+	if withThink == nil || withThink.ThinkMs != 1000 {
+		t.Errorf("thinking message: %+v", withThink)
+	}
+	if without == nil || without.ThinkMs != 0 {
+		t.Errorf("message without thinking: %+v", without)
+	}
+}

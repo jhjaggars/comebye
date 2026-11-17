@@ -25,18 +25,19 @@ import (
 
 // Message is one renderable item in the chat view.
 type Message struct {
-	ID     string `json:"id"`
-	Kind   string `json:"kind"` // user | assistant | tool | note | compaction
-	Time   string `json:"time,omitempty"`
-	Text   string `json:"text,omitempty"`   // user / assistant text
-	Think  string `json:"think,omitempty"`  // assistant thinking
-	Model  string `json:"model,omitempty"`  // assistant model id
-	Note   string `json:"note,omitempty"`   // note / compaction summary
-	Tool   string `json:"tool,omitempty"`   // tool name
-	Args   string `json:"args,omitempty"`   // compact argument summary
-	Result string `json:"result,omitempty"` // truncated tool result
-	Err    bool   `json:"err,omitempty"`    // tool result errored
-	Ms     int64  `json:"ms,omitempty"`     // tool duration
+	ID      string `json:"id"`
+	Kind    string `json:"kind"` // user | assistant | tool | note | compaction
+	Time    string `json:"time,omitempty"`
+	Text    string `json:"text,omitempty"`     // user / assistant text
+	Think   string `json:"think,omitempty"`    // assistant thinking
+	ThinkMs int64  `json:"think_ms,omitempty"` // how long it thought (Claude only; an estimate)
+	Model   string `json:"model,omitempty"`    // assistant model id
+	Note    string `json:"note,omitempty"`     // note / compaction summary
+	Tool    string `json:"tool,omitempty"`     // tool name
+	Args    string `json:"args,omitempty"`     // compact argument summary
+	Result  string `json:"result,omitempty"`   // truncated tool result
+	Err     bool   `json:"err,omitempty"`      // tool result errored
+	Ms      int64  `json:"ms,omitempty"`       // tool duration
 	// Subagent is set on a Claude Agent/Task call (see subagent.go). It is
 	// replaced, never modified, once a message has been handed out.
 	Subagent *SubagentInfo `json:"subagent,omitempty"`
