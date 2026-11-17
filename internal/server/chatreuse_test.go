@@ -16,8 +16,14 @@ import (
 func chatReuseHub(t *testing.T) (s *Server, fh *fakeLaunchHerdr, page, session string) {
 	t.Helper()
 	s, fh, page, _ = chatHub(t)
-	session = filepath.Join(t.TempDir(), "s1.jsonl")
-	if err := os.WriteFile(session, []byte("{}\n"), 0o644); err != nil {
+	// The helper is claude: its session is an id in claude's projects directory.
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	session = "c3eb8f54-0000-4000-8000-000000000002"
+	if err := os.MkdirAll(filepath.Join(cfg, "projects", "chat"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "projects", "chat", session+".jsonl"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	fh.set(func(f *fakeLaunchHerdr) {
@@ -51,7 +57,7 @@ func settleChat(t *testing.T, s *Server, fh *fakeLaunchHerdr, name, dir, session
 		for i := range f.agents {
 			if f.agents[i].Name == name {
 				f.agents[i].CWD = dir
-				f.agents[i].AgentSession = &herdr.AgentSessionInfo{Agent: "pi", Kind: "path", Value: session}
+				f.agents[i].AgentSession = &herdr.AgentSessionInfo{Agent: "claude", Kind: "id", Value: session}
 			}
 		}
 	})

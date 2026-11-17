@@ -583,6 +583,12 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := choice.Kind
+	if body.Chat != "" {
+		if why := chatKindRefusal(kind); why != "" {
+			writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "chat_no_readonly", "message": why})
+			return
+		}
+	}
 	name := strings.TrimSpace(body.Name)
 	named := name != ""
 	if named && !agentNameRe.MatchString(name) {

@@ -152,9 +152,10 @@ func (l *chatLimiter) allow(now time.Time) bool {
 }
 
 // chatAllowedTools are the commands a claude helper may run: reading the
-// Page and what produced it, and filing the follow-up to-do. Everything
-// else that writes is refused by plan mode.
-const chatAllowedTools = "Bash(comebye pages show:*),Bash(comebye read:*),Bash(comebye ledger:*),Bash(comebye todo add:*),Bash(comebye whoami:*)"
+// Page and what produced it, and `comebye pages note`, which can only file a
+// follow-up to-do linking that Page (pagenote.go). The general `comebye todo
+// add` is not allowed. Everything else that writes is refused by plan mode.
+const chatAllowedTools = "Bash(comebye pages show:*),Bash(comebye read:*),Bash(comebye ledger:*),Bash(comebye pages note:*),Bash(comebye whoami:*)"
 
 // chatArgs are the harness arguments of a chat helper. They go before the
 // first prompt (claude's --allowedTools takes what follows it).
@@ -166,19 +167,28 @@ func chatArgs(kind string) []string {
 		// ExitPlanMode keeps its "Ready to code?" dialog from leading out of
 		// plan mode when the user taps through it.
 		return []string{"--permission-mode", "plan", "--disallowedTools", "ExitPlanMode", "--allowedTools", chatAllowedTools}
-	case "pi":
-		// pi has no read-only mode: the brief's rules are all that holds it.
-		return []string{"--tools", "read,grep,find,ls,bash"}
 	}
 	return nil
 }
 
-// chatReadOnly says how a kind's helper is held to read-only.
+// chatReadOnly says how a kind's helper is held to read-only: "plan mode"
+// for a kind with an enforced read-only mode, "" for one with none. A kind
+// with none (pi, opencode) is refused a chat helper: the brief's rules alone
+// are not a boundary.
 func chatReadOnly(kind string) string {
 	if kind == "claude" {
 		return "plan mode"
 	}
-	return "brief only"
+	return ""
+}
+
+// chatKindRefusal is the plain refusal for a kind that cannot be held
+// read-only; "" when the kind may host a chat.
+func chatKindRefusal(kind string) string {
+	if chatReadOnly(kind) != "" {
+		return ""
+	}
+	return "Chat about this is off for " + kind + ": it has no read-only mode, so a helper could not be kept from changing things. Use a claude agent."
 }
 
 // makeChatDir makes a fresh scratch directory for a chat about a Page.
@@ -290,7 +300,7 @@ Rules
 - Start by reading the Page. Then say in three lines what it claims, and wait.
 - If the user concludes the Page needs changes, write them as a short list and, when
   they ask you to pass them on, run:
-  comebye todo add "<one finding>" --kind followup --page %s --context -
+  comebye pages note %s "<one finding>" --context -
   with the details on standard input. That command is allowed even where your tools
   are read-only: run it, do not assume it is refused, and tell the user the to-do id
   it prints. The coordinator relays it. It is the only way to hand anything back.
@@ -586,6 +596,57 @@ func (s *Server) handlePageChat(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if err := s.promptAgent(ctx, herdr.AgentInfo{Host: host, PaneID: res.Agent.PaneID, Name: name}, brief); err != nil {
 		out["prompt_error"] = "the helper started, but its brief was not delivered: " + err.Error()
+	}
+	writeJSON(w, out)
+}
+
+// chatKindOf is the kind a chat started on host with no kind asked for
+// would use: that host's default.
+func (s *Server) chatKindOf(ctx context.Context, host string) string {
+	var data []byte
+	if host == s.fleet.LocalName() {
+		rec := httptest.NewRecorder()
+		s.handleLaunchOptions(rec, httptest.NewRequest(http.MethodGet, "/api/launch-options", nil).WithContext(ctx))
+		data = rec.Body.Bytes()
+	} else {
+		status, d, err := s.fleet.CallHost(ctx, host, "launch-options", nil, nil)
+		if err != nil || status != http.StatusOK {
+			return ""
+		}
+		data = d
+	}
+	var o struct {
+		Kind string `json:"default_kind"`
+	}
+	_ = json.Unmarshal(data, &o)
+	return o.Kind
+}
+
+// handlePageChatOptions: GET /api/pages/{id}/chat-options tells the app
+// whether "Chat about this" is on for this Page: off, with a short reason,
+// when the host that would run the helper starts a kind with no read-only
+// mode. A Page that already has a chat stays on (it is reopened, not
+// started). The start route refuses the same way, whatever the app does.
+func (s *Server) handlePageChatOptions(w http.ResponseWriter, r *http.Request) {
+	if s.pagesOff(w, r) {
+		return
+	}
+	p, ok := s.pages.get(r.PathValue("id"))
+	if !ok {
+		pageErr(w, errPageNotFound)
+		return
+	}
+	out := map[string]any{"ok": true}
+	if _, has := s.chats.get(p.ID); !has {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if host, _ := s.chatHost(ctx, p, ""); host != "" {
+			kind := s.chatKindOf(ctx, host)
+			out["host"], out["kind"] = host, kind
+			if why := chatKindRefusal(kind); kind != "" && why != "" {
+				out["ok"], out["reason"] = false, why
+			}
+		}
 	}
 	writeJSON(w, out)
 }

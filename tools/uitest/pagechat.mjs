@@ -50,6 +50,9 @@ for (const width of [1280, 390]) {
     if (mode === "away") return r.fulfill({ status: 409, json: { code: "chat_host_away", message: "desk is not answering" } });
     r.fulfill({ json: body });
   });
+  // The fixture host's default kind may have no read-only mode: the other checks are about the tap, so the button is on.
+  let off = null;
+  await page.route(/\/api\/pages\/[^/]+\/chat-options$/, (r) => r.fulfill({ json: off || { ok: true, kind: "claude" } }));
   const toastText = async () => (await page.locator("#toast").textContent()).trim();
   const open = async () => {
     posts.length = 0;
@@ -154,6 +157,31 @@ for (const width of [1280, 390]) {
       if (m === "no_host") await page.screenshot({ path: `${out}/pagechat-refused-${width}.png` });
     });
   }
+  await check(`pagechat: a host whose kind has no read-only mode turns the button off with its reason, and a tap posts nothing at ${tag}`, async () => {
+    const reason = "Chat about this is off for pi: it has no read-only mode, so a helper could not be kept from changing things. Use a claude agent.";
+    off = { ok: false, kind: "pi", reason };
+    await open();
+    await page.reload({ waitUntil: "load" }); // the answer is kept per page until the app reloads
+    await page.waitForSelector("#pgs-chat", { timeout: 8000 });
+    posts.length = 0;
+    await page.waitForSelector("#pgs-chat[aria-disabled=true]", { timeout: 5000 });
+    const title = await page.getAttribute("#pgs-chat", "title");
+    if (title !== reason) throw new Error("title: " + title);
+    await page.click("#pgs-menub");
+    await page.waitForSelector("#pgs-menu:not([hidden])");
+    await page.waitForTimeout(500);
+    for (const sel of ["#pgs-chatmi", "#pgs-chatnew"]) {
+      if ((await page.getAttribute(sel, "aria-disabled")) !== "true") throw new Error(sel + " is not marked off");
+    }
+    await page.click("#pgs-chatmi", { force: true });
+    await page.waitForTimeout(400);
+    if (!/no read-only mode/.test(await toastText())) throw new Error("toast: " + (await toastText()));
+    await page.click("#pgs-chat", { force: true });
+    await page.waitForTimeout(300);
+    if (posts.length !== 0) throw new Error("a disabled button posted: " + JSON.stringify(posts));
+    await page.screenshot({ path: `${out}/pagechat-off-${width}.png` });
+    off = null;
+  });
   await browser.close();
 }
 

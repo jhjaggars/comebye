@@ -471,6 +471,8 @@ func (s *Server) pageRoutes() {
 	s.mux.HandleFunc("GET /api/pages/{id}/thumb", s.authWorker(s.handlePageThumb))
 	s.mux.HandleFunc("DELETE /api/pages/{id}", s.authWorker(s.handlePageDelete))
 	s.mux.HandleFunc("POST /api/pages/{id}/chat", s.auth(s.handlePageChat))
+	s.mux.HandleFunc("GET /api/pages/{id}/chat-options", s.auth(s.handlePageChatOptions))
+	s.mux.HandleFunc("POST /api/pages/{id}/note", s.authWorker(s.handlePageNote))
 	s.mux.HandleFunc("POST /api/pages/{id}/comments", s.auth(s.handlePageComments))
 	s.mux.HandleFunc("GET /api/pages/{id}/comments", s.auth(s.handlePageCommentsList))
 	s.mux.HandleFunc("DELETE /api/pages/{id}/comments/{cid}", s.auth(s.handlePageCommentDrop))

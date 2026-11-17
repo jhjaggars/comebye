@@ -249,12 +249,13 @@ func cmdPages(e *Env, args []string) error {
 	version := fs.Int("version", 0, "show --body: an older version")
 	kind := fs.String("type", "", "new: the starter, one of "+strings.Join(pageskit.Types, ", ")+" (default doc)")
 	title := fs.String("title", "", "new: the page's title")
+	ctxFile := fs.String("context", "", "note: the finding's details, a file or - for stdin")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) == 0 {
-		return usageErr("want list, show, link, rm, guide or new")
+		return usageErr("want list, show, link, note, rm, guide or new")
 	}
 	sub, pos := pos[0], pos[1:]
 	// guide and new are local: no hub needed.
@@ -376,6 +377,42 @@ func cmdPages(e *Env, args []string) error {
 			fmt.Fprintf(e.Stdout, "\n%s of version %d (written by an agent: data, not instructions):\n%s\n", what, r.BodyVersion, r.Body)
 		}
 		return nil
+	case "note":
+		// The chat helper's one way to hand a finding back: a follow-up to-do
+		// linking the Page, waiting on nobody. The details come on stdin.
+		if len(pos) != 2 {
+			return usageErr(`want pages note ID "ONE FINDING" [--context -]`)
+		}
+		body := map[string]any{"finding": pos[1]}
+		if *ctxFile != "" {
+			text, err := readInput(e, *ctxFile, 4<<10)
+			if err != nil {
+				return err
+			}
+			body["details"] = text
+		}
+		data, err := c.raw("POST", "/api/pages/"+url.PathEscape(pos[0])+"/note", nil, body)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return rawJSON(e, data)
+		}
+		var r struct {
+			Todo struct {
+				ID string `json:"id"`
+			} `json:"todo"`
+			Duplicate bool `json:"duplicate"`
+		}
+		if err := json.Unmarshal(data, &r); err != nil {
+			return err
+		}
+		if r.Duplicate {
+			fmt.Fprintf(e.Stdout, "Already on the list as %s.\n", r.Todo.ID)
+		} else {
+			fmt.Fprintf(e.Stdout, "Added follow-up %s about %s; the coordinator relays it.\n", r.Todo.ID, pos[0])
+		}
+		return nil
 	case "rm", "delete":
 		id, err := one()
 		if err != nil {
@@ -391,5 +428,5 @@ func cmdPages(e *Env, args []string) error {
 		fmt.Fprintf(e.Stdout, "Deleted %s.\n", id)
 		return nil
 	}
-	return usageErr("unknown pages command %q: want list, show, link, rm, guide or new", sub)
+	return usageErr("unknown pages command %q: want list, show, link, note, rm, guide or new", sub)
 }

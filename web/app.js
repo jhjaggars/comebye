@@ -7042,6 +7042,7 @@ function renderPageView() {
     // Same page and version: refresh the bar only, so the page keeps its state.
     view.querySelector(".pgs-bar").outerHTML = bar;
     pagesMade(p.id, ver);
+    pgsChatGate(p.id);
     return;
   }
   pgsPop("pgsmenu", false); pgsPop("pgsinfo", false);
@@ -7056,6 +7057,7 @@ function renderPageView() {
   fr.addEventListener("load", pgcMarks);
   pgcOpen(p, ver);
   pagesMade(p.id, ver);
+  pgsChatGate(p.id);
 }
 
 // The session that made a version of a page: the transcript index knows, from the
@@ -13252,13 +13254,37 @@ async function submitCoordinator() {
 // helper (POST /api/pages/{id}/chat) and opens its conversation. A second tap
 // while the first is starting does nothing.
 const PAGE_CHAT_SAYS = {
+  chat_no_readonly: "Chat about this is off for that kind of agent: it has no read-only mode.",
   chat_no_host: "No host can start a chat right now. Check that a computer running agents is online, then try again.",
   chat_rate: "You started several chats a moment ago. Wait a minute, then try again.",
   chat_host_away: "The computer that runs this page's chat is not answering. Try again in a moment, or start a new chat.",
 };
+// pgsChatGate: "Chat about this" is off, with its reason, for a Page whose
+// helper would be a kind with no read-only mode (the route refuses it too).
+// The answer is asked once per Page and kept until the view is left.
+const pgsChatOff = new Map(); // page id -> reason ("" = on)
+function pgsChatShow(id) {
+  const why = pgsChatOff.get(id) || "";
+  for (const sel of ["#pgs-chat", "#pgs-chatmi", "#pgs-chatnew"]) {
+    const b = $(sel.slice(1));
+    if (!b) continue;
+    if (why) { b.setAttribute("aria-disabled", "true"); b.title = why; b.classList.add("pgs-chatoff"); }
+    else { b.removeAttribute("aria-disabled"); b.classList.remove("pgs-chatoff"); }
+  }
+  const main = $("pgs-chat");
+  if (main && !why) main.title = "Chat about this page: start a read-only helper";
+}
+function pgsChatGate(id) {
+  if (pgsChatOff.has(id)) { pgsChatShow(id); return; }
+  api("/api/pages/" + encodeURIComponent(id) + "/chat-options").then((o) => {
+    pgsChatOff.set(id, o && o.ok === false ? (o.reason || "Chat is off for this page.") : "");
+    if (pgs.route && pgs.route.id === id) pgsChatShow(id);
+  }, () => {});
+}
 async function pagesChat(fresh) {
   const route = pgs.route;
   if (!route || pgs.chatBusy) return;
+  if (pgsChatOff.get(route.id)) { toast(pgsChatOff.get(route.id), true); return; }
   pgs.chatBusy = true;
   $("pgs-chat")?.setAttribute("aria-busy", "true");
   toast(fresh ? "Starting a new chat about this page…" : "Opening the chat about this page…");
