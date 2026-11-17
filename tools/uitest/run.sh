@@ -106,6 +106,7 @@ if want stt; then node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1 ; f
 # The Copy strip on code blocks (clipboard read back in headless Chrome).
 if want copycode; then node copycode.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want fontsetting; then node fontsetting.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want readcol; then node readcol.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Buttons and the one focus ring (design language slice 4).
 if want buttons; then node buttons.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Chips, cards and empty states share one shape (design language slice 5).

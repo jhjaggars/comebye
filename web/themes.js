@@ -318,7 +318,29 @@
   };
   API.fontSet = (id) => { try { ls.set(API.KEY_FONT, id); } catch (e) { /* not saved */ } API.fontApply(); };
   API.fontApply();
+
+  // The reading width: localStorage "comebye.col" holds "" (Comfortable, the default) or one of COLS' ids;
+  // colApply puts it on <html data-col> before first paint, and web/index.html turns it into --col. A value
+  // this build does not know shows the default. Per device: a phone and a 3440 monitor want different widths.
+  API.COLS = [
+    { id: "", name: "Comfortable", px: 820, sub: "820 px, the default" },
+    { id: "wide", name: "Wide", px: 1120, sub: "1120 px" },
+    { id: "wider", name: "Wider", px: 1480, sub: "1480 px" },
+    { id: "full", name: "Full", px: 0, sub: "the whole pane" },
+  ];
+  API.KEY_COL = "comebye.col";
+  API.colChoice = () => {
+    const v = ls.get(API.KEY_COL) || "";
+    return API.COLS.some((c) => c.id === v) ? v : "";
+  };
+  API.colApply = () => {
+    const v = API.colChoice(), el = document.documentElement;
+    if (v) el.setAttribute("data-col", v); else el.removeAttribute("data-col");
+    return v;
+  };
+  API.colSet = (id) => { ls.set(API.KEY_COL, id); API.colApply(); };
+  API.colApply();
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
-  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); });
+  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); });
 })(typeof window !== "undefined" ? window : globalThis);

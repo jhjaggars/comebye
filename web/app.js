@@ -9551,10 +9551,45 @@ function sxCard(p) {
     <div class="sx-acts"><button type="button" class="btn sm" data-sx="rename"${sx.busy ? " disabled" : ""}>Rename</button><button type="button" class="btn sm danger" data-sx="remove"${sx.busy ? " disabled" : ""}>Remove</button></div></div>`;
 }
 
+// The Appearance section: device-level choices kept in localStorage (web/themes.js), applied to <html> before
+// first paint. Reading width is four presets; the strip draws the column to scale on this window's conversation pane.
+function sxColId(id) { return "sx-col-" + (id || "default"); }
+function sxAppearance() {
+  const cur = CT.colChoice();
+  const pane = Math.max(1, Math.round($("settings").getBoundingClientRect().width || window.innerWidth)); // the screen is the conversation pane
+  const colPx = (c) => (c.px ? Math.min(c.px, pane - 20) : pane - 20);
+  const sel = CT.COLS.find((c) => c.id === cur);
+  const w = colPx(sel);
+  const pct = (n) => (Math.max(0, Math.min(1, n / pane)) * 100).toFixed(2);
+  const same = CT.COLS.every((c) => Math.round(colPx(c)) === Math.round(colPx(CT.COLS[0])));
+  const caption = same ? `On this window the column is always ${Math.round(w)} px: this setting has no effect here.`
+    : `On this window the column is ${Math.round(w)} px of the ${pane} px conversation pane.` + (sel.id === "full" ? " Full means very long lines of prose." : "");
+  return `<h2>Appearance</h2>
+    <p class="sx-note">Saved on this device only.</p>
+    <div class="sx-field"><div class="sx-lbl" id="sx-col-lbl">Reading width</div>
+      <div class="sx-radios" role="radiogroup" aria-labelledby="sx-col-lbl">${CT.COLS.map((c) => `<button type="button" class="sx-radio" role="radio" id="${sxColId(c.id)}" aria-checked="${c.id === cur}" tabindex="${c.id === cur ? 0 : -1}" data-sx="col" data-col="${c.id}"><span class="sx-rn">${esc(c.name)}</span><small>${esc(c.sub)}</small></button>`).join("")}</div>
+      <div class="sx-strip" aria-hidden="true"><i class="sx-strip-col" style="left:${pct((pane - w) / 2)}%;width:${pct(w)}%"></i></div>
+      <p class="sx-note" role="status">${esc(caption)}</p></div>`;
+}
+
+function sxColKey(ev) {
+  const b = ev.target.closest && ev.target.closest(".sx-radio");
+  if (!b) return;
+  const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+  let i = CT.COLS.findIndex((c) => c.id === b.dataset.col);
+  if (ev.key in keys) i = (i + keys[ev.key] + CT.COLS.length) % CT.COLS.length;
+  else if (ev.key === "Home") i = 0;
+  else if (ev.key === "End") i = CT.COLS.length - 1;
+  else return;
+  ev.preventDefault();
+  CT.colSet(CT.COLS[i].id);
+  renderSettings();
+}
+
 function renderSettings() {
   const el = $("sx-view");
   if (!el || !sx.route) return;
-  let h = `<h2>Passkeys</h2><p class="sx-note">A passkey approves a sensitive action with Face ID. Only Apple Passwords passkeys work, and they must support PRF: in iOS, turn on Passwords under Settings, General, AutoFill &amp; Passwords, AutoFill From.</p>`;
+  let h = sxAppearance() + `<h2>Passkeys</h2><p class="sx-note">A passkey approves a sensitive action with Face ID. Only Apple Passwords passkeys work, and they must support PRF: in iOS, turn on Passwords under Settings, General, AutoFill &amp; Passwords, AutoFill From.</p>`;
   if (sx.status === "loading") h += `<div class="empty">Loading…</div>`;
   else if (sx.status === "off") h += `<div class="empty"><b>Passkeys live on the hub</b><span>Open the hub's app to manage them.</span></div>`;
   else if (sx.status === "err") h += `<p class="sx-msg err" role="alert">${esc(sx.err)}</p>`;
@@ -9574,6 +9609,7 @@ function renderSettings() {
   const focus = document.activeElement && document.activeElement.id;
   el.innerHTML = h;
   const f = (sx.rename && $("sx-rename")) || (focus && $(focus));
+  if (focus && focus.indexOf("sx-col-") === 0) { const r = el.querySelector('.sx-radio[aria-checked="true"]'); if (r) r.focus({ preventScroll: true }); }
   if (f && f !== document.activeElement && (sx.rename || focus === "sx-name")) { f.focus({ preventScroll: true }); if (sx.rename) f.select(); }
 }
 
@@ -9685,6 +9721,7 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
+    case "col": CT.colSet(b.dataset.col); renderSettings(); { const r = $("sx-view").querySelector('.sx-radio[aria-checked="true"]'); if (r) r.focus({ preventScroll: true }); } break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
     case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
@@ -9726,6 +9763,10 @@ function initSettings() {
     else if (ev.key === "Escape") { ev.stopPropagation(); if (sx.rename) { sx.rename = ""; renderSettings(); } }
   });
   $("sx-view").addEventListener("click", settingsClick);
+  $("sx-view").addEventListener("keydown", sxColKey);
+  // The strip is drawn for this window, and another tab can change the width: redraw the open screen.
+  window.addEventListener("resize", () => { if (sx.route) renderSettings(); });
+  window.addEventListener("storage", (e) => { if (sx.route && e.key === CT.KEY_COL) renderSettings(); });
   $("sx-view").addEventListener("submit", settingsSubmit);
 }
 

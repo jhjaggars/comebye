@@ -308,13 +308,18 @@
     #detail header .title { font-weight: 650; font-size: var(--fs-16); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #detail header .subtitle { color: var(--muted); font-size: var(--fs-12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     /* Chat view */
+    /* The reading column: Settings > Appearance sets <html data-col> (web/themes.js). The conversation's padding
+       and the composer and bars above it all read --col, so they stay lined up. A narrower window always wins. */
+    :root { --col: 820px; }
+    html[data-col="wide"] { --col: 1120px; }
+    html[data-col="wider"] { --col: 1480px; }
+    html[data-col="full"] { --col: 100%; }
     #chat, #sv-chat {
       background: var(--bg);
       margin: var(--sp-12) 0 var(--sp-8);
       /* No frame: the conversation sits on the page. On a wide pane the scroll
          container stays full width (its scrollbar at the window edge) and the
          padding centres a --col-wide reading column. */
-      --col: 820px;
       padding: var(--sp-14) max(var(--sp-10), calc((100% - var(--col)) / 2));
       min-height: 0; overflow-y: auto;
       display: flex; flex-direction: column; gap: var(--sp-10);
@@ -825,7 +830,12 @@
     }
     .prompt:focus-within { border-color: var(--blue); }
     /* The composer and the bars above it share the chat's reading column. */
-    #detail main > :is(.prompt, #queued, #d-markbar, #d-chatstrip, #keypad) { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; box-sizing: border-box; }
+    #detail main > :is(.prompt, #queued, #d-markbar, #d-chatstrip, #keypad) { width: 100%; max-width: var(--col); margin-left: auto; margin-right: auto; box-sizing: border-box; }
+    /* Where the column fills the pane (Wider and Full, or any width in a narrow pane) the conversation keeps a
+       10px gutter; the composer and the bars keep it too, so they stay lined up with the text. */
+    @media (min-width: 601px) {
+      #detail main > :is(.prompt, #queued, #d-markbar, #d-chatstrip, #keypad) { max-width: min(var(--col), calc(100% - 2 * var(--sp-10))); }
+    }
     .prompt .composer {
       flex: 1; min-width: 0; min-height: var(--hit-40);
       max-height: calc(6 * 1.4em + 20px); overflow-y: auto; overscroll-behavior: contain;
@@ -2604,6 +2614,14 @@
     .sx-card .sx-name { font-weight: 600; font-size: var(--fs-15); overflow-wrap: anywhere; }
     .sx-meta { display: flex; flex-wrap: wrap; gap: var(--sp-4) var(--sp-12); color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .sx-fp { font-family: var(--ff-code); color: var(--text); letter-spacing: .02em; }
+    .sx-field { display: flex; flex-direction: column; gap: var(--sp-8); min-width: 0; }
+    .sx-lbl { font-size: var(--fs-14); font-weight: 600; }
+    .sx-radios { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--sp-6); }
+    .sx-radio { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: var(--sp-2); min-height: var(--hit-44); padding: var(--sp-6) var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel2); color: var(--text); font: inherit; font-size: var(--fs-14); text-align: left; cursor: pointer; }
+    .sx-radio small { color: var(--muted); font-size: var(--fs-12); }
+    .sx-radio[aria-checked="true"] { border-color: var(--blue); background: var(--chip-blue); }
+    .sx-strip { position: relative; height: 22px; border: 1px solid var(--border); border-radius: var(--r-6); background: var(--panel2); overflow: hidden; }
+    .sx-strip-col { position: absolute; top: 3px; bottom: 3px; border-radius: var(--r-4); background: var(--blue); opacity: .7; }
     .sx-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; }
     .sx-acts input[type="text"] { flex: 1 1 180px; min-width: 0; min-height: var(--hit-44); padding: 0 var(--sp-10); font: inherit; font-size: var(--fs-16); color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); }
     .sx-confirm { border: 1px solid var(--red); border-radius: var(--r-10); padding: var(--sp-10) var(--sp-12); display: flex; flex-direction: column; gap: var(--sp-8); font-size: var(--fs-14); }
