@@ -13,9 +13,9 @@ import (
 	"github.com/jhjaggars/comebye/internal/state"
 )
 
-// "Send to To do": the same extraction the idle detector runs
+// The from-last endpoint: the same extraction the idle detector runs
 // (questionTodos), on demand, on an agent's last message. The user presses
-// it in the app, or an agent (or the user in its session) runs
+// it from the CLI, or an agent (or the user in its session) runs
 // `comebye todo from-last`. Unlike the detector's guesses these items are
 // kept at once, are not held back by a person's item already waiting on the
 // agent, and are filed whatever the agent's status or whoever is watching.
