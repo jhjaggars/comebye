@@ -874,7 +874,7 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		}
 		a.Credential = pk.ID
 		finish(apApproved, "")
-		delete(st.snooze, snoozeKey(a.Host, a.Action)) // unlocked: the next lock is a new ask
+		delete(st.snooze, snoozeKey(a.Host, "gpg-unlock")) // unlocked (or set up): the next lock is a new ask
 		cp = *a
 		st.mu.Unlock()
 		s.passkeys.Used(pk.ID, ctr)

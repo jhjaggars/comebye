@@ -52,8 +52,10 @@ const addAuth = (cdp, hasPrf) => cdp.send("WebAuthn.addVirtualAuthenticator", { 
   protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true,
   automaticPresenceSimulation: true, hasPrf } });
 
-// A throwaway key (ed25519, signing) with a passphrase, in the temp GNUPGHOME.
-execFileSync("gpg", ["--batch", "--pinentry-mode", "loopback", "--passphrase", PASS, "--quick-gen-key", "UI Test <ui@example.invalid>", "ed25519", "sign", "never"], { env, stdio: "pipe" });
+// A throwaway key (ed25519, signing) with a passphrase, in the temp GNUPGHOME (checked above). A full run.sh shares that
+// GNUPGHOME with gpgunlock.mjs, which made the same key with the same passphrase: reuse it when it is there.
+const haveKey = execFileSync("gpg", ["--batch", "--list-secret-keys", "--with-colons"], { env, encoding: "utf8" }).split("\n").some((l) => l.startsWith("fpr:"));
+if (!haveKey) execFileSync("gpg", ["--batch", "--pinentry-mode", "loopback", "--passphrase", PASS, "--quick-gen-key", "UI Test <ui@example.invalid>", "ed25519", "sign", "never"], { env, stdio: "pipe" });
 const FPR = execFileSync("gpg", ["--batch", "--list-secret-keys", "--with-colons"], { env, encoding: "utf8" }).split("\n").map((l) => l.split(":")).find((f) => f[0] === "fpr")[9];
 const status = () => JSON.parse(cli(["gpg", "status", "--json"]).stdout);
 const cleanHub = async () => {
@@ -74,7 +76,8 @@ await cdp.send("WebAuthn.enable");
 await addAuth(cdp, true);
 const itemSel = (id) => `#todo .td-item[data-id="${id}"]`;
 const lst = async (q = "") => { const l = await fetch(base + "/api/todos" + q).then((r) => r.json()); return l.items || l.todos || []; };
-const approvals = async () => (await lst("?state=all")).filter((t) => t.kind === "approval" && /GPG is locked/.test(t.question));
+const startedAt = Date.now() - 1000; // a full run.sh hub holds the earlier scripts' items too: only look at ours
+const approvals = async () => (await lst("?state=all")).filter((t) => Date.parse(t.created_at) >= startedAt).filter((t) => t.kind === "approval" && /GPG is locked/.test(t.question));
 const openTodo = async (id) => {
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#todo .td-toggle", { state: "visible", timeout: 15000 });
@@ -88,7 +91,7 @@ const openTodo = async (id) => {
 let watcher;
 const stopWatcher = () => { if (watcher) { watcher.kill("SIGTERM"); watcher = null; } };
 const wlog = [];
-const startWatcher = () => { watcher = spawn(bin, ["gpg", "watch", "--every", "10s"], { env }); watcher.stdout.on("data", (d) => wlog.push(String(d))); watcher.stderr.on("data", (d) => wlog.push("ERR " + d)); };
+const startWatcher = () => { watcher = spawn(bin, ["gpg", "watch", "--every", "5s"], { env }); watcher.stdout.on("data", (d) => wlog.push(String(d))); watcher.stderr.on("data", (d) => wlog.push("ERR " + d)); };
 
 await check("register a passkey and set GPG unlock up (real CLI, real gpg, throwaway GNUPGHOME)", async () => {
   await page.goto(base + "/#/settings", { waitUntil: "load" });
@@ -111,11 +114,20 @@ await check("register a passkey and set GPG unlock up (real CLI, real gpg, throw
   if (!status().locked) throw new Error("lock: " + l.out);
 });
 
+// Earlier scripts in a full run leave the fixture's agents idle, and the watcher files only for a host with an active agent:
+// keep one working for the whole check, by starting a turn on it when it is idle (each turn keeps it working for a couple of seconds).
+const ag = (await fetch(base + "/api/agents").then((r) => r.json())).agents[0];
+const busy = setInterval(async () => { // a new turn only when it is idle: a prompt on a working agent does not extend it
+  try {
+    const a = (await fetch(base + "/api/agents").then((r) => r.json())).agents.find((x) => x.pane_id === ag.pane_id);
+    if (a && (a.agent_status || a.status) === "idle") { const r = await fetch(`${base}/api/agents/${encodeURIComponent(ag.pane_id)}/prompt`, { method: "POST", headers: J, body: JSON.stringify({ text: "work" }) }); busy.last = r.status; }
+  } catch {}
+}, 500);
 let first, firstApproval, t0;
-await check("the watcher (every 10 s) files ONE item, and it is still the same one after 2.5 minutes of rounds", async () => {
+await check("the watcher (every 5 s) files ONE item, and it is still the same one after 2.5 minutes of rounds", async () => {
   startWatcher();
   for (const end = Date.now() + 40000; Date.now() < end && !first; await sleep(500)) first = (await approvals())[0];
-  if (!first) throw new Error("no item filed; watcher said: " + wlog.join(""));
+  if (!first) throw new Error("no item filed; watcher said: " + wlog.join("") + " agents: " + JSON.stringify((await fetch(base + "/api/agents").then((r) => r.json())).agents.map((a) => [a.host, a.pane_id, a.agent_status || a.status])) + " status: " + JSON.stringify(status()) + " last prompt status: " + busy.last + " prompt agent: " + ag.pane_id + " " + ag.host);
   firstApproval = first.approval.id; t0 = Date.now();
   const seenApprovals = new Set([firstApproval]), seenTodos = new Set([first.id]);
   while (Date.now() - t0 < 150000) {
@@ -165,6 +177,7 @@ await check('"Not now": lock again, the watcher files one item, Not now drops it
   console.log("     quiet 45 s after Not now (snoozed 10 min)");
 });
 stopWatcher();
+clearInterval(busy);
 console.log("watcher output: " + JSON.stringify(wlog.join("")));
 await browser.close();
 const bad = results.filter((r) => !r.ok).length;
