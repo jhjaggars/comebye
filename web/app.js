@@ -10405,12 +10405,12 @@ function renderTranscript(t, reset) {
   let appended = false;
   for (const m of t.messages) {
     if (chat.rendered.has(m.id)) {
-      // A tool card may have gained its result since it was rendered.
+      // A tool call may have gained its result since it was rendered.
       if (m.kind === "tool") patchToolCard(m);
       continue;
     }
     chat.rendered.add(m.id);
-    chatEl.appendChild(renderMessage(m));
+    appendMessage(chatEl, m, chat);
     appended = true;
     if (m.kind === "user") settlePending(m.text);
   }
@@ -10696,8 +10696,8 @@ function tickActivity() {
   row.querySelector(".act-time").textContent = fmtClock(Date.now() - workingSince(a)) + (st && st.detail ? " · " + st.detail : "");
 }
 
-// toolMeta is a tool card's status: duration, "failed" for a call whose
-// result is an error (red card), or still running.
+// toolMeta is one call's status: its duration, "failed" for a result that is
+// an error, or still running.
 function toolMeta(m) {
   if (m.err) return "failed" + (m.ms ? " · " + fmtMs(m.ms) : "");
   return m.ms ? fmtMs(m.ms) : (m.result ? "ran" : "running…");
@@ -10706,8 +10706,8 @@ function toolMeta(m) {
 // toolRunning: a call still waiting for its result.
 function toolRunning(m) { return !m.result && !m.err && !m.ms; }
 
-// toolResultText is a tool card's body: empty (hidden) while the call runs,
-// so a result that arrives later is not mistaken for a final "(no output)".
+// toolResultText is a call's output: empty while the call runs, so a result
+// that arrives later is not mistaken for a final "(no output)".
 function toolResultText(m) {
   return m.result || (toolRunning(m) ? "" : "(no output)");
 }
@@ -10718,18 +10718,171 @@ function stillChanging(m) {
   return m.subagent ? m.subagent.status === "running" : toolRunning(m);
 }
 
+/* ---------- tool runs: consecutive tool calls as one quiet line ---------- */
+//
+// A run of tool calls is one grey line ("Ran 3 commands, edited 2 files ›").
+// Tapping it opens a compact list; tapping a row opens that call's input and
+// output. TOOL_KINDS maps a tool's name (lower-cased) to what it does, for
+// Claude's names (Bash, Read, Edit, Grep, WebFetch, mcp__server__tool…), Pi's
+// (bash, read, edit, find, ls…) and opencode's; any other tool is "other".
+const TOOL_KINDS = {
+  bash: "command", bashoutput: "command", killshell: "command", killbash: "command", shell: "command", exec: "command", run: "command",
+  read: "read", notebookread: "read", view: "read", cat: "read",
+  edit: "edit", multiedit: "edit", notebookedit: "edit", patch: "edit", apply_patch: "edit", str_replace: "edit",
+  write: "write", create: "write",
+  grep: "search", glob: "search", find: "search", ls: "search", list: "search", search: "search", toolsearch: "search",
+  websearch: "websearch", web_search: "websearch",
+  webfetch: "webfetch", web_fetch: "webfetch", fetch: "webfetch",
+  task: "agent", agent: "agent",
+  todowrite: "plan", todoread: "plan", update_plan: "plan", exitplanmode: "plan",
+};
+function toolKind(name) {
+  const n = String(name || "").toLowerCase();
+  if (n.startsWith("mcp__") || n.startsWith("mcp_")) return "mcp";
+  return TOOL_KINDS[n] || "other";
+}
+// kind -> [phrase for one, phrase for many ("%n" is the count), row verb, row verb while running].
+const TOOL_PHRASES = {
+  command: ["ran a command", "ran %n commands", "Ran", "Running"],
+  read: ["read a file", "read %n files", "Read", "Reading"],
+  edit: ["edited a file", "edited %n files", "Edited", "Editing"],
+  write: ["wrote a file", "wrote %n files", "Wrote", "Writing"],
+  search: ["ran a search", "ran %n searches", "Searched", "Searching"],
+  websearch: ["searched the web", "searched the web %n times", "Searched the web", "Searching the web"],
+  webfetch: ["fetched a page", "fetched %n pages", "Fetched", "Fetching"],
+  agent: ["ran a subagent", "ran %n subagents", "Ran subagent", "Running subagent"],
+  plan: ["updated the plan", "updated the plan %n times", "Updated plan", "Updating plan"],
+  mcp: ["called an MCP tool", "called %n MCP tools", "Called", "Calling"],
+  other: ["used a tool", "used %n tools", "Used", "Using"],
+};
+// toolRowVerb: the word in front of a call in the list.
+function toolRowVerb(m) {
+  const p = TOOL_PHRASES[toolKind(m.tool)];
+  return toolRunning(m) ? p[3] : p[2];
+}
+// toolRunSummary describes a run of calls (the messages, in order): the
+// phrase, how many failed, whether one is still running, and the first line
+// of the last call's output when that call failed.
+function toolRunSummary(calls) {
+  const counts = new Map();
+  let failed = 0, running = 0;
+  for (const m of calls) {
+    const k = toolKind(m.tool);
+    counts.set(k, (counts.get(k) || 0) + 1);
+    if (m.err) failed++;
+    else if (toolRunning(m)) running++;
+  }
+  // When every call is of an unnamed kind, "used 4 tools" reads better than "used 4 other tools".
+  const parts = [];
+  for (const [k, n] of counts) parts.push(TOOL_PHRASES[k][n === 1 ? 0 : 1].replace("%n", n));
+  let text = parts.join(", ");
+  text = text.charAt(0).toUpperCase() + text.slice(1);
+  const last = calls[calls.length - 1];
+  let peek = "";
+  if (last && last.err) {
+    const line = String(last.result || "").split("\n").map((l) => l.trim()).find((l) => l) || "";
+    peek = line || "failed";
+  }
+  return { text, failed, running, peek };
+}
+
+function renderToolRun() {
+  const d = document.createElement("div");
+  d.className = "toolrun";
+  d._calls = [];
+  d.innerHTML =
+    `<button type="button" class="tr-line" aria-expanded="false"><span class="tr-dot" aria-hidden="true"></span>` +
+    `<span class="tr-txt"></span><span class="tr-bad"></span><span class="tr-chev" aria-hidden="true">›</span></button>` +
+    `<div class="tr-peek" hidden></div><div class="tr-list" hidden></div>`;
+  const line = d.querySelector(".tr-line"), list = d.querySelector(".tr-list");
+  line.addEventListener("click", () => {
+    const open = list.hidden;
+    list.hidden = !open;
+    line.setAttribute("aria-expanded", String(open));
+  });
+  return d;
+}
+
+function toolRowEl(m) {
+  const item = document.createElement("div");
+  item.className = "tr-item";
+  item.dataset.id = m.id;
+  item.innerHTML =
+    `<button type="button" class="tr-row" aria-expanded="false"><span class="tr-v"></span><span class="tr-o"></span><span class="tr-st"></span></button>` +
+    `<div class="tr-detail" hidden>` +
+    `<div class="tr-lab"><span>Input</span>${cpOut(".toolargs", "Copy", "Copy what the agent ran")}</div><pre class="tr-pre toolargs"></pre>` +
+    `<div class="tr-lab"><span>Output</span>${cpOut(".toolresult", "Copy", "Copy the result")}</div><pre class="tr-pre toolresult"></pre>` +
+    `</div>`;
+  const row = item.querySelector(".tr-row"), det = item.querySelector(".tr-detail");
+  row.addEventListener("click", () => {
+    const open = det.hidden;
+    det.hidden = !open;
+    row.setAttribute("aria-expanded", String(open));
+  });
+  fillToolRow(item, m);
+  return item;
+}
+
+// fillToolRow sets (or refreshes) a row from its message; the text is only
+// touched when it changed, so an open row keeps its scroll and selection.
+function fillToolRow(item, m) {
+  const set = (el, t) => { if (el.textContent !== t) el.textContent = t; };
+  item.classList.toggle("bad", !!m.err); // !!: the server omits err when false
+  item.classList.toggle("running", toolRunning(m));
+  set(item.querySelector(".tr-v"), toolRowVerb(m));
+  set(item.querySelector(".tr-o"), m.args || m.tool || "tool");
+  set(item.querySelector(".tr-st"), toolMeta(m));
+  set(item.querySelector(".toolargs"), (m.tool ? m.tool + (m.args ? " " : "") : "") + (m.args || ""));
+  const out = item.querySelector(".toolresult");
+  set(out, toolResultText(m));
+  out.classList.toggle("err", !!m.err);
+}
+
+// updateToolRun recomputes a run's line from its calls.
+function updateToolRun(run) {
+  const s = toolRunSummary(run._calls);
+  const set = (el, t) => { if (el.textContent !== t) el.textContent = t; };
+  const line = run.querySelector(".tr-line");
+  set(run.querySelector(".tr-txt"), s.text);
+  set(run.querySelector(".tr-bad"), s.failed ? s.failed + " failed" : "");
+  run.querySelector(".tr-dot").className = "tr-dot" + (s.running ? " run" : "");
+  const peek = run.querySelector(".tr-peek");
+  set(peek, s.peek);
+  peek.hidden = !s.peek;
+  line.setAttribute("aria-label", s.text + (s.failed ? ", " + s.failed + " failed" : "") + (s.running ? ", still running" : ""));
+}
+
+// addRunCall puts a call at the end (or, for earlier messages, the start) of a run.
+function addRunCall(run, m, front) {
+  const list = run.querySelector(".tr-list");
+  const item = toolRowEl(m);
+  if (front) { list.prepend(item); run._calls.unshift(m); } else { list.appendChild(item); run._calls.push(m); }
+  updateToolRun(run);
+}
+
+// appendMessage renders m into parent. Consecutive plain tool calls share one
+// run (ctx.run); anything else, a subagent card included, ends it.
+function appendMessage(parent, m, ctx) {
+  if (m.kind === "tool" && !isSubagentCard(m)) {
+    if (!ctx.run || ctx.run.parentNode !== parent) { ctx.run = renderToolRun(); parent.appendChild(ctx.run); }
+    addRunCall(ctx.run, m, false);
+    return;
+  }
+  ctx.run = null;
+  parent.appendChild(renderMessage(m));
+}
+
 function patchToolCard(m, root = $("chat")) {
   const el = root.querySelector(`[data-id="${CSS.escape(m.id)}"]`);
   if (!el) return;
   if (el.classList.contains("subagent")) { patchSubagentCard(el, m); return; }
-  // !!: the server omits err when false, and toggle(name, undefined) flips
-  // the class instead of removing it, so cards blinked red on every poll.
-  el.classList.toggle("err", !!m.err);
-  const meta = el.querySelector(".toolmeta");
-  if (meta) meta.textContent = toolMeta(m);
-  const body = el.querySelector(".toolresult");
-  const text = toolResultText(m);
-  if (body && body.textContent !== text) body.textContent = text;
+  const run = el.closest(".toolrun");
+  fillToolRow(el, m);
+  if (run) {
+    const i = run._calls.findIndex((c) => c.id === m.id);
+    if (i >= 0) run._calls[i] = m;
+    updateToolRun(run);
+  }
 }
 
 /* ---------- subagent cards (Claude's Agent/Task calls) ---------- */
@@ -10934,7 +11087,7 @@ async function loadSubview(reset) {
         continue;
       }
       subview.rendered.add(m.id);
-      el.appendChild(renderMessage(m));
+      appendMessage(el, m, subview);
       appended = true;
     }
     if (t.messages.length) subview.from = (t.messages.find(stillChanging) || t.messages[t.messages.length - 1]).id;
@@ -11070,17 +11223,9 @@ function renderMessage(m) {
     }
     case "tool": {
       if (isSubagentCard(m)) return renderSubagentCard(m);
-      const d = document.createElement("details");
-      d.className = "toolcard" + (m.err ? " err" : "");
-      d.dataset.id = m.id;
-      const meta = toolMeta(m);
-      d.innerHTML =
-        `<summary><span class="toolname">${esc(m.tool || "tool")}</span>` +
-        `<span class="toolargs">${esc(m.args || "")}</span>` +
-        `<span class="toolmeta">${esc(meta)}</span></summary>` +
-        `<div class="tool-cp">${cpOut(".toolargs", "Copy command", "Copy what the agent ran")}${cpOut(".toolresult", "Copy result", "Copy the result")}</div>` +
-        `<div class="toolresult">${esc(toolResultText(m))}</div>`;
-      return d;
+      const run = renderToolRun();
+      addRunCall(run, m, false);
+      return run;
     }
     case "note": {
       const div = document.createElement("div");
@@ -11111,12 +11256,19 @@ async function loadEarlier() {
     const t = await api(`${pathFor(state.selected)}/transcript?limit=100&skip=${chat.skip}`);
     // Prepend older messages without disturbing what is already rendered.
     const frag = document.createDocumentFragment();
+    const ctx = { run: null };
     for (const m of t.messages) {
       if (chat.rendered.has(m.id)) continue;
       chat.rendered.add(m.id);
-      frag.appendChild(renderMessage(m));
+      appendMessage(frag, m, ctx);
     }
     const earlier = chatEl.querySelector(".load-earlier");
+    // A run cut by the page boundary continues in the run already on screen.
+    const after = earlier ? earlier.nextElementSibling : chatEl.firstElementChild;
+    if (ctx.run && after && after.classList.contains("toolrun")) {
+      for (const m of [...ctx.run._calls].reverse()) addRunCall(after, m, true);
+      ctx.run.remove();
+    }
     chatEl.insertBefore(frag, earlier || jumpEl);
     chat.more = t.more;
     if (!t.more && earlier) earlier.remove();

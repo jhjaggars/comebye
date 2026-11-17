@@ -143,25 +143,26 @@ await check("chat: Copy under a message copies its Markdown source (yours and th
 });
 
 // ---- slice 4: copy what a tool ran, a hub check, a terminal snapshot ----
-await check("chat: a tool card copies the command and the result", async () => {
+await check("chat: a tool call copies the command and the result", async () => {
   const msgs = [
     { id: "tc1", kind: "tool", tool: "Bash", args: "go test ./internal/upgrade/", result: "ok  \tgithub.com/x/upgrade\t0.412s\nok  \tgithub.com/x/other\t0.2s", ms: 412 },
     { id: "tc2", kind: "tool", tool: "Bash", args: "comebye upgrade --smoke-only", result: "smoke: dial tcp 10.0.0.7:443: connection refused", err: true, ms: 9 },
   ];
   await page.route(/\/transcript\?/, (r) => r.fulfill({ json: { messages: msgs, total: 2, more: false, format: "claude" } }));
   await page.goto(base + "/#/agent/" + encodeURIComponent("w1:p1"), { waitUntil: "load" });
-  const card = page.locator('#chat .toolcard[data-id="tc1"]');
-  await card.waitFor({ timeout: 8000 });
-  await card.locator("summary").click();
+  const card = page.locator('#chat .tr-item[data-id="tc1"]');
+  await card.waitFor({ state: "attached", timeout: 8000 });
+  await page.locator("#chat .tr-line").click(); // the run's line opens the list
+  await card.locator(".tr-row").click(); // a row opens that call's input and output
   const cmd = card.locator('.cpb[data-copy-target=".toolargs"]');
   const h = await cmd.evaluate((e) => e.getBoundingClientRect().height);
   if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
   await sentinel(); await cmd.click(); await page.waitForTimeout(300);
-  same(await clip(), "go test ./internal/upgrade/", "command");
+  same(await clip(), "Bash go test ./internal/upgrade/", "command");
   await page.waitForTimeout(1600);
   await sentinel(); await card.locator('.cpb[data-copy-target=".toolresult"]').click(); await page.waitForTimeout(300);
   same(await clip(), "ok  \tgithub.com/x/upgrade\t0.412s\nok  \tgithub.com/x/other\t0.2s", "result, with its line break and tab");
-  same(await card.evaluate((d) => d.open), true, "the card stays open");
+  same(await card.locator(".tr-detail").isVisible(), true, "the row stays open");
   await page.unroute(/\/transcript\?/);
 });
 

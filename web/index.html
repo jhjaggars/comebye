@@ -452,6 +452,7 @@
       overflow-wrap: anywhere;
     }
 
+    /* Only a subagent's call is still a card (.toolcard.subagent); plain tool calls are the quiet .toolrun lines below. */
     .toolcard {
       align-self: flex-start; max-width: 88%;
       background: var(--panel); border: 1px solid var(--border);
@@ -486,6 +487,69 @@
       white-space: pre-wrap; word-break: break-word;
     }
     .toolcard .toolresult:empty { display: none; }
+
+    /* A run of tool calls: one quiet grey line, a compact list, then one call's input and output. */
+    .toolrun { align-self: stretch; min-width: 0; display: flex; flex-direction: column; }
+    .tr-line {
+      display: flex; align-items: center; gap: var(--sp-6); width: 100%; text-align: left;
+      background: none; border: 0; border-radius: var(--r-8); color: var(--muted);
+      font: inherit; font-size: var(--fs-14); cursor: pointer;
+      padding: var(--sp-4) var(--sp-6); min-height: var(--hit-32); -webkit-tap-highlight-color: transparent;
+    }
+    .tr-line:hover { color: var(--text); }
+    .tr-txt { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    .tr-chev { flex: none; display: inline-block; font-size: 1.1em; line-height: 1; transition: transform .12s; }
+    .tr-line[aria-expanded="true"] .tr-chev { transform: rotate(90deg); }
+    .tr-bad { color: var(--red); white-space: nowrap; flex: none; }
+    .tr-bad:empty { display: none; }
+    .tr-dot { display: none; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--blue); }
+    .tr-dot.run { display: inline-block; animation: tr-pulse 1.2s ease-in-out infinite; }
+    @keyframes tr-pulse { 50% { opacity: .25; } }
+    .tr-peek {
+      margin: 0 0 var(--sp-4) var(--sp-6); padding: var(--sp-4) var(--sp-10); border-left: 2px solid var(--red);
+      color: var(--red); font: var(--fs-12)/1.4 var(--ff-code); overflow-wrap: anywhere;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .tr-peek[hidden], .tr-list[hidden], .tr-detail[hidden] { display: none; }
+    .tr-list {
+      margin: 0 0 var(--sp-4) var(--sp-10); padding: 0 0 0 var(--sp-8); border-left: 2px solid var(--border);
+      display: flex; flex-direction: column; min-width: 0;
+    }
+    .tr-item { min-width: 0; }
+    .tr-row {
+      display: flex; align-items: center; gap: var(--sp-8); width: 100%; min-width: 0; text-align: left;
+      background: none; border: 0; border-radius: var(--r-8); color: var(--muted);
+      font: inherit; font-size: var(--fs-13); cursor: pointer;
+      padding: var(--sp-4) var(--sp-6); min-height: var(--hit-32); -webkit-tap-highlight-color: transparent;
+    }
+    .tr-row:hover { background: var(--panel2); }
+    .tr-v { flex: none; }
+    .tr-o { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: var(--fs-12) var(--ff-code); }
+    .tr-st { flex: none; margin-left: auto; font-size: var(--fs-11); font-variant-numeric: tabular-nums; }
+    .tr-item.bad .tr-v, .tr-item.bad .tr-st { color: var(--red); }
+    .tr-item.running .tr-st { color: var(--blue); }
+    .tr-detail { margin: 0 0 var(--sp-6) var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-6); min-width: 0; }
+    .tr-lab {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: var(--fs-11); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    }
+    .tr-pre {
+      margin: 0; box-sizing: border-box; max-width: 100%; max-height: 260px; overflow: auto;
+      -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+      background: var(--code-bg); color: var(--code-text); border: 1px solid var(--border); border-radius: var(--r-8);
+      padding: var(--sp-8) var(--sp-10); font: var(--fs-12)/1.5 var(--ff-code);
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .tr-pre.err { border-color: var(--red); }
+    .tr-pre:empty { display: none; }
+    @media (pointer: coarse) {
+      .tr-line, .tr-row { min-height: var(--hit-44); }
+    }
+    @media (max-width: 600px) {
+      .tr-row { flex-wrap: wrap; row-gap: 0; }
+      .tr-o { flex: 1 1 100%; order: 3; padding-left: var(--sp-14); }
+    }
+    @media (prefers-reduced-motion: reduce) { .tr-dot.run { animation: none; } .tr-chev { transition: none; } }
 
     /* Subagent cards: the description is the title, the type a badge. */
     .toolcard.subagent { border-left: 3px solid var(--purple); align-self: stretch; max-width: none; }

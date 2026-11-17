@@ -114,6 +114,8 @@ if want chips; then node chips.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want controls; then node controls.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Tap-to-copy values, whole-message copy and the other copy buttons.
 if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Tool calls as one grey line per run: the list, a call's input and output, the failure peek.
+if want toolruns; then node toolruns.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Decision sets in the To do panel: the card, the phone stepper, conflicts, drafts and Submit.
 if want decisionsets; then node decisionsets.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want chatswitch; then node chatswitch.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

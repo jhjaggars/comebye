@@ -391,3 +391,71 @@ console.log(JSON.stringify(bad));
 		t.Fatalf("canRestart gave the wrong answer for: %s", out)
 	}
 }
+
+// toolRunSummary is the grey line over a run of tool calls ("Ran 3 commands, edited 2 files"). The table and the
+// function are cut out of app.js and run in Node, so the app's own code is what is checked.
+func TestToolRunSummary(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []string
+	for _, re := range []string{
+		`(?m)^function toolRunning\(m\) \{.*\}$`,
+		`(?s)\nconst TOOL_KINDS = \{.*?\n\};\n`,
+		`(?s)\nfunction toolKind\(name\) \{.*?\n\}\n`,
+		`(?s)\nconst TOOL_PHRASES = \{.*?\n\};\n`,
+		`(?s)\nfunction toolRowVerb\(m\) \{.*?\n\}\n`,
+		`(?s)\nfunction toolRunSummary\(calls\) \{.*?\n\}\n`,
+	} {
+		b := regexp.MustCompile(re).Find(src)
+		if b == nil {
+			t.Fatalf("app.js has nothing matching %s", re)
+		}
+		parts = append(parts, string(b))
+	}
+	js := strings.Join(parts, "\n") + `
+const t = (tool, extra) => Object.assign({ id: tool + Math.random(), kind: "tool", tool, args: "x", result: "ok", ms: 5 }, extra || {});
+const cases = [
+  // the example from the issue, in first-seen order
+  [[t("Bash"), t("Bash"), t("Edit"), t("Read"), t("Edit"), t("Read"), t("Read"), t("Bash"), t("Read"), t("Read")], "Ran 3 commands, edited 2 files, read 5 files"],
+  [[t("Bash")], "Ran a command"],
+  [[t("Read")], "Read a file"],
+  [[t("Write"), t("Write")], "Wrote 2 files"],
+  [[t("Grep"), t("Glob"), t("Grep")], "Ran 3 searches"],
+  [[t("WebSearch"), t("WebFetch"), t("WebFetch")], "Searched the web, fetched 2 pages"],
+  [[t("Task")], "Ran a subagent"],
+  [[t("TodoWrite"), t("TodoWrite")], "Updated the plan 2 times"],
+  [[t("mcp__github__list_prs"), t("mcp__jira__get")], "Called 2 MCP tools"],
+  // pi names
+  [[t("bash"), t("read"), t("read"), t("edit"), t("write"), t("find"), t("ls")], "Ran a command, read 2 files, edited a file, wrote a file, ran 2 searches"],
+  // unknown tools get a generic verb
+  [[t("Frobnicate"), t("")], "Used 2 tools"],
+  [[t("Read"), t("Frobnicate")], "Read a file, used a tool"],
+];
+const bad = cases.filter(([calls, want]) => toolRunSummary(calls).text !== want).map(([calls, want]) => want + " != " + toolRunSummary(calls).text);
+
+// failures, a running call and the peek
+let s = toolRunSummary([t("Bash", { err: true, result: "boom\nmore" }), t("Bash")]);
+if (s.failed !== 1 || s.peek !== "") bad.push("an earlier failure is only a count: " + JSON.stringify(s));
+s = toolRunSummary([t("Bash"), t("Bash", { err: true, result: "\n  exit status 2: no such file\nsecond line" })]);
+if (s.failed !== 1 || s.peek !== "exit status 2: no such file") bad.push("the last failure peeks its first line: " + JSON.stringify(s));
+s = toolRunSummary([t("Bash", { err: true, result: "" })]);
+if (s.peek !== "failed") bad.push("a failure with no output still peeks: " + JSON.stringify(s));
+s = toolRunSummary([t("Bash"), t("Read", { result: "", ms: 0 })]);
+if (s.running !== 1 || s.failed !== 0 || s.peek !== "") bad.push("a call without a result is running: " + JSON.stringify(s));
+if (toolRowVerb(t("Read", { result: "", ms: 0 })) !== "Reading" || toolRowVerb(t("Edit")) !== "Edited") bad.push("row verbs");
+console.log(JSON.stringify(bad));
+`
+	out, err := exec.Command(node, "-e", js).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "[]" {
+		t.Fatalf("toolRunSummary gave the wrong answer for: %s", out)
+	}
+}
