@@ -302,7 +302,7 @@ func (p *claudeParser) assistant(r *claudeRecord) {
 				}
 				continue
 			}
-			m := Message{ID: b.ID, Kind: "tool", Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)}
+			m := Message{ID: b.ID, Kind: "tool", Tool: b.Name, Args: summarizeArgs(b.Name, b.Input), Edit: parseEdit(b.Name, b.Input)}
 			if isAgentTool(b.Name) {
 				m.Subagent = newSubagent(b.Input)
 				m.Time = r.Timestamp

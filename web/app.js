@@ -10899,7 +10899,8 @@ function toolRowEl(m) {
   item.innerHTML =
     `<button type="button" class="tr-row" aria-expanded="false"><span class="tr-v"></span><span class="tr-o"></span><span class="tr-st"></span></button>` +
     `<div class="tr-detail" hidden>` +
-    `<div class="tr-lab"><span>Input</span>${cpOut(".toolargs", "Copy", "Copy what the agent ran")}</div><pre class="tr-pre toolargs"></pre>` +
+    `<div class="tr-diffbox" hidden><div class="tr-lab"><span class="df-title">Changes</span>${cpOut(".df-raw", "Copy", "Copy the diff")}</div><div class="tr-diff"></div><pre class="df-raw" hidden></pre></div>` +
+    `<div class="tr-inbox"><div class="tr-lab"><span>Input</span>${cpOut(".toolargs", "Copy", "Copy what the agent ran")}</div><pre class="tr-pre toolargs"></pre></div>` +
     `<div class="tr-lab"><span>Output</span>${cpOut(".toolresult", "Copy", "Copy the result")}</div><pre class="tr-pre toolresult"></pre>` +
     `</div>`;
   const row = item.querySelector(".tr-row"), det = item.querySelector(".tr-detail");
@@ -10912,6 +10913,110 @@ function toolRowEl(m) {
   return item;
 }
 
+// ---- diffs: an Edit, MultiEdit or Write call shows what it changed ----
+const DIFF_CTX = 2;        // unchanged lines kept around a change
+const DIFF_WRITE_LINES = 14; // a Write of a new file shows its first lines
+const DIFF_MAX_CELLS = 250000; // past this, old and new are not matched line by line
+
+// diffLines compares two arrays of lines and returns [{t:" "|"-"|"+", s}] (LCS; a long pair is all removed then all added).
+function diffLines(a, b) {
+  let top = 0;
+  while (top < a.length && top < b.length && a[top] === b[top]) top++;
+  let bot = 0;
+  while (bot < a.length - top && bot < b.length - top && a[a.length - 1 - bot] === b[b.length - 1 - bot]) bot++;
+  const ma = a.slice(top, a.length - bot), mb = b.slice(top, b.length - bot);
+  const out = a.slice(0, top).map((s) => ({ t: " ", s }));
+  if (ma.length * mb.length > DIFF_MAX_CELLS) {
+    for (const s of ma) out.push({ t: "-", s });
+    for (const s of mb) out.push({ t: "+", s });
+  } else {
+    const n = ma.length, m = mb.length, w = m + 1;
+    const L = new Uint32Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i * w + j] = ma[i] === mb[j] ? L[(i + 1) * w + j + 1] + 1 : Math.max(L[(i + 1) * w + j], L[i * w + j + 1]);
+    let i = 0, j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && ma[i] === mb[j]) { out.push({ t: " ", s: ma[i] }); i++; j++; }
+      else if (j >= m || (i < n && L[(i + 1) * w + j] >= L[i * w + j + 1])) out.push({ t: "-", s: ma[i++] });
+      else out.push({ t: "+", s: mb[j++] });
+    }
+  }
+  for (const s of a.slice(a.length - bot)) out.push({ t: " ", s });
+  return out;
+}
+function splitLines(t) {
+  if (!t) return [];
+  const l = t.split("\n");
+  if (l[l.length - 1] === "") l.pop();
+  return l;
+}
+// editRows turns an edit into display rows: {t, s} lines and {gap:n} for hidden unchanged lines.
+function editRows(e) {
+  const rows = [];
+  if (e.write) {
+    const lines = splitLines((e.edits[0] && e.edits[0].new) || "");
+    for (const s of lines.slice(0, DIFF_WRITE_LINES)) rows.push({ t: "+", s });
+    if (lines.length > DIFF_WRITE_LINES) rows.push({ more: lines.length - DIFF_WRITE_LINES });
+    return rows;
+  }
+  e.edits.forEach((x, k) => {
+    if (k) rows.push({ sep: true });
+    const d = diffLines(splitLines(x.old), splitLines(x.new));
+    const keep = new Array(d.length).fill(false);
+    d.forEach((r, i) => { if (r.t !== " ") for (let j = Math.max(0, i - DIFF_CTX); j <= Math.min(d.length - 1, i + DIFF_CTX); j++) keep[j] = true; });
+    let hidden = 0;
+    d.forEach((r, i) => {
+      if (keep[i]) { if (hidden) { rows.push({ gap: hidden }); hidden = 0; } rows.push(r); } else hidden++;
+    });
+    if (hidden) rows.push({ gap: hidden });
+  });
+  return rows;
+}
+function editPlain(e, rows) {
+  const out = ["--- " + (e.path || "file"), "+++ " + (e.path || "file")];
+  for (const r of rows) {
+    if (r.sep) out.push("@@");
+    else if (r.gap) out.push("@@ " + r.gap + " unchanged lines @@");
+    else if (r.more) out.push("… " + r.more + " more lines");
+    else out.push(r.t + r.s);
+  }
+  if (e.truncated) out.push("… cut: the change is longer than the app keeps");
+  return out.join("\n");
+}
+function fillDiff(item, m) {
+  const box = item.querySelector(".tr-diffbox");
+  const key = m.edit ? JSON.stringify(m.edit) : "";
+  box.hidden = !m.edit;
+  item.querySelector(".tr-inbox").hidden = !!m.edit;
+  if (item._edit === key) return;
+  item._edit = key;
+  const view = item.querySelector(".tr-diff"), raw = item.querySelector(".df-raw");
+  view.textContent = "";
+  raw.textContent = "";
+  if (!m.edit) return;
+  const e = m.edit, rows = editRows(e);
+  const mk = (cls, sign, text) => {
+    const d = document.createElement("div");
+    d.className = "df-l " + cls;
+    const g = document.createElement("span");
+    g.className = "df-g"; g.setAttribute("aria-hidden", "true"); g.textContent = sign;
+    const t = document.createElement("span");
+    t.className = "df-t"; t.textContent = text;
+    d.append(g, t);
+    return d;
+  };
+  const note = (text) => { const d = document.createElement("div"); d.className = "df-note"; d.textContent = text; return d; };
+  item.querySelector(".df-title").textContent = (e.write ? "New file " : "Changes ") + (e.path ? e.path.split("/").slice(-2).join("/") : "");
+  for (const r of rows) {
+    if (r.sep) view.append(note("⋯"));
+    else if (r.gap) view.append(note(r.gap + " unchanged line" + (r.gap === 1 ? "" : "s")));
+    else if (r.more) view.append(note(r.more + " more line" + (r.more === 1 ? "" : "s")));
+    else view.append(mk(r.t === "+" ? "add" : r.t === "-" ? "del" : "ctx", r.t === " " ? "" : r.t, r.s));
+  }
+  if (e.edits.length && e.edits.some((x) => x.all)) view.append(note("replaces every match"));
+  if (e.truncated) view.append(note("cut: the change is longer than the app keeps"));
+  raw.textContent = editPlain(e, rows);
+}
+
 // fillToolRow sets (or refreshes) a row from its message; the text is only
 // touched when it changed, so an open row keeps its scroll and selection.
 function fillToolRow(item, m) {
@@ -10922,6 +11027,7 @@ function fillToolRow(item, m) {
   set(item.querySelector(".tr-o"), m.args || m.tool || "tool");
   set(item.querySelector(".tr-st"), toolMeta(m));
   set(item.querySelector(".toolargs"), (m.tool ? m.tool + (m.args ? " " : "") : "") + (m.args || ""));
+  fillDiff(item, m);
   const out = item.querySelector(".toolresult");
   set(out, toolResultText(m));
   out.classList.toggle("err", !!m.err);

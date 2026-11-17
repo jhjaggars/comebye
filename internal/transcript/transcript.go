@@ -41,6 +41,8 @@ type Message struct {
 	// Subagent is set on a Claude Agent/Task call (see subagent.go). It is
 	// replaced, never modified, once a message has been handed out.
 	Subagent *SubagentInfo `json:"subagent,omitempty"`
+	// Edit is set on an Edit, MultiEdit or Write call: what it changed (see edit.go).
+	Edit *EditInfo `json:"edit,omitempty"`
 }
 
 // Transcript is a parsed window of a session file.
@@ -374,6 +376,7 @@ func appendAssistant(all *[]Message, toolIdx map[string]int, r rawRecord) {
 			Kind: "tool",
 			Tool: b.Name,
 			Args: summarizeArgs(b.Name, b.Args),
+			Edit: parseEdit(b.Name, b.Args),
 		})
 		toolIdx[b.ID] = len(*all) - 1
 	}

@@ -5,7 +5,7 @@
 //   node toolruns.mjs BASE OUT_DIR      (env: SCHEME; SHOTS=1 also writes labelled screenshots at 390 and 1280)
 import { launch } from "./lib.mjs";
 import fs from "node:fs";
-import { T, U, A, claude, pi } from "./fixtures/toolruns.mjs";
+import { T, U, A, claude, pi, edits } from "./fixtures/toolruns.mjs";
 
 const [base, out] = process.argv.slice(2);
 const dark = process.env.SCHEME !== "light";
@@ -78,6 +78,80 @@ await check("tap: the line opens a compact list, a row opens that call's input a
   same(await row.locator(".tr-st").textContent(), "failed · 40ms", "status");
   await run(0).locator(".tr-line").click();
   same(await run(0).locator(".tr-list").isVisible(), false, "list closes again");
+});
+
+await check("diffs: an Edit row opens a compact diff, red and green, with context kept short", async () => {
+  await open(edits);
+  await run(0).locator(".tr-line").click();
+  const row = run(0).locator('.tr-item[data-id="x1"]');
+  await row.locator(".tr-row").click();
+  same(await row.locator(".tr-diffbox").isVisible(), true, "diff shown");
+  same(await row.locator(".tr-inbox").isVisible(), false, "the plain input is replaced by the diff");
+  same(await row.locator(".df-title").textContent(), "Changes upgrade/upgrade_test.go", "title");
+  same(await row.locator(".df-l.del").count(), 1, "one removed line");
+  same(await row.locator(".df-l.add").count(), 1, "one added line");
+  same(await row.locator(".df-l.del .df-t").textContent(), "\ttime.Sleep(50 * time.Millisecond)", "removed text");
+  same(await row.locator(".df-l.ctx").count(), 4, "two context lines each side");
+  same(await row.locator(".df-note").textContent(), "1 unchanged line", "the rest of the file is a gap");
+  const [add, del, plain] = await Promise.all([
+    row.locator(".df-l.add").evaluate((e) => getComputedStyle(e).backgroundColor),
+    row.locator(".df-l.del").evaluate((e) => getComputedStyle(e).backgroundColor),
+    row.locator(".tr-diff").evaluate((e) => getComputedStyle(e).backgroundColor),
+  ]);
+  if (add === del || add === plain || del === plain) throw new Error(`add ${add}, del ${del}, plain ${plain}`);
+  const [ga, gd] = await Promise.all([row.locator(".df-l.add .df-g").evaluate((e) => getComputedStyle(e).color), row.locator(".df-l.del .df-g").evaluate((e) => getComputedStyle(e).color)]);
+  if (ga === gd) throw new Error("the + and - signs share a colour");
+  const ff = await row.locator(".df-t").first().evaluate((e) => getComputedStyle(e).fontFamily);
+  if (!/mono|code|courier/i.test(ff) && !/Mono|Courier/i.test(ff)) throw new Error("not monospace: " + ff);
+});
+
+await check("diffs: a long line wraps on a phone instead of scrolling the page or the diff sideways", async () => {
+  await open(edits);
+  await run(0).locator(".tr-line").click();
+  const row = run(0).locator('.tr-item[data-id="x1"]');
+  await row.locator(".tr-row").click();
+  const box = await row.locator(".tr-diff").evaluate((e) => ({ sw: e.scrollWidth, cw: e.clientWidth }));
+  if (box.sw > box.cw + 1) throw new Error(`diff scrolls sideways: ${box.sw} > ${box.cw}`);
+  const h = await row.locator(".df-l.add").evaluate((e) => e.getBoundingClientRect().height);
+  if (h < 40) throw new Error("the long added line did not wrap: " + h + "px");
+  same(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "page scrolls sideways");
+});
+
+await check("diffs: MultiEdit lists each replacement; a Write of a new file shows its first lines; a cut edit says so", async () => {
+  await open(edits);
+  await run(0).locator(".tr-line").click();
+  const multi = run(0).locator('.tr-item[data-id="x2"]');
+  await multi.locator(".tr-row").click();
+  same(await multi.locator(".df-l.del").count(), 2, "removed lines of both edits");
+  same(await multi.locator(".df-l.add").count(), 1, "added: only the first edit has new text");
+  same((await multi.locator(".tr-diff").textContent()).includes("replaces every match"), true, "replace_all noted");
+  const w = run(0).locator('.tr-item[data-id="x3"]');
+  await w.locator(".tr-row").click();
+  same(await w.locator(".df-title").textContent(), "New file docs/notes.md", "title");
+  same(await w.locator(".df-l.add").count(), 14, "first 14 lines");
+  same(await w.locator(".df-l.del").count(), 0, "nothing removed");
+  same(await w.locator(".df-note").textContent(), "6 more lines", "the rest is counted");
+  const c = run(0).locator('.tr-item[data-id="x4"]');
+  await c.locator(".tr-row").click();
+  same((await c.locator(".tr-diff").textContent()).includes("cut: the change is longer than the app keeps"), true, "truncated marker");
+  const b = run(0).locator('.tr-item[data-id="x5"]');
+  await b.locator(".tr-row").click();
+  same(await b.locator(".tr-diffbox").isVisible(), false, "a Bash row has no diff");
+  same(await b.locator(".tr-inbox").isVisible(), true, "it keeps its input");
+});
+
+await check("diffs: Copy puts the unified diff on the clipboard", async () => {
+  await open(edits);
+  await run(0).locator(".tr-line").click();
+  const row = run(0).locator('.tr-item[data-id="x1"]');
+  await row.locator(".tr-row").click();
+  const txt = await row.locator(".df-raw").evaluate((e) => e.textContent);
+  for (const want of ["--- /home/u/code/x/internal/upgrade/upgrade_test.go", "-\ttime.Sleep(50 * time.Millisecond)", "+\tclock.Advance(", " \tsetup()"]) {
+    if (!txt.includes(want)) throw new Error("copy text lacks " + JSON.stringify(want) + "\n" + txt);
+  }
+  const got = await page.evaluate((sel) => { const b = document.querySelector(sel); return copyTargetText(b); }, '.tr-item[data-id="x1"] .tr-diffbox .cpb');
+  if (got !== txt) throw new Error("copyTargetText differs from the raw diff:\n" + got);
+  same(await row.locator(".tr-diffbox .cpb").isVisible(), true, "a Copy button is shown");
 });
 
 await check("tap targets: line and rows are at least 44px on a phone", async () => {
@@ -379,6 +453,21 @@ await browser.close();
     same(await r.locator('.tr-item[data-id="c3"] .tr-detail').isVisible(), true, "detail");
     same(await d.page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "sideways scroll");
     if (shots) { await r.locator('.tr-item[data-id="c3"]').scrollIntoViewIfNeeded(); await d.page.screenshot({ path: `${shots}/toolruns-1280-open.png` }); }
+  });
+  await dcheck("desktop: an Edit's diff shows at 1280 without sideways scroll", async () => {
+    await d.page.unroute(/\/transcript\?/);
+    await d.page.route(/\/transcript\?/, (r) => r.fulfill({ json: { messages: edits, total: edits.length, more: false, format: "claude" } }));
+    await d.page.goto("about:blank");
+    await d.page.goto(base + "/#/agent/" + encodeURIComponent("w1:p1"), { waitUntil: "load" });
+    await d.page.waitForSelector("#chat .toolrun");
+    const r = d.page.locator("#chat .toolrun").first();
+    await r.locator(".tr-line").click();
+    const row = r.locator('.tr-item[data-id="x1"]');
+    await row.locator(".tr-row").click();
+    same(await row.locator(".df-l.add").count(), 1, "added line");
+    same(await row.locator(".df-l.del").count(), 1, "removed line");
+    same(await d.page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "sideways scroll");
+    if (shots) { await row.scrollIntoViewIfNeeded(); await d.page.screenshot({ path: `${shots}/toolruns-1280-diff.png` }); }
   });
   await d.browser.close();
 }

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
 )
@@ -528,5 +529,97 @@ func TestClaudeThinkMs(t *testing.T) {
 	}
 	if without == nil || without.ThinkMs != 0 {
 		t.Errorf("message without thinking: %+v", without)
+	}
+}
+
+func claudeToolUse(id, name, input string) string {
+	return `{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"id":"m` + id + `","model":"claude-test","role":"assistant","content":[{"type":"tool_use","id":"` + id + `","name":"` + name + `","input":` + input + `}]},"uuid":"u` + id + `","timestamp":"2026-10-20T10:00:02Z","sessionId":"s1"}`
+}
+
+func TestEditInfoShapes(t *testing.T) {
+	path := writeSession(t, cMode, cUser,
+		claudeToolUse("e1", "Edit", `{"file_path":"/a/b.go","old_string":"x := 1","new_string":"x := 2","replace_all":true}`),
+		claudeToolUse("e2", "MultiEdit", `{"file_path":"/a/c.go","edits":[{"old_string":"a","new_string":"b"},{"old_string":"c","new_string":"d"}]}`),
+		claudeToolUse("e3", "Write", `{"file_path":"/a/new.txt","content":"one\ntwo\n"}`),
+		claudeToolUse("e4", "Bash", `{"command":"ls"}`),
+		claudeToolUse("e5", "Write", `{"file_path":"/a/empty","content":""}`),
+	)
+	tr, err := Read(path, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Message{}
+	for _, m := range tr.Messages {
+		by[m.ID] = m
+	}
+	e := by["e1"].Edit
+	if e == nil || e.Path != "/a/b.go" || e.Write || len(e.Edits) != 1 || e.Edits[0] != (EditPair{Old: "x := 1", New: "x := 2", All: true}) {
+		t.Errorf("Edit: %+v", e)
+	}
+	e = by["e2"].Edit
+	if e == nil || len(e.Edits) != 2 || e.Edits[1].Old != "c" || e.Edits[1].New != "d" {
+		t.Errorf("MultiEdit: %+v", e)
+	}
+	e = by["e3"].Edit
+	if e == nil || !e.Write || e.Path != "/a/new.txt" || len(e.Edits) != 1 || e.Edits[0].New != "one\ntwo\n" || e.Edits[0].Old != "" {
+		t.Errorf("Write: %+v", e)
+	}
+	if by["e4"].Edit != nil || by["e5"].Edit != nil {
+		t.Errorf("Bash/empty Write should carry no edit: %+v %+v", by["e4"].Edit, by["e5"].Edit)
+	}
+}
+
+func TestEditInfoCap(t *testing.T) {
+	big := strings.Repeat("é", maxEditChars) // 2 bytes a rune: the cut must land on a boundary
+	in := `{"file_path":"/a/big","old_string":"` + big + `","new_string":"` + big + `"}`
+	path := writeSession(t, cMode, cUser, claudeToolUse("e1", "Edit", in))
+	tr, err := Read(path, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := tr.Messages[len(tr.Messages)-1].Edit
+	if e == nil || !e.Truncated {
+		t.Fatalf("want truncated edit, got %+v", e)
+	}
+	if n := len(e.Edits[0].Old) + len(e.Edits[0].New); n > maxEditChars {
+		t.Errorf("edit carries %d bytes, cap %d", n, maxEditChars)
+	}
+	if !utf8.ValidString(e.Edits[0].Old) || !utf8.ValidString(e.Edits[0].New) {
+		t.Error("cut inside a rune")
+	}
+	small := parseEdit("Edit", []byte(`{"file_path":"f","old_string":"a","new_string":"b"}`))
+	if small.Truncated {
+		t.Error("small edit marked truncated")
+	}
+}
+
+func TestPiEditInfo(t *testing.T) {
+	lines := []string{
+		`{"type":"session","version":3,"id":"s1"}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","content":[` +
+			`{"type":"toolCall","id":"p1","name":"edit","arguments":{"path":"/x/y.go","oldText":"foo","newText":"bar"}},` +
+			`{"type":"toolCall","id":"p2","name":"edit","arguments":{"path":"/x/z.go","edits":[{"oldText":"1","newText":"2"},{"oldText":"3","newText":"4"}]}},` +
+			`{"type":"toolCall","id":"p3","name":"write","arguments":{"path":"/x/n.md","content":"hello"}},` +
+			`{"type":"toolCall","id":"p4","name":"bash","arguments":{"command":"ls"}}]}}`,
+	}
+	tr, err := Read(writeSession(t, lines...), 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Message{}
+	for _, m := range tr.Messages {
+		by[m.ID] = m
+	}
+	if e := by["p1"].Edit; e == nil || e.Path != "/x/y.go" || len(e.Edits) != 1 || e.Edits[0].Old != "foo" || e.Edits[0].New != "bar" {
+		t.Errorf("pi edit: %+v", e)
+	}
+	if e := by["p2"].Edit; e == nil || len(e.Edits) != 2 || e.Edits[1].New != "4" {
+		t.Errorf("pi multi edit: %+v", e)
+	}
+	if e := by["p3"].Edit; e == nil || !e.Write || e.Edits[0].New != "hello" {
+		t.Errorf("pi write: %+v", e)
+	}
+	if by["p4"].Edit != nil {
+		t.Error("bash carries no edit")
 	}
 }

@@ -38,3 +38,23 @@ export const pi = [
   A("pa1", "Done."),
 ];
 
+
+// A run of edits: an Edit with unchanged lines around the change, a MultiEdit, a Write of a new file, and an Edit
+// the server cut.
+const body = (n) => Array.from({ length: n }, (_, i) => `line ${i + 1} of the file`).join("\n");
+export const edits = [
+  U("eu1", "Make the timer wait on the clock."),
+  T("x1", "Edit", "internal/upgrade/upgrade_test.go", "The file has been updated.", {
+    edit: { path: "/home/u/code/x/internal/upgrade/upgrade_test.go", edits: [{
+      old: "func TestFlaky(t *testing.T) {\n\tsetup()\n\ttime.Sleep(50 * time.Millisecond)\n\tcheck(t)\n\tteardown()\n}\n",
+      new: "func TestFlaky(t *testing.T) {\n\tsetup()\n\tclock.Advance(50 * time.Millisecond) // a very long line that has to wrap on a phone because it just keeps going and going past the edge\n\tcheck(t)\n\tteardown()\n}\n",
+    }] },
+  }),
+  T("x2", "MultiEdit", "web/app.js", "Applied 2 edits.", {
+    edit: { path: "/home/u/code/x/web/app.js", edits: [{ old: "let a = 1;", new: "let a = 2;" }, { old: "const b = 'x';\n", new: "", all: true }] },
+  }),
+  T("x3", "Write", "docs/notes.md", "File created.", { edit: { path: "/home/u/code/x/docs/notes.md", write: true, edits: [{ new: body(20) + "\n" }] } }),
+  T("x4", "Edit", "big.txt", "ok", { edit: { path: "/home/u/code/x/big.txt", truncated: true, edits: [{ old: "aaa\nbbb", new: "aaa\nccc" }] } }),
+  T("x5", "Bash", "go test ./...", "ok"),
+  A("ea1", "Done."),
+];
