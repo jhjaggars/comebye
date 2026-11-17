@@ -68,9 +68,28 @@ func (f *fakeLaunchHerdr) call(method string) *fakeCall {
 	return nil
 }
 
+// answerJSON answers a call and encodes the reply while still holding the
+// lock: the result can share f.agents with the fake's state, which a
+// concurrent call (agent.rename, the hook's agent.list) mutates in place.
+func (f *fakeLaunchHerdr) answerJSON(id, method string, params map[string]any) []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	res, herr := f.answerLocked(method, params)
+	if herr != nil {
+		b, _ := json.Marshal(map[string]any{"id": id, "error": herr})
+		return b
+	}
+	b, _ := json.Marshal(map[string]any{"id": id, "result": res})
+	return b
+}
+
 func (f *fakeLaunchHerdr) answer(method string, params map[string]any) (any, *herdr.Error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.answerLocked(method, params)
+}
+
+func (f *fakeLaunchHerdr) answerLocked(method string, params map[string]any) (any, *herdr.Error) {
 	f.calls = append(f.calls, fakeCall{method, params})
 	if f.hook != nil {
 		if res, err, ok := f.hook(method, params); ok {
@@ -160,13 +179,7 @@ func startFakeLaunchHerdr(t *testing.T) (*fakeLaunchHerdr, *herdr.Client) {
 					Params map[string]any `json:"params"`
 				}
 				_ = json.Unmarshal(line, &req)
-				res, herr := f.answer(req.Method, req.Params)
-				var b []byte
-				if herr != nil {
-					b, _ = json.Marshal(map[string]any{"id": req.ID, "error": herr})
-				} else {
-					b, _ = json.Marshal(map[string]any{"id": req.ID, "result": res})
-				}
+				b := f.answerJSON(req.ID, req.Method, req.Params)
 				c.Write(append(b, '\n'))
 			}()
 		}
