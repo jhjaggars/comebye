@@ -278,6 +278,9 @@ type Server struct {
 	// planPush tells the user a plan settled (the dispatcher's NotifyPlan;
 	// tests replace it).
 	planPush func(id, title, body string)
+	// approvalPush tells the user a new approval item waits (the dispatcher's
+	// NotifyApproval): once per item, never for a renewed request.
+	approvalPush func(id, title, body string)
 	// ledger records handoffs and marks (nil without a state directory,
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
@@ -503,6 +506,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	if manager != nil {
 		manager.Dispatcher().Quiet = s.quietAgent
 		s.planPush = manager.Dispatcher().NotifyPlan
+		s.approvalPush = manager.Dispatcher().NotifyApproval
 	}
 	s.routes()
 	return s

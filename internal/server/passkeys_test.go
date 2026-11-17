@@ -516,7 +516,8 @@ func TestApprovalRefusals(t *testing.T) {
 	if code, body := assertFor(t, s, h, id4, a); code != 409 || !strings.Contains(body, "expired") {
 		t.Errorf("expired = %d %s", code, body)
 	}
-	if it, _ := s.todos.get(tid4); it.State != TodoDropped || it.DropReason != "expired" {
+	// A GPG unlock item outlives its request: the host renews it in place.
+	if it, _ := s.todos.get(tid4); it.State != TodoOpen || it.Approval.State != apExpired {
 		t.Errorf("expired item = %+v", it)
 	}
 }

@@ -275,6 +275,13 @@ func (h *Host) NewRequest(rpID string, setup bool) (id string, request []byte, e
 	return id, request, nil
 }
 
+// DropPending forgets a request that was never filed (the hub snoozed it).
+func (h *Host) DropPending(id string) {
+	if strings.HasPrefix(id, "gu_") && !strings.ContainsAny(id, "/\\.") {
+		_ = os.Remove(h.path(filepath.Join(dirPending, id+".json")))
+	}
+}
+
 func (h *Host) prunePending() {
 	ents, _ := os.ReadDir(h.path(dirPending))
 	for _, e := range ents {

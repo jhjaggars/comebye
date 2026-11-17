@@ -199,4 +199,6 @@ if want provision; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node 
 if want provhosts; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provhosts.mjs "$out" || rc=1 ; fi
 # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
 if want usage; then FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1 ; fi
+# The "GPG is locked" item stays (the watcher renews its request in place; Not now snoozes it): the real watcher over minutes.
+if want gpgrenew; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node gpgrenew.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 exit $rc

@@ -81,10 +81,14 @@ type approvalSpec struct {
 	title             string        // %s: the host
 	ttl               time.Duration // approvalTTL when zero
 	gpg               bool          // the answer goes to the host (gpg.go)
+	// keepOpen: the item outlives its request. A request that runs out leaves
+	// the item open (the host renews it); only the host's withdraw, an answer
+	// or "Not now" ends it.
+	keepOpen bool
 }
 
 var approvalActions = map[string]approvalSpec{
-	"gpg-unlock": {agent: true, todo: true, title: "GPG is locked on %s", gpg: true},
+	"gpg-unlock": {agent: true, todo: true, title: "GPG is locked on %s", gpg: true, keepOpen: true},
 	// The first unlock of a host: the user compares the host key's
 	// fingerprint and types the passphrase, so the request waits longer.
 	"gpg-setup":   {agent: true, todo: true, title: "Set up GPG unlock on %s", ttl: gpgunlock.SetupTTL, gpg: true},
@@ -173,7 +177,15 @@ type approvalStore struct {
 	path  string
 	items []*approval
 	now   func() time.Time
+	// snooze: host+action -> until when the host's own refiling is quiet,
+	// after the user closed its item with "Not now" (memory only).
+	snooze map[string]time.Time
 }
+
+// approvalSnooze is how long the watcher's refiling stays quiet after "Not now".
+const approvalSnooze = 10 * time.Minute
+
+func snoozeKey(host, action string) string { return strings.ToLower(host) + "|" + action }
 
 func approvalsPath(dir string) string { return filepath.Join(dir, "approvals.json") }
 
@@ -266,6 +278,23 @@ func (s *Server) settleApprovalTodo(a *approval, reason string) {
 	if a.TodoID == "" || s.todos == nil {
 		return
 	}
+	if a.State == apExpired && approvalActions[a.Action].keepOpen {
+		// A request that ran out is renewed by its host on the same item: the
+		// item stays, showing the state, unless the host took it back. An
+		// older request that a newer one replaced says nothing about the item.
+		if reason == "withdrawn" {
+			_, _ = s.todos.close(a.TodoID, TodoDropped, "hub", reason)
+			return
+		}
+		_, _ = s.todos.mutate(a.TodoID, func(it *Todo) error {
+			if !it.active() || it.Approval == nil || it.Approval.ID != a.ID {
+				return errTodoClosed
+			}
+			it.Approval.State = a.State
+			return nil
+		})
+		return
+	}
 	_, _ = s.todos.mutate(a.TodoID, func(it *Todo) error {
 		if it.Approval != nil {
 			it.Approval.State = a.State
@@ -288,10 +317,24 @@ func (s *Server) approvalClosedByUser(it Todo) {
 	}
 	s.approvals.mu.Lock()
 	a := s.approvals.find(it.Approval.ID)
+	now := s.approvals.now()
 	if a != nil && a.State == apPending {
-		now := s.approvals.now()
 		a.State, a.DecidedAt, a.Note = apDenied, &now, "not now"
 		_ = s.approvals.saveLocked()
+	}
+	if a != nil && approvalActions[a.Action].keepOpen {
+		// The host's renewals that are still answerable go too, and its own
+		// refiling is quiet for a while: "Not now" is not "ask me again in a minute".
+		for _, o := range s.approvals.items {
+			if o.State == apPending && o.Action == a.Action && sameHost(o.Host, a.Host) {
+				o.State, o.DecidedAt, o.Note = apDenied, &now, "not now"
+			}
+		}
+		_ = s.approvals.saveLocked()
+		if s.approvals.snooze == nil {
+			s.approvals.snooze = map[string]time.Time{}
+		}
+		s.approvals.snooze[snoozeKey(a.Host, a.Action)] = now.Add(approvalSnooze)
 	}
 	s.approvals.mu.Unlock()
 }
@@ -343,6 +386,7 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 		Host    string          `json:"host"`
 		Subject string          `json:"subject"`
 		Request json.RawMessage `json:"request"`
+		Auto    bool            `json:"auto"` // the host's timer, not a person's ask
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&b); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -410,10 +454,29 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 	expired := st.expireLocked()
 	now := st.now()
 	recent := 0
-	var old, stale *approval
+	if until, ok := st.snooze[snoozeKey(host, b.Action)]; ok && spec.keepOpen && b.Auto && c.agent() {
+		if now.Before(until) {
+			st.mu.Unlock()
+			for _, e := range expired {
+				cp := *e
+				s.settleApprovalTodo(&cp, "expired")
+			}
+			writeJSON(w, map[string]any{"snoozed": true, "until": until})
+			return
+		}
+		delete(st.snooze, snoozeKey(host, b.Action))
+	}
+	var old, stale, last *approval
+	var older []*approval
 	for _, a := range st.items {
 		if !sameHost(a.Host, host) {
 			continue
+		}
+		if spec.keepOpen && a.Action == b.Action && a.TodoID != "" {
+			last = a
+		}
+		if spec.keepOpen && a.State == apPending && a.Action == b.Action && old != nil {
+			older = append(older, old) // two renewals back: no longer answerable
 		}
 		if now.Sub(a.CreatedAt) < time.Minute {
 			recent++
@@ -440,10 +503,21 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 	// sees one item per host and action, always the latest.
 	reuse := ""
 	if old != nil {
-		old.State, old.DecidedAt, old.Note = apExpired, &now, "replaced by a newer request"
+		if spec.keepOpen {
+			// The renewal: the old request stays answerable until its own
+			// time (a Face ID already begun on it still lands), the item is the same.
+			for _, o := range older {
+				o.State, o.DecidedAt, o.Note = apExpired, &now, "replaced by a newer request"
+			}
+		} else {
+			old.State, old.DecidedAt, old.Note = apExpired, &now, "replaced by a newer request"
+		}
 		reuse = old.TodoID
 	} else if stale != nil {
 		reuse = stale.TodoID
+	}
+	if reuse == "" && last != nil {
+		reuse = last.TodoID // a request that ran out left its item open
 	}
 	a := &approval{ID: newApprovalID(), Action: b.Action, Host: host, Subject: subject, RequestedBy: s.by(r, ""),
 		State: apPending, CreatedAt: now, ExpiresAt: now.Add(approvalLife(b.Action))}
@@ -503,6 +577,10 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !dup {
+			if spec.keepOpen && s.approvalPush != nil {
+				// One push per item: a renewal reuses the item and sends none.
+				s.approvalPush(out.ID, out.Question, "Open the app to unlock it with Face ID.")
+			}
 			item = &out
 			st.mu.Lock()
 			a.TodoID = out.ID
@@ -625,6 +703,13 @@ func (s *Server) handleApprovalWithdraw(w http.ResponseWriter, r *http.Request) 
 	}
 	now := st.now()
 	a.State, a.DecidedAt, a.Note = apExpired, &now, "withdrawn by the host"
+	if approvalActions[a.Action].keepOpen {
+		for _, o := range st.items { // the renewals still answerable go with it
+			if o.State == apPending && !o.relaying && o.Action == a.Action && sameHost(o.Host, a.Host) {
+				o.State, o.DecidedAt, o.Note = apExpired, &now, "withdrawn by the host"
+			}
+		}
+	}
 	_ = st.saveLocked()
 	cp := *a
 	st.mu.Unlock()

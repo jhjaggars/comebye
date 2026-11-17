@@ -300,6 +300,28 @@ func (d *Dispatcher) NotifyPlan(id, title, body string) {
 	}
 }
 
+// NotifyApproval tells the user an item waits for their Face ID (the GPG
+// unlock). It is sent once, when the item is made; its throttle key is the
+// item's, and it is the "blocked" kind: something needs the user.
+func (d *Dispatcher) NotifyApproval(id, title, body string) {
+	if d == nil || !d.kindOn(KindBlocked) {
+		return
+	}
+	ntfyOn, pushOn := d.channels()
+	key := "approval/" + id
+	if pushOn {
+		d.Push.Notify(key+"/"+KindBlocked, push.Message{Title: title, Body: body, URL: "/", Tag: key},
+			push.Options{Urgency: "high", TTL: 12 * time.Hour, Topic: push.TopicFor(key)})
+	}
+	if ntfyOn {
+		msg := ntfyMessage{Title: title, Message: body, Tags: []string{"lock"}}
+		if d.Ntfy.ClickURL != "" {
+			msg.Click = strings.TrimRight(d.Ntfy.ClickURL, "/") + "/"
+		}
+		d.Ntfy.notify(key, KindBlocked, msg)
+	}
+}
+
 func (d *Dispatcher) kindOn(k string) bool { return d.Kinds == nil || d.Kinds[k] }
 
 // digestEntry is one "done" waiting for the digest.

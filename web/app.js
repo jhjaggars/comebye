@@ -2342,7 +2342,7 @@ function renderTodos(force) {
   if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
   const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()], [...gu].map(([k, v]) => [k, v.st, v.msg, apBusy.has(k)]),
-    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.approval && t.approval.state, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
+    todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.approval && t.approval.state, t.approval && t.approval.id, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
   // The age moves between renders; a typed answer must not be lost to one.
   const typing = (el) => el && ((el.contains(document.activeElement) && document.activeElement.classList.contains("td-text")) || [...el.querySelectorAll(".ap-pass")].some((p) => p.value));
   if (show && main && (again || (main.dataset.sig !== sig && !typing(main)))) {
@@ -9821,7 +9821,10 @@ function guBarHtml(t) {
     return h;
   }
   if (!pending) {
-    h += `<p class="sx-note" role="status">This request is ${esc(a.state === "pending" ? "expired" : a.state)}. Run <code>comebye gpg unlock</code> on ${host} for a new one.</p>
+    h += a.action === "gpg-unlock" && (a.state === "expired" || a.state === "pending")
+      ? `<p class="sx-note" role="status">That request ran out. ${host} sends a fresh one within a minute and this item keeps its place; if nothing comes, run <code>comebye gpg unlock</code> there.</p>
+      <div class="td-acts"><button type="button" class="ap-no">Not now</button></div></div>`
+      : `<p class="sx-note" role="status">This request is ${esc(a.state === "pending" ? "expired" : a.state)}. Run <code>comebye gpg unlock</code> on ${host} for a new one.</p>
       <div class="td-acts"><button type="button" class="ap-no">Dismiss</button></div></div>`;
     return h;
   }

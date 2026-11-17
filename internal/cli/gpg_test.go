@@ -210,11 +210,13 @@ func TestGPGCommands(t *testing.T) {
 	if code := run(e, "gpg", "watch", "--once"); code != 0 || posts("/api/approvals") != before+1 {
 		t.Fatalf("watch with a request waiting: %d", code)
 	}
-	now = now.Add(gpgunlock.Cooldown + time.Minute)
+	// Idle for longer than the grace: the standing item is taken back.
+	f.answers["POST /api/approvals/ap_1/withdraw"] = answer{body: `{}`}
+	now = now.Add(gpgunlock.Grace + time.Minute)
 	f.answers["GET /api/agents"] = answer{body: strings.ReplaceAll(agentsJSON, `"agent_status":"working"`, `"agent_status":"idle"`)}
 	out.Reset()
-	if code := run(e, "gpg", "watch", "--once"); code != 0 || out.String() != "" || posts("/api/approvals") != before+1 {
-		t.Fatalf("watch on an idle host: %d %q", code, out)
+	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "withdrawn") || posts("/api/approvals") != before+1 || posts("/api/approvals/ap_1/withdraw") != 1 {
+		t.Fatalf("watch on a host idle past the grace: %d %q", code, out)
 	}
 	f.answers["GET /api/agents"] = answer{body: agentsJSON}
 	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "filed") || posts("/api/approvals") != before+2 {
@@ -226,9 +228,8 @@ func TestGPGCommands(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f.answers["POST /api/approvals/ap_1/withdraw"] = answer{body: `{}`}
 	out.Reset()
-	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "withdrawn") || posts("/api/approvals/ap_1/withdraw") != 1 {
+	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "withdrawn") || posts("/api/approvals/ap_1/withdraw") != 2 {
 		t.Fatalf("watch after pinentry: %d %q", code, out)
 	}
 	if code := run(e, "gpg", "reset", "--yes"); code != 0 {

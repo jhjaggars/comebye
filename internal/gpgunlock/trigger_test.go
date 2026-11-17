@@ -16,6 +16,8 @@ type triggerRig struct {
 	withdrawn []string
 	active    bool
 	wdErr     error
+	fileErr   error
+	start     time.Time
 	k         []byte
 }
 
@@ -37,6 +39,9 @@ func newTriggerRig(t *testing.T, life time.Duration) *triggerRig {
 	tr.w = &Watcher{
 		Host: r.h,
 		File: func() (string, string, error) {
+			if tr.fileErr != nil {
+				return "", "", tr.fileErr
+			}
 			tr.filed++
 			id, _, err := r.h.NewRequest(testRP, false)
 			return "ap_" + id, id, err
@@ -50,6 +55,7 @@ func newTriggerRig(t *testing.T, life time.Duration) *triggerRig {
 		},
 		Active: func() (bool, error) { return tr.active, nil },
 	}
+	tr.start = r.h.now()
 	return tr
 }
 
@@ -81,7 +87,7 @@ func TestWatchLockedWithActiveAgentFilesExactlyOne(t *testing.T) {
 		t.Fatalf("first check: %q", got)
 	}
 	for i := 0; i < 5; i++ { // the request still waits: no second item
-		tr.now.Add(10 * time.Second)
+		tr.now.Add(5 * time.Second)
 		if got := tr.check(t); got != "" {
 			t.Fatalf("check %d: %q", i, got)
 		}
@@ -90,24 +96,151 @@ func TestWatchLockedWithActiveAgentFilesExactlyOne(t *testing.T) {
 	if _, ok := tr.h.Waiting(); !ok {
 		t.Fatal("a worker would not see the waiting request")
 	}
-	// The request lapsed unanswered: not asked again at once ...
-	tr.now.Add(RequestTTL)
+}
+
+// The item stays across many rounds, hours of them: each time the request
+// runs low it is renewed (File again, which the hub turns into the same item),
+// and nothing is withdrawn while an agent is active.
+func TestWatchKeepsTheItemAcrossManyRounds(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	tr.active = true
+	first := tr.check(t)
+	if first != "filed" {
+		t.Fatalf("first: %q", first)
+	}
+	renewals := 0
+	for i := 0; i < 4*60*2; i++ { // 4 hours of 30 s rounds
+		tr.now.Add(WatchEvery)
+		switch got := tr.check(t); got {
+		case "refreshed":
+			renewals++
+		case "":
+		default:
+			t.Fatalf("round %d: %q", i, got)
+		}
+		// At every round a request the user could answer is there.
+		if _, ok := tr.h.Waiting(); !ok {
+			t.Fatalf("round %d: no live request", i)
+		}
+	}
+	if len(tr.withdrawn) != 0 {
+		t.Fatalf("withdrawn: %v", tr.withdrawn)
+	}
+	if tr.filed != 1+renewals || renewals < 100 {
+		t.Fatalf("filed %d, renewals %d", tr.filed, renewals)
+	}
+}
+
+// A renewal is a fresh request (a new challenge) for the item that stands, and
+// the old request stays answerable until its own time.
+func TestWatchRefreshesTheChallengeBeforeItRunsOut(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	tr.active = true
+	tr.check(t)
+	a, _ := tr.h.LastFiled()
+	tr.now.Add(RequestTTL - Refresh - time.Second)
 	if got := tr.check(t); got != "" {
-		t.Fatalf("asked again inside the cooldown: %q", got)
+		t.Fatalf("renewed too early: %q", got)
 	}
-	// ... but after the cooldown, while an agent is active.
-	tr.now.Add(Cooldown)
-	if got := tr.check(t); got != "filed" {
-		t.Fatalf("after cooldown: %q", got)
+	tr.now.Add(2 * time.Second)
+	if got := tr.check(t); got != "refreshed" {
+		t.Fatalf("not renewed with %s left: %q", Refresh, got)
 	}
-	if tr.filed != 2 {
-		t.Fatalf("filed %d, want 2", tr.filed)
+	b, _ := tr.h.LastFiled()
+	if b.Request == a.Request || b.Approval == a.Approval {
+		t.Fatalf("same request after a renewal: %+v %+v", a, b)
 	}
-	// The agent went away: nothing more.
+	if !b.Exp.After(a.Exp) {
+		t.Fatalf("expiry did not move: %v %v", a.Exp, b.Exp)
+	}
+	// The request the user may be answering (the old one) is still on the host.
+	if _, err := tr.h.takePending(a.Request); err != nil {
+		t.Fatalf("the old request was dropped by the renewal: %v", err)
+	}
+}
+
+// With no agent active the item stays for the grace (renewed, so a tap still
+// works), then is withdrawn, and nothing is filed again for an idle host.
+func TestWatchWithdrawsAfterTheGraceWithNoActiveAgent(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	tr.active = true
+	tr.check(t)
+	last, _ := tr.h.LastFiled()
 	tr.active = false
-	tr.now.Add(RequestTTL + Cooldown)
-	if got := tr.check(t); got != "" || tr.filed != 2 {
-		t.Fatalf("idle again: %q, filed %d", got, tr.filed)
+	for tr.now.Now().Sub(tr.start) < Grace-time.Minute {
+		tr.now.Add(WatchEvery)
+		if got := tr.check(t); got != "" && got != "refreshed" {
+			t.Fatalf("inside the grace: %q", got)
+		}
+	}
+	if len(tr.withdrawn) != 0 {
+		t.Fatal("withdrawn inside the grace")
+	}
+	if _, ok := tr.h.Waiting(); !ok {
+		t.Fatal("no live request inside the grace")
+	}
+	tr.now.Add(2 * time.Minute)
+	got := tr.check(t)
+	if got != "withdrawn" || len(tr.withdrawn) != 1 {
+		t.Fatalf("after the grace: %q %v", got, tr.withdrawn)
+	}
+	if tr.withdrawn[0] == "" || last.Approval == "" {
+		t.Fatal("no approval id")
+	}
+	filed := tr.filed
+	for i := 0; i < 5; i++ {
+		tr.now.Add(WatchEvery)
+		if got := tr.check(t); got != "" {
+			t.Fatalf("idle host after the grace: %q", got)
+		}
+	}
+	if tr.filed != filed {
+		t.Fatal("filed for an idle host")
+	}
+	// An agent back: one new item.
+	tr.active = true
+	if got := tr.check(t); got != "filed" {
+		t.Fatalf("agent back: %q", got)
+	}
+}
+
+// A brief idle moment does not start the grace over: the agent being seen
+// again resets it.
+func TestWatchBriefIdleKeepsTheItem(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	tr.active = true
+	tr.check(t)
+	for i := 0; i < 10; i++ {
+		tr.active = false
+		tr.now.Add(20 * time.Minute)
+		if got := tr.check(t); got == "withdrawn" {
+			t.Fatalf("withdrawn after a brief idle (round %d)", i)
+		}
+		tr.active = true
+		tr.now.Add(WatchEvery)
+		tr.check(t)
+	}
+}
+
+// "Not now": the hub answers snoozed, the watcher files nothing and stays
+// quiet until the time given.
+func TestWatchSnoozedByNotNow(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	tr.active = true
+	until := tr.now.Now().Add(10 * time.Minute)
+	tr.fileErr = &SnoozedError{Until: until}
+	if got := tr.check(t); got != "" {
+		t.Fatalf("snoozed: %q", got)
+	}
+	n := tr.filed
+	tr.fileErr = nil
+	tr.now.Add(5 * time.Minute)
+	if got := tr.check(t); got != "" || tr.filed != n {
+		t.Fatalf("inside the snooze: %q, filed %d", got, tr.filed)
+	}
+	tr.now.Add(6 * time.Minute)
+	if got := tr.check(t); got != "filed" {
+		t.Fatalf("after the snooze: %q", got)
 	}
 }
 

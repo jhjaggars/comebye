@@ -148,7 +148,7 @@ func gpgSetup(e *Env, args []string) error {
 	}
 	// The "Set up GPG unlock" to-do: the app shows this fingerprint (computed
 	// from the request's host key), takes the passphrase and asks for Face ID.
-	id, aid, err := gpgFile(e, h, c, name, *key)
+	id, aid, err := gpgFile(e, h, c, name, *key, false)
 	if err != nil {
 		fmt.Fprintf(e.Stdout, "The set-up item could not be filed (%v). Run `comebye gpg unlock` to file it again.\n", err)
 		return nil
@@ -160,7 +160,7 @@ func gpgSetup(e *Env, args []string) error {
 // gpgFile makes a request for this host and files it with the hub: a setup
 // request (the passphrase is not stored yet) as action gpg-setup, otherwise
 // gpg-unlock. It returns the request's id and the approval's.
-func gpgFile(e *Env, h *gpgunlock.Host, c *client, host, fpr string) (reqID, approvalID string, err error) {
+func gpgFile(e *Env, h *gpgunlock.Host, c *client, host, fpr string, auto bool) (reqID, approvalID string, err error) {
 	setup := !h.HasBlob()
 	id, req, err := h.NewRequest(h.Pinned().RPID, setup)
 	if err != nil {
@@ -174,10 +174,18 @@ func gpgFile(e *Env, h *gpgunlock.Host, c *client, host, fpr string) (reqID, app
 		Approval struct {
 			ID string `json:"id"`
 		} `json:"approval"`
+		Snoozed bool      `json:"snoozed"`
+		Until   time.Time `json:"until"`
 	}
-	err = c.call("POST", "/api/approvals", nil, map[string]any{
-		"action": action, "host": host, "subject": subject, "request": json.RawMessage(req),
-	}, &out)
+	body := map[string]any{"action": action, "host": host, "subject": subject, "request": json.RawMessage(req)}
+	if auto {
+		body["auto"] = true // the watcher: the hub may answer "snoozed" after a "Not now"
+	}
+	err = c.call("POST", "/api/approvals", nil, body, &out)
+	if err == nil && out.Snoozed {
+		h.DropPending(id)
+		return id, "", &gpgunlock.SnoozedError{Until: out.Until}
+	}
 	if err == nil {
 		// Remembered so a second ask (a worker's, the watcher's) does not
 		// replace the request the user may have open.
@@ -274,7 +282,7 @@ func gpgUnlock(e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	id, aid, err := gpgFile(e, h, c, cfg.Host, cfg.FPR)
+	id, aid, err := gpgFile(e, h, c, cfg.Host, cfg.FPR, false)
 	if err != nil {
 		return err
 	}
@@ -404,7 +412,7 @@ func gpgWatch(e *Env, args []string) error {
 		if err != nil {
 			return "", "", err
 		}
-		id, aid, err := gpgFile(e, h, c, cfg.Host, cfg.FPR)
+		id, aid, err := gpgFile(e, h, c, cfg.Host, cfg.FPR, true)
 		return aid, id, err
 	}
 	w.Withdraw = func(approval string) error {
