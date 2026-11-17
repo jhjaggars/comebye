@@ -160,6 +160,11 @@ type Config struct {
 	// leave its session file untouched before the hub marks it quiet and
 	// files one to-do (quiet.go). Hub only.
 	QuietAfter time.Duration
+	// LoopNudgeAfter and LoopNudgeAgain, when positive, time the loop nudge
+	// (loopnudge.go): a worker handed off with --loop that sits idle for the
+	// first gets a nudge, the second after the first, and the requester is
+	// told the grace (LoopNudgeAfter) after the second. Hub only.
+	LoopNudgeAfter, LoopNudgeAgain time.Duration
 	// ParkSuggestAfter, when positive, is how long an agent must have been idle
 	// before the hub suggests parking it (at least an hour). Suggest only: nothing is parked by itself.
 	ParkSuggestAfter time.Duration
@@ -227,6 +232,7 @@ type Server struct {
 	bgAgents bgAgents
 	// quiet follows working workers that stopped writing (quiet.go).
 	quiet *quietMon
+	loops *loopMon
 	// parkSug suggests parking long-idle agents (parksuggest.go); nil when off.
 	parkSug *parkSuggest
 	// peerAgents replaces the fleet's agent list for peerBackground (tests).
@@ -489,6 +495,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.initAutoTodo(cfg.AutoTodo)
 			s.initBlockedRelay(cfg.RelayBlocked)
 			s.initQuiet(cfg.QuietAfter)
+			s.initLoopNudge(cfg.LoopNudgeAfter, cfg.LoopNudgeAgain)
 			if s.pages, err = openPageStore(filepath.Join(cfg.StateDir, "pages")); err != nil {
 				log.Printf("pages: %v (published pages are off)", err)
 				s.pages = nil // never overwrite the unreadable index

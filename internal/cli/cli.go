@@ -1252,6 +1252,7 @@ func cmdHandoff(e *Env, args []string) error {
 	base := fs.String("base", "", "the base branch (default: the repository's default branch)")
 	kind := fs.String("kind", "", "the agent kind (default: the host's own default, see `comebye settings --host H`; naming another kind is allowed but warned about, and refused outside the host's allowed kinds)")
 	purpose := fs.String("purpose", "", "research, plan, review or spike when the branch is not meant to merge (its report is the deliverable; the sweep then lists it apart)")
+	loop := fs.String("loop", "", "what this worker keeps doing, e.g. \"watch PR 118 until merged or CI red\": it is meant to keep looping, so the hub nudges it if it goes idle with nothing running (10 minutes idle, again 20 minutes later, then tells you)")
 	name := fs.String("name", "", "the worker's name (default: from the branch)")
 	model := fs.String("model", "", "the worker's model (see `comebye models`; default: the agent's own)")
 	thinking := fs.String("thinking", "", "pi's thinking level: "+strings.Join(thinkingLevels, ", ")+" (default: pi's own)")
@@ -1290,7 +1291,7 @@ func cmdHandoff(e *Env, args []string) error {
 	if len(after) > 0 {
 		body["after"] = []string(after)
 	}
-	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name, "plan": *plan, "model": *model, "thinking": *thinking, "purpose": *purpose} {
+	for k, v := range map[string]string{"base": *base, "kind": *kind, "name": *name, "plan": *plan, "model": *model, "thinking": *thinking, "purpose": *purpose, "loop": *loop} {
 		if v != "" {
 			body[k] = v
 		}

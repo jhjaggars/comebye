@@ -352,14 +352,14 @@ func TestHandoffCommand(t *testing.T) {
 	f.answers["POST /api/handoffs"] = answer{body: `{"entry":{"id":"h9","host":"kube","repo_name":"other","branch":"feat/x","base":"main","agent_id":"kube/w7:p1","agent_name":"feat-x","worktree":"/home/k/.worktrees/other/feat-x","status":"running"}}`}
 	brief := filepath.Join(t.TempDir(), "brief.md")
 	os.WriteFile(brief, []byte("## Goal\nDo X."), 0o600)
-	code := run(e, "handoff", "--host", "kube", "--repo", "/home/k/code/other", "--branch", "feat/x", "--kind", "claude", "--brief", brief)
+	code := run(e, "handoff", "--host", "kube", "--repo", "/home/k/code/other", "--branch", "feat/x", "--kind", "claude", "--loop", "watch PR 118 until merged", "--brief", brief)
 	if code != 0 || !strings.Contains(out.String(), "Handed off feat/x on kube to feat-x (kube/w7:p1)") {
 		t.Fatalf("handoff: %d %s %s", code, out, errb)
 	}
 	var body map[string]string
 	json.Unmarshal([]byte(f.find("POST", "/api/handoffs").body), &body)
 	if body["host"] != "kube" || body["repo"] != "/home/k/code/other" || body["branch"] != "feat/x" || body["kind"] != "claude" ||
-		body["brief"] != "## Goal\nDo X." || body["base"] != "" {
+		body["brief"] != "## Goal\nDo X." || body["base"] != "" || body["loop"] != "watch PR 118 until merged" {
 		t.Fatalf("body = %v", body)
 	}
 	// From stdin; an existing worker is reported as such.

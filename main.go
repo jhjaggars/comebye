@@ -131,6 +131,8 @@ func main() {
 		parkMode       = flag.String("park-mode", envOr("COMEBYE_PARK_MODE", server.ParkModeAuto), "auto: the hub parks an agent idle for a day whose worktree is clean (no edits, no untracked files) and that has no open question, queued prompt, background task, loop or wakeup; it shows under Recently closed as parked automatically. suggest: only the \"can park\" chip and review. off: neither")
 		parkSuggest    = flag.Duration("park-suggest-after", envDuration("COMEBYE_PARK_SUGGEST_AFTER", server.DefaultParkSuggestAfter), "how long an agent must have been idle before the app suggests parking it (a \"can park\" chip and a one-tap review; nothing is parked by itself), at least 1h. 0 turns the suggestions off")
 		parkRetention  = flag.Duration("park-retention", envDuration("COMEBYE_PARK_RETENTION", server.DefaultParkRetention), "how long a parked agent is kept before the hub proposes removing it (it goes into the Ready to remove review; you confirm, nothing is deleted by retention alone); a pinned (kept) one is never proposed. 0 keeps parked agents for ever. Hub only")
+		loopAfter      = flag.Duration("loop-nudge-after", envDuration("COMEBYE_LOOP_NUDGE_AFTER", server.DefaultLoopNudgeAfter), "how long a worker handed off with --loop may sit idle with nothing running before the hub nudges it, and the wait after the second nudge before it tells the requester the loop is dead (also what shortened timings in a check change). 0 turns the loop nudge off. Hub only")
+		loopAgain      = flag.Duration("loop-nudge-again", envDuration("COMEBYE_LOOP_NUDGE_AGAIN", server.DefaultLoopNudgeAgain), "how long after the first loop nudge the second goes out if the worker is still idle. Hub only")
 		quietAfter     = flag.Duration("quiet-after", envDuration("COMEBYE_QUIET_AFTER", server.DefaultQuietAfter), "how long a working handoff worker may write nothing to its session file before the hub marks it quiet (in the app and `comebye agents`) and files one to-do for it, cleared when it writes again; not for a worker with a background task running. 0 turns it off. Hub only")
 		relayBlocked   = flag.Duration("relay-blocked-after", envDuration("COMEBYE_RELAY_BLOCKED_AFTER", server.DefaultRelayBlocked), "how long an agent that has a coordinator must be blocked at a dialog before the hub logs it (comebye log, kind blocked; it logs again when the dialog clears); the coordinator is messaged only if it stays blocked for 30 minutes with no to-do for it; 0 turns the relay off. Hub only")
 		autoRemove     = flag.Bool("auto-remove", envBool("COMEBYE_AUTO_REMOVE", true), "hub: remove a worker marked ready to remove without the user's tap when every check is clean (its work is in origin's default branch, nothing unpushed or uncommitted, the session answered SAFE, nothing waits on it, it is idle); the removals review lists recent ones for a day with an Undo. -auto-remove=false leaves every removal to the user")
@@ -505,6 +507,8 @@ func main() {
 		HubOnly:                *hubOnly,
 		RelayBlocked:           *relayBlocked,
 		QuietAfter:             *quietAfter,
+		LoopNudgeAfter:         *loopAfter,
+		LoopNudgeAgain:         *loopAgain,
 		ParkSuggestAfter:       *parkSuggest,
 		ParkMode:               *parkMode,
 		ParkRetention:          *parkRetention,
@@ -529,6 +533,7 @@ func main() {
 	go srv.RunProvision(context.Background())
 	go srv.RunBlockedRelay(context.Background())
 	go srv.RunQuiet(context.Background())
+	go srv.RunLoopNudge(context.Background())
 	go srv.RunParkSuggest(context.Background())
 	go srv.RunParkRetention(context.Background())
 	go srv.RunReask(context.Background())

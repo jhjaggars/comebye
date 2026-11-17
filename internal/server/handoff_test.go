@@ -66,9 +66,17 @@ func TestHandoffLocal(t *testing.T) {
 	// failed start is recorded as failed.
 	os.WriteFile(filepath.Join(stateDir, "handoff-template.md"), []byte("Do {{brief}} on {{branch}} in {{worktree}}."), 0o600)
 	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
-	w = do(s, "POST", "/api/handoffs", nil, `{"repo":"`+repo+`","branch":"feat/b","kind":"pi","brief":"B"}`)
+	w = do(s, "POST", "/api/handoffs", nil, `{"repo":"`+repo+`","branch":"feat/b","kind":"pi","brief":"B","loop":"watch PR 7\nuntil `+"`merged`"+`"}`)
 	if w.Code != 200 {
 		t.Fatalf("second = %d %s", w.Code, w.Body)
+	}
+	// --loop is kept on the entry as one plain line; a handoff without it has none.
+	var loops []string
+	for _, e := range s.ledger.Entries() {
+		loops = append(loops, e.Branch+"="+e.Loop)
+	}
+	if got := strings.Join(loops, "|"); got != "feat/a=|feat/b=watch PR 7 until ?merged?" {
+		t.Fatalf("loops = %q", got)
 	}
 	if got := fh.call("agent.prompt").Params["text"]; got != "Do B on feat/b in "+filepath.Join(wtRoot, "proj", "feat-b")+"." {
 		t.Fatalf("templated brief = %q", got)

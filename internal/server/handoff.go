@@ -323,7 +323,10 @@ type handoffBody struct {
 	// Purpose: "research", "plan", "review" or "spike" for a branch that is
 	// not meant to merge (see ledger.Entry.Purpose); empty for ordinary work.
 	Purpose string `json:"purpose"`
-	Name    string `json:"name"`
+	// Loop: what a looping worker (a PR watcher) keeps doing; the hub nudges
+	// it when it goes idle with no loop running (see ledger.Entry.Loop).
+	Loop string `json:"loop"`
+	Name string `json:"name"`
 	// Model and Thinking choose the worker's model (see launchBody): they
 	// are recorded on the entry.
 	Model    string `json:"model"`
@@ -538,7 +541,7 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 	}
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, Purpose: b.Purpose, Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking),
+		Kind: b.Kind, Purpose: b.Purpose, Loop: cleanLoop(b.Loop), Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking),
 		Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply, PlanID: b.Plan,
 	}
 	if lerr != nil {

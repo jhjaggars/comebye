@@ -81,6 +81,11 @@ type Entry struct {
 	// DisposablePurposes). Its output is the worker's report; the sweep
 	// lists such a worker apart once it has reported, instead of "unmerged".
 	Purpose string `json:"purpose,omitempty"`
+	// Loop says the worker is meant to keep looping (a PR watcher): a short
+	// description of what it keeps doing, from `comebye handoff --loop`. The
+	// hub nudges a worker with a loop that goes idle with nothing running
+	// (loopnudge.go). Empty: no nudge.
+	Loop string `json:"loop,omitempty"`
 	// KindSource says where Kind came from: request, setting, flag or auto
 	// (empty on entries from before host settings).
 	KindSource string `json:"kind_source,omitempty"`
