@@ -1287,6 +1287,10 @@ func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool,
 			log.Printf("roles: %v", err)
 		}
 	}
+	// A removed chat helper's record goes (its directory went with it, on its host).
+	if res.ParkID == "" {
+		s.chats.dropAgent(it.ID)
+	}
 	s.coord.mu.Lock()
 	delete(s.coord.checks, it.EntryID)
 	s.coord.mu.Unlock()

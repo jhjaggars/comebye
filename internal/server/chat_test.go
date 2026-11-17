@@ -242,7 +242,7 @@ func TestPageChatSecondChatGetsANewNameAndReplacesTheRecord(t *testing.T) {
 		t.Fatalf("first = %d %v", code, m)
 	}
 	first, _ := s.chats.get(page)
-	code, m := chatPost(s, page, userHdr, `{}`)
+	code, m := chatPost(s, page, userHdr, `{"new":true}`)
 	if code != 200 || m["name"] != "chat-garage-failover-2" {
 		t.Fatalf("second = %d %v", code, m)
 	}
@@ -255,11 +255,11 @@ func TestPageChatSecondChatGetsANewNameAndReplacesTheRecord(t *testing.T) {
 func TestPageChatRateLimit(t *testing.T) {
 	s, _, page, _ := chatHub(t)
 	for i := 0; i < chatRate; i++ {
-		if code, m := chatPost(s, page, userHdr, `{}`); code != 200 {
+		if code, m := chatPost(s, page, userHdr, `{"new":true}`); code != 200 {
 			t.Fatalf("chat %d = %d %v", i, code, m)
 		}
 	}
-	if code, m := chatPost(s, page, userHdr, `{}`); code != http.StatusTooManyRequests || m["code"] != "chat_rate" {
+	if code, m := chatPost(s, page, userHdr, `{"new":true}`); code != http.StatusTooManyRequests || m["code"] != "chat_rate" {
 		t.Fatalf("over the limit = %d %v", code, m)
 	}
 	var l chatLimiter

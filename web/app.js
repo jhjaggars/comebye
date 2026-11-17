@@ -7437,6 +7437,7 @@ function initPages() {
     if (ev.target.closest("#pgs-menub")) { pgsPop("pgsmenu"); return; }
     if (ev.target.closest("#pgs-infob")) { pgsPop("pgsinfo"); return; }
     if (ev.target.closest("#pgs-focus")) { pagesFocus(!pgs.focus); return; }
+    if (ev.target.closest("#pgs-chatnew")) { pgsPop("pgsmenu", false); pagesChat(true); return; }
     if (ev.target.closest("#pgs-chat, #pgs-chatmi")) { pgsPop("pgsmenu", false); pagesChat(); return; }
     if (ev.target.closest("#pgs-chg")) { pgsPop("pgsmenu", false); pgcToggleChanges(); return; }
     if (ev.target.closest("#pgs-del")) { pgsPop("pgsmenu", false); pagesDelete(); return; }
@@ -13253,21 +13254,26 @@ async function submitCoordinator() {
 const PAGE_CHAT_SAYS = {
   chat_no_host: "No host can start a chat right now. Check that a computer running agents is online, then try again.",
   chat_rate: "You started several chats a moment ago. Wait a minute, then try again.",
+  chat_host_away: "The computer that runs this page's chat is not answering. Try again in a moment, or start a new chat.",
 };
-async function pagesChat() {
+async function pagesChat(fresh) {
   const route = pgs.route;
   if (!route || pgs.chatBusy) return;
   pgs.chatBusy = true;
   $("pgs-chat")?.setAttribute("aria-busy", "true");
-  toast("Starting a chat about this page…");
+  toast(fresh ? "Starting a new chat about this page…" : "Opening the chat about this page…");
   try {
-    const r = await api("/api/pages/" + encodeURIComponent(route.id) + "/chat", { method: "POST", body: "{}", timeout: 180000 });
+    const r = await api("/api/pages/" + encodeURIComponent(route.id) + "/chat", { method: "POST", body: fresh ? '{"new":true}' : "{}", timeout: 180000 });
     const pane = r.agent && r.agent.pane_id;
     const label = r.name || "chat";
     let note = "";
+    let done = "";
+    if (r.reused === "open") done = r.page_note ? `Opened ${label}. ${r.page_note}` : `Opened ${label}`;
+    else if (r.reused === "resumed") done = r.page_note ? `Resumed ${label}. ${r.page_note}` : `Resumed ${label}`;
+    else if (r.replaced) done = `The earlier chat was closed, so ${label} is a new one.`;
     if (r.prompt_error) note = "The chat started, but its first message did not go in: " + r.prompt_error;
     else if (r.prompt_note) note = "The chat started but is waiting at a prompt. Open it and answer the prompt, and it will read the page.";
-    if (pane) openLaunched(r.host, pane, label, note);
+    if (pane) openLaunched(r.host, pane, label, note || "", done);
     else toast("The chat started, but its conversation could not be opened. Look for " + label + " in Agents.", true);
   } catch (e) {
     toast(PAGE_CHAT_SAYS[e.code] || (e.status === 429 ? PAGE_CHAT_SAYS.chat_rate : "Could not start a chat: " + (e.message || "the host did not answer") + "."), true);
@@ -13279,7 +13285,7 @@ async function pagesChat() {
 
 // openLaunched opens the new agent's chat as soon as the agent list (SSE)
 // has it; herdr reports it within a second or two. A note replaces "Started".
-function openLaunched(host, pane, label, note) {
+function openLaunched(host, pane, label, note, said) {
   const r = { host: host && host !== state.localHost ? host : null, pane };
   const until = Date.now() + 15000;
   const tick = () => {
@@ -13292,7 +13298,7 @@ function openLaunched(host, pane, label, note) {
     if (Date.now() > until - 10000) refreshAgents().catch(() => {});
     setTimeout(tick, 500);
   };
-  toast(note || `Started ${label}`, !!note);
+  toast(note || said || `Started ${label}`, !!note);
   tick();
 }
 

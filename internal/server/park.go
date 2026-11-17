@@ -142,20 +142,29 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 			return nil, &launchError{status: http.StatusConflict, code: "background_task", message: "a background task is running (" + strings.TrimSpace(t.Kind+" "+t.Label) + "); parking would kill it"}
 		}
 	}
-	wt, lerr := resolveLaunchDir(agent.CWD, roots)
-	if lerr != nil {
-		return nil, lerr
-	}
-	checks := checkWorktree(ctx, wt, "", "")
-	if !checks.Exists || checks.Error != "" {
-		return nil, &launchError{status: http.StatusConflict, code: "no_worktree", message: "the agent's directory is not a git checkout; nothing was closed"}
-	}
-	if checks.Primary {
-		return nil, &launchError{status: http.StatusConflict, code: "primary_checkout", message: "a repository's primary checkout is a home session; it is not parked"}
-	}
-	if checks.Dirty && !b.Dirty {
-		return nil, &launchError{status: http.StatusConflict, code: "dirty_worktree",
-			message: fmt.Sprintf("the worktree has %d uncommitted file(s); parking keeps them in place. Confirm to park anyway", checks.DirtyFiles)}
+	// A "Chat about this" helper lives in a scratch directory of its own: no
+	// git checkout, outside the launch roots, nothing to be dirty.
+	chatDir, isChat := s.chatDirOf(agent.CWD)
+	var wt string
+	var checks worktreeChecks
+	if isChat {
+		wt, checks = chatDir, worktreeChecks{Path: chatDir, Exists: true}
+	} else {
+		var lerr *launchError
+		if wt, lerr = resolveLaunchDir(agent.CWD, roots); lerr != nil {
+			return nil, lerr
+		}
+		checks = checkWorktree(ctx, wt, "", "")
+		if !checks.Exists || checks.Error != "" {
+			return nil, &launchError{status: http.StatusConflict, code: "no_worktree", message: "the agent's directory is not a git checkout; nothing was closed"}
+		}
+		if checks.Primary {
+			return nil, &launchError{status: http.StatusConflict, code: "primary_checkout", message: "a repository's primary checkout is a home session; it is not parked"}
+		}
+		if checks.Dirty && !b.Dirty {
+			return nil, &launchError{status: http.StatusConflict, code: "dirty_worktree",
+				message: fmt.Sprintf("the worktree has %d uncommitted file(s); parking keeps them in place. Confirm to park anyway", checks.DirtyFiles)}
+		}
 	}
 	sk, sv, lerr := s.sessionRef(ctx, *agent, live)
 	if lerr != nil {
@@ -199,7 +208,11 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 	if err := ps.Add(rec); err != nil {
 		return nil, &launchError{status: http.StatusInternalServerError, code: "record_failed", message: "could not write the park record: " + err.Error()}
 	}
-	rr, lerr := s.removeSession(ctx, removeBody{Agent: agent.PaneID, Name: agent.Name, Worktree: wt, RemoveWorktree: false})
+	rmWT := wt
+	if isChat {
+		rmWT = "" // a chat has no worktree, and its directory must survive
+	}
+	rr, lerr := s.removeSession(ctx, removeBody{Agent: agent.PaneID, Name: agent.Name, Worktree: rmWT, RemoveWorktree: false, keepScratch: true})
 	if lerr != nil {
 		_ = ps.Delete(rec.ID)
 		return nil, lerr
@@ -502,9 +515,14 @@ func (s *Server) resumeAgent(ctx context.Context, b resumeBody) (*resumeResult, 
 	if len(roots) == 0 {
 		return nil, errLaunchDisabled
 	}
-	dir, lerr := resolveLaunchDir(rec.Worktree, roots)
+	var dir string
+	var lerr *launchError
 	recreated := ""
-	if lerr != nil && lerr.code == "not_found" && rec.WorktreeGone {
+	if cd, ok := s.chatDirOf(rec.Worktree); ok {
+		dir = cd
+	} else if s.isChatDirName(rec.Worktree) {
+		return nil, &launchError{status: http.StatusNotFound, code: "not_found", message: "the chat's scratch directory is gone; it cannot be resumed"}
+	} else if dir, lerr = resolveLaunchDir(rec.Worktree, roots); lerr != nil && lerr.code == "not_found" && rec.WorktreeGone {
 		var rerr *launchError
 		if recreated, rerr = s.recreateWorktree(ctx, rec, roots); rerr != nil {
 			return nil, rerr

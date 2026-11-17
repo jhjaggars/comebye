@@ -556,6 +556,9 @@ type removeBody struct {
 	// session can be resumed from Recently closed. The removal is refused,
 	// and nothing closed, when no record can be made.
 	RecordPark string `json:"record_park,omitempty"`
+	// keepScratch (a park, not sent over the wire) leaves a chat's scratch
+	// directory in place: the agent comes back to it.
+	keepScratch bool
 }
 
 // removeResult says what a removal did.
@@ -578,6 +581,9 @@ type removeResult struct {
 	// Scratch is what was cleaned up in the temporary directory once the
 	// worktree was gone (its scratchpad, processes left running in it).
 	Scratch *scratch.Report `json:"scratch,omitempty"`
+	// ChatDir is the scratch directory of a "Chat about this" helper that
+	// was deleted with it.
+	ChatDir string `json:"chat_dir,omitempty"`
 }
 
 // handleRemove closes a session and, if asked and safe, removes its
@@ -725,6 +731,17 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 	}
 	if s.manager != nil && res.Closed != "" {
 		s.manager.Refresh()
+	}
+	// A chat helper's scratch directory goes with it, unless it is only
+	// being parked or can be resumed from Recently closed.
+	if agent != nil && res.Closed != "" && !b.keepScratch && b.RecordPark == "" {
+		if dir, ok := s.chatDirOf(agent.CWD); ok {
+			if removed, err := s.removeChatDir(dir); err != nil {
+				log.Printf("chat: could not delete %s: %v", dir, err)
+			} else if removed {
+				res.ChatDir = dir
+			}
+		}
 	}
 
 	switch {

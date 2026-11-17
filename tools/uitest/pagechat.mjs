@@ -37,13 +37,17 @@ for (const width of [1280, 390]) {
   const posts = [];
   let mode = "ok", hold = null;
   await page.route(/\/api\/pages\/[^/]+\/chat$/, async (r) => {
-    posts.push({ url: new URL(r.request().url()).pathname, method: r.request().method(), site: r.request().headers()["sec-fetch-site"] });
+    posts.push({ url: new URL(r.request().url()).pathname, method: r.request().method(), site: r.request().headers()["sec-fetch-site"], body: r.request().postData() });
     if (hold) await hold;
     if (mode === "no_host") return r.fulfill({ status: 409, json: { code: "chat_no_host", message: "no chat can start: nothing starts agents" } });
     if (mode === "broken") return r.fulfill({ status: 502, json: { code: "unknown_method", message: "the host broke" } });
     if (mode === "rate") return r.fulfill({ status: 429, json: { code: "chat_rate", message: "starting chats too fast: wait a minute" } });
     const body = { agent: { pane_id: target.pane_id, name: target.name }, host: target.host && target.host !== "local" ? target.host : undefined, name: target.name, page: id, version: 1 };
     if (mode === "note") body.prompt_note = "the helper started at a dialog (answer it in the app)";
+    if (mode === "open") Object.assign(body, { reused: "open" });
+    if (mode === "resumed") Object.assign(body, { reused: "resumed", page_note: "Page is now v2: the chat was told to read it again." });
+    if (mode === "replaced") Object.assign(body, { replaced: "chat-old" });
+    if (mode === "away") return r.fulfill({ status: 409, json: { code: "chat_host_away", message: "desk is not answering" } });
     r.fulfill({ json: body });
   });
   const toastText = async () => (await page.locator("#toast").textContent()).trim();
@@ -77,7 +81,7 @@ for (const width of [1280, 390]) {
     let release; hold = new Promise((r) => (release = r));
     await page.click("#pgs-chat");
     await page.waitForTimeout(300);
-    if (!/Starting a chat/.test(await toastText())) throw new Error("toast while starting: " + (await toastText()));
+    if (!/Opening the chat/.test(await toastText())) throw new Error("toast while starting: " + (await toastText()));
     await page.screenshot({ path: `${out}/pagechat-toast-${width}.png` });
     await page.click("#pgs-chat", { force: true }); // a second tap while it starts
     await page.waitForTimeout(200);
@@ -104,7 +108,38 @@ for (const width of [1280, 390]) {
     if (!(await page.locator("#pgs-menu").isHidden())) throw new Error("the menu stayed open");
   });
 
-  for (const [m, re] of [["no_host", /No host can start a chat/], ["rate", /wait a minute/i], ["broken", /^Could not start a chat: .*host broke/]]) {
+  await check(`pagechat: "Start a new chat…" is in the menu and posts new:true; a plain tap posts none at ${tag}`, async () => {
+    mode = "ok";
+    await open();
+    await page.click("#pgs-menub");
+    await page.waitForSelector("#pgs-menu:not([hidden])");
+    const items = (await page.locator("#pgs-menu [role=menuitem]:visible").allTextContents()).map((s) => s.trim());
+    if (items[0] !== "Chat about this" || items[1] !== "Start a new chat…") throw new Error("menu items: " + items.join(" | "));
+    const m = await box("#pgs-chatnew");
+    if (m.height < (width > 500 ? 32 : 44)) throw new Error("menu item height " + m.height);
+    await page.screenshot({ path: `${out}/pagechat-newitem-${width}.png` });
+    await page.click("#pgs-chatnew");
+    await page.waitForTimeout(500);
+    if (posts.length !== 1 || JSON.parse(posts[0].body).new !== true) throw new Error("posts: " + JSON.stringify(posts));
+    if (!(await page.locator("#pgs-menu").isHidden())) throw new Error("the menu stayed open");
+    await open();
+    await page.click("#pgs-chat");
+    await page.waitForTimeout(500);
+    if (posts.length !== 1 || JSON.parse(posts[0].body).new) throw new Error("a plain tap sent new: " + JSON.stringify(posts));
+  });
+
+  for (const [m, re] of [["open", /^Opened /], ["resumed", /^Resumed .*Page is now v2/], ["replaced", /earlier chat was closed/]]) {
+    await check(`pagechat: a reused chat says so (${m}) and opens at ${tag}`, async () => {
+      mode = m;
+      await open();
+      await page.click("#pgs-chat");
+      await page.waitForTimeout(500);
+      const t = await toastText();
+      if (!re.test(t)) throw new Error("toast: " + t);
+    });
+  }
+
+  for (const [m, re] of [["away", /not answering/], ["no_host", /No host can start a chat/], ["rate", /wait a minute/i], ["broken", /^Could not start a chat: .*host broke/]]) {
     await check(`pagechat: the ${m} refusal is a plain sentence, and the page stays at ${tag}`, async () => {
       mode = m;
       await open();

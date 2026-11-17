@@ -305,6 +305,9 @@ type chatBody struct {
 	// sends none of them.
 	Host string `json:"host"`
 	Kind string `json:"kind"`
+	// New starts a fresh chat even when the Page has one ("Start a new
+	// chat…"): the record is replaced, the old helper left alone.
+	New bool `json:"new"`
 }
 
 // chatSlug is a lowercase slug of a title for the agent's name.
@@ -467,6 +470,21 @@ func (s *Server) handlePageChat(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]string{"code": "chats_disabled", "message": "this hub keeps no state directory, so it cannot record chats"})
 		return
 	}
+	// A Page that has a chat gets that chat back: reuse is not a new chat, so
+	// it is not rate limited.
+	var replaced *ChatRec
+	var goneWhy string
+	if old, ok := s.chats.get(p.ID); ok && !b.New {
+		ctx0, cancel0 := context.WithTimeout(r.Context(), launchTimeout+30*time.Second)
+		reuse := map[string]any{}
+		done := s.reuseChat(ctx0, w, p, old, reuse)
+		cancel0()
+		if done {
+			return
+		}
+		replaced = &old
+		goneWhy, _ = reuse["gone_why"].(string)
+	}
 	if !s.chatRate.allow(time.Now()) {
 		writeJSONStatus(w, http.StatusTooManyRequests, map[string]string{"code": "chat_rate", "message": "starting chats too fast: wait a minute"})
 		return
@@ -546,6 +564,15 @@ func (s *Server) handlePageChat(w http.ResponseWriter, r *http.Request) {
 	// Now the brief.
 	brief := chatBrief(s.chatBriefFor(p))
 	out := map[string]any{"agent": res.Agent, "chat": res.Chat, "page": p.ID, "version": p.Version, "host": host, "name": name}
+	if replaced != nil {
+		// The earlier helper was closed (or could not be brought back): say so,
+		// and drop the scratch directory it left on this host.
+		out["replaced"] = replaced.Name
+		if goneWhy != "" {
+			out["replaced_why"] = goneWhy
+		}
+		s.dropGoneChatDir(*replaced)
+	}
 	if len(res.Warnings) > 0 {
 		out["warnings"] = res.Warnings
 	}
