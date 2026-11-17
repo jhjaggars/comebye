@@ -74,6 +74,10 @@ const (
 // not the limit, the churn is.
 var approvalPerMinute = 10
 
+// gpgHostIDRequired: a gpg approval is answered only when its request id is
+// a host's own (gu_...). Tests of the generic approval mechanics switch it off.
+var gpgHostIDRequired = true
+
 // approvalActions are the actions a request may name. agent: an agent or a
 // host may file it; user: the user's own page may; todo: a to-do item is filed.
 type approvalSpec struct {
@@ -432,6 +436,9 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subject := oneLine(b.Subject, maxApprovalSubject)
+	if c.agent() && !(s.cfg.TestMode && b.Action == "test-approve") {
+		subject = serverSubject(b.Action, subject) // the card's wording is the server's
+	}
 
 	var reqBytes []byte
 	if len(b.Request) > 0 && string(b.Request) != "null" {
@@ -454,7 +461,7 @@ func (s *Server) handleApprovalCreate(w http.ResponseWriter, r *http.Request) {
 	expired := st.expireLocked()
 	now := st.now()
 	recent := 0
-	if until, ok := st.snooze[snoozeKey(host, b.Action)]; ok && spec.keepOpen && b.Auto && c.agent() {
+	if until, ok := st.snooze[snoozeKey(host, b.Action)]; ok && spec.keepOpen && c.agent() {
 		if now.Before(until) {
 			st.mu.Unlock()
 			for _, e := range expired {
@@ -798,6 +805,17 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 	if len(b.Sealed) > maxApprovalSealed {
 		st.mu.Unlock()
 		apErr(w, http.StatusRequestEntityTooLarge, "too_large", "the sealed key is too large")
+		return
+	}
+	if approvalActions[a.Action].gpg && gpgHostIDRequired && !strings.HasPrefix(gpgRequestID(a.Request), "gu_") {
+		// Only a host's own request (its id starts gu_) is relayed to it. Any
+		// other would leave a sealed key here for whoever filed it to read.
+		finish(apDenied, "not a GPG unlock request from a host")
+		cp := *a
+		st.mu.Unlock()
+		s.settleApprovalTodo(&cp, "not a GPG unlock request from a host")
+		s.audit(r, ledger.AuditEvent{Action: "approval.refused", Todo: cp.TodoID, Host: cp.Host, Detail: cp.Action + " " + cp.ID + ": not a host request"})
+		apErr(w, http.StatusBadRequest, "not_host_request", "this request did not come from the host's own unlock: ask again with `comebye gpg unlock`")
 		return
 	}
 	pk, ok := s.passkeys.Get(b.CredentialID)

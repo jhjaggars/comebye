@@ -637,6 +637,10 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "text is required", http.StatusBadRequest)
 		return
 	}
+	if callerOf(r).agent() && looksLikeHubText(b.Text) {
+		lookalikeRefusal(w)
+		return
+	}
 	var target *herdr.AgentInfo
 	agents := s.fleet.Agents()
 	for i := range agents {

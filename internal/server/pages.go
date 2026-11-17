@@ -809,12 +809,12 @@ const pageSandbox = "sandbox allow-scripts allow-popups allow-popups-to-escape-s
 // objects) or loaded except images and fonts as data: URIs and scripts
 // inline or from cdnjs.
 const pageCSPBody = "default-src 'none'; base-uri 'none'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com; " +
-	"style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'"
+	"style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; webrtc 'block'"
 
 // A Markdown page is shown by a fixed shell that renders it with the
 // vendored libraries, which it loads from this server: the one place
 // 'self' is allowed.
-const pageMDCSPBody = "default-src 'none'; base-uri 'none'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'"
+const pageMDCSPBody = "default-src 'none'; base-uri 'none'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; webrtc 'block'"
 
 // origin is scheme://host[:port] of a URL, "" when it is not one.
 func origin(u string) string {
@@ -849,6 +849,7 @@ func (s *Server) pageCSP(md bool) string {
 
 func (s *Server) setPageHeaders(h http.Header) {
 	h.Set("Content-Security-Policy", s.pageCSP(false))
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cache-Control", "no-store")

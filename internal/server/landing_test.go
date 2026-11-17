@@ -18,6 +18,9 @@ func landingFix(t *testing.T) (*Server, landedRepo, ledger.Entry, string) {
 	r := newLandedRepo(t)
 	own := r.edit(t, r.wt, 3, "the worker's change")
 	s, _, _ := coordServer(t)
+	if err := s.recordRole("desk/w1:p1", "coordinator", RoleCoordinator, "me"); err != nil {
+		t.Fatal(err)
+	}
 	s.cfg.LaunchRoots = []string{filepath.Dir(r.repo)}
 	e, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: r.repo, RepoName: "proj", Branch: "w", Base: "main", AgentID: "desk/w2:p1", PaneID: "w2:p1", AgentName: "home", Worktree: r.wt, Status: ledger.Running, ReplyTo: &ledger.Ref{AgentID: "desk/w1:p1"}})
 	if err != nil {

@@ -212,7 +212,7 @@ func TestRelayToAParkedAgentQueuesAndClosesOnDelivery(t *testing.T) {
 	if err := r.s.parkStore().Add(rec); err != nil {
 		t.Fatal(err)
 	}
-	it := todoOf(t, do(r.s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"Cover egress too?","waiting":"desk/w5:p1"}`).Body.Bytes())
+	it := todoOf(t, do(r.s, "POST", "/api/todos", userHdr, `{"question":"Cover egress too?","waiting":"desk/w5:p1"}`).Body.Bytes())
 	r.answer(t, it.ID, "yes")
 	until(t, "the queued relay", func() bool { return r.state(it.ID).Relay != nil && r.state(it.ID).Relay.State == relayQueued })
 	q := r.s.pq.list("desk/w5:p1", false)

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -84,6 +85,8 @@ func assertFor(t *testing.T, s *Server, h map[string]string, id string, a *passk
 func passkeyServer(t *testing.T) (*Server, map[string]string, *passkeytest.Authenticator) {
 	t.Helper()
 	s, _, _ := todoServer(t)
+	gpgHostIDRequired = false // most tests here answer a gpg approval to try the mechanics, not a host
+	t.Cleanup(func() { gpgHostIDRequired = true })
 	s.todos.rateMax = -1
 	h := csrfFor(t, s)
 	a := passkeytest.New(testRPID)
@@ -366,7 +369,7 @@ func TestApprovalWhoMayFile(t *testing.T) {
 		want int
 	}{
 		{"agent, own host by default", agentHdr("w2:p1"), `{"action":"gpg-unlock"}`, 201},
-		{"agent, own host named", agentHdr("w2:p1"), `{"action":"gpg-unlock","host":"desk","subject":"b"}`, 201},
+		{"agent, own host named", agentHdr("w2:p1"), `{"action":"gpg-unlock","host":"desk","subject":"b","request":{"v":1,"n":"b"}}`, 201},
 		{"agent, another host", agentHdr("w2:p1"), `{"action":"gpg-unlock","host":"worker-3","subject":"c"}`, 403},
 		{"agent, the user's action", agentHdr("w2:p1"), `{"action":"passkey-add"}`, 403},
 		{"agent, unknown action", agentHdr("w2:p1"), `{"action":"rm-rf"}`, 400},
@@ -396,7 +399,7 @@ func TestApprovalTaggedWorkerOwnHostOnly(t *testing.T) {
 	if c := post("worker-3", `{"action":"gpg-unlock","subject":"a"}`); c != 201 {
 		t.Errorf("own host = %d", c)
 	}
-	if c := post("worker-3", `{"action":"gpg-unlock","host":"worker-3","subject":"b"}`); c != 201 {
+	if c := post("worker-3", `{"action":"gpg-unlock","host":"worker-3","subject":"b","request":{"v":1,"n":"b"}}`); c != 201 {
 		t.Errorf("own host named = %d", c)
 	}
 	if c := post("worker-3", `{"action":"gpg-unlock","host":"desk","subject":"c"}`); c != 403 {
@@ -422,11 +425,11 @@ func TestApprovalNeedsAPasskeyAndIsRateLimited(t *testing.T) {
 	}
 	s2, _, _ := passkeyServer(t)
 	for i := 0; i < approvalPerMinute; i++ {
-		if code, _ := fileApproval(t, s2, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"s`+string(rune('a'+i))+`"}`); code != 201 {
+		if code, _ := fileApproval(t, s2, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"s","request":{"v":1,"n":`+fmt.Sprint(i)+`}}`); code != 201 {
 			t.Fatalf("approval %d = %d", i, code)
 		}
 	}
-	if code, _ := fileApproval(t, s2, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"one more"}`); code != 429 {
+	if code, _ := fileApproval(t, s2, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"s","request":{"v":1,"n":99}}`); code != 429 {
 		t.Fatalf("over the cap = %d", code)
 	}
 	// One item for the host, showing the latest request.
@@ -450,7 +453,7 @@ func TestApprovalRefusals(t *testing.T) {
 	s, h, a := passkeyServer(t)
 	other := passkeytest.New(testRPID)
 	mk := func(subject string) (string, string) {
-		code, out := fileApproval(t, s, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"`+subject+`"}`)
+		code, out := fileApproval(t, s, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"s","request":{"v":1,"n":"`+subject+`"}}`)
 		if code != 201 || out.Todo == nil {
 			t.Fatalf("file %q = %d", subject, code)
 		}
@@ -525,7 +528,7 @@ func TestApprovalRefusals(t *testing.T) {
 func TestApprovalCounter(t *testing.T) {
 	s, h, a := passkeyServer(t)
 	file := func(subject string) string {
-		_, out := fileApproval(t, s, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"`+subject+`"}`)
+		_, out := fileApproval(t, s, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"s","request":{"v":1,"n":"`+subject+`"}}`)
 		return out.Approval.ID
 	}
 	a.Counter = 0 // a synced passkey: always 0, always accepted

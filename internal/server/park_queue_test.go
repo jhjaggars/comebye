@@ -104,13 +104,13 @@ func TestTodoWaitingOnParkedAgentIsParkedThenRebound(t *testing.T) {
 	if err := s.parkStore().Add(rec); err != nil {
 		t.Fatal(err)
 	}
-	it := todoOf(t, do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"Cover egress too?","waiting":"desk/w5:p1"}`).Body.Bytes())
+	it := todoOf(t, do(s, "POST", "/api/todos", userHdr, `{"question":"Cover egress too?","waiting":"desk/w5:p1"}`).Body.Bytes())
 	got := s.todoGone(it)
 	if got.Waiting == nil || !got.Waiting.Parked || got.Waiting.ParkID != "pk_ghost00001" || got.Waiting.Gone || got.Waiting.Name != "ghost" {
 		t.Fatalf("waiting = %+v", got.Waiting)
 	}
 	// A gated answer ("merge") reaches the coordinator with a hint to queue it for the parked agent.
-	gated := todoOf(t, do(s, "POST", "/api/todos", agentHdr("w2:p1"), `{"question":"Land it?","waiting":"desk/w5:p1"}`).Body.Bytes())
+	gated := todoOf(t, do(s, "POST", "/api/todos", userHdr, `{"question":"Land it?","waiting":"desk/w5:p1"}`).Body.Bytes())
 	do(s, "POST", "/api/todos/"+gated.ID+"/answer", userHdr, `{"text":"yes, merge"}`)
 	msgs := waitSent(t, sent, mu, 1)
 	if !strings.Contains(msgs[0], "is waiting on ghost, which is parked") || !strings.Contains(msgs[0], "comebye prompt ghost --queue") {

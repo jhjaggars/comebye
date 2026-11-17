@@ -42,6 +42,9 @@ func pqHas(s *Server, agent, substr string) bool {
 
 func TestLandingQueueOverHTTP(t *testing.T) {
 	s, _, _ := coordServer(t)
+	if err := s.recordRole("desk/w1:p1", "coordinator", RoleCoordinator, "me"); err != nil {
+		t.Fatal(err)
+	}
 	qWorker(t, s, "w2:p1", "/r/proj", "main")
 	qWorker(t, s, "w3:p1", "/r/proj", "main")
 	qWorker(t, s, "w4:p1", "/r/proj", "main")
@@ -103,6 +106,9 @@ func TestLandingQueueOverHTTP(t *testing.T) {
 
 func TestLandingQueueTurnTimeoutTellsCoordinator(t *testing.T) {
 	s, _, _ := coordServer(t)
+	if err := s.recordRole("desk/w1:p1", "coordinator", RoleCoordinator, "me"); err != nil {
+		t.Fatal(err)
+	}
 	s.landTurn = time.Minute
 	qWorker(t, s, "w2:p1", "/r/proj", "main")
 	qWorker(t, s, "w3:p1", "/r/proj", "main")

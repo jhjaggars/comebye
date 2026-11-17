@@ -118,8 +118,7 @@ func TestGPGUnlockWithdrawTakesTheRenewalsToo(t *testing.T) {
 	}
 }
 
-// "Not now" closes the item and the watcher's refiling is quiet for a while;
-// a person's own ask (a worker's `comebye gpg unlock`) is not.
+// "Not now" closes the item and every agent's refiling is quiet for a while.
 func TestGPGUnlockNotNowSnoozesTheWatcher(t *testing.T) {
 	s, _, _ := passkeyServer(t)
 	_, o := fileApproval(t, s, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"k","auto":true}`)
@@ -133,7 +132,9 @@ func TestGPGUnlockNotNowSnoozesTheWatcher(t *testing.T) {
 	if n := len(s.todos.list("")); n != 0 {
 		t.Fatalf("%d items after a snoozed ask", n)
 	}
-	if code, out := fileApproval(t, s, agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"k"}`); code != 201 || out.Todo == nil {
-		t.Fatalf("a worker's ask = %d", code)
+	// Every agent request is snoozed, the auto flag or not: leaving the flag
+	// out was a way round the snooze.
+	if w := do(s, "POST", "/api/approvals", agentHdr("w2:p1"), `{"action":"gpg-unlock","subject":"k"}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"snoozed":true`) {
+		t.Fatalf("a worker's ask = %d %s", w.Code, w.Body)
 	}
 }

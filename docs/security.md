@@ -121,7 +121,25 @@ Treat access to it like SSH access to that machine.
   like a cookie, so the server wraps everything in Go's
   `http.CrossOriginProtection` (checks `Sec-Fetch-Site`/`Origin`) and
   requires `Content-Type: application/json` on POSTs. A web page the phone
-  visits cannot drive your agents through Serve.
+  visits cannot drive your agents through Serve. A GET to `/api/*` that the
+  browser marks `Sec-Fetch-Site: cross-site` is refused too (a GET can make
+  the hub run git or `gh`, or hold an event stream open). Every response carries
+  `Cross-Origin-Opener-Policy: same-origin`.
+- **Text from an agent is labelled, and cannot pose as the hub.** Agents run
+  as you, so the hub tells their words apart. A prompt an agent sends to
+  another agent (`comebye prompt`, and the queue) is refused when a line of
+  it starts like a hub message (`Comebye (hub notice)`, `Comebye (hub relay)`,
+  however spaced or dressed), and every such prompt reaches the target as
+  `From agent NAME (host/pane), not the user and not the hub: ...`. All text typed
+  into a pane has its control and escape characters removed (newline and tab
+  stay), so it cannot act as keys. A to-do an agent files can wait on that
+  agent or a coordinator only; the hub never relays an answer an agent
+  recorded as "the user's own". Landing, cancelling a landing and the landing
+  queue are the user's or a recorded coordinator's; a request with no pane
+  header is not a coordinator's. **Limitation:** the pane header is still
+  self-asserted (see above), so an agent that claims a coordinator's pane can
+  still record an answer or a landing; the hub does not pass such an answer on
+  as the user's. Per-agent identity is what closes the rest.
 - **`-ts-allow-login` is required.** Without it the API would be
   unauthenticated and every device on your tailnet could drive your agents,
   so the server refuses to start unless you also pass `-insecure-no-auth`
@@ -431,7 +449,12 @@ a later slice. What this slice fixes:
 - **Who can ask.** Only the user changes passkeys or answers an approval (user
   role, plus the CSRF token). An agent or a host may file a `gpg-unlock`
   request for **its own host only**, and read the public keys (a host pins
-  them). The to-do item's wording is the server's, never the agent's. A second
+  them). The to-do item's wording is the server's: an agent's subject is kept
+  only when it is exactly a key fingerprint line ("Unlock GPG key <hex>"),
+  otherwise the server's own wording is used. A gpg approval is answered only
+  when its request id is a host's own (`gu_...`); any other is refused and no
+  sealed key is stored for it. "Not now" quiets every agent's refiling of an
+  approval for ten minutes, the `auto` flag or not. A second
   passkey needs an approved `passkey-add` approval from an existing one.
 - **The hub's check is a first filter.** A host must check the assertion
   itself against the passkeys it pinned during setup; a hub that is compromised
@@ -613,5 +636,9 @@ would be you. So a page never runs as the app:
 Without the listener the page is served from the app's own origin and the
 isolation rests on the browser honouring `sandbox`. A page can show anything, so the app puts a provenance bar (who
 published it, when) above it: use the app's link, not a page's own text, to
-know where it came from. A page cannot reach the network, but its text is
-agent text: do not paste commands from it.
+know where it came from. A page's script is held back from the network: the
+Content-Security-Policy refuses fetches, forms and (`webrtc 'block'`, where the
+browser supports that directive) WebRTC. That does not stop a page from sending
+what it holds by other means a browser permits, such as navigating away or a
+link the viewer opens, so treat anything a page can read as readable by whoever
+wrote the page. Its text is also agent text: do not paste commands from it.

@@ -140,6 +140,9 @@ func (s *Server) handleLandQueueEdit(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusConflict, apiErr("self", "an agent cannot reorder its own landing"))
 		return
 	}
+	if !s.landerOK(w, r) {
+		return
+	}
 	switch strings.TrimSpace(b.Action) {
 	case "move":
 		if b.To < 1 {

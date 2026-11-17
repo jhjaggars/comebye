@@ -557,6 +557,17 @@ func (s *Server) callerIsCoordinator(c caller) bool {
 	return s.isCoordinator(ref, name)
 }
 
+// waitingIsCoordinator: the agent with this fleet id is a recorded coordinator.
+func (s *Server) waitingIsCoordinator(id string) bool {
+	name := ""
+	for _, a := range s.fleet.Agents() {
+		if a.ID == id {
+			name = a.Name
+		}
+	}
+	return s.isCoordinator(id, name)
+}
+
 // mayManage: the user, or a coordinator.
 func (s *Server) mayManage(w http.ResponseWriter, r *http.Request) bool {
 	c := callerOf(r)
@@ -779,6 +790,13 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 	case waiting != "":
 		if !todoAgentRE.MatchString(waiting) {
 			bad("bad_waiting", "waiting is a host-qualified agent id (host/pane)")
+			return
+		}
+		// Whom an item waits on is who the hub later tells "the user answered".
+		// An agent may name itself or a coordinator; only the user or a
+		// coordinator may name anyone else.
+		if c.agent() && !s.callerIsCoordinator(c) && waiting != s.replyID(c) && !s.waitingIsCoordinator(waiting) {
+			writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "waiting_forbidden", "message": "an agent can have a to-do wait on itself or on the coordinator only"})
 			return
 		}
 	case c.agent() && c.pane != "" && !b.NoWait && !s.callerIsCoordinator(c):

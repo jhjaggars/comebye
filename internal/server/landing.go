@@ -37,6 +37,16 @@ type landBody struct {
 
 const maxLandNote = 500
 
+// landerOK: a landing, its cancelling and its queue are the user's or a
+// recorded coordinator's. A caller with no pane header is no coordinator.
+func (s *Server) landerOK(w http.ResponseWriter, r *http.Request) bool {
+	if c := callerOf(r); c.agent() && !s.callerIsCoordinator(c) {
+		writeJSONStatus(w, http.StatusForbidden, apiErr("coordinator_only", "only the user or a coordinator can land work or change the landing queue"))
+		return false
+	}
+	return true
+}
+
 // handleLanding records the approval to land a finished worker's work.
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	if s.ledgerOff(w, r) {
@@ -49,6 +59,9 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	}
 	if c := callerOf(r); c.agent() && b.AgentID == c.agentRef() {
 		writeJSONStatus(w, http.StatusConflict, apiErr("self", "an agent cannot land its own work this way: the coordinator does, after the user OKs it"))
+		return
+	}
+	if !s.landerOK(w, r) {
 		return
 	}
 	e, ok := s.ledger.ByAgent(b.AgentID)

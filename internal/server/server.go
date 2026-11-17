@@ -548,7 +548,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/agents/{target}/output", s.authAgent(s.readGuard(s.handleOutput)))
 	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.authAgent(s.readGuard(s.handleTranscript)))
 	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.readGuard(s.handleSubagentTranscript)))
-	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.handlePrompt))))
+	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.labelAgentPrompt(s.handlePrompt)))))
 	s.mux.HandleFunc("POST /api/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	// The coordinator's context reset, on the agent's host: the hub's own
@@ -575,7 +575,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.readGuard(s.onHost("output", s.handleOutput))))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.readGuard(s.onHost("transcript", s.handleTranscript))))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.readGuard(s.onHost("subagent-transcript", s.handleSubagentTranscript))))
-	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.onHost("prompt", s.handlePrompt)))))
+	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.labelAgentPrompt(s.onHost("prompt", s.handlePrompt))))))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/keys", s.auth(s.onHost("keys", s.handleKeys)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/activity", s.auth(s.onHost("activity", s.handleActivity)))
@@ -768,6 +768,9 @@ func (s *Server) Handler() http.Handler {
 	// The health probes come first: no Host check (a kubelet probes the pod
 	// IP), no login, nothing secret in the answer (see health.go).
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Nothing of this origin may keep a handle on a window another site
+		// opened, or give one to a window it opened.
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		if !s.serveHealth(w, r) {
 			app.ServeHTTP(w, r)
 		}
@@ -776,6 +779,13 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) base() http.Handler {
 	jsonOnly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A GET is outside the cross-origin rule, and it can make the hub run
+		// git or gh, or hold an event stream open: the API is for this site
+		// (and for clients that send no site at all: the CLI, peers).
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "cross_site", "message": "not from another site"})
+			return
+		}
 		if r.Method == http.MethodPost {
 			ct := r.Header.Get("Content-Type")
 			if mt, _, _ := strings.Cut(ct, ";"); strings.TrimSpace(strings.ToLower(mt)) != "application/json" {

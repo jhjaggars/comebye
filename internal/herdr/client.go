@@ -361,6 +361,27 @@ type PromptOptions struct {
 	TimeoutMs int64
 }
 
+// CleanPromptText is text as it is typed into a pane: valid UTF-8, line
+// ends as \n, and no control or escape characters other than newline and
+// tab (C0, DEL and C1 are dropped). An escape, a carriage return or a
+// paste-end sequence inside a prompt would otherwise be read by the pane's
+// program as keys.
+func CleanPromptText(s string) string {
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\r':
+			return '\n'
+		case r == '\n' || r == '\t':
+			return r
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0):
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // Prompt sends text to an agent via agent.prompt. target is a live agent name
 // or the hosting pane ID. With Wait, herdr starts a wait in the same call so
 // "send this, tell me when done" has no race; the response then reflects the
@@ -370,7 +391,7 @@ func (c *Client) Prompt(ctx context.Context, target, text string, opts PromptOpt
 		Target string      `json:"target"`
 		Text   string      `json:"text"`
 		Wait   *waitParams `json:"wait"`
-	}{Target: target, Text: text}
+	}{Target: target, Text: CleanPromptText(text)}
 	if opts.Wait {
 		w := &waitParams{Until: make([]string, len(opts.Until))}
 		for i, s := range opts.Until {

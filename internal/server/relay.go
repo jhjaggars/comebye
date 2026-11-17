@@ -145,6 +145,10 @@ func (s *Server) relayGate(it Todo) string {
 		return "it answers a plan"
 	case it.Answer == nil && !it.earlyPending():
 		return "no answer"
+	case it.Answer != nil && it.Answer.Via == "relay":
+		// An agent's word that it is a coordinator relaying the user is not
+		// the user's answer: it is the coordinator's to pass on by hand.
+		return "an agent recorded the answer, not the user"
 	}
 	for _, l := range it.Links {
 		if l.Handoff == "" || s.ledger == nil {
