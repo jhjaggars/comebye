@@ -1214,7 +1214,10 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != ReadyToRemove && !e.Reported()) {
 		return Entry{}, false, nil
 	}
-	again := e.Status == Finished && e.ReportSource == "explicit" && e.FinalReport == Truncate(text, MaxReport)
+	// A marked worker (or one that landed) that sends the very same text
+	// again has told the requester nothing new: the mark no longer holds,
+	// but the round and the notice do not repeat.
+	again := (e.Status == Finished || e.Status == ReadyToRemove || e.Status == Landed) && e.ReportSource == "explicit" && e.FinalReport == Truncate(text, MaxReport)
 	if e.Status == ReadyToRemove {
 		// A marked worker that reports again is at work again: the mark
 		// no longer holds, and this is a new round's report.
@@ -1236,6 +1239,9 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		e.FinishedAt = &t
 		e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
 		return copyEntry(e), true, s.save()
+	}
+	if e.Status == Landed && again {
+		return copyEntry(e), true, nil // the same text: still landed, nothing new
 	}
 	if e.Status == Landed {
 		if e.AwaitIdle {

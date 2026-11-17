@@ -681,3 +681,26 @@ func TestNoticeKeysSurviveRestartAndAreBounded(t *testing.T) {
 		t.Fatal("keys after a restart: the newest must be kept and the oldest dropped")
 	}
 }
+
+// The same report sent again after the entry landed, or was marked ready
+// to remove, is not a new round: the requester was told about this very
+// text already (a repeat finished notice reached the coordinator twice).
+func TestResentSameReportAfterLandedOrMarkedIsNotANewRound(t *testing.T) {
+	for _, st := range []Status{Landed, ReadyToRemove} {
+		s, _ := Open(filepath.Join(t.TempDir(), "ledger.json"))
+		e, _ := s.Add(Entry{AgentID: "desk/w9:p1", Status: Running, ReplyTo: &Ref{AgentID: "desk/w1:p1"}})
+		now := time.Now()
+		s.Report(e.AgentID, "done: all green", now)
+		settle(t, s, e.ID)
+		s.mu.Lock()
+		s.byAgent(e.AgentID).Status = st
+		s.mu.Unlock()
+		got, ok, err := s.Report(e.AgentID, "done: all green", now.Add(time.Minute))
+		if !ok || err != nil {
+			t.Fatalf("%s: %v %v", st, ok, err)
+		}
+		if n := len(s.PendingCallbacks()); n != 0 || got.ReportSeq != 1 {
+			t.Fatalf("%s: same report again queued %d notices, ReportSeq %d; want 0 and 1", st, n, got.ReportSeq)
+		}
+	}
+}
