@@ -21,7 +21,7 @@ also writes `state-FAIL-N.txt`: the agents, the ledger, the to-dos and every pro
 | 1 | the coordinator hands off a worker (own branch, real `git worktree`); the worker commits and reports; the hub types the finished notice into the coordinator's pane | stand-in agents, real hub, CLI and git |
 | 2 | a second worker files a decision to-do with buttons; the user taps a choice **on the phone** (390px headless Chrome, the real Content-Security-Policy); the hub types the answer, labelled as the user's, into the worker and closes the item | same |
 | 3 | the coordinator files "Land?", the user answers in the app, the coordinator runs `comebye land`; the worker is told, labelled as an agent's, and pushes to a **bare throwaway origin**; the hub sees it and the board and the app show it landed | same |
-| 4 | the worker publishes a Page; the user opens it in the viewer; "Chat about this" starts a read-only `claude` helper and opens its conversation | the helper is a stand-in agent |
+| 4 | the worker publishes a Page (the template, with a recorder); the user opens it in the viewer and every visible frame is in the app's theme (no flash); "Chat about this" starts a read-only `claude` helper and opens its conversation | the helper is a stand-in agent |
 | 5 | park the idle second worker (pane closes, worktree, branch and session stay), resume it (new pane, same session, catch-up note), restart it (same pane, same flags) | stand-in agents |
 | 6 | GPG unlock with Face ID: Chrome's virtual authenticator (PRF), real gpg in a throwaway `GNUPGHOME`, the real set-up item and card; the key then signs with no prompt | real gpg and CLI; reuses `tools/uitest/gpghelp.mjs` |
 | 7 | as the coordinator: `comebye board`, `comebye log` and `comebye coordinator digest` show what happened | real CLI |
@@ -51,8 +51,5 @@ also writes `state-FAIL-N.txt`: the agents, the ledger, the to-dos and every pro
 
 ## Not covered yet
 
-- **No theme flash in the Page viewer** (commit b6d05c6, "paint in the app's theme from the first frame") is not on
-  main yet. Once it lands, add a check to step 4 that the frame's first paint is in the app's theme (the viewer today
-  shows a white page in a dark app until the page's own theme listener runs: see `4-page-390.png`).
 - Real herdr, claude and pi. A local-only mode that runs a throwaway `herdr --session <name>` (never the real config)
   would exercise herdr's own agent detection; it is not built.

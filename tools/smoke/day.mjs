@@ -242,9 +242,15 @@ await check("3. the worker lands to the bare origin; the hub sees it and the boa
 
 // ---- 4. A Page, and "Chat about this" ---------------------------------------------------------------------------------
 let pageId;
-await check("4. the worker publishes a Page; the user opens it in the viewer on the phone and it renders in the frame", async () => {
+await check("4. the worker publishes a Page; the user opens it in the viewer on the phone: it renders in the frame, in the app's theme from the first visible frame, in the app's theme from the first visible frame", async () => {
+  // The page is the Comebye page template (what `comebye pages new` prints, with its theme listener) with a recorder in the head
+  // that samples its own background on every frame, so the check can see whether the first paint was in the app's theme.
+  const RECORDER = `<script>window.__s=[];(function t(){var b=document.body;window.__s.push({body:!!b,bg:b?getComputedStyle(b).backgroundColor:"",vis:getComputedStyle(document.documentElement).visibility});if(window.__s.length<600)requestAnimationFrame(t)})();</script>`;
   const f = `${tmp}/report-page.html`;
-  fs.writeFileSync(f, `<!doctype html><html><head><meta charset="utf-8"><title>Hello report</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="font:16px/1.5 sans-serif;margin:16px"><h1>Hello report</h1><p id="p">hello.txt says hi, and it is on main.</p></body></html>`);
+  let html = ok(cli(await worker1.pane(), ["pages", "new", "--title", "Hello report"]), "pages new");
+  html = html.replace("<head>", "<head>\n" + RECORDER).replace("</main>", `<p id="p">hello.txt says hi, and it is on main.</p></main>`);
+  must(html.includes('id="p"'), "the template has no <main> to put the text in");
+  fs.writeFileSync(f, html);
   const o = ok(await worker1.run(["publish", f, "--key", "smoke-day-report"]), "publish");
   pageId = o.match(/pg_[0-9a-f]{10}/)[0];
   await page.goto(base + "/#/pages/" + pageId, { waitUntil: "load" });
@@ -254,6 +260,15 @@ await check("4. the worker publishes a Page; the user opens it in the viewer on 
   must(/hello\.txt says hi/.test(await fr.locator("#p").innerText()), "the page text is not in the frame");
   await noScroll("page viewer");
   await shot("4-page-390");
+  // No theme flash: every frame the user could see (the page stays hidden until the app's theme arrives) is in the app's theme,
+  // although the page itself defaults to the device's scheme.
+  await sleep(800);
+  const smp = (await fr.evaluate(() => window.__s)).filter((x) => x.body && x.vis !== "hidden");
+  must(smp.length > 0, "no visible frame was sampled");
+  const lum = (rgb) => { const m = String(rgb).match(/[\d.]+/g).map(Number); return 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2]; };
+  const dark = process.env.SCHEME !== "light";
+  const flash = smp.filter((x) => (lum(x.bg) < 128) !== dark);
+  must(flash.length === 0, `${flash.length} of ${smp.length} visible frames painted outside the app's theme; first: ${JSON.stringify(flash[0])}`);
 });
 await check("4. the user taps \"Chat about this\"; the hub starts a read-only claude helper and opens its conversation", async () => {
   await page.waitForSelector("#pgs-chat", { timeout: 8000 });
