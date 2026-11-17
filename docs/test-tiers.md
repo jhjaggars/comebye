@@ -10,6 +10,12 @@ time. The plan, with the measurements behind it, is the Page "Test tiers plan" i
 | Nightly | 02:00 UTC, and by hand | everything in merge, both schemes; Go shuffled with no cache; a fresh govulncheck; the release cross-build; each flaky-list check 5 times | 7 min | the next release |
 | Release | a `v*` tag | the gate (below), then the 4 builds and the publish | 2 min | nothing: it publishes |
 
+The **day in the life** (`tools/smoke/run.sh`, about 15 seconds after the build) is one more job in the pre-submit tier
+(with the browser smoke set) and in the merge and nightly tiers: handoff, report, a to-do answered on a phone, landing to a
+bare origin, a Page and its chat, park, resume, restart, GPG unlock and the coordinator's board, log and digest, on a
+throwaway hub with stand-in agents. It is the guard for hardening: a slice that makes normal use hard turns it red.
+See `tools/smoke/README.md`.
+
 Workers still land by fast-forward after the full suite on their own machine: `go test -race ./...` and
 `tools/uitest/run.sh` in both themes. Put the result in the landing report.
 

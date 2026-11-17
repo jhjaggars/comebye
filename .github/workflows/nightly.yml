@@ -121,6 +121,36 @@ jobs:
           export CHROME="$(command -v google-chrome || command -v chromium)"
           OUT_DIR="$RUNNER_TEMP/flaky" tools/ci/flakes.sh stress 5
 
+  # The day in the life (tools/smoke), once more on main's head: a hardening slice's effect on normal use.
+  day-in-the-life:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: day in the life
+        env:
+          SMOKE_REQUIRE_GPG: "1"
+        run: tools/smoke/run.sh "$RUNNER_TEMP/smoke"
+      - name: upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: day-in-the-life
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore
+
   release-build:
     runs-on: ubuntu-latest
     steps:
@@ -138,7 +168,7 @@ jobs:
   # One issue for a red stretch of nights, closed when the nightly is green again.
   report:
     if: always()
-    needs: [lint, go, browser, flaky, release-build]
+    needs: [lint, go, browser, flaky, release-build, day-in-the-life]
     runs-on: ubuntu-latest
     permissions:
       issues: write

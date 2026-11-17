@@ -287,10 +287,45 @@ jobs:
           path: ${{ runner.temp }}/uitest
           if-no-files-found: ignore
 
+  # The day in the life (tools/smoke): one end-to-end run of what the user and agents actually do, on a throwaway hub with a
+  # stand-in herdr and a bare origin: handoff, report, a to-do answered on the phone, landing, a Page and its chat, park,
+  # resume, restart, GPG unlock, and the coordinator's board, log and digest. Every hardening slice keeps it green: a red
+  # run here means normal use broke. Pre-submit whenever the smoke set runs; merge whenever the browser checks do.
+  day-in-the-life:
+    needs: changes
+    if: (github.event_name == 'pull_request' && needs.changes.outputs.smoke == 'true') || (github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: day in the life
+        env:
+          SMOKE_REQUIRE_GPG: "1"
+        run: tools/smoke/run.sh "$RUNNER_TEMP/smoke"
+      - name: upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: day-in-the-life
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore
+
   # One job to read. Green when every job this change needed passed; a skipped job is one it did not need.
   ci-status:
     if: always()
-    needs: [changes, lint, go-full, go-changed, browser-smoke, browser-drive, browser-rest, visual]
+    needs: [changes, lint, go-full, go-changed, browser-smoke, browser-drive, browser-rest, visual, day-in-the-life]
     runs-on: ubuntu-latest
     steps:
       - name: every needed job passed

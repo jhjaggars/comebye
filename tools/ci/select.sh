@@ -46,6 +46,10 @@ while IFS= read -r f; do
     internal/cli/*) lint=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/cli ;;
     internal/usage/*) lint=true; add_script usage; merge_browser=true; merge_go=true; add_pkg ./internal/usage ;;
     internal/release/*|internal/upgrade/*) lint=true; add_script releaseauto; merge_browser=true; merge_go=true; add_pkg "./$(dirname "$f")" ;;
+    # The day-in-the-life smoke (tools/smoke) runs whenever the browser smoke set does (see ci.yml); its own files run it.
+    tools/smoke/*) lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg ./tools/smoke/fakeherdr ;;
+    # The helper the GPG scripts share: both of them, and (through tools/smoke/day.mjs) the day in the life.
+    tools/uitest/gpghelp.mjs) lint=true; smoke=true; merge_browser=true; add_script gpgunlock; add_script gpgrenew ;;
     tools/uitest/*.mjs)
       lint=true; smoke=true; merge_browser=true
       b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in buttons|chips|controls|fontsetting|decisionsets|starters|empties|contrast|tokens) visual=true;; esac ;;

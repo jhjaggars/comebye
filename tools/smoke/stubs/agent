@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stands in for the claude and pi executables on the hub's PATH: the hub only checks that a kind is installed
+# (the stand-in herdr never runs it). Run for real, it refuses, so nothing mistakes it for an agent.
+echo "smoke stand-in for $(basename "$0"): not an agent" >&2
+exit 1

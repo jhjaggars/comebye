@@ -10,26 +10,17 @@
 // Checked: the card says the unlock is fixed at 8 hours and has no picker; setup shows the host fingerprint the CLI printed;
 // the failure messages; and after use no secret is left in the DOM, in storage, or sent to the hub in the clear.
 import { launch } from "./lib.mjs";
-import { execFileSync, spawnSync } from "node:child_process";
+import { PASS, requireThrowawayGnupg, gpgInstalled, throwawayKey, addAuth } from "./gpghelp.mjs";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 const [rawBase, out] = process.argv.slice(2);
 const base = rawBase.replace("127.0.0.1", "localhost");
 const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR, gnupg = process.env.GNUPGHOME;
 if (!bin || !stateDir) { console.error("gpgunlock.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
-// Never the user's own keys: only a throwaway GNUPGHOME under the temp directory.
-if (!gnupg || !path.resolve(gnupg).startsWith(os.tmpdir() + path.sep) || path.resolve(gnupg) === path.resolve(os.homedir(), ".gnupg")) {
-  console.error("gpgunlock.mjs: GNUPGHOME must be a temp directory (run.sh sets one)"); process.exit(2);
-}
-const have = (b) => spawnSync("sh", ["-c", `command -v ${b}`]).status === 0;
-if (!have("gpg") || !have("gpg-connect-agent") || !have("gpgconf") || !(have("gpg-preset-passphrase") || ["/usr/lib/gnupg/gpg-preset-passphrase", "/usr/libexec/gpg-preset-passphrase", "/usr/lib/gnupg2/gpg-preset-passphrase"].some((p) => fs.existsSync(p)))) {
-  console.log("gpgunlock: gpg or its preset tool is not installed: skipped"); process.exit(0);
-}
+requireThrowawayGnupg("gpgrenew.mjs", gnupg);
+if (!gpgInstalled()) { console.log("gpgrenew: gpg or its preset tool is not installed: skipped"); process.exit(0); }
 fs.mkdirSync(out, { recursive: true });
-fs.mkdirSync(gnupg, { recursive: true, mode: 0o700 });
-fs.chmodSync(gnupg, 0o700);
 const dark = process.env.SCHEME !== "light";
 const results = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -39,7 +30,6 @@ async function check(name, fn) {
   catch (e) { results.push({ name, ok: false }); if (shotPage) await shotPage.screenshot({ path: `${out}/gpgunlock-FAIL-${results.length}.png` }).catch(() => {}); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
 }
 const HOST = "uitest";
-const PASS = "correct horse battery staple 7a1f";
 const env = { ...process.env, PATH: process.env.PATH, COMEBYE_URL: rawBase, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w2:p1", GNUPGHOME: gnupg };
 const cli = (args, input) => {
   const r = spawnSync(bin, args, { env, input, encoding: "utf8" });
@@ -48,15 +38,10 @@ const cli = (args, input) => {
 const J = { "Content-Type": "application/json" };
 const listKeys = async () => (await fetch(base + "/api/passkeys").then((r) => r.json()));
 const todo = async (id) => (await fetch(base + "/api/todos/" + id).then((r) => r.json())).todo;
-const addAuth = (cdp, hasPrf) => cdp.send("WebAuthn.addVirtualAuthenticator", { options: {
-  protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true,
-  automaticPresenceSimulation: true, hasPrf } });
 
 // A throwaway key (ed25519, signing) with a passphrase, in the temp GNUPGHOME (checked above). A full run.sh shares that
-// GNUPGHOME with gpgunlock.mjs, which made the same key with the same passphrase: reuse it when it is there.
-const haveKey = execFileSync("gpg", ["--batch", "--list-secret-keys", "--with-colons"], { env, encoding: "utf8" }).split("\n").some((l) => l.startsWith("fpr:"));
-if (!haveKey) execFileSync("gpg", ["--batch", "--pinentry-mode", "loopback", "--passphrase", PASS, "--quick-gen-key", "UI Test <ui@example.invalid>", "ed25519", "sign", "never"], { env, stdio: "pipe" });
-const FPR = execFileSync("gpg", ["--batch", "--list-secret-keys", "--with-colons"], { env, encoding: "utf8" }).split("\n").map((l) => l.split(":")).find((f) => f[0] === "fpr")[9];
+// GNUPGHOME with gpgunlock.mjs, which made the same key with the same passphrase: throwawayKey reuses it when it is there.
+const FPR = throwawayKey(env);
 const status = () => JSON.parse(cli(["gpg", "status", "--json"]).stdout);
 const cleanHub = async () => {
   cli(["gpg", "reset", "--yes"]);
@@ -65,7 +50,6 @@ const cleanHub = async () => {
 };
 
 
-import { spawn } from "node:child_process";
 const width = 390;
 await cleanHub();
 const { browser, ctx, page } = await launch({ width, height: 844, dark });
