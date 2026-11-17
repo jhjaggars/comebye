@@ -602,6 +602,11 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 		writeLaunchError(w, lerr)
 		return
 	}
+	if res.ChatDir != "" && body.Agent != "" {
+		// A chat helper removed on this host: its record goes too (a peer's
+		// is dropped by the hub when it confirms the removal).
+		s.chats.dropAgent(state.QualifiedID(s.fleet.LocalName(), body.Agent))
+	}
 	writeJSON(w, res)
 }
 

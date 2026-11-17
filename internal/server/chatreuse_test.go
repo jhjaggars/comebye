@@ -271,8 +271,7 @@ func TestRemovingAChatDeletesItsDirectory(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("the directory stays after the removal: %v", err)
 	}
-	// The hub drops the record when its removal confirms.
-	s.chats.dropAgent(rec.Agent)
+	// The record went with it.
 	if _, ok := s.chats.get(page); ok {
 		t.Fatal("the record stays")
 	}
