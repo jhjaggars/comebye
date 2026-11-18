@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/fleet"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/playbook"
 	"github.com/jhjaggars/comebye/internal/state"
@@ -970,6 +971,10 @@ func (s *Server) onHostLaunch(op string, local http.HandlerFunc) http.HandlerFun
 			local(w, r)
 		case s.fleet.HasPeer(host):
 			s.fleet.ProxyHost(w, r, host, op)
+		case s.cfg.Upstream != nil && (op == "settings" || op == "settings-set") && !callerOf(r).agent():
+			// On a peer, the user's call for a host it does not know goes to
+			// its hub, which knows every host (an agent's was forwarded by guard).
+			s.userViaHub(w, r)
 		default:
 			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_host", "message": "no such host"})
 		}
@@ -979,4 +984,23 @@ func (s *Server) onHostLaunch(op string, local http.HandlerFunc) http.HandlerFun
 func fileExists(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.Mode().IsRegular()
+}
+
+// userViaHub sends the user's host-qualified settings call (already checked
+// by this host's own login rule) to the hub. It carries no forwarded
+// marker, so the hub sees the peer's own identity, as for any user call.
+func (s *Server) userViaHub(w http.ResponseWriter, r *http.Request) {
+	req := fleet.UpstreamRequest{
+		Method: r.Method, Segments: strings.Split(strings.Trim(r.URL.Path, "/"), "/"),
+		MaxBody: 64 << 10, Timeout: 30 * time.Second,
+	}
+	if r.Method == http.MethodPut || r.Method == http.MethodPost {
+		b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, req.MaxBody))
+		if err != nil {
+			writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "too_large", "message": "the request is too large"})
+			return
+		}
+		req.Body = b
+	}
+	s.cfg.Upstream.Forward(r.Context(), w, req)
 }

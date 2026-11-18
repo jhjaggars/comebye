@@ -64,7 +64,7 @@ type UpstreamRequest struct {
 	// out of the path the caller built).
 	Segments []string
 	Query    url.Values
-	// Body is sent for POSTs (it must be JSON within MaxBody).
+	// Body is sent for POSTs and PUTs (it must be JSON within MaxBody).
 	Body    []byte
 	MaxBody int64
 	Timeout time.Duration
@@ -102,7 +102,7 @@ func (u *Upstream) Do(ctx context.Context, req UpstreamRequest) (int, string, []
 		p.RawQuery = req.Query.Encode()
 	}
 	var body io.Reader
-	if req.Method == http.MethodPost {
+	if req.Method == http.MethodPost || req.Method == http.MethodPut {
 		if int64(len(req.Body)) > req.MaxBody || !json.Valid(req.Body) {
 			return 0, "", nil, errors.New("invalid body")
 		}

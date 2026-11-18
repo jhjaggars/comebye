@@ -222,6 +222,9 @@ func cmdSettings(e *Env, args []string) error {
 	var cur apiSettings
 	if err := c.call("GET", path, nil, nil, &cur); err != nil {
 		var ae *apiError
+		if errors.As(err, &ae) && ae.status == 404 && ae.code == "unknown_host" {
+			return fmt.Errorf("%v (no host of that name is known to the Comebye this talks to or its hub)", err)
+		}
 		if errors.As(err, &ae) && ae.status == 404 && *host != "" {
 			return fmt.Errorf("%v (the host may be too old to have settings: `comebye peer show %s` says its version)", err, *host)
 		}

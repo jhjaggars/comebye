@@ -82,6 +82,8 @@ func TestSwitchModelLocal(t *testing.T) {
 		{Name: "c", PaneID: "w2:p1", Agent: "claude", Status: herdr.StatusIdle},
 		{Name: "busy", PaneID: "w3:p1", Agent: "claude", Status: herdr.StatusWorking},
 		{Name: "x", PaneID: "w4:p1", Agent: "codex", Status: herdr.StatusIdle},
+		{Name: "fin", PaneID: "w5:p1", Agent: "claude", Status: herdr.StatusDone},
+		{Name: "blk", PaneID: "w6:p1", Agent: "claude", Status: herdr.StatusBlocked},
 	})
 	// A worker's ledger entry follows the switch.
 	e, _ := s.ledger.Add(ledger.Entry{Host: "desk", Repo: "/r", RepoName: "r", Branch: "b", Kind: "pi", Model: "homelab/fast", AgentID: "desk/w1:p1", PaneID: "w1:p1", Status: ledger.Running})
@@ -105,6 +107,15 @@ func TestSwitchModelLocal(t *testing.T) {
 		t.Fatalf("prompts = %q", got)
 	}
 
+	// A done agent sits at its prompt: it switches like an idle one.
+	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
+	if w := do(s, "POST", "/api/agents/fin/model", nil, `{"model":"opus"}`); w.Code != 200 {
+		t.Fatalf("done = %d %s", w.Code, w.Body)
+	}
+	if got := sentPrompts(fh); !reflect.DeepEqual(got, []string{"w5:p1: /model opus"}) {
+		t.Fatalf("done prompts = %q", got)
+	}
+
 	fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
 	for path, c := range map[string]struct {
 		body string
@@ -115,6 +126,7 @@ func TestSwitchModelLocal(t *testing.T) {
 		"/api/agents/c/model":           {`{}`, 400, "model_required"},
 		"/api/agents/x/model":           {`{"model":"gpt-5.5"}`, 400, "switch_unsupported"},
 		"/api/agents/busy/model":        {`{"model":"opus"}`, 409, "agent_busy"},
+		"/api/agents/blk/model":         {`{"model":"opus"}`, 409, "agent_busy"},
 		"/api/agents/nobody/model":      {`{"model":"opus"}`, 404, "agent_not_found"},
 		"/api/hosts/zzz/agents/p/model": {`{"model":"opus"}`, 404, "unknown_host"},
 	} {

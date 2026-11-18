@@ -897,3 +897,37 @@ func TestPullCoordinatorDir(t *testing.T) {
 		t.Fatal("the coordinator did not start")
 	}
 }
+
+// A peer's user setting another host's settings (`comebye settings set
+// --host X` on a peer) reaches the hub, as the peer itself and after the
+// peer's own login check; a host on neither side is the hub's 404.
+func TestPeerUserSettingsOfOtherHostGoThroughHub(t *testing.T) {
+	hub := &fakeHub{}
+	hs := httptest.NewServer(hub)
+	defer hs.Close()
+	up, err := fleet.NewUpstream(hs.URL, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), Upstream: up, AgentToken: testToken}, nil, nil)
+	const body = `{"rev":1,"default_kind":"claude"}`
+	w := do(s, "PUT", "/api/hosts/desk/settings", userHdr, body)
+	r, got := hub.last()
+	if w.Code != 200 || r == nil || r.Method != "PUT" || r.URL.Path != "/api/hosts/desk/settings" || got != body {
+		t.Fatalf("set = %d %s (hub saw %v %q)", w.Code, w.Body, r, got)
+	}
+	if r.Header.Get(HeaderForwarded) != "" || r.Header.Get(HeaderAgentToken) != "" {
+		t.Fatalf("headers = %v: the hub must see the peer's own identity", r.Header)
+	}
+	if w := do(s, "GET", "/api/hosts/desk/settings", userHdr, ""); w.Code != 200 {
+		t.Fatalf("show = %d %s", w.Code, w.Body)
+	}
+	// The peer's own login check comes first: no login, nothing sent.
+	n := len(hub.reqs)
+	if w := do(s, "PUT", "/api/hosts/desk/settings", map[string]string{"Tailscale-User-Login": "x@example.com"}, body); w.Code != http.StatusUnauthorized || len(hub.reqs) != n {
+		t.Fatalf("other login = %d, hub saw %d more", w.Code, len(hub.reqs)-n)
+	}
+	if w := do(s, "PUT", "/api/hosts/desk/settings", agentHdr("w1:p1"), body); w.Code != http.StatusForbidden || len(hub.reqs) != n {
+		t.Fatalf("agent = %d, hub saw %d more", w.Code, len(hub.reqs)-n)
+	}
+}

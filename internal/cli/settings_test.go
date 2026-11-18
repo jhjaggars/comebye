@@ -83,6 +83,15 @@ func TestSettingsOnAnOldPeer(t *testing.T) {
 	}
 }
 
+func TestSettingsOnAnUnknownHost(t *testing.T) {
+	e, _, errb, _ := peerEnv(t, map[string]string{"COMEBYE_LOGIN": "me@example.com"}, map[string]answer{
+		"GET /api/hosts/nope/settings": {404, `{"code":"unknown_host","message":"no such host"}`},
+	})
+	if code := run(e, "settings", "set", "--host", "nope", "--default-kind", "pi"); code != 1 || strings.Contains(errb.String(), "too old") || !strings.Contains(errb.String(), "no host of that name") {
+		t.Fatalf("exit %d %s", code, errb)
+	}
+}
+
 func TestPeerListShowsDefaultsAndPeerShow(t *testing.T) {
 	answers := map[string]answer{
 		"GET /api/peers":               {200, peersJSON},

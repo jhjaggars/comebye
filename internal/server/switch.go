@@ -81,8 +81,8 @@ func (s *Server) switchModel(ctx context.Context, target string, b switchBody) (
 	}
 	// A slash command typed while the agent works would be queued as a
 	// message, and one typed over a dialog would answer it.
-	if agent.Status != herdr.StatusIdle {
-		return fail(http.StatusConflict, "agent_busy", "the agent is "+string(agent.Status)+": switch its model when it is idle")
+	if agent.Status != herdr.StatusIdle && agent.Status != herdr.StatusDone {
+		return fail(http.StatusConflict, "agent_busy", "the agent is "+string(agent.Status)+": switch its model when it is idle or done")
 	}
 	if err := s.guardPrompt(ctx, *agent); err != nil {
 		var he *herdr.Error
