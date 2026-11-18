@@ -27,25 +27,43 @@ merge_go=false; merge_browser=false; everything=false
 add_script() { case " $scripts " in *" $1 "*) ;; *) scripts="$scripts $1";; esac; }
 add_pkg() { case " $go_pkgs " in *" $1 "*) ;; *) go_pkgs="$go_pkgs $1";; esac; }
 
+# The package a path belongs to: its first two components (internal/x, tools/x), so a testdata file or a
+# subdirectory names the package that owns it, not a directory with no Go files.
+pkg_of() { local a b rest; IFS=/ read -r a b rest <<< "$1"; echo "./$a/$b"; }
+
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in
+    # Files that Go tests of OTHER packages read straight from disk (os.ReadFile("../../...")): they are not
+    # imports, so the importer walk below cannot see them. Keep this list in step with those tests:
+    #   pageskit_test.go: web/themes.js, web/index.html   lifecycle_test.go, handoff_test.go: docs/lifecycle.md
+    #   handoff_test.go, playbook_test.go: internal/playbook/playbook.md   interop_test.go: web/test/unlockinterop.mjs
+    #   release_test.go: tools/release/tag   provision/server tests: tools/worker/testdata, internal/provision/testdata
+    #   dialog tests (state, server): internal/dialog/testdata
+    docs/lifecycle.md) lint=true; merge_go=true; add_pkg ./internal/cli; add_pkg ./internal/server ;;
+    internal/playbook/*) lint=true; merge_go=true; add_pkg ./internal/playbook; add_pkg ./internal/server ;;
+    internal/dialog/*) lint=true; merge_go=true; add_pkg ./internal/dialog; add_pkg ./internal/state; add_pkg ./internal/server ;;
+    web/test/unlockinterop.mjs) lint=true; merge_browser=true; merge_go=true; add_script markdown; add_pkg ./internal/gpgunlock ;;
+    tools/release/tag) lint=true; merge_go=true; add_pkg ./tools/release; add_pkg ./internal/release ;;
+    tools/worker/testdata/*) lint=true; add_script provision; add_script provhosts; merge_browser=true; merge_go=true; add_pkg ./tools/worker; add_pkg ./internal/provision; add_pkg ./internal/server ;;
     docs/*|*.md|LICENSE|.gitignore|deploy/*) ;;                       # nothing to test
     .github/*|go.mod|go.sum|tools/uitest/package.json|tools/uitest/package-lock.json|tools/uitest/run.sh|tools/uitest/lib.mjs|tools/ci/*)
       everything=true ;;
-    web/themes.js) lint=true; smoke=true; visual=true; merge_browser=true ;;
+    web/themes.js) lint=true; smoke=true; visual=true; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
     web/sidepanel.js) lint=true; smoke=true; add_script sidepanel; merge_browser=true; add_pkg ./web ;;
     web/test/*) lint=true; add_script markdown; merge_browser=true ;;
-    web/*) lint=true; smoke=true; visual=true; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server ;;
+    web/*) lint=true; smoke=true; visual=true; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
     main.go|announce.go|main_test.go) lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg . ;;
     internal/server/*|internal/herdr/*|internal/state/*)
-      lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg "./$(dirname "$f")" ;;
+      lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
     internal/pageskit/*) lint=true; smoke=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
     internal/fleet/*) lint=true; add_script peers; merge_browser=true; merge_go=true; add_pkg ./internal/fleet ;;
-    tools/worker/*|internal/provision/*) lint=true; add_script provision; add_script provhosts; merge_browser=true; merge_go=true; add_pkg "./$(dirname "$f")" ;;
+    tools/worker/*|internal/provision/*) lint=true; add_script provision; add_script provhosts; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")"
+      # internal/server's tests read the provision and tools/worker golden files and testdata
+      add_pkg ./internal/provision; add_pkg ./internal/server ;;
     internal/cli/*) lint=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/cli ;;
     internal/usage/*) lint=true; add_script usage; merge_browser=true; merge_go=true; add_pkg ./internal/usage ;;
-    internal/release/*|internal/upgrade/*) lint=true; add_script releaseauto; merge_browser=true; merge_go=true; add_pkg "./$(dirname "$f")" ;;
+    internal/release/*|internal/upgrade/*) lint=true; add_script releaseauto; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
     # The day-in-the-life smoke (tools/smoke) runs whenever the browser smoke set does (see ci.yml); its own files run it.
     tools/smoke/*) lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg ./tools/smoke/fakeherdr ;;
     # The helper the GPG scripts share: both of them, and (through tools/smoke/day.mjs) the day in the life.
@@ -55,8 +73,8 @@ while IFS= read -r f; do
       b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in buttons|chips|controls|fontsetting|decisionsets|starters|empties|contrast|tokens) visual=true;; esac ;;
     tools/uitest/*|tools/devserver/*) lint=true; smoke=true; merge_browser=true ;;
     # A leaf Go package: nothing the browser scripts reach (they go through the hub), so Go tests only.
-    internal/*/*.go|internal/*/*/*) lint=true; merge_go=true; add_pkg "./$(dirname "$f")" ;;
-    tools/demo/*|tools/genicon/*|tools/release/*|tools/stt/*) lint=true; merge_go=true; add_pkg "./$(dirname "$f")" ;;
+    internal/*/*.go|internal/*/*/*) lint=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
+    tools/demo/*|tools/genicon/*|tools/release/*|tools/stt/*) lint=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
     *.go) lint=true; merge_go=true; add_pkg . ;;
     *) everything=true ;;                                             # unknown: run everything
   esac
