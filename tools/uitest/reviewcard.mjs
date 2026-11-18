@@ -203,6 +203,10 @@ for (const width of [1280, 390]) {
         const set = { decisions: [
           { id: "D1", title: "Where tenants live", recommend: 1, options: [{ label: "One bucket", short: "1 bucket" }, { label: "A bucket each", short: "each" }] },
           { id: "D2", title: "Rollout", recommend: 1, options: [{ label: "Flag per tenant", short: "flag" }, { label: "All at once", short: "all" }] }] };
+        // The check before closed its split with history.back(), which pops later; a pop that lands after this check's split opens
+        // closes it again (syncSplit), and #pgs-note never appears. Wait for the history entry to settle first.
+        await page.waitForSelector("#rs", { state: "hidden" });
+        await page.waitForFunction(() => !(history.state && history.state.rs));
         const r = await fetch(base + "/api/todos", { method: "POST", headers: J, body: JSON.stringify({ question: "Decisions from the report", kind: "decision", no_wait: true, set, page: { id: withPic } }) });
         const t = (await r.json()).todo; ids.push(t.id);
         await fetch(base + `/api/todos/${t.id}/draft`, { method: "PUT", headers: J, body: JSON.stringify({ accept_suggestions: true, choices: { D1: { option: 1, confirmed: true }, D2: { option: 1, confirmed: true } } }) });
