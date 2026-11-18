@@ -367,7 +367,29 @@
   const wrap = pref("wrap", API.WRAPS);
   API.KEY_WRAP = wrap.key; API.wrapChoice = wrap.choice; API.wrapApply = wrap.apply; API.wrapSet = wrap.set;
   wrap.apply();
+  // Open by default: whether a thinking line and a tool run list start open ("", "think", "tools", "both"). It only
+  // sets a line's first state; a line the user opened or closed by hand keeps theirs (web/app.js).
+  API.OPENS = [
+    { id: "", name: "Off", sub: "folded until you open it" },
+    { id: "think", name: "Think", sub: "" },
+    { id: "tools", name: "Tools", sub: "" },
+    { id: "both", name: "Both", sub: "" },
+  ];
+  API.ONOFF = [
+    { id: "", name: "Off", sub: "folded, the default" },
+    { id: "on", name: "On", sub: "open when it appears" },
+  ];
+  const open = pref("open", API.OPENS);
+  API.KEY_OPEN = open.key; API.openChoice = open.choice; API.openApply = open.apply; API.openSet = open.set;
+  API.openThink = () => { const v = open.choice(); return v === "think" || v === "both"; };
+  API.openTools = () => { const v = open.choice(); return v === "tools" || v === "both"; };
+  API.openPart = (which, on) => {
+    let t = API.openThink(), k = API.openTools();
+    if (which === "think") t = on; else k = on;
+    open.set(t && k ? "both" : t ? "think" : k ? "tools" : "");
+  };
+  open.apply();
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
-  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); if (e.key === API.KEY_WRAP) API.wrapApply(); });
+  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); if (e.key === API.KEY_WRAP) API.wrapApply(); if (e.key === API.KEY_OPEN) API.openApply(); });
 })(typeof window !== "undefined" ? window : globalThis);

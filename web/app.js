@@ -9576,7 +9576,8 @@ function sxAppearance() {
       <div class="sx-prev-wrap" aria-hidden="true"><div class="sx-prev" inert>
         <div class="msg user"><div class="bubble">Can you make the text easier to read?</div></div>
         <div class="msg assistant"><div class="bubble md"><p>This is how a reply reads on this window. A command such as <code>go test ./...</code> sits inside a sentence.</p><pre><code>func Scale(n int) int {\n\treturn n * 2 // a long comment on one line, longer than a phone is wide: scroll sideways to read it, or wrap it\n}</code></pre></div></div>
-        <div class="toolrun"><span class="tr-line"><span class="tr-dot"></span><span class="tr-txt">Ran 3 commands</span><span class="tr-chev">›</span></span></div>
+        <div class="thinking"><span class="tr-line" aria-expanded="${CT.openThink()}"><span class="tr-dot"></span><span class="tr-txt">Thought for 4s</span><span class="tr-chev">›</span></span><div class="think-body md"${CT.openThink() ? "" : " hidden"}><p>The user wants the text easier to read.</p></div></div>
+        <div class="toolrun"><span class="tr-line" aria-expanded="${CT.openTools()}"><span class="tr-dot"></span><span class="tr-txt">Ran 3 commands</span><span class="tr-chev">›</span></span><div class="tr-list"${CT.openTools() ? "" : " hidden"}><div class="tr-item"><span class="tr-row"><span class="tr-v">Bash</span><span class="tr-o">go test ./...</span></span></div></div></div>
       </div></div>
       <p class="sx-note">A preview of the conversation at this window's width.</p></div>
     <div class="sx-field"><div class="sx-lbl" id="sx-sp-lbl">Spacing</div>
@@ -9585,7 +9586,12 @@ function sxAppearance() {
     <h3 class="sx-grp">Code and conversation</h3>
     <div class="sx-field"><div class="sx-lbl" id="sx-wrap-lbl">Wrap long code lines</div>
       ${sxRadios("wrap", "sx-wrap-lbl", CT.WRAPS, CT.wrapChoice())}
-      <p class="sx-note">Off scrolls a long line sideways. On wraps it in code blocks and tool output. Copying gives the original text either way. The preview above follows.</p></div>`;
+      <p class="sx-note">Off scrolls a long line sideways. On wraps it in code blocks and tool output. Copying gives the original text either way. The preview above follows.</p></div>
+    <div class="sx-field"><div class="sx-lbl" id="sx-openthink-lbl">Open thinking by default</div>
+      ${sxRadios("openthink", "sx-openthink-lbl", CT.ONOFF, CT.openThink() ? "on" : "")}</div>
+    <div class="sx-field"><div class="sx-lbl" id="sx-opentools-lbl">Open tool run lists by default</div>
+      ${sxRadios("opentools", "sx-opentools-lbl", CT.ONOFF, CT.openTools() ? "on" : "")}
+      <p class="sx-note">Sets only how a line first appears. One you open or close yourself stays as you left it. The preview above follows.</p></div>`;
 }
 
 function sxRadios(kind, lbl, list, cur) {
@@ -9603,7 +9609,7 @@ function sxFitPreview() {
 }
 
 // The choice for a radio group by its kind ("col", "rs", "sp"): the list, and how to save it.
-const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet] });
+const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet], openthink: [CT.ONOFF, (v) => CT.openPart("think", !!v)], opentools: [CT.ONOFF, (v) => CT.openPart("tools", !!v)] });
 function sxPick(kind, val) {
   const p = SX_PREFS()[kind];
   if (!p) return;
@@ -9650,7 +9656,7 @@ function renderSettings() {
   const focus = document.activeElement && document.activeElement.id;
   el.innerHTML = h;
   const f = (sx.rename && $("sx-rename")) || (focus && $(focus));
-  if (focus && /^sx-(col|rs|sp|wrap)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
+  if (focus && /^sx-(col|rs|sp|wrap|openthink|opentools)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
   sxFitPreview();
   if (f && f !== document.activeElement && (sx.rename || focus === "sx-name")) { f.focus({ preventScroll: true }); if (sx.rename) f.select(); }
 }
@@ -9763,7 +9769,7 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
-    case "col": case "rs": case "sp": case "wrap": sxPick(b.dataset.sx, b.dataset.val); break;
+    case "col": case "rs": case "sp": case "wrap": case "openthink": case "opentools": sxPick(b.dataset.sx, b.dataset.val); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
     case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
@@ -9808,7 +9814,7 @@ function initSettings() {
   $("sx-view").addEventListener("keydown", sxColKey);
   // The strip is drawn for this window, and another tab can change the width: redraw the open screen.
   window.addEventListener("resize", () => { if (sx.route) renderSettings(); });
-  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP || e.key === CT.KEY_WRAP)) renderSettings(); });
+  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP || e.key === CT.KEY_WRAP || e.key === CT.KEY_OPEN)) renderSettings(); });
   $("sx-view").addEventListener("submit", settingsSubmit);
 }
 
@@ -11003,6 +11009,7 @@ function renderToolRun() {
     setRunOpen(d, list.hidden);
   });
   d.querySelector(".tr-more").addEventListener("click", () => { d._all = true; applyRunCap(d); });
+  if (CT.openTools()) setRunOpen(d, true); // Open by default: the first state only; a click sets _manual
   return d;
 }
 
@@ -11056,7 +11063,7 @@ function restoreReading(chatEl, spot) {
 function syncLiveRuns(chatEl, working) {
   const todo = [];
   for (const run of chatEl.querySelectorAll(":scope > .toolrun")) {
-    const want = run._manual !== undefined ? run._manual : isLiveRun(run, working);
+    const want = run._manual !== undefined ? run._manual : CT.openTools() || isLiveRun(run, working);
     if (want !== !run.querySelector(".tr-list").hidden) todo.push([run, want]);
   }
   if (!todo.length) return;
@@ -11283,12 +11290,30 @@ function renderThinking(text, ms, key, live) {
   const line = d.querySelector(".tr-line"), body = d.querySelector(".think-body");
   line.addEventListener("click", () => {
     const open = body.hidden;
+    d._manual = open; // the user's own open or close beats the default
     body.hidden = !open;
     line.setAttribute("aria-expanded", String(open));
     if (open) fillThinking(d);
   });
+  if (CT.openThink()) { body.hidden = false; line.setAttribute("aria-expanded", "true"); fillThinking(d); }
   return d;
 }
+// A change to Open by default in another tab reaches lines already on screen that the user has not toggled.
+window.addEventListener("storage", (e) => {
+  if (e.key !== CT.KEY_OPEN) return;
+  for (const root of [$("chat"), $("sv-chat")]) {
+    if (!root) continue;
+    for (const d of root.querySelectorAll(".thinking")) {
+      if (d._manual !== undefined) continue;
+      const body = d.querySelector(".think-body"), on = CT.openThink();
+      body.hidden = !on; d.querySelector(".tr-line").setAttribute("aria-expanded", String(on));
+      if (on) fillThinking(d);
+    }
+  }
+  const c = $("chat"), sv = $("sv-chat");
+  if (c) syncLiveRuns(c, !!activity.seenAt);
+  if (sv) for (const run of sv.querySelectorAll(".toolrun")) if (run._manual === undefined) setRunOpen(run, CT.openTools());
+});
 function fillThinking(d) {
   const body = d.querySelector(".think-body");
   if (body.dataset.md === d._text) return;
