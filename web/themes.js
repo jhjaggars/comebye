@@ -248,6 +248,7 @@
   const ls = {
     get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+    del(k) { try { localStorage.removeItem(k); } catch (e) {} },
   };
   const mq = root.matchMedia ? root.matchMedia("(prefers-color-scheme: light)") : null;
   const osLight = () => !!(mq && mq.matches);
@@ -389,6 +390,11 @@
     open.set(t && k ? "both" : t ? "think" : k ? "tools" : "");
   };
   open.apply();
+  // Reset to defaults (Settings > Appearance): removes the layout choices above (col, rs, sp, wrap, open) and puts
+  // each default on <html> at once. The theme and the font are not layout and stay. Removing a key gives other
+  // tabs a storage event, and their listeners below re-apply.
+  const PREFS = [col, rs, sp, wrap, open];
+  API.resetAppearance = () => { for (const p of PREFS) { ls.del(p.key); p.apply(); } };
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
   root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); if (e.key === API.KEY_WRAP) API.wrapApply(); if (e.key === API.KEY_OPEN) API.openApply(); });

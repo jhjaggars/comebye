@@ -124,7 +124,7 @@ for (const dark of [true, false]) {
         same(await page.locator("#sx-view [role=radiogroup]").count(), 6, "six radio groups");
         const sel = '[aria-labelledby="sx-wrap-lbl"] .sx-radio[aria-checked="true"] .sx-rn';
         same(await page.locator(sel).textContent(), "Off", "default checked");
-        same(await page.locator("#sx-view .sx-grp").textContent(), "Code and conversation", "group heading");
+        same(await page.locator("#sx-view .sx-grp").first().textContent(), "Code and conversation", "group heading");
         const prev = () => page.evaluate(() => getComputedStyle(document.querySelector(".sx-prev pre")).whiteSpace);
         same(await prev(), "pre", "preview at Off");
         await page.locator("#sx-wrap-default").focus();

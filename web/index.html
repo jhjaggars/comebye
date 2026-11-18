@@ -1233,6 +1233,9 @@
       #sheet-bk[hidden] { display: none; }
     }
     @media (prefers-reduced-motion: reduce) { .pop, #sheet-bk { animation: none !important; } }
+    /* The Theme and Font rows in Settings (a full-screen view, above popups) open these two panels: lift them, and the phone backdrop, over it. */
+    body:has(#settings:not([hidden])) :is(#theme-panel, #font-panel) { z-index: calc(var(--z-screen) + 2); }
+    body:has(#settings:not([hidden])) #sheet-bk { z-index: calc(var(--z-screen) + 1); }
 
     /* Ready-to-remove review. */
     #review, #switch, #mk, #fs, #pk, #ps, #rt { position: fixed; inset: 0; z-index: var(--z-screen); background: var(--bg); display: flex; flex-direction: column; }
@@ -2636,6 +2639,10 @@
     .sx-field { display: flex; flex-direction: column; gap: var(--sp-8); min-width: 0; }
     .sx-lbl { font-size: var(--fs-14); font-weight: 600; }
     .sx-grp { margin: var(--sp-6) 0 0; font-size: var(--fs-12); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .sx-rows { gap: var(--sp-6); }
+    .sx-row { display: flex; align-items: center; gap: var(--sp-10); min-height: var(--hit-44); padding: var(--sp-6) var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel2); color: var(--text); font: inherit; font-size: var(--fs-14); text-align: left; cursor: pointer; }
+    .sx-row .sx-rl { font-weight: 600; }
+    .sx-row .sx-rv { margin-left: auto; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sx-radios { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--sp-6); }
     .sx-radio { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: var(--sp-2); min-height: var(--hit-44); padding: var(--sp-6) var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel2); color: var(--text); font: inherit; font-size: var(--fs-14); text-align: left; cursor: pointer; }
     .sx-radio small { color: var(--muted); font-size: var(--fs-12); }

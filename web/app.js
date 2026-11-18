@@ -4562,8 +4562,8 @@ const POPS = {
   // Esc (the palette's esc goes back a step first) and puts the focus back. noSheet: no phone backdrop.
   palette: { id: "palette", noSheet: true, close: () => window.CMDK && CMDK.close(false), trigger: () => window.CMDK && CMDK.from(), esc: () => !!(window.CMDK && CMDK.back()) },
   cheats: { id: "cheats", noSheet: true, close: () => window.CMDK && CMDK.closeCheats(false), trigger: () => window.CMDK && CMDK.cheatFrom() },
-  theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => $("btn-fleet") },
-  font: { id: "font-panel", close: () => toggleFontPanel(false), trigger: () => $("btn-fleet") },
+  theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => sxRow("theme") || $("btn-fleet") },
+  font: { id: "font-panel", close: () => toggleFontPanel(false), trigger: () => sxRow("font") || $("btn-fleet") },
   pgsmenu: { id: "pgs-menu", close: () => pgsPop("pgsmenu", false), trigger: () => $("pgs-menub") },
   pgsinfo: { id: "pgs-infopop", close: () => pgsPop("pgsinfo", false), trigger: () => $("pgs-infob") },
   notify: { id: "notify-panel", close: () => toggleNotifyPanel(false), trigger: () => $("btn-notify") },
@@ -4600,10 +4600,13 @@ function placePop(name, anchor) {
   const el = $(POPS[name].id);
   el.style.left = el.style.top = el.style.maxHeight = "";
   if (isSheet() || !anchor) return;
-  const r = anchor.getBoundingClientRect(), w = el.offsetWidth, top = r.bottom + 4;
+  const r = anchor.getBoundingClientRect(), w = el.offsetWidth;
+  let top = r.bottom + 4, room = innerHeight - top - 8;
+  // A button low on the screen (a row at the foot of Settings): open upward when that has more room.
+  if (room < Math.min(el.scrollHeight, 280) && r.top - 12 > room) { room = Math.min(el.scrollHeight, r.top - 12); top = r.top - 4 - room; }
   el.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.right - w)) + "px";
   el.style.top = top + "px";
-  el.style.maxHeight = Math.max(160, innerHeight - top - 8) + "px";
+  el.style.maxHeight = Math.max(160, room) + "px";
 }
 
 function initPopovers() {
@@ -4743,6 +4746,7 @@ function applyTheme() {
   if (sw) sw.innerHTML = swatch(id);
   const v = $("f-theme-val");
   if (v) v.textContent = themeLabel();
+  sxRowVals();
   const q = $("btn-theme-q");
   if (q) {
     const t = CT.byId[id], cp = CT.counterpart(id), other = t.mode === "dark" ? "light" : "dark";
@@ -4763,7 +4767,7 @@ function quickTheme() {
   toast("Theme: " + CT.byId[cp].name);
 }
 
-function toggleThemePanel(show) {
+function toggleThemePanel(show, anchor) {
   const p = $("theme-panel");
   const open = show ?? p.hidden;
   if (open === !p.hidden) return;
@@ -4771,7 +4775,7 @@ function toggleThemePanel(show) {
   if (open) {
     tp.step = 1;
     renderThemePanel();
-    placePop("theme", $("btn-fleet"));
+    placePop("theme", anchor || $("btn-fleet"));
     popOpened("theme");
     (p.querySelector('[aria-checked="true"]') || popItems(p)[0])?.focus();
   } else {
@@ -4834,16 +4838,17 @@ function applyFont() {
   CT.fontApply();
   const v = $("f-font-val");
   if (v) v.textContent = fontLabel();
+  sxRowVals();
 }
 
-function toggleFontPanel(show) {
+function toggleFontPanel(show, anchor) {
   const p = $("font-panel");
   const open = show ?? p.hidden;
   if (open === !p.hidden) return;
   p.hidden = !open;
   if (open) {
     renderFontPanel();
-    placePop("font", $("btn-fleet"));
+    placePop("font", anchor || $("btn-fleet"));
     popOpened("font");
     (p.querySelector('[aria-checked="true"]') || popItems(p)[0])?.focus();
   } else {
@@ -9591,7 +9596,32 @@ function sxAppearance() {
       ${sxRadios("openthink", "sx-openthink-lbl", CT.ONOFF, CT.openThink() ? "on" : "")}</div>
     <div class="sx-field"><div class="sx-lbl" id="sx-opentools-lbl">Open tool run lists by default</div>
       ${sxRadios("opentools", "sx-opentools-lbl", CT.ONOFF, CT.openTools() ? "on" : "")}
-      <p class="sx-note">Sets only how a line first appears. One you open or close yourself stays as you left it. The preview above follows.</p></div>`;
+      <p class="sx-note">Sets only how a line first appears. One you open or close yourself stays as you left it. The preview above follows.</p></div>
+    <h3 class="sx-grp">Theme and font</h3>
+    <div class="sx-field sx-rows">
+      <button type="button" class="sx-row" id="sx-row-theme" data-sx="theme" aria-haspopup="menu"><span class="sx-rl">Theme</span><span class="sx-rv" id="sx-theme-val">${esc(themeLabel())}</span><span class="sx-chev" aria-hidden="true">›</span></button>
+      <button type="button" class="sx-row" id="sx-row-font" data-sx="font" aria-haspopup="menu"><span class="sx-rl">Font</span><span class="sx-rv" id="sx-font-val">${esc(fontLabel())}</span><span class="sx-chev" aria-hidden="true">›</span></button></div>
+    <div class="sx-field"><button type="button" class="btn" id="sx-reset" data-sx="reset">Reset to defaults</button>
+      <p class="sx-note">Puts reading width, text size, spacing, wrapping and open by default back to the default. Your theme and font stay.</p></div>`;
+}
+
+// The Theme and Font rows open the same panels as the fleet menu, anchored under the row; the panel's trigger
+// is the row, so Esc and a pick return the focus to it.
+const sxRow = (n) => { const b = $("sx-row-" + n); return b && b.isConnected && b.getClientRects().length ? b : null; };
+function sxOpenPanel(which) {
+  (which === "theme" ? toggleThemePanel : toggleFontPanel)(true, sxRow(which));
+}
+// A pick, or another tab, changed the theme or font: keep the two rows' values true.
+function sxRowVals() {
+  const t = $("sx-theme-val"), f = $("sx-font-val");
+  if (t) t.textContent = themeLabel();
+  if (f) f.textContent = fontLabel();
+}
+function sxReset() {
+  CT.resetAppearance();
+  renderSettings();
+  const b = $("sx-view").querySelector("#sx-col-default");
+  if (b) b.focus({ preventScroll: true });
 }
 
 function sxRadios(kind, lbl, list, cur) {
@@ -9770,6 +9800,8 @@ function settingsClick(ev) {
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
     case "col": case "rs": case "sp": case "wrap": case "openthink": case "opentools": sxPick(b.dataset.sx, b.dataset.val); break;
+    case "theme": case "font": sxOpenPanel(b.dataset.sx); break;
+    case "reset": sxReset(); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
     case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
