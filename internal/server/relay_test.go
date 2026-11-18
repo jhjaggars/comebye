@@ -87,6 +87,38 @@ func (r *ansRig) state(id string) Todo {
 	return it
 }
 
+// quiet waits until no background relay of the item is running. A queued or
+// given-up relay records its state before the goroutine drops its in-flight
+// mark, and a deliverTodoNotices pass in between is skipped, so a test that
+// settles the queue and then runs one pass must wait here first.
+func (r *ansRig) quiet(t *testing.T, id string) {
+	t.Helper()
+	until(t, "the relay goroutine to finish", func() bool {
+		r.s.todos.mu.Lock()
+		defer r.s.todos.mu.Unlock()
+		return !r.s.todos.relaying[id]
+	})
+}
+
+// retryNow lets the retry pause of a failed relay pass. It waits for the
+// relay goroutine first: that records the failure time after the item's
+// Relay state, so clearing it earlier is undone and the next pass is skipped.
+func (r *ansRig) retryNow(t *testing.T, id string) {
+	t.Helper()
+	r.quiet(t, id)
+	r.s.todos.mu.Lock()
+	r.s.todos.relayFail = map[string]time.Time{}
+	r.s.todos.mu.Unlock()
+}
+
+// eventsN waits for n events of the kind: the hub logs a relay's event after
+// it closes the item, so the closed state is not a signal that it is there.
+func (r *ansRig) eventsN(t *testing.T, kind string, n int) []Event {
+	t.Helper()
+	until(t, "the "+kind+" event(s)", func() bool { return len(r.events(kind)) >= n })
+	return r.events(kind)
+}
+
 func (r *ansRig) events(kind string) []Event {
 	return r.s.events.query(time.Time{}, []string{kind}, 0)
 }
@@ -109,7 +141,9 @@ func TestRelayPassesTheAnswerClosesAndLogs(t *testing.T) {
 	if g := r.state(it.ID); g.ClosedBy != "hub" || g.Notice != nil {
 		t.Fatalf("closed = %+v", g)
 	}
-	ev := r.events(evRelay)
+	ev := r.eventsN(t, evRelay, 1)
+	pause() // a wrong second event would show up now
+	ev = r.events(evRelay)
 	if len(ev) != 1 || ev[0].Subject != it.ID || ev[0].Who != "home" || !strings.Contains(ev[0].Text, "ok 2") || !strings.Contains(ev[0].Text, "closed") {
 		t.Fatalf("events = %+v", ev)
 	}
@@ -118,6 +152,7 @@ func TestRelayPassesTheAnswerClosesAndLogs(t *testing.T) {
 		t.Fatalf("the coordinator was told: %v", n)
 	}
 	// A later pass sends nothing more.
+	r.quiet(t, it.ID)
 	r.s.deliverTodoNotices(r.s.fleet.Agents())
 	pause()
 	if n := len(r.relays()); n != 1 {
@@ -226,12 +261,13 @@ func TestRelayToAParkedAgentQueuesAndClosesOnDelivery(t *testing.T) {
 		t.Fatalf("answered=%v relays=%v told=%v", g.State, r.relays(), r.told())
 	}
 	// The queue delivers it (after the resume): the next pass closes the item.
+	r.quiet(t, it.ID)
 	if _, err := r.s.pq.settle(q[0].ID, QueueDelivered, false); err != nil {
 		t.Fatal(err)
 	}
 	r.s.deliverTodoNotices(r.s.fleet.Agents())
 	until(t, "the item to close", func() bool { return r.state(it.ID).State == TodoDone })
-	if ev := r.events(evRelay); len(ev) != 2 { // queued, then relayed
+	if ev := r.eventsN(t, evRelay, 2); len(ev) != 2 { // queued, then relayed
 		t.Fatalf("events = %+v", ev)
 	}
 	pause()
@@ -251,6 +287,7 @@ func TestRelayQueueExpiryTellsTheCoordinator(t *testing.T) {
 		t.Fatalf("queue = %+v", q)
 	}
 	// It expires on the queue (2 hours without the agent taking it).
+	r.quiet(t, it.ID)
 	if _, err := r.s.pq.settle(q[0].ID, QueueExpired, true); err != nil {
 		t.Fatal(err)
 	}
@@ -296,10 +333,7 @@ func TestRelayFailedSendsKeepTheItemAndTellTheCoordinator(t *testing.T) {
 			g := r.state(it.ID)
 			return g.Relay != nil && (g.Relay.Tries == n || g.Relay.State == relayGaveUp)
 		})
-		// Let the retry pause pass.
-		r.s.todos.mu.Lock()
-		r.s.todos.relayFail = map[string]time.Time{}
-		r.s.todos.mu.Unlock()
+		r.retryNow(t, it.ID)
 	}
 	fail(1)
 	if n := r.told(); len(n) != 0 {
@@ -336,9 +370,7 @@ func TestRelayAFailureThatRecoversIsRelayedOnce(t *testing.T) {
 	r.answer(t, it.ID, "the second")
 	until(t, "a failed try", func() bool { g := r.state(it.ID); return g.Relay != nil && g.Relay.Tries == 1 })
 	r.setErr(nil)
-	r.s.todos.mu.Lock()
-	r.s.todos.relayFail = map[string]time.Time{}
-	r.s.todos.mu.Unlock()
+	r.retryNow(t, it.ID)
 	r.s.deliverTodoNotices(r.s.fleet.Agents())
 	until(t, "the item to close", func() bool { return r.state(it.ID).State == TodoDone })
 	if n := len(r.relays()); n != 1 || len(r.told()) != 0 {
@@ -422,7 +454,7 @@ func TestRelayDecisionSetEarlyThenFinal(t *testing.T) {
 	if n := r.told(); len(n) != 0 {
 		t.Fatalf("told = %v", n)
 	}
-	if ev := r.events(evRelay); len(ev) != 2 {
+	if ev := r.eventsN(t, evRelay, 2); len(ev) != 2 {
 		t.Fatalf("events = %+v", ev)
 	}
 }

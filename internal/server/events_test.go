@@ -28,7 +28,12 @@ func allEvents(s *Server, kinds ...string) []Event { return s.events.query(time.
 // and, optionally, its landing report still to come.
 func landedFor(t *testing.T, s *Server, coord herdr.AgentInfo, ci *ledger.CI, awaitReport bool) ledger.Entry {
 	t.Helper()
-	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, coord)
+	// The coordinator is not passed to cbFinished: the observer's own
+	// deliverCallbacks pass races the report capture, and with the coordinator
+	// idle in the fleet it would send the "finished" notice before this test
+	// makes the entry landed. Without it the requester is not in the fleet, so
+	// nothing is sent until the test's own deliverAll.
+	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"})
 	if _, _, err := s.ledger.Update(e.ID, func(x *ledger.Entry) {
 		x.Status = ledger.Landed
 		x.AwaitLandReport = awaitReport
@@ -103,7 +108,7 @@ func TestJudgementNoticesStayMessages(t *testing.T) {
 	})
 	t.Run("landing failed", func(t *testing.T) {
 		s, fh, coord := eventsServer(t)
-		e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, coord)
+		e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"})
 		if _, _, err := s.ledger.Update(e.ID, func(x *ledger.Entry) {
 			x.LandCheck = &ledger.LandCheck{State: ledger.LandFailed, Reason: "conflict", At: time.Now().Add(time.Minute)}
 		}); err != nil {
@@ -119,7 +124,7 @@ func TestJudgementNoticesStayMessages(t *testing.T) {
 	})
 	t.Run("finished report", func(t *testing.T) {
 		s, fh, coord := eventsServer(t)
-		e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, coord)
+		e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"})
 		deliverAll(t, s, coord, e.ID)
 		if n := promptCount(fh); n != 1 {
 			t.Fatalf("a finished report must stay a message: %d prompts", n)
