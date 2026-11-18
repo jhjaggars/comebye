@@ -203,19 +203,24 @@ for (const width of [1280, 390]) {
         const set = { decisions: [
           { id: "D1", title: "Where tenants live", recommend: 1, options: [{ label: "One bucket", short: "1 bucket" }, { label: "A bucket each", short: "each" }] },
           { id: "D2", title: "Rollout", recommend: 1, options: [{ label: "Flag per tenant", short: "flag" }, { label: "All at once", short: "all" }] }] };
-        // The check before closed its split with history.back(), which pops later; a pop that lands after this check's split opens
-        // closes it again (syncSplit), and #pgs-note never appears. Wait for the history entry to settle first.
-        await page.waitForSelector("#rs", { state: "hidden" });
-        await page.waitForFunction(() => !(history.state && history.state.rs));
         const r = await fetch(base + "/api/todos", { method: "POST", headers: J, body: JSON.stringify({ question: "Decisions from the report", kind: "decision", no_wait: true, set, page: { id: withPic } }) });
         const t = (await r.json()).todo; ids.push(t.id);
         await fetch(base + `/api/todos/${t.id}/draft`, { method: "PUT", headers: J, body: JSON.stringify({ accept_suggestions: true, choices: { D1: { option: 1, confirmed: true }, D2: { option: 1, confirmed: true } } }) });
         await page.evaluate(async () => { todos.loadedAt = 0; todos.openId = null; await loadTodos(); renderTodos(true); });
+        // Closing a split (the one the checks before left open, or the openId reset above) calls history.back(), which pops
+        // later; a pop that lands after this check's split opens closes it again (syncSplit), and #pgs-note never appears.
+        // Wait for the split to be gone and the history entry settled before opening.
+        await page.waitForSelector("#rs", { state: "hidden" });
+        await page.waitForFunction(() => !(history.state && history.state.rs));
         await page.locator(`${LIST} .td-item[data-id="${t.id}"] .td-row`).click();
         await page.waitForSelector(`#rs .td-item.open[data-id="${t.id}"] .ds-set`);
         let fr; for (let i = 0; i < 60 && !fr; i++) { fr = page.frames().find((x) => x.url().includes("/p/" + withPic + "/")); if (!fr) await page.waitForTimeout(100); }
         await fr.evaluate(() => parent.postMessage({ type: "comebye-selection", v: 1, quote: "Each card shows", before: "", after: " a picture" }, "*"));
         await page.locator("#pgs-addc").click();
+        await page.locator("#pgs-note").waitFor({ timeout: 5000 }).catch(async (e) => {
+          await page.screenshot({ path: `${out}/split-set-FAIL-${width}-${dark ? "dark" : "light"}.png` }).catch(() => {});
+          throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ rsHidden: !document.querySelector("#rs:not([hidden])"), hist: history.state, sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, key: pgc.id + "/" + pgc.ver, frames: document.querySelectorAll("iframe.pgs-frame").length }))));
+        });
         await page.locator("#pgs-note").fill("Is one bucket enough?");
         await page.locator("#pgs-noteadd").click();
         await page.waitForSelector("#rs-notes:not([hidden])");
