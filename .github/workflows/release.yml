@@ -27,9 +27,11 @@ on:
 permissions:
   contents: read
 
-# The Go the workflow installs (go.mod's toolchain line) is the one that runs: no second toolchain is downloaded into the
-# module cache, where the setup-go cache restore then hits "Cannot open: File exists" on it.
+# One Go version, the one on go.mod's toolchain line (the lint job checks they agree). setup-go v7 installs the `go` line's
+# 1.26.0 when given go.mod, and Go then downloads the toolchain into the module cache, where the cache restore hits
+# "Cannot open: File exists" on it. Installing the right one and never switching (GOTOOLCHAIN=local) avoids both.
 env:
+  GO_VERSION: "1.26.11"
   GOTOOLCHAIN: local
 
 jobs:
@@ -51,7 +53,7 @@ jobs:
       # go.mod's toolchain line picks the exact Go release.
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
 
       - name: gate
         id: gate

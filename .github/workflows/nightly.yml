@@ -14,9 +14,11 @@ on:
 permissions:
   contents: read
 
-# The Go the workflow installs (go.mod's toolchain line) is the one that runs: no second toolchain is downloaded into the
-# module cache, where the setup-go cache restore then hits "Cannot open: File exists" on it.
+# One Go version, the one on go.mod's toolchain line (the lint job checks they agree). setup-go v7 installs the `go` line's
+# 1.26.0 when given go.mod, and Go then downloads the toolchain into the module cache, where the cache restore hits
+# "Cannot open: File exists" on it. Installing the right one and never switching (GOTOOLCHAIN=local) avoids both.
 env:
+  GO_VERSION: "1.26.11"
   GOTOOLCHAIN: local
 
 jobs:
@@ -29,7 +31,7 @@ jobs:
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -63,7 +65,7 @@ jobs:
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
 
       # A shuffled order and no test cache: tests that only pass in file order, or from a cached result, fail here.
       - name: go test -race -shuffle=on
@@ -83,7 +85,7 @@ jobs:
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -113,7 +115,7 @@ jobs:
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -136,7 +138,7 @@ jobs:
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -167,7 +169,7 @@ jobs:
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
 
       - name: the release builds for all four targets
         run: tools/ci/crossbuild.sh v0.0.0-nightly "$RUNNER_TEMP/dist"
