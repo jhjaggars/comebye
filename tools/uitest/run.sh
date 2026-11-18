@@ -143,6 +143,8 @@ if want pages; then PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_ST
 if want starters; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node starters.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Comments on a page: select, comment, send; and what the viewer refuses from a hostile page.
 if want pagecomments; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagecomments.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The Page does not move when text is selected, commented on, saved or cancelled (the strip and tray float over it).
+if want pagefixed; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagefixed.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The review card in To do: a kind "review" item about a Page (thumbnail, Looks good with Undo, Needs changes and its Fix item, keys).
 if want reviewcard; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node reviewcard.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # An expanded To do item (and the split review mode) does not trap navigation: header, fleet menu, agent, Page link, Back.
