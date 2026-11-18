@@ -57,6 +57,10 @@
     return rgb2hex([f(p, q, h + 1 / 3), f(p, q, h), f(p, q, h - 1 / 3)].map((x) => x * 255));
   };
 
+  // nav-bg: the list column's surface, recessed a step from the conversation (--bg). 4.5% black over bg in light
+  // themes, 50% in dark ones; a theme can set "nav-bg" in its palette when the step looks off or text fails 4.5:1.
+  const navBg = (bg, dark) => mix("#000000", bg, dark ? 0.5 : 0.045);
+
   // theme() derives the full token set from a core palette.
   function theme(p) {
     const dark = p.mode === "dark";
@@ -89,6 +93,7 @@
     const v = { bg, panel, panel2, border, text };
     const codeBg = p.code || (dark ? mix("#000000", bg, 0.5) : mix("#000000", bg, 0.04));
     v["code-bg"] = codeBg;
+    v["nav-bg"] = p["nav-bg"] || navBg(bg, dark);
     v["code-text"] = text;
     v["rc-out"] = codeBg;
     v["th-bg"] = tint(border, panel2, 0.3, text);
@@ -230,7 +235,7 @@
   ];
 
   const byId = {};
-  THEMES.forEach((t) => { byId[t.id] = t; });
+  THEMES.forEach((t) => { if (!t.vars["nav-bg"]) t.vars["nav-bg"] = navBg(t.vars.bg, t.mode === "dark"); byId[t.id] = t; });
 
   const API = { THEMES, byId, mix, contrast, KEY: "comebye.theme", KEY_LIGHT: "comebye.theme.light", KEY_DARK: "comebye.theme.dark" };
   root.ComebyeThemes = API;

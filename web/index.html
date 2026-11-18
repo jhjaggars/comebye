@@ -1998,6 +1998,12 @@
       .lr-badge { min-width: 24px; padding: 1px var(--sp-6); border-radius: var(--r-pill); font-size: var(--fs-12); font-weight: 650; line-height: 1.4; text-align: center; color: var(--bg); }
       .lr-need { background: var(--orange); }
       .lr-todo { background: var(--blue); }
+      /* The list column sits one step below the conversation (--nav-bg); #chat, #sv-chat, the detail and the pages stay on --bg. */
+      body { background: var(--nav-bg); }
+      #list header { background: transparent; }
+      #detail, #detail-empty, #briefs, .page, .screen, #review { background: var(--bg); }
+      body.list-collapsed #list-rail { background: var(--nav-bg); }
+      body.list-collapsed #list-rail:hover { background: var(--panel); }
       body {
         display: grid; height: 100vh; height: 100dvh; overflow: hidden;
         grid-template-columns: var(--list-w) minmax(0, 1fr);

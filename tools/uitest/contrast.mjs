@@ -43,6 +43,9 @@ const TEXT = [
   ["on-accent", "blue", AA, "send button"], ["on-red", "red", AA, "stop button"], ["on-orange", "orange", AA, "badge"],
   ...["blue", "orange", "green", "purple", "red", "yellow", "teal"].flatMap((c) => [[c, "bg", AA, c + " text"], [c, "panel", AA, c + " text on cards"], [c, "panel2", AA, c + " text on raised"]]),
   // Non-text: the focus ring and the status dots (working=blue, idle=muted, blocked=orange, done=green, error=red).
+  // The list column's surface (--nav-bg, from 1100px): text, muted, quote and the accents must read on it too.
+  ["text", "nav-bg", AA, "text on nav"], ["muted", "nav-bg", AA, "muted on nav"], ["quote", "nav-bg", AA, "quote on nav"],
+  ...["blue", "orange", "green", "purple", "red", "yellow", "teal"].map((c) => [c, "nav-bg", AA, c + " text on nav"]),
   ["focus", "bg", UI, "focus ring"], ["focus", "panel", UI, "focus ring on cards"],
   ["scroll-thumb", "bg", UI, "scrollbar thumb"], ["scroll-thumb", "panel", UI, "scrollbar thumb on cards"],
   ...["blue", "orange", "green", "red"].flatMap((c) => [[c, "bg", UI, c + " status dot"], [c, "panel", UI, c + " status dot on cards"]]),
