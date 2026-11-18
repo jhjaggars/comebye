@@ -1919,7 +1919,11 @@ for (const width of [1280, 390]) {
       if (r.chip !== "repo damaged" || !r.title.includes("missing or damaged objects")) throw new Error(JSON.stringify(r));
       if (r.others !== 1) throw new Error(`${r.others} agents marked`);
       await noOverflow();
-      await page.locator(box + " .st-repair").screenshot({ path: `${out}/repo-damage-${width}.png` });
+      // The Status body can re-render under the screenshot (a poll), detaching the element: take it again.
+      for (let i = 0; ; i++) {
+        try { await page.locator(box + " .st-repair").screenshot({ path: `${out}/repo-damage-${width}.png`, timeout: 4000 }); break; }
+        catch (e) { if (i >= 3) throw e; await page.waitForTimeout(250); }
+      }
     } finally { await unmockStatusData(); }
   });
 }
