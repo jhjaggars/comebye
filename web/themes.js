@@ -57,9 +57,19 @@
     return rgb2hex([f(p, q, h + 1 / 3), f(p, q, h), f(p, q, h - 1 / 3)].map((x) => x * 255));
   };
 
-  // nav-bg: the list column's surface, recessed a step from the conversation (--bg). 4.5% black over bg in light
-  // themes, 50% in dark ones; a theme can set "nav-bg" in its palette when the step looks off or text fails 4.5:1.
-  const navBg = (bg, dark) => mix("#000000", bg, dark ? 0.5 : 0.045);
+  // nav-bg: the list column's surface, recessed a step from the conversation (--bg). Light themes: 4.5% black over bg
+  // (a step of about 1.10). Dark themes: black mixed in until the luminance step (bg vs nav) is about 1.14, calm but
+  // clear in every theme: a fixed 50% gave 1.06 on the near-black themes (Comebye Dark) and 1.29 on Nord. The darkest
+  // backgrounds cannot reach 1.14 even at black, so the mix is capped at 90% (Comebye Dark lands near 1.11). A theme
+  // can set "nav-bg" in its palette when the step looks off or text fails 4.5:1.
+  const NAV_STEP = 1.14, NAV_MAX = 0.9;
+  const navBg = (bg, dark) => {
+    if (!dark) return mix("#000000", bg, 0.045);
+    let lo = 0, hi = NAV_MAX;
+    if (contrast(bg, mix("#000000", bg, hi)) <= NAV_STEP) return mix("#000000", bg, hi);
+    for (let i = 0; i < 20; i++) { const m = (lo + hi) / 2; if (contrast(bg, mix("#000000", bg, m)) < NAV_STEP) lo = m; else hi = m; }
+    return mix("#000000", bg, hi);
+  };
 
   // theme() derives the full token set from a core palette.
   function theme(p) {
@@ -148,6 +158,7 @@
     "chip-blue": "#14202f", "chip-purple": "#241a30", "chip-red": "#2f1414", "chip-green": "#12261c",
     "chip-finished": "#1d1730", "chip-cand": "#132a1c", "chip-rtr": "#2e1d10", "chip-landing": "#102a2c", "chip-yellow": "#2a2412",
     "secret-bg": "rgba(251,146,60,.12)", "sh-md": "rgba(0, 0, 0, 0.35)", "sh-lg": "rgba(0, 0, 0, 0.5)",
+    "nav-bg": "#020306", /* bg #101218 is too near black for a mix to reach the 1.14 step; a cool near-black keeps the tint (1.10) */
     selection: "#2b4a7a", focus: "#60a5fa", "scroll-thumb": "#666b77",
   };
   const comebyeLight = {

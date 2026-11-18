@@ -1,8 +1,9 @@
 // The list column is recessed from the conversation (Nav contrast, slice 1): from 1100px the list column paints
 // --nav-bg (the body, since #list is display:contents; the list header, #agents and the rest are transparent over
 // it) and #chat, #sv-chat, the detail and the pages stay on --bg. At 1280 and 3440, in Comebye Light, Comebye Dark
-// and Gruvbox Dark, the list's effective background differs from #chat by the planned step (4.5% black over bg in
-// light themes, 50% in dark ones) and the detail and the empty state are on --bg; at 390 the two are equal.
+// and Gruvbox Dark, the list's effective background is --nav-bg, a step from #chat inside the tuned bounds
+// (slice 3: dark themes 1.09-1.16:1, light 1.09-1.12:1, in all 15 themes), and the detail and the empty state are
+// on --bg; at 390 the two are equal.
 //
 // Slice 2 carries it through the rest of the column: the keybar footer is transparent on the nav (not a lighter
 // --panel strip) with its text and key caps readable; the collapsed 56px rail and its hover; the host filter's
@@ -21,13 +22,33 @@ async function check(name, fn) {
   try { await fn(); results.push(true); console.log("ok   " + name); }
   catch (e) { results.push(false); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
 }
+// Slice 3: the step between --bg and --nav-bg, read clearly but calmly: [min, max] luminance contrast.
+const STEP = { dark: [1.09, 1.16], light: [1.09, 1.12] };
 const THEMES = [{ id: "light", dark: false }, { id: "dark", dark: true }, { id: "gruvbox-dark", dark: true }];
 const rgb = (s) => (s.match(/[\d.]+/g) || []).slice(0, 4).map(Number);
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-const planned = (bg, dark) => hex(bg).map((v) => Math.round(v * (1 - (dark ? 0.5 : 0.045))));
 const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
 const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
 const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 1);
+
+// All 15 themes' tokens, no browser: the step is inside the bounds and text, muted and the accents hold 4.5:1 on the nav,
+// the selected row outline and the focus ring 3:1 (themes.js is the one source of the tokens).
+import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
+const tctx = { globalThis: null }; tctx.globalThis = tctx; vm.createContext(tctx);
+vm.runInContext(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "themes.js"), "utf8"), tctx);
+const { THEMES: ALL, contrast: tcontrast } = tctx.ComebyeThemes;
+await check("all 15 themes: nav step in bounds, text/muted/accents >= 4.5 and focus/selected outline >= 3 on the nav", async () => {
+  const rows = [];
+  for (const t of ALL) {
+    const v = t.vars, step = tcontrast(v.bg, v["nav-bg"]), [lo, hi] = STEP[t.mode];
+    if (step < lo || step > hi) throw new Error(`${t.id}: step ${step.toFixed(3)} (bg ${v.bg}, nav ${v["nav-bg"]}) outside ${lo}-${hi}`);
+    for (const k of ["text", "muted", "quote", "blue", "orange", "green", "purple", "red", "yellow", "teal"]) if (tcontrast(v[k], v["nav-bg"]) < 4.5) throw new Error(`${t.id}: ${k} on nav ${tcontrast(v[k], v["nav-bg"]).toFixed(2)} < 4.5`);
+    for (const bgk of ["nav-bg", "panel2"]) if (tcontrast(v.focus, v[bgk]) < 3) throw new Error(`${t.id}: focus ring/selected outline on ${bgk} ${tcontrast(v.focus, v[bgk]).toFixed(2)} < 3`);
+    rows.push(`${t.id} ${step.toFixed(2)}`);
+  }
+  if (ALL.length !== 15) throw new Error(`${ALL.length} themes, expected 15`);
+  console.log("     steps: " + rows.join(", "));
+});
 
 async function read(width, theme) {
   const { browser, page } = await launch({ width, height: width < 500 ? 844 : 900, dark: theme.dark });
@@ -65,15 +86,14 @@ for (const th of THEMES) {
   for (const w of [1280, 3440]) {
     await check(`${th.id} @${w}: list recessed from #chat, detail on bg`, async () => {
       const r = await read(w, th);
-      const want = planned(r.bg, th.dark);
-      if (!near(rgb(r.body), want)) throw new Error(`list (body) ${r.body}, want ${want} (${th.dark ? "50%" : "4.5%"} black over ${r.bg})`);
       if (!near(rgb(r.body), hex(r.nav))) throw new Error(`list ${r.body} is not --nav-bg ${r.nav}`);
       if (!near(rgb(r.chat), hex(r.bg))) throw new Error(`#chat ${r.chat}, want --bg ${r.bg}`);
       if (!near(rgb(r.detail), hex(r.bg))) throw new Error(`#detail ${r.detail}, want --bg ${r.bg}`);
       if (!near(rgb(r.empty), hex(r.bg))) throw new Error(`#detail-empty ${r.empty}, want --bg ${r.bg}`);
       if (rgb(r.agents)[3] !== 0 || rgb(r.head)[3] !== 0) throw new Error(`#agents ${r.agents} / list header ${r.head} must be transparent so the column is one surface`);
       const k = ratio(rgb(r.body), rgb(r.chat));
-      if (k < 1.04) throw new Error(`list vs #chat contrast ${k.toFixed(3)} < 1.04`);
+      const [lo, hi] = STEP[th.dark ? 'dark' : 'light'];
+      if (k < lo || k > hi) throw new Error(`list vs #chat step ${k.toFixed(3)} outside ${lo}-${hi}`);
       console.log(`     ${th.id} ${w}: list ${r.body} vs #chat ${r.chat} = ${k.toFixed(2)}:1`);
     });
   }
@@ -129,7 +149,7 @@ for (const th of THEMES) {
       const { rest, hover } = await readRail(w, th);
       if (Math.round(rest.w) !== 56) throw new Error(`rail ${rest.w}px wide, want 56`);
       if (!near(rgb(rest.bg), rgb(rest.body))) throw new Error(`rail ${rest.bg} is not the nav surface ${rest.body}`);
-      if (ratio(rgb(rest.bg), rgb(rest.chat)) < 1.04) throw new Error(`rail vs #chat ${ratio(rgb(rest.bg), rgb(rest.chat)).toFixed(3)} < 1.04`);
+      if (ratio(rgb(rest.bg), rgb(rest.chat)) < 1.09) throw new Error(`rail vs #chat ${ratio(rgb(rest.bg), rgb(rest.chat)).toFixed(3)} < 1.09`);
       if (!near(rgb(hover.bg), hex(hover.panel))) throw new Error(`rail hover ${hover.bg}, want --panel ${hover.panel}`);
       const k = ratio(rgb(hover.fg), rgb(hover.bg)); if (k < 4.5) throw new Error(`rail icon ${hover.fg} on hover ${hover.bg} = ${k.toFixed(2)}:1 < 4.5`);
       const k2 = ratio(rgb(rest.fg), rgb(rest.bg)); if (k2 < 4.5) throw new Error(`rail icon ${rest.fg} on ${rest.bg} = ${k2.toFixed(2)}:1 < 4.5`);

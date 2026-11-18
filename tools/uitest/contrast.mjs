@@ -47,6 +47,8 @@ const TEXT = [
   ["text", "nav-bg", AA, "text on nav"], ["muted", "nav-bg", AA, "muted on nav"], ["quote", "nav-bg", AA, "quote on nav"],
   ...["blue", "orange", "green", "purple", "red", "yellow", "teal"].map((c) => [c, "nav-bg", AA, c + " text on nav"]),
   ["focus", "bg", UI, "focus ring"], ["focus", "panel", UI, "focus ring on cards"],
+  // The list column: the keyboard focus ring on the nav, and the selected agent row (2px --focus outline over --panel2 on the nav).
+  ["focus", "nav-bg", UI, "focus ring on nav"], ["focus", "panel2", UI, "selected row outline on its --panel2 fill"],
   ["scroll-thumb", "bg", UI, "scrollbar thumb"], ["scroll-thumb", "panel", UI, "scrollbar thumb on cards"],
   ...["blue", "orange", "green", "red"].flatMap((c) => [[c, "bg", UI, c + " status dot"], [c, "panel", UI, c + " status dot on cards"]]),
   ["muted", "bg", UI, "idle status dot"],

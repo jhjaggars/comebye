@@ -4007,8 +4007,8 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     await tp.waitForSelector("#theme-panel", { state: "hidden" }); // picking closes the picker
     if ((await cur()) !== "gruvbox-dark") throw new Error("data-theme not applied");
     if ((await tok("--bg")) !== "#1d2021") throw new Error("--bg " + (await tok("--bg")));
-    // At 1280 the body is the list column (--nav-bg: 50% black over Gruvbox Dark's #1d2021), not --bg.
-    if ((await bodyBg()) !== "rgb(15, 16, 17)") throw new Error("body background " + (await bodyBg()));
+    // At 1280 the body is the list column (--nav-bg for Gruvbox Dark's #1d2021, a ~1.14 step down), not --bg.
+    if ((await bodyBg()) !== "rgb(17, 18, 19)") throw new Error("body background " + (await bodyBg()));
     await openPicker();
     if ((await tp.locator('#tp-list [data-theme-id="gruvbox-dark"]').getAttribute("aria-checked")) !== "true") throw new Error("option not marked checked");
     // A swatch previews ITS theme, not the active one.
