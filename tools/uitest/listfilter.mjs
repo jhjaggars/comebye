@@ -205,10 +205,12 @@ for (const dark of [false, true]) {
     const { browser, page } = await open(390, dark);
     try {
       await page.fill("#lf-q", "api");
-      await page.tap("#agents .agent[data-id]");
-      await page.waitForFunction(() => location.hash.startsWith("#/agent/"));
+      const id = (await shown(page))[0];
+      await page.click(`#agents .agent[data-id="${id}"]`);
+      await page.waitForFunction(() => location.hash.startsWith("#/agent/")).catch(() => { throw new Error("opening the row did not route to the agent: " + location.hash); });
       await page.goBack();
-      await page.waitForFunction(() => !location.hash.startsWith("#/agent/"));
+      await page.waitForFunction(() => !location.hash.startsWith("#/agent/")).catch(() => { throw new Error("back did not leave the agent route"); });
+      await page.waitForTimeout(150);
       if (await hash(page) !== "#/list?q=api") throw new Error("hash after back " + await hash(page));
       if (await page.inputValue("#lf-q") !== "api") throw new Error("box lost");
     } finally { await browser.close(); }
