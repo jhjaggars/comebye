@@ -245,7 +245,7 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 	if c.pane != "" {
 		req.Header.Set(HeaderAgent, c.pane)
 	}
-	if r.Method == http.MethodPost {
+	if r.Method == http.MethodPost || r.Method == http.MethodPut { // a PUT carries a body too (the page thumbnails)
 		b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 		if err != nil {
 			writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "too_large", "message": "the request is too large"})

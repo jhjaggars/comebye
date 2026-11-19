@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -44,12 +43,9 @@ var layoutRender = func(ctx context.Context, chrome, host string) (string, error
 	if err := os.WriteFile(f, []byte(host), 0o600); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, chrome, "--headless", "--no-sandbox", "--disable-gpu", "--no-first-run",
-		"--hide-scrollbars", "--user-data-dir="+filepath.Join(dir, "profile"),
-		"--virtual-time-budget=4000", "--dump-dom", "file://"+f)
 	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+	args := append(chromeBase(filepath.Join(dir, "profile")), "--virtual-time-budget=4000", "--dump-dom", "file://"+f)
+	if err := runChrome(ctx, chrome, args, &out); err != nil {
 		return "", err
 	}
 	return out.String(), nil
@@ -62,10 +58,14 @@ func findChrome(e *Env) string {
 	}
 	for _, dir := range filepath.SplitList(e.Getenv("PATH")) {
 		for _, n := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"} {
-			p := filepath.Join(dir, n)
-			if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			if p := filepath.Join(dir, n); fileExecutable(p) {
 				return p
 			}
+		}
+	}
+	for _, p := range chromePaths {
+		if fileExecutable(p) {
+			return p
 		}
 	}
 	return ""

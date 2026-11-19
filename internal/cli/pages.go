@@ -192,15 +192,19 @@ func cmdPublish(e *Env, args []string) error {
 		// The gallery thumbnails render beside the layout check, so a publish
 		// waits for the slower of the two, not both.
 		var wg sync.WaitGroup
+		var thumbLine string
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendThumbnails(e, c, r.Page.ID, r.Page.Version, body)
+			thumbLine = sendThumbnails(e, c, r.Page.ID, r.Page.Version, body)
 		}()
 		for _, w := range layoutCheck(e, body) {
 			fmt.Fprintln(e.Stderr, w)
 		}
 		wg.Wait()
+		if thumbLine != "" {
+			fmt.Fprintln(e.Stderr, thumbLine)
+		}
 	}
 	if *review != "" {
 		// After the thumbnails, so the card has its picture when it opens.

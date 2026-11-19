@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -19,13 +20,15 @@ import (
 // picture and sends both to the hub with the version. It is a courtesy, like
 // the layout check: no Chrome, a failed render, a slow page or a hub that
 // does not take thumbnails all mean no thumbnail (the gallery shows its
-// skeleton) and never an error. It costs a publish at most thumbTimeout.
+// skeleton) and never an error, but `comebye publish` says so in one line
+// and why. It costs a publish at most thumbTimeout.
 // COMEBYE_NO_THUMBNAILS=1 turns it off; COMEBYE_CHROME names the browser.
 
 const (
-	thumbTimeout = 6 * time.Second
-	thumbW       = 400 // the picture sent: 1280x800 shrunk, 16:10 as the gallery's cards
+	thumbTimeout = 8 * time.Second // both renders run at once, each under this
+	thumbW       = 400             // the picture sent: 1280x800 shrunk, 16:10 as the gallery's cards
 	thumbH       = 250
+	thumbMax     = 90 << 10 // the hub takes 96 KiB a picture
 )
 
 // shotRender renders page in headless Chrome at 1280x800 in the scheme
@@ -44,11 +47,9 @@ var shotRender = func(ctx context.Context, chrome, page, scheme string) ([]byte,
 	if scheme == "dark" {
 		pref = "0"
 	}
-	cmd := exec.CommandContext(ctx, chrome, "--headless", "--no-sandbox", "--disable-gpu", "--no-first-run",
-		"--hide-scrollbars", "--user-data-dir="+filepath.Join(dir, "profile"),
-		"--blink-settings=preferredColorScheme="+pref,
+	args := append(chromeBase(filepath.Join(dir, "profile")), "--blink-settings=preferredColorScheme="+pref,
 		"--window-size=1280,800", "--virtual-time-budget=5000", "--screenshot="+out, "file://"+f)
-	if err := cmd.Run(); err != nil {
+	if err := runChrome(ctx, chrome, args, nil); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(out)
@@ -100,41 +101,71 @@ func shrink(b []byte) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// thumbnails returns the light and dark pictures of page; either may be nil.
-func thumbnails(e *Env, page string) (light, dark []byte) {
+// thumbnails returns the light and dark pictures of page; either may be nil,
+// and why says in a few words what went wrong for the one(s) that are (""
+// when both are there, or when thumbnails are turned off).
+func thumbnails(e *Env, page string) (light, dark []byte, why string) {
 	if e.Getenv("COMEBYE_NO_THUMBNAILS") != "" {
-		return nil, nil
+		return nil, nil, ""
 	}
 	chrome := findChrome(e)
 	if chrome == "" {
-		return nil, nil
+		return nil, nil, "no Chrome found (put it on PATH or set COMEBYE_CHROME)"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), thumbTimeout)
-	defer cancel()
 	var wg sync.WaitGroup
+	var lerr, derr error
 	for sc, dst := range map[string]*[]byte{"light": &light, "dark": &dark} {
+		errp := &lerr
+		if sc == "dark" {
+			errp = &derr
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Each render has its own clock and is killed with its helpers when it runs out.
+			ctx, cancel := context.WithTimeout(context.Background(), thumbTimeout)
+			defer cancel()
 			shot, err := shotRender(ctx, chrome, page, sc)
 			if err != nil {
+				*errp = err
 				return
 			}
-			if small, err := shrink(shot); err == nil && len(small) <= 90<<10 {
+			small, err := shrink(shot)
+			switch {
+			case err != nil:
+				*errp = fmt.Errorf("the screenshot is not a PNG: %v", err)
+			case len(small) > thumbMax:
+				*errp = fmt.Errorf("the picture is %d KiB, over the hub's %d KiB", len(small)>>10, thumbMax>>10)
+			default:
 				*dst = small
 			}
 		}()
 	}
 	wg.Wait()
-	return light, dark
+	err := lerr
+	if err == nil {
+		err = derr
+	}
+	switch {
+	case err == nil:
+		return light, dark, ""
+	case errors.Is(err, errChromeTimeout):
+		return light, dark, fmt.Sprintf("Chrome did not finish in %ds", int(thumbTimeout/time.Second))
+	}
+	return light, dark, err.Error()
 }
 
 // sendThumbnails renders and uploads the thumbnails of a stored version. It
-// reports nothing: see above.
-func sendThumbnails(e *Env, c *client, id string, version int, page string) {
-	light, dark := thumbnails(e, page)
+// never fails a publish; it returns the one line to tell the publisher when
+// the card will not have both pictures ("" when it will, or when thumbnails
+// are off).
+func sendThumbnails(e *Env, c *client, id string, version int, page string) string {
+	light, dark, why := thumbnails(e, page)
 	if light == nil && dark == nil {
-		return
+		if why == "" {
+			return ""
+		}
+		return "No gallery thumbnail: " + why + ". The page is published; its card shows a text preview."
 	}
 	req := map[string]any{"version": version}
 	if light != nil {
@@ -143,5 +174,11 @@ func sendThumbnails(e *Env, c *client, id string, version int, page string) {
 	if dark != nil {
 		req["dark_b64"] = base64.StdEncoding.EncodeToString(dark)
 	}
-	_, _ = c.raw("PUT", "/api/pages/"+id+"/thumbs", nil, req)
+	if _, err := c.raw("PUT", "/api/pages/"+id+"/thumbs", nil, req); err != nil {
+		return "No gallery thumbnail: the hub did not take it (" + err.Error() + "). The page is published; its card shows a text preview."
+	}
+	if why != "" {
+		return "Only one gallery thumbnail (light or dark) was made: " + why + "."
+	}
+	return ""
 }

@@ -94,6 +94,9 @@ const ledgerJSON = `{"entries":[
 
 func newFake(t *testing.T) (*fakeComebye, *Env, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
+	oldChrome := chromePaths // a browser installed on the test machine must not be found
+	chromePaths = nil
+	t.Cleanup(func() { chromePaths = oldChrome })
 	dir := t.TempDir()
 	tok, err := agenttoken.LoadOrCreate(dir)
 	if err != nil {

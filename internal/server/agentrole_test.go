@@ -447,6 +447,9 @@ func TestPeerForwardsToHub(t *testing.T) {
 		{"GET", "/api/pages?mine=1&evil=1", "", "/api/pages"},
 		{"GET", "/api/pages/pg_0123456789?body=1", "", "/api/pages/pg_0123456789"},
 		{"DELETE", "/api/pages/pg_0123456789", "", "/api/pages/pg_0123456789"},
+		// The gallery thumbnails are a PUT with a body: a peer that dropped it made every
+		// thumbnail from a peer host fail (the hub saw an empty body).
+		{"PUT", "/api/pages/pg_0123456789/thumbs", `{"version":2,"light_b64":"AAAA"}`, "/api/pages/pg_0123456789/thumbs"},
 	}
 	for _, c := range cases {
 		w := do(s, c.method, c.path, agentHdr("w1:p1"), c.body)

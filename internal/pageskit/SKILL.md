@@ -251,8 +251,10 @@ the check is skipped silently; `COMEBYE_NO_LAYOUT_CHECK=1` turns it off.
 The same Chrome takes the gallery's thumbnail of an HTML page (one light, one
 dark, rendered at 1280 px with your page's own `prefers-color-scheme` rules) and
 sends it with the version. A page that looks right in both schemes gets a good
-card; with no Chrome the card shows a text skeleton instead.
-`COMEBYE_NO_THUMBNAILS=1` turns it off.
+card. The render has no network but cdnjs (a script or font from any other host
+fails at once). When no thumbnail is stored (no Chrome, a render that failed, the
+hub said no) publish prints one line, `No gallery thumbnail: <why>`, and the card
+shows a text skeleton instead. `COMEBYE_NO_THUMBNAILS=1` turns it off.
 
 ## Comments from the user
 

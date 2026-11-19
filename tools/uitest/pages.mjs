@@ -10,7 +10,7 @@
 //
 //   node pages.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
 import { launch } from "./lib.mjs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -846,6 +846,28 @@ await check("thumbnails: Chrome's pictures of new pages, for the current theme; 
       await d.page.evaluate(() => ComebyeThemes.set("system"));
     } finally { await d.browser.close(); }
   }
+});
+
+await check("thumbnails: a page whose scripts and fonts never load still gets its picture quickly; a publish says why when there is none", async () => {
+  // Hosts that never answer (a blackhole address, a documentation range, a font CDN) hung the render until the timeout
+  // and no picture was stored: only cdnjs is reachable from the render now, the rest fails at once.
+  const slow = `<!doctype html><title>Dead hosts</title><script src="http://10.255.255.1/a.js"></script><script src="http://192.0.2.1/b.js"></script><link rel=stylesheet href="https://fonts.googleapis.com/css2?family=Inter"><body style="background:#ffeedd;color:#222;font:40px system-ui;margin:40px"><h1>Dead hosts</h1><p>Still has a card picture.</p>`;
+  const t0 = Date.now();
+  const id = idOf(publish(["-", "--key", "tp-dead", "--title", "Thumb probe dead hosts"], slow, "w1:p1"));
+  const took = Date.now() - t0;
+  const th = (await (await fetch(base + "/api/pages/" + id)).json()).page.versions.at(-1).thumbs;
+  if (!th || th.join() !== "light,dark") throw new Error("no thumbnails for a page with dead hosts: " + JSON.stringify(th));
+  if (took > 9000) throw new Error("the publish took " + took + " ms");
+  const d = await launch({ width: 1280, height: 900, dark, bypassCSP: false });
+  try {
+    await d.page.goto(base + "/#/pages", { waitUntil: "load" });
+    await d.page.locator(`.pgs-card[data-id="${id}"] img.pgs-img`).waitFor({ state: "attached", timeout: 8000 });
+    await d.page.waitForFunction((id) => { const i = document.querySelector(`.pgs-card[data-id="${id}"] img.pgs-img`); return i && i.complete && i.naturalWidth === 400; }, id, { timeout: 8000 });
+  } finally { await d.browser.close(); }
+  // A Chrome that cannot run: the page is published and the publisher is told, in one line.
+  const r = spawnSync(bin, ["publish", "-", "--key", "tp-nochrome", "--title", "Thumb probe no chrome"], { env: { PATH: "/usr/bin:/bin", COMEBYE_CHROME: "/nonexistent/chrome", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w1:p1" }, input: slow, encoding: "utf8" });
+  const lines = r.stderr.split("\n").filter((l) => /thumbnail/i.test(l));
+  if (r.status !== 0 || lines.length !== 1 || !/^No gallery thumbnail: .*no such file/.test(lines[0])) throw new Error("publish with a broken Chrome: " + r.status + " " + r.stderr);
 });
 
 await check("links: a to-do link to a page opens it in the app; delete asks and removes", async () => {
