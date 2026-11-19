@@ -15,6 +15,7 @@
 # Any failed check fails the suite; there is no list of checks allowed to fail.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "${BASH_SOURCE[0]}" "$@"
 suite="${1:?suite: smoke|drive|rest|visual|full}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"; shard="${4:-}"
 
 VISUAL="shapes appearance starters depth"
