@@ -170,4 +170,40 @@ for (const dark of [false, true]) {
   });
 }
 
+// Slice 6: the list column follows the window: 360 at 1280 and 1920, 480 at 3440, a phone unchanged; nothing in it overflows.
+const WANT_W = { 1280: 360, 1920: 360, 3440: 480 };
+for (const dark of [false, true]) for (const width of [390, 1280, 1920, 3440]) {
+  await check(`${dark ? "dark" : "light"} @${width}: the list column is ${WANT_W[width] ? WANT_W[width] + "px" : "the phone layout"} and nothing in it overflows`, async () => {
+    const { browser, page, errs } = await open(width, dark);
+    try {
+      const g = await page.evaluate(() => {
+        const col = document.querySelector("#agents").getBoundingClientRect();
+        const lw = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--list-w")) || 0;
+        const bad = [];
+        const sels = ["#list header", "#nav", "#host-filter", "#list-filter", "#agents"];
+        for (const s of sels) {
+          const e = document.querySelector(s); if (!e || e.hidden || !e.getClientRects().length) continue;
+          if (e.scrollWidth > e.clientWidth + 1) bad.push(`${s} scrolls ${e.scrollWidth}>${e.clientWidth}`);
+          for (const c of e.querySelectorAll("*")) {
+            const b = c.getBoundingClientRect();
+            if (b.width && b.right > e.getBoundingClientRect().right + 1) bad.push(`${s} > ${c.tagName}.${c.className} right ${Math.round(b.right)} past ${Math.round(e.getBoundingClientRect().right)}`);
+          }
+        }
+        const d = document.querySelector("#detail-empty"), de = d && d.getClientRects().length ? d.getBoundingClientRect() : null;
+        return { colW: Math.round(col.width), colLeft: Math.round(col.left), grid: getComputedStyle(document.body).display, cols: getComputedStyle(document.body).gridTemplateColumns, detailLeft: de && Math.round(de.left), docOver: document.documentElement.scrollWidth > innerWidth, bad: bad.slice(0, 5), lw, ww: innerWidth };
+      });
+      if (g.docOver) throw new Error("the page scrolls sideways");
+      if (g.bad.length) throw new Error(g.bad.join("; "));
+      if (width === 390) { if (g.grid === "grid") throw new Error("the phone got the two-column grid"); }
+      else {
+        const first = parseFloat(g.cols);
+        if (Math.round(first) !== WANT_W[width]) throw new Error(`grid column ${g.cols}, want ${WANT_W[width]}px`);
+        if (g.detailLeft != null && Math.abs(g.detailLeft - WANT_W[width]) > 1) throw new Error(`the detail pane starts at ${g.detailLeft}, want ${WANT_W[width]}`);
+      }
+      await page.screenshot({ path: `${out}/leftnav-wide-${width}-${dark ? "dark" : "light"}.png` });
+      if (errs.length) throw new Error(errs.join("; "));
+    } finally { await browser.close(); }
+  });
+}
+
 process.exit(results.every(Boolean) ? 0 : 1);

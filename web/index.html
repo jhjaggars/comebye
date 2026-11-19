@@ -2023,7 +2023,7 @@
     #btn-collapse, #list-rail { display: none; }
     #detail-empty { display: none; }
     @media (min-width: 1100px) {
-      :root { --list-w: 360px; }
+      :root { --list-w: clamp(360px, 14vw, 480px); } /* 360 up to ~2570px wide, 480 from ~3430px (a 3440 ultrawide) */
       body.list-collapsed { --list-w: 56px; }
       #btn-collapse { display: inline-flex; }
       body.list-collapsed #list header, body.list-collapsed #notify-panel, body.list-collapsed #nav, body.list-collapsed #host-filter, body.list-collapsed #list-filter,
