@@ -165,3 +165,22 @@ func TestHubDidSection(t *testing.T) {
 		t.Error("an empty section is shown")
 	}
 }
+
+func TestBuildScopedSaysWhoseWorkItIs(t *testing.T) {
+	now := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	out := Build(Input{Now: now, Harness: "claude", Name: "proj-a", Scoped: true,
+		Others: "- coordinator (main): 2 handoffs, 1 to-dos, 0 plans open",
+		Plans:  []Plan{{ID: "pl1", Title: "Split the API", Size: 3, Done: 1}}})
+	for _, want := range []string{"## Whose work this is", "You are proj-a, one of several coordinators", "yours alone", "- coordinator (main): 2 handoffs", "## Open plans", "`pl1` Split the API (1 of 3 done)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("digest lacks %q:\n%s", want, out)
+		}
+	}
+	main := Build(Input{Now: now, Harness: "claude", Name: "coordinator", Scoped: true, Main: true})
+	if !strings.Contains(main, "the main coordinator") || strings.Contains(main, "Open plans") {
+		t.Errorf("main's digest:\n%s", main)
+	}
+	if plain := Build(Input{Now: now, Harness: "claude"}); strings.Contains(plain, "Whose work") {
+		t.Errorf("an unscoped digest says whose work it is:\n%s", plain)
+	}
+}

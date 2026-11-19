@@ -14,7 +14,7 @@ A Markdown digest of at most 24 KB (about 7k tokens), made from records, never f
 - the open to-dos, one line each with the id;
 - the running, waiting, landing and reported-but-not-landed handoffs, one line of state each;
 - the ledger events since the last fresh start (handoffs started, reported, removed, lost; newest 40, at most 48 hours back);
-- the **tail** of `<state dir>/coordinator/state.md`, the coordinator's own notes (the last 8 KB, from a heading or a line start; the file itself can be much larger).
+- the **tail** of the coordinator's own notes, `<state dir>/coordinator/state.md` for the main coordinator and `<state dir>/coordinators/<name>/state.md` for any other (the last 8 KB, from a heading or a line start; the file itself can be much larger). With several coordinators every part above holds only that coordinator's own work (see [several coordinators](agents.md#several-coordinators-who-hears-what)), plus one line with the others' open counts.
 
 Every part has its own budget and is cut with a note when it does not fit. Run it yourself any time: `comebye coordinator digest`. The text opens with `comebye-digest:v1`, which the hub looks for to confirm that the digest reached the new session.
 

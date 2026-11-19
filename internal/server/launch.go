@@ -471,6 +471,12 @@ type launchBody struct {
 	// permission arguments and a first prompt pointing it at the
 	// playbook, and is recorded as a coordinator on the hub.
 	Coordinator bool `json:"coordinator"`
+	// NewCoordinator, with Coordinator, makes one more coordinator (comebye
+	// coordinator new): Name is required, Dir (inside a launch root) is where
+	// it works, default <state>/coordinators/<name>. Unlike the first
+	// Coordinator launch it never pulls Dir, and its first prompt is always
+	// the playbook's.
+	NewCoordinator bool `json:"new_coordinator,omitempty"`
 	// Chat is a Page id: the "Chat about this" helper (chat.go). The agent
 	// starts in a fresh scratch directory under <state>/chats (Dir is
 	// ignored; it need not be in a launch root), read-only where the
@@ -563,6 +569,32 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "no_state_dir", "message": "this host keeps no state directory, so it has no place for a chat's scratch directory"})
 			return
 		}
+	case body.Coordinator && body.NewCoordinator:
+		name := strings.TrimSpace(body.Name)
+		if !agentNameRe.MatchString(name) {
+			writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_name", "message": "a new coordinator needs a name: lowercase letters, digits, - and _, starting with a letter (at most 32)"})
+			return
+		}
+		if body.Dir != "" {
+			var lerr *launchError
+			if dir, lerr = resolveLaunchDir(body.Dir, roots); lerr != nil {
+				writeLaunchError(w, lerr)
+				return
+			}
+		} else {
+			if s.cfg.StateDir == "" {
+				writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "no_state_dir", "message": "this host keeps no state directory, so it has no default place for a coordinator: pass a directory"})
+				return
+			}
+			dir = filepath.Join(s.cfg.StateDir, "coordinators", name)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "coordinator_dir", "message": "could not make the coordinator's directory: " + err.Error()})
+				return
+			}
+			if real, err := filepath.EvalSymlinks(dir); err == nil {
+				dir = real
+			}
+		}
 	case body.Coordinator:
 		// The one launch outside the roots: a fixed directory from the
 		// server's configuration, never one from the request.
@@ -630,8 +662,11 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	// The model comes first: claude's --allowedTools swallows what follows.
 	args := choice.Args
 	var pullNotice string
+	var coordWarnings []string
 	if body.Coordinator {
-		pullNotice = pullCoordinatorDir(ctx, dir)
+		if !body.NewCoordinator {
+			pullNotice = pullCoordinatorDir(ctx, dir)
+		}
 		if pullNotice != "" {
 			log.Printf("coordinator launch: %s", pullNotice)
 		}
@@ -640,11 +675,17 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		if kind == "claude" && s.cfg.StateDir != "" {
 			if p := filepath.Join(s.cfg.StateDir, "coordinator", playbook.HookSettingsName); fileExists(p) {
 				args = append(args, "--settings", p)
+			} else if body.NewCoordinator {
+				coordWarnings = append(coordWarnings, "the coordinator reset hook is not installed on this host, so this coordinator cannot be given a fresh start: run `comebye coordinator install-hook` there, then start it again")
 			}
 		}
 		args = append(append(args, playbook.AgentArgs(kind, name, dir)...), s.cfg.CoordinatorArgs[kind]...)
 		if strings.TrimSpace(body.Prompt) == "" {
-			body.Prompt = playbook.FirstPrompt(kind, dir)
+			if body.NewCoordinator {
+				body.Prompt = playbook.NewFirstPrompt(kind, name)
+			} else {
+				body.Prompt = playbook.FirstPrompt(kind, dir)
+			}
 		}
 	}
 
@@ -712,6 +753,7 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	if pullNotice != "" {
 		warnings = append(append([]string(nil), warnings...), pullNotice)
 	}
+	warnings = append(append([]string(nil), warnings...), coordWarnings...)
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
 	}

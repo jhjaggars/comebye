@@ -16,6 +16,8 @@ type boardLane struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
 	Items []struct {
+		ID    string `json:"id"`
+		Type  string `json:"type"`
 		Title string `json:"title"`
 		Kind  string `json:"kind"`
 		State string `json:"state"`
@@ -27,7 +29,7 @@ type boardLane struct {
 func (l boardLane) digestLane() digest.Lane {
 	out := digest.Lane{Key: l.Key, Name: l.Name, Count: l.Count}
 	for _, it := range l.Items {
-		li := digest.LaneItem{Title: it.Title, Status: firstNonEmpty(it.State, it.Kind)}
+		li := digest.LaneItem{ID: it.ID, Title: it.Title, Status: firstNonEmpty(it.State, it.Kind)}
 		if t, err := time.Parse(time.RFC3339, it.Since); err == nil {
 			li.Since = t
 		}

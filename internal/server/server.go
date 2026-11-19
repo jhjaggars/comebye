@@ -733,6 +733,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/coordinator", s.authAgent(s.handleCoordinator))
 	s.mux.HandleFunc("POST /api/coordinator/reset", s.auth(s.handleCoordinatorReset))
 	s.mux.HandleFunc("GET /api/roles", s.authWorker(s.handleRoles))
+	s.mux.HandleFunc("GET /api/coordinators", s.authAgent(s.handleCoordinators))
 	s.mux.HandleFunc("POST /api/roles", s.auth(s.handleSetRole))
 	s.mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))
 	s.mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))

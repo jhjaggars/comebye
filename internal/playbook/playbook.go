@@ -173,6 +173,14 @@ func FirstPrompt(kind, dir string) string {
 		"` and follow it: it explains your role and the `comebye` commands you act with. Then run `comebye whoami` and `comebye ledger`, and tell me briefly what you see."
 }
 
+// NewFirstPrompt is the first prompt of an additional coordinator (comebye
+// coordinator new): the playbook, plus that there are others, so it works only
+// on what it is given or hands off.
+func NewFirstPrompt(kind, name string) string {
+	return "You are the Comebye coordinator " + name + ", one of several: each coordinator has its own context, handoffs and to-dos. Run `comebye playbook --harness " + HarnessForKind(kind) +
+		"` and follow it. Then run `comebye whoami`, `comebye coordinator list` (it shows your notes file: keep it current) and `comebye ledger --active`, and tell me briefly what you see."
+}
+
 // WorkerArgs are the extra arguments a handoff's worker starts with: it
 // may run the commands it needs to finish (`comebye report`, `read`,
 // `whoami`) without a permission prompt, and nothing else of comebye.

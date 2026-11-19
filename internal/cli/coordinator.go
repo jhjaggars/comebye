@@ -32,7 +32,7 @@ func coordinatorDir(e *Env) string { return filepath.Join(StateDir(e.Getenv), "c
 
 func cmdCoordinator(e *Env, args []string) error {
 	if len(args) == 0 {
-		return usageErr("want init, digest, install-hook, status, reset or main")
+		return usageErr("want init, digest, install-hook, status, reset, main, new or list")
 	}
 	switch args[0] {
 	case "init":
@@ -47,8 +47,12 @@ func cmdCoordinator(e *Env, args []string) error {
 		return cmdCoordReset(e, args[1:])
 	case "main":
 		return cmdCoordMain(e, args[1:])
+	case "new":
+		return cmdCoordNew(e, args[1:])
+	case "list":
+		return cmdCoordList(e, args[1:])
 	}
-	return usageErr("unknown coordinator command %q (want init, digest, install-hook, status, reset or main)", args[0])
+	return usageErr("unknown coordinator command %q (want init, digest, install-hook, status, reset, main, new or list)", args[0])
 }
 
 // ---- digest ----
@@ -173,12 +177,23 @@ func buildDigest(e *Env, harness string) (string, []string) {
 	now := e.Now()
 	in := digest.Input{Now: now, Harness: harness}
 	var problems []string
+	var scope coordScope
+	scope.notFound = true
+	statePath := coordStatePath(e, "", true)
 	c, err := newClient(e)
 	if err != nil {
 		problems = append(problems, err.Error())
 	} else {
 		if me, err := c.getWhoami(); err == nil {
 			in.Agent = me.Agent
+		}
+		// Which coordinator this is: with several, the digest keeps to its
+		// own work and notes. Unknown (an old hub, no record): all of it.
+		if cs, err := c.getCoordinators(); err == nil && in.Agent != "" {
+			scope = scopeFor(cs, in.Agent)
+			if !scope.notFound {
+				statePath = coordStatePath(e, scope.self.Name, scope.self.Main)
+			}
 		}
 		var cs struct {
 			Last *struct {
@@ -226,18 +241,31 @@ func buildDigest(e *Env, harness string) (string, []string) {
 					since = in.LastReset
 				}
 			}
+			lg = scopedLedger(lg, scope)
 			in.Handoffs, in.Events = ledgerDigest(lg, since)
 			if evs, err := getLog(c, since.Format(time.RFC3339), "", 100); err != nil {
 				problems = append(problems, "hub log")
 			} else {
 				for _, ev := range evs {
+					if scope.scoped && !scope.keepEvent(ev.Subject) {
+						continue
+					}
 					in.Hub = append(in.Hub, digest.HubEvent{At: ev.At, Kind: ev.Kind, Text: ev.Text})
 				}
 			}
 		}
 	}
+	if scope.scoped {
+		var pl struct {
+			Plans []apiPlan `json:"plans"`
+		}
+		if err := c.call("GET", "/api/plans", nil, nil, &pl); err != nil {
+			problems = append(problems, "plans")
+		}
+		applyScope(&in, scope, pl.Plans)
+	}
 	// The coordinator's own notes, and the memory index it loads.
-	sp := filepath.Join(coordinatorDir(e), stateFileName)
+	sp := statePath
 	in.StatePath = sp
 	if tail, size, err := readTail(sp, 3*digest.StateTailBytes); err == nil {
 		in.StateTail, in.StateSize = tail, size

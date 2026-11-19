@@ -34,6 +34,7 @@ const (
 
 // LaneItem is one line of a board lane.
 type LaneItem struct {
+	ID     string // the handoff's or to-do's id; "" when unknown
 	Title  string
 	Status string // a handoff's state, a to-do's kind; "" when none
 	Since  time.Time
@@ -75,6 +76,14 @@ type Todo struct {
 	Waiting  string // the agent waiting on it
 	Answer   string // a short note that an answer is in, "" when none
 	At       time.Time
+}
+
+// Plan is an open plan.
+type Plan struct {
+	ID    string
+	Title string
+	Size  int
+	Done  int
 }
 
 // Handoff is a running or landing handoff.
@@ -123,6 +132,13 @@ type Input struct {
 	StateTail string
 	StatePath string
 	StateSize int
+	// Name is this coordinator's name and Main whether it is the main one.
+	// Scoped says the lists above hold only its own work (several
+	// coordinators are running); Others is then one line per other
+	// coordinator with its open counts, and Plans its open plans.
+	Name, Others string
+	Main, Scoped bool
+	Plans        []Plan
 	// MemoryIndex is the path of the memory index the coordinator loads
 	// ("" when there is none).
 	MemoryIndex string
@@ -146,8 +162,22 @@ func Build(in Input) string {
 	}
 	b.WriteString("\n")
 
+	if in.Scoped {
+		role := "one of several coordinators"
+		if in.Main {
+			role = "the main coordinator (events nobody owns come to you)"
+		}
+		fmt.Fprintf(&b, "## Whose work this is\nYou are %s, %s. The board, to-dos, plans, handoffs and events below are yours alone: work you handed off or asked about, and what nobody owns when you are main.\n", orDash(in.Name), role)
+		if in.Others != "" {
+			b.WriteString("Other coordinators (their open work; do not act on it):\n" + in.Others + "\n")
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString(section("## Board", board(in), boardBudget))
 	b.WriteString(section("## Open to-dos", todos(in), todoBudget))
+	if len(in.Plans) > 0 {
+		b.WriteString(section("## Open plans", plans(in), todoBudget/2))
+	}
 	b.WriteString(section("## Running and landing handoffs", handoffs(in), handoffBudget))
 	b.WriteString(section("## Ledger events since the last reset", events(in), eventBudget))
 	if len(in.Hub) > 0 {
@@ -229,6 +259,14 @@ func todos(in Input) string {
 			line += " — " + t.Answer
 		}
 		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func plans(in Input) string {
+	var out []string
+	for _, p := range in.Plans {
+		out = append(out, fmt.Sprintf("- `%s` %s (%d of %d done)", p.ID, oneLine(p.Title, 100), p.Done, p.Size))
 	}
 	return strings.Join(out, "\n")
 }

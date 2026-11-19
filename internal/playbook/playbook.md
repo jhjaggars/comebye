@@ -280,8 +280,10 @@ to-dos, running and landing handoffs, recent ledger events, what the hub
 handled itself, the tail of your state file). You keep your pane, name and role. The user can also
 start one from the app.
 
-- **Keep `~/.local/state/comebye/coordinator/state.md` current** at
-  milestones: decisions, gotchas, what you are waiting for, newest last.
+- **Keep your state file current** at milestones (the main coordinator's is
+  `~/.local/state/comebye/coordinator/state.md`; any other coordinator's is
+  `~/.local/state/comebye/coordinators/<name>/state.md`; `comebye coordinator
+  list` shows yours, marked `*`): decisions, gotchas, what you are waiting for, newest last.
   After a fresh start its tail and the digest are all you remember.
 - After one, run `comebye todo list` and `comebye ledger --active` before
   acting. `comebye coordinator digest` prints the digest again.

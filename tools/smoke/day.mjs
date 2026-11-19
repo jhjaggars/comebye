@@ -31,6 +31,8 @@ async function dumpState(tag) {
     const agents = await get("/api/agents").then((r) => r.agents).catch((e) => String(e));
     lines.push("agents: " + JSON.stringify(agents, null, 1));
     lines.push("ledger: " + JSON.stringify(await get("/api/ledger").catch((e) => String(e)), null, 1));
+    lines.push("coordinators: " + JSON.stringify(await get("/api/coordinators").catch((e) => String(e)), null, 1));
+    lines.push("log: " + JSON.stringify(await get("/api/log?since=1h").catch((e) => String(e)), null, 1));
     lines.push("todos: " + JSON.stringify(await get("/api/todos?state=all").catch((e) => String(e)), null, 1));
     for (const a of Array.isArray(agents) ? agents : []) {
       const r = await rpc("smoke.prompts", { target: a.name }).catch(() => null);
@@ -435,7 +437,38 @@ await check("7. `comebye coordinator digest` carries the handoffs, the board and
   const d = ok(cli(await coord.pane(), ["coordinator", "digest"]), "digest");
   must(/feat\/hello reported \(status now landed\)/.test(d), "digest has no landed handoff:\n" + d);
   must(/handed off `h[0-9a-f]+` proj feat\/two/.test(d), "digest does not know the second handoff:\n" + d);
-  must(/## The hub handled since your last turn/.test(d) && /relay/.test(d), "digest has no hub-handled section:\n" + d);
+  // coord is not main here (coord2 is): its digest holds its own work, so the landing of its worker. The relay of the user's
+  // answer was about a to-do waiting on a pane that is gone (the worker was parked and resumed), which nobody owns now: main's.
+  must(/## The hub handled since your last turn/.test(d) && /\[landed\]/.test(d), "digest has no hub-handled section:\n" + d);
+  const dm = ok(cli(await coord2.pane(), ["coordinator", "digest"]), "main digest");
+  must(/\[relay\]/.test(dm), "main's digest does not have the relay nobody owns:\n" + dm);
+});
+
+await check("another coordinator: `comebye coordinator new` starts one with its own digest and notes; main's notes path is unchanged", async () => {
+  const o = ok(cli(null, ["coordinator", "new", "proj-a", "--kind", "claude"]), "coordinator new");
+  must(/Started coordinator proj-a/.test(o), "new said: " + o);
+  const projA = new Agent("proj-a");
+  await until(() => agentNamed("proj-a"), "the hub to see proj-a");
+  must((await agentNamed("proj-a")).cwd === `${tmp}/state/coordinators/proj-a`, "proj-a's directory: " + (await agentNamed("proj-a")).cwd);
+  const roles = (await get("/api/roles")).roles;
+  const id = (await agentNamed("proj-a")).id;
+  must(roles[id]?.role === "coordinator" && !roles[id].main, "proj-a's role: " + JSON.stringify(roles[id]));
+  const list = ok(cli(await coord2.pane(), ["coordinator", "list"]), "coordinator list");
+  must(/^coord2 \*\s+main\s.*\/coordinator\/state\.md/m.test(list), "list does not show main with the unchanged path:\n" + list);
+  must(new RegExp(`^proj-a\\s.*${tmp}/state/coordinators/proj-a/state\\.md`, "m").test(list), "list does not show proj-a with its own state file:\n" + list);
+  // Each one's digest names its own notes; proj-a's is scoped and says who else there is.
+  fs.mkdirSync(`${tmp}/state/coordinators/proj-a`, { recursive: true });
+  fs.writeFileSync(`${tmp}/state/coordinators/proj-a/state.md`, "## proj-a\n- proj-a's own note\n");
+  const da = ok(cli(await projA.pane(), ["coordinator", "digest"]), "proj-a digest");
+  must(da.includes(`${tmp}/state/coordinators/proj-a/state.md`) && da.includes("proj-a's own note"), "proj-a's digest has not its own notes:\n" + da.slice(0, 600));
+  must(/one of several coordinators/.test(da) && /coord2 \(main\): \d+ handoffs/.test(da), "proj-a's digest is not scoped:\n" + da.slice(0, 600));
+  must(!/feat\/hello/.test(da) && !/feat\/two/.test(da), "proj-a's digest carries main's handoffs:\n" + da);
+  const dm = ok(cli(await coord2.pane(), ["coordinator", "digest"]), "main digest");
+  must(dm.includes(`${tmp}/state/coordinator/state.md`) && !dm.includes("coordinators/proj-a") && !/proj-a's own note/.test(dm), "main's digest paths:\n" + dm.slice(0, 600));
+  must(/the main coordinator/.test(dm) && /- proj-a: 0 handoffs/.test(dm), "main's digest does not summarise proj-a:\n" + dm.slice(0, 600));
+  // A name that is taken is refused, and nothing else is started.
+  const again = cli(null, ["coordinator", "new", "proj-a", "--kind", "claude"]);
+  must(again.code !== 0 && /already running/.test(again.out), "a second proj-a: " + again.out);
 });
 
 await check("the browser run was clean: no page errors", async () => { must(pageErrors.length === 0, pageErrors.join("; ")); });

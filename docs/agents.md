@@ -418,6 +418,55 @@ that belongs to one of them:
   handoff's finished notice the hub still waits the usual ten minutes
   before standing in.
 
+#### Making another coordinator
+
+The user starts one coordinator per project (or per anything), each in its
+own context window, so several can be typed to at nearly the same time:
+
+```sh
+comebye coordinator new proj-a                      # in <state>/coordinators/proj-a
+comebye coordinator new proj-b --dir ~/code/proj-b  # in a project (inside a launch root)
+comebye coordinator new proj-c --host kube          # on another host
+```
+
+It is the Coordinator preset with a name: the same Claude arguments
+(`--allowedTools "Bash(comebye:*)"`, the `--settings` file with the reset
+hook from `comebye coordinator install-hook`, which every coordinator on a
+host shares) and the coordinator role, recorded on the hub. It is the
+user's alone (`--login you@example.com`, or `$COMEBYE_LOGIN`): an agent token
+is refused, like any launch. The hub does not run `git pull` in a `--dir`,
+and the first prompt is the playbook's plus "you are one of several". It
+prints the pane and the notes file. Talk to it in the app (it is pinned
+with the coordinators) or in its herdr pane. What it hands off, and what it
+prompts, answers to it (see above); a notice for something nobody owns still
+goes to main. An app button for it is a follow-up; until then it is the CLI.
+
+Each coordinator has its **own notes and digest**:
+
+- Notes: the main coordinator's stay at
+  `~/.local/state/comebye/coordinator/state.md`, where they always were (an
+  upgrade loses nothing); another's are
+  `~/.local/state/comebye/coordinators/<name>/state.md`. The file follows
+  the *main* mark: if the user moves main, the new main reads the original
+  file and the old one starts on its own path.
+- Digest (`comebye coordinator digest`, and the fresh-start hook): its notes
+  only; the board, to-dos, plans, handoffs and events that are its own
+  (owner = it; main also gets what nobody owns); and one line per other
+  coordinator with its open counts. A lone coordinator, or an old hub,
+  gets the whole digest as before.
+- `comebye coordinator list` shows each coordinator, main marked, you
+  starred, with host and pane, status, open handoffs, to-dos and plans, and
+  its notes file (`(on HOST)` when it is not this machine's).
+
+**Removing one.** The user marks it ready to remove and removes it like any
+agent (agents cannot mark a coordinator; removing one asks for the extra
+confirmation), or clears its role (the app's menu, `POST /api/roles` with an
+empty role). Its
+open handoffs, to-dos and plans fall back to main by the rules above ("a gone
+owner") and the notices say whose they were; its notes directory under
+`coordinators/` stays on disk for the user to keep or delete. If it was
+main, the oldest remaining coordinator becomes main.
+
 ### The coordinator directory
 
 A coordinator can start in a directory you own, a git repository, and load
