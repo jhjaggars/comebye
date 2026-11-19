@@ -168,7 +168,7 @@ async function readScreen(width, theme, route, sel) {
     await page.waitForTimeout(300);
     const r = await page.evaluate((sel) => { const e = document.querySelector(sel), c = getComputedStyle(e), b = e.getBoundingClientRect(), root = getComputedStyle(document.documentElement);
       const h = e.querySelector("header") && getComputedStyle(e.querySelector("header"));
-      return { bg: c.backgroundColor, left: b.left, bw: c.borderLeftWidth, bc: c.borderLeftColor, bgvar: root.getPropertyValue("--bg").trim(), border: root.getPropertyValue("--border").trim(), nav: getComputedStyle(document.body).backgroundColor,
+      return { bg: c.backgroundColor, left: b.left, bw: c.borderLeftWidth, bc: c.borderLeftColor, bgvar: root.getPropertyValue("--bg").trim(), s1: root.getPropertyValue("--s1").trim(), border: root.getPropertyValue("--border").trim(), nav: getComputedStyle(document.body).backgroundColor,
         listw: parseFloat(getComputedStyle(document.body).gridTemplateColumns.split(" ")[0]), head: h && h.backgroundColor }; }, sel);
     if (process.env.NAV_SHOTS) await page.screenshot({ path: `${out}/navscreen-${route.split("/")[0]}-${theme.id}-${width}.png` });
     return r;
@@ -180,7 +180,7 @@ for (const th of THEMES) {
       await check(`${th.id} @${w}: ${route} cell is on --bg with a clean 1px edge at the list column`, async () => {
         const r = await readScreen(w, th, route, sel);
         if (!near(rgb(r.bg), hex(r.bgvar))) throw new Error(`${sel} ${r.bg}, want --bg ${r.bgvar}`);
-        if (r.head && rgb(r.head)[3] !== 0 && !near(rgb(r.head), hex(r.bgvar))) throw new Error(`${sel} header ${r.head}, want --bg ${r.bgvar}`);
+        if (r.head && rgb(r.head)[3] !== 0 && !near(rgb(r.head), hex(r.s1))) throw new Error(`${sel} header ${r.head}, want --s1 ${r.s1} (Surfaces: Layered lifts the bar one step above the page)`);
         if (Math.abs(r.left - r.listw) > 1) throw new Error(`${sel} starts at x=${r.left}, the list column ends at ${r.listw}`);
         if (r.bw !== "1px" || !near(rgb(r.bc), hex(r.border))) throw new Error(`${sel} left edge ${r.bw} ${r.bc}, want 1px --border ${r.border}`);
         if (near(rgb(r.nav), rgb(r.bg))) throw new Error(`the list column ${r.nav} is not distinct from the ${sel} cell ${r.bg}`);
