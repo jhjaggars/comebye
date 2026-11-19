@@ -89,27 +89,43 @@ type SetRule struct {
 	Fix   *SetFix        `json:"fix,omitempty"`
 }
 
-// SetChoice is the draft answer to one decision.
+// setMaxText bounds a typed answer to one decision; setMaxNote the note on
+// the set as a whole.
+const (
+	setMaxText = 500
+	setMaxNote = todoMaxNote
+)
+
+// SetChoice is the draft answer to one decision: a 1-based Option, or Text
+// (the user's own words, "Other"), never both. A text answer is confirmed
+// the moment it is typed: the user wrote it, there is nothing to suggest.
 type SetChoice struct {
-	Option    int  `json:"option"`
-	Confirmed bool `json:"confirmed"`
+	Option    int    `json:"option"`
+	Text      string `json:"text,omitempty"`
+	Confirmed bool   `json:"confirmed"`
 }
+
+// answered: the decision has an option or typed text.
+func (c SetChoice) answered() bool { return c.Option > 0 || c.Text != "" }
 
 // SetDraft is the user's work so far. Rev counts the saves, so two screens
 // can tell they are out of date.
 type SetDraft struct {
-	Rev       int                  `json:"rev"`
-	Choices   map[string]SetChoice `json:"choices,omitempty"`
-	Facts     map[string]bool      `json:"facts,omitempty"` // known
-	UpdatedAt time.Time            `json:"updated_at,omitzero"`
-	By        string               `json:"by,omitempty"`
+	Rev     int                  `json:"rev"`
+	Choices map[string]SetChoice `json:"choices,omitempty"`
+	Facts   map[string]bool      `json:"facts,omitempty"` // known
+	// Note is the user's free text about the set as a whole.
+	Note      string    `json:"note,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	By        string    `json:"by,omitempty"`
 }
 
 // SetResultChoice is one answer in the submitted result.
 type SetResultChoice struct {
-	Option    int    `json:"option"`
-	Label     string `json:"label"`
-	Suggested bool   `json:"suggested"` // it was the recommendation
+	Option    int    `json:"option"`         // 0 for a text answer
+	Label     string `json:"label"`          // the option's label, or the text
+	Text      string `json:"text,omitempty"` // set for a text answer ("Other")
+	Suggested bool   `json:"suggested"`      // it was the recommendation
 	Early     bool   `json:"early,omitempty"`
 }
 
@@ -117,6 +133,7 @@ type SetResultChoice struct {
 type SetResult struct {
 	Decisions map[string]SetResultChoice `json:"decisions"`
 	Facts     map[string]string          `json:"facts,omitempty"` // known or unknown
+	Note      string                     `json:"note,omitempty"`  // the note on the set as a whole
 	Warnings  []SetConflict              `json:"warnings,omitempty"`
 }
 
@@ -309,7 +326,8 @@ func cleanSet(in *TodoSet) (*TodoSet, error) {
 // ---- rules ----
 
 // conflicts are the rules that fire on the draft: every decision in When
-// has the option named, confirmed or not.
+// has the option named, confirmed or not. A text answer has no option, so no
+// rule fires on it: the hub cannot know what the user's words mean.
 func (ts *TodoSet) conflicts(ch map[string]SetChoice) []SetConflict {
 	var out []SetConflict
 	for _, r := range ts.Rules {
@@ -331,7 +349,7 @@ func (ts *TodoSet) conflicts(ch map[string]SetChoice) []SetConflict {
 func (ts *TodoSet) missing(ch map[string]SetChoice) []string {
 	var out []string
 	for _, d := range ts.Decisions {
-		if c := ch[d.ID]; c.Option == 0 || !c.Confirmed {
+		if c := ch[d.ID]; !c.answered() || !c.Confirmed {
 			out = append(out, d.ID)
 		}
 	}
@@ -359,7 +377,9 @@ func (ts *TodoSet) setMarkdown(withDraft bool) string {
 			sb.WriteString(" (one-way door)")
 		}
 		if withDraft {
-			if c := ts.Draft.Choices[d.ID]; c.Option > 0 {
+			if c := ts.Draft.Choices[d.ID]; c.Text != "" {
+				fmt.Fprintf(&sb, ": Other: %s", c.Text)
+			} else if c.Option > 0 {
 				fmt.Fprintf(&sb, ": %s", d.Options[c.Option-1].Label)
 				if c.Option == d.Recommend {
 					sb.WriteString(" (suggested)")
@@ -478,6 +498,8 @@ type draftBody struct {
 	Rev     *int                 `json:"rev"`
 	Choices map[string]SetChoice `json:"choices"`
 	Facts   map[string]bool      `json:"facts"`
+	// Note replaces the note on the set as a whole; absent keeps it.
+	Note *string `json:"note"`
 	// AcceptSuggestions fills the decisions that have no choice with the
 	// recommendation. A one-way door is filled but left unconfirmed.
 	AcceptSuggestions bool `json:"accept_suggestions"`
@@ -501,6 +523,15 @@ func (ts *TodoSet) applyDraft(b draftBody, by string, now time.Time) (SetDraft, 
 		if dec == nil {
 			return d, reqErr(http.StatusBadRequest, "bad_choice", fmt.Sprintf("%q is not a decision of this set", oneLine(id, 20)))
 		}
+		c.Text = strings.TrimSpace(strings.ReplaceAll(oneLine(c.Text, setMaxText), "**", ""))
+		if c.Text != "" {
+			if c.Option != 0 {
+				return d, reqErr(http.StatusBadRequest, "bad_choice", fmt.Sprintf("decision %s: an option or text, not both", id))
+			}
+			c.Confirmed = true
+			d.Choices[id] = c
+			continue
+		}
 		if c.Option == 0 {
 			continue // cleared
 		}
@@ -508,6 +539,10 @@ func (ts *TodoSet) applyDraft(b draftBody, by string, now time.Time) (SetDraft, 
 			return d, reqErr(http.StatusBadRequest, "bad_choice", fmt.Sprintf("decision %s has %d options, not %d", id, len(dec.Options), c.Option))
 		}
 		d.Choices[id] = c
+	}
+	d.Note = ts.Draft.Note
+	if b.Note != nil {
+		d.Note = block(*b.Note, setMaxNote)
 	}
 	for id, known := range b.Facts {
 		found := false
@@ -523,7 +558,7 @@ func (ts *TodoSet) applyDraft(b draftBody, by string, now time.Time) (SetDraft, 
 	}
 	if b.AcceptSuggestions {
 		for _, dec := range ts.Decisions {
-			if _, ok := d.Choices[dec.ID]; !ok && dec.Recommend > 0 {
+			if c := d.Choices[dec.ID]; !c.answered() && dec.Recommend > 0 {
 				d.Choices[dec.ID] = SetChoice{Option: dec.Recommend, Confirmed: !dec.OneWay}
 			}
 		}
@@ -574,7 +609,7 @@ func (s *Server) handleTodoDraft(w http.ResponseWriter, r *http.Request) {
 		ts.Draft = d
 		var fresh []string
 		for _, dec := range ts.Decisions {
-			if c := d.Choices[dec.ID]; dec.Early && c.Option > 0 && c.Confirmed {
+			if c := d.Choices[dec.ID]; dec.Early && c.answered() && c.Confirmed {
 				before := len(ts.Released)
 				ts.Released = addUnique(ts.Released, dec.ID)
 				if len(ts.Released) > before {
@@ -646,6 +681,10 @@ func (s *Server) handleTodoSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, d := range ts.Decisions {
 			c := ts.Draft.Choices[d.ID]
+			if c.Text != "" {
+				res.Decisions[d.ID] = SetResultChoice{Label: c.Text, Text: c.Text, Early: contains(ts.Released, d.ID)}
+				continue
+			}
 			res.Decisions[d.ID] = SetResultChoice{Option: c.Option, Label: d.Options[c.Option-1].Label, Suggested: c.Option == d.Recommend, Early: contains(ts.Released, d.ID)}
 		}
 		for _, f := range ts.Facts {
@@ -655,8 +694,12 @@ func (s *Server) handleTodoSubmit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		now := s.todos.now()
+		res.Note = ts.Draft.Note
 		ts.Result, ts.SubmittedAt = res, &now
 		md := ts.setMarkdown(true)
+		if res.Note != "" {
+			md += "\n\nThe user's note on the set (their own words):\n\n" + res.Note
+		}
 		if note != "" {
 			md += "\n\nThe user's notes (their own words):\n\n" + note
 		}
