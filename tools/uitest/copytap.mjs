@@ -21,7 +21,9 @@ async function check(name, fn) {
   await page.screenshot({ path: `${out}/copytap-${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
 }
 const same = (got, want, what) => { if (got !== want) throw new Error(`${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); };
-const clip = () => page.evaluate(() => navigator.clipboard.readText());
+// What the clipboard holds once the tap has written it: every read follows a sentinel write, so wait for the text to change.
+const changed = (pg) => pg.waitForFunction(async () => (await navigator.clipboard.readText()) !== "sentinel", null, { timeout: 4000, polling: 50 }).catch(() => {});
+const clip = async () => { await changed(page); return page.evaluate(() => navigator.clipboard.readText()); };
 const sentinel = () => page.evaluate(() => navigator.clipboard.writeText("sentinel"));
 const post = (path, body) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 
@@ -61,7 +63,7 @@ await check("inline: a tap copies the value and shows a check", async () => {
   same(await clip(), "c9fa5cc", "sha");
   await page.waitForFunction(() => document.querySelector("[role=status].sr-only")?.textContent === "Copied c9fa5cc");
   await page.waitForFunction(() => !document.querySelector(".td-ctx code.cp").dataset.state, null, { timeout: 4000 });
-  await sentinel(); await ctxCp().nth(2).click(); await page.waitForTimeout(250);
+  await sentinel(); await ctxCp().nth(2).click(); 
   same(await clip(), "/tmp/shots/shot-390.png", "path");
 });
 
@@ -76,18 +78,18 @@ await check("inline: the tap area is about 32px high and a tap just above the te
   if (h < 30) throw new Error("tap area is " + h + "px high, want 30 or more");
   await sentinel();
   await page.mouse.click(box.x + box.width / 2, box.y - 7);
-  await page.waitForTimeout(300);
+  
   same(await clip(), "c9fa5cc", "tap 7px above the text");
 });
 
 await check("inline: Enter and Space copy from the keyboard", async () => {
   await ctxCp().nth(1).evaluate((e) => e.scrollIntoView({ block: "center" }));
   await ctxCp().nth(1).focus();
-  await sentinel(); await page.keyboard.press("Enter"); await page.waitForTimeout(250);
+  await sentinel(); await page.keyboard.press("Enter"); 
   same(await clip(), "research/copy-buttons", "Enter");
-  await page.waitForTimeout(1700);
+  await page.waitForFunction(() => !document.querySelectorAll(".td-ctx code.cp")[1].dataset.state, null, { timeout: 4000 }); // the check has cleared
   await ctxCp().nth(1).focus();
-  await sentinel(); await page.keyboard.press("Space"); await page.waitForTimeout(250);
+  await sentinel(); await page.keyboard.press("Space"); 
   same(await clip(), "research/copy-buttons", "Space");
 });
 
@@ -132,10 +134,10 @@ await check("chat: Copy under a message copies its Markdown source (yours and th
   same(await ub.getAttribute("aria-label"), "Copy message", "aria-label");
   const h = await ub.evaluate((e) => e.getBoundingClientRect().height);
   if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
-  await sentinel(); await ub.click(); await page.waitForTimeout(300);
+  await sentinel(); await ub.click(); 
   same(await clip(), SENT, "your message");
   const ab = reply.last().locator(".cpb");
-  await sentinel(); await ab.click(); await page.waitForTimeout(300);
+  await sentinel(); await ab.click(); 
   const got = await clip();
   if (!got.includes("```sh") || !got.includes("echo " + MARK)) throw new Error("reply source lost its fence: " + JSON.stringify(got));
   const sz = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
@@ -157,10 +159,10 @@ await check("chat: a tool call copies the command and the result", async () => {
   const cmd = card.locator('.cpb[data-copy-target=".toolargs"]');
   const h = await cmd.evaluate((e) => e.getBoundingClientRect().height);
   if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
-  await sentinel(); await cmd.click(); await page.waitForTimeout(300);
+  await sentinel(); await cmd.click(); 
   same(await clip(), "Bash go test ./internal/upgrade/", "command");
-  await page.waitForTimeout(1600);
-  await sentinel(); await card.locator('.cpb[data-copy-target=".toolresult"]').click(); await page.waitForTimeout(300);
+  await page.waitForFunction(() => ![...document.querySelectorAll(".cpb")].some((b) => /Copied/.test(b.textContent)), null, { timeout: 4000 }); // the label is back
+  await sentinel(); await card.locator('.cpb[data-copy-target=".toolresult"]').click(); 
   same(await clip(), "ok  \tgithub.com/x/upgrade\t0.412s\nok  \tgithub.com/x/other\t0.2s", "result, with its line break and tab");
   same(await card.locator(".tr-detail").isVisible(), true, "the row stays open");
   await page.unroute(/\/transcript\?/);
@@ -184,7 +186,7 @@ await check("answer card: Copy screen copies the terminal snapshot", async () =>
   await b.waitFor({ state: "visible" });
   const want = (await page.locator("#answer-snap").evaluate((e) => e.innerText)).replace(/\n+$/, "");
   if (!want) throw new Error("the snapshot is empty");
-  await sentinel(); await b.click(); await page.waitForTimeout(300);
+  await sentinel(); await b.click(); 
   // The snapshot is redrawn on each poll, and a redraw can add or drop a blank first line (a <pre> ignores one when it is
   // parsed, not when it is set), so want, read just before the click, and the copy can differ by that line.
   same((await clip()).replace(/^\n+/, ""), want.replace(/^\n+/, ""), "snapshot");
@@ -200,9 +202,9 @@ await check("an error toast carries a Copy button that copies the message", asyn
   await b.waitFor({ state: "visible" });
   const h = await b.evaluate((e) => e.getBoundingClientRect().height);
   if (h < 35.5) throw new Error("tap target is " + h + "px high, want 36");
-  await page.waitForTimeout(3200); // longer than a plain toast
+  await page.waitForTimeout(3200); // an intended wait: the error toast must outlive a plain toast
   if (!(await b.isVisible())) throw new Error("the error toast was gone after 3.2 s");
-  await sentinel(); await b.click(); await page.waitForTimeout(300);
+  await sentinel(); await b.click(); 
   same(await clip(), "could not send: gpg failed to sign the data", "toast text, without the button label");
   same((await b.innerText()).trim(), "Copied", "label");
   await page.evaluate(() => toast("saved"));
@@ -232,7 +234,7 @@ await check("pages: Copy link uses the shared helper, and a page's own copy butt
   const cl = page.locator("#pgs-copy");
   await cl.waitFor({ timeout: 8000 });
   same(await page.locator("iframe.pgs-frame").getAttribute("allow"), "clipboard-write", "frame allow");
-  await sentinel(); await cl.click(); await page.waitForTimeout(400);
+  await sentinel(); await cl.click(); 
   const link = await clip();
   if (!link.includes("/p/" + pgid)) throw new Error("link copied: " + JSON.stringify(link));
   const fr = page.frameLocator("iframe.pgs-frame");
@@ -251,14 +253,14 @@ async function dcheck(name, fn) {
   catch (e) { results.push({ name: "desktop: " + name, ok: false }); console.log("FAIL desktop: " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
   await desk.page.screenshot({ path: `${out}/copytap-desktop-${name.replace(/\W+/g, "-")}.png` }).catch(() => {});
 }
-const dclip = () => desk.page.evaluate(() => navigator.clipboard.readText());
+const dclip = async () => { await changed(desk.page); return desk.page.evaluate(() => navigator.clipboard.readText()); };
 await dcheck("the To do detail has no item id; an inline path copies", async (pg) => {
   await pg.goto(base + "/#/todo", { waitUntil: "load" });
   await pg.waitForSelector(`#p-todo .td-item[data-id="${tid}"] .td-row`, { state: "visible", timeout: 8000 });
   await pg.locator(`#p-todo .td-item[data-id="${tid}"] .td-row`).first().click();
   same(await pg.locator(".td-panel").first().evaluate((e, id) => e.innerText.includes(id), tid), false, "item id shown");
   await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
-  await pg.locator("#p-todo .td-ctx code.cp").nth(2).click(); await pg.waitForTimeout(250);
+  await pg.locator("#p-todo .td-ctx code.cp").nth(2).click(); 
   same(await dclip(), "/tmp/shots/shot-390.png", "path");
 });
 
@@ -279,7 +281,7 @@ await dcheck("the hub-check block copies its lines", async (pg) => {
   const b = pg.locator('#ps-body details[data-id="cpfx"] .hubchk .cpb');
   await b.waitFor();
   await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
-  await b.click(); await pg.waitForTimeout(300);
+  await b.click(); 
   const got = await dclip();
   if (!/1 claim in the report contradicts what the hub found\n/.test(got) || !/the report says pushed, but 2 commit\(s\) are on no remote\n/.test(got) || !/CI is green/.test(got) || /Copy|[✓✗]/.test(got)) throw new Error("hub check text: " + JSON.stringify(got));
   await pg.unroute(/\/api\/ledger$/); await pg.unroute(/\/api\/ledger\/cpfx\/hubcheck$/);
@@ -302,7 +304,7 @@ await dcheck("a Status report has Copy report that copies its Markdown", async (
   const open = await pg.locator('#ps-body details[data-id="cpfx"]').evaluate((d) => d.open);
   same(open, true, "pressing Copy report must not close the report");
   await pg.evaluate(() => navigator.clipboard.writeText("sentinel"));
-  await b.click(); await pg.waitForTimeout(300);
+  await b.click(); 
   same(await dclip(), REPORT, "report source");
   same(await pg.locator('#ps-body details[data-id="cpfx"]').evaluate((d) => d.open), true, "report stays open after Copy");
   await pg.unroute(/\/api\/ledger$/);
@@ -321,7 +323,7 @@ async function screenCheck(pg, rd, sent) {
   const box = await b.boundingBox(), out = await pg.locator("#output").boundingBox();
   if (box.height < 35.5) throw new Error("tap target is " + box.height + "px high, want 36");
   if (box.y + box.height > out.y + 1) throw new Error("Copy screen should sit above the terminal text");
-  await sent(); await b.click(); await pg.waitForTimeout(300);
+  await sent(); await b.click(); 
   same(await rd(), SCREEN.replace(/\n+$/, ""), "screen text, with no button label in it");
   same(await b.textContent(), "Copied", "button feedback");
   await pg.unroute(/\/transcript\?/); await pg.unroute(/\/output\?lines=/);

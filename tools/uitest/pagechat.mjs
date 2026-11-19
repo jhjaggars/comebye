@@ -54,11 +54,19 @@ for (const width of [1280, 390]) {
   let off = null;
   await page.route(/\/api\/pages\/[^/]+\/chat-options$/, (r) => r.fulfill({ json: off || { ok: true, kind: "claude" } }));
   const toastText = async () => (await page.locator("#toast").textContent()).trim();
+  // settle: two frames, then no finite CSS transition or animation still running (a menu has slid in), not a timer.
+  const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+  // until(fn, arg): poll fn in the page (page.evaluate: this page's CSP refuses the string eval that page.waitForFunction does), a frame apart, up to 5 s.
+  const until = async (fn, arg) => { const end = Date.now() + 5000; while (Date.now() < end) { if (await page.evaluate(fn, arg)) return true; await frames(); } return false; };
+  const settle = async () => { await frames(); await until(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity)); };
+  // Conditions on what the page has sent and said, not a pause: the tap's POST has been seen / the toast reads as wanted.
+  const waitPosts = async (n) => { const end = Date.now() + 5000; while (posts.length < n && Date.now() < end) await frames(); };
+  const waitToast = (re) => until((src) => new RegExp(src[0], src[1]).test((document.querySelector("#toast")?.textContent || "").trim()), [re.source, re.flags]);
   const open = async () => {
     posts.length = 0;
     await page.goto(base + "/#/pages/" + id, { waitUntil: "load" });
     await page.waitForSelector("#pgs-chat", { timeout: 8000 });
-    await page.waitForTimeout(500);
+    await settle();
   };
   const box = async (sel) => (await page.locator(sel).boundingBox());
 
@@ -71,7 +79,7 @@ for (const width of [1280, 390]) {
     await page.screenshot({ path: `${out}/pagechat-bar-${width}.png` });
     await page.click("#pgs-menub");
     await page.waitForSelector("#pgs-menu:not([hidden])");
-    await page.waitForTimeout(500);
+    await settle();
     const items = await page.locator("#pgs-menu [role=menuitem]:visible").allTextContents();
     if (items[0].trim() !== "Chat about this") throw new Error("menu items: " + items.join(" | "));
     const m = await box("#pgs-chatmi");
@@ -83,14 +91,14 @@ for (const width of [1280, 390]) {
     await open();
     let release; hold = new Promise((r) => (release = r));
     await page.click("#pgs-chat");
-    await page.waitForTimeout(300);
+    await waitToast(/Opening the chat/);
     if (!/Opening the chat/.test(await toastText())) throw new Error("toast while starting: " + (await toastText()));
     await page.screenshot({ path: `${out}/pagechat-toast-${width}.png` });
     await page.click("#pgs-chat", { force: true }); // a second tap while it starts
-    await page.waitForTimeout(200);
+    await settle();
     release(); hold = null;
     await page.waitForFunction(() => /^#\/(agent|a)\b|detail|chat/i.test(location.hash) || document.body.classList.contains("in-detail") || !document.getElementById("detail")?.hidden, null, { timeout: 8000 }).catch(() => {});
-    await page.waitForTimeout(800);
+    await waitPosts(1); await settle();
     if (posts.length !== 1) throw new Error("posts: " + JSON.stringify(posts));
     if (posts[0].url !== `/api/pages/${id}/chat` || posts[0].method !== "POST") throw new Error("post " + JSON.stringify(posts[0]));
     const opened = await page.evaluate(() => !!(document.getElementById("detail") && !document.getElementById("detail").hidden && document.getElementById("detail").offsetParent));
@@ -104,7 +112,7 @@ for (const width of [1280, 390]) {
     await page.click("#pgs-menub");
     await page.waitForSelector("#pgs-menu:not([hidden])");
     await page.click("#pgs-chatmi");
-    await page.waitForTimeout(500);
+    await waitPosts(1); await settle();
     if (posts.length !== 1) throw new Error("posts: " + posts.length);
     const t = await toastText();
     if (!/waiting at a prompt/.test(t) || !/answer/i.test(t)) throw new Error("toast: " + t);
@@ -122,12 +130,12 @@ for (const width of [1280, 390]) {
     if (m.height < (width > 500 ? 32 : 44)) throw new Error("menu item height " + m.height);
     await page.screenshot({ path: `${out}/pagechat-newitem-${width}.png` });
     await page.click("#pgs-chatnew");
-    await page.waitForTimeout(500);
+    await waitPosts(1); await settle();
     if (posts.length !== 1 || JSON.parse(posts[0].body).new !== true) throw new Error("posts: " + JSON.stringify(posts));
     if (!(await page.locator("#pgs-menu").isHidden())) throw new Error("the menu stayed open");
     await open();
     await page.click("#pgs-chat");
-    await page.waitForTimeout(500);
+    await waitPosts(1); await settle();
     if (posts.length !== 1 || JSON.parse(posts[0].body).new) throw new Error("a plain tap sent new: " + JSON.stringify(posts));
   });
 
@@ -136,7 +144,7 @@ for (const width of [1280, 390]) {
       mode = m;
       await open();
       await page.click("#pgs-chat");
-      await page.waitForTimeout(500);
+      await waitToast(re);
       const t = await toastText();
       if (!re.test(t)) throw new Error("toast: " + t);
     });
@@ -147,12 +155,12 @@ for (const width of [1280, 390]) {
       mode = m;
       await open();
       await page.click("#pgs-chat");
-      await page.waitForTimeout(500);
+      await waitToast(re);
       const t = await toastText();
       if (!re.test(t)) throw new Error("toast: " + t);
       if (!/#\/pages\//.test(page.url())) throw new Error("left the page: " + page.url());
       await page.click("#pgs-chat"); // not stuck busy
-      await page.waitForTimeout(300);
+      await waitPosts(2); await settle();
       if (posts.length !== 2) throw new Error("a retry did not post: " + posts.length);
       if (m === "no_host") await page.screenshot({ path: `${out}/pagechat-refused-${width}.png` });
     });
@@ -169,15 +177,16 @@ for (const width of [1280, 390]) {
     if (title !== reason) throw new Error("title: " + title);
     await page.click("#pgs-menub");
     await page.waitForSelector("#pgs-menu:not([hidden])");
-    await page.waitForTimeout(500);
+    await until(() => { const r = document.querySelector("#pgs-chatmi").getBoundingClientRect(); return r.bottom <= innerHeight && r.top >= 0; }); // the menu has come in
+    await settle();
     for (const sel of ["#pgs-chatmi", "#pgs-chatnew"]) {
       if ((await page.getAttribute(sel, "aria-disabled")) !== "true") throw new Error(sel + " is not marked off");
     }
     await page.click("#pgs-chatmi", { force: true });
-    await page.waitForTimeout(400);
+    await waitToast(/no read-only mode/);
     if (!/no read-only mode/.test(await toastText())) throw new Error("toast: " + (await toastText()));
     await page.click("#pgs-chat", { force: true });
-    await page.waitForTimeout(300);
+    await settle();
     if (posts.length !== 0) throw new Error("a disabled button posted: " + JSON.stringify(posts));
     await page.screenshot({ path: `${out}/pagechat-off-${width}.png` });
     off = null;

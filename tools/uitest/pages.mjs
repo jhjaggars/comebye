@@ -143,6 +143,16 @@ page.on("pageerror", (e) => log.push(`pageerror: ${e.message}`));
 let popups = 0;
 desktop.ctx.on("page", () => { popups++; });
 const frameOf = (id) => page.frames().find((f) => f.url().includes("/p/" + id));
+// waitFrame: the frame of page `id` in pg, once its iframe exists and has navigated to the page (a condition, not a poll loop with sleeps).
+// settle: two animation frames in pg, then no finite CSS transition or animation still running (not a timer).
+const settle = async (pg) => { await pg.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))); await pg.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {}); };
+const waitFrame = async (id, pg = page) => {
+  const h = await pg.waitForSelector(`iframe[src*="/p/${id}"]`, { state: "attached", timeout: 8000 }).catch(() => null);
+  const f = h && (await h.contentFrame());
+  if (!f) return undefined;
+  await f.waitForURL((u) => u.href.includes("/p/" + id), { timeout: 8000 }).catch(() => {});
+  return f.url().includes("/p/" + id) ? f : undefined;
+};
 const todoCount = async () => (await (await fetch(base + "/api/todos?state=all")).json()).todos.filter((t) => /PWNED/.test(t.question)).length;
 const shot = (name) => page.screenshot({ path: `${out}/${name}.png` });
 shotFail = (name) => page.screenshot({ path: `${out}/pages-fail-${name.replace(/\W+/g, "-").slice(0, 40)}.png` }).catch(() => {});
@@ -176,12 +186,12 @@ await check("sandbox: in the app's iframe nothing of the hub is reachable and th
   if (sandbox !== "allow-scripts allow-popups allow-popups-to-escape-sandbox") throw new Error(`iframe sandbox=${sandbox}`);
   await page.evaluate(() => { window.__marker = "app window"; });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.probe); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.probe);
   if (!fr) throw new Error("page frame not found");
   await until(fr, () => window.__done === true);
   probeResult = JSON.parse(await fr.locator("#result").innerText());
   if (!/own script ran: 6 x 7 = 42/.test(await fr.locator("#alive").innerText())) throw new Error("the page's own script did not run");
-  await page.waitForTimeout(700); // time for a top navigation to land, if one would
+  await page.waitForTimeout(700); // an intended wait: nothing can be observed for a navigation that must not happen
   const failures = bad(probeResult, [...NET, ...FRAME]);
   if (failures.length) throw new Error("not blocked: " + failures.join("; "));
   if (!/sandbox/.test(probeResult["top.location"] || "") && !/threw|no exception/.test(probeResult["top.location"])) throw new Error("top.location: " + probeResult["top.location"]);
@@ -221,7 +231,7 @@ await check("markdown: rendered in the sandbox, its script and handler do nothin
   await page.goto(base + `/#/pages/${pages.md}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.md); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.md);
   await fr.waitForSelector("#out h1", { timeout: 8000 });
   const h1 = await fr.locator("#out h1").innerText();
   if (!/Failover test: 3 of 3/.test(h1)) throw new Error("h1: " + h1);
@@ -259,7 +269,7 @@ await check("theme: the page gets the app's theme after load and again when the 
   await page.goto(base + `/#/pages/${pages.theme}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.theme); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.theme);
   const appTok = (id, k) => page.evaluate(([id, k]) => ComebyeThemes.byId[id].vars[k], [id, k]);
   const frameVars = () => fr.evaluate(() => { const c = getComputedStyle(document.documentElement); return { bg: c.getPropertyValue("--bg").trim(), blue: c.getPropertyValue("--blue").trim(), scheme: document.documentElement.style.colorScheme, body: getComputedStyle(document.body).backgroundColor }; });
   const rgb = (h) => "rgb(" + [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(", ") + ")";
@@ -267,7 +277,7 @@ await check("theme: the page gets the app's theme after load and again when the 
     const bg = await appTok(id, "bg"), blue = await appTok(id, "blue");
     const mode = await page.evaluate((id) => ComebyeThemes.byId[id].mode, id);
     let v;
-    for (let i = 0; i < 40; i++) { v = await frameVars(); if (v.bg === bg) break; await page.waitForTimeout(100); }
+    await until(fr, (bg) => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === bg, bg, 4000).catch(() => {}); v = await frameVars();
     if (v.bg !== bg || v.blue !== blue || v.scheme !== mode || v.body !== rgb(bg)) throw new Error(`${why}: page has ${JSON.stringify(v)}, app theme ${id} has bg=${bg} blue=${blue} ${mode}`);
   };
   const first = await page.evaluate(() => ComebyeThemes.resolve()); // System: the OS scheme's Comebye theme
@@ -287,7 +297,7 @@ await check("theme: the page gets the app's theme after load and again when the 
     send({ type: "other", tokens: { "--bg": "#123456" } });
     send("comebye-theme");
   });
-  await page.waitForTimeout(300);
+  await settle(page);
   const after = await fr.evaluate(() => { const r = document.documentElement; return { bg: r.style.getPropertyValue("--bg"), text: r.style.getPropertyValue("--text"), evil: r.style.getPropertyValue("--evil"), scheme: r.style.colorScheme }; });
   if (after.bg !== dracula.bg || after.text === "red; background: red" || after.evil || after.scheme === "sepia") throw new Error("a bad theme message got through: " + JSON.stringify(after));
   await page.evaluate(() => ComebyeThemes.set("system"));
@@ -307,7 +317,7 @@ await check("images: publish inlines a page's local images, and the frame shows 
   await page.goto(base + `/#/pages/${pages.shots}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.shots); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.shots);
   await until(fr, () => document.getElementById("a").complete);
   const st = await fr.evaluate(() => ({ a: document.getElementById("a").naturalWidth, a_src: document.getElementById("a").src.slice(0, 22), b: document.getElementById("b").currentSrc.slice(0, 22), c: getComputedStyle(document.getElementById("c")).backgroundImage.slice(0, 26), d: document.getElementById("d").src }));
   if (st.a !== 2 || !st.a_src.startsWith("data:image/png") || !st.b.startsWith("data:image/png") || !st.c.startsWith('url("data:image/png')) throw new Error("not inlined: " + JSON.stringify(st) + body.slice(0, 80));
@@ -331,20 +341,20 @@ await check("mermaid: a mermaid block draws an SVG in the Markdown page; a page 
   await page.goto(base + `/#/pages/${pages.md}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let plain;
-  for (let i = 0; i < 60 && !plain; i++) { plain = frameOf(pages.md); if (!plain) await page.waitForTimeout(100); }
+  plain = await waitFrame(pages.md);
   await plain.waitForSelector("#out h1", { timeout: 8000 });
-  await page.waitForTimeout(500);
+  await settle(page);
   if (asked.length) throw new Error("Mermaid was loaded by a page without a diagram: " + asked);
   await page.goto(base + `/#/pages/${pages.mmd}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.mmd); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.mmd);
   await fr.waitForSelector("#out .mmd svg", { timeout: 15000 });
   page.off("request", onReq);
   if (asked.length !== 1) throw new Error("mermaid.js requests: " + asked.length);
   const st = await fr.evaluate(() => ({ nodes: document.querySelectorAll("#out .mmd svg .node").length, text: document.querySelector("#out .mmd svg").textContent, rest: document.getElementById("out").innerText, w: document.querySelector("#out .mmd svg").getBoundingClientRect().width }));
   if (st.nodes < 3 || !/Start/.test(st.text) || !/after the diagram/.test(st.rest)) throw new Error("diagram: " + JSON.stringify(st));
-  await page.waitForTimeout(200);
+  await settle(page);
   await shot("pages-mermaid-1280");
 });
 
@@ -353,9 +363,9 @@ await check("mermaid: a hostile diagram (html label, click callbacks, javascript
   await page.goto(base + `/#/pages/${pages.mmdBad}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.mmdBad); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.mmdBad);
   await until(fr, () => !!document.querySelector("#out .u") || document.querySelectorAll("#out .mmd").length > 1, null, 15000);
-  await page.waitForTimeout(500);
+  await settle(page);
   const st = await fr.evaluate(() => ({ pwned: window.__pwned || 0, img: document.querySelectorAll("#out img").length, js: document.querySelectorAll("#out [href^=javascript], #out [onclick], #out [onerror]").length, note: (document.querySelector("#out .u") || {}).textContent || "", pres: document.querySelectorAll("#out pre").length }));
   if (st.pwned || st.img || st.js) throw new Error("hostile diagram ran or left markup: " + JSON.stringify(st));
   if (!/could not be drawn/.test(st.note) || st.pres < 1) throw new Error("broken diagram: " + JSON.stringify(st));
@@ -367,7 +377,7 @@ await check("clipboard: the frame is allowed to write the clipboard (and the san
   const attrs = await page.locator("iframe.pgs-frame").evaluate((f) => [f.getAttribute("allow"), f.getAttribute("sandbox")]);
   if (attrs[0] !== "clipboard-write" || attrs[1] !== "allow-scripts allow-popups allow-popups-to-escape-sandbox") throw new Error("iframe allow/sandbox: " + attrs);
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.chart); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.chart);
   await fr.waitForSelector(".bar", { timeout: 8000 });
   const allowed = await fr.evaluate(() => [document.featurePolicy.allowsFeature("clipboard-write"), document.featurePolicy.allowsFeature("clipboard-read"), document.featurePolicy.allowsFeature("camera")]);
   if (!allowed[0] || allowed[1] || allowed[2]) throw new Error("permissions policy in the frame (write, read, camera): " + allowed);
@@ -379,7 +389,7 @@ await check("version pill: a newer version shows as a pill that reloads the fram
   await page.goto(base + `/#/pages/${pages.live}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.live); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.live);
   await fr.waitForSelector("#v");
   if (await page.locator("#pgs-new").count()) throw new Error("a pill with no newer version");
   publish(["-", "--key", "livepage", "--kind", "html"], v1.replace("version one", "version two"));
@@ -393,7 +403,7 @@ await check("version pill: a newer version shows as a pill that reloads the fram
   const m = phone.page;
   await m.goto(base + `/#/pages/${pages.live}`, { waitUntil: "load" });
   await m.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
-  await m.waitForTimeout(500);
+  await waitFrame(pages.live, m);
   publish(["-", "--key", "livepage", "--kind", "html"], v1.replace("version one", "version three"));
   await m.evaluate(() => pagesLoad());
   await page.evaluate(() => pagesLoad());
@@ -403,12 +413,12 @@ await check("version pill: a newer version shows as a pill that reloads the fram
   await m.screenshot({ path: `${out}/pages-pill-390.png` });
   await phone.browser.close();
   await page.waitForFunction(() => /v3 is out/.test(document.getElementById("pgs-new")?.textContent || ""), null, { timeout: 8000 });
-  await page.waitForTimeout(150);
+  await settle(page);
   await shot("pages-pill-1280");
   await page.locator("#pgs-new").click();
   await until(page, () => !document.querySelector("#pgs-new") && /\/p\/pg_[0-9a-f]{10}\/3$/.test(document.querySelector("iframe.pgs-frame").src), null, 5000);
-  let f2;
-  for (let i = 0; i < 60 && !f2; i++) { f2 = frameOf(pages.live); if (f2 && !(await f2.evaluate(() => document.getElementById("v")?.textContent === "version three").catch(() => false))) f2 = null; if (!f2) await page.waitForTimeout(100); }
+  let f2 = await waitFrame(pages.live);
+  if (f2) await until(f2, () => document.getElementById("v")?.textContent === "version three").catch(() => { f2 = undefined; });
   if (!f2) throw new Error("the frame did not load version three");
   // a reader who picked version 1 is not moved by a version 3
   await page.locator("#pgs-menub").click();
@@ -429,7 +439,7 @@ await check("links: a click on a link in a page opens a new tab (not the app) wi
   await page.goto(base + `/#/pages/${pages.links}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached", timeout: 8000 });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.links); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.links);
   await fr.waitForSelector("#l1");
   const appUrl = page.url();
   for (const id of ["l1", "l2"]) {
@@ -504,14 +514,14 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   if (cards < 5) throw new Error("cards " + cards);
   const titles = (await page.locator(".pgs-title").allInnerTexts()).join("|");
   if (!/Latency by hour/.test(titles) || !/Failover test/.test(titles)) throw new Error("titles " + titles);
-  await page.waitForTimeout(300);
+  await settle(page);
   await shot("pages-list-1280");
   await page.goto(base + `/#/pages/${pages.chart}`, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
   let fr;
-  for (let i = 0; i < 60 && !fr; i++) { fr = frameOf(pages.chart); if (!fr) await page.waitForTimeout(100); }
+  fr = await waitFrame(pages.chart);
   await fr.waitForSelector(".bar", { timeout: 8000 });
-  await page.waitForTimeout(300);
+  await settle(page);
   // Who made it and the sandbox note are behind the (i) button: closed at first, one tap away.
   if (await page.locator("#pgs-infopop").isVisible()) throw new Error("the info popover opened by itself");
   await page.locator("#pgs-infob").click();
@@ -549,14 +559,14 @@ await check("screens: the list and an open page at 1280 and 390", async () => {
   await m.waitForSelector(".pgs-card", { timeout: 8000 });
   const over = await m.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-list").scrollWidth, document.querySelector(".pgs-list").clientWidth]);
   if (over[0] > over[1] || over[2] > over[3]) throw new Error("list scrolls sideways " + over);
-  await m.waitForTimeout(300);
+  await settle(m);
   await m.screenshot({ path: `${out}/pages-list-390.png` });
   await m.locator(`.pgs-card[data-id="${pages.chart}"]`).click();
   await m.waitForSelector("iframe.pgs-frame", { state: "attached" });
   let mf;
-  for (let i = 0; i < 60 && !mf; i++) { mf = m.frames().find((f) => f.url().includes("/p/" + pages.chart)); if (!mf) await m.waitForTimeout(100); }
+  mf = await waitFrame(pages.chart, m);
   await mf.waitForSelector(".bar", { timeout: 8000 });
-  await m.waitForTimeout(300);
+  await settle(m);
   const over2 = await m.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-bar").scrollWidth, document.querySelector(".pgs-bar").clientWidth]);
   if (over2[0] > over2[1] || over2[2] > over2[3]) throw new Error("page view scrolls sideways " + over2);
   await m.screenshot({ path: `${out}/pages-open-390.png` });
@@ -583,7 +593,7 @@ await check("search: page text is searched on the hub, hits show under the title
     if (r.imgs || r.x !== undefined || r.marked !== "needlezz") throw new Error("markup: " + JSON.stringify(r));
     const over = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
     if (over[0] > over[1]) throw new Error("sideways " + over);
-    await page.waitForTimeout(200);
+    await settle(page);
     await page.screenshot({ path: `${out}/pages-bodysearch-${tag}.png` });
   }
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -593,11 +603,11 @@ await check("search: page text is searched on the hub, hits show under the title
   // Nothing in any body: the usual empty notice; one letter is not searched. (The filter is in the gallery, behind the back arrow.)
   await page.locator("#pgs-vback").click();
   await page.locator("#pgs-q").fill("zzzznotthere");
-  await page.waitForTimeout(900);
+  await page.waitForFunction(() => /No page matches/.test(document.querySelector("#pgs-items")?.innerText || ""), null, { timeout: 5000 }).catch(() => {});
   if (!/No page matches/.test(await page.locator("#pgs-items").innerText()) || await page.locator(".pgs-hit").count()) throw new Error("empty search");
   await page.locator("#pgs-q").fill("");
   await page.locator("#pgs-q").fill("a");
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(700); // an intended wait: the search debounce, and nothing must come of it
   if (await page.locator(".pgs-hit").count()) throw new Error("one letter searched the bodies");
   await page.locator("#pgs-q").fill("");
 });
@@ -625,21 +635,21 @@ await check("open session: a Page made in an indexed session names it per versio
     if (!/Made in Retry the upgrade smoke check/.test(t) || !/turn 22/.test(t) || !/Open session/.test(t)) throw new Error("strip: " + t);
     const over = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth, document.querySelector(".pgs-bar").scrollWidth, document.querySelector(".pgs-bar").clientWidth]);
     if (over[0] > over[1] || over[2] > over[3]) throw new Error("sideways " + over);
-    await page.waitForTimeout(300);
+    await settle(page);
     await page.screenshot({ path: `${out}/pages-opensession-${tag}.png` });
   }
   await page.setViewportSize({ width: 1280, height: 800 });
   if (!(await page.locator("#pgs-opensess").isVisible())) await page.locator("#pgs-infob").click();
   await page.locator("#pgs-opensess").click();
   // (waitForFunction evals a string, which this page's CSP refuses: poll with evaluate.)
-  const poll = async (fn, what) => { for (let i = 0; i < 80; i++) { if (await page.evaluate(fn)) return; await page.waitForTimeout(100); } throw new Error("timed out: " + what); };
+  const poll = async (fn, what) => { const end = Date.now() + 8000; do { if (await page.evaluate(fn)) return; await settle(page); } while (Date.now() < end); throw new Error("timed out: " + what); };
   await poll(() => location.hash.startsWith("#/search/devbox/claude/11111111-aaaa-4aaa-8aaa-111111111111") && location.hash.includes("seq=22"), "hash");
   await poll(() => /Retry the upgrade/.test(document.querySelector(".rc-stitle")?.textContent || ""), "transcript");
   // A page with no session in the index shows no strip; one whose other versions only were made there says so.
   await page.goto("about:blank");
   await page.goto(base + "/#/pages/" + pages.md, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(400); // an intended wait: a strip that must not appear
   if (await page.locator("#pgs-made").isVisible()) throw new Error("a strip for a page the index does not know");
   await page.goto("about:blank");
   await page.goto(base + "/#/pages/" + pages.secret, { waitUntil: "load" });
@@ -669,7 +679,7 @@ await check("open session: a Page made in an indexed session names it per versio
   await page.goto("about:blank");
   await page.goto(base + "/#/pages/" + pages.md, { waitUntil: "load" });
   await page.waitForSelector("iframe.pgs-frame", { state: "attached" });
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(600); // an intended wait: a strip that must not appear
   if (await page.locator("#pgs-made").isVisible()) throw new Error("a strip for a session the index lacks");
   await page.unroute(/\/api\/pages(\?.*)?$/);
   await page.unroute(/\/api\/recall\/produced\?ref=/);
@@ -911,7 +921,7 @@ await check("phone: a long page scrolls to its end and the back arrow clears the
   await m.locator(`.pgs-card[data-id="${id}"]`).click();
   await m.waitForSelector("iframe.pgs-frame", { state: "attached" });
   let f;
-  for (let i = 0; i < 60 && !f; i++) { f = m.frames().find((x) => x.url().includes("/p/" + id)); if (!f) await m.waitForTimeout(100); }
+  f = await waitFrame(id, m);
   await until(f, () => !!document.getElementById("end"));
   const geo = () => m.evaluate(() => {
     const r = (s) => document.querySelector(s).getBoundingClientRect();
@@ -929,7 +939,7 @@ await check("phone: a long page scrolls to its end and the back arrow clears the
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: pt(700) });
     for (let i = 1; i <= 8; i++) { await m.waitForTimeout(16); await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: pt(700 - 60 * i) }); }
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await m.waitForTimeout(250);
+    await settle(m);
   };
   const atEnd = () => f.evaluate(() => Math.ceil(scrollY + innerHeight) >= document.documentElement.scrollHeight - 2).catch(() => false);
   for (let i = 0; i < 120 && !(await atEnd()); i++) await swipe();
@@ -951,7 +961,7 @@ await check("phone: a long page scrolls to its end and the back arrow clears the
   await m.waitForSelector("#pgs-sel:not([hidden])", { timeout: 4000 });
   await m.locator("#pgs-addc").tap();
   await m.setViewportSize({ width: 390, height: 520 });
-  await m.waitForTimeout(300);
+  await settle(m);
   g = await geo();
   const room = await m.evaluate(() => ({ frame: document.querySelector(".pgs-frame").getBoundingClientRect().height, sel: document.getElementById("pgs-sel").getBoundingClientRect().height, tray: document.getElementById("pgs-tray").getBoundingClientRect().height, sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
   await m.screenshot({ path: `${out}/pages-long-390-note.png` });

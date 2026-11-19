@@ -10,6 +10,8 @@ import { launch } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
 const results = [];
+// idle: two frames, then no CSS transition or animation still running (a sheet has slid in, a pull has sprung back), not a timer.
+const idle = async (page) => { await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))); await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {}); };
 async function check(name, fn) {
   try { await fn(); results.push(true); console.log("ok   " + name); }
   catch (e) { results.push(false); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
@@ -38,7 +40,7 @@ async function open(width, dark, n = 5, store) {
     try { st === undefined ? localStorage.removeItem("herdr-host-filter") : localStorage.setItem("herdr-host-filter", st); } catch {}
     state.hostFilter = null; state.hosts = f.hosts; setAgents(f); window.setAgents = () => {}; renderList();
   }, [f, store]);
-  await page.waitForTimeout(150);
+  await idle(page);
   return { browser, page, errs };
 }
 const shown = (page) => page.evaluate(() => [...document.querySelectorAll("#agents .agent[data-id]")].map((e) => e.dataset.id));
@@ -67,7 +69,7 @@ for (const dark of [false, true]) {
           const rows = await page.locator("#hp-list .hp-row").count();
           if (rows !== n + 1) throw new Error(`${rows} rows, want ${n + 1}`);
           if ((n >= 8) !== await page.locator("#hp-q").isVisible()) throw new Error("the find box should show from 8 hosts");
-          await page.waitForTimeout(300);
+          await idle(page);
           await page.screenshot({ path: `${out}/hostpicker-${w}-${n}-${scheme}.png` });
           if (errs.length) throw new Error(errs.join("; "));
         } finally { await browser.close(); }
@@ -195,7 +197,7 @@ for (const dark of [false, true]) {
     try {
       await page.click("#hp-btn");
       await page.waitForSelector("#hp-pop:not([hidden])");
-      await page.waitForTimeout(400);
+      await idle(page);
       const g = await page.evaluate(() => { const r = document.querySelector("#hp-pop").getBoundingClientRect(); return { l: r.left, r: r.right, b: r.bottom, h: r.height, vh: innerHeight, bk: !document.querySelector("#sheet-bk").hidden, grab: getComputedStyle(document.querySelector("#hp-pop .grab")).display }; });
       if (g.l !== 0 || g.r !== 390 || Math.abs(g.b - g.vh) > 1 || !g.bk || g.grab === "none") throw new Error("not a bottom sheet " + JSON.stringify(g));
       // Tab wraps inside the sheet, both ways.
@@ -207,14 +209,14 @@ for (const dark of [false, true]) {
       if (!await page.locator("#hp-pop").isHidden() || await page.evaluate(() => document.activeElement.id) !== "hp-btn") throw new Error("Esc");
       await page.click("#hp-btn"); await page.click("#hp-pop .pop-x");
       if (!await page.locator("#hp-pop").isHidden()) throw new Error("the x");
-      await page.click("#hp-btn"); await page.waitForTimeout(300);
+      await page.click("#hp-btn"); await idle(page);
       await page.touchscreen.tap(195, 40);
       if (!await page.locator("#hp-pop").isHidden()) throw new Error("tap outside");
       // A short pull springs back; a long one from the handle closes.
-      await page.click("#hp-btn"); await page.waitForTimeout(400);
+      await page.click("#hp-btn"); await idle(page);
       const hb = await page.locator("#hp-pop .grab").boundingBox(), cx = hb.x + hb.width / 2, cy = hb.y + hb.height / 2;
       await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx, cy + 20, { steps: 3 }); await page.mouse.up();
-      await page.waitForTimeout(350);
+      await idle(page);
       if (await page.locator("#hp-pop").isHidden()) throw new Error("a 20px pull closed the sheet");
       const hb2 = await page.locator("#hp-pop .grab").boundingBox();
       await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2); await page.mouse.down();
@@ -227,7 +229,7 @@ for (const dark of [false, true]) {
   await check(`${scheme} @390: the phone sheet picks two hosts and the list follows`, async () => {
     const { browser, page } = await open(390, dark, 5);
     try {
-      await page.click("#hp-btn"); await page.waitForTimeout(300);
+      await page.click("#hp-btn"); await idle(page);
       await page.tap('#hp-list .hp-row[data-host="laharl"]'); await page.tap('#hp-list .hp-row[data-host="mac"]');
       if (await label(page) !== "laharl + mac") throw new Error("label " + await label(page));
       if (!(await page.locator("#hp-pop").isVisible())) throw new Error("the sheet closed on a pick");

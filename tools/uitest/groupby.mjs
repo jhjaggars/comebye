@@ -8,6 +8,8 @@ import { launch } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
 const results = [];
+// idle: two frames, then no CSS transition or animation still running (a sheet has slid in, a pull has sprung back), not a timer.
+const idle = async (page) => { await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))); await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {}); };
 async function check(name, fn) {
   try { await fn(); results.push(true); console.log("ok   " + name); }
   catch (e) { results.push(false); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
@@ -48,7 +50,7 @@ async function open(width, dark, { hash = "", store = {}, hostNames, fleet: fl }
     if (hash) location.hash = "";
     if (hash) { history.replaceState(null, "", hash); route(); } else { renderList(); route(); }
   }, [f, store, hash]);
-  await page.waitForTimeout(150);
+  await idle(page);
   return { browser, page, errs, f };
 }
 const shown = (page) => page.evaluate(() => [...document.querySelectorAll("#agents .agent[data-id]")].filter((e) => !e.classList.contains("host-down")).map((e) => e.dataset.id));
@@ -59,7 +61,7 @@ const groups = (page) => page.evaluate(() => [...document.querySelectorAll("#age
   mode: s.dataset.group, aria: s.getAttribute("aria-label") })));
 const names = async (page) => (await groups(page)).map((g) => g.name);
 const hash = (page) => page.evaluate(() => location.hash);
-const pick = async (page, key) => { await page.click("#gb-btn"); await page.click(`#gb-list [data-group="${key}"]`); await page.waitForTimeout(80); };
+const pick = async (page, key) => { await page.click("#gb-btn"); await page.click(`#gb-list [data-group="${key}"]`); await idle(page); };
 const noOverflow = (page) => page.evaluate(() => { const b = document.querySelector("#list-filter"); return [b.scrollWidth, b.clientWidth, document.documentElement.scrollWidth, document.documentElement.clientWidth]; });
 const blockedIds = (f) => f.agents.filter((a) => a.agent_status === "blocked").map((a) => a.id).sort();
 
@@ -229,7 +231,7 @@ for (const dark of [false, true]) {
       await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
       if (await page.evaluate(() => document.activeElement.dataset.group) !== "status") throw new Error("arrows");
       await page.keyboard.press("Enter");
-      await page.waitForTimeout(80);
+      await idle(page);
       if (await page.locator("#gb-label").innerText() !== "Status" || !await page.locator("#gb-pop").isHidden()) throw new Error("Enter did not pick");
       if (await page.evaluate(() => document.activeElement.id) !== "gb-btn") throw new Error("focus did not return");
       await page.keyboard.press("Space");
@@ -245,7 +247,7 @@ for (const dark of [false, true]) {
       await page.evaluate(() => { document.activeElement.blur(); location.hash = ""; });
       await page.keyboard.press(process.platform === "darwin" ? "Meta+k" : "Control+k");
       await page.keyboard.type("group");
-      await page.waitForTimeout(150);
+      await idle(page);
       await page.keyboard.press("Enter");
       await page.waitForSelector("#gb-pop:not([hidden])");
     } finally { await browser.close(); }
@@ -256,14 +258,14 @@ for (const dark of [false, true]) {
     try {
       await page.tap("#gb-btn");
       await page.waitForSelector("#gb-pop:not([hidden])");
-      await page.waitForTimeout(350);
+      await idle(page);
       const r = await page.evaluate(() => { const b = document.querySelector("#gb-pop").getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, vh: innerHeight, vw: innerWidth, bk: !document.querySelector("#sheet-bk").hidden,
         rows: [...document.querySelectorAll("#gb-list .hp-row")].map((x) => Math.round(x.getBoundingClientRect().height)) }; });
       if (Math.abs(r.bottom - r.vh) > 2 || r.left < 0 || r.right > r.vw + 1 || !r.bk) throw new Error("not a sheet " + JSON.stringify(r));
       if (r.rows.length !== 3 || r.rows.some((h) => h < 36)) throw new Error("rows " + r.rows);
       await page.screenshot({ path: `${out}/groupby-menu-390-${scheme}.png` });
       await page.tap('#gb-list [data-group="host"]');
-      await page.waitForTimeout(200);
+      await idle(page);
       if (!await page.locator("#gb-pop").isHidden() || await page.locator("#gb-label").innerText() !== "Host") throw new Error("tap did not pick and close");
       const hs = await page.evaluate(() => [...document.querySelectorAll("#lf-q, #gb-btn")].map((e) => Math.round(e.getBoundingClientRect().height)));
       if (hs.some((h) => h < 36)) throw new Error("targets " + hs);

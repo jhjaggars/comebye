@@ -386,7 +386,7 @@ await check("remove page: sweep: delivered rows have their own button (a discard
   await noOverflow();
   const before = sweepPosts.length;
   await btn.click();
-  await page.waitForTimeout(800);
+  await waitUntil(() => marks.length >= 1); await idle();
   if (marks.length !== 1 || marks[0].discard !== true || !marks[0].reason.startsWith("Sweep: work delivered")) throw new Error("marks " + JSON.stringify(marks));
   if (sweepPosts.length !== before + 1 || sweepPosts[before].dry_run !== true) throw new Error("no refresh after marking: " + JSON.stringify(sweepPosts));
 });
@@ -727,7 +727,11 @@ const briefsState = () => page.evaluate(() => ({
   hash: location.hash,
   listY: Math.round(window.scrollY),
 }));
-async function settle() { await page.waitForTimeout(450); }
+// idle: two frames, then no CSS transition or animation still running (a slide-in done, a pull sprung back), not a timer.
+// waitUntil: idle until a node-side condition holds (what the page has posted), up to 5 s.
+async function idle(pg = page) { await pg.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))); await pg.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {}); }
+async function waitUntil(fn) { const end = Date.now() + 5000; while (!fn() && Date.now() < end) await idle(); }
+const settle = idle;
 async function freshList() {
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#btn-fleet", { timeout: 8000 });
@@ -780,7 +784,7 @@ await check("briefings: the menu item opens it; the browser's back returns", asy
 });
 await check("briefings: a cold start on #/briefings shows it without a slide", async () => {
   await page.goto(base + "/#/briefings", { waitUntil: "load" });
-  await page.waitForTimeout(300);
+  await idle();
   const st = await briefsState();
   if (!st.open || st.x !== 0) throw new Error(JSON.stringify(st));
 });
@@ -1172,11 +1176,11 @@ await check("pages: opening one leaves the agent through closeDetail (presence c
     await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
     await page.waitForSelector("#detail", { state: "visible" });
     await page.waitForFunction(() => state.selected && state.selected.endsWith("w1:p1"));
-    await page.waitForTimeout(300);
+    await waitUntil(() => posts.some((p) => p.pane && p.visible));
     if (!posts.some((p) => p.pane && p.visible)) throw new Error("no presence for the open agent: " + JSON.stringify(posts));
     posts.length = 0;
     await page.evaluate(() => openPage("todo"));
-    await page.waitForTimeout(300);
+    await idle();
     const r = await page.evaluate(() => ({ sel: state.selected, view: state.view, hash: location.hash, poll: state.pollTimer, cls: document.body.className }));
     if (r.sel !== null || r.view !== "todo" || r.hash !== "#/todo" || r.poll || !/view-todo/.test(r.cls) || /has-detail/.test(r.cls)) throw new Error("state " + JSON.stringify(r));
     if (!posts.length || posts[posts.length - 1].pane !== "") throw new Error("presence not cleared: " + JSON.stringify(posts));
@@ -1201,7 +1205,7 @@ await check("pages: g t then j/k move the To do selection, even with focus left 
     return out;
   });
   const open = () => page.evaluate(() => todos.openId);
-  const rowsOpen = async (want, what) => { await page.waitForTimeout(150); const got = await open(); if (got !== want) throw new Error(what + ": open item " + got + ", want " + want + " rows " + JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("#p-todo .td-item")].map((e) => e.dataset.id)))); };
+  const rowsOpen = async (want, what) => { await page.waitForFunction((w) => todos.openId === w, want, { timeout: 3000 }).catch(() => {}); const got = await open(); if (got !== want) throw new Error(what + ": open item " + got + ", want " + want + " rows " + JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("#p-todo .td-item")].map((e) => e.dataset.id)))); };
   try {
     const gt = async () => { await page.keyboard.press("g"); await page.keyboard.press("t"); await page.waitForSelector("#p-todo", { state: "visible" }); };
     const fresh = async () => { await page.evaluate(() => { todos.loadedAt = 0; todos.openId = null; todos.lastId = null; return loadTodos(); }); await page.waitForSelector("#p-todo .td-item", { state: "visible" }); };
@@ -1220,13 +1224,15 @@ await check("pages: g t then j/k move the To do selection, even with focus left 
     // g s, then g t again from the Status page.
     await page.keyboard.press("g"); await page.keyboard.press("s");
     await page.waitForSelector("#p-status", { state: "visible" });
-    await gt(); await fresh(); order = await ord();
-    await page.keyboard.press("j"); await rowsOpen(order[0], "status, g t, j");
+    await gt(); await fresh(); await idle(); order = await ord();
+    // The page may already show the first item (it opens one once the list has loaded); j then goes to the next.
+    const wasOpen = await open();
+    await page.keyboard.press("j"); await rowsOpen(wasOpen ? order[order.indexOf(wasOpen) + 1] : order[0], "status, g t, j");
     // A reload on #/todo.
     await page.goto(base + "/#/todo", { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
     await page.waitForSelector("#p-todo .td-item", { state: "visible" });
-    await page.waitForTimeout(500);
+    await idle();
     order = await ord();
     // The page may already show the first item; j then goes to the next.
     const was = await open();
@@ -1257,7 +1263,7 @@ async function coldStartWith(blocked) {
     await page.evaluate(() => { try { localStorage.clear(); } catch {} });
     await page.goto(base + "/", { waitUntil: "load" });
     await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
-    await page.waitForTimeout(600);
+    await idle();
     return await page.evaluate(() => ({ sel: state.selected, view: state.view, hash: location.hash }));
   } finally {
     await page.unroute(/\/api\/agents$/, list);
@@ -1342,7 +1348,7 @@ await check("pages: an open To do item uses the panel's width (code and tables w
   const hscroll = (sel) => page.evaluate((sel) => [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth), sel);
   for (const w of [1280, 1600, 2000]) {
     await page.setViewportSize({ width: w, height: 800 });
-    await page.waitForTimeout(150);
+    await idle();
     const bad = await hscroll(item);
     if (bad.length) throw new Error(w + ": horizontal scroll inside the open To do item: " + bad.join("; "));
   }
@@ -1388,14 +1394,14 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if (await page.locator("#rtr-banner").isVisible()) throw new Error("the removal banner shows beside its row");
     await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
     await page.waitForSelector("#detail", { state: "visible" });
-    await page.waitForTimeout(300);
+    await idle();
     if (await page.locator("#nav .nv.on").count()) throw new Error("a page row marked over an agent");
     posts.length = 0;
     await page.locator('#nav .nv[data-page="todo"]').click();
     await page.waitForSelector("#p-todo", { state: "visible" });
     if (await visible("#detail")) throw new Error("the agent stays under the page");
     if ((await page.locator("#nav .nv.on").getAttribute("data-page")) !== "todo") throw new Error("row not marked");
-    await page.waitForTimeout(300);
+    await idle();
     if (!posts.length || posts[posts.length - 1].pane !== "") throw new Error("presence not cleared: " + JSON.stringify(posts));
     await page.locator('#nav .nv[data-page="status"]').click();
     await page.waitForSelector("#p-status", { state: "visible" });
@@ -1407,7 +1413,7 @@ await check("pages: the rows above the list open the pages; the open one is mark
     if (!(await visible("#agents"))) throw new Error("the sidebar went away");
     if (await visible("#p-status")) throw new Error("the Status page stays under Search");
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(150);
+    await idle();
     if (!(await visible("#recall"))) throw new Error("Esc left the Search page");
     await page.locator('#nav .nv[data-page="status"]').click();
     await page.waitForSelector("#p-status", { state: "visible" });
@@ -1418,7 +1424,7 @@ await check("pages: the rows above the list open the pages; the open one is mark
     posts.length = 0;
     await page.locator('#nav .nv[data-page="search"]').click();
     await page.waitForSelector("#recall", { state: "visible" });
-    await page.waitForTimeout(300);
+    await idle();
     if (await page.evaluate(() => state.selected) !== null || !posts.length || posts[posts.length - 1].pane !== "") throw new Error("the agent stays open under Search: " + JSON.stringify(posts));
     await page.locator('#nav .nv[data-page="status"]').click();
     await page.waitForSelector("#p-status", { state: "visible" });
@@ -1672,7 +1678,7 @@ for (const width of [1280, 390]) {
       const ring = () => page.evaluate(() => { const a = document.activeElement; if (!a || !a.closest("#plans")) return "none"; const c = getComputedStyle(a); return c.outlineStyle !== "none" && parseFloat(c.outlineWidth) > 0 ? "ring" : "none"; });
       // A mouse click leaves no ring on the title (the card re-renders under it).
       await title.click();
-      await page.waitForTimeout(150);
+      await idle();
       if ((await ring()) !== "none") throw new Error("a ring after a mouse click on the title");
       await page.locator("#plans a.pm").first().focus();
       await page.keyboard.press("Shift+Tab"); // keyboard moves to the title
@@ -1783,7 +1789,7 @@ for (const width of [1280, 390]) {
       // The Status body can re-render under the screenshot (a poll), detaching the element: take it again.
       for (let i = 0; ; i++) {
         try { await page.locator(box + " .st-repair").screenshot({ path: `${out}/repo-damage-${width}.png`, timeout: 4000 }); break; }
-        catch (e) { if (i >= 3) throw e; await page.waitForTimeout(250); }
+        catch (e) { if (i >= 3) throw e; await idle(); }
       }
     } finally { await unmockStatusData(); }
   });
@@ -2340,7 +2346,7 @@ await check("to-do: items show with their context; answer, done and drop work fr
   await openIt(ids[2]);
   await page.evaluate(() => window.confirm = () => false);
   await page.locator(q(ids[2]) + " .td-drop").click();
-  await page.waitForTimeout(300);
+  await idle();
   if (!(await page.locator(q(ids[2])).count())) throw new Error("dropped without the user confirming");
   await page.evaluate(() => window.confirm = () => true);
   await page.locator(q(ids[2]) + " .td-drop").click();
@@ -2485,14 +2491,14 @@ await check("to-do choices (desktop): a numbered list in the context becomes cho
   if ((await box.inputValue()) !== "ok 1+2" || (await page.locator(it + " .td-opt.on").count()) !== 2) throw new Error("two picks: " + await box.inputValue());
   await page.locator(it + " .td-opt[data-n='2']").click({ modifiers: ["Shift"] });
   if ((await box.inputValue()) !== "ok 1") throw new Error("unpick: " + await box.inputValue());
-  await page.waitForTimeout(1000); // past the 700 ms undo window
+  await page.waitForTimeout(1000); // an intended wait: past the 700 ms undo window, and nothing must be sent
   if ((await serverTodo(ids[0])).state !== "open") throw new Error("a shift-click sent the answer");
   // Typed text that did not come from a button is not replaced and not sent.
   await box.fill("because the old key leaks");
   await page.locator(it + " .td-opt[data-n='3']").click();
   if ((await box.inputValue()) !== "ok 3 because the old key leaks") throw new Error("front: " + await box.inputValue());
   if (!/to the front of your answer/.test(await page.locator("#toast").innerText())) throw new Error("no toast saying so: " + await page.locator("#toast").innerText());
-  await page.waitForTimeout(1000); // past the 700 ms undo window
+  await page.waitForTimeout(1000); // an intended wait: past the 700 ms undo window, and nothing must be sent
   if ((await serverTodo(ids[0])).state !== "open") throw new Error("typed text was sent by a choice click");
   await box.fill("");
   if (!(await page.locator("#pt-body .td-nx").count())) throw new Error("no Next up mark");
@@ -2521,7 +2527,7 @@ await check("to-do choices: Undo inside the window puts the item back, with its 
   await page.waitForFunction((i) => { const e = document.querySelector(`#pt-body .td-item[data-id="${i}"]`); return todos.items.find((x) => x.id === i)?.state === "open" && e && !e.classList.contains("answered"); }, ids[0], { timeout: 2000 });
   await page.locator(it + " > .td-row").evaluate((r) => { if (!r.closest(".td-item").classList.contains("open")) r.click(); });
   if ((await page.locator(it + " .td-text").inputValue()) !== "ok 1") throw new Error("draft after undo: " + await page.locator(it + " .td-text").inputValue());
-  await page.waitForTimeout(1000); // past the undo window
+  await page.waitForTimeout(1000); // an intended wait: past the undo window, and nothing must be sent
   if ((await serverTodo(ids[0])).state !== "open") throw new Error("an undone choice was sent");
   await dropTodos(ids);
 });
@@ -2537,7 +2543,7 @@ await check("to-do choices: the recommendation, a digit key and Shift+digit then
     await page.evaluate(async (id) => { todos.pend.drop(id); todos.openId = id; todos.loadedAt = 0; await loadTodos(); }, c.ids[0]);
     await page.waitForSelector(c.it + ".open .td-opt");
   };
-  const waitSent = (n) => page.waitForFunction(() => true).then(async () => { for (let k = 0; k < 80 && sent.length < n; k++) await page.waitForTimeout(100); if (sent.length < n) throw new Error(`only ${sent.length} sent: ` + JSON.stringify(sent)); });
+  const waitSent = (n) => page.waitForFunction(() => true).then(async () => { await waitUntil(() => sent.length >= n); if (sent.length < n) throw new Error(`only ${sent.length} sent: ` + JSON.stringify(sent)); });
   // The recommendation button sends ok 1+3.
   await page.locator(c.it + " .td-rec").click();
   await waitSent(1);
@@ -2741,7 +2747,7 @@ await check("transcripts: agent text cannot run; markdown still renders; output 
   await page.goto(base + "/" + SMOKE, { waitUntil: "load" });
   await page.waitForSelector(".rc-tool", { timeout: 5000 });
   await page.locator(".rc-tool", { hasText: "printf" }).locator("summary").click();
-  await page.waitForTimeout(200);
+  await idle();
   const r = await page.evaluate(() => ({
     xss: window.__xss,
     imgs: document.querySelectorAll("#recall img").length,
@@ -3022,7 +3028,7 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
       await page.waitForFunction((b) => /No transcript index/.test((document.querySelector(b + ' [aria-label="Transcript index"]') || {}).innerText || ""), box, { timeout: 6000 });
       await page.unroute(/\/api\/recall\/status$/);
       await show((r) => r.fulfill({ status: 500, json: {} }));
-      await page.waitForTimeout(800);
+      await idle();
       if (await card()) throw new Error("a card shows with no status");
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("sideways scroll");
     } finally { await page.unroute(/\/api\/recall\/status$/).catch(() => {}); }
@@ -3059,7 +3065,7 @@ await check("search page: sidebar kept, query box in the header, Esc clears then
   await page.waitForFunction(() => /newest first/.test(document.querySelector("#rc-results").textContent), null, { timeout: 5000 });
   if ((await page.evaluate(() => location.hash)) !== "#/search") throw new Error("hash " + (await page.evaluate(() => location.hash)));
   await page.keyboard.press("Escape");
-  await page.waitForTimeout(200);
+  await idle();
   if (!(await visible("#recall"))) throw new Error("a second Esc left the page");
   await page.locator("#rc-q").fill("connection refused");
   await page.waitForSelector(".rc-card .rc-snip mark", { timeout: 5000 });
@@ -3072,7 +3078,7 @@ await check("search page: sidebar kept, query box in the header, Esc clears then
 
 await check("search page: the results stack above the session when the pane is narrow", async () => {
   await page.setViewportSize({ width: 1100, height: 800 });
-  await page.waitForTimeout(300);
+  await idle();
   const [l, ss] = await Promise.all([geo(".rc-list"), geo("#rc-session")]);
   if (ss.y < l.y + l.h - 1 || Math.abs(ss.x - l.x) > 2) throw new Error("not stacked at 1100: " + JSON.stringify([l, ss]));
   await page.screenshot({ path: `${out}/search-page-1100.png` });
@@ -3681,12 +3687,12 @@ await check("keys: stop and interrupt are in the palette only, behind a confirm"
     await page.keyboard.press("Enter");
     await page.keyboard.press("Enter"); // the confirm
     await page.waitForFunction(() => document.querySelector("#palette").hidden);
-    await page.waitForTimeout(300);
+    await idle();
     if (keyPosts.length !== 1 || keyPosts[0].keys.join() !== "esc") throw new Error("keys " + JSON.stringify(keyPosts));
     // and no single key does it
     keyPosts.length = 0;
     for (const k of ["s", "x", "Escape", "Control+c"]) await page.keyboard.press(k);
-    await page.waitForTimeout(200);
+    await idle();
     if (keyPosts.length) throw new Error("a bare key sent " + JSON.stringify(keyPosts));
   });
 
@@ -3728,6 +3734,9 @@ await check("keys: stop and interrupt are in the palette only, behind a confirm"
     await page.waitForFunction(() => document.activeElement && document.activeElement.id === "rc-q", null, { timeout: 3000 });
     if ((await page.locator("#rc-q").inputValue()) !== "") throw new Error("the slash was typed");
     await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
+    // The keys below act on the list: wait until the rows are drawn, and the page has taken the Escapes, not just until they were sent.
+    await page.waitForFunction(() => document.querySelectorAll("#agents .agent[data-id]").length >= 3, null, { timeout: 5000 });
+    await idle();
     await page.locator("#agents").focus().catch(() => {});
     await page.evaluate(() => document.activeElement && document.activeElement.blur());
     const ids = await page.evaluate(() => [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent).map((r) => r.dataset.id));
@@ -3764,9 +3773,9 @@ await check("keys: stop and interrupt are in the palette only, behind a confirm"
     await page.waitForSelector("#p-todo", { state: "visible" });
     // the chord times out after about a second
     await page.keyboard.press("g");
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1500); // an intended wait: the g chord expires
     await page.keyboard.press("s");
-    await page.waitForTimeout(250);
+    await idle();
     if (!(await visible("#p-todo")) || (await visible("#p-status"))) throw new Error("a stale g still chorded");
     // ? opens the cheat sheet; Esc closes it and the focus comes back
     await page.evaluate(() => document.querySelector("#nav .nv")?.focus());
@@ -3960,7 +3969,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         // Wait for the fleet to arrive (the list drawn, the event stream open): the first "agents" event can land any time
         // after load, and one landing after the list is forced empty below redraws it with the fleet.
         await p.waitForFunction(() => document.querySelector("#agents .agent") && state.es && state.es.readyState === 1);
-        await p.waitForTimeout(300);
+        await idle(p);
         // Each state is forced, then its box is measured: non-zero left padding, text centred, inside its pane.
         const states = [
           ["list", "state.agents = []; renderList()", "#agents .empty", true], // measured in the same task: an "agents" event (or a resume refresh) landing in a wait would redraw the fleet
@@ -4100,7 +4109,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     fleet: async () => { await page.locator("#btn-fleet").click(); await page.waitForSelector("#f-menu", { state: "visible" }); },
     // The pointer is parked in a corner afterwards: a mouse resting over a row would preview that row
     // when the browser next re-hit-tests (slow CI), over whatever the keyboard previewed.
-    theme: async () => { await page.locator("#btn-fleet").click(); await page.locator("#f-theme").click(); await page.waitForSelector("#theme-panel", { state: "visible" }); await page.mouse.move(page.viewportSize().width - 3, 3); await page.waitForTimeout(150); },
+    theme: async () => { await page.locator("#btn-fleet").click(); await page.locator("#f-theme").click(); await page.waitForSelector("#theme-panel", { state: "visible" }); await page.mouse.move(page.viewportSize().width - 3, 3); await idle(); },
     notify: async () => { await page.locator("#btn-notify").click(); await page.waitForSelector("#notify-panel", { state: "visible" }); },
     row: async () => { await rowOf(PANES.alpha).locator(".row-more").click(); await page.waitForSelector("#row-menu", { state: "visible" }); },
   };
@@ -4272,14 +4281,14 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
     await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
     for (const name of ["fleet", "theme", "notify", "row"]) {
       await OPEN[name]();
-      await page.waitForTimeout(400); // the slide-in
+      await idle();
       const g = await page.evaluate((sel) => { const e = document.querySelector(sel), r = e.getBoundingClientRect(), gr = e.querySelector(".grab").getBoundingClientRect(), bk = document.querySelector("#sheet-bk"); return { x: r.x, w: r.width, bottom: r.bottom, top: r.top, vh: innerHeight, vw: innerWidth, grab: gr.height, bk: !bk.hidden && getComputedStyle(bk).display !== "none" }; }, BOX[name]);
       if (g.x !== 0 || Math.abs(g.w - g.vw) > 1 || Math.abs(g.bottom - g.vh) > 1 || g.grab < 10 || !g.bk || g.top < g.vh * 0.15) throw new Error(`${name}: not a bottom sheet ` + JSON.stringify(g));
       // A short pull springs back; a long one closes.
       const hb = await page.locator(BOX[name] + " .grab").boundingBox();
       const cx = hb.x + hb.width / 2, cy = hb.y + hb.height / 2;
       await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx, cy + 20, { steps: 3 }); await page.mouse.up();
-      await page.waitForTimeout(350);
+      await idle();
       if (!(await vis(BOX[name]))) throw new Error(`${name}: a 20px pull closed it`);
       // The spring-back must not replay the slide-in (it used to, 180 ms later, which moved the handle under the next pull).
       if (await page.evaluate((sel) => document.querySelector(sel).getAnimations().filter((a) => a.animationName === "sheet-in").length, BOX[name])) throw new Error(`${name}: the slide-in replayed after a short pull`);
@@ -4303,11 +4312,11 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         await page.evaluate((t) => ComebyeThemes.set(t), th);
         await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
         await OPEN.fleet();
-        await page.waitForTimeout(450); // the open animation
+        await idle();
         await page.screenshot({ path: `${out}/menus-fleet-${th}-${width}.png` });
         await page.locator("#f-theme").click();
         await page.waitForSelector("#theme-panel", { state: "visible" });
-        await page.waitForTimeout(450);
+        await idle();
         await page.screenshot({ path: `${out}/menus-theme-${th}-${width}.png` });
         const bad = await page.evaluate(() => [...document.querySelectorAll("#theme-panel *")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflowX === "visible").map((e) => e.tagName + "." + e.className));
         if (bad.length) throw new Error("clipped: " + bad.join(","));
@@ -4479,7 +4488,7 @@ const relPost = async (b) => {
   for (let i = 0; i < 14; i++) {
     const r = await page.evaluate(async (b) => { const x = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }); return { code: x.status, body: await x.json() }; }, b);
     if (r.code !== 429) return r.body.todo;
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(5000); // an intended wait: the rate limit's retry
   }
   return undefined;
 };
@@ -4503,7 +4512,7 @@ await check(`releases tab at ${width}: tabs and badge, and the card and fleet ta
   await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(state) }));
   try {
     const txt = () => page.locator("#pr-releases").innerText();
-    const reload = async (s) => { state = s; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => document.querySelector("#pr-releases").innerText.length > 0 && rls.data && rls.data.history, null); await page.waitForTimeout(100); };
+    const reload = async (s) => { state = s; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => document.querySelector("#pr-releases").innerText.length > 0 && rls.data && rls.data.history, null); await idle(); };
     await openReleases(width);
     // the tabs
     if ((await page.locator("#pr-tabs [role=tab]:not([hidden])").allInnerTexts()).map((t) => t.trim().replace(/\s+\d$/, "")).join("|") !== "Hosts|Releases") throw new Error("tabs");
@@ -4709,7 +4718,7 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
   });
   try {
     const fleet = "#pr-releases [data-fleet]";
-    const reload = async (st) => { state = st; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before" ? !rls.data.rollout_job : rls.data.rollout_job), st); await page.waitForTimeout(100); };
+    const reload = async (st) => { state = st; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before" ? !rls.data.rollout_job : rls.data.rollout_job), st); await idle(); };
     await openReleases(width);
     await reload("ro-before");
     // before: the button sits with the per-host Upgrade buttons, which stay usable
@@ -4758,7 +4767,7 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     await page.screenshot({ path: `${out}/rollout-running-${width}.png` });
     await page.locator(band + " [data-rel=ro-pause]").click();
     await page.waitForFunction(() => 1);
-    await page.waitForTimeout(150);
+    await idle();
     const p1 = posts[posts.length - 1];
     if (p1.url !== "/api/release/rollout/pause" || p1.body.id !== "r7f3a1" || p1.csrf !== "fixture") throw new Error("pause request " + JSON.stringify(p1));
 
@@ -4767,7 +4776,7 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     if ((await page.locator(band + " button").allInnerTexts()).join() !== "Resume,Cancel" || !/Paused/.test(await page.locator(band).innerText())) throw new Error("paused band");
     await page.screenshot({ path: `${out}/rollout-paused-${width}.png` });
     await page.locator(band + " [data-rel=ro-resume]").click();
-    await page.waitForTimeout(150);
+    await waitUntil(() => posts.length && posts[posts.length - 1].url === "/api/release/rollout/resume");
     if (posts[posts.length - 1].url !== "/api/release/rollout/resume") throw new Error("resume request");
 
     // failed: the host's reason and output, what was not touched, Retry and Cancel
@@ -4779,7 +4788,7 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     if (!/not touched/.test(await row("mac-mini").innerText())) throw new Error("mac-mini after a stop");
     await page.screenshot({ path: `${out}/rollout-failed-${width}.png` });
     await page.locator(band + " [data-rel=ro-resume]").click();
-    await page.waitForTimeout(150);
+    await waitUntil(() => posts.length && posts[posts.length - 1].url === "/api/release/rollout/resume");
     if (posts[posts.length - 1].url !== "/api/release/rollout/resume") throw new Error("retry request");
 
     // done with one skipped: the release stays open, Roll out again for just that host
