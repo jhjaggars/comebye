@@ -430,7 +430,11 @@ func TestReleaseDryRunTagsNothing(t *testing.T) {
 	if code, body := approve(s, it.ID, tok, "v0.5.9", relSHA); code != 202 {
 		t.Fatalf("approve = %d %s", code, body)
 	}
-	waitUntil(t, "dry run done", func() bool { return len(tool.tagged()) == 1 && len(actions(s)) == 2 })
+	// The audit line is written before the item goes back to pending (tagRelease), so the item is waited for too.
+	waitUntil(t, "dry run done", func() bool {
+		cur, _ := s.todos.get(it.ID)
+		return len(tool.tagged()) == 1 && len(actions(s)) == 2 && cur.Release != nil && cur.Release.DryRun != ""
+	})
 	if tags := tool.tagged(); tags[0] != "v0.5.9 "+relSHA+" dry" {
 		t.Fatalf("tags = %v", tags)
 	}
