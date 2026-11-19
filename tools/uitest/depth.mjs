@@ -19,11 +19,14 @@ const rgb = (h) => { h = h.replace("#", ""); if (h.length === 3) h = h.replace(/
 
 // What the page computes for the surfaces under test, and the theme's tokens, in one round trip.
 const probe = (page) => page.evaluate(() => {
+  // A plain card made here, not one from the fleet: which rows exist (blocked, selected, working) depends on the fixtures.
+  document.getElementById("depth-probe")?.remove();
+  const pr = document.createElement("div"); pr.id = "depth-probe"; pr.className = "agent"; pr.style.cssText = "position:fixed;left:-999px;top:0;width:200px"; document.body.appendChild(pr);
   const css = (sel, ...props) => { const e = document.querySelector(sel); if (!e) return null; const cs = getComputedStyle(e); return Object.fromEntries(props.map((p) => [p, cs.getPropertyValue(p)])); };
   const t = ComebyeThemes.byId[document.documentElement.getAttribute("data-theme")];
   return {
     vars: t.vars, depth: document.documentElement.getAttribute("data-depth"),
-    agent: css(".agent.working:not(.selected)", "background-color", "border-top-color", "box-shadow"),
+    agent: css("#depth-probe", "background-color", "border-top-color", "box-shadow"),
     header: css("header", "background-color", "box-shadow"),
     prompt: css(".prompt", "background-color", "box-shadow"),
     menu: css("#row-menu", "background-color", "border-top-color", "box-shadow"),
