@@ -468,3 +468,45 @@ func TestRouteMainIsTheFirstRegisteredUntilRemoved(t *testing.T) {
 		t.Fatalf("main after removal = %q", mainOf())
 	}
 }
+
+// The agents payload names each agent's owning coordinator (the app's Group by Coordinator): a handoff's requester, the
+// coordinator that last prompted it, and through a worker that handed off a sub-worker; a coordinator and an unowned agent
+// have none.
+func TestSlimAgentsCarryTheOwner(t *testing.T) {
+	r := rigOf(t)
+	if _, err := r.s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "w", AgentID: "desk/w4:p1", PaneID: "w4:p1", AgentName: "worker", Status: ledger.Running, ReplyTo: refB}); err != nil {
+		t.Fatal(err)
+	}
+	// A sub-worker handed off by the worker is owned by B too.
+	if _, err := r.s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "s", AgentID: "desk/w5:p1", PaneID: "w5:p1", AgentName: "sub", Status: ledger.Running, ReplyTo: &ledger.Ref{AgentID: "desk/w4:p1", Name: "worker"}}); err != nil {
+		t.Fatal(err)
+	}
+	r.fh.set(func(f *fakeLaunchHerdr) {
+		f.agents = append(f.agents, herdr.AgentInfo{Name: "worker", PaneID: "w4:p1", Agent: "pi", Status: herdr.StatusIdle},
+			herdr.AgentInfo{Name: "sub", PaneID: "w5:p1", Agent: "pi", Status: herdr.StatusIdle})
+	})
+	r.s.manager.Refresh()
+	waitFor(t, func() bool { return len(r.s.fleet.Agents()) == 5 })
+	if w := do(r.s, "POST", "/api/agents/w2:p1/prompt", agentHdr("w1:p1"), `{"text":"look"}`); w.Code != 200 {
+		t.Fatalf("prompt = %d %s", w.Code, w.Body)
+	}
+	got := map[string]string{}
+	for _, a := range r.s.slimAgents(r.s.fleet.Agents()) {
+		got[a.PaneID] = a.Owner
+	}
+	want := map[string]string{"w1:p1": "", "w3:p1": "", "w2:p1": refA.AgentID, "w4:p1": refB.AgentID, "w5:p1": refB.AgentID}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("owners = %v, want %v", got, want)
+		}
+	}
+	// B stops being a coordinator: its agents are unowned.
+	if err := r.s.recordRole(refB.AgentID, refB.Name, "", "me"); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range r.s.slimAgents(r.s.fleet.Agents()) {
+		if a.PaneID == "w4:p1" && a.Owner != "" {
+			t.Fatalf("owner after the role was removed = %q", a.Owner)
+		}
+	}
+}

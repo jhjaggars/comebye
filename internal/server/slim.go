@@ -47,6 +47,10 @@ type browserAgent struct {
 	// Chat: this agent is a "Chat about this" helper (chat.go); the app shows
 	// the strip and the chip.
 	Chat *chatMark `json:"chat,omitempty"`
+	// Owner: the id of the coordinator that owns this agent (it handed the work off, planned it, or last prompted
+	// it), the same owner its notices go to (route.go). Absent for a coordinator, and when nobody owns the agent or
+	// its owner is no longer a coordinator.
+	Owner string `json:"owner,omitempty"`
 }
 
 // chatMark says which Page a chat helper is about. Version is the Page's
@@ -126,10 +130,22 @@ func (s *Server) slimAgents(agents []herdr.AgentInfo) []browserAgent {
 			Worktree: a.Worktree, LastActive: a.LastActive, StatusSince: a.StatusSince, Instance: a.Instance,
 			BlockedOn: s.blockedOnOf(a), StatusNote: a.StatusNote, Background: s.backgroundOfAgent(a),
 			QuietSince: a.QuietSince, ParkHint: a.ParkHint,
-			Chat: s.chatMarkOf(a, roles),
+			Chat:  s.chatMarkOf(a, roles),
+			Owner: s.ownerIDOf(a),
 		}
 	}
 	return out
+}
+
+// ownerIDOf is the id of the coordinator that owns a (see Owner); "" when a is a coordinator itself or nobody does.
+func (s *Server) ownerIDOf(a herdr.AgentInfo) string {
+	if s.isCoordinatorID(a.ID) {
+		return ""
+	}
+	if c := s.owningCoordinator(s.ownerOfAgent(a.ID, a.Name)); c != nil {
+		return c.AgentID
+	}
+	return ""
 }
 
 func slimHosts(hosts []state.HostStatus) []browserHost {

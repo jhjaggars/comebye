@@ -901,6 +901,8 @@ const GROUP_STATUS = [["Needs you", (a) => a.agent_status === "blocked"], ["Work
 const GROUP_MODES = [
   { key: "project", label: "Project", pins: true, groups: (list) => projectGroups(list) },
   { key: "host", label: "Host", pins: true, show: () => multiHost(), groups: (list) => hostGroups(list) },
+  // Coordinator heads its own group, so the Coordinators section is not pinned above; a waiting agent is still pinned on a desktop.
+  { key: "coordinator", label: "Coordinator", pins: true, pinCoords: false, show: () => hasCoordinatorView(), groups: (list) => coordinatorGroups(list) },
   { key: "status", label: "Status", pins: false, groups: (list) => statusGroups(list) },
 ];
 const normGroup = (g) => (GROUP_MODES.some((x) => x.key === g) ? g : "project");
@@ -934,6 +936,27 @@ function hostGroups(agents) {
     groups.get(h).push(a);
   }
   return urgentFirst([...groups.entries()]);
+}
+// Coordinator mode is offered when there is more than one coordinator, or any agent has an owner (the hub says so in `owner`).
+// With one coordinator and nobody owned there is nothing to tell apart, as Host is not offered on one host.
+const coordAgents = () => state.agents.filter((a) => isCoordinator(a));
+const hasCoordinatorView = () => coordAgents().length > 1 || state.agents.some((a) => a.owner);
+// coordinatorGroups: a group per coordinator (named for it, its row first, then the agents it started), then "Unowned" for the rest
+// (no owner, or an owner that is not a coordinator any more). Two coordinators of one name are told apart by their host.
+function coordinatorGroups(agents) {
+  const coords = coordAgents();
+  const label = new Map(coords.map((c) => [agentId(c), coords.filter((x) => x.name === c.name).length > 1 && c.host ? `${c.name || c.pane_id} · ${c.host}` : c.name || c.pane_id]));
+  const groups = new Map(), unowned = [];
+  for (const a of agents) {
+    const key = isCoordinator(a) ? agentId(a) : label.has(a.owner) ? a.owner : "";
+    if (!key) { unowned.push(a); continue; }
+    if (!groups.has(key)) groups.set(key, []);
+    const l = groups.get(key);
+    if (isCoordinator(a)) l.unshift(a); else l.push(a);
+  }
+  const out = urgentFirst([...groups.entries()].map(([id, l]) => [label.get(id), l]));
+  if (unowned.length) out.push(["Unowned", unowned]);
+  return out;
 }
 // statusGroups: a group per status, in a fixed order; a blocked agent is in Needs you only (a group holds an agent once).
 function statusGroups(agents) {
@@ -1256,11 +1279,11 @@ function renderListRows() {
   const needsSec = needs.length ? `<section class="proj needs-sec" aria-label="Needs you">
     <div class="proj-head static"><span class="proj-name">Needs you</span><span class="proj-counts"><span class="need">${needs.length}</span></span></div>
     <div class="proj-body">${needs.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
-  const coords = gm.pins ? agents.filter((a) => isCoordinator(a) && !needs.includes(a)) : [];
+  const coords = gm.pins && gm.pinCoords !== false ? agents.filter((a) => isCoordinator(a) && !needs.includes(a)) : [];
   const pinned = coords.length ? `<section class="proj coord-sec" aria-label="Coordinators">
     <div class="proj-head static"><span class="proj-name">Coordinators</span></div>
     <div class="proj-body">${coords.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
-  const rest = agents.filter((a) => !(gm.pins && isCoordinator(a)) && !needs.includes(a));
+  const rest = agents.filter((a) => !(gm.pins && gm.pinCoords !== false && isCoordinator(a)) && !needs.includes(a));
   wrap.innerHTML = parkBannerHTML() + needsSec + pinned + gm.groups(rest).map(([name, list]) => projectHTML(name, list, gm.key)).join("") + parkedSectionHTML() + downRows;
   wrap.querySelectorAll(".proj-head").forEach((el) =>
     el.addEventListener("click", () => toggleProject(el.dataset.proj)));

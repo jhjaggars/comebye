@@ -1,5 +1,5 @@
-// Left nav, slice 4: the Group by menu (issue #30).
-// Project (default, today's grouping), Host and Status; collapse state is kept per mode; the choice persists in storage and in
+// Left nav, slices 4 and 5: the Group by menu (issue #30).
+// Project (default, today's grouping), Host, Coordinator (slice 5, at the end of this file) and Status; collapse state is kept per mode; the choice persists in storage and in
 // the #/list?...&group= hash; it works with the tabs, the filter box and the host picker; a blocked agent is in sight in every
 // mode; the menu is keyboard reachable and a bottom sheet on a phone; nothing overflows at 390, 1280 and 3440, light and dark.
 //
@@ -31,12 +31,12 @@ function fleet(hostNames = HOSTS) {
   return { agents, hosts };
 }
 
-async function open(width, dark, { hash = "", store = {}, hostNames } = {}) {
+async function open(width, dark, { hash = "", store = {}, hostNames, fleet: fl } = {}) {
   const { browser, page } = await launch({ width, height: width < 500 ? 844 : 900, dark });
   page.setDefaultTimeout(8000);
   const errs = [];
   page.on("pageerror", (e) => errs.push(e.message));
-  const f = fleet(hostNames);
+  const f = fl || fleet(hostNames);
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#agents .agent");
   await page.evaluate(([f, store, hash]) => {
@@ -163,7 +163,7 @@ for (const dark of [false, true]) {
     } finally { await o.browser.close(); }
     o = await open(1280, dark, { hash: "#/list?group=bogus" });
     try { if (await o.page.locator("#gb-label").innerText() !== "Project") throw new Error("bad link"); } finally { await o.browser.close(); }
-    o = await open(1280, dark, { store: { "herdr-list-group": "coordinator" } });
+    o = await open(1280, dark, { store: { "herdr-list-group": "bogus-mode" } });
     try { if (await o.page.locator("#gb-label").innerText() !== "Project") throw new Error("unknown stored mode"); } finally { await o.browser.close(); }
   });
 
@@ -300,6 +300,119 @@ for (const dark of [false, true]) {
       await page.evaluate((f) => { state.hosts = f.hosts; setAgents(f); renderList(); }, fleet());
       if (await page.locator("#gb-label").innerText() !== "Host") throw new Error("Host did not come back");
     } finally { await browser.close(); }
+  });
+}
+
+
+// ---- slice 5: Group by Coordinator ----
+// laharl has its own coordinator (coord-laharl) beside mac's (coord-mac). The hub says which coordinator owns an agent in `owner`.
+//   coord-laharl owns laharl's api (idle) and web (working); coord-mac owns mac's api (blocked), web and docs, and nas's web;
+//   nas's api (blocked) has an owner that is no coordinator any more; the rest are unowned.
+function coordFleet({ owners = true, second = true } = {}) {
+  const f = fleet();
+  const now = new Date().toISOString();
+  if (second) f.agents.push({ id: "laharl/c0:p1", host: "laharl", pane_id: "c0:p1", name: "coord-laharl", agent: "claude", display_agent: "Claude", agent_status: "idle",
+    cwd: "/home/u/code/comebye", worktree: { repo: "comebye", checkout: "/x", linked: false }, last_active: now, status_since: now, role: "coordinator", is_coordinator: true });
+  const own = { "laharl/w00:p1": "laharl/c0:p1", "laharl/w01:p1": "laharl/c0:p1", "mac/w10:p1": "mac/c1:p1", "mac/w11:p1": "mac/c1:p1", "mac/w12:p1": "mac/c1:p1",
+    "nas/w21:p1": "mac/c1:p1", "nas/w20:p1": "nas/gone:p1" };
+  if (owners) for (const a of f.agents) if (own[a.id]) a.owner = own[a.id];
+  return f;
+}
+const openCoord = (w, dark, o = {}) => open(w, dark, { ...o, fleet: coordFleet(o.fleetOpts) });
+const members = (page) => page.evaluate(() => [...document.querySelectorAll("#agents section.proj[data-group=coordinator]")].map((s) => [s.querySelector(".proj-name").textContent,
+  [...s.querySelectorAll(".agent[data-id]")].map((r) => r.dataset.id)]));
+
+for (const dark of [false, true]) {
+  const scheme = dark ? "dark" : "light";
+  await check(`${scheme} @1280: Coordinator is offered with two coordinators, or when any agent has an owner, and not otherwise`, async () => {
+    const offered = async (o) => { const x = await openCoord(1280, dark, o); try { await x.page.click("#gb-btn"); return await x.page.evaluate(() => [...document.querySelectorAll("#gb-list .hp-row")].map((b) => b.dataset.group).join()); } finally { await x.browser.close(); } };
+    if (await offered({}) !== "project,host,coordinator,status") throw new Error("two coordinators and owners: " + await offered({}));
+    if (await offered({ fleetOpts: { owners: false } }) !== "project,host,coordinator,status") throw new Error("two coordinators, no owners");
+    if (await offered({ fleetOpts: { second: false } }) !== "project,host,coordinator,status") throw new Error("one coordinator with owned agents");
+    if (await offered({ fleetOpts: { second: false, owners: false } }) !== "project,host,status") throw new Error("one coordinator, nobody owned: " + await offered({ fleetOpts: { second: false, owners: false } }));
+    // A saved Coordinator with nothing to tell apart shows as Project and comes back with an owner.
+    const x = await openCoord(1280, dark, { fleetOpts: { second: false, owners: false }, store: { "herdr-list-group": "coordinator" } });
+    try {
+      if (await x.page.locator("#gb-label").innerText() !== "Project") throw new Error("saved Coordinator without a reason shows " + await x.page.locator("#gb-label").innerText());
+      await x.page.evaluate((f) => { state.agents = f.agents; renderList(); }, coordFleet({ second: false }));
+      if (await x.page.locator("#gb-label").innerText() !== "Coordinator") throw new Error("Coordinator did not come back");
+    } finally { await x.browser.close(); }
+  });
+
+  for (const w of [390, 1280, 3440]) {
+    await check(`${scheme} @${w}: Coordinator mode: a group per coordinator led by its row, then Unowned; every agent once; a blocked agent in sight; nothing overflows`, async () => {
+      const { browser, page, errs, f } = await openCoord(w, dark);
+      try {
+        await pick(page, "coordinator");
+        if (await page.locator("#gb-label").innerText() !== "Coordinator" || await page.evaluate(() => listHash()) !== "#/list?group=coordinator") throw new Error("label/hash " + await page.evaluate(() => listHash()));
+        const m = await members(page), all = await shown(page);
+        if (all.length !== f.agents.length || new Set(all).size !== all.length) throw new Error(`rows ${all.length} of ${f.agents.length}`);
+        const by = Object.fromEntries(m);
+        // The group is named for the coordinator, and the coordinator's own row heads it.
+        const want = { "coord-laharl": ["laharl/c0:p1", "laharl/w00:p1", "laharl/w01:p1"], "coord-mac": ["mac/c1:p1", "mac/w10:p1", "mac/w11:p1", "mac/w12:p1", "nas/w21:p1"] };
+        // On a desktop a blocked agent (mac's api) is pinned in Needs you above, out of its group.
+        const pinned = w >= 1100 ? new Set(blockedIds(f)) : new Set();
+        for (const [n, ids] of Object.entries(want)) {
+          const exp = ids.filter((id) => !pinned.has(id));
+          // The coordinator's own row first, then what it started in the list's order.
+          const got = by[n] || [];
+          if (exp.includes(ids[0]) && got[0] !== ids[0]) throw new Error(`${n} is not led by its coordinator: ${got}`);
+          if (got.slice().sort().join() !== exp.slice().sort().join()) throw new Error(`${n}: ${got} want ${exp}`);
+        }
+        if (m[m.length - 1][0] !== "Unowned") throw new Error("Unowned is not last: " + m.map((x) => x[0]));
+        const owned = new Set(Object.values(want).flat());
+        const expUn = f.agents.map((x) => x.id).filter((id) => !owned.has(id) && !pinned.has(id)).sort();
+        if ((by.Unowned || []).slice().sort().join() !== expUn.join()) throw new Error(`Unowned: ${by.Unowned} want ${expUn}`);
+        // A coordinator group's own row is first.
+        const heads = await page.evaluate(() => [...document.querySelectorAll("#agents section.proj[data-group=coordinator]")].map((s) => [s.querySelector(".proj-name").textContent, s.querySelector(".agent[data-id]")?.querySelector(".role-chip")?.textContent || ""]));
+        for (const [n, chip] of heads) if (n.startsWith("coord-") && chip !== "coordinator") throw new Error(`${n} is not led by its own row`);
+        const vis = await page.evaluate(() => [...document.querySelectorAll("#agents .agent.blocked[data-id]")].filter((r) => r.getClientRects().length).map((r) => r.dataset.id).sort());
+        if (vis.join() !== blockedIds(f).join()) throw new Error("blocked in sight " + vis);
+        if (w >= 1100 && !(await groups(page)).some((g) => g.aria === "Needs you" && g.rows === 2)) throw new Error("Needs you is not pinned on a desktop");
+        if ((await groups(page)).some((g) => g.name === "Coordinators")) throw new Error("the Coordinators section is pinned above the groups");
+        const ov = await noOverflow(page);
+        if (ov[0] !== ov[1] || ov[2] > ov[3]) throw new Error("overflow " + ov);
+        await page.screenshot({ path: `${out}/groupby-coordinator-${w}-${scheme}.png` });
+        if (errs.length) throw new Error(errs.join("; "));
+      } finally { await browser.close(); }
+    });
+  }
+
+  await check(`${scheme} @1280: Coordinator mode: folds on its own, persists in storage and the hash, works with the tabs and the box`, async () => {
+    let o = await openCoord(1280, dark, { store: { "comebye-collapsed-projects": JSON.stringify(["mac"]) } });
+    try {
+      await pick(o.page, "coordinator");
+      await o.page.click('#agents section.proj[data-group=coordinator] .proj-head[data-proj] >> text="coord-laharl"');
+      const g = await groups(o.page);
+      if (g.find((x) => x.name === "coord-laharl").open || !g.find((x) => x.name === "coord-mac").open) throw new Error("fold " + JSON.stringify(g.map((x) => [x.name, x.open])));
+      await pick(o.page, "project");
+      if ((await groups(o.page)).find((x) => x.name === "mac" && x.mode === "project").open) throw new Error("project fold lost");
+      await pick(o.page, "coordinator");
+      if ((await groups(o.page)).find((x) => x.name === "coord-laharl").open) throw new Error("coordinator fold lost");
+      await o.page.click('#lf-tabs [data-tab="working"]');
+      await o.page.fill("#lf-q", "web");
+      if (await o.page.evaluate(() => listHash()) !== "#/list?tab=working&q=web&group=coordinator") throw new Error("hash " + await o.page.evaluate(() => listHash()));
+      for (const [, ids] of await members(o.page)) if (ids.some((id) => !/web/.test(o.f.agents.find((a) => a.id === id).name))) throw new Error("box let others through " + ids);
+    } finally { await o.browser.close(); }
+    o = await openCoord(390, dark, { hash: "#/list?group=coordinator" });
+    try {
+      if (await o.page.locator("#gb-label").innerText() !== "Coordinator") throw new Error("link not applied");
+      if (await o.page.evaluate(() => localStorage.getItem("herdr-list-group")) !== "coordinator") throw new Error("storage");
+      const names = (await members(o.page)).map(([k]) => k);
+      if (names[names.length - 1] !== "Unowned" || !names.includes("coord-mac")) throw new Error("groups " + names);
+    } finally { await o.browser.close(); }
+  });
+
+  await check(`${scheme} @1280: two coordinators of one name are told apart by their host; an owner that went away is Unowned`, async () => {
+    const f = coordFleet();
+    f.agents.find((a) => a.id === "laharl/c0:p1").name = "coord-mac";
+    const o = await open(1280, dark, { fleet: f });
+    try {
+      await pick(o.page, "coordinator");
+      const n = (await members(o.page)).map(([k]) => k);
+      if (!n.includes("coord-mac · laharl") || !n.includes("coord-mac · mac")) throw new Error("names " + n);
+      if (!(await members(o.page)).find(([k]) => k === "Unowned")[1].includes("nas/w20:p1") && !blockedIds(f).includes("nas/w20:p1")) throw new Error("the gone owner's agent is not Unowned");
+    } finally { await o.browser.close(); }
   });
 }
 
