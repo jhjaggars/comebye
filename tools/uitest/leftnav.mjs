@@ -121,7 +121,7 @@ for (const dark of [false, true]) {
     } finally { await browser.close(); }
   });
 
-  await check(`${scheme} @390: no icon row; Pages, Usage, Peers, Settings stay in the fleet menu; Search and the pager stay`, async () => {
+  await check(`${scheme} @390: no icon row; Pages, Usage, Peers, Settings stay in the fleet menu; Search stays`, async () => {
     const { browser, page } = await open(390, dark);
     try {
       if (await page.locator("#nav").isVisible()) throw new Error("the icon row shows on a phone");
