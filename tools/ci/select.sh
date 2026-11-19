@@ -2,7 +2,7 @@
 # Which checks does a change need? Reads the changed paths (one per line) on stdin, or with --base REF
 # from `git diff --name-only REF...HEAD`, and prints key=value lines (CI appends them to $GITHUB_OUTPUT):
 #
-#   lint=true|false         gofmt, vet, build, node --check, tokens, contrast (cheap: false only for docs)
+#   lint=true|false         gofmt, vet, build, node --check, static checks, contrast (cheap: false only for docs)
 #   go=none|all|PKGS        pre-submit: Go packages to test (the ones touched and their importers)
 #   scripts=...|all         pre-submit: browser scripts for the touched paths, besides the smoke set
 #   smoke=true|false        pre-submit: the browser smoke set
@@ -70,7 +70,7 @@ while IFS= read -r f; do
     tools/uitest/gpghelp.mjs) lint=true; smoke=true; merge_browser=true; add_script gpgunlock; add_script gpgrenew ;;
     tools/uitest/*.mjs)
       lint=true; smoke=true; merge_browser=true
-      b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in buttons|chips|controls|fontsetting|decisionsets|starters|empties|contrast|tokens) visual=true;; esac ;;
+      b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in buttons|chips|controls|fontsetting|decisionsets|starters|empties|contrast|tokens|static) visual=true;; esac ;;
     tools/uitest/*|tools/devserver/*) lint=true; smoke=true; merge_browser=true ;;
     # A leaf Go package: nothing the browser scripts reach (they go through the hub), so Go tests only.
     internal/*/*.go|internal/*/*/*) lint=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
