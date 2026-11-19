@@ -174,7 +174,7 @@ await check("1. the worker commits and reports; the hub marks it finished and ty
   await until(async () => (await get("/api/ledger")).entries?.find((e) => e.id === h1 && e.status === "finished") || (await get("/api/ledger")).ledger?.find?.((e) => e.id === h1 && e.status === "finished"), "the ledger entry to be finished").catch(async (e) => { throw new Error(e.message + ": " + JSON.stringify(await get("/api/ledger")).slice(0, 400)); });
   const n = await coord.gotPrompt(/\(hub notice\).*feat\/hello.*finished/s, "the finished notice");
   must(n.includes(h1), "the notice does not name the handoff " + h1);
-  must(!(await coord2.prompts()).some((p) => /hub notice/.test(p)), "the other coordinator was typed a notice that is coord's");
+  must(!((await coord2.prompts()) || []).some((p) => /hub notice/.test(p)), "the other coordinator was typed a notice that is coord's");
   await coord.idle(); // the coordinator's turn on the notice ends
   const rd = ok(cli(await coord.pane(), ["read", h1, "--report"]), "read --report");
   must(/Added hello\.txt/.test(rd), "the coordinator cannot read the report: " + rd.slice(0, 200));
@@ -220,7 +220,7 @@ await check("3. the coordinator asks the user to OK the landing; the user answer
   await until(async () => (await todoById(t3)).state === "answered", "the answer to be recorded");
   const n = await coord.gotPrompt(/the user answered to-do item\(s\) /, "the answer notice");
   must(n.includes(t3), "the notice does not name " + t3);
-  must(!(await coord2.prompts()).some((p) => /hub notice/.test(p)), "the other coordinator was typed coord's to-do answer");
+  must(!((await coord2.prompts()) || []).some((p) => /hub notice/.test(p)), "the other coordinator was typed coord's to-do answer");
 });
 await check("3. the coordinator relays the OK with `comebye land`; the worker is told, labelled as an agent's, to push to main", async () => {
   ok(cli(await coord.pane(), ["todo", "done", t3]), "todo done");
@@ -380,6 +380,17 @@ if (!gpgInstalled()) {
 }
 
 // ---- 7. What the coordinator sees ------------------------------------------------------------------------------------------
+await check("2 coordinators: the first registered is main; the user marks the other main with `comebye coordinator main`, and `comebye agents` says which", async () => {
+  let o = ok(cli(await coord.pane(), ["coordinator", "main"]), "coordinator main");
+  must(/main coordinator: coord /.test(o), "main before: " + o);
+  must(/coord\s.*coordinator \(main\)/.test(ok(cli(await coord.pane(), ["agents"]), "agents")), "agents does not mark coord main");
+  ok(cli(null, ["coordinator", "main", "coord2"]), "mark main as the user");
+  o = ok(cli(await coord.pane(), ["coordinator", "main"]), "coordinator main");
+  must(/main coordinator: coord2 /.test(o), "main after: " + o);
+  const rows = ok(cli(await coord.pane(), ["agents"]), "agents").split("\n");
+  must(/^\S+\s+coord2\s.*coordinator \(main\)/.test(rows.find((r) => /\scoord2\s/.test(r)) || ""), "agents row of coord2: " + rows.join("|"));
+  must(!/coordinator \(main\)/.test(rows.find((r) => /\scoord\s/.test(r)) || ""), "coord is still shown as main");
+});
 await check("7. `comebye board` shows what happened: one landed, two still on it, nothing needing the user", async () => {
   const b = ok(cli(await coord.pane(), ["board"]), "board");
   must(/landed, recent \(1\)\n- one \[landed\]/.test(b), "board has no landed one:\n" + b);
