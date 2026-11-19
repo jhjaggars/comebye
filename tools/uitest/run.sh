@@ -144,6 +144,7 @@ if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ;
 if want versionbanner; then node versionbanner.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The Pages checks publish with the real CLI, so they need the binary and its state.
 if want pagescript; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagescript.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want pageback; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pageback.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want pages; then PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The page starters (comebye pages new): published by the real CLI, opened in the viewer under the real CSP.
 if want starters; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node starters.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

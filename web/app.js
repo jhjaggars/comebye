@@ -7646,9 +7646,10 @@ async function pgcSend() {
 function syncPages() {
   const r = parsePagesRoute();
   const el = $("pages");
-  const was = !el.hidden;
+  const was = !el.hidden, prev = pgs.route;
   pgs.route = r;
   el.hidden = !r;
+  pagesStamp(r, was, prev);
   if (!r) {
     pgsPop("pgsmenu", false); pgsPop("pgsinfo", false); pagesFocus(false);
     clearInterval(pgs.timer); pgs.timer = null;
@@ -7665,6 +7666,24 @@ function syncPages() {
   renderPages();
 }
 
+// Where did this history entry's page come from? Stamped once into the entry's own state (pgFrom), so it survives Back, Forward,
+// a reload and the replaceState calls that keep history.state: "app" (arrived from another screen: Back returns there),
+// "gallery" (from the list, or hopping between pages beside it: Back is the list), "cold" (the first screen this tab ever showed:
+// nothing in the app to go back to).
+function pagesStamp(r, was, prev) {
+  const seen = pgs.booted; pgs.booted = true;
+  if (!r || !r.id || (history.state && history.state.pgFrom)) return;
+  const from = !seen ? "cold" : was ? "gallery" : "app";
+  history.replaceState({ ...(history.state || {}), pgFrom: from }, "", location.href);
+}
+// pagesUnwind leaves a page: Back to the screen it was opened from, or to the gallery (replacing the page's entry, so the
+// history shrinks instead of piling a gallery entry on top of the page).
+function pagesUnwind() {
+  if (history.state && history.state.pgFrom === "app") { history.back(); return; }
+  history.replaceState(null, "", "#/pages");
+  route();
+}
+
 function closePages() {
   history.replaceState(null, "", location.pathname + location.search);
   route();
@@ -7672,7 +7691,7 @@ function closePages() {
 
 // Back from a page is the gallery; back from the gallery is the way out, on a phone. In the pane (desktop) the nav is the way out.
 function pagesBack() {
-  if (pgs.route && pgs.route.id) location.hash = "#/pages";
+  if (pgs.route && pgs.route.id) pagesUnwind();
   else if (!isDesktop()) closePages();
 }
 
@@ -7683,8 +7702,7 @@ async function pagesDelete() {
     await api("/api/pages/" + encodeURIComponent(p.id), { method: "DELETE" });
     pgs.items = pgs.items.filter((x) => x.id !== p.id);
     toast("Deleted");
-    if (isDesktop()) history.replaceState(null, "", "#/pages"); else history.back();
-    route();
+    pagesUnwind();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -7717,7 +7735,7 @@ function initPages() {
     if (ev.target.id !== "pgs-ver" || !pgs.route) return;
     pgsPop("pgsmenu", false);
     const p = pgs.items.find((x) => x.id === pgs.route.id), n = Number(ev.target.value);
-    history.replaceState(null, "", pageHash(pgs.route.id, p && n === p.version ? 0 : n));
+    history.replaceState(history.state, "", pageHash(pgs.route.id, p && n === p.version ? 0 : n));
     pgs.reload = true; // an explicit pick loads that version, pill or not
     route();
   });
