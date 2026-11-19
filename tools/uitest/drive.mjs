@@ -1581,7 +1581,9 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
       if (!/new/.test(m) || !/moved/.test(m)) throw new Error("marks " + m);
       const btn = await page.locator(`${box} [data-bd-seen]`).innerText();
       if (!btn.startsWith("2 new or moved")) throw new Error("button " + btn);
-      if ((await page.locator(`${box} [data-bd-seen]`).evaluate((b) => b.getBoundingClientRect().height)) < 44) throw new Error("Mark seen is under 44px");
+      // The button's size is read once its stylesheet rules apply, not at the first frame after the reload.
+      await page.waitForFunction(([box]) => document.querySelector(`${box} [data-bd-seen]`)?.getBoundingClientRect().height >= 44, [box], { timeout: 3000 })
+        .catch(async () => { throw new Error("Mark seen is under 44px: " + await page.locator(`${box} [data-bd-seen]`).evaluate((b) => b.getBoundingClientRect().height)); });
       await page.locator(`${box} .bd-lane[data-lane="running"] summary`).click();
       await page.screenshot({ path: `${out}/board-new-${width}.png` });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls sideways");
@@ -3099,8 +3101,14 @@ await check("search page: Open agent leaves for the agent, and Back restores the
       renderRecallSession();
     });
     await page.waitForSelector("#rc-open", { timeout: 3000 });
+    // This agent exists only in the page's state: the hub has no pane for it, so the detail's output poll gets a 404 and the
+    // app closes the detail ("agent is gone") within a frame or two. The detail being on screen is therefore not something
+    // to wait for (under load the 404 lands before the next poll of the page); what the click did is the hash it went to,
+    // which is recorded as it changes.
+    await page.evaluate(() => { window.__hashes = []; addEventListener("hashchange", () => window.__hashes.push(location.hash)); });
     await page.locator("#rc-open").click();
-    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForFunction(() => window.__hashes.some((h) => h.startsWith("#/agent/devbox/")), null, { timeout: 5000 })
+      .catch(async () => { throw new Error("Open agent did not go to the agent: " + JSON.stringify(await page.evaluate(() => window.__hashes))); });
     await page.waitForSelector("#recall", { state: "hidden" });
     await page.goBack();
     await page.waitForSelector("#recall", { state: "visible" });
@@ -3995,7 +4003,7 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
       const p = await ctx.newPage();
       try {
         await p.goto(base + "/#/todo", { waitUntil: "load" });
-        await p.waitForTimeout(500);
+        await p.waitForFunction(() => typeof state !== "undefined" && document.querySelector("#agents"), null, { timeout: 8000 });
         // A To do item with choices, drawn from the app's own markup.
         await p.evaluate(() => {
           document.body.insertAdjacentHTML("beforeend", `<div id="zz" style="position:fixed;left:20px;top:20px;z-index:99999;background:var(--bg);padding:10px">
@@ -4005,14 +4013,27 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         const look = (sel) => p.evaluate((sel) => { const cs = getComputedStyle(document.querySelector(sel)); return [cs.backgroundColor, cs.borderTopColor, cs.transform, cs.cursor].join("|"); }, sel);
         const bad = [];
         // The look once its transition has finished: two reads 40 ms apart agree.
-        const still = async (sel) => { let prev = ""; for (let i = 0; i < 25; i++) { const v = await look(sel); if (v === prev) return v; prev = v; await p.waitForTimeout(40); } return prev; };
+        // `from` is the look this state must leave (the previous state's): the hover or press has not landed until the look
+        // differs, so a read that still equals it is waited on, up to 2 s, rather than taken as "no change" (under load the
+        // style recalculation after the mouse event can lag the event). A control that really does not change keeps `from`.
+        const still = async (sel, from) => {
+          if (from !== undefined) await p.waitForFunction(([sel, from]) => { const cs = getComputedStyle(document.querySelector(sel)); return [cs.backgroundColor, cs.borderTopColor, cs.transform, cs.cursor].join("|") !== from; }, [sel, from], { timeout: 2000 }).catch(() => {});
+          // then the look once its transition has finished: two reads in consecutive frames agree
+          return p.evaluate(async (sel) => {
+            const read = () => { const cs = getComputedStyle(document.querySelector(sel)); return [cs.backgroundColor, cs.borderTopColor, cs.transform, cs.cursor].join("|"); };
+            const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+            let prev = read(), stable = 0;
+            for (let i = 0; i < 90 && stable < 6; i++) { await frame(); const v = read(); if (v === prev) stable++; else { stable = 0; prev = v; } }
+            return prev;
+          }, sel);
+        };
         for (const sel of ["#zz-a", "#zz-b", "#zz-c"]) {
           await p.mouse.move(700, 600);
           const rest = await still(sel);
           await p.hover(sel);
-          const hover = await still(sel);
+          const hover = await still(sel, rest);
           await p.mouse.down();
-          const press = await still(sel);
+          const press = await still(sel, hover);
           await p.mouse.up();
           if (hover === rest) bad.push(`${sel}: hover looks like rest`);
           if (press === hover) bad.push(`${sel}: pressed looks like hover`);
@@ -4020,8 +4041,9 @@ await check("themes: every theme passes the contrast check (tools/uitest/contras
         }
         await p.mouse.move(700, 600);
         const selRest = await still("#zz-b");
+        const plainRest = await still("#zz-a");
         await p.hover("#zz-a");
-        const plainHover = await still("#zz-a");
+        const plainHover = await still("#zz-a", plainRest);
         if (plainHover.split("|").slice(0, 2).join() === selRest.split("|").slice(0, 2).join()) bad.push("hovered plain option looks like the selected one");
         // Only (hover: hover) devices get hover rules: none outside such a media block.
         const ok = await p.evaluate(() => {
