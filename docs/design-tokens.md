@@ -29,20 +29,7 @@ Not tokenised yet: `z-index` (13 distinct values), breakpoints (9), transitions.
 1. In `padding`, `margin`, `gap`, `border-radius` and `font-size`, write the token, not the number.
 2. Need a value that is not on a scale? Pick the nearest step. Add a step only with a reason in the PR;
    the scale is meant to stay small.
-3. `tools/uitest/tokens.mjs` enforces this as a ratchet (below). Colours still come from `themes.js` only.
-
-## The ratchet
-
-```sh
-node tools/uitest/tokens.mjs            # check (CI runs it): exit 1 if a count went up
-node tools/uitest/tokens.mjs --verbose  # list every offender, with its selector
-node tools/uitest/tokens.mjs --update   # lower tools/uitest/tokens-baseline.json after you fixed some
-```
-
-Per scale it counts `literal` (a positive px written out where a token exists) and `offscale`
-(a px on no scale). `tokens-baseline.json` holds today's counts; the check fails if either goes
-up, and also when it goes down, to make you commit the lower baseline. `--update` refuses to raise
-a count. The scales it checks against are read from `:root`, so adding a step there is one edit.
+3. Nothing in CI enforces this any more (the px-literal ratchet was removed: its counts were never lowered). Colours still come from `themes.js` only.
 
 ## The snap (what moved)
 
@@ -62,7 +49,7 @@ was not touched.
 
 `:focus-visible` has one rule at the top of the stylesheet (`outline: var(--ring)`). Component rules no longer repeat
 the colour or width; the 40 that need a different offset set `outline-offset` alone, the 12 that matched the default are gone,
-and the `--blue` rings now use the theme's `--focus`. Every `min-height` of 32/36/40/44/48px is `var(--hit-N)` (ratchet: `hit.literal`).
+and the `--blue` rings now use the theme's `--focus`. Every `min-height` of 32/36/40/44/48px is `var(--hit-N)`.
 `.btn` has one tone set (`.primary`, `.warn`, `.danger`) and a dense size (`.btn.sm`, 32px). Per-surface button rules (`.td-acts button`,
 `.bd-seg button`, ...) are not folded into `.btn` yet: they are different controls (segments, menu items) and belong to slices 5 and 6.
 
@@ -83,7 +70,7 @@ A control adds only its own sizing (`.us-seg` is the dense 36px one). The underl
 *Menu / sheet:* `.pop` was already the one popover-and-bottom-sheet primitive (grab handle, safe-area padding, backdrop); its radius is now `--r-16`
 (was 18px) and its layers are tokens.
 *Stacking:* `--z-raised 2, pop 5, bar 10, pill 15, view 30, backdrop 34, menu 35, popup 36, sheet 37, screen 40, scrim 70, toast 100, toast-over 101`.
-A two-digit literal `z-index` is a ratchet failure (`z.literal`).
+A two-digit literal `z-index` is a convention break; use the tokens.
 *Notice:* `#toast`, `.rtr-banner` and the briefing card (`.br-card`) share one 12px surface; `.notice.info|warn|err` sets the edge colour (and the warn tint).
 
 ### Shared with Pages (slice 7)

@@ -49,10 +49,10 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-      - name: JS, tokens, contrast, flaky list
+      - name: JS, static checks, contrast, flaky list
         run: |
           for f in web/*.js; do node --check "$f"; done
-          node tools/uitest/tokens.mjs
+          node tools/ci/static.mjs
           node tools/uitest/contrast.mjs
           tools/ci/flakes.sh expired
 

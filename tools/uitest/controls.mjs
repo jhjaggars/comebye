@@ -1,5 +1,5 @@
 // Segmented controls, menus and sheets, toasts and banners (design language slice 6): the shared
-// look and the stacking order, read back from computed styles.
+// look read back from computed styles (the stacking order is tools/ci/static.mjs).
 //
 //   node controls.mjs BASE OUT_DIR      (env: SCHEME)
 import { launch } from "./lib.mjs";
@@ -21,14 +21,6 @@ for (const width of [390, 1280]) {
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#btn-fleet");
   await page.waitForTimeout(600);
-
-  await check(`${tag}: the stacking tokens are ordered backdrop < menu < popup < sheet < screen < scrim < toast`, async () => {
-    const z = await page.evaluate(() => {
-      const cs = getComputedStyle(document.documentElement), g = (n) => Number(cs.getPropertyValue("--z-" + n));
-      return ["raised", "pop", "bar", "view", "backdrop", "menu", "popup", "sheet", "screen", "scrim", "toast", "toast-over"].map(g);
-    });
-    for (let i = 1; i < z.length; i++) if (!(z[i] > z[i - 1])) throw new Error("not increasing: " + z.join(", "));
-  });
 
   await check(`${tag}: a segmented control is a 10px-radius hairline box and its pressed segment is the accent`, async () => {
     for (const hash of ["#/status", "#/usage", "#/briefings", "#/search"]) {

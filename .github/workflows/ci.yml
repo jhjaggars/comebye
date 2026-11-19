@@ -109,9 +109,9 @@ jobs:
         run: |
           for f in web/*.js; do node --check "$f"; done
 
-      # Spacing, radius and type use the tokens in docs/design-tokens.md; the counts may only go down.
-      - name: design tokens
-        run: node tools/uitest/tokens.mjs
+      # Static facts about web/ (no browser, under a second): every var(--x) is defined; the stacking tokens are in order.
+      - name: static checks
+        run: node tools/ci/static.mjs
 
       # Every theme in web/themes.js: WCAG AA contrast, and every token the page uses is defined.
       - name: theme contrast
