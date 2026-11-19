@@ -1522,7 +1522,7 @@ await check("pages: the rows above the list open the pages; the open one is mark
   const onReq = (r) => { if (r.url().includes("/api/push/presence")) posts.push(JSON.parse(r.postData() || "{}")); };
   page.on("request", onReq);
   try {
-    const rows = await page.locator("#nav .nv span:first-of-type").allInnerTexts();
+    const rows = (await page.locator("#nav .nv").evaluateAll((bs) => bs.map((b) => b.title)));
     for (const want of ["Status", "To do", "Search"]) if (!rows.includes(want)) throw new Error("rows " + JSON.stringify(rows));
     const [n, l] = await Promise.all([geo("#nav"), geo("#agents")]);
     if (!n.shown || n.x !== 0 || n.y > l.y) throw new Error("the rows are not above the agent list: " + JSON.stringify([n, l]));

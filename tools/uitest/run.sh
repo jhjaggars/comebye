@@ -113,6 +113,7 @@ if want wrap; then node wrap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want openbydefault; then node openbydefault.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want appearancereset; then node appearancereset.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want navcontrast; then node navcontrast.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want leftnav; then node leftnav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Buttons and the one focus ring (design language slice 4).
 if want buttons; then node buttons.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Chips, cards and empty states share one shape (design language slice 5).

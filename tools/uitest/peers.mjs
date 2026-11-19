@@ -232,7 +232,7 @@ try {
         await shot("nav-dot");
         // the fleet menu (the phone's way to Peers) carries it too
         await page.locator("#btn-fleet").click();
-        await page.waitForSelector("#f-peers .nv-dot:not([hidden])");
+        await page.waitForSelector("#f-peers .nv-dot:not([hidden])", { state: width >= 1100 ? "attached" : "visible" }); // the desktop's menu has no Peers: the icon row has it
         await page.keyboard.press("Escape");
         const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
         if (w[0] > w[1]) throw new Error("horizontal overflow " + w);

@@ -10166,8 +10166,9 @@ function renderNav() {
   const html = rows.map((r) => {
     const n = r.count ? r.count() : 0;
     const on = r.on ? r.on() : state.view === r.key;
-    return `<button type="button" class="nv${on ? " on" : ""}" data-page="${r.key}"${on ? ' aria-current="page"' : ""}>${NAV_ICON[r.key]}<span>${esc(r.label)}</span>${
-      n ? `<span class="badge" aria-label="${n} open">${n}</span>` : r.odot && r.odot() ? `<span class="bdot bdot-o" role="img" aria-label="a release needs you: ${escAttr((rls.data && rls.data.needs_text) || "")}"></span>` : r.dot && r.dot() ? '<span class="bdot" aria-label="new"></span>' : ""}</button>`;
+    const tip = n ? `${r.label}, ${n} open` : r.label;
+    return `<button type="button" class="nv${on ? " on" : ""}" data-page="${r.key}" title="${escAttr(r.label)}" aria-label="${escAttr(tip)}"${on ? ' aria-current="page"' : ""}>${NAV_ICON[r.key]}${
+      n ? `<span class="badge" aria-hidden="true">${n}</span>` : r.odot && r.odot() ? `<span class="bdot bdot-o" role="img" aria-label="a release needs you: ${escAttr((rls.data && rls.data.needs_text) || "")}"></span>` : r.dot && r.dot() ? '<span class="bdot" aria-label="new"></span>' : ""}</button>`;
   }).join("");
   if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; }
 }
