@@ -202,17 +202,25 @@ for (const dark of [false, true]) {
   });
 
   await check(`${scheme} @390: opening an agent leaves the hash to its route; coming back restores the list's own`, async () => {
-    const { browser, page } = await open(390, dark);
+    // The server's own agents here: the test fleet's do not exist there, and the app drops a detail whose agent is gone.
+    const { browser, page } = await launch({ width: 390, height: 844, dark });
+    page.setDefaultTimeout(8000);
     try {
-      await page.fill("#lf-q", "api");
-      const id = (await shown(page))[0];
-      await page.click(`#agents .agent[data-id="${id}"]`);
-      await page.waitForFunction(() => location.hash.startsWith("#/agent/")).catch(() => { throw new Error("opening the row did not route to the agent: " + location.hash); });
-      await page.goBack();
-      await page.waitForFunction(() => !location.hash.startsWith("#/agent/")).catch(() => { throw new Error("back did not leave the agent route"); });
+      await page.goto(base + "/", { waitUntil: "load" });
+      await page.waitForSelector("#agents .agent[data-id]");
+      await page.evaluate(() => { for (const k of ["herdr-host-filter", "herdr-list-tab", "herdr-list-q"]) localStorage.removeItem(k); });
+      const nm = await page.evaluate(() => agentById(document.querySelector("#agents .agent[data-id]").dataset.id).name);
+      const q = nm.slice(0, 4).trim();
+      await page.fill("#lf-q", q);
+      const h0 = await hash(page);
+      if (h0 !== "#/list?q=" + encodeURIComponent(q).replace(/%20/g, "+")) throw new Error("hash with a filter " + h0);
+      await page.click("#agents .agent[data-id]");
+      await page.waitForFunction(() => location.hash.startsWith("#/agent/"));
+      await page.evaluate(() => history.back());
+      await page.waitForFunction(() => !location.hash.startsWith("#/agent/"));
       await page.waitForTimeout(150);
-      if (await hash(page) !== "#/list?q=api") throw new Error("hash after back " + await hash(page));
-      if (await page.inputValue("#lf-q") !== "api") throw new Error("box lost");
+      if (await hash(page) !== h0) throw new Error("hash after back " + await hash(page));
+      if (await page.inputValue("#lf-q") !== q) throw new Error("box lost");
     } finally { await browser.close(); }
   });
 
