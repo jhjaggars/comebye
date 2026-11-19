@@ -82,6 +82,7 @@ echo "app: $app ($(git -C "$app" log -1 --format='%h %s'))"
 cd "$here"
 rc=0
 if want drive; then node drive.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want coordnav; then node coordnav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 
 # Markdown rendering in the chat, in a real browser (its own debugging port, so suites side by side do not clash).
 if want markdown; then node "$root/web/test/markdown.test.mjs" "http://127.0.0.1:$port/" --chrome "${CHROME:-google-chrome}" --port $((port + 500)) || rc=1; fi
