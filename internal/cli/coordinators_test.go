@@ -126,6 +126,7 @@ func TestCoordinatorNew(t *testing.T) {
 	launch := `{"agent":{"id":"laharl/w9:p1","host":"laharl","pane_id":"w9:p1","name":"proj-a","cwd":"/home/x/.local/state/comebye/coordinators/proj-a"},"workspace_id":"w9","coordinator":true,"warnings":["the coordinator reset hook is not installed on this host"]}`
 	e, out, _, reqs := peerEnv(t, map[string]string{"COMEBYE_LOGIN": "me@example.com"}, map[string]answer{
 		"POST /api/launch": {200, launch}, "POST /api/hosts/kube/launch": {200, launch},
+		"GET /api/coordinators": {200, `{"coordinators":[{"id":"laharl/w9:p1","name":"proj-a","main":true,"handoffs":[],"closed":[],"todos":[],"plans":[]}]}`},
 	})
 	if code := run(e, "coordinator", "new", "proj-a"); code != 0 {
 		t.Fatalf("exit %d: %s", code, out)
@@ -144,7 +145,7 @@ func TestCoordinatorNew(t *testing.T) {
 	if strings.Contains(body, `"dir"`) {
 		t.Errorf("a dir was sent: %s", body)
 	}
-	for _, want := range []string{"Started coordinator proj-a (laharl/w9:p1)", "coordinators/proj-a/state.md", "warning: the coordinator reset hook"} {
+	for _, want := range []string{"Started coordinator proj-a (laharl/w9:p1)", "/coordinator/state.md (on laharl; it is the main coordinator", "warning: the coordinator reset hook"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -154,7 +155,12 @@ func TestCoordinatorNew(t *testing.T) {
 	if code := run(e, "coordinator", "new", "proj-b", "--host", "kube", "--dir", "/srv/code/proj"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	last := (*reqs)[len(*reqs)-1]
+	var last recorded
+	for _, r := range *reqs {
+		if r.method == "POST" {
+			last = r
+		}
+	}
 	if last.path != "/api/hosts/kube/launch" || !strings.Contains(last.body, `"dir":"/srv/code/proj"`) {
 		t.Errorf("request = %s %s", last.path, last.body)
 	}

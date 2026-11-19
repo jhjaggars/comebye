@@ -302,7 +302,21 @@ func cmdCoordNew(e *Env, args []string) error {
 	}
 	where := firstNonEmpty(r.Agent.ID, r.Agent.Host+"/"+r.Agent.PaneID)
 	fmt.Fprintf(e.Stdout, "Started coordinator %s (%s) in %s\n", name, where, dash(r.Agent.CWD))
-	fmt.Fprintf(e.Stdout, "  notes:   %s (on %s; it becomes the digest's state file)\n", filepath.Join(coordinatorsDir(e), name, stateFileName), firstNonEmpty(r.Agent.Host, *host, "its host"))
+	// The notes file follows the main mark: the first coordinator on a hub is
+	// main, and keeps the original path.
+	isMain := false
+	if cs, err := c.getCoordinators(); err == nil {
+		for _, co := range cs {
+			if co.ID == r.Agent.ID {
+				isMain = co.Main
+			}
+		}
+	}
+	mainNote := ""
+	if isMain {
+		mainNote = "; it is the main coordinator, the first registered"
+	}
+	fmt.Fprintf(e.Stdout, "  notes:   %s (on %s%s)\n", coordStatePath(e, name, isMain), firstNonEmpty(r.Agent.Host, *host, "its host"), mainNote)
 	fmt.Fprintf(e.Stdout, `
 Talk to it: open %s in the app (it is pinned with the Coordinators), or in its herdr pane.
 Work it hands off, to-dos its workers file and agents it prompts answer to it, not to main.
