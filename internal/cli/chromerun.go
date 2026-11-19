@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -68,6 +69,9 @@ func runChrome(ctx context.Context, chrome string, args []string, stdout io.Writ
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	if ctx.Err() != nil {
+		if l := se.last(); l != "" {
+			return fmt.Errorf("%w (Chrome's last words: %s)", errChromeTimeout, l)
+		}
 		return errChromeTimeout
 	}
 	if err != nil {
@@ -95,6 +99,9 @@ func (l *lastLines) Write(p []byte) (int, error) {
 }
 
 func (l *lastLines) last() string {
+	if len(bytes.TrimSpace(l.b)) == 0 {
+		return ""
+	}
 	lines := strings.Split(strings.TrimSpace(string(bytes.ToValidUTF8(l.b, nil))), "\n")
 	s := strings.TrimSpace(lines[len(lines)-1])
 	if len(s) > 160 {

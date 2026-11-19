@@ -270,6 +270,27 @@ func TestRunChromeKillsAHungChromeAndItsHelpers(t *testing.T) {
 	}
 }
 
+func TestRunChromeTimeoutCarriesChromesLastWords(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "chrome")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'waiting on the GPU process' >&2\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := runChrome(ctx, script, nil, nil)
+	if !errors.Is(err, errChromeTimeout) || !strings.Contains(err.Error(), "waiting on the GPU process") {
+		t.Fatalf("err = %v", err)
+	}
+	_, e, _, _ := newFake(t)
+	chromeEnv(e, nil)
+	old := shotRender
+	shotRender = func(context.Context, string, string, string) ([]byte, error) { return nil, err }
+	t.Cleanup(func() { shotRender = old })
+	if _, _, why := thumbnails(e, "<p>x"); !strings.Contains(why, "Chrome did not finish in 8s (Chrome's last words: waiting on the GPU process)") {
+		t.Errorf("why = %q", why)
+	}
+}
+
 func TestRunChromeReportsChromesComplaint(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "chrome")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'noise' >&2\necho 'Missing X server or $DISPLAY' >&2\nexit 1\n"), 0o755); err != nil {
@@ -306,13 +327,19 @@ func TestRealChromeThumbnailOfAPageWithDeadScripts(t *testing.T) {
 <script src="http://10.255.255.1/x.js"></script><script src="http://192.0.2.1/y.js"></script>
 <link rel=stylesheet href="https://fonts.googleapis.com/css2?family=Inter">
 <style>body{background:#fff;color:#000}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}}</style><body style="font:20px sans-serif"><h1>Hello</h1><p>Body text of the page.</p></body>`
+	// What is tested is that dead hosts do not stall the render, not how fast a starved CI host starts Chrome
+	// (twice, among a dozen race-instrumented test binaries): a generous budget, and Chrome's own words if it runs out.
+	old := thumbTimeout
+	thumbTimeout = 60 * time.Second
+	t.Cleanup(func() { thumbTimeout = old })
 	start := time.Now()
 	light, dark, why := thumbnails(e, page)
 	if light == nil || dark == nil || why != "" {
-		t.Fatalf("light %v dark %v why %q", light != nil, dark != nil, why)
+		t.Fatalf("light %v dark %v why %q after %v", light != nil, dark != nil, why, time.Since(start))
 	}
-	if d := time.Since(start); d > thumbTimeout {
-		t.Errorf("took %v", d)
+	// The old behaviour waited out the whole budget on the dead hosts; anything near it is the hang again.
+	if d := time.Since(start); d > thumbTimeout/2 {
+		t.Errorf("took %v of a %v budget", d, thumbTimeout)
 	}
 	for _, b := range [][]byte{light, dark} {
 		if cfg, err := png.DecodeConfig(bytes.NewReader(b)); err != nil || cfg.Width != thumbW || len(b) > thumbMax {

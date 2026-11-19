@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,11 +25,13 @@ import (
 // and why. It costs a publish at most thumbTimeout.
 // COMEBYE_NO_THUMBNAILS=1 turns it off; COMEBYE_CHROME names the browser.
 
+// thumbTimeout is each render's time; both run at once. A variable so a test on a starved host can widen it.
+var thumbTimeout = 8 * time.Second
+
 const (
-	thumbTimeout = 8 * time.Second // both renders run at once, each under this
-	thumbW       = 400             // the picture sent: 1280x800 shrunk, 16:10 as the gallery's cards
-	thumbH       = 250
-	thumbMax     = 90 << 10 // the hub takes 96 KiB a picture
+	thumbW   = 400 // the picture sent: 1280x800 shrunk, 16:10 as the gallery's cards
+	thumbH   = 250
+	thumbMax = 90 << 10 // the hub takes 96 KiB a picture
 )
 
 // shotRender renders page in headless Chrome at 1280x800 in the scheme
@@ -150,7 +153,11 @@ func thumbnails(e *Env, page string) (light, dark []byte, why string) {
 	case err == nil:
 		return light, dark, ""
 	case errors.Is(err, errChromeTimeout):
-		return light, dark, fmt.Sprintf("Chrome did not finish in %ds", int(thumbTimeout/time.Second))
+		why := fmt.Sprintf("Chrome did not finish in %ds", int(thumbTimeout/time.Second))
+		if _, tail, ok := strings.Cut(err.Error(), errChromeTimeout.Error()); ok && tail != "" {
+			why += tail // " (Chrome's last words: ...)"
+		}
+		return light, dark, why
 	}
 	return light, dark, err.Error()
 }
