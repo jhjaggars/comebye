@@ -4,7 +4,7 @@ name: Nightly
 # Both colour schemes of every browser check, Go in a shuffled order, a fresh govulncheck, the release
 # cross-build, and each flaky-list check five times. When it is red, it opens or updates one issue titled
 # "Nightly is red" with the label nightly-red, and comments on it for each further red night; the coordinator
-# files a To do from that. A red nightly stops the next release (tools/ci/releasegate.sh).
+# files a To do from that. A red nightly does not stop a release: the Release workflow checks its own commit.
 
 on:
   schedule:

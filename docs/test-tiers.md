@@ -7,8 +7,8 @@ time. The plan, with the measurements behind it, is the Page "Test tiers plan" i
 |---|---|---|---|---|
 | Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched | 3.5 min (5 when `internal/server` changed) | merging the pull request |
 | Merge | a push to main | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and a `rest` job; the visual pass in dark and light | 4 min | the next release of that commit (and the landing queue reads it) |
-| Nightly | 02:00 UTC, and by hand | everything in merge, both schemes; Go shuffled with no cache; a fresh govulncheck; the release cross-build; each flaky-list check 5 times | 7 min | the next release |
-| Release | a `v*` tag | the gate (below), then the 4 builds and the publish | 2 min | nothing: it publishes |
+| Nightly | 02:00 UTC, and by hand | everything in merge, both schemes; Go shuffled with no cache; a fresh govulncheck; the release cross-build; each flaky-list check 5 times | 7 min | nothing: it opens the `nightly-red` issue |
+| Release | a `v*` tag | the gate (below), govulncheck, the 4 builds, then the publish | 2 min | nothing: it publishes |
 
 The **day in the life** (`tools/smoke/run.sh`, about 15 seconds after the build) is one more job in the pre-submit tier
 (with the browser smoke set) and in the merge and nightly tiers: handoff, report, a to-do answered on a phone, landing to a
@@ -88,6 +88,7 @@ gh run list --workflow nightly.yml --limit 1 --json conclusion,databaseId,create
 
 ## Releasing
 
-`tools/ci/releasegate.sh` allows a release when CI is green on the tagged commit (otherwise the release workflow
-tests it itself) and the last nightly is green and under 36 hours old. To release past a red or stale nightly, run
-the Release workflow by hand from the Actions tab with the tag and **force** set; the override is logged on the run.
+A red nightly does not stop a release. The Release workflow checks the tagged commit itself, and each of these fails the
+release: `tools/ci/releasegate.sh` finds no green push CI run on the commit, so `go vet` and `go test -race` run
+(with a green run they are skipped); `govulncheck` (the newest advisory database); the 4-target build. There is no
+force input: a failure is fixed and the workflow re-run (by hand from the Actions tab with the tag, if the tag exists).

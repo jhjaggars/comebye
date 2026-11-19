@@ -2,12 +2,10 @@ name: Release
 
 # Push a tag like v0.1.0 to build binaries and publish a GitHub release:
 #   git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
-# The tagged commit must have a green CI run (the merge tier tests everything on push) and the last nightly must
-# be green and under 36 hours old (tools/ci/releasegate.sh). A tag need not be on a commit CI passed: with no green
-# run for the commit, this workflow tests it itself, so a broken tag still publishes nothing.
-#
-# To release past a red or stale nightly (a hotfix), run this workflow by hand from the Actions tab with the tag
-# and force set; the override is logged as a warning on the run.
+# This workflow checks the exact commit it releases, and any failing step stops the release: govulncheck, the
+# four-target build, and, when there is no green push CI run on the commit (tools/ci/releasegate.sh), go vet and
+# go test -race. The nightly is not consulted. There is no override: fix the cause and re-run (the workflow can be
+# run by hand from the Actions tab with the tag).
 
 on:
   push:
@@ -18,11 +16,6 @@ on:
         description: "The tag to release (it must already exist)"
         required: true
         type: string
-      force:
-        description: "Release past a red or stale nightly (a hotfix)"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -39,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release and upload its assets
-      actions: read   # read the CI and nightly runs for the gate
+      actions: read   # read the CI runs for the gate
     env:
       VERSION: ${{ inputs.tag || github.ref_name }}
     steps:
@@ -59,7 +52,6 @@ jobs:
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
-          FORCE: ${{ inputs.force }}
         run: tools/ci/releasegate.sh "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # Only when CI has not already tested this commit.
@@ -70,6 +62,12 @@ jobs:
       - name: go test
         if: steps.gate.outputs.tested != 'true'
         run: go test -race ./...
+
+      # The newest advisory database, as the nightly uses; a finding fails the release.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
       # Static, reproducible-ish binaries: no cgo, no local paths, the tag
       # stamped in as the version (comebye -version). Archive names carry
