@@ -94,7 +94,7 @@ func TestSetRulesBlockAndWarn(t *testing.T) {
 	s, _, _ := todoServer(t)
 	it := setAdd(t, s, setBody)
 	full := func(d3, d1, d6 int) string {
-		b, _ := json.Marshal(map[string]any{"choices": map[string]SetChoice{"D1": {d1, true}, "D3": {d3, true}, "D6": {d6, true}}})
+		b, _ := json.Marshal(map[string]any{"choices": map[string]SetChoice{"D1": {Option: d1, Confirmed: true}, "D3": {Option: d3, Confirmed: true}, "D6": {Option: d6, Confirmed: true}}})
 		return string(b)
 	}
 	_, m := putDraft(s, it.ID, full(2, 1, 1))
@@ -303,5 +303,82 @@ func TestSetSubmitNoteGoesWithTheAnswer(t *testing.T) {
 	g := todoOf(t, w.Body.Bytes())
 	if w.Code != 200 || g.Answer == nil || !strings.Contains(g.Answer.Text, "please check this") || !strings.Contains(g.Answer.Text, "own words") {
 		t.Fatalf("submit with a note = %d %+v", w.Code, g.Answer)
+	}
+}
+
+// A decision answered with the user's own words confirms the decision, is
+// left alone by accept-all, never trips a rule, and reaches the answer.
+func TestSetTextAnswerCountsAndRelays(t *testing.T) {
+	s, _, _ := todoServer(t)
+	it := setAdd(t, s, setBody)
+	// Text and an option together are refused.
+	if code, _ := putDraft(s, it.ID, `{"choices":{"D6":{"option":1,"text":"x"}}}`); code != 400 {
+		t.Fatalf("both = %d", code)
+	}
+	// D3=Big-bang with D6 typed would be blocked as an option; as text no rule fires.
+	code, m := putDraft(s, it.ID, `{"choices":{"D3":{"option":2,"confirmed":true},"D6":{"text":"  4 vCPU / 32 GiB  **x**"}},"note":"also: ping me first"}`)
+	if code != 200 {
+		t.Fatalf("draft = %d %v", code, m)
+	}
+	if cs, _ := m["conflicts"].([]any); len(cs) != 0 {
+		t.Fatalf("a text answer fired a rule: %v", cs)
+	}
+	g, _ := s.todos.get(it.ID)
+	if c := g.Set.Draft.Choices["D6"]; c.Text != "4 vCPU / 32 GiB x" || !c.Confirmed || c.Option != 0 {
+		t.Fatalf("D6 = %+v", c)
+	}
+	// Accept-all fills D1 and leaves D6's text alone.
+	putDraft(s, it.ID, `{"accept_suggestions":true}`)
+	g, _ = s.todos.get(it.ID)
+	if c := g.Set.Draft.Choices["D6"]; c.Text == "" || c.Option != 0 {
+		t.Fatalf("accept-all touched the text answer: %+v", c)
+	}
+	if g.Set.Draft.Note != "also: ping me first" || !g.Set.Draft.Choices["D1"].Confirmed {
+		t.Fatalf("draft = %+v", g.Set.Draft)
+	}
+	// A note-only save keeps the choices; clearing the text clears the answer.
+	putDraft(s, it.ID, `{"note":"changed"}`)
+	g, _ = s.todos.get(it.ID)
+	if g.Set.Draft.Note != "changed" || g.Set.Draft.Choices["D6"].Text == "" {
+		t.Fatalf("note-only save = %+v", g.Set.Draft)
+	}
+	putDraft(s, it.ID, `{"choices":{"D6":{"text":"   "}}}`)
+	g, _ = s.todos.get(it.ID)
+	if c, ok := g.Set.Draft.Choices["D6"]; ok && c.answered() {
+		t.Fatalf("blank text kept: %+v", c)
+	}
+	// choices replace the whole map, as the app sends it.
+	putDraft(s, it.ID, `{"choices":{"D1":{"option":1,"confirmed":true},"D3":{"option":2,"confirmed":true},"D6":{"text":"4 vCPU / 32 GiB"}}}`)
+
+	w := do(s, "POST", "/api/todos/"+it.ID+"/submit", userHdr, ``)
+	g = todoOf(t, w.Body.Bytes())
+	if w.Code != 200 || g.Answer == nil {
+		t.Fatalf("submit = %d %s", w.Code, w.Body)
+	}
+	for _, want := range []string{"**D6 Rollout**: Other: 4 vCPU / 32 GiB", "Big-bang (overrides the suggestion)", "The user's note on the set", "changed"} {
+		if !strings.Contains(g.Answer.Text, want) {
+			t.Errorf("answer lacks %q:\n%s", want, g.Answer.Text)
+		}
+	}
+	r := g.Set.Result.Decisions["D6"]
+	if r.Text != "4 vCPU / 32 GiB" || r.Option != 0 || r.Label != r.Text || g.Set.Result.Note != "changed" {
+		t.Fatalf("result = %+v", g.Set.Result)
+	}
+	if got := setChoices(g, false); !strings.Contains(got, "4 vCPU / 32 GiB") {
+		t.Fatalf("relay choices = %q", got)
+	}
+}
+
+// A text answer on a release_early decision is told to the coordinator.
+func TestSetTextAnswerReleasesEarly(t *testing.T) {
+	s, _, _ := todoServer(t)
+	it := setAdd(t, s, setBody)
+	putDraft(s, it.ID, `{"choices":{"D1":{"text":"three buckets"}}}`)
+	g, _ := s.todos.get(it.ID)
+	if len(g.Set.Released) != 1 || g.Set.Released[0] != "D1" {
+		t.Fatalf("released = %v", g.Set.Released)
+	}
+	if txt := relayText(g); !strings.Contains(txt, "D1 Layout: Other: three buckets") {
+		t.Fatalf("early relay = %q", txt)
 	}
 }

@@ -123,7 +123,10 @@ func setChoices(it Todo, early bool) string {
 		if early && !contains(it.Set.EarlyPending, d.ID) {
 			continue
 		}
-		if c := it.Set.Draft.Choices[d.ID]; c.Option >= 1 && c.Option <= len(d.Options) {
+		c := it.Set.Draft.Choices[d.ID]
+		if c.Text != "" {
+			sb.WriteString(c.Text + "\n")
+		} else if c.Option >= 1 && c.Option <= len(d.Options) {
 			sb.WriteString(d.Options[c.Option-1].Label + " " + d.Options[c.Option-1].Detail + "\n")
 		}
 	}
@@ -202,7 +205,10 @@ func relayText(it Todo) string {
 	if it.earlyPending() {
 		var sb strings.Builder
 		for _, d := range it.Set.Decisions {
-			if c := it.Set.Draft.Choices[d.ID]; contains(it.Set.EarlyPending, d.ID) && c.Option >= 1 && c.Option <= len(d.Options) {
+			c := it.Set.Draft.Choices[d.ID]
+			if contains(it.Set.EarlyPending, d.ID) && c.Text != "" {
+				fmt.Fprintf(&sb, "- %s %s: Other: %s\n", oneLine(d.ID, 20), oneLine(d.Title, 100), oneLine(c.Text, setMaxText))
+			} else if contains(it.Set.EarlyPending, d.ID) && c.Option >= 1 && c.Option <= len(d.Options) {
 				fmt.Fprintf(&sb, "- %s %s: %s\n", oneLine(d.ID, 20), oneLine(d.Title, 100), oneLine(d.Options[c.Option-1].Label, 120))
 			}
 		}

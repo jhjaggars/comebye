@@ -879,7 +879,7 @@
        in this sense: segments (.seg), menu items (.attach-menu, #f-menu), tabs (.rc-tabs, .pr-tabs), filter pills
        (.hf-chip), list rows (.us-row), the sp-bar controls (they sit beside a select and an input and match those)
        and the round icon buttons. */
-    .btn, .td-acts button, .ds-fix, .ds-confirm, .ds-fk, .ds-nav button, .br-sched button, .bf-stale-acts button,
+    .btn, .td-acts button, .ds-fix, .ds-use, .ds-confirm, .ds-fk, .ds-nav button, .br-sched button, .bf-stale-acts button,
     .empty button.empty-act, .tds-none button, .rel button:not(.rel-refresh), .rl-card button:not(.rel-refresh),
     .btn.sm, #sp .cite button, #sp .hk button, .us-crumbs button {
       border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel2); color: var(--text);
@@ -888,13 +888,13 @@
     .btn { flex: 1; min-height: var(--hit-44); padding: 0 var(--sp-4); }
     .btn:active { filter: brightness(1.25); }
     /* size compact (40px): the buttons of a row of actions on a screen or a card */
-    .td-acts button, .ds-fix, .ds-confirm, .ds-fk, .ds-nav button, .br-sched button, .bf-stale-acts button,
+    .td-acts button, .ds-fix, .ds-use, .ds-confirm, .ds-fk, .ds-nav button, .br-sched button, .bf-stale-acts button,
     .empty button.empty-act, .tds-none button, .rel button:not(.rel-refresh), .rl-card button:not(.rel-refresh) { min-height: var(--hit-40); padding: 0 var(--sp-14); }
     /* size dense (32px): inside a list row, a panel or a toolbar */
     .btn.sm, .btn.rv-reask, #sp .cite button, #sp .hk button, .us-crumbs button { min-height: var(--hit-32); padding: 0 var(--sp-10); font-size: var(--fs-13); }
     #sp .hk button.hk-cp { min-height: var(--hit-36); } /* the hunk Copy is the one a thumb reaches for */
     /* tones: one set for every surface */
-    .btn.primary, .td-acts .td-answer-btn, .ds-confirm, .ds-nav button:last-child, .bf-stale-acts .bf-start, .empty button.empty-act, .tds-none button,
+    .btn.primary, .td-acts .td-answer-btn, .ds-use, .ds-confirm, .ds-nav button:last-child, .bf-stale-acts .bf-start, .empty button.empty-act, .tds-none button,
     .rel button.rel-approve, .rel button.rel-go, .rel button.rel-up, .rel button.rel-dep-btn, .rl-card button.rel-approve, .rl-card button.rel-go, .rl-card button.rel-up, .rl-card button.rel-dep-btn,
     #sp .cite button, #sp .hk button, .us-crumbs button { border-color: var(--blue); background: var(--chip-blue); color: var(--blue); }
     .btn.warn { color: var(--orange); }
@@ -1541,6 +1541,11 @@
     .ds-opt.pend { border-style: dashed; border-color: var(--yellow); background: var(--chip-yellow); }
     .ds-opt.pend .ds-dot { border-color: var(--yellow); background: radial-gradient(var(--yellow) 0 45%, transparent 50%); }
     .ds-opt:disabled { cursor: default; opacity: 0.8; }
+    .ds-obox { display: flex; flex-direction: column; gap: var(--sp-6); margin: 0 0 var(--sp-2) var(--sp-16); }
+    .ds-text { box-sizing: border-box; width: 100%; min-height: var(--hit-44); padding: var(--sp-8) var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel2); color: var(--text); font: inherit; font-size: max(16px, var(--fs-14)); resize: vertical; }
+    .ds-text:focus-visible { outline-offset: 1px; }
+    .ds-use { align-self: flex-end; }
+    .ds-other small { overflow-wrap: anywhere; white-space: pre-wrap; }
     .ds-opt:focus-visible, .ds-fix:focus-visible, .ds-confirm:focus-visible, .ds-fk:focus-visible, .ds-rk:focus-visible, .ds-rv:focus-visible, .ds-nav button:focus-visible, .ds-dots button:focus-visible { outline-offset: 1px; }
     .ds-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8); border-radius: var(--r-8); padding: var(--sp-6) var(--sp-10); font-size: var(--fs-13); border-left: 4px solid var(--border); }
     .ds-note.block { background: var(--chip-red); border-left-color: var(--red); }

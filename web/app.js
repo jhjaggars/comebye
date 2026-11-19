@@ -2251,6 +2251,7 @@ function rsEnsure() {
     onTodoClick(ev);
   });
   el.addEventListener("input", onTodoInput);
+  el.addEventListener("change", onTodoChange);
   rs.el = el;
   return el;
 }
@@ -2327,7 +2328,7 @@ function renderSplit(force) {
   }
   const side = $("rs-side");
   const typing = side.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName);
-  const sig = JSON.stringify([t, todos.rv.get(t.id), todos.rvBusy.has(t.id), todoDraft(t.id), todos.pend.busy(t.id), [...(todos.setBusy.has(t.id) ? [1] : [])], todos.setStep.get(t.id), pgsScheme(), rs.tab]);
+  const sig = JSON.stringify([t, todos.rv.get(t.id), todos.rvBusy.has(t.id), todoDraft(t.id), todos.pend.busy(t.id), [...(todos.setBusy.has(t.id) ? [1] : [])], todos.setStep.get(t.id), [...todos.setOther], pgsScheme(), rs.tab]);
   if (first || force === true || (sig !== rs.sig && !typing)) {
     rs.sig = sig;
     todoPaint(side, todoItemHtml(t, "rs", true));
@@ -2485,6 +2486,8 @@ function todoItemHtml(t, pfx, asPanel) {
 todos.setStep = new Map(); // item id -> index; D.length is the review screen
 todos.setQ = new Map();    // item id -> promise chain of saves
 todos.setBusy = new Set();
+todos.setOther = new Set(); // "item:decision" whose "Other" box is open
+todos.setText = new Map();  // "item:decision" or "item:#note" -> text typed and not yet saved
 
 function setChoices(t) { return (t.set.draft && t.set.draft.choices) || {}; }
 function setFacts(t) { return (t.set.draft && t.set.draft.facts) || {}; }
@@ -2494,7 +2497,7 @@ function setConflicts(t) {
 }
 function setMissing(t) {
   const ch = setChoices(t);
-  return t.set.decisions.filter((d) => !(ch[d.id] && ch[d.id].option && ch[d.id].confirmed));
+  return t.set.decisions.filter((d) => !(ch[d.id] && (ch[d.id].option || ch[d.id].text) && ch[d.id].confirmed));
 }
 function setDone(t) { return t.set.decisions.length - setMissing(t).length; }
 function setLocked(t) { return t.state !== "open" || !!t.set.submitted_at; }
@@ -2505,6 +2508,16 @@ function setOptHtml(t, d, i) {
   return `<button type="button" class="ds-opt${sel ? " on" : ""}${pend ? " pend" : ""}" role="radio" aria-checked="${!!sel}" data-d="${escAttr(d.id)}" data-o="${i + 1}"${setLocked(t) ? " disabled" : ""}>
       <span class="ds-dot" aria-hidden="true"></span><span class="ds-ot"><b>${esc(o.label)}</b>${o.detail ? `<small>${esc(o.detail)}</small>` : ""}</span>
       <span class="ds-oc">${i + 1 === d.recommend ? `<span class="td-chip st-answered">suggested</span>` : ""}${pend ? `<span class="td-chip td-draft">confirm</span>` : ""}</span></button>`;
+}
+
+// The "Other…" choice of a decision: the user's own words, which confirm the decision.
+function setOtherHtml(t, d) {
+  const c = setChoices(t)[d.id], key = t.id + ":" + d.id, txt = c && c.text, editing = todos.setOther.has(key), lock = setLocked(t);
+  const val = todos.setText.has(key) ? todos.setText.get(key) : txt || "";
+  return `<button type="button" class="ds-opt ds-other${txt ? " on" : ""}" role="radio" aria-checked="${!!txt}" data-d="${escAttr(d.id)}" data-other="1"${lock ? " disabled" : ""}>
+      <span class="ds-dot" aria-hidden="true"></span><span class="ds-ot"><b>Other…</b><small>${txt ? esc(txt) : "Write your own answer"}</small></span><span class="ds-oc"></span></button>` +
+    (editing && !lock ? `<div class="ds-obox"><textarea class="ds-text" rows="2" maxlength="500" data-d="${escAttr(d.id)}" placeholder="Your answer for ${escAttr(d.id)}" aria-label="Your own answer for ${escAttr(d.id)} ${escAttr(d.title)}">${esc(val)}</textarea>
+      <button type="button" class="ds-use" data-d="${escAttr(d.id)}">${txt ? "Update answer" : "Use this answer"}</button></div>` : "");
 }
 
 function setDecHtml(t, d, compact) {
@@ -2518,7 +2531,7 @@ function setDecHtml(t, d, compact) {
       <h4><span class="ds-id">${esc(d.id)}</span>${esc(d.title)}</h4>
       <div class="ds-chips">${d.one_way ? `<span class="td-chip st-warn">one-way door</span>` : ""}${d.release_early ? `<span class="td-chip st-answered">unblocks now${(t.set.released || []).includes(d.id) ? " · sent" : ""}</span>` : ""}${(d.after || []).length ? `<span class="td-chip">after ${esc(d.after.join(", "))}</span>` : ""}${d.surface ? `<span class="td-chip st-surf">changes: ${esc(d.surface)}</span>` : ""}</div>
       ${!compact && d.question ? `<div class="ds-q">${esc(d.question)}</div>` : ""}
-      <div class="ds-opts" role="radiogroup" aria-label="${escAttr(d.title)}">${d.options.map((_, i) => setOptHtml(t, d, i)).join("")}</div>${notes}</div>`;
+      <div class="ds-opts" role="radiogroup" aria-label="${escAttr(d.title)}">${d.options.map((_, i) => setOptHtml(t, d, i)).join("")}${setOtherHtml(t, d)}</div>${notes}</div>`;
 }
 
 function setFixLabel(t, fix) {
@@ -2554,12 +2567,20 @@ function setBodyHtml(t) {
   if (isDesktop()) decs = `<div class="ds-h">Decisions</div><div class="ds-list">${S.decisions.map((d) => setDecHtml(t, d, false)).join("")}</div>`;
   else if (step >= N) decs = `<div class="ds-dots">${setDotsHtml(t, step)}</div><div class="ds-h">Review</div><div class="ds-review">${S.decisions.map((d, i) => {
     const c = setChoices(t)[d.id];
-    return `<button type="button" class="ds-rv" data-step="${i}"><b>${esc(d.id)}</b><span>${c && c.option ? esc(d.options[c.option - 1].short || d.options[c.option - 1].label) + (c.confirmed ? "" : " (confirm)") : "<i>open</i>"}</span></button>`;
-  }).join("")}</div>${setConflicts(t).map((r) => `<div class="ds-note ${r.level}"><span><b>${r.level === "block" ? "Conflict" : "Heads up"}:</b> ${esc(r.say)}</span></div>`).join("")}`;
+    return `<button type="button" class="ds-rv" data-step="${i}"><b>${esc(d.id)}</b><span>${c && c.text ? "Other: " + esc(c.text) : c && c.option ? esc(d.options[c.option - 1].short || d.options[c.option - 1].label) + (c.confirmed ? "" : " (confirm)") : "<i>open</i>"}</span></button>`;
+  }).join("")}</div>${setConflicts(t).map((r) => `<div class="ds-note ${r.level}"><span><b>${r.level === "block" ? "Conflict" : "Heads up"}:</b> ${esc(r.say)}</span></div>`).join("")}${setNoteHtml(t)}`;
   else decs = `<div class="ds-dots">${setDotsHtml(t, step)}</div>${setDecHtml(t, S.decisions[step], true)}
       <div class="ds-nav"><button type="button" class="ds-back" data-step="${step - 1}"${step ? "" : " disabled"}>Back</button><button type="button" class="ds-next" data-step="${step + 1}">${step === N - 1 ? "Review" : "Next"}</button></div>`;
   const wide = isDesktop() || step >= N;
-  return `<div class="ds-set">${isDesktop() || step === 0 ? `${decided}${risks ? `<div class="ds-h">Biggest risks</div>${risks}` : ""}` : ""}${decs}${wide ? facts : ""}</div>`;
+  return `<div class="ds-set">${isDesktop() || step === 0 ? `${decided}${risks ? `<div class="ds-h">Biggest risks</div>${risks}` : ""}` : ""}${decs}${wide ? facts : ""}${isDesktop() ? setNoteHtml(t) : ""}</div>`;
+}
+
+// A free-text note for anything that is not one decision.
+function setNoteHtml(t) {
+  const key = t.id + ":#note", lock = setLocked(t), saved = (t.set.draft && t.set.draft.note) || "";
+  const val = todos.setText.has(key) ? todos.setText.get(key) : saved;
+  if (lock && !saved) return "";
+  return `<div class="ds-h">Your note</div><textarea class="ds-text ds-notebox" rows="3" maxlength="2000" data-note="1" placeholder="Anything that is not one decision (optional)" aria-label="Your note on the whole set"${lock ? " disabled" : ""}>${esc(val)}</textarea>`;
 }
 
 function setDotsHtml(t, step) {
@@ -2569,7 +2590,7 @@ function setDotsHtml(t, step) {
 }
 
 // Saves the draft: the whole choices and facts, in order per item.
-function setSave(t, body) {
+function setSave(t, body, quiet) {
   const q = (todos.setQ.get(t.id) || Promise.resolve()).then(async () => {
     try {
       const r = await api(`/api/todos/${encodeURIComponent(t.id)}/draft`, { method: "PUT", body: JSON.stringify(body) });
@@ -2579,7 +2600,7 @@ function setSave(t, body) {
       toast("Not saved: " + e.message, true);
       todos.loadedAt = 0; await loadTodos();
     }
-    renderTodos(true);
+    if (!quiet) renderTodos(true);
   });
   todos.setQ.set(t.id, q);
   return q;
@@ -2592,6 +2613,13 @@ function setEdit(t, fn) {
   t.set.draft = { ...t.set.draft, choices: ch, facts: fa };
   renderTodos(true);
   return setSave(t, { choices: ch, facts: fa });
+}
+
+// Keeps the user's note at once (no redraw: they may be about to tap Submit).
+function setSaveNote(t, text) {
+  todos.setText.delete(t.id + ":#note");
+  t.set.draft = { ...t.set.draft, note: text };
+  return setSave(t, { note: text }, true);
 }
 
 function setAcceptAll(t) {
@@ -2620,7 +2648,27 @@ async function setSubmit(t) {
 function setClick(ev, t) {
   const el = ev.target;
   const opt = el.closest(".ds-opt");
-  if (opt) { if (!opt.disabled) setEdit(t, (ch) => { ch[opt.dataset.d] = { option: Number(opt.dataset.o), confirmed: true }; }); return true; }
+  if (opt && opt.dataset.other) {
+    const key = t.id + ":" + opt.dataset.d;
+    if (!opt.disabled) {
+      if (todos.setOther.has(key) && !(setChoices(t)[opt.dataset.d] || {}).text) todos.setOther.delete(key); else todos.setOther.add(key);
+      renderTodos(true);
+      const box = el.closest(".ds-dec") && el.closest(".ds-dec").querySelector(".ds-text");
+      if (box) box.focus();
+    }
+    return true;
+  }
+  if (opt) {
+    if (!opt.disabled) { todos.setOther.delete(t.id + ":" + opt.dataset.d); todos.setText.delete(t.id + ":" + opt.dataset.d); setEdit(t, (ch) => { ch[opt.dataset.d] = { option: Number(opt.dataset.o), confirmed: true }; }); }
+    return true;
+  }
+  const use = el.closest(".ds-use");
+  if (use) {
+    const box = use.parentElement.querySelector(".ds-text"), text = box ? box.value.trim() : "";
+    const key = t.id + ":" + use.dataset.d;
+    if (text) { todos.setOther.delete(key); todos.setText.delete(key); setEdit(t, (ch) => { ch[use.dataset.d] = { text, confirmed: true }; }); }
+    return true;
+  }
   const cf = el.closest(".ds-confirm");
   if (cf) { setEdit(t, (ch) => { if (ch[cf.dataset.d]) ch[cf.dataset.d].confirmed = true; }); return true; }
   const fix = el.closest(".ds-fix");
@@ -2737,7 +2785,7 @@ function renderTodos(force) {
   const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()], [...gu].map(([k, v]) => [k, v.st, v.msg, apBusy.has(k)]),
     todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.approval && t.approval.state, t.approval && t.approval.id, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
   // The age moves between renders; a typed answer must not be lost to one.
-  const typing = (el) => el && ((el.contains(document.activeElement) && document.activeElement.classList.contains("td-text")) || [...el.querySelectorAll(".ap-pass")].some((p) => p.value));
+  const typing = (el) => el && ((el.contains(document.activeElement) && (document.activeElement.classList.contains("td-text") || document.activeElement.classList.contains("ds-text"))) || [...el.querySelectorAll(".ap-pass")].some((p) => p.value));
   if (show && main && (again || (main.dataset.sig !== sig && !typing(main)))) {
     main.dataset.sig = sig;
     todoPaint(main, `<div class="td-head"><button type="button" class="td-toggle" aria-expanded="${!folded}">
@@ -3685,6 +3733,12 @@ function onTodoClick(ev) {
 
 // A typed answer is kept per item (and across reloads), and marks the row.
 function onTodoInput(ev) {
+  const sb = ev.target.closest && ev.target.closest(".ds-text");
+  if (sb) { // a decision set's own words: kept in the page until they are used or saved
+    const it = sb.closest(".td-item");
+    if (it) todos.setText.set(it.dataset.id + ":" + (sb.dataset.note ? "#note" : sb.dataset.d), sb.value);
+    return;
+  }
   const ck = ev.target.closest && ev.target.closest(".ap-confirm");
   if (ck) { const it = ck.closest(".td-item"); const ti = it && todos.items.find((x) => x.id === it.dataset.id); if (ti && ti.approval) guState(ti.approval.id).ok = ck.checked; return; }
   if (ev.target.closest && ev.target.closest(".ap-pass")) return; // never a draft: the passphrase lives in its input and nowhere else
@@ -3701,6 +3755,14 @@ function onTodoInput(ev) {
   if (chip) chip.hidden = !box.value.trim();
 }
 
+// The note on a decision set is kept when the box is left.
+function onTodoChange(ev) {
+  const nb = ev.target.closest && ev.target.closest(".ds-notebox");
+  const item = nb && nb.closest(".td-item");
+  const t = item && todos.items.find((x) => x.id === item.dataset.id);
+  if (t && t.set && !setLocked(t) && nb.value.trim() !== ((t.set.draft && t.set.draft.note) || "")) setSaveNote(t, nb.value.trim());
+}
+
 // Keys. Ctrl/Cmd+Enter sends from any answer box. On the desktop To do page:
 // ↑/↓ or j/k open the next or previous item, Enter goes to its answer box,
 // Esc leaves the box and then closes the item.
@@ -3711,6 +3773,8 @@ function onTodoKey(ev) {
     if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); const it = el.closest(".td-item"); if (it) approvalGo(it.dataset.id, it); }
     return;
   }
+  const ds = el.closest && el.closest(".ds-text:not(.ds-notebox)");
+  if (ds && ev.key === "Enter" && !ev.shiftKey && !ev.altKey && !ev.isComposing) { ev.preventDefault(); const u = ds.parentElement.querySelector(".ds-use"); if (u) u.click(); return; }
   const box = el.closest && el.closest(".td-text");
   if (box && ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey) {
     ev.preventDefault();
@@ -14486,6 +14550,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!el) continue;
     el.addEventListener("click", onTodoClick);
     el.addEventListener("input", onTodoInput);
+    el.addEventListener("change", onTodoChange);
   }
   loadLedger();
 
