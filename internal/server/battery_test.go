@@ -37,7 +37,7 @@ func piMsg(id, role, text string) string {
 // Transcript polls: an unchanged file is a bodiless 304, and ?from= cuts
 // the response down to that message and the ones after it.
 func TestTranscriptConditionalAndPartial(t *testing.T) {
-	s := New(Config{ReadLines: 100, HostName: "desk"}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk"}, nil, nil)
 	path := writeSession(t, piMsg("u1", "user", "hi"), piMsg("a1", "assistant", "hello"), piMsg("u2", "user", "more"))
 	get := func(query string, hdr map[string]string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("GET", "/api/agents/wS:p1/transcript"+query, nil)
@@ -97,7 +97,7 @@ func TestTranscriptConditionalAndPartial(t *testing.T) {
 // A subagent's transcript is read from <session>/subagents/ only, for a
 // well-formed id, and is served like a session (ETag, ?from=).
 func TestSubagentTranscript(t *testing.T) {
-	s := New(Config{ReadLines: 100, HostName: "desk"}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk"}, nil, nil)
 	session := writeSession(t, `{"type":"user","isSidechain":false,"message":{"role":"user","content":"hi"},"uuid":"u1","timestamp":"2026-10-20T10:00:00Z"}`)
 	dir := filepath.Join(strings.TrimSuffix(session, ".jsonl"), "subagents")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -131,7 +131,7 @@ func TestSubagentTranscript(t *testing.T) {
 // they see changed, and a gzip-compressed stream that still flushes per
 // event. A hub (?full=1) gets full records, uncompressed.
 func TestEventsSlimDedupedGzip(t *testing.T) {
-	s := New(Config{ReadLines: 100, HostName: "desk", PingInterval: time.Hour}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", PingInterval: time.Hour}, nil, nil)
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	hub := s.fleet.Hub()

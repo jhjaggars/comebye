@@ -607,7 +607,7 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 		}
 		s.coord.reporting[e.ID] = time.Now()
 		s.coord.mu.Unlock()
-		go s.captureReport(e)
+		s.spawn(func() { s.captureReport(e) })
 	}
 }
 
@@ -668,7 +668,7 @@ func (s *Server) RunLedger(ctx context.Context) {
 			agents := s.fleet.Agents()
 			s.autoCleanup(agents)
 			if s.autoRemove {
-				go s.autoRemoveStep(ctx, time.Now())
+				s.spawn(func() { s.autoRemoveStep(ctx, time.Now()) })
 			}
 		case ev, ok := <-events:
 			if !ok {
@@ -793,7 +793,9 @@ func (s *Server) cachedChecks(e ledger.Entry) *worktreeChecks {
 	c, ok := s.coord.checks[e.ID]
 	if (!ok || time.Since(c.at) > checksTTL) && !s.coord.checking[e.ID] {
 		s.coord.checking[e.ID] = true
+		s.bg.Add(1)
 		go func() {
+			defer s.bg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			res, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{}.forEntry(e))

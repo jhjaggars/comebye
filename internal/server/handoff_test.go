@@ -26,7 +26,7 @@ func TestHandoffLocal(t *testing.T) {
 	wts := []map[string]any{{"path": repo, "branch": "main", "is_linked_worktree": false}}
 	fh.set(func(f *fakeLaunchHerdr) { f.hook = worktreeHook(t, &wts, nil) })
 	stateDir := t.TempDir()
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: stateDir}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: stateDir}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" }
 
 	w := do(s, "POST", "/api/handoffs", map[string]string{"Tailscale-User-Login": "me@example.com"},
@@ -108,7 +108,7 @@ func TestHandoffLocal(t *testing.T) {
 }
 
 func TestLedgerDisabled(t *testing.T) {
-	s := New(Config{HostName: "desk"}, nil, nil)
+	s := newServer(t, Config{HostName: "desk"}, nil, nil)
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/ledger", ""}, {"POST", "/api/handoffs", `{}`}, {"POST", "/api/marks", `{"agent_id":"x"}`},
 		{"GET", "/api/removals", ""}, {"POST", "/api/removals/confirm", `{"ids":["x"]}`},
@@ -210,7 +210,7 @@ func TestHandoffViaPeer(t *testing.T) {
 	defer ps.Close()
 	pu, _ := url.Parse(ps.URL)
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 
 	w := do(s, "POST", "/api/handoffs", nil, `{"host":"kube","repo":"/home/k/code/proj","branch":"feat/x","kind":"claude","brief":"Fix X.","from":"coordinator"}`)
 	var r struct {
@@ -325,7 +325,7 @@ func TestHostOpAllowlist(t *testing.T) {
 	}
 	// Browsers reach a peer's repos and checks through the hub, nothing
 	// else of the worker API.
-	s := New(Config{AllowLogins: []string{"me@example.com"}, Fleet: fl}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, Fleet: fl}, nil, nil)
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	get := func(path string) int {

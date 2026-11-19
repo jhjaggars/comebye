@@ -66,7 +66,7 @@ func panelHome(t *testing.T) (home, wt string) {
 
 func panelServer(t *testing.T) *Server {
 	t.Helper()
-	return New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, nil, nil)
+	return newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, nil, nil)
 }
 
 func runDiff(t *testing.T, s *Server, dir, since string) panelDiff {
@@ -366,7 +366,7 @@ func newPanelRig(t *testing.T) *panelRig {
 		}
 	})
 	m := managerWith(t, client, "desk", 2)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, client, m)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, client, m)
 	return &panelRig{s: s, fh: fh, wt: wt, home: home}
 }
 
@@ -528,7 +528,7 @@ func (p *panelPeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func TestPanelThroughAPeer(t *testing.T) {
 	_, wt := panelHome(t)
 	put(t, filepath.Join(wt, "docs", "plan.md"), "# Plan\n\n## 1. Goal\n")
-	peerSrv := New(Config{ReadLines: 100, HostName: "kube", StateDir: t.TempDir()}, nil, nil)
+	peerSrv := newServer(t, Config{ReadLines: 100, HostName: "kube", StateDir: t.TempDir()}, nil, nil)
 	pp := &panelPeer{host: peerSrv.Handler(), cwd: wt}
 	ps := httptest.NewServer(pp)
 	defer ps.Close()
@@ -537,7 +537,7 @@ func TestPanelThroughAPeer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go fl.Run(ctx)
-	hub := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir()}, nil, nil)
+	hub := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir()}, nil, nil)
 	for deadline := time.Now().Add(5 * time.Second); len(fl.Agents()) == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the peer's agent never showed up")

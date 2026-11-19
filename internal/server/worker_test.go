@@ -58,7 +58,7 @@ func workerTree(t *testing.T) (root, repo, wtRoot string) {
 }
 
 func newWorkerServer(t *testing.T, client *herdr.Client, root, wtRoot string) *Server {
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" || name == "claude" }
 	return s
 }
@@ -519,7 +519,7 @@ func TestInspectMarkDiscardConfirm(t *testing.T) {
 		f.agents = append(f.agents, herdr.AgentInfo{Name: "coordinator", PaneID: "w1:p1", WorkspaceID: "w1", Agent: "claude", Status: herdr.StatusIdle, CWD: repo})
 	})
 	m := managerWith(t, client, "desk", 2)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken,
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken,
 		LaunchRoots: []string{filepath.Dir(repo)}, WorktreeRoot: filepath.Dir(filepath.Dir(wt))}, client, m)
 
 	// The coordinator inspects the worker: read-only, allowed.

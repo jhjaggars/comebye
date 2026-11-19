@@ -164,7 +164,7 @@ func TestModelsViaPeer(t *testing.T) {
 	defer peer.Close()
 	pu, _ := url.Parse(peer.URL)
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{ReadLines: 100, Fleet: fl}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, Fleet: fl}, nil, nil)
 	w := do(s, "GET", "/api/hosts/kube/models?kind=pi", nil, "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "kube/m") || path.Load() != "/api/models?kind=pi" {
 		t.Fatalf("peer models = %d %s (peer saw %v)", w.Code, w.Body, path.Load())
@@ -241,7 +241,7 @@ func TestWorkerAndHandoffWithModel(t *testing.T) {
 	fh, client := startFakeLaunchHerdr(t)
 	wts := []map[string]any{{"path": repo, "branch": "main", "is_linked_worktree": false}}
 	fh.set(func(f *fakeLaunchHerdr) { f.hook = worktreeHook(t, &wts, nil) })
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" || name == "claude" }
 
 	w := do(s, "POST", "/api/handoffs", nil, `{"repo":"`+repo+`","branch":"feat/m","kind":"claude","model":"sonnet","brief":"Do it."}`)

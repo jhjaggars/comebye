@@ -330,7 +330,7 @@ func TestGoneWorktreeOptionsReachThePeer(t *testing.T) {
 	defer ps.Close()
 	pu, _ := url.Parse(ps.URL)
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	e, err := s.ledger.Add(ledger.Entry{
 		Host: "kube", Repo: "/home/k/code/proj", RepoName: "proj", Branch: "feat/x", Base: "main", PreviousBranches: []string{"feat/old"},
 		AgentID: "kube/wS:p9", PaneID: "wS:p9", Worktree: "/home/k/.worktrees/proj/feat-x", Status: ledger.Finished,

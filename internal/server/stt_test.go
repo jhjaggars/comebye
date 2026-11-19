@@ -50,7 +50,7 @@ func TestSTTStatusNotInstalledThenInstalled(t *testing.T) {
 		t.Fatalf("installed: %s", w.Body)
 	}
 	// The user's alone: with a login allowlist an unknown caller is refused.
-	if w := do(New(Config{StateDir: state, AllowLogins: []string{"me@example.com"}, ReadLines: 100}, nil, nil), "GET", "/api/stt", nil, ""); w.Code != http.StatusForbidden && w.Code != http.StatusUnauthorized {
+	if w := do(newServer(t, Config{StateDir: state, AllowLogins: []string{"me@example.com"}, ReadLines: 100}, nil, nil), "GET", "/api/stt", nil, ""); w.Code != http.StatusForbidden && w.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous /api/stt: %d", w.Code)
 	}
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# go test -race, optionally one half of the work.
+# go test -race -shuffle=on, optionally one half of the work.
 #
 #   tools/ci/gotest.sh                       every package
 #   tools/ci/gotest.sh PKG...                just these packages (go test's own patterns)
@@ -16,8 +16,8 @@ shard=""
 if [ "${1:-}" = "--shard" ]; then shard="$2"; shift 2; fi
 
 if [ -z "$shard" ]; then
-  if [ $# -gt 0 ]; then exec go test -race "$@"; fi
-  exec go test -race ./...
+  if [ $# -gt 0 ]; then exec go test -race -shuffle=on "$@"; fi
+  exec go test -race -shuffle=on ./...
 fi
 
 n="${shard%/*}"; of="${shard#*/}"
@@ -26,10 +26,10 @@ names="$(go test -list '.*' ./internal/server | grep -E '^Test' | sort)"
 odd="$(echo "$names" | awk 'NR%2==1' | paste -sd'|')"
 even="$(echo "$names" | awk 'NR%2==0' | paste -sd'|')"
 if [ "$n" = 1 ]; then
-  exec go test -race -run "^($odd)\$" ./internal/server
+  exec go test -race -shuffle=on -run "^($odd)\$" ./internal/server
 fi
 rc=0
-go test -race -run "^($even)\$" ./internal/server || rc=1
+go test -race -shuffle=on -run "^($even)\$" ./internal/server || rc=1
 # shellcheck disable=SC2046
-go test -race $(go list ./... | grep -v '/internal/server$') || rc=1
+go test -race -shuffle=on $(go list ./... | grep -v '/internal/server$') || rc=1
 exit $rc

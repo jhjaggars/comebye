@@ -138,7 +138,7 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 		// Held until the attempt ends (a prompt can take 45 s).
 		s.coord.calling[j.key] = now.Add(sendTimeout)
 		s.coord.mu.Unlock()
-		go s.sendCallback(j, *target, standIn, gone)
+		s.spawn(func() { s.sendCallback(j, *target, standIn, gone) })
 	}
 }
 

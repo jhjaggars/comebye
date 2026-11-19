@@ -24,7 +24,7 @@ import (
 func deliverServer(t *testing.T) (*Server, *fakeLaunchHerdr) {
 	t.Helper()
 	fh, client := startFakeLaunchHerdr(t)
-	s := New(Config{ReadLines: 100, HostName: "desk"}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk"}, client, nil)
 	s.briefBackoff = time.Millisecond
 	fh.set(func(f *fakeLaunchHerdr) {
 		f.agents = []herdr.AgentInfo{{Name: "w", PaneID: "w9:p1", WorkspaceID: "w9", Agent: "pi", Status: herdr.StatusIdle, InteractiveReady: true}}
@@ -190,7 +190,7 @@ func TestDeliverPromptBoundedFailureRecorded(t *testing.T) {
 	fh2.set(func(f *fakeLaunchHerdr) {
 		f.hook = worktreeHook(t, &wts, nil)
 	})
-	s2 := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
+	s2 := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
 	s2.findExec = func(name string) bool { return name == "pi" }
 	s2.briefBackoff = time.Millisecond
 	onPrompt(fh2, map[int]promptAnswer{0: {err: stalled}}, nil)

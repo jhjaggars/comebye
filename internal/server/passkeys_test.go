@@ -608,7 +608,7 @@ func TestApprovalsSurviveARestart(t *testing.T) {
 }
 
 func TestPasskeysOffOnAPeer(t *testing.T) {
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk"}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk"}, nil, nil)
 	if w := do(s, "GET", "/api/passkeys", userHdr, ""); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("list = %d %s", w.Code, w.Body)
 	}

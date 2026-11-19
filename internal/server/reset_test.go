@@ -465,7 +465,7 @@ func TestFreshStartOnAPeer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go fl.Run(ctx)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, StateDir: t.TempDir(), AgentToken: testToken, CoordinatorResetTokens: 150000}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, StateDir: t.TempDir(), AgentToken: testToken, CoordinatorResetTokens: 150000}, nil, nil)
 	for deadline := time.Now().Add(5 * time.Second); len(s.fleet.Agents()) == 0; time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the peer's agent never appeared")
@@ -500,7 +500,7 @@ func TestCoordinatorPresetPassesTheHookSettings(t *testing.T) {
 	coordDir, _ := filepath.EvalSymlinks(t.TempDir())
 	state := t.TempDir()
 	fh, client := startFakeLaunchHerdr(t)
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: state}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: state}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" || name == "claude" }
 	argsOf := func() []string {
 		var argv []string

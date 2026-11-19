@@ -119,7 +119,7 @@ func TestCapIsPerRepository(t *testing.T) {
 }
 
 func TestLocalCapSettingRoundTrip(t *testing.T) {
-	s := New(Config{ReadLines: 100, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, StateDir: t.TempDir()}, nil, nil)
 	get := func() settingsView {
 		var v settingsView
 		w := do(s, "GET", "/api/settings", map[string]string{"Tailscale-User-Login": "u@example.com"}, "")

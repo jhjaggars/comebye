@@ -213,7 +213,7 @@ func TestQueuePersistsAcrossRestart(t *testing.T) {
 	if len(l) != 1 {
 		t.Fatal("not queued")
 	}
-	s2 := New(Config{HostName: "desk", StateDir: dir}, nil, nil)
+	s2 := newServer(t, Config{HostName: "desk", StateDir: dir}, nil, nil)
 	got := s2.pq.list("", false)
 	if len(got) != 1 || got[0].ID != l[0].ID || got[0].Text != "survive" || got[0].Agent != "desk/w2:p1" {
 		t.Fatalf("reopened = %+v", got)

@@ -638,7 +638,7 @@ func TestPagePublishStampsTheCallersSession(t *testing.T) {
 		}
 	})
 	m := managerWith(t, client, "desk", 2)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, client, m)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, client, m)
 	t.Cleanup(s.waitBackground)
 	if s.pages == nil {
 		t.Skip("pages off")

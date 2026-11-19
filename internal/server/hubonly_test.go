@@ -21,7 +21,7 @@ func hubOnlyServer(t *testing.T, dir, name string) *Server {
 	client := herdr.NewClient("")
 	m := state.New(client, &state.Notifier{})
 	f := fleet.New(m, name, nil, fleet.Options{HubMode: true, NoLocalAgents: true, Version: "v-test"})
-	return New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, StateDir: dir, AgentToken: testToken,
+	return newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, StateDir: dir, AgentToken: testToken,
 		Fleet: f, HubOnly: true, Version: "v-test"}, client, m)
 }
 

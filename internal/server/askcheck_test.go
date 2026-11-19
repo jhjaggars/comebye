@@ -133,7 +133,7 @@ func TestRecheckPRThroughAPeer(t *testing.T) {
 	defer ps.Close()
 	pu, _ := url.Parse(ps.URL)
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	s.probeTTL = 0
 	// The local gh must not be asked: the session is on kube.
 	stubProbes(t, nil, nil, nil)

@@ -59,7 +59,9 @@ func (s *Server) autoCleanup(agents []herdr.AgentInfo) {
 		s.coord.calling[key] = now
 		s.coord.checking[key] = true
 		s.coord.mu.Unlock()
+		s.bg.Add(1)
 		go func(e ledger.Entry) {
+			defer s.bg.Done()
 			defer func() {
 				s.coord.mu.Lock()
 				delete(s.coord.checking, key)

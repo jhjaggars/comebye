@@ -94,7 +94,7 @@ func newSweepFix(t *testing.T) *sweepFix {
 	fh, client := startFakeLaunchHerdr(t)
 	fh.set(func(f *fakeLaunchHerdr) { f.agents = agents })
 	m := managerWith(t, client, "desk", len(agents))
-	s := New(Config{ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), LaunchRoots: []string{root}, WorktreeRoot: wtRoot, AllowLogins: []string{"me@example.com"}, AgentToken: testToken}, client, m)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), LaunchRoots: []string{root}, WorktreeRoot: wtRoot, AllowLogins: []string{"me@example.com"}, AgentToken: testToken}, client, m)
 	s.askPoll, s.askWait = 10_000_000, 50_000_000
 	t.Cleanup(s.asking.Wait) // before the temp dirs go: asks run git in the worktrees
 	f := &sweepFix{fh: fh, s: s, ids: map[string]string{}}

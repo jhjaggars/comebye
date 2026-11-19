@@ -94,7 +94,7 @@ func newUsageRig(t *testing.T) *usageRig {
 	hdir := t.TempDir()
 	writeTranscript(t, filepath.Join(hdir, "p", "hub.jsonl"),
 		tokenLine("c", now, "claude-haiku-5-5", "/srv/other", "", 1, 2, 3, 4))
-	s := New(Config{
+	s := newServer(t, Config{
 		AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken,
 		WhoIs: who, AllowCap: testCap, StateDir: t.TempDir(),
 		Usage: UsageConfig{Sources: []usage.Source{{Kind: "claude", Root: hdir}}},
@@ -276,7 +276,7 @@ func TestUsageAuthMatrix(t *testing.T) {
 }
 
 func TestUsageOffWithoutStateDir(t *testing.T) {
-	s := New(Config{AllowLogins: []string{"me@example.com"}}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}}, nil, nil)
 	req := httptest.NewRequest("GET", "/api/usage", nil)
 	req.Header.Set("Tailscale-User-Login", "me@example.com")
 	req.Host = "localhost"

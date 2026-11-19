@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/state"
 )
 
 // testHosts admits httptest.NewRequest's default Host (example.com) for
@@ -144,7 +147,7 @@ func TestLegacyTokenCredentialsRejected(t *testing.T) {
 }
 
 func TestAllowlistRequiresLoopback(t *testing.T) {
-	s := New(Config{Addr: "0.0.0.0:0", AllowLogins: []string{"me@example.com"}}, nil, nil)
+	s := newServer(t, Config{Addr: "0.0.0.0:0", AllowLogins: []string{"me@example.com"}}, nil, nil)
 	if err := s.ListenAndServe(); err == nil {
 		t.Fatal("expected refusal to serve identity auth on a non-loopback address")
 	}
@@ -156,7 +159,7 @@ func TestAllowlistRequiresLoopback(t *testing.T) {
 }
 
 func TestCSRFProtection(t *testing.T) {
-	s := New(Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, ReadLines: 100}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, ReadLines: 100}, nil, nil)
 	h := s.Handler()
 	post := func(hdr map[string]string) int {
 		r := httptest.NewRequest("POST", "/api/agents/x/keys", strings.NewReader(`{"keys":[]}`))
@@ -179,4 +182,15 @@ func TestCSRFProtection(t *testing.T) {
 	if c := post(map[string]string{"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}); c == http.StatusForbidden || c == http.StatusUnsupportedMediaType {
 		t.Errorf("same-origin JSON POST was blocked: %d", c)
 	}
+}
+
+// newServer is New for a test: it registers the cleanup that joins the server's background work (asks, queued
+// senders, release passes, every s.spawn) before the test's temp directories go. A goroutine that outlives the test
+// otherwise writes into a directory being removed (TempDir RemoveAll: directory not empty). Cleanups run last in,
+// first out, and the temp dirs are made while the config is built, so this one runs first.
+func newServer(t testing.TB, cfg Config, client *herdr.Client, m *state.Manager) *Server {
+	t.Helper()
+	s := New(cfg, client, m)
+	t.Cleanup(s.waitBackground)
+	return s
 }

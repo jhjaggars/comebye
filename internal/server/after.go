@@ -146,7 +146,9 @@ func (s *Server) releaseQueued() {
 			if busy {
 				continue
 			}
+			s.bg.Add(1)
 			go func(e ledger.Entry) {
+				defer s.bg.Done()
 				defer func() {
 					s.coord.mu.Lock()
 					delete(s.coord.starting, "queued/"+e.ID)

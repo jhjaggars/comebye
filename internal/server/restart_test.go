@@ -81,7 +81,7 @@ func (rf *restartFake) install(f *fakeLaunchHerdr) {
 				return map[string]any{"type": "ok"}, nil, true
 			}
 		case "agent.list":
-			kept := f.agents[:0]
+			kept := make([]herdr.AgentInfo, 0, len(f.agents)) // not f.agents[:0]: a reply built earlier may still share the array
 			for _, a := range f.agents {
 				if n, ok := rf.lingerLeft[a.PaneID]; ok {
 					if n <= 0 {
@@ -187,7 +187,7 @@ func restartServer(t *testing.T, agents ...herdr.AgentInfo) *restartEnv {
 		rf.install(f)
 	})
 	m := managerWith(t, client, "desk", len(agents))
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken, LaunchRoots: []string{t.TempDir()}}, client, m)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken, LaunchRoots: []string{t.TempDir()}}, client, m)
 	s.findExec = func(name string) bool { return true }
 	s.restartPoll, s.restartWait = 10*time.Millisecond, 400*time.Millisecond
 	t.Cleanup(s.waitBackground)

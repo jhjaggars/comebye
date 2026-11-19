@@ -39,7 +39,7 @@ func newPeerRig(t *testing.T, dir string, hubMode bool) *peerRig {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go fl.Run(ctx)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: "tok", Version: "v1.0.0"}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: "tok", Version: "v1.0.0"}, nil, nil)
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	return &peerRig{t: t, dir: dir, fl: fl, srv: srv, peer: peer, stop: cancel}
@@ -205,7 +205,7 @@ func TestStaticPeerCannotBeRemovedThroughAPI(t *testing.T) {
 	}
 	fl := fleet.New(nil, "desk", static, fleet.Options{Logf: func(string, ...any) {}})
 	fl.AttachStore(store, opt)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl}, nil, nil)
 	h := map[string]string{"Tailscale-User-Login": "me@example.com", "Content-Type": "application/json"}
 	w := do(s, "DELETE", "/api/peers/kube", h, "")
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "static_peer") || !strings.Contains(w.Body.String(), "COMEBYE_PEERS") {
@@ -222,7 +222,7 @@ func TestStaticPeerCannotBeRemovedThroughAPI(t *testing.T) {
 }
 
 func TestWhoamiAndHostsCarryVersion(t *testing.T) {
-	s := New(Config{ReadLines: 100, HostName: "desk", Version: "v1.2.3"}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", Version: "v1.2.3"}, nil, nil)
 	if w := do(s, "GET", "/api/whoami", nil, ""); !strings.Contains(w.Body.String(), `"version":"v1.2.3"`) {
 		t.Fatalf("whoami: %s", w.Body)
 	}

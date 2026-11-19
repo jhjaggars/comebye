@@ -71,7 +71,7 @@ func coordServer(t *testing.T) (*Server, *fakeLaunchHerdr, string) {
 	})
 	m := managerWith(t, client, "desk", 2)
 	dir := t.TempDir()
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: dir, AgentToken: testToken, LaunchRoots: []string{t.TempDir()}}, client, m)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: dir, AgentToken: testToken, LaunchRoots: []string{t.TempDir()}}, client, m)
 	s.findExec = func(name string) bool { return name == "pi" || name == "claude" }
 	// A review can re-ask a marked session; shrink the ask and wait for it, or it types into the temp dir
 	// (typed.json) after the test returns.
@@ -168,7 +168,7 @@ func TestAgentRoleAllowlist(t *testing.T) {
 		t.Errorf("anonymous: %d", w.Code)
 	}
 	// Without a configured token, the agent role does not exist.
-	s2 := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "desk"}, nil, nil)
+	s2 := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "desk"}, nil, nil)
 	if w := do(s2, "GET", "/api/agents", agentHdr(""), ""); w.Code != http.StatusUnauthorized {
 		t.Errorf("no token configured: %d", w.Code)
 	}
@@ -297,7 +297,7 @@ func TestRolesAPI(t *testing.T) {
 		t.Fatalf("stale role listed: %s", w.Body)
 	}
 	// Reopened from disk; cleared by the user.
-	s2 := New(Config{HostName: "desk", StateDir: dir}, nil, nil)
+	s2 := newServer(t, Config{HostName: "desk", StateDir: dir}, nil, nil)
 	if !s2.isCoordinator("desk/w2:p1", "home") {
 		t.Fatal("roles not persisted")
 	}
@@ -363,7 +363,7 @@ func TestBriefStorage(t *testing.T) {
 func TestNoHub(t *testing.T) {
 	// A peer that keeps no ledger and has no hub: agents get 409 no_hub,
 	// the app 503 (it hides the ledger's features).
-	s := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken}, nil, nil)
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/ledger", ""}, {"POST", "/api/handoffs", `{}`}, {"POST", "/api/marks", `{"agent_id":"x"}`},
 		{"POST", "/api/marks/clear", `{"agent_id":"x"}`}, {"GET", "/api/brief", ""}, {"POST", "/api/brief", `{"markdown":"x"}`}, {"GET", "/api/roles", ""},
@@ -423,7 +423,7 @@ func TestPeerForwardsToHub(t *testing.T) {
 	if _, err := fleet.NewUpstream(hs.URL, false, nil); err == nil {
 		t.Fatal("plain http hub accepted without the test switch")
 	}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), Upstream: up, AgentToken: testToken}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), Upstream: up, AgentToken: testToken}, nil, nil)
 	if s.ledger != nil {
 		t.Fatal("a peer with -hub keeps a ledger")
 	}
@@ -505,11 +505,11 @@ func TestHubTreatsForwardedAsAgent(t *testing.T) {
 	// A real hub behind the peer: the forwarded request gets the agent
 	// role there (attributed to the peer's agent) and its restrictions.
 	hubDir := t.TempDir()
-	hubSrv := New(Config{InsecureNoAuth: true, HostName: "desk", StateDir: hubDir}, nil, nil)
+	hubSrv := newServer(t, Config{InsecureNoAuth: true, HostName: "desk", StateDir: hubDir}, nil, nil)
 	hs := httptest.NewServer(hubSrv.Handler())
 	defer hs.Close()
 	up, _ := fleet.NewUpstream(hs.URL, true, nil)
-	peer := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", Upstream: up, AgentToken: testToken}, nil, nil)
+	peer := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", Upstream: up, AgentToken: testToken}, nil, nil)
 	if w := do(peer, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"from kube"}`); w.Code != 200 {
 		t.Fatalf("brief via peer = %d %s", w.Code, w.Body)
 	}
@@ -527,7 +527,7 @@ func TestHubTreatsForwardedAsAgent(t *testing.T) {
 	}
 	// A hub never forwards a forwarded request again (no loops), even if
 	// it is misconfigured with -hub itself.
-	loop := New(Config{InsecureNoAuth: true, HostName: "x", Upstream: up}, nil, nil)
+	loop := newServer(t, Config{InsecureNoAuth: true, HostName: "x", Upstream: up}, nil, nil)
 	if w := do(loop, "GET", "/api/ledger", fwd, ""); w.Code != http.StatusConflict {
 		t.Errorf("loop = %d %s", w.Code, w.Body)
 	}
@@ -542,7 +542,7 @@ func TestIdempotentHandoff(t *testing.T) {
 		f.agents = []herdr.AgentInfo{{Name: "coordinator", PaneID: "w1:p1", Agent: "pi", Status: herdr.StatusIdle}}
 	})
 	m := managerWith(t, client, "desk", 1)
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir(), AgentToken: testToken}, client, m)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir(), AgentToken: testToken}, client, m)
 	s.findExec = func(name string) bool { return name == "pi" }
 	body := `{"host":"desk","repo":"` + repo + `","branch":"feat/a","kind":"pi","brief":"Do A."}`
 	starts := func() int {
@@ -650,7 +650,7 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 	root, _ := launchTree(t)
 	coordDir, _ := filepath.EvalSymlinks(t.TempDir())
 	fh, client := startFakeLaunchHerdr(t)
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: t.TempDir(),
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: t.TempDir(),
 		// Per-install extras (here a permission gate's --auto) are appended
 		// to the preset's built-in pi arguments.
 		CoordinatorArgs: map[string][]string{"pi": {"--auto"}}}, client, nil)
@@ -714,7 +714,7 @@ func TestCoordinatorLaunchPreset(t *testing.T) {
 		t.Fatalf("plain launch in the coordinator dir = %d", w.Code)
 	}
 	// Launching off: no coordinator either.
-	off := New(Config{HostName: "desk", CoordinatorDir: coordDir}, client, nil)
+	off := newServer(t, Config{HostName: "desk", CoordinatorDir: coordDir}, client, nil)
 	if w := do(off, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"pi"}`); w.Code != http.StatusForbidden {
 		t.Fatalf("launch off = %d", w.Code)
 	}
@@ -735,7 +735,7 @@ func TestCoordinatorLaunchOnPeer(t *testing.T) {
 	defer peer.Close()
 	pu, _ := url.Parse(peer.URL)
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	w := do(s, "POST", "/api/hosts/kube/launch", nil, `{"coordinator":true,"kind":"pi"}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "wS:p3") || !strings.Contains(string(got), `"coordinator":true`) {
 		t.Fatalf("peer launch = %d %s (peer got %s)", w.Code, w.Body, got)
@@ -816,7 +816,7 @@ func TestCoordinatorLaunchWithDirectory(t *testing.T) {
 	os.WriteFile(filepath.Join(coordDir, "AGENTS.md"), []byte("rules\n"), 0o644)
 	os.MkdirAll(filepath.Join(coordDir, "skills"), 0o755)
 	fh, client := startFakeLaunchHerdr(t)
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: t.TempDir()}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: t.TempDir()}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" || name == "claude" }
 
 	start := func(kind string) ([]string, int) {
@@ -890,7 +890,7 @@ func TestPullCoordinatorDir(t *testing.T) {
 	root, _ := launchTree(t)
 	realClone, _ := filepath.EvalSymlinks(clone)
 	fh, client := startFakeLaunchHerdr(t)
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: realClone, StateDir: t.TempDir()}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: realClone, StateDir: t.TempDir()}, client, nil)
 	s.findExec = func(name string) bool { return name == "claude" }
 	w := do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"claude"}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"warnings"`) || !strings.Contains(w.Body.String(), "git pull --ff-only failed") {
@@ -912,7 +912,7 @@ func TestPeerUserSettingsOfOtherHostGoThroughHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), Upstream: up, AgentToken: testToken}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), Upstream: up, AgentToken: testToken}, nil, nil)
 	const body = `{"rev":1,"default_kind":"claude"}`
 	w := do(s, "PUT", "/api/hosts/desk/settings", userHdr, body)
 	r, got := hub.last()

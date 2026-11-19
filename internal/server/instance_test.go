@@ -35,7 +35,7 @@ func newInstRig(t *testing.T, peersDir, stateDir string) *instRig {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go fl.Run(ctx)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: "tok", Version: "v1.0.0", StateDir: stateDir}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: "tok", Version: "v1.0.0", StateDir: stateDir}, nil, nil)
 	if s.ledger == nil || s.todos == nil {
 		t.Fatal("no ledger")
 	}

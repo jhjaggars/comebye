@@ -204,10 +204,10 @@ func (s *Server) startDeployLocal(by, todo, version string) (DeployRecord, int, 
 	s.writeDeployRecord(rec)
 	log.Printf("release: deploy %s started by %s: %s", version, rec.By, filepath.Base(argv[0]))
 	if cfg.Simulated {
-		go s.simulateDeploy(rec)
+		s.spawn(func() { s.simulateDeploy(rec) })
 		return rec, http.StatusAccepted, [2]string{}
 	}
-	go s.runDeploy(rec, argv)
+	s.spawn(func() { s.runDeploy(rec, argv) })
 	return rec, http.StatusAccepted, [2]string{}
 }
 
