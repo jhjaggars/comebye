@@ -37,7 +37,7 @@ async function open(width, dark, { hash = "", store = {} } = {}) {
   const errs = [];
   page.on("pageerror", (e) => errs.push(e.message));
   const f = fleet();
-  await page.goto(base + "/" + hash, { waitUntil: "load" });
+  await page.goto(base + "/", { waitUntil: "load" }); // the link is applied below, once the fleet is ours: a cold start on a filter would hide the real one
   await page.waitForSelector("#agents .agent");
   await page.evaluate(([f, store, hash]) => {
     for (const k of ["herdr-host-filter", "herdr-list-tab", "herdr-list-q"]) try { localStorage.removeItem(k); } catch {}
@@ -140,7 +140,7 @@ for (const dark of [false, true]) {
   await check(`${scheme} @1280: f focuses the box, does not fire while typing, / stays Search, h stays the host picker, g f still goes to Search`, async () => {
     const { browser, page } = await open(1280, dark);
     try {
-      await page.locator("body").click({ position: { x: 900, y: 500 } });
+      await page.evaluate(() => { document.activeElement && document.activeElement.blur(); });
       await page.keyboard.press("f");
       if (await page.evaluate(() => document.activeElement.id) !== "lf-q") throw new Error("f did not focus the box");
       if (await page.inputValue("#lf-q") !== "") throw new Error("f was typed into the box");
