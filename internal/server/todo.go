@@ -816,7 +816,7 @@ func (s *Server) handleTodoAdd(w http.ResponseWriter, r *http.Request) {
 	if c.agent() {
 		it.Source = SourceAgent
 	}
-	out, dup, err := s.todos.add(it)
+	out, dup, err := s.late(it)
 	if err != nil {
 		todoErr(w, err)
 		return
@@ -1130,4 +1130,18 @@ func (s *Server) todosGone(items []Todo) []Todo {
 		out[i] = s.todoGone(it)
 	}
 	return out
+}
+
+// late files an agent's item, unless the report of the handoff it works on
+// already asked the same question (a worker that files its questions after
+// its report): that item comes back as the duplicate.
+func (s *Server) late(it Todo) (Todo, bool, error) {
+	if it.Source == SourceAgent && it.Kind == "decision" && it.CreatedByID != "" && s.ledger != nil {
+		if e, ok := s.ledger.ByAgent(it.CreatedByID); ok {
+			if got, ok := s.todos.handoffItem(e, it.Question); ok {
+				return got, true, nil
+			}
+		}
+	}
+	return s.todos.add(it)
 }

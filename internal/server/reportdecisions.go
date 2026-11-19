@@ -246,9 +246,24 @@ func reportKey(entryID, kind, text string) string {
 // reportMaxDecisions), or the single pointer item for a section that did
 // not parse.
 func reportItems(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink) []Todo {
+	return reportItemsSkip(e, text, w, pages, nil)
+}
+
+// reportItemsSkip is reportItems without the decisions skip says are asked
+// already (this handoff's earlier report, answered or dropped or still open).
+func reportItemsSkip(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink, skip func(question string) bool) []Todo {
 	ds, found, _, unparsed, _, _ := parseReportDecisions(text)
 	if !found {
 		return nil
+	}
+	if skip != nil {
+		var keep []reportDecision
+		for _, d := range ds {
+			if !skip(d.Question) {
+				keep = append(keep, d)
+			}
+		}
+		ds = keep
 	}
 	who := e.AgentName
 	if who == "" {
@@ -262,6 +277,9 @@ func reportItems(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink) []
 		// say there is nothing to decide). The finished notice tells the
 		// coordinator to read the section.
 		log.Printf("todo: report %s: the decisions section has no numbered or bulleted decision; filed no item", e.ID)
+		return nil
+	}
+	if len(ds) == 0 {
 		return nil
 	}
 	var out []Todo
@@ -411,15 +429,110 @@ func (s *Server) fileReportDecisions(e ledger.Entry, text string) {
 			ref, _ = s.pageFor(id, 0)
 		}
 	}
-	for _, it := range reportItems(e, text, w, pages) {
+	// One rule: the report's Decisions section is the worker's whole list for
+	// this handoff. A question an earlier report of the handoff asked (open,
+	// answered or dropped) is not filed again, and the worker's own open
+	// `todo add` decisions for the handoff are folded into what the report filed.
+	skip := func(q string) bool { return s.todos.handoffAsked(e, q) }
+	items := reportItemsSkip(e, text, w, pages, skip)
+	pointer := ""
+	for _, it := range items {
 		if ref != nil {
 			pg := *ref
 			it.Page = &pg
 		}
-		if _, _, err := s.todos.addReportItem(it); err != nil {
+		got, _, err := s.todos.addReportItem(it)
+		if err != nil {
 			log.Printf("todo: report decision of %s: %v", e.ID, err)
+			continue
+		}
+		if pointer == "" {
+			pointer = got.ID
 		}
 	}
+	reason := "The worker's report lists this question"
+	if pointer != "" {
+		reason += "; answer it in to-do " + pointer
+	}
+	// "None." or a bullet that names an item id (the worker's own item) absorbs
+	// nothing.
+	if _, found, none, unparsed, skipped, _ := parseReportDecisions(text); found && !none && !unparsed && skipped == 0 {
+		s.todos.absorbSelfFiled(e, reason+".")
+	}
+}
+
+// reportOwned reports that it is an item the handoff's worker filed for
+// itself during this handoff: an agent-filed open decision, made by the
+// worker, that waits on the worker (so not a question for a coordinator).
+func reportOwned(it Todo, e ledger.Entry) bool {
+	if e.AgentID == "" || it.Source != SourceAgent || it.Kind != "decision" || it.Set != nil || !it.active() {
+		return false
+	}
+	for _, l := range it.Links {
+		if l.Handoff != "" && l.Handoff == e.ID {
+			return true
+		}
+	}
+	return it.CreatedByID == e.AgentID && !it.CreatedAt.Before(e.CreatedAt) && it.Waiting != nil && it.Waiting.ID == e.AgentID
+}
+
+// absorbSelfFiled drops the worker's open self-filed decisions of this
+// handoff: the report (which has decisions) now carries them.
+func (t *todoStore) absorbSelfFiled(e ledger.Entry, reason string) {
+	t.mu.Lock()
+	var ids []string
+	for _, it := range t.data.Items {
+		if reportOwned(it, e) {
+			ids = append(ids, it.ID)
+		}
+	}
+	t.mu.Unlock()
+	for _, id := range ids {
+		if _, err := t.close(id, TodoDropped, "hub", reason); err != nil {
+			log.Printf("todo: absorb %s into the report of %s: %v", id, e.ID, err)
+		}
+	}
+}
+
+// handoffAsked reports that an item the hub filed from a report of this
+// handoff (any state) already asks q: as a loose item, or as a decision in a
+// set. Matching is on the normalized question (sameQuestion), within one
+// handoff.
+func (t *todoStore) handoffAsked(e ledger.Entry, q string) bool {
+	_, ok := t.handoffItem(e, q)
+	return ok
+}
+
+// handoffItem is the item handoffAsked found.
+func (t *todoStore) handoffItem(e ledger.Entry, q string) (Todo, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	q = strings.ReplaceAll(q, "**", "")
+	for _, it := range t.data.Items {
+		if it.Source != SourceReport || !linksHandoff(it, e.ID) {
+			continue
+		}
+		if sameQuestion(it.Question, q) {
+			return it, true
+		}
+		if it.Set != nil {
+			for _, d := range it.Set.Decisions {
+				if sameQuestion(d.Title, q) || sameQuestion(d.Question, q) || sameQuestion(oneLine(q, 120), d.Title) {
+					return it, true
+				}
+			}
+		}
+	}
+	return Todo{}, false
+}
+
+func linksHandoff(it Todo, id string) bool {
+	for _, l := range it.Links {
+		if l.Handoff == id {
+			return true
+		}
+	}
+	return false
 }
 
 // reportPageRE finds a Page named in a report: its id, or a /p/pg_… URL.

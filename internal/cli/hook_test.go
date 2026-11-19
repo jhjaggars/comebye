@@ -77,3 +77,33 @@ func TestStopHookSilentWhenThereIsNothingToFile(t *testing.T) {
 		t.Fatalf("garbage: %v %q", err, out.String())
 	}
 }
+
+func rowReport(cmd string) string {
+	b, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{"content": []map[string]any{{"type": "tool_use", "name": "Bash", "input": map[string]string{"command": cmd}}}}})
+	return string(b)
+}
+
+// A turn that ran `comebye report` with decisions gets no nag: the hub files
+// them. A report with "None.", or a progress note, still gets it.
+func TestStopHookSilentAfterReportWithDecisions(t *testing.T) {
+	withDecisions := rowReport("comebye report - <<'EOF'\n## Summary\nx\n## Decisions for the user\n1. Keep CSV?\n   1. yes\n   2. no\nEOF")
+	tr := writeTranscript(t, rowPrompt, withDecisions, rowResult)
+	if out := runStop(t, map[string]any{"last_assistant_message": hookAsk, "transcript_path": tr}); out != "" {
+		t.Fatalf("nagged after a report with decisions: %q", out)
+	}
+	for name, cmd := range map[string]string{
+		"none":     "comebye report - <<'EOF'\n## Decisions for the user\nNone.\nEOF",
+		"progress": "comebye report --progress \"## Decisions for the user\n1. x?\"",
+		"empty":    "comebye report - <<'EOF'\n## Decisions for the user\n## Follow-ups\n1. x\nEOF",
+	} {
+		tr := writeTranscript(t, rowPrompt, rowReport(cmd), rowResult)
+		if out := runStop(t, map[string]any{"last_assistant_message": hookAsk, "transcript_path": tr}); out == "" {
+			t.Errorf("%s: no reminder", name)
+		}
+	}
+	// A report from an earlier turn does not silence this one.
+	tr = writeTranscript(t, withDecisions, rowPrompt, rowOther, rowResult)
+	if out := runStop(t, map[string]any{"last_assistant_message": hookAsk, "transcript_path": tr}); out == "" {
+		t.Error("earlier turn's report silenced the reminder")
+	}
+}

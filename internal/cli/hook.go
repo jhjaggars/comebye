@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/jhjaggars/comebye/internal/question"
@@ -55,6 +56,9 @@ func stopReminder(in stopInput) string {
 	if filedInTurn(in.TranscriptPath) {
 		return ""
 	}
+	if reportedDecisions(in.TranscriptPath) {
+		return "" // the hub files a report's decisions itself
+	}
 	var b strings.Builder
 	n := len(ex.Items)
 	fmt.Fprintf(&b, "Comebye: your last message leaves %d question%s for the user, and this turn did not run `comebye todo add`. A question left only in the chat pane is easily missed. ", n, map[bool]string{true: "", false: "s"}[n == 1])
@@ -77,6 +81,45 @@ func stopReminder(in stopInput) string {
 // real user message) ran a Bash call with `comebye todo add`. A transcript
 // it cannot read says no, so the reminder errs towards being given.
 func filedInTurn(path string) bool {
+	return turnRan(path, func(cmd string) bool { return strings.Contains(cmd, "comebye todo add") })
+}
+
+// reportedDecisions reports that the current turn ran `comebye report` whose
+// text has a non-empty "Decisions for the user" section: the hub turns that
+// into to-do items, so the worker files nothing.
+func reportedDecisions(path string) bool {
+	return turnRan(path, func(cmd string) bool {
+		return strings.Contains(cmd, "comebye report") && !strings.Contains(cmd, "--progress") && reportHasDecisions(cmd)
+	})
+}
+
+var decisionsHeadRE = regexp.MustCompile(`(?im)^#{1,6}\s*\**decisions for the user\**:?\s*$`)
+var decisionsNoneRE = regexp.MustCompile(`(?i)^(?:[-*+]\s+)?\**(none|nothing|no decisions?|n/a)\b`)
+
+// reportHasDecisions: text has a "Decisions for the user" heading followed by
+// something other than "None.".
+func reportHasDecisions(text string) bool {
+	loc := decisionsHeadRE.FindStringIndex(text)
+	if loc == nil {
+		return false
+	}
+	for _, l := range strings.Split(text[loc[1]:], "\n") {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "#") {
+			return false // the next section: this one was empty
+		}
+		return !decisionsNoneRE.MatchString(t)
+	}
+	return false
+}
+
+// turnRan reports that a Bash call of the transcript's current turn (after
+// the last real user message) satisfies match. A transcript it cannot read
+// says no, so the reminder errs towards being given.
+func turnRan(path string, match func(cmd string) bool) bool {
 	if path == "" {
 		return false
 	}
@@ -123,7 +166,7 @@ func filedInTurn(path string) bool {
 				continue
 			}
 			for _, bl := range blocks {
-				if bl.Type == "tool_use" && bl.Name == "Bash" && strings.Contains(bl.Input.Command, "comebye todo add") {
+				if bl.Type == "tool_use" && bl.Name == "Bash" && match(bl.Input.Command) {
 					found = true
 				}
 			}

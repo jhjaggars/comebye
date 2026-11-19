@@ -206,6 +206,35 @@ await check("2. the user taps a choice in the app; the hub types the answer, lab
   await worker2.idle();
 });
 
+// ---- 2b. A worker files its questions AND lists them in its report: the user sees one item ---------------------------
+await check("2b. a worker that files its questions and lists them in its report leaves one to-do (the report's set) on the phone", async () => {
+  ok(cli(await coord.pane(), ["handoff", "--host", "smoke", "--repo", repo, "--branch", "feat/three", "--name", "three", "--kind", "claude", "--brief", "-"], "Intent: ask the user two things.\n"), "handoff three");
+  const worker3 = new Agent("three");
+  await worker3.gotPrompt(/handed this task by coord/, "its brief");
+  await until(() => agentNamed("three"), "the hub to list the third worker");
+  for (const q of ["Should the export keep the CSV format?", "Which compression for the archive?"]) {
+    ok(await worker3.run(["todo", "add", q, "--kind", "decision", "--waiting", "three", "--option", "yes|first", "--option", "no|second"], ""), "todo add");
+  }
+  must((await todoList("open")).filter((t) => t.waiting?.name === "three").length === 2, "the two self-filed items are not open");
+  const rep = REPORT("Asked two things.", "- none").replace("## Decisions for the user\nNone.\n",
+    "## Decisions for the user\n1. Keep the CSV format for exports?\n   1. Yes - keep\n   2. No - drop\n   Recommend: 1\n2. Which compression, gzip or zstd?\n   1. gzip - common\n   2. zstd - smaller\n   Recommend: 2\n");
+  ok(await worker3.run(["report", "-"], rep), "report");
+  await worker3.idle();
+  await coord.gotPrompt(/\(hub notice\).*feat\/three.*finished/s, "the finished notice of the third worker");
+  await coord.idle();
+  const mine = (await todoList("open")).filter((t) => t.waiting?.name === "three");
+  must(mine.length === 1 && mine[0].set && mine[0].set.decisions.length === 2, "open items for the worker: " + JSON.stringify(mine.map((t) => t.question)));
+  const dropped = (await todoList("dropped")).filter((t) => t.waiting?.name === "three");
+  must(dropped.length === 2 && dropped.every((t) => t.drop_reason.includes(mine[0].id)), "the self-filed items were not folded into the set: " + JSON.stringify(dropped.map((t) => t.drop_reason)));
+  await phoneTodo();
+  await page.waitForSelector(`#todo .td-item[data-id="${mine[0].id}"] .td-row`, { state: "visible", timeout: 15000 });
+  const rows = await page.locator("#todo .td-item", { hasText: "three" }).count();
+  must(rows === 1, `the To do panel shows ${rows} items for the worker, want 1`);
+  await shot("2b-one-item-390");
+  // The user is done with it, so the board in step 7 has nothing needing them.
+  must((await post(`/api/todos/${mine[0].id}/drop`, {})).status === 200, "drop the set");
+});
+
 // ---- 3. Landing -------------------------------------------------------------------------------------------------------
 let t3;
 await check("3. the coordinator asks the user to OK the landing; the user answers in the app; the coordinator is told", async () => {

@@ -352,3 +352,116 @@ func TestReportLinksPagesFirst(t *testing.T) {
 		t.Fatalf("single item page ref = %+v", it.Page)
 	}
 }
+
+// A worker that files its questions with `todo add` and also lists them in
+// its report leaves one visible item: the report's set. The worker's own
+// items (reworded, no handoff link) are dropped with a pointer to it.
+func TestReportAbsorbsSelfFiledItems(t *testing.T) {
+	s, _ := decisionsServer(t)
+	add := func(q string) {
+		b, _ := json.Marshal(map[string]any{"question": q, "kind": "decision"})
+		if c := do(s, "POST", "/api/todos", agentHdr("w9:p1"), string(b)).Code; c != http.StatusCreated {
+			t.Fatalf("add %q = %d", q, c)
+		}
+	}
+	add("Should I keep the CSV format for exports?")
+	add("gzip or zstd for the archive?")
+	// A question for someone else is not absorbed.
+	b, _ := json.Marshal(map[string]any{"question": "Release this?", "kind": "decision", "waiting": "desk/w1:p1"})
+	do(s, "POST", "/api/todos", agentHdr("w9:p1"), string(b))
+	report(t, s, "## Decisions for the user\n1. Keep the CSV format?\n   1. yes\n   2. no\n2. Which compression?\n   1. gzip\n   2. zstd\n")
+	var open, dropped []Todo
+	for _, it := range activeItems(s) {
+		if it.active() {
+			open = append(open, it)
+		} else if it.State == TodoDropped {
+			dropped = append(dropped, it)
+		}
+	}
+	if len(open) != 2 || len(dropped) != 2 {
+		t.Fatalf("open=%d dropped=%d: %+v", len(open), len(dropped), activeItems(s))
+	}
+	var set Todo
+	for _, it := range open {
+		if it.Set != nil {
+			set = it
+		}
+	}
+	if set.ID == "" {
+		t.Fatalf("no set among %+v", open)
+	}
+	for _, d := range dropped {
+		if d.ClosedBy != "hub" || !strings.Contains(d.DropReason, set.ID) {
+			t.Errorf("dropped item %+v", d)
+		}
+	}
+}
+
+// A self-filed item that carries the handoff link is absorbed too.
+func TestReportAbsorbsHandoffLinkedItem(t *testing.T) {
+	s, e := decisionsServer(t)
+	b, _ := json.Marshal(map[string]any{"question": "Totally different words?", "kind": "decision", "links": []map[string]string{{"handoff": e.ID}}})
+	do(s, "POST", "/api/todos", agentHdr("w9:p1"), string(b))
+	report(t, s, "## Decisions for the user\n- Ship it?\n")
+	n := 0
+	for _, it := range activeItems(s) {
+		if it.active() {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("active = %d: %+v", n, activeItems(s))
+	}
+}
+
+// "None." and a bullet that names an item id absorb nothing.
+func TestReportNoneKeepsSelfFiledItems(t *testing.T) {
+	s, _ := decisionsServer(t)
+	b, _ := json.Marshal(map[string]any{"question": "Keep CSV?", "kind": "decision"})
+	do(s, "POST", "/api/todos", agentHdr("w9:p1"), string(b))
+	report(t, s, "## Decisions for the user\nNone.\n")
+	if it := activeItems(s)[0]; !it.active() {
+		t.Fatalf("dropped on None: %+v", it)
+	}
+}
+
+// A later report of the same handoff does not re-file a question that was
+// answered or dropped, nor one still open; a new question is filed. The same
+// holds for a question inside a set.
+func TestLaterReportDoesNotRefileAskedQuestions(t *testing.T) {
+	s, _ := decisionsServer(t)
+	first := "## Decisions for the user\n1. Keep the CSV format?\n   1. yes\n   2. no\n2. Which compression?\n   1. gzip\n   2. zstd\n"
+	report(t, s, first)
+	items := activeItems(s)
+	if len(items) != 1 || items[0].Set == nil {
+		t.Fatalf("items = %+v", items)
+	}
+	if _, err := s.todos.close(items[0].ID, TodoDropped, "user", "answered elsewhere"); err != nil {
+		t.Fatal(err)
+	}
+	report(t, s, first+"3. Ship Friday?\n   1. yes\n   2. no\n")
+	items = activeItems(s)
+	if len(items) != 2 {
+		t.Fatalf("after second report: %+v", items)
+	}
+	if items[1].Set != nil || !strings.Contains(items[1].Question, "Ship Friday") {
+		t.Fatalf("second item = %+v", items[1])
+	}
+	// The same report again: nothing new.
+	report(t, s, first+"3. Ship Friday?\n   1. yes\n   2. no\n")
+	if n := len(activeItems(s)); n != 2 {
+		t.Fatalf("third report: %d items", n)
+	}
+}
+
+// A worker that files its questions after its report (the Stop hook's old
+// nag, or just habit) gets the report's item back as a duplicate.
+func TestSelfFileAfterReportIsDuplicate(t *testing.T) {
+	s, _ := decisionsServer(t)
+	report(t, s, "## Decisions for the user\n- Should the flag default to on?\n  1. yes\n  2. no\n")
+	b, _ := json.Marshal(map[string]any{"question": "Should the flag default to ON?", "kind": "decision"})
+	r := do(s, "POST", "/api/todos", agentHdr("w9:p1"), string(b))
+	if !strings.Contains(r.Body.String(), `"duplicate":true`) || len(activeItems(s)) != 1 {
+		t.Fatalf("%d %s items=%+v", r.Code, r.Body.String(), activeItems(s))
+	}
+}
