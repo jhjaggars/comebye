@@ -35,7 +35,7 @@ func deliveredSetupFH(t *testing.T) (s *Server, fh *fakeLaunchHerdr, repo, wt, p
 		f.agents = append(f.agents, herdr.AgentInfo{Name: "coordinator", PaneID: "w1:p1", WorkspaceID: "w1", Agent: "claude", Status: herdr.StatusIdle, CWD: repo})
 	})
 	m := managerWith(t, s0.client, "desk", 2)
-	s = New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken,
+	s = newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken,
 		LaunchRoots: []string{filepath.Dir(repo)}, WorktreeRoot: filepath.Dir(filepath.Dir(wt))}, s0.client, m)
 	w := do(s, "POST", "/api/pages", agentHdr("w9:p1"), pubJSON(map[string]any{"title": "Findings", "body": "# findings\ntext"}))
 	if w.Code != http.StatusCreated {

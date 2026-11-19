@@ -66,7 +66,7 @@ func relHubWithPeer(t *testing.T, hubVersion, peerVersion string, down bool) (*S
 	t.Cleanup(cancel)
 	go fl.Run(ctx)
 	tool := &fakeTool{check: okCheck(), build: release.Build{State: "success"}}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir(), Version: hubVersion,
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir(), Version: hubVersion,
 		Release: ReleaseConfig{Tool: tool, Upgrade: true, Runner: &fakeRunner{}}}, nil, nil)
 	b, _ := json.Marshal(map[string]any{"name": "kube", "urls": []string{peer.URL}})
 	if w := do(s, "POST", "/api/peers", userHdr, string(b)); w.Code != 201 {

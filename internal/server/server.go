@@ -834,9 +834,19 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 // herdr's full agent records instead of the browser's slim view.
 func fullRecords(r *http.Request) bool { return r.URL.Query().Get("full") == "1" }
 
-// waitBackground waits for the queued-prompt senders that are running. Tests call it before their temp directory
+// spawn runs f in the background and counts it in s.bg, so waitBackground (a test's cleanup, before its temp
+// directory goes) joins it. Every fire-and-forget goroutine that can touch the state directory starts here.
+func (s *Server) spawn(f func()) {
+	s.bg.Add(1)
+	go func() {
+		defer s.bg.Done()
+		f()
+	}()
+}
+
+// waitBackground waits for the background work that is running: asks, queued-prompt senders, release passes. Tests call it before their temp directory
 // goes, so a sender that settles a prompt late does not write into a directory being removed.
-func (s *Server) waitBackground() { s.bg.Wait(); s.releasing.Wait() }
+func (s *Server) waitBackground() { s.asking.Wait(); s.bg.Wait(); s.releasing.Wait() }
 
 // handleVersion returns the app version, which every /api response also
 // carries in X-App-Version.

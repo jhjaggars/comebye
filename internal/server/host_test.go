@@ -13,7 +13,7 @@ import (
 // auth, even though any local client can set a valid identity header; the
 // names Serve and local tools use get through.
 func TestHostCheckBlocksRebinding(t *testing.T) {
-	s := New(Config{AllowLogins: []string{"me@example.com"}, AllowHosts: SplitHosts("Phone.Lan:8741, other.lan"), ReadLines: 100}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, AllowHosts: SplitHosts("Phone.Lan:8741, other.lan"), ReadLines: 100}, nil, nil)
 	h := s.Handler()
 	get := func(host, path string) int {
 		t.Helper()
@@ -39,7 +39,7 @@ func TestHostCheckBlocksRebinding(t *testing.T) {
 }
 
 func TestListenRequiresAllowlistOrInsecureFlag(t *testing.T) {
-	s := New(Config{Addr: "127.0.0.1:0"}, nil, nil)
+	s := newServer(t, Config{Addr: "127.0.0.1:0"}, nil, nil)
 	err := s.ListenAndServe()
 	if err == nil || !strings.Contains(err.Error(), "insecure-no-auth") {
 		t.Fatalf("expected refusal without an allowlist, got %v", err)

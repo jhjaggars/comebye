@@ -201,7 +201,7 @@ func (s *Server) noteHeld(agentID string) {
 	t.polls = true
 	t.mu.Unlock()
 	if start {
-		go s.retryHeld()
+		s.spawn(s.retryHeld)
 	}
 }
 

@@ -29,7 +29,7 @@ func peerTagServer(t *testing.T) (*Server, *fakeTool) {
 	ck := okCheck()
 	ck.CIURL = ghRun + "100"
 	tool := &fakeTool{check: ck, build: release.Build{State: "success", URL: ghRun + "1"}, runURL: ghRun + "1"}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken,
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken,
 		Release: ReleaseConfig{Tool: tool}}, nil, nil)
 	return s, tool
 }
@@ -291,7 +291,7 @@ func relHub(t *testing.T, p *relPeer, mod func(*Config)) *Server {
 	if mod != nil {
 		mod(&cfg)
 	}
-	s := New(cfg, nil, nil)
+	s := newServer(t, cfg, nil, nil)
 	b, _ := json.Marshal(map[string]any{"name": "kube", "urls": []string{p.srv.URL}})
 	if w := do(s, "POST", "/api/peers", userHdr, string(b)); w.Code != 201 {
 		t.Fatalf("add peer = %d %s", w.Code, w.Body)

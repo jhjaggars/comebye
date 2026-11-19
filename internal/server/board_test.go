@@ -185,7 +185,7 @@ func TestBoardDialogBlockedIsNeedsYou(t *testing.T) {
 		}
 	})
 	m := managerWith(t, client, "desk", 2)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, client, m)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "desk", StateDir: t.TempDir(), AgentToken: testToken}, client, m)
 	e, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "b", AgentName: "home", AgentID: "desk/w2:p1", PaneID: "w2:p1", Status: ledger.Running, Brief: "b"})
 	if err != nil {
 		t.Fatal(err)

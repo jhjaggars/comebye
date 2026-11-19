@@ -654,7 +654,7 @@ func TestUpgradeResultIsAuditedOnceWhenItEnds(t *testing.T) {
 func peerRelServer(t *testing.T) (*Server, *fakeRunner) {
 	t.Helper()
 	run := &fakeRunner{}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken,
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken,
 		Release: ReleaseConfig{Upgrade: true, Runner: run}}, nil, nil)
 	return s, run
 }
@@ -843,7 +843,7 @@ func TestUpgradeAPeerThroughTheHub(t *testing.T) {
 	t.Cleanup(cancel)
 	go fl.Run(ctx)
 	tool := &fakeTool{check: okCheck(), build: release.Build{State: "success"}}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir(),
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir(),
 		Release: ReleaseConfig{Tool: tool}}, nil, nil)
 	b, _ := json.Marshal(map[string]any{"name": "kube", "urls": []string{peer.URL}})
 	if w := do(s, "POST", "/api/peers", userHdr, string(b)); w.Code != 201 {

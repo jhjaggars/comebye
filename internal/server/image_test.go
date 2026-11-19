@@ -16,7 +16,7 @@ var pngBytes = append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
 
 func TestImageUpload(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "uploads")
-	s := New(Config{ReadLines: 100, HostName: "desk", UploadDir: dir}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", UploadDir: dir}, nil, nil)
 	b64 := base64.StdEncoding.EncodeToString(pngBytes)
 
 	// An old upload is pruned by the next one.
@@ -58,7 +58,7 @@ func TestImageUpload(t *testing.T) {
 	if w := do(s, "POST", "/api/agents/wS:p1/image", nil, `{"data":"%%%"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("bad base64: %d", w.Code)
 	}
-	off := New(Config{ReadLines: 100, HostName: "desk"}, nil, nil)
+	off := newServer(t, Config{ReadLines: 100, HostName: "desk"}, nil, nil)
 	if w := do(off, "POST", "/api/agents/wS:p1/image", nil, `{"data":"`+b64+`"}`); w.Code != http.StatusNotFound {
 		t.Fatalf("disabled: %d", w.Code)
 	}

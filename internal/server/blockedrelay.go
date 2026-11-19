@@ -259,7 +259,7 @@ func (s *Server) relayStep(agents []herdr.AgentInfo, now time.Time) {
 		}
 		if !d.reading && now.Sub(d.readAt) >= relayRefresh {
 			d.reading = true
-			go s.relayRead(a, d.spell, now)
+			s.spawn(func() { s.relayRead(a, d.spell, now) })
 		}
 	}
 	// 3. Episodes, for the agents that have a coordinator.
@@ -474,7 +474,7 @@ func (s *Server) relayDeliver(byID map[string]herdr.AgentInfo, now time.Time) {
 		clearing := ep.ended != nil
 		text := s.relayText(ep, now, clearing, s.relayLink(byID[ep.id])) + goneNote(gone)
 		ep.tries, ep.inFlight = now, true
-		go s.relaySend(ep, *target, text, clearing)
+		s.spawn(func() { s.relaySend(ep, *target, text, clearing) })
 	}
 }
 

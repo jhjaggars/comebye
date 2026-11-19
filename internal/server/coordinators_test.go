@@ -104,7 +104,7 @@ func TestLaunchNewCoordinator(t *testing.T) {
 	root, outside := launchTree(t)
 	fh, client := startFakeLaunchHerdr(t)
 	state := t.TempDir()
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, StateDir: state, CoordinatorDir: t.TempDir()}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, StateDir: state, CoordinatorDir: t.TempDir()}, client, nil)
 	s.findExec = func(name string) bool { return name == "claude" }
 
 	// No name: refused.

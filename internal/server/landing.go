@@ -229,7 +229,9 @@ func (s *Server) checkLandings() {
 		if busy {
 			continue
 		}
+		s.bg.Add(1)
 		go func() {
+			defer s.bg.Done()
 			defer func() {
 				s.coord.mu.Lock()
 				delete(s.coord.checking, key)
@@ -507,7 +509,9 @@ func (s *Server) backgroundOf(ctx context.Context, e ledger.Entry, wait bool) (t
 	case wait && stale:
 		read(ctx)
 	case refresh:
+		s.bg.Add(1)
 		go func() {
+			defer s.bg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			read(ctx)

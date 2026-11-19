@@ -108,7 +108,7 @@ func firstSSEData(t *testing.T, base string) string {
 
 // Every API response, a rejected one included, names the binary version.
 func TestComebyeVersionHeader(t *testing.T) {
-	s := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "desk", Version: "v9.9.9"}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "desk", Version: "v9.9.9"}, nil, nil)
 	for _, p := range []string{"/api/version", "/api/agents", "/api/hosts"} {
 		if got := do(s, "GET", p, nil, "").Header().Get("X-Comebye-Version"); got != "v9.9.9" {
 			t.Fatalf("%s (no login, 401) X-Comebye-Version = %q", p, got)

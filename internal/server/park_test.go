@@ -272,7 +272,7 @@ func TestParkedAllMirrorsOfflinePeers(t *testing.T) {
 	defer ps.Close()
 	pu, _ := url.Parse(ps.URL)
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{AllowLogins: []string{"me@example.com"}, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	if err := s.parkStore().Add(park.Record{ID: "pk_local00001", Name: "near", Kind: "claude", ParkedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}

@@ -573,7 +573,7 @@ func (s *Server) handleReleaseApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, ledger.AuditEvent{Action: "release.approve", Todo: it.ID, Host: s.releaseHost(), OK: true, Detail: fmt.Sprintf("%s at %s (dry run %v)", it.Release.Version, it.Release.Commit, cfg.DryRun)})
 	unlock = false
-	go s.tagRelease(it, by)
+	s.spawn(func() { s.tagRelease(it, by) })
 	cur, _ := s.todos.get(it.ID)
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"todo": s.todoGone(cur)})
 }

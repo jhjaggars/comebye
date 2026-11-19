@@ -95,7 +95,7 @@ func TestRecallIsUserOnly(t *testing.T) {
 
 func recallServer(t *testing.T, index string) *httptest.Server {
 	t.Helper()
-	s := New(Config{InsecureNoAuth: true, RecallIndex: index, StateDir: t.TempDir(), ReadLines: 10}, nil, nil)
+	s := newServer(t, Config{InsecureNoAuth: true, RecallIndex: index, StateDir: t.TempDir(), ReadLines: 10}, nil, nil)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts

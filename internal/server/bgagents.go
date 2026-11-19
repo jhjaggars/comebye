@@ -145,7 +145,7 @@ func (s *Server) backgroundOfAgent(a herdr.AgentInfo) []bgBrief {
 	}
 	if stale && !e.busy {
 		e.busy = true
-		go s.readBackground(a, key, stamp)
+		s.spawn(func() { s.readBackground(a, key, stamp) })
 	}
 	s.bgAgents.mu.Unlock()
 	return out

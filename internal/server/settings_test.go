@@ -34,7 +34,7 @@ func newSettingsRig(t *testing.T, mod func(*Config)) *settingsRig {
 	if mod != nil {
 		mod(&cfg)
 	}
-	s := New(cfg, client, nil)
+	s := newServer(t, cfg, client, nil)
 	// pi, codex and cursor are installed; claude is not.
 	s.findExec = func(name string) bool { return name == "pi" || name == "codex" || name == "cursor-agent" }
 	return &settingsRig{s: s, fh: fh, root: root}
@@ -327,7 +327,7 @@ func TestSettingsPersistAndSurviveACorruptFile(t *testing.T) {
 // (a coordinator) reads and cannot write; nobody without an identity gets in.
 func TestSettingsAuthMatrix(t *testing.T) {
 	root, _ := launchTree(t)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, ReadLines: 100, HostName: "desk",
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, ReadLines: 100, HostName: "desk",
 		LaunchRoots: []string{root}, StateDir: t.TempDir(), AgentToken: testToken}, nil, nil)
 	h := s.Handler()
 	send := func(method, path string, hdr map[string]string, body string) int {
@@ -426,7 +426,7 @@ func TestSettingsThroughTheHub(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go fl.Run(ctx)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir()}, nil, nil)
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	req := func(method, path, body string, hdr map[string]string) (int, string) {
@@ -503,7 +503,7 @@ func TestSettingsBareRouteForwardsAsOwnHost(t *testing.T) {
 	if err != nil {
 		t.Skipf("no upstream: %v", err)
 	}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "laptop", AgentToken: testToken, Upstream: up}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "laptop", AgentToken: testToken, Upstream: up}, nil, nil)
 	w := do(s, "GET", "/api/settings", map[string]string{HeaderAgentToken: testToken}, "")
 	mu.Lock()
 	defer mu.Unlock()
@@ -520,7 +520,7 @@ func TestHandoffFollowsHostSettings(t *testing.T) {
 	fh, client := startFakeLaunchHerdr(t)
 	wts := []map[string]any{{"path": repo, "branch": "main", "is_linked_worktree": false}}
 	fh.set(func(f *fakeLaunchHerdr) { f.hook = worktreeHook(t, &wts, nil) })
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" || name == "codex" }
 	if _, err := s.settings.put(hostSettings{DefaultKind: "codex", Kinds: map[string]kindSettings{"codex": {Model: "gpt-5"}}}, nil, "me", time.Now()); err != nil {
 		t.Fatal(err)

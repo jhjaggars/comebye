@@ -56,7 +56,7 @@ func switchServer(t *testing.T, agents []herdr.AgentInfo) (*Server, *fakeLaunchH
 	for deadline := time.Now().Add(5 * time.Second); len(m.Agents()) < len(agents) && time.Now().Before(deadline); {
 		time.Sleep(20 * time.Millisecond)
 	}
-	s := New(Config{ReadLines: 100, HostName: "desk", StateDir: t.TempDir()}, client, m)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", StateDir: t.TempDir()}, client, m)
 	s.switchGap = time.Millisecond
 	s.listModels = func(ctx context.Context, kind string) *modelCatalog {
 		return &modelCatalog{Kind: kind, Exact: true, Models: []modelInfo{{ID: "homelab/fast"}, {ID: "homelab/thinking"}}}
@@ -158,7 +158,7 @@ func TestSwitchModelViaPeer(t *testing.T) {
 	defer peer.Close()
 	pu, _ := url.Parse(peer.URL)
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	e, _ := s.ledger.Add(ledger.Entry{Host: "kube", Repo: "/r", RepoName: "r", Branch: "b", Kind: "claude", AgentID: "kube/wS:p9", PaneID: "wS:p9", Status: ledger.Running})
 
 	w := do(s, "POST", "/api/hosts/kube/agents/wS:p9/model", nil, `{"model":"opus"}`)

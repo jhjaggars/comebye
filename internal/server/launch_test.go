@@ -219,7 +219,7 @@ func launchTree(t *testing.T) (root, outside string) {
 }
 
 func newLaunchServer(t *testing.T, client *herdr.Client, manager *state.Manager, roots ...string) *Server {
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: roots}, client, manager)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: roots}, client, manager)
 	s.findExec = func(name string) bool { return name == "pi" || name == "codex" || name == "cursor-agent" }
 	return s
 }
@@ -658,7 +658,7 @@ func TestLaunchHostRoutes(t *testing.T) {
 
 func TestLaunchRequiresAuthAndCSRF(t *testing.T) {
 	root, _ := launchTree(t)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, HostName: "desk", LaunchRoots: []string{root}}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, AllowHosts: testHosts, HostName: "desk", LaunchRoots: []string{root}}, nil, nil)
 	h := s.Handler()
 	send := func(method, path string, hdr map[string]string, body string) int {
 		r, _ := http.NewRequest(method, "http://example.com"+path, strings.NewReader(body))

@@ -21,7 +21,7 @@ func healthServer(t *testing.T, cfg Config) (*Server, string) {
 	cfg.StateDir = dir
 	cfg.AllowLogins = []string{"me@example.com"}
 	cfg.Version = "v-test"
-	return New(cfg, herdr.NewClient(""), state.New(herdr.NewClient(""), &state.Notifier{})), dir
+	return newServer(t, cfg, herdr.NewClient(""), state.New(herdr.NewClient(""), &state.Notifier{})), dir
 }
 
 func getHealth(s *Server, path, host string) (int, map[string]any) {

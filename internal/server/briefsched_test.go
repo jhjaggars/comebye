@@ -251,7 +251,7 @@ func TestBriefScheduleValidation(t *testing.T) {
 		t.Fatalf("dismiss nothing = %d", w.Code)
 	}
 	// It survives a restart.
-	s2 := New(Config{HostName: "desk", StateDir: s.cfg.StateDir}, nil, nil)
+	s2 := newServer(t, Config{HostName: "desk", StateDir: s.cfg.StateDir}, nil, nil)
 	if v := s2.briefSched.get().Schedule; !v.Enabled || v.At != "07:05" {
 		t.Fatalf("reloaded = %+v", v)
 	}

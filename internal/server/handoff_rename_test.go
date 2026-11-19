@@ -21,7 +21,7 @@ func handoffOnce(t *testing.T) (s *Server, fh *fakeLaunchHerdr, repo, wt string,
 	fh, client := startFakeLaunchHerdr(t)
 	list := []map[string]any{{"path": repo, "branch": "main", "is_linked_worktree": false}}
 	fh.set(func(f *fakeLaunchHerdr) { f.hook = worktreeHook(t, &list, nil) })
-	s = New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
+	s = newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" }
 	if w := do(s, "POST", "/api/handoffs", nil, `{"repo":"`+repo+`","branch":"feat/a","kind":"pi","brief":"A"}`); w.Code != 200 {
 		t.Fatalf("handoff = %d %s", w.Code, w.Body)
@@ -152,7 +152,7 @@ func TestRememberedKindStartFails(t *testing.T) {
 			return hook(m, p)
 		}
 	})
-	s := New(Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
 	s.findExec = func(string) bool { return false }
 	s.kinds.remember("pi", time.Now())
 	code, r := startWorkerReq(t, s, `{"repo":"`+repo+`","branch":"x","kind":"pi"}`)

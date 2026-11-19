@@ -91,7 +91,7 @@ func newReadRig(t *testing.T) *readRig {
 	t.Cleanup(cancel)
 	go fl.Run(ctx)
 	who := &fakeWhoIs{}
-	s := New(Config{
+	s := newServer(t, Config{
 		AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken,
 		WhoIs: who, AllowCap: testCap, StateDir: t.TempDir(),
 	}, nil, nil)
@@ -281,7 +281,7 @@ func TestPeerForwardsReadsToTheHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), Upstream: up, AgentToken: testToken}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), Upstream: up, AgentToken: testToken}, nil, nil)
 	for path, hubPath := range map[string]string{
 		"/api/agents/w2:p1/output":                   "/api/hosts/kube/agents/w2:p1/output",
 		"/api/agents/w2:p1/transcript":               "/api/hosts/kube/agents/w2:p1/transcript",

@@ -270,10 +270,10 @@ func TestPeerRestartMarksARunningJobInterrupted(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, HostName: "prov", StateDir: dir, NoLedger: true, AgentToken: testToken,
 		Provision: ProvisionConfig{Tool: &provision.Tool{Bin: w.bin, Config: "/etc/worker.conf"}}}
-	s := New(cfg, nil, nil)
+	s := newServer(t, cfg, nil, nil)
 	_, v := startPeerJob(t, s, "key-restart-1234")
 	time.Sleep(200 * time.Millisecond)
-	s2 := New(cfg, nil, nil) // the same state directory, as after a restart
+	s2 := newServer(t, cfg, nil, nil) // the same state directory, as after a restart
 	got := peerJob(t, s2, v.ID, 0)
 	if got.State != jobInterrupted || !strings.Contains(got.Msg, "restarted") {
 		t.Fatalf("after restart: %+v", got)

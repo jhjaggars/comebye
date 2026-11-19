@@ -159,7 +159,7 @@ func noticeHub(t *testing.T, p *noticePeer) *Server {
 	t.Helper()
 	pu, _ := url.Parse(httptestServer(t, p))
 	fl := fleet.New(nil, "desk", []fleet.Peer{{Name: "kube", URLs: []*url.URL{pu}}}, fleet.Options{Logf: func(string, ...any) {}})
-	s := New(Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, Fleet: fl, StateDir: t.TempDir()}, nil, nil)
 	s.noticeArriveWait = 20 * time.Millisecond
 	return s
 }

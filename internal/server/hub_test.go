@@ -19,7 +19,7 @@ import (
 )
 
 func TestSingleHostAPIShape(t *testing.T) {
-	s := New(Config{ReadLines: 100, HostName: "desk"}, nil, nil)
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk"}, nil, nil)
 	w := do(s, "GET", "/api/agents", nil, "")
 	var body struct {
 		Agents []json.RawMessage  `json:"agents"`
@@ -110,7 +110,7 @@ func TestHubServesPeers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go fl.Run(ctx)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl}, nil, nil)
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl}, nil, nil)
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 

@@ -97,7 +97,7 @@ func provPeerServer(t *testing.T, w *fakeWorkerDir) *Server {
 	if w != nil {
 		cfg.Provision = ProvisionConfig{Tool: &provision.Tool{Bin: w.bin, Config: "/etc/worker.conf"}}
 	}
-	return New(cfg, nil, nil)
+	return newServer(t, cfg, nil, nil)
 }
 
 var peerProvCalls = []struct{ name, method, path string }{
@@ -288,7 +288,7 @@ func provHub(t *testing.T, def string, peers map[string]*provPeer) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go fl.Run(ctx)
-	s := New(Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir(),
+	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, ReadLines: 100, Fleet: fl, AgentToken: testToken, StateDir: t.TempDir(),
 		Provision: ProvisionConfig{Host: def}}, nil, nil)
 	for name, p := range peers {
 		b, _ := json.Marshal(map[string]any{"name": name, "urls": []string{p.srv.URL}})

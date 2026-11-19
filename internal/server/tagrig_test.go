@@ -77,7 +77,7 @@ func newRigWith(t *testing.T, selfRegister bool, set func(*Config)) *tagRig {
 		WhoIs: who, SelfRegister: selfRegister,
 	}
 	set(&cfg)
-	s := New(cfg, nil, nil)
+	s := newServer(t, cfg, nil, nil)
 	r := &tagRig{t: t, fl: fl, who: who, worker: worker,
 		main: httptest.NewServer(s.Handler()),
 	}
