@@ -706,8 +706,8 @@ await check("more: stays visible with a very long name and title at phone width"
   if (w > 0) throw new Error("page scrolls horizontally by " + w);
 });
 
-// ---- the briefings screen: swipe left from the list, with history ----
-// A real touch swipe: CDP touch events (press, moves, release) at a pace.
+// ---- the briefings screen: opened from the ⋯ menu, with history ----
+// A real touch swipe (the list takes no sideways gesture: a check below drags one and expects nothing): CDP touch events (press, moves, release) at a pace.
 const cdp = await page.context().newCDPSession(page);
 async function swipe(x0, y0, x1, y1, { steps = 8, ms = 240, hold = false } = {}) {
   const pt = (x, y) => [{ x, y, id: 1 }];
@@ -730,8 +730,12 @@ const briefsState = () => page.evaluate(() => ({
 async function settle() { await page.waitForTimeout(450); }
 async function freshList() {
   await page.goto(base + "/", { waitUntil: "load" });
-  await page.waitForSelector("#pager:not([hidden])", { timeout: 8000 });
+  await page.waitForSelector("#btn-fleet", { timeout: 8000 });
   await page.waitForSelector("#agents .agent", { timeout: 8000 });
+}
+async function openBriefsFromMenu() {
+  await page.locator("#btn-fleet").click();
+  await page.locator("#f-briefs").click();
 }
 await check("briefings: history is kept and listed, newest first, the latest on top", async () => {
   // The hub merges briefings published within 15 minutes unless the Needs you
@@ -742,21 +746,21 @@ await check("briefings: history is kept and listed, newest first, the latest on 
   const h = await (await fetch(base + "/api/brief/history")).json();
   if (h.briefs.length < 3 || !h.briefs[0].markdown.includes("three") || !h.briefs[1].markdown.includes("two")) throw new Error(JSON.stringify(h).slice(0, 300));
   await freshList();
-  await page.locator("#pager").click();
+  await openBriefsFromMenu();
   await page.waitForFunction(() => document.querySelectorAll("#br-body .br-item").length >= 2, null, { timeout: 5000 });
   const t = await page.locator("#br-body").innerText();
   if (!/History three/.test(t.split("EARLIER")[0] || t) || !t.includes("History two") || !t.includes("History one")) throw new Error(t.slice(0, 300));
   await page.locator("#br-body .br-item summary").first().click();
   await page.waitForFunction(() => document.querySelector("#br-body .br-item[open] .md")?.innerText.includes("body two"), null, { timeout: 3000 });
 });
-await check("briefings: the pill opens it, the back button returns (and the URL follows)", async () => {
+await check("briefings: the menu item opens it, the back button returns (and the URL follows)", async () => {
   await freshList();
   let st = await briefsState();
   if (st.open || !st.inert || st.x < 380) throw new Error("not parked off-screen: " + JSON.stringify(st));
-  await page.locator("#pager").click();
+  await openBriefsFromMenu();
   await settle();
   st = await briefsState();
-  if (!st.open || st.inert || st.x !== 0 || st.hash !== "#/briefings") throw new Error("pill did not open it: " + JSON.stringify(st));
+  if (!st.open || st.inert || st.x !== 0 || st.hash !== "#/briefings") throw new Error("the menu item did not open it: " + JSON.stringify(st));
   await page.locator("#br-back").click();
   await settle();
   st = await briefsState();
@@ -780,189 +784,42 @@ await check("briefings: a cold start on #/briefings shows it without a slide", a
   const st = await briefsState();
   if (!st.open || st.x !== 0) throw new Error(JSON.stringify(st));
 });
-await check("briefings: swipe left opens it, swipe right returns", async () => {
+await check("briefings: at 390px a sideways drag on the list does nothing, and #/briefings still opens from the menu", async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await freshList();
-  await swipe(330, 500, 60, 505);
+  if (await page.locator("#pager").count()) throw new Error("the pager pill is still in the page");
+  const before = await briefsState();
+  await swipe(330, 500, 60, 505); // the old open gesture
   await settle();
-  let st = await briefsState();
-  if (!st.open || st.x !== 0 || st.hash !== "#/briefings") throw new Error("swipe left did not open it: " + JSON.stringify(st));
-  await swipe(60, 500, 330, 505);
+  await swipe(60, 500, 330, 505); // and its way back
   await settle();
-  st = await briefsState();
-  if (st.open || st.x < 380 || st.hash !== "") throw new Error("swipe right did not return: " + JSON.stringify(st));
-});
-await check("briefings: mid-swipe the screen follows the finger", async () => {
-  await freshList();
-  await swipe(330, 500, 130, 504, { hold: true });
-  await page.waitForTimeout(100);
-  const x = (await briefsState()).x;
-  await page.screenshot({ path: `${out}/briefings-mid-swipe.png` });
-  await release();
-  // 200px of finger: the left edge sits near 390 - 200 (the lock distance is not counted).
-  if (x < 190 || x > 260) throw new Error("screen at x=" + x + " with the finger 200px along");
+  await swipe(383, 500, 100, 504, { steps: 6, ms: 150 });
   await settle();
-});
-await check("briefings: a short slow drag snaps back; a short fast flick goes through", async () => {
-  await freshList();
-  await swipe(300, 500, 230, 503, { ms: 600 }); // 70px, slow
-  await settle();
-  let st = await briefsState();
-  if (st.open || st.x < 380) throw new Error("a short slow drag opened it: " + JSON.stringify(st));
-  await swipe(300, 500, 240, 502, { steps: 3, ms: 45 }); // 60px, fast
-  await settle();
-  st = await briefsState();
-  if (!st.open) throw new Error("a fast flick did not open it: " + JSON.stringify(st));
-});
-await check("briefings: a flick back the other way mid-drag cancels the open", async () => {
-  await freshList();
-  await swipe(330, 500, 150, 504, { steps: 6, ms: 300, hold: true });
-  for (const x of [165, 200, 260, 330]) { await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: 504, id: 1 }] }); await page.waitForTimeout(8); }
-  await release();
+  const after = await briefsState();
+  if (after.open || !after.inert || after.x < 380 || after.hash !== "" || after.listY !== before.listY) throw new Error("a sideways drag did something: " + JSON.stringify({ before, after }));
+  const sx = await page.evaluate(() => ({ x: scrollX, over: document.documentElement.scrollWidth - innerWidth }));
+  if (sx.x !== 0 || sx.over > 0) throw new Error("the page moved sideways: " + JSON.stringify(sx));
+  await page.screenshot({ path: `${out}/briefings-list-390.png` });
+  await openBriefsFromMenu();
   await settle();
   const st = await briefsState();
-  if (st.open || st.x < 380) throw new Error("a reversal still opened it: " + JSON.stringify(st));
+  if (!st.open || st.x !== 0 || st.hash !== "#/briefings") throw new Error("the menu did not open it: " + JSON.stringify(st));
+  await swipe(60, 500, 330, 505); // swiping right no longer returns
+  await settle();
+  const still = await briefsState();
+  if (!still.open) throw new Error("a swipe right closed it: " + JSON.stringify(still));
+  await page.screenshot({ path: `${out}/briefings-open-390.png` });
+  await page.locator("#br-back").click();
+  await settle();
+  if ((await briefsState()).open) throw new Error("the back button did not return");
 });
-await check("briefings: vertical scrolling on the list does not open it", async () => {
+await check("briefings: vertical scrolling on the list still scrolls it", async () => {
   await freshList();
   await page.evaluate(() => { document.querySelector("#agents").style.minHeight = "2400px"; });
-  await swipe(200, 600, 190, 200, { steps: 10, ms: 200 }); // up, with a little drift left
+  await swipe(200, 600, 190, 200, { steps: 10, ms: 200 });
   await settle();
   const st = await briefsState();
-  if (st.open || st.x < 380) throw new Error("a vertical swipe opened it: " + JSON.stringify(st));
-  if (st.listY < 100) throw new Error("the list did not scroll: " + JSON.stringify(st));
-});
-await check("briefings: a swipe that starts on a sideways-scrolling row scrolls the row, not the page", async () => {
-  await freshList();
-  await page.evaluate(() => {
-    const d = document.createElement("div");
-    d.id = "hscroll"; d.className = "host-filter"; d.style.cssText = "overflow-x:auto;white-space:nowrap;height:60px;background:#334";
-    d.innerHTML = '<div style="flex:none;width:1200px;height:40px">a wide row that scrolls sideways</div>';
-    document.querySelector("#agents").prepend(d);
-  });
-  const r = await page.evaluate(() => { const b = document.querySelector("#hscroll").getBoundingClientRect(); return { y: b.y + 20 }; });
-  await swipe(330, r.y, 60, r.y + 2);
-  await settle();
-  const st = await briefsState();
-  // The row scrolls on the compositor, which a loaded machine can be late with: wait for it rather than read once.
-  const sl = await page.waitForFunction(() => { const x = document.querySelector("#hscroll").scrollLeft; return x >= 50 ? x : false; }, null, { timeout: 4000 }).then((h) => h.jsonValue()).catch(() => page.evaluate(() => document.querySelector("#hscroll").scrollLeft));
-  if (st.open) throw new Error("opened from a scrolling row");
-  if (sl < 50) throw new Error("the row did not scroll (scrollLeft " + sl + ")");
-});
-await check("briefings: touches at the screen edges are left to the OS", async () => {
-  await freshList();
-  await swipe(383, 500, 100, 504); // starts at the right edge
-  await settle();
-  let st = await briefsState();
-  if (st.open) throw new Error("opened from the right edge");
-  await page.locator("#pager").click();
-  await settle();
-  await swipe(8, 500, 340, 504); // starts at the left edge: iOS back swipe territory
-  await settle();
-  st = await briefsState();
-  if (!st.open || st.x !== 0) throw new Error("a left-edge start was taken by the page: " + JSON.stringify(st));
-});
-await check("briefings: no swipe while an agent or the launch sheet is open", async () => {
-  await freshList();
-  await page.locator("#btn-launch").click();
-  await page.waitForSelector("#launch", { state: "visible" });
-  await swipe(330, 500, 60, 504);
-  await settle();
-  let st = await briefsState();
-  if (st.open) throw new Error("opened under the launch sheet");
-  await page.locator("#ln-close").click();
-  await openAgent("alpha");
-  await swipe(330, 500, 60, 504);
-  await settle();
-  st = await briefsState();
-  if (st.open) throw new Error("opened over an agent");
-});
-
-// ---- the Briefings chip stays at the bottom of the screen (phone) ----
-await check("pager: at 390px the chip stays at the bottom of the screen while a long To do item scrolls, clear of its last button", async () => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(base + "/", { waitUntil: "load" });
-  const ctx = Array.from({ length: 40 }, (_, i) => `- line ${i} of the context, long enough to wrap on a narrow screen`).join("\n");
-  const id = await page.evaluate(async (c) => {
-    const r = await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "Pager check: pick one?", kind: "decision", context: c, no_wait: true }) }).then((x) => x.json());
-    return r.todo.id;
-  }, ctx);
-  try {
-    await page.reload({ waitUntil: "load" });
-    await page.waitForSelector("#pager", { state: "visible" });
-    await page.waitForSelector("#todo .td-toggle", { state: "visible" });
-    if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
-    await page.locator(`#todo .td-item[data-id="${id}"] .td-row`).click();
-    await page.waitForSelector(`#todo .td-item.open[data-id="${id}"] .td-acts button`);
-    const geoOf = () => page.evaluate((i) => {
-      const r = document.getElementById("pager").getBoundingClientRect();
-      const bs = [...document.querySelectorAll(`#todo .td-item[data-id="${i}"] button`)], b = bs[bs.length - 1].getBoundingClientRect();
-      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, vh: innerHeight, vw: innerWidth, btnTop: b.top, btnBottom: b.bottom, sy: scrollY, max: document.documentElement.scrollHeight - innerHeight };
-    }, id);
-    const pinned = (g, at) => {
-      if (g.bottom > g.vh + 0.5 || g.bottom < g.vh - 60) throw new Error(`${at}: the chip is not at the bottom: ${JSON.stringify(g)}`);
-      if (Math.abs((g.left + g.right) / 2 - g.vw / 2) > 1.5) throw new Error(`${at}: the chip is not centred: ${JSON.stringify(g)}`);
-    };
-    await page.evaluate(() => scrollTo(0, 0));
-    await page.evaluate((i) => document.querySelector(`#todo .td-item[data-id="${i}"]`).scrollIntoView(), id);
-    pinned(await geoOf(), "top of the item");
-    await page.evaluate(() => scrollBy(0, 500));
-    const mid = await geoOf(); pinned(mid, "mid-scroll");
-    await page.screenshot({ path: `${out}/pager-mid.png` });
-    await page.evaluate(() => scrollTo(0, 1e7));
-    await page.waitForTimeout(150);
-    const end = await geoOf(); pinned(end, "end of the page");
-    if (end.sy < end.max - 2) throw new Error("did not reach the end: " + JSON.stringify(end));
-    await page.screenshot({ path: `${out}/pager-end.png` });
-    // The last button scrolls clear of the chip: it ends above the chip's top edge.
-    if (end.btnBottom > end.top) throw new Error("the chip covers the last button: " + JSON.stringify(end));
-  } finally {
-    await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id).catch(() => {});
-  }
-});
-await check("pager: at 390px an opened To do item's last option button ends above the chip at the end of the page, and can be tapped", async () => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(base + "/", { waitUntil: "load" });
-  const ctx = "Ways:\n\n1. **Rotate now.** wait\n2. **Rotate later.** no wait\n3. **Both.** why not\n\nMy recommendation: ok 1+3.";
-  const id = await page.evaluate(async (c) => (await fetch("/api/todos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "Pager options: which?", kind: "decision", context: c, no_wait: true }) }).then((x) => x.json())).todo.id, ctx);
-  try {
-    await page.reload({ waitUntil: "load" });
-    await page.waitForSelector("#pager", { state: "visible" });
-    await page.waitForSelector("#todo .td-toggle", { state: "visible" });
-    if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
-    await page.locator(`#todo .td-item[data-id="${id}"] .td-row`).click();
-    await page.waitForSelector(`#todo .td-item.open[data-id="${id}"] .td-opt`);
-    await page.evaluate(() => scrollTo(0, 1e7));
-    await page.waitForTimeout(150);
-    const g = await page.evaluate((i) => {
-      const p = document.getElementById("pager").getBoundingClientRect();
-      const bs = [...document.querySelectorAll(`#todo .td-item[data-id="${i}"] .td-opt, #todo .td-item[data-id="${i}"] button`)];
-      const b = bs.map((x) => x.getBoundingClientRect()).sort((x, y) => y.bottom - x.bottom)[0];
-      const hit = document.elementFromPoint(b.left + b.width / 2, b.bottom - 4);
-      return { pagerTop: p.top, btnBottom: b.bottom, vh: innerHeight, coveredBy: hit && hit.closest("#pager") ? "pager" : "" };
-    }, id);
-    await page.screenshot({ path: `${out}/pager-options-end.png` });
-    if (g.btnBottom > g.pagerTop || g.coveredBy) throw new Error("the chip covers the last button: " + JSON.stringify(g));
-  } finally {
-    await page.evaluate((i) => fetch("/api/todos/" + i + "/drop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), id).catch(() => {});
-  }
-});
-await check("pager: when the visual viewport differs from the layout one (pinch-zoomed), the chip follows the visible bottom", async () => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(base + "/", { waitUntil: "load" });
-  await page.waitForSelector("#pager", { state: "visible" });
-  const cdp = await page.context().newCDPSession(page);
-  try {
-    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1.5 });
-    await page.evaluate(() => { visualViewport.dispatchEvent(new Event("resize")); });
-    await page.waitForTimeout(150);
-    const g = await page.evaluate(() => { const r = document.getElementById("pager").getBoundingClientRect(), v = visualViewport; return { bottom: r.bottom, vvBottom: v.offsetTop + v.height, scale: v.scale, mid: (r.left + r.right) / 2, vvMid: v.offsetLeft + v.width / 2 }; });
-    if (Math.abs(g.scale - 1.5) > 0.01) throw new Error("page scale not applied: " + JSON.stringify(g)); // emulation broke
-    if (g.bottom > g.vvBottom + 0.5 || g.bottom < g.vvBottom - 20) throw new Error("the chip is not at the visible bottom: " + JSON.stringify(g));
-    if (Math.abs(g.mid - g.vvMid) > 2) throw new Error("the chip is not centred in the visible area: " + JSON.stringify(g));
-  } finally {
-    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 }).catch(() => {});
-    await cdp.detach().catch(() => {});
-  }
+  if (st.open || st.listY < 100) throw new Error("the list did not scroll: " + JSON.stringify(st));
 });
 
 // ---- desktop view (>= 1100px): two columns, the list and one pane ----
@@ -985,13 +842,12 @@ for (const width of [1280, 1920]) {
     await publishBrief("## Status\n\nDesktop panel check\n\nlong detail\n\n## Needs you\nNo decisions.");
     await desktopList(width);
     await page.waitForSelector("body.view-briefing #briefs.open .br-card");
-    const [l, d, e, b, c, pg, td] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefs"), geo("#briefing"), geo("#pager"), geo("#todo")]);
+    const [l, d, e, b, c, td] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefs"), geo("#briefing"), geo("#todo")]);
     if (!l.shown || l.x !== 0 || l.w < 300 || l.w > 400) throw new Error("list column: " + JSON.stringify(l));
     if (d.shown) throw new Error("agent pane shown with a page open");
     if (e.shown) throw new Error("the empty state shows over a page");
     if (!b.shown || Math.abs(b.x - (l.x + l.w)) > 2 || Math.abs(b.x + b.w - width) > 1 || b.h < 600) throw new Error("the Briefing page does not fill the pane beside the list: " + JSON.stringify(b));
     if (c.shown || (td && td.shown)) throw new Error("the latest-briefing or to-do card shows in the list column");
-    if (pg.shown) throw new Error("the pill shows on desktop");
     const t = await page.locator("#briefs").innerText();
     if (!t.includes("Desktop panel check")) throw new Error("latest briefing missing from the page: " + t.slice(0, 200));
     if (!(await page.locator("#briefs .br-item").count())) throw new Error("no history on the page");
@@ -2586,8 +2442,8 @@ await check("to-do accordion (desktop): one item open at a time; keys move, answ
   if (st.todo.state !== "answered" || st.todo.answer.text !== "jk typed") throw new Error("answer " + JSON.stringify(st.todo));
   if (await page.locator(row(ids[1])).count()) throw new Error("the answered item is still in the open list");
   if (await page.locator("#pt-body .td-g").getAttribute("aria-expanded") !== "false") throw new Error("the Answered group is not folded");
-  const counts = await page.evaluate(() => ({ open: todos.open, badge: document.querySelector('#nav .nv[data-page="todo"] .badge')?.textContent, pill: document.querySelector("#pager-todo").textContent }));
-  if (counts.badge !== String(counts.open) || counts.pill !== String(counts.open)) throw new Error("badge counts more than open items: " + JSON.stringify(counts));
+  const counts = await page.evaluate(() => ({ open: todos.open, badge: document.querySelector('#nav .nv[data-page="todo"] .badge')?.textContent }));
+  if (counts.badge !== String(counts.open)) throw new Error("badge counts more than open items: " + JSON.stringify(counts));
   await page.screenshot({ path: `${out}/todo-accordion-1280.png` });
   await page.locator("#pt-body .td-g").click();
   await page.waitForSelector(row(ids[1]));

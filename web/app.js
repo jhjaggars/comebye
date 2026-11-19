@@ -2335,8 +2335,6 @@ function todoPaint(el, html) {
 
 function renderTodos(force) {
   const main = $("todo"), page = $("pt-body");
-  const pill = $("pager-todo");
-  if (pill) { pill.hidden = !todos.open; pill.textContent = String(todos.open); }
   const moved = todoFollowRefresh();
   // A forced redraw, or one that moves to another item, goes ahead even while the user types.
   const again = !!force || moved || todos.follow;
@@ -3393,7 +3391,7 @@ function renderBrief() {
   const el = $("briefing");
   if (!el) return;
   renderFleetMenu();
-  renderPager();
+  renderBriefsNav();
   renderBriefs();
   let b = briefing.data;
   if (b && (!b.markdown.trim() || lsGet(BRIEF_DISMISSED_KEY) === b.at)) b = null;
@@ -3484,22 +3482,16 @@ function editBriefSchedule() {
   }, 80);
 }
 
-/* ---------- the briefings screen (swipe left from the agent list) ---------- */
+/* ---------- the briefings screen (the ⋯ menu's History item) ---------- */
 //
 // A page to the right of the list: the latest briefing in full, the
 // schedule and any missed-briefing note, and the earlier briefings the hub
-// kept (GET /api/brief/history, the last 48; briefings within 15 minutes merge). Reached by swiping left on the
-// list (the panel follows the finger, then snaps on distance or velocity),
-// by the pill at the bottom of the list, or by the ⋯ menu. Swiping right,
-// the back button, or the browser's back returns. The URL is #/briefings, so
-// back and reload behave. The gesture stays out of the way of vertical
-// scrolling, of the screen edges (the OS back gestures) and of anything that
-// scrolls sideways itself.
+// kept (GET /api/brief/history, the last 48; briefings within 15 minutes merge). Reached by the ⋯ menu's
+// History item; the back button or the browser's back returns. The URL is
+// #/briefings, so back and reload behave. There is no sideways gesture.
 
 const briefs = { open: false, pushed: false, history: [], digests: [], histAt: 0, histLoaded: false, inflight: false, openAts: new Set(), sig: "" };
 const BRIEFS_HASH = "#/briefings";
-const BRIEF_SEEN_KEY = "comebye-brief-seen"; // the `at` of the latest briefing seen on the screen
-const SWIPE = { lock: 10, edge: 20, fraction: 0.33, velocity: 0.45 }; // px, px, of the width, px/ms
 
 const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -3525,15 +3517,9 @@ async function loadBriefHistory() {
   renderBriefs();
 }
 
-// renderPager shows the pill that opens the screen, with a dot while the
-// latest briefing has not been seen there.
-function renderPager() {
-  const p = $("pager");
-  if (!p) return;
-  p.hidden = !briefsAvailable();
+// renderBriefsNav keeps the desktop page and the nav rows in step with the briefings.
+function renderBriefsNav() {
   syncDesktopBriefs();
-  const b = briefing.data;
-  $("pager-new").hidden = !(b && b.markdown.trim() && lsGet(BRIEF_SEEN_KEY) !== b.at);
   renderNav();
 }
 
@@ -3591,14 +3577,10 @@ function setBriefsOpen(open, animate) {
   const was = briefs.open;
   briefs.open = open;
   p.classList.toggle("anim", !!animate && !reducedMotion());
-  p.classList.remove("dragging");
-  $("pager").classList.remove("dragging");
   p.style.transform = "";
   p.classList.toggle("open", open);
   p.inert = !open;
   if (open && !was) {
-    const b = briefing.data;
-    if (b) { lsSet(BRIEF_SEEN_KEY, b.at); renderPager(); }
     briefs.sig = "";
     renderBriefs();
     loadBrief();
@@ -3607,18 +3589,18 @@ function setBriefsOpen(open, animate) {
     if (!isDesktop()) p.focus?.({ preventScroll: true });
   } else if (!open && was) {
     // Hand the focus back to where the user came from.
-    if (p.contains(document.activeElement)) $("pager").focus?.({ preventScroll: true });
+    if (p.contains(document.activeElement)) $("btn-fleet").focus?.({ preventScroll: true });
   }
 }
 
 // On desktop the screen is the Briefing page in the main pane: open while it
-// is the page shown (and the hub keeps briefings), no sliding, no gesture;
+// is the page shown (and the hub keeps briefings), no sliding;
 // its history entry is the page's own hash.
 function syncDesktopBriefs() {
   if (isDesktop() && state.view === "briefing" && !briefsAvailable()) { setView(null); return; } // the hub keeps none
   const desk = isDesktop(), want = desk && state.view === "briefing";
   if (want === briefs.open) { briefs.desk = want; return; }
-  if (!want && !briefs.desk) return; // phone: the swipe state is not ours to touch
+  if (!want && !briefs.desk) return; // phone: the slide state is not ours to touch
   briefs.pushed = false;
   briefs.desk = want;
   setBriefsOpen(want, false);
@@ -3651,126 +3633,13 @@ function syncBriefs() {
   setBriefsOpen(want, !!briefs.inited);
 }
 
-// ---- the gesture ----
-
-// scrollsSideways says whether something between the touch and the page
-// would scroll in that direction (dir < 0: the finger moves left, so the
-// content moves right), so the swipe leaves it alone.
-function scrollsSideways(el, root, dir) {
-  for (; el && el !== root && el.nodeType === 1; el = el.parentElement) {
-    if (el.scrollWidth <= el.clientWidth + 1) continue;
-    const ox = getComputedStyle(el).overflowX;
-    if (ox !== "auto" && ox !== "scroll") continue;
-    const max = el.scrollWidth - el.clientWidth;
-    if (dir < 0 ? el.scrollLeft < max - 1 : el.scrollLeft > 1) return true;
-  }
-  return false;
-}
-
 function anotherLayerOpen() {
   if (openPopName()) return true;
   return !!document.querySelector('[role="dialog"]:not([hidden])');
 }
 
-function installBriefsGesture() {
-  let g = null; // the touch in progress
-  const W = () => window.innerWidth;
-
-  const finish = (commit) => {
-    const opening = g.opening;
-    g = null;
-    if (opening) { if (commit) openBriefs(true); else setBriefsOpen(false, true); }
-    else if (commit) closeBriefs();
-    else setBriefsOpen(true, true);
-  };
-
-  document.addEventListener("pointerdown", (ev) => {
-    if (g || ev.pointerType !== "touch" || !ev.isPrimary || isDesktop()) return;
-    if (state.selected != null || !briefsAvailable()) return;
-    const opening = !briefs.open;
-    if (opening && (anotherLayerOpen() || $("list").style.display === "none")) return;
-    if (!opening && anotherLayerOpen()) return;
-    // The screen edges belong to the OS (iOS back swipe on the left, Android's on both).
-    if (ev.clientX < SWIPE.edge || ev.clientX > W() - SWIPE.edge) return;
-    if (ev.target.closest?.("input, textarea, select, [contenteditable]")) return;
-    g = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, opening, state: "pending", target: ev.target, samples: [{ t: ev.timeStamp, x: ev.clientX }], dx: 0 };
-  }, { passive: true });
-
-  document.addEventListener("pointermove", (ev) => {
-    if (!g || ev.pointerId !== g.id) return;
-    const dx = ev.clientX - g.x0, dy = ev.clientY - g.y0;
-    if (g.state === "pending") {
-      if (Math.abs(dx) < SWIPE.lock && Math.abs(dy) < SWIPE.lock) return;
-      const root = g.opening ? $("list") : $("briefs");
-      const right = g.opening ? dx < 0 : dx > 0; // the direction that moves the screen
-      // Mostly sideways, the right way, and not something that scrolls itself.
-      if (Math.abs(dx) < Math.abs(dy) * 1.6 || !right || scrollsSideways(g.target, root, Math.sign(dx))) { g = null; return; }
-      g.state = "drag";
-      g.x0 = ev.clientX; // start from here: no jump when the lock engages
-      $("briefs").classList.add("dragging");
-      $("briefs").classList.remove("anim");
-      $("pager").classList.add("dragging");
-      try { document.body.setPointerCapture?.(ev.pointerId); } catch {}
-      window.getSelection?.()?.removeAllRanges?.();
-    }
-    if (g.state !== "drag") return;
-    const w = W();
-    // Opening: the screen is at w + dx (dx <= 0). Closing: at dx (dx >= 0).
-    const off = g.opening ? Math.min(w, Math.max(0, w + (ev.clientX - g.x0))) : Math.min(w, Math.max(0, ev.clientX - g.x0));
-    g.dx = g.opening ? off - w : off;
-    $("briefs").style.transform = `translateX(${off}px)`;
-    g.samples.push({ t: ev.timeStamp, x: ev.clientX });
-    while (g.samples.length > 2 && ev.timeStamp - g.samples[0].t > 100) g.samples.shift();
-    ev.preventDefault?.();
-  }, { passive: false });
-
-  const end = (ev, cancelled) => {
-    if (!g || ev.pointerId !== g.id) return;
-    if (g.state !== "drag") { g = null; return; }
-    const s = g.samples, a = s[0], z = s[s.length - 1];
-    const v = z.t > a.t ? (z.x - a.x) / (z.t - a.t) : 0; // px/ms, negative = leftwards
-    const moved = Math.abs(g.dx);
-    const toward = g.opening ? v < -SWIPE.velocity : v > SWIPE.velocity;
-    const away = g.opening ? v > SWIPE.velocity : v < -SWIPE.velocity;
-    const commit = !cancelled && !away && (moved > W() * SWIPE.fraction || (toward && moved > 24));
-    // A drag must not also be a tap on whatever is under the finger.
-    const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
-    document.addEventListener("click", swallow, { capture: true, once: true });
-    setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 60);
-    finish(commit);
-  };
-  document.addEventListener("pointerup", (ev) => end(ev, false));
-  document.addEventListener("pointercancel", (ev) => end(ev, true));
-}
-
-// pinPager keeps the Briefings chip at the bottom of what the user sees. A
-// fixed element is placed against the layout viewport; on iOS (zoomed, or
-// with the layout viewport taller than the visible one) the two differ and
-// the chip floats mid-screen. The offsets below carry it back to the visual
-// viewport's bottom centre; they are 0 whenever the two agree.
-function pinPager() {
-  const vv = window.visualViewport, p = $("pager");
-  if (!vv || !p) return;
-  const set = () => {
-    const off = isDesktop();
-    // The chip's own size changes with the zoom: undo it so it stays the same on screen.
-    const s = vv.scale || 1;
-    const dy = off ? 0 : vv.offsetTop + vv.height - window.innerHeight;
-    const dx = off ? 0 : vv.offsetLeft + vv.width / 2 - window.innerWidth / 2;
-    p.style.setProperty("--pg-x", Math.abs(dx) < 0.5 ? "0px" : dx + "px");
-    p.style.setProperty("--pg-y", Math.abs(dy) < 0.5 ? "0px" : dy + "px");
-    p.style.setProperty("--pg-s", off || Math.abs(s - 1) < 0.01 ? "1" : String(1 / s));
-  };
-  vv.addEventListener("resize", set);
-  vv.addEventListener("scroll", set);
-  window.addEventListener("resize", set);
-  set();
-}
-
 function initBriefs() {
   briefs.inited = true;
-  pinPager();
-  $("pager").addEventListener("click", () => openBriefs(true));
   $("br-back").addEventListener("click", closeBriefs);
   $("briefs").addEventListener("click", onBriefClick);
   $("briefs").addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !anotherLayerOpen()) { ev.stopPropagation(); closeBriefs(); } });
@@ -3786,7 +3655,6 @@ function initBriefs() {
       if (h && md && !md.firstChild) md.innerHTML = renderMarkdown(h.markdown, "brief:" + at);
     } else briefs.openAts.delete(at);
   }, true);
-  installBriefsGesture();
   syncBriefs();
   syncDesktopBriefs();
 }
