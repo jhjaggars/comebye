@@ -6,6 +6,10 @@
 #   tools/ci/flakes.sh judge LOG            read run.sh's output; exit 1 if a failed check is not on the active list
 #   tools/ci/flakes.sh stress N             run each script that has an entry N times, whole (the nightly); exit 1 if any
 #                                           entry fails every time (a flake that fails sometimes is the point)
+#   tools/ci/flakes.sh repeat N [SCRIPT...] run each uitest script (default: every one run.sh knows) N times, JOBS (default 4)
+#                                           at a time, each on its own server; list the checks that failed in some runs but
+#                                           not all (FLAKY k/N) apart from those that failed every time (BROKEN); exit 1 if any
+#                                           is FLAKY. Not tied to the flaky list: this is how a new flake is found.
 #
 # judge prints which failures it let through and why, and appends the same to $GITHUB_STEP_SUMMARY.
 set -euo pipefail
@@ -67,5 +71,52 @@ Failed checks that block:$blocking"
       done < <(active)
     done
     exit $rc ;;
-  *) sed -n '2,12p' "$0"; exit 2 ;;
+  repeat)
+    n="${1:-3}"; shift || true
+    scripts="${*:-$(grep -o 'want [a-z]*;' "$here/../uitest/run.sh" | awk '{print $2}' | tr -d ';' | tr '\n' ' ')}"
+    jobs="${JOBS:-4}"; base="${REPEAT_PORT:-21000}"; scheme="${SCHEME:-dark}"
+    out="${OUT_DIR:-$(mktemp -d)}"; mkdir -p "$out"
+    app="${APP_DIR:-$here/../..}"
+    # One npm ci before the jobs start, not one per job racing on node_modules.
+    (cd "$here/../uitest" && { [ -d node_modules/playwright-core ] || npm ci --no-audit --no-fund --silent; })
+    declare -a slot=()
+    for script in $scripts; do
+      for i in $(seq "$n"); do
+        free=""
+        while [ -z "$free" ]; do
+          for k in $(seq 0 $((jobs - 1))); do
+            if [ -z "${slot[$k]:-}" ] || ! kill -0 "${slot[$k]}" 2>/dev/null; then free="$k"; break; fi
+          done
+          [ -n "$free" ] || sleep 1
+        done
+        # Each job has its own server, and ports base+1000*slot.. (run.sh uses up to +500 on top of its PORT).
+        ( SCRIPTS="$script" SCHEME="$scheme" PORT=$((base + 1000 * free)) "$here/../uitest/run.sh" "$app" "$out/$script-$i" > "$out/$script-$i.log" 2>&1
+          echo $? > "$out/$script-$i.rc" ) &
+        slot[$free]=$!
+      done
+    done
+    wait
+    rc=0; table=""
+    for script in $scripts; do
+      # The failed checks of each run, one per line; a run that failed with no FAIL line (a crash, a port taken) counts as its own check.
+      all=""
+      for i in $(seq "$n"); do
+        f="$(sed -n 's/^[[:space:]]*FAIL[[:space:]]\{1,\}//p' "$out/$script-$i.log" | sed 's/ -- .*$//' | sort -u)"
+        [ -z "$f" ] && [ "$(cat "$out/$script-$i.rc" 2>/dev/null || echo 1)" != 0 ] && f="(the script exited non-zero with no FAIL line; see its .log)"
+        all="$all
+$f"
+      done
+      while read -r cnt name; do
+        [ -n "$name" ] || continue
+        if [ "$cnt" -ge "$n" ]; then table="$table
+BROKEN $script / $name: failed $cnt of $n"
+        else table="$table
+FLAKY  $script / $name: failed $cnt of $n"; rc=1; fi
+      done < <(printf '%s\n' "$all" | grep -v '^$' | sort | uniq -c | sed -E 's/^ *([0-9]+) /\1 /')
+    done
+    if [ -z "$table" ]; then msg="No check failed in $n runs of each of: $scripts"; else msg="$(printf '%s\n' "$table" | sed '/^$/d')"; fi
+    echo "$msg"
+    [ -n "${GITHUB_STEP_SUMMARY:-}" ] && { echo "### Repeat runs ($n each)"; echo '```'; echo "$msg"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+    exit $rc ;;
+  *) sed -n '2,16p' "$0"; exit 2 ;;
 esac

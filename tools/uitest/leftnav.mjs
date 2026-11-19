@@ -40,9 +40,16 @@ async function open(width, dark) {
   page.on("pageerror", (e) => errs.push(e.message));
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#agents .agent");
-  // The fleet and the counts go in through the app's own state, then it draws.
+  // The app's first loads (the ledger and the to-do list) must be over, or one lands after the state below and replaces it
+  // (the single host of the test server hides the Peers button; an empty ledger hides Ready to remove).
+  await page.waitForFunction(() => ledger.on === true && !ledger.inflight && ledger.loadedAt > 0 && !todos.inflight && todos.loadedAt > 0);
+  // The fleet and the counts go in through the app's own state, then it draws. The app refreshes that state from the
+  // server's events and every few seconds, and the next refresh (on a slow runner, one that lands mid-check) would put
+  // the server's one-host fleet back: the loaders that set it are stubbed, as the other left-nav scripts stub setAgents.
   await page.evaluate((f) => {
-    state.hosts = f.hosts; setAgents(f); todos.on = true; todos.open = 3; ledger.on = true;
+    state.hosts = f.hosts; setAgents(f);
+    for (const fn of ["setAgents", "setLedger", "loadLedger", "loadTodos"]) window[fn] = () => {};
+    todos.on = true; todos.open = 3; ledger.on = true;
     ledger.marked = new Set(["a", "b", "c", "d", "e"]); renderList(); renderNav(); renderFleetMenu();
   }, fleet());
   await page.waitForTimeout(200);

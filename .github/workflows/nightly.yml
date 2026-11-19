@@ -128,6 +128,40 @@ jobs:
           export CHROME="$(command -v google-chrome || command -v chromium)"
           OUT_DIR="$RUNNER_TEMP/flaky" tools/ci/flakes.sh stress 5
 
+  # Every browser script three times (JOBS at a time, each on its own server), listing the checks that failed in some
+  # runs and not all: a new flake shows up here before it fails a push. Not in the report job's needs: it never makes the
+  # night red, only this job (read its step summary). By hand: tools/ci/flakes.sh repeat 3 [SCRIPT...].
+  repeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/uitest/package-lock.json
+
+      - name: every browser script, three runs each
+        run: |
+          export CHROME="$(command -v google-chrome || command -v chromium)"
+          OUT_DIR="$RUNNER_TEMP/repeat" tools/ci/flakes.sh repeat 3
+
+      - name: upload browser logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: repeat
+          path: ${{ runner.temp }}/repeat
+          if-no-files-found: ignore
+
   # The day in the life (tools/smoke), once more on main's head: a hardening slice's effect on normal use.
   day-in-the-life:
     runs-on: ubuntu-latest
