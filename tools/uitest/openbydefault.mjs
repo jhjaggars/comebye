@@ -144,7 +144,7 @@ for (const dark of [true, false]) {
         await store(page, null);
         await page.reload({ waitUntil: "load" });
         await page.waitForSelector("#sx-openthink-default");
-        same(await page.locator("#sx-view [role=radiogroup]").count(), 7, "seven radio groups");
+        same(await page.locator("#sx-view [role=radiogroup]").count(), 8, "eight radio groups");
         const sel = (id) => `[aria-labelledby="${id}"] .sx-radio[aria-checked="true"] .sx-rn`;
         same(await page.locator(sel("sx-openthink-lbl")).textContent(), "Off", "think default");
         same(await page.locator(sel("sx-opentools-lbl")).textContent(), "Off", "tools default");
