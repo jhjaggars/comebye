@@ -105,7 +105,7 @@ if want stt; then node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1 ; f
 
 # The Copy strip on code blocks (clipboard read back in headless Chrome).
 if want copycode; then node copycode.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want fontsetting; then node fontsetting.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want fontsetting; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node fontsetting.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want readcol; then node readcol.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want textsize; then node textsize.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want spacing; then node spacing.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

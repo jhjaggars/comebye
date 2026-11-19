@@ -31,34 +31,24 @@
       --elev-1: 0 2px 10px var(--sh-md); --elev-2: 0 6px 24px var(--sh-lg);
       --z-raised: 2; --z-pop: 5; --z-bar: 10; --z-view: 30; --z-backdrop: 34; --z-menu: 35; --z-popup: 36; --z-sheet: 37; --z-screen: 40; --z-scrim: 70; --z-toast: 100; --z-toast-over: 101; /* stacking order, low to high */
       --ring: 2px solid var(--focus); --ring-off: 2px; /* the one focus ring: colour from the theme, 2px offset; inset ones override --ring-off only */
-      /* Font families: every rule uses these roles. Default = the system stacks, so with no data-font on
-         <html> nothing changes and no font file is fetched. data-font is set from localStorage "comebye.font"
-         by themes.js; see the [data-font] rules after the @font-face block. */
+      /* Font families: every rule uses these roles. Default = the system sans and mono stacks. <html data-font="serif">
+         (localStorage "comebye.font", set by themes.js before first paint) swaps --ff-ui for the serif stack below. */
       --ff-sys: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       --ff-sysmono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      --ff-serif: "Geist Serif", Georgia, "Times New Roman", serif;
-      --ff-ui: var(--ff-sys); --ff-head: var(--ff-ui); --ff-read: var(--ff-ui); --ff-code: var(--ff-sysmono);
+      /* One system serif stack, no font file: Iowan Old Style (macOS/iOS), Charter (macOS/iOS, some Linux), Sitka Text
+         and Cambria (Windows), Noto Serif (Android, Linux), then Georgia. Chosen because each is a text face drawn for
+         screens, with a sturdy bold and a real italic, so emphasis in replies and Markdown needs no synthesizing. */
+      --ff-serif: "Iowan Old Style", Charter, "Bitstream Charter", "Sitka Text", Cambria, "Noto Serif", Georgia, "Times New Roman", serif;
+      --ff-ui: var(--ff-sys); --ff-code: var(--ff-sysmono);
       --safe-bottom: env(safe-area-inset-bottom, 0px);
     }
-    @font-face { font-family: "Geist Serif"; src: url("vendor/fonts/GeistSerif-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
-    @font-face { font-family: "Geist"; src: url("vendor/fonts/GeistSans-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
-    @font-face { font-family: "Geist Mono"; src: url("vendor/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
-    /* ---- Font setting: <html data-font="serif-heads | serif-reading | geist"> (themes.js sets it, before paint) ----
-       none           the system stacks; no font file is fetched
-       serif-heads    Geist Serif on the big headings only: screen and sheet titles, the open To do question,
-                      the briefing's first line, Markdown h1/h2. Not card titles or labels under 15px.
-       serif-reading  the above plus the reading text (briefing, To do context and answers, Markdown)
-       geist          Geist Sans for the UI and Geist Mono for code
-       Geist Serif ships Regular only (no bold, no italic): serif headings get weight 400 and no synthesized
-       bold; strong/em in serif reading text keep the browser's synthesized style so emphasis survives. */
-    html[data-font="geist"] { --ff-ui: "Geist", var(--ff-sys); --ff-code: "Geist Mono", var(--ff-sysmono); }
-    html[data-font="serif-heads"], html[data-font="serif-reading"] { --ff-head: var(--ff-serif); }
-    html[data-font="serif-reading"] { --ff-read: var(--ff-serif); }
-    html[data-font="serif-heads"] :is(header h1, header h2, #d-title, .st-ph, .bd-head, .pgs-title, .pgs-bar h2, .md h1, .md h2, .br-md h2, .td-item.open .td-q),
-    html[data-font="serif-reading"] :is(header h1, header h2, #d-title, .st-ph, .bd-head, .pgs-title, .pgs-bar h2, .md h1, .md h2, .br-md h2, .td-item.open .td-q) { font-family: var(--ff-head); font-weight: 400; font-synthesis: none; }
-    html[data-font="serif-reading"] :is(.md, .br-md, .td-ctx, .td-q, .td-answer-t, .bd-q, .td-panel) { font-family: var(--ff-read); }
-    html[data-font="serif-reading"] :is(.md, .br-md, .td-ctx, .td-q, .td-answer-t) :is(strong, b, em, i) { font-synthesis: weight style; }
-    html[data-font="geist"] :is(pre, code, kbd, samp) { font-family: var(--ff-code); }
+    /* ---- Font setting: <html data-font="serif"> puts the serif stack on the body, so every reading surface inherits it:
+       the conversation, To do, the briefing, Markdown, Pages chrome and the headings. Code stays monospace (--ff-code).
+       The key bar, the nav tabs, .btn and segmented buttons, select/input fields and kbd keys stay sans: small controls scan better in it. Other buttons
+       follow the page (many rows are buttons holding reading text) and the compose box is text, so it follows too. */
+    html[data-font="serif"] { --ff-ui: var(--ff-serif); }
+    html[data-font="serif"] :is(select, input, .keybar, kbd, .pnav, .host-filter, .hp-bar, .btn, .seg button, .bd-seg button, .bc-seg button, .pgs-seg button, .us-seg button, .sx-radio, .pop-x) { font-family: var(--ff-sys); }
+    html[data-font="serif"] :is(pre, code, samp, kbd) { font-family: var(--ff-code); }
     ::selection { background: var(--selection); }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     /* Scrollbars: thin, a quiet thumb and no track, wherever the OS draws classic ones (a Mac with "Show scroll bars: Always", or a mouse).
@@ -114,25 +104,25 @@
     .tp-sw i:nth-child(5) { background: var(--red); }
     .tp-sw i:nth-child(1) { background: var(--text); }
     #notify-panel { width: 300px; }
-    #theme-panel, #font-panel { width: 340px; }
+    #theme-panel { width: 340px; }
     #notify-panel .np-status { color: var(--muted); font-size: var(--fs-14); padding: var(--sp-2) var(--sp-14) 0; }
     #notify-panel .np-actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); padding: var(--sp-10) var(--sp-14) var(--sp-14); }
     #notify-panel .np-actions:not(:has(.btn:not([hidden]))) { display: none; }
     #notify-panel .btn { flex: 1 1 auto; padding: 0 var(--sp-12); }
     #notify-panel .btn[hidden] { display: none; }
-    #theme-panel .tp-list, #font-panel .tp-list { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-4) var(--sp-6); }
+    #theme-panel .tp-list { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-4) var(--sp-6); }
     #theme-panel .tp-row { display: flex; align-items: center; gap: var(--sp-4); }
     #theme-panel .tp-row .tp-opt { flex: 1; min-width: 0; }
-    #theme-panel .tp-opt, #font-panel .tp-opt {
+    #theme-panel .tp-opt {
       display: flex; align-items: center; gap: var(--sp-10); min-height: var(--hit-40); padding: var(--sp-4) var(--sp-10); text-align: left;
       background: none; color: var(--text); border: 1px solid transparent; border-radius: var(--r-10); font: inherit; font-size: var(--fs-14); cursor: pointer;
     }
-    #theme-panel .tp-opt[aria-checked="true"], #font-panel .tp-opt[aria-checked="true"] { border-color: var(--blue); }
-    #font-panel .tp-opt:focus-visible, #theme-panel .tp-opt:focus-visible, #theme-panel .tp-more:focus-visible, #theme-panel .tp-back:focus-visible { outline-offset: -2px; }
-    @media (hover: hover) { #theme-panel .tp-opt:hover, #font-panel .tp-opt:hover { background: var(--panel); } }
-    #theme-panel .tp-opt:focus-visible, #font-panel .tp-opt:focus-visible { background: var(--panel); }
-    #theme-panel .tp-name, #font-panel .tp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #theme-panel .tp-mode, #font-panel .tp-mode { color: var(--muted); font-size: var(--fs-12); }
+    #theme-panel .tp-opt[aria-checked="true"] { border-color: var(--blue); }
+    #theme-panel .tp-opt:focus-visible, #theme-panel .tp-more:focus-visible, #theme-panel .tp-back:focus-visible { outline-offset: -2px; }
+    @media (hover: hover) { #theme-panel .tp-opt:hover { background: var(--panel); } }
+    #theme-panel .tp-opt:focus-visible { background: var(--panel); }
+    #theme-panel .tp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #theme-panel .tp-mode { color: var(--muted); font-size: var(--fs-12); }
     #theme-panel .tp-more, #theme-panel .tp-back { flex: none; min-height: var(--hit-32); padding: 0 var(--sp-10); background: var(--btn-bg); color: var(--text); border: 0; border-radius: var(--r-8); font: inherit; font-size: var(--fs-13); cursor: pointer; white-space: nowrap; }
     #theme-panel .tp-back[hidden] { display: none; }
     #theme-panel .tp-hint { margin: var(--sp-2) var(--sp-14) var(--sp-10); min-height: 1.4em; color: var(--muted); font-size: var(--fs-13); }
@@ -1267,7 +1257,7 @@
     }
     @media (prefers-reduced-motion: reduce) { .pop, #sheet-bk { animation: none !important; } }
     /* The Theme and Font rows in Settings (a full-screen view, above popups) open these two panels: lift them, and the phone backdrop, over it. */
-    body:has(#settings:not([hidden])) :is(#theme-panel, #font-panel) { z-index: calc(var(--z-screen) + 2); }
+    body:has(#settings:not([hidden])) #theme-panel { z-index: calc(var(--z-screen) + 2); }
     body:has(#settings:not([hidden])) #sheet-bk { z-index: calc(var(--z-screen) + 1); }
 
     /* Ready-to-remove review. */
@@ -2988,7 +2978,7 @@
       <div class="mark-state" id="f-note" hidden></div>
       <div class="m-grp" role="presentation">View</div>
       <button type="button" role="menuitem" id="f-theme" class="has-side" aria-haspopup="dialog" aria-controls="theme-panel"><span id="f-theme-sw"></span><span class="m-grow">Theme</span><span class="m-side" id="f-theme-val">System</span></button>
-      <button type="button" role="menuitem" id="f-font" class="has-side" aria-haspopup="dialog" aria-controls="font-panel"><span class="m-grow">Font</span><span class="m-side" id="f-font-val">System sans</span></button>
+      <button type="button" role="menuitem" id="f-font" class="has-side"><span class="m-grow">Font</span><span class="m-side" id="f-font-val">Sans</span></button>
       <button type="button" role="menuitem" id="f-notify" class="has-side" aria-haspopup="dialog" aria-controls="notify-panel"><span class="m-grow">Notifications</span><span class="m-side" id="f-notify-val"></span></button>
       <div class="m-grp" role="presentation">Hub</div>
       <button type="button" role="menuitem" id="f-brief">Briefing</button>
@@ -3015,11 +3005,6 @@
       <div class="tp-list" id="tp-list" role="menu" aria-label="Theme"></div>
       <div class="tp-hint" id="tp-hint" aria-live="polite"></div>
       <div class="tp-sys" id="tp-sys" hidden></div>
-    </section>
-    <section id="font-panel" class="attach-menu pop" role="dialog" aria-label="Font" hidden>
-      <div class="grab" aria-hidden="true"><i></i></div>
-      <div class="pop-head"><span class="pop-title">Font</span><button type="button" class="pop-x" aria-label="Close the font picker">&times;</button></div>
-      <div class="tp-list" id="fp-list" role="menu" aria-label="Font"></div>
     </section>
     <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
     <div id="keybar" class="keybar"><span id="kb-mode" class="kb-mode" data-mode="NAV" role="status" aria-label="Keyboard mode">NAV</span><button type="button" id="kb-open" class="kb-hint" aria-label="Open the command palette"><span id="kb-hint"></span></button></div>

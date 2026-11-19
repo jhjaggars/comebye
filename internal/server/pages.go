@@ -956,6 +956,8 @@ code{background:var(--code);padding:1px 4px;border-radius:3px;font-size:.92em}pr
 table{border-collapse:collapse;display:block;overflow-x:auto}th,td{border:1px solid var(--line);padding:5px 9px}
 blockquote{margin-left:0;padding-left:12px;border-left:3px solid var(--line);color:var(--mut)}
 .u{color:var(--mut);font-size:.9em}
+:root.serif body{font-family:"Iowan Old Style",Charter,"Bitstream Charter","Sitka Text",Cambria,"Noto Serif",Georgia,"Times New Roman",serif}
+:root.serif code,:root.serif pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .mmd{overflow-x:auto;margin:1em 0;text-align:center}.mmd svg{max-width:100%;height:auto}
 </style></head><body><main id="out"><noscript>This page needs scripts to render.</noscript></main>
 `
@@ -976,6 +978,7 @@ window.addEventListener("message",function(e){var d=e.data;
  if(!d||typeof d!=="object"||d.type!=="comebye-theme"||!d.tokens||typeof d.tokens!=="object")return;
  var r=root;
  Object.keys(MAP).forEach(function(k){var v=d.tokens[k];if(typeof v==="string"&&v.length<=64&&COLOUR.test(v))r.style.setProperty(MAP[k],v)});
+ if(d.font==="serif"||d.font==="sans")r.classList.toggle("serif",d.font==="serif");
  if(d.scheme==="light"||d.scheme==="dark"){var ch=scheme!==null&&scheme!==d.scheme;scheme=d.scheme;r.style.colorScheme=d.scheme;if(ch)drawAll()}
  show()});
 try{parent.postMessage({type:"comebye-page-ready"},"*")}catch(e){}

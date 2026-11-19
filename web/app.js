@@ -4518,7 +4518,6 @@ const POPS = {
   cheats: { id: "cheats", noSheet: true, close: () => window.CMDK && CMDK.closeCheats(false), trigger: () => window.CMDK && CMDK.cheatFrom() },
   hosts: { id: "hp-pop", close: () => toggleHostPicker(false), trigger: () => $("hp-btn") },
   theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => sxRow("theme") || $("btn-fleet") },
-  font: { id: "font-panel", close: () => toggleFontPanel(false), trigger: () => sxRow("font") || $("btn-fleet") },
   pgsmenu: { id: "pgs-menu", close: () => pgsPop("pgsmenu", false), trigger: () => $("pgs-menub") },
   pgsinfo: { id: "pgs-infopop", close: () => pgsPop("pgsinfo", false), trigger: () => $("pgs-infob") },
   notify: { id: "notify-panel", close: () => toggleNotifyPanel(false), trigger: () => $("btn-notify") },
@@ -4778,49 +4777,27 @@ function initThemePanel() {
   window.matchMedia?.("(prefers-color-scheme: light)").addEventListener?.("change", sync);
 }
 
-/* ---------- font: the Font setting, next to Theme (themes.js owns the saved choice) ---------- */
+/* ---------- font: Sans or Serif (themes.js owns the saved choice; Settings > Appearance is the control) ---------- */
 
 function fontLabel() { return CT.FONTS.find((f) => f.id === CT.fontChoice()).name; }
 
-function renderFontPanel() {
-  const cur = CT.fontChoice();
-  $("fp-list").innerHTML = CT.FONTS.map((f) =>
-    '<button type="button" class="tp-opt" role="menuitemradio" aria-checked="' + (f.id === cur) + '" data-font-id="' + f.id + '">' +
-    '<span class="tp-name">' + esc(f.name) + '</span><span class="tp-mode">' + esc(f.sub) + "</span></button>").join("");
-}
-
+// Keep the fleet menu's value and the Settings radios true after a change here or in another tab.
 function applyFont() {
   CT.fontApply();
   const v = $("f-font-val");
   if (v) v.textContent = fontLabel();
-  sxRowVals();
-}
-
-function toggleFontPanel(show, anchor) {
-  const p = $("font-panel");
-  const open = show ?? p.hidden;
-  if (open === !p.hidden) return;
-  p.hidden = !open;
-  if (open) {
-    renderFontPanel();
-    placePop("font", anchor || $("btn-fleet"));
-    popOpened("font");
-    (p.querySelector('[aria-checked="true"]') || popItems(p)[0])?.focus();
-  } else {
-    popClosed("font");
-  }
 }
 
 function initFontPanel() {
-  $("fp-list").addEventListener("click", (ev) => {
-    const b = ev.target.closest("[data-font-id]");
-    if (!b) return;
-    CT.fontSet(b.dataset.fontId);
+  // The fleet menu's Font entry toggles Sans and Serif; the choice itself lives in Settings > Appearance.
+  $("f-font").addEventListener("click", fleetAction(() => {
+    CT.fontSet(CT.fontChoice() ? "" : "serif");
     applyFont();
     toast("Font: " + fontLabel());
-    closePop("font", true);
-  });
-  window.addEventListener("storage", () => { applyFont(); if (!$("font-panel").hidden) renderFontPanel(); });
+    if (sx.route) renderSettings();
+  }));
+  window.addEventListener("storage", (e) => { if (e.key === CT.KEY_FONT) applyFont(); });
+  applyFont();
 }
 
 function toggleFleetMenu(show, focus) {
@@ -7093,13 +7070,13 @@ async function pagesMade(id, ver) {
 // scheme:"light"|"dark", tokens:{"--bg":"#...", ...}} after the frame loads
 // and whenever the theme changes. Colours only, nothing else; the target
 // origin is "*" because an opaque origin cannot be named. A page that does not
-// listen ignores it.
+// listen ignores it. It also says font:"serif"|"sans" (the Font setting); the Markdown shell follows it.
 function pageThemeMessage() {
   const t = window.ComebyeThemes && ComebyeThemes.byId[document.documentElement.getAttribute("data-theme")];
   if (!t) return null;
   const tokens = {};
   for (const k of Object.keys(t.vars)) tokens["--" + k] = String(t.vars[k]);
-  return { type: "comebye-theme", scheme: t.mode, tokens };
+  return { type: "comebye-theme", scheme: t.mode, font: CT.fontChoice() === "serif" ? "serif" : "sans", tokens };
 }
 
 function pageFrames() { return document.querySelectorAll("#pgs-view iframe.pgs-frame, #rs iframe.pgs-frame"); }
@@ -7126,7 +7103,7 @@ window.addEventListener("message", (e) => {
 });
 
 // Every theme change (picker, preview, the OS scheme under System) sets data-theme.
-new MutationObserver(sendPageTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+new MutationObserver(sendPageTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-font"] });
 
 // ---- Comments on a page ----
 // The page is untrusted code in a sandboxed frame. The hub adds a small script
@@ -9554,8 +9531,10 @@ function sxAppearance() {
       <p class="sx-note">Sets only how a line first appears. One you open or close yourself stays as you left it. The preview above follows.</p></div>
     <h3 class="sx-grp">Theme and font</h3>
     <div class="sx-field sx-rows">
-      <button type="button" class="sx-row" id="sx-row-theme" data-sx="theme" aria-haspopup="menu"><span class="sx-rl">Theme</span><span class="sx-rv" id="sx-theme-val">${esc(themeLabel())}</span><span class="sx-chev" aria-hidden="true">›</span></button>
-      <button type="button" class="sx-row" id="sx-row-font" data-sx="font" aria-haspopup="menu"><span class="sx-rl">Font</span><span class="sx-rv" id="sx-font-val">${esc(fontLabel())}</span><span class="sx-chev" aria-hidden="true">›</span></button></div>
+      <button type="button" class="sx-row" id="sx-row-theme" data-sx="theme" aria-haspopup="menu"><span class="sx-rl">Theme</span><span class="sx-rv" id="sx-theme-val">${esc(themeLabel())}</span><span class="sx-chev" aria-hidden="true">›</span></button></div>
+    <div class="sx-field"><div class="sx-lbl" id="sx-font-lbl">Font</div>
+      ${sxRadios("font", "sx-font-lbl", CT.FONTS, CT.fontChoice())}
+      <p class="sx-note">Serif is for the text you read: replies, To do, the briefing, Markdown and Pages. Code stays monospace; the key bar, action buttons and form fields stay sans.</p></div>
     <div class="sx-field"><button type="button" class="btn" id="sx-reset" data-sx="reset">Reset to defaults</button>
       <p class="sx-note">Puts reading width, text size, spacing, wrapping and open by default back to the default. Your theme and font stay.</p></div>`;
 }
@@ -9564,13 +9543,12 @@ function sxAppearance() {
 // is the row, so Esc and a pick return the focus to it.
 const sxRow = (n) => { const b = $("sx-row-" + n); return b && b.isConnected && b.getClientRects().length ? b : null; };
 function sxOpenPanel(which) {
-  (which === "theme" ? toggleThemePanel : toggleFontPanel)(true, sxRow(which));
+  toggleThemePanel(true, sxRow(which));
 }
-// A pick, or another tab, changed the theme or font: keep the two rows' values true.
+// A pick, or another tab, changed the theme: keep the row's value true.
 function sxRowVals() {
-  const t = $("sx-theme-val"), f = $("sx-font-val");
+  const t = $("sx-theme-val");
   if (t) t.textContent = themeLabel();
-  if (f) f.textContent = fontLabel();
 }
 function sxReset() {
   CT.resetAppearance();
@@ -9594,7 +9572,7 @@ function sxFitPreview() {
 }
 
 // The choice for a radio group by its kind ("col", "rs", "sp"): the list, and how to save it.
-const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet], openthink: [CT.ONOFF, (v) => CT.openPart("think", !!v)], opentools: [CT.ONOFF, (v) => CT.openPart("tools", !!v)] });
+const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet], font: [CT.FONTS, CT.fontSet], openthink: [CT.ONOFF, (v) => CT.openPart("think", !!v)], opentools: [CT.ONOFF, (v) => CT.openPart("tools", !!v)] });
 function sxPick(kind, val) {
   const p = SX_PREFS()[kind];
   if (!p) return;
@@ -9754,8 +9732,8 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
-    case "col": case "rs": case "sp": case "wrap": case "openthink": case "opentools": sxPick(b.dataset.sx, b.dataset.val); break;
-    case "theme": case "font": sxOpenPanel(b.dataset.sx); break;
+    case "col": case "rs": case "sp": case "wrap": case "font": case "openthink": case "opentools": sxPick(b.dataset.sx, b.dataset.val); break;
+    case "theme": sxOpenPanel(b.dataset.sx); break;
     case "reset": sxReset(); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
@@ -9801,7 +9779,7 @@ function initSettings() {
   $("sx-view").addEventListener("keydown", sxColKey);
   // The strip is drawn for this window, and another tab can change the width: redraw the open screen.
   window.addEventListener("resize", () => { if (sx.route) renderSettings(); });
-  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP || e.key === CT.KEY_WRAP || e.key === CT.KEY_OPEN)) renderSettings(); });
+  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP || e.key === CT.KEY_WRAP || e.key === CT.KEY_OPEN || e.key === CT.KEY_FONT)) renderSettings(); });
   $("sx-view").addEventListener("submit", settingsSubmit);
 }
 
@@ -14140,7 +14118,6 @@ window.addEventListener("DOMContentLoaded", () => {
   $("f-theme").addEventListener("click", fleetAction(() => toggleThemePanel(true)));
   initThemePanel();
   applyTheme();
-  $("f-font").addEventListener("click", fleetAction(() => toggleFontPanel(true)));
   initFontPanel();
   applyFont();
   $("btn-fleet").addEventListener("keydown", (ev) => { if (ev.key === "ArrowDown" && $("f-menu").hidden) { ev.preventDefault(); toggleFleetMenu(true); } });

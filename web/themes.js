@@ -313,40 +313,28 @@
   API.set = (choice) => { ls.set(API.KEY, choice); API.apply(); };
   API.setSystem = (mode, id) => { ls.set(mode === "light" ? API.KEY_LIGHT : API.KEY_DARK, id); API.apply(); };
 
-  // The Font setting: localStorage "comebye.font" holds "" (system sans, the default) or one of FONTS' ids;
-  // fontApply puts it on <html data-font> before first paint, like the theme. A stored value this build does
-  // not know is ignored, so the default shows.
-  API.FONTS = [
-    { id: "", name: "System sans", sub: "default" },
-    { id: "serif-heads", name: "Serif headings", sub: "big headings only" },
-    { id: "serif-reading", name: "Serif reading", sub: "briefing, To do, Markdown" },
-    { id: "geist", name: "Geist Sans + Mono", sub: "UI and code" },
-  ];
-  API.KEY_FONT = "comebye.font";
-  API.fontChoice = () => {
-    let v = "";
-    try { v = ls.get(API.KEY_FONT) || ""; } catch (e) { /* no storage: the default */ }
-    return API.FONTS.some((f) => f.id === v) ? v : "";
-  };
-  API.fontApply = () => {
-    const v = API.fontChoice(), el = document.documentElement;
-    if (v) el.setAttribute("data-font", v); else el.removeAttribute("data-font");
-    return v;
-  };
-  API.fontSet = (id) => { try { ls.set(API.KEY_FONT, id); } catch (e) { /* not saved */ } API.fontApply(); };
-  API.fontApply();
-
   // Device-level appearance choices (Settings > Appearance): localStorage "comebye.<name>" holds "" (the default)
   // or one of the list's ids; apply puts it on <html data-<name>> before first paint, and web/index.html turns it
   // into a CSS variable. A value this build does not know shows the default. Per device: a phone and a 3440
   // monitor want different values. One helper builds the Choice/Apply/Set trio for each (COLS, RS).
-  const pref = (name, list) => {
+  const pref = (name, list, legacy) => {
     const key = "comebye." + name, attr = "data-" + name;
-    const choice = () => { const v = ls.get(key) || ""; return list.some((c) => c.id === v) ? v : ""; };
+    const choice = () => { let v = ls.get(key) || ""; if (legacy && v in legacy) v = legacy[v]; return list.some((c) => c.id === v) ? v : ""; };
     const apply = () => { const v = choice(), el = document.documentElement; if (v) el.setAttribute(attr, v); else el.removeAttribute(attr); return v; };
     const set = (id) => { ls.set(key, id); apply(); };
     return { key, choice, apply, set };
   };
+  // The font: Sans (the system sans stack, the default) or Serif (one system serif stack for the reading text; web/index.html
+  // reads <html data-font>). Builds before this one stored "serif-heads", "serif-reading" or "geist": the first two are
+  // Serif now, geist and anything unknown show Sans, and the stored value is rewritten once so it is clean.
+  API.FONTS = [
+    { id: "", name: "Sans", sub: "system sans, the default" },
+    { id: "serif", name: "Serif", sub: "for reading and writing" },
+  ];
+  const font = pref("font", API.FONTS, { "serif-heads": "serif", "serif-reading": "serif" });
+  API.KEY_FONT = font.key; API.fontChoice = font.choice; API.fontApply = font.apply; API.fontSet = font.set;
+  try { const raw = ls.get(font.key); if (raw && raw !== font.choice()) { if (font.choice()) ls.set(font.key, font.choice()); else ls.del(font.key); } } catch (e) { /* not saved */ }
+  font.apply();
   // The reading width.
   API.COLS = [
     { id: "", name: "Comfortable", px: 820, sub: "820 px, the default" },

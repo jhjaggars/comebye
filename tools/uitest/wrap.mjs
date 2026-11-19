@@ -121,7 +121,7 @@ for (const dark of [true, false]) {
         await store(page, null);
         await page.reload({ waitUntil: "load" });
         await page.waitForSelector("#sx-wrap-default");
-        same(await page.locator("#sx-view [role=radiogroup]").count(), 6, "six radio groups");
+        same(await page.locator("#sx-view [role=radiogroup]").count(), 7, "seven radio groups");
         const sel = '[aria-labelledby="sx-wrap-lbl"] .sx-radio[aria-checked="true"] .sx-rn';
         same(await page.locator(sel).textContent(), "Off", "default checked");
         same(await page.locator("#sx-view .sx-grp").first().textContent(), "Code and conversation", "group heading");

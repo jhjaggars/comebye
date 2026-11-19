@@ -1,9 +1,9 @@
-// Settings > Appearance, last slice: the Theme and Font rows and Reset to defaults. Reset removes every layout
+// Settings > Appearance, last slice: the Theme row, the Font radios and Reset to defaults. Reset removes every layout
 // choice (comebye.col, rs, sp, wrap, open) and not the theme or font; the page follows at once with no reload;
 // the conversation then has the default layout at 390, 1280 and 3440 (column 820 or the pane, text 15 px, line
-// height 1.55, wrap off, nothing open); another tab follows by the storage event; the Theme and Font rows open
-// the same panels as the fleet menu (anchored at the row, Esc and a pick return to the row) and show the
-// current value; everything is reachable by keyboard. Light and dark.
+// height 1.55, wrap off, nothing open); another tab follows by the storage event; the Theme row opens
+// the fleet menu's panel (anchored at the row, Esc and a pick return to the row) and shows the
+// current value, the Font is a Sans/Serif radio pair; everything is reachable by keyboard. Light and dark.
 //
 //   node appearancereset.mjs BASE OUT_DIR
 import { launch } from "./lib.mjs";
@@ -56,7 +56,7 @@ for (const dark of [true, false]) {
     const { browser, page } = await session(w, hgt, dark);
     await check(`${w} ${tag}: change everything, Reset restores the default layout at once; theme and font stay; no reload`, async () => {
       await settings(page);
-      await page.evaluate(() => { localStorage.setItem("comebye.font", "geist"); localStorage.setItem("comebye.theme", "dracula"); });
+      await page.evaluate(() => { localStorage.setItem("comebye.font", "serif"); localStorage.setItem("comebye.theme", "dracula"); });
       await page.reload({ waitUntil: "load" }); await page.waitForSelector("#sx-reset");
       await changeAll(page);
       const before = await attrs(page);
@@ -65,10 +65,10 @@ for (const dark of [true, false]) {
       await page.locator("#sx-reset").click();
       const a = await attrs(page);
       for (const k of ATTRS) same(a[k], null, k + " removed at once");
-      same(a["data-font"], "geist", "font stays"); same(a["data-theme"] !== null, true, "theme stays");
+      same(a["data-font"], "serif", "font stays"); same(a["data-theme"] !== null, true, "theme stays");
       const s = await stored(page);
       for (const k of KEYS) same(s[k], null, "comebye." + k + " removed");
-      same(s.font, "geist", "stored font"); same(s.theme, "dracula", "stored theme");
+      same(s.font, "serif", "stored font"); same(s.theme, "dracula", "stored theme");
       same(await page.evaluate(() => window.__mark), 1, "no reload");
       for (const [k, v] of [["col", ""], ["rs", ""], ["sp", ""], ["wrap", ""], ["openthink", ""], ["opentools", ""]]) {
         same(await page.locator(`#sx-${k}-default`).getAttribute("aria-checked"), "true", k + " shows the default");
@@ -82,7 +82,7 @@ for (const dark of [true, false]) {
       // and it stays after a reload
       await page.reload({ waitUntil: "load" }); await page.waitForSelector("#chat .tr-line");
       for (const k of ATTRS) same(await page.evaluate((k) => document.documentElement.getAttribute(k), k), null, k + " after reload");
-      same((await attrs(page))["data-font"], "geist", "font after reload");
+      same((await attrs(page))["data-font"], "serif", "font after reload");
     });
     await check(`${w} ${tag}: the changed layout really differs before Reset (so the reset proves something)`, async () => {
       await settings(page);
@@ -98,21 +98,14 @@ for (const dark of [true, false]) {
   // Rows: same panels, values, anchored at the row, focus back; keyboard.
   for (const [w, hgt] of [[390, 844], [1280, 800]]) {
     const { browser, page } = await session(w, hgt, dark);
-    await check(`${w} ${tag}: Theme and Font rows show the current value and open the fleet menu's panels; a pick updates the row and focus returns to it`, async () => {
+    await check(`${w} ${tag}: Theme row shows the value and opens the fleet menu's panel, the Font radios apply; focus returns`, async () => {
       await settings(page);
       await page.evaluate(() => { localStorage.removeItem("comebye.font"); });
       await page.reload({ waitUntil: "load" }); await page.waitForSelector("#sx-reset");
-      same(await page.locator("#sx-font-val").textContent(), "System sans", "font value");
-      await page.locator("#sx-row-font").click();
-      await page.locator("#font-panel").waitFor({ state: "visible" });
-      same(await page.locator("#font-panel .tp-opt").count(), 4, "same four fonts");
-      if (w > 600) { const r = await page.evaluate(() => { const a = document.getElementById("sx-row-font").getBoundingClientRect(), p = document.getElementById("font-panel").getBoundingClientRect(); return p.top >= a.bottom - 1; }); same(r, true, "panel under the row"); }
-      await page.screenshot({ path: `${out}/areset-${w}-${tag}-fontpanel.png` });
-      await page.locator('#font-panel .tp-opt:has(.tp-name:text-is("Serif reading"))').click();
-      await page.locator("#font-panel").waitFor({ state: "hidden" });
-      same(await page.locator("#sx-font-val").textContent(), "Serif reading", "row value follows");
-      same(await page.evaluate(() => document.documentElement.getAttribute("data-font")), "serif-reading", "applied");
-      same(await page.evaluate(() => document.activeElement.id), "sx-row-font", "focus back on the row");
+      same(await page.locator("#sx-font-default").getAttribute("aria-checked"), "true", "font shows Sans");
+      await page.locator("#sx-font-serif").click();
+      same(await page.evaluate(() => document.documentElement.getAttribute("data-font")), "serif", "applied");
+      same(await page.evaluate(() => document.activeElement.id), "sx-font-serif", "focus stays on the radio");
       // theme
       await page.locator("#sx-row-theme").click();
       await page.locator("#theme-panel").waitFor({ state: "visible" });
@@ -128,24 +121,23 @@ for (const dark of [true, false]) {
       same((await page.locator("#sx-theme-val").textContent()).includes("Dracula"), true, "row shows Dracula");
       // Reset leaves both
       await page.locator("#sx-reset").click();
-      same(await page.evaluate(() => [document.documentElement.getAttribute("data-theme"), document.documentElement.getAttribute("data-font")]), ["dracula", "serif-reading"], "theme+font survive reset");
-      same(await page.locator("#sx-font-val").textContent(), "Serif reading", "font row after reset");
+      same(await page.evaluate(() => [document.documentElement.getAttribute("data-theme"), document.documentElement.getAttribute("data-font")]), ["dracula", "serif"], "theme+font survive reset");
+      same(await page.locator("#sx-font-serif").getAttribute("aria-checked"), "true", "font radio after reset");
     });
-    await check(`${w} ${tag}: the fleet menu keeps Theme and Font`, async () => {
+    await check(`${w} ${tag}: the fleet menu keeps Theme and a Font toggle`, async () => {
       await page.goto(base + "/#/", { waitUntil: "load" });
       await page.locator("#btn-fleet").click();
-      await page.locator("#f-font").click();
-      await page.locator("#font-panel").waitFor({ state: "visible" });
+      same(await page.locator("#f-font").count(), 1, "f-font exists");
       await page.keyboard.press("Escape");
       same(await page.locator("#f-theme").count(), 1, "f-theme exists");
     });
-    await check(`${w} ${tag}: keyboard reaches the rows and Reset; Enter opens a picker, Reset works from the keyboard`, async () => {
+    await check(`${w} ${tag}: keyboard reaches the Theme row and Reset; Reset works from the keyboard`, async () => {
       await settings(page);
       await radio(page, "sp", "roomy");
       await page.locator("#sx-opentools-on").focus();
       const seen = [];
       for (let i = 0; i < 6 && seen.indexOf("sx-reset") < 0; i++) { await page.keyboard.press("Tab"); seen.push(await page.evaluate(() => document.activeElement.id)); }
-      same(seen.includes("sx-row-theme") && seen.includes("sx-row-font") && seen.includes("sx-reset"), true, "Tab reaches both rows and Reset: " + seen);
+      same(seen.includes("sx-row-theme") && seen.includes("sx-reset"), true, "Tab reaches the Theme row and Reset: " + seen);
       await page.keyboard.press("Enter");
       same(await page.evaluate(() => document.documentElement.getAttribute("data-sp")), null, "Enter on Reset resets");
       const h = await page.evaluate(() => document.getElementById("sx-reset").getBoundingClientRect().height);
