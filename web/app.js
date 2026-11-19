@@ -7092,9 +7092,19 @@ async function pagesLoad() {
   if (pgs.route) renderPages();
 }
 
+// The search box's has:script term (also what the Interactive chip toggles): only the pages that run JavaScript.
+// pgsQuery splits it from the words, which match the list's metadata and, on the hub, the pages' text.
+const PGS_SCRIPT = "has:script";
+function pgsQuery(q) {
+  const words = String(q || "").trim().split(/\s+/).filter(Boolean);
+  const rest = words.filter((w) => w.toLowerCase() !== PGS_SCRIPT);
+  return { script: rest.length !== words.length, text: rest.join(" ") };
+}
+
 function pagesFiltered() {
-  const q = pgs.q.trim().toLowerCase();
+  const pq = pgsQuery(pgs.q), q = pq.text.toLowerCase();
   let a = pgs.items;
+  if (pq.script) a = a.filter((p) => p.script);
   if (pgs.chip === "rev") a = a.filter((p) => p.version > 1);
   else if (pgs.chip !== "all") a = a.filter((p) => p.host === pgs.chip);
   if (q) a = a.filter((p) => [p.title, p.by, p.host, p.id, p.key, p.kind, p.handoff].some((v) => String(v || "").toLowerCase().includes(q)));
@@ -7110,7 +7120,9 @@ function pagesChips() {
   const hosts = [...new Set(pgs.items.map((p) => p.host).filter(Boolean))].sort();
   if (pgs.chip !== "all" && pgs.chip !== "rev" && !hosts.includes(pgs.chip)) pgs.chip = "all";
   const cs = [["all", "All " + pgs.items.length], ["rev", "Revised"], ...hosts.map((h) => [h, h])];
-  return cs.map(([k, label]) => `<button type="button" class="pgs-chip" data-chip="${esc(k)}" aria-pressed="${pgs.chip === k}">${esc(label)}</button>`).join("");
+  const js = pgs.items.some((p) => p.script) || pgsQuery(pgs.q).script;
+  return cs.map(([k, label]) => `<button type="button" class="pgs-chip" data-chip="${esc(k)}" aria-pressed="${pgs.chip === k}">${esc(label)}</button>`).join("")
+    + (js ? `<button type="button" class="pgs-chip" data-script="1" aria-pressed="${pgsQuery(pgs.q).script}" title="Pages that run JavaScript (the search term ${PGS_SCRIPT})">Interactive</button>` : "");
 }
 
 // pgsMarked is a snippet from the hub, as HTML: text with \x02 and \x03 around the matched words,
@@ -7126,7 +7138,8 @@ function pagesBodySearch() {
   clearTimeout(pgs.bodyTimer);
   const q = pgs.q.trim();
   const seq = ++pgs.bodySeq;
-  if (q.length < 2) { if (pgs.body) { pgs.body = null; renderPages(); } return; }
+  // has:script alone is the list's own filter: there is no text to look for
+  if (pgsQuery(q).text.length < 2) { if (pgs.body) { pgs.body = null; renderPages(); } return; }
   pgs.bodyTimer = setTimeout(async () => {
     try {
       const d = await api("/api/pages?q=" + encodeURIComponent(q));
@@ -7177,7 +7190,7 @@ function renderPages() {
       return `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">${pgsThumb(p)}${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span class="pgs-txt">
         <span class="pgs-title">${esc(p.title)}</span>
         <span class="pgs-line"><span class="pgs-by">${esc(p.by)}</span>${p.host ? `<span class="pgs-meta">${esc(p.host)}</span>` : ""}</span>
-        <span class="pgs-line"><span class="pgs-meta" title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-pill">v${p.version}</span></span></span></a>`;
+        <span class="pgs-line"><span class="pgs-meta" title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-tags">${p.script ? `<span class="pgs-pill pgs-js" title="Runs JavaScript">JS</span>` : ""}<span class="pgs-pill">v${p.version}</span></span></span></span></a>`;
     };
     const body = pgs.body && pgs.body.q === pgs.q.trim() ? pgs.body.matches.filter((m) => pgs.items.some((p) => p.id === m.id)) : [];
     const hit = (m) => {
@@ -7685,6 +7698,13 @@ function initPages() {
     const b = ev.target.closest("button[data-chip]");
     if (!b) return;
     pgs.chip = b.dataset.chip; renderPages();
+  });
+  $("pgs-chips").addEventListener("click", (ev) => { // Interactive: add or remove has:script in the search box
+    if (!ev.target.closest("button[data-script]")) return;
+    const pq = pgsQuery(pgs.q);
+    pgs.q = pq.script ? pq.text : (PGS_SCRIPT + " " + pq.text).trim();
+    $("pgs-q").value = pgs.q;
+    renderPages(); pagesBodySearch();
   });
   $("pages").addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && (!$("pgs-menu").hidden || !$("pgs-infopop").hidden)) return; // the popover answers it
