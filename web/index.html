@@ -1594,6 +1594,7 @@
     .td-acts button:disabled { opacity: 0.5; cursor: default; }
     .td-acts .td-drop { margin-left: auto; color: var(--muted); }
     .td-acts button:focus-visible { outline-offset: 1px; }
+    .td-acts .td-open[aria-disabled="true"] { opacity: 0.5; cursor: help; }
     /* The decision set's bar sits in a column that can be narrow: the buttons share the row and shrink, never push past the edge. */
     .ds-bar, .ds-bar .td-acts { min-width: 0; max-width: 100%; box-sizing: border-box; }
     .ds-bar .td-acts button { flex: 1 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }

@@ -2131,7 +2131,7 @@ function reviewBarHtml(t) {
   return `<div class="td-form rv-bar">${stale}
       <div class="rv-btns"><button type="button" class="btn primary rv-good"${busy} title="Closes the item. You can undo for a few seconds. Key: 1"><kbd>1</kbd> ✓ Looks good</button><button type="button" class="btn warn rv-chg" aria-expanded="${!!st}"${busy} title="Add a note and file a Fix item. Key: 2"><kbd>2</kbd> ✎ Needs changes</button><button type="button" class="btn rv-chat" data-page="${escAttr(t.page.id)}"${busy}${pgs.chatBusy ? ' aria-busy="true"' : ""}${pgsChatOff.get(t.page.id) ? ` aria-disabled="true" title="${escAttr(pgsChatOff.get(t.page.id))}"` : ` title="${RV_CHAT_TITLE}"`}>💬 Chat about this</button></div>
       ${kinds}
-      <div class="rv-foot"><div class="rv-route">${reviewRouteLine(t)}</div><div class="td-acts"><button type="button" class="td-drop">Drop</button></div></div></div>`;
+      <div class="rv-foot"><div class="rv-route">${reviewRouteLine(t)}</div><div class="td-acts">${todoOpenBtn(t)}<button type="button" class="td-drop">Drop</button></div></div></div>`;
 }
 
 // reviewVerdict sends the verdict. The hub closes the item and holds the message to the worker until the Undo window
@@ -2344,6 +2344,42 @@ document.addEventListener("error", (ev) => {
   if (box) box.classList.remove("has-img");
 }, true);
 
+// The agent an item is about, for its "Open session" button: the one it is waiting on, else the one that filed it, else the one
+// running the handoff it links to. null when the item names none. live is the agent in the fleet now (not one that has gone,
+// or that a restarted host has replaced); why is the plain reason there is no session to open.
+function todoSessionAgent(t) {
+  const cands = [];
+  const add = (id, name) => { if (id && !cands.some((c) => c.id === id)) cands.push({ id, name: name || "" }); };
+  if (t.waiting && t.waiting.id && !t.waiting.gone) add(t.waiting.id, t.waiting.name);
+  add(t.created_by_id, t.created_by);
+  for (const l of t.links || []) {
+    const e = l.handoff ? (ledger.entries || []).find((x) => x.id === l.handoff) : null;
+    if (e && e.agent_id) add(e.agent_id, e.name || e.branch);
+  }
+  if (!cands.length) return t.waiting && t.waiting.id ? { id: t.waiting.id, name: t.waiting.name || "", live: false, why: `${t.waiting.name || "The agent"} is no longer running, so there is no session to open.` } : null;
+  const c = cands.find((x) => agentById(x.id));
+  if (c) return { id: c.id, name: c.name, live: true, why: "" };
+  return { ...cands[0], live: false, why: `${cands[0].name || "The agent"} is no longer running, so there is no session to open.` };
+}
+// The button: it opens that agent's session with the prompt box focused, and leaves the item as it is. With no live agent it is
+// greyed (still reachable by keyboard, so its reason can be read) and says why.
+function todoOpenBtn(t) {
+  const s = todoSessionAgent(t);
+  if (!s) return "";
+  return s.live
+    ? `<button type="button" class="td-open" data-agent="${escAttr(s.id)}" title="${escAttr(`Open ${s.name || "the agent"}'s session to read it and type to it. This item stays open.`)}">Open session</button>`
+    : `<button type="button" class="td-open" aria-disabled="true" data-why="${escAttr(s.why)}" title="${escAttr(s.why)}">Open session</button>`;
+}
+// todoOpenSession: the same view as opening the agent from the list, then the prompt box.
+function todoOpenSession(btn) {
+  if (btn.getAttribute("aria-disabled") === "true") { toast(btn.dataset.why || "That agent is no longer running.", true); return; }
+  const id = btn.dataset.agent;
+  if (!agentById(id)) { toast("That agent is no longer running, so there is no session to open.", true); return; }
+  rsLeave(); // the split's history entry must not be popped after the agent route is pushed
+  openDetail(id);
+  requestAnimationFrame(() => { const p = $("prompt-text"); if (p && p.offsetParent) p.focus(); });
+}
+
 // asPanel: only the panel, for the split review mode's side (the Page is beside it, so no row and no thumbnail).
 function todoItemHtml(t, pfx, asPanel) {
   const at = Date.parse(t.created_at);
@@ -2423,6 +2459,7 @@ function todoItemHtml(t, pfx, asPanel) {
             ${ans || isRel ? "" : sttMicHtml("todo:" + t.id)}
             ${t.suggested && !ans ? `<button type="button" class="td-keep" title="Make this a real item">Keep</button><button type="button" class="td-dismiss" data-why="not_a_question">Not a question</button><button type="button" class="td-dismiss" data-why="already_handled">Already handled</button>` : ""}
             ${ans || isRel ? "" : `<button type="button" class="td-answer-btn"${busy}>Answer</button>`}
+            ${todoOpenBtn(t)}
             <button type="button" class="td-done"${busy}>Done</button>
             <button type="button" class="td-drop"${busy}>Drop</button>
           </div>${after}
@@ -2501,7 +2538,7 @@ function setBarHtml(t) {
   return `<div class="td-form ds-bar"><div class="ds-st">${setStatusHtml(t)}</div>
     <div class="td-acts"><button type="button" class="ds-all"${lock ? " disabled" : ""}>Accept all suggestions</button>
     <button type="button" class="ds-submit td-answer-btn"${lock || why ? " disabled" : ""}${why ? ` title="${escAttr(why)}"` : ""}>Submit to agent</button>
-    <button type="button" class="td-done">Done</button><button type="button" class="td-drop">Drop</button></div>${why ? `<div class="td-after">${esc(why)}. Held-back one-way doors wait for you; warnings do not stop Submit.</div>` : ""}</div>`;
+    ${todoOpenBtn(t)}<button type="button" class="td-done">Done</button><button type="button" class="td-drop">Drop</button></div>${why ? `<div class="td-after">${esc(why)}. Held-back one-way doors wait for you; warnings do not stop Submit.</div>` : ""}</div>`;
 }
 
 function setBodyHtml(t) {
@@ -3589,8 +3626,10 @@ function onTodoClick(ev) {
   const item = ev.target.closest(".td-item");
   if (!item) return;
   const id = item.dataset.id;
+  const ob = ev.target.closest(".td-open");
+  if (ob) { todoOpenSession(ob); return; }
   const ag = ev.target.closest(".td-agent");
-  if (ag) { if (rsActive()) { todos.openId = null; renderTodos(true); } openDetail(ag.dataset.agent); return; }
+  if (ag) { rsLeave(); openDetail(ag.dataset.agent); return; }
   if (ev.target.closest(".td-reptog")) {
     ev.preventDefault();
     const d = item.querySelector("details.td-rep");
@@ -3608,7 +3647,7 @@ function onTodoClick(ev) {
   if (ev.target.closest(".rv-send")) { reviewVerdict(id, "changes", item); return; }
   if (ev.target.closest(".rv-cancel")) { todos.rv.delete(id); renderTodos(true); return; }
   const setT = todos.items.find((x) => x.id === id);
-  if (setT && setT.set && !ev.target.closest(".td-row, .td-agent, .td-done, .td-drop") && setClick(ev, setT)) return;
+  if (setT && setT.set && !ev.target.closest(".td-row, .td-agent, .td-open, .td-done, .td-drop") && setClick(ev, setT)) return;
   const opt = ev.target.closest(".td-opt");
   if (opt) {
     if (!item.querySelector(".td-text")) return;

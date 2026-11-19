@@ -153,6 +153,8 @@ if want pagefixed; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state
 if want reviewcard; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node reviewcard.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # An expanded To do item (and the split review mode) does not trap navigation: header, fleet menu, agent, Page link, Back.
 if want todonav; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node todonav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# "Open session" on a To do item: the agent in its detail view with the prompt focused, the item untouched; none, gone, set and split cases.
+if want todoopen; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node todoopen.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Passkeys (issue #3, slice 1): Settings, register with Chrome's virtual authenticator (PRF on), rename, remove, the approval item in To do.
 if want passkeys; then COMEBYE_STATE_DIR="$tmp/state" node passkeys.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # GPG unlock (issue #3, slice 3): the Set up and Unlock cards, with the real CLI and gpg in a throwaway GNUPGHOME and the virtual authenticator's PRF.
