@@ -3,7 +3,7 @@
 //
 //   node parked.mjs BASE OUT_DIR       (env: SCHEME)
 // The hub's answers are mocked, so the check does not depend on the shared fleet.
-import { launch } from "./lib.mjs";
+import { launch, shotOf } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
 const dark = process.env.SCHEME !== "light";
@@ -58,7 +58,7 @@ for (const width of [390, 1280]) {
     if (!/Recently closed 3/.test(g.head) || !g.edited || g.scroll || !g.inside) throw new Error("section " + JSON.stringify(g));
     const cost = await page.evaluate(() => document.querySelector(".parked-sec .pk-cost")?.textContent || "");
     if (!/3 kept: 1\.1 GB of worktrees, 30 MB of sessions, 330 MB of scratchpads moved off \/tmp/.test(cost)) throw new Error("cost line: " + cost);
-    await page.locator(".parked-sec").screenshot({ path: `${out}/parked-section-${width}.png` });
+    await shotOf(page, ".parked-sec", `${out}/parked-section-${width}.png`);
   });
 
   await check(`resume sheet at ${width}px: what is kept, Resume posts the record id`, async () => {
@@ -110,6 +110,7 @@ for (const width of [390, 1280]) {
     const ids = await page.evaluate(() => {
       const mk = (pane, st, name) => ({ ...state.agents[0], pane_id: pane, id: (state.agents[0].host ? state.agents[0].host + "/" : "") + pane, name, agent: "claude", agent_status: st, background: undefined, blocked_on: undefined });
       const a = mk("w91:p1", "idle", "park-me"), b = mk("w92:p1", "working", "busy-one");
+      window.setAgents = () => {}; // the app's next refresh would put the server's agents back (a goto drops this)
       state.agents = [a, b]; renderList();
       return [agentId(a), agentId(b)];
     });
@@ -131,6 +132,7 @@ for (const width of [390, 1280]) {
     await page.evaluate(() => {
       const mk = (pane, name, hint) => ({ ...state.agents[0], pane_id: pane, id: (state.agents[0].host ? state.agents[0].host + "/" : "") + pane, name, agent: "claude", agent_status: "idle",
         background: undefined, blocked_on: undefined, park_hint: hint ? { since: new Date(Date.now() - 30 * 3600e3).toISOString() } : undefined });
+      window.setAgents = () => {}; // as above
       state.agents = [mk("w81:p1", "idle-a", true), mk("w82:p1", "idle-b", true), mk("w83:p1", "fresh-c", false)];
       renderList();
     });

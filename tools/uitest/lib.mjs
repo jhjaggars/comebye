@@ -95,3 +95,11 @@ export async function dumpFailure({ page, out, name, err, log = [] }) {
 export function stamped(log, t0 = Date.now()) {
   return { push: (s) => log.push(`+${String(Date.now() - t0).padStart(6)}ms ${s}`) };
 }
+
+// A screenshot of what one selector covers, taken as a clip of the page. locator.screenshot holds an element handle,
+// and the app redraws its lists on every refresh: a redraw between the handle and the shot fails the check with "Element
+// is not attached to the DOM". The box is read and shot in one go instead.
+export async function shotOf(page, selector, path) {
+  const box = await page.evaluate((sel) => { const b = document.querySelector(sel).getBoundingClientRect(); return { x: b.left + scrollX, y: b.top + scrollY, width: b.width, height: b.height }; }, selector);
+  await page.screenshot({ path, clip: box, fullPage: true });
+}

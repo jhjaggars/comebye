@@ -2,7 +2,7 @@
 // herdr: after a prompt is sent, the reply must show without re-selecting
 // the agent, in the chat view and in the raw terminal view, and switching
 // agents must not show the previous agent's view.
-import { launch, mockLaunchRoutes, dumpFailure, stamped } from "./lib.mjs";
+import { launch, mockLaunchRoutes, dumpFailure, stamped, shotOf } from "./lib.mjs";
 import { releaseView } from "./relfix.mjs";
 import { boardView } from "./boardfix.mjs";
 import fs from "node:fs";
@@ -949,7 +949,7 @@ for (const width of [390, 1280]) {
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
     for (const cs of ["dark", "light"]) {
       await page.emulateMedia({ colorScheme: cs });
-      await page.locator("#agents").screenshot({ path: `${out}/landing-states-${width}-${cs}.png` });
+      await shotOf(page, "#agents", `${out}/landing-states-${width}-${cs}.png`);
     }
     await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
     await page.evaluate(() => { for (let i = 1; i <= 17; i++) ledger.byAgent.delete(`uit/w${i}:p1`); });
@@ -994,7 +994,7 @@ for (const width of [390, 1280]) {
         { id: "uit/w2:p1", host: "uit", pane_id: "w2:p1", name: "feat-add-host-slice2", agent: "claude", agent_status: "done", cwd: "/x", background: [{ kind: "bash", label: "race + uitest", since: iso0(4 * 60e3) }] },
         { id: "uit/w1:p1", host: "uit", pane_id: "w1:p1", name: "feat-other", agent: "claude", agent_status: "done", cwd: "/x" },
         { id: "uit/w4:p1", host: "uit", pane_id: "w4:p1", name: "feat-busy", agent: "claude", agent_status: "working", cwd: "/x" }]; renderListRows(); });
-      await page.locator("#agents").screenshot({ path: `${out}/background-waiting-${width}-${cs}.png` });
+      await shotOf(page, "#agents", `${out}/background-waiting-${width}-${cs}.png`);
     }
     await page.emulateMedia({ colorScheme: process.env.SCHEME === "light" ? "light" : "dark" });
   });
