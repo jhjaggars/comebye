@@ -209,7 +209,9 @@ func TestWorkerArgsAreNarrow(t *testing.T) {
 func TestFinishedNoticeHeldWhileBackgroundRuns(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	idle := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
-	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, idle)
+	// Not in the fleet cbFinished observes: its own delivery pass would send the notice as soon as the report is captured,
+	// before the background task below is in place (on a slow machine it did). Only this test's calls see the coordinator.
+	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"})
 	var bgMu sync.Mutex
 	bg := []transcript.BackgroundTask{{ID: "b1", Tool: "Bash", Desc: "uitest"}}
 	s.latest = func(context.Context, string, string) *transcript.Latest {

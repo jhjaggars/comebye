@@ -3077,30 +3077,39 @@ await check("search page: the results stack above the session when the pane is n
   await page.setViewportSize({ width: 1440, height: 800 });
 });
 
+// The app replaces state.agents from the server on every fleet event, and a check that edits an agent in it (a host, a
+// session, a status) loses the edit the moment one arrives, which on a slow runner is mid-check. freezeAgents stubs
+// setAgents until thawAgents; a navigation drops the stub with the page.
+const freezeAgents = () => page.evaluate(() => { if (!window.__setAgents) { window.__setAgents = window.setAgents; window.setAgents = () => {}; } });
+const thawAgents = () => page.evaluate(() => { if (window.__setAgents) { window.setAgents = window.__setAgents; delete window.__setAgents; } }).catch(() => {});
+
 await check("search page: Open agent leaves for the agent, and Back restores the same query and session", async () => {
-  await desktopList(1440, "#/search?q=" + encodeURIComponent("connection refused"));
-  await page.waitForSelector(".rc-card", { timeout: 5000 });
-  await page.locator(".rc-card", { hasText: "Long session" }).click();
-  await page.waitForSelector(".rc-stitle", { timeout: 5000 });
-  if (await visible("#rc-open")) throw new Error("Open agent on a session with no live agent");
-  const want = await page.evaluate(() => location.hash);
-  // Make one live agent hold this session (the fixture's agents hold other sessions).
-  await page.evaluate(() => {
-    const a = state.agents[0];
-    a.host = "devbox"; a.agent_session = { kind: "id", value: "22222222-bbbb-4bbb-8bbb-222222222222" };
-    renderRecallSession();
-  });
-  await page.waitForSelector("#rc-open", { timeout: 3000 });
-  await page.locator("#rc-open").click();
-  await page.waitForSelector("#detail", { state: "visible" });
-  await page.waitForSelector("#recall", { state: "hidden" });
-  await page.goBack();
-  await page.waitForSelector("#recall", { state: "visible" });
-  await page.waitForSelector(".rc-stitle", { timeout: 5000 });
-  if ((await page.evaluate(() => location.hash)) !== want) throw new Error("hash " + (await page.evaluate(() => location.hash)));
-  if ((await page.locator("#rc-q").inputValue()) !== "connection refused") throw new Error("query lost: " + (await page.locator("#rc-q").inputValue()));
-  if (!/Long session/.test(await page.locator(".rc-stitle").innerText())) throw new Error("another session");
-  if (!(await page.locator(".rc-card.current").count())) throw new Error("the open session is not marked");
+  try {
+    await desktopList(1440, "#/search?q=" + encodeURIComponent("connection refused"));
+    await page.waitForSelector(".rc-card", { timeout: 5000 });
+    await page.locator(".rc-card", { hasText: "Long session" }).click();
+    await page.waitForSelector(".rc-stitle", { timeout: 5000 });
+    if (await visible("#rc-open")) throw new Error("Open agent on a session with no live agent");
+    const want = await page.evaluate(() => location.hash);
+    // Make one live agent hold this session (the fixture's agents hold other sessions).
+    await freezeAgents();
+    await page.evaluate(() => {
+      const a = state.agents[0];
+      a.host = "devbox"; a.agent_session = { kind: "id", value: "22222222-bbbb-4bbb-8bbb-222222222222" };
+      renderRecallSession();
+    });
+    await page.waitForSelector("#rc-open", { timeout: 3000 });
+    await page.locator("#rc-open").click();
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForSelector("#recall", { state: "hidden" });
+    await page.goBack();
+    await page.waitForSelector("#recall", { state: "visible" });
+    await page.waitForSelector(".rc-stitle", { timeout: 5000 });
+    if ((await page.evaluate(() => location.hash)) !== want) throw new Error("hash " + (await page.evaluate(() => location.hash)));
+    if ((await page.locator("#rc-q").inputValue()) !== "connection refused") throw new Error("query lost: " + (await page.locator("#rc-q").inputValue()));
+    if (!/Long session/.test(await page.locator(".rc-stitle").innerText())) throw new Error("another session");
+    if (!(await page.locator(".rc-card.current").count())) throw new Error("the open session is not marked");
+  } finally { await thawAgents(); }
 });
 
 await check("search page: on the phone it is a full page with a Back arrow", async () => {
@@ -3723,6 +3732,7 @@ await check("keys: stop and interrupt are in the palette only, behind a confirm"
     S("k " + (await sel())); await page.keyboard.press("k");
     await atRow(1);
     // Two agents that need you, whatever the earlier checks left answered (the next list update would undo it, so press at once).
+    await freezeAgents();
     const blocked = await page.evaluate(() => {
       const rs = [...document.querySelectorAll("#agents .agent[data-id]")].filter((r) => r.offsetParent);
       for (const r of [rs[0], rs[2]]) { const a = agentById(r.dataset.id); if (a) a.agent_status = "blocked"; }
@@ -3762,7 +3772,7 @@ await check("keys: stop and interrupt are in the palette only, behind a confirm"
     await page.keyboard.press("Escape");
     await page.waitForSelector("#cheats", { state: "hidden" });
     if ((await act()) !== before) throw new Error(`focus not restored: ${before} -> ${await act()}`);
-    } catch (e) { throw new Error(step + ": " + String(e.message).split("\n")[0]); }
+    } catch (e) { throw new Error(step + ": " + String(e.message).split("\n")[0]); } finally { await thawAgents(); }
   });
 
   await check("keys: m marks the open agent; the existing To do keys still work", async () => {

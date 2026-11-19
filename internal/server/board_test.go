@@ -124,7 +124,13 @@ func TestBoardLanesFromRecords(t *testing.T) {
 
 func TestBoardNotesAndHeadlineFromTheBriefing(t *testing.T) {
 	s, _, _ := todoServer(t)
-	e, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "feat/x", AgentName: "oc-pr-4025", Status: ledger.Waiting, Brief: "b"})
+	// Waiting behind a step that has not reported. With no step to wait for, the board's own ledger pass would release the
+	// entry (releaseQueued starts it in a goroutine) and it could be a running handoff by the time the board is read.
+	step, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "feat/step", AgentName: "step", Status: ledger.Running, Brief: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "feat/x", AgentName: "oc-pr-4025", Status: ledger.Waiting, After: []string{step.ID}, Brief: "b"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -177,13 +177,20 @@ func TestReviewNeedsChangesFilesLinkedFix(t *testing.T) {
 	if f2.Kind != "followup" || !strings.HasPrefix(f2.Question, "Idea for later:") {
 		t.Fatalf("idea = %+v", f2)
 	}
-	// The verdict is told right away, with the Fix id.
+	// Each verdict is told right away, with its Fix id. The two notices go out from separate goroutines, so their order is
+	// not the order the verdicts were given: wait for both and look for the first one's among them.
 	s.deliverReviewRoutes(s.fleet.Agents())
-	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(*sent) >= 1 })
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(*sent) >= 2 })
 	mu.Lock()
 	defer mu.Unlock()
-	if !strings.Contains((*sent)[0], got.Review.FixID) || !strings.Contains((*sent)[0], "Needs changes") {
-		t.Fatalf("sent = %v", *sent)
+	told := false
+	for _, m := range *sent {
+		if strings.Contains(m, got.Review.FixID) && strings.Contains(m, "Needs changes") {
+			told = true
+		}
+	}
+	if !told {
+		t.Fatalf("no notice names the Fix %s: sent = %v", got.Review.FixID, *sent)
 	}
 	// A closed review takes no second verdict.
 	if w := do(s, "POST", "/api/todos/"+it.ID+"/verdict", userHdr, `{"verdict":"good"}`); w.Code != 409 {
