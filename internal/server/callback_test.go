@@ -34,9 +34,20 @@ func cbFinished(t *testing.T, s *Server, replyTo *ledger.Ref, others ...herdr.Ag
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The observer ends each pass by delivering waiting notices to whoever is in the fleet it was given. With the
+	// requester in `others`, the pass that captures the report can send the notice as soon as the capture goroutine has
+	// finished, before the test has set up its own condition (a busy requester, a failing send, a background task): on a
+	// slow machine it did, and the test saw one prompt too many. The in-flight guard makes those passes skip this entry;
+	// it is lifted once the report is in, so the test's own deliverCallbacks sends.
+	s.coord.mu.Lock()
+	s.coord.calling[e.ID] = time.Now().Add(time.Minute)
+	s.coord.mu.Unlock()
 	s.observeLedger(append([]herdr.AgentInfo{cbAgent("w9:p1", "feat-x", herdr.StatusWorking)}, others...))
 	s.observeLedger(append([]herdr.AgentInfo{cbAgent("w9:p1", "feat-x", herdr.StatusIdle)}, others...))
 	waitFor(t, func() bool { g, _ := s.ledger.Get(e.ID); return g.FinalReport != "" })
+	s.coord.mu.Lock()
+	delete(s.coord.calling, e.ID)
+	s.coord.mu.Unlock()
 	return e
 }
 
@@ -209,9 +220,7 @@ func TestWorkerArgsAreNarrow(t *testing.T) {
 func TestFinishedNoticeHeldWhileBackgroundRuns(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	idle := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
-	// Not in the fleet cbFinished observes: its own delivery pass would send the notice as soon as the report is captured,
-	// before the background task below is in place (on a slow machine it did). Only this test's calls see the coordinator.
-	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"})
+	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, idle)
 	var bgMu sync.Mutex
 	bg := []transcript.BackgroundTask{{ID: "b1", Tool: "Bash", Desc: "uitest"}}
 	s.latest = func(context.Context, string, string) *transcript.Latest {
