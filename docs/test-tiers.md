@@ -46,6 +46,12 @@ SHOTS=1 tools/uitest/run.sh      # a screenshot after every drive.mjs check (oth
 
 Several suites on one machine need different bases: `PORT=24741 tools/uitest/run.sh`.
 
+## Heavy local runs are capped
+
+`tools/ci/gotest.sh`, `tools/ci/browser.sh`, `tools/uitest/run.sh` and `tools/ci/flakes.sh repeat|stress` re-run themselves inside `tools/ci/capped.sh`: `systemd-run --user --scope -p MemoryMax=N -p MemorySwapMax=0`, so a runaway run is killed by the kernel instead of freezing the machine. N is the lower of 40% of RAM and 24G; `CAP_MEM=8G` sets it, `CAP_MEM=off` disables it. Without user systemd (a container, a runner) the command runs uncapped and one line says so. On CI (`CI` or `GITHUB_ACTIONS` set) nothing changes.
+
+Locally, parallelism is bounded too (`tools/ci/jobs.sh`): `JOBS` for `flakes.sh repeat` defaults to min(4, cores/4); a larger `JOBS` is lowered to cores/2 unless `JOBS_FORCE=1`; `go test -p` is capped at cores/2 (`GOTEST_P=n`). **Do not run two heavy suites at once** (two `repeat` runs, or `repeat` beside a `-race` loop): each is capped alone, but two together can still starve the machine. `tools/ci/capped_test.sh` checks the wrapper (an allocator over the cap is killed, the fallback path, the JOBS rules).
+
 ## Test mode
 
 `comebye -test-mode` (off by default; `run.sh` and `dev.sh` set it) makes the app poll every 300 ms (the side

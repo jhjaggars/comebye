@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# go test -race, optionally one half of the work.
+# go test -race (with -p capped locally), optionally one half of the work.
 #
 #   tools/ci/gotest.sh                       every package
 #   tools/ci/gotest.sh PKG...                just these packages (go test's own patterns)
@@ -12,12 +12,15 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
+[ -n "${COMEBYE_CAPPED:-}" ] || exec "$(dirname "${BASH_SOURCE[0]}")/capped.sh" "${BASH_SOURCE[0]}" "$@"
+. "$(dirname "${BASH_SOURCE[0]}")/jobs.sh"
+pflag=(); [ -n "$COMEBYE_GOP" ] && pflag=(-p "$COMEBYE_GOP")
 shard=""
 if [ "${1:-}" = "--shard" ]; then shard="$2"; shift 2; fi
 
 if [ -z "$shard" ]; then
-  if [ $# -gt 0 ]; then exec go test -race "$@"; fi
-  exec go test -race ./...
+  if [ $# -gt 0 ]; then exec go test -race "${pflag[@]}" "$@"; fi
+  exec go test -race "${pflag[@]}" ./...
 fi
 
 n="${shard%/*}"; of="${shard#*/}"
@@ -26,10 +29,10 @@ names="$(go test -list '.*' ./internal/server | grep -E '^Test' | sort)"
 odd="$(echo "$names" | awk 'NR%2==1' | paste -sd'|')"
 even="$(echo "$names" | awk 'NR%2==0' | paste -sd'|')"
 if [ "$n" = 1 ]; then
-  exec go test -race -run "^($odd)\$" ./internal/server
+  exec go test -race "${pflag[@]}" -run "^($odd)\$" ./internal/server
 fi
 rc=0
-go test -race -run "^($even)\$" ./internal/server || rc=1
+go test -race "${pflag[@]}" -run "^($even)\$" ./internal/server || rc=1
 # shellcheck disable=SC2046
-go test -race $(go list ./... | grep -v '/internal/server$') || rc=1
+go test -race "${pflag[@]}" $(go list ./... | grep -v '/internal/server$') || rc=1
 exit $rc

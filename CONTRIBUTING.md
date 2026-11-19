@@ -118,6 +118,10 @@ baseline that always works.
   is the safety net.
 - `herdr api schema --json` prints the full JSON Schema for the protocol.
 
+## Heavy test runs are capped
+
+`tools/ci/gotest.sh`, `tools/ci/browser.sh`, `tools/uitest/run.sh` and `flakes.sh repeat` run in a memory-capped systemd scope (the lower of 40% of RAM and 24G; `CAP_MEM` overrides) with bounded parallelism, so a bad run is killed rather than hanging your machine. Don't run two heavy suites at once. Details: [docs/test-tiers.md](docs/test-tiers.md#heavy-local-runs-are-capped).
+
 ## Browser checks against a fake herdr
 
 A UI change that touches what happens after a send, switching agents, or the

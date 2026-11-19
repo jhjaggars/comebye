@@ -6,7 +6,7 @@
 #   tools/ci/flakes.sh judge LOG            read run.sh's output; exit 1 if a failed check is not on the active list
 #   tools/ci/flakes.sh stress N             run each script that has an entry N times, whole (the nightly); exit 1 if any
 #                                           entry fails every time (a flake that fails sometimes is the point)
-#   tools/ci/flakes.sh repeat N [SCRIPT...] run each uitest script (default: every one run.sh knows) N times, JOBS (default 4)
+#   tools/ci/flakes.sh repeat N [SCRIPT...] run each uitest script (default: every one run.sh knows) N times, JOBS (default 4 in CI, min(4, cores/4) locally; never over cores/2 locally without JOBS_FORCE=1)
 #                                           at a time, each on its own server; list the checks that failed in some runs but
 #                                           not all (FLAKY k/N) apart from those that failed every time (BROKEN); exit 1 if any
 #                                           is FLAKY. Not tied to the flaky list: this is how a new flake is found.
@@ -25,6 +25,8 @@ active() { entries | awk -F'\t' -v t="$today" '$5 >= t'; }
 expired() { entries | awk -F'\t' -v t="$today" '$5 < t'; }
 
 cmd="${1:-}"; shift || true
+# The heavy subcommands run inside a memory cap (tools/ci/capped.sh); the rest are light.
+case "$cmd" in repeat|stress) [ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "$0" "$cmd" "$@";; esac
 case "$cmd" in
   list) active ;;
   expired)
@@ -77,7 +79,7 @@ Failed checks that block:$blocking"
   repeat)
     n="${1:-3}"; shift || true
     scripts="${*:-$(grep -o 'want [a-z]*;' "$here/../uitest/run.sh" | awk '{print $2}' | tr -d ';' | tr '\n' ' ')}"
-    jobs="${JOBS:-4}"; base="${REPEAT_PORT:-21000}"; scheme="${SCHEME:-dark}"
+    . "$here/jobs.sh"; jobs="$COMEBYE_JOBS"; base="${REPEAT_PORT:-21000}"; scheme="${SCHEME:-dark}"
     out="${OUT_DIR:-$(mktemp -d)}"; mkdir -p "$out"
     app="${APP_DIR:-$here/../..}"
     # One npm ci before the jobs start, not one per job racing on node_modules.

@@ -11,6 +11,7 @@
 # A red run is judged against tools/ci/flaky.tsv: failed checks on an active entry do not fail the suite.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "${BASH_SOURCE[0]}" "$@"
 suite="${1:?suite: smoke|drive|rest|visual|full}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"
 
 VISUAL="buttons chips controls fontsetting decisionsets starters depth"

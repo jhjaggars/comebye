@@ -10,6 +10,7 @@
 # npm and google-chrome (CHROME=/path to override). Screenshots, the console
 # and network logs land in OUT_DIR (default: a temp dir). Exit 1 on failure.
 set -euo pipefail
+[ -n "${COMEBYE_CAPPED:-}" ] || exec "$(dirname "${BASH_SOURCE[0]}")/../ci/capped.sh" "${BASH_SOURCE[0]}" "$@"
 
 # SCHEME=dark|light picks the emulated prefers-color-scheme (CI runs one per
 # job; dark also serves pages from a second listener unless PAGES_LISTENER
