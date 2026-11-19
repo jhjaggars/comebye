@@ -167,6 +167,17 @@ func sendThumbnails(e *Env, c *client, id string, version int, page string) stri
 		}
 		return "No gallery thumbnail: " + why + ". The page is published; its card shows a text preview."
 	}
+	if err := putThumbs(c, id, version, light, dark); err != nil {
+		return "No gallery thumbnail: the hub did not take it (" + err.Error() + "). The page is published; its card shows a text preview."
+	}
+	if why != "" {
+		return "Only one gallery thumbnail (light or dark) was made: " + why + "."
+	}
+	return ""
+}
+
+// putThumbs uploads the pictures (either may be nil) for a stored version.
+func putThumbs(c *client, id string, version int, light, dark []byte) error {
 	req := map[string]any{"version": version}
 	if light != nil {
 		req["light_b64"] = base64.StdEncoding.EncodeToString(light)
@@ -174,11 +185,6 @@ func sendThumbnails(e *Env, c *client, id string, version int, page string) stri
 	if dark != nil {
 		req["dark_b64"] = base64.StdEncoding.EncodeToString(dark)
 	}
-	if _, err := c.raw("PUT", "/api/pages/"+id+"/thumbs", nil, req); err != nil {
-		return "No gallery thumbnail: the hub did not take it (" + err.Error() + "). The page is published; its card shows a text preview."
-	}
-	if why != "" {
-		return "Only one gallery thumbnail (light or dark) was made: " + why + "."
-	}
-	return ""
+	_, err := c.raw("PUT", "/api/pages/"+id+"/thumbs", nil, req)
+	return err
 }

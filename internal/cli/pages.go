@@ -253,13 +253,16 @@ func cmdPages(e *Env, args []string) error {
 	version := fs.Int("version", 0, "show --body: an older version")
 	kind := fs.String("type", "", "new: the starter, one of "+strings.Join(pageskit.Types, ", ")+" (default doc)")
 	title := fs.String("title", "", "new: the page's title")
+	backfill := fs.Bool("backfill", false, "thumbs: make the gallery thumbnails of pages that have none")
+	all := fs.Bool("all", false, "thumbs --backfill: every page")
+	dry := fs.Bool("dry-run", false, "thumbs --backfill: list what would be done, render nothing")
 	ctxFile := fs.String("context", "", "note: the finding's details: - for stdin, else the text itself (never a file path)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) == 0 {
-		return usageErr("want list, show, link, note, rm, guide or new")
+		return usageErr("want list, show, link, note, rm, thumbs, guide or new")
 	}
 	sub, pos := pos[0], pos[1:]
 	// guide and new are local: no hub needed.
@@ -284,6 +287,12 @@ func cmdPages(e *Env, args []string) error {
 	c, err := newClient(e)
 	if err != nil {
 		return err
+	}
+	if sub == "thumbs" {
+		if !*backfill || (*all == (len(pos) > 0)) {
+			return usageErr("want pages thumbs --backfill (--all | ID...) [--dry-run]")
+		}
+		return backfillThumbs(e, c, pos, *dry)
 	}
 	one := func() (string, error) {
 		if len(pos) != 1 {
