@@ -187,10 +187,12 @@ func (s *Server) loopNotifyRequester(ctx context.Context, e ledger.Entry, text s
 		}
 	}
 	var target *herdr.AgentInfo
+	found := false
 	if to != nil {
 		for i := range agents {
 			a := agents[i]
 			if a.ID == to.AgentID && (to.Name == "" || a.Name == "" || a.Name == to.Name) {
+				found = true
 				if canTakePrompt(a) {
 					target = &a
 				}
@@ -198,13 +200,18 @@ func (s *Server) loopNotifyRequester(ctx context.Context, e ledger.Entry, text s
 			}
 		}
 	}
+	if found && target == nil {
+		return "", nil // the requester is busy: wait for it, not another coordinator
+	}
+	gone := ""
 	if target == nil {
-		target, _ = s.pickCoordinator()
+		rt := s.routeCoordinator(to)
+		target, gone = rt.Agent, rt.Gone
 	}
 	if target == nil {
 		return "", nil
 	}
-	return target.ID, s.promptNotice(ctx, *target, text)
+	return target.ID, s.promptNotice(ctx, *target, text+goneNote(gone))
 }
 
 // loopStep applies one fleet snapshot.

@@ -461,12 +461,18 @@ func (s *Server) relayDeliver(byID map[string]herdr.AgentInfo, now time.Time) {
 				target = &a
 			}
 		}
+		gone := ""
+		if target == nil {
+			// The requester is gone: its owner, else the pool, labelled.
+			rt := s.routeCoordinator(&ep.to)
+			target, gone = rt.Agent, rt.Gone
+		}
 		if target == nil || !canTakePrompt(*target) || busyTarget[target.ID] {
 			continue
 		}
 		busyTarget[target.ID] = true
 		clearing := ep.ended != nil
-		text := s.relayText(ep, now, clearing, s.relayLink(byID[ep.id]))
+		text := s.relayText(ep, now, clearing, s.relayLink(byID[ep.id])) + goneNote(gone)
 		ep.tries, ep.inFlight = now, true
 		go s.relaySend(ep, *target, text, clearing)
 	}

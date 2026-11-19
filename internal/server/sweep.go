@@ -484,13 +484,14 @@ func sweepSummary(res sweepResult) string {
 
 // notifySweep tells an idle coordinator the outcome.
 func (s *Server) notifySweep(ctx context.Context, res sweepResult) (to, errMsg string) {
-	a, why := s.pickCoordinator()
+	rt := s.poolRoute()
+	a, why := rt.Agent, rt.Why
 	if a == nil {
 		return "", "no idle coordinator to tell (" + why + ")"
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	if err := s.promptHeld(ctx, *a, sweepSummary(res)); err != nil {
+	if err := s.promptHeld(ctx, *a, sweepSummary(res)+goneMainNote(rt.Gone)); err != nil {
 		return "", err.Error()
 	}
 	return a.ID, ""

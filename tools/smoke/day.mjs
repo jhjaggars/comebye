@@ -103,7 +103,7 @@ class Agent {
 }
 const REPORT = (summary, changes) => `## Summary\n${summary}\n\n## Changes\n${changes}\n\n## Verification\nVerified live: the stand-in worker ran the steps by hand.\nUnit tests only: none\nNot verified: none\n\n## Follow-ups\nNone.\n\n## Decisions for the user\nNone.\n`;
 
-const coord = new Agent("coord");
+const coord = new Agent("coord"), coord2 = new Agent("coord2");
 const worker1 = new Agent("one"), worker2 = new Agent("two");
 const WT = (b) => `${tmp}/worktrees/proj/${b}`;
 
@@ -140,6 +140,14 @@ await check("setup: a coordinator agent runs and the hub knows it as the coordin
   const r = await post("/api/roles", { agent_id: id, role: "coordinator" });
   must(r.status === 200 && r.body.roles?.[id]?.role === "coordinator", "role: " + JSON.stringify(r));
   await coord.idle();
+  // A second coordinator, registered later and idle: notices that belong to "coord" must never reach it.
+  await rpc("smoke.add_agent", { name: "coord2", kind: "claude", cwd: repo });
+  await until(() => agentNamed("coord2"), "the hub to see the second coordinator");
+  const id2 = (await agentNamed("coord2")).id;
+  const r2 = await post("/api/roles", { agent_id: id2, role: "coordinator" });
+  must(r2.status === 200 && r2.body.roles?.[id2]?.role === "coordinator", "role 2: " + JSON.stringify(r2));
+  must(r2.body.roles?.[id].main === true && !r2.body.roles?.[id2].main, "main is not the first coordinator: " + JSON.stringify(r2.body.roles));
+  await coord2.idle();
 });
 
 // ---- 1. The user starts a worker; it reports; the coordinator is told ------------------------------------------------
@@ -166,6 +174,7 @@ await check("1. the worker commits and reports; the hub marks it finished and ty
   await until(async () => (await get("/api/ledger")).entries?.find((e) => e.id === h1 && e.status === "finished") || (await get("/api/ledger")).ledger?.find?.((e) => e.id === h1 && e.status === "finished"), "the ledger entry to be finished").catch(async (e) => { throw new Error(e.message + ": " + JSON.stringify(await get("/api/ledger")).slice(0, 400)); });
   const n = await coord.gotPrompt(/\(hub notice\).*feat\/hello.*finished/s, "the finished notice");
   must(n.includes(h1), "the notice does not name the handoff " + h1);
+  must(!(await coord2.prompts()).some((p) => /hub notice/.test(p)), "the other coordinator was typed a notice that is coord's");
   await coord.idle(); // the coordinator's turn on the notice ends
   const rd = ok(cli(await coord.pane(), ["read", h1, "--report"]), "read --report");
   must(/Added hello\.txt/.test(rd), "the coordinator cannot read the report: " + rd.slice(0, 200));
@@ -211,6 +220,7 @@ await check("3. the coordinator asks the user to OK the landing; the user answer
   await until(async () => (await todoById(t3)).state === "answered", "the answer to be recorded");
   const n = await coord.gotPrompt(/the user answered to-do item\(s\) /, "the answer notice");
   must(n.includes(t3), "the notice does not name " + t3);
+  must(!(await coord2.prompts()).some((p) => /hub notice/.test(p)), "the other coordinator was typed coord's to-do answer");
 });
 await check("3. the coordinator relays the OK with `comebye land`; the worker is told, labelled as an agent's, to push to main", async () => {
   ok(cli(await coord.pane(), ["todo", "done", t3]), "todo done");

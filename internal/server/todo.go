@@ -983,19 +983,30 @@ func todoNoticeText(ids []string) string {
 		strings.Join(list, ", "))
 }
 
-// deliverTodoNotices runs on every fleet update: one note to an idle
-// coordinator naming the items the user answered in the app. It retries
-// until the items are closed or ledger.CallbackTTL has passed.
+// todoGroup is the answered items one coordinator is told about in one note.
+type todoGroup struct {
+	target   herdr.AgentInfo
+	gone     string
+	ids      []string
+	answered []string
+	early    []string // notes for sets settled ahead of Submit
+	parked   string
+}
+
+// deliverTodoNotices runs on every fleet update: one note to the coordinator
+// that owns each answered item (the agent the item waits on when it is a
+// coordinator, else the coordinator that owns the waiting agent; the pool
+// when nobody does) naming the items the user answered in the app. A
+// coordinator that is busy is not replaced by another: its items wait. It
+// retries until the items are closed or ledger.CallbackTTL has passed.
 func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 	if s.todos == nil {
 		return
 	}
 	s.deliverReviewRoutes(agents)
 	now := time.Now()
-	var ids []string
-	var answered []string
-	var early []string // notes for sets settled ahead of Submit
-	parkedNote := ""
+	groups := map[string]*todoGroup{}
+	var order []string
 	for _, it := range s.todos.pendingNotices() {
 		if now.Sub(it.Notice.At) > ledger.CallbackTTL {
 			s.todos.settleNotices([]string{it.ID}, todoNoticeExpired)
@@ -1005,28 +1016,39 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 			s.relayStart(it, agents) // the hub passes it on; the coordinator is not told
 			continue
 		}
+		var owner *ledger.Ref
+		if it.Waiting != nil {
+			owner = &ledger.Ref{AgentID: it.Waiting.ID, Name: it.Waiting.Name}
+		}
+		rt := s.routeCoordinator(owner)
+		if rt.Agent == nil {
+			continue // its coordinator is busy or not known yet: later
+		}
+		g := groups[rt.Agent.ID]
+		if g == nil {
+			g = &todoGroup{target: *rt.Agent, gone: rt.Gone}
+			groups[rt.Agent.ID] = g
+			order = append(order, rt.Agent.ID)
+		}
+		g.ids = append(g.ids, it.ID)
 		if it.earlyPending() {
-			early = append(early, earlyNoticeText(it)+relayNote(it))
-			ids = append(ids, it.ID)
+			g.early = append(g.early, earlyNoticeText(it)+relayNote(it))
 			continue
 		}
-		ids = append(ids, it.ID)
-		answered = append(answered, it.ID)
-		parkedNote += relayNote(it)
+		g.answered = append(g.answered, it.ID)
+		g.parked += relayNote(it)
 	}
-	if len(ids) == 0 {
+	if len(order) == 0 {
 		return
 	}
-	for _, id := range answered {
-		if it, ok := s.todos.get(id); ok {
-			if it = s.todoParked(it); it.Waiting != nil && it.Waiting.Parked {
-				parkedNote += fmt.Sprintf(" %s is waiting on %s, which is parked: send the answer with `comebye prompt %s --queue`, it is delivered when the agent is resumed.", safeText(id), safeText(it.Waiting.Name), safeText(it.Waiting.Name))
+	for _, g := range groups {
+		for _, id := range g.answered {
+			if it, ok := s.todos.get(id); ok {
+				if it = s.todoParked(it); it.Waiting != nil && it.Waiting.Parked {
+					g.parked += fmt.Sprintf(" %s is waiting on %s, which is parked: send the answer with `comebye prompt %s --queue`, it is delivered when the agent is resumed.", safeText(id), safeText(it.Waiting.Name), safeText(it.Waiting.Name))
+				}
 			}
 		}
-	}
-	target, _ := s.pickCoordinator()
-	if target == nil {
-		return
 	}
 	t := s.todos
 	t.mu.Lock()
@@ -1037,31 +1059,36 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 	t.sending, t.last = true, now
 	t.mu.Unlock()
 	s.bg.Add(1)
-	go func(target herdr.AgentInfo) {
+	go func() {
 		defer s.bg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
-		defer cancel()
+		defer func() {
+			t.mu.Lock()
+			t.sending = false
+			t.mu.Unlock()
+		}()
 		send := t.send
 		if send == nil {
 			send = s.promptNotice
 		}
-		var texts []string
-		if len(answered) > 0 {
-			texts = append(texts, todoNoticeText(answered)+parkedNote)
+		for _, key := range order {
+			g := groups[key]
+			ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+			var texts []string
+			if len(g.answered) > 0 {
+				texts = append(texts, todoNoticeText(g.answered)+g.parked)
+			}
+			texts = append(texts, g.early...)
+			err := send(ctx, g.target, strings.Join(texts, "\n\n")+goneNote(g.gone))
+			cancel()
+			if err != nil {
+				t.noticeTried(g.ids)
+			} else {
+				// Settled before the guard is released, or a pass between
+				// the two would send the same notice again.
+				t.settleNotices(g.ids, todoNoticeSent)
+			}
 		}
-		texts = append(texts, early...)
-		err := send(ctx, target, strings.Join(texts, "\n\n"))
-		if err != nil {
-			t.noticeTried(ids)
-		} else {
-			// Settled before the guard is released, or a pass between
-			// the two would send the same notice again.
-			t.settleNotices(ids, todoNoticeSent)
-		}
-		t.mu.Lock()
-		t.sending = false
-		t.mu.Unlock()
-	}(*target)
+	}()
 }
 
 // todoGone marks the waiting agent gone when its host is no longer the

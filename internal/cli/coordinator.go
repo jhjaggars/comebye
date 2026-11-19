@@ -32,7 +32,7 @@ func coordinatorDir(e *Env) string { return filepath.Join(StateDir(e.Getenv), "c
 
 func cmdCoordinator(e *Env, args []string) error {
 	if len(args) == 0 {
-		return usageErr("want init, digest, install-hook, status or reset")
+		return usageErr("want init, digest, install-hook, status, reset or main")
 	}
 	switch args[0] {
 	case "init":
@@ -45,8 +45,10 @@ func cmdCoordinator(e *Env, args []string) error {
 		return cmdCoordStatus(e, args[1:])
 	case "reset":
 		return cmdCoordReset(e, args[1:])
+	case "main":
+		return cmdCoordMain(e, args[1:])
 	}
-	return usageErr("unknown coordinator command %q (want init, digest, install-hook, status or reset)", args[0])
+	return usageErr("unknown coordinator command %q (want init, digest, install-hook, status, reset or main)", args[0])
 }
 
 // ---- digest ----
@@ -557,5 +559,62 @@ func cmdCoordReset(e *Env, args []string) error {
 	if !r.DigestLanded {
 		fmt.Fprintln(e.Stdout, "WARNING: the digest was not seen in the new session; look at the pane")
 	}
+	return nil
+}
+
+// cmdCoordMain: `comebye coordinator main [AGENT]` shows which coordinator is
+// main (the one events nobody owns go to), or, with an agent (id, pane or
+// name), marks it main. The user's alone.
+func cmdCoordMain(e *Env, args []string) error {
+	fs := flag.NewFlagSet("coordinator main", flag.ContinueOnError)
+	login := fs.String("login", "", "the Tailscale login to act as when setting main (default $COMEBYE_LOGIN, else the first of $COMEBYE_TS_ALLOW_LOGIN)")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 1 {
+		return usageErr("want at most one agent")
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	if len(pos) == 1 {
+		// Marking main is the user's alone: an agent token is refused.
+		if c.user = peerLogin(e, *login); c.user == "" {
+			return usageErr("coordinator main AGENT needs the user's login: pass --login you@example.com (or set COMEBYE_LOGIN)")
+		}
+		ar, err := c.getAgents()
+		if err != nil {
+			return err
+		}
+		id := ""
+		for _, a := range ar.Agents {
+			if a.ID == pos[0] || a.PaneID == pos[0] || (a.Name != "" && a.Name == pos[0]) {
+				id = a.ID
+			}
+		}
+		if id == "" {
+			return usageErr("no such agent %q", pos[0])
+		}
+		if err := c.call("POST", "/api/roles", nil, map[string]any{"agent_id": id, "role": "coordinator", "main": true}, nil); err != nil {
+			return err
+		}
+		fmt.Fprintf(e.Stdout, "%s is the main coordinator.\n", pos[0])
+		return nil
+	}
+	var r struct {
+		Roles map[string]apiRole `json:"roles"`
+	}
+	if err := c.call("GET", "/api/roles", nil, nil, &r); err != nil {
+		return err
+	}
+	for id, rl := range r.Roles {
+		if rl.Role == "coordinator" && rl.Main {
+			fmt.Fprintf(e.Stdout, "main coordinator: %s (%s)\n", dash(rl.Name), id)
+			return nil
+		}
+	}
+	fmt.Fprintln(e.Stdout, "no coordinator is running")
 	return nil
 }

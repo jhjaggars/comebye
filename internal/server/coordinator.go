@@ -193,6 +193,10 @@ type Role struct {
 	Page string    `json:"page,omitempty"`
 	By   string    `json:"by,omitempty"`
 	At   time.Time `json:"at"`
+	// Main marks the main coordinator: the one events nobody owns go to
+	// (route.go). At most one role has it. None marked: the first registered
+	// live coordinator is main.
+	Main bool `json:"main,omitempty"`
 }
 
 // RoleCoordinator marks an agent that coordinates.
@@ -298,6 +302,27 @@ func (s *Server) liveRoles() map[string]Role {
 		}
 		out[id] = r
 	}
+	// With no coordinator marked main, the first registered live one is
+	// shown as main (the same one poolRoute takes).
+	marked := false
+	var first string
+	var firstAt time.Time
+	for id, r := range out {
+		if r.Role != RoleCoordinator {
+			continue
+		}
+		if r.Main {
+			marked = true
+		}
+		if _, seen := names[id]; seen && (first == "" || r.At.Before(firstAt) || (r.At.Equal(firstAt) && id < first)) {
+			first, firstAt = id, r.At
+		}
+	}
+	if !marked && first != "" {
+		r := out[first]
+		r.Main = true
+		out[first] = r
+	}
 	return out
 }
 
@@ -306,7 +331,7 @@ func (s *Server) recordRole(id, name, role, by string) error {
 	if s.roles == nil {
 		return errors.New("this instance keeps no roles")
 	}
-	return s.roles.set(id, Role{Role: role, Name: name, By: by, At: time.Now().UTC()})
+	return s.roles.set(id, Role{Role: role, Name: name, By: by, At: time.Now().UTC(), Main: s.roles.isMain(id) && role == RoleCoordinator})
 }
 
 // handleRoles lists the coordinator roles: {roles: {id: role}}.
@@ -325,6 +350,9 @@ type roleBody struct {
 	// Only a -test-mode hub takes it (the browser tests and the dev server have
 	// no real launch to make helpers with); chat.go makes the real ones.
 	Page string `json:"page,omitempty"`
+	// Main, with role "coordinator", makes this the main coordinator (and
+	// the one that was is no longer).
+	Main bool `json:"main,omitempty"`
 }
 
 // handleSetRole makes an agent a coordinator or not: POST {agent_id,
@@ -375,6 +403,12 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 	if err := s.recordRole(b.AgentID, name, b.Role, s.by(r, "")); err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "roles_error", "message": err.Error()})
 		return
+	}
+	if b.Main && b.Role == RoleCoordinator {
+		if err := s.roles.setMain(b.AgentID); err != nil {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "roles_error", "message": err.Error()})
+			return
+		}
 	}
 	writeJSON(w, map[string]any{"roles": s.liveRoles()})
 }
@@ -504,54 +538,17 @@ func (s *Server) isSelf(c caller, host, target string) bool {
 	return false
 }
 
-// pickCoordinator picks the coordinator to prompt: a running one that is
-// idle (or done), the hub's own first, then the most recently made one.
-// Without one it says why: no coordinator running, all busy, or unknown
-// (a recorded coordinator is not in the fleet: its host may be down or
-// still starting; never counted as a miss).
+// pickCoordinator picks a coordinator for a notice nobody owns: the pool
+// (poolCoordinator). A notice about an agent a coordinator started or
+// prompted goes through routeCoordinator instead (route.go).
 func (s *Server) pickCoordinator() (*herdr.AgentInfo, string) {
-	roles := s.liveRoles()
-	agents := s.fleet.Agents()
-	seen := map[string]bool{}
-	type cand struct {
-		a  herdr.AgentInfo
-		at time.Time
-	}
-	var ready []cand
-	running := false
-	for _, a := range agents {
-		seen[a.ID] = true
-		r, ok := roles[a.ID]
-		if !ok || r.Role != RoleCoordinator || (r.Name != "" && a.Name != "" && a.Name != r.Name) {
-			continue
-		}
-		running = true
-		if a.Status == herdr.StatusIdle || a.Status == herdr.StatusDone {
-			ready = append(ready, cand{a, r.At})
-		}
-	}
-	if len(ready) == 0 {
-		if running {
-			return nil, missBusy
-		}
-		if len(agents) == 0 {
-			return nil, waitUnknown
-		}
-		for id, r := range roles {
-			if r.Role == RoleCoordinator && !seen[id] {
-				return nil, waitUnknown
-			}
-		}
-		return nil, missNoCoordinator
-	}
-	local := s.fleet.LocalName()
-	sort.SliceStable(ready, func(i, j int) bool {
-		if li, lj := ready[i].a.Host == local, ready[j].a.Host == local; li != lj {
-			return li
-		}
-		return ready[i].at.After(ready[j].at)
-	})
-	return &ready[0].a, ""
+	return s.poolCoordinator()
+}
+
+// poolCoordinator is poolRoute without the label.
+func (s *Server) poolCoordinator() (*herdr.AgentInfo, string) {
+	r := s.poolRoute()
+	return r.Agent, r.Why
 }
 
 // promptAgent sends text to an agent on any host.

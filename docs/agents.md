@@ -382,6 +382,40 @@ read,grep,find,ls,bash`: no edit or write tools). The hub records the
 agent as a coordinator. Any agent can be made a coordinator (or not) from
 the ⋮ menu of its chat.
 
+### Several coordinators: who hears what
+
+You can run more than one coordinator (for instance one per project, each
+with its own context). The hub does not treat them as a pool for a notice
+that belongs to one of them:
+
+- **Owned notices go to the coordinator that asked, and to nobody else.**
+  A handoff's notices (finished, report N replaces, landed, landing failed,
+  loop dead, blocked dialogs, and the to-do items the worker's report or a
+  mark opened) go to the handoff's requester (`ReplyTo`); a plan's to its
+  creator; a to-do answer to the coordinator the item waits on; a queued
+  prompt's expiry to the coordinator that sent it. A worker that handed off
+  a sub-worker is itself owned, so the notice climbs to the coordinator at
+  the top. While the owner is busy the notice waits; another coordinator is
+  never given it.
+- **A coordinator's `comebye prompt` to an agent that is not its handoff**
+  (an agent you started yourself) makes that coordinator the agent's
+  *asker*, kept in `askers.json`. That agent's later notices go there until
+  another coordinator prompts it. A prompt to another coordinator's
+  handoff changes nothing.
+- **Events nobody owns go to the main coordinator**: sweep results, the
+  scheduled briefing, release items, review verdicts and loop nudges whose
+  owner is unknown, and to-do answers whose waiting agent no coordinator
+  owns. Main is the coordinator you mark with `comebye coordinator main
+  AGENT` (the user's alone; `comebye coordinator main` shows it, and
+  `comebye agents` prints `coordinator (main)`). With none marked, the
+  first registered live coordinator is main. If main is busy the notice
+  waits; if main is not running, any idle coordinator takes it and the
+  notice says it was main's.
+- **A gone owner** (its pane closed, or its role removed) falls back to
+  main, and the notice names the coordinator it was meant for. For a
+  handoff's finished notice the hub still waits the usual ten minutes
+  before standing in.
+
 ### The coordinator directory
 
 A coordinator can start in a directory you own, a git repository, and load

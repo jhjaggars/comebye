@@ -347,6 +347,7 @@ type apiRole struct {
 	Name string    `json:"name"`
 	By   string    `json:"by"`
 	At   time.Time `json:"at"`
+	Main bool      `json:"main,omitempty"`
 }
 
 type ledgerResp struct {

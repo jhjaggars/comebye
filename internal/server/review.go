@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
 // Review items (issue #17, slice 1). Any item can name the Page (id and
@@ -353,7 +354,13 @@ func (s *Server) deliverReviewRoutes(agents []herdr.AgentInfo) {
 			}
 		}
 		if target == nil {
-			target, _ = s.pickCoordinator()
+			// The publisher is gone or busy: its owner (a coordinator that
+			// prompted it), else the pool.
+			var owner *ledger.Ref
+			if it.Page.Agent != "" {
+				owner = &ledger.Ref{AgentID: it.Page.Agent}
+			}
+			target = s.routeCoordinator(owner).Agent
 			via = "coordinator"
 		}
 		if target == nil {

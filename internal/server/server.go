@@ -334,6 +334,9 @@ type Server struct {
 	restart                  restartState
 	restartPoll, restartWait time.Duration
 	roles                    *roleStore
+	// askers: the coordinator that last prompted an agent that is not its
+	// handoff (route.go).
+	askers *askerStore
 	// kinds remembers the agent kinds that worked on this host (nil
 	// without a state directory).
 	kinds *kindStore
@@ -474,6 +477,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				log.Printf("roles: %v (starting with none)", err)
 				s.roles = &roleStore{path: filepath.Join(cfg.StateDir, "roles.json"), data: map[string]Role{}}
 			}
+			if s.askers, err = openAskers(askersPath(cfg.StateDir)); err != nil {
+				log.Printf("askers: %v (starting with none)", err)
+				s.askers = &askerStore{data: map[string]Asker{}}
+			}
 			if s.pq, err = openPromptQueue(queuePath(cfg.StateDir)); err != nil {
 				log.Printf("prompt queue: %v (starting empty)", err)
 				s.pq = newPromptQueue("") // in memory: never overwrite the unreadable file
@@ -550,7 +557,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/agents/{target}/output", s.authAgent(s.readGuard(s.handleOutput)))
 	s.mux.HandleFunc("GET /api/agents/{target}/transcript", s.authAgent(s.readGuard(s.handleTranscript)))
 	s.mux.HandleFunc("GET /api/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.readGuard(s.handleSubagentTranscript)))
-	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.labelAgentPrompt(s.handlePrompt)))))
+	s.mux.HandleFunc("POST /api/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.labelAgentPrompt(s.noteAsker(s.handlePrompt))))))
 	s.mux.HandleFunc("POST /api/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/model", s.authAgent(s.selfGuard(s.handleSwitchModel)))
 	// The coordinator's context reset, on the agent's host: the hub's own
@@ -577,7 +584,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/output", s.authAgent(s.readGuard(s.onHost("output", s.handleOutput))))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/transcript", s.authAgent(s.readGuard(s.onHost("transcript", s.handleTranscript))))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/subagents/{sub}/transcript", s.authAgent(s.readGuard(s.onHost("subagent-transcript", s.handleSubagentTranscript))))
-	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.labelAgentPrompt(s.onHost("prompt", s.handlePrompt))))))
+	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/prompt", s.authWorker(s.selfGuard(s.promptGuard(s.labelAgentPrompt(s.noteAsker(s.onHost("prompt", s.handlePrompt)))))))
 	s.mux.HandleFunc("POST /api/hosts/{host}/agents/{target}/keys", s.auth(s.onHost("keys", s.handleKeys)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/dialog", s.auth(s.onHost("dialog", s.handleDialog)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/agents/{target}/activity", s.auth(s.onHost("activity", s.handleActivity)))

@@ -317,6 +317,7 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 	// The decision is made on a copy; the prompt goes out between two
 	// updates so the lock is not held across the network.
 	var target *herdr.AgentInfo
+	briefGone := ""
 	err = s.briefSched.update(func(f *briefSchedFile) bool {
 		r := &f.Run
 		before, _ := json.Marshal(r)
@@ -357,10 +358,11 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 			return string(before) != string(after)
 		}
 		if r.PromptedAt == nil {
-			a, why := s.pickCoordinator()
+			rt := s.poolRoute()
+			a, why := rt.Agent, rt.Why
 			switch {
 			case a != nil:
-				target = a
+				target, briefGone = a, rt.Gone
 			case why == missNoCoordinator && !r.Counted:
 				r.addMiss(slot, missNoCoordinator)
 				r.Counted = true
@@ -379,7 +381,7 @@ func (s *Server) briefTick(ctx context.Context, now time.Time) {
 	if target == nil {
 		return
 	}
-	if err := s.promptBrief(ctx, *target, plan, briefAt); err != nil {
+	if err := s.promptBrief(ctx, *target, plan, briefAt, briefGone); err != nil {
 		log.Printf("brief schedule: prompting %s: %v", target.ID, err)
 		_ = s.briefSched.update(func(f *briefSchedFile) bool {
 			f.Run.Waiting = missBusy
@@ -493,10 +495,10 @@ func fmtEvery(d time.Duration) string {
 }
 
 // promptBrief sends the scheduled prompt to a coordinator on any host.
-func (s *Server) promptBrief(ctx context.Context, a herdr.AgentInfo, plan schedPlan, last time.Time) error {
+func (s *Server) promptBrief(ctx context.Context, a herdr.AgentInfo, plan schedPlan, last time.Time, gone string) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	return s.promptNotice(ctx, a, briefPrompt(plan, last, s.parkSuggestCount()))
+	return s.promptNotice(ctx, a, briefPrompt(plan, last, s.parkSuggestCount())+goneMainNote(gone))
 }
 
 // briefSchedView is the schedule with its status, for the app and CLI.

@@ -591,3 +591,30 @@ func TestBoardTextShowsTheHubDidLane(t *testing.T) {
 		t.Fatalf("board = %s", got)
 	}
 }
+
+func TestCoordinatorMainShowsAndSets(t *testing.T) {
+	roles := `{"roles":{"laharl/w1:p1":{"role":"coordinator","name":"alpha"},"laharl/w3:p1":{"role":"coordinator","name":"beta","main":true}}}`
+	e, out, _, _ := peerEnv(t, nil, map[string]answer{"GET /api/roles": {200, roles}})
+	if code := run(e, "coordinator", "main"); code != 0 || !strings.Contains(out.String(), "main coordinator: beta (laharl/w3:p1)") {
+		t.Fatalf("show: %d %s", code, out)
+	}
+	// Setting is the user's: refused without a login, sent as the user with one.
+	e, _, errb, reqs := peerEnv(t, nil, nil)
+	if code := run(e, "coordinator", "main", "alpha"); code != 2 || !strings.Contains(errb.String(), "login") || len(*reqs) != 0 {
+		t.Fatalf("no login: %d %s", code, errb)
+	}
+	e, out, _, reqs = peerEnv(t, map[string]string{"COMEBYE_LOGIN": "me@example.com"}, map[string]answer{
+		"GET /api/agents": {200, `{"agents":[{"id":"laharl/w1:p1","pane_id":"w1:p1","host":"laharl","name":"alpha"}]}`},
+		"POST /api/roles": {200, `{"roles":{}}`},
+	})
+	if code := run(e, "coordinator", "main", "alpha"); code != 0 {
+		t.Fatalf("set: %d", code)
+	}
+	last := (*reqs)[len(*reqs)-1]
+	if last.hdr.Get(headerToken) != "" || last.hdr.Get("Tailscale-User-Login") != "me@example.com" || !strings.Contains(last.body, `"main":true`) || !strings.Contains(last.body, `"agent_id":"laharl/w1:p1"`) {
+		t.Fatalf("request = %+v", last)
+	}
+	if !strings.Contains(out.String(), "alpha is the main coordinator") {
+		t.Fatalf("output = %s", out)
+	}
+}

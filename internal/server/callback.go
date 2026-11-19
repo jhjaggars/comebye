@@ -126,7 +126,7 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 		if !j.ready {
 			continue
 		}
-		target, standIn := callbackTarget(j.replyTo, j.cb, agents, now, s.pickCoordinator)
+		target, standIn, gone := callbackTarget(j.replyTo, j.cb, agents, now, s.routeCoordinator)
 		if target == nil {
 			continue
 		}
@@ -138,7 +138,7 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 		// Held until the attempt ends (a prompt can take 45 s).
 		s.coord.calling[j.key] = now.Add(sendTimeout)
 		s.coord.mu.Unlock()
-		go s.sendCallback(j, *target, standIn)
+		go s.sendCallback(j, *target, standIn, gone)
 	}
 }
 
@@ -150,24 +150,27 @@ func (s *Server) logLedger(err error) {
 
 // callbackTarget picks the agent to tell: the requester when it is in the
 // fleet (and idle or done; nil while it is busy), else, after
-// callbackFallback, an idle coordinator (standIn). The requester must
-// still have the name it had when it asked: a pane id can be reused.
-func callbackTarget(replyTo *ledger.Ref, cb *ledger.Callback, agents []herdr.AgentInfo, now time.Time, coordinator func() (*herdr.AgentInfo, string)) (target *herdr.AgentInfo, standIn bool) {
+// callbackFallback, the coordinator that owns the requester (standIn): the
+// requester itself when it is a coordinator, the one that owns it when it
+// is a worker, and only when that one is gone too the pool, with gone naming
+// it. The requester must still have the name it had when it asked: a pane
+// id can be reused.
+func callbackTarget(replyTo *ledger.Ref, cb *ledger.Callback, agents []herdr.AgentInfo, now time.Time, coordinator func(*ledger.Ref) coordRoute) (target *herdr.AgentInfo, standIn bool, gone string) {
 	for i := range agents {
 		a := agents[i]
 		if a.ID != replyTo.AgentID || (replyTo.Name != "" && a.Name != "" && a.Name != replyTo.Name) {
 			continue
 		}
 		if canTakePrompt(a) {
-			return &a, false
+			return &a, false, ""
 		}
-		return nil, false
+		return nil, false, ""
 	}
 	if len(agents) == 0 || now.Sub(cb.At) < callbackFallback {
-		return nil, false
+		return nil, false, ""
 	}
-	c, _ := coordinator()
-	return c, c != nil
+	c := coordinator(replyTo)
+	return c.Agent, c.Agent != nil, c.Gone
 }
 
 // callbackText is the fixed message. The only variable parts are the
@@ -267,7 +270,7 @@ func safeText(s string) string {
 	return string(out)
 }
 
-func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
+func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool, gone string) {
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
 	if j.hold != nil {
@@ -311,6 +314,7 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool) {
 			return
 		}
 	}
+	text += goneNote(gone)
 	if !s.sent.claim(j.subject, target.ID) {
 		// Another send of this very notice (to the requester, or to the
 		// coordinator as its stand-in) went out or is going out.

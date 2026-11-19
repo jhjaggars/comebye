@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
 // The prompt queue (`comebye prompt --queue`, docs/proposals/prompt-queue.md):
@@ -540,6 +541,13 @@ func (s *Server) sendNotice(agents []herdr.AgentInfo, it QueuedPrompt, now time.
 			from = &agents[i]
 		}
 	}
+	gone := ""
+	if from == nil && s.isCoordinatorID(it.FromID) {
+		// The sending coordinator is gone: the pool is told, and it says whose
+		// prompt this was.
+		rt := s.routeCoordinator(&ledger.Ref{AgentID: it.FromID})
+		from, gone = rt.Agent, rt.Gone
+	}
 	if from == nil || !canTakePrompt(*from) {
 		return
 	}
@@ -560,7 +568,7 @@ func (s *Server) sendNotice(agents []herdr.AgentInfo, it QueuedPrompt, now time.
 		if send == nil {
 			send = s.promptAgent
 		}
-		err := send(ctx, *from, noticeText(it))
+		err := send(ctx, *from, noticeText(it)+goneNote(gone))
 		s.pq.mu.Lock()
 		delete(s.pq.sending, key)
 		s.pq.mu.Unlock()
@@ -685,6 +693,9 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		queueErr(w, err)
 		return
+	}
+	if ref := s.replyRef(r); ref != nil && c.agent() {
+		s.recordAsker(*ref, *target) // a queued prompt makes its sender the asker too
 	}
 	s.deliverQueue(agents)
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"queued": out, "duplicate": dup})
