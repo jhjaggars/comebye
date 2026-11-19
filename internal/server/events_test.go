@@ -82,7 +82,11 @@ func TestLandedBeforeReportIsAnEvent(t *testing.T) {
 	e := landedFor(t, s, coord, &ledger.CI{State: ledger.CISuccess}, true)
 	deliverAll(t, s, coord, e.ID)
 	if n := promptCount(fh); n != 0 {
-		t.Fatalf("prompts = %d", n)
+		// Seen once in CI (nightly 44375487700) and not reproduced since: say what was sent and what the entry was, so the
+		// next time shows which path sent it.
+		text, _ := fh.call("agent.prompt").Params["text"].(string)
+		g, _ := s.ledger.Get(e.ID)
+		t.Fatalf("prompts = %d, the first: %q; entry status %s, await_land_report %v, callback %+v", n, text, g.Status, g.AwaitLandReport, g.Callback)
 	}
 	if evs := allEvents(s, "landed"); len(evs) != 1 {
 		t.Fatalf("events = %+v", evs)

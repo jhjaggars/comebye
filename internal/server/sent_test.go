@@ -46,7 +46,10 @@ func TestFinishIsNotAnnouncedTwiceViaStandIn(t *testing.T) {
 func TestSentClaimReleasedAfterFailedSend(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	idle := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
-	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"}, idle)
+	// The coordinator is not in the fleet cbFinished observes: with it there, the observer's own delivery pass can send the
+	// notice as soon as the report is captured, which on a slow machine was before the failing hook below went in (the notice
+	// went out for good and its claim was never released). Only this test's deliverCallbacks calls see it.
+	e := cbFinished(t, s, &ledger.Ref{AgentID: "desk/w1:p1", Name: "coordinator"})
 	fh.set(func(f *fakeLaunchHerdr) {
 		f.hook = func(m string, _ map[string]any) (any, *herdr.Error, bool) {
 			if m == "agent.prompt" {
