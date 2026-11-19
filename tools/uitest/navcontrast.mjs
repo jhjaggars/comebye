@@ -71,7 +71,7 @@ async function read(width, theme) {
     const main = await page.evaluate(() => ({ chat: getComputedStyle(document.querySelector("#chat")).backgroundColor, detail: getComputedStyle(document.querySelector("#detail")).backgroundColor }));
     const parts = await page.evaluate(() => {
       const cs = (sel) => { const e = document.querySelector(sel); return e ? getComputedStyle(e) : null; };
-      const kb = cs("#keybar"), hint = cs("#keybar .kb-hint"), mode = cs("#kb-mode"), hf = document.querySelector("#host-filter .hf-chip[aria-pressed=\"false\"]");
+      const kb = cs("#keybar"), hint = cs("#keybar .kb-hint"), mode = cs("#kb-mode"), hf = document.querySelector("#host-filter .hp-btn:not([data-narrow])");
       const kbd = cs("#keybar kbd");
       return { keybar: kb && { bg: kb.backgroundColor, color: kb.color, top: kb.borderTopColor, topw: kb.borderTopWidth, hint: hint && hint.color, kbdBg: kbd && kbd.backgroundColor, kbdFg: kbd && kbd.color },
         hfBox: cs("#host-filter") && cs("#host-filter").backgroundColor,

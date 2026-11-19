@@ -512,7 +512,7 @@
       sec("Everywhere", [["Command palette", [MOD, "K"]], ["This sheet", ["?"]], ["Leave the prompt box", ["Esc"]], ["Send a prompt", ["Enter"]]]),
       sec("Agents", [["Next / previous agent", ["j", "k"]], ["Next agent that needs you", ["n"]], ["Previous that needs you", ["Shift", "N"]], ["Agent 1–9 in the list", ["Alt", "1–9"]],
         ["Focus the prompt", ["i"]], ["Doc and diff panel", ["d"]], ["Collapse / expand the list", ["["]], ["Mark / unmark", ["m"]], ["Rename (Claude agents)", ["r"]], ["Switch model", ["Shift", "M"]]]),
-      sec("Go to", [["Search", ["/"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Briefing", ["g", "b"]], ["Agent list", ["g", "a"]]]),
+      sec("Go to", [["Search", ["/"]], ["Host picker", ["h"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Briefing", ["g", "b"]], ["Agent list", ["g", "a"]]]),
       sec("To do page", [["Next / previous item", ["j", "k"]], ["Open the answer box", ["Enter"]], ["Pick an option", ["1–9"]], ["Close the item", ["Esc"]], ["Send an answer", [MOD, "Enter"]]]),
     );
     box.replaceChildren(h, cols);
@@ -593,6 +593,7 @@
       case "g": ev.preventDefault(); gAt = Date.now(); return;
       case "i": if (focusPrompt()) ev.preventDefault(); return;
       case "/": ev.preventDefault(); goSearch(); return;
+      case "h": if (multiHost() && $("host-filter") && !$("host-filter").hidden && $("host-filter").getClientRects().length) { ev.preventDefault(); toggleHostPicker(true); } return;
       case "?": ev.preventDefault(); openCheats(); return;
       case "j": case "k":
         if (todoPage || !isDesktop()) return; // the To do page moves its own items

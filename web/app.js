@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const state = {
   agents: [],          // current agent list from the server (every host's, on a hub)
-  hostFilter: null,    // "all" or a host name (loaded lazily); only used with more than one host
+  hostFilter: null,    // the chosen host names, [] for all (loaded lazily); only used with more than one host
   hosts: [],           // per-host status from the server; one entry unless this is a hub
   localHost: null,     // name of the server's own host
   selected: null,      // id ("<host>/<pane>") of the agent being viewed
@@ -801,45 +801,135 @@ const STATUS_ORDER = { blocked: 0, working: 1, done: 2, idle: 3, unknown: 4 };
 /* ---------- host filter (hub with more than one host) ---------- */
 
 const HOST_FILTER_KEY = "herdr-host-filter";
-function loadHostFilter() {
-  try { return localStorage.getItem(HOST_FILTER_KEY) || "all"; } catch { return "all"; }
+// The selection is a list of host names; an empty list is "all hosts". It is stored as a JSON array; the old
+// single string ("all", or one host's name) still reads, as no item or as one.
+function normHostFilter(v) {
+  if (Array.isArray(v)) return [...new Set(v.filter((x) => typeof x === "string" && x && x !== "all"))];
+  if (typeof v === "string" && v && v !== "all") return [v];
+  return [];
 }
-function setHostFilter(name) {
-  state.hostFilter = name;
-  try { localStorage.setItem(HOST_FILTER_KEY, name); } catch {}
+function loadHostFilter() {
+  let raw = null;
+  try { raw = localStorage.getItem(HOST_FILTER_KEY); } catch { return []; }
+  if (raw && raw[0] === "[") { try { return normHostFilter(JSON.parse(raw)); } catch { return []; } }
+  return normHostFilter(raw);
+}
+function setHostFilter(sel) {
+  state.hostFilter = normHostFilter(sel);
+  try { localStorage.setItem(HOST_FILTER_KEY, JSON.stringify(state.hostFilter)); } catch {}
   renderList();
 }
-// activeHostFilter falls back to "all" when the remembered host is no
-// longer configured (or this is a single-host instance).
-function activeHostFilter() {
+// hostSel is the chosen hosts that are still configured; empty means every host (also on a single-host instance).
+function hostSel() {
   if (state.hostFilter === null) state.hostFilter = loadHostFilter();
-  const f = state.hostFilter || "all";
-  if (f === "all" || !multiHost() || !state.hosts.some((h) => h.name === f)) return "all";
-  return f;
+  state.hostFilter = normHostFilter(state.hostFilter);
+  if (!multiHost()) return [];
+  return state.hostFilter.filter((n) => state.hosts.some((h) => h.name === n));
+}
+const hostIn = (name) => { const s = hostSel(); return !s.length || s.includes(name); };
+// A host filter never hides an agent that is waiting on you.
+const agentShown = (a) => hostIn(a.host) || a.agent_status === "blocked";
+// hostLabel: what the picker button says: "All hosts", "laharl", "laharl + mac", "3 hosts".
+function hostLabel() {
+  const s = hostSel();
+  return !s.length ? "All hosts" : s.length <= 2 ? s.join(" + ") : s.length + " hosts";
 }
 
+const hp = { open: false, q: "" };
+// hostCard: one host's facts for the picker.
+function hostFacts(h) {
+  const agents = state.agents.filter((a) => a.host === h.name);
+  return { h, n: agents.length, need: agents.some((a) => a.agent_status === "blocked"), down: !h.local && h.status !== "ok" };
+}
 function renderHostFilter() {
   const nav = $("host-filter");
-  if (!multiHost()) { nav.hidden = true; nav.innerHTML = ""; return; }
-  const active = activeHostFilter();
-  const chip = (name, label, agents, down, host) => {
-    const need = agents.some((a) => a.agent_status === "blocked");
-    // A peer on another version than the hub (the hub reports the
-    // mismatch): a small badge naming the version it runs.
-    const local = state.hosts.find((x) => x.local);
-    const ver = host && host.version_mismatch && host.version
-      ? `<span class="ver" title="${esc(host.name)} runs ${esc(host.version)}${local && local.version ? `; this hub runs ${esc(local.version)}` : ""}">${esc(host.version)}</span>` : "";
-    const none = host && host.no_agents;
-    return `<button type="button" class="hf-chip${down ? " down" : ""}" data-host="${esc(name)}"` +
-      `${none ? ' title="This hub hosts no agents; its peers\' agents are listed"' : ""}` +
-      ` aria-pressed="${active === name}">${need ? '<span class="need" aria-label="needs input"></span>' : ""}` +
-      `${esc(label)} <span class="n">${down ? "down" : none ? "no agents here" : agents.length}</span>${ver}</button>`;
-  };
-  nav.innerHTML = chip("all", "All", state.agents, false) + state.hosts.map((h) =>
-    chip(h.name, h.name, state.agents.filter((a) => a.host === h.name), !h.local && h.status !== "ok", h)).join("");
+  if (!multiHost()) { nav.hidden = true; nav.innerHTML = ""; if (hp.open) toggleHostPicker(false); return; }
+  const sel = hostSel(), narrow = sel.length > 0;
+  const need = state.agents.some((a) => a.agent_status === "blocked");
+  const outside = narrow ? state.agents.filter((a) => a.agent_status === "blocked" && !hostIn(a.host)).length : 0;
+  // innerHTML replaced on every poll: keep the keyboard focus on the button.
+  const had = document.activeElement === $("hp-btn");
+  nav.innerHTML = `<button type="button" id="hp-btn" class="hp-btn" aria-haspopup="dialog" aria-expanded="${hp.open}" aria-controls="hp-pop"` +
+    `${narrow ? " data-narrow" : ""} title="Filter by host (h)">` +
+    `${need ? '<span class="hp-need" aria-label="needs input"></span>' : ""}<span class="hp-label">${esc(hostLabel())}</span><span class="chev" aria-hidden="true">&#9662;</span></button>` +
+    `<div class="hp-out" role="status"${outside ? "" : " hidden"}>${outside ? `<span class="hp-need" aria-hidden="true"></span>+${outside} outside this filter` : ""}</div>`;
   nav.hidden = false;
-  nav.querySelectorAll(".hf-chip").forEach((el) =>
-    el.addEventListener("click", () => setHostFilter(el.dataset.host)));
+  $("hp-btn").addEventListener("click", () => toggleHostPicker());
+  if (had) $("hp-btn").focus({ preventScroll: true });
+  if (hp.open) renderHostPicker();
+}
+
+// The picker's rows: an "All hosts" row, then a row per host with its need-you dot, version badge, down state and agent count.
+function renderHostPicker() {
+  const list = $("hp-list"), sel = hostSel(), q = hp.q.trim().toLowerCase();
+  const fid = document.activeElement && list.contains(document.activeElement) ? document.activeElement.dataset.host : null;
+  const local = state.hosts.find((x) => x.local);
+  const rows = state.hosts.map((h) => {
+    const f = hostFacts(h), on = sel.includes(h.name);
+    const ver = h.version_mismatch && h.version
+      ? `<span class="ver" title="${esc(h.name)} runs ${esc(h.version)}${local && local.version ? `; this hub runs ${esc(local.version)}` : ""}">${esc(h.version)}</span>` : "";
+    const since = h.since ? Date.parse(h.since) : NaN;
+    const right = f.down ? `down${Number.isNaN(since) ? "" : " " + fmtAgo(since)}` : h.no_agents ? "no agents here" : String(f.n);
+    const hide = q && !h.name.toLowerCase().includes(q);
+    // A down host is listed but cannot be picked (unless it is already picked, so it can be let go).
+    const dis = f.down && !on;
+    return `<button type="button" class="hp-row${f.down ? " down" : ""}" role="checkbox" aria-checked="${on}" data-host="${esc(h.name)}"` +
+      `${dis ? " disabled" : ""}${hide ? " hidden" : ""}${f.down ? ` title="${esc(h.error || "This host is not reachable")}"` : ""}>` +
+      `<span class="hp-box" aria-hidden="true"></span>${f.need ? '<span class="hp-need" aria-label="needs input"></span>' : '<span class="hp-need off" aria-hidden="true"></span>'}` +
+      `<span class="hp-name">${esc(h.name)}</span>${ver}<span class="n">${esc(right)}</span></button>`;
+  });
+  const all = `<button type="button" class="hp-row hp-all" role="checkbox" aria-checked="${!sel.length}" data-host="">` +
+    `<span class="hp-box" aria-hidden="true"></span><span class="hp-name">All hosts</span><span class="n">${state.agents.length}</span></button>`;
+  const none = q && !state.hosts.some((h) => h.name.toLowerCase().includes(q));
+  list.innerHTML = (q ? "" : all) + rows.join("") + (none ? '<div class="hp-none">No host matches</div>' : "");
+  $("hp-q").hidden = state.hosts.length < 8;
+  if (fid !== null) { const r = [...list.querySelectorAll(".hp-row")].find((x) => x.dataset.host === fid && !x.disabled && !x.hidden); if (r) r.focus({ preventScroll: true }); }
+}
+function toggleHostPick(name) {
+  const sel = hostSel();
+  if (!name) return setHostFilter([]);
+  setHostFilter(sel.includes(name) ? sel.filter((x) => x !== name) : [...sel, name]);
+}
+function toggleHostPicker(show) {
+  const pop = $("hp-pop");
+  const open = show ?? pop.hidden;
+  if (open === !pop.hidden) return;
+  if (open && !multiHost()) return;
+  hp.open = open;
+  pop.hidden = !open;
+  if (open) {
+    hp.q = ""; $("hp-q").value = "";
+    renderHostPicker();
+    popOpened("hosts");
+    placePop("hosts", $("hp-btn"));
+    // On a desktop the popover sits under the left-aligned button.
+    if (!isSheet()) { const r = $("hp-btn").getBoundingClientRect(); pop.style.left = Math.max(8, Math.min(innerWidth - pop.offsetWidth - 8, r.left)) + "px"; }
+    const first = !$("hp-q").hidden ? $("hp-q") : (pop.querySelector('.hp-row[aria-checked="true"]:not(:disabled)') || popItems(pop)[0]);
+    (first || pop).focus?.();
+  } else {
+    popClosed("hosts");
+  }
+  if ($("hp-btn")) $("hp-btn").setAttribute("aria-expanded", String(open));
+}
+function initHostPicker() {
+  const pop = $("hp-pop");
+  $("hp-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest(".hp-row");
+    if (b && !b.disabled) toggleHostPick(b.dataset.host);
+  });
+  $("hp-q").addEventListener("input", () => { hp.q = $("hp-q").value; renderHostPicker(); });
+  pop.addEventListener("keydown", (ev) => {
+    // Enter applies (the list already follows every tick) and closes; Space toggles through the button itself.
+    if (ev.key === "Enter" && !ev.isComposing && !ev.target.closest(".pop-x")) { ev.preventDefault(); closePop("hosts", true); return; }
+    // A dialog traps Tab: it cycles through the search, the rows and the x.
+    if (ev.key === "Tab") {
+      const f = [...pop.querySelectorAll("button, input")].filter((x) => !x.disabled && !x.hidden && x.getClientRects().length);
+      if (!f.length) { ev.preventDefault(); return; }
+      const i = f.indexOf(document.activeElement);
+      const next = ev.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i < 0 || i === f.length - 1 ? 0 : i + 1);
+      ev.preventDefault(); f[next].focus();
+    }
+  });
 }
 
 function renderList() {
@@ -861,9 +951,7 @@ function emptyHtml(title, hint, act) {
 function renderListRows() {
   const wrap = $("agents");
   renderHostFilter();
-  const filter = activeHostFilter();
-  // A host filter never hides an agent that is waiting on you.
-  const agents = state.agents.filter((a) => filter === "all" || a.host === filter || a.agent_status === "blocked").sort((a, b) =>
+  const agents = state.agents.filter(agentShown).sort((a, b) =>
     statusRank(a) - statusRank(b) ||
     // Within a status, most recently active first, so the agents that just
     // went idle sit above the ones that have been idle for days.
@@ -886,7 +974,7 @@ function renderListRows() {
   // what broke (dns, tcp, tls, http) and since when - the hub's health
   // probe keeps the diagnosis fresh - instead of a bare error.
   const downRows = state.hosts.filter((h) => !h.local && h.status !== "ok" &&
-    (filter === "all" || h.name === filter)).map((h) => {
+    hostIn(h.name)).map((h) => {
     const since = h.since ? Date.parse(h.since) : NaN;
     let what;
     if (h.status === "connecting") {
@@ -911,18 +999,18 @@ function renderListRows() {
   renderNav();
   renderStatus();
   if (!agents.length) {
-    const f = activeHostFilter();
+    const f = hostSel();
     const hubOnly = state.hosts.some((h) => h.local && h.no_agents);
     // A hub-only hub (no herdr) says so, instead of telling you to start an agent here.
-    const here = f === "all" || state.hosts.some((h) => h.local && h.name === f);
+    const here = !f.length || state.hosts.some((h) => h.local && f.includes(h.name));
     wrap.innerHTML = (state.unauthorized ? `<div class="empty"><b>${esc(UNAUTHORIZED_MSG)}</b></div>`
       : hubOnly && here ? emptyHtml("No agents here", "This hub hosts none. Agents on its peers appear as they connect.")
-      : f !== "all" ? emptyHtml(`No agents on ${f}`, "", ["Show all hosts", "all-hosts"])
+      : f.length ? emptyHtml(`No agents on ${f.join(" or ")}`, "", ["Show all hosts", "all-hosts"])
       : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + parkedSectionHTML() + downRows;
     wrap.querySelectorAll(".proj-head").forEach((el) => el.addEventListener("click", () => toggleProject(el.dataset.proj)));
     bindParkedRows(wrap);
     const act = wrap.querySelector(".empty-act");
-    if (act) act.onclick = () => setHostFilter("all");
+    if (act) act.onclick = () => setHostFilter([]);
     return;
   }
   // Coordinators are pinned above the projects.
@@ -4110,10 +4198,9 @@ async function loadParked() {
 
 // parkedEntries are the records the host filter shows, newest first.
 function parkedEntries() {
-  const f = activeHostFilter();
   const out = [];
   for (const h of parked.hosts) {
-    if (f !== "all" && h.host !== f) continue;
+    if (!hostIn(h.host)) continue;
     for (const r of h.parked || []) out.push({ host: h.host, online: h.online, rec: r });
   }
   return out.sort((a, b) => Date.parse(b.rec.parked_at) - Date.parse(a.rec.parked_at));
@@ -4314,8 +4401,7 @@ function parkHintTitle(a) {
   return `Idle${since ? " for " + fmtAgo(since) : ""}, nothing running, no open question and a clean worktree: it can be parked. Park… is in its ⋯ menu.`;
 }
 function parkSuggestions() {
-  const f = activeHostFilter();
-  return state.agents.filter((a) => a.park_hint && canPark(a) && (f === "all" || a.host === f))
+  return state.agents.filter((a) => a.park_hint && canPark(a) && hostIn(a.host))
     .sort((a, b) => Date.parse(a.park_hint.since) - Date.parse(b.park_hint.since));
 }
 function parkBannerHTML() {
@@ -4430,6 +4516,7 @@ const POPS = {
   // Esc (the palette's esc goes back a step first) and puts the focus back. noSheet: no phone backdrop.
   palette: { id: "palette", noSheet: true, close: () => window.CMDK && CMDK.close(false), trigger: () => window.CMDK && CMDK.from(), esc: () => !!(window.CMDK && CMDK.back()) },
   cheats: { id: "cheats", noSheet: true, close: () => window.CMDK && CMDK.closeCheats(false), trigger: () => window.CMDK && CMDK.cheatFrom() },
+  hosts: { id: "hp-pop", close: () => toggleHostPicker(false), trigger: () => $("hp-btn") },
   theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => sxRow("theme") || $("btn-fleet") },
   font: { id: "font-panel", close: () => toggleFontPanel(false), trigger: () => sxRow("font") || $("btn-fleet") },
   pgsmenu: { id: "pgs-menu", close: () => pgsPop("pgsmenu", false), trigger: () => $("pgs-menub") },
@@ -13248,8 +13335,8 @@ function openLaunch() {
   if (launch.open) return;
   launch.open = true;
   history.pushState({ launch: true }, "", location.href);
-  const f = activeHostFilter();
-  launch.host = f !== "all" ? f : state.localHost;
+  const f = hostSel();
+  launch.host = f.length === 1 ? f[0] : state.localHost;
   // A hub-only hub starts nothing itself: begin on the first host that can.
   const hosting = (state.hosts || []).find((h) => h.name === launch.host);
   if (hosting && hosting.no_agents) {
@@ -14027,6 +14114,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setInterval(() => { if (!document.hidden) loadParked(); }, 30000);
   $("row-transcript").addEventListener("click", rowMenuTranscript);
   initPopovers();
+  initHostPicker();
   $("mk-close").addEventListener("click", closeMark);
   $("mk-go").addEventListener("click", submitMark);
   $("d-fresh").addEventListener("click", openFresh);

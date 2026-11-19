@@ -256,7 +256,41 @@
     }
     .hf-chip, .rc-chip { flex: none; }
     .hf-chip[aria-pressed="true"], .pgs-chip[aria-pressed="true"], .rc-chip.on { background: var(--chip-blue); border-color: var(--blue); color: var(--blue); }
-    #host-filter .hf-chip[aria-pressed="true"] { background: var(--chip-purple); border-color: var(--purple); color: var(--purple); }
+    /* Host picker (hub with more than one host): one button naming the selection, a checklist in a popover (a bottom sheet on a phone). */
+    .hp-bar { min-width: 0; margin: 0 0 var(--sp-10); }
+    .hp-bar[hidden] { display: none; }
+    .hp-btn {
+      display: flex; align-items: center; gap: var(--sp-8); width: 100%; min-width: 0; min-height: var(--hit-36); padding: 0 var(--sp-12);
+      border-radius: var(--r-pill); background: var(--panel); border: 1px solid var(--border); color: var(--text);
+      font: inherit; font-size: var(--fs-13); font-weight: 600; text-align: left; cursor: pointer;
+    }
+    .hp-btn[data-narrow] { background: var(--chip-purple); border-color: var(--purple); color: var(--purple); }
+    .hp-btn .hp-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hp-btn .chev { flex: none; font-size: var(--fs-12); }
+    .hp-btn:not([data-narrow]) .chev { color: var(--muted); }
+    .hp-need { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+    .hp-need.off { visibility: hidden; }
+    .hp-out { margin: var(--sp-4) var(--sp-12) 0; font-size: var(--fs-12); color: var(--muted); display: flex; align-items: center; gap: var(--sp-6); }
+    .hp-out[hidden] { display: none; }
+    .hp-pop { width: min(92vw, 340px); }
+    .hp-q { flex: none; margin: 0 var(--sp-12) var(--sp-8); min-height: var(--hit-40); padding: 0 var(--sp-10); background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-8); font: inherit; font-size: var(--fs-14); }
+    .hp-q[hidden] { display: none; }
+    .hp-list { display: flex; flex-direction: column; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 var(--sp-6) var(--sp-8); }
+    .hp-pop .hp-row {
+      display: flex; align-items: center; gap: var(--sp-10); width: 100%; min-width: 0; min-height: var(--hit-40); padding: 0 var(--sp-10);
+      border: 0; border-top: 0; border-radius: var(--r-10); background: none; color: var(--text); font: inherit; font-size: var(--fs-14); text-align: left; cursor: pointer;
+    }
+    .hp-pop .hp-row[hidden] { display: none; }
+    .hp-pop .hp-row:disabled { opacity: 0.55; cursor: default; }
+    .hp-box { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: var(--r-4); color: var(--purple); font-size: var(--fs-12); font-weight: 700; line-height: 1; }
+    .hp-row[aria-checked="true"] .hp-box { background: var(--chip-purple); border-color: var(--purple); }
+    .hp-row[aria-checked="true"] .hp-box::before { content: "\2713"; }
+    .hp-row:disabled .hp-box { border-style: dashed; }
+    .hp-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hp-row .ver { flex: none; color: var(--orange); border: 1px solid var(--orange); border-radius: var(--r-6); padding: 0 var(--sp-6); font-size: var(--fs-11); font-weight: 600; line-height: 1.5; max-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hp-row .n { flex: none; color: var(--muted); font-size: var(--fs-13); font-variant-numeric: tabular-nums; }
+    .hp-none { padding: var(--sp-10) var(--sp-14); color: var(--muted); font-size: var(--fs-13); }
+    @media (hover: hover) { .hp-pop .hp-row:not(:disabled):hover { background: var(--panel); } }
     .hf-chip .n { color: var(--muted); font-weight: 500; font-size: var(--fs-13); }
     .hf-chip .need { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 6px var(--orange); }
     .hf-chip.down { opacity: 0.6; border-style: dashed; }
@@ -2010,7 +2044,7 @@
       #list header .count .run, #list header .count .sep, #list header .count .tot { display: none; }
       #nav { grid-column: 1; grid-row: 3; display: flex; flex-direction: row; gap: var(--sp-2); padding: var(--sp-6) var(--sp-8); border-bottom: 1px solid var(--border); }
       #nav:empty { display: none; }
-      #host-filter { grid-column: 1; grid-row: 4; margin: var(--sp-10) 0 0; padding: 0 var(--sp-12) var(--sp-2); }
+      #host-filter { grid-column: 1; grid-row: 4; margin: var(--sp-10) var(--sp-12) 0; }
       #plans { grid-column: 1; grid-row: 5; margin: var(--sp-10) var(--sp-12) 0; max-height: 30vh; overflow-y: auto; }
       #agents { grid-column: 1; grid-row: 6; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-10) var(--sp-12) var(--sp-20); }
       header .bell { min-width: 36px; min-height: var(--hit-36); margin: -6px -6px -6px 0; }
@@ -2942,6 +2976,12 @@
       <button type="button" class="bell" id="btn-fleet" aria-label="More: fleet actions" aria-haspopup="menu" aria-expanded="false" aria-controls="f-menu">&#8942;</button>
     </header>
     <div id="sheet-bk" hidden></div>
+    <section id="hp-pop" class="attach-menu pop hp-pop" role="dialog" aria-label="Choose hosts" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><span class="pop-title">Hosts</span><button type="button" class="pop-x" aria-label="Close the host list">&times;</button></div>
+      <input type="search" id="hp-q" class="hp-q" placeholder="Find a host" aria-label="Find a host" autocomplete="off" hidden>
+      <div class="hp-list" id="hp-list" role="group" aria-label="Hosts"></div>
+    </section>
     <div id="f-menu" class="attach-menu d-menu pop" role="menu" aria-label="Fleet actions" hidden>
       <div class="grab" aria-hidden="true"><i></i></div>
       <div class="pop-head"><span class="pop-title">Fleet</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
@@ -2981,7 +3021,7 @@
       <div class="pop-head"><span class="pop-title">Font</span><button type="button" class="pop-x" aria-label="Close the font picker">&times;</button></div>
       <div class="tp-list" id="fp-list" role="menu" aria-label="Font"></div>
     </section>
-    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><nav id="host-filter" class="host-filter" aria-label="Filter by host" hidden></nav><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
+    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
     <div id="keybar" class="keybar"><span id="kb-mode" class="kb-mode" data-mode="NAV" role="status" aria-label="Keyboard mode">NAV</span><button type="button" id="kb-open" class="kb-hint" aria-label="Open the command palette"><span id="kb-hint"></span></button></div>
     <button type="button" id="list-rail" class="list-rail" aria-label="Expand the list" aria-controls="agents" aria-expanded="false" title="Expand the list ( [ )">
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M13 9.5l2.5 2.5-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>

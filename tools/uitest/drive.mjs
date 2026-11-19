@@ -1035,7 +1035,10 @@ await check("hub-only: the hub's own host reads 'no agents here' and the launch 
     state.hosts = [{ name: "hub", local: true, status: "ok", no_agents: true, agents: 0 }, { name: "buildbox", status: "ok", agents: 0 }];
     state.agents = [];
     renderList();
-    const chips = document.getElementById("host-filter").innerText;
+    // The picker's rows say it: open it to read them.
+    toggleHostPicker(true);
+    const chips = document.getElementById("hp-list").innerText;
+    toggleHostPicker(false);
     const empty = document.querySelector("#agents .empty")?.innerText || "";
     renderLaunchHosts();
     const launch = [...document.querySelectorAll("#ln-hosts .hf-chip")].map((b) => [b.dataset.host, b.disabled]);
@@ -1043,7 +1046,7 @@ await check("hub-only: the hub's own host reads 'no agents here' and the launch 
     renderList();
     return { chips, empty, launch };
   });
-  if (!/hub\s+no agents here/.test(r.chips)) throw new Error("the host chip does not say 'no agents here': " + JSON.stringify(r.chips));
+  if (!/hub\s+no agents here/.test(r.chips)) throw new Error("the host row does not say 'no agents here': " + JSON.stringify(r.chips));
   if (!/hosts none/.test(r.empty)) throw new Error("the empty state does not explain: " + JSON.stringify(r.empty));
   const byHost = Object.fromEntries(r.launch);
   if (byHost.hub !== true || byHost.buildbox !== false) throw new Error("launch form hosts: " + JSON.stringify(r.launch));
@@ -2271,7 +2274,7 @@ await check("pi trust prompt: an idle-reported Pi agent shows as blocked with it
 });
 
 // ---- version badge: a peer that runs another version than the hub ----
-await check("host chips: a peer on another version shows a badge, a matching or unknown one does not", async () => {
+await check("host picker: a peer on another version shows a badge, a matching or unknown one does not", async () => {
   await page.goto(base + "/", { waitUntil: "load" });
   await page.waitForSelector("#agents .agent");
   const r = await page.evaluate(() => {
@@ -2284,7 +2287,9 @@ await check("host chips: a peer on another version shows a badge, a matching or 
     ];
     renderHostFilter();
     const nav = document.getElementById("host-filter");
-    const badges = [...nav.querySelectorAll(".ver")].map((e) => ({ text: e.textContent, host: e.closest(".hf-chip").dataset.host, title: e.title }));
+    toggleHostPicker(true);
+    const badges = [...document.querySelectorAll("#hp-list .ver")].map((e) => ({ text: e.textContent, host: e.closest(".hp-row").dataset.host, title: e.title }));
+    toggleHostPicker(false);
     return { badges, hidden: nav.hidden, overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth };
   });
   if (r.hidden) throw new Error("host filter hidden");
