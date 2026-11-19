@@ -35,9 +35,11 @@ import (
 // pane closed, or its role removed) does it fall back to the pool, and the
 // notice then says whose it was. A notice nobody owns (a release, a sweep, a
 // briefing, a user-started agent no coordinator ever prompted) goes to the
-// main coordinator: the one the user marked (comebye coordinator main), else
-// the first registered live one. While main is busy it waits; when main is
-// not running any idle coordinator takes it, labelled as main's.
+// main coordinator: the first one registered, which stays main (durably, in
+// roles.json) until its role is removed, then the oldest remaining one; the
+// user may also mark another (comebye coordinator main). While main is busy
+// or offline it waits; when main is not running any idle coordinator takes
+// it, labelled as main's.
 
 // askerMax bounds askers.json; the oldest records go first.
 const askerMax = 200
@@ -310,11 +312,18 @@ func (w *statusWriter) Flush() {
 	}
 }
 
-// isMain: the role of id is marked main.
-func (s *roleStore) isMain(id string) bool {
+// get is the role recorded for id.
+func (s *roleStore) get(id string) (Role, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.data[id].Main
+	r, ok := s.data[id]
+	return r, ok
+}
+
+// isMain: the role of id is marked main.
+func (s *roleStore) isMain(id string) bool {
+	r, _ := s.get(id)
+	return r.Main
 }
 
 // setMain marks id the main coordinator and clears the mark elsewhere.

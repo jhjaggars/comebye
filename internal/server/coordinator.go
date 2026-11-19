@@ -265,7 +265,35 @@ func (s *roleStore) set(id string, r Role) error {
 		}
 		s.data[id] = r
 	}
+	s.ensureMainLocked()
 	return writeFileAtomic(s.path, s.data)
+}
+
+// ensureMainLocked keeps exactly one coordinator marked main, durably: the
+// first one registered becomes main and stays main until its role is removed;
+// then the oldest remaining coordinator is. s.mu is held.
+func (s *roleStore) ensureMainLocked() {
+	first := ""
+	for id, r := range s.data {
+		if r.Role != RoleCoordinator {
+			if r.Main {
+				r.Main = false
+				s.data[id] = r
+			}
+			continue
+		}
+		if r.Main {
+			return
+		}
+		if o, ok := s.data[first]; first == "" || !ok || r.At.Before(o.At) || (r.At.Equal(o.At) && id < first) {
+			first = id
+		}
+	}
+	if first != "" {
+		r := s.data[first]
+		r.Main = true
+		s.data[first] = r
+	}
 }
 
 // maxRoles bounds roles.json; the oldest roles go first.
@@ -331,7 +359,11 @@ func (s *Server) recordRole(id, name, role, by string) error {
 	if s.roles == nil {
 		return errors.New("this instance keeps no roles")
 	}
-	return s.roles.set(id, Role{Role: role, Name: name, By: by, At: time.Now().UTC(), Main: s.roles.isMain(id) && role == RoleCoordinator})
+	at, main := time.Now().UTC(), false
+	if old, ok := s.roles.get(id); ok && old.Role == RoleCoordinator && role == RoleCoordinator {
+		at, main = old.At, old.Main // registered again: still the same place in the order
+	}
+	return s.roles.set(id, Role{Role: role, Name: name, By: by, At: at, Main: main})
 }
 
 // handleRoles lists the coordinator roles: {roles: {id: role}}.

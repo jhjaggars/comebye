@@ -405,10 +405,12 @@ that belongs to one of them:
 - **Events nobody owns go to the main coordinator**: sweep results, the
   scheduled briefing, release items, review verdicts and loop nudges whose
   owner is unknown, and to-do answers whose waiting agent no coordinator
-  owns. Main is the coordinator you mark with `comebye coordinator main
-  AGENT` (the user's alone; `comebye coordinator main` shows it, and
-  `comebye agents` prints `coordinator (main)`). With none marked, the
-  first registered live coordinator is main. If main is busy the notice
+  owns. Main is the first coordinator registered; it stays main (recorded in
+  `roles.json`, so a restart keeps it) until it is removed, and then the
+  oldest remaining coordinator is. Busy, parked or offline does not change
+  it. `comebye coordinator main` shows it, `comebye coordinator main AGENT`
+  (the user's alone) moves the mark, and `comebye agents` prints
+  `coordinator (main)`. If main is busy the notice
   waits; if main is not running, any idle coordinator takes it and the
   notice says it was main's.
 - **A gone owner** (its pane closed, or its role removed) falls back to

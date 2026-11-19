@@ -431,3 +431,40 @@ func TestRouteLoopNoticeGoesToTheRequester(t *testing.T) {
 		t.Fatalf("A prompts = %v", ps)
 	}
 }
+
+// The first coordinator registered is main and stays main (also across a
+// restart and a second registration) until its role is removed; then the
+// oldest remaining one is.
+func TestRouteMainIsTheFirstRegisteredUntilRemoved(t *testing.T) {
+	r := rigOf(t)
+	mainOf := func() string {
+		for id, ro := range r.s.roles.all() {
+			if ro.Main {
+				return id
+			}
+		}
+		return ""
+	}
+	if mainOf() != refA.AgentID {
+		t.Fatalf("main = %q", mainOf())
+	}
+	if err := r.s.recordRole(refA.AgentID, refA.Name, RoleCoordinator, "me"); err != nil { // registered again
+		t.Fatal(err)
+	}
+	if mainOf() != refA.AgentID {
+		t.Fatalf("main after re-register = %q", mainOf())
+	}
+	re, err := openRoles(r.s.roles.path) // a restart
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !re.isMain(refA.AgentID) || re.isMain(refB.AgentID) {
+		t.Fatalf("reloaded roles = %+v", re.all())
+	}
+	if err := r.s.recordRole(refA.AgentID, "", "", ""); err != nil { // removed
+		t.Fatal(err)
+	}
+	if mainOf() != refB.AgentID {
+		t.Fatalf("main after removal = %q", mainOf())
+	}
+}
