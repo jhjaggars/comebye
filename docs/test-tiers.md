@@ -60,6 +60,22 @@ listed checks failed passes (`tools/ci/flakes.sh judge`). The nightly runs each 
 passed. An expired entry blocks again (the lint job fails): renew it with a new date and a note on what you found, or
 fix the check and delete the line. No automatic retries: they hide the cause.
 
+## Finding a new flake
+
+The flaky list is for checks that are already known. To find the ones that are not, run a script (or all of them) several
+times and look at what fails only sometimes:
+
+```sh
+tools/ci/flakes.sh repeat 5 leftnav reviewcard      # these two, five runs each, 4 at a time (JOBS=n changes it)
+tools/ci/flakes.sh repeat 3                         # every script run.sh knows (the nightly's `repeat` job)
+```
+
+It prints `FLAKY script / check: failed k of N` for a check that failed in some runs and not all (exit 1), and `BROKEN` for one
+that failed every time. Slow runners are mimicked locally with `taskset -c 0,1` plus a few busy loops on those cores. The
+nightly's `repeat` job does this with three runs of every script; it is not part of the nightly's red/green (the step summary
+has the list), so a flake it finds is a to-do, not a stopped release. The cause is nearly always a wait on a fixed time or on
+state the app refreshes underneath the test: wait on the condition that the next step needs instead.
+
 ## A red nightly
 
 The nightly opens one issue titled **Nightly is red**, label **`nightly-red`**, comments on it for each further red
