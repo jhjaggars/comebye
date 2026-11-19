@@ -112,6 +112,7 @@ if want spacing; then node spacing.mjs "http://127.0.0.1:$port" "$out" || rc=1 ;
 if want wrap; then node wrap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want openbydefault; then node openbydefault.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want appearancereset; then node appearancereset.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want depth; then node depth.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want navcontrast; then node navcontrast.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want leftnav; then node leftnav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want hostpicker; then node hostpicker.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

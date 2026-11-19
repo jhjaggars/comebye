@@ -7396,6 +7396,9 @@ function pageThemeMessage() {
   if (!t) return null;
   const tokens = {};
   for (const k of Object.keys(t.vars)) tokens["--" + k] = String(t.vars[k]);
+  // The depth tokens follow the Surfaces setting: under Flat they are the plain panel, border and shadow colours.
+  const dt = CT.depthTokens(t.vars);
+  for (const k of Object.keys(dt)) tokens["--" + k] = String(dt[k]);
   return { type: "comebye-theme", scheme: t.mode, font: CT.fontChoice() === "serif" ? "serif" : "sans", tokens };
 }
 
@@ -7423,7 +7426,7 @@ window.addEventListener("message", (e) => {
 });
 
 // Every theme change (picker, preview, the OS scheme under System) sets data-theme.
-new MutationObserver(sendPageTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-font"] });
+new MutationObserver(sendPageTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-font", "data-depth"] });
 
 // ---- Comments on a page ----
 // The page is untrusted code in a sandboxed frame. The hub adds a small script
@@ -9860,11 +9863,14 @@ function sxAppearance() {
     <h3 class="sx-grp">Theme and font</h3>
     <div class="sx-field sx-rows">
       <button type="button" class="sx-row" id="sx-row-theme" data-sx="theme" aria-haspopup="menu"><span class="sx-rl">Theme</span><span class="sx-rv" id="sx-theme-val">${esc(themeLabel())}</span><span class="sx-chev" aria-hidden="true">›</span></button></div>
+    <div class="sx-field"><div class="sx-lbl" id="sx-depth-lbl">Surfaces</div>
+      ${sxRadios("depth", "sx-depth-lbl", CT.DEPTHS, CT.depthChoice())}
+      <p class="sx-note">Layered lifts cards, bars and menus a step above the page with quiet shadows, and tints the row you hover or select. Flat is one surface and a border, as before. Pages follow.</p></div>
     <div class="sx-field"><div class="sx-lbl" id="sx-font-lbl">Font</div>
       ${sxRadios("font", "sx-font-lbl", CT.FONTS, CT.fontChoice())}
       <p class="sx-note">Serif is for the text you read: replies, To do, the briefing, Markdown and Pages. Code stays monospace; the key bar, action buttons and form fields stay sans.</p></div>
     <div class="sx-field"><button type="button" class="btn" id="sx-reset" data-sx="reset">Reset to defaults</button>
-      <p class="sx-note">Puts reading width, text size, spacing, wrapping and open by default back to the default. Your theme and font stay.</p></div>`;
+      <p class="sx-note">Puts reading width, text size, spacing, wrapping, open by default and surfaces back to the default. Your theme and font stay.</p></div>`;
 }
 
 // The Theme and Font rows open the same panels as the fleet menu, anchored under the row; the panel's trigger
@@ -9900,7 +9906,7 @@ function sxFitPreview() {
 }
 
 // The choice for a radio group by its kind ("col", "rs", "sp"): the list, and how to save it.
-const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet], font: [CT.FONTS, CT.fontSet], openthink: [CT.ONOFF, (v) => CT.openPart("think", !!v)], opentools: [CT.ONOFF, (v) => CT.openPart("tools", !!v)] });
+const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet], depth: [CT.DEPTHS, CT.depthSet], font: [CT.FONTS, CT.fontSet], openthink: [CT.ONOFF, (v) => CT.openPart("think", !!v)], opentools: [CT.ONOFF, (v) => CT.openPart("tools", !!v)] });
 function sxPick(kind, val) {
   const p = SX_PREFS()[kind];
   if (!p) return;
@@ -10060,7 +10066,7 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
-    case "col": case "rs": case "sp": case "wrap": case "font": case "openthink": case "opentools": sxPick(b.dataset.sx, b.dataset.val); break;
+    case "col": case "rs": case "sp": case "wrap": case "depth": case "font": case "openthink": case "opentools": sxPick(b.dataset.sx, b.dataset.val); break;
     case "theme": sxOpenPanel(b.dataset.sx); break;
     case "reset": sxReset(); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
@@ -10107,7 +10113,7 @@ function initSettings() {
   $("sx-view").addEventListener("keydown", sxColKey);
   // The strip is drawn for this window, and another tab can change the width: redraw the open screen.
   window.addEventListener("resize", () => { if (sx.route) renderSettings(); });
-  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP || e.key === CT.KEY_WRAP || e.key === CT.KEY_OPEN || e.key === CT.KEY_FONT)) renderSettings(); });
+  window.addEventListener("storage", (e) => { if (sx.route && (e.key === CT.KEY_COL || e.key === CT.KEY_RS || e.key === CT.KEY_SP || e.key === CT.KEY_WRAP || e.key === CT.KEY_OPEN || e.key === CT.KEY_DEPTH || e.key === CT.KEY_FONT)) renderSettings(); });
   $("sx-view").addEventListener("submit", settingsSubmit);
 }
 

@@ -61,6 +61,14 @@
     --selection:#d6e6fb;
     --focus:#1c58b8;
     --scroll-thumb:#7f8593;
+    --s1:#ffffff;
+    --s2:#eef0f5;
+    --s3:#ffffff;
+    --edge:#e0e3ea;
+    --hi:rgba(255, 255, 255, 0);
+    --hov:#eef3fc;
+    --sel:#e1ebfa;
+    --sh-sm:rgba(30, 40, 70, 0.1);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -113,6 +121,14 @@
     --selection:#2b4a7a;
     --focus:#60a5fa;
     --scroll-thumb:#666b77;
+    --s1:#1b1f28;
+    --s2:#21252f;
+    --s3:#262a34;
+    --edge:#262a35;
+    --hi:rgba(230, 232, 238, 0.07);
+    --hov:#1c2433;
+    --sel:#1e2940;
+    --sh-sm:rgba(0, 0, 0, 0.45);
   }
 }
 /* Non-colour tokens: the same scales as the app's :root in web/index.html (pageskit_test.go keeps them equal).
@@ -138,7 +154,7 @@ body {
 .wrap { max-width: 860px; margin: 0 auto; padding: var(--sp-24) var(--sp-16) 64px; }
 
 /* heading block */
-.hero { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-12); padding: var(--sp-20); margin: 0 0 var(--sp-24); box-shadow: 0 2px 10px var(--sh-md); }
+.hero { background: var(--s1); border: 1px solid var(--edge); border-radius: var(--r-12); padding: var(--sp-20); margin: 0 0 var(--sp-24); box-shadow: 0 2px 10px var(--sh-md), inset 0 1px 0 var(--hi); }
 .hero h1 { margin: 0 0 var(--sp-6); font-size: 1.6em; line-height: 1.25; font-weight: 700; }
 .hero .what { margin: 0 0 var(--sp-14); color: var(--muted); }
 .meta { display: flex; flex-wrap: wrap; gap: var(--sp-6) var(--sp-8); margin: 0; padding: 0; list-style: none; font-size: var(--fs-13); }
@@ -149,7 +165,7 @@ body {
 .meta li.by { background: var(--chip-green); color: var(--green); }
 
 /* table of contents */
-nav.toc { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-12); margin: 0 0 28px; padding: 0; }
+nav.toc { background: var(--s1); border: 1px solid var(--edge); border-radius: var(--r-12); margin: 0 0 28px; padding: 0; box-shadow: 0 1px 2px var(--sh-sm), inset 0 1px 0 var(--hi); }
 nav.toc summary { cursor: pointer; padding: var(--sp-10) var(--sp-16); font-weight: 600; list-style-position: inside; }
 nav.toc ol, nav.toc ul { margin: 0; padding: 0 var(--sp-16) var(--sp-12) 36px; font-size: var(--fs-15); }
 nav.toc ul ul, nav.toc ol ol { padding: var(--sp-2) 0 var(--sp-2) 18px; }
@@ -217,14 +233,14 @@ nav.toc a:hover { text-decoration: underline; }
 .chip.orange { background: var(--chip-rtr); color: var(--orange); }
 .chip.purple { background: var(--chip-purple); color: var(--purple); }
 .chip.teal { background: var(--chip-landing); color: var(--teal); }
-.chip.muted { background: var(--panel2); color: var(--muted); }
+.chip.muted { background: var(--s2); color: var(--muted); }
 
 /* card: the app's surface (panel, hairline, 12px radius); .attn / .bad / .good set the edge */
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-12); padding: var(--sp-12) var(--sp-14); min-width: 0; }
+.card { background: var(--s1); border: 1px solid var(--edge); border-radius: var(--r-12); padding: var(--sp-12) var(--sp-14); min-width: 0; box-shadow: 0 1px 2px var(--sh-sm), inset 0 1px 0 var(--hi); }
 .card.attn { border-color: var(--orange); } .card.bad { border-color: var(--red); } .card.good { border-color: var(--green); }
 
 /* buttons and segmented control, as in the app (44px phone target; .sm is the dense 32px) */
-.btn { min-height: var(--hit-44); padding: 0 var(--sp-14); border-radius: var(--r-12); border: 1px solid var(--border); background: var(--panel2); color: var(--text); font: inherit; font-size: var(--fs-14); font-weight: 600; cursor: pointer; }
+.btn { min-height: var(--hit-44); padding: 0 var(--sp-14); border-radius: var(--r-12); border: 1px solid var(--border); background: var(--s2); color: var(--text); font: inherit; font-size: var(--fs-14); font-weight: 600; cursor: pointer; }
 .btn.sm { min-height: var(--hit-32); padding: 0 var(--sp-10); font-size: var(--fs-13); }
 .btn.primary { border-color: var(--blue); background: var(--chip-blue); color: var(--blue); }
 .btn.warn { color: var(--orange); } .btn.danger { color: var(--red); }
@@ -248,7 +264,7 @@ footer { margin-top: 40px; padding-top: var(--sp-12); border-top: 1px solid var(
    token name with a plain colour value is applied; nothing is evaluated;
    anything else is ignored. */
 (function () {
-  var KNOWN = ["bg", "panel", "panel2", "border", "text", "muted", "blue", "orange", "green", "purple", "red", "yellow", "teal", "on-accent", "on-red", "on-orange", "code-bg", "code-text", "quote", "snip", "th-bg", "btn-bg", "blocked-bg", "blocked-name", "bubble", "rc-user", "rc-out", "mark-bg", "rcmark-bg", "rcmark-text", "chip-blue", "chip-purple", "chip-red", "chip-green", "chip-finished", "chip-cand", "chip-rtr", "chip-landing", "chip-yellow", "secret-bg", "sh-md", "sh-lg", "selection", "focus", "scroll-thumb"];
+  var KNOWN = ["bg", "panel", "panel2", "border", "text", "muted", "blue", "orange", "green", "purple", "red", "yellow", "teal", "on-accent", "on-red", "on-orange", "code-bg", "code-text", "quote", "snip", "th-bg", "btn-bg", "blocked-bg", "blocked-name", "bubble", "rc-user", "rc-out", "mark-bg", "rcmark-bg", "rcmark-text", "chip-blue", "chip-purple", "chip-red", "chip-green", "chip-finished", "chip-cand", "chip-rtr", "chip-landing", "chip-yellow", "secret-bg", "sh-md", "sh-lg", "selection", "focus", "scroll-thumb", "s1", "s2", "s3", "edge", "hi", "hov", "sel", "sh-sm"];
   var ok = {}; KNOWN.forEach(function (k) { ok["--" + k] = 1; });
   var COLOUR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\(\s*[0-9.%\s,\/-]+\))$/i;
   var root = document.documentElement;

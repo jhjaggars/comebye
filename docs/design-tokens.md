@@ -24,6 +24,28 @@ Hit sizes are defined but not adopted yet: component by component, `min-height: 
 `var(--hit-44)`. Phone controls are 44 (the iOS minimum), dense desktop controls 32-36.
 Not tokenised yet: `z-index` (13 distinct values), breakpoints (9), transitions.
 
+## Surfaces (Layered and Flat)
+
+Settings > Appearance > Surfaces picks **Layered** (the default) or **Flat** (`<html data-depth="flat">`, today's look).
+The colour tokens are per theme in `web/themes.js`; `depth()` derives them for the 13 palette themes, and Comebye Dark and Light
+state theirs by hand (the `s1`..`sh-sm` lines at the end of `comebyeDark` and `comebyeLight`).
+
+| Token | Meaning |
+|---|---|
+| `--s1` `--s2` `--s3` | the scale above the page (`--bg`): cards, bars and fields; wells and the composer; menus, sheets, the palette. Light themes cannot rise above white, so `--s2` steps down |
+| `--edge` | a container's hairline; a control keeps the full `--border` |
+| `--hi` | the dark top-light, a 1px line inside a raised edge (alpha 0 in light themes) |
+| `--hov` `--sel` | hover and selected rows: a quiet accent tint over `--s1` |
+| `--sh-sm` | the tight shadow under a card (`--sh-md` and `--sh-lg` are the larger ones) |
+
+Every step is backed off until text, muted text and the accents read at 4.5:1 on it (`contrast.mjs` checks it for all themes),
+so a dark theme whose muted text sits close to the page gets smaller steps (one-dark and rose-pine collapse `--s3` onto `--s2`).
+
+In `web/index.html`, write `var(--card-edge)`, `var(--lift-1)` (card), `var(--lift-2)` (composer), `var(--lift-3)` (menu),
+`var(--bg-hover)` and `var(--bg-sel)`: under Flat they are the plain border, no shadow and `--panel2`; the Layered block at the
+end of the sheet redefines them, and redefines `--panel` and `--panel2` as `--s1` and `--s2`. Pages receive the same tokens in
+`{type:"comebye-theme"}` (the Flat equivalents under Flat), and the Page template draws its cards from `--s1` and `--edge`.
+
 ## Rules
 
 1. In `padding`, `margin`, `gap`, `border-radius` and `font-size`, write the token, not the number.
