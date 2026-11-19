@@ -6,6 +6,7 @@ const state = {
   agents: [],          // current agent list from the server (every host's, on a hub)
   listTab: null,       // the status tab: all | needs | working | done (loaded lazily)
   listQ: null,         // the filter box's text (loaded lazily)
+  listGroup: null,     // how the list is grouped: project | host | status (loaded lazily)
   hostFilter: null,    // the chosen host names, [] for all (loaded lazily); only used with more than one host
   hosts: [],           // per-host status from the server; one entry unless this is a hub
   localHost: null,     // name of the server's own host
@@ -890,6 +891,58 @@ function clearFilters() {
   syncListHash();
 }
 
+/* ---------- group by (left nav, slice 4) ---------- */
+
+// Each mode turns the sorted agents into [name, list] groups; a mode that does not apply (Host on one host) is not offered and the
+// list falls back to Project. To add a mode, add an entry here (and its `groups`); the menu, the URL and the saved choice follow.
+const LIST_GROUP_KEY = "herdr-list-group";
+const GROUP_STATUS = [["Needs you", (a) => a.agent_status === "blocked"], ["Working", (a) => a.agent_status === "working"],
+  ["Done", (a) => a.agent_status === "done" || a.agent_status === "idle"]];
+const GROUP_MODES = [
+  { key: "project", label: "Project", pins: true, groups: (list) => projectGroups(list) },
+  { key: "host", label: "Host", pins: true, show: () => multiHost(), groups: (list) => hostGroups(list) },
+  { key: "status", label: "Status", pins: false, groups: (list) => statusGroups(list) },
+];
+const normGroup = (g) => (GROUP_MODES.some((x) => x.key === g) ? g : "project");
+// listGroup is the saved choice; groupMode is the one in effect (a saved Host on a single host shows as Project, and comes back with the hosts).
+function listGroup() {
+  if (state.listGroup === null) state.listGroup = normGroup(lsGet(LIST_GROUP_KEY));
+  return state.listGroup;
+}
+function groupMode() {
+  const m = GROUP_MODES.find((x) => x.key === listGroup());
+  return m && (!m.show || m.show()) ? m : GROUP_MODES[0];
+}
+function setListGroup(g) {
+  state.listGroup = normGroup(g);
+  lsSet(LIST_GROUP_KEY, state.listGroup);
+  renderList();
+  syncListHash();
+}
+// Collapse state is per mode: a Project group and a Host group of the same name are two keys. Project keeps the plain name it always had.
+const groupKey = (mode, name) => (mode === "project" ? name : "\u001f" + mode + "\u001f" + name);
+function urgentFirst(groups) {
+  const rank = (list) => Math.min(...list.map(statusRank));
+  const recent = (list) => Math.max(...list.map(activeMs));
+  return groups.sort(([na, la], [nb, lb]) => rank(la) - rank(lb) || recent(lb) - recent(la) || na.localeCompare(nb));
+}
+function hostGroups(agents) {
+  const groups = new Map();
+  for (const a of agents) {
+    const h = a.host || state.localHost || "This host";
+    if (!groups.has(h)) groups.set(h, []);
+    groups.get(h).push(a);
+  }
+  return urgentFirst([...groups.entries()]);
+}
+// statusGroups: a group per status, in a fixed order; a blocked agent is in Needs you only (a group holds an agent once).
+function statusGroups(agents) {
+  const out = GROUP_STATUS.map(([name, has]) => [name, agents.filter(has)]);
+  const other = agents.filter((a) => !GROUP_STATUS.some(([, has]) => has(a)));
+  if (other.length) out.push(["Unknown", other]);
+  return out.filter(([, l]) => l.length);
+}
+
 // The URL carries the view so it can be shared: #/list?tab=working&q=api&host=mac,laharl (only what differs from the default).
 // A screen or an agent owns the hash while it is open; the list's own hash is written when none is.
 function listHash() {
@@ -898,6 +951,7 @@ function listHash() {
   if (listQ().trim()) p.set("q", listQ().trim());
   const h = normHostFilter(state.hostFilter);
   if (h.length) p.set("host", h.join(","));
+  if (listGroup() !== "project") p.set("group", listGroup());
   const s = p.toString();
   return s ? `${LIST_HASH}?${s}` : "";
 }
@@ -917,6 +971,8 @@ function applyListHash() {
   state.listTab = normTab(p.get("tab"));
   state.listQ = (p.get("q") || "").slice(0, 200);
   state.hostFilter = normHostFilter((p.get("host") || "").split(",").filter(Boolean));
+  state.listGroup = normGroup(p.get("group"));
+  lsSet(LIST_GROUP_KEY, state.listGroup);
   lsSet(LIST_TAB_KEY, state.listTab); lsSet(LIST_Q_KEY, state.listQ);
   try { localStorage.setItem(HOST_FILTER_KEY, JSON.stringify(state.hostFilter)); } catch {}
   return true;
@@ -933,6 +989,11 @@ function renderListFilter(base) {
   const box = $("lf-q");
   if (box.value !== q) box.value = q;
   $("lf-x").hidden = !q;
+  const gm = groupMode();
+  $("gb-label").textContent = gm.label;
+  $("gb-btn").setAttribute("aria-label", `Group by: ${gm.label}`);
+  if (gm.key !== "project") $("gb-btn").setAttribute("data-set", ""); else $("gb-btn").removeAttribute("data-set");
+  if (!$("gb-pop").hidden) renderGroupMenu();
   const had = document.activeElement && document.activeElement.closest ? document.activeElement.closest("#lf-tabs .lf-tab") : null;
   $("lf-tabs").innerHTML = LIST_TABS.map((t) => {
     const n = base.filter(t.has).length;
@@ -949,7 +1010,45 @@ function focusListFilter() {
   $("lf-q").select();
   return true;
 }
+function renderGroupMenu() {
+  const cur = groupMode().key, list = $("gb-list");
+  const fid = document.activeElement && list.contains(document.activeElement) ? document.activeElement.dataset.group : null;
+  list.innerHTML = GROUP_MODES.filter((m) => !m.show || m.show()).map((m) =>
+    `<button type="button" class="hp-row" role="menuitemradio" aria-checked="${m.key === cur}" data-group="${m.key}"><span class="hp-box" aria-hidden="true"></span><span class="hp-name">${esc(m.label)}</span></button>`).join("");
+  if (fid !== null) list.querySelector(`[data-group="${fid}"]`)?.focus({ preventScroll: true });
+}
+function toggleGroupMenu(show) {
+  const pop = $("gb-pop");
+  const open = show ?? pop.hidden;
+  if (open === !pop.hidden) return;
+  pop.hidden = !open;
+  if (open) {
+    renderGroupMenu();
+    popOpened("group");
+    placePop("group", $("gb-btn"));
+    // Under the button on a desktop, left edge in line with the box and never off the screen.
+    (pop.querySelector('[aria-checked="true"]') || popItems(pop)[0] || pop).focus?.();
+  } else {
+    popClosed("group");
+  }
+  $("gb-btn").setAttribute("aria-expanded", String(open));
+}
+function openGroupMenu() {
+  const bar = $("list-filter");
+  if (!bar || bar.hidden || !bar.getClientRects().length) return false;
+  if (document.body.classList.contains("list-collapsed")) setListCollapsed(false, false);
+  toggleGroupMenu(true);
+  return true;
+}
 function initListFilter() {
+  $("gb-btn").addEventListener("click", () => toggleGroupMenu());
+  $("gb-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest(".hp-row");
+    if (!b) return;
+    closePop("group", true);
+    setListGroup(b.dataset.group);
+  });
+  $("gb-pop").addEventListener("keydown", (ev) => { if (ev.key === "Tab") closePop("group", true); });
   $("lf-q").addEventListener("input", () => setListQ($("lf-q").value));
   $("lf-q").addEventListener("keydown", (ev) => {
     if (ev.isComposing) return;
@@ -1152,16 +1251,17 @@ function renderListRows() {
   }
   // Coordinators are pinned above the projects.
   // Desktop: the agents waiting on you sit in a group of their own at the top.
-  const needs = isDesktop() ? agents.filter((a) => a.agent_status === "blocked") : [];
+  const gm = groupMode();
+  const needs = isDesktop() && gm.pins ? agents.filter((a) => a.agent_status === "blocked") : [];
   const needsSec = needs.length ? `<section class="proj needs-sec" aria-label="Needs you">
     <div class="proj-head static"><span class="proj-name">Needs you</span><span class="proj-counts"><span class="need">${needs.length}</span></span></div>
     <div class="proj-body">${needs.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
-  const coords = agents.filter((a) => isCoordinator(a) && !needs.includes(a));
+  const coords = gm.pins ? agents.filter((a) => isCoordinator(a) && !needs.includes(a)) : [];
   const pinned = coords.length ? `<section class="proj coord-sec" aria-label="Coordinators">
     <div class="proj-head static"><span class="proj-name">Coordinators</span></div>
     <div class="proj-body">${coords.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
-  const rest = agents.filter((a) => !isCoordinator(a) && !needs.includes(a));
-  wrap.innerHTML = parkBannerHTML() + needsSec + pinned + projectGroups(rest).map(([name, list]) => projectHTML(name, list)).join("") + parkedSectionHTML() + downRows;
+  const rest = agents.filter((a) => !(gm.pins && isCoordinator(a)) && !needs.includes(a));
+  wrap.innerHTML = parkBannerHTML() + needsSec + pinned + gm.groups(rest).map(([name, list]) => projectHTML(name, list, gm.key)).join("") + parkedSectionHTML() + downRows;
   wrap.querySelectorAll(".proj-head").forEach((el) =>
     el.addEventListener("click", () => toggleProject(el.dataset.proj)));
   bindParkedRows(wrap);
@@ -1534,23 +1634,30 @@ function collapsed() {
   }
   return collapsedProjects;
 }
-function toggleProject(name) {
+function toggleProject(name) { // name is a group's collapse key (groupKey), or "Recently closed"
+  if (!name) return;
   const c = collapsed();
   if (c.has(name)) c.delete(name); else c.add(name);
   try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...c].slice(-200))); } catch {}
   renderList();
 }
 
-function projectHTML(name, list) {
-  const open = !collapsed().has(name);
+function projectHTML(name, list, mode = "project") {
+  const key = groupKey(mode, name);
+  const open = !collapsed().has(key);
   const nBlocked = list.filter((a) => a.agent_status === "blocked").length;
   const nWorking = list.filter((a) => a.agent_status === "working").length;
   const counts = (nBlocked ? `<span class="need">${nBlocked} need${nBlocked === 1 ? "s" : ""} input</span>` : "") +
     (nWorking ? `<span class="run">${nWorking} working</span>` : "") + `<span>${list.length}</span>`;
-  const home = list.filter((a) => !isWorker(a));
-  const workers = list.filter(isWorker);
-  return `<section class="proj">
-    <button type="button" class="proj-head" data-proj="${esc(name)}" aria-expanded="${open}">
+  // Project mode seats the worktree workers after the checkout's own agents; the other modes keep the list's order.
+  const home = mode === "project" ? list.filter((a) => !isWorker(a)) : list;
+  const workers = mode === "project" ? list.filter(isWorker) : [];
+  // Needs you (Status mode) is never folded away, as the desktop's Needs you section is not: a waiting agent stays in sight.
+  if (mode === "status" && name === "Needs you") return `<section class="proj needs-sec" data-group="status" aria-label="Needs you">
+    <div class="proj-head static"><span class="proj-name">Needs you</span><span class="proj-counts"><span class="need">${list.length}</span></span></div>
+    <div class="proj-body">${list.map((a) => agentRow(a, false)).join("")}</div></section>`;
+  return `<section class="proj" data-group="${esc(mode)}">
+    <button type="button" class="proj-head" data-proj="${esc(key)}" aria-expanded="${open}">
       <span class="proj-chev" aria-hidden="true"></span><span class="proj-name">${esc(name || "Other")}</span>
       <span class="proj-counts">${counts}</span>
     </button>
@@ -4653,6 +4760,7 @@ const POPS = {
   // Esc (the palette's esc goes back a step first) and puts the focus back. noSheet: no phone backdrop.
   palette: { id: "palette", noSheet: true, close: () => window.CMDK && CMDK.close(false), trigger: () => window.CMDK && CMDK.from(), esc: () => !!(window.CMDK && CMDK.back()) },
   cheats: { id: "cheats", noSheet: true, close: () => window.CMDK && CMDK.closeCheats(false), trigger: () => window.CMDK && CMDK.cheatFrom() },
+  group: { id: "gb-pop", close: () => toggleGroupMenu(false), trigger: () => $("gb-btn") },
   hosts: { id: "hp-pop", close: () => toggleHostPicker(false), trigger: () => $("hp-btn") },
   theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => sxRow("theme") || $("btn-fleet") },
   pgsmenu: { id: "pgs-menu", close: () => pgsPop("pgsmenu", false), trigger: () => $("pgs-menub") },

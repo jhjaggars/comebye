@@ -97,6 +97,7 @@
   const pages = () => [
     { id: "go-status", label: "Status", keys: ["g", "s"], run: () => openPage("status"), show: () => ledger.on !== false },
     { id: "go-todo", label: "To do", keys: ["g", "t"], run: () => openPage("todo"), show: () => todos.on !== false },
+    { id: "go-group", label: "Group the agent list by…", run: () => { if (!openGroupMenu()) toast("No agents to group"); } },
     { id: "go-filter", label: "Filter the agent list", keys: ["f"], run: () => { if (!focusListFilter()) toast("No agents to filter"); } },
     { id: "go-search", label: "Search", keys: ["/"], run: () => goSearch() },
     { id: "go-releases", label: "Releases (Peers tab)" + (relNeedsYou() ? " · needs you" : ""), run: () => { location.hash = RELEASES_HASH; }, show: () => ledger.on !== false },

@@ -301,6 +301,19 @@
     .lf-tab.nd .n { color: var(--orange); font-weight: 700; }
     .lf-tab[aria-pressed="true"].nd .n { color: var(--blue); }
     @media (hover: hover) { .lf-tab:not([aria-pressed="true"]):hover, .lf-x:hover { background: var(--panel); color: var(--text); } }
+    /* Group by (left nav, slice 4): a button beside the filter box, a short menu (a bottom sheet on a phone). */
+    .lf-top { display: flex; align-items: center; gap: var(--sp-8); min-width: 0; }
+    .lf-top .lf-box { flex: 1 1 0; }
+    .gb-btn { flex: none; display: inline-flex; align-items: center; gap: var(--sp-4); max-width: 55%; min-height: var(--hit-36); padding: 0 var(--sp-10); border-radius: var(--r-pill); background: var(--panel); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: var(--fs-13); font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .gb-btn .gb-k { color: var(--muted); font-weight: 500; }
+    .gb-btn .gb-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .gb-btn .chev { flex: none; font-size: var(--fs-12); color: var(--muted); }
+    .gb-btn[data-set] { background: var(--chip-blue); border-color: var(--blue); color: var(--blue); }
+    .gb-btn[data-set] .gb-k, .gb-btn[data-set] .chev { color: var(--blue); }
+    @media (hover: hover) { .gb-btn:not([data-set]):hover { background: var(--bg); } }
+    .gb-pop { width: min(92vw, 240px); }
+    .gb-pop .hp-list { padding-top: var(--sp-4); }
+    .gb-pop .hp-box { border-radius: 50%; }
     .hp-out .hp-out-btn { display: inline-flex; align-items: center; gap: var(--sp-6); min-height: var(--hit-36); padding: 0 var(--sp-8); margin-left: calc(-1 * var(--sp-8)); background: none; border: 0; border-radius: var(--r-8); color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
     @media (hover: hover) { .hp-out .hp-out-btn:hover { color: var(--text); background: var(--panel); } }
     .hf-chip .n { color: var(--muted); font-weight: 500; font-size: var(--fs-13); }
@@ -2996,6 +3009,11 @@
       <input type="search" id="hp-q" class="hp-q" placeholder="Find a host" aria-label="Find a host" autocomplete="off" hidden>
       <div class="hp-list" id="hp-list" role="group" aria-label="Hosts"></div>
     </section>
+    <section id="gb-pop" class="attach-menu pop hp-pop gb-pop" role="menu" aria-label="Group the list by" hidden>
+      <div class="grab" aria-hidden="true"><i></i></div>
+      <div class="pop-head"><span class="pop-title">Group by</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
+      <div class="hp-list" id="gb-list"></div>
+    </section>
     <div id="f-menu" class="attach-menu d-menu pop" role="menu" aria-label="Fleet actions" hidden>
       <div class="grab" aria-hidden="true"><i></i></div>
       <div class="pop-head"><span class="pop-title">Fleet</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
@@ -3030,7 +3048,7 @@
       <div class="tp-hint" id="tp-hint" aria-live="polite"></div>
       <div class="tp-sys" id="tp-sys" hidden></div>
     </section>
-    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><div id="list-filter" class="lf" hidden><div class="lf-box"><input id="lf-q" type="search" class="lf-q" placeholder="Filter by name, branch or repo" aria-label="Filter agents by name, branch or repo" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><kbd class="lf-key" aria-hidden="true">f</kbd><button type="button" id="lf-x" class="lf-x" aria-label="Clear the filter" hidden>&times;</button></div><div class="lf-tabs" id="lf-tabs" role="group" aria-label="Show agents by status"></div></div><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
+    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><div id="list-filter" class="lf" hidden><div class="lf-top"><div class="lf-box"><input id="lf-q" type="search" class="lf-q" placeholder="Filter by name, branch or repo" aria-label="Filter agents by name, branch or repo" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><kbd class="lf-key" aria-hidden="true">f</kbd><button type="button" id="lf-x" class="lf-x" aria-label="Clear the filter" hidden>&times;</button></div><button type="button" id="gb-btn" class="gb-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="gb-pop" title="Group the list by"><span class="gb-k">Group</span><span class="gb-label" id="gb-label">Project</span><span class="chev" aria-hidden="true">&#9662;</span></button></div><div class="lf-tabs" id="lf-tabs" role="group" aria-label="Show agents by status"></div></div><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
     <div id="keybar" class="keybar"><span id="kb-mode" class="kb-mode" data-mode="NAV" role="status" aria-label="Keyboard mode">NAV</span><button type="button" id="kb-open" class="kb-hint" aria-label="Open the command palette"><span id="kb-hint"></span></button></div>
     <button type="button" id="list-rail" class="list-rail" aria-label="Expand the list" aria-controls="agents" aria-expanded="false" title="Expand the list ( [ )">
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M13 9.5l2.5 2.5-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
