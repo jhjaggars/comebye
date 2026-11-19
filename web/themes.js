@@ -71,6 +71,52 @@
     return mix("#000000", bg, hi);
   };
 
+  // depth(): the surface scale of the Layered look (Settings > Appearance > Surfaces), derived from a theme's tokens.
+  //   s1 s2 s3   three steps above the page: cards and rows, inputs and the composer, popovers and sheets. Dark themes
+  //              climb toward the text colour, light ones cannot rise above white, so s1 is the lightest and s2 steps down.
+  //   edge       the hairline on a container (a card, a popover); a control keeps the full --border.
+  //   hi         the dark top-light, a 1px line inside a raised edge (invisible, alpha 0, in light themes).
+  //   hov sel    hover and selected rows: a quiet accent tint over s1.
+  //   sh-sm      the tight shadow under a card (--sh-md and --sh-lg are the two larger ones).
+  // Every step is backed off until the body text, the muted text and the accents still read (4.5:1) on it, so a
+  // dark theme whose muted text is close to the page ends up with smaller steps. `over` is a theme's own explicit
+  // values (the Comebye themes hand-tune theirs); a key in it replaces the derived one.
+  const DEPTH_KEYS = ["s1", "s2", "s3", "edge", "hi", "hov", "sel", "sh-sm"];
+  function depth(v, dark, over) {
+    const MIN = 4.5;
+    const fgs = [v.text, v.muted, v.quote, v.snip, v.blue, v.orange, v.green, v.purple, v.red, v.yellow, v.teal];
+    const reads = (c) => fgs.every((f) => contrast(f, c) >= MIN);
+    // step: `toward` mixed into `from` just far enough for a `goal` contrast step, then backed off until the text reads.
+    const step = (from, toward, goal) => {
+      let lo = 0, hi = 1;
+      for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (contrast(from, mix(toward, from, m)) < goal) lo = m; else hi = m; }
+      let t = hi, c = mix(toward, from, t);
+      while (t > 0 && !reads(c)) { t = Math.max(0, t - 0.005); c = mix(toward, from, t); }
+      return c;
+    };
+    const tintOf = (r, base) => { let x = mix(v.blue, base, r); while (r > 0.02 && !reads(x)) { r -= 0.01; x = mix(v.blue, base, r); } return x; };
+    // A scheme's own card colour stays where it already stands clear of the page (lighter, by the goal step).
+    const own = (c, from, goal) => lum(c) > lum(from) && contrast(from, c) >= goal && reads(c);
+    let s1, s2, s3;
+    if (dark) {
+      s1 = own(v.panel, v.bg, 1.12) ? v.panel : step(v.bg, v.text, 1.12);
+      s2 = step(s1, v.text, 1.10);
+      s3 = step(s2, v.text, 1.10);
+    } else {
+      s1 = own(v.panel, v.bg, 1.07) ? v.panel : step(v.bg, "#ffffff", 1.07); s3 = mix("#ffffff", s1, 0.6);
+      s2 = mix(v.text, s1, 0.045); for (let t = 0.045; t > 0 && !reads(s2); ) { t = Math.max(0, t - 0.005); s2 = mix(v.text, s1, t); }
+    }
+    const d = {
+      s1, s2, s3,
+      edge: mix(v.border, s1, 0.6),
+      hi: dark ? rgba(v.text, 0.07) : "rgba(255, 255, 255, 0)",
+      hov: tintOf(dark ? 0.1 : 0.07, s1),
+      sel: tintOf(dark ? 0.2 : 0.14, s1),
+      "sh-sm": dark ? "rgba(0, 0, 0, 0.45)" : "rgba(30, 40, 70, 0.1)",
+    };
+    return Object.assign(d, over || {});
+  }
+
   // theme() derives the full token set from a core palette.
   function theme(p) {
     const dark = p.mode === "dark";
@@ -142,6 +188,7 @@
     // Selection and the focus ring follow the primary accent.
     v.selection = tint(v.blue, bg, dark ? 0.35 : 0.25, text);
     v.focus = v.blue;
+    Object.assign(v, depth(v, dark, p.depth));
     return { id: p.id, name: p.name, mode: p.mode, src: p.src, vars: v, adjusted };
   }
 
@@ -160,6 +207,9 @@
     "secret-bg": "rgba(251,146,60,.12)", "sh-md": "rgba(0, 0, 0, 0.35)", "sh-lg": "rgba(0, 0, 0, 0.5)",
     "nav-bg": "#020306", /* bg #101218 is too near black for a mix to reach the 1.14 step; a cool near-black keeps the tint (1.10) */
     selection: "#2b4a7a", focus: "#60a5fa", "scroll-thumb": "#666b77",
+    // Surfaces > Layered, hand-tuned (see depth() above): the steps are 1.11 / 1.09 / 1.08 and muted text stays at 4.5 on s3.
+    s1: "#1b1f28", s2: "#21252f", s3: "#262a34", edge: "#262a35", hi: "rgba(230, 232, 238, 0.07)",
+    hov: "#1c2433", sel: "#1e2940", "sh-sm": "rgba(0, 0, 0, 0.45)",
   };
   const comebyeLight = {
     bg: "#f3f4f7", panel: "#ffffff", panel2: "#eceef3", border: "#d3d7e0", text: "#1a1d26", muted: "#596072",
@@ -174,6 +224,9 @@
     "chip-finished": "#efe6fb", "chip-cand": "#e0f3e6", "chip-rtr": "#fcebdb", "chip-landing": "#dcf3f0", "chip-yellow": "#fbf0d0",
     "secret-bg": "rgba(168,74,6,.1)", "sh-md": "rgba(30, 40, 70, 0.14)", "sh-lg": "rgba(30, 40, 70, 0.22)",
     selection: "#d6e6fb", focus: "#1c58b8", "scroll-thumb": "#7f8593",
+    // Surfaces > Layered, hand-tuned: light cannot rise above white, so cards are white on the grey page and lean on a navy shadow.
+    s1: "#ffffff", s2: "#eef0f5", s3: "#ffffff", edge: "#e0e3ea", hi: "rgba(255, 255, 255, 0)",
+    hov: "#eef3fc", sel: "#e1ebfa", "sh-sm": "rgba(30, 40, 70, 0.1)",
   };
 
   const THEMES = [
@@ -372,6 +425,22 @@
   const wrap = pref("wrap", API.WRAPS);
   API.KEY_WRAP = wrap.key; API.wrapChoice = wrap.choice; API.wrapApply = wrap.apply; API.wrapSet = wrap.set;
   wrap.apply();
+  // Surfaces: Layered (the default: a tonal scale of surfaces, quiet shadows, a top-light in dark themes and an accent
+  // tint on hover and selection, from the s1/s2/s3, edge, hi, hov, sel and sh-sm tokens) or Flat (the look before it
+  // existed). web/index.html reads <html data-depth>; "" is Layered.
+  API.DEPTHS = [
+    { id: "", name: "Layered", sub: "surfaces rise a step each, quiet shadows, the default" },
+    { id: "flat", name: "Flat", sub: "one surface and a border, as before" },
+  ];
+  const dep = pref("depth", API.DEPTHS);
+  API.KEY_DEPTH = dep.key; API.depthChoice = dep.choice; API.depthApply = dep.apply; API.depthSet = dep.set;
+  dep.apply();
+  // The depth tokens a Page should use: the theme's own under Layered, and under Flat the plain panel, border and shadow
+  // tokens, so a Page that draws its cards from --s1 and --edge looks as it did before.
+  API.depthTokens = (vars) => {
+    if (dep.choice() !== "flat") return DEPTH_KEYS.reduce((o, k) => (o[k] = vars[k], o), {});
+    return { s1: vars.panel, s2: vars.panel2, s3: vars.panel, edge: vars.border, hi: "rgba(0, 0, 0, 0)", hov: vars.panel2, sel: vars.panel2, "sh-sm": "rgba(0, 0, 0, 0)" };
+  };
   // Open by default: whether a thinking line and a tool run list start open ("", "think", "tools", "both"). It only
   // sets a line's first state; a line the user opened or closed by hand keeps theirs (web/app.js).
   API.OPENS = [
@@ -394,12 +463,12 @@
     open.set(t && k ? "both" : t ? "think" : k ? "tools" : "");
   };
   open.apply();
-  // Reset to defaults (Settings > Appearance): removes the layout choices above (col, rs, sp, wrap, open) and puts
+  // Reset to defaults (Settings > Appearance): removes the layout choices above (col, rs, sp, wrap, open, surfaces) and puts
   // each default on <html> at once. The theme and the font are not layout and stay. Removing a key gives other
   // tabs a storage event, and their listeners below re-apply.
-  const PREFS = [col, rs, sp, wrap, open];
+  const PREFS = [col, rs, sp, wrap, open, dep];
   API.resetAppearance = () => { for (const p of PREFS) { ls.del(p.key); p.apply(); } };
   API.apply();
   if (mq && mq.addEventListener) mq.addEventListener("change", () => { if (API.choice() === "system") API.apply(); });
-  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); if (e.key === API.KEY_WRAP) API.wrapApply(); if (e.key === API.KEY_OPEN) API.openApply(); });
+  root.addEventListener("storage", (e) => { if (e.key && e.key.indexOf(API.KEY) === 0) API.apply(); if (e.key === API.KEY_FONT) API.fontApply(); if (e.key === API.KEY_COL) API.colApply(); if (e.key === API.KEY_RS) API.rsApply(); if (e.key === API.KEY_SP) API.spApply(); if (e.key === API.KEY_WRAP) API.wrapApply(); if (e.key === API.KEY_OPEN) API.openApply(); if (e.key === API.KEY_DEPTH) API.depthApply(); });
 })(typeof window !== "undefined" ? window : globalThis);

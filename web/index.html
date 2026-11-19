@@ -29,6 +29,9 @@
       --fs-18: 18px; --fs-20: 20px; --fs-22: 22px; --fs-24: 24px;
       --hit-32: 32px; --hit-36: 36px; --hit-40: 40px; --hit-44: 44px; --hit-48: 48px; /* touch/click target heights; adopted per component in a later slice */
       --elev-1: 0 2px 10px var(--sh-md); --elev-2: 0 6px 24px var(--sh-lg);
+      /* Surfaces (Settings > Appearance > Surfaces). Flat, below, is today's look: a card's edge is --border, nothing is lifted, hover and
+         selected are --panel2. The Layered block at the end of this sheet (the default, <html data-depth> absent) redefines these. */
+      --card-edge: var(--border); --lift-1: none; --lift-2: none; --lift-3: none; --bg-hover: var(--panel2); --bg-sel: var(--panel2);
       --z-raised: 2; --z-pop: 5; --z-bar: 10; --z-view: 30; --z-backdrop: 34; --z-menu: 35; --z-popup: 36; --z-sheet: 37; --z-screen: 40; --z-scrim: 70; --z-toast: 100; --z-toast-over: 101; /* stacking order, low to high */
       --ring: 2px solid var(--focus); --ring-off: 2px; /* the one focus ring: colour from the theme, 2px offset; inset ones override --ring-off only */
       /* Font families: every rule uses these roles. Default = the system sans and mono stacks. <html data-font="serif">
@@ -135,7 +138,7 @@
 
     .agent {
       display: flex; align-items: center; gap: var(--sp-12);
-      background: var(--panel); border: 1px solid var(--border);
+      background: var(--panel); border: 1px solid var(--card-edge); box-shadow: var(--lift-1);
       border-radius: var(--r-14); padding: var(--sp-12) var(--sp-14); margin-bottom: var(--sp-10);
       cursor: pointer; min-height: calc(var(--hit-48) + var(--sp-8)); /* a row with two lines of text */
     }
@@ -195,7 +198,7 @@
     /* Card: one surface (panel, hairline, 12px radius). .card.attn / .bad / .good set the edge colour;
        a link card (a whole-card <a>/<button>) also hovers and rings inset. */
     .card, .bcard, .pz-card, .rl-card, .us-card, .rc-card, .pgs-card, .pgs-hit, .pr-card {
-      background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-12);
+      background: var(--panel); border: 1px solid var(--card-edge); box-shadow: var(--lift-1); border-radius: var(--r-12);
     }
     .card.attn, .pz-card.pz-warn, .rl-card.rl-attn { border-color: var(--orange); }
     .card.bad, .rl-card.rl-bad { border-color: var(--red); }
@@ -1494,7 +1497,7 @@
       background: none; border: 0; border-radius: var(--r-10); color: var(--text); font: inherit; text-align: left; cursor: pointer;
       scroll-margin: 72px 0 12px;
     }
-    @media (hover: hover) { .td-row:hover, .td-g:hover { background: var(--panel2); } }
+    @media (hover: hover) { .td-row:hover, .td-g:hover { background: var(--bg-hover); } }
     .td-row:focus-visible { outline-offset: -2px; }
     .td-kind { flex: none; font-size: var(--fs-11); font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--blue); }
     .td-action .td-kind { color: var(--orange); }
@@ -1722,8 +1725,8 @@
       position: relative; display: flex; align-items: center; justify-content: center; flex: 1 1 0; min-width: var(--hit-36); min-height: var(--hit-36); padding: var(--sp-4);
       background: none; border: 0; border-radius: var(--r-10); color: var(--text); font: inherit; cursor: pointer;
     }
-    .nv:hover { background: var(--panel2); }
-    .nv.on { background: var(--panel2); box-shadow: inset 0 0 0 1px var(--blue); }
+    .nv:hover { background: var(--bg-hover); }
+    .nv.on { background: var(--bg-sel); box-shadow: inset 0 0 0 1px var(--blue); }
     .nv:focus-visible { outline-offset: -1px; }
     .nv svg { width: 20px; height: 20px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
     .nv.on svg { stroke: var(--text); }
@@ -2088,7 +2091,7 @@
       .agent .sub:has(.lg-chip:not(.running)) { flex-wrap: wrap; }
       .agent.worker { margin-left: var(--sp-14); }
       .proj-head { min-height: var(--hit-36); }
-      .agent.selected { outline: 2px solid var(--focus); outline-offset: -1px; background: var(--panel2); }
+      .agent.selected { outline: 2px solid var(--focus); outline-offset: -1px; background: var(--bg-sel); }
       .agent.selected:focus-visible { outline-offset: -1px; }
       #f-menu { right: auto; left: calc(var(--list-w) - 10px); transform: translateX(-100%); }
       /* The Briefing and To do pages replace these two cards. */
@@ -2873,7 +2876,37 @@
       #detail.sp-open > #sp { position: fixed; left: 0; right: 0; bottom: 0; height: 72vh; height: 72dvh; z-index: var(--z-view); border-left: 0; border-top: 1px solid var(--border); border-radius: var(--r-16) var(--r-16) 0 0; box-shadow: 0 -6px 24px var(--sh-lg); }
       #sp .sp-tabs { padding-top: var(--sp-14); }
       #sp .sp-tabs::before { content: ""; position: absolute; top: 5px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: var(--r-2); background: var(--border); }
-    }</style>
+    }
+    /* ---- Surfaces: Layered (the default; <html data-depth="flat"> turns it off and leaves every rule above as it was) ----
+       The tonal scale from themes.js: --s1 cards, rows, bars and fields; --s2 the wells and the composer inside them (a step
+       down in light themes, up in dark ones); --s3 menus, sheets and the palette; --edge a container's hairline (a control keeps
+       --border); --hov and --sel the accent tint of a hovered and a selected row; --hi the dark top-light; --sh-sm a card's shadow.
+       --panel and --panel2 are redefined as --s1 and --s2, so everything that already drew from them moves onto the scale. */
+    :root:not([data-depth="flat"]) {
+      --panel: var(--s1); --panel2: var(--s2);
+      --card-edge: var(--edge); --bg-hover: var(--hov); --bg-sel: var(--sel);
+      --lift-1: 0 1px 2px var(--sh-sm), inset 0 1px 0 var(--hi);
+      --lift-2: 0 2px 8px var(--sh-md), 0 1px 2px var(--sh-sm), inset 0 1px 0 var(--hi);
+      --lift-3: 0 12px 32px var(--sh-lg), 0 2px 8px var(--sh-md), inset 0 1px 0 var(--hi);
+    }
+    /* Bars lift off the page they scroll over. */
+    :root:not([data-depth="flat"]) :is(header, .rs-bar, .pgs-bar) { background: var(--s1); box-shadow: var(--lift-1); }
+    :root:not([data-depth="flat"]) .prompt { box-shadow: var(--lift-2); }
+    /* Things that float: menus, the theme and notification panels, the host list, the palette, the toast. */
+    :root:not([data-depth="flat"]) :is(.pop, .attach-menu, .pal) { background: var(--s3); border-color: var(--edge); box-shadow: var(--lift-3); }
+    :root:not([data-depth="flat"]) #toast { box-shadow: var(--lift-3); }
+    :root:not([data-depth="flat"]) :is(.pop, .attach-menu, .pal) { --bg-hover: var(--s2); }
+    /* The row you point at or have open reads as a tint, with a bar on the selected agent. */
+    :root:not([data-depth="flat"]) .agent.selected { box-shadow: inset 3px 0 0 var(--focus), var(--lift-1); }
+    :root:not([data-depth="flat"]) .agent.selected.marked { box-shadow: inset 3px 0 0 var(--orange), var(--lift-1); }
+    /* Settings: each labelled field is a card. */
+    :root:not([data-depth="flat"]) #sx-body .sx-field:has(> .sx-lbl) { background: var(--s1); border: 1px solid var(--edge); border-radius: var(--r-12); padding: var(--sp-12) var(--sp-14); box-shadow: var(--lift-1); }
+    /* More contrast, or forced colours: no shadows, the full border. */
+    @media (prefers-contrast: more), (forced-colors: active) {
+      :root:not([data-depth="flat"]) { --card-edge: var(--border); --lift-1: none; --lift-2: none; --lift-3: none; }
+      :root:not([data-depth="flat"]) :is(.pop, .attach-menu, .pal) { border-color: var(--border); }
+    }
+  </style>
 </head>
 <body>
   <!-- Transcripts: search and read archived sessions -->

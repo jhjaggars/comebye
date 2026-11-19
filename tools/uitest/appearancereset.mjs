@@ -16,7 +16,7 @@ async function check(name, fn) {
   try { await fn(); results.push(true); console.log("ok   " + name); }
   catch (e) { results.push(false); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
 }
-const KEYS = ["col", "rs", "sp", "wrap", "open"];
+const KEYS = ["col", "rs", "sp", "wrap", "open", "depth"];
 const ATTRS = KEYS.map((k) => "data-" + k);
 async function session(width, height, dark) {
   const { browser, ctx, page } = await launch({ width, height, dark });
@@ -34,7 +34,7 @@ async function settings(page) {
 const radio = (page, kind, val) => page.locator(`#sx-${kind}-${val}`).click();
 async function changeAll(page) {
   await radio(page, "col", "wider"); await radio(page, "rs", "larger"); await radio(page, "sp", "roomy");
-  await radio(page, "wrap", "on"); await radio(page, "openthink", "on"); await radio(page, "opentools", "on");
+  await radio(page, "wrap", "on"); await radio(page, "depth", "flat"); await radio(page, "openthink", "on"); await radio(page, "opentools", "on");
 }
 // What the conversation looks like now (first assistant reply, a code block, the open state of the lines).
 async function chat(page) {
@@ -70,7 +70,7 @@ for (const dark of [true, false]) {
       for (const k of KEYS) same(s[k], null, "comebye." + k + " removed");
       same(s.font, "serif", "stored font"); same(s.theme, "dracula", "stored theme");
       same(await page.evaluate(() => window.__mark), 1, "no reload");
-      for (const [k, v] of [["col", ""], ["rs", ""], ["sp", ""], ["wrap", ""], ["openthink", ""], ["opentools", ""]]) {
+      for (const [k, v] of [["col", ""], ["rs", ""], ["sp", ""], ["wrap", ""], ["depth", ""], ["openthink", ""], ["opentools", ""]]) {
         same(await page.locator(`#sx-${k}-default`).getAttribute("aria-checked"), "true", k + " shows the default");
       }
       same(await page.evaluate(() => document.activeElement.id), "sx-col-default", "focus lands on the first group");

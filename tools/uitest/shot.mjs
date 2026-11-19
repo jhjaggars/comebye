@@ -17,6 +17,7 @@
 //   --scroll SEL:PX      scroll an element by PX (SEL "window" for the page)
 //   --full               full-page screenshot (default: the viewport)
 //   --theme ID           a theme id from web/themes.js (gruvbox-dark, dracula, ...); default: System
+//   --depth flat         Settings > Appearance > Surfaces: flat (default: Layered)
 //   --out FILE           PNG path (default: ./shot-<width>-<theme>.png)
 //   --inspect SEL        print visibility + bounding box (repeatable)
 //   --dom SEL            print the element's outerHTML, trimmed (repeatable)
@@ -85,6 +86,7 @@ const theme = opt.dark === undefined ? "default" : opt.dark ? "dark" : "light";
 const out = opt.out || `shot-${width}-${opt.theme || theme}.png`;
 
 const { browser, ctx, page } = await launch({ width, height, dark: opt.dark });
+if (opt.depth) await ctx.addInitScript((d) => { try { localStorage.setItem("comebye.depth", d); } catch {} }, opt.depth);
 if (opt.theme) await ctx.addInitScript((t) => { try { localStorage.setItem("comebye.theme", t); } catch {} }, opt.theme);
 const problems = [];
 page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") problems.push(`console.${m.type()}: ${m.text()}`); });

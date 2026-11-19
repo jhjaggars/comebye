@@ -52,7 +52,16 @@ const TEXT = [
   ["scroll-thumb", "bg", UI, "scrollbar thumb"], ["scroll-thumb", "panel", UI, "scrollbar thumb on cards"],
   ...["blue", "orange", "green", "red"].flatMap((c) => [[c, "bg", UI, c + " status dot"], [c, "panel", UI, c + " status dot on cards"]]),
   ["muted", "bg", UI, "idle status dot"],
+  // Surfaces > Layered: the tonal scale (--panel and --panel2 are redefined as s1 and s2), the hover and selected tints.
+  ...["s1", "s2", "s3", "hov", "sel"].flatMap((b) => [["text", b, AA, "text on " + b], ["muted", b, AA, "muted on " + b], ["quote", b, AA, "quote on " + b], ["snip", b, AA, "snippet on " + b],
+    ...["blue", "orange", "green", "purple", "red", "yellow", "teal"].map((c) => [c, b, AA, c + " text on " + b])]),
+  ["focus", "s1", UI, "focus ring on s1"], ["focus", "sel", UI, "selected row outline on its --sel fill"], ["focus", "s3", UI, "focus ring on menus"],
+  ["scroll-thumb", "s1", UI, "scrollbar thumb on s1"],
+  ...["blue", "orange", "green", "red"].map((c) => [c, "s1", UI, c + " status dot on s1"]),
 ];
+// The scale must rise: the page to s1 and s1 to s2 by at least 1.05, in every theme (s2 to s3 may collapse where muted text leaves no room).
+const STEPS = [["bg", "s1", 1.05], ["s1", "s2", 1.05]];
+const DEPTH = ["s1", "s2", "s3", "edge", "hi", "hov", "sel", "sh-sm"];
 
 // Tokens index.html uses; every theme must define all of them.
 const html = fs.readFileSync(path.join(web, "index.html"), "utf8");
@@ -70,6 +79,8 @@ for (const t of THEMES) {
     const r = contrast(f, b);
     if (r < min) bad.push(`${what}: ${fg} ${f} on ${bg} ${b} = ${r.toFixed(2)} < ${min}`);
   }
+  for (const k of DEPTH) if (!(k in t.vars)) bad.push(`depth token --${k} is not defined`);
+  for (const [a, b, min] of STEPS) { checks++; const r = contrast(t.vars[a], t.vars[b]); if (r < min) bad.push(`surface step ${a} -> ${b} = ${r.toFixed(2)} < ${min}`); }
   for (const k of used) if (!(k in t.vars)) bad.push(`token --${k} is used by index.html but not defined`);
   const adj = Object.entries(t.adjusted || {});
   console.log(`${bad.length ? "FAIL" : "PASS"}  ${t.name} (${t.id})${adj.length ? `  adjusted: ${adj.map(([k, [a, b]]) => `${k} ${a}->${b}`).join(", ")}` : ""}`);
