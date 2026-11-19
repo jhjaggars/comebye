@@ -97,6 +97,7 @@
   const pages = () => [
     { id: "go-status", label: "Status", keys: ["g", "s"], run: () => openPage("status"), show: () => ledger.on !== false },
     { id: "go-todo", label: "To do", keys: ["g", "t"], run: () => openPage("todo"), show: () => todos.on !== false },
+    { id: "go-filter", label: "Filter the agent list", keys: ["f"], run: () => { if (!focusListFilter()) toast("No agents to filter"); } },
     { id: "go-search", label: "Search", keys: ["/"], run: () => goSearch() },
     { id: "go-releases", label: "Releases (Peers tab)" + (relNeedsYou() ? " · needs you" : ""), run: () => { location.hash = RELEASES_HASH; }, show: () => ledger.on !== false },
     { id: "go-remove", label: "Ready to remove", keys: ["g", "r"], run: () => openReview(), show: () => ledger.on !== false },
@@ -512,7 +513,7 @@
       sec("Everywhere", [["Command palette", [MOD, "K"]], ["This sheet", ["?"]], ["Leave the prompt box", ["Esc"]], ["Send a prompt", ["Enter"]]]),
       sec("Agents", [["Next / previous agent", ["j", "k"]], ["Next agent that needs you", ["n"]], ["Previous that needs you", ["Shift", "N"]], ["Agent 1–9 in the list", ["Alt", "1–9"]],
         ["Focus the prompt", ["i"]], ["Doc and diff panel", ["d"]], ["Collapse / expand the list", ["["]], ["Mark / unmark", ["m"]], ["Rename (Claude agents)", ["r"]], ["Switch model", ["Shift", "M"]]]),
-      sec("Go to", [["Search", ["/"]], ["Host picker", ["h"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Briefing", ["g", "b"]], ["Agent list", ["g", "a"]]]),
+      sec("Go to", [["Search", ["/"]], ["Filter the agent list", ["f"]], ["Host picker", ["h"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Briefing", ["g", "b"]], ["Agent list", ["g", "a"]]]),
       sec("To do page", [["Next / previous item", ["j", "k"]], ["Open the answer box", ["Enter"]], ["Pick an option", ["1–9"]], ["Close the item", ["Esc"]], ["Send an answer", [MOD, "Enter"]]]),
     );
     box.replaceChildren(h, cols);
@@ -593,6 +594,7 @@
       case "g": ev.preventDefault(); gAt = Date.now(); return;
       case "i": if (focusPrompt()) ev.preventDefault(); return;
       case "/": ev.preventDefault(); goSearch(); return;
+      case "f": if (focusListFilter()) ev.preventDefault(); return;
       case "h": if (multiHost() && $("host-filter") && !$("host-filter").hidden && $("host-filter").getClientRects().length) { ev.preventDefault(); toggleHostPicker(true); } return;
       case "?": ev.preventDefault(); openCheats(); return;
       case "j": case "k":

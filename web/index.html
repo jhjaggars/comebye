@@ -281,6 +281,28 @@
     .hp-row .n { flex: none; color: var(--muted); font-size: var(--fs-13); font-variant-numeric: tabular-nums; }
     .hp-none { padding: var(--sp-10) var(--sp-14); color: var(--muted); font-size: var(--fs-13); }
     @media (hover: hover) { .hp-pop .hp-row:not(:disabled):hover { background: var(--panel); } }
+    /* List filter: a filter box (f) and the status tabs, under the host picker. */
+    .lf { min-width: 0; margin: 0 0 var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-8); }
+    .lf[hidden] { display: none; }
+    .lf-box { position: relative; display: flex; align-items: center; min-width: 0; }
+    .lf-q { flex: 1 1 auto; width: 100%; min-width: 0; min-height: var(--hit-36); padding: 0 var(--hit-36) 0 var(--sp-12); background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-pill); font: inherit; font-size: var(--fs-13); -webkit-appearance: none; appearance: none; }
+    .lf-q::-webkit-search-cancel-button { display: none; }
+    .lf-q::placeholder { color: var(--muted); opacity: 1; }
+    .lf-q:not(:placeholder-shown) { border-color: var(--blue); }
+    .lf-key { position: absolute; right: var(--sp-12); top: 50%; transform: translateY(-50%); pointer-events: none; font: inherit; font-size: var(--fs-12); color: var(--muted); border: 1px solid var(--border); border-radius: var(--r-4); padding: 0 var(--sp-6); line-height: 1.5; }
+    .lf-q:focus ~ .lf-key, .lf-q:not(:placeholder-shown) ~ .lf-key { display: none; }
+    @media (hover: none) { .lf-key { display: none; } }
+    .lf-x { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: var(--hit-36); height: var(--hit-36); display: grid; place-items: center; border: 0; background: none; color: var(--muted); font: inherit; font-size: var(--fs-18); cursor: pointer; border-radius: var(--r-pill); }
+    .lf-x[hidden] { display: none; }
+    .lf-tabs { display: flex; gap: var(--sp-4); min-width: 0; }
+    .lf-tab { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-4); min-height: var(--hit-36); padding: 0 var(--sp-6); border-radius: var(--r-pill); background: none; border: 1px solid transparent; color: var(--muted); font: inherit; font-size: var(--fs-13); font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .lf-tab .n { font-weight: 500; font-variant-numeric: tabular-nums; }
+    .lf-tab[aria-pressed="true"] { background: var(--chip-blue); border-color: var(--blue); color: var(--blue); }
+    .lf-tab.nd .n { color: var(--orange); font-weight: 700; }
+    .lf-tab[aria-pressed="true"].nd .n { color: var(--blue); }
+    @media (hover: hover) { .lf-tab:not([aria-pressed="true"]):hover, .lf-x:hover { background: var(--panel); color: var(--text); } }
+    .hp-out .hp-out-btn { display: inline-flex; align-items: center; gap: var(--sp-6); min-height: var(--hit-36); padding: 0 var(--sp-8); margin-left: calc(-1 * var(--sp-8)); background: none; border: 0; border-radius: var(--r-8); color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+    @media (hover: hover) { .hp-out .hp-out-btn:hover { color: var(--text); background: var(--panel); } }
     .hf-chip .n { color: var(--muted); font-weight: 500; font-size: var(--fs-13); }
     .hf-chip .need { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 6px var(--orange); }
     .hf-chip.down { opacity: 0.6; border-style: dashed; }
@@ -1991,7 +2013,7 @@
       :root { --list-w: 360px; }
       body.list-collapsed { --list-w: 56px; }
       #btn-collapse { display: inline-flex; }
-      body.list-collapsed #list header, body.list-collapsed #notify-panel, body.list-collapsed #nav, body.list-collapsed #host-filter,
+      body.list-collapsed #list header, body.list-collapsed #notify-panel, body.list-collapsed #nav, body.list-collapsed #host-filter, body.list-collapsed #list-filter,
       body.list-collapsed #plans, body.list-collapsed #agents, body.list-collapsed #f-menu { display: none !important; }
       body.list-collapsed #list-rail {
         grid-column: 1; grid-row: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: var(--sp-10);
@@ -2012,7 +2034,7 @@
       body {
         display: grid; height: 100vh; height: 100dvh; overflow: hidden;
         grid-template-columns: var(--list-w) minmax(0, 1fr);
-        grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
+        grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr) auto;
       }
       /* The pages take the detail cell. The briefings screen is the Briefing page. */
       #briefs, .page {
@@ -2035,8 +2057,10 @@
       #nav { grid-column: 1; grid-row: 3; display: flex; flex-direction: row; gap: var(--sp-2); padding: var(--sp-6) var(--sp-8); border-bottom: 1px solid var(--border); }
       #nav:empty { display: none; }
       #host-filter { grid-column: 1; grid-row: 4; margin: var(--sp-10) var(--sp-12) 0; }
-      #plans { grid-column: 1; grid-row: 5; margin: var(--sp-10) var(--sp-12) 0; max-height: 30vh; overflow-y: auto; }
-      #agents { grid-column: 1; grid-row: 6; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-10) var(--sp-12) var(--sp-20); }
+      #list-filter { grid-column: 1; grid-row: 5; margin: var(--sp-10) var(--sp-12) 0; }
+      #host-filter:not([hidden]) + #list-filter { margin-top: var(--sp-8); }
+      #plans { grid-column: 1; grid-row: 6; margin: var(--sp-10) var(--sp-12) 0; max-height: 30vh; overflow-y: auto; }
+      #agents { grid-column: 1; grid-row: 7; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-10) var(--sp-12) var(--sp-20); }
       header .bell { min-width: 36px; min-height: var(--hit-36); margin: -6px -6px -6px 0; }
       /* Denser rows, so more agents fit: one line of detail, tighter padding. */
       .agent { padding: var(--sp-8) var(--sp-12); min-height: 0; margin-bottom: var(--sp-6); gap: var(--sp-10); border-radius: var(--r-12); }
@@ -2232,7 +2256,7 @@
     #btn-cmds { display: inline-flex; }
     @media (min-width: 1100px) {
       #btn-cmds { display: none; }
-      .keybar { grid-column: 1; grid-row: 7; display: flex; align-items: center; gap: var(--sp-10); padding: var(--sp-6) var(--sp-12); border-top: 1px solid var(--border); background: transparent; font-size: var(--fs-12); color: var(--muted); min-width: 0; }
+      .keybar { grid-column: 1; grid-row: 8; display: flex; align-items: center; gap: var(--sp-10); padding: var(--sp-6) var(--sp-12); border-top: 1px solid var(--border); background: transparent; font-size: var(--fs-12); color: var(--muted); min-width: 0; }
       .kb-hint { flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: var(--sp-2) 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .kb-hint:focus-visible { outline-offset: 1px; border-radius: var(--r-4); }
     }
@@ -3006,7 +3030,7 @@
       <div class="tp-hint" id="tp-hint" aria-live="polite"></div>
       <div class="tp-sys" id="tp-sys" hidden></div>
     </section>
-    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
+    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><div id="list-filter" class="lf" hidden><div class="lf-box"><input id="lf-q" type="search" class="lf-q" placeholder="Filter by name, branch or repo" aria-label="Filter agents by name, branch or repo" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><kbd class="lf-key" aria-hidden="true">f</kbd><button type="button" id="lf-x" class="lf-x" aria-label="Clear the filter" hidden>&times;</button></div><div class="lf-tabs" id="lf-tabs" role="group" aria-label="Show agents by status"></div></div><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
     <div id="keybar" class="keybar"><span id="kb-mode" class="kb-mode" data-mode="NAV" role="status" aria-label="Keyboard mode">NAV</span><button type="button" id="kb-open" class="kb-hint" aria-label="Open the command palette"><span id="kb-hint"></span></button></div>
     <button type="button" id="list-rail" class="list-rail" aria-label="Expand the list" aria-controls="agents" aria-expanded="false" title="Expand the list ( [ )">
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M13 9.5l2.5 2.5-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>

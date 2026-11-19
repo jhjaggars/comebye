@@ -4,6 +4,8 @@
 const $ = (id) => document.getElementById(id);
 const state = {
   agents: [],          // current agent list from the server (every host's, on a hub)
+  listTab: null,       // the status tab: all | needs | working | done (loaded lazily)
+  listQ: null,         // the filter box's text (loaded lazily)
   hostFilter: null,    // the chosen host names, [] for all (loaded lazily); only used with more than one host
   hosts: [],           // per-host status from the server; one entry unless this is a hub
   localHost: null,     // name of the server's own host
@@ -818,6 +820,7 @@ function setHostFilter(sel) {
   state.hostFilter = normHostFilter(sel);
   try { localStorage.setItem(HOST_FILTER_KEY, JSON.stringify(state.hostFilter)); } catch {}
   renderList();
+  syncListHash();
 }
 // hostSel is the chosen hosts that are still configured; empty means every host (also on a single-host instance).
 function hostSel() {
@@ -833,6 +836,133 @@ const agentShown = (a) => hostIn(a.host) || a.agent_status === "blocked";
 function hostLabel() {
   const s = hostSel();
   return !s.length ? "All hosts" : s.length <= 2 ? s.join(" + ") : s.length + " hosts";
+}
+
+/* ---------- status tabs and the filter box (left nav, slice 3) ---------- */
+
+const LIST_TAB_KEY = "herdr-list-tab", LIST_Q_KEY = "herdr-list-q", LIST_HASH = "#/list";
+// A tab is a predicate over agent_status. A blocked agent is in All, Needs you and Working (it is waiting mid-job);
+// Done is every agent that has stopped without waiting on you (done or idle). An unknown one shows only in All.
+const LIST_TABS = [
+  { key: "all", label: "All", has: () => true },
+  { key: "needs", label: "Needs you", has: (a) => a.agent_status === "blocked" },
+  { key: "working", label: "Working", has: (a) => a.agent_status === "working" || a.agent_status === "blocked" },
+  { key: "done", label: "Done", has: (a) => a.agent_status === "done" || a.agent_status === "idle" },
+];
+const normTab = (t) => (LIST_TABS.some((x) => x.key === t) ? t : "all");
+function listTab() {
+  if (state.listTab === null) state.listTab = normTab(lsGet(LIST_TAB_KEY));
+  return state.listTab;
+}
+function listQ() {
+  if (state.listQ === null) state.listQ = (lsGet(LIST_Q_KEY) || "").slice(0, 200);
+  return state.listQ;
+}
+// textMatch: every word of the box is a part of the agent's name, repo or branch (case does not matter).
+function textMatch(a, q) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const r = repoLabel(a);
+  const hay = [a.name, a.terminal_title_stripped, a.display_agent, a.agent, a.pane_id, r.repo, r.branch, a.worktree && a.worktree.branch].filter(Boolean).join("\n").toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+const filtersOn = () => listTab() !== "all" || !!listQ().trim() || hostSel().length > 0;
+
+function setListTab(t) {
+  state.listTab = normTab(t);
+  lsSet(LIST_TAB_KEY, state.listTab);
+  renderList();
+  syncListHash();
+}
+function setListQ(q) {
+  state.listQ = String(q).slice(0, 200);
+  lsSet(LIST_Q_KEY, state.listQ);
+  renderList();
+  syncListHash();
+}
+// clearFilters resets the status tab, the box and the host selection.
+function clearFilters() {
+  state.listTab = "all"; state.listQ = "";
+  lsSet(LIST_TAB_KEY, "all"); lsSet(LIST_Q_KEY, "");
+  state.hostFilter = [];
+  try { localStorage.setItem(HOST_FILTER_KEY, "[]"); } catch {}
+  renderList();
+  syncListHash();
+}
+
+// The URL carries the view so it can be shared: #/list?tab=working&q=api&host=mac,laharl (only what differs from the default).
+// A screen or an agent owns the hash while it is open; the list's own hash is written when none is.
+function listHash() {
+  const p = new URLSearchParams();
+  if (listTab() !== "all") p.set("tab", listTab());
+  if (listQ().trim()) p.set("q", listQ().trim());
+  const h = normHostFilter(state.hostFilter);
+  if (h.length) p.set("host", h.join(","));
+  const s = p.toString();
+  return s ? `${LIST_HASH}?${s}` : "";
+}
+const onListHash = () => location.hash === "" || location.hash === LIST_HASH || location.hash.startsWith(LIST_HASH + "?");
+function syncListHash() {
+  if (!onListHash()) return;
+  const want = listHash();
+  if (location.hash === want || (!want && location.hash === "")) return;
+  history.replaceState(history.state, "", want || location.pathname + location.search);
+}
+// applyListHash takes the view from a #/list?... link (a missing part is its default); false when the hash is not one.
+function applyListHash() {
+  const h = location.hash;
+  if (h !== LIST_HASH && !h.startsWith(LIST_HASH + "?")) return false;
+  const qi = h.indexOf("?");
+  const p = new URLSearchParams(qi < 0 ? "" : h.slice(qi + 1));
+  state.listTab = normTab(p.get("tab"));
+  state.listQ = (p.get("q") || "").slice(0, 200);
+  state.hostFilter = normHostFilter((p.get("host") || "").split(",").filter(Boolean));
+  lsSet(LIST_TAB_KEY, state.listTab); lsSet(LIST_Q_KEY, state.listQ);
+  try { localStorage.setItem(HOST_FILTER_KEY, JSON.stringify(state.hostFilter)); } catch {}
+  return true;
+}
+
+// renderListFilter draws the tabs' counts. The box is static markup (a poll must not take the typing from it).
+function renderListFilter(base) {
+  const bar = $("list-filter");
+  if (!bar) return;
+  const show = state.agents.length > 0;
+  bar.hidden = !show;
+  if (!show) return;
+  const tab = listTab(), q = listQ();
+  const box = $("lf-q");
+  if (box.value !== q) box.value = q;
+  $("lf-x").hidden = !q;
+  const had = document.activeElement && document.activeElement.closest ? document.activeElement.closest("#lf-tabs .lf-tab") : null;
+  $("lf-tabs").innerHTML = LIST_TABS.map((t) => {
+    const n = base.filter(t.has).length;
+    return `<button type="button" class="lf-tab${t.key === "needs" && n ? " nd" : ""}" data-tab="${t.key}" aria-pressed="${t.key === tab}"` +
+      ` aria-label="${esc(t.label)}, ${n}"><span class="l">${esc(t.label)}</span><span class="n">${n}</span></button>`;
+  }).join("");
+  if (had) { const b = $("lf-tabs").querySelector(`[data-tab="${had.dataset.tab}"]`); if (b) b.focus({ preventScroll: true }); }
+}
+function focusListFilter() {
+  const bar = $("list-filter");
+  if (!bar || bar.hidden || !bar.getClientRects().length) return false;
+  if (document.body.classList.contains("list-collapsed")) setListCollapsed(false, false);
+  $("lf-q").focus();
+  $("lf-q").select();
+  return true;
+}
+function initListFilter() {
+  $("lf-q").addEventListener("input", () => setListQ($("lf-q").value));
+  $("lf-q").addEventListener("keydown", (ev) => {
+    if (ev.isComposing) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      if ($("lf-q").value) setListQ(""); else $("lf-q").blur();
+    } else if (ev.key === "Enter" || ev.key === "ArrowDown") {
+      const r = document.querySelector("#agents .agent[data-id]");
+      if (r) { ev.preventDefault(); r.focus({ preventScroll: false }); }
+    }
+  });
+  $("lf-x").addEventListener("click", () => { setListQ(""); $("lf-q").focus(); });
+  $("lf-tabs").addEventListener("click", (ev) => { const b = ev.target.closest(".lf-tab"); if (b) setListTab(b.dataset.tab); });
 }
 
 const hp = { open: false, q: "" };
@@ -852,9 +982,10 @@ function renderHostFilter() {
   nav.innerHTML = `<button type="button" id="hp-btn" class="hp-btn" aria-haspopup="dialog" aria-expanded="${hp.open}" aria-controls="hp-pop"` +
     `${narrow ? " data-narrow" : ""} title="Filter by host (h)">` +
     `${need ? '<span class="hp-need" aria-label="needs input"></span>' : ""}<span class="hp-label">${esc(hostLabel())}</span><span class="chev" aria-hidden="true">&#9662;</span></button>` +
-    `<div class="hp-out" role="status"${outside ? "" : " hidden"}>${outside ? `<span class="hp-need" aria-hidden="true"></span>+${outside} outside this filter` : ""}</div>`;
+    `<div class="hp-out" role="status"${outside ? "" : " hidden"}>${outside ? `<button type="button" class="hp-out-btn" id="hp-out-btn" title="Show every host"><span class="hp-need" aria-hidden="true"></span>+${outside} outside this filter</button>` : ""}</div>`;
   nav.hidden = false;
   $("hp-btn").addEventListener("click", () => toggleHostPicker());
+  if ($("hp-out-btn")) $("hp-out-btn").addEventListener("click", () => { setHostFilter([]); $("hp-btn")?.focus({ preventScroll: true }); });
   if (had) $("hp-btn").focus({ preventScroll: true });
   if (hp.open) renderHostPicker();
 }
@@ -951,7 +1082,11 @@ function emptyHtml(title, hint, act) {
 function renderListRows() {
   const wrap = $("agents");
   renderHostFilter();
-  const agents = state.agents.filter(agentShown).sort((a, b) =>
+  // base: what the host picker and the box leave; the tabs count it and narrow it.
+  const base = state.agents.filter(agentShown).filter((a) => textMatch(a, listQ()));
+  renderListFilter(base);
+  const tabHas = LIST_TABS.find((t) => t.key === listTab()).has;
+  const agents = base.filter(tabHas).sort((a, b) =>
     statusRank(a) - statusRank(b) ||
     // Within a status, most recently active first, so the agents that just
     // went idle sit above the ones that have been idle for days.
@@ -1003,14 +1138,16 @@ function renderListRows() {
     const hubOnly = state.hosts.some((h) => h.local && h.no_agents);
     // A hub-only hub (no herdr) says so, instead of telling you to start an agent here.
     const here = !f.length || state.hosts.some((h) => h.local && f.includes(h.name));
+    const tabLabel = LIST_TABS.find((t) => t.key === listTab()).label, qq = listQ().trim();
+    const why = [listTab() !== "all" ? `status ${esc(tabLabel)}` : "", qq ? `“${esc(qq)}”` : "", f.length ? `on ${esc(f.join(" or "))}` : ""].filter(Boolean).join(", ");
     wrap.innerHTML = (state.unauthorized ? `<div class="empty"><b>${esc(UNAUTHORIZED_MSG)}</b></div>`
-      : hubOnly && here ? emptyHtml("No agents here", "This hub hosts none. Agents on its peers appear as they connect.")
-      : f.length ? emptyHtml(`No agents on ${f.join(" or ")}`, "", ["Show all hosts", "all-hosts"])
+      : hubOnly && here && !qq && listTab() === "all" ? emptyHtml("No agents here", "This hub hosts none. Agents on its peers appear as they connect.")
+      : state.agents.length && filtersOn() ? emptyHtml("No agents match", `Nothing for ${why}.`, ["Clear filters", "clear-filters"])
       : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + parkedSectionHTML() + downRows;
     wrap.querySelectorAll(".proj-head").forEach((el) => el.addEventListener("click", () => toggleProject(el.dataset.proj)));
     bindParkedRows(wrap);
     const act = wrap.querySelector(".empty-act");
-    if (act) act.onclick = () => setHostFilter([]);
+    if (act) act.onclick = () => { clearFilters(); $("lf-q")?.focus({ preventScroll: true }); };
     return;
   }
   // Coordinators are pinned above the projects.
@@ -7468,6 +7605,7 @@ function route() {
   const r = parseRoute();
   if (!r) {
     state.pendingRoute = null;
+    if (applyListHash()) renderList(); else syncListHash();
     if (state.selected) closeDetail();
     if (isDesktop()) setView(viewFromHash()); // the hash names the page
     return;
@@ -7535,7 +7673,7 @@ function openPage(v) {
 function openToSomething() {
   if (state.opened || !isDesktop() || state.pendingRoute) return;
   state.opened = true;
-  if (state.selected || state.view || location.hash) return;
+  if (state.selected || state.view || (location.hash && !onListHash())) return;
   const w = document.querySelector("#agents .agent.blocked[data-id]");
   if (w) { openDetail(w.dataset.id); return; }
   if (ledger.on !== false) {
@@ -14093,6 +14231,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("row-transcript").addEventListener("click", rowMenuTranscript);
   initPopovers();
   initHostPicker();
+  initListFilter();
   $("mk-close").addEventListener("click", closeMark);
   $("mk-go").addEventListener("click", submitMark);
   $("d-fresh").addEventListener("click", openFresh);
