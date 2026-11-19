@@ -2380,6 +2380,24 @@ function todoOpenSession(btn) {
   requestAnimationFrame(() => { const p = $("prompt-text"); if (p && p.offsetParent) p.focus(); });
 }
 
+// mainCoordinatorRole: the hub's role for the main coordinator ({id, role}), or null with no coordinator at all. The hub marks
+// one main (liveRoles falls back to the first live one when none is marked); a role can outlive its agent.
+function mainCoordinatorRole() {
+  const cs = [...ledger.roles].filter(([, r]) => r && r.role === "coordinator");
+  const m = cs.find(([, r]) => r.main) || cs.find(([id]) => agentById(id)) || cs[0];
+  return m ? { id: m[0], name: m[1].name || "" } : null;
+}
+// openMainCoordinator (`g c`): the main coordinator's session, as clicking its row does, with the prompt focused. A new history
+// entry (openDetail pushes), so Back returns to where you were. With the main coordinator gone it says so and stays put.
+function openMainCoordinator() {
+  const m = mainCoordinatorRole();
+  if (!m) { toast("No coordinator is running", true); return; }
+  if (!agentById(m.id)) { toast(`The main coordinator${m.name ? " (" + m.name + ")" : ""} is no longer running`, true); return; }
+  rsLeave();
+  openDetail(m.id);
+  requestAnimationFrame(() => { const p = $("prompt-text"); if (p && p.offsetParent) p.focus(); });
+}
+
 // asPanel: only the panel, for the split review mode's side (the Page is beside it, so no row and no thumbnail).
 function todoItemHtml(t, pfx, asPanel) {
   const at = Date.parse(t.created_at);

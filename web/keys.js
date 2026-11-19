@@ -103,6 +103,7 @@
     { id: "go-releases", label: "Releases (Peers tab)" + (relNeedsYou() ? " · needs you" : ""), run: () => { location.hash = RELEASES_HASH; }, show: () => ledger.on !== false },
     { id: "go-remove", label: "Ready to remove", keys: ["g", "r"], run: () => openReview(), show: () => ledger.on !== false },
     { id: "go-brief", label: "Briefing", keys: ["g", "b"], run: () => openPage("briefing"), show: () => ledger.on !== false && isDesktop() },
+    { id: "go-coordinator", label: "Main coordinator", keys: ["g", "c"], run: () => openMainCoordinator(), show: () => !!mainCoordinatorRole() },
     { id: "go-agents", label: "Agent list (focus it)", keys: ["g", "a"], run: () => (rows()[0] && focusRow(state.selected && rowFor(state.selected) ? state.selected : rows()[0].dataset.id)) },
   ];
 
@@ -514,7 +515,7 @@
       sec("Everywhere", [["Command palette", [MOD, "K"]], ["This sheet", ["?"]], ["Leave the prompt box", ["Esc"]], ["Send a prompt", ["Enter"]]]),
       sec("Agents", [["Next / previous agent", ["j", "k"]], ["Next agent that needs you", ["n"]], ["Previous that needs you", ["Shift", "N"]], ["Agent 1–9 in the list", ["Alt", "1–9"]],
         ["Focus the prompt", ["i"]], ["Doc and diff panel", ["d"]], ["Collapse / expand the list", ["["]], ["Mark / unmark", ["m"]], ["Rename (Claude agents)", ["r"]], ["Switch model", ["Shift", "M"]]]),
-      sec("Go to", [["Search", ["/"]], ["Filter the agent list", ["f"]], ["Host picker", ["h"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Briefing", ["g", "b"]], ["Agent list", ["g", "a"]]]),
+      sec("Go to", [["Search", ["/"]], ["Filter the agent list", ["f"]], ["Host picker", ["h"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Briefing", ["g", "b"]], ["Main coordinator", ["g", "c"]], ["Agent list", ["g", "a"]]]),
       sec("To do page", [["Next / previous item", ["j", "k"]], ["Open the answer box", ["Enter"]], ["Pick an option", ["1–9"]], ["Close the item", ["Esc"]], ["Send an answer", [MOD, "Enter"]]]),
     );
     box.replaceChildren(h, cols);
@@ -561,7 +562,7 @@
   /* ---------- the keys ---------- */
 
   let gAt = 0;
-  const G = { t: () => openPage("todo"), s: () => openPage("status"), r: () => openReview(), f: () => goSearch(), a: () => pages().find((p) => p.id === "go-agents").run(), b: () => openPage("briefing") };
+  const G = { t: () => openPage("todo"), s: () => openPage("status"), r: () => openReview(), f: () => goSearch(), a: () => pages().find((p) => p.id === "go-agents").run(), b: () => openPage("briefing"), c: () => { const c = pages().find((p) => p.id === "go-coordinator"); if (c.show()) c.run(); } };
 
   function onKey(ev) {
     if (ev.defaultPrevented || ev.isComposing) return;
