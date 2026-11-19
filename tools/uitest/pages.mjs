@@ -888,7 +888,8 @@ await check("links: a to-do link to a page opens it in the app; delete asks and 
   page.once("dialog", (d) => { asked = d.message(); d.accept(); });
   await page.locator("#pgs-menub").click();
   await page.locator("#pgs-del").click();
-  await until(page, (id) => !document.querySelector(`.pgs-card[data-id="${id}"]`), pages.secret, 5000);
+  // opened from the to-do list, so deleting returns to it (the gallery is not the way back from a link)
+  await until(page, (id) => location.hash === "#/todo" && document.getElementById("pages").hidden && !pgs.items.some((p) => p.id === id), pages.secret, 5000);
   if (!/Delete/.test(asked)) throw new Error("no confirmation: " + asked);
   const r = await fetch(base + "/p/" + pages.secret);
   if (r.status !== 404) throw new Error("deleted page answers " + r.status);
