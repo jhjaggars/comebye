@@ -56,11 +56,16 @@ func pageText(kind string, b []byte) string {
 }
 
 // pageSearchWords splits a query into the lowercase words that must all appear.
-func pageSearchWords(q string) []string {
-	var out []string
+// The term has:script is not a word: script reports whether it was there, and
+// it limits the search to the pages that run JavaScript.
+func pageSearchWords(q string) (out []string, script bool) {
 	seen := map[string]bool{}
 	for _, w := range strings.Fields(strings.ToLower(q)) {
 		w = strings.Trim(w, `"'`)
+		if w == "has:script" {
+			script = true
+			continue
+		}
 		if w == "" || seen[w] {
 			continue
 		}
@@ -70,7 +75,7 @@ func pageSearchWords(q string) []string {
 			break
 		}
 	}
-	return out
+	return out, script
 }
 
 // matchPageText reports how often the first word appears and a snippet around the

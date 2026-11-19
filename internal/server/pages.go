@@ -85,6 +85,9 @@ type PageVersion struct {
 	// "dark"); none for a version published without a Chrome to render them.
 	Thumbs    []string `json:"thumbs,omitempty"`
 	ThumbSize int64    `json:"thumb_size,omitempty"`
+	// Script is whether an HTML body holds a <script> element (inline or src).
+	// nil is a version kept before the flag existed: openPageStore fills it in.
+	Script *bool `json:"script,omitempty"`
 }
 
 // PageSession names a session as the transcript index does.
@@ -103,15 +106,18 @@ type Page struct {
 	// By is the publisher as the user reads it; Agent is its fleet id
 	// ("host/pane"), empty when the user published it; Host is where it
 	// ran. All three come from the authenticated caller.
-	By      string        `json:"by"`
-	Agent   string        `json:"agent,omitempty"`
-	Host    string        `json:"host,omitempty"`
-	Tagged  bool          `json:"tagged,omitempty"`
-	Handoff string        `json:"handoff,omitempty"`
-	Created time.Time     `json:"created_at"`
-	Updated time.Time     `json:"updated_at"`
-	Version int           `json:"version"` // the newest
-	Size    int64         `json:"size"`    // of the newest
+	By      string    `json:"by"`
+	Agent   string    `json:"agent,omitempty"`
+	Host    string    `json:"host,omitempty"`
+	Tagged  bool      `json:"tagged,omitempty"`
+	Handoff string    `json:"handoff,omitempty"`
+	Created time.Time `json:"created_at"`
+	Updated time.Time `json:"updated_at"`
+	Version int       `json:"version"` // the newest
+	// Script is the newest version's flag, set when a page is listed or read
+	// (it is not stored: each version keeps its own).
+	Script  bool          `json:"script,omitempty"`
+	Size    int64         `json:"size"` // of the newest
 	History []PageVersion `json:"versions"`
 }
 
@@ -181,7 +187,58 @@ func openPageStore(dir string) (*pageStore, error) {
 		return nil, fmt.Errorf("parse pages.json: %w", err)
 	}
 	st.data.Version = 1
+	st.backfillScript()
 	return st, nil
+}
+
+// backfillScript sets the script flag of versions kept before it existed, from
+// their body files, once: the result is saved, so a later start finds none to do.
+// A body that cannot be read is left unflagged (false) and is not retried.
+func (st *pageStore) backfillScript() {
+	changed := false
+	for i := range st.data.Pages {
+		p := &st.data.Pages[i]
+		for j := range p.History {
+			v := &p.History[j]
+			if v.Script != nil {
+				continue
+			}
+			f := false
+			if v.Kind == "html" {
+				if b, err := os.ReadFile(st.bodyPath(p.ID, v.N, v.Kind)); err == nil {
+					f = pageHasScript(b)
+				}
+			}
+			v.Script = &f
+			changed = true
+		}
+	}
+	if changed {
+		_ = st.saveLocked()
+	}
+}
+
+// pageScriptTagRE finds the start of a <script> element: the tag name ends at
+// whitespace, ">" or "/", so <noscript> and prose that says "script" do not match.
+var pageScriptTagRE = regexp.MustCompile(`(?i)<script[\s/>]`)
+
+// pageHasScript reports whether an HTML body holds a <script> element, inline or
+// src. Comments are skipped, so a commented-out tag does not count.
+func pageHasScript(b []byte) bool {
+	return pageScriptTagRE.Match(pageCommentRE.ReplaceAll(b, nil))
+}
+
+var pageCommentRE = regexp.MustCompile(`(?s)<!--.*?(-->|$)`)
+
+// withScript sets p.Script from its newest version.
+func (p Page) withScript() Page {
+	p.Script = false
+	for _, v := range p.History {
+		if v.N == p.Version && v.Script != nil {
+			p.Script = *v.Script
+		}
+	}
+	return p
 }
 
 func (st *pageStore) saveLocked() error {
@@ -242,7 +299,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 			return Page{}, false, errPageForbidden
 		}
 		if in.IfVersion != nil && *in.IfVersion != p.Version {
-			return p, false, errPageConflict
+			return p.withScript(), false, errPageConflict
 		}
 	} else if len(st.data.Pages) >= pageMaxPages {
 		return Page{}, false, errPageFull
@@ -301,7 +358,8 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 	if in.Handoff != "" {
 		p.Handoff = in.Handoff
 	}
-	p.History = append(p.History, PageVersion{N: p.Version, Kind: in.Kind, Size: p.Size, At: now, Session: in.Session})
+	hasScript := in.Kind == "html" && pageHasScript(in.Body)
+	p.History = append(p.History, PageVersion{N: p.Version, Kind: in.Kind, Size: p.Size, At: now, Session: in.Session, Script: &hasScript})
 	if n := len(p.History) - pageMaxVersions; n > 0 {
 		p.History = p.History[n:]
 	}
@@ -332,7 +390,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 			st.dropThumbs(p.ID, v.N)
 		}
 	}
-	return p, created, nil
+	return p.withScript(), created, nil
 }
 
 func writeBodyFile(path string, b []byte) error {
@@ -364,7 +422,7 @@ func (st *pageStore) get(id string) (Page, bool) {
 	defer st.mu.Unlock()
 	for _, p := range st.data.Pages {
 		if p.ID == id {
-			return p, true
+			return p.withScript(), true
 		}
 	}
 	return Page{}, false
@@ -373,7 +431,10 @@ func (st *pageStore) get(id string) (Page, bool) {
 // list returns the pages newest first.
 func (st *pageStore) list() []Page {
 	st.mu.Lock()
-	out := append([]Page{}, st.data.Pages...)
+	out := make([]Page, len(st.data.Pages))
+	for i, p := range st.data.Pages {
+		out[i] = p.withScript()
+	}
 	st.mu.Unlock()
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
 	return out
@@ -699,16 +760,31 @@ func (s *Server) handlePageList(w http.ResponseWriter, r *http.Request) {
 	res := map[string]any{"public_url": s.cfg.PublicURL, "pages_url": s.pagesOrigin()}
 	if text := strings.TrimSpace(q.Get("q")); q.Has("q") {
 		// Search the bodies: the user's alone, as reading a page is.
-		words := pageSearchWords(text)
+		words, script := pageSearchWords(text)
 		switch {
 		case !who.user:
 			pageSearchBad(w, "read_forbidden", "only the user searches the text of pages", http.StatusForbidden)
 			return
-		case len(words) == 0 || len(text) > pageSearchMaxQ:
+		case (len(words) == 0 && !script) || len(text) > pageSearchMaxQ:
 			pageSearchBad(w, "bad_request", "q is words to find, up to 200 bytes", http.StatusBadRequest)
 			return
-		case !s.pages.searchRateOK():
+		case len(words) > 0 && !s.pages.searchRateOK():
 			pageSearchBad(w, "search_rate", "searching too fast: wait a moment", http.StatusTooManyRequests)
+			return
+		}
+		if script { // has:script: the flag is metadata, so only the words need the bodies
+			flagged := []Page{}
+			for _, p := range out {
+				if p.Script {
+					flagged = append(flagged, p)
+				}
+			}
+			out = flagged
+		}
+		if len(words) == 0 {
+			res["matches"], res["partial"] = []PageMatch{}, false
+			res["pages"] = out
+			writeJSON(w, res)
 			return
 		}
 		matches, partial := s.pages.search(out, words)
