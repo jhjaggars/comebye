@@ -17,6 +17,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 list="$here/flaky.tsv"
 today="${TODAY:-$(date -u +%F)}"
 
+# ports_free P: nothing listens on any of the ports a run.sh with PORT=P uses.
+ports_free() { local p; for p in 0 1 100 200 250 270 400 500; do (exec 3<>"/dev/tcp/127.0.0.1/$(($1 + p))") 2>/dev/null && return 1; done; return 0; }
+
 entries() { grep -vE '^\s*(#|$)' "$list" || true; }           # script check owner added expires note
 active() { entries | awk -F'\t' -v t="$today" '$5 >= t'; }
 expired() { entries | awk -F'\t' -v t="$today" '$5 < t'; }
@@ -89,8 +92,11 @@ Failed checks that block:$blocking"
           done
           [ -n "$free" ] || sleep 1
         done
-        # Each job has its own server, and ports base+1000*slot.. (run.sh uses up to +500 on top of its PORT).
-        ( SCRIPTS="$script" SCHEME="$scheme" PORT=$((base + 1000 * free)) "$here/../uitest/run.sh" "$app" "$out/$script-$i" > "$out/$script-$i.log" 2>&1
+        # Each job has its own server on ports PORT, +1 and up to +500 (what run.sh uses): the first PORT from
+        # base+1000*slot whose ports nothing listens on (a developer's machine has a syncthing on 22000).
+        port=$((base + 1000 * free))
+        while ! ports_free "$port"; do port=$((port + 10)); done
+        ( SCRIPTS="$script" SCHEME="$scheme" PORT=$port "$here/../uitest/run.sh" "$app" "$out/$script-$i" > "$out/$script-$i.log" 2>&1
           echo $? > "$out/$script-$i.rc" ) &
         slot[$free]=$!
       done
