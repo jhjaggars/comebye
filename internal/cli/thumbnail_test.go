@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -305,7 +306,7 @@ func TestRunChromeReportsChromesComplaint(t *testing.T) {
 // What a hung render needs: no network but the CDN, a profile of its own.
 func TestChromeBaseFlags(t *testing.T) {
 	args := strings.Join(chromeBase("/tmp/p"), "\n")
-	for _, w := range []string{"--user-data-dir=/tmp/p", "--headless", `h=="cdnjs.cloudflare.com"?"DIRECT":"PROXY 127.0.0.1:9"`, "--disable-background-networking"} {
+	for _, w := range []string{"--user-data-dir=/tmp/p", "--headless", "--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=cdnjs.cloudflare.com", "--disable-background-networking"} {
 		if !strings.Contains(args, w) {
 			t.Errorf("flags lack %q", w)
 		}
@@ -327,19 +328,40 @@ func TestRealChromeThumbnailOfAPageWithDeadScripts(t *testing.T) {
 <script src="http://10.255.255.1/x.js"></script><script src="http://192.0.2.1/y.js"></script>
 <link rel=stylesheet href="https://fonts.googleapis.com/css2?family=Inter">
 <style>body{background:#fff;color:#000}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}}</style><body style="font:20px sans-serif"><h1>Hello</h1><p>Body text of the page.</p></body>`
-	// What is tested is that dead hosts do not stall the render, not how fast a starved CI host starts Chrome
-	// (twice, among a dozen race-instrumented test binaries): a generous budget, and Chrome's own words if it runs out.
+	// What is tested is that dead hosts do not stall the render, not how fast this host starts Chrome: the nightly runs this
+	// beside race-instrumented binaries of every package on four cores, and one night Chrome took 40 s here (a render is
+	// 0.2 s on an idle machine). So the budget is generous, and the guard is relative: the same page without the dead hosts is
+	// rendered at the same moment, under the same load, and the dead-host page may take no longer than it plus a margin.
+	// A page that waits on a dead host waits for the budget (the old behaviour), not for a margin over its twin.
 	old := thumbTimeout
 	thumbTimeout = 60 * time.Second
 	t.Cleanup(func() { thumbTimeout = old })
-	start := time.Now()
+	clean := `<!doctype html><meta charset=utf-8><title>x</title>
+<style>body{background:#fff;color:#000}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}}</style><body style="font:20px sans-serif"><h1>Hello</h1><p>Body text of the page.</p></body>`
+	took := func(p string, d *time.Duration, errp *error, wg *sync.WaitGroup) {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), thumbTimeout)
+		defer cancel()
+		start := time.Now()
+		_, *errp = shotRender(ctx, chrome, p, "light")
+		*d = time.Since(start)
+	}
+	var wg sync.WaitGroup
+	var dDead, dClean time.Duration
+	var eDead, eClean error
+	wg.Add(2)
+	go took(page, &dDead, &eDead, &wg)
+	go took(clean, &dClean, &eClean, &wg)
+	wg.Wait()
+	if eDead != nil || eClean != nil {
+		t.Fatalf("render with dead hosts: %v (%v); without: %v (%v)", eDead, dDead, eClean, dClean)
+	}
+	if limit := dClean + max(10*time.Second, dClean); dDead > limit {
+		t.Errorf("the page with dead hosts took %v, the same page without them %v: it waited on the dead hosts", dDead, dClean)
+	}
 	light, dark, why := thumbnails(e, page)
 	if light == nil || dark == nil || why != "" {
-		t.Fatalf("light %v dark %v why %q after %v", light != nil, dark != nil, why, time.Since(start))
-	}
-	// The old behaviour waited out the whole budget on the dead hosts; anything near it is the hang again.
-	if d := time.Since(start); d > thumbTimeout/2 {
-		t.Errorf("took %v of a %v budget", d, thumbTimeout)
+		t.Fatalf("light %v dark %v why %q", light != nil, dark != nil, why)
 	}
 	for _, b := range [][]byte{light, dark} {
 		if cfg, err := png.DecodeConfig(bytes.NewReader(b)); err != nil || cfg.Width != thumbW || len(b) > thumbMax {
