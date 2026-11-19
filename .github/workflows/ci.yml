@@ -62,7 +62,7 @@ jobs:
           fi
           cat "$GITHUB_OUTPUT"
 
-  # gofmt, vet, build, vulnerabilities, JS syntax, tokens and contrast: fast.
+  # gofmt, vet, build, vulnerabilities, JS syntax, static checks and contrast: fast.
   lint:
     needs: changes
     if: needs.changes.outputs.lint == 'true'

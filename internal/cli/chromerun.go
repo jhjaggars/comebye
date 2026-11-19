@@ -38,16 +38,18 @@ var chromePaths = []string{
 // chromeNoNetwork routes every request but the CDN's to a closed port, so a
 // page that loads from anywhere else fails at once instead of waiting for a
 // host that never answers (IP literals included, which a resolver rule would
-// miss). file:// pages do not use a proxy.
-const chromeNoNetwork = `--proxy-pac-url=data:application/x-ns-proxy-autoconfig;charset=utf-8,` +
-	`function FindProxyForURL(u,h){return h=="cdnjs.cloudflare.com"?"DIRECT":"PROXY 127.0.0.1:9"}`
+// miss). file:// pages do not use a proxy. A fixed proxy and a bypass list, not
+// a PAC script: a PAC is fetched and run by a helper process, and when that does
+// not come up in time Chrome goes DIRECT, which is how a page with dead hosts took
+// 40 s (the dead hosts' connect timeout) in a nightly on a loaded runner.
+var chromeNoNetwork = []string{"--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=cdnjs.cloudflare.com"}
 
 // chromeBase are the flags every headless run shares; profile is a fresh
 // user-data directory, never the user's.
 func chromeBase(profile string) []string {
-	return []string{"--headless", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+	return append([]string{"--headless", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
 		"--hide-scrollbars", "--disable-dev-shm-usage", "--disable-background-networking", "--disable-component-update",
-		"--disable-sync", "--mute-audio", "--user-data-dir=" + profile, chromeNoNetwork}
+		"--disable-sync", "--mute-audio", "--user-data-dir=" + profile}, chromeNoNetwork...)
 }
 
 var errChromeTimeout = errors.New("timed out")
