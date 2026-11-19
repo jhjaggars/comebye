@@ -1361,7 +1361,7 @@
     #list .host-filter, #list .host-filter *, .md pre, .md pre *, .md table, .md table * { touch-action: pan-x pan-y pinch-zoom; }
     /* The list covers the screen, even when short: a touch below it would go to the page, which pans sideways. */
     #list { min-height: 100vh; min-height: 100dvh; }
-    #list > main { padding-bottom: calc(16px + var(--safe-bottom)); }
+    #list > main { padding-bottom: calc(var(--sp-16) + var(--safe-bottom)); }
     #briefs {
       position: fixed; inset: 0; z-index: var(--z-view); background: var(--bg);
       display: flex; flex-direction: column;

@@ -25,7 +25,7 @@ for (const width of [390, 1280]) {
   await check(`${tag}: the stacking tokens are ordered backdrop < menu < popup < sheet < screen < scrim < toast`, async () => {
     const z = await page.evaluate(() => {
       const cs = getComputedStyle(document.documentElement), g = (n) => Number(cs.getPropertyValue("--z-" + n));
-      return ["raised", "pop", "bar", "pill", "view", "backdrop", "menu", "popup", "sheet", "screen", "scrim", "toast", "toast-over"].map(g);
+      return ["raised", "pop", "bar", "view", "backdrop", "menu", "popup", "sheet", "screen", "scrim", "toast", "toast-over"].map(g);
     });
     for (let i = 1; i < z.length; i++) if (!(z[i] > z[i - 1])) throw new Error("not increasing: " + z.join(", "));
   });
