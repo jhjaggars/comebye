@@ -104,7 +104,7 @@ func TestAppMarkdownIsSanitized(t *testing.T) {
 	}
 	for _, re := range []string{
 		`lib\.P\.sanitize\(lib\.m\.parse\(src\), MD_PURIFY\)`,
-		`ALLOWED_URI_REGEXP: /\^\(\?:https\?:\|mailto:\)/i`,
+		`ALLOWED_URI_REGEXP: /\^\(\?:\(\?:https\?:\|mailto:\)\|\\/\?#\\/todo\\/t\[0-9a-f\]\{10\}\$\)/i`,
 		`"bubble md">\$\{renderMarkdown\(m\.text`,
 	} {
 		if !regexp.MustCompile(re).Match(src) {
@@ -221,7 +221,7 @@ func TestAppTodoPanelWiring(t *testing.T) {
 	for _, re := range []string{
 		`(?s)\.td-drop"\)\) \{\s*if \(!confirm\(`,
 		`\.td-done"\)\) \{\s*todoAct\(id, "done"\)`,
-		`function todoLinkHref\(u\) \{ return /\^https\?:`,
+		`(?s)function todoLinkHref\(u\) \{.*?/\^https\?:`,
 		`esc\(t\.question\)`,
 		`renderMarkdown\(t\.context,`,
 	} {
