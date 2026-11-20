@@ -24,12 +24,12 @@ Every item is in at most one lane, and the lane is the whole rule.
 | **Running** (`running`) | a ledger entry in state `running` whose agent is not blocked on a dialog. |
 | **Waiting on others** (`waiting`) | a ledger entry in state `waiting` (queued behind earlier steps; the detail names them), or an open release item in state `tagged` that is not dismissed (the tag is out and the hosts are upgrading; the Releases tab says what is next). |
 | **Ready to land, or landing** (`landing`) | a ledger entry in state `landing`; or in state `finished` with no purpose of `research`, `plan`, `review` or `spike` and no mark: work that is meant to merge and has not. |
+| **Reports to read** (`reports`) | a ledger entry in state `finished` with a purpose of `research`, `plan`, `review` or `spike` and no mark: its work is the report, so it is a card with its purpose (`kind`), `report` (a final report was captured) and the `pages` published for it. The app opens the report in place and links each Page. Newest first. |
 | **Landed, recent** (`landed`) | a ledger entry in state `landed`, or `ready_to_remove` after it had landed (`marked_from`), whose landing check (else finish time) is within 48 hours. |
 | **Hub did** (`hub_did`) | the hub's event log (`comebye log`) has an event from the last 24 hours. The count is all of them; the items are the newest five, as one line each (kind in `kind`). A day with none has no lane. These are notices the hub no longer types into the coordinator's pane: work that landed (CI not failed), automatic parks, removals and cleanups, sessions a scheduled sweep marked, dialogs that cleared, prompts held for typing. While the scheduled sweep is on, the lane's first line says when it last ran and what it marked ("Last sweep: marked 3 ready to remove (a, b, c); 28 need a look"), even on a day with nothing else. |
 
-Left out on purpose, and counted in `loose`: `reports` (finished work that
-is not meant to land, waiting to be read) and `ready_to_remove` (marked
-entries that never landed). `failed`, `lost` and `removed` entries are not
+Left out on purpose, and counted in `loose`: `ready_to_remove` (marked
+entries that never landed; `loose.reports` is kept for older readers and is always 0). A lane lists at most 40 items, newest first (Needs you: oldest first); `count` is the full number, and the app says "and N older not shown" when they differ. `failed`, `lost` and `removed` entries are not
 on the board.
 
 **What the board cannot know.** "Waiting on others" is only what the records
