@@ -482,6 +482,9 @@ type launchBody struct {
 	// ignored; it need not be in a launch root), read-only where the
 	// harness has a mode for it.
 	Chat string `json:"chat,omitempty"`
+	// ChatWritable, with Chat, is the user's explicit "start it anyway" for a
+	// kind with no read-only mode. Only the user may send it.
+	ChatWritable bool `json:"chat_writable,omitempty"`
 }
 
 // coordinatorDir is where the Coordinator preset starts agents, symlinks
@@ -553,6 +556,10 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	if body.ChatWritable && callerOf(r).agent() {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "chat_override_user_only", "message": "only the user can start a helper that is not read-only"})
+		return
+	}
 	roots := s.launchRoots()
 	if len(roots) == 0 {
 		writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "launch_disabled", "message": "launching is not available on this host"})
@@ -616,10 +623,13 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := choice.Kind
+	chatWritable := false
 	if body.Chat != "" {
-		if why := chatKindRefusal(kind); why != "" {
+		if why := chatKindRefusal(kind); why != "" && !body.ChatWritable {
 			writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "chat_no_readonly", "message": why})
 			return
+		} else if why != "" {
+			chatWritable = true
 		}
 	}
 	name := strings.TrimSpace(body.Name)
@@ -764,7 +774,7 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		resp["thinking"] = choice.Thinking
 	}
 	if body.Chat != "" {
-		resp["chat"] = map[string]any{"page": body.Chat, "dir": dir, "read_only": chatReadOnly(kind)}
+		resp["chat"] = map[string]any{"page": body.Chat, "dir": dir, "read_only": chatReadOnly(kind), "writable": chatWritable}
 	}
 	if body.Coordinator {
 		resp["coordinator"] = true

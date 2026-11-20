@@ -193,7 +193,7 @@ func (s *Server) reuseChat(ctx context.Context, w http.ResponseWriter, p Page, r
 	case "alive":
 		ag := s.slimAgents([]herdr.AgentInfo{f.agent})[0]
 		res := map[string]any{"agent": ag, "page": p.ID, "version": p.Version, "host": rec.Host, "name": rec.Name, "reused": "open",
-			"chat": map[string]any{"page": p.ID, "dir": rec.Dir}}
+			"writable": rec.Writable, "chat": map[string]any{"page": p.ID, "dir": rec.Dir}}
 		if f.agent.ID != rec.Agent {
 			rec.Agent = f.agent.ID
 			_ = s.chats.update(p.ID, func(r *ChatRec) { r.Agent = f.agent.ID })
@@ -241,7 +241,7 @@ func (s *Server) reuseChat(ctx context.Context, w http.ResponseWriter, p Page, r
 		ag := res.Agent
 		ag.ID, ag.Host = id, f.park.Host
 		resp := map[string]any{"agent": ag, "page": p.ID, "version": p.Version, "host": rec.Host, "name": rec.Name, "reused": "resumed",
-			"chat": map[string]any{"page": p.ID, "dir": rec.Dir}}
+			"writable": rec.Writable, "chat": map[string]any{"page": p.ID, "dir": rec.Dir}}
 		if res.Warn != "" {
 			resp["warnings"] = []string{res.Warn}
 		}

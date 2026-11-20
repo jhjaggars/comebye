@@ -59,6 +59,9 @@ type chatMark struct {
 	Page    string `json:"page"`
 	Title   string `json:"title,omitempty"`
 	Version int    `json:"version,omitempty"`
+	// Writable: started with the read-only check overridden (the kind has no
+	// read-only mode); the app marks it "not read-only".
+	Writable bool `json:"writable,omitempty"`
 }
 
 // chatMarkOf is the chat marker of a, from the hub's roles (nil when a is no
@@ -77,6 +80,7 @@ func (s *Server) chatMarkOf(a herdr.AgentInfo, roles map[string]Role) *chatMark 
 	if s.chats != nil {
 		if rec, ok := s.chats.get(r.Page); ok && rec.Agent == a.ID {
 			m.Version = rec.Version
+			m.Writable = rec.Writable
 		}
 	}
 	return m
