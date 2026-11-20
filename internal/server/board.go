@@ -346,11 +346,19 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 // nothing, so a quiet day shows no lane.
 func (s *Server) hubDidLane(now time.Time) *BoardLane {
 	evs := s.events.query(now.Add(-hubDidWindow), nil, 0)
-	if len(evs) == 0 {
+	line, lineAt, haveLine := "", time.Time{}, false
+	if s.sweeps != nil && s.ledger != nil {
+		line, lineAt, haveLine = s.sweepBoardLine()
+	}
+	if len(evs) == 0 && !haveLine {
 		return nil
 	}
 	l := &BoardLane{Key: laneHubDid, Name: "Hub did", Count: len(evs), Items: []BoardItem{},
-		Rule: "What the hub handled itself in the last 24 hours (landed work, automatic parks and removals, cleanups, dialogs that cleared): a count and the newest five. `comebye log` lists them all."}
+		Rule: "What the hub handled itself in the last 24 hours (landed work, automatic parks and removals, cleanups, sweeps, dialogs that cleared): a count and the newest five. `comebye log` lists them all. The first line says when the scheduled sweep last ran and what it marked."}
+	if haveLine {
+		l.Count++
+		l.Items = append(l.Items, BoardItem{ID: "sweep-last", Type: "event", Title: line, Kind: evSweep, Since: lineAt.UTC().Format(time.RFC3339), Project: "Hub"})
+	}
 	for i, ev := range evs {
 		if i >= hubDidLines {
 			break

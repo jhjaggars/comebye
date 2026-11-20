@@ -44,10 +44,12 @@ type hostSettings struct {
 	Kinds        map[string]kindSettings `json:"kinds,omitempty"`
 	// MaxWorkersPerRepo is the most running workers this host keeps per
 	// repository: nil is the default (defaultMaxWorkersPerRepo), 0 no cap.
-	MaxWorkersPerRepo *int       `json:"max_workers_per_repo,omitempty"`
-	Rev               int        `json:"rev"`
-	UpdatedBy         string     `json:"updated_by,omitempty"`
-	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	MaxWorkersPerRepo *int `json:"max_workers_per_repo,omitempty"`
+	// SweepLoop is the hub's scheduled sweep (sweeploop.go): nil is on, hourly.
+	SweepLoop *sweepLoopSettings `json:"sweep_loop,omitempty"`
+	Rev       int                `json:"rev"`
+	UpdatedBy string             `json:"updated_by,omitempty"`
+	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
 }
 
 // settingsStore keeps settings.json. Safe for concurrent use; a nil store
@@ -94,6 +96,7 @@ func normalizeSettings(h hostSettings) hostSettings {
 		n := min(max(*h.MaxWorkersPerRepo, 0), maxWorkersCeiling)
 		h.MaxWorkersPerRepo = &n
 	}
+	h.SweepLoop = normalizeSweepLoop(h.SweepLoop)
 	h.Kinds = nil
 	if len(kinds) > 0 {
 		h.Kinds = kinds
@@ -126,6 +129,7 @@ func copySettings(h hostSettings) hostSettings {
 		n := *h.MaxWorkersPerRepo
 		h.MaxWorkersPerRepo = &n
 	}
+	h.SweepLoop = normalizeSweepLoop(h.SweepLoop)
 	h.AllowedKinds = slices.Clone(h.AllowedKinds)
 	if h.Kinds != nil {
 		m := make(map[string]kindSettings, len(h.Kinds))
@@ -315,7 +319,9 @@ type settingsView struct {
 		// Notice says the default in force cannot be used right now.
 		Notice string `json:"notice,omitempty"`
 	} `json:"effective"`
-	InstalledKinds []string `json:"installed_kinds"`
+	// SweepLoop is the scheduled sweep: the setting in force and its last run.
+	SweepLoop      sweepLoopView `json:"sweep_loop"`
+	InstalledKinds []string      `json:"installed_kinds"`
 	// AgentAuth is each installed agent's sign-in state and method (no account),
 	// probed on this host and kept for a minute.
 	AgentAuth  map[string]signin.AuthInfo `json:"agent_auth"`
@@ -336,6 +342,7 @@ func (s *Server) settingsView() settingsView {
 	if set {
 		v.Effective.MaxWorkersPerRepoSource = "setting"
 	}
+	v.SweepLoop = s.sweepLoopView()
 	if v.Effective.AllowedKinds == nil {
 		v.Effective.AllowedKinds = []string{}
 	}
@@ -384,6 +391,8 @@ type settingsBody struct {
 	Kinds        map[string]kindSettings `json:"kinds"`
 	// MaxWorkersPerRepo: absent keeps the default; 0 lifts the cap.
 	MaxWorkersPerRepo *int `json:"max_workers_per_repo"`
+	// SweepLoop: absent keeps what is set (older clients do not send it).
+	SweepLoop *sweepLoopSettings `json:"sweep_loop"`
 	// Rev, when given, must be the revision read; a later one is a 409.
 	Rev *int `json:"rev"`
 }
@@ -404,7 +413,15 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &b) {
 		return
 	}
-	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo})
+	sweepLoop := b.SweepLoop
+	if sweepLoop == nil {
+		sweepLoop = s.settings.get().SweepLoop
+	}
+	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo, SweepLoop: sweepLoop})
+	if b.SweepLoop != nil && b.SweepLoop.EveryMinutes != nil && (*b.SweepLoop.EveryMinutes < int(minSweepEvery/time.Minute) || *b.SweepLoop.EveryMinutes > int(maxSweepEvery/time.Minute)) {
+		badSettings(w, fmt.Sprintf("sweep_loop.every_minutes: want %d to %d", int(minSweepEvery/time.Minute), int(maxSweepEvery/time.Minute)))
+		return
+	}
 	if b.MaxWorkersPerRepo != nil && (*b.MaxWorkersPerRepo < 0 || *b.MaxWorkersPerRepo > maxWorkersCeiling) {
 		badSettings(w, fmt.Sprintf("max_workers_per_repo: want 0 (no cap) to %d", maxWorkersCeiling))
 		return

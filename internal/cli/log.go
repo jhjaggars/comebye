@@ -49,7 +49,7 @@ func getLog(c *client, since, kinds string, limit int) ([]logEvent, error) {
 func cmdLog(e *Env, args []string) error {
 	fs := flag.NewFlagSet("log", flag.ContinueOnError)
 	since := fs.String("since", "24h", "how far back: a duration such as 90m, 24h or 2d")
-	kind := fs.String("kind", "", "only these kinds, comma separated: landed, park, autoremove, cleanup, blocked, unblocked, held, relay, relay-failed")
+	kind := fs.String("kind", "", "only these kinds, comma separated: landed, park, autoremove, cleanup, sweep, blocked, unblocked, held, relay, relay-failed")
 	limit := fs.Int("limit", 0, "at most this many events (newest first; 0: all)")
 	asJSON := fs.Bool("json", false, "machine-readable output (the hub's /api/log answer)")
 	pos, err := parse(fs, args)

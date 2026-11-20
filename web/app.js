@@ -1925,11 +1925,11 @@ const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight
 function todoLinkHref(u) {
   u = u || "";
   if (/^#\/todo\/t[0-9a-f]{10}$/.test(u)) return "/" + u; // same hub: opens in the app
-  return /^https?:\/\//i.test(u) || /^\/#\/(agent\/[^\s]+|pages\/pg_[0-9a-f]{10}|todo\/t[0-9a-f]{10})$/.test(u) ? u : "";
+  return /^https?:\/\//i.test(u) || /^\/#\/(agent\/[^\s]+|pages\/pg_[0-9a-f]{10}|todo\/t[0-9a-f]{10}|remove)$/.test(u) ? u : "";
 }
 const todoRepOpen = new Set(); // items whose "Full report" is expanded: a redraw keeps it
 // The provenance chip: items the hub filed itself say so (and why).
-const TODO_SOURCE = { "hub-quiet": "auto · quiet", "hub-blocked": "auto · blocked", "hub-question": "auto · question", "hub-report": "from report" };
+const TODO_SOURCE = { "hub-quiet": "auto · quiet", "hub-blocked": "auto · blocked", "hub-question": "auto · question", "hub-report": "from report", "hub-sweep": "auto · sweep" };
 function todoSrcChip(t) {
   const label = TODO_SOURCE[t.source];
   return (label ? `<span class="td-chip td-src" title="Filed by the hub, not by an agent or a person">${esc(label)}</span>` : "") +
@@ -8538,7 +8538,9 @@ function draftFrom(name, data) {
   const s = (data && data.settings) || {};
   const kinds = {};
   for (const [k, v] of Object.entries(s.kinds || {})) kinds[k] = { model: v.model || "", thinking: v.thinking || "" };
-  return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds, max_workers: s.max_workers_per_repo == null ? "" : String(s.max_workers_per_repo) };
+  return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds, max_workers: s.max_workers_per_repo == null ? "" : String(s.max_workers_per_repo),
+    // The scheduled sweep (sweep_loop): on unless switched off; "" minutes is the default hour. Hosts too old to have it send nothing.
+    sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "" };
 }
 
 function draftBody(d) {
@@ -8547,6 +8549,12 @@ function draftBody(d) {
   const body = { default_kind: d.default_kind, allowed_kinds: d.allowed, kinds, rev: d.rev };
   const mw = String(d.max_workers == null ? "" : d.max_workers).trim();
   if (/^\d+$/.test(mw)) body.max_workers_per_repo = Number(mw);
+  if (d.sweep_known) {
+    const sl = {}, ev = String(d.sweep_every || "").trim();
+    if (!d.sweep_on) sl.enabled = false;
+    if (/^\d+$/.test(ev)) sl.every_minutes = Number(ev);
+    body.sweep_loop = sl; // {} puts the default back
+  }
   return body;
 }
 
@@ -8621,6 +8629,11 @@ function maxwNote(d, eff) {
   if (d.max_workers === "") return `Unset: the default of ${eff.max_workers_per_repo_source === "default" ? eff.max_workers_per_repo : 4} applies.`;
   return d.max_workers === "0" ? "0: no cap." : "A handoff over this waits, and starts when a worker in that repository finishes.";
 }
+function sweepNote(d, sw) {
+  if (!d.sweep_on) return "Off: the hub does not look for finished sessions by itself. `comebye sweep` still does it by hand.";
+  const last = sw && sw.last_run_at ? `Last ran ${fmtWhen(sw.last_run_at)}: marked ${sw.last_marked}, ${sw.last_needs_look} need a look.` : "It has not run yet.";
+  return `Marks finished sessions with nothing to lose as ready to remove, and files one To do item a day. It never removes anything itself. ${last}`;
+}
 function peerSettingsForm(h, c, d) {
   const data = c.data;
   const installed = data.installed_kinds || [];
@@ -8651,6 +8664,10 @@ function peerSettingsForm(h, c, d) {
     <div class="pr-field"><label for="pr-maxw">Most running workers per repository</label>
       <input type="number" id="pr-maxw" min="0" max="1000" step="1" inputmode="numeric" value="${esc(d.max_workers)}" placeholder="${esc(eff.max_workers_per_repo_source === "default" || eff.max_workers_per_repo == null ? "4 (default)" : String(eff.max_workers_per_repo))}" autocomplete="off">
       <div class="pr-note" id="pr-maxw-note">${maxwNote(d, eff)} Agents cannot change it.</div></div>
+    ${d.sweep_known ? `<div class="pr-field"><span class="pr-lbl" id="pr-sweep-l">Sweep for sessions to remove</span>
+      <div class="pr-checks" role="group" aria-labelledby="pr-sweep-l"><label class="pr-check"><input type="checkbox" id="pr-sweep-on"${d.sweep_on ? " checked" : ""}>On</label>
+        <label class="pr-check" for="pr-sweep-every">every <input type="number" id="pr-sweep-every" min="15" max="1440" step="5" inputmode="numeric" value="${esc(d.sweep_every)}" placeholder="60" autocomplete="off"${d.sweep_on ? "" : " disabled"}> minutes</label></div>
+      <div class="pr-note" id="pr-sweep-note">${esc(sweepNote(d, data.sweep_loop))}</div></div>` : ""}
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
       <button type="button" class="btn" id="pr-revert"${dirty ? "" : " disabled"}>Revert</button>
@@ -8965,12 +8982,14 @@ function initPeers() {
     const d = prs.draft, t = ev.target;
     if (!d) return;
     if (t.id === "pr-maxw") { d.max_workers = t.value.replace(/[^0-9]/g, ""); refreshDirty(); const n = $("pr-maxw-note"), c = prs.cfg[d.host]; if (n && c && c.data) n.textContent = maxwNote(d, c.data.effective || {}) + " Agents cannot change it."; }
+    else if (t.id === "pr-sweep-every") { d.sweep_every = t.value.replace(/[^0-9]/g, ""); refreshDirty(); }
     else if (t.dataset.model) { (d.kinds[t.dataset.model] ||= { model: "", thinking: "" }).model = t.value; refreshDirty(); }
   });
   v.addEventListener("change", (ev) => {
     const d = prs.draft, t = ev.target;
     if (!d) return;
     if (t.id === "pr-default") d.default_kind = t.value;
+    else if (t.id === "pr-sweep-on") d.sweep_on = t.checked;
     else if (t.dataset.allow) d.allowed = t.checked ? [...new Set([...d.allowed, t.dataset.allow])] : d.allowed.filter((k) => k !== t.dataset.allow);
     else if (t.dataset.think) (d.kinds[t.dataset.think] ||= { model: "", thinking: "" }).thinking = t.value;
     else return;

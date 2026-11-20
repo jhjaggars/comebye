@@ -524,6 +524,7 @@ func main() {
 		go announceToHub(upstream, localAPI, *hostName, *announceURL)
 	}
 	go srv.RunLedger(context.Background())
+	go srv.RunSweepLoop(context.Background())
 	transcript.DefaultResolver.OpencodeDir = acfg.OpencodeDir
 	go srv.RunUsage(context.Background())
 	go srv.RunOpencodeMirror(context.Background())

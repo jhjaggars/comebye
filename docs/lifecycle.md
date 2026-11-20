@@ -79,10 +79,34 @@ same call that moves the entry to `landing`.
 | `finished` | the worker reported | worker, hub | `comebye land` → `landing`; more work → `running`; mark → `ready_to_remove` |
 | `landing` | `comebye land WORKER --note "<the user's OK>"` | coordinator, after the user OKs | the hub finds every approved commit in `origin/<base>` (`landed`), or the worker has said it is done or stopped with nothing running and the work is not there (back to `finished`, "land failed") |
 | `landed` | the hub's check found every approved commit in `origin/<base>` (it polls while the entry is landing; the worker's landing report is not needed) | hub | mark/sweep → `ready_to_remove`; more work → `running` (a new round) |
-| `ready_to_remove` | `comebye mark`, `comebye sweep`, or the app | coordinator, user | unmark → back; the user confirms → `removed` |
+| `ready_to_remove` | `comebye mark`, `comebye sweep`, the hub's scheduled sweep, or the app | coordinator, user, hub | unmark → back; the user confirms → `removed` |
 | `removed` | the user confirmed the removal in the app | user | (final) |
 | `failed` | the worker never started | hub | (final) |
 | `lost` | the worker's host was removed from the hub, or its name taken over by another machine (a reused spot-worker name), before the work was reported. Entries follow one *instance* of a host (the hub's peer registry: a UUID, or the cloud instance id `worker create` records), so the new machine's panes never move an old entry. The branch and brief remain; `error` says why | hub | (final) |
+
+### The scheduled sweep
+
+The hub runs `comebye sweep` for you (`internal/server/sweeploop.go`), on by
+default, once an hour (Peers → the host → "Sweep for sessions to remove", or
+`sweep_loop` in the settings API: on or off, 15 minutes to a day). A worker
+still recorded as running counts as finished after 2 hours idle, not the 30
+minutes of a hand-run sweep, because nobody is watching this one.
+
+- It only **marks**, as `comebye sweep` does (the session is asked what is
+  left; the automatic removal or the user's tap in the removals review does the
+  removing). It never removes anything itself.
+- A second run marks nothing new: marked sessions are skipped. A run that marks
+  nothing writes nothing to the log.
+- The board's "Hub did" lane starts with "Last sweep: …" (when it ran, what it
+  marked, how many need a look); a run that marked sessions also logs a
+  `sweep` event.
+- At most **one To do item a day**: "N sessions are ready to remove", linking
+  the removals review. It counts marked sessions the review's "Remove all safe"
+  would take (a mark older than 20 minutes, not a coordinator, not a proposal to
+  discard, not UNSAFE); the one confirm is that button. While it is open the
+  loop keeps its count right, and closes it when nothing is left.
+- Its state (last run, last item) is `sweeploop.json` in the state directory,
+  so a restart neither sweeps again early nor files a second item.
 
 ## Workflows
 
