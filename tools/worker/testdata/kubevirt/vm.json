@@ -49,6 +49,13 @@
         }
       },
       "spec": {
+        "dnsConfig": {
+          "nameservers": [
+            "1.1.1.1",
+            "9.9.9.9"
+          ]
+        },
+        "dnsPolicy": "None",
         "domain": {
           "cpu": {
             "cores": 4

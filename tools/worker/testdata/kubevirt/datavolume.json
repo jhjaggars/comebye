@@ -2,6 +2,9 @@
   "apiVersion": "cdi.kubevirt.io/v1beta1",
   "kind": "DataVolume",
   "metadata": {
+    "annotations": {
+      "cdi.kubevirt.io/storage.deleteAfterCompletion": "false"
+    },
     "labels": {
       "comebye-worker/name": "w1",
       "managed-by": "comebye-worker"

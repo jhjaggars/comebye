@@ -3,7 +3,7 @@
 `tools/worker` builds a worker VM on Google Compute Engine **or AWS EC2**
 (`provider = gcp|aws`), a sandbox on an **OpenShell gateway**
 (`provider = openshell`, see [OpenShell sandboxes](#openshell-sandboxes)), or, as a dry run only so far, a VM on a
-**KubeVirt cluster** (`provider = kubevirt`, see [KubeVirt VMs](#kubevirt-vms-dry-run-only-so-far)), puts it on your tailnet as a **tagged, persistent** node (`tag:worker`) and lets it join the
+**KubeVirt cluster** (`provider = kubevirt`, see [KubeVirt VMs](#kubevirt-vms)), puts it on your tailnet as a **tagged, persistent** node (`tag:worker`) and lets it join the
 comebye hub. After that, comebye does the rest: launching agents, handoffs
 and repo checkouts go through the hub like any other peer. The tool does no
 agent orchestration and clones no repositories.
@@ -447,13 +447,11 @@ at this rate (an estimate; most have far less). A pull is not an interactive ses
 delay the idle poweroff; a tick that lands mid-pull on an otherwise idle worker past its limit could stop the VM, which `archive` reports as an ssh failure to repeat.
 Codex sessions are not archived: the archive knows only Claude and pi.
 
-## KubeVirt VMs (dry run only so far)
+## KubeVirt VMs
 
 `provider = kubevirt` makes the worker a KubeVirt VM on a cluster that `kubectl` and
-`virtctl` already reach (plan: issue #48). **This is slice 1 of that plan: the config, the
-`create --dry-run` plan, `preflight` and the capacity gate. There is no live create yet**;
-`create` without `--dry-run`, and every other command that would change the cluster, stops
-with an error before it runs anything.
+`virtctl` already reach (plan: issue #48). The commands are the same as for a cloud VM;
+the differences are below.
 
 ```
 provider=kubevirt
@@ -483,6 +481,23 @@ kubeconfig; it runs `kubectl` with at most `--context NAME`. The fixed cluster p
 (namespace, quota, network policy, golden image, the service account) are applied once from the
 homelab repo's `k3s-manifests/` and are not made by this tool.
 
+- **`create NAME`** applies, in order: the data DataVolume (a standalone object; `destroy`
+  keeps it), the cloud-init Secret, and the VirtualMachine (boot disk = a CSI clone of the
+  golden DataVolume; `runStrategy: RerunOnFailure`, so the idle poweroff leaves it stopped;
+  `dnsPolicy: None` with public resolvers, because the namespace's network policy denies
+  cluster DNS). Everything after that (tailnet enrolment as `tag:worker`, the comebye install,
+  the hub join) is the same bootstrap as for a cloud VM, over ssh.
+- **The host key is pinned by the tool**, not learned: `create` generates an ed25519 host key,
+  puts it in the Secret's user-data (sent on kubectl's stdin, never argv) and records its
+  public half on the Secret as an annotation. `known_hosts` is written from that, with
+  `StrictHostKeyChecking yes`.
+- **ssh goes through `virtctl port-forward`**: the worker's private `ssh_config` has
+  `ProxyCommand virtctl port-forward --stdio=true vmi/NAME.NAMESPACE 22`; the namespace admits
+  only virt-api on tcp/22.
+- **`stop`/`start`** set the run strategy (`Halted`, then `RerunOnFailure` again) and wait.
+  **`destroy`** deletes the VM (its boot disk goes with it) and the Secret; the data DataVolume
+  stays unless `--delete-data-disk`. Every change first checks the `managed-by=comebye-worker`
+  label and refuses an object without it.
 - **`create NAME --dry-run`** prints the plan, then the DataVolume, Secret and VirtualMachine
   it would apply (every object labelled `managed-by=comebye-worker`; the Secret's host key is
   a placeholder). It reads the cluster with `kubectl get` only, and exits non-zero when the
