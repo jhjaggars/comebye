@@ -4804,6 +4804,31 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
   }
 });
 }
+// A rollout that wakes a stopped worker (relfix.mjs ro-waking): the host's step says it is starting, shows a "started" gate that
+// has not passed, is not marked offline-skipped, and the band says what it is doing.
+for (const width of [1280, 390]) {
+await check(`releases rollout wake at ${width}: a stopped worker's step reads starting kubevirt-1…, with the started gate pending and its upgrade gates not yet reached`, async () => {
+  await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView("ro-waking") }));
+  try {
+    await openReleases(width);
+    await page.evaluate(() => loadReleases(false));
+    const fleet = "#pr-releases [data-fleet]";
+    await page.waitForFunction(() => rls.data && rls.data.rollout_job && document.querySelector("#pr-releases [data-fleet] .rl-band"));
+    await idle();
+    const bt = await page.locator(fleet + " .rl-band").innerText();
+    if (!/Rolling out v0\.5\.22/.test(bt) || !/1 of 4 done/.test(bt) || !/starting kubevirt-1/.test(bt)) throw new Error("band: " + bt);
+    const kv = page.locator(`${fleet} .rl-host[data-host="kubevirt-1"]`);
+    const t = await kv.innerText();
+    if (!/starting/.test(await kv.locator(".rl-phase").innerText()) || !/starting kubevirt-1…/.test(t) || !/… started/.test(t) || !/○ upgrade ok/.test(t) || !/○ back online/.test(t)) throw new Error("kubevirt-1: " + t);
+    if (await kv.locator("button:not(.cpb):not(:disabled)").filter({ hasText: /Upgrade|Retry|Roll back/ }).count()) throw new Error("an upgrade button on a host being started");
+    if (await kv.locator(".rl-tag-off").count()) throw new Error("a host being started is tagged offline");
+    await page.screenshot({ path: `${out}/rollout-waking-${width}.png` });
+    const h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1]) throw new Error("sideways scroll " + JSON.stringify(h));
+  } finally {
+    await page.unroute(/\/api\/releases(\?.*)?$/);
+  }
+});
+}
 // Dismiss: the user abandons a tagged release's rollout. A confirm first, then it is out of the tab and the badge.
 for (const width of [1280, 390]) {
 await check(`releases dismiss at ${width}: Dismiss release asks for a confirm, then the release leaves the tab and the badge, its item is dropped, and it stays in the history`, async () => {

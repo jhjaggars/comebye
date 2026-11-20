@@ -52,6 +52,7 @@ const (
 	roUpgrading = "upgrading" // the host's run was started; waiting for its record
 	roVerifying = "verifying" // the record is ok; waiting for the host to be back on the version
 	roSoaking   = "soaking"   // canary only: watching the host for a while
+	roWaking    = "waking"    // the host was stopped (idle off); it is being started, and is not yet counted offline or soaking
 	roOK        = "ok"
 	roSkipped   = "skipped"
 	roFailed    = "failed"
@@ -73,6 +74,7 @@ const (
 	rolloutRunWait      = upgrade.StaleAfter + 30*time.Second // a run with no verdict at all
 	rolloutStartRetry   = 5 * time.Minute                     // a host that cannot be told to start
 	rolloutHostCallWait = 20 * time.Second
+	rolloutWakeWait     = 10 * time.Minute // a stopped worker: started and joined the hub (the start job 7 min, the join 3)
 )
 
 // RolloutStep is one host of the plan.
@@ -93,6 +95,8 @@ type RolloutStep struct {
 	OfflineSince *time.Time `json:"offline_since,omitempty"`
 	TryingSince  *time.Time `json:"trying_since,omitempty"`
 	Attempt      int        `json:"attempt,omitempty"`
+	// Woke: the host was stopped and this rollout started it (issue #66).
+	Woke bool `json:"woke,omitempty"`
 	// Mode "deploy": the step is the hub wave's deploy command, not an
 	// upgrade of the host itself (rollout_hub.go). Dry: it was a dry run.
 	Mode string `json:"mode,omitempty"`
@@ -151,6 +155,27 @@ type rolloutOps interface {
 	StartDeploy(ctx context.Context, job Rollout) (string, error)
 	// DeployStatus is the deploy record, as the release host keeps it.
 	DeployStatus(ctx context.Context) (deployStatus, error)
+	// Wake is asked once for a host that is not up: when the provisioner knows
+	// it as a stopped worker, it starts it (or joins the start already going)
+	// and says wakeStarting. wakeNone means it is not a stopped provisioned
+	// worker (the old offline grace applies); wakeRefused carries why a stopped
+	// worker was not started (rate limit, budget cap, provisioner offline).
+	Wake(ctx context.Context, job Rollout, host string) wakeVerdict
+	// WakeStatus follows the wake of a host.
+	WakeStatus(ctx context.Context, host string) wakeVerdict
+}
+
+// What the hub says about waking a host for a rollout.
+const (
+	wakeNone    = "none"
+	wakeRefused = "refused"
+	// wakeStarting, wakeUp and wakeFailed are the wake book's own words (wake.go).
+)
+
+type wakeVerdict struct {
+	Kind   string
+	Step   string // the tool's last line, or what the hub waits for
+	Reason string // why it was refused or failed
 }
 
 // rolloutEngine drives the job file.
@@ -163,7 +188,7 @@ type rolloutEngine struct {
 	// hosts is the fleet answer of the tick in progress (guarded by mu).
 	hosts []relHost
 	// Timings; tests shorten them.
-	soak, backWait, offlineGrace, runWait, startRetry time.Duration
+	soak, backWait, offlineGrace, runWait, startRetry, wakeWait time.Duration
 	// tickEvery is how often Run ticks (rolloutTick; -test-mode makes it shorter).
 	tickEvery time.Duration
 	// onState is told, after the file was written, whenever the job's state
@@ -174,7 +199,7 @@ type rolloutEngine struct {
 
 func newRolloutEngine(path string, ops rolloutOps, audit func(ledger.AuditEvent)) *rolloutEngine {
 	return &rolloutEngine{path: path, ops: ops, now: func() time.Time { return time.Now().UTC() }, audit: audit,
-		soak: rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry}
+		soak: rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry, wakeWait: rolloutWakeWait}
 }
 
 var (
@@ -570,6 +595,8 @@ func (e *rolloutEngine) advance(ctx context.Context, j *Rollout, hosts []relHost
 			return e.watchHub(ctx, j, st, h, found, now)
 		}
 		return e.watchRun(j, st, h, found, now)
+	case roWaking:
+		return e.watchWake(ctx, j, st, h, found, now)
 	case roVerifying:
 		return e.verify(j, st, h, found, now)
 	case roSoaking:
@@ -589,6 +616,24 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 		e.finishStep(j, st, h, now, "already on the version")
 		return true
 	case !hostUp(h):
+		if st.OfflineSince == nil && st.Mode != stepModeDeploy {
+			// A stopped provisioned worker is started, not waited for: the
+			// offline grace is for hosts that went quiet for unknown reasons.
+			cctx, cancel := context.WithTimeout(ctx, rolloutHostCallWait)
+			v := e.ops.Wake(cctx, *j, st.Host)
+			cancel()
+			switch v.Kind {
+			case wakeStarting:
+				st.Phase, st.At, st.Woke, st.Detail = roWaking, now, true, wakeText(st.Host, v)
+				j.Note = st.Detail
+				e.emit(*j, st.Host, "rollout.wake", true, "start requested: it is stopped", "comebye")
+				return false
+			case wakeRefused:
+				e.emit(*j, st.Host, "rollout.wake", false, "not started: "+v.Reason, "comebye")
+				e.skip(j, st, now, v.Reason)
+				return true
+			}
+		}
 		if st.OfflineSince == nil {
 			since := now
 			if h.Since != nil && hostDown(h) {
@@ -633,6 +678,50 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 		return false
 	}
 	e.started(j, st, h, rec, now, "")
+	return false
+}
+
+func wakeText(host string, v wakeVerdict) string {
+	t := "starting " + host + "…"
+	if v.Step != "" {
+		t += " " + oneLine(v.Step, 120)
+	}
+	return t
+}
+
+// watchWake: a stopped host is being started. It is neither offline nor in
+// flight: the step carries on as an ordinary one once the host has joined
+// the hub, and is skipped, with the reason, if the start fails or takes too
+// long (one sleeping VM must not stop the rollout).
+func (e *rolloutEngine) watchWake(ctx context.Context, j *Rollout, st *RolloutStep, h relHost, found bool, now time.Time) bool {
+	if !found {
+		e.skip(j, st, now, "no longer in the fleet")
+		return true
+	}
+	cctx, cancel := context.WithTimeout(ctx, rolloutHostCallWait)
+	v := e.ops.WakeStatus(cctx, st.Host)
+	cancel()
+	took := now.Sub(st.At).Round(time.Second)
+	switch {
+	case v.Kind == wakeFailed:
+		e.emit(*j, st.Host, "rollout.wake", false, "could not wake: "+oneLine(v.Reason, 200), "comebye")
+		e.skip(j, st, now, "could not wake "+st.Host+": "+oneLine(v.Reason, 200))
+		return true
+	case hostUp(h):
+		st.Phase, st.At, st.Detail, st.OfflineSince = roPending, now, "", nil
+		e.emit(*j, st.Host, "rollout.wake", true, "joined the hub after "+took.String(), "comebye")
+		return true
+	case v.Kind != wakeStarting && v.Kind != wakeUp:
+		e.emit(*j, st.Host, "rollout.wake", false, "the wake was lost", "comebye")
+		e.skip(j, st, now, "could not wake "+st.Host+": the hub lost track of the start")
+		return true
+	case now.Sub(st.At) >= e.wakeWait:
+		e.emit(*j, st.Host, "rollout.wake", false, "did not join within "+e.wakeWait.String(), "comebye")
+		e.skip(j, st, now, "could not wake "+st.Host+": it did not join the hub within "+e.wakeWait.Round(time.Second).String())
+		return true
+	}
+	st.Detail = wakeText(st.Host, v)
+	j.Note = st.Detail
 	return false
 }
 
@@ -767,6 +856,10 @@ func (e *rolloutEngine) finishStep(j *Rollout, st *RolloutStep, h relHost, now t
 	st.Phase, st.Done, st.Detail = roOK, &t, note
 	if st.To == "" {
 		st.To = h.Version
+	}
+	if st.Woke && note == "" {
+		st.Detail = "woke it, then upgraded; it powers off again when idle"
+		note = "(woke it)"
 	}
 	e.emit(*j, st.Host, "rollout.gate", true, fmt.Sprintf("done version=%s took=%s %s", st.To, took(*st, now), note), "comebye")
 	if j.PauseRequested {

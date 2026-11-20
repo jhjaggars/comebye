@@ -3287,12 +3287,13 @@ function roJob(d) { return d && d.todo && d.rollout_job && d.rollout_job.todo ==
 function roLive(j) { return !!j && (j.state === "running" || j.state === "paused" || j.state === "stopped"); }
 function roState(d) { const j = roJob(d); return j ? j.state : ""; }
 const RO_WAVE = { canary: "Canary", peers: "Other peers", hub: "Hub" };
-const RO_PHASE = { pending: "waiting", upgrading: "upgrading", verifying: "verifying", soaking: "soaking", ok: "done", skipped: "skipped", failed: "failed" };
+const RO_PHASE = { pending: "waiting", waking: "starting", upgrading: "upgrading", verifying: "verifying", soaking: "soaking", ok: "done", skipped: "skipped", failed: "failed" };
 
 // What a host's step says beside its version.
 function roStepText(st, job) {
   switch (st.phase) {
     case "pending": return st.detail || (job.state === "stopped" ? "not touched" : "waiting for its turn");
+    case "waking": return st.detail || "starting " + st.host + "…";
     case "upgrading": return (st.mode === "deploy" ? "running the deploy; it restarts the hub" : "upgrading") + (st.detail ? " · " + st.detail : "…");
     case "verifying": return (st.mode === "deploy" ? "deploy ok · " : "upgrade ok · ") + (st.detail || "waiting for it to be back");
     case "soaking": return st.detail || "soaking";
@@ -3313,6 +3314,7 @@ function roGatesHtml(st, version) {
     g(dep ? "hub back" : "back online", past("soaking", "ok"), st.phase === "verifying"),
     g(version + " seen", past("soaking", "ok"), st.phase === "verifying"),
   ];
+  if (st.woke || st.phase === "waking") gates.unshift(g("started", st.phase !== "waking" && st.phase !== "pending", st.phase === "waking"));
   if (st.wave === "canary") gates.push(g("soak", st.phase === "ok", st.phase === "soaking"));
   return `<div class="rl-gates" aria-label="Gates of ${escAttr(st.host)}">${gates.join("")}</div>`;
 }
@@ -3449,7 +3451,7 @@ function relRowHtml(x, d, job, step) {
   const vcls = x.offline && !x.current ? "off" : !cur || x.current || !tagged ? "cur" : "old";
   const to = tagged && !x.current ? ` <span class="rl-to">→ <b>${esc(cur.version)}</b></span>` : "";
   return `<div class="rl-host rel-host${rowcls}" data-host="${escAttr(x.name)}"${isDeploy ? " data-deploy" : ""}>
-    <div class="rl-hl"><span class="rel-hn">${esc(x.name)}</span>${x.hub ? '<span class="rl-tag">hub</span>' : ""}${x.offline ? '<span class="rl-tag rl-tag-off">offline</span>' : ""}<span class="rl-ver rl-v-${vcls}">${esc(x.version || "?")}</span>${to}${step ? `<span class="rl-phase rl-ph-${escAttr(step.phase)}">${esc(RO_PHASE[step.phase] || step.phase)}</span>` : ""}</div>
+    <div class="rl-hl"><span class="rel-hn">${esc(x.name)}</span>${x.hub ? '<span class="rl-tag">hub</span>' : ""}${x.offline && !(step && step.phase === "waking") ? '<span class="rl-tag rl-tag-off">offline</span>' : ""}<span class="rl-ver rl-v-${vcls}">${esc(x.version || "?")}</span>${to}${step ? `<span class="rl-phase rl-ph-${escAttr(step.phase)}">${esc(RO_PHASE[step.phase] || step.phase)}</span>` : ""}</div>
     ${act ? `<div class="rel-ha">${act}</div>` : ""}
     ${sub ? `<div class="rl-sub rel-hs${err ? " rl-err" : ""}">${esc(sub)}</div>` : ""}${gates}${deployRuns && (act || drec) ? `<div class="rl-sub rel-runs">${esc(deployRuns)}</div>` : ""}${out}</div>`;
 }

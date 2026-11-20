@@ -27,6 +27,39 @@ type fakeFleet struct {
 	deploys   int
 	deployErr error
 	statusErr error
+	// the provisioner: what Wake answers for a host (default none: not a
+	// stopped provisioned worker), what WakeStatus answers, and the hosts
+	// Wake was asked about
+	wakeAs   map[string]wakeVerdict
+	wakeNow  map[string]wakeVerdict
+	wakeAsks []string
+}
+
+func (f *fakeFleet) Wake(_ context.Context, _ Rollout, host string) wakeVerdict {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.wakeAsks = append(f.wakeAsks, host)
+	if v, ok := f.wakeAs[host]; ok {
+		return v
+	}
+	return wakeVerdict{Kind: wakeNone}
+}
+
+func (f *fakeFleet) WakeStatus(_ context.Context, host string) wakeVerdict {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if v, ok := f.wakeNow[host]; ok {
+		return v
+	}
+	return wakeVerdict{Kind: wakeNone}
+}
+
+// stopped makes host a stopped provisioned worker: down, and the fake
+// provisioner starts it when asked.
+func (f *fakeFleet) stopped(host string) {
+	f.wakeAs = map[string]wakeVerdict{host: {Kind: wakeStarting, Step: "asking prov to start it"}}
+	f.wakeNow = map[string]wakeVerdict{host: {Kind: wakeStarting, Step: "starting " + host}}
+	f.set(host, func(h *relHost) { h.Status = "down" })
 }
 
 func newFakeFleet(target string, names ...string) *fakeFleet {
@@ -847,4 +880,135 @@ func TestHubWaveAsAnOrdinaryHostUpgrade(t *testing.T) {
 	r.tick()
 	r.tick()
 	r.want("done a=ok hub=ok")
+}
+
+func TestRolloutWakesAStoppedWorkerAndUpgradesIt(t *testing.T) {
+	r := newRolloutRig(t, "a", "kv1", "c")
+	r.f.stopped("kv1")
+	r.start("a", "kv1", "c")
+	r.tick()
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick() // a soaking
+	r.f.advance(3 * time.Minute)
+	r.tick() // a ok; kv1 is stopped: it is woken, not waited for
+	r.want("running a=ok kv1=waking c=pending")
+	j, _ := r.e.Get()
+	if !j.Plan[1].Woke || !strings.Contains(j.Plan[1].Detail, "starting kv1") || !strings.Contains(j.Note, "starting kv1") {
+		t.Fatalf("waking step: %+v note %q", j.Plan[1], j.Note)
+	}
+	if got := strings.Join(r.f.wakeAsks, ","); got != "kv1" {
+		t.Fatalf("wake asked %q", got)
+	}
+	// the boot takes longer than the offline grace and is not skipped, nor started on, nor counted as offline
+	for i := 0; i < 4; i++ {
+		r.f.advance(90 * time.Second)
+		r.tick()
+		r.want("running a=ok kv1=waking c=pending")
+	}
+	if len(r.f.starts) != 1 || len(r.f.wakeAsks) != 1 {
+		t.Fatalf("starts %v, wake asks %v", r.f.starts, r.f.wakeAsks)
+	}
+	if j, _ := r.e.Get(); j.Plan[1].OfflineSince != nil || inFlight(j) != -1 {
+		t.Fatalf("a waking host counts as offline or in flight: %+v", j.Plan[1])
+	}
+	// it joins the hub: the step goes on as an ordinary one
+	r.f.set("kv1", func(h *relHost) { h.Status = "ok" })
+	r.tick()
+	r.want("running a=ok kv1=upgrading c=pending")
+	r.f.finish("kv1", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("running a=ok kv1=ok c=upgrading")
+	j, _ = r.e.Get()
+	if !j.Plan[1].Woke || !strings.Contains(j.Plan[1].Detail, "woke it") {
+		t.Fatalf("ok step does not say it woke the host: %+v", j.Plan[1])
+	}
+	if got := strings.Join(r.f.starts, ","); got != "a,kv1,c" {
+		t.Fatalf("starts %s", got)
+	}
+	a := r.actions()
+	if strings.Count(a, "rollout.wake:kv1") != 2 {
+		t.Errorf("audit: %s", a)
+	}
+	r.f.finish("c", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok kv1=ok c=ok")
+}
+
+func TestRolloutSkipsAHostWhoseWakeFailsWithTheReason(t *testing.T) {
+	r := newRolloutRig(t, "a", "kv1", "c")
+	r.f.stopped("kv1")
+	r.start("a", "kv1", "c")
+	r.f.set("a", func(h *relHost) { h.Version = "v0.6.4" }) // a is already current
+	r.tick()
+	r.want("running a=ok kv1=waking c=pending")
+	r.f.mu.Lock()
+	r.f.wakeNow["kv1"] = wakeVerdict{Kind: wakeFailed, Reason: "prov is offline"}
+	r.f.mu.Unlock()
+	r.tick()
+	r.want("running a=ok kv1=skipped c=upgrading")
+	j, _ := r.e.Get()
+	if got := j.Plan[1].Detail; got != "could not wake kv1: prov is offline" {
+		t.Fatalf("detail %q", got)
+	}
+	r.f.finish("c", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok kv1=skipped c=ok")
+	if a := r.actions(); !strings.Contains(a, "rollout.wake:kv1") || !strings.Contains(a, "rollout.skip:kv1") {
+		t.Fatalf("audit %s", a)
+	}
+}
+
+func TestRolloutSkipsAWakeThatNeverJoins(t *testing.T) {
+	r := newRolloutRig(t, "kv1", "c")
+	r.f.stopped("kv1")
+	r.start("kv1", "c")
+	r.tick()
+	r.want("running kv1=waking c=pending")
+	r.f.advance(rolloutWakeWait + time.Second)
+	r.tick()
+	r.want("running kv1=skipped c=upgrading")
+	if j, _ := r.e.Get(); !strings.Contains(j.Plan[0].Detail, "did not join the hub") {
+		t.Fatalf("detail %q", j.Plan[0].Detail)
+	}
+}
+
+func TestRolloutSkipsAHostTheWakeRefusesRateLimitOrBudgetCap(t *testing.T) {
+	for name, why := range map[string]string{
+		"rate":   "not started: kv1 woke 3 times this hour; tap Start to start it anyway",
+		"budget": "not started: kv1 was stopped by its budget cap: start it from Peers",
+	} {
+		r := newRolloutRig(t, "kv1", "c")
+		r.f.stopped("kv1")
+		r.f.wakeAs["kv1"] = wakeVerdict{Kind: wakeRefused, Reason: why}
+		r.start("kv1", "c")
+		r.tick()
+		r.want("running kv1=skipped c=upgrading")
+		j, _ := r.e.Get()
+		if j.Plan[0].Detail != why {
+			t.Fatalf("%s: detail %q", name, j.Plan[0].Detail)
+		}
+		if a := r.actions(); !strings.Contains(a, "rollout.skip:kv1") {
+			t.Fatalf("%s: audit %s", name, a)
+		}
+	}
+}
+
+func TestRolloutKeepsTheOfflineGraceForAHostThatIsNotAStoppedWorker(t *testing.T) {
+	r := newRolloutRig(t, "b", "c")
+	r.f.set("b", func(h *relHost) { h.Status = "down" }) // the provisioner does not know it
+	r.start("b", "c")
+	r.tick()
+	r.want("running b=pending c=pending")
+	r.f.advance(90 * time.Second)
+	r.tick()
+	r.want("running b=pending c=pending")
+	r.f.advance(40 * time.Second)
+	r.tick()
+	r.want("running b=skipped c=upgrading")
+	if j, _ := r.e.Get(); !strings.Contains(j.Plan[0].Detail, "offline for") {
+		t.Fatalf("detail %q", j.Plan[0].Detail)
+	}
+	if got := strings.Join(r.f.wakeAsks, ","); got != "b" {
+		t.Fatalf("the wake was asked %q: once, not every tick", got)
+	}
 }

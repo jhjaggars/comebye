@@ -16,6 +16,7 @@
 //   done      tagged and every host upgraded; the item was closed by the hub
 //   ro-before   tagged, build green: the "Roll out to all" button and the plan it would confirm
 //   ro-running  a rollout: the canary is done, the next peer is upgrading, one waits
+//   ro-waking   the canary is done, kubevirt-1 was stopped and is being started (the wake step), one waits
 //   ro-paused   paused after the canary
 //   ro-failed   stopped at the second peer (its upgrade was rolled back); the third was not touched
 //   ro-skipped  done, one peer skipped (offline): "Roll out again"
@@ -28,7 +29,7 @@ const HIST = [
   ["v0.5.19", 6, "Answered box readable in light mode"], ["v0.5.18", 9, "Mark button reads Unmark"], ["v0.5.17", 12, "Briefings skip a slot when nothing changed"],
 ];
 
-export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "rollout", "done", "dismissed", "ro-before", "ro-running", "ro-paused", "ro-failed", "ro-skipped"];
+export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "rollout", "done", "dismissed", "ro-before", "ro-running", "ro-waking", "ro-paused", "ro-failed", "ro-skipped"];
 
 // The v0.5.24 rollout as the user saw it. The deploy ran from laharl for the hub (comebye-hub);
 // laharl itself is on v0.5.23 and the Mac was upgraded by hand after its app upgrade failed.
@@ -80,6 +81,12 @@ function rolloutJobView(name) {
     set("kubevirt-1", { record: { id: "run-kv", version: V, state: "running", by: "me", started: ago(30000) } });
     n(1);
     out.needs_you = false; out.needs_text = `Rolling out ${V}: upgrading kubevirt-1`;
+  } else if (name === "ro-waking") {
+    job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "waking", { woke: true, detail: "starting kubevirt-1… waiting for it to join the hub" }), step("mac-mini", "peers", "pending"), hub()];
+    job.note = "starting kubevirt-1… waiting for it to join the hub";
+    set("kubevirt-1", { status: "down", offline: true, unknown: true, enabled: false, since: ago(3 * 3600000) });
+    n(1); out.rollout.offline = 1; out.rollout.behind = 2;
+    out.needs_you = false; out.needs_text = `Rolling out ${V}: starting kubevirt-1`;
   } else if (name === "ro-paused") {
     job.state = "paused"; job.note = "paused after peerbox";
     job.plan = [done("peerbox", "canary", PREV), step("kubevirt-1", "peers", "pending"), step("mac-mini", "peers", "pending"), hub()];

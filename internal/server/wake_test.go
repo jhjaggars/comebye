@@ -357,3 +357,71 @@ func TestPeerStartRouteRefusesWhatTheBookDoesNotAllow(t *testing.T) {
 		t.Errorf("destroying an adopted host: %v", err)
 	}
 }
+
+// ---- the rollout's wake (slice 2): the hub side of rolloutOps ----
+
+func rolloutJobFor() Rollout { return Rollout{ID: "r1", Todo: "t1", By: "jesse"} }
+
+func TestRolloutWakeStartsAStoppedProvisionedWorkerOnce(t *testing.T) {
+	s, prov, wk, _ := stoppedHub(t)
+	var h hostsResp
+	getJSON(t, s, "/api/provision/hosts?refresh=1", userHdr, &h)
+	wk.set(t, "start.out", "starting demo1\ndemo1 is up, comebye v1\n")
+	ops := serverRolloutOps{s}
+	v := ops.Wake(context.Background(), rolloutJobFor(), "demo1")
+	if v.Kind != wakeStarting {
+		t.Fatalf("wake = %+v", v)
+	}
+	// a second ask joins the wake that is going
+	if v2 := ops.Wake(context.Background(), rolloutJobFor(), "demo1"); v2.Kind != wakeStarting {
+		t.Fatalf("second wake = %+v", v2)
+	}
+	waitWake(t, s, "demo1", wakeUp)
+	if st := ops.WakeStatus(context.Background(), "demo1"); st.Kind != wakeUp {
+		t.Errorf("status = %+v", st)
+	}
+	if wk.runs("start demo1") != 1 || prov.asked("/api/provisioner/host/start") != 1 {
+		t.Errorf("the tool ran %d times: %v", wk.runs("start demo1"), wk.argv())
+	}
+	if e, _ := s.wake.get("demo1"); e.Why != "rollout" || e.By != "jesse" {
+		t.Errorf("entry %+v", e)
+	}
+	if len(s.wake.auto) != 1 {
+		t.Errorf("the automatic wake was not counted: %v", s.wake.auto)
+	}
+}
+
+func TestRolloutWakeRefusesWhatItMustNotStart(t *testing.T) {
+	s, prov, wk, _ := stoppedHub(t)
+	var h hostsResp
+	getJSON(t, s, "/api/provision/hosts?refresh=1", userHdr, &h)
+	ops := serverRolloutOps{s}
+	ctx := context.Background()
+	// not a provisioned worker: none, the old grace
+	if v := ops.Wake(ctx, rolloutJobFor(), "stray"); v.Kind != wakeNone {
+		t.Errorf("unknown host = %+v", v)
+	}
+	// the rate limit
+	for i := 0; i < wakeHostPerHour; i++ {
+		s.wake.noteAuto("demo1")
+	}
+	if v := ops.Wake(ctx, rolloutJobFor(), "demo1"); v.Kind != wakeRefused || !strings.Contains(v.Reason, "tap Start") {
+		t.Errorf("rate limited = %+v", v)
+	}
+	// a budget cap is never woken automatically, rate limit or not
+	prov.peer.phosts.MarkStopped("demo1", true)
+	tick(s)
+	if v := ops.Wake(ctx, rolloutJobFor(), "demo1"); v.Kind != wakeRefused || !strings.Contains(v.Reason, "budget cap") {
+		t.Errorf("cap-stopped = %+v", v)
+	}
+
+	// running in the cloud: a network fault, not ours
+	wk.set(t, "status.json", statusDoc("demo1", "RUNNING", ""))
+	tick(s)
+	if v := ops.Wake(ctx, rolloutJobFor(), "demo1"); v.Kind != wakeNone {
+		t.Errorf("running = %+v", v)
+	}
+	if wk.runs("start demo1") != 0 {
+		t.Fatalf("a refused wake ran the tool: %v", wk.argv())
+	}
+}
