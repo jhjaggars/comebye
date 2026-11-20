@@ -1527,7 +1527,7 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
       if (width < 1100) await page.goto(base + start, { waitUntil: "load" });
       await page.waitForSelector(`${box} .bd .bd-lane`, { timeout: 8000 });
       let b = await boardSummary(box);
-      const want = ["needs_you:3", "running:2", "waiting:2", "landing:2", "landed:2"];
+      const want = ["needs_you:3", "running:2", "waiting:2", "landing:49", "reports:2", "landed:2"];
       if (b.lanes.map((l) => l.lane + ":" + l.count).join() !== want.join()) throw new Error("lanes " + JSON.stringify(b.lanes));
       if (!b.lanes[0].open || b.lanes.slice(1).some((l) => l.open)) throw new Error("only Needs you is open at first: " + JSON.stringify(b.lanes));
       if (!b.head.startsWith("Tue 20:11. v0.5.20 is rolling out")) throw new Error("headline " + b.head);
@@ -1546,7 +1546,7 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
       const keys = b.lanes.map((l) => l.lane);
       if (keys[0] !== "needs_you" || !keys.includes("p:comebye") || !keys.includes("p:openclaw-enterprise") || keys.includes("running")) throw new Error("projects " + keys);
       const comebye = b.lanes.find((l) => l.lane === "p:comebye");
-      if (comebye.count !== "5") throw new Error("comebye count " + comebye.count);
+      if (comebye.count !== "7") throw new Error("comebye count " + comebye.count);
       if (b.pressed.join() !== "project") throw new Error("pressed " + b.pressed);
       await page.locator(`${box} .bd-lane[data-lane="p:comebye"] summary`).click();
       if (!(await page.locator(`${box} .bd-lane[data-lane="p:comebye"] .bd-tag`).count())) throw new Error("no lane tags by project");
