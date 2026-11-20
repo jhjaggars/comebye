@@ -8055,7 +8055,7 @@ function openToSomething() {
 
 const BOARD_MODE_KEY = "comebye-board-mode";
 const board = { data: null, at: 0, inflight: false, mode: lsGet(BOARD_MODE_KEY) === "project" ? "project" : "status", open: new Set(["needs_you"]), projOpen: new Set() };
-const BOARD_LANE_LABEL = { running: "running", waiting: "waiting", landing: "to land", landed: "landed", hub_did: "hub did" };
+const BOARD_LANE_LABEL = { running: "running", waiting: "waiting", landing: "to land", reports: "to read", landed: "landed", hub_did: "hub did" };
 
 // The "new" mark: this browser remembers which item was in which lane when the
 // board was last marked seen (BOARD_SEEN_KEY, {items: {id: lane}}). An item
@@ -8120,7 +8120,17 @@ function boardItemHtml(it, laneKey, showLane) {
   if (it.type === "todo") {
     return `<li><button type="button" class="bd-todo" data-bd-todo="${escAttr(it.id)}" aria-label="Open to-do ${escAttr(it.id)}: ${escAttr(it.title)}"><span class="td-kind">${esc(TODO_KIND[it.kind] || it.kind || "")}</span> <span class="bd-q">${esc(it.title)}</span>${mark}<code class="bd-id">${esc(it.id)}</code></button>${why}${note}</li>`;
   }
-  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${mark}${lane}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${note}</li>`;
+  const pages = (it.pages || []).map((p) => `<a class="rv-page" href="${pageHash(p.id)}">${esc(p.title || p.id)}</a>`).join(" · ");
+  let rep = "";
+  if (it.type === "handoff" && laneKey === "reports") {
+    const e = it.report ? ledger.entries.find((x) => x && x.id === it.id) : null;
+    const op = statusUi.open.has(it.id);
+    const rpt = e && e.final_report
+      ? `<details class="st-row bd-rep" data-id="${escAttr(it.id)}"${op ? " open" : ""}><summary>Read report</summary>${op ? `<div class="st-rep">${copyBtnHtml("rep:" + it.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}</div><div class="md st-rep">${renderMarkdown(e.final_report, "board:" + it.id)}</div>` : ""}</details>`
+      : `<span class="bd-d">${it.report ? "report loading" : "no report captured"}</span>`;
+    rep = `<div class="bd-d">${esc(it.kind || "report")}${pages ? " · Page: " + pages : ""}</div>${rpt}`;
+  }
+  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${mark}${lane}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${rep}${note}</li>`;
 }
 
 function boardLaneHtml(key, name, count, items, open, showLane, extra) {
@@ -8128,7 +8138,7 @@ function boardLaneHtml(key, name, count, items, open, showLane, extra) {
   const names = items.slice(0, 3).map((i) => i.title).join(", ") + (count > 3 ? ", …" : "");
   const fresh = items.filter((i) => boardMark(i.id, i.lane || key)).length;
   return `<details class="bd-lane${key === "needs_you" ? " need" : ""}" data-lane="${escAttr(key)}"${open ? " open" : ""}><summary><span class="bd-chip">${count}</span><span class="bd-name">${esc(name)}</span>${fresh ? `<span class="bd-new">${fresh} new</span>` : ""}<span class="bd-names">${esc(names)}</span></summary>` +
-    `<ul>${items.map((i) => boardItemHtml(i, i.lane || key, showLane)).join("")}</ul>${extra || ""}</details>`;
+    `<ul>${items.map((i) => boardItemHtml(i, i.lane || key, showLane)).join("")}</ul>${count > items.length ? `<p class="bd-more">and ${count - items.length} older not shown</p>` : ""}${extra || ""}</details>`;
 }
 
 function boardHtml() {
@@ -8150,7 +8160,7 @@ function boardHtml() {
       .map(([p, items]) => boardLaneHtml("p:" + p, p, items.length, items, board.open.has("p:" + p), true)).join("");
   }
   const loose = d.loose || {};
-  const foot = [loose.reports ? `${loose.reports} ${loose.reports === 1 ? "report" : "reports"} to read` : "", loose.ready_to_remove ? `${loose.ready_to_remove} ready to remove` : "",
+  const foot = [loose.ready_to_remove ? `${loose.ready_to_remove} ready to remove` : "",
     (d.unkeyed_notes || []).length ? `${d.unkeyed_notes.length} ${d.unkeyed_notes.length === 1 ? "note names" : "notes name"} an unknown id` : ""].filter(Boolean).join(" · ");
   const counts = rest.map((l) => `${l.count} ${BOARD_LANE_LABEL[l.key] || l.name}`).join(" · ");
   let fresh = 0;

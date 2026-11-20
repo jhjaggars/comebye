@@ -30,6 +30,7 @@ const (
 	laneRunning = "running"
 	laneWaiting = "waiting"
 	laneLanding = "landing"
+	laneReports = "reports"
 	laneLanded  = "landed"
 	laneHubDid  = "hub_did"
 )
@@ -49,6 +50,16 @@ type BoardItem struct {
 	// any item, both from the latest briefing.
 	Why  string `json:"why,omitempty"`
 	Note string `json:"note,omitempty"`
+	// Report is true when the handoff has a final report to read; Pages are
+	// the Pages published for it (the Reports lane links them).
+	Report bool      `json:"report,omitempty"`
+	Pages  []PageRef `json:"pages,omitempty"`
+}
+
+// PageRef is a published Page named by a board item.
+type PageRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"`
 }
 
 // BoardLane is one lane with its rule.
@@ -67,9 +78,10 @@ type BoardView struct {
 	BriefAt  *time.Time  `json:"brief_at,omitempty"`
 	BriefBy  string      `json:"brief_by,omitempty"`
 	Lanes    []BoardLane `json:"lanes"`
-	// Loose counts what the lanes leave out on purpose: reports to read
-	// (finished work that is not meant to land) and entries marked ready to
-	// remove that never landed.
+	// Loose counts what the lanes leave out on purpose: entries marked ready
+	// to remove that never landed. Reports is kept for older readers and is
+	// always 0: finished research, plans, reviews and spikes are the
+	// "reports" lane.
 	Loose struct {
 		Reports       int `json:"reports"`
 		ReadyToRemove int `json:"ready_to_remove"`
@@ -187,11 +199,20 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	running := lane(laneRunning, "Running", "Handoffs in state running whose agent is not stuck on a dialog.")
 	waiting := lane(laneWaiting, "Waiting on others", "Handoffs queued behind earlier steps (state waiting), and tagged releases still rolling out.")
 	landing := lane(laneLanding, "Ready to land, or landing", "Finished handoffs whose work is meant to merge (not a research, plan, review or spike) and that are not marked, and handoffs in state landing.")
+	reports := lane(laneReports, "Reports to read", "Finished research, plan, review and spike handoffs that are not marked ready to remove: their work is the report (and the Pages published for it), not a branch to merge.")
 	landed := lane(laneLanded, "Landed, recent", "Handoffs the hub found in the base (landed, or marked ready to remove after landing) within the last 48 hours.")
+	// add keeps every item; the lanes are sorted and cut to boardMaxItems
+	// afterwards, so the cut never drops the newest.
 	add := func(l *BoardLane, it BoardItem) {
 		l.Count++
-		if len(l.Items) < boardMaxItems {
-			l.Items = append(l.Items, it)
+		l.Items = append(l.Items, it)
+	}
+	pagesOf := map[string][]PageRef{}
+	if s.pages != nil {
+		for _, p := range s.pages.list() {
+			if p.Handoff != "" {
+				pagesOf[p.Handoff] = append(pagesOf[p.Handoff], PageRef{ID: p.ID, Title: p.Title})
+			}
 		}
 	}
 	title := func(e ledger.Entry) string {
@@ -284,7 +305,10 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 			case e.Mark != nil:
 				view.Loose.ReadyToRemove++
 			case ledger.DisposablePurpose(e.Purpose):
-				view.Loose.Reports++
+				it.Report = e.FinalReport != ""
+				it.Pages = pagesOf[e.ID]
+				it.Kind = e.Purpose
+				add(reports, it)
 			default:
 				add(landing, it)
 			}
@@ -309,13 +333,19 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	// Newest first in the lanes that are about time; the to-do list is
 	// oldest first (the longest wait first).
-	for _, l := range []*BoardLane{running, waiting, landing, landed} {
+	// The cut comes after the sort: what a long lane hides is the oldest.
+	for _, l := range []*BoardLane{running, waiting, landing, reports, landed} {
 		sort.SliceStable(l.Items, func(i, j int) bool { return l.Items[i].Since > l.Items[j].Since })
 	}
 	sort.SliceStable(needs.Items, func(i, j int) bool { return needs.Items[i].Since < needs.Items[j].Since })
+	for _, l := range []*BoardLane{needs, running, waiting, landing, reports, landed} {
+		if len(l.Items) > boardMaxItems {
+			l.Items = l.Items[:boardMaxItems]
+		}
+	}
 
 	view.At = now.UTC()
-	view.Lanes = []BoardLane{*needs, *running, *waiting, *landing, *landed}
+	view.Lanes = []BoardLane{*needs, *running, *waiting, *landing, *reports, *landed}
 	if l := s.hubDidLane(now); l != nil {
 		view.Lanes = append(view.Lanes, *l)
 	}
