@@ -65,6 +65,8 @@ type fake struct {
 	statusLag  time.Duration
 	replyDelay time.Duration
 	noStatus   bool
+	wsN        int
+	pending    map[string]string // pane -> cwd of a workspace.create
 }
 
 func main() {
@@ -80,6 +82,7 @@ func main() {
 	autoBlock := flag.Bool("autoblock", false, "add a Claude agent blocked on an auto-mode permission prompt with the \"will automatically block this request\" warning")
 	trust := flag.Bool("trust-prompt", false, "add a Pi agent that herdr reports as idle while its screen shows the \"Trust project folder?\" prompt (any Enter answers it)")
 	panelDir := flag.String("panel-dir", "", "add an agent \"panel\" (w7:p1) working in this git worktree, for the side-panel checks")
+	piDirs := flag.String("pi-dir", "", "comma-separated git worktrees: add an idle pi agent (pi-a, pi-b, ...) working in each, with a session file, for park/resume checks (workspace.close, workspace.create and agent.start work)")
 	recallFixture := flag.String("recall-fixture", "", "write a synthetic transcript index to this file and exit")
 	flag.Parse()
 	if *recallFixture != "" {
@@ -127,6 +130,21 @@ func main() {
 		f.agents = append(f.agents, &agent{Name: "panel", PaneID: "w7:p1", Workspace: "w7", TabID: "w7:t1", Agent: "claude", Display: "Claude",
 			Status: "idle", Title: "panel", CWD: *panelDir, Ready: true, repo: "proj", checkout: *panelDir, linked: true,
 			screen: []string{"panel ready"}})
+	}
+	for i, d := range strings.Split(*piDirs, ",") {
+		if d == "" {
+			continue
+		}
+		n := fmt.Sprintf("pi-%c", 'a'+i)
+		sess := filepath.Join(*dir, n+".jsonl")
+		if err := os.WriteFile(sess, []byte("{}\n"), 0o644); err != nil {
+			log.Fatal(err)
+		}
+		ws := fmt.Sprintf("w%d", 20+i)
+		f.agents = append(f.agents, &agent{Name: n, PaneID: ws + ":p1", Workspace: ws, TabID: ws + ":t1", Agent: "pi", Display: "Pi",
+			Status: "idle", Title: n, CWD: d, Ready: true, repo: "proj", checkout: d, linked: true,
+			Session: map[string]string{"source": "fake", "agent": "pi", "kind": "path", "value": sess},
+			screen:  []string{n + " ready"}})
 	}
 	if *falseBlocked && !*fixtures {
 		f.addLongCommand()
@@ -244,6 +262,32 @@ func (f *fake) answer(method string, p map[string]any) (any, *rpcErr) {
 		}
 
 		return map[string]any{"type": "ok"}, nil
+	case "workspace.close", "pane.close":
+		kept := f.agents[:0]
+		for _, a := range f.agents {
+			if a.Workspace != p["workspace_id"] && a.PaneID != p["pane_id"] {
+				kept = append(kept, a)
+			}
+		}
+		f.agents = kept
+		return map[string]any{"type": "ok"}, nil
+	case "workspace.create":
+		f.wsN++
+		ws := fmt.Sprintf("w%d", 40+f.wsN)
+		f.pending = map[string]string{ws + ":p1": fmt.Sprint(p["cwd"])}
+		return map[string]any{"type": "workspace_created",
+			"workspace": map[string]any{"workspace_id": ws, "number": 40 + f.wsN, "label": p["label"], "focused": false, "pane_count": 1, "tab_count": 1, "active_tab_id": ws + ":t1", "agent_status": "unknown"},
+			"tab":       map[string]any{"tab_id": ws + ":t1", "workspace_id": ws},
+			"root_pane": map[string]any{"pane_id": ws + ":p1", "terminal_id": "t1", "workspace_id": ws, "tab_id": ws + ":t1", "focused": true, "agent_status": "unknown", "revision": 0}}, nil
+	case "agent.start":
+		pane, _ := p["pane_id"].(string)
+		name, _ := p["name"].(string)
+		kind, _ := p["kind"].(string)
+		ws := strings.SplitN(pane, ":", 2)[0]
+		a := &agent{Name: name, PaneID: pane, Workspace: ws, TabID: ws + ":t1", Agent: kind, Display: kind, Status: "idle",
+			Title: name, CWD: f.pending[pane], Ready: true, screen: []string{name + " ready"}}
+		f.agents = append(f.agents, a)
+		return map[string]any{"type": "agent_started", "agent": a, "argv": []string{kind}}, nil
 	case "agent.prompt":
 		a := f.find(target)
 		if a == nil {
