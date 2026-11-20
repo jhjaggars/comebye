@@ -165,30 +165,74 @@ for (const width of [1280, 390]) {
       if (m === "no_host") await page.screenshot({ path: `${out}/pagechat-refused-${width}.png` });
     });
   }
-  await check(`pagechat: a host whose kind has no read-only mode turns the button off with its reason, and a tap posts nothing at ${tag}`, async () => {
-    const reason = "Chat about this is off for pi: it has no read-only mode, so a helper could not be kept from changing things. Use a claude agent.";
-    off = { ok: false, kind: "pi", reason };
+  // The picker (chat-options lists the hosts and their kinds; a default kind with no read-only mode needs the user's say-so).
+  const RO = "plan mode";
+  const OPTS = { ok: true, host: "desk", kind: "pi", needs_override: true, override_reason: "pi has no read-only mode.", hosts: [
+    { name: "desk", local: true, ok: true, default_kind: "pi", model_kinds: ["pi", "claude"], kinds: [{ kind: "pi", read_only: "" }, { kind: "claude", read_only: RO }] },
+    { name: "laptop", ok: true, default_kind: "claude", model_kinds: ["claude"], kinds: [{ kind: "claude", read_only: RO }] },
+    { name: "napping", ok: false, reason: "napping is not answering", kinds: [] } ] };
+  await page.route(/\/api\/(hosts\/[^/]+\/)?models/, (r) => r.fulfill({ json: { host: "desk", catalogs: [{ kind: new URL(r.request().url()).searchParams.get("kind"), exact: true, default: "sonnet", models: [{ id: "opus", provider: "Aliases" }, { id: "sonnet", provider: "Aliases" }] }] } }));
+  const reloadOpen = async () => {
     await open();
     await page.reload({ waitUntil: "load" }); // the answer is kept per page until the app reloads
     await page.waitForSelector("#pgs-chat", { timeout: 8000 });
     posts.length = 0;
-    await page.waitForSelector("#pgs-chat[aria-disabled=true]", { timeout: 5000 });
-    const title = await page.getAttribute("#pgs-chat", "title");
-    if (title !== reason) throw new Error("title: " + title);
+  };
+  await check(`pagechat: a default kind with no read-only mode keeps the button on, and a tap opens the picker with the confirm and posts nothing at ${tag}`, async () => {
+    off = OPTS;
+    await reloadOpen();
+    await page.waitForFunction(() => !document.querySelector("#pgs-chat").hasAttribute("aria-disabled"), null, { timeout: 5000 });
+    await settle();
+    await page.click("#pgs-chat");
+    await page.waitForSelector("#chatpick:not([hidden])", { timeout: 5000 });
+    await page.waitForSelector("#cp-warn:not([hidden])", { timeout: 5000 });
+    const w = (await page.textContent("#cp-warn")).replace(/\s+/g, " ");
+    if (!/pi has no read-only mode\. This helper can change files and run commands on desk\. It starts in a scratch folder, not in your code\. Start it anyway\?/.test(w)) throw new Error("warn: " + w);
+    if ((await page.textContent("#cp-go")).trim() !== "Start anyway") throw new Error("go: " + (await page.textContent("#cp-go")));
+    await settle();
+    if (posts.length) throw new Error("opening the picker posted: " + JSON.stringify(posts));
+    const over = await page.evaluate(() => { const e = document.documentElement; return e.scrollWidth > innerWidth + 1; });
+    if (over) throw new Error("the picker scrolls sideways");
+    const r = await page.evaluate(() => { const g = document.querySelector("#cp-go").getBoundingClientRect(), k = document.querySelector("#cp-kinds").getBoundingClientRect(); return { gb: g.bottom, gr: g.right, kr: k.right, h: innerHeight, w: innerWidth }; });
+    if (r.gb > r.h + 1 || r.gr > r.w + 1 || r.kr > r.w + 1) throw new Error("the picker does not fit: " + JSON.stringify(r));
+    await page.screenshot({ path: `${out}/pagechat-picker-pi-${width}.png` });
+    await page.click("#cp-go");
+    await waitPosts(1);
+    const body = JSON.parse(posts[0].body);
+    if (body.kind !== "pi" || body.host !== "desk" || body.allow_writable !== true) throw new Error("body: " + posts[0].body);
+    await settle();
+    await page.waitForFunction(() => document.querySelector("#chatpick").hidden);
+  });
+  await check(`pagechat: the picker sends the picked host, kind and model, and no override for a read-only kind at ${tag}`, async () => {
+    off = OPTS;
+    await reloadOpen();
     await page.click("#pgs-menub");
     await page.waitForSelector("#pgs-menu:not([hidden])");
-    await until(() => { const r = document.querySelector("#pgs-chatmi").getBoundingClientRect(); return r.bottom <= innerHeight && r.top >= 0; }); // the menu has come in
+    await until(() => { const r = document.querySelector("#pgs-chatpick").getBoundingClientRect(); return r.bottom <= innerHeight && r.top >= 0; });
     await settle();
-    for (const sel of ["#pgs-chatmi", "#pgs-chatnew"]) {
-      if ((await page.getAttribute(sel, "aria-disabled")) !== "true") throw new Error(sel + " is not marked off");
-    }
-    await page.click("#pgs-chatmi", { force: true });
-    await waitToast(/no read-only mode/);
-    if (!/no read-only mode/.test(await toastText())) throw new Error("toast: " + (await toastText()));
-    await page.click("#pgs-chat", { force: true });
+    await page.click("#pgs-chatpick");
+    await page.waitForSelector("#chatpick:not([hidden])");
+    await page.waitForSelector('#cp-hosts [data-host="laptop"]');
+    await page.click('#cp-hosts [data-host="laptop"]');
+    if (await page.locator("#cp-warn").isVisible()) throw new Error("claude shows the warning");
+    if ((await page.textContent("#cp-go")).trim() === "Start anyway") throw new Error("claude says Start anyway");
+    await page.waitForSelector("#cp-model option[value=opus]", { state: "attached" });
+    await page.selectOption("#cp-model", "opus");
+    await page.screenshot({ path: `${out}/pagechat-picker-claude-${width}.png` });
+    await page.click("#cp-go");
+    await waitPosts(1);
+    const body = JSON.parse(posts[0].body);
+    if (body.host !== "laptop" || body.kind !== "claude" || body.model !== "opus" || "allow_writable" in body) throw new Error("body: " + posts[0].body);
     await settle();
-    if (posts.length !== 0) throw new Error("a disabled button posted: " + JSON.stringify(posts));
-    await page.screenshot({ path: `${out}/pagechat-off-${width}.png` });
+    // Cancel: nothing is posted.
+    posts.length = 0;
+    await page.click("#pgs-menub");
+    await until(() => { const r = document.querySelector("#pgs-chatpick").getBoundingClientRect(); return r.bottom <= innerHeight && r.top >= 0; });
+    await page.click("#pgs-chatpick");
+    await page.waitForSelector("#chatpick:not([hidden])");
+    await page.click("#cp-close");
+    await page.waitForFunction(() => document.querySelector("#chatpick").hidden);
+    if (posts.length) throw new Error("cancel posted");
     off = null;
   });
   await browser.close();

@@ -35,7 +35,14 @@ import (
 //     is named in the brief for reading only;
 //   - read-only: claude starts in plan mode with ExitPlanMode refused (so no
 //     dialog can lead it out of plan mode) and may run only the few comebye
-//     commands it needs; other kinds get the brief's rules alone;
+//     commands it needs; other kinds (pi) are refused, unless the user sends
+//     allow_writable ("Start anyway", after a confirm): the helper then has
+//     the brief's rules alone (stay in the scratch directory, change nothing
+//     else: NOT enforced), the start is audited (chat.not_read_only) and the
+//     record and the agent's chat mark say "not read-only". An agent token
+//     may not send it;
+//   - started with the host, kind and model the user picks (body host, kind,
+//     model), or the defaults when it picks none;
 //   - given a brief that names the Page and says how to fetch it. The Page
 //     text is never pasted into the prompt: the agent reads it with
 //     `comebye pages show ID --body --text`, and everything agent-written is

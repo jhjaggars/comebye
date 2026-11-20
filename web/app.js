@@ -251,7 +251,7 @@ function subLine(a) {
   const chip = branch ? `<span class="wt-chip">⑂ ${esc(branch)}</span>` : "";
   const d = repoDamageOf(a);
   const dmg = d ? `<span class="lg-chip failed rd-chip" title="${escAttr(`${d.repo}: ${d.reason}. ${d.hint}`)}">repo damaged</span>` : "";
-  const ch = a.chat ? `<span class="chip purple chat-chip" title="${escAttr("A read-only helper about " + (a.chat.title ? "“" + a.chat.title + "”" : "a Page"))}">chat</span>` : "";
+  const ch = a.chat ? `<span class="chip purple chat-chip" title="${escAttr((a.chat.writable ? "A helper about " : "A read-only helper about ") + (a.chat.title ? "“" + a.chat.title + "”" : "a Page"))}">chat</span>${a.chat.writable ? '<span class="chip cp-rwchip" title="Started with the read-only check overridden: this helper can change files and run commands.">not read-only</span>' : ""}` : "";
   const pk = a.park_hint ? `<span class="chip teal can-park" title="${escAttr(parkHintTitle(a))}">can park</span>` : "";
   return `<div class="sub">${hostEl}${repoEl}${chip}${kindEl}${dmg}${ch}${pk}${ledgerChip(a)}${(ledgerEntry(a) && usageChipHtml(ledgerEntry(a).id, false)) || ""}</div>`;
 }
@@ -2176,7 +2176,7 @@ function reviewBarHtml(t) {
       <textarea class="td-text rv-text" id="rv-note-${escAttr(t.id)}" rows="3" maxlength="4000" placeholder="What should change? (optional)" aria-label="Note for the worker">${esc(todoDraft(t.id))}</textarea>
       <div class="td-acts"><button type="button" class="rv-send"${busy}>Send: Needs changes</button><button type="button" class="rv-cancel">Cancel</button></div></div>` : "";
   return `<div class="td-form rv-bar">${stale}
-      <div class="rv-btns"><button type="button" class="btn primary rv-good"${busy} title="Closes the item. You can undo for a few seconds. Key: 1"><kbd>1</kbd> ✓ Looks good</button><button type="button" class="btn warn rv-chg" aria-expanded="${!!st}"${busy} title="Add a note and file a Fix item. Key: 2"><kbd>2</kbd> ✎ Needs changes</button><button type="button" class="btn rv-chat" data-page="${escAttr(t.page.id)}"${busy}${pgs.chatBusy ? ' aria-busy="true"' : ""}${pgsChatOff.get(t.page.id) ? ` aria-disabled="true" title="${escAttr(pgsChatOff.get(t.page.id))}"` : ` title="${RV_CHAT_TITLE}"`}>💬 Chat about this</button></div>
+      <div class="rv-btns"><button type="button" class="btn primary rv-good"${busy} title="Closes the item. You can undo for a few seconds. Key: 1"><kbd>1</kbd> ✓ Looks good</button><button type="button" class="btn warn rv-chg" aria-expanded="${!!st}"${busy} title="Add a note and file a Fix item. Key: 2"><kbd>2</kbd> ✎ Needs changes</button><span class="rv-chatrow"><button type="button" class="btn rv-chat" data-page="${escAttr(t.page.id)}"${busy}${pgs.chatBusy ? ' aria-busy="true"' : ""}${pgsChatOff.get(t.page.id) ? ` aria-disabled="true" title="${escAttr(pgsChatOff.get(t.page.id))}"` : ` title="${RV_CHAT_TITLE}"`}>💬 Chat about this</button><button type="button" class="btn rv-chatpick" data-page="${escAttr(t.page.id)}"${busy} aria-label="Chat with another agent" title="Pick the host, agent and model for the chat">▾</button></span></div>
       ${kinds}
       <div class="rv-foot"><div class="rv-route">${reviewRouteLine(t)}</div><div class="td-acts">${todoOpenBtn(t)}<button type="button" class="td-drop">Drop</button></div></div></div>`;
 }
@@ -3771,6 +3771,7 @@ function onTodoClick(ev) {
   if (ev.target.closest(".ap-no")) { todoAct(id, "drop"); return; } // "Not now": no confirm box, the hub denies the request
   if (ev.target.closest(".rv-good")) { reviewVerdict(id, "good", item); return; }
   if (ev.target.closest(".rv-chg")) { reviewNote(id, item); return; }
+  if (ev.target.closest(".rv-chatpick")) { const tt = todos.items.find((x) => x.id === id); if (tt && tt.page) openChatPick(tt.page.id, false); return; }
   if (ev.target.closest(".rv-chat")) { const tt = todos.items.find((x) => x.id === id); if (tt && tt.page) pagesChat(false, tt.page.id); return; }
   const rk = ev.target.closest(".rv-kind");
   if (rk) { const st = todos.rv.get(id); if (st) { st.kind = rk.dataset.k; renderTodos(true); } return; }
@@ -7896,6 +7897,7 @@ function initPages() {
     if (ev.target.closest("#pgs-menub")) { pgsPop("pgsmenu"); return; }
     if (ev.target.closest("#pgs-infob")) { pgsPop("pgsinfo"); return; }
     if (ev.target.closest("#pgs-focus")) { pagesFocus(!pgs.focus); return; }
+    if (ev.target.closest("#pgs-chatpick")) { pgsPop("pgsmenu", false); openChatPick(pgs.route && pgs.route.id, false); return; }
     if (ev.target.closest("#pgs-chatnew")) { pgsPop("pgsmenu", false); pagesChat(true); return; }
     if (ev.target.closest("#pgs-chat, #pgs-chatmi")) { pgsPop("pgsmenu", false); pagesChat(); return; }
     if (ev.target.closest("#pgs-chg")) { pgsPop("pgsmenu", false); pgcToggleChanges(); return; }
@@ -8022,6 +8024,7 @@ function route() {
   syncSplit();
   syncFresh();
   syncSwitch();
+  syncChatPick();
   const r = parseRoute();
   if (!r) {
     state.pendingRoute = null;
@@ -11139,7 +11142,7 @@ function renderChatStrip(a) {
   const c = a && a.chat && /^pg_[0-9a-f]{10}$/.test(a.chat.page || "") ? a.chat : null;
   if (!c) { el.hidden = true; el.innerHTML = ""; return; }
   const title = c.title || "this Page";
-  const html = `<span class="cs-ico" aria-hidden="true"></span><span class="cs-t">Chat about <b>${esc(title)}</b></span><span class="cs-sep" aria-hidden="true">·</span><a class="cs-open" href="#/pages/${escAttr(c.page)}">Open page</a>`;
+  const html = `<span class="cs-ico" aria-hidden="true"></span><span class="cs-t">Chat about <b>${esc(title)}</b></span>${c.writable ? '<span class="chip cp-rwchip" title="Started with the read-only check overridden: this helper can change files and run commands.">not read-only</span>' : ""}<span class="cs-sep" aria-hidden="true">·</span><a class="cs-open" href="#/pages/${escAttr(c.page)}">Open page</a>`;
   if (el.innerHTML !== html) el.innerHTML = html;
   el.hidden = false;
 }
@@ -14713,7 +14716,8 @@ async function submitCoordinator() {
 // helper (POST /api/pages/{id}/chat) and opens its conversation. A second tap
 // while the first is starting does nothing.
 const PAGE_CHAT_SAYS = {
-  chat_no_readonly: "Chat about this is off for that kind of agent: it has no read-only mode.",
+  chat_no_readonly: "That kind of agent has no read-only mode. Pick it in “Chat with another agent…” and confirm to start it anyway.",
+  chat_override_user_only: "Only you can start a helper that is not read-only.",
   chat_no_host: "No host can start a chat right now. Check that a computer running agents is online, then try again.",
   chat_rate: "You started several chats a moment ago. Wait a minute, then try again.",
   chat_host_away: "The computer that runs this page's chat is not answering. Try again in a moment, or start a new chat.",
@@ -14724,7 +14728,7 @@ const PAGE_CHAT_SAYS = {
 const pgsChatOff = new Map(); // page id -> reason ("" = on)
 function pgsChatShow(id) {
   const why = pgsChatOff.get(id) || "";
-  for (const sel of ["#pgs-chat", "#pgs-chatmi", "#pgs-chatnew"]) {
+  for (const sel of ["#pgs-chat", "#pgs-chatmi", "#pgs-chatnew", "#pgs-chatpick"]) {
     const b = $(sel.slice(1));
     if (!b) continue;
     if (why) { b.setAttribute("aria-disabled", "true"); b.title = why; b.classList.add("pgs-chatoff"); }
@@ -14737,23 +14741,32 @@ function pgsChatShow(id) {
   const main = $("pgs-chat");
   if (main && !why) main.title = "Chat about this page: start a read-only helper";
 }
+// What the options route said about a Page: the host and kind a plain tap
+// uses, whether that kind needs the user's say-so (needs_override), and every
+// host with its kinds. The button is never greyed for a kind with no
+// read-only mode: a tap asks first.
+const pgsChatInfo = new Map(); // page id -> chat-options answer
 function pgsChatGate(id) {
-  if (pgsChatOff.has(id)) { pgsChatShow(id); return; }
+  if (pgsChatInfo.has(id)) { pgsChatShow(id); return; }
   api("/api/pages/" + encodeURIComponent(id) + "/chat-options").then((o) => {
-    pgsChatOff.set(id, o && o.ok === false ? (o.reason || "Chat is off for this page.") : "");
+    pgsChatInfo.set(id, o || {});
+    pgsChatOff.set(id, "");
     pgsChatShow(id);
   }, () => {});
 }
-async function pagesChat(fresh, pageId) {
+async function pagesChat(fresh, pageId, pick) {
   const pid = pageId || (pgs.route && pgs.route.id);
   if (!pid || pgs.chatBusy) return;
   if (pgsChatOff.get(pid)) { toast(pgsChatOff.get(pid), true); return; }
+  // A plain tap that would start a kind with no read-only mode asks first.
+  const info = pgsChatInfo.get(pid);
+  if (!pick && info && info.needs_override && (fresh || !info.existing)) { openChatPick(pid, fresh); return; }
   pgs.chatBusy = true;
   $("pgs-chat")?.setAttribute("aria-busy", "true");
   document.querySelectorAll(".rv-chat").forEach((b) => b.setAttribute("aria-busy", "true"));
   toast(fresh ? "Starting a new chat about this page…" : "Opening the chat about this page…");
   try {
-    const r = await api("/api/pages/" + encodeURIComponent(pid) + "/chat", { method: "POST", body: fresh ? '{"new":true}' : "{}", timeout: 180000 });
+    const r = await api("/api/pages/" + encodeURIComponent(pid) + "/chat", { method: "POST", body: JSON.stringify(Object.assign(fresh ? { new: true } : {}, pick || {})), timeout: 180000 });
     const pane = r.agent && r.agent.pane_id;
     const label = r.name || "chat";
     let note = "";
@@ -14761,6 +14774,7 @@ async function pagesChat(fresh, pageId) {
     if (r.reused === "open") done = r.page_note ? `Opened ${label}. ${r.page_note}` : `Opened ${label}`;
     else if (r.reused === "resumed") done = r.page_note ? `Resumed ${label}. ${r.page_note}` : `Resumed ${label}`;
     else if (r.replaced) done = `The earlier chat was closed, so ${label} is a new one.`;
+    if (r.writable) done = (done ? done + " " : "") + `${label} is not read-only.`;
     if (r.prompt_error) note = "The chat started, but its first message did not go in: " + r.prompt_error;
     else if (r.prompt_note) note = "The chat started but is waiting at a prompt. Open it and answer the prompt, and it will read the page.";
     if (pane) openLaunched(r.host, pane, label, note || "", done);
@@ -14791,6 +14805,138 @@ function openLaunched(host, pane, label, note, said) {
   };
   toast(note || said || `Started ${label}`, !!note);
   tick();
+}
+
+/* ---------- "Chat about this": pick the agent ---------- */
+//
+// A sheet over the Page: the host, the agent kind and (optionally) the model
+// of the helper. A kind with no read-only mode (pi) is marked, and picking it
+// shows what that means; "Start anyway" then sends allow_writable. The one
+// tap on Chat is unchanged (the host's default); it opens this sheet only when
+// that default has no read-only mode.
+
+const cp = { open: false, page: "", fresh: false, host: "", kind: "", model: "", info: null, cat: null, seq: 0 };
+
+function cpHost() { return ((cp.info && cp.info.hosts) || []).find((h) => h.name === cp.host) || null; }
+function cpKindRO(kind) { const h = cpHost(); const k = h && h.kinds.find((x) => x.kind === kind); return !k || !!k.read_only; }
+
+function openChatPick(pageId, fresh) {
+  if (!pageId || cp.open || pgs.chatBusy) return;
+  Object.assign(cp, { open: true, page: pageId, fresh: !!fresh, info: null, cat: null, model: "", host: "", kind: "" });
+  history.pushState({ chatpick: true }, "", location.href);
+  $("chatpick").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("cp-status").textContent = "";
+  renderChatPick();
+  $("cp-close").focus();
+  const seq = ++cp.seq;
+  api("/api/pages/" + encodeURIComponent(pageId) + "/chat-options").then((o) => o || {}, () => ({ hosts: [] })).then((o) => {
+    if (seq !== cp.seq || !cp.open) return;
+    pgsChatInfo.set(pageId, o);
+    cp.info = o;
+    const hosts = (o.hosts || []).filter((h) => h.ok);
+    const h = hosts.find((x) => x.name === o.host) || hosts[0];
+    if (h) { cp.host = h.name; cp.kind = h.kinds.some((k) => k.kind === (o.kind || h.default_kind)) ? (o.kind || h.default_kind) : h.kinds[0].kind; }
+    cpKindChosen();
+  });
+}
+
+function cpKindChosen() {
+  cp.model = "";
+  cp.cat = null;
+  const h = cpHost();
+  const seq = ++cp.seq;
+  if (h && cp.kind && (h.model_kinds || []).includes(cp.kind)) {
+    cp.cat = { loading: true };
+    api(modelsBase(h.local ? null : h.name) + "?kind=" + encodeURIComponent(cp.kind))
+      .then((d) => (d.catalogs || [])[0] || { error: "the host sent no model list" }, (e) => ({ error: e.message }))
+      .then((cat) => { if (seq === cp.seq && cp.open) { cp.cat = cat; renderChatPick(); } });
+  }
+  renderChatPick();
+}
+
+function hideChatPick() {
+  cp.open = false;
+  cp.seq++;
+  $("chatpick").hidden = true;
+  document.body.classList.remove("sheet-open");
+  maybeReload();
+}
+function closeChatPick() {
+  if ($("chatpick").classList.contains("busy")) return;
+  if (history.state && history.state.chatpick) history.back();
+  else hideChatPick();
+}
+function syncChatPick() {
+  if (cp.open && !(history.state && history.state.chatpick)) hideChatPick();
+}
+
+function renderChatPick() {
+  const info = cp.info;
+  const h = cpHost();
+  const hosts = ((info && info.hosts) || []);
+  const ex = info && info.existing;
+  $("cp-note").textContent = !info ? "Loading the choices…"
+    : !hosts.some((x) => x.ok) ? "No host can start an agent right now."
+    : ex && !cp.fresh ? `This Page already has a chat (${ex.name}). Starting one here replaces it; the old helper is left running.`
+    : "The helper reads this Page and talks it over with you, in a scratch folder, not in your code.";
+  const live = hosts.filter((x) => x.ok);
+  $("cp-hostblock").hidden = live.length < 2;
+  $("cp-hosts").innerHTML = hosts.map((x) =>
+    `<button type="button" class="hf-chip${x.ok ? "" : " down"}" data-host="${esc(x.name)}" aria-pressed="${x.name === cp.host}"${x.ok ? "" : ` disabled title="${escAttr(x.reason || "")}"`}>${esc(x.name)}</button>`).join("");
+  $("cp-kinds").innerHTML = h ? h.kinds.map((k) =>
+    `<button type="button" class="hf-chip${k.read_only ? "" : " cp-rw"}" data-kind="${esc(k.kind)}" aria-pressed="${k.kind === cp.kind}">${esc(k.kind)}<small>${k.read_only ? "read-only" : "no read-only mode"}</small></button>`).join("") : "";
+  const mb = $("cp-modelblock");
+  const cat = cp.cat;
+  mb.hidden = !cat;
+  if (cat) {
+    const sel = $("cp-model");
+    const models = (cat.models || []);
+    sel.innerHTML = `<option value="">${cat.loading ? "Loading…" : "Default" + (cat.default ? ` (${esc(cat.default)})` : "")}</option>` +
+      models.map((m) => `<option value="${escAttr(m.id)}"${m.id === cp.model ? " selected" : ""}>${esc(m.id)}</option>`).join("");
+    sel.value = cp.model;
+  }
+  const rw = !!h && !!cp.kind && !cpKindRO(cp.kind);
+  const warn = $("cp-warn");
+  warn.hidden = !rw;
+  if (rw) warn.innerHTML = `<b>${esc(cp.kind)} has no read-only mode.</b> This helper can change files and run commands on ${esc(h.name)}. It starts in a scratch folder, not in your code. Start it anyway?`;
+  const go = $("cp-go");
+  go.textContent = rw ? "Start anyway" : (ex && !cp.fresh) || cp.fresh ? "Start a new chat" : "Start chat";
+  go.classList.toggle("warn", rw);
+  go.disabled = !h || !cp.kind || $("chatpick").classList.contains("busy");
+}
+
+async function submitChatPick() {
+  const h = cpHost();
+  if (!h || !cp.kind || $("chatpick").classList.contains("busy")) return;
+  const pick = { host: h.name, kind: cp.kind };
+  if (cp.model) pick.model = cp.model;
+  if (!cpKindRO(cp.kind)) pick.allow_writable = true;
+  const ex = cp.info && cp.info.existing;
+  const page = cp.page;
+  const fresh = cp.fresh || !!ex;
+  hideChatPick();
+  if (history.state && history.state.chatpick) history.replaceState(null, "", location.href); // the sheet's entry is spent
+  await pagesChat(fresh, page, pick);
+}
+
+function initChatPick() {
+  $("cp-close").addEventListener("click", closeChatPick);
+  $("chatpick").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeChatPick(); } });
+  $("cp-hosts").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-host]");
+    if (!b || b.disabled) return;
+    cp.host = b.dataset.host;
+    const h = cpHost();
+    if (!h.kinds.some((k) => k.kind === cp.kind)) cp.kind = h.default_kind || h.kinds[0].kind;
+    cpKindChosen();
+  });
+  $("cp-kinds").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-kind]");
+    if (b) { cp.kind = b.dataset.kind; cpKindChosen(); }
+  });
+  $("cp-model").addEventListener("change", () => { cp.model = $("cp-model").value; });
+  $("cp-go").addEventListener("click", submitChatPick);
 }
 
 /* ---------- switching a running agent's model ---------- */
@@ -14914,7 +15060,7 @@ function noteVersion(v) {
 
 // busy: the user is reading an agent or something would be lost.
 function busy() {
-  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim() || launch.open || review.open || sw.open;
+  return !!state.selected || state.sending || answer.inflight || !!promptValue().trim() || launch.open || review.open || sw.open || cp.open;
 }
 
 function maybeReload() {
@@ -15204,6 +15350,7 @@ window.addEventListener("DOMContentLoaded", () => {
   applyFont();
   $("btn-fleet").addEventListener("keydown", (ev) => { if (ev.key === "ArrowDown" && $("f-menu").hidden) { ev.preventDefault(); toggleFleetMenu(true); } });
   $("d-model").addEventListener("click", openSwitch);
+  initChatPick();
   $("sw-close").addEventListener("click", closeSwitch);
   $("switch").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeSwitch(); } });
   $("sw-q").addEventListener("input", () => { sw.q = $("sw-q").value; renderSwitch(); });
