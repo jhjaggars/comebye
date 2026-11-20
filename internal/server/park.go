@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/buildout"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/park"
 	"github.com/jhjaggars/comebye/internal/scratch"
@@ -78,6 +79,8 @@ type parkResult struct {
 	Record  park.Record `json:"record"`
 	Closed  string      `json:"closed"`
 	Scratch string      `json:"scratch,omitempty"` // what happened to the scratchpad
+	// BuildFreed is the build output cleared from the worktree, in bytes.
+	BuildFreed int64 `json:"build_freed,omitempty"`
 }
 
 // handlePark is POST /api/park: close the agent, keep everything, write the record.
@@ -218,6 +221,21 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 		return nil, lerr
 	}
 	out := &parkResult{Record: rec, Closed: rr.Closed}
+	// The pane is closed, so nothing is building: drop the ignored build
+	// output (a chat helper's directory is not a checkout).
+	if !isChat {
+		freed, cleared, err := buildout.Clear(ctx, wt)
+		if err != nil {
+			log.Printf("park: clearing build output in %s: %v", wt, err)
+		}
+		if freed > 0 {
+			log.Printf("park: cleared %s of build output in %s (%d dirs)", buildout.Human(freed), wt, len(cleared))
+			if upd, err := ps.Update(rec.ID, func(r *park.Record) { r.BuildFreed = freed }); err == nil {
+				out.Record = upd
+			}
+			out.BuildFreed = freed
+		}
+	}
 	// The scratchpad goes to disk now that the process is gone.
 	if kind == "claude" {
 		from, to, n, note := s.moveScratchOut(wt, rec.ID)

@@ -303,7 +303,7 @@ func (s *Server) parkLedger(recs []parkedRecord, agents []herdr.AgentInfo) {
 		}
 		var err error
 		if r.Parked() {
-			_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "parked", At: r.ParkedAt, Pane: r.PaneID}, nil)
+			_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "parked", At: r.ParkedAt, Pane: r.PaneID, Freed: r.BuildFreed}, nil)
 		} else if id, live := resumedID(pr, agents); live {
 			to := &ledger.Where{AgentID: id, PaneID: r.ResumedPane}
 			for _, a := range agents {
@@ -312,7 +312,7 @@ func (s *Server) parkLedger(recs []parkedRecord, agents []herdr.AgentInfo) {
 				}
 			}
 			// The parked event first, so the history reads in order whatever the hub saw.
-			_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "parked", At: r.ParkedAt, Pane: r.PaneID}, nil)
+			_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "parked", At: r.ParkedAt, Pane: r.PaneID, Freed: r.BuildFreed}, nil)
 			if err == nil {
 				_, err = s.ledger.NotePark(old, ledger.ParkEvent{ID: r.ID, Event: "resumed", At: *r.ResumedAt, Pane: r.ResumedPane}, to)
 			}

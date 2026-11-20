@@ -91,8 +91,9 @@ var hostProxyOps = map[string]struct {
 	"worker":         {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},
 	// Park and resume: close an agent keeping its worktree and session, and
 	// start it again (the user's click, through the hub).
-	"park":   {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "park"}, false},
-	"resume": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
+	"park":        {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "park"}, false},
+	"build-sweep": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 280 * time.Second}, []string{"api", "build-sweep"}, false},
+	"resume":      {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
 	// restart: end an agent's process and start it again in its pane (up to
 	// 20s for the exit, then the start's own wait).
 	"restart":  {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 150 * time.Second}, []string{"api", "restart"}, false},
