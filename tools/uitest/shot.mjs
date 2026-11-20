@@ -95,6 +95,12 @@ page.on("requestfailed", (r) => r.failure()?.errorText !== "net::ERR_ABORTED" &&
 page.on("response", (r) => { if (r.status() >= 400) problems.push(`http ${r.status()}: ${r.request().method()} ${r.url()}`); });
 
 if (opt.board) await page.route(/\/api\/board$/, (r) => r.fulfill({ json: boardView() }));
+if (opt.board) await page.route(/\/api\/ledger$/, async (r) => { // the reports lane's "Read report" needs the entry
+  const j = await (await r.fetch()).json();
+  j.entries = [...(j.entries || []), { id: "h121212121212", host: "uitest", repo_name: "comebye", branch: "r/etcd", agent_name: "etcd-op-lifecycle", purpose: "research", status: "finished",
+    created_at: new Date(Date.now() - 3600e3).toISOString(), finished_at: new Date(Date.now() - 1200e3).toISOString(), final_report: "## Summary\nThe operator upgrades one member at a time.\n\n## Findings\n- restore needs a snapshot\n- no PDB by default", live: { present: false } }];
+  r.fulfill({ json: j });
+});
 if (opt.release) await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(opt.release) }));
 
 if (opt.hubcheck) {

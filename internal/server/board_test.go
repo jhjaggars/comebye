@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestBoardLanesFromRecords(t *testing.T) {
 	ldOld := add(ledger.Entry{AgentName: "w-landed-old", Status: ledger.Landed, FinishedAt: &old})
 	rm := add(ledger.Entry{AgentName: "w-rtr-landed", Status: ledger.ReadyToRemove, MarkedFrom: ledger.Landed, FinishedAt: &fin})
 	rm2 := add(ledger.Entry{AgentName: "w-rtr-never", Status: ledger.ReadyToRemove, MarkedFrom: ledger.Finished, FinishedAt: &fin})
-	_ = []string{research, ldOld, rm2}
+	_ = []string{ldOld, rm2}
 
 	q, _, err := s.todos.add(Todo{Question: "ship it?", Kind: "decision", CreatedBy: "agent", Waiting: &TodoAgent{ID: "desk/w2:p1"}})
 	if err != nil {
@@ -83,7 +84,7 @@ func TestBoardLanesFromRecords(t *testing.T) {
 	dis, _, _ := s.todos.add(Todo{Question: "release v1.0.0", Kind: "release", CreatedBy: "agent", Release: &TodoRelease{Version: "v1.0.0", Commit: "abc1234", State: relTagged, Dismissed: true}})
 
 	v := getBoard(t, s, userHdr)
-	if len(v.Lanes) != 5 {
+	if len(v.Lanes) != 6 {
 		t.Fatalf("lanes = %d", len(v.Lanes))
 	}
 	check := func(key string, count int, ids ...string) {
@@ -102,13 +103,14 @@ func TestBoardLanesFromRecords(t *testing.T) {
 	check(laneRunning, 1, run)
 	check(laneWaiting, 2, wait, rel.ID)
 	check(laneLanding, 2, rtl, lnd)
+	check(laneReports, 1, research)
 	check(laneLanded, 2, ld, rm)
 	for _, l := range v.Lanes {
 		if strings.Contains(laneIDs(l), dis.ID) || strings.Contains(laneIDs(l), done.ID) {
 			t.Errorf("dismissed or done item shown in %s", l.Key)
 		}
 	}
-	if v.Loose.Reports != 1 || v.Loose.ReadyToRemove != 1 {
+	if v.Loose.Reports != 0 || v.Loose.ReadyToRemove != 1 {
 		t.Errorf("loose = %+v", v.Loose)
 	}
 	if it := laneOf(t, v, laneNeeds).Items[0]; it.Project != "Not tied to a project" || it.Kind != "decision" {
@@ -203,5 +205,54 @@ func TestBoardDialogBlockedIsNeedsYou(t *testing.T) {
 			t.Fatalf("not in Needs you: %+v", v.Lanes)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A lane longer than the cap keeps the newest items, whatever order the
+// ledger holds them in, and its count still says how many there are.
+func TestBoardCapKeepsNewest(t *testing.T) {
+	s, _, _ := todoServer(t)
+	now := time.Now()
+	n := boardMaxItems + 9
+	var newest, oldest string
+	for i := 0; i < n; i++ { // added oldest first, so the newest come last in the ledger
+		fin := now.Add(-time.Duration(n-i) * time.Hour)
+		got, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: "/r/c", RepoName: "comebye", Branch: fmt.Sprintf("feat/b%d", i), AgentName: fmt.Sprintf("w%d", i), Status: ledger.Finished, FinishedAt: &fin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			oldest = got.ID
+		}
+		newest = got.ID
+	}
+	l := laneOf(t, getBoard(t, s, userHdr), laneLanding)
+	if l.Count != n || len(l.Items) != boardMaxItems {
+		t.Fatalf("count %d items %d, want %d and %d", l.Count, len(l.Items), n, boardMaxItems)
+	}
+	if l.Items[0].ID != newest || strings.Contains(laneIDs(l), oldest) {
+		t.Errorf("newest first %v, oldest shown %v", l.Items[0].ID == newest, strings.Contains(laneIDs(l), oldest))
+	}
+}
+
+// A finished research handoff is a card in Reports to read, with its report
+// flag, purpose and the Pages published for it; a marked one is not.
+func TestBoardReportsLane(t *testing.T) {
+	s, _, _ := todoServer(t)
+	fin := time.Now().Add(-time.Hour)
+	e, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: "/r/c", RepoName: "comebye", Branch: "r/etcd", AgentName: "etcd-op", Status: ledger.Finished, Purpose: "research", FinishedAt: &fin, FinalReport: "# findings"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.pages.mu.Lock()
+	s.pages.data.Pages = append(s.pages.data.Pages, Page{ID: "pg_etcd", Title: "etcd lifecycle", Handoff: e.ID})
+	s.pages.mu.Unlock()
+	l := laneOf(t, getBoard(t, s, userHdr), laneReports)
+	if l.Count != 1 || len(l.Items) != 1 {
+		t.Fatalf("reports lane = %+v", l)
+	}
+	it := l.Items[0]
+	if it.ID != e.ID || !it.Report || it.Kind != "research" || len(it.Pages) != 1 || it.Pages[0].ID != "pg_etcd" {
+		t.Errorf("item = %+v", it)
 	}
 }
