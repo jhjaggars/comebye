@@ -176,6 +176,7 @@ type wakeVerdict struct {
 	Kind   string
 	Step   string // the tool's last line, or what the hub waits for
 	Reason string // why it was refused or failed
+	Code   string // for a refusal: a short code the app reads (agent_forbidden, needs_confirm, wake_limit, ...)
 }
 
 // rolloutEngine drives the job file.

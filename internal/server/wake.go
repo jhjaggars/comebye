@@ -87,11 +87,11 @@ type wakeBook struct {
 	m    map[string]*wakeEntry
 	auto []wakeAuto
 
-	busyWait, joinWait, pollGap, retryGap time.Duration // tests shorten them
+	busyWait, joinWait, pollGap, retryGap, sessionGrace time.Duration // tests shorten them
 }
 
 func openWakeBook(stateDir string) *wakeBook {
-	b := &wakeBook{now: time.Now, m: map[string]*wakeEntry{}, busyWait: wakeBusyWait, joinWait: wakeJoinWait, pollGap: 2 * time.Second, retryGap: 3 * time.Second}
+	b := &wakeBook{now: time.Now, m: map[string]*wakeEntry{}, busyWait: wakeBusyWait, joinWait: wakeJoinWait, pollGap: 2 * time.Second, retryGap: 3 * time.Second, sessionGrace: wakeSessionGrace}
 	if stateDir == "" {
 		return b
 	}
@@ -262,6 +262,9 @@ type wakeBody struct {
 }
 
 func (s *Server) peerStatus(name string) string {
+	if s.peerStatusHook != nil {
+		return s.peerStatusHook(name)
+	}
 	for _, h := range s.fleet.Hosts() {
 		if h.Name == name {
 			return h.Status
@@ -465,6 +468,7 @@ func (s *Server) wakeRun(host, via string, confirmCap bool, by string, resumed b
 		time.Sleep(b.pollGap)
 	}
 	b.succeed(host)
+	s.afterWake(host)
 	s.prov.mu.Lock()
 	if c := s.prov.hosts[via]; c != nil {
 		c.At = time.Time{} // look again at once: it is running now

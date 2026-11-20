@@ -685,6 +685,14 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "self", "message": "an agent cannot do this to itself"})
 		return
 	}
+	// A prompt for a session on a stopped worker starts the worker, and is
+	// delivered once it is up (wakeuse.go); an agent that is not the
+	// coordinator is refused, and nothing is queued.
+	wv := s.wakeEnsure(r.Context(), r, target.Host, "a queued prompt")
+	if wv.Kind == wakeRefused {
+		s.wakeAnswerFor(w, target.Host, wv)
+		return
+	}
 	p := QueuedPrompt{Agent: target.ID, Name: target.Name, Text: b.Text, From: s.by(r, "")}
 	if c.agent() {
 		p.FromID = s.replyID(c)
@@ -698,7 +706,12 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 		s.recordAsker(*ref, *target) // a queued prompt makes its sender the asker too
 	}
 	s.deliverQueue(agents)
-	writeJSONStatus(w, http.StatusAccepted, map[string]any{"queued": out, "duplicate": dup})
+	ans := map[string]any{"queued": out, "duplicate": dup}
+	if wv.Kind == wakeStarting {
+		wk, _ := s.wake.get(target.Host)
+		ans["waking"], ans["note"] = wk, target.Host+" is stopped: starting it. Your prompt is delivered once it is up."
+	}
+	writeJSONStatus(w, http.StatusAccepted, ans)
 }
 
 // replyID is the calling agent's fleet id (host/pane).

@@ -21,11 +21,20 @@ func statusDoc(name, state string, extra string) string {
 // stoppedHub is realHub with demo1 stopped in the cloud, and demo1 itself a
 // peer of the hub (another in-process node: the worker the hub talks to).
 func stoppedHub(t *testing.T) (*Server, *provPeer, *fakeWorkerDir, map[string]string) {
+	s, prov, wk, hdr, _ := stoppedHubW(t, nil)
+	return s, prov, wk, hdr
+}
+
+// stoppedHubW also gives the peer that is demo1.
+func stoppedHubW(t *testing.T, pre func(worker *provPeer)) (*Server, *provPeer, *fakeWorkerDir, map[string]string, *provPeer) {
 	t.Helper()
 	s, prov, wk, hdr, _ := realHub(t)
 	wk.set(t, "status.json", statusDoc("demo1", "STOPPED", ""))
 	wk.set(t, "start.flip", statusDoc("demo1", "RUNNING", ""))
 	worker := newProvPeer(t, newFakeWorker(t))
+	if pre != nil {
+		pre(worker) // before the hub's stream to it opens
+	}
 	b, _ := json.Marshal(map[string]any{"name": "demo1", "urls": []string{worker.srv.URL}})
 	if w := do(s, "POST", "/api/peers", userHdr, string(b)); w.Code != 201 {
 		t.Fatalf("add peer = %d %s", w.Code, w.Body)
@@ -34,7 +43,7 @@ func stoppedHub(t *testing.T) (*Server, *provPeer, *fakeWorkerDir, map[string]st
 	t.Cleanup(func() { do(s, "DELETE", "/api/peers/demo1", userHdr, "") })
 	waitUntil(t, "demo1 up", func() bool { return s.peerStatus("demo1") == fleet.StatusOK })
 	s.wake.pollGap, s.wake.retryGap = 20*time.Millisecond, 20*time.Millisecond
-	return s, prov, wk, hdr
+	return s, prov, wk, hdr, worker
 }
 
 type wakeResp struct {
