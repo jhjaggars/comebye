@@ -196,6 +196,7 @@ COMEBYE_CTX_CONFIG_HOME="$tmp/ctxhome" "$tmp/comebye" -sock "$tmp/cx.sock" -addr
   -state-dir "$tmp/state-cx" -host-name uitest >"$out/comebye-cx.log" 2>&1 &
 for _ in $(seq 300); do curl -sf "http://127.0.0.1:$cxport/api/agents" >/dev/null && break; sleep 0.1; done
 if want ctxchip; then node ctxchip.mjs "http://127.0.0.1:$cxport" "$out" || rc=1 ; fi
+if want modelchip; then node modelchip.mjs "http://127.0.0.1:$cxport" "$out" || rc=1 ; fi
 # Claude's auto-mode prompt with the "will automatically block" countdown: its own fake herdr and hub.
 "$tmp/fake-herdr" -sock "$tmp/ab.sock" -dir "$tmp/ab" -autoblock >"$out/fake-herdr-ab.log" 2>&1 &
 for _ in $(seq 300); do [ -S "$tmp/ab.sock" ] && break; sleep 0.1; done

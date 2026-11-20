@@ -11235,19 +11235,60 @@ function ctxLevel(c) {
   return f >= CTX_DANGER ? "red" : f >= CTX_WARN ? "yellow" : "muted";
 }
 
+// A short, readable model name for the header chip. Claude ids become
+// "Opus 5.5"; anything else keeps its last path segment minus a trailing
+// date or build stamp ("enmaas/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+// is "DeepSeek-V4.1-Flash"). The full provider/model stays in the tooltip.
+function shortModel(id) {
+  const raw = String(id || "").trim();
+  if (!raw) return "";
+  const last = raw.split("/").filter(Boolean).pop() || raw;
+  const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
+  let m = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:\[[^\]]*\])?$/i.exec(last);
+  if (m) return cap(m[1].toLowerCase()) + " " + m[2] + (m[3] ? "." + m[3] : "");
+  m = /^claude-(\d+)(?:-(\d{1,2}))?-(opus|sonnet|haiku)(?:-\d{8})?$/i.exec(last);
+  if (m) return cap(m[3].toLowerCase()) + " " + m[1] + (m[2] ? "." + m[2] : "");
+  const t = last.replace(/-(?:\d{8}|\d{4})$/, "");
+  return t || last;
+}
+
+// What the transcript reports it is using, else the model the agent was
+// launched with (the ledger entry of a handed-off worker).
+function agentModel() {
+  const c = state.chat && state.chat.ctx;
+  if (c && c.model) return { model: c.model, provider: c.provider || "" };
+  const a = state.selected && agentById(state.selected);
+  const e = a && ledgerEntry(a);
+  if (e && e.model) return { model: e.model, provider: "" };
+  return null;
+}
+
+function modelFull(m) { return (m.provider && !m.model.startsWith(m.provider + "/") ? m.provider + "/" : "") + m.model; }
+
 function ctxDetail(c) {
-  const parts = [c.window
+  const m = agentModel();
+  const parts = [];
+  if (c && c.tokens > 0) parts.push(c.window
     ? `Context: ${c.tokens.toLocaleString()} of ${c.window.toLocaleString()} tokens (${Math.round((c.tokens / c.window) * 100)}%)`
-    : `Context: ${c.tokens.toLocaleString()} tokens (the model's window is not known)`];
-  if (c.model) parts.push((c.provider ? c.provider + "/" : "") + c.model);
-  const comp = c.compacted ? Date.parse(c.compacted) : NaN;
+    : `Context: ${c.tokens.toLocaleString()} tokens (the model's window is not known)`);
+  if (m) parts.push("Model: " + modelFull(m));
+  const comp = c && c.compacted ? Date.parse(c.compacted) : NaN;
   if (!isNaN(comp)) parts.push(`compacted ${fmtAgo(comp)} ago (${new Date(comp).toLocaleString()})`);
   return parts.join(" · ");
 }
 
 function renderCtxChip() {
-  const el = $("d-ctx");
+  const el = $("d-ctx"), me = $("d-modelchip"), sm = $("d-submodel");
   const c = state.chat && state.chat.ctx;
+  const m = agentModel();
+  const detail = ctxDetail(c);
+  if (m) {
+    me.textContent = shortModel(m.model);
+    me.title = detail;
+    me.setAttribute("aria-label", detail);
+    me.hidden = false;
+    sm.textContent = me.textContent; sm.title = detail; sm.hidden = false;
+  } else { me.hidden = true; me.textContent = ""; sm.hidden = true; sm.textContent = ""; }
   if (!c || !(c.tokens > 0)) { el.hidden = true; el.textContent = ""; el.dataset.level = ""; return; }
   const lvl = ctxLevel(c);
   el.className = "chip d-ctx " + (lvl || "muted");
@@ -11256,15 +11297,17 @@ function renderCtxChip() {
   el.innerHTML = c.window
     ? `ctx ${Math.round((c.tokens / c.window) * 100)}%<span class="ctx-tok"> · ${tok}</span>`
     : `ctx ${tok}`;
-  el.title = ctxDetail(c);
-  el.setAttribute("aria-label", ctxDetail(c));
+  el.title = detail;
+  el.setAttribute("aria-label", detail);
   el.hidden = false;
 }
 
-$("d-ctx").addEventListener("click", () => {
-  const c = state.chat && state.chat.ctx;
-  if (c) toast(ctxDetail(c));
-});
+for (const id of ["d-ctx", "d-modelchip", "d-submodel"]) {
+  $(id).addEventListener("click", () => {
+    const d = ctxDetail(state.chat && state.chat.ctx);
+    if (d) toast(d);
+  });
+}
 
 /* ---------- queued prompts ---------- */
 //

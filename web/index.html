@@ -1194,7 +1194,16 @@
     .d-usage { margin-top: var(--sp-2); }
     /* Context usage next to the status word: a chip whose tone is the fill (muted, warning from 80%, danger from 95%). */
     #detail header .d-ctx { flex: none; position: relative; border: 0; font: inherit; font-size: var(--fs-12); font-weight: 600; line-height: 20px; cursor: pointer; }
-    #detail header .d-ctx[hidden] { display: none; }
+    #detail header .d-ctx[hidden], #detail header .d-modelchip[hidden] { display: none; }
+    /* The model in use, beside the context chip: truncated, never wrapped, narrower on a phone. */
+    #detail header .d-modelchip { flex: none; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; font: inherit; font-size: var(--fs-12); font-weight: 600; line-height: 20px; cursor: pointer; }
+    /* A phone's header has no room for a second chip: the model gets a line of its own under the whole header row. */
+    #detail header .d-submodel { display: none; }
+    @media (max-width: 480px) {
+      #detail header .d-modelchip { display: none; }
+      #detail header:has(.d-submodel:not([hidden])) { flex-wrap: wrap; }
+      #detail header .d-submodel:not([hidden]) { display: block; flex: 0 0 100%; min-width: 0; margin-top: calc(var(--sp-4) * -1); padding-left: 52px; color: var(--muted); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    }
     #detail header .d-ctx:focus-visible { outline-offset: 1px; }
     #detail header .d-ctx::after { content: ""; position: absolute; inset: -10px -4px; } /* a 40px tap area around the 20px chip */
     @media (max-width: 480px) { #detail header .d-ctx .ctx-tok { display: none; } }
@@ -3402,11 +3411,13 @@
         <div class="d-note" id="d-note" hidden></div>
         <div class="d-usage" id="d-usage" hidden></div>
       </div>
+      <button type="button" class="chip muted d-modelchip" id="d-modelchip" hidden></button>
       <button type="button" class="chip d-ctx" id="d-ctx" hidden></button>
       <button type="button" class="pgs-ib d-term" id="btn-terminal" aria-label="Show raw terminal" title="Show raw terminal" hidden></button>
       <span class="status" id="d-status"></span>
       <button type="button" class="more" id="d-refresh" aria-label="Refresh this view">&#8635;</button>
       <button type="button" class="more" id="d-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="d-menu">&#8942;</button>
+      <div class="d-submodel" id="d-submodel" hidden></div>
     </header>
     <div id="d-menu" class="attach-menu d-menu pop" role="menu" aria-label="Agent actions" hidden>
       <div class="grab" aria-hidden="true"><i></i></div>
