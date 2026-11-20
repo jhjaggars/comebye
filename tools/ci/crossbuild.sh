@@ -4,7 +4,7 @@
 #   tools/ci/crossbuild.sh VERSION OUT_DIR
 #
 # Archive names carry no version, so releases/latest/download/<name> is a stable URL. The release workflow
-# publishes OUT_DIR; the nightly builds it to prove the release would build.
+# publishes OUT_DIR.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 version="${1:?version}"; dist="$(mkdir -p "${2:?out dir}" && cd "$2" && pwd)"

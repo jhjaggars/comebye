@@ -2,8 +2,8 @@
 
 One script that does what the user and the agents actually do, on a throwaway hub, so a hardening change
 that makes normal use hard fails here first. Every hardening slice must keep it green. It runs in CI
-(`day-in-the-life` in `.github/workflows/ci.yml`, pre-submit with the browser smoke set and on every push to main,
-and again in the nightly) and takes about 15 seconds after the build.
+(`day-in-the-life` in `.github/workflows/ci.yml`, pre-submit with the browser smoke set and on every push to main)
+and takes about 15 seconds after the build.
 
 ```sh
 tools/smoke/run.sh [OUT_DIR]      # needs go, node, npm, git, gpg and google-chrome (CHROME=/path to override)

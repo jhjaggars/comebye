@@ -7,11 +7,10 @@ time. The plan, with the measurements behind it, is the Page "Test tiers plan" i
 |---|---|---|---|---|
 | Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched | 3.5 min (5 when `internal/server` changed) | merging the pull request |
 | Merge | a push to main | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and a `rest` job; the visual pass in dark and light | 4 min | the next release of that commit (and the landing queue reads it) |
-| Nightly | 02:00 UTC, and by hand | everything in merge, both schemes; Go shuffled with no cache; a fresh govulncheck; the release cross-build; each flaky-list check 5 times | 7 min | nothing: it opens the `nightly-red` issue |
 | Release | a `v*` tag | the gate (below), govulncheck, the 4 builds, then the publish | 2 min | nothing: it publishes |
 
 The **day in the life** (`tools/smoke/run.sh`, about 15 seconds after the build) is one more job in the pre-submit tier
-(with the browser smoke set) and in the merge and nightly tiers: handoff, report, a to-do answered on a phone, landing to a
+(with the browser smoke set) and in the merge tier: handoff, report, a to-do answered on a phone, landing to a
 bare origin, a Page and its chat, park, resume, restart, GPG unlock and the coordinator's board, log and digest, on a
 throwaway hub with stand-in agents. It is the guard for hardening: a slice that makes normal use hard turns it red.
 See `tools/smoke/README.md`.
@@ -31,7 +30,7 @@ git diff --name-only origin/main... | tools/ci/select.sh
 
 The merge tier is full except for docs-only and leaf-Go-only changes. The pre-submit tier uses the whole table
 (`tools/ci/select.sh` has it, one rule per path pattern). A rule never runs fewer checks than the table says, and
-the nightly runs everything, so a wrong rule is caught within a day.
+the merge tier runs everything, so a wrong rule is caught on the next push to main.
 
 ## Running a suite locally
 
@@ -67,28 +66,16 @@ times and look at what fails only sometimes:
 
 ```sh
 tools/ci/flakes.sh repeat 5 leftnav reviewcard      # these two, five runs each, 4 at a time (JOBS=n changes it)
-tools/ci/flakes.sh repeat 3                         # every script run.sh knows (the nightly's `repeat` job)
+tools/ci/flakes.sh repeat 3                         # every script run.sh knows
 ```
 
 It prints `FLAKY script / check: failed k of N` for a check that failed in some runs and not all (exit 1), and `BROKEN` for one
-that failed every time. Slow runners are mimicked locally with `taskset -c 0,1` plus a few busy loops on those cores. The
-nightly's `repeat` job does this with three runs of every script; it is not part of the nightly's red/green (the step summary
-has the list), so a flake it finds is a to-do, not a stopped release. The cause is nearly always a wait on a fixed time or on
+that failed every time. Slow runners are mimicked locally with `taskset -c 0,1` plus a few busy loops on those cores. It runs by hand only, not in CI. The cause is nearly always a wait on a fixed time or on
 state the app refreshes underneath the test: wait on the condition that the next step needs instead.
-
-## A red nightly
-
-The nightly opens one issue titled **Nightly is red**, label **`nightly-red`**, comments on it for each further red
-night, and closes it when a night is green. To find out from a script:
-
-```sh
-gh issue list --label nightly-red --state open
-gh run list --workflow nightly.yml --limit 1 --json conclusion,databaseId,createdAt
-```
 
 ## Releasing
 
-A red nightly does not stop a release. The Release workflow checks the tagged commit itself, and each of these fails the
+The Release workflow checks the tagged commit itself, and each of these fails the
 release: `tools/ci/releasegate.sh` finds no green push CI run on the commit, so `go vet` and `go test -race` run
 (with a green run they are skipped); `govulncheck` (the newest advisory database); the 4-target build. There is no
 force input: a failure is fixed and the workflow re-run (by hand from the Actions tab with the tag, if the tag exists).
