@@ -220,7 +220,7 @@ async function main() {
   const profile = mkdtempSync(join(tmpdir(), "mdtest-chrome-"));
   const chrome = spawn(chromeBin, [
     "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
-    "--no-first-run", "--no-default-browser-check", "--disable-gpu", "about:blank",
+    "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox", "about:blank",
   ], { stdio: "ignore" });
   let failed = 0;
   try {
