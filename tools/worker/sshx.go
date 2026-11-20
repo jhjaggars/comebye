@@ -50,7 +50,7 @@ func sshProxy(c *Config, name string) string {
 	if c.KubeContext != "" {
 		ctxArg = " --context " + c.KubeContext
 	}
-	return fmt.Sprintf("  ProxyCommand %s%s port-forward --stdio=true vmi/%s.%s 22\n", virtctlBin, ctxArg, name, c.KubeNamespace)
+	return fmt.Sprintf("  ProxyCommand %s%s port-forward -n %s --stdio=true vmi/%s 22\n", virtctlBin, ctxArg, c.KubeNamespace, name)
 }
 
 func sshConfigBase(c *Config, name, ip, knownHosts string) string {

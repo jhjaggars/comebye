@@ -436,7 +436,7 @@ func TestKubeVirtDryRun(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out())
 	}
 	o := out()
-	for _, want := range []string{"4 vCPU, 32Gi", "-> rozalin", "avoided", "DataVolume w1-data", "Secret w1-cloudinit", "VirtualMachine w1", "RerunOnFailure", "virtctl port-forward --stdio=true vmi/w1.comebye-workers 22", `"kubernetes.io/hostname": "rozalin.x.cc"`} {
+	for _, want := range []string{"4 vCPU, 32Gi", "-> rozalin", "avoided", "DataVolume w1-data", "Secret w1-cloudinit", "VirtualMachine w1", "RerunOnFailure", "virtctl port-forward -n comebye-workers --stdio=true vmi/w1 22", `"kubernetes.io/hostname": "rozalin.x.cc"`} {
 		if !strings.Contains(o, want) {
 			t.Errorf("plan lacks %q:\n%s", want, o)
 		}
@@ -574,7 +574,7 @@ func (w *liveWorld) fake() *fakeRunner {
 				}
 				line := strings.Join(args, " ")
 				switch {
-				case strings.Contains(line, "managed-by}"):
+				case strings.Contains(line, "jsonpath={.metadata.labels.managed-by}"):
 					return labelOf(o), "", nil
 				case strings.Contains(line, "host-key}"):
 					return o["metadata"].(map[string]any)["annotations"].(map[string]any)[hostKeyAnno].(string), "", nil
@@ -776,7 +776,7 @@ func TestKubeVirtSSHConfig(t *testing.T) {
 	c := kubeCfg(t)
 	c.KubeContext = "homelab"
 	s := sshConfig(c, "kv1", "kv1", "/k/known_hosts")
-	for _, want := range []string{"HostName kv1", "StrictHostKeyChecking yes", "ProxyCommand virtctl --context homelab port-forward --stdio=true vmi/kv1.comebye-workers 22", "UserKnownHostsFile /k/known_hosts"} {
+	for _, want := range []string{"HostName kv1", "StrictHostKeyChecking yes", "ProxyCommand virtctl --context homelab port-forward -n comebye-workers --stdio=true vmi/kv1 22", "UserKnownHostsFile /k/known_hosts"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("ssh_config lacks %q:\n%s", want, s)
 		}

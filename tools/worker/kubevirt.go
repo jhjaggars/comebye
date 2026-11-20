@@ -493,7 +493,7 @@ func (p *kubevirtProv) Plan(name, pub string, w logf) {
 	w("   2. Secret %s: cloud-config with the %s user and YOUR PUBLIC ssh key, this worker's ssh host key (made here, pinned in known_hosts before the VM exists), the data disk mount.\n      No tailnet key, hub URL secret or token goes in it; the Tailscale key travels over ssh stdin later.\n", cloudInitName(name), c.SSHUser)
 	w("   3. VirtualMachine %s: %d vCPU (CPU request %d, limit %d), %s memory (request = limit), %d GiB boot disk cloned from %s,\n      pinned to node %s, runStrategy RerunOnFailure (an idle poweroff leaves it stopped), pod network only, the guest gets no service account token\n",
 		name, c.VMCPU, c.VMCPURequest, c.VMCPU, c.VMMemory, c.BootDiskGB, p.imageSource(), shortNode(node))
-	w("   4. wait for the VMI, then ssh through `%s port-forward --stdio=true vmi/%s.%s 22` (StrictHostKeyChecking yes, the pinned key)\n", virtctlBin, name, c.KubeNamespace)
+	w("   4. wait for the VMI, then ssh through `%s port-forward -n %s --stdio=true vmi/%s 22` (StrictHostKeyChecking yes, the pinned key)\n", virtctlBin, c.KubeNamespace, name)
 	w("   the objects, as kubectl would apply them (the host key is a placeholder):\n")
 	for _, m := range []any{
 		renderDataDV(c, name),

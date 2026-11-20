@@ -61,7 +61,7 @@ func (d vmDoc) inst() Inst {
 
 // managedLabel reads an object's managed-by label: found, managed, error.
 func (p *kubevirtProv) managedLabel(ctx context.Context, kind, name string) (found, managed bool, err error) {
-	out, errOut, err := p.k.kubectl(ctx, p.k.ns("get", kind, name, "-o", `jsonpath={.metadata.labels.app\.kubernetes\.io/managed-by}`)...)
+	out, errOut, err := p.k.kubectl(ctx, p.k.ns("get", kind, name, "-o", "jsonpath={.metadata.labels."+strings.ReplaceAll(labelKey, ".", `\.`)+"}")...)
 	if err != nil {
 		if strings.Contains(errOut+err.Error(), "NotFound") || strings.Contains(errOut, "not found") {
 			return false, false, nil
