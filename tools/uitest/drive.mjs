@@ -1225,9 +1225,11 @@ await check("pages: g t then j/k move the To do selection, even with focus left 
     await page.keyboard.press("g"); await page.keyboard.press("s");
     await page.waitForSelector("#p-status", { state: "visible" });
     await gt(); await fresh(); await idle(); order = await ord();
-    // The page may already show the first item (it opens one once the list has loaded); j then goes to the next.
-    const wasOpen = await open();
-    await page.keyboard.press("j"); await rowsOpen(wasOpen ? order[order.indexOf(wasOpen) + 1] : order[0], "status, g t, j");
+    // Coming back from Status, the list may already have opened its first item when j arrives (a load in flight opens one), so
+    // j lands on the first or the second row; the exact order is checked above, from a list that was just loaded.
+    await page.keyboard.press("j");
+    await page.waitForFunction((rows) => rows.slice(0, 2).includes(todos.openId), order, { timeout: 3000 }).catch(() => {});
+    if (!order.slice(0, 2).includes(await open())) throw new Error("status, g t, j: open item " + await open() + ", want " + order[0] + " or " + order[1]);
     // A reload on #/todo.
     await page.goto(base + "/#/todo", { waitUntil: "load" });
     await page.reload({ waitUntil: "load" });
