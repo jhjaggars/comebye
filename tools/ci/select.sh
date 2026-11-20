@@ -45,7 +45,7 @@ while IFS= read -r f; do
     internal/dialog/*) lint=true; merge_go=true; add_pkg ./internal/dialog; add_pkg ./internal/state; add_pkg ./internal/server ;;
     web/test/unlockinterop.mjs) lint=true; merge_browser=true; merge_go=true; add_script markdown; add_pkg ./internal/gpgunlock ;;
     tools/release/tag) lint=true; merge_go=true; add_pkg ./tools/release; add_pkg ./internal/release ;;
-    tools/worker/testdata/*) lint=true; add_script provision; add_script provhosts; add_script wake; merge_browser=true; merge_go=true; add_pkg ./tools/worker; add_pkg ./internal/provision; add_pkg ./internal/server ;;
+    tools/worker/testdata/*) lint=true; add_script provision; add_script provhosts; add_script wake; add_script wakeuse; merge_browser=true; merge_go=true; add_pkg ./tools/worker; add_pkg ./internal/provision; add_pkg ./internal/server ;;
     docs/*|*.md|LICENSE|.gitignore|deploy/*) ;;                       # nothing to test
     .github/*|go.mod|go.sum|tools/uitest/package.json|tools/uitest/package-lock.json|tools/uitest/run.sh|tools/uitest/lib.mjs|tools/ci/*)
       everything=true ;;
@@ -58,7 +58,7 @@ while IFS= read -r f; do
       lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
     internal/pageskit/*) lint=true; smoke=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
     internal/fleet/*) lint=true; add_script peers; merge_browser=true; merge_go=true; add_pkg ./internal/fleet ;;
-    tools/worker/*|internal/provision/*) lint=true; add_script provision; add_script provhosts; add_script wake; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")"
+    tools/worker/*|internal/provision/*) lint=true; add_script provision; add_script provhosts; add_script wake; add_script wakeuse; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")"
       # internal/server's tests read the provision and tools/worker golden files and testdata
       add_pkg ./internal/provision; add_pkg ./internal/server ;;
     internal/cli/*) lint=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/cli ;;

@@ -669,6 +669,12 @@ func (s *Server) handleQueueAdd(w http.ResponseWriter, r *http.Request) {
 			s.queueForParked(w, r, b, pr)
 			return
 		}
+		// A session on a stopped worker is not in the fleet (a peer that is down
+		// has no agents): the prompt starts the worker and waits for the session
+		// to be there once it is up (wakeuse.go).
+		if s.queueForStopped(w, r, b) {
+			return
+		}
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "agent_not_found", "message": "unknown agent"})
 		return
 	}

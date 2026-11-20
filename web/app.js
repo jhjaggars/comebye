@@ -91,15 +91,17 @@ async function api(path, opts = {}) {
     throw err;
   }
   if (!res.ok) {
-    let detail = res.statusText, code = "";
+    let detail = res.statusText, code = "", parkId = "";
     try {
       const body = await res.json();
       detail = body.message || body.code || detail;
       code = body.code || "";
+      parkId = body.park_id || "";
     } catch {}
     const err = new Error(detail);
     err.status = res.status;
     err.code = code;
+    err.parkId = parkId;
     throw err;
   }
   return res.json();
@@ -369,11 +371,22 @@ function agentHash(a) {
 function pathFor(id) {
   const a = agentById(id);
   if (!a) {
+
     const err = new Error("agent is gone");
     err.status = 410;
     throw err;
   }
   return agentPath(a);
+}
+
+// pathForSend is pathFor for a message: a session on a worker that powered off is no longer listed
+// (its host is down), but a message to it starts the worker: the hub does that (host_waking).
+function pathForSend(id) {
+  if (!agentById(id) && stoppedSession(id)) {
+    const h = hostOf(id);
+    return `/api/hosts/${encodeURIComponent(h)}/agents/${encodeURIComponent(id.slice(h.length + 1))}`;
+  }
+  return pathFor(id);
 }
 
 function hostOf(id) {
@@ -397,6 +410,11 @@ function setAgents(d) {
     state.hosts = d.hosts;
     const local = d.hosts.find((h) => h.local);
     state.localHost = local ? local.name : null;
+  }
+  if (state.selected) {
+    // a host that came up (or went down) changes the banner; a stopped session that is listed again is live
+    if (state.stoppedOpen && agentById(state.selected)) { state.stoppedOpen = false; openDetail(state.selected); }
+    renderWakeBanner();
   }
 }
 
@@ -4742,7 +4760,7 @@ async function submitResume() {
   $("pk").classList.add("busy");
   $("pk-status").textContent = "Resuming…";
   try {
-    const d = await api(`/api/hosts/${encodeURIComponent(host)}/resume`, { method: "POST", body: JSON.stringify({ id }), timeout: 100000 });
+    const d = await apiWake(host, `/api/hosts/${encodeURIComponent(host)}/resume`, { method: "POST", body: JSON.stringify({ id }), timeout: 100000 }, (h) => { $("pk-status").textContent = `Starting ${h}…`; });
     parked.busy = false;
     $("pk").classList.remove("busy");
     closeParkSheet();
@@ -8014,6 +8032,11 @@ function applyPendingRoute() {
   if (a) { state.pendingRoute = null; openDetail(agentId(a)); return; }
   const h = r.host && hostStatus(r.host);
   if (h && h.status === "connecting") return; // the hub has not reached that peer yet; wait
+  if (h && h.status === "down") {
+    // A stopped worker: its sessions are not listed, but opening one is only a read (the Start banner).
+    if (wakeOf(h)) { state.pendingRoute = null; openStoppedSession(r.host, r.pane); return; }
+    if (!ph.data && !r.looked) { r.looked = true; loadProvHosts(false).then(() => applyPendingRoute()); return; }
+  }
   state.pendingRoute = null;
   toast(h && h.status === "down" ? `${r.host} is unreachable${h.class ? `: ${h.class}` : ""}` : "that agent is gone", true);
   history.replaceState(null, "", location.pathname + location.search);
@@ -9300,6 +9323,21 @@ const ph = { data: null, err: "", loading: false, dest: null, timer: null, polli
 function phMoney(v) { return v == null ? "–" : "$" + (v >= 100 ? v.toFixed(0) : v >= 0.1 ? v.toFixed(2) : v.toFixed(3)); }
 function phHost(name) { return ph.data && (ph.data.hosts || []).find((h) => h.name === name && h.state !== "destroyed") || null; }
 
+// phEnsure loads what the provisioners say about their hosts without the Peers screen being open, so that a
+// session on a host that is down can say it is stopped. Asked again after half a minute if it did not come.
+function phEnsure() {
+  if (ph.data || ph.asking || Date.now() - (ph.askedAt || 0) < 30000) return;
+  ph.asking = true; ph.askedAt = Date.now();
+  (async () => {
+    try {
+      if (!pz.nodes) await loadProvNodes(false);
+      if (pz.nodes && pz.nodes.enabled) await loadProvHosts(false);
+    } catch (e) { /* a plain "unreachable" then */ }
+    ph.asking = false;
+    wakeRedraw();
+  })();
+}
+
 async function loadProvHosts(force) {
   if (ph.loading || ledger.on !== true || !multiHost() || !(pz.nodes && pz.nodes.enabled)) return;
   ph.loading = true;
@@ -9497,6 +9535,8 @@ async function wakePoll() {
 }
 
 function wakeRedraw() {
+  if (state.selected && !agentById(state.selected) && (ph.data || ph.asking)) renderDetail(); // a session of a host that is down: stopped, or not
+  renderWakeBanner();
   if (typeof renderList === "function") renderList();
   if (prs.route) renderPeers();
 }
@@ -9514,6 +9554,70 @@ async function wakeStart(name, confirmed) {
   }
   wk.busy[name] = false;
   wakeRedraw();
+}
+
+// wakeWaitFor follows the wake of host until it is up (the call that began it
+// answered 202 host_waking). It throws with the reason when it fails.
+async function wakeWaitFor(host, first) {
+  if (first) wk.wakes[host] = first;
+  wakeStartPoll();
+  wakeRedraw();
+  const until = Date.now() + 14 * 60 * 1000;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    let d;
+    try { d = await api("/api/provision/wake", { timeout: 20000 }); } catch (e) { if (Date.now() > until) throw e; continue; }
+    wk.wakes = d.wakes || wk.wakes;
+    const w = wk.wakes[host];
+    if (w && w.state === "up") { wakeRedraw(); return; }
+    if (!w || w.state === "failed") { wakeRedraw(); throw new Error(`could not start ${host}: ${(w && w.reason) || "it did not start"}`); }
+    if (Date.now() > until) throw new Error(`${host} did not start in time`);
+  }
+}
+
+// apiWake is api() for an action on a worker that may be stopped: the hub
+// answers 202 host_waking and starts it, this shows "starting kv1…" while it
+// boots, then repeats the action. onWait says it is waiting (the caller shows it).
+async function apiWake(host, path, opts, onWait) {
+  let d = await api(path, opts);
+  if (d && d.code === "host_waking") {
+    if (onWait) onWait(host);
+    await wakeWaitFor(host, d.wake);
+    d = await api(path, opts);
+  }
+  return d;
+}
+
+// The banner above the composer of a session on a stopped worker. Opening the
+// session does not start the host: this is how you do, or you just send.
+function renderWakeBanner() {
+  const el = $("wk-banner");
+  if (!el) return;
+  // The session may be gone from the list because its host is down: the id still names the host.
+  const a = state.selected ? agentById(state.selected) : null;
+  if (a) state.selName = a.name || "";
+  const hn = state.selected ? hostOf(state.selected) : null;
+  const h = hn ? hostStatus(hn) : null;
+  if (h && !h.local && peerStatusOf(h) !== "ok") phEnsure();
+  const x = h ? wakeOf(h) : null;
+  if (!x) { el.hidden = true; el.textContent = ""; el.className = "wk-banner"; return; }
+  // Keep a button that is being pressed: only redraw when the state changed.
+  const key = [h.name, x.kind, x.step || x.reason || "", wk.confirm === h.name, !!wk.busy[h.name], wk.err[h.name] || ""].join("|");
+  if (el.dataset.key === key && !el.hidden) return;
+  el.dataset.key = key;
+  el.hidden = false;
+  el.className = "wk-banner " + x.kind;
+  const title = x.kind === "starting" ? `Starting ${h.name}…` : x.kind === "failed" ? `${h.name} did not start` : `${h.name} is stopped. Start it?`;
+  const sub = x.kind === "stopped" ? `Sending a message starts it (about 2 minutes) and your text is kept. ${state.selName ? state.selName + " may not survive the power-off: if it does not, you can resume or launch it again." : ""}` : x.kind === "failed" ? x.reason : "";
+  el.innerHTML = `<p class="wk-title">${esc(title)}</p>${sub ? `<p class="wk-sub">${esc(sub)}</p>` : ""}${wakeAction(h, x)}`;
+}
+
+// A session that did not survive the power-off: said plainly, with a way on.
+function sessionGoneToast(e, host) {
+  const acts = [];
+  if (e.parkId) acts.push({ label: "Resume", fn: () => apiWake(host, `/api/hosts/${encodeURIComponent(host)}/resume`, { method: "POST", body: JSON.stringify({ id: e.parkId }), timeout: 100000 }).then(() => toast("resumed"), (x) => toast(x.message, true)) });
+  else acts.push({ label: "Launch again", fn: () => openLaunch() });
+  toastActions(e.message, acts, 30000);
 }
 
 document.addEventListener("click", (ev) => {
@@ -10969,6 +11073,7 @@ function openDetail(id) {
 }
 
 function closeDetail() {
+  state.stoppedOpen = false;
   toggleKeypad(false);
   toggleDetailMenu(false);
   closeActivityPanel();
@@ -11015,9 +11120,52 @@ function renderDetailNote() {
   el.hidden = !el.innerHTML;
 }
 
+// A session on a worker that is stopped: not listed (a host that is down lists nothing), but
+// opening it is a read, not a start: the header, a note, the Start banner and the composer.
+function stoppedSession(id) {
+  const h = hostOf(id), st = h && hostStatus(h);
+  return !!id && !agentById(id) && !!st && !st.local && peerStatusOf(st) !== "ok" && (!!wakeOf(st) || (!ph.data && ph.asking)); // (until the provisioners are heard from, assume it)
+}
+
+function openStoppedSession(host, pane) {
+  setView(null);
+  resetTerminalView();
+  const hash = "#/agent/" + encodeURIComponent(host) + "/" + encodeURIComponent(pane);
+  if (location.hash !== hash) {
+    history.pushState(null, "", hash);
+    state.pushedRoute = true;
+    syncScreens();
+  }
+  state.selected = host + "/" + pane;
+  state.stoppedOpen = true;
+  state.chat = null;
+  clearTimeout(chatRetryTimer);
+  state.ask = null;
+  state.lastStatus = null;
+  $("list").style.display = "none";
+  $("detail").style.display = "flex";
+  document.body.classList.add("has-detail");
+  markSelectedRow();
+  renderDetail();
+  loadChat();
+}
+
+function renderStoppedDetail() {
+  const id = state.selected, host = hostOf(id);
+  state.stoppedOpen = true;
+  stopPolling(); // nothing to poll while the host is off; openDetail starts it again when the session is listed
+  $("d-title").textContent = state.selName || id.slice(host.length + 1);
+  $("d-subtitle").textContent = `${host} · stopped`;
+  $("d-usage").innerHTML = ""; $("d-usage").hidden = true;
+  renderWakeBanner();
+  loadChat();
+}
+
 function renderDetail() {
+  renderWakeBanner();
   const a = agentById(state.selected);
   if (!a) {
+    if (stoppedSession(state.selected)) { renderStoppedDetail(); return; }
     const h = hostStatus(hostOf(state.selected));
     if (h && !h.local && h.status !== "ok") toast(`${h.name} is unreachable${h.class ? `: ${h.class}` : ""}`, true);
     closeDetail();
@@ -11174,6 +11322,11 @@ document.addEventListener("click", async (ev) => {
 async function loadChat(reset = true) {
   if (!state.selected) return;
   const pane = state.selected;
+  if (stoppedSession(pane)) { // nothing to read: the host is off
+    state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: state.chat && state.chat.pending || [], from: "", running: [], ctx: null };
+    $("chat").innerHTML = `<div class="wk-gone"><p><strong>${esc(hostOf(pane))} is stopped.</strong> This session's messages show again once it is up.</p></div>`;
+    return;
+  }
   if (reset) {
     state.chat = { rendered: new Set(), skip: 0, more: false, terminal: false, pending: [], from: "", running: [], ctx: null };
     $("chat").innerHTML = "";
@@ -12406,7 +12559,7 @@ function renderPending() {
     const div = document.createElement("div");
     div.className = "msg user pending";
     div.innerHTML = `<div class="bubble">${esc(p.text)}</div>` +
-      `<div class="msgtime">${p.sending ? "sending…" : working ? "queued — the agent picks it up at its next step" : "sent"}</div>`;
+      `<div class="msgtime">${p.sending ? (p.waking ? "starting " + esc(p.waking) + "…" : "sending…") : working ? "queued — the agent picks it up at its next step" : "sent"}</div>`;
     chatEl.insertBefore(div, before);
   }
 }
@@ -13138,7 +13291,7 @@ function sendPrompt() {
   }
   const pane = state.selected;
   let path;
-  try { path = pathFor(pane); } catch (e) { toast("prompt failed: " + e.message, true); return; }
+  try { path = pathForSend(pane); } catch (e) { toast("prompt failed: " + e.message, true); return; }
   state.sending++;
   setPromptValue("");
   // Shown before the POST returns: a fast transcript poll may already
@@ -13199,7 +13352,9 @@ async function queuePrompt(job, a) {
 async function postPrompt(job) {
   const { text, pane, path, pending, terminal } = job;
   try {
-    await api(`${path}/prompt`, { method: "POST", body: JSON.stringify({ text }) });
+    // A stopped worker is started by the send (the hub answers 202 host_waking); the text waits here.
+    await apiWake(hostOf(pane), `${path}/prompt`, { method: "POST", body: JSON.stringify({ text }) }, (h) => { if (pending) { pending.waking = h; renderPending(); } });
+    if (pending) delete pending.waking;
     if (pending) { pending.sending = false; if (state.selected === pane) renderPending(); }
     state.pollUntil = Date.now() + POLL_AFTER_SEND_MS;
     if (state.selected !== pane) return;
@@ -13214,7 +13369,9 @@ async function postPrompt(job) {
       const now = promptValue();
       setPromptValue(now.trim() ? text + "\n" + now : text);
     }
-    if (e.status === 409) {
+    if (e.code === "session_gone") {
+      sessionGoneToast(e, hostOf(pane));
+    } else if (e.status === 409 && e.code !== "wake_limit" && e.code !== "needs_confirm" && e.code !== "host_stopped") {
       toastActions(refusalNote(e), refusalActions(e, job), 20000);
     } else {
       toast("prompt failed: " + e.message + (state.selected === pane ? " — your message is back in the box" : ""), true);
@@ -14361,7 +14518,7 @@ async function submitLaunch() {
   renderLaunchForm();
   let r;
   try {
-    r = await api(launchBase(host), { method: "POST", timeout: 180000, body: JSON.stringify(body) });
+    r = await apiWake(host, launchBase(host), { method: "POST", timeout: 180000, body: JSON.stringify(body) }, (h) => { $("ln-status").textContent = `Starting ${h}…`; });
   } catch (e) {
     toast(e.message, true);
     $("ln-status").textContent = "";

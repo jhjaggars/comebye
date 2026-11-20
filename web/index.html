@@ -2613,6 +2613,15 @@
     .agent.host-stopped.failed .status { color: var(--red); }
     .agent.host-stopped.starting .status { color: var(--orange); }
     @media (max-width: 420px) { .wk-start { width: 100%; } .wk-acts .btn { flex: 1; } }
+    /* A session on a stopped worker: the banner above the composer */
+    .wk-banner { flex: none; margin: 0 var(--sp-12) var(--sp-8); padding: var(--sp-10) var(--sp-12); border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); display: flex; flex-direction: column; gap: var(--sp-8); }
+    .wk-banner[hidden] { display: none; }
+    .wk-banner p { margin: 0; overflow-wrap: anywhere; }
+    .wk-banner .wk-title { font-weight: 600; }
+    .wk-banner .wk-sub { color: var(--muted); font-size: var(--fs-13); }
+    .wk-banner.failed .wk-title { color: var(--red); }
+    .wk-gone { padding: var(--sp-16) var(--sp-12); color: var(--muted); }
+    .wk-gone p { margin: 0; }
     .ph-dest { display: flex; flex-direction: column; gap: var(--sp-8); padding-top: var(--sp-8); border-top: 1px solid var(--border); }
     .ph-dest label.pz-check { align-items: flex-start; }
     .ph-dest .az-in { max-width: 360px; }
@@ -3418,6 +3427,7 @@
       <button type="button" class="cpb cpb-out" id="btn-copy-screen" data-copy-key="term-screen" aria-label="Copy what the terminal shows" hidden>Copy screen</button>
       <pre id="output" style="display:none"></pre>
       <section id="answer" style="display:none" aria-live="polite"></section>
+      <section id="wk-banner" class="wk-banner" hidden aria-label="This host is stopped"></section>
       <section id="queued" hidden aria-label="Queued prompts"></section>
       <div id="keypad" class="keypad" hidden aria-label="Send keys"></div>
       <div class="stt-status" data-stt-status="prompt" role="status" aria-live="polite" hidden></div>
