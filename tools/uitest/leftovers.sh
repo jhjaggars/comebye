@@ -87,6 +87,10 @@ if [ $rc = 0 ]; then
   git -C "$d/proj" worktree add -q -b feat/auto "$wt/auto" main
   sed -i '30s/.*/auto change/' "$wt/auto/f.txt"; git -C "$wt/auto" commit -q -am "auto"; git -C "$wt/auto" push -q origin feat/auto
   git -C "$d/proj" cherry-pick feat/auto >/dev/null; git -C "$d/proj" push -q origin main
+  # The second real example: a LIVE idle agent (bravo) re-asked 12 times, whose backup branch was rebased.
+  git -C "$d/proj" worktree add -q -b ui/layered-surfaces "$wt/layered" main
+  sed -i '25s/.*/layered change/' "$wt/layered/f.txt"; git -C "$wt/layered" commit -q -am "layered"; git -C "$wt/layered" push -q origin ui/layered-surfaces
+  git -C "$d/proj" cherry-pick ui/layered-surfaces >/dev/null; git -C "$d/proj" push -q origin main
   node - "$d" "$state" <<'JS'
 const [d, state] = process.argv.slice(2);
 const fs = require("fs");
@@ -96,6 +100,9 @@ const tmpl = L.entries.find((e) => e.agent_name === "extra-commit");
 L.entries.push({ ...tmpl, id: "h00000000099", agent_name: "auto-case", branch: "feat/auto", worktree: d + "/worktrees/proj/auto", agent_id: "devbox/w60:p1", pane_id: "w60:p1", workspace_id: "w60",
   mark: { ...tmpl.mark, agent_id: "devbox/w60:p1", name: "auto-case", ask: { state: "unsafe", reason: "see items", at: ago(30), asked_at: ago(30),
     items: [{ type: "cleanup", text: "Delete the backup branch `origin/feat/auto`. The same content is already in main." }] } } });
+L.entries.push({ ...tmpl, id: "h00000000098", agent_name: "layered-surfaces", branch: "ui/layered-surfaces", worktree: d + "/worktrees/proj/layered", agent_id: "devbox/w2:p1", pane_id: "w2:p1", workspace_id: "w2",
+  mark: { ...tmpl.mark, agent_id: "devbox/w2:p1", name: "layered-surfaces", ask: { state: "unsafe", reason: "see items", at: ago(30), asked_at: ago(30), reasks: 12,
+    items: [{ type: "cleanup", text: "Delete the remote branch `ui/layered-surfaces` on origin. PR 38 is now CLOSED, but the branch still holds the old pre-rebase commits, whose SHAs differ from the ones on main. Waiting on a go-ahead." }] } } });
 fs.writeFileSync(state + "/ledger.json", JSON.stringify(L));
 fs.writeFileSync(state + "/settings.json", JSON.stringify({ rev: 2, sweep_loop: { enabled: true, every_minutes: 15, auto_delete_branches: true } }));
 fs.rmSync(state + "/sweeploop.json", { force: true });

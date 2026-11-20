@@ -128,6 +128,13 @@ minutes of a hand-run sweep, because nobody is watching this one.
   - Any other leftover (a process to stop, a PR to close) is left alone: the
     agent that could do it is gone, and doing it from here would write outside
     the session's own branch and local copy. The card keeps saying what is left.
+  - This holds for a **live** agent too (idle or done, never working or blocked):
+    a session that keeps answering "waiting on a go-ahead" to a branch git proves
+    is stale needs no go-ahead from anyone, and its LEFT answer no longer
+    triggers re-asks. The hub's automatic re-asks of one mark stop after 3
+    (`reaskMax`); a mark that reached it, or whose agent is gone, with a leftover
+    the hub cannot check or do, is listed in the day's item ("N sessions have a
+    leftover nobody is finishing") for the user.
   A run that settles nothing changes nothing, so a second run does nothing new.
 - Its state (last run, last item) is `sweeploop.json` in the state directory,
   so a restart neither sweeps again early nor files a second item.

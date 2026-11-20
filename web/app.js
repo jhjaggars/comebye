@@ -5421,7 +5421,7 @@ function reviewAskHTML(it, dis) {
     return `<li class="rv-ai ${esc(x.state)} t-${esc(x.type)}"><span class="rv-chip">${esc(chip)}</span><span class="rv-ai-t">${text}</span>` +
       (ar.stale_only || (it.live && !it.live.present) ? "" : `<button type="button" class="btn rv-reask" data-act="reask" data-id="${id}" data-item="${i + 1}" aria-label="Re-ask the session about item ${i + 1}"${dis || busy ? " disabled" : ""}>Re-ask</button>`) + `</li>`;
   }).join("");
-  const staleN = ar.stale_only ? `<div class="rv-ask-act"><span class="rv-ask-n">The agent is gone. Git shows every commit on that branch is already in the default branch, so removing this session deletes it first (and the sweep does it by itself when auto-delete is on).</span></div>` : "";
+  const staleN = ar.stale_only ? `<div class="rv-ask-act"><span class="rv-ask-n">Git shows every commit on that branch is already in the default branch, so removing this session deletes it first (and the sweep does it by itself when auto-delete is on).</span></div>` : "";
   const goneN = ar.only_cleanup && !ar.resolved && !ar.stale_only && it.live && !it.live.present
     ? `<div class="rv-ask-act"><span class="rv-ask-n">The agent is gone, so nothing can do this for it. The sweep checks what it can on the host; the rest is left to you.</span></div>` : "";
   const clean = ar.only_cleanup && !ar.resolved && !ar.stale_only && !(it.live && !it.live.present)
@@ -8691,7 +8691,7 @@ function maxwNote(d, eff) {
 function sweepNote(d, sw) {
   if (!d.sweep_on) return "Off: the hub does not look for finished sessions by itself. `comebye sweep` still does it by hand.";
   const last = sw && sw.last_run_at ? `Last ran ${fmtWhen(sw.last_run_at)}: marked ${sw.last_marked}, ${sw.last_needs_look} need a look.` : "It has not run yet.";
-  return `Marks finished sessions with nothing to lose as ready to remove, and files one To do item a day. It never removes anything itself. ${d.sweep_del ? "It also deletes a gone session’s remote branch itself when git shows every commit on it is already in the default branch and no pull request is open." : "A gone session’s stale remote branch (every commit already in the default branch) is deleted when you confirm the day’s item."} ${last}`;
+  return `Marks finished sessions with nothing to lose as ready to remove, and files one To do item a day. It never removes anything itself. ${d.sweep_del ? "It also deletes a finished session’s remote branch itself when git shows every commit on it is already in the default branch and no pull request is open." : "A finished session’s stale remote branch (every commit already in the default branch) is deleted when you confirm the day’s item."} ${last}`;
 }
 function peerSettingsForm(h, c, d) {
   const data = c.data;
@@ -8726,7 +8726,7 @@ function peerSettingsForm(h, c, d) {
     ${d.sweep_known ? `<div class="pr-field"><span class="pr-lbl" id="pr-sweep-l">Sweep for sessions to remove</span>
       <div class="pr-checks" role="group" aria-labelledby="pr-sweep-l"><label class="pr-check"><input type="checkbox" id="pr-sweep-on"${d.sweep_on ? " checked" : ""}>On</label>
         <label class="pr-check" for="pr-sweep-every">every <input type="number" id="pr-sweep-every" min="15" max="1440" step="5" inputmode="numeric" value="${esc(d.sweep_every)}" placeholder="60" autocomplete="off"${d.sweep_on ? "" : " disabled"}> minutes</label>
-        <label class="pr-check" for="pr-sweep-del"><input type="checkbox" id="pr-sweep-del"${d.sweep_del ? " checked" : ""}${d.sweep_on ? "" : " disabled"}>Delete a gone session’s stale remote branch without asking</label></div>
+        <label class="pr-check" for="pr-sweep-del"><input type="checkbox" id="pr-sweep-del"${d.sweep_del ? " checked" : ""}${d.sweep_on ? "" : " disabled"}>Delete a finished session’s stale remote branch without asking</label></div>
       <div class="pr-note" id="pr-sweep-note">${esc(sweepNote(d, data.sweep_loop))}</div></div>` : ""}
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>

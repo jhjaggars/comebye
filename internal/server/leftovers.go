@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
@@ -59,7 +60,7 @@ func (s *Server) answerSafeBySweep(it *removal, what string, now time.Time) {
 // one could not be (nothing else is done then).
 func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now time.Time) ([]string, error) {
 	m := it.Mark
-	if it.Live.Present || m.Ask == nil || m.Ask.State != ledger.AskUnsafe || it.EntryID == "" || !s.knownHost(it.Host) {
+	if sessionBusy(it) || m.Ask == nil || m.Ask.State != ledger.AskUnsafe || it.EntryID == "" || !s.knownHost(it.Host) {
 		return nil, nil
 	}
 	ar := s.askReviewOf(ctx, it)
@@ -139,7 +140,7 @@ func (s *Server) leftovers(ctx context.Context, now time.Time) (settled int, del
 	auto := s.sweepLoopConf().AutoDeleteBranches
 	for _, it := range s.marked() {
 		a := it.Mark.Ask
-		if it.Live.Present || it.Coordinator || it.Mark.Discard || it.EntryID == "" || a == nil || a.State != ledger.AskUnsafe ||
+		if sessionBusy(it) || it.Coordinator || it.Mark.Discard || it.EntryID == "" || a == nil || a.State != ledger.AskUnsafe ||
 			a.ReaskedAt != nil || a.CleaningAt != nil || !s.knownHost(it.Host) {
 			continue
 		}
@@ -178,4 +179,9 @@ func staleDeletions(it *removal) []string {
 		}
 	}
 	return out
+}
+
+// sessionBusy: the agent is working or blocked, so nothing is done around it.
+func sessionBusy(it *removal) bool {
+	return it.Live.Present && (it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked)
 }

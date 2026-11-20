@@ -45,7 +45,7 @@ const (
 	// openGap is the least time between asks when the review is opened.
 	openGap    = 2 * time.Minute
 	reaskCap   = time.Hour // an answer older than this is not trusted: the session is asked again
-	reaskMax   = 12
+	reaskMax   = 3
 	reaskEvery = 2 * time.Minute
 	// recheckWait bounds the re-checks of one answer.
 	recheckWait = 25 * time.Second
@@ -269,7 +269,7 @@ type askReview struct {
 	Cleaning  *time.Time `json:"cleaning,omitempty"`
 	ReaskNote string     `json:"reask_note,omitempty"`
 	Reasks    int        `json:"reasks,omitempty"`
-	// StaleOnly: the session is gone and every item still unresolved is a stale
+	// StaleOnly: every item still unresolved is a stale
 	// branch the sweep can delete (so confirming the removal covers them).
 	StaleOnly bool `json:"stale_only,omitempty"`
 	// Loop is what the sweep loop last did about this answer, and when.
@@ -342,7 +342,7 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 		}
 	}
 	ar.OnlyCleanup = ar.OnlyCleanup && cleanups > 0
-	ar.StaleOnly = stales > 0 && others == 0 && !it.Live.Present
+	ar.StaleOnly = stales > 0 && others == 0
 	return ar
 }
 

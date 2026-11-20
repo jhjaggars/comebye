@@ -479,7 +479,7 @@ func (s *Server) unsafeStale(a *ledger.Ask, ar *askReview, now time.Time) bool {
 // does not apply (a person is looking). It reports whether it asked.
 func (s *Server) reaskStale(it *removal, now time.Time) bool {
 	a := it.Mark.Ask
-	if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || it.AskReview == nil || !s.unsafeStale(a, it.AskReview, now) {
+	if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || it.AskReview == nil || it.AskReview.StaleOnly || !s.unsafeStale(a, it.AskReview, now) {
 		return false
 	}
 	last := a.At
@@ -522,7 +522,7 @@ func (s *Server) reaskStep(ctx context.Context, now time.Time) []string {
 			continue
 		}
 		ar := s.askReviewOf(ctx, it)
-		if ar == nil || !s.unsafeStale(a, ar, now) {
+		if ar == nil || ar.StaleOnly || !s.unsafeStale(a, ar, now) { // a stale branch the sweep can delete is not asked about again
 			continue
 		}
 		if err := s.reask(it.Mark, true, ""); err != nil {

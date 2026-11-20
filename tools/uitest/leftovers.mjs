@@ -63,7 +63,10 @@ if (phase === "confirm") {
     const t = await until("the item", async () => { const x = await sweepTodos(); return x.length ? x[0] : null; });
     console.log("     " + t.question + "\n     " + t.context.split("\n").filter((l) => l.startsWith("- ") || /also deletes/.test(l)).join("\n     "));
     if (t.question !== "1 session is ready to remove" || !t.context.includes("delete* origin/" + B1)) throw new Error(t.context);
-    if (t.context.includes("extra-commit") || t.context.includes("stop-server")) throw new Error("names a session that is not safe");
+    // The sessions with something left nobody can finish are listed apart, after the ready ones, for the user.
+    const [readyPart, stuckPart = ""] = t.context.split("no one is going to finish it");
+    if (readyPart.includes("extra-commit") || readyPart.includes("stop-server")) throw new Error("a session that is not safe is listed as ready");
+    if (!stuckPart.includes("stop-server") || !stuckPart.includes("agent gone") || !stuckPart.includes("pid 4242")) throw new Error("the stuck leftover is not listed: " + stuckPart);
     if (!onOrigin(B1) || !onOrigin("feat/extra")) throw new Error("the loop deleted a branch");
     if ((await api("GET", "/api/settings")).sweep_loop.auto_delete_branches) throw new Error("auto is on by default");
   });
@@ -117,12 +120,20 @@ if (phase === "confirm") {
     console.log("     " + st);
     if (!/deleted \d+ stale remote branch/.test(st || "")) throw new Error("board line: " + st);
   });
+  await check("a LIVE agent re-asked 12 times: the loop gives the go-ahead itself, and nobody asks it again", async () => {
+    const it = await until("the loop's delete", async () => { const x = await byName("layered-surfaces"); return x?.ask_review?.loop ? x : null; }, 45000);
+    console.log("     live " + it.live.present + ", reasks " + it.mark.ask.reasks + ", state " + it.mark.ask.state + ": " + it.ask_review.loop.text);
+    if (!it.live.present) throw new Error("the agent is not live");
+    if (onOrigin("ui/layered-surfaces")) throw new Error("still on origin");
+    if (it.mark.ask.reasks !== 12 || it.mark.ask.state !== "safe" || it.mark.ask.reasked_at) throw new Error(JSON.stringify(it.mark.ask));
+  });
   await check("a second run does nothing new", async () => {
     const before = (await byName("auto-case")).mark.ask.loop.at;
     await new Promise((r) => setTimeout(r, 4000));
     if ((await byName("auto-case")).mark.ask.loop.at !== before) throw new Error("the note changed");
   });
   await shots("auto", '.rv-item[data-id$="w60:p1"]');
+  await shots("live", '.rv-item[data-id$="w2:p1"]');
   await check("the Peers setting shows on", async () => {
     const { browser, page } = await launch({ width: 1280, height: 800, dark: true });
     try {

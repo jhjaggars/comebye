@@ -10,6 +10,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // stubOpenPRs makes gh's open pull requests for the test: none, or n.
@@ -159,7 +160,17 @@ type goneFix struct {
 
 const goneID = "desk/w9:p9"
 
+// liveID is the idle agent "home" of coordServer.
+const liveID = "desk/w2:p1"
+
 func newGoneFix(t *testing.T, land bool, text string) *goneFix {
+	t.Helper()
+	return newFix(t, land, text, goneID, "w9:p9", 0)
+}
+
+// newFix seeds a marked session whose answer lists one cleanup item and has been
+// re-asked reasks times. id is its agent: goneID (not in herdr) or liveID (idle there).
+func newFix(t *testing.T, land bool, text, id, pane string, reasks int) *goneFix {
 	t.Helper()
 	stubOpenPRs(t, nil, nil)
 	r := backedUp(t)
@@ -186,13 +197,13 @@ func newGoneFix(t *testing.T, land bool, text string) *goneFix {
 	if text == "" {
 		text = "Delete the backup branch `origin/w`. It still points at the pre-rebase commit, and the same content is already in main. This waits on a go-ahead."
 	}
-	e, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: r.repo, RepoName: "proj", Branch: "w", Base: "main", AgentID: goneID, PaneID: "w9:p9", AgentName: "gone", WorkspaceID: "w9", Worktree: r.wt, Status: ledger.Finished})
+	e, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: r.repo, RepoName: "proj", Branch: "w", Base: "main", AgentID: id, PaneID: pane, AgentName: "gone", WorkspaceID: "w9", Worktree: r.wt, Status: ledger.Finished})
 	if err != nil {
 		t.Fatal(err)
 	}
 	at := time.Now().UTC().Add(-26 * time.Hour)
-	m := ledger.Mark{AgentID: goneID, Host: "desk", PaneID: "w9:p9", Name: "gone", By: "coordinator", Reason: "landed, CI green", At: at.Add(-48 * time.Hour),
-		Ask: &ledger.Ask{State: ledger.AskUnsafe, Reason: "delete backup", At: at, AskedAt: &at, Items: []ledger.AskItem{{Type: ledger.ItemCleanup, Text: text}}}}
+	m := ledger.Mark{AgentID: id, Host: "desk", PaneID: pane, Name: "gone", By: "coordinator", Reason: "landed, CI green", At: at.Add(-48 * time.Hour),
+		Ask: &ledger.Ask{State: ledger.AskUnsafe, Reason: "delete backup", At: at, AskedAt: &at, Reasks: reasks, Items: []ledger.AskItem{{Type: ledger.ItemCleanup, Text: text}}}}
 	if _, err := s.ledger.SetMark(m); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +219,7 @@ func (f *goneFix) setAuto(t *testing.T, on bool) {
 
 func (f *goneFix) ask(t *testing.T) *ledger.Ask {
 	t.Helper()
-	e, ok := f.s.ledger.ByAgent(goneID)
+	e, ok := f.s.ledger.ByAgent(f.m.AgentID)
 	if !ok || e.Mark == nil {
 		t.Fatal("no mark")
 	}
@@ -358,13 +369,96 @@ func TestSweepLeftoversRecheckedAnswerBecomesNothingLeft(t *testing.T) {
 	}
 }
 
-func TestSweepLeftoversSkipsASessionWhoseAgentIsLive(t *testing.T) {
+func TestSweepLeftoversSkipsAWorkingAgent(t *testing.T) {
 	f := newGoneFix(t, true, "")
 	f.setAuto(t, true)
-	// Make the agent live: it is asked, not acted for.
+	// A working agent is left alone.
 	it := &removal{ID: goneID, Host: "desk", EntryID: f.e.ID, Branch: "w", Worktree: f.r.wt, Mark: f.m}
-	it.Live.Present = true
+	it.Live.Present, it.Live.Status = true, herdr.StatusWorking
 	if names, err := f.s.deleteStaleFor(ctx(), it, "the sweep", time.Now()); names != nil || err != nil || !remoteHas(t, f.r, "w") {
-		t.Fatalf("a live session's branch: %v %v", names, err)
+		t.Fatalf("a working session's branch: %v %v", names, err)
+	}
+}
+
+// ---- a live agent that keeps answering "waiting on a go-ahead" ----
+
+const layeredText = "Delete the remote branch `w` on origin. PR 38 is now CLOSED, but the branch still holds the old pre-rebase commits, whose SHAs differ from the ones on main. Waiting on a go-ahead."
+
+func quietReasks(s *Server) {
+	s.latest = func(context.Context, string, string) *transcript.Latest {
+		return &transcript.Latest{Text: "waiting", Time: "t"}
+	}
+}
+
+func TestLiveAgentRebasedBranchIsSettledNotReasked(t *testing.T) {
+	f := newFix(t, true, layeredText, liveID, "w2:p1", 12)
+	quietReasks(f.s)
+	it := reviewOf(t, f.s, liveID)
+	if !it.Live.Present || !it.Safe || it.AskReview == nil || !it.AskReview.StaleOnly || !it.AskReview.Items[0].Stale {
+		t.Fatalf("review = live %v safe %v %+v warnings %v", it.Live.Present, it.Safe, it.AskReview, it.Warnings)
+	}
+	// Twelve re-asks are enough: the hub does not ask again, and the open review did not either.
+	if asked := f.s.reaskStep(ctx(), time.Now().Add(48*time.Hour)); len(asked) != 0 {
+		t.Fatalf("asked again: %v", asked)
+	}
+	if got := f.ask(t).ReaskedAt; got != nil {
+		t.Fatalf("the review re-asked: %v", got)
+	}
+	// Default mode: nothing deleted; the day's item names the deletion.
+	if n, deleted := f.s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 || !remoteHas(t, f.r, "w") {
+		t.Fatalf("default mode settled %d, deleted %v", n, deleted)
+	}
+	f.s.sweepLoopStep(ctx(), time.Now())
+	_, active := sweepItemsOf(f.s)
+	if len(active) != 1 || !strings.Contains(active[0].Context, "delete* origin/w") {
+		t.Fatalf("items = %+v", active)
+	}
+	// Auto mode: the loop gives the go-ahead itself, once.
+	f.setAuto(t, true)
+	n, deleted := f.s.leftovers(ctx(), time.Now())
+	if n != 1 || len(deleted) != 1 || remoteHas(t, f.r, "w") {
+		t.Fatalf("auto settled %d, deleted %v", n, deleted)
+	}
+	if a := f.ask(t); a.State != ledger.AskSafe || a.Reasks != 12 || a.Loop == nil {
+		t.Fatalf("ask = %+v", a)
+	}
+	if n, deleted := f.s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 {
+		t.Fatalf("second run settled %d deleted %v", n, deleted)
+	}
+}
+
+func TestLiveAgentBranchWithUnmergedWorkIsNeverDeleted(t *testing.T) {
+	f := newFix(t, false, layeredText, liveID, "w2:p1", 12)
+	quietReasks(f.s)
+	f.setAuto(t, true)
+	if n, deleted := f.s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 || !remoteHas(t, f.r, "w") {
+		t.Fatalf("settled %d deleted %v", n, deleted)
+	}
+}
+
+func TestReaskStopsAndTheLeftoverIsFiledForTheUser(t *testing.T) {
+	const stop = "Stop the dev server I started (pid 4242)."
+	// Under the cap the live agent is asked again (the control)...
+	c := newFix(t, true, stop, liveID, "w2:p1", 0)
+	quietReasks(c.s)
+	if asked := c.s.reaskStep(ctx(), time.Now().Add(48*time.Hour)); len(asked) != 1 {
+		t.Fatalf("control: asked %v", asked)
+	}
+	c.s.asking.Wait()
+	// ...at the cap it is not, and the day's item lists what is left.
+	f := newFix(t, true, stop, liveID, "w2:p1", 12)
+	quietReasks(f.s)
+	if asked := f.s.reaskStep(ctx(), time.Now().Add(48*time.Hour)); len(asked) != 0 {
+		t.Fatalf("asked past the cap: %v", asked)
+	}
+	f.s.sweepLoopStep(ctx(), time.Now())
+	_, active := sweepItemsOf(f.s)
+	if len(active) != 1 || !strings.Contains(active[0].Question, "leftover nobody is finishing") ||
+		!strings.Contains(active[0].Context, "asked 12 times") || !strings.Contains(active[0].Context, "pid 4242") {
+		t.Fatalf("items = %+v", active)
+	}
+	t.Logf("%s\n%s", active[0].Question, active[0].Context)
+	if remoteHas(t, f.r, "w") == false {
+		t.Fatal("the branch was touched")
 	}
 }

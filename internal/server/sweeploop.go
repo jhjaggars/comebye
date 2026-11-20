@@ -309,9 +309,10 @@ func (s *Server) sweepTodoPrefilter(now time.Time) []*removal {
 		if it.Coordinator || m.Discard || now.Sub(m.At) < s.sweeps.grace {
 			continue
 		}
-		// A gone session's LEFT answer is looked at: its stale branches are
-		// what the confirm deletes (the review decides whether it is safe).
-		if m.Ask != nil && (m.Ask.State == ledger.AskAsking || (m.Ask.State == ledger.AskUnsafe && it.Live.Present)) {
+		// A LEFT answer is looked at, live agent or not: its stale branches are
+		// what the confirm deletes, and what only a person can finish is listed
+		// (the review decides whether it is safe).
+		if m.Ask != nil && m.Ask.State == ledger.AskAsking {
 			continue
 		}
 		out = append(out, it)
@@ -321,7 +322,7 @@ func (s *Server) sweepTodoPrefilter(now time.Time) []*removal {
 
 // sweepReady reviews the prefiltered sessions the way the removals review does
 // and keeps the ones its "Remove all safe" would take.
-func (s *Server) sweepReady(ctx context.Context, cands []*removal) []*removal {
+func (s *Server) sweepReady(ctx context.Context, cands []*removal) (out, stuck []*removal) {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -336,32 +337,56 @@ func (s *Server) sweepReady(ctx context.Context, cands []*removal) []*removal {
 		}()
 	}
 	wg.Wait()
-	var out []*removal
 	for _, it := range cands {
-		if it.Safe && !it.DeliveredDiscard && !it.Coordinator {
+		switch {
+		case it.Safe && !it.DeliveredDiscard && !it.Coordinator:
 			out = append(out, it)
+		case s.sweepStuck(it):
+			stuck = append(stuck, it)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Mark.At.Before(out[j].Mark.At) })
-	return out
+	for _, l := range [][]*removal{out, stuck} {
+		sort.SliceStable(l, func(i, j int) bool { return l[i].Mark.At.Before(l[j].Mark.At) })
+	}
+	return out, stuck
+}
+
+// sweepStuck: a reviewed session whose only leftovers are cleanup the hub cannot
+// check, and that nobody is going to finish: its agent is gone, or it has been
+// asked reaskMax times and each time said it waits for a go-ahead. The hub stops
+// asking and lists it in the day's item for the user.
+func (s *Server) sweepStuck(it *removal) bool {
+	a, ar := it.Mark.Ask, it.AskReview
+	return !it.Safe && !it.Coordinator && !it.Mark.Discard && a != nil && a.State == ledger.AskUnsafe && ar != nil && ar.OnlyCleanup && !ar.StaleOnly &&
+		(!it.Live.Present || a.Reasks >= s.reaskMax)
 }
 
 // sweepTodoText is the item's question and Markdown context for the sessions.
-func sweepTodoText(ready []*removal) (question, body string) {
+func sweepTodoText(ready []*removal) (question, body string) { return sweepItemText(ready, nil) }
+
+// sweepItemText is the item's text for the sessions ready to remove and those
+// stuck on a leftover nobody is finishing (sweepStuck).
+func sweepItemText(ready, stuck []*removal) (question, body string) {
 	n := len(ready)
-	if n == 1 {
+	switch {
+	case n == 0:
+		question = fmt.Sprintf("%d %s a leftover nobody is finishing", len(stuck), plural(len(stuck), "session has", "sessions have"))
+	case n == 1:
 		question = "1 session is ready to remove"
-	} else {
+	default:
 		question = fmt.Sprintf("%d sessions are ready to remove", n)
 	}
 	var b strings.Builder
+	if n == 0 {
+		b.WriteString("Nothing is ready to remove yet.\n\n")
+	}
 	b.WriteString("These sessions are marked ready to remove, and the hub's checks found nothing to lose in them: each is clean, its work is in the base branch, and nothing is unpushed. Nothing is removed until you confirm.\n\n")
 	nb := 0
 	for _, it := range ready {
 		nb += len(staleDeletions(it))
 	}
 	if nb > 0 {
-		fmt.Fprintf(&b, "Your confirm also deletes %d stale remote %s, marked *delete* below: the agent that left each as a to-do is gone, git shows every commit on it is already in the default branch (checked on its host just now), and no pull request from it is open.\n\n", nb, plural(nb, "branch", "branches"))
+		fmt.Fprintf(&b, "Your confirm also deletes %d stale remote %s, marked *delete* below: each was left as a to-do by an agent that is gone or keeps waiting for a go-ahead; git shows every commit on it is already in the default branch (checked on its host just now), and no pull request from it is open.\n\n", nb, plural(nb, "branch", "branches"))
 	}
 	for i, it := range ready {
 		if i >= sweepTodoList {
@@ -382,7 +407,30 @@ func sweepTodoText(ready []*removal) (question, body string) {
 		}
 		b.WriteString(oneLine(line, 240) + "\n")
 	}
-	b.WriteString("\nOpen the removals review and tap **Remove all safe**, then confirm once. Sessions that need a look are not in this list; they stay where they are.")
+	if n > 0 {
+		b.WriteString("\nOpen the removals review and tap **Remove all safe**, then confirm once. Sessions that need a look are not in this list; they stay where they are.\n")
+	}
+	if len(stuck) > 0 {
+		b.WriteString("\nThese have one thing left that the hub cannot check or do, and no one is going to finish it (the agent is gone, or it was asked several times and still waits for a go-ahead). The hub stopped asking. Each stays in the review:\n\n")
+		for i, it := range stuck {
+			if i >= sweepTodoList {
+				fmt.Fprintf(&b, "- … and %d more\n", len(stuck)-sweepTodoList)
+				break
+			}
+			left := ""
+			for _, v := range it.AskReview.Items {
+				if v.State != itemResolved {
+					left = v.Text
+					break
+				}
+			}
+			why := "agent gone"
+			if it.Live.Present {
+				why = fmt.Sprintf("asked %d times", it.Mark.Ask.Reasks)
+			}
+			b.WriteString(oneLine("- **"+mdSafe(orDefault(it.Name, it.ID))+"** ("+why+"): "+mdSafe(left), 300) + "\n")
+		}
+	}
 	return question, block(b.String(), todoMaxContext)
 }
 
@@ -416,14 +464,14 @@ func (s *Server) sweepTodoStep(ctx context.Context, now time.Time, forced bool) 
 	l.st.TodoLook = now
 	l.saveLocked()
 	l.mu.Unlock()
-	ready := s.sweepReady(ctx, s.sweepTodoPrefilter(now))
+	ready, stuck := s.sweepReady(ctx, s.sweepTodoPrefilter(now))
 	switch {
-	case have && len(ready) == 0:
+	case have && len(ready)+len(stuck) == 0:
 		if _, err := s.todos.close(open.ID, TodoDone, AutoCreator, "nothing is left to remove"); err != nil {
 			log.Printf("sweep loop: close %s: %v", open.ID, err)
 		}
 	case have:
-		q, c := sweepTodoText(ready)
+		q, c := sweepItemText(ready, stuck)
 		if q == open.Question && c == open.Context {
 			return
 		}
@@ -436,8 +484,8 @@ func (s *Server) sweepTodoStep(ctx context.Context, now time.Time, forced bool) 
 		}); err != nil {
 			log.Printf("sweep loop: update %s: %v", open.ID, err)
 		}
-	case len(ready) > 0:
-		q, c := sweepTodoText(ready)
+	case len(ready)+len(stuck) > 0:
+		q, c := sweepItemText(ready, stuck)
 		it, _, err := s.todos.add(Todo{
 			Question: q, Context: c, Kind: "action",
 			Links:     []TodoLink{{Label: "Open the removals review", URL: SweepReviewLink}},
