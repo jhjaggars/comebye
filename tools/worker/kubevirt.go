@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -17,15 +16,12 @@ import (
 // policy, the golden image, a scoped service account) are applied once from
 // the homelab repo; this tool makes the per-worker objects.
 //
-// This slice has no live create: it holds the config, the pure renderers of
-// what a create would apply, the dry-run plan, the preflight check and the
-// capacity gate. The methods that would change the cluster return
-// errKubeVirtLive.
+// This file holds the config, the pure renderers of the objects a create
+// applies, the dry-run plan, the preflight check and the capacity gate;
+// kubevirt_live.go has the methods that change the cluster.
 //
 // The tool never reads, copies or prints the kubeconfig: it runs kubectl with
 // at most a --context name, and nothing it prints comes from a Secret.
-
-var errKubeVirtLive = errors.New("provider kubevirt: only `create --dry-run`, `preflight` and the capacity gate exist so far; there is no live create yet")
 
 const (
 	kubectlBin = "kubectl"
@@ -42,7 +38,12 @@ const (
 	// dataDiskSerial is the serial of the data disk: the guest sees it as
 	// /dev/disk/by-id/virtio-comebye-data whichever order the disks come up in.
 	dataDiskSerial = "comebye-data"
+
+	hostKeyAnno = "comebye-worker/host-key"
 )
+
+// guestDNS are the resolvers the guest uses: the network policy denies cluster DNS.
+var guestDNS = []any{"1.1.1.1", "9.9.9.9"}
 
 var (
 	kubeNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -114,11 +115,17 @@ type kubeCLI struct {
 // kubectl runs kubectl with the configured context. Secrets never travel
 // here; stdin carries a manifest only when a later slice applies one.
 func (k *kubeCLI) kubectl(ctx context.Context, args ...string) (string, string, error) {
+	return k.kubectlIn(ctx, nil, args...)
+}
+
+// kubectlIn is kubectl with stdin: a manifest for `apply -f -`. A Secret
+// travels this way, never in argv.
+func (k *kubeCLI) kubectlIn(ctx context.Context, stdin []byte, args ...string) (string, string, error) {
 	var a []string
 	if k.cfg.KubeContext != "" {
 		a = append(a, "--context", k.cfg.KubeContext)
 	}
-	return k.r.Run(ctx, kubectlBin, append(a, args...), nil)
+	return k.r.Run(ctx, kubectlBin, append(a, args...), stdin)
 }
 
 func (k *kubeCLI) ns(args ...string) []string {
@@ -435,10 +442,11 @@ type kubevirtProv struct {
 	k       *kubeCLI
 	cfg     *Config
 	planErr error // set by Plan when the gate refused
+	wait    func(secs int)
 }
 
 func newKubeVirt(r Runner, c *Config) *kubevirtProv {
-	return &kubevirtProv{k: &kubeCLI{r: r, cfg: c}, cfg: c}
+	return &kubevirtProv{k: &kubeCLI{r: r, cfg: c}, cfg: c, wait: func(s int) { time.Sleep(time.Duration(s) * time.Second) }}
 }
 
 func (p *kubevirtProv) Kind() string { return "kubevirt" }
@@ -450,26 +458,6 @@ func (p *kubevirtProv) Gate(ctx context.Context) (gateResult, error) {
 		return gateResult{}, err
 	}
 	return kubeGate(p.cfg, nodes, usage), nil
-}
-
-func (p *kubevirtProv) Describe(context.Context, string) (*Inst, error) { return nil, errKubeVirtLive }
-func (p *kubevirtProv) EnsureNetwork(context.Context, logf) error       { return errKubeVirtLive }
-func (p *kubevirtProv) EnsureDataDisk(context.Context, string, logf) error {
-	return errKubeVirtLive
-}
-func (p *kubevirtProv) Create(context.Context, string, string) error { return errKubeVirtLive }
-func (p *kubevirtProv) Attach(context.Context, string) error         { return errKubeVirtLive }
-func (p *kubevirtProv) Start(context.Context, string) error          { return errKubeVirtLive }
-func (p *kubevirtProv) Stop(context.Context, string) error           { return errKubeVirtLive }
-func (p *kubevirtProv) Delete(context.Context, string) error         { return errKubeVirtLive }
-func (p *kubevirtProv) DeleteDataDisk(context.Context, string) error { return errKubeVirtLive }
-func (p *kubevirtProv) HostKey(context.Context, string, *Inst) (string, error) {
-	return "", errKubeVirtLive
-}
-func (p *kubevirtProv) Instances(context.Context) ([]Inst, error) { return nil, errKubeVirtLive }
-func (p *kubevirtProv) List(context.Context, logf) error          { return errKubeVirtLive }
-func (p *kubevirtProv) CleanupNetwork(context.Context, logf) error {
-	return errKubeVirtLive
 }
 
 // PlanErr is the gate's refusal found by Plan, for a dry run to fail on.
@@ -542,7 +530,9 @@ func gibStr(n int) string { return strconv.Itoa(n) + "Gi" }
 func renderDataDV(c *Config, name string) map[string]any {
 	return map[string]any{
 		"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
-		"metadata": map[string]any{"name": dataDVName(name), "namespace": c.KubeNamespace, "labels": kubeLabels(name)},
+		"metadata": map[string]any{"name": dataDVName(name), "namespace": c.KubeNamespace, "labels": kubeLabels(name),
+			// keep the DataVolume object after the import, so it stays findable (and applies are idempotent)
+			"annotations": map[string]any{"cdi.kubevirt.io/storage.deleteAfterCompletion": "false"}},
 		"spec": map[string]any{
 			"source":  map[string]any{"blank": map[string]any{}},
 			"storage": storageSpec(c, c.DataDiskGB),
@@ -594,7 +584,9 @@ runcmd:
 func renderSecret(c *Config, name, pub, hostPriv, hostPub string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-		"metadata":   map[string]any{"name": cloudInitName(name), "namespace": c.KubeNamespace, "labels": kubeLabels(name)},
+		// The public half of the pinned host key rides on the Secret so a later
+		// connect (after a stop, or from another shell) pins the same key.
+		"metadata":   map[string]any{"name": cloudInitName(name), "namespace": c.KubeNamespace, "labels": kubeLabels(name), "annotations": map[string]any{hostKeyAnno: hostPub}},
 		"stringData": map[string]any{"userdata": renderCloudInit(c, name, pub, hostPriv, hostPub)},
 	}
 }
@@ -629,7 +621,10 @@ func renderVM(c *Config, name, node string) map[string]any {
 			"template": map[string]any{
 				"metadata": map[string]any{"labels": kubeLabels(name)},
 				"spec": map[string]any{
-					"nodeSelector":                  map[string]any{"kubernetes.io/hostname": node},
+					"nodeSelector": map[string]any{"kubernetes.io/hostname": node},
+					// Cluster DNS is denied to the guest by the namespace's network policy.
+					"dnsPolicy":                     "None",
+					"dnsConfig":                     map[string]any{"nameservers": guestDNS},
 					"terminationGracePeriodSeconds": 120,
 					"domain": map[string]any{
 						"cpu": map[string]any{"cores": c.VMCPU},

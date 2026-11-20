@@ -82,9 +82,6 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 		return err
 	}
 	names := vmStages
-	if e.Cfg.Provider == "kubevirt" && !e.DryRun {
-		return errKubeVirtLive
-	}
 	if e.Cfg.Provider == "openshell" {
 		names = sandboxStages
 	}
@@ -281,7 +278,11 @@ func (e *env) connect(ctx context.Context, name string) error {
 func (e *env) connectVM(ctx context.Context, name string) error {
 	pv := e.prov()
 	var ip, key string
-	err := e.poll(72, 5, "the VM's ssh host key from the cloud API", func() (bool, error) {
+	tries := 72
+	if e.Cfg.Provider == "kubevirt" {
+		tries = 180 // the boot disk is cloned first
+	}
+	err := e.poll(tries, 5, "the VM's ssh host key from the cloud API", func() (bool, error) {
 		inst, err := pv.Describe(ctx, name)
 		if err != nil {
 			return false, err
@@ -302,6 +303,9 @@ func (e *env) connectVM(ctx context.Context, name string) error {
 	})
 	if err != nil {
 		return err
+	}
+	if e.Cfg.Provider == "kubevirt" {
+		ip = name // the transport is a ProxyCommand: the pinned key is filed under the worker's name
 	}
 	if _, err := writeSSHConfig(e.Cfg, name, ip, key); err != nil {
 		return err

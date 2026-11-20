@@ -473,20 +473,351 @@ func TestKubeVirtDryRunRefusedByGate(t *testing.T) {
 	}
 }
 
-func TestKubeVirtNoLiveCreate(t *testing.T) {
-	e, r, _, _ := kubeEnv(t, goodWorld())
-	e.DryRun = false
-	if err := e.create(context.Background(), "w1", createOpts{}); !errors.Is(err, errKubeVirtLive) {
-		t.Errorf("live create: %v", err)
+// liveWorld is a tiny stateful cluster behind a fake kubectl: objects by
+// "kind/name" with their JSON, so apply, get, patch and delete behave.
+type liveWorld struct {
+	*kubeWorld
+	objs    map[string]map[string]any
+	applied []string // "kind/name" in order
+	stdins  []string
+	vmState string // printableStatus once a VM exists
+	vmiGone bool
+	patches []string
+	denyDel bool
+	fail    bool // every kubectl call fails (not NotFound)
+}
+
+func newLiveWorld() *liveWorld {
+	return &liveWorld{kubeWorld: goodWorld(), objs: map[string]map[string]any{}, vmState: "Running"}
+}
+
+func kindOf(k string) string {
+	switch k = strings.ToLower(k); k {
+	case "virtualmachine", "vm":
+		return "vm"
+	case "virtualmachineinstance":
+		return "vmi"
 	}
-	if len(r.calls) != 0 {
-		t.Errorf("a refused live create still ran %v", r.calls)
+	return k
+}
+
+func (w *liveWorld) fake() *fakeRunner {
+	base := w.kubeWorld.fake()
+	return &fakeRunner{handle: func(c call, f *fakeRunner) (string, string, error) {
+		if c.name == "ssh-keygen" {
+			path := c.args[len(c.args)-1]
+			os.WriteFile(path, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEHOSTKEY\n-----END OPENSSH PRIVATE KEY-----\n"), 0o600)
+			os.WriteFile(path+".pub", []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIpinnedpinnedpinnedpinnedpinnedpinnedpinned\n"), 0o644)
+			return "", "", nil
+		}
+		if c.name != "kubectl" {
+			return "", "", fmt.Errorf("unexpected %s", c.line())
+		}
+		if w.fail {
+			return "", "Unable to connect to the server", errors.New("exit 1")
+		}
+		args := c.args
+		if len(args) >= 2 && args[0] == "--context" {
+			args = args[2:]
+		}
+		if len(args) >= 2 && args[0] == "-n" {
+			args = args[2:]
+		}
+		if len(args) >= 3 && args[1] == "-n" {
+			args = append([]string{args[0]}, args[3:]...)
+		}
+		nf := func(kind, name string) (string, string, error) {
+			return "", fmt.Sprintf("Error from server (NotFound): %s %q not found", kind, name), errors.New("exit 1")
+		}
+		switch args[0] {
+		case "apply":
+			var m map[string]any
+			if err := json.Unmarshal([]byte(c.stdin), &m); err != nil {
+				return "", "bad manifest", err
+			}
+			k := kindOf(m["kind"].(string)) + "/" + m["metadata"].(map[string]any)["name"].(string)
+			w.objs[k] = m
+			w.applied = append(w.applied, k)
+			w.stdins = append(w.stdins, c.stdin)
+			return k + " configured", "", nil
+		case "patch":
+			w.patches = append(w.patches, args[len(args)-1])
+			return "patched", "", nil
+		case "delete":
+			if w.denyDel {
+				return "", "Forbidden", errors.New("exit 1")
+			}
+			k := kindOf(args[1]) + "/" + args[2]
+			delete(w.objs, k)
+			if args[1] == "vm" {
+				delete(w.objs, "vmi/"+args[2])
+			}
+			w.patches = append(w.patches, "delete "+k)
+			return "deleted", "", nil
+		case "get":
+			if len(args) >= 3 && (args[1] == "vm" || args[1] == "vmi" || args[1] == "secret" || args[1] == "datavolume" || args[1] == "pvc") && args[2] != "-l" {
+				k := args[1] + "/" + args[2]
+				o, ok := w.objs[k]
+				if args[1] == "vm" && ok {
+					o["status"] = map[string]any{"printableStatus": w.vmState}
+				}
+				if args[1] == "vmi" {
+					if !ok && w.vmState == "Running" && w.objs["vm/"+args[2]] != nil {
+						o, ok = map[string]any{"status": map[string]any{"nodeName": "rozalin.x.cc", "interfaces": []any{map[string]any{"ipAddress": "10.42.1.9"}}}}, true
+					}
+					if w.vmiGone {
+						ok = false
+					}
+				}
+				if !ok {
+					return nf(args[1], args[2])
+				}
+				line := strings.Join(args, " ")
+				switch {
+				case strings.Contains(line, "managed-by}"):
+					return labelOf(o), "", nil
+				case strings.Contains(line, "host-key}"):
+					return o["metadata"].(map[string]any)["annotations"].(map[string]any)[hostKeyAnno].(string), "", nil
+				case strings.Contains(line, "-o name"):
+					return k, "", nil
+				}
+				b, _ := json.Marshal(o)
+				return string(b), "", nil
+			}
+			if len(args) >= 2 && args[1] == "vm" { // list with -l
+				var items []string
+				for k, o := range w.objs {
+					if strings.HasPrefix(k, "vm/") {
+						o["status"] = map[string]any{"printableStatus": w.vmState}
+						b, _ := json.Marshal(o)
+						items = append(items, string(b))
+					}
+				}
+				return `{"items":[` + strings.Join(items, ",") + `]}`, "", nil
+			}
+		}
+		return base.handle(c, f)
+	}}
+}
+
+func labelOf(o map[string]any) string {
+	l, _ := o["metadata"].(map[string]any)["labels"].(map[string]any)
+	s, _ := l[labelKey].(string)
+	return s
+}
+
+func liveEnv(t *testing.T, w *liveWorld) (*env, *fakeRunner) {
+	t.Helper()
+	c := kubeCfg(t)
+	r := w.fake()
+	e, _, _ := newEnv(t, c, &fakeWorld{hubVersion: "v0.3.1"}, r)
+	e.prov().(*kubevirtProv).wait = func(int) {}
+	return e, r
+}
+
+const fakePub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItestkeytestkeytestkeytestkeytestkeytestkey comebye-worker"
+
+func TestKubeVirtCreatePinsHostKey(t *testing.T) {
+	w := newLiveWorld()
+	e, r := liveEnv(t, w)
+	p := e.prov().(*kubevirtProv)
+	ctx := context.Background()
+	if err := p.EnsureDataDisk(ctx, "kv1", func(string, ...any) {}); err != nil {
+		t.Fatal(err)
 	}
+	if err := p.Create(ctx, "kv1", fakePub); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(w.applied, ",") != "datavolume/kv1-data,secret/kv1-cloudinit,vm/kv1" {
+		t.Errorf("applied %v", w.applied)
+	}
+	// the pinned key is the one in the Secret's user-data, and HostKey returns exactly it
+	k, err := p.HostKey(ctx, "kv1", nil)
+	if err != nil || !strings.HasPrefix(k, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIpinned") || strings.Contains(k, " comebye") {
+		t.Fatalf("HostKey %q %v", k, err)
+	}
+	ud := w.stdins[1]
+	if !strings.Contains(ud, "FAKEHOSTKEY") || !strings.Contains(ud, strings.Fields(k)[1]) {
+		t.Error("the Secret does not carry the private key and the pinned public key")
+	}
+	// the node is the gate's choice, and the secret was never in argv
+	if !strings.Contains(w.stdins[2], `"kubernetes.io/hostname":"rozalin.x.cc"`) {
+		t.Errorf("VM not pinned to the gate's node: %s", w.stdins[2])
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c.line(), "FAKEHOSTKEY") {
+			t.Errorf("a key reached argv: %s", c.line())
+		}
+	}
+	if !strings.Contains(w.stdins[2], `"dnsPolicy":"None"`) || !strings.Contains(w.stdins[2], "1.1.1.1") {
+		t.Error("the guest has no public resolvers")
+	}
+}
+
+func TestKubeVirtCreateRefusals(t *testing.T) {
+	w := newLiveWorld()
+	w.objs["secret/kv1-cloudinit"] = map[string]any{"metadata": map[string]any{"name": "kv1-cloudinit"}}
+	e, _ := liveEnv(t, w)
+	p := e.prov().(*kubevirtProv)
+	if err := p.Create(context.Background(), "kv1", fakePub); err == nil || !strings.Contains(err.Error(), "without") || len(w.applied) != 0 {
+		t.Errorf("an unlabelled Secret was overwritten: %v %v", err, w.applied)
+	}
+	// the gate refuses
+	w = newLiveWorld()
+	w.pods = podsJSON("rozalin.x.cc", "40Gi")
+	w.nodes = nodesJSON([3]string{"rozalin.x.cc", "65471768Ki", "1k"})
+	e, _ = liveEnv(t, w)
+	if err := e.prov().Create(context.Background(), "kv1", fakePub); err == nil || !strings.Contains(err.Error(), "capacity gate") || len(w.applied) != 0 {
+		t.Errorf("create went past the gate: %v %v", err, w.applied)
+	}
+	// an unlabelled data disk is not adopted
+	w = newLiveWorld()
+	w.objs["datavolume/kv1-data"] = map[string]any{"metadata": map[string]any{"name": "kv1-data"}}
+	e, _ = liveEnv(t, w)
+	if err := e.prov().EnsureDataDisk(context.Background(), "kv1", func(string, ...any) {}); err == nil {
+		t.Error("adopted a foreign DataVolume")
+	}
+}
+
+func TestKubeVirtDescribe(t *testing.T) {
+	w := newLiveWorld()
+	e, _ := liveEnv(t, w)
 	p := e.prov()
-	if _, err := p.Describe(context.Background(), "w1"); err == nil {
-		t.Error("Describe returned nil, nil: destroy would read it as 'no such instance'")
+	ctx := context.Background()
+	if i, err := p.Describe(ctx, "kv1"); i != nil || err != nil {
+		t.Fatalf("absent VM: %v %v", i, err)
 	}
-	if err := p.Delete(context.Background(), "w1"); err == nil {
-		t.Error("Delete succeeded")
+	p.EnsureDataDisk(ctx, "kv1", func(string, ...any) {})
+	p.Create(ctx, "kv1", fakePub)
+	i, err := p.Describe(ctx, "kv1")
+	if err != nil || i == nil || i.State != stateRunning || i.IP != "10.42.1.9" || !i.Managed || i.Type != "0 vCPU, " && !strings.Contains(i.Type, "32Gi") {
+		t.Fatalf("%+v %v", i, err)
+	}
+	w.vmState = "Stopped"
+	if i, _ := p.Describe(ctx, "kv1"); i.State != stateStopped || i.IP != "" {
+		t.Errorf("%+v", i)
+	}
+	w.vmState = "Provisioning"
+	if i, _ := p.Describe(ctx, "kv1"); i.State != "PROVISIONING" {
+		t.Errorf("%+v", i)
+	}
+	// a kubectl failure other than NotFound is an error, not "no such VM"
+	w.fail = true
+	if i, err := p.Describe(ctx, "kv1"); err == nil {
+		t.Errorf("an unreachable cluster read as %v", i)
+	}
+}
+
+func TestKubeVirtStopStart(t *testing.T) {
+	w := newLiveWorld()
+	e, _ := liveEnv(t, w)
+	p := e.prov().(*kubevirtProv)
+	ctx := context.Background()
+	p.Create(ctx, "kv1", fakePub)
+	w.vmState = "Stopped"
+	w.vmiGone = true
+	if err := p.Stop(ctx, "kv1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(ctx, "kv1"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(w.patches, "|") != `{"spec":{"runStrategy":"Halted"}}|{"spec":{"runStrategy":"Halted"}}|{"spec":{"runStrategy":"RerunOnFailure"}}` {
+		t.Errorf("patches %v", w.patches)
+	}
+	// a VM that never reaches Stopped is an error, not a hang
+	w.vmState, w.vmiGone = "Running", false
+	if err := p.Stop(ctx, "kv1"); err == nil {
+		t.Error("Stop returned while the VM runs")
+	}
+	// an unlabelled VM is left alone
+	delete(w.objs["vm/kv1"]["metadata"].(map[string]any), "labels")
+	w.patches = nil
+	if err := p.Stop(ctx, "kv1"); err == nil || len(w.patches) != 0 {
+		t.Errorf("stopped a foreign VM: %v %v", err, w.patches)
+	}
+}
+
+func TestKubeVirtDelete(t *testing.T) {
+	w := newLiveWorld()
+	e, _ := liveEnv(t, w)
+	p := e.prov()
+	ctx := context.Background()
+	p.EnsureDataDisk(ctx, "kv1", func(string, ...any) {})
+	p.Create(ctx, "kv1", fakePub)
+	if err := p.Delete(ctx, "kv1"); err != nil {
+		t.Fatal(err)
+	}
+	if w.objs["vm/kv1"] != nil || w.objs["secret/kv1-cloudinit"] != nil {
+		t.Errorf("left behind: %v", w.objs)
+	}
+	if w.objs["datavolume/kv1-data"] == nil {
+		t.Error("Delete removed the data disk")
+	}
+	// absent VM: nothing to guard, nothing deleted
+	if err := p.Delete(ctx, "kv1"); err == nil {
+		t.Error("Delete of an absent VM succeeded silently") // destroy checks Describe first
+	}
+	if err := p.DeleteDataDisk(ctx, "kv1"); err != nil || w.objs["datavolume/kv1-data"] != nil {
+		t.Errorf("%v %v", err, w.objs)
+	}
+	// a foreign VM is not deleted
+	w.objs["vm/other"] = map[string]any{"metadata": map[string]any{"name": "other"}}
+	if err := p.Delete(ctx, "other"); err == nil || w.objs["vm/other"] == nil {
+		t.Errorf("deleted a foreign VM: %v", err)
+	}
+	w.objs["datavolume/foreign-data"] = map[string]any{"metadata": map[string]any{"name": "foreign-data"}}
+	if err := p.DeleteDataDisk(ctx, "foreign"); err == nil || w.objs["datavolume/foreign-data"] == nil {
+		t.Errorf("deleted a foreign disk: %v", err)
+	}
+}
+
+func TestKubeVirtSSHConfig(t *testing.T) {
+	c := kubeCfg(t)
+	c.KubeContext = "homelab"
+	s := sshConfig(c, "kv1", "kv1", "/k/known_hosts")
+	for _, want := range []string{"HostName kv1", "StrictHostKeyChecking yes", "ProxyCommand virtctl --context homelab port-forward --stdio=true vmi/kv1.comebye-workers 22", "UserKnownHostsFile /k/known_hosts"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("ssh_config lacks %q:\n%s", want, s)
+		}
+	}
+	c.Provider = "gcp"
+	if strings.Contains(sshConfig(c, "kv1", "1.2.3.4", "/k"), "ProxyCommand") {
+		t.Error("a non-kubevirt config got a ProxyCommand")
+	}
+}
+
+func TestKubeVirtConnectPins(t *testing.T) {
+	w := newLiveWorld()
+	e, r := liveEnv(t, w)
+	e.prov().Create(context.Background(), "kv1", fakePub)
+	// ssh answers
+	base := r.handle
+	r.handle = func(c call, f *fakeRunner) (string, string, error) {
+		if c.name == "ssh" {
+			return "", "", nil
+		}
+		return base(c, f)
+	}
+	if err := e.connect(context.Background(), "kv1"); err != nil {
+		t.Fatal(err)
+	}
+	kh, _ := os.ReadFile(filepath.Join(e.Cfg.WorkerDir("kv1"), "known_hosts"))
+	if !strings.HasPrefix(string(kh), "kv1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIpinned") {
+		t.Errorf("known_hosts %q", kh)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(e.Cfg.WorkerDir("kv1"), "ssh_config"))
+	if !strings.Contains(string(cfg), "ProxyCommand virtctl port-forward") {
+		t.Errorf("ssh_config %s", cfg)
+	}
+}
+
+func TestKubeVirtInstancesAndList(t *testing.T) {
+	w := newLiveWorld()
+	e, _ := liveEnv(t, w)
+	e.prov().Create(context.Background(), "kv1", fakePub)
+	is, err := e.prov().Instances(context.Background())
+	if err != nil || len(is) != 1 || is[0].Name != "kv1" || !is[0].Managed {
+		t.Errorf("%+v %v", is, err)
 	}
 }

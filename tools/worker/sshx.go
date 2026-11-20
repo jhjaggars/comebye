@@ -37,6 +37,23 @@ func writeKnownHosts(dir, ip, key string) (string, error) {
 // checking against the file above, our key only, no agent, no other
 // known_hosts.
 func sshConfig(c *Config, name, ip, knownHosts string) string {
+	return sshConfigBase(c, name, ip, knownHosts) + sshProxy(c, name)
+}
+
+// sshProxy is the transport line for a KubeVirt VM: ssh is reached through
+// `virtctl port-forward` (the namespace admits only virt-api on tcp/22).
+func sshProxy(c *Config, name string) string {
+	if c.Provider != "kubevirt" {
+		return ""
+	}
+	ctxArg := ""
+	if c.KubeContext != "" {
+		ctxArg = " --context " + c.KubeContext
+	}
+	return fmt.Sprintf("  ProxyCommand %s%s port-forward --stdio=true vmi/%s.%s 22\n", virtctlBin, ctxArg, name, c.KubeNamespace)
+}
+
+func sshConfigBase(c *Config, name, ip, knownHosts string) string {
 	return fmt.Sprintf(`Host %[1]s
   HostName %[2]s
   User %[3]s
