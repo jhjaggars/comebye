@@ -465,7 +465,7 @@ func TestCreateEndToEnd(t *testing.T) {
 			user = cl.stdin
 		}
 	}
-	for _, want := range []string{"WK_VERSION='v0.3.1'", "WK_HUB='https://hub.tail1.ts.net'", "COMEBYE_ANNOUNCE=1", "sha256sum -c"} {
+	for _, want := range []string{"WK_VERSION='v0.3.1'", "WK_HUB='https://hub.tail1.ts.net'", "COMEBYE_ANNOUNCE=1", "COMEBYE_RELEASE_UPGRADE=true\n", "sha256sum -c"} {
 		if !strings.Contains(user, want) {
 			t.Errorf("user script lacks %q", want)
 		}

@@ -361,7 +361,8 @@ only) is what limits where it works from.
    installed but **not signed in**, and comebye **at the hub's version** from
    its release tarball with `SHA256SUMS` checked, then `comebye upgrade
    --version` (which restarts the unit and smoke-checks). The env file sets
-   `COMEBYE_HUB`, `COMEBYE_ANNOUNCE=1`, `COMEBYE_PUSH=false`,
+   `COMEBYE_HUB`, `COMEBYE_ANNOUNCE=1`, `COMEBYE_RELEASE_UPGRADE=true` (so a
+   release rollout from the app can upgrade the worker), `COMEBYE_PUSH=false`,
    `COMEBYE_TS_ALLOW_LOGIN`, `COMEBYE_LAUNCH_ROOTS=/data/code` and
    `COMEBYE_WORKTREE_ROOT=/data/worktrees`, so repos and worktrees live on the
    data disk and survive a rebuilt boot disk.

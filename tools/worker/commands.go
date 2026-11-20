@@ -577,7 +577,7 @@ func (e *env) createPlan(name string, o createOpts) error {
 		c.SSHUser, c.HerdrInstall, map[bool]string{true: ", sha256 pinned", false: ", NOT pinned"}[c.HerdrSHA256 != ""], strings.Join(c.Agents, ", "), c.PiVersion, version, c.ReleasesURL)
 	for _, l := range []string{
 		"COMEBYE_HOST_NAME=" + name, "COMEBYE_TS_ALLOW_LOGIN=" + c.TSAllowLogin, "COMEBYE_PUSH=false",
-		"COMEBYE_HUB=" + c.HubPeerURL, "COMEBYE_ANNOUNCE=1", "COMEBYE_LAUNCH_ROOTS=/data/code", "COMEBYE_WORKTREE_ROOT=/data/worktrees",
+		"COMEBYE_HUB=" + c.HubPeerURL, "COMEBYE_ANNOUNCE=1", "COMEBYE_RELEASE_UPGRADE=true", "COMEBYE_LAUNCH_ROOTS=/data/code", "COMEBYE_WORKTREE_ROOT=/data/worktrees",
 	} {
 		e.printf("     %s\n", l)
 	}

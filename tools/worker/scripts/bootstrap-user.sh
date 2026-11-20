@@ -110,6 +110,7 @@ UNIT
 
 # The env file is the worker's join: COMEBYE_HUB + COMEBYE_ANNOUNCE make it
 # register itself with the hub (the hub must allow the worker tag).
+# COMEBYE_RELEASE_UPGRADE lets the app's rollout upgrade this worker.
 umask 077
 cat >"$HOME/.config/comebye/env" <<ENV
 COMEBYE_HOST_NAME=$WK_NAME
@@ -117,6 +118,7 @@ COMEBYE_TS_ALLOW_LOGIN=$WK_LOGIN
 COMEBYE_PUSH=false
 COMEBYE_HUB=$WK_HUB
 COMEBYE_ANNOUNCE=1
+COMEBYE_RELEASE_UPGRADE=true
 COMEBYE_LAUNCH_ROOTS=/data/code
 COMEBYE_WORKTREE_ROOT=/data/worktrees
 ENV

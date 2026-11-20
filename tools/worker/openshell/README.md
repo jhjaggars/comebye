@@ -63,6 +63,7 @@ comebye's own keys (same as the VM worker's bootstrap-user.sh, except the paths)
 | `COMEBYE_PUSH` | `false` |
 | `COMEBYE_HUB` | hub Serve URL |
 | `COMEBYE_ANNOUNCE` | `1` |
+| `COMEBYE_RELEASE_UPGRADE` | **not set**: the app's upgrade needs `systemd-run`, which a sandbox lacks; upgrade with `comebye upgrade --restart exit` |
 | `COMEBYE_LAUNCH_ROOTS` | `/sandbox/code` |
 | `COMEBYE_WORKTREE_ROOT` | `/sandbox/worktrees` |
 
