@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jhjaggars/comebye/internal/herdr"
 )
 
 func TestChatBriefNamesThingsAndNeverPastesThePage(t *testing.T) {
@@ -246,7 +248,7 @@ func TestChatAllowedToolsAreNarrow(t *testing.T) {
 	}
 }
 
-func TestPageChatOptionsSaysWhyItIsOff(t *testing.T) {
+func TestPageChatOptionsListsTheChoices(t *testing.T) {
 	s, _, page, _ := chatHub(t)
 	get := func() map[string]any {
 		w := served(s, "GET", "/api/pages/"+page+"/chat-options", userHdr, "")
@@ -257,15 +259,125 @@ func TestPageChatOptionsSaysWhyItIsOff(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &m)
 		return m
 	}
-	if m := get(); m["ok"] != true {
+	m := get()
+	if m["ok"] != true || m["needs_override"] != nil || m["kind"] != "claude" {
 		t.Fatalf("claude default: %v", m)
 	}
+	hosts, _ := m["hosts"].([]any)
+	if len(hosts) == 0 {
+		t.Fatalf("no hosts: %v", m)
+	}
+	h := hosts[0].(map[string]any)
+	if h["name"] != "desk" || h["ok"] != true || h["default_kind"] != "claude" {
+		t.Fatalf("host = %v", h)
+	}
+	ro := map[string]string{}
+	for _, k := range h["kinds"].([]any) {
+		km := k.(map[string]any)
+		ro[km["kind"].(string)], _ = km["read_only"].(string)
+	}
+	if ro["claude"] == "" || ro["pi"] != "" {
+		t.Fatalf("kinds = %v", ro)
+	}
+	if _, has := ro["pi"]; !has {
+		t.Fatalf("pi missing: %v", ro)
+	}
+	// A pi default keeps the button on: it needs the override instead.
 	if _, err := s.settings.put(hostSettings{DefaultKind: "pi"}, nil, "me", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	m := get()
-	if m["ok"] != false || m["kind"] != "pi" || !strings.Contains(m["reason"].(string), "no read-only mode") {
+	m = get()
+	if m["ok"] != true || m["kind"] != "pi" || m["needs_override"] != true || !strings.Contains(m["override_reason"].(string), "no read-only mode") {
 		t.Fatalf("pi default: %v", m)
+	}
+}
+
+// The user may start a pi helper on purpose with allow_writable: it is
+// started in a scratch directory with no read-only flags, its brief says what
+// is asked of it, the override is audited and the record and the agent's
+// chat mark say "not read-only".
+func TestPageChatAllowsPiWithTheOverride(t *testing.T) {
+	s, fh, page, _ := chatHub(t)
+	code, m := chatPost(s, page, userHdr, `{"kind":"pi","allow_writable":true}`)
+	if code != 200 {
+		t.Fatalf("chat = %d %v", code, m)
+	}
+	if m["writable"] != true {
+		t.Errorf("answer lacks writable: %v", m)
+	}
+	st := fh.call("agent.start").Params
+	if st["kind"] != "pi" {
+		t.Fatalf("agent.start = %v", st)
+	}
+	for _, a := range st["args"].([]any) {
+		if strings.Contains(a.(string), "plan") {
+			t.Errorf("pi given claude's flags: %v", st["args"])
+		}
+	}
+	dir, _ := m["chat"].(map[string]any)["dir"].(string)
+	if !strings.HasPrefix(dir, filepath.Join(s.cfg.StateDir, "chats", page+"-")) {
+		t.Fatalf("not a scratch dir: %q", dir)
+	}
+	text, _ := fh.call("agent.prompt").Params["text"].(string)
+	if !strings.Contains(text, "outside your own") || strings.Contains(text, "you are read-only") {
+		t.Errorf("brief:\n%s", text)
+	}
+	rec, _ := s.chats.get(page)
+	if !rec.Writable || rec.Kind != "pi" {
+		t.Errorf("record = %+v", rec)
+	}
+	var found bool
+	for _, a := range s.ledger.AuditLog("") {
+		if a.Action == "chat.not_read_only" && a.Host == "desk" && strings.Contains(a.Detail, page) && strings.Contains(a.Detail, "kind pi") && a.By != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no audit entry: %+v", s.ledger.AuditLog(""))
+	}
+	if mk := s.chatMarkOf(herdr.AgentInfo{ID: rec.Agent, Name: rec.Name}, s.liveRoles()); mk == nil || !mk.Writable {
+		t.Errorf("chat mark = %+v", mk)
+	}
+}
+
+// allow_writable from an agent token is refused, and the override does not
+// make a claude helper writable.
+func TestPageChatOverrideIsTheUsersAlone(t *testing.T) {
+	s, fh, page, _ := chatHub(t)
+	for _, hdr := range []map[string]string{agentHdr("w2:p1"), agentHdr("w1:p1")} {
+		if code, _ := chatPost(s, page, hdr, `{"kind":"pi","allow_writable":true}`); code != http.StatusForbidden {
+			t.Errorf("agent override = %d", code)
+		}
+	}
+	if slices.Contains(fh.methods(), "agent.start") {
+		t.Error("a helper was started")
+	}
+	// The launch route itself refuses it from an agent, too.
+	if w := do(s, "POST", "/api/launch", agentHdr("w1:p1"), `{"chat":"`+page+`","kind":"pi","chat_writable":true}`); w.Code != http.StatusForbidden {
+		t.Errorf("agent launch override = %d", w.Code)
+	}
+	code, m := chatPost(s, page, userHdr, `{"kind":"claude","allow_writable":true}`)
+	if code != 200 || m["writable"] == true {
+		t.Errorf("claude with override: %d %v", code, m)
+	}
+}
+
+// A host and kind picked in the request are honoured, with the model.
+func TestPageChatHonoursThePickedHostKindAndModel(t *testing.T) {
+	s, fh, page, _ := chatHub(t)
+	if _, err := s.settings.put(hostSettings{DefaultKind: "pi"}, nil, "me", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	code, m := chatPost(s, page, userHdr, `{"host":"desk","kind":"claude","model":"opus","new":true}`)
+	if code != 200 || m["host"] != "desk" {
+		t.Fatalf("chat = %d %v", code, m)
+	}
+	st := fh.call("agent.start").Params
+	if st["kind"] != "claude" {
+		t.Fatalf("agent.start = %v", st)
+	}
+	if code, m := chatPost(s, page, userHdr, `{"host":"nowhere","new":true}`); code != http.StatusConflict || m["code"] != "chat_no_host" {
+		t.Errorf("unknown host: %d %v", code, m)
 	}
 }
 
