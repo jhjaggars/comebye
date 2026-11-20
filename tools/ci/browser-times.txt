@@ -48,3 +48,4 @@ quietmark 1
 releaseauto 1
 stt 1
 versionbanner 1
+wake 25

@@ -47,7 +47,7 @@ const (
 // observeHosts folds the cloud's view of the hosts into the book. A cloud that
 // cannot be asked (the login expired) leaves the book as it was.
 func (s *Server) observeHosts(ctx context.Context) error {
-	if s.phosts == nil || s.cfg.Provision.Tool == nil || len(s.phosts.Live()) == 0 {
+	if s.phosts == nil || s.cfg.Provision.Tool == nil {
 		return nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -75,7 +75,10 @@ func (s *Server) handlePeerHosts(w http.ResponseWriter, r *http.Request) {
 	if !s.peerProvGuard(w, r) {
 		return
 	}
-	if r.URL.Query().Get("refresh") == "1" {
+	s.phostMu.Lock()
+	never := s.phostAt.IsZero() && s.phostErr == ""
+	s.phostMu.Unlock()
+	if r.URL.Query().Get("refresh") == "1" || never { // never looked yet: adopt what the tool reports now, not in five minutes
 		s.observeHosts(r.Context())
 	}
 	views, total := s.phosts.Views()
@@ -148,6 +151,7 @@ func (s *Server) RunProvision(ctx context.Context) {
 	}
 	t := time.NewTicker(gap)
 	defer t.Stop()
+	s.wakeResume() // a hub restarted mid-wake follows its start job again
 	for {
 		select {
 		case <-ctx.Done():
@@ -306,7 +310,7 @@ func (s *Server) hostsAnswer(r *http.Request) map[string]any {
 	if hosts == nil {
 		hosts = []hubHostView{}
 	}
-	return map[string]any{"hosts": hosts, "nodes": nodes, "total": tot, "csrf": s.csrfToken(r)}
+	return map[string]any{"hosts": hosts, "nodes": nodes, "total": tot, "wakes": s.wake.views(), "csrf": s.csrfToken(r)}
 }
 
 // handleProvisionHosts: GET /api/provision/hosts.

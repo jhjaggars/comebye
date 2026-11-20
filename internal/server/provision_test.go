@@ -50,7 +50,9 @@ case "$4" in
    [ -f ` + d + `/create.sleep ] && sleep $(cat ` + d + `/create.sleep)
    exit $(cat ` + d + `/create.exit 2>/dev/null || echo 0) ;;
  start)
+   [ -f ` + d + `/start.out ] && cat ` + d + `/start.out
    [ -f ` + d + `/start.fail ] && { echo "the instance would not start" >&2; exit 1; }
+   [ -f ` + d + `/start.flip ] && cp ` + d + `/start.flip ` + d + `/status.json
    exit 0 ;;
  stop) exit 0 ;;
  status)
@@ -110,6 +112,7 @@ var peerProvCalls = []struct{ name, method, path string }{
 	{"cleanup", "POST", "/api/provisioner/job/cleanup"},
 	{"hosts", "GET", "/api/provisioner/hosts"},
 	{"destroy", "POST", "/api/provisioner/host/destroy"},
+	{"start", "POST", "/api/provisioner/host/start"},
 }
 
 func TestPeerProvisionOpsAnswerOnlyAHub(t *testing.T) {
@@ -205,19 +208,27 @@ func TestProvisionRoutesAreUserOnly(t *testing.T) {
 	for _, line := range strings.Split(string(psrc), "\n") {
 		if strings.Contains(line, `HandleFunc("`) && strings.Contains(line, "/api/provision") {
 			n++
+			if strings.Contains(line, "/api/provision/hosts/{name}/start") {
+				// the one exception: the coordinator may start a worker too (the
+				// handler refuses any other agent itself, and TestStartNeedsTheUserOrTheCoordinator pins it)
+				if !strings.Contains(line, "s.authAgent(s.handleProvisionHostStart)") {
+					t.Errorf("the start route is not guarded as agreed: %s", strings.TrimSpace(line))
+				}
+				continue
+			}
 			if !strings.Contains(line, ", s.auth(s.") || strings.Contains(line, "authAgent") || strings.Contains(line, "authWorker") {
 				t.Errorf("a provisioning route is not user-only: %s", strings.TrimSpace(line))
 			}
 		}
 	}
-	if n != 20 {
-		t.Fatalf("found %d provisioning routes, want 20: update this test with the route", n)
+	if n != 23 {
+		t.Fatalf("found %d provisioning routes, want 23: update this test with the route", n)
 	}
 	if strings.Contains(string(src), "/api/provision") {
 		t.Error("provisioning routes belong in provision.go, where this test checks them")
 	}
 	// ...and a browser cannot have the peer ops forwarded.
-	for _, op := range []string{"provision-preflight", "provision-catalog", "provision-plan", "provision-job-create", "provision-job", "provision-job-retry", "provision-job-cleanup", "provision-hosts", "provision-host-destroy"} {
+	for _, op := range []string{"provision-preflight", "provision-catalog", "provision-plan", "provision-job-create", "provision-job", "provision-job-retry", "provision-job-cleanup", "provision-hosts", "provision-host-destroy", "provision-host-start"} {
 		rec := httptest.NewRecorder()
 		fleet.New(nil, "desk", nil, fleet.Options{}).ProxyHost(rec, httptest.NewRequest("GET", "/", nil), "kube", op)
 		if rec.Code != 404 {

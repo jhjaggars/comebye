@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -217,6 +218,50 @@ func (t *Tool) RunDestroy(ctx context.Context, name string, o DestroyOpts, emit 
 		args = append(args, "--no-archive")
 	}
 	return t.runJob(ctx, "create", nil, args, emit)
+}
+
+// StartTimeout bounds a start: longer than the tool's own two-minute wait for
+// comebye on the host, to cover a slow KubeVirt boot.
+const StartTimeout = 10 * time.Minute
+
+// RunStart starts a stopped host (worker start NAME): the provider's own
+// start, the ssh config, the host key and the wait for comebye. It is the same
+// command for every provider. The tool has no --events for start, so each line
+// of its text (stdout or stderr) becomes a log Item: that is the progress.
+func (t *Tool) RunStart(ctx context.Context, name string, emit func(Item)) JobResult {
+	if !nameRe.MatchString(name) {
+		return JobResult{Class: ClassOther, Msg: "bad name"}
+	}
+	var mu sync.Mutex // stdout and stderr are read by two goroutines
+	var last string
+	line := func(l string) {
+		l = Text(l, 300)
+		if l == "" {
+			return
+		}
+		mu.Lock()
+		last = l
+		mu.Unlock()
+		emit(Item{Kind: "log", Msg: l})
+	}
+	_, err := t.stream(ctx, "create", StartTimeout, nil, []string{"start", name},
+		func(b []byte) { line(string(b)) }, line)
+	if err == nil {
+		return JobResult{OK: true}
+	}
+	mu.Lock()
+	msg := last
+	mu.Unlock()
+	var re *RunError
+	if errors.As(err, &re) && re.Msg != "" {
+		msg = re.Msg
+	} else if msg == "" {
+		msg = Text(err.Error(), 300)
+	}
+	if ctx.Err() != nil {
+		msg = "the run was interrupted"
+	}
+	return JobResult{Class: ClassOther, Msg: Text(msg, 300)}
 }
 
 // StopTimeout bounds a stop.

@@ -324,6 +324,7 @@ type Server struct {
 	pseen          *provSeen
 	provObserveGap time.Duration // how often the provisioner asks (tests shorten it)
 	hjobs          *hubJobs      // on a hub: the jobs it has asked provisioners to run
+	wake           *wakeBook     // on a hub: stopped workers it is starting (wake.json)
 	pages          *pageStore
 	chats          *chatStore // Page -> its chat helper (chat.go)
 	chatRate       chatLimiter
@@ -430,6 +431,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		}
 	}
 	s.hjobs = openHubJobs(cfg.StateDir)
+	s.wake = openWakeBook(cfg.StateDir)
 	s.pseen = openProvSeen(cfg.StateDir)
 	switch rc := &s.cfg.Release; {
 	case rc.Host != "" && rc.Tool != nil:

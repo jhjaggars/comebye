@@ -1247,6 +1247,19 @@ function renderListRows() {
       what = "unreachable" + (h.class ? `: ${h.class}` : "") +
         (Number.isNaN(since) ? "" : ` (since ${fmtAgo(since)} ago)`);
     }
+    const wx = wakeOf(h);
+    if (wx) {
+      return `
+    <div class="agent host-down host-stopped ${esc(wx.kind)}" role="status" data-wk-host="${esc(h.name)}">
+      <span class="dot unknown"></span>
+      <div class="meta">
+        <div class="name">${esc(h.name)}</div>
+        <div class="sub">${esc(wakeWhat(wx))}</div>
+        ${wakeAction(h, wx)}
+      </div>
+      <span class="status">${esc(wakeChip(wx))}</span>
+    </div>`;
+    }
     return `
     <div class="agent host-down" role="status" title="${esc(h.error || "")}">
       <span class="dot unknown"></span>
@@ -8575,7 +8588,11 @@ function draftDirty() {
 }
 
 function peerStatusOf(h) { return h.local ? "ok" : (h.status || "connecting"); }
-function peerStatusText(h) { return ({ ok: "Connected", down: "Down", connecting: "Connecting" })[peerStatusOf(h)] || peerStatusOf(h); }
+function peerStatusText(h) {
+  const x = wakeOf(h);
+  if (x) return x.kind === "stopped" ? "Stopped" : x.kind === "starting" ? "Starting…" : "Failed to start";
+  return ({ ok: "Connected", down: "Down", connecting: "Connecting" })[peerStatusOf(h)] || peerStatusOf(h);
+}
 
 function peerDefaultText(name) {
   const c = prs.cfg[name];
@@ -8599,7 +8616,7 @@ function renderPeersList() {
     return `<a class="pr-card${r.name === h.name ? " current" : ""}" href="${esc(peerHash(h.name))}" data-name="${esc(h.name)}">
       <span class="pr-name"><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}${h.local ? ' <span class="pr-meta">(this host)</span>' : ""}${hostNeedsSignin(h.name) ? '<span class="pr-need" role="img" aria-label="an agent here is signed out" title="An agent on this host is signed out"></span>' : ""}</span>
       <span class="pr-meta">${esc(peerStatusText(h))} · ${esc(h.version || "version unknown")}${mis} · ${h.no_agents ? "no agents here" : (h.agents || 0) + " agent" + (h.agents === 1 ? "" : "s")}</span>
-      ${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>`;
+      ${wakeOf(h) ? `<span class="pr-meta">${esc(wakeWhat(wakeOf(h)))}</span>` : ""}${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) && !phHost(h.name).adopted ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>${wakeOf(h) ? `<div class="wk-line" data-wk-for="${esc(h.name)}">${wakeAction(h, wakeOf(h))}</div>` : ""}`;
   }).join("");
   const nudge = rls.data && rls.data.needs_you && rls.data.todo
     ? `<a class="pr-nudge" href="${RELEASES_HASH}">${esc(rls.data.todo.release.version)} needs you: ${esc(rls.data.needs_text || "see the Releases tab")} →</a>` : "";
@@ -8884,7 +8901,9 @@ function renderPeerView() {
     <div class="pr-sec"><h3>Host</h3><dl class="pr-kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl></div>`;
   // Keep the focus and caret in a field being typed in across a redraw.
   const ae = document.activeElement, keep = ae && view.contains(ae) && ae.id ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
-  const html = head + reach + body;
+  const wx = wakeOf(h);
+  const wsec = wx ? `<div class="pr-sec wk-sec"><h3>${esc(wakeChip(wx))}</h3><div class="pr-note">${esc(wakeWhat(wx))}</div>${wakeAction(h, wx)}</div>` : "";
+  const html = head + wsec + reach + body;
   if (view._html === html) return;
   view._html = html;
   const typed = document.getElementById("si-code"), typedV = typed && view.contains(typed) ? typed.value : "";
@@ -9285,13 +9304,16 @@ async function loadProvHosts(force) {
   try {
     ph.data = await api("/api/provision/hosts" + (force ? "?refresh=1" : ""), { timeout: 120000 });
     ph.err = "";
+    wk.wakes = ph.data.wakes || {};
+    if (Object.values(wk.wakes).some((w) => w.state === "starting")) wakeStartPoll(); // a wake begun elsewhere, or before a reload
   } catch (e) { ph.err = e.message || "failed"; }
   ph.loading = false;
-  if (prs.route) renderPeers();
+  wakeRedraw();
 }
 
 function phSpendText(h) {
   const sp = h.spend || {};
+  if (h.adopted) return "spend n/a (made with the worker tool)";
   if (h.kind === "openshell") return h.state === "destroyed" ? "not priced" : "not priced (sandbox)";
   if (h.state === "destroyed") return `final bill ≈ ${phMoney(sp.usd)}`;
   return `≈ ${phMoney(sp.usd)} so far`;
@@ -9309,7 +9331,7 @@ function phRow(h) {
     : "";
   const fail = h.destroy_failed ? `<p class="pz-note warn" role="alert">The last destroy did not finish: ${esc(h.destroy_failed)}</p>` : "";
   const dest = ph.dest && ph.dest.name === h.name ? phDestroyPanel(h) : "";
-  const btn = live && h.state !== "destroying" && !dest ? `<button type="button" class="btn danger" data-ph-destroy="${escAttr(h.name)}">Destroy…</button>` : "";
+  const btn = live && h.state !== "destroying" && !dest && !h.adopted ? `<button type="button" class="btn danger" data-ph-destroy="${escAttr(h.name)}">Destroy…</button>` : "";
   return `<li class="ph-row" data-ph="${escAttr(h.name)}"><div class="ph-line"><span class="ph-name">${esc(h.name)}</span><span class="ph-chip ${esc(h.state)}">${esc(h.state)}</span>
     <span class="ph-spend">${esc(phSpendText(h))}</span></div>
     <div class="ph-meta">${esc(what)}${esc(burn)}${h.price_from_cloud || h.kind === "openshell" ? "" : " · price estimated"}</div>
@@ -9410,6 +9432,96 @@ function initProvHosts() {
     else if (t.id === "ph-lose") ph.dest.lose = t.checked;
   });
 }
+
+/* ---------- Stopped workers: a Start button (issue #66) ---------- */
+//
+// A worker that powered itself off is a provisioned host the cloud says is
+// STOPPED: not a dead network. The hub knows it from the provisioners' look at
+// their hosts (ph.data) and keeps a wake book (starting, up, failed) with the
+// tool's own step line. Start asks the node that can start it; the page reads
+// GET /api/provision/wake every moment or two until the host is up. A host
+// stopped at its budget cap asks first: starting it again costs money.
+const wk = { wakes: {}, confirm: "", busy: {}, err: {}, timer: null, polling: false };
+
+// wakeOf says what the hub knows of a peer that is not up: a stopped worker, one
+// being started, or one that failed to start. null: an ordinary host.
+function wakeOf(h) {
+  if (!h || h.local || peerStatusOf(h) === "ok") return null;
+  const w = wk.wakes[h.name], p = phHost(h.name);
+  if (w && w.state === "starting") return { kind: "starting", step: w.step || "starting", w, p };
+  if (!p || p.state !== "stopped") return null;
+  if (w && w.state === "failed") return { kind: "failed", reason: w.reason || "it did not start", w, p };
+  return { kind: "stopped", w, p };
+}
+
+function wakeWhat(x) {
+  const p = x.p || {};
+  const bits = [p.provider || (p.kind && p.kind !== "openshell" ? p.kind : ""), p.type];
+  if (x.kind === "stopped") return `${p.cap_stopped ? "stopped at its budget cap " + pzAge(p.cap_stopped) : "idle off" + (p.stopped_at ? " " + pzAge(p.stopped_at) : "")}${bits.filter(Boolean).length ? " · " + bits.filter(Boolean).join(" · ") : ""}`;
+  if (x.kind === "starting") return x.step;
+  return `failed to start: ${x.reason}`;
+}
+
+function wakeChip(x) { return x.kind === "stopped" ? (x.p && x.p.cap_stopped ? "stopped: cap" : "stopped") : x.kind === "starting" ? "starting…" : "failed to start"; }
+
+// The button (or the confirmation) for one host.
+function wakeAction(h, x) {
+  const n = escAttr(h.name);
+  if (x.kind === "starting") return `<div class="wk-prog" role="status"><span class="wk-spin" aria-hidden="true"></span><span>${esc(x.step)}</span></div>`;
+  if (wk.confirm === h.name) {
+    const p = x.p || {}, cap = p.cap_stopped ? `stopped at its $${(p.budget_cap_usd || 0).toFixed(2)} budget cap, with about ${phMoney((p.spend || {}).usd)} spent` : "due to be destroyed";
+    return `<div class="wk-confirm" role="alertdialog" aria-label="Start ${n}"><p class="pz-note warn">${esc(h.name)} was ${esc(cap)}. Starting it again costs more${p.cap_stopped ? ", and the cap will stop it again" : ""}. Start it anyway?</p>
+      <div class="wk-acts"><button type="button" class="btn" data-wk-no="1">Cancel</button><button type="button" class="btn primary" data-wk-yes="${n}">Start anyway</button></div></div>`;
+  }
+  const err = wk.err[h.name] ? `<p class="pz-note warn" role="alert">${esc(wk.err[h.name])}</p>` : "";
+  return `${err}<button type="button" class="btn wk-start" data-wk-start="${n}"${wk.busy[h.name] ? " disabled" : ""}>${wk.busy[h.name] ? "Starting…" : x.kind === "failed" ? "Start again" : "Start"}</button>`;
+}
+
+function wakeStartPoll() { if (!wk.timer) wk.timer = setInterval(wakePoll, 1500); }
+async function wakePoll() {
+  if (wk.polling) return;
+  wk.polling = true;
+  try {
+    const d = await api("/api/provision/wake", { timeout: 20000 });
+    wk.wakes = d.wakes || {};
+    if (!Object.values(wk.wakes).some((w) => w.state === "starting")) {
+      clearInterval(wk.timer); wk.timer = null;
+      wk.polling = false;
+      await loadProvHosts(true);
+    }
+  } catch (e) { /* the next tick tries again */ }
+  wk.polling = false;
+  wakeRedraw();
+}
+
+function wakeRedraw() {
+  if (typeof renderList === "function") renderList();
+  if (prs.route) renderPeers();
+}
+
+async function wakeStart(name, confirmed) {
+  const p = phHost(name);
+  if (!confirmed && p && (p.cap_stopped || (p.destroy_due && Date.parse(p.destroy_due) <= Date.now()))) { wk.confirm = name; wakeRedraw(); return; }
+  wk.confirm = ""; wk.busy[name] = true; wk.err[name] = ""; wakeRedraw();
+  try {
+    const d = await api(`/api/provision/hosts/${encodeURIComponent(name)}/start`, { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: (p || {}).via || "", confirm_cap: !!confirmed }), timeout: 60000 });
+    if (d.wake) wk.wakes[name] = d.wake;
+    wakeStartPoll();
+  } catch (e) {
+    if (e.code === "needs_confirm") wk.confirm = name; else wk.err[name] = e.message || "failed";
+  }
+  wk.busy[name] = false;
+  wakeRedraw();
+}
+
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest && ev.target.closest("[data-wk-start],[data-wk-yes],[data-wk-no]");
+  if (!b || b.disabled) return;
+  ev.preventDefault(); ev.stopPropagation();
+  if (b.dataset.wkStart) wakeStart(b.dataset.wkStart, false);
+  else if (b.dataset.wkYes) wakeStart(b.dataset.wkYes, true);
+  else { wk.confirm = ""; wakeRedraw(); }
+}, true);
 
 /* ---------- Add host: the wizard (Peers → Prices → Add host…) ---------- */
 //

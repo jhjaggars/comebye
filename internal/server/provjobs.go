@@ -48,7 +48,10 @@ const (
 	jobCleaned     = "cleaned"
 )
 
-const opDestroy = "destroy"
+const (
+	opDestroy = "destroy"
+	opStart   = "start"
+)
 
 var keyRe = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 var jobIDRe = regexp.MustCompile(`^pj_[0-9a-f]{16}$`)
@@ -60,7 +63,7 @@ type pjob struct {
 	Spec    provision.Spec   `json:"spec"`
 	Region  string           `json:"region,omitempty"`
 	Dry     bool             `json:"dry_run"`
-	Op      string           `json:"op,omitempty"` // "" or create: build a host; destroy: remove one
+	Op      string           `json:"op,omitempty"` // "" or create: build a host; destroy: remove one; start: power a stopped one on
 	Cost    *provision.Cost  `json:"cost,omitempty"`
 	Destroy *destroyReq      `json:"destroy,omitempty"`
 	State   string           `json:"state"`
@@ -231,6 +234,8 @@ func (m *provJobs) again(tool *provision.Tool, id string) (*pjob, error) {
 		return nil, errors.New("only a failed or interrupted job can be retried")
 	case j.Op == opDestroy:
 		return nil, errors.New("a destroy is asked for again from the host, not retried")
+	case j.Op == opStart:
+		return nil, errors.New("a start is asked for again from the host (Start again), not retried")
 	}
 	j.State, j.Class, j.Zone, j.Msg, j.Ended = jobRunning, "", "", "", time.Time{}
 	j.Attempt++
@@ -259,6 +264,8 @@ func (m *provJobs) cleanup(tool *provision.Tool, id string) (*pjob, error) {
 		return nil, errors.New("only a failed or interrupted job can be cleaned up")
 	case j.Op == opDestroy:
 		return nil, errors.New("a destroy has nothing to clean up")
+	case j.Op == opStart:
+		return nil, errors.New("a start has nothing to clean up")
 	}
 	if j.Dry {
 		j.Next++
@@ -307,6 +314,8 @@ func (m *provJobs) destroy(tool *provision.Tool, name string, req destroyReq) (*
 		return nil, errBusy
 	case h.Destroyed != nil:
 		return nil, errors.New("this host is already destroyed")
+	case h.Adopted:
+		return nil, errors.New("this host was made with the worker tool, not from the app: destroy it with the tool")
 	}
 	j := &pjob{ID: newJobID(), Key: "d-" + newJobID(), Spec: h.Spec, Region: h.Region, Op: opDestroy, Destroy: &req, Dry: false, State: jobRunning, Attempt: 1, Started: m.now()}
 	m.jobs[j.ID] = j
@@ -320,6 +329,60 @@ func (m *provJobs) destroy(tool *provision.Tool, name string, req destroyReq) (*
 	return j, nil
 }
 
+var errNeedsConfirm = errors.New("needs confirm")
+
+// errNotStopped is a start asked of a host the cloud does not say is stopped.
+type errNotStopped struct{ state string }
+
+func (e *errNotStopped) Error() string {
+	return "the cloud says this host is " + e.state + ", not stopped"
+}
+
+// startHost starts a stopped host this node knows (built from the app or
+// adopted). One job at a time. A host the budget cap stopped, or one due to be
+// destroyed, starts only when the caller has confirmed that.
+func (m *provJobs) startHost(tool *provision.Tool, name string, confirmCap bool) (*pjob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h, ok := m.book.Get(name)
+	switch {
+	case !ok:
+		return nil, os.ErrNotExist
+	case h.Destroyed != nil || h.Destroying != "":
+		return nil, errors.New("this host is destroyed or being destroyed")
+	case m.busy != "":
+		return nil, errBusy
+	case h.State != "STOPPED":
+		return nil, &errNotStopped{state: stateWord(h.State)}
+	}
+	if at, ok := h.DestroyDueAt(); (h.CapStopped != nil || ok && !m.now().Before(at)) && !confirmCap {
+		return nil, errNeedsConfirm
+	}
+	j := &pjob{ID: newJobID(), Key: "s-" + newJobID(), Spec: h.Spec, Region: h.Region, Op: opStart, Dry: false, State: jobRunning, Attempt: 1, Started: m.now()}
+	m.jobs[j.ID] = j
+	m.pruneLocked()
+	m.busy = j.ID
+	m.saveLocked(j)
+	go m.run(tool, j, func(ctx context.Context, emit func(provision.Item)) provision.JobResult {
+		return tool.RunStart(ctx, name, emit)
+	}, jobOK)
+	return j, nil
+}
+
+func stateWord(s string) string {
+	switch s {
+	case "RUNNING":
+		return "running"
+	case "PENDING":
+		return "starting"
+	case "STOPPING":
+		return "stopping"
+	case "GONE":
+		return "gone"
+	}
+	return "in an unknown state"
+}
+
 // run executes one attempt and records how it ended; okState is the state a
 // clean exit leaves the job in.
 func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, func(provision.Item)) provision.JobResult, okState string) {
@@ -328,7 +391,7 @@ func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, fu
 		defer m.mu.Unlock()
 		j.Next++
 		it.Seq, it.Attempt = j.Next, j.Attempt
-		if j.Op != opDestroy && !j.Dry && it.Kind == "event" && (it.Stage == "instance" || it.Stage == "sandbox") && it.State == "ok" {
+		if j.Op != opDestroy && j.Op != opStart && !j.Dry && it.Kind == "event" && (it.Stage == "instance" || it.Stage == "sandbox") && it.State == "ok" {
 			// The instance exists from here on: it costs money, so it is on the books.
 			var est provision.Estimate
 			m.book.Add(j.Spec.Name, j.ID, j.Spec, j.Region, j.Cost, est)
@@ -348,6 +411,10 @@ func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, fu
 		j.State, j.Class, j.Zone, j.Msg = jobFailed, res.Class, res.Zone, res.Msg
 	}
 	switch {
+	case j.Op == opStart:
+		if res.OK { // the next look at the cloud fills in the rest
+			m.book.Update(j.Spec.Name, func(h *provision.Host) { h.State, h.StoppedAt, h.CapStopped = "RUNNING", nil, nil })
+		}
 	case j.Op == opDestroy:
 		m.book.EndDestroy(j.Spec.Name, res.OK, res.OK && !j.Destroy.DeleteDataDisk, res.Msg)
 	case okState == jobCleaned && res.OK:
@@ -578,6 +645,56 @@ func (s *Server) handlePeerJobCreate(w http.ResponseWriter, r *http.Request) {
 func dryWord(dry bool) string {
 	if dry {
 		return " (dry run)"
+	}
+	return ""
+}
+
+// handlePeerHostStart: POST /api/provisioner/host/start {name, confirm_cap}.
+func (s *Server) handlePeerHostStart(w http.ResponseWriter, r *http.Request) {
+	if !s.peerProvGuard(w, r) {
+		return
+	}
+	var q struct {
+		Name       string `json:"name"`
+		ConfirmCap bool   `json:"confirm_cap"`
+		Why        string `json:"why"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&q); err != nil || !provision.ValidName(q.Name) {
+		relErr(w, http.StatusBadRequest, "bad_request", "give the host's name")
+		return
+	}
+	// Look at the cloud first: a host that came up (or went) since the last
+	// look is not started again.
+	s.observeHosts(r.Context())
+	j, err := s.pjobs.startHost(s.cfg.Provision.Tool, q.Name, q.ConfirmCap)
+	var ns *errNotStopped
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		relErr(w, http.StatusNotFound, "no_host", "this provisioner does not know a host called "+q.Name)
+		return
+	case errors.Is(err, errBusy):
+		relErr(w, http.StatusConflict, "busy", "this provisioner is busy with another job: wait for it to finish")
+		return
+	case errors.Is(err, errNeedsConfirm):
+		relErr(w, http.StatusConflict, "needs_confirm", q.Name+" was stopped at its budget cap or is due to be destroyed: starting it needs a confirmation")
+		return
+	case errors.As(err, &ns):
+		relErr(w, http.StatusConflict, "not_stopped", oneLine(err.Error(), 200))
+		return
+	case err != nil:
+		relErr(w, http.StatusConflict, "bad_state", oneLine(err.Error(), 200))
+		return
+	}
+	s.audit(r, ledger.AuditEvent{Action: "provision.start", OK: true, Host: q.Name, Detail: "job " + j.ID + cleanWhy(q.Why)})
+	v, _ := s.pjobs.view(j.ID, 0)
+	writeJSONStatus(w, http.StatusAccepted, v)
+}
+
+func cleanWhy(w string) string {
+	if w = oneLine(provision.Text(w, 80), 80); w != "" {
+		return " (" + w + ")"
 	}
 	return ""
 }

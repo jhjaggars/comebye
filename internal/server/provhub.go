@@ -335,8 +335,8 @@ func (s *Server) hubView(j *hubJob, after int, r *http.Request) hubJobView {
 		}
 	}
 	failed := j.State == jobFailed || j.State == jobInterrupted
-	v.CanRetry = failed && j.Superseded == "" && j.Op != opDestroy
-	v.CanCleanup = failed && j.Superseded == "" && j.Op != opDestroy
+	v.CanRetry = failed && j.Superseded == "" && j.Op != opDestroy && j.Op != opStart
+	v.CanCleanup = failed && j.Superseded == "" && j.Op != opDestroy && j.Op != opStart
 	if failed && j.Class == provision.ClassSpotCapacity {
 		alt := &jobAlternatives{OnDemand: j.Spec.Spot}
 		s.prov.mu.Lock()
@@ -451,8 +451,8 @@ func parsePeerJob(b []byte) (*pjobView, bool) {
 // the node sends are decoded into the Item type only and cleaned again.
 func applyPeerJob(j *hubJob, v *pjobView) {
 	j.State, j.Attempt, j.Dry = v.State, v.Attempt, v.Dry
-	if v.Op == opDestroy {
-		j.Op = opDestroy
+	if v.Op == opDestroy || v.Op == opStart {
+		j.Op = v.Op
 	}
 	j.Class, j.Zone, j.Msg = v.Class, v.Zone, provision.Text(v.Msg, 300)
 	switch j.Class {
@@ -510,7 +510,7 @@ func (s *Server) refreshJob(ctx context.Context, j *hubJob) {
 			j.offline = ""
 			applyPeerJob(j, pv)
 			s.hjobs.saveLocked()
-			if j.Op == opDestroy && !open(j.State) {
+			if (j.Op == opDestroy || j.Op == opStart) && !open(j.State) {
 				s.prov.mu.Lock()
 				if c := s.prov.hosts[via]; c != nil {
 					c.At = time.Time{} // the host is gone (or still here): look again
@@ -559,7 +559,7 @@ func (s *Server) jobAct(w http.ResponseWriter, r *http.Request, act string) {
 		return
 	}
 	s.hjobs.mu.Lock()
-	failed := (j.State == jobFailed || j.State == jobInterrupted) && j.Op != opDestroy
+	failed := (j.State == jobFailed || j.State == jobInterrupted) && j.Op != opDestroy && j.Op != opStart
 	via, pid := j.Via, j.PeerID
 	s.hjobs.mu.Unlock()
 	if !failed {
@@ -629,7 +629,7 @@ func (s *Server) handleProvisionJobChange(w http.ResponseWriter, r *http.Request
 	}
 	s.hjobs.mu.Lock()
 	state, spec, via, region, super := j.State, j.Spec, j.Via, j.Region, j.Superseded
-	dry, isDestroy := j.Dry, j.Op == opDestroy
+	dry, isDestroy := j.Dry, j.Op == opDestroy || j.Op == opStart
 	s.hjobs.mu.Unlock()
 	if (state != jobFailed && state != jobInterrupted && state != jobCleaned) || super != "" || isDestroy {
 		relErr(w, http.StatusConflict, "bad_state", "only a failed job can be changed")

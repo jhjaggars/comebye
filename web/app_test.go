@@ -459,3 +459,28 @@ console.log(JSON.stringify(bad));
 		t.Fatalf("toolRunSummary gave the wrong answer for: %s", out)
 	}
 }
+
+// A stopped worker shows "Stopped" with a Start button (issue #66): the app
+// reads the wake book, starts through the hub's route with the CSRF token,
+// asks first for a host stopped at its budget cap, and shows progress.
+func TestAppHasAStartButtonForStoppedWorkers(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`function wakeOf\(h\)`,
+		"/api/provision/hosts/\\$\\{encodeURIComponent\\(name\\)\\}/start",
+		`confirm_cap: !!confirmed`,
+		`"/api/provision/wake"`,
+		`data-wk-start=`,
+		`Start again`,
+		`Start anyway`,
+		`wk\.wakes = ph\.data\.wakes`,
+		`!h\.adopted \? ` + "`" + `<button type="button" class="btn danger" data-ph-destroy`,
+	} {
+		if !regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js does not match %s", re)
+		}
+	}
+}

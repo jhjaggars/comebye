@@ -1,9 +1,12 @@
 package provision
 
 import (
+	"context"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -197,5 +200,83 @@ func TestParseStatus(t *testing.T) {
 	}
 	if _, err := ParseStatus([]byte(`{"v":2}`)); err == nil {
 		t.Error("v2 accepted")
+	}
+}
+
+func TestEveryManagedInstanceTheToolReportsIsAdopted(t *testing.T) {
+	dir := t.TempDir()
+	b, now := newBook(t, dir)
+	addHost(b) // w1: made from the app
+	doc := `{"v":1,"provider":"kubevirt","workers":[
+	 {"name":"w1","state":"RUNNING","type":"4cpu","managed":true,"launched_at":"` + tp(t0) + `"},
+	 {"name":"kv1","state":"STOPPED","type":"4cpu-16Gi","managed":true,"created_at":"` + tp(t0.Add(-48*time.Hour)) + `","last_stop_at":"` + tp(t0.Add(-3*time.Hour)) + `","caps":{"destroy_after_hours":1}},
+	 {"name":"other","state":"RUNNING","type":"x","managed":false}]}`
+	ws, err := ParseStatus([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = t0.Add(time.Hour)
+	b.Observe(ws)
+	kv, ok := b.Get("kv1")
+	if !ok || !kv.Adopted || kv.Provider != "kubevirt" || kv.State != "STOPPED" {
+		t.Fatalf("kv1: %+v %v", kv, ok)
+	}
+	if _, ok := b.Get("other"); ok {
+		t.Error("an instance the tool does not call managed was adopted")
+	}
+	if w1, _ := b.Get("w1"); w1.Adopted {
+		t.Error("a host made from the app was marked adopted")
+	}
+	// adopted: no price, no timers, even with a destroy-after tag long past
+	if acts := kv.Check(*now); len(acts) != 0 {
+		t.Errorf("a timer would act on an adopted host: %v", acts)
+	}
+	for _, v := range func() []HostView { v, _ := b.Views(); return v }() {
+		if v.Name == "kv1" && (!v.Adopted || v.State != "stopped" || v.Provider != "kubevirt" || v.DestroyDue != "") {
+			t.Errorf("view: %+v", v)
+		}
+	}
+	// it survives a restart of the node (a kubevirt spec is not a valid aws or gcp one)
+	b2, _ := newBook(t, dir)
+	if h, ok := b2.Get("kv1"); !ok || !h.Adopted {
+		t.Errorf("reloaded: %+v %v", h, ok)
+	}
+	// once the instance is gone from the cloud it is closed like any other
+	*now = t0.Add(5 * time.Hour)
+	b.Observe(ws[:1])
+	if h, _ := b.Get("kv1"); h.State != "GONE" {
+		t.Errorf("gone: %+v", h)
+	}
+}
+
+func TestRunStartRunsWorkerStartAndStreamsItsText(t *testing.T) {
+	bin, dir := fakeWorker(t, "echo 'rewriting the ssh config'\necho 'comebye is active' >&2\n")
+	tool := &Tool{Bin: bin, Config: "/etc/worker.conf"}
+	var msgs []string
+	var mu sync.Mutex
+	r := tool.RunStart(context.Background(), "kv1", func(it Item) { mu.Lock(); msgs = append(msgs, it.Msg); mu.Unlock() })
+	if !r.OK {
+		t.Fatalf("result: %+v", r)
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
+	if got := strings.TrimSpace(string(argv)); got != "-config /etc/worker.conf -no-prompt start kv1" {
+		t.Errorf("argv: %q", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(msgs) != 2 {
+		t.Errorf("progress lines: %v", msgs)
+	}
+	if r := tool.RunStart(context.Background(), "bad name", func(Item) {}); r.OK || r.Msg != "bad name" {
+		t.Errorf("bad name: %+v", r)
+	}
+}
+
+func TestRunStartReportsTheToolsLastLineOnFailure(t *testing.T) {
+	bin, _ := fakeWorker(t, "echo 'the instance would not start' >&2\nexit 1\n")
+	tool := &Tool{Bin: bin, Config: "/etc/worker.conf"}
+	r := tool.RunStart(context.Background(), "kv1", func(Item) {})
+	if r.OK || !strings.Contains(r.Msg, "would not start") {
+		t.Errorf("result: %+v", r)
 	}
 }

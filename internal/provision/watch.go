@@ -38,6 +38,15 @@ func (h *Host) destroyDue() (time.Time, bool) {
 	return h.StoppedAt.Add(time.Duration(hrs) * time.Hour), true
 }
 
+// DestroyDueAt is when a stopped host is due to be destroyed by its timer;
+// false for an adopted host (no timer ever acts on it) or one without a stop.
+func (h *Host) DestroyDueAt() (time.Time, bool) {
+	if h.Adopted || h.State != "STOPPED" {
+		return time.Time{}, false
+	}
+	return h.destroyDue()
+}
+
 // Action kinds a check can ask for.
 const (
 	ActWarn    = "warn80"  // record the 80% warning (the hub turns it into a to-do)
@@ -54,8 +63,8 @@ type Act struct {
 
 // Check says what is due for a host at now. It changes nothing.
 func (h *Host) Check(now time.Time) []Act {
-	if h.Destroyed != nil || h.Destroying != "" {
-		return nil
+	if h.Destroyed != nil || h.Destroying != "" || h.Adopted {
+		return nil // an adopted host has no price or cap here: no timer ever acts on it
 	}
 	var out []Act
 	capUSD := h.Cap()

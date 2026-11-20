@@ -152,6 +152,9 @@ var hostProxyOps = map[string]struct {
 	// confirmation at the hub.
 	"provision-hosts":        {proxyOp{method: http.MethodGet, query: []string{"refresh"}, timeout: 100 * time.Second}, []string{"api", "provisioner", "hosts"}, true},
 	"provision-host-destroy": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "host", "destroy"}, true},
+	// Waking a stopped worker: the provisioner starts it (the job runs on; the
+	// hub reads it with provision-job like any other).
+	"provision-host-start": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "host", "start"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

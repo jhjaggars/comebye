@@ -232,6 +232,8 @@ if want rolloutlive; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" nod
 if want provision; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provision.mjs "$out" || rc=1 ; fi
 # Slice 3: hosts built from the app, their spend, and Destroy… (the real path on, against a stand-in worker).
 if want provhosts; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provhosts.mjs "$out" || rc=1 ; fi
+# Waking a stopped worker (issue #66): Start on a worker the cloud says is stopped, with the tool's progress, against a stand-in worker tool.
+if want wake; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wake.mjs "$out" || rc=1 ; fi
 # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
 if want usage; then FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1 ; fi
 # (The "GPG is locked" item staying open over minutes is Go tests with an injected clock: internal/gpgunlock/trigger_test.go,

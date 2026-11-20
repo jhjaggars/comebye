@@ -69,6 +69,13 @@ type Host struct {
 	DestroyFailed   string     `json:"destroy_failed,omitempty"` // the last failed destroy, one line
 	DestroyFailedAt *time.Time `json:"destroy_failed_at,omitempty"`
 	NextAuto        time.Time  `json:"next_auto,omitempty"` // no timer destroy before this (after a failure)
+
+	// Adopted marks a host the tool reported as managed that this node did not
+	// build from the app (made with the worker CLI): it can be listed and
+	// started, but no price, cap or timer is known for it, so no safety timer
+	// ever acts on it and the app does not offer to destroy it.
+	Adopted  bool   `json:"adopted,omitempty"`
+	Provider string `json:"provider,omitempty"` // aws, gcp, kubevirt or openshell: the tool's own word
 }
 
 // Spend is what a host has cost so far, or in all.
@@ -146,6 +153,8 @@ type StatusWorker struct {
 	Type       string `json:"type"`
 	Mode       string `json:"mode"`
 	Managed    bool   `json:"managed"`
+	Provider   string `json:"-"` // from the status document, not per worker
+	CreatedAt  string `json:"created_at"`
 	LaunchedAt string `json:"launched_at"`
 	LastStopAt string `json:"last_stop_at"`
 	Caps       struct {
@@ -172,8 +181,9 @@ func parseT(s string) *time.Time {
 // ParseStatus decodes `status --json`: only the named fields survive.
 func ParseStatus(b []byte) ([]StatusWorker, error) {
 	var d struct {
-		V       int            `json:"v"`
-		Workers []StatusWorker `json:"workers"`
+		V        int            `json:"v"`
+		Provider string         `json:"provider"`
+		Workers  []StatusWorker `json:"workers"`
 	}
 	if err := json.Unmarshal(b, &d); err != nil {
 		return nil, fmt.Errorf("the status is not understood: %w", err)
@@ -191,11 +201,20 @@ func ParseStatus(b []byte) ([]StatusWorker, error) {
 		default:
 			w.State = "UNKNOWN"
 		}
+		w.Provider = providerWord(d.Provider)
 		if len(out) < 200 {
 			out = append(out, w)
 		}
 	}
 	return out, nil
+}
+
+func providerWord(p string) string {
+	switch p {
+	case "aws", "gcp", "kubevirt", "openshell":
+		return p
+	}
+	return ""
 }
 
 // ---- the book ----
@@ -231,7 +250,7 @@ func OpenHostBook(dir string) *HostBook {
 		return b
 	}
 	for _, h := range list {
-		if nameRe.MatchString(h.Name) && h.Spec.Validate() == nil {
+		if nameRe.MatchString(h.Name) && (h.Adopted || h.Spec.Validate() == nil) {
 			b.hosts[h.Name] = h
 		}
 	}
@@ -320,7 +339,26 @@ func (b *HostBook) Observe(ws []StatusWorker) {
 		}
 		h.apply(w, now)
 	}
+	// Every managed instance the tool reports that the book has never seen is
+	// adopted: a host made with the worker CLI is as startable as one made here.
+	for _, w := range ws {
+		if _, known := b.hosts[w.Name]; known || !w.Managed || w.State == "UNKNOWN" || len(b.hosts) >= maxHosts {
+			continue
+		}
+		b.adoptLocked(w, now)
+	}
 	b.saveLocked()
+}
+
+func (b *HostBook) adoptLocked(w StatusWorker, now time.Time) {
+	created := now
+	if t := parseT(w.CreatedAt); t != nil {
+		created = *t
+	}
+	h := &Host{Name: w.Name, Spec: Spec{Name: w.Name, Kind: w.Provider, Type: w.Type}, Created: created, State: "PENDING", LastSeen: now, Adopted: true, Provider: w.Provider}
+	h.Mode = "on_demand"
+	b.hosts[w.Name] = h
+	h.apply(w, now)
 }
 
 func closeOpen(h *Host, at time.Time) {
@@ -494,6 +532,8 @@ type HostView struct {
 	FromTag       bool    `json:"price_from_cloud"`
 	DiskUSDGBMon  float64 `json:"disk_usd_gb_month"`
 	AsOf          string  `json:"as_of"`
+	Adopted       bool    `json:"adopted,omitempty"`  // made with the worker CLI: no price, cap or timer known
+	Provider      string  `json:"provider,omitempty"` // the tool's word: aws, gcp, kubevirt, openshell
 }
 
 func rfc(t *time.Time) string {
@@ -520,7 +560,8 @@ func (h *Host) view(now time.Time) HostView {
 			v.State = "unknown"
 		}
 	}
-	if due, ok := h.destroyDue(); ok && h.State == "STOPPED" && h.Destroyed == nil {
+	v.Adopted, v.Provider = h.Adopted, h.Provider
+	if due, ok := h.destroyDue(); ok && h.State == "STOPPED" && h.Destroyed == nil && !h.Adopted {
 		v.DestroyDue = due.UTC().Format(time.RFC3339)
 	}
 	v.BudgetCapUSD = h.Cap()
@@ -623,6 +664,7 @@ func ParseHosts(b []byte) (*HostsView, error) {
 		if h.Kind != KindOpenShell && h.Kind != KindGCP {
 			h.Kind = KindAWS
 		}
+		h.Provider = providerWord(h.Provider)
 		if !regionRe.MatchString(h.Region) {
 			h.Region = ""
 		}
