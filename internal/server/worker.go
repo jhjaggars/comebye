@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jhjaggars/comebye/internal/buildout"
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/park"
 	"github.com/jhjaggars/comebye/internal/playbook"
@@ -584,6 +585,9 @@ type removeResult struct {
 	// ChatDir is the scratch directory of a "Chat about this" helper that
 	// was deleted with it.
 	ChatDir string `json:"chat_dir,omitempty"`
+	// BuildFreed is the ignored build output (bytes) that went with a removed
+	// worktree.
+	BuildFreed int64 `json:"build_freed,omitempty"`
 }
 
 // handleRemove closes a session and, if asked and safe, removes its
@@ -759,6 +763,7 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 			closedWS = wsID
 		}
 		why := s.worktreeInUse(ctx, checks, live, res.PaneID, closedWS)
+		bo := buildOutBytes(ctx, wt)
 		branch := checks.Branch
 		if branch != "" && branch == defaultBranch(ctx, checks.Repo) {
 			branch = "" // never the repository's default branch
@@ -770,6 +775,9 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 			}
 			// --force removed it even if the branch deletion failed.
 			res.WorktreeRemoved = err == nil || deleted || !dirExists(wt)
+			if res.WorktreeRemoved {
+				res.BuildFreed = bo
+			}
 			res.Discarded = res.WorktreeRemoved
 			if deleted {
 				res.BranchDeleted = branch
@@ -791,10 +799,12 @@ func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult
 			ok = why == ""
 		}
 		if ok {
+			bo := buildOutBytes(ctx, wt)
 			if err := removeWorktree(ctx, checks.Repo, wt); err != nil {
 				why = err.Error()
 			} else {
 				res.WorktreeRemoved = true
+				res.BuildFreed = bo
 				// Every commit is in the base (Removable), so its local branch
 				// is nothing left to finish: it goes with the worktree, which
 				// is the only place it was checked out (a session cannot
@@ -974,4 +984,11 @@ func hexSHA(s string) string {
 		return h[0]
 	}
 	return ""
+}
+
+// buildOutBytes is the size of the ignored build output in a worktree about to
+// be removed (git deletes it with the worktree; this is the figure reported).
+func buildOutBytes(ctx context.Context, wt string) int64 {
+	dirs, _ := buildout.Find(ctx, wt)
+	return buildout.Total(dirs)
 }

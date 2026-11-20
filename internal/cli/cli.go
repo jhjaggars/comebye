@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/jhjaggars/comebye/internal/buildout"
 	"io"
 	"net/http"
 	"net/url"
@@ -87,7 +88,7 @@ func init() {
 		{"restart", "AGENT [--force-schedule] [--login L] [--json] | --kind K --host H --all [--dry-run] [--login L] [--json]", "restart an idle agent in its own pane on the same session, keeping its flags where they can be read (claude, pi, opencode); use it after a key or config change a running agent does not pick up; --all restarts every eligible agent of one kind on one host in turn (coordinators are skipped, a refusal does not stop the rest, --dry-run only lists)", cmdRestart},
 		{"parked", "[--host H] [--all] [--json]", "the agents parked on a host (this one by default); --all includes the resumed ones, kept 30 days as history", cmdParked},
 		{"resume", "ID|NAME [--host H] [--no-note] [--login L] [--json]", "start a parked agent again: a new pane in the same worktree on its own session (claude --resume, pi --session, opencode -s), its scratchpad moved back, and a catch-up note", cmdResume},
-		{"sweep", "[--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
+		{"sweep", "[--build-output [--clear-build-output] [--host H] [--login L]] [--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"reask", "AGENT [--item N] [--json]", "ask a marked session again what is left to finish", cmdReask},
 		{"brief", "set FILE|- [--no-check] | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
@@ -1809,6 +1810,10 @@ func cmdSweep(e *Env, args []string) error {
 	idle := fs.String("idle-after", "", "also count a worker still recorded as running whose agent has been idle this long (default 30m; 0 turns it off)")
 	notify := fs.Bool("notify", false, "tell an idle coordinator the outcome (not with --dry-run)")
 	markDelivered := fs.Bool("mark-delivered", false, "also mark the research/plan/review/spike workers that reported, to discard their local commits (the user confirms each)")
+	buildOut := fs.Bool("build-output", false, "instead: list this host's worktrees with no live agent whose build output (Cargo target/, node_modules, ...) exceeds 1 GB, with sizes; deletes nothing")
+	clearBuild := fs.Bool("clear-build-output", false, "with --build-output: delete that build output (code, commits and untracked source stay)")
+	host := fs.String("host", "", "with --build-output: the host to sweep (default this one)")
+	login := fs.String("login", "", "with --build-output: the Tailscale login to act as (default $COMEBYE_LOGIN, else the first of $COMEBYE_TS_ALLOW_LOGIN)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -1819,6 +1824,12 @@ func cmdSweep(e *Env, args []string) error {
 	c, err := newClient(e)
 	if err != nil {
 		return err
+	}
+	if *clearBuild {
+		*buildOut = true
+	}
+	if *buildOut {
+		return cmdBuildSweep(e, c, *host, *login, *clearBuild, *asJSON)
 	}
 	data, err := c.raw("POST", "/api/sweep", nil, map[string]any{"dry_run": *dry, "idle_after": *idle, "notify": *notify, "mark_delivered": *markDelivered})
 	if err != nil {
@@ -3066,12 +3077,16 @@ func cmdPark(e *Env, args []string) error {
 			ID, Name, Kind, Worktree, Branch string
 			Dirty                            bool
 		} `json:"record"`
-		Scratch string `json:"scratch"`
+		Scratch    string `json:"scratch"`
+		BuildFreed int64  `json:"build_freed"`
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
 		return err
 	}
 	fmt.Fprintf(e.Stdout, "Parked %s (%s) as %s. Worktree and branch %s kept at %s.\n", r.Record.Name, r.Record.Kind, r.Record.ID, r.Record.Branch, r.Record.Worktree)
+	if r.BuildFreed > 0 {
+		fmt.Fprintf(e.Stdout, "Cleared %s of build output.\n", buildout.Human(r.BuildFreed))
+	}
 	if r.Scratch != "" {
 		fmt.Fprintf(e.Stdout, "Scratchpad: %s.\n", r.Scratch)
 	}
@@ -3470,6 +3485,70 @@ func restartAll(e *Env, kind, host string, dry, asJSON bool, login string) error
 	fmt.Fprintf(e.Stdout, "%d %s, %d refused, %d failed, %d skipped (%d %s agents on %s)\n", n, verb, r.Refused, r.Failed, r.Skipped, len(r.Results), kind, host)
 	if r.Failed > 0 {
 		return fmt.Errorf("%d agents failed to restart", r.Failed)
+	}
+	return nil
+}
+
+// cmdBuildSweep is `sweep --build-output`: the worktrees on a host with no
+// live agent whose build output exceeds 1 GB (a dry run unless clear).
+func cmdBuildSweep(e *Env, c *client, host, login string, clear, asJSON bool) error {
+	// The sweep is the user's alone: the call goes out as the user's login.
+	if c.user = peerLogin(e, login); c.user == "" {
+		return usageErr("--build-output needs the user's login: pass --login you@example.com (or set COMEBYE_LOGIN)")
+	}
+	h, err := parkedHost(c, host)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/hosts/"+url.PathEscape(h)+"/build-sweep", nil, map[string]any{"clear": clear})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Rows []struct {
+			Worktree string `json:"worktree"`
+			Parked   string `json:"parked"`
+			Bytes    int64  `json:"bytes"`
+			Cleared  bool   `json:"cleared"`
+			Error    string `json:"error"`
+			Dirs     []struct {
+				Rel   string `json:"rel"`
+				Bytes int64  `json:"bytes"`
+			} `json:"dirs"`
+		} `json:"rows"`
+		Total   int64 `json:"total_bytes"`
+		Freed   int64 `json:"freed_bytes"`
+		Skipped int   `json:"skipped_live"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	if len(r.Rows) == 0 {
+		fmt.Fprintf(e.Stdout, "No worktree on %s without a live agent holds more than 1 GB of build output (%d with a live agent left alone).\n", h, r.Skipped)
+		return nil
+	}
+	for _, row := range r.Rows {
+		note := ""
+		switch {
+		case row.Error != "":
+			note = "  (failed: " + row.Error + ")"
+		case row.Cleared:
+			note = "  (cleared)"
+		case row.Parked != "":
+			note = "  (parked: " + row.Parked + ")"
+		}
+		fmt.Fprintf(e.Stdout, "%9s  %s%s\n", buildout.Human(row.Bytes), row.Worktree, note)
+		for _, d := range row.Dirs {
+			fmt.Fprintf(e.Stdout, "%9s    %s\n", buildout.Human(d.Bytes), d.Rel)
+		}
+	}
+	if clear {
+		fmt.Fprintf(e.Stdout, "Cleared %s of build output on %s.\n", buildout.Human(r.Freed), h)
+	} else {
+		fmt.Fprintf(e.Stdout, "%s of build output on %s. Dry run: add --clear-build-output to delete it.\n", buildout.Human(r.Total), h)
 	}
 	return nil
 }

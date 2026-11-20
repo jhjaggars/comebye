@@ -319,3 +319,73 @@ func TestParkPin(t *testing.T) {
 		t.Fatalf("unknown = %d", code)
 	}
 }
+
+func TestParkClearsIgnoredBuildOutput(t *testing.T) {
+	s, _, wt, _ := parkSetup(t)
+	write := func(rel, body string) {
+		p := filepath.Join(wt, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Cargo.toml", "[package]\n")
+	write(".gitignore", "target/\n")
+	write("target/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55\n")
+	write("target/debug/big", strings.Repeat("x", 4096))
+	write("notes.txt", "untracked source stays")
+
+	// The sweep first: the agent is live, so its worktree is left alone.
+	s.cfg.WorktreeRoot = filepath.Dir(wt)
+	code, r := parkReq(t, s, "POST", "/api/build-sweep", `{"min_bytes":1}`)
+	if code != 200 || len(r["rows"].([]any)) != 0 || r["skipped_live"].(float64) != 1 {
+		t.Fatalf("sweep with a live agent = %d %v", code, r)
+	}
+
+	code, r = parkReq(t, s, "POST", "/api/park", `{"agent":"w9:p1","name":"w","dirty":true}`)
+	if code != 200 {
+		t.Fatalf("park = %d %v", code, r)
+	}
+	if r["build_freed"].(float64) < 4096 || r["record"].(map[string]any)["build_freed"].(float64) < 4096 {
+		t.Fatalf("freed not reported: %v", r)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "target")); err == nil {
+		t.Fatal("target/ was not cleared")
+	}
+	for _, keep := range []string{"notes.txt", "Cargo.toml", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(wt, keep)); err != nil {
+			t.Fatalf("%s was removed", keep)
+		}
+	}
+}
+
+func TestBuildSweepListsThenClears(t *testing.T) {
+	s, fh, wt, _ := parkSetup(t)
+	os.WriteFile(filepath.Join(wt, "Cargo.toml"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(wt, ".gitignore"), []byte("target/\n"), 0o644)
+	os.MkdirAll(filepath.Join(wt, "target"), 0o755)
+	os.WriteFile(filepath.Join(wt, "target", "CACHEDIR.TAG"), []byte("Signature: 8a477f597d28d172789f06886806bc55\n"), 0o644)
+	os.WriteFile(filepath.Join(wt, "target", "big"), []byte(strings.Repeat("x", 4096)), 0o644)
+	s.cfg.WorktreeRoot = filepath.Dir(wt)
+	fh.set(func(f *fakeLaunchHerdr) { f.agents = nil }) // nobody is live
+
+	code, r := parkReq(t, s, "POST", "/api/build-sweep", `{"min_bytes":1}`)
+	rows, _ := r["rows"].([]any)
+	if code != 200 || len(rows) != 1 || r["total_bytes"].(float64) < 4096 {
+		t.Fatalf("dry run = %d %v", code, r)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "target")); err != nil {
+		t.Fatal("a dry run deleted something")
+	}
+	// Below the 1 GB default nothing is listed.
+	if _, r := parkReq(t, s, "POST", "/api/build-sweep", `{}`); len(r["rows"].([]any)) != 0 {
+		t.Fatalf("default threshold listed %v", r)
+	}
+	code, r = parkReq(t, s, "POST", "/api/build-sweep", `{"min_bytes":1,"clear":true}`)
+	if code != 200 || r["freed_bytes"].(float64) < 4096 {
+		t.Fatalf("clear = %d %v", code, r)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "target")); err == nil {
+		t.Fatal("target/ survived the sweep")
+	}
+}

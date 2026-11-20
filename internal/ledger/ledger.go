@@ -618,6 +618,8 @@ type ParkEvent struct {
 	Event string    `json:"event"` // "parked" or "resumed"
 	At    time.Time `json:"at"`
 	Pane  string    `json:"pane,omitempty"` // the pane it left, or the one it resumed in
+	// Freed is the build output cleared at park, in bytes.
+	Freed int64 `json:"freed,omitempty"`
 }
 
 // NotePark records a park or resume on the entry that follows agentID (once per

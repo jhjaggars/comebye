@@ -55,6 +55,9 @@ type Record struct {
 	// after a few seconds, so the figure may be a floor): for the "disk cost" line.
 	WorktreeBytes int64 `json:"worktree_bytes,omitempty"`
 	SessionBytes  int64 `json:"session_bytes,omitempty"`
+	// BuildFreed is the ignored build output (Cargo target/, node_modules, ...)
+	// cleared from the worktree at park, in bytes.
+	BuildFreed int64 `json:"build_freed,omitempty"`
 	// Resume history: the record is kept after a resume as history.
 	ResumedAt   *time.Time `json:"resumed_at,omitempty"`
 	ResumedPane string     `json:"resumed_pane,omitempty"`
