@@ -22,6 +22,13 @@ func (e *env) wait(secs int) {
 		e.Sleep(secs)
 		return
 	}
+	if e.Ctx != nil {
+		select {
+		case <-time.After(time.Duration(secs) * time.Second):
+		case <-e.Ctx.Done():
+		}
+		return
+	}
 	time.Sleep(time.Duration(secs) * time.Second)
 }
 
@@ -29,6 +36,9 @@ func (e *env) wait(secs int) {
 // attempts run out.
 func (e *env) poll(tries, every int, what string, f func() (bool, error)) error {
 	for i := 0; i < tries; i++ {
+		if e.Ctx != nil && e.Ctx.Err() != nil {
+			return fmt.Errorf("interrupted while waiting for %s", what)
+		}
 		ok, err := f()
 		if err != nil {
 			return err
@@ -311,12 +321,22 @@ func (e *env) connectVM(ctx context.Context, name string) error {
 		return err
 	}
 	e.printf("  host key verified through the %s API for %s\n", pv.Kind(), ip)
+	var lastErr error
 	err = e.poll(60, 5, "ssh", func() (bool, error) {
-		_, err := e.sh(ctx, name, "true", nil)
-		return err == nil, nil
+		_, lastErr = e.sh(ctx, name, "true", nil)
+		if ctx.Err() != nil {
+			return false, fmt.Errorf("interrupted while waiting for ssh")
+		}
+		return lastErr == nil, nil
 	})
 	if err != nil {
-		return fmt.Errorf("%w\n%s", err, sshTimeoutHint(e.Cfg))
+		if ctx.Err() != nil || e.Ctx != nil && e.Ctx.Err() != nil {
+			return err
+		}
+		if lastErr != nil {
+			err = fmt.Errorf("%w (last try: %s)", err, firstLine(lastErr.Error()))
+		}
+		return fmt.Errorf("%w\n%s", err, sshTimeoutHint(e.Cfg, name))
 	}
 	return nil
 }
@@ -325,7 +345,12 @@ func (e *env) connectVM(ctx context.Context, name string) error {
 // running with a verified host key: the firewall admits ssh only from
 // ssh_source_cidr, and a home or office address changes. The rule is made
 // once and not rewritten from the config, so the fix has two parts.
-func sshTimeoutHint(c *Config) string {
+func sshTimeoutHint(c *Config, name string) string {
+	if c.Provider == "kubevirt" {
+		return fmt.Sprintf("the VM is running with the pinned host key, but ssh through `virtctl port-forward` did not answer: the guest is probably not up on the network.\n"+
+			"  look at its console: kubectl -n %s logs $(kubectl -n %s get pod -l vm.kubevirt.io/name=%s -o name) -c guest-console-log | tail -40\n"+
+			"  and at the pod's view of the guest: kubectl -n %s exec <virt-launcher pod> -c compute -- ip neigh   (10.0.2.2 FAILED = the guest never took its address)", c.KubeNamespace, c.KubeNamespace, name, c.KubeNamespace)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "the VM is running, but ssh did not answer. The firewall admits ssh only from ssh_source_cidr = %s.\n", c.SSHSourceCIDR)
 	b.WriteString("If your public IP changed since create, find the new one (curl -s https://checkip.amazonaws.com), then\n")

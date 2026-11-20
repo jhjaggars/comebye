@@ -918,7 +918,7 @@ func TestSSHTimeoutNamesTheSourceCIDR(t *testing.T) {
 
 func TestSSHTimeoutHintGCE(t *testing.T) {
 	c := testCfg(t)
-	h := sshTimeoutHint(c)
+	h := sshTimeoutHint(c, "w1")
 	if !strings.Contains(h, "203.0.113.7/32") || !strings.Contains(h, "gcloud compute firewall-rules update "+c.Network+"-ssh --source-ranges=<new-ip>/32") {
 		t.Errorf("gce hint:\n%s", h)
 	}

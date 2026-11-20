@@ -494,6 +494,8 @@ homelab repo's `k3s-manifests/` and are not made by this tool.
 - **ssh goes through `virtctl port-forward`**: the worker's private `ssh_config` has
   `ProxyCommand virtctl port-forward -n NAMESPACE --stdio=true vmi/NAME 22`; the namespace admits
   only virt-api on tcp/22.
+- **The guest's MAC is pinned** (a locally administered one derived from the name) and its network config is DHCP on `en*` with no MAC: KubeVirt otherwise picks a new random MAC at every start, and cloud-init's first-boot config matched the old one, so the guest came back with no address.
+- **Ctrl-C and SIGTERM** end `create`, `start` and `login` at once; the ssh process and its `virtctl port-forward` are killed with it.
 - **`stop`/`start`** set the run strategy (`Halted`, then `RerunOnFailure` again) and wait.
   **`destroy`** deletes the VM (its boot disk goes with it) and the Secret; the data DataVolume
   stays unless `--delete-data-disk`. Every change first checks the `managed-by=comebye-worker`

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -41,8 +42,23 @@ func runStream(ctx context.Context, r Runner, name string, args []string, w io.W
 
 type osRunner struct{}
 
+// killGroup makes a cancelled command end together with what it started: ssh
+// runs `virtctl port-forward` as its ProxyCommand, and that must not outlive
+// it. The command gets its own process group and the cancel signals the group.
+func killGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = 3 * time.Second
+}
+
 func (osRunner) RunStream(ctx context.Context, name string, args []string, stdout io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...)
+	killGroup(cmd)
 	var errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = stdout, &errb
 	if err := cmd.Run(); err != nil {
@@ -53,6 +69,7 @@ func (osRunner) RunStream(ctx context.Context, name string, args []string, stdou
 
 func (osRunner) Run(ctx context.Context, name string, args []string, stdin []byte) (string, string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	killGroup(cmd)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if stdin != nil {
@@ -68,6 +85,9 @@ func (osRunner) Run(ctx context.Context, name string, args []string, stdin []byt
 func (osRunner) Interactive(ctx context.Context, name string, args []string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// Not a new process group: it owns the terminal. A Ctrl-C reaches the
+	// whole foreground group, and ssh ends its own ProxyCommand.
+	cmd.WaitDelay = 3 * time.Second
 	return cmd.Run()
 }
 
@@ -106,7 +126,10 @@ type env struct {
 	DryRun   bool
 	HTTP     httpDoer
 	Sleep    func(d int) // seconds
-	Getenv   func(string) string
+	// Ctx is the program's context (cancelled by SIGINT and SIGTERM): the
+	// polling loops stop on it instead of running out their attempts.
+	Ctx    context.Context
+	Getenv func(string) string
 	// ReadSecret reads one hidden line from the terminal (tests replace it).
 	ReadSecret func(prompt string) (string, error)
 

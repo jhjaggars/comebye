@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -516,6 +517,17 @@ func (p *kubevirtProv) imageSource() string {
 
 // ---- pure renderers ----
 
+// networkData is the guest's network config: DHCP on whatever the NIC is
+// called, with no MAC in it.
+const networkData = "version: 2\nethernets:\n  nic:\n    match:\n      name: \"en*\"\n    dhcp4: true\n"
+
+// guestMAC is a locally administered MAC derived from the worker's name, so
+// it is the same at every start.
+func guestMAC(name string) string {
+	h := sha256.Sum256([]byte("comebye-worker/" + name))
+	return fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x", h[0], h[1], h[2], h[3], h[4])
+}
+
 func dataDVName(name string) string    { return name + "-data" }
 func bootDVName(name string) string    { return name + "-boot" }
 func cloudInitName(name string) string { return name + "-cloudinit" }
@@ -587,7 +599,7 @@ func renderSecret(c *Config, name, pub, hostPriv, hostPub string) map[string]any
 		// The public half of the pinned host key rides on the Secret so a later
 		// connect (after a stop, or from another shell) pins the same key.
 		"metadata":   map[string]any{"name": cloudInitName(name), "namespace": c.KubeNamespace, "labels": kubeLabels(name), "annotations": map[string]any{hostKeyAnno: hostPub}},
-		"stringData": map[string]any{"userdata": renderCloudInit(c, name, pub, hostPriv, hostPub)},
+		"stringData": map[string]any{"userdata": renderCloudInit(c, name, pub, hostPriv, hostPub), "networkdata": networkData},
 	}
 }
 
@@ -638,14 +650,17 @@ func renderVM(c *Config, name, node string) map[string]any {
 								disk("data", map[string]any{"serial": dataDiskSerial}),
 								disk("cloudinit", nil),
 							},
-							"interfaces": []any{map[string]any{"name": "default", "masquerade": map[string]any{}}},
+							// A fixed MAC: cloud-init's first-boot network config matches the NIC by
+							// MAC, and KubeVirt picks a new random one at every start, which left the
+							// guest with no address after a stop and start.
+							"interfaces": []any{map[string]any{"name": "default", "masquerade": map[string]any{}, "macAddress": guestMAC(name)}},
 						},
 					},
 					"networks": []any{map[string]any{"name": "default", "pod": map[string]any{}}},
 					"volumes": []any{
 						map[string]any{"name": "boot", "dataVolume": map[string]any{"name": bootDVName(name)}},
 						map[string]any{"name": "data", "dataVolume": map[string]any{"name": dataDVName(name)}},
-						map[string]any{"name": "cloudinit", "cloudInitNoCloud": map[string]any{"secretRef": map[string]any{"name": cloudInitName(name)}}},
+						map[string]any{"name": "cloudinit", "cloudInitNoCloud": map[string]any{"secretRef": map[string]any{"name": cloudInitName(name)}, "networkDataSecretRef": map[string]any{"name": cloudInitName(name)}}},
 					},
 				},
 			},

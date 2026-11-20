@@ -85,6 +85,7 @@
             ],
             "interfaces": [
               {
+                "macAddress": "02:2b:86:96:19:fa",
                 "masquerade": {},
                 "name": "default"
               }
@@ -126,6 +127,9 @@
           },
           {
             "cloudInitNoCloud": {
+              "networkDataSecretRef": {
+                "name": "w1-cloudinit"
+              },
               "secretRef": {
                 "name": "w1-cloudinit"
               }

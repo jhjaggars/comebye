@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -246,8 +247,9 @@ func run(args []string, e *env) int {
 		return 2
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	e.Ctx = ctx
 	name := ""
 	if len(pos) > 0 {
 		name = pos[0]

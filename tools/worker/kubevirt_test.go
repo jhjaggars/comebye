@@ -821,3 +821,63 @@ func TestKubeVirtInstancesAndList(t *testing.T) {
 		t.Errorf("%+v %v", is, err)
 	}
 }
+
+func TestKubeVirtGuestNetworkSurvivesRestart(t *testing.T) {
+	c := kubeCfg(t)
+	b, _ := json.Marshal(renderVM(c, "kv1", "rozalin"))
+	m := guestMAC("kv1")
+	if !strings.Contains(string(b), `"macAddress":"`+m+`"`) || guestMAC("kv1") != m || guestMAC("kv2") == m || !strings.HasPrefix(m, "02:") {
+		t.Errorf("MAC %s not pinned or not per name: %s", m, b)
+	}
+	if !strings.Contains(string(b), `"networkDataSecretRef":{"name":"kv1-cloudinit"}`) {
+		t.Error("no network data")
+	}
+	sec, _ := json.Marshal(renderSecret(c, "kv1", fakePub, "P", "ssh-ed25519 AAAA"))
+	if !strings.Contains(string(sec), `"networkdata":"version: 2`) || strings.Contains(string(sec), "macaddress") {
+		t.Errorf("network data: %s", sec)
+	}
+}
+
+// A cancelled context ends the wait for ssh at once and says why, instead of
+// running out the 60 attempts (found live: Ctrl-C did nothing).
+func TestKubeVirtConnectStopsOnInterrupt(t *testing.T) {
+	w := newLiveWorld()
+	e, r := liveEnv(t, w)
+	e.prov().Create(context.Background(), "kv1", fakePub)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.Ctx = ctx
+	sshTries := 0
+	base := r.handle
+	r.handle = func(c call, f *fakeRunner) (string, string, error) {
+		if c.name == "ssh" {
+			sshTries++
+			if sshTries == 2 {
+				cancel()
+			}
+			return "", "Internal error occurred: dialing VM: no route to host", errors.New("exit 255")
+		}
+		return base(c, f)
+	}
+	err := e.connect(ctx, "kv1")
+	if err == nil || !strings.Contains(err.Error(), "interrupted") || sshTries > 3 {
+		t.Errorf("err %v after %d tries", err, sshTries)
+	}
+}
+
+func TestKubeVirtSSHTimeoutMessage(t *testing.T) {
+	w := newLiveWorld()
+	e, r := liveEnv(t, w)
+	e.Sleep = func(int) {}
+	e.prov().Create(context.Background(), "kv1", fakePub)
+	base := r.handle
+	r.handle = func(c call, f *fakeRunner) (string, string, error) {
+		if c.name == "ssh" {
+			return "", "Internal error occurred: dialing VM: dial tcp 10.42.4.246:22: connect: no route to host", errors.New("ssh: exit 255")
+		}
+		return base(c, f)
+	}
+	err := e.connect(context.Background(), "kv1")
+	if err == nil || !strings.Contains(err.Error(), "guest-console-log") || !strings.Contains(err.Error(), "last try") || strings.Contains(err.Error(), "firewall") {
+		t.Errorf("%v", err)
+	}
+}
