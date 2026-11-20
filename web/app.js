@@ -416,6 +416,7 @@ function setAgents(d) {
     if (state.stoppedOpen && agentById(state.selected)) { state.stoppedOpen = false; openDetail(state.selected); }
     renderWakeBanner();
   }
+  launchHostSync(); // the host picked in the launch sheet joined the hub: its folders load
 }
 
 function fmtTime(iso) {
@@ -9552,12 +9553,18 @@ async function wakePoll() {
   wakeRedraw();
 }
 
+// launchHostSync: the picked host of the launch sheet came up (its folders load) or is still stopped (the note follows the wake).
+function launchHostSync() {
+  if (!launch.open || !launch.host) return;
+  if (!launch.opts && !launchHostStopped(launch.host) && (hostStatus(launch.host) || {}).status === "ok" && $("ln-list").querySelector("[data-wk-launch]")) setLaunchHost(launch.host);
+  else if (launchHostStopped(launch.host)) renderLaunchStopped(launch.host);
+}
+
 function wakeRedraw() {
   if (launch.open) {
     // The launch picker: tags follow the wake, and a host that came up loads its folders.
     renderLaunchHosts();
-    if (launch.host && !launch.opts && !launchHostStopped(launch.host) && (hostStatus(launch.host) || {}).status === "ok" && $("ln-list").querySelector("[data-wk-launch]")) setLaunchHost(launch.host);
-    else if (launchHostStopped(launch.host)) renderLaunchStopped(launch.host);
+    launchHostSync();
   }
   if (state.selected && !agentById(state.selected) && (ph.data || ph.asking)) renderDetail(); // a session of a host that is down: stopped, or not
   renderWakeBanner();
