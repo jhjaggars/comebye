@@ -492,7 +492,7 @@ homelab repo's `k3s-manifests/` and are not made by this tool.
   public half on the Secret as an annotation. `known_hosts` is written from that, with
   `StrictHostKeyChecking yes`.
 - **ssh goes through `virtctl port-forward`**: the worker's private `ssh_config` has
-  `ProxyCommand virtctl port-forward --stdio=true vmi/NAME.NAMESPACE 22`; the namespace admits
+  `ProxyCommand virtctl port-forward -n NAMESPACE --stdio=true vmi/NAME 22`; the namespace admits
   only virt-api on tcp/22.
 - **`stop`/`start`** set the run strategy (`Halted`, then `RerunOnFailure` again) and wait.
   **`destroy`** deletes the VM (its boot disk goes with it) and the Secret; the data DataVolume
