@@ -261,12 +261,12 @@ func TestSweepLoopBoardLineAndLog(t *testing.T) {
 
 func TestSweepLoopStateSurvivesARestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sweeploop.json")
-	l := openSweepLoop(path)
+	l := openSweepLoop(path, false)
 	l.mu.Lock()
 	l.st = sweepLoopState{LastRunAt: time.Now().UTC().Truncate(time.Second), Runs: 3, LastMarked: 2, TodoID: "t0123456789", TodoAt: time.Now().UTC().Truncate(time.Second)}
 	l.saveLocked()
 	l.mu.Unlock()
-	got := openSweepLoop(path).get()
+	got := openSweepLoop(path, false).get()
 	if got.Runs != 3 || got.LastMarked != 2 || got.TodoID != "t0123456789" || got.TodoAt.IsZero() {
 		t.Fatalf("reloaded = %+v", got)
 	}

@@ -471,7 +471,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.typed = openTyped(typedPath(cfg.StateDir))
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.autoRemove = cfg.AutoRemove
-			s.sweeps = openSweepLoop(filepath.Join(cfg.StateDir, "sweeploop.json"))
+			s.sweeps = openSweepLoop(filepath.Join(cfg.StateDir, "sweeploop.json"), cfg.TestMode)
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
 			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
 				log.Printf("brief schedule: %v (starting with none)", err)

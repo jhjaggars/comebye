@@ -139,10 +139,16 @@ type sweepLoop struct {
 	path    string // "" keeps it in memory
 	st      sweepLoopState
 	running bool
+	// tick, grace and look are sweepLoopTick, sweepTodoGrace and sweepTodoLook;
+	// the dev server (-test-mode) shortens them so a browser run sees it all.
+	tick, grace, look time.Duration
 }
 
-func openSweepLoop(path string) *sweepLoop {
-	l := &sweepLoop{path: path}
+func openSweepLoop(path string, testMode bool) *sweepLoop {
+	l := &sweepLoop{path: path, tick: sweepLoopTick, grace: sweepTodoGrace, look: sweepTodoLook}
+	if testMode {
+		l.tick, l.grace, l.look = time.Second, 3*time.Second, 2*time.Second
+	}
 	if path == "" {
 		return l
 	}
@@ -198,7 +204,7 @@ func (s *Server) RunSweepLoop(ctx context.Context) {
 	if s.ledger == nil || s.sweeps == nil {
 		return
 	}
-	tick := time.NewTicker(sweepLoopTick)
+	tick := time.NewTicker(s.sweeps.tick)
 	defer tick.Stop()
 	for {
 		select {
@@ -280,7 +286,7 @@ func (s *Server) sweepTodoPrefilter(now time.Time) []*removal {
 	var out []*removal
 	for _, it := range s.marked() {
 		m := it.Mark
-		if it.Coordinator || m.Discard || now.Sub(m.At) < sweepTodoGrace {
+		if it.Coordinator || m.Discard || now.Sub(m.At) < s.sweeps.grace {
 			continue
 		}
 		if m.Ask != nil && (m.Ask.State == ledger.AskAsking || m.Ask.State == ledger.AskUnsafe) {
@@ -337,7 +343,9 @@ func sweepTodoText(ready []*removal) (question, body string) {
 		if it.Repo != "" || it.Branch != "" {
 			line += " · " + mdSafe(strings.Trim(it.Repo+" "+it.Branch, " "))
 		}
-		if r := strings.TrimSpace(strings.TrimPrefix(it.Mark.Reason, "Sweep: ")); r != "" {
+		// A sweep's reason is the checks the text above already names; a
+		// person's or a coordinator's is worth showing.
+		if r := strings.TrimSpace(it.Mark.Reason); r != "" && !strings.HasPrefix(r, "Sweep: ") {
 			line += ": " + mdSafe(r)
 		}
 		b.WriteString(oneLine(line, 240) + "\n")
@@ -369,7 +377,7 @@ func (s *Server) sweepTodoStep(ctx context.Context, now time.Time, forced bool) 
 	if !have && now.Sub(st.TodoAt) < sweepTodoEvery {
 		return // filed a day ago or less, and the user dealt with it: one a day
 	}
-	if !forced && now.Sub(st.TodoLook) < sweepTodoLook {
+	if !forced && now.Sub(st.TodoLook) < l.look {
 		return
 	}
 	l.mu.Lock()
