@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,5 +114,33 @@ func TestScratchDisabledWithoutDir(t *testing.T) {
 	s, _, _, _ := removalSetup(t)
 	if w := do(s, "POST", "/api/scratch", nil, `{}`); w.Code != 403 {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+func TestRemoveReportsTheBuildOutputThatWentWithTheWorktree(t *testing.T) {
+	s, _, repo, wt := removalSetup(t)
+	// Ignore target/ without dirtying the worktree: exclude lives in the repo's git dir.
+	ex := filepath.Join(repo, ".git", "info", "exclude")
+	os.MkdirAll(filepath.Dir(ex), 0o755)
+	if err := os.WriteFile(ex, []byte("target/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for p, body := range map[string]string{
+		"target/CACHEDIR.TAG": "Signature: 8a477f597d28d172789f06886806bc55\n",
+		"target/debug/big":    strings.Repeat("x", 8192),
+	} {
+		full := filepath.Join(wt, p)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The CACHEDIR.TAG qualifies target/ without a Cargo.toml beside it.
+	code, r := removeReq(t, s, `{"agent":"w9:p1","name":"w","remove_worktree":true}`)
+	if code != 200 || r["worktree_removed"] != true {
+		t.Fatalf("remove = %d %v", code, r)
+	}
+	if f, _ := r["build_freed"].(float64); f < 8192 {
+		t.Fatalf("build_freed = %v, want at least 8192: %v", r["build_freed"], r)
 	}
 }
