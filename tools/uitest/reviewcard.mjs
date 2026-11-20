@@ -86,7 +86,7 @@ for (const width of [1280, 390]) {
       if (!g.src || !new RegExp(`/p/${withPic}/1$`).test(g.src)) throw new Error("frame src: " + g.src);
       if (!/what to try/i.test(g.text)) throw new Error("text: " + g.text.slice(0, 300));
       if (!/Gallery thumbnails demo/.test(g.bar || "")) throw new Error("title in the bar: " + g.bar);
-      if (g.btns.length !== 3 || !/Looks good/.test(g.btns[0].t) || !/Needs changes/.test(g.btns[1].t) || !/Chat about this/.test(g.btns[2].t)) throw new Error("buttons: " + JSON.stringify(g.btns));
+      if (g.btns.length !== 4 || g.btns[3].t.trim() !== "▾" || !/Looks good/.test(g.btns[0].t) || !/Needs changes/.test(g.btns[1].t) || !/Chat about this/.test(g.btns[2].t)) throw new Error("buttons: " + JSON.stringify(g.btns));
       if (g.btns.some((b) => b.h < 44 - 0.5)) throw new Error("buttons under 44px: " + JSON.stringify(g.btns));
       if (!/goes to|no longer running/i.test(g.text)) throw new Error("no routing line: " + g.text.slice(0, 400));
       if (!g.noThumb) throw new Error("a thumbnail next to the real Page");
