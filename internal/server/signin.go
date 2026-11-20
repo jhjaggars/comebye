@@ -23,22 +23,6 @@ import (
 
 const signinMaxBody = 1 << 10
 
-// onLocalHost runs local for this host's own name. A peer's sign-in is
-// relayed by the hub in a later step; until then it is refused.
-func (s *Server) onLocalHost(local http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		host := r.PathValue("host")
-		switch {
-		case host == s.fleet.LocalName():
-			local(w, r)
-		case s.fleet.HasPeer(host):
-			writeJSONStatus(w, http.StatusNotImplemented, map[string]string{"code": "not_relayed", "message": "sign in from that host's own Comebye for now"})
-		default:
-			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_host", "message": "no such host"})
-		}
-	}
-}
-
 func signinError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSONStatus(w, status, map[string]string{"code": code, "message": msg})
 }

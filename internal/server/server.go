@@ -638,10 +638,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/hosts/{host}/resume", s.auth(s.onHostLaunch("resume", s.handleResume)))
 	// Restart in place (restart.go): the user's alone.
 	// Sign an agent in on this host (signin.go): the user's alone. Local host only for now.
-	s.mux.HandleFunc("POST /api/hosts/{host}/signin", s.auth(s.onLocalHost(s.handleSigninStart)))
-	s.mux.HandleFunc("GET /api/hosts/{host}/signin/{id}", s.auth(s.onLocalHost(s.handleSigninGet)))
-	s.mux.HandleFunc("POST /api/hosts/{host}/signin/{id}/code", s.auth(s.onLocalHost(s.handleSigninCode)))
-	s.mux.HandleFunc("DELETE /api/hosts/{host}/signin/{id}", s.auth(s.onLocalHost(s.handleSigninCancel)))
+	// A peer's sign-in is relayed by the hub (fleet.ProxyHost, no state kept);
+	// the peer serves it on the host-less routes.
+	s.mux.HandleFunc("POST /api/signin", s.auth(s.handleSigninStart))
+	s.mux.HandleFunc("GET /api/signin/{id}", s.auth(s.handleSigninGet))
+	s.mux.HandleFunc("POST /api/signin/{id}/code", s.auth(s.handleSigninCode))
+	s.mux.HandleFunc("DELETE /api/signin/{id}", s.auth(s.handleSigninCancel))
+	s.mux.HandleFunc("POST /api/hosts/{host}/signin", s.auth(s.onHostLaunch("signin-start", s.handleSigninStart)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/signin/{id}", s.auth(s.onHostLaunch("signin-get", s.handleSigninGet)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/signin/{id}/code", s.auth(s.onHostLaunch("signin-code", s.handleSigninCode)))
+	s.mux.HandleFunc("DELETE /api/hosts/{host}/signin/{id}", s.auth(s.onHostLaunch("signin-cancel", s.handleSigninCancel)))
 	s.mux.HandleFunc("POST /api/restart", s.auth(s.handleRestart))
 	s.mux.HandleFunc("POST /api/hosts/{host}/restart", s.auth(s.onHostLaunch("restart", s.handleRestart)))
 	// Bulk: the hub restarts a host's eligible agents of one kind one by one

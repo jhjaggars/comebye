@@ -107,6 +107,9 @@ func (fp *fakePeer) serve(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/launch/dirs":
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"path":%q,"entries":[]}`, r.URL.Query().Get("path"))
+	case strings.HasPrefix(path, "/api/signin"):
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"si_1","state":"waiting_code"}`)
 	case path == "/api/launch":
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -724,5 +727,53 @@ func TestHostsReportsAHubThatHostsNoAgents(t *testing.T) {
 	}
 	if h := New(nil, "hub", nil, Options{}).Hosts(); h[0].NoAgents {
 		t.Errorf("a normal host is not no_agents")
+	}
+}
+
+func TestProxyHostSignin(t *testing.T) {
+	fp := newFakePeer(t)
+	f := New(nil, "desk", []Peer{{Name: "kube", URLs: []*url.URL{fp.url()}}}, fastOpts(nil))
+	call := func(method, op, id, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/x?evil=1", strings.NewReader(body))
+		r.SetPathValue("id", id)
+		r.Header.Set("Tailscale-User-Login", "phone@example.com")
+		r.Header.Set("Cookie", "secret=1")
+		w := httptest.NewRecorder()
+		f.ProxyHost(w, r, "kube", op)
+		return w
+	}
+	for _, c := range []struct{ method, op, id, body, path string }{
+		{"POST", "signin-start", "", `{"agent":"claude"}`, "/api/signin"},
+		{"GET", "signin-get", "si_1", "", "/api/signin/si_1"},
+		{"POST", "signin-code", "si_1", `{"code":"GOOD-CODE"}`, "/api/signin/si_1/code"},
+		{"DELETE", "signin-cancel", "si_1", "", "/api/signin/si_1"},
+	} {
+		if w := call(c.method, c.op, c.id, c.body); w.Code != 200 || !strings.Contains(w.Body.String(), "waiting_code") {
+			t.Fatalf("%s = %d %s", c.op, w.Code, w.Body)
+		}
+		got := fp.requestsTo(c.path)
+		last := got[len(got)-1]
+		if last.method != c.method || last.path != c.path || last.body != c.body || last.query != "" || last.header.Get("Cookie") != "" || last.header.Get("Tailscale-User-Login") != "" {
+			t.Errorf("%s forwarded %+v", c.op, last)
+		}
+	}
+	before := len(fp.requestsTo(""))
+	// Refused locally: a body over 1 KiB, the wrong method, a hostile or missing id.
+	if w := call("POST", "signin-code", "si_1", `{"code":"`+strings.Repeat("x", 2<<10)+`"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("oversized code: %d", w.Code)
+	}
+	if w := call("POST", "signin-start", "", `{"x":"`+strings.Repeat("x", 2<<10)+`"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("oversized start: %d", w.Code)
+	}
+	if w := call("GET", "signin-code", "si_1", ""); w.Code != http.StatusNotFound {
+		t.Errorf("GET code: %d", w.Code)
+	}
+	for _, id := range []string{"", "..", "a/b", "a%2Fb", "a?b", "a\x00b"} {
+		if w := call("GET", "signin-get", id, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("id %q: %d", id, w.Code)
+		}
+	}
+	if n := len(fp.requestsTo("")); n != before {
+		t.Errorf("refused calls reached the peer: %d requests", n-before)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -96,10 +97,17 @@ var hostProxyOps = map[string]struct {
 	"resume":      {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
 	// restart: end an agent's process and start it again in its pane (up to
 	// 20s for the exit, then the start's own wait).
-	"restart":  {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 150 * time.Second}, []string{"api", "restart"}, false},
-	"parked":   {proxyOp{method: http.MethodGet, query: []string{"all"}, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
-	"park-pin": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "park", "pin"}, false},
-	"remove":   {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
+	"restart": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 150 * time.Second}, []string{"api", "restart"}, false},
+	// Signing an agent in on a peer (the user's alone; the hub keeps no state
+	// and never logs a body, so the one-time code only passes through). {id}
+	// in a path is the session id from the request's path.
+	"signin-start":  {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 60 * time.Second}, []string{"api", "signin"}, false},
+	"signin-get":    {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "signin", "{id}"}, false},
+	"signin-code":   {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 30 * time.Second}, []string{"api", "signin", "{id}", "code"}, false},
+	"signin-cancel": {proxyOp{method: http.MethodDelete, timeout: 20 * time.Second}, []string{"api", "signin", "{id}"}, false},
+	"parked":        {proxyOp{method: http.MethodGet, query: []string{"all"}, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
+	"park-pin":      {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "park", "pin"}, false},
+	"remove":        {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
 	// The side panels: an agent's per-file diff and its documents, read on
 	// the agent's host (see the server's panel.go). Hub-only.
 	"panel-diff": {proxyOp{method: http.MethodGet, query: []string{"dir", "since"}, timeout: 40 * time.Second}, []string{"api", "panel", "diff"}, true},
@@ -204,7 +212,17 @@ func (f *Fleet) ProxyHost(w http.ResponseWriter, r *http.Request, host, op strin
 		writeJSON(w, http.StatusNotFound, "not_found", "not a proxied operation")
 		return
 	}
-	f.forward(w, r, p, spec.path, spec.proxyOp)
+	path := spec.path
+	if slices.Contains(path, "{id}") {
+		id := r.PathValue("id")
+		if !ValidTarget(id) || strings.ContainsAny(id, "/\\?#%") {
+			writeJSON(w, http.StatusBadRequest, "bad_id", "invalid id")
+			return
+		}
+		path = slices.Clone(path)
+		path[slices.Index(path, "{id}")] = id
+	}
+	f.forward(w, r, p, path, spec.proxyOp)
 }
 
 // CallHost makes one per-host API call (an op of hostProxyOps) to the peer
