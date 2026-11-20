@@ -1308,18 +1308,18 @@
     body:has(#settings:not([hidden])) #sheet-bk { z-index: calc(var(--z-screen) + 1); }
 
     /* Ready-to-remove review. */
-    #review, #switch, #mk, #fs, #pk, #ps, #rt { position: fixed; inset: 0; z-index: var(--z-screen); background: var(--bg); display: flex; flex-direction: column; }
-    #review[hidden], #switch[hidden], #mk[hidden], #fs[hidden], #pk[hidden], #ps[hidden], #rt[hidden] { display: none; }
-    #review header .back, #switch header .back, #mk header .back, #fs header .back, #pk header .back, #ps header .back, #rt header .back {
+    #review, #switch, #chatpick, #mk, #fs, #pk, #ps, #rt { position: fixed; inset: 0; z-index: var(--z-screen); background: var(--bg); display: flex; flex-direction: column; }
+    #review[hidden], #switch[hidden], #chatpick[hidden], #mk[hidden], #fs[hidden], #pk[hidden], #ps[hidden], #rt[hidden] { display: none; }
+    #review header .back, #switch header .back, #chatpick header .back, #mk header .back, #fs header .back, #pk header .back, #ps header .back, #rt header .back {
       font: inherit; font-size: var(--fs-20); line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: var(--r-10); padding: 0;
       min-width: 44px; min-height: var(--hit-44); margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #review header h2, #switch header h2, #mk header h2, #fs header h2, #pk header h2, #ps header h2, #rt header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
+    #review header h2, #switch header h2, #chatpick header h2, #mk header h2, #fs header h2, #pk header h2, #ps header h2, #rt header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
     #switch .ln-picker { margin-top: 0; }
     #switch .ln-mlist { max-height: 46vh; }
-    #review.busy .ln-status::before, #switch.busy .ln-status::before, #mk.busy .ln-status::before, #fs.busy .ln-status::before, #pk.busy .ln-status::before, #ps.busy .ln-status::before, #rt.busy .ln-status::before {
+    #review.busy .ln-status::before, #switch.busy .ln-status::before, #chatpick.busy .ln-status::before, #mk.busy .ln-status::before, #fs.busy .ln-status::before, #pk.busy .ln-status::before, #ps.busy .ln-status::before, #rt.busy .ln-status::before {
       content: ""; display: inline-block; width: 12px; height: 12px; margin-right: var(--sp-8); vertical-align: -1px;
       border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%;
       animation: spin 0.8s linear infinite;
@@ -1645,7 +1645,8 @@
     .rv-tryh { margin-top: var(--sp-8); font-size: var(--fs-12); font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
     .rv-btns { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
     .rv-btns .btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-8); }
-    .rv-btns .rv-chat { flex: 1 1 100%; }
+    .rv-btns .rv-chatrow { flex: 1 1 100%; display: flex; gap: var(--sp-8); }
+    .rv-btns .rv-chatrow .rv-chat { flex: 1 1 0; }
     .rv-btns .rv-chat[aria-busy="true"] { opacity: .55; }
     .rv-btns kbd { font: var(--fs-11) var(--ff-code); padding: 1px var(--sp-6); border: 1px solid currentColor; border-radius: var(--r-6); opacity: 0.8; }
     @media (hover: none) { .rv-btns kbd { display: none; } }
@@ -2404,6 +2405,17 @@
     .pgs-chatb { gap: var(--sp-6); }
     .pgs-chatb[aria-busy="true"] { opacity: .55; }
     .pgs-chatoff { opacity: .45; }
+    .rv-btns .rv-chatpick { flex: none; min-width: var(--hit-44); padding: 0 var(--sp-10); }
+    #chatpick .cp-hosts, #chatpick .cp-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
+    #chatpick .hf-chip { min-height: var(--hit-44); }
+    #chatpick .hf-chip small { margin-left: var(--sp-6); font-size: var(--fs-11); color: var(--muted); font-weight: 500; }
+    #chatpick .hf-chip.cp-rw small { color: var(--orange); }
+    #chatpick select.cp-model { width: 100%; min-height: var(--hit-44); font-size: var(--fs-16); }
+    #chatpick .cp-warn { margin-top: var(--sp-14); padding: var(--sp-12); border-radius: var(--r-10); border: 1px solid var(--orange); background: var(--chip-rtr); color: var(--text); font-size: var(--fs-15); line-height: 1.45; overflow-wrap: anywhere; }
+    #chatpick .ln-go.warn { background: var(--orange); border-color: var(--orange); color: var(--on-orange, var(--bg)); }
+    #chatpick .cp-warn[hidden] { display: none; }
+    #chatpick .cp-warn b { color: var(--orange); }
+    .chip.cp-rwchip { background: var(--chip-rtr); color: var(--orange); }
     .pgs-chatl { display: none; font-size: var(--fs-14); font-weight: 600; }
     @media (min-width: 700px) { .pgs-chatb { padding: 0 var(--sp-10); } .pgs-chatl { display: inline; } }
     .pgs-focusb { display: none; }
@@ -3100,6 +3112,7 @@
       <label class="pgs-vrow" id="pgs-vrow" hidden><span>Version</span><select id="pgs-ver" aria-label="Version"></select></label>
       <button type="button" role="menuitem" id="pgs-chatmi">Chat about this</button>
       <button type="button" role="menuitem" id="pgs-chatnew">Start a new chat…</button>
+      <button type="button" role="menuitem" id="pgs-chatpick">Chat with another agent…</button>
       <button type="button" role="menuitem" id="pgs-chg" hidden>Highlight changes</button>
       <button type="button" role="menuitem" id="pgs-copy">Copy link</button>
       <a role="menuitem" class="pgs-mi" id="pgs-open" href="#" target="_blank" rel="noopener">Open in tab</a>
@@ -3302,6 +3315,32 @@
     <footer class="ln-foot">
       <div class="ln-status" id="sw-status" aria-live="polite"></div>
       <button type="button" class="btn ln-go" id="sw-go" disabled>Switch</button>
+    </footer>
+  </section>
+
+  <!-- Chat about this: pick the agent -->
+  <section id="chatpick" hidden role="dialog" aria-modal="true" aria-labelledby="cp-title">
+    <header>
+      <button type="button" class="back" id="cp-close" aria-label="Close">&#10005;</button>
+      <h2 id="cp-title">Chat about this</h2>
+    </header>
+    <div class="ln-body">
+      <div class="ln-note" id="cp-note"></div>
+      <div id="cp-hostblock">
+        <div class="ln-label" id="cp-host-label">Host</div>
+        <div class="cp-hosts" id="cp-hosts" role="group" aria-labelledby="cp-host-label"></div>
+      </div>
+      <div class="ln-label" id="cp-kind-label">Agent</div>
+      <div class="cp-kinds" id="cp-kinds" role="group" aria-labelledby="cp-kind-label"></div>
+      <div id="cp-modelblock" hidden>
+        <label class="ln-label" for="cp-model">Model <span class="ln-opt">(optional)</span></label>
+        <select id="cp-model" class="cp-model"></select>
+      </div>
+      <div class="cp-warn" id="cp-warn" role="alert" hidden></div>
+    </div>
+    <footer class="ln-foot">
+      <div class="ln-status" id="cp-status" aria-live="polite"></div>
+      <button type="button" class="btn ln-go" id="cp-go">Start chat</button>
     </footer>
   </section>
 

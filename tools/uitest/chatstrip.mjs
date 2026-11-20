@@ -29,6 +29,7 @@ async function check(name, fn) {
   try { await fn(); results.push({ name, ok: true }); console.log("ok   " + name); }
   catch (e) { results.push({ name, ok: false }); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
 }
+let p3b = null;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TITLE = "Garage failover drill: what to check before the cutover";
@@ -99,7 +100,29 @@ try {
         if (!(await page.locator("#d-chatstrip").isHidden())) throw new Error("the strip shows on a worker");
       });
 
-      await check(`review button at ${tag}: "Chat about this" is the third button, starts the Page's chat once and the answer is unchanged`, async () => {
+      await check(`not read-only at ${tag}: a helper started with the override is marked in the list and in its conversation`, async () => {
+        // The hub marks it from chats.json (unit-tested); here the agents answer says writable, and the app shows it.
+        const p3 = (await (async () => { const b = await launch({ width, height: width > 500 ? 800 : 844, dark, bypassCSP: false }); p3b = b.browser; return b.page; })());
+        await p3.route(/\/api\/pages\/[^/]+\/chat-options$/, (r) => r.fulfill({ json: { ok: true, kind: "claude" } }));
+        try {
+          await p3.goto(base + "/", { waitUntil: "load" });
+          await p3.waitForSelector(`.agent[data-id="${chatAgent.id}"]`, { state: "attached", timeout: 15000 });
+          await p3.evaluate((id) => { state.agents.find((a) => a.id === id).chat.writable = true; renderList(); }, chatAgent.id);
+          await p3.waitForSelector(`.agent[data-id="${chatAgent.id}"] .cp-rwchip`, { state: "attached", timeout: 15000 });
+          const t = (await p3.locator(`.agent[data-id="${chatAgent.id}"] .cp-rwchip`).first().textContent()).trim();
+          if (t !== "not read-only") throw new Error("chip: " + t);
+          await p3.locator(`.agent[data-id="${chatAgent.id}"]`).first().scrollIntoViewIfNeeded();
+          await p3.screenshot({ path: `${out}/chatstrip-notro-list-${width}-${dark ? "dark" : "light"}.png` });
+          await p3.locator(`.agent[data-id="${chatAgent.id}"]`).first().click();
+          await p3.evaluate((id) => { state.agents.find((a) => a.id === id).chat.writable = true; renderChatStrip(agentById(id)); }, chatAgent.id);
+          await p3.waitForSelector("#d-chatstrip .cp-rwchip", { timeout: 8000 });
+          const g = await p3.evaluate(() => { const s = document.getElementById("d-chatstrip"); return { text: s.innerText.replace(/\s+/g, " ").trim(), over: s.scrollWidth > s.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth }; });
+          if (!/not read-only/.test(g.text) || g.over) throw new Error("strip: " + JSON.stringify(g));
+          await p3.screenshot({ path: `${out}/chatstrip-notro-strip-${width}-${dark ? "dark" : "light"}.png` });
+        } finally { await p3b.close().catch(() => {}); }
+      });
+
+      await check(`review button at ${tag}: "Chat about this" is the third button (with a ▾ picker beside it), starts the Page's chat once and the answer is unchanged`, async () => {
         const mk = await (await fetch(base + "/api/todos", { method: "POST", headers: J, body: JSON.stringify({ question: `Review: failover drill ${width}`, kind: "review", no_wait: true, context: "Open the Page.", page: { id: pageId } }) })).json();
         const id = mk.todo.id;
         try {
@@ -118,7 +141,7 @@ try {
           const btn = page.locator(`#rs .td-item[data-id="${id}"] .rv-chat`);
           await btn.waitFor({ state: "visible" });
           const g = await page.evaluate((sel) => [...document.querySelectorAll(sel + " .rv-btns button")].map((b) => ({ t: b.innerText.trim(), h: b.getBoundingClientRect().height, w: b.getBoundingClientRect().width })), `#rs .td-item[data-id="${id}"]`);
-          if (g.length !== 3 || !/Looks good/.test(g[0].t) || !/Needs changes/.test(g[1].t) || g[2].t !== "💬 Chat about this") throw new Error("buttons: " + JSON.stringify(g));
+          if (g.length !== 4 || g[3].t !== "▾" || !/Looks good/.test(g[0].t) || !/Needs changes/.test(g[1].t) || g[2].t !== "💬 Chat about this") throw new Error("buttons: " + JSON.stringify(g));
           if (g.some((b) => b.h < 43.5)) throw new Error("a button is under 44px: " + JSON.stringify(g));
           await page.screenshot({ path: `${out}/chatstrip-review-${width}-${dark ? "dark" : "light"}.png` });
           posts.length = 0;
@@ -141,13 +164,12 @@ try {
           await fetch(base + `/api/todos/${id}/drop`, { method: "POST", headers: J, body: "{}" }).catch(() => {});
         }
       });
-      await check(`review button at ${tag}: for a kind with no read-only mode it is greyed with the reason, and a tap starts nothing`, async () => {
-        const { browser: b2, page: p2 } = await launch({ width, height: width > 500 ? 800 : 844, dark, bypassCSP: false }); // a fresh load: the gate is kept per load
+      await check(`review button at ${tag}: for a kind with no read-only mode the button stays on and a tap asks first, posting nothing`, async () => {
+        const { browser: b2, page: p2 } = await launch({ width, height: width > 500 ? 800 : 844, dark, bypassCSP: false }); // a fresh load: the answer is kept per load
         p2.on("request", (r) => { if (/\/chat$/.test(r.url()) && r.method() === "POST") posts.push({ url: r.url() }); });
-        const offPage = publish("uitest-chatstrip-off", "A page that cannot be chatted about " + width); // the gate is asked once per Page and kept
-        const REASON = "pi has no read-only mode, so it cannot chat about a page.";
-        const off = (r) => r.fulfill({ json: { ok: false, reason: REASON } });
-        await p2.route(/\/api\/pages\/[^/]+\/chat-options$/, off);
+        const offPage = publish("uitest-chatstrip-off", "A page whose default chat kind is pi " + width); // asked once per Page and kept
+        const opts = (r) => r.fulfill({ json: { ok: true, host: "desk", kind: "pi", needs_override: true, hosts: [{ name: "desk", local: true, ok: true, default_kind: "pi", kinds: [{ kind: "pi", read_only: "" }, { kind: "claude", read_only: "plan mode" }] }] } });
+        await p2.route(/\/api\/pages\/[^/]+\/chat-options$/, opts);
         const mk = await (await fetch(base + "/api/todos", { method: "POST", headers: J, body: JSON.stringify({ question: `Review: pi page ${width}`, kind: "review", no_wait: true, context: "Open the Page.", page: { id: offPage } }) })).json();
         const id = mk.todo.id;
         try {
@@ -159,14 +181,15 @@ try {
           if (width < 500) await p2.locator('#rs [data-rs-tab="decide"]').click();
           const btn = p2.locator(`#rs .td-item[data-id="${id}"] .rv-chat`);
           await btn.waitFor({ state: "visible" });
-          await p2.locator(`#rs .td-item[data-id="${id}"] .rv-chat[aria-disabled="true"]`).waitFor({ timeout: 5000 });
-          if ((await btn.getAttribute("title")) !== REASON) throw new Error("title: " + (await btn.getAttribute("title")));
-          await p2.screenshot({ path: `${out}/chatstrip-review-off-${width}-${dark ? "dark" : "light"}.png` });
-          posts.length = 0;
-          await btn.click({ force: true });
           await p2.waitForTimeout(500);
+          if ((await btn.getAttribute("aria-disabled")) === "true") throw new Error("the button is off");
+          if (!(await p2.locator(`#rs .td-item[data-id="${id}"] .rv-chatpick`).isVisible())) throw new Error("no picker button beside Chat");
+          await p2.screenshot({ path: `${out}/chatstrip-review-pi-${width}-${dark ? "dark" : "light"}.png` });
+          posts.length = 0;
+          await btn.click();
+          await p2.waitForSelector("#chatpick:not([hidden])", { timeout: 5000 });
+          await p2.waitForSelector("#cp-warn:not([hidden])", { timeout: 5000 });
           if (posts.length) throw new Error("a tap posted: " + JSON.stringify(posts));
-          if (!(await p2.locator("#toast").textContent()).includes("no read-only mode")) throw new Error("toast: " + (await p2.locator("#toast").textContent()));
         } finally {
           await b2.close().catch(() => {});
           await fetch(base + `/api/todos/${id}/drop`, { method: "POST", headers: J, body: "{}" }).catch(() => {});
