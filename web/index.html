@@ -2612,7 +2612,19 @@
     .agent.host-stopped .status { white-space: nowrap; }
     .agent.host-stopped.failed .status { color: var(--red); }
     .agent.host-stopped.starting .status { color: var(--orange); }
-    @media (max-width: 420px) { .wk-start { width: 100%; } .wk-acts .btn { flex: 1; } }
+    @media (max-width: 420px) { .wk-start { width: 100%; } .wk-acts .btn { flex: 1; } .wk-launch .btn { width: 100%; } }
+    /* Launch picker and rollout preview: stopped workers (issue #66) */
+    .hf-chip .ln-wk { margin-left: var(--sp-6); font-size: var(--fs-11); font-weight: 500; color: var(--muted); }
+    .hf-chip .ln-wk.starting { color: var(--orange); } .hf-chip .ln-wk.failed { color: var(--red); }
+    .wk-launch { display: flex; flex-direction: column; gap: var(--sp-8); align-items: flex-start; }
+    .wk-launch p { margin: 0; overflow-wrap: anywhere; }
+    .rl-tag-stop { background: color-mix(in srgb, var(--orange) 14%, var(--panel2)); color: var(--orange); white-space: normal; }
+    .rl-note { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
+    #d-status.stopped, .status.stopped { color: var(--muted); }
+    @media (max-width: 420px) {
+      .rel-confirm .td-acts { flex-direction: column; } .rel-confirm .td-acts button { width: 100%; min-height: var(--hit-44); }
+      .rl-order li .rl-tag-stop { display: block; margin-top: var(--sp-4); }
+    }
     /* A session on a stopped worker: the banner above the composer */
     .wk-banner { flex: none; margin: 0 var(--sp-12) var(--sp-8); padding: var(--sp-10) var(--sp-12); border: 1px solid var(--card-edge); border-radius: var(--r-12); background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-8); }
     .wk-banner[hidden] { display: none; }

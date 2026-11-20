@@ -3315,7 +3315,7 @@ function roStepText(st, job) {
     case "upgrading": return (st.mode === "deploy" ? "running the deploy; it restarts the hub" : "upgrading") + (st.detail ? " · " + st.detail : "…");
     case "verifying": return (st.mode === "deploy" ? "deploy ok · " : "upgrade ok · ") + (st.detail || "waiting for it to be back");
     case "soaking": return st.detail || "soaking";
-    case "ok": return st.detail || "";
+    case "ok": return (st.detail || "") + (st.woke ? (st.detail ? " · " : "") + "woke it" : "");
     case "skipped": return "skipped · " + (st.detail || "");
     default: return st.detail || "failed";
   }
@@ -3374,6 +3374,15 @@ function roBandHtml(d, job) {
     ${acts ? `<div class="td-acts">${acts}</div>` : ""}</div>`;
 }
 
+// What the confirm says of a host that is not up: a stopped worker the rollout
+// will start (and about how long it then runs), or "offline" with the reason
+// when it is stopped but will not be started.
+function rlPreviewTag(h) {
+  if (h.stopped) return ` <span class="rl-tag rl-tag-stop" data-stopped>stopped, will be started (about ${h.wake_min || 4} min of runtime)</span>`;
+  if (!h.offline) return "";
+  return ` <span class="rl-tag rl-tag-off">offline</span>${h.wake_note ? ` <span class="rl-note">${esc(h.wake_note)}</span>` : ""}`;
+}
+
 // The confirm: version, commit, build, the ordered hosts with what they run,
 // who goes first. The click repeats all of it to the server.
 function roConfirmHtml(d) {
@@ -3385,13 +3394,13 @@ function roConfirmHtml(d) {
   const li = order.map((n, i) => {
     const h = by.get(n) || {};
     const role = i === 0 && order.length > 1 ? ' <span class="rl-tag">canary</span>' : "";
-    const off = h.offline ? ' <span class="rl-tag rl-tag-off">offline</span>' : "";
+    const off = rlPreviewTag(h);
     return `<li data-host="${escAttr(n)}"><b>${esc(n)}</b> <span class="rl-ver rl-v-old">${esc(h.version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span>${role}${off}</li>`;
   }).join("");
   const hubLi = hubStep ? `<li class="rl-hubli" data-host="${escAttr(hubStep.host)}" data-wave="hub"><b>${esc(hubStep.host)}</b> <span class="rl-tag">hub</span> <span class="rl-ver rl-v-old">${esc(hubH.version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span><div class="rl-sub">${hubStep.mode === "deploy" ? `last: <b>${esc(hubLabel)}</b>${d.release_host && d.release_host !== hubStep.host ? ` runs on ${esc(d.release_host)}` : ""}. This changes what is running in the cluster and restarts the hub; it has no automatic undo.` : "last: the hub upgrades itself and restarts."}</div></li>` : "";
   const sel = order.length > 1 ? `<label class="rl-canary">Goes first (canary): <select data-ro-canary>${order.map((n) => `<option value="${escAttr(n)}"${n === order[0] ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : "";
   const soak = order.length > 1 ? ` The first host goes alone and soaks for 2 minutes; the rest follow one at a time only if it stays healthy.` : "";
-  return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${total} host${total === 1 ? "" : "s"}${hubStep ? ", the hub last" : ""}, in this order?${soak} The first failure stops everything and leaves the rest alone; a host that fails rolls itself back. Offline hosts are skipped and can be rolled out again later.</div>
+  return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${total} host${total === 1 ? "" : "s"}${hubStep ? ", the hub last" : ""}, in this order?${soak} The first failure stops everything and leaves the rest alone; a host that fails rolls itself back. Offline hosts are skipped and can be rolled out again later; a stopped worker is started first.</div>
     <ol class="rl-order">${li}${hubLi}</ol>${sel}
     <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-rollout"${rls.busy ? " disabled" : ""}>Confirm: roll out ${esc(rl.version)} to ${total} host${total === 1 ? "" : "s"}</button>
     <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
@@ -3469,7 +3478,7 @@ function relRowHtml(x, d, job, step) {
   const vcls = x.offline && !x.current ? "off" : !cur || x.current || !tagged ? "cur" : "old";
   const to = tagged && !x.current ? ` <span class="rl-to">→ <b>${esc(cur.version)}</b></span>` : "";
   return `<div class="rl-host rel-host${rowcls}" data-host="${escAttr(x.name)}"${isDeploy ? " data-deploy" : ""}>
-    <div class="rl-hl"><span class="rel-hn">${esc(x.name)}</span>${x.hub ? '<span class="rl-tag">hub</span>' : ""}${x.offline && !(step && step.phase === "waking") ? '<span class="rl-tag rl-tag-off">offline</span>' : ""}<span class="rl-ver rl-v-${vcls}">${esc(x.version || "?")}</span>${to}${step ? `<span class="rl-phase rl-ph-${escAttr(step.phase)}">${esc(RO_PHASE[step.phase] || step.phase)}</span>` : ""}</div>
+    <div class="rl-hl"><span class="rel-hn">${esc(x.name)}</span>${x.hub ? '<span class="rl-tag">hub</span>' : ""}${x.stopped && !step ? '<span class="rl-tag rl-tag-stop">stopped</span>' : x.offline && !(step && step.phase === "waking") ? '<span class="rl-tag rl-tag-off">offline</span>' : ""}<span class="rl-ver rl-v-${vcls}">${esc(x.version || "?")}</span>${to}${step ? `<span class="rl-phase rl-ph-${escAttr(step.phase)}">${esc(RO_PHASE[step.phase] || step.phase)}</span>` : ""}</div>
     ${act ? `<div class="rel-ha">${act}</div>` : ""}
     ${sub ? `<div class="rl-sub rel-hs${err ? " rl-err" : ""}">${esc(sub)}</div>` : ""}${gates}${deployRuns && (act || drec) ? `<div class="rl-sub rel-runs">${esc(deployRuns)}</div>` : ""}${out}</div>`;
 }
@@ -9535,6 +9544,12 @@ async function wakePoll() {
 }
 
 function wakeRedraw() {
+  if (launch.open) {
+    // The launch picker: tags follow the wake, and a host that came up loads its folders.
+    renderLaunchHosts();
+    if (launch.host && !launch.opts && !launchHostStopped(launch.host) && (hostStatus(launch.host) || {}).status === "ok" && $("ln-list").querySelector("[data-wk-launch]")) setLaunchHost(launch.host);
+    else if (launchHostStopped(launch.host)) renderLaunchStopped(launch.host);
+  }
   if (state.selected && !agentById(state.selected) && (ph.data || ph.asking)) renderDetail(); // a session of a host that is down: stopped, or not
   renderWakeBanner();
   if (typeof renderList === "function") renderList();
@@ -11156,6 +11171,11 @@ function renderStoppedDetail() {
   stopPolling(); // nothing to poll while the host is off; openDetail starts it again when the session is listed
   $("d-title").textContent = state.selName || id.slice(host.length + 1);
   $("d-subtitle").textContent = `${host} · stopped`;
+  // Not a live status: the host is off, so the chip says so, not what the agent last did.
+  const ds = $("d-status");
+  ds.textContent = "stopped";
+  ds.title = "The host is off: this session is not running";
+  ds.className = "status stopped";
   $("d-usage").innerHTML = ""; $("d-usage").hidden = true;
   renderWakeBanner();
   loadChat();
@@ -14345,14 +14365,31 @@ function syncLaunch() {
 function renderLaunchHosts() {
   const nav = $("ln-hosts");
   if (!multiHost()) { nav.hidden = true; nav.innerHTML = ""; return; }
+  if (state.hosts.some((h) => !h.local && h.status !== "ok")) phEnsure(); // is a down host stopped? (the tag and Start follow)
   nav.innerHTML = state.hosts.map((h) => {
-    const down = !h.local && h.status !== "ok";
+    const wx = wakeOf(h); // a stopped worker can be picked: launching starts it (issue #66)
+    const down = !h.local && h.status !== "ok" && !wx;
     const off = down || h.no_agents; // a hub-only hub starts nothing itself
-    return `<button type="button" class="hf-chip${down ? " down" : ""}" data-host="${esc(h.name)}"` +
+    const tag = wx ? ` <small class="ln-wk ${esc(wx.kind)}">${esc(wx.kind === "stopped" ? "stopped" : wx.kind === "starting" ? "starting…" : "failed to start")}</small>` : "";
+    return `<button type="button" class="hf-chip${down ? " down" : ""}${wx ? " wk-" + esc(wx.kind) : ""}" data-host="${esc(h.name)}"` +
       `${h.no_agents ? ' title="This hub hosts no agents"' : ""}` +
-      ` aria-pressed="${launch.host === h.name}"${off ? " disabled" : ""}>${esc(h.name)}</button>`;
+      ` aria-pressed="${launch.host === h.name}"${off ? " disabled" : ""}>${esc(h.name)}${tag}</button>`;
   }).join("");
   nav.hidden = false;
+}
+
+// A stopped worker has no folders to list: its disk is off. Picking it shows
+// that, with a Start button; launching on it (after the folder list is back,
+// or from a folder chosen before it stopped) starts it through the wake.
+function launchHostStopped(host) {
+  const h = hostStatus(host);
+  return !!h && !!wakeOf(h);
+}
+function renderLaunchStopped(host) {
+  const h = hostStatus(host), x = h && wakeOf(h);
+  if (!x) return;
+  const msg = x.kind === "starting" ? `Starting ${host}…` : x.kind === "failed" ? `${host} did not start: ${x.reason}` : `${host} is stopped. Start it to choose a folder; launching on it also starts it (about 2 minutes).`;
+  $("ln-list").innerHTML = `<div class="ln-empty wk-launch" data-wk-launch="${esc(host)}"><p>${esc(msg)}</p>${wakeAction(h, x)}</div>`;
 }
 
 async function setLaunchHost(host) {
@@ -14368,8 +14405,9 @@ async function setLaunchHost(host) {
   const seq = ++launch.seq;
   renderLaunchHosts();
   renderLaunchForm();
-  $("ln-list").innerHTML = '<div class="ln-empty">Loading…</div>';
   $("ln-crumb").textContent = "";
+  if (launchHostStopped(host)) { renderLaunchStopped(host); return; }
+  $("ln-list").innerHTML = '<div class="ln-empty">Loading…</div>';
   let o;
   try {
     o = await api(launchBase(host) + "/options");
