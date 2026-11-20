@@ -338,9 +338,9 @@ func TestPreflightKubeVirt(t *testing.T) {
 		t.Errorf("no namespace: %+v", c)
 	}
 	w = goodWorld()
-	w.absent["serviceaccount/comebye-worker"] = true
+	w.absent["serviceaccount/comebye-worker-tool"] = true
 	w.absent["datavolume/debian-13-golden"] = true
-	if c := run(w); c.State != "missing" || !strings.Contains(c.Note, "service account comebye-worker") || !strings.Contains(c.Note, "image DataVolume debian-13-golden") {
+	if c := run(w); c.State != "missing" || !strings.Contains(c.Note, "service account comebye-worker-tool") || !strings.Contains(c.Note, "image DataVolume debian-13-golden") {
 		t.Errorf("no sa/image: %+v", c)
 	}
 	w = goodWorld()

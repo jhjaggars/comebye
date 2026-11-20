@@ -191,7 +191,7 @@ func defaults() Config {
 		ArchiveEnv:     filepath.Join(h, ".config", "comebye", "archive.env"),
 
 		KubeNamespace:    "comebye-workers",
-		KubeServiceAcct:  "comebye-worker",
+		KubeServiceAcct:  "comebye-worker-tool",
 		KubeNodePrefer:   []string{"rozalin", "zetta"},
 		KubeNodeAvoid:    []string{"adell", "etna"},
 		KubeFloorGiB:     12,

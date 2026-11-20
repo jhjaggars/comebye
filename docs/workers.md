@@ -463,7 +463,7 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # --- defaults, shown for reference
 # kube_context=                  # kubectl context; empty = the current one
 # kube_namespace=comebye-workers
-# kube_service_account=comebye-worker   # the scoped account the prerequisites create
+# kube_service_account=comebye-worker-tool  # the scoped account the prerequisites create
 # kube_node_prefer=rozalin,zetta        # the only nodes a VM may go to, in order; empty = any but kube_node_avoid
 # kube_node_avoid=adell,etna            # never
 # kube_floor_gib=12                     # free memory a node keeps after the VM
