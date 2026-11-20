@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
-	"github.com/jhjaggars/comebye/internal/provision"
 	"github.com/jhjaggars/comebye/internal/upgrade"
 )
 
@@ -207,41 +206,11 @@ func (o serverRolloutOps) StartDeploy(ctx context.Context, job Rollout) (string,
 // confirmed here, and the hourly limits apply. A host that is not a stopped
 // provisioned worker is wakeNone, and the rollout keeps its offline grace.
 func (o serverRolloutOps) Wake(ctx context.Context, job Rollout, host string) wakeVerdict {
-	s := o.s
-	if s.wake == nil || !provision.ValidName(host) {
-		return wakeVerdict{Kind: wakeNone}
+	v := o.s.wakeAuto(ctx, host, "rollout", job.By, job.Todo, "", "for rollout "+job.ID, "started for rollout "+job.ID+" (it was stopped)")
+	if v.Kind == wakeRefused {
+		v.Reason = "not started: " + v.Reason
 	}
-	if cur, ok := s.wake.get(host); ok && cur.State == wakeStarting {
-		return wakeVerdict{Kind: wakeStarting, Step: cur.Step} // one wake per host: join it
-	}
-	owner, hv, amb := s.ownerOf(ctx, host, "")
-	if owner == "" || amb || hv == nil || hv.State != "stopped" {
-		return wakeVerdict{Kind: wakeNone} // not provisioned, or not stopped: a network fault is not ours to fix
-	}
-	refuse := func(why string) wakeVerdict {
-		s.auditBy(ledger.AuditEvent{By: job.By, Action: "provision.start_refused", Todo: job.Todo, Host: owner, Detail: host + " for rollout " + job.ID + ": " + oneLine(why, 160)})
-		return wakeVerdict{Kind: wakeRefused, Reason: "not started: " + why}
-	}
-	if st := s.peerStatus(owner); st != "ok" {
-		return refuse(owner + " is offline, and it is the node that can start " + host)
-	}
-	if hv.CapStopped != "" {
-		return refuse(host + " was stopped by its budget cap: start it from Peers")
-	}
-	if t, err := time.Parse(time.RFC3339, hv.DestroyDue); err == nil && !time.Now().Before(t) {
-		return refuse(host + " is due to be destroyed: start it from Peers if you want it")
-	}
-	if err := s.wake.wakeAllow(host); err != nil {
-		return refuse(err.Error())
-	}
-	e, joined := s.wake.begin(host, owner, job.By, "rollout")
-	if !joined {
-		s.wake.noteAuto(host)
-		s.auditBy(ledger.AuditEvent{By: job.By, Action: "provision.start", Todo: job.Todo, OK: true, Host: owner, Detail: host + " started for rollout " + job.ID + " (it was stopped)"})
-		go s.wakeRun(e.Host, owner, false, job.By, false)
-	}
-	v, _ := s.wake.get(host)
-	return wakeVerdict{Kind: wakeStarting, Step: v.Step}
+	return v
 }
 
 // WakeStatus is the wake book's word on a host.

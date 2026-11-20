@@ -420,6 +420,12 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, status, payload)
 		return
 	}
+	// A handoff to a stopped worker starts it and waits (it is a long call
+	// anyway); an agent that is not the coordinator is refused (wakeuse.go).
+	if st, payload, stop := s.wakeForHandoff(r.Context(), r, b.Host); stop {
+		writeJSONStatus(w, st, payload)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), workerTimeout+15*time.Second)
 	defer cancel()
 	status, payload := s.doHandoff(ctx, b, from, s.replyRef(r), nil, "")

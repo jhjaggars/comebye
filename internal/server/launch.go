@@ -978,6 +978,9 @@ func (s *Server) handleHostLaunch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	if s.wakeGate(w, r, host, "a launch") { // a stopped worker is started (wakeuse.go)
+		return
+	}
 	if !body.Coordinator {
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		s.fleet.ProxyHost(w, r, host, "launch")
@@ -1012,6 +1015,9 @@ func (s *Server) onHostLaunch(op string, local http.HandlerFunc) http.HandlerFun
 		case host == s.fleet.LocalName():
 			local(w, r)
 		case s.fleet.HasPeer(host):
+			if op == "resume" && s.wakeGate(w, r, host, "a resume") { // a stopped worker is started (wakeuse.go)
+				return
+			}
 			s.fleet.ProxyHost(w, r, host, op)
 		case s.cfg.Upstream != nil && (op == "settings" || op == "settings-set") && !callerOf(r).agent():
 			// On a peer, the user's call for a host it does not know goes to

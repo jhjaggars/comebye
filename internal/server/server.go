@@ -322,9 +322,10 @@ type Server struct {
 	phostErr       string              // why the cloud could not be asked last time
 	phostAt        time.Time           // when it last was
 	pseen          *provSeen
-	provObserveGap time.Duration // how often the provisioner asks (tests shorten it)
-	hjobs          *hubJobs      // on a hub: the jobs it has asked provisioners to run
-	wake           *wakeBook     // on a hub: stopped workers it is starting (wake.json)
+	provObserveGap time.Duration       // how often the provisioner asks (tests shorten it)
+	hjobs          *hubJobs            // on a hub: the jobs it has asked provisioners to run
+	wake           *wakeBook           // on a hub: stopped workers it is starting (wake.json)
+	peerStatusHook func(string) string // tests: what a peer's status is
 	pages          *pageStore
 	chats          *chatStore // Page -> its chat helper (chat.go)
 	chatRate       chatLimiter
@@ -903,6 +904,13 @@ func (s *Server) onHost(op string, local http.HandlerFunc) http.HandlerFunc {
 		case host == s.fleet.LocalName():
 			local(w, r)
 		case s.fleet.HasPeer(host):
+			if op == "prompt" {
+				// Sending a prompt to a stopped worker starts it (wakeuse.go).
+				if s.wakeGate(w, r, host, "a prompt") {
+					return
+				}
+				w = s.sessionGone(w, host, r.PathValue("target"))
+			}
 			s.fleet.Proxy(w, r, host, r.PathValue("target"), op)
 		default:
 			writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_host", "message": "no such host"})
