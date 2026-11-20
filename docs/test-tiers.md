@@ -51,18 +51,15 @@ Several suites on one machine need different bases: `PORT=24741 tools/uitest/run
 panel every 1 s) instead of every 3 to 20 s, and lifts the to-do list's 20-adds-a-minute limit. It changes nothing
 else. The browser checks wait for conditions, not for the app's own timers.
 
-## The flaky list
+## No flaky list, no warnings
 
-`tools/ci/flaky.tsv` lists checks that are known to fail now and then, each with an **owner**, the date added and
-an **expiry 14 days later**. While an entry is active the check still runs and shows red, but a run in which only
-listed checks failed passes (`tools/ci/flakes.sh judge`). The nightly runs each entry five times and prints how many
-passed. An expired entry blocks again (the lint job fails): renew it with a new date and a note on what you found, or
-fix the check and delete the line. No automatic retries: they hide the cause.
+A check that fails fails the run. There is no list of checks allowed to fail, no automatic retry (it hides the
+cause), and no step that only warns: a CI check either fails the build or is removed. A flaky check is fixed (wait on
+the condition the next step needs) or deleted.
 
 ## Finding a new flake
 
-The flaky list is for checks that are already known. To find the ones that are not, run a script (or all of them) several
-times and look at what fails only sometimes:
+To find a flaky check, run a script (or all of them) several times by hand and look at what fails only sometimes:
 
 ```sh
 tools/ci/flakes.sh repeat 5 leftnav reviewcard      # these two, five runs each, 4 at a time (JOBS=n changes it)

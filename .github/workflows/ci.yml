@@ -117,9 +117,6 @@ jobs:
       - name: theme contrast
         run: node tools/uitest/contrast.mjs
 
-      # Entries on the flaky list that have run out (tools/ci/flaky.tsv) block again.
-      - name: flaky list
-        run: tools/ci/flakes.sh expired
 
   # Merge tier: every Go test, in two halves of about equal length (tools/ci/gotest.sh).
   go-full:
