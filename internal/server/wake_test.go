@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/fleet"
+	"github.com/jhjaggars/comebye/internal/provision"
 )
 
 func statusDoc(name, state string, extra string) string {
@@ -432,5 +433,54 @@ func TestRolloutWakeRefusesWhatItMustNotStart(t *testing.T) {
 	}
 	if wk.runs("start demo1") != 0 {
 		t.Fatalf("a refused wake ran the tool: %v", wk.argv())
+	}
+}
+
+// The rollout preview lists a stopped, wakeable worker as "will be started",
+// and keeps "offline" (with the reason) for one a rollout would not start.
+func TestMarkWakeableSeparatesStoppedFromOffline(t *testing.T) {
+	s, _, _, _ := stoppedHub(t)
+	var h hostsResp
+	getJSON(t, s, "/api/provision/hosts?refresh=1", userHdr, &h)
+	mk := func() relHost {
+		hs := []relHost{{Name: "demo1", Status: "down"}, {Name: "plain", Status: "down"}, {Name: "up1", Status: "ok"}}
+		s.markWakeable(context.Background(), hs)
+		if hs[1].Stopped || hs[1].WakeNote != "" || hs[2].Stopped {
+			t.Fatalf("a host the provisioner does not list, or one that is up, is marked: %+v", hs)
+		}
+		return hs[0]
+	}
+	if g := mk(); !g.Stopped || g.WakeMin != rolloutWakeMin || g.WakeNote != "" {
+		t.Fatalf("stopped and wakeable: %+v", g)
+	}
+	edit := func(f func(v *provision.HostView)) {
+		s.prov.mu.Lock()
+		defer s.prov.mu.Unlock()
+		for _, c := range s.prov.hosts {
+			for i := range c.View.Hosts {
+				f(&c.View.Hosts[i])
+			}
+		}
+	}
+	edit(func(v *provision.HostView) { v.CapStopped = time.Now().Format(time.RFC3339) })
+	if g := mk(); g.Stopped || !strings.Contains(g.WakeNote, "budget cap") {
+		t.Fatalf("cap-stopped: %+v", g)
+	}
+	edit(func(v *provision.HostView) {
+		v.CapStopped = ""
+		v.DestroyDue = time.Now().Add(-time.Hour).Format(time.RFC3339)
+	})
+	if g := mk(); g.Stopped || !strings.Contains(g.WakeNote, "destroyed") {
+		t.Fatalf("due to be destroyed: %+v", g)
+	}
+	edit(func(v *provision.HostView) { v.DestroyDue = "" })
+	s.peerStatusHook = func(string) string { return "down" }
+	if g := mk(); g.Stopped || !strings.Contains(g.WakeNote, "offline") {
+		t.Fatalf("provisioner offline: %+v", g)
+	}
+	s.peerStatusHook = nil
+	edit(func(v *provision.HostView) { v.State = "running" })
+	if g := mk(); g.Stopped || g.WakeNote != "" {
+		t.Fatalf("running in the cloud stays plain offline: %+v", g)
 	}
 }

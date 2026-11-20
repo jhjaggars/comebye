@@ -277,6 +277,14 @@ type relHost struct {
 	Offline bool       `json:"offline,omitempty"`
 	Current bool       `json:"current"`
 	Since   *time.Time `json:"since,omitempty"`
+	// Stopped marks an offline host that is a stopped provisioned worker the
+	// rollout would start (issue #66); WakeMin is about how long it then
+	// runs. WakeNote is, for an offline host that is stopped but will not be
+	// started, why. All three are set by markWakeable, from the provisioners'
+	// cached books: the preview asks no cloud.
+	Stopped  bool   `json:"stopped,omitempty"`
+	WakeMin  int    `json:"wake_min,omitempty"`
+	WakeNote string `json:"wake_note,omitempty"`
 }
 
 // How old an answer from git or GitHub the page may be shown. The refresh
@@ -424,6 +432,7 @@ func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, re
 			markRollout(hosts, it.Release.Version)
 		}
 	}
+	s.markWakeable(ctx, hosts)
 	// The fleet is listed whatever the release's state; only a tagged release
 	// has a rollout to track.
 	out["hosts"] = hosts

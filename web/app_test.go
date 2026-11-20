@@ -520,3 +520,41 @@ console.log(JSON.stringify(cases.filter(([i, w]) => shortModel(i) !== w).map(([i
 		t.Fatalf("shortModel gave the wrong answer for: %s", out)
 	}
 }
+
+// Slice 4 of issue #66: the launch picker marks a stopped worker and can pick
+// it, the rollout confirm says "stopped, will be started" (offline keeps its
+// reason), a finished step says "woke it", the stopped session's chip does not
+// look live, and the phone gets full-width buttons under 420 px.
+func TestAppPolishesStoppedWorkers(t *testing.T) {
+	js, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, err := FS.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		`const wx = wakeOf\(h\); // a stopped worker can be picked`,
+		`class="ln-wk `,
+		`function renderLaunchStopped\(host\)`,
+		`if \(launchHostStopped\(host\)\) \{ renderLaunchStopped\(host\); return; \}`,
+		`stopped, will be started \(about \$\{h\.wake_min \|\| 4\} min of runtime\)`,
+		`h\.wake_note \?`,
+		`"woke it"`,
+		`ds\.textContent = "stopped"`,
+	} {
+		if !regexp.MustCompile(re).Match(js) {
+			t.Errorf("app.js does not match %s", re)
+		}
+	}
+	for _, re := range []string{
+		`\.rl-tag-stop`,
+		`@media \(max-width: 420px\) \{ \.wk-start \{ width: 100%; \} .*\.wk-launch \.btn \{ width: 100%; \}`,
+		`\.rel-confirm \.td-acts button \{ width: 100%`,
+	} {
+		if !regexp.MustCompile(re).Match(html) {
+			t.Errorf("index.html does not match %s", re)
+		}
+	}
+}

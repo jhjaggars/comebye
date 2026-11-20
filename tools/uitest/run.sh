@@ -237,6 +237,8 @@ if want provhosts; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node 
 if want wake; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wake.mjs "$out" || rc=1 ; fi
 # Using a session on a stopped worker (issue #66, slice 3): the Start banner, and a send that starts the host.
 if want wakeuse; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wakeuse.mjs "$out" || rc=1 ; fi
+# Polish (issue #66, slice 4): the launch picker marks a stopped worker, and the rollout confirm says it will be started.
+if want wakepolish; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wakepolish.mjs "$out" || rc=1 ; fi
 # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
 if want usage; then FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1 ; fi
 # (The "GPG is locked" item staying open over minutes is Go tests with an injected clock: internal/gpgunlock/trigger_test.go,

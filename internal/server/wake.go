@@ -551,3 +551,78 @@ func (s *Server) wakeResume() {
 		go s.wakeRun(e.Host, e.Via, false, e.By, true)
 	}
 }
+
+// rolloutWakeMin is about how long a woken worker runs for a rollout: a boot
+// and join (about 2 minutes) and the upgrade and verify (about 2).
+const rolloutWakeMin = 4
+
+// markWakeable tells the rollout preview which offline hosts are stopped
+// provisioned workers that the rollout would start (issue #66), from the
+// provisioners' last look (cached: a preview asks no cloud). It mirrors the
+// refusals of wakeAuto: a budget-cap stop, a host due to be destroyed and a
+// provisioner that is offline are not started by a rollout. A host that is
+// not a stopped provisioned worker is left as "offline".
+func (s *Server) markWakeable(ctx context.Context, hosts []relHost) {
+	if s.wake == nil {
+		return
+	}
+	for _, h := range hosts {
+		if !h.Local && h.Status != "ok" {
+			// something is down: make sure the provisioners' books are not empty (a cached look is used when it is fresh)
+			for _, n := range s.hostsNodes() {
+				s.askHosts(ctx, n, false)
+			}
+			break
+		}
+	}
+	for i := range hosts {
+		h := &hosts[i]
+		if h.Local || h.Status == "ok" || !provision.ValidName(h.Name) {
+			continue
+		}
+		hv, owner := s.cachedHost(h.Name)
+		if hv == nil || hv.State != "stopped" {
+			continue
+		}
+		switch {
+		case hv.CapStopped != "":
+			h.WakeNote = "stopped by its budget cap: start it from Peers"
+		case dueNow(hv.DestroyDue):
+			h.WakeNote = "stopped and due to be destroyed: start it from Peers if you want it"
+		case s.peerStatus(owner) != "ok":
+			h.WakeNote = "stopped, but " + owner + " (the node that can start it) is offline"
+		default:
+			h.Stopped, h.WakeMin = true, rolloutWakeMin
+		}
+	}
+}
+
+func dueNow(due string) bool {
+	t, err := time.Parse(time.RFC3339, due)
+	return err == nil && !time.Now().Before(t)
+}
+
+// cachedHost finds a host in the provisioners' cached books (no network).
+// nil when none lists it, or more than one does.
+func (s *Server) cachedHost(name string) (*provision.HostView, string) {
+	s.prov.mu.Lock()
+	defer s.prov.mu.Unlock()
+	var out *provision.HostView
+	var owner string
+	for n, c := range s.prov.hosts {
+		if c.View == nil {
+			continue
+		}
+		for i := range c.View.Hosts {
+			h := c.View.Hosts[i]
+			if h.Name == name && h.State != "destroyed" {
+				if out != nil {
+					return nil, ""
+				}
+				cp := h
+				out, owner = &cp, n
+			}
+		}
+	}
+	return out, owner
+}
