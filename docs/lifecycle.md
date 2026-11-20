@@ -105,6 +105,7 @@ minutes of a hand-run sweep, because nobody is watching this one.
   would take (a mark older than 20 minutes, not a coordinator, not a proposal to
   discard, not UNSAFE); the one confirm is that button. While it is open the
   loop keeps its count right, and closes it when nothing is left.
+- A worker the sweep marks as "Gone" (its host left the fleet) is the one exception to "the user confirms": with `-auto-remove` on, the hub clears its record itself (nothing on any host is touched), audited and logged as an `autoremove` event.
 - Its state (last run, last item) is `sweeploop.json` in the state directory,
   so a restart neither sweeps again early nor files a second item.
 

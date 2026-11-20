@@ -531,3 +531,54 @@ func TestResumeRecreatesTheWorktree(t *testing.T) {
 		}
 	}
 }
+
+// A worker a sweep marked "Gone" (its host left the fleet) has its record
+// cleared without a tap, audited and logged; nothing else in the same state is.
+func TestAutoRemoveGoneHost(t *testing.T) {
+	f := newSweepFix(t)
+	s := f.s
+	s.autoRemove = true
+	add := func(name, host, reason string) ledger.Entry {
+		id := host + "/w9:" + name
+		e, err := s.ledger.Add(ledger.Entry{Host: host, Repo: "/x", RepoName: "proj", Branch: name, Base: "main", AgentID: id, PaneID: "w9:" + name, AgentName: name, Worktree: "/x/wt/" + name, Status: ledger.ReadyToRemove})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ledger.SetMark(ledger.Mark{AgentID: id, By: AutoCreator, Reason: reason, At: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	gone := add("ghost-a", "oldbox", "Sweep: host oldbox is not in this hub's fleet any more")
+	byHand := add("ghost-b", "oldbox", "by hand") // not a sweep's Gone mark: left for the user
+	// "marked" (a known host, marked by hand) must stay too.
+	got := s.autoRemoveStep(context.Background(), time.Now())
+	if len(got) != 1 || got[0] != "oldbox/w9:ghost-a" {
+		t.Fatalf("removed = %v", got)
+	}
+	if g, _ := s.ledger.Get(gone.ID); g.Status != ledger.Removed {
+		t.Fatalf("gone = %s", g.Status)
+	}
+	if g, _ := s.ledger.Get(byHand.ID); g.Status != ledger.ReadyToRemove {
+		t.Fatalf("by-hand mark = %s", g.Status)
+	}
+	if st := statusOf(s, f.ids["marked"]); st != ledger.ReadyToRemove {
+		t.Fatalf("known-host mark = %s", st)
+	}
+	var audited bool
+	for _, a := range s.ledger.AuditLog("") {
+		audited = audited || (a.Action == "worker.auto_remove" && a.OK && a.By == AutoCreator && strings.Contains(a.Detail, "only the record was cleared"))
+	}
+	if !audited {
+		t.Fatal("no audit entry")
+	}
+	if ls := s.events.query(time.Time{}, []string{"autoremove"}, 0); len(ls) != 1 || !strings.Contains(ls[0].Text, "cleared the record") {
+		t.Fatalf("events = %+v", ls)
+	}
+	// Off with the setting: nothing happens.
+	s.autoRemove = false
+	add("ghost-c", "oldbox", "Sweep: gone")
+	if got := s.autoRemoveStep(context.Background(), time.Now()); len(got) != 0 {
+		t.Fatalf("removed with auto-remove off: %v", got)
+	}
+}

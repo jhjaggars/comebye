@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
@@ -172,6 +173,12 @@ func (s *Server) autoRemoveStep(ctx context.Context, now time.Time) []string {
 	}
 	var removed []string
 	for _, it := range s.marked() {
+		if autoRemoveGone(it) && !s.knownHost(it.Host) {
+			if s.autoRemoveGoneOne(ctx, it) {
+				removed = append(removed, it.ID)
+			}
+			continue
+		}
 		if !autoRemoveCandidate(it) {
 			continue
 		}
@@ -194,6 +201,33 @@ func (s *Server) autoRemoveStep(ctx context.Context, now time.Time) []string {
 		}
 	}
 	return removed
+}
+
+// autoRemoveGone: a ledger worker a sweep marked as "Gone" whose host is not in
+// this hub's fleet any more. Removing it only clears the record (confirmOne
+// touches no worktree, branch or agent), so there is nothing a confirmation
+// protects. Anything else, a coordinator included, is left to the user.
+func autoRemoveGone(it *removal) bool {
+	return it.EntryID != "" && !it.Coordinator && !it.Mark.Discard && strings.HasPrefix(it.Mark.Reason, "Sweep: ")
+}
+
+// autoRemoveGoneOne clears the record of one such worker, audited and logged.
+func (s *Server) autoRemoveGoneOne(ctx context.Context, it *removal) bool {
+	if !s.markCurrent(it.Mark) {
+		return false
+	}
+	it.recordPark = ""
+	o := s.confirmOne(ctx, it, false, "")
+	label := orDefault(it.Name, it.EntryID)
+	if !o.OK {
+		log.Printf("auto remove (gone) of %s: %s: %s", it.ID, o.Code, o.Message)
+		return false
+	}
+	const why = "its host is no longer in the fleet: only the record was cleared"
+	s.auditBy(ledger.AuditEvent{By: AutoCreator, Action: "worker.auto_remove", Host: it.Host, OK: true,
+		Detail: fmt.Sprintf("%s (%s, host %s): %s", label, it.EntryID, it.Host, why)})
+	s.queueLine("autoremove", it.EntryID, "autorm/"+it.EntryID, "cleared the record of "+safeText(label)+" automatically: its host is no longer in the fleet.")
+	return true
 }
 
 // autoRemoveOne reviews one marked worker and removes it when it is clean.
