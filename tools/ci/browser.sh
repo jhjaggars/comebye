@@ -8,7 +8,7 @@
 #        EXTRA="peers sidepanel" adds scripts to smoke.
 # SCHEME: dark (default) or light. Chrome comes from $CHROME or the first google-chrome or chromium on PATH.
 #
-# A red run is judged against tools/ci/flaky.tsv: failed checks on an active entry do not fail the suite.
+# Any failed check fails the suite; there is no list of checks allowed to fail.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 suite="${1:?suite: smoke|drive|rest|visual|full}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"
@@ -32,13 +32,11 @@ esac
 
 if [ -z "${CHROME:-}" ]; then
   CHROME="$(command -v google-chrome || command -v chromium || true)"
-  if [ -z "$CHROME" ]; then echo "::warning::no google-chrome or chromium on this machine; skipping browser checks"; exit 0; fi
+  if [ -z "$CHROME" ]; then echo "no google-chrome or chromium on this machine (set CHROME)" >&2; exit 1; fi
   export CHROME
 fi
 
 mkdir -p "$out"
 # Each suite's servers take their ports from the base: two suites on one machine need different PORT values.
 SCRIPTS="$scripts" SCHEME="$scheme" "$here/../uitest/run.sh" "${APP_DIR:-$here/../..}" "$out" 2>&1 | tee "$out/run.log"
-rc=${PIPESTATUS[0]}
-[ "$rc" -eq 0 ] && exit 0
-"$here/flakes.sh" judge "$out/run.log"
+exit "${PIPESTATUS[0]}"
