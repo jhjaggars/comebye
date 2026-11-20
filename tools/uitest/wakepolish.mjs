@@ -145,7 +145,7 @@ try {
       if (bad.length) throw new Error(bad.slice(0, 3).join(" | "));
     });
     if (width >= 1100) {
-      await check("desktop: Start in the picker boots kv1, and its folders then load", async () => {
+      await check("desktop: Start in the picker boots kv1, and its folder list then loads", async () => {
         await page.goto(base + "/", { waitUntil: "load" });
         await page.waitForFunction(() => state.hosts && state.hosts.some((h) => h.name === "kv1"), null, { timeout: 40000 });
         await page.evaluate(() => openLaunch());
@@ -154,7 +154,8 @@ try {
         await page.locator('#ln-list [data-wk-start="kv1"]').click();
         await page.waitForSelector("#ln-list .wk-prog", { timeout: 20000 });
         await shot("launch-starting");
-        await page.waitForSelector("#ln-list .ln-dir", { timeout: 120000 }).catch(async (e) => { await shot("launch-folders-missing"); throw e; });
+        // kv1 answered the folder request: its folders, or (a machine with no ~/code) its own "no launch root" answer
+        await page.waitForFunction(() => { const l = document.querySelector("#ln-list"); return l && !l.querySelector("[data-wk-launch]") && !/Loading/.test(l.innerText) && (l.querySelector(".ln-dir") || /launch root/.test(l.innerText)); }, null, { timeout: 120000 }).catch(async (e) => { await shot("launch-folders-missing"); throw e; });
         await shot("launch-folders");
       });
     }
