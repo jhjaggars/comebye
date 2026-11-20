@@ -928,6 +928,10 @@ await check("phone: a long page scrolls to its end and the back arrow clears the
     const b = r(".pgs-bar"), a = r("#pgs-vback"), fr = r(".pgs-frame");
     return { barTop: b.top, backTop: a.top, backBottom: a.bottom, frameTop: fr.top, frameBottom: fr.bottom, scrollY, vh: innerHeight };
   });
+  // The document behind this screen is made taller than the window (as a long agent list does), so a swipe past the end of the page
+  // chains into it on every run, not only after other scripts have left many agents.
+  await m.evaluate(() => { document.querySelector("#list").style.minHeight = "1400px"; });
+  if (!(await m.evaluate(() => document.documentElement.scrollHeight > innerHeight + 100))) throw new Error("the document behind the page is not taller than the window");
   let g = await geo();
   // every control of the bar is under the status bar's inset, not behind it, and the page fills the rest
   if (g.backTop < inset - 0.5) throw new Error("the back arrow is behind the notch: " + JSON.stringify(g));
@@ -944,8 +948,14 @@ await check("phone: a long page scrolls to its end and the back arrow clears the
   const atEnd = () => f.evaluate(() => Math.ceil(scrollY + innerHeight) >= document.documentElement.scrollHeight - 2).catch(() => false);
   for (let i = 0; i < 120 && !(await atEnd()); i++) await swipe();
   if (!(await atEnd())) throw new Error("touch scrolling never reached the end of the page");
+  const top = g;
   g = await geo();
-  if (g.scrollY !== 0 || g.backTop < inset - 0.5) throw new Error("after scrolling the bar moved: " + JSON.stringify(g));
+  // The bar, the back arrow and the frame sit where they sat before the scrolling. The window's own scrollY is not asserted:
+  // behind this screen the agent list is still in the document (a long list, as the shared server of the "rest" suite has after
+  // the other scripts, makes the document taller than the window), and a swipe that overshoots the end of the page chains
+  // into it. The screen is fixed, so nothing visible moves; a bar that did move is what this must catch.
+  for (const k of ["barTop", "backTop", "backBottom", "frameTop", "frameBottom"]) if (Math.abs(g[k] - top[k]) > 0.5) throw new Error(`after scrolling the bar moved (${k}): before ${JSON.stringify(top)}, after ${JSON.stringify(g)}`);
+  if (g.backTop < inset - 0.5) throw new Error("after scrolling the back arrow is behind the notch: " + JSON.stringify(g));
   await m.screenshot({ path: `${out}/pages-long-390-end.png` });
   // comment strip with its note editor and a tray of two comments, on a short screen (the keyboard up): the page keeps room and still scrolls
   const sel = (t) => f.evaluate((t) => { const r = document.createRange(); const p = [...document.querySelectorAll("p")].find((x) => x.textContent.includes(t)); r.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }, t);
