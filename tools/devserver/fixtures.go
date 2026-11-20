@@ -187,6 +187,7 @@ func (f *fake) addContextAgents(dir, tag string) {
 	ask(mk("ctx-live2", "w39:p1", "claude", "claude-sonnet-4-6", 60000-20000, 20000, false)) // the same, for the second viewport
 	ask(mk("ctx-nowindow", "w34:p1", "claude", "claude-haiku-5-5", 40000-1000, 1000, false))
 	ask(mk("ctx-pi", "w35:p1", "pi", "m1", 64000-4000, 4000, true))
+	ask(mk("ctx-pi-long", "w40:p1", "pi", "enmaas/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", 64000-4000, 4000, true)) // a long provider path: the model chip truncates
 	none := mk("ctx-none", "w36:p1", "claude", "", 0, 0, false)
 	ask(none)
 	st := mk("ctx-compacted", "w37:p1", "claude", "claude-sonnet-4-6", 100000-1000, 1000, false)

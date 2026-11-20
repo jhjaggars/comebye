@@ -484,3 +484,39 @@ func TestAppHasAStartButtonForStoppedWorkers(t *testing.T) {
 		}
 	}
 }
+
+// The model chip beside the context chip shows a short name: Claude ids as
+// "Opus 5.5", other models by their last path segment minus a date or build
+// stamp. The full provider/model stays in the tooltip.
+func TestShortModel(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := regexp.MustCompile(`(?s)\nfunction shortModel\(id\) \{.*?\n\}\n`).Find(src)
+	if b == nil {
+		t.Fatal("app.js has no shortModel")
+	}
+	js := string(b) + `
+const cases = [
+  ["claude-opus-5-5", "Opus 5.5"], ["claude-sonnet-4-6", "Sonnet 4.6"], ["claude-haiku-5-5", "Haiku 5.5"],
+  ["claude-fable-5-2", "Fable 5.2"], ["claude-opus-5", "Opus 5"], ["claude-sonnet-4-5-20250929", "Sonnet 4.5"],
+  ["claude-opus-4-1-20250805", "Opus 4.1"], ["claude-3-5-sonnet-20241022", "Sonnet 3.5"], ["claude-opus-5-5[1m]", "Opus 5.5"],
+  ["anthropic/claude-opus-5-5", "Opus 5.5"],
+  ["enmaas/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", "DeepSeek-V4.1-Flash"],
+  ["gpt-5", "gpt-5"], ["openai/gpt-4o-2024-08-06", "gpt-4o-2024-08-06"], ["m1", "m1"], ["a/b/", "b"], ["", ""], [null, ""], ["  ", ""],
+];
+console.log(JSON.stringify(cases.filter(([i, w]) => shortModel(i) !== w).map(([i, w]) => i + " -> " + shortModel(i) + ", wanted " + w)));
+`
+	out, err := exec.Command(node, "-e", js).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "[]" {
+		t.Fatalf("shortModel gave the wrong answer for: %s", out)
+	}
+}
