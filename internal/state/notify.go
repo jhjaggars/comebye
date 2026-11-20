@@ -300,6 +300,21 @@ func (d *Dispatcher) NotifyPlan(id, title, body string) {
 	}
 }
 
+// TodoRoute is the same-origin address that opens one To do item in the app
+// (a tap on its notification). An id that is not a to-do id gets the app's
+// front page.
+func TodoRoute(id string) string {
+	if len(id) != 11 || id[0] != 't' {
+		return "/"
+	}
+	for _, c := range id[1:] {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return "/"
+		}
+	}
+	return "/#/todo/" + id
+}
+
 // NotifyApproval tells the user an item waits for their Face ID (the GPG
 // unlock). It is sent once, when the item is made; its throttle key is the
 // item's, and it is the "blocked" kind: something needs the user.
@@ -310,13 +325,13 @@ func (d *Dispatcher) NotifyApproval(id, title, body string) {
 	ntfyOn, pushOn := d.channels()
 	key := "approval/" + id
 	if pushOn {
-		d.Push.Notify(key+"/"+KindBlocked, push.Message{Title: title, Body: body, URL: "/", Tag: key},
+		d.Push.Notify(key+"/"+KindBlocked, push.Message{Title: title, Body: body, URL: TodoRoute(id), Tag: key},
 			push.Options{Urgency: "high", TTL: 12 * time.Hour, Topic: push.TopicFor(key)})
 	}
 	if ntfyOn {
 		msg := ntfyMessage{Title: title, Message: body, Tags: []string{"lock"}}
 		if d.Ntfy.ClickURL != "" {
-			msg.Click = strings.TrimRight(d.Ntfy.ClickURL, "/") + "/"
+			msg.Click = strings.TrimRight(d.Ntfy.ClickURL, "/") + TodoRoute(id)
 		}
 		d.Ntfy.notify(key, KindBlocked, msg)
 	}

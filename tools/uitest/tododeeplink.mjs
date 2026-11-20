@@ -111,6 +111,37 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) {
       await page.evaluate(() => document.getElementById("dl-link").remove());
     });
 
+    await check(`a markdown link to #/todo/<id> in an item's context and a --link survive the sanitizer and open the item; other schemes do not: ${tag}`, async () => {
+      const target = await mk({ question: "link target " + width });
+      const src = await mk({
+        question: "link source " + width,
+        context: `Go to [the target](/#/todo/${target.id}) or [bare](#/todo/${target.id}).\n\n[agent](#/agent/w1:p1) [js](javascript:alert(1)) [other id](/#/todo/nonsense) [evil](/#/todo/${target.id}/../x) [web](https://example.com/x)`,
+        links: [{ label: "Sibling", url: "#/todo/" + target.id }],
+      });
+      // The hub still refuses every other scheme in a link.
+      for (const u of ["javascript:alert(1)", "#/agent/w1:p1", "#/todo/nonsense", "/#/todo/" + target.id + "x", "data:text/html,x"]) {
+        const r = await fetch(base + "/api/todos", { method: "POST", headers: J, body: JSON.stringify({ question: "bad link " + u, kind: "decision", no_wait: true, links: [{ url: u }] }) });
+        if (r.status !== 400) { const j = await r.json().catch(() => ({})); if (j.todo) ids.push(j.todo.id); throw new Error(`link ${u} was accepted: ${r.status}`); }
+      }
+      await cold("#/todo/" + src.id);
+      await openIs(src);
+      const hrefs = await page.evaluate((sel) => [...document.querySelectorAll(sel + " a")].map((a) => ({ t: a.textContent, h: a.getAttribute("href"), tg: a.getAttribute("target") })), item(src));
+      const by = (t) => hrefs.find((x) => x.t === t);
+      for (const t of ["the target", "bare"]) {
+        const x = by(t);
+        if (!x || !/^\/?#\/todo\/t[0-9a-f]{10}$/.test(x.h || "") || x.tg) throw new Error(`${t}: ${JSON.stringify(x)}`);
+      }
+      const sib = by("Sibling");
+      if (!sib || sib.h !== "/#/todo/" + target.id || sib.tg) throw new Error("--link: " + JSON.stringify(sib));
+      for (const t of ["agent", "js", "other id", "evil"]) if (by(t) && by(t).h) throw new Error(`${t} kept an href: ${JSON.stringify(by(t))}`);
+      if (!by("web") || by("web").tg !== "_blank") throw new Error("web link changed: " + JSON.stringify(by("web")));
+      await page.locator(`${item(src)} a`, { hasText: "the target" }).first().click();
+      await openIs(target);
+      if ((await page.locator(item(src) + ".open").count())) throw new Error("the source stayed open");
+      if (!(await hash()).endsWith("#/todo/" + target.id)) throw new Error("hash: " + (await hash()));
+      await page.screenshot({ path: `${out}/tododeeplink-${width}-${tag0}-ctxlink.png` });
+    });
+
     await check(`collapsing the item the link opened takes the hash back; Back/reload do not reopen it: ${tag}`, async () => {
       await cold("#/todo/" + a.id);
       await openIs(a);

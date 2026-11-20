@@ -243,3 +243,85 @@ func TestTodoShowDecisionSet(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 }
+
+func TestTodoLinkAndOpenLine(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/todos"] = answer{code: 201, body: `{"todo":` + todoJSON + `}`}
+	f.answers["GET /api/todos/t1"] = answer{body: `{"todo":` + todoJSON + `}`}
+
+	// A peer's route to the hub wins; the hub's public URL is next.
+	for _, c := range []struct{ who, want string }{
+		{`{"host":"w1","role":"agent","hub":"https://hub.t.ts.net/"}`, "https://hub.t.ts.net/#/todo/t1"},
+		{`{"host":"w1","role":"agent","hub":"self","public_url":"https://pub.example.ts.net"}`, "https://pub.example.ts.net/#/todo/t1"},
+	} {
+		f.answers["GET /api/whoami"] = answer{body: c.who}
+		out.Reset()
+		errb.Reset()
+		if code := run(e, "todo", "link", "t1"); code != 0 || out.String() != c.want+"\n" || errb.Len() != 0 {
+			t.Fatalf("link: %d %q %q", code, out, errb)
+		}
+		out.Reset()
+		if code := run(e, "todo", "link", "t1", "--json"); code != 0 {
+			t.Fatalf("link json: %d %s", code, errb)
+		}
+		var j map[string]any
+		if json.Unmarshal(out.Bytes(), &j); j["id"] != "t1" || j["url"] != c.want || j["full"] != true {
+			t.Fatalf("link json = %s", out)
+		}
+		out.Reset()
+		if code := run(e, "todo", "add", "q"); code != 0 || !strings.Contains(out.String(), "Added t1") || !strings.Contains(out.String(), "Open: "+c.want+"\n") {
+			t.Fatalf("add: %d %s", code, out)
+		}
+		out.Reset()
+		if code := run(e, "todo", "add", "q", "--json"); code != 0 {
+			t.Fatalf("add json: %d %s", code, errb)
+		}
+		j = nil
+		if json.Unmarshal(out.Bytes(), &j); j["url"] != c.want || j["full"] != true || j["todo"].(map[string]any)["id"] != "t1" {
+			t.Fatalf("add json = %s", out)
+		}
+		out.Reset()
+		if code := run(e, "todo", "set", "create", "--from", "-", "--json"); code != 2 {
+			// no stdin set: usage error, not a crash
+			t.Fatalf("set no input: %d", code)
+		}
+		e.Stdin = strings.NewReader(`{"question":"pick","decisions":[]}`)
+		if code := run(e, "todo", "set", "create", "--from", "-"); code != 0 || !strings.Contains(out.String(), "Open: "+c.want+"\n") {
+			t.Fatalf("set create: %d %s %s", code, out, errb)
+		}
+		out.Reset()
+		e.Stdin = strings.NewReader(`{"question":"pick","decisions":[]}`)
+		if code := run(e, "todo", "set", "create", "--from", "-", "--json"); code != 0 {
+			t.Fatalf("set json: %d %s", code, errb)
+		}
+		j = nil
+		if json.Unmarshal(out.Bytes(), &j); j["url"] != c.want {
+			t.Fatalf("set json = %s", out)
+		}
+	}
+
+	// A duplicate prints the link too.
+	f.answers["POST /api/todos"] = answer{body: `{"duplicate":true,"todo":` + todoJSON + `}`}
+	out.Reset()
+	if code := run(e, "todo", "add", "q"); code != 0 || !strings.Contains(out.String(), "Already on the list as t1.") || !strings.Contains(out.String(), "Open: https://pub.example.ts.net/#/todo/t1") {
+		t.Fatalf("dup: %d %s", code, out)
+	}
+
+	// No known hub URL: a path, said so on stderr.
+	f.answers["GET /api/whoami"] = answer{body: `{"host":"w1","role":"agent","hub":"self"}`}
+	out.Reset()
+	errb.Reset()
+	if code := run(e, "todo", "link", "t1"); code != 0 || out.String() != "/#/todo/t1\n" || !strings.Contains(errb.String(), "path") {
+		t.Fatalf("path: %d %q %q", code, out, errb)
+	}
+
+	// A typo exits non-zero and prints no URL.
+	f.answers["GET /api/todos/t9"] = answer{code: 404, body: `{"code":"not_found","message":"no such to-do"}`}
+	out.Reset()
+	if code := run(e, "todo", "link", "t9"); code != 1 || out.Len() != 0 {
+		t.Fatalf("unknown: %d %q", code, out)
+	}
+	if code := run(e, "todo", "link"); code != 2 {
+		t.Fatalf("no id: %d", code)
+	}
+}

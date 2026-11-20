@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -333,5 +334,25 @@ func TestNotifyPlan(t *testing.T) {
 	}
 	if k, err := ParseKinds("done,plan"); err != nil || !k[KindPlan] {
 		t.Fatalf("plan kind = %v %v", k, err)
+	}
+}
+
+// An approval's push opens the item it is about: a tap lands on /#/todo/<id>.
+func TestNotifyApprovalOpensTheTodoItem(t *testing.T) {
+	fp := &fakePusher{}
+	d := &Dispatcher{Push: fp}
+	d.NotifyApproval("t0123456789", "Unlock GPG?", "Open the app to unlock it with Face ID.")
+	if len(fp.msgs) != 1 || fp.msgs[0].URL != "/#/todo/t0123456789" {
+		t.Fatalf("push = %+v", fp.msgs)
+	}
+	b, _ := json.Marshal(fp.msgs[0])
+	if !strings.Contains(string(b), `"url":"/#/todo/t0123456789"`) {
+		t.Fatalf("payload = %s", b)
+	}
+	// Anything that is not a to-do id falls back to the front page.
+	for _, id := range []string{"", "x0123456789", "t012345678", "t01234567zz", "t0123456789a", "t0123456789/../x"} {
+		if got := TodoRoute(id); got != "/" {
+			t.Errorf("TodoRoute(%q) = %q", id, got)
+		}
 	}
 }

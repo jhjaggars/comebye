@@ -128,6 +128,46 @@ func parseAskOptions(options, recommends []string) ([]map[string]string, []int, 
 	return opts, recs, nil
 }
 
+// todoLink is the address that opens one To do item in the app: the hub's
+// full URL when known (what a peer forwards to, else its public URL), else
+// the bare path, flagged as not full. Built here, like pageLink, because only
+// the CLI knows its route to the hub.
+func todoLink(c *client, id string) (link string, full bool) {
+	path := "/#/todo/" + id
+	if w, err := c.getWhoami(); err == nil {
+		if w.Hub != "" && w.Hub != "self" {
+			return strings.TrimRight(w.Hub, "/") + path, true
+		}
+		if w.PublicURL != "" {
+			return strings.TrimRight(w.PublicURL, "/") + path, true
+		}
+	}
+	return path, false
+}
+
+// todoAddJSON prints the hub's answer to an add with the item's link added
+// as "url" (and "full": false when it is only a path).
+func todoAddJSON(e *Env, c *client, data []byte) error {
+	var v map[string]any
+	if json.Unmarshal(data, &v) != nil {
+		return rawJSON(e, data)
+	}
+	if t, ok := v["todo"].(map[string]any); ok {
+		if id, _ := t["id"].(string); id != "" {
+			link, full := todoLink(c, id)
+			v["url"] = link
+			v["full"] = full
+		}
+	}
+	return jsonOut(e, v)
+}
+
+// printOpen prints the "Open: URL" line an agent puts in its message.
+func printOpen(e *Env, c *client, id string) {
+	link, _ := todoLink(c, id)
+	fmt.Fprintf(e.Stdout, "Open: %s\n", link)
+}
+
 func cmdTodo(e *Env, args []string) error {
 	fs := flag.NewFlagSet("todo", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
@@ -154,7 +194,7 @@ func cmdTodo(e *Env, args []string) error {
 		return err
 	}
 	if len(pos) == 0 {
-		return usageErr("want add, set create, from-last, list, show, answer, done or drop")
+		return usageErr("want add, set create, from-last, list, show, link, answer, done or drop")
 	}
 	sub, pos := pos[0], pos[1:]
 	c, err := newClient(e)
@@ -238,7 +278,7 @@ func cmdTodo(e *Env, args []string) error {
 			return err
 		}
 		if *asJSON {
-			return rawJSON(e, data)
+			return todoAddJSON(e, c, data)
 		}
 		var r struct {
 			Todo      apiTodo `json:"todo"`
@@ -251,9 +291,11 @@ func cmdTodo(e *Env, args []string) error {
 		}
 		if r.Duplicate {
 			fmt.Fprintf(e.Stdout, "Already on the list as %s.\n", r.Todo.ID)
+			printOpen(e, c, r.Todo.ID)
 			return nil
 		}
 		fmt.Fprintf(e.Stdout, "Added %s (%s); it shows in the app's To do panel. Waiting: %s.\n", r.Todo.ID, r.Todo.Kind, r.Todo.waiter())
+		printOpen(e, c, r.Todo.ID)
 		if r.Hint != "" {
 			fmt.Fprintf(e.Stdout, "Hint: %s.\n", r.Hint)
 		}
@@ -314,7 +356,7 @@ func cmdTodo(e *Env, args []string) error {
 			return err
 		}
 		if *asJSON {
-			return rawJSON(e, data)
+			return todoAddJSON(e, c, data)
 		}
 		var r struct {
 			Todo      apiTodo `json:"todo"`
@@ -325,9 +367,11 @@ func cmdTodo(e *Env, args []string) error {
 		}
 		if r.Duplicate {
 			fmt.Fprintf(e.Stdout, "Already on the list as %s.\n", r.Todo.ID)
+			printOpen(e, c, r.Todo.ID)
 			return nil
 		}
 		fmt.Fprintf(e.Stdout, "Added decision set %s; it shows in the app's To do panel as one card. Waiting: %s.\n", r.Todo.ID, r.Todo.waiter())
+		printOpen(e, c, r.Todo.ID)
 		return nil
 	case "from-last":
 		// File one item per question in an agent's last message: yours by
@@ -427,6 +471,24 @@ func cmdTodo(e *Env, args []string) error {
 		}
 		if r.Answered > 0 {
 			fmt.Fprintf(e.Stdout, "\n* answered: relay the answer to whoever waits, then `comebye todo done ID`.\n")
+		}
+		return nil
+	case "link":
+		// One full URL on stdout, nothing else; a typo exits non-zero.
+		id, err := one("ID")
+		if err != nil {
+			return err
+		}
+		if _, err := c.raw("GET", "/api/todos/"+url.PathEscape(id), nil, nil); err != nil {
+			return err
+		}
+		link, full := todoLink(c, id)
+		if *asJSON {
+			return jsonOut(e, map[string]any{"id": id, "url": link, "full": full})
+		}
+		fmt.Fprintln(e.Stdout, link)
+		if !full {
+			fmt.Fprintln(e.Stderr, "That is a path on the hub, not a full URL: set the hub's -public-url for a full link.")
 		}
 		return nil
 	case "show":

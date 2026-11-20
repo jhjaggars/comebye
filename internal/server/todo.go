@@ -501,6 +501,10 @@ func block(s string, n int) string {
 var todoAgentRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._-]{0,63}/[A-Za-z0-9][A-Za-z0-9:._-]{0,63}$`)
 var todoHandoffRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
+// todoSelfLinkRE is a link to one To do item on this same hub (the app's
+// own route, /#/todo/<id>), which a link may be without being http(s).
+var todoSelfLinkRE = regexp.MustCompile(`^/?#/todo/t[0-9a-f]{10}$`)
+
 // cleanLinks keeps http(s) URLs and handoff ids; anything else is an error.
 func cleanLinks(in []TodoLink) ([]TodoLink, error) {
 	if len(in) > todoMaxLinks {
@@ -515,7 +519,9 @@ func cleanLinks(in []TodoLink) ([]TodoLink, error) {
 		if l.URL == "" && l.Handoff == "" {
 			return nil, errors.New("a link needs a url or a handoff id")
 		}
-		if l.URL != "" {
+		if l.URL != "" && todoSelfLinkRE.MatchString(l.URL) {
+			// A link to another item on this hub: the app opens it in place.
+		} else if l.URL != "" {
 			u, err := url.Parse(l.URL)
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || len(l.URL) > 500 || strings.ContainsAny(l.URL, " \t\r\n") {
 				return nil, fmt.Errorf("link %q: only http(s) URLs", oneLine(l.URL, 60))

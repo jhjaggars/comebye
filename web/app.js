@@ -439,7 +439,9 @@ const MD_PURIFY = {
   ALLOWED_ATTR: ["href", "title", "class", "align", "start", "type", "checked", "disabled"],
   // Only absolute web and mail links; anything else (javascript:, data:,
   // relative paths that would land on this app) loses its href.
-  ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i,
+  // The one exception is a link to a To do item on this same hub
+  // (/#/todo/<id> or #/todo/<id>): it stays, and opens in the app.
+  ALLOWED_URI_REGEXP: /^(?:(?:https?:|mailto:)|\/?#\/todo\/t[0-9a-f]{10}$)/i,
   // DOMPurify checks every attribute value not listed as URI-safe against
   // that regexp; these never hold URLs, so exempt them.
   ADD_URI_SAFE_ATTR: ["align", "start", "type", "checked", "disabled"],
@@ -464,10 +466,15 @@ function mdSetup() {
       else node.removeAttribute("class");
     }
     if (tag === "A") {
-      if (node.hasAttribute("href") && !/^(?:https?:|mailto:)/i.test(node.getAttribute("href"))) {
+      const href = node.getAttribute("href");
+      const inApp = href != null && /^\/?#\/todo\/t[0-9a-f]{10}$/.test(href);
+      if (href != null && !inApp && !/^(?:https?:|mailto:)/i.test(href)) {
         node.removeAttribute("href"); // belt and braces with ALLOWED_URI_REGEXP
       }
-      if (node.hasAttribute("href")) {
+      if (inApp) {
+        node.removeAttribute("target"); // same tab: the hash change opens the item
+        node.removeAttribute("rel");
+      } else if (node.hasAttribute("href")) {
         node.setAttribute("target", "_blank");
         node.setAttribute("rel", "noopener noreferrer");
       }
@@ -1915,7 +1922,11 @@ const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight
   drafts: loadTodoDrafts(), pend: new Overlay(),
   deep: null, deepId: null, deepHash: null, pin: null, notice: null };
 
-function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/(agent\/[^\s]+|pages\/pg_[0-9a-f]{10})$/.test(u || "") ? u : ""; }
+function todoLinkHref(u) {
+  u = u || "";
+  if (/^#\/todo\/t[0-9a-f]{10}$/.test(u)) return "/" + u; // same hub: opens in the app
+  return /^https?:\/\//i.test(u) || /^\/#\/(agent\/[^\s]+|pages\/pg_[0-9a-f]{10}|todo\/t[0-9a-f]{10})$/.test(u) ? u : "";
+}
 const todoRepOpen = new Set(); // items whose "Full report" is expanded: a redraw keeps it
 // The provenance chip: items the hub filed itself say so (and why).
 const TODO_SOURCE = { "hub-quiet": "auto · quiet", "hub-blocked": "auto · blocked", "hub-question": "auto · question", "hub-report": "from report" };
