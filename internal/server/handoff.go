@@ -1267,6 +1267,14 @@ func (s *Server) confirmOne(ctx context.Context, it *removal, allowWorking bool,
 		return o
 	}
 	s.findWorktree(ctx, it)
+	// A gone session's only leftovers may be stale remote branches: the user's
+	// confirm deletes them (re-checked on the host first), or the removal waits.
+	if discardTip == "" {
+		if _, err := s.deleteStaleFor(ctx, it, "on your confirm,", time.Now()); err != nil {
+			o.Code, o.Message = "stale_branch", err.Error()
+			return o
+		}
+	}
 	var lost *lostWork
 	if discardTip != "" {
 		// What this discard drops, as the checks see it now, for the record.

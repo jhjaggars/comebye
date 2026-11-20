@@ -412,6 +412,15 @@ type Ask struct {
 	// left the old answer standing ("did not answer").
 	Reasks    int    `json:"reasks,omitempty"`
 	ReaskNote string `json:"reask_note,omitempty"`
+	// Loop is the last thing the sweep loop did about this answer, and when
+	// (it deleted a stale branch, or found every item had resolved).
+	Loop *LoopNote `json:"loop,omitempty"`
+}
+
+// LoopNote says what the sweep loop did and when.
+type LoopNote struct {
+	At   time.Time `json:"at"`
+	Text string    `json:"text"`
 }
 
 // AskItem types.
@@ -441,6 +450,15 @@ type AskItem struct {
 	Name   string `json:"name,omitempty"`
 	Host   string `json:"host,omitempty"`
 	Text   string `json:"text,omitempty"`
+	// Done is set when the sweep loop finished the item itself (it deleted a
+	// remote branch that was provably in the default branch).
+	Done *ItemDone `json:"done,omitempty"`
+}
+
+// ItemDone records how the sweep loop finished a leftover item.
+type ItemDone struct {
+	At  time.Time `json:"at"`
+	How string    `json:"how"`
 }
 
 // PageRef names a published Page that captures an agent's work.

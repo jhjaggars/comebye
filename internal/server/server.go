@@ -632,6 +632,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/probe", s.auth(s.handleProbe))
 	s.mux.HandleFunc("POST /api/worker", s.auth(s.handleWorker))
 	s.mux.HandleFunc("POST /api/remove", s.auth(s.handleRemove))
+	s.mux.HandleFunc("POST /api/stale-branch", s.auth(s.handleStaleBranch))
 	s.mux.HandleFunc("POST /api/scratch", s.authAgentLocal(s.handleScratch))
 	// Park and resume (park.go): the user's alone. The host writes the record.
 	s.mux.HandleFunc("POST /api/park", s.auth(s.handlePark))

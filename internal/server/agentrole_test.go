@@ -103,6 +103,7 @@ func TestAgentRoleAllowlist(t *testing.T) {
 		{"GET", "/api/probe?kind=pid&pid=1234", ""},
 		{"POST", "/api/worker", `{}`},
 		{"POST", "/api/remove", `{}`},
+		{"POST", "/api/stale-branch", `{}`},
 		{"GET", "/api/hosts/desk/repos", ""},
 		{"GET", "/api/hosts/desk/checks", ""},
 		{"GET", "/api/removals", ""},

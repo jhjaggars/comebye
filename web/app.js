@@ -5404,25 +5404,31 @@ function askAge(iso) {
 const ASK_ITEM_CHIP = { resolved: "resolved", unresolved: "holds", unchecked: "can’t check" };
 // Who an unresolved item of a type waits on, when the type says so.
 const ASK_WAITS = { decision: "waits on you", cleanup: "agent can do it" };
+// loopNote says what the sweep loop did about an answer, and when ("the sweep, 2 h ago: deleted origin/x …").
+const loopNote = (l) => l ? `<div class="rv-ask-n rv-loop">Sweep · ${esc(askAge(l.at))}: ${esc(l.text)}</div>` : "";
 function reviewAskHTML(it, dis) {
   const ar = it.ask_review;
   if (!ar || ar.state !== "unsafe") return "";
   const id = esc(it.id);
   const re = ar.cleaning ? " · cleaning up…" : ar.reasking ? " · asking it again…" : "";
   const busy = !!(ar.reasking || ar.cleaning);
-  const hold = ar.resolved ? "all of it is done now" : "still left";
+  const hold = ar.resolved ? "all of it is done now" : ar.stale_only ? "the sweep can finish it" : "still left";
   const rows = (ar.items || []).map((x, i) => {
-    const text = x.type === "other" || x.type === "cleanup" ? esc(x.text || "(no detail given)") : `<b>${esc(x.label)}</b> ${esc(x.now)}${x.text ? ` <span class="rv-say">“${esc(x.text)}”</span>` : ""}`;
-    const waits = x.state !== "resolved" && ASK_WAITS[x.type] ? ASK_WAITS[x.type] : "";
+    const found = (x.stale || x.state === "resolved") && x.now ? ` <span class="rv-say">${esc(x.now)}</span>` : "";
+    const text = x.type === "other" || x.type === "cleanup" ? esc(x.text || "(no detail given)") + found : `<b>${esc(x.label)}</b> ${esc(x.now)}${x.text ? ` <span class="rv-say">“${esc(x.text)}”</span>` : ""}`;
+    const waits = x.state !== "resolved" && x.stale ? "sweep can do it" : x.state !== "resolved" && ASK_WAITS[x.type] ? ASK_WAITS[x.type] : "";
     const chip = waits || ASK_ITEM_CHIP[x.state] || x.state;
     return `<li class="rv-ai ${esc(x.state)} t-${esc(x.type)}"><span class="rv-chip">${esc(chip)}</span><span class="rv-ai-t">${text}</span>` +
-      `<button type="button" class="btn rv-reask" data-act="reask" data-id="${id}" data-item="${i + 1}" aria-label="Re-ask the session about item ${i + 1}"${dis || busy ? " disabled" : ""}>Re-ask</button></li>`;
+      (ar.stale_only || (it.live && !it.live.present) ? "" : `<button type="button" class="btn rv-reask" data-act="reask" data-id="${id}" data-item="${i + 1}" aria-label="Re-ask the session about item ${i + 1}"${dis || busy ? " disabled" : ""}>Re-ask</button>`) + `</li>`;
   }).join("");
-  const clean = ar.only_cleanup && !ar.resolved
+  const staleN = ar.stale_only ? `<div class="rv-ask-act"><span class="rv-ask-n">The agent is gone. Git shows every commit on that branch is already in the default branch, so removing this session deletes it first (and the sweep does it by itself when auto-delete is on).</span></div>` : "";
+  const goneN = ar.only_cleanup && !ar.resolved && !ar.stale_only && it.live && !it.live.present
+    ? `<div class="rv-ask-act"><span class="rv-ask-n">The agent is gone, so nothing can do this for it. The sweep checks what it can on the host; the rest is left to you.</span></div>` : "";
+  const clean = ar.only_cleanup && !ar.resolved && !ar.stale_only && !(it.live && !it.live.present)
     ? `<div class="rv-ask-act"><button type="button" class="btn rv-cleanup" data-act="cleanup" data-id="${id}"${dis || busy ? " disabled" : ""}>Let it clean up</button>` +
       `<span class="rv-ask-n">Tells the session to do exactly what is listed, then asks again what is left.</span></div>` : "";
   const note = ar.reask_note ? `<div class="rv-ask-n">${esc(ar.reask_note)}</div>` : "";
-  return `<div class="rv-ask ${ar.resolved ? "resolved" : "holds"}"><div class="rv-ask-h"><b>LEFT TO FINISH</b> · answered <span class="rv-age">${esc(askAge(ar.answered_at))}</span>${re} · ${hold}</div><ul class="rv-items">${rows}</ul>${clean}${note}</div>`;
+  return `<div class="rv-ask ${ar.resolved ? "resolved" : "holds"}"><div class="rv-ask-h"><b>LEFT TO FINISH</b> · answered <span class="rv-age">${esc(askAge(ar.answered_at))}</span>${re} · ${hold}</div><ul class="rv-items">${rows}</ul>${clean}${goneN}${staleN}${loopNote(ar.loop)}${note}</div>`;
 }
 
 const reviewDone = (it) => !!(review.results.get(it.id) || {}).ok;
@@ -5444,11 +5450,11 @@ function reviewItemHTML(it) {
     ? `<li>Clean, and merged into ${esc(c.base_used || "its base")}: the worktree and its local branch will be removed</li>` : "";
   const ask = m.ask || {};
   const said = ask.state === "safe"
-    ? `<li>Nothing is left to finish${ask.reason ? ": " + esc(ask.reason) : ""} · answered <span class="rv-age">${esc(askAge(ask.at))}</span> <button type="button" class="btn rv-reask" data-act="reask" data-id="${esc(it.id)}"${review.busy || ask.reasked_at ? " disabled" : ""}>Re-ask</button></li>` : "";
+    ? `<li>Nothing is left to finish${ask.reason && !ask.loop ? ": " + esc(ask.reason) : ""} · answered <span class="rv-age">${esc(askAge(ask.at))}</span> ${it.live && it.live.present ? `<button type="button" class="btn rv-reask" data-act="reask" data-id="${esc(it.id)}"${review.busy || ask.reasked_at ? " disabled" : ""}>Re-ask</button>` : ""}${loopNote(ask.loop)}</li>` : "";
   // An UNSAFE answer's items are rows of their own below (reviewAskHTML): their warnings and per-item notes are not repeated.
   const askRows = !!(it.ask_review && it.ask_review.state === "unsafe");
   const warnings = (it.warnings || []).filter((w) => !(askRows && w.startsWith("the session says this is left"))).map((w) => `<li>${esc(w)}</li>`).join("");
-  const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session listed ") && w.includes(" as left, but it "))).map((w) => `<li>${esc(w)}</li>`).join("");
+  const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session listed ") && (w.includes(" as left, but it ") || w.startsWith("the session listed this as left:")))).map((w) => `<li>${esc(w)}</li>`).join("");
   const report = it.final_report
     ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary>${copyBtnHtml("rep:" + it.id, it.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md"></div><div class="hubchk" data-id="${esc(it.id)}" hidden></div></details>` : "";
   const loss = it.discardable && !done ? lossHTML(it) : "";
@@ -8588,7 +8594,7 @@ function draftFrom(name, data) {
   for (const [k, v] of Object.entries(s.kinds || {})) kinds[k] = { model: v.model || "", thinking: v.thinking || "" };
   return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds, max_workers: s.max_workers_per_repo == null ? "" : String(s.max_workers_per_repo),
     // The scheduled sweep (sweep_loop): on unless switched off; "" minutes is the default hour. Hosts too old to have it send nothing.
-    sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "" };
+    sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "", sweep_del: !!(s.sweep_loop && s.sweep_loop.auto_delete_branches) };
 }
 
 function draftBody(d) {
@@ -8601,6 +8607,7 @@ function draftBody(d) {
     const sl = {}, ev = String(d.sweep_every || "").trim();
     if (!d.sweep_on) sl.enabled = false;
     if (/^\d+$/.test(ev)) sl.every_minutes = Number(ev);
+    if (d.sweep_del) sl.auto_delete_branches = true;
     body.sweep_loop = sl; // {} puts the default back
   }
   return body;
@@ -8684,7 +8691,7 @@ function maxwNote(d, eff) {
 function sweepNote(d, sw) {
   if (!d.sweep_on) return "Off: the hub does not look for finished sessions by itself. `comebye sweep` still does it by hand.";
   const last = sw && sw.last_run_at ? `Last ran ${fmtWhen(sw.last_run_at)}: marked ${sw.last_marked}, ${sw.last_needs_look} need a look.` : "It has not run yet.";
-  return `Marks finished sessions with nothing to lose as ready to remove, and files one To do item a day. It never removes anything itself. ${last}`;
+  return `Marks finished sessions with nothing to lose as ready to remove, and files one To do item a day. It never removes anything itself. ${d.sweep_del ? "It also deletes a gone session’s remote branch itself when git shows every commit on it is already in the default branch and no pull request is open." : "A gone session’s stale remote branch (every commit already in the default branch) is deleted when you confirm the day’s item."} ${last}`;
 }
 function peerSettingsForm(h, c, d) {
   const data = c.data;
@@ -8718,7 +8725,8 @@ function peerSettingsForm(h, c, d) {
       <div class="pr-note" id="pr-maxw-note">${maxwNote(d, eff)} Agents cannot change it.</div></div>
     ${d.sweep_known ? `<div class="pr-field"><span class="pr-lbl" id="pr-sweep-l">Sweep for sessions to remove</span>
       <div class="pr-checks" role="group" aria-labelledby="pr-sweep-l"><label class="pr-check"><input type="checkbox" id="pr-sweep-on"${d.sweep_on ? " checked" : ""}>On</label>
-        <label class="pr-check" for="pr-sweep-every">every <input type="number" id="pr-sweep-every" min="15" max="1440" step="5" inputmode="numeric" value="${esc(d.sweep_every)}" placeholder="60" autocomplete="off"${d.sweep_on ? "" : " disabled"}> minutes</label></div>
+        <label class="pr-check" for="pr-sweep-every">every <input type="number" id="pr-sweep-every" min="15" max="1440" step="5" inputmode="numeric" value="${esc(d.sweep_every)}" placeholder="60" autocomplete="off"${d.sweep_on ? "" : " disabled"}> minutes</label>
+        <label class="pr-check" for="pr-sweep-del"><input type="checkbox" id="pr-sweep-del"${d.sweep_del ? " checked" : ""}${d.sweep_on ? "" : " disabled"}>Delete a gone session’s stale remote branch without asking</label></div>
       <div class="pr-note" id="pr-sweep-note">${esc(sweepNote(d, data.sweep_loop))}</div></div>` : ""}
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
@@ -9044,6 +9052,7 @@ function initPeers() {
     if (!d) return;
     if (t.id === "pr-default") d.default_kind = t.value;
     else if (t.id === "pr-sweep-on") d.sweep_on = t.checked;
+    else if (t.id === "pr-sweep-del") d.sweep_del = t.checked;
     else if (t.dataset.allow) d.allowed = t.checked ? [...new Set([...d.allowed, t.dataset.allow])] : d.allowed.filter((k) => k !== t.dataset.allow);
     else if (t.dataset.think) (d.kinds[t.dataset.think] ||= { model: "", thinking: "" }).thinking = t.value;
     else return;

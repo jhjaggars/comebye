@@ -244,6 +244,11 @@ type itemView struct {
 	// ChangedAt is when it resolved, when known (a PR merging, a to-do
 	// closing): an event after the answer is a reason to ask again.
 	ChangedAt *time.Time `json:"changed_at,omitempty"`
+	// Stale: the item is deleting a remote branch of the session's own whose
+	// every commit is provably in the default branch (Proof says how): the
+	// sweep may do it (stalebranch.go).
+	Stale bool   `json:"stale,omitempty"`
+	Proof string `json:"proof,omitempty"`
 }
 
 // askReview is a mark's answer with its items re-checked.
@@ -264,6 +269,11 @@ type askReview struct {
 	Cleaning  *time.Time `json:"cleaning,omitempty"`
 	ReaskNote string     `json:"reask_note,omitempty"`
 	Reasks    int        `json:"reasks,omitempty"`
+	// StaleOnly: the session is gone and every item still unresolved is a stale
+	// branch the sweep can delete (so confirming the removal covers them).
+	StaleOnly bool `json:"stale_only,omitempty"`
+	// Loop is what the sweep loop last did about this answer, and when.
+	Loop *ledger.LoopNote `json:"loop,omitempty"`
 }
 
 // agoText says how long ago t was.
@@ -287,7 +297,7 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 	if a == nil {
 		return nil
 	}
-	ar := &askReview{State: a.State, AnsweredAt: a.At, Reasking: a.ReaskedAt, Cleaning: a.CleaningAt, ReaskNote: a.ReaskNote, Reasks: a.Reasks}
+	ar := &askReview{State: a.State, AnsweredAt: a.At, Reasking: a.ReaskedAt, Cleaning: a.CleaningAt, ReaskNote: a.ReaskNote, Reasks: a.Reasks, Loop: a.Loop}
 	if a.State != ledger.AskUnsafe {
 		return ar
 	}
@@ -305,16 +315,22 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 			defer wg.Done()
 			v := itemView{AskItem: item, Label: itemLabel(item)}
 			v.State, v.Now, v.ChangedAt = s.recheck(cctx, it, item)
+			s.staleCheck(cctx, it, &v)
 			ar.Items[i] = v
 		}()
 	}
 	wg.Wait()
 	ar.Resolved = true
-	cleanups := 0
+	cleanups, stales, others := 0, 0, 0
 	ar.OnlyCleanup = true
 	for _, v := range ar.Items {
 		if v.State != itemResolved {
 			ar.Resolved = false
+			if v.Stale {
+				stales++
+			} else {
+				others++
+			}
 			if v.Type != ledger.ItemCleanup {
 				ar.OnlyCleanup = false
 			} else {
@@ -326,12 +342,16 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 		}
 	}
 	ar.OnlyCleanup = ar.OnlyCleanup && cleanups > 0
+	ar.StaleOnly = stales > 0 && others == 0 && !it.Live.Present
 	return ar
 }
 
 // recheck looks at one item again.
 func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) (state, now string, changed *time.Time) {
 	unchecked := func(why string) (string, string, *time.Time) { return itemUnchecked, "can't check: " + why, nil }
+	if d := item.Done; d != nil {
+		return itemResolved, d.How + " " + agoText(time.Now(), d.At), nil
+	}
 	switch item.Type {
 	case ledger.ItemPR:
 		if item.Repo == "" {
@@ -585,6 +605,10 @@ func (ar *askReview) reviewLines(it *removal, asCaptured bool) {
 			it.Notes = append(it.Notes, "the session listed "+v.Label+" as left, but it "+v.Now)
 			continue
 		}
+		if ar.StaleOnly && v.Stale {
+			it.Notes = append(it.Notes, "the session listed this as left: "+v.Text+" (answered "+agoText(time.Now(), ar.AnsweredAt)+"). The hub checked on its host: "+v.Now+". Confirming the removal deletes it.")
+			continue
+		}
 		it.Warnings = append(it.Warnings, "the session says this is left: "+itemText(v)+age)
 	}
 }
@@ -603,4 +627,51 @@ func itemText(v itemView) string {
 		s += " (" + v.Text + ")"
 	}
 	return s
+}
+
+// staleProbe asks the session's host about one remote branch; del deletes it
+// when the proof holds there. A check is cached for a minute, a delete never.
+func (s *Server) staleProbe(ctx context.Context, it *removal, branch string, del bool) (*staleBranchResult, string) {
+	b := staleBranchBody{Path: it.Worktree, Repo: it.opts.Repo, Branch: branch, Own: it.Branch, Delete: del}
+	ask := func() any {
+		r, lerr := s.staleBranchOn(ctx, it.Host, b)
+		if lerr != nil {
+			return &staleBranchResult{State: staleUnknown, Why: lerr.message}
+		}
+		return r
+	}
+	if del {
+		r, _ := ask().(*staleBranchResult)
+		return r, ""
+	}
+	r, _ := s.cached("stale|"+it.Host+"|"+it.Worktree+"|"+branch, ask).(*staleBranchResult)
+	return r, ""
+}
+
+// staleCheck looks at an item that is about deleting the session's own remote
+// branch, and says what the host found: already gone (resolved), provably in the
+// default branch (Stale: the sweep can do it), or kept for a reason.
+func (s *Server) staleCheck(ctx context.Context, it *removal, v *itemView) {
+	if v.State == itemResolved || (v.Type != ledger.ItemCleanup && v.Type != ledger.ItemOther) || it.Branch == "" || it.Worktree == "" || !s.knownHost(it.Host) {
+		return
+	}
+	branch, ok := remoteBranchItem(v.Text, it.Branch)
+	if !ok {
+		return
+	}
+	r, _ := s.staleProbe(ctx, it, branch, false)
+	if r == nil {
+		return
+	}
+	switch r.State {
+	case staleAbsent:
+		v.State, v.Now = itemResolved, "origin no longer has "+branch
+	case staleInMain:
+		v.State, v.Stale, v.Proof = itemOpen, true, r.Proof
+		v.Now = fmt.Sprintf("origin/%s is at %s and %s; no pull request from it is open: it is safe to delete", branch, short(r.Tip), r.Proof)
+	case staleNotInMain, staleOpenPR:
+		v.State, v.Now = itemOpen, "origin/"+branch+" is kept: "+r.Why
+	default:
+		v.State, v.Now = itemUnchecked, "can't check: "+orDefault(r.Why, r.State)
+	}
 }

@@ -72,6 +72,10 @@ const (
 type sweepLoopSettings struct {
 	Enabled      *bool `json:"enabled,omitempty"`
 	EveryMinutes *int  `json:"every_minutes,omitempty"`
+	// AutoDeleteBranches lets the loop delete a gone session's stale remote
+	// branch itself (every commit provably in the default branch, no open PR).
+	// Off (nil or false) the deletion waits for the one confirm of the day's item.
+	AutoDeleteBranches *bool `json:"auto_delete_branches,omitempty"`
 }
 
 func normalizeSweepLoop(in *sweepLoopSettings) *sweepLoopSettings {
@@ -87,7 +91,11 @@ func normalizeSweepLoop(in *sweepLoopSettings) *sweepLoopSettings {
 		n := min(max(*in.EveryMinutes, int(minSweepEvery/time.Minute)), int(maxSweepEvery/time.Minute))
 		out.EveryMinutes = &n
 	}
-	if out.Enabled == nil && out.EveryMinutes == nil {
+	if in.AutoDeleteBranches != nil {
+		v := *in.AutoDeleteBranches
+		out.AutoDeleteBranches = &v
+	}
+	if out.Enabled == nil && out.EveryMinutes == nil && out.AutoDeleteBranches == nil {
 		return nil
 	}
 	return out
@@ -98,6 +106,8 @@ type sweepLoopConf struct {
 	On     bool          `json:"enabled"`
 	Every  time.Duration `json:"-"`
 	Source string        `json:"source"` // "setting" or "default"
+	// AutoDeleteBranches: delete provably stale remote branches with no confirm.
+	AutoDeleteBranches bool `json:"auto_delete_branches"`
 }
 
 func (s *Server) sweepLoopConf() sweepLoopConf {
@@ -109,6 +119,7 @@ func (s *Server) sweepLoopConf() sweepLoopConf {
 		if v.EveryMinutes != nil {
 			c.Every, c.Source = time.Duration(*v.EveryMinutes)*time.Minute, "setting"
 		}
+		c.AutoDeleteBranches = v.AutoDeleteBranches != nil && *v.AutoDeleteBranches
 	}
 	return c
 }
@@ -127,7 +138,11 @@ type sweepLoopState struct {
 	LastMarked    int            `json:"last_marked"`
 	LastNames     []sweepSession `json:"last_names,omitempty"`
 	LastNeedsLook int            `json:"last_needs_look"`
-	LastError     string         `json:"last_error,omitempty"`
+	// LastSettled and LastDeleted: gone sessions whose leftovers the last run
+	// settled, and the stale remote branches it deleted.
+	LastSettled int      `json:"last_settled,omitempty"`
+	LastDeleted []string `json:"last_deleted,omitempty"`
+	LastError   string   `json:"last_error,omitempty"`
 	// TodoID and TodoAt are the item last filed and when.
 	TodoID   string    `json:"todo_id,omitempty"`
 	TodoAt   time.Time `json:"todo_at"`
@@ -248,6 +263,7 @@ func (s *Server) sweepOnce(ctx context.Context, now time.Time) sweepResult {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	res := s.sweep(ctx, sweepBody{IdleAfter: sweepLoopIdle.String()}, "", AutoCreator)
+	settled, deleted := s.leftovers(ctx, now)
 	var names []sweepSession
 	for _, g := range [][]sweepItem{res.Ready, res.Gone} {
 		for _, it := range g {
@@ -261,6 +277,7 @@ func (s *Server) sweepOnce(ctx context.Context, now time.Time) sweepResult {
 	l.st.LastRunAt, l.st.LastError = now, ""
 	l.st.Runs++
 	l.st.LastMarked, l.st.LastNeedsLook = len(names), len(res.NeedsLook)
+	l.st.LastSettled, l.st.LastDeleted = settled, deleted
 	l.st.LastNames = names[:min(len(names), sweepKeepNames)]
 	l.saveLocked()
 	l.mu.Unlock()
@@ -274,6 +291,9 @@ func (s *Server) sweepOnce(ctx context.Context, now time.Time) sweepResult {
 			more = fmt.Sprintf(" and %d more", len(names)-len(list))
 		}
 		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep marked %d %s ready to remove: %s%s.", len(names), plural(len(names), "session", "sessions"), strings.Join(list, ", "), more))
+	}
+	if len(deleted) > 0 {
+		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep deleted %d stale remote %s (every commit is in the default branch): %s.", len(deleted), plural(len(deleted), "branch", "branches"), strings.Join(deleted, ", ")))
 	}
 	return res
 }
@@ -289,7 +309,9 @@ func (s *Server) sweepTodoPrefilter(now time.Time) []*removal {
 		if it.Coordinator || m.Discard || now.Sub(m.At) < s.sweeps.grace {
 			continue
 		}
-		if m.Ask != nil && (m.Ask.State == ledger.AskAsking || m.Ask.State == ledger.AskUnsafe) {
+		// A gone session's LEFT answer is looked at: its stale branches are
+		// what the confirm deletes (the review decides whether it is safe).
+		if m.Ask != nil && (m.Ask.State == ledger.AskAsking || (m.Ask.State == ledger.AskUnsafe && it.Live.Present)) {
 			continue
 		}
 		out = append(out, it)
@@ -334,6 +356,13 @@ func sweepTodoText(ready []*removal) (question, body string) {
 	}
 	var b strings.Builder
 	b.WriteString("These sessions are marked ready to remove, and the hub's checks found nothing to lose in them: each is clean, its work is in the base branch, and nothing is unpushed. Nothing is removed until you confirm.\n\n")
+	nb := 0
+	for _, it := range ready {
+		nb += len(staleDeletions(it))
+	}
+	if nb > 0 {
+		fmt.Fprintf(&b, "Your confirm also deletes %d stale remote %s, marked *delete* below: the agent that left each as a to-do is gone, git shows every commit on it is already in the default branch (checked on its host just now), and no pull request from it is open.\n\n", nb, plural(nb, "branch", "branches"))
+	}
 	for i, it := range ready {
 		if i >= sweepTodoList {
 			fmt.Fprintf(&b, "- … and %d more\n", n-sweepTodoList)
@@ -342,6 +371,9 @@ func sweepTodoText(ready []*removal) (question, body string) {
 		line := "- **" + mdSafe(orDefault(it.Name, it.ID)) + "**"
 		if it.Repo != "" || it.Branch != "" {
 			line += " · " + mdSafe(strings.Trim(it.Repo+" "+it.Branch, " "))
+		}
+		if d := staleDeletions(it); len(d) > 0 {
+			line += " · *delete* " + mdSafe(strings.Join(d, ", "))
 		}
 		// A sweep's reason is the checks the text above already names; a
 		// person's or a coordinator's is worth showing.
@@ -444,6 +476,9 @@ func (s *Server) sweepBoardLine() (title string, at time.Time, ok bool) {
 		}
 		parts = append(parts, p+")")
 	}
+	if n := len(st.LastDeleted); n > 0 {
+		parts = append(parts, fmt.Sprintf("deleted %d stale remote %s", n, plural(n, "branch", "branches")))
+	}
 	if st.LastNeedsLook > 0 {
 		parts = append(parts, fmt.Sprintf("%d need a look", st.LastNeedsLook))
 	}
@@ -466,11 +501,13 @@ type sweepLoopView struct {
 	TodoAt       *time.Time `json:"todo_at,omitempty"`
 	// Hub: this host has no ledger, so it cannot sweep.
 	Hub bool `json:"hub"`
+	// AutoDeleteBranches: the setting in force (see sweepLoopSettings).
+	AutoDeleteBranches bool `json:"auto_delete_branches"`
 }
 
 func (s *Server) sweepLoopView() sweepLoopView {
 	c := s.sweepLoopConf()
-	v := sweepLoopView{Enabled: c.On, EveryMinutes: int(c.Every / time.Minute), Source: c.Source, Hub: s.ledger != nil}
+	v := sweepLoopView{Enabled: c.On, EveryMinutes: int(c.Every / time.Minute), Source: c.Source, Hub: s.ledger != nil, AutoDeleteBranches: c.AutoDeleteBranches}
 	st := s.sweeps.get()
 	if !st.LastRunAt.IsZero() {
 		t := st.LastRunAt

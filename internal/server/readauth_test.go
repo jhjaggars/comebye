@@ -374,6 +374,7 @@ func TestTaggedWorkerWrites(t *testing.T) {
 		{"POST", "/api/agents/wZ:p1/image", `{}`},
 		{"POST", "/api/hosts/kube/agents/wS:p1/image", `{}`},
 		{"POST", "/api/remove", `{}`},
+		{"POST", "/api/stale-branch", `{}`},
 		{"POST", "/api/worker", `{}`},
 		{"POST", "/api/removals/confirm", `{}`},
 		{"GET", "/api/removals", ""},

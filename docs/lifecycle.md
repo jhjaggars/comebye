@@ -106,6 +106,29 @@ minutes of a hand-run sweep, because nobody is watching this one.
   discard, not UNSAFE); the one confirm is that button. While it is open the
   loop keeps its count right, and closes it when nothing is left.
 - A worker the sweep marks as "Gone" (its host left the fleet) is the one exception to "the user confirms": with `-auto-remove` on, the hub clears its record itself (nothing on any host is touched), audited and logged as an `autoremove` event.
+- **Leftovers of a gone session** (`internal/server/leftovers.go`). A marked
+  session whose agent has gone cannot answer "Let it clean up" or "Re-ask", so
+  a LEFT answer it gave first would sit in the review for ever. Each run looks
+  at the facts on the session's host instead:
+  - Items that have resolved since (a PR merged, a to-do closed, a branch gone
+    from origin) are re-checked; when all have, the answer becomes NOTHING LEFT
+    and the card says "Sweep · when: what it found".
+  - An item that is "delete the remote copy of my own branch" is **done** when
+    the hub proves it is safe on the host, not on the agent's word: after a
+    fetch, `git cherry origin/<default> <tip>` shows no `+` and the branch has
+    no merge commit (or its tree equals a commit on `origin/<default>`), the
+    branch is the session's own (never the default branch, never anyone else's),
+    and `gh` shows no open pull request from it (gh failing is "no proof").
+    By default the day's item names it ("delete origin/x") and the one confirm
+    that removes the session deletes the branch first, after checking again. With
+    `sweep_loop.auto_delete_branches` on (Peers → "Delete a gone session's stale
+    remote branch without asking") the loop deletes it itself, from the host,
+    with its own git credentials and a lease on the verified tip. A branch with
+    any commit not in main, or with an open PR, is never deleted.
+  - Any other leftover (a process to stop, a PR to close) is left alone: the
+    agent that could do it is gone, and doing it from here would write outside
+    the session's own branch and local copy. The card keeps saying what is left.
+  A run that settles nothing changes nothing, so a second run does nothing new.
 - Its state (last run, last item) is `sweeploop.json` in the state directory,
   so a restart neither sweeps again early nor files a second item.
 
