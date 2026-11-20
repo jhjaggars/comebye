@@ -805,6 +805,17 @@ compaction summaries. Subagent (sidechain) records and injected context
 notifications use the last assistant message and, for a permission
 prompt, the tool call waiting on it.
 
+**Trust prompt.** Claude asks "Do you trust the files in this folder?" in a
+folder it has not met, and holds a brief typed at it. When comebye starts a
+Claude *worker* it first records that worker's worktree (that one directory,
+after checking it lies inside the launch and worktree roots) as trusted in
+Claude's config (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`), the
+entry Claude writes when you answer Yes, so a fresh host's first worker does
+not stop at the prompt. Nothing else is trusted: not the worktree root, not
+the repository, not a plain launch's directory. If the config cannot be
+written the worker starts anyway with a warning, and the brief is queued
+behind the dialog as before.
+
 The transcripts live in `~/.claude/projects/<project>/<session-id>.jsonl`
 (or under `$CLAUDE_CONFIG_DIR`). To find the right one, install herdr's
 Claude Code integration (recommended):

@@ -284,6 +284,16 @@ func (s *Server) startWorker(ctx context.Context, b workerBody) (*workerResult, 
 	if lerr != nil {
 		return nil, lerr
 	}
+	if kind == "claude" {
+		// A fresh host has no folder Claude trusts, and its trust prompt
+		// would hold the brief until someone answers. Trust this worktree
+		// (only if it is inside the roots) before the agent starts.
+		if real, err := filepath.EvalSymlinks(opened.Path); err != nil || !withinAny(real, s.checkRoots()) {
+			choice.Warnings = append(choice.Warnings, "claude may stop at its trust-this-folder prompt: the worktree is not inside the launch or worktree roots, so comebye did not pre-trust it")
+		} else if err := trustClaudeFolder(opened.Path); err != nil {
+			choice.Warnings = append(choice.Warnings, "claude may stop at its trust-this-folder prompt: could not pre-trust the worktree: "+err.Error())
+		}
+	}
 	agent, err := s.startAgent(ctx, name, kind, pane, append(modelArgs, playbook.WorkerArgs(kind)...)...)
 	if err != nil {
 		e := herdrFailure("start "+kind, err)
