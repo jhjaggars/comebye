@@ -30,7 +30,7 @@ type Driver struct {
 var Claude = Driver{
 	Name:      "claude",
 	Command:   []string{"claude", "auth", "login", "--claudeai"},
-	Status:    []string{"claude", "auth", "status"},
+	Status:    []string{"claude", "auth", "status", "--json"},
 	CodeInput: true,
 	Hosts:     []string{"claude.com", "claude.ai", "platform.claude.com", "console.anthropic.com"},
 }

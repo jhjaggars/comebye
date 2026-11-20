@@ -96,6 +96,10 @@ type Config struct {
 	Drivers map[string]Driver
 	// Env is the child's environment; default Environ().
 	Env func() []string
+	// Now is the clock for the auth cache (default time.Now).
+	Now func() time.Time
+	// LookupEnv reads comebye's own environment for a key variable (default os.Getenv).
+	LookupEnv func(string) string
 }
 
 // Environ is the child's environment: PATH (with ~/.local/bin first), HOME,
@@ -129,6 +133,7 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session
+	auth     map[string]authEntry
 	wg       sync.WaitGroup
 	closed   bool
 }
@@ -156,7 +161,13 @@ func NewManager(cfg Config) *Manager {
 	if cfg.Env == nil {
 		cfg.Env = Environ
 	}
-	return &Manager{cfg: cfg, sessions: map[string]*session{}}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.LookupEnv == nil {
+		cfg.LookupEnv = defaultLookupEnv
+	}
+	return &Manager{cfg: cfg, sessions: map[string]*session{}, auth: map[string]authEntry{}}
 }
 
 func newID() string {
@@ -325,6 +336,7 @@ func (m *Manager) finish(s *session, state, reason, method string) {
 	s.snap.State, s.snap.Reason, s.snap.Method = state, reason, method
 	s.snap.Message = reasonText[reason]
 	s.snap.URL = ""
+	delete(m.auth, s.d.Name) // the next settings read probes again
 	if s.timer != nil {
 		s.timer.Stop()
 	}

@@ -8497,7 +8497,7 @@ function renderPeersList() {
     const def = peerDefaultText(h.name);
     const old = prs.cfg[h.name] && prs.cfg[h.name].state === "old" ? " · <span class=\"warn\">needs an upgrade for settings</span>" : "";
     return `<a class="pr-card${r.name === h.name ? " current" : ""}" href="${esc(peerHash(h.name))}" data-name="${esc(h.name)}">
-      <span class="pr-name"><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}${h.local ? ' <span class="pr-meta">(this host)</span>' : ""}</span>
+      <span class="pr-name"><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}${h.local ? ' <span class="pr-meta">(this host)</span>' : ""}${hostNeedsSignin(h.name) ? '<span class="pr-need" role="img" aria-label="an agent here is signed out" title="An agent on this host is signed out"></span>' : ""}</span>
       <span class="pr-meta">${esc(peerStatusText(h))} · ${esc(h.version || "version unknown")}${mis} · ${h.no_agents ? "no agents here" : (h.agents || 0) + " agent" + (h.agents === 1 ? "" : "s")}</span>
       ${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>`;
   }).join("");
@@ -8576,6 +8576,159 @@ function peerSettingsForm(h, c, d) {
   </form>`;
 }
 
+// ---- Sign an agent in on a host (internal/signin). The link comes from the host; the user opens it, copies the
+// one-time code the page shows and pastes it here. Nothing is kept: the code goes to the host and out of the box.
+const sis = { by: {}, timer: null }; // by host: { agent, id, state, url, reason, message, method, err, copied }
+const SIGNIN_STORE = "comebye.signin";
+const sinBase = (host) => isLocalHostName(host) ? "/api/signin" : `/api/hosts/${encodeURIComponent(host)}/signin`;
+function sinSave() {
+  try { sessionStorage.setItem(SIGNIN_STORE, JSON.stringify(Object.fromEntries(Object.entries(sis.by).filter(([, v]) => v.id).map(([h, v]) => [h, { agent: v.agent, id: v.id }])))); } catch {}
+}
+function sinStored(host) {
+  try { return (JSON.parse(sessionStorage.getItem(SIGNIN_STORE) || "{}") || {})[host] || null; } catch { return null; }
+}
+const sinActive = (v) => !!v && ["starting", "waiting_code", "checking"].includes(v.state);
+// A call that keeps its answer's body on an error (a 409 carries the running sign-in).
+async function sinCall(method, path, body) {
+  try {
+    const res = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  } catch (e) { return { status: 0, body: { message: e && e.name === "TimeoutError" ? "timed out — check the connection" : "could not reach the host" } }; }
+}
+function sinApply(host, snap) {
+  const v = sis.by[host];
+  if (!v || !snap) return;
+  Object.assign(v, { id: snap.id, agent: snap.agent || v.agent, state: snap.state, url: snap.url || "", reason: snap.reason || "", message: snap.message || "", method: snap.method || "", code_input: snap.code_input !== false });
+  v.err = "";
+  sinSave();
+  if (snap.state === "signed_in") peersLoadCfg(host, true); // the host probes again right after a sign-in
+}
+function sinFail(host, msg) {
+  const v = sis.by[host];
+  if (v) { v.state = "failed"; v.message = msg; v.reason = "error"; v.url = ""; sinSave(); }
+}
+function sinTick() {
+  const hosts = Object.keys(sis.by).filter((h) => sinActive(sis.by[h]) && sis.by[h].id);
+  if (!hosts.length) { clearInterval(sis.timer); sis.timer = null; return; }
+  for (const host of hosts) sinPoll(host);
+}
+function sinWatch() { if (!sis.timer) sis.timer = setInterval(sinTick, 2000); }
+async function sinPoll(host) {
+  const v = sis.by[host];
+  if (!v || !v.id) return;
+  const r = await sinCall("GET", `${sinBase(host)}/${encodeURIComponent(v.id)}`);
+  if (sis.by[host] !== v) return;
+  if (r.status === 200) sinApply(host, r.body);
+  else if (r.status === 404 && v.attaching) { delete sis.by[host]; sinSave(); } // a stale record of one that ended
+  else if (r.status === 404) sinFail(host, "The sign-in is gone (the host may have restarted). Try again.");
+  // anything else (a hiccup): keep what is shown and ask again
+  renderPeers();
+}
+async function sinStart(host, agent) {
+  const v = sis.by[host] = { agent, id: "", state: "starting", url: "", reason: "", message: "", method: "", err: "", copied: false, code_input: true };
+  renderPeers();
+  const r = await sinCall("POST", sinBase(host), { agent });
+  if (sis.by[host] !== v) { // cancelled while starting: end what it started
+    if (r.status === 200 && r.body.id) sinCall("DELETE", `${sinBase(host)}/${encodeURIComponent(r.body.id)}`);
+    return;
+  }
+  if (r.status === 200) sinApply(host, r.body);
+  else if (r.status === 409 && r.body.session) sinApply(host, r.body.session); // one is already running: attach to it
+  else sinFail(host, r.body.message || "Could not start the sign-in");
+  if (sinActive(v)) sinWatch();
+  renderPeers();
+}
+async function sinSend(host) {
+  const v = sis.by[host], box = $("si-code");
+  if (!v || !box || v.sending) return;
+  const code = box.value.trim();
+  if (!code) { v.err = "Paste the code first."; $("pr-view")._html = ""; renderPeers(); return; }
+  v.sending = true; v.err = "";
+  const r = await sinCall("POST", `${sinBase(host)}/${encodeURIComponent(v.id)}/code`, { code });
+  v.sending = false;
+  if (r.status !== 400) box.value = ""; // never kept here
+  if (sis.by[host] !== v) return;
+  if (r.status === 200) { sinApply(host, r.body); sinWatch(); }
+  else if (r.status === 400) v.err = r.body.message || "That is not a code.";
+  else if (r.status === 404) sinFail(host, "The sign-in is gone. Try again.");
+  else v.err = r.body.message || "Could not send the code.";
+  $("pr-view")._html = ""; renderPeers();
+}
+async function sinCancel(host) {
+  const v = sis.by[host];
+  if (!v) return;
+  delete sis.by[host]; sinSave();
+  renderPeers();
+  if (v.id && sinActive(v)) await sinCall("DELETE", `${sinBase(host)}/${encodeURIComponent(v.id)}`);
+  peersLoadCfg(host, true);
+}
+function sinClose(host) { delete sis.by[host]; sinSave(); renderPeers(); }
+// Back on a host's page: re-attach to a sign-in the page started before it was left or reloaded.
+function sinReattach(host) {
+  if (sis.by[host]) return;
+  const st = sinStored(host);
+  if (!st || !st.id) return;
+  sis.by[host] = { agent: st.agent, id: st.id, state: "checking", url: "", reason: "", message: "", method: "", err: "", copied: false, code_input: true, attaching: true };
+  sinPoll(host).then(() => { const v = sis.by[host]; if (v) v.attaching = false; if (sinActive(v)) sinWatch(); });
+}
+
+// What an installed agent's row says about its sign-in: a chip tone and text, and whether to offer the button.
+function agentAuthOf(d, k) {
+  const a = (d.agent_auth || {})[k];
+  if (!a) return null;
+  if (a.method === "api_key") return { tone: "green", text: "Key set", can: false };
+  if (a.state === "signed_in") return { tone: "green", text: "Signed in" + (a.method ? " · " + a.method : ""), can: false };
+  if (a.state === "signed_out") return { tone: "orange", text: "Signed out", can: !!a.can_sign_in };
+  return a.can_sign_in ? { tone: "", text: "Not checked", can: true } : { tone: "", text: "", can: false }; // nothing to say of an agent with no sign-in here
+}
+const SIGNIN_CHIP = { starting: ["orange", "Starting…"], waiting_code: ["orange", "Waiting for the code"], checking: ["orange", "Checking…"], signed_in: ["green", "Signed in"], failed: ["red", "Failed"] };
+function signinDialog(h, v) {
+  const [tone, label] = SIGNIN_CHIP[v.state] || ["", v.state];
+  const head = `<div class="si-head"><h4 id="si-title">Sign in to ${esc(v.agent)} on ${esc(h.name)}</h4><span class="chip ${tone}" id="si-chip" role="status">${esc(label)}${v.state === "signed_in" && v.method ? " · " + esc(v.method) : ""}</span></div>`;
+  let body = "", acts = "";
+  if (v.state === "starting") body = `<div class="pr-note">Asking ${esc(h.name)} for a sign-in link…</div>`;
+  else if (v.state === "waiting_code") {
+    body = `<div class="si-step"><span class="si-n">1</span><div class="si-col"><div>Open this link and sign in. It signs ${esc(v.agent)} in on ${esc(h.name)}.</div>
+        <div class="si-link"><code id="si-url" tabindex="0">${esc(v.url)}</code><button type="button" class="btn" id="si-copy" data-si="copy">${v.copied ? "Copied" : "Copy"}</button></div>
+        <a class="si-open" href="${esc(v.url)}" target="_blank" rel="noopener noreferrer">Open the link</a></div></div>
+      <div class="si-step"><span class="si-n">2</span><div class="si-col"><label for="si-code">Paste the code that page shows</label>
+        <div class="si-send"><input type="text" id="si-code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" maxlength="512" placeholder="Code">
+        <button type="button" class="btn primary" data-si="send"${v.sending ? " disabled" : ""}>${v.sending ? "Sending…" : "Send"}</button></div>
+        ${v.err ? `<div class="pr-note warn" role="alert">${esc(v.err)}</div>` : ""}</div></div>`;
+    acts = `<button type="button" class="btn" data-si="cancel">Cancel</button>`;
+  } else if (v.state === "checking") {
+    body = `<div class="pr-note">Checking that ${esc(v.agent)} is signed in on ${esc(h.name)}…</div>`;
+    acts = `<button type="button" class="btn" data-si="cancel">Cancel</button>`;
+  } else if (v.state === "signed_in") {
+    body = `<div class="pr-note">${esc(v.agent)} is signed in on ${esc(h.name)}.</div>`;
+    acts = `<button type="button" class="btn primary" data-si="close">Done</button>`;
+  } else { // failed
+    body = `<div class="pr-note err" role="alert">${esc((v.message || "The sign-in failed.").replace(/^./, (c) => c.toUpperCase()))}</div>`;
+    acts = `<button type="button" class="btn primary" data-si="retry">Try again</button><button type="button" class="btn" data-si="close">Close</button>`;
+  }
+  if (v.state === "starting") acts = `<button type="button" class="btn" data-si="cancel">Cancel</button>`;
+  return `<div class="si-dialog" role="dialog" aria-labelledby="si-title" data-state="${esc(v.state)}">${head}${body}${acts ? `<div class="si-acts">${acts}</div>` : ""}</div>`;
+}
+function agentRows(h, d, cats) {
+  const kinds = d.installed_kinds || [];
+  if (!kinds.length) return '<span class="pr-note">None found on this host.</span>';
+  const v = sis.by[h.name];
+  return `<div class="pr-agents">` + kinds.map((k) => {
+    const ct = cats[k], au = agentAuthOf(d, k);
+    const meta = [ct && ct.models ? `${ct.models.length} model${ct.models.length === 1 ? "" : "s"}` : "", ct && ct.default ? ct.default : ""].filter(Boolean).join(" · ");
+    const mine = v && v.agent === k;
+    let tone = au ? au.tone : "", text = au ? au.text : "";
+    if (mine && v.state !== "signed_in") [tone, text] = SIGNIN_CHIP[v.state] || [tone, text];
+    const btn = au && au.can && !mine && !(v && sinActive(v)) ? `<button type="button" class="btn si-btn" data-signin="${esc(k)}">Sign in</button>` : "";
+    return `<div class="pr-agent" data-agent="${esc(k)}"><div class="pa-name"><b>${esc(k)}</b>${meta ? `<span class="pr-note">${esc(meta)}</span>` : ""}</div>${text ? `<span class="chip ${tone}" data-chip="${esc(k)}">${esc(text)}</span>` : ""}${btn}</div>`;
+  }).join("") + `</div>` + (v ? signinDialog(h, v) : "");
+}
+// A host with an agent signed out needs the user: the orange dot on its row in the list.
+function hostNeedsSignin(name) {
+  const c = prs.cfg[name];
+  return !!(c && c.state === "ok" && Object.values(c.data.agent_auth || {}).some((a) => a && a.state === "signed_out" && a.method !== "api_key"));
+}
+
 function renderPeerView() {
   const r = prs.route, view = $("pr-view");
   $("peers").classList.toggle("in-peer", !!r.name);
@@ -8605,11 +8758,8 @@ function renderPeerView() {
     const d = c.data, l = d.launch || {};
     rows.push(["Starting agents", l.enabled ? "On" : `<span class="warn">Off: ${esc(l.reason || "not available")}</span>`]);
     const cats = prs.cats[h.name] || {};
-    const inst = (d.installed_kinds || []).map((k) => {
-      const ct = cats[k];
-      return `<span class="hf-chip" style="cursor:default">${esc(k)}${ct && ct.models ? ` · ${ct.models.length} model${ct.models.length === 1 ? "" : "s"}` : ""}${ct && ct.default ? ` · ${esc(ct.default)}` : ""}</span>`;
-    }).join("");
-    reach = `<div class="pr-sec"><h3>Installed agents</h3><div class="pr-chips">${inst || '<span class="pr-note">None found on this host.</span>'}</div></div>`;
+    sinReattach(h.name);
+    reach = `<div class="pr-sec"><h3>Installed agents</h3>${agentRows(h, d, cats)}</div>`;
     if (d.effective && d.effective.notice) reach += `<div class="pr-sec"><div class="pr-note warn">${esc(d.effective.notice)}</div></div>`;
     const s = d.settings || {};
     body = `<div class="pr-sec"><h3>Defaults for this host</h3>${peerSettingsForm(h, c, prs.draft)}
@@ -8628,7 +8778,10 @@ function renderPeerView() {
   const html = head + reach + body;
   if (view._html === html) return;
   view._html = html;
+  const typed = document.getElementById("si-code"), typedV = typed && view.contains(typed) ? typed.value : "";
   view.innerHTML = html;
+  const again = typedV && document.getElementById("si-code");
+  if (again) again.value = typedV; // the code being pasted survives a redraw (it is never kept anywhere else)
   if (keep) {
     const el = document.getElementById(keep.id);
     if (el) { el.focus(); try { if (keep.s != null) el.setSelectionRange(keep.s, keep.e); } catch {} }
@@ -8723,6 +8876,9 @@ function initPeers() {
   $("peers").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); peersBack(); } });
   const v = $("pr-view");
   const touch = () => { v._html = ""; /* the dirty marks change; the fields keep what was typed */ };
+  v.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && ev.target.id === "si-code") { ev.preventDefault(); sinSend(prs.route.name); }
+  });
   v.addEventListener("input", (ev) => {
     const d = prs.draft, t = ev.target;
     if (!d) return;
@@ -8740,6 +8896,18 @@ function initPeers() {
   });
   v.addEventListener("submit", (ev) => { ev.preventDefault(); peersSave(); });
   v.addEventListener("click", (ev) => {
+    const host = prs.route && prs.route.name;
+    const si = ev.target.closest("[data-si], [data-signin]");
+    if (si && host) {
+      const a = si.dataset.signin, op = si.dataset.si, cur = sis.by[host];
+      if (a) sinStart(host, a);
+      else if (op === "send") sinSend(host);
+      else if (op === "cancel") sinCancel(host);
+      else if (op === "close") sinClose(host);
+      else if (op === "retry" && cur) sinStart(host, cur.agent);
+      else if (op === "copy" && cur) copyText(cur.url).then((ok) => { cur.copied = ok; toast(ok ? "Link copied" : "Could not copy: select the link and copy it", !ok); $("pr-view")._html = ""; renderPeers(); });
+      return;
+    }
     if (!ev.target.closest("#pr-revert")) return;
     const c = prs.cfg[prs.route.name];
     if (c && c.state === "ok") { prs.draft = draftFrom(prs.route.name, c.data); touch(); renderPeers(); }

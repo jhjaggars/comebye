@@ -229,3 +229,32 @@ func TestSigninUserOnly(t *testing.T) {
 		t.Errorf("state = %v", m["state"])
 	}
 }
+
+// The host's settings answer carries each installed agent's sign-in state and method (no account), probed with
+// `claude auth status`, and is fresh right after a sign-in.
+func TestSettingsAgentAuth(t *testing.T) {
+	s, _, _ := signinHost(t, "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	v := s.settingsView()
+	a, ok := v.AgentAuth["claude"]
+	if !ok || a.State != signin.AuthSignedOut || !a.CanSignIn {
+		t.Fatalf("before: %+v (installed %v)", v.AgentAuth, v.InstalledKinds)
+	}
+	snap, err := s.signin.Start(context.Background(), "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.signin.SendCode(snap.ID, "GOOD-CODE"); err != nil {
+		t.Fatal(err)
+	}
+	signinWait(t, s, snap.ID, "signed_in")
+	after := s.settingsView().AgentAuth["claude"]
+	if after.State != signin.AuthSignedIn || after.Method != "claude.ai" {
+		t.Fatalf("after: %+v", after)
+	}
+	b, _ := json.Marshal(s.settingsView().AgentAuth)
+	if strings.Contains(string(b), "@") {
+		t.Fatalf("an account in the answer: %s", b)
+	}
+}

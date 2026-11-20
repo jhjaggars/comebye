@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/herdr"
+	"github.com/jhjaggars/comebye/internal/signin"
 )
 
 // Host settings: which agent kind, model and thinking level this host
@@ -315,8 +316,11 @@ type settingsView struct {
 		Notice string `json:"notice,omitempty"`
 	} `json:"effective"`
 	InstalledKinds []string `json:"installed_kinds"`
-	ModelKinds     []string `json:"model_kinds"`
-	Launch         struct {
+	// AgentAuth is each installed agent's sign-in state and method (no account),
+	// probed on this host and kept for a minute.
+	AgentAuth  map[string]signin.AuthInfo `json:"agent_auth"`
+	ModelKinds []string                   `json:"model_kinds"`
+	Launch     struct {
 		Enabled bool   `json:"enabled"`
 		Reason  string `json:"reason,omitempty"`
 	} `json:"launch"`
@@ -340,6 +344,7 @@ func (s *Server) settingsView() settingsView {
 	if v.InstalledKinds == nil {
 		v.InstalledKinds = []string{}
 	}
+	v.AgentAuth = s.signin.AuthState(context.Background(), v.InstalledKinds)
 	if eff.DefaultKind != "" && !slices.Contains(v.InstalledKinds, eff.DefaultKind) {
 		v.Effective.Notice = "the default " + eff.DefaultKind + " is not available on this host"
 	}

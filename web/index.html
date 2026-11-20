@@ -2468,6 +2468,42 @@
     .pr-kv .warn, .pr-note.warn { color: var(--orange); }
     .pr-note { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .pr-chips { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
+    /* Sign an agent in from a host's page (renderPeerView). Orange needs the user, green is ok, red is an error. */
+    .pr-agents { display: flex; flex-direction: column; gap: var(--sp-8); }
+    .pr-agent { display: flex; align-items: center; gap: var(--sp-10); padding: var(--sp-10) var(--sp-12); min-height: var(--hit-44); border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel); min-width: 0; }
+    .pa-name { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2) var(--sp-8); overflow-wrap: anywhere; }
+    .pr-agent .chip { flex: none; }
+    .si-btn { flex: none; min-height: var(--hit-44); padding: 0 var(--sp-16); }
+    .pr-need { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+    .si-dialog { display: flex; flex-direction: column; gap: var(--sp-10); padding: var(--sp-12); border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel2); min-width: 0; }
+    .si-dialog[data-state="waiting_code"], .si-dialog[data-state="checking"], .si-dialog[data-state="starting"] { border-color: var(--orange); }
+    .si-dialog[data-state="signed_in"] { border-color: var(--green); }
+    .si-dialog[data-state="failed"] { border-color: var(--red); }
+    .si-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-8); flex-wrap: wrap; }
+    .si-head h4 { margin: 0; font-size: var(--fs-15); overflow-wrap: anywhere; }
+    .si-step { display: flex; gap: var(--sp-10); min-width: 0; }
+    .si-n { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--chip-blue); color: var(--blue); font-size: var(--fs-12); font-weight: 700; text-align: center; line-height: 22px; }
+    .si-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-8); font-size: var(--fs-14); }
+    .si-link { display: flex; gap: var(--sp-8); align-items: stretch; min-width: 0; }
+    .si-link code { flex: 1; min-width: 0; padding: var(--sp-8) var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-8); background: var(--panel); font: var(--fs-12)/1.4 var(--ff-code); overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+    .si-link .btn { flex: none; min-height: var(--hit-44); padding: 0 var(--sp-14); }
+    .si-open { font-size: var(--fs-13); }
+    .si-send { display: flex; gap: var(--sp-8); min-width: 0; }
+    .si-send input { flex: 1; min-width: 0; min-height: var(--hit-44); font-size: 16px; padding: 0 var(--sp-10); }
+    .si-send .btn { flex: none; min-height: var(--hit-44); padding: 0 var(--sp-16); }
+    .si-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
+    .si-acts .btn { flex: 0 1 auto; min-height: var(--hit-44); padding: 0 18px; }
+    .pr-note.err { color: var(--red); }
+    @media (max-width: 599px) {
+      .pr-agent { flex-wrap: wrap; }
+      .pa-name { flex-basis: 100%; }
+      .si-btn { flex: 1 1 100%; width: 100%; }
+      .si-acts .btn { flex: 1 1 100%; }
+      .si-link { flex-direction: column; }
+      .si-link .btn { width: 100%; }
+      .si-send { flex-direction: column; }
+      .si-send .btn { width: 100%; }
+    }
     .pr-form { display: flex; flex-direction: column; gap: var(--sp-14); }
     .pr-field { display: flex; flex-direction: column; gap: var(--sp-6); min-width: 0; }
     .pr-field > label, .pr-field > .pr-lbl { font-size: var(--fs-14); font-weight: 600; }
