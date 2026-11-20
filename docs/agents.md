@@ -928,3 +928,10 @@ killer, so Comebye cleans up after sessions:
 What is not done: agents' `TMPDIR` is not redirected to disk. herdr's
 `agent.start` takes no environment, so Comebye cannot set it per worker; to do
 it for all of them, set `TMPDIR` in the environment herdr is started from.
+
+## Linking to a to-do item
+
+`/#/todo/<id>` opens that one item, on a desktop and on a phone, on a cold load and from inside the app. The route waits
+for the list to load. A done or dropped item opens read only with a note; an unknown id shows a notice card; an item with a
+Page opens the split view and a decision set opens its set card. Expanding an item by hand does not change the URL;
+closing an item a link opened takes the hash back to `#/todo`. On a phone the bare `#/todo` scrolls the To do card into view.

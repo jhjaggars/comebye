@@ -1912,7 +1912,8 @@ const TODO_DRAFTS_KEY = "comebye.todo.drafts";
 const TODO_KIND = { decision: "decision", action: "for you", followup: "follow-up", release: "release", review: "review", approval: "approve" };
 const todos = { on: null, items: [], open: 0, answered: 0, loadedAt: 0, inflight: false,
   openId: null, lastId: null, nxt: null, ansOpen: false, seen: new Map(), order: [], follow: false,
-  drafts: loadTodoDrafts(), pend: new Overlay() };
+  drafts: loadTodoDrafts(), pend: new Overlay(),
+  deep: null, deepId: null, deepHash: null, pin: null, notice: null };
 
 function todoLinkHref(u) { return /^https?:\/\//i.test(u || "") || /^\/#\/(agent\/[^\s]+|pages\/pg_[0-9a-f]{10})$/.test(u || "") ? u : ""; }
 const todoRepOpen = new Set(); // items whose "Full report" is expanded: a redraw keeps it
@@ -1939,7 +1940,7 @@ function saveTodoDrafts() { lsSet(TODO_DRAFTS_KEY, JSON.stringify(Object.fromEnt
 function todoDraft(id) { const d = todos.drafts.get(id); return d ? d.text : ""; }
 
 async function loadTodos() {
-  if (todos.inflight || ledger.on !== true) { if (ledger.on !== true) { todos.on = false; renderTodos(); } return; }
+  if (todos.inflight || ledger.on !== true) { if (ledger.on !== true) { todos.on = false; renderTodos(); if (ledger.on === false) todoDeepResolve(); } return; }
   todos.inflight = true;
   try {
     const d = await api("/api/todos");
@@ -1947,6 +1948,8 @@ async function loadTodos() {
     todos.items = Array.isArray(d.todos) ? d.todos : [];
     todos.open = d.open | 0;
     todos.answered = d.answered | 0;
+    // A done or dropped item a deep link opened is not in the list: keep it while it is the open one.
+    if (todos.pin && todos.openId === todos.pin.id && !todos.items.some((x) => x.id === todos.pin.id)) todos.items.push(todos.pin);
     todoReapply();
   } catch (e) {
     if (e.status === 503 || e.status === 404) todos.on = false;
@@ -1956,6 +1959,7 @@ async function loadTodos() {
     todos.loadedAt = Date.now();
   }
   renderTodos();
+  todoDeepResolve();
 }
 
 function todoCountText() {
@@ -2410,7 +2414,7 @@ function todoItemHtml(t, pfx, asPanel) {
   const draft = todoDraft(t.id).trim() !== "";
   const rid = `${pfx}-row-${t.id}`, pid = `${pfx}-panel-${t.id}`;
   const chips = `<span class="td-chip td-draft"${draft ? "" : " hidden"}>draft</span>` + todoSrcChip(t) +
-    (ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`) +
+    (ans ? `<span class="td-chip st-answered">${esc(t.state === "open" ? "answered" : t.state)}</span>` : `<span class="td-chip st-open">open</span>`) +
     (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "") +
     (t.kind === "review" && !ans && t.review && t.review.stale ? `<span class="td-chip st-warn" title="Open for 3 days or more">stale</span>` : "");
   let panel = "";
@@ -2448,7 +2452,7 @@ function todoItemHtml(t, pfx, asPanel) {
         ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}${t.waiting && t.waiting.parked ? ' <span class="chip teal" title="Its pane is closed. Whatever is sent to it waits and is delivered when it is resumed.">parked</span>' : ""}</span></div>` : ""}
         ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
         ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;
-    const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">answered</span>` : `<span class="td-chip st-open">open</span>`}</div>
+    const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">${esc(t.state === "open" ? "answered" : t.state)}</span>` : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
     const isRel = t.kind === "release" && !!t.release;
     const after = ans || isRel || todoIsReview(t) || t.kind === "approval" ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
@@ -2461,6 +2465,7 @@ function todoItemHtml(t, pfx, asPanel) {
     panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
         ${dhead}
         <div class="td-scroll">
+          ${ans && todos.deepId === t.id ? `<div class="td-deepnote" role="note">${esc(t.state === "dropped" ? "Dropped" + (t.drop_reason ? ": " + t.drop_reason : "") + ". Read only." : t.state === "done" ? "Done. Read only." : "Already answered. Read only.")}</div>` : ""}
           ${meta ? `<div class="td-meta">${meta}</div>` : ""}
           ${isRel ? relPingHtml(t) : ""}
           ${asPanel ? rsNotesHtml(t) : ""}
@@ -2479,8 +2484,8 @@ function todoItemHtml(t, pfx, asPanel) {
             ${t.suggested && !ans ? `<button type="button" class="td-keep" title="Make this a real item">Keep</button><button type="button" class="td-dismiss" data-why="not_a_question">Not a question</button><button type="button" class="td-dismiss" data-why="already_handled">Already handled</button>` : ""}
             ${ans || isRel ? "" : `<button type="button" class="td-answer-btn"${busy}>Answer</button>`}
             ${todoOpenBtn(t)}
-            <button type="button" class="td-done"${busy}>Done</button>
-            <button type="button" class="td-drop"${busy}>Drop</button>
+            ${t.state === "done" || t.state === "dropped" ? "" : `<button type="button" class="td-done"${busy}>Done</button>`}
+            ${t.state === "done" || t.state === "dropped" ? "" : `<button type="button" class="td-drop"${busy}>Drop</button>`}
           </div>${after}
         </div>`}
       </div>`;
@@ -2720,7 +2725,8 @@ function todoListHtml(pfx) {
   todos.nxt = todoNextOpen(todos.openId, todoOrder().map((t) => t.id));
   const opens = todos.items.filter((t) => t.state === "open");
   const done = todos.items.filter((t) => t.state !== "open");
-  let h = todoOrphans().map(([id, d]) => todoKeptHtml(id, d.text, `Not sent: “${d.q || id}” was closed before you answered.`)).join("");
+  let h = todos.notice ? `<div class="td-notice" role="status"><span>${esc(todos.notice.text)}</span><button type="button" class="td-notice-x btn sm">Back to the list</button></div>` : "";
+  h += todoOrphans().map(([id, d]) => todoKeptHtml(id, d.text, `Not sent: “${d.q || id}” was closed before you answered.`)).join("");
   h += opens.map((t) => todoItemHtml(t, pfx)).join("");
   if (!opens.length) h += `<div class="td-none">${done.length ? "Nothing else is waiting on you." : "Nothing is waiting on you."}</div>`;
   if (done.length) {
@@ -2796,7 +2802,7 @@ function renderTodos(force) {
   const moved = todoFollowRefresh();
   // A forced redraw, or one that moves to another item, goes ahead even while the user types.
   const again = !!force || moved || todos.follow;
-  const show = todos.on === true && (todos.items.length > 0 || todoOrphans().length > 0);
+  const show = todos.on === true && (todos.items.length > 0 || todoOrphans().length > 0 || !!todos.notice);
   if (main) main.hidden = !show;
   if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
@@ -2834,6 +2840,8 @@ function todoListEl() { return isDesktop() ? $("pt-body") : $("todo"); }
 // Opens one item (closing the one that was open) and focuses its row, or
 // its answer box with to = "box".
 function todoExpand(id, to) {
+  if (todos.deepId && todos.deepId !== id) todoDeepClean();
+  todos.notice = null;
   todos.openId = id;
   if (id) todos.lastId = id;
   renderTodos(true);
@@ -2860,6 +2868,7 @@ function todoExpand(id, to) {
 function todoCollapse() {
   if (rsActive() && history.state && history.state.rs) { history.back(); return; } // popstate closes it, see syncSplit
   if (todos.openId) todos.lastId = todos.openId;
+  if (todos.deepId) todoDeepClean();
   todos.openId = null;
   renderTodos(true);
   const el = todoListEl();
@@ -3671,6 +3680,7 @@ function onTodoClick(ev) {
     renderTodos(true);
     return;
   }
+  if (ev.target.closest(".td-notice-x")) { todos.notice = null; renderTodos(true); return; }
   if (ev.target.closest(".td-g")) {
     todos.ansOpen = !todos.ansOpen;
     const cur = todos.items.find((t) => t.id === todos.openId);
@@ -7862,6 +7872,63 @@ function parseRoute() {
   } catch { return null; }
 }
 
+// #/todo/<id> opens one To do item; the bare #/todo on a phone scrolls the To do card into view (on a desktop it is the page).
+// The route is held in todos.deep until the list has loaded (todoDeepResolve, from loadTodos and from route).
+const TODO_ID = /^t[0-9a-f]{10}$/;
+function parseTodoRoute() {
+  const m = location.hash.match(/^#\/todo(?:\/([^/?]*))?$/);
+  if (!m) return null;
+  if (m[1] === undefined) return isDesktop() ? null : { id: "" };
+  try { return { id: decodeURIComponent(m[1]) }; } catch { return { id: m[1] }; }
+}
+// Takes the hash back to the plain page once the item the link opened is closed, so a reload does not reopen it.
+function todoDeepClean() {
+  todos.deepId = null; todos.deepHash = null; todos.pin = null;
+  if (location.hash.startsWith("#/todo/")) history.replaceState(history.state, "", isDesktop() ? PAGE_HASH.todo : location.pathname + location.search);
+}
+function todoDeepNotice(id, text) {
+  todos.deep = null; todos.deepHash = null;
+  todos.notice = { id, text };
+  history.replaceState(history.state, "", isDesktop() ? PAGE_HASH.todo : location.pathname + location.search);
+  renderTodos(true);
+  const el = isDesktop() ? $("pt-body") : $("todo");
+  if (el && !isDesktop()) el.scrollIntoView?.({ block: "start" });
+}
+function todoDeepResolve() {
+  const d = todos.deep;
+  if (!d) return;
+  if (todos.on === false && ledger.on === false) { if (d.id) todoDeepNotice(d.id, "To do is not available on this hub."); else todos.deep = null; return; }
+  if (todos.on !== true) return; // the list has not arrived: keep the route
+  if (!d.id) { // the bare #/todo on a phone
+    todos.deep = null;
+    $("todo")?.scrollIntoView?.({ block: "start" });
+    return;
+  }
+  const bad = () => todoDeepNotice(d.id, `No to-do ${d.id.length > 24 ? d.id.slice(0, 24) + "…" : d.id} here. It may have been cleared, or it is on another hub.`);
+  if (!TODO_ID.test(d.id)) { bad(); return; }
+  const t = todos.items.find((x) => x.id === d.id);
+  if (!t) {
+    if (d.fetching) return;
+    d.fetching = true;
+    api("/api/todos/" + d.id).then((j) => {
+      if (todos.deep !== d) return;
+      if (j && j.todo && j.todo.id === d.id) { todos.pin = j.todo; todos.items.push(j.todo); d.fetching = false; todoDeepResolve(); } else bad();
+    }, (e) => { if (todos.deep !== d) return; if (e && (e.status === 404 || e.status === 400)) bad(); else d.fetching = false; /* a failed fetch retries on the next poll */ });
+    return;
+  }
+  todos.deep = null;
+  todos.notice = null;
+  todos.deepId = t.id; todos.deepHash = location.hash;
+  if (t.state !== "open") todos.ansOpen = true;
+  todos.openId = t.id; todos.lastId = t.id; todos.follow = true;
+  if (!isDesktop()) { lsSet(TODO_FOLDED_KEY, "0"); closeBriefs(); }
+  renderTodos(true);
+  if (!rsActive()) {
+    const el = todoListEl(), row = el && todoRowIn(el, t.id);
+    if (row) row.scrollIntoView?.({ block: isDesktop() ? "nearest" : "start" });
+  }
+}
+
 function routedAgent(r) {
   return state.agents.find((a) => a.pane_id === r.pane &&
     (r.host && r.host !== state.localHost ? a.host === r.host : isLocal(a)));
@@ -7901,6 +7968,10 @@ function route() {
     if (applyListHash()) renderList(); else syncListHash();
     if (state.selected) closeDetail();
     if (isDesktop()) setView(viewFromHash()); // the hash names the page
+    // A todo link is taken up once per hash: Back out of the split view lands on the same hash and must not reopen the item.
+    const td = parseTodoRoute();
+    if (!td) todos.deepHash = null;
+    else if (location.hash !== todos.deepHash) { todos.deep = td; todos.deepId = null; todos.deepHash = null; todoDeepResolve(); }
     return;
   }
   const a = routedAgent(r);
@@ -7929,7 +8000,7 @@ function applyPendingRoute() {
 // 1100px the hash routes do nothing new and the phone flow is unchanged.
 
 const PAGE_HASH = { status: "#/status", briefing: "#/briefings", todo: "#/todo" }; // briefing: the old hand-written one, reached from Status
-const viewFromHash = () => (isDesktop() ? Object.keys(PAGE_HASH).find((k) => PAGE_HASH[k] === location.hash) || null : null);
+const viewFromHash = () => (isDesktop() ? Object.keys(PAGE_HASH).find((k) => PAGE_HASH[k] === (location.hash.startsWith("#/todo/") ? PAGE_HASH.todo : location.hash)) || null : null);
 
 // setView shows a page (or none) without touching the history.
 function setView(v) {
@@ -14746,7 +14817,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("d-sched").addEventListener("click", editBriefSchedule);
   $("briefing").addEventListener("click", onBriefClick);
   // The split review mode closes when the app goes somewhere else, and starts over when the layout changes.
-  window.addEventListener("hashchange", () => { if (rsActive() && !(isDesktop() && location.hash === PAGE_HASH.todo)) { todos.openId = null; renderTodos(true); } });
+  window.addEventListener("hashchange", () => { if (rsActive() && !(isDesktop() && location.hash === PAGE_HASH.todo) && !location.hash.startsWith("#/todo/")) { todos.openId = null; renderTodos(true); } });
   desktopMQ.addEventListener("change", () => { rsTeardown(); renderTodos(true); });
   window.addEventListener("resize", rsPlace);
   for (const id of ["todo", "pt-body"]) {

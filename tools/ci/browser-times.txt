@@ -21,6 +21,7 @@ provhosts 13
 ctxchip 12
 pagerevisions 11
 todoopen 11
+tododeeplink 12
 copycode 9
 pageback 9
 pagecomments 9
