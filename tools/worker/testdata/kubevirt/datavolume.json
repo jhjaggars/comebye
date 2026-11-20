@@ -1,0 +1,28 @@
+{
+  "apiVersion": "cdi.kubevirt.io/v1beta1",
+  "kind": "DataVolume",
+  "metadata": {
+    "labels": {
+      "comebye-worker/name": "w1",
+      "managed-by": "comebye-worker"
+    },
+    "name": "w1-data",
+    "namespace": "comebye-workers"
+  },
+  "spec": {
+    "source": {
+      "blank": {}
+    },
+    "storage": {
+      "accessModes": [
+        "ReadWriteOnce"
+      ],
+      "resources": {
+        "requests": {
+          "storage": "150Gi"
+        }
+      },
+      "storageClassName": "longhorn"
+    }
+  }
+}

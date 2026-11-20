@@ -17,7 +17,24 @@ import (
 // ~/.config/comebye-worker/config. Nothing secret belongs in it: the
 // Tailscale OAuth client has its own 0600 file (TSOAuthFile).
 type Config struct {
-	Provider string // gcp (default), aws or openshell
+	Provider string // gcp (default), aws, openshell or kubevirt
+
+	// kubevirt: a worker is a KubeVirt VM on a cluster kubectl already reaches
+	// (see docs/workers.md). The cluster's credentials stay in the kubeconfig
+	// and are never read, copied or printed by this tool.
+	KubeContext      string   // kubectl context; empty = the current one
+	KubeNamespace    string   // where the VMs live (made once by the prerequisites manifest)
+	KubeServiceAcct  string   // the scoped service account the namespace carries
+	KubeNodePrefer   []string // the nodes a VM may go to, in order of preference; empty = any schedulable node but KubeNodeAvoid
+	KubeNodeAvoid    []string // nodes a VM never goes to
+	KubeFloorGiB     int      // memory a node must keep free after the VM (GiB)
+	KubeNodeFloors   map[string]int
+	KubeStorageClass string
+	VMImageDV        string // a DataVolume in the namespace, cloned per VM
+	VMImageURL       string // or: a qcow2 URL CDI imports per VM
+	VMCPU            int    // vCPUs, and the CPU limit
+	VMCPURequest     int    // the CPU request (the scheduler's share)
+	VMMemory         string // guest memory, request and limit (e.g. 32Gi)
 
 	// openshell: the gateway that runs the sandboxes (see docs/workers.md).
 	OpenShellBin       string   // the CLI (default "openshell")
@@ -42,6 +59,8 @@ type Config struct {
 	ExtraTags [][2]string
 
 	machineSet, diskSet bool
+	bootSet, dataSet    bool
+	floorsOwn           bool   // kube_node_floor was given: it replaces the default floors
 	baseAZ              string // aws_az as the config file has it; a per-request zone differs from it
 
 	// Per-request settings (a --spec): zero means not set. They are recorded
@@ -171,6 +190,17 @@ func defaults() Config {
 		StateDir:       state,
 		ArchiveEnv:     filepath.Join(h, ".config", "comebye", "archive.env"),
 
+		KubeNamespace:    "comebye-workers",
+		KubeServiceAcct:  "comebye-worker",
+		KubeNodePrefer:   []string{"rozalin", "zetta"},
+		KubeNodeAvoid:    []string{"adell", "etna"},
+		KubeFloorGiB:     12,
+		KubeNodeFloors:   map[string]int{"zetta": 8},
+		KubeStorageClass: "longhorn",
+		VMCPU:            4,
+		VMCPURequest:     2,
+		VMMemory:         "32Gi",
+
 		Agents:                []string{"pi"},
 		PiVersion:             "1.5.0",
 		LLMProvisionerKeyFile: filepath.Join(cfgDir, "llm-provisioner-key"),
@@ -224,6 +254,17 @@ func (c *Config) finish() {
 		}
 		if !c.diskSet {
 			c.DiskType = "gp3"
+		}
+	case "kubevirt":
+		// A worker VM is sized by vm_cpu and vm_memory; the disks default larger than a cloud VM's.
+		if !c.bootSet {
+			c.BootDiskGB = 40
+		}
+		if !c.dataSet {
+			c.DataDiskGB = 150
+		}
+		if c.VMImageDV == "" && c.VMImageURL == "" {
+			c.VMImageDV = "debian-13-golden"
 		}
 	default:
 		if !c.machineSet {
@@ -330,8 +371,49 @@ func (c *Config) apply(kv map[string]string) error {
 			c.MachineType, c.machineSet = v, true
 		case "boot_disk_gb":
 			c.BootDiskGB, err = strconv.Atoi(v)
+			c.bootSet = true
 		case "data_disk_gb":
 			c.DataDiskGB, err = strconv.Atoi(v)
+			c.dataSet = true
+		case "kube_context":
+			c.KubeContext = v
+		case "kube_namespace":
+			c.KubeNamespace = v
+		case "kube_service_account":
+			c.KubeServiceAcct = v
+		case "kube_node_prefer":
+			c.KubeNodePrefer = splitList(v)
+		case "kube_node_avoid":
+			c.KubeNodeAvoid = splitList(v)
+		case "kube_floor_gib":
+			c.KubeFloorGiB, err = strconv.Atoi(v)
+		case "kube_node_floor":
+			// NODE=GIB,NODE=GIB: nodes that may run closer to full (or must keep more free).
+			floors := map[string]int{}
+			for _, ent := range splitList(v) {
+				n, g, ok := strings.Cut(ent, "=")
+				gi, perr := strconv.Atoi(g)
+				if !ok || perr != nil {
+					err = fmt.Errorf("kube_node_floor must be NODE=GIB[,NODE=GIB], not %q", v)
+					break
+				}
+				floors[n] = gi
+			}
+			if err == nil {
+				c.KubeNodeFloors = floors
+			}
+		case "kube_storage_class":
+			c.KubeStorageClass = v
+		case "vm_image_dv":
+			c.VMImageDV = v
+		case "vm_image_url":
+			c.VMImageURL = v
+		case "vm_cpu":
+			c.VMCPU, err = strconv.Atoi(v)
+		case "vm_cpu_request":
+			c.VMCPURequest, err = strconv.Atoi(v)
+		case "vm_memory":
+			c.VMMemory = v
 		case "disk_type":
 			c.DiskType, c.diskSet = v, true
 		case "image_project":
@@ -568,7 +650,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("vpc_range %q is not a CIDR network containing subnet_range %q", c.VPCRange, c.SubnetRange)
 		}
 	}
-	if c.Provider != "openshell" {
+	if c.Provider != "openshell" && c.Provider != "kubevirt" {
 		if err := validateSSHSource(c.SSHSourceCIDR); err != nil {
 			return err
 		}
@@ -734,8 +816,10 @@ func (c *Config) validateProvider(chk func(bool, string, ...any) error) error {
 		}
 	case "openshell":
 		return c.validateOpenShell(chk)
+	case "kubevirt":
+		return c.validateKubeVirt(chk)
 	default:
-		return fmt.Errorf("provider %q: want gcp, aws or openshell", c.Provider)
+		return fmt.Errorf("provider %q: want gcp, aws, openshell or kubevirt", c.Provider)
 	}
 	return nil
 }

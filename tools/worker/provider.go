@@ -73,6 +73,9 @@ func newProvider(r Runner, c *Config) Provider {
 	if c.Provider == "openshell" {
 		return &openshellProv{cli: &osCLI{r: r, cfg: c}, cfg: c, wait: func(s int) { time.Sleep(time.Duration(s) * time.Second) }}
 	}
+	if c.Provider == "kubevirt" {
+		return newKubeVirt(r, c)
+	}
 	if c.Provider == "aws" {
 		return &awsProv{a: &awsCLI{r: r, cfg: c}, cfg: c}
 	}

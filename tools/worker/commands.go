@@ -82,6 +82,9 @@ func (e *env) create(ctx context.Context, name string, o createOpts) error {
 		return err
 	}
 	names := vmStages
+	if e.Cfg.Provider == "kubevirt" && !e.DryRun {
+		return errKubeVirtLive
+	}
 	if e.Cfg.Provider == "openshell" {
 		names = sandboxStages
 	}
@@ -516,11 +519,21 @@ func (e *env) createPlan(name string, o createOpts) error {
 			pub = f[0] + " " + f[1] + " comebye-worker"
 		}
 	}
-	e.printf("DRY RUN: nothing is created, no key is minted, no host is contacted.\n\n")
-	e.printf("worker      %s\nprovider    %s\nmachine     %s, boot %d GB, data %d GB %s\ncomebye     %s\ntailnet tag %s   hub %s\n\n",
-		name, c.Provider, c.MachineType, c.BootDiskGB, c.DataDiskGB, c.DiskType, version, c.Tag, c.HubPeerURL)
+	machine := fmt.Sprintf("%s, boot %d GB, data %d GB %s", c.MachineType, c.BootDiskGB, c.DataDiskGB, c.DiskType)
+	if c.Provider == "kubevirt" {
+		e.printf("DRY RUN: nothing is created, no key is minted, no host is contacted; the cluster is only read (kubectl get).\n\n")
+		machine = fmt.Sprintf("%d vCPU, %s, boot %d GB, data %d GB on %s", c.VMCPU, c.VMMemory, c.BootDiskGB, c.DataDiskGB, c.KubeStorageClass)
+	} else {
+		e.printf("DRY RUN: nothing is created, no key is minted, no host is contacted.\n\n")
+	}
+	e.printf("worker      %s\nprovider    %s\nmachine     %s\ncomebye     %s\ntailnet tag %s   hub %s\n\n",
+		name, c.Provider, machine, version, c.Tag, c.HubPeerURL)
 	e.printf("1. cloud resources (%s)\n", c.Provider)
 	e.prov().Plan(name, pub, e.printf)
+	var planErr error // a refusal the provider found while planning: shown, then returned
+	if pe, ok := e.prov().(interface{ PlanErr() error }); ok {
+		planErr = pe.PlanErr()
+	}
 	e.printf("2. ssh key: ssh-keygen -t ed25519 at %s, only if absent; host key verified, known_hosts written to %s/known_hosts, StrictHostKeyChecking yes\n", c.KeyPath(), c.WorkerDir(name))
 	e.printf("3. over ssh as root: apt packages (git jq bubblewrap socat curl ...), tailscale from its apt repo,\n   linger, /data/code, /data/worktrees, idle-poweroff timer (%d min, no interactive ssh session and no working agent)%s\n", c.IdleMinutes, maxRunNote(c))
 	e.printf("4. tailnet:\n")
@@ -552,7 +565,7 @@ func (e *env) createPlan(name string, o createOpts) error {
 	}
 	e.printf("6. wait for the hub (%s) to list %s; if it does not, print:\n   comebye peer add %s %s --tag %s\n", c.HubURL, name, name, peerURL(c, name), c.Tag)
 	e.printf("\nNo repo is cloned and no agent is signed in; sign in with `worker login %s claude|codex`.\n", name)
-	return nil
+	return planErr
 }
 
 // ---- status ----

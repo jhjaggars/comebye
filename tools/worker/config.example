@@ -3,7 +3,7 @@
 # in its own mode-0600 file (ts_oauth_file).
 
 # --- required
-# provider=gcp                    # gcp (default), aws or openshell
+# provider=gcp                    # gcp (default), aws, openshell or kubevirt (dry run only so far: see docs/workers.md)
 
 # GCP:
 project=my-gcp-project

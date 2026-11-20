@@ -1,0 +1,131 @@
+{
+  "apiVersion": "kubevirt.io/v1",
+  "kind": "VirtualMachine",
+  "metadata": {
+    "labels": {
+      "comebye-worker/name": "w1",
+      "managed-by": "comebye-worker"
+    },
+    "name": "w1",
+    "namespace": "comebye-workers"
+  },
+  "spec": {
+    "dataVolumeTemplates": [
+      {
+        "metadata": {
+          "labels": {
+            "comebye-worker/name": "w1",
+            "managed-by": "comebye-worker"
+          },
+          "name": "w1-boot"
+        },
+        "spec": {
+          "source": {
+            "http": {
+              "url": "https://cloud.debian.org/images/cloud/trixie/20261101-1/debian-13-genericcloud-amd64-20261101-1.qcow2"
+            }
+          },
+          "storage": {
+            "accessModes": [
+              "ReadWriteOnce"
+            ],
+            "resources": {
+              "requests": {
+                "storage": "40Gi"
+              }
+            },
+            "storageClassName": "longhorn"
+          }
+        }
+      }
+    ],
+    "runStrategy": "RerunOnFailure",
+    "template": {
+      "metadata": {
+        "labels": {
+          "comebye-worker/name": "w1",
+          "managed-by": "comebye-worker"
+        }
+      },
+      "spec": {
+        "domain": {
+          "cpu": {
+            "cores": 4
+          },
+          "devices": {
+            "disks": [
+              {
+                "bootOrder": 1,
+                "disk": {
+                  "bus": "virtio"
+                },
+                "name": "boot"
+              },
+              {
+                "disk": {
+                  "bus": "virtio"
+                },
+                "name": "data",
+                "serial": "comebye-data"
+              },
+              {
+                "disk": {
+                  "bus": "virtio"
+                },
+                "name": "cloudinit"
+              }
+            ],
+            "interfaces": [
+              {
+                "masquerade": {},
+                "name": "default"
+              }
+            ]
+          },
+          "resources": {
+            "limits": {
+              "cpu": "4",
+              "memory": "32Gi"
+            },
+            "requests": {
+              "cpu": "2",
+              "memory": "32Gi"
+            }
+          }
+        },
+        "networks": [
+          {
+            "name": "default",
+            "pod": {}
+          }
+        ],
+        "nodeSelector": {
+          "kubernetes.io/hostname": "zetta.x.cc"
+        },
+        "terminationGracePeriodSeconds": 120,
+        "volumes": [
+          {
+            "dataVolume": {
+              "name": "w1-boot"
+            },
+            "name": "boot"
+          },
+          {
+            "dataVolume": {
+              "name": "w1-data"
+            },
+            "name": "data"
+          },
+          {
+            "cloudInitNoCloud": {
+              "secretRef": {
+                "name": "w1-cloudinit"
+              }
+            },
+            "name": "cloudinit"
+          }
+        ]
+      }
+    }
+  }
+}

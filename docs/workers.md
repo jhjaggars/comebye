@@ -1,8 +1,9 @@
 # Worker VMs
 
 `tools/worker` builds a worker VM on Google Compute Engine **or AWS EC2**
-(`provider = gcp|aws`), or a sandbox on an **OpenShell gateway**
-(`provider = openshell`, see [OpenShell sandboxes](#openshell-sandboxes)), puts it on your tailnet as a **tagged, persistent** node (`tag:worker`) and lets it join the
+(`provider = gcp|aws`), a sandbox on an **OpenShell gateway**
+(`provider = openshell`, see [OpenShell sandboxes](#openshell-sandboxes)), or, as a dry run only so far, a VM on a
+**KubeVirt cluster** (`provider = kubevirt`, see [KubeVirt VMs](#kubevirt-vms-dry-run-only-so-far)), puts it on your tailnet as a **tagged, persistent** node (`tag:worker`) and lets it join the
 comebye hub. After that, comebye does the rest: launching agents, handoffs
 and repo checkouts go through the hub like any other peer. The tool does no
 agent orchestration and clones no repositories.
@@ -445,6 +446,59 @@ On AWS, at $0.09/GB egress, a worker with 200 MB of sessions costs about $0.09 a
 at this rate (an estimate; most have far less). A pull is not an interactive session, so it does not
 delay the idle poweroff; a tick that lands mid-pull on an otherwise idle worker past its limit could stop the VM, which `archive` reports as an ssh failure to repeat.
 Codex sessions are not archived: the archive knows only Claude and pi.
+
+## KubeVirt VMs (dry run only so far)
+
+`provider = kubevirt` makes the worker a KubeVirt VM on a cluster that `kubectl` and
+`virtctl` already reach (plan: issue #48). **This is slice 1 of that plan: the config, the
+`create --dry-run` plan, `preflight` and the capacity gate. There is no live create yet**;
+`create` without `--dry-run`, and every other command that would change the cluster, stops
+with an error before it runs anything.
+
+```
+provider=kubevirt
+ts_allow_login=you@example.com
+hub_url=https://hub.your-tailnet.ts.net
+hub_peer_url=https://hub.your-tailnet.ts.net
+# --- defaults, shown for reference
+# kube_context=                  # kubectl context; empty = the current one
+# kube_namespace=comebye-workers
+# kube_service_account=comebye-worker   # the scoped account the prerequisites create
+# kube_node_prefer=rozalin,zetta        # the only nodes a VM may go to, in order; empty = any but kube_node_avoid
+# kube_node_avoid=adell,etna            # never
+# kube_floor_gib=12                     # free memory a node keeps after the VM
+# kube_node_floor=zetta=8               # NODE=GIB,... per-node floors (replaces the default list)
+# kube_storage_class=longhorn
+# vm_image_dv=debian-13-golden          # a DataVolume in the namespace, cloned per VM ...
+# vm_image_url=https://.../debian-13-genericcloud-amd64.qcow2   # ... or a qcow2 CDI imports (set one)
+# vm_cpu=4                              # vCPUs and the CPU limit
+# vm_cpu_request=2                      # the scheduler's share; below vm_cpu so a control-plane node is not starved
+# vm_memory=32Gi                        # request = limit
+# boot_disk_gb=40
+# data_disk_gb=150
+```
+
+`project`, `zone` and `ssh_source_cidr` do not apply. The tool never reads or prints the
+kubeconfig; it runs `kubectl` with at most `--context NAME`. The fixed cluster pieces
+(namespace, quota, network policy, golden image, the service account) are applied once from the
+homelab repo's `k3s-manifests/` and are not made by this tool.
+
+- **`create NAME --dry-run`** prints the plan, then the DataVolume, Secret and VirtualMachine
+  it would apply (every object labelled `managed-by=comebye-worker`; the Secret's host key is
+  a placeholder). It reads the cluster with `kubectl get` only, and exits non-zero when the
+  capacity gate refuses.
+- **The capacity gate** refuses a node unless it keeps its floor of free memory after the VM:
+  allocatable memory, minus the larger of its pods' memory requests and its measured use (the
+  metrics API, when it answers), minus the VM's memory plus 512 MiB of pod overhead, must still
+  be at least the floor (12 GiB, or the node's own `kube_node_floor`; the plan sets zetta to 8).
+  Only nodes in `kube_node_prefer` are candidates when it is set; cordoned, tainted, not-Ready
+  and no-`devices.kubevirt.io/kvm` nodes are skipped; the first allowed node in preference order
+  wins, and the VM is pinned to it.
+- **`preflight`** adds a `kubevirt` line (JSON: `"kubevirt"`, present only for this provider):
+  `kubectl` and `virtctl` on PATH, the cluster answers, KubeVirt and CDI are `Deployed`, the
+  namespace, service account, golden image and storage class exist, and a node may take a VM.
+  `missing` means the prerequisites manifest is not applied; `error` means something else is
+  wrong.
 
 ## OpenShell sandboxes
 

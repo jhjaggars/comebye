@@ -47,6 +47,9 @@ type pfDoc struct {
 	Tailnet   pfCheck `json:"tailnet"`
 	OpenShell pfCheck `json:"openshell"`
 	SSH       pfCheck `json:"ssh"`
+	// Only when the config's provider is kubevirt: the cluster check reads the
+	// cluster, which a gcp or aws node has no business doing.
+	KubeVirt *pfCheck `json:"kubevirt,omitempty"`
 	// What this node is set up to build in (settings, not credentials): the
 	// config's aws_region, and the regions a caller may pick.
 	Region  string   `json:"region,omitempty"`
@@ -72,6 +75,10 @@ func (e *env) preflight(ctx context.Context, asJSON bool) error {
 	d.Tailnet = e.pfTailnet(ctx)
 	d.OpenShell = e.pfOpenShell(ctx)
 	d.SSH = e.pfSSH()
+	if e.Cfg.Provider == "kubevirt" {
+		k := e.pfKubeVirt(ctx)
+		d.KubeVirt = &k
+	}
 	d.Region, d.Regions = e.Cfg.AWSRegion, e.Cfg.RegionsAllowed()
 	d.GCPZone = e.Cfg.Zone
 	if asJSON {
@@ -79,10 +86,17 @@ func (e *env) preflight(ctx context.Context, asJSON bool) error {
 		e.printf("%s\n", b)
 		return nil
 	}
-	for _, r := range []struct {
+	rows := []struct {
 		n string
 		c pfCheck
-	}{{"aws", d.AWS}, {"gcp", d.GCP}, {"tailnet", d.Tailnet}, {"openshell", d.OpenShell}, {"ssh", d.SSH}} {
+	}{{"aws", d.AWS}, {"gcp", d.GCP}, {"tailnet", d.Tailnet}, {"openshell", d.OpenShell}, {"ssh", d.SSH}}
+	if d.KubeVirt != nil {
+		rows = append(rows, struct {
+			n string
+			c pfCheck
+		}{"kubevirt", *d.KubeVirt})
+	}
+	for _, r := range rows {
 		e.printf("%-10s %-8s %s\n", r.n, r.c.State, r.c.Note)
 	}
 	return nil
