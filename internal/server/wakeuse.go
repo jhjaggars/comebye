@@ -291,3 +291,48 @@ func (s *Server) sessionGone(w http.ResponseWriter, host, target string) http.Re
 	}
 	return g
 }
+
+// queueForStopped queues a prompt for a session that is not in the fleet
+// because its worker is stopped: the worker is started, and the prompt is
+// delivered when the session is back, or given up when it is not (afterWake).
+// It reports whether it answered.
+func (s *Server) queueForStopped(w http.ResponseWriter, r *http.Request, b queueBody) bool {
+	host := hostPart(b.Agent)
+	if s.wake == nil || host == "" || host == s.fleet.LocalName() || !s.fleet.HasPeer(host) {
+		return false
+	}
+	c := callerOf(r)
+	if c.tagged && !sameHost(host, c.host) && !s.isCoordinator(b.Agent, b.Name) {
+		promptForbidden(w)
+		return true
+	}
+	wv := s.wakeEnsure(r.Context(), r, host, "a queued prompt")
+	switch wv.Kind {
+	case wakeRefused:
+		return s.wakeAnswerFor(w, host, wv)
+	case wakeStarting:
+	default:
+		return false
+	}
+	p := QueuedPrompt{Agent: b.Agent, Name: b.Name, Text: b.Text, From: s.by(r, "")}
+	if c.agent() {
+		p.FromID = s.replyID(c)
+	}
+	out, dup, err := s.pq.add(p)
+	if err != nil {
+		queueErr(w, err)
+		return true
+	}
+	wk, _ := s.wake.get(host)
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"queued": out, "duplicate": dup, "waking": wk,
+		"note": host + " is stopped: starting it. Your prompt is delivered when the session is back; if the power-off ended it, you are told."})
+	return true
+}
+
+// hostPart is the host of a fleet id (host/pane).
+func hostPart(id string) string {
+	if i := strings.Index(id, "/"); i > 0 {
+		return id[:i]
+	}
+	return ""
+}

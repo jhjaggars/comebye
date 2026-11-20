@@ -33,7 +33,9 @@ func newUseRig(t *testing.T) *useRig {
 	t.Helper()
 	r := &useRig{hits: map[string]int{}}
 	s, prov, wk, hdr, _ := stoppedHubW(t, r.serve)
+	r.mu.Lock()
 	r.s, r.wk, r.prov, r.hdr = s, wk, prov, hdr
+	r.mu.Unlock()
 	real := func(name string) string {
 		for _, h := range s.fleet.Hosts() {
 			if h.Name == name {
@@ -48,14 +50,6 @@ func newUseRig(t *testing.T) *useRig {
 		}
 		return real(name)
 	}
-	waitUntil(t, "demo1's agent in the fleet", func() bool {
-		for _, a := range s.fleet.Agents() {
-			if a.ID == "demo1/w9:p1" {
-				return true
-			}
-		}
-		return false
-	})
 	var h hostsResp
 	getJSON(t, s, "/api/provision/hosts?refresh=1", userHdr, &h)
 	t.Cleanup(s.waitBackground)
@@ -68,7 +62,19 @@ func (r *useRig) hit(k string) int {
 	return r.hits[k]
 }
 
-func (r *useRig) starts() int { return r.wk.runs("start demo1") }
+func (r *useRig) starts() int { return r.startRuns() }
+
+// startRuns is how often the fake tool was asked to start demo1 (the rig's own
+// hook reads it while the rig is still being built).
+func (r *useRig) startRuns() int {
+	r.mu.Lock()
+	wk := r.wk
+	r.mu.Unlock()
+	if wk == nil {
+		return 0
+	}
+	return wk.runs("start demo1")
+}
 
 func (r *useRig) coordinator(t *testing.T) map[string]string {
 	t.Helper()
@@ -319,15 +325,17 @@ func (r *useRig) serve(worker *provPeer) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case q.URL.Path == "/api/events":
+			// a stopped worker's sessions are gone from the fleet; once it has been
+			// started they are back, unless the power-off ended them
 			w.Header().Set("Content-Type", "text/event-stream")
 			last := ""
 			for {
 				r.mu.Lock()
 				g := r.gone
 				r.mu.Unlock()
-				cur := "[" + useAgent + "]"
-				if g {
-					cur = "[]"
+				cur := "[]"
+				if r.startRuns() > 0 && !g {
+					cur = "[" + useAgent + "]"
 				}
 				if cur != last {
 					fmt.Fprintf(w, "event: agents\ndata: {\"type\":\"agents\",\"agents\":%s}\n\n", cur)
