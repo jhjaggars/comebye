@@ -175,6 +175,9 @@ for (const width of [390, 1280]) {
       await page.click("#sx-back");
       await page.waitForSelector("#settings", { state: "hidden" });
     } else {
+      // Escape is heard only inside the screen. The screen focuses itself as it opens, but on a slow page something
+      // later can leave focus on the body (seen after the reviewcard script): put it where a click would.
+      await page.locator("#sx-body").focus();
       await page.keyboard.press("Escape");
       await page.waitForSelector("#settings", { state: "hidden" });
     }
