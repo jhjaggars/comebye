@@ -106,25 +106,13 @@ if want stt; then node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1 ; f
 
 # The Copy strip on code blocks (clipboard read back in headless Chrome).
 if want copycode; then node copycode.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want fontsetting; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node fontsetting.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want readcol; then node readcol.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want textsize; then node textsize.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want spacing; then node spacing.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want wrap; then node wrap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want openbydefault; then node openbydefault.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want appearancereset; then node appearancereset.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want appearance; then node appearance.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want depth; then node depth.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want navcontrast; then node navcontrast.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want leftnav; then node leftnav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want hostpicker; then node hostpicker.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want listfilter; then node listfilter.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want groupby; then node groupby.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# Buttons and the one focus ring (design language slice 4).
-if want buttons; then node buttons.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# Chips, cards and empty states share one shape (design language slice 5).
-if want chips; then node chips.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# Segmented controls, menus and sheets, notices, stacking order (design language slice 6).
-if want controls; then node controls.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+if want shapes; then node shapes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Tap-to-copy values, whole-message copy and the other copy buttons.
 if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Tool calls as one grey line per run: the list, a call's input and output, the failure peek.

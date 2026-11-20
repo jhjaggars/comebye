@@ -70,7 +70,7 @@ while IFS= read -r f; do
     tools/uitest/gpghelp.mjs) lint=true; smoke=true; merge_browser=true; add_script gpgunlock; add_script gpgrenew ;;
     tools/uitest/*.mjs)
       lint=true; smoke=true; merge_browser=true
-      b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in buttons|chips|controls|fontsetting|decisionsets|starters|depth|empties|contrast|tokens|static) visual=true;; esac ;;
+      b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in shapes|appearance|starters|depth|empties|contrast|tokens|static) visual=true;; esac ;;
     tools/uitest/*|tools/devserver/*) lint=true; smoke=true; merge_browser=true ;;
     # A leaf Go package: nothing the browser scripts reach (they go through the hub), so Go tests only.
     internal/*/*.go|internal/*/*/*) lint=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;

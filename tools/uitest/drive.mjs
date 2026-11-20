@@ -3855,12 +3855,6 @@ await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\
 });
 
 // ---- themes (web/themes.js): contrast, picker, persistence, no flash ----
-await check("themes: every theme passes the contrast check (tools/uitest/contrast.mjs)", async () => {
-  const { execFileSync } = await import("node:child_process");
-  try { execFileSync("node", [new URL("./contrast.mjs", import.meta.url).pathname], { encoding: "utf8", stdio: "pipe" }); }
-  catch (e) { throw new Error(String(e.stdout || e.message).split("\n").filter((l) => /FAIL|<|missing|not defined/.test(l)).slice(0, 4).join(" | ")); }
-});
-
 {
   const tctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: "light", bypassCSP: true });
   const tp = await tctx.newPage();
