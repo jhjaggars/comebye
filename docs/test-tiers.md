@@ -6,7 +6,7 @@ time. The plan, with the measurements behind it, is the Page "Test tiers plan" i
 | Tier | Trigger | What runs | Target | A failure blocks |
 |---|---|---|---|---|
 | Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched | 3.5 min (5 when `internal/server` changed) | merging the pull request |
-| Merge | a push to main | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and a `rest` job; the visual pass in dark and light | 4 min | the next release of that commit (and the landing queue reads it) |
+| Merge | a push to main | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and the `rest` scripts in 4 parallel parts; the visual pass in dark and light | 4 min | the next release of that commit (and the landing queue reads it) |
 | Release | a `v*` tag | the gate (below), govulncheck, the 4 builds, then the publish | 2 min | nothing: it publishes |
 
 The **day in the life** (`tools/smoke/run.sh`, about 15 seconds after the build) is one more job in the pre-submit tier
@@ -37,6 +37,7 @@ the merge tier runs everything, so a wrong rule is caught on the next push to ma
 ```sh
 tools/ci/browser.sh smoke        # ~160 checks covering every screen, about 2 min
 tools/ci/browser.sh drive light  # drive.mjs in the light scheme
+tools/ci/browser.sh rest dark "" 2/4  # part 2 of 4 of the rest scripts (what one CI job runs)
 tools/ci/browser.sh full         # everything, one scheme (tools/uitest/run.sh runs both)
 tools/ci/gotest.sh --shard 1/2   # half of the Go work
 SCRIPTS="sidepanel peers" tools/uitest/run.sh   # just these scripts
@@ -44,6 +45,13 @@ SHOTS=1 tools/uitest/run.sh      # a screenshot after every drive.mjs check (oth
 ```
 
 Several suites on one machine need different bases: `PORT=24741 tools/uitest/run.sh`.
+
+## Sharding the browser job
+
+`tools/ci/browser.sh rest dark OUT I/N` runs part I of N. The parts are balanced by `tools/ci/browser-times.txt`
+(each script's seconds; an unlisted script counts 30), so a new script lands in some part with no list to edit.
+Every script prints `== script NAME: N s` when the next one starts: when the parts drift apart, copy those numbers
+from a CI log into the file. `ci-status` is still the one required check; it waits for all the parts.
 
 ## Test mode
 

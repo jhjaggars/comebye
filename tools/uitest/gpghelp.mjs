@@ -1,4 +1,4 @@
-// What the GPG unlock scripts (gpgunlock.mjs, gpgrenew.mjs and tools/smoke/day.mjs) share: the throwaway GNUPGHOME
+// What the GPG unlock scripts (gpgunlock.mjs and tools/smoke/day.mjs) share: the throwaway GNUPGHOME
 // guard, the "is gpg here" probe, the throwaway key, and Chrome's virtual authenticator with PRF.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";

@@ -29,7 +29,17 @@ fi
 
 # SCRIPTS="drive sidepanel" runs only those scripts (a name per tools/uitest/<name>.mjs); unset runs all.
 # The suites (smoke, behaviour, visual) are SCRIPTS lists in tools/ci/suites.sh.
-want() { [ -z "${SCRIPTS:-}" ] || [[ " $SCRIPTS " == *" $1 "* ]]; }
+# Each script that runs prints a marker with how long the one before it took, so a log shows where the time goes
+# (the shards in tools/ci/browser.sh are balanced from these numbers).
+want() {
+  [ -z "${SCRIPTS:-}" ] || [[ " $SCRIPTS " == *" $1 "* ]] || return 1
+  note_script "$1"
+}
+_prev=""; _prev_at=$SECONDS
+note_script() {
+  [ -z "$_prev" ] || echo "== script $_prev: $((SECONDS - _prev_at)) s"
+  _prev="$1"; _prev_at=$SECONDS
+}
 
 # Set up for the pass picked above: the dark pass uses the pages listener.
 if [ -z "${PAGES_LISTENER:-}" ]; then
@@ -219,6 +229,7 @@ if want provision; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node 
 if want provhosts; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provhosts.mjs "$out" || rc=1 ; fi
 # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
 if want usage; then FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1 ; fi
-# The "GPG is locked" item stays (the watcher renews its request in place; Not now snoozes it): the real watcher over minutes.
-if want gpgrenew; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node gpgrenew.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# (The "GPG is locked" item staying open over minutes is Go tests with an injected clock: internal/gpgunlock/trigger_test.go,
+# internal/server/approvals_keep_test.go, internal/cli/gpg_test.go. The Unlock card itself is gpgunlock.mjs.)
+note_script ""
 exit $rc

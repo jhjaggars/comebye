@@ -218,7 +218,19 @@ func TestGPGCommands(t *testing.T) {
 	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "withdrawn") || posts("/api/approvals") != before+1 || posts("/api/approvals/ap_1/withdraw") != 1 {
 		t.Fatalf("watch on a host idle past the grace: %d %q", code, out)
 	}
+	// "Not now" on the hub: the ask comes back snoozed, so the round files nothing and keeps no record
+	// (this and the quiet that follows are what the browser script gpgrenew.mjs (deleted) checked over minutes of real waiting).
 	f.answers["GET /api/agents"] = answer{body: agentsJSON}
+	f.answers["POST /api/approvals"] = answer{body: `{"snoozed":true,"until":"` + now.Add(10*time.Minute).Format(time.RFC3339) + `"}`}
+	out.Reset()
+	if code := run(e, "gpg", "watch", "--once"); code != 0 || strings.Contains(out.String(), "filed") || posts("/api/approvals") != before+2 {
+		t.Fatalf("watch after Not now: %d %q", code, out)
+	}
+	if _, ok := h.LastFiled(); ok {
+		t.Fatal("a snoozed ask left a record of a request that was never filed")
+	}
+	f.answers["POST /api/approvals"] = answer{body: `{"approval":{"id":"ap_1"}}`}
+	before++ // the snoozed ask above was one more POST
 	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "filed") || posts("/api/approvals") != before+2 {
 		t.Fatalf("watch with an agent working: %d %q", code, out)
 	}

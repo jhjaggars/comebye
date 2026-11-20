@@ -204,6 +204,7 @@ jobs:
     needs: changes
     if: github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -229,10 +230,17 @@ jobs:
           path: ${{ runner.temp }}/uitest
           if-no-files-found: ignore
 
+  # Every other behaviour script, in 4 parallel parts balanced by each script's time (tools/ci/browser-times.txt).
   browser-rest:
+    name: browser rest (${{ matrix.shard }}/4)
     needs: changes
     if: github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1", "2", "3", "4"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -248,13 +256,13 @@ jobs:
           cache: npm
           cache-dependency-path: tools/uitest/package-lock.json
 
-      - name: browser checks (the other scripts)
-        run: tools/ci/browser.sh rest dark "$RUNNER_TEMP/uitest"
+      - name: browser checks (the other scripts, part ${{ matrix.shard }} of 4)
+        run: tools/ci/browser.sh rest dark "$RUNNER_TEMP/uitest" ${{ matrix.shard }}/4
       - name: upload browser logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: uitest-rest
+          name: uitest-rest-${{ matrix.shard }}
           path: ${{ runner.temp }}/uitest
           if-no-files-found: ignore
 

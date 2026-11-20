@@ -67,7 +67,7 @@ while IFS= read -r f; do
     # The day-in-the-life smoke (tools/smoke) runs whenever the browser smoke set does (see ci.yml); its own files run it.
     tools/smoke/*) lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg ./tools/smoke/fakeherdr ;;
     # The helper the GPG scripts share: both of them, and (through tools/smoke/day.mjs) the day in the life.
-    tools/uitest/gpghelp.mjs) lint=true; smoke=true; merge_browser=true; add_script gpgunlock; add_script gpgrenew ;;
+    tools/uitest/gpghelp.mjs) lint=true; smoke=true; merge_browser=true; add_script gpgunlock ;;
     tools/uitest/*.mjs)
       lint=true; smoke=true; merge_browser=true
       b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in shapes|appearance|starters|depth|empties|contrast|tokens|static) visual=true;; esac ;;
