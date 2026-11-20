@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# A fake `claude` for the sign-in tests: it behaves like Claude Code 2.1.x's
+# `auth login` and `auth status` as seen in a pseudo-terminal, with no
+# account and no network. It is put first on PATH.
+#
+# The sign-in child gets a scrubbed environment, so fault modes are chosen by
+# the contents of $HOME/fake-mode (one word), not by an environment variable:
+#   nourl      print no link, then wait
+#   badurl     print a link off the allow-list
+#   httpurl    print an http link on an allowed host
+#   hang       after the code, hang (with a background child) and never exit
+#   exit0      after any code, exit 0 without signing in
+#   echo       print the code back before the verdict
+# Every run writes its pid to $HOME/fake-pid, its background child's pid to
+# $HOME/fake-child-pid, and its environment to $HOME/fake-env.
+mode=$(cat "$HOME/fake-mode" 2>/dev/null)
+url='https://claude.com/cai/oauth/authorize?code=true&client_id=fake&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&code_challenge=abc&state=xyz'
+case "$mode" in
+  badurl) url='https://evil.example/cai/oauth/authorize?code=true&state=xyz' ;;
+  httpurl) url='http://claude.com/cai/oauth/authorize?code=true&state=xyz' ;;
+esac
+case "$1 $2" in
+  "auth login")
+    mkdir -p "$HOME/.claude"
+    echo $$ > "$HOME/fake-pid"
+    env > "$HOME/fake-env"
+    sleep 300 &
+    echo $! > "$HOME/fake-child-pid"
+    printf 'Opening browser to sign in\xe2\x80\xa6\n'
+    if [ "$mode" != nourl ]; then
+      printf 'If the browser didn'"'"'t open, visit: \033]8;;%s\007%s\033]8;;\007\n' "$url" "$url"
+      printf '\033[94m%s\033[39m\n' "$url"
+    fi
+    printf 'Paste code here if prompted > '
+    IFS= read -r line
+    line=${line%$'\r'}
+    [ "$mode" = echo ] && printf '%s\n' "$line"
+    if [ "$mode" = hang ]; then
+      sleep 300
+    fi
+    if [ "$mode" = exit0 ]; then
+      exit 0
+    fi
+    if [ "$line" = GOOD-CODE ]; then
+      touch "$HOME/.claude/fake-ok"
+      printf 'Login successful.\n'
+      exit 0
+    fi
+    printf 'Login failed: invalid code\n'
+    exit 1
+    ;;
+  "auth status")
+    if [ -f "$HOME/.claude/fake-ok" ]; then
+      printf '{"loggedIn":true,"authMethod":"claude.ai","loginExpiresAt":"2099-01-01T00:00:00Z"}\n'
+      exit 0
+    fi
+    printf '{"loggedIn":false}\n'
+    exit 1
+    ;;
+esac
+echo "fake claude: unsupported: $*" >&2
+exit 2

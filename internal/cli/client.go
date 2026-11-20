@@ -57,6 +57,7 @@ type apiError struct {
 	status  int
 	code    string
 	message string
+	body    []byte // the raw answer, for a caller that wants more than code and message
 }
 
 func (e *apiError) Error() string {
@@ -189,7 +190,7 @@ func (c *client) raw(method, path string, query url.Values, body any) ([]byte, e
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return data, nil
 	}
-	e := &apiError{status: resp.StatusCode}
+	e := &apiError{status: resp.StatusCode, body: data}
 	var m struct{ Code, Message string }
 	if json.Unmarshal(data, &m) == nil && (m.Code != "" || m.Message != "") {
 		e.code, e.message = m.Code, m.Message

@@ -31,6 +31,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/park"
 	"github.com/jhjaggars/comebye/internal/passkey"
 	"github.com/jhjaggars/comebye/internal/push"
+	"github.com/jhjaggars/comebye/internal/signin"
 	"github.com/jhjaggars/comebye/internal/state"
 	"github.com/jhjaggars/comebye/internal/transcript"
 	"github.com/jhjaggars/comebye/internal/tsauth"
@@ -117,6 +118,8 @@ type Config struct {
 	// default of 48h; negative: tmp.* directories are left alone).
 	ScratchEvery time.Duration
 	TmpMaxAge    time.Duration
+	// Signin sets the limits of the host's agent sign-ins (zero: the defaults; tests shorten them).
+	Signin signin.Config
 	// StateDir holds the handoff ledger (ledger.json), the briefing
 	// (brief.json) and its schedule (brief-schedule.json), the roles (roles.json) and an optional
 	// handoff-template.md. Empty turns handoffs and marks off.
@@ -268,7 +271,9 @@ type Server struct {
 	asking sync.WaitGroup
 	// probes caches the removals review's re-checks (see askcheck.go);
 	// probeTTL is how long one lives (tests shrink it).
-	probes   *probeCache
+	probes *probeCache
+	// signin holds this host's agent sign-ins, in memory only (signin.go).
+	signin   *signin.Manager
 	probeTTL time.Duration
 	// reaskGap, reaskCap and reaskMax pace the hub's automatic re-asks
 	// (tests change them); reaskEvery is how often RunReask looks.
@@ -400,6 +405,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond, resetPoll: 500 * time.Millisecond, resetWait: 30 * time.Second,
 		restartPoll: 250 * time.Millisecond, restartWait: restartExitWait,
 		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait,
+		signin: signin.NewManager(cfg.Signin),
 		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, openGap: openGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
 	switch {
 	case cfg.LandTurnTimeout == 0:
@@ -631,6 +637,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/hosts/{host}/park", s.auth(s.onHostLaunch("park", s.handlePark)))
 	s.mux.HandleFunc("POST /api/hosts/{host}/resume", s.auth(s.onHostLaunch("resume", s.handleResume)))
 	// Restart in place (restart.go): the user's alone.
+	// Sign an agent in on this host (signin.go): the user's alone. Local host only for now.
+	s.mux.HandleFunc("POST /api/hosts/{host}/signin", s.auth(s.onLocalHost(s.handleSigninStart)))
+	s.mux.HandleFunc("GET /api/hosts/{host}/signin/{id}", s.auth(s.onLocalHost(s.handleSigninGet)))
+	s.mux.HandleFunc("POST /api/hosts/{host}/signin/{id}/code", s.auth(s.onLocalHost(s.handleSigninCode)))
+	s.mux.HandleFunc("DELETE /api/hosts/{host}/signin/{id}", s.auth(s.onLocalHost(s.handleSigninCancel)))
 	s.mux.HandleFunc("POST /api/restart", s.auth(s.handleRestart))
 	s.mux.HandleFunc("POST /api/hosts/{host}/restart", s.auth(s.onHostLaunch("restart", s.handleRestart)))
 	// Bulk: the hub restarts a host's eligible agents of one kind one by one
