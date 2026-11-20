@@ -4,7 +4,7 @@ name: Release
 #   git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
 # This workflow checks the exact commit it releases, and any failing step stops the release: govulncheck, the
 # four-target build, and, when there is no green push CI run on the commit (tools/ci/releasegate.sh), go vet and
-# go test -race. The nightly is not consulted. There is no override: fix the cause and re-run (the workflow can be
+# go test -race. There is no override: fix the cause and re-run (the workflow can be
 # run by hand from the Actions tab with the tag).
 
 on:
@@ -63,7 +63,7 @@ jobs:
         if: steps.gate.outputs.tested != 'true'
         run: go test -race ./...
 
-      # The newest advisory database, as the nightly uses; a finding fails the release.
+      # The newest advisory database; a finding fails the release.
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest

@@ -5,8 +5,7 @@
 #
 # tested=true when a green push CI run exists on SHA (the merge tier ran everything there); tested=false
 # otherwise, and the release workflow then runs vet and the Go tests itself. Either way the release workflow
-# also builds all targets and runs govulncheck on the exact commit. Nothing here blocks a release: the
-# nightly is not consulted.
+# also builds all targets and runs govulncheck on the exact commit. Nothing here blocks a release.
 set -euo pipefail
 sha="${1:?sha}"
 repo="${GITHUB_REPOSITORY:?}"

@@ -2,7 +2,7 @@ name: CI
 
 # Three tiers (docs/test-tiers.md). A pull request is the quick pre-submit tier: lint, the Go packages the
 # change touches, and a browser smoke set. A push to main is the merge tier: everything once, in short parallel
-# jobs. The nightly workflow runs the full matrix. tools/ci/select.sh decides from the changed paths what each
+# jobs. tools/ci/select.sh decides from the changed paths what each
 # tier needs; a path it does not know means everything.
 #
 # Every run ends in ci-status, which is green when every job that was needed passed. Read that one
