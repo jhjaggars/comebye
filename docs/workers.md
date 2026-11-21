@@ -515,6 +515,19 @@ kubeconfig; it runs `kubectl` with at most `--context NAME`. The fixed cluster p
 (namespace, quota, network policy, golden image, the service account) are applied once from the
 homelab repo's `k3s-manifests/` and are not made by this tool.
 
+**Run the tool as the scoped account, not as cluster admin.** The prerequisites bind
+`comebye-worker-tool` to a Role in the workers' namespace (VMs, DataVolumes, claims, Secrets,
+the start/stop and port-forward subresources, pod logs) and to a read-only ClusterRole (nodes, pods, node
+metrics, storage classes, the KubeVirt and CDI objects, and the one namespace), and declare a
+`kubernetes.io/service-account-token` Secret for it. Build a kubeconfig from that Secret (the
+cluster's server, its `ca.crt` and its `token`; mode 0600) and point the provisioning host's
+`KUBECONFIG` at it. The token does not expire: to rotate it, delete the Secret, re-apply the
+manifest (the token controller fills in a new one) and rebuild the kubeconfig; deleting the
+Secret also revokes it. The rules cover every call `preflight`, status, create, start, stop,
+ssh, archive and destroy make, while `kubectl auth can-i '*' '*'` is `no` and nothing outside
+the namespace can be changed. `kubectl exec` into the virt-launcher pod (the
+second hint after a failed ssh) is not granted; the guest console log (`kubectl logs`) is.
+
 - **`create NAME`** applies, in order: the data DataVolume (a standalone object; `destroy`
   keeps it), the cloud-init Secret, and the VirtualMachine (boot disk = a CSI clone of the
   golden DataVolume; `runStrategy: RerunOnFailure`, so the idle poweroff leaves it stopped;
