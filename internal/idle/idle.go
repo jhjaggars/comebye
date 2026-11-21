@@ -1,6 +1,7 @@
 // Package idle decides whether a worker host has been idle long enough to
-// stop: no herdr agent is working and nothing interactive has been active
-// for a while. One implementation serves every host kind: the VM's idle
+// stop: no herdr agent is working or waiting on the user, no hold is set
+// (work in flight, an upgrade: hold.go), and nothing interactive has been
+// active for a while. One implementation serves every host kind: the VM's idle
 // timer and a sandbox's init loop both call `comebye idle`.
 //
 // The check is polled. Each poll that finds activity renews a stamp file;
@@ -30,6 +31,13 @@ type Options struct {
 	Stamp   string // the stamp file
 	NoTouch bool   // read the stamp, never write it (a dry run)
 
+	// Holds is the holds directory (HoldsDir); "" checks none.
+	Holds string
+	// BlockedMax is how long a blocked agent keeps the host up: 0 is
+	// DefaultBlockedMax, negative is no limit. The clock runs from the first
+	// poll that saw an agent blocked, and restarts once none is.
+	BlockedMax time.Duration
+
 	Herdr    *herdr.Client // nil: herdr's default socket
 	ProcRoot string        // default /proc
 	Now      func() time.Time
@@ -49,7 +57,17 @@ type Result struct {
 	AgentsWorking int      `json:"agents_working"`
 	SSHSessions   int      `json:"ssh_sessions"`
 	HerdrState    string   `json:"herdr"` // ok, not_running, no_answer
+	AgentsBlocked int      `json:"agents_blocked"`
+	// BlockedMinutes is how long some agent has been blocked; past
+	// BlockedMax blocked agents no longer keep the host up.
+	BlockedMinutes int    `json:"blocked_minutes,omitempty"`
+	Holds          []Hold `json:"holds,omitempty"`
 }
+
+// DefaultBlockedMax is how long a blocked agent keeps a host up by default:
+// a day covers a question asked in the evening and answered next morning,
+// and still stops a host whose user has gone away.
+const DefaultBlockedMax = 24 * time.Hour
 
 // Check runs one poll.
 func Check(ctx context.Context, o Options) (Result, error) {
@@ -72,9 +90,14 @@ func Check(ctx context.Context, o Options) (Result, error) {
 	//    ssh connection does not: herdr keeps one open for as long as a
 	//    machine is saved;
 	//  - a herdr agent whose status is "working";
+	//  - a herdr agent that is "blocked": it waits on the user (a question,
+	//    a permission), and stopping the host would throw its session away.
+	//    Only for BlockedMax, so a user who has gone away does not keep it
+	//    up for ever;
+	//  - a hold that has not expired: a prompt or launch an agent has not
+	//    picked up yet (a handoff in flight), an upgrade (hold.go);
 	//  - herdr running but not answering: not a time to stop on a guess.
-	// Not activity: idle, done, unknown and blocked (it waits on the user,
-	// who can start the host again).
+	// Not activity: idle, done and unknown.
 	r.SSHSessions = sshPtys(o.ProcRoot)
 	if r.SSHSessions > 0 {
 		r.Reasons = append(r.Reasons, fmt.Sprintf("%d interactive ssh session(s)", r.SSHSessions))
@@ -90,16 +113,26 @@ func Check(ctx context.Context, o Options) (Result, error) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	agents, err := list(cctx)
 	cancel()
+	now := o.Now()
+	epoch := o.Epoch()
 	switch {
 	case err == nil:
 		r.HerdrState = "ok"
 		for _, a := range agents {
-			if a.Status == herdr.StatusWorking {
+			switch a.Status {
+			case herdr.StatusWorking:
 				r.AgentsWorking++
+			case herdr.StatusBlocked:
+				r.AgentsBlocked++
 			}
 		}
 		if r.AgentsWorking > 0 {
 			r.Reasons = append(r.Reasons, fmt.Sprintf("%d herdr agent(s) working", r.AgentsWorking))
+		}
+		if reason, err := blockedReason(&r, o, now, epoch); err != nil {
+			return r, err
+		} else if reason != "" {
+			r.Reasons = append(r.Reasons, reason)
 		}
 	case notRunning(err):
 		r.HerdrState = "not_running"
@@ -108,8 +141,13 @@ func Check(ctx context.Context, o Options) (Result, error) {
 		r.Reasons = append(r.Reasons, "herdr is up but did not answer: "+oneLine(err))
 	}
 
-	now := o.Now()
-	epoch := o.Epoch()
+	if o.Holds != "" {
+		r.Holds = ActiveHolds(o.Holds, now)
+		for _, h := range r.Holds {
+			r.Reasons = append(r.Reasons, fmt.Sprintf("held until %s: %s", h.Until.UTC().Format("15:04Z"), h.Reason))
+		}
+	}
+
 	last, ok := readStamp(o.Stamp, epoch)
 	active := len(r.Reasons) > 0
 	if !ok || active {
@@ -127,15 +165,53 @@ func Check(ctx context.Context, o Options) (Result, error) {
 	return r, nil
 }
 
+// blockedReason keeps the blocked clock (a second stamp beside the idle
+// one) and says whether blocked agents keep the host up.
+func blockedReason(r *Result, o Options, now time.Time, epoch string) (string, error) {
+	path := o.Stamp + ".blocked"
+	if r.AgentsBlocked == 0 {
+		if !o.NoTouch {
+			_ = os.Remove(path)
+		}
+		return "", nil
+	}
+	since, ok := readStamp(path, epoch)
+	if !ok {
+		since = now
+		if !o.NoTouch {
+			if err := writeStamp(path, now, epoch); err != nil {
+				return "", fmt.Errorf("write %s: %w", path, err)
+			}
+		}
+	}
+	max := o.BlockedMax
+	if max == 0 {
+		max = DefaultBlockedMax
+	}
+	d := now.Sub(since)
+	if d > 0 {
+		r.BlockedMinutes = int(d / time.Minute)
+	}
+	if max > 0 && d >= max {
+		return "", nil
+	}
+	return fmt.Sprintf("%d herdr agent(s) blocked, waiting on the user", r.AgentsBlocked), nil
+}
+
 // Summary is the one-line human form.
 func (r Result) Summary() string {
 	switch {
 	case len(r.Reasons) > 0:
 		return "active: " + strings.Join(r.Reasons, ", ")
-	case r.Idle:
-		return fmt.Sprintf("idle for %d min (limit %d): no working agent, no interactive session", r.IdleMinutes, r.Minutes)
 	}
-	return fmt.Sprintf("idle for %d of %d min: no working agent, no interactive session", r.IdleMinutes, r.Minutes)
+	why := "no working or blocked agent, no hold, no interactive session"
+	if r.AgentsBlocked > 0 {
+		why = fmt.Sprintf("no working agent, %d blocked for %d min (past the limit), no hold, no interactive session", r.AgentsBlocked, r.BlockedMinutes)
+	}
+	if r.Idle {
+		return fmt.Sprintf("idle for %d min (limit %d): %s", r.IdleMinutes, r.Minutes, why)
+	}
+	return fmt.Sprintf("idle for %d of %d min: %s", r.IdleMinutes, r.Minutes, why)
 }
 
 // notRunning: nothing listens on herdr's socket (no socket file, or a stale

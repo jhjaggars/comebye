@@ -1145,6 +1145,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if a != nil && callerOf(r).agent() {
 		s.typed.record(originAgent, oneLine(s.by(r, ""), 100), a.ID, body.Text)
 	}
+	// Typed into an idle pane, the prompt is work no agent has picked up
+	// yet: keep the host from stopping as idle meanwhile (R2).
+	s.holdIdle("prompt", inFlightHold, "a prompt for "+oneLine(target, 80))
 	agent, err := s.client.Prompt(ctx, target, body.Text, opts)
 	if err != nil {
 		writeError(w, err)

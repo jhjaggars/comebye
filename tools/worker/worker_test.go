@@ -854,11 +854,29 @@ echo "$3" >>"$HOME/installed"
 	}
 }
 
-// runIdleCheck runs the idle script under bash with fake ps, runuser, getent,
-// systemctl and logger, and returns the decision line and whether it powered off.
+// idleRun is one run of the idle script under bash with fake ps, runuser,
+// getent, systemctl and logger.
+type idleRun struct {
+	ps, herdrOut          string
+	herdrFails, herdrUnit bool
+	idleMin, minutesAgo   int
+	extraConf             string            // more idle.conf lines
+	holds                 map[string]string // hold file name -> contents ("+15m reason": until now+15m)
+	upgradeUnit           bool              // a comebye-upgrade-* unit is active
+	blockedSince          int               // minutes ago the blocked stamp was touched; 0 = no stamp
+}
+
+// runIdleCheck returns the decision line, whether it powered off, and
+// whether it renewed the activity stamp.
 func runIdleCheck(t *testing.T, ps, herdrOut string, herdrFails, herdrUnit bool, idleMin int, minutesAgo int) (line string, poweroff, touched bool) {
 	t.Helper()
-	dir := t.TempDir()
+	line, poweroff, touched, _ = idleRun{ps: ps, herdrOut: herdrOut, herdrFails: herdrFails, herdrUnit: herdrUnit, idleMin: idleMin, minutesAgo: minutesAgo}.run(t)
+	return
+}
+
+func (c idleRun) run(t *testing.T) (line string, poweroff, touched bool, dir string) {
+	t.Helper()
+	dir = t.TempDir()
 	bin := filepath.Join(dir, "bin")
 	if err := os.Mkdir(bin, 0o755); err != nil {
 		t.Fatal(err)
@@ -868,26 +886,52 @@ func runIdleCheck(t *testing.T, ps, herdrOut string, herdrFails, herdrUnit bool,
 			t.Fatal(err)
 		}
 	}
-	w("ps", "cat <<'EOF'\n"+ps+"\nEOF\n")
+	w("ps", "cat <<'EOF'\n"+c.ps+"\nEOF\n")
 	w("getent", "echo worker:x:1000:1000::"+dir+":/bin/bash\n")
 	fail := "0"
-	if herdrFails {
+	if c.herdrFails {
 		fail = "1"
 	}
 	// runuser -u USER -- env HOME=... herdr agent list
-	w("runuser", "[ "+fail+" = 1 ] && exit 1\ncat <<'EOF'\n"+herdrOut+"\nEOF\n")
+	w("runuser", "[ "+fail+" = 1 ] && exit 1\ncat <<'EOF'\n"+c.herdrOut+"\nEOF\n")
 	unit := "1"
-	if herdrUnit {
+	if c.herdrUnit {
 		unit = "0"
 	}
-	w("systemctl", "if [ \"$1\" = poweroff ]; then echo poweroff >>"+dir+"/log; exit 0; fi\nexit "+unit+"\n")
+	units := ""
+	if c.upgradeUnit {
+		units = "comebye-upgrade-0a1b2c.service loaded active running /home/worker/.local/bin/comebye upgrade"
+	}
+	// systemctl poweroff | systemctl --user -M u@ is-active herdr.service |
+	// systemctl --user -M u@ list-units ... 'comebye-upgrade-*'
+	w("systemctl", "if [ \"$1\" = poweroff ]; then echo poweroff >>"+dir+"/log; exit 0; fi\n"+
+		"case \" $* \" in *' list-units '*) echo '"+units+"'; exit 0 ;; esac\nexit "+unit+"\n")
 	w("logger", "shift 2; echo \"$*\" >>"+dir+"/log\n")
 	conf := filepath.Join(dir, "idle.conf")
-	os.WriteFile(conf, []byte(fmt.Sprintf("WK_USER=worker\nWK_IDLE_MINUTES=%d\n", idleMin)), 0o644)
+	os.WriteFile(conf, []byte(fmt.Sprintf("WK_USER=worker\nWK_IDLE_MINUTES=%d\n%s", c.idleMin, c.extraConf)), 0o644)
+	holds := filepath.Join(dir, ".local/state/comebye/idle-holds")
+	os.MkdirAll(holds, 0o700)
+	for name, body := range c.holds {
+		if rest, ok := strings.CutPrefix(body, "+"); ok {
+			d, why, _ := strings.Cut(rest, " ")
+			dd, err := time.ParseDuration(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = fmt.Sprintf("%d %s\n", time.Now().Add(dd).Unix(), why)
+		}
+		os.WriteFile(filepath.Join(holds, name), []byte(body), 0o644)
+	}
 	stamp := filepath.Join(dir, "stamp")
 	os.WriteFile(stamp, nil, 0o644)
-	old := time.Now().Add(-time.Duration(minutesAgo) * time.Minute)
+	old := time.Now().Add(-time.Duration(c.minutesAgo) * time.Minute)
 	os.Chtimes(stamp, old, old)
+	if c.blockedSince > 0 {
+		bs := stamp + ".blocked"
+		os.WriteFile(bs, nil, 0o644)
+		at := time.Now().Add(-time.Duration(c.blockedSince) * time.Minute)
+		os.Chtimes(bs, at, at)
+	}
 	cmd := exec.Command("bash", "-c", idleCheck)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "WK_IDLE_CONF=" + conf, "WK_IDLE_STAMP=" + stamp}
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -895,13 +939,14 @@ func runIdleCheck(t *testing.T, ps, herdrOut string, herdrFails, herdrUnit bool,
 	}
 	logb, _ := os.ReadFile(filepath.Join(dir, "log"))
 	st, _ := os.Stat(stamp)
-	return string(logb), strings.Contains(string(logb), "poweroff\n"), st.ModTime().After(old.Add(time.Minute))
+	return string(logb), strings.Contains(string(logb), "poweroff\n"), st.ModTime().After(old.Add(time.Minute)), dir
 }
 
 const (
 	psMux      = "sshd: /usr/sbin/sshd -D [listener]\nsshd: worker [priv]\nsshd: worker@notty\n/home/worker/.local/bin/herdr remote-client-bridge --idle-timeout-v1"
 	psPty      = psMux + "\nsshd: worker [priv]\nsshd: worker@pts/1"
-	agentsIdle = `{"result":{"agents":[{"agent_status":"idle"},{"agent_status":"blocked"},{"agent_status":"done"},{"agent_status":"unknown"}]}}`
+	agentsIdle = `{"result":{"agents":[{"agent_status":"idle"},{"agent_status":"done"},{"agent_status":"unknown"}]}}`
+	agentsBlk  = `{"result":{"agents":[{"agent_status":"idle"},{"agent_status":"blocked"},{"agent_status":"done"}]}}`
 	agentsWork = `{"result":{"agents":[{"agent_status":"idle"},{"agent_status":"working"}]}}`
 )
 
@@ -926,5 +971,65 @@ func TestIdleCheckDecisions(t *testing.T) {
 		if off != c.wantPoweroff || touched != c.wantActive || !strings.Contains(line, c.wantLine) {
 			t.Errorf("%s: poweroff=%v touched=%v log=%q", c.name, off, touched, line)
 		}
+	}
+}
+
+// R2: what is in flight on the VM keeps it up. Each case is 40 minutes past
+// a 30-minute limit with no ssh and no working agent, which used to power off.
+func TestIdleCheckHonoursWorkInFlight(t *testing.T) {
+	base := idleRun{ps: psMux, herdrOut: agentsIdle, herdrUnit: true, idleMin: 30, minutesAgo: 40}
+	with := func(f func(*idleRun)) idleRun { c := base; f(&c); return c }
+	cases := []struct {
+		name                     string
+		run                      idleRun
+		wantActive, wantPoweroff bool
+		wantLine                 string
+	}{
+		{"a blocked agent waits on the user", with(func(c *idleRun) { c.herdrOut = agentsBlk }),
+			true, false, "1 herdr agent(s) blocked, waiting on the user"},
+		{"blocked within the limit", with(func(c *idleRun) { c.herdrOut = agentsBlk; c.blockedSince = 23 * 60 }),
+			true, false, "blocked, waiting on the user"},
+		{"blocked past the day's limit: the idle stop wins", with(func(c *idleRun) { c.herdrOut = agentsBlk; c.blockedSince = 25 * 60 }),
+			false, true, "1 agent(s) blocked for 1500 min (past the limit of 1440): powering off"},
+		{"a shorter blocked limit from idle.conf", with(func(c *idleRun) {
+			c.herdrOut = agentsBlk
+			c.blockedSince = 61
+			c.extraConf = "WK_IDLE_BLOCKED_MAX_MINUTES=60\n"
+		}), false, true, "powering off"},
+		{"no blocked limit", with(func(c *idleRun) {
+			c.herdrOut = agentsBlk
+			c.blockedSince = 30 * 24 * 60
+			c.extraConf = "WK_IDLE_BLOCKED_MAX_MINUTES=0\n"
+		}), true, false, "blocked, waiting on the user"},
+		{"a handoff typed into an idle pane holds the VM", with(func(c *idleRun) { c.holds = map[string]string{"prompt": "+12m a prompt for w1:p1"} }),
+			true, false, "held for 12 min: a prompt for w1:p1"},
+		{"an upgrade holds the VM", with(func(c *idleRun) { c.holds = map[string]string{"upgrade": "+14m upgrade to v0.5.49"} }),
+			true, false, "upgrade to v0.5.49"},
+		{"an upgrade unit still running holds the VM, past its hold", with(func(c *idleRun) {
+			c.upgradeUnit = true
+			c.holds = map[string]string{"upgrade": "+-5m upgrade to v0.5.49"}
+		}), true, false, "an upgrade is running"},
+		{"expired and junk holds do not", with(func(c *idleRun) {
+			c.holds = map[string]string{"prompt": "+-1m old", "junk": "soon", "launch.tmp": "+10m half written", "empty": ""}
+		}), false, true, "powering off"},
+	}
+	for _, c := range cases {
+		line, off, touched, _ := c.run.run(t)
+		if off != c.wantPoweroff || touched != c.wantActive || !strings.Contains(line, c.wantLine) {
+			t.Errorf("%s: poweroff=%v touched=%v log=%q", c.name, off, touched, line)
+		}
+	}
+}
+
+// The blocked clock starts at the first tick that sees a blocked agent and
+// is dropped once none is.
+func TestIdleCheckBlockedClock(t *testing.T) {
+	_, _, _, dir := idleRun{ps: psMux, herdrOut: agentsBlk, herdrUnit: true, idleMin: 30, minutesAgo: 1}.run(t)
+	if _, err := os.Stat(filepath.Join(dir, "stamp.blocked")); err != nil {
+		t.Fatalf("no blocked stamp: %v", err)
+	}
+	_, _, _, dir = idleRun{ps: psMux, herdrOut: agentsIdle, herdrUnit: true, idleMin: 30, minutesAgo: 1, blockedSince: 10}.run(t)
+	if _, err := os.Stat(filepath.Join(dir, "stamp.blocked")); err == nil {
+		t.Fatal("the blocked stamp outlived the blocked spell")
 	}
 }

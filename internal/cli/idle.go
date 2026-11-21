@@ -18,7 +18,8 @@ import (
 var errNotIdle = errors.New("not idle")
 
 // cmdIdle exits 0 when this host has been idle for the limit: no herdr agent
-// working and no interactive session for that long. Meant to be polled (the
+// working or blocked, no hold (work in flight, an upgrade) and no
+// interactive session for that long. Meant to be polled (the
 // VM's timer, a sandbox's init loop); each poll that sees activity renews
 // the clock. It works on this host only and does not need the server.
 func cmdIdle(e *Env, args []string) error {
@@ -31,6 +32,7 @@ func cmdIdle(e *Env, args []string) error {
 	asJSON := fs.Bool("json", false, "machine-readable answer")
 	noTouch := fs.Bool("dry-run", false, "never write the clock (the stamp file)")
 	stamp := fs.String("stamp", "", "the clock file (default <state dir>/idle-stamp)")
+	blockedMax := fs.Int("blocked-max-minutes", int(idle.DefaultBlockedMax/time.Minute), "how long a blocked agent (waiting on the user) keeps this host up; 0 is no limit")
 	sock := fs.String("sock", "", "herdr socket (default $COMEBYE_SOCK, $HERDR_SOCKET_PATH, herdr's default)")
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -42,10 +44,17 @@ func cmdIdle(e *Env, args []string) error {
 	if *minutes < 0 {
 		return usageErr("--minutes must not be negative")
 	}
+	if *blockedMax < 0 {
+		return usageErr("--blocked-max-minutes must not be negative")
+	}
 	if *stamp == "" {
 		*stamp = filepath.Join(StateDir(e.Getenv), "idle-stamp")
 	}
-	o := idle.Options{Minutes: *minutes, Stamp: *stamp, NoTouch: *noTouch}
+	o := idle.Options{Minutes: *minutes, Stamp: *stamp, NoTouch: *noTouch,
+		Holds: idle.HoldsDir(StateDir(e.Getenv)), BlockedMax: time.Duration(*blockedMax) * time.Minute}
+	if *blockedMax == 0 {
+		o.BlockedMax = -1
+	}
 	if e.Now != nil {
 		o.Now = e.Now
 	}
