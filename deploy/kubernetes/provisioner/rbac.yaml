@@ -1,0 +1,67 @@
+# What the provisioner may do in the VM namespace, and nowhere else.
+#
+# A Role (never a ClusterRole), no wildcards, no resourceNames: exactly what the
+# worker tool's KubeVirt provider calls (tools/worker/kubevirt_live.go) for
+# create, destroy, start, stop and preflight. It is a little narrower than the
+# existing comebye-worker-tool Role: no update on VirtualMachines or
+# DataVolumes (the tool only patches the run strategy), no create on PVCs.
+# manifests_test.go pins this file: it fails on a wildcard, a ClusterRole or
+# ClusterRoleBinding, or any verb or resource not in its list. To grow the
+# Role, change the test in the same commit and say why.
+#
+# Secrets are the sharp edge: get/list/create/update/delete on Secrets in this
+# namespace lets the pod read every worker's cloud-init Secret (the guest's ssh
+# host key and its Tailscale auth key). Keep the namespace for workers only.
+#
+# The rules are one line per field on purpose: the test parses this file with
+# no YAML library and refuses a layout it does not recognise.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: comebye-provisioner
+  namespace: comebye-workers
+rules:
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachineinstances"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: ["virtualmachines/start", "virtualmachines/stop"]
+    verbs: ["update"]
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: ["virtualmachines/portforward", "virtualmachineinstances/portforward"]
+    verbs: ["get"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes/source"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "events", "resourcequotas", "limitranges"]
+    verbs: ["get", "list", "watch"]
+---
+# The only link between the two namespaces: a RoleBinding in the VM namespace
+# whose subject is the provisioner's service account in the hub's. Delete this
+# one object and the pod has no cluster rights at all.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: comebye-provisioner
+  namespace: comebye-workers
+subjects:
+  - kind: ServiceAccount
+    name: comebye-provisioner
+    namespace: comebye-hub   # CHANGE-ME: the hub's namespace (same as serviceaccount.yaml)
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: comebye-provisioner

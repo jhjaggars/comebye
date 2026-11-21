@@ -1,0 +1,25 @@
+# The worker tool's config for KubeVirt (tools/worker/config.example,
+# docs/workers.md "KubeVirt VMs"). No secrets: the OAuth client is its own
+# Secret, mounted at ts_oauth_file. No kube_context: the tool then runs kubectl
+# with the pod's service account.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: comebye-provisioner-config
+  namespace: comebye-hub   # CHANGE-ME
+data:
+  config: |
+    provider=kubevirt
+    # CHANGE-ME: the Tailscale login that owns the hub device
+    ts_allow_login=you@example.com
+    # CHANGE-ME: the hub's Serve URL, twice (see tools/worker/config.example)
+    hub_url=https://hub.your-tailnet.ts.net
+    hub_peer_url=https://hub.your-tailnet.ts.net
+    kube_namespace=comebye-workers
+    kube_service_account=comebye-worker-tool
+    # CHANGE-ME: the rest of your cluster's settings (docs/workers.md)
+    # kube_storage_class=longhorn
+    # vm_image_dv=debian-13-golden
+    # kube_node_prefer=rozalin,zetta
+    # The OAuth client's mount (the Secret comebye-provisioner-tailscale-oauth).
+    ts_oauth_file=/etc/comebye-provisioner/oauth/tailscale-oauth

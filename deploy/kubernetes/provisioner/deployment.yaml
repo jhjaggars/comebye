@@ -1,0 +1,126 @@
+# The in-cluster provisioner: an ordinary comebye peer started with
+# -provision-config, plus a tailscaled sidecar like the hub's. It holds no
+# ledger and no sign-in (the hub's data is not reachable from here: another
+# pod, another volume, another service account).
+#
+# replicas MUST stay 1 and the strategy Recreate: the worker directory is a
+# ReadWriteOnce volume and a second copy of the pod would fight over it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: comebye-provisioner
+  namespace: comebye-hub   # CHANGE-ME
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: comebye-provisioner}
+  template:
+    metadata:
+      labels: {app: comebye-provisioner}
+    spec:
+      serviceAccountName: comebye-provisioner
+      # The one pod in this stack that mounts a service account token: kubectl
+      # and virtctl use it (in-cluster mode) to reach the VM namespace.
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: comebye
+          # CHANGE-ME: the image built from Dockerfile in this directory
+          # (see README.md), pinned by digest.
+          image: registry.example.com/comebye-provisioner:CHANGE-ME
+          securityContext:
+            runAsUser: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          args:
+            - -ledger=false
+            - -hub=$(COMEBYE_HUB)
+            - -provision-config=/etc/comebye-provisioner/config
+            # Create and destroy stay a dry run until you add -provision-create
+            # (docs/workers.md). The caps below apply once you do.
+            # - -provision-create
+            - -provision-max-usd-hour=1
+            - -provision-max-hosts=3
+          env:
+            # CHANGE-ME: the hub's Serve URL.
+            - {name: COMEBYE_HUB, value: "https://hub.your-tailnet.ts.net"}
+            - {name: COMEBYE_STATE_DIR, value: /var/lib/comebye}
+            - {name: COMEBYE_HOST_NAME, value: provisioner}
+            # CHANGE-ME: the Tailscale login(s) allowed to use the app (as the hub).
+            - {name: COMEBYE_TS_ALLOW_LOGIN, value: you@example.com}
+            # Admit the hub's capability and register this node as a peer by itself.
+            # CHANGE-ME: the same capability name the hub uses (-ts-allow-cap).
+            # - {name: COMEBYE_TS_ALLOW_CAP, value: "example.com/cap/comebye"}
+            # - {name: COMEBYE_ANNOUNCE, value: "true"}
+            - {name: COMEBYE_HEALTH_ADDR, value: ":8743"}
+            # The worker tool's state (per-worker ssh keys, known_hosts) lives on
+            # the PVC; HOME is writable scratch for kubectl's and ssh's caches.
+            - {name: HOME, value: /tmp/home}
+            - {name: XDG_STATE_HOME, value: /var/lib/comebye-worker}
+          ports:
+            - {name: health, containerPort: 8743}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/comebye}
+            - {name: worker, mountPath: /var/lib/comebye-worker}
+            - {name: home, mountPath: /tmp/home}
+            - {name: tmp, mountPath: /tmp}
+            - {name: config, mountPath: /etc/comebye-provisioner/config, subPath: config, readOnly: true}
+            - {name: oauth, mountPath: /etc/comebye-provisioner/oauth, readOnly: true}
+            - {name: tailscale-socket, mountPath: /var/run/tailscale}
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+        - name: tailscale
+          image: ghcr.io/tailscale/tailscale:stable  # CHANGE-ME: pin a version, as for the hub
+          env:
+            # CHANGE-ME: this node's tailnet name.
+            - {name: TS_HOSTNAME, value: comebye-provisioner}
+            - {name: TS_KUBE_SECRET, value: comebye-provisioner-tailscale-state}
+            - {name: TS_STATE_DIR, value: /var/lib/tailscale}
+            - {name: TS_USERSPACE, value: "false"}
+            - {name: TS_SOCKET, value: /var/run/tailscale/tailscaled.sock}
+            - {name: TS_SERVE_CONFIG, value: /config/serve.json}
+            # First start only (a tagged key, see secrets.yaml).
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef: {name: comebye-provisioner-tailscale-auth, key: authkey, optional: true}
+          # TUN mode, as the hub's sidecar: NET_ADMIN and /dev/net/tun.
+          securityContext:
+            capabilities: {add: ["NET_ADMIN"]}
+          volumeMounts:
+            - {name: tailscale-socket, mountPath: /var/run/tailscale}
+            - {name: serve-config, mountPath: /config, readOnly: true}
+            - {name: dev-net-tun, mountPath: /dev/net/tun}
+      volumes:
+        - name: dev-net-tun
+          hostPath: {path: /dev/net/tun, type: CharDevice}
+        - name: tailscale-socket
+          emptyDir: {}
+        - name: serve-config
+          configMap: {name: comebye-provisioner-serve}
+        - name: config
+          configMap: {name: comebye-provisioner-config}
+        - name: oauth
+          secret:
+            secretName: comebye-provisioner-tailscale-oauth
+            defaultMode: 0400
+            optional: true
+        - name: state
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: worker
+          persistentVolumeClaim: {claimName: comebye-provisioner-worker}

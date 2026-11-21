@@ -643,3 +643,34 @@ browser supports that directive) WebRTC. That does not stop a page from sending
 what it holds by other means a browser permits, such as navigating away or a
 link the viewer opens, so treat anything a page can read as readable by whoever
 wrote the page. Its text is also agent text: do not paste commands from it.
+
+## The in-cluster provisioner (issue #78)
+
+[`deploy/kubernetes/provisioner/`](../deploy/kubernetes/provisioner/) holds example manifests for a
+second peer, in the hub's namespace, that wakes, stops, creates and destroys KubeVirt worker VMs
+([docs/workers.md](workers.md#the-in-cluster-provisioner)). What it changes and what it does not:
+
+- **The hub stays credential-free.** The pod is a peer with `-ledger=false -hub=...`, so the rule that
+  refuses the provisioner routes on a host with a ledger is untouched. The hub's service account still
+  has no token mounted; only the provisioner pod mounts one.
+- **One namespace, no ClusterRole.** The service account `comebye-provisioner` is bound by a
+  RoleBinding in `comebye-workers` to a Role listing exactly what the worker tool calls. A Go test
+  (`deploy/kubernetes/provisioner/manifests_test.go`) fails on a wildcard, a ClusterRole or
+  ClusterRoleBinding, or any verb or resource outside that list. Deleting the RoleBinding removes the
+  pod's cluster rights at once.
+- **The Secrets trade-off.** The Role includes get, list, create, update and delete on Secrets in the
+  VM namespace, which means a compromise of the pod reads every worker's cloud-init Secret (the guest's
+  ssh host key and its Tailscale auth key) and can make VMs up to the namespace quota. It cannot reach
+  the hub's state or your sign-in, which are in another pod with another volume and no shared token.
+  Keep the VM namespace for workers only.
+- **The OAuth client** (used to enrol a new worker; it can enrol any `tag:worker` node) is its own Secret,
+  mounted read-only, mode 0400, in this pod only, and not needed until `-provision-create` is on. Create
+  is off by default: every job is a dry run, and the per-hour cost and host caps apply when it is on.
+- **No secret value is committed.** The Secrets in the example are placeholders with no data, and a test
+  fails if any manifest holds a Secret value or a credential-shaped string. Fill them outside the
+  repository.
+- **The pod's token** is a service-account token kubectl uses in cluster mode; the worker tool passes
+  only `KUBERNETES_SERVICE_HOST` and `_PORT` to it, never reads the token and never prints it. Prefer a
+  bound (projected) token your cluster refreshes; revoke by deleting the RoleBinding.
+- **The worker directory** (each worker's ssh key, pinned host key) is on a volume in the pod. Back it up
+  like any key store.

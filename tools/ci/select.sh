@@ -46,6 +46,8 @@ while IFS= read -r f; do
     web/test/unlockinterop.mjs) lint=true; merge_browser=true; merge_go=true; add_script markdown; add_pkg ./internal/gpgunlock ;;
     tools/release/tag) lint=true; merge_go=true; add_pkg ./tools/release; add_pkg ./internal/release ;;
     tools/worker/testdata/*) lint=true; add_script provision; add_script provhosts; add_script wake; add_script multiconfig; add_script wakeuse; add_script wakepolish; merge_browser=true; merge_go=true; add_pkg ./tools/worker; add_pkg ./internal/provision; add_pkg ./internal/server ;;
+    # The provisioner example manifests have a Go test (deploy/kubernetes/provisioner/manifests_test.go): the Role's allow-list, the Secret lint, kustomize.
+    deploy/kubernetes/provisioner/*) lint=true; merge_go=true; add_pkg ./deploy/kubernetes/provisioner ;;
     docs/*|*.md|LICENSE|.gitignore|deploy/*) ;;                       # nothing to test
     .github/*|go.mod|go.sum|tools/uitest/package.json|tools/uitest/package-lock.json|tools/uitest/run.sh|tools/uitest/lib.mjs|tools/ci/*)
       everything=true ;;

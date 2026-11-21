@@ -551,6 +551,71 @@ homelab repo's `k3s-manifests/` and are not made by this tool.
   `missing` means the prerequisites manifest is not applied; `error` means something else is
   wrong.
 
+## The in-cluster provisioner
+
+Plan and tracking: issue #78. The example manifests are in
+[`deploy/kubernetes/provisioner/`](../deploy/kubernetes/provisioner/); this section is what they are for
+and the one-time steps around them.
+
+A second comebye **peer**, in its own pod next to the hub, that holds the KubeVirt
+rights and runs the worker tool (`-provision-config`). The hub asks it exactly as it
+asks any provisioner peer (see [Browsing prices from the app](#browsing-prices-from-the-app-a-provisioner)),
+so a cluster-side wake, stop, create and destroy no longer need a laptop to be on. It keeps `-ledger=false`
+and `-hub`: the hub still holds no cloud or cluster credential, and the route refusal on a ledger
+host is unchanged. AWS and GCP stay on the host that has those logins; this pod is KubeVirt only.
+
+- **Pod**: one replica, `Recreate`, a `tailscaled` sidecar like the hub's (`NET_ADMIN`,
+  `/dev/net/tun`), the only pod in the stack with `automountServiceAccountToken: true`. kubectl and
+  virtctl fall back to that token when the config has no `kube_context`; the worker tool passes
+  `KUBERNETES_SERVICE_HOST` and `_PORT` through its filtered environment and its `preflight` says
+  "in-cluster credentials". The tool never reads the token.
+- **Rights**: a ServiceAccount `comebye-provisioner` in the hub's namespace, bound by a RoleBinding
+  in `comebye-workers` to a new Role `comebye-provisioner`. No ClusterRole, no wildcard; the Role
+  lists only what the tool calls (VirtualMachines get/list/watch/create/patch/delete, VMIs
+  get/list/watch, start and stop, port-forward, DataVolumes with create and delete, PVC delete,
+  Secrets, read of pods, events and quotas). `manifests_test.go` fails if it grows.
+- **State**: a 100 Mi volume at the tool's state directory (each worker's ssh key and pinned
+  `known_hosts`). Lose it and `start` cannot verify a guest; back it up.
+- **Create stays off**: without `-provision-create` every job is a dry run. Turning it on is one
+  documented step (below), under the existing cost and host caps.
+- **Image**: `deploy/kubernetes/provisioner/Dockerfile`: comebye and comebye-worker built from this
+  tree, kubectl, virtctl (versions and sha256 pinned, checked in the build) and openssh-client.
+  Nothing is pushed from this repository; build it and push it to your own registry (the Dockerfile
+  header has the commands) and pin its digest in `deployment.yaml`.
+
+**Known gap.** A peer started with `-hub` today still waits for a herdr socket, and `-hub-only` is
+refused together with `-hub`, so this pod does not come up until comebye has a peer mode with no
+herdr (the plan's later slices). The manifests are the reviewed target, not yet runnable.
+
+### The Secrets trade-off
+
+The Role has get, list, create, update and delete on **Secrets in the VM namespace**, because the
+tool creates and removes each worker's cloud-init Secret. That Secret carries the guest's ssh host
+key and its Tailscale auth key, so a compromised provisioner pod can read every worker's. It cannot
+reach the hub's data or sign-in. Keep `comebye-workers` for workers only; its ResourceQuota (VMs and
+Secrets) bounds the damage. The Tailscale OAuth client (create only) sits in its own Secret,
+mounted in this pod only, mode 0400, and should be limited to the worker tag.
+
+### One-time steps in your homelab repo
+
+The user does these; nothing in this repository touches the cluster.
+
+1. Copy `deploy/kubernetes/provisioner/` to your gitops repo beside the hub's directory. Edit every
+   `CHANGE-ME` (namespaces, image, tailnet names, logins, the config map).
+2. Split the manifest set if you apply the namespaces from different places: `rbac.yaml`'s Role and
+   RoleBinding live in `comebye-workers` and are the only link between the two namespaces.
+3. Create the two Secrets with values, outside this repository (SOPS or `kubectl create secret`):
+   `comebye-provisioner-tailscale-auth` (key `authkey`, a tagged key, first start only) and, only
+   for create, `comebye-provisioner-tailscale-oauth` (key `tailscale-oauth`).
+4. Let the hub admit the pod: the same `-ts-allow-cap` grant the other peers use, and either
+   `comebye peers add` once or `-peer-self-register` on the hub with `COMEBYE_ANNOUNCE` on the pod.
+5. Leave the hub's own manifest alone: pick the pod's node in the app. Its `-provision-host` default
+   is unchanged.
+6. To allow create and destroy, uncomment `-provision-create` in `deployment.yaml` and set the OAuth
+   Secret. Remove it to go back to dry runs.
+7. Version bumps: the hub's bump script edits one manifest; point it at this Deployment's image too
+   (a follow-up in the homelab repo).
+
 ## OpenShell sandboxes
 
 `provider = openshell` makes the worker a **sandbox** on an [OpenShell](https://github.com/NVIDIA/OpenShell)
