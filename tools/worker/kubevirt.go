@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -736,7 +737,28 @@ func (e *env) pfKubeVirt(ctx context.Context) pfCheck {
 	case len(bad) > 0:
 		return pfCheck{State: "missing", Note: strings.Join(missingNote(bad), "; ")}
 	}
-	return pfCheck{State: "ok", Note: fmt.Sprintf("cluster answers; KubeVirt and CDI Deployed; namespace %s; %d node(s) may take a VM", c.KubeNamespace, cands)}
+	creds := ""
+	if inClusterCreds(c) {
+		creds = "in-cluster credentials; "
+	}
+	return pfCheck{State: "ok", Note: fmt.Sprintf("%scluster answers; KubeVirt and CDI Deployed; namespace %s; %d node(s) may take a VM", creds, c.KubeNamespace, cands)}
+}
+
+// inClusterTokenFile is where a pod's ServiceAccount token is mounted.
+const inClusterTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+// statFile is os.Stat; tests replace it.
+var statFile = os.Stat
+
+// inClusterCreds is true when no kube_context is set and the pod's token file
+// exists, so kubectl uses the pod's own ServiceAccount. It checks the file
+// exists and never reads it.
+func inClusterCreds(c *Config) bool {
+	if c.KubeContext != "" {
+		return false
+	}
+	_, err := statFile(inClusterTokenFile)
+	return err == nil
 }
 
 func missingNote(bad []string) []string {

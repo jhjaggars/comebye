@@ -881,3 +881,35 @@ func TestKubeVirtSSHTimeoutMessage(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+func TestPreflightInClusterCredentials(t *testing.T) {
+	withPath(t, "")
+	old := statFile
+	t.Cleanup(func() { statFile = old })
+	var statted []string
+	statFile = func(p string) (os.FileInfo, error) {
+		statted = append(statted, p)
+		if p == inClusterTokenFile {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	run := func(ctxName string) pfCheck {
+		e, _, _, _ := kubeEnv(t, goodWorld())
+		e.Cfg.KubeContext = ctxName
+		return e.pfKubeVirt(context.Background())
+	}
+	if c := run(""); c.State != "ok" || !strings.Contains(c.Note, "in-cluster credentials") {
+		t.Errorf("token, no context: %+v", c)
+	}
+	if c := run("homelab"); c.State != "ok" || strings.Contains(c.Note, "in-cluster") {
+		t.Errorf("context set: %+v", c)
+	}
+	statFile = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	if c := run(""); c.State != "ok" || strings.Contains(c.Note, "in-cluster") {
+		t.Errorf("no token file: %+v", c)
+	}
+	if len(statted) == 0 || statted[0] != "/var/run/secrets/kubernetes.io/serviceaccount/token" {
+		t.Errorf("statted %v", statted)
+	}
+}

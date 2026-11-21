@@ -55,7 +55,9 @@ var ErrBusy = errors.New("another run of this kind kept the tool busy")
 func childEnv(environ []string) []string {
 	allowed := func(k string) bool {
 		switch k {
-		case "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TZ", "SHELL":
+		case "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TZ", "SHELL",
+			// kubectl and virtctl find the API server from these inside a pod.
+			"KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT":
 			return true
 		}
 		for _, p := range []string{"XDG_", "AWS_", "CLOUDSDK_", "GOOGLE_", "GCLOUD_", "OPENSHELL_"} {

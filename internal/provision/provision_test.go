@@ -238,3 +238,40 @@ func TestToolSerialisesRunsOfOneKind(t *testing.T) {
 		t.Errorf("two runs overlapped: %v", strings.Fields(string(b)))
 	}
 }
+
+func TestChildEnvAllowList(t *testing.T) {
+	in := []string{
+		"PATH=/usr/bin", "HOME=/h", "AWS_PROFILE=p", "KUBERNETES_SERVICE_HOST=10.0.0.1", "KUBERNETES_SERVICE_PORT=443",
+		"KUBERNETES_SERVICE_PORT_HTTPS=443", "KUBECONFIG=/x", "KUBERNETES_FOO=1", "COMEBYE_AGENT_TOKEN=SECRET", "TS_AUTHKEY=x", "NOEQUALS",
+	}
+	want := map[string]bool{"PATH=/usr/bin": true, "HOME=/h": true, "AWS_PROFILE=p": true, "KUBERNETES_SERVICE_HOST=10.0.0.1": true, "KUBERNETES_SERVICE_PORT=443": true}
+	got := childEnv(in)
+	if len(got) != len(want) {
+		t.Errorf("childEnv = %v", got)
+	}
+	for _, kv := range got {
+		if !want[kv] {
+			t.Errorf("unexpected %q passed", kv)
+		}
+	}
+}
+
+// Under the allow-list the tool still finds a fake in-cluster kubectl: the
+// variables it needs arrive, and the node's own secrets do not.
+func TestToolReachesInClusterKubectlUnderTheAllowList(t *testing.T) {
+	pf, _ := filepath.Abs("testdata/preflight.json")
+	bin, dir := fakeWorker(t, "if [ -n \"$KUBERNETES_SERVICE_HOST\" ] && [ -n \"$KUBERNETES_SERVICE_PORT\" ]; then echo incluster > "+"\""+"$(dirname \"$0\")"+"/kubectl-reached\"; fi\ncat "+pf+"\n")
+	tool := &Tool{Bin: bin, Config: "/etc/worker.conf", Environ: func() []string {
+		return []string{"PATH=/usr/bin", "KUBERNETES_SERVICE_HOST=10.43.0.1", "KUBERNETES_SERVICE_PORT=443", "COMEBYE_AGENT_TOKEN=SECRET"}
+	}}
+	if _, err := tool.Preflight(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "kubectl-reached")); err != nil {
+		t.Error("the in-cluster variables did not reach the tool")
+	}
+	env, _ := os.ReadFile(filepath.Join(dir, "env"))
+	if strings.Contains(string(env), "SECRET") {
+		t.Errorf("secret leaked:\n%s", env)
+	}
+}
