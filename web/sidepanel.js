@@ -673,6 +673,15 @@
   }
 
   function bindBody(body) {
+    // A file's fold is kept the moment its header is clicked (or Enter/Space on it): the toggle event comes a task
+    // later, and a redraw in between (the push stream, the poll, the highlighter arriving) would draw it from the
+    // old state and lose the click. The click runs before the details flips, so the new state is the opposite.
+    body.addEventListener("click", (e) => {
+      const sum = e.target.closest && e.target.closest("details.df > summary");
+      if (!sum || e.target.closest("button, a, select, input")) return;
+      const el = sum.parentElement;
+      if (el.open) st.closed.add(el.dataset.key); else st.closed.delete(el.dataset.key);
+    }, true);
     body.addEventListener("toggle", (e) => {
       const el = e.target;
       if (!el.matches || !el.matches("details.df")) return;

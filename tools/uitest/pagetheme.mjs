@@ -113,13 +113,18 @@ for (const device of ["dark", "light"]) {
     const { browser, page } = await launch({ width: 390, height: 844, dark: device === "dark", bypassCSP: false });
     try {
       await open(page, mdId, app, "/#/pages/" + mdId);
-      let fr;
-      for (let i = 0; i < 100 && !fr; i++) { fr = frameOf(page, mdId); if (!fr) await page.waitForTimeout(100); }
-      const state = () => fr.evaluate(() => {
-        const n = document.querySelector(".mmd svg .node rect, .mmd svg .node polygon, .mmd svg rect");
-        return { bg: getComputedStyle(document.body).backgroundColor, node: n ? getComputedStyle(n).fill : "", svg: !!document.querySelector(".mmd svg") };
-      });
-      const until = async (mode) => { let v; for (let i = 0; i < 80; i++) { v = await state(); if (v.svg && modeOfBg(v.bg) === mode && modeOfBg(v.node) === mode) return v; await page.waitForTimeout(100); } throw new Error(`want ${mode}, the Markdown Page has ${JSON.stringify(v)}`); };
+      // The frame is looked up on every read, and a read that meets a navigation (the viewer loads the Page into its
+      // frame again, and a theme change may too) counts as "not yet": a frame kept from before it would be destroyed.
+      const state = async () => {
+        const fr = frameOf(page, mdId);
+        if (!fr) return { frame: false };
+        return fr.evaluate(() => {
+          const n = document.querySelector(".mmd svg .node rect, .mmd svg .node polygon, .mmd svg rect");
+          return { bg: document.body ? getComputedStyle(document.body).backgroundColor : "", node: n ? getComputedStyle(n).fill : "", svg: !!document.querySelector(".mmd svg") };
+        }).catch((e) => ({ frame: true, err: String(e.message).split("\n")[0] }));
+      };
+      // 15 s: the first read also waits for the frame to appear (it had 10 s of its own before).
+      const until = async (mode) => { let v; for (let i = 0; i < 150; i++) { v = await state(); if (v.svg && modeOfBg(v.bg) === mode && modeOfBg(v.node) === mode) return v; await page.waitForTimeout(100); } throw new Error(`want ${mode}, the Markdown Page has ${JSON.stringify(v)}`); };
       await until(app);
       await page.screenshot({ path: `${out}/pagetheme-md-device-${device}.png` });
       await page.evaluate((t) => ComebyeThemes.set(t), THEMES[device]);

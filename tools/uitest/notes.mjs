@@ -39,6 +39,18 @@ const SETUP = () => {
   return rows.map((r) => agentId(r[0]));
 };
 
+// A row's picture, by its box: the list redraws on its own (the stream, the minute tick), and an element screenshot
+// whose element was replaced mid-way fails with "not attached to the DOM" though every check on it passed.
+async function rowShot(page, q, file) {
+  const box = await page.evaluate((sel) => {
+    const e = document.querySelector(sel); if (!e) return null;
+    e.scrollIntoView({ block: "nearest" });
+    const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };
+  }, q);
+  if (!box || !box.width || !box.height) throw new Error("no row to picture: " + q);
+  await page.screenshot({ path: file, clip: box });
+}
+
 for (const width of [390, 1280]) {
   const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark });
   await page.goto(base + "/", { waitUntil: "load" });
@@ -56,7 +68,7 @@ for (const width of [390, 1280]) {
     if (!/next the web checks/.test(g.title)) throw new Error("no full note on hover");
     if (await page.locator(row(0) + " .pnote.old").count()) throw new Error("fresh note is muted");
     if (await page.locator(row(0) + " .nou").count()) throw new Error("fresh note has a no-update hint");
-    await page.locator(row(0)).screenshot({ path: `${out}/note-row-${width}.png` });
+    await rowShot(page, row(0), `${out}/note-row-${width}.png`);
   });
   await check(`notes at ${width}px: a note over 2 h old is muted, and the worker shows "no update"`, async () => {
     const g = await page.evaluate((q) => {
@@ -64,7 +76,7 @@ for (const width of [390, 1280]) {
       return { old: n.classList.contains("old"), color: getComputedStyle(n.querySelector(".pn-t")).color, fresh: getComputedStyle(f).color, nou: !!n.querySelector(".nou"), text: n.textContent };
     }, row(1));
     if (!g.old || g.color === g.fresh || !g.nou || !/3h ago/.test(g.text)) throw new Error(JSON.stringify(g));
-    await page.locator(row(1)).screenshot({ path: `${out}/note-old-${width}.png` });
+    await rowShot(page, row(1), `${out}/note-old-${width}.png`);
   });
   await check(`notes at ${width}px: no note and a worker that just started shows nothing; a long quiet one shows "no update" only`, async () => {
     const g = await page.evaluate((q) => {

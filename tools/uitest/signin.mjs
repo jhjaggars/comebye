@@ -64,7 +64,13 @@ try {
 
     async function check(name, fn) {
       try { await fn(); results.push([name, true, ""]); }
-      catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); }
+      catch (e) {
+        // What the page knew when it failed: the route, the host's settings load, the sign-in it holds and kept.
+        const seen = await page.evaluate(() => ({ hash: location.hash, cfg: prs.cfg.kube && prs.cfg.kube.state, si: sis.by.kube && { state: sis.by.kube.state, id: !!sis.by.kube.id, url: !!sis.by.kube.url },
+          kept: sessionStorage.getItem("comebye.signin"), dialog: !!document.querySelector(".si-dialog") })).catch((x) => ({ err: String(x.message).split("\n")[0] }));
+        results.push([name, false, String(e.message).split("\n")[0] + " (page: " + JSON.stringify(seen) + ")"]);
+        await page.screenshot({ path: `${out}/signin-${tag}-fail-${results.length}.png` }).catch(() => {});
+      }
     }
     const { browser: b, page } = await launch({ width, height: width >= 1100 ? 800 : 844, dark });
     browser = b;
