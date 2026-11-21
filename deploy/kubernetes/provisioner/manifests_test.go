@@ -372,7 +372,9 @@ func TestManifestShape(t *testing.T) {
 	d := f["deployment.yaml"]
 	for _, want := range []string{
 		"replicas: 1", "strategy: {type: Recreate}", "automountServiceAccountToken: true",
-		"serviceAccountName: comebye-provisioner", "NET_ADMIN", "-ledger=false", "-provision-config=",
+		"serviceAccountName: comebye-provisioner", "NET_ADMIN", "-hub-only", "-ledger=false",
+		// The worker directory (ssh keys, known_hosts) is on the claim.
+		"XDG_STATE_HOME, value: /var/lib/comebye-worker", "{name: worker, mountPath: /var/lib/comebye-worker}", "-provision-config=",
 	} {
 		if !strings.Contains(d, want) {
 			t.Errorf("deployment.yaml: missing %q", want)
@@ -383,6 +385,9 @@ func TestManifestShape(t *testing.T) {
 	}
 	if !strings.Contains(f["pvc.yaml"], "storage: 100Mi") {
 		t.Error("pvc.yaml: the worker directory claim is 100Mi")
+	}
+	if !strings.Contains(f["configmap.yaml"], "\n    state_dir=/var/lib/comebye-worker\n") {
+		t.Error("configmap.yaml: the tool's state_dir must be the claim's mount path")
 	}
 	if !strings.Contains(f["configmap.yaml"], "provider=kubevirt") {
 		t.Error("configmap.yaml: not a kubevirt worker config")

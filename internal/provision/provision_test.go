@@ -278,8 +278,8 @@ func TestToolReachesInClusterKubectlUnderTheAllowList(t *testing.T) {
 }
 
 func TestChildEnvKeepsWhatKubectlNeedsAndDropsComebyesOwn(t *testing.T) {
-	got := strings.Join(childEnv([]string{"PATH=/bin", "HOME=/h", "KUBECONFIG=/h/.kube/config.k3s", "COMEBYE_AGENT_TOKEN=x", "COMEBYE_HUB=https://h", "AWS_PROFILE=p"}), " ")
-	for _, want := range []string{"KUBECONFIG=/h/.kube/config.k3s", "PATH=/bin", "HOME=/h", "AWS_PROFILE=p"} {
+	got := strings.Join(childEnv([]string{"XDG_STATE_HOME=/var/lib/comebye-worker", "PATH=/bin", "HOME=/h", "KUBECONFIG=/h/.kube/config.k3s", "COMEBYE_AGENT_TOKEN=x", "COMEBYE_HUB=https://h", "AWS_PROFILE=p"}), " ")
+	for _, want := range []string{"XDG_STATE_HOME=/var/lib/comebye-worker", "KUBECONFIG=/h/.kube/config.k3s", "PATH=/bin", "HOME=/h", "AWS_PROFILE=p"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q dropped: %s", want, got)
 		}

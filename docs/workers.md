@@ -583,9 +583,10 @@ host is unchanged. AWS and GCP stay on the host that has those logins; this pod 
   Nothing is pushed from this repository; build it and push it to your own registry (the Dockerfile
   header has the commands) and pin its digest in `deployment.yaml`.
 
-**Known gap.** A peer started with `-hub` today still waits for a herdr socket, and `-hub-only` is
-refused together with `-hub`, so this pod does not come up until comebye has a peer mode with no
-herdr (the plan's later slices). The manifests are the reviewed target, not yet runnable.
+The pod runs `-hub-only -ledger=false -hub=…`: a peer with no herdr (see [the setup
+guide](setup.md#a-hub-with-no-herdr-containers-kubernetes)). It answers the hub's provisioner,
+health and peer calls and reports 0 agents, which the hub shows as "no agents here", not as a
+broken host. Agent routes on it answer 409 `no_herdr`.
 
 ### The Secrets trade-off
 

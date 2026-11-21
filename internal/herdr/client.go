@@ -64,7 +64,7 @@ type Client struct {
 
 // ErrNoHerdr is what every call of a client with no socket returns: a hub
 // that hosts no agents (comebye -hub-only).
-var ErrNoHerdr = &Error{Code: "no_herdr", Message: "this hub hosts no agents: there is no herdr here"}
+var ErrNoHerdr = &Error{Code: "no_herdr", Message: "no herdr here: this host hosts no agents"}
 
 // NewClient returns a client for the socket at socketPath. An empty path
 // gives a client whose calls all fail with ErrNoHerdr.

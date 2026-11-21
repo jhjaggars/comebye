@@ -8935,7 +8935,7 @@ function renderPeerView() {
   const rows = [
     ["Status", statusRow],
     ["Version", `${esc(h.version || "unknown")}${h.version_mismatch ? ` <span class="warn">(the hub runs ${esc(prs.hubVersion || "another version")})</span>` : ""}`],
-    ["Agents", h.no_agents ? "none by design (a hub only)" : String(h.agents || 0)],
+    ["Agents", h.no_agents ? "none by design (no herdr here)" : String(h.agents || 0)],
   ];
   if (h.last_seen && !h.local) rows.push(["Last seen", esc(fmtWhen(h.last_seen))]);
   if (info) {

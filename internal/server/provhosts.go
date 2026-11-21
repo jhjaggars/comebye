@@ -246,6 +246,40 @@ type provHostsCache struct {
 
 // hostsNodes are the nodes the hub asks about hosts: the default provisioner,
 // and every node that has been asked to build one.
+// provisionerPeers lists the reachable peers that are provisioners. Each is
+// probed at most once per provTTL (a peer that is not one is remembered too),
+// and a peer that is down is not probed at all.
+func (s *Server) provisionerPeers() []string {
+	if s.fleet == nil {
+		return nil
+	}
+	var up []string
+	for _, h := range s.fleet.Hosts() {
+		if !h.Local && h.Status == fleet.StatusOK && fleet.ValidName(h.Name) {
+			up = append(up, h.Name)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	roles := make([]bool, len(up))
+	var wg sync.WaitGroup
+	for i, n := range up {
+		wg.Add(1)
+		go func(i int, n string) {
+			defer wg.Done()
+			roles[i] = s.probeNode(ctx, n, false).Role
+		}(i, n)
+	}
+	wg.Wait()
+	var out []string
+	for i, n := range up {
+		if roles[i] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (s *Server) hostsNodes() []string {
 	set := map[string]bool{}
 	if d := s.cfg.Provision.Host; d != "" {
@@ -263,6 +297,13 @@ func (s *Server) hostsNodes() []string {
 		}
 	}
 	s.prov.mu.Unlock()
+	// Every peer that answers as a provisioner is asked for its hosts too, not
+	// only the default or one that ran a job: with no default (or laharl as the
+	// default and off), an in-cluster provisioner's stopped worker must still
+	// be found, so that the Peers page can offer its Start.
+	for _, n := range s.provisionerPeers() {
+		set[n] = true
+	}
 	var out []string
 	for n := range set {
 		if fleet.ValidName(n) && s.fleet.HasPeer(n) {

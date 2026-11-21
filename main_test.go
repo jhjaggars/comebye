@@ -241,3 +241,23 @@ func TestProvisionFlagError(t *testing.T) {
 		t.Error("-provision-host must be a known peer other than this host")
 	}
 }
+
+func TestHubOnlyFlagRules(t *testing.T) {
+	for _, c := range []struct {
+		hasHub, ledger bool
+		ok             bool
+	}{
+		{false, true, true},   // a hub with no herdr
+		{true, false, true},   // a peer with no herdr: the provisioner pod
+		{true, true, false},   // a peer keeps no ledger
+		{false, false, false}, // a hub-only hub is its ledger
+	} {
+		if err := hubOnlyError(c.hasHub, c.ledger); (err == nil) != c.ok {
+			t.Errorf("hasHub=%v ledger=%v: %v", c.hasHub, c.ledger, err)
+		}
+	}
+	// the pod's flags pass the provisioner rule too
+	if err := provisionFlagError(false, "/etc/config", "", ":8741", true, true, false); err != nil {
+		t.Error(err)
+	}
+}

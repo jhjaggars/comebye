@@ -15,6 +15,8 @@ data:
     # CHANGE-ME: the hub's Serve URL, twice (see tools/worker/config.example)
     hub_url=https://hub.your-tailnet.ts.net
     hub_peer_url=https://hub.your-tailnet.ts.net
+    # Each worker's ssh key and pinned host key live on the claim, not the image.
+    state_dir=/var/lib/comebye-worker
     kube_namespace=comebye-workers
     kube_service_account=comebye-worker-tool
     # CHANGE-ME: the rest of your cluster's settings (docs/workers.md)

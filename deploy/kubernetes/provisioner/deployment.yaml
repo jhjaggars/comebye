@@ -38,6 +38,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: ["ALL"]}
           args:
+            - -hub-only        # no herdr in this pod: answers the hub, reports 0 agents
             - -ledger=false
             - -hub=$(COMEBYE_HUB)
             - -provision-config=/etc/comebye-provisioner/config

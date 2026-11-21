@@ -509,8 +509,12 @@ comebye -hub-only -addr 127.0.0.1:8741 -host-name hub \
   -ts-allow-login you@example.com -state-dir /var/lib/comebye
 ```
 
-`-hub-only` refuses to start with `-hub` (it is the hub, not a peer) or
-`-ledger=false`. Everything that is not about a pane on this machine works as
+`-hub-only` refuses to start with `-ledger=false` unless `-hub` is set too (the
+ledger is the point of a hub-only hub). With `-hub` and `-ledger=false` it is a
+**peer with no herdr**: not a hub (no `-hub-mode`), it answers only its hub's
+calls (the provisioner routes, health, peer calls), reports 0 agents, and the
+hub lists it as "no agents here". The in-cluster provisioner pod uses this;
+agent routes there answer 409 `no_herdr`. On a hub, everything that is not about a pane on this machine works as
 on any hub:
 
 | Feature | In hub-only mode |
@@ -867,7 +871,7 @@ to the home screen again.
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~/coordinator` when it exists, else `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). A directory made with `comebye coordinator init` holds its rules (`AGENTS.md`) and skills; the hub runs `git pull --ff-only` there before a start and a fresh start when it is a repository with a remote. See [the coordinator directory](agents.md#the-coordinator-directory). |
 | `-coordinator-reset-tokens` | `COMEBYE_COORDINATOR_RESET_TOKENS` | `150000` | Hub: the context size past which the first briefing marks the coordinator's in-place reset (`/clear` plus a digest) due; it runs when the coordinator is idle with nothing queued. `0` turns it off. Needs `comebye coordinator install-hook`; see [coordinator-reset.md](coordinator-reset.md). |
 | `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |
-| `-hub-only` | `COMEBYE_HUB_ONLY` | `false` | Run as a hub that hosts no agents: no herdr, nothing waits for a socket; implies `-hub-mode`, turns launching off here. An explicitly empty `-sock=` means the same. See [A hub with no herdr](#a-hub-with-no-herdr-containers-kubernetes). |
+| `-hub-only` | `COMEBYE_HUB_ONLY` | `false` | Run with no herdr (nothing waits for a socket) and host no agents; on a hub it implies `-hub-mode`; with `-hub` and `-ledger=false` it is a herdr-less peer (a provisioner pod). Turns launching off here. An explicitly empty `-sock=` means the same. See [A hub with no herdr](#a-hub-with-no-herdr-containers-kubernetes). |
 | `-lock-wait` | `COMEBYE_LOCK_WAIT` | `0` | When another comebye holds the state directory, retry this long (once a second) before refusing to start. See [One server per state directory](#one-server-per-state-directory). |
 | `-health-addr` | `COMEBYE_HEALTH_ADDR` | (none) | Also serve `/healthz` and `/readyz` (nothing else, no login) on this address, e.g. `:8743`, for probes that cannot reach the loopback listener. |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |

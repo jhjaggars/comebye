@@ -158,6 +158,11 @@ func (s *Server) guard(a access, next http.HandlerFunc) http.HandlerFunc {
 		if s.cfg.Version != "" {
 			h.Set("X-Comebye-Version", s.cfg.Version)
 		}
+		// A host with no herdr says so, so the hub shows it as a host that
+		// hosts no agents by design rather than a broken one with none.
+		if s.cfg.HubOnly {
+			h.Set("X-Comebye-No-Agents", "1")
+		}
 		// API responses are never sniffed or stored. A handler that wants
 		// revalidation instead (transcripts, with an ETag) overrides
 		// Cache-Control.

@@ -334,6 +334,7 @@ type peer struct {
 	preferred int    // index into addrs of the last address that answered
 	lastSeen  time.Time
 	version   string // X-Comebye-Version of the last answer ("" = unknown)
+	noAgents  bool   // the peer said (NoAgentsHeader) it runs no herdr: no agents by design
 	agents    []herdr.AgentInfo
 	tracker   *state.Tracker
 	checked   bool   // the peer's push setting was checked
@@ -377,7 +378,7 @@ func validStatus(s herdr.AgentStatus) bool {
 func (p *peer) hostStatus() state.HostStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), Class: p.class, Addr: p.addr, Version: p.version, RepoDamage: p.repoDamage, Tmp: p.tmp}
+	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), NoAgents: p.noAgents, Class: p.class, Addr: p.addr, Version: p.version, RepoDamage: p.repoDamage, Tmp: p.tmp}
 	if p.status != StatusOK {
 		hs.Error = p.lastErr
 	}
@@ -437,6 +438,7 @@ func (p *peer) attempt(fn func(base *url.URL) (*http.Response, error)) (*http.Re
 			p.preferred, p.addr = i, host
 			// A peer too old to send the header reads as unknown.
 			p.version = cleanVersion(resp.Header.Get(VersionHeader))
+			p.noAgents = resp.Header.Get(NoAgentsHeader) == "1"
 			p.mu.Unlock()
 			if first {
 				p.f.opts.Logf("peer %s: using %s (address %d of %d)", p.name, host, i+1, len(p.addrs))
@@ -450,6 +452,10 @@ func (p *peer) attempt(fn func(base *url.URL) (*http.Response, error)) (*http.Re
 
 // VersionHeader carries an instance's binary version on every API response.
 const VersionHeader = "X-Comebye-Version"
+
+// NoAgentsHeader is "1" on every API response of an instance with no herdr
+// (-hub-only): a hub-only peer such as the in-cluster provisioner.
+const NoAgentsHeader = "X-Comebye-No-Agents"
 
 // cleanVersion bounds what a peer reports about itself.
 func cleanVersion(v string) string {

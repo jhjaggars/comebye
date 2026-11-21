@@ -140,7 +140,7 @@ func main() {
 		autoTodo       = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on questions past -auto-todo-question-after, one suggestion per question to keep or dismiss; skipped for 10 minutes after the user viewed or typed in the agent); off for none")
 		autoBlocked    = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
 		autoQuestion   = flag.Duration("auto-todo-question-after", envDuration("COMEBYE_AUTO_TODO_QUESTION_AFTER", server.DefaultAutoQuestion), "how long an agent must sit idle or done on a question, with no device viewing it and the user away for 10 minutes, before -auto-todo suggests items")
-		hubOnly        = flag.Bool("hub-only", envBool("COMEBYE_HUB_ONLY", false), "run as a hub that hosts no agents (no herdr here, nothing waits for a socket): the ledger, to-dos, briefings, plans, peers, archive, push and the app all work; implies -hub-mode. Also implied by an explicitly empty -sock (see docs/setup.md)")
+		hubOnly        = flag.Bool("hub-only", envBool("COMEBYE_HUB_ONLY", false), "run with no herdr (nothing waits for a socket) and host no agents. On a hub (no -hub): the ledger, to-dos, briefings, plans, peers, archive, push and the app all work; implies -hub-mode. With -hub and -ledger=false: a peer that only answers its hub and reports 0 agents, e.g. the in-cluster provisioner (docs/workers.md). Also implied by an explicitly empty -sock (see docs/setup.md)")
 		lockWait       = flag.Duration("lock-wait", envDuration("COMEBYE_LOCK_WAIT", 0), "when another comebye holds the state directory, retry this long before refusing to start (0 refuses at once); a Kubernetes replacement pod can set 30s")
 		healthAddr     = flag.String("health-addr", getenv("COMEBYE_HEALTH_ADDR"), "also serve /healthz and /readyz (nothing else, no login) on this address, e.g. :8743, for probes that cannot reach the loopback listener; empty (default) serves them on -addr only")
 		showVersion    = flag.Bool("version", false, "print the version and exit")
@@ -168,13 +168,15 @@ func main() {
 		}
 	})
 	if *hubOnly {
-		switch {
-		case strings.TrimSpace(*hubURL) != "":
-			log.Fatalf("-hub-only and -hub: a hub-only instance is the hub, not a peer")
-		case !*ledgerOn:
-			log.Fatalf("-hub-only and -ledger=false: the ledger is the point of a hub-only instance")
+		isPeer := strings.TrimSpace(*hubURL) != ""
+		if err := hubOnlyError(isPeer, *ledgerOn); err != nil {
+			log.Fatal(err)
 		}
-		*hubMode = true
+		// A hub-only hub is the hub; a hub-only peer (-hub) only answers its
+		// hub, and so is not in hub mode.
+		if !isPeer {
+			*hubMode = true
+		}
 		*launchOn = false
 	}
 	if *ntfyThottle > 0 {
@@ -948,6 +950,19 @@ func provisionFlagError(noAuth bool, cfg, host, addr string, noLedger, hasHub, t
 		return errors.New("-provision-host is for the hub (it keeps the ledger and has no -hub): the peer that holds the credentials sets -provision-config")
 	case cfg != "" && !(noLedger && hasHub):
 		return errors.New("-provision-config needs -ledger=false and -hub: a provisioner is a peer, answering its hub")
+	}
+	return nil
+}
+
+// hubOnlyError checks -hub-only against -hub and -ledger. Without -hub it is
+// a hub with no herdr, and the ledger is the point of it. With -hub it is a
+// peer with no herdr (the in-cluster provisioner pod), which keeps no ledger.
+func hubOnlyError(hasHub, ledgerOn bool) error {
+	switch {
+	case hasHub && ledgerOn:
+		return errors.New("-hub-only and -hub: a peer with no herdr (a provisioner pod) keeps no ledger; add -ledger=false, or drop -hub for a hub that hosts no agents")
+	case !hasHub && !ledgerOn:
+		return errors.New("-hub-only and -ledger=false: the ledger is the point of a hub-only instance")
 	}
 	return nil
 }
