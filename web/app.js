@@ -8927,9 +8927,13 @@ function renderPeerView() {
     if (c.state === "ok") peersLoadCats(h.name);
   }
   if (c.state === "ok" && (!prs.draft || prs.draft.host !== h.name)) { prs.draft = draftFrom(h.name, c.data); peersLoadCats(h.name); }
-  const st = peerStatusOf(h), info = prs.info[h.name];
+  const st = peerStatusOf(h), info = prs.info[h.name], wx = wakeOf(h);
+  // A worker the cloud says is stopped is stopped, not "down, no response".
+  const statusRow = wx
+    ? `${wx.kind === "starting" ? "Starting" : wx.kind === "failed" ? "Stopped (failed to start)" : "Stopped"}${wx.p && wx.p.stopped_at && wx.kind !== "starting" ? " since " + esc(fmtWhen(wx.p.stopped_at)) : ""}`
+    : `${esc(peerStatusText(h))}${h.since && st !== "ok" ? " since " + esc(fmtWhen(h.since)) : ""}${h.error ? ' <span class="warn">' + esc(h.error) + "</span>" : ""}`;
   const rows = [
-    ["Status", `${esc(peerStatusText(h))}${h.since && st !== "ok" ? " since " + esc(fmtWhen(h.since)) : ""}${h.error ? ' <span class="warn">' + esc(h.error) + "</span>" : ""}`],
+    ["Status", statusRow],
     ["Version", `${esc(h.version || "unknown")}${h.version_mismatch ? ` <span class="warn">(the hub runs ${esc(prs.hubVersion || "another version")})</span>` : ""}`],
     ["Agents", h.no_agents ? "none by design (a hub only)" : String(h.agents || 0)],
   ];
@@ -8952,7 +8956,7 @@ function renderPeerView() {
   } else if (c.state === "old") {
     body = `<div class="pr-sec"><h3>Defaults for this host</h3><div class="pr-note warn">This host runs ${esc(h.version || "an older version")}, which has no host settings. Upgrade it to set a default agent, model and thinking level.</div></div>`;
   } else if (c.state === "down") {
-    body = `<div class="pr-sec"><h3>Defaults for this host</h3><div class="pr-note">Settings are kept on the host itself, which is not answering. They can be edited again when it is back.</div></div>`;
+    body = `<div class="pr-sec"><h3>Defaults for this host</h3><div class="pr-note">Settings are kept on the host itself, ${wx ? "which is stopped" : "which is not answering"}. They can be edited again when it is back.</div></div>`;
   } else if (c.state === "err") {
     body = `<div class="pr-sec"><h3>Defaults for this host</h3><div class="pr-note warn">${esc(c.err || "Could not read the settings")}</div></div>`;
   } else body = '<div class="pr-sec"><div class="pr-note">Loading…</div></div>';
@@ -8960,7 +8964,6 @@ function renderPeerView() {
     <div class="pr-sec"><h3>Host</h3><dl class="pr-kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl></div>`;
   // Keep the focus and caret in a field being typed in across a redraw.
   const ae = document.activeElement, keep = ae && view.contains(ae) && ae.id ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
-  const wx = wakeOf(h);
   const wsec = wx ? `<div class="pr-sec wk-sec"><h3>${esc(wakeChip(wx))}</h3><div class="pr-note">${esc(wakeWhat(wx))}</div>${wakeAction(h, wx)}</div>` : "";
   const html = head + wsec + reach + body;
   if (view._html === html) return;
