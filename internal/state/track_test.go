@@ -87,6 +87,16 @@ type fakeHerdr struct {
 	mu     sync.Mutex
 	agents []herdr.AgentInfo
 	screen string // answer to pane.read
+	// subscribes records the size of each events.subscribe request's
+	// subscription set. The fake answers a subscribe and hangs up, so the
+	// stream resyncs right away, again and again.
+	subscribes []int
+}
+
+func (f *fakeHerdr) subscribeSizes() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.subscribes...)
 }
 
 func (f *fakeHerdr) set(agents ...herdr.AgentInfo) {
@@ -121,10 +131,20 @@ func startFakeHerdr(t *testing.T) (*fakeHerdr, *herdr.Client) {
 				if err != nil {
 					return
 				}
-				var req struct{ ID, Method string }
+				var req struct {
+					ID, Method string
+					Params     struct {
+						Subscriptions []json.RawMessage `json:"subscriptions"`
+					} `json:"params"`
+				}
 				_ = json.Unmarshal(line, &req)
 				var result any
 				switch req.Method {
+				case "events.subscribe":
+					f.mu.Lock()
+					f.subscribes = append(f.subscribes, len(req.Params.Subscriptions))
+					f.mu.Unlock()
+					result = map[string]any{"type": "subscription_started"}
 				case "agent.list":
 					f.mu.Lock()
 					result = map[string]any{"type": "agent_list", "agents": f.agents}
