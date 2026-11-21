@@ -308,6 +308,10 @@ type apiEntry struct {
 	RemovedAt    *time.Time `json:"removed_at"`
 	LostAt       *time.Time `json:"lost_at"`
 	FinalReport  string     `json:"final_report"`
+	// Loop, LoopEvery and LastPassAt describe a loop worker (`comebye loop`).
+	Loop             string     `json:"loop"`
+	LoopEveryMinutes int        `json:"loop_every_minutes"`
+	LastPassAt       *time.Time `json:"last_pass_at"`
 	// Progress is the worker's latest `comebye report --progress` note.
 	Progress *struct {
 		Text  string    `json:"text"`

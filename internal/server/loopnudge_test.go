@@ -249,3 +249,80 @@ func TestCleanLoop(t *testing.T) {
 		t.Fatalf("length = %d", n)
 	}
 }
+
+// A standing loop (loop set --every 1h) sits idle between passes: the hub
+// leaves it alone until its pass is overdue by the margin (a quarter of the
+// interval, at least the 10-minute default), nudges it once, and a margin
+// later tells the requester. The clock counts from the ledger's last pass
+// end, so a hub restart does not push the nudge out.
+func TestLoopNudgeStandingLoopOnSchedule(t *testing.T) {
+	r := newLoopRig(t, "run a steward pass")
+	pass := autoT0
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LoopEveryMinutes, e.LastPassAt = 60, &pass })
+	r.at(1, herdr.StatusIdle) // first seen a minute after the pass ended
+	r.at(30, herdr.StatusIdle)
+	r.at(74, herdr.StatusIdle)
+	r.want(0, 0, "between passes, not overdue")
+	r.at(75, herdr.StatusIdle)
+	r.want(1, 0, "an hour plus 15 minutes after the pass ended")
+	if !strings.Contains(r.nudges[0], "overdue") || !strings.Contains(r.nudges[0], "every 1h") {
+		t.Fatalf("nudge = %q", r.nudges[0])
+	}
+	r.at(89, herdr.StatusIdle)
+	r.want(1, 0, "one nudge only, then the margin")
+	r.at(90, herdr.StatusIdle)
+	r.want(1, 1, "the requester is told")
+	if !strings.Contains(r.told[0], "missed its pass") || !strings.Contains(r.told[0], "loop clear "+r.id) {
+		t.Fatalf("message = %q", r.told[0])
+	}
+	r.at(300, herdr.StatusIdle)
+	r.want(1, 1, "nothing more")
+}
+
+func TestLoopNudgeStandingLoopPassResets(t *testing.T) {
+	r := newLoopRig(t, "run a steward pass")
+	pass := autoT0
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LoopEveryMinutes, e.LastPassAt = 60, &pass })
+	r.at(10, herdr.StatusIdle)
+	r.at(60, herdr.StatusWorking) // its next pass, on time
+	next := autoT0.Add(65 * time.Minute)
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LastPassAt = &next })
+	r.at(65, herdr.StatusIdle)
+	r.at(139, herdr.StatusIdle)
+	r.want(0, 0, "the clock counts from the new pass end")
+	r.at(140, herdr.StatusIdle)
+	r.want(1, 0, "overdue from the new pass end")
+}
+
+func TestLoopSetRoute(t *testing.T) {
+	r := newLoopRig(t, "")
+	pass := autoT0
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) {
+		e.Loop, e.Status, e.FinishedAt = "", ledger.Finished, &pass
+		e.Callback = &ledger.Callback{State: ledger.CallbackPending, At: pass}
+	})
+	hdr := agentHdr("w1:p1")
+	if w := do(r.s, "POST", "/api/handoffs/pr-watch/loop", nil, `{"every":"1h"}`); w.Code == 200 {
+		t.Fatal("unauthenticated loop set allowed")
+	}
+	if w := do(r.s, "POST", "/api/handoffs/pr-watch/loop", hdr, `{"every":"10s"}`); w.Code != 400 {
+		t.Fatalf("bad every: %d %s", w.Code, w.Body)
+	}
+	if w := do(r.s, "POST", "/api/handoffs/nobody/loop", hdr, `{"every":"1h"}`); w.Code != 404 {
+		t.Fatalf("unknown name: %d %s", w.Code, w.Body)
+	}
+	w := do(r.s, "POST", "/api/handoffs/pr-watch/loop", hdr, `{"every":"1h","loop":"run a steward pass"}`)
+	if w.Code != 200 {
+		t.Fatalf("set: %d %s", w.Code, w.Body)
+	}
+	e, _ := r.s.ledger.Get(r.id)
+	if e.Loop != "run a steward pass" || e.LoopEveryMinutes != 60 || e.Status != ledger.Running || e.Callback != nil || !e.BetweenPasses() {
+		t.Fatalf("after set: %+v", e)
+	}
+	if w := do(r.s, "POST", "/api/handoffs/"+r.id+"/loop", hdr, `{"clear":true}`); w.Code != 200 {
+		t.Fatalf("clear: %d %s", w.Code, w.Body)
+	}
+	if e, _ := r.s.ledger.Get(r.id); e.Loop != "" || e.LoopEveryMinutes != 0 {
+		t.Fatalf("after clear: %+v", e)
+	}
+}

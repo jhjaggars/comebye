@@ -69,6 +69,7 @@ func init() {
 		{"plan", "create --title T --size N | show ID | list [--json]", "group handoffs into one change: the user is told once when all of them are done", cmdPlan},
 		{"release", "ID [--json]", "start a handoff that is waiting for earlier steps now (e.g. a step that went idle without reporting)", cmdRelease},
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
+		{"loop", "set NAME [--every D] [--text T] | clear NAME  [--json]", "register a running worker (handoff id, worker name or branch) as a standing loop that runs a pass every D (e.g. a steward that wakes hourly): its pass ends are then \"between passes\", not finished, so no finished notice goes out and the sweep leaves it alone, and if a pass is overdue by a quarter of D (at least 10 minutes) the hub nudges it once, then tells you. clear takes the loop off", cmdLoop},
 		{"report", "FILE|- | --progress [--phase rebase|tests|push|ci] TEXT|-", "(workers) declare yourself done and send your final report to whoever handed you the task; --progress sends a short note on what you are doing instead, which is not a report and finishes nothing; its TEXT is the note itself (a lone - reads it from stdin, never a file name), and a failure prints an error and exits non-zero", cmdReport},
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
 		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--branch B] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
@@ -653,6 +654,9 @@ func cmdLedger(e *Env, args []string) error {
 			default:
 				notes = append(notes, "landing check failed: "+dash(l.Verdict))
 			}
+		}
+		if en.Loop != "" && en.Status != "removed" && en.Status != "failed" {
+			notes = append(notes, loopNote(e, en))
 		}
 		if en.PlanID != "" {
 			notes = append(notes, "plan "+en.PlanID)
@@ -2272,6 +2276,76 @@ func queuedAction(e *Env, args []string, verb string) error {
 	} else {
 		fmt.Fprintf(e.Stdout, "Started %s on %s (%s, %s).\n", r.Entry.Branch, r.Entry.Host, dash(r.Entry.AgentName), r.Entry.AgentID)
 	}
+	return nil
+}
+
+// loopNote is the ledger's note for a loop worker.
+func loopNote(e *Env, en apiEntry) string {
+	n := "loop"
+	if m := en.LoopEveryMinutes; m > 0 {
+		every := fmt.Sprintf("%dm", m)
+		if m%60 == 0 {
+			every = fmt.Sprintf("%dh", m/60)
+		}
+		n += " every " + every
+	}
+	if en.LastPassAt != nil && en.Status == "running" {
+		n += ", last pass ended " + ago(e, *en.LastPassAt)
+	}
+	return n + ": " + en.Loop
+}
+
+func cmdLoop(e *Env, args []string) error {
+	if len(args) == 0 || (args[0] != "set" && args[0] != "clear") {
+		return usageErr("want `comebye loop set NAME [--every D] [--text T]` or `comebye loop clear NAME`")
+	}
+	verb := args[0]
+	fs := flag.NewFlagSet("loop "+verb, flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	every := fs.String("every", "", "how often it runs a pass, e.g. 1h or 90m (set only); left out, the default loop nudge (10 minutes idle)")
+	text := fs.String("text", "", "what it keeps doing, typed into its nudge (set only; left out, its handoff's --loop text, else a generic line)")
+	pos, err := parse(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("want exactly one worker: a handoff id, worker name or branch (see `comebye ledger`)")
+	}
+	body := map[string]any{}
+	if verb == "clear" {
+		if *every != "" || *text != "" {
+			return usageErr("--every and --text go with set, not clear")
+		}
+		body["clear"] = true
+	} else {
+		if *every != "" {
+			d, err := time.ParseDuration(*every)
+			if err != nil || d < time.Minute || d > 7*24*time.Hour {
+				return usageErr("--every wants a duration from 1m to 168h, such as 1h or 90m")
+			}
+		}
+		body["every"], body["loop"] = *every, *text
+	}
+	c, err := newClient(e)
+	if err != nil {
+		return err
+	}
+	data, err := c.raw("POST", "/api/handoffs/"+url.PathEscape(pos[0])+"/loop", nil, body)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return rawJSON(e, data)
+	}
+	var r struct {
+		Entry apiEntry `json:"entry"`
+	}
+	_ = json.Unmarshal(data, &r)
+	if verb == "clear" {
+		fmt.Fprintf(e.Stdout, "%s (%s) is no longer a loop worker: its next pass end finishes it as usual.\n", r.Entry.Branch, r.Entry.ID)
+		return nil
+	}
+	fmt.Fprintf(e.Stdout, "%s (%s) is a loop worker: %s. Its pass ends are between passes now, not finished (status %s).\n", r.Entry.Branch, r.Entry.ID, loopNote(e, r.Entry), r.Entry.Status)
 	return nil
 }
 

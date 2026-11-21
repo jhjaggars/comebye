@@ -288,3 +288,20 @@ func TestBoardLanesByBranchPurpose(t *testing.T) {
 		}
 	}
 }
+
+// A loop worker between passes is on the board as running, with its phase,
+// since its last pass ended: not under Landing as a finished worker.
+func TestBoardLoopWorkerBetweenPasses(t *testing.T) {
+	s, _, _ := todoServer(t)
+	pass := time.Now().Add(-20 * time.Minute).UTC().Truncate(time.Second)
+	e, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "steward/notes", AgentName: "steward", AgentID: "desk/w5:p1", PaneID: "w5:p1",
+		Status: ledger.Running, Brief: "b", Loop: "run a steward pass", LoopEveryMinutes: 60, LastPassAt: &pass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := getBoard(t, s, userHdr)
+	r := laneOf(t, v, laneRunning)
+	if r.Count != 1 || r.Items[0].ID != e.ID || r.Items[0].Phase != "between passes (every 1h)" || r.Items[0].Since != pass.Format(time.RFC3339) {
+		t.Fatalf("running = %+v", r.Items)
+	}
+}

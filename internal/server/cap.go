@@ -67,8 +67,8 @@ func (s *Server) runningInLocked(host, repoName, skip string) int {
 	for _, e := range s.ledger.Entries() {
 		switch {
 		case e.Host != host || e.RepoName != repoName || e.ID == skip:
-		case e.Status == ledger.Running:
-			n++
+		case e.Status == ledger.Running && !e.BetweenPasses():
+			n++ // a loop worker between passes holds no slot, as a finished one does not
 		case e.Status == ledger.Waiting && s.coord.starting["queued/"+e.ID]:
 			n++
 		}

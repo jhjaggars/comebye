@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,15 @@ import (
 // handoff landed, was removed or lost (see loopWatched) and pauses while the agent is blocked at a dialog, is
 // gone from the fleet (parked) or its user is typing in its box. It lives in
 // memory: a hub restart starts the count again.
+//
+// A standing loop (`comebye loop set NAME --every 1h`: a worker that sleeps
+// between passes, such as an hourly steward) is meant to sit idle between
+// passes, so its clock is its schedule: it counts from the end of its last
+// pass (the ledger's LastPassAt, so a hub restart does not reset it), the
+// one nudge goes out when the next pass is overdue by a margin (every plus
+// loopMargin), and if it is still idle a margin after the nudge, the
+// requester (else the coordinator) is told. One nudge, not two: a pass it
+// missed by a quarter of its interval is already late.
 
 const (
 	// DefaultLoopNudgeAfter is how long a looping worker may sit idle
@@ -60,6 +70,31 @@ const (
 	loopTypingWindow = 30 * time.Second
 	loopSpecMax      = 200
 )
+
+// loopMargin is how late a standing loop's pass may be before the hub
+// nudges it, and how long after the nudge before it tells the requester: a
+// quarter of the interval, and never less than the default idle wait.
+func (l *loopMon) loopMargin(every time.Duration) time.Duration {
+	return max(every/4, l.after)
+}
+
+// loopEveryText says how often a loop worker runs its passes, for a line.
+func loopEveryText(e ledger.Entry) string {
+	if e.LoopEveryMinutes <= 0 {
+		return "a loop, no schedule"
+	}
+	return "every " + shortDur(e.LoopEvery())
+}
+
+// shortDur prints 1h, 90m, 1h30m, 2d without zero units.
+func shortDur(d time.Duration) string {
+	s := d.Round(time.Minute).String()
+	s = strings.TrimSuffix(s, "0s")
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
 
 // cleanLoop reduces a loop spec to one short plain line: the hub types it
 // into an agent's pane, so it carries no markup or control characters.
@@ -162,6 +197,10 @@ func loopWatched(e ledger.Entry) bool {
 
 func loopNudgeText(e ledger.Entry, n int) string {
 	lead := "Comebye (hub nudge): you are idle with nothing running, but your brief says to keep this going: "
+	if e.LoopEveryMinutes > 0 {
+		lead = "Comebye (hub nudge): your next pass is overdue (you run " + loopEveryText(e) + ") and nothing is running or scheduled that the hub can see. Your loop is: "
+		return lead + cleanLoop(e.Loop) + ". Run a pass now and schedule the next one. If you are done, file your report with `comebye report -`."
+	}
 	if n == 2 {
 		lead = "Comebye (hub nudge, second): you are still idle with nothing running, and the first nudge did not restart your loop. Your brief says to keep this going: "
 	}
@@ -169,6 +208,12 @@ func loopNudgeText(e ledger.Entry, n int) string {
 }
 
 func loopDeadText(e ledger.Entry, idle time.Duration) string {
+	if e.LoopEveryMinutes > 0 {
+		return "Comebye (hub notice): the loop worker on branch " + safeText(e.Branch) + " in " + safeText(e.RepoName) + " on " + safeText(e.Host) +
+			" (handoff " + safeText(e.ID) + ") missed its pass: it runs " + loopEveryText(e) + ", but it has been idle with nothing running for " + shortDur(idle) +
+			" since its last pass and did not start one after a nudge. Its loop is: " + cleanLoop(e.Loop) + ". " +
+			"Look at it with `comebye read " + safeText(e.ID) + "`, restart it with `comebye prompt`, or stop watching it with `comebye loop clear " + safeText(e.ID) + "`. The hub sends no more nudges for it until it runs a pass again."
+	}
 	return "Comebye (hub notice): the loop of the worker on branch " + safeText(e.Branch) + " in " + safeText(e.RepoName) + " on " + safeText(e.Host) +
 		" (handoff " + safeText(e.ID) + ") is dead: it was idle with nothing running for " + idle.Round(time.Minute).String() +
 		" and did not restart after two nudges. Its loop was: " + cleanLoop(e.Loop) + ". " +
@@ -266,15 +311,29 @@ func (s *Server) loopStep(ctx context.Context, agents []herdr.AgentInfo, now tim
 			continue
 		}
 		// Idle, nothing running.
+		every := e.LoopEvery()
 		l.mu.Lock()
 		if st == nil {
 			st = &loopSt{start: now}
+			if every > 0 && e.LastPassAt != nil && e.LastPassAt.Before(now) {
+				st.start = *e.LastPassAt // the schedule counts from the pass end
+			}
 			l.m[e.ID] = st
 		}
 		st.workFrom = time.Time{}
 		cp := *st
 		l.mu.Unlock()
 		if cp.told || l.typing(a) || now.Sub(cp.tried) < loopRetry {
+			continue
+		}
+		if every > 0 {
+			margin := l.loopMargin(every)
+			switch {
+			case cp.nudges == 0 && now.Sub(cp.start) >= every+margin:
+				s.loopNudge(ctx, l, e, a, 1, now)
+			case cp.nudges >= 1 && now.Sub(cp.last) >= margin:
+				s.loopTell(ctx, l, e, now.Sub(cp.start), now)
+			}
 			continue
 		}
 		switch {
@@ -355,8 +414,93 @@ func (s *Server) loopTell(ctx context.Context, l *loopMon, e ledger.Entry, idle 
 		return
 	}
 	s.sent.confirm(subject)
-	log.Printf("loop dead: %s (%s) did not restart after two nudges; told %s", e.Branch, e.ID, to)
+	if e.LoopEveryMinutes > 0 {
+		log.Printf("loop missed: %s (%s) did not run its pass after a nudge; told %s", e.Branch, e.ID, to)
+	} else {
+		log.Printf("loop dead: %s (%s) did not restart after two nudges; told %s", e.Branch, e.ID, to)
+	}
 	l.mu.Lock()
 	st.told = true
 	l.mu.Unlock()
+}
+
+// Loop registration bounds: a pass interval is a minute to a week.
+const (
+	loopEveryMin = time.Minute
+	loopEveryMax = 7 * 24 * time.Hour
+)
+
+// findLoopTarget picks the active handoff a `comebye loop` names: its id,
+// its worker's name or agent id, or its branch. A name more than one
+// active handoff answers to is refused.
+func (s *Server) findLoopTarget(name string) (ledger.Entry, string) {
+	if e, ok := s.ledger.Get(name); ok {
+		return e, ""
+	}
+	var hits []ledger.Entry
+	for _, e := range s.ledger.Entries() {
+		if e.Active() && (e.AgentName == name || e.AgentID == name || e.Branch == name) {
+			hits = append(hits, e)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return ledger.Entry{}, "no active handoff is called " + name + " (see `comebye ledger`)"
+	case 1:
+		return hits[0], ""
+	}
+	return ledger.Entry{}, name + " names " + itoa(len(hits)) + " active handoffs: use the handoff id (see `comebye ledger`)"
+}
+
+// handleSetLoop registers an existing handoff as a loop worker, or takes
+// its loop off (body: {"loop": "...", "every": "1h"} or {"clear": true}).
+func (s *Server) handleSetLoop(w http.ResponseWriter, r *http.Request) {
+	if s.ledgerOff(w, r) {
+		return
+	}
+	var b struct {
+		Loop  string `json:"loop"`
+		Every string `json:"every"`
+		Clear bool   `json:"clear"`
+	}
+	if !decodeBody(w, r, &b) {
+		return
+	}
+	e, msg := s.findLoopTarget(r.PathValue("id"))
+	if msg != "" {
+		writeJSONStatus(w, http.StatusNotFound, apiErr("no_handoff", msg))
+		return
+	}
+	text, every := "", time.Duration(0)
+	if !b.Clear {
+		text = cleanLoop(b.Loop)
+		if text == "" {
+			text = e.Loop
+		}
+		if text == "" {
+			text = "keep running your passes on schedule, as your brief says"
+		}
+		if strings.TrimSpace(b.Every) != "" {
+			d, err := time.ParseDuration(strings.TrimSpace(b.Every))
+			if err != nil || d < loopEveryMin || d > loopEveryMax {
+				writeJSONStatus(w, http.StatusBadRequest, apiErr("bad_every", "every must be a duration from 1m to 168h, such as 1h or 90m"))
+				return
+			}
+			every = d.Truncate(time.Minute)
+		}
+	}
+	got, err := s.ledger.SetLoop(e.ID, text, every)
+	if err != nil {
+		writeJSONStatus(w, http.StatusConflict, apiErr("not_active", err.Error()))
+		return
+	}
+	if s.loops != nil {
+		s.loops.forget(e.ID) // a new schedule starts a new clock
+	}
+	what := "set, " + loopEveryText(got)
+	if b.Clear {
+		what = "cleared"
+	}
+	log.Printf("loop: %s (%s) %s by %s", e.Branch, e.ID, what, s.by(r, ""))
+	writeJSON(w, map[string]any{"entry": got})
 }

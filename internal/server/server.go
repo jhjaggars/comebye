@@ -674,6 +674,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))
 	s.mux.HandleFunc("POST /api/handoffs/{id}/release", s.authAgent(s.handleReleaseHandoff))
 	s.mux.HandleFunc("POST /api/handoffs/{id}/cancel", s.authAgent(s.handleCancelHandoff))
+	s.mux.HandleFunc("POST /api/handoffs/{id}/loop", s.authAgent(s.handleSetLoop))
 	s.mux.HandleFunc("POST /api/report", s.authWorker(s.handleReport))
 	s.mux.HandleFunc("POST /api/landings", s.authAgent(s.handleLanding))
 	s.mux.HandleFunc("GET /api/landings/queue", s.authAgent(s.handleLandQueue))

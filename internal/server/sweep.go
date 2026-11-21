@@ -257,6 +257,13 @@ func (s *Server) sweepCandidates(agents []herdr.AgentInfo, idleAfter time.Durati
 		if a != nil {
 			name = a.Name
 		}
+		if e.BetweenPasses() {
+			// A loop worker between passes is waiting for its next one, not
+			// finished: the loop nudge watches it (loopnudge.go).
+			item.Reason = "a loop worker between passes (" + loopEveryText(e) + "): it is not finished; take its loop off with `comebye loop clear` to sweep it"
+			skipped = append(skipped, item)
+			continue
+		}
 		switch e.Status {
 		case ledger.ReadyToRemove:
 			item.Reason = "already marked ready to remove"

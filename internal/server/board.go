@@ -37,10 +37,14 @@ const (
 
 // BoardItem is one line of a lane.
 type BoardItem struct {
-	ID      string `json:"id"`   // to-do id, ledger entry id
-	Type    string `json:"type"` // "todo", "handoff", "release", "dialog"
-	Title   string `json:"title"`
-	Detail  string `json:"detail,omitempty"`
+	ID     string `json:"id"`   // to-do id, ledger entry id
+	Type   string `json:"type"` // "todo", "handoff", "release", "dialog"
+	Title  string `json:"title"`
+	Detail string `json:"detail,omitempty"`
+	// Phase qualifies State for a handoff whose ledger status does not say
+	// it all: "between passes (every 1h)" for a loop worker waiting for its
+	// next pass (State stays "running").
+	Phase   string `json:"phase,omitempty"`
 	Project string `json:"project"`
 	Kind    string `json:"kind,omitempty"`  // a to-do's kind
 	State   string `json:"state,omitempty"` // a handoff's ledger status, a release's state
@@ -286,6 +290,10 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 			}
 			add(waiting, it)
 		case ledger.Running:
+			if e.BetweenPasses() && e.LastPassAt != nil {
+				it.Phase, it.Since = "between passes ("+loopEveryText(e)+")", since(*e.LastPassAt)
+				it.Detail = it.Phase
+			}
 			if isLive && a.Status == herdr.StatusBlocked {
 				it.Type, it.Detail = "dialog", "stuck on a dialog: it needs an answer"
 				add(needs, it)

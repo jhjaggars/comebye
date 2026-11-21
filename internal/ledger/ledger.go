@@ -94,6 +94,15 @@ type Entry struct {
 	// hub nudges a worker with a loop that goes idle with nothing running
 	// (loopnudge.go). Empty: no nudge.
 	Loop string `json:"loop,omitempty"`
+	// LoopEveryMinutes is how often a loop worker is expected to run a pass
+	// (a standing loop that sleeps between passes, such as an hourly
+	// steward), from `comebye loop set --every`. Zero: no schedule, the
+	// nudge's default clock (a loop that should never sit idle long).
+	LoopEveryMinutes int `json:"loop_every_minutes,omitempty"`
+	// LastPassAt is when a loop worker last went idle after working: the end
+	// of its last pass. A loop worker's pass end is not a finish: it stays
+	// running, between passes, until it files a report (see BetweenPasses).
+	LastPassAt *time.Time `json:"last_pass_at,omitempty"`
 	// KindSource says where Kind came from: request, setting, flag or auto
 	// (empty on entries from before host settings).
 	KindSource string `json:"kind_source,omitempty"`
@@ -772,9 +781,67 @@ func (e Entry) Active() bool {
 	return false
 }
 
+// BetweenPasses reports whether e is a loop worker that is not in a pass
+// now: running with a loop, idle since its last pass ended. It also takes
+// an entry recorded as finished by a pass end from before loops stayed
+// running (no report of its own). Such a worker is waiting for its next
+// pass, not finished: the sweep leaves it alone and no finished notice goes
+// out for it.
+func (e Entry) BetweenPasses() bool {
+	if e.Loop == "" {
+		return false
+	}
+	switch e.Status {
+	case Running:
+		return !e.SawWorking && e.LastPassAt != nil
+	case Finished:
+		return e.ReportSource != "explicit"
+	}
+	return false
+}
+
+// LoopEvery is the expected time between a loop worker's passes (zero: none set).
+func (e Entry) LoopEvery() time.Duration {
+	return time.Duration(e.LoopEveryMinutes) * time.Minute
+}
+
 // Reported reports whether the worker is stopped with its work reported:
 // finished or landed.
 func (e Entry) Reported() bool { return e.Status == Finished || e.Status == Landed }
+
+// SetLoop registers an active handoff as a loop worker (text non-empty) with
+// the expected time between its passes (every, zero for none), or takes the
+// loop off (text empty). A worker recorded as finished by a pass end, with
+// no report of its own, goes back to running between passes, and its
+// pending finished notice is dropped: it was a pass end, not a finish.
+func (s *Store) SetLoop(id, text string, every time.Duration) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID != id {
+			continue
+		}
+		if !active(e) {
+			return Entry{}, fmt.Errorf("handoff %s is %s, not active", id, e.Status)
+		}
+		e.Loop, e.LoopEveryMinutes = text, 0
+		if text != "" {
+			e.LoopEveryMinutes = int(every / time.Minute)
+			if e.Status == Finished && e.ReportSource != "explicit" {
+				at := e.FinishedAt
+				e.Status, e.FinishedAt, e.SawWorking = Running, nil, false
+				if e.LastPassAt == nil {
+					e.LastPassAt = at
+				}
+				if e.Callback != nil && e.Callback.State == CallbackPending {
+					e.Callback = nil
+				}
+			}
+		}
+		return copyEntry(e), s.save()
+	}
+	return Entry{}, fmt.Errorf("no handoff %s", id)
+}
 
 // ByAgent returns the active entry for a host-qualified agent id.
 func (s *Store) ByAgent(agentID string) (Entry, bool) {
@@ -1134,7 +1201,13 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 			if e.Reported() && e.AwaitIdle {
 				e.AwaitIdle, e.SawWorking, changed = false, false, true
 			}
-			if e.Status == Running && e.SawWorking {
+			if e.Status == Running && e.SawWorking && e.Loop != "" {
+				// A loop worker's pass ended: it is between passes, not
+				// finished. Only its own report finishes it.
+				t := now.UTC()
+				e.SawWorking, e.LastPassAt = false, &t
+				changed = true
+			} else if e.Status == Running && e.SawWorking {
 				t := now.UTC()
 				e.Status, e.FinishedAt, e.SawWorking, e.ReportTries = Finished, &t, false, 0
 				queueNotice(e, t)

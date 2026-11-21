@@ -1142,3 +1142,27 @@ func TestLandWarnsOnReportOnlyWork(t *testing.T) {
 		t.Fatalf("land fix: %d %s", code, errb2)
 	}
 }
+
+func TestLoopSetAndClear(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	f.answers["POST /api/handoffs/steward/loop"] = answer{body: `{"entry":{"id":"hd1","branch":"steward/notes","status":"running","loop":"run a steward pass","loop_every_minutes":60}}`}
+	if code := run(e, "loop", "set", "steward", "--every", "1h", "--text", "run a steward pass"); code != 0 || !strings.Contains(out.String(), "steward/notes (hd1) is a loop worker: loop every 1h: run a steward pass") {
+		t.Fatalf("set: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/handoffs/steward/loop").body; !strings.Contains(b, `"every":"1h"`) || !strings.Contains(b, `"loop":"run a steward pass"`) {
+		t.Fatalf("body %s", b)
+	}
+	f.answers["POST /api/handoffs/hd1/loop"] = answer{body: `{"entry":{"id":"hd1","branch":"steward/notes","status":"running"}}`}
+	out.Reset()
+	if code := run(e, "loop", "clear", "hd1"); code != 0 || !strings.Contains(out.String(), "no longer a loop worker") {
+		t.Fatalf("clear: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/handoffs/hd1/loop").body; !strings.Contains(b, `"clear":true`) {
+		t.Fatalf("clear body %s", b)
+	}
+	for _, args := range [][]string{{"loop"}, {"loop", "set"}, {"loop", "set", "x", "--every", "5s"}, {"loop", "clear", "x", "--every", "1h"}} {
+		if code := run(e, args...); code != 2 {
+			t.Fatalf("%v: %d", args, code)
+		}
+	}
+}
