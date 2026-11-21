@@ -552,3 +552,36 @@ func TestConfirmingARowWhoseRepositoryIsGone(t *testing.T) {
 		t.Fatalf("status = %s", e.Status)
 	}
 }
+
+// A loop worker between passes is not finished: the sweep skips it, whether
+// the ledger reads it as running since its last pass or (from before loops
+// stayed running) as finished without a report of its own.
+func TestSweepSkipsALoopWorkerBetweenPasses(t *testing.T) {
+	f := newSweepFix(t)
+	e, _ := f.s.ledger.ByAgent(f.ids["merged"])
+	pass := time.Now().Add(-3 * time.Hour)
+	f.s.ledger.Update(e.ID, func(e *ledger.Entry) {
+		e.Status, e.Loop, e.LoopEveryMinutes, e.LastPassAt, e.FinishedAt = ledger.Running, "steward pass", 60, &pass, nil
+	})
+	reasonOf := func(now time.Time) (bool, string) {
+		cands, skipped := f.s.sweepCandidates(f.s.fleet.Agents(), defaultSweepIdle, "", now)
+		for _, it := range skipped {
+			if it.ID == f.ids["merged"] {
+				return hasCand(cands, f.ids["merged"]), it.Reason
+			}
+		}
+		return hasCand(cands, f.ids["merged"]), ""
+	}
+	if cand, why := reasonOf(time.Now().Add(2 * defaultSweepIdle)); cand || !strings.Contains(why, "between passes (every 1h)") {
+		t.Fatalf("running between passes: candidate=%v reason=%q", cand, why)
+	}
+	f.s.ledger.Update(e.ID, func(e *ledger.Entry) { e.Status, e.FinishedAt = ledger.Finished, &pass })
+	if cand, why := reasonOf(time.Now()); cand || !strings.Contains(why, "between passes") {
+		t.Fatalf("finished by a pass end: candidate=%v reason=%q", cand, why)
+	}
+	// Its own report finishes it: swept as usual.
+	f.s.ledger.Update(e.ID, func(e *ledger.Entry) { e.ReportSource = "explicit" })
+	if cand, _ := reasonOf(time.Now()); !cand {
+		t.Fatal("a loop worker that reported was not a candidate")
+	}
+}

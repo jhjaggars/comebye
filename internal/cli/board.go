@@ -21,6 +21,7 @@ type boardLane struct {
 		Title string `json:"title"`
 		Kind  string `json:"kind"`
 		State string `json:"state"`
+		Phase string `json:"phase"`
 		Since string `json:"since"`
 	} `json:"items"`
 }
@@ -30,6 +31,9 @@ func (l boardLane) digestLane() digest.Lane {
 	out := digest.Lane{Key: l.Key, Name: l.Name, Count: l.Count}
 	for _, it := range l.Items {
 		li := digest.LaneItem{ID: it.ID, Title: it.Title, Status: firstNonEmpty(it.State, it.Kind)}
+		if it.Phase != "" {
+			li.Status += ", " + it.Phase
+		}
 		if t, err := time.Parse(time.RFC3339, it.Since); err == nil {
 			li.Since = t
 		}
