@@ -1259,7 +1259,8 @@ func cmdHandoff(e *Env, args []string) error {
 	branch := fs.String("branch", "", "the worker's branch (created from --base when new)")
 	base := fs.String("base", "", "the base branch (default: the repository's default branch)")
 	kind := fs.String("kind", "", "the agent kind (default: the host's own default, see `comebye settings --host H`; naming another kind is allowed but warned about, and refused outside the host's allowed kinds)")
-	purpose := fs.String("purpose", "", "research, plan, review or spike when the branch is not meant to merge (its report is the deliverable; the sweep then lists it apart)")
+	purpose := fs.String("purpose", "", strings.Join(ledger.DisposablePurposes, ", ")+" (smoke is test) when the branch is not meant to merge: its report is the deliverable, so the board lists it under Reports and the sweep apart. Left out, the hub infers it from the branch prefix (research/, plan/, poc/, eval/, test/, …) and says so")
+	fs.StringVar(purpose, "workflow", "", "the same as --purpose")
 	loop := fs.String("loop", "", "what this worker keeps doing, e.g. \"watch PR 118 until merged or CI red\": it is meant to keep looping, so the hub nudges it if it goes idle with nothing running (10 minutes idle, again 20 minutes later, then tells you)")
 	name := fs.String("name", "", "the worker's name (default: from the branch)")
 	model := fs.String("model", "", "the worker's model (see `comebye models`; default: the agent's own)")
@@ -1282,7 +1283,7 @@ func cmdHandoff(e *Env, args []string) error {
 	case len(after) > 0 && *plan == "":
 		return usageErr("--after needs --plan")
 	case *purpose != "" && !ledger.DisposablePurpose(*purpose):
-		return usageErr("--purpose must be one of %s", strings.Join(ledger.DisposablePurposes, ", "))
+		return usageErr("--purpose must be one of %s (or smoke, the same as test)", strings.Join(ledger.DisposablePurposes, ", "))
 	}
 	text, err := readInput(e, *brief, 1<<20)
 	if err != nil {
@@ -1349,10 +1350,26 @@ func cmdHandoff(e *Env, args []string) error {
 	if m := modelLabel(en.Model, en.Thinking); m != "" {
 		fmt.Fprintf(e.Stdout, "  model:    %s\n", m)
 	}
+	if p := purposeLabel(en.Purpose, en.PurposeSrc); p != "" {
+		fmt.Fprintf(e.Stdout, "  purpose:  %s\n", p)
+	}
 	if en.Error != "" {
 		fmt.Fprintf(e.Stdout, "  warning:  %s\n", en.Error)
 	}
 	return nil
+}
+
+// purposeLabel says what purpose a handoff recorded and where it came from.
+func purposeLabel(purpose, source string) string {
+	switch {
+	case source == ledger.PurposeFromBranch:
+		return purpose + " (from the branch name; pass --purpose to set it)"
+	case source == ledger.PurposeFromNone:
+		return "none: work meant to land (pass --purpose if it is not)"
+	case purpose != "":
+		return purpose
+	}
+	return ""
 }
 
 // ---- prompt ----
@@ -1544,6 +1561,15 @@ func cmdLand(e *Env, args []string) error {
 	retry := en.Status == "landing" && en.FinishedAt == nil
 	if !retry && (en.Status != "finished" || strings.TrimSpace(en.FinalReport) == "") {
 		return fmt.Errorf("%s is not ready to land: its ledger entry is %q and %s; land after the worker has finished and reported", t.label(), en.Status, map[bool]string{true: "has a final report", false: "has no final report"}[strings.TrimSpace(en.FinalReport) != ""])
+	}
+	// A report-only handoff (research, poc, eval, …) is not meant to merge:
+	// say so, but the user's OK still lands it.
+	if p := ledger.PurposeOf(en.Purpose, en.Branch); ledger.DisposablePurpose(p) && !*asJSON {
+		how := "its branch name"
+		if en.Purpose != "" && (en.PurposeSrc == ledger.PurposeFromFlag || en.PurposeSrc == "") {
+			how = "its handoff"
+		}
+		fmt.Fprintf(e.Stderr, "comebye land: warning: %s is %s work (from %s): its report is the deliverable and its branch is not meant to merge. Landing it anyway, as the user OKed.\n", t.label(), p, how)
 	}
 	// Record the approval first (the entry becomes landing), then send the
 	// prompt; if it cannot be sent, the landing is undone.
@@ -1810,7 +1836,7 @@ func cmdSweep(e *Env, args []string) error {
 	dry := fs.Bool("dry-run", false, "list what would be marked, mark nothing")
 	idle := fs.String("idle-after", "", "also count a worker still recorded as running whose agent has been idle this long (default 30m; 0 turns it off)")
 	notify := fs.Bool("notify", false, "tell an idle coordinator the outcome (not with --dry-run)")
-	markDelivered := fs.Bool("mark-delivered", false, "also mark the research/plan/review/spike workers that reported, to discard their local commits (the user confirms each)")
+	markDelivered := fs.Bool("mark-delivered", false, "also mark the report-only workers (research, plan, review, spike, poc, eval, test) that reported, to discard their local commits (the user confirms each)")
 	buildOut := fs.Bool("build-output", false, "instead: list this host's worktrees with no live agent whose build output (Cargo target/, node_modules, ...) exceeds 1 GB, with sizes; deletes nothing")
 	clearBuild := fs.Bool("clear-build-output", false, "with --build-output: delete that build output (code, commits and untracked source stay)")
 	host := fs.String("host", "", "with --build-output: the host to sweep (default this one)")

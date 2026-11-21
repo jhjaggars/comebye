@@ -256,3 +256,35 @@ func TestBoardReportsLane(t *testing.T) {
 		t.Errorf("item = %+v", it)
 	}
 }
+
+// Whether finished work is a report or work to land comes from its purpose,
+// else its branch prefix: a poc/ branch is a report, a docs/ one is not.
+func TestBoardLanesByBranchPurpose(t *testing.T) {
+	s, _, _ := todoServer(t)
+	fin := time.Now().Add(-time.Hour)
+	add := func(branch, purpose string) string {
+		t.Helper()
+		e, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: "/r/c", RepoName: "comebye", Branch: branch, AgentName: branch, Status: ledger.Finished, Purpose: purpose, FinishedAt: &fin, FinalReport: "r"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e.ID
+	}
+	poc, docs, declared := add("poc/x", ""), add("docs/x", ""), add("feat/y", "eval")
+	v := getBoard(t, s, userHdr)
+	reports, landing := laneIDs(laneOf(t, v, laneReports)), laneIDs(laneOf(t, v, laneLanding))
+	if !strings.Contains(reports, poc) || strings.Contains(landing, poc) {
+		t.Errorf("poc/x: reports %s, landing %s", reports, landing)
+	}
+	if !strings.Contains(landing, docs) || strings.Contains(reports, docs) {
+		t.Errorf("docs/x: reports %s, landing %s", reports, landing)
+	}
+	if !strings.Contains(reports, declared) {
+		t.Errorf("declared eval: reports %s", reports)
+	}
+	for _, it := range laneOf(t, v, laneReports).Items {
+		if it.ID == poc && it.Kind != "poc" {
+			t.Errorf("poc card kind = %q", it.Kind)
+		}
+	}
+}

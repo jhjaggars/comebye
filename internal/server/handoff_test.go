@@ -384,3 +384,52 @@ func TestTemplateAndPlaybookAgreeOnIntentSpec(t *testing.T) {
 		}
 	}
 }
+
+// A handoff records its purpose and where it came from: the declared one
+// (an alias normalised), else the branch prefix's, else none.
+func TestHandoffRecordsPurpose(t *testing.T) {
+	root, repo, wtRoot := workerTree(t)
+	fh, client := startFakeLaunchHerdr(t)
+	wts := []map[string]any{{"path": repo, "branch": "main", "is_linked_worktree": false}}
+	fh.set(func(f *fakeLaunchHerdr) { f.hook = worktreeHook(t, &wts, nil) })
+	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, WorktreeRoot: wtRoot, StateDir: t.TempDir()}, client, nil)
+	s.findExec = func(name string) bool { return name == "pi" }
+	for _, tc := range []struct{ branch, purpose, want, source string }{
+		{"poc/a", "", "poc", ledger.PurposeFromBranch},
+		{"feat/b", "", "", ledger.PurposeFromNone},
+		{"docs/c", "", "", ledger.PurposeFromNone},
+		{"feat/d", "smoke", "test", ledger.PurposeFromFlag},
+		{"poc/e", "review", "review", ledger.PurposeFromFlag},
+	} {
+		body := `{"host":"desk","repo":"` + repo + `","branch":"` + tc.branch + `","kind":"pi","brief":"B","purpose":"` + tc.purpose + `"}`
+		w := do(s, "POST", "/api/handoffs", nil, body)
+		var r struct {
+			Entry ledger.Entry `json:"entry"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &r)
+		if w.Code != 200 || r.Entry.Purpose != tc.want || r.Entry.PurposeSource != tc.source {
+			t.Errorf("%s %q: %d purpose %q source %q, want %q %q: %s", tc.branch, tc.purpose, w.Code, r.Entry.Purpose, r.Entry.PurposeSource, tc.want, tc.source, w.Body)
+		}
+	}
+	if w := do(s, "POST", "/api/handoffs", nil, `{"host":"desk","repo":"`+repo+`","branch":"feat/z","kind":"pi","brief":"B","purpose":"docs"}`); w.Code != 400 || !strings.Contains(w.Body.String(), "bad_purpose") {
+		t.Errorf("docs purpose: %d %s", w.Code, w.Body)
+	}
+}
+
+// Starting a queued handoff passes on only a declared purpose: one the hub
+// inferred from the branch is inferred again, not recorded as declared.
+func TestDeclaredPurpose(t *testing.T) {
+	for _, tc := range []struct {
+		e    ledger.Entry
+		want string
+	}{
+		{ledger.Entry{Purpose: "eval", PurposeSource: ledger.PurposeFromBranch}, ""},
+		{ledger.Entry{Purpose: "eval", PurposeSource: ledger.PurposeFromFlag}, "eval"},
+		{ledger.Entry{Purpose: "research"}, "research"}, // from before purpose_source: a flag
+		{ledger.Entry{PurposeSource: ledger.PurposeFromNone}, ""},
+	} {
+		if got := declaredPurpose(tc.e); got != tc.want {
+			t.Errorf("declaredPurpose(%+v) = %q, want %q", tc.e, got, tc.want)
+		}
+	}
+}

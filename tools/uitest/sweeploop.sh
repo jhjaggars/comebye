@@ -3,7 +3,8 @@
 # against a throwaway hub: a fake herdr (tools/devserver, no real session), a throwaway bare git
 # "origin" in a temp dir (never a real remote), and a seeded ledger of finished workers:
 #   6 merged and clean (removed by the loop), 2 pushed but not merged, 1 dirty, 1 with local commits
-#   (all four stay), and three marked sessions whose answer lists something left:
+#   (all four stay), a poc/ and an eval/ branch with local commits and no recorded purpose (kept, and
+#   classed delivered by their prefix), and three marked sessions whose answer lists something left:
 #   tool-runs-s6-keys (delete origin/<own branch>, in main: branch deleted, session removed),
 #   extra-commit (the same words but the backup has a commit main lacks: kept) and stop-server
 #   (a process to stop: kept).
@@ -44,12 +45,14 @@ mk() { # mk NAME KIND
             git -C "$d/proj" merge -q --no-edit "$n"; git -C "$d/proj" push -q origin main ;;
     pushed) echo "$n" >"$wt/$n/$n.txt"; git -C "$wt/$n" add .; git -C "$wt/$n" commit -q -m "$n"; git -C "$wt/$n" push -q origin "$n" ;;
     dirty)  echo wip >"$wt/$n/wip.txt" ;;
-    local)  echo "$n" >"$wt/$n/$n.txt"; git -C "$wt/$n" add .; git -C "$wt/$n" commit -q -m "$n" ;;
+    local)  echo "$n" >"$wt/$n/${n//\//-}.txt"; git -C "$wt/$n" add .; git -C "$wt/$n" commit -q -m "$n" ;;
   esac
   names+=("$n"); kind[$n]="$k"
 }
 for n in fix-header fix-footer add-cache drop-flag rename-api bump-deps; do mk "$n" merged; done
 mk open-pr-a pushed; mk open-pr-b pushed; mk half-done dirty; mk local-only local
+# Report-only work by its branch prefix alone (no purpose recorded): delivered, not "needs a look".
+mk poc/demo local; mk eval/bench local
 B1=feat/tool-runs-6-keyboard
 # The example: the backup (pre-rebase) is pushed, then main gets the same change under another SHA.
 git -C "$d/proj" worktree add -q -b "$B1" "$wt/s6" main

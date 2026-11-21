@@ -168,10 +168,13 @@ var purposeOfPrefix = map[string]string{
 // usagePurpose: the handoff's --purpose when it set one (the flag wins), else
 // what the branch prefix suggests.
 func usagePurpose(flag, branch string) string {
-	if flag != "" {
-		if flag == "spike" {
-			return "research"
-		}
+	switch flag {
+	case "":
+	case "spike", "eval":
+		return "research"
+	case "poc", "test":
+		return "build"
+	default:
 		return flag
 	}
 	pre := branch
@@ -179,6 +182,15 @@ func usagePurpose(flag, branch string) string {
 		pre = pre[:i]
 	}
 	return purposeOfPrefix[strings.ToLower(pre)]
+}
+
+// declaredPurpose is the purpose the handoff passed: one the hub inferred
+// from the branch is left to usage's own prefix table.
+func declaredPurpose(e ledger.Entry) string {
+	if e.PurposeSource == ledger.PurposeFromFlag || e.PurposeSource == "" {
+		return e.Purpose
+	}
+	return ""
 }
 
 // usageLabeler builds the function that labels a session from the ledger,
@@ -201,7 +213,7 @@ func (s *Server) usageLabeler() func(host, home string, sess *usage.Session) usa
 		var l usage.Labels
 		if e, ok := byWT[host+"\x00"+cwd]; ok && cwd != "" {
 			l = usage.Labels{Project: e.RepoName, Role: "worker", Handoff: e.ID, Name: e.AgentName, Agent: e.AgentID, Src: usage.SrcLedger,
-				Purpose: usagePurpose(e.Purpose, e.Branch)}
+				Purpose: usagePurpose(declaredPurpose(e), e.Branch)}
 			if l.Name == "" {
 				l.Name = e.Branch
 			}

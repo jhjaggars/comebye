@@ -248,11 +248,15 @@ day and the check goes on with what it has) and classified:
   worktree whose branch or recorded commits are not in the base (a gone
   worktree with nothing unmerged is ready), or the checks failed;
 - **delivered** ("work delivered in the report; branch has N local
-  commits"): a research, plan, review or spike worker that has reported, whose
-  branch holds work nobody meant to merge. Declared with `comebye handoff
-  --purpose research|plan|review|spike`; without it a branch named
-  `research/…`, `plan/…`, `review/…`, `spike/…` or `investigate/…` is taken
-  for one. Never marked by a plain sweep; `--mark-delivered` (or the button in
+  commits"): a research, plan, review, spike, poc, eval or test worker that
+  has reported, whose branch holds work nobody meant to merge. Declared with
+  `comebye handoff --purpose research|plan|review|spike|poc|eval|test`
+  (`--workflow` is the same flag, `smoke` the same as `test`); without it the
+  hub infers it at handoff from the branch prefix (`research/`,
+  `investigate/`, `plan/`, `rfc/`, `rfc-`, `spec/`, `review/`, `audit/`,
+  `spike/`, `poc/`, `proto/`, `eval/`, `test/`, `smoke/`) and records it with
+  `purpose_source: branch`; an older entry with no purpose is read the same
+  way. A `docs/…` branch is work to land. Never marked by a plain sweep; `--mark-delivered` (or the button in
   the app's sweep sheet) marks them as a *discard* proposal, which the removals
   review still asks you to confirm;
 - **gone**: nothing is left to lose or check (the host is not in the fleet, or

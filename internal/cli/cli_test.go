@@ -1090,3 +1090,55 @@ func TestLedgerShowsRecheckedAnswersAndReask(t *testing.T) {
 		t.Fatalf("reask: %d %s %s", code, out, errb)
 	}
 }
+
+// The handoff says what purpose the hub recorded and where it came from;
+// --workflow is --purpose, and smoke is accepted as test.
+func TestHandoffPurpose(t *testing.T) {
+	f, e, out, errb := newFake(t)
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	os.WriteFile(brief, []byte("Do X."), 0o600)
+	f.answers["POST /api/handoffs"] = answer{body: `{"entry":{"id":"h9","host":"kube","branch":"plan/x","agent_id":"kube/w7:p1","agent_name":"plan-x","status":"running","purpose":"plan","purpose_source":"branch"}}`}
+	if code := run(e, "handoff", "--host", "kube", "--repo", "/r", "--branch", "plan/x", "--brief", brief); code != 0 ||
+		!strings.Contains(out.String(), "purpose:  plan (from the branch name; pass --purpose to set it)") {
+		t.Fatalf("inferred: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/handoffs").body; strings.Contains(b, `"purpose"`) {
+		t.Errorf("no purpose was passed, body %s", b)
+	}
+	f.answers["POST /api/handoffs"] = answer{body: `{"entry":{"id":"h9","host":"kube","branch":"feat/x","agent_id":"kube/w7:p1","agent_name":"x","status":"running","purpose":"eval","purpose_source":"flag"}}`}
+	out.Reset()
+	if code := run(e, "handoff", "--host", "kube", "--repo", "/r", "--branch", "feat/x", "--workflow", "eval", "--brief", brief); code != 0 || !strings.Contains(out.String(), "purpose:  eval\n") {
+		t.Fatalf("--workflow: %d %s %s", code, out, errb)
+	}
+	if b := f.find("POST", "/api/handoffs").body; !strings.Contains(b, `"purpose":"eval"`) {
+		t.Errorf("--workflow body %s", b)
+	}
+	out.Reset()
+	if code := run(e, "handoff", "--host", "kube", "--repo", "/r", "--branch", "feat/x", "--purpose", "smoke", "--brief", brief); code != 0 {
+		t.Fatalf("smoke: %d %s", code, errb)
+	}
+	errb.Reset()
+	if code := run(e, "handoff", "--host", "kube", "--repo", "/r", "--branch", "feat/x", "--purpose", "docs", "--brief", brief); code != 2 || !strings.Contains(errb.String(), "poc, eval, test") {
+		t.Fatalf("docs refused: %d %s", code, errb)
+	}
+}
+
+// Landing report-only work (here a poc/ branch) is warned about, not refused.
+func TestLandWarnsOnReportOnlyWork(t *testing.T) {
+	f, e, _, errb := newFake(t)
+	f.answers["POST /api/hosts/laharl/agents/w3:p1/prompt"] = answer{body: `{"agent":{}}`}
+	f.answers["POST /api/landings"] = answer{body: `{"entry":{"status":"landing"}}`}
+	f.answers["GET /api/ledger"] = answer{body: strings.Replace(ledgerJSON, `"branch":"fix/a"`, `"branch":"poc/a"`, 1)}
+	if code := run(e, "land", "laharl/w3:p1", "--note", "ok"); code != 0 || !strings.Contains(errb.String(), "is poc work (from its branch name)") {
+		t.Fatalf("land poc: %d %s", code, errb)
+	}
+	if f.find("POST", "/api/hosts/laharl/agents/w3:p1/prompt") == nil {
+		t.Fatal("the land prompt was not sent")
+	}
+	f2, e2, _, errb2 := newFake(t)
+	f2.answers["POST /api/hosts/laharl/agents/w3:p1/prompt"] = answer{body: `{"agent":{}}`}
+	f2.answers["POST /api/landings"] = answer{body: `{"entry":{"status":"landing"}}`}
+	if code := run(e2, "land", "laharl/w3:p1", "--note", "ok"); code != 0 || strings.Contains(errb2.String(), "warning") {
+		t.Fatalf("land fix: %d %s", code, errb2)
+	}
+}

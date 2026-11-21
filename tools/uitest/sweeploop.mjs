@@ -36,6 +36,7 @@ const allTodos = async () => (await api("GET", "/api/todos?state=all")).todos ??
 const MERGED = ["add-cache", "bump-deps", "drop-flag", "fix-footer", "fix-header", "rename-api"];
 const NEEDS_LOOK = ["half-done", "local-only", "open-pr-a", "open-pr-b"];
 const KEPT = ["extra-commit", "stop-server"];
+const DELIVERED = ["poc/demo", "eval/bench"];
 let tip = "";
 
 await check("the loop ran by itself and removed the merged, clean sessions and the one with a provably stale branch", async () => {
@@ -51,6 +52,25 @@ await check("the loop ran by itself and removed the merged, clean sessions and t
   }
   for (const n of [...NEEDS_LOOK, "extra", "server"]) if (!fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is gone");
   if (fs.existsSync(`${harness}/worktrees/proj/s6`)) throw new Error("s6 worktree is still there");
+});
+
+await check("a dry-run sweep classes the poc/ and eval/ workers as delivered by their branch prefix", async () => {
+  const st = await statuses();
+  for (const n of DELIVERED) if (st[n] !== "finished") throw new Error(n + " is " + st[n]);
+  const r = await api("POST", "/api/sweep", { dry_run: true });
+  const cls = Object.fromEntries(["ready", "needs_look", "delivered", "gone", "skipped"].flatMap((k) => (r[k] || []).map((i) => [i.name, k + ": " + i.reason])));
+  console.log("     " + JSON.stringify(Object.fromEntries([...DELIVERED, "local-only"].map((n) => [n, cls[n]]))));
+  for (const n of DELIVERED) if (!String(cls[n]).startsWith("delivered: work delivered in the report")) throw new Error(n + " is " + cls[n]);
+  if (!String(cls["local-only"]).startsWith("needs_look")) throw new Error("local-only is " + cls["local-only"]);
+});
+
+await check("the board puts the poc/ and eval/ workers in Reports to read, and local-only in Ready to land", async () => {
+  const b = await api("GET", "/api/board");
+  const lane = (k) => b.lanes.find((l) => l.key === k)?.items ?? [];
+  const reports = lane("reports").map((i) => i.title + "|" + i.kind).join(", "), landing = lane("landing").map((i) => i.title).join(", ");
+  console.log("     reports: " + reports + "; landing: " + landing);
+  for (const [n, k] of [["poc/demo", "poc"], ["eval/bench", "eval"]]) if (!reports.includes(n + "|" + k) || landing.includes(n)) throw new Error(n + " not a " + k + " report");
+  if (!landing.includes("local-only")) throw new Error("local-only is not in landing");
 });
 
 await check("the proven backup branch is deleted from origin; the one with a commit main lacks is kept", async () => {

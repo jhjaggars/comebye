@@ -296,6 +296,10 @@ func TestSweepDelivered(t *testing.T) {
 		{"declared by purpose", ledger.Entry{Status: ledger.Finished, Branch: "feat/openshell", Purpose: "research", FinalReport: "r"}, c(3, false), SweepDelivered, "work delivered in the report"},
 		{"no report yet", ledger.Entry{Status: ledger.Finished, Branch: "research/x"}, c(2, false), SweepNeedsLook, "on no remote"},
 		{"ordinary work is never delivered", ledger.Entry{Status: ledger.Finished, Branch: "feat/x", FinalReport: "done"}, c(2, false), SweepNeedsLook, "on no remote"},
+		{"an eval branch with a report", ledger.Entry{Status: ledger.Finished, Branch: "eval/x", FinalReport: "r"}, c(3, false), SweepDelivered, "branch has 3 local commits"},
+		{"an eval branch with no report", ledger.Entry{Status: ledger.Finished, Branch: "eval/x"}, c(3, false), SweepNeedsLook, "on no remote"},
+		{"a poc branch with a report", ledger.Entry{Status: ledger.Finished, Branch: "poc/x", FinalReport: "r"}, c(1, false), SweepDelivered, "work delivered in the report"},
+		{"a docs branch is work to land", ledger.Entry{Status: ledger.Finished, Branch: "docs/x", FinalReport: "r"}, c(1, false), SweepNeedsLook, "on no remote"},
 		{"a prefix does not override a declared purpose", ledger.Entry{Status: ledger.Finished, Branch: "research/x", Purpose: "work", FinalReport: "r"}, c(2, false), SweepNeedsLook, "on no remote"},
 	}
 	for _, tc := range cases {

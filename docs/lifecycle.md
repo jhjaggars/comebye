@@ -163,7 +163,13 @@ minutes of a hand-run sweep, because nobody is watching this one.
 ## Workflows
 
 The workflow is a property of the handoff (`comebye handoff --workflow
-TYPE`, recorded on the ledger entry and on its backlog item). Every
+TYPE`, recorded on the ledger entry and on its backlog item). Built today:
+`--workflow` is an alias of `--purpose`, which takes the report-only kinds
+(research, plan, review, spike, poc, eval, test; `smoke` is `test`) and is
+recorded as the entry's `purpose`. Left out, the hub infers it from the
+branch prefix and records `purpose_source: branch` (or `none`: work meant to
+land); `ledger.EffectivePurpose` reads it, with the prefix as the fallback
+for older entries. Every
 workflow uses the shared parts: the report format and evidence grading,
 the report outcome, waits, history and notes, marking and removal. A
 workflow says which of the rest applies:

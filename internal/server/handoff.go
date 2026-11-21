@@ -320,8 +320,9 @@ type handoffBody struct {
 	Branch string `json:"branch"`
 	Base   string `json:"base"`
 	Kind   string `json:"kind"`
-	// Purpose: "research", "plan", "review" or "spike" for a branch that is
-	// not meant to merge (see ledger.Entry.Purpose); empty for ordinary work.
+	// Purpose: one of ledger.DisposablePurposes for a branch that is not
+	// meant to merge (see ledger.Entry.Purpose); empty for ordinary work, or
+	// to infer it from the branch prefix (ledger.InferPurpose).
 	Purpose string `json:"purpose"`
 	// Loop: what a looping worker (a PR watcher) keeps doing; the hub nudges
 	// it when it goes idle with no loop running (see ledger.Entry.Loop).
@@ -370,6 +371,7 @@ func (s *Server) handleHandoff(w http.ResponseWriter, r *http.Request) {
 	if b.Host == "" {
 		b.Host = s.fleet.LocalName()
 	}
+	b.Purpose = ledger.NormalizePurpose(b.Purpose) // "smoke" is "test"
 	switch {
 	case !s.knownHost(b.Host):
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "unknown_host", "message": "no such host"})
@@ -545,9 +547,10 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 		got, _, err := s.ledger.Update(queued.ID, func(x *ledger.Entry) { *x = e })
 		return got, err
 	}
+	purpose, purposeSrc := ledger.InferPurpose(b.Purpose, branch)
 	e := ledger.Entry{
 		Host: b.Host, Repo: filepath.Clean(b.Repo), RepoName: repoName, Branch: branch, Base: strings.TrimSpace(b.Base),
-		Kind: b.Kind, Purpose: b.Purpose, Loop: cleanLoop(b.Loop), Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking),
+		Kind: b.Kind, Purpose: purpose, PurposeSource: purposeSrc, Loop: cleanLoop(b.Loop), Model: strings.TrimSpace(b.Model), Thinking: strings.TrimSpace(b.Thinking),
 		Brief: strings.TrimSpace(b.Brief), From: from, ReplyTo: reply, PlanID: b.Plan,
 	}
 	if lerr != nil {

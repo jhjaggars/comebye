@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -77,10 +78,17 @@ type Entry struct {
 	Base             string   `json:"base,omitempty"`
 	Kind             string   `json:"kind,omitempty"`
 	// Purpose says what the work is for when the branch is not meant to
-	// merge: "research", "plan", "review" or "spike" (see
-	// DisposablePurposes). Its output is the worker's report; the sweep
-	// lists such a worker apart once it has reported, instead of "unmerged".
+	// merge: one of DisposablePurposes ("research", "plan", "poc", …). Its
+	// output is the worker's report; the board shows it under Reports and
+	// the sweep lists it apart once it has reported, instead of "unmerged".
+	// Empty: work meant to land. Read it through EffectivePurpose, which
+	// falls back to the branch prefix for entries from before PurposeSource.
 	Purpose string `json:"purpose,omitempty"`
+	// PurposeSource says where Purpose came from: "flag" (the handoff's
+	// --purpose), "branch" (inferred from the branch prefix) or "none" (no
+	// purpose passed and no prefix matched: work meant to land). Empty: an
+	// entry from before it was recorded.
+	PurposeSource string `json:"purpose_source,omitempty"`
 	// Loop says the worker is meant to keep looping (a PR watcher): a short
 	// description of what it keeps doing, from `comebye handoff --loop`. The
 	// hub nudges a worker with a loop that goes idle with nothing running
@@ -1520,14 +1528,80 @@ func Truncate(s string, n int) string {
 
 // DisposablePurposes are the handoff purposes whose branch is not meant to
 // merge: the report is the deliverable.
-var DisposablePurposes = []string{"research", "plan", "review", "spike"}
+var DisposablePurposes = []string{"research", "plan", "review", "spike", "poc", "eval", "test"}
 
-// DisposablePurpose reports whether p is one of them.
+// purposeAliases are other names accepted for a purpose.
+var purposeAliases = map[string]string{"smoke": "test"}
+
+// NormalizePurpose maps an alias ("smoke") to its purpose and trims p;
+// anything else is returned as is.
+func NormalizePurpose(p string) string {
+	p = strings.TrimSpace(p)
+	if a, ok := purposeAliases[p]; ok {
+		return a
+	}
+	return p
+}
+
+// DisposablePurpose reports whether p is one of them (or an alias of one).
 func DisposablePurpose(p string) bool {
-	for _, d := range DisposablePurposes {
-		if p == d {
-			return true
+	return slices.Contains(DisposablePurposes, NormalizePurpose(p))
+}
+
+// Where an entry's purpose came from (Entry.PurposeSource).
+const (
+	PurposeFromFlag   = "flag"
+	PurposeFromBranch = "branch"
+	PurposeFromNone   = "none"
+)
+
+// purposePrefixes are the branch prefixes that, absent a declared purpose,
+// say the branch is not meant to merge, and the purpose each one implies.
+// docs/ is work to land, so it is not here.
+var purposePrefixes = []struct{ prefix, purpose string }{
+	{"research/", "research"}, {"investigate/", "research"},
+	{"plan/", "plan"}, {"rfc/", "plan"}, {"rfc-", "plan"}, {"spec/", "plan"},
+	{"review/", "review"}, {"audit/", "review"},
+	{"spike/", "spike"},
+	{"poc/", "poc"}, {"proto/", "poc"},
+	{"eval/", "eval"},
+	{"test/", "test"}, {"smoke/", "test"},
+}
+
+// BranchPurpose is the purpose the branch name implies, or "" for work
+// meant to land.
+func BranchPurpose(branch string) string {
+	for _, p := range purposePrefixes {
+		if strings.HasPrefix(branch, p.prefix) {
+			return p.purpose
 		}
 	}
-	return false
+	return ""
 }
+
+// InferPurpose is the purpose a handoff records, and its source: the
+// declared one when it names one, else what the branch prefix implies.
+func InferPurpose(declared, branch string) (purpose, source string) {
+	if d := NormalizePurpose(declared); d != "" {
+		return d, PurposeFromFlag
+	}
+	if p := BranchPurpose(branch); p != "" {
+		return p, PurposeFromBranch
+	}
+	return "", PurposeFromNone
+}
+
+// PurposeOf is the purpose of work with this recorded purpose and branch:
+// the recorded one, else (an entry from before purposes were recorded at
+// handoff, or one recorded as "none") the branch prefix's. "" means work
+// meant to land.
+func PurposeOf(purpose, branch string) string {
+	if p := NormalizePurpose(purpose); p != "" {
+		return p
+	}
+	return BranchPurpose(branch)
+}
+
+// EffectivePurpose is PurposeOf for an entry. The board, the sweep and
+// the land command read it instead of e.Purpose.
+func EffectivePurpose(e Entry) string { return PurposeOf(e.Purpose, e.Branch) }

@@ -23,7 +23,7 @@ import (
 const (
 	SweepReady     = "ready"      // marked (or would be, in a dry run)
 	SweepNeedsLook = "needs_look" // not marked: a person or the coordinator decides
-	// SweepDelivered: a research / plan / review / spike worker that has
+	// SweepDelivered: a report-only (research, plan, poc, eval, …) worker that has
 	// reported; its branch has local work nobody meant to merge. Never
 	// marked unless asked (mark_delivered): the user sees it first.
 	SweepDelivered = "delivered"
@@ -94,26 +94,12 @@ type sweepCandidate struct {
 	adHoc bool             // no live handoff: the entry is made from the agent
 }
 
-// disposableBranchPrefixes are branch prefixes that, absent a declared
-// purpose, suggest a branch not meant to merge. A hint only: it puts a
-// worker in the "delivered" group for the user to see, never marks it.
-var disposableBranchPrefixes = []string{"research/", "plan/", "review/", "spike/", "investigate/"}
-
 // sweepDisposable says whether the worker's branch was never meant to
-// merge: declared on the handoff, else guessed from the branch name.
+// merge: declared on the handoff, else guessed from the branch name
+// (ledger.EffectivePurpose). It puts a worker in the "delivered" group for
+// the user to see, never marks it.
 func sweepDisposable(e ledger.Entry) bool {
-	if ledger.DisposablePurpose(e.Purpose) {
-		return true
-	}
-	if e.Purpose != "" {
-		return false
-	}
-	for _, p := range disposableBranchPrefixes {
-		if strings.HasPrefix(e.Branch, p) {
-			return true
-		}
-	}
-	return false
+	return ledger.DisposablePurpose(ledger.EffectivePurpose(e))
 }
 
 // dirtyFiles names the uncommitted files (porcelain status lines) for a
@@ -200,7 +186,7 @@ func sweepClassify(e ledger.Entry, live *herdr.AgentInfo, c *worktreeChecks, che
 	return SweepReady, sweepReason(e, c)
 }
 
-// sweepDelivered: a research / plan / review / spike worker that
+// sweepDelivered: a report-only (research, plan, poc, eval, …) worker that
 // reported and whose branch holds work the base lacks. Its output is the
 // report; the branch is the user's to discard after seeing it.
 func sweepDelivered(e ledger.Entry, c *worktreeChecks) bool {

@@ -198,8 +198,8 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	needs := lane(laneNeeds, "Needs you", "Open to-do items (a rollout of a tagged release is under Waiting on others), and running handoffs whose agent is stuck on a dialog.")
 	running := lane(laneRunning, "Running", "Handoffs in state running whose agent is not stuck on a dialog.")
 	waiting := lane(laneWaiting, "Waiting on others", "Handoffs queued behind earlier steps (state waiting), and tagged releases still rolling out.")
-	landing := lane(laneLanding, "Ready to land, or landing", "Finished handoffs whose work is meant to merge (not a research, plan, review or spike) and that are not marked, and handoffs in state landing.")
-	reports := lane(laneReports, "Reports to read", "Finished research, plan, review and spike handoffs that are not marked ready to remove: their work is the report (and the Pages published for it), not a branch to merge.")
+	landing := lane(laneLanding, "Ready to land, or landing", "Finished handoffs whose work is meant to merge (not research, plan, review, spike, poc, eval or test work, declared or from the branch name) and that are not marked, and handoffs in state landing.")
+	reports := lane(laneReports, "Reports to read", "Finished research, plan, review, spike, poc, eval and test handoffs (declared, or from the branch name) that are not marked ready to remove: their work is the report (and the Pages published for it), not a branch to merge.")
 	landed := lane(laneLanded, "Landed, recent", "Handoffs the hub found in the base (landed, or marked ready to remove after landing) within the last 48 hours.")
 	// add keeps every item; the lanes are sorted and cut to boardMaxItems
 	// afterwards, so the cut never drops the newest.
@@ -304,10 +304,10 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case e.Mark != nil:
 				view.Loose.ReadyToRemove++
-			case ledger.DisposablePurpose(e.Purpose):
+			case ledger.DisposablePurpose(ledger.EffectivePurpose(e)):
 				it.Report = e.FinalReport != ""
 				it.Pages = pagesOf[e.ID]
-				it.Kind = e.Purpose
+				it.Kind = ledger.EffectivePurpose(e)
 				add(reports, it)
 			default:
 				add(landing, it)
