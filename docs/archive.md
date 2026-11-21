@@ -310,7 +310,7 @@ comebye archive run && comebye archive index --all-hosts --if-changed
 
 Start it under `flock -n`, so that a tick finding the last one still going exits at
 once. `flock -n -E 0` makes that exit count as success, which keeps the unit from
-reading as failed. As systemd user units, for example (paths and the environment file
+reading as failed. `deploy/` does not ship these units; as systemd user units, for example (paths and the environment file
 are this machine's; the `Description` should say how often it really runs):
 
 ```ini
