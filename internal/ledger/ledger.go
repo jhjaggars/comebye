@@ -187,7 +187,8 @@ type AutoRemoval struct {
 	// Landed says how the work was found in the base: "in origin/main" or
 	// "merged as PR #N" or "no commits".
 	Landed string `json:"landed,omitempty"`
-	// WorktreeRemoved: the worktree went (the branch is never deleted);
+	// WorktreeRemoved: the worktree went, and its local branch with it
+	// (every commit was in the base; the remote branch is not touched);
 	// false means it was kept, with Kept saying why.
 	WorktreeRemoved bool   `json:"worktree_removed"`
 	Kept            string `json:"kept,omitempty"`

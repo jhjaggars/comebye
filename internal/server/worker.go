@@ -626,9 +626,11 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 
 // removeSession closes the agent's workspace when nothing else lives in it
 // (never a repository's primary workspace), else just its pane; then, when
-// asked, removes the worktree if it is clean, merged and unused. Branches
-// are deleted only by a discard, which removes an unused worktree whatever
-// its state.
+// asked, removes the worktree if it is clean, merged and unused. The local
+// branch goes with the worktree when every commit is in the base, and a
+// discard (which removes an unused worktree whatever its state) deletes it
+// too. A remote branch is never deleted here: only the landing worker, or the
+// sweep loop when it proves the branch stale, deletes one.
 func (s *Server) removeSession(ctx context.Context, b removeBody) (*removeResult, *launchError) {
 	roots := s.checkRoots()
 	if len(roots) == 0 {

@@ -75,8 +75,15 @@ type Record struct {
 	Landed       string `json:"landed,omitempty"`
 }
 
+// WhyAutoRemoved is the Why of the record an automatic removal leaves: history
+// for "Recently closed", not a parked agent.
+const WhyAutoRemoved = "auto_removed"
+
 // Parked reports whether the agent is still closed.
 func (r Record) Parked() bool { return r.ResumedAt == nil }
+
+// AutoRemoved reports whether the record was left by an automatic removal.
+func (r Record) AutoRemoved() bool { return r.Why == WhyAutoRemoved }
 
 // Launch is how an agent was started: its kind and arguments (without the
 // first prompt), kept so a resume can start it the same way.
@@ -226,6 +233,11 @@ func (s *Store) Prune(keep time.Duration, now time.Time) {
 	kept := s.f.Records[:0]
 	for _, r := range s.f.Records {
 		if r.ResumedAt != nil && now.Sub(*r.ResumedAt) > keep {
+			continue
+		}
+		// An automatic removal's record is history: it goes after keep too,
+		// so it stops counting as a parked agent (a pinned one stays).
+		if r.AutoRemoved() && !r.Pinned && now.Sub(r.ParkedAt) > keep {
 			continue
 		}
 		kept = append(kept, r)

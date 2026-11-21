@@ -658,10 +658,13 @@ is not offered: the user's answer, or the session's own work, comes first.
 the session replies; a re-ask that gets no answer leaves it with a note. The
 hub also re-asks by itself, once an idle session is free, when a LEFT
 answer is **older than an event that touches one of its items** (a PR merged,
-a to-do closed after the answer) or, while still unresolved, **older than 12
-hours**. It is rate limited: at most one ask of a mark per 30 minutes and
-three automatic re-asks per mark. A working or blocked session waits until
-it is idle. A NOTHING LEFT answer is not re-asked on its own.
+a to-do closed after the answer) or, while still unresolved, **older than 1
+hour** (`reaskCap = time.Hour`, `internal/server/askcheck.go`). It is rate
+limited: at most one ask of a mark per 30 minutes and three automatic re-asks
+per mark. A working or blocked session waits until it is idle. A NOTHING LEFT
+answer is not re-asked on its own, except that a stale one is asked again
+right before an automatic removal (`autoremove.go`); that ask is outside the
+cap of three.
 
 *Limits:* a pid is only "alive" or "dead"; a reused pid reads as alive (the
 item stays a warning). `gh` must be logged in on the session's host or the PR

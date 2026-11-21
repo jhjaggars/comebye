@@ -12,6 +12,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/park"
 )
 
 // Automatic removal. A worker that is marked ready to remove (by its
@@ -33,10 +34,12 @@ import (
 //
 // Anything else stays in the review exactly as before. The removal itself is
 // the ordinary one (removeSession), which keeps the worktree whenever anything
-// is unmerged and never deletes a branch. Each auto-removal is audited,
-// reported to the coordinator in the digest, and listed in the review for a
-// day with an Undo (autoremoveundo: the branch is still there, so the worktree
-// is recreated and a fresh worker started on it).
+// is unmerged; when it removes the worktree, the local branch goes with it,
+// since every commit is in the base. The remote branch is not touched. Each
+// auto-removal is audited, reported to the coordinator in the digest, and
+// listed in the review for a day with an Undo (handleUndoAutoRemove: the
+// session is resumed from its park record, which recreates the worktree from
+// the branch or from where the work landed, else a fresh worker is started).
 
 const (
 	// autoRemoveEvery is how often one marked worker is looked at again.
@@ -265,7 +268,7 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 		return false
 	}
 	how := inBaseHow(it.Checks)
-	it.recordPark = "auto_removed"
+	it.recordPark = park.WhyAutoRemoved
 	o := s.confirmOne(ctx, it, false, "")
 	if !o.OK {
 		log.Printf("auto remove of %s: %s: %s", it.ID, o.Code, o.Message)

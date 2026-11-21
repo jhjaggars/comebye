@@ -56,6 +56,26 @@ func TestParkRetentionProposesOnceAndSkipsPinned(t *testing.T) {
 	}
 }
 
+func TestParkRetentionLeavesAutoRemovedRecords(t *testing.T) {
+	r, _ := newPQRig(t)
+	r.s.cfg.ParkRetention = 14 * 24 * time.Hour
+	now := time.Now()
+	for _, rec := range []park.Record{
+		{ID: "pk_auto000001", Name: "closed", Kind: "claude", Host: "desk", Worktree: "/wt/closed", Why: park.WhyAutoRemoved, WorktreeGone: true, ParkedAt: now.Add(-15 * 24 * time.Hour)},
+		{ID: "pk_plain00001", Name: "parked", Kind: "claude", Host: "desk", Worktree: "/wt/parked", Why: "idle", ParkedAt: now.Add(-15 * 24 * time.Hour)},
+	} {
+		if err := r.s.parkStore().Add(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := r.s.parkRetentionStep(now); n != 1 {
+		t.Fatalf("proposed %d, want 1", n)
+	}
+	if marks := r.s.ledger.Marks(); len(marks) != 1 || marks[0].Name != "parked" {
+		t.Fatalf("marks = %+v", marks)
+	}
+}
+
 func TestParkRetentionMarksTheWorkersEntry(t *testing.T) {
 	r, _ := newPQRig(t)
 	r.s.cfg.ParkRetention = 14 * 24 * time.Hour

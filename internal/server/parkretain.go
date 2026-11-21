@@ -110,7 +110,9 @@ func (s *Server) RunParkRetention(ctx context.Context) {
 }
 
 // parkRetentionStep proposes the removal of every parked agent past retention
-// that is not pinned and was not proposed before. It returns how many.
+// that is not pinned and was not proposed before. It returns how many. A record
+// an automatic removal left (Recently closed) is history, not a parked agent,
+// and is never proposed: park.Store.Prune drops it after 30 days.
 func (s *Server) parkRetentionStep(now time.Time) int {
 	p := s.proposed()
 	if s.cfg.ParkRetention <= 0 || s.ledger == nil || p == nil {
@@ -124,7 +126,7 @@ func (s *Server) parkRetentionStep(now time.Time) int {
 	n := 0
 	for _, pr := range recs {
 		r := pr.Rec
-		if !r.Parked() || r.Pinned || now.Sub(r.ParkedAt) < s.cfg.ParkRetention || p.has(r.ID) {
+		if !r.Parked() || r.AutoRemoved() || r.Pinned || now.Sub(r.ParkedAt) < s.cfg.ParkRetention || p.has(r.ID) {
 			continue
 		}
 		days := int(now.Sub(r.ParkedAt).Hours() / 24)

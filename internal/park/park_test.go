@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -201,5 +202,33 @@ func TestRestartArgs(t *testing.T) {
 		if _, err := RestartArgs(bad[0], []string{bad[0]}, bad[1], bad[2]); err == nil {
 			t.Errorf("RestartArgs(%v) accepted", bad)
 		}
+	}
+}
+
+func TestPruneDropsOldAutoRemovedRecords(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	day := 24 * time.Hour
+	for _, r := range []Record{
+		{ID: NewID(), Name: "auto-old", Why: WhyAutoRemoved, ParkedAt: now.Add(-31 * day)},
+		{ID: NewID(), Name: "auto-young", Why: WhyAutoRemoved, ParkedAt: now.Add(-29 * day)},
+		{ID: NewID(), Name: "auto-pinned", Why: WhyAutoRemoved, ParkedAt: now.Add(-31 * day), Pinned: true},
+		{ID: NewID(), Name: "parked-old", Why: "idle", ParkedAt: now.Add(-31 * day)},
+	} {
+		if err := s.Add(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Prune(30*day, now)
+	var got []string
+	for _, r := range s.List(false) {
+		got = append(got, r.Name)
+	}
+	sort.Strings(got)
+	if want := []string{"auto-pinned", "auto-young", "parked-old"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after prune = %v, want %v", got, want)
 	}
 }

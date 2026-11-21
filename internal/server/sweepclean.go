@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/park"
 )
 
 // The sweep loop's clean-up (see sweeploop.go): remove a marked session when the
@@ -143,7 +144,7 @@ func (s *Server) sweepCleanOne(ctx context.Context, it *removal, now time.Time) 
 		tip = it.Checks.Tip
 	}
 	if it.Live.Present && it.Checks.Origin != nil && it.Checks.Origin.Records {
-		it.recordPark = "auto_removed" // a live session can be resumed from Recently closed
+		it.recordPark = park.WhyAutoRemoved // a live session can be resumed from Recently closed
 	}
 	o := s.confirmOne(ctx, it, false, "")
 	label := orDefault(it.Name, it.EntryID)

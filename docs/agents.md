@@ -282,7 +282,8 @@ session answered SAFE (not "did not answer", UNSAFE or unchecked); no open
 to-do waits on it and it has no queued prompts; it is not a coordinator and
 is not working, blocked or running a background task. Anything else stays in
 the review as before. The removal keeps the worktree whenever anything is
-unmerged and never deletes a branch. Each one writes an audit entry
+unmerged; when the worktree goes, its local branch goes with it (every commit
+is in the base), and the remote branch is not touched. Each one writes an audit entry
 (`worker.auto_remove`), puts "removed X automatically: landed, clean, SAFE" in
 the coordinator's digest, and is listed in the review for a day with an
 **Undo**. Every
