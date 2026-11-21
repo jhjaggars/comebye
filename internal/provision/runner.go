@@ -61,7 +61,10 @@ func childEnv(environ []string) []string {
 		case "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TZ", "SHELL":
 			return true
 		}
-		for _, p := range []string{"XDG_", "AWS_", "CLOUDSDK_", "GOOGLE_", "GCLOUD_", "OPENSHELL_"} {
+		// kubectl and virtctl (the kubevirt provider) find their cluster by
+		// KUBECONFIG; a service that sets it and has no ~/.kube/config would
+		// otherwise reach "localhost:8080: connection refused".
+		for _, p := range []string{"KUBECONFIG", "KUBECACHEDIR", "KUBECTL_", "KUBE_", "XDG_", "AWS_", "CLOUDSDK_", "GOOGLE_", "GCLOUD_", "OPENSHELL_"} {
 			if strings.HasPrefix(k, p) {
 				return true
 			}

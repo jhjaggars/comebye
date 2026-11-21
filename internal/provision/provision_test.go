@@ -238,3 +238,29 @@ func TestToolSerialisesRunsOfOneKind(t *testing.T) {
 		t.Errorf("two runs overlapped: %v", strings.Fields(string(b)))
 	}
 }
+
+func TestChildEnvKeepsWhatKubectlNeedsAndDropsComebyesOwn(t *testing.T) {
+	got := strings.Join(childEnv([]string{"PATH=/bin", "HOME=/h", "KUBECONFIG=/h/.kube/config.k3s", "COMEBYE_AGENT_TOKEN=x", "COMEBYE_HUB=https://h", "AWS_PROFILE=p"}), " ")
+	for _, want := range []string{"KUBECONFIG=/h/.kube/config.k3s", "PATH=/bin", "HOME=/h", "AWS_PROFILE=p"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q dropped: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "COMEBYE_") {
+		t.Errorf("comebye's own variables reached the tool: %s", got)
+	}
+}
+
+func TestStatusReachesTheClusterThroughKubeconfig(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "worker")
+	script := "#!/bin/sh\n[ -n \"$KUBECONFIG\" ] || { echo 'dial tcp [::1]:8080: connection refused' >&2; exit 1; }\n" +
+		`echo '{"v":1,"provider":"kubevirt","workers":[{"name":"kv1","state":"STOPPED","managed":true}]}'` + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tool := &Tool{Bin: bin, Config: "/x", Environ: func() []string { return []string{"PATH=/usr/bin:/bin", "KUBECONFIG=/h/.kube/config.k3s"} }}
+	ws, err := tool.Status(context.Background())
+	if err != nil || len(ws) != 1 || ws[0].State != "STOPPED" {
+		t.Fatalf("%v %v", ws, err)
+	}
+}
