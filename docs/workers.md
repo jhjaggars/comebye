@@ -411,6 +411,32 @@ Sign in with `worker login NAME claude` (and `codex`), then use comebye as
 usual. Git push credentials are yours to arrange (a per-repo deploy key, or a
 temporary `gh auth login --web` on the VM).
 
+## Bringing a branch back from a worker that cannot push
+
+A worker keeps no GitHub login: its agents commit locally, under `/data/code` and
+`/data/worktrees`. The machine running this tool, which holds the push credentials,
+brings the work back:
+
+```sh
+go run ./tools/worker [-config FILE] fetch NAME BRANCH [--repo DIR] [--remote-repo REPO] [--push] [--force]
+```
+
+It fetches `refs/heads/BRANCH` from `/data/code/REPO` on the worker over this tool's own
+ssh config for it (strict host key, our key only) into the local repository (`--repo`,
+default the current directory; REPO defaults to its name), and with `--push` sends it to
+`origin`. It refuses:
+
+- a NAME this tool has no ssh config for (it is not a worker it made);
+- the default branch (`main`, `master`, and `origin`'s HEAD), and any name that is not a
+  plain branch name;
+- a branch checked out in a local worktree, when it would have to move;
+- a local or `origin` tip that is not an ancestor of the worker's. `--force` replaces it,
+  leased on the tip it saw (`update-ref` with the old value, `push --force-with-lease`),
+  so a tip that moved in between is never lost.
+
+The hub does not run this by itself yet: the coordinator runs it when such a worker
+reports.
+
 ## Sessions and the archive
 
 A worker's sessions are on its boot disk (`~/.pi/agent/sessions`, and
