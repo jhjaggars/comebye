@@ -69,6 +69,12 @@ type fullLister interface {
 	AllInst(ctx context.Context) ([]Inst, error)
 }
 
+// diskReporter is a provider that can say what state a worker's disks are
+// in, for `worker status NAME` (one line per disk, read-only).
+type diskReporter interface {
+	DiskLines(ctx context.Context, name string) []string
+}
+
 func newProvider(r Runner, c *Config) Provider {
 	if c.Provider == "openshell" {
 		return &openshellProv{cli: &osCLI{r: r, cfg: c}, cfg: c, wait: func(s int) { time.Sleep(time.Duration(s) * time.Second) }}

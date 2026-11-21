@@ -534,6 +534,14 @@ homelab repo's `k3s-manifests/` and are not made by this tool.
   **`destroy`** deletes the VM (its boot disk goes with it) and the Secret; the data DataVolume
   stays unless `--delete-data-disk`. Every change first checks the `managed-by=comebye-worker`
   label and refuses an object without it.
+- **`status NAME`** shows the VM's state (an idle poweroff reads `STOPPED`; `start` brings it
+  back), its node and pod IP while running, a line per disk (`kv1-boot`, deleted with the VM;
+  `kv1-data`, kept by `destroy`) with the claim's phase, size and class and the DataVolume's
+  phase, and the archive host `NAME.UID`: the instance id is the VM's `metadata.uid`, which a stop
+  and start keep and a new VM of the same name does not reuse. `status --json` carries the same
+  id and the VM's creation time; there is no price, so `mode` is absent. `destroy` of a stopped
+  VM refuses with nothing changed until it is started (its sessions are on its disk), or
+  `--no-archive` is passed.
 - **`create NAME --dry-run`** prints the plan, then the DataVolume, Secret and VirtualMachine
   it would apply (every object labelled `managed-by=comebye-worker`; the Secret's host key is
   a placeholder). It reads the cluster with `kubectl get` only, and exits non-zero when the

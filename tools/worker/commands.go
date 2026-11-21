@@ -618,6 +618,11 @@ func (e *env) status(ctx context.Context, name string) error {
 	if inst.Note != "" {
 		e.printf("            %s\n", inst.Note)
 	}
+	if dr, ok := e.prov().(diskReporter); ok {
+		for _, l := range dr.DiskLines(ctx, name) {
+			e.printf("%s\n", l)
+		}
+	}
 	e.printf("archive     host %s\n", archive.WorkerHost(name, inst.ID))
 	if inst.State == stateRunning {
 		if err := e.connect(ctx, name); err != nil {

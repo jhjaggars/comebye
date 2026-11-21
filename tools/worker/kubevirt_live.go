@@ -370,3 +370,72 @@ func (p *kubevirtProv) List(ctx context.Context, w logf) error {
 }
 
 func (p *kubevirtProv) CleanupNetwork(context.Context, logf) error { return nil }
+
+// DiskLines says, for status, where each disk is: the claim's phase, size and
+// class, and the DataVolume's phase (an import or clone in progress shows
+// here). A disk that cannot be read says so; nothing here changes anything.
+func (p *kubevirtProv) DiskLines(ctx context.Context, name string) []string {
+	var res []string
+	for _, d := range []struct{ label, obj, keep string }{
+		{"boot disk", bootDVName(name), "deleted with the VM"},
+		{"data disk", dataDVName(name), "kept by destroy unless --delete-data-disk"},
+	} {
+		res = append(res, fmt.Sprintf("%-11s %s: %s (%s)", d.label, d.obj, p.diskState(ctx, d.obj), d.keep))
+	}
+	return res
+}
+
+func (p *kubevirtProv) diskState(ctx context.Context, obj string) string {
+	notFound := func(errOut string, err error) bool {
+		return strings.Contains(errOut+err.Error(), "NotFound") || strings.Contains(errOut, "not found")
+	}
+	var parts []string
+	out, errOut, err := p.k.kubectl(ctx, p.k.ns("get", "pvc", obj, "-o", "json")...)
+	switch {
+	case err == nil:
+		var c struct {
+			Spec struct {
+				StorageClassName string `json:"storageClassName"`
+			}
+			Status struct {
+				Phase    string
+				Capacity map[string]string
+			}
+		}
+		if json.Unmarshal([]byte(out), &c) != nil {
+			parts = append(parts, "claim unreadable")
+			break
+		}
+		s := "claim " + orDash(c.Status.Phase)
+		if size := c.Status.Capacity["storage"]; size != "" {
+			s += ", " + size
+		}
+		if c.Spec.StorageClassName != "" {
+			s += " on " + c.Spec.StorageClassName
+		}
+		parts = append(parts, s)
+	case notFound(errOut, err):
+		parts = append(parts, "no claim")
+	default:
+		parts = append(parts, "claim: "+firstLine(errOut))
+	}
+	out, errOut, err = p.k.kubectl(ctx, p.k.ns("get", "datavolume", obj, "-o", "json")...)
+	switch {
+	case err == nil:
+		var dv struct {
+			Status struct{ Phase, Progress string }
+		}
+		if json.Unmarshal([]byte(out), &dv) == nil && dv.Status.Phase != "" {
+			s := "DataVolume " + dv.Status.Phase
+			if dv.Status.Phase != "Succeeded" && dv.Status.Progress != "" && dv.Status.Progress != "N/A" {
+				s += " " + dv.Status.Progress
+			}
+			parts = append(parts, s)
+		}
+	case notFound(errOut, err):
+		// CDI may delete a finished DataVolume and leave the claim.
+	default:
+		parts = append(parts, "DataVolume: "+firstLine(errOut))
+	}
+	return strings.Join(parts, ", ")
+}
