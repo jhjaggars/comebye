@@ -14,7 +14,7 @@
 // With --agent, it also opens that agent's chat at 360px wide, checks the
 // page does not scroll sideways, and optionally saves a screenshot.
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,7 +29,8 @@ if (!base) {
   process.exit(2);
 }
 const chromeBin = opt("chrome", process.env.CHROME || "google-chrome");
-const port = Number(opt("port", "19733"));
+// 0 (the default): Chrome picks a free port and says which in its profile (no clash with another suite).
+const port = Number(opt("port", "0"));
 const agent = opt("agent");
 const shot = opt("screenshot");
 
@@ -216,19 +217,61 @@ async function waitFor(c, expr, ms = 10000) {
   throw new Error("timed out waiting for " + expr);
 }
 
+// Starts Chrome and answers it with its DevTools port. Chrome writes the port it listens on to DevToolsActivePort in
+// its profile, so the wait is for that file (and an answer on the port), or for Chrome to exit. The first Chrome on a
+// fresh CI runner can take more than 10 s to start (its files are not in the page cache yet; a passing CI run spent 12 s in this script),
+// so it gets 60 s; one that exits first is started once more on a fresh profile, and its last stderr says why.
+async function startChrome() {
+  let why = "";
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const profile = mkdtempSync(join(tmpdir(), "mdtest-chrome-"));
+    const chrome = spawn(chromeBin, [
+      "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
+      "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox", "about:blank",
+    ], { stdio: ["ignore", "ignore", "pipe"], detached: true }); // its own process group: its helpers are stopped with it
+    let tail = "", exited = null;
+    chrome.stderr.on("data", (d) => { tail = (tail + d).slice(-2000); });
+    chrome.on("exit", (code, sig) => { exited = sig || "code " + code; });
+    chrome.on("error", (e) => { exited = e.message; });
+    const end = Date.now() + 60000;
+    while (exited === null && Date.now() < end) {
+      let p = 0;
+      try { p = Number(readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]); } catch {}
+      if (p) {
+        try { if ((await fetch(`http://127.0.0.1:${p}/json/version`)).ok) return { chrome, profile, port: p }; } catch {}
+      }
+      await sleep(100);
+    }
+    await stopChrome({ chrome, profile });
+    why = (exited === null ? "chrome did not start in 60 s" : `chrome exited (${exited}) before it listened`) + (tail ? ":\n" + tail.trim() : "");
+    if (exited === null) break; // a Chrome that hangs would hang again: say so now
+    console.error(`markdown: ${why}\nmarkdown: starting Chrome again (attempt ${attempt + 1})`);
+  }
+  throw new Error(why);
+}
+
+// Stops Chrome and its helpers (the crash handler, the utility processes: they outlive the main process and write
+// to the profile) and waits for them before the profile is removed. A profile that still cannot be removed is left
+// behind with a warning: cleanup must not fail checks that passed.
+async function stopChrome({ chrome, profile }) {
+  const group = (sig) => { try { process.kill(-chrome.pid, sig); return true; } catch { return false; } };
+  group("SIGTERM");
+  for (let i = 0; i < 50 && group(0); i++) await sleep(100);
+  group("SIGKILL");
+  for (let i = 0; i < 20 && group(0); i++) await sleep(100);
+  for (let i = 0; ; i++) {
+    try { rmSync(profile, { recursive: true, force: true }); return; } catch (e) {
+      if (i >= 10) { console.error(`markdown: left ${profile} behind: ${e.code || e.message}`); return; }
+      await sleep(200);
+    }
+  }
+}
+
 async function main() {
-  const profile = mkdtempSync(join(tmpdir(), "mdtest-chrome-"));
-  const chrome = spawn(chromeBin, [
-    "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
-    "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox", "about:blank",
-  ], { stdio: "ignore" });
+  const browser = await startChrome();
+  const port = browser.port;
   let failed = 0;
   try {
-    let ver;
-    for (let i = 0; i < 100 && !ver; i++) {
-      try { ver = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); } catch { await sleep(100); }
-    }
-    if (!ver) throw new Error("chrome did not start");
     const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: "PUT" })).json();
     const c = await cdp(target.webSocketDebuggerUrl);
     const dialogs = [];
@@ -299,9 +342,7 @@ async function main() {
     check(errors.length === 0, "no uncaught page errors (" + errors.join("; ") + ")");
     c.close();
   } finally {
-    chrome.kill("SIGTERM");
-    await sleep(300);
-    rmSync(profile, { recursive: true, force: true });
+    await stopChrome(browser);
   }
   console.log(failed ? `${failed} failed` : "all passed");
   process.exit(failed ? 1 : 0);

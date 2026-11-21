@@ -58,7 +58,23 @@ export COMEBYE_SCRATCH_DIR="$tmp/scratch"; mkdir -p "$COMEBYE_SCRATCH_DIR"
 mkdir -p "$out"
 # GPG unlock checks (gpgunlock.mjs, and the hub's relay) use a throwaway GNUPGHOME: never the user's own ~/.gnupg.
 export GNUPGHOME="$tmp/gnupg"; mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
-trap 'gpgconf --kill gpg-agent 2>/dev/null || true; kill $(jobs -p) 2>/dev/null || true; rm -rf "$tmp"' EXIT
+# On exit: stop the servers started here and wait for them to be gone before their directory is removed (a server
+# still writing its state while rm -rf runs makes "Directory not empty", and a failing trap fails a green run).
+cleanup() {
+  local pids i
+  gpgconf --kill gpg-agent 2>/dev/null || true
+  pids="$(jobs -p)"
+  if [ -n "$pids" ]; then
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    for i in $(seq 50); do kill -0 $pids 2>/dev/null || break; sleep 0.1; done # up to 5 s for a clean stop
+    kill -9 $pids 2>/dev/null || true
+    wait 2>/dev/null || true
+  fi
+  for i in 1 2 3; do rm -rf "$tmp" 2>/dev/null && return 0; sleep 0.5; done
+  echo "run.sh: could not remove $tmp (left behind)" >&2
+}
+trap cleanup EXIT
 
 (cd "$here" && [ -d node_modules/playwright-core ] || npm ci --no-audit --no-fund --silent)
 
@@ -95,8 +111,8 @@ rc=0
 if want drive; then node drive.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want coordnav; then node coordnav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 
-# Markdown rendering in the chat, in a real browser (its own debugging port, so suites side by side do not clash).
-if want markdown; then node "$root/web/test/markdown.test.mjs" "http://127.0.0.1:$port/" --chrome "${CHROME:-google-chrome}" --port $((port + 500)) || rc=1; fi
+# Markdown rendering in the chat, in a real browser (Chrome picks its own debugging port, so suites side by side do not clash).
+if want markdown; then node "$root/web/test/markdown.test.mjs" "http://127.0.0.1:$port/" --chrome "${CHROME:-google-chrome}" || rc=1; fi
 
 # Voice input (stt.mjs). The "not installed" and secure-context checks always
 # run, against the server above (no speech files in its state dir). The rest
