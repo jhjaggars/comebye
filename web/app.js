@@ -5438,7 +5438,7 @@ function askAge(iso) {
 // "Let it clean up" button tells it to do exactly that. Its text is the session's, escaped.
 const ASK_ITEM_CHIP = { resolved: "resolved", unresolved: "holds", unchecked: "can’t check" };
 // Who an unresolved item of a type waits on, when the type says so.
-const ASK_WAITS = { decision: "waits on you", cleanup: "agent can do it" };
+const ASK_WAITS = { decision: "waits on you", followup: "yours to do", cleanup: "agent can do it" };
 // loopNote says what the sweep loop did about an answer, and when ("the sweep, 2 h ago: deleted origin/x …").
 const loopNote = (l) => l ? `<div class="rv-ask-n rv-loop">Sweep · ${esc(askAge(l.at))}: ${esc(l.text)}</div>` : "";
 function reviewAskHTML(it, dis) {

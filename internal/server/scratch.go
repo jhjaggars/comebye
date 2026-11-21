@@ -196,6 +196,15 @@ func (s *Server) handleScratch(w http.ResponseWriter, r *http.Request) {
 
 var scratchPathRe = regexp.MustCompile(`/[A-Za-z0-9_./-]+`)
 
+// scratchDirOf is the session's Claude scratch project, which removing its
+// worktree deletes; "" when this server does not know it (another host's).
+func (s *Server) scratchDirOf(it *removal) string {
+	if s.cfg.ScratchDir == "" || it.Worktree == "" || it.Host != s.fleet.LocalName() {
+		return ""
+	}
+	return filepath.Join(s.scratchOpts(false).ClaudeRoot(), scratch.ProjectDir(it.Worktree))
+}
+
 // scratchItem says whether a leftover item is only about deleting the
 // session's own scratch directory: a deletion verb, no remote or branch talk,
 // and every absolute path it names is the session's Claude scratch project
@@ -204,10 +213,10 @@ var scratchPathRe = regexp.MustCompile(`/[A-Za-z0-9_./-]+`)
 // so the item is done by the removal; nothing else is ever named here. Only the
 // hub's own host is recognised, whose scratch root this server knows.
 func (s *Server) scratchItem(text string, it *removal) bool {
-	if s.cfg.ScratchDir == "" || it.Worktree == "" || it.Host != s.fleet.LocalName() || !deleteVerbRe.MatchString(text) || remoteWordRe.MatchString(text) {
+	dir := s.scratchDirOf(it)
+	if dir == "" || !deleteVerbRe.MatchString(text) || remoteWordRe.MatchString(text) {
 		return false
 	}
-	dir := filepath.Join(s.scratchOpts(false).ClaudeRoot(), scratch.ProjectDir(it.Worktree))
 	paths := scratchPathRe.FindAllString(text, -1)
 	if len(paths) == 0 {
 		return false

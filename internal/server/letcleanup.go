@@ -48,7 +48,7 @@ func cleanupItems(ar *askReview) ([]string, string) {
 	}
 	var out []string
 	for _, v := range ar.Items {
-		if v.Type == ledger.ItemCleanup && v.State != itemResolved {
+		if isCleanup(v.AskItem) && v.State != itemResolved {
 			out = append(out, orDefault(v.Text, "(no detail given)"))
 		}
 	}

@@ -84,7 +84,7 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		if !v.Stale {
 			continue
 		}
-		branch, ok := remoteBranchItem(v.Text, it.Branch)
+		branch, ok := staleTarget(v.AskItem, it.Branch)
 		if !ok {
 			continue
 		}
@@ -185,7 +185,7 @@ func staleDeletions(it *removal) []string {
 	if ar := it.AskReview; ar != nil && ar.StaleOnly {
 		for _, v := range ar.Items {
 			if v.Stale {
-				if b, ok := remoteBranchItem(v.Text, it.Branch); ok {
+				if b, ok := staleTarget(v.AskItem, it.Branch); ok {
 					out = append(out, "origin/"+b)
 				}
 			}

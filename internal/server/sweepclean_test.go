@@ -107,6 +107,7 @@ func TestSweepCleanKeepsASessionWhoseWorkIsNotInMain(t *testing.T) {
 // review with no To do.
 func TestSweepCleanKeepsAnUnsettledLeftover(t *testing.T) {
 	f := newGoneFix(t, true, "Stop the dev server I started (pid 4242).")
+	pidRunning(t, true)
 	if done := f.s.sweepCleanStep(ctx(), time.Now(), true); len(done) != 0 || f.status(t) != ledger.ReadyToRemove {
 		t.Fatalf("removed %+v, status %s", done, f.status(t))
 	}

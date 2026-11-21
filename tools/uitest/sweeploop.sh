@@ -4,8 +4,10 @@
 # "origin" in a temp dir (never a real remote), and a seeded ledger of finished workers:
 #   6 merged and clean (removed by the loop), 2 pushed but not merged, 1 dirty, 1 with local commits
 #   (all four stay), a poc/ and an eval/ branch with local commits and no recorded purpose (kept, and
-#   classed delivered by their prefix), and three marked sessions whose answer lists something left:
+#   classed delivered by their prefix), and four marked sessions whose answer lists something left:
 #   tool-runs-s6-keys (delete origin/<own branch>, in main: branch deleted, session removed),
+#   left-path-branch (a "path" in its own scratchpad and a "branch" item for its backup, in main:
+#   the path is settled by the removal, the branch deleted, the session removed),
 #   extra-commit (the same words but the backup has a commit main lacks: kept) and stop-server
 #   (a process to stop: kept).
 # The hub runs with -test-mode, so its loop ticks every second and a mark counts after 3 s. Then
@@ -63,14 +65,20 @@ git -C "$d/proj" worktree add -q -b feat/extra "$wt/extra" main
 echo one >"$wt/extra/one.txt"; git -C "$wt/extra" add .; git -C "$wt/extra" commit -q -m "part one"; git -C "$wt/extra" push -q origin feat/extra
 git -C "$d/proj" cherry-pick feat/extra >/dev/null; git -C "$d/proj" push -q origin main
 echo two >"$wt/extra/two.txt"; git -C "$wt/extra" add .; git -C "$wt/extra" commit -q -m "part two"; git -C "$wt/extra" push -q origin feat/extra
+# The typed leftovers: a backup in main, and a file in the session's scratchpad.
+git -C "$d/proj" worktree add -q -b feat/leftovers "$wt/lp" main
+echo lp >"$wt/lp/lp.txt"; git -C "$wt/lp" add .; git -C "$wt/lp" commit -q -m leftovers; git -C "$wt/lp" push -q origin feat/leftovers
+git -C "$d/proj" cherry-pick feat/leftovers >/dev/null; git -C "$d/proj" push -q origin main
+lp_pad="$d/scratch/claude-$(id -u)/$(printf '%s' "$wt/lp" | sed 's/[^A-Za-z0-9]/-/g')/s1/scratchpad"
+mkdir -p "$lp_pad"; echo x >"$lp_pad/shots.tar"; echo "$lp_pad/shots.tar" >"$d/lp_path"
 git -C "$d/proj" worktree add -q -b feat/server "$wt/server" main
 git -C "$d/proj" fetch -q origin
 echo "$B1" >"$d/b1"
 
 # --- the seeded ledger and the settings ---
 state="$d/state"; mkdir -p "$state"
-node - "$d" "$state" "${names[*]}" <<'JS'
-const [d, state, list] = process.argv.slice(2);
+node - "$d" "$state" "${names[*]}" "$(cat "$d/lp_path")" <<'JS'
+const [d, state, list, lpPath] = process.argv.slice(2);
 const fs = require("fs");
 const now = Date.now();
 const entries = list.split(" ").map((n, i) => ({
@@ -84,6 +92,9 @@ const left = [
   { n: "tool-runs-s6-keys", b: "feat/tool-runs-6-keyboard", dir: "s6", text: "Delete the backup branch `origin/feat/tool-runs-6-keyboard`. It still points at the pre-rebase commit, and the same content is already in main. This waits on a go-ahead." },
   { n: "extra-commit", b: "feat/extra", dir: "extra", text: "Delete the backup branch `origin/feat/extra`. The same content is already in main. This waits on a go-ahead." },
   { n: "stop-server", b: "feat/server", dir: "server", text: "Stop the dev server I started (pid 4242), then close my PR." },
+  { n: "left-path-branch", b: "feat/leftovers", dir: "lp", items: [
+    { type: "path", name: lpPath, text: "the screenshots I took" },
+    { type: "branch", remote: "origin", branch: "feat/leftovers", text: "the pre-rebase backup" }] },
 ];
 left.forEach((s, j) => { const i = entries.length + j; entries.push({
   id: "h" + String(i + 1).padStart(11, "0"), host: "devbox", repo: d + "/proj", repo_name: "proj", branch: s.b, base: "main", kind: "claude",
@@ -91,7 +102,7 @@ left.forEach((s, j) => { const i = entries.length + j; entries.push({
   worktree: d + "/worktrees/proj/" + s.dir, brief: "fixture", status: "ready_to_remove", saw_working: true,
   created_at: ago(80), finished_at: ago(60), final_report: "Done: " + s.n, report_source: "explicit",
   mark: { agent_id: "devbox/w" + (50 + i) + ":p1", host: "devbox", name: s.n, by: "coordinator", reason: "landed, CI green", at: ago(48),
-    ask: { state: "unsafe", reason: "see items", at: ago(26), asked_at: ago(26), items: [{ type: "cleanup", text: s.text }] } } }); });
+    ask: { state: "unsafe", reason: "see items", at: ago(26), asked_at: ago(26), items: s.items || [{ type: "cleanup", text: s.text }] } } }); });
 fs.writeFileSync(state + "/ledger.json", JSON.stringify({ version: 1, entries, marks: [] }));
 fs.writeFileSync(state + "/settings.json", JSON.stringify({ rev: 1, sweep_loop: { enabled: true, every_minutes: 15 } }));
 JS
