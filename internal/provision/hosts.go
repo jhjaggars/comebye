@@ -674,7 +674,7 @@ func ParseHosts(b []byte) (*HostsView, error) {
 		if !typeRe.MatchString(h.Type) {
 			h.Type = ""
 		}
-		if h.Kind != KindOpenShell && h.Kind != KindGCP {
+		if h.Kind != KindOpenShell && h.Kind != KindGCP && h.Kind != KindKubeVirt {
 			h.Kind = KindAWS
 		}
 		h.Provider = providerWord(h.Provider)

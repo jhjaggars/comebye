@@ -31,3 +31,6 @@ podman push registry.example.com/comebye-provisioner:...
 ```
 
 Check: `go test ./deploy/kubernetes/provisioner/` (needs `kubectl` for the kustomize case).
+
+Create and destroy stay off (every job is a dry run) until you uncomment `-provision-create` in
+`deployment.yaml` and fill the OAuth Secret: see docs/workers.md, "Create and destroy from the pod".

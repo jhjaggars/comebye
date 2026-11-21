@@ -14,7 +14,7 @@ import (
 // absent leaves the config's value. Unknown fields are an error, so a typo
 // or a field from a newer caller never goes unnoticed.
 type Spec struct {
-	Kind              string   `json:"kind"` // gcp, aws or openshell
+	Kind              string   `json:"kind"` // gcp, aws, kubevirt or openshell
 	Name              string   `json:"name"`
 	Type              string   `json:"type"` // instance or machine type
 	Spot              *bool    `json:"spot"`
@@ -70,7 +70,7 @@ func ParseSpec(b []byte) (*Spec, error) {
 	return &s, nil
 }
 
-var specKinds = map[string]bool{"gcp": true, "aws": true, "openshell": true}
+var specKinds = map[string]bool{"gcp": true, "aws": true, "openshell": true, "kubevirt": true}
 
 // Apply lays the spec over c and re-validates. The result is a whole config
 // that passes the same checks as one read from the file, so the spec cannot
@@ -78,7 +78,7 @@ var specKinds = map[string]bool{"gcp": true, "aws": true, "openshell": true}
 func (s *Spec) Apply(c *Config) error {
 	if s.Kind != "" {
 		if !specKinds[s.Kind] {
-			return fmt.Errorf("spec: kind %q: want gcp, aws or openshell", s.Kind)
+			return fmt.Errorf("spec: kind %q: want gcp, aws, kubevirt or openshell", s.Kind)
 		}
 		c.Provider = s.Kind
 	}
@@ -87,15 +87,16 @@ func (s *Spec) Apply(c *Config) error {
 			return fmt.Errorf("spec: %w", err)
 		}
 	}
-	// A sandbox has no machine, zone or disks: refuse rather than ignore.
-	if c.Provider == "openshell" {
+	// A sandbox or a KubeVirt VM is made from the config (its size, disks and
+	// namespace are the node's own): refuse rather than ignore.
+	if c.Provider == "openshell" || c.Provider == "kubevirt" {
 		for field, set := range map[string]bool{
 			"type": s.Type != "", "spot": s.Spot != nil, "zone": s.Zone != "",
 			"boot_disk_gb": s.BootDiskGB != nil, "data_disk_gb": s.DataDiskGB != nil,
 			"max_run": s.MaxRun != nil, "agents": s.Agents != nil,
 		} {
 			if set {
-				return fmt.Errorf("spec: %s does not apply to kind openshell", field)
+				return fmt.Errorf("spec: %s does not apply to kind %s", field, c.Provider)
 			}
 		}
 	}

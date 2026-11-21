@@ -35,7 +35,15 @@ const (
 	KindAWS       = "aws"
 	KindGCP       = "gcp"
 	KindOpenShell = "openshell"
+	// KindKubeVirt is a KubeVirt VM on the node's cluster. Like a sandbox it
+	// is made from the node's worker config, not from the request: the
+	// request is a name, an idle stop and a destroy-after.
+	KindKubeVirt = "kubevirt"
 )
+
+// FromNodeConfig reports whether a kind is made from the node's own settings
+// and so carries no machine, disks, price or budget cap in a request.
+func FromNodeConfig(kind string) bool { return kind == KindOpenShell || kind == KindKubeVirt }
 
 // Defaults the wizard starts from (accepted in the plan: spot by default,
 // stop after 2 h idle, destroy 3 days after, a $10 budget cap).
@@ -102,11 +110,11 @@ func ParseSpec(b []byte) (Spec, error) {
 // handed to the tool; the tool checks again against its config's ceilings.
 func (s *Spec) Validate() error {
 	switch s.Kind {
-	case KindOpenShell:
+	case KindOpenShell, KindKubeVirt:
 		return s.validateSandbox()
 	case KindAWS, KindGCP:
 	default:
-		return bad("kind", "the kind is aws, gcp or openshell")
+		return bad("kind", "the kind is aws, gcp, kubevirt or openshell")
 	}
 	typeOK, typeHint := awsTypeRe.MatchString(s.Type), "choose an instance type like t3.xlarge"
 	if s.Kind == KindGCP {
@@ -142,15 +150,16 @@ func (s *Spec) Validate() error {
 	return nil
 }
 
-// validateSandbox checks an OpenShell sandbox: it has a name, an idle stop and
-// a destroy-after, and nothing else (no machine, disks, zone, price or cap: the
-// worker tool refuses those fields for a sandbox, and so does this).
+// validateSandbox checks an OpenShell sandbox or a KubeVirt VM: it has a name,
+// an idle stop and a destroy-after, and nothing else (no machine, disks, zone,
+// price or cap: the worker tool refuses those fields for these kinds, and so
+// does this; the node's config says what they are made from).
 func (s *Spec) validateSandbox() error {
 	switch {
 	case !nameRe.MatchString(s.Name):
 		return bad("name", "the name is 2 to 30 lowercase letters, digits and dashes, starting with a letter")
 	case s.Type != "" || s.Spot || s.Zone != "" || s.BootDiskGB != 0 || s.DataDiskGB != 0 || s.MaxRun != "" || s.BudgetCapUSD != 0:
-		return bad("kind", "a sandbox has no machine type, spot price, zone, disks, longest run or budget cap")
+		return bad("kind", "a sandbox or KubeVirt VM has no machine type, spot price, zone, disks, longest run or budget cap")
 	case s.IdleMinutes < MinIdle || s.IdleMinutes > MaxIdle:
 		return bad("idle_minutes", "stop after idle is %d to %d minutes", MinIdle, MaxIdle)
 	case s.DestroyAfterHours < 1 || s.DestroyAfterHours > MaxDestroyHrs:
@@ -166,6 +175,13 @@ func DefaultGCESpec(name, typ string) Spec {
 	return sp
 }
 
+// DefaultKubeVirtSpec is a KubeVirt VM spec with the defaults filled in.
+func DefaultKubeVirtSpec(name string) Spec {
+	sp := DefaultSandboxSpec(name)
+	sp.Kind = KindKubeVirt
+	return sp
+}
+
 // DefaultSandboxSpec is a sandbox spec with the defaults filled in.
 func DefaultSandboxSpec(name string) Spec {
 	return Spec{Kind: KindOpenShell, Name: name, IdleMinutes: DefaultIdleMinutes, DestroyAfterHours: DefaultDestroyHours}
@@ -175,7 +191,7 @@ func DefaultSandboxSpec(name string) Spec {
 // absent one would leave the node config's value, spot among them); a sandbox
 // spec carries only the three it may have.
 func (s *Spec) JSON() []byte {
-	if s.Kind == KindOpenShell {
+	if FromNodeConfig(s.Kind) {
 		b, _ := json.Marshal(map[string]any{"kind": s.Kind, "name": s.Name, "idle_minutes": s.IdleMinutes, "destroy_after_hours": s.DestroyAfterHours})
 		return b
 	}
@@ -210,11 +226,22 @@ func SandboxCost() *Cost {
 	return &Cost{Mode: "sandbox", Basis: "an OpenShell sandbox has no per-hour price here: it runs on the gateway's own capacity"}
 }
 
+// ClusterCost is the "cost" of a KubeVirt VM: none that comebye can price. It
+// runs on the cluster's own capacity, bounded by the namespace's ResourceQuota
+// and by -provision-max-hosts, not by dollars. It shares the "sandbox" mode,
+// which means "not priced here".
+func ClusterCost() *Cost {
+	return &Cost{Mode: "sandbox", Basis: "a KubeVirt VM has no per-hour price here: it runs on the cluster's own capacity, held by the namespace's quota and the host-count cap"}
+}
+
 // EstimateCost prices a spec from a catalog row: the lowest spot price (or the
 // on-demand price) plus the public IPv4 and the disks.
 func EstimateCost(s Spec, c *Catalog) (*Cost, error) {
-	if s.Kind == KindOpenShell {
+	switch s.Kind {
+	case KindOpenShell:
 		return SandboxCost(), nil
+	case KindKubeVirt:
+		return ClusterCost(), nil
 	}
 	if c == nil {
 		return nil, errors.New("no price list")

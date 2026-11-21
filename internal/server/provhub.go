@@ -170,7 +170,7 @@ func (s *Server) decodeProvBody(w http.ResponseWriter, r *http.Request, needKey 
 	}
 	// A host is built in the node's own region: a request for another is
 	// refused rather than priced for one region and built in a different one.
-	if n := s.probeNode(r.Context(), b.Via, false); spec.Kind != provision.KindOpenShell && n.Role && n.Preflight != nil {
+	if n := s.probeNode(r.Context(), b.Via, false); !provision.FromNodeConfig(spec.Kind) && n.Role && n.Preflight != nil {
 		if own := nodeRegion(n.Preflight, spec.Kind); own != "" {
 			if b.Region != "" && b.Region != own {
 				relErr(w, http.StatusUnprocessableEntity, "bad_region", b.Via+" builds only in "+own)
@@ -223,6 +223,16 @@ func credsOK(pf *provision.Preflight, kind string) (bool, []string) {
 			n string
 			c provision.Check
 		}{"gcp", pf.GCP}
+	}
+	if kind == provision.KindKubeVirt {
+		kv := pf.KubeVirt
+		if kv == nil {
+			return false, []string{"kubevirt not configured"}
+		}
+		need = []struct {
+			n string
+			c provision.Check
+		}{{"kubevirt", *kv}, {"tailnet", pf.Tailnet}, {"ssh", pf.SSH}}
 	}
 	if kind == provision.KindOpenShell {
 		need = []struct {

@@ -597,6 +597,25 @@ reach the hub's data or sign-in. Keep `comebye-workers` for workers only; its Re
 Secrets) bounds the damage. The Tailscale OAuth client (create only) sits in its own Secret,
 mounted in this pod only, mode 0400, and should be limited to the worker tag.
 
+### Create and destroy from the pod
+
+With `-provision-create` the app's **Add host** offers **KubeVirt VM (on the cluster)** when this
+node answers with a kubevirt config (the preflight carries a `kubevirt` check). The request is only a
+name, an idle stop and a destroy-after: the VM's size, disks, image and namespace are the node's
+config, and a request that names a machine, a disk or a price is refused. Nothing about it is priced,
+so the per-hour cost cap does not apply to it; what holds it is the namespace's ResourceQuota (6 VMs)
+and `-provision-max-hosts` (default 3), and the cost cap is unchanged for AWS and Google Cloud.
+Without the flag every job is `create --dry-run`: the plan, nothing created, and the app says so.
+
+**Destroy…** runs the same job as for any host: sessions are saved first, and the VM, its cloud-init
+Secret, its tailnet node and its hub entry go. The **data disk is kept** unless the box is ticked.
+The tool deletes only objects that carry the label `managed-by=comebye-worker` and refuses a foreign
+one. The OAuth client never reaches a job's output, a plan or the host list (the journal is passed
+through the same secret filter as for any provisioner), and the worker never receives it.
+Only a provisioner whose preflight config is the kubevirt one (this pod) offers the kind: a node
+that also holds an AWS or Google Cloud config reports that cloud's checks, so AWS and Google Cloud
+stay on laharl and a KubeVirt VM is built from the pod.
+
 ### One-time steps in your homelab repo
 
 The user does these; nothing in this repository touches the cluster.
@@ -612,8 +631,10 @@ The user does these; nothing in this repository touches the cluster.
    `comebye peers add` once or `-peer-self-register` on the hub with `COMEBYE_ANNOUNCE` on the pod.
 5. Leave the hub's own manifest alone: pick the pod's node in the app. Its `-provision-host` default
    is unchanged.
-6. To allow create and destroy, uncomment `-provision-create` in `deployment.yaml` and set the OAuth
-   Secret. Remove it to go back to dry runs.
+6. To allow create and destroy (the one opt-in step): fill the OAuth Secret
+   `comebye-provisioner-tailscale-oauth` (key `tailscale-oauth`, mounted read-only, mode 0400, in this
+   pod only), then uncomment `-provision-create` in `deployment.yaml`. Remove it to go back to dry
+   runs. See [Create and destroy from the pod](#create-and-destroy-from-the-pod).
 7. Version bumps: the hub's bump script edits one manifest; point it at this Deployment's image too
    (a follow-up in the homelab repo).
 

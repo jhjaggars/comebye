@@ -45,15 +45,17 @@ type Check struct {
 // Preflight is what a node says about the credentials it holds and where it
 // may build.
 type Preflight struct {
-	V         int      `json:"v"`
-	CheckedAt string   `json:"checked_at"`
-	AWS       Check    `json:"aws"`
-	GCP       Check    `json:"gcp"`
-	Tailnet   Check    `json:"tailnet"`
-	OpenShell Check    `json:"openshell"`
-	SSH       Check    `json:"ssh"`
-	Region    string   `json:"region,omitempty"`
-	Regions   []string `json:"regions,omitempty"`
+	V         int    `json:"v"`
+	CheckedAt string `json:"checked_at"`
+	AWS       Check  `json:"aws"`
+	GCP       Check  `json:"gcp"`
+	Tailnet   Check  `json:"tailnet"`
+	OpenShell Check  `json:"openshell"`
+	// KubeVirt is present only when the node has a kubevirt worker config.
+	KubeVirt *Check   `json:"kubevirt,omitempty"`
+	SSH      Check    `json:"ssh"`
+	Region   string   `json:"region,omitempty"`
+	Regions  []string `json:"regions,omitempty"`
 	// GCPRegion is the region of the zone a gcp host is built in.
 	GCPZone string `json:"gcp_zone,omitempty"`
 	// DryRun is set by the node's comebye, not the tool: every job on this node
@@ -121,6 +123,10 @@ func ParsePreflight(b []byte) (Preflight, error) {
 		return p, fmt.Errorf("the preflight is version %d, not 1", p.V)
 	}
 	p.AWS, p.GCP, p.Tailnet, p.OpenShell, p.SSH = cleanCheck(p.AWS), cleanCheck(p.GCP), cleanCheck(p.Tailnet), cleanCheck(p.OpenShell), cleanCheck(p.SSH)
+	if p.KubeVirt != nil {
+		k := cleanCheck(*p.KubeVirt)
+		p.KubeVirt = &k
+	}
 	if _, err := time.Parse(time.RFC3339, p.CheckedAt); err != nil {
 		p.CheckedAt = ""
 	}

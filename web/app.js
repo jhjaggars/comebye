@@ -9125,7 +9125,7 @@ const pz = {
 };
 const PZ_CREDS = [
   ["aws", "AWS", "aws login"], ["gcp", "Google Cloud", "gcloud auth login"], ["tailnet", "Tailscale OAuth client", ""],
-  ["openshell", "OpenShell gateway", "openshell gateway login"], ["ssh", "ssh key", ""],
+  ["openshell", "OpenShell gateway", "openshell gateway login"], ["kubevirt", "KubeVirt cluster", ""], ["ssh", "ssh key", ""],
 ];
 const PZ_BANDS = { "<5%": 0, "5-10%": 1, "10-15%": 2, "15-20%": 3, ">20%": 4 };
 
@@ -9208,7 +9208,7 @@ function pzAge(iso) { const t = Date.parse(iso); return Number.isNaN(t) ? "" : f
 function pzCredRows(n) {
   const pf = n.preflight;
   if (!pf) return `<p class="pz-note warn">${n.state === "offline" ? esc(n.name) + " is offline." : "No answer yet."} ${esc(n.error || "")}</p>`;
-  return `<dl class="pz-creds">${PZ_CREDS.map(([k, label, fix]) => {
+  return `<dl class="pz-creds">${PZ_CREDS.filter(([k]) => k !== "kubevirt" || pf.kubevirt).map(([k, label, fix]) => {
     const c = pf[k] || { state: "error" };
     const word = ({ ok: "present", missing: "missing", expired: "expired", error: "could not check" })[c.state] || c.state;
     const hint = c.state === "expired" && fix ? ` On ${esc(n.name)}, run <code>${esc(fix)}</code>.` : "";
@@ -9383,7 +9383,7 @@ async function loadProvHosts(force) {
 function phSpendText(h) {
   const sp = h.spend || {};
   if (h.adopted) return "spend n/a (made with the worker tool)";
-  if (h.kind === "openshell") return h.state === "destroyed" ? "not priced" : "not priced (sandbox)";
+  if (h.kind === "openshell" || h.kind === "kubevirt") return h.state === "destroyed" ? "not priced" : h.kind === "kubevirt" ? "not priced (cluster)" : "not priced (sandbox)";
   if (h.state === "destroyed") return `final bill ≈ ${phMoney(sp.usd)}`;
   return `≈ ${phMoney(sp.usd)} so far`;
 }
@@ -9393,9 +9393,9 @@ function phRow(h) {
   const live = h.state !== "destroyed" && h.state !== "gone";
   const burn = live && sp.usd_hour ? ` · ≈ ${phMoney(sp.usd_hour)}/h now` : "";
   const pct = h.budget_cap_usd > 0 ? Math.round(100 * (sp.usd || 0) / h.budget_cap_usd) : 0;
-  const what = [h.kind === "openshell" ? "OpenShell sandbox" : h.type, h.kind === "openshell" ? "" : h.mode === "spot" ? "spot" : "on-demand", h.via, h.budget_cap_usd > 0 && h.state !== "destroyed" ? `cap ${phMoney(h.budget_cap_usd)} · ${pct}% used` : ""].filter(Boolean).join(" · ");
+  const what = [h.kind === "openshell" ? "OpenShell sandbox" : h.kind === "kubevirt" ? "KubeVirt VM" : h.type, h.kind === "openshell" || h.kind === "kubevirt" ? "" : h.mode === "spot" ? "spot" : "on-demand", h.via, h.budget_cap_usd > 0 && h.state !== "destroyed" ? `cap ${phMoney(h.budget_cap_usd)} · ${pct}% used` : ""].filter(Boolean).join(" · ");
   const note = h.state === "destroyed"
-    ? `Destroyed ${pzAge(h.destroyed)}.${h.data_disk_kept ? ` Its ${h.data_disk_gb} GB data disk was kept and goes on costing about ${phMoney(h.data_disk_gb * (h.disk_usd_gb_month || 0.08))} a month (not in this bill).` : ""}`
+    ? `Destroyed ${pzAge(h.destroyed)}.${h.data_disk_kept ? (h.kind === "kubevirt" ? " Its data disk was kept on the cluster's storage." : ` Its ${h.data_disk_gb} GB data disk was kept and goes on costing about ${phMoney(h.data_disk_gb * (h.disk_usd_gb_month || 0.08))} a month (not in this bill).`) : ""}`
     : h.state === "stopped" ? `${h.cap_stopped ? "Stopped at its budget cap " + pzAge(h.cap_stopped) : "Stopped" + (h.stopped_at ? " " + pzAge(h.stopped_at) : "")}; only its disks cost now.${h.destroy_due ? " Destroyed automatically " + (Date.parse(h.destroy_due) > Date.now() ? "in " + fmtAgo(Date.now() - (Date.parse(h.destroy_due) - Date.now())) : "now") + "." : ""}`
     : "";
   const fail = h.destroy_failed ? `<p class="pz-note warn" role="alert">The last destroy did not finish: ${esc(h.destroy_failed)}</p>` : "";
@@ -9403,7 +9403,7 @@ function phRow(h) {
   const btn = live && h.state !== "destroying" && !dest && !h.adopted ? `<button type="button" class="btn danger" data-ph-destroy="${escAttr(h.name)}">Destroy…</button>` : "";
   return `<li class="ph-row" data-ph="${escAttr(h.name)}"><div class="ph-line"><span class="ph-name">${esc(h.name)}</span><span class="ph-chip ${esc(h.state)}">${esc(h.state)}</span>
     <span class="ph-spend">${esc(phSpendText(h))}</span></div>
-    <div class="ph-meta">${esc(what)}${esc(burn)}${h.price_from_cloud || h.kind === "openshell" ? "" : " · price estimated"}</div>
+    <div class="ph-meta">${esc(what)}${esc(burn)}${h.price_from_cloud || h.kind === "openshell" || h.kind === "kubevirt" ? "" : " · price estimated"}</div>
     ${note ? `<div class="ph-meta">${esc(note)}</div>` : ""}${fail}${btn}${dest}</li>`;
 }
 
@@ -9414,7 +9414,7 @@ function phDestroyPanel(h) {
   const stopped = h.state === "stopped";
   return `<div class="ph-dest" role="group" aria-label="Destroy ${escAttr(h.name)}">
     <p class="pz-note">This saves ${esc(h.name)}'s sessions to the archive, then removes the ${h.kind === "openshell" ? "sandbox" : "VM"}, its tailnet node and its entry on the hub. If the sessions cannot be saved, nothing is destroyed. A destroyed host cannot be brought back.</p>
-    ${h.kind === "openshell" ? "" : `<label class="pz-check"><input type="checkbox" id="ph-del"${d.del ? " checked" : ""}>Also delete the ${h.data_disk_gb} GB data disk (kept, it costs about ${phMoney(h.data_disk_gb * (h.disk_usd_gb_month || 0.08))} a month)</label>`}
+    ${h.kind === "openshell" ? "" : h.kind === "kubevirt" ? `<label class="pz-check"><input type="checkbox" id="ph-del"${d.del ? " checked" : ""}>Also delete the data disk (kept unless you tick this; it stays on the cluster's storage)</label>` : `<label class="pz-check"><input type="checkbox" id="ph-del"${d.del ? " checked" : ""}>Also delete the ${h.data_disk_gb} GB data disk (kept, it costs about ${phMoney(h.data_disk_gb * (h.disk_usd_gb_month || 0.08))} a month)</label>`}
     <label class="pz-check"><input type="checkbox" id="ph-lose"${d.lose ? " checked" : ""}>Do not save its sessions: they are lost${stopped ? ". A stopped host cannot be read, so this is needed" : ""}</label>
     <div class="pz-field"><label for="ph-confirm">Type <b>${esc(h.name)}</b> to confirm</label><input class="az-in" id="ph-confirm" value="${escAttr(d.confirm)}" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
     ${d.err ? `<p class="pz-note warn" role="alert">${esc(d.err)}</p>` : ""}
@@ -9687,10 +9687,12 @@ const AZ_NAME = /^[a-z][a-z0-9-]{0,28}[a-z0-9]$/;
 const AZ_JOB_KEY = "comebye.addhost.job";
 
 function azDefaults(type, kind) {
-  if (kind === "openshell") return { kind: "openshell", name: "", idle_minutes: 120, destroy_after_hours: 72 };
+  if (kind === "openshell" || kind === "kubevirt") return { kind, name: "", idle_minutes: 120, destroy_after_hours: 72 };
   return { kind: kind === "gcp" ? "gcp" : "aws", name: "", type: type || "", spot: true, zone: "", boot_disk_gb: 20, data_disk_gb: 50, idle_minutes: 120, max_run: "24h", budget_cap_usd: 10, destroy_after_hours: 72 };
 }
-function azSandbox() { return !!(az.spec && az.spec.kind === "openshell"); }
+// A sandbox and a KubeVirt VM are made from the node's own config: no size, disks or price to pick.
+function azSandbox() { return !!(az.spec && (az.spec.kind === "openshell" || az.spec.kind === "kubevirt")); }
+function azKube() { return !!(az.spec && az.spec.kind === "kubevirt"); }
 // What a node can build now: its kinds, from the preflight (a kind whose login is missing is disabled, with why).
 function azKinds(n) { return (n && n.kinds) || [{ kind: "aws", label: "AWS spot or on-demand VM", ok: true }]; }
 function azGCE() { return !!(az.spec && az.spec.kind === "gcp"); }
@@ -9728,7 +9730,7 @@ function azCost() {
   return { hour, day: hour * 24, hours: sp.budget_cap_usd / hour };
 }
 function azFoot() {
-  if (azSandbox()) return `<b>no per-hour price</b><small>an OpenShell sandbox runs on the gateway's own capacity</small>`;
+  if (azSandbox()) return `<b>no per-hour price</b><small>${azKube() ? "a KubeVirt VM runs on the cluster's own capacity" : "an OpenShell sandbox runs on the gateway's own capacity"}</small>`;
   const c = azCost(), sp = az.spec;
   const cost = c
     ? `<b>≈ ${pzMoney(c.hour)}/h · $${c.day.toFixed(2)}/day</b><small>${sp.spot ? (azGCE() ? "Spot VM, estimated" : "spot, market price") : "on-demand"} · the $${sp.budget_cap_usd} cap lasts about ${c.hours >= 100 ? Math.round(c.hours) : c.hours.toFixed(1)} h</small>`
@@ -9738,12 +9740,18 @@ function azFoot() {
 function azUpdateFoot() { const el = $("az-cost"); if (el) el.innerHTML = azFoot(); }
 
 function azSteps() {
-  const steps = azSandbox() ? AZ_STEPS.map((l) => (l === "Size" ? "Sandbox" : l)) : AZ_STEPS;
+  const steps = azSandbox() ? AZ_STEPS.map((l) => (l === "Size" ? (azKube() ? "KubeVirt" : "Sandbox") : l)) : AZ_STEPS;
   return `<ol class="az-steps" aria-label="Steps">${steps.map((l, i) => `<li class="${i + 1 === az.step ? "on" : i + 1 < az.step ? "done" : ""}"${i + 1 === az.step ? ' aria-current="step"' : ""}>${i + 1}. ${l}</li>`).join("")}</ol>`;
 }
 
 // A sandbox has no size to pick: the step shows what the node will make it from.
 function azSandboxCard(n) {
+  if (azKube()) {
+    const kv = (n && n.preflight && n.preflight.kubevirt) || {};
+    return `<div class="pz-card"><h3>KubeVirt VM on ${esc(n ? n.name : "the node")}</h3>
+    <dl class="az-kv"><dt>Cluster</dt><dd>${esc(kv.note || kv.state || "not checked")}</dd></dl>
+    <p class="pz-note">Its size, disks, image and namespace are ${esc(n ? n.name : "the node")}'s own settings (its KubeVirt worker config), not chosen here. A KubeVirt VM has no price: the namespace's quota and the provisioner's host-count cap hold it. Its sessions are saved before it is destroyed, and its data disk is kept unless you ask to delete it.</p></div>`;
+  }
   const os = (n && n.preflight && n.preflight.openshell) || {};
   const row = (k, v) => (v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "");
   return `<div class="pz-card"><h3>OpenShell sandbox on ${esc(n ? n.name : "the node")}</h3>
@@ -9761,11 +9769,11 @@ function azBody() {
       <button type="button" class="btn" id="pz-recheck"${pz.loadingNodes ? " disabled" : ""}>${pz.loadingNodes ? "Checking…" : "Recheck"}</button></div>
       <fieldset class="az-kinds"><legend class="pz-note">What to build</legend>${azKinds(n).map((k) => `<label class="pz-check"><input type="radio" name="az-kind" value="${escAttr(k.kind)}"${sp.kind === k.kind ? " checked" : ""}${k.ok ? "" : " disabled"}>${esc(k.label)}${k.ok ? "" : ` <span class="pz-note warn">(${esc(k.why || "not available")})</span>`}</label>`).join("")}</fieldset>
       ${n ? pzCredRows(n) : ""}
-      <p class="pz-note">${azSandbox() ? "A sandbox is made on the node's OpenShell gateway, not in a cloud region." : `Builds in <b>${esc(pzKindRegion(n, azGCE() ? "gcp" : "aws") || pz.region || "?")}</b>, this node's own ${azGCE() ? "zone's region" : "region"}.`} The credentials stay on ${esc(n ? n.name : "the node")}; this page only learns whether each is present.</p>
+      <p class="pz-note">${azKube() ? "A KubeVirt VM is made on the node's own cluster, not in a cloud region." : azSandbox() ? "A sandbox is made on the node's OpenShell gateway, not in a cloud region." : `Builds in <b>${esc(pzKindRegion(n, azGCE() ? "gcp" : "aws") || pz.region || "?")}</b>, this node's own ${azGCE() ? "zone's region" : "region"}.`} The credentials stay on ${esc(n ? n.name : "the node")}; this page only learns whether each is present.</p>
       ${dry ? `<div class="az-dry"><b>Dry run.</b> ${esc(n.name)} is set to plan only: every step below works, and the stages show as planned, but nothing is created and no cost is incurred.</div>` : ""}</div>`;
     const kk = azKinds(n).find((k) => k.kind === sp.kind);
     can = !!n && n.state === "ok" && (!kk || kk.ok);
-    next = azSandbox() ? "Sandbox →" : "Size →";
+    next = azKube() ? "KubeVirt →" : azSandbox() ? "Sandbox →" : "Size →";
   } else if (az.step === 2 && azSandbox()) {
     back = "← Node"; next = "Options →"; can = true;
     main = azSandboxCard(n);
@@ -9776,13 +9784,13 @@ function azBody() {
     else if (pz.cat && n) main = pzCatalog(n, true);
     else main = '<div class="pz-card"><p class="pz-note">Loading…</p></div>';
   } else if (az.step === 3 && azSandbox()) {
-    back = "← Sandbox"; next = "Review →";
+    back = azKube() ? "← KubeVirt" : "← Sandbox"; next = "Review →";
     const bad = sp.name && !AZ_NAME.test(sp.name);
     can = AZ_NAME.test(sp.name);
     const num = (id, label, v, min, max, hint) => `<div class="pz-field"><label for="${id}">${label}</label><input class="az-in" id="${id}" type="number" inputmode="decimal" min="${min}" max="${max}" value="${escAttr(v)}"><small class="pz-note">${hint}</small></div>`;
-    main = `<div class="pz-card"><h3>Sandbox on ${esc(pz.via)}</h3><div class="az-grid">
-      <div class="pz-field az-wide"><label for="az-name">Name</label><input class="az-in${bad ? " bad" : ""}" id="az-name" value="${escAttr(sp.name)}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. sandbox-1"><small class="pz-note${bad ? " warn" : ""}">2 to 30 lowercase letters, digits and dashes. It becomes the host's name in Comebye.</small></div>
-      ${num("az-idle", "Stop after idle (minutes)", sp.idle_minutes, 5, 1440, "Default 120. Its volume is kept.")}
+    main = `<div class="pz-card"><h3>${azKube() ? "KubeVirt VM" : "Sandbox"} on ${esc(pz.via)}</h3><div class="az-grid">
+      <div class="pz-field az-wide"><label for="az-name">Name</label><input class="az-in${bad ? " bad" : ""}" id="az-name" value="${escAttr(sp.name)}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${azKube() ? "e.g. kv-2" : "e.g. sandbox-1"}"><small class="pz-note${bad ? " warn" : ""}">2 to 30 lowercase letters, digits and dashes. It becomes the host's name in Comebye.</small></div>
+      ${num("az-idle", "Stop after idle (minutes)", sp.idle_minutes, 5, 1440, azKube() ? "Default 120. Its disks are kept." : "Default 120. Its volume is kept.")}
       ${num("az-destroy", "Destroy after stopped (hours)", sp.destroy_after_hours, 1, 720, "Default 72 (3 days). The provisioner then starts it, saves its sessions and destroys it; if it cannot, nothing is destroyed.")}
       </div></div>`;
   } else if (az.step === 3) {
@@ -9819,7 +9827,9 @@ function azBody() {
 function azReview() {
   const sp = az.spec, n = azNode(), p = az.plan;
   const os = (n && n.preflight && n.preflight.openshell) || {};
-  const kv = azSandbox() ? `<dl class="az-kv"><dt>Node</dt><dd>${esc(pz.via)} · gateway ${esc(os.gateway || "?")}</dd><dt>Name</dt><dd>${esc(sp.name)}</dd><dt>Made from</dt><dd>${esc(os.image || "the node's image")}${os.cpu || os.memory ? " · " + esc([os.cpu && os.cpu + " CPU", os.memory].filter(Boolean).join(", ")) : ""}</dd>
+  const kvp = (n && n.preflight && n.preflight.kubevirt) || {};
+  const kv = azKube() ? `<dl class="az-kv"><dt>Node</dt><dd>${esc(pz.via)} · cluster ${esc(kvp.note || kvp.state || "?")}</dd><dt>Name</dt><dd>${esc(sp.name)}</dd><dt>Made from</dt><dd>the node's KubeVirt config (image, size, disks)</dd>
+    <dt>Safety</dt><dd>stops after ${sp.idle_minutes} min idle · destroyed ${sp.destroy_after_hours} h after it stops · no budget cap (nothing here is priced; the namespace quota and the host cap hold it)</dd></dl>` : azSandbox() ? `<dl class="az-kv"><dt>Node</dt><dd>${esc(pz.via)} · gateway ${esc(os.gateway || "?")}</dd><dt>Name</dt><dd>${esc(sp.name)}</dd><dt>Made from</dt><dd>${esc(os.image || "the node's image")}${os.cpu || os.memory ? " · " + esc([os.cpu && os.cpu + " CPU", os.memory].filter(Boolean).join(", ")) : ""}</dd>
     <dt>Safety</dt><dd>stops after ${sp.idle_minutes} min idle · destroyed ${sp.destroy_after_hours} h after it stops · no budget cap (nothing here is priced)</dd></dl>` : `<dl class="az-kv"><dt>Node</dt><dd>${esc(pz.via)} · ${esc(pz.region)}</dd><dt>Name</dt><dd>${esc(sp.name)}</dd><dt>Size</dt><dd>${esc(sp.type)}, ${sp.spot ? "spot" : "on-demand"}${sp.zone ? ", " + esc(sp.zone) : ""}</dd>
     <dt>Disks</dt><dd>${sp.boot_disk_gb} GB boot + ${sp.data_disk_gb} GB data</dd><dt>Safety</dt><dd>stops after ${sp.idle_minutes} min idle · budget cap $${sp.budget_cap_usd} · destroyed ${sp.destroy_after_hours} h after it stops</dd></dl>`;
   let body;
@@ -9833,7 +9843,7 @@ function azReview() {
       ${p.refused ? `<p class="pz-note warn" role="alert"><b>Refused:</b> ${esc(p.refused)}</p>` : ""}
       ${!p.ready ? `<p class="pz-note warn" role="alert">${esc(pz.via)} cannot build now: ${esc((p.missing || []).join(", "))}. Fix it on ${esc(pz.via)} and Recheck.</p>` : ""}
       <details class="pz-src"><summary>The plan, in the tool's words</summary><pre class="az-plan">${esc(p.plan && p.plan.text || "")}</pre></details>
-      <label class="pz-check az-ack"><input type="checkbox" id="az-ack"${az.ack ? " checked" : ""}>${p.dry_run ? "I understand this is a dry run." : azSandbox() ? "I understand this creates a sandbox on the gateway." : `I understand this creates cloud resources that cost money${c ? " (up to about $" + Number(c.usd_day).toFixed(2) + " a day)" : ""}.`}</label>`;
+      <label class="pz-check az-ack"><input type="checkbox" id="az-ack"${az.ack ? " checked" : ""}>${p.dry_run ? "I understand this is a dry run." : azKube() ? "I understand this creates a VM on the cluster." : azSandbox() ? "I understand this creates a sandbox on the gateway." : `I understand this creates cloud resources that cost money${c ? " (up to about $" + Number(c.usd_day).toFixed(2) + " a day)" : ""}.`}</label>`;
   } else body = "";
   return `<div class="pz-card"><h3>Review</h3>${kv}${body}</div>`;
 }
@@ -9853,7 +9863,7 @@ async function azPlan() {
 
 function azSpecOut() {
   const s = az.spec;
-  if (s.kind === "openshell") return { kind: "openshell", name: s.name, idle_minutes: s.idle_minutes, destroy_after_hours: s.destroy_after_hours };
+  if (s.kind === "openshell" || s.kind === "kubevirt") return { kind: s.kind, name: s.name, idle_minutes: s.idle_minutes, destroy_after_hours: s.destroy_after_hours };
   const o = { ...s };
   if (!o.zone) delete o.zone;
   return o;
@@ -10013,7 +10023,7 @@ function initAddHost() {
       renderPeers(); return;
     }
     if (t.id === "az-via") { pz.via = t.value; const nd = azNode(); pz.region = pzKindRegion(nd, pz.kind) || pz.region; pz.cat = null; pz.catKey = ""; renderPeers(); return; }
-    if (t.id === "az-name") { az.spec.name = t.value.trim().toLowerCase(); const nameBad = !!az.spec.name && !AZ_NAME.test(az.spec.name); t.classList.toggle("bad", nameBad); if (t.nextElementSibling) t.nextElementSibling.classList.toggle("warn", nameBad); const nb = $("az-next"); if (nb) nb.disabled = !(AZ_NAME.test(az.spec.name) && az.spec.budget_cap_usd >= 1); return; }
+    if (t.id === "az-name") { az.spec.name = t.value.trim().toLowerCase(); const nameBad = !!az.spec.name && !AZ_NAME.test(az.spec.name); t.classList.toggle("bad", nameBad); if (t.nextElementSibling) t.nextElementSibling.classList.toggle("warn", nameBad); const nb = $("az-next"); if (nb) nb.disabled = !(AZ_NAME.test(az.spec.name) && (azSandbox() || az.spec.budget_cap_usd >= 1)); return; }
     if (t.id === "az-spot") az.spec.spot = t.value === "1";
     else if (t.id === "az-zone") az.spec.zone = t.value;
     else if (t.id === "az-boot") az.spec.boot_disk_gb = n(t.value);

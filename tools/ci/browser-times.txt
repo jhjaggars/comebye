@@ -18,6 +18,7 @@ pagechat 14
 provision 14
 leftnav 13
 provhosts 13
+provkubevirt 13
 ctxchip 12
 modelchip 8
 pagerevisions 11

@@ -522,6 +522,9 @@ func (s *Server) provCeiling(ctx context.Context, spec provision.Spec, region st
 	if spec.Kind == provision.KindOpenShell {
 		return provision.SandboxCost(), "", nil // nothing here is priced, so no ceiling applies
 	}
+	if spec.Kind == provision.KindKubeVirt {
+		return provision.ClusterCost(), "", nil // held by the namespace quota and -provision-max-hosts instead
+	}
 	if region == "" {
 		return nil, "the region was not given, so the cost could not be checked", s.ceilingUnknown(tool, "the region was not given")
 	}

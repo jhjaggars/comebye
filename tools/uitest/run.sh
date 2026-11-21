@@ -233,6 +233,8 @@ if want rolloutlive; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" nod
 if want provision; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provision.mjs "$out" || rc=1 ; fi
 # Slice 3: hosts built from the app, their spend, and Destroy… (the real path on, against a stand-in worker).
 if want provhosts; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provhosts.mjs "$out" || rc=1 ; fi
+# Add host and Destroy… for a KubeVirt worker: the in-cluster provisioner (a kubevirt config, create on) against a stand-in worker tool.
+if want provkubevirt; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provkubevirt.mjs "$out" || rc=1 ; fi
 # Waking a stopped worker (issue #66): Start on a worker the cloud says is stopped, with the tool's progress, against a stand-in worker tool.
 if want wake; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wake.mjs "$out" || rc=1 ; fi
 # One provisioner with two worker configs (AWS login expired, KubeVirt fine): the stopped KubeVirt worker still has its Start button.

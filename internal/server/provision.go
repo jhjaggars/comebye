@@ -256,7 +256,11 @@ func nodeKinds(pf *provision.Preflight) []kindView {
 		return nil
 	}
 	var out []kindView
-	for _, k := range []struct{ kind, label string }{{provision.KindAWS, "AWS spot or on-demand VM"}, {provision.KindGCP, "Google Cloud VM (Spot or on-demand)"}, {provision.KindOpenShell, "OpenShell sandbox"}} {
+	kinds := []struct{ kind, label string }{{provision.KindAWS, "AWS spot or on-demand VM"}, {provision.KindGCP, "Google Cloud VM (Spot or on-demand)"}, {provision.KindOpenShell, "OpenShell sandbox"}}
+	if pf.KubeVirt != nil { // offered only by a node that has a kubevirt config
+		kinds = append(kinds, struct{ kind, label string }{provision.KindKubeVirt, "KubeVirt VM (on the cluster)"})
+	}
+	for _, k := range kinds {
 		ok, miss := credsOK(pf, k.kind)
 		v := kindView{Kind: k.kind, Label: k.label, OK: ok || pf.DryRun}
 		if !v.OK {

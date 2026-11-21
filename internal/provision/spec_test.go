@@ -159,3 +159,43 @@ func TestGCESpec(t *testing.T) {
 		t.Errorf("cost: %+v %v", c, err)
 	}
 }
+
+func TestKubeVirtSpecIsANameAnIdleStopAndADestroyAfter(t *testing.T) {
+	s, err := ParseSpec([]byte(`{"kind":"kubevirt","name":"kv2","idle_minutes":120,"destroy_after_hours":72}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(s.JSON()); got != `{"destroy_after_hours":72,"idle_minutes":120,"kind":"kubevirt","name":"kv2"}` {
+		t.Errorf("the tool is handed: %s", got)
+	}
+	d := DefaultKubeVirtSpec("kv2")
+	if d.Kind != KindKubeVirt || d.Validate() != nil {
+		t.Errorf("%+v %v", d, d.Validate())
+	}
+	for name, in := range map[string]string{
+		"a machine":  `{"kind":"kubevirt","name":"kv2","type":"t3.large","idle_minutes":120,"destroy_after_hours":72}`,
+		"a disk":     `{"kind":"kubevirt","name":"kv2","data_disk_gb":50,"idle_minutes":120,"destroy_after_hours":72}`,
+		"a price":    `{"kind":"kubevirt","name":"kv2","budget_cap_usd":10,"idle_minutes":120,"destroy_after_hours":72}`,
+		"a bad name": `{"kind":"kubevirt","name":"a;b","idle_minutes":120,"destroy_after_hours":72}`,
+		"no idle":    `{"kind":"kubevirt","name":"kv2","destroy_after_hours":72}`,
+	} {
+		if _, err := ParseSpec([]byte(in)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	c, err := EstimateCost(s, nil)
+	if err != nil || c.USDHour != 0 || c.Mode != "sandbox" {
+		t.Errorf("cost: %+v %v", c, err)
+	}
+}
+
+func TestPreflightKeepsAKubeVirtCheckOnlyWhenTheNodeHasOne(t *testing.T) {
+	p, err := ParsePreflight([]byte(`{"v":1,"aws":{"state":"ok"},"gcp":{"state":"ok"},"tailnet":{"state":"ok"},"openshell":{"state":"ok"},"ssh":{"state":"ok"},"kubevirt":{"state":"ok","note":"in-cluster credentials; token=abc"}}`))
+	if err != nil || p.KubeVirt == nil || p.KubeVirt.State != StateOK || strings.Contains(p.KubeVirt.Note, "abc") {
+		t.Fatalf("%+v %v", p.KubeVirt, err)
+	}
+	p, _ = ParsePreflight([]byte(`{"v":1}`))
+	if p.KubeVirt != nil {
+		t.Errorf("a node with no kubevirt config reports one: %+v", p.KubeVirt)
+	}
+}
