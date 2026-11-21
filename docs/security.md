@@ -272,7 +272,8 @@ Treat access to it like SSH access to that machine.
     last release, and an upgrade needs a tagged release with a passed build. And an
     agent with a shell can run `git push` of a tag or `comebye upgrade` itself, as it
     always could, so the harness rule against agents pushing tags still matters.
-  - **Provisioning (the Prices tab).** A peer started with `-provision-config` runs
+  - **Provisioning (the Prices tab).** A peer started with `-provision-config` (one or
+    several worker configs, each its own subprocess and credentials) runs
     the worker tool for two read-only questions, which credentials it holds and its
     price list, and the hub (`-provision-host`) relays them to the app. The
     credentials never leave that peer: the answers carry only `present` or `missing`

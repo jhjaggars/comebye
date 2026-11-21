@@ -63,7 +63,8 @@ type pjob struct {
 	Spec    provision.Spec   `json:"spec"`
 	Region  string           `json:"region,omitempty"`
 	Dry     bool             `json:"dry_run"`
-	Op      string           `json:"op,omitempty"` // "" or create: build a host; destroy: remove one; start: power a stopped one on
+	Tool    string           `json:"tool,omitempty"` // the worker config (Tool.Name) the job runs through
+	Op      string           `json:"op,omitempty"`   // "" or create: build a host; destroy: remove one; start: power a stopped one on
 	Cost    *provision.Cost  `json:"cost,omitempty"`
 	Destroy *destroyReq      `json:"destroy,omitempty"`
 	State   string           `json:"state"`
@@ -209,7 +210,7 @@ func (m *provJobs) start(tool *provision.Tool, spec provision.Spec, key, region 
 			return nil, false, errTooMany
 		}
 	}
-	j = &pjob{ID: newJobID(), Key: key, Spec: spec, Region: region, Cost: cost, Dry: !tool.Real, State: jobRunning, Attempt: 1, Started: m.now()}
+	j = &pjob{ID: newJobID(), Key: key, Spec: spec, Region: region, Cost: cost, Tool: tool.Name, Dry: !tool.Real, State: jobRunning, Attempt: 1, Started: m.now()}
 	m.jobs[j.ID] = j
 	m.pruneLocked()
 	m.busy = j.ID
@@ -317,7 +318,7 @@ func (m *provJobs) destroy(tool *provision.Tool, name string, req destroyReq) (*
 	case h.Adopted:
 		return nil, errors.New("this host was made with the worker tool, not from the app: destroy it with the tool")
 	}
-	j := &pjob{ID: newJobID(), Key: "d-" + newJobID(), Spec: h.Spec, Region: h.Region, Op: opDestroy, Destroy: &req, Dry: false, State: jobRunning, Attempt: 1, Started: m.now()}
+	j := &pjob{ID: newJobID(), Key: "d-" + newJobID(), Spec: h.Spec, Region: h.Region, Op: opDestroy, Tool: tool.Name, Destroy: &req, Dry: false, State: jobRunning, Attempt: 1, Started: m.now()}
 	m.jobs[j.ID] = j
 	m.pruneLocked()
 	m.busy = j.ID
@@ -358,7 +359,7 @@ func (m *provJobs) startHost(tool *provision.Tool, name string, confirmCap bool)
 	if at, ok := h.DestroyDueAt(); (h.CapStopped != nil || ok && !m.now().Before(at)) && !confirmCap {
 		return nil, errNeedsConfirm
 	}
-	j := &pjob{ID: newJobID(), Key: "s-" + newJobID(), Spec: h.Spec, Region: h.Region, Op: opStart, Dry: false, State: jobRunning, Attempt: 1, Started: m.now()}
+	j := &pjob{ID: newJobID(), Key: "s-" + newJobID(), Spec: h.Spec, Region: h.Region, Op: opStart, Tool: tool.Name, Dry: false, State: jobRunning, Attempt: 1, Started: m.now()}
 	m.jobs[j.ID] = j
 	m.pruneLocked()
 	m.busy = j.ID
@@ -395,6 +396,11 @@ func (m *provJobs) run(tool *provision.Tool, j *pjob, f func(context.Context, fu
 			// The instance exists from here on: it costs money, so it is on the books.
 			var est provision.Estimate
 			m.book.Add(j.Spec.Name, j.ID, j.Spec, j.Region, j.Cost, est)
+			m.book.Update(j.Spec.Name, func(h *provision.Host) {
+				if h.Owner == "" {
+					h.Owner = tool.Name
+				}
+			})
 		}
 		j.Items = append(j.Items, it)
 		if len(j.Items) > pjMaxItems {
@@ -512,12 +518,12 @@ func specErr(w http.ResponseWriter, err error) {
 // the ceiling. A price list that cannot be had is a warning in a dry run and a
 // refusal in a real one: a cost that cannot be checked is not allowed to spend.
 func (s *Server) provCeiling(ctx context.Context, spec provision.Spec, region string) (cost *provision.Cost, warn string, err error) {
-	tool := s.cfg.Provision.Tool
+	tool := s.cfg.Provision.toolForKind(spec.Kind)
 	if spec.Kind == provision.KindOpenShell {
 		return provision.SandboxCost(), "", nil // nothing here is priced, so no ceiling applies
 	}
 	if region == "" {
-		return nil, "the region was not given, so the cost could not be checked", s.ceilingUnknown("the region was not given")
+		return nil, "the region was not given, so the cost could not be checked", s.ceilingUnknown(tool, "the region was not given")
 	}
 	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -527,7 +533,7 @@ func (s *Server) provCeiling(ctx context.Context, spec provision.Spec, region st
 	}
 	if cerr != nil {
 		why := oneLine(provision.Text(cerr.Error(), 160), 160)
-		return nil, "the cost could not be priced: " + why, s.ceilingUnknown(why)
+		return nil, "the cost could not be priced: " + why, s.ceilingUnknown(tool, why)
 	}
 	max := tool.MaxUSDHour
 	if max <= 0 {
@@ -550,8 +556,8 @@ type unpricedError struct{ why string }
 func (e *unpricedError) Error() string { return "the cost cannot be checked (" + e.why + ")" }
 
 // ceilingUnknown is an error only where something real would be created.
-func (s *Server) ceilingUnknown(why string) error {
-	if !s.cfg.Provision.Tool.Real {
+func (s *Server) ceilingUnknown(tool *provision.Tool, why string) error {
+	if !tool.Real {
 		return nil
 	}
 	return &unpricedError{why: why}
@@ -566,7 +572,7 @@ func (s *Server) handlePeerPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tool := s.cfg.Provision.Tool
+	tool := s.cfg.Provision.toolForKind(spec.Kind)
 	plan, err := tool.PlanFor(r.Context(), spec)
 	if err != nil {
 		relErr(w, http.StatusUnprocessableEntity, "plan_refused", oneLine(err.Error(), 300))
@@ -600,7 +606,7 @@ func (s *Server) handlePeerJobCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tool := s.cfg.Provision.Tool
+	tool := s.cfg.Provision.toolForKind(spec.Kind)
 	// An old key returns its job without pricing or running anything again.
 	s.pjobs.mu.Lock()
 	old := s.pjobs.byKey(q.Key)
@@ -667,8 +673,17 @@ func (s *Server) handlePeerHostStart(w http.ResponseWriter, r *http.Request) {
 	}
 	// Look at the cloud first: a host that came up (or went) since the last
 	// look is not started again.
-	s.observeHosts(r.Context())
-	j, err := s.pjobs.startHost(s.cfg.Provision.Tool, q.Name, q.ConfirmCap)
+	tool, terr := s.toolOfHost(q.Name)
+	if terr == nil {
+		s.observeTool(r.Context(), tool, tool == s.cfg.Provision.Tool)
+	}
+	var j *pjob
+	var err error
+	if terr != nil {
+		err = terr
+	} else {
+		j, err = s.pjobs.startHost(tool, q.Name, q.ConfirmCap)
+	}
 	var ns *errNotStopped
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -731,7 +746,7 @@ func (s *Server) peerJobAct(w http.ResponseWriter, r *http.Request, act string) 
 		relErr(w, http.StatusBadRequest, "bad_request", "give the job id")
 		return
 	}
-	tool := s.cfg.Provision.Tool
+	tool := s.toolOfJob(raw.ID)
 	var err error
 	if act == "retry" {
 		_, err = s.pjobs.again(tool, raw.ID)
@@ -759,4 +774,20 @@ func (s *Server) handlePeerJobRetry(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handlePeerJobCleanup(w http.ResponseWriter, r *http.Request) {
 	s.peerJobAct(w, r, "cleanup")
+}
+
+// toolOfJob is the worker config a job ran through (the first when the job was
+// recorded before there were several, or its config is no longer set).
+func (s *Server) toolOfJob(id string) *provision.Tool {
+	s.pjobs.mu.Lock()
+	var name string
+	var kind string
+	if j := s.pjobs.jobs[id]; j != nil {
+		name, kind = j.Tool, j.Spec.Kind
+	}
+	s.pjobs.mu.Unlock()
+	if t := s.cfg.Provision.toolNamed(name); t != nil && name != "" {
+		return t
+	}
+	return s.cfg.Provision.toolForKind(kind)
 }

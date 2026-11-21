@@ -319,8 +319,8 @@ type Server struct {
 	pjobs          *provJobs           // on a provisioner: the jobs it runs
 	phosts         *provision.HostBook // on a provisioner: the hosts it built and what they cost
 	phostMu        sync.Mutex          // guards phostErr, phostAt
-	phostErr       string              // why the cloud could not be asked last time
-	phostAt        time.Time           // when it last was
+	phostErrs      map[string]string   // per worker config: why the cloud could not be asked last time
+	phostAt        time.Time           // when any config's cloud last was
 	pseen          *provSeen
 	provObserveGap time.Duration       // how often the provisioner asks (tests shorten it)
 	hjobs          *hubJobs            // on a hub: the jobs it has asked provisioners to run

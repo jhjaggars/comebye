@@ -42,9 +42,54 @@ import (
 // provisioner (on a hub) on.
 type ProvisionConfig struct {
 	// Tool runs the worker tool on this peer; nil: this host does not provision.
+	// With several worker configs it is the first: the one the price list, the
+	// preflight and Add host use for a kind no other config's provider matches.
 	Tool *provision.Tool
+	// Extra are the other worker configs of this provisioner (see Tools).
+	Extra []*provision.Tool
 	// Host is, on the hub, the default provisioner peer.
 	Host string
+}
+
+// Tools is every worker config this provisioner drives, the first first.
+func (c ProvisionConfig) Tools() []*provision.Tool {
+	if c.Tool == nil {
+		return nil
+	}
+	return append([]*provision.Tool{c.Tool}, c.Extra...)
+}
+
+// toolNamed finds a config by the name a host's Owner records. An empty name
+// is a host recorded before there were several: the first config's.
+func (c ProvisionConfig) toolNamed(name string) *provision.Tool {
+	for i, t := range c.Tools() {
+		if name == "" && i == 0 || name != "" && t.Name == name {
+			return t
+		}
+	}
+	return nil
+}
+
+// toolForKind is the config that builds and prices a kind of host: the first
+// whose provider is that kind, else the first config.
+func (c ProvisionConfig) toolForKind(kind string) *provision.Tool {
+	for _, t := range c.Tools() {
+		if t.Provider == kind {
+			return t
+		}
+	}
+	return c.Tool
+}
+
+// preflightTool is the config whose credentials the preflight reports: the
+// first of a cloud that has a price list and Add host, else the first.
+func (c ProvisionConfig) preflightTool() *provision.Tool {
+	for _, t := range c.Tools() {
+		if t.Provider == provision.KindAWS || t.Provider == provision.KindGCP || t.Provider == provision.KindOpenShell {
+			return t
+		}
+	}
+	return c.Tool
 }
 
 const (
@@ -108,7 +153,8 @@ func (s *Server) handlePeerPreflight(w http.ResponseWriter, r *http.Request) {
 	if !s.peerProvGuard(w, r) {
 		return
 	}
-	p, err := s.cfg.Provision.Tool.Preflight(r.Context())
+	tool := s.cfg.Provision.preflightTool()
+	p, err := tool.Preflight(r.Context())
 	if err != nil {
 		s.audit(r, ledger.AuditEvent{Action: "provision.preflight_failed", Detail: oneLine(err.Error(), 300)})
 		code := http.StatusBadGateway
@@ -118,7 +164,7 @@ func (s *Server) handlePeerPreflight(w http.ResponseWriter, r *http.Request) {
 		relErr(w, code, "preflight_failed", oneLine(provision.Text(err.Error(), 300), 300))
 		return
 	}
-	p.DryRun = !s.cfg.Provision.Tool.Real
+	p.DryRun = !tool.Real
 	writeJSON(w, p)
 }
 
@@ -149,7 +195,7 @@ func (s *Server) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Score = strings.Split(sc, ",")
 	}
-	c, err := s.cfg.Provision.Tool.Catalog(r.Context(), req)
+	c, err := s.cfg.Provision.toolForKind(req.Kind).Catalog(r.Context(), req)
 	if err != nil {
 		code, class := http.StatusBadGateway, "catalog_failed"
 		var ce *provision.CatalogError

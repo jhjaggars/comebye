@@ -31,12 +31,17 @@ import (
 // watchHosts does what is due for the node's hosts. One thing at a time; a
 // running job (a create, a destroy) holds the slot, and the check waits for the
 // next look.
-func (s *Server) watchHosts(ctx context.Context) {
-	tool := s.cfg.Provision.Tool
-	if s.phosts == nil || tool == nil || !tool.Real {
+func (s *Server) watchHosts(ctx context.Context, read map[string]bool) {
+	if s.phosts == nil || s.cfg.Provision.Tool == nil {
 		return
 	}
 	for _, a := range s.phosts.Due() {
+		// Each host is acted on through its own config, and only when that
+		// config's cloud was read just now: a failing config leaves its hosts be.
+		tool, err := s.toolOfHost(a.Name)
+		if err != nil || !tool.Real || read != nil && !read[tool.Name] {
+			continue
+		}
 		switch a.Kind {
 		case provision.ActWarn:
 			s.phosts.MarkWarned(a.Name)
