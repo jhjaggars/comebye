@@ -8677,7 +8677,11 @@ function renderPeersList() {
     ? `<a class="pr-nudge" href="${RELEASES_HASH}">${esc(rls.data.todo.release.version)} needs you: ${esc(rls.data.needs_text || "see the Releases tab")} →</a>` : "";
   const browse = pz.nodes && pz.nodes.enabled
     ? `<a class="pr-browse" href="${PRICES_HASH}" id="pr-browse">Browse prices<span>${esc(pzDefaultNode() || "")}</span></a>` : "";
-  const all = browse + html + nudge;
+  // A provisioner's worker config whose cloud could not be read (an expired AWS login) is said here, for that config
+  // only: the hosts of the other configs are listed and startable as usual.
+  const cloud = ph.data && (ph.data.nodes || []).filter((n) => n.stale).map((n) => `${n.name}: ${n.stale}`);
+  const cloudNote = cloud && cloud.length ? `<p class="pz-note warn pr-cloud" role="status">Not refreshed from the cloud: ${esc(cloud.join("; "))}</p>` : "";
+  const all = browse + html + cloudNote + nudge;
   if ($("pr-items")._html !== all) { $("pr-items")._html = all; $("pr-items").innerHTML = all; }
 }
 
