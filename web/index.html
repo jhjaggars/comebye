@@ -2241,7 +2241,7 @@
         border-left: 1px solid var(--border);
       }
       .screen header, #review header { padding-left: var(--sp-20); min-height: calc(var(--hit-48) + var(--sp-8)); }
-      #recall #rc-back, #review #rv-close, #pr-back, #us-back, #sx-back, #pages:not(.in-page) #pgs-back { display: none; }
+      #recall #rc-back, #review #rv-close, #pr-back, #us-back, #sx-back, #ar-back, #pages:not(.in-page) #pgs-back { display: none; }
       #recall #rc-form, #recall.in-session #rc-form { display: block; flex: 1 1 280px; order: 0; max-width: 640px; }
       #recall .rc-list { flex: 0 0 clamp(320px, 40%, 460px); display: block !important; border-right: 1px solid var(--border); }
       #recall .rc-session { display: block !important; }
@@ -2780,6 +2780,35 @@
     #us-back { margin: -10px 0 -10px -10px; color: var(--text); }
     #us-body:focus { outline: 0; }
     #us-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    /* Archived: finished work put away (#/archived). A screen of its own, like Settings; its rows are .rv-item cards. */
+    #ar-back { margin: -10px 0 -10px -10px; color: var(--text); }
+    #ar-body:focus { outline: 0; }
+    #ar-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    .ar-wrap { max-width: 900px; margin: 0; display: flex; flex-direction: column; gap: var(--sp-10); min-width: 0; }
+    .ar-sum { margin: 0; color: var(--muted); font-size: var(--fs-13); line-height: 1.45; overflow-wrap: anywhere; }
+    .ar-sum b { color: var(--text); font-size: var(--fs-15); font-weight: 650; }
+    .ar-tools { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; min-width: 0; }
+    #ar-q { flex: 1 1 220px; min-width: 0; min-height: var(--hit-44); padding: var(--sp-8) var(--sp-12); font: inherit; font-size: var(--fs-16); color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-10); }
+    #ar-q:focus-visible { outline-offset: 0; }
+    .ar-seg { display: flex; flex-wrap: wrap; gap: var(--sp-6); min-width: 0; }
+    .ar-seg button { min-height: var(--hit-40); padding: 0 var(--sp-12); background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-pill); font: inherit; font-size: var(--fs-14); cursor: pointer; }
+    .ar-seg button[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: var(--on-accent); font-weight: 600; }
+    .ar-seg .ar-n { opacity: 0.75; font-variant-numeric: tabular-nums; }
+    .ar-item .rv-top .chip { flex: none; }
+    .ar-left { font-size: var(--fs-13); margin-top: var(--sp-6); line-height: 1.45; overflow-wrap: anywhere; }
+    .ar-left b { font-weight: 650; }
+    .ar-left.owes b { color: var(--blue); }
+    .ar-left.cant b, .ar-left.waits b { color: var(--muted); }
+    .ar-item .rv-actions .btn { flex: 1 1 auto; }
+    .rv-sub a.ar-tr { color: var(--blue); }
+    .ar-msg { margin: 0; font-size: var(--fs-14); line-height: 1.45; overflow-wrap: anywhere; }
+    .ar-msg:empty { display: none; }
+    .ar-msg.err { color: var(--red); }
+    .rv-arch { margin: var(--sp-12) var(--sp-2) 0; color: var(--muted); font-size: var(--fs-13); line-height: 1.45; }
+    .rv-arch a, .bd-foot a.bd-arch { color: var(--blue); font-weight: 600; }
+    .pk-arch { display: flex; align-items: center; gap: var(--sp-6); min-height: var(--hit-44); margin: var(--sp-4) var(--sp-4) 0; color: var(--blue); font-size: var(--fs-14); font-weight: 600; text-decoration: none; }
+    .pk-arch .ln-chev { margin-left: auto; }
+    .bd-park { margin-left: var(--sp-4); }
     /* Settings: the passkeys list. A screen of its own, like Usage. */
     #sx-back { margin: -10px 0 -10px -10px; color: var(--text); }
     #sx-body:focus { outline: 0; }
@@ -3070,6 +3099,23 @@
       <h1>Settings</h1>
     </header>
     <div id="sx-body" tabindex="-1"><div class="sx-wrap" id="sx-view" aria-live="polite"></div></div>
+  </div>
+
+  <!-- Archived: finished work put away (#/archived) -->
+  <div id="archived" class="screen" hidden>
+    <header>
+      <button type="button" class="bell" id="ar-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <h1>Archived</h1>
+    </header>
+    <div id="ar-body" tabindex="-1"><div class="ar-wrap">
+      <p class="ar-sum" id="ar-sum"></p>
+      <div class="ar-tools">
+        <input id="ar-q" type="search" placeholder="Search archived sessions" aria-label="Search archived sessions" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <div class="ar-seg" id="ar-seg" role="group" aria-label="Show"></div>
+      </div>
+      <p class="ar-msg" id="ar-msg" role="status" aria-live="polite"></p>
+      <div id="ar-list" aria-live="polite"></div>
+    </div></div>
   </div>
 
   <!-- Pages: reports agents publish with `comebye publish` -->
@@ -3445,6 +3491,7 @@
       <div id="rv-bulk" class="rv-bulk" hidden></div>
       <div id="rv-list" aria-live="polite"></div>
       <div id="rv-auto" class="rv-auto" hidden></div>
+      <div id="rv-arch" class="rv-arch" hidden></div>
       <div class="ln-status" id="rv-status" aria-live="polite"></div>
     </div>
   </section>

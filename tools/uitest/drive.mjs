@@ -1539,6 +1539,9 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
       if (!(await page.locator(`${box} .bd-lane[data-lane="waiting"]`).evaluate((d) => d.open))) throw new Error("a lane closed on re-render");
       const t = await page.locator(`${box} .bd`).innerText();
       for (const w of ["Release v0.5.20", "Waits for the RFC, on purpose.", "the rollout is waiting on the hub."]) if (!t.includes(w)) throw new Error("no " + w);
+      // The footer: the loose counts, the archived one a link to the Archived screen.
+      const foot = await page.locator(`${box} .bd-foot`).evaluate((f) => ({ t: f.textContent, href: f.querySelector("a.bd-arch")?.getAttribute("href") }));
+      if (foot.t !== "3 ready to remove · 27 archived" || foot.href !== "#/archived") throw new Error("footer " + JSON.stringify(foot));
       await page.screenshot({ path: `${out}/board-status-${width}.png` });
       // By project: Needs you stays, the other lanes regroup with a lane tag per item.
       await page.locator(`${box} [data-bd-mode="project"]`).click();

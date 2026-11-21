@@ -1482,6 +1482,7 @@ async function loadLedger() {
   ledger.inflight = true;
   try {
     setLedger(await api("/api/ledger"));
+    if (!arch.data && !arch.err) loadArchived(); // the board footer and Recently closed need it
     // The briefing rides along, at most every 20 seconds.
     if (Date.now() - briefing.loadedAt > 20000) loadBrief();
     if (Date.now() - todos.loadedAt > 8000) loadTodos();
@@ -4672,14 +4673,49 @@ async function loadParked() {
   } catch { /* the list keeps what it had */ }
 }
 
-// parkedEntries are the records the host filter shows, newest first.
+// parkedEntries are the records the host filter shows, newest first. An archived session's record
+// is left out: the Archived screen lists it (the Parked list folds into it).
 function parkedEntries() {
-  const out = [];
+  const out = [], inArchive = archParkIds();
   for (const h of parked.hosts) {
     if (!hostIn(h.host)) continue;
-    for (const r of h.parked || []) out.push({ host: h.host, online: h.online, rec: r });
+    for (const r of h.parked || []) if (!inArchive.has(r.id)) out.push({ host: h.host, online: h.online, rec: r });
   }
   return out.sort((a, b) => Date.parse(b.rec.parked_at) - Date.parse(a.rec.parked_at));
+}
+
+// parkLedgerEntry is the ledger entry of a park record: the newest handoff of that name on that host.
+function parkLedgerEntry(host, rec) {
+  let best = null;
+  for (const x of ledger.entries) {
+    if (!x || !x.agent_name || x.agent_name !== rec.name || (x.host && host && x.host !== host)) continue;
+    if (rec.worktree && x.worktree && x.worktree !== rec.worktree) continue;
+    if (!best || Date.parse(x.created_at) > Date.parse(best.created_at)) best = x;
+  }
+  return best;
+}
+
+// PAUSED_STATES: a handoff parked in one of these was parked mid-task, so it is "paused" (it comes back
+// to the board when resumed). Parked finished work just has its "pane closed".
+const PAUSED_STATES = new Set(["running", "waiting", "landing"]);
+function parkLabel(host, rec) {
+  if (rec.why === "auto_removed") return "removed";
+  const e = parkLedgerEntry(host, rec);
+  return e && PAUSED_STATES.has(e.status) ? "paused" : "pane closed";
+}
+
+// boardPark is the open park record of a board item's handoff, so the card can say "paused" or
+// "pane closed" and offer Resume.
+function boardPark(it) {
+  if (it.type !== "handoff" || !parked.hosts.length) return null;
+  const e = ledger.entries.find((x) => x && x.id === it.id);
+  if (!e || !e.agent_name || (it.agent && state.agents.some((a) => agentId(a) === it.agent))) return null;
+  for (const h of parked.hosts) {
+    if (e.host && h.host !== e.host) continue;
+    const rec = (h.parked || []).find((r) => r.name === e.agent_name && !r.resumed_at && r.why !== "auto_removed" && (!r.worktree || !e.worktree || r.worktree === e.worktree));
+    if (rec) return { host: h.host, rec, label: PAUSED_STATES.has(e.status) ? "paused" : "pane closed" };
+  }
+  return null;
 }
 
 function parkedRowHTML(e) {
@@ -4690,19 +4726,20 @@ function parkedRowHTML(e) {
     <div class="meta"><div class="name">${esc(r.name)}${r.pinned ? '<span class="role-chip" title="Kept: never suggested for removal">kept</span>' : ""}</div>
       <div class="sub">${esc(e.host)} · ${esc(r.kind)} · closed ${esc(when)} ago</div>
       <div class="sub">${kept}${e.online ? "" : ' <span class="chip muted">host offline</span>'}</div></div>
-    <span class="status">${r.why === "auto_removed" ? "removed" : "parked"}</span></div>`;
+    <span class="status">${esc(parkLabel(e.host, r))}</span></div>`;
 }
 
 function parkedSectionHTML() {
-  const list = parkedEntries();
-  if (!list.length) return "";
+  const list = parkedEntries(), nArch = archCount();
+  if (!list.length && !nArch) return "";
+  const toArch = nArch ? `<a class="pk-arch" href="${ARCHIVED_HASH}">${nArch} archived: finished work put away<span class="ln-chev" aria-hidden="true">›</span></a>` : "";
   const open = !collapsed().has("Recently closed");
   return `<section class="proj parked-sec" aria-label="Recently closed">
     <button type="button" class="proj-head" data-proj="Recently closed" aria-expanded="${open}">
       <span class="proj-chev" aria-hidden="true"></span><span class="proj-name">Recently closed</span>
       <span class="proj-counts"><span>${list.length}</span></span>
     </button>
-    <div class="proj-body"${open ? "" : " hidden"}>${parkCostHTML(list)}${list.map(parkedRowHTML).join("")}</div></section>`;
+    <div class="proj-body"${open ? "" : " hidden"}>${parkCostHTML(list)}${list.map(parkedRowHTML).join("")}${toArch}</div></section>`;
 }
 
 function fmtBytes(n) {
@@ -5315,6 +5352,196 @@ function fleetRefresh() {
   toast("Refreshing");
 }
 
+/* ---------- Archived: a screen (#/archived) ---------- */
+//
+// Finished work nobody will merge or look at soon, put away by the hub's sweep
+// loop (or by hand): GET /api/archived (archived.go). Each row says why it was
+// archived, the commits main lacks, what is left (followup items as "Owes
+// you"), and the build output its archiving cleared. Nothing here deletes
+// anything: Unarchive brings it back to the board, Resume also reopens its
+// parked pane, and Propose removal marks it, so it goes to Ready to remove,
+// is asked what is left and is checked by git there. It is reached from the
+// board's footer, from Ready to remove and from Recently closed, which leaves
+// out the park records of archived sessions (they are listed here).
+
+const ARCHIVED_HASH = "#/archived";
+const ARCH_FILTERS = [
+  { key: "all", label: "All", ok: () => true },
+  { key: "unmerged", label: "Unmerged", ok: (r) => (r.archive.unmerged || 0) > 0 },
+  { key: "reports", label: "Reports", ok: (r) => !!r.report },
+  { key: "left", label: "Something left", ok: (r) => (r.archive.left || []).length > 0 },
+];
+const arch = { route: false, data: null, err: "", q: "", filter: "all", busy: new Set(), open: new Set(), inflight: false, sig: "" };
+
+// archCount is the number archived: the list when it is in, else the board's count.
+function archCount() {
+  if (arch.data) return arch.data.count || 0;
+  return (board.data && board.data.loose && board.data.loose.archived) || 0;
+}
+
+// archParkIds are the park records of archived sessions: Recently closed leaves them out.
+function archParkIds() {
+  return new Set(((arch.data && arch.data.archived) || []).map((r) => r.archive && r.archive.park_id).filter(Boolean));
+}
+
+async function loadArchived() {
+  if (arch.inflight || ledger.on !== true) return;
+  arch.inflight = true;
+  try {
+    const d = await api("/api/archived");
+    d.archived = Array.isArray(d.archived) ? d.archived : [];
+    for (const r of d.archived) r.archive = r.archive || {};
+    arch.data = d; arch.err = "";
+  } catch (e) {
+    arch.err = e.message;
+  } finally { arch.inflight = false; }
+  const sig = JSON.stringify([...archParkIds()]) + ":" + archCount();
+  if (sig !== arch.sig) { arch.sig = sig; renderList(); renderNav(); }
+  renderArchived();
+  if (review.open) renderReviewArch();
+}
+
+// archItemText is a leftover item as a line: its text, or what it names.
+function archItemText(x) {
+  const what = x.type === "pr" || x.type === "issue" ? `${x.repo || ""}#${x.number || ""}` : x.type === "branch" ? (x.remote ? x.remote + "/" : "") + (x.branch || "")
+    : x.type === "todo" ? x.id || "" : x.type === "path" ? x.name || "" : "";
+  return [what, x.text].filter(Boolean).join(": ") || "(no detail given)";
+}
+
+function archRowHTML(r) {
+  const a = r.archive, id = esc(r.id), name = esc(r.name || r.id), busy = arch.busy.has(r.id) ? " disabled" : "";
+  const left = a.left || [];
+  const chips = (r.purpose ? `<span class="chip line">${esc(r.purpose)}</span>` : "") + (left.length ? `<span class="chip yellow">${left.length} left</span>` : "") +
+    (multiHost() && r.host ? `<span class="host-chip">${esc(r.host)}</span>` : "");
+  const where = [r.project, r.branch].filter(Boolean).map(esc).join(" · ");
+  const when = a.at ? `archived ${esc(fmtAgo(Date.parse(a.at)))} ago` : "archived";
+  const commits = a.unmerged > 0 ? `${a.unmerged} commit${a.unmerged === 1 ? "" : "s"} not merged${a.unpushed > 0 ? `, ${a.unpushed} on no remote` : a.unpushed === 0 ? ", pushed" : ""}.`
+    : a.unmerged === 0 ? "Nothing that its base lacks." : "";
+  const build = a.build_pending ? `Its build output is cleared when ${esc(r.host)} is next up.`
+    : a.build_freed ? `Freed ${esc(fmtBytes(a.build_freed))} of build output${(a.build_dirs || []).length ? ` (${a.build_dirs.map(esc).join(", ")})` : ""}.` : "";
+  const disk = a.worktree_bytes ? `${esc(fmtBytes(a.worktree_bytes))} on disk.` : "";
+  const facts = [commits && esc(commits), build, disk].filter(Boolean).join(" ");
+  const owes = left.filter((x) => x.type === "followup" || x.type === "decision"), cant = left.filter((x) => x.type === "cleanup" || x.type === "other");
+  const waits = left.filter((x) => !owes.includes(x) && !cant.includes(x));
+  const line = (label, xs, cls) => xs.length ? `<div class="ar-left ${cls}"><b>${label}:</b> ${xs.map((x) => esc(archItemText(x))).join("; ")}</div>` : "";
+  const e = r.report ? ledger.entries.find((x) => x && x.id === r.id) : null;
+  const rep = e && e.final_report ? `<details class="rv-report" data-id="${id}"><summary>Final report</summary><div class="md"></div></details>` : "";
+  const resume = a.park_id ? `<button type="button" class="btn" data-ar="resume" data-id="${id}" aria-label="Unarchive ${name} and resume its pane"${busy}>Resume</button>` : "";
+  const propose = r.agent_id ? `<button type="button" class="btn" data-ar="propose" data-id="${id}" aria-label="Propose removing ${name}"${busy}>Propose removal</button>` : "";
+  return `<div class="rv-item ar-item" data-id="${id}">
+    <div class="rv-top"><span class="rv-name">${name}</span>${chips}</div>
+    <div class="rv-sub">${where ? where + " · " : ""}${when} · <a class="ar-tr" href="#/search/for?ledger=${encodeURIComponent(r.id)}">transcript</a></div>
+    <div class="rv-reason">${esc(a.why || "Archived.")}${facts ? " " + facts : ""}</div>
+    ${line("Owes you", owes, "owes")}${line("Can’t check", cant, "cant")}${line("Waits on", waits, "waits")}${rep}
+    <div class="rv-actions"><button type="button" class="btn" data-ar="restore" data-id="${id}" aria-label="Unarchive ${name}"${busy}>Unarchive</button>${resume}${propose}</div></div>`;
+}
+
+function archMatches(r, q) {
+  if (!q) return true;
+  const a = r.archive;
+  return [r.name, r.project, r.branch, r.purpose, r.host, a.why, ...(a.left || []).map(archItemText)].some((s) => s && String(s).toLowerCase().includes(q));
+}
+
+function renderArchived() {
+  if (!arch.route) return;
+  const d = arch.data, rows = d ? d.archived : [];
+  $("ar-sum").innerHTML = d ? `<b>${d.count} archived</b> · ${esc(fmtBytes(d.worktree_bytes || 0))} on disk · ${esc(fmtBytes(d.build_freed || 0))} of build output freed · no source is ever deleted` : "";
+  const q = arch.q.trim().toLowerCase();
+  const found = rows.filter((r) => archMatches(r, q));
+  $("ar-seg").innerHTML = ARCH_FILTERS.map((f) => `<button type="button" data-ar-f="${f.key}" aria-pressed="${arch.filter === f.key}">${esc(f.label)} <span class="ar-n">${found.filter(f.ok).length}</span></button>`).join("");
+  const f = ARCH_FILTERS.find((x) => x.key === arch.filter) || ARCH_FILTERS[0];
+  const shown = found.filter(f.ok);
+  let html;
+  if (!d) html = arch.err ? `<div class="ln-empty">${esc(arch.err)}</div>` : `<div class="ln-empty">Loading…</div>`;
+  else if (!rows.length) html = `<div class="ln-empty">Nothing is archived. The hub archives finished work after a week with no progress (3 days for research, plans, reviews and the like), and keeps its worktree and branch.</div>`;
+  else if (!shown.length) html = `<div class="ln-empty">No archived session matches.</div>`;
+  else html = shown.map(archRowHTML).join("");
+  const list = $("ar-list");
+  if (list._html === html) return;
+  list._html = html;
+  list.innerHTML = html;
+  list.querySelectorAll(".rv-report").forEach((det) => {
+    const e = ledger.entries.find((x) => x && x.id === det.dataset.id);
+    if (e) mdOnOpen(det, det.querySelector(".md"), e.final_report, "archived:" + e.id);
+    if (arch.open.has(det.dataset.id)) det.open = true;
+    det.addEventListener("toggle", () => { if (det.open) arch.open.add(det.dataset.id); else arch.open.delete(det.dataset.id); });
+  });
+}
+
+function archSay(msg, isErr) { $("ar-msg").textContent = msg || ""; $("ar-msg").classList.toggle("err", !!isErr); }
+
+async function archAct(act, id) {
+  const r = arch.data && arch.data.archived.find((x) => x.id === id);
+  if (!r || arch.busy.has(id)) return;
+  arch.busy.add(id); renderArchived();
+  const name = r.name || r.id;
+  try {
+    if (act === "propose") {
+      await api("/api/marks", { method: "POST", body: JSON.stringify({ agent_id: r.agent_id, reason: "Proposed from the Archived screen" }) });
+      archSay(`${name} is under Ready to remove: it is asked what is left, and git decides before anything is deleted.`);
+    } else {
+      const d = await api("/api/archived/restore", { method: "POST", body: JSON.stringify({ ref: r.id, resume: act === "resume" }) });
+      if (d.resume_error) archSay(`Unarchived ${name}, but it could not be resumed: ${d.resume_error}`, true);
+      else archSay(act === "resume" ? `Unarchived ${name} and resumed its pane.` : `Unarchived ${name}: it is back on the board.`);
+      if (act === "resume") { parked.sig = ""; loadParked(); }
+    }
+  } catch (e) {
+    archSay(e.message, true);
+  } finally { arch.busy.delete(id); }
+  board.at = 0;
+  loadLedger();
+  await loadArchived();
+  loadBoard();
+}
+
+function syncArchived() {
+  const on = location.hash.split("?")[0] === ARCHIVED_HASH;
+  const el = $("archived");
+  const was = !el.hidden;
+  arch.route = on;
+  el.hidden = !on;
+  if (!on) return;
+  if (!was) {
+    archSay("");
+    $("ar-list")._html = "";
+    loadArchived();
+    ($("ar-back").offsetParent ? $("ar-back") : $("ar-body")).focus({ preventScroll: true });
+  }
+  renderArchived();
+}
+
+function closeArchived() {
+  history.replaceState(null, "", location.pathname + location.search);
+  route();
+}
+
+function initArchived() {
+  $("ar-back").addEventListener("click", closeArchived);
+  $("archived").addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    ev.stopPropagation();
+    if (ev.target.id === "ar-q" && arch.q) { arch.q = ev.target.value = ""; renderArchived(); } else closeArchived();
+  });
+  $("ar-q").addEventListener("input", (ev) => { arch.q = ev.target.value; renderArchived(); });
+  $("ar-seg").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-ar-f]");
+    if (b) { arch.filter = b.dataset.arF; renderArchived(); }
+  });
+  $("ar-list").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-ar]");
+    if (b && !b.disabled) archAct(b.dataset.ar, b.dataset.id);
+  });
+}
+
+// renderReviewArch is the "Archived (N)" link on Ready to remove.
+function renderReviewArch() {
+  const el = $("rv-arch");
+  if (!el) return;
+  const n = archCount();
+  el.hidden = !n;
+  el.innerHTML = n ? `<a href="${ARCHIVED_HASH}">Archived (${n})</a><span> finished work put away, with its worktree and branch kept. Propose removal there to bring one here.</span>` : "";
+}
+
 /* ---------- Ready to remove: a page (#/remove) ---------- */
 //
 // The sessions marked ready to remove, each with safety checks run on its
@@ -5353,6 +5580,7 @@ function showReview() {
   renderSweep();
   renderNav();
   loadReview();
+  loadArchived();
 }
 
 function hideReview() {
@@ -5619,6 +5847,7 @@ function renderReview() {
   });
   renderReviewBulk();
   renderReviewAuto();
+  renderReviewArch();
   $("rv-sweep").disabled = review.busy || sweep.busy;
 }
 
@@ -8040,7 +8269,8 @@ function syncScreens() {
   syncUsage();
   syncSettings();
   syncReview();
-  document.body.classList.toggle("has-screen", !!(rc.route || pgs.route || prs.route || us.route || sx.route || review.open));
+  syncArchived();
+  document.body.classList.toggle("has-screen", !!(rc.route || pgs.route || prs.route || us.route || sx.route || review.open || arch.route));
   renderNav();
 }
 
@@ -8200,6 +8430,7 @@ async function loadBoard() {
     const d = await api("/api/board");
     if (d && Array.isArray(d.lanes)) {
       board.data = d;
+      if (d.loose && arch.data && (d.loose.archived || 0) !== arch.data.count) loadArchived();
       if (!board.seen) { board.seen = boardSnapshot(d); lsSet(BOARD_SEEN_KEY, JSON.stringify(board.seen)); }
     }
   } catch { /* keep what we had */ } finally {
@@ -8215,6 +8446,8 @@ function boardItemHtml(it, laneKey, showLane) {
   const open = it.agent && isDesktop() && state.agents.some((a) => agentId(a) === it.agent) ? ` <button type="button" class="st-link" data-agent="${escAttr(it.agent)}">open</button>` : "";
   const when = it.since && fmtWhen(it.since) ? `<span class="bd-age">${esc(fmtWhen(it.since))}</span>` : "";
   const lane = showLane ? `<span class="bd-tag">${esc(BOARD_LANE_LABEL[laneKey] || "")}</span>` : "";
+  const pk = boardPark(it);
+  const paused = pk ? ` <span class="chip teal bd-park" title="${pk.label === "paused" ? "Parked mid-task: its pane is closed, and it comes back here when resumed." : "Its pane is closed; the work is kept."}">${esc(pk.label)}</span> <button type="button" class="st-link" data-bd-park="${escAttr(pk.rec.id)}" data-host="${escAttr(pk.host)}">resume</button>` : "";
   const mk = boardMark(it.id, laneKey);
   const mark = mk ? `<span class="bd-new" title="${mk === "new" ? "Not on the board when you last marked it seen" : "In another lane when you last marked it seen"}">${mk}</span>` : "";
   if (it.type === "todo") {
@@ -8230,7 +8463,7 @@ function boardItemHtml(it, laneKey, showLane) {
       : `<span class="bd-d">${it.report ? "report loading" : "no report captured"}</span>`;
     rep = `<div class="bd-d">${esc(it.kind || "report")}${pages ? " · Page: " + pages : ""}</div>${rpt}`;
   }
-  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${mark}${lane}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${rep}${note}</li>`;
+  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${mark}${lane}${paused}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${rep}${note}</li>`;
 }
 
 function boardLaneHtml(key, name, count, items, open, showLane, extra) {
@@ -8260,8 +8493,10 @@ function boardHtml() {
       .map(([p, items]) => boardLaneHtml("p:" + p, p, items.length, items, board.open.has("p:" + p), true)).join("");
   }
   const loose = d.loose || {};
-  const foot = [loose.ready_to_remove ? `${loose.ready_to_remove} ready to remove` : "",
-    (d.unkeyed_notes || []).length ? `${d.unkeyed_notes.length} ${d.unkeyed_notes.length === 1 ? "note names" : "notes name"} an unknown id` : ""].filter(Boolean).join(" · ");
+  // The archived count links to the Archived screen: they are in no lane.
+  const foot = [loose.ready_to_remove ? esc(`${loose.ready_to_remove} ready to remove`) : "",
+    loose.archived ? `<a class="bd-arch" href="${ARCHIVED_HASH}">${esc(loose.archived)} archived</a>` : "",
+    (d.unkeyed_notes || []).length ? esc(`${d.unkeyed_notes.length} ${d.unkeyed_notes.length === 1 ? "note names" : "notes name"} an unknown id`) : ""].filter(Boolean).join(" · ");
   const counts = rest.map((l) => `${l.count} ${BOARD_LANE_LABEL[l.key] || l.name}`).join(" · ");
   let fresh = 0;
   for (const l of lanes) for (const it of l.items || []) if (boardMark(it.id, l.key)) fresh++;
@@ -8269,7 +8504,7 @@ function boardHtml() {
   return `<section class="bd" aria-label="Briefing board">${head}` +
     (needs.count ? boardLaneHtml("needs_you", "Needs you", needs.count, needs.items, board.open.has("needs_you"), false) : `<p class="bd-clear">Nothing needs you.</p>`) +
     `<div class="bd-bar"><span class="bd-sum">${esc(total ? counts : "Nothing else in flight.")}</span><span class="bd-seg" role="group" aria-label="Group by">${sw}</span>${seen}</div>${body}` +
-    (foot ? `<p class="bd-foot">${esc(foot)}</p>` : "") + `</section>`;
+    (foot ? `<p class="bd-foot">${foot}</p>` : "") + `</section>`;
 }
 
 function boardGoTodo(id) {
@@ -8506,8 +8741,9 @@ function renderStatus() {
 
 function onStatusClick(ev) {
   const g = ev.target.closest("[data-go]"), a = ev.target.closest("[data-agent]"), bi = ev.target.closest("[data-bi]");
-  const bm = ev.target.closest("[data-bd-mode]"), bt = ev.target.closest("[data-bd-todo]");
-  if (bm) {
+  const bm = ev.target.closest("[data-bd-mode]"), bt = ev.target.closest("[data-bd-todo]"), bp = ev.target.closest("[data-bd-park]");
+  if (bp) openParkSheet(bp.dataset.bdPark, bp.dataset.host);
+  else if (bm) {
     board.mode = bm.dataset.bdMode === "project" ? "project" : "status";
     lsSet(BOARD_MODE_KEY, board.mode);
     for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
@@ -11082,6 +11318,7 @@ const NAV_ICON = {
   settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>',
   peers: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>',
   removals: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  archived: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9M10 13h4"/></svg>',
 };
 const NAV_ROWS = [
   { key: "status", label: "Status", show: () => ledger.on === true },
@@ -11093,6 +11330,8 @@ const NAV_ROWS = [
   { key: "settings", label: "Settings", show: () => ledger.on === true, open: () => { location.hash = "#/settings"; }, on: () => sx.route }, // the passkeys
   // Hidden at zero, except while you are on it.
   { key: "removals", label: "Ready to remove", show: () => ledger.on === true && (ledger.marked.size > 0 || review.open), count: () => ledger.marked.size, open: () => openReview(), on: () => review.open },
+  // Finished work put away: no badge (nothing there waits on you).
+  { key: "archived", label: "Archived", show: () => ledger.on === true && (archCount() > 0 || arch.route), open: () => { location.hash = ARCHIVED_HASH; }, on: () => arch.route },
 ];
 
 function renderNav() {
@@ -15190,6 +15429,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initPeers();
   initUsage();
   initSettings();
+  initArchived();
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     const chat = state.chat;
@@ -15354,7 +15594,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("pk-rm").addEventListener("click", sendParkToRemoval);
   $("pk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeParkSheet(); } });
   loadParked();
-  setInterval(() => { if (!document.hidden) loadParked(); }, 30000);
+  setInterval(() => { if (!document.hidden) { loadParked(); loadArchived(); } }, 30000);
   $("row-transcript").addEventListener("click", rowMenuTranscript);
   initPopovers();
   initHostPicker();

@@ -37,6 +37,6 @@ export function boardView(todoId = "tf7e1b09b86", question = "Press Bump hub on 
         h("h999999999999", "oce-setup", "oce-ocp-setup", "landed", 900, { detail: "PR #17 merged" }),
       ]),
     ],
-    loose: { reports: 0, ready_to_remove: 3 },
+    loose: { reports: 0, ready_to_remove: 3, archived: 27 },
   };
 }

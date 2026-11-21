@@ -137,6 +137,8 @@ if want decisionsets; then node decisionsets.mjs "http://127.0.0.1:$port" "$out"
 if want setfreetext; then node setfreetext.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want chatswitch; then node chatswitch.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The Archived screen (#/archived): list, filter, Unarchive/Resume/Propose removal, the board footer and the links.
+if want archived; then node archived.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want restart; then node restart.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
