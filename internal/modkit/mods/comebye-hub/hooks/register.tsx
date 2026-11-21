@@ -39,7 +39,14 @@ async function refresh($: Engine, st: State, force: boolean) {
     }
   } finally {
     st.inFlight = false
-    st.lastAt = await $.clock.now()
+    // Callers fire and forget, so refresh must never reject: when the module
+    // is unloaded mid-call (a plugin reload, a test's end) the engine refuses
+    // $.clock and the rejection would go unhandled.
+    try {
+      st.lastAt = await $.clock.now()
+    } catch {
+      // The module is gone; there is no state left to keep.
+    }
   }
 }
 
