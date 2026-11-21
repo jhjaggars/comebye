@@ -1,0 +1,20 @@
+# The in-cluster KubeVirt provisioner (issue #78): a second comebye peer, in its
+# own pod, that wakes, stops, creates and destroys KubeVirt worker VMs for the
+# hub. Copy this directory, edit everything marked CHANGE-ME, then
+#   kubectl apply -k .
+# See README.md, docs/workers.md ("The in-cluster provisioner") and
+# docs/security.md.
+#
+# No `namespace:` here on purpose: kustomize would force every object into one
+# namespace, and this set spans two (the hub's, and the VMs'). Each object
+# names its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - serviceaccount.yaml
+  - rbac.yaml
+  - secrets.yaml
+  - configmap.yaml
+  - serve-config.yaml
+  - pvc.yaml
+  - deployment.yaml

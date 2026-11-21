@@ -1,0 +1,17 @@
+# Tailscale Serve for the provisioner's own node: terminate HTTPS on its
+# tailnet name and proxy to comebye on the pod's loopback, as the hub does.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: comebye-provisioner-serve
+  namespace: comebye-hub   # CHANGE-ME
+data:
+  serve.json: |
+    {
+      "TCP": {"443": {"HTTPS": true}},
+      "Web": {
+        "${TS_CERT_DOMAIN}:443": {
+          "Handlers": {"/": {"Proxy": "http://127.0.0.1:8741"}}
+        }
+      }
+    }

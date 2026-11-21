@@ -1,0 +1,13 @@
+# The worker tool's state directory: each worker's ssh key and pinned
+# known_hosts. Lose it and `start` can no longer verify a guest (a re-key then
+# takes a destroy and create), so back it up like any key store.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: comebye-provisioner-worker
+  namespace: comebye-hub   # CHANGE-ME
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # storageClassName: CHANGE-ME  (omit for the cluster default)
+  resources:
+    requests: {storage: 100Mi}
