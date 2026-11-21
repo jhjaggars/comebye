@@ -234,7 +234,7 @@ jobs:
   browser-rest:
     name: browser rest (${{ matrix.shard }}/4)
     needs: changes
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true') # TEMP (PR #94 proof): revert before landing
+    if: github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
