@@ -173,10 +173,20 @@ func newGoneFix(t *testing.T, land bool, text string) *goneFix {
 // re-asked reasks times. id is its agent: goneID (not in herdr) or liveID (idle there).
 func newFix(t *testing.T, land bool, text, id, pane string, reasks int) *goneFix {
 	t.Helper()
+	var how func(*testing.T, landedRepo)
+	if land {
+		how = func(t *testing.T, r landedRepo) { r.landCherryPick(t) }
+	}
+	return newFixLanded(t, how, text, id, pane, reasks)
+}
+
+// newFixLanded is newFix with the landing done by land (nil: not landed).
+func newFixLanded(t *testing.T, land func(*testing.T, landedRepo), text, id, pane string, reasks int) *goneFix {
+	t.Helper()
 	stubOpenPRs(t, nil, nil)
 	r := backedUp(t)
-	if land {
-		r.landCherryPick(t)
+	if land != nil {
+		land(t, r)
 	}
 	s, fh, _ := coordServer(t)
 	s.cfg.LaunchRoots = []string{filepath.Dir(r.repo)}
@@ -312,7 +322,7 @@ func TestSweepLeftoversAutoModeDeletesOnceAndSaysSo(t *testing.T) {
 	tip := git(t, f.r.repo, "rev-parse", "refs/remotes/origin/w")
 	n, deleted := s.leftovers(ctx(), now, true)
 	if n != 1 || len(deleted) != 1 || deleted[0].Kind != doneBranch || deleted[0].Branch != "w" || deleted[0].Tip != tip ||
-		deleted[0].Restore != "git push origin "+tip+":refs/heads/w" {
+		deleted[0].Restore != "git push origin "+tip+":refs/heads/w" || deleted[0].Backup != "refs/comebye/backup/w" {
 		t.Fatalf("settled %d, deleted %+v (tip %s)", n, deleted, tip)
 	}
 	if remoteHas(t, f.r, "w") {

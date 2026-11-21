@@ -152,6 +152,8 @@ type sweepDone struct {
 	Branch  string    `json:"branch,omitempty"`
 	Tip     string    `json:"tip,omitempty"`
 	Restore string    `json:"restore,omitempty"`
+	// Backup is the ref on Host that keeps the deleted branch's tip.
+	Backup string `json:"backup,omitempty"`
 	// Note: a session removed but its worktree kept, and why.
 	Note string `json:"note,omitempty"`
 }
@@ -358,14 +360,18 @@ func (s *Server) recordDone(now time.Time, done []sweepDone) {
 			}
 			sessions = append(sessions, t)
 		case doneBranch:
-			branches = append(branches, fmt.Sprintf("origin/%s was at %s", safeText(d.Branch), d.Tip))
+			t := fmt.Sprintf("origin/%s was at %s", safeText(d.Branch), d.Tip)
+			if d.Backup != "" {
+				t += ", kept on " + safeText(d.Host) + " as " + safeText(d.Backup)
+			}
+			branches = append(branches, t)
 		}
 	}
 	if n := len(sessions); n > 0 {
 		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep removed %d %s with nothing to lose (clean, every commit in the default branch, nothing unpushed): %s.", n, plural(n, "session", "sessions"), strings.Join(sessions, ", ")))
 	}
 	if n := len(branches); n > 0 {
-		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep deleted %d stale remote %s (every commit is in the default branch, no open PR): %s. Restore one with git push origin <sha>:refs/heads/<name>.", n, plural(n, "branch", "branches"), strings.Join(branches, "; ")))
+		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep deleted %d stale remote %s (every commit is in the default branch, or was rebased into it; no open PR): %s. Restore one on its host with git push origin <sha>:refs/heads/<name>.", n, plural(n, "branch", "branches"), strings.Join(branches, "; ")))
 	}
 }
 

@@ -25,7 +25,13 @@ import (
 //   - after a fetch, `git cherry origin/<default> <tip>` shows no "+" line and
 //     the branch has no merge commit (or its tree is identical to a commit on
 //     origin/<default>);
+//     origin/<default>), or it is superseded by its own rebase (supersededOn:
+//     each commit git cherry cannot match was rebased as exactly one commit on
+//     origin/<default>, which git range-diff pairs with it);
 //   - gh finds no open pull request from it (gh failing is "unknown": no proof).
+//
+// Before deleting, the host keeps the tip under refs/comebye/backup/<branch>
+// in the repository, so the branch can be pushed back from there.
 //
 // The check and the deletion run on the session's host, where the repository and
 // its git credentials are. The deletion re-runs the whole check and pushes with
@@ -60,8 +66,14 @@ type staleBranchResult struct {
 	Ahead int    `json:"ahead,omitempty"` // commits the default branch lacks (not_in_main)
 	PR    int    `json:"pr,omitempty"`
 	Why   string `json:"why,omitempty"`
+	// Superseded lists, for a branch proven by its rebase (supersededOn),
+	// each of its commits and the commit on the default branch it was rebased as.
+	Superseded []landedCommit `json:"superseded,omitempty"`
 	// Deleted: this call removed it from origin.
 	Deleted bool `json:"deleted,omitempty"`
+	// Backup is the local ref on the host that holds the deleted tip
+	// (refs/comebye/backup/<branch>), set when Deleted.
+	Backup string `json:"backup,omitempty"`
 }
 
 // ghOpenPRs lists the open pull requests whose head branch is branch. A
@@ -149,6 +161,8 @@ func checkStaleBranch(ctx context.Context, dir, branch, own string, del bool) st
 		r.Proof = "every commit has an equal in " + r.Ref + " (git cherry)"
 	case treeOnBase(ctx, dir, base, tip):
 		r.Proof = "its tree is identical to a commit on " + r.Ref
+	case strings.TrimSpace(merges) == "0" && supersededOn(ctx, dir, base, tip, &r):
+		// r.Proof and r.Superseded say which commits replaced it.
 	default:
 		r.State = staleNotInMain
 		r.Why = fmt.Sprintf("%d %s not in %s", max(r.Ahead, 1), plural(max(r.Ahead, 1), "commit is", "commits are"), r.Ref)
@@ -165,6 +179,14 @@ func checkStaleBranch(ctx context.Context, dir, branch, own string, del bool) st
 	}
 	r.State = staleInMain
 	if del {
+		// A local ref keeps the commits on this host first (git gc never
+		// collects them), so the branch can be pushed back from it.
+		bk, err := backupRef(ctx, dir, branch, tip)
+		if err != nil {
+			r.State, r.Why = staleUnknown, "no backup ref could be kept, so the branch was not deleted: "+clip(err.Error(), 160)
+			return r
+		}
+		r.Backup = bk
 		// A lease on the tip just checked: a branch that moved since is kept.
 		if _, err := runGit(ctx, dir, "push", "--no-verify", "--force-with-lease=refs/heads/"+branch+":"+tip, "origin", ":refs/heads/"+branch); err != nil {
 			r.State, r.Why = staleUnknown, "the delete was refused: "+clip(err.Error(), 160)

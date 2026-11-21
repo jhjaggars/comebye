@@ -21,10 +21,12 @@ import (
 //     have, the answer becomes NOTHING LEFT, with a note of what the loop did;
 //   - an item that is "delete the remote copy of my own branch" is done when git
 //     proves every commit of that branch is in origin's default branch and no
-//     pull request from it is open (stalebranch.go). With "Clean up
+//     pull request from it is open, or that it is superseded by its own rebase
+//     on that branch (stalebranch.go, supersede.go). With "Clean up
 //     automatically" on (the default) the loop deletes it itself, from the
 //     session's host, with the host's own git credentials, and logs the branch
-//     and the SHA it was at so it can be pushed back; off, the branch stays;
+//     and the SHA it was at, keeping that SHA under refs/comebye/backup/<branch>
+//     on the host so it can be pushed back; off, the branch stays;
 //   - an item that is only "delete my scratch directory" under the session's own
 //     Claude scratch path (/tmp/claude-<uid>/<its worktree>) is done by the
 //     removal itself, which deletes that directory (scratchItem);
@@ -75,6 +77,7 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		branch string
 		how    string
 		tip    string // the tip it was deleted at (empty: it was already gone)
+		backup string // the host's ref that keeps the tip
 	}
 	var done []did
 	for i, v := range ar.Items {
@@ -88,9 +91,10 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		r, _ := s.staleProbe(ctx, it, branch, true)
 		switch {
 		case r != nil && r.Deleted:
-			done = append(done, did{i, branch, fmt.Sprintf("deleted origin/%s (was %s; restore with git push origin %s:refs/heads/%s): %s", branch, r.Tip, r.Tip, branch, r.Proof), r.Tip})
+			done = append(done, did{i, branch, fmt.Sprintf("deleted origin/%s (was %s, kept on %s as %s; restore with %s): %s",
+				branch, r.Tip, it.Host, r.Backup, restoreFromBackupCmd(r.Backup, branch), r.Proof), r.Tip, r.Backup})
 		case r != nil && r.State == staleAbsent:
-			done = append(done, did{i, branch, "origin no longer had " + branch, ""})
+			done = append(done, did{i, branch, "origin no longer had " + branch, "", ""})
 		default:
 			why := "no answer"
 			if r != nil {
@@ -108,7 +112,7 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		hows = append(hows, d.how)
 		if d.tip != "" {
 			out = append(out, sweepDone{At: now.UTC(), Kind: doneBranch, Name: orDefault(it.Name, it.EntryID), Repo: it.Repo, Host: it.Host,
-				Branch: d.branch, Tip: d.tip, Restore: restoreBranchCmd(d.tip, d.branch)})
+				Branch: d.branch, Tip: d.tip, Restore: restoreBranchCmd(d.tip, d.branch), Backup: d.backup})
 		}
 	}
 	text := by + " " + strings.Join(hows, "; ")
