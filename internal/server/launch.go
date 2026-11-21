@@ -473,9 +473,8 @@ type launchBody struct {
 	Coordinator bool `json:"coordinator"`
 	// NewCoordinator, with Coordinator, makes one more coordinator (comebye
 	// coordinator new): Name is required, Dir (inside a launch root) is where
-	// it works, default <state>/coordinators/<name>. Unlike the first
-	// Coordinator launch it never pulls Dir, and its first prompt is always
-	// the playbook's.
+	// it works, default <state>/coordinators/<name>. Its first prompt says
+	// it is one of several.
 	NewCoordinator bool `json:"new_coordinator,omitempty"`
 	// Chat is a Page id: the "Chat about this" helper (chat.go). The agent
 	// starts in a fresh scratch directory under <state>/chats (Dir is
@@ -509,41 +508,6 @@ func (s *Server) coordinatorDir() string {
 		return ""
 	}
 	return real
-}
-
-// pullTimeout bounds the git pull of the coordinator directory.
-const pullTimeout = 30 * time.Second
-
-// pullCoordinatorDir brings the coordinator directory up to date with its
-// remote (git pull --ff-only) when it is a git repository with a remote.
-// It returns a notice when the pull failed (the coordinator then starts
-// with the copy on disk) and "" when it worked or there was nothing to
-// pull. Never fatal.
-func pullCoordinatorDir(ctx context.Context, dir string) string {
-	if dir == "" {
-		return ""
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-		return ""
-	}
-	git := func(args ...string) (string, error) {
-		ctx, cancel := context.WithTimeout(ctx, pullTimeout)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		out, err := cmd.CombinedOutput()
-		return strings.TrimSpace(string(out)), err
-	}
-	if out, err := git("remote"); err != nil || out == "" {
-		return "" // no remote (or no git): nothing to pull
-	}
-	if out, err := git("pull", "--ff-only"); err != nil {
-		if len(out) > 300 {
-			out = out[:300] + "…"
-		}
-		return "could not update the coordinator directory " + dir + " (git pull --ff-only failed: " + strings.ReplaceAll(out, "\n", " ") + "); started with the existing copy"
-	}
-	return ""
 }
 
 // handleLaunch starts a new agent: a fresh workspace in the directory, the
@@ -672,15 +636,8 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	}
 	// The model comes first: claude's --allowedTools swallows what follows.
 	args := choice.Args
-	var pullNotice string
 	var coordWarnings []string
 	if body.Coordinator {
-		if !body.NewCoordinator {
-			pullNotice = pullCoordinatorDir(ctx, dir)
-		}
-		if pullNotice != "" {
-			log.Printf("coordinator launch: %s", pullNotice)
-		}
 		// The reset hook's settings (installed with `comebye coordinator
 		// install-hook`) go before --allowedTools, which swallows what follows.
 		if kind == "claude" && s.cfg.StateDir != "" {
@@ -690,12 +647,12 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 				coordWarnings = append(coordWarnings, "the coordinator reset hook is not installed on this host, so this coordinator cannot be given a fresh start: run `comebye coordinator install-hook` there, then start it again")
 			}
 		}
-		args = append(append(args, playbook.AgentArgs(kind, name, dir)...), s.cfg.CoordinatorArgs[kind]...)
+		args = append(append(args, playbook.AgentArgs(kind, name)...), s.cfg.CoordinatorArgs[kind]...)
 		if strings.TrimSpace(body.Prompt) == "" {
 			if body.NewCoordinator {
 				body.Prompt = playbook.NewFirstPrompt(kind, name)
 			} else {
-				body.Prompt = playbook.FirstPrompt(kind, dir)
+				body.Prompt = playbook.FirstPrompt(kind)
 			}
 		}
 	}
@@ -760,11 +717,7 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		"workspace_id": ws.WorkspaceID,
 	}
 	resp["kind_source"] = choice.KindSource
-	warnings := choice.Warnings
-	if pullNotice != "" {
-		warnings = append(append([]string(nil), warnings...), pullNotice)
-	}
-	warnings = append(append([]string(nil), warnings...), coordWarnings...)
+	warnings := append(append([]string(nil), choice.Warnings...), coordWarnings...)
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
 	}

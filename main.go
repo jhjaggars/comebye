@@ -95,7 +95,7 @@ func main() {
 		announce       = flag.Bool("announce", envBool("COMEBYE_ANNOUNCE", false), "on a peer with -hub: announce this node to the hub as a peer at startup (the hub needs -peer-self-register and this node the -ts-allow-cap capability)")
 		announceURL    = flag.String("announce-url", getenv("COMEBYE_ANNOUNCE_URL"), "the Serve URL to announce (default https://<this node's MagicDNS name>)")
 		ledgerOn       = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
-		coordDir       = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", defaultCoordDir()), "where the app's Coordinator preset starts a coordinator agent (default ~/coordinator when it exists, else ~; may lie outside the launch roots; only that preset uses it)")
+		coordDir       = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
 		publicURL      = flag.String("public-url", getenv("COMEBYE_PUBLIC_URL"), "the https URL this hub is reached at (https://hub.tailnet.ts.net); `comebye publish` prints links built from it")
 		pagesListen    = flag.String("pages-listen", getenv("COMEBYE_PAGES_LISTEN"), "serve published pages on a second loopback listener (e.g. 127.0.0.1:8742) that has only /p and no /api; put Tailscale Serve on its own port in front (tailscale serve --https=8443 http://127.0.0.1:8742) so pages get an origin of their own; needs -pages-url")
 		pagesURL       = flag.String("pages-url", getenv("COMEBYE_PAGES_URL"), "the https URL of that pages listener as the browser reaches it (https://hub.tailnet.ts.net:8443); the app frames pages from it and page links are built from it")
@@ -715,17 +715,6 @@ func splitLogins(s string) []string {
 		}
 	}
 	return out
-}
-
-// defaultCoordDir is ~/coordinator (the coordinator directory: AGENTS.md and
-// skills, see `comebye coordinator init`) when it exists, else ~.
-func defaultCoordDir() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		if fi, err := os.Stat(filepath.Join(home, "coordinator")); err == nil && fi.IsDir() {
-			return "~/coordinator"
-		}
-	}
-	return "~"
 }
 
 func expandHome(p string) string {

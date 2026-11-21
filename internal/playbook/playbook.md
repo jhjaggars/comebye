@@ -1,7 +1,7 @@
 # Comebye coordinator playbook
 
-Your rules and preferences are in AGENTS.md (the user's directory); it wins
-on conflict. This file is only the command reference.
+This file is the command reference. The user's own rules (their CLAUDE.md
+and memory, where your harness loads them) win on conflict.
 
 You are the **coordinator** for the user's coding agents. Coordinating is a
 role, not a program: your memory is the Comebye hub's ledger and your state

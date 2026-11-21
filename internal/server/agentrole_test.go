@@ -1,14 +1,12 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -809,9 +807,9 @@ func TestReassignRoleAfterRename(t *testing.T) {
 	}
 }
 
-// A coordinator directory (AGENTS.md, skills/) changes the preset's first
-// prompt and pi's arguments; claude only starts there.
-func TestCoordinatorLaunchWithDirectory(t *testing.T) {
+// A directory with AGENTS.md and skills/ changes nothing (issue #19): the
+// preset's first prompt is the playbook's and pi gets no extra flags.
+func TestCoordinatorLaunchIgnoresAgentsFile(t *testing.T) {
 	root, _ := launchTree(t)
 	coordDir, _ := filepath.EvalSymlinks(t.TempDir())
 	os.WriteFile(filepath.Join(coordDir, "AGENTS.md"), []byte("rules\n"), 0o644)
@@ -820,85 +818,24 @@ func TestCoordinatorLaunchWithDirectory(t *testing.T) {
 	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: coordDir, StateDir: t.TempDir()}, client, nil)
 	s.findExec = func(name string) bool { return name == "pi" || name == "claude" }
 
-	start := func(kind string) ([]string, int) {
+	start := func(kind string) ([]string, string, int) {
 		fh.set(func(f *fakeLaunchHerdr) { f.calls = nil })
 		w := do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"`+kind+`"}`)
 		var argv []string
 		raw, _ := json.Marshal(fh.call("agent.start").Params["args"])
 		json.Unmarshal(raw, &argv)
-		return argv, w.Code
+		return argv, w.Body.String(), w.Code
 	}
-	argv, code := start("claude")
+	argv, body, code := start("claude")
 	if code != 200 || len(argv) != 4 || argv[0] != "--allowedTools" || argv[2] != "--" ||
-		!strings.HasPrefix(argv[3], "Read AGENTS.md, then run `comebye whoami`") {
-		t.Fatalf("claude = %d %q", code, argv)
+		!strings.Contains(argv[3], "comebye playbook --harness claude") || strings.Contains(body, `"warnings"`) {
+		t.Fatalf("claude = %d %q %s", code, argv, body)
 	}
-	argv, code = start("pi")
+	argv, _, code = start("pi")
 	j := strings.Join(argv, " ")
-	if code != 200 || !strings.Contains(j, "--no-skills --no-context-files --tools read,grep,find,ls,bash --append-system-prompt "+coordDir+"/AGENTS.md --skill "+coordDir+"/skills -- Read AGENTS.md") {
+	if code != 200 || !strings.Contains(j, "--no-skills --no-context-files --tools read,grep,find,ls,bash -- You are the Comebye coordinator") ||
+		strings.Contains(j, "--append-system-prompt") || strings.Contains(j, "--skill ") {
 		t.Fatalf("pi = %d %q", code, j)
-	}
-}
-
-// The directory is pulled (fast-forward only) before a coordinator starts;
-// a failed pull is a notice, never a failed start.
-func TestPullCoordinatorDir(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("no git")
-	}
-	ctx := context.Background()
-	if n := pullCoordinatorDir(ctx, t.TempDir()); n != "" {
-		t.Fatalf("not a repo: %q", n)
-	}
-	origin := t.TempDir()
-	gitIn(t, origin, "init", "-q", "-b", "main")
-	os.WriteFile(filepath.Join(origin, "AGENTS.md"), []byte("v1\n"), 0o644)
-	gitIn(t, origin, "add", "AGENTS.md")
-	gitIn(t, origin, "commit", "-q", "-m", "v1")
-	clone := filepath.Join(t.TempDir(), "c")
-	gitIn(t, origin, "clone", "-q", origin, clone)
-
-	// A repo without a remote: nothing to do.
-	lone := t.TempDir()
-	gitIn(t, lone, "init", "-q")
-	if n := pullCoordinatorDir(ctx, lone); n != "" {
-		t.Fatalf("no remote: %q", n)
-	}
-
-	os.WriteFile(filepath.Join(origin, "AGENTS.md"), []byte("v2\n"), 0o644)
-	gitIn(t, origin, "commit", "-q", "-am", "v2")
-	if n := pullCoordinatorDir(ctx, clone); n != "" {
-		t.Fatalf("pull: %q", n)
-	}
-	if b, _ := os.ReadFile(filepath.Join(clone, "AGENTS.md")); string(b) != "v2\n" {
-		t.Fatalf("not pulled: %q", b)
-	}
-
-	// Diverged history cannot fast-forward: a notice, and the copy stays.
-	os.WriteFile(filepath.Join(origin, "AGENTS.md"), []byte("v3\n"), 0o644)
-	gitIn(t, origin, "commit", "-q", "-am", "v3")
-	os.WriteFile(filepath.Join(clone, "AGENTS.md"), []byte("local\n"), 0o644)
-	gitIn(t, clone, "commit", "-q", "-am", "local")
-	n := pullCoordinatorDir(ctx, clone)
-	if !strings.Contains(n, "git pull --ff-only failed") || !strings.Contains(n, "existing copy") {
-		t.Fatalf("notice = %q", n)
-	}
-	if b, _ := os.ReadFile(filepath.Join(clone, "AGENTS.md")); string(b) != "local\n" {
-		t.Fatalf("copy changed: %q", b)
-	}
-
-	// And the launch reports it as a warning but still starts.
-	root, _ := launchTree(t)
-	realClone, _ := filepath.EvalSymlinks(clone)
-	fh, client := startFakeLaunchHerdr(t)
-	s := newServer(t, Config{ReadLines: 100, HostName: "desk", LaunchRoots: []string{root}, CoordinatorDir: realClone, StateDir: t.TempDir()}, client, nil)
-	s.findExec = func(name string) bool { return name == "claude" }
-	w := do(s, "POST", "/api/launch", nil, `{"coordinator":true,"kind":"claude"}`)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"warnings"`) || !strings.Contains(w.Body.String(), "git pull --ff-only failed") {
-		t.Fatalf("launch = %d %s", w.Code, w.Body)
-	}
-	if fh.call("agent.start") == nil {
-		t.Fatal("the coordinator did not start")
 	}
 }
 
