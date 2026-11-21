@@ -4704,7 +4704,7 @@ await check(`releases fleet rows at ${width}: Bump hub on the hub's row, Upgrade
 // The rolling rollout on the Fleet card (relfix.mjs ro-* states): the button and its confirm, the band, the waves, a host's gates,
 // the controls. The hub's answers are canned; the POSTs are caught and read.
 for (const width of [1280, 390]) {
-await check(`releases rolling rollout at ${width}: Roll out to all confirms version, commit, order and canary; the band, waves and gates follow the job; Upgrade is locked while it runs`, async () => {
+await check(`releases rolling rollout at ${width}: Roll out to all confirms version, commit and order (no canary, no soak); the band, waves and gates follow the job; Upgrade is locked while it runs`, async () => {
   let state = "ro-before";
   const posts = [];
   await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(state) }));
@@ -4726,20 +4726,17 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     await page.locator(fleet + " .rel-roll").click();
     await page.waitForSelector(fleet + " [aria-label='Confirm the rollout']");
     let ct = await page.locator(fleet + " .rel-confirm").innerText();
-    if (!/v0\.5\.22/.test(ct) || !/a3f9c1e/.test(ct) || !/2 minutes/.test(ct) || !/stops everything/.test(ct)) throw new Error("confirm text: " + ct);
+    if (!/v0\.5\.22/.test(ct) || !/a3f9c1e/.test(ct) || /canary|soak|2 minutes/.test(ct) || !/stops everything/.test(ct)) throw new Error("confirm text: " + ct);
     const order = () => page.locator(fleet + " .rl-order li").evaluateAll((l) => l.map((x) => x.dataset.host));
     if ((await order()).join() !== "peerbox,kubevirt-1,mac-mini,laharl") throw new Error("order " + (await order()));
     if (!/the hub last/.test(ct) || !/Bump hub/.test(await page.locator(fleet + " .rl-hubli").innerText()) || !/what is running in the cluster/.test(await page.locator(fleet + " .rl-hubli").innerText())) throw new Error("the hub wave is not named: " + ct);
-    if (!/canary/.test(await page.locator(fleet + " .rl-order li").first().innerText())) throw new Error("the first host is not marked canary");
+    if (/canary/.test(await page.locator(fleet + " .rl-order").innerText()) || await page.locator(fleet + " select[data-ro-canary]").count()) throw new Error("a canary in the default confirm");
     if (!/Confirm: roll out v0\.5\.22 to 4 hosts/.test(await page.locator(fleet + " .rel-go").innerText())) throw new Error("confirm button");
     await page.screenshot({ path: `${out}/rollout-confirm-${width}.png` });
-    // the user picks another canary
-    await page.locator(fleet + " select[data-ro-canary]").selectOption("kubevirt-1");
-    if ((await order()).join() !== "kubevirt-1,peerbox,mac-mini,laharl") throw new Error("canary not moved: " + (await order()));
     await page.locator(fleet + " .rel-go").click();
     await page.waitForFunction(() => !document.querySelector("#pr-releases .rel-confirm"));
     const p0 = posts[0];
-    if (!p0 || p0.url !== "/api/release/rollout" || p0.body.version !== "v0.5.22" || p0.body.commit.length !== 40 || p0.body.hosts.join() !== "kubevirt-1,peerbox,mac-mini" || p0.body.hub !== true || !p0.body.todo || p0.csrf !== "fixture") throw new Error("start request " + JSON.stringify(p0));
+    if (!p0 || p0.url !== "/api/release/rollout" || p0.body.version !== "v0.5.22" || p0.body.commit.length !== 40 || p0.body.hosts.join() !== "peerbox,kubevirt-1,mac-mini" || p0.body.hub !== true || !p0.body.todo || p0.csrf !== "fixture") throw new Error("start request " + JSON.stringify(p0));
     // Cancel in the confirm sends nothing
     await page.locator(fleet + " .rel-roll").click();
     await page.locator(fleet + " .rel-confirm [data-rel=cancel]").click();
@@ -4751,11 +4748,11 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     let bt = await page.locator(band).innerText();
     if (!/Rolling out v0\.5\.22/.test(bt) || !/1 of 4 done/.test(bt) || !/upgrading kubevirt-1/.test(bt)) throw new Error("running band: " + bt);
     if ((await page.locator(band + " button").allInnerTexts()).join() !== "Pause,Cancel") throw new Error("running controls");
-    if ((await page.locator(fleet + " .rl-wave-h").allInnerTexts()).join().toLowerCase() !== "canary,other peers,hub") throw new Error("waves " + (await page.locator(fleet + " .rl-wave-h").allInnerTexts()));
+    if ((await page.locator(fleet + " .rl-wave-h").allInnerTexts()).join().toLowerCase() !== "peers,hub") throw new Error("waves " + (await page.locator(fleet + " .rl-wave-h").allInnerTexts()));
     if (await page.locator(fleet + " .rel-roll").count()) throw new Error("Roll out to all while a rollout runs");
     const row = (n) => page.locator(`${fleet} .rl-host[data-host="${n}"]`);
     const pb = await row("peerbox").innerText();
-    if (!/done/.test(pb) || !/✓ upgrade ok/.test(pb) || !/✓ back online/.test(pb) || !/✓ v0\.5\.22 seen/.test(pb) || !/✓ soak/.test(pb)) throw new Error("peerbox: " + pb);
+    if (!/done/.test(pb) || !/✓ upgrade ok/.test(pb) || !/✓ back online/.test(pb) || !/✓ v0\.5\.22 seen/.test(pb) || /soak/.test(pb)) throw new Error("peerbox: " + pb);
     const kv = await row("kubevirt-1").innerText();
     if (!/upgrading/.test(kv) || !/… upgrade ok/.test(kv) || !/○ back online/.test(kv)) throw new Error("kubevirt-1: " + kv);
     if (!/waiting for its turn/.test(await row("mac-mini").innerText())) throw new Error("mac-mini: " + (await row("mac-mini").innerText()));
@@ -4795,12 +4792,38 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     if (!/skipped/.test(await row("mac-mini").innerText())) throw new Error("mac-mini not marked skipped");
     await page.screenshot({ path: `${out}/rollout-skipped-${width}.png` });
     await page.locator(fleet + " .rel-roll").click();
-    if ((await order()).join() !== "mac-mini" || /canary|2 minutes/.test(await page.locator(fleet + " .rel-confirm").innerText()) || await page.locator(fleet + " select[data-ro-canary]").count()) throw new Error("again confirm: " + (await order()));
+    if ((await order()).join() !== "mac-mini" || /canary|2 minutes/.test(await page.locator(fleet + " .rel-confirm").innerText())) throw new Error("again confirm: " + (await order()));
     await page.locator(fleet + " .rel-confirm [data-rel=cancel]").click();
     const h = await relHscroll(); if (h.bad.length || h.page[0] > h.page[1]) throw new Error("sideways scroll " + JSON.stringify(h));
   } finally {
     await page.unroute(/\/api\/releases(\?.*)?$/);
     await page.unroute(/\/api\/release\/rollout(\/\w+)?$/);
+  }
+});
+}
+// The opt-in canary (-release-canary), and a rollout saved by an older build: the confirm marks the canary and says it soaks;
+// the running rollout shows the Canary wave and the soak gate. There is no picker for it.
+for (const width of [1280, 390]) {
+await check(`releases rollout with the opt-in canary at ${width}: the confirm marks it and mentions the soak, with no picker; the Canary wave and the soak gate show`, async () => {
+  let state = "ro-before-canary";
+  await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(state) }));
+  try {
+    const fleet = "#pr-releases [data-fleet]";
+    const reload = async (st) => { state = st; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before-canary" ? !rls.data.rollout_job : rls.data.rollout_job), st); await idle(); };
+    await openReleases(width);
+    await reload("ro-before-canary");
+    await page.locator(fleet + " .rel-roll").click();
+    await page.waitForSelector(fleet + " [aria-label='Confirm the rollout']");
+    const ct = await page.locator(fleet + " .rel-confirm").innerText();
+    if (!/peerbox goes first, alone, and soaks for 2 minutes/.test(ct) || await page.locator(fleet + " select[data-ro-canary]").count()) throw new Error("canary confirm: " + ct);
+    if (!/canary/.test(await page.locator(fleet + " .rl-order li").first().innerText())) throw new Error("the first host is not marked canary");
+    await page.screenshot({ path: `${out}/rollout-confirm-canary-${width}.png` });
+    await reload("ro-running-canary");
+    if ((await page.locator(fleet + " .rl-wave-h").allInnerTexts()).join().toLowerCase() !== "canary,other peers,hub") throw new Error("waves");
+    if (!/✓ soak/.test(await page.locator(`${fleet} .rl-host[data-host="peerbox"]`).innerText())) throw new Error("no soak gate");
+    await page.screenshot({ path: `${out}/rollout-running-canary-${width}.png` });
+  } finally {
+    await page.unroute(/\/api\/releases(\?.*)?$/);
   }
 });
 }

@@ -96,7 +96,7 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 	if b.Hosts == nil {
 		b.Hosts = []string{}
 	}
-	plan, err := planRollout(hosts, b.Hosts, "")
+	plan, err := planRollout(hosts, b.Hosts, s.cfg.Release.Canary)
 	if err != nil {
 		relErr(w, http.StatusConflict, "bad_plan", err.Error())
 		return

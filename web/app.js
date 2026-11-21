@@ -3306,6 +3306,7 @@ function roJob(d) { return d && d.todo && d.rollout_job && d.rollout_job.todo ==
 function roLive(j) { return !!j && (j.state === "running" || j.state === "paused" || j.state === "stopped"); }
 function roState(d) { const j = roJob(d); return j ? j.state : ""; }
 const RO_WAVE = { canary: "Canary", peers: "Other peers", hub: "Hub" };
+const roWaveName = (w, plan) => (w === "peers" && !(plan || []).some((st) => st.wave === "canary") ? "Peers" : RO_WAVE[w]);
 const RO_PHASE = { pending: "waiting", waking: "starting", upgrading: "upgrading", verifying: "verifying", soaking: "soaking", ok: "done", skipped: "skipped", failed: "failed" };
 
 // What a host's step says beside its version.
@@ -3391,18 +3392,19 @@ function roConfirmHtml(d) {
   if (!c || c.k !== "rollout") return "";
   const rl = d.todo.release, by = new Map((d.hosts || []).map((h) => [h.name, h]));
   const order = c.order || [], hubStep = c.hub ? (d.rollout_plan || []).find((st) => st.wave === "hub") : null, hubH = hubStep ? by.get(hubStep.host) || {} : null;
+  // A canary is the opt-in (-release-canary): the server's plan says whether there is one.
+  const canary = ((d.rollout_plan || []).find((st) => st.wave === "canary") || {}).host || "";
   const total = order.length + (hubStep ? 1 : 0), hubLabel = d.rollout_hub_label || "Bump hub";
   const li = order.map((n, i) => {
     const h = by.get(n) || {};
-    const role = i === 0 && order.length > 1 ? ' <span class="rl-tag">canary</span>' : "";
+    const role = i === 0 && canary === n ? ' <span class="rl-tag">canary</span>' : "";
     const off = rlPreviewTag(h);
     return `<li data-host="${escAttr(n)}"><b>${esc(n)}</b> <span class="rl-ver rl-v-old">${esc(h.version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span>${role}${off}</li>`;
   }).join("");
   const hubLi = hubStep ? `<li class="rl-hubli" data-host="${escAttr(hubStep.host)}" data-wave="hub"><b>${esc(hubStep.host)}</b> <span class="rl-tag">hub</span> <span class="rl-ver rl-v-old">${esc(hubH.version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span><div class="rl-sub">${hubStep.mode === "deploy" ? `last: <b>${esc(hubLabel)}</b>${d.release_host && d.release_host !== hubStep.host ? ` runs on ${esc(d.release_host)}` : ""}. This changes what is running in the cluster and restarts the hub; it has no automatic undo.` : "last: the hub upgrades itself and restarts."}</div></li>` : "";
-  const sel = order.length > 1 ? `<label class="rl-canary">Goes first (canary): <select data-ro-canary>${order.map((n) => `<option value="${escAttr(n)}"${n === order[0] ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : "";
-  const soak = order.length > 1 ? ` The first host goes alone and soaks for 2 minutes; the rest follow one at a time only if it stays healthy.` : "";
+  const soak = canary ? ` ${esc(canary)} goes first, alone, and soaks for 2 minutes; the rest follow one at a time only if it stays healthy.` : order.length > 1 ? " The peers go one at a time." : "";
   return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${total} host${total === 1 ? "" : "s"}${hubStep ? ", the hub last" : ""}, in this order?${soak} The first failure stops everything and leaves the rest alone; a host that fails rolls itself back. Offline hosts are skipped and can be rolled out again later; a stopped worker is started first.</div>
-    <ol class="rl-order">${li}${hubLi}</ol>${sel}
+    <ol class="rl-order">${li}${hubLi}</ol>
     <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-rollout"${rls.busy ? " disabled" : ""}>Confirm: roll out ${esc(rl.version)} to ${total} host${total === 1 ? "" : "s"}</button>
     <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
 }
@@ -3509,7 +3511,7 @@ function relFleetHtml(d) {
     for (const w of ["canary", "peers", "hub"]) {
       const steps = (job.plan || []).filter((st) => st.wave === w);
       if (!steps.length) continue;
-      h += `<div class="rl-wave" data-wave="${w}"><div class="rl-wave-h">${RO_WAVE[w]}</div><div class="rl-hosts">${steps.map((st) => byName.has(st.host) ? relRowHtml(byName.get(st.host), d, job, st) : "").join("")}</div></div>`;
+      h += `<div class="rl-wave" data-wave="${w}"><div class="rl-wave-h">${roWaveName(w, job.plan)}</div><div class="rl-hosts">${steps.map((st) => byName.has(st.host) ? relRowHtml(byName.get(st.host), d, job, st) : "").join("")}</div></div>`;
     }
     const rest = hosts.filter((x) => !inPlan.has(x.name));
     if (rest.length) h += `<div class="rl-wave" data-wave="rest"><div class="rl-wave-h">Not in this rollout</div><div class="rl-hosts">${rest.map((x) => relRowHtml(x, d, job)).join("")}</div></div>`;
@@ -9038,14 +9040,6 @@ function initPeers() {
   $("pr-releases").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-rel]");
     if (b && !b.disabled) relClick(b.dataset.rel, b.dataset.host);
-  });
-  // The canary is whoever the confirm lists first.
-  $("pr-releases").addEventListener("change", (ev) => {
-    const sel = ev.target.closest("select[data-ro-canary]");
-    const c = rls.confirm;
-    if (!sel || !c || c.k !== "rollout") return;
-    c.order = [sel.value, ...c.order.filter((n) => n !== sel.value)];
-    renderReleases();
   });
   $("peers").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); peersBack(); } });
   const v = $("pr-view");

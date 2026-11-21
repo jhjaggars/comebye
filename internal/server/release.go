@@ -116,8 +116,8 @@ type ReleaseConfig struct {
 	DeployCmd []string
 	// DeployLabel names that button (default "Deploy").
 	DeployLabel string
-	// Canary names the peer a rollout upgrades first (default: the first
-	// peer behind). The confirm lets the user pick another.
+	// Canary opts in to a canary: the named peer is upgraded first, alone,
+	// and soaks before the rest. Empty (the default): no canary, no soak.
 	Canary string
 }
 

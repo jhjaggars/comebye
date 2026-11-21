@@ -260,8 +260,9 @@ func (e *rolloutEngine) Get() (Rollout, bool) {
 // ---- planning ----
 
 // planRollout orders the hosts of a rollout. order, when given, is the
-// user's own list (the confirm's); otherwise the canary comes first, then
-// the other peers in fleet order. A host already on the version is left out
+// user's own list (the confirm's); otherwise the peers in fleet order.
+// There is no canary or soak unless canary names the first peer (the
+// -release-canary opt-in); then it goes first, alone, and soaks. A host already on the version is left out
 // of the default plan. The hub is not an ordinary peer: its wave is added
 // by the caller. A reachable host that does not let the app upgrade it, or
 // a name that is no host, refuses the plan.
@@ -307,7 +308,7 @@ func planRollout(hosts []relHost, order []string, canary string) ([]RolloutStep,
 			notEnabled = append(notEnabled, n)
 		}
 		wave := wavePeers
-		if len(plan) == 0 && len(order) > 1 { // a lone host is not a canary: there is nothing to hold back
+		if len(plan) == 0 && len(order) > 1 && n == canary { // opt-in only (-release-canary); a lone host is not a canary
 			wave = waveCanary
 		}
 		plan = append(plan, RolloutStep{Host: n, Wave: wave, Phase: roPending})
@@ -339,7 +340,10 @@ func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutSt
 	var idb [3]byte
 	_, _ = rand.Read(idb[:])
 	j := Rollout{ID: fmt.Sprintf("r%x", idb), Todo: todo, Version: version, Commit: commit, State: roRunning, By: by,
-		Canary: plan[0].Host, Plan: plan, Started: now}
+		Plan: plan, Started: now}
+	if plan[0].Wave == waveCanary {
+		j.Canary = plan[0].Host
+	}
 	j.Note = "starting"
 	if err := e.save(&j); err != nil {
 		return Rollout{}, err
@@ -351,7 +355,7 @@ func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutSt
 			names[i] = "|" + st.Host
 		}
 	}
-	e.emit(j, "", "rollout.start", true, fmt.Sprintf("%s plan=[%s] canary=%s id=%s", version, strings.Join(names, " "), j.Canary, j.ID), by)
+	e.emit(j, "", "rollout.start", true, fmt.Sprintf("%s plan=[%s] canary=%q id=%s", version, strings.Join(names, " "), j.Canary, j.ID), by)
 	if e.onState != nil {
 		e.onState(j)
 	}

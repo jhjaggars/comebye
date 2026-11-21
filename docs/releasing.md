@@ -137,10 +137,12 @@ peer, so the hub needs neither `gh` nor a clone for it.
 On the Releases tab, **Roll out to all** upgrades the fleet in one go, run by the hub, so closing the tab or
 restarting the hub loses nothing. The confirm names the version, the commit, the hosts in order and the hub wave.
 
-- **Order:** one canary peer first (the first in the list; `-release-canary NAME` sets the default and the confirm
-  lets you pick another), a 2-minute soak, then the other peers one at a time, then the hub last. The hub wave is
-  the deploy command (Bump hub) when one is set, else the hub's own upgrade; it changes what is running in the
-  cluster and has no automatic undo, which is why it only follows proven peers.
+- **Order:** the peers one at a time (fleet order, one wave, no canary and no soak), then the hub last. The hub
+  wave is the deploy command (Bump hub) when one is set, else the hub's own upgrade; it changes what is running in
+  the cluster and has no automatic undo, so it only follows peers that came back healthy. To opt back in to a canary,
+  start the hub with `-release-canary NAME` (or `COMEBYE_RELEASE_CANARY`): that peer goes first, alone, and soaks for
+  2 minutes before the others. A rollout saved with a canary step before this change still resumes and finishes as
+  it was planned.
 - **Gates:** a host's own upgrade record says ok (its smoke check ran, and it put the old binary back if not), then
   the hub sees it back online on the version (5 minutes). Any failure stops the whole rollout at once: the rest are
   not touched, hosts already done stay done. **Retry** runs the failed step again; **Cancel** ends it and reverts

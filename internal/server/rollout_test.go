@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -168,11 +169,12 @@ type rolloutRig struct {
 	path   string
 	audit  []ledger.AuditEvent
 	states []Rollout
+	canary string // the -release-canary opt-in; most tests here run the canary + soak path, so it is host a
 }
 
 func newRolloutRig(t *testing.T, names ...string) *rolloutRig {
 	t.Helper()
-	r := &rolloutRig{t: t, f: newFakeFleet("v0.6.4", names...), path: filepath.Join(t.TempDir(), "release", "rollout.json")}
+	r := &rolloutRig{t: t, f: newFakeFleet("v0.6.4", names...), path: filepath.Join(t.TempDir(), "release", "rollout.json"), canary: "a"}
 	r.e = r.engine()
 	return r
 }
@@ -187,7 +189,7 @@ func (r *rolloutRig) engine() *rolloutEngine {
 
 func (r *rolloutRig) start(order ...string) Rollout {
 	r.t.Helper()
-	plan, err := planRollout(r.f.Hosts(context.Background(), "v0.6.4"), order, "")
+	plan, err := planRollout(r.f.Hosts(context.Background(), "v0.6.4"), order, r.canary)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -610,23 +612,27 @@ func TestPlanRollout(t *testing.T) {
 		}
 		return strings.Join(s, " ")
 	}
-	p, err := planRollout(hosts, nil, "")
-	if err != nil || names(p) != "a/canary b/peers d/peers" {
+	p, err := planRollout(hosts, nil, "") // the default: no canary, no soak
+	if err != nil || names(p) != "a/peers b/peers d/peers" {
 		t.Fatalf("default: %s %v", names(p), err)
 	}
-	p, _ = planRollout(hosts, nil, "b")
+	p, _ = planRollout(hosts, nil, "b") // the opt-in
 	if names(p) != "b/canary a/peers d/peers" {
 		t.Fatalf("canary b: %s", names(p))
 	}
 	p, _ = planRollout(hosts, nil, "nobody") // an unknown canary is ignored
-	if names(p) != "a/canary b/peers d/peers" {
+	if names(p) != "a/peers b/peers d/peers" {
 		t.Fatalf("%s", names(p))
 	}
 	p, err = planRollout(hosts, []string{"b", "a"}, "")
-	if err != nil || names(p) != "b/canary a/peers" {
+	if err != nil || names(p) != "b/peers a/peers" {
 		t.Fatalf("explicit: %s %v", names(p), err)
 	}
-	p, _ = planRollout(hosts, []string{"b"}, "") // one host is no canary: no soak for it
+	p, _ = planRollout(hosts, []string{"b", "a"}, "b")
+	if names(p) != "b/canary a/peers" {
+		t.Fatalf("explicit canary: %s", names(p))
+	}
+	p, _ = planRollout(hosts, []string{"b"}, "b") // one host is no canary: no soak for it
 	if names(p) != "b/peers" {
 		t.Fatalf("lone host: %s", names(p))
 	}
@@ -1011,4 +1017,82 @@ func TestRolloutKeepsTheOfflineGraceForAHostThatIsNotAStoppedWorker(t *testing.T
 	if got := strings.Join(r.f.wakeAsks, ","); got != "b" {
 		t.Fatalf("the wake was asked %q: once, not every tick", got)
 	}
+}
+
+// ---- no canary by default ----
+
+func TestRolloutDefaultHasNoCanaryAndNoSoak(t *testing.T) {
+	r := newRolloutRig(t, "a", "b", "c")
+	r.canary = ""
+	j := r.start()
+	if j.Canary != "" {
+		t.Fatalf("canary = %q", j.Canary)
+	}
+	for _, st := range j.Plan {
+		if st.Wave != wavePeers {
+			t.Fatalf("%s is in wave %s", st.Host, st.Wave)
+		}
+	}
+	r.tick()
+	r.want("running a=upgrading b=pending c=pending")
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick() // the gates (record ok, back online on the version) pass: no soak, the step is done
+	r.want("running a=ok b=upgrading c=pending")
+	r.f.finish("b", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("running a=ok b=ok c=upgrading")
+	r.f.finish("c", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok b=ok c=ok")
+	if len(r.f.starts) != 3 {
+		t.Fatalf("starts %v", r.f.starts)
+	}
+}
+
+func TestRolloutWithoutCanaryStillStopsOnAFailure(t *testing.T) {
+	r := newRolloutRig(t, "a", "b", "c")
+	r.canary = ""
+	r.start()
+	r.tick()
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.f.finish("b", upgrade.RecRolledBack, "")
+	r.tick()
+	r.tick()
+	r.want("stopped a=ok b=failed c=pending")
+	for i := 0; i < 3; i++ {
+		r.f.advance(time.Minute)
+		r.tick()
+	}
+	if len(r.f.starts) != 2 {
+		t.Fatalf("a stopped rollout started more: %v", r.f.starts)
+	}
+}
+
+func TestRolloutSavedWithACanaryStepStillResumesAndFinishes(t *testing.T) {
+	// A rollout saved by the build that had a canary by default: the file
+	// says wave "canary" and "canary":"a". Resuming must still soak a, then go on.
+	r := newRolloutRig(t, "a", "b")
+	r.canary = ""
+	saved := `{"id":"rold","todo":"t1","version":"v0.6.4","commit":"` + strings.Repeat("a", 40) + `","state":"running","by":"jesse","canary":"a",` +
+		`"plan":[{"host":"a","wave":"canary","phase":"pending"},{"host":"b","wave":"peers","phase":"pending"}],"started":"2026-11-12T09:00:00Z","updated":"2026-11-12T09:00:00Z","rev":1}`
+	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.path, []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.e = r.engine()
+	r.e.resumeAfterRestart()
+	r.tick()
+	r.want("running a=upgrading b=pending")
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("running a=soaking b=pending")
+	r.f.advance(3 * time.Minute)
+	r.tick()
+	r.want("running a=ok b=upgrading")
+	r.f.finish("b", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok b=ok")
 }

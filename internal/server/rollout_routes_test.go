@@ -87,7 +87,7 @@ func TestRolloutStartRoute(t *testing.T) {
 	var out struct{ Rollout Rollout }
 	json.Unmarshal([]byte(w.Body), &out)
 	j := out.Rollout
-	if j.State != roRunning || j.Canary != "b" || j.Plan[0].Host != "b" || j.Plan[0].Wave != waveCanary || j.By != "me@example.com" || j.Todo != it.ID {
+	if j.State != roRunning || j.Canary != "" || j.Plan[0].Host != "b" || j.Plan[0].Wave != wavePeers || j.Plan[1].Wave != wavePeers || j.By != "me@example.com" || j.Todo != it.ID {
 		t.Fatalf("job = %+v", j)
 	}
 	// A second start is refused while this one is live.
