@@ -104,6 +104,7 @@ connecting several machines, and every setting.
   vulnerabilities)
 - [API](docs/api.md): the JSON API behind the app
 - [The briefing board](docs/board.md): the lanes in the app's Status page, their rules, and how the coordinator's notes attach
+- [Background processes](docs/background-processes.md): every loop the server runs on its own, how often, what it does and how to turn it off
 
 ## Development
 

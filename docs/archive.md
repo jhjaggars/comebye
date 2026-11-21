@@ -310,7 +310,34 @@ comebye archive run && comebye archive index --all-hosts --if-changed
 
 Start it under `flock -n`, so that a tick finding the last one still going exits at
 once. `flock -n -E 0` makes that exit count as success, which keeps the unit from
-reading as failed.
+reading as failed. As systemd user units, for example (paths and the environment file
+are this machine's; the `Description` should say how often it really runs):
+
+```ini
+# ~/.config/systemd/user/comebye-archive.service
+[Unit]
+Description=Comebye archive: upload new session bytes, then refresh the index (every 5 minutes)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/comebye/env
+ExecStart=/usr/bin/flock -n -E 0 %t/comebye-archive.lock sh -c '%h/.local/bin/comebye archive run && %h/.local/bin/comebye archive index --all-hosts --if-changed'
+
+# ~/.config/systemd/user/comebye-archive.timer
+[Unit]
+Description=Run comebye-archive.service every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+`comebye-worker destroy` starts `comebye-archive.service` by name, so keep that name.
+See [background-processes.md](background-processes.md) for everything the server
+itself runs on a clock.
 
 **`--all-hosts`** finds hosts in the `v1/` listing and runs the same incremental
 per-host sync on each, tombstones included. It also covers any host the index still
