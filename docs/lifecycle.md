@@ -59,6 +59,11 @@ stateDiagram-v2
     ready_to_remove --> finished: unmark
     ready_to_remove --> landed: unmark (had landed)
     ready_to_remove --> removed: user confirms in the app
+    finished --> archived: no progress for 7 days (3 for delivered kinds) / archived add
+    ready_to_remove --> archived: what is left still unsettled, or marked as delivered
+    archived --> finished: archived restore / new commit / resumed / reported
+    archived --> running: its agent works again (a new round)
+    archived --> ready_to_remove: the daily proof finds its work landed
     removed --> [*]
     running --> lost: its host was removed or taken over by another machine
     landing --> lost: same
@@ -80,6 +85,7 @@ same call that moves the entry to `landing`.
 | `landing` | `comebye land WORKER --note "<the user's OK>"` | coordinator, after the user OKs | the hub finds every approved commit in `origin/<base>` (`landed`), or the worker has said it is done or stopped with nothing running and the work is not there (back to `finished`, "land failed") |
 | `landed` | the hub's check found every approved commit in `origin/<base>` (it polls while the entry is landing; the worker's landing report is not needed) | hub | mark/sweep → `ready_to_remove`; more work → `running` (a new round) |
 | `ready_to_remove` | `comebye mark`, `comebye sweep`, the hub's scheduled sweep, or the app | coordinator, user, hub | unmark → back; the user confirms → `removed` |
+| `archived` | finished work put away: the sweep loop after 7 days without progress (3 for research, plan, review, spike, poc, eval and test work), or `comebye archived add` (see [Archived](#archived)) | hub, coordinator, user | `comebye archived restore`, a resume, a report, a progress note or a new commit → back to `finished` (or `running`); its work found landed → marked |
 | `removed` | the user confirmed the removal in the app | user | (final) |
 | `failed` | the worker never started | hub | (final) |
 | `lost` | the worker's host was removed from the hub, or its name taken over by another machine (a reused spot-worker name), before the work was reported. Entries follow one *instance* of a host (the hub's peer registry: a UUID, or the cloud instance id `worker create` records), so the new machine's panes never move an old entry. The branch and brief remain; `error` says why | hub | (final) |
@@ -178,6 +184,71 @@ minutes of a hand-run sweep, because nobody is watching this one.
 - Its state (the last run, what it removed and deleted) is `sweeploop.json` in
   the state directory, so a restart neither sweeps again early nor forgets what
   it did.
+
+### Archived
+
+Finished work that nobody is going to merge or look at soon is **archived**
+(`internal/server/archived.go`): one name for finished work put away, with
+parking as the mechanism under it. An archived session leaves the board's lanes
+(the footer counts it: `loose.archived`), the removals review and the sweep's
+"needs a look" count. It keeps its worktree source (dirty and untracked files
+included), its local and remote branches, its transcript and its scratchpad;
+its pane is parked, with a park record, so it can be resumed. Only regenerable
+build output inside the worktree is cleared, and the bytes freed are recorded.
+
+- **Who and when.** The sweep loop, after it marks and cleans, with "Clean up
+  automatically" on and its own setting `sweep_loop.archive_after_days`
+  (default 7, 1 to 90; delivered kinds at most 3). It archives a session that is
+  finished, or marked with a LEFT answer that is still unsettled (no re-ask or
+  clean-up under way) or as delivered (a discard proposal), and whose last
+  activity is older than that: the report, the latest progress note, the mark
+  and its answer, a landing, a resume or a restore. Never a coordinator, a
+  session without a worktree of its own (a home checkout), a standing `--loop`
+  worker, an agent that is working, blocked or running a background task, one
+  with a queued prompt or an open to-do waiting on it, a pinned park record, or
+  a member of a plan with steps still waiting. The user or a coordinator
+  archives at once with `comebye archived add NAME --reason "…"` (an agent never
+  archives itself).
+- **What it does, in order.** It checks the worktree on its host (read-only: the
+  tip, the commits not in the base and those on no remote); parks the pane when
+  the agent is live and idle (`parkAgent`, a dirty tree allowed, since nothing in
+  it is removed); clears the build output over the host call `POST
+  /api/buildout/clear`; then sets the status, moving the mark (if any) into the
+  archive record, so the review forgets it but the "what is left" answer
+  survives as `archive.left`. On a host that does not answer, the entry is
+  archived at once and the clearing waits (`build_pending`) until the host is
+  next up.
+- **Build output** is `internal/buildout`'s rule, unchanged: a real directory
+  (never a symlink) git ignores and tracks nothing inside, with a valid
+  `CACHEDIR.TAG` or on the known list (`target/` beside a `Cargo.toml`,
+  `node_modules/`, `.venv/`, `dist/`, `build/`, `bin/` beside a `go.mod`).
+  Source, commits, untracked files and other ignored files (`.env`, data
+  directories) are never touched, and neither is Go's shared build cache. The
+  host call refuses a worktree with a live agent in it. A resume rebuilds it: the
+  next `cargo build` or `npm ci` recreates it.
+- **Git still decides removal.** Once a day the loop re-runs the proof on each
+  archived entry whose host answers. Work that has landed since (someone merged
+  the PR) is unarchived and marked, and goes down the normal path: mark, proof,
+  removal. A new commit on the branch brings it back to `finished`.
+- **It comes back by itself** when its agent is resumed or works again (a new
+  round), reports, or sends a progress note. `comebye archived restore NAME`
+  returns it to the state it was archived from (its mark is not restored);
+  `--resume` also resumes the parked pane.
+- **Park retention** (14 days, then a removal proposal) no longer applies to a
+  session the ledger knows about: that one is archived and kept. It stays only
+  for parked sessions with no ledger entry, such as a chat helper.
+- **A host that gets destroyed.** A provisioned host is destroyed 3 days after it
+  stops (`destroy_after_hours`), and its sessions are saved first, but not its
+  worktrees. While an archived worktree on it has commits on no remote (or not
+  known), the hub asks the host's provisioner to hold that timer
+  (`POST /api/provisioner/host/hold`, 48 hours, renewed at every sweep) and logs
+  "held the destroy timer of HOST" once; it lifts the hold when nothing there
+  needs it. A destroy the user asks for in the app is not held.
+- **What you see.** `comebye archived` lists them (name, project, branch, when,
+  why, commits not in main, what is left, disk used, build output freed);
+  `comebye ledger --archived` shows the entries; the "Hub did" line says
+  "archived N sessions (…), freed X of build output", and the log has an
+  `archive` event for each.
 
 ## Workflows
 

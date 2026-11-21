@@ -76,27 +76,29 @@ func TestParkRetentionLeavesAutoRemovedRecords(t *testing.T) {
 	}
 }
 
-func TestParkRetentionMarksTheWorkersEntry(t *testing.T) {
+// Retention applies only to parked sessions the ledger has no entry for (a
+// chat helper, an agent started by hand): a worker's session is archived and
+// kept, and git decides its removal (issue #86, D3).
+func TestParkRetentionSkipsLedgerSessions(t *testing.T) {
 	r, _ := newPQRig(t)
 	r.s.cfg.ParkRetention = 14 * 24 * time.Hour
 	e, _ := r.s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "feat/x", Worktree: "/wt/w", AgentID: "desk/w5:p1", PaneID: "w5:p1", AgentName: "w", Status: ledger.Finished})
-	r.s.parkStore().Add(park.Record{ID: "pk_old0000001", Name: "w", Kind: "claude", Host: "desk", PaneID: "w5:p1", Worktree: "/wt/w", ParkedAt: time.Now().Add(-20 * 24 * time.Hour)})
+	old := time.Now().Add(-20 * 24 * time.Hour)
+	r.s.parkStore().Add(park.Record{ID: "pk_old0000001", Name: "w", Kind: "claude", Host: "desk", PaneID: "w5:p1", Worktree: "/wt/w", ParkedAt: old})
+	// An archived worker whose park record is only named by the archive.
+	a, _ := r.s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "poc/y", Worktree: "/wt/a", AgentID: "desk/w6:p1", PaneID: "w6:p1", AgentName: "a", Status: ledger.Finished})
+	r.s.ledger.Archive(a.ID, ledger.Archival{By: "hub", ParkID: "pk_arch000001"})
+	r.s.parkStore().Add(park.Record{ID: "pk_arch000001", Name: "a", Kind: "claude", Host: "desk", PaneID: "w6:p1", Worktree: "/wt/moved", ParkedAt: old})
+	// No ledger entry: still proposed.
+	r.s.parkStore().Add(park.Record{ID: "pk_hand000001", Name: "hand", Kind: "claude", Host: "desk", PaneID: "w7:p1", Worktree: "/wt/hand", ParkedAt: old})
 	if n := r.s.parkRetentionStep(time.Now()); n != 1 {
-		t.Fatalf("proposed %d", n)
+		t.Fatalf("proposed %d, want 1 (only the session the ledger does not know)", n)
 	}
-	got, _ := r.s.ledger.Get(e.ID)
-	if got.Status != ledger.ReadyToRemove || got.Mark == nil || got.Mark.By != "hub (park retention)" {
-		t.Fatalf("entry = %+v", got)
+	if got, _ := r.s.ledger.Get(e.ID); got.Status != ledger.Finished || got.Mark != nil {
+		t.Fatalf("the worker's entry was proposed: %+v", got)
 	}
-	// The review lists it with the entry's own repository and branch.
-	var item *removal
-	for _, it := range r.s.marked() {
-		if it.EntryID == e.ID {
-			item = it
-		}
-	}
-	if item == nil || item.Branch != "feat/x" || item.Worktree != "/wt/w" {
-		t.Fatalf("review item = %+v", item)
+	if marks := r.s.ledger.Marks(); len(marks) != 1 || marks[0].Name != "hand" {
+		t.Fatalf("marks = %+v", marks)
 	}
 }
 

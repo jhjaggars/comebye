@@ -70,7 +70,8 @@ type parkBody struct {
 	Name  string `json:"name"`
 	// Dirty confirms parking a worktree with uncommitted edits (they stay in place).
 	Dirty bool `json:"dirty"`
-	// Why: "manual" (default), "suggested" or "auto" (the hub's own park).
+	// Why: "manual" (default), "suggested", "auto" (the hub's own park) or
+	// "archive" (the hub archived the finished session, archived.go).
 	Why string `json:"why"`
 }
 
@@ -79,8 +80,10 @@ type parkResult struct {
 	Record  park.Record `json:"record"`
 	Closed  string      `json:"closed"`
 	Scratch string      `json:"scratch,omitempty"` // what happened to the scratchpad
-	// BuildFreed is the build output cleared from the worktree, in bytes.
-	BuildFreed int64 `json:"build_freed,omitempty"`
+	// BuildFreed is the build output cleared from the worktree, in bytes, and
+	// BuildDirs the directories it was in (relative to the worktree).
+	BuildFreed int64    `json:"build_freed,omitempty"`
+	BuildDirs  []string `json:"build_dirs,omitempty"`
 }
 
 // handlePark is POST /api/park: close the agent, keep everything, write the record.
@@ -192,7 +195,7 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 		launch = park.Launch{} // another kind lived under this name before
 	}
 	why := b.Why
-	if why != "suggested" && why != "auto" {
+	if why != "suggested" && why != "auto" && why != "archive" {
 		why = "manual"
 	}
 	rec := park.Record{
@@ -234,6 +237,9 @@ func (s *Server) parkAgent(ctx context.Context, b parkBody, by string) (*parkRes
 				out.Record = upd
 			}
 			out.BuildFreed = freed
+			for _, d := range cleared {
+				out.BuildDirs = append(out.BuildDirs, d.Rel)
+			}
 		}
 	}
 	// The scratchpad goes to disk now that the process is gone.

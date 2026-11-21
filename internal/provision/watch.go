@@ -77,7 +77,7 @@ func (h *Host) Check(now time.Time) []Act {
 			out = append(out, Act{h.Name, ActWarn, fmt.Sprintf("about $%.2f of its $%.2f budget cap is spent", sp.USD, capUSD)})
 		}
 	}
-	if due, ok := h.destroyDue(); ok && h.State == "STOPPED" && !now.Before(due) && !now.Before(h.NextAuto) {
+	if due, ok := h.destroyDue(); ok && h.State == "STOPPED" && !now.Before(due) && !now.Before(h.NextAuto) && !h.Held(now) {
 		out = append(out, Act{h.Name, ActDestroy, fmt.Sprintf("stopped since %s, more than the %s it was asked to wait", h.StoppedAt.UTC().Format("2006-01-02 15:04"), due.Sub(*h.StoppedAt).Round(time.Hour))})
 	}
 	return out
@@ -108,6 +108,24 @@ func (b *HostBook) MarkWarned(name string) {
 // AutoRetryGap is how long after a failed timer destroy the next try waits: a
 // try starts the host, which costs, so it is not repeated every few minutes.
 const AutoRetryGap = 6 * time.Hour
+
+// MaxHold bounds one destroy hold: the hub renews it while it still holds.
+const MaxHold = 72 * time.Hour
+
+// Held reports whether the hub's destroy hold is in force at now.
+func (h *Host) Held(now time.Time) bool {
+	return h.HoldUntil != nil && now.Before(*h.HoldUntil)
+}
+
+// Hold holds the host's destroy timer back for d (at most MaxHold), with why.
+// It reports false when the book does not know the host.
+func (b *HostBook) Hold(name, why string, d time.Duration) bool {
+	d = min(max(d, 0), MaxHold)
+	return b.Update(name, func(h *Host) {
+		t := b.Now().Add(d)
+		h.HoldUntil, h.HoldWhy = &t, Text(why, 200)
+	})
+}
 
 // MarkAutoDestroy records that a timer started a destroy, and why.
 func (b *HostBook) MarkAutoDestroy(name, why string) {

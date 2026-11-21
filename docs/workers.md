@@ -921,6 +921,7 @@ is enough on its own:
 | Budget backstop | the host's guest timer: at create the tool sets the max run to the smaller of `max_run` and cap ÷ the on-demand price + IPv4 (the highest rate a host of that size can pay; per boot, at least 30 min) | works |
 | Budget cap, exactly: to-do at 80%, **stop** at 100% | the provisioner, every 5 minutes, from its spend ledger; the cap is read from the instance's tag `comebye-budget-cap-usd` (the lower of the tag and what was asked for) | only the backstop applies; the hub raises a to-do after 15 minutes of silence |
 | Destroy after stopped (default 3 days) | the provisioner (`stopped_at` comes from the cloud's own stop time); it starts the host, saves its sessions, then destroys it, and does nothing if it cannot start | waits, and catches up on return |
+| Destroy hold (archived work) | the hub asks the provisioner to hold the destroy-after-stopped timer while an archived worktree on the host has commits on no remote (docs/lifecycle.md, "Archived"); 48 hours at a time, renewed at every sweep | the hold runs out after its 48 hours, and the timer applies again |
 
 A stop never loses data (the disks stay); only destroy does, and a budget cap
 never destroys. A timer destroy that fails (the host would not start, the archive

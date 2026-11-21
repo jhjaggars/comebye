@@ -318,7 +318,9 @@ type apiEntry struct {
 		Phase string    `json:"phase"`
 		At    time.Time `json:"at"`
 	} `json:"progress"`
-	Mark     *apiMark `json:"mark"`
+	Mark *apiMark `json:"mark"`
+	// Archive is the archive record of an archived entry (archived.go).
+	Archive  *archivedRecord `json:"archive"`
 	Approval *struct {
 		By   string `json:"by"`
 		Note string `json:"note"`

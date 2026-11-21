@@ -644,6 +644,7 @@ func (s *Server) provisionRoutes() {
 	// slice 3: the hosts built, their spend, and destroy
 	s.mux.HandleFunc("GET /api/provisioner/hosts", s.auth(s.handlePeerHosts))
 	s.mux.HandleFunc("POST /api/provisioner/host/destroy", s.auth(s.handlePeerHostDestroy))
+	s.mux.HandleFunc("POST /api/provisioner/host/hold", s.auth(s.handlePeerHostHold))
 	// waking a stopped worker (issue #66)
 	s.mux.HandleFunc("POST /api/provisioner/host/start", s.auth(s.handlePeerHostStart))
 	s.mux.HandleFunc("POST /api/provision/hosts/{name}/start", s.authAgent(s.handleProvisionHostStart))

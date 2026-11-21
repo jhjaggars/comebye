@@ -124,6 +124,7 @@ func main() {
 		releaseDeploy  = flag.String("release-deploy-cmd", getenv("COMEBYE_RELEASE_DEPLOY_CMD"), "on the host that owns -release-repo: a command (absolute program path and arguments, no shell) that the release item's second button runs once the build passed, with the version appended as the last argument and in COMEBYE_RELEASE_VERSION. Approve release never runs it. For example a script that commits the version to a deployment repository; empty: no such button")
 		releaseCanary  = flag.String("release-canary", getenv("COMEBYE_RELEASE_CANARY"), "opt in to a canary: this peer is upgraded first and soaks 2 minutes before the others (default: none, every peer is one wave)")
 		releaseDepLbl  = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
+		testArchive    = flag.Duration("test-archive-after", 0, "with -test-mode only (the dev harness): the sweep loop archives finished work after this idle time instead of days, and re-runs the archived proof every 2 s; 0 keeps the settings")
 		testMode       = flag.Bool("test-mode", false, "browser tests and the dev server: the app polls every 300 ms instead of every 3 to 20 s and the to-do list has no per-minute limit; nothing else changes")
 		releaseSim     = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		landTurn       = flag.Duration("land-turn-timeout", envDuration("COMEBYE_LAND_TURN_TIMEOUT", server.DefaultLandTurnTimeout), "how long a worker may hold its turn in a landing queue before the slot is released and its coordinator told; negative never. Hub only")
@@ -490,16 +491,17 @@ func main() {
 		AllowLogins:    logins,
 		// Checked again by ListenAndServe, so a library caller cannot
 		// end up open by accident either.
-		InsecureNoAuth: *noAuth,
-		AllowHosts:     server.SplitHosts(allowHosts...),
-		PublicURL:      strings.TrimRight(strings.TrimSpace(*publicURL), "/"),
-		PagesURL:       strings.TrimRight(strings.TrimSpace(*pagesURL), "/"),
-		ReadLines:      1000,
-		TestMode:       *testMode,
-		Push:           pushSvc,
-		Presence:       presence,
-		AutoTodo:       autoCfg,
-		Fleet:          fl,
+		InsecureNoAuth:   *noAuth,
+		AllowHosts:       server.SplitHosts(allowHosts...),
+		PublicURL:        strings.TrimRight(strings.TrimSpace(*publicURL), "/"),
+		PagesURL:         strings.TrimRight(strings.TrimSpace(*pagesURL), "/"),
+		ReadLines:        1000,
+		TestMode:         *testMode,
+		TestArchiveAfter: *testArchive,
+		Push:             pushSvc,
+		Presence:         presence,
+		AutoTodo:         autoCfg,
+		Fleet:            fl,
 		// Images sent from the app, for agents on this host to read.
 		UploadDir:   filepath.Join(expandHome(*stateDir), "uploads"),
 		LaunchRoots: launchRootList(*launchOn, launchRoots),

@@ -123,10 +123,16 @@ func (s *Server) parkRetentionStep(now time.Time) int {
 	for _, pr := range recs {
 		live[pr.Rec.ID] = true
 	}
+	known := s.ledgerParks()
 	n := 0
 	for _, pr := range recs {
 		r := pr.Rec
 		if !r.Parked() || r.AutoRemoved() || r.Pinned || now.Sub(r.ParkedAt) < s.cfg.ParkRetention || p.has(r.ID) {
+			continue
+		}
+		if known[r.ID] || (r.Worktree != "" && known[pr.Host+"|"+filepath.Clean(r.Worktree)]) {
+			// A session the ledger knows about is archived and kept, not
+			// proposed for removal by age: git decides that (archived.go).
 			continue
 		}
 		days := int(now.Sub(r.ParkedAt).Hours() / 24)
@@ -139,6 +145,27 @@ func (s *Server) parkRetentionStep(now time.Time) int {
 		n++
 	}
 	return n
+}
+
+// ledgerParks is the park records and worktrees ("host|path") of the sessions
+// the ledger knows about (any entry not removed).
+func (s *Server) ledgerParks() map[string]bool {
+	out := map[string]bool{}
+	for _, e := range s.ledger.Entries() {
+		if e.Status == ledger.Removed || e.Status == ledger.Failed {
+			continue
+		}
+		for _, h := range e.ParkHistory {
+			out[h.ID] = true
+		}
+		if e.Archive != nil && e.Archive.ParkID != "" {
+			out[e.Archive.ParkID] = true
+		}
+		if e.Worktree != "" {
+			out[e.Host+"|"+filepath.Clean(e.Worktree)] = true
+		}
+	}
+	return out
 }
 
 // parkMarkBody is the body of POST /api/park/mark.

@@ -133,3 +133,40 @@ func TestAStoppedHostNeverDestroysOnABudgetCap(t *testing.T) {
 		}
 	}
 }
+
+// The hub's hold (an archived worktree there has commits on no remote) keeps
+// the destroy timer back until it runs out or is lifted; the view says why.
+func TestADestroyHoldWaits(t *testing.T) {
+	b, now := hostAt(t, 100)
+	stopAt := t0.Add(2 * time.Hour)
+	*now = stopAt.Add(73 * time.Hour)
+	b.Observe([]StatusWorker{{Name: "w1", State: "STOPPED", LaunchedAt: tp(t0), LastStopAt: tp(stopAt)}})
+	if got := kinds(b.Due()); got != "destroy," {
+		t.Fatalf("not due: %q", got)
+	}
+	if !b.Hold("w1", "archived session poc-x has commits on no remote", 48*time.Hour) {
+		t.Fatal("hold refused")
+	}
+	if got := kinds(b.Due()); got != "" {
+		t.Fatalf("held, yet due: %q", got)
+	}
+	v, _ := b.Views()
+	if v[0].DestroyHeld == "" || v[0].HoldUntil == "" {
+		t.Fatalf("view = %+v", v[0])
+	}
+	*now = now.Add(49 * time.Hour) // the hub stopped renewing it
+	if got := kinds(b.Due()); got != "destroy," {
+		t.Fatalf("after the hold ran out: %q", got)
+	}
+	b.Hold("w1", "again", 1000*time.Hour) // capped at MaxHold
+	if h, _ := b.Get("w1"); h.HoldUntil.Sub(*now) != MaxHold {
+		t.Fatalf("hold = %v", h.HoldUntil.Sub(*now))
+	}
+	b.Hold("w1", "", 0) // lifted
+	if got := kinds(b.Due()); got != "destroy," {
+		t.Fatalf("after the lift: %q", got)
+	}
+	if b.Hold("nope", "x", time.Hour) {
+		t.Fatal("held an unknown host")
+	}
+}

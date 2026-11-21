@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jhjaggars/comebye/internal/buildout"
 )
 
 // The sweep loop. The hub runs the sweep (sweep.go) on a schedule, so finished
@@ -86,6 +88,10 @@ type sweepLoopSettings struct {
 	// stale remote branch). It is read so an old file still loads, never acted on
 	// and dropped when the settings are written again.
 	AutoDeleteBranches *bool `json:"auto_delete_branches,omitempty"`
+	// ArchiveAfterDays is the archive clock (archived.go): a finished session
+	// with no progress for this long is archived (default 7; delivered kinds
+	// at most 3).
+	ArchiveAfterDays *int `json:"archive_after_days,omitempty"`
 }
 
 func normalizeSweepLoop(in *sweepLoopSettings) *sweepLoopSettings {
@@ -101,7 +107,11 @@ func normalizeSweepLoop(in *sweepLoopSettings) *sweepLoopSettings {
 		n := min(max(*in.EveryMinutes, int(minSweepEvery/time.Minute)), int(maxSweepEvery/time.Minute))
 		out.EveryMinutes = &n
 	}
-	if out.Enabled == nil && out.EveryMinutes == nil {
+	if in.ArchiveAfterDays != nil {
+		n := min(max(*in.ArchiveAfterDays, 1), maxArchiveAfterDays)
+		out.ArchiveAfterDays = &n
+	}
+	if out.Enabled == nil && out.EveryMinutes == nil && out.ArchiveAfterDays == nil {
 		return nil
 	}
 	return out
@@ -138,6 +148,7 @@ type sweepSession struct {
 const (
 	doneSession = "session" // a session removed (its worktree and local branch with it)
 	doneBranch  = "branch"  // a stale remote branch deleted
+	// doneArchived (archived.go): a session archived, Freed its build output.
 )
 
 // sweepDone is one thing the loop did: a session it removed, or a remote
@@ -154,8 +165,11 @@ type sweepDone struct {
 	Restore string    `json:"restore,omitempty"`
 	// Backup is the ref on Host that keeps the deleted branch's tip.
 	Backup string `json:"backup,omitempty"`
-	// Note: a session removed but its worktree kept, and why.
+	// Note: a session removed but its worktree kept, and why; for an
+	// archived one, why it was archived.
 	Note string `json:"note,omitempty"`
+	// Freed is the build output an archive cleared, in bytes.
+	Freed int64 `json:"freed,omitempty"`
 }
 
 // restoreBranchCmd is the command that puts a deleted remote branch back.
@@ -179,6 +193,8 @@ type sweepLoopState struct {
 	// sweepDoneWindow; LastDoneAt is when it last did anything.
 	Done       []sweepDone `json:"done,omitempty"`
 	LastDoneAt time.Time   `json:"last_done_at"`
+	// Holds are the hosts whose destroy timer the hub holds (archived.go).
+	Holds []string `json:"holds,omitempty"`
 }
 
 type sweepLoop struct {
@@ -189,6 +205,9 @@ type sweepLoop struct {
 	// tick, grace and look are sweepLoopTick, sweepCleanGrace and sweepCleanLook;
 	// the dev server (-test-mode) shortens them so a browser run sees it all.
 	tick, grace, look time.Duration
+	// archiveAge and recheck replace the archive clocks and the daily proof
+	// (0: the settings and archiveRecheck); -test-archive-after sets them.
+	archiveAge, recheck time.Duration
 }
 
 func openSweepLoop(path string, testMode bool) *sweepLoop {
@@ -243,6 +262,7 @@ func (l *sweepLoop) get() sweepLoopState {
 	st := l.st
 	st.LastNames = append([]sweepSession(nil), st.LastNames...)
 	st.Done = append([]sweepDone(nil), st.Done...)
+	st.Holds = append([]string(nil), st.Holds...)
 	return st
 }
 
@@ -288,6 +308,10 @@ func (s *Server) sweepLoopStep(ctx context.Context, now time.Time) bool {
 	s.sweepCloseOldItem()
 	if conf.On {
 		s.sweepCleanStep(ctx, now, due)
+		if due || l.archiveAge > 0 {
+			// Finished work with no progress for days is put away (archived.go).
+			s.recordDone(now, s.archiveStep(ctx, now))
+		}
 	}
 	return due
 }
@@ -351,6 +375,7 @@ func (s *Server) recordDone(now time.Time, done []sweepDone) {
 	l.saveLocked()
 	l.mu.Unlock()
 	var sessions, branches []string
+	var archived []sweepDone
 	for _, d := range done {
 		switch d.Kind {
 		case doneSession:
@@ -359,6 +384,8 @@ func (s *Server) recordDone(now time.Time, done []sweepDone) {
 				t += " (worktree kept: " + safeText(d.Note) + ")"
 			}
 			sessions = append(sessions, t)
+		case doneArchived:
+			archived = append(archived, d)
 		case doneBranch:
 			t := fmt.Sprintf("origin/%s was at %s", safeText(d.Branch), d.Tip)
 			if d.Backup != "" {
@@ -369,6 +396,9 @@ func (s *Server) recordDone(now time.Time, done []sweepDone) {
 	}
 	if n := len(sessions); n > 0 {
 		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep removed %d %s with nothing to lose (clean, every commit in the default branch, nothing unpushed): %s.", n, plural(n, "session", "sessions"), strings.Join(sessions, ", ")))
+	}
+	if n := len(archived); n > 0 {
+		s.logEvent(evSweep, "", "", "", "Sweep "+archivedText(archived, 6)+" (nothing else deleted: worktree source, branches and transcripts are kept; `comebye archived` lists them).")
 	}
 	if n := len(branches); n > 0 {
 		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep deleted %d stale remote %s (every commit is in the default branch, or was rebased into it; no open PR): %s. Restore one on its host with git push origin <sha>:refs/heads/<name>.", n, plural(n, "branch", "branches"), strings.Join(branches, "; ")))
@@ -411,14 +441,17 @@ func (s *Server) sweepBoardLine() (title string, at time.Time, ok bool) {
 	var parts []string
 	// What it did in the last day, and when it last did any.
 	now := time.Now()
-	var sessions, branches []sweepDone
+	var sessions, branches, archived []sweepDone
 	for _, d := range st.Done {
 		if now.Sub(d.At) >= 24*time.Hour {
 			continue
 		}
-		if d.Kind == doneBranch {
+		switch d.Kind {
+		case doneBranch:
 			branches = append(branches, d)
-		} else {
+		case doneArchived:
+			archived = append(archived, d)
+		default:
 			sessions = append(sessions, d)
 		}
 	}
@@ -443,6 +476,9 @@ func (s *Server) sweepBoardLine() (title string, at time.Time, ok bool) {
 			p += fmt.Sprintf(", +%d", len(branches)-len(names))
 		}
 		parts = append(parts, p+")")
+	}
+	if len(archived) > 0 {
+		parts = append(parts, archivedText(archived, 3))
 	}
 	if len(parts) > 0 && st.LastDoneAt.After(at) {
 		at = st.LastDoneAt
@@ -492,4 +528,26 @@ func (s *Server) sweepLoopView() sweepLoopView {
 		v.LastDoneAt = &t
 	}
 	return v
+}
+
+// archivedText says what the loop archived: "archived 4 sessions (a, b, c, +1),
+// freed 31 GB of build output".
+func archivedText(ds []sweepDone, show int) string {
+	names := make([]string, 0, show)
+	var freed int64
+	for i, d := range ds {
+		if i < show {
+			names = append(names, safeText(d.Name))
+		}
+		freed += d.Freed
+	}
+	p := fmt.Sprintf("archived %d %s (%s", len(ds), plural(len(ds), "session", "sessions"), strings.Join(names, ", "))
+	if len(ds) > len(names) {
+		p += fmt.Sprintf(", +%d", len(ds)-len(names))
+	}
+	p += ")"
+	if freed > 0 {
+		p += ", freed " + buildout.Human(freed) + " of build output"
+	}
+	return p
 }

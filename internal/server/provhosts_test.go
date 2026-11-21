@@ -212,6 +212,30 @@ func TestAProvisionerRefusesToDestroyWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
+// The hub holds a host's destroy timer (an archived worktree there has commits
+// on no remote); a host the provisioner did not build is refused.
+func TestAProvisionerHoldsADestroyForItsHub(t *testing.T) {
+	w := newFakeWorker(t)
+	s := provPeerServer(t, w)
+	s.phosts.Add("demo1", "pj_0123456789abcdef", provision.DefaultSpec("demo1", "t3.small"), "us-east-1", nil, provision.Estimate{})
+	rec := do(s, "POST", "/api/provisioner/host/hold", hubCall, `{"name":"demo1","why":"archived kv has 2 commits on no remote","hours":48}`)
+	if rec.Code != 200 {
+		t.Fatalf("hold = %d %s", rec.Code, rec.Body)
+	}
+	if h, _ := s.phosts.Get("demo1"); !h.Held(time.Now()) || !strings.Contains(h.HoldWhy, "archived kv") {
+		t.Fatalf("host = %+v", h)
+	}
+	if rec := do(s, "POST", "/api/provisioner/host/hold", hubCall, `{"name":"someone-elses","hours":1}`); rec.Code != 404 {
+		t.Errorf("unknown = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(s, "POST", "/api/provisioner/host/hold", hubCall, `{"name":"demo1","hours":0}`); rec.Code != 200 {
+		t.Fatalf("lift = %d %s", rec.Code, rec.Body)
+	}
+	if h, _ := s.phosts.Get("demo1"); h.Held(time.Now()) {
+		t.Fatal("not lifted")
+	}
+}
+
 func TestACleanedUpFailedCreateEndsItsRecord(t *testing.T) {
 	w := newFakeWorker(t)
 	w.set(t, "create.events", `{"v":1,"seq":1,"stage":"instance","step":"4/9","state":"ok"}`+"\n"+`{"v":1,"seq":2,"stage":"bootstrap","step":"6/9","state":"failed","class":"bootstrap_failed","msg":"apt failed"}`+"\n")

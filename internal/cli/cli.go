@@ -60,7 +60,8 @@ func init() {
 		{"agents", "[--host H] [--long [--over 2h]] [--json]", "every agent on every host: project, branch, status, role; --long lists only workers running longer than --over, with their latest progress note and its age", cmdAgents},
 		{"board", "[--json]", "the hub's board as plain text: needs you, running, waiting, landing, landed (recent) and what the hub did, one short line per item with its status and age; the coordinator may read it", cmdBoard},
 		{"log", "[--since 24h] [--kind K,K] [--limit N] [--json]", "what the hub handled itself instead of messaging you: work that landed, agents parked or removed automatically, handoffs cleaned up, dialogs that cleared, prompts held for typing; newest first", cmdLog},
-		{"ledger", "[--active] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints", cmdLedger},
+		{"ledger", "[--active | --archived] [--json]", "the hub's handoffs: status, branch, worker, report, marks, hints; --archived shows only the archived ones", cmdLedger},
+		{"archived", "[list] | add NAME --reason R | restore NAME [--resume]  [--json]", "finished work put away: list the archived sessions (project, branch, why, commits not in main, what is left, disk, build output freed), archive one at once, or bring one back to the state it was archived from (--resume also resumes its pane). The hub archives finished work by itself after 7 days without progress (3 for research, plan, review, spike, poc, eval and test work); it keeps the worktree source, branches and transcript and clears only regenerable build output. Archiving and restoring are the user's or a coordinator's", cmdArchived},
 		{"read", "AGENT [--lines N] [--report [--summary]] [--json]", "an agent's recent messages, or its final report (--summary: just its Summary and Decisions for the user)", cmdRead},
 		{"inspect", "AGENT [--diff] [--json]", "an agent's git state on its host: uncommitted files, unmerged and unpushed commits", cmdInspect},
 		{"handoff", "--host H --repo PATH --branch B [--base X] [--kind K] [--model M] [--thinking T] [--name N] --brief FILE|- [--plan ID] [--json]", "hand work to a new worker on its own branch and worktree", cmdHandoff},
@@ -586,6 +587,7 @@ func cmdLedger(e *Env, args []string) error {
 	fs := flag.NewFlagSet("ledger", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	active := fs.Bool("active", false, "hide removed and failed handoffs")
+	archivedOnly := fs.Bool("archived", false, "show only the archived handoffs (`comebye archived` lists them with what they hold)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -602,6 +604,23 @@ func cmdLedger(e *Env, args []string) error {
 		if err != nil {
 			return err
 		}
+		if *archivedOnly {
+			var all map[string]json.RawMessage
+			var entries []map[string]any
+			if err := json.Unmarshal(data, &all); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(all["entries"], &entries); err != nil {
+				return err
+			}
+			kept := []map[string]any{}
+			for _, en := range entries {
+				if en["status"] == "archived" {
+					kept = append(kept, en)
+				}
+			}
+			return jsonOut(e, map[string]any{"entries": kept})
+		}
 		return rawJSON(e, data)
 	}
 	lg, err := c.getLedger()
@@ -613,6 +632,9 @@ func cmdLedger(e *Env, args []string) error {
 	fmt.Fprintln(tw, "ENTRY\tSTATUS\tHOST\tREPO\tBRANCH\tWORKER\tMODEL\tREPORT\tNOTES")
 	for _, en := range lg.Entries {
 		if *active && (en.Status == "removed" || en.Status == "failed") {
+			continue
+		}
+		if *archivedOnly && en.Status != "archived" {
 			continue
 		}
 		shown++
@@ -678,6 +700,13 @@ func cmdLedger(e *Env, args []string) error {
 			if a := askText(en.Mark.Ask); a != "" {
 				notes = append(notes, a)
 			}
+		}
+		if x := en.Archive; x != nil {
+			n := "archived " + ago(e, x.At) + " by " + dash(x.By) + ": " + dash(x.Why)
+			if x.BuildFreed > 0 {
+				n += "; freed " + buildout.Human(x.BuildFreed) + " of build output"
+			}
+			notes = append(notes, n)
 		}
 		if en.Error != "" {
 			notes = append(notes, "error: "+en.Error)

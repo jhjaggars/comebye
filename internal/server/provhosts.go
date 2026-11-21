@@ -195,6 +195,34 @@ func (s *Server) handlePeerHostDestroy(w http.ResponseWriter, r *http.Request) {
 	writeJSONStatus(w, http.StatusAccepted, v)
 }
 
+type peerHoldReq struct {
+	Name  string `json:"name"`
+	Why   string `json:"why"`
+	Hours int    `json:"hours"`
+}
+
+// handlePeerHostHold: POST /api/provisioner/host/hold. The hub holds a host's
+// destroy-after-stopped timer back (archive.go): an archived worktree there has
+// commits on no remote. Hours 0 lifts the hold.
+func (s *Server) handlePeerHostHold(w http.ResponseWriter, r *http.Request) {
+	if !s.peerProvGuard(w, r) {
+		return
+	}
+	var q peerHoldReq
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&q); err != nil || !provision.ValidName(q.Name) || q.Hours < 0 {
+		relErr(w, http.StatusBadRequest, "bad_request", "give the host's name and the hours to hold")
+		return
+	}
+	if s.phosts == nil || !s.phosts.Hold(q.Name, q.Why, time.Duration(q.Hours)*time.Hour) {
+		relErr(w, http.StatusNotFound, "no_host", "this provisioner did not build "+q.Name)
+		return
+	}
+	h, _ := s.phosts.Get(q.Name)
+	writeJSON(w, map[string]any{"name": q.Name, "hold_until": h.HoldUntil, "why": h.HoldWhy})
+}
+
 func dataWord(del bool) string {
 	if del {
 		return " (data disk deleted)"

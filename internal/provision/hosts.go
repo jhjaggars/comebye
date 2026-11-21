@@ -69,6 +69,12 @@ type Host struct {
 	DestroyFailed   string     `json:"destroy_failed,omitempty"` // the last failed destroy, one line
 	DestroyFailedAt *time.Time `json:"destroy_failed_at,omitempty"`
 	NextAuto        time.Time  `json:"next_auto,omitempty"` // no timer destroy before this (after a failure)
+	// HoldUntil holds the destroy-after-stopped timer back until then, and
+	// HoldWhy says why: the hub asks for it while an archived worktree on the
+	// host has commits on no remote (a destroy would lose them). The hub
+	// renews it at every sweep, so it lapses on its own once it stops asking.
+	HoldUntil *time.Time `json:"hold_until,omitempty"`
+	HoldWhy   string     `json:"hold_why,omitempty"`
 
 	// Adopted marks a host the tool reported as managed that this node did not
 	// build from the app (made with the worker CLI): it can be listed and
@@ -540,7 +546,9 @@ type HostView struct {
 	Warned80At    string  `json:"warned_80_at,omitempty"`
 	DestroyFailAt string  `json:"destroy_failed_at,omitempty"`
 	AutoDestroy   string  `json:"auto_destroy,omitempty"`
-	DestroyDue    string  `json:"destroy_due,omitempty"` // when a stopped host will be destroyed
+	DestroyDue    string  `json:"destroy_due,omitempty"`  // when a stopped host will be destroyed
+	DestroyHeld   string  `json:"destroy_held,omitempty"` // why the destroy timer waits (the hub's hold)
+	HoldUntil     string  `json:"hold_until,omitempty"`
 	Warned80      bool    `json:"warned_80,omitempty"`
 	FromTag       bool    `json:"price_from_cloud"`
 	DiskUSDGBMon  float64 `json:"disk_usd_gb_month"`
@@ -578,6 +586,9 @@ func (h *Host) view(now time.Time) HostView {
 		v.DestroyDue = due.UTC().Format(time.RFC3339)
 	}
 	v.BudgetCapUSD = h.Cap()
+	if h.Held(now) {
+		v.DestroyHeld, v.HoldUntil = h.HoldWhy, rfc(h.HoldUntil)
+	}
 	return v
 }
 

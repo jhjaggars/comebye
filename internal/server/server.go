@@ -137,6 +137,9 @@ type Config struct {
 	// TestPollMs instead of every 3 to 20 s, and the to-do list has no per-minute limit.
 	// It changes no other behaviour; off by default.
 	TestMode bool
+	// TestArchiveAfter (with TestMode, the dev harness): the sweep loop's
+	// archive clock, in place of days (archived.go).
+	TestArchiveAfter time.Duration
 	// AutoTodo turns on the to-do items the hub files itself (autotodo.go).
 	AutoTodo AutoTodoConfig
 	// Release turns on the release and upgrade buttons (release.go).
@@ -475,6 +478,9 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.autoRemove = cfg.AutoRemove
 			s.sweeps = openSweepLoop(filepath.Join(cfg.StateDir, "sweeploop.json"), cfg.TestMode)
+			if cfg.TestMode && cfg.TestArchiveAfter > 0 {
+				s.sweeps.archiveAge, s.sweeps.recheck = cfg.TestArchiveAfter, 2*time.Second
+			}
 			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
 			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
 				log.Printf("brief schedule: %v (starting with none)", err)
@@ -637,6 +643,7 @@ func (s *Server) routes() {
 	// Park and resume (park.go): the user's alone. The host writes the record.
 	s.mux.HandleFunc("POST /api/park", s.auth(s.handlePark))
 	s.mux.HandleFunc("POST /api/build-sweep", s.auth(s.handleBuildSweep))
+	s.mux.HandleFunc("POST /api/buildout/clear", s.auth(s.handleBuildoutClear))
 	s.mux.HandleFunc("POST /api/hosts/{host}/build-sweep", s.auth(s.onHostLaunch("build-sweep", s.handleBuildSweep)))
 	s.mux.HandleFunc("POST /api/resume", s.auth(s.handleResume))
 	s.mux.HandleFunc("GET /api/parked", s.authAgent(s.handleParked))
@@ -669,6 +676,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
 	// The handoff ledger (hub side).
 	s.mux.HandleFunc("GET /api/ledger", s.authWorker(s.handleLedger))
+	// Archived sessions (archived.go): any reader lists them; archiving and
+	// restoring are the user's or a coordinator's.
+	s.mux.HandleFunc("GET /api/archived", s.authWorker(s.handleArchived))
+	s.mux.HandleFunc("POST /api/archived", s.authAgent(s.handleArchiveAdd))
+	s.mux.HandleFunc("POST /api/archived/restore", s.authAgent(s.handleArchiveRestore))
 	s.mux.HandleFunc("GET /api/inspect", s.authWorker(s.handleInspect))
 	s.mux.HandleFunc("GET /api/ledger/{id}/hubcheck", s.authWorker(s.handleHubCheck))
 	s.mux.HandleFunc("POST /api/handoffs", s.authAgent(s.handleHandoff))

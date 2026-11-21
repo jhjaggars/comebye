@@ -86,9 +86,13 @@ type BoardView struct {
 	// to remove that never landed. Reports is kept for older readers and is
 	// always 0: finished research, plans, reviews and spikes are the
 	// "reports" lane.
+	// Archived counts the archived sessions (finished work put away,
+	// archived.go): they are in no lane, and the footer links the count to
+	// the Archived screen.
 	Loose struct {
 		Reports       int `json:"reports"`
 		ReadyToRemove int `json:"ready_to_remove"`
+		Archived      int `json:"archived"`
 	} `json:"loose"`
 	// UnkeyedNotes are bullets of the briefing that look like notes but name
 	// no item the board knows (an id that is gone, a typo).
@@ -320,6 +324,8 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 			default:
 				add(landing, it)
 			}
+		case ledger.Archived:
+			view.Loose.Archived++
 		case ledger.Landed, ledger.ReadyToRemove:
 			if e.Status == ledger.ReadyToRemove && e.MarkedFrom != ledger.Landed {
 				view.Loose.ReadyToRemove++

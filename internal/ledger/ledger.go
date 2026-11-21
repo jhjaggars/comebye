@@ -28,6 +28,10 @@ import (
 //	check found its work in the base) -> ready_to_remove (marked) ->
 //	removed
 //
+// archived is finished work put away (archived.go): a finished, landed or
+// marked entry leaves the board and the removals review, and comes back to
+// finished when it gets more work.
+//
 // failed is a handoff whose worker never started. A landing whose check
 // fails goes back to finished. A finished or landed worker that gets more
 // work goes back to running (a new round); unmarking returns to running,
@@ -47,6 +51,8 @@ const (
 	// machine (a reused worker name) before the work was reported. The branch
 	// and brief remain; nothing follows the new host's panes.
 	Lost Status = "lost"
+	// Archived: finished work put away (see archived.go and Entry.Archive).
+	Archived Status = "archived"
 )
 
 // MaxReport caps a captured final report (bytes).
@@ -195,6 +201,10 @@ type Entry struct {
 	// server's autoremove.go): the removals review lists it for a day, with
 	// an Undo.
 	AutoRemoved *AutoRemoval `json:"auto_removed,omitempty"`
+	// Archive is the archive record while the entry is archived (nil
+	// otherwise); ArchiveHistory lists every archive and unarchive.
+	Archive        *Archival      `json:"archive,omitempty"`
+	ArchiveHistory []ArchiveEvent `json:"archive_history,omitempty"`
 }
 
 // AutoRemoval records a removal the hub made without the user's tap.
@@ -620,6 +630,10 @@ func newID() string {
 func copyEntry(e *Entry) Entry {
 	c := *e
 	c.ParkHistory = append([]ParkEvent(nil), e.ParkHistory...)
+	c.ArchiveHistory = append([]ArchiveEvent(nil), e.ArchiveHistory...)
+	if e.Archive != nil {
+		c.Archive = copyArchival(e.Archive)
+	}
 	if e.ReplyTo != nil {
 		r := *e.ReplyTo
 		c.ReplyTo = &r
@@ -699,6 +713,9 @@ func (s *Store) NotePark(agentID string, ev ParkEvent, to *Where) (bool, error) 
 			e.WorkspaceID = to.WorkspaceID
 		}
 	}
+	if ev.Event == "resumed" && e.Status == Archived && e.Archive != nil && ev.At.After(e.Archive.At) {
+		unarchiveLocked(e, "", "", "its agent was resumed", ev.At.UTC())
+	}
 	return true, s.save()
 }
 
@@ -772,10 +789,10 @@ func (s *Store) Update(id string, fn func(*Entry)) (Entry, bool, error) {
 func active(e *Entry) bool { return e.Active() }
 
 // Active reports whether the entry still has a session to track: it is
-// running, finished, landing, landed or marked.
+// running, finished, landing, landed, marked or archived.
 func (e Entry) Active() bool {
 	switch e.Status {
-	case Running, Finished, Landing, Landed, ReadyToRemove:
+	case Running, Finished, Landing, Landed, ReadyToRemove, Archived:
 		return true
 	}
 	return false
@@ -1131,11 +1148,25 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 	changed := false
 	var capture []Entry
 	for _, e := range s.data.Entries {
-		if e.Status != Running && e.Status != Landing && !e.Reported() {
+		if e.Status != Running && e.Status != Landing && !e.Reported() && e.Status != Archived {
 			continue
 		}
 		a := byID[e.AgentID]
 		if a == nil {
+			continue
+		}
+		if e.Status == Archived {
+			// Like a landed entry: new work on it starts a new round. Only
+			// its own agent counts (a pane id can be reused once it closed).
+			if a.Status == herdr.StatusWorking && (e.AgentName == "" || a.Name == e.AgentName) &&
+				(e.HostInstance == "" || a.Instance == "" || a.Instance == e.HostInstance) {
+				unarchiveLocked(e, Running, "", "its agent is working again", now.UTC())
+				e.FinishedAt, e.SawWorking, e.Callback = nil, true, nil
+				if e.ReportSource != "explicit" {
+					e.FinalReport, e.ReportTries = "", 0
+				}
+				changed = true
+			}
 			continue
 		}
 		if e.AwaitLandReport && e.Status == Landed && e.LandCheck != nil && now.Sub(e.LandCheck.At) > landReportWait {
@@ -1328,8 +1359,12 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := s.byAgent(agentID)
-	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != ReadyToRemove && !e.Reported()) {
+	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != ReadyToRemove && e.Status != Archived && !e.Reported()) {
 		return Entry{}, false, nil
+	}
+	if e.Status == Archived {
+		// An archived worker that reports is at work again: a new round.
+		unarchiveLocked(e, Finished, "", "it reported", now.UTC())
 	}
 	// A marked worker (or one that landed) that sends the very same text
 	// again has told the requester nothing new: the mark no longer holds,
@@ -1389,8 +1424,13 @@ func (s *Store) Note(agentID, text, phase string, now time.Time) (Entry, bool, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := s.byAgent(agentID)
-	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != Finished && e.Status != Landed) {
+	if e == nil || (e.Status != Running && e.Status != Landing && e.Status != Finished && e.Status != Landed && e.Status != Archived) {
 		return Entry{}, false, nil
+	}
+	if e.Status == Archived {
+		// A progress note is work: it comes back to the board.
+		unarchiveLocked(e, Running, "", "it sent a progress note", now.UTC())
+		e.FinishedAt = nil
 	}
 	e.Progress = &Progress{Text: Truncate(strings.TrimSpace(text), MaxProgress), Phase: phase, At: now.UTC()}
 	return copyEntry(e), true, s.save()

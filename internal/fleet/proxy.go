@@ -94,7 +94,10 @@ var hostProxyOps = map[string]struct {
 	// start it again (the user's click, through the hub).
 	"park":        {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "park"}, false},
 	"build-sweep": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 280 * time.Second}, []string{"api", "build-sweep"}, false},
-	"resume":      {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
+	// buildout-clear: clear one archived worktree's regenerable build output
+	// (the hub's archive step). Hub-only.
+	"buildout-clear": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 280 * time.Second}, []string{"api", "buildout", "clear"}, true},
+	"resume":         {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 100 * time.Second}, []string{"api", "resume"}, false},
 	// restart: end an agent's process and start it again in its pane (up to
 	// 20s for the exit, then the start's own wait).
 	"restart": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 150 * time.Second}, []string{"api", "restart"}, false},
@@ -155,6 +158,9 @@ var hostProxyOps = map[string]struct {
 	// confirmation at the hub.
 	"provision-hosts":        {proxyOp{method: http.MethodGet, query: []string{"refresh"}, timeout: 100 * time.Second}, []string{"api", "provisioner", "hosts"}, true},
 	"provision-host-destroy": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "host", "destroy"}, true},
+	// provision-host-hold: the hub holds a host's destroy timer back while an
+	// archived worktree there has commits on no remote. Hub-only.
+	"provision-host-hold": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "host", "hold"}, true},
 	// Waking a stopped worker: the provisioner starts it (the job runs on; the
 	// hub reads it with provision-job like any other).
 	"provision-host-start": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "host", "start"}, true},

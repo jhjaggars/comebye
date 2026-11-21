@@ -113,6 +113,7 @@ var peerProvCalls = []struct{ name, method, path string }{
 	{"hosts", "GET", "/api/provisioner/hosts"},
 	{"destroy", "POST", "/api/provisioner/host/destroy"},
 	{"start", "POST", "/api/provisioner/host/start"},
+	{"hold", "POST", "/api/provisioner/host/hold"},
 }
 
 func TestPeerProvisionOpsAnswerOnlyAHub(t *testing.T) {
@@ -221,14 +222,14 @@ func TestProvisionRoutesAreUserOnly(t *testing.T) {
 			}
 		}
 	}
-	if n != 23 {
-		t.Fatalf("found %d provisioning routes, want 23: update this test with the route", n)
+	if n != 24 {
+		t.Fatalf("found %d provisioning routes, want 24: update this test with the route", n)
 	}
 	if strings.Contains(string(src), "/api/provision") {
 		t.Error("provisioning routes belong in provision.go, where this test checks them")
 	}
 	// ...and a browser cannot have the peer ops forwarded.
-	for _, op := range []string{"provision-preflight", "provision-catalog", "provision-plan", "provision-job-create", "provision-job", "provision-job-retry", "provision-job-cleanup", "provision-hosts", "provision-host-destroy", "provision-host-start"} {
+	for _, op := range []string{"provision-preflight", "provision-catalog", "provision-plan", "provision-job-create", "provision-job", "provision-job-retry", "provision-job-cleanup", "provision-hosts", "provision-host-destroy", "provision-host-start", "provision-host-hold"} {
 		rec := httptest.NewRecorder()
 		fleet.New(nil, "desk", nil, fleet.Options{}).ProxyHost(rec, httptest.NewRequest("GET", "/", nil), "kube", op)
 		if rec.Code != 404 {

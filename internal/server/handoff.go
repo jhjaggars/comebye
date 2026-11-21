@@ -512,6 +512,10 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 		// The earlier worker's agent is gone: the new one takes over its
 		// entry (and its worktree, which startWorker reopened).
 		entry, _, err := s.ledger.Update(prev.ID, func(e *ledger.Entry) {
+			if e.Status == ledger.Archived {
+				e.Archive = nil // new work on archived work: a new round
+				e.ArchiveHistory = append(e.ArchiveHistory, ledger.ArchiveEvent{Event: "unarchived", At: time.Now().UTC(), Why: "a new handoff took it over"})
+			}
 			e.Status, e.Error = ledger.Running, res.PromptError
 			e.HostInstance, e.LostAt = s.hostInstance(e.Host), nil
 			e.AgentID, e.PaneID, e.AgentName, e.Kind = res.Agent.ID, res.Agent.PaneID, res.Agent.Name, res.Agent.Agent
