@@ -35,7 +35,9 @@ const allTodos = async () => (await api("GET", "/api/todos?state=all")).todos ??
 
 const MERGED = ["add-cache", "bump-deps", "drop-flag", "fix-footer", "fix-header", "rename-api"];
 const NEEDS_LOOK = ["half-done", "local-only", "open-pr-a", "open-pr-b"];
-const KEPT = ["extra-commit", "stop-server"];
+const KEPT = ["extra-commit"];
+// Its LEFT answer came after the hub's third re-ask and lists only cleanup: archived at once (#86 slice 7).
+const REASKS_OUT = "stop-server";
 const DELIVERED = ["poc/demo", "eval/bench"];
 let tip = "";
 
@@ -50,6 +52,7 @@ await check("the loop ran by itself and removed the merged, clean sessions and t
     if (fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is still there");
     if (git("branch", "--list", n) !== "") throw new Error(n + " local branch is still there");
   }
+  if (st[REASKS_OUT] !== "archived") throw new Error(REASKS_OUT + " is " + st[REASKS_OUT]);
   for (const n of [...NEEDS_LOOK, "extra", "server"]) if (!fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is gone");
   if (fs.existsSync(`${harness}/worktrees/proj/s6`)) throw new Error("s6 worktree is still there");
   if (fs.existsSync(`${harness}/worktrees/proj/lp`)) throw new Error("lp worktree is still there");
@@ -63,6 +66,18 @@ await check("the typed leftovers settle: the path in the scratchpad goes with th
   const ask = e && e.mark && e.mark.ask;
   console.log("     " + (ask ? ask.state + ": " + ask.reason : JSON.stringify(e && e.mark)));
   if (!ask || ask.state !== "safe" || !/deleted origin\/feat\/leftovers/.test(ask.reason)) throw new Error("answer not settled by the sweep: " + JSON.stringify(ask));
+});
+
+await check("the session whose re-asks ran out is archived with what is left on its row, its worktree and branch kept", async () => {
+  const v = await api("GET", "/api/archived");
+  const row = (v.archived || []).find((r) => r.name === REASKS_OUT);
+  if (!row) throw new Error("not in /api/archived: " + JSON.stringify(v).slice(0, 400));
+  const a = row.archive;
+  console.log("     " + a.why + " | left: " + JSON.stringify((a.left || []).map((i) => i.type + ": " + (i.text || i.name))));
+  if (!/re-asked 3 times/.test(a.why) || !(a.left || []).length) throw new Error(JSON.stringify(a));
+  if (!fs.existsSync(`${harness}/worktrees/proj/server`) || git("branch", "--list", "feat/server") === "") throw new Error("its worktree or branch went");
+  const b = await api("GET", "/api/board");
+  if (!(b.loose && b.loose.archived >= 1)) throw new Error("loose = " + JSON.stringify(b.loose));
 });
 
 await check("a dry-run sweep classes the poc/ and eval/ workers as delivered by their branch prefix", async () => {

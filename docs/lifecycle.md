@@ -60,7 +60,7 @@ stateDiagram-v2
     ready_to_remove --> landed: unmark (had landed)
     ready_to_remove --> removed: user confirms in the app
     finished --> archived: no progress for 7 days (3 for delivered kinds) / archived add
-    ready_to_remove --> archived: what is left still unsettled, or marked as delivered
+    ready_to_remove --> archived: what is left still unsettled, or marked as delivered; at once when the re-asks run out
     archived --> finished: archived restore / new commit / resumed / reported
     archived --> running: its agent works again (a new round)
     archived --> ready_to_remove: the daily proof finds its work landed
@@ -85,7 +85,7 @@ same call that moves the entry to `landing`.
 | `landing` | `comebye land WORKER --note "<the user's OK>"` | coordinator, after the user OKs | the hub finds every approved commit in `origin/<base>` (`landed`), or the worker has said it is done or stopped with nothing running and the work is not there (back to `finished`, "land failed") |
 | `landed` | the hub's check found every approved commit in `origin/<base>` (it polls while the entry is landing; the worker's landing report is not needed) | hub | mark/sweep → `ready_to_remove`; more work → `running` (a new round) |
 | `ready_to_remove` | `comebye mark`, `comebye sweep`, the hub's scheduled sweep, or the app | coordinator, user, hub | unmark → back; the user confirms → `removed` |
-| `archived` | finished work put away: the sweep loop after 7 days without progress (3 for research, plan, review, spike, poc, eval and test work), or `comebye archived add` (see [Archived](#archived)) | hub, coordinator, user | `comebye archived restore`, a resume, a report, a progress note or a new commit → back to `finished` (or `running`); its work found landed → marked |
+| `archived` | finished work put away: the sweep loop after 7 days without progress (3 for research, plan, review, spike, poc, eval and test work) or once a LEFT answer outlasts the hub's re-asks, or `comebye archived add` (see [Archived](#archived)) | hub, coordinator, user | `comebye archived restore`, a resume, a report, a progress note or a new commit → back to `finished` (or `running`); its work found landed → marked |
 | `removed` | the user confirmed the removal in the app | user | (final) |
 | `failed` | the worker never started | hub | (final) |
 | `lost` | the worker's host was removed from the hub, or its name taken over by another machine (a reused spot-worker name), before the work was reported. Entries follow one *instance* of a host (the hub's peer registry: a UUID, or the cloud instance id `worker create` records), so the new machine's panes never move an old entry. The branch and brief remain; `error` says why | hub | (final) |
@@ -206,8 +206,18 @@ build output inside the worktree is cleared, and the bytes freed are recorded.
   session without a worktree of its own (a home checkout), a standing `--loop`
   worker, an agent that is working, blocked or running a background task, one
   with a queued prompt or an open to-do waiting on it, a pinned park record, or
-  a member of a plan with steps still waiting. The user or a coordinator
-  archives at once with `comebye archived add NAME --reason "…"` (an agent never
+  a member of a plan with steps still waiting.
+- **When the re-asks run out.** A marked session whose LEFT answer came back
+  after the hub's last automatic re-ask (`reaskMax`, 3) is archived at the next
+  step, without waiting out the clock, when its items, re-typed and re-checked,
+  are settled except for `cleanup`, `other` and `followup` ones: nothing the hub
+  can check or that is still moving. Those items go onto `archive.left` and show
+  on its row (`comebye archived`, the app). An open `pr`, `todo` or `decision`
+  item, or one the hub still checks (`branch`, `path`, `issue`, `resource`,
+  `commits`), keeps it in the review, as before, until it settles or the clock
+  runs out. No To do is filed for what is left. The other guards above still
+  apply.
+- **By hand.** The user or a coordinator archives at once with `comebye archived add NAME --reason "…"` (an agent never
   archives itself).
 - **What it does, in order.** It checks the worktree on its host (read-only: the
   tip, the commits not in the base and those on no remote); parks the pane when
@@ -784,7 +794,9 @@ answer is **older than an event that touches one of its items** (a PR merged,
 a to-do closed after the answer) or, while still unresolved, **older than 1
 hour** (`reaskCap = time.Hour`, `internal/server/askcheck.go`). It is rate
 limited: at most one ask of a mark per 30 minutes and three automatic re-asks
-per mark. A working or blocked session waits until it is idle. A NOTHING LEFT
+per mark (after the third, a LEFT answer holding only cleanup, other or
+followup items is archived: see [Archived](#archived)). A working or blocked
+session waits until it is idle. A NOTHING LEFT
 answer is not re-asked on its own, except that a stale one is asked again
 right before an automatic removal (`autoremove.go`); that ask is outside the
 cap of three.

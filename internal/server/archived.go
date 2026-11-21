@@ -24,7 +24,9 @@ import (
 // The sweep loop archives a finished session that has made no progress for N
 // days (7; 3 for research, plan, review, spike, poc, eval and test work), and
 // a marked one whose "what is left" answer is still unsettled or that was
-// marked as delivered. Archiving parks the pane (when the agent is live and
+// marked as delivered. A marked one whose answer still says LEFT after the
+// hub's last automatic re-ask, with only cleanup, other or followup items
+// unsettled, is archived at once, and those items go onto its record. Archiving parks the pane (when the agent is live and
 // idle), clears the regenerable build output in the worktree on its host (the
 // bytes freed are recorded) and sets the ledger status. Nothing else is
 // deleted: the worktree source, both branches, the transcript and the park
@@ -136,6 +138,51 @@ type archiveFacts struct {
 	openTodo    bool // an open to-do waits on it
 	pinned      bool // its park record is pinned
 	planWaiting bool // its plan still has steps waiting
+	// reasksOut: the hub's automatic re-asks of its mark are used up, the last
+	// answer still says LEFT, and every item left is one only the user or
+	// nobody can settle (cleanup, other, followup): it is archived at once,
+	// without waiting out the clock. left are those items.
+	reasksOut bool
+	left      []ledger.AskItem
+}
+
+// reasksSpent: the mark's answer is LEFT and came back after the last of the
+// hub's max automatic re-asks (none in flight, no clean-up under way).
+func reasksSpent(m *ledger.Mark, max int) bool {
+	if m == nil || max <= 0 || m.Discard {
+		return false
+	}
+	a := m.Ask
+	return a != nil && a.State == ledger.AskUnsafe && a.Reasks >= max && a.ReaskedAt == nil && a.CleaningAt == nil
+}
+
+// leftOnlyOwed reads a re-checked LEFT answer (its items re-typed): it returns
+// the items still unsettled when every one is cleanup, other or followup, and
+// false when one is still moving or checkable (an open pr, a to-do, a
+// decision, a branch, a path, ...), when all have settled (the proof removes
+// it), or when what is left is a stale branch the sweep deletes.
+func leftOnlyOwed(ar *askReview) ([]ledger.AskItem, bool) {
+	if ar == nil || ar.State != ledger.AskUnsafe || ar.Resolved || ar.StaleOnly {
+		return nil, false
+	}
+	var left []ledger.AskItem
+	for _, v := range ar.Items {
+		if v.State == itemResolved {
+			continue
+		}
+		switch v.Type {
+		case ledger.ItemCleanup, ledger.ItemOther, ledger.ItemFollowup:
+			left = append(left, v.AskItem)
+		default:
+			return nil, false
+		}
+	}
+	return left, len(left) > 0
+}
+
+// reasksOutWhy is the record's reason for an archive when the re-asks ran out.
+func reasksOutWhy(n int, left []ledger.AskItem) string {
+	return fmt.Sprintf("re-asked %d %s and its answer still lists %d %s left that the hub cannot settle", n, plural(n, "time", "times"), len(left), plural(len(left), "thing", "things"))
 }
 
 // archiveBlock says why the loop does not archive e now ("" when it does).
@@ -172,7 +219,7 @@ func archiveBlock(e ledger.Entry, f archiveFacts, now time.Time, plain, delivere
 		return "its park record is pinned"
 	case f.planWaiting:
 		return "its plan still has steps waiting"
-	case now.Sub(archiveLastActivity(e)) < age:
+	case !f.reasksOut && now.Sub(archiveLastActivity(e)) < age:
 		return "it moved within " + archiveAgeText(age)
 	}
 	return ""
@@ -269,15 +316,33 @@ func (s *Server) archiveStep(ctx context.Context, now time.Time) []sweepDone {
 		}
 	}
 	var done []sweepDone
+	var marks map[string]*removal // entry id -> its mark, read once when needed
 	for _, e := range s.ledger.Entries() {
 		if ctx.Err() != nil {
 			break
 		}
 		f := s.archiveFactsOf(ctx, e, live, openTodos, pinned)
+		if e.Status == ledger.ReadyToRemove && reasksSpent(e.Mark, s.reaskMax) {
+			if marks == nil {
+				marks = map[string]*removal{}
+				for _, it := range s.marked() {
+					if it.EntryID != "" {
+						marks[it.EntryID] = it
+					}
+				}
+			}
+			if it := marks[e.ID]; it != nil {
+				f.left, f.reasksOut = leftOnlyOwed(s.askReviewOf(ctx, it))
+			}
+		}
 		if why := archiveBlock(e, f, now, plain, delivered); why != "" {
 			continue
 		}
-		got, err := s.archiveOne(ctx, e, f.live, AutoCreator, archiveWhy(e, plain, delivered), true)
+		why := archiveWhy(e, plain, delivered)
+		if f.reasksOut {
+			why = reasksOutWhy(e.Mark.Ask.Reasks, f.left)
+		}
+		got, err := s.archiveOneLeft(ctx, e, f.live, AutoCreator, why, true, f.left)
 		if err != nil {
 			log.Printf("archive: %s (%s): %v", orDefault(e.AgentName, e.ID), e.ID, err)
 			continue
@@ -304,10 +369,16 @@ var errArchiveRefused = errors.New("refused")
 // output on its host, set the ledger status. auto is the loop's own archive: a
 // worktree that is gone is left to the sweep.
 func (s *Server) archiveOne(ctx context.Context, e ledger.Entry, live *herdr.AgentInfo, by, why string, auto bool) (ledger.Entry, error) {
+	return s.archiveOneLeft(ctx, e, live, by, why, auto, nil)
+}
+
+// archiveOneLeft is archiveOne with the unsettled items to carry onto the
+// record (nil: those of the stored answer, as written).
+func (s *Server) archiveOneLeft(ctx context.Context, e ledger.Entry, live *herdr.AgentInfo, by, why string, auto bool, left []ledger.AskItem) (ledger.Entry, error) {
 	if !ledger.Archivable(e.Status) {
 		return e, fmt.Errorf("%w: it is %s; only finished, landed or marked work is archived", errArchiveRefused, e.Status)
 	}
-	a := ledger.Archival{By: by, Why: why, Unmerged: -1, Unpushed: -1}
+	a := ledger.Archival{By: by, Why: why, Unmerged: -1, Unpushed: -1, Left: left}
 	reachable := false
 	if e.Worktree != "" {
 		chk, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{Detail: true}.forEntry(e))

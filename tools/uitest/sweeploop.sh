@@ -9,7 +9,8 @@
 #   left-path-branch (a "path" in its own scratchpad and a "branch" item for its backup, in main:
 #   the path is settled by the removal, the branch deleted, the session removed),
 #   extra-commit (the same words but the backup has a commit main lacks: kept) and stop-server
-#   (a process to stop: kept).
+#   (a process to stop, its answer given after the hub's third re-ask: archived at once, the
+#   process to stop carried onto its row, no To do).
 # The hub runs with -test-mode, so its loop ticks every second and a mark counts after 3 s. Then
 # sweeploop.mjs checks what was removed and deleted, that no To do is filed, the board line and the
 # removals review, and takes the screenshots at 390 and 1280 px.
@@ -91,7 +92,7 @@ const ago = (h) => new Date(now - h * 3600e3).toISOString();
 const left = [
   { n: "tool-runs-s6-keys", b: "feat/tool-runs-6-keyboard", dir: "s6", text: "Delete the backup branch `origin/feat/tool-runs-6-keyboard`. It still points at the pre-rebase commit, and the same content is already in main. This waits on a go-ahead." },
   { n: "extra-commit", b: "feat/extra", dir: "extra", text: "Delete the backup branch `origin/feat/extra`. The same content is already in main. This waits on a go-ahead." },
-  { n: "stop-server", b: "feat/server", dir: "server", text: "Stop the dev server I started (pid 4242), then close my PR." },
+  { n: "stop-server", b: "feat/server", dir: "server", reasks: 3, text: "Stop the dev server I started (pid 4242), then close my PR." },
   { n: "left-path-branch", b: "feat/leftovers", dir: "lp", items: [
     { type: "path", name: lpPath, text: "the screenshots I took" },
     { type: "branch", remote: "origin", branch: "feat/leftovers", text: "the pre-rebase backup" }] },
@@ -102,7 +103,7 @@ left.forEach((s, j) => { const i = entries.length + j; entries.push({
   worktree: d + "/worktrees/proj/" + s.dir, brief: "fixture", status: "ready_to_remove", saw_working: true,
   created_at: ago(80), finished_at: ago(60), final_report: "Done: " + s.n, report_source: "explicit",
   mark: { agent_id: "devbox/w" + (50 + i) + ":p1", host: "devbox", name: s.n, by: "coordinator", reason: "landed, CI green", at: ago(48),
-    ask: { state: "unsafe", reason: "see items", at: ago(26), asked_at: ago(26), items: s.items || [{ type: "cleanup", text: s.text }] } } }); });
+    ask: { state: "unsafe", reason: "see items", at: ago(26), asked_at: ago(26), items: s.items || [{ type: "cleanup", text: s.text }], reasks: s.reasks || 0 } } }); });
 fs.writeFileSync(state + "/ledger.json", JSON.stringify({ version: 1, entries, marks: [] }));
 fs.writeFileSync(state + "/settings.json", JSON.stringify({ rev: 1, sweep_loop: { enabled: true, every_minutes: 15 } }));
 JS
