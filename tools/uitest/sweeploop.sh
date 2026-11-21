@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# The scheduled sweep (internal/server/sweeploop.go) against a throwaway hub: a fake herdr
-# (tools/devserver, no real session), real git repositories in a temp dir, and a seeded ledger of
-# finished workers: 6 merged and clean, 2 pushed but not merged, 1 dirty, 1 with local commits.
+# The scheduled sweep and its clean-up (internal/server/sweeploop.go, sweepclean.go, leftovers.go)
+# against a throwaway hub: a fake herdr (tools/devserver, no real session), a throwaway bare git
+# "origin" in a temp dir (never a real remote), and a seeded ledger of finished workers:
+#   6 merged and clean (removed by the loop), 2 pushed but not merged, 1 dirty, 1 with local commits
+#   (all four stay), and three marked sessions whose answer lists something left:
+#   tool-runs-s6-keys (delete origin/<own branch>, in main: branch deleted, session removed),
+#   extra-commit (the same words but the backup has a commit main lacks: kept) and stop-server
+#   (a process to stop: kept).
 # The hub runs with -test-mode, so its loop ticks every second and a mark counts after 3 s. Then
-# sweeploop.mjs checks the sweep marked the right ones, filed one To do item, that a second sweep
-# marks nothing new, that one confirm in the removals review removes them, and takes the screenshots.
+# sweeploop.mjs checks what was removed and deleted, that no To do is filed, the board line and the
+# removals review, and takes the screenshots at 390 and 1280 px.
 #
 #   tools/uitest/sweeploop.sh [OUT_DIR]      (needs go, node, git, google-chrome)
 set -Eeuo pipefail
@@ -18,6 +23,10 @@ cleanup() { for p in "${pids[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || 
 trap cleanup EXIT
 (cd "$here" && [ -d node_modules/playwright-core ] || npm ci --no-audit --no-fund --silent)
 (cd "$root" && go build -o "$d/fake-herdr" ./tools/devserver && go build -o "$d/comebye" .)
+
+# gh is not available (and must not be asked about real PRs): a stub that says no pull request is open.
+mkdir -p "$d/bin"; printf '#!/bin/sh\necho "[]"\n' >"$d/bin/gh"; chmod +x "$d/bin/gh"
+export PATH="$d/bin:$PATH"
 
 # --- git fixtures: an origin, a clone with worktrees ---
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
@@ -41,7 +50,19 @@ mk() { # mk NAME KIND
 }
 for n in fix-header fix-footer add-cache drop-flag rename-api bump-deps; do mk "$n" merged; done
 mk open-pr-a pushed; mk open-pr-b pushed; mk half-done dirty; mk local-only local
+B1=feat/tool-runs-6-keyboard
+# The example: the backup (pre-rebase) is pushed, then main gets the same change under another SHA.
+git -C "$d/proj" worktree add -q -b "$B1" "$wt/s6" main
+echo keyboard >"$wt/s6/keys.txt"; git -C "$wt/s6" add .; git -C "$wt/s6" commit -q -m keyboard; git -C "$wt/s6" push -q origin "$B1"
+git -C "$d/proj" cherry-pick "$B1" >/dev/null; git -C "$d/proj" push -q origin main
+# A backup with one commit main lacks.
+git -C "$d/proj" worktree add -q -b feat/extra "$wt/extra" main
+echo one >"$wt/extra/one.txt"; git -C "$wt/extra" add .; git -C "$wt/extra" commit -q -m "part one"; git -C "$wt/extra" push -q origin feat/extra
+git -C "$d/proj" cherry-pick feat/extra >/dev/null; git -C "$d/proj" push -q origin main
+echo two >"$wt/extra/two.txt"; git -C "$wt/extra" add .; git -C "$wt/extra" commit -q -m "part two"; git -C "$wt/extra" push -q origin feat/extra
+git -C "$d/proj" worktree add -q -b feat/server "$wt/server" main
 git -C "$d/proj" fetch -q origin
+echo "$B1" >"$d/b1"
 
 # --- the seeded ledger and the settings ---
 state="$d/state"; mkdir -p "$state"
@@ -55,6 +76,19 @@ const entries = list.split(" ").map((n, i) => ({
   worktree: d + "/worktrees/proj/" + n, brief: "fixture", status: "finished", saw_working: true,
   created_at: new Date(now - 6 * 3600e3).toISOString(), finished_at: new Date(now - 3 * 3600e3).toISOString(),
   final_report: "Done: " + n, report_source: "explicit" }));
+const ago = (h) => new Date(now - h * 3600e3).toISOString();
+const left = [
+  { n: "tool-runs-s6-keys", b: "feat/tool-runs-6-keyboard", dir: "s6", text: "Delete the backup branch `origin/feat/tool-runs-6-keyboard`. It still points at the pre-rebase commit, and the same content is already in main. This waits on a go-ahead." },
+  { n: "extra-commit", b: "feat/extra", dir: "extra", text: "Delete the backup branch `origin/feat/extra`. The same content is already in main. This waits on a go-ahead." },
+  { n: "stop-server", b: "feat/server", dir: "server", text: "Stop the dev server I started (pid 4242), then close my PR." },
+];
+left.forEach((s, j) => { const i = entries.length + j; entries.push({
+  id: "h" + String(i + 1).padStart(11, "0"), host: "devbox", repo: d + "/proj", repo_name: "proj", branch: s.b, base: "main", kind: "claude",
+  agent_name: s.n, agent_id: "devbox/w" + (50 + i) + ":p1", pane_id: "w" + (50 + i) + ":p1", workspace_id: "w" + (50 + i),
+  worktree: d + "/worktrees/proj/" + s.dir, brief: "fixture", status: "ready_to_remove", saw_working: true,
+  created_at: ago(80), finished_at: ago(60), final_report: "Done: " + s.n, report_source: "explicit",
+  mark: { agent_id: "devbox/w" + (50 + i) + ":p1", host: "devbox", name: s.n, by: "coordinator", reason: "landed, CI green", at: ago(48),
+    ask: { state: "unsafe", reason: "see items", at: ago(26), asked_at: ago(26), items: [{ type: "cleanup", text: s.text }] } } }); });
 fs.writeFileSync(state + "/ledger.json", JSON.stringify({ version: 1, entries, marks: [] }));
 fs.writeFileSync(state + "/settings.json", JSON.stringify({ rev: 1, sweep_loop: { enabled: true, every_minutes: 15 } }));
 JS
@@ -69,6 +103,6 @@ COMEBYE_DEV_WEB_DIR="$root/web" setsid "$d/comebye" -sock "$d/h.sock" -addr "127
   -state-dir "$state" -host-name devbox -auto-remove=false -launch-root "$d" -worktree-root "$d/worktrees" >"$d/comebye.log" 2>&1 & pids+=("$!")
 for _ in $(seq 100); do curl -sf "http://127.0.0.1:$port/api/agents" >/dev/null && break; sleep 0.1; done
 rc=0
-node "$here/sweeploop.mjs" "http://127.0.0.1:$port" "$out" "$d" || rc=$?
+node "$here/sweeploop.mjs" "http://127.0.0.1:$port" "$out" "$d" "$(cat "$d/b1")" || rc=$?
 [ $rc = 0 ] || { echo "--- hub log"; tail -30 "$d/comebye.log"; }
 exit $rc

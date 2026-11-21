@@ -63,7 +63,7 @@ type autoFacts struct {
 // origin check asked for) may be removed without the user's tap; when not,
 // why not. It is the single place the rule lives.
 func autoRemoveVerdict(it *removal, f autoFacts) (ok bool, why string) {
-	c, m := it.Checks, it.Mark
+	m := it.Mark
 	switch {
 	case it.EntryID == "":
 		return false, "not a handoff worker"
@@ -87,6 +87,19 @@ func autoRemoveVerdict(it *removal, f autoFacts) (ok bool, why string) {
 		return false, "the NOTHING LEFT answer is " + agoText(f.Now, m.Ask.At) + ": too old to trust"
 	case m.Ask.ReaskedAt != nil:
 		return false, "the session is being asked again"
+	}
+	return workProven(it)
+}
+
+// workProven is the part of the verdict that is about the work itself, from
+// the host's checks and not from anything the session said: the worktree is
+// clean and in a state to remove, every commit is in the base (or its pull
+// request merged), and nothing is unpushed. Both the automatic removal of a
+// session that said SAFE and the sweep loop's clean-up (which decides for a
+// session whose agent is gone) use it.
+func workProven(it *removal) (ok bool, why string) {
+	c := it.Checks
+	switch {
 	case it.Worktree == "" || it.ChecksError != "" || c == nil:
 		return false, "its worktree could not be checked"
 	case !c.Exists || c.Primary || c.Error != "" || c.InProgress != "":

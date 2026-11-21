@@ -459,6 +459,9 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 			}
 		}
 	}
+	if (item.Type == ledger.ItemCleanup || item.Type == ledger.ItemOther) && s.scratchItem(item.Text, it) {
+		return itemResolved, "is nothing left: removing the session deletes its scratch directory", nil
+	}
 	if item.Type == ledger.ItemCleanup {
 		return unchecked("the session can do this itself")
 	}

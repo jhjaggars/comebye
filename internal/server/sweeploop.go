@@ -7,43 +7,51 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
 // The sweep loop. The hub runs the sweep (sweep.go) on a schedule, so finished
-// sessions with nothing to lose are marked ready to remove without anyone
-// typing `comebye sweep`. It lives in the hub because the hub already owns the
-// ledger, the fleet and the clock, every install gets it, and there is no unit
-// file to keep in step with the binary.
+// sessions are marked ready to remove without anyone typing `comebye sweep`,
+// and the ones with nothing to lose are cleaned up without anyone tapping
+// anything. It lives in the hub because the hub already owns the ledger, the
+// fleet and the clock, every install gets it, and there is no unit file to keep
+// in step with the binary.
 //
 // What it does, and what it never does:
 //
-//   - It only marks. A mark is the ordinary one (the session is asked what is
-//     left; the existing automatic removal, autoremove.go, or the user's tap
-//     in the removals review does the removing). Nothing here removes.
-//   - It is idempotent: a sweep skips what is already marked, so a second run
-//     marks nothing new, and a run that marks nothing adds nothing to the log.
+//   - It marks, as the sweep always did (the session is asked what is left),
+//     and it settles what it can prove for sessions whose agent is gone
+//     (leftovers.go): a stale remote branch every commit of which is in the
+//     default branch, with no open PR, is deleted, and its name and tip SHA
+//     are logged so it can be pushed back.
+//   - With "Clean up automatically" on (the default) it then removes a marked
+//     session when the hub itself proves, on the session's host, right before
+//     removing, that there is nothing to lose (sweepclean.go): clean tree, every
+//     commit in the default branch, nothing unpushed. The removal is the
+//     ordinary one: the session, its worktree and its local branch go, and the
+//     worktree is kept whenever anything is not provably in the base. Off, the
+//     loop only marks.
+//   - It never files a To do item. A session that needs a look stays in the
+//     removals review, unremoved. What the loop did is on the board's "Hub did"
+//     line and in the review.
+//   - It is idempotent: a sweep skips what is already marked, a second run
+//     removes and deletes nothing more, and a run that does nothing adds
+//     nothing to the log.
 //   - It is cheap: one sweep an hour (setting), the same checks `comebye
 //     sweep` makes, four hosts' worth at a time.
-//   - It files at most one To do item a day: "N sessions are ready to remove",
-//     linking the removals review, whose "Remove all safe" is the one confirm.
-//     While that item is open the loop only keeps its count right, and it
-//     closes it when nothing is left.
 //
-// Its state (the last run, what it marked, the item it filed) is sweeploop.json
-// in the state directory, so a restart neither repeats a sweep nor files a
-// second item the same day. The setting (on or off, how often) is in
+// Its state (the last run, what it marked, removed and deleted) is
+// sweeploop.json in the state directory, so a restart neither repeats a sweep
+// nor forgets what it did. The setting (on or off, how often) is in
 // settings.json, edited in the app's Peers screen.
 
 const (
-	// SourceSweep marks the To do item the sweep loop filed.
+	// SourceSweep marked the To do item the sweep loop used to file; the loop
+	// closes one it finds from an earlier version.
 	SourceSweep = "hub-sweep"
-	evSweep     = "sweep" // a sweep marked sessions ready to remove
+	evSweep     = "sweep" // a sweep marked, removed or deleted something
 
 	defaultSweepEvery = time.Hour
 	minSweepEvery     = 15 * time.Minute
@@ -53,28 +61,30 @@ const (
 	// running (and an agent started by hand) counts as finished: longer than
 	// `comebye sweep`'s 30 minutes, because nobody is watching this one.
 	sweepLoopIdle = 2 * time.Hour
-	// sweepTodoEvery is the most often a new item is filed.
-	sweepTodoEvery = 24 * time.Hour
-	// sweepTodoGrace is how long a mark waits before it counts: the session
-	// is asked first, and the automatic removal gets its look.
-	sweepTodoGrace = 20 * time.Minute
-	// sweepTodoLook is how often an open item's count is checked again.
-	sweepTodoLook = 20 * time.Minute
-	// sweepTodoList is how many sessions the item's text names.
-	sweepTodoList  = 20
+	// sweepCleanGrace is how long a mark waits before the loop cleans it up: the
+	// session is asked first, and the automatic removal gets its look.
+	sweepCleanGrace = 20 * time.Minute
+	// sweepCleanLook is how often the marked sessions are looked at again
+	// between two sweeps.
+	sweepCleanLook = 20 * time.Minute
 	sweepKeepNames = 12
+	// sweepKeepDone is how many removals and deletions the state keeps, and
+	// sweepDoneWindow how long the review and the board show them.
+	sweepKeepDone   = 100
+	sweepDoneWindow = 7 * 24 * time.Hour
 	// SweepReviewLink is the app's removals review.
 	SweepReviewLink = "/#/remove"
 )
 
 // sweepLoopSettings is the "sweep_loop" part of settings.json. A nil Enabled
-// is the default (on); a nil EveryMinutes is an hour.
+// is the default (on); a nil EveryMinutes is an hour. Enabled is the one switch,
+// "Clean up automatically": off, the loop only marks.
 type sweepLoopSettings struct {
 	Enabled      *bool `json:"enabled,omitempty"`
 	EveryMinutes *int  `json:"every_minutes,omitempty"`
-	// AutoDeleteBranches lets the loop delete a gone session's stale remote
-	// branch itself (every commit provably in the default branch, no open PR).
-	// Off (nil or false) the deletion waits for the one confirm of the day's item.
+	// AutoDeleteBranches is the old second switch (batched confirm or not for a
+	// stale remote branch). It is read so an old file still loads, never acted on
+	// and dropped when the settings are written again.
 	AutoDeleteBranches *bool `json:"auto_delete_branches,omitempty"`
 }
 
@@ -91,23 +101,17 @@ func normalizeSweepLoop(in *sweepLoopSettings) *sweepLoopSettings {
 		n := min(max(*in.EveryMinutes, int(minSweepEvery/time.Minute)), int(maxSweepEvery/time.Minute))
 		out.EveryMinutes = &n
 	}
-	if in.AutoDeleteBranches != nil {
-		v := *in.AutoDeleteBranches
-		out.AutoDeleteBranches = &v
-	}
-	if out.Enabled == nil && out.EveryMinutes == nil && out.AutoDeleteBranches == nil {
+	if out.Enabled == nil && out.EveryMinutes == nil {
 		return nil
 	}
 	return out
 }
 
-// sweepLoopConf is the loop's setting in force.
+// sweepLoopConf is the loop's setting in force. On is "Clean up automatically".
 type sweepLoopConf struct {
 	On     bool          `json:"enabled"`
 	Every  time.Duration `json:"-"`
 	Source string        `json:"source"` // "setting" or "default"
-	// AutoDeleteBranches: delete provably stale remote branches with no confirm.
-	AutoDeleteBranches bool `json:"auto_delete_branches"`
 }
 
 func (s *Server) sweepLoopConf() sweepLoopConf {
@@ -119,7 +123,6 @@ func (s *Server) sweepLoopConf() sweepLoopConf {
 		if v.EveryMinutes != nil {
 			c.Every, c.Source = time.Duration(*v.EveryMinutes)*time.Minute, "setting"
 		}
-		c.AutoDeleteBranches = v.AutoDeleteBranches != nil && *v.AutoDeleteBranches
 	}
 	return c
 }
@@ -131,6 +134,33 @@ type sweepSession struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+// Kinds of sweepDone.
+const (
+	doneSession = "session" // a session removed (its worktree and local branch with it)
+	doneBranch  = "branch"  // a stale remote branch deleted
+)
+
+// sweepDone is one thing the loop did: a session it removed, or a remote
+// branch it deleted. Tip is the SHA the branch was at, so it can be restored
+// with Restore.
+type sweepDone struct {
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
+	Name    string    `json:"name"` // the session's name
+	Repo    string    `json:"repo,omitempty"`
+	Host    string    `json:"host,omitempty"`
+	Branch  string    `json:"branch,omitempty"`
+	Tip     string    `json:"tip,omitempty"`
+	Restore string    `json:"restore,omitempty"`
+	// Note: a session removed but its worktree kept, and why.
+	Note string `json:"note,omitempty"`
+}
+
+// restoreBranchCmd is the command that puts a deleted remote branch back.
+func restoreBranchCmd(tip, branch string) string {
+	return "git push origin " + tip + ":refs/heads/" + branch
+}
+
 // sweepLoopState is sweeploop.json.
 type sweepLoopState struct {
 	LastRunAt     time.Time      `json:"last_run_at"`
@@ -138,15 +168,15 @@ type sweepLoopState struct {
 	LastMarked    int            `json:"last_marked"`
 	LastNames     []sweepSession `json:"last_names,omitempty"`
 	LastNeedsLook int            `json:"last_needs_look"`
-	// LastSettled and LastDeleted: gone sessions whose leftovers the last run
-	// settled, and the stale remote branches it deleted.
-	LastSettled int      `json:"last_settled,omitempty"`
-	LastDeleted []string `json:"last_deleted,omitempty"`
-	LastError   string   `json:"last_error,omitempty"`
-	// TodoID and TodoAt are the item last filed and when.
-	TodoID   string    `json:"todo_id,omitempty"`
-	TodoAt   time.Time `json:"todo_at"`
-	TodoLook time.Time `json:"todo_look"`
+	// LastSettled: gone sessions whose leftovers the last run settled.
+	LastSettled int    `json:"last_settled,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+	// CleanLook is when the marked sessions were last looked at for cleaning.
+	CleanLook time.Time `json:"clean_look"`
+	// Done is what the loop removed and deleted, newest first, kept for
+	// sweepDoneWindow; LastDoneAt is when it last did anything.
+	Done       []sweepDone `json:"done,omitempty"`
+	LastDoneAt time.Time   `json:"last_done_at"`
 }
 
 type sweepLoop struct {
@@ -154,13 +184,13 @@ type sweepLoop struct {
 	path    string // "" keeps it in memory
 	st      sweepLoopState
 	running bool
-	// tick, grace and look are sweepLoopTick, sweepTodoGrace and sweepTodoLook;
+	// tick, grace and look are sweepLoopTick, sweepCleanGrace and sweepCleanLook;
 	// the dev server (-test-mode) shortens them so a browser run sees it all.
 	tick, grace, look time.Duration
 }
 
 func openSweepLoop(path string, testMode bool) *sweepLoop {
-	l := &sweepLoop{path: path, tick: sweepLoopTick, grace: sweepTodoGrace, look: sweepTodoLook}
+	l := &sweepLoop{path: path, tick: sweepLoopTick, grace: sweepCleanGrace, look: sweepCleanLook}
 	if testMode {
 		l.tick, l.grace, l.look = time.Second, 3*time.Second, 2*time.Second
 	}
@@ -210,6 +240,7 @@ func (l *sweepLoop) get() sweepLoopState {
 	defer l.mu.Unlock()
 	st := l.st
 	st.LastNames = append([]sweepSession(nil), st.LastNames...)
+	st.Done = append([]sweepDone(nil), st.Done...)
 	return st
 }
 
@@ -231,17 +262,15 @@ func (s *Server) RunSweepLoop(ctx context.Context) {
 	}
 }
 
-// sweepLoopStep is one look at the clock: sweep when one is due, then keep the
-// To do item right. It reports whether a sweep ran. One step at a time.
+// sweepLoopStep is one look at the clock: sweep when one is due, then, with
+// clean-up on, look at the marked sessions (after a sweep, or every sweepCleanLook).
+// It reports whether a sweep ran. One step at a time.
 func (s *Server) sweepLoopStep(ctx context.Context, now time.Time) bool {
 	l := s.sweeps
 	if l == nil || s.ledger == nil {
 		return false
 	}
 	conf := s.sweepLoopConf()
-	if !conf.On {
-		return false
-	}
 	l.mu.Lock()
 	if l.running {
 		l.mu.Unlock()
@@ -252,18 +281,22 @@ func (s *Server) sweepLoopStep(ctx context.Context, now time.Time) bool {
 	l.mu.Unlock()
 	defer func() { l.mu.Lock(); l.running = false; l.mu.Unlock() }()
 	if due {
-		s.sweepOnce(ctx, now)
+		s.sweepOnce(ctx, now, conf.On)
 	}
-	s.sweepTodoStep(ctx, now, due)
+	s.sweepCloseOldItem()
+	if conf.On {
+		s.sweepCleanStep(ctx, now, due)
+	}
 	return due
 }
 
-// sweepOnce runs one sweep as the hub and records it.
-func (s *Server) sweepOnce(ctx context.Context, now time.Time) sweepResult {
+// sweepOnce runs one sweep as the hub and records it. clean is the "Clean up
+// automatically" setting: off, no remote branch is deleted either.
+func (s *Server) sweepOnce(ctx context.Context, now time.Time, clean bool) sweepResult {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	res := s.sweep(ctx, sweepBody{IdleAfter: sweepLoopIdle.String()}, "", AutoCreator)
-	settled, deleted := s.leftovers(ctx, now)
+	settled, deleted := s.leftovers(ctx, now, clean)
 	var names []sweepSession
 	for _, g := range [][]sweepItem{res.Ready, res.Gone} {
 		for _, it := range g {
@@ -277,7 +310,7 @@ func (s *Server) sweepOnce(ctx context.Context, now time.Time) sweepResult {
 	l.st.LastRunAt, l.st.LastError = now, ""
 	l.st.Runs++
 	l.st.LastMarked, l.st.LastNeedsLook = len(names), len(res.NeedsLook)
-	l.st.LastSettled, l.st.LastDeleted = settled, deleted
+	l.st.LastSettled = settled
 	l.st.LastNames = names[:min(len(names), sweepKeepNames)]
 	l.saveLocked()
 	l.mu.Unlock()
@@ -292,249 +325,136 @@ func (s *Server) sweepOnce(ctx context.Context, now time.Time) sweepResult {
 		}
 		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep marked %d %s ready to remove: %s%s.", len(names), plural(len(names), "session", "sessions"), strings.Join(list, ", "), more))
 	}
-	if len(deleted) > 0 {
-		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep deleted %d stale remote %s (every commit is in the default branch): %s.", len(deleted), plural(len(deleted), "branch", "branches"), strings.Join(deleted, ", ")))
-	}
+	s.recordDone(now, deleted)
 	return res
 }
 
-// sweepTodoPrefilter keeps the marked sessions that could be in the item: not a
-// coordinator, not a proposal to discard work, not waiting on a session's
-// answer or holding an UNSAFE one, and marked long enough ago for the ask and
-// the automatic removal to have had their turn.
-func (s *Server) sweepTodoPrefilter(now time.Time) []*removal {
-	var out []*removal
-	for _, it := range s.marked() {
-		m := it.Mark
-		if it.Coordinator || m.Discard || now.Sub(m.At) < s.sweeps.grace {
-			continue
+// recordDone keeps what the loop did in its state, on the board's line and in
+// the log: for a branch, its name and the SHA it was at, with the command that
+// puts it back.
+func (s *Server) recordDone(now time.Time, done []sweepDone) {
+	if len(done) == 0 {
+		return
+	}
+	l := s.sweeps
+	l.mu.Lock()
+	l.st.Done = append(append([]sweepDone(nil), done...), l.st.Done...)
+	keep := l.st.Done[:0]
+	for _, d := range l.st.Done {
+		if len(keep) < sweepKeepDone && now.Sub(d.At) < sweepDoneWindow {
+			keep = append(keep, d)
 		}
-		// A LEFT answer is looked at, live agent or not: its stale branches are
-		// what the confirm deletes, and what only a person can finish is listed
-		// (the review decides whether it is safe).
-		if m.Ask != nil && m.Ask.State == ledger.AskAsking {
-			continue
+	}
+	l.st.Done, l.st.LastDoneAt = keep, now
+	l.saveLocked()
+	l.mu.Unlock()
+	var sessions, branches []string
+	for _, d := range done {
+		switch d.Kind {
+		case doneSession:
+			t := safeText(d.Name)
+			if d.Note != "" {
+				t += " (worktree kept: " + safeText(d.Note) + ")"
+			}
+			sessions = append(sessions, t)
+		case doneBranch:
+			branches = append(branches, fmt.Sprintf("origin/%s was at %s", safeText(d.Branch), d.Tip))
 		}
-		out = append(out, it)
+	}
+	if n := len(sessions); n > 0 {
+		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep removed %d %s with nothing to lose (clean, every commit in the default branch, nothing unpushed): %s.", n, plural(n, "session", "sessions"), strings.Join(sessions, ", ")))
+	}
+	if n := len(branches); n > 0 {
+		s.logEvent(evSweep, "", "", "", fmt.Sprintf("Sweep deleted %d stale remote %s (every commit is in the default branch, no open PR): %s. Restore one with git push origin <sha>:refs/heads/<name>.", n, plural(n, "branch", "branches"), strings.Join(branches, "; ")))
+	}
+}
+
+// sweepDoneSince lists what the loop did within sweepDoneWindow, newest first.
+func (s *Server) sweepDoneSince(now time.Time) []sweepDone {
+	out := []sweepDone{}
+	for _, d := range s.sweeps.get().Done {
+		if now.Sub(d.At) < sweepDoneWindow {
+			out = append(out, d)
+		}
 	}
 	return out
 }
 
-// sweepReady reviews the prefiltered sessions the way the removals review does
-// and keeps the ones its "Remove all safe" would take.
-func (s *Server) sweepReady(ctx context.Context, cands []*removal) (out, stuck []*removal) {
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4)
-	for _, it := range cands {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			s.review(ctx, it)
-		}()
-	}
-	wg.Wait()
-	for _, it := range cands {
-		switch {
-		case it.Safe && !it.DeliveredDiscard && !it.Coordinator:
-			out = append(out, it)
-		case s.sweepStuck(it):
-			stuck = append(stuck, it)
+// sweepBranchesDeleted lists the stale remote branches the loop deleted in the
+// last day, newest first, each with the SHA it was at and the command that puts
+// it back; the removals review shows them next to the sessions it removed.
+func (s *Server) sweepBranchesDeleted(now time.Time) []sweepDone {
+	out := []sweepDone{}
+	for _, d := range s.sweepDoneSince(now) {
+		if d.Kind == doneBranch && now.Sub(d.At) < AutoRemoveWindow {
+			out = append(out, d)
 		}
 	}
-	for _, l := range [][]*removal{out, stuck} {
-		sort.SliceStable(l, func(i, j int) bool { return l[i].Mark.At.Before(l[j].Mark.At) })
-	}
-	return out, stuck
+	return out
 }
 
-// sweepStuck: a reviewed session whose only leftovers are cleanup the hub cannot
-// check, and that nobody is going to finish: its agent is gone, or it has been
-// asked reaskMax times and each time said it waits for a go-ahead. The hub stops
-// asking and lists it in the day's item for the user.
-func (s *Server) sweepStuck(it *removal) bool {
-	a, ar := it.Mark.Ask, it.AskReview
-	return !it.Safe && !it.Coordinator && !it.Mark.Discard && a != nil && a.State == ledger.AskUnsafe && ar != nil && ar.OnlyCleanup && !ar.StaleOnly &&
-		(!it.Live.Present || a.Reasks >= s.reaskMax)
-}
-
-// sweepTodoText is the item's question and Markdown context for the sessions.
-func sweepTodoText(ready []*removal) (question, body string) { return sweepItemText(ready, nil) }
-
-// sweepItemText is the item's text for the sessions ready to remove and those
-// stuck on a leftover nobody is finishing (sweepStuck).
-func sweepItemText(ready, stuck []*removal) (question, body string) {
-	n := len(ready)
-	switch {
-	case n == 0:
-		question = fmt.Sprintf("%d %s a leftover nobody is finishing", len(stuck), plural(len(stuck), "session has", "sessions have"))
-	case n == 1:
-		question = "1 session is ready to remove"
-	default:
-		question = fmt.Sprintf("%d sessions are ready to remove", n)
-	}
-	var b strings.Builder
-	if n == 0 {
-		b.WriteString("Nothing is ready to remove yet.\n\n")
-	}
-	b.WriteString("These sessions are marked ready to remove, and the hub's checks found nothing to lose in them: each is clean, its work is in the base branch, and nothing is unpushed. Nothing is removed until you confirm.\n\n")
-	nb := 0
-	for _, it := range ready {
-		nb += len(staleDeletions(it))
-	}
-	if nb > 0 {
-		fmt.Fprintf(&b, "Your confirm also deletes %d stale remote %s, marked *delete* below: each was left as a to-do by an agent that is gone or keeps waiting for a go-ahead; git shows every commit on it is already in the default branch (checked on its host just now), and no pull request from it is open.\n\n", nb, plural(nb, "branch", "branches"))
-	}
-	for i, it := range ready {
-		if i >= sweepTodoList {
-			fmt.Fprintf(&b, "- … and %d more\n", n-sweepTodoList)
-			break
-		}
-		line := "- **" + mdSafe(orDefault(it.Name, it.ID)) + "**"
-		if it.Repo != "" || it.Branch != "" {
-			line += " · " + mdSafe(strings.Trim(it.Repo+" "+it.Branch, " "))
-		}
-		if d := staleDeletions(it); len(d) > 0 {
-			line += " · *delete* " + mdSafe(strings.Join(d, ", "))
-		}
-		// A sweep's reason is the checks the text above already names; a
-		// person's or a coordinator's is worth showing.
-		if r := strings.TrimSpace(it.Mark.Reason); r != "" && !strings.HasPrefix(r, "Sweep: ") {
-			line += ": " + mdSafe(r)
-		}
-		b.WriteString(oneLine(line, 240) + "\n")
-	}
-	if n > 0 {
-		b.WriteString("\nOpen the removals review and tap **Remove all safe**, then confirm once. Sessions that need a look are not in this list; they stay where they are.\n")
-	}
-	if len(stuck) > 0 {
-		b.WriteString("\nThese have one thing left that the hub cannot check or do, and no one is going to finish it (the agent is gone, or it was asked several times and still waits for a go-ahead). The hub stopped asking. Each stays in the review:\n\n")
-		for i, it := range stuck {
-			if i >= sweepTodoList {
-				fmt.Fprintf(&b, "- … and %d more\n", len(stuck)-sweepTodoList)
-				break
-			}
-			left := ""
-			for _, v := range it.AskReview.Items {
-				if v.State != itemResolved {
-					left = v.Text
-					break
-				}
-			}
-			why := "agent gone"
-			if it.Live.Present {
-				why = fmt.Sprintf("asked %d times", it.Mark.Ask.Reasks)
-			}
-			b.WriteString(oneLine("- **"+mdSafe(orDefault(it.Name, it.ID))+"** ("+why+"): "+mdSafe(left), 300) + "\n")
-		}
-	}
-	return question, block(b.String(), todoMaxContext)
-}
-
-// sweepActiveItem is the open item the loop filed, if there is one.
-func (s *Server) sweepActiveItem() (Todo, bool) {
-	for _, t := range s.todos.list("") {
-		if t.Source == SourceSweep && t.active() {
-			return t, true
-		}
-	}
-	return Todo{}, false
-}
-
-// sweepTodoStep files the day's item, keeps an open one's count right, and
-// closes it when nothing is left to remove. forced: a sweep just ran, so look
-// now rather than at the next sweepTodoLook.
-func (s *Server) sweepTodoStep(ctx context.Context, now time.Time, forced bool) {
-	if s.todos == nil {
-		return
-	}
-	l := s.sweeps
-	st := l.get()
-	open, have := s.sweepActiveItem()
-	if !have && now.Sub(st.TodoAt) < sweepTodoEvery {
-		return // filed a day ago or less, and the user dealt with it: one a day
-	}
-	if !forced && now.Sub(st.TodoLook) < l.look {
-		return
-	}
-	l.mu.Lock()
-	l.st.TodoLook = now
-	l.saveLocked()
-	l.mu.Unlock()
-	ready, stuck := s.sweepReady(ctx, s.sweepTodoPrefilter(now))
-	switch {
-	case have && len(ready)+len(stuck) == 0:
-		if _, err := s.todos.close(open.ID, TodoDone, AutoCreator, "nothing is left to remove"); err != nil {
-			log.Printf("sweep loop: close %s: %v", open.ID, err)
-		}
-	case have:
-		q, c := sweepItemText(ready, stuck)
-		if q == open.Question && c == open.Context {
-			return
-		}
-		if _, err := s.todos.mutate(open.ID, func(it *Todo) error {
-			if !it.active() {
-				return errTodoClosed
-			}
-			it.Question, it.Context = q, c
-			return nil
-		}); err != nil {
-			log.Printf("sweep loop: update %s: %v", open.ID, err)
-		}
-	case len(ready)+len(stuck) > 0:
-		q, c := sweepItemText(ready, stuck)
-		it, _, err := s.todos.add(Todo{
-			Question: q, Context: c, Kind: "action",
-			Links:     []TodoLink{{Label: "Open the removals review", URL: SweepReviewLink}},
-			CreatedBy: AutoCreator, Source: SourceSweep, AutoKey: SourceSweep + ":" + now.UTC().Format("2006-01-02"),
-		})
-		if err != nil {
-			log.Printf("sweep loop: file the item: %v", err)
-			return
-		}
-		l.mu.Lock()
-		l.st.TodoID, l.st.TodoAt = it.ID, now
-		l.saveLocked()
-		l.mu.Unlock()
-	}
-}
-
-// sweepBoardLine is the "Hub did" lane's line for the loop: when it last ran
-// and what it marked. ok is false when there is nothing to say (it has not
-// run, or it is off and never ran).
+// sweepBoardLine is the "Hub did" lane's line for the loop: when it last ran,
+// what it marked, and what it removed and deleted since. ok is false when there
+// is nothing to say (it has not run).
 func (s *Server) sweepBoardLine() (title string, at time.Time, ok bool) {
 	st := s.sweeps.get()
 	if st.LastRunAt.IsZero() {
 		return "", time.Time{}, false
 	}
+	at = st.LastRunAt
 	var parts []string
-	if st.LastMarked == 0 {
-		parts = append(parts, "marked nothing new")
-	} else {
-		names := make([]string, 0, 3)
-		for _, n := range st.LastNames[:min(len(st.LastNames), 3)] {
-			names = append(names, safeText(n.Name))
+	// What it did in the last day, and when it last did any.
+	now := time.Now()
+	var sessions, branches []sweepDone
+	for _, d := range st.Done {
+		if now.Sub(d.At) >= 24*time.Hour {
+			continue
 		}
-		p := fmt.Sprintf("marked %d ready to remove (%s", st.LastMarked, strings.Join(names, ", "))
-		if st.LastMarked > len(names) {
-			p += fmt.Sprintf(", +%d", st.LastMarked-len(names))
+		if d.Kind == doneBranch {
+			branches = append(branches, d)
+		} else {
+			sessions = append(sessions, d)
+		}
+	}
+	if len(sessions) > 0 {
+		names := make([]string, 0, 3)
+		for _, d := range sessions[:min(len(sessions), 3)] {
+			names = append(names, safeText(d.Name))
+		}
+		p := fmt.Sprintf("removed %d %s (%s", len(sessions), plural(len(sessions), "session", "sessions"), strings.Join(names, ", "))
+		if len(sessions) > len(names) {
+			p += fmt.Sprintf(", +%d", len(sessions)-len(names))
 		}
 		parts = append(parts, p+")")
 	}
-	if n := len(st.LastDeleted); n > 0 {
-		parts = append(parts, fmt.Sprintf("deleted %d stale remote %s", n, plural(n, "branch", "branches")))
+	if len(branches) > 0 {
+		names := make([]string, 0, 3)
+		for _, d := range branches[:min(len(branches), 3)] {
+			names = append(names, "origin/"+safeText(d.Branch)+" @ "+short(d.Tip))
+		}
+		p := fmt.Sprintf("deleted %d stale remote %s (%s", len(branches), plural(len(branches), "branch", "branches"), strings.Join(names, ", "))
+		if len(branches) > len(names) {
+			p += fmt.Sprintf(", +%d", len(branches)-len(names))
+		}
+		parts = append(parts, p+")")
+	}
+	if len(parts) > 0 && st.LastDoneAt.After(at) {
+		at = st.LastDoneAt
+	}
+	if st.LastMarked > 0 {
+		parts = append(parts, fmt.Sprintf("marked %d ready to remove", st.LastMarked))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "nothing to clean up")
 	}
 	if st.LastNeedsLook > 0 {
 		parts = append(parts, fmt.Sprintf("%d need a look", st.LastNeedsLook))
 	}
-	title = "Last sweep: " + strings.Join(parts, "; ")
+	title = "Sweep: " + strings.Join(parts, "; ")
 	if !s.sweepLoopConf().On {
-		title += " (the sweep is off)"
+		title += " (automatic clean-up is off: it only marks)"
 	}
-	return title, st.LastRunAt, true
+	return title, at, true
 }
 
 // sweepLoopView is what the settings answer says about the loop.
@@ -546,28 +466,24 @@ type sweepLoopView struct {
 	LastMarked   int        `json:"last_marked"`
 	NeedsLook    int        `json:"last_needs_look"`
 	NextRunAt    *time.Time `json:"next_run_at,omitempty"`
-	TodoAt       *time.Time `json:"todo_at,omitempty"`
+	LastDoneAt   *time.Time `json:"last_done_at,omitempty"`
 	// Hub: this host has no ledger, so it cannot sweep.
 	Hub bool `json:"hub"`
-	// AutoDeleteBranches: the setting in force (see sweepLoopSettings).
-	AutoDeleteBranches bool `json:"auto_delete_branches"`
 }
 
 func (s *Server) sweepLoopView() sweepLoopView {
 	c := s.sweepLoopConf()
-	v := sweepLoopView{Enabled: c.On, EveryMinutes: int(c.Every / time.Minute), Source: c.Source, Hub: s.ledger != nil, AutoDeleteBranches: c.AutoDeleteBranches}
+	v := sweepLoopView{Enabled: c.On, EveryMinutes: int(c.Every / time.Minute), Source: c.Source, Hub: s.ledger != nil}
 	st := s.sweeps.get()
 	if !st.LastRunAt.IsZero() {
 		t := st.LastRunAt
 		v.LastRunAt, v.LastMarked, v.NeedsLook = &t, st.LastMarked, st.LastNeedsLook
-		if c.On {
-			n := t.Add(c.Every)
-			v.NextRunAt = &n
-		}
+		n := t.Add(c.Every)
+		v.NextRunAt = &n
 	}
-	if !st.TodoAt.IsZero() {
-		t := st.TodoAt
-		v.TodoAt = &t
+	if !st.LastDoneAt.IsZero() {
+		t := st.LastDoneAt
+		v.LastDoneAt = &t
 	}
 	return v
 }

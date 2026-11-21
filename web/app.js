@@ -5389,6 +5389,7 @@ async function loadReview(quiet) {
   if (seq !== review.seq) return;
   review.items = Array.isArray(d.removals) ? d.removals : [];
   review.auto = Array.isArray(d.auto_removed) ? d.auto_removed : [];
+  review.branches = Array.isArray(d.sweep_branches) ? d.sweep_branches : [];
   const ids = new Set(review.items.map((it) => it.id));
   for (const id of [...review.sel]) if (!ids.has(id)) review.sel.delete(id);
   if (review.confirm && !review.confirm.ids.every((id) => ids.has(id))) review.confirm = null;
@@ -5605,10 +5606,11 @@ function renderReview() {
 function renderReviewAuto() {
   const box = $("rv-auto");
   const rows = review.auto || [];
-  box.hidden = !rows.length;
-  if (!rows.length) { box.innerHTML = ""; return; }
+  const branches = review.branches || [];
+  box.hidden = !rows.length && !branches.length;
+  if (box.hidden) { box.innerHTML = ""; return; }
   const dis = review.busy ? " disabled" : "";
-  box.innerHTML = `<h3 class="rv-autoh">Removed automatically · last day</h3>` + rows.map((a) => {
+  const sessions = rows.map((a) => {
     const name = esc(a.name || a.entry_id);
     const host = multiHost() && a.host ? `<span class="host-chip">${esc(a.host)}</span>` : "";
     const branch = a.branch ? `<span class="wt-chip">⑂ ${esc(a.branch)}</span>` : "";
@@ -5623,6 +5625,13 @@ function renderReviewAuto() {
       <div class="rv-top"><span class="rv-name">${name}</span>${host}${branch}<span class="status">${when}</span></div>
       <div class="rv-reason">Removed automatically: ${how}</div>${a.in_recent ? '<div class="rv-sub">Its session is in Recently closed: resume it from there any time.</div>' : ""}${kept}${act}</div>`;
   }).join("");
+  // Remote branches the sweep deleted, each with the SHA it was at, so it can be pushed back.
+  const gone = branches.map((b) => `<div class="rv-item rv-auto-item rv-branch">
+      <div class="rv-top"><span class="rv-name">origin/${esc(b.branch)}</span>${b.name ? `<span class="wt-chip">${esc(b.name)}</span>` : ""}<span class="status">${esc(askAge(b.at))}</span></div>
+      <div class="rv-reason">Deleted by the sweep: every commit was already in the default branch and no pull request was open. It was at <code>${esc(b.tip)}</code>.</div>
+      <div class="rv-sub">To restore: <code>${esc(b.restore)}</code></div></div>`).join("");
+  box.innerHTML = (rows.length ? `<h3 class="rv-autoh">Removed automatically · last day</h3>${sessions}` : "") +
+    (branches.length ? `<h3 class="rv-autoh">Remote branches deleted · last day</h3>${gone}` : "");
 }
 
 // The select-all bar: it counts the selection and removes the safe rows in it.
@@ -8609,7 +8618,7 @@ function draftFrom(name, data) {
   for (const [k, v] of Object.entries(s.kinds || {})) kinds[k] = { model: v.model || "", thinking: v.thinking || "" };
   return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds, max_workers: s.max_workers_per_repo == null ? "" : String(s.max_workers_per_repo),
     // The scheduled sweep (sweep_loop): on unless switched off; "" minutes is the default hour. Hosts too old to have it send nothing.
-    sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "", sweep_del: !!(s.sweep_loop && s.sweep_loop.auto_delete_branches) };
+    sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "" };
 }
 
 function draftBody(d) {
@@ -8622,7 +8631,6 @@ function draftBody(d) {
     const sl = {}, ev = String(d.sweep_every || "").trim();
     if (!d.sweep_on) sl.enabled = false;
     if (/^\d+$/.test(ev)) sl.every_minutes = Number(ev);
-    if (d.sweep_del) sl.auto_delete_branches = true;
     body.sweep_loop = sl; // {} puts the default back
   }
   return body;
@@ -8704,9 +8712,9 @@ function maxwNote(d, eff) {
   return d.max_workers === "0" ? "0: no cap." : "A handoff over this waits, and starts when a worker in that repository finishes.";
 }
 function sweepNote(d, sw) {
-  if (!d.sweep_on) return "Off: the hub does not look for finished sessions by itself. `comebye sweep` still does it by hand.";
+  if (!d.sweep_on) return "Off: the hub still marks finished sessions as ready to remove, but removes nothing itself. You remove them in the removals review (or `comebye sweep` by hand).";
   const last = sw && sw.last_run_at ? `Last ran ${fmtWhen(sw.last_run_at)}: marked ${sw.last_marked}, ${sw.last_needs_look} need a look.` : "It has not run yet.";
-  return `Marks finished sessions with nothing to lose as ready to remove, and files one To do item a day. It never removes anything itself. ${d.sweep_del ? "It also deletes a finished session’s remote branch itself when git shows every commit on it is already in the default branch and no pull request is open." : "A finished session’s stale remote branch (every commit already in the default branch) is deleted when you confirm the day’s item."} ${last}`;
+  return `Removes finished sessions that have nothing to lose (clean, every commit in the default branch, nothing unpushed, checked on the host just before), and deletes their stale remote branches when git shows every commit is in the default branch and no pull request is open. Files no To do: what it did is on the board and in the removals review, and a deleted branch is logged with its SHA. Sessions that need a look stay in the review. ${last}`;
 }
 function peerSettingsForm(h, c, d) {
   const data = c.data;
@@ -8738,10 +8746,9 @@ function peerSettingsForm(h, c, d) {
     <div class="pr-field"><label for="pr-maxw">Most running workers per repository</label>
       <input type="number" id="pr-maxw" min="0" max="1000" step="1" inputmode="numeric" value="${esc(d.max_workers)}" placeholder="${esc(eff.max_workers_per_repo_source === "default" || eff.max_workers_per_repo == null ? "4 (default)" : String(eff.max_workers_per_repo))}" autocomplete="off">
       <div class="pr-note" id="pr-maxw-note">${maxwNote(d, eff)} Agents cannot change it.</div></div>
-    ${d.sweep_known ? `<div class="pr-field"><span class="pr-lbl" id="pr-sweep-l">Sweep for sessions to remove</span>
-      <div class="pr-checks" role="group" aria-labelledby="pr-sweep-l"><label class="pr-check"><input type="checkbox" id="pr-sweep-on"${d.sweep_on ? " checked" : ""}>On</label>
-        <label class="pr-check" for="pr-sweep-every">every <input type="number" id="pr-sweep-every" min="15" max="1440" step="5" inputmode="numeric" value="${esc(d.sweep_every)}" placeholder="60" autocomplete="off"${d.sweep_on ? "" : " disabled"}> minutes</label>
-        <label class="pr-check" for="pr-sweep-del"><input type="checkbox" id="pr-sweep-del"${d.sweep_del ? " checked" : ""}${d.sweep_on ? "" : " disabled"}>Delete a finished session’s stale remote branch without asking</label></div>
+    ${d.sweep_known ? `<div class="pr-field"><span class="pr-lbl" id="pr-sweep-l">Finished sessions</span>
+      <div class="pr-checks" role="group" aria-labelledby="pr-sweep-l"><label class="pr-check"><input type="checkbox" id="pr-sweep-on"${d.sweep_on ? " checked" : ""}>Clean up automatically</label>
+        <label class="pr-check" for="pr-sweep-every">every <input type="number" id="pr-sweep-every" min="15" max="1440" step="5" inputmode="numeric" value="${esc(d.sweep_every)}" placeholder="60" autocomplete="off"${d.sweep_on ? "" : " disabled"}> minutes</label></div>
       <div class="pr-note" id="pr-sweep-note">${esc(sweepNote(d, data.sweep_loop))}</div></div>` : ""}
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
@@ -9059,7 +9066,6 @@ function initPeers() {
     if (!d) return;
     if (t.id === "pr-default") d.default_kind = t.value;
     else if (t.id === "pr-sweep-on") d.sweep_on = t.checked;
-    else if (t.id === "pr-sweep-del") d.sweep_del = t.checked;
     else if (t.dataset.allow) d.allowed = t.checked ? [...new Set([...d.allowed, t.dataset.allow])] : d.allowed.filter((k) => k !== t.dataset.allow);
     else if (t.dataset.think) (d.kinds[t.dataset.think] ||= { model: "", thinking: "" }).thinking = t.value;
     else return;
