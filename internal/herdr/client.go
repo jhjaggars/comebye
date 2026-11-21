@@ -853,7 +853,6 @@ func GlobalSubscriptions() []Subscription {
 // streamConn is one live subscription connection.
 type streamConn struct {
 	cancel context.CancelFunc
-	done   chan struct{}
 }
 
 // Stream runs a self-healing subscription connection. It reconnects with
@@ -862,11 +861,19 @@ type streamConn struct {
 // consumers can re-read authoritative state. The per-pane subscription set is
 // fixed per connection by herdr, so callers must Restart when the pane set
 // changes.
+//
+// onResync runs on the stream's own loop and may call Start (to resubscribe
+// with a new pane set). So neither Start nor Stop may wait for a loop while
+// holding the lock, and Start never waits for the old loop at all: it cancels
+// it and starts the new one. The old loop exits without another onResync once
+// its current one returns; an event it already read may still arrive.
 type Stream struct {
-	client *Client
-	mu     sync.Mutex
-	subs   []Subscription
-	conn   *streamConn
+	client  *Client
+	mu      sync.Mutex
+	subs    []Subscription
+	conn    *streamConn
+	stopped bool
+	loops   sync.WaitGroup
 
 	onEvent  func(PushEvent)
 	onResync func(reason string)
@@ -878,33 +885,37 @@ func NewStream(client *Client, onEvent func(PushEvent), onResync func(reason str
 }
 
 // Start launches the stream with the given subscription set. Calling Start
-// again while running is a no-op unless the set changed.
+// again while running is a no-op unless the set changed, and after Stop it
+// always is. It never blocks on the stream's loop, so onResync may call it.
 func (s *Stream) Start(subs []Subscription) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.conn != nil && sameSubs(s.subs, subs) {
+	if s.stopped || (s.conn != nil && sameSubs(s.subs, subs)) {
 		return
 	}
 	if s.conn != nil {
 		s.conn.cancel()
-		<-s.conn.done // wait for the old loop to fully drain
 	}
 	s.subs = append([]Subscription(nil), subs...)
 	ctx, cancel := context.WithCancel(context.Background())
-	conn := &streamConn{cancel: cancel, done: make(chan struct{})}
-	s.conn = conn
-	go s.loop(ctx, conn, s.subs)
+	s.conn = &streamConn{cancel: cancel}
+	s.loops.Add(1)
+	go s.loop(ctx, s.subs)
 }
 
-// Stop tears the stream down.
+// Stop tears the stream down for good and waits for its loops to exit. It
+// must not be called from onEvent or onResync.
 func (s *Stream) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stopped = true
 	if s.conn != nil {
 		s.conn.cancel()
-		<-s.conn.done
 		s.conn = nil
 	}
+	s.mu.Unlock()
+	// Wait unlocked: a loop inside onResync may call Start, which takes
+	// the lock (and returns at once, since the stream is stopped).
+	s.loops.Wait()
 }
 
 func sameSubs(a, b []Subscription) bool {
@@ -924,8 +935,8 @@ func sameSubs(a, b []Subscription) bool {
 	return true
 }
 
-func (s *Stream) loop(ctx context.Context, conn *streamConn, subs []Subscription) {
-	defer close(conn.done)
+func (s *Stream) loop(ctx context.Context, subs []Subscription) {
+	defer s.loops.Done()
 	backoff := 500 * time.Millisecond
 	for {
 		if ctx.Err() != nil {
