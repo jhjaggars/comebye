@@ -228,7 +228,7 @@ async function startChrome() {
     const chrome = spawn(chromeBin, [
       "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
       "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox", "about:blank",
-    ], { stdio: ["ignore", "ignore", "pipe"] });
+    ], { stdio: ["ignore", "ignore", "pipe"], detached: true }); // its own process group: its helpers are stopped with it
     let tail = "", exited = null;
     chrome.stderr.on("data", (d) => { tail = (tail + d).slice(-2000); });
     chrome.on("exit", (code, sig) => { exited = sig || "code " + code; });
@@ -250,14 +250,21 @@ async function startChrome() {
   throw new Error(why);
 }
 
-// Stops Chrome and waits for it to exit before its profile is removed (it writes there until it is gone).
+// Stops Chrome and its helpers (the crash handler, the utility processes: they outlive the main process and write
+// to the profile) and waits for them before the profile is removed. A profile that still cannot be removed is left
+// behind with a warning: cleanup must not fail checks that passed.
 async function stopChrome({ chrome, profile }) {
-  if (chrome.exitCode === null && chrome.signalCode === null) {
-    const gone = new Promise((r) => chrome.once("exit", r));
-    chrome.kill("SIGTERM");
-    if (!(await Promise.race([gone.then(() => true), sleep(5000).then(() => false)]))) { chrome.kill("SIGKILL"); await gone; }
+  const group = (sig) => { try { process.kill(-chrome.pid, sig); return true; } catch { return false; } };
+  group("SIGTERM");
+  for (let i = 0; i < 50 && group(0); i++) await sleep(100);
+  group("SIGKILL");
+  for (let i = 0; i < 20 && group(0); i++) await sleep(100);
+  for (let i = 0; ; i++) {
+    try { rmSync(profile, { recursive: true, force: true }); return; } catch (e) {
+      if (i >= 10) { console.error(`markdown: left ${profile} behind: ${e.code || e.message}`); return; }
+      await sleep(200);
+    }
   }
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
 }
 
 async function main() {

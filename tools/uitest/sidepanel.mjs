@@ -264,19 +264,16 @@ for (const width of [1440, 390]) {
     await page.waitForFunction(() => document.querySelectorAll("#sp-body details.df[open]").length === 1, null, { timeout: 4000 }).catch(() => { throw new Error("opening one file"); });
     await page.locator('#sp-body details.df summary').first().click();
     await page.waitForFunction(() => !document.querySelector("#sp-body details.df[open]"), null, { timeout: 4000 }).catch(() => { throw new Error("closing it again"); });
-    // A redraw that lands between the click and its toggle event (the push stream, the poll, the highlighter
-    // arriving) keeps the click: here the panel is redrawn in the same task as the click, before the event.
-    const kept = await page.evaluate(() => {
-      const key = () => document.querySelector("#sp-body details.df").dataset.key;
-      const k = key();
-      document.querySelector("#sp-body details.df summary").click();
-      SP.toggle(false); SP.toggle(true); // closes and reopens the panel: the body is drawn again from its state
-      const d = [...document.querySelectorAll("#sp-body details.df")].find((x) => x.dataset.key === k);
-      return d ? d.open : null;
-    });
-    if (kept !== true) throw new Error("a redraw right after the click lost it (open: " + kept + ")");
-    await page.locator('#sp-body details.df summary').first().click();
-    await page.waitForFunction(() => !document.querySelector("#sp-body details.df[open]"), null, { timeout: 4000 }).catch(() => { throw new Error("closing it after the redraw"); });
+    // A file opened and closed again stays closed when the panel is next drawn (the push stream, the poll). Opening a
+    // file draws it again, and that fresh element's own toggle event merged with the closing click's, so the close was
+    // never kept and the next redraw opened the file again. Here the redraw is forced: the panel closed and reopened.
+    // Reopening also reads the diff again: wait for that answer and its redraw, so it cannot land on the steps below.
+    const reread = page.waitForResponse((r) => /\/diff(\?|$)/.test(new URL(r.url()).pathname + new URL(r.url()).search), { timeout: 8000 });
+    await page.evaluate(() => { SP.toggle(false); SP.toggle(true); });
+    await (await reread).finished();
+    await page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(r), 0))); // its redraw has run
+    const reopened = await page.evaluate(() => document.querySelectorAll("#sp-body details.df[open]").length);
+    if (reopened) throw new Error(`a redraw opened ${reopened} file(s) that were closed`);
     await page.locator("#sp-jump").selectOption({ label: "c.go" });
     await page.waitForFunction(() => { const d = [...document.querySelectorAll("#sp-body details.df")].find((x) => x.dataset.key.endsWith("|c.go")); return d && d.open; }, null, { timeout: 4000 });
     if (!(await inView('#sp-body details.df[open] .p[title="c.go"]'))) throw new Error("c.go is not in view after the jump");
