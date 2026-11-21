@@ -385,7 +385,6 @@ var (
 	retypeSeveralRe = regexp.MustCompile(`(?i);|,\s*then\b|\bthen\b|\band also\b|\bas well as\b|\bplus\b`)
 )
 
-//
 // own is the session's branch: words about deleting its remote copy keep the
 // reading remoteBranchItem gives them, whatever else they mention.
 func retype(item ledger.AskItem, own string) ledger.AskItem {
