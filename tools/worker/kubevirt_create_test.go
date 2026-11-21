@@ -39,6 +39,7 @@ func TestSpecKubeVirtKindTakesOnlyWhatTheConfigDoesNotSet(t *testing.T) {
 // The plan with the in-cluster config (no kube_context, the pod's token file):
 // it reads the cluster, changes nothing and prints no credential.
 func TestKubeVirtDryRunWithInClusterCredentials(t *testing.T) {
+	withPath(t, "")
 	old := statFile
 	t.Cleanup(func() { statFile = old })
 	statFile = func(p string) (os.FileInfo, error) {
