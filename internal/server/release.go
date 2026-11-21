@@ -756,6 +756,10 @@ func (s *Server) startUpgrade(by, version string, rollback bool) (upgrade.Record
 	if err := upgrade.WriteRecord(path, rec); err != nil {
 		return rec, http.StatusInternalServerError, [2]string{"upgrade_error", err.Error()}
 	}
+	// The host must not stop as idle mid-upgrade (R2): hold it for as long
+	// as a running record is believed. The VM's idle check also sees the
+	// comebye-upgrade-* unit itself, for a run that takes longer.
+	s.holdIdle("upgrade", upgrade.StaleAfter, "upgrade to "+version)
 	runner := cfg.Runner
 	if runner == nil {
 		runner = defaultUpgradeRunner(cfg.Bin, "http://"+s.cfg.Addr)
@@ -763,6 +767,7 @@ func (s *Server) startUpgrade(by, version string, rollback bool) (upgrade.Record
 	if err := runner.Start(context.Background(), rec, path, rollback, cfg.DryRun); err != nil {
 		rec.State, rec.Error, rec.Finished = upgrade.RecFailed, "could not start: "+err.Error(), time.Now().UTC()
 		_ = upgrade.WriteRecord(path, rec)
+		s.clearIdleHold("upgrade")
 		s.auditBy(ledger.AuditEvent{By: by, Action: "upgrade.start", Detail: version + ": " + rec.Error})
 		return rec, http.StatusInternalServerError, [2]string{"upgrade_error", rec.Error}
 	}

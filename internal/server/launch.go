@@ -565,6 +565,7 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusForbidden, map[string]string{"code": "launch_disabled", "message": "launching is not available on this host"})
 		return
 	}
+	s.holdIdle("launch", inFlightHold, "a launch") // work in flight (R2)
 	var dir string
 	switch {
 	case body.Chat != "":

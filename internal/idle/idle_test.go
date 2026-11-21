@@ -53,7 +53,7 @@ func (r *rig) check(minutes int, noTouch bool) Result {
 
 func TestIdleAfterTheLimit(t *testing.T) {
 	r := newRig(t)
-	r.agents = []herdr.AgentInfo{{Status: herdr.StatusIdle}, {Status: herdr.StatusBlocked}, {Status: herdr.StatusDone}}
+	r.agents = []herdr.AgentInfo{{Status: herdr.StatusIdle}, {Status: herdr.StatusUnknown}, {Status: herdr.StatusDone}}
 	if res := r.check(30, false); res.Idle || res.IdleMinutes != 0 || len(res.Reasons) != 0 {
 		t.Fatalf("first poll starts the clock: %+v", res)
 	}
@@ -199,5 +199,157 @@ func TestOverASocket(t *testing.T) {
 	res, _ = Check(context.Background(), Options{Minutes: 0, Stamp: filepath.Join(dir, "s"), ProcRoot: t.TempDir(), Herdr: herdr.NewClient(sock)})
 	if !res.Idle || res.HerdrState != "not_running" {
 		t.Fatalf("no socket: %+v", res)
+	}
+}
+
+// R2: an agent waiting on the user is not an idle host. Stopping it would
+// throw away the session that asked the question.
+func TestBlockedAgentKeepsTheHostUp(t *testing.T) {
+	r := newRig(t)
+	r.check(30, false)
+	r.agents = []herdr.AgentInfo{{Status: herdr.StatusIdle}, {Status: herdr.StatusBlocked}}
+	r.now = r.now.Add(40 * time.Minute)
+	res := r.check(30, false)
+	if res.Idle || !strings.Contains(res.Summary(), "1 herdr agent(s) blocked") {
+		t.Fatalf("a blocked agent counted as idle: %+v / %s", res, res.Summary())
+	}
+	// Once it is answered (idle again) the clock runs from the last blocked poll.
+	r.agents = []herdr.AgentInfo{{Status: herdr.StatusIdle}}
+	r.now = r.now.Add(29 * time.Minute)
+	if res := r.check(30, false); res.Idle {
+		t.Fatalf("%+v", res)
+	}
+	r.now = r.now.Add(time.Minute)
+	if res := r.check(30, false); !res.Idle {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestBlockedAgentHoldsOnlyForBlockedMax(t *testing.T) {
+	r := newRig(t)
+	r.agents = []herdr.AgentInfo{{Status: herdr.StatusBlocked}}
+	opts := func() Options {
+		return Options{Minutes: 30, Stamp: r.stamp, ProcRoot: r.proc, BlockedMax: 2 * time.Hour,
+			Now: func() time.Time { return r.now }, Epoch: func() string { return r.epoch },
+			ListAgents: func(context.Context) ([]herdr.AgentInfo, error) { return r.agents, nil }}
+	}
+	run := func() Result {
+		res, err := Check(context.Background(), opts())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	for i := 0; i < 24; i++ { // every 5 minutes, 0 to 1h55
+		if res := run(); res.Idle {
+			t.Fatalf("poll %d: %+v", i, res)
+		}
+		r.now = r.now.Add(5 * time.Minute)
+	}
+	// 2h blocked: no longer a reason; the idle clock last ran at 1h55.
+	res := run()
+	if res.Idle || len(res.Reasons) != 0 || res.BlockedMinutes != 120 || res.IdleMinutes != 5 {
+		t.Fatalf("at 2h blocked is no longer a reason; the stamp was renewed at 1h55: %+v", res)
+	}
+	r.now = r.now.Add(30 * time.Minute)
+	res = run()
+	if !res.Idle || !strings.Contains(res.Summary(), "1 blocked for 150 min (past the limit)") {
+		t.Fatalf("%+v / %s", res, res.Summary())
+	}
+	// A blocked spell that ends restarts the blocked clock.
+	r.agents = nil
+	run()
+	r.agents = []herdr.AgentInfo{{Status: herdr.StatusBlocked}}
+	if res := run(); res.Idle || res.BlockedMinutes != 0 {
+		t.Fatalf("a new blocked spell: %+v", res)
+	}
+}
+
+func TestBlockedMaxDefaultAndNoLimit(t *testing.T) {
+	for _, c := range []struct {
+		max      time.Duration
+		after    time.Duration
+		wantIdle bool
+	}{
+		{0, DefaultBlockedMax - time.Minute, false},
+		{0, DefaultBlockedMax + 31*time.Minute, true},
+		{-1, 30 * 24 * time.Hour, false},
+	} {
+		r := newRig(t)
+		r.agents = []herdr.AgentInfo{{Status: herdr.StatusBlocked}}
+		o := Options{Minutes: 30, Stamp: r.stamp, ProcRoot: r.proc, BlockedMax: c.max,
+			Now: func() time.Time { return r.now }, Epoch: func() string { return r.epoch },
+			ListAgents: func(context.Context) ([]herdr.AgentInfo, error) { return r.agents, nil }}
+		Check(context.Background(), o)
+		// The blocked clock is from the first poll; jump, poll once to pass
+		// the limit, then let the idle clock run out.
+		r.now = r.now.Add(c.after - 31*time.Minute)
+		Check(context.Background(), o)
+		r.now = r.now.Add(31 * time.Minute)
+		res, _ := Check(context.Background(), o)
+		if res.Idle != c.wantIdle {
+			t.Errorf("max %v after %v: %+v", c.max, c.after, res)
+		}
+	}
+}
+
+func TestHoldsKeepTheHostUpUntilTheyExpire(t *testing.T) {
+	r := newRig(t)
+	holds := filepath.Join(t.TempDir(), "idle-holds")
+	check := func() Result {
+		res, err := Check(context.Background(), Options{Minutes: 30, Stamp: r.stamp, ProcRoot: r.proc, Holds: holds,
+			Now: func() time.Time { return r.now }, Epoch: func() string { return r.epoch },
+			ListAgents: func(context.Context) ([]herdr.AgentInfo, error) { return nil, nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	check()
+	r.now = r.now.Add(29 * time.Minute)
+	// A handoff is typed into an idle pane a minute before the limit.
+	if err := SetHold(holds, "prompt", r.now.Add(15*time.Minute), "a prompt for w1"); err != nil {
+		t.Fatal(err)
+	}
+	r.now = r.now.Add(10 * time.Minute)
+	res := check()
+	if res.Idle || len(res.Holds) != 1 || !strings.Contains(res.Summary(), "a prompt for w1") {
+		t.Fatalf("a hold did not keep the host up: %+v / %s", res, res.Summary())
+	}
+	// Expired: the clock runs from the last poll that saw the hold.
+	r.now = r.now.Add(10 * time.Minute)
+	if res := check(); res.Idle || len(res.Holds) != 0 || res.IdleMinutes != 10 {
+		t.Fatalf("%+v", res)
+	}
+	r.now = r.now.Add(20 * time.Minute)
+	if res := check(); !res.Idle {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestSetHoldKeepsTheLaterTime(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "h")
+	now := time.Unix(1_700_000_000, 0)
+	SetHold(dir, "upgrade", now.Add(15*time.Minute), "upgrade to v1.2.3")
+	SetHold(dir, "upgrade", now.Add(5*time.Minute), "shorter")
+	hs := ActiveHolds(dir, now)
+	if len(hs) != 1 || hs[0].Reason != "upgrade to v1.2.3" || !hs[0].Until.Equal(now.Add(15*time.Minute)) {
+		t.Fatalf("%+v", hs)
+	}
+	SetHold(dir, "prompt", now.Add(20*time.Minute), "p")
+	if hs := ActiveHolds(dir, now); len(hs) != 2 || hs[0].Name != "prompt" {
+		t.Fatalf("latest first: %+v", hs)
+	}
+	if err := SetHold(dir, "../x", now, "r"); err == nil {
+		t.Fatal("a path as a hold name")
+	}
+	os.WriteFile(filepath.Join(dir, "junk"), []byte("not a time"), 0o644)
+	ClearHold(dir, "prompt")
+	ClearHold(dir, "missing")
+	if hs := ActiveHolds(dir, now); len(hs) != 1 || hs[0].Name != "upgrade" {
+		t.Fatalf("%+v", hs)
+	}
+	if hs := ActiveHolds(dir, now.Add(15*time.Minute)); len(hs) != 0 {
+		t.Fatalf("an expired hold: %+v", hs)
 	}
 }

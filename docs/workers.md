@@ -364,15 +364,23 @@ only) is what limits where it works from.
    `StrictHostKeyChecking yes`.
 3. Over that ssh: packages (`git jq bubblewrap socat curl`), Tailscale from its
    apt repository, linger, and the idle timer. Every five minutes it powers the
-   VM off after `idle_minutes` with no interactive ssh session and no herdr agent
-   `working` (a guest poweroff stops the instance on both clouds; `start` brings it back).
-   What counts as activity: an ssh session with a pty (`ssh -t`, `worker login`),
-   and an agent whose herdr state is `working`. Bare ssh connections do not count,
+   VM off after `idle_minutes` with no interactive ssh session, no herdr agent
+   `working` or `blocked`, and nothing in flight (a guest poweroff stops the
+   instance on both clouds; `start` brings it back).
+   What counts as activity: an ssh session with a pty (`ssh -t`, `worker login`);
+   an agent whose herdr state is `working`; an agent that is `blocked` (it waits
+   on you, and a poweroff would lose its session), for up to a day from the
+   first tick that saw it blocked (`WK_IDLE_BLOCKED_MAX_MINUTES` in
+   `/etc/comebye-worker/idle.conf`, default 1440, `0` no limit); a hold that
+   comebye on the VM sets for 15 minutes when a prompt, launch or resume
+   arrives (a handoff no agent has picked up yet) and for 15 minutes when the
+   app starts an upgrade (files in `~/.local/state/comebye/idle-holds`); and a
+   `comebye-upgrade-*` unit that is still running, however long it takes, so
+   the VM never powers off mid-upgrade. Bare ssh connections do not count,
    so herdr's saved-machine connection (a ControlMaster or bridge, no pty) cannot
    keep the VM up; neither does a herdr TUI merely attached (herdr exposes no
-   "client attached" signal; typing makes the agent `working`). `idle`, `done`,
-   `unknown` and `blocked` agents do not count: a blocked agent waits on you, and
-   `start` brings the VM back. If herdr is up but does not answer, the VM stays
+   "client attached" signal; typing makes the agent `working`). `idle`, `done`
+   and `unknown` agents do not count. If herdr is up but does not answer, the VM stays
    up. Each tick logs its decision: `journalctl -t comebye-idle` on the VM. Run
    `sudo WK_IDLE_DRY=1 /usr/local/sbin/comebye-idle-check` to see the decision
    without changing anything. Re-running `create NAME` re-installs the script
@@ -735,7 +743,7 @@ provider on the OpenShell gateway.
 | | VM | Sandbox |
 |---|---|---|
 | Archive host | `NAME.INSTANCE_ID` | `NAME.SANDBOX_ID` (the gateway's immutable id; it survives stop and start) |
-| Idle stop | poweroff timer | the init exits 0 after `idle_minutes` with no working agent; the sandbox goes to `Completed`. `status` shows it as stopped, and `start` resumes it |
+| Idle stop | poweroff timer | the init exits 0 after `idle_minutes` with no working or blocked agent and no hold (`comebye idle`, the same rules as the VM); the sandbox goes to `Completed`. `status` shows it as stopped, and `start` resumes it |
 | `stop` / `start` | VM stop / start | `openshell sandbox stop` / `start`. `/sandbox` (the volume) is kept; only that is promised, not `/tmp`. The init brings the whole stack back and the node keeps its identity |
 | `destroy` | the VM; the data disk is kept | the sandbox **and its volume**; `--delete-data-disk` is refused. A `Completed` or stopped sandbox needs `start` first, or `--no-archive`, because its sessions are on the volume |
 | Agent stop for the final archive | `systemctl --user stop` | `herdr server stop`; the init restarts herdr, so a failed archive leaves the sandbox as it was |

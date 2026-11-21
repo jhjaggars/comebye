@@ -509,6 +509,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), launchTimeout)
 	defer cancel()
+	s.holdIdle("resume", inFlightHold, "a resume") // work in flight (R2)
 	res, lerr := s.resumeAgent(ctx, body)
 	if lerr != nil {
 		writeLaunchError(w, lerr)
