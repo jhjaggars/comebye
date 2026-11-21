@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -213,7 +214,7 @@ func newFix(t *testing.T, land bool, text, id, pane string, reasks int) *goneFix
 func (f *goneFix) setAuto(t *testing.T, on bool) {
 	t.Helper()
 	f.s.settings.mu.Lock()
-	f.s.settings.cur.SweepLoop = &sweepLoopSettings{AutoDeleteBranches: &on}
+	f.s.settings.cur.SweepLoop = &sweepLoopSettings{Enabled: &on}
 	f.s.settings.mu.Unlock()
 }
 
@@ -251,32 +252,34 @@ func TestGoneSessionLeftoverNotInMainStaysLeft(t *testing.T) {
 		t.Fatalf("review = safe %v warnings %v", it.Safe, it.Warnings)
 	}
 	f.setAuto(t, true)
-	if _, deleted := f.s.leftovers(ctx(), time.Now()); len(deleted) != 0 || !remoteHas(t, f.r, "w") {
+	if _, deleted := f.s.leftovers(ctx(), time.Now(), true); len(deleted) != 0 || !remoteHas(t, f.r, "w") {
 		t.Fatalf("deleted %v", deleted)
 	}
 }
 
-func TestSweepLeftoversDefaultModeDeletesNothingAndTheItemNamesIt(t *testing.T) {
+// Clean-up off: the loop only marks. It deletes no branch, removes no session
+// and files no To do; the user's own confirm still does both.
+func TestSweepSettingOffDeletesNothingAndFilesNoItem(t *testing.T) {
 	f := newGoneFix(t, true, "")
+	f.setAuto(t, false)
 	s := f.s
-	if n, deleted := s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 {
-		t.Fatalf("default mode settled %d, deleted %v", n, deleted)
+	if n, deleted := s.leftovers(ctx(), time.Now(), false); n != 0 || len(deleted) != 0 {
+		t.Fatalf("off settled %d, deleted %v", n, deleted)
 	}
-	if !remoteHas(t, f.r, "w") {
-		t.Fatal("default mode deleted the branch")
-	}
-	// The day's item: the session is in it, with the branch marked for deletion.
 	s.sweepLoopStep(ctx(), time.Now())
-	_, active := sweepItemsOf(s)
-	if len(active) != 1 {
-		t.Fatalf("items = %v", active)
+	if !remoteHas(t, f.r, "w") {
+		t.Fatal("the setting is off and the branch was deleted")
 	}
-	c := active[0].Context
-	if !strings.Contains(c, "delete* origin/w") || !strings.Contains(c, "also deletes 1 stale remote branch") {
-		t.Fatalf("context = %q", c)
+	if e, _ := s.ledger.Get(f.e.ID); e.Status != ledger.ReadyToRemove {
+		t.Fatalf("the setting is off and the session was %s", e.Status)
 	}
-	t.Logf("%s\n%s", active[0].Question, c)
-	// The one confirm removes the session and deletes the branch first.
+	if all, _ := sweepItemsOf(s); len(all) != 0 {
+		t.Fatalf("a To do was filed: %+v", all)
+	}
+	if title, _, _ := s.sweepBoardLine(); !strings.Contains(title, "automatic clean-up is off") {
+		t.Fatalf("board line = %q", title)
+	}
+	// The one confirm in the review removes the session and deletes the branch first.
 	w := do(s, "POST", "/api/removals/confirm", userHdr, `{"ids":["`+goneID+`"]}`)
 	if w.Code != 200 {
 		t.Fatalf("confirm = %d %s", w.Code, w.Body)
@@ -304,46 +307,74 @@ func TestConfirmKeepsTheBranchWhenItGotNewWork(t *testing.T) {
 
 func TestSweepLeftoversAutoModeDeletesOnceAndSaysSo(t *testing.T) {
 	f := newGoneFix(t, true, "")
-	f.setAuto(t, true)
 	s := f.s
 	now := time.Now()
-	n, deleted := s.leftovers(ctx(), now)
-	if n != 1 || len(deleted) != 1 || deleted[0] != "origin/w" {
-		t.Fatalf("settled %d, deleted %v", n, deleted)
+	tip := git(t, f.r.repo, "rev-parse", "refs/remotes/origin/w")
+	n, deleted := s.leftovers(ctx(), now, true)
+	if n != 1 || len(deleted) != 1 || deleted[0].Kind != doneBranch || deleted[0].Branch != "w" || deleted[0].Tip != tip ||
+		deleted[0].Restore != "git push origin "+tip+":refs/heads/w" {
+		t.Fatalf("settled %d, deleted %+v (tip %s)", n, deleted, tip)
 	}
 	if remoteHas(t, f.r, "w") {
 		t.Fatal("still on origin")
 	}
 	a := f.ask(t)
-	if a.State != ledger.AskSafe || a.Loop == nil || !strings.Contains(a.Loop.Text, "deleted origin/w") || a.Loop.At.Before(now.Add(-time.Second)) {
+	if a.State != ledger.AskSafe || a.Loop == nil || !strings.Contains(a.Loop.Text, "deleted origin/w") || !strings.Contains(a.Loop.Text, tip) || a.Loop.At.Before(now.Add(-time.Second)) {
 		t.Fatalf("ask = %+v loop %+v", a, a.Loop)
 	}
 	// Idempotent: a second run does nothing new.
-	if n, deleted := s.leftovers(ctx(), now.Add(time.Hour)); n != 0 || len(deleted) != 0 {
+	if n, deleted := s.leftovers(ctx(), now.Add(time.Hour), true); n != 0 || len(deleted) != 0 {
 		t.Fatalf("second run settled %d deleted %v", n, deleted)
 	}
-	// The sweep loop's own run records it, in the board line and the state.
+}
+
+// The loop's own run deletes the branch and removes the session with nothing
+// to lose, says so on the board and in the log with the SHA, files no To do,
+// and a second run does nothing.
+func TestSweepLoopCleansAGoneSessionAndSaysSo(t *testing.T) {
 	g := newGoneFix(t, true, "")
-	g.setAuto(t, true)
+	now := time.Now()
+	tip := git(t, g.r.repo, "rev-parse", "refs/remotes/origin/w")
 	g.s.sweepLoopStep(ctx(), now)
 	st := g.s.sweeps.get()
-	if len(st.LastDeleted) != 1 || st.LastSettled != 1 {
+	if st.LastSettled != 1 || len(st.Done) != 2 {
 		t.Fatalf("state = %+v", st)
 	}
-	if title, _, _ := g.s.sweepBoardLine(); !strings.Contains(title, "deleted 1 stale remote branch") {
+	if e, _ := g.s.ledger.Get(g.e.ID); e.Status != ledger.Removed || e.AutoRemoved == nil || !strings.Contains(e.AutoRemoved.Reason, "nothing to lose") {
+		t.Fatalf("entry = %+v", e)
+	}
+	if _, err := os.Stat(g.r.wt); err == nil {
+		t.Fatal("the worktree is still there")
+	}
+	if remoteHas(t, g.r, "w") {
+		t.Fatal("the stale branch is still on origin")
+	}
+	title, _, _ := g.s.sweepBoardLine()
+	if !strings.Contains(title, "removed 1 session (gone)") || !strings.Contains(title, "deleted 1 stale remote branch (origin/w @ "+tip[:7]) {
 		t.Fatalf("board line = %q", title)
 	}
-	// The gone session is now plain "ready": it is in the day's item, deleting nothing more.
+	var logged string
+	for _, ev := range g.s.events.query(time.Time{}, []string{evSweep}, 0) {
+		logged += ev.Text + "\n"
+	}
+	if !strings.Contains(logged, tip) || !strings.Contains(logged, "Sweep removed 1 session") {
+		t.Fatalf("log = %q", logged)
+	}
+	if all, _ := sweepItemsOf(g.s); len(all) != 0 {
+		t.Fatalf("a To do was filed: %+v", all)
+	}
+	// A second run does nothing, and logs nothing.
+	n := len(g.s.events.query(time.Time{}, []string{evSweep}, 0))
 	g.s.sweepLoopStep(ctx(), now.Add(2*time.Hour))
-	if it := reviewOf(t, g.s, goneID); !it.Safe || it.AskReview != nil && it.AskReview.Loop == nil {
-		t.Fatalf("review = %+v", it)
+	if got := len(g.s.sweeps.get().Done); got != 2 || len(g.s.events.query(time.Time{}, []string{evSweep}, 0)) != n {
+		t.Fatalf("a second run did something: %d done", got)
 	}
 }
 
 func TestSweepLeftoversOtherCleanupIsLeftAlone(t *testing.T) {
 	f := newGoneFix(t, true, "Stop the dev server I started (pid 4242).")
 	f.setAuto(t, true)
-	if n, deleted := f.s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 {
+	if n, deleted := f.s.leftovers(ctx(), time.Now(), true); n != 0 || len(deleted) != 0 {
 		t.Fatalf("settled %d deleted %v", n, deleted)
 	}
 	a := f.ask(t)
@@ -359,7 +390,7 @@ func TestSweepLeftoversRecheckedAnswerBecomesNothingLeft(t *testing.T) {
 	// An item that resolved on its own (the branch is already gone from origin).
 	f := newGoneFix(t, true, "")
 	git(t, f.r.repo, "push", "-q", "origin", ":refs/heads/w")
-	n, deleted := f.s.leftovers(ctx(), time.Now())
+	n, deleted := f.s.leftovers(ctx(), time.Now(), true)
 	if n != 1 || len(deleted) != 0 {
 		t.Fatalf("settled %d deleted %v", n, deleted)
 	}
@@ -404,25 +435,19 @@ func TestLiveAgentRebasedBranchIsSettledNotReasked(t *testing.T) {
 	if got := f.ask(t).ReaskedAt; got != nil {
 		t.Fatalf("the review re-asked: %v", got)
 	}
-	// Default mode: nothing deleted; the day's item names the deletion.
-	if n, deleted := f.s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 || !remoteHas(t, f.r, "w") {
-		t.Fatalf("default mode settled %d, deleted %v", n, deleted)
+	// Clean-up off: nothing deleted.
+	if n, deleted := f.s.leftovers(ctx(), time.Now(), false); n != 0 || len(deleted) != 0 || !remoteHas(t, f.r, "w") {
+		t.Fatalf("off: settled %d, deleted %v", n, deleted)
 	}
-	f.s.sweepLoopStep(ctx(), time.Now())
-	_, active := sweepItemsOf(f.s)
-	if len(active) != 1 || !strings.Contains(active[0].Context, "delete* origin/w") {
-		t.Fatalf("items = %+v", active)
-	}
-	// Auto mode: the loop gives the go-ahead itself, once.
-	f.setAuto(t, true)
-	n, deleted := f.s.leftovers(ctx(), time.Now())
+	// On: the loop gives the go-ahead itself, once.
+	n, deleted := f.s.leftovers(ctx(), time.Now(), true)
 	if n != 1 || len(deleted) != 1 || remoteHas(t, f.r, "w") {
 		t.Fatalf("auto settled %d, deleted %v", n, deleted)
 	}
 	if a := f.ask(t); a.State != ledger.AskSafe || a.Reasks != 12 || a.Loop == nil {
 		t.Fatalf("ask = %+v", a)
 	}
-	if n, deleted := f.s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 {
+	if n, deleted := f.s.leftovers(ctx(), time.Now(), true); n != 0 || len(deleted) != 0 {
 		t.Fatalf("second run settled %d deleted %v", n, deleted)
 	}
 }
@@ -431,12 +456,12 @@ func TestLiveAgentBranchWithUnmergedWorkIsNeverDeleted(t *testing.T) {
 	f := newFix(t, false, layeredText, liveID, "w2:p1", 12)
 	quietReasks(f.s)
 	f.setAuto(t, true)
-	if n, deleted := f.s.leftovers(ctx(), time.Now()); n != 0 || len(deleted) != 0 || !remoteHas(t, f.r, "w") {
+	if n, deleted := f.s.leftovers(ctx(), time.Now(), true); n != 0 || len(deleted) != 0 || !remoteHas(t, f.r, "w") {
 		t.Fatalf("settled %d deleted %v", n, deleted)
 	}
 }
 
-func TestReaskStopsAndTheLeftoverIsFiledForTheUser(t *testing.T) {
+func TestReaskStopsAndTheLeftoverStaysInTheReviewWithNoToDo(t *testing.T) {
 	const stop = "Stop the dev server I started (pid 4242)."
 	// Under the cap the live agent is asked again (the control)...
 	c := newFix(t, true, stop, liveID, "w2:p1", 0)
@@ -451,13 +476,14 @@ func TestReaskStopsAndTheLeftoverIsFiledForTheUser(t *testing.T) {
 	if asked := f.s.reaskStep(ctx(), time.Now().Add(48*time.Hour)); len(asked) != 0 {
 		t.Fatalf("asked past the cap: %v", asked)
 	}
+	// The loop neither files a To do nor removes it: the pid is not the hub's to stop.
 	f.s.sweepLoopStep(ctx(), time.Now())
-	_, active := sweepItemsOf(f.s)
-	if len(active) != 1 || !strings.Contains(active[0].Question, "leftover nobody is finishing") ||
-		!strings.Contains(active[0].Context, "asked 12 times") || !strings.Contains(active[0].Context, "pid 4242") {
-		t.Fatalf("items = %+v", active)
+	if all, _ := sweepItemsOf(f.s); len(all) != 0 {
+		t.Fatalf("a To do was filed: %+v", all)
 	}
-	t.Logf("%s\n%s", active[0].Question, active[0].Context)
+	if e, _ := f.s.ledger.Get(f.e.ID); e.Status != ledger.ReadyToRemove {
+		t.Fatalf("the session was %s", e.Status)
+	}
 	if remoteHas(t, f.r, "w") == false {
 		t.Fatal("the branch was touched")
 	}

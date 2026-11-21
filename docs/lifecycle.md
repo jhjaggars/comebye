@@ -86,26 +86,42 @@ same call that moves the entry to `landing`.
 
 ### The scheduled sweep
 
-The hub runs `comebye sweep` for you (`internal/server/sweeploop.go`), on by
-default, once an hour (Peers → the host → "Sweep for sessions to remove", or
+The hub runs `comebye sweep` for you and cleans up what it proves safe
+(`internal/server/sweeploop.go`, `sweepclean.go`, `leftovers.go`), on by
+default, once an hour (Peers → the host → "Clean up automatically", or
 `sweep_loop` in the settings API: on or off, 15 minutes to a day). A worker
 still recorded as running counts as finished after 2 hours idle, not the 30
 minutes of a hand-run sweep, because nobody is watching this one.
 
-- It only **marks**, as `comebye sweep` does (the session is asked what is
-  left; the automatic removal or the user's tap in the removals review does the
-  removing). It never removes anything itself.
-- A second run marks nothing new: marked sessions are skipped. A run that marks
-  nothing writes nothing to the log.
-- The board's "Hub did" lane starts with "Last sweep: …" (when it ran, what it
-  marked, how many need a look); a run that marked sessions also logs a
-  `sweep` event.
-- At most **one To do item a day**: "N sessions are ready to remove", linking
-  the removals review. It counts marked sessions the review's "Remove all safe"
-  would take (a mark older than 20 minutes, not a coordinator, not a proposal to
-  discard, not UNSAFE); the one confirm is that button. While it is open the
-  loop keeps its count right, and closes it when nothing is left.
-- A worker the sweep marks as "Gone" (its host left the fleet) is the one exception to "the user confirms": with `-auto-remove` on, the hub clears its record itself (nothing on any host is touched), audited and logged as an `autoremove` event.
+- It **marks**, as `comebye sweep` does (the session is asked what is left),
+  and, with "Clean up automatically" on, it then **removes** a marked session
+  when the hub itself proves there is nothing to lose: not a coordinator, not a
+  proposal to discard work, marked at least 20 minutes ago, and, reviewed again
+  on its host right before the removal (not from a cached result), a clean
+  tree, every commit in `origin/<default>` (or its pull request merged) and
+  nothing unpushed. A session whose agent is still there also needs its
+  NOTHING LEFT answer, as the automatic removal does; one whose agent is gone
+  has nobody to ask, so the proof decides, and a LEFT answer that is not fully
+  settled keeps it. The removal is the ordinary one: the session, its worktree
+  and its local branch go, the worktree is kept whenever anything is not provably
+  in the base, and the session's scratch directory and stray processes go with
+  the worktree. Off, the loop only marks.
+- It files **no To do item**. A session that needs a look stays in the removals
+  review (`/#/remove`), unremoved. An item an earlier version filed ("N sessions
+  are ready to remove") is closed the first time the loop runs.
+- What it did is shown, not asked about: the board's "Hub did" lane starts with
+  "Sweep: removed N sessions (…); deleted N stale remote branches (origin/x @ sha)…",
+  the log has a `sweep` event for each removal and each deleted branch, and the
+  removals review lists the sessions removed in the last day (with the usual
+  Undo) and the remote branches deleted, each with the SHA it was at and the
+  command that puts it back: `git push origin <sha>:refs/heads/<name>`. Every
+  removal and deletion is also audited (`worker.sweep_remove`,
+  `worker.stale_branch_delete`).
+- A second run does nothing: a removed session is no longer marked, a deleted
+  branch is gone, and a run that does nothing writes nothing to the log.
+- A worker the sweep marks as "Gone" (its host left the fleet) is cleared with
+  `-auto-remove` on (nothing on any host is touched), audited and logged as an
+  `autoremove` event.
 - **Leftovers of a gone session** (`internal/server/leftovers.go`). A marked
   session whose agent has gone cannot answer "Let it clean up" or "Re-ask", so
   a LEFT answer it gave first would sit in the review for ever. Each run looks
@@ -119,25 +135,30 @@ minutes of a hand-run sweep, because nobody is watching this one.
     no merge commit (or its tree equals a commit on `origin/<default>`), the
     branch is the session's own (never the default branch, never anyone else's),
     and `gh` shows no open pull request from it (gh failing is "no proof").
-    By default the day's item names it ("delete origin/x") and the one confirm
-    that removes the session deletes the branch first, after checking again. With
-    `sweep_loop.auto_delete_branches` on (Peers → "Delete a gone session's stale
-    remote branch without asking") the loop deletes it itself, from the host,
-    with its own git credentials and a lease on the verified tip. A branch with
-    any commit not in main, or with an open PR, is never deleted.
-  - Any other leftover (a process to stop, a PR to close) is left alone: the
-    agent that could do it is gone, and doing it from here would write outside
-    the session's own branch and local copy. The card keeps saying what is left.
+    With "Clean up automatically" on, the loop deletes it itself, from the host,
+    with its own git credentials and a lease on the verified tip, and logs the
+    branch and its tip SHA. A branch with any commit not in main, or with an
+    open PR, is never deleted. Off, nothing is deleted by the loop; the user's
+    confirm in the review still deletes it, after checking again.
+  - An item that is only "delete my scratch directory", naming nothing but the
+    session's own Claude scratch path (`/tmp/claude-<uid>/<its worktree>`, on the
+    hub's own host), is **done by the removal itself**: removing the worktree
+    deletes that directory (`cleanRemoved`). It counts as resolved, so the
+    session can go; naming any other path keeps the item open.
+  - Any other leftover (a process to stop, a PR to close, a backup branch the
+    hub cannot prove is in main) is left alone: the agent that could do it is
+    gone, and doing it from here would write outside the session's own branch and
+    local copy. The session stays in the review, unremoved, with no To do, and
+    the card keeps saying what is left.
   - This holds for a **live** agent too (idle or done, never working or blocked):
     a session that keeps answering "waiting on a go-ahead" to a branch git proves
     is stale needs no go-ahead from anyone, and its LEFT answer no longer
     triggers re-asks. The hub's automatic re-asks of one mark stop after 3
-    (`reaskMax`); a mark that reached it, or whose agent is gone, with a leftover
-    the hub cannot check or do, is listed in the day's item ("N sessions have a
-    leftover nobody is finishing") for the user.
+    (`reaskMax`).
   A run that settles nothing changes nothing, so a second run does nothing new.
-- Its state (last run, last item) is `sweeploop.json` in the state directory,
-  so a restart neither sweeps again early nor files a second item.
+- Its state (the last run, what it removed and deleted) is `sweeploop.json` in
+  the state directory, so a restart neither sweeps again early nor forgets what
+  it did.
 
 ## Workflows
 

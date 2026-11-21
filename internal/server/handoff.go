@@ -1175,7 +1175,7 @@ func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []*removal{}
 	}
-	writeJSON(w, map[string]any{"removals": items, "auto_removed": s.recentAutoRemovals(time.Now()), "auto_remove": s.autoRemove})
+	writeJSON(w, map[string]any{"removals": items, "auto_removed": s.recentAutoRemovals(time.Now()), "auto_remove": s.autoRemove, "sweep_branches": s.sweepBranchesDeleted(time.Now())})
 }
 
 // confirmBody is the JSON body of a removal confirmation.

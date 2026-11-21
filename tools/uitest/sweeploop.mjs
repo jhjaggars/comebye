@@ -1,11 +1,14 @@
-// The scheduled sweep against a throwaway hub (see sweeploop.sh): what it marked, the one To do item, a
-// second sweep that marks nothing new, one confirm that removes them, and the screenshots.
+// The scheduled sweep and its clean-up against a throwaway hub (see sweeploop.sh): the loop removes the
+// merged, clean sessions and deletes the one provably stale remote branch by itself, keeps everything else,
+// files no To do, says what it did on the board and in the removals review (with the branch's SHA), and does
+// nothing the second time. Screenshots at 390 and 1280 px.
 //
-//   node sweeploop.mjs BASE OUT_DIR HARNESS_DIR
+//   node sweeploop.mjs BASE OUT_DIR HARNESS_DIR EXAMPLE_BRANCH
 import { launch } from "./lib.mjs";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 
-const [base, out, harness] = process.argv.slice(2);
+const [base, out, harness, B1] = process.argv.slice(2);
 let failed = 0;
 async function check(name, fn) {
   try { await fn(); console.log("ok   " + name); } catch (e) { failed++; console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
@@ -16,7 +19,7 @@ const api = async (method, path, body) => {
   if (!r.ok) throw new Error(`${method} ${path}: ${r.status} ${text}`);
   return text ? JSON.parse(text) : {};
 };
-const until = async (what, fn, ms = 30000) => {
+const until = async (what, fn, ms = 45000) => {
   const end = Date.now() + ms;
   for (;;) {
     const v = await fn();
@@ -25,66 +28,79 @@ const until = async (what, fn, ms = 30000) => {
     await new Promise((r) => setTimeout(r, 250));
   }
 };
-const sweepTodos = async () => (await api("GET", "/api/todos?state=all")).todos?.filter((t) => t.source === "hub-sweep") ?? [];
+const git = (...a) => execFileSync("git", ["-C", harness + "/proj", ...a]).toString().trim();
+const onOrigin = (b) => git("ls-remote", "--heads", harness + "/origin.git", "refs/heads/" + b) !== "";
+const statuses = async () => Object.fromEntries((await api("GET", "/api/ledger")).entries.map((e) => [e.agent_name, e.status]));
+const allTodos = async () => (await api("GET", "/api/todos?state=all")).todos ?? [];
 
 const MERGED = ["add-cache", "bump-deps", "drop-flag", "fix-footer", "fix-header", "rename-api"];
-const LEFT = ["half-done", "local-only", "open-pr-a", "open-pr-b"];
-let todoId = "";
+const NEEDS_LOOK = ["half-done", "local-only", "open-pr-a", "open-pr-b"];
+const KEPT = ["extra-commit", "stop-server"];
+let tip = "";
 
-await check("the loop ran by itself and marked exactly the merged, clean sessions", async () => {
-  const s = await until("the first scheduled sweep", async () => (await api("GET", "/api/settings")).sweep_loop.last_run_at);
-  const v = (await api("GET", "/api/settings")).sweep_loop;
-  if (!v.enabled || v.every_minutes !== 15) throw new Error("setting " + JSON.stringify(v));
-  const marked = (await api("GET", "/api/removals")).removals.map((r) => r.name).sort();
-  if (!marked.length) for (const x of (await api("POST", "/api/sweep", { dry_run: true })).needs_look) console.log(`     needs a look: ${x.name}: ${x.reason}`);
-  console.log("     marked: " + marked.join(", ") + "; last sweep: marked " + v.last_marked + ", " + v.last_needs_look + " need a look");
-  if (JSON.stringify(marked) !== JSON.stringify(MERGED)) throw new Error("marked " + marked + ", want " + MERGED);
-  const by = (await api("GET", "/api/removals")).removals.map((r) => r.mark.by);
-  if (!by.every((b) => b === "hub")) throw new Error("marked by " + by);
+await check("the loop ran by itself and removed the merged, clean sessions and the one with a provably stale branch", async () => {
+  tip = git("rev-parse", "refs/remotes/origin/" + B1);
+  const want = [...MERGED, "tool-runs-s6-keys"];
+  const st = await until("the removals", async () => { const s = await statuses(); return want.every((n) => s[n] === "removed") ? s : null; });
+  console.log("     " + JSON.stringify(st));
+  for (const n of [...NEEDS_LOOK]) if (st[n] !== "finished") throw new Error(n + " is " + st[n]);
+  for (const n of KEPT) if (st[n] !== "ready_to_remove") throw new Error(n + " is " + st[n]);
+  for (const n of MERGED) {
+    if (fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is still there");
+    if (git("branch", "--list", n) !== "") throw new Error(n + " local branch is still there");
+  }
+  for (const n of [...NEEDS_LOOK, "extra", "server"]) if (!fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is gone");
+  if (fs.existsSync(`${harness}/worktrees/proj/s6`)) throw new Error("s6 worktree is still there");
 });
 
-await check("one batched To do item, linking the removals review", async () => {
-  const items = await until("the item", async () => { const t = await sweepTodos(); return t.length ? t : null; });
-  if (items.length !== 1) throw new Error(items.length + " items");
-  const t = items[0];
-  todoId = t.id;
-  console.log("     " + t.question);
-  if (t.question !== "6 sessions are ready to remove" || t.kind !== "action" || !t.links?.some((l) => l.url === "/#/remove")) throw new Error(JSON.stringify(t));
-  for (const n of MERGED) if (!t.context.includes(n)) throw new Error("context lacks " + n);
-  for (const n of LEFT) if (t.context.includes(n)) throw new Error("context names " + n);
+await check("the proven backup branch is deleted from origin; the one with a commit main lacks is kept", async () => {
+  if (onOrigin(B1)) throw new Error(B1 + " is still on origin");
+  if (!onOrigin("feat/extra")) throw new Error("a branch with unmerged work was deleted");
+  if (!onOrigin("main")) throw new Error("main was touched");
 });
 
-await check("a second sweep marks nothing new and files no second item", async () => {
-  const r = await api("POST", "/api/sweep", { idle_after: "2h" });
-  if (r.ready.length) throw new Error("marked again: " + r.ready.map((x) => x.name));
+await check("no To do is filed, and the sessions that need a look stay in the review with none", async () => {
+  await new Promise((r) => setTimeout(r, 4000));
+  const t = await allTodos();
+  if (t.length) throw new Error("to-dos: " + t.map((x) => x.question));
+  const names = (await api("GET", "/api/removals")).removals.map((r) => r.name).sort();
+  if (JSON.stringify(names) !== JSON.stringify(KEPT)) throw new Error("review has " + names);
+});
+
+await check("a second run does nothing", async () => {
+  const before = JSON.stringify((await api("GET", "/api/removals")).sweep_branches) + (await api("GET", "/api/removals")).auto_removed.length;
   await new Promise((r) => setTimeout(r, 6000)); // the loop looks every 2 s in test mode
-  const t = await sweepTodos();
-  if (t.length !== 1) throw new Error(t.length + " items");
-  const left = r.needs_look.map((x) => x.name).sort();
-  if (JSON.stringify(left) !== JSON.stringify(LEFT)) throw new Error("needs a look: " + left);
-  for (const x of r.needs_look) console.log(`     needs a look: ${x.name}: ${x.reason}`);
+  const after = JSON.stringify((await api("GET", "/api/removals")).sweep_branches) + (await api("GET", "/api/removals")).auto_removed.length;
+  if (before !== after) throw new Error(before + " -> " + after);
 });
 
-await check("the board line and the event say what the sweep did", async () => {
+await check("the board line and the log say what the loop removed and deleted, with the SHA", async () => {
   const b = await api("GET", "/api/board");
   const lane = b.lanes.find((l) => l.key === "hub_did");
   if (!lane) throw new Error("no Hub did lane");
   const first = lane.items[0];
   console.log("     " + first.title);
-  if (!/^Last sweep: marked 6 ready to remove \(/.test(first.title) || !/4 need a look/.test(first.title)) throw new Error(first.title);
-  if (!lane.items.some((i) => i.kind === "sweep" && /Sweep marked 6 sessions ready to remove/.test(i.title))) throw new Error("no sweep event");
+  if (!/^Sweep: removed 7 sessions \(/.test(first.title) || !first.title.includes("deleted 1 stale remote branch (origin/" + B1 + " @ " + tip.slice(0, 7))) throw new Error(first.title);
+  const log = await api("GET", "/api/log?since=1h&kind=sweep");
+  const ev = (log.events || []).find((i) => /Sweep deleted 1 stale remote branch/.test(i.text));
+  if (!ev || !ev.text.includes(tip)) throw new Error("no deletion event with the SHA: " + JSON.stringify(log).slice(0, 800));
+  console.log("     " + ev.text);
 });
 
-// Screenshots before the confirm: the item and the board line, and the setting.
+await check("the review lists what was removed and the deleted branch with its SHA and restore command, and the command works", async () => {
+  const d = await api("GET", "/api/removals");
+  if (d.auto_removed.length !== 7) throw new Error("auto_removed " + d.auto_removed.length);
+  if (!d.auto_removed.every((a) => /nothing to lose/.test(a.reason))) throw new Error(d.auto_removed.map((a) => a.reason));
+  const [b] = d.sweep_branches;
+  if (d.sweep_branches.length !== 1 || b.branch !== B1 || b.tip !== tip || b.restore !== `git push origin ${tip}:refs/heads/${B1}`) throw new Error(JSON.stringify(d.sweep_branches));
+  git(...b.restore.split(" ").slice(1));
+  if (!onOrigin(B1) || git("ls-remote", "--heads", harness + "/origin.git", "refs/heads/" + B1).split(/\s/)[0] !== tip) throw new Error("the branch did not come back at its tip");
+  git("push", "-q", "origin", ":refs/heads/" + B1); // delete it again for the screenshots
+});
+
 for (const width of [390, 1280]) {
-  const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark: true });
-  await check(`screenshots at ${width}px: the To do item, the board line and the setting`, async () => {
-    await page.goto(`${base}/#/todo/${todoId}`, { waitUntil: "load" });
-    await page.waitForSelector(".td-item, .td-open, [data-todo-id]", { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(800);
-    await page.screenshot({ path: `${out}/sweep-todo-${width}.png` });
-    const txt = await page.evaluate(() => document.body.innerText);
-    if (!/6 sessions are ready to remove/.test(txt)) throw new Error("the item is not on screen");
+  const { browser, page } = await launch({ width, height: width > 500 ? 900 : 844, dark: true });
+  await check(`screenshots at ${width}px: the board line, the removals review and the setting`, async () => {
     await page.goto(`${base}/#/briefings`, { waitUntil: "load" });
     await page.waitForTimeout(1500);
     const lane = page.locator('[data-lane="hub_did"]');
@@ -92,39 +108,30 @@ for (const width of [390, 1280]) {
     await page.waitForTimeout(400);
     await page.screenshot({ path: `${out}/sweep-board-${width}.png` });
     const bt = await page.evaluate(() => document.body.innerText);
-    if (!/Last sweep: marked 6/.test(bt)) throw new Error("the board line is not on screen");
+    if (!/Sweep: removed 7 sessions/.test(bt)) throw new Error("the board line is not on screen");
+    await page.goto(`${base}/#/remove`, { waitUntil: "load" });
+    await page.waitForSelector(".rv-auto-item", { timeout: 20000 });
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: `${out}/sweep-review-${width}.png`, fullPage: true });
+    await page.locator("#rv-auto").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: `${out}/sweep-review-removed-${width}.png` });
+    await page.locator(".rv-branch").first().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: `${out}/sweep-review-branch-${width}.png` });
+    const rt = await page.locator("#rv-auto").innerText();
+    if (!/Removed automatically/i.test(rt) || !/Remote branches deleted/i.test(rt) || !rt.includes(tip) || !rt.includes("git push origin " + tip)) throw new Error("the review lacks the removals or the branch SHA; tail: " + rt.slice(-700));
+    const w = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    if (w > 1) throw new Error(`horizontal overflow of ${w}px at ${width}px`);
     await page.goto(`${base}/#/peers/devbox`, { waitUntil: "load" });
     await page.waitForSelector("#pr-sweep-on", { timeout: 15000 });
+    if (!(await page.locator("#pr-sweep-on").isChecked())) throw new Error("not on");
+    if (await page.locator("#pr-sweep-del").count()) throw new Error("the old branch switch is still there");
     await page.locator("#pr-sweep-on").scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${out}/sweep-setting-${width}.png` });
   });
   await browser.close();
 }
-
-await check("one confirm in the removals review removes them all", async () => {
-  const { browser, page } = await launch({ width: 390, height: 844, dark: true });
-  try {
-    await page.goto(`${base}/#/remove`, { waitUntil: "load" });
-    await page.waitForSelector("#rv-all-safe:not([disabled])", { timeout: 20000 });
-    await page.screenshot({ path: `${out}/sweep-review-390.png` });
-    const label = await page.locator("#rv-all-safe").innerText();
-    if (!/Remove all safe \(6\)/.test(label)) throw new Error("button says " + label);
-    await page.locator("#rv-all-safe").click();
-    await page.getByRole("button", { name: /^Remove 6$/ }).click(); // the one confirm
-    await until("the removals", async () => (await api("GET", "/api/removals")).removals.length === 0, 40000);
-  } finally { await browser.close(); }
-  const entries = (await api("GET", "/api/ledger")).entries;
-  const st = Object.fromEntries(entries.map((e) => [e.agent_name, e.status]));
-  console.log("     " + JSON.stringify(st));
-  for (const n of MERGED) if (st[n] !== "removed") throw new Error(n + " is " + st[n]);
-  for (const n of LEFT) if (st[n] !== "finished") throw new Error(n + " is " + st[n]);
-  for (const n of LEFT) if (!fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is gone");
-  for (const n of MERGED) if (fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is still there");
-});
-
-await check("the item closes itself once nothing is left to remove", async () => {
-  await until("the item to close", async () => { const t = await sweepTodos(); return t.length === 1 && t[0].state === "done"; }, 20000);
-});
 
 console.log(failed ? `${failed} failed` : "all passed");
 process.exit(failed ? 1 : 0);

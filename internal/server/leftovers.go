@@ -21,15 +21,18 @@ import (
 //     have, the answer becomes NOTHING LEFT, with a note of what the loop did;
 //   - an item that is "delete the remote copy of my own branch" is done when git
 //     proves every commit of that branch is in origin's default branch and no
-//     pull request from it is open (stalebranch.go). By default the loop only adds it
-//     to the day's batched item, and the one confirm that removes the session
-//     deletes the branch with it; with the setting "auto_delete_branches" on, the
-//     loop deletes it itself, from the session's host, with the host's own git
-//     credentials;
-//   - anything else (a process to stop, a PR to close, a box to tick) is left
-//     as it is. The agent that could do it is gone, and doing it from here would
-//     write outside the session's own branch and local copy: the card keeps
-//     saying what is left, and the user decides.
+//     pull request from it is open (stalebranch.go). With "Clean up
+//     automatically" on (the default) the loop deletes it itself, from the
+//     session's host, with the host's own git credentials, and logs the branch
+//     and the SHA it was at so it can be pushed back; off, the branch stays;
+//   - an item that is only "delete my scratch directory" under the session's own
+//     Claude scratch path (/tmp/claude-<uid>/<its worktree>) is done by the
+//     removal itself, which deletes that directory (scratchItem);
+//   - anything else (a process to stop, a PR to close, a box to tick, a backup
+//     branch the hub cannot prove is in main) is left as it is. The agent that
+//     could do it is gone, and doing it from here would write outside the
+//     session's own branch and local copy: the session stays in the removals
+//     review, unremoved and with no to-do, and the user decides.
 
 // answerSafeBySweep records that every leftover of a gone session's answer has
 // resolved: the answer becomes NOTHING LEFT, and says who changed it.
@@ -58,7 +61,7 @@ func (s *Server) answerSafeBySweep(it *removal, what string, now time.Time) {
 // still lists, on its host, when they are all it has left. by says who asked
 // ("the sweep", "your confirm"). It reports the branches deleted; an error means
 // one could not be (nothing else is done then).
-func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now time.Time) ([]string, error) {
+func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now time.Time) ([]sweepDone, error) {
 	m := it.Mark
 	if sessionBusy(it) || m.Ask == nil || m.Ask.State != ledger.AskUnsafe || it.EntryID == "" || !s.knownHost(it.Host) {
 		return nil, nil
@@ -71,6 +74,7 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		i      int
 		branch string
 		how    string
+		tip    string // the tip it was deleted at (empty: it was already gone)
 	}
 	var done []did
 	for i, v := range ar.Items {
@@ -84,9 +88,9 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		r, _ := s.staleProbe(ctx, it, branch, true)
 		switch {
 		case r != nil && r.Deleted:
-			done = append(done, did{i, branch, fmt.Sprintf("deleted origin/%s (was %s): %s", branch, short(r.Tip), r.Proof)})
+			done = append(done, did{i, branch, fmt.Sprintf("deleted origin/%s (was %s; restore with git push origin %s:refs/heads/%s): %s", branch, r.Tip, r.Tip, branch, r.Proof), r.Tip})
 		case r != nil && r.State == staleAbsent:
-			done = append(done, did{i, branch, "origin no longer had " + branch})
+			done = append(done, did{i, branch, "origin no longer had " + branch, ""})
 		default:
 			why := "no answer"
 			if r != nil {
@@ -98,10 +102,14 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 	if len(done) == 0 {
 		return nil, nil
 	}
-	var names, hows []string
+	var out []sweepDone
+	var hows []string
 	for _, d := range done {
-		names = append(names, "origin/"+d.branch)
 		hows = append(hows, d.how)
+		if d.tip != "" {
+			out = append(out, sweepDone{At: now.UTC(), Kind: doneBranch, Name: orDefault(it.Name, it.EntryID), Repo: it.Repo, Host: it.Host,
+				Branch: d.branch, Tip: d.tip, Restore: restoreBranchCmd(d.tip, d.branch)})
+		}
 	}
 	text := by + " " + strings.Join(hows, "; ")
 	allDone := len(done) == countUnresolved(ar)
@@ -121,7 +129,7 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 	}
 	s.auditBy(ledger.AuditEvent{By: AutoCreator, Action: "worker.stale_branch_delete", Host: it.Host, OK: true,
 		Detail: fmt.Sprintf("%s (%s): %s", orDefault(it.Name, it.EntryID), it.EntryID, text)})
-	return names, nil
+	return out, nil
 }
 
 func countUnresolved(ar *askReview) int {
@@ -135,9 +143,10 @@ func countUnresolved(ar *askReview) int {
 }
 
 // leftovers is one pass over the marked sessions whose agent is gone. It
-// returns how many answers it settled and the branches it deleted.
-func (s *Server) leftovers(ctx context.Context, now time.Time) (settled int, deleted []string) {
-	auto := s.sweepLoopConf().AutoDeleteBranches
+// returns how many answers it settled and the branches it deleted. del is the
+// "clean up automatically" setting: off, a stale branch is left alone.
+func (s *Server) leftovers(ctx context.Context, now time.Time, del bool) (settled int, deleted []sweepDone) {
+	auto := del
 	for _, it := range s.marked() {
 		a := it.Mark.Ask
 		if sessionBusy(it) || it.Coordinator || it.Mark.Discard || it.EntryID == "" || a == nil || a.State != ledger.AskUnsafe ||
@@ -151,14 +160,14 @@ func (s *Server) leftovers(ctx context.Context, now time.Time) (settled int, del
 			s.answerSafeBySweep(it, "every thing the session listed as left has resolved: "+strings.TrimPrefix(ar.said(), "the session listed what was left at "), now)
 			settled++
 		case auto && ar.StaleOnly:
-			names, err := s.deleteStaleFor(ctx, it, "the sweep", now)
+			got, err := s.deleteStaleFor(ctx, it, "the sweep", now)
 			if err != nil {
 				log.Printf("sweep leftovers: %s: %v", it.ID, err)
 				continue
 			}
-			if len(names) > 0 {
+			if len(got) > 0 {
 				settled++
-				deleted = append(deleted, names...)
+				deleted = append(deleted, got...)
 			}
 		}
 	}
