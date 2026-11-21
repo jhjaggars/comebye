@@ -147,10 +147,15 @@ func hubCheckOf(e ledger.Entry, c *worktreeChecks, now time.Time) hubCheck {
 		}
 	}
 
-	// Pushed.
+	// Pushed. On a push-less host the hub's own fetch-and-push settles it.
 	said := claimed(report, pushedRe, notPushedRe)
 	d := c.Detail
+	pfState, pfText, pfSettles := pushFetchItem(e, c.Tip)
+	if pfState != "" {
+		add("pushed", pfState, "%s", pfText)
+	}
 	switch {
+	case pfSettles:
 	case c.Gone || d == nil || d.Unpushed < 0:
 		if said {
 			add("pushed", "info", "the report says pushed; the hub cannot tell (no worktree to look at)")
@@ -232,6 +237,12 @@ func (s *Server) handleHubCheck(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(e.FinalReport) == "" || e.Worktree == "" {
 		writeJSON(w, hubCheckOf(e, nil, time.Now()))
 		return
+	}
+	if s.pushFetchDue(e, time.Now()) || s.pushFetchRunning(e.ID) {
+		// A push-less host: bring the branch back before reading "pushed".
+		fctx, fcancel := context.WithTimeout(r.Context(), pushFetchWait)
+		e = s.pushFetch(fctx, e)
+		fcancel()
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()

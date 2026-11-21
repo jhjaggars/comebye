@@ -47,9 +47,12 @@ type hostSettings struct {
 	MaxWorkersPerRepo *int `json:"max_workers_per_repo,omitempty"`
 	// SweepLoop is the hub's scheduled sweep (sweeploop.go): nil is on, hourly.
 	SweepLoop *sweepLoopSettings `json:"sweep_loop,omitempty"`
-	Rev       int                `json:"rev"`
-	UpdatedBy string             `json:"updated_by,omitempty"`
-	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
+	// PushlessFetch is the hub bringing branches back from push-less hosts
+	// (pushless.go): nil is off.
+	PushlessFetch *pushlessFetchSettings `json:"pushless_fetch,omitempty"`
+	Rev           int                    `json:"rev"`
+	UpdatedBy     string                 `json:"updated_by,omitempty"`
+	UpdatedAt     *time.Time             `json:"updated_at,omitempty"`
 }
 
 // settingsStore keeps settings.json. Safe for concurrent use; a nil store
@@ -97,6 +100,7 @@ func normalizeSettings(h hostSettings) hostSettings {
 		h.MaxWorkersPerRepo = &n
 	}
 	h.SweepLoop = normalizeSweepLoop(h.SweepLoop)
+	h.PushlessFetch = normalizePushless(h.PushlessFetch)
 	h.Kinds = nil
 	if len(kinds) > 0 {
 		h.Kinds = kinds
@@ -130,6 +134,7 @@ func copySettings(h hostSettings) hostSettings {
 		h.MaxWorkersPerRepo = &n
 	}
 	h.SweepLoop = normalizeSweepLoop(h.SweepLoop)
+	h.PushlessFetch = normalizePushless(h.PushlessFetch)
 	h.AllowedKinds = slices.Clone(h.AllowedKinds)
 	if h.Kinds != nil {
 		m := make(map[string]kindSettings, len(h.Kinds))
@@ -393,6 +398,8 @@ type settingsBody struct {
 	MaxWorkersPerRepo *int `json:"max_workers_per_repo"`
 	// SweepLoop: absent keeps what is set (older clients do not send it).
 	SweepLoop *sweepLoopSettings `json:"sweep_loop"`
+	// PushlessFetch: absent keeps what is set; {} turns it off.
+	PushlessFetch *pushlessFetchSettings `json:"pushless_fetch"`
 	// Rev, when given, must be the revision read; a later one is a 409.
 	Rev *int `json:"rev"`
 }
@@ -417,7 +424,15 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if sweepLoop == nil {
 		sweepLoop = s.settings.get().SweepLoop
 	}
-	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo, SweepLoop: sweepLoop})
+	pushless := s.settings.get().PushlessFetch
+	if b.PushlessFetch != nil {
+		pushless = normalizePushless(b.PushlessFetch)
+		if msg := checkPushless(pushless); msg != "" {
+			badSettings(w, msg)
+			return
+		}
+	}
+	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo, SweepLoop: sweepLoop, PushlessFetch: pushless})
 	if b.SweepLoop != nil && b.SweepLoop.EveryMinutes != nil && (*b.SweepLoop.EveryMinutes < int(minSweepEvery/time.Minute) || *b.SweepLoop.EveryMinutes > int(maxSweepEvery/time.Minute)) {
 		badSettings(w, fmt.Sprintf("sweep_loop.every_minutes: want %d to %d", int(minSweepEvery/time.Minute), int(maxSweepEvery/time.Minute)))
 		return

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,18 @@ type fetchOpts struct {
 	RemoteRepo string // repository name under /data/code (default: the local repo's name)
 	Push       bool
 	Force      bool
+	// JSON prints one fetchResult object on stdout; the human lines go to
+	// stderr.
+	JSON bool
+}
+
+// fetchResult is what `fetch --json` prints when it succeeds.
+type fetchResult struct {
+	Name   string `json:"name"`
+	Branch string `json:"branch"`
+	Tip    string `json:"tip"`
+	Local  string `json:"local"`  // created, moved, replaced or same
+	Pushed string `json:"pushed"` // pushed, same or no
 }
 
 var repoNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
@@ -41,6 +54,22 @@ func fetchStageRef(name, branch string) string {
 }
 
 func (e *env) fetch(ctx context.Context, name, branch string, o fetchOpts) error {
+	r := fetchResult{Name: name, Branch: branch, Pushed: "no"}
+	if !o.JSON {
+		return e.fetchSteps(ctx, name, branch, o, &r)
+	}
+	out := e.Out
+	e.Out = e.Err
+	defer func() { e.Out = out }()
+	if err := e.fetchSteps(ctx, name, branch, o, &r); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(r)
+	_, err := fmt.Fprintf(out, "%s\n", b)
+	return err
+}
+
+func (e *env) fetchSteps(ctx context.Context, name, branch string, o fetchOpts, r *fetchResult) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
@@ -90,6 +119,7 @@ func (e *env) fetch(ctx context.Context, name, branch string, o fetchOpts) error
 		return err
 	}
 	e.printf("%s %s is %s\n", name, branch, short(tip))
+	r.Tip = tip
 
 	// 2. The local branch: create it, fast-forward it, or (with --force)
 	// overwrite it leased on what it was.
@@ -97,6 +127,7 @@ func (e *env) fetch(ctx context.Context, name, branch string, o fetchOpts) error
 	switch {
 	case local == tip:
 		e.printf("local %s is already there\n", branch)
+		r.Local = "same"
 	default:
 		if wt := checkedOutIn(ctx, g, ref); wt != "" {
 			return fmt.Errorf("%s is checked out in %s: moving it would leave that worktree behind; switch it away first", branch, wt)
@@ -113,6 +144,14 @@ func (e *env) fetch(ctx context.Context, name, branch string, o fetchOpts) error
 		}
 		if _, err := g.out(ctx, "update-ref", "-m", "comebye-worker fetch "+name, ref, tip, old); err != nil {
 			return fmt.Errorf("update %s: %w", ref, err)
+		}
+		switch {
+		case local == "":
+			r.Local = "created"
+		case g.ancestor(ctx, local, tip):
+			r.Local = "moved"
+		default:
+			r.Local = "replaced"
 		}
 		if local == "" {
 			e.printf("created local %s at %s\n", branch, short(tip))
@@ -136,6 +175,7 @@ func (e *env) fetch(ctx context.Context, name, branch string, o fetchOpts) error
 	}
 	if remote == tip {
 		e.printf("origin %s is already there\n", branch)
+		r.Pushed = "same"
 		return nil
 	}
 	args := []string{"push", "--no-verify"}
@@ -156,6 +196,7 @@ func (e *env) fetch(ctx context.Context, name, branch string, o fetchOpts) error
 		return fmt.Errorf("push %s: %w", branch, err)
 	}
 	e.printf("pushed %s to origin (%s)\n", branch, short(tip))
+	r.Pushed = "pushed"
 	return nil
 }
 

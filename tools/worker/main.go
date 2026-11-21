@@ -49,12 +49,13 @@ Commands:
   catalog [--kind aws|gcp] [--region R] [--families f1,f2] [--types t1,t2] [--score t1,t2] [--refresh] [--json]
         read-only: instance types with vCPU, memory, prices and spot interruption bands,
         cached on disk in the state dir
-  fetch NAME BRANCH [--repo DIR] [--remote-repo NAME] [--push] [--force]
+  fetch NAME BRANCH [--repo DIR] [--remote-repo NAME] [--push] [--force] [--json]
         bring a branch back from a worker that cannot push: fetch it from
         /data/code/REPO on the worker over this tool's ssh config into the local
         repository (DIR, default the current one; REPO defaults to its name), and with
         --push send it to origin. Never the default branch; a local or origin tip that
-        is not an ancestor is refused unless --force (a leased overwrite)
+        is not an ancestor is refused unless --force (a leased overwrite). --json prints
+        {name, branch, tip, local, pushed} on stdout
   keys [--prune]
         the per-worker LLM gateway keys (worker-NAME) and whether a VM exists
         for each; --prune deletes the ones whose VM is gone
@@ -215,7 +216,7 @@ func run(args []string, e *env) int {
 	for flag, bad := range map[string]bool{
 		"--spec": *specPath != "" && cmd != "create", "--yes": *yes && cmd != "destroy",
 		"--events": *events && cmd != "create" && cmd != "destroy",
-		"--json":   *asJSON && cmd != "preflight" && cmd != "catalog" && cmd != "status",
+		"--json":   *asJSON && cmd != "preflight" && cmd != "catalog" && cmd != "status" && cmd != "fetch",
 		"--repo":   *fRepo != "" && cmd != "fetch", "--remote-repo": *fRemote != "" && cmd != "fetch",
 		"--push": *fPush && cmd != "fetch", "--force": *fForce && cmd != "fetch",
 	} {
@@ -309,7 +310,7 @@ func run(args []string, e *env) int {
 	case "keys":
 		err = e.keys(ctx, *prune)
 	case "fetch":
-		err = e.fetch(ctx, name, pos[1], fetchOpts{Repo: *fRepo, RemoteRepo: *fRemote, Push: *fPush, Force: *fForce})
+		err = e.fetch(ctx, name, pos[1], fetchOpts{Repo: *fRepo, RemoteRepo: *fRemote, Push: *fPush, Force: *fForce, JSON: *asJSON})
 	}
 	if err != nil {
 		fmt.Fprintf(e.Err, "worker: %v\n", err)

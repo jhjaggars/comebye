@@ -168,6 +168,10 @@ type Entry struct {
 	Approval *Approval `json:"approval,omitempty"`
 	// LandCheck is the hub's latest check of the landing (see LandCheck).
 	LandCheck *LandCheck `json:"land_check,omitempty"`
+	// PushFetch is the hub bringing the branch back from a push-less host
+	// (one with no GitHub login): fetched over the provisioner's ssh and
+	// pushed to origin from there, for the report of round ReportSeq.
+	PushFetch *PushFetch `json:"push_fetch,omitempty"`
 	// Progress is the worker's latest progress note (`comebye report
 	// --progress`): it says what the worker is doing and is not a report,
 	// so it never finishes or lands anything.
@@ -641,6 +645,10 @@ func copyEntry(e *Entry) Entry {
 			a.UndoneAt = &t
 		}
 		c.AutoRemoved = &a
+	}
+	if e.PushFetch != nil {
+		f := *e.PushFetch
+		c.PushFetch = &f
 	}
 	if e.LandCheck != nil {
 		l := *e.LandCheck
@@ -1244,6 +1252,33 @@ func (s *Store) AddNoticeKey(id, key string) error {
 		return s.save()
 	}
 	return nil
+}
+
+// PushFetch is one fetch-and-push of a push-less host's branch. A failure
+// is a note (Note says why); it never fails the handoff or a landing.
+type PushFetch struct {
+	At        time.Time `json:"at"`
+	ReportSeq int       `json:"report_seq"`
+	Via       string    `json:"via,omitempty"` // the provisioner node that ran it
+	Branch    string    `json:"branch"`
+	OK        bool      `json:"ok"`
+	Tip       string    `json:"tip,omitempty"`    // the commit now on origin
+	Pushed    string    `json:"pushed,omitempty"` // pushed, or same (already there)
+	Note      string    `json:"note,omitempty"`
+}
+
+// SetPushFetch records a fetch-and-push on the entry. ok is false when
+// there is no such entry.
+func (s *Store) SetPushFetch(id string, f PushFetch) (Entry, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID == id {
+			e.PushFetch = &f
+			return copyEntry(e), true, s.save()
+		}
+	}
+	return Entry{}, false, nil
 }
 
 // Report records a worker's explicit report: the agent's active entry is
