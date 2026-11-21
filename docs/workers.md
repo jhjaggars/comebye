@@ -117,8 +117,8 @@ from the app comes later.
   (`COMEBYE_PROVISION_CONFIG`; `-provision-worker` or `COMEBYE_PROVISION_WORKER`
   names the binary, default `comebye-worker` on `PATH`). It needs `-ledger=false`
   and `-hub` like every peer, and `-ts-allow-login`. The tool runs there as a
-  subprocess with a filtered environment (PATH, HOME, `AWS_*`, `CLOUDSDK_*`
-  and the like; none of comebye's own variables), in its own process group,
+  subprocess with a filtered environment (PATH, HOME, `AWS_*`, `CLOUDSDK_*`,
+  `KUBECONFIG` and `KUBE*` for the kubevirt provider and the like; none of comebye's own variables), in its own process group,
   with a timeout.
 - **Several worker configs on one provisioner** (AWS beside KubeVirt, say). A
   worker config belongs to one provider, so a provisioner that runs two clouds

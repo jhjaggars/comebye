@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -83,7 +84,11 @@ func (s *Server) observeTool(ctx context.Context, t *provision.Tool, first bool)
 		s.phostErrs = map[string]string{}
 	}
 	if err != nil {
-		s.phostErrs[t.Name] = oneLine(provision.Text(err.Error(), 160), 160)
+		msg := oneLine(provision.Text(err.Error(), 160), 160)
+		if s.phostErrs[t.Name] != msg { // said once per distinct failure, not every look
+			log.Printf("provision: the worker config %q could not be read: %s", t.Label(), msg)
+		}
+		s.phostErrs[t.Name] = msg
 		return false
 	}
 	s.phosts.ObserveFor(t.Name, first, ws)
