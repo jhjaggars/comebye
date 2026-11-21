@@ -611,18 +611,41 @@ LEFT
 - commits feat/x pushed to origin
 - resource k3d-cluster dev on desk
 - resource pid 4242 on desk
+- path /tmp/fetch-cache on desk
+- branch origin/feat/x the pre-rebase backup
+- issue jhjaggars/comebye#78 tick the box once it lands
+- followup post the summary to the ticket (only the user can)
 - other a loop I run every 10 minutes
 ```
 
 `decision TODO_ID` is work waiting on the user's answer; `cleanup WHAT` is
 work the session can do itself if told to go ahead (delete a branch or
 worktree, stop a process it started, close its PR, tick an issue box).
+`path`, `branch` and `issue` name things the hub can look at itself;
+`followup WHAT` is something only the user can do (post a comment, run
+`tf-apply`, try a browser login): it is the user's, not the session's.
 `NOTHING LEFT` is what lets the hub remove a landed, clean session by itself.
 
 The parser is lenient (bullets or numbers, markdown around the words, a
 reason on the `LEFT` line, a PR as a URL); text it cannot type becomes an
 `other` item. An answer recorded before items existed counts as one `other`
 item.
+
+**Re-typing.** Answers given before the `path`, `branch`, `issue` and
+`followup` types, and sessions that still write `cleanup` or `other`, name
+checkable things in their own words. Each time the review is built the hub
+re-types such a line when it plainly names one thing: an absolute path
+(`path`), `origin/…` with a deletion word, or the session's own remote branch
+as the stale-branch check reads it (`branch`), `OWNER/REPO#N` with the word
+"issue" (`issue`), `pid N` (`resource pid`), `OWNER/REPO#N` otherwise (`pr`),
+"N commits ahead" or "unpushed commits" (`commits`), and words that put the step
+on the user ("waiting on the user", "the user has to", "only the user can":
+`followup`). A line that strings steps together ("stop pid 4242, then close my
+PR", or with a `;`), or names two things of a kind, is left as it is, because
+settling a re-typed item can let the sweep remove the session. A `PR #N` with no
+repository stays text: there is nothing to check. Only the review's copy is
+re-typed; the stored answer keeps its words, and the item carries `was` (its
+old type), so "Let it clean up" still covers a re-typed `cleanup`.
 
 **The hub re-checks the items** each time the review (or `comebye ledger`)
 is built, with the results cached for a minute:
@@ -635,6 +658,10 @@ is built, with the results cached for a minute:
 | `cleanup` | nothing: the session does it | never by itself; it resolves when the session is asked again |
 | `commits` | the branch checks (`Unmerged`, `Equivalent`, pushed) | all in the base, squash-merged, or all on a remote |
 | `resource` | a `pid` alive on the host, a `k3d-cluster` in `k3d cluster list` | the pid is dead, the cluster gone; any other kind: "can't check" |
+| `path` | `os.Lstat` on the host (`path` probe: absolute, no `..`, only under the home or temporary directory, through no symlink below that, never following one) | it is gone; a path in the session's own scratchpad or worktree at once, since the removal deletes both |
+| `branch` | `git ls-remote` on origin from the session's host (only `origin`) | origin no longer has it. The session's own branch, provably in the default branch with no open PR, is deleted by the sweep (see the stale branch rule); anyone else's branch is only looked at |
+| `issue` | `gh issue view` on the session's host | closed |
+| `followup` | nothing: it is the user's to do | never by the hub |
 | `other` | nothing | never |
 
 When **every** item has resolved, the list becomes a note, and the session

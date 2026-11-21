@@ -436,6 +436,17 @@ const (
 	// ItemCleanup is work the session can do itself if told to go ahead
 	// (Text says what: delete a branch, stop a process, close a PR).
 	ItemCleanup = "cleanup"
+	// ItemPath is a file or directory left behind (Name, the absolute
+	// path; Host when not the session's): resolved once it is gone.
+	ItemPath = "path"
+	// ItemBranch is a remote branch (Remote, Branch): resolved once the
+	// remote no longer has it.
+	ItemBranch = "branch"
+	// ItemIssue is an issue (Repo, Number): resolved once it is closed.
+	ItemIssue = "issue"
+	// ItemFollowup is something the user has to do, not the session
+	// (Text says what).
+	ItemFollowup = "followup"
 )
 
 // AskItem is one thing an answer says is left to finish (an UNSAFE answer,
@@ -451,6 +462,10 @@ type AskItem struct {
 	Name   string `json:"name,omitempty"`
 	Host   string `json:"host,omitempty"`
 	Text   string `json:"text,omitempty"`
+	// Was is the type the session gave an item the hub re-typed when it
+	// read the answer (a "cleanup" naming a path becomes a "path"). It is
+	// set only on the review's copy, never stored.
+	Was string `json:"was,omitempty"`
 	// Done is set when the sweep loop finished the item itself (it deleted a
 	// remote branch that was provably in the default branch).
 	Done *ItemDone `json:"done,omitempty"`

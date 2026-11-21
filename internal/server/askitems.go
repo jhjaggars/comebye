@@ -24,6 +24,10 @@ import (
 //	- commits feat/x pushed to origin
 //	- resource k3d-cluster dev on desk
 //	- resource pid 4242 on desk
+//	- path /tmp/fetch-cache on desk
+//	- branch origin/feat/x the pre-rebase backup
+//	- issue jhjaggars/comebye#78 tick the box once it lands
+//	- followup post the summary to the ticket (only the user can)
 //	- other a loop I run every 10 minutes
 //
 // NOTHING LEFT is the old SAFE, and LEFT the old UNSAFE: replies in the old
@@ -47,7 +51,11 @@ const askFormat = "Reply in exactly this format. First line: NOTHING LEFT, or LE
 	"- todo TODO_ID <your note>\n" +
 	"- commits BRANCH [pushed to REMOTE] <your note>\n" +
 	"- resource KIND NAME_OR_ID [on HOST] <your note>   (KIND: pid, k3d-cluster, container, ...)\n" +
-	"- other <anything else: a loop you run, a request or follow-up you owe the user>\n" +
+	"- path ABSOLUTE_PATH [on HOST] <your note>   (a file or directory left behind)\n" +
+	"- branch REMOTE/BRANCH <your note>   (a remote branch left behind, such as origin/feat/x)\n" +
+	"- issue OWNER/REPO#NUMBER <your note>\n" +
+	"- followup <something only the user can do: post a comment, run a command, try a login>\n" +
+	"- other <anything else: a loop you run, a request you owe the user>\n" +
 	"Do not do the cleanup now: only list it. Say NOTHING LEFT only when nothing remains. No other text."
 
 // parseReply reads a session's reply to the ask: the state (safe: nothing
@@ -155,6 +163,26 @@ func parseItem(line string) (ledger.AskItem, bool) {
 			return ledger.AskItem{}, false
 		}
 		return ledger.AskItem{Type: ledger.ItemCleanup, Text: clip(rest, maxItemText)}, true
+	case "path", "file", "dir", "directory":
+		if it, ok := parsePath(rest); ok {
+			return it, true
+		}
+		return other()
+	case "branch":
+		if it, ok := parseBranch(rest); ok {
+			return it, true
+		}
+		return other()
+	case "issue":
+		if it, ok := parseIssue(rest); ok {
+			return it, true
+		}
+		return other()
+	case "followup", "follow-up", "followups":
+		if rest == "" {
+			return ledger.AskItem{}, false
+		}
+		return ledger.AskItem{Type: ledger.ItemFollowup, Text: clip(rest, maxItemText)}, true
 	case "other":
 		if rest == "" {
 			return ledger.AskItem{}, false
@@ -261,6 +289,186 @@ func parseResource(rest string) (ledger.AskItem, bool) {
 	return it, it.Name != ""
 }
 
+// trimTok trims the punctuation a reference picks up in a sentence.
+func trimTok(s string) string { return strings.Trim(s, ",.:;()\"'") }
+
+// trimNote trims the dash or colon a note starts with.
+func trimNote(toks []string) string {
+	return strings.TrimLeftFunc(clip(strings.Join(toks, " "), maxItemText), func(r rune) bool { return unicode.IsSpace(r) || strings.ContainsRune("-–—:,", r) })
+}
+
+// parsePath reads "ABSOLUTE_PATH [on HOST] <note>".
+func parsePath(rest string) (ledger.AskItem, bool) {
+	toks := strings.Fields(strings.ReplaceAll(rest, "`", ""))
+	if len(toks) == 0 {
+		return ledger.AskItem{}, false
+	}
+	p := strings.TrimRight(trimTok(toks[0]), ".")
+	if !strings.HasPrefix(p, "/") {
+		return ledger.AskItem{}, false
+	}
+	it := ledger.AskItem{Type: ledger.ItemPath, Name: p}
+	tail := toks[1:]
+	if len(tail) >= 2 && strings.EqualFold(tail[0], "on") {
+		it.Host = trimTok(tail[1])
+		tail = tail[2:]
+	}
+	it.Text = trimNote(tail)
+	return it, true
+}
+
+// remoteNames are the remotes a branch reference may start with.
+var remoteNames = map[string]bool{"origin": true, "upstream": true}
+
+// splitRemote cuts "origin/feat/x" into its remote and branch; a reference
+// that names no remote is on origin.
+func splitRemote(ref string) (remote, branch string) {
+	ref = strings.TrimPrefix(strings.TrimPrefix(ref, "refs/remotes/"), "refs/heads/")
+	if r, b, ok := strings.Cut(ref, "/"); ok && remoteNames[r] && b != "" {
+		return r, b
+	}
+	return "origin", ref
+}
+
+// parseBranch reads "REMOTE/BRANCH <note>".
+func parseBranch(rest string) (ledger.AskItem, bool) {
+	toks := strings.Fields(strings.ReplaceAll(rest, "`", ""))
+	if len(toks) == 0 {
+		return ledger.AskItem{}, false
+	}
+	ref := strings.TrimRight(trimTok(toks[0]), ".")
+	if ref == "" {
+		return ledger.AskItem{}, false
+	}
+	remote, branch := splitRemote(ref)
+	return ledger.AskItem{Type: ledger.ItemBranch, Remote: remote, Branch: branch, Text: trimNote(toks[1:])}, true
+}
+
+var issueRefRe = regexp.MustCompile(`([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:#|/issues/)(\d+)`)
+
+// parseIssue reads "OWNER/REPO#NUMBER <note>" (or an issue's URL).
+func parseIssue(rest string) (ledger.AskItem, bool) {
+	rest = strings.ReplaceAll(rest, "`", "")
+	if m := issueRefRe.FindStringSubmatch(rest); m != nil {
+		n, _ := strconv.Atoi(m[2])
+		return ledger.AskItem{Type: ledger.ItemIssue, Repo: m[1], Number: n, Text: noteAfter(rest, m[0])}, true
+	}
+	tok, _, _ := strings.Cut(rest, " ")
+	if m := prNumRe.FindStringSubmatch(trimTok(tok)); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return ledger.AskItem{Type: ledger.ItemIssue, Number: n, Text: noteAfter(rest, tok)}, true
+	}
+	return ledger.AskItem{}, false
+}
+
+// Re-typing. Answers given before the path, branch, issue and followup types
+// (and sessions that still write "cleanup" or "other") name things the hub
+// can check in their own words. retype reads a cleanup or other item's words
+// and, when they are plainly about one checkable thing, gives it that type,
+// keeping the words and the old type (Was). It runs on the review's copy of
+// an answer, so stored answers benefit without a re-ask.
+//
+// It is careful: settling a re-typed item can let the sweep remove the
+// session, so a line that strings several steps together ("stop pid 4242,
+// then close my PR") or names two things of a kind is left as it was. Only
+// the words that put the step on the user make a followup whatever else
+// the line says: a followup is never settled by the hub.
+var (
+	retypePIDRe     = regexp.MustCompile(`(?i)\bpid[ :#]*(\d{2,7})\b`)
+	retypeRemoteRe  = regexp.MustCompile("(?:^|[\\s`'\"(])((?:origin|upstream)/[A-Za-z0-9][\\w.-]*(?:/[\\w.-]+)*)")
+	retypeIssueWord = regexp.MustCompile(`(?i)\bissues?\b`)
+	retypePRNumRe   = regexp.MustCompile(`(?i)\b(?:PR|pull request)\s*#?(\d+)\b`)
+	retypeCommitsRe = regexp.MustCompile(`(?i)\bcommits? ahead\b|\bunpushed commits?\b|\bcommits? (?:not|never) pushed\b`)
+	retypePathRe    = regexp.MustCompile("(?:^|[\\s`'\"(=])(/[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*)/?")
+	retypeURLRe     = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://\S+`)
+	retypeUserRe    = regexp.MustCompile(`(?i)\bwaiting (?:on|for) (?:the )?user\b|\b(?:the )?user (?:has|needs|must|will need) to\b|\bonly the user can\b|\bfor the user to (?:do|run|post|try)\b`)
+	retypeSeveralRe = regexp.MustCompile(`(?i);|,\s*then\b|\bthen\b|\band also\b|\bas well as\b|\bplus\b`)
+)
+
+//
+// own is the session's branch: words about deleting its remote copy keep the
+// reading remoteBranchItem gives them, whatever else they mention.
+func retype(item ledger.AskItem, own string) ledger.AskItem {
+	if item.Type != ledger.ItemCleanup && item.Type != ledger.ItemOther {
+		return item
+	}
+	t := strings.ReplaceAll(item.Text, "`", " ")
+	as := func(n ledger.AskItem) ledger.AskItem {
+		n.Text, n.Was, n.Done = item.Text, item.Type, item.Done
+		return n
+	}
+	if b, ok := remoteBranchItem(item.Text, own); ok {
+		return as(ledger.AskItem{Type: ledger.ItemBranch, Remote: "origin", Branch: b})
+	}
+	if ownBranchDeletion(item.Text, own) && !retypePathRe.MatchString(retypeURLRe.ReplaceAllString(t, " ")) {
+		return item // the local branch goes with the worktree (recheck)
+	}
+	if !retypeSeveralRe.MatchString(t) {
+		pids := distinct(retypePIDRe.FindAllStringSubmatch(t, -1))
+		var remotes []string
+		for _, r := range distinct(retypeRemoteRe.FindAllStringSubmatch(t, -1)) {
+			if _, b := splitRemote(r); !protectedBranches[b] {
+				remotes = append(remotes, r)
+			}
+		}
+		noURL := retypeURLRe.ReplaceAllString(t, " ")
+		issues := distinct(issueRefRe.FindAllStringSubmatch(t, -1))
+		prs := distinct(prRefRe.FindAllStringSubmatch(t, -1))
+		prNums := distinct(retypePRNumRe.FindAllStringSubmatch(t, -1))
+		del := deleteVerbRe.MatchString(t)
+		var paths []string
+		for _, p := range distinct(retypePathRe.FindAllStringSubmatch(noURL, -1)) {
+			if strings.Count(p, "/") >= 2 || p == "/tmp" {
+				paths = append(paths, p)
+			}
+		}
+		refs := len(pids) + len(remotes) + len(paths)
+		switch {
+		case len(pids) == 1 && refs == 1:
+			return as(ledger.AskItem{Type: ledger.ItemResource, Kind: "pid", Name: pids[0]})
+		case len(remotes) == 1 && refs == 1 && del:
+			r, b := splitRemote(remotes[0])
+			return as(ledger.AskItem{Type: ledger.ItemBranch, Remote: r, Branch: strings.TrimRight(b, ".")})
+		case refs == 0 && retypeIssueWord.MatchString(t) && len(issues) == 1 && !strings.Contains(t, "/pull/"):
+			m := issueRefRe.FindStringSubmatch(t)
+			n, _ := strconv.Atoi(m[2])
+			return as(ledger.AskItem{Type: ledger.ItemIssue, Repo: m[1], Number: n})
+		// A PR named with no repository is left as words: the hub could not
+		// check it anyway.
+		case refs == 0 && !del && !retypeIssueWord.MatchString(t) && len(prs) == 1:
+			m := prRefRe.FindStringSubmatch(t)
+			n, _ := strconv.Atoi(m[2])
+			return as(ledger.AskItem{Type: ledger.ItemPR, Repo: m[1], Number: n})
+		case refs == 0 && !del && len(prs)+len(issues)+len(prNums) == 0 && retypeCommitsRe.MatchString(t):
+			return as(ledger.AskItem{Type: ledger.ItemCommits})
+		}
+		if !retypeUserRe.MatchString(t) && len(paths) == 1 && refs == 1 && len(prs)+len(issues)+len(prNums) == 0 {
+			return as(ledger.AskItem{Type: ledger.ItemPath, Name: strings.TrimRight(paths[0], ".")})
+		}
+	}
+	if retypeUserRe.MatchString(t) {
+		return as(ledger.AskItem{Type: ledger.ItemFollowup})
+	}
+	return item
+}
+
+// distinct is the first group of each match, once each.
+func distinct(ms [][]string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range ms {
+		v := m[len(m)-1]
+		if len(m) > 2 {
+			v = m[1] + "#" + m[2]
+		}
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // label names an item in one phrase ("PR o/r#343").
 func itemLabel(it ledger.AskItem) string {
 	switch it.Type {
@@ -284,6 +492,21 @@ func itemLabel(it ledger.AskItem) string {
 		return "decision (to-do " + it.ID + ")"
 	case ledger.ItemCleanup:
 		return "cleanup"
+	case ledger.ItemPath:
+		s := "path " + it.Name
+		if it.Host != "" {
+			s += " on " + it.Host
+		}
+		return s
+	case ledger.ItemBranch:
+		return "branch " + orDefault(it.Remote, "origin") + "/" + it.Branch
+	case ledger.ItemIssue:
+		if it.Repo == "" {
+			return fmt.Sprintf("issue #%d", it.Number)
+		}
+		return fmt.Sprintf("issue %s#%d", it.Repo, it.Number)
+	case ledger.ItemFollowup:
+		return "a follow-up for you"
 	case ledger.ItemResource:
 		s := it.Kind + " " + it.Name
 		if it.Host != "" {

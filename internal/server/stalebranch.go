@@ -96,10 +96,15 @@ func checkStaleBranch(ctx context.Context, dir, branch, own string, del bool) st
 	switch {
 	case !validBranch(branch):
 		return refuse("not a branch name")
-	case own == "" || branch != own:
-		return refuse("not the session's own branch")
 	case protectedBranches[branch]:
 		return refuse("a default branch is never deleted")
+	case own == "" || branch != own:
+		if del || own == "" {
+			return refuse("not the session's own branch")
+		}
+		// Somebody else's branch is never deleted, but whether origin
+		// still has it is a fact the hub may look at.
+		return remotePresence(ctx, dir, branch)
 	}
 	res := fetchOrigin(ctx, dir)
 	switch {
@@ -173,6 +178,23 @@ func checkStaleBranch(ctx context.Context, dir, branch, own string, del bool) st
 		r.Deleted = true
 	}
 	return r
+}
+
+// remotePresence says whether origin still has branch, deleting nothing:
+// absent, or refused with the tip it is at.
+func remotePresence(ctx context.Context, dir, branch string) staleBranchResult {
+	out, err := runGit(ctx, dir, "ls-remote", "--heads", "--exit-code", "origin", "refs/heads/"+branch)
+	switch {
+	case err != nil && strings.Contains(err.Error(), "exit status 2"):
+		return staleBranchResult{State: staleAbsent, Why: "origin does not have it"}
+	case err != nil:
+		return staleBranchResult{State: staleUnknown, Why: "could not ask origin: " + clip(err.Error(), 120)}
+	}
+	tip, _, _ := strings.Cut(strings.TrimSpace(out), "\t")
+	if !shaOnlyRe.MatchString(tip) {
+		return staleBranchResult{State: staleUnknown, Why: "origin's answer was not a commit"}
+	}
+	return staleBranchResult{State: staleRefused, Tip: tip, Why: "not the session's own branch"}
 }
 
 func short(sha string) string {

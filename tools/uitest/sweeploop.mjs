@@ -40,7 +40,7 @@ let tip = "";
 
 await check("the loop ran by itself and removed the merged, clean sessions and the one with a provably stale branch", async () => {
   tip = git("rev-parse", "refs/remotes/origin/" + B1);
-  const want = [...MERGED, "tool-runs-s6-keys"];
+  const want = [...MERGED, "tool-runs-s6-keys", "left-path-branch"];
   const st = await until("the removals", async () => { const s = await statuses(); return want.every((n) => s[n] === "removed") ? s : null; });
   console.log("     " + JSON.stringify(st));
   for (const n of [...NEEDS_LOOK]) if (st[n] !== "finished") throw new Error(n + " is " + st[n]);
@@ -51,6 +51,17 @@ await check("the loop ran by itself and removed the merged, clean sessions and t
   }
   for (const n of [...NEEDS_LOOK, "extra", "server"]) if (!fs.existsSync(`${harness}/worktrees/proj/${n}`)) throw new Error(n + " worktree is gone");
   if (fs.existsSync(`${harness}/worktrees/proj/s6`)) throw new Error("s6 worktree is still there");
+  if (fs.existsSync(`${harness}/worktrees/proj/lp`)) throw new Error("lp worktree is still there");
+});
+
+await check("the typed leftovers settle: the path in the scratchpad goes with the removal, the stale branch item is deleted", async () => {
+  if (onOrigin("feat/leftovers")) throw new Error("feat/leftovers is still on origin");
+  const lp = fs.readFileSync(harness + "/lp_path", "utf8").trim();
+  if (fs.existsSync(lp)) throw new Error("the scratchpad file is still there: " + lp);
+  const e = (await api("GET", "/api/ledger")).entries.find((x) => x.agent_name === "left-path-branch");
+  const ask = e && e.mark && e.mark.ask;
+  console.log("     " + (ask ? ask.state + ": " + ask.reason : JSON.stringify(e && e.mark)));
+  if (!ask || ask.state !== "safe" || !/deleted origin\/feat\/leftovers/.test(ask.reason)) throw new Error("answer not settled by the sweep: " + JSON.stringify(ask));
 });
 
 await check("the proven backup branch is deleted from origin; the one with a commit main lacks is kept", async () => {
@@ -80,19 +91,19 @@ await check("the board line and the log say what the loop removed and deleted, w
   if (!lane) throw new Error("no Hub did lane");
   const first = lane.items[0];
   console.log("     " + first.title);
-  if (!/^Sweep: removed 7 sessions \(/.test(first.title) || !first.title.includes("deleted 1 stale remote branch (origin/" + B1 + " @ " + tip.slice(0, 7))) throw new Error(first.title);
+  if (!/^Sweep: removed 8 sessions \(/.test(first.title) || !/deleted 2 stale remote branches/.test(first.title) || !first.title.includes("origin/" + B1 + " @ " + tip.slice(0, 7))) throw new Error(first.title);
   const log = await api("GET", "/api/log?since=1h&kind=sweep");
-  const ev = (log.events || []).find((i) => /Sweep deleted 1 stale remote branch/.test(i.text));
+  const ev = (log.events || []).find((i) => /Sweep deleted 2 stale remote branches/.test(i.text));
   if (!ev || !ev.text.includes(tip)) throw new Error("no deletion event with the SHA: " + JSON.stringify(log).slice(0, 800));
   console.log("     " + ev.text);
 });
 
 await check("the review lists what was removed and the deleted branch with its SHA and restore command, and the command works", async () => {
   const d = await api("GET", "/api/removals");
-  if (d.auto_removed.length !== 7) throw new Error("auto_removed " + d.auto_removed.length);
+  if (d.auto_removed.length !== 8) throw new Error("auto_removed " + d.auto_removed.length);
   if (!d.auto_removed.every((a) => /nothing to lose/.test(a.reason))) throw new Error(d.auto_removed.map((a) => a.reason));
-  const [b] = d.sweep_branches;
-  if (d.sweep_branches.length !== 1 || b.branch !== B1 || b.tip !== tip || b.restore !== `git push origin ${tip}:refs/heads/${B1}`) throw new Error(JSON.stringify(d.sweep_branches));
+  const b = d.sweep_branches.find((x) => x.branch === B1);
+  if (d.sweep_branches.length !== 2 || !b || !d.sweep_branches.some((x) => x.branch === "feat/leftovers") || b.tip !== tip || b.restore !== `git push origin ${tip}:refs/heads/${B1}`) throw new Error(JSON.stringify(d.sweep_branches));
   git(...b.restore.split(" ").slice(1));
   if (!onOrigin(B1) || git("ls-remote", "--heads", harness + "/origin.git", "refs/heads/" + B1).split(/\s/)[0] !== tip) throw new Error("the branch did not come back at its tip");
   git("push", "-q", "origin", ":refs/heads/" + B1); // delete it again for the screenshots
@@ -108,7 +119,7 @@ for (const width of [390, 1280]) {
     await page.waitForTimeout(400);
     await page.screenshot({ path: `${out}/sweep-board-${width}.png` });
     const bt = await page.evaluate(() => document.body.innerText);
-    if (!/Sweep: removed 7 sessions/.test(bt)) throw new Error("the board line is not on screen");
+    if (!/Sweep: removed 8 sessions/.test(bt)) throw new Error("the board line is not on screen");
     await page.goto(`${base}/#/remove`, { waitUntil: "load" });
     await page.waitForSelector(".rv-auto-item", { timeout: 20000 });
     await page.waitForTimeout(700);

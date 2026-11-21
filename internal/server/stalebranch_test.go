@@ -371,8 +371,17 @@ func TestSweepLoopCleansAGoneSessionAndSaysSo(t *testing.T) {
 	}
 }
 
+// pidRunning makes pid 4242 the one process alive (a "pid" leftover is checked).
+func pidRunning(t *testing.T, alive bool) {
+	t.Helper()
+	old := probePIDAlive
+	probePIDAlive = func(pid int) bool { return alive && pid == 4242 }
+	t.Cleanup(func() { probePIDAlive = old })
+}
+
 func TestSweepLeftoversOtherCleanupIsLeftAlone(t *testing.T) {
 	f := newGoneFix(t, true, "Stop the dev server I started (pid 4242).")
+	pidRunning(t, true)
 	f.setAuto(t, true)
 	if n, deleted := f.s.leftovers(ctx(), time.Now(), true); n != 0 || len(deleted) != 0 {
 		t.Fatalf("settled %d deleted %v", n, deleted)
@@ -383,6 +392,11 @@ func TestSweepLeftoversOtherCleanupIsLeftAlone(t *testing.T) {
 	}
 	if it := reviewOf(t, f.s, goneID); it.Safe {
 		t.Fatalf("a process to stop was treated as done: %v", it.Warnings)
+	}
+	// Once the process is gone, the line (re-typed as a pid) has resolved.
+	pidRunning(t, false)
+	if n, _ := f.s.leftovers(ctx(), time.Now(), true); n != 1 || f.ask(t).State != ledger.AskSafe {
+		t.Fatalf("a stopped process: settled %d, ask %+v", n, f.ask(t))
 	}
 }
 
@@ -464,6 +478,7 @@ func TestLiveAgentBranchWithUnmergedWorkIsNeverDeleted(t *testing.T) {
 func TestReaskStopsAndTheLeftoverStaysInTheReviewWithNoToDo(t *testing.T) {
 	const stop = "Stop the dev server I started (pid 4242)."
 	// Under the cap the live agent is asked again (the control)...
+	pidRunning(t, true)
 	c := newFix(t, true, stop, liveID, "w2:p1", 0)
 	quietReasks(c.s)
 	if asked := c.s.reaskStep(ctx(), time.Now().Add(48*time.Hour)); len(asked) != 1 {

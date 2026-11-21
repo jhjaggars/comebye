@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/scratch"
 )
 
 // Re-checking what a session said keeps it. A session's "something is left" (UNSAFE) answer is
@@ -31,7 +34,16 @@ import (
 //	cleanup   work the session can do itself: never resolved by the hub
 //	commits   the branch checks (all in the base, or all on a remote)
 //	resource  a pid alive on the host, a k3d cluster still there
+//	path      a file or directory on the host (gone: resolved); one inside
+//	          the session's own scratchpad or worktree is settled by the removal
+//	branch    a remote branch (gone from origin: resolved; the session's own,
+//	          provably in main: the sweep may delete it, stalebranch.go)
+//	issue     gh issue view on the session's host (closed: resolved)
+//	followup  something the user has to do: never resolved by the hub
 //	other     free text: never resolved by the hub
+//
+// Cleanup and other items are re-typed first when their words plainly name
+// one of these (retype, askitems.go).
 //
 // An item the hub cannot check ("unchecked") stays a warning, like an
 // unresolved one. When every item has resolved, the UNSAFE is a note.
@@ -104,6 +116,33 @@ var (
 		}
 		return r, nil
 	}
+	probeGHIssue = func(ctx context.Context, repo string, n int) (*probeResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "gh", "issue", "view", strconv.Itoa(n), "-R", repo, "--json", "state,closedAt,title,url")
+		cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1")
+		var out, errb bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errb
+		if err := cmd.Run(); err != nil {
+			msg := strings.TrimSpace(errb.String())
+			if msg == "" {
+				msg = err.Error()
+			}
+			return nil, errors.New(clip(msg, 200))
+		}
+		var v struct {
+			State, Title, URL string
+			ClosedAt          *time.Time
+		}
+		if err := json.Unmarshal(out.Bytes(), &v); err != nil {
+			return nil, err
+		}
+		r := &probeResult{State: strings.ToLower(v.State), Title: v.Title, URL: v.URL}
+		if r.State == "closed" {
+			r.At = v.ClosedAt
+		}
+		return r, nil
+	}
 	probePIDAlive = func(pid int) bool {
 		err := syscall.Kill(pid, 0)
 		return err == nil || errors.Is(err, syscall.EPERM)
@@ -153,6 +192,33 @@ func probeLocal(ctx context.Context, q url.Values) (*probeResult, *launchError) 
 			return &probeResult{State: "alive"}, nil
 		}
 		return &probeResult{State: "dead"}, nil
+	case "issue":
+		n, err := strconv.Atoi(q.Get("number"))
+		if !repoRe.MatchString(q.Get("repo")) || err != nil || n < 1 || n > 1<<30 {
+			return bad("want repo OWNER/NAME and a number")
+		}
+		r, err := probeGHIssue(ctx, q.Get("repo"), n)
+		if err != nil {
+			return &probeResult{State: "unknown", Detail: "gh: " + err.Error()}, nil
+		}
+		return r, nil
+	case "path":
+		p, why := probePathAllowed(q.Get("path"))
+		if why != "" {
+			return bad(why)
+		}
+		fi, err := os.Lstat(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+			return &probeResult{State: "absent"}, nil
+		case err != nil:
+			return &probeResult{State: "unknown", Detail: clip(err.Error(), 200)}, nil
+		case fi.Mode()&fs.ModeSymlink != 0:
+			return &probeResult{State: "present", Detail: "a symlink"}, nil
+		case fi.IsDir():
+			return &probeResult{State: "present", Detail: "a directory"}, nil
+		}
+		return &probeResult{State: "present", Detail: "a file"}, nil
 	case "k3d":
 		if !nameRe.MatchString(q.Get("name")) {
 			return bad("want a cluster name")
@@ -167,6 +233,57 @@ func probeLocal(ctx context.Context, q url.Values) (*probeResult, *launchError) 
 		return &probeResult{State: "absent"}, nil
 	}
 	return bad("unknown probe")
+}
+
+// pathProbeRoots are the directories a path probe may look in: the home
+// directory and the temporary directory. A variable so tests can set them.
+var pathProbeRoots = func() []string {
+	var roots []string
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		roots = append(roots, h)
+	}
+	return append(roots, os.TempDir(), "/tmp")
+}
+
+// probePathAllowed checks a path the hub asks about: absolute, no "..",
+// inside a probe root, and reached through no symlink below that root (the
+// last part may be one: it is looked at, never followed). why says what is
+// wrong.
+func probePathAllowed(p string) (string, string) {
+	if p == "" || len(p) > 1024 || !filepath.IsAbs(p) || strings.ContainsRune(p, 0) {
+		return "", "want an absolute path"
+	}
+	for _, part := range strings.Split(p, "/") {
+		if part == ".." {
+			return "", "the path may not contain .."
+		}
+	}
+	p = filepath.Clean(p)
+	root := ""
+	for _, r := range pathProbeRoots() {
+		r = filepath.Clean(r)
+		if r != "/" && scratch.Within(p, r) && p != r && len(r) > len(root) {
+			root = r
+		}
+	}
+	if root == "" {
+		return "", "the hub looks only in the home and temporary directories"
+	}
+	// Every directory between the root and the last part must be a real
+	// directory: a symlink there could lead anywhere.
+	rel := strings.Split(strings.TrimPrefix(p, root+"/"), "/")
+	cur := root
+	for _, part := range rel[:len(rel)-1] {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			break // missing: the path is absent, nothing to follow
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return "", "the path goes through a symlink (" + cur + ")"
+		}
+	}
+	return p, ""
 }
 
 // handleProbe is GET /api/probe: the hub's re-check of one thing on this host.
@@ -310,6 +427,7 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 	ar.Items = make([]itemView, len(items))
 	var wg sync.WaitGroup
 	for i, item := range items {
+		item = retype(item, it.Branch)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -331,7 +449,7 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 			} else {
 				others++
 			}
-			if v.Type != ledger.ItemCleanup {
+			if !isCleanup(v.AskItem) {
 				ar.OnlyCleanup = false
 			} else {
 				cleanups++
@@ -448,6 +566,48 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 			return unchecked(orDefault(r.Detail, r.State))
 		}
 		return unchecked("the hub does not look for a " + orDefault(item.Kind, "resource") + " of that kind")
+	case ledger.ItemPath:
+		return s.recheckPath(ctx, it, item)
+	case ledger.ItemBranch:
+		// staleCheck asks the session's host; this is what is said when it can't.
+		switch {
+		case item.Remote != "" && item.Remote != "origin":
+			return unchecked("the hub looks only at origin")
+		case !validBranch(item.Branch):
+			return unchecked("not a branch name")
+		case it.Worktree == "" || it.Branch == "":
+			return unchecked("the session has no worktree of its own")
+		case !s.knownHost(it.Host):
+			return unchecked("host " + it.Host + " is not in this hub's fleet")
+		}
+		return unchecked("origin could not be asked")
+	case ledger.ItemIssue:
+		if item.Repo == "" {
+			return unchecked("the answer names no repository")
+		}
+		if !repoRe.MatchString(item.Repo) {
+			return unchecked("not a repository name")
+		}
+		if !s.knownHost(it.Host) {
+			return unchecked("host " + it.Host + " is not in this hub's fleet")
+		}
+		r, why := s.probeCached(ctx, it.Host, url.Values{"kind": {"issue"}, "repo": {item.Repo}, "number": {strconv.Itoa(item.Number)}})
+		if r == nil {
+			return unchecked(why)
+		}
+		switch r.State {
+		case "closed":
+			when := ""
+			if r.At != nil {
+				when = " " + agoText(time.Now(), *r.At)
+			}
+			return itemResolved, "was closed" + when, r.At
+		case "open":
+			return itemOpen, "is still open", nil
+		}
+		return unchecked(orDefault(r.Detail, "gh said "+r.State))
+	case ledger.ItemFollowup:
+		return itemUnchecked, "is yours to do, not the session's", nil
 	}
 	if item.Type == ledger.ItemCleanup || item.Type == ledger.ItemOther {
 		// "git branch -d my-branch" is not work left: the branch is checked
@@ -466,6 +626,44 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 		return unchecked("the session can do this itself")
 	}
 	return unchecked("free text")
+}
+
+// isCleanup: an item the session can do itself when told to go ahead (one
+// the hub re-typed included, so "Let it clean up" still covers it).
+func isCleanup(item ledger.AskItem) bool {
+	return item.Type == ledger.ItemCleanup || item.Was == ledger.ItemCleanup
+}
+
+// recheckPath looks for a path item on its host. A path inside the session's
+// own scratchpad or worktree is settled by the removal, which deletes both.
+func (s *Server) recheckPath(ctx context.Context, it *removal, item ledger.AskItem) (string, string, *time.Time) {
+	unchecked := func(why string) (string, string, *time.Time) { return itemUnchecked, "can't check: " + why, nil }
+	host := orDefault(item.Host, it.Host)
+	if !filepath.IsAbs(item.Name) {
+		return unchecked("not an absolute path")
+	}
+	if host == it.Host {
+		if dir := s.scratchDirOf(it); dir != "" && scratch.Within(filepath.Clean(item.Name), dir) {
+			return itemResolved, "is in the session's own scratchpad: removing the session deletes it", nil
+		}
+		if it.Worktree != "" && scratch.Within(filepath.Clean(item.Name), it.Worktree) {
+			return itemResolved, "is in the session's own worktree: removing the session deletes it", nil
+		}
+	}
+	if !s.knownHost(host) {
+		return unchecked("host " + host + " is not in this hub's fleet")
+	}
+	r, why := s.probeCached(ctx, host, url.Values{"kind": {"path"}, "path": {item.Name}})
+	if r == nil {
+		return unchecked(why)
+	}
+	switch r.State {
+	case "absent":
+		return itemResolved, "is gone", nil
+	case "present":
+		return itemOpen, "is still there (" + orDefault(r.Detail, "it exists") + ")", nil
+	}
+	return unchecked(orDefault(r.Detail, r.State))
 }
 
 var (
@@ -651,20 +849,39 @@ func (s *Server) staleProbe(ctx context.Context, it *removal, branch string, del
 	return r, ""
 }
 
+// staleTarget is the remote branch an item is about, when the hub can check
+// it: a branch item on origin, or a cleanup or other item worded as deleting
+// the session's own remote branch.
+func staleTarget(item ledger.AskItem, own string) (string, bool) {
+	switch item.Type {
+	case ledger.ItemBranch:
+		if (item.Remote == "" || item.Remote == "origin") && validBranch(item.Branch) {
+			return item.Branch, true
+		}
+	case ledger.ItemCleanup, ledger.ItemOther:
+		return remoteBranchItem(item.Text, own)
+	}
+	return "", false
+}
+
 // staleCheck looks at an item that is about deleting the session's own remote
 // branch, and says what the host found: already gone (resolved), provably in the
 // default branch (Stale: the sweep can do it), or kept for a reason.
 func (s *Server) staleCheck(ctx context.Context, it *removal, v *itemView) {
-	if v.State == itemResolved || (v.Type != ledger.ItemCleanup && v.Type != ledger.ItemOther) || it.Branch == "" || it.Worktree == "" || !s.knownHost(it.Host) {
+	if v.State == itemResolved || it.Branch == "" || it.Worktree == "" || !s.knownHost(it.Host) {
 		return
 	}
-	branch, ok := remoteBranchItem(v.Text, it.Branch)
+	branch, ok := staleTarget(v.AskItem, it.Branch)
 	if !ok {
 		return
 	}
 	r, _ := s.staleProbe(ctx, it, branch, false)
 	if r == nil {
 		return
+	}
+	if v.Type == ledger.ItemBranch {
+		// Its label already names the branch.
+		defer func() { v.Now = strings.TrimPrefix(v.Now, "origin/"+branch+" ") }()
 	}
 	switch r.State {
 	case staleAbsent:
@@ -674,6 +891,12 @@ func (s *Server) staleCheck(ctx context.Context, it *removal, v *itemView) {
 		v.Now = fmt.Sprintf("origin/%s is at %s and %s; no pull request from it is open: it is safe to delete", branch, short(r.Tip), r.Proof)
 	case staleNotInMain, staleOpenPR:
 		v.State, v.Now = itemOpen, "origin/"+branch+" is kept: "+r.Why
+	case staleRefused:
+		if r.Tip != "" {
+			v.State, v.Now = itemOpen, "origin/"+branch+" is still there at "+short(r.Tip)+" (the hub deletes only the session's own branch)"
+			return
+		}
+		v.State, v.Now = itemUnchecked, "can't check: "+orDefault(r.Why, r.State)
 	default:
 		v.State, v.Now = itemUnchecked, "can't check: "+orDefault(r.Why, r.State)
 	}
