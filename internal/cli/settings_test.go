@@ -160,3 +160,34 @@ func TestHandoffPrintsHostSettingsWarningToStderr(t *testing.T) {
 		t.Fatalf("stdout %q", out)
 	}
 }
+
+func TestSettingsPushlessFetch(t *testing.T) {
+	withPL := strings.Replace(settingsJSON, `"rev":4`, `"pushless_fetch":{"enabled":true,"hosts":["kv1"],"via":"laharl"},"rev":4`, 1)
+	e, out, _, reqs := peerEnv(t, map[string]string{"COMEBYE_LOGIN": "me@example.com"}, map[string]answer{
+		"GET /api/settings": {200, settingsJSON},
+		"PUT /api/settings": {200, withPL},
+	})
+	if code := run(e, "settings", "set", "--pushless-fetch", "on", "--pushless-hosts", "kv1", "--pushless-via", "laharl"); code != 0 {
+		t.Fatalf("exit %d %s", code, out)
+	}
+	if b := (*reqs)[1].body; !strings.Contains(b, `"pushless_fetch":{"enabled":true,"hosts":["kv1"],"via":"laharl"}`) || !strings.Contains(b, `"default_kind":"pi"`) {
+		t.Fatalf("sent %s", b)
+	}
+	if !strings.Contains(out.String(), "push-less fetch: on for kv1 (through laharl)") {
+		t.Errorf("output:\n%s", out)
+	}
+	// Other settings leave it out, so the hub keeps it.
+	e, _, _, reqs = peerEnv(t, map[string]string{"COMEBYE_LOGIN": "me@example.com"}, map[string]answer{
+		"GET /api/settings": {200, withPL},
+		"PUT /api/settings": {200, withPL},
+	})
+	if code := run(e, "settings", "set", "--default-kind", "codex"); code != 0 || strings.Contains((*reqs)[1].body, "pushless") {
+		t.Fatalf("exit %d, sent %s", code, (*reqs)[1].body)
+	}
+	if code := run(e, "settings", "clear", "--field", "pushless"); code != 0 || !strings.Contains((*reqs)[3].body, `"pushless_fetch":{"enabled":false}`) {
+		t.Fatalf("clear: exit %d, sent %s", code, (*reqs)[3].body)
+	}
+	if code := run(e, "settings", "set", "--pushless-fetch", "maybe"); code != 2 {
+		t.Errorf("--pushless-fetch maybe: exit %d", code)
+	}
+}

@@ -328,6 +328,7 @@ type Server struct {
 	provObserveGap time.Duration       // how often the provisioner asks (tests shorten it)
 	hjobs          *hubJobs            // on a hub: the jobs it has asked provisioners to run
 	wake           *wakeBook           // on a hub: stopped workers it is starting (wake.json)
+	pushless       pushlessState       // on a hub: fetches from push-less hosts under way
 	peerStatusHook func(string) string // tests: what a peer's status is
 	pages          *pageStore
 	chats          *chatStore // Page -> its chat helper (chat.go)

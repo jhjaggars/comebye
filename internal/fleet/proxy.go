@@ -164,6 +164,10 @@ var hostProxyOps = map[string]struct {
 	// Waking a stopped worker: the provisioner starts it (the job runs on; the
 	// hub reads it with provision-job like any other).
 	"provision-host-start": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "provisioner", "host", "start"}, true},
+	// Bringing a branch back from a push-less host: the provisioner fetches it
+	// over its ssh to the host and pushes it to origin. Hub-only; it waits for
+	// the tool (FetchTimeout) and a little more.
+	"provision-host-fetch": {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 260 * time.Second}, []string{"api", "provisioner", "host", "fetch"}, true},
 }
 
 // ValidTarget reports whether target (an agent name or pane ID) can be

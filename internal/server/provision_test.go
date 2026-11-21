@@ -55,6 +55,9 @@ case "$4" in
    [ -f ` + d + `/start.flip ] && cp ` + d + `/start.flip ` + d + `/status.json
    exit 0 ;;
  stop) exit 0 ;;
+ fetch)
+   [ -f ` + d + `/fetch.fail ] && { echo "worker: $(cat ` + d + `/fetch.fail)" >&2; exit 1; }
+   cat ` + d + `/fetch.json ;;
  status)
    [ -f ` + d + `/status.fail ] && { echo "status failed" >&2; exit 1; }
    cat ` + d + `/status.json 2>/dev/null || echo '{"v":1,"provider":"aws","workers":[]}' ;;
@@ -114,6 +117,7 @@ var peerProvCalls = []struct{ name, method, path string }{
 	{"destroy", "POST", "/api/provisioner/host/destroy"},
 	{"start", "POST", "/api/provisioner/host/start"},
 	{"hold", "POST", "/api/provisioner/host/hold"},
+	{"fetch", "POST", "/api/provisioner/host/fetch"},
 }
 
 func TestPeerProvisionOpsAnswerOnlyAHub(t *testing.T) {
@@ -222,8 +226,8 @@ func TestProvisionRoutesAreUserOnly(t *testing.T) {
 			}
 		}
 	}
-	if n != 24 {
-		t.Fatalf("found %d provisioning routes, want 24: update this test with the route", n)
+	if n != 25 {
+		t.Fatalf("found %d provisioning routes, want 25: update this test with the route", n)
 	}
 	if strings.Contains(string(src), "/api/provision") {
 		t.Error("provisioning routes belong in provision.go, where this test checks them")

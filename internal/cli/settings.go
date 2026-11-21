@@ -21,6 +21,7 @@ type apiSettings struct {
 		AllowedKinds []string               `json:"allowed_kinds"`
 		Kinds        map[string]apiKindConf `json:"kinds"`
 		MaxWorkers   *int                   `json:"max_workers_per_repo"`
+		Pushless     *apiPushless           `json:"pushless_fetch"`
 		Rev          int                    `json:"rev"`
 		UpdatedBy    string                 `json:"updated_by"`
 		UpdatedAt    *time.Time             `json:"updated_at"`
@@ -39,6 +40,24 @@ type apiSettings struct {
 		Enabled bool   `json:"enabled"`
 		Reason  string `json:"reason"`
 	} `json:"launch"`
+}
+
+// apiPushless is the hub fetching branches back from push-less hosts.
+type apiPushless struct {
+	Enabled bool     `json:"enabled"`
+	Hosts   []string `json:"hosts,omitempty"`
+	Via     string   `json:"via,omitempty"`
+}
+
+func pushlessLabel(p *apiPushless) string {
+	if p == nil || !p.Enabled {
+		return "off"
+	}
+	l := "on for " + dash(strings.Join(p.Hosts, ", "))
+	if p.Via != "" {
+		l += " (through " + p.Via + ")"
+	}
+	return l
 }
 
 type apiKindConf struct {
@@ -107,6 +126,9 @@ func printSettings(e *Env, s apiSettings) {
 	sort.Strings(kinds)
 	for _, k := range kinds {
 		fmt.Fprintf(w, "  %-14s %s\n", k+":", modelLabel(s.Settings.Kinds[k].Model, s.Settings.Kinds[k].Thinking))
+	}
+	if p := s.Settings.Pushless; p != nil {
+		fmt.Fprintf(w, "  push-less fetch: %s\n", pushlessLabel(p))
 	}
 	if s.Launch.Enabled {
 		fmt.Fprintln(w, "  launching:     on")
@@ -183,7 +205,10 @@ func cmdSettings(e *Env, args []string) error {
 	fs.Var(&models, "model", "set: KIND=MODEL, the model that kind starts with (KIND= clears it; repeatable)")
 	fs.Var(&thinkings, "thinking", "set: KIND=LEVEL, pi's thinking level (KIND= clears it; repeatable)")
 	maxWorkers := fs.Int("max-workers", -1, "set: the most workers running at once per repository on the host; more wait (0 = no cap)")
-	field := fs.String("field", "", "clear: only this one of default-kind, allowed, models, max-workers (default: everything)")
+	plFetch := fs.String("pushless-fetch", "", "set: on or off: the hub fetches a push-less host's branch through its provisioner and pushes it (hub only)")
+	plHosts := fs.String("pushless-hosts", "", "set: the push-less hosts (comma-separated; 'none' empties the list)")
+	plVia := fs.String("pushless-via", "", "set: the provisioner node to ask ('none': the one that reports the host)")
+	field := fs.String("field", "", "clear: only this one of default-kind, allowed, models, max-workers, pushless (default: everything but pushless)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -195,13 +220,18 @@ func cmdSettings(e *Env, args []string) error {
 	if len(pos) > 0 || (verb != "show" && verb != "set" && verb != "clear") {
 		return usageErr("want settings, settings set ... or settings clear")
 	}
+	plSet := *plFetch != "" || *plHosts != "" || *plVia != ""
 	switch {
-	case verb == "set" && *defKind == "" && *allow == "" && len(models) == 0 && len(thinkings) == 0 && *maxWorkers < 0:
-		return usageErr("settings set wants --default-kind, --allow, --model, --thinking or --max-workers")
+	case verb == "set" && *defKind == "" && *allow == "" && len(models) == 0 && len(thinkings) == 0 && *maxWorkers < 0 && !plSet:
+		return usageErr("settings set wants --default-kind, --allow, --model, --thinking, --max-workers or a --pushless-* flag")
+	case *plFetch != "" && *plFetch != "on" && *plFetch != "off":
+		return usageErr("--pushless-fetch is on or off")
+	case verb != "set" && plSet:
+		return usageErr("the --pushless-* flags go with settings set")
 	case verb != "clear" && *field != "":
 		return usageErr("--field goes with settings clear")
-	case verb == "clear" && *field != "" && *field != "default-kind" && *field != "allowed" && *field != "models" && *field != "max-workers":
-		return usageErr("--field is default-kind, allowed, models or max-workers")
+	case verb == "clear" && *field != "" && *field != "default-kind" && *field != "allowed" && *field != "models" && *field != "max-workers" && *field != "pushless":
+		return usageErr("--field is default-kind, allowed, models, max-workers or pushless")
 	case verb != "set" && (*defKind != "" || *allow != "" || len(models) > 0 || len(thinkings) > 0 || *maxWorkers >= 0):
 		return usageErr("--default-kind, --allow, --model, --thinking and --max-workers go with settings set")
 	}
@@ -265,6 +295,32 @@ func cmdSettings(e *Env, args []string) error {
 		if *maxWorkers >= 0 {
 			capSet = maxWorkers
 		}
+		if plSet {
+			p := apiPushless{}
+			if cur.Settings.Pushless != nil {
+				p = *cur.Settings.Pushless
+			}
+			if *plFetch != "" {
+				p.Enabled = *plFetch == "on"
+			}
+			if *plHosts != "" {
+				p.Hosts = nil
+				if *plHosts != "none" {
+					for _, h := range strings.Split(*plHosts, ",") {
+						if h = strings.TrimSpace(h); h != "" {
+							p.Hosts = append(p.Hosts, h)
+						}
+					}
+				}
+			}
+			if *plVia != "" {
+				p.Via = *plVia
+				if p.Via == "none" {
+					p.Via = ""
+				}
+			}
+			body["pushless_fetch"] = p
+		}
 		for k, m := range models {
 			v := kinds[k]
 			v.Model = m
@@ -287,6 +343,8 @@ func cmdSettings(e *Env, args []string) error {
 			kinds = map[string]apiKindConf{}
 		case "max-workers":
 			capSet = nil
+		case "pushless":
+			body["pushless_fetch"] = apiPushless{}
 		}
 	}
 	body["default_kind"], body["allowed_kinds"], body["kinds"] = dk, allowed, kinds

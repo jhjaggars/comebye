@@ -442,8 +442,26 @@ default the current directory; REPO defaults to its name), and with `--push` sen
   leased on the tip it saw (`update-ref` with the old value, `push --force-with-lease`),
   so a tip that moved in between is never lost.
 
-The hub does not run this by itself yet: the coordinator runs it when such a worker
-reports.
+### The hub can do it for you (off by default)
+
+On the hub, list the push-less hosts and switch it on:
+
+```sh
+comebye settings set --pushless-fetch on --pushless-hosts kv1 [--pushless-via laharl]
+```
+
+When a handoff on a listed host reports, the hub asks the provisioner that reports the
+host (or the `--pushless-via` node, needed when two report it) to run `fetch NAME BRANCH
+--push` through `POST /api/provisioner/host/fetch`. The provisioner uses its own checkout
+of the repository, the first one of that name under its launch roots. The hub-check
+waits for this before it reads "pushed", and shows the push in place of the worker
+clone's "on no remote".
+
+The result is kept on the handoff (`push_fetch`). A failure, such as a tip that is not
+an ancestor or a stopped VM, is a note on the handoff and an event, never a failed
+handoff or landing. The hub tries again for the same report only after five minutes,
+and only from the hub-check. A landing is never fetched, and nor is the default branch.
+`comebye settings clear --field pushless` turns it off.
 
 ## Sessions and the archive
 

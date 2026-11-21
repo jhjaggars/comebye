@@ -314,3 +314,27 @@ func TestFetchFlagsOnlyForFetch(t *testing.T) {
 		t.Errorf("unknown worker: exit %d\n%s", code, errb.String())
 	}
 }
+
+func TestFetchJSON(t *testing.T) {
+	w := newFetchWorld(t)
+	tip := w.workerBranch("feat/x", "x")
+	var out, errb bytes.Buffer
+	e := &env{Out: &out, Err: &errb, Run: osRunner{}, Cfg: w.cfg}
+	if err := e.fetch(context.Background(), "kv1", "feat/x", fetchOpts{Repo: w.local, Push: true, JSON: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"name":"kv1","branch":"feat/x","tip":"` + tip + `","local":"created","pushed":"pushed"}` + "\n"
+	if out.String() != want {
+		t.Fatalf("stdout = %q, want %q", out.String(), want)
+	}
+	if !strings.Contains(errb.String(), "pushed feat/x") {
+		t.Errorf("the human lines did not go to stderr: %q", errb.String())
+	}
+	out.Reset()
+	if err := e.fetch(context.Background(), "kv1", "feat/x", fetchOpts{Repo: w.local, Push: true, JSON: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"local":"same","pushed":"same"`) {
+		t.Errorf("re-run: %s", out.String())
+	}
+}

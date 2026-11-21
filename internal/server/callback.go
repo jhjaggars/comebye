@@ -433,6 +433,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_handoff", "message": "this agent is not a handoff worker"})
 	default:
 		s.fileReportDecisions(e, e.FinalReport)
+		s.afterReport(e)
 		writeJSON(w, map[string]any{"entry": e})
 	}
 }
