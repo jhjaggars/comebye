@@ -132,3 +132,22 @@ func TestArchiveComesBack(t *testing.T) {
 		t.Fatalf("after resume = %+v", g)
 	}
 }
+
+// Marking archived work (Propose removal) takes it out of the archive into the
+// review; unmarking returns it to the status it was archived from.
+func TestMarkArchived(t *testing.T) {
+	s, _ := openTemp(t)
+	now := time.Now().UTC()
+	e, _ := s.Add(Entry{Host: "desk", AgentID: "desk/w1:p1", Branch: "poc/x", Status: Landed, FinishedAt: &now})
+	s.Archive(e.ID, Archival{By: "hub"})
+	got, err := s.SetMark(Mark{AgentID: "desk/w1:p1", Reason: "propose removal", By: "me"})
+	if err != nil || got == nil || got.Status != ReadyToRemove || got.Archive != nil || got.MarkedFrom != Landed {
+		t.Fatalf("mark = %+v %v", got, err)
+	}
+	if _, err := s.ClearMark("desk/w1:p1"); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.Get(e.ID); g.Status != Landed || g.Archive != nil {
+		t.Fatalf("unmark = %s %+v", g.Status, g.Archive)
+	}
+}

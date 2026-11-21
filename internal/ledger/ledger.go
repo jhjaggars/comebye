@@ -957,6 +957,11 @@ func (s *Store) SetMark(m Mark) (*Entry, error) {
 	}
 	m = *copyMark(&m)
 	if e := s.byAgent(m.AgentID); e != nil {
+		if e.Status == Archived {
+			// Proposing the removal of archived work: it leaves the archive
+			// for the review, and unmarking returns it to what it was before.
+			unarchiveLocked(e, "", m.By, "marked: "+Truncate(m.Reason, 200), m.At)
+		}
 		if e.Status != ReadyToRemove {
 			e.MarkedFrom = e.Status
 		}
