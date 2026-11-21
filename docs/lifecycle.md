@@ -132,13 +132,32 @@ minutes of a hand-run sweep, because nobody is watching this one.
   - An item that is "delete the remote copy of my own branch" is **done** when
     the hub proves it is safe on the host, not on the agent's word: after a
     fetch, `git cherry origin/<default> <tip>` shows no `+` and the branch has
-    no merge commit (or its tree equals a commit on `origin/<default>`), the
-    branch is the session's own (never the default branch, never anyone else's),
-    and `gh` shows no open pull request from it (gh failing is "no proof").
+    no merge commit (or its tree equals a commit on `origin/<default>`, or it is
+    **superseded by its own rebase**, below), the branch is the session's own
+    (never the default branch, never anyone else's), and `gh` shows no open pull
+    request from it (gh failing is "no proof").
     With "Clean up automatically" on, the loop deletes it itself, from the host,
     with its own git credentials and a lease on the verified tip, and logs the
-    branch and its tip SHA. A branch with any commit not in main, or with an
-    open PR, is never deleted. Off, nothing is deleted by the loop; the user's
+    branch and its tip SHA. First it keeps that tip under
+    `refs/comebye/backup/<branch>` in the repository on the host (an existing
+    backup at another commit is never moved: the new one goes under
+    `<branch>-<12 hex of the tip>`), so the commits survive `git gc` and the
+    branch can be put back from there: `git push origin
+    refs/comebye/backup/<branch>:refs/heads/<branch>`. A branch with any commit
+    not in main, or with an open PR, is never deleted.
+  - **Superseded by its rebase** (`internal/server/supersede.go`): the
+    pre-rebase backup a worker pushes before it rebases and lands. When the
+    rebase changed a patch (a conflict, or a neighbouring line changed), `git
+    cherry` cannot match it and no commit of main has its tree. It still counts
+    as proven when the branch has no merge commit, at most 20 commits git cherry
+    cannot match, and each of them has **exactly one** commit on
+    `origin/<default>` since the merge base with the same author email, the same
+    author date (with its zone) and the same subject (a rebase keeps all three);
+    no two share one; each is no newer (committer date) than its landed commit,
+    so nothing on the branch came after the land; and `git range-diff` pairs the
+    two (`=` or `!`). A commit added on top, an amend made after the land, or
+    another change under the same subject and date fails it, and the branch is
+    kept. Off, nothing is deleted by the loop; the user's
     confirm in the review still deletes it, after checking again.
   - An item that is only "delete my scratch directory", naming nothing but the
     session's own Claude scratch path (`/tmp/claude-<uid>/<its worktree>`, on the
