@@ -235,6 +235,8 @@ if want provision; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node 
 if want provhosts; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provhosts.mjs "$out" || rc=1 ; fi
 # Waking a stopped worker (issue #66): Start on a worker the cloud says is stopped, with the tool's progress, against a stand-in worker tool.
 if want wake; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wake.mjs "$out" || rc=1 ; fi
+# One provisioner with two worker configs (AWS login expired, KubeVirt fine): the stopped KubeVirt worker still has its Start button.
+if want multiconfig; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node multiconfig.mjs "$out" || rc=1 ; fi
 # Using a session on a stopped worker (issue #66, slice 3): the Start banner, and a send that starts the host.
 if want wakeuse; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wakeuse.mjs "$out" || rc=1 ; fi
 # Polish (issue #66, slice 4): the launch picker marks a stopped worker, and the rollout confirm says it will be started.
