@@ -2,7 +2,7 @@
 // (-ledger=false, -release-simulate: they "upgrade" by writing a record and then report the new version). Nothing is mocked:
 // Roll out to all goes through the hub's routes, the loop runs in the hub process, and the hub is KILLED and restarted in the
 // middle of the rollout, which must carry on from release/rollout.json. Then a version whose simulated upgrade fails (patch
-// 13) stops the rollout at the canary and leaves the rest untouched.
+// 13) stops the rollout at the first peer (there is no canary by default) and leaves the rest untouched.
 //
 //   node rolloutlive.mjs OUT_DIR       (env: COMEBYE_BIN, FAKE_SOCK; SCHEME=dark|light)
 import { launch } from "./lib.mjs";
@@ -71,18 +71,20 @@ try {
   await check("the plan offers the peers, then the hub last", async () => {
     const v = await view();
     const plan = v.rollout_plan || [];
-    // The canary is p1; the peers after it come in fleet order, the order they announced themselves, which is not
-    // fixed here; the hub is last.
+    // No canary by default: every peer is in the "peers" wave, in fleet order (the order they announced themselves,
+    // which is not fixed here); the hub is last.
     const steps = plan.map((s) => s.host + "/" + s.wave);
-    if ([steps[0], ...steps.slice(1, -1).sort(), steps[steps.length - 1]].join() !== "p1/canary,p2/peers,p3/peers,hub/hub") throw new Error(JSON.stringify(plan));
+    if ([...steps.slice(0, -1).sort(), steps[steps.length - 1]].join() !== "p1/peers,p2/peers,p3/peers,hub/hub") throw new Error(JSON.stringify(plan));
   });
-  await check("Roll out to all starts a rollout; the canary goes first and soaks while nothing else is touched", async () => {
+  await check("Roll out to all starts a rollout; one peer at a time, with no canary and no soak", async () => {
     const s = await j("POST", "/api/release/rollout", { todo: r1.id, version: V1, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r1.csrf });
     if (s.status !== 202) throw new Error(JSON.stringify(s));
     const dup = await j("POST", "/api/release/rollout", { todo: r1.id, version: V1, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r1.csrf });
     if (dup.status !== 409) throw new Error("a second start was accepted: " + dup.status);
-    const jb = await until("p1 soaking", async () => { const x = await job(); return x && x.plan[0].phase === "soaking" && x; });
-    if (jb.plan[1].phase !== "pending" || jb.plan[2].phase !== "pending" || jb.plan[3].phase !== "pending") throw new Error("others touched: " + phases(jb));
+    // p1 is upgraded alone: while it is not done, nobody else is touched; and no step ever soaks.
+    const jb = await until("p1 upgrading", async () => { const x = await job(); return x && x.plan[0].phase !== "pending" && x; });
+    if (jb.plan[0].phase !== "ok" && (jb.plan[1].phase !== "pending" || jb.plan[2].phase !== "pending" || jb.plan[3].phase !== "pending")) throw new Error("others touched: " + phases(jb));
+    if (jb.plan.some((x) => x.phase === "soaking" || x.wave === "canary") || jb.canary) throw new Error("a canary or a soak: " + JSON.stringify(jb.plan));
     const up1 = await j("POST", `/api/hosts/p2/release/upgrade`, { todo: r1.id, version: V1 }, { "X-Comebye-Csrf": r1.csrf });
     if (up1.status !== 409 || !JSON.stringify(up1.body).includes("rollout_active")) throw new Error("manual upgrade was not refused: " + JSON.stringify(up1));
   });
@@ -106,10 +108,10 @@ try {
     if (!v.hosts.every((h) => h.version === V1)) throw new Error(v.hosts.map((h) => h.name + ":" + h.version).join());
   });
 
-  // ---- scenario 2: a build whose simulated upgrade fails stops at the canary ----
+  // ---- scenario 2: a build whose simulated upgrade fails stops at the first peer ----
   const V2 = "v9.7.13";
   const r2 = await tag(V2);
-  await check("a failing canary stops the rollout; the rest are not touched; Retry fails the same way; Cancel gives the host buttons back", async () => {
+  await check("a failing first peer stops the rollout; the rest are not touched; Retry fails the same way; Cancel gives the host buttons back", async () => {
     const s = await j("POST", "/api/release/rollout", { todo: r2.id, version: V2, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r2.csrf });
     if (s.status !== 202) throw new Error(JSON.stringify(s));
     const jb = await until("stopped", async () => { const x = await job(); return x && x.state === "stopped" && x; });
