@@ -280,3 +280,64 @@ func TestRunStartReportsTheToolsLastLineOnFailure(t *testing.T) {
 		t.Errorf("result: %+v", r)
 	}
 }
+
+func TestObserveForOnlyClosesItsOwnHosts(t *testing.T) {
+	b := OpenHostBook("")
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.Now = func() time.Time { return t0 }
+	kv := StatusWorker{Name: "kv1", State: "STOPPED", Managed: true, Provider: "kubevirt", Type: "4 vCPU, 32Gi"}
+	b.ObserveFor("kubevirt", false, []StatusWorker{kv})
+	h, ok := b.Get("kv1")
+	if !ok || h.Owner != "kubevirt" || !h.Adopted || h.State != "STOPPED" {
+		t.Fatalf("adopted: %+v %v", h, ok)
+	}
+	// another config's look, which does not list kv1, leaves it alone, even long after
+	b.Now = func() time.Time { return t0.Add(48 * time.Hour) }
+	b.ObserveFor("aws", true, nil)
+	if h, _ := b.Get("kv1"); h.State != "STOPPED" {
+		t.Errorf("another config closed it: %+v", h)
+	}
+	// its own config not listing it does close it
+	b.ObserveFor("kubevirt", false, nil)
+	if h, _ := b.Get("kv1"); h.State != "GONE" {
+		t.Errorf("its own look: %+v", h)
+	}
+}
+
+func TestLegacyRecordsBelongToTheFirstConfig(t *testing.T) {
+	b := OpenHostBook("")
+	b.Add("w1", "j", Spec{Name: "w1", Kind: "aws"}, "us-east-1", nil, Estimate{})
+	b.ObserveFor("kubevirt", false, nil)
+	if h, _ := b.Get("w1"); h.Owner != "" {
+		t.Errorf("a second config claimed it: %+v", h)
+	}
+	b.ObserveFor("aws", true, []StatusWorker{{Name: "w1", State: "RUNNING"}})
+	if h, _ := b.Get("w1"); h.Owner != "aws" {
+		t.Errorf("first config did not claim it: %+v", h)
+	}
+}
+
+func TestParseToolEntriesAndNames(t *testing.T) {
+	es, err := ParseToolEntries("/a/config", "/a/kv.conf:/bin/worker-kv, /b/other")
+	if err != nil || len(es) != 3 || es[0].Bin != "" || es[1].Bin != "/bin/worker-kv" || es[1].Config != "/a/kv.conf" {
+		t.Fatalf("%+v %v", es, err)
+	}
+	if es, _ := ParseToolEntries(""); len(es) != 0 {
+		t.Errorf("empty: %+v", es)
+	}
+	dir := t.TempDir()
+	w := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte(body), 0o600)
+		return p
+	}
+	ts := []*Tool{{Config: w("a", "# c\nprovider=aws # x\n")}, {Config: w("b", "provider = kubevirt\n")}, {Config: w("c", "provider=aws\n")}, {Config: w("d", "project=p\n")}}
+	NameTools(ts)
+	var got []string
+	for _, x := range ts {
+		got = append(got, x.Name+"/"+x.Provider)
+	}
+	if strings.Join(got, " ") != "aws/aws kubevirt/kubevirt aws-2/aws gcp/gcp" {
+		t.Errorf("names: %v", got)
+	}
+}

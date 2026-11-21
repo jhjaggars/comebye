@@ -357,8 +357,8 @@ func TestPeerStartRouteRefusesWhatTheBookDoesNotAllow(t *testing.T) {
 	s.cfg.Provision.Tool.Real = true
 	w.set(t, "status.json", statusDoc("kv1", "STOPPED", ""))
 	// kv1 was made with the worker CLI: observing adopts it
-	if err := s.observeHosts(context.Background()); err != nil {
-		t.Fatal(err)
+	if ok := s.observeHosts(context.Background()); len(ok) != 1 {
+		t.Fatal("not read")
 	}
 	if h, ok := s.phosts.Get("kv1"); !ok || !h.Adopted || h.State != "STOPPED" {
 		t.Fatalf("adoption: %+v %v", h, ok)

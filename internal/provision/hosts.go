@@ -76,6 +76,10 @@ type Host struct {
 	// ever acts on it and the app does not offer to destroy it.
 	Adopted  bool   `json:"adopted,omitempty"`
 	Provider string `json:"provider,omitempty"` // aws, gcp, kubevirt or openshell: the tool's own word
+	// Owner is the name of the worker config (Tool.Name) that made or reported
+	// the host: its start, stop, status and destroy run through that config.
+	// Empty on a record from before there were several: the first config's.
+	Owner string `json:"owner,omitempty"`
 }
 
 // Spend is what a host has cost so far, or in all.
@@ -317,7 +321,13 @@ func (b *HostBook) Add(name, jobID string, spec Spec, region string, cost *Cost,
 
 // Observe folds what the cloud says into the records. A host the cloud no
 // longer lists is closed as gone. Hosts the book does not know are ignored.
-func (b *HostBook) Observe(ws []StatusWorker) {
+func (b *HostBook) Observe(ws []StatusWorker) { b.ObserveFor("", true, ws) }
+
+// ObserveFor is Observe for one of several worker configs: only the hosts that
+// config owns are looked at (a record with no owner is the first config's, so
+// first says whether this is it), and a host it reports that no config has is
+// adopted as its own.
+func (b *HostBook) ObserveFor(owner string, first bool, ws []StatusWorker) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.Now()
@@ -326,8 +336,11 @@ func (b *HostBook) Observe(ws []StatusWorker) {
 		seen[w.Name] = w
 	}
 	for name, h := range b.hosts {
-		if h.Destroyed != nil {
+		if h.Destroyed != nil || !(h.Owner == owner || h.Owner == "" && first) {
 			continue
+		}
+		if h.Owner == "" {
+			h.Owner = owner
 		}
 		w, ok := seen[name]
 		if !ok {
@@ -345,17 +358,17 @@ func (b *HostBook) Observe(ws []StatusWorker) {
 		if _, known := b.hosts[w.Name]; known || !w.Managed || w.State == "UNKNOWN" || len(b.hosts) >= maxHosts {
 			continue
 		}
-		b.adoptLocked(w, now)
+		b.adoptLocked(w, owner, now)
 	}
 	b.saveLocked()
 }
 
-func (b *HostBook) adoptLocked(w StatusWorker, now time.Time) {
+func (b *HostBook) adoptLocked(w StatusWorker, owner string, now time.Time) {
 	created := now
 	if t := parseT(w.CreatedAt); t != nil {
 		created = *t
 	}
-	h := &Host{Name: w.Name, Spec: Spec{Name: w.Name, Kind: w.Provider, Type: w.Type}, Created: created, State: "PENDING", LastSeen: now, Adopted: true, Provider: w.Provider}
+	h := &Host{Name: w.Name, Spec: Spec{Name: w.Name, Kind: w.Provider, Type: w.Type}, Created: created, State: "PENDING", LastSeen: now, Adopted: true, Provider: w.Provider, Owner: owner}
 	h.Mode = "on_demand"
 	b.hosts[w.Name] = h
 	h.apply(w, now)

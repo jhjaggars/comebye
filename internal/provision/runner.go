@@ -21,6 +21,9 @@ type Tool struct {
 	Bin string
 	// Config is the worker config file (-provision-config).
 	Config string
+	// Name and Provider say which of a provisioner's several configs this is
+	// (see NameTools): the name is what a host's owner is recorded as.
+	Name, Provider string
 	// Environ is the process environment to filter (default os.Environ).
 	Environ func() []string
 	// Real turns the real create path on. Off (the default), every job runs

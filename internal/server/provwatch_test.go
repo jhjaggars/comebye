@@ -31,8 +31,8 @@ func watchPeer(t *testing.T, capUSD float64) (*Server, *fakeWorkerDir, *time.Tim
 		w.set(t, "status.json", `{"v":1,"provider":"aws","workers":[{"name":"demo1","state":"`+state+`","type":"t3.large","mode":"spot","managed":true,"launched_at":"`+launched+`","last_stop_at":`+st+`,"caps":{}}]}`)
 	}
 	run("RUNNING", now.Format(time.RFC3339), "")
-	if err := s.observeHosts(context.Background()); err != nil {
-		t.Fatal(err)
+	if ok := s.observeHosts(context.Background()); len(ok) != 1 {
+		t.Fatal("the status was not read")
 	}
 	return s, w, &now
 }
@@ -47,7 +47,7 @@ func TestWatchdogStopsAHostAtItsCapAndKeepsItsDisks(t *testing.T) {
 	}
 	*now = now.Add(8*time.Hour + 5*time.Minute)
 	status()
-	s.watchHosts(ctx)
+	s.watchHosts(ctx, nil)
 	h, _ := s.phosts.Get("demo1")
 	if !h.Warned80 || h.Warned80At == nil || h.CapStopped != nil {
 		t.Fatalf("at 80%%: %+v", h)
@@ -57,7 +57,7 @@ func TestWatchdogStopsAHostAtItsCapAndKeepsItsDisks(t *testing.T) {
 	}
 	*now = now.Add(2 * time.Hour)
 	status()
-	s.watchHosts(ctx)
+	s.watchHosts(ctx, nil)
 	h, _ = s.phosts.Get("demo1")
 	if h.CapStopped == nil || h.State != "STOPPED" || h.Destroyed != nil || h.Destroying != "" {
 		t.Fatalf("at 100%%: %+v", h)
@@ -74,7 +74,7 @@ func TestWatchdogWaitsWhileAJobHoldsTheSlot(t *testing.T) {
 	s.pjobs.mu.Lock()
 	s.pjobs.busy = "pj_busy"
 	s.pjobs.mu.Unlock()
-	s.watchHosts(context.Background())
+	s.watchHosts(context.Background(), nil)
 	if w.runs(" stop ") != 0 {
 		t.Fatalf("stopped under a running job: %v", w.argv())
 	}
@@ -84,7 +84,7 @@ func TestWatchdogWaitsWhileAJobHoldsTheSlot(t *testing.T) {
 	s.pjobs.mu.Lock()
 	s.pjobs.busy = ""
 	s.pjobs.mu.Unlock()
-	s.watchHosts(context.Background())
+	s.watchHosts(context.Background(), nil)
 	if w.runs(" stop ") != 1 {
 		t.Errorf("next look: %v", w.argv())
 	}
@@ -95,7 +95,7 @@ func TestWatchdogDoesNothingInADryRun(t *testing.T) {
 	s.cfg.Provision.Tool.Real = false
 	*now = now.Add(11 * time.Hour)
 	s.observeHosts(context.Background())
-	s.watchHosts(context.Background())
+	s.watchHosts(context.Background(), nil)
 	if w.runs(" stop ") != 0 {
 		t.Errorf("a dry-run node stopped something: %v", w.argv())
 	}
@@ -106,20 +106,20 @@ func stoppedFor(t *testing.T, s *Server, w *fakeWorkerDir, now *time.Time, d tim
 	stop := now.Add(2 * time.Hour)
 	*now = stop.Add(d)
 	w.set(t, "status.json", `{"v":1,"provider":"aws","workers":[{"name":"demo1","state":"STOPPED","type":"t3.large","mode":"spot","managed":true,"launched_at":"`+stop.Add(-2*time.Hour).Format(time.RFC3339)+`","last_stop_at":"`+stop.Format(time.RFC3339)+`","caps":{}}]}`)
-	if err := s.observeHosts(context.Background()); err != nil {
-		t.Fatal(err)
+	if ok := s.observeHosts(context.Background()); len(ok) != 1 {
+		t.Fatal("the status was not read")
 	}
 }
 
 func TestWatchdogStartsASessionSavingDestroyAfterTheWait(t *testing.T) {
 	s, w, now := watchPeer(t, 100)
 	stoppedFor(t, s, w, now, 71*time.Hour)
-	s.watchHosts(context.Background())
+	s.watchHosts(context.Background(), nil)
 	if w.runs("destroy") != 0 || w.runs(" start ") != 0 {
 		t.Fatalf("early: %v", w.argv())
 	}
 	*now = now.Add(2 * time.Hour)
-	s.watchHosts(context.Background())
+	s.watchHosts(context.Background(), nil)
 	waitUntil(t, "destroyed", func() bool { h, _ := s.phosts.Get("demo1"); return h.Destroyed != nil })
 	argv := w.argvLines()
 	var iStart, iDestroy = -1, -1
@@ -145,7 +145,7 @@ func TestWatchdogDoesNotDestroyWhenTheHostWillNotStart(t *testing.T) {
 	// the fake tool fails every "start"
 	w.set(t, "start.fail", "")
 	stoppedFor(t, s, w, now, 73*time.Hour)
-	s.watchHosts(context.Background())
+	s.watchHosts(context.Background(), nil)
 	waitUntil(t, "failed", func() bool { h, _ := s.phosts.Get("demo1"); return h.DestroyFailed != "" })
 	if w.runs("destroy") != 0 {
 		t.Fatalf("destroyed without saving its sessions: %v", w.argv())
@@ -160,7 +160,7 @@ func TestWatchdogDoesNotDestroyWhenTheHostWillNotStart(t *testing.T) {
 	s.pjobs.mu.Unlock()
 	s.phosts.MarkAutoFailed("demo1")
 	before := w.runs(" start ")
-	s.watchHosts(context.Background())
+	s.watchHosts(context.Background(), nil)
 	time.Sleep(50 * time.Millisecond)
 	if w.runs(" start ") != before {
 		t.Error("tried again straight after a failure")

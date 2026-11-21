@@ -2,7 +2,7 @@
 
 `tools/worker` builds a worker VM on Google Compute Engine **or AWS EC2**
 (`provider = gcp|aws`), a sandbox on an **OpenShell gateway**
-(`provider = openshell`, see [OpenShell sandboxes](#openshell-sandboxes)), or, as a dry run only so far, a VM on a
+(`provider = openshell`, see [OpenShell sandboxes](#openshell-sandboxes)), or a VM on a
 **KubeVirt cluster** (`provider = kubevirt`, see [KubeVirt VMs](#kubevirt-vms)), puts it on your tailnet as a **tagged, persistent** node (`tag:worker`) and lets it join the
 comebye hub. After that, comebye does the rest: launching agents, handoffs
 and repo checkouts go through the hub like any other peer. The tool does no
@@ -120,6 +120,39 @@ from the app comes later.
   subprocess with a filtered environment (PATH, HOME, `AWS_*`, `CLOUDSDK_*`
   and the like; none of comebye's own variables), in its own process group,
   with a timeout.
+- **Several worker configs on one provisioner** (AWS beside KubeVirt, say). A
+  worker config belongs to one provider, so a provisioner that runs two clouds
+  has two configs. Give each as its own `-provision-config` (repeat the flag),
+  or list them, comma-separated, in `COMEBYE_PROVISION_CONFIG`. An entry is
+  `CONFIG` or `CONFIG:BINARY`: the binary is that config's own, and without one
+  the entry uses `-provision-worker` / `COMEBYE_PROVISION_WORKER`. One entry is
+  today's setting and works as before. For example, in the provisioner's env file:
+
+  ```
+  COMEBYE_PROVISION_CONFIG=/home/me/.config/comebye-worker/config,/home/me/.config/comebye-worker/kubevirt.conf
+  ```
+
+  Each config is named for its `provider=` line (`aws`, `kubevirt`; a second
+  config of one provider is `aws-2`). The provisioner records which config owns
+  each host (the one that built it, or the one whose `status` reported it), and
+  start, stop, status and destroy of a host run that config's binary with that
+  config's `-config`. The first entry is the default one. The rest follow it:
+  - **Status is read per config.** An expired AWS login shows as
+    `aws: <reason>` on the Peers screen's "Not refreshed from the cloud" line, and
+    does not hide the KubeVirt host: its own config is read, kept and offered a
+    Start button as usual. A failing config's hosts stay as last seen, and no
+    safety timer acts on them until it can be read again.
+  - **Prices and Add host are per cloud.** `catalog` (the Prices tab) and Add host
+    go through the config whose provider is the chosen cloud (aws, gcp or
+    openshell), else the first. KubeVirt has no price list and is not offered in Add
+    host. The credentials check on the Prices tab reports the first cloud config
+    (aws, gcp or openshell), else the first config.
+  - **A config taken off** leaves its hosts in the book, but nothing is run for them
+    through another config: put it back to start or destroy them.
+  - `tools/worker` (`go build -o ~/.local/bin/comebye-worker ./tools/worker`) has
+    the KubeVirt provider as well as AWS, GCP and OpenShell, so one binary from the
+    same checkout can serve every entry; a separate build per config is not needed.
+    Only the config differs.
 - **The hub** sets `-provision-host NAME` (`COMEBYE_PROVISION_HOST`), the default
   provisioner, which must be a peer it already knows (as for `-release-host`).
   Every other peer that answers is listed too and can be picked in the app;

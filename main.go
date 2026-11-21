@@ -114,8 +114,7 @@ func main() {
 		recallIndex    = flag.String("recall-index", getenv("COMEBYE_RECALL_INDEX"), "the transcript index the app searches, read-only (default ~/.local/state/comebye/recall/index.db; see `comebye archive index`)")
 		releaseRepo    = flag.String("release-repo", getenv("COMEBYE_RELEASE_REPO"), "a dedicated comebye clone this host tags releases from, with its own git and gh credentials (see docs/security.md). On a hub it backs the app's \"Approve release\" button; on a peer (-hub) it lets the hub tag through this host (-release-host there); empty: off")
 		releaseHost    = flag.String("release-host", getenv("COMEBYE_RELEASE_HOST"), "on the hub: the peer whose -release-repo the \"Approve release\" button tags through (the hub asks it to check, tag and report the build; it keeps no clone or credentials of its own); not with -release-repo")
-		provisionCfg   = flag.String("provision-config", getenv("COMEBYE_PROVISION_CONFIG"), "on a peer: make it a provisioner, the host the hub asks which cloud credentials are present and for a price list. The worker tool's config file (tools/worker/config.example; AWS profile, region); the tool runs here as a subprocess and its credentials never leave this host. Needs -ledger=false and -hub; empty: off")
-		provisionBin   = flag.String("provision-worker", envOr("COMEBYE_PROVISION_WORKER", "comebye-worker"), "with -provision-config: the worker tool binary (a name looked up on PATH, or a path)")
+		provisionBin   = flag.String("provision-worker", envOr("COMEBYE_PROVISION_WORKER", "comebye-worker"), "with -provision-config: the worker tool binary (a name looked up on PATH, or a path); the default for a config given without its own")
 		provisionReal  = flag.Bool("provision-create", envBool("COMEBYE_PROVISION_CREATE", false), "with -provision-config: let the app's Add host create cloud resources. Off (the default), every job runs the worker tool's create --dry-run: the plan, nothing created")
 		provisionMax   = flag.Float64("provision-max-usd-hour", envFloat("COMEBYE_PROVISION_MAX_USD_HOUR", 1.0), "with -provision-config: the most one host may cost an hour, checked on this host from its own price list")
 		provisionHosts = flag.Int("provision-max-hosts", 3, "with -provision-config: the most real hosts this provisioner's jobs may have built")
@@ -150,6 +149,8 @@ func main() {
 	flag.Var(&coordArgs, "coordinator-args", "extra arguments the app's Coordinator preset passes to an agent kind, as KIND=ARGS (ARGS split on spaces; repeatable, or ';'-separated), e.g. pi=--auto for a Pi install with a permission gate that has --auto")
 	flag.Var(&launchRoots, "launch-root", "directory inside which the app may start new agents (repeatable or comma-separated; default ~/code); roots that do not exist are ignored")
 	flag.Var(&allowHosts, "allow-host", "extra Host name the server answers to besides localhost, loopback IPs and *.ts.net (repeatable or comma-separated); other Hosts are refused against DNS rebinding")
+	provisionCfgs := &listFlag{vals: nonEmpty(getenv("COMEBYE_PROVISION_CONFIG"))}
+	flag.Var(provisionCfgs, "provision-config", "on a peer: make it a provisioner, the host the hub asks which cloud credentials are present and for a price list. The worker tool's config file (tools/worker/config.example; AWS profile, region); the tool runs here as a subprocess and its credentials never leave this host. One provisioner can drive several configs (AWS beside KubeVirt): repeat the flag, or list them with commas in COMEBYE_PROVISION_CONFIG; an entry is CONFIG or CONFIG:BINARY (a binary of its own, else -provision-worker). Needs -ledger=false and -hub; empty: off")
 	flag.Parse()
 	switch *parkMode {
 	case server.ParkModeAuto, server.ParkModeSuggest, server.ParkModeOff:
@@ -396,22 +397,37 @@ func main() {
 	if err := releaseFlagError(*noAuth, *releaseRepo, *releaseHost, *releaseUp, *releaseSim, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != ""); err != nil {
 		log.Fatal(err)
 	}
-	if err := provisionFlagError(*noAuth, *provisionCfg, *provisionHost, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != "", insecureTestPeers); err != nil {
+	provEntries, err := provision.ParseToolEntries(provisionCfgs.vals...)
+	if err != nil {
+		log.Fatalf("-provision-config: %v", err)
+	}
+	if err := provisionFlagError(*noAuth, provisionCfgs.String(), *provisionHost, *addr, !*ledgerOn, strings.TrimSpace(*hubURL) != "", insecureTestPeers); err != nil {
 		log.Fatal(err)
 	}
 	var provCfg server.ProvisionConfig
-	if c := strings.TrimSpace(*provisionCfg); c != "" {
-		c = expandHome(c)
-		if st, err := os.Stat(c); err != nil || st.IsDir() {
-			log.Fatalf("-provision-config %q: not a file", c)
+	if len(provEntries) > 0 {
+		var tools []*provision.Tool
+		for _, e := range provEntries {
+			c := expandHome(e.Config)
+			if st, err := os.Stat(c); err != nil || st.IsDir() {
+				log.Fatalf("-provision-config %q: not a file", c)
+			}
+			bin := e.Bin
+			if bin == "" {
+				bin = strings.TrimSpace(*provisionBin)
+			}
+			tools = append(tools, &provision.Tool{Bin: expandHome(bin), Config: c, Real: *provisionReal, MaxUSDHour: *provisionMax, MaxHosts: *provisionHosts})
 		}
-		provCfg.Tool = &provision.Tool{Bin: strings.TrimSpace(*provisionBin), Config: c, Real: *provisionReal, MaxUSDHour: *provisionMax, MaxHosts: *provisionHosts}
+		provision.NameTools(tools)
+		provCfg.Tool, provCfg.Extra = tools[0], tools[1:]
 		if *provisionReal {
 			log.Printf("provision: the real create path is ON: the app can build hosts that cost money (at most $%.2f an hour each)", *provisionMax)
 		} else {
 			log.Printf("provision: dry-run only: the app's Add host plans and walks the stages but creates nothing (-provision-create turns the real path on)")
 		}
-		log.Printf("provision: this host is a provisioner (worker tool %s, config %s); the hub may ask it for credentials' presence and prices", *provisionBin, filepath.Base(c))
+		for _, t := range tools {
+			log.Printf("provision: this host is a provisioner (config %q: %s, worker tool %s, config %s); the hub may ask it for credentials' presence and prices", t.Name, t.Provider, t.Bin, filepath.Base(t.Config))
+		}
 	}
 	if h := strings.TrimSpace(*provisionHost); h != "" {
 		if err := provisionHostError(h, *hostName, fl.HasPeer); err != nil {
@@ -736,6 +752,35 @@ func getenv(key string) string {
 }
 
 var warnedLegacy sync.Map
+
+// listFlag is a repeatable string flag whose default comes from the
+// environment: the first use on the command line replaces the default.
+type listFlag struct {
+	vals []string
+	set  bool
+}
+
+func (l *listFlag) String() string {
+	if l == nil {
+		return ""
+	}
+	return strings.Join(l.vals, ",")
+}
+
+func (l *listFlag) Set(v string) error {
+	if !l.set {
+		l.vals, l.set = nil, true
+	}
+	l.vals = append(l.vals, v)
+	return nil
+}
+
+func nonEmpty(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return []string{s}
+}
 
 func envOr(key, def string) string {
 	if v := getenv(key); v != "" {

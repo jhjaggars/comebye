@@ -3,7 +3,8 @@
 # in its own mode-0600 file (ts_oauth_file).
 
 # --- required
-# provider=gcp                    # gcp (default), aws, openshell or kubevirt (dry run only so far: see docs/workers.md)
+# provider=gcp                    # gcp (default), aws, openshell or kubevirt (see docs/workers.md)
+# One provisioner (-provision-config) can drive several of these files, one per provider.
 
 # GCP:
 project=my-gcp-project

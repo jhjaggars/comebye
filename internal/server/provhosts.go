@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,24 +45,68 @@ const (
 
 // ---- the provisioner's side ----
 
-// observeHosts folds the cloud's view of the hosts into the book. A cloud that
-// cannot be asked (the login expired) leaves the book as it was.
-func (s *Server) observeHosts(ctx context.Context) error {
-	if s.phosts == nil || s.cfg.Provision.Tool == nil {
+// observeHosts folds the cloud's view of the hosts into the book, one worker
+// config at a time. A config whose cloud cannot be asked (the login expired)
+// leaves its own hosts as they were and says why, for that config only; the
+// others are read all the same. It returns the configs that were read.
+func (s *Server) observeHosts(ctx context.Context) map[string]bool {
+	if s.phosts == nil {
 		return nil
 	}
+	tools := s.cfg.Provision.Tools()
+	ok := map[string]bool{}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for i, t := range tools {
+		wg.Add(1)
+		go func(i int, t *provision.Tool) {
+			defer wg.Done()
+			if s.observeTool(ctx, t, i == 0) {
+				mu.Lock()
+				ok[t.Name] = true
+				mu.Unlock()
+			}
+		}(i, t)
+	}
+	wg.Wait()
+	return ok
+}
+
+// observeTool reads one config's cloud into the book.
+func (s *Server) observeTool(ctx context.Context, t *provision.Tool, first bool) bool {
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	ws, err := s.cfg.Provision.Tool.Status(cctx)
+	ws, err := t.Status(cctx)
 	s.phostMu.Lock()
 	defer s.phostMu.Unlock()
-	if err != nil {
-		s.phostErr = oneLine(provision.Text(err.Error(), 160), 160)
-		return err
+	if s.phostErrs == nil {
+		s.phostErrs = map[string]string{}
 	}
-	s.phosts.Observe(ws)
-	s.phostErr, s.phostAt = "", s.phosts.Now()
-	return nil
+	if err != nil {
+		s.phostErrs[t.Name] = oneLine(provision.Text(err.Error(), 160), 160)
+		return false
+	}
+	s.phosts.ObserveFor(t.Name, first, ws)
+	delete(s.phostErrs, t.Name)
+	s.phostAt = s.phosts.Now()
+	return true
+}
+
+// phostStale is the per-config failures as one line. With one config it is the
+// bare reason (as it always was); with several each is named by its config.
+// The caller holds phostMu.
+func (s *Server) phostStale() string {
+	tools := s.cfg.Provision.Tools()
+	var parts []string
+	for _, t := range tools {
+		if e := s.phostErrs[t.Name]; e != "" {
+			if len(tools) > 1 {
+				e = t.Name + ": " + e
+			}
+			parts = append(parts, e)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 type peerHostsAnswer struct {
@@ -76,19 +121,33 @@ func (s *Server) handlePeerHosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.phostMu.Lock()
-	never := s.phostAt.IsZero() && s.phostErr == ""
+	never := s.phostAt.IsZero() && len(s.phostErrs) == 0
 	s.phostMu.Unlock()
 	if r.URL.Query().Get("refresh") == "1" || never { // never looked yet: adopt what the tool reports now, not in five minutes
 		s.observeHosts(r.Context())
 	}
 	views, total := s.phosts.Views()
 	s.phostMu.Lock()
-	a := peerHostsAnswer{HostsView: provision.HostsView{V: 1, Hosts: views, Total: total}, Stale: s.phostErr}
+	a := peerHostsAnswer{HostsView: provision.HostsView{V: 1, Hosts: views, Total: total}, Stale: s.phostStale()}
 	if !s.phostAt.IsZero() {
 		a.ObservedAt = s.phostAt.UTC().Format(time.RFC3339)
 	}
 	s.phostMu.Unlock()
 	writeJSON(w, a)
+}
+
+// toolOfHost is the worker config that owns a host: the one that made it or
+// reported it. os.ErrNotExist when the book does not know the host; a host
+// whose config is no longer set here is an error too, never another config.
+func (s *Server) toolOfHost(name string) (*provision.Tool, error) {
+	h, ok := s.phosts.Get(name)
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	if t := s.cfg.Provision.toolNamed(h.Owner); t != nil {
+		return t, nil
+	}
+	return nil, provision.ErrNoTool
 }
 
 type peerDestroyReq struct {
@@ -109,7 +168,12 @@ func (s *Server) handlePeerHostDestroy(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusBadRequest, "bad_request", "give the host's name")
 		return
 	}
-	j, err := s.pjobs.destroy(s.cfg.Provision.Tool, q.Name, destroyReq{DeleteDataDisk: q.DeleteDataDisk, LoseSessions: q.LoseSessions})
+	tool, terr := s.toolOfHost(q.Name)
+	if terr != nil {
+		relErr(w, http.StatusNotFound, "no_host", "this provisioner did not build "+q.Name+", so it will not destroy it")
+		return
+	}
+	j, err := s.pjobs.destroy(tool, q.Name, destroyReq{DeleteDataDisk: q.DeleteDataDisk, LoseSessions: q.LoseSessions})
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		relErr(w, http.StatusNotFound, "no_host", "this provisioner did not build "+q.Name+", so it will not destroy it")
@@ -158,9 +222,7 @@ func (s *Server) RunProvision(ctx context.Context) {
 			return
 		case <-t.C:
 			if s.phosts != nil { // a provisioner: look at the cloud, then do what is due
-				if s.observeHosts(ctx) == nil {
-					s.watchHosts(ctx)
-				}
+				s.watchHosts(ctx, s.observeHosts(ctx))
 			}
 			s.hubProvisionStep(ctx) // a hub: raise the to-dos
 		}
