@@ -195,9 +195,9 @@ func TestScratchItemRealWording(t *testing.T) {
 		name, text string
 		want       bool
 	}{
-		{"ci-go-flakes", "Scratch files remain in `/tmp/claude-1000/-home-jhjaggars--worktrees-comebye-ci-go-flakes/7faa4e22-1554-4231-a596-c00c9d286e3f/scratchpad/`: `server.base` and `server.new` (about 40 MB each, race test binaries). I can delete them once told to go ahead.", true},
-		{"feat-page-chat-5-handback", "throwaway files from the live check under `/tmp/claude-1000/-home-jhjaggars--worktrees-comebye-feat-page-chat-5-handback/c78d827b-3134-4f20-a808-31d6a310a439/scratchpad/` (state, code, bin, logs). They are scratch only, and I can delete them if told to go ahead.", true},
-		{"audit-tests", "temp files: scratch logs and screenshots under /tmp/claude-1000/ (CI logs, local test-run logs, page build files). I can delete them on a go-ahead; nothing depends on them.", false},
+		{"ci-go-flakes", "Scratch files remain in `/tmp/claude-"+itoa(os.Getuid())+"/-home-jhjaggars--worktrees-comebye-ci-go-flakes/7faa4e22-1554-4231-a596-c00c9d286e3f/scratchpad/`: `server.base` and `server.new` (about 40 MB each, race test binaries). I can delete them once told to go ahead.", true},
+		{"feat-page-chat-5-handback", "throwaway files from the live check under `/tmp/claude-"+itoa(os.Getuid())+"/-home-jhjaggars--worktrees-comebye-feat-page-chat-5-handback/c78d827b-3134-4f20-a808-31d6a310a439/scratchpad/` (state, code, bin, logs). They are scratch only, and I can delete them if told to go ahead.", true},
+		{"audit-tests", "temp files: scratch logs and screenshots under /tmp/claude-"+itoa(os.Getuid())+"/ (CI logs, local test-run logs, page build files). I can delete them on a go-ahead; nothing depends on them.", false},
 		{"review-hardening-batch-1", "delete three small leftover Claude session folders from my permission-mode proofs, under `/home/jhjaggars/.claude/projects/`, with names ending `scratchpad-cl-A`", false},
 		{"audit-tests", "pid 1561652: a background wait-loop I started that never exited. I can stop it once told to go ahead.", false},
 	} {
