@@ -212,7 +212,7 @@ taport=$((port + 260))
 "$tmp/comebye" -sock "$tmp/ta.sock" -addr "127.0.0.1:$taport" -insecure-no-auth -test-mode -push=false -auto-todo-blocked-after 2s \
   -state-dir "$tmp/state-ta" -host-name uitest >"$out/comebye-ta.log" 2>&1 &
 for _ in $(seq 300); do curl -sf "http://127.0.0.1:$taport/api/agents" >/dev/null && break; sleep 0.1; done
-if want todoanswer; then node todoanswer.mjs "http://127.0.0.1:$taport" "$out" || rc=1 ; fi
+if want todoanswer; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-ta" node todoanswer.mjs "http://127.0.0.1:$taport" "$out" || rc=1 ; fi
 # The Doc and Diff side panels: an agent in a real git worktree (a temp HOME, under a dot-directory), declaring its document
 # with the real CLI; its own fake herdr and hub so the shared fleet's agent count is untouched.
 pdir="$tmp/phome"; mkdir -p "$pdir"

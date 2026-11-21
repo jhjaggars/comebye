@@ -250,7 +250,7 @@ func buildDigest(e *Env, harness string) (string, []string) {
 					if scope.scoped && !scope.keepEvent(ev.Subject) {
 						continue
 					}
-					in.Hub = append(in.Hub, digest.HubEvent{At: ev.At, Kind: ev.Kind, Text: ev.Text})
+					in.Hub = append(in.Hub, digest.HubEvent{At: ev.At, Kind: ev.Kind, Who: ev.Who, Text: ev.Text})
 				}
 			}
 		}

@@ -108,6 +108,7 @@ type Event struct {
 type HubEvent struct {
 	At   time.Time
 	Kind string
+	Who  string // the agent's name, when there is one
 	Text string
 }
 
@@ -321,6 +322,7 @@ func hubDid(in Input) string {
 	}
 	var out []string
 	out = append(out, fmt.Sprintf("%d things, handled without a message to you: %s.", len(hs), strings.Join(parts, ", ")))
+	out = append(out, relayedLines(hs)...)
 	for i, h := range hs {
 		if i >= hubDidLines {
 			break
@@ -329,6 +331,37 @@ func hubDid(in Input) string {
 	}
 	out = append(out, "`comebye log --since 24h` for the rest.")
 	return strings.Join(out, "\n")
+}
+
+// relayedLines is one line per agent the hub relayed answers to (the
+// "relay" events of answers that arrived, not those still queued), so a
+// worker that looks idle is not taken for one whose answer was lost.
+func relayedLines(hs []HubEvent) []string {
+	n := map[string]int{}
+	var who []string
+	for _, h := range hs {
+		if h.Kind != "relay" || !strings.HasPrefix(h.Text, "relayed ") {
+			continue
+		}
+		w := h.Who
+		if w == "" {
+			w = "a worker"
+		}
+		if n[w] == 0 {
+			who = append(who, w)
+		}
+		n[w]++
+	}
+	sort.Strings(who)
+	var out []string
+	for _, w := range who {
+		noun := "answers"
+		if n[w] == 1 {
+			noun = "answer"
+		}
+		out = append(out, fmt.Sprintf("- the hub relayed %d %s to %s (`comebye todo show ID` says when; no need to relay them again)", n[w], noun, oneLine(w, 40)))
+	}
+	return out
 }
 
 // stateSection renders the tail of the coordinator's state file within

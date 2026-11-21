@@ -48,7 +48,14 @@ type apiTodo struct {
 	} `json:"answer"`
 	ClosedBy   string `json:"closed_by"`
 	DropReason string `json:"drop_reason"`
-	Notice     *struct {
+	Relay      *struct {
+		State  string    `json:"state"`
+		To     string    `json:"to"`
+		Notice string    `json:"notice"`
+		Why    string    `json:"why"`
+		At     time.Time `json:"at"`
+	} `json:"relay"`
+	Notice *struct {
 		State string `json:"state"`
 	} `json:"notice"`
 	Set *struct {
@@ -73,6 +80,33 @@ type apiTodo struct {
 		RunURL     string `json:"run_url"`
 		Error      string `json:"error"`
 	} `json:"release"`
+}
+
+// relayLine says where the hub's own relay of the answer stands, "" when
+// it made none: a closed item it relayed says so, so "done, closed by hub"
+// is not mistaken for an answer that was dropped.
+func (t apiTodo) relayLine() string {
+	r := t.Relay
+	if r == nil {
+		return ""
+	}
+	to := r.To
+	if to == "" {
+		to = t.waiter()
+	}
+	at := r.At.UTC().Format("15:04 UTC on 2006-01-02")
+	switch r.State {
+	case "delivered":
+		if r.Notice != "" {
+			return fmt.Sprintf("Relayed by the hub to %s at %s; it reached the agent's transcript (notice %s).", to, at, r.Notice)
+		}
+		return fmt.Sprintf("Relayed by the hub to %s at %s; the prompt queue typed it once the agent could take it.", to, at)
+	case "queued":
+		return fmt.Sprintf("Queued by the hub for %s at %s; it is typed when the agent can take it.", t.waiter(), at)
+	case "gaveup":
+		return fmt.Sprintf("The hub could not relay it (%s) at %s: relay it by hand.", r.Why, at)
+	}
+	return ""
 }
 
 func (t apiTodo) waiter() string {
@@ -548,6 +582,9 @@ func cmdTodo(e *Env, args []string) error {
 		}
 		if a := t.Answer; a != nil {
 			fmt.Fprintf(e.Stdout, "\nAnswer (%s, %s, %s):\n%s\n", a.By, a.Via, ago(e, a.At), a.Text)
+		}
+		if l := t.relayLine(); l != "" {
+			fmt.Fprintf(e.Stdout, "\n%s\n", l)
 		}
 		if t.DropReason != "" {
 			fmt.Fprintf(e.Stdout, "\nDropped: %s\n", t.DropReason)

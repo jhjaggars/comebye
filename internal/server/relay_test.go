@@ -160,6 +160,39 @@ func TestRelayPassesTheAnswerClosesAndLogs(t *testing.T) {
 	}
 }
 
+func TestRelayLeavesADeliveredRecord(t *testing.T) {
+	r := newAnsRig(t)
+	it := r.add(t, `{"question":"Which key should the service use?","options":[{"label":"Mint a key"},{"label":"Reuse the old key"}]}`)
+	r.answer(t, it.ID, "ok 2")
+	until(t, "the item to close", func() bool { return r.state(it.ID).State == TodoDone })
+	g := r.state(it.ID)
+	rl := g.Relay
+	if rl == nil || rl.State != relayDelivered || rl.To != "home" || rl.At.IsZero() {
+		t.Fatalf("relay = %+v", rl)
+	}
+	got := r.relays()[0]
+	text := strings.TrimPrefix(got, "desk/w2:p1: ")
+	if rl.Notice == "" || rl.Notice != noticeID(text) {
+		t.Fatalf("notice = %q, want %q", rl.Notice, noticeID(text))
+	}
+	// The API hands the record out, so todo show can print it.
+	if b := do(r.s, "GET", "/api/todos/"+it.ID, userHdr, "").Body.String(); !strings.Contains(b, `"state":"delivered"`) || !strings.Contains(b, `"to":"home"`) {
+		t.Fatalf("api = %s", b)
+	}
+}
+
+func TestRelayContextChoiceThatHoldsIsRelayed(t *testing.T) {
+	r := newAnsRig(t)
+	it := r.add(t, `{"question":"Land PR #85?","context":"1. Land it on main\n2. Hold it."}`)
+	r.answer(t, it.ID, "ok 2")
+	until(t, "the relay", func() bool { return len(r.relays()) == 1 })
+	until(t, "the item to close", func() bool { return r.state(it.ID).State == TodoDone })
+	pause()
+	if n := r.told(); len(n) != 0 {
+		t.Fatalf("the coordinator was told: %v", n)
+	}
+}
+
 func TestRelayFreeTextIsTheUsersOwnWords(t *testing.T) {
 	r := newAnsRig(t)
 	it := r.add(t, `{"question":"Branch?"}`)
@@ -197,6 +230,9 @@ func TestRelayGatesGoToTheCoordinator(t *testing.T) {
 			setup: func(t *testing.T, r *ansRig, it Todo) {
 				r.s.todos.mutate(it.ID, func(i *Todo) error { i.Set = &TodoSet{Plan: "pl_1"}; return nil })
 			}},
+		{name: "ok N picks a land line from the context's list", answer: "ok 1", body: `{"question":"Next step for the sweep branch?","context":"1. Land it on main\n2. Hold it."}`},
+		{name: "yes to a question that says land", answer: "yes", body: `{"question":"Land PR #85?"}`},
+		{name: "bare ok N to a question that says land", answer: "ok 1", body: `{"question":"Land PR #85?"}`},
 		{name: "item about a handoff awaiting landing", answer: "yes", body: `{"question":"q"}`,
 			setup: func(t *testing.T, r *ansRig, it Todo) {
 				e, err := r.s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "p", Branch: "b", AgentID: "desk/w9:p1", Status: ledger.Finished})
@@ -267,6 +303,9 @@ func TestRelayToAParkedAgentQueuesAndClosesOnDelivery(t *testing.T) {
 	}
 	r.s.deliverTodoNotices(r.s.fleet.Agents())
 	until(t, "the item to close", func() bool { return r.state(it.ID).State == TodoDone })
+	if rl := r.state(it.ID).Relay; rl == nil || rl.State != relayDelivered || rl.To != "ghost" || rl.Notice != "" {
+		t.Fatalf("relay = %+v", rl)
+	}
 	if ev := r.eventsN(t, evRelay, 2); len(ev) != 2 { // queued, then relayed
 		t.Fatalf("events = %+v", ev)
 	}

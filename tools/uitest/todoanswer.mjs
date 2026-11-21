@@ -1,8 +1,12 @@
 // Answering a hub-blocked to-do from the To do panel (internal/server/todoanswer.go): the hub files an
 // item for an agent blocked at a dialog, and its option buttons answer the dialog in the pane.
+// Then the hub's own relay (internal/server/relay.go): an answer to an item waiting on alpha is typed
+// into alpha's pane, the closed item keeps a "delivered" record that `todo show` and the panel's row
+// ("Sent to alpha") show, and a land answer picked from the context's numbered list is held for the coordinator.
 //
-//   node todoanswer.mjs BASE OUT_DIR       (env: SCHEME)
+//   node todoanswer.mjs BASE OUT_DIR       (env: SCHEME, COMEBYE_BIN, COMEBYE_STATE_DIR)
 // BASE is a hub on its own fake herdr (-autoblock) with -auto-todo-blocked-after 2s.
+import { execFileSync } from "node:child_process";
 import { launch } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
@@ -68,6 +72,62 @@ for (const width of [390, 1280]) {
     await check(`to do at ${width}px: no page errors`, async () => { if (msgs.length) throw new Error(msgs.join("; ")); });
   } finally { await browser.close(); }
 }
+// The hub's own relay of an answer to a worker.
+const post = (path, body) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(async (r) => ({ code: r.status, j: await r.json().catch(() => ({})) }));
+let rid, gid, alpha;
+await check("relay: an answer to an item waiting on alpha reaches alpha's transcript", async () => {
+  const ags = await fetch(base + "/api/agents").then((r) => r.json());
+  alpha = (ags.agents || ags).find((a) => a.name === "alpha");
+  if (!alpha) throw new Error("no alpha: " + JSON.stringify(ags).slice(0, 300));
+  const r = await post("/api/todos", { question: "Which key should the service use?", kind: "decision", waiting: alpha.id, options: [{ label: "Mint a key", detail: "fresh, rotates" }, { label: "Reuse the old key" }] });
+  if (r.code !== 201) throw new Error("add: " + r.code + " " + JSON.stringify(r.j));
+  rid = r.j.todo.id;
+  const a = await post(`/api/todos/${rid}/answer`, { text: "ok 2" });
+  if (a.code !== 200) throw new Error("answer: " + a.code + " " + JSON.stringify(a.j));
+  const it = await until(async () => (await todos()).find((t) => t.id === rid && t.state === "done"), "the relayed item to close");
+  if (it.closed_by !== "hub" || !it.relay || it.relay.state !== "delivered" || it.relay.to !== "alpha" || !/^[0-9a-f]{6}$/.test(it.relay.notice || "")) throw new Error("item: " + JSON.stringify(it));
+  const tr = await fetch(base + `/api/agents/${encodeURIComponent(alpha.id.split("/").pop())}/transcript?limit=20`).then((r) => r.text());
+  if (!tr.includes("Comebye (hub relay)") || !tr.includes(rid) || !tr.includes(`[notice ${it.relay.notice}]`)) throw new Error("transcript: " + tr.slice(-600));
+});
+await check("relay: todo show says the hub relayed it", async () => {
+  const bin = process.env.COMEBYE_BIN, sd = process.env.COMEBYE_STATE_DIR;
+  if (!bin || !sd) throw new Error("set COMEBYE_BIN and COMEBYE_STATE_DIR");
+  const o = execFileSync(bin, ["todo", "show", rid], { env: { PATH: "/usr/bin:/bin", HOME: sd, COMEBYE_URL: base, COMEBYE_STATE_DIR: sd }, encoding: "utf8" });
+  if (!/Relayed by the hub to alpha at \d\d:\d\d UTC on \d{4}-\d\d-\d\d; it reached the agent's transcript \(notice [0-9a-f]{6}\)\./.test(o)) throw new Error("todo show: " + o);
+  console.log("     " + o.trim().split("\n").filter((l) => l.startsWith("Relayed")).join(""));
+});
+await check("relay: a land answer chosen from the context's list is held for the coordinator", async () => {
+  const r = await post("/api/todos", { question: "Next step for the sweep branch?", kind: "decision", waiting: alpha.id, context: "1. Land it on main\n2. Hold it." });
+  if (r.code !== 201) throw new Error("add: " + r.code + " " + JSON.stringify(r.j));
+  gid = r.j.todo.id;
+  await post(`/api/todos/${gid}/answer`, { text: "ok 1" });
+  await sleep(1500);
+  const it = (await todos()).find((t) => t.id === gid);
+  if (!it || it.state !== "answered" || (it.relay && it.relay.state === "delivered")) throw new Error("item: " + JSON.stringify(it));
+  const tr = await fetch(base + `/api/agents/${encodeURIComponent(alpha.id.split("/").pop())}/transcript?limit=20`).then((r) => r.text());
+  if (tr.includes(gid)) throw new Error("the gate was relayed to alpha");
+});
+for (const width of [390, 1280]) {
+  if (!rid) break;
+  const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark });
+  const msgs = [];
+  page.on("pageerror", (e) => msgs.push(String(e)));
+  try {
+    await check(`relay at ${width}px: the closed row reads "Sent to alpha"`, async () => {
+      const sel = width > 500 ? "#p-todo" : "#todo";
+      await page.goto(base + "/#/todo/" + rid, { waitUntil: "load" });
+      await page.waitForSelector(`${sel} .td-item[data-id="${rid}"] .td-row`, { state: "visible", timeout: 15000 });
+      const row = await page.locator(`${sel} .td-item[data-id="${rid}"] .td-row`).innerText();
+      if (!/Sent to alpha/.test(row)) throw new Error("row: " + row);
+      const t = await page.locator(`${sel} .td-item[data-id="${rid}"]`).innerText();
+      if (!/Sent to alpha by the hub .*ago; it reached the agent's transcript \(notice [0-9a-f]{6}\)\./.test(t)) throw new Error("card: " + t.slice(0, 600));
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls sideways");
+      await page.screenshot({ path: `${out}/todoanswer-relayed-${width}.png` });
+    });
+    await check(`relay at ${width}px: no page errors`, async () => { if (msgs.length) throw new Error(msgs.join("; ")); });
+  } finally { await browser.close(); }
+}
+
 const bad = results.filter((r) => !r.ok).length;
 console.log(`todoanswer: ${results.length - bad}/${results.length} passed`);
 process.exit(bad ? 1 : 0);

@@ -325,3 +325,19 @@ func TestTodoLinkAndOpenLine(t *testing.T) {
 		t.Fatalf("no id: %d", code)
 	}
 }
+
+func TestTodoShowSaysTheHubRelayedIt(t *testing.T) {
+	f, e, out, _ := newFake(t)
+	f.answers["GET /api/todos/t9"] = answer{body: `{"todo":{"id":"t9","question":"q","kind":"decision","state":"done","created_by":"x","closed_by":"hub","waiting":{"id":"desk/w2:p1","name":"sweep-rebased"},"answer":{"text":"ok 1","by":"me","via":"app","at":"2026-11-21T12:19:00Z"},"relay":{"subject":"relay/t9/1","state":"delivered","to":"sweep-rebased","notice":"b4edba","at":"2026-11-21T12:20:00Z"}}}`}
+	if code := run(e, "todo", "show", "t9"); code != 0 {
+		t.Fatal(code)
+	}
+	if want := "Relayed by the hub to sweep-rebased at 12:20 UTC on 2026-11-21; it reached the agent's transcript (notice b4edba)."; !strings.Contains(out.String(), want) {
+		t.Fatalf("out = %q", out)
+	}
+	out.Reset()
+	f.answers["GET /api/todos/t9"] = answer{body: `{"todo":{"id":"t9","question":"q","kind":"decision","state":"answered","created_by":"x","relay":{"state":"gaveup","why":"the waiting agent is gone","at":"2026-11-21T12:20:00Z"}}}`}
+	if code := run(e, "todo", "show", "t9"); code != 0 || !strings.Contains(out.String(), "The hub could not relay it (the waiting agent is gone)") {
+		t.Fatalf("out = %q", out)
+	}
+}

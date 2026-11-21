@@ -2446,6 +2446,27 @@ function openMainCoordinator() {
   requestAnimationFrame(() => { const p = $("prompt-text"); if (p && p.offsetParent) p.focus(); });
 }
 
+// The hub's own relay of an answer (relay.go): a closed item it relayed says where the answer went,
+// so "done" does not read as an answer that was dropped.
+function todoSentTo(t) {
+  const r = t.relay;
+  return r && r.state === "delivered" && t.state === "done" ? r.to || (t.waiting && (t.waiting.name || t.waiting.id)) || "the agent" : "";
+}
+function todoStateChip(t) {
+  const to = todoSentTo(t);
+  if (to) return `<span class="td-chip st-answered" title="The hub typed your answer into ${escAttr(to)}'s pane">${esc("Sent to " + to)}</span>`;
+  return `<span class="td-chip st-answered">${esc(t.state === "open" ? "answered" : t.state)}</span>`;
+}
+function todoRelayNote(t) {
+  const r = t.relay;
+  if (!r) return "";
+  const at = Date.parse(r.at), ago = Number.isNaN(at) ? "" : ` ${fmtAgo(at)} ago`;
+  if (todoSentTo(t)) return `Sent to ${todoSentTo(t)} by the hub${ago}${r.notice ? `; it reached the agent's transcript (notice ${r.notice})` : ""}.`;
+  if (r.state === "queued" && t.state === "answered") return "Queued by the hub: it is typed when the agent can take it.";
+  if (r.state === "gaveup" && t.state === "answered") return "The hub could not pass it on; the coordinator relays it.";
+  return "";
+}
+
 // asPanel: only the panel, for the split review mode's side (the Page is beside it, so no row and no thumbnail).
 function todoItemHtml(t, pfx, asPanel) {
   const at = Date.parse(t.created_at);
@@ -2457,7 +2478,7 @@ function todoItemHtml(t, pfx, asPanel) {
   const draft = todoDraft(t.id).trim() !== "";
   const rid = `${pfx}-row-${t.id}`, pid = `${pfx}-panel-${t.id}`;
   const chips = `<span class="td-chip td-draft"${draft ? "" : " hidden"}>draft</span>` + todoSrcChip(t) +
-    (ans ? `<span class="td-chip st-answered">${esc(t.state === "open" ? "answered" : t.state)}</span>` : `<span class="td-chip st-open">open</span>`) +
+    (ans ? todoStateChip(t) : `<span class="td-chip st-open">open</span>`) +
     (todos.pend.busy(t.id) ? `<span class="td-chip st-sending">sending…</span>` : "") +
     (t.kind === "review" && !ans && t.review && t.review.stale ? `<span class="td-chip st-warn" title="Open for 3 days or more">stale</span>` : "");
   let panel = "";
@@ -2488,14 +2509,14 @@ function todoItemHtml(t, pfx, asPanel) {
     const answered = a
       ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : esc(fmtAgo(aAt)) + " ago"}</div>
           <div class="td-answer-t">${renderInline(a.text)}</div>
-          <div class="td-wait">${t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""}</div></div>` : "";
+          <div class="td-wait">${esc(todoRelayNote(t) || (t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""))}</div></div>` : "";
     const nx = todos.nxt && todos.nxt !== t.id ? todos.items.find((x) => x.id === todos.nxt) : null;
     const agentId = t.waiting && t.waiting.id;
     const strip = `<div class="td-strip">
         ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}${t.waiting && t.waiting.parked ? ' <span class="chip teal" title="Its pane is closed. Whatever is sent to it waits and is delivered when it is resumed.">parked</span>' : ""}</span></div>` : ""}
         ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
         ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;
-    const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? `<span class="td-chip st-answered">${esc(t.state === "open" ? "answered" : t.state)}</span>` : `<span class="td-chip st-open">open</span>`}</div>
+    const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? todoStateChip(t) : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
     const isRel = t.kind === "release" && !!t.release;
     const after = ans || isRel || todoIsReview(t) || t.kind === "approval" ? "" : `<div class="td-after">${who ? `Goes to ${esc(who)} through the coordinator. ` : ""}${nx ? `Next: ${esc(nx.question.replace(/\s*\n\s*/g, " ").slice(0, 70))}` : "That clears the queue."}</div>`;
@@ -2508,7 +2529,7 @@ function todoItemHtml(t, pfx, asPanel) {
     panel = `<div class="td-panel" id="${escAttr(pid)}" role="region" aria-labelledby="${escAttr(rid)}">
         ${dhead}
         <div class="td-scroll">
-          ${ans && todos.deepId === t.id ? `<div class="td-deepnote" role="note">${esc(t.state === "dropped" ? "Dropped" + (t.drop_reason ? ": " + t.drop_reason : "") + ". Read only." : t.state === "done" ? "Done. Read only." : "Already answered. Read only.")}</div>` : ""}
+          ${ans && todos.deepId === t.id ? `<div class="td-deepnote" role="note">${esc(t.state === "dropped" ? "Dropped" + (t.drop_reason ? ": " + t.drop_reason : "") + ". Read only." : t.state === "done" ? (todoSentTo(t) ? "Sent to " + todoSentTo(t) + ". Read only." : "Done. Read only.") : "Already answered. Read only.")}</div>` : ""}
           ${meta ? `<div class="td-meta">${meta}</div>` : ""}
           ${isRel ? relPingHtml(t) : ""}
           ${asPanel ? rsNotesHtml(t) : ""}

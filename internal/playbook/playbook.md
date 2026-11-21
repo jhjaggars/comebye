@@ -63,7 +63,7 @@ with the matches listed.
 | `comebye pages guide` / `pages new --type doc\|mockup\|deck\|dashboard` | how to make a good page, and a starter in the app's theme; for anything visual (a plan with mockups, a review, a chart) tell workers to publish HTML from a starter, not Markdown, with `--key <agent-name>-<subject>` |
 | `comebye pages list` / `show ID [--body]` / `rm ID` | the published pages, one page's details or source, delete one |
 | `comebye todo list` / `show ID` | the open and answered items / one item with its context |
-| `comebye todo answer ID "WORDS"` / `done ID` / `drop ID` | record the user's answer you relayed from chat / finish / drop an item. The hub relays answers the user gives in the app itself; you get one only for a gate (release, approval, land or go-ahead, you waiting) or when the relay failed |
+| `comebye todo answer ID "WORDS"` / `done ID` / `drop ID` | record the user's answer you relayed from chat / finish / drop an item. The hub relays answers the user gives in the app itself; you get one only for a gate (release, approval, land or go-ahead, you waiting) or when the relay failed. Check `todo show` for "Relayed by the hub" before relaying by hand |
 
 Your harness may have its own tools for listing or messaging sessions
 (Claude Code's ListAgents and SendMessage, for one). Do not use them for

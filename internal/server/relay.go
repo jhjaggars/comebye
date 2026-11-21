@@ -53,8 +53,9 @@ import (
 const (
 	relayMaxTries = 3
 
-	relayQueued = "queued" // on the prompt queue, waiting for delivery
-	relayGaveUp = "gaveup" // the hub gave up: the coordinator relays it
+	relayQueued    = "queued"    // on the prompt queue, waiting for delivery
+	relayGaveUp    = "gaveup"    // the hub gave up: the coordinator relays it
+	relayDelivered = "delivered" // it reached the agent; the item closed
 
 	evRelay       = "relay"        // an answer relayed to the waiting agent
 	evRelayFailed = "relay-failed" // the hub could not; the coordinator was told
@@ -62,13 +63,17 @@ const (
 
 // TodoRelay is where the hub's relay of one answer stands. Subject names
 // the answer (or the early decisions) it is about, so a later answer on the
-// same item starts afresh.
+// same item starts afresh. A relay that arrived stays on the closed item
+// (state "delivered", To and At, and Notice when it was typed straight into
+// the pane), so `todo show` can say the answer reached the agent.
 type TodoRelay struct {
 	Subject string    `json:"subject"`
 	State   string    `json:"state,omitempty"`
 	QueueID string    `json:"queue_id,omitempty"`
 	Tries   int       `json:"tries,omitempty"`
 	Why     string    `json:"why,omitempty"`
+	To      string    `json:"to,omitempty"`
+	Notice  string    `json:"notice,omitempty"`
 	At      time.Time `json:"at"`
 }
 
@@ -78,6 +83,9 @@ var (
 	gateWordRE = regexp.MustCompile(`(?i)\b(land|merge|approv|start|push|go ahead)`)
 	// okNRE reads the choice the option buttons send ("ok 2", "ok 1+3").
 	okNRE = regexp.MustCompile(`(?i)^\s*ok\s+(\d+(?:\s*\+\s*\d+)*)\s*$`)
+	// bareYesRE is an answer that only says yes: what it agrees to is in
+	// the question ("Land PR #85?" answered "yes").
+	bareYesRE = regexp.MustCompile(`(?i)^\s*(yes|yep|yeah|y|go|ok|okay|sure|do it)\s*[.!]*\s*$`)
 )
 
 // relaySubject names what a relay is about, "" when there is nothing to relay.
@@ -107,6 +115,38 @@ func chosenOptions(it Todo) string {
 		n, _ := strconv.Atoi(strings.TrimSpace(f))
 		if n >= 1 && n <= len(it.Options) {
 			sb.WriteString(it.Options[n-1].Label + " " + it.Options[n-1].Detail + "\n")
+		}
+	}
+	return sb.String()
+}
+
+// contextChoices is the text of the numbered context lines an "ok N"
+// picked, for an item that has no options: its choices are a numbered
+// list in the context (the parse looksLikeChoices makes).
+func contextChoices(it Todo) string {
+	if it.Answer == nil || len(it.Options) > 0 || !looksLikeChoices(it.Context) {
+		return ""
+	}
+	m := okNRE.FindStringSubmatch(it.Answer.Text)
+	if m == nil {
+		return ""
+	}
+	want := map[int]bool{}
+	for _, f := range strings.Split(m[1], "+") {
+		n, _ := strconv.Atoi(strings.TrimSpace(f))
+		want[n] = true
+	}
+	var sb strings.Builder
+	inCode := false
+	for _, l := range strings.Split(it.Context, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			inCode = !inCode
+			continue
+		}
+		if mm := todoListLineRE.FindStringSubmatch(l); mm != nil && !inCode {
+			if n, _ := strconv.Atoi(mm[1]); want[n] {
+				sb.WriteString(strings.TrimSpace(l) + "\n")
+			}
 		}
 	}
 	return sb.String()
@@ -168,7 +208,15 @@ func (s *Server) relayGate(it Todo) string {
 	case it.Set != nil:
 		text = it.Answer.Text + "\n" + setChoices(it, false)
 	default:
-		text = it.Answer.Text + "\n" + chosenOptions(it)
+		chose := chosenOptions(it) + contextChoices(it)
+		text = it.Answer.Text + "\n" + chose
+		// A bare yes, or an "ok N" that names no option or list line, agrees
+		// to what the question asks, so the question's words count too
+		// ("Land PR #85?" answered "ok 1"). A choice that names its option
+		// is judged by that option ("ok 2" for "Hold it").
+		if bareYesRE.MatchString(it.Answer.Text) || (chose == "" && okNRE.MatchString(it.Answer.Text)) {
+			text += "\n" + it.Question
+		}
 	}
 	if m := gateWordRE.FindString(text); m != "" {
 		return "the answer says \"" + strings.ToLower(m) + "\""
@@ -294,7 +342,7 @@ func (s *Server) relayOne(it Todo, agents []herdr.AgentInfo) bool {
 	err := send(ctx, *a, text)
 	switch {
 	case err == nil:
-		s.relayDone(it, subject, name)
+		s.relayDone(it, subject, name, noticeID(text))
 		return false
 	case isDialogErr(err):
 		// A dialog: type nothing over it; the queue sends when it is answered.
@@ -369,7 +417,14 @@ func (s *Server) relayQueued(it Todo, subject, qid string) bool {
 		case QueuePending:
 			return false
 		case QueueDelivered:
-			s.relayDone(it, subject, name)
+			to := name
+			if to == "" {
+				to = p.Name
+			}
+			if to == "" {
+				to = p.Agent
+			}
+			s.relayDone(it, subject, to, "")
 			return false
 		case QueueExpired:
 			why := "the queued relay expired after 2 hours without the agent taking it"
@@ -383,9 +438,11 @@ func (s *Server) relayQueued(it Todo, subject, qid string) bool {
 	return s.relayGiveUp(it, subject, "the queued relay is no longer on the queue")
 }
 
-// relayDone records a relay that reached the agent: the item closes (an
-// early relay on a set only clears what it told), and the event is logged.
-func (s *Server) relayDone(it Todo, subject, name string) {
+// relayDone records a relay that reached the agent: the item closes with a
+// "delivered" relay record on it (an early relay on a set only clears what
+// it told), and the event is logged. notice is the tag the send carried
+// into the transcript, "" when the prompt queue typed it.
+func (s *Server) relayDone(it Todo, subject, name, notice string) {
 	s.sent.confirm(subject)
 	line := ""
 	if it.earlyPending() {
@@ -413,6 +470,10 @@ func (s *Server) relayDone(it Todo, subject, name string) {
 		})
 		line = fmt.Sprintf("relayed %s decision(s) %s → %s, item stays open", it.ID, strings.Join(told, ", "), oneLine(name, 40))
 	} else {
+		s.todos.mutate(it.ID, func(x *Todo) error {
+			x.Relay = &TodoRelay{Subject: subject, State: relayDelivered, To: name, Notice: notice, At: time.Now()}
+			return nil
+		})
 		if _, err := s.todos.close(it.ID, TodoDone, "hub", ""); err != nil && !errors.Is(err, errTodoClosed) {
 			log.Printf("relay of %s: closing: %v", it.ID, err)
 		}

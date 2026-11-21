@@ -184,3 +184,22 @@ func TestBuildScopedSaysWhoseWorkItIs(t *testing.T) {
 		t.Errorf("an unscoped digest says whose work it is:\n%s", plain)
 	}
 }
+
+func TestHubDidCountsRelaysPerAgent(t *testing.T) {
+	in := full()
+	in.Hub = []HubEvent{
+		{At: now.Add(-time.Minute), Kind: "relay", Who: "sweep-rebased", Text: `relayed t1 → sweep-rebased ("ok 1"), closed`},
+		{At: now.Add(-2 * time.Minute), Kind: "relay", Who: "sweep-rebased", Text: `relayed t2 → sweep-rebased ("ok 2"), closed`},
+		{At: now.Add(-3 * time.Minute), Kind: "relay", Who: "alpha", Text: `relayed t3 → alpha ("yes"), closed`},
+		{At: now.Add(-4 * time.Minute), Kind: "relay", Who: "beta", Text: `queued t4 for beta until it can take it (parked)`},
+	}
+	out := Build(in)
+	for _, want := range []string{"- the hub relayed 2 answers to sweep-rebased", "- the hub relayed 1 answer to alpha"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("digest lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "answer to beta") || strings.Contains(out, "answers to beta") {
+		t.Errorf("a queued relay is counted as delivered:\n%s", out)
+	}
+}
