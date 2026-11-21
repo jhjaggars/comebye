@@ -126,6 +126,17 @@ try {
       await shot("aws-error");
       await noHScroll();
     });
+    await check(`${tag}: the host detail says Stopped (not Down) and has a Start button`, async () => {
+      await page.goto(base + "/#/peers/" + host, { waitUntil: "load" });
+      await page.waitForSelector(`#pr-view .wk-sec [data-wk-start="${host}"]`, { timeout: 30000 }).catch(async (e) => { await shot("detail-missing"); throw e; });
+      const t = await page.locator("#pr-view").innerText();
+      if (!/Status\s+Stopped/.test(t) || /Down|no response/.test(t)) throw new Error("detail: " + t);
+      if (/not answering/.test(t)) throw new Error("settings note: " + t);
+      const box = await page.locator(`#pr-view [data-wk-start]`).boundingBox();
+      if (!box || box.height < 40) throw new Error("button " + JSON.stringify(box));
+      await shot("detail");
+      await noHScroll();
+    });
     if (width < 1100) { await check("phone: no Start was tapped (kv1 stays stopped for the desktop pass)", async () => {
       if (fs.existsSync(path.join(wdir, "started-kv1"))) throw new Error("it started");
     }); }
