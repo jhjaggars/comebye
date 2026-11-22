@@ -376,14 +376,22 @@ func (s *Server) landSignals(ctx context.Context, e ledger.Entry, now time.Time)
 // done (its report) or stopped (it went idle after working), a grace has
 // passed, and nothing is running: its pane is not working or blocked and,
 // where the session can say so, no background task is open. A progress note
-// newer than the report says it is going on. The hub never fails a landing
-// merely because a check ran at a bad moment.
+// newer than the report says it is going on. A queued lander waits idle
+// for its turn, so the grace runs from the later of its report and its
+// turn. The hub never fails a landing merely because a check ran at a bad
+// moment.
 func landFailure(e ledger.Entry, sg landSignals) (failed bool, why string) {
+	// waited: it reported (or went idle) after the approval and before its
+	// turn came, i.e. while it waited in the queue.
+	a := e.Approval
+	waited := a != nil && a.TurnAt != nil && e.FinishedAt != nil && e.FinishedAt.After(a.At) && a.TurnAt.After(*e.FinishedAt)
 	switch {
 	case e.FinishedAt == nil:
 		return false, waitingOn(sg, "the worker has not reported")
 	case e.Progress != nil && e.Progress.At.After(*e.FinishedAt):
 		return false, "the worker is still landing: " + progressLabel(e.Progress)
+	case waited && sg.Now.Sub(*a.TurnAt) < landGrace:
+		return false, "the worker just got its turn to land; checking again"
 	case sg.Now.Sub(*e.FinishedAt) < landGrace:
 		return false, "the worker reported; checking again"
 	case !sg.Present:

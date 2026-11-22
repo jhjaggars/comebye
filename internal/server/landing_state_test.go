@@ -228,6 +228,12 @@ func TestLandFailureDecision(t *testing.T) {
 		{"idle, background unreadable, not a report", ledger.Entry{FinishedAt: ago(5 * time.Minute)}, landSignals{Now: now, Present: true, Status: herdr.StatusIdle}, false, "cannot be read"},
 		{"done, background unreadable", ledger.Entry{FinishedAt: ago(5 * time.Minute), ReportSource: "explicit"}, landSignals{Now: now, Present: true, Status: herdr.StatusIdle}, true, "said it was done"},
 		{"session gone", ledger.Entry{FinishedAt: ago(5 * time.Minute)}, landSignals{Now: now}, true, "session is gone"},
+		// A queued lander goes idle waiting for "You're up"; that idle is not
+		// a stop once the turn comes. fix-duplicate-todos (issue #32) was
+		// failed 6 seconds after its turn, on the idle from before it.
+		{"just got its turn after waiting idle", ledger.Entry{FinishedAt: ago(5 * time.Minute), Approval: &ledger.Approval{At: *ago(20 * time.Minute), Queued: true, TurnAt: ago(6 * time.Second)}}, idle, false, "its turn"},
+		{"reported before the approval, turn just now", ledger.Entry{FinishedAt: ago(10 * time.Minute), ReportSource: "explicit", Approval: &ledger.Approval{At: *ago(time.Minute), TurnAt: ago(time.Minute)}}, idle, true, "said it was done"},
+		{"idle long after its turn", ledger.Entry{FinishedAt: ago(10 * time.Minute), Approval: &ledger.Approval{At: *ago(20 * time.Minute), Queued: true, TurnAt: ago(5 * time.Minute)}}, idle, true, "stopped"},
 	}
 	for _, c := range cases {
 		failed, why := landFailure(c.e, c.sg)
