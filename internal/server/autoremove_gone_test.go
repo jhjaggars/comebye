@@ -173,3 +173,22 @@ func TestReviewReaskRespectsTheCap(t *testing.T) {
 		t.Fatalf("prompts = %d, reasks = %d", promptCount(fh), a.Reasks)
 	}
 }
+
+// GET /api/removals?dry=1 shows what the automatic removal would decide and
+// asks nobody again.
+func TestRemovalsDryShowsVerdictsWithoutAsking(t *testing.T) {
+	s, fh := askServer(t, "SAFE")
+	other := ledger.AskItem{Type: "other", Text: "remote branch research/x still exists"}
+	markUnsafe(t, s, 2*time.Hour, other)
+	w := do(s, "GET", "/api/removals?dry=1", userHdr, "")
+	var rv struct{ Removals []removal }
+	if json.Unmarshal(w.Body.Bytes(), &rv); len(rv.Removals) != 1 || rv.Removals[0].AutoVerdict == nil {
+		t.Fatalf("review = %s", w.Body)
+	}
+	if v := rv.Removals[0].AutoVerdict; v.OK || v.Why == "" {
+		t.Fatalf("verdict = %+v", v)
+	}
+	if promptCount(fh) != 0 || markOf(t, s, "desk/w2:p1").Ask.ReaskedAt != nil {
+		t.Fatalf("a dry review asked again (%d prompts)", promptCount(fh))
+	}
+}

@@ -978,7 +978,10 @@ type removal struct {
 	captured bool
 	// Coordinator: the agent is a coordinator; removing it needs its id
 	// in the confirmation's coordinators as well.
-	Coordinator bool              `json:"coordinator,omitempty"`
+	Coordinator bool `json:"coordinator,omitempty"`
+	// AutoVerdict answers GET /api/removals?dry=1: what the automatic
+	// removal would decide now ("" with ok: it would be removed).
+	AutoVerdict *autoVerdictView  `json:"auto_verdict,omitempty"`
 	Status      herdr.AgentStatus `json:"-"`
 	// opts carries the ledger entry's repository, earlier branch names
 	// and recorded SHAs to the checks (for a worktree that is gone).
@@ -1156,12 +1159,22 @@ func (s *Server) findWorktree(ctx context.Context, it *removal) {
 	}
 }
 
+// autoVerdictView is the automatic removal's verdict on one item.
+type autoVerdictView struct {
+	OK  bool   `json:"ok"`
+	Why string `json:"why,omitempty"`
+	// Reask: an old SAFE answer would be asked again.
+	Reask bool `json:"reask,omitempty"`
+}
+
 // handleRemovals lists the marked sessions with fresh checks from their
-// hosts.
+// hosts. With dry=1 it only looks: no stale answer is asked again, and each
+// item carries the automatic removal's verdict (checked against origin).
 func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
 	if s.ledgerOff(w, r) {
 		return
 	}
+	dry := r.URL.Query().Get("dry") == "1"
 	items := s.marked()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
@@ -1173,8 +1186,20 @@ func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			if !dry {
+				s.review(ctx, it)
+				s.reaskStale(it, time.Now())
+				return
+			}
+			it.opts.Origin = true
 			s.review(ctx, it)
-			s.reaskStale(it, time.Now())
+			f := s.autoFactsOf(it)
+			v := &autoVerdictView{}
+			// The sweep's verdict is the automatic removal's for a live
+			// session, and the clean-up's for one whose agent is gone.
+			v.OK, v.Why = sweepCleanVerdict(it, f)
+			v.Reask = !v.OK && s.ttlReaskDue(it, f)
+			it.AutoVerdict = v
 		}()
 	}
 	wg.Wait()
