@@ -367,6 +367,7 @@ func (s *Server) settleDeployAudit(st deployStatus) {
 		detail += ": " + rec.Error
 	}
 	s.auditBy(ledger.AuditEvent{By: "comebye", Todo: rec.Todo, Host: s.releaseHost(), Action: "deploy.result", OK: rec.State == depOK || rec.State == depDryRun, Detail: oneLine(detail, 400)})
+	s.alarmDeploy(*rec) // a failure files the release's to-do, a success closes it (rollout_alarm.go)
 }
 
 type deployBody struct {

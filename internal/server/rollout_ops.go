@@ -146,7 +146,11 @@ var errNoChange = errors.New("no change")
 
 // DeployStatus is the deploy record, as the release host keeps it.
 func (o serverRolloutOps) DeployStatus(ctx context.Context) (deployStatus, error) {
-	return o.s.deployStatusFor(ctx)
+	st, err := o.s.deployStatusFor(ctx)
+	if err == nil && st.Enabled {
+		o.s.settleDeployAudit(st) // the hub wave's verdict is settled without the page open too
+	}
+	return st, err
 }
 
 // StartDeploy is handleReleaseDeploy without the browser: the build must be

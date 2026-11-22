@@ -875,6 +875,7 @@ func (s *Server) settleUpgradeAudit(host string, rec *upgrade.Record) {
 	}
 	s.auditBy(ledger.AuditEvent{By: rec.By, Action: "upgrade.result", Host: host, OK: rec.State == upgrade.RecOK || rec.State == upgrade.RecDryRun,
 		Detail: fmt.Sprintf("%s: %s -> %s %s run %s %s", rec.Version, rec.From, rec.To, rec.State, rec.ID, oneLine(rec.Error, 200))})
+	s.alarmUpgrade(host, *rec) // a failure files the release's to-do, a success closes it (rollout_alarm.go)
 }
 
 // ---- starting an upgrade that survives the restart ----

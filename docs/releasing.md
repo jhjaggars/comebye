@@ -194,6 +194,14 @@ knows nothing about what it does.
   style values, private key blocks). That is a safety net only: **the deploy command
   must not print secrets**, because what it prints is served to the page and kept
   in `deploy.json` on the release host.
+- **A failure files a to-do.** When the hub settles a failed run of the deploy
+  command, or a failed upgrade of a host to a tagged release (from the item, a
+  rollout or the release sweep; a rollback or dry run does not count), it files one
+  **action** item of its own: "The vX.Y.Z hub rollout failed" (or "… upgrade of
+  HOST failed") with the phase, the reason, the last lines of the cleaned output and
+  a link to the release item. There is one open item per release and target: a
+  second failure while it is open adds nothing, and a later run that succeeds closes
+  it. A new failure after it closed files a new one.
 - `-release-dry-run` runs nothing and records a dry run.
 
 ### Simple setup: your own comebye holds the clone
