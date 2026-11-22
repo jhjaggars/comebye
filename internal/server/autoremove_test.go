@@ -14,8 +14,12 @@ import (
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
-// lastSession is the pi session file of the last workerFix.
-var lastSession string
+// lastSession is the pi session file of the last workerFix, and lastHerdr
+// its herdr.
+var (
+	lastSession string
+	lastHerdr   *fakeLaunchHerdr
+)
 
 const arAgent = "desk/w2:p1"
 
@@ -44,7 +48,7 @@ func workerFix(t *testing.T) (*Server, landedRepo, ledger.Entry) {
 	if err := os.WriteFile(session, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	lastSession = session
+	lastSession, lastHerdr = session, fh
 	var wts []map[string]any
 	wh := worktreeHook(t, &wts, nil)
 	fh.set(func(f *fakeLaunchHerdr) {

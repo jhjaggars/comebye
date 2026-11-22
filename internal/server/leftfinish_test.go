@@ -65,7 +65,7 @@ func TestParseWhatIsLeft(t *testing.T) {
 func TestAskPromptAsksWhatIsLeft(t *testing.T) {
 	p := askPrompt("landed", "coordinator", "")
 	for _, want := range []string{"What is left to finish this work?", "who each item waits on", "waiting on the user", "NOTHING LEFT, or LEFT",
-		"- decision TODO_ID", "- cleanup <", "Do not do the cleanup now"} {
+		"- decision TODO_ID", "- cleanup <", "do not do the cleanup now", "without asking, delete your own scratch", "Not scratch"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, p)
 		}

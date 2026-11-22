@@ -59,7 +59,12 @@ func askPrompt(reason, by, focus string) string {
 		"`git status` and the branch and remote state of your worktree, " +
 		"`comebye todo show ID` for every to-do you filed, " +
 		"and any process, container or cluster you started that is still running. " +
-		"Read-only commands for those checks are fine. Do not take any other action now: no commits, pushes, merges, cleanup or edits. " +
+		"Read-only commands for those checks are fine. " +
+		"Then, without asking, delete your own scratch and stop your own throwaway processes, after checking each one is yours: " +
+		"scratch is your /tmp and scratchpad files, your pre-edit backups, stray processes you started and throwaway herdr sessions you opened. " +
+		"Not scratch, so leave it and list it: a live resource the user asked to keep, unpushed commits, open PRs and branches, " +
+		"credentials or accounts on real systems, and anything that is not your own. " +
+		"Take no other action now: no commits, pushes, merges, other cleanup or edits. " +
 		"Say what is left, in plain words, and who each item waits on: a decision only the user can make is waiting on the user; " +
 		"cleanup you can do yourself (delete your branch or worktree, stop a process you started, close your PR, tick an issue box) " +
 		"is waiting on a go-ahead, and you will be told when to do it. " +
@@ -163,7 +168,11 @@ func (s *Server) runAsk(m ledger.Mark, a herdr.AgentInfo, o askOpts) {
 		if l == nil || l.Text == "" || (before != nil && l.Text == before.Text && l.Time == before.Time) {
 			continue
 		}
-		set(parseReply(l.Text))
+		state, reason, items := parseReply(l.Text)
+		set(state, reason, items)
+		if state == ledger.AskUnsafe {
+			s.autoLetCleanupOf(ctx, m.AgentID) // its own scratch: no need to wait for a tap
+		}
 		return
 	}
 	if s.markCurrent(m) {
@@ -510,6 +519,13 @@ func (s *Server) reaskStep(ctx context.Context, now time.Time) []string {
 	for _, it := range s.marked() {
 		a := it.Mark.Ask
 		if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || a.Reasks >= s.reaskMax {
+			continue
+		}
+		// Scratch the answer lists that was not sent its go-ahead yet (the
+		// session was busy, or the hub restarted): send it, and let the ask
+		// after the cleanup decide.
+		if l := s.liveAgent(it.ID); l != nil && (l.Status == herdr.StatusIdle || l.Status == herdr.StatusDone) && s.autoLetCleanup(ctx, it) {
+			asked = append(asked, it.ID)
 			continue
 		}
 		last := a.At

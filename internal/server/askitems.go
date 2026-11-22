@@ -50,13 +50,13 @@ const askFormat = "Reply in exactly this format. First line: NOTHING LEFT, or LE
 	"- pr OWNER/REPO#NUMBER <your note>\n" +
 	"- todo TODO_ID <your note>\n" +
 	"- commits BRANCH [pushed to REMOTE] <your note>\n" +
-	"- resource KIND NAME_OR_ID [on HOST] <your note>   (KIND: pid, k3d-cluster, container, ...)\n" +
-	"- path ABSOLUTE_PATH [on HOST] <your note>   (a file or directory left behind)\n" +
+	"- resource KIND NAME_OR_ID [on HOST] <your note: say \"mine\" if you started it, \"keep\" if the user asked to keep it>   (KIND: pid, k3d-cluster, container, ...)\n" +
+	"- path ABSOLUTE_PATH [on HOST] <your note: say \"mine\" if you created it>   (a file or directory left behind)\n" +
 	"- branch REMOTE/BRANCH <your note>   (a remote branch left behind, such as origin/feat/x)\n" +
 	"- issue OWNER/REPO#NUMBER <your note>\n" +
 	"- followup <something only the user can do: post a comment, run a command, try a login>\n" +
 	"- other <anything else: a loop you run, a request you owe the user>\n" +
-	"Do not do the cleanup now: only list it. Say NOTHING LEFT only when nothing remains. No other text."
+	"Apart from your own scratch, do not do the cleanup now: only list it. Say NOTHING LEFT only when nothing remains. No other text."
 
 // parseReply reads a session's reply to the ask: the state (safe: nothing
 // left; unsafe: something is left; or unclear with the reply as its reason),

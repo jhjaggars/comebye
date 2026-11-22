@@ -183,7 +183,12 @@ are warnings), or "Remove all safe" for those without warnings.
 knows: an open PR it is watching, a loop it runs, work it was told to
 keep, a follow-up it owes you. So marking a session that is idle or done
 (from the app or `comebye mark`) also sends it a short prompt asking
-"what is left to finish this work?", and to take no other action. The question
+"what is left to finish this work?". It first deletes its own scratch and
+stops its own throwaway processes, without asking and after checking each is
+its own (its `/tmp` and scratchpad files, pre-edit backups, stray processes
+and throwaway herdr sessions; never a live resource the user asked to keep,
+unpushed commits, open PRs or branches, credentials or accounts on real
+systems, or anything not its own), and takes no other action. The question
 carries the mark's reason, tells the session to check the live state (PRs,
 git, to-dos, processes) before it answers, and includes the hub's own check of its worktree, run on its host just before
 asking ("the worktree is clean and every commit of feat/x is in
@@ -201,8 +206,13 @@ first words of its reply and shows it in the review:
   commits, a resource, other) shows who it waits on, and Comebye checks each
   again when the review opens: when all of them have
   resolved (the PR merged, the to-do done) the list is only a note. When only
-  cleanup is left, **Let it clean up** tells the session to do exactly that
-  and report, then asks again. The
+  cleanup or its own scratch is left, **Let it clean up** tells the session
+  to do exactly that and nothing else, and report, then asks again. Comebye
+  sends that go-ahead by itself, once per answer, for the scratch an answer
+  still lists: a path or resource the session says is its own, or cleanup
+  that names no PR, branch, push or issue, and never one it says to keep.
+  Whatever else is left stays on the answer; the ask after the cleanup
+  counts as one of Comebye's re-asks, so it stops at the same limit. The
   review says how old the answer is and has a **Re-ask** on every item;
   Comebye also asks again by itself when an item changes or a day-old
   answer still holds (see `docs/lifecycle.md`, "Evidence, not memory");

@@ -439,6 +439,9 @@ type Ask struct {
 	// CleaningAt is set while the session has been told to do the cleanup it
 	// listed ("Let it clean up"); it is asked again when it reports.
 	CleaningAt *time.Time `json:"cleaning_at,omitempty"`
+	// AutoCleanFor is the At of the answer the hub sent the scratch
+	// go-ahead for by itself, so each answer gets it once.
+	AutoCleanFor *time.Time `json:"auto_clean_for,omitempty"`
 	// Reasks counts the hub's automatic re-asks of this mark (a person's
 	// click is not counted); ReaskNote is how the last re-ask ended when it
 	// left the old answer standing ("did not answer").

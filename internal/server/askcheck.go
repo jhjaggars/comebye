@@ -376,7 +376,8 @@ type askReview struct {
 	// Resolved: an UNSAFE answer whose items have all resolved.
 	Resolved bool `json:"resolved,omitempty"`
 	// OnlyCleanup: items are left, and every one still unresolved is
-	// cleanup the session can do itself ("Let it clean up").
+	// cleanup the session can do itself, or its own scratch ("Let it clean
+	// up").
 	OnlyCleanup bool `json:"only_cleanup,omitempty"`
 	// Event: some item resolved after the answer was given.
 	Event    bool       `json:"event,omitempty"`
@@ -449,7 +450,7 @@ func (s *Server) askReviewOf(ctx context.Context, it *removal) *askReview {
 			} else {
 				others++
 			}
-			if !isCleanup(v.AskItem) {
+			if !cleanable(v.AskItem) {
 				ar.OnlyCleanup = false
 			} else {
 				cleanups++
