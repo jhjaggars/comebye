@@ -242,6 +242,11 @@ type worktreeChecks struct {
 	// repository was not the recorded one but found beside the worktree.
 	RepoMissing string `json:"repo_missing,omitempty"`
 	RepoNote    string `json:"repo_note,omitempty"`
+	// GoneInOrigin is, for a gone worktree with records, origin's copy of
+	// the base ("origin/main") when every record has all its commits in it:
+	// what an automatic removal trusts (a checkout's own main may hold
+	// commits nobody pushed). "" when not, or not checked.
+	GoneInOrigin string `json:"gone_in_origin,omitempty"`
 	// Tip is the commit the checks looked at (the branch, else HEAD); a
 	// discard is refused if it moved since the user reviewed it.
 	Tip string `json:"tip,omitempty"`
@@ -564,6 +569,7 @@ func checkWorktree(ctx context.Context, path, branch, base string) worktreeCheck
 // baseCmp is a branch compared with the better of its two bases.
 type baseCmp struct {
 	n      int      // commits with no equivalent in the base; -1 unknown
+	origin int      // the same against origin's copy of the base; -1 unknown
 	name   string   // "main" or "origin/main"
 	ref    string   // unambiguous ref for git commands
 	plus   []string // those commits, oldest first
@@ -576,6 +582,7 @@ type baseCmp struct {
 // another SHA are looked up in the winning base for their landed SHA.
 func compareToBase(ctx context.Context, dir, tip, base string) baseCmp {
 	best := baseCmp{n: -1}
+	originN := -1
 	var eq []string
 	for _, b := range []string{base, "refs/remotes/origin/" + base} {
 		if b != base && !refExists(ctx, dir, b) {
@@ -594,6 +601,9 @@ func compareToBase(ctx context.Context, dir, tip, base string) baseCmp {
 				minus = append(minus, l[2:])
 			}
 		}
+		if b != base {
+			originN = len(plus)
+		}
 		if best.n < 0 || len(plus) < best.n {
 			best = baseCmp{n: len(plus), name: b, ref: b, plus: plus}
 			if r, ok := strings.CutPrefix(b, "refs/remotes/"); ok {
@@ -605,6 +615,7 @@ func compareToBase(ctx context.Context, dir, tip, base string) baseCmp {
 	if best.n >= 0 && len(eq) > 0 {
 		best.landed = findLanded(ctx, dir, best.ref, tip, eq)
 	}
+	best.origin = originN
 	return best
 }
 
@@ -764,6 +775,7 @@ func checkGone(ctx context.Context, path, repo, branch string, prev, hints []str
 	}
 	unmerged := map[string]bool{}
 	landed := map[string]landedCommit{}
+	inOrigin := len(recs) > 0
 	for _, r := range recs {
 		cmp := compareToBase(ctx, top, r.tip, base)
 		if cmp.n < 0 {
@@ -773,6 +785,7 @@ func checkGone(ctx context.Context, path, repo, branch string, prev, hints []str
 		for _, sha := range cmp.plus {
 			unmerged[sha] = true
 		}
+		inOrigin = inOrigin && cmp.origin == 0
 		for _, l := range cmp.landed {
 			landed[l.SHA] = l
 		}
@@ -789,6 +802,9 @@ func checkGone(ctx context.Context, path, repo, branch string, prev, hints []str
 		sort.Slice(c.Landed, func(i, j int) bool { return c.Landed[i].SHA < c.Landed[j].SHA })
 	}
 	c.Unmerged = len(unmerged)
+	if inOrigin {
+		c.GoneInOrigin = "origin/" + base
+	}
 	return c
 }
 

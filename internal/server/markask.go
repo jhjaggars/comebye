@@ -475,11 +475,12 @@ func (s *Server) unsafeStale(a *ledger.Ask, ar *askReview, now time.Time) bool {
 // reaskStale is the review being opened: an UNSAFE answer that is stale (see
 // unsafeStale) of an idle session is asked again now, not at the next tick of
 // the hub's loop, so a stale answer does not sit in the review until someone
-// types into the session. At most one ask per openGap, and the hub's own limit
-// does not apply (a person is looking). It reports whether it asked.
+// types into the session. At most one ask per openGap; it is the hub's doing,
+// not a person's (the app polls the review), so it counts against reaskMax
+// like the loop's re-asks and stops there. It reports whether it asked.
 func (s *Server) reaskStale(it *removal, now time.Time) bool {
 	a := it.Mark.Ask
-	if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || it.AskReview == nil || it.AskReview.StaleOnly || !s.unsafeStale(a, it.AskReview, now) {
+	if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || a.Reasks >= s.reaskMax || it.AskReview == nil || it.AskReview.StaleOnly || !s.unsafeStale(a, it.AskReview, now) {
 		return false
 	}
 	last := a.At
@@ -489,7 +490,7 @@ func (s *Server) reaskStale(it *removal, now time.Time) bool {
 	if now.Sub(last) < s.openGap {
 		return false
 	}
-	if err := s.reask(it.Mark, false, ""); err != nil {
+	if err := s.reask(it.Mark, true, ""); err != nil {
 		return false
 	}
 	t := now.UTC()

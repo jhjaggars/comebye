@@ -158,11 +158,14 @@ func (s *Server) sweepCleanOne(ctx context.Context, it *removal, now time.Time) 
 	if o.Result != nil {
 		rec.WorktreeRemoved, rec.Kept, rec.ParkID = o.Result.WorktreeRemoved, o.Result.Kept, o.Result.ParkID
 	}
+	if workGone(it) {
+		rec.Kept = "" // there was no worktree left to keep
+	}
 	if _, _, err := s.ledger.Update(it.EntryID, func(e *ledger.Entry) { e.AutoRemoved = &rec }); err != nil {
 		log.Printf("ledger: %v", err)
 	}
 	detail := fmt.Sprintf("%s (%s, branch %s at %s): %s; %s", label, it.EntryID, it.Branch, tip, sweepCleanReason, how)
-	if !rec.WorktreeRemoved {
+	if !rec.WorktreeRemoved && rec.Kept != "" {
 		detail += "; the worktree was kept: " + rec.Kept
 	}
 	s.auditBy(ledger.AuditEvent{By: AutoCreator, Action: "worker.sweep_remove", Host: it.Host, OK: true, Detail: detail})

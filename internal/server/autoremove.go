@@ -105,6 +105,8 @@ func workProven(it *removal) (ok bool, why string) {
 	switch {
 	case it.Worktree == "" || it.ChecksError != "" || c == nil:
 		return false, "its worktree could not be checked"
+	case !c.Exists && c.Gone:
+		return goneProven(it)
 	case !c.Exists || c.Primary || c.Error != "" || c.InProgress != "":
 		return false, "its worktree is not in a state to remove"
 	case c.Dirty || c.DirtyFiles > 0:
@@ -135,10 +137,40 @@ func workProven(it *removal) (ok bool, why string) {
 	return true, ""
 }
 
+// goneProven is workProven for a worktree that is already gone: nothing is
+// left on disk, so what matters is that nothing of the work exists only in
+// what was removed. The rule is the review's (goneVerdict: every recorded
+// commit, of the branch if it is still there or the ones the ledger kept,
+// is in the base), held to origin's copy of the base, not the checkout's
+// own main. Removing it closes the session and clears the record; no
+// worktree or branch is touched.
+func goneProven(it *removal) (ok bool, why string) {
+	c := it.Checks
+	if warn, msg := c.goneVerdict(); warn {
+		return false, msg
+	}
+	switch {
+	case len(it.Warnings) > 0:
+		return false, it.Warnings[0]
+	case len(c.Records) > 0 && c.GoneInOrigin == "":
+		return false, "the worktree is gone and its commits are not all in origin's copy of " + orDefault(c.BaseUsed, "the base")
+	}
+	return true, ""
+}
+
+// workGone: the review found the worktree already gone.
+func workGone(it *removal) bool {
+	return it.Checks != nil && !it.Checks.Exists && it.Checks.Gone
+}
+
 // inBaseHow says how the work is in the base, for the audit entry.
 func inBaseHow(c *worktreeChecks) string {
 	o := c.Origin
 	switch {
+	case !c.Exists && c.Gone && len(c.Records) == 0:
+		return "the worktree and branch were already removed"
+	case !c.Exists && c.Gone:
+		return "the worktree was already gone; every commit of " + strings.Join(c.Records, ", ") + " is in " + c.GoneInOrigin
 	case o == nil:
 		return ""
 	case o.Unmerged == 0 && len(c.Landed) == 0:
@@ -254,9 +286,7 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	s.review(ctx, it)
 	f := s.autoFactsOf(it)
 	if ok, _ := autoRemoveVerdict(it, f); !ok {
-		// A SAFE answer that went old is asked again (it stays until the new
-		// one replaces it); the next look decides on the fresh answer.
-		if a := it.Mark.Ask; a != nil && a.State == ledger.AskSafe && a.ReaskedAt == nil && f.AnswerTTL > 0 && f.Now.Sub(a.At) >= f.AnswerTTL {
+		if s.ttlReaskDue(it, f) {
 			if err := s.reask(it.Mark, true, ""); err != nil {
 				log.Printf("auto remove: re-ask %s: %v", it.ID, err)
 			}
@@ -269,6 +299,10 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	}
 	how := inBaseHow(it.Checks)
 	it.recordPark = park.WhyAutoRemoved
+	if workGone(it) {
+		// A park record needs a worktree to resume in; there is none.
+		it.recordPark = ""
+	}
 	o := s.confirmOne(ctx, it, false, "")
 	if !o.OK {
 		log.Printf("auto remove of %s: %s: %s", it.ID, o.Code, o.Message)
@@ -280,21 +314,43 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	if o.Result != nil {
 		rec.WorktreeRemoved, rec.Kept, rec.ParkID = o.Result.WorktreeRemoved, o.Result.Kept, o.Result.ParkID
 	}
+	if workGone(it) {
+		rec.Kept = "" // there was no worktree left to keep
+	}
 	if _, _, err := s.ledger.Update(it.EntryID, func(e *ledger.Entry) { e.AutoRemoved = &rec }); err != nil {
 		log.Printf("ledger: %v", err)
 	}
 	label := orDefault(it.Name, it.EntryID)
 	detail := fmt.Sprintf("%s (%s, branch %s): %s; %s", label, it.EntryID, it.Branch, autoRemoveReason, how)
-	if !rec.WorktreeRemoved {
+	if !rec.WorktreeRemoved && rec.Kept != "" {
 		detail += "; the worktree was kept: " + rec.Kept
 	}
 	s.auditBy(ledger.AuditEvent{By: AutoCreator, Action: "worker.auto_remove", Host: it.Host, OK: true, Detail: detail})
 	line := fmt.Sprintf("removed %s automatically: %s", safeText(label), autoRemoveReason)
-	if !rec.WorktreeRemoved {
+	if !rec.WorktreeRemoved && rec.Kept != "" {
 		line = fmt.Sprintf("closed %s automatically (%s) but kept its worktree: %s", safeText(label), autoRemoveReason, safeText(rec.Kept))
 	}
 	s.queueLine("autoremove", it.EntryID, "autorm/"+it.EntryID, line+".")
 	return true
+}
+
+// ttlReaskDue: a SAFE answer that went old is asked again (it stays until the
+// new one replaces it) only when the age of the answer is all that stands in
+// the way: a fresh answer cannot prove work the host's checks do not (a gone
+// worktree whose commits are not in origin, a host that cannot be reached),
+// so asking would only repeat forever. It counts against reaskMax.
+func (s *Server) ttlReaskDue(it *removal, f autoFacts) bool {
+	a := it.Mark.Ask
+	if a == nil || a.State != ledger.AskSafe || a.ReaskedAt != nil || f.AnswerTTL <= 0 || f.Now.Sub(a.At) < f.AnswerTTL {
+		return false
+	}
+	if a.Reasks >= s.reaskMax {
+		return false
+	}
+	fresh := f
+	fresh.AnswerTTL = 0
+	ok, _ := autoRemoveVerdict(it, fresh)
+	return ok
 }
 
 // autoRemovedView is one recent auto-removal as the review lists it.

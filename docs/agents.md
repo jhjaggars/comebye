@@ -298,7 +298,11 @@ worker's branch if it is still there, else on a new branch at the commit the
 work landed in (`origin/<default>` at the removal). Undo is that resume; for an
 older removal with no record it starts a fresh worker on the branch. A worker
 whose session cannot be recorded (no session file, not running, or a host too
-old to keep records) is never removed by itself. A safety answer is not trusted for more than an hour: opening the review asks an idle session again when its UNSAFE answer is older than that (or an item it named has since changed), and an automatic removal waits for a fresh SAFE. `-auto-remove=false`
+old to keep records) is never removed by itself. A worker whose worktree is
+already gone is removed when the review's own check of it shows every recorded
+commit (of its branch if that is still there, else the ones the ledger kept)
+in `origin/<default>`: only the session is closed and the record cleared, and
+no Recently closed record is left (there is no worktree to resume in). A safety answer is not trusted for more than an hour: opening the review asks an idle session again when its UNSAFE answer is older than that (or an item it named has since changed), and an automatic removal asks again for a fresh SAFE, but only when the answer's age is all that stands in the way (not when the host's checks cannot prove the work, which a new answer cannot change). These automatic re-asks of one mark stop after three. `-auto-remove=false`
 (`COMEBYE_AUTO_REMOVE=false`) turns it off. Workers on a peer host go through
 the same host routes; a peer too old to answer the origin check stays in the
 review.
