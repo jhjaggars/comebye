@@ -148,7 +148,7 @@ try {
     await page.evaluate((pct) => {
       const total = 31 * 1024 ** 3;
       for (const h of state.hosts) h.tmp = { path: "/tmp", tmpfs: true, total, used: Math.round(total * pct / 100), used_pct: pct, warn: pct >= 80 };
-      for (const el of [document.getElementById("ps-body"), document.getElementById("br-status")]) if (el) el._html = "";
+      for (const el of [document.getElementById("ps-body"), document.getElementById("ss-body")]) if (el) el._html = "";
       renderStatus();
     }, pct);
     await page.waitForTimeout(200);

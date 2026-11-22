@@ -63,10 +63,10 @@ if (!/:focus-visible\s*\{[^}]*outline:\s*var\(--ring\)[^}]*outline-offset:\s*var
 const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sels: m[1].split(",").map((x) => x.trim().replace(/\s+/g, " ")), body: m[2] }));
 const FAMILIES = {
   chip: { val: "var(--r-6)", classes: [".chip", ".wt-chip", ".host-chip", ".lg-chip", ".role-chip", ".us-chip", ".bd-tag", ".td-chip", ".rel-chip", ".bd-chip", ".rc-tag", ".rv-chip"] },
-  card: { val: "var(--r-12)", classes: [".card", ".bcard", ".pz-card", ".rl-card", ".us-card", ".rc-card", ".pgs-card", ".pgs-hit", ".pr-card"] },
-  seg: { val: "var(--r-10)", classes: [".seg", ".bd-seg", ".bc-seg", ".pgs-seg", ".us-seg"] },
-  notice: { val: "var(--r-12)", classes: [".notice", "#toast", ".rtr-banner", ".br-card"] },
-  button: { val: "var(--r-12)", classes: [".btn", ".td-acts button", ".ds-fix", ".ds-confirm", ".ds-fk", ".ds-nav button", ".br-sched button", ".bf-stale-acts button", ".tds-none button", "#sp .cite button", "#sp .hk button", ".us-crumbs button"] },
+  card: { val: "var(--r-12)", classes: [".card", ".pz-card", ".rl-card", ".us-card", ".rc-card", ".pgs-card", ".pgs-hit", ".pr-card"] },
+  seg: { val: "var(--r-10)", classes: [".seg", ".bd-seg", ".pgs-seg", ".us-seg"] },
+  notice: { val: "var(--r-12)", classes: [".notice", "#toast", ".rtr-banner"] },
+  button: { val: "var(--r-12)", classes: [".btn", ".td-acts button", ".ds-fix", ".ds-confirm", ".ds-fk", ".ds-nav button", ".tds-none button", "#sp .cite button", "#sp .hk button", ".us-crumbs button"] },
 };
 const radius = (body) => { const m = body.match(/(?:^|[;\s])border-radius\s*:\s*([^;]+)/); return m ? m[1].trim() : null; };
 for (const [name, fam] of Object.entries(FAMILIES)) {

@@ -26,7 +26,7 @@ const state = {
   pendingRoute: null,  // {host, pane} from #/agent/... waiting for the agent list to arrive
   pushedRoute: false,  // openDetail pushed a history entry (back pops it)
   opened: false,       // the desktop's cold-start choice (openToSomething) has been made
-  view: null,          // desktop only: the page filling the main pane ("status", "briefing", "todo"), or null for an agent / nothing
+  view: null,          // desktop only: the page filling the main pane ("status", "todo"), or null for an agent / nothing
 };
 
 /* ---------- helpers ---------- */
@@ -289,7 +289,7 @@ async function loadIdx() {
   if (idx.inflight || Date.now() - idx.at < 30000) return;
   idx.inflight = true;
   try { idx.st = await api("/api/recall/status"); } catch { idx.st = null; } finally { idx.inflight = false; idx.at = Date.now(); }
-  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
   renderStatus();
 }
 
@@ -1290,7 +1290,7 @@ function renderListRows() {
     </div>`;
   }).join("");
   renderRemovalBanner();
-  renderBrief();
+  renderFleetMenu();
   renderPlans();
   renderNav();
   renderStatus();
@@ -1483,8 +1483,6 @@ async function loadLedger() {
   try {
     setLedger(await api("/api/ledger"));
     if (!arch.data && !arch.err) loadArchived(); // the board footer and Recently closed need it
-    // The briefing rides along, at most every 20 seconds.
-    if (Date.now() - briefing.loadedAt > 20000) loadBrief();
     if (Date.now() - todos.loadedAt > 8000) loadTodos();
     loadUsageChips();
     // The server checks finished workers' worktrees in the background
@@ -1496,7 +1494,7 @@ async function loadLedger() {
       ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, 3000);
     }
   } catch (e) {
-    if (e.status === 503) { ledger.on = false; briefing.data = null; } // no state directory: no handoffs or marks here
+    if (e.status === 503) { ledger.on = false; } // no state directory: no handoffs or marks here
   } finally {
     ledger.inflight = false;
     ledger.loadedAt = Date.now();
@@ -1640,7 +1638,7 @@ function progressNote(a) {
 function noteHtml(a) {
   const n = progressNote(a);
   if (!n) return "";
-  const hint = n.noUpdate ? `<span class="lg-chip nou" title="No progress note for over 90 minutes while it works. The coordinator's briefing covers it.">no update</span>` : "";
+  const hint = n.noUpdate ? `<span class="lg-chip nou" title="No progress note for over 90 minutes while it works.">no update</span>` : "";
   if (!n.text) return `<div class="pnote">${hint}</div>`;
   return `<div class="pnote${n.old ? " old" : ""}" title="${escAttr(n.text)}"><span class="pn-t">${esc(n.text)}</span><span class="pn-a">${esc(fmtAgo(n.at))} ago</span>${hint}</div>`;
 }
@@ -1738,93 +1736,15 @@ function renderRemovalBanner() {
   renderFleetMenu();
 }
 
-/* ---------- the briefing (published by a coordinator) ---------- */
-//
-// A coordinator publishes a short markdown briefing to the hub
-// (`comebye brief set`); it shows as a card at the top of the list. The
-// card is collapsed by default, and a new briefing does not expand it: the
-// collapsed header shows the title, the age and the first line of the
-// briefing (the coordinator's status line) as a preview, so a new one is
-// still noticeable. Tapping expands it; that choice is a persistent
-// per-browser preference (not tied to one briefing), so an expanded card
-// stays expanded across new briefings until it is collapsed again. The
-// card can also be dismissed: a dismissed briefing stays hidden until a
-// newer one is published (remembered per browser by its time). The stale
-// note sits outside the foldable body, so it shows either way.
-//
-// The hub can also ask a coordinator for one on a schedule (off by
-// default; set here or by a coordinator, `comebye brief schedule`). When
-// scheduled runs are missed (no coordinator running, or it never
-// published), the card says the briefing is stale and why, with a way to
-// start a coordinator. Dismissing that note is stored on the hub, for this
-// streak of misses only; the next briefing ends the streak.
-
-const briefing = { data: null, schedule: null, loadedAt: 0, inflight: false, acking: null };
-const BRIEF_DISMISSED_KEY = "comebye-brief-dismissed";
-const BRIEF_EXPANDED_KEY = "comebye-brief-expanded"; // "1" once the user expanded the card
+/* ---------- small helpers: browser storage, times ---------- */
 
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
-
-async function loadBrief() {
-  if (briefing.inflight) return;
-  if (ledger.on !== true) { briefing.data = null; briefing.schedule = null; renderBrief(); return; }
-  briefing.inflight = true;
-  try {
-    const d = await api("/api/brief");
-    briefing.data = d && d.brief && typeof d.brief.markdown === "string" ? d.brief : null;
-    briefing.schedule = d && d.schedule && typeof d.schedule === "object" ? d.schedule : null;
-  } catch {
-    // Keep what we had: a failed poll should not make the card blink.
-  } finally {
-    briefing.inflight = false;
-    briefing.loadedAt = Date.now();
-  }
-  renderBrief();
-  renderStatus();
-  if (briefs.open && Date.now() - briefs.histAt > 15000) loadBriefHistory();
-}
-
-const MISS_REASONS = {
-  no_coordinator: "no coordinator is running",
-  busy: "the coordinator stayed busy",
-  no_briefing: "the coordinator was asked but published nothing",
-};
-
-// briefChecked is the note "checked 14:05, no change" the hub keeps with the
-// latest briefing when it skipped a scheduled run because nothing a briefing
-// reports had changed ("" when there is none, or a newer briefing replaced it).
-function briefChecked() {
-  const sc = briefing.schedule;
-  const t = sc && sc.enabled && sc.checked_at ? Date.parse(sc.checked_at) : NaN;
-  if (Number.isNaN(t)) return "";
-  return `checked ${new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}, no change`;
-}
-
-// briefMiss is the streak of missed scheduled briefings to show, if any.
-function briefMiss() {
-  const m = briefing.schedule && briefing.schedule.enabled ? briefing.schedule.missed : null;
-  return m && !m.dismissed && m.count > 0 && m.id !== briefing.acking ? m : null;
-}
 
 function fmtWhen(iso) {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "";
   return new Date(t).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
-}
-
-function missNote(m, hasBrief) {
-  const runs = m.count === 1 ? "1 scheduled run" : `${m.count} scheduled runs`;
-  const why = MISS_REASONS[m.reason] || m.reason;
-  const text = `${hasBrief ? "Stale: " : ""}${runs} missed since ${fmtWhen(m.since)}; ${why}.`;
-  return `<div class="bf-stale" role="status">
-      <p>${esc(text)}</p>
-      <div class="bf-stale-acts">
-        ${m.reason === "no_coordinator" ? `<button type="button" class="bf-start">Start coordinator</button>` : ""}
-        <button type="button" class="bf-sched">Schedule…</button>
-        <button type="button" class="bf-ack">Dismiss</button>
-      </div>
-    </div>`;
 }
 
 // renderPlans shows the plans (several workers, one change) that are open
@@ -1937,7 +1857,7 @@ function initPlans() {
 //
 // Questions and decisions the user has to deal with, and follow-ups, that
 // coordinators and workers put on the hub's to-do list (`comebye todo`).
-// The panel sits under the briefing on the phone; on a wide screen it is the
+// The panel sits at the top of the list on the phone; on a wide screen it is the
 // To do page, in the main pane. Answering is the user's
 // action here: the hub then tells the coordinator, who relays the words to
 // the agent that waits. Every string comes from an agent (the question, the
@@ -3942,260 +3862,67 @@ function onTodoKey(ev) {
   }
 }
 
-// briefPreview is the first line of the briefing with the markdown marks
-// taken off (the coordinator's status line), for the collapsed card.
-function briefPreview(md) {
-  for (const raw of md.split("\n")) {
-    const t = raw.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)*/, "").replace(/[*_`~]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
-    if (t && !/^[-=_*]{3,}$/.test(t)) return t.length > 200 ? t.slice(0, 200) + "…" : t;
-  }
-  return "";
-}
-
-function renderBrief() {
-  const el = $("briefing");
-  if (!el) return;
-  renderFleetMenu();
-  renderBriefsNav();
-  renderBriefs();
-  let b = briefing.data;
-  if (b && (!b.markdown.trim() || lsGet(BRIEF_DISMISSED_KEY) === b.at)) b = null;
-  const miss = briefMiss();
-  if (!b && !miss) {
-    el.hidden = true;
-    el.innerHTML = "";
-    delete el.dataset.sig;
-    return;
-  }
-  const folded = !!b && !isDesktop() && lsGet(BRIEF_EXPANDED_KEY) !== "1"; // the desktop has the Briefing page instead of this card
-  const preview = b && folded ? briefPreview(b.markdown) : "";
-  const sched = briefing.schedule;
-  const every = sched && sched.enabled ? ` · every ${sched.every}${sched.at ? " at " + sched.at : ""}` : "";
-  const metaText = () => {
-    if (!b) return `none to show${every}`;
-    const at = Date.parse(b.at);
-    // The age first: it is what you look for, and the rest may be cut.
-    const chk = briefChecked();
-    return `${Number.isNaN(at) ? "" : `${fmtAgo(at)} ago · `}from ${b.by || "a coordinator"}${chk ? " · " + chk : ""}${every}`;
-  };
-  const sig = [b ? b.at : "", folded, preview, every, briefChecked(), miss ? `${miss.id}|${miss.count}|${miss.reason}` : ""].join("|");
-  el.hidden = false;
-  el.classList.toggle("stale", !!miss);
-  if (el.dataset.sig === sig) {
-    // Same briefing, same state: only the age moves.
-    const meta = el.querySelector(".bf-meta");
-    if (meta) meta.textContent = metaText();
-    return;
-  }
-  el.dataset.sig = sig;
-  const head = b
-    ? `<button type="button" class="bf-toggle" aria-expanded="${!folded}" aria-controls="bf-body">
-        <span class="proj-chev" aria-hidden="true"></span>
-        <span class="bf-title">Briefing</span>
-        <span class="bf-meta">${esc(metaText())}</span>
-      </button>
-      <button type="button" class="bf-dismiss" aria-label="Dismiss this briefing">&#10005;</button>`
-    : `<div class="bf-toggle static"><span class="bf-title">Briefing</span><span class="bf-meta">${esc(metaText())}</span></div>`;
-  el.innerHTML = `<div class="bf-head">${head}</div>
-    ${preview ? `<div class="bf-preview">${esc(preview)}</div>` : ""}
-    ${miss ? missNote(miss, !!b) : ""}
-    ${b ? `<div class="bf-body md" id="bf-body"${folded ? " hidden" : ""}>${renderMarkdown(b.markdown, "brief:" + b.at)}</div>` : ""}`;
-}
-
-async function onBriefClick(ev) {
-  const b = briefing.data;
-  if (ev.target.closest(".bf-start")) {
-    openLaunch();
-    setLaunchMode("coordinator");
-  } else if (ev.target.closest(".bf-sched")) {
-    editBriefSchedule();
-  } else if (ev.target.closest(".bf-ack")) {
-    const m = briefMiss();
-    if (!m) return;
-    briefing.acking = m.id; // gone now; back if the request fails
-    renderBrief();
-    try {
-      const d = await api("/api/brief/schedule/dismiss", { method: "POST", body: JSON.stringify({ id: m.id }) });
-      if (d && d.schedule) briefing.schedule = d.schedule;
-    } catch (e) {
-      toast("Could not dismiss: " + e.message, true);
-    }
-    briefing.acking = null;
-    renderBrief();
-  } else if (b && ev.target.closest(".bf-dismiss")) {
-    lsSet(BRIEF_DISMISSED_KEY, b.at);
-    renderBrief();
-    toast("Briefing dismissed until the next one");
-  } else if (b && ev.target.closest(".bf-toggle")) {
-    lsSet(BRIEF_EXPANDED_KEY, lsGet(BRIEF_EXPANDED_KEY) === "1" ? "0" : "1");
-    renderBrief();
-  }
-}
-
-// editBriefSchedule takes you to the Briefings card on Status (on the phone,
-// the top of the briefings screen), where the schedule is edited in place.
-function editBriefSchedule() {
-  toggleDetailMenu(false);
-  toggleFleetMenu(false);
-  if (isDesktop()) openPage("status"); else openBriefs(true);
-  setTimeout(() => {
-    renderStatus();
-    const c = [...document.querySelectorAll(".bcard")].find((x) => x.getClientRects().length);
-    if (!c) return;
-    c.scrollIntoView?.({ block: "nearest" });
-    c.querySelector("[data-bk]")?.focus();
-  }, 80);
-}
-
-/* ---------- the briefings screen (the ⋯ menu's History item) ---------- */
+/* ---------- the Status screen (phone) ---------- */
 //
-// A page to the right of the list: the latest briefing in full, the
-// schedule and any missed-briefing note, and the earlier briefings the hub
-// kept (GET /api/brief/history, the last 48; briefings within 15 minutes merge). Reached by the ⋯ menu's
-// History item; the back button or the browser's back returns. The URL is
-// #/briefings, so back and reload behave. There is no sideways gesture.
+// On the phone, Status (the board and the project cards, statusHTML) is a
+// screen to the right of the list, reached by the ⋯ menu's Status item; the
+// back button or the browser's back returns. Its URL is #/status, the
+// desktop Status page's own, so back and reload behave. There is no
+// sideways gesture. On the desktop the Status page fills the main pane
+// instead, and this screen stays closed.
 
-const briefs = { open: false, pushed: false, history: [], digests: [], histAt: 0, histLoaded: false, inflight: false, openAts: new Set(), sig: "" };
-const BRIEFS_HASH = "#/briefings";
+const sts = { open: false, pushed: false, inited: false };
+const STATUS_HASH = "#/status";
 
 const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-function briefsAvailable() { return ledger.on !== false; }
-
-async function loadBriefHistory() {
-  if (briefs.inflight || ledger.on !== true) return;
-  briefs.inflight = true;
-  try {
-    const d = await api("/api/brief/history");
-    briefs.history = d && Array.isArray(d.briefs) ? d.briefs.filter((b) => b && typeof b.markdown === "string") : [];
-    briefs.histLoaded = true;
-    try {
-      const dg = await api("/api/digests");
-      briefs.digests = dg && Array.isArray(dg.digests) ? dg.digests.filter((x) => x && Array.isArray(x.lines)) : [];
-    } catch { /* an older hub has none */ }
-  } catch {
-    // Keep what we had.
-  } finally {
-    briefs.inflight = false;
-    briefs.histAt = Date.now();
-  }
-  renderBriefs();
-}
-
-// renderBriefsNav keeps the desktop page and the nav rows in step with the briefings.
-function renderBriefsNav() {
-  syncDesktopBriefs();
-  renderNav();
-}
-
-function briefItem(h) {
-  const at = Date.parse(h.at);
-  const open = briefs.openAts.has(h.at);
-  return `<details class="br-item" data-at="${esc(h.at)}"${open ? " open" : ""}>
-      <summary><span class="br-when">${esc(Number.isNaN(at) ? "" : fmtAgo(at) + " ago · " + fmtWhen(h.at))}</span><span class="br-pre">${esc(briefPreview(h.markdown))}</span></summary>
-      <div class="br-md md">${open ? renderMarkdown(h.markdown, "brief:" + h.at) : ""}</div>
-    </details>`;
-}
-
-// digestItem is one digest the hub sent the coordinator: the routine
-// notices it batched (landed, finished with no decisions, cleanups).
-function digestItem(d) {
-  const at = Date.parse(d.at);
-  const n = d.lines.length;
-  return `<details class="br-item" data-digest="${esc(d.at)}">
-      <summary><span class="br-when">${esc(Number.isNaN(at) ? "" : fmtAgo(at) + " ago · " + fmtWhen(d.at))}</span><span class="br-pre">${n} routine update${n === 1 ? "" : "s"}</span></summary>
-      <ul class="br-md br-digest">${d.lines.map((l) => `<li>${esc(l.text)}</li>`).join("")}</ul>
-    </details>`;
-}
-
-function renderBriefs() {
-  const el = $("br-body");
-  if (!el || !briefs.open) return;
-  const b = briefing.data && briefing.data.markdown.trim() ? briefing.data : null;
-  const miss = briefMiss();
-  const earlier = briefs.history.filter((h) => !b || h.at !== b.at);
-  const sig = [b ? b.at : "", miss ? `${miss.id}|${miss.count}|${miss.reason}` : "", briefChecked(), earlier.map((h) => h.at).join(","), briefs.digests.map((d) => d.at).join(","), Math.floor(Date.now() / 60000)].join("|");
-  if (sig === briefs.sig) return;
-  briefs.sig = sig;
-  const top = el.scrollTop;
-  const at = b ? Date.parse(b.at) : NaN;
-  const key = el.contains(document.activeElement) ? document.activeElement.dataset.bk : ""; // the Briefings card's control in use
-  el.innerHTML = `<div id="br-status"></div><section class="br-card${miss ? " stale" : ""}" aria-label="Latest briefing">
-      <div class="br-head"><span class="bf-title">Latest</span><span class="bf-meta">${b ? esc((Number.isNaN(at) ? "" : fmtAgo(at) + " ago · ") + "from " + (b.by || "a coordinator") + (briefChecked() ? " · " + briefChecked() : "")) : "none yet"}</span></div>
-      ${miss ? missNote(miss, !!b) : ""}
-      ${b ? `<div class="br-md md">${renderMarkdown(b.markdown, "brief:" + b.at)}</div>`
-          : `<p class="br-empty">No briefing has been published. A coordinator publishes one with <code>comebye brief set</code>.</p>`}
-    </section>
-    <h3 class="br-h">Earlier</h3>
-    ${earlier.length ? earlier.map(briefItem).join("")
-      : `<p class="br-note">${briefs.histLoaded ? "Earlier briefings appear here as new ones are published. The hub keeps the last 48, at most one per 15 minutes unless the Needs you list changed." : "Loading…"}</p>`}
-    ${briefs.digests.length ? `<h3 class="br-h">Routine updates sent to the coordinator</h3>${briefs.digests.map(digestItem).join("")}` : ""}`;
-  el.scrollTop = top;
-  renderStatus();
-  if (key) el.querySelector(`[data-bk="${key}"]`)?.focus({ preventScroll: true });
-}
-
-// setBriefsOpen slides the screen in or out (animate: from wherever the
-// drag left it) and keeps the focus and the inert state right.
-function setBriefsOpen(open, animate) {
-  const p = $("briefs");
-  const was = briefs.open;
-  briefs.open = open;
+// setStatusScreenOpen slides the screen in or out and keeps the focus and
+// the inert state right.
+function setStatusScreenOpen(open, animate) {
+  const p = $("st-screen");
+  const was = sts.open;
+  sts.open = open;
   p.classList.toggle("anim", !!animate && !reducedMotion());
   p.style.transform = "";
   p.classList.toggle("open", open);
   p.inert = !open;
   if (open && !was) {
-    briefs.sig = "";
-    renderBriefs();
-    loadBrief();
-    loadBriefHistory();
+    const el = $("ss-body");
+    if (el) el._html = "";
+    renderStatus();
     // Focus the screen itself (no ring), so a keyboard user tabs on from its top.
-    if (!isDesktop()) p.focus?.({ preventScroll: true });
+    p.focus?.({ preventScroll: true });
   } else if (!open && was) {
     // Hand the focus back to where the user came from.
     if (p.contains(document.activeElement)) $("btn-fleet").focus?.({ preventScroll: true });
   }
 }
 
-// On desktop the screen is the Briefing page in the main pane: open while it
-// is the page shown (and the hub keeps briefings), no sliding;
-// its history entry is the page's own hash.
-function syncDesktopBriefs() {
-  if (isDesktop() && state.view === "briefing" && !briefsAvailable()) { setView(null); return; } // the hub keeps none
-  const desk = isDesktop(), want = desk && state.view === "briefing";
-  if (want === briefs.open) { briefs.desk = want; return; }
-  if (!want && !briefs.desk) return; // phone: the slide state is not ours to touch
-  briefs.pushed = false;
-  briefs.desk = want;
-  setBriefsOpen(want, false);
-}
-
-function openBriefs(animate = true) {
-  if (isDesktop()) return;
-  if (briefs.open || state.selected != null || !briefsAvailable()) return;
-  setBriefsOpen(true, animate);
-  if (location.hash !== BRIEFS_HASH) {
+function openStatusScreen(animate = true) {
+  if (isDesktop()) { openPage("status"); return; }
+  if (sts.open || state.selected != null || ledger.on === false) return;
+  setStatusScreenOpen(true, animate);
+  if (location.hash !== STATUS_HASH) {
     // A history entry, so the phone's back gesture returns to the list.
-    history.pushState(null, "", BRIEFS_HASH);
-    briefs.pushed = true;
+    history.pushState(null, "", STATUS_HASH);
+    sts.pushed = true;
   }
 }
 
-function closeBriefs() {
-  if (!briefs.open || isDesktop()) return;
-  setBriefsOpen(false, true);
-  if (briefs.pushed) { briefs.pushed = false; history.back(); }
-  else if (location.hash === BRIEFS_HASH) history.replaceState(null, "", location.pathname + location.search);
+function closeStatusScreen() {
+  if (!sts.open || isDesktop()) return;
+  setStatusScreenOpen(false, true);
+  if (sts.pushed) { sts.pushed = false; history.back(); }
+  else if (location.hash === STATUS_HASH) history.replaceState(null, "", location.pathname + location.search);
 }
 
-// syncBriefs follows the URL (back, forward, a cold start on #/briefings).
-function syncBriefs() {
-  if (isDesktop()) return;
-  const want = location.hash === BRIEFS_HASH && state.selected == null && briefsAvailable();
-  if (want === briefs.open) return;
-  if (!want) briefs.pushed = false;
-  setBriefsOpen(want, !!briefs.inited);
+// syncStatusScreen follows the URL on the phone (back, forward, a cold start
+// on #/status) and keeps the screen closed on the desktop.
+function syncStatusScreen() {
+  const want = !isDesktop() && location.hash === STATUS_HASH && state.selected == null && ledger.on !== false;
+  if (want === sts.open) return;
+  if (!want) sts.pushed = false;
+  setStatusScreenOpen(want, sts.inited && !isDesktop());
 }
 
 function anotherLayerOpen() {
@@ -4203,25 +3930,11 @@ function anotherLayerOpen() {
   return !!document.querySelector('[role="dialog"]:not([hidden])');
 }
 
-function initBriefs() {
-  briefs.inited = true;
-  $("br-back").addEventListener("click", closeBriefs);
-  $("briefs").addEventListener("click", onBriefClick);
-  $("briefs").addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !anotherLayerOpen()) { ev.stopPropagation(); closeBriefs(); } });
-  // An earlier briefing renders when it is first opened.
-  $("br-body").addEventListener("toggle", (ev) => {
-    const d = ev.target;
-    if (!d.matches?.("details.br-item")) return;
-    const at = d.dataset.at;
-    if (d.open) {
-      briefs.openAts.add(at);
-      const h = briefs.history.find((x) => x.at === at);
-      const md = d.querySelector(".br-md");
-      if (h && md && !md.firstChild) md.innerHTML = renderMarkdown(h.markdown, "brief:" + at);
-    } else briefs.openAts.delete(at);
-  }, true);
-  syncBriefs();
-  syncDesktopBriefs();
+function initStatusScreen() {
+  $("ss-back").addEventListener("click", closeStatusScreen);
+  $("st-screen").addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !anotherLayerOpen()) { ev.stopPropagation(); closeStatusScreen(); } });
+  syncStatusScreen();
+  sts.inited = true;
 }
 
 /* ---------- marking a session ready to remove (detail view menu) ---------- */
@@ -4238,7 +3951,6 @@ function renderDetailMenu() {
   $("d-transcript").hidden = !lon;
   const st = $("d-mark-state");
   if (!lon) {
-    $("d-sched").hidden = true;
     $("d-fresh").hidden = true;
     renderMarkBar(null);
     st.hidden = !off;
@@ -4253,7 +3965,6 @@ function renderDetailMenu() {
   if (m) st.textContent = "Marked ready to remove" + (m.reason ? ": " + m.reason : "");
   const coord = isCoordinator(agentById(state.selected));
   $("d-role").textContent = coord ? "Not coordinator" : "Make coordinator";
-  $("d-sched").hidden = !coord;
   $("d-fresh").hidden = !(coord && agentById(state.selected)?.agent === "claude");
 }
 
@@ -4566,7 +4277,7 @@ async function openFresh() {
         $("fs-go").disabled = true;
       }
     } else if (c && c.error) parts.push("Could not read its context: " + c.error);
-    if (d.threshold > 0) parts.push("The hub clears it by itself at the first briefing after " + fmtTokens(d.threshold) + " tokens.");
+    if (d.threshold > 0) parts.push("The hub clears it by itself, when it is idle, once its context passes " + fmtTokens(d.threshold) + " tokens.");
     else parts.push("The automatic fresh start is off.");
     if (d.last) parts.push("Last fresh start: " + new Date(d.last.at).toLocaleString() + " (" + d.last.trigger + ").");
     $("fs-ctx").textContent = parts.join(" ");
@@ -4978,18 +4689,10 @@ async function submitParkAll() {
 /* ---------- the header's fleet menu ("⋯" at the top right of the list) ---------- */
 //
 // Fleet-wide actions, always one tap away: the sweep, the removals review,
-// the briefing (show / expand, show again after a dismissal, its schedule),
+// Status (on the phone),
 // the notifications panel and a refresh. It reuses the agent view's menu
 // styles; the items that need the ledger wait for it ("(loading)") or, on a
 // hub that keeps none, give way to a note.
-
-function briefingUiState() {
-  const b = briefing.data;
-  if (!b || !b.markdown.trim()) return "none";
-  if (lsGet(BRIEF_DISMISSED_KEY) === b.at) return "dismissed";
-  if (isDesktop()) return "panel";
-  return lsGet(BRIEF_EXPANDED_KEY) === "1" ? "expanded" : "folded";
-}
 
 function renderFleetMenu() {
   const lon = ledger.on === true;
@@ -4998,14 +4701,9 @@ function renderFleetMenu() {
   const sfx = loading ? " (loading)" : "";
   const note = $("f-note");
   note.hidden = !off;
-  note.textContent = off ? "Removals and briefings are not available on this hub" : "";
-  for (const id of ["f-brief", "f-briefs", "f-pages", "f-usage", "f-peers", "f-settings"]) { $(id).hidden = off; $(id).disabled = !lon; }
+  note.textContent = off ? "Removals and Status are not available on this hub" : "";
+  for (const id of ["f-status", "f-pages", "f-usage", "f-peers", "f-settings"]) { $(id).hidden = off; $(id).disabled = !lon; }
   $("f-peers").hidden = off || !multiHost();
-  const st = briefingUiState();
-  $("f-brief").textContent = ({ none: "Briefing (none yet)", dismissed: "Show the dismissed briefing", panel: "Briefing (see the Briefing page)", folded: "Expand the briefing", expanded: "Collapse the briefing" })[st] + (loading ? " (loading)" : "");
-  $("f-brief").disabled = !lon || st === "none" || st === "panel";
-  // Nothing to expand or show: the item would only be a dead row.
-  $("f-brief").hidden = off || (lon && (st === "none" || st === "panel"));
   $("f-notify-val").textContent = ({ on: "On", off: "Off" })[pushState()] || "";
   applyTheme();
 }
@@ -5334,19 +5032,8 @@ function fleetAction(fn) {
   return () => { toggleFleetMenu(false); fn(); };
 }
 
-function fleetBrief() {
-  const st = briefingUiState();
-  if (st === "dismissed") lsSet(BRIEF_DISMISSED_KEY, "");
-  else if (st === "folded") lsSet(BRIEF_EXPANDED_KEY, "1");
-  else if (st === "expanded") lsSet(BRIEF_EXPANDED_KEY, "0");
-  else return;
-  renderBrief();
-  $("briefing").scrollIntoView?.({ block: "nearest" });
-}
-
 function fleetRefresh() {
   ledger.loadedAt = 0;
-  briefing.loadedAt = 0;
   refreshAgents().catch(() => setConn(false));
   loadLedger();
   toast("Refreshing");
@@ -5786,7 +5473,7 @@ function reviewConfirmHTML(it, cf) {
     body = `<p>${name} has work a removal keeps on disk:</p><ul>${w || "<li>its worktree is not clean and merged</li>"}</ul><p>The worktree stays; only the session closes.</p>`;
     yes = "Close session";
   }
-  if (it.coordinator) body += `<p>${name} is a coordinator. Removing it closes the agent that hands off and follows your work (the ledger and briefing stay on the hub).</p>`;
+  if (it.coordinator) body += `<p>${name} is a coordinator. Removing it closes the agent that hands off and follows your work (the ledger stays on the hub).</p>`;
   return `<div class="rv-confirm" role="group" aria-label="Confirm">${body}<div class="rv-actions">
     <button type="button" class="btn ${cf.kind === "discard" ? "danger" : "go"}" data-act="confirm-yes" data-id="${esc(it.id)}">${yes}</button>
     <button type="button" class="btn" data-act="confirm-no" data-id="${esc(it.id)}">Cancel</button></div></div>`;
@@ -8170,7 +7857,7 @@ function initPages() {
     const link = base + "/p/" + r.id + (r.ver ? "/" + r.ver : "");
     if (await copyText(link)) toast("Link copied"); else toast(link);
   });
-  // A link in a report, briefing or to-do item to one of this hub's pages
+  // A link in a report or to-do item to one of this hub's pages
   // opens it here.
   document.addEventListener("click", (ev) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
@@ -8244,7 +7931,7 @@ function todoDeepResolve() {
   todos.deepId = t.id; todos.deepHash = location.hash;
   if (t.state !== "open") todos.ansOpen = true;
   todos.openId = t.id; todos.lastId = t.id; todos.follow = true;
-  if (!isDesktop()) { lsSet(TODO_FOLDED_KEY, "0"); closeBriefs(); }
+  if (!isDesktop()) { lsSet(TODO_FOLDED_KEY, "0"); closeStatusScreen(); }
   renderTodos(true);
   if (!rsActive()) {
     const el = todoListEl(), row = el && todoRowIn(el, t.id);
@@ -8276,7 +7963,7 @@ function syncScreens() {
 
 function route() {
   syncScreens();
-  syncBriefs();
+  syncStatusScreen();
   syncSubview();
   syncLaunch();
   syncMark();
@@ -8323,21 +8010,21 @@ function applyPendingRoute() {
   history.replaceState(null, "", location.pathname + location.search);
 }
 
-/* ---------- pages (desktop): Briefing, To do, Search fill the main pane ---------- */
+/* ---------- pages (desktop): Status, To do, Search fill the main pane ---------- */
 //
 // One selection fills one pane: an agent (state.selected) or a page
 // (state.view), never both. The pages are only a desktop thing; below
 // 1100px the hash routes do nothing new and the phone flow is unchanged.
 
-const PAGE_HASH = { status: "#/status", briefing: "#/briefings", todo: "#/todo" }; // briefing: the old hand-written one, reached from Status
+const PAGE_HASH = { status: "#/status", todo: "#/todo" };
 const viewFromHash = () => (isDesktop() ? Object.keys(PAGE_HASH).find((k) => PAGE_HASH[k] === (location.hash.startsWith("#/todo/") ? PAGE_HASH.todo : location.hash)) || null : null);
 
 // setView shows a page (or none) without touching the history.
 function setView(v) {
   state.view = isDesktop() ? v : null;
-  for (const k of ["status", "briefing", "todo"]) document.body.classList.toggle("view-" + k, state.view === k);
+  for (const k of ["status", "todo"]) document.body.classList.toggle("view-" + k, state.view === k);
   document.body.classList.toggle("has-page", !!state.view);
-  syncDesktopBriefs();
+  syncStatusScreen();
   renderNav();
   renderStatus();
   if (state.view === "todo") renderTodos(); else rsLeave();
@@ -8376,11 +8063,10 @@ function openToSomething() {
   }
 }
 
-/* ---------- The briefing board: lanes from GET /api/board, above the coordinator's briefing ---------- */
+/* ---------- The board: lanes from GET /api/board, at the top of Status ---------- */
 //
 // Everything on it comes from the hub's records (to-dos, ledger, agents,
-// releases); the coordinator's headline, reasons and notes are parsed from the
-// latest briefing by the hub. Read-only. Needs you is open at first and is the
+// releases). Read-only. Needs you is open at first and is the
 // same in both groupings; the rest is by status (the lanes) or by project.
 
 const BOARD_MODE_KEY = "comebye-board-mode";
@@ -8419,7 +8105,7 @@ function boardMarkSeen() {
   if (!board.data) return;
   board.seen = boardSnapshot(board.data);
   lsSet(BOARD_SEEN_KEY, JSON.stringify(board.seen));
-  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
   renderStatus();
 }
 
@@ -8441,8 +8127,6 @@ async function loadBoard() {
 }
 
 function boardItemHtml(it, laneKey, showLane) {
-  const note = it.note ? `<div class="bd-note">${esc(it.note)}</div>` : "";
-  const why = it.why ? `<div class="bd-note">${esc(it.why)}</div>` : "";
   const open = it.agent && isDesktop() && state.agents.some((a) => agentId(a) === it.agent) ? ` <button type="button" class="st-link" data-agent="${escAttr(it.agent)}">open</button>` : "";
   const when = it.since && fmtWhen(it.since) ? `<span class="bd-age">${esc(fmtWhen(it.since))}</span>` : "";
   const lane = showLane ? `<span class="bd-tag">${esc(BOARD_LANE_LABEL[laneKey] || "")}</span>` : "";
@@ -8451,7 +8135,7 @@ function boardItemHtml(it, laneKey, showLane) {
   const mk = boardMark(it.id, laneKey);
   const mark = mk ? `<span class="bd-new" title="${mk === "new" ? "Not on the board when you last marked it seen" : "In another lane when you last marked it seen"}">${mk}</span>` : "";
   if (it.type === "todo") {
-    return `<li><button type="button" class="bd-todo" data-bd-todo="${escAttr(it.id)}" aria-label="Open to-do ${escAttr(it.id)}: ${escAttr(it.title)}"><span class="td-kind">${esc(TODO_KIND[it.kind] || it.kind || "")}</span> <span class="bd-q">${esc(it.title)}</span>${mark}<code class="bd-id">${esc(it.id)}</code></button>${why}${note}</li>`;
+    return `<li><button type="button" class="bd-todo" data-bd-todo="${escAttr(it.id)}" aria-label="Open to-do ${escAttr(it.id)}: ${escAttr(it.title)}"><span class="td-kind">${esc(TODO_KIND[it.kind] || it.kind || "")}</span> <span class="bd-q">${esc(it.title)}</span>${mark}<code class="bd-id">${esc(it.id)}</code></button></li>`;
   }
   const pages = (it.pages || []).map((p) => `<a class="rv-page" href="${pageHash(p.id)}">${esc(p.title || p.id)}</a>`).join(" · ");
   let rep = "";
@@ -8463,7 +8147,7 @@ function boardItemHtml(it, laneKey, showLane) {
       : `<span class="bd-d">${it.report ? "report loading" : "no report captured"}</span>`;
     rep = `<div class="bd-d">${esc(it.kind || "report")}${pages ? " · Page: " + pages : ""}</div>${rpt}`;
   }
-  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${mark}${lane}${paused}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${rep}${note}</li>`;
+  return `<li><div class="bd-line"><b class="bd-n">${esc(it.title)}</b>${mark}${lane}${paused}${when}${open}</div>${it.detail ? `<div class="bd-d">${esc(it.detail)}</div>` : ""}${rep}</li>`;
 }
 
 function boardLaneHtml(key, name, count, items, open, showLane, extra) {
@@ -8481,7 +8165,6 @@ function boardHtml() {
   const needs = lanes.find((l) => l.key === "needs_you") || { count: 0, items: [] };
   const rest = lanes.filter((l) => l.key !== "needs_you");
   const total = rest.reduce((n, l) => n + l.count, 0);
-  const head = d.headline ? `<p class="bd-head">${esc(d.headline)}<span class="bd-by">${d.brief_at && fmtWhen(d.brief_at) ? esc(`${d.brief_by || "coordinator"}, ${fmtWhen(d.brief_at)}`) : ""}</span></p>` : "";
   const sw = ["status", "project"].map((m) => `<button type="button" data-bd-mode="${m}" aria-pressed="${board.mode === m}">${m === "status" ? "By status" : "By project"}</button>`).join("");
   let body = "";
   if (board.mode === "status") {
@@ -8495,13 +8178,12 @@ function boardHtml() {
   const loose = d.loose || {};
   // The archived count links to the Archived screen: they are in no lane.
   const foot = [loose.ready_to_remove ? esc(`${loose.ready_to_remove} ready to remove`) : "",
-    loose.archived ? `<a class="bd-arch" href="${ARCHIVED_HASH}">${esc(loose.archived)} archived</a>` : "",
-    (d.unkeyed_notes || []).length ? esc(`${d.unkeyed_notes.length} ${d.unkeyed_notes.length === 1 ? "note names" : "notes name"} an unknown id`) : ""].filter(Boolean).join(" · ");
+    loose.archived ? `<a class="bd-arch" href="${ARCHIVED_HASH}">${esc(loose.archived)} archived</a>` : ""].filter(Boolean).join(" · ");
   const counts = rest.map((l) => `${l.count} ${BOARD_LANE_LABEL[l.key] || l.name}`).join(" · ");
   let fresh = 0;
   for (const l of lanes) for (const it of l.items || []) if (boardMark(it.id, l.key)) fresh++;
   const seen = fresh ? `<button type="button" class="bd-seen" data-bd-seen>${fresh} new or moved · Mark seen</button>` : "";
-  return `<section class="bd" aria-label="Briefing board">${head}` +
+  return `<section class="bd" aria-label="Board">` +
     (needs.count ? boardLaneHtml("needs_you", "Needs you", needs.count, needs.items, board.open.has("needs_you"), false) : `<p class="bd-clear">Nothing needs you.</p>`) +
     `<div class="bd-bar"><span class="bd-sum">${esc(total ? counts : "Nothing else in flight.")}</span><span class="bd-seg" role="group" aria-label="Group by">${sw}</span>${seen}</div>${body}` +
     (foot ? `<p class="bd-foot">${foot}</p>` : "") + `</section>`;
@@ -8512,7 +8194,7 @@ function boardGoTodo(id) {
   todos.follow = true;
   if (isDesktop()) openPage("todo");
   else {
-    closeBriefs();
+    closeStatusScreen();
     $("todo")?.scrollIntoView?.({ block: "start" });
   }
   renderTodos(true);
@@ -8594,89 +8276,7 @@ function statusHTML(desktop) {
     return `<div class="st-row"><span class="st-n">${esc(multiHost() ? `${host} · ${d.repo}` : d.repo)}</span><span class="st-m warn">${esc(d.reason)}${d.ref ? ` at <code>${esc(d.ref)}</code>` : ""}</span><span class="st-r">${Number.isNaN(since) ? "" : "since " + esc(fmtAgo(since)) + " ago"}</span>` +
       `<div class="st-hint">${esc(d.hint)}</div><div class="st-m">${esc(d.path)} · found by ${esc(d.source)}${n ? ` · ${n} ${n === 1 ? "agent works" : "agents work"} in it` : ""}</div></div>`;
   }).join("")}</section>` : "";
-  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${tmpCardHtml()}${idxCardHtml()}${boardHtml()}${briefCardHtml()}${ps.map(card).join("")}${
-    desktop ? `<p class="st-more"><button type="button" class="st-link" data-go="briefing">Earlier hand-written briefings</button></p>` : ""}</div>`;
-}
-
-// The Briefings card: when the last briefing was, when the next is due, and
-// the schedule, edited in place through the hub's brief schedule API (what
-// `comebye brief schedule` calls). Anything else a schedule can carry (a time
-// of day, a long interval) shows as a pressed "Every …" chip and is kept.
-const BRIEF_INTERVALS = [["", "Off"], ["1h", "1 h"], ["3h", "3 h"], ["6h", "6 h"]];
-const BRIEF_QUIET = ["6h", "12h", "24h", "48h"];
-const briefCard = { busy: false };
-const hoursLabel = (d) => { const m = /^(\d+)h$/.exec(d || ""); return m ? m[1] + " h" : d || ""; };
-
-function briefCardHtml() {
-  const sc = briefing.schedule;
-  if (!sc) return "";
-  const on = !!sc.enabled;
-  const cur = on ? sc.every : "";
-  const b = briefing.data && briefing.data.markdown.trim() ? briefing.data : null;
-  const checked = briefChecked();
-  const next = !on ? "off" : sc.next && fmtWhen(sc.next) ? fmtWhen(sc.next) : "soon";
-  const state = on ? { waiting: " · waiting for a busy coordinator", prompted: " · a coordinator was asked" }[sc.state] || "" : "";
-  const quiet = sc.max_quiet || "6h";
-  const quietOpts = BRIEF_QUIET.includes(quiet) ? BRIEF_QUIET : [...BRIEF_QUIET, quiet];
-  const seg = BRIEF_INTERVALS.map(([v, l]) => `<button type="button" data-bk="int-${v || "off"}" data-bi="${v}" aria-pressed="${v === cur}">${l}</button>`).join("") +
-    (on && !BRIEF_INTERVALS.some(([v]) => v === cur) ? `<button type="button" data-bk="int-custom" aria-pressed="true" disabled>Every ${esc(sc.every)}${sc.at ? " at " + esc(sc.at) : ""}</button>` : "");
-  return `<section class="bcard" aria-label="Briefings">
-    <div class="bc-h">Briefings</div>
-    <div class="bc-kv"><span>Last briefing</span><b>${esc(b ? fmtWhen(b.at) + (checked ? " · " + checked : "") : "none yet")}</b></div>
-    <div class="bc-kv"><span>Next briefing</span><b>${esc(next + state)}</b></div>
-    <div class="bc-seg" role="group" aria-label="Ask a coordinator for a briefing every">${seg}</div>
-    <label class="bc-chk"><input type="checkbox" data-bk="skip" data-bskip${sc.always ? "" : " checked"}${on ? "" : " disabled"}> Skip when nothing has changed</label>
-    <label class="bc-fld">Max quiet<select data-bk="quiet" data-bquiet${on && !sc.always ? "" : " disabled"}>${quietOpts.map((v) => `<option value="${v}"${v === quiet ? " selected" : ""}>${hoursLabel(v)}</option>`).join("")}</select>
-      <small>With skipping on, ask anyway once the last briefing is this old.</small></label>
-    <div class="bc-acts"><button type="button" class="btn" data-bk="pub" data-bpub>Publish now</button><button type="button" class="btn" data-bk="hist" data-bhist>History</button></div>
-  </section>`;
-}
-
-async function saveSchedule(patch, say) {
-  if (briefCard.busy) return;
-  const c = briefing.schedule || {};
-  const body = { enabled: !!c.enabled, every: c.every || "", at: c.at || "", tz: c.tz || "", always: !!c.always, max_quiet: c.max_quiet || "", ...patch };
-  briefCard.busy = true;
-  try {
-    const d = await api("/api/brief/schedule", { method: "POST", body: JSON.stringify(body) });
-    if (d && d.schedule) briefing.schedule = d.schedule;
-    toast(say(briefing.schedule || {}));
-  } catch (e) {
-    toast(e.message, true);
-  } finally {
-    briefCard.busy = false;
-  }
-  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
-  renderStatus();
-  renderBrief();
-}
-
-function setBriefInterval(v) {
-  // Off keeps the interval for next time (the hub holds on to it); a picked interval drops a time of day.
-  if (!v) saveSchedule({ enabled: false, every: "", at: "", tz: "" }, () => "Scheduled briefings off");
-  else saveSchedule({ enabled: true, every: v, at: "", tz: "" }, (sc) => `Briefing every ${hoursLabel(sc.every)}`);
-}
-
-// briefNow asks the coordinator for a briefing right away, as a scheduled
-// run does (the hub has no endpoint for it; this is a prompt to its pane).
-async function briefNow() {
-  if (briefCard.busy) return;
-  const a = state.agents.find((x) => isCoordinator(x));
-  if (!a) { toast("No coordinator is running. Start one first.", true); return; }
-  briefCard.busy = true;
-  try {
-    await api(`${pathFor(agentId(a))}/prompt`, { method: "POST", body: JSON.stringify({ text: "Publish a briefing now (asked from the Comebye Status page). Run `comebye todo list` first and relay answered items, catch up from the ledger (`comebye ledger`) and the workers' reports since the last briefing, then publish with `comebye brief set` in the playbook's format. If nothing changed, publish a short one that says so." }) });
-    toast("Asked " + (a.name || "the coordinator") + " for a briefing");
-  } catch (e) {
-    toast(e.status === 409 ? "The coordinator is waiting for input; answer it first" : "Could not ask: " + e.message, true);
-  } finally {
-    briefCard.busy = false;
-  }
-}
-
-function briefHistory() {
-  if (isDesktop()) openPage("briefing");
-  else document.querySelector("#br-body .br-h")?.scrollIntoView?.({ block: "start" });
+  return `<div class="st"><p class="st-sum">${esc(sum)}</p>${repair}${tmpCardHtml()}${idxCardHtml()}${boardHtml()}${ps.map(card).join("")}</div>`;
 }
 
 /* ---------- hub-checked block beside a report ---------- */
@@ -8718,18 +8318,18 @@ function fillHubChecks(root) {
   }
 }
 
-// renderStatus fills the desktop page and, on the phone, the top of the briefings screen.
+// renderStatus fills the desktop page and, on the phone, the Status screen.
 function renderStatus() {
-  for (const [el, desktop] of [[$("ps-body"), true], [$("br-status"), false]]) {
+  for (const [el, desktop] of [[$("ps-body"), true], [$("ss-body"), false]]) {
     if (!el) continue;
     if (desktop && state.view !== "status") continue; // only the page on screen
-    if (!desktop && !briefs.open) continue;
+    if (!desktop && !sts.open) continue;
     if (Date.now() - board.at > 20000) loadBoard();
     loadIdx();
     const html = statusHTML(desktop);
     if (el._html === html) continue;
     el._html = html;
-    const sc = el.closest(".page-body, .br-body");
+    const sc = el.closest(".page-body, .ss-body");
     const y = sc ? sc.scrollTop : 0;
     const key = el.contains(document.activeElement) ? document.activeElement.dataset.bk : "";
     el.innerHTML = html;
@@ -8740,27 +8340,18 @@ function renderStatus() {
 }
 
 function onStatusClick(ev) {
-  const g = ev.target.closest("[data-go]"), a = ev.target.closest("[data-agent]"), bi = ev.target.closest("[data-bi]");
+  const g = ev.target.closest("[data-go]"), a = ev.target.closest("[data-agent]");
   const bm = ev.target.closest("[data-bd-mode]"), bt = ev.target.closest("[data-bd-todo]"), bp = ev.target.closest("[data-bd-park]");
   if (bp) openParkSheet(bp.dataset.bdPark, bp.dataset.host);
   else if (bm) {
     board.mode = bm.dataset.bdMode === "project" ? "project" : "status";
     lsSet(BOARD_MODE_KEY, board.mode);
-    for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+    for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
     renderStatus();
   } else if (ev.target.closest("[data-bd-seen]")) boardMarkSeen();
   else if (bt) boardGoTodo(bt.dataset.bdTodo);
-  else if (bi) setBriefInterval(bi.dataset.bi);
-  else if (ev.target.closest("[data-bpub]")) briefNow();
-  else if (ev.target.closest("[data-bhist]")) briefHistory();
   else if (g) openPage(g.dataset.go);
   else if (a) openDetail(a.dataset.agent);
-}
-
-function onStatusChange(ev) {
-  const t = ev.target;
-  if (t.matches?.("[data-bskip]")) saveSchedule({ always: !t.checked }, (sc) => sc.always ? "A briefing every slot" : "Skipping when nothing has changed");
-  else if (t.matches?.("[data-bquiet]")) saveSchedule({ max_quiet: t.value }, (sc) => "Max quiet " + hoursLabel(sc.max_quiet));
 }
 
 // An opened report is kept across re-renders, and rendered when first opened.
@@ -8769,14 +8360,14 @@ function onStatusToggle(ev) {
   if (d.matches && d.matches("details.bd-lane")) {
     if (d.open === board.open.has(d.dataset.lane)) return;
     if (d.open) board.open.add(d.dataset.lane); else board.open.delete(d.dataset.lane);
-    for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+    for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
     renderStatus();
     return;
   }
   if (!d.matches || !d.matches("details.st-row")) return;
   if (d.open === statusUi.open.has(d.dataset.id)) return; // a re-rendered <details open> fires toggle too: not a change
   if (d.open) statusUi.open.add(d.dataset.id); else statusUi.open.delete(d.dataset.id);
-  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
   renderStatus();
 }
 
@@ -10773,7 +10364,7 @@ function sxAppearance() {
       <p class="sx-note">Layered lifts cards, bars and menus a step above the page with quiet shadows, and tints the row you hover or select. Flat is one surface and a border, as before. Pages follow.</p></div>
     <div class="sx-field"><div class="sx-lbl" id="sx-font-lbl">Font</div>
       ${sxRadios("font", "sx-font-lbl", CT.FONTS, CT.fontChoice())}
-      <p class="sx-note">Serif is for the text you read: replies, To do, the briefing, Markdown and Pages. Code stays monospace; the key bar, action buttons and form fields stay sans.</p></div>
+      <p class="sx-note">Serif is for the text you read: replies, To do, Markdown and Pages. Code stays monospace; the key bar, action buttons and form fields stay sans.</p></div>
     <div class="sx-field"><button type="button" class="btn" id="sx-reset" data-sx="reset">Reset to defaults</button>
       <p class="sx-note">Puts reading width, text size, spacing, wrapping, open by default and surfaces back to the default. Your theme and font stay.</p></div>`;
 }
@@ -11264,7 +10855,7 @@ async function loadUsageChips() {
   }
   renderList();
   if (state.selected) renderDetail();
-  for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
   renderStatus();
 }
 
@@ -11304,10 +10895,7 @@ function initUsage() {
 
 /* ---------- the page rows above the agent list (desktop) ---------- */
 //
-// One table; a row is a page (openPage) or an action (a dialog). The
-// Briefing row is the only one that depends on the briefing, so it is the
-// one to delete if the briefing goes: with its page (#briefs) and its fleet
-// menu items.
+// One table; a row is a page (openPage) or an action (a dialog).
 
 const NAV_ICON = {
   status: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/><circle cx="19" cy="12" r="1.5"/></svg>',
@@ -14865,7 +14453,7 @@ function renderLaunchForm() {
     const dir = (o && o.coordinator_dir) || "~";
     $("co-note").innerHTML = `Starts an agent named <b>coordinator</b> in <code>${esc(dir)}</code> on <b>${esc(host)}</b> ` +
       `and asks it to run <code>comebye playbook --harness ${esc(harnessFor(launch.kind))}</code>. ` +
-      "It hands work to workers, follows them in the ledger and publishes briefings here; " +
+      "It hands work to workers and follows them in the ledger; " +
       "removing anything stays with you.";
     $("ln-go").disabled = launch.busy || !launch.kind || !(o && o.enabled);
     return;
@@ -15402,7 +14990,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-collapse").addEventListener("click", () => setListCollapsed(true));
   $("list-rail").addEventListener("click", () => setListCollapsed(false));
   if (lsGet(LIST_COLLAPSED_KEY) === "1") setListCollapsed(true, false);
-  desktopMQ.addEventListener("change", () => { setView(viewFromHash()); renderList(); renderBrief(); markSelectedRow(); syncDesktopBriefs(); });
+  desktopMQ.addEventListener("change", () => { setView(viewFromHash()); renderList(); markSelectedRow(); syncStatusScreen(); });
   window.addEventListener("offline", () => setConn(false));
 
   $("back").addEventListener("click", () => {
@@ -15422,7 +15010,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   window.addEventListener("popstate", route);
   window.addEventListener("hashchange", route);
-  initBriefs();
+  initStatusScreen();
   initRecall();
   initPlans();
   initPages();
@@ -15608,13 +15196,11 @@ window.addEventListener("DOMContentLoaded", () => {
   $("mk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeMark(); } });
   $("btn-fleet").addEventListener("click", (ev) => { ev.stopPropagation(); toggleFleetMenu(); });
   $("nav").addEventListener("click", onNavClick);
-  for (const id of ["ps-body", "br-body"]) {
+  for (const id of ["ps-body", "ss-body"]) {
     $(id).addEventListener("click", onStatusClick);
-    $(id).addEventListener("change", onStatusChange);
     $(id).addEventListener("toggle", onStatusToggle, true);
   }
-  $("f-brief").addEventListener("click", fleetAction(fleetBrief));
-  $("f-briefs").addEventListener("click", fleetAction(() => openBriefs(true)));
+  $("f-status").addEventListener("click", fleetAction(() => openStatusScreen(true)));
   $("f-pages").addEventListener("click", fleetAction(() => { location.hash = "#/pages"; }));
   $("f-usage").addEventListener("click", fleetAction(() => { location.hash = "#/usage"; }));
   $("f-peers").addEventListener("click", fleetAction(() => { location.hash = "#/peers"; }));
@@ -15647,8 +15233,6 @@ window.addEventListener("DOMContentLoaded", () => {
     setTimeout(relBackground, TEST_POLL_MS || 4000);
   });
   $("d-role").addEventListener("click", toggleRole);
-  $("d-sched").addEventListener("click", editBriefSchedule);
-  $("briefing").addEventListener("click", onBriefClick);
   // The split review mode closes when the app goes somewhere else, and starts over when the layout changes.
   window.addEventListener("hashchange", () => { if (rsActive() && !(isDesktop() && location.hash === PAGE_HASH.todo) && !location.hash.startsWith("#/todo/")) { todos.openId = null; renderTodos(true); } });
   desktopMQ.addEventListener("change", () => { rsTeardown(); renderTodos(true); });

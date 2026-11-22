@@ -147,7 +147,7 @@ await check("the review lists what was removed and the deleted branch with its S
 for (const width of [390, 1280]) {
   const { browser, page } = await launch({ width, height: width > 500 ? 900 : 844, dark: true });
   await check(`screenshots at ${width}px: the board line, the removals review and the setting`, async () => {
-    await page.goto(`${base}/#/briefings`, { waitUntil: "load" });
+    await page.goto(`${base}/#/status`, { waitUntil: "load" });
     await page.waitForTimeout(1500);
     const lane = page.locator('[data-lane="hub_did"]');
     if (await lane.count()) { await lane.first().evaluate((el) => { el.open = true; el.scrollIntoView(); }); }

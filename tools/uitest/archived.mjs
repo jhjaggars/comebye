@@ -117,8 +117,8 @@ for (const width of [390, 1280]) {
     await page.waitForFunction(() => !document.querySelector('#ar-list .ar-item[data-id="h0000000000a3"]'), null, { timeout: 5000 });
     const p = posts.filter((x) => x.url === "/api/archived/restore");
     if (p.length !== 1 || p[0].body.ref !== "h0000000000a3" || p[0].body.resume) throw new Error("posts " + JSON.stringify(posts));
-    await page.goto(base + (width > 1000 ? "/#/status" : "/#/briefings"), { waitUntil: "load" });
-    const box = width > 1000 ? "#ps-body" : "#br-status";
+    await page.goto(base + "/#/status", { waitUntil: "load" });
+    const box = width > 1000 ? "#ps-body" : "#ss-body";
     await page.waitForSelector(`${box} .bd .bd-foot`, { timeout: 15000 });
     const g = await page.evaluate((b) => ({ foot: document.querySelector(b + " .bd-foot").textContent, names: [...document.querySelectorAll(b + " .bd-lane")].map((l) => l.textContent).join(" | ") }), box);
     if (!/2 archived/.test(g.foot)) throw new Error("footer " + g.foot);
@@ -126,12 +126,12 @@ for (const width of [390, 1280]) {
   });
 
   await check(`board at ${width}px: a session parked mid-task says "paused" with resume, and the footer links to Archived`, async () => {
-    const box = width > 1000 ? "#ps-body" : "#br-status";
-    await page.evaluate(() => { board.open.add("running"); for (const el of [$("ps-body"), $("br-status")]) if (el) el._html = ""; renderStatus(); });
+    const box = width > 1000 ? "#ps-body" : "#ss-body";
+    await page.evaluate(() => { board.open.add("running"); for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = ""; renderStatus(); });
     const g = await page.evaluate((b) => { const t = document.querySelector(b + " .bd-park"); return { t: t && t.textContent, li: t && t.closest("li").textContent, btn: !!document.querySelector(b + " [data-bd-park=pk_paused0001]") }; }, box);
     if (g.t !== "paused" || !/briefing-board/.test(g.li) || !g.btn) throw new Error(JSON.stringify(g));
     await page.evaluate((b) => document.querySelector(b + ' .bd-lane[data-lane="running"]').scrollIntoView({ block: "start" }), box);
-    await page.waitForTimeout(500); // the phone's briefings sheet slides in
+    await page.waitForTimeout(500); // the phone's Status screen slides in
     await page.screenshot({ path: `${out}/archived-board-${width}-${scheme}.png` });
     await page.click(`${box} .bd-foot a.bd-arch`);
     await page.waitForSelector("#archived:not([hidden]) #ar-list .ar-item", { timeout: 8000 });

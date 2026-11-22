@@ -34,7 +34,7 @@ page.on("framenavigated", (f) => { if (f === page.mainFrame()) note.push(`naviga
 // picker check opens the sheet the one before it set up), so a smoke set must keep a group whole or leave it out.
 const SMOKE_SET = [
   "chat:", "raw:", "switch:", "model:",                                      // chat, raw terminals, the launch sheet, model switch
-  "mark:", "fleet menu:", "brief:", "status:", "board:",                      // marks, the fleet menu, the briefing, Status, the board
+  "mark:", "fleet menu:", "status:", "board:",                                // marks, the fleet menu, Status, the board
   "desktop", "waiting:", "keys:", "phone:", "prompt bar:",                // the desktop and phone layouts, keys, the prompt bar
   "to-do:", "to-do accordion", "to-do choices", "to-do markdown",             // To do
   "search page:", "host chips:", "releases live at", "theme:",                // search, hosts, releases, themes
@@ -426,54 +426,6 @@ await check("remove page: a gone row is safe, says it only clears the record, an
   await page.unroute(/\/api\/removals(\/confirm)?$/);
 });
 
-// The briefing card: collapsed by default, a new briefing keeps it collapsed,
-// and expanding is a persistent choice that survives new briefings.
-async function publishBrief(text) {
-  const r = await fetch(base + "/api/brief", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ markdown: text }) });
-  if (!r.ok) throw new Error("publish brief: " + r.status);
-  await new Promise((r) => setTimeout(r, 1100)); // briefings have a timestamp to the second
-}
-const briefState = () => page.evaluate(() => ({
-  hidden: document.querySelector("#briefing").hidden,
-  expanded: document.querySelector("#briefing .bf-toggle")?.getAttribute("aria-expanded"),
-  body: !!document.querySelector("#briefing .bf-body") && !document.querySelector("#briefing .bf-body").hidden,
-  preview: document.querySelector("#briefing .bf-preview")?.textContent || "",
-  text: document.querySelector("#briefing")?.innerText || "",
-}));
-async function reloadBrief() {
-  await page.goto(base + "/", { waitUntil: "load" });
-  await page.waitForSelector("#briefing .bf-toggle", { state: "visible", timeout: 8000 });
-}
-await check("brief: collapsed by default, with a preview, and stays collapsed on a new briefing", async () => {
-  await publishBrief("## Status\n\n**All quiet** on the western front\n\nlong detail one");
-  await page.goto(base + "/", { waitUntil: "load" });
-  await page.evaluate(() => { try { localStorage.clear(); } catch {} });
-  await reloadBrief();
-  let st = await briefState();
-  if (st.expanded !== "false" || st.body) throw new Error("not collapsed by default: " + JSON.stringify(st));
-  if (st.preview !== "Status") throw new Error("preview is " + JSON.stringify(st.preview));
-  await publishBrief("**Second update** is in\n\nlong detail two");
-  await reloadBrief();
-  st = await briefState();
-  if (st.expanded !== "false" || st.body) throw new Error("new briefing expanded the card: " + JSON.stringify(st));
-  if (st.preview !== "Second update is in") throw new Error("preview is " + JSON.stringify(st.preview));
-  if (st.text.includes("long detail two")) throw new Error("body text shown while collapsed");
-});
-await check("brief: expanding persists across a reload and a new briefing; collapsing sticks too", async () => {
-  await page.locator("#briefing .bf-toggle").click();
-  let st = await briefState();
-  if (st.expanded !== "true" || !st.body || st.preview) throw new Error("tap did not expand: " + JSON.stringify(st));
-  await publishBrief("Third update\n\nlong detail three");
-  await reloadBrief();
-  st = await briefState();
-  if (st.expanded !== "true" || !st.body || !st.text.includes("long detail three")) throw new Error("new briefing collapsed an expanded card: " + JSON.stringify(st));
-  await page.locator("#briefing .bf-toggle").click();
-  await publishBrief("Fourth update\n\nlong detail four");
-  await reloadBrief();
-  st = await briefState();
-  if (st.expanded !== "false" || st.body) throw new Error("collapse did not stick: " + JSON.stringify(st));
-});
-
 // ---- the header's fleet menu ("⋯", top right of the list) ----
 await check("fleet menu: the ⋯ is visible at 390px, on top, inside the header, without overflow", async () => {
   await toList();
@@ -497,8 +449,8 @@ await check("fleet menu: opens with its items and the right aria; Escape closes 
   if (await page.locator("#btn-fleet").getAttribute("aria-expanded") !== "true") throw new Error("aria-expanded not true");
   if (await page.locator("#btn-fleet").getAttribute("aria-haspopup") !== "menu") throw new Error("aria-haspopup");
   const t = (await page.locator("#f-menu button:visible:not(.pop-x)").allInnerTexts()).map((x) => x.trim().replace(/\s+/g, " "));
-  // View (Theme, Font, Notifications), Hub (the briefing item when there is one, History, Pages, Usage, Settings, Refresh): the schedule lives on Status; sweep and removals are the Ready to remove page.
-  const want = [/^Theme /, /^Font /, /^Notifications/, /briefing/i, /^History/, /^Pages/, /^Usage/, /^Settings/, /^Refresh/];
+  // View (Theme, Font, Notifications), Hub (Status, Pages, Usage, Settings, Refresh): sweep and removals are the Ready to remove page.
+  const want = [/^Theme /, /^Font /, /^Notifications/, /^Status/, /^Pages/, /^Usage/, /^Settings/, /^Refresh/];
   if (t.length !== want.length || want.some((re, i) => !re.test(t[i]))) throw new Error("items " + JSON.stringify(t));
   if (/schedule/i.test(t.join("|"))) throw new Error("the schedule is still in the menu");
   const grp = await page.locator("#f-menu .m-grp").allInnerTexts();
@@ -565,47 +517,6 @@ await check("remove page: at zero the phone banner reads \"Look for finished age
   await page.locator("#rv-close").click();
   await page.waitForSelector("#review", { state: "hidden" });
 });
-await check("fleet menu: Briefing item expands, collapses and shows a dismissed briefing again", async () => {
-  await publishBrief("Menu briefing\n\nlong detail five");
-  await reloadBrief();
-  await page.evaluate(() => { try { localStorage.clear(); } catch {} });
-  await reloadBrief();
-  await page.waitForFunction(() => !document.querySelector("#f-brief").disabled, null, { timeout: 8000 });
-  await fleetMenuOpen();
-  if (!/^Expand/.test(await page.locator("#f-brief").innerText())) throw new Error("item " + await page.locator("#f-brief").innerText());
-  await page.locator("#f-brief").click();
-  if ((await briefState()).expanded !== "true") throw new Error("not expanded");
-  await page.locator("#briefing .bf-dismiss").click();
-  await page.waitForSelector("#briefing", { state: "hidden" });
-  await fleetMenuOpen();
-  if (!/dismissed/.test(await page.locator("#f-brief").innerText())) throw new Error("item " + await page.locator("#f-brief").innerText());
-  await page.locator("#f-brief").click();
-  await page.waitForSelector("#briefing", { state: "visible" });
-});
-
-// ---- the collapsed briefing preview: exactly two lines, none cut ----
-// 1000px: wide, but below the desktop breakpoint (1100px), so still the card.
-for (const width of [390, 1000]) {
-  await check(`brief: a long first line clamps to exactly two lines, inside the card, at ${width}px`, async () => {
-    await page.setViewportSize({ width, height: 844 });
-    await publishBrief('fix-header-menu landed on main as 8ea6a16 after the coordinator marked "landed on main as" the worker finished, the sweep verified every commit of the branch is in origin/main and nothing is unpushed, so it is safe to remove the worktree and its branch.\n\nmore');
-    await page.evaluate(() => { try { localStorage.clear(); } catch {} });
-    await reloadBrief();
-    const r = await page.evaluate(() => {
-      const p = document.querySelector("#briefing .bf-preview"), card = document.querySelector("#briefing");
-      const cs = getComputedStyle(p), lh = parseFloat(cs.lineHeight);
-      const pr = p.getBoundingClientRect(), cr = card.getBoundingClientRect();
-      // the preview's own box: padding included; no bottom padding may exist, or a third line shows in it
-      return { lines: Math.round(pr.height / lh), pad: parseFloat(cs.paddingBottom), h: pr.height, lh, bottom: pr.bottom, cardBottom: cr.bottom,
-        clamp: cs.webkitLineClamp, scrollH: p.scrollHeight, meta: document.querySelector(".bf-meta").innerText, metaCut: document.querySelector(".bf-meta").scrollWidth > document.querySelector(".bf-meta").clientWidth };
-    });
-    if (r.lines !== 2 || r.pad !== 0 || r.clamp !== "2") throw new Error("not a clean two-line clamp: " + JSON.stringify(r));
-    if (r.scrollH <= r.h + 1) throw new Error("text did not overflow two lines; the fixture is too short: " + JSON.stringify(r));
-    if (r.bottom > r.cardBottom) throw new Error("preview extends past the card: " + JSON.stringify(r));
-    if (!/^\d+\w+ ago/.test(r.meta)) throw new Error("age is not first in the meta: " + r.meta);
-    if (r.metaCut && width > 500) throw new Error("meta is truncated at " + width + "px: " + JSON.stringify(r));
-  });
-}
 await page.setViewportSize({ width: 390, height: 844 });
 
 // ---- agent view "⋯" menu: always at the top right, whatever the ledger says ----
@@ -706,7 +617,7 @@ await check("more: stays visible with a very long name and title at phone width"
   if (w > 0) throw new Error("page scrolls horizontally by " + w);
 });
 
-// ---- the briefings screen: opened from the ⋯ menu, with history ----
+// ---- the Status screen (phone): opened from the ⋯ menu ----
 // A real touch swipe (the list takes no sideways gesture: a check below drags one and expects nothing): CDP touch events (press, moves, release) at a pace.
 const cdp = await page.context().newCDPSession(page);
 async function swipe(x0, y0, x1, y1, { steps = 8, ms = 240, hold = false } = {}) {
@@ -720,10 +631,10 @@ async function swipe(x0, y0, x1, y1, { steps = 8, ms = 240, hold = false } = {})
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
 const release = () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-const briefsState = () => page.evaluate(() => ({
-  open: document.querySelector("#briefs").classList.contains("open"),
-  inert: document.querySelector("#briefs").inert,
-  x: Math.round(document.querySelector("#briefs").getBoundingClientRect().x),
+const stScreenState = () => page.evaluate(() => ({
+  open: document.querySelector("#st-screen").classList.contains("open"),
+  inert: document.querySelector("#st-screen").inert,
+  x: Math.round(document.querySelector("#st-screen").getBoundingClientRect().x),
   hash: location.hash,
   listY: Math.round(window.scrollY),
 }));
@@ -737,92 +648,77 @@ async function freshList() {
   await page.waitForSelector("#btn-fleet", { timeout: 8000 });
   await page.waitForSelector("#agents .agent", { timeout: 8000 });
 }
-async function openBriefsFromMenu() {
+async function openStatusFromMenu() {
   await page.locator("#btn-fleet").click();
-  await page.locator("#f-briefs").click();
+  await page.locator("#f-status").click();
 }
-await check("briefings: history is kept and listed, newest first, the latest on top", async () => {
-  // The hub merges briefings published within 15 minutes unless the Needs you
-  // lines differ, so each of these says something different there.
-  await publishBrief("## History one\n\nbody one\n\n## Needs you\nNothing open.");
-  await publishBrief("## History two\n\nbody two\n\n## Needs you\nNone.");
-  await publishBrief("## History three\n\nbody three\n\n## Needs you\nAll clear.");
-  const h = await (await fetch(base + "/api/brief/history")).json();
-  if (h.briefs.length < 3 || !h.briefs[0].markdown.includes("three") || !h.briefs[1].markdown.includes("two")) throw new Error(JSON.stringify(h).slice(0, 300));
+await check("status screen: the menu item opens it, the back button returns (and the URL follows)", async () => {
   await freshList();
-  await openBriefsFromMenu();
-  await page.waitForFunction(() => document.querySelectorAll("#br-body .br-item").length >= 2, null, { timeout: 5000 });
-  const t = await page.locator("#br-body").innerText();
-  if (!/History three/.test(t.split("EARLIER")[0] || t) || !t.includes("History two") || !t.includes("History one")) throw new Error(t.slice(0, 300));
-  await page.locator("#br-body .br-item summary").first().click();
-  await page.waitForFunction(() => document.querySelector("#br-body .br-item[open] .md")?.innerText.includes("body two"), null, { timeout: 3000 });
-});
-await check("briefings: the menu item opens it, the back button returns (and the URL follows)", async () => {
-  await freshList();
-  let st = await briefsState();
+  let st = await stScreenState();
   if (st.open || !st.inert || st.x < 380) throw new Error("not parked off-screen: " + JSON.stringify(st));
-  await openBriefsFromMenu();
+  await openStatusFromMenu();
   await settle();
-  st = await briefsState();
-  if (!st.open || st.inert || st.x !== 0 || st.hash !== "#/briefings") throw new Error("the menu item did not open it: " + JSON.stringify(st));
-  await page.locator("#br-back").click();
+  st = await stScreenState();
+  if (!st.open || st.inert || st.x !== 0 || st.hash !== "#/status") throw new Error("the menu item did not open it: " + JSON.stringify(st));
+  if (!(await page.locator("#ss-body .st").count())) throw new Error("no Status in the screen");
+  await page.locator("#ss-back").click();
   await settle();
-  st = await briefsState();
+  st = await stScreenState();
   if (st.open || !st.inert || st.x < 380 || st.hash !== "") throw new Error("back did not return: " + JSON.stringify(st));
 });
-await check("briefings: the menu item opens it; the browser's back returns", async () => {
+await check("status screen: the menu item opens it; the browser's back returns", async () => {
   await freshList();
   await page.locator("#btn-fleet").click();
-  await page.locator("#f-briefs").click();
+  await page.locator("#f-status").click();
   await settle();
-  let st = await briefsState();
+  let st = await stScreenState();
   if (!st.open) throw new Error("menu did not open it: " + JSON.stringify(st));
   await page.goBack();
   await settle();
-  st = await briefsState();
+  st = await stScreenState();
   if (st.open || st.x < 380) throw new Error("history back did not return: " + JSON.stringify(st));
 });
-await check("briefings: a cold start on #/briefings shows it without a slide", async () => {
-  await page.goto(base + "/#/briefings", { waitUntil: "load" });
+await check("status screen: a cold start on #/status shows it without a slide", async () => {
+  await page.goto(base + "/#/status", { waitUntil: "load" });
   await idle();
-  const st = await briefsState();
+  const st = await stScreenState();
   if (!st.open || st.x !== 0) throw new Error(JSON.stringify(st));
 });
-await check("briefings: at 390px a sideways drag on the list does nothing, and #/briefings still opens from the menu", async () => {
+await check("status screen: at 390px a sideways drag on the list does nothing, and #/status still opens from the menu", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
   await freshList();
   if (await page.locator("#pager").count()) throw new Error("the pager pill is still in the page");
-  const before = await briefsState();
+  const before = await stScreenState();
   await swipe(330, 500, 60, 505); // the old open gesture
   await settle();
   await swipe(60, 500, 330, 505); // and its way back
   await settle();
   await swipe(383, 500, 100, 504, { steps: 6, ms: 150 });
   await settle();
-  const after = await briefsState();
+  const after = await stScreenState();
   if (after.open || !after.inert || after.x < 380 || after.hash !== "" || after.listY !== before.listY) throw new Error("a sideways drag did something: " + JSON.stringify({ before, after }));
   const sx = await page.evaluate(() => ({ x: scrollX, over: document.documentElement.scrollWidth - innerWidth }));
   if (sx.x !== 0 || sx.over > 0) throw new Error("the page moved sideways: " + JSON.stringify(sx));
-  await page.screenshot({ path: `${out}/briefings-list-390.png` });
-  await openBriefsFromMenu();
+  await page.screenshot({ path: `${out}/status-list-390.png` });
+  await openStatusFromMenu();
   await settle();
-  const st = await briefsState();
-  if (!st.open || st.x !== 0 || st.hash !== "#/briefings") throw new Error("the menu did not open it: " + JSON.stringify(st));
+  const st = await stScreenState();
+  if (!st.open || st.x !== 0 || st.hash !== "#/status") throw new Error("the menu did not open it: " + JSON.stringify(st));
   await swipe(60, 500, 330, 505); // swiping right no longer returns
   await settle();
-  const still = await briefsState();
+  const still = await stScreenState();
   if (!still.open) throw new Error("a swipe right closed it: " + JSON.stringify(still));
-  await page.screenshot({ path: `${out}/briefings-open-390.png` });
-  await page.locator("#br-back").click();
+  await page.screenshot({ path: `${out}/status-open-390.png` });
+  await page.locator("#ss-back").click();
   await settle();
-  if ((await briefsState()).open) throw new Error("the back button did not return");
+  if ((await stScreenState()).open) throw new Error("the back button did not return");
 });
-await check("briefings: vertical scrolling on the list still scrolls it", async () => {
+await check("status screen: vertical scrolling on the list still scrolls it", async () => {
   await freshList();
   await page.evaluate(() => { document.querySelector("#agents").style.minHeight = "2400px"; });
   await swipe(200, 600, 190, 200, { steps: 10, ms: 200 });
   await settle();
-  const st = await briefsState();
+  const st = await stScreenState();
   if (st.open || st.listY < 100) throw new Error("the list did not scroll: " + JSON.stringify(st));
 });
 
@@ -832,9 +728,9 @@ const geo = (sel) => page.evaluate((s) => {
   const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
   return { x: r.x, y: r.y, w: r.width, h: r.height, shown: cs.display !== "none" && cs.visibility !== "hidden" && r.width > 0 };
 }, sel);
-// start: the hash to load. The Briefing page by default, so what is in the pane does not
+// start: the hash to load. The Status page by default, so what is in the pane does not
 // depend on which agents happen to be waiting (the desktop's own default has its own checks).
-async function desktopList(width, start = "#/briefings") {
+async function desktopList(width, start = "#/status") {
   await page.setViewportSize({ width, height: 800 });
   await page.goto(base + "/", { waitUntil: "load" });
   await page.evaluate(() => { try { localStorage.clear(); } catch {} });
@@ -842,20 +738,16 @@ async function desktopList(width, start = "#/briefings") {
   await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
 }
 for (const width of [1280, 1920]) {
-  await check(`desktop: at ${width}px the list and the Briefing page sit side by side, two columns`, async () => {
-    await publishBrief("## Status\n\nDesktop panel check\n\nlong detail\n\n## Needs you\nNo decisions.");
+  await check(`desktop: at ${width}px the list and the Status page sit side by side, two columns`, async () => {
     await desktopList(width);
-    await page.waitForSelector("body.view-briefing #briefs.open .br-card");
-    const [l, d, e, b, c, td] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#briefs"), geo("#briefing"), geo("#todo")]);
+    await page.waitForSelector("body.view-status #p-status .st");
+    const [l, d, e, b, s, td] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail-empty"), geo("#p-status"), geo("#st-screen"), geo("#todo")]);
     if (!l.shown || l.x !== 0 || l.w < 300 || l.w > 400) throw new Error("list column: " + JSON.stringify(l));
     if (d.shown) throw new Error("agent pane shown with a page open");
     if (e.shown) throw new Error("the empty state shows over a page");
-    if (!b.shown || Math.abs(b.x - (l.x + l.w)) > 2 || Math.abs(b.x + b.w - width) > 1 || b.h < 600) throw new Error("the Briefing page does not fill the pane beside the list: " + JSON.stringify(b));
-    if (c.shown || (td && td.shown)) throw new Error("the latest-briefing or to-do card shows in the list column");
-    const t = await page.locator("#briefs").innerText();
-    if (!t.includes("Desktop panel check")) throw new Error("latest briefing missing from the page: " + t.slice(0, 200));
-    if (!(await page.locator("#briefs .br-item").count())) throw new Error("no history on the page");
-    if (await page.locator("#br-back").isVisible()) throw new Error("a back button on the page");
+    if (!b.shown || Math.abs(b.x - (l.x + l.w)) > 2 || Math.abs(b.x + b.w - width) > 1 || b.h < 600) throw new Error("the Status page does not fill the pane beside the list: " + JSON.stringify(b));
+    if (s.shown) throw new Error("the phone's Status screen shows on the desktop");
+    if (td && td.shown) throw new Error("the to-do card shows in the list column");
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
     if (await page.evaluate(() => getComputedStyle(document.body).gridTemplateColumns.split(" ").length) !== 2) throw new Error("not two grid columns");
   });
@@ -1076,9 +968,9 @@ for (const width of [1280, 1600, 1920, 2560]) {
     await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
     await page.waitForSelector("#detail", { state: "visible" });
     await page.waitForSelector("#chat", { state: "visible" });
-    const [l, d, m, c, h, b] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail main"), geo("#chat"), geo("#detail header"), geo("#briefs")]);
+    const [l, d, m, c, h, b] = await Promise.all([geo("#agents"), geo("#detail"), geo("#detail main"), geo("#chat"), geo("#detail header"), geo("#p-status")]);
     if (Math.abs(d.x - 360) > 2 || Math.abs(d.x + d.w - width) > 1.5) throw new Error("pane does not span list..window edge: " + JSON.stringify([l, d]));
-    if (b.shown) throw new Error("the Briefing page stays over an agent");
+    if (b.shown) throw new Error("the Status page stays over an agent");
     if (m.w < d.w - 2 || h.w < d.w - 2) throw new Error("main/header narrower than the pane: " + JSON.stringify([d, m, h]));
     if (c.w < d.w - 40) throw new Error("chat leaves empty space at the sides: " + JSON.stringify([d, c]));
   });
@@ -1103,13 +995,13 @@ await check("desktop: up/down in the list moves through the agents and opens eac
   const id = await page.evaluate(() => document.activeElement?.dataset?.id);
   if (id !== cur) throw new Error("focus lost on re-render: " + id + " vs " + cur);
 });
-await check("desktop: the fleet menu opens beside the list and has no Briefing items", async () => {
+await check("desktop: the fleet menu opens beside the list and has no Status item", async () => {
   await desktopList(1280);
   await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
   await page.locator("#btn-fleet").click();
   const m = await geo("#f-menu");
   if (!m.shown || m.x < 0 || m.x + m.w > 361) throw new Error("menu outside the list column: " + JSON.stringify(m));
-  if (await page.locator("#f-briefs").isVisible() || await page.locator("#f-brief").isVisible()) throw new Error("a Briefing item shows in the fleet menu on desktop");
+  if (await page.locator("#f-status").isVisible()) throw new Error("a Status item shows in the fleet menu on desktop (the nav row has it)");
   await page.keyboard.press("Escape");
 });
 // ---- waiting agents: the tab title, a Needs you group on desktop, the n key ----
@@ -1478,12 +1370,9 @@ await check("status: the page groups the ledger, to-dos and agents by project, w
     await page.waitForSelector("#ps-body .st-rep strong");
     await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
     if (!(await page.locator('#ps-body details[data-id="h3"]').evaluate((d) => d.open))) throw new Error("report closed by a re-render");
-    // The links: to-do goes to the To do page; the old briefing is still readable.
+    // The link: to-do goes to the To do page.
     await page.locator('#ps-body [data-go="todo"]').click();
     await page.waitForSelector("#p-todo", { state: "visible" });
-    await page.locator('#nav .nv[data-page="status"]').click();
-    await page.locator('#ps-body [data-go="briefing"]').click();
-    await page.waitForSelector("#briefs.open", { state: "visible" });
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("page scrolls horizontally");
     await page.locator('#nav .nv[data-page="status"]').click();
     await page.screenshot({ path: `${out}/status-1280.png` });
@@ -1491,34 +1380,33 @@ await check("status: the page groups the ledger, to-dos and agents by project, w
     await page.screenshot({ path: `${out}/status-1600.png` });
   } finally { await unmockStatusData(); }
 });
-await check("status: readable on the phone, at the top of the briefings screen, with no sideways scroll", async () => {
+await check("status: readable on the phone, on the Status screen, with no sideways scroll", async () => {
   await mockStatusData();
   try {
     await desktopList(390);
-    await page.goto(base + "/#/briefings", { waitUntil: "load" });
-    await page.waitForSelector("#br-status .st-proj", { timeout: 8000 });
-    const t = await page.locator("#br-status").innerText();
+    await page.goto(base + "/#/status", { waitUntil: "load" });
+    await page.waitForSelector("#ss-body .st-proj", { timeout: 8000 });
+    const t = await page.locator("#ss-body").innerText();
     if (!t.includes("fix-login") || !t.includes("queued behind")) throw new Error(t.slice(0, 300));
-    if (await page.locator("#br-status [data-go]").count()) throw new Error("desktop-only links on the phone");
+    if (await page.locator("#ss-body [data-go]").count()) throw new Error("desktop-only links on the phone");
     await noOverflow();
     await page.screenshot({ path: `${out}/status-390.png` });
   } finally { await unmockStatusData(); }
 });
 
-// ---- the briefing board (mocked GET /api/board): lanes with counts, the switch, Needs you linking to its to-do ----
+// ---- the board (mocked GET /api/board): lanes with counts, the switch, Needs you linking to its to-do ----
 const boardSummary = (box) => page.evaluate((b) => {
   const root = document.querySelector(b + " .bd");
   if (!root) return null;
   return {
     lanes: [...root.querySelectorAll(".bd-lane")].map((d) => ({ lane: d.dataset.lane, count: d.querySelector(".bd-chip").textContent, open: d.open })),
-    head: (root.querySelector(".bd-head") || {}).textContent || "",
     pressed: [...root.querySelectorAll("[data-bd-mode]")].filter((x) => x.getAttribute("aria-pressed") === "true").map((x) => x.dataset.bdMode),
     wide: document.documentElement.scrollWidth > innerWidth,
     todo: root.querySelector("[data-bd-todo]") ? root.querySelector("[data-bd-todo]").dataset.bdTodo : "",
     h: root.querySelector("[data-bd-todo]") ? root.querySelector("[data-bd-todo]").getBoundingClientRect().height : 0,
   };
 }, box);
-for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-status", "#/briefings"]]) {
+for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#ss-body", "#/status"]]) {
   await check(`board: lanes, counts, the switch and the Needs you link at ${width}px`, async () => {
     await mockStatusData();
     try {
@@ -1530,7 +1418,6 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
       const want = ["needs_you:3", "running:2", "waiting:2", "landing:49", "reports:2", "landed:2"];
       if (b.lanes.map((l) => l.lane + ":" + l.count).join() !== want.join()) throw new Error("lanes " + JSON.stringify(b.lanes));
       if (!b.lanes[0].open || b.lanes.slice(1).some((l) => l.open)) throw new Error("only Needs you is open at first: " + JSON.stringify(b.lanes));
-      if (!b.head.startsWith("Tue 20:11. v0.5.20 is rolling out")) throw new Error("headline " + b.head);
       if (b.pressed.join() !== "status" || b.wide) throw new Error(JSON.stringify(b));
       if (b.h < 44) throw new Error("the Needs you row is only " + b.h + "px tall");
       // A lane opens, and stays open across a re-render.
@@ -1538,7 +1425,7 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
       await page.evaluate(() => { board.at = 0; return loadBoard(); });
       if (!(await page.locator(`${box} .bd-lane[data-lane="waiting"]`).evaluate((d) => d.open))) throw new Error("a lane closed on re-render");
       const t = await page.locator(`${box} .bd`).innerText();
-      for (const w of ["Release v0.5.20", "Waits for the RFC, on purpose.", "the rollout is waiting on the hub."]) if (!t.includes(w)) throw new Error("no " + w);
+      for (const w of ["Release v0.5.20", "queued behind h555555555555"]) if (!t.includes(w)) throw new Error("no " + w);
       // The footer: the loose counts, the archived one a link to the Archived screen.
       const foot = await page.locator(`${box} .bd-foot`).evaluate((f) => ({ t: f.textContent, href: f.querySelector("a.bd-arch")?.getAttribute("href") }));
       if (foot.t !== "3 ready to remove · 27 archived" || foot.href !== "#/archived") throw new Error("footer " + JSON.stringify(foot));
@@ -1567,12 +1454,12 @@ for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-st
         if (!q.includes("Keep old session cookies")) throw new Error("opened " + q.slice(0, 80));
       } else {
         await page.waitForSelector("#todo:not([hidden])", { timeout: 5000 });
-        if (await page.evaluate(() => document.querySelector("#briefs").classList.contains("open"))) throw new Error("the briefings screen stays open");
+        if (await page.evaluate(() => document.querySelector("#st-screen").classList.contains("open"))) throw new Error("the Status screen stays open");
       }
     } finally { await unmockStatusData(); }
   });
 }
-for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-status", "#/briefings"]]) {
+for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#ss-body", "#/status"]]) {
   await check(`board: the new mark: none on a first visit, new and moved after a change, cleared by Mark seen, at ${width}px`, async () => {
     await mockStatusData();
     try {
@@ -1774,10 +1661,10 @@ for (const width of [1280, 390]) {
     await mockStatusData();
     try {
       await desktopList(width, "#/status");
-      if (width < 1100) await page.goto(base + "/#/briefings", { waitUntil: "load" });
-      await page.waitForSelector(width >= 1100 ? "#ps-body .st-proj" : "#br-status .st-proj", { timeout: 8000 });
+      if (width < 1100) await page.goto(base + "/#/status", { waitUntil: "load" });
+      await page.waitForSelector(width >= 1100 ? "#ps-body .st-proj" : "#ss-body .st-proj", { timeout: 8000 });
       const id = await injectRepoDamage();
-      const box = width >= 1100 ? "#ps-body" : "#br-status";
+      const box = width >= 1100 ? "#ps-body" : "#ss-body";
       const r = await page.evaluate(([box, id]) => {
         const sec = document.querySelector(box + " .st-repair");
         const row = document.querySelector(`#agents .agent[data-id="${CSS.escape(id)}"] .rd-chip`);
@@ -1804,7 +1691,7 @@ await check("pages: below the breakpoint the page hashes do nothing and openPage
   await desktopList(1099);
   await page.goto(base + "/#/todo", { waitUntil: "load" });
   await page.waitForSelector("#agents .agent[data-id]", { state: "visible" });
-  await page.evaluate(() => openPage("briefing"));
+  await page.evaluate(() => openPage("status"));
   const r = await page.evaluate(() => ({ view: state.view, hash: location.hash, cls: document.body.className }));
   if (r.view !== null || r.hash !== "#/todo" || /view-|has-page/.test(r.cls)) throw new Error("state " + JSON.stringify(r));
 });
@@ -1814,17 +1701,13 @@ await check("desktop: below the breakpoint (1099px) it is still the phone layout
   const [l, a] = await Promise.all([geo("#list"), geo("#agents")]);
   if (a.x < 100 || a.w > 640) throw new Error("not the centred single column: " + JSON.stringify(a));
   if (await visible("#detail-empty")) throw new Error("desktop empty state shown");
-  const st = await briefState();
-  if (st.expanded !== "false") throw new Error("briefing not collapsed: " + JSON.stringify(st));
-  if (await page.evaluate(() => document.body.classList.contains("has-briefs") || document.querySelector("#briefs").classList.contains("open"))) throw new Error("the briefings panel stays open below the breakpoint");
+  if (await page.evaluate(() => document.body.classList.contains("has-page") || document.querySelector("#st-screen").classList.contains("open"))) throw new Error("a page or the Status screen is open below the breakpoint");
 });
-await check("phone: 390px is unchanged: one column, back button, collapsed briefing, no desktop pane", async () => {
+await check("phone: 390px is unchanged: one column, back button, no desktop pane", async () => {
   await desktopList(390);
   const a = await geo("#agents");
   if (a.x > 20 || a.w < 340 || a.w > 390) throw new Error("agents column: " + JSON.stringify(a));
   if (await visible("#detail-empty") || await visible("#detail")) throw new Error("desktop pane visible");
-  const st = await briefState();
-  if (st.expanded !== "false" || st.body) throw new Error("briefing not collapsed: " + JSON.stringify(st));
   const f = await geo("#f-menu"); // hidden until opened
   await page.locator('#agents .agent[data-id$="w1:p1"]').first().click();
   await page.waitForSelector("#detail", { state: "visible" });
@@ -2146,7 +2029,7 @@ await check("latency: unmark and the coordinator role show in a frame, stay thro
 // The real hub answers (alpha is a Claude agent with a session file that has no
 // usage lines and no hook), so the refusal path is the real one; the success
 // path is mocked, since the fake herdr has no Claude to clear.
-const freshCtx = (over = {}) => ({ threshold: 150000, last: { at: "2026-11-08T09:00:00Z", trigger: "briefing", tokens: 158000 }, coordinators: [{ id: "uitest/w1:p1", name: "alpha", context: { tokens: 163000, hook_active: true, ...over } }] });
+const freshCtx = (over = {}) => ({ threshold: 150000, last: { at: "2026-11-08T09:00:00Z", trigger: "auto", tokens: 158000 }, coordinators: [{ id: "uitest/w1:p1", name: "alpha", context: { tokens: 163000, hook_active: true, ...over } }] });
 async function openFresh() {
   await page.locator("#d-more").click();
   await page.locator("#d-fresh").click();
@@ -3007,7 +2890,7 @@ await check("threads: View transcript on an agent's row menu, and the to-do link
   await page.setViewportSize({ width: 390, height: 844 });
 });
 
-for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#br-status", "#/briefings"]]) {
+for (const [width, box, start] of [[1280, "#ps-body", "#/status"], [390, "#ss-body", "#/status"]]) {
   await check(`status: the transcript index line says ok, stale, missing, and hides when unreadable, at ${width}px`, async () => {
     const card = () => page.evaluate((b) => (document.querySelector(b + ' [aria-label="Transcript index"]') || {}).innerText || "", box);
     const show = async (route) => {
@@ -3833,30 +3716,6 @@ await check("keys: stop and interrupt are in the palette only, behind a confirm"
   await page.unroute(/\/api\/agents\/[^/]+\/keys$/);
 }
 
-await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\" with the briefing", async () => {
-  await publishBrief("## Status\n\nchecked-note briefing");
-  const checked = new Date(Date.now() + 1000).toISOString();
-  await page.route(/\/api\/brief$/, async (r) => {
-    const res = await r.fetch();
-    const j = await res.json();
-    j.schedule = { ...(j.schedule || {}), enabled: true, every: "1h", state: "ok", checked_at: checked };
-    await r.fulfill({ response: res, json: j });
-  });
-  try {
-    await page.goto("about:blank");
-    await page.goto(base + "/", { waitUntil: "load" });
-    await page.waitForFunction(() => /checked \d{1,2}:\d{2}.*no change/.test(document.querySelector("#briefing .bf-meta")?.textContent || ""), null, { timeout: 8000 });
-    const t = await page.locator("#briefing .bf-meta").innerText();
-    if (!/ago · from .* · checked/.test(t)) throw new Error("meta: " + t);
-  } finally {
-    await page.unroute(/\/api\/brief$/);
-  }
-  await page.goto("about:blank");
-  await page.goto(base + "/", { waitUntil: "load" });
-  await page.waitForSelector("#briefing .bf-toggle", { state: "visible", timeout: 8000 });
-  if (/no change/.test(await page.locator("#briefing").innerText())) throw new Error("note shown without the hub saying so");
-});
-
 // ---- themes (web/themes.js): contrast, picker, persistence, no flash ----
 {
   const tctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: "light", bypassCSP: true });
@@ -4099,7 +3958,7 @@ await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\
   });
 }
 
-// ---- menus: one set of rules for every ⋯ popover; the theme picker; the ☀/☾ toggle; the Briefings card ----
+// ---- menus: one set of rules for every ⋯ popover; the theme picker; the ☀/☾ toggle ----
 {
   const vis = (sel) => page.locator(sel).isVisible();
   const active = () => page.evaluate(() => document.activeElement?.id || document.activeElement?.className || "");
@@ -4325,69 +4184,6 @@ await check("briefing: a skipped scheduled run shows \"checked HH:MM, no change\
       await page.evaluate(() => localStorage.clear());
     });
   }
-
-  // ---- the Briefings card on Status ----
-  const schedule = () => page.evaluate(async () => (await (await fetch("/api/brief/schedule")).json()).schedule);
-  const cardSteps = async (card) => {
-    const c = (s) => page.locator(`${card} ${s}`);
-    await page.waitForSelector(`${card} .bcard`, { state: "visible", timeout: 8000 });
-    const t = await c(".bcard").innerText();
-    for (const w of ["Last briefing", "Next briefing", "Skip when nothing has changed", "Max quiet", "Publish now", "History"]) if (!t.includes(w)) throw new Error("card lacks " + w + ": " + t);
-    for (const l of ["Off", "1 h", "3 h", "6 h"]) if (!(await c(".bc-seg button").filter({ hasText: new RegExp("^" + l + "$") }).count())) throw new Error("no " + l + " button");
-    await c('[data-bi="3h"]').click();
-    await page.waitForFunction(() => /Briefing every 3 h/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
-    let sc = await schedule();
-    if (!sc.enabled || sc.every !== "3h") throw new Error("3 h not saved: " + JSON.stringify(sc));
-    if ((await c('[data-bi="3h"]').getAttribute("aria-pressed")) !== "true") throw new Error("3 h not pressed");
-    if (!/Next briefing\s*\n?.*\S/.test(await c(".bcard").innerText()) || /Next briefing\s+off/.test(await c(".bcard").innerText())) throw new Error("next slot missing: " + await c(".bcard").innerText());
-    await page.waitForFunction((cd) => document.activeElement?.dataset?.bk === "int-3h" && document.activeElement.closest(cd), card, { timeout: 2000 }).catch(() => { throw new Error("focus lost after saving"); });
-    await c('[data-bskip]').uncheck();
-    await page.waitForFunction(() => /every slot/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
-    sc = await schedule();
-    if (!sc.always) throw new Error("skip off not saved: " + JSON.stringify(sc));
-    if (!(await c("[data-bquiet]").isDisabled())) throw new Error("max quiet should wait for the skip");
-    await c('[data-bskip]').check();
-    await page.waitForFunction(() => /Skipping when nothing/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
-    await c("[data-bquiet]").selectOption("12h");
-    await page.waitForFunction(() => /Max quiet 12 h/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
-    sc = await schedule();
-    if (sc.always || sc.max_quiet !== "12h" || sc.every !== "3h") throw new Error("quiet not saved: " + JSON.stringify(sc));
-    await c('[data-bi=""]').click();
-    await page.waitForFunction(() => /briefings off/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
-    sc = await schedule();
-    if (sc.enabled) throw new Error("Off not saved");
-    if (!(await c("[data-bskip]").isDisabled())) throw new Error("the options stay live while off");
-    await c('[data-bi="1h"]').click();
-    await page.waitForFunction(() => /every 1 h/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
-    if ((await schedule()).every !== "1h") throw new Error("1 h not saved");
-    await c("[data-bpub]").click();
-    await page.waitForFunction(() => /No coordinator|Asked/.test(document.querySelector("#toast").textContent), null, { timeout: 5000 });
-  };
-  await check("briefings card: on the desktop Status page it shows the times and applies each change through the schedule API", async () => {
-    await desktopList(1280, "#/status");
-    await page.waitForSelector("#p-status", { state: "visible" });
-    await cardSteps("#ps-body");
-    await page.screenshot({ path: `${out}/briefings-card-1280.png` });
-    const bad = await page.evaluate(() => [...document.querySelectorAll("#ps-body .bcard *")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className));
-    if (bad.length) throw new Error("clipped: " + bad.join(","));
-    await page.locator("#ps-body [data-bhist]").click();
-    await page.waitForSelector("#p-briefing, #briefs", { state: "visible" });
-  });
-  await check("briefings card: on the phone it sits at the top of the briefings screen and the schedule is gone from ⋯", async () => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(base + "/", { waitUntil: "load" });
-    await page.waitForSelector("#agents .agent");
-    await page.waitForFunction(() => ledger.on === true, null, { timeout: 8000 });
-    await page.evaluate(() => { location.hash = "#/briefings"; });
-    await page.waitForSelector("#br-status", { state: "visible" });
-    await cardSteps("#br-status");
-    await page.screenshot({ path: `${out}/briefings-card-390.png` });
-    await noOverflow();
-    const bad = await page.evaluate(() => [...document.querySelectorAll("#br-status .bcard *")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline").map((e) => e.tagName + "." + e.className));
-    if (bad.length) throw new Error("clipped: " + bad.join(","));
-    if (nativeDialogs) throw new Error("a native dialog opened");
-    if (await page.locator("#f-sched").count()) throw new Error("#f-sched is still in the page");
-  });
 }
 
 // Collapsing the left column (desktop): a rail with the expand button and the counts, the

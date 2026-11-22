@@ -46,11 +46,11 @@
       --safe-bottom: env(safe-area-inset-bottom, 0px);
     }
     /* ---- Font setting: <html data-font="serif"> puts the serif stack on the body, so every reading surface inherits it:
-       the conversation, To do, the briefing, Markdown, Pages chrome and the headings. Code stays monospace (--ff-code).
+       the conversation, To do, Markdown, Pages chrome and the headings. Code stays monospace (--ff-code).
        The key bar, the nav tabs, .btn and segmented buttons, select/input fields and kbd keys stay sans: small controls scan better in it. Other buttons
        follow the page (many rows are buttons holding reading text) and the compose box is text, so it follows too. */
     html[data-font="serif"] { --ff-ui: var(--ff-serif); }
-    html[data-font="serif"] :is(select, input, .keybar, kbd, .pnav, .host-filter, .hp-bar, .btn, .seg button, .bd-seg button, .bc-seg button, .pgs-seg button, .us-seg button, .sx-radio, .pop-x) { font-family: var(--ff-sys); }
+    html[data-font="serif"] :is(select, input, .keybar, kbd, .pnav, .host-filter, .hp-bar, .btn, .seg button, .bd-seg button, .pgs-seg button, .us-seg button, .sx-radio, .pop-x) { font-family: var(--ff-sys); }
     html[data-font="serif"] :is(pre, code, samp, kbd) { font-family: var(--ff-code); }
     ::selection { background: var(--selection); }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -182,22 +182,22 @@
     .agent .name { font-weight: 600; font-size: var(--fs-15); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .agent .sub { color: var(--muted); font-size: var(--fs-13); display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-6); min-width: 0; }
     .agent .sub .repo { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    /* Notice: toast, banner and briefing card share a 12px surface; the tone sets the edge (and, for a warning, a tint). */
-    .notice, #toast, .rtr-banner, .br-card { border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel); }
-    .notice.info, .br-card { border-color: color-mix(in srgb, var(--blue) 40%, var(--border)); }
-    .notice.warn, .rtr-banner, .br-card.stale { border-color: color-mix(in srgb, var(--orange) 50%, var(--border)); }
+    /* Notice: toast and banner share a 12px surface; the tone sets the edge (and, for a warning, a tint). */
+    .notice, #toast, .rtr-banner { border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel); }
+    .notice.info { border-color: color-mix(in srgb, var(--blue) 40%, var(--border)); }
+    .notice.warn, .rtr-banner { border-color: color-mix(in srgb, var(--orange) 50%, var(--border)); }
     .notice.warn, .rtr-banner { background: color-mix(in srgb, var(--orange) 9%, var(--panel)); color: var(--orange); }
     .notice.err, #toast.error { border-color: var(--red); color: var(--red); }
     /* Segmented control: one choice of N in a hairline box; the pressed segment is the accent. A control adds only its own sizing. */
-    .seg, .bd-seg, .bc-seg, .pgs-seg, .us-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-10); overflow: hidden; background: var(--panel2); }
-    .seg button, .bd-seg button, .bc-seg button, .pgs-seg button, .us-seg button { min-height: var(--hit-44); padding: 0 var(--sp-12); background: transparent; color: var(--text); border: 0; font: inherit; font-size: var(--fs-14); cursor: pointer; }
-    .seg button + button, .bd-seg button + button, .bc-seg button + button, .pgs-seg button + button, .us-seg button + button { border-left: 1px solid var(--border); }
-    .seg button[aria-pressed="true"], .bd-seg button[aria-pressed="true"], .bc-seg button[aria-pressed="true"], .pgs-seg button[aria-pressed="true"], .us-seg button[aria-pressed="true"] { background: var(--blue); color: var(--on-accent); font-weight: 600; }
+    .seg, .bd-seg, .pgs-seg, .us-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-10); overflow: hidden; background: var(--panel2); }
+    .seg button, .bd-seg button, .pgs-seg button, .us-seg button { min-height: var(--hit-44); padding: 0 var(--sp-12); background: transparent; color: var(--text); border: 0; font: inherit; font-size: var(--fs-14); cursor: pointer; }
+    .seg button + button, .bd-seg button + button, .pgs-seg button + button, .us-seg button + button { border-left: 1px solid var(--border); }
+    .seg button[aria-pressed="true"], .bd-seg button[aria-pressed="true"], .pgs-seg button[aria-pressed="true"], .us-seg button[aria-pressed="true"] { background: var(--blue); color: var(--on-accent); font-weight: 600; }
     /* dense segments (a header or toolbar, not a form): 36px, 13px */
     .seg.sm button, .pgs-seg button, .us-seg button { min-height: var(--hit-36); font-size: var(--fs-13); font-weight: 600; }
     /* Card: one surface (panel, hairline, 12px radius). .card.attn / .bad / .good set the edge colour;
        a link card (a whole-card <a>/<button>) also hovers and rings inset. */
-    .card, .bcard, .pz-card, .rl-card, .us-card, .rc-card, .pgs-card, .pgs-hit, .pr-card {
+    .card, .pz-card, .rl-card, .us-card, .rc-card, .pgs-card, .pgs-hit, .pr-card {
       background: var(--panel); border: 1px solid var(--card-edge); box-shadow: var(--lift-1); border-radius: var(--r-12);
     }
     .card.attn, .pz-card.pz-warn, .rl-card.rl-attn { border-color: var(--orange); }
@@ -338,7 +338,7 @@
     /* One empty state everywhere: muted, centred in its pane, with its own padding (never flush to an edge),
        a short line saying why it is empty, and where it helps what will appear or the one action to take. */
     /* Empty state: one centred muted block. */
-    .empty, .ln-empty, .br-empty, .rc-empty, .td-none, .pal-empty, .pgs-empty, .pr-empty, .us-empty { box-sizing: border-box; color: var(--muted); font-size: var(--fs-14); line-height: 1.45; text-align: center; padding: 28px var(--sp-20); overflow-wrap: anywhere; }
+    .empty, .ln-empty, .rc-empty, .td-none, .pal-empty, .pgs-empty, .pr-empty, .us-empty { box-sizing: border-box; color: var(--muted); font-size: var(--fs-14); line-height: 1.45; text-align: center; padding: 28px var(--sp-20); overflow-wrap: anywhere; }
     .empty b { display: block; color: var(--text); font-size: var(--fs-15); font-weight: 650; }
     .empty span { display: block; margin-top: var(--sp-4); }
     .empty button.empty-act { margin-top: var(--sp-12); }
@@ -879,7 +879,7 @@
        in this sense: segments (.seg), menu items (.attach-menu, #f-menu), tabs (.rc-tabs, .pr-tabs), filter pills
        (.hf-chip), list rows (.us-row), the sp-bar controls (they sit beside a select and an input and match those)
        and the round icon buttons. */
-    .btn, .td-acts button, .ds-fix, .ds-use, .ds-confirm, .ds-fk, .ds-nav button, .br-sched button, .bf-stale-acts button,
+    .btn, .td-acts button, .ds-fix, .ds-use, .ds-confirm, .ds-fk, .ds-nav button,
     .empty button.empty-act, .tds-none button, .rel button:not(.rel-refresh), .rl-card button:not(.rel-refresh),
     .btn.sm, #sp .cite button, #sp .hk button, .us-crumbs button {
       border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel2); color: var(--text);
@@ -888,13 +888,13 @@
     .btn { flex: 1; min-height: var(--hit-44); padding: 0 var(--sp-4); }
     .btn:active { filter: brightness(1.25); }
     /* size compact (40px): the buttons of a row of actions on a screen or a card */
-    .td-acts button, .ds-fix, .ds-use, .ds-confirm, .ds-fk, .ds-nav button, .br-sched button, .bf-stale-acts button,
+    .td-acts button, .ds-fix, .ds-use, .ds-confirm, .ds-fk, .ds-nav button,
     .empty button.empty-act, .tds-none button, .rel button:not(.rel-refresh), .rl-card button:not(.rel-refresh) { min-height: var(--hit-40); padding: 0 var(--sp-14); }
     /* size dense (32px): inside a list row, a panel or a toolbar */
     .btn.sm, .btn.rv-reask, #sp .cite button, #sp .hk button, .us-crumbs button { min-height: var(--hit-32); padding: 0 var(--sp-10); font-size: var(--fs-13); }
     #sp .hk button.hk-cp { min-height: var(--hit-36); } /* the hunk Copy is the one a thumb reaches for */
     /* tones: one set for every surface */
-    .btn.primary, .td-acts .td-answer-btn, .ds-use, .ds-confirm, .ds-nav button:last-child, .bf-stale-acts .bf-start, .empty button.empty-act, .tds-none button,
+    .btn.primary, .td-acts .td-answer-btn, .ds-use, .ds-confirm, .ds-nav button:last-child, .empty button.empty-act, .tds-none button,
     .rel button.rel-approve, .rel button.rel-go, .rel button.rel-up, .rel button.rel-dep-btn, .rl-card button.rel-approve, .rl-card button.rel-go, .rl-card button.rel-up, .rl-card button.rel-dep-btn,
     #sp .cite button, #sp .hk button, .us-crumbs button { border-color: var(--blue); background: var(--chip-blue); color: var(--blue); }
     .btn.warn { color: var(--orange); }
@@ -1422,63 +1422,41 @@
     .co-note { margin: var(--sp-12) 0 0; font-size: var(--fs-14); line-height: 1.45; color: var(--code-text); overflow-wrap: anywhere; }
     .co-note code { font: var(--fs-13) var(--ff-code); background: var(--panel2); border-radius: var(--r-6); padding: 1px var(--sp-4); }
 
-    /* The briefings screen: a page to the right of the agent list; the menu's
-       History item slides it in. */
+    /* The Status screen (phone): a page to the right of the agent list; the
+       menu's Status item slides it in. */
     /* Vertical pans scroll and sideways ones do nothing: the list and the
-       briefings screen take no sideways gesture. Every descendant says so,
+       Status screen take no sideways gesture. Every descendant says so,
        because a nested scroller would otherwise take the sideways pan
        itself. Things that scroll sideways keep that. */
-    #list, #list *, #briefs, #briefs * { touch-action: pan-y pinch-zoom; }
+    #list, #list *, #st-screen, #st-screen * { touch-action: pan-y pinch-zoom; }
     #list .host-filter, #list .host-filter *, .md pre, .md pre *, .md table, .md table * { touch-action: pan-x pan-y pinch-zoom; }
     /* The list covers the screen, even when short: a touch below it would go to the page, which pans sideways. */
     #list { min-height: 100vh; min-height: 100dvh; }
     #list > main { padding-bottom: calc(var(--sp-16) + var(--safe-bottom)); }
-    #briefs {
+    #st-screen {
       position: fixed; inset: 0; z-index: var(--z-view); background: var(--bg);
       display: flex; flex-direction: column;
       transform: translateX(100%); visibility: hidden; box-shadow: -12px 0 24px var(--sh-md);
     }
-    #briefs.anim { transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.28s; }
-    #briefs.open { visibility: visible; transition-delay: 0s; }
-    #briefs.open { transform: none; }
-    #briefs.open.anim { transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
-    #briefs:focus { outline: none; }
-    @media (prefers-reduced-motion: reduce) { #briefs.anim, #briefs.open.anim { transition: none; } }
-    #briefs header .back {
+    #st-screen.anim { transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.28s; }
+    #st-screen.open { visibility: visible; transition-delay: 0s; }
+    #st-screen.open { transform: none; }
+    #st-screen.open.anim { transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    #st-screen:focus { outline: none; }
+    @media (prefers-reduced-motion: reduce) { #st-screen.anim, #st-screen.open.anim { transition: none; } }
+    #st-screen header .back {
       font: inherit; font-size: var(--fs-24); line-height: 1; cursor: pointer; color: var(--blue);
       background: none; border: 0; border-radius: var(--r-10); padding: 0;
       min-width: 44px; min-height: var(--hit-44); margin: -8px 0 -8px -8px;
       display: inline-flex; align-items: center; justify-content: center; flex: none;
     }
-    #briefs header .back:focus-visible { outline-offset: 0; }
-    #briefs header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
-    .br-body {
+    #st-screen header .back:focus-visible { outline-offset: 0; }
+    #st-screen header h2 { font-size: var(--fs-18); margin: 0; font-weight: 650; }
+    .ss-body {
       flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
       width: 100%; max-width: 640px; margin: 0 auto;
       padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px));
     }
-    .br-head { display: flex; align-items: baseline; gap: var(--sp-8); padding: var(--sp-10) var(--sp-14) var(--sp-6); }
-    .br-md { padding: 0 var(--sp-14) var(--sp-12); font-size: var(--fs-15); overflow-wrap: anywhere; }
-    .br-md > :first-child { margin-top: 0; }
-    .br-md h2 { font-size: var(--fs-15); margin: var(--sp-12) 0 var(--sp-4); }
-    .br-md h2:first-child { margin-top: var(--sp-2); }
-    .br-sched { display: flex; align-items: center; gap: var(--sp-10); margin: var(--sp-10) var(--sp-2) 0; color: var(--muted); font-size: var(--fs-14); }
-    .br-sched span { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
-    .br-sched button { flex: none; }
-    .br-sched button:focus-visible { outline-offset: 1px; }
-    .br-h { margin: var(--sp-20) var(--sp-2) var(--sp-8); font-size: var(--fs-13); font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-    .br-note { margin: 0 var(--sp-2); color: var(--muted); font-size: var(--fs-14); }
-    .br-item { margin-bottom: var(--sp-6); border-radius: var(--r-12); background: var(--panel); border: 1px solid var(--border); }
-    .br-item summary {
-      display: flex; align-items: center; gap: var(--sp-8); min-height: var(--hit-44); padding: var(--sp-8) var(--sp-12); cursor: pointer; list-style: none;
-    }
-    .br-item summary::-webkit-details-marker { display: none; }
-    .br-item summary:focus-visible { outline-offset: -2px; border-radius: var(--r-12); }
-    .br-when { flex: none; font-size: var(--fs-13); font-weight: 600; color: var(--muted); }
-    .br-pre { min-width: 0; flex: 1 1 auto; font-size: var(--fs-14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .br-item[open] .br-pre { display: none; }
-    .br-digest { margin: 0; padding: var(--sp-10) var(--sp-14) var(--sp-10) var(--sp-32); font-size: var(--fs-14); }
-    .br-item .br-md { border-top: 1px solid var(--border); padding-top: var(--sp-10); }
     /* The to-do list: an accordion, one item open at a time. The phone shows
        it as a card in the list; desktop as the To do page (rules further down). */
     .todo {
@@ -1753,13 +1731,11 @@
     .nv-dot { display: inline-block; width: 8px; height: 8px; margin-left: var(--sp-8); border-radius: 50%; background: var(--orange); vertical-align: middle; } .nv-dot[hidden] { display: none; }
     .nv .bdot { position: absolute; top: 5px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 6px var(--blue); }
 
-    /* Status: one card per project, built from live data. Used on the desktop page and on the phone's briefings screen. */
+    /* Status: one card per project, built from live data. Used on the desktop page and on the phone's Status screen. */
     .st { display: flex; flex-direction: column; gap: var(--sp-10); max-width: 820px; }
     .st-sum { color: var(--muted); font-size: var(--fs-14); margin: 0 var(--sp-2); }
-    /* The briefing board above the Status cards and the coordinator's briefing. */
+    /* The board above the Status cards. */
     .bd { display: flex; flex-direction: column; gap: var(--sp-8); }
-    .bd-head { margin: 0; padding: var(--sp-10) var(--sp-12); background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-14); font-size: var(--fs-15); font-weight: 600; line-height: 1.45; }
-    .bd-by { display: block; margin-top: var(--sp-2); font-size: var(--fs-12); font-weight: 400; color: var(--muted); }
     .bd-clear { margin: 0 var(--sp-2); font-size: var(--fs-14); color: var(--muted); }
     .bd-lane { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-14); }
     .bd-lane.need { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
@@ -1780,7 +1756,6 @@
     .bd-age { color: var(--muted); font-size: var(--fs-12); }
     .bd-tag { padding-top: 0; padding-bottom: 0; font-size: var(--fs-12); font-weight: 400; }
     .bd-d { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
-    .bd-note { margin-top: var(--sp-2); padding-left: var(--sp-8); border-left: 2px solid var(--border); color: var(--text); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .bd-todo { display: block; width: 100%; min-height: var(--hit-44); padding: var(--sp-2) 0; text-align: left; background: none; border: 0; color: var(--text); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
     .bd-q { font-weight: 600; }
     .bd-id { margin-left: var(--sp-6); color: var(--muted); font-size: var(--fs-12); }
@@ -1794,24 +1769,6 @@
     .bd-more { margin: var(--sp-4) 0 0; padding: 0 var(--sp-12) var(--sp-8); color: var(--muted); font-size: var(--fs-13); }
     .bd-rep > summary { cursor: pointer; color: var(--blue); font-size: var(--fs-13); }
     .bd-foot { margin: 0 var(--sp-2); color: var(--muted); font-size: var(--fs-13); }
-    /* The Briefings card on Status (desktop page and the top of the phone's briefings screen). */
-    .bcard { display: flex; flex-direction: column; gap: var(--sp-10); padding: var(--sp-12) var(--sp-14); }
-    .bc-h { font-weight: 650; }
-    .bc-kv { display: flex; justify-content: space-between; gap: var(--sp-12); font-size: var(--fs-14); }
-    .bc-kv span { color: var(--muted); flex: none; }
-    .bc-kv b { font-weight: 600; text-align: right; min-width: 0; overflow-wrap: anywhere; }
-    .bc-seg { display: flex; }
-    .bc-seg button { flex: 1 1 0; min-width: 0; padding: 0 var(--sp-6); overflow-wrap: anywhere; }
-    .bc-seg button:disabled { cursor: default; flex-grow: 2; }
-    .bc-seg button:focus-visible, .bc-fld select:focus-visible, .bc-chk input:focus-visible { outline-offset: -2px; }
-    .bc-chk { display: flex; align-items: center; gap: var(--sp-10); min-height: var(--hit-36); font-size: var(--fs-14); }
-    .bc-chk input { width: 20px; height: 20px; accent-color: var(--blue); flex: none; }
-    .bc-fld { display: flex; flex-direction: column; gap: var(--sp-4); font-size: var(--fs-14); }
-    .bc-fld select { min-height: var(--hit-44); padding: 0 var(--sp-8); background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-8); font: inherit; font-size: var(--fs-14); }
-    .bc-fld small { color: var(--muted); font-size: var(--fs-13); }
-    .bc-chk:has(input:disabled), .bc-fld:has(select:disabled) { opacity: 0.55; }
-    .bc-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
-    .bc-acts .btn { flex: 1 1 auto; }
     header .bell[aria-disabled="true"] { opacity: 0.5; }
     .st-proj { border-radius: var(--r-14); background: var(--panel); border: 1px solid var(--border); padding: var(--sp-10) var(--sp-12) var(--sp-6); }
     .st-proj.hot { border-color: color-mix(in srgb, var(--orange) 45%, var(--border)); }
@@ -1858,7 +1815,6 @@
     .st-repair .st-r { margin-left: var(--sp-8); }
     .st-repair code { font: var(--fs-12) var(--ff-code); overflow-wrap: anywhere; }
     .st-hint { margin: var(--sp-4) 0; padding: var(--sp-6) var(--sp-8); border-radius: var(--r-8); background: var(--panel2); font: var(--fs-13)/1.45 var(--ff-code); overflow-wrap: anywhere; white-space: pre-wrap; }
-    #br-status { margin-bottom: var(--sp-14); }
 
     /* The To do page: desktop only (the media query below shows it). */
     .page { display: none; }
@@ -1950,12 +1906,6 @@
     .pt-keys[hidden] { display: none; }
     .pt-keys kbd { font: var(--fs-11) var(--ff-code); padding: 1px var(--sp-6); border: 1px solid var(--border); border-radius: var(--r-6); background: var(--panel2); color: var(--text); }
 
-    /* The briefing a coordinator published. */
-    .briefing {
-      margin-bottom: var(--sp-10); border-radius: var(--r-14); background: var(--panel);
-      border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border));
-    }
-    .briefing[hidden] { display: none; }
     .plans { margin-bottom: var(--sp-10); }
     .plans[hidden] { display: none; }
     .plan {
@@ -2007,39 +1957,13 @@
     .pm-rep summary { cursor: pointer; padding: var(--sp-2) 0; }
 
     .pm-rep .md { color: var(--text); max-height: 40vh; overflow: auto; }
-    .bf-head { display: flex; align-items: center; }
-    .bf-toggle {
-      flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-8); min-height: var(--hit-44); padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-8);
-      background: none; border: 0; color: var(--text); font: inherit; text-align: left; cursor: pointer;
-    }
-    .bf-toggle[aria-expanded="false"] .proj-chev { transform: rotate(-45deg); }
-    .bf-title { font-weight: 650; font-size: var(--fs-14); color: var(--blue); flex: none; }
-    .bf-meta { color: var(--muted); font-size: var(--fs-13); min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .bf-dismiss {
-      flex: none; min-width: 44px; min-height: var(--hit-44); border: 0; border-radius: var(--r-12); background: none;
-      color: var(--muted); font-size: var(--fs-16); cursor: pointer;
-    }
-    .bf-toggle:focus-visible, .bf-dismiss:focus-visible { outline-offset: -2px; border-radius: var(--r-12); }
-    .bf-body { padding: 0 var(--sp-14) var(--sp-10); font-size: var(--fs-14); max-height: 45vh; overflow-y: auto; overscroll-behavior: contain; }
-    .bf-preview { padding: 0 var(--sp-14) 0 36px; margin: -4px 0 var(--sp-10); font-size: var(--fs-14); line-height: 1.4; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-    .bf-body[hidden] { display: none; }
-    .bf-body > :first-child { margin-top: 0; }
-    .bf-body h2 { font-size: var(--fs-15); margin: var(--sp-12) 0 var(--sp-4); }
-    .bf-body h2:first-child { margin-top: var(--sp-2); }
-    /* Missed scheduled briefings: the briefing is stale. */
-    .briefing.stale { border-color: color-mix(in srgb, var(--orange) 55%, var(--border)); }
-    .bf-toggle.static { cursor: default; padding-left: var(--sp-14); }
-    .bf-stale { margin: 0 var(--sp-14) var(--sp-10); padding: var(--sp-8) var(--sp-10); border-radius: var(--r-10); background: color-mix(in srgb, var(--orange) 12%, var(--panel)); font-size: var(--fs-14); }
-    .bf-stale p { margin: 0 0 var(--sp-6); color: var(--text); overflow-wrap: anywhere; }
-    .bf-stale-acts { display: flex; flex-wrap: wrap; gap: var(--sp-6); }
-    .bf-stale-acts button:focus-visible { outline-offset: 1px; }
     /* Desktop view (>= 1100px): two columns. The agent list stays on the
        left; one selection fills the pane on the right: an agent, or a page
-       (Briefing, To do). 1100px leaves the agent view well over a
+       (Status, To do). 1100px leaves the agent view well over a
        phone-width chat, and is wider than any phone or portrait tablet, so
        those keep the phone UI.
        Pure CSS plus a few hooks in app.js (state.view and the body classes
-       view-briefing / view-todo / has-detail): #list and its <main> become
+       view-status / view-todo / has-detail): #list and its <main> become
        display:contents so each piece can take its own grid cell. */
     /* Collapsing the list (desktop): the left column shrinks to a thin rail
        with one expand button and what needs the user. The list stays in the
@@ -2064,7 +1988,7 @@
       /* The list column sits one step below the conversation (--nav-bg); #chat, #sv-chat, the detail and the pages stay on --bg. */
       body { background: var(--nav-bg); }
       #list header { background: transparent; }
-      #detail, #detail-empty, #briefs, .page, .screen, #review { background: var(--bg); }
+      #detail, #detail-empty, .page, .screen, #review { background: var(--bg); }
       body.list-collapsed #list-rail { background: var(--nav-bg); }
       body.list-collapsed #list-rail:hover { background: var(--panel); }
       /* The footer is part of the column (no lighter strip on the recessed nav); the host filter's pills and the rail's hover stay --panel, one step above it. */
@@ -2073,18 +1997,17 @@
         grid-template-columns: var(--list-w) minmax(0, 1fr);
         grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr) auto;
       }
-      /* The pages take the detail cell. The briefings screen is the Briefing page. */
-      #briefs, .page {
+      /* The pages take the detail cell. The Status page replaces the phone's Status screen. */
+      .page {
         position: static; grid-column: 2; grid-row: 1 / -1; z-index: auto; min-height: 0; min-width: 0; overflow: hidden;
         transform: none !important; visibility: visible; box-shadow: none; border-left: 1px solid var(--border);
         display: none; flex-direction: column;
       }
-      body.view-briefing #briefs, body.view-todo #p-todo, body.view-status #p-status { display: flex; }
+      body.view-todo #p-todo, body.view-status #p-status { display: flex; }
       #f-pages, #f-usage, #f-peers, #f-settings { display: none !important; } /* the icon row above the list has them */
-      #f-brief, #f-briefs, #briefs header .back { display: none !important; }
+      #f-status, #st-screen { display: none !important; }
       #rtr-banner, #btn-recall { display: none !important; } /* the Ready to remove and Search rows replace them */
       #list { min-height: 0; }
-      .br-body { max-width: 820px; margin: 0; }
       #list, #list main { display: contents !important; }
       #list header { grid-column: 1; grid-row: 1; gap: var(--sp-4); padding-left: var(--sp-14); padding-right: var(--sp-14); }
       header .count .long { display: none; }
@@ -2114,8 +2037,8 @@
       .agent.selected { outline: 2px solid var(--focus); outline-offset: -1px; background: var(--bg-sel); }
       .agent.selected:focus-visible { outline-offset: -1px; }
       #f-menu { right: auto; left: calc(var(--list-w) - 10px); transform: translateX(-100%); }
-      /* The Briefing and To do pages replace these two cards. */
-      #briefing, #todo { display: none !important; }
+      /* The To do page replaces this card. */
+      #todo { display: none !important; }
 
       #detail, #detail-empty { grid-column: 2; grid-row: 1 / -1; border-left: 1px solid var(--border); min-width: 0; min-height: 0; }
       #detail { display: none !important; height: auto; contain: layout; } /* contain: its fixed sub-view and menu stay inside the pane */
@@ -3207,8 +3130,7 @@
       <button type="button" role="menuitem" id="f-font" class="has-side"><span class="m-grow">Font</span><span class="m-side" id="f-font-val">Sans</span></button>
       <button type="button" role="menuitem" id="f-notify" class="has-side" aria-haspopup="dialog" aria-controls="notify-panel"><span class="m-grow">Notifications</span><span class="m-side" id="f-notify-val"></span></button>
       <div class="m-grp" role="presentation">Hub</div>
-      <button type="button" role="menuitem" id="f-brief">Briefing</button>
-      <button type="button" role="menuitem" id="f-briefs">History</button>
+      <button type="button" role="menuitem" id="f-status">Status</button>
       <button type="button" role="menuitem" id="f-pages">Pages</button>
       <button type="button" role="menuitem" id="f-usage">Usage</button>
       <button type="button" role="menuitem" id="f-peers">Peers</button>
@@ -3232,7 +3154,7 @@
       <div class="tp-hint" id="tp-hint" aria-live="polite"></div>
       <div class="tp-sys" id="tp-sys" hidden></div>
     </section>
-    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><div id="list-filter" class="lf" hidden><div class="lf-top"><div class="lf-box"><input id="lf-q" type="search" class="lf-q" placeholder="Filter by name, branch or repo" aria-label="Filter agents by name, branch or repo" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><kbd class="lf-key" aria-hidden="true">f</kbd><button type="button" id="lf-x" class="lf-x" aria-label="Clear the filter" hidden>&times;</button></div><button type="button" id="gb-btn" class="gb-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="gb-pop" title="Group the list by"><span class="gb-k">Group</span><span class="gb-label" id="gb-label">Project</span><span class="chev" aria-hidden="true">&#9662;</span></button></div><div class="lf-tabs" id="lf-tabs" role="group" aria-label="Show agents by status"></div></div><section id="briefing" class="briefing" aria-label="Briefing" hidden></section><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
+    <main><nav id="nav" class="pnav" aria-label="Pages"></nav><div id="host-filter" class="hp-bar" hidden></div><div id="list-filter" class="lf" hidden><div class="lf-top"><div class="lf-box"><input id="lf-q" type="search" class="lf-q" placeholder="Filter by name, branch or repo" aria-label="Filter agents by name, branch or repo" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><kbd class="lf-key" aria-hidden="true">f</kbd><button type="button" id="lf-x" class="lf-x" aria-label="Clear the filter" hidden>&times;</button></div><button type="button" id="gb-btn" class="gb-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="gb-pop" title="Group the list by"><span class="gb-k">Group</span><span class="gb-label" id="gb-label">Project</span><span class="chev" aria-hidden="true">&#9662;</span></button></div><div class="lf-tabs" id="lf-tabs" role="group" aria-label="Show agents by status"></div></div><section id="todo" class="todo" aria-label="To do" hidden></section><section id="plans" class="plans" aria-label="Plans" hidden></section><button type="button" id="rtr-banner" class="rtr-banner" hidden></button><div id="agents"></div></main>
     <div id="keybar" class="keybar"><span id="kb-mode" class="kb-mode" data-mode="NAV" role="status" aria-label="Keyboard mode">NAV</span><button type="button" id="kb-open" class="kb-hint" aria-label="Open the command palette"><span id="kb-hint"></span></button></div>
     <button type="button" id="list-rail" class="list-rail" aria-label="Expand the list" aria-controls="agents" aria-expanded="false" title="Expand the list ( [ )">
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 4.5v15M13 9.5l2.5 2.5-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -3241,13 +3163,13 @@
     </button>
   </div>
 
-  <!-- Briefings (the ⋯ menu's History item) -->
-  <section id="briefs" aria-label="Briefings" tabindex="-1" inert>
+  <!-- Status (phone; the ⋯ menu's Status item) -->
+  <section id="st-screen" aria-label="Status" tabindex="-1" inert>
     <header>
-      <button type="button" class="back" id="br-back" aria-label="Back to the agent list">&#8249;</button>
-      <h2>Briefings</h2>
+      <button type="button" class="back" id="ss-back" aria-label="Back to the agent list">&#8249;</button>
+      <h2>Status</h2>
     </header>
-    <div class="br-body" id="br-body"></div>
+    <div class="ss-body" id="ss-body"></div>
   </section>
 
   <!-- Status page (desktop only): generated from the ledger, the to-do list and the agents -->
@@ -3469,7 +3391,7 @@
     </header>
     <div class="ln-body">
       <div class="rv-name" id="fs-name"></div>
-      <div class="ln-note" id="fs-note">Clears this coordinator&rsquo;s context in place: the hub sends <code>/clear</code> into its pane and a digest of the briefing, to-dos, handoffs and its notes is loaded into the new session. Same pane, name and role. It waits until the coordinator is idle with nothing queued for it.</div>
+      <div class="ln-note" id="fs-note">Clears this coordinator&rsquo;s context in place: the hub sends <code>/clear</code> into its pane and a digest of the board, to-dos, handoffs and its notes is loaded into the new session. Same pane, name and role. It waits until the coordinator is idle with nothing queued for it.</div>
       <div class="ln-note" id="fs-ctx" aria-live="polite"></div>
     </div>
     <footer class="ln-foot">
@@ -3523,7 +3445,6 @@
       <button type="button" role="menuitem" id="d-transcript" hidden>View transcript</button>
       <button type="button" role="menuitem" id="d-mark">Mark ready to remove…</button>
       <button type="button" role="menuitem" id="d-role">Make coordinator</button>
-      <button type="button" role="menuitem" id="d-sched" hidden>Briefing schedule…</button>
       <button type="button" role="menuitem" id="d-fresh" hidden>Fresh start…</button>
     </div>
     <main>

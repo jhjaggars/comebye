@@ -118,13 +118,13 @@ for (const dark of [false, true]) {
     } finally { await browser.close(); }
   });
 
-  await check(`${scheme} @1280: the fleet menu has no Pages, Usage, Peers or Settings; Briefing/History/Refresh stay`, async () => {
+  await check(`${scheme} @1280: the fleet menu has no Pages, Usage, Peers, Settings or Status; Refresh stays`, async () => {
     const { browser, page } = await open(1280, dark);
     try {
       await page.click("#btn-fleet");
       await page.waitForSelector("#f-menu:not([hidden])");
-      for (const id of ["f-pages", "f-usage", "f-peers", "f-settings"]) if (await page.locator("#" + id).isVisible()) throw new Error(id + " is in the menu");
-      for (const id of ["f-briefs", "f-refresh", "f-theme"]) if (!(await page.locator("#" + id).isVisible()) && id !== "f-briefs") throw new Error(id + " is missing");
+      for (const id of ["f-pages", "f-usage", "f-peers", "f-settings", "f-status"]) if (await page.locator("#" + id).isVisible()) throw new Error(id + " is in the menu");
+      for (const id of ["f-refresh", "f-theme"]) if (!(await page.locator("#" + id).isVisible())) throw new Error(id + " is missing");
     } finally { await browser.close(); }
   });
 

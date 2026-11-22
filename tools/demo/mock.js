@@ -177,11 +177,6 @@
         { id: "td-9b4", kind: "decision", state: "answered", question: "Keep the v1 API alive through Q3?", created_at: ago(500), updated_at: ago(8), created_by: "quill",
           answer: { text: "Yes, through Q3. Tell the two partners by Friday.", by: "you", via: "app", at: ago(8) } },
       ],
-      brief: { markdown: "## tidepool\n- **retry-webhooks** is running: backoff for webhook delivery.\n- **rate-limit-store** is waiting on your answer about the store.\n- **csv-export** finished and is ready for you to look at.\n\n## fernlog\n- **search-index-v2** is measuring the new index build.\n- **arm64-build** failed: the spot VM was reclaimed. I'll retry on buildbox.", by: "quill", at: ago(45) },
-      briefHistory: [
-        { markdown: "## overnight\n- **hero-copy** landed on marigold-site.\n- Nothing is waiting on you.", by: "quill", at: ago(800) },
-      ],
-      schedule: { enabled: true, every: "24h", at: "08:00", tz: "UTC", state: "ok", updated: ago(5000) },
     };
     startScripts();
   }
@@ -551,13 +546,6 @@
     if (path === "/api/agents") return agentsPayload();
     if (path === "/api/version") return { version: VERSION };
     if (path === "/api/ledger") return ledgerPayload();
-    if (path === "/api/brief") return { brief: S.brief, schedule: S.schedule };
-    if (path === "/api/brief/history") return { briefs: [S.brief, ...S.briefHistory], max: 48 };
-    if (path === "/api/brief/schedule") {
-      if (method === "POST") S.schedule = body.enabled ? { enabled: true, every: body.every, at: body.at, tz: body.tz, state: "ok", updated: now() } : { enabled: false, state: "off", updated: now() };
-      return { schedule: S.schedule };
-    }
-    if (path === "/api/brief/schedule/dismiss") return { schedule: S.schedule };
     if (path === "/api/todos") return todosPayload();
     let m = path.match(/^\/api\/todos\/([^/]+)\/(answer|done|drop)$/);
     if (m && method === "POST") return todoAct(decodeURIComponent(m[1]), m[2], body);

@@ -25,7 +25,6 @@ export const STATES = {
   "list-host-empty": { hash: "", ledger: true, eval: "state.hostFilter = 'peerbox'; state.agents = state.agents.filter((a) => a.host !== 'peerbox'); renderList()", sel: "#list .empty, #list .empty-state" },
   "review-empty":   { hash: "", ledger: true, eval: "openReview(); await new Promise(r => setTimeout(r, 600)); review.items = []; renderReview()", sel: "#rv-list .ln-empty, #rv-list .empty-state" },
   "sweep-empty":    { hash: "", ledger: true, eval: "openReview(); await new Promise(r => setTimeout(r, 600)); Object.assign(sweep, { shown: true, busy: false, data: { ready: [], needs_look: [] } }); renderSweep()", sel: "#rv-sweepbox .ln-empty" },
-  "briefing-none":  { hash: "#/briefings", ledger: true, sel: ".br-empty, .empty-state" },
   "notify-panel":   { hash: "", ledger: true, click: "#btn-notify", sel: "#notify-status" },
   "launch-dirs":    { hash: "", ledger: true, click: "#btn-launch", sel: ".ln-empty, .empty-state", any: true },
 };
@@ -38,12 +37,11 @@ for (const w of widths) for (const th of themes) {
   await ctx.addInitScript((t) => { if (!["dark", "light"].includes(t)) localStorage.setItem("comebye.theme", t); }, th);
   for (const [name, s] of Object.entries(STATES)) {
     if (only && !only.includes(name)) continue;
-    if ((name.startsWith("todo") || name.startsWith("status") || name === "briefing-none") && w < 1000 && name !== "todo-none") continue;
+    if ((name.startsWith("todo") || name.startsWith("status")) && w < 1000 && name !== "todo-none") continue;
     const p = await ctx.newPage();
     await p.setViewportSize({ width: w, height: w <= 500 ? 844 : 800 });
     await p.route(/\/api\/ledger$/, (r) => s.ledger === false ? r.fulfill({ status: 503, json: { error: "no ledger" } }) : r.fulfill({ json: EMPTY_LEDGER }));
     if (s.todos) await p.route(/\/api\/todos$/, (r) => r.fulfill({ json: s.todos }));
-    if (name === "briefing-none") await p.route(/\/api\/brief$/, (r) => r.fulfill({ status: 404, json: { error: "none" } }));
     await p.goto(base + "/" + s.hash);
     await p.waitForTimeout(900);
     if (s.eval) await p.evaluate(`(async () => { ${s.eval} })()`);

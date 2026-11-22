@@ -1,6 +1,6 @@
 // The Copy strip on fenced code blocks (addCopyStrips / copyText in web/app.js),
 // against the shared server, in headless Chrome with clipboard permission so the
-// text that reaches the clipboard is read back. Chat, To do and the briefing.
+// text that reaches the clipboard is read back. Chat and To do.
 //
 //   node copycode.mjs BASE OUT_DIR      (env: SCHEME)
 import { launch } from "./lib.mjs";
@@ -99,22 +99,6 @@ await check("todo: falls back to execCommand when the clipboard API refuses", as
   await page.locator(".td-ctx .cb-copy").first().click(); await page.waitForTimeout(300);
   same(await page.evaluate(() => window.__rt()), CMD.replace(/\n$/, ""), "fallback copy");
   same(await page.locator(".td-ctx .cb-copy").first().getAttribute("data-state"), "ok", "state");
-});
-
-// ---- the briefing ----
-await check("briefing: a code block has a strip and copies exactly", async () => {
-  const md = "Check:\n\n```sh\nls -la\ncd /tmp\n```\n";
-  const r = await fetch(base + "/api/brief", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ markdown: md }) });
-  if (!r.ok) throw new Error("publish brief: " + r.status);
-  await page.goto(base + "/", { waitUntil: "load" });
-  const tog = page.locator("#briefing .bf-toggle");
-  await tog.waitFor({ state: "visible", timeout: 8000 });
-  if ((await tog.getAttribute("aria-expanded")) !== "true") await tog.click();
-  await page.waitForSelector("#briefing .bf-body .cb", { state: "visible", timeout: 5000 });
-  await page.evaluate(() => { for (const k of ["readText"]) void k; });
-  await page.locator("#briefing .cb-copy").first().click(); await page.waitForTimeout(300);
-  // the clipboard API was replaced above only on the previous document; this one is fresh
-  same(await clip(), "ls -la\ncd /tmp", "briefing block");
 });
 
 // ---- chat: the fake agent echoes the prompt, so a fenced block comes back in a bubble ----

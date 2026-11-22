@@ -15,8 +15,8 @@ async function check(name, fn) {
   catch (e) { results.push(false); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
 }
 const CHIPS = ".chip, .wt-chip, .host-chip, .lg-chip, .role-chip, .us-chip, .bd-tag, .td-chip, .rel-chip, .bd-chip, .rc-tag, .rv-chip";
-const CARDS = ".card, .bcard, .pz-card, .rl-card, .us-card, .rc-card, .pgs-card, .pgs-hit, .pr-card";
-const SEGS = ".seg, .bd-seg, .bc-seg, .pgs-seg, .us-seg";
+const CARDS = ".card, .pz-card, .rl-card, .us-card, .rc-card, .pgs-card, .pgs-hit, .pr-card";
+const SEGS = ".seg, .bd-seg, .pgs-seg, .us-seg";
 const same = (a, what) => { const u = [...new Set(a)]; if (u.length > 1) throw new Error(`${what} differ: ${JSON.stringify(u)}`); };
 
 for (const width of [390, 1280]) {
@@ -26,7 +26,7 @@ for (const width of [390, 1280]) {
   page.on("pageerror", (e) => errs.push(e.message));
   const tag = `${width}px ${dark ? "dark" : "light"}`;
   const seen = { chips: [], cards: [], segs: [] };
-  for (const hash of ["", "#/todo", "#/status", "#/peers", "#/usage", "#/briefings", "#/pages"]) {
+  for (const hash of ["", "#/todo", "#/status", "#/peers", "#/usage", "#/pages"]) {
     await page.goto(base + "/" + hash, { waitUntil: "load" });
     await page.waitForTimeout(700);
     const r = await page.evaluate(([chips, cards, segs]) => {

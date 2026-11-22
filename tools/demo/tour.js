@@ -129,7 +129,7 @@
         await until(() => document.querySelector("#rv-list .rv-item"));
       }, target: () => ["#rv-list"] },
     { title: "Light or dark, then it's yours",
-      body: `<p>The ⋮ menu holds the theme, along with the sweep for finished workers and the briefing schedule. Pick a theme:</p>
+      body: `<p>The ⋮ menu holds the theme, along with Status and the sweep for finished workers. Pick a theme:</p>
         <div class="themes"><button type="button" class="demo-btn" data-theme-pick="system">System</button><button type="button" class="demo-btn" data-theme-pick="light">Light</button><button type="button" class="demo-btn" data-theme-pick="dark">Dark</button></div>
         <p style="margin-top:10px">That's the tour. Everything still works, so click around. Below 1100px wide the same app becomes the phone layout it was built for.</p>`,
       async go() {

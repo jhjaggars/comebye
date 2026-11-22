@@ -9,7 +9,7 @@
 # It starts the fake herdr (tools/devserver -fixtures: workers, a coordinator,
 # home agents, a blocked dialog, long names, a marked session) and comebye
 # built from THIS checkout, plus a second fake herdr + comebye as a peer host
-# ("peerbox"), seeded with a coordinator, a mark and a briefing (seed.mjs).
+# ("peerbox"), seeded with a coordinator and a mark (seed.mjs).
 # web/ is served from disk (COMEBYE_DEV_WEB_DIR): edit web/*.js|css|html and
 # reload, no rebuild. Go changes need `restart`. State lives in a mktemp dir
 # recorded in tools/uitest/.dev-run (git-ignored), so each checkout has its
