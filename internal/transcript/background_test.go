@@ -183,3 +183,27 @@ func TestBackgroundAgentWaitingOnItsOwnWorkStaysOpen(t *testing.T) {
 		t.Errorf("a finished agent is still listed: %+v", l.Background)
 	}
 }
+
+// A foreground Bash call that outruns its timeout is moved to the
+// background by Claude Code: the call has no run_in_background, and its
+// result says so in other words. Three landings on 2026-11-18 were failed
+// as "stopped" while such a run (the full uitest suite) was still going
+// (issue #32).
+func TestBackgroundBashMovedAfterItsTimeout(t *testing.T) {
+	launch := []string{
+		bgCall("t1", "Bash", `{"command":"tools/uitest/run.sh 2>&1 | tail -8","timeout":900000}`),
+		bgResult("t1", "Terminated\n---\nCommand did not complete within its 600s timeout and was moved to the background (ID: ba9ih00go). Output is being written to: /tmp/x/tasks/ba9ih00go.output. You will be notified when it completes."),
+	}
+	l := bgLines(t, launch...)
+	if len(l.Background) != 1 || l.Background[0].ID != "ba9ih00go" || l.Background[0].Tool != "Bash" || !l.Background[0].Cmd {
+		t.Fatalf("a moved command not seen: %+v", l.Background)
+	}
+	if l = bgLines(t, append(launch, notif("ba9ih00go", "failed"))...); len(l.Background) != 0 {
+		t.Errorf("a moved command that ended is still listed: %+v", l.Background)
+	}
+	// A foreground call that finishes in time starts nothing.
+	l = bgLines(t, bgCall("t2", "Bash", `{"command":"go vet ./...","description":"vet"}`), bgResult("t2", "ok"))
+	if len(l.Background) != 0 {
+		t.Errorf("a finished foreground call is listed: %+v", l.Background)
+	}
+}

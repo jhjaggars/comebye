@@ -9,7 +9,10 @@ package transcript
 //
 //   - launch: the tool_result of the call says "Command running in
 //     background with ID: <id>" (Bash), "Async agent launched ... agentId:
-//     <id>" (Agent/Task) or "Monitor started (task <id>, ..." (Monitor);
+//     <id>" (Agent/Task) or "Monitor started (task <id>, ..." (Monitor); a
+//     foreground Bash call that outruns its timeout is moved to the
+//     background, and its result says "... was moved to the background
+//     (ID: <id>)";
 //   - end: a <task-notification> naming <task-id> and a terminal <status>
 //     (completed, failed, killed, stopped), as a queue-operation record, an
 //     attachment (mid-turn) or a user record; or TaskStop's "Successfully
@@ -45,6 +48,7 @@ const maxBackgroundAge = 12 * time.Hour
 
 var (
 	bgBashRE    = regexp.MustCompile(`Command running in background with ID:\s*([A-Za-z0-9_-]+)`)
+	bgMovedRE   = regexp.MustCompile(`moved to the background \(ID:\s*([A-Za-z0-9_-]+)\)`)
 	bgMonitorRE = regexp.MustCompile(`Monitor started \(task ([A-Za-z0-9_-]+)`)
 	bgAgentRE   = regexp.MustCompile(`agentId:\s*([A-Za-z0-9_-]+)`)
 	bgStoppedRE = regexp.MustCompile(`Successfully stopped task:\s*([A-Za-z0-9_-]+)`)
@@ -55,6 +59,9 @@ var (
 type bgLaunch struct {
 	tool, desc string
 	cmd        bool
+	// fg: a Bash call not run in the background, which starts a task only
+	// if it is moved there after its timeout.
+	fg bool
 }
 
 // bgTracker follows launches and endings through a stream of records.
@@ -86,8 +93,8 @@ func (t *bgTracker) call(id, name string, input json.RawMessage) {
 	case string:
 		bg = v == "true"
 	}
-	if !bg && name != "Monitor" {
-		return
+	if !bg && name != "Monitor" && name != "Bash" {
+		return // only a Bash call can be moved to the background later
 	}
 	tool := name
 	if isAgentTool(name) {
@@ -98,7 +105,7 @@ func (t *bgTracker) call(id, name string, input json.RawMessage) {
 	if desc == "" {
 		desc, cmd = strings.TrimSpace(in.Command), true
 	}
-	t.calls[id] = bgLaunch{tool: tool, desc: Excerpt(desc, 120), cmd: cmd}
+	t.calls[id] = bgLaunch{tool: tool, desc: Excerpt(desc, 120), cmd: cmd, fg: !bg && name == "Bash"}
 	if len(t.calls) > 200 { // keep the map small on a long window
 		for k := range t.calls {
 			delete(t.calls, k)
@@ -121,7 +128,11 @@ func (t *bgTracker) result(toolUseID, text, at string) {
 	var id string
 	switch {
 	case call.tool == "Bash":
-		if m := bgBashRE.FindStringSubmatch(text); m != nil {
+		re := bgBashRE
+		if call.fg {
+			re = bgMovedRE
+		}
+		if m := re.FindStringSubmatch(text); m != nil {
 			id = m[1]
 		}
 	case call.tool == "Monitor":
