@@ -34,7 +34,7 @@ import (
 // busy the notice waits (the callers retry). Only when the owner is gone (its
 // pane closed, or its role removed) does it fall back to the pool, and the
 // notice then says whose it was. A notice nobody owns (a release, a sweep, a
-// briefing, a user-started agent no coordinator ever prompted) goes to the
+// user-started agent no coordinator ever prompted) goes to the
 // main coordinator: the first one registered, which stays main (durably, in
 // roles.json) until its role is removed, then the oldest remaining one; the
 // user may also mark another (comebye coordinator main). While main is busy
@@ -191,8 +191,18 @@ func (s *Server) owningCoordinator(ref *ledger.Ref) *ledger.Ref {
 	return nil
 }
 
+// Why a notice has nowhere to go now (coordRoute.Why).
+const (
+	routeNoCoordinator = "no_coordinator"
+	routeBusy          = "busy"
+	// routeUnknown: the hub cannot tell whether a coordinator is running (a
+	// recorded one is not in the fleet, or the fleet is empty), so the
+	// caller asks again later.
+	routeUnknown = "unknown"
+)
+
 // coordRoute is where a notice goes. Agent nil means nobody now: Why says
-// why (missBusy waits for the owner, retried by the caller). Gone is the
+// why (routeBusy waits for the owner, retried by the caller). Gone is the
 // name of the owning coordinator when the notice fell back to the pool
 // because that coordinator is gone.
 type coordRoute struct {
@@ -222,12 +232,12 @@ func (s *Server) routeCoordinator(owner *ledger.Ref) coordRoute {
 			a := a
 			return coordRoute{Agent: &a}
 		}
-		return coordRoute{Why: missBusy}
+		return coordRoute{Why: routeBusy}
 	}
 	// Not in the fleet. A host that reports no agents may be down or still
 	// starting: wait rather than call its coordinator gone.
 	if len(agents) == 0 || !hostSeen[idHost(owner.AgentID)] {
-		return coordRoute{Why: waitUnknown}
+		return coordRoute{Why: routeUnknown}
 	}
 	gone := owner.Name
 	if gone == "" {
@@ -347,7 +357,7 @@ func (s *roleStore) setMain(id string) error {
 
 // poolRoute picks the coordinator for a notice nobody owns: the main
 // coordinator (marked by the user; else the first registered live one). When
-// main is busy the notice waits (Why missBusy; the callers retry). When main
+// main is busy the notice waits (Why routeBusy; the callers retry). When main
 // is not running, any idle coordinator takes it and Gone names main. Without
 // a coordinator it says why: none running, or unknown (a recorded one is not
 // in the fleet: its host may be down or still starting; never a miss).
@@ -398,7 +408,7 @@ func (s *Server) poolRoute() coordRoute {
 				a := c.a
 				return coordRoute{Agent: &a}
 			}
-			return coordRoute{Why: missBusy}
+			return coordRoute{Why: routeBusy}
 		}
 	}
 	// Main is not running (or there is none).
@@ -414,14 +424,14 @@ func (s *Server) poolRoute() coordRoute {
 	}
 	switch {
 	case len(live) > 0:
-		return coordRoute{Why: missBusy}
+		return coordRoute{Why: routeBusy}
 	case len(agents) == 0:
-		return coordRoute{Why: waitUnknown}
+		return coordRoute{Why: routeUnknown}
 	}
 	for id, r := range roles {
 		if r.Role == RoleCoordinator && !seen[id] {
-			return coordRoute{Why: waitUnknown}
+			return coordRoute{Why: routeUnknown}
 		}
 	}
-	return coordRoute{Why: missNoCoordinator}
+	return coordRoute{Why: routeNoCoordinator}
 }

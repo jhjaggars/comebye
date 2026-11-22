@@ -119,53 +119,6 @@ func TestBoardLanesFromRecords(t *testing.T) {
 	if it := laneOf(t, v, laneWaiting).Items; !strings.Contains(it[0].Detail+it[1].Detail, "queued behind "+run+"") {
 		t.Errorf("waiting detail = %+v", it)
 	}
-	if v.Headline != "" || v.BriefAt != nil {
-		t.Errorf("no briefing yet, got %q", v.Headline)
-	}
-}
-
-func TestBoardNotesAndHeadlineFromTheBriefing(t *testing.T) {
-	s, _, _ := todoServer(t)
-	// Waiting behind a step that has not reported. With no step to wait for, the board's own ledger pass would release the
-	// entry (releaseQueued starts it in a goroutine) and it could be a running handoff by the time the board is read.
-	step, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "feat/step", AgentName: "step", Status: ledger.Running, Brief: "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	e, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "feat/x", AgentName: "oc-pr-4025", Status: ledger.Waiting, After: []string{step.ID}, Brief: "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	q, _, _ := s.todos.add(Todo{Question: "may I?", Kind: "decision", CreatedBy: "agent"})
-	md := "**Tue 20:04. v0.5.20 tagged. Next: you press Bump hub.**\n\n## Needs you\n- " + q.ID + ": the rollout is blocked on this.\n\n## Notes\n- **" + e.ID + "**: waits for the RFC, on purpose.\n- `oc-pr-4025` — same, by name\n- tdeadbeef00: an id that is gone\n- plain bullet: not a note\n"
-	if err := s.brief.set(Brief{Markdown: md, By: "coord", At: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	v := getBoard(t, s, agentHdr("w1:p1")) // the coordinator reads it too
-	if v.Headline != "Tue 20:04. v0.5.20 tagged. Next: you press Bump hub." || v.BriefBy != "coord" {
-		t.Errorf("headline = %q by %q", v.Headline, v.BriefBy)
-	}
-	n := laneOf(t, v, laneNeeds).Items[0]
-	if n.ID != q.ID || n.Why != "the rollout is blocked on this." {
-		t.Errorf("why = %+v", n)
-	}
-	w := laneOf(t, v, laneWaiting).Items[0]
-	if w.ID != e.ID || w.Note != "waits for the RFC, on purpose." {
-		t.Errorf("note = %+v", w)
-	}
-	if len(v.UnkeyedNotes) != 1 || !strings.HasPrefix(v.UnkeyedNotes[0], "tdeadbeef00") {
-		t.Errorf("unkeyed = %v", v.UnkeyedNotes)
-	}
-}
-
-func TestBoardNoteByName(t *testing.T) {
-	s, _, _ := todoServer(t)
-	s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "comebye", Branch: "b", AgentName: "oc-pr-4025", Status: ledger.Running, Brief: "b"})
-	s.brief.set(Brief{Markdown: "head\n\n- oc-pr-4025: parked on the RFC\n", By: "c", At: time.Now()})
-	v := getBoard(t, s, userHdr)
-	if it := laneOf(t, v, laneRunning).Items[0]; it.Note != "parked on the RFC" {
-		t.Errorf("note by name = %+v", it)
-	}
 }
 
 func TestBoardIsReadOnlyAndAuthed(t *testing.T) {

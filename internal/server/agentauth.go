@@ -17,10 +17,9 @@ import (
 // this host, sends the local agent token (agenttoken, in the state
 // directory) instead of a Tailscale identity. Such requests get the
 // "agent" role, which may only read (agents, hosts, transcripts and output
-// within readGuard's rule, the ledger, inspections of an agent's git state, the briefing, roles,
+// within readGuard's rule, the ledger, inspections of an agent's git state, roles,
 // the playbook) and do the workflow's steps: hand off, prompt an agent,
-// mark or unmark (proposing a discard included), publish the briefing and
-// set its schedule (or dismiss a streak of missed scheduled briefings),
+// mark or unmark (proposing a discard included),
 // add and read to-do items (answering, finishing and dropping them need a
 // recorded coordinator).
 // Everything else (keys, answers, images, launching, workers, removals and
@@ -233,8 +232,6 @@ func (s *Server) forwardToHub(w http.ResponseWriter, r *http.Request, c caller) 
 		maxBody = maxReportBody
 	case r.URL.Path == "/api/landings":
 		timeout = 75 * time.Second // the hub checks the worktree on its host first
-	case r.URL.Path == "/api/brief":
-		maxBody = maxBriefBytes + 16<<10
 	}
 	// Only the query parameters the agent role's routes read.
 	q := url.Values{}

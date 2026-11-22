@@ -21,7 +21,7 @@ Beyond watching agents, it can:
 - **clean up** finished sessions after you confirm, keeping their branches;
 - **span several machines** in one list, with one of them acting as the hub;
 - let a **coordinator** agent (Claude Code, Pi or others) organize work for
-  you and leave you a briefing for when you come back;
+  you and tell you where things stand when you ask;
 - keep a **to-do list** of the questions and decisions waiting on you, with
   context, and answer them from the app;
 - read the **pages** agents publish: `comebye publish report.html` (or
@@ -103,7 +103,7 @@ connecting several machines, and every setting.
 - [Security model](docs/security.md) and [SECURITY.md](SECURITY.md) (reporting
   vulnerabilities)
 - [API](docs/api.md): the JSON API behind the app
-- [The briefing board](docs/board.md): the lanes in the app's Status page, their rules, and how the coordinator's notes attach
+- [The board](docs/board.md): the lanes in the app's Status page and their rules
 
 ## Development
 

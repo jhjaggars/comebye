@@ -86,7 +86,7 @@ func main() {
 		worktreeRoot   = flag.String("worktree-root", envOr("COMEBYE_WORKTREE_ROOT", "~/.worktrees"), "where handed-off workers get their git worktrees (<root>/<repo>/<branch>)")
 		hubMode        = flag.Bool("hub-mode", envBool("COMEBYE_HUB_MODE", false), "make this instance a hub even with no peers yet, so peers can be added at runtime (comebye peer add); also implied by -peers or stored peers")
 		peerDomains    = flag.String("peer-domains", getenv("COMEBYE_PEER_DOMAINS"), "extra tailnet domain suffixes (comma-separated, e.g. mytailnet.example.com) allowed for peers added at runtime; *.ts.net is always allowed; tailnet IPs only as fallback addresses")
-		hubURL         = flag.String("hub", getenv("COMEBYE_HUB"), "on a peer: the hub's Tailscale Serve URL (https://hub.tailnet.ts.net); the coordinator CLI's ledger, handoff, mark, briefing and prompt requests are forwarded there and this instance keeps no ledger")
+		hubURL         = flag.String("hub", getenv("COMEBYE_HUB"), "on a peer: the hub's Tailscale Serve URL (https://hub.tailnet.ts.net); the coordinator CLI's ledger, handoff, mark and prompt requests are forwarded there and this instance keeps no ledger")
 		tsAllowCap     = flag.String("ts-allow-cap", getenv("COMEBYE_TS_ALLOW_CAP"), "on a hub: the Tailscale app capability (example.com/cap/peer) that admits a tagged node through Tailscale Serve (run Serve with --accept-app-caps); the node must also be a registered peer, and gets the forwarded-agent role only")
 		removedTags    = flag.String("ts-allow-tag", getenv("COMEBYE_TS_ALLOW_TAGS"), "REMOVED, ignored with a warning: tagged nodes come in through Serve with -ts-allow-cap")
 		removedListen  = flag.String("peer-listen", getenv("COMEBYE_PEER_LISTEN"), "REMOVED, ignored with a warning: the peer listener (port 8742) is gone; use Serve with -ts-allow-cap")
@@ -94,7 +94,7 @@ func main() {
 		tsSocket       = flag.String("ts-socket", envOr("COMEBYE_TS_SOCKET", tsauth.DefaultSocket), "tailscaled's LocalAPI socket (WhoIs for tagged nodes; this node's name for -announce)")
 		announce       = flag.Bool("announce", envBool("COMEBYE_ANNOUNCE", false), "on a peer with -hub: announce this node to the hub as a peer at startup (the hub needs -peer-self-register and this node the -ts-allow-cap capability)")
 		announceURL    = flag.String("announce-url", getenv("COMEBYE_ANNOUNCE_URL"), "the Serve URL to announce (default https://<this node's MagicDNS name>)")
-		ledgerOn       = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger, briefing and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
+		ledgerOn       = flag.Bool("ledger", envBool("COMEBYE_LEDGER", true), "keep the handoff ledger and coordinator roles here (the hub, or a single instance); off on a peer with -hub")
 		coordDir       = flag.String("coordinator-dir", envOr("COMEBYE_COORDINATOR_DIR", "~"), "where the app's Coordinator preset starts a coordinator agent (may lie outside the launch roots; only that preset uses it)")
 		publicURL      = flag.String("public-url", getenv("COMEBYE_PUBLIC_URL"), "the https URL this hub is reached at (https://hub.tailnet.ts.net); `comebye publish` prints links built from it")
 		pagesListen    = flag.String("pages-listen", getenv("COMEBYE_PAGES_LISTEN"), "serve published pages on a second loopback listener (e.g. 127.0.0.1:8742) that has only /p and no /api; put Tailscale Serve on its own port in front (tailscale serve --https=8443 http://127.0.0.1:8742) so pages get an origin of their own; needs -pages-url")
@@ -141,7 +141,7 @@ func main() {
 		autoTodo       = flag.String("auto-todo", envOr("COMEBYE_AUTO_TODO", "blocked,question"), "to-do items the hub files itself, comma-separated: blocked (an agent blocked at a dialog, unwatched, past -auto-todo-blocked-after), question (an agent idle on questions past -auto-todo-question-after, one suggestion per question to keep or dismiss; skipped for 10 minutes after the user viewed or typed in the agent); off for none")
 		autoBlocked    = flag.Duration("auto-todo-blocked-after", envDuration("COMEBYE_AUTO_TODO_BLOCKED_AFTER", server.DefaultAutoBlocked), "how long an agent must be blocked, with no device viewing it, before -auto-todo files an item")
 		autoQuestion   = flag.Duration("auto-todo-question-after", envDuration("COMEBYE_AUTO_TODO_QUESTION_AFTER", server.DefaultAutoQuestion), "how long an agent must sit idle or done on a question, with no device viewing it and the user away for 10 minutes, before -auto-todo suggests items")
-		hubOnly        = flag.Bool("hub-only", envBool("COMEBYE_HUB_ONLY", false), "run with no herdr (nothing waits for a socket) and host no agents. On a hub (no -hub): the ledger, to-dos, briefings, plans, peers, archive, push and the app all work; implies -hub-mode. With -hub and -ledger=false: a peer that only answers its hub and reports 0 agents, e.g. the in-cluster provisioner (docs/workers.md). Also implied by an explicitly empty -sock (see docs/setup.md)")
+		hubOnly        = flag.Bool("hub-only", envBool("COMEBYE_HUB_ONLY", false), "run with no herdr (nothing waits for a socket) and host no agents. On a hub (no -hub): the ledger, to-dos, plans, peers, archive, push and the app all work; implies -hub-mode. With -hub and -ledger=false: a peer that only answers its hub and reports 0 agents, e.g. the in-cluster provisioner (docs/workers.md). Also implied by an explicitly empty -sock (see docs/setup.md)")
 		lockWait       = flag.Duration("lock-wait", envDuration("COMEBYE_LOCK_WAIT", 0), "when another comebye holds the state directory, retry this long before refusing to start (0 refuses at once); a Kubernetes replacement pod can set 30s")
 		healthAddr     = flag.String("health-addr", getenv("COMEBYE_HEALTH_ADDR"), "also serve /healthz and /readyz (nothing else, no login) on this address, e.g. :8743, for probes that cannot reach the loopback listener; empty (default) serves them on -addr only")
 		showVersion    = flag.Bool("version", false, "print the version and exit")
@@ -510,7 +510,7 @@ func main() {
 		ScratchDir:   *scratchDir,
 		ScratchEvery: *scratchEvery,
 		TmpMaxAge:    *tmpMaxAge,
-		// The handoff ledger, briefing, roles and handoff-template.md.
+		// The handoff ledger, roles and handoff-template.md.
 		StateDir:               expandHome(*stateDir),
 		RepoHealth:             repoHealth,
 		NoLedger:               !*ledgerOn,
@@ -560,7 +560,6 @@ func main() {
 	go srv.RunReask(context.Background())
 	go srv.RunRepoHealth(context.Background())
 	go srv.RunScratchPrune(context.Background())
-	go srv.RunBriefSchedule(context.Background())
 	go srv.RunReset(context.Background())
 
 	go func() {

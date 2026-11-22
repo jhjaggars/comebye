@@ -111,7 +111,7 @@ To stop being asked for each comebye call, pick one:
    "Allow exceptions" of extensions/permission-gate/judge-rules.md:
 
    - **The comebye CLI.** ` + "`comebye`" + ` subcommands (agents, ledger,
-     read, handoff, prompt, mark, unmark, brief, playbook, whoami) talk
+     read, handoff, prompt, mark, unmark, todo, playbook, whoami) talk
      only to the local Comebye server, which limits agents to the
      coordinator workflow.
 

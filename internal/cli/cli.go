@@ -1,6 +1,6 @@
 // Package cli is the comebye command line: the subcommands an agent acting
 // as coordinator uses to read the fleet and the hub's ledger and to do the
-// workflow's steps (hand off, prompt, mark, publish the briefing). It
+// workflow's steps (hand off, prompt, mark, file to-dos). It
 // talks to the local Comebye server with the local agent token, as the
 // restricted "agent" role; a peer forwards to its hub. It runs in the same
 // binary as the server: `comebye <subcommand>`.
@@ -75,7 +75,7 @@ func init() {
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
 		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--branch B] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
 		{"queue", "[AGENT] [--all] [--cancel ID] [--json]", "prompts queued with `prompt --queue`: pending ones, or withdraw one", cmdQueue},
-		{"todo", "add QUESTION [--kind decision|action|followup|review|release --version vX.Y.Z --commit REF] [--option LABEL[|DETAIL] ... [--recommend N[,M]]] [--page pg_ID[@vN]] [--context FILE|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT | --no-wait] | set create --from FILE|- | from-last [AGENT] | list [--all | --state S] | show ID | link ID | answer ID TEXT|- | verdict ID good|changes [--note T] [--note-kind fix|idea|looks_off] | undo ID | done ID | drop ID [--reason R]  [--json]", "the to-do list beside the briefing: questions and follow-ups the user has to deal with, with context; any agent adds, the user answers in the app, the coordinator relays answers (answer, done and drop are the coordinator's). add prints an `Open: URL` line (and url in --json); link ID prints one item's full URL: give the user that link, not the id", cmdTodo},
+		{"todo", "add QUESTION [--kind decision|action|followup|review|release --version vX.Y.Z --commit REF] [--option LABEL[|DETAIL] ... [--recommend N[,M]]] [--page pg_ID[@vN]] [--context FILE|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT | --no-wait] | set create --from FILE|- | from-last [AGENT] | list [--all | --state S] | show ID | link ID | answer ID TEXT|- | verdict ID good|changes [--note T] [--note-kind fix|idea|looks_off] | undo ID | done ID | drop ID [--reason R]  [--json]", "the to-do list: questions and follow-ups the user has to deal with, with context; any agent adds, the user answers in the app, the coordinator relays answers (answer, done and drop are the coordinator's). add prints an `Open: URL` line (and url in --json); link ID prints one item's full URL: give the user that link, not the id", cmdTodo},
 		{"publish", "FILE|- [--title T] [--kind html|md] [--key K | --update ID] [--if-version N] [--handoff ID] [--json]", "publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages. --update ID or --key K adds a version to the same link", cmdPublish},
 		{"pages", "list [--mine] [--handoff ID] | show ID [--body [--text] [--version N]] | link ID | note ID FINDING [--context -] | rm ID | thumbs --backfill (--all | ID...) [--dry-run]  [--json] | guide | new [--type doc|mockup|deck|dashboard] [--title T]", "the published pages: list them, show one (with its source, or --body --text as plain text), print its link, or delete one of yours; thumbs --backfill makes the gallery thumbnails of pages that have none (run by the user or a coordinator for any page; another agent only for its own); guide prints how to make a good page (the comebye-pages skill), new prints a starter page built on the Comebye page template", cmdPages},
 		{"coordinator", "digest [--hook [--note]] [--harness H] | install-hook [--uninstall] | status [--refresh] | reset [AGENT] | main [AGENT] | new NAME [--host H] [--dir DIR] | list", "the coordinator's in-place context reset: `digest` prints what a fresh session needs (the SessionStart hook injects it after the hub's /clear), `install-hook` writes the coordinator-only Claude settings that do so, `status` shows the last reset, `reset` (the user's alone) clears the coordinator's context now, `main` shows or sets (the user's alone) the main coordinator that events nobody owns go to, `new` (the user's alone) starts another coordinator with its own context, notes and digest, `list` shows each one with its host, pane, notes file and open work", cmdCoordinator},
@@ -93,7 +93,6 @@ func init() {
 		{"sweep", "[--build-output [--clear-build-output] [--host H] [--login L]] [--dry-run] [--idle-after D] [--notify] [--json]", "find finished workers, check each on its host and mark the ones with nothing to lose as ready to remove; list the rest with why (never removes anything)", cmdSweep},
 		{"unmark", "AGENT [--json]", "withdraw a removal proposal", cmdUnmark},
 		{"reask", "AGENT [--item N] [--json]", "ask a marked session again what is left to finish", cmdReask},
-		{"brief", "set FILE|- [--no-check] | get | schedule [--every D] [--at HH:MM] [--tz ZONE] [--off] [--dismiss] [--json]", "publish or read the briefing shown in the app; show or set its schedule", cmdBrief},
 		{"usage", "[--by kind|model|host|project|role|purpose|handoff|session|token] [--since 14d|DATE] [--until D] [--bucket hour|day] [--project P --handoff ID ...] [--limit N] [--login L] [--json]", "tokens spent by agents: fresh tokens (input + output + cache writes) with cache reads apart, by kind, model, host, project, role, purpose, handoff or session, with top handoffs and sessions and cache efficiency; dollars are list-price estimates. The user's, and a coordinator's", cmdUsage},
 		{"settings", "[show | set [--default-kind K] [--allow K,K|any] [--model KIND=M] [--thinking pi=LEVEL] | clear [--field default-kind|allowed|models]] [--host H] [--login L] [--json]", "a host's agent settings: the kind, model and thinking level a start uses when none is asked for, and the kinds it may start. Anyone reads them; setting is the user's alone", cmdSettings},
 		{"peer", "list | show NAME | add NAME URL[|URL...] [--tag T] | remove NAME  [--login L] [--json]", "(hub, the user's alone) the hub's peers: list them with their status and version, add one live, or remove a dynamic one; peers set with -peers are listed but only changed by editing the hub's environment", cmdPeer},
@@ -2568,275 +2567,6 @@ func cmdUnmark(e *Env, args []string) error {
 	return nil
 }
 
-// ---- brief ----
-
-func cmdBrief(e *Env, args []string) error {
-	fs := flag.NewFlagSet("brief", flag.ContinueOnError)
-	asJSON := fs.Bool("json", false, "machine-readable output")
-	every := fs.String("every", "", "schedule: brief every D (a duration: 24h, 12h; 1h to 720h)")
-	at := fs.String("at", "", "schedule: at this time of day (HH:MM; none for no time of day)")
-	tz := fs.String("tz", "", "schedule: the time zone of --at (IANA, e.g. Europe/Berlin; default the hub's)")
-	skip := fs.String("skip", "", "schedule: on (default) skips a slot when nothing a briefing reports changed; off asks at every slot")
-	maxQuiet := fs.String("max-quiet", "", "schedule: with --skip on, ask anyway when the last briefing is this old (default 6h, 1h or more)")
-	off := fs.Bool("off", false, "schedule: turn scheduled briefings off")
-	dismiss := fs.Bool("dismiss", false, "schedule: dismiss the note about missed scheduled briefings")
-	noCheck := fs.Bool("no-check", false, "set: publish even if a \"Needs you\" line has no id of an active to-do item")
-	pos, err := parse(fs, args)
-	if err != nil {
-		return err
-	}
-	if len(pos) == 0 {
-		return usageErr("want set FILE|-, get or schedule")
-	}
-	setsSchedule := *every != "" || *at != "" || *tz != "" || *skip != "" || *maxQuiet != "" || *off || *dismiss
-	if setsSchedule && pos[0] != "schedule" {
-		return usageErr("--every, --at, --tz, --skip, --max-quiet, --off and --dismiss go with brief schedule")
-	}
-	if *noCheck && pos[0] != "set" {
-		return usageErr("--no-check goes with brief set")
-	}
-	if *skip != "" && *skip != "on" && *skip != "off" {
-		return usageErr("--skip is on or off")
-	}
-	c, err := newClient(e)
-	if err != nil {
-		return err
-	}
-	switch pos[0] {
-	case "schedule":
-		if len(pos) != 1 {
-			return usageErr("brief schedule takes flags only")
-		}
-		return briefSchedule(e, c, *asJSON, *every, *at, *tz, *skip, *maxQuiet, *off, *dismiss)
-	case "set":
-		if len(pos) != 2 {
-			return usageErr("want brief set FILE (or - for stdin)")
-		}
-		text, err := readInput(e, pos[1], 64<<10)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(text) == "" {
-			return usageErr("the briefing is empty")
-		}
-		body := map[string]any{"markdown": text}
-		if *noCheck {
-			body["no_check"] = true
-		}
-		data, err := c.raw("POST", "/api/brief", nil, body)
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			return rawJSON(e, data)
-		}
-		fmt.Fprintln(e.Stdout, "Published the briefing; it shows at the top of the app.")
-		var r struct {
-			Warnings []string `json:"warnings"`
-		}
-		if json.Unmarshal(data, &r) == nil {
-			for _, w := range r.Warnings {
-				fmt.Fprintf(e.Stdout, "Warning: %s\n", w)
-			}
-		}
-		return nil
-	case "get":
-		if len(pos) != 1 {
-			return usageErr("brief get takes no arguments")
-		}
-		data, err := c.raw("GET", "/api/brief", nil, nil)
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			return rawJSON(e, data)
-		}
-		var r struct {
-			Brief *struct {
-				Markdown string    `json:"markdown"`
-				By       string    `json:"by"`
-				At       time.Time `json:"at"`
-			} `json:"brief"`
-		}
-		if err := json.Unmarshal(data, &r); err != nil {
-			return fmt.Errorf("unexpected answer: %v", err)
-		}
-		if r.Brief == nil {
-			fmt.Fprintln(e.Stdout, "(no briefing published yet)")
-			return nil
-		}
-		fmt.Fprintf(e.Stdout, "Briefing from %s, %s:\n\n%s\n", dash(r.Brief.By), ago(e, r.Brief.At), strings.TrimRight(r.Brief.Markdown, "\n"))
-		return nil
-	}
-	return usageErr("unknown brief action %q (want set, get or schedule)", pos[0])
-}
-
-// briefSched is the hub's schedule as GET /api/brief/schedule has it.
-type briefSched struct {
-	Enabled    bool       `json:"enabled"`
-	Every      string     `json:"every"`
-	At         string     `json:"at"`
-	TZ         string     `json:"tz"`
-	Always     bool       `json:"always"`
-	MaxQuiet   string     `json:"max_quiet"`
-	CheckedAt  *time.Time `json:"checked_at"`
-	By         string     `json:"by"`
-	Updated    time.Time  `json:"updated"`
-	State      string     `json:"state"`
-	Next       *time.Time `json:"next"`
-	PromptedAt *time.Time `json:"prompted_at"`
-	PromptedTo string     `json:"prompted_to"`
-	Missed     *struct {
-		ID        string    `json:"id"`
-		Since     time.Time `json:"since"`
-		Count     int       `json:"count"`
-		Reason    string    `json:"reason"`
-		Dismissed bool      `json:"dismissed"`
-	} `json:"missed"`
-}
-
-// briefSchedule shows the schedule, or sets it (flags not given keep
-// their current values), or turns it off, or dismisses missed runs.
-func briefSchedule(e *Env, c *client, asJSON bool, every, at, tz, skip, maxQuiet string, off, dismiss bool) error {
-	get := func() (*briefSched, []byte, error) {
-		data, err := c.raw("GET", "/api/brief/schedule", nil, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		var r struct {
-			Schedule briefSched `json:"schedule"`
-		}
-		if err := json.Unmarshal(data, &r); err != nil {
-			return nil, nil, fmt.Errorf("unexpected answer: %v", err)
-		}
-		return &r.Schedule, data, nil
-	}
-	cur, data, err := get()
-	if err != nil {
-		return err
-	}
-	switch {
-	case off && (every != "" || at != "" || tz != "" || skip != "" || maxQuiet != ""):
-		return usageErr("--off takes no --every, --at, --tz, --skip or --max-quiet")
-	case dismiss:
-		if cur.Missed == nil {
-			return fmt.Errorf("no missed scheduled briefings to dismiss")
-		}
-		if _, err := c.raw("POST", "/api/brief/schedule/dismiss", nil, map[string]string{"id": cur.Missed.ID}); err != nil {
-			return err
-		}
-	case off:
-		if _, err := c.raw("POST", "/api/brief/schedule", nil, map[string]any{"enabled": false}); err != nil {
-			return err
-		}
-	case every != "" || at != "" || tz != "" || skip != "" || maxQuiet != "":
-		if every == "" {
-			every = cur.Every
-		}
-		if every == "" {
-			return usageErr("--every is required the first time (e.g. --every 24h)")
-		}
-		switch at {
-		case "":
-			at = cur.At
-		case "none":
-			at = ""
-		}
-		if tz == "" {
-			tz = cur.TZ
-		}
-		always := cur.Always
-		switch skip {
-		case "on":
-			always = false
-		case "off":
-			always = true
-		}
-		if maxQuiet == "" {
-			maxQuiet = cur.MaxQuiet
-		}
-		if _, err := c.raw("POST", "/api/brief/schedule", nil, map[string]any{"enabled": true, "every": every, "at": at, "tz": tz, "always": always, "max_quiet": maxQuiet}); err != nil {
-			return err
-		}
-	}
-	if dismiss || off || every != "" || at != "" || tz != "" || skip != "" || maxQuiet != "" {
-		if cur, data, err = get(); err != nil {
-			return err
-		}
-	}
-	if asJSON {
-		return rawJSON(e, data)
-	}
-	when := func(t time.Time) string {
-		if cur.TZ != "" {
-			if loc, err := time.LoadLocation(cur.TZ); err == nil {
-				t = t.In(loc)
-			}
-		}
-		return t.Format("Mon Jan 2 15:04 MST")
-	}
-	if !cur.Enabled {
-		fmt.Fprint(e.Stdout, "Scheduled briefings are off.")
-		if cur.Every != "" {
-			fmt.Fprintf(e.Stdout, " (Last set to every %s%s; turn on again with brief schedule --every %s.)", cur.Every, atText(cur.At, cur.TZ), cur.Every)
-		}
-		fmt.Fprintln(e.Stdout)
-		return nil
-	}
-	fmt.Fprintf(e.Stdout, "Scheduled briefings: every %s%s, set by %s %s.\n", cur.Every, atText(cur.At, cur.TZ), dash(cur.By), ago(e, cur.Updated))
-	if cur.Always {
-		fmt.Fprintln(e.Stdout, "Asks at every slot, changed or not (--skip off).")
-	} else {
-		mq := cur.MaxQuiet
-		if mq == "" {
-			mq = "6h"
-		}
-		fmt.Fprintf(e.Stdout, "Skips a slot when nothing a briefing reports changed, but asks when the last briefing is %s old (--skip, --max-quiet).\n", mq)
-	}
-	if cur.CheckedAt != nil {
-		fmt.Fprintf(e.Stdout, "Checked %s: nothing changed, no coordinator asked.\n", ago(e, *cur.CheckedAt))
-	}
-	if cur.Next != nil {
-		fmt.Fprintf(e.Stdout, "Next: %s.\n", when(*cur.Next))
-	}
-	switch cur.State {
-	case "prompted":
-		fmt.Fprintf(e.Stdout, "Asked %s for this one %s; waiting for it to publish.\n", dash(cur.PromptedTo), ago(e, *cur.PromptedAt))
-	case "waiting":
-		fmt.Fprintln(e.Stdout, "Due now; waiting for a coordinator to be idle.")
-	}
-	if m := cur.Missed; m != nil {
-		dis := ""
-		if m.Dismissed {
-			dis = " (dismissed)"
-		}
-		fmt.Fprintf(e.Stdout, "Missed %d scheduled briefing(s) since %s: %s%s.\n", m.Count, when(m.Since), missText(m.Reason), dis)
-	}
-	return nil
-}
-
-func atText(at, tz string) string {
-	switch {
-	case at == "":
-		return ""
-	case tz == "":
-		return " at " + at
-	}
-	return " at " + at + " " + tz
-}
-
-func missText(reason string) string {
-	switch reason {
-	case "no_coordinator":
-		return "no coordinator was running"
-	case "busy":
-		return "the coordinator stayed busy"
-	case "no_briefing":
-		return "the coordinator was asked but published nothing"
-	}
-	return reason
-}
-
 // ---- playbook / presets (local, no server) ----
 
 func cmdPlaybook(e *Env, args []string) error {
@@ -2917,7 +2647,7 @@ func cmdWhoami(e *Env, args []string) error {
 	case "self":
 		fmt.Fprintln(e.Stdout, "This Comebye is the hub: it keeps the ledger.")
 	case "":
-		fmt.Fprintln(e.Stdout, "This Comebye keeps no ledger and has no hub configured (-hub): handoffs, marks and briefings will fail.")
+		fmt.Fprintln(e.Stdout, "This Comebye keeps no ledger and has no hub configured (-hub): handoffs and marks will fail.")
 	default:
 		fmt.Fprintf(e.Stdout, "The ledger is on the hub at %s; this Comebye forwards to it.\n", w.Hub)
 	}

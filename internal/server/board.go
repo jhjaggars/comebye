@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -11,13 +10,10 @@ import (
 	"github.com/jhjaggars/comebye/internal/ledger"
 )
 
-// The briefing board: GET /api/board. A read-only view built only from
-// records the hub already holds (the to-do list, the ledger, the fleet's
-// agents, the release items), so the coordinator's briefing need not
-// retype state. Each lane's rule is below and in docs/api.md; nothing is
-// stored and nothing is guessed. The coordinator's own words reach the board
-// in two places and are parsed from the latest briefing: the headline (its
-// first line) and notes, bullets that start with an id (see boardNotes).
+// The board: GET /api/board. A read-only view built only from records the
+// hub already holds (the to-do list, the ledger, the fleet's agents, the
+// release items), so nobody has to retype state. Each lane's rule is below
+// and in docs/api.md; nothing is stored and nothing is guessed.
 
 const (
 	boardLandedWindow = 48 * time.Hour // "landed (recent)"
@@ -50,10 +46,6 @@ type BoardItem struct {
 	State   string `json:"state,omitempty"` // a handoff's ledger status, a release's state
 	Since   string `json:"since,omitempty"` // RFC 3339: when it entered the state
 	Agent   string `json:"agent,omitempty"` // fleet id of the agent, to open it
-	// Why is the coordinator's reason for a Needs you item, Note its note on
-	// any item, both from the latest briefing.
-	Why  string `json:"why,omitempty"`
-	Note string `json:"note,omitempty"`
 	// Report is true when the handoff has a final report to read; Pages are
 	// the Pages published for it (the Reports lane links them).
 	Report bool      `json:"report,omitempty"`
@@ -77,11 +69,8 @@ type BoardLane struct {
 
 // BoardView is the response.
 type BoardView struct {
-	At       time.Time   `json:"at"`
-	Headline string      `json:"headline,omitempty"`
-	BriefAt  *time.Time  `json:"brief_at,omitempty"`
-	BriefBy  string      `json:"brief_by,omitempty"`
-	Lanes    []BoardLane `json:"lanes"`
+	At    time.Time   `json:"at"`
+	Lanes []BoardLane `json:"lanes"`
 	// Loose counts what the lanes leave out on purpose: entries marked ready
 	// to remove that never landed. Reports is kept for older readers and is
 	// always 0: finished research, plans, reviews and spikes are the
@@ -94,87 +83,7 @@ type BoardView struct {
 		ReadyToRemove int `json:"ready_to_remove"`
 		Archived      int `json:"archived"`
 	} `json:"loose"`
-	// UnkeyedNotes are bullets of the briefing that look like notes but name
-	// no item the board knows (an id that is gone, a typo).
-	UnkeyedNotes []string `json:"unkeyed_notes,omitempty"`
 }
-
-var (
-	boardNoteRE = regexp.MustCompile("^\\s*[-*+]\\s+(?:\\*\\*|__|`)?([A-Za-z0-9][A-Za-z0-9._#/@:-]*?)(?:\\*\\*|__|`)?\\s*(?::|\\x{2014}|\\x{2013}|\\s-\\s)(?:\\*\\*|__)?\\s*(.+)$")
-	boardMDRE   = regexp.MustCompile("[*_`#]+")
-)
-
-// boardHeadline is the first line of text of a briefing, without Markdown
-// emphasis and heading marks.
-func boardHeadline(md string) string {
-	for _, l := range strings.Split(strings.ReplaceAll(md, "\r", ""), "\n") {
-		t := strings.TrimSpace(l)
-		if t == "" || briefRuleRE.MatchString(t) {
-			continue
-		}
-		return oneLine(strings.TrimSpace(boardMDRE.ReplaceAllString(t, "")), 240)
-	}
-	return ""
-}
-
-// boardNotes parses the notes of a briefing: a list item that starts with an
-// id, bold or in backticks or bare, then ":" or a dash and the note. Items in
-// the "Needs you" section are reasons ("why"), not notes. The returned maps
-// are keyed by the id as written; lines whose id is not in known are returned
-// as unkeyed.
-func boardNotes(md string, known func(string) bool) (notes, why map[string]string, unkeyed []string) {
-	notes, why = map[string]string{}, map[string]string{}
-	entries, found := briefNeedsEntries(md)
-	if found {
-		for _, e := range entries {
-			for _, id := range briefIDRE.FindAllString(e, 1) {
-				w := strings.TrimSpace(strings.Trim(briefItemRE.ReplaceAllString(e, ""), " "))
-				w = strings.TrimSpace(strings.Trim(boardMDRE.ReplaceAllString(strings.Replace(w, id, "", 1), ""), " :—–-"))
-				why[id] = oneLine(w, 240)
-			}
-		}
-	}
-	needs := map[string]bool{}
-	for _, e := range entries {
-		needs[e] = true
-	}
-	inNeeds, inCode := false, false
-	for _, l := range strings.Split(strings.ReplaceAll(md, "\r", ""), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(l), "```") {
-			inCode = !inCode
-			continue
-		}
-		if inCode {
-			continue
-		}
-		if h, ok := briefHeadingText(l); ok {
-			inNeeds = briefNeedsRE.MatchString(h)
-			continue
-		}
-		if inNeeds {
-			continue
-		}
-		m := boardNoteRE.FindStringSubmatch(l)
-		if m == nil {
-			continue
-		}
-		id, text := m[1], oneLine(strings.TrimSpace(boardMDRE.ReplaceAllString(m[2], "")), 240)
-		if known(id) {
-			if notes[id] == "" {
-				notes[id] = text
-			}
-		} else if looksLikeID(id) {
-			unkeyed = append(unkeyed, oneLine(id+": "+text, 120))
-		}
-	}
-	return notes, why, unkeyed
-}
-
-// looksLikeID is true for a to-do id (t + 10 hex) or a ledger entry id (h + 12
-// hex): a bullet starting with one that the board does not know is reported.
-var idShapeRE = regexp.MustCompile(`^(?:t[0-9a-f]{10}|h[0-9a-f]{12})$`)
-
-func looksLikeID(s string) bool { return idShapeRE.MatchString(s) }
 
 // handleBoard answers GET /api/board.
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
@@ -252,12 +161,10 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Needs you: to-dos, oldest first.
-	known := map[string]bool{}
 	for _, t := range todos {
 		if t.State != TodoOpen {
 			continue
 		}
-		known[t.ID] = true
 		if t.Release != nil && t.Release.State == relTagged {
 			if t.Release.Dismissed {
 				continue
@@ -281,10 +188,6 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 
 	var view BoardView
 	for _, e := range entries {
-		known[e.ID] = true
-		if e.AgentName != "" {
-			known[e.AgentName] = true
-		}
 		a, isLive := live[e.AgentID]
 		it := BoardItem{ID: e.ID, Type: "handoff", Title: title(e), Detail: detail(e), Project: project(e), State: string(e.Status), Since: since(e.CreatedAt), Agent: e.AgentID}
 		switch e.Status {
@@ -362,25 +265,6 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	view.Lanes = []BoardLane{*needs, *running, *waiting, *landing, *reports, *landed}
 	if l := s.hubDidLane(now); l != nil {
 		view.Lanes = append(view.Lanes, *l)
-	}
-	if b, err := s.brief.get(); err == nil && b != nil && strings.TrimSpace(b.Markdown) != "" {
-		at := b.At
-		view.BriefAt, view.BriefBy = &at, b.By
-		view.Headline = boardHeadline(b.Markdown)
-		notes, why, unkeyed := boardNotes(b.Markdown, func(id string) bool { return known[id] })
-		view.UnkeyedNotes = unkeyed
-		for li := range view.Lanes {
-			for ii := range view.Lanes[li].Items {
-				it := &view.Lanes[li].Items[ii]
-				it.Note = notes[it.ID]
-				if it.Note == "" && it.Type != "todo" {
-					it.Note = notes[it.Title] // a worker by its name
-				}
-				if view.Lanes[li].Key == laneNeeds {
-					it.Why = why[it.ID]
-				}
-			}
-		}
 	}
 	writeJSON(w, view)
 }

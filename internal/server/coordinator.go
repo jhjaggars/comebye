@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,134 +20,9 @@ import (
 
 // Coordinators: "coordinator" is a role, not a process. Any agent, of any
 // kind, on any host can coordinate: its memory is the hub's ledger and
-// briefing, and it acts through the comebye CLI (the agent role, see
+// to-do list, and it acts through the comebye CLI (the agent role, see
 // agentauth.go). The hub records which agents are coordinators (roles.json),
-// so the app can pin them and guard their removal, and keeps the latest
-// briefing a coordinator published (brief.json).
-
-// maxBriefBytes caps the briefing's markdown.
-const maxBriefBytes = 64 << 10
-
-// Brief is the published briefing.
-type Brief struct {
-	Markdown string    `json:"markdown"`
-	By       string    `json:"by"`
-	At       time.Time `json:"at"`
-	// Since is set on a history entry that stands for several briefings
-	// published close together: when the first of them was published (At is
-	// the last). The window for merging runs from Since.
-	Since time.Time `json:"since,omitempty"`
-}
-
-// briefStore keeps brief.json in the state directory.
-type briefStore struct {
-	mu   sync.Mutex
-	path string
-}
-
-// get returns the briefing, nil when none was published.
-func (b *briefStore) get() (*Brief, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	data, err := os.ReadFile(b.path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out Brief
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", b.path, err)
-	}
-	return &out, nil
-}
-
-// maxBriefHistory bounds brief-history.json: the newest briefings, so the
-// app can page back through earlier (say hourly) ones. About 3 MB at most.
-const maxBriefHistory = 48
-
-// briefMergeWindow: briefings published within this long of the history's
-// newest entry are merged into it (the entry becomes the latest text), unless
-// the "Needs you" section changed. A coordinator that publishes at every
-// event would otherwise fill the 48 entries with near copies in a couple of
-// hours. The current briefing (brief.json) is never merged: it is always the
-// last one published.
-const briefMergeWindow = 15 * time.Minute
-
-// briefNeedsSame reports whether two briefings have the same "Needs you"
-// section (or both have none), compared line by line.
-func briefNeedsSame(a, b string) bool {
-	ea, fa := briefNeedsEntries(a)
-	eb, fb := briefNeedsEntries(b)
-	if fa != fb || len(ea) != len(eb) {
-		return false
-	}
-	for i := range ea {
-		if strings.TrimSpace(ea[i]) != strings.TrimSpace(eb[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func (b *briefStore) historyPath() string {
-	return filepath.Join(filepath.Dir(b.path), "brief-history.json")
-}
-
-func (b *briefStore) set(v Brief) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := writeFileAtomic(b.path, v); err != nil {
-		return err
-	}
-	// The history is a convenience: the briefing is already published, so a
-	// history that cannot be read or written does not fail the publish.
-	h, _ := b.readHistory()
-	if len(h) > 0 {
-		anchor := h[0].At
-		if !h[0].Since.IsZero() {
-			anchor = h[0].Since
-		}
-		if d := v.At.Sub(anchor); d >= 0 && d < briefMergeWindow && briefNeedsSame(h[0].Markdown, v.Markdown) {
-			v.Since = anchor
-			h = h[1:]
-		}
-	}
-	h = append([]Brief{v}, h...)
-	if len(h) > maxBriefHistory {
-		h = h[:maxBriefHistory]
-	}
-	_ = writeFileAtomic(b.historyPath(), h)
-	return nil
-}
-
-// readHistory returns the kept briefings, newest first. Callers hold b.mu.
-func (b *briefStore) readHistory() ([]Brief, error) {
-	data, err := os.ReadFile(b.historyPath())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []Brief
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", b.historyPath(), err)
-	}
-	return out, nil
-}
-
-// history returns the kept briefings, newest first (at most limit when > 0).
-func (b *briefStore) history(limit int) ([]Brief, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	h, err := b.readHistory()
-	if limit > 0 && len(h) > limit {
-		h = h[:limit]
-	}
-	return h, err
-}
+// so the app can pin them and guard their removal.
 
 // writeFileAtomic writes v as JSON to path (temp file, fsync, rename),
 // mode 0600.
@@ -443,85 +317,6 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"roles": s.liveRoles()})
-}
-
-// handleGetBrief answers {brief: {markdown, by, at} | null, schedule}
-// (the schedule as GET /api/brief/schedule has it, so the app polls once).
-func (s *Server) handleGetBrief(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w, r) {
-		return
-	}
-	b, err := s.brief.get()
-	if err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "brief_error", "message": err.Error()})
-		return
-	}
-	writeJSON(w, map[string]any{"brief": b, "schedule": s.briefSchedView(time.Now())})
-}
-
-// handleGetBriefHistory answers {briefs: [{markdown, by, at}, ...]}, the
-// last briefings published (at most 48) newest first; ?limit=N takes fewer.
-func (s *Server) handleGetBriefHistory(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w, r) {
-		return
-	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	h, err := s.brief.history(limit)
-	if err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "brief_error", "message": err.Error()})
-		return
-	}
-	if h == nil {
-		h = []Brief{}
-	}
-	writeJSON(w, map[string]any{"briefs": h, "max": maxBriefHistory})
-}
-
-// handleSetBrief publishes a briefing: POST {markdown} (at most 64 KB).
-func (s *Server) handleSetBrief(w http.ResponseWriter, r *http.Request) {
-	if s.ledgerOff(w, r) {
-		return
-	}
-	var b struct {
-		Markdown string `json:"markdown"`
-		NoCheck  bool   `json:"no_check"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBriefBytes+16<<10)).Decode(&b); err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "brief_too_large", "message": "the briefing is larger than 64 KB"})
-			return
-		}
-		http.Error(w, "invalid body", http.StatusBadRequest)
-		return
-	}
-	switch {
-	case strings.TrimSpace(b.Markdown) == "":
-		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"code": "bad_brief", "message": "the briefing is empty"})
-		return
-	case len(b.Markdown) > maxBriefBytes:
-		writeJSONStatus(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "brief_too_large", "message": "the briefing is larger than 64 KB"})
-		return
-	}
-	var warns []string
-	if s.todos != nil && !b.NoCheck {
-		var fail string
-		if fail, warns = checkBrief(b.Markdown, s.todos.list("")); fail != "" {
-			writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"code": "needs_you_unlinked", "message": fail})
-			return
-		}
-	}
-	v := Brief{Markdown: b.Markdown, By: s.by(r, ""), At: time.Now().UTC()}
-	if err := s.brief.set(v); err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"code": "brief_error", "message": err.Error()})
-		return
-	}
-	s.briefPublished(v.At)
-	resp := map[string]any{"brief": v}
-	if len(warns) > 0 {
-		resp["warnings"] = warns
-	}
-	writeJSON(w, resp)
 }
 
 // handlePlaybook serves the coordinator playbook: ?harness=pi|claude|

@@ -57,6 +57,17 @@ func (f *fakeLaunchHerdr) methods() []string {
 	return out
 }
 
+// promptCount counts the prompts typed into panes.
+func promptCount(fh *fakeLaunchHerdr) int {
+	n := 0
+	for _, m := range fh.methods() {
+		if m == "agent.prompt" {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *fakeLaunchHerdr) call(method string) *fakeCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()

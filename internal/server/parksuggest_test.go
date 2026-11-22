@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -123,7 +122,7 @@ func TestParkSuggestConfig(t *testing.T) {
 	s.stampPark([]herdr.AgentInfo{{}}) // off: no panic
 }
 
-func TestParkSuggestReachesBrowsersAndTheBriefing(t *testing.T) {
+func TestParkSuggestReachesBrowsers(t *testing.T) {
 	r := newSugRig(t)
 	a := r.idleFor("w8:p1", "ok", 25*time.Hour)
 	q := time.Now().Add(-time.Hour)
@@ -135,15 +134,6 @@ func TestParkSuggestReachesBrowsersAndTheBriefing(t *testing.T) {
 	}
 	if a.ParkHint != nil {
 		t.Fatal("slimAgents stamped the caller's copy")
-	}
-	if got := parkLine(0); got != "" {
-		t.Fatalf("line for none = %q", got)
-	}
-	if got := parkLine(1); !strings.Contains(got, "1 agent can be parked") || !strings.Contains(got, "Do not park them yourself") {
-		t.Fatalf("line = %q", got)
-	}
-	if got := parkLine(6); !strings.Contains(got, "6 agents can be parked") {
-		t.Fatalf("line = %q", got)
 	}
 }
 

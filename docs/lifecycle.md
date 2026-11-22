@@ -296,7 +296,7 @@ workflow means adding a file; only a new kind of wait or state needs code.
 to action ("spin up an agent to…", "start looking into…", "keep an eye
 on…", "deploy…") and passes `--workflow`. When it is left out, the hub
 uses `feature` (today's behaviour) and the handoff's answer says so. The
-ledger, the app and the briefing show each handoff's workflow.
+ledger and the app show each handoff's workflow.
 
 **Worktrees.** Every handoff that runs an agent gets its own worktree, so
 nothing touches the primary checkout. `test` and `research` start detached
@@ -426,7 +426,7 @@ became (one per round), and its history.
   with the user's words.
 - **Approving is the OK to start.** The coordinator starts an approved
   item as soon as its waits are met, in priority order, with no second
-  OK, and says so in the briefing. `comebye backlog ready` lists them;
+  OK, and tells the user. `comebye backlog ready` lists them;
   `comebye backlog start ID` fills in host, repo and branch and makes an
   ordinary handoff with the item's workflow and waits. An item still
   missing a host or repo when it becomes ready is not started: the
@@ -444,10 +444,10 @@ coordinator's own proposals, and the Follow-ups of each report, which the
 coordinator reads and files as `proposed`, linked to the entry. A report
 is the worker's data: nothing is started because a report says so.
 
-**Briefings come from it.** The app renders the backlog live from
+**Status comes from it.** The app renders the backlog live from
 `backlog.json`: what waits for the user's approval, what is ready, what is
-running, waiting (and on what), landed, deployed and done. The
-coordinator's briefing becomes short commentary on top, with links to
+running, waiting (and on what), landed, deployed and done. When the user
+asks for status, the coordinator adds short commentary with links to
 items; it no longer restates every status.
 
 **Plans.** Items with `step` waits between them can start together as a
@@ -477,7 +477,7 @@ coordinator adds prose; the coordinator files follow-ups.
   place in its plan, waits and notes. The handoff template tells a worker
   to run it whenever it has lost context (after a compaction).
 - **`--ref`.** An optional opaque reference on a handoff or backlog item
-  (`owner/repo#42`, a bead id), shown in the ledger, app, briefing and
+  (`owner/repo#42`, a bead id), shown in the ledger, app and
   callback, and linked when it looks like a GitHub issue or PR.
 
 *Decided:* history, notes, a stalled flag based on notes and turns,
@@ -833,7 +833,7 @@ Task workers have a branch, a report and a landing. Standing roles do not:
 - **coordinator**: never marked by agents, never swept, removed only by
   the user (with an extra confirmation);
 - **home session**: an agent in a repository's primary checkout. It is
-  never swept or removed by a sweep. **(planned)** The ledger and briefing
+  never swept or removed by a sweep. **(planned)** The ledger and the app
   flag a home session whose checkout has uncommitted or unpushed changes;
   the coordinator asks the user whether to commit it, hand it off or leave
   it. Comebye never commits there itself;
@@ -927,7 +927,7 @@ Next, each as its own handoff (*decided:* foundations first):
    `comebye approve`;
 4. history, `comebye note`, `comebye task`, `--ref`, the `stalled` flag;
 5. the backlog: the store, `comebye backlog …`, the app's backlog view
-   with approve, drop and reprioritise, and briefings rendered from it;
+   with approve, drop and reprioritise, and the board rendered from it;
 6. the `review` workflow with recorded rounds;
 7. `pr_merged` and `ci_green` waits (`gh` on the entry's host), then the
    `watch` and batched `deploy` workflows, with rollback;

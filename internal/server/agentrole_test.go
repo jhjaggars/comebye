@@ -145,12 +145,7 @@ func TestAgentRoleAllowlist(t *testing.T) {
 		{"GET", "/api/ledger", "", 200},
 		{"POST", "/api/handoffs", `{"repo":"/x","branch":"b","brief":""}`, 400},
 		{"POST", "/api/marks/clear", `{"agent_id":"desk/w2:p1"}`, 200},
-		{"GET", "/api/brief", "", 200},
 		{"GET", "/api/coordinator", "", 200},
-		{"POST", "/api/brief", `{"markdown":"# hi"}`, 200},
-		{"GET", "/api/brief/schedule", "", 200},
-		{"POST", "/api/brief/schedule", `{"enabled":true,"every":"24h"}`, 200},
-		{"POST", "/api/brief/schedule/dismiss", `{}`, 404}, // nothing missed: but allowed
 		{"GET", "/api/roles", "", 200},
 	}
 	for _, c := range allowed {
@@ -184,7 +179,7 @@ func TestAgentRoleThroughHandler(t *testing.T) {
 	s, _, _ := coordServer(t)
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
-	req, _ := http.NewRequest("POST", srv.URL+"/api/brief", strings.NewReader(`{"markdown":"hello"}`))
+	req, _ := http.NewRequest("POST", srv.URL+"/api/marks/clear", strings.NewReader(`{"agent_id":"desk/w2:p1"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderAgentToken, testToken)
 	resp, err := http.DefaultClient.Do(req)
@@ -193,7 +188,7 @@ func TestAgentRoleThroughHandler(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
-		t.Fatalf("brief through the handler: %d", resp.StatusCode)
+		t.Fatalf("unmark through the handler: %d", resp.StatusCode)
 	}
 }
 
@@ -317,46 +312,20 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
-func TestBriefStorage(t *testing.T) {
-	s, _, dir := coordServer(t)
-	if w := do(s, "GET", "/api/brief", userHdr, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"brief":null`) || !strings.Contains(w.Body.String(), `"state":"off"`) {
-		t.Fatalf("empty = %d %s", w.Code, w.Body)
-	}
-	w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"## proj\n**Finished:** feat/x"}`)
-	if w.Code != 200 {
-		t.Fatalf("set = %d %s", w.Code, w.Body)
-	}
-	var got struct{ Brief Brief }
-	json.Unmarshal(do(s, "GET", "/api/brief", userHdr, "").Body.Bytes(), &got)
-	if got.Brief.Markdown != "## proj\n**Finished:** feat/x" || got.Brief.By != "coordinator (desk/w1:p1)" || time.Since(got.Brief.At) > time.Minute {
-		t.Fatalf("brief = %+v", got.Brief)
-	}
-	if fi, err := os.Stat(filepath.Join(dir, "brief.json")); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("brief.json: %v %v", fi, err)
-	}
-	// The user can publish too.
-	if w := do(s, "POST", "/api/brief", userHdr, `{"markdown":"mine"}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"by":"me@example.com"`) {
-		t.Fatalf("user brief = %d %s", w.Code, w.Body)
-	}
-	// 64 KB cap; empty refused; the old briefing stays.
-	big, _ := json.Marshal(map[string]string{"markdown": strings.Repeat("x", maxBriefBytes+1)})
-	if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), string(big)); w.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("oversized: %d", w.Code)
-	}
-	exact, _ := json.Marshal(map[string]string{"markdown": strings.Repeat("y", maxBriefBytes)})
-	if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), string(exact)); w.Code != 200 {
-		t.Errorf("64 KB exactly: %d", w.Code)
-	}
-	huge, _ := json.Marshal(map[string]string{"markdown": strings.Repeat("x", 200<<10)})
-	if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), string(huge)); w.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("huge: %d", w.Code)
-	}
-	if w := do(s, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"  "}`); w.Code != http.StatusBadRequest {
-		t.Errorf("empty: %d", w.Code)
-	}
-	b, _ := s.brief.get()
-	if b == nil || len(b.Markdown) != maxBriefBytes {
-		t.Fatalf("kept brief = %v", b)
+func TestBriefingRoutesAreGone(t *testing.T) {
+	// The briefing was removed (#19): its routes are gone for everyone (404,
+	// or 405 where only another method of the path is served).
+	s, _, _ := coordServer(t)
+	for _, c := range []struct{ method, path, body string }{
+		{"GET", "/api/brief", ""}, {"POST", "/api/brief", `{"markdown":"x"}`}, {"GET", "/api/brief/history", ""},
+		{"GET", "/api/brief/schedule", ""}, {"POST", "/api/brief/schedule", `{"enabled":true,"every":"24h"}`},
+		{"POST", "/api/brief/schedule/dismiss", `{}`}, {"GET", "/api/digests", ""},
+	} {
+		for _, hdr := range []map[string]string{userHdr, agentHdr("w1:p1")} {
+			if w := do(s, c.method, c.path, hdr, c.body); w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s = %d, want 404 or 405", c.method, c.path, w.Code)
+			}
+		}
 	}
 }
 
@@ -366,7 +335,7 @@ func TestNoHub(t *testing.T) {
 	s := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", StateDir: t.TempDir(), NoLedger: true, AgentToken: testToken}, nil, nil)
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/ledger", ""}, {"POST", "/api/handoffs", `{}`}, {"POST", "/api/marks", `{"agent_id":"x"}`},
-		{"POST", "/api/marks/clear", `{"agent_id":"x"}`}, {"GET", "/api/brief", ""}, {"POST", "/api/brief", `{"markdown":"x"}`}, {"GET", "/api/roles", ""},
+		{"POST", "/api/marks/clear", `{"agent_id":"x"}`}, {"GET", "/api/roles", ""},
 	} {
 		if w := do(s, c.method, c.path, agentHdr("w1:p1"), c.body); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "no hub configured") {
 			t.Errorf("agent %s %s: %d %s", c.method, c.path, w.Code, w.Body)
@@ -432,8 +401,6 @@ func TestPeerForwardsToHub(t *testing.T) {
 		{"POST", "/api/handoffs", `{"host":"kube","repo":"/r","branch":"b","brief":"x"}`, "/api/handoffs"},
 		{"POST", "/api/marks", `{"agent_id":"kube/w2:p1","reason":"done"}`, "/api/marks"},
 		{"POST", "/api/marks/clear", `{"agent_id":"kube/w2:p1"}`, "/api/marks/clear"},
-		{"GET", "/api/brief", "", "/api/brief"},
-		{"POST", "/api/brief", `{"markdown":"x"}`, "/api/brief"},
 		{"GET", "/api/roles", "", "/api/roles"},
 		{"GET", "/api/agents", "", "/api/agents"},
 		// This host's own per-agent routes become host-qualified ones.
@@ -510,12 +477,11 @@ func TestHubTreatsForwardedAsAgent(t *testing.T) {
 	defer hs.Close()
 	up, _ := fleet.NewUpstream(hs.URL, true, nil)
 	peer := newServer(t, Config{AllowLogins: []string{"me@example.com"}, HostName: "kube", Upstream: up, AgentToken: testToken}, nil, nil)
-	if w := do(peer, "POST", "/api/brief", agentHdr("w1:p1"), `{"markdown":"from kube"}`); w.Code != 200 {
-		t.Fatalf("brief via peer = %d %s", w.Code, w.Body)
+	if w := do(peer, "POST", "/api/todos", agentHdr("w1:p1"), `{"question":"from kube","kind":"followup"}`); w.Code != http.StatusCreated {
+		t.Fatalf("to-do via peer = %d %s", w.Code, w.Body)
 	}
-	b, _ := hubSrv.brief.get()
-	if b == nil || b.Markdown != "from kube" || b.By != "kube/w1:p1" {
-		t.Fatalf("hub brief = %+v", b)
+	if l := hubSrv.todos.list(""); len(l) != 1 || l[0].Question != "from kube" || l[0].CreatedBy != "kube/w1:p1" {
+		t.Fatalf("hub to-dos = %+v", l)
 	}
 	// Directly at the hub, a forwarded request is held to the agent role.
 	fwd := map[string]string{HeaderForwarded: "1", HeaderAgent: "w1:p1", HeaderAgentHost: "kube"}

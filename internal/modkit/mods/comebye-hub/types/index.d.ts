@@ -4,7 +4,6 @@ export type Band = {
   firstTodo?: string
   queued: number
   openTodos?: number
-  headline?: string
   handoff?: {
     id: string
     status: string

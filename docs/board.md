@@ -1,18 +1,15 @@
-# The briefing board
+# The board
 
-`GET /api/board` is a read-only view that the app draws above the
-coordinator's Markdown briefing (the Status page, and the top of the phone's
-briefings screen). It is built only from records the hub already holds: the
-to-do list, the ledger, the fleet's agents and the release items. Nothing is
-stored, and nothing is guessed. The coordinator writes a headline, a reason
-for each "Needs you" item and a few notes; the board draws everything else,
-so the briefing no longer retypes state. The design is "A. Board plus note"
-from the briefing-UX spike (Page `pg_a1112e4cfd`).
+`GET /api/board` is a read-only view that the app draws at the top of the
+Status page (on the phone, the Status screen). It is built only from records
+the hub already holds: the to-do list, the ledger, the fleet's agents and the
+release items. Nothing is stored, and nothing is guessed. The coordinator's
+fresh-start digest carries the same lanes.
 
 `comebye board [--json]` prints it as plain text lanes (one short line per item: title, status, age).
 
 Who may read it: the user, and agents with the agent role (the coordinator
-reads it before it writes a briefing); a tagged worker may not.
+reads it when you ask for status); a tagged worker may not.
 
 ## Lane rules
 
@@ -34,28 +31,12 @@ on the board.
 
 **What the board cannot know.** "Waiting on others" is only what the records
 say. A pull request waiting for `/lgtm`, an RFC that must come first, or an
-idea parked on purpose is not a field; the coordinator says it in a note keyed
-to the handoff or to-do that stands for it.
+idea parked on purpose is not a field; the coordinator says so when it gives
+you status.
 
 **A tagged release needing the user** ("press Bump hub") is a release item,
 so it sits under *Waiting on others* here. The Releases tab, and the orange
-dot, are the live source for what the user must do next; the coordinator's
-"Needs you" line for it carries the to-do id, so its reason is shown with the
-release.
-
-## What the coordinator writes
-
-Parsed from the latest briefing by the hub:
-
-- **`headline`**: the first line of text, without Markdown marks.
-- **`why`**: on a Needs you item, the text after its id in the briefing's
-  "Needs you" section.
-- **`note`**: a list item outside "Needs you" that starts with an id, then `:`
-  or a dash. The id is a handoff id, a to-do id or a worker's name, bold, in
-  backticks or bare: `- **h45500d313d85:** waits for the RFC`. A bullet that
-  starts with an `h`/`t` id the board does not know is returned in
-  `unkeyed_notes` and counted in the app, so it gets fixed. Any other
-  Markdown stays in the briefing under the board.
+dot, are the live source for what the user must do next.
 
 ## In the app
 

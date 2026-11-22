@@ -13,7 +13,7 @@ import (
 )
 
 // Upstream is a peer's link to its hub (-hub): the coordinator CLI's
-// requests on a peer (ledger, handoffs, marks, the briefing, prompts) are
+// requests on a peer (ledger, handoffs, marks, to-dos, prompts) are
 // forwarded there, because the hub keeps the one ledger. It is the mirror
 // of the hub's calls to its peers and hardened the same way: no redirects,
 // bounded bodies and answers, and only the

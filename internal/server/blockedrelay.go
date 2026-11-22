@@ -21,8 +21,8 @@ import (
 // Push notifications (state.Dispatcher) reach the user's phone, and the
 // auto to-do (autotodo.go) waits ten minutes and skips an agent somebody
 // has open. Neither reaches the coordinator that handed the work out, so a
-// worker could sit at a permission prompt while its coordinator, and
-// through it the briefing, said nothing. This file closes that gap, and
+// worker could sit at a permission prompt while its coordinator said
+// nothing. This file closes that gap, and
 // also reads each blocked agent's dialog so the agent list can say what it
 // is blocked on ("permission prompt (git push …)") instead of a bare
 // "blocked".

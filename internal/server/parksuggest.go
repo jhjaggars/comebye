@@ -309,19 +309,6 @@ func (s *Server) parkSuggestStep(ctx context.Context, agents []herdr.AgentInfo, 
 	p.mu.Unlock()
 }
 
-// parkSuggestCount is how many agents are suggested for parking now.
-func (s *Server) parkSuggestCount() int {
-	agents := append([]herdr.AgentInfo(nil), s.fleet.Agents()...)
-	s.stampPark(agents)
-	n := 0
-	for _, a := range agents {
-		if a.ParkHint != nil {
-			n++
-		}
-	}
-	return n
-}
-
 // autoPark parks a for good reason: the audit entry and the digest line say so.
 // A refusal leaves the suggestion where it was.
 func (s *Server) autoPark(ctx context.Context, a herdr.AgentInfo, key string, now time.Time) {

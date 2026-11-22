@@ -153,30 +153,6 @@ func TestTodoAddOptions(t *testing.T) {
 	}
 }
 
-func TestBriefSetNoCheck(t *testing.T) {
-	f, e, out, errb := newFake(t)
-	f.answers["POST /api/brief"] = answer{body: `{"brief":{"markdown":"x"},"warnings":["1 open to-do item(s) are not in \"Needs you\": t1 (q)"]}`}
-	e.Stdin = strings.NewReader("## Needs you\n- q\n")
-	if code := run(e, "brief", "set", "-", "--no-check"); code != 0 || !strings.Contains(f.find("POST", "/api/brief").body, `"no_check":true`) ||
-		!strings.Contains(out.String(), "Warning: 1 open to-do item") {
-		t.Fatalf("no-check: %d %s %s", code, out, errb)
-	}
-	e.Stdin = strings.NewReader("## proj\n")
-	if code := run(e, "brief", "set", "-"); code != 0 || strings.Contains(f.find("POST", "/api/brief").body, "no_check") {
-		t.Fatalf("default: %d %s", code, f.find("POST", "/api/brief").body)
-	}
-	// The refusal reaches the caller with its fix.
-	f.answers["POST /api/brief"] = answer{code: 422, body: `{"code":"needs_you_unlinked","message":"the briefing was not published: add the id"}`}
-	e.Stdin = strings.NewReader("## Needs you\n- q\n")
-	errb.Reset()
-	if code := run(e, "brief", "set", "-"); code != 1 || !strings.Contains(errb.String(), "add the id") {
-		t.Fatalf("refusal: %d %s", code, errb)
-	}
-	if code := run(e, "brief", "get", "--no-check"); code != 2 {
-		t.Fatalf("--no-check on get: %d", code)
-	}
-}
-
 func TestTodoFromLast(t *testing.T) {
 	f, e, out, errb := newFake(t)
 	f.answers["POST /api/todos/from-last"] = answer{code: 200, body: `{"todos":[{"id":"t1","question":"home asks: Keep the CSV format?","kind":"decision","state":"open"}],"filed":1,"existing":1,"found":2}`}

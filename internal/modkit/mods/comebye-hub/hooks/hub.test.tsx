@@ -125,7 +125,8 @@ test('splitArgs reads quotes', () => {
 test('bandText is null when quiet', () => {
   expect(bandText(null)).toBeNull()
   expect(bandText({ coordinator: false, todos: 0, queued: 0 })).toBeNull()
-  expect(bandText({ coordinator: true, todos: 0, queued: 0, headline: 'Nothing waits on you.' })).toBe('Comebye: Nothing waits on you.')
+  expect(bandText({ coordinator: true, todos: 0, queued: 0 })).toBeNull()
+  expect(bandText({ coordinator: true, todos: 0, queued: 0, openTodos: 2 })).toBe('Comebye: 2 open to-dos')
 })
 
 const ctx = (url?: string, own: string[] = []) => ({ ownOwners: own, remoteUrl: async () => url })

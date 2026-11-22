@@ -93,7 +93,7 @@ A control adds only its own sizing (`.us-seg` is the dense 36px one). The underl
 (was 18px) and its layers are tokens.
 *Stacking:* `--z-raised 2, pop 5, bar 10, pill 15, view 30, backdrop 34, menu 35, popup 36, sheet 37, screen 40, scrim 70, toast 100, toast-over 101`.
 A two-digit literal `z-index` is a convention break; use the tokens.
-*Notice:* `#toast`, `.rtr-banner` and the briefing card (`.br-card`) share one 12px surface; `.notice.info|warn|err` sets the edge colour (and the warn tint).
+*Notice:* `#toast` and `.rtr-banner` share one 12px surface; `.notice.info|warn|err` sets the edge colour (and the warn tint).
 
 ### Shared with Pages (slice 7)
 

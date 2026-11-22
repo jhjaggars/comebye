@@ -350,11 +350,8 @@ func TestTaggedWorkerWrites(t *testing.T) {
 		{"POST", "/api/sweep", `{"dry_run":true}`},
 		{"POST", "/api/agents/wZ:p1/model", `{"model":"m"}`},
 		{"POST", "/api/hosts/kube/agents/wS:p1/model", `{"model":"m"}`},
-		{"POST", "/api/brief", `{"markdown":"x"}`},
-		{"GET", "/api/brief", ""},
-		{"GET", "/api/brief/schedule", ""},
-		{"POST", "/api/brief/schedule", `{"enabled":false}`},
-		{"POST", "/api/brief/schedule/dismiss", `{"id":"x"}`},
+		{"GET", "/api/board", ""},
+		{"GET", "/api/coordinator", ""},
 		{"POST", "/api/todos/x/answer", `{"text":"t"}`},
 		{"POST", "/api/todos/x/done", `{}`},
 		{"POST", "/api/todos/x/drop", `{}`},
@@ -409,8 +406,8 @@ func TestUntaggedWritesUnchanged(t *testing.T) {
 				t.Errorf("%s: POST %s: %d %s", name, p, code, body)
 			}
 		}
-		if code, body := r.call(r.main, "GET", "/api/brief", "", hdr); code != 200 {
-			t.Errorf("%s: GET /api/brief: %d %s", name, code, body)
+		if code, body := r.call(r.main, "GET", "/api/board", "", hdr); code != 200 {
+			t.Errorf("%s: GET /api/board: %d %s", name, code, body)
 		}
 	}
 }

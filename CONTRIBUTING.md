@@ -50,7 +50,7 @@ report. A passing `run.sh` does not tell you the UI looks right.
 
 `dev.sh` starts the fake herdr with fixture agents (a worker, a coordinator,
 home agents, one blocked on a dialog, one marked ready to remove, long
-names, a briefing, and a second host `peerbox`) plus comebye built from the
+names, and a second host `peerbox`) plus comebye built from the
 current checkout, on a free port, with all state in a `mktemp` dir. `web/` is
 served from disk, so **edit JS/CSS/HTML and reload, no rebuild**; after a Go
 change run `dev.sh restart`. `dev.sh status|url|logs` help when stuck. Each

@@ -7,7 +7,6 @@ export type RawBand = {
   first_todo?: string
   queued?: number
   open_todos?: number
-  headline?: string
   handoff?: {
     id: string
     status: string
@@ -25,7 +24,6 @@ export function toBand(raw: RawBand): Band {
     firstTodo: raw.first_todo,
     queued: raw.queued ?? 0,
     openTodos: raw.open_todos,
-    headline: raw.headline,
     handoff: raw.handoff,
   }
 }
@@ -56,7 +54,6 @@ export function bandText(b: Band | null): string | null {
   if (b.coordinator) {
     if ((b.openTodos ?? 0) > 0 && b.todos === 0)
       parts.push(plural(b.openTodos ?? 0, 'open to-do', 'open to-dos'))
-    if (b.headline) parts.push(b.headline)
   }
   return parts.length ? 'Comebye: ' + parts.join(' · ') : null
 }

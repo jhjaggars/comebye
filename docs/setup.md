@@ -520,7 +520,7 @@ on any hub:
 | Feature | In hub-only mode |
 | --- | --- |
 | Handoff ledger, plans, marks, reports, landings, queue | Work as on any hub. A worker runs on a **peer**; name the host when you hand off. |
-| To do, briefing and its schedule, coordinator roles | Work. The scheduled briefing prompts a coordinator on any **peer**; with none reachable it waits, as for any busy coordinator. |
+| To do, the board, coordinator roles | Work. |
 | Peers, the agent list, push and ntfy notifications, release | Work: the hub merges its peers' agents and notifies for them. |
 | Archive and `recall` search | Searching works (it reads the index, `-recall-index`). The server ships a transcript copy only when a **local** agent is removed, so a hub-only hub ships none. |
 | The app's host list | The hub's own host shows **"no agents here"** (`no_agents` in `/api/hosts`), not an error or a bare 0. Its peers' hosts are listed as usual. |
@@ -616,8 +616,7 @@ backups private.
 | --- | --- | --- |
 | `ledger.json` | The handoff ledger: workers, marks, plans, reports | **Required.** History and open work are gone. |
 | `todo.json` | The To do list | **Required.** |
-| `brief.json`, `brief-history.json`, `brief-schedule.json` | The briefing, its history and schedule | **Required** (history is lost; the briefing is rewritten by the next run). |
-| `coordinator-reset.json` | The last coordinator resets, and any due one | Optional; the next briefing decides again. |
+| `coordinator-reset.json` | The last coordinator resets, and any due one | Optional; the next look (every 10 minutes) decides again. |
 | `roles.json` | Which agents are coordinators | **Required**; coordinators must be marked again. |
 | `queue.json` | Prompts waiting to be delivered | **Required** if prompts are queued; otherwise empty. |
 | `peers.json` | Peers added live (`comebye peer add`) | **Required**, or re-add each peer. Peers in `-peers` need no file. |
@@ -642,7 +641,7 @@ scaled to 0) or from a volume snapshot.
 
 **What hard-codes the host name.** Agent ids are `<host>/<pane>`, and that id
 is stored in `ledger.json` (`host`, `agent_id`), `todo.json` (who waits),
-`queue.json`, `roles.json` and `brief-schedule.json`. The `-host-name` of the
+`queue.json` and `roles.json`. The `-host-name` of the
 hub that wrote them is therefore **part of the data**. When a hub moves:
 
 1. Give the new hub a `-host-name` that is **not** the old hub's, and not the
@@ -677,7 +676,7 @@ comebye -hub-only -state-dir /var/lib/comebye -host-name hub -ts-allow-login you
 ```
 
 Check it: `curl localhost:8741/readyz`, then `comebye todo list` and
-`comebye brief get` with `COMEBYE_STATE_DIR=/var/lib/comebye` show your data. To
+`comebye ledger` with `COMEBYE_STATE_DIR=/var/lib/comebye` show your data. To
 rehearse a restore without touching the live hub, extract the archive into a
 scratch directory and start a second hub there on **another port** (`-addr
 127.0.0.1:18761`) and its own `-state-dir`: the lock is per directory, so it
@@ -865,17 +864,17 @@ to the home screen again.
 | `-pages-listen` | `COMEBYE_PAGES_LISTEN` | (none) | A second loopback listener (e.g. `127.0.0.1:8742`) that serves only published pages (`/p/...`): no `/api`, no app, everything else 404. Publish it on its own Serve port (`tailscale serve --bg --https=8443 http://127.0.0.1:8742`), so pages get an origin of their own. Needs `-pages-url`; must differ from `-addr`; loopback when `-ts-allow-login` is set. |
 | `-pages-url` | `COMEBYE_PAGES_URL` | (none) | That listener as the browser reaches it (`https://hub.tailnet.ts.net:8443`): the app frames pages from it (its Content-Security-Policy names it), and page links use it. |
 | `-hub` | `COMEBYE_HUB` | (none) | On a peer: the hub's `https://` Serve URL (a tagged node uses it too). The coordinator CLI's requests are forwarded there and this instance keeps no ledger. Exclusive with `-peers` and `-hub-mode`. See [Coordinators](agents.md#coordinators). |
-| `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger, briefing and coordinator roles here (off on a peer with `-hub`). |
+| `-ledger` | `COMEBYE_LEDGER` | `true` | Keep the handoff ledger and coordinator roles here (off on a peer with `-hub`). |
 | `-default-kind` | `COMEBYE_DEFAULT_KIND` | (none) | The agent kind a start on this host uses when the request names none (a launch, a handoff, a plan step). A seed: a value saved in `settings.json` (the app's Peers screen, `comebye settings set`) wins. Empty: the kind most of the running agents use. Use it to give an ephemeral host (a spot worker) a rule at creation: `COMEBYE_DEFAULT_KIND=pi`. |
 | `-allowed-kinds` | `COMEBYE_ALLOWED_KINDS` | (none) | The only agent kinds this host starts, comma-separated (`pi`, or `pi,codex`); anything else is refused (`kind_not_allowed`) and the launch sheet does not offer it. A seed that `settings.json` overrides. Empty: every installed kind. |
 | `-coordinator-dir` | `COMEBYE_COORDINATOR_DIR` | `~` | Where the app's Coordinator preset starts a coordinator (may lie outside the launch roots; only that preset uses it). |
-| `-coordinator-reset-tokens` | `COMEBYE_COORDINATOR_RESET_TOKENS` | `150000` | Hub: the context size past which the first briefing marks the coordinator's in-place reset (`/clear` plus a digest) due; it runs when the coordinator is idle with nothing queued. `0` turns it off. Needs `comebye coordinator install-hook`; see [coordinator-reset.md](coordinator-reset.md). |
+| `-coordinator-reset-tokens` | `COMEBYE_COORDINATOR_RESET_TOKENS` | `150000` | Hub: the context size past which the hub marks the coordinator's in-place reset (`/clear` plus a digest) due; it runs when the coordinator is idle with nothing queued. `0` turns it off. Needs `comebye coordinator install-hook`; see [coordinator-reset.md](coordinator-reset.md). |
 | `-coordinator-args` | `COMEBYE_COORDINATOR_ARGS` | none | Extra arguments the Coordinator preset passes per agent kind, `KIND=ARGS` (repeatable or `;`-separated), e.g. `pi=--auto` for an install whose Pi has that extension flag. |
 | `-hub-only` | `COMEBYE_HUB_ONLY` | `false` | Run with no herdr (nothing waits for a socket) and host no agents; on a hub it implies `-hub-mode`; with `-hub` and `-ledger=false` it is a herdr-less peer (a provisioner pod). Turns launching off here. An explicitly empty `-sock=` means the same. See [A hub with no herdr](#a-hub-with-no-herdr-containers-kubernetes). |
 | `-lock-wait` | `COMEBYE_LOCK_WAIT` | `0` | When another comebye holds the state directory, retry this long (once a second) before refusing to start. See [One server per state directory](#one-server-per-state-directory). |
 | `-health-addr` | `COMEBYE_HEALTH_ADDR` | (none) | Also serve `/healthz` and `/readyz` (nothing else, no login) on this address, e.g. `:8743`, for probes that cannot reach the loopback listener. |
 | `-push` | `COMEBYE_PUSH` | `true` | Enable Web Push. Set `false` on peers. |
-| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `peers.json` (peers added live), `ledger.json`, `brief.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`; `hub.lock` keeps a second server off it. The CLI reads the token from here too. Every file is listed, with what to do if it is lost, in [The state directory](#the-state-directory-what-is-in-it-and-moving-it). |
+| `-state-dir` | `COMEBYE_STATE_DIR` | `$XDG_STATE_HOME/comebye`, else `~/.local/state/comebye` | Holds `vapid.pem`, `push-subscriptions.json`, the `agent-token`, and on the hub `peers.json` (peers added live), `ledger.json` and `roles.json` (dir 0700, files 0600), and an optional `handoff-template.md`; `hub.lock` keeps a second server off it. The CLI reads the token from here too. Every file is listed, with what to do if it is lost, in [The state directory](#the-state-directory-what-is-in-it-and-moving-it). |
 | `-push-subject` | `COMEBYE_PUSH_SUBJECT` | `mailto:<first email login>`, else the project URL | VAPID contact, `mailto:` or `https://`; must be a public domain. |
 | `-push-excerpt` | `COMEBYE_PUSH_EXCERPT` | `200` | Max characters of the agent's last message in Web Push bodies (end-to-end encrypted); `0` sends none. |
 | `-notify-throttle` | `COMEBYE_NOTIFY_THROTTLE` | `30s` | Minimum interval between repeat notifications per agent and kind (both channels). |

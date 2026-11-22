@@ -392,9 +392,9 @@ agents.
 
 **Coordinator is a role, not a process.** Any agent, of any kind, on any
 host, can act as your coordinator: it turns what you ask for into
-handoffs, follows the workers, proposes cleanup and keeps a briefing for
-you. It has no memory of its own to lose: the state is the hub's ledger
-and briefing, and every action is a `comebye` command, so you can close a
+handoffs, follows the workers, proposes cleanup and tells you where things
+stand. It has no memory of its own to lose: the state is the hub's ledger
+and to-do list, and every action is a `comebye` command, so you can close a
 coordinator and start another (of another kind, on another host) and it
 picks up where the last one left off.
 
@@ -433,8 +433,8 @@ that belongs to one of them:
   *asker*, kept in `askers.json`. That agent's later notices go there until
   another coordinator prompts it. A prompt to another coordinator's
   handoff changes nothing.
-- **Events nobody owns go to the main coordinator**: sweep results, the
-  scheduled briefing, release items, review verdicts and loop nudges whose
+- **Events nobody owns go to the main coordinator**: sweep results,
+  release items, review verdicts and loop nudges whose
   owner is unknown, and to-do answers whose waiting agent no coordinator
   owns. Main is the first coordinator registered; it stays main (recorded in
   `roles.json`, so a restart keeps it) until it is removed, and then the
@@ -511,75 +511,14 @@ replaces a stale record with the live name). Check with `comebye agents`:
 its ROLE column says `coordinator`. (`comebye whoami` shows the *auth*
 role, `agent`, for every agent; it never shows the coordinator role.)
 
-The scheduled briefing does not belong to a pane: the hub prompts
-whichever coordinator is running and idle when a slot comes, so making
-another agent the coordinator is all it takes; the old pane only remains
-as "set by" on the schedule.
-
 Coordinators are pinned above the projects with a badge. Agents cannot
 mark a coordinator ready to remove; you can, and removing one asks for an
 extra confirmation ("Remove all safe" leaves it out).
 
-**The briefing.** A coordinator publishes a short markdown briefing
-(`comebye brief set`): per project, what finished and what it produced,
-what is unfinished or blocked, and proposed next tasks with branch names.
-It shows as a card at the top of the list ("from <agent> · <age>"),
-rendered like agent replies (sanitized). Collapse it, or dismiss it until
-the next one is published. Stored on the hub as `brief.json` (64 KB at
-most).
-
-**Scheduled briefings.** The hub can ask a coordinator for a briefing on
-a schedule: off by default, set from the Briefings card on the Status page
-(on a phone, the top of the briefings screen: Off, 1 h, 3 h or 6 h, the
-skip-when-unchanged switch and the max-quiet safety net, applied at once),
-or by a coordinator (`comebye brief schedule --every 24h --at 08:00`, which
-the card shows as an "Every 24h at 08:00" chip and keeps). Slots
-fall every interval (1h to 30 days), from a time of day in a time zone
-when given (whole days follow the calendar across DST), else from when it
-was set; the slot under way when it is set does not fire. At a slot the
-hub prompts an idle coordinator (the hub's own first, else the most
-recently made one, on any host) to catch up and `comebye brief set`. Any
-briefing published after the slot satisfies it, a hand-made one too.
-
-A slot is missed when no coordinator is running (counted at once), when
-the coordinator stays busy until the next slot, or when it was asked and
-published nothing. Misses form a streak: the card shows the briefing as
-stale with how many runs were missed since when and why, plus "Start
-coordinator" (the + sheet's Coordinator preset) and "Dismiss". Dismissing
-is stored on the hub, so it applies on every device, and only hides that
-streak; the next briefing ends it. Missed slots are never replayed and no
-notification is pushed for them. Stored on the hub as
-`brief-schedule.json`.
-
-**Quiet slots are skipped.** A briefing that only repeats "no change" costs
-the coordinator a whole turn, so at a slot the hub first compares a
-fingerprint of what a briefing reports with the one it took when the last
-briefing was published (`comebye brief set`, or by hand). If they match, the
-coordinator is not prompted: the slot counts as handled (never a miss, and
-no coordinator needs to be running), and the briefing card shows "checked
-14:05, no change" next to its age until a new briefing is published. The
-fingerprint covers:
-
-- to-do items: id, state, `updated_at` (a new, answered or closed item);
-- ledger entries: id, status, report count and report time (a worker filed
-  a report, finished, landed, was lost or removed);
-- agents: which ids exist and whether each is `done`, not working/idle,
-  which flaps all day (a worker on a watch loop) and changes nothing a
-  briefing says;
-- damaged repositories (host, path, source, since) and each host's version.
-
-It leaves out host connectivity (up/down flaps), branch tips and anything
-only a transcript shows. A safety net covers those: when the last briefing
-is older than 6 hours (`--max-quiet`) the next slot prompts anyway, so the
-coordinator refreshes its own state file. The fingerprint is stored in
-`brief-schedule.json`, so a hub restart neither wakes the coordinator for
-nothing nor hides a change made while it was down; a briefing with no
-fingerprint on file (published before this existed) is asked for. A change
-during a slot is picked up at the next slot, not mid-slot. Turn the skip off
-with `comebye brief schedule --skip off` (every slot prompts, as before);
-`--skip on` and `--max-quiet 12h` set it back and change the net (1h to
-30 days). The same settings are `always` and `max_quiet` in
-`POST /api/brief/schedule`.
+**Status on demand.** There is no scheduled briefing (it was removed in
+2026-11): ask the coordinator for status when you want it. It reads the
+ledger, the to-do list and `comebye board`, the same lanes as the app's
+Status page.
 
 **The CLI.** The same `comebye` binary runs the command line when its
 first argument is a command (`comebye` with flags, or none, is the
@@ -614,7 +553,7 @@ success, 1 when a call failed, 2 for a usage error.
 **Park and resume.** `comebye park` closes an idle agent's pane and keeps its worktree, branch and session; the app lists it under *Recently closed* on the Agents screen (every host, a host that is down greyed from the hub's last copy) with Resume and Keep (pin). A prompt queued for a parked agent (`comebye prompt NAME --queue`) waits up to 7 days and is delivered to its new pane after a resume; a to-do waiting on it shows *parked* and follows it. The hub suggests parking agents idle for a day with every guard passing (`-park-suggest-after`): a *can park* chip, a banner and a one-tap review; with `-park-mode auto` (the default) the hub parks such an agent itself once it has been idle a full day, and it shows in *Recently closed* as *parked automatically*. Park records are kept on the agent's host; resumed ones stay 30 days as history, and a ledger worker's entry records `park_history` and follows its agent to the new pane. After `-park-retention` (14 days) the hub proposes removal in *Ready to remove*, which you confirm (only for a parked session the ledger has no entry for: a worker's finished session is archived instead, see `comebye archived`); the sheet's Remove… sends one there now, and the section header shows what the closed agents keep on disk. An archived session's pane is listed on the *Archived* screen (`#/archived`, linked from the board's footer, from *Ready to remove* and from the foot of *Recently closed*), not under *Recently closed*: each row says why it was archived, the commits its base lacks, what is left (follow-ups as *Owes you*) and the build output that was cleared, with Unarchive, Resume and Propose removal. A session parked in the middle of its work shows as *paused* on its board card (finished work parked shows *pane closed*), with resume.
 
 | `comebye sweep [--dry-run] [--idle-after D] [--notify] [--mark-delivered] [--json]` | Sweep for finished workers (see [Sweeping](#sweeping-for-finished-agents)): mark the ones with nothing to lose as ready to remove, list the others with why. `--dry-run` marks nothing; `--notify` also tells an idle coordinator. |
-| `comebye todo add "QUESTION" [--kind decision\|action\|followup] [--option "LABEL\|DETAIL" ... [--recommend N[,M]]] [--context FILE\|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT \| --no-wait]` | Put a question, a decision, something only the user can do, or a follow-up on the to-do list, with a little context (why, what yes and no do, links to the PR or report). It shows in the app's To do panel beside the briefing, so it is not lost while you field other agents' feedback. Any agent may add; a worker is by default the agent waiting on its own item, a coordinator by default names none (`--waiting AGENT` for the agent blocked on it; a worker may name itself or a coordinator only, the user and a coordinator anyone). A question with choices takes `--option "label\|detail"` (2 to 9, repeatable) and `--recommend N[,M]`; the hub also writes the numbered list and a "My recommendation: ok N" line into the context, and the app draws its buttons from the fields. `todo add` and `todo set create` end with an `Open: URL` line (and `--json` carries `url`): **when you tell the user about an item, give them that full link, not the id** (a bare `t…` id means nothing on a phone). `comebye todo link ID` prints the same URL alone. The link opens that item in the app on desktop and phone; inside an item's `--context` markdown or a `--link`, write it as `/#/todo/ID` or `#/todo/ID` (same hub) and it stays a working link. |
+| `comebye todo add "QUESTION" [--kind decision\|action\|followup] [--option "LABEL\|DETAIL" ... [--recommend N[,M]]] [--context FILE\|-] [--link [LABEL=]URL] [--handoff ID] [--waiting AGENT \| --no-wait]` | Put a question, a decision, something only the user can do, or a follow-up on the to-do list, with a little context (why, what yes and no do, links to the PR or report). It shows in the app's To do panel, so it is not lost while you field other agents' feedback. Any agent may add; a worker is by default the agent waiting on its own item, a coordinator by default names none (`--waiting AGENT` for the agent blocked on it; a worker may name itself or a coordinator only, the user and a coordinator anyone). A question with choices takes `--option "label\|detail"` (2 to 9, repeatable) and `--recommend N[,M]`; the hub also writes the numbered list and a "My recommendation: ok N" line into the context, and the app draws its buttons from the fields. `todo add` and `todo set create` end with an `Open: URL` line (and `--json` carries `url`): **when you tell the user about an item, give them that full link, not the id** (a bare `t…` id means nothing on a phone). `comebye todo link ID` prints the same URL alone. The link opens that item in the app on desktop and phone; inside an item's `--context` markdown or a `--link`, write it as `/#/todo/ID` or `#/todo/ID` (same hub) and it stays a working link. |
 | `comebye todo link ID` | Print the full URL that opens one To do item (`https://HUB/#/todo/ID`), on one line; exits non-zero for an unknown id. `--json` gives `{id, url, full}`. |
 | `comebye todo set create --from FILE\|- [--waiting AGENT \| --no-wait] [--link [LABEL=]URL]` | File a **decision set**: one To do card for a planning step with many decisions, instead of one loose item per question. The file is JSON: `question`, optional `context`, `decided` (what is settled), `risks` (`id`, `text`, `decisions`), `decisions` (`id`, `title`, `question`, `surface`, `one_way`, `release_early`, `after`, `options` as `label`/`detail`/`short`, `recommend` as one option number), `facts` (`id`, `text`, `test`, `affects`), `rules` (`id`, `level` block\|warn, `when` as decision id to option number, `say`, `fix`) and an optional `plan` (a plan id: the plan's handoffs, queued even without `--after`, start when the set is submitted and fail if it is dropped unanswered). The user works the draft out in the app (Accept all suggestions holds back `one_way` decisions) and presses Submit once; the answer reaches the coordinator like any answer, with the structured result on the item (`todo show ID --json`). Every decision also has an "Other…" answer the user types, and the set has a free-text note; both reach you in the answer (`**D2 Size**: Other: 4 vCPU / 32 GiB`), and in `todo show ID --json` as `draft.choices.D2.text` and `draft.note`. A `rules` entry only fires on option numbers, never on a text answer, so do not rely on a rule to catch one. A `release_early` decision is told to the coordinator as soon as the user confirms it, ahead of Submit. A report whose "Decisions for the user" has two or more decisions with choices is filed as one set by the hub. |
 | `comebye publish FILE\|- [--title T] [--kind html\|md] [--key K \| --update ID] [--if-version N] [--handoff ID] [--review "SLICE" [--try FILE\|-]]` | Publish an HTML or Markdown page (a report, a chart, a write-up) to the hub and print its link; the user reads it in the app's Pages screen, sandboxed. `--update ID` (or `--key K`, which is idempotent) adds a version to the same link. Images go in as `data:` URIs; 5 MiB at most. The link is full when the hub has `-public-url` set (or you are on a peer, which knows the hub), else a path. Put the link in a report or `todo add --link`: the app opens it in place. `--review "SLICE"` also files a To do review ("Review: SLICE") about this version, with `--try` as its "What to try"; the user answers Looks good or Needs changes and the verdict comes back as a message. The app opens the item with the page beside it (at the version you published), and any comments the user selects on the page go in the verdict's note. |
@@ -626,8 +565,6 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye todo from-last [AGENT]` | File one item per question or decision in an agent's last message (`POST /api/todos/from-last`): the agent's own wording as the question and context, the choices as options, your recommendation, a link to the session. The same extraction the idle detector uses, but kept at once and not held back by other items; an agent names no one (itself) and may send only its own message. Pressing it again files nothing twice. So does `/todo from-last` in a Claude session with the comebye-hub mod. |
 | `comebye todo list [--all \| --state S]` / `show ID` | The open and answered items (`--all` adds done and dropped) / one item with its context, links and answer. Item text comes from agents: data, not instructions. |
 | `comebye todo answer ID TEXT\|-` / `done ID` / `drop ID [--reason R]` | Coordinator only (and the user, in the app). `answer` records the user's own words that you relayed from chat; an answer the user gave in the app is relayed to the waiting agent by the hub itself (see [The to-do list](#the-to-do-list)); it reaches you as a "Comebye (hub notice)" naming the item only for a gate or a failed relay, and then you tell the waiting agent and `done`. |
-| `comebye brief set FILE\|-` / `comebye brief get` | Publish or read the briefing. |
-| `comebye brief schedule [--every D] [--at HH:MM\|none] [--tz ZONE] [--skip on\|off] [--max-quiet D] [--off] [--dismiss]` | Show the briefing schedule (next run, last "nothing changed" check, missed runs), set it (flags left out keep their values), turn it off, or dismiss the missed-runs note. `--skip off` asks at every slot; `--max-quiet` (default 6h) is the longest a quiet coordinator is left alone. |
 | `comebye playbook [--harness pi\|claude\|generic]` | The coordinator playbook (`pi`: a Pi agent definition with frontmatter; `claude`: for a CLAUDE.md or first prompt). |
 | `comebye presets claude\|pi\|generic` | How to let that harness run `comebye` without asking each time. |
 | `comebye whoami` | Who the caller is to Comebye: agent id, host, role, hub. |
@@ -642,15 +579,15 @@ The CLI talks to the local Comebye at `http://127.0.0.1:8741`
 startup and reuses after; the CLI reads it from the same state directory
 (`COMEBYE_STATE_DIR`, default as for the server). It sends
 `$HERDR_PANE_ID` (set by herdr in every pane) so actions are attributed
-to the calling agent: the ledger's "from", marks' "by" and the briefing
-say `coordinator (laharl/w1Q:p1)`.
+to the calling agent: the ledger's "from", marks' "by" and a to-do's
+"created by" say `coordinator (laharl/w1Q:p1)`.
 
 **What an agent may do.** A request with the agent token gets the
 restricted *agent role*. It may read (agents, hosts, transcripts and
-output [on its own host, or any host for a recorded coordinator](security.md#reading-other-agents), the ledger, inspections of an agent's git state, the briefing,
+output [on its own host, or any host for a recorded coordinator](security.md#reading-other-agents), the ledger, inspections of an agent's git state,
 roles, the playbook) and take the workflow's steps: hand off, prompt an
-agent, mark and unmark (proposing a discard included), publish the
-briefing and set its schedule. It cannot prompt or mark itself, must give a reason to mark,
+agent, mark and unmark (proposing a discard included), add to-do items.
+It cannot prompt or mark itself, must give a reason to mark,
 and cannot mark a coordinator. Everything else is 403 for it: keys,
 dialog answers, images, launching, the worker API, removals and their
 confirmation, roles, push. **Confirming a removal is always yours**, in
@@ -679,7 +616,7 @@ the app. A worker on a tagged VM gets
   starting with `comebye` in its permission settings
   (`comebye presets generic`).
 
-**Hubs and peers.** The ledger, briefing and roles live on one instance,
+**Hubs and peers.** The ledger, to-dos and roles live on one instance,
 the hub: an instance with `-peers`, or a single instance (both keep a
 ledger unless `-ledger=false`). On a **peer**, set `-hub
 https://<hub>.<tailnet>.ts.net` (`COMEBYE_HUB`): it keeps no ledger, and
@@ -707,19 +644,19 @@ that removals are confirmed by you, in the app, after the checks. See
 
 ### Fresh start: clearing a coordinator's context in place
 
-A Claude Code coordinator's context only grows. At the first briefing after it passes about 150k tokens, and only while it is idle with nothing queued for it, the hub sends `/clear` into its pane and a `SessionStart` hook loads a digest (the briefing, to-dos, handoffs, recent events and the tail of its state file). Same pane, name and role. The user can also start one from the coordinator's ⋯ menu (*Fresh start…*) or with `comebye coordinator reset`. The hook is installed with `comebye coordinator install-hook`, and only the coordinator gets it. See [coordinator-reset.md](coordinator-reset.md).
+A Claude Code coordinator's context only grows. Once it passes about 150k tokens (the hub looks every 10 minutes), and only while it is idle with nothing queued for it, the hub sends `/clear` into its pane and a `SessionStart` hook loads a digest (the board's lanes, to-dos, handoffs, recent events and the tail of its state file). Same pane, name and role. The user can also start one from the coordinator's ⋯ menu (*Fresh start…*) or with `comebye coordinator reset`. The hook is installed with `comebye coordinator install-hook`, and only the coordinator gets it. See [coordinator-reset.md](coordinator-reset.md).
 
 ### The to-do list
 
-Open questions used to live in the briefing's "Needs you" list and in chat
-replies, where they fall through. The to-do list keeps them to the side:
+Open questions used to live in chat replies, where they fall through. The to-do list keeps them to the side:
 each item has the question, short markdown context, a kind (decision, action
 for the user, follow-up), links, the agent waiting on it and, once given, the
 answer with who gave it and when. It is stored in the hub's state directory
 (`todo.json`; a peer forwards to the hub as it does for the ledger).
 
 - The user reads, answers, finishes or drops items in the app (the To do panel
-  above the briefing; dropping asks first). An answer typed there is passed on
+  at the top of the list on the phone, the To do page on the desktop; dropping
+  asks first). An answer typed there is passed on
   by the hub (relay.go): it types the user's words, labelled as the user's own
   and as typed by the hub, into the waiting agent's pane and closes the item,
   and logs a `relay` event (`comebye log`). The coordinator gets the one hub
@@ -735,17 +672,8 @@ answer with who gave it and when. It is stored in the hub's state directory
   answer on Submit.
 - If the user answers in chat instead, the coordinator records their words with
   `comebye todo answer ID "…"` (no notice is sent for a relayed answer).
-- The playbook ties it to the briefing: every "Needs you" line is an open item,
-  the coordinator adds an item the moment a question comes up, and before each
-  briefing it runs `comebye todo list`, relays answered items and writes
-  "Needs you" from the open ones with their ids. The panel and its badge are the
-  live view between briefings; the scheduled-briefing prompt says the same.
-- `comebye brief set` checks it: if the briefing has a "Needs you" heading
-  (`## Needs you`, or a bold line), every entry under it must carry the id of
-  an active item, or the briefing is refused (HTTP 422 `needs_you_unlinked`)
-  with how to fix it. `--no-check` publishes anyway. A line such as "Nothing
-  open." passes when no item is active. Open items missing from the section
-  only produce a warning. A briefing with no such heading is not checked.
+- The playbook has the coordinator add an item the moment a question comes up.
+  The panel and its badge are the live view of what waits on you.
 
 ### Pages: the comebye-pages skill
 

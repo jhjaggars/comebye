@@ -120,14 +120,13 @@ type Config struct {
 	TmpMaxAge    time.Duration
 	// Signin sets the limits of the host's agent sign-ins (zero: the defaults; tests shorten them).
 	Signin signin.Config
-	// StateDir holds the handoff ledger (ledger.json), the briefing
-	// (brief.json) and its schedule (brief-schedule.json), the roles (roles.json) and an optional
-	// handoff-template.md. Empty turns handoffs and marks off.
+	// StateDir holds the handoff ledger (ledger.json), the roles
+	// (roles.json) and an optional handoff-template.md. Empty turns handoffs and marks off.
 	StateDir string
 	// RepoHealth hears about damaged repositories (fetches, other git
 	// commands, the daily fsck); nil leaves them unreported.
 	RepoHealth *gitfetch.Health
-	// NoLedger turns the ledger (and the briefing and roles) off even with
+	// NoLedger turns the ledger (and the roles) off even with
 	// a state directory: the instance is a peer that is not the hub.
 	NoLedger bool
 	// Upstream, on a peer, is its hub: the agent role's requests are
@@ -155,7 +154,7 @@ type Config struct {
 	// root; only that preset may use it.
 	CoordinatorDir string
 	// CoordinatorResetTokens is the context size, in tokens, past which the
-	// first briefing marks the coordinator's in-place reset due (reset.go).
+	// hub marks the coordinator's in-place reset due (reset.go).
 	// 0 turns the automatic reset off. Hub only.
 	CoordinatorResetTokens int
 	// RelayBlocked, when positive, is how long an agent that has a
@@ -299,8 +298,7 @@ type Server struct {
 	// ledger records handoffs and marks (nil without a state directory,
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
-	// brief and roles live next to the ledger (nil when it is).
-	brief *briefStore
+	// roles live next to the ledger (nil when it is).
 	pq    *promptQueue
 	todos *todoStore
 	// passkeys, approvals and reg are the hub's passkey list, its pending
@@ -313,7 +311,6 @@ type Server struct {
 	events         *eventStore // what the hub handled itself (events.go)
 	typed          *typedStore // what the hub typed into panes that is not the user's (typed.go)
 	sent           *sentStore  // what the hub already told whom (sent.go)
-	digests        *digestStore
 	autoRemove     bool
 	sweeps         *sweepLoop // the scheduled sweep's state (sweeploop.go)
 	auto           *autoTodo
@@ -338,7 +335,6 @@ type Server struct {
 	commentLim     commentLimiter
 	cmtOnce        sync.Once
 	pageCmts       *commentStore
-	briefSched     *briefSchedStore
 	resets         *resetStore
 	// resetPoll and resetWait pace a reset's wait for the new session
 	// (tests shrink them).
@@ -478,16 +474,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.migrateOutbox(cfg.StateDir)
 			s.sent = openSent(sentPath(cfg.StateDir))
 			s.typed = openTyped(typedPath(cfg.StateDir))
-			s.digests = &digestStore{path: filepath.Join(cfg.StateDir, "digest-history.json")}
 			s.autoRemove = cfg.AutoRemove
 			s.sweeps = openSweepLoop(filepath.Join(cfg.StateDir, "sweeploop.json"), cfg.TestMode)
 			if cfg.TestMode && cfg.TestArchiveAfter > 0 {
 				s.sweeps.archiveAge, s.sweeps.recheck = cfg.TestArchiveAfter, 2*time.Second
-			}
-			s.brief = &briefStore{path: filepath.Join(cfg.StateDir, "brief.json")}
-			if s.briefSched, err = openBriefSched(filepath.Join(cfg.StateDir, "brief-schedule.json")); err != nil {
-				log.Printf("brief schedule: %v (starting with none)", err)
-				s.briefSched = &briefSchedStore{path: filepath.Join(cfg.StateDir, "brief-schedule.json")}
 			}
 			if s.resets, err = openResets(filepath.Join(cfg.StateDir, "coordinator-reset.json")); err != nil {
 				log.Printf("coordinator reset: %v (starting with none)", err)
@@ -763,14 +753,7 @@ func (s *Server) routes() {
 	// Removal confirmation is the user's alone, always.
 	s.mux.HandleFunc("POST /api/removals/confirm", s.auth(s.handleConfirmRemovals))
 	s.mux.HandleFunc("POST /api/removals/undo", s.auth(s.handleUndoAutoRemove))
-	// The briefing and the coordinator roles (hub side).
-	s.mux.HandleFunc("GET /api/brief", s.authAgent(s.handleGetBrief))
-	s.mux.HandleFunc("POST /api/brief", s.authAgent(s.handleSetBrief))
-	s.mux.HandleFunc("GET /api/brief/history", s.auth(s.handleGetBriefHistory))
-	s.mux.HandleFunc("GET /api/digests", s.auth(s.handleGetDigests))
-	s.mux.HandleFunc("GET /api/brief/schedule", s.authAgent(s.handleGetBriefSchedule))
-	s.mux.HandleFunc("POST /api/brief/schedule", s.authAgent(s.handleSetBriefSchedule))
-	s.mux.HandleFunc("POST /api/brief/schedule/dismiss", s.authAgent(s.handleDismissBriefMiss))
+	// The coordinator roles (hub side).
 	s.mux.HandleFunc("GET /api/coordinator", s.authAgent(s.handleCoordinator))
 	s.mux.HandleFunc("POST /api/coordinator/reset", s.auth(s.handleCoordinatorReset))
 	s.mux.HandleFunc("GET /api/roles", s.authWorker(s.handleRoles))

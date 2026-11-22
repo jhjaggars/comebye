@@ -58,8 +58,4 @@ export const COMMANDS: Record<string, { description: string; hint?: string; argv
     hint: '[--active]',
     argv: a => ['ledger', ...(a.length ? a : ['--active'])],
   },
-  brief: {
-    description: "The coordinator's briefing",
-    argv: a => ['brief', ...(a.length ? a : ['get'])],
-  },
 }

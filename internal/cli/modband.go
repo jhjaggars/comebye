@@ -15,7 +15,6 @@ type bandState struct {
 	FirstTodo   string       `json:"first_todo,omitempty"`
 	Queued      int          `json:"queued"` // hub notices and prompts held for this agent
 	Handoff     *bandHandoff `json:"handoff,omitempty"`
-	Headline    string       `json:"headline,omitempty"`   // a coordinator's briefing, first line
 	OpenTodos   int          `json:"open_todos,omitempty"` // a coordinator: all open to-dos
 }
 
@@ -26,18 +25,6 @@ type bandHandoff struct {
 	Phase    string `json:"phase,omitempty"`
 	Landing  string `json:"landing,omitempty"` // landed, pending, failed
 	CI       string `json:"ci,omitempty"`      // running, success, failure, none
-}
-
-// headline is a briefing's first line of prose, without Markdown marks.
-func headline(md string) string {
-	for _, l := range strings.Split(md, "\n") {
-		l = strings.TrimSpace(strings.NewReplacer("**", "", "__", "", "`", "").Replace(strings.TrimLeft(strings.TrimSpace(l), "# ")))
-		if l == "" {
-			continue
-		}
-		return clip(l, 160)
-	}
-	return ""
 }
 
 func clip(s string, n int) string {
@@ -125,16 +112,6 @@ func collectBand(c *client) (*bandState, error) {
 			if it.State == "pending" {
 				b.Queued++
 			}
-		}
-	}
-	if b.Coordinator {
-		var br struct {
-			Brief *struct {
-				Markdown string `json:"markdown"`
-			} `json:"brief"`
-		}
-		if err := c.call("GET", "/api/brief", nil, nil, &br); err == nil && br.Brief != nil {
-			b.Headline = headline(br.Brief.Markdown)
 		}
 	}
 	return b, nil

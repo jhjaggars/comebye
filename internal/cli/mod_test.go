@@ -93,7 +93,7 @@ func TestModBand(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &b); err != nil {
 		t.Fatal(err)
 	}
-	if b.Todos != 1 || b.FirstTodo != "may I delete the old key?" || b.Queued != 1 || b.Coordinator || b.Headline != "" {
+	if b.Todos != 1 || b.FirstTodo != "may I delete the old key?" || b.Queued != 1 || b.Coordinator {
 		t.Fatalf("band = %+v", b)
 	}
 	if b.Handoff == nil || b.Handoff.ID != "h1" || b.Handoff.CI != "running" || b.Handoff.Landing != "landed" || b.Handoff.Phase != "ci" {
@@ -109,13 +109,12 @@ func TestModBandCoordinatorAndFailures(t *testing.T) {
 	f.answers["GET /api/ledger"] = answer{body: `{"entries":[],"roles":{"laharl/w1:p1":{"role":"coordinator"}}}`}
 	f.answers["GET /api/todos"] = answer{body: `{"todos":[{"id":"t1","question":"q","state":"open"},{"id":"t2","question":"q","state":"open"}]}`}
 	f.answers["GET /api/queue"] = answer{code: 500, body: `{"error":"boom"}`}
-	f.answers["GET /api/brief"] = answer{body: `{"brief":{"markdown":"\n**Tue 19:38. Nothing waits on you.** Usage landed.\n\n## Needs you\n"}}`}
 	if code := run(e, "mod", "band"); code != 0 {
 		t.Fatalf("band: %d", code)
 	}
 	var b bandState
 	json.Unmarshal(out.Bytes(), &b)
-	if !b.Coordinator || b.OpenTodos != 2 || b.Todos != 0 || b.Queued != 0 || b.Headline != "Tue 19:38. Nothing waits on you. Usage landed." || b.Handoff != nil {
+	if !b.Coordinator || b.OpenTodos != 2 || b.Todos != 0 || b.Queued != 0 || b.Handoff != nil {
 		t.Fatalf("band = %+v", b)
 	}
 	// Without an answer from whoami there is no band at all (non-zero exit).
@@ -123,18 +122,6 @@ func TestModBandCoordinatorAndFailures(t *testing.T) {
 	out.Reset()
 	if code := run(e, "mod", "band"); code == 0 {
 		t.Fatal("band without a whoami succeeded")
-	}
-}
-
-func TestHeadline(t *testing.T) {
-	if got := headline("# Title here\n\nbody"); got != "Title here" {
-		t.Fatal(got)
-	}
-	if got := headline(strings.Repeat("x", 400)); len([]rune(got)) != 160 {
-		t.Fatal(len(got))
-	}
-	if headline("\n\n") != "" {
-		t.Fatal("empty")
 	}
 }
 

@@ -357,7 +357,7 @@ func TestRouteMainCoordinator(t *testing.T) {
 	}
 	// Main busy: the notice waits, A (idle) is not given it.
 	r.status("w3:p1", herdr.StatusWorking)
-	if rt := pool(); rt.Agent != nil || rt.Why != missBusy {
+	if rt := pool(); rt.Agent != nil || rt.Why != routeBusy {
 		t.Fatalf("busy main = %+v", rt)
 	}
 	// Main gone: A takes it, labelled as main's.

@@ -18,7 +18,7 @@ import (
 )
 
 // Notices the hub sends to an agent (a worker finished, a to-do answered,
-// a blocked agent relayed, the scheduled briefing) are sent once. herdr's
+// a blocked agent relayed, a sweep result) are sent once. herdr's
 // agent.prompt can fail after the text and Enter were already written (a
 // timeout, a dropped socket); the callers used to read any error as "not
 // sent" and send the notice again on the next pass, so the agent got it

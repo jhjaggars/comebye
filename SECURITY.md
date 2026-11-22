@@ -37,7 +37,7 @@ What it relies on:
 - **The agent role is a guard rail, not a boundary.** The `comebye` CLI,
   run by a coordinator agent, authenticates with the local agent token
   (`<state-dir>/agent-token`, mode 0600) and gets a restricted role: it may
-  read, hand off, prompt, mark and publish the briefing, and nothing else;
+  read, hand off, prompt, mark and add to-do items, and nothing else;
   removal confirmation is the user's only. This keeps a well-behaved
   coordinator inside the workflow and prevents accidents. It does **not**
   contain a malicious local agent: anything running as your user can read
@@ -81,8 +81,8 @@ In scope:
 - Making a peer with `-hub` forward anything but the agent role's
   requests, forward them anywhere but the configured hub, or follow a
   redirect; making a hub re-forward a forwarded request.
-- Script injection through the briefing (it is rendered with the same
-  sanitizer as transcripts).
+- Script injection through reports, to-do context or Pages (they are
+  rendered with the same sanitizer as transcripts).
 - Script injection in the web UI from agent output or transcripts.
 - Leaking agent output, transcripts or settings to third parties.
   Web Push payloads are end-to-end encrypted (RFC 8291); the push service

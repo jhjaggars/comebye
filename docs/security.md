@@ -66,7 +66,7 @@ Treat access to it like SSH access to that machine.
     waiting on an agent there (others: 404). `GET /api/inspect` answers only for
     its host's agents (403 `read_forbidden`).
   - **Everything else is refused:** other agents' output and transcripts on any
-    host, its own panes included; the briefing; plans; handoffs, on any host
+    host, its own panes included; plans; handoffs, on any host
     (they could start an agent elsewhere, and `--after` pastes other workers'
     reports into the new prompt); landings; marks and sweeps; model switches;
     closing to-dos. Keys, answers, images and removals remain the user's alone.
@@ -174,7 +174,7 @@ Treat access to it like SSH access to that machine.
 - <a id="state-directory-backups"></a>**State directory backups are secrets.**
   The directory holds `vapid.pem` (the Web Push signing key: whoever has it can
   send notifications to every subscribed phone), `agent-token` (the local CLI's
-  token), the ledger, to-dos and briefings (prompts, reports, questions you were
+  token), the ledger and to-dos (prompts, reports, questions you were
   asked), and `push-subscriptions.json`. A tarball of it is as sensitive as the
   directory: create it mode 0600, store it encrypted (or on storage only you can
   read), and exclude `hub.lock`. A restore needs the same care: extract into a
@@ -203,8 +203,7 @@ Treat access to it like SSH access to that machine.
   as the user). That role may read (other agents' output
   [within its rule](#reading-other-agents)), hand off, prompt, mark, sweep (which only marks, with
   its own generated reason, workers whose checks show nothing to lose; never a
-  coordinator or the caller itself), publish the
-  briefing and set its schedule, add and read to-do items (any agent), and,
+  coordinator or the caller itself), add and read to-do items (any agent), and,
   for a recorded coordinator only, answer, finish or drop them, and nothing else (no keys, answers, launches, removals or
   their confirmation, and no peer changes). This role keeps a well-behaved
   coordinator inside the workflow. It is not a boundary. An agent with a shell

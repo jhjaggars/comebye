@@ -266,8 +266,8 @@ func (f *Fleet) CallHost(ctx context.Context, host, op string, query url.Values,
 
 // CallAgent makes one per-agent call (an op of proxyOps, e.g. prompt) to
 // an agent on the peer named host as the hub itself; the answer is
-// returned as CallHost's is. The hub's scheduled briefing prompts a
-// coordinator on a peer this way.
+// returned as CallHost's is. The hub's notices reach a coordinator on a
+// peer this way.
 func (f *Fleet) CallAgent(ctx context.Context, host, target, op string, body []byte) (int, []byte, error) {
 	p := f.lookup(host)
 	if p == nil {

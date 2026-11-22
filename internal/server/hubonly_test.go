@@ -77,13 +77,13 @@ func TestHubOnlyServesAndItsStateDirRestores(t *testing.T) {
 		t.Fatalf("agents = %d %s", w.Code, w.Body)
 	}
 
-	// To-dos and the briefing work with no herdr.
+	// To-dos and the board work with no herdr.
 	w = do(s, "POST", "/api/todos", userHdr, `{"question":"keep the old VAPID key?","kind":"decision","waiting":"csb-vm/w1:p1"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("todo add = %d %s", w.Code, w.Body)
 	}
-	if w = do(s, "POST", "/api/brief", userHdr, `{"markdown":"# Morning"}`); w.Code != http.StatusOK {
-		t.Fatalf("brief set = %d %s", w.Code, w.Body)
+	if w = do(s, "GET", "/api/board", userHdr, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "keep the old VAPID key?") {
+		t.Fatalf("board = %d %s", w.Code, w.Body)
 	}
 
 	// Anything that needs a local herdr says so (409 no_herdr), not a 502.
@@ -102,8 +102,5 @@ func TestHubOnlyServesAndItsStateDirRestores(t *testing.T) {
 	w = do(s2, "GET", "/api/todos", userHdr, "")
 	if !strings.Contains(w.Body.String(), "keep the old VAPID key?") || !strings.Contains(w.Body.String(), "csb-vm/w1:p1") {
 		t.Fatalf("restored to-dos = %s", w.Body)
-	}
-	if w = do(s2, "GET", "/api/brief", userHdr, ""); !strings.Contains(w.Body.String(), "# Morning") {
-		t.Fatalf("restored brief = %s", w.Body)
 	}
 }

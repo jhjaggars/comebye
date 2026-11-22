@@ -1,6 +1,6 @@
 # The coordinator's fresh start (in-place context reset)
 
-A coordinator's context only grows: every briefing, ledger read and report adds to it, and the longer it is the dearer and less sharp each turn gets. The **fresh start** clears it without moving the coordinator: the hub sends `/clear` into the coordinator's own pane, and a Claude Code `SessionStart` hook loads a **digest** into the new session. The pane, the agent id, the name and the role stay as they were; only the session id changes.
+A coordinator's context only grows: every ledger read, report and status answer adds to it, and the longer it is the dearer and less sharp each turn gets. The **fresh start** clears it without moving the coordinator: the hub sends `/clear` into the coordinator's own pane, and a Claude Code `SessionStart` hook loads a **digest** into the new session. The pane, the agent id, the name and the role stay as they were; only the session id changes.
 
 It works for **Claude Code coordinators** only (the hook is Claude's). A Pi or other coordinator is never cleared.
 
