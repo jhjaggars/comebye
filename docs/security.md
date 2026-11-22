@@ -182,9 +182,21 @@ Treat access to it like SSH access to that machine.
   keeps the same rule as on a host: the main listener stays on loopback
   (with `tailscaled` as a sidecar sharing the pod's network namespace, Serve is
   its only client), so no `Service` or `Ingress` should point at it.
-- **Local users are trusted.** Any process on the same host can connect to
-  the loopback port and forge the identity header. Do not run this on a
-  shared multi-user machine.
+- <a id="local-users-are-trusted"></a>**Local users are trusted.** Any process
+  on the same host can connect to the loopback port and forge the identity
+  header, and to the hub it is then the user. That includes every agent, since
+  agents run as you. It can do anything the user role can: send keys, answer
+  dialogs, launch, mark and remove sessions, add and remove peers
+  (`POST /api/peers`, `DELETE /api/peers/{name}`), tag releases and upgrade
+  hosts. It can also give the app's confirmations itself, because a tap in the
+  app is just another request carrying that same header. Passkeys guard only
+  two actions so far. The GPG unlock works only when a host checks a Face ID
+  assertion from a passkey it pinned at setup
+  ([below](#gpg-unlock-in-the-app-slice-3-of-issue-3)), and adding a second
+  passkey needs an approval from an existing one. A local process cannot make
+  either assertion. Gating the other user-only actions the same way is the
+  remaining part of [issue #3](https://github.com/jhjaggars/comebye/issues/3).
+  Do not run this on a shared multi-user machine.
 - **Agents get a restricted role, not a boundary.** The `comebye` CLI
   authenticates with the local agent token (`<state-dir>/agent-token`,
   0600, compared in constant time; a wrong token is refused, never treated
@@ -194,10 +206,14 @@ Treat access to it like SSH access to that machine.
   coordinator or the caller itself), publish the
   briefing and set its schedule, add and read to-do items (any agent), and,
   for a recorded coordinator only, answer, finish or drop them, and nothing else (no keys, answers, launches, removals or
-  their confirmation). It keeps a well-behaved coordinator inside the
-  workflow; an agent with a shell could still read the token, forge the
-  identity header or run git itself, so the real safeguard is that you
-  confirm removals in the app. A peer with `-hub` forwards only these
+  their confirmation, and no peer changes). This role keeps a well-behaved
+  coordinator inside the workflow. It is not a boundary. An agent with a shell
+  can read the token, run git itself, or forge the identity header and act as
+  [the user](#local-users-are-trusted), which includes confirming its own
+  removals. Confirming removals in the app catches the mistakes of an agent that
+  stays in the workflow, not a determined one. With `-auto-remove` (on by
+  default) the hub removes a marked worker whose every check is clean without
+  asking you at all, and the removals review lists it for a day with an Undo. A peer with `-hub` forwards only these
   requests to the hub (https, no redirects, bounded, marked as forwarded),
   and the hub applies the agent role to them again. See
   [Coordinators](agents.md#coordinators).
