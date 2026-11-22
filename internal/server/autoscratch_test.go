@@ -205,3 +205,61 @@ func TestScratchGoAheadLimits(t *testing.T) {
 		t.Fatalf("sent twice: asked %v, %d prompts", got, promptCount(fh))
 	}
 }
+
+// A gone session (page-chat-s5, 11-22) whose answer lists only its own
+// throwaway processes and its scratch folder, all already gone: the hub
+// checks each on the host (the pids are not running, the folder is not
+// there), settles the answer, and the sweep's proof removes the session.
+func TestGoneSessionsOwnGoneScratchIsSettledAndRemoved(t *testing.T) {
+	f := newGoneFix(t, true, "")
+	_, tmp := probeRoots(t)
+	pidRunning(t, false)
+	folder := filepath.Join(tmp, "claude-1000", "-home-u--worktrees-proj-w", "c78d827b", "scratchpad") + "/"
+	items := []ledger.AskItem{
+		{Type: "resource", Kind: "pid", Name: "1518018", Text: "a throwaway herdr_up.py pty client I started for the live check. It is still running, and I can stop it if told to go ahead."},
+		{Type: "resource", Kind: "pid", Name: "1518096", Text: "a herdr --session cb5live client I started for the live check. It is still running, and I can stop it if told to go ahead."},
+		{Type: "cleanup", Text: "throwaway files from the live check under `" + folder + "` (state, code, bin, logs). They are scratch only, and I can delete them if told to go ahead."},
+	}
+	if _, _, err := f.s.ledger.Update(f.e.ID, func(e *ledger.Entry) {
+		e.Mark.Ask = &ledger.Ask{State: ledger.AskUnsafe, Reason: "see items", Items: items, At: e.Mark.At, Reasks: 12}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// What a hub on another host asks this one: both pids are dead, the folder absent.
+	for _, q := range []string{"kind=pid&pid=1518018", "kind=pid&pid=1518096", "kind=path&path=" + folder} {
+		if w := do(f.s, "GET", "/api/probe?"+q, userHdr, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"dead"`) && !strings.Contains(w.Body.String(), `"absent"`) {
+			t.Fatalf("probe %s: %d %s", q, w.Code, w.Body)
+		}
+	}
+	// The review checks each item: all settled, and they are its own scratch.
+	for _, it := range f.s.marked() {
+		ar := f.s.askReviewOf(ctx(), it)
+		if !ar.Resolved {
+			t.Fatalf("not settled: %+v", ar.Items)
+		}
+		for _, v := range ar.Items {
+			if !isScratch(v.AskItem) {
+				t.Errorf("not scratch: %+v", v.AskItem)
+			}
+		}
+	}
+	f.setAuto(t, true)
+	f.s.sweepLoopStep(ctx(), time.Now())
+	if got := f.status(t); got != ledger.Removed {
+		t.Fatalf("status = %s, ask %+v", got, f.ask(t))
+	}
+	// A pid still running keeps such a session.
+	g := newGoneFix(t, true, "")
+	pidRunning(t, true)
+	if _, _, err := g.s.ledger.Update(g.e.ID, func(e *ledger.Entry) {
+		e.Mark.Ask = &ledger.Ask{State: ledger.AskUnsafe, Reason: "see items", At: e.Mark.At,
+			Items: []ledger.AskItem{{Type: "resource", Kind: "pid", Name: "4242", Text: "a client I started"}}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g.setAuto(t, true)
+	g.s.sweepLoopStep(ctx(), time.Now())
+	if got := g.status(t); got != ledger.ReadyToRemove {
+		t.Fatalf("a running pid: status = %s", got)
+	}
+}

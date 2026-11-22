@@ -74,6 +74,7 @@ func coordServer(t *testing.T) (*Server, *fakeLaunchHerdr, string) {
 	// A review can re-ask a marked session; shrink the ask and wait for it, or it types into the temp dir
 	// (typed.json) after the test returns.
 	s.askPoll, s.askWait = 10*time.Millisecond, 100*time.Millisecond
+	s.cleanupWait = time.Second // a go-ahead nobody reports on must not hold the test for 15 minutes
 	t.Cleanup(s.asking.Wait)
 	t.Cleanup(s.waitBackground) // runs before the temp dirs go: a late queued-prompt sender must not write into them
 	return s, fh, dir

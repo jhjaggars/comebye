@@ -233,7 +233,7 @@ func (s *Server) sendCleanup(it *removal, items []string, auto bool) error {
 	if !changed {
 		return &errReask{"not_marked", "that session is no longer marked"}
 	}
-	s.setQuiet(m.AgentID, now.Add(cleanupWait+s.askWait+askQuietAfter))
+	s.setQuiet(m.AgentID, now.Add(s.cleanupWait+s.askWait+askQuietAfter))
 	s.asking.Add(1)
 	go func() {
 		defer s.asking.Done()
@@ -245,7 +245,7 @@ func (s *Server) sendCleanup(it *removal, items []string, auto bool) error {
 // runCleanup sends the go-ahead, waits for the session to be idle with a
 // new reply, then asks what is left again.
 func (s *Server) runCleanup(m ledger.Mark, a herdr.AgentInfo, items []string, auto bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupWait+time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), s.cleanupWait+time.Minute)
 	defer cancel()
 	finish := func(note string) {
 		_, err := s.ledger.UpdateAsk(m.AgentID, m.At, func(k *ledger.Ask) bool {
@@ -261,7 +261,7 @@ func (s *Server) runCleanup(m ledger.Mark, a herdr.AgentInfo, items []string, au
 		finish("could not tell it to clean up: " + err.Error())
 		return
 	}
-	deadline := time.Now().Add(cleanupWait)
+	deadline := time.Now().Add(s.cleanupWait)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():

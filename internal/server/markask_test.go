@@ -85,7 +85,7 @@ func TestMarkAsksSafe(t *testing.T) {
 		t.Fatalf("ask = %+v", a)
 	}
 	p := fh.call("agent.prompt").Params
-	if p["target"] != "w2:p1" || !strings.Contains(p["text"].(string), "Do not take any other action") {
+	if p["target"] != "w2:p1" || !strings.Contains(p["text"].(string), "Take no other action now") {
 		t.Fatalf("prompt = %v", p)
 	}
 	if it := reviewOf(t, s, "desk/w2:p1"); !it.Safe {
@@ -224,7 +224,7 @@ func TestMarkAskCarriesTheCheck(t *testing.T) {
 	entryAnswered(t, s, "desk/w2:p1")
 	text := fh.call("agent.prompt").Params["text"].(string)
 	for _, want := range []string{
-		"Do not take any other action",
+		"Take no other action now",
 		"The hub checked this session's worktree on its host just now: the worktree is clean and every commit of w is in origin/main (landed on origin/main as " + landed[:7] + ")",
 		"Trust this check over your memory",
 	} {

@@ -269,6 +269,8 @@ type Server struct {
 	// to remove (tests shrink them); latest, when set, replaces latestOf.
 	askPoll time.Duration
 	askWait time.Duration
+	// cleanupWait bounds a \"Let it clean up\" (tests shorten it).
+	cleanupWait time.Duration
 	// asking counts the asks under way (they run git checks in the
 	// session's worktree), so tests can wait for them before cleaning up.
 	asking sync.WaitGroup
@@ -411,7 +413,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s := &Server{cfg: cfg, recall: archive.NewReader(cfg.RecallIndex), client: client, manager: manager, fleet: f, mux: http.NewServeMux(),
 		agentReadyPoll: 200 * time.Millisecond, agentReadyWait: launchStartTimeout, switchGap: 700 * time.Millisecond, resetPoll: 500 * time.Millisecond, resetWait: 30 * time.Second,
 		restartPoll: 250 * time.Millisecond, restartWait: restartExitWait,
-		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait,
+		briefWait: 20 * time.Second, briefTries: 3, briefBackoff: 3 * time.Second, askPoll: askPoll, askWait: askWait, cleanupWait: cleanupWait,
 		signin: signin.NewManager(cfg.Signin),
 		probes: newProbeCache(), probeTTL: probeTTL, reaskGap: reaskGap, openGap: openGap, reaskCap: reaskCap, reaskMax: reaskMax, reaskEvery: reaskEvery}
 	switch {
