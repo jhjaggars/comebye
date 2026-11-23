@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -243,23 +242,6 @@ func TestEventStoreQueryAndPersistence(t *testing.T) {
 	old.add(Event{At: time.Now().Add(-15 * 24 * time.Hour), Kind: "park", Text: "old"})
 	if got := old.query(time.Time{}, nil, 0); len(got) != 0 {
 		t.Fatalf("an event past its keep time stayed: %+v", got)
-	}
-}
-
-// An outbox file an older hub left is turned into events once, then removed.
-func TestOutboxIsMigratedToEvents(t *testing.T) {
-	s, _, _ := eventsServer(t)
-	dir := t.TempDir()
-	b, _ := json.Marshal(map[string]any{"lines": []map[string]any{{"key": "landed/h1", "kind": "landed", "entry": "h1", "text": "handoff h1 landed", "at": time.Now()}}})
-	if err := os.WriteFile(outboxPath(dir), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s.migrateOutbox(dir)
-	if evs := allEvents(s, "landed"); len(evs) != 1 || evs[0].Subject != "h1" {
-		t.Fatalf("events = %+v", evs)
-	}
-	if _, err := os.Stat(outboxPath(dir)); err == nil {
-		t.Fatal("the outbox file stayed")
 	}
 }
 

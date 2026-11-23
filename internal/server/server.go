@@ -471,7 +471,6 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				s.rollout.soak = time.Second
 			}
 			s.events = openEvents(eventsPath(cfg.StateDir))
-			s.migrateOutbox(cfg.StateDir)
 			s.sent = openSent(sentPath(cfg.StateDir))
 			s.typed = openTyped(typedPath(cfg.StateDir))
 			s.autoRemove = cfg.AutoRemove

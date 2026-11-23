@@ -81,13 +81,13 @@ and the `--blue` rings now use the theme's `--focus`. Every `min-height` of 32/3
 shape (6px radius, `1px 6px`, 11px, 600, no wrap; `.us-chip` and `.rel-chip` are 12px) and one tone table (blue default, `purple yellow green orange red teal muted`).
 A chip class only adds layout; a new one is `.chip.green`. Not folded in: the filter pills (`.hf-chip`, `.rc-chip`, buttons), the
 count badge `.bd-chip`, and the outlined `.rc-tag`/`.rv-chip` labels, which are different controls.
-*Card:* one surface (`.card`, 1px hairline, 12px radius; `.attn` `.bad` `.good` set the edge). `.bcard .pz-card .rl-card .us-card` and the four
-whole-card links (`.rc-card .pgs-card .pgs-hit .pr-card`) share it, and the link cards share one hover/ring/`.current` rule. `.bcard` went from 14px to 12px.
+*Card:* one surface (`.card`, 1px hairline, 12px radius; `.attn` `.bad` `.good` set the edge). `.pz-card .rl-card .us-card` and the four
+whole-card links (`.rc-card .pgs-card .pgs-hit .pr-card`) share it, and the link cards share one hover/ring/`.current` rule.
 *Empty state:* `.pal-empty .pgs-empty .pr-empty .us-empty` join `.empty` (centred, muted, 28px/20px padding); `.ap-empty` (an inline italic note) is left alone.
 
 ### Segmented controls, menus and sheets, notices, stacking (slice 6)
 
-*Segmented control:* `.seg` (and `.bd-seg .bc-seg .pgs-seg .us-seg`) is one hairline box with a 10px radius; the pressed segment (`aria-pressed`) is the accent.
+*Segmented control:* `.seg` (and `.bd-seg .pgs-seg .us-seg`) is one hairline box with a 10px radius; the pressed segment (`aria-pressed`) is the accent.
 A control adds only its own sizing (`.us-seg` is the dense 36px one). The underline tabs (`.pr-tabs`, `.sp-tabs`) are a different control and stay.
 *Menu / sheet:* `.pop` was already the one popover-and-bottom-sheet primitive (grab handle, safe-area padding, backdrop); its radius is now `--r-16`
 (was 18px) and its layers are tokens.

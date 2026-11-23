@@ -203,33 +203,6 @@ func (s *Server) queueLine(kind, entry, key, text string) {
 	s.logEvent(kind, entry, "", key, text)
 }
 
-// migrateOutbox turns the lines an older hub had queued for a digest into
-// events, then removes the outbox file: the digest message is retired.
-func (s *Server) migrateOutbox(dir string) {
-	path := outboxPath(dir)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	var f struct {
-		Lines []struct {
-			Key   string    `json:"key"`
-			Kind  string    `json:"kind"`
-			Entry string    `json:"entry"`
-			Text  string    `json:"text"`
-			At    time.Time `json:"at"`
-		} `json:"lines"`
-	}
-	if json.Unmarshal(b, &f) == nil {
-		for _, l := range f.Lines {
-			s.events.add(Event{At: l.At, Kind: l.Kind, Subject: l.Entry, Key: l.Key, Text: l.Text})
-		}
-	}
-	_ = os.Remove(path)
-}
-
-func outboxPath(dir string) string { return filepath.Join(dir, "notice-outbox.json") }
-
 // parseSince reads a CLI duration: Go's ("90m", "24h") or days ("2d").
 func parseSince(s string, now time.Time) (time.Time, error) {
 	s = strings.TrimSpace(s)

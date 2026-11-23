@@ -365,19 +365,6 @@ func (s *Server) isSelf(c caller, host, target string) bool {
 	return false
 }
 
-// pickCoordinator picks a coordinator for a notice nobody owns: the pool
-// (poolCoordinator). A notice about an agent a coordinator started or
-// prompted goes through routeCoordinator instead (route.go).
-func (s *Server) pickCoordinator() (*herdr.AgentInfo, string) {
-	return s.poolCoordinator()
-}
-
-// poolCoordinator is poolRoute without the label.
-func (s *Server) poolCoordinator() (*herdr.AgentInfo, string) {
-	r := s.poolRoute()
-	return r.Agent, r.Why
-}
-
 // promptAgent sends text to an agent on any host.
 func (s *Server) promptAgent(ctx context.Context, a herdr.AgentInfo, text string) error {
 	if a.Host == "" || a.Host == s.fleet.LocalName() {

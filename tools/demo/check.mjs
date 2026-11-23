@@ -251,7 +251,7 @@ console.log("== free exploration, dark");
   await page.waitForSelector("#review", { state: "hidden" });
   ok(await page.locator("#agents .agent:has-text('nav-contrast')").count() === 0, "the removed agent leaves the list");
 
-  // host filter, fleet menu, sweep, schedule, notifications
+  // host filter, notifications
   await page.locator("#host-filter .hf-chip", { hasText: "spot-7" }).click();
   await page.waitForTimeout(100);
   ok(await page.locator("#agents .agent:has-text('tidepool')").count() <= 1, "host filter narrows the list");
@@ -259,13 +259,6 @@ console.log("== free exploration, dark");
   await page.click("#btn-notify");
   ok(/off in this demo/.test(await page.textContent("#notify-status")), "notifications explain themselves");
   await page.click("#btn-notify");
-  await page.click("#btn-fleet"); await page.click("#f-sched");
-  await page.waitForTimeout(200);
-  await page.click("#btn-fleet"); await page.click("#f-sweep");
-  await page.waitForSelector("#sweep:not([hidden])");
-  await page.waitForFunction(() => !document.getElementById("sweep").classList.contains("busy"));
-  await page.click("#sweep-close");
-  await page.waitForTimeout(200);
   // deep link and reload work on the hash routes
   await page.goto(base + "#/todo"); await page.waitForSelector("#pt-body .td-item");
   ok(true, "#/todo deep link");
