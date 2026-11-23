@@ -1,0 +1,69 @@
+{
+  "api user": {"login": "me"},
+
+  "pr list OWNER/REPO": [
+    {"number": 12, "title": "Covered by a to-do", "url": "https://github.com/OWNER/REPO/pull/12", "author": {"login": "me"},
+     "isDraft": false, "createdAt": "-5h", "headRefName": "feat/twelve", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]},
+    {"number": 13, "title": "Red and nobody on it", "url": "https://github.com/OWNER/REPO/pull/13", "author": {"login": "me"},
+     "isDraft": false, "createdAt": "-3h", "headRefName": "feat/thirteen", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "FAILURE"}, {"name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"}]},
+    {"number": 14, "title": "Too young", "url": "https://github.com/OWNER/REPO/pull/14", "author": {"login": "me"},
+     "isDraft": false, "createdAt": "-0.2h", "headRefName": "feat/fourteen", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "IN_PROGRESS", "conclusion": ""}]},
+    {"number": 15, "title": "A worker is on it", "url": "https://github.com/OWNER/REPO/pull/15", "author": {"login": "me"},
+     "isDraft": false, "createdAt": "-2h", "headRefName": "feat/retry", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]}
+  ],
+  "pr list OWNER/OTHER": [
+    {"number": 30, "title": "Update dependency a", "url": "https://github.com/OWNER/OTHER/pull/30", "author": {"login": "renovate-bot-x", "is_bot": true},
+     "isDraft": false, "createdAt": "-30h", "headRefName": "renovate/a", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]},
+    {"number": 31, "title": "Update dependency b", "url": "https://github.com/OWNER/OTHER/pull/31", "author": {"login": "renovate-bot-x", "is_bot": true},
+     "isDraft": false, "createdAt": "-30h", "headRefName": "renovate/b", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "FAILURE"}]}
+  ],
+  "pr list ORG/UP @me": [
+    {"number": 20, "title": "Old green draft", "url": "https://github.com/ORG/UP/pull/20", "author": {"login": "me"},
+     "isDraft": true, "createdAt": "-80h", "headRefName": "me/twenty", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]},
+    {"number": 21, "title": "Young green draft", "url": "https://github.com/ORG/UP/pull/21", "author": {"login": "me"},
+     "isDraft": true, "createdAt": "-70h", "headRefName": "me/twentyone", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]},
+    {"number": 22, "title": "Young red draft", "url": "https://github.com/ORG/UP/pull/22", "author": {"login": "me"},
+     "isDraft": true, "createdAt": "-24h", "headRefName": "me/twentytwo", "reviewDecision": "",
+     "statusCheckRollup": [{"name": "e2e", "status": "COMPLETED", "conclusion": "FAILURE"}]}
+  ],
+
+  "issue list OWNER/REPO": [
+    {"number": 40, "title": "All done", "url": "https://github.com/OWNER/REPO/issues/40", "updatedAt": "-20h",
+     "body": "## Slices\n\n- [x] 1. one\n- [x] 2. two\n"},
+    {"number": 41, "title": "Rest is later", "url": "https://github.com/OWNER/REPO/issues/41", "updatedAt": "-20h",
+     "body": "## Slices\n\n- [x] 1. one\n- [ ] 2. Later: maybe\n- [ ] 3. two (not approved)\n"},
+    {"number": 42, "title": "Approved, one due", "url": "https://github.com/OWNER/REPO/issues/42", "updatedAt": "-20h",
+     "body": "The user approved all slices on 2026-01-01.\n\n## Slices\n\n- [x] 1. one\n- [ ] 2. the next slice\n"},
+    {"number": 44, "title": "A worker is on it", "url": "https://github.com/OWNER/REPO/issues/44", "updatedAt": "-20h",
+     "body": "Approved.\n\n## Slices\n\n- [ ] 1. retry the launch\n"},
+    {"number": 43, "title": "No checklist", "url": "https://github.com/OWNER/REPO/issues/43", "updatedAt": "-20h",
+     "body": "just a bug"}
+  ],
+
+  "pr view 5 ORG/UP": {
+    "author": {"login": "me"}, "url": "https://github.com/ORG/UP/pull/5", "headRefOid": "abcdef0123456789", "state": "OPEN",
+    "comments": [
+      {"author": {"login": "me"}, "createdAt": "-40h", "body": "pushed a fix"},
+      {"author": {"login": "maintainer"}, "createdAt": "-30h", "body": "one more thing: rename the flag"},
+      {"author": {"login": "ci-bot[bot]"}, "createdAt": "-1h", "body": "coverage 80%"}
+    ],
+    "reviews": []
+  },
+
+  "run list ORG/UP": [
+    {"databaseId": 777, "headSha": "0123456789abcdef", "conclusion": "success", "status": "completed",
+     "createdAt": "-4h", "url": "https://github.com/ORG/UP/actions/runs/777"}
+  ],
+  "run view 777 ORG/UP": {"jobs": [
+    {"name": "E2E", "status": "completed", "conclusion": "success"},
+    {"name": "Unit", "status": "completed", "conclusion": "success"}
+  ]}
+}

@@ -1,0 +1,21 @@
+{
+  "_comment": "The steward pass's config: copy it next to the steward's notes (not into this repo) and fill in its repos. Every key is optional; pass.py lists the defaults.",
+  "notes": "STEWARD_NOTES.md",
+  "min_age_hours": 1,
+  "prs": [
+    {"repo": "OWNER/REPO"},
+    {"repo": "OWNER/OTHER", "ignore_authors": ["app/renovate*"]},
+    {"repo": "ORG/UPSTREAM", "author": "@me", "flag_after_hours": 72}
+  ],
+  "plans": [{"repo": "OWNER/REPO"}],
+  "quiet_hours": 3,
+  "queue_hours": 1,
+  "answered_window_hours": 48,
+  "failed_window_hours": 48,
+  "decisions_window_hours": 72,
+  "release_hours": 24,
+  "host_down_hours": 1,
+  "host_probes": {"HOST": ["kubectl", "get", "vm", "HOST", "-n", "NAMESPACE", "--no-headers"]},
+  "comment_watches": [{"repo": "ORG/UPSTREAM", "number": 1, "stale_hours": 24}],
+  "run_watches": [{"repo": "ORG/UPSTREAM", "branch": "main", "workflow": "Tests", "event": "push", "jobs": ["E2E"]}]
+}

@@ -125,7 +125,7 @@ func main() {
 		releaseCanary  = flag.String("release-canary", getenv("COMEBYE_RELEASE_CANARY"), "opt in to a canary: this peer is upgraded first and soaks 2 minutes before the others (default: none, every peer is one wave)")
 		releaseDepLbl  = flag.String("release-deploy-label", getenv("COMEBYE_RELEASE_DEPLOY_LABEL"), "the name of that button (default Deploy)")
 		testArchive    = flag.Duration("test-archive-after", 0, "with -test-mode only (the dev harness): the sweep loop archives finished work after this idle time instead of days, and re-runs the archived proof every 2 s; 0 keeps the settings")
-		testMode       = flag.Bool("test-mode", false, "browser tests and the dev server: the app polls every 300 ms instead of every 3 to 20 s and the to-do list has no per-minute limit; nothing else changes")
+		testMode       = flag.Bool("test-mode", false, "browser tests and the dev server: the app polls every 300 ms instead of every 3 to 20 s, a down peer is retried every 2 s at most instead of 30 s, and the to-do list and page publishing have no per-minute limit; nothing else changes")
 		releaseSim     = flag.Bool("release-simulate", false, "demo and browser tests: the release button runs nothing at all and answers with canned results")
 		landTurn       = flag.Duration("land-turn-timeout", envDuration("COMEBYE_LAND_TURN_TIMEOUT", server.DefaultLandTurnTimeout), "how long a worker may hold its turn in a landing queue before the slot is released and its coordinator told; negative never. Hub only")
 		parkMode       = flag.String("park-mode", envOr("COMEBYE_PARK_MODE", server.ParkModeAuto), "auto: the hub parks an agent idle for a day whose worktree is clean (no edits, no untracked files) and that has no open question, queued prompt, background task, loop or wakeup; it shows under Recently closed as parked automatically. suggest: only the \"can park\" chip and review. off: neither")
@@ -367,7 +367,13 @@ func main() {
 		}
 		return scratch.UsageOf(*scratchDir)
 	}
-	fl := fleet.New(manager, *hostName, peers, fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List, Tmp: tmpUsage})
+	fopts := fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List, Tmp: tmpUsage}
+	if *testMode {
+		// Browser tests and the dev server: a peer that comes back (a worker started, a hub restarted) is seen
+		// within 2 s, not after a reconnect delay that has doubled up to 30 s while it was down.
+		fopts.MaxBackoff = 2 * time.Second
+	}
+	fl := fleet.New(manager, *hostName, peers, fopts)
 	repoHealth.OnChange = fl.Changed
 	fl.AttachStore(peerStore, addrOpt)
 	go fl.Run(context.Background())
