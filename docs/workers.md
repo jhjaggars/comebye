@@ -499,6 +499,30 @@ between (provisioning, stopping), a VM without the toolchain at this checkout's 
 ssh could not reach the VM.
 `tools/ci/remote_test.sh` tests it with a fake `ssh` and a local folder for the VM.
 
+### The test VM by default
+
+With a test VM configured, the heavy wrappers send themselves there without being asked:
+`tools/ci/browser.sh` (every suite), `tools/ci/flakes.sh repeat`, `tools/ci/gotest.sh` for the
+whole set (no package named, `./...` or `--shard`) and `tools/ci/prelanding.sh`. Each runs
+`tools/ci/remote.sh --check HOST` first: the provisioner knows the VM (a stopped one is started,
+as above), ssh reaches it, and it has this checkout's pins. When that passes, the run goes
+through `remote.sh` with a line saying so. When it does not, or no VM is configured, the run
+stays on this machine with one line saying why. Quick runs always stay here: `gotest.sh` with
+named packages, any other `flakes.sh` command, and a plain `go test` (call `gotest.sh` for
+`-race ./...`). CI (`CI` or `GITHUB_ACTIONS` set) and the VM itself never take this path.
+
+A machine learns its test VM from a small file of its own, never from this (public) repository:
+
+```sh
+# ~/.config/comebye-worker/test-vm   (or $TEST_VM_CONFIG)
+host=kv1                                               # a worker this provisioner made
+worker_config=~/.config/comebye-worker/kubevirt.conf   # optional: the provisioner's -config for it
+```
+
+`TEST_VM=local` keeps a run on this machine with no message (the opt-out); `TEST_VM=NAME` uses
+another worker for one run. A machine without the file, such as a contributor's or a worker's
+own, runs as before, with one line pointing here.
+
 ## Bringing a branch back from a worker that cannot push
 
 A worker keeps no GitHub login: its agents commit locally, under `/data/code` and

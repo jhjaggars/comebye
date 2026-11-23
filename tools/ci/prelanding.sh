@@ -8,6 +8,8 @@
 # visible in the report. Exit 1 if anything failed. Needs go, node and Chrome (CHROME=/path to override).
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# On the test VM when one is configured and answers (tools/ci/prefer-vm.sh; TEST_VM=local keeps it here).
+. "$here/prefer-vm.sh"; prefer_vm prelanding "$@"
 root="$here/../.."
 out="${1:-$(mktemp -d)}"; mkdir -p "$out"
 cd "$root"

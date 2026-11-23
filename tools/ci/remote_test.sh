@@ -8,7 +8,9 @@
 # live output, the exit status, the artifacts back, the run folder removed, the flakes argument order, a stop
 # mid-run killing the suite on the VM, the idle hold, a stopped VM started through a fake provisioner, and the
 # refusals (unknown host, no VM, stopped with REMOTE_START=0, a start that fails, no toolchain, wrong pins, two runs
-# at once, ssh down).
+# at once, ssh down). Then tools/ci/prefer-vm.sh, through stand-in wrappers that call the real prefer_vm: the test VM
+# from its config (and the provisioner's -config), TEST_VM=local, CI, no config, a VM that does not answer (each with
+# its one line), a start shown as it happens, and which gotest and flakes runs go (only whole sets and repeats).
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0; ok() { echo "ok   $1"; }; bad() { echo "FAIL $1"; fail=1; }
@@ -42,6 +44,7 @@ EOF
 # The fake provisioner: status --json from $root/vmstate (absent: no such VM); start sets RUNNING unless FAKE_START_FAIL.
 cat >"$bin/fake-worker" <<EOF
 #!/bin/bash
+[ "\$1" = -config ] && { echo "config=\$2" >>"$root/worker.log"; shift 2; }
 printf '%s\n' "\$*" >>"$root/worker.log"
 case "\$1" in
   status) [ "\$2" = --json ] && [ "\$3" = kv1 ] && [ -f "$root/vmstate" ] || { echo '{"v":1,"provider":"kubevirt","workers":[]}'; exit 0; }
@@ -53,7 +56,8 @@ esac
 EOF
 echo RUNNING >"$root/vmstate"
 export COMEBYE_WORKER_TOOL="$bin/fake-worker" # never the real provisioner
-unset REMOTE_START
+unset REMOTE_START TEST_VM COMEBYE_WORKER_CONFIG COMEBYE_ON_VM COMEBYE_VM_DECIDED CI GITHUB_ACTIONS
+export TEST_VM_CONFIG="$root/test-vm" # absent unless a check writes it: never the real ~/.config one
 for t in node npm google-chrome; do printf '#!/bin/sh\necho stub\n' >"$tools/$t"; done
 command -v go >/dev/null || printf '#!/bin/sh\necho stub\n' >"$tools/go"
 chmod +x "$bin"/* "$tools"/*
@@ -64,7 +68,7 @@ pins 1.2.3 4.5.6 7.8.9.10
 # ---- the caller's worktree
 cd "$caller" && git init -q && git remote add origin "https://someone:tok3n-SECRET@example.com/x.git" || exit 1
 mkdir -p tools/ci tools/worker
-cp "$here/remote.sh" tools/ci/remote.sh
+cp "$here/remote.sh" tools/ci/remote.sh; cp "$here/prefer-vm.sh" tools/ci/prefer-vm.sh
 cat >tools/worker/testrunner.go <<'EOF'
 var testPins = testRunnerPins{
 	GoVersion:     "1.2.3",
@@ -81,8 +85,10 @@ EOF
 # rc.txt (an untracked file, so it also proves untracked files arrive). With wait.txt, it waits for $root/release.
 cat >tools/ci/browser.sh <<EOF
 #!/bin/bash
-out="\$3"; mkdir -p "\$out/failures"
+. "\$(dirname "\$0")/prefer-vm.sh"; prefer_vm browser "\$@"
+out="\${3:-\$RUNNER_TEMP/uitest-\$1-\${2:-dark}}"; mkdir -p "\$out/failures"
 echo "STREAMED from the vm"
+echo "where=\$([ -n "\${COMEBYE_ON_VM:-}" ] && echo vm || echo local)" >"\$out/where.txt"
 { echo "args=\$*"; echo "pwd=\$PWD"; echo "capped=\${CAPPED_BY_TEST:-no}"; echo "toolchain=\$GOTOOLCHAIN"
   echo "gocache=\$GOCACHE"; echo "scheme=\${SCHEME:-}"; echo "jobs=\${JOBS:-}"; echo "branch=\$(git branch --show-current)"
   echo "origin_main=\$(git rev-parse --verify -q refs/remotes/origin/main >/dev/null && echo yes || echo no)"
@@ -101,7 +107,14 @@ exit "\$(cat rc.txt 2>/dev/null || echo 0)"
 EOF
 cat >tools/ci/flakes.sh <<'EOF'
 #!/bin/bash
-mkdir -p "$OUT_DIR"; echo "args=$*" >"$OUT_DIR/flakes.txt"; echo "FLAKY none"; exit 1
+. "$(dirname "$0")/prefer-vm.sh"; prefer_vm flakes "$@"
+w=$([ -n "${COMEBYE_ON_VM:-}" ] && echo vm || echo local)
+o="${OUT_DIR:-$RUNNER_TEMP/flakes}"; mkdir -p "$o"; echo "args=$*" >"$o/flakes.txt"; echo "FLAKY none where=$w"; exit 1
+EOF
+cat >tools/ci/gotest.sh <<'EOF'
+#!/bin/bash
+. "$(dirname "$0")/prefer-vm.sh"; prefer_vm gotest "$@"
+echo "gotest where=$([ -n "${COMEBYE_ON_VM:-}" ] && echo vm || echo local) args=$*"
 EOF
 chmod +x tools/ci/*.sh
 echo committed >committed.txt; echo before >modified.txt; echo before >staged.txt; echo gone >deleted.txt
@@ -201,6 +214,55 @@ echo PROVISIONING >"$root/vmstate"
 out="$("$r" kv1 browser rest 2>&1)"; rc=$?
 check "neither up nor stopped: refused (rc=$rc)" rc_says "$rc" 2 'kv1 is PROVISIONING' "$out"
 echo RUNNING >"$root/vmstate"
+
+# ---- the wrappers prefer the test VM (tools/ci/prefer-vm.sh)
+check "the real browser.sh asks prefer_vm" grep -q 'prefer_vm browser "$@"' "$here/browser.sh"
+check "the real flakes.sh asks prefer_vm" grep -q 'prefer_vm flakes "$cmd" "$@"' "$here/flakes.sh"
+check "the real gotest.sh asks prefer_vm" grep -q 'prefer_vm gotest "$@"' "$here/gotest.sh"
+check "the real prelanding.sh asks prefer_vm" grep -q 'prefer_vm prelanding "$@"' "$here/prelanding.sh"
+b="$caller/tools/ci/browser.sh"; where() { sed "s/^where=//" "$RUNNER_TEMP/uitest-rest-dark/where.txt" 2>/dev/null; }
+echo 0 >rc.txt; rm -rf "$RUNNER_TEMP"; : >"$root/ssh.log"
+out="$("$b" rest 2>&1)"; rc=$?
+check "no config: runs here (rc=$rc)" [ "$rc:$(where)" = 0:local ]
+check "...saying so in one line" [ "$(grep -c '^tests: running on this machine (no test VM in ' <<<"$out")" = 1 ]
+check "...without ssh" [ ! -s "$root/ssh.log" ]
+printf '# the test VM\nhost = kv1  # a worker\nworker_config=~/wk.conf\n' >"$TEST_VM_CONFIG"
+echo 3 >rc.txt; rm -rf "$RUNNER_TEMP"; : >"$root/worker.log"
+out="$("$b" rest 2>&1)"; rc=$?
+check "configured: runs on the VM, with the suite's status (rc=$rc)" [ "$rc:$(where)" = 3:vm ]
+check "...saying so" grep -q '^tests: running browser on the test VM kv1 (TEST_VM=local runs it here)$' <<<"$out"
+check "...with the provisioner's -config from the config file" grep -qx "config=$HOME/wk.conf" "$root/worker.log"
+echo 0 >rc.txt; rm -rf "$RUNNER_TEMP"; : >"$root/ssh.log"
+out="$(TEST_VM=local "$b" rest 2>&1)"; rc=$?
+check "TEST_VM=local: here, silently, no ssh (rc=$rc)" [ "$rc:$(where):$(grep -c '^tests:' <<<"$out"):$(wc -c <"$root/ssh.log")" = 0:local:0:0 ]
+rm -rf "$RUNNER_TEMP"
+out="$(CI=1 "$b" rest 2>&1)"; rc=$?
+check "CI: here, silently" [ "$rc:$(where):$(grep -c '^tests:' <<<"$out")" = 0:local:0 ]
+rm -rf "$RUNNER_TEMP"
+out="$(TEST_VM=kv2 "$b" rest 2>&1)"; rc=$?
+check "TEST_VM=NAME: that VM (kv2 is unknown, so here, saying why)" rc_says "$rc:$(where)" 0:local '^tests: running on this machine: test VM kv2 does not answer (kv2 is not a worker this provisioner knows' "$out"
+rm -rf "$RUNNER_TEMP"
+out="$(FAKE_SSH_DOWN=1 "$b" rest 2>&1)"; rc=$?
+check "VM unreachable: here, with the reason in one line (rc=$rc)" rc_says "$rc:$(where):$(grep -c '^tests:' <<<"$out")" 0:local:1 'test VM kv1 does not answer (ssh could not reach kv1' "$out"
+pins 9.9.9 4.5.6 7.8.9.10; rm -rf "$RUNNER_TEMP"
+out="$("$b" rest 2>&1)"; rc=$?
+check "VM without the pins: here (rc=$rc)" rc_says "$rc:$(where)" 0:local 'test VM kv1 does not answer (kv1 has no test toolchain' "$out"
+pins 1.2.3 4.5.6 7.8.9.10
+echo STOPPED >"$root/vmstate"; rm -rf "$RUNNER_TEMP"
+out="$("$b" rest 2>&1)"; rc=$?
+check "VM stopped: started, shown as it happens, then the run goes there (rc=$rc)" rc_says "$rc:$(where)" 0:vm '^remote: kv1 is STOPPED; starting it' "$out"
+check "...and how long it took" grep -Eq '^remote: kv1 started in [0-9]+ s$' <<<"$out"
+g="$caller/tools/ci/gotest.sh"
+check "gotest with no package: the VM" grep -q '^gotest where=vm args=$' <<<"$("$g" 2>&1)"
+check "gotest ./...: the VM" grep -q '^gotest where=vm args=-count=1 ./...$' <<<"$("$g" -count=1 ./... 2>&1)"
+check "gotest --shard: the VM" grep -q '^gotest where=vm args=--shard 1/2$' <<<"$("$g" --shard 1/2 2>&1)"
+: >"$root/ssh.log"; out="$("$g" -run X ./internal/x 2>&1)"
+check "gotest of one package: here, silently, no ssh" [ "$out:$(wc -c <"$root/ssh.log")" = "gotest where=local args=-run X ./internal/x:0" ]
+f="$caller/tools/ci/flakes.sh"
+check "flakes repeat: the VM" grep -q 'FLAKY none where=vm' <<<"$(OUT_DIR="$root/fl2" "$f" repeat 2 x 2>&1)"
+check "flakes other than repeat: here" grep -q 'FLAKY none where=local' <<<"$("$f" list 2>&1)"
+check "a relative OUT_DIR lands in the caller's folder" bash -c "cd '$caller/sub' && '$caller/tools/ci/remote.sh' kv1 browser smoke dark rel-out >/dev/null 2>&1; [ -f '$caller/sub/rel-out/failures/check.png' ]"
+rm -f "$TEST_VM_CONFIG"
 
 # two at once, then a stop mid-run
 echo 0 >rc.txt; touch wait.txt

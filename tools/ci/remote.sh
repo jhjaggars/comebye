@@ -2,6 +2,7 @@
 # Run a heavy suite on a worker VM instead of this machine, on this worktree's exact state.
 #
 #   tools/ci/remote.sh HOST SUITE [ARG...]
+#   tools/ci/remote.sh --check HOST     only the checks below (and a start); exit 0 when a run would go ahead
 #
 #   SUITE  browser ARG...   tools/ci/browser.sh ARG...    artifacts -> ARG 3, or ${RUNNER_TEMP:-/tmp}/uitest-SUITE-SCHEME
 #          flakes ARG...    tools/ci/flakes.sh ARG...     artifacts -> $OUT_DIR, or a new /tmp/flakes.XXXXXX
@@ -25,7 +26,9 @@
 # saying so and how long it took); REMOTE_START=0 refuses instead. While the suite runs, an idle hold on the VM
 # (remote-test-ID, 20 min, renewed every 5) keeps it from powering off: a plain ssh session is not activity to it.
 # The provisioner is $COMEBYE_WORKER_TOOL (words, e.g. "comebye-worker -config FILE"), else comebye-worker if it is
-# on PATH, else `go run ./tools/worker`.
+# on PATH, else `go run ./tools/worker`; COMEBYE_WORKER_CONFIG=FILE adds `-config FILE`. The repository is the one
+# this script lives in, whatever the current directory. The heavy wrappers call this by themselves when a test VM
+# is configured (tools/ci/prefer-vm.sh).
 #
 # Refused before anything runs (exit 2): a HOST with no provisioner ssh config or no VM, a VM that is stopped with
 # REMOTE_START=0 or would not start, a VM whose toolchain is missing or not this checkout's pins
@@ -33,16 +36,18 @@
 # 255: ssh could not reach the VM.
 set -uo pipefail
 
-usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" >&2; exit 2; }
+usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" >&2; exit 2; }
 die() { echo "remote: $*" >&2; exit 2; }
-[ $# -ge 2 ] || usage
+check=""
+if [ "${1:-}" = --check ]; then check=1; shift; [ $# = 1 ] || usage; else [ $# -ge 2 ] || usage; fi
 host="$1"; shift
 [[ "$host" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die "host '$host': want a worker name (lower-case letters, digits, '-')"
 
 # q: one shell word, for a command line the VM's shell reads.
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not in a git worktree"
+here_dir="$PWD"
+top="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" || die "$(dirname "${BASH_SOURCE[0]}") is not in a git worktree"
 cd "$top" || exit 2
 state="${COMEBYE_WORKER_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/comebye-worker}"
 cfg="$state/$host/ssh_config"
@@ -50,7 +55,7 @@ cfg="$state/$host/ssh_config"
 ssh_vm() { ssh -F "$cfg" -o BatchMode=yes "$host" "$@" 9>&-; }
 
 # ---- the suite, and where its artifacts land here
-kind="$1"; shift
+kind="${1:-}"; [ -n "$check" ] && kind=go; shift || true
 loc_art=""; rem_art_arg=""; env_art=""
 args=("$@")
 case "$kind" in
@@ -74,16 +79,17 @@ case "$kind" in
   go) cmd=(go) ;;
   *) echo "remote: unknown suite '$kind'" >&2; usage ;;
 esac
+case "$loc_art" in ""|/*) ;; *) loc_art="$here_dir/$loc_art" ;; esac # a relative OUT_DIR is the caller's, not $top's
 
 # ---- one run per worktree at a time
 gitdir="$(git rev-parse --absolute-git-dir)"
 lock="$gitdir/comebye-remote.lock"
 exec 9>"$lock" || die "cannot open $lock"
-flock -n 9 || die "another remote run from this worktree is going ($(cat "$gitdir/comebye-remote.run" 2>/dev/null || echo '?')); wait for it"
+[ -n "$check" ] || flock -n 9 || die "another remote run from this worktree is going ($(cat "$gitdir/comebye-remote.run" 2>/dev/null || echo '?')); wait for it"
 
 me="$(hostname -s 2>/dev/null | tr 'A-Z' 'a-z' | tr -c 'a-z0-9-\n' - | cut -c1-16)"
 run_id="${me:-host}-$(date +%Y%m%d-%H%M%S)-$$" # also the idle hold's name: [a-z0-9-], at most 63 with its prefix
-echo "$host $run_id" >"$gitdir/comebye-remote.run"
+[ -n "$check" ] || echo "$host $run_id" >"$gitdir/comebye-remote.run"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/remote.XXXXXX")"
 hold=""; sent=""
 rroot='"${REMOTE_ROOT:-$HOME/.cache/comebye-remote}"'
@@ -100,7 +106,7 @@ cleanup() {
     wait "$spid" 2>/dev/null; kill "$t" 2>/dev/null
   fi
   [ -n "$sent" ] && ssh_vm "rm -rf $rrun; rm -f $rhold" </dev/null >/dev/null 2>&1
-  rm -rf "$tmp"; rm -f "$gitdir/comebye-remote.run"
+  rm -rf "$tmp"; [ -n "$check" ] || rm -f "$gitdir/comebye-remote.run"
 }
 trap cleanup EXIT
 trap 'exit 130' INT; trap 'exit 143' TERM HUP
@@ -109,6 +115,7 @@ trap 'exit 130' INT; trap 'exit 143' TERM HUP
 if [ -n "${COMEBYE_WORKER_TOOL:-}" ]; then read -r -a wtool <<<"$COMEBYE_WORKER_TOOL"
 elif command -v comebye-worker >/dev/null; then wtool=(comebye-worker)
 else wtool=(go run ./tools/worker); fi
+[ -n "${COMEBYE_WORKER_CONFIG:-}" ] && wtool+=(-config "$COMEBYE_WORKER_CONFIG")
 # The cloud's view, no ssh: RUNNING, STOPPED, ...; "none" when the provisioner has no such VM, "" when it did not answer.
 vm_state() {
   local j; j="$("${wtool[@]}" status --json "$host" 2>/dev/null 9>&-)" || return 0
@@ -142,6 +149,7 @@ rc=$?
 have="${have% }"
 [ "$have" = "$want" ] || die "$host has no test toolchain at this checkout's pins (it says: ${have:-nothing}; want: $want).
   Install it with: go run ./tools/worker toolchain $host"
+[ -n "$check" ] && { echo "remote: $host is ready ($have)" >&2; exit 0; }
 
 # ---- what is sent: HEAD, the tracked changes, the untracked files (no .git/config, no remotes)
 head="$(git rev-parse HEAD)" || die "no HEAD"
@@ -195,6 +203,7 @@ done
 remote_script='set -u
 root='"$rroot"'; run='"$rrun"'; art='"$rem_art"'
 cache="$root/cache"; mkdir -p "$cache/go-build" "$cache/go-mod" "$cache/npm" "$cache/node_modules"
+export COMEBYE_ON_VM=1 # the wrappers run here, never back to a VM (tools/ci/prefer-vm.sh)
 export GOCACHE="$cache/go-build" GOMODCACHE="$cache/go-mod" npm_config_cache="$cache/npm" GOTOOLCHAIN=local
 export PATH="/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:$PATH"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"

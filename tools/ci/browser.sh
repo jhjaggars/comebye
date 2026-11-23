@@ -17,6 +17,8 @@
 # Any failed check fails the suite; there is no list of checks allowed to fail.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# On the test VM when one is configured and answers (tools/ci/prefer-vm.sh; TEST_VM=local keeps it here).
+. "$here/prefer-vm.sh"; prefer_vm browser "$@"
 [ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "${BASH_SOURCE[0]}" "$@"
 suite="${1:?suite: smoke|drive|rest|visual|full|changed}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"; shard="${4:-}"
 

@@ -12,8 +12,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ports_free() { local p; for p in 0 1 100 200 250 270 400 500; do (exec 3<>"/dev/tcp/127.0.0.1/$(($1 + p))") 2>/dev/null && return 1; done; return 0; }
 
 cmd="${1:-}"; shift || true
-# The heavy subcommand runs inside a memory cap (tools/ci/capped.sh).
-case "$cmd" in repeat) [ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "$0" "$cmd" "$@";; esac
+# The heavy subcommand runs on the test VM when one is configured and answers (tools/ci/prefer-vm.sh; TEST_VM=local
+# keeps it here), and here inside a memory cap (tools/ci/capped.sh).
+case "$cmd" in repeat) . "$here/prefer-vm.sh"; prefer_vm flakes "$cmd" "$@"; [ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "$0" "$cmd" "$@";; esac
 case "$cmd" in
   repeat)
     n="${1:-3}"; shift || true

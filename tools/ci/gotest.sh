@@ -12,6 +12,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
+# The whole set (no package named, ./..., or a shard) runs on the test VM when one is configured and answers
+# (tools/ci/prefer-vm.sh; TEST_VM=local keeps it here); named packages always run here.
+. tools/ci/prefer-vm.sh; prefer_vm gotest "$@"
 [ -n "${COMEBYE_CAPPED:-}" ] || exec "$(dirname "${BASH_SOURCE[0]}")/capped.sh" "${BASH_SOURCE[0]}" "$@"
 . "$(dirname "${BASH_SOURCE[0]}")/jobs.sh"
 pflag=(); [ -n "$COMEBYE_GOP" ] && pflag=(-p "$COMEBYE_GOP")
