@@ -783,10 +783,10 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 		views = append(views, v)
 	}
 	if c := callerOf(r); c.tagged {
-		writeJSON(w, map[string]any{"entries": taggedEntries(views, c.host), "marks": taggedMarks(s.ledger.Marks(), c.host), "plans": []planView{}, "roles": s.liveRoles()})
+		writeJSON(w, ledgerView{Entries: taggedEntries(views, c.host), Marks: taggedMarks(s.ledger.Marks(), c.host), Plans: []planView{}, Roles: s.liveRoles()})
 		return
 	}
-	writeJSON(w, map[string]any{"entries": views, "marks": s.ledger.Marks(), "plans": s.planViews(), "roles": s.liveRoles(), "asks": s.askReviews(r.Context())})
+	writeJSON(w, ledgerView{Entries: views, Marks: s.ledger.Marks(), Plans: s.planViews(), Roles: s.liveRoles(), Asks: s.askReviews(r.Context())})
 }
 
 // askReviews re-checks the answers of every marked session, by agent id
@@ -1222,7 +1222,7 @@ func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []*removal{}
 	}
-	writeJSON(w, map[string]any{"removals": items, "auto_removed": s.recentAutoRemovals(time.Now()), "auto_remove": s.autoRemove, "sweep_branches": s.sweepBranchesDeleted(time.Now())})
+	writeJSON(w, removalsView{Removals: items, AutoRemoved: s.recentAutoRemovals(time.Now()), AutoRemove: s.autoRemove, SweepBranches: s.sweepBranchesDeleted(time.Now())})
 }
 
 // confirmBody is the JSON body of a removal confirmation.

@@ -242,5 +242,5 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	writeJSON(w, map[string]any{"events": s.events.query(since, kinds, limit)})
+	writeJSON(w, logView{Events: s.events.query(since, kinds, limit)})
 }

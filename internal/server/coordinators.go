@@ -172,5 +172,5 @@ func (s *Server) handleCoordinators(w http.ResponseWriter, r *http.Request) {
 	if s.ledgerOff(w, r) {
 		return
 	}
-	writeJSON(w, map[string]any{"coordinators": s.coordinatorList()})
+	writeJSON(w, coordinatorsView{Coordinators: s.coordinatorList()})
 }

@@ -850,7 +850,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"agents": s.withBackground(s.fleet.Agents()), "hosts": s.fleet.Hosts()})
 		return
 	}
-	writeJSON(w, map[string]any{"agents": s.slimAgents(s.fleet.Agents()), "hosts": slimHosts(s.fleet.Hosts())})
+	writeJSON(w, agentsView{Agents: s.slimAgents(s.fleet.Agents()), Hosts: slimHosts(s.fleet.Hosts())})
 }
 
 // fullRecords reports whether the caller (a hub reading a peer) asked for

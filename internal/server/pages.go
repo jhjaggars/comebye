@@ -645,10 +645,10 @@ func (s *Server) pagesBase() string {
 }
 
 // pageJSON is a page as the API shows it.
-func (s *Server) pageJSON(p Page) map[string]any {
-	m := map[string]any{"page": p, "path": "/p/" + p.ID}
+func (s *Server) pageJSON(p Page) pageView {
+	m := pageView{Page: p, Path: "/p/" + p.ID}
 	if base := s.pagesBase(); base != "" {
-		m["url"] = base + "/p/" + p.ID
+		m.URL = base + "/p/" + p.ID
 	}
 	return m
 }
@@ -731,7 +731,7 @@ func (s *Server) handlePageCreate(w http.ResponseWriter, r *http.Request) {
 		s.pages.preview(p.ID, p.Version) // keep this version's preview now, so the gallery never waits for it
 	}
 	m := s.pageJSON(p)
-	m["created"] = created
+	m.Created = &created
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
@@ -757,7 +757,7 @@ func (s *Server) handlePageList(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, p)
 	}
-	res := map[string]any{"public_url": s.cfg.PublicURL, "pages_url": s.pagesOrigin()}
+	res := pageListView{PublicURL: s.cfg.PublicURL, PagesURL: s.pagesOrigin()}
 	if text := strings.TrimSpace(q.Get("q")); q.Has("q") {
 		// Search the bodies: the user's alone, as reading a page is.
 		words, script := pageSearchWords(text)
@@ -782,8 +782,8 @@ func (s *Server) handlePageList(w http.ResponseWriter, r *http.Request) {
 			out = flagged
 		}
 		if len(words) == 0 {
-			res["matches"], res["partial"] = []PageMatch{}, false
-			res["pages"] = out
+			none, partial := []PageMatch{}, false
+			res.Matches, res.Partial, res.Pages = &none, &partial, out
 			writeJSON(w, res)
 			return
 		}
@@ -799,9 +799,9 @@ func (s *Server) handlePageList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out = hit
-		res["matches"], res["partial"] = matches, partial
+		res.Matches, res.Partial = &matches, &partial
 	}
-	res["pages"] = out
+	res.Pages = out
 	writeJSON(w, res)
 }
 
@@ -842,10 +842,12 @@ func (s *Server) handlePageGet(w http.ResponseWriter, r *http.Request) {
 			pageErr(w, err)
 			return
 		}
-		m["body"], m["body_version"], m["body_kind"] = string(b), v.N, v.Kind
+		body := string(b)
+		m.Body, m.BodyVersion, m.BodyKind = &body, v.N, v.Kind
 		if r.URL.Query().Get("text") == "1" {
 			// What a reader sees: no markup, scripts, styles or data: images.
-			m["body"], m["body_kind"] = pageText(v.Kind, b), "text"
+			body = pageText(v.Kind, b)
+			m.BodyKind = "text"
 		}
 	}
 	writeJSON(w, m)

@@ -293,22 +293,17 @@ func (s *Server) by(r *http.Request, given string) string {
 // handleWhoami tells the CLI how this instance sees it.
 func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 	c := callerOf(r)
-	resp := map[string]any{"host": s.fleet.LocalName(), "role": "user", "ledger": s.ledger != nil, "version": s.cfg.Version, "hub_mode": s.fleet.IsHub()}
+	resp := whoamiView{Host: s.fleet.LocalName(), Role: "user", Ledger: s.ledger != nil, Version: s.cfg.Version, HubMode: s.fleet.IsHub(), PublicURL: s.cfg.PublicURL}
 	switch {
 	case s.ledger != nil:
-		resp["hub"] = "self"
+		resp.Hub = "self"
 	case s.cfg.Upstream != nil:
-		resp["hub"] = s.cfg.Upstream.URL()
-	default:
-		resp["hub"] = ""
-	}
-	if s.cfg.PublicURL != "" {
-		resp["public_url"] = s.cfg.PublicURL
+		resp.Hub = s.cfg.Upstream.URL()
 	}
 	if c.agent() {
-		resp["role"] = "agent"
-		resp["agent"] = c.agentRef()
-		resp["by"] = s.by(r, "")
+		resp.Role = "agent"
+		resp.Agent = c.agentRef()
+		resp.By = s.by(r, "")
 	}
 	writeJSON(w, resp)
 }
