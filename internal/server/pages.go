@@ -168,6 +168,8 @@ type pageStore struct {
 	now   func() time.Time
 	rate  map[string][]time.Time
 	quota int64
+	// noRate lifts the per-publisher limit (-test-mode: a browser run publishes from one CLI faster than a person would).
+	noRate bool
 }
 
 func newPageStore(dir string) *pageStore {
@@ -311,7 +313,7 @@ func (st *pageStore) publish(in pageIn, who pageWho) (out Page, created bool, er
 			recent = append(recent, at)
 		}
 	}
-	if len(recent) >= pageRate {
+	if len(recent) >= pageRate && !st.noRate {
 		st.rate[who.rateKey()] = recent
 		return Page{}, false, errPageRate
 	}
