@@ -209,7 +209,8 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) {
         await page.screenshot({ path: `${out}/tododeeplink-${width}-${tag0}-unknown.png` });
         await page.locator(`${item(b)} .td-row`).click();
         await openIs(b);
-        await page.locator(`${LIST} .td-notice-x`).click().catch(() => {});
+        // Tidy up if the notice is still there (opening an item clears it): a click on a notice that is gone waited 8 s.
+        if (await page.locator(`${LIST} .td-notice-x`).count()) await page.locator(`${LIST} .td-notice-x`).click();
       });
     }
 

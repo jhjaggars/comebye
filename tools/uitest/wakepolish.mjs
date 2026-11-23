@@ -101,7 +101,8 @@ try {
     await page.waitForFunction(() => state.hosts && state.hosts.some((h) => h.name === "kv1" && h.status !== "ok"), null, { timeout: 40000 });
 
     await check(`${tag}: the launch picker marks the stopped kv1 and it can be picked; an offline p2 stays disabled`, async () => {
-      await page.waitForFunction(() => ph.data && ph.data.hosts && ph.data.hosts.some((h) => h.name === "kv1" && h.state === "stopped"), null, { timeout: 40000 }).catch(async () => { await page.evaluate(() => loadProvHosts && loadProvHosts(true)); await sleep(3000); });
+      // No wait for the provisioners' host list first: the picker asks for it itself (phEnsure), and the wait below is
+      // for what the user sees. (A wait here for ph.data used to time out at 40 s on every run, then force a load.)
       await page.evaluate(() => openLaunch());
       await page.waitForSelector('#ln-hosts [data-host="kv1"]', { timeout: 15000 });
       await page.waitForFunction(() => /stopped/.test(document.querySelector('#ln-hosts [data-host="kv1"]')?.innerText || ""), null, { timeout: 30000 });
