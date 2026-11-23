@@ -94,6 +94,9 @@ func (s *Server) autoCleanOne(e ledger.Entry) {
 			agent = &a
 		}
 	}
+	if agent != nil && len(s.pendingTasks(ctx, e.Host, e.AgentID, orDefault(agent.PaneID, e.PaneID))) > 0 {
+		return // still on its task (a CI watch, a wakeup): the ask would interrupt it
+	}
 	m := ledger.Mark{AgentID: e.AgentID, By: AutoCreator, Reason: autoCleanReason}
 	if _, _, err := s.applyMark(m, agent, true); err != nil {
 		log.Printf("auto cleanup of %s: %v", e.ID, err)

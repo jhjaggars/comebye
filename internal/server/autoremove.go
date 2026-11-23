@@ -183,8 +183,10 @@ func inBaseHow(c *worktreeChecks) string {
 	return ""
 }
 
-// autoFactsOf gathers the outside facts about an agent id.
-func (s *Server) autoFactsOf(it *removal) autoFacts {
+// autoFactsOf gathers the outside facts about an agent id. Its background
+// tasks (and scheduled wakeups) are read from the session now, not from the
+// agent list's cache, which has nothing until its first read lands.
+func (s *Server) autoFactsOf(ctx context.Context, it *removal) autoFacts {
 	f := autoFacts{AnswerTTL: s.reaskCap, Now: time.Now()}
 	if s.todos != nil {
 		for _, t := range s.todos.list("") {
@@ -200,6 +202,9 @@ func (s *Server) autoFactsOf(it *removal) autoFacts {
 		if a.ID == it.ID || (a.Host == it.Host && a.PaneID == it.PaneID && it.PaneID != "") {
 			f.Background = len(s.backgroundOfAgent(a))
 		}
+	}
+	if it.Live.Present {
+		f.Background = max(f.Background, len(s.pendingTasks(ctx, it.Host, it.ID, it.PaneID)))
 	}
 	return f
 }
@@ -284,7 +289,7 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	defer cancel()
 	it.opts.Origin = true
 	s.review(ctx, it)
-	f := s.autoFactsOf(it)
+	f := s.autoFactsOf(ctx, it)
 	if ok, _ := autoRemoveVerdict(it, f); !ok {
 		if s.ttlReaskDue(it, f) {
 			if err := s.reask(it.Mark, true, ""); err != nil {

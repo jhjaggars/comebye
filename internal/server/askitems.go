@@ -55,7 +55,7 @@ const askFormat = "Reply in exactly this format. First line: NOTHING LEFT, or LE
 	"- branch REMOTE/BRANCH <your note>   (a remote branch left behind, such as origin/feat/x)\n" +
 	"- issue OWNER/REPO#NUMBER <your note>\n" +
 	"- followup <something only the user can do: post a comment, run a command, try a login>\n" +
-	"- other <anything else: a loop you run, a request you owe the user>\n" +
+	"- other <anything else: a loop you run, a request you owe the user, the report your task asks for if you still owe it (you will be told to file it)>\n" +
 	"Apart from your own scratch, do not do the cleanup now: only list it. Say NOTHING LEFT only when nothing remains. No other text."
 
 // parseReply reads a session's reply to the ask: the state (safe: nothing

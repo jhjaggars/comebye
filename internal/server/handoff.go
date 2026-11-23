@@ -1208,7 +1208,7 @@ func (s *Server) handleRemovals(w http.ResponseWriter, r *http.Request) {
 			}
 			it.opts.Origin = true
 			s.review(ctx, it)
-			f := s.autoFactsOf(it)
+			f := s.autoFactsOf(ctx, it)
 			v := &autoVerdictView{}
 			// The sweep's verdict is the automatic removal's for a live
 			// session, and the clean-up's for one whose agent is gone.

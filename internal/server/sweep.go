@@ -12,6 +12,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
+	"github.com/jhjaggars/comebye/internal/transcript"
 )
 
 // The sweep: find the ledger workers that look finished, check each on
@@ -336,6 +337,74 @@ func (s *Server) sweepCandidates(agents []herdr.AgentInfo, idleAfter time.Durati
 	return cands, skipped
 }
 
+// sweepHold says why a worker that looks finished is still on its task, so
+// the sweep neither marks nor asks it ("" when nothing holds it). An idle
+// pane is not a finished task: Claude Code shows idle once a turn ends,
+// though a CI watch it started in the background, or a wakeup it
+// scheduled, will wake it to carry on (a lander re-running CI, 2026-11-23).
+// And a worker whose last turn ended without a report (the turn after its
+// report: a landing, a follow-up) gets the idle time a running one needs.
+func sweepHold(e ledger.Entry, live *herdr.AgentInfo, bg []transcript.BackgroundTask, idleAfter time.Duration, now time.Time) string {
+	if live == nil {
+		return ""
+	}
+	if len(bg) > 0 {
+		return "still on its task: waiting on " + bgWhat(bg)
+	}
+	if idleAfter <= 0 {
+		idleAfter = defaultSweepIdle
+	}
+	if idleLongEnough(live, idleAfter, now) {
+		return ""
+	}
+	switch {
+	case e.Status == ledger.Landed && e.AwaitLandReport:
+		return "still on its task: its work landed and its landing report is not filed yet"
+	case e.Reported() && unreportedTurn(e):
+		return "still on its task: its last turn ended without a report, and it has not been idle " + shortDur(idleAfter) + " yet"
+	}
+	return ""
+}
+
+// unreportedTurn: the entry was finished by its agent going idle, not by
+// its own report (none, or one older than the turn that ended).
+func unreportedTurn(e ledger.Entry) bool {
+	if e.FinishedAt == nil {
+		return false
+	}
+	if e.ReportSource != "explicit" {
+		return true
+	}
+	return e.ReportAt != nil && e.FinishedAt.After(*e.ReportAt)
+}
+
+// bgWhat names what an agent waits on: "a background task (gh run watch)",
+// "a scheduled wakeup (watching CI)", "+N more" when there are several.
+func bgWhat(bg []transcript.BackgroundTask) string {
+	t := bg[0]
+	what := "a background task"
+	if t.Tool == "Wakeup" {
+		what = "a scheduled wakeup"
+	}
+	if l := bgLabel(t); l != "" {
+		what += " (" + l + ")"
+	}
+	if len(bg) > 1 {
+		what += fmt.Sprintf(" and %d more", len(bg)-1)
+	}
+	return what
+}
+
+// pendingTasks is what an agent has running in the background or scheduled
+// to wake it, read from its session now: a decision rests on it.
+func (s *Server) pendingTasks(ctx context.Context, host, agentID, paneID string) []transcript.BackgroundTask {
+	if agentID == "" || paneID == "" {
+		return nil
+	}
+	tasks, _ := s.backgroundOf(ctx, ledger.Entry{AgentID: agentID, PaneID: paneID, Host: host}, true)
+	return tasks
+}
+
 // idleLongEnough: the agent is idle (or done) and has been for idleAfter.
 func idleLongEnough(a *herdr.AgentInfo, idleAfter time.Duration, now time.Time) bool {
 	if idleAfter <= 0 || a == nil || (a.Status != herdr.StatusIdle && a.Status != herdr.StatusDone) {
@@ -392,6 +461,13 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			e := c.e
+			if c.agent != nil {
+				pane := orDefault(c.agent.PaneID, e.PaneID)
+				if why := sweepHold(e, c.agent, s.pendingTasks(ctx, e.Host, e.AgentID, pane), idle, time.Now()); why != "" {
+					items[i] = sweepItem{ID: e.AgentID, EntryID: e.ID, Host: e.Host, Name: e.AgentName, Repo: e.RepoName, Branch: e.Branch, Class: SweepSkip, Reason: why, AdHoc: c.adHoc}
+					return
+				}
+			}
 			// The host's checks fetch origin first, so a branch merged
 			// upstream since the last fetch is seen as merged.
 			chk, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{Detail: true}.forEntry(e))

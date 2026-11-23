@@ -131,7 +131,7 @@ func (s *Server) sweepCleanOne(ctx context.Context, it *removal, now time.Time) 
 	defer cancel()
 	it.opts.Origin = true
 	s.review(ctx, it)
-	if ok, _ := sweepCleanVerdict(it, s.autoFactsOf(it)); !ok {
+	if ok, _ := sweepCleanVerdict(it, s.autoFactsOf(ctx, it)); !ok {
 		return nil
 	}
 	// The mark may have been withdrawn or replaced while the checks ran.

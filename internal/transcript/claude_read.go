@@ -178,6 +178,9 @@ func (st *claudeLatest) line(line []byte) {
 				}
 			case "tool_use":
 				st.bg.call(b.ID, b.Name, b.Input)
+				if b.Name == "ScheduleWakeup" {
+					st.bg.wakeup(b.ID, rec.Timestamp, b.Input)
+				}
 				if b.ID != "" {
 					st.order = append(st.order, b.ID)
 					st.pending[b.ID] = PendingTool{Tool: b.Name, Args: summarizeArgs(b.Name, b.Input)}

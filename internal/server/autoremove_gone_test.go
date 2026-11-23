@@ -60,7 +60,7 @@ func TestAutoRemoveGoneWorktreeOnlyInLocalMain(t *testing.T) {
 	it := s.marked()[0]
 	it.opts.Origin = true
 	s.review(context.Background(), it)
-	if ok, why := autoRemoveVerdict(it, s.autoFactsOf(it)); ok || !strings.Contains(why, "origin") {
+	if ok, why := autoRemoveVerdict(it, s.autoFactsOf(context.Background(), it)); ok || !strings.Contains(why, "origin") {
 		t.Fatalf("verdict = %v %q (checks %+v)", ok, why, it.Checks)
 	}
 	if got := steps(s, 2); len(got) != 0 {

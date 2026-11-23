@@ -13,6 +13,9 @@ package transcript
 //     foreground Bash call that outruns its timeout is moved to the
 //     background, and its result says "... was moved to the background
 //     (ID: <id>)";
+//   - a ScheduleWakeup (without stop) is a wait too: the session wakes when
+//     its delay runs out, so it is listed (Tool "Wakeup") until then, or
+//     until a later ScheduleWakeup replaces or stops it;
 //   - end: a <task-notification> naming <task-id> and a terminal <status>
 //     (completed, failed, killed, stopped), as a queue-operation record, an
 //     attachment (mid-turn) or a user record; or TaskStop's "Successfully
@@ -35,7 +38,7 @@ import (
 // seen end.
 type BackgroundTask struct {
 	ID    string `json:"id"`
-	Tool  string `json:"tool"` // Bash, Agent or Monitor
+	Tool  string `json:"tool"` // Bash, Agent, Monitor or Wakeup
 	Desc  string `json:"desc,omitempty"`
 	Since string `json:"since,omitempty"`
 	// Cmd: Desc is the command line (the call had no description), which
@@ -69,6 +72,9 @@ type bgTracker struct {
 	calls map[string]bgLaunch // tool_use id -> a call that may start a task
 	open  map[string]BackgroundTask
 	order []string
+	// wake is the pending ScheduleWakeup, if any, and wakeAt when it fires.
+	wake   *BackgroundTask
+	wakeAt time.Time
 }
 
 func newBgTracker() *bgTracker {
@@ -112,6 +118,35 @@ func (t *bgTracker) call(id, name string, input json.RawMessage) {
 			break
 		}
 	}
+}
+
+// wakeup notes a ScheduleWakeup call made at at: the session waits for it
+// until its delay runs out. A later call replaces it; one with stop ends it.
+func (t *bgTracker) wakeup(id, at string, input json.RawMessage) {
+	var in struct {
+		Stop         bool    `json:"stop"`
+		DelaySeconds float64 `json:"delaySeconds"`
+		Reason       string  `json:"reason"`
+	}
+	_ = json.Unmarshal(input, &in)
+	ts, err := time.Parse(time.RFC3339Nano, at)
+	if in.Stop || err != nil || in.DelaySeconds <= 0 {
+		t.wake = nil
+		return
+	}
+	desc := strings.TrimSpace(in.Reason)
+	if desc == "" {
+		desc = "scheduled wakeup"
+	}
+	t.wake = &BackgroundTask{ID: orID(id, "wakeup"), Tool: "Wakeup", Desc: Excerpt(desc, 120), Since: at}
+	t.wakeAt = ts.Add(time.Duration(in.DelaySeconds * float64(time.Second)))
+}
+
+func orID(id, def string) string {
+	if id == "" {
+		return def
+	}
+	return id
 }
 
 // result applies a tool_result: a launch, or TaskStop.
@@ -200,6 +235,9 @@ func (t *bgTracker) tasks(now time.Time) []BackgroundTask {
 		}
 		out = append(out, bt)
 		delete(t.open, id) // an id listed twice in order shows once
+	}
+	if t.wake != nil && now.Before(t.wakeAt) {
+		out = append(out, *t.wake)
 	}
 	return out
 }
