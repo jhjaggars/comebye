@@ -280,6 +280,13 @@ func TestPagesRetentionQuotaRate(t *testing.T) {
 	if _, _, err := r.publish(pageIn{Kind: "md", Body: []byte("x")}, pageWho{agent: "desk/w2:p1", host: "desk"}); err != nil {
 		t.Errorf("a minute later: %v", err)
 	}
+	// -test-mode lifts the limit.
+	r.noRate = true
+	for i := 0; i < pageRate+5; i++ {
+		if _, _, err := r.publish(pageIn{Kind: "md", Body: []byte("x")}, pageWho{agent: "desk/w2:p1", host: "desk"}); err != nil {
+			t.Fatalf("test mode, publish %d: %v", i, err)
+		}
+	}
 }
 
 // Every response under /p/ carries the sandbox policy: pages, errors, the

@@ -517,6 +517,8 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			if s.pages, err = openPageStore(filepath.Join(cfg.StateDir, "pages")); err != nil {
 				log.Printf("pages: %v (published pages are off)", err)
 				s.pages = nil // never overwrite the unreadable index
+			} else if cfg.TestMode {
+				s.pages.noRate = true // the browser tests publish many pages a minute from one CLI
 			}
 			if s.chats, err = openChats(filepath.Join(cfg.StateDir, "chats.json")); err != nil {
 				log.Printf("chats: %v (starting empty)", err)
