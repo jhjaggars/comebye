@@ -15,10 +15,35 @@ import (
 	"time"
 )
 
-// `comebye api run` with the built binary against a throwaway hub (its own
-// state dir, a fake herdr with the dev fixtures): the module's hub tests
-// (internal/apipy/tests/hub_check.py) and the guide's example script.
-func TestAPIRunAgainstAHub(t *testing.T) {
+// apiHub is a throwaway hub for `comebye api run` tests: the built binary,
+// its own state dir and a fake herdr with the dev fixtures.
+type apiHub struct {
+	t       *testing.T
+	root    string // the repository
+	comebye string // the built binary
+	env     []string
+}
+
+// hubAgo is a time h hours ago, as the ledger writes it.
+func hubAgo(h float64) string {
+	return time.Now().UTC().Add(-time.Duration(h * float64(time.Hour))).Format(time.RFC3339)
+}
+
+// hubEntry is a ledger entry on host devbox for the comebye repo; kv sets more fields.
+func hubEntry(i int, name, pane, status string, kv ...any) map[string]any {
+	e := map[string]any{"id": fmt.Sprintf("h%011x", 0xabc000+i), "host": "devbox", "repo": "/home/u/code/comebye", "repo_name": "comebye",
+		"branch": "feat/" + name, "kind": "claude", "agent_name": name, "agent_id": "devbox/" + pane, "pane_id": pane, "brief": "do " + name,
+		"status": status, "created_at": hubAgo(30)}
+	for i := 0; i+1 < len(kv); i += 2 {
+		e[kv[i].(string)] = kv[i+1]
+	}
+	return e
+}
+
+// startAPIHub writes the ledger (and the to-dos, when todos is not nil)
+// into a new state dir and starts the hub on it.
+func startAPIHub(t *testing.T, entries []any, todos []any) *apiHub {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("builds and starts comebye")
 	}
@@ -43,29 +68,17 @@ func TestAPIRunAgainstAHub(t *testing.T) {
 	}
 	comebye, herdr := bin("comebye", "."), bin("fake-herdr", "./tools/devserver")
 
-	// The ledger, written before the hub starts.
 	state := filepath.Join(d, "state")
 	os.MkdirAll(state, 0o700)
-	now := time.Now().UTC()
-	ago := func(h float64) string { return now.Add(-time.Duration(h * float64(time.Hour))).Format(time.RFC3339) }
-	entry := func(i int, name, pane, status string, kv ...any) map[string]any {
-		e := map[string]any{"id": fmt.Sprintf("h%011x", 0xabc000+i), "host": "devbox", "repo": "/home/u/code/comebye", "repo_name": "comebye",
-			"branch": "feat/" + name, "kind": "claude", "agent_name": name, "agent_id": "devbox/" + pane, "pane_id": pane, "brief": "do " + name,
-			"status": status, "created_at": ago(30)}
-		for i := 0; i+1 < len(kv); i += 2 {
-			e[kv[i].(string)] = kv[i+1]
+	write := func(name string, v any) {
+		b, _ := json.Marshal(v)
+		if err := os.WriteFile(filepath.Join(state, name), b, 0o600); err != nil {
+			t.Fatal(err)
 		}
-		return e
 	}
-	led, _ := json.Marshal(map[string]any{"version": 1, "marks": []any{}, "entries": []any{
-		entry(1, "fix-detail-menu", "w3:p1", "running", "progress", map[string]any{"text": "running the browser tests", "at": ago(0.05)}),
-		entry(2, "old-worker", "w7:p1", "finished", "final_report", "## Summary\nall done", "report_source", "explicit", "report_seq", 1, "report_at", ago(50), "finished_at", ago(50)),
-		entry(3, "ghost-worker", "w99:p1", "finished", "finished_at", ago(3)),
-		entry(4, "pr-watcher", "w4:p1", "running", "loop", "watch PRs", "final_report", "pass 1: quiet", "report_source", "explicit", "report_seq", 1,
-			"report_at", ago(26), "last_pass_report", "pass 9: PR #12 green", "last_pass_report_at", ago(0.5)),
-	}})
-	if err := os.WriteFile(filepath.Join(state, "ledger.json"), led, 0o600); err != nil {
-		t.Fatal(err)
+	write("ledger.json", map[string]any{"version": 1, "marks": []any{}, "entries": entries})
+	if todos != nil {
+		write("todo.json", map[string]any{"version": 1, "items": todos})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,40 +127,59 @@ func TestAPIRunAgainstAHub(t *testing.T) {
 		r.Body.Close()
 		return r.StatusCode == 200
 	})
-
 	// The CLI, as an agent with no pane of its own, aimed at the hub.
-	cli := func(stdin string, args ...string) (int, string, string) {
-		cmd := exec.Command(comebye, args...)
-		cmd.Dir = filepath.Join(root, "internal", "apipy")
-		cmd.Env = append(baseEnv, "COMEBYE_URL=http://"+addr, "COMEBYE_STATE_DIR="+state)
-		cmd.Stdin = strings.NewReader(stdin)
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		err := cmd.Run()
-		code := 0
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		} else if err != nil {
-			t.Fatal(err)
-		}
-		return code, out.String(), errb.String()
-	}
-	must := func(stdin string, args ...string) {
-		if code, out, errs := cli(stdin, args...); code != 0 {
-			t.Fatalf("comebye %v: exit %d\n%s%s", args, code, out, errs)
-		}
-	}
-	must("", "todo", "add", "Land PR #12?", "--kind", "followup")
-	must("", "prompt", "needs-input", "please check the flaky test", "--queue")
-	must("# Hello\n", "publish", "-", "--title", "API demo page", "--kind", "md")
+	return &apiHub{t: t, root: root, comebye: comebye, env: append(baseEnv, "COMEBYE_URL=http://"+addr, "COMEBYE_STATE_DIR="+state)}
+}
 
-	code, out, errs := cli("", "api", "run", "tests/hub_check.py")
+// cli runs the CLI in dir (relative to the repository) with stdin and extra env.
+func (h *apiHub) cli(dir, stdin string, env []string, args ...string) (int, string, string) {
+	cmd := exec.Command(h.comebye, args...)
+	cmd.Dir = filepath.Join(h.root, dir)
+	cmd.Env = append(append([]string{}, h.env...), env...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		h.t.Fatal(err)
+	}
+	return code, out.String(), errb.String()
+}
+
+func (h *apiHub) must(dir, stdin string, args ...string) {
+	h.t.Helper()
+	if code, out, errs := h.cli(dir, stdin, nil, args...); code != 0 {
+		h.t.Fatalf("comebye %v: exit %d\n%s%s", args, code, out, errs)
+	}
+}
+
+// `comebye api run` with the built binary against a throwaway hub: the
+// module's hub tests (internal/apipy/tests/hub_check.py) and the guide's
+// example script.
+func TestAPIRunAgainstAHub(t *testing.T) {
+	ago := hubAgo
+	h := startAPIHub(t, []any{
+		hubEntry(1, "fix-detail-menu", "w3:p1", "running", "progress", map[string]any{"text": "running the browser tests", "at": ago(0.05)}),
+		hubEntry(2, "old-worker", "w7:p1", "finished", "final_report", "## Summary\nall done", "report_source", "explicit", "report_seq", 1, "report_at", ago(50), "finished_at", ago(50)),
+		hubEntry(3, "ghost-worker", "w99:p1", "finished", "finished_at", ago(3)),
+		hubEntry(4, "pr-watcher", "w4:p1", "running", "loop", "watch PRs", "final_report", "pass 1: quiet", "report_source", "explicit", "report_seq", 1,
+			"report_at", ago(26), "last_pass_report", "pass 9: PR #12 green", "last_pass_report_at", ago(0.5)),
+	}, nil)
+	const dir = "internal/apipy"
+	h.must(dir, "", "todo", "add", "Land PR #12?", "--kind", "followup")
+	h.must(dir, "", "prompt", "needs-input", "please check the flaky test", "--queue")
+	h.must(dir, "# Hello\n", "publish", "-", "--title", "API demo page", "--kind", "md")
+
+	code, out, errs := h.cli(dir, "", nil, "api", "run", "tests/hub_check.py")
 	if code != 0 || !strings.Contains(errs, "OK") {
 		t.Fatalf("hub_check.py: exit %d\n%s%s", code, out, errs)
 	}
 	t.Logf("hub_check.py:\n%s", errs)
 
-	code, out, errs = cli(helpExample(t), "api", "run", "-")
+	code, out, errs = h.cli(dir, helpExample(t), nil, "api", "run", "-")
 	if code != 0 {
 		t.Fatalf("the guide's example: exit %d\n%s%s", code, out, errs)
 	}
