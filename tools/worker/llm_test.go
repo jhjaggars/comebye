@@ -31,14 +31,13 @@ type fakeKey struct {
 // honours the provisioning key on key routes, and enforces nothing on a
 // minted key (so the tool has to send every limit itself).
 type fakeLiteLLM struct {
-	down        bool
-	deleteFail  bool
-	keys        []*fakeKey
-	active      map[string]bool // key value -> still accepted by /v1/models
-	gens        []map[string]any
-	n           int
-	calls       []string
-	listBadAuth bool
+	down       bool
+	deleteFail bool
+	keys       []*fakeKey
+	active     map[string]bool // key value -> still accepted by /v1/models
+	gens       []map[string]any
+	n          int
+	calls      []string
 }
 
 func newFakeLLM() *fakeLiteLLM { return &fakeLiteLLM{active: map[string]bool{}} }
