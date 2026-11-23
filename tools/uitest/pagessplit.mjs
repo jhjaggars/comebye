@@ -118,9 +118,11 @@ try {
         }));
         same([r.title, r.ver, r.href, r.rows], [`Split report ${width} ${tag0}`, "v1", "#/pages/" + P2, true], "card");
         if (!/ago|now/.test(r.age)) throw new Error("no age on the card: " + r.age);
-        // The thumbnail fills in after the draw (preview, image); the rest is the Pages list's card as drawn.
+        // The thumbnail fills in after the draw (preview, image); the rest is the Pages list's card as drawn. The age ("1s ago")
+        // can tick between the panel's draw and this one, so it is left out of the comparison.
+        const noAge = (h) => h.replace(/>(updated )?(\d+\s*\w+ ago|just now)</g, ">AGE<");
         const want = await page.evaluate((id) => { const t = document.createElement("template"); t.innerHTML = pgsCardHtml(pgs.items.find((x) => x.id === id), false); return t.content.querySelector(".pgs-txt").outerHTML; }, P2);
-        same(await page.locator(`#sp-pgl a.pgs-card[data-id="${P2}"] .pgs-txt`).evaluate((x) => x.outerHTML), want, "same markup as the Pages list's card");
+        same(noAge(await page.locator(`#sp-pgl a.pgs-card[data-id="${P2}"] .pgs-txt`).evaluate((x) => x.outerHTML)), noAge(want), "same markup as the Pages list's card");
         await shot("list");
       });
 
