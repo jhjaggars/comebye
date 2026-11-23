@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,7 +39,9 @@ func signinHub(t *testing.T, mode string) (hub, peer *Server, peerHome, peerDir,
 }
 
 func TestSigninRelayThroughHub(t *testing.T) {
-	var logs bytes.Buffer
+	// Locked: other tests' goroutines (a state refresh timer) may still log
+	// while this one reads the log.
+	var logs lockedLog
 	old := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(old) })
@@ -182,4 +185,22 @@ func TestSigninRelayUserOnly(t *testing.T) {
 	if _, err := peer.signin.Get("si_x"); err == nil {
 		t.Errorf("a refused call reached the sign-in manager")
 	}
+}
+
+// lockedLog is a log capture that goroutines may write while a test reads it.
+type lockedLog struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
