@@ -77,7 +77,7 @@ func TestKubeVirtStatusStoppedShowsDisksAndArchiveHost(t *testing.T) {
 }
 
 // status --json: the instance id is the VM's uid, created comes from the VM,
-// and there is no price mode.
+// the node is the one it is pinned to, and there is no price mode.
 func TestKubeVirtStatusJSON(t *testing.T) {
 	w := newLiveWorld()
 	e := kvWorker(t, w)
@@ -99,6 +99,9 @@ func TestKubeVirtStatusJSON(t *testing.T) {
 		if got.ID != "6f1c2d3e-0000-4000-8000-00000000abcd" || got.State != stateStopped || got.Mode != "" || !got.Managed ||
 			got.CreatedAt == nil || *got.CreatedAt != "2026-11-20T10:00:00Z" || !strings.Contains(got.Type, "32Gi") {
 			t.Errorf("%q: %+v", name, got)
+		}
+		if got.Node != "rozalin.x.cc" { // a stopped VM's node is its pin, for tools/ci's heat check
+			t.Errorf("%q: node %q, want the pinned rozalin.x.cc", name, got.Node)
 		}
 		if strings.Contains(out.String(), `"mode"`) {
 			t.Errorf("a KubeVirt worker has no price mode: %s", out.String())

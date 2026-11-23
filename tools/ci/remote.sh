@@ -5,7 +5,8 @@
 #   tools/ci/remote.sh --check HOST     only the checks below (and a start); exit 0 when a run would go ahead
 #   tools/ci/remote.sh --probe HOST     one ssh, no start: prints `slots=N free=F toolchain=ok|bad` (255: ssh failed)
 #   tools/ci/remote.sh --state HOST     no ssh: prints the provisioner's state (RUNNING, STOPPED, ...; none: no such VM;
-#                                       an empty line: no answer). For the pool picker in tools/ci/prefer-vm.sh.
+#                                       an empty line: no answer), then the VM's node when the provisioner names one.
+#                                       For the pool picker in tools/ci/prefer-vm.sh.
 #   --no-wait (before HOST, or REMOTE_NO_WAIT=1): refuse when the VM is busy instead of waiting for it
 #
 #   SUITE  browser ARG...   tools/ci/browser.sh ARG...    artifacts -> ARG 3, or ${RUNNER_TEMP:-/tmp}/uitest-SUITE-SCHEME
@@ -50,6 +51,16 @@
 # Clients from before slots took REMOTE_ROOT/run.lock exclusively. A run here also holds run.lock, shared, for as
 # long as its slot: an old client's exclusive lock waits until no new run is going, and a new run waits while an
 # old one holds it, so old and new clients still take turns on the same VM.
+#
+# Temperatures: every run that is sent appends one line to a local log, ${COMEBYE_REMOTE_LOG:-${XDG_STATE_HOME:-
+# ~/.local/state}/comebye-remote/temps.log}: when it started, the VM, its node (`worker status --json`), the slot,
+# the suite, how long it took and its exit status, and the node's CPU and NVMe temperatures as it started and as its
+# suite ended (tools/ci/temps.sh), e.g.
+#   2026-11-23T18:30:00Z vm=kv1 node=N slot=1/1 suite=browser secs=312 rc=0 cpu_start=72 nvme_start=63 cpu_end=88 nvme_end=71 run=ID branch=B
+# Prometheus is $TEST_PROMETHEUS, else the `prometheus=URL` word on this VM's line of the test pool, else a
+# `prometheus=URL` line in the test pool or test-vm file (tools/ci/prefer-vm.sh). A reading never fails or holds up a
+# run: each is taken alongside other work and gives up after 2 s, leaving its fields empty, as does a run with no
+# Prometheus or no node. A run stopped with Ctrl-C is logged too, with its exit status.
 #
 # Refused before anything runs (exit 2): a HOST with no provisioner ssh config or no VM, a VM that is stopped with
 # REMOTE_START=0 or would not start, a VM whose toolchain is missing or not this checkout's pins
@@ -127,7 +138,7 @@ me="$(hostname -s 2>/dev/null | tr 'A-Z' 'a-z' | tr -c 'a-z0-9-\n' - | cut -c1-1
 run_id="${me:-host}-$(date +%Y%m%d-%H%M%S)-$$" # also the idle hold's name: [a-z0-9-], at most 63 with its prefix
 [ -n "$check" ] || echo "$host $run_id" >"$gitdir/comebye-remote.run"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/remote.XXXXXX")"
-hold=""; sent=""
+hold=""; sent=""; vm_node=""; t0pid=""; t1pid=""
 rroot='"${REMOTE_ROOT:-$HOME/.cache/comebye-remote}"'
 [ -n "${REMOTE_ROOT:-}" ] && rroot="$(q "$REMOTE_ROOT")"
 rrun="$rroot/runs/$(q "$run_id")"
@@ -136,13 +147,46 @@ rhold='"${WK_IDLE_HOLDS:-$HOME/.local/state/comebye/idle-holds}"'"/remote-test-$
 hold_cmd() { echo "h=$rhold; mkdir -p \"\${h%/*}\" && echo \"\$((\$(date +%s) + $1 * 60)) remote test run $run_id\" >\"\$h.tmp\" && mv -f \"\$h.tmp\" \"\$h\""; }
 spid=""
 cleanup() {
+  local st=$? slot=""
   [ -n "$hold" ] && kill "$hold" 2>/dev/null
   if [ -n "$spid" ]; then # stopped mid-run: give the VM 15 s to stop the suite, then drop the link
     ( sleep 15; kill "$spid" ) >/dev/null 2>&1 9>&- & local t=$!
     wait "$spid" 2>/dev/null; kill "$t" 2>/dev/null
   fi
-  [ -n "$sent" ] && ssh_vm "rm -rf $rrun; rm -f $rhold" </dev/null >/dev/null 2>&1
+  if [ -n "$sent" ]; then
+    [ -n "$t1pid" ] || temps_at end
+    slot="$(ssh_vm "cat $rrun/slot 2>/dev/null; rm -rf $rrun; rm -f $rhold" </dev/null 2>/dev/null | head -1)"
+    log_run "$st" "$slot"
+  fi
   rm -rf "$tmp"; [ -n "$check" ] || rm -f "$gitdir/comebye-remote.run"
+}
+# The temperature log (see the top). prom_url: where Prometheus is, or nothing.
+prom_url() {
+  [ -n "${TEST_PROMETHEUS:-}" ] && { echo "$TEST_PROMETHEUS"; return; }
+  local c="${XDG_CONFIG_HOME:-$HOME/.config}/comebye-worker" f
+  for f in "${TEST_POOL_CONFIG:-$c/test-pool}" "${TEST_VM_CONFIG:-$c/test-vm}"; do
+    [ -f "$f" ] || continue
+    awk -v h="$host" '
+      $1 == "vm" && $2 == h { for (i = 3; i <= NF && $i !~ /^#/; i++) if ($i ~ /^prometheus=/) { mine = substr($i, 12) } }
+      $0 ~ /^[[:space:]]*prometheus[[:space:]]*=/ && !all { l = $0; sub(/^[^=]*=[[:space:]]*/, "", l); sub(/[[:space:]]*(#.*)?$/, "", l); all = l }
+      END { if (mine != "") print mine; else if (all != "") print all }' "$f" 2>/dev/null | head -1 | grep . && return
+  done
+}
+# temps_at start|end: this VM's node's temperatures into $tmp/temps-start|end, in the background (2 s at most).
+temps_at() {
+  local p; [ -n "$vm_node" ] && p="$(prom_url)" && [ -n "$p" ] || return 0
+  "$(dirname "${BASH_SOURCE[0]}")/temps.sh" "$p" "$vm_node" >"$tmp/temps-$1" 2>/dev/null 9>&- &
+  if [ "$1" = start ]; then t0pid=$!; else t1pid=$!; fi
+}
+# log_run RC SLOT: the run's line in the log; never fails the run.
+log_run() {
+  local f="${COMEBYE_REMOTE_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/comebye-remote/temps.log}" c0="" n0="" c1="" n1=""
+  [ -n "$t0pid" ] && wait "$t0pid" 2>/dev/null; [ -n "$t1pid" ] && wait "$t1pid" 2>/dev/null
+  read -r _ c0 n0 <"$tmp/temps-start" 2>/dev/null; read -r _ c1 n1 <"$tmp/temps-end" 2>/dev/null
+  { mkdir -p "$(dirname "$f")" &&
+    echo "$started vm=$host node=$vm_node slot=$2 suite=$kind secs=$((SECONDS - t_sent)) rc=$1 cpu_start=${c0#cpu=} nvme_start=${n0#nvme=} cpu_end=${c1#cpu=} nvme_end=${n1#nvme=} run=$run_id branch=$branch" >>"$f"
+  } 2>/dev/null
+  return 0
 }
 trap cleanup EXIT
 trap 'exit 130' INT; trap 'exit 143' TERM HUP
@@ -153,13 +197,14 @@ elif command -v comebye-worker >/dev/null; then wtool=(comebye-worker)
 else wtool=(go run ./tools/worker); fi
 [ -n "${COMEBYE_WORKER_CONFIG:-}" ] && wtool+=(-config "$COMEBYE_WORKER_CONFIG")
 # The cloud's view, no ssh: RUNNING, STOPPED, ...; "none" when the provisioner has no such VM, "" when it did not answer.
+# vm_state: "STATE NODE", the node when the provisioner names one (kubevirt: where the VM runs or is pinned).
 vm_state() {
   local j; j="$("${wtool[@]}" status --json "$host" 2>/dev/null 9>&-)" || return 0
   grep -q '"name"' <<<"$j" || { echo none; return 0; }
-  sed -n 's/.*"state": *"\([^"]*\)".*/\1/p' <<<"$j" | head -1
+  echo "$(sed -n 's/.*"state": *"\([^"]*\)".*/\1/p' <<<"$j" | head -1) $(sed -n 's/.*"node": *"\([^"]*\)".*/\1/p' <<<"$j" | head -1)"
 }
-if [ -n "$state_only" ]; then vm="$(vm_state)"; echo "$vm"; exit 0; fi
-vm=RUNNING; [ -n "$probe" ] || vm="$(vm_state)" # a probe asks the VM only: the caller asked the provisioner already
+vm=RUNNING; [ -n "$probe" ] || read -r vm vm_node <<<"$(vm_state)" # a probe asks the VM only: the caller asked the provisioner already
+if [ -n "$state_only" ]; then echo "$vm${vm_node:+ $vm_node}"; exit 0; fi
 case "$vm" in
   RUNNING|"") ;;
   none) die "the provisioner (${wtool[*]}) has no VM $host" ;;
@@ -226,6 +271,7 @@ rm -f "$tmp/untracked.list"
 
 ndirty=$(git diff --name-only HEAD | wc -l); nnew=$(tar -tf "$tmp/untracked.tar" | grep -vc '/$')
 echo "remote: $host $run_id: $(git rev-parse --short HEAD) ($branch), $ndirty changed and $nnew untracked file(s)" >&2
+started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; t_sent=$SECONDS; temps_at start
 sent=1
 tar -C "$tmp" -cf - repo.bundle changes.patch untracked.tar HEAD BRANCH |
   ssh_vm "set -e; $(hold_cmd 20); root=$rroot; find \"\$root/runs\" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
@@ -307,6 +353,7 @@ if ! take; then
 fi
 who="$(printf "%s since %s" '"$(q "$run_id ($kind, $branch, from $me)")"' "$(date -u +%H:%M:%SZ)")"
 echo "$who" >"$root/slot-$slot.who"; echo "$who" >"$root/run.who" # run.who: what an old client says it waits for
+echo "$((slot + 1))/$n" >"$run/slot" # for the temperature log
 if [ "$n" -gt 1 ]; then # this slot'"'"'s share of the VM: a lower value sent from here is kept, a higher one is not
   lower() { local v="${!1:-}"; [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -le "$2" ] && [ "$v" -ge 1 ] || export "$1=$2"; }
   mb() { [[ "$1" =~ ^([0-9]+)([KMGT]?)$ ]] || return 1
@@ -341,6 +388,7 @@ spid=$!
 wait "$spid"; rc=$?
 spid=""
 kill "$hold" 2>/dev/null; hold=""
+temps_at end # alongside the artifacts' copy
 
 # ---- artifacts back
 if [ -z "$loc_art" ] && [ -n "$env_art$rem_art_arg" ]; then

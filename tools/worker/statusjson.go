@@ -35,6 +35,7 @@ type statusWorker struct {
 	CreatedAt  *string    `json:"created_at"`
 	Caps       statusCaps `json:"caps"`
 	Note       string     `json:"note,omitempty"`
+	Node       string     `json:"node,omitempty"` // kubevirt: the node it runs on or is pinned to (tools/ci reads it for the heat check)
 }
 
 type statusDoc struct {
@@ -53,7 +54,7 @@ func tsPtr(t time.Time) *string {
 
 func workerStatus(i Inst) statusWorker {
 	w := statusWorker{Name: i.Name, ID: i.ID, State: i.State, Type: i.Type, Mode: i.Mode, Managed: i.Managed,
-		LaunchedAt: tsPtr(i.Launched), LastStopAt: tsPtr(i.Stopped), CreatedAt: tsPtr(i.Created), Note: i.Note}
+		LaunchedAt: tsPtr(i.Launched), LastStopAt: tsPtr(i.Stopped), CreatedAt: tsPtr(i.Created), Note: i.Note, Node: i.Node}
 	if v, err := strconv.ParseFloat(i.Tags[tagBudgetCap], 64); err == nil {
 		w.Caps.BudgetCapUSD = &v
 	}

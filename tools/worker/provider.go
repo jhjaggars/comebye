@@ -55,6 +55,7 @@ type Inst struct {
 	IP       string    // external IPv4
 	Managed  bool      // carries managed-by=comebye-worker
 	Note     string    // extra status line, e.g. "spot, reclaimed by AWS"
+	Node     string    // the cluster node it runs on, or is pinned to (kubevirt only; the node's full name)
 	Created  time.Time // when the VM was first created (not its latest boot); zero if unknown
 
 	// Read by status --json; zero when the cloud does not say (only aws fills them).
