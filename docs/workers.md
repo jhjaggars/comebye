@@ -664,14 +664,14 @@ provider=kubevirt
 ts_allow_login=you@example.com
 hub_url=https://hub.your-tailnet.ts.net
 hub_peer_url=https://hub.your-tailnet.ts.net
-# --- defaults, shown for reference (the node names are placeholders: set your own)
+# --- defaults, shown for reference (the node keys have none: the names are examples)
 # kube_context=                  # kubectl context; empty = the current one
 # kube_namespace=comebye-workers
 # kube_service_account=comebye-worker-tool  # the scoped account the prerequisites create
 # kube_node_prefer=node-a,node-b        # the only nodes a VM may go to, in order; empty = any but kube_node_avoid
-# kube_node_avoid=node-c,node-d         # never
+# kube_node_avoid=node-c,node-d         # never; empty by default
 # kube_floor_gib=12                     # free memory a node keeps after the VM
-# kube_node_floor=node-b=8              # NODE=GIB,... per-node floors (replaces the default list)
+# kube_node_floor=node-b=8              # NODE=GIB,... per-node floors; none by default (kube_floor_gib applies)
 # kube_storage_class=longhorn
 # kube_data_storage_class=              # the data disk's class; empty = kube_storage_class (the boot disk always uses that)
 # vm_image_dv=debian-13-golden          # a DataVolume in the namespace, cloned per VM ...

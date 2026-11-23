@@ -203,10 +203,7 @@ func defaults() Config {
 
 		KubeNamespace:    "comebye-workers",
 		KubeServiceAcct:  "comebye-worker-tool",
-		KubeNodePrefer:   []string{"rozalin", "zetta"},
-		KubeNodeAvoid:    []string{"adell", "etna"},
 		KubeFloorGiB:     12,
-		KubeNodeFloors:   map[string]int{"zetta": 8},
 		KubeStorageClass: "longhorn",
 		VMCPU:            4,
 		VMCPURequest:     2,

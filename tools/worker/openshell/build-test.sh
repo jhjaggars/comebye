@@ -1,12 +1,14 @@
 #!/bin/bash
-# build-test.sh COMMIT [--push]: a NON-release image, registry.jaggars.cc/comebye-sandbox:test-<short>,
+# build-test.sh COMMIT [--push]: a NON-release image, $SBX_REGISTRY/comebye-sandbox:test-<short>,
 # = the current release image with comebye replaced by a binary built from COMMIT, and this
 # directory's init. For testing unreleased comebye changes in a sandbox; never used for workers
-# you keep. Needs go and podman.
+# you keep. Needs go and podman. SBX_REGISTRY (required) is your image registry, e.g.
+# registry.example.com; SBX_BASE_IMAGE replaces the base (default the v0.5.12 release image there).
 set -euo pipefail
+[ -n "${SBX_REGISTRY:-}" ] || { echo "SBX_REGISTRY is not set: set it to your image registry, e.g. SBX_REGISTRY=registry.example.com (the image is \$SBX_REGISTRY/comebye-sandbox:test-COMMIT)" >&2; exit 2; }
 commit=$(git rev-parse --verify "$1^{commit}"); short=${commit:0:7}; push=${2:-}
-base=${SBX_BASE_IMAGE:-registry.jaggars.cc/comebye-sandbox:v0.5.12}
-img=registry.jaggars.cc/comebye-sandbox:test-$short
+base=${SBX_BASE_IMAGE:-$SBX_REGISTRY/comebye-sandbox:v0.5.12}
+img=$SBX_REGISTRY/comebye-sandbox:test-$short
 here=$(cd "$(dirname "$0")" && pwd); ctx=$(mktemp -d); trap 'rm -rf "$ctx"' EXIT
 git archive "$commit" | tar -x -C "$ctx" --one-top-level=src
 (cd "$ctx/src" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=test-$short" -o "$ctx/comebye" .)

@@ -158,7 +158,7 @@ func TestOpenShellConfigFile(t *testing.T) {
 	os.WriteFile(p, []byte(`provider=openshell
 openshell_gateway=homelab
 openshell_workspace=openshell-sandboxes
-sandbox_image=registry.jaggars.cc/comebye-sandbox:{version}
+sandbox_image=registry.example.com/comebye-sandbox:{version}
 sandbox_policy=/etc/sandbox-policy.yaml
 sandbox_providers=anthropic-claude, github-push
 sandbox_cpu=2

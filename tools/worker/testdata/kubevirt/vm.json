@@ -109,7 +109,7 @@
           }
         ],
         "nodeSelector": {
-          "kubernetes.io/hostname": "rozalin.x.cc"
+          "kubernetes.io/hostname": "node-a.x.cc"
         },
         "terminationGracePeriodSeconds": 120,
         "volumes": [
