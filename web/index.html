@@ -492,7 +492,6 @@
     .cpb-out { display: block; margin: 0 0 var(--sp-2); }
     #btn-copy-screen { align-self: flex-start; margin: var(--sp-4) 0 0; padding-left: 0; }
     #btn-copy-screen[hidden] { display: none; }
-    .tool-cp { display: flex; flex-wrap: wrap; margin: 0 0 var(--sp-2); }
     .hc-cp { margin: var(--sp-2) 0 0; }
     .td-cprow { margin: var(--sp-4) 0 0 calc(var(--sp-10) * -1); }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -832,7 +831,7 @@
     #answer .opt.chosen { border-color: var(--blue); border-left-color: var(--blue); background: color-mix(in srgb, var(--blue) 14%, var(--panel)); }
     #answer .opt.submit.chosen, #answer .opt.cancel.chosen { background: color-mix(in srgb, currentColor 10%, var(--panel)); }
     #answer .opt.locked:not(.chosen) { opacity: 0.55; cursor: default; }
-    #answer .opt.pend::after, .pend-dot::after {
+    #answer .opt.pend::after {
       content: ""; width: 12px; height: 12px; box-sizing: border-box; align-self: center; margin-left: auto; flex: none;
       border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; opacity: 0.7; animation: spin 0.8s linear infinite;
     }
@@ -841,7 +840,7 @@
     @keyframes flash { from { filter: brightness(1.6); } to { filter: none; } }
     .td-chip.st-sending { opacity: 0.8; }
     .td-item.sending .td-q { opacity: 0.75; }
-    @media (prefers-reduced-motion: reduce) { #answer .opt.pend::after, .pend-dot::after { animation: none; } .flash { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { #answer .opt.pend::after { animation: none; } .flash { animation: none; } }
     #answer .opt.cur { border-left-color: var(--blue); }
     #answer .opt.ro { cursor: default; min-height: 0; }
     #answer .opt-label { font-weight: 600; font-size: var(--fs-16); flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
@@ -1695,12 +1694,9 @@
     .rel-changes ul { margin: var(--sp-4) 0 0; padding-left: 18px; }
     .rel-changes li { overflow-wrap: anywhere; }
     .rel-changes pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: var(--sp-4) 0 0; font-size: var(--fs-12); }
-    .rel-sub { font-size: var(--fs-12); font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-top: var(--sp-4); }
-    .rel-hosts, .rel-deps { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-10); }
-    .rel-host, .rel-dephost { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-10); padding: var(--sp-8) var(--sp-10); font-size: var(--fs-14); }
-    .rel-host + .rel-host, .rel-dephost + .rel-dephost { border-top: 1px solid var(--border); }
+    .rel-host { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-10); padding: var(--sp-8) var(--sp-10); font-size: var(--fs-14); }
+    .rel-host + .rel-host { border-top: 1px solid var(--border); }
     .rel-hn { font-weight: 600; }
-    .rel-hv { color: var(--muted); font-variant-numeric: tabular-nums; }
     .rel-hs { flex: 1 1 14ch; min-width: 0; color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .rel-ha { margin-left: auto; }
     .rel-confirm { padding: var(--sp-10); border-radius: var(--r-10); border: 1px solid color-mix(in srgb, var(--orange) 50%, var(--border)); background: color-mix(in srgb, var(--orange) 8%, var(--panel)); font-size: var(--fs-14); display: flex; flex-direction: column; gap: var(--sp-8); overflow-wrap: anywhere; }
@@ -2418,7 +2414,6 @@
     .pr-kv dt { color: var(--muted); } .pr-kv dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
     .pr-kv .warn, .pr-note.warn { color: var(--orange); }
     .pr-note { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
-    .pr-chips { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
     /* Sign an agent in from a host's page (renderPeerView). Orange needs the user, green is ok, red is an error. */
     .pr-agents { display: flex; flex-direction: column; gap: var(--sp-8); }
     .pr-agent { display: flex; align-items: center; gap: var(--sp-10); padding: var(--sp-10) var(--sp-12); min-height: var(--hit-44); border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel); min-width: 0; }
@@ -2511,7 +2506,6 @@
     .pz-row:hover { background: var(--panel2); } .pz-row:focus-visible { outline-offset: -2px; }
     .pz-type { font-weight: 600; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-8); align-items: baseline; }
     .pz-tag { font-weight: 400; font-size: var(--fs-12); padding: 1px var(--sp-8); border-radius: var(--r-8); border: 1px solid var(--border); color: var(--muted); }
-    .pz-tag.arm { border-color: var(--orange); color: var(--orange); }
     .pz-cell { display: block; text-align: right; font-variant-numeric: tabular-nums; min-width: 0; }
     .pz-lb { display: none; }
     .pz-detail { padding: var(--sp-8) var(--sp-12) var(--sp-12); display: flex; flex-direction: column; gap: var(--sp-8); border-top: 1px solid var(--border); }
@@ -3176,7 +3170,7 @@
 
   <!-- Status page (desktop only): generated from the ledger, the to-do list and the agents -->
   <section id="p-status" class="page" aria-label="Status">
-    <header><h2>Status</h2><span class="pg-count" id="ps-count"></span></header>
+    <header><h2>Status</h2></header>
     <div class="page-body" id="ps-body"></div>
   </section>
 

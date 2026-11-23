@@ -10350,7 +10350,6 @@ function sxCard(p) {
 
 // The Appearance section: device-level choices kept in localStorage (web/themes.js), applied to <html> before
 // first paint. Reading width is four presets; the strip draws the column to scale on this window's conversation pane.
-function sxColId(id) { return "sx-col-" + (id || "default"); }
 function sxAppearance() {
   const cur = CT.colChoice();
   const pane = Math.max(1, Math.round($("settings").getBoundingClientRect().width || window.innerWidth)); // the screen is the conversation pane
