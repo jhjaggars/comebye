@@ -62,7 +62,7 @@ for (const width of (process.env.WIDTHS || "1280,390").split(",").map(Number)) {
 
     await check(`${tag}: the panel has a Status tab and shows the hub's Status beside the chat`, async () => {
       await openAgent(A);
-      same((await page.locator("#sp .sp-tab").allInnerTexts()).map((t) => t.trim()), ["Doc", "Diff", "Status"], "tabs");
+      same((await page.locator("#sp .sp-tab").allInnerTexts()).map((t) => t.trim()), ["Doc", "Diff", "Status", "Pages"], "tabs");
       await page.click("#sp-btn");
       await page.click("#sp-tab-status");
       await page.waitForSelector("#sp-st .st", { state: "visible" });
@@ -155,10 +155,14 @@ for (const width of (process.env.WIDTHS || "1280,390").split(",").map(Number)) {
       same(await page.locator("#sp-st").count(), 0, "Status gone from the body");
       await page.focus("#sp-tab-doc");
       await page.keyboard.press("ArrowLeft");
-      same((await panel()).tab, "status", "ArrowLeft from Doc wraps to Status");
+      same((await panel()).tab, "pages", "ArrowLeft from Doc wraps to Pages (the fourth tab)");
+      await page.keyboard.press("ArrowLeft");
+      same((await panel()).tab, "status", "ArrowLeft from Pages is Status");
       await page.waitForSelector("#sp-st .st", { state: "visible" });
       await page.keyboard.press("ArrowRight");
-      same((await panel()).tab, "doc", "ArrowRight from Status wraps to Doc");
+      same((await panel()).tab, "pages", "ArrowRight from Status is Pages");
+      await page.keyboard.press("ArrowRight");
+      same((await panel()).tab, "doc", "ArrowRight from Pages wraps to Doc");
       await page.click("#sp-tab-status");
     });
 
