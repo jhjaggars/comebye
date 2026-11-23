@@ -1540,12 +1540,7 @@ for (const width of [1280, 390]) {
       await page.waitForSelector("#detail", { state: "visible" });
       if (!/#\/agent\/w1(:|%3A)p1/.test(await page.evaluate(() => location.hash))) throw new Error("hash " + await page.evaluate(() => location.hash));
       // The gone one: a tooltip says so and the click lands on that handoff's transcript.
-      // Back to where the card is: the Status page on a desktop, the list on a phone. (#/status on a phone slides the Status
-      // screen over the list and its card: the click only landed when it beat the 0.28 s slide, and failed with
-      // "#st-screen.anim.open intercepts pointer events" when it did not.)
-      await page.goto(base + (width >= 1100 ? "/#/status" : "/"), { waitUntil: "load" });
-      await page.waitForSelector("#plans .plan-title", { state: "visible" });
-      if (!(await page.locator("#plans a.pm.gone").isVisible())) await page.locator("#plans .plan-title").click(); // a reload shows it closed
+      await page.goto(base + "/#/status", { waitUntil: "load" });
       await page.waitForSelector("#plans a.pm.gone", { state: "visible" });
       const tip = await page.locator("#plans a.pm.gone").getAttribute("title");
       if (!/gone/.test(tip)) throw new Error("tooltip " + tip);
