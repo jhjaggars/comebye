@@ -63,12 +63,35 @@ h="\${3:-\$2}"; [ "\$1" = start ] && h="\$2"
 if [ "\$h" = kv1 ]; then st="$root/vmstate"; else st="$root/vmstate-\$h"; fi
 case "\$1" in
   status) [ "\$2" = --json ] && [ -f "\$st" ] || { echo '{"v":1,"provider":"kubevirt","workers":[]}'; exit 0; }
-          echo "{\"v\":1,\"provider\":\"kubevirt\",\"workers\":[{\"name\":\"\$h\",\"state\":\"\$(cat "\$st")\"}]}" ;;
+          n=""; [ -f "$root/node-\$h" ] && n=",\"node\":\"\$(cat "$root/node-\$h")\""
+          echo "{\"v\":1,\"provider\":\"kubevirt\",\"workers\":[{\"name\":\"\$h\",\"state\":\"\$(cat "\$st")\"\$n}]}" ;;
   start)  [ -f "\$st" ] || exit 2; [ -n "\${FAKE_START_FAIL:-}" ] && { echo "start: the cluster said no" >&2; exit 1; }
           sleep 1; echo RUNNING >"\$st"; echo "\$h is up, comebye v1" ;;
   *) exit 2 ;;
 esac
 EOF
+# The fake Prometheus, as curl: answers http://fake-prom/api/v1/query with $root/prom.json (absent: connection
+# refused); with $root/prom-slow it hangs. Each call's query goes to $root/prom.log.
+cat >"$bin/curl" <<EOF
+#!/bin/bash
+q=""; u=""
+while [ \$# -gt 0 ]; do case "\$1" in --data-urlencode) q="\$2"; shift 2 ;; -m) shift 2 ;; -*) shift ;; *) u="\$1"; shift ;; esac; done
+printf '%s %s\n' "\$u" "\$q" >>"$root/prom.log"
+[ "\$u" = http://fake-prom/api/v1/query ] || { echo "fake curl: \$u" >&2; exit 7; }
+[ -e "$root/prom-slow" ] && sleep 20
+[ -f "$root/prom.json" ] || exit 7
+cat "$root/prom.json"
+EOF
+chmod +x "$bin/curl"
+# prom_json NODE CPU NVME...: Prometheus' answer to temps.sh's query, as the real one looks.
+prom_json() {
+  local r="" t=1795475468.956
+  while [ $# -ge 3 ]; do
+    r="$r${r:+,}{\"metric\":{\"node\":\"$1\",\"t\":\"nvme\"},\"value\":[$t,\"$3\"]},{\"metric\":{\"node\":\"$1\",\"t\":\"cpu\"},\"value\":[$t,\"$2\"]}"
+    shift 3
+  done
+  echo "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":[$r]}}"
+}
 # holdports.py BASE RELEASE OUT: listen on BASE+each offset in $PORT_OFFSETS (what run.sh uses), write "bound ..." or
 # "clash PORT" to OUT, and keep them until the file RELEASE appears (30 s at most). Exit 98 on a clash.
 cat >"$root/holdports.py" <<'EOF'
@@ -103,7 +126,7 @@ pins 1.2.3 4.5.6 7.8.9.10
 # ---- the caller's worktree
 cd "$caller" && git init -q && git remote add origin "https://someone:tok3n-SECRET@example.com/x.git" || exit 1
 mkdir -p tools/ci tools/worker
-cp "$here/remote.sh" tools/ci/remote.sh; cp "$here/prefer-vm.sh" tools/ci/prefer-vm.sh
+cp "$here/remote.sh" tools/ci/remote.sh; cp "$here/prefer-vm.sh" tools/ci/prefer-vm.sh; cp "$here/temps.sh" tools/ci/temps.sh
 cat >tools/worker/testrunner.go <<'EOF'
 var testPins = testRunnerPins{
 	GoVersion:     "1.2.3",
@@ -136,6 +159,7 @@ echo "where=\$([ -n "\${COMEBYE_ON_VM:-}" ] && echo vm || echo local)" >"\$out/w
   for f in deleted.txt ignored.log secret.pem api-token.txt .env; do [ -e "\$f" ] && echo "present=\$f"; done
 } >"\$out/record.txt"
 echo shot >"\$out/failures/check.png"
+[ -f "$root/prom-end.json" ] && cp "$root/prom-end.json" "$root/prom.json" # the temperatures as the suite ends
 if [ -e wait.txt ]; then
   echo \$\$ >"$root/suite.pid"; touch "$root/started"
   if [ -e "$root/bind" ]; then # hold every port run.sh would listen on with this PORT (holdports.py), until released
@@ -369,6 +393,7 @@ sleep 6 # past the watchdog's TERM-then-KILL, were it to fire on its own
 check "a running suite is left running while ssh is up" kill -0 "${suite:-0}"
 kill -TERM "$first"; wait "$first"; rc=$?
 check "stopped mid-run: exits 143 (got $rc)" [ $rc = 143 ]
+check "...and logged, with its exit status" grep -q ' vm=kv1 .* suite=browser secs=[0-9]* rc=143 ' <<<"$(tail -1 "$root/nope/comebye-remote/temps.log")"
 check "...and the suite on the VM is gone" bash -c "! kill -0 '${suite:-0}' 2>/dev/null"
 check "...and its run folder too" bash -c "[ -z \"\$(ls -A '$vm/.cache/comebye-remote/runs')\" ]"
 touch "$root/release"
@@ -554,4 +579,76 @@ printf 'vm kv-a\n' >"$TEST_POOL_CONFIG"
 pool_run
 check "a pool of one: as test-vm (rc=$rc)" bash -c "[ '$rc:$(went)' = 0:kv-a ] && grep -qx 'tests: running browser on the test VM kv-a (TEST_VM=local runs it here)' <<<\"\$1\"" _ "$out"
 rm -f "$TEST_POOL_CONFIG" "$TEST_VM_CONFIG"
+
+# ---- temperatures (tools/ci/temps.sh): the heat check in the pool, and the log of every run
+tlog="$root/nope/comebye-remote/temps.log"
+prom_json etna.x 72 39 rozalin.x 73.4 62.5 >"$root/prom.json"
+check "temps.sh: one line per node, whole degrees" [ "$("$here/temps.sh" http://fake-prom | tr '\n' ';')" = "etna.x cpu=72 nvme=39;rozalin.x cpu=73 nvme=63;" ]
+check "temps.sh NODE: that node only" [ "$("$here/temps.sh" http://fake-prom rozalin.x)" = "rozalin.x cpu=73 nvme=63" ]
+check "temps.sh: the query joins both exporters to their node by pod (kube_pod_info)" \
+  bash -c "grep -q 'smartctl_device_temperature{temperature_type=\"current\",device=~\"nvme.\*\"} \* on (pod) group_left (node)' '$root/prom.log' && grep -q 'chip_name=~\"coretemp|k10temp\"} \* on (pod) group_left (node) max by (pod, node) (kube_pod_info{namespace=\"monitoring\"})' '$root/prom.log'"
+touch "$root/prom-slow"; t0=$SECONDS; o="$("$here/temps.sh" http://fake-prom)"; rc=$?
+took=$((SECONDS - t0))
+check "temps.sh: Prometheus hangs: nothing, exit 0, within 3 s ($took s)" [ "$rc:$o:$((took <= 3))" = "0::1" ]
+rm -f "$root/prom-slow"
+check "temps.sh: Prometheus down: nothing, exit 0" [ "$(mv "$root/prom.json" "$root/p.j"; "$here/temps.sh" http://fake-prom; echo "rc=$?"; mv "$root/p.j" "$root/prom.json")" = "rc=0" ]
+echo rozalin.x >"$root/node-kv1"
+check "--state: the state, then the VM's node" [ "$("$r" --state kv1 2>/dev/null)" = "RUNNING rozalin.x" ]
+
+# the heat check: kv-a has the most free slots, but its node is hot
+mkvm kv-a 2 RUNNING; mkvm kv-b 1 RUNNING; mkvm kv-c 1 STOPPED; rm -f "$root/down-kv-a"
+printf 'go=1.2.3\nnode=4.5.6\nchrome=7.8.9.10\n' >"$root/vm-kv-b/etc/test-runner"
+echo na.x >"$root/node-kv-a"; echo nb.x >"$root/node-kv-b"; echo nc.x >"$root/node-kv-c"
+prom_json na.x 90 70 nb.x 60 50 nc.x 95 80 >"$root/prom.json"
+cat >"$TEST_POOL_CONFIG" <<EOF
+prometheus=http://fake-prom
+vm kv-a
+vm kv-b
+vm kv-c
+EOF
+: >"$root/prom.log"; : >"$root/worker.log"
+pool_run
+check "heat: a VM whose node's NVMe is at or over 68 is skipped; the run goes to the next (rc=$rc)" [ "$rc:$(went)" = 0:kv-b ]
+check "...saying so in one line" [ "$(grep -c '^tests: skipping test VM kv-a: its node na.x has its NVMe at 70°C (nvme_max_c=68)$' <<<"$out")" = 1 ]
+check "...one Prometheus query for the whole pool (and the run's own two for the log)" [ "$(grep -c 'smartctl' "$root/prom.log")" = 3 ]
+check "...and the run's log line has kv-b's node and its temperatures" grep -q " vm=kv-b node=nb.x slot=1/1 suite=browser secs=[0-9]* rc=0 cpu_start=60 nvme_start=50 cpu_end=60 nvme_end=50 run=" <<<"$(tail -1 "$tlog")"
+sed -i 's/^vm kv-a$/vm kv-a nvme_max_c=75/' "$TEST_POOL_CONFIG"
+pool_run
+check "heat: a VM's own nvme_max_c (75) lets it through (rc=$rc)" [ "$rc:$(went)" = 0:kv-a ]
+sed -i 's/^vm kv-a nvme_max_c=75$/vm kv-a/; 1a nvme_max_c=72' "$TEST_POOL_CONFIG"
+pool_run
+check "heat: a pool-wide nvme_max_c line (72) too (rc=$rc)" [ "$rc:$(went)" = 0:kv-a ]
+sed -i '/^nvme_max_c=/d' "$TEST_POOL_CONFIG"
+mv "$root/prom.json" "$root/p.j"
+pool_run
+check "heat: Prometheus does not answer: nothing skipped (rc=$rc)" [ "$rc:$(went):$(grep -c skipping <<<"$out")" = 0:kv-a:0 ]
+touch "$root/prom-slow"; t0=$SECONDS
+pool_run; took=$((SECONDS - t0))
+check "heat: Prometheus hangs: nothing skipped, and it costs at most its 2 s twice ($took s)" [ "$rc:$(went):$((took <= 12))" = 0:kv-a:1 ]
+check "...the run is logged with its temperatures empty" grep -q " vm=kv-a node=na.x slot=1/2 suite=browser secs=[0-9]* rc=0 cpu_start= nvme_start= cpu_end= nvme_end= run=" <<<"$(tail -1 "$tlog")"
+rm -f "$root/prom-slow"; mv "$root/p.j" "$root/prom.json"
+hold kv-b 0
+: >"$root/worker.log"
+out="$(TEST_VM_NO_WAIT=1 timeout 60 "$bw" rest 2>&1)"
+check "heat: a hot stopped VM is not started either" bash -c "! grep -q '^start' '$root/worker.log' && grep -q 'skipping test VM kv-c: its node nc.x' <<<\"\$1\"" _ "$out"
+touch "$root/rel-kv-b-0"; wait
+rm -f "$TEST_POOL_CONFIG"
+
+# the log of a run on kv1 (test-vm, prometheus= there), temperatures as it started and as its suite ended
+printf 'host=kv1\nprometheus = http://fake-prom   # for the log\n' >"$TEST_VM_CONFIG"
+prom_json rozalin.x 61 60 >"$root/prom.json"; prom_json rozalin.x 88 71 >"$root/prom-end.json"
+echo 3 >rc.txt
+rm -rf "$RUNNER_TEMP"; out="$(timeout 60 "$bw" rest 2>&1)"; rc=$?
+check "the log: one line per run, start and end temperatures, slot, suite, VM, node, time and status (rc=$rc)" \
+  grep -Eq '^20[0-9-]+T[0-9:]+Z vm=kv1 node=rozalin.x slot=1/1 suite=browser secs=[0-9]+ rc=3 cpu_start=61 nvme_start=60 cpu_end=88 nvme_end=71 run=[a-z0-9-]+ branch=feat/x$' <<<"$(tail -1 "$tlog")"
+rm -f "$root/prom-end.json"
+printf 'host=kv1\n' >"$TEST_VM_CONFIG"; echo 0 >rc.txt
+rm -rf "$RUNNER_TEMP"; out="$(timeout 60 "$bw" rest 2>&1)"
+check "no Prometheus: still logged, temperatures empty" grep -q ' vm=kv1 node=rozalin.x slot=1/1 suite=browser secs=[0-9]* rc=0 cpu_start= nvme_start= cpu_end= nvme_end= ' <<<"$(tail -1 "$tlog")"
+rm -f "$root/node-kv1"
+out="$("$r" kv1 browser rest 2>&1)"
+check "no node from the provisioner: logged, node and temperatures empty" grep -q ' vm=kv1 node= slot=1/1 ' <<<"$(tail -1 "$tlog")"
+n0=$(wc -l <"$tlog"); "$r" --probe kv1 >/dev/null 2>&1; "$r" --check kv1 >/dev/null 2>&1; "$r" --state kv1 >/dev/null 2>&1
+check "--probe, --check and --state log nothing" [ "$(wc -l <"$tlog")" = "$n0" ]
+rm -f "$TEST_VM_CONFIG" "$root/prom.json"
 exit $fail

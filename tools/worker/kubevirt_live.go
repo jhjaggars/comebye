@@ -35,6 +35,7 @@ type vmDoc struct {
 					CPU       struct{ Cores int }
 					Resources struct{ Limits map[string]string }
 				}
+				NodeSelector map[string]string
 			}
 		}
 	}
@@ -56,6 +57,7 @@ func (d vmDoc) inst() Inst {
 		Type:    fmt.Sprintf("%d vCPU, %s", d.Spec.Template.Spec.Domain.CPU.Cores, d.Spec.Template.Spec.Domain.Resources.Limits["memory"]),
 		Managed: d.Metadata.Labels[labelKey] == labelVal,
 		Created: d.Metadata.CreationTimestamp,
+		Node:    d.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"], // the gate pins every VM it places
 	}
 }
 
@@ -125,6 +127,9 @@ func (p *kubevirtProv) Describe(ctx context.Context, name string) (*Inst, error)
 					i.IP = v.Status.Interfaces[0].IPAddress
 				}
 				i.Note = "on node " + shortNode(v.Status.NodeName)
+				if v.Status.NodeName != "" {
+					i.Node = v.Status.NodeName
+				}
 			}
 		}
 	}

@@ -17,10 +17,16 @@
 #
 # A pool of test VMs, when this machine has one, comes before test-vm:
 #   ${TEST_POOL_CONFIG:-${XDG_CONFIG_HOME:-~/.config}/comebye-worker/test-pool}
-#     # tried in this order; one line per VM: vm NAME [PROVISIONER_CONFIG] [remote_root=DIR]
+#     # tried in this order; one line per VM: vm NAME [PROVISIONER_CONFIG] [remote_root=DIR] [nvme_max_c=C] [prometheus=URL]
 #     vm kv-a ~/.config/comebye-worker/kv-a.conf remote_root=/data/comebye-remote
-#     vm kv1  ~/.config/comebye-worker/kubevirt.conf
-# Other KEY=VALUE words and lines are left for later (the heat check). With two or more VMs, a run asks each one's
+#     vm kv1  ~/.config/comebye-worker/kubevirt.conf nvme_max_c=65
+#     prometheus=https://prometheus.example   # the heat check's, for every VM without its own
+#     nvme_max_c=68                           # the default for every VM without its own (68 when not given)
+# Other KEY=VALUE words are ignored. Heat check: with a Prometheus, one query per pool (tools/ci/temps.sh, alongside the
+# state calls below, 2 s at most) reads every cluster node's NVMe temperature, and a VM whose node (its `node` in
+# `worker status --json`) is at or over its nvme_max_c is skipped, for a free slot and for a start alike, with one
+# line saying so. When Prometheus does not answer, or has no reading for a VM's node, nothing is skipped.
+# With two or more VMs, a run asks each one's
 # state from its provisioner (`remote.sh --state`, no ssh), all at once, then probes the running ones (`remote.sh
 # --probe`, one ssh each) and goes to the one with the most free slots; a tie goes to the one listed first. When every
 # running VM is full, the first stopped one in the list is started (`remote.sh --check`) and the run goes there. When
@@ -51,17 +57,24 @@ prefer_vm() {
   local pool="${TEST_POOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/comebye-worker/test-pool}"
   local host="${TEST_VM:-}" wcfg="" root="" k v i
   [ "$host" = local ] && return 0
-  # The pool: _pvm_names, _pvm_confs and _pvm_roots, in order.
-  _pvm_names=(); _pvm_confs=(); _pvm_roots=()
+  # The pool: _pvm_names, _pvm_confs, _pvm_roots, _pvm_proms and _pvm_maxes, in order; the pool-wide lines in
+  # _pvm_prom and _pvm_max.
+  _pvm_names=(); _pvm_confs=(); _pvm_roots=(); _pvm_proms=(); _pvm_maxes=(); _pvm_prom=""; _pvm_max=68
   if [ -f "$pool" ]; then
     local w words
     while read -r -a words; do
+      case "${words[0]:-}" in
+        prometheus=*) _pvm_prom="${words[0]#prometheus=}"; continue ;;
+        nvme_max_c=*) [[ "${words[0]#nvme_max_c=}" =~ ^[0-9]+$ ]] && _pvm_max="${words[0]#nvme_max_c=}"; continue ;;
+      esac
       [ "${words[0]:-}" = vm ] && [[ "${words[1]:-}" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || continue
-      _pvm_names+=("${words[1]}"); _pvm_confs+=(""); _pvm_roots+=("")
+      _pvm_names+=("${words[1]}"); _pvm_confs+=(""); _pvm_roots+=(""); _pvm_proms+=(""); _pvm_maxes+=("")
       for w in "${words[@]:2}"; do
         case "$w" in
           \#*) break ;;
           remote_root=*) _pvm_roots[-1]="${w#remote_root=}" ;;
+          prometheus=*) _pvm_proms[-1]="${w#prometheus=}" ;;
+          nvme_max_c=*) [[ "${w#nvme_max_c=}" =~ ^[0-9]+$ ]] && _pvm_maxes[-1]="${w#nvme_max_c=}" ;;
           *=*) ;;
           *) _pvm_confs[-1]="${w/#\~/$HOME}" ;;
         esac
@@ -145,11 +158,26 @@ _pvm_pool() {
     echo "tests: running $suite on the test VM ${_pvm_names[$j]}: $said (pool: $p; TEST_VM=local runs it here)" >&2
     exec "$remote" "${_pvm_names[$j]}" "$suite" "$@"
   }
-  # The provisioners' answers, then a probe of each running VM (or one that did not answer: ssh says).
+  # The nodes' temperatures, one query per Prometheus (one for the whole pool, usually), alongside the provisioners'
+  # answers; then a probe of each running VM (or one whose provisioner did not answer: ssh says).
+  local urls=() u k node nv mx
+  for i in "${!_pvm_names[@]}"; do
+    u="${_pvm_proms[$i]:-$_pvm_prom}"; [ -n "$u" ] || continue
+    case " ${urls[*]} " in *" $u "*) ;; *) urls+=("$u") ;; esac
+  done
+  for k in "${!urls[@]}"; do "$(dirname "$remote")/temps.sh" "${urls[$k]}" >"$d/temps-$k" 2>/dev/null & done
   for i in "${!_pvm_names[@]}"; do ( _pvm_env "$i"; "$remote" --state "${_pvm_names[$i]}" >"$d/$i.state" 2>/dev/null || echo none >"$d/$i.state" ) & done; wait
   local up=() down=() off=""
   for i in "${!_pvm_names[@]}"; do
-    st="$(head -1 "$d/$i.state")"
+    read -r st node <"$d/$i.state"
+    u="${_pvm_proms[$i]:-$_pvm_prom}"; nv=""; mx="${_pvm_maxes[$i]:-$_pvm_max}"
+    if [ -n "$u" ] && [ -n "$node" ]; then
+      for k in "${!urls[@]}"; do [ "${urls[$k]}" = "$u" ] && nv="$(awk -v n="$node" '$1 == n { sub(/^nvme=/, "", $3); print $3 }' "$d/temps-$k")"; done
+    fi
+    if [ -n "$nv" ] && [ "$nv" -ge "$mx" ] 2>/dev/null; then
+      echo "tests: skipping test VM ${_pvm_names[$i]}: its node $node has its NVMe at ${nv}°C (nvme_max_c=$mx)" >&2
+      sum="$sum${sum:+, }${_pvm_names[$i]} hot"; continue
+    fi
     case "$st" in
       RUNNING|"") up+=("$i") ;;
       STOPPED|TERMINATED|SUSPENDED|Stopped|Paused) down+=("$i"); off="$off${off:+, }${_pvm_names[$i]} stopped" ;;

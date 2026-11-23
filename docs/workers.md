@@ -567,6 +567,31 @@ this checkout's pins is passed over, and with none left the run stays here with 
 saying why. A pool of one VM behaves like `test-vm`, and `TEST_VM=NAME` takes that VM with its
 pool line.
 
+**Heat check.** A `prometheus=URL` line in the pool (or a `prometheus=` word on one VM's line)
+turns it on: before picking, one query reads every cluster node's NVMe temperature
+(`tools/ci/temps.sh`, 2 s at most), and a VM whose node is at or over its `nvme_max_c` (a word
+on its line, else a pool-wide `nvme_max_c=` line, else 68) is skipped, for a free slot and for a
+start alike: `tests: skipping test VM kv1: its node NODE has its NVMe at 71°C (nvme_max_c=68)`.
+When Prometheus does not answer, nothing is skipped. A VM's node is the `node` field of
+`worker status --json`: where it runs, or the node it is pinned to while stopped. Both exporters
+are DaemonSet pods in the `monitoring` namespace whose series carry a `pod` label, and
+`kube_pod_info` maps each pod to its node (the smartctl exporter's instance is its pod IP;
+node-exporter's, on the host network, is the node IP).
+
+**Temperature log.** Every run `remote.sh` sends appends one line to
+`~/.local/state/comebye-remote/temps.log` (`COMEBYE_REMOTE_LOG` to change): when it started,
+the VM, its node, its slot, the suite, how long it took, its exit status, and the node's CPU
+(the hottest coretemp or k10temp sensor) and NVMe temperatures as it started and as its suite
+ended:
+
+```
+2026-11-23T23:16:46Z vm=kv1 node=NODE slot=1/1 suite=browser secs=312 rc=0 cpu_start=67 nvme_start=62 cpu_end=88 nvme_end=71 run=ID branch=B
+```
+
+Prometheus comes from `$TEST_PROMETHEUS`, the VM's pool line, or a `prometheus=` line in
+`test-pool` or `test-vm`. A reading gives up after 2 s and is left empty; it never fails a run.
+Prometheus scrapes every 30 s or so, so a run shorter than that may show the same reading twice.
+
 ## Bringing a branch back from a worker that cannot push
 
 A worker keeps no GitHub login: its agents commit locally, under `/data/code` and
