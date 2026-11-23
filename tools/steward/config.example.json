@@ -4,7 +4,7 @@
   "min_age_hours": 1,
   "prs": [
     {"repo": "OWNER/REPO"},
-    {"repo": "OWNER/OTHER", "ignore_authors": ["app/renovate"]},
+    {"repo": "OWNER/OTHER", "ignore_authors": ["app/renovate*"]},
     {"repo": "ORG/UPSTREAM", "author": "@me", "flag_after_hours": 72}
   ],
   "plans": [{"repo": "OWNER/REPO"}],

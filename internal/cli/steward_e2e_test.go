@@ -22,7 +22,7 @@ func TestStewardPassAgainstAHub(t *testing.T) {
 		hubEntry(5, "landed-worker", "w98:p1", "landed", "finished_at", ago(4)),
 		hubEntry(9, "launch-fail", "", "failed", "agent_id", "", "created_at", ago(2), "error", "outside_roots"),
 		hubEntry(10, "retry-me", "w3:p1", "failed", "branch", "feat/retry", "created_at", ago(5), "error", "outside_roots"),
-		hubEntry(11, "retry-me", "w3:p1", "running", "branch", "feat/retry", "created_at", ago(1),
+		hubEntry(11, "retry-me", "w3:p1", "running", "branch", "feat/retry", "created_at", ago(1), "brief", "fix the launch for issues/44",
 			"progress", map[string]any{"text": "retrying", "at": ago(0.1)}),
 	}, []any{
 		map[string]any{"id": "t0000000001", "question": "Land OWNER/REPO#12?", "kind": "followup", "state": "open",

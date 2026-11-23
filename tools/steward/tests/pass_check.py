@@ -23,7 +23,7 @@ CONF = {
     "notes": NOTES,
     "prs": [
         {"repo": "OWNER/REPO"},
-        {"repo": "OWNER/OTHER", "ignore_authors": ["app/renovate"]},
+        {"repo": "OWNER/OTHER", "ignore_authors": ["app/renovate*"]},
         {"repo": "ORG/UP", "author": "@me", "flag_after_hours": 72},
     ],
     "plans": [{"repo": "OWNER/REPO"}],
@@ -85,6 +85,10 @@ class StewardPass(unittest.TestCase):
         self.assertIn("the next slice", due["evidence"])
         self.assertIn("body says: The user approved all slices", due["evidence"])
         self.assertTrue(any("OWNER/REPO#41: 1/3 ticked, the rest marked later" in q for q in self.p.quiet), self.p.quiet)
+        # A slice a running worker names is watched, not flagged.
+        on = self.find("OWNER/REPO#44", self.w)
+        self.assertEqual(on["why_watch"], "a worker is running on it")
+        self.assertIn("retry-me (running)", on["evidence"])
 
     def test_stuck(self):
         self.find("nap-loop: pass overdue")
@@ -98,6 +102,7 @@ class StewardPass(unittest.TestCase):
         self.assertFalse([t for t in self.f if "landed-worker" in t])
         self.find("needs-input blocked", self.w)  # it blocked just now: watched for an hour first
         self.find("queued prompt", self.w)
+        self.assertTrue(any(q.startswith("to-dos: 1 open; t0000000001 followup") for q in self.p.quiet), self.p.quiet)
 
     def test_watches(self):
         c = self.find("ORG/UP#5: maintainer comment unanswered")

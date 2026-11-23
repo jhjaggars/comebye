@@ -26,6 +26,7 @@ here: this file is public.
 
 import argparse
 import concurrent.futures
+import fnmatch
 import json
 import os
 import re
@@ -208,13 +209,13 @@ class Pass:
         if w.get("author"):
             args += ["--author", w["author"]]
         prs = gh(*args) or []
-        ignore = set(w.get("ignore_authors", []))
+        ignore = w.get("ignore_authors", [])  # glob patterns: "app/renovate*"
         shown = 0
         for p in prs:
             login = (p.get("author") or {}).get("login", "")
             ci, red = ci_state(p.get("statusCheckRollup"))
             h = hours(p["createdAt"])
-            if login in ignore or ("app/" + login) in ignore:
+            if any(fnmatch.fnmatchcase(login, pat) or fnmatch.fnmatchcase("app/" + login, pat) for pat in ignore):
                 if ci == "red":
                     self.add("prs", "user", "%s#%d by %s: CI red (author normally ignored)" % (repo, p["number"], login),
                              "failing: %s" % ", ".join(red[:4]), keys=["%s#%d" % (repo, p["number"])],
@@ -266,10 +267,13 @@ class Pass:
                 continue
             workers = self.active_on(needle=re.compile(r"(issues/|#)%d\b" % i["number"]))
             approval = self.approval(repo, i["number"], body)
-            self.add("plans", "coord",
-                     "%s %s: %d/%d slices ticked, %d unticked and not marked later" % (ref, i["title"][:50], ticked, len(slices), len(due)),
-                     "next unticked: %s; workers naming it: %s; %s" % (due[0][:90], ", ".join(workers) or "none", approval),
-                     keys=[ref, i["url"]], url=i["url"])
+            title = "%s %s: %d/%d slices ticked, %d unticked and not marked later" % (ref, i["title"][:50], ticked, len(slices), len(due))
+            ev = "next unticked: %s; workers naming it: %s; %s" % (due[0][:90], ", ".join(workers) or "none", approval)
+            if any(x.endswith("(running)") for x in workers):
+                self.watch.append({"check": "plans", "title": title, "why_watch": "a worker is running on it",
+                                   "evidence": ev, "url": i["url"]})
+                continue
+            self.add("plans", "coord", title, ev, keys=[ref, i["url"]], url=i["url"])
         self.quiet.append("plans %s: %d open issues, %d with Slices" % (repo, len(issues), n))
 
     def approval(self, repo, number, body=""):
@@ -382,6 +386,9 @@ class Pass:
                              (a.agent_status if a else "gone" + (" (parked)" if t.waiting.parked else "")),
                              utc(a.last_active) if a else "-", ("%s %s" % (e.id, e.status)) if e else "none", relay),
                          keys=[t.id], at=t.answer.at)
+        opened = [t for t in self.todos_all if t.state == "open"]
+        self.quiet.append("to-dos: %d open%s" % (len(opened), "".join(
+            "; %s %s %s \"%s\"" % (t.id, t.kind, utc(t.created_at), t.question[:50]) for t in opened[:5])))
         self.quiet.append("stuck: %d running, %d queued pending, %d answered to-dos checked for an agent that acted" % (
             sum(1 for e in self.entries if e.status == "running"), len(pend), n))
 

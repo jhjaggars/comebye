@@ -16,10 +16,10 @@
      "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]}
   ],
   "pr list OWNER/OTHER": [
-    {"number": 30, "title": "Update dependency a", "url": "https://github.com/OWNER/OTHER/pull/30", "author": {"login": "renovate", "is_bot": true},
+    {"number": 30, "title": "Update dependency a", "url": "https://github.com/OWNER/OTHER/pull/30", "author": {"login": "renovate-bot-x", "is_bot": true},
      "isDraft": false, "createdAt": "-30h", "headRefName": "renovate/a", "reviewDecision": "",
      "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]},
-    {"number": 31, "title": "Update dependency b", "url": "https://github.com/OWNER/OTHER/pull/31", "author": {"login": "renovate", "is_bot": true},
+    {"number": 31, "title": "Update dependency b", "url": "https://github.com/OWNER/OTHER/pull/31", "author": {"login": "renovate-bot-x", "is_bot": true},
      "isDraft": false, "createdAt": "-30h", "headRefName": "renovate/b", "reviewDecision": "",
      "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "FAILURE"}]}
   ],
@@ -42,6 +42,8 @@
      "body": "## Slices\n\n- [x] 1. one\n- [ ] 2. Later: maybe\n- [ ] 3. two (not approved)\n"},
     {"number": 42, "title": "Approved, one due", "url": "https://github.com/OWNER/REPO/issues/42", "updatedAt": "-20h",
      "body": "The user approved all slices on 2026-01-01.\n\n## Slices\n\n- [x] 1. one\n- [ ] 2. the next slice\n"},
+    {"number": 44, "title": "A worker is on it", "url": "https://github.com/OWNER/REPO/issues/44", "updatedAt": "-20h",
+     "body": "Approved.\n\n## Slices\n\n- [ ] 1. retry the launch\n"},
     {"number": 43, "title": "No checklist", "url": "https://github.com/OWNER/REPO/issues/43", "updatedAt": "-20h",
      "body": "just a bug"}
   ],
