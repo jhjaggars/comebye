@@ -21,6 +21,7 @@ want node "$(node --version 2>/dev/null || true)" "v$WK_NODE_VERSION"
 want npm "$(npm --version >/dev/null 2>&1 && echo present || echo missing)" present
 want google-chrome "$(google-chrome --version 2>/dev/null | awk '{print $NF}' || true)" "$WK_CHROME_VERSION"
 want python3 "$(python3 -c 'print("present")' 2>/dev/null || echo missing)" present
+want sqlite3 "$(sqlite3 -version >/dev/null 2>&1 && echo present || echo missing)" present
 want gpg "$(gpg --version >/dev/null 2>&1 && echo present || echo missing)" present
 [ "$fail" = 0 ] || { echo "testcheck: the toolchain is not as pinned (run: worker toolchain NAME)"; exit 1; }
 [ "${WK_QUICK:-0}" = 1 ] && { echo "testcheck: toolchain ok (quick: no tests run)"; exit 0; }

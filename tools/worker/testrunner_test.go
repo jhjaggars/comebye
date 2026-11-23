@@ -57,7 +57,7 @@ func TestTestRunnerScriptCarriesEveryPin(t *testing.T) {
 		"https://nodejs.org/dist/v$WK_NODE_VERSION/node-v$WK_NODE_VERSION-linux-x64.tar.xz",
 		"https://storage.googleapis.com/chrome-for-testing-public/$WK_CHROME_VERSION/linux64/chrome-linux64.zip",
 		"sha256sum -c", "/usr/local/bin/google-chrome", "/usr/local/bin/go", "/usr/local/bin/npm",
-		"python3", "gnupg", "fonts-liberation", "libnss3", "libasound2",
+		"python3", "gnupg", "sqlite3", "fonts-liberation", "libnss3", "libasound2",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the test runner script lacks %q", want)

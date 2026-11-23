@@ -24,11 +24,12 @@ fetch() {
 }
 
 # ---- system packages: Chrome's libraries (its deb.deps), fonts, and what
-# tools/uitest/run.sh calls (python3, gpg, git, curl, xz for Node's tarball).
+# what the tests call (python3, gpg, git, curl, sqlite3 for internal/archive; xz
+# for Node's tarball).
 # Debian 13 renamed some libraries for 64-bit time_t (libasound2 is
 # libasound2t64 there; the old name is only a virtual package apt will not
 # pick), so take the t64 name where the release has one.
-pkgs="python3 gnupg git curl ca-certificates xz-utils unzip
+pkgs="python3 gnupg sqlite3 git curl ca-certificates xz-utils unzip
   fonts-liberation fonts-dejavu-core fonts-noto-color-emoji
   libnss3 libnspr4 libdbus-1-3 libexpat1 libgbm1 libdrm2 libvulkan1 libudev1
   libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 libxshmfence1

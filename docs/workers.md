@@ -433,7 +433,7 @@ right after the packages in step 3:
 - **Chrome for Testing** (a fixed build at a fixed URL, unlike the stable channel's deb), in
   `/opt/chrome-for-testing/VERSION`, as `google-chrome` on `PATH`;
 - Chrome's libraries (its `deb.deps`, with Debian 13's `t64` names where they apply), fonts
-  (Liberation, DejaVu, Noto Color Emoji), `python3` and `gnupg` for `tools/uitest/run.sh`.
+  (Liberation, DejaVu, Noto Color Emoji), `python3`, `gnupg` and `sqlite3`, which the tests call.
 
 All three are pinned by version **and sha256** in `tools/worker/testrunner.go`; a download that
 does not match is refused before it is unpacked. Bump them on purpose: a test fails if Go stops
