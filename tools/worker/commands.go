@@ -242,6 +242,12 @@ func (e *env) createVM(ctx context.Context, name string, o createOpts) error {
 	if _, err := e.sh(ctx, name, "sudo install -m 0755 /dev/stdin /usr/local/sbin/comebye-idle-check", []byte(idleCheck)); err != nil {
 		return fmt.Errorf("installing the idle check: %w", err)
 	}
+	if e.Cfg.TestRunner {
+		e.printf("  test runner: Go %s, Node %s, Chrome for Testing %s\n", testPins.GoVersion, testPins.NodeVersion, testPins.ChromeVersion)
+		if err := e.installTestRunner(ctx, name); err != nil {
+			return err
+		}
+	}
 
 	e.begin(7, "7/8 tailnet\n")
 	if err := e.enroll(ctx, name); err != nil {
@@ -565,6 +571,10 @@ func (e *env) createPlan(name string, o createOpts) error {
 	}
 	e.printf("2. ssh key: ssh-keygen -t ed25519 at %s, only if absent; host key verified, known_hosts written to %s/known_hosts, StrictHostKeyChecking yes\n", c.KeyPath(), c.WorkerDir(name))
 	e.printf("3. over ssh as root: apt packages (git jq bubblewrap socat curl ...), tailscale from its apt repo,\n   linger, /data/code, /data/worktrees, idle-poweroff timer (%d min, no interactive ssh session and no working agent)%s\n", c.IdleMinutes, maxRunNote(c))
+	if c.TestRunner {
+		e.printf("   test runner (test_runner=true): Go %s, Node %s, Chrome for Testing %s, each sha256 pinned;\n   Chrome's libraries, fonts, python3 (go test ./internal/... and tools/ci/browser.sh)\n",
+			testPins.GoVersion, testPins.NodeVersion, testPins.ChromeVersion)
+	}
 	e.printf("4. tailnet:\n")
 	if _, err := os.Stat(c.TSOAuthFile); err == nil {
 		e.printf("   OAuth client %s: delete an offline %s device named %s (never an untagged one), mint a single-use\n   pre-authorized %s key valid 10 minutes\n", c.TSOAuthFile, c.Tag, name, c.Tag)

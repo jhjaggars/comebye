@@ -117,6 +117,12 @@ type Config struct {
 	Agents    []string
 	PiVersion string // npm version of @earendil-works/pi-coding-agent, pinned
 
+	// TestRunner installs the pinned test toolchain (Go, Node, Chrome; see
+	// testrunner.go) so the worker can run comebye's suites. On by default
+	// for kubevirt workers, off elsewhere; test_runner=true|false decides.
+	TestRunner    bool
+	testRunnerSet bool
+
 	// The LLM gateway (LiteLLM). Off unless LLMGatewayURL is set: then each
 	// worker gets its own virtual key, limited by the fields below.
 	LLMGatewayURL         string
@@ -246,6 +252,9 @@ func LoadConfig(path string) (*Config, error) {
 // finish fills the defaults that depend on the provider. It runs again after
 // a spec has changed the kind.
 func (c *Config) finish() {
+	if !c.testRunnerSet {
+		c.TestRunner = false
+	}
 	switch c.Provider {
 	case "aws":
 		if !c.machineSet {
@@ -264,6 +273,9 @@ func (c *Config) finish() {
 		}
 		if c.VMImageDV == "" && c.VMImageURL == "" {
 			c.VMImageDV = "debian-13-golden"
+		}
+		if !c.testRunnerSet {
+			c.TestRunner = true
 		}
 	default:
 		if !c.machineSet {
@@ -470,6 +482,13 @@ func (c *Config) apply(kv map[string]string) error {
 			c.Agents = splitList(v)
 		case "pi_version":
 			c.PiVersion = v
+		case "test_runner":
+			switch v {
+			case "true", "false":
+				c.TestRunner, c.testRunnerSet = v == "true", true
+			default:
+				err = fmt.Errorf("test_runner must be true or false, not %q", v)
+			}
 		case "llm_gateway_url":
 			c.LLMGatewayURL = strings.TrimRight(v, "/")
 		case "llm_provisioner_key_file":
@@ -634,6 +653,7 @@ func (c *Config) Validate() error {
 		chk(c.MaxBudgetCapUSD >= 0 && c.MaxBudgetCapUSD <= 10000, "max_budget_cap_usd must be 0..10000"),
 		chk(c.DestroyAfterHours >= 0 && c.DestroyAfterHours <= 8760, "destroy_after_hours must be 0..8760"),
 		chk(c.HubVersion == "" || versionRe.MatchString(c.HubVersion), "hub_version %q is not a release tag like v0.3.0", c.HubVersion),
+		chk(!c.TestRunner || c.Provider != "openshell", "test_runner is for VM workers, not openshell sandboxes"),
 	} {
 		if e != nil {
 			return e

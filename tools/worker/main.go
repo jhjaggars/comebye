@@ -56,6 +56,15 @@ Commands:
         --push send it to origin. Never the default branch; a local or origin tip that
         is not an ancestor is refused unless --force (a leased overwrite). --json prints
         {name, branch, tip, local, pushed} on stdout
+  toolchain NAME
+        install (or upgrade to) the pinned test toolchain on an existing VM: Go at
+        go.mod's version, Node at CI's, Chrome for Testing, Chrome's libraries and
+        fonts. Only that: no tailnet step, no restart, /data untouched. create does
+        the same when test_runner is on (the default for kubevirt)
+  testcheck NAME [--remote-repo NAME] [--quick]
+        prove the VM runs comebye's tests: the pinned versions answer, then
+        go test ./internal/... and tools/ci/browser.sh smoke pass in
+        /data/code/REPO (default comebye). --quick checks the versions only
   keys [--prune]
         the per-worker LLM gateway keys (worker-NAME) and whether a VM exists
         for each; --prune deletes the ones whose VM is gone
@@ -161,6 +170,7 @@ func run(args []string, e *env) int {
 	fRemote := cf.String("remote-repo", "", "fetch: the repository's name under /data/code on the worker")
 	fPush := cf.Bool("push", false, "fetch: push the branch to origin")
 	fForce := cf.Bool("force", false, "fetch: replace a local or origin tip that is not an ancestor (leased)")
+	quick := cf.Bool("quick", false, "testcheck: check the toolchain's versions only")
 	noArchive := cf.Bool("no-archive", false, "destroy: do not save the worker's sessions (they are lost)")
 	// Flags may follow the positional name: split them out.
 	var pos, flags []string
@@ -187,7 +197,7 @@ func run(args []string, e *env) int {
 	}
 
 	switch cmd {
-	case "create", "status", "stop", "start", "destroy", "login", "keys", "archive", "preflight", "catalog", "fetch":
+	case "create", "status", "stop", "start", "destroy", "login", "keys", "archive", "preflight", "catalog", "fetch", "toolchain", "testcheck":
 	case "help":
 		fmt.Fprint(e.Out, usage)
 		return 0
@@ -195,7 +205,7 @@ func run(args []string, e *env) int {
 		fmt.Fprintf(e.Err, "worker: unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
-	want := map[string][2]int{"create": {1, 1}, "status": {0, 1}, "stop": {1, 1}, "start": {1, 1}, "destroy": {1, 1}, "login": {2, 2}, "keys": {0, 0}, "archive": {0, 1}, "preflight": {0, 0}, "catalog": {0, 0}, "fetch": {2, 2}}[cmd]
+	want := map[string][2]int{"create": {1, 1}, "status": {0, 1}, "stop": {1, 1}, "start": {1, 1}, "destroy": {1, 1}, "login": {2, 2}, "keys": {0, 0}, "archive": {0, 1}, "preflight": {0, 0}, "catalog": {0, 0}, "fetch": {2, 2}, "toolchain": {1, 1}, "testcheck": {1, 1}}[cmd]
 	if cmd == "create" && *specPath != "" {
 		want[0] = 0 // the name may come from the spec
 	}
@@ -217,8 +227,9 @@ func run(args []string, e *env) int {
 		"--spec": *specPath != "" && cmd != "create", "--yes": *yes && cmd != "destroy",
 		"--events": *events && cmd != "create" && cmd != "destroy",
 		"--json":   *asJSON && cmd != "preflight" && cmd != "catalog" && cmd != "status" && cmd != "fetch",
-		"--repo":   *fRepo != "" && cmd != "fetch", "--remote-repo": *fRemote != "" && cmd != "fetch",
-		"--push": *fPush && cmd != "fetch", "--force": *fForce && cmd != "fetch",
+		"--repo":   *fRepo != "" && cmd != "fetch", "--remote-repo": *fRemote != "" && cmd != "fetch" && cmd != "testcheck",
+		"--quick": *quick && cmd != "testcheck",
+		"--push":  *fPush && cmd != "fetch", "--force": *fForce && cmd != "fetch",
 	} {
 		if bad {
 			fmt.Fprintf(e.Err, "worker: %s does not apply to %s\n", flag, cmd)
@@ -309,6 +320,10 @@ func run(args []string, e *env) int {
 		err = e.login(ctx, name, pos[1])
 	case "keys":
 		err = e.keys(ctx, *prune)
+	case "toolchain":
+		err = e.toolchain(ctx, name)
+	case "testcheck":
+		err = e.testcheck(ctx, name, testCheckOpts{Repo: *fRemote, Quick: *quick})
 	case "fetch":
 		err = e.fetch(ctx, name, pos[1], fetchOpts{Repo: *fRepo, RemoteRepo: *fRemote, Push: *fPush, Force: *fForce, JSON: *asJSON})
 	}
