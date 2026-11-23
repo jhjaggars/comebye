@@ -330,7 +330,7 @@ class Pass:
                     if not later:
                         self.add("stuck", "coord", "%s finished with decisions for the user and no to-do waiting on it" % e.agent_name,
                                  "handoff %s; report %s%s; decision: %s" % (
-                                     e.id, utc(at), "" if r.at else " (finished_at: this hub has no report_at)",
+                                     e.id, utc(at), "" if r.at else " (finished_at: no report_at)",
                                      " ".join(m.group(1).split())[:120]),
                                  keys=[e.id, e.agent_name], at=at)
             if e.status == "failed" and (hours(e.created_at) or 0) < c["failed_window_hours"]:
@@ -547,7 +547,8 @@ class Pass:
         L.append("steward pass %s (hub %s; %d hub + %d gh calls, %.1fs)" % (
             cb.now().strftime("%Y-%m-%d %H:%MZ"), self.me.version, STATS["hub"], STATS["gh"], self.seconds))
         if not self.has_report_at:
-            L.append("note: this hub has no report_at: report ages fall back to finished_at")
+            L.append("note: no entry has report_at yet (a hub before v0.5.53, or no report since it upgraded): "
+                     "report ages fall back to finished_at")
         L.append("")
         L.append("FINDINGS (%d) - judge each; who = user (a to-do?) / coord (a note?) / info" % len(self.findings))
         for i, f in enumerate(self.findings, 1):
