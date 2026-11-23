@@ -46,9 +46,15 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # No Go cache here: this job builds nothing, and as the first job to finish it used to save an empty cache
+      # (7 KB) under the key every other job restores, so each of them downloaded and built from scratch.
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
+          cache: false
 
       - id: sel
         env:
@@ -75,6 +81,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -136,6 +145,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - name: go test -race
         run: tools/ci/gotest.sh --shard ${{ matrix.shard }}/2
@@ -153,6 +165,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - name: go test -race
         env:
@@ -163,9 +178,10 @@ jobs:
   # The app in headless Chrome against a fake herdr (tools/uitest). Dev/CI only: its playwright-core is pinned by
   # package-lock.json and drives the runner's own Chrome, so nothing is downloaded or shipped.
   # Pre-submit: the smoke set (about 160 checks covering every screen, 2 minutes), plus the scripts for the paths the change touches.
+  # A change that needs every script (scripts=all: CI, the driver, go.mod) runs the merge tier's parallel jobs below instead.
   browser-smoke:
     needs: changes
-    if: github.event_name == 'pull_request' && (needs.changes.outputs.smoke == 'true' || needs.changes.outputs.scripts != '')
+    if: github.event_name == 'pull_request' && needs.changes.outputs.scripts != 'all' && (needs.changes.outputs.smoke == 'true' || needs.changes.outputs.scripts != '')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -175,6 +191,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -185,12 +204,7 @@ jobs:
       - name: browser smoke checks
         env:
           SCRIPTS: ${{ needs.changes.outputs.scripts }}
-        run: |
-          if [ "$SCRIPTS" = all ]; then
-            tools/ci/browser.sh full dark "$RUNNER_TEMP/uitest"
-          else
-            EXTRA="$SCRIPTS" tools/ci/browser.sh smoke dark "$RUNNER_TEMP/uitest"
-          fi
+        run: EXTRA="$SCRIPTS" tools/ci/browser.sh smoke dark "$RUNNER_TEMP/uitest"
       - name: upload browser logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -199,10 +213,11 @@ jobs:
           path: ${{ runner.temp }}/uitest
           if-no-files-found: ignore
 
-  # Merge tier, behaviour, dark only: drive.mjs (the main app) beside every other script.
+  # Merge tier, behaviour, dark only: drive.mjs (the main app) beside every other script. Also on a pull request that needs
+  # every script (scripts=all), in place of the smoke job: the same checks in parallel, not one serial job of 20 minutes.
   browser-drive:
     needs: changes
-    if: github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true'
+    if: (github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true') || (github.event_name == 'pull_request' && needs.changes.outputs.scripts == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -213,6 +228,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -234,7 +252,7 @@ jobs:
   browser-rest:
     name: browser rest (${{ matrix.shard }}/4)
     needs: changes
-    if: github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true'
+    if: (github.event_name == 'push' && needs.changes.outputs.merge_browser == 'true') || (github.event_name == 'pull_request' && needs.changes.outputs.scripts == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -249,6 +267,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -285,6 +306,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -318,6 +342,9 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            tools/ci/go-cache-epoch
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

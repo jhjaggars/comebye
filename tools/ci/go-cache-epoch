@@ -1,0 +1,3 @@
+# Part of the Go cache key in .github/workflows/ci.yml (with go.sum). A cache entry is never replaced once saved, so
+# change the number below to start a new one (for example after a bad entry was saved, as the empty 7 KB one was).
+1
