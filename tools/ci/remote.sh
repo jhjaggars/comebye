@@ -3,6 +3,7 @@
 #
 #   tools/ci/remote.sh HOST SUITE [ARG...]
 #   tools/ci/remote.sh --check HOST     only the checks below (and a start); exit 0 when a run would go ahead
+#   tools/ci/remote.sh --probe HOST     one ssh, no start: prints `slots=N free=F toolchain=ok|bad` (255: ssh failed)
 #   --no-wait (before HOST, or REMOTE_NO_WAIT=1): refuse when the VM is busy instead of waiting for it
 #
 #   SUITE  browser ARG...   tools/ci/browser.sh ARG...    artifacts -> ARG 3, or ${RUNNER_TEMP:-/tmp}/uitest-SUITE-SCHEME
@@ -21,7 +22,8 @@
 # VM), with the pinned toolchain first on PATH and GOTOOLCHAIN=local, its output streamed here. Its artifacts come
 # back to the local path above, the run folder on the VM is removed, and this exits with the suite's status.
 # Go, npm and uitest's node_modules stay warm in the VM's cache folder (REMOTE_ROOT, default ~/.cache/comebye-remote
-# on the VM). Forwarded when set here: SCHEME EXTRA PARALLEL JOBS JOBS_FORCE GOTEST_P CAP_MEM BASE PORT REPEAT_PORT.
+# on the VM). Forwarded when set here: SCHEME EXTRA PARALLEL JOBS JOBS_FORCE GOTEST_P CAP_MEM BASE PORT REPEAT_PORT
+# (on a VM with more than one slot, the slot's own values below win over these).
 #
 # A worker powers itself off when idle. A stopped one is started first, through the provisioner (`worker start HOST`,
 # saying so and how long it took); REMOTE_START=0 refuses instead. While the suite runs, an idle hold on the VM
@@ -31,9 +33,20 @@
 # this script lives in, whatever the current directory. The heavy wrappers call this by themselves when a test VM
 # is configured (tools/ci/prefer-vm.sh).
 #
-# One suite at a time on a VM: a run takes a lock there (REMOTE_ROOT/run.lock) before its suite starts. When another
-# run holds it, this one says whose it is and since when, and waits its turn, under its idle hold; Ctrl-C gives up.
-# A killed run's lock goes with its processes.
+# Slots: a VM runs up to N suites at once, N from its test-slots file (beside its test-runner file, so
+# /etc/comebye-worker/test-slots; `worker toolchain` writes it), 1 when there is none. A run takes a free slot there
+# (REMOTE_ROOT/slot-I.lock, I from 0, who holds it in slot-I.who) before its suite starts. When every slot is taken,
+# this one says whose runs hold them and since when, and waits for any slot, under its idle hold; Ctrl-C gives up.
+# A killed run's slot goes with its processes. With N > 1 each slot gets its share of the VM, so suites side by side
+# cannot clash: GOTEST_P = vCPUs / N, JOBS the same but at most 4, CAP_MEM = 85% of RAM / N (a lower value sent from
+# here is kept), PARALLEL at most 4, and PORT = REPEAT_PORT = 18741 + I * 5000: every port a browser or flakes run
+# uses is within that 5000 (run.sh uses PORT..PORT+401; PARALLEL's parts and flakes' JOBS add 1000 each, so 4 of
+# them reach PORT+3401). remote_test.sh checks those offsets against the real scripts. With N = 1 nothing is set.
+# (COMEBYE_SLOT_PORT_BASE on the VM moves the 18741; the self-test uses it.) An old client waiting for run.lock can be
+# kept waiting while new runs overlap on a busy VM: flock lets shared holders in ahead of it.
+# Clients from before slots took REMOTE_ROOT/run.lock exclusively. A run here also holds run.lock, shared, for as
+# long as its slot: an old client's exclusive lock waits until no new run is going, and a new run waits while an
+# old one holds it, so old and new clients still take turns on the same VM.
 #
 # Refused before anything runs (exit 2): a HOST with no provisioner ssh config or no VM, a VM that is stopped with
 # REMOTE_START=0 or would not start, a VM whose toolchain is missing or not this checkout's pins
@@ -41,16 +54,30 @@
 # 255: ssh could not reach the VM.
 set -uo pipefail
 
-usage() { sed -n '2,41p' "${BASH_SOURCE[0]}" >&2; exit 2; }
+usage() { sed -n '2,/^set -uo/{/^#/p}' "${BASH_SOURCE[0]}" >&2; exit 2; }
 die() { echo "remote: $*" >&2; exit 2; }
-check=""; nowait="${REMOTE_NO_WAIT:-}"; [ "$nowait" = 0 ] && nowait=""
-while :; do case "${1:-}" in --check) check=1; shift ;; --no-wait) nowait=1; shift ;; *) break ;; esac; done
+check=""; probe=""; nowait="${REMOTE_NO_WAIT:-}"; [ "$nowait" = 0 ] && nowait=""
+while :; do case "${1:-}" in --check) check=1; shift ;; --probe) check=1; probe=1; shift ;; --no-wait) nowait=1; shift ;; *) break ;; esac; done
 if [ -n "$check" ]; then [ $# = 1 ] || usage; else [ $# -ge 2 ] || usage; fi
 host="$1"; shift
 [[ "$host" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die "host '$host': want a worker name (lower-case letters, digits, '-')"
 
 # q: one shell word, for a command line the VM's shell reads.
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# The VM's slots, as shell functions its scripts start with ($root is REMOTE_ROOT there). nslots: N from the
+# test-slots file (1 when absent or not a number; at most 8, so the port ranges stay below 65536). old_holds: a
+# client from before slots holds run.lock (exclusively). nfree N: the free slots, 0 while an old client holds the VM.
+# holders N: who holds the VM, as "WHO since TIME", several joined with "; ".
+slot_fns='slots_file="${COMEBYE_TEST_SLOTS_FILE:-$(dirname "${COMEBYE_TEST_RUNNER_FILE:-/etc/comebye-worker/test-runner}")/test-slots}"
+nslots() { local n=""; [ -r "$slots_file" ] && read -r n <"$slots_file"; n="${n//[[:space:]]/}"; [[ "$n" =~ ^[1-9][0-9]*$ ]] || n=1; [ "$n" -le 8 ] || n=8; echo "$n"; }
+old_holds() { [ -e "$root/run.lock" ] && ! flock -s -n "$root/run.lock" true 2>/dev/null; }
+slot_busy() { [ -e "$root/slot-$1.lock" ] && ! flock -n "$root/slot-$1.lock" true 2>/dev/null; }
+nfree() { local i f=0; old_holds && { echo 0; return; }; for ((i = 0; i < $1; i++)); do slot_busy "$i" || f=$((f + 1)); done; echo "$f"; }
+holders() { local i w=""
+  if old_holds; then cat "$root/run.who" 2>/dev/null || echo "another run"; return; fi
+  for ((i = 0; i < $1; i++)); do slot_busy "$i" && w="$w${w:+; }$(cat "$root/slot-$i.who" 2>/dev/null || echo "another run")"; done
+  echo "${w:-another run}"; }'
 
 here_dir="$PWD"
 top="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" || die "$(dirname "${BASH_SOURCE[0]}") is not in a git worktree"
@@ -128,7 +155,7 @@ vm_state() {
   grep -q '"name"' <<<"$j" || { echo none; return 0; }
   sed -n 's/.*"state": *"\([^"]*\)".*/\1/p' <<<"$j" | head -1
 }
-vm="$(vm_state)"
+vm=RUNNING; [ -n "$probe" ] || vm="$(vm_state)" # a probe asks the VM only: the caller asked the provisioner already
 case "$vm" in
   RUNNING|"") ;;
   none) die "the provisioner (${wtool[*]}) has no VM $host" ;;
@@ -150,12 +177,19 @@ want="go=$(pin GoVersion) node=$(pin NodeVersion) chrome=$(pin ChromeVersion)"
 have="$(ssh_vm 'f="${COMEBYE_TEST_RUNNER_FILE:-/etc/comebye-worker/test-runner}"; export PATH="/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:$PATH"
   for t in go node npm google-chrome; do command -v "$t" >/dev/null || { echo "missing $t"; exit 0; }; done
   [ -f "$f" ] && tr "\n" " " <"$f" || echo "no $f"
-  r='"$rroot"'; echo
-  if [ -e "$r/run.lock" ] && ! flock -n "$r/run.lock" true 2>/dev/null; then echo "BUSY $(cat "$r/run.who" 2>/dev/null)"; fi' </dev/null)"
+  root='"$rroot"'; echo
+  '"$slot_fns"'
+  n="$(nslots)"; free="$(nfree "$n")"; echo "SLOTS $n $free"
+  [ "$free" -gt 0 ] || echo "BUSY $(holders "$n")"' </dev/null)"
 rc=$?
-busy="$(sed -n 's/^BUSY //p' <<<"$have")"; have="$(head -1 <<<"$have")"
-[ $rc = 255 ] && { echo "remote: ssh could not reach $host (the provisioner says: ${vm:-no answer}; ${wtool[*]} status $host)" >&2; exit 255; }
+busy="$(sed -n 's/^BUSY //p' <<<"$have")"; slots="$(sed -n 's/^SLOTS //p' <<<"$have")"; have="$(head -1 <<<"$have")"
+[ $rc = 255 ] && { echo "remote: ssh could not reach $host${probe:+" (ssh -F $cfg $host)"}${probe:-" (the provisioner says: ${vm:-no answer}; ${wtool[*]} status $host)"}" >&2; exit 255; }
 have="${have% }"
+if [ -n "$probe" ]; then
+  read -r n f <<<"$slots"
+  echo "slots=${n:-1} free=${f:-0} toolchain=$([ "$have" = "$want" ] && echo ok || echo bad)"
+  exit 0
+fi
 [ "$have" = "$want" ] || die "$host has no test toolchain at this checkout's pins (it says: ${have:-nothing}; want: $want).
   Install it with: go run ./tools/worker toolchain $host"
 if [ -n "$busy" ]; then
@@ -210,6 +244,7 @@ for v in SCHEME EXTRA PARALLEL JOBS JOBS_FORCE GOTEST_P CAP_MEM BASE PORT REPEAT
   [ -n "${!v+x}" ] && envs="$envs $v=$(q "${!v}")"
 done
 [ -n "$env_art" ] && envs="$envs $env_art=\"\$art\""
+[ -n "$envs" ] && envs="export$envs"
 
 # The script the VM runs. Its stdin is held open by this side: when ssh goes (Ctrl-C, a dropped link), the VM sees
 # EOF and stops the suite's whole process group, so nothing keeps running there.
@@ -237,24 +272,52 @@ fi
 echo "remote(vm): $(hostname), $(nproc) CPUs, in $src" >&2
 # The idle hold, renewed while this run waits and its suite runs, and only while this script is alive (it lapses on
 # its own 20 min after a lost link). Neither helper keeps the lock below.
-( while sleep 300 && kill -0 $$ 2>/dev/null; do '"$(hold_cmd 20)"'; done ) </dev/null >/dev/null 2>&1 8>&- &
+( while sleep 300 && kill -0 $$ 2>/dev/null; do '"$(hold_cmd 20)"'; done ) </dev/null >/dev/null 2>&1 7>&- 8>&- &
 renew=$!
 trap '"'"'kill "$renew" 2>/dev/null'"'"' EXIT
-# One suite at a time on this VM. The suite inherits the lock, so it is free once the suite and this script are gone,
-# however they end. While another run holds it, wait in steps, and give up when this side goes (EOF on stdin).
+# A slot on this VM (see the top of remote.sh). The suite inherits the slot lock (fd 7) and run.lock, shared
+# (fd 8), so both are free once the suite and this script are gone, however they end. While every slot is taken,
+# try again every 2 s, and give up when this side goes (EOF on stdin).
+'"$slot_fns"'
+'"$envs"'
+n="$(nslots)"; slot=""
 exec 8>>"$root/run.lock"
-if ! flock -n 8; then
+take() { local i
+  for ((i = 0; i < n; i++)); do
+    exec 7>>"$root/slot-$i.lock"
+    if flock -n 7; then flock -s -n 8 && { slot=$i; return 0; }; exec 7>&-; return 1; fi
+    exec 7>&-
+  done
+  return 1; }
+if ! take; then
   w0=$SECONDS
-  echo "remote(vm): $(hostname) is busy with $(cat "$root/run.who" 2>/dev/null || echo "another run"); waiting for it (Ctrl-C gives up)" >&2
-  until flock -w 5 8; do
-    read -t 1 -r _; [ $? -gt 128 ] || { echo "remote(vm): gave up waiting" >&2; exit 130; }
+  if [ "$n" = 1 ] || old_holds; then
+    echo "remote(vm): $(hostname) is busy with $(holders "$n"); waiting for it (Ctrl-C gives up)" >&2
+  else
+    echo "remote(vm): $(hostname) has all $n slots busy ($(holders "$n")); waiting for one (Ctrl-C gives up)" >&2
+  fi
+  until take; do
+    read -t 2 -r _; [ $? -gt 128 ] || { echo "remote(vm): gave up waiting" >&2; exit 130; }
   done
   echo "remote(vm): $(hostname) is free after $((SECONDS - w0)) s; starting" >&2
 fi
-printf "%s since %s\n" '"$(q "$run_id ($kind, $branch, from $me)")"' "$(date -u +%H:%M:%SZ)" >"$root/run.who"
-setsid env'"$envs"' tools/ci/capped.sh'"$line"' </dev/null &
+who="$(printf "%s since %s" '"$(q "$run_id ($kind, $branch, from $me)")"' "$(date -u +%H:%M:%SZ)")"
+echo "$who" >"$root/slot-$slot.who"; echo "$who" >"$root/run.who" # run.who: what an old client says it waits for
+if [ "$n" -gt 1 ]; then # this slot'"'"'s share of the VM: a lower value sent from here is kept, a higher one is not
+  lower() { local v="${!1:-}"; [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -le "$2" ] && [ "$v" -ge 1 ] || export "$1=$2"; }
+  mb() { [[ "$1" =~ ^([0-9]+)([KMGT]?)$ ]] || return 1
+    case "${BASH_REMATCH[2]}" in K) echo $((BASH_REMATCH[1] / 1024)) ;; M) echo "${BASH_REMATCH[1]}" ;;
+      G) echo $((BASH_REMATCH[1] * 1024)) ;; T) echo $((BASH_REMATCH[1] * 1048576)) ;; *) echo $((BASH_REMATCH[1] / 1048576)) ;; esac; }
+  cpus="$(nproc)"; sj=$((cpus / n)); [ "$sj" -ge 1 ] || sj=1
+  smem=$(( $(awk '"'"'/^MemTotal:/ {print $2}'"'"' /proc/meminfo) / 1024 * 85 / 100 / n )); [ "$smem" -ge 1024 ] || smem=1024
+  lower GOTEST_P "$sj"; [ "$sj" -le 4 ] || sj=4; lower JOBS "$sj"; [ -z "${PARALLEL:-}" ] || lower PARALLEL 4
+  c="$(mb "${CAP_MEM:-}")" && [ "$c" -ge 1 ] && [ "$c" -le "$smem" ] || export CAP_MEM="${smem}M"
+  export PORT=$(( ${COMEBYE_SLOT_PORT_BASE:-18741} + slot * 5000 )); export REPEAT_PORT=$PORT
+  echo "remote(vm): slot $((slot + 1)) of $n: JOBS=$JOBS CAP_MEM=$CAP_MEM ports $PORT-$((PORT + 4999))" >&2
+fi
+setsid tools/ci/capped.sh'"$line"' </dev/null &
 pid=$!
-( while IFS= read -r _; do :; done; kill -TERM -- "-$pid"; sleep 5; kill -KILL -- "-$pid" ) <&0 >/dev/null 2>&1 8>&- & # <&0: a background job reads /dev/null otherwise
+( while IFS= read -r _; do :; done; kill -TERM -- "-$pid"; sleep 5; kill -KILL -- "-$pid" ) <&0 >/dev/null 2>&1 7>&- 8>&- & # <&0: a background job reads /dev/null otherwise
 watch=$!
 wait "$pid"; rc=$?
 kill "$watch" "$renew" 2>/dev/null
