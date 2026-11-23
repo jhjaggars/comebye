@@ -482,10 +482,21 @@ caches, npm's cache and `tools/uitest/node_modules` (per `package-lock.json`) st
 `~/.cache/comebye-remote/cache`. Ctrl-C stops the suite on the VM as well. A run folder that a
 lost link left behind is removed by the next run a day later.
 
+A worker powers itself off when idle, so a stopped one is **started first**, through this
+tool (`worker start HOST`), with a line saying so and how long the start took; `REMOTE_START=0`
+refuses instead and prints the start command. The script asks the provisioner first
+(`worker status --json HOST`, no ssh): `$COMEBYE_WORKER_TOOL` (words, for example
+`comebye-worker -config FILE`), else `comebye-worker` on `PATH`, else `go run ./tools/worker`.
+While the suite runs, an idle hold (`remote-test-ID` in the VM's idle-holds folder, 20 minutes,
+renewed every 5) keeps the VM from powering off under it: the idle check does not count a plain
+ssh session as activity. The hold is removed with the run folder, and lapses by itself after a lost link.
+
 It refuses (exit 2, before anything is sent): a HOST this tool has no ssh config for
 (`$COMEBYE_WORKER_STATE`, default `~/.local/state/comebye-worker`: set it if your config has a
-`state_dir`), a VM without the toolchain at this checkout's pins (`worker toolchain HOST`), and
-a second run from the same worktree while one is going. 255 means ssh could not reach the VM.
+`state_dir`) or no VM, a VM that is stopped under `REMOTE_START=0`, won't start, or is in
+between (provisioning, stopping), a VM without the toolchain at this checkout's pins
+(`worker toolchain HOST`), and a second run from the same worktree while one is going. 255 means
+ssh could not reach the VM.
 `tools/ci/remote_test.sh` tests it with a fake `ssh` and a local folder for the VM.
 
 ## Bringing a branch back from a worker that cannot push
