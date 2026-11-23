@@ -5,17 +5,64 @@ import { chromium } from "playwright-core";
 
 export const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
 
-// Launches headless Chrome with a phone-style context (390x844 by default;
+// One Chrome per script process: the first launch() starts it, every launch() gets a context of its own (its own
+// cookies, storage, cache and permissions, as a fresh browser had), and the returned browser's close() closes that
+// context. Chrome itself closes a moment after its last context does, so a script that ends without process.exit
+// still ends. A script that opens a context several times (widths, themes) no longer starts Chrome each time
+// (300 starts in the rest suite; a cold start on a CI runner took seconds).
+// UITEST_PROFILE=FILE appends one line per Chrome start ("launch SCRIPT MS") to FILE, for profiling a run.
+let shared = null, users = 0, idleClose = null;
+async function acquire() {
+  if (idleClose) { clearTimeout(idleClose); idleClose = null; }
+  users++;
+  if (!shared) {
+    const t0 = Date.now();
+    shared = chromium.launch({ executablePath: CHROME, headless: true, args: ["--no-sandbox"] });
+    shared.then(async () => { if (process.env.UITEST_PROFILE) (await import("node:fs")).appendFileSync(process.env.UITEST_PROFILE, `launch ${process.argv[1].split("/").pop()} ${Date.now() - t0}\n`); }, () => {});
+  }
+  try {
+    const b = await shared;
+    if (b.isConnected()) return b;
+    shared = null; users--; return acquire(); // it crashed or was closed: start another
+  } catch (e) { shared = null; users--; throw e; }
+}
+function release() {
+  if (--users > 0) return;
+  const b = shared;
+  idleClose = setTimeout(() => { idleClose = null; if (shared === b) shared = null; b?.then((x) => x.close()).catch(() => {}); }, 200);
+}
+
+// Opens a headless Chrome context with a phone-style viewport (390x844 by default;
 // width > 500 makes a desktop one: no touch, no mobile emulation). bypassCSP:
 // false keeps the servers' Content-Security-Policy in force (the Pages checks
-// test the sandbox it sets).
+// test the sandbox it sets). Returns { browser, ctx, page }: browser.close() closes
+// this context (and Chrome once no context is left); browser.newContext() is the shared Chrome's.
 export async function launch({ width = 390, height = 844, dark, bypassCSP = true } = {}) {
-  const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ["--no-sandbox"] });
+  const real = await acquire();
   const mobile = width <= 500;
-  const ctx = await browser.newContext({
-    viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile, bypassCSP,
-    ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1" } : {}),
-    ...(dark === undefined ? {} : { colorScheme: dark ? "dark" : "light" }),
+  let ctx;
+  try {
+    ctx = await real.newContext({
+      viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile, bypassCSP,
+      ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1" } : {}),
+      ...(dark === undefined ? {} : { colorScheme: dark ? "dark" : "light" }),
+    });
+  } catch (e) { release(); throw e; }
+  const extra = []; // contexts the script made itself with browser.newContext(): closed with this one
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    await Promise.all([ctx, ...extra].map((c) => c.close().catch(() => {})));
+    release();
+  };
+  const browser = new Proxy(real, {
+    get(t, k) {
+      if (k === "close") return close;
+      if (k === "newContext") return async (...a) => { const c = await t.newContext(...a); extra.push(c); return c; };
+      const v = Reflect.get(t, k);
+      return typeof v === "function" ? v.bind(t) : v;
+    },
   });
   return { browser, ctx, page: await ctx.newPage() };
 }
