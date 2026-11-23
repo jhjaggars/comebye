@@ -2262,6 +2262,7 @@ function rsTeardown(leave) {
   if (!rs.el) return;
   if (!rs.el.hidden) {
     rs.el.hidden = true; rs.el.replaceChildren(); rs.key = ""; rs.sig = ""; pgc.split = false;
+    if (window.SP) window.SP.pageRefocus(); // the comments were the split's: back to the side panel's page, if it shows one
     if (history.state && history.state.rs) { // the entry the split pushed
       if (leave) history.replaceState(null, "", location.href); else history.back();
     }
@@ -2319,11 +2320,9 @@ function renderSplit(force) {
         ${href ? `<a class="rs-open" href="${escAttr(href)}" target="_blank" rel="noopener" title="Open the Page on its own">Open ↗</a>` : ""}
         <span class="seg sm rs-tabs" role="group" aria-label="Show"><button type="button" data-rs-tab="page" aria-pressed="${rs.tab === "page"}">Page</button><button type="button" data-rs-tab="decide" aria-pressed="${rs.tab === "decide"}">${esc(t.set ? "Decide" : t.kind === "review" ? "Verdict" : "Answer")}<span class="rs-n" hidden></span></button></span>
       </div>
-      <div class="rs-cols"><section class="rs-page" aria-label="The Page"><div class="pgs-sel" id="pgs-sel" hidden></div><div class="rs-body"><iframe class="pgs-frame" style="color-scheme:${pgsScheme()}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${escAttr(p.title || p.id)}" src="${escAttr((pgs.pagesUrl || "") + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div></section>
+      <div class="rs-cols"><section class="rs-page" aria-label="The Page"><div class="pgs-sel" id="pgs-sel" hidden></div><div class="rs-body">${pageFrameHtml(p, ver)}<aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div></section>
         <section class="rs-side" id="rs-side" aria-label="${escAttr(TODO_KIND[t.kind] || "item")}"></section></div>`;
-    const fr = el.querySelector("iframe.pgs-frame");
-    fr.addEventListener("load", sendPageTheme);
-    fr.addEventListener("load", pgcMarks);
+    pageFrameWire(el);
     pgcOpen(p, ver, true);
   }
   const side = $("rs-side");
@@ -7131,7 +7130,7 @@ function pgsThumbSrc(key, scheme) {
 // an image that fails to load goes, and the skeleton shows.
 function pgsImgs() {
   const sc = pgsScheme();
-  for (const el of document.querySelectorAll("#pgs-items .pgs-thumb[data-th]")) {
+  for (const el of document.querySelectorAll("#pgs-items .pgs-thumb[data-th], #sp-pgl .pgs-thumb[data-th]")) {
     const have = el.dataset.th.split(" ").filter(Boolean);
     let img = el.querySelector("img.pgs-img");
     if (!have.length || el._noimg === el.dataset.prev) { if (img) img.remove(); el.classList.remove("has-img"); continue; }
@@ -7151,7 +7150,7 @@ function pgsImgs() {
   }
 }
 function pgsFill() {
-  for (const el of document.querySelectorAll("#pgs-items .pgs-thumb")) {
+  for (const el of document.querySelectorAll("#pgs-items .pgs-thumb, #sp-pgl .pgs-thumb")) {
     const sk = pgs.prev.get(el.dataset.prev);
     const empty = !sk || sk === "loading" || sk === "none";
     el.classList.toggle("empty", empty);
@@ -7175,7 +7174,7 @@ function pgsPump() {
       .catch(() => pgs.prev.set(key, "none"))
       .finally(() => {
         pgs.prevBusy--;
-        if (!pgs.prevRaf) pgs.prevRaf = requestAnimationFrame(() => { pgs.prevRaf = 0; if (pgs.route) pgsFill(); });
+        if (!pgs.prevRaf) pgs.prevRaf = requestAnimationFrame(() => { pgs.prevRaf = 0; if (pgs.route || $("sp-pgl")) pgsFill(); });
         pgsPump();
       });
   }
@@ -7223,7 +7222,9 @@ async function pagesLoad() {
     pgs.err = e.status === 503 ? "Pages are off on this hub." : e.message;
   }
   pgs.loaded = true;
+  pgs.at = Date.now();
   if (pgs.route) renderPages();
+  if (window.SP) window.SP.pagesChanged(); // the Pages tab beside an agent's chat reads the same list
 }
 
 // The search box's has:script term (also what the Interactive chip toggles): only the pages that run JavaScript.
@@ -7247,6 +7248,24 @@ function pagesFiltered() {
   if (pgs.sort === "title") return a.slice().sort((x, y) => String(x.title).localeCompare(String(y.title)) || upd(y) - upd(x));
   if (pgs.sort === "opened") return a.slice().sort((x, y) => at(y) - at(x) || upd(y) - upd(x));
   return a.slice().sort((x, y) => upd(y) - upd(x));
+}
+
+// agentPages: the Pages an agent published, newest first, for the Pages tab of the side panel beside its chat (sidepanel.js).
+// A page records its publisher's fleet id ("host/pane", page.agent) and, when the publisher passed --handoff, the handoff it
+// is about (page.handoff). A page belongs to the agent when
+//   - it names the agent's current handoff, whichever pane published it: a worker restarted or resumed in another pane keeps its
+//     handoff, so its earlier Pages stay with it; or
+//   - its publisher is this pane, it names no other handoff, and (when the agent has a handoff) it was made after that handoff
+//     started: a pane id is reused, and a page an earlier agent in the same pane published is that agent's, not this one's.
+// A page published from an earlier pane without --handoff cannot be told apart from anyone else's, so it is not shown.
+function agentPages(a) {
+  if (!a) return [];
+  const ref = String(agentId(a)).includes("/") ? agentId(a) : (a.host || state.localHost || "") + "/" + a.pane_id;
+  const mine = (ledger.entries || []).filter((e) => e && e.agent_id === agentId(a)).sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
+  const e = ledgerEntry(a) || mine[0] || null;
+  const since = e ? Date.parse(e.created_at) || 0 : 0;
+  return pgs.items.filter((p) => (e && p.handoff === e.id) || (p.agent === ref && !p.handoff && (!e || (Date.parse(p.created_at) || 0) >= since)))
+    .sort((x, y) => (Date.parse(y.updated_at) || 0) - (Date.parse(x.updated_at) || 0));
 }
 
 // The filter chips: all, the pages with more than one version, and one per host.
@@ -7307,6 +7326,17 @@ function pgsGroup(list) {
   return groups.length > 1 ? groups : [{ label: "", items: list }];
 }
 
+// A card reads top down: the preview, the title, who made it, when and which version. The "new" / "updated" dot sits on the
+// card's corner; the size and kind are in the viewer's (i). The Pages list draws it, and so does the Pages tab of the side
+// panel beside an agent's chat (sidepanel.js), in the list's rows layout.
+function pgsCardHtml(p, current) {
+  const dot = pgsDot(p), rev = p.updated_at !== p.created_at;
+  return `<a class="pgs-card${current ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">${pgsThumb(p)}${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span class="pgs-txt">
+        <span class="pgs-title">${esc(p.title)}</span>
+        <span class="pgs-line"><span class="pgs-by">${esc(p.by)}</span>${p.host ? `<span class="pgs-meta">${esc(p.host)}</span>` : ""}</span>
+        <span class="pgs-line"><span class="pgs-meta" title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-tags">${p.script ? `<span class="pgs-pill pgs-js" title="Runs JavaScript">JS</span>` : ""}<span class="pgs-pill">v${p.version}</span></span></span></span></a>`;
+}
+
 function renderPages() {
   const r = pgs.route;
   if (!r) return;
@@ -7317,15 +7347,7 @@ function renderPages() {
   else if (!pgs.loaded) html = `<div class="pgs-empty">Loading…</div>`;
   else if (!pgs.items.length) html = `<div class="pgs-empty pgs-zero"><span class="pgs-zsk" aria-hidden="true"><i class="a"></i><i></i><i></i><i></i></span><b>No pages yet</b><span>An agent publishes one when it has something to show you: a plan, a mockup, a report.</span><button type="button" class="btn cp" data-copy="comebye publish report.html" aria-label="Copy the command"><code>comebye publish report.html</code></button><span class="pgs-meta">A <code>.md</code> file works too.</span></div>`;
   else {
-    // A card reads top down: the preview, the title, who made it, when and which version. The "new" / "updated" dot sits on the
-    // card's corner; the size and kind are in the viewer's (i).
-    const card = (p) => {
-      const dot = pgsDot(p), rev = p.updated_at !== p.created_at;
-      return `<a class="pgs-card${p.id === r.id ? " current" : ""}" href="${esc(pageHash(p.id))}" data-id="${esc(p.id)}">${pgsThumb(p)}${dot ? `<span class="pgs-dot">${dot}</span>` : ""}<span class="pgs-txt">
-        <span class="pgs-title">${esc(p.title)}</span>
-        <span class="pgs-line"><span class="pgs-by">${esc(p.by)}</span>${p.host ? `<span class="pgs-meta">${esc(p.host)}</span>` : ""}</span>
-        <span class="pgs-line"><span class="pgs-meta" title="${esc(new Date(p.updated_at).toLocaleString())}">${rev ? "updated " : ""}${esc(pageAgo(p.updated_at))}</span><span class="pgs-tags">${p.script ? `<span class="pgs-pill pgs-js" title="Runs JavaScript">JS</span>` : ""}<span class="pgs-pill">v${p.version}</span></span></span></span></a>`;
-    };
+    const card = (p) => pgsCardHtml(p, p.id === r.id);
     const body = pgs.body && pgs.body.q === pgs.q.trim() ? pgs.body.matches.filter((m) => pgs.items.some((p) => p.id === m.id)) : [];
     const hit = (m) => {
       const p = pgs.items.find((x) => x.id === m.id);
@@ -7445,14 +7467,24 @@ function renderPageView() {
   pgs.frameKey = key;
   pgs.frameVer = ver;
   pgs.frameFollow = !r.ver;
-  // allow="clipboard-write": a page's Copy button may write the clipboard (on a click; it can never read it).
-  view.innerHTML = bar + `<div class="pgs-sel" id="pgs-sel" hidden></div><div class="pgs-body"><iframe class="pgs-frame" style="color-scheme:${pgsScheme()}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${esc(p.title)}" src="${esc(pgs.pagesUrl + "/p/" + p.id + "/" + ver)}"></iframe><aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div>`;
-  const fr = view.querySelector("iframe.pgs-frame");
-  fr.addEventListener("load", sendPageTheme);
-  fr.addEventListener("load", pgcMarks);
+  view.innerHTML = bar + `<div class="pgs-sel" id="pgs-sel" hidden></div><div class="pgs-body">${pageFrameHtml(p, ver)}<aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div>`;
+  pageFrameWire(view);
   pgcOpen(p, ver);
   pagesMade(p.id, ver);
   pgsChatGate(p.id);
+}
+
+// The frame a page is shown in, wherever it is shown: the Pages viewer, the review split (#rs) and the Pages tab of the side
+// panel (sidepanel.js). allow="clipboard-write": a page's Copy button may write the clipboard (on a click; it can never read it).
+function pageFrameHtml(p, ver) {
+  return `<iframe class="pgs-frame" style="color-scheme:${pgsScheme()}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" allow="clipboard-write" referrerpolicy="no-referrer" title="${escAttr(p.title || p.id)}" src="${escAttr((pgs.pagesUrl || "") + "/p/" + p.id + "/" + ver)}"></iframe>`;
+}
+// pageFrameWire: the frame in el gets the app's theme and the comment marks once it loads.
+function pageFrameWire(el) {
+  const fr = el.querySelector("iframe.pgs-frame");
+  if (!fr) return;
+  fr.addEventListener("load", sendPageTheme);
+  fr.addEventListener("load", pgcMarks);
 }
 
 // The session that made a version of a page: the transcript index knows, from the
@@ -7536,7 +7568,7 @@ function pageThemeMessage() {
   return { type: "comebye-theme", scheme: t.mode, font: CT.fontChoice() === "serif" ? "serif" : "sans", tokens };
 }
 
-function pageFrames() { return document.querySelectorAll("#pgs-view iframe.pgs-frame, #rs iframe.pgs-frame"); }
+function pageFrames() { return document.querySelectorAll("#pgs-view iframe.pgs-frame, #rs iframe.pgs-frame, #sp-body iframe.pgs-frame"); }
 
 function sendPageTheme() {
   if (pgs.route) pgsImgs();
@@ -7616,7 +7648,10 @@ function pgcToggleChanges() {
   pgcChgItem();
 }
 
-function pgcFrame() { return document.querySelector("#rs:not([hidden]) iframe.pgs-frame") || document.querySelector("#pgs-view iframe.pgs-frame"); }
+// The viewer the comments work on: the review split, else the Pages screen, else the side panel's Pages tab (sidepanel.js). The
+// strip and tray (#pgs-sel, #pgs-tray) are found by id, and the three containers come in that order in the document, so the
+// first of each id is the one beside this frame.
+function pgcFrame() { return document.querySelector("#rs:not([hidden]) iframe.pgs-frame") || document.querySelector("#pgs-view iframe.pgs-frame") || document.querySelector("#sp-body iframe.pgs-frame"); }
 
 window.addEventListener("message", (e) => {
   const fr = pgcFrame();
@@ -7797,6 +7832,7 @@ function syncPages() {
     pgsPop("pgsmenu", false); pgsPop("pgsinfo", false); pagesFocus(false);
     clearInterval(pgs.timer); pgs.timer = null;
     $("pgs-view").replaceChildren(); $("pgs-view").dataset.id = ""; pgs.frameKey = "";
+    if (was && window.SP) window.SP.pageRefocus(); // the comments were the Pages viewer's: back to the panel's page, if it shows one
     return;
   }
   if (!was) {

@@ -146,6 +146,8 @@ if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ;
 if want reportage; then node reportage.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Status as the third tab of the side panel beside an agent's chat (statussplit.mjs: live, closes, URL and Back, phone sheet).
 if want statussplit; then node statussplit.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The Pages an agent published, as the fourth tab of the side panel (pagessplit.mjs: the match, a Page in the panel, live, back, full screen, empty).
+if want pagessplit; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagessplit.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Tool calls as one grey line per run: the list, a call's input and output, the failure peek.
 if want toolruns; then node toolruns.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The same lines by keyboard only (arrows, Home/End, Enter/Space, Esc), the status line and a light axe-style audit.
