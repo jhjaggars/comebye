@@ -1,0 +1,123 @@
+comebye api: read the hub from one Python script instead of many shell calls.
+
+Usage:
+  comebye api run FILE|- [ARGS...]   run a script with the `comebye` module importable
+  comebye api types [NAME...]        the records: every field, its type and its meaning
+  comebye api --help                 this guide
+
+A whole check (ledger, to-dos, queue, agents, gh) is one script and one tool
+call: fetch everything, apply your rules in Python, print only the findings.
+
+How it runs
+  python3 from PATH (3.8 or newer, standard library only). Without python3,
+  `comebye api run` stops with "python3 is not on PATH" and runs nothing;
+  install it (e.g. dnf install python3, apt install python3).
+  The module talks to the same Comebye as the CLI (COMEBYE_URL, default
+  http://127.0.0.1:8741) with the agent token from its state directory
+  (COMEBYE_STATE_DIR), as the agent role. The token reaches the module over a
+  private pipe, never the environment or the command line.
+  The script's exit status is the command's. A hub error ends the script with
+  one line ("comebye api: GET /api/...: 404 ...") and status 1.
+  Read-only: every function is a GET. There are no write functions; use the
+  CLI (comebye todo add, comebye prompt, ...) to act on what you find.
+
+Functions (import comebye as cb)
+  cb.whoami()                         Whoami: host, role, agent, hub, version
+  cb.agents(host=None, name=None)     [Agent] on every host (status in .agent_status)
+  cb.agent(ref)                       one Agent by id, pane id or name
+  cb.hosts()                          [Host]: status, version, error
+  cb.ledger(refresh=False)            Ledger: entries, marks, plans, roles, asks (fetched once per run)
+  cb.entries(status=, active=, repo=, name=, loop=)
+                                      [Entry], oldest first; status is one or a list of
+                                      waiting running finished landing landed
+                                      ready_to_remove removed failed lost archived
+  cb.entry(ref)                       newest Entry by id, agent id, agent name or branch
+  cb.latest_reply(entry)              Reply(text, at, kind): the newer of final_report and
+                                      last_pass_report, with when it was written
+  cb.marks()                          [Mark]: sessions proposed for removal (no entry)
+  cb.todos(state=None)                [Todo]; state None (open+answered), open, answered,
+                                      done, dropped, all. The text is .question
+  cb.todo_list(state=None)            TodoList: todos plus the open/answered counts
+  cb.todo(id)                         one Todo
+  cb.queue(agent=None, settled=False) [QueuedPrompt] waiting for delivery
+  cb.pages(mine=False, handoff=None)  [Page] (metadata)
+  cb.page(id, body=False, text=False, version=None)
+                                      PageView; body= the HTML/Markdown, text= as plain text
+  cb.archived()                       Archived: archived sessions, newest first
+  cb.log(since="24h", kind=None, limit=None)
+                                      [Event]: what the hub handled itself, newest first
+  cb.coordinators()                   [Coordinator]
+  cb.removals()                       Removals: the user's route. An agent gets cb.Forbidden
+                                      (403), as for /api/releases and /api/usage
+  cb.get("/api/...", **query)         any other GET route, as plain JSON
+
+  Time: record times are timezone-aware UTC datetimes (None when unset).
+  cb.now() is UTC; cb.age(t) a timedelta; cb.ago(t) "3h ago". Never compare
+  with a naive or local datetime.
+
+  GitHub (read-only, via the gh CLI and its login; plain dicts):
+  cb.gh.pr(N, repo=None)              state, mergeable, mergeStateStatus, statusCheckRollup...
+  cb.gh.checks(N, repo=None)          [{name, state, bucket, link, workflow}]
+  cb.gh.runs(repo=None, branch=None, workflow=None, limit=10)
+  cb.gh.run_jobs(RUN_ID, repo=None)   [{name, status, conclusion, url, steps...}]
+
+Records
+  Records are strict and read-only: they have exactly the fields of the hub's
+  Go types, generated from them. A wrong field fails loudly:
+    todo.title  ->  AttributeError: Todo has no field 'title'; did you mean ...
+  A field the hub left out reads as its empty value ("", 0, False, [], {},
+  None). cb.to_dict(rec) is the JSON; cb.fields(rec) the field names.
+  The main ones (`comebye api types NAME` for all fields and their meaning):
+    Entry     id status agent_name agent_id host repo_name branch base purpose
+              loop final_report report_at report_age last_pass_report
+              last_pass_report_at newer_reply_age progress live candidate
+              checks mark approval created_at finished_at
+    Todo      id question context kind state waiting created_at answer options
+    Agent     id host pane_id name agent agent_status cwd worktree last_active
+    QueuedPrompt  id agent_id name text from_ at state held
+    Page      id title by agent host handoff version updated_at
+    Event     id at kind subject who text
+  A field named like a Python keyword ends in _: Entry.from_, Host.class_.
+
+Example: a mini steward check
+  cat > check.py <<'PY'
+  import comebye as cb
+
+  me = cb.whoami()
+  print(f"hub {me.host}, as {me.role}")
+  live = {a.id: a for a in cb.agents()}
+  for e in cb.entries(status=["running", "finished", "landing"]):
+      r = cb.latest_reply(e)
+      notes = []
+      if e.status == "finished" and not r.text:
+          notes.append("finished without a report")
+      if r.at and cb.age(r.at).total_seconds() > 24 * 3600:
+          notes.append(f"its newest reply is {cb.ago(r.at)}")
+      if e.agent_id and e.agent_id not in live:
+          notes.append("its agent is gone")
+      if e.progress and e.status == "running":
+          notes.append(f"progress {cb.ago(e.progress.at)}: {e.progress.text[:60]}")
+      print(f"{e.status:9} {e.agent_name or e.id:24} {'; '.join(notes) or 'ok'}")
+  waiting = [t for t in cb.todos("open") if t.waiting]
+  gone = [t for t in waiting if t.waiting.gone or t.waiting.id not in live]
+  print(f"{len(cb.todos('open'))} open to-dos, {len(gone)} waiting on an agent that is gone")
+  for t in gone:
+      print(f"  {t.id} {t.question[:70]}")
+  held = [q for q in cb.queue() if q.held]
+  print(f"{len(cb.queue())} queued prompts, {len(held)} held")
+  try:
+      cb.removals()
+  except cb.Forbidden:
+      print("removals: the user's to review")
+  PY
+  comebye api run check.py
+
+  Its output, against a test hub:
+    hub devbox, as agent
+    running   fix-detail-menu          progress 4m ago: running the browser tests
+    finished  old-worker               its newest reply is 2d ago
+    finished  ghost-worker             finished without a report; its agent is gone
+    running   pr-watcher               ok
+    2 open to-dos, 0 waiting on an agent that is gone
+    1 queued prompts, 0 held
+    removals: the user's to review

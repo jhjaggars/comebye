@@ -583,6 +583,40 @@ success, 1 when a call failed, 2 for a usage error.
 | `comebye playbook [--harness pi\|claude\|generic]` | The coordinator playbook (`pi`: a Pi agent definition with frontmatter; `claude`: for a CLAUDE.md or first prompt). |
 | `comebye presets claude\|pi\|generic` | How to let that harness run `comebye` without asking each time. |
 | `comebye whoami` | Who the caller is to Comebye: agent id, host, role, hub. |
+| `comebye api run FILE\|- [ARGS...]` / `api types [NAME...]` / `api --help` | Run a Python script with a read-only `comebye` module over the hub (see *Scripting the hub* below) / the records and their fields / the guide. |
+
+**Scripting the hub (`comebye api`).** A check that reads many things
+(the ledger, the to-do list, the queue, agents, a PR's checks) costs one
+tool call as a script instead of one per command. `comebye api run
+check.py` runs `python3` from PATH (3.8 or newer, standard library only)
+with the module `comebye` importable, aimed at the same Comebye as the CLI
+(`COMEBYE_URL`, `COMEBYE_STATE_DIR`) as the agent role. The token reaches
+it over a private pipe, never the environment. Without `python3` the
+command says so and runs nothing. The script's exit status is the
+command's; a hub error ends it with one line and status 1.
+
+```python
+import comebye as cb
+for e in cb.entries(status=["running", "finished"]):
+    r = cb.latest_reply(e)          # the newer of final_report and last_pass_report
+    print(e.agent_name, e.status, cb.ago(r.at) if r.at else "no report")
+print(len(cb.todos("open")), "open to-dos")
+```
+
+Functions: `whoami`, `agents`, `agent`, `hosts`, `ledger`, `entries`,
+`entry`, `latest_reply`, `marks`, `todos`, `todo_list`, `todo`, `queue`,
+`pages`, `page`, `archived`, `log`, `coordinators`, `removals`, `get`
+(any other GET route, as JSON), and `cb.gh.pr`, `checks`, `runs`,
+`run_jobs` over the `gh` CLI. It only reads: every call is a GET, and there
+are no write functions (act with the CLI). The hub does not enforce that:
+the token is the agent's own. `removals()` (like `/api/releases` and
+`/api/usage`) is the user's and raises `cb.Forbidden` for the agent role.
+Records are strict: they have exactly the fields of the hub's Go types
+(generated from them by `internal/server/apitypes_test.go`, which fails
+when the types change without `go test ./internal/server -run
+TestAPITypes -update-api-types`), so `todo.title` raises "Todo has no
+field 'title'; did you mean 'question'". Times are timezone-aware UTC
+datetimes. `comebye api --help` has the full list and a mini steward check.
 
 AGENT is a host-qualified id (`laharl/w1Q:p1`), a pane id on the local
 host (`w1Q:p1`) or an agent name; a name that matches agents on several

@@ -106,6 +106,7 @@ func init() {
 		{"upgrade", "[--version vX.Y.Z|latest | --from-source [--ref R] [--repo DIR]] [--dry-run] [--force] [--rollback] [--restart auto|systemd|exit [--pid N]]", "install a new comebye over this one and restart it: a verified release (default) or a source build; smoke-checks and rolls back by itself; restarts the user service, or with --restart exit (the default without systemd) stops the server so its supervisor starts it again; this host only", cmdUpgrade},
 		{"signin", "claude [--host H] [--login L] [--json]", "sign claude in on a host without a shell on it: prints the sign-in link, reads the one-time code the page shows from stdin and prints the result (the user's alone; the credential is written on that host by claude itself; --host defaults to this host)", cmdSignin},
 		{"whoami", "[--json]", "who this agent is to Comebye: id, host, hub", cmdWhoami},
+		{"api", "run FILE|- [ARGS...] | types [NAME...] | --help", "read the hub from one Python script instead of many calls: a read-only module (agents, ledger, to-dos, queue, pages, log, gh) with strict records generated from the hub's types; `comebye api --help` is the guide", cmdAPI},
 		{"help", "[COMMAND]", "this help", nil},
 	}
 }
@@ -163,11 +164,14 @@ func Run(args []string, e *Env) int {
 		}
 		err := c.run(e, args[1:])
 		var ue *usageError
+		var es exitStatus
 		switch {
 		case err == nil:
 			return 0
 		case errors.Is(err, errNotIdle):
 			return 1
+		case errors.As(err, &es):
+			return int(es)
 		case errors.Is(err, flag.ErrHelp):
 			fmt.Fprintf(e.Stdout, "usage: comebye %s %s\n\n%s\n", c.name, c.args, c.summary)
 			return 0

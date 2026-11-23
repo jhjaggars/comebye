@@ -64,6 +64,8 @@ while IFS= read -r f; do
       # internal/server's tests read the provision and tools/worker golden files and testdata
       add_pkg ./internal/provision; add_pkg ./internal/server ;;
     internal/cli/*) lint=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/cli ;;
+    # `comebye api`'s module: the cli runs it, internal/server's golden test checks the generated records.
+    internal/apipy/*) lint=true; merge_go=true; add_pkg ./internal/apipy; add_pkg ./internal/cli; add_pkg ./internal/server ;;
     internal/usage/*) lint=true; add_script usage; merge_browser=true; merge_go=true; add_pkg ./internal/usage ;;
     internal/release/*|internal/upgrade/*) lint=true; add_script releaseauto; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
     # The day-in-the-life smoke (tools/smoke) runs whenever the browser smoke set does (see ci.yml); its own files run it.
