@@ -1,6 +1,7 @@
 # Seconds each rest script takes on a CI runner (from the "== script NAME: N s" lines of a CI run: PR #101's first run).
 # tools/ci/browser.sh balances its parts from these; a script not listed counts 30. Refresh from a CI run's lines.
 statussplit 70
+pagessplit 60
 pages 49
 hostpicker 40
 groupby 40

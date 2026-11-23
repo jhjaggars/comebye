@@ -1,12 +1,16 @@
 /* Side panels beside an agent's chat: a Doc panel (the document the agent
  * declared with `comebye show`, or a file the user picks), a Diff panel
- * (what the agent's checkout changed) and a Status panel (the hub's Status
- * page, the same one #/status shows full screen). Doc and Diff are read through
+ * (what the agent's checkout changed), a Status panel (the hub's Status
+ * page, the same one #/status shows full screen) and a Pages panel (the Pages
+ * this agent published, app.js's agentPages, and one of them open in the same
+ * sandboxed frame, with the same comments, as the Pages screen). Doc and Diff are read through
  * the hub from the agent's own host (GET <agent>/file and <agent>/diff); this
  * file only draws them. Status is drawn by app.js's renderStatus into #sp-st,
- * so it stays live on the hub's events like the full-screen page.
+ * so it stays live on the hub's events like the full-screen page. Pages come
+ * from the Pages screen's own list (app.js's pagesLoad, GET /api/pages), read
+ * again while the tab is shown as often as the Pages screen reads it.
  * Desktop: a split beside the chat (drag the divider; D toggles it);
- * phone: a bottom sheet with Doc, Diff and Status tabs.
+ * phone: a bottom sheet with Doc, Diff, Status and Pages tabs.
  *
  * Uses app.js's globals: $, esc, escAttr, api, agentById, agentPath, state,
  * toast, renderMarkdown. Everything from the host is untrusted text: it goes
@@ -22,7 +26,9 @@
   // The Doc panel renders Markdown up to the host's own 1 MB cap (chat bubbles stop at MD_MAX_CHARS).
   const DOC_MD_MAX = 1100000;
   const reduced = () => matchMedia("(prefers-reduced-motion:reduce)").matches;
-  const TABS = ["doc", "diff", "status"];
+  const TABS = ["doc", "diff", "status", "pages"];
+  // The Pages tab reads the hub's Pages list as often as the Pages screen does (every 20 s; faster in test mode).
+  const PAGES_MS = 20000;
 
   const st = {
     id: null,          // the selected agent's id
@@ -55,6 +61,11 @@
     loadErr: new Map(), // section|path -> why a fetch failed
     busy: false,
     again: false,      // a click arrived while a load was in flight: run it when that one ends
+    // pages
+    pg: null,          // the id of the Page open in the panel (null: the list)
+    pgVer: 0,          // the version its frame shows (the newest when it was opened)
+    pgKey: "",         // id/version of the frame now in the body ("" when there is none)
+    pgLoading: false,  // a read of the Pages list is in flight
   };
 
   // ---- per-agent memory of the panel (open, tab, width) ----
@@ -72,7 +83,7 @@
     if (!det || $("sp")) return;
     const btn = document.createElement("button");
     btn.id = "sp-btn"; btn.type = "button"; btn.className = "more"; btn.setAttribute("aria-pressed", "false");
-    btn.setAttribute("aria-label", "Side panel: document, diff and status"); btn.title = "Document, diff and status (D)";
+    btn.setAttribute("aria-label", "Side panel: document, diff, status and pages"); btn.title = "Document, diff, status and pages (D)";
     btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 4v16" stroke="currentColor" stroke-width="2"/></svg>';
     $("d-refresh").before(btn);
     const sp = document.createElement("aside");
@@ -82,6 +93,7 @@
         <button type="button" class="sp-tab" role="tab" id="sp-tab-doc" data-tab="doc">Doc</button>
         <button type="button" class="sp-tab" role="tab" id="sp-tab-diff" data-tab="diff">Diff<span class="sp-badge" id="sp-n" hidden></span></button>
         <button type="button" class="sp-tab" role="tab" id="sp-tab-status" data-tab="status">Status</button>
+        <button type="button" class="sp-tab" role="tab" id="sp-tab-pages" data-tab="pages">Pages<span class="sp-badge" id="sp-pgn" hidden></span></button>
         <button type="button" class="sp-x" aria-label="Close the panel">&times;</button>
       </div>
       <div class="sp-bar" id="sp-bar"></div>
@@ -102,6 +114,13 @@
     // Status in the panel answers clicks as the Status page does (app.js's handlers), only inside #sp-st.
     $("sp-body").addEventListener("click", (e) => { if (e.target.closest && e.target.closest("#sp-st") && window.onStatusClick) window.onStatusClick(e); });
     $("sp-body").addEventListener("toggle", (e) => { if (e.target.closest && e.target.closest("#sp-st") && window.onStatusToggle) window.onStatusToggle(e); }, true);
+    // A card in the Pages tab opens its Page here (a modified or middle click keeps the link's own behaviour: #/pages/<id>).
+    $("sp-body").addEventListener("click", (e) => {
+      const c = e.target.closest && e.target.closest("#sp-pgl a.pgs-card");
+      if (!c || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      openPg(c.dataset.id);
+    });
     bindGrip($("sp-grip"), det);
     if (typeof ResizeObserver !== "undefined") { // two columns only when the body is wide enough
       new ResizeObserver(() => {
@@ -196,6 +215,7 @@
     if (carry) remember({ open: true, tab: "status" });
     st.open = !!m.open;
     st.tab = TABS.includes(m.tab) ? m.tab : "doc";
+    st.pg = typeof m.pg === "string" && m.pg ? m.pg : null; st.pgVer = 0; st.pgKey = "";
     st.split = !!m.split;
     det.style.setProperty("--sp-w", (m.w || 44) + "%");
     $("sp-grip").setAttribute("aria-valuenow", String(Math.round(m.w || 44)));
@@ -233,6 +253,7 @@
     syncStream();
     if (!st.open || !st.id || document.hidden) return;
     if (st.tab === "status") return; // drawn from the app's own state (renderStatus), which the hub's events keep current
+    if (st.tab === "pages") { loadPages(now); return; }
     // With the push stream up, a poll is only a safety net.
     if (!now && st.live && Date.now() - st.fetchedAt < SAFETY_MS) return;
     // A load is in flight. A poll just waits for the next one, but a click (a
@@ -251,6 +272,51 @@
       st.busy = false;
       if (st.again) { st.again = false; tick(true); }
     }
+  }
+
+  // ---- pages: the Pages screen's list (pgs.items), read again when it is older than the Pages screen would let it get ----
+  function loadPages(force) {
+    if (st.pgLoading || !window.pagesLoad) return;
+    const age = Date.now() - (pgs.at || 0);
+    if (!force && pgs.loaded && age < (window.pollMs ? window.pollMs(PAGES_MS, 1000) : PAGES_MS)) return;
+    if (!pgs.loaded) renderBody();
+    st.pgLoading = true;
+    window.pagesLoad().finally(() => { st.pgLoading = false; }); // pagesLoad calls pagesChanged when the list is in
+  }
+  // app.js's pagesLoad read the list (for the Pages screen, the review split or this tab): draw what changed.
+  function pagesChanged() {
+    badge();
+    if (!st.open || st.tab !== "pages" || !st.id) return;
+    renderBar();
+    renderBody({ keepScroll: true });
+  }
+  const mine = () => (st.id && window.agentPages ? window.agentPages(agentById(st.id)) : []);
+  function badge() {
+    const n = $("sp-pgn");
+    if (!n) return;
+    const k = st.id && pgs.loaded ? mine().length : 0;
+    n.textContent = String(k);
+    n.hidden = !k;
+  }
+  function openPg(id) {
+    st.pg = id; st.pgVer = 0;
+    remember({ pg: id });
+    renderBar(); renderBody();
+  }
+  function closePg() {
+    const id = st.pg;
+    st.pg = null; st.pgVer = 0;
+    remember({ pg: null });
+    renderBar(); renderBody();
+    const c = [...document.querySelectorAll("#sp-pgl a.pgs-card")].find((x) => x.dataset.id === id);
+    (c || $("sp-body")).focus({ preventScroll: !c });
+  }
+  // The comments strip and tray follow the frame they were opened for: when the Pages screen or the review split had them, and
+  // that viewer is gone, the panel's Page takes them back.
+  function pageRefocus() {
+    if (!st.open || st.tab !== "pages" || !st.pg || !st.pgKey || !$("sp-body").querySelector("iframe.pgs-frame")) return;
+    const p = pgs.items.find((x) => x.id === st.pg);
+    if (p && window.pgcOpen) window.pgcOpen(p, st.pgVer);
   }
 
   async function loadDiff(a, id, force) {
@@ -371,7 +437,19 @@
     n.textContent = String(files);
     n.hidden = !st.diff || !files;
     let html;
-    if (st.tab === "status") {
+    if (st.tab === "pages") {
+      badge();
+      const p = st.pg && pgs.items.find((x) => x.id === st.pg);
+      if (p) {
+        const ver = st.pgVer || p.version;
+        html = `<button type="button" id="sp-pgback" aria-label="Back to this agent's Pages">‹ Pages</button><span class="sp-tot sp-pgt" title="${escAttr(p.title)}">${esc(p.title)}</span>` +
+          (ver < p.version ? `<button type="button" id="sp-pgnew" title="Show the newest version">v${p.version} is out · reload</button>` : `<span class="pgs-pill cur" id="sp-pgv">v${ver}</span>`) +
+          `<button type="button" id="sp-pgfull" title="Open this Page on the Pages screen">Full screen</button>`;
+      } else {
+        const n = pgs.loaded ? mine().length : 0;
+        html = `<span class="sp-tot">${n ? `<b>${n} page${n === 1 ? "" : "s"}</b> <span class="muted">this agent published</span>` : `<span class="muted">Pages this agent publishes</span>`}</span><span class="live${pgs.err ? " off" : ""}" id="sp-live">${pgs.err ? "not updating" : "live"}</span>`;
+      }
+    } else if (st.tab === "status") {
       // Full screen is the desktop's Status page; on a phone the sheet is nearly that already.
       html = `<span class="sp-tot muted">The hub's Status, live</span>` + (isDesktop() ? `<button type="button" id="sp-full" title="Open the Status page in the main pane (g s)">Full screen</button>` : "");
     } else if (st.tab === "doc") {
@@ -442,6 +520,9 @@
     });
     bar.addEventListener("click", (e) => {
       if (e.target.closest("#sp-full")) { if (window.openPage) window.openPage("status"); return; }
+      if (e.target.closest("#sp-pgback")) { closePg(); return; }
+      if (e.target.closest("#sp-pgnew")) { st.pgVer = 0; renderBar(); renderBody(); return; }
+      if (e.target.closest("#sp-pgfull") && st.pg) { const p = pgs.items.find((x) => x.id === st.pg); location.hash = window.pageHash(st.pg, p && st.pgVer && st.pgVer < p.version ? st.pgVer : 0); return; }
       if (e.target.id === "sp-split") {
         st.split = !st.split;
         remember({ split: st.split });
@@ -476,17 +557,55 @@
     const body = $("sp-body");
     if (!body || !st.open) return;
     const top = body.scrollTop;
+    body.classList.toggle("sp-flush", st.tab === "pages" && !!st.pg && pgs.items.some((x) => x.id === st.pg));
+    if (st.tab !== "pages") st.pgKey = "";
+    if (st.tab === "pages") { pagesBody(body, opts, top); renderBar(); return; }
     if (st.tab === "status") {
-      if (!$("sp-st")) body.innerHTML = '<div id="sp-st" class="sp-st"></div>';
+      if (!$("sp-st")) { body._pgl = ""; body.innerHTML = '<div id="sp-st" class="sp-st"></div>'; }
       if (window.renderStatus) window.renderStatus();
       renderBar();
       return;
     }
+    body._pgl = "";
     body.innerHTML = st.tab === "doc" ? docHtml() : diffHtml();
     if (st.tab === "doc") afterDoc(opts);
     else if (opts.keepScroll) body.scrollTop = top;
     if (opts.keepScroll) body.scrollTop = top;
     renderBar();
+  }
+
+  // The Pages tab: the list (the Pages screen's cards, in its rows layout), or one Page in the Pages screen's frame.
+  function pagesBody(body, opts, top) {
+    const p = st.pg && pgs.items.find((x) => x.id === st.pg);
+    if (st.pg && !p && pgs.loaded && !pgs.err) { st.pg = null; remember({ pg: null }); } // deleted since
+    if (p) {
+      const ver = st.pgVer || p.version, key = p.id + "/" + ver;
+      if (st.pgKey === key && body.querySelector("iframe.pgs-frame")) return; // the same frame: the page keeps its state
+      st.pgVer = ver; st.pgKey = key;
+      body._pgl = "";
+      body.innerHTML = `<div class="sp-pgv"><div class="pgs-sel" id="pgs-sel" hidden></div><div class="pgs-body">${window.pageFrameHtml(p, ver)}<aside class="pgs-tray" id="pgs-tray" aria-label="Comments" hidden></aside></div></div>`;
+      window.pageFrameWire(body);
+      window.pgcOpen(p, ver);
+      if (ver === p.version) window.pgsMarkOpened(p);
+      return;
+    }
+    st.pgKey = "";
+    let html;
+    if (pgs.err) html = `<div class="empty" role="status">${esc(pgs.err)}</div>`;
+    else if (!pgs.loaded) html = `<div class="empty" role="status">Reading the Pages…</div>`;
+    else {
+      const list = mine();
+      html = list.length ? `<div class="pgs-rows sp-pgl" id="sp-pgl" aria-label="Pages this agent published">${list.map((x) => window.pgsCardHtml(x, false)).join("")}</div>`
+        : `<div class="empty sp-pg0" role="status"><b>No Pages from this agent yet.</b><br>When it runs <code>comebye publish FILE</code>, the page shows up here.</div>`;
+    }
+    if (body._pgl === html && body.querySelector("#sp-pgl, .empty")) return; // unchanged: no redraw, focus and scroll stay
+    const f = document.activeElement, fid = f && body.contains(f) && f.dataset ? f.dataset.id : "";
+    body._pgl = html;
+    body.innerHTML = html;
+    if (fid) { const again = [...body.querySelectorAll("#sp-pgl a.pgs-card")].find((x) => x.dataset.id === fid); if (again) again.focus({ preventScroll: true }); }
+    if (opts.keepScroll) body.scrollTop = top; else body.scrollTop = 0;
+    for (const el of body.querySelectorAll("#sp-pgl .pgs-thumb")) window.pgsWantPreview(el.dataset.prev);
+    window.pgsFill();
   }
 
   function docHtml() {
@@ -799,6 +918,6 @@
     if (matchMedia("(max-width:1099px)").matches) toggle(false); // the sheet covers the prompt
   }
 
-  window.SP = { toggle, show, onAgent, isOpen: () => st.open, statusShown: () => st.open && !!st.id && st.tab === "status" && !!$("sp-st") };
+  window.SP = { toggle, show, onAgent, isOpen: () => st.open, statusShown: () => st.open && !!st.id && st.tab === "status" && !!$("sp-st"), pagesChanged, pageRefocus };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", inject); else inject();
 })();
