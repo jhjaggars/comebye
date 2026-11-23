@@ -3,6 +3,7 @@
 #
 #   tools/ci/remote.sh HOST SUITE [ARG...]
 #   tools/ci/remote.sh --check HOST     only the checks below (and a start); exit 0 when a run would go ahead
+#   --no-wait (before HOST, or REMOTE_NO_WAIT=1): refuse when the VM is busy instead of waiting for it
 #
 #   SUITE  browser ARG...   tools/ci/browser.sh ARG...    artifacts -> ARG 3, or ${RUNNER_TEMP:-/tmp}/uitest-SUITE-SCHEME
 #          flakes ARG...    tools/ci/flakes.sh ARG...     artifacts -> $OUT_DIR, or a new /tmp/flakes.XXXXXX
@@ -30,16 +31,21 @@
 # this script lives in, whatever the current directory. The heavy wrappers call this by themselves when a test VM
 # is configured (tools/ci/prefer-vm.sh).
 #
+# One suite at a time on a VM: a run takes a lock there (REMOTE_ROOT/run.lock) before its suite starts. When another
+# run holds it, this one says whose it is and since when, and waits its turn, under its idle hold; Ctrl-C gives up.
+# A killed run's lock goes with its processes.
+#
 # Refused before anything runs (exit 2): a HOST with no provisioner ssh config or no VM, a VM that is stopped with
 # REMOTE_START=0 or would not start, a VM whose toolchain is missing or not this checkout's pins
 # (`worker toolchain HOST` installs them), and a second run from the same worktree while one is going.
 # 255: ssh could not reach the VM.
 set -uo pipefail
 
-usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" >&2; exit 2; }
+usage() { sed -n '2,41p' "${BASH_SOURCE[0]}" >&2; exit 2; }
 die() { echo "remote: $*" >&2; exit 2; }
-check=""
-if [ "${1:-}" = --check ]; then check=1; shift; [ $# = 1 ] || usage; else [ $# -ge 2 ] || usage; fi
+check=""; nowait="${REMOTE_NO_WAIT:-}"; [ "$nowait" = 0 ] && nowait=""
+while :; do case "${1:-}" in --check) check=1; shift ;; --no-wait) nowait=1; shift ;; *) break ;; esac; done
+if [ -n "$check" ]; then [ $# = 1 ] || usage; else [ $# -ge 2 ] || usage; fi
 host="$1"; shift
 [[ "$host" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die "host '$host': want a worker name (lower-case letters, digits, '-')"
 
@@ -143,12 +149,19 @@ pin() { sed -n "s/^[[:space:]]*$1:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$pins" 
 want="go=$(pin GoVersion) node=$(pin NodeVersion) chrome=$(pin ChromeVersion)"
 have="$(ssh_vm 'f="${COMEBYE_TEST_RUNNER_FILE:-/etc/comebye-worker/test-runner}"; export PATH="/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:$PATH"
   for t in go node npm google-chrome; do command -v "$t" >/dev/null || { echo "missing $t"; exit 0; }; done
-  [ -f "$f" ] && tr "\n" " " <"$f" || echo "no $f"' </dev/null)"
+  [ -f "$f" ] && tr "\n" " " <"$f" || echo "no $f"
+  r='"$rroot"'; echo
+  if [ -e "$r/run.lock" ] && ! flock -n "$r/run.lock" true 2>/dev/null; then echo "BUSY $(cat "$r/run.who" 2>/dev/null)"; fi' </dev/null)"
 rc=$?
+busy="$(sed -n 's/^BUSY //p' <<<"$have")"; have="$(head -1 <<<"$have")"
 [ $rc = 255 ] && { echo "remote: ssh could not reach $host (the provisioner says: ${vm:-no answer}; ${wtool[*]} status $host)" >&2; exit 255; }
 have="${have% }"
 [ "$have" = "$want" ] || die "$host has no test toolchain at this checkout's pins (it says: ${have:-nothing}; want: $want).
   Install it with: go run ./tools/worker toolchain $host"
+if [ -n "$busy" ]; then
+  [ -n "$nowait" ] && die "$host is busy with ${busy:-another run}: not waiting (--no-wait)"
+  echo "remote: $host is busy with $busy; this run will wait its turn" >&2
+fi
 [ -n "$check" ] && { echo "remote: $host is ready ($have)" >&2; exit 0; }
 
 # ---- what is sent: HEAD, the tracked changes, the untracked files (no .git/config, no remotes)
@@ -222,12 +235,26 @@ if [ -n "$lockh" ] && [ -d "$nm" ] && [ ! -e tools/uitest/node_modules ]; then
   cp -al "$nm" tools/uitest/node_modules 2>/dev/null || cp -a "$nm" tools/uitest/node_modules
 fi
 echo "remote(vm): $(hostname), $(nproc) CPUs, in $src" >&2
-# The idle hold, renewed while the suite runs (it lapses on its own 20 min after a lost link).
-( while sleep 300; do '"$(hold_cmd 20)"'; done ) </dev/null >/dev/null 2>&1 &
+# The idle hold, renewed while this run waits and its suite runs, and only while this script is alive (it lapses on
+# its own 20 min after a lost link). Neither helper keeps the lock below.
+( while sleep 300 && kill -0 $$ 2>/dev/null; do '"$(hold_cmd 20)"'; done ) </dev/null >/dev/null 2>&1 8>&- &
 renew=$!
+trap '"'"'kill "$renew" 2>/dev/null'"'"' EXIT
+# One suite at a time on this VM. The suite inherits the lock, so it is free once the suite and this script are gone,
+# however they end. While another run holds it, wait in steps, and give up when this side goes (EOF on stdin).
+exec 8>>"$root/run.lock"
+if ! flock -n 8; then
+  w0=$SECONDS
+  echo "remote(vm): $(hostname) is busy with $(cat "$root/run.who" 2>/dev/null || echo "another run"); waiting for it (Ctrl-C gives up)" >&2
+  until flock -w 5 8; do
+    read -t 1 -r _; [ $? -gt 128 ] || { echo "remote(vm): gave up waiting" >&2; exit 130; }
+  done
+  echo "remote(vm): $(hostname) is free after $((SECONDS - w0)) s; starting" >&2
+fi
+printf "%s since %s\n" '"$(q "$run_id ($kind, $branch, from $me)")"' "$(date -u +%H:%M:%SZ)" >"$root/run.who"
 setsid env'"$envs"' tools/ci/capped.sh'"$line"' </dev/null &
 pid=$!
-( while IFS= read -r _; do :; done; kill -TERM -- "-$pid"; sleep 5; kill -KILL -- "-$pid" ) <&0 >/dev/null 2>&1 & # <&0: a background job reads /dev/null otherwise
+( while IFS= read -r _; do :; done; kill -TERM -- "-$pid"; sleep 5; kill -KILL -- "-$pid" ) <&0 >/dev/null 2>&1 8>&- & # <&0: a background job reads /dev/null otherwise
 watch=$!
 wait "$pid"; rc=$?
 kill "$watch" "$renew" 2>/dev/null

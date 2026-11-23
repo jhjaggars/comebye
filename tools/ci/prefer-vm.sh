@@ -11,7 +11,8 @@
 #   ${TEST_VM_CONFIG:-${XDG_CONFIG_HOME:-~/.config}/comebye-worker/test-vm}
 #     host=kv1                                           # a worker the provisioner made (tools/worker)
 #     worker_config=~/.config/comebye-worker/kubevirt.conf  # optional: the provisioner's -config for it
-# TEST_VM=NAME uses that worker instead; TEST_VM=local runs here and says nothing (the opt-out).
+# TEST_VM=NAME uses that worker instead; TEST_VM=local runs here and says nothing (the opt-out). A VM runs one suite
+# at a time: a run waits its turn there, or with TEST_VM_NO_WAIT=1 runs here when the VM is busy.
 #
 # Here regardless, silently: in CI (CI or GITHUB_ACTIONS), on the VM itself (COMEBYE_ON_VM, set by remote.sh), and
 # once a wrapper has decided (COMEBYE_VM_DECIDED, so a wrapper that re-runs itself under capped.sh asks once).
@@ -50,17 +51,18 @@ prefer_vm() {
   [ -n "$wcfg" ] && [ -z "${COMEBYE_WORKER_CONFIG:-}" ] && export COMEBYE_WORKER_CONFIG="$wcfg"
   # The check's lines about a start show as they come (a start takes a while); the rest is kept for the warning.
   local why="" l rc=1
+  local nw=(); [ -n "${TEST_VM_NO_WAIT:-}" ] && [ "${TEST_VM_NO_WAIT}" != 0 ] && nw=(--no-wait)
   while IFS= read -r l; do
     case "$l" in
       "rc="*) rc="${l#rc=}" ;;
-      *"; starting it"*|*" started in "*) echo "$l" >&2 ;;
+      *"; starting it"*|*" started in "*|*"; this run will wait its turn") echo "$l" >&2 ;;
       "remote: "*) why="${l#remote: }" ;;
     esac
-  done < <("$remote" --check "$host" 2>&1 >/dev/null; echo "rc=$?")
+  done < <("$remote" --check "${nw[@]}" "$host" 2>&1 >/dev/null; echo "rc=$?")
   if [ "$rc" = 0 ]; then
     echo "tests: running $suite on the test VM $host (TEST_VM=local runs it here)" >&2
     exec "$remote" "$host" "$suite" "$@"
   fi
-  echo "tests: running on this machine: test VM $host does not answer (${why:-exit $rc})" >&2
+  echo "tests: running on this machine: test VM $host is not available (${why:-exit $rc})" >&2
   return 0
 }

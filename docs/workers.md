@@ -491,6 +491,15 @@ While the suite runs, an idle hold (`remote-test-ID` in the VM's idle-holds fold
 renewed every 5) keeps the VM from powering off under it: the idle check does not count a plain
 ssh session as activity. The hold is removed with the run folder, and lapses by itself after a lost link.
 
+A VM runs **one suite at a time**. A run takes a lock there (`run.lock` in the cache root)
+before its suite starts. When another run holds it, the new one prints
+`remote(vm): kv1 is busy with RUN (SUITE, BRANCH, from HOST) since HH:MM:SSZ; waiting for it
+(Ctrl-C gives up)`, then `… is free after N s; starting` when its turn comes. Its idle hold
+covers the wait. The lock belongs to the run's processes on the VM, so a run that is killed,
+or whose link drops, frees it by itself. Ctrl-C while waiting gives up cleanly.
+`--no-wait` (or `REMOTE_NO_WAIT=1`) refuses a busy VM instead of waiting, and
+`TEST_VM_NO_WAIT=1` makes the default path (below) run on this machine instead.
+
 It refuses (exit 2, before anything is sent): a HOST this tool has no ssh config for
 (`$COMEBYE_WORKER_STATE`, default `~/.local/state/comebye-worker`: set it if your config has a
 `state_dir`) or no VM, a VM that is stopped under `REMOTE_START=0`, won't start, or is in
@@ -506,7 +515,7 @@ With a test VM configured, the heavy wrappers send themselves there without bein
 whole set (no package named, `./...` or `--shard`) and `tools/ci/prelanding.sh`. Each runs
 `tools/ci/remote.sh --check HOST` first: the provisioner knows the VM (a stopped one is started,
 as above), ssh reaches it, and it has this checkout's pins. When that passes, the run goes
-through `remote.sh` with a line saying so. When it does not, or no VM is configured, the run
+through `remote.sh` with a line saying so. When it does not (or it is busy and `TEST_VM_NO_WAIT=1` is set), or no VM is configured, the run
 stays on this machine with one line saying why. Quick runs always stay here: `gotest.sh` with
 named packages, any other `flakes.sh` command, and a plain `go test` (call `gotest.sh` for
 `-race ./...`). CI (`CI` or `GITHUB_ACTIONS` set) and the VM itself never take this path.

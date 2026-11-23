@@ -9,8 +9,11 @@
 # mid-run killing the suite on the VM, the idle hold, a stopped VM started through a fake provisioner, and the
 # refusals (unknown host, no VM, stopped with REMOTE_START=0, a start that fails, no toolchain, wrong pins, two runs
 # at once, ssh down). Then tools/ci/prefer-vm.sh, through stand-in wrappers that call the real prefer_vm: the test VM
-# from its config (and the provisioner's -config), TEST_VM=local, CI, no config, a VM that does not answer (each with
+# from its config (and the provisioner's -config), TEST_VM=local, CI, no config, a VM that is not available (each with
 # its one line), a start shown as it happens, and which gotest and flakes runs go (only whole sets and repeats).
+# Then one suite at a time on the VM, with a second worktree as a second caller: a run waits its turn (saying whose
+# run holds the VM, under its own idle hold) and starts only once the first ends; a holder killed hard frees the
+# lock; giving up while waiting; --no-wait, directly and through prefer-vm.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0; ok() { echo "ok   $1"; }; bad() { echo "FAIL $1"; fail=1; }
@@ -88,6 +91,7 @@ cat >tools/ci/browser.sh <<EOF
 . "\$(dirname "\$0")/prefer-vm.sh"; prefer_vm browser "\$@"
 out="\${3:-\$RUNNER_TEMP/uitest-\$1-\${2:-dark}}"; mkdir -p "\$out/failures"
 echo "STREAMED from the vm"
+echo "start \$PWD" >>"$root/starts.log"; trap 'echo "end \$PWD" >>"$root/starts.log"' EXIT
 echo "where=\$([ -n "\${COMEBYE_ON_VM:-}" ] && echo vm || echo local)" >"\$out/where.txt"
 { echo "args=\$*"; echo "pwd=\$PWD"; echo "capped=\${CAPPED_BY_TEST:-no}"; echo "toolchain=\$GOTOOLCHAIN"
   echo "gocache=\$GOCACHE"; echo "scheme=\${SCHEME:-}"; echo "jobs=\${JOBS:-}"; echo "branch=\$(git branch --show-current)"
@@ -240,13 +244,13 @@ out="$(CI=1 "$b" rest 2>&1)"; rc=$?
 check "CI: here, silently" [ "$rc:$(where):$(grep -c '^tests:' <<<"$out")" = 0:local:0 ]
 rm -rf "$RUNNER_TEMP"
 out="$(TEST_VM=kv2 "$b" rest 2>&1)"; rc=$?
-check "TEST_VM=NAME: that VM (kv2 is unknown, so here, saying why)" rc_says "$rc:$(where)" 0:local '^tests: running on this machine: test VM kv2 does not answer (kv2 is not a worker this provisioner knows' "$out"
+check "TEST_VM=NAME: that VM (kv2 is unknown, so here, saying why)" rc_says "$rc:$(where)" 0:local '^tests: running on this machine: test VM kv2 is not available (kv2 is not a worker this provisioner knows' "$out"
 rm -rf "$RUNNER_TEMP"
 out="$(FAKE_SSH_DOWN=1 "$b" rest 2>&1)"; rc=$?
-check "VM unreachable: here, with the reason in one line (rc=$rc)" rc_says "$rc:$(where):$(grep -c '^tests:' <<<"$out")" 0:local:1 'test VM kv1 does not answer (ssh could not reach kv1' "$out"
+check "VM unreachable: here, with the reason in one line (rc=$rc)" rc_says "$rc:$(where):$(grep -c '^tests:' <<<"$out")" 0:local:1 'test VM kv1 is not available (ssh could not reach kv1' "$out"
 pins 9.9.9 4.5.6 7.8.9.10; rm -rf "$RUNNER_TEMP"
 out="$("$b" rest 2>&1)"; rc=$?
-check "VM without the pins: here (rc=$rc)" rc_says "$rc:$(where)" 0:local 'test VM kv1 does not answer (kv1 has no test toolchain' "$out"
+check "VM without the pins: here (rc=$rc)" rc_says "$rc:$(where)" 0:local 'test VM kv1 is not available (kv1 has no test toolchain' "$out"
 pins 1.2.3 4.5.6 7.8.9.10
 echo STOPPED >"$root/vmstate"; rm -rf "$RUNNER_TEMP"
 out="$("$b" rest 2>&1)"; rc=$?
@@ -263,6 +267,59 @@ check "flakes repeat: the VM" grep -q 'FLAKY none where=vm' <<<"$(OUT_DIR="$root
 check "flakes other than repeat: here" grep -q 'FLAKY none where=local' <<<"$("$f" list 2>&1)"
 check "a relative OUT_DIR lands in the caller's folder" bash -c "cd '$caller/sub' && '$caller/tools/ci/remote.sh' kv1 browser smoke dark rel-out >/dev/null 2>&1; [ -f '$caller/sub/rel-out/failures/check.png' ]"
 rm -f "$TEST_VM_CONFIG"
+
+# ---- one suite at a time on the VM
+wf() { local i; for i in $(seq 150); do eval "$1" && return 0; sleep 0.1; done; return 1; } # wait (15 s at most) until
+git -C "$caller" worktree add -q --detach "$root/caller2" HEAD
+r2="$root/caller2/tools/ci/remote.sh"
+hold_n() { ls "$vm/.local/state/comebye/idle-holds/" 2>/dev/null | grep -c '^remote-test-'; }
+start_a() { rm -f "$root/started" "$root/release" "$root/suite.pid"; touch wait.txt; "$r" kv1 browser rest >"$root/a.log" 2>&1 & a=$!; wf '[ -e "$root/started" ]'; }
+echo 0 >rc.txt; : >"$root/starts.log"
+start_a
+RUNNER_TEMP="$root/rt2" "$r2" kv1 browser rest >"$root/b.log" 2>&1 & b=$!
+check "a second run waits its turn, saying whose run holds the VM and since when" wf "grep -Eq '^remote\(vm\): .+ is busy with [a-z0-9-]+ \(browser, feat/x, from [a-z0-9-]+\) since [0-9:]+Z; waiting for it \(Ctrl-C gives up\)$' '$root/b.log'"
+sleep 6 # past a wait step
+check "...its suite has not started" [ "$(grep -c '^start' "$root/starts.log")" = 1 ]
+check "...and its idle hold covers the wait" [ "$(hold_n)" = 2 ]
+touch "$root/release"; wait "$a"; wait "$b"; rc=$?
+check "...then it runs, once the first has ended (rc=$rc)" [ "$rc:$(cut -d' ' -f1 "$root/starts.log" | tr '\n' ' ')" = "0:start end start end " ]
+check "...saying it is free" grep -Eq '^remote\(vm\): .+ is free after [0-9]+ s; starting$' "$root/b.log"
+check "...the second run's own place is the one after the first" [ "$(sed -n 3p "$root/starts.log")" = "start $vm/.cache/comebye-remote/runs/$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$root/b.log")/src" ]
+check "no hold left" [ "$(hold_n)" = 0 ]
+
+# a holder killed hard on the VM (no cleanup of its own) frees the lock
+: >"$root/starts.log"; start_a
+RUNNER_TEMP="$root/rt2" "$r2" kv1 browser rest >"$root/b.log" 2>&1 & b=$!
+wf "grep -q 'waiting for it' '$root/b.log'"
+ida="$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$root/a.log")"
+pkill -KILL -f "runs/'$ida'"; kill -KILL -- "-$(cat "$root/suite.pid")" 2>/dev/null; kill -KILL "$(cat "$root/suite.pid")" 2>/dev/null
+check "a holder killed hard: the waiting run goes ahead" wf "grep -q 'is free after' '$root/b.log'"
+wait "$b"; rc=$?; wait "$a"
+check "...and passes (rc=$rc)" [ "$rc" = 0 ]
+
+# giving up while waiting
+: >"$root/starts.log"; start_a; suite_a="$(cat "$root/suite.pid")"
+RUNNER_TEMP="$root/rt2" "$r2" kv1 browser rest >"$root/b.log" 2>&1 & b=$!
+wf "grep -q 'waiting for it' '$root/b.log'"
+idb="$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$root/b.log")"
+t0=$SECONDS; kill -TERM "$b"; wait "$b"; rc=$?
+check "giving up while waiting: exits 143 within 10 s (rc=$rc, $((SECONDS - t0)) s)" [ "$rc" = 143 ] && [ $((SECONDS - t0)) -le 10 ]
+check "...the VM side gave up" wf "grep -q 'gave up waiting' '$root/b.log'"
+check "...its suite never ran" [ "$(grep -c '^start' "$root/starts.log")" = 1 ]
+check "...its run folder is gone" [ ! -e "$vm/.cache/comebye-remote/runs/$idb" ]
+check "...and the first run carries on" kill -0 "$suite_a"
+
+# --no-wait, while the first still holds the VM
+out="$("$r2" --no-wait kv1 browser rest 2>&1)"; rc=$?
+check "--no-wait on a busy VM: refused (rc=$rc)" rc_says "$rc" 2 'kv1 is busy with .*: not waiting (--no-wait)' "$out"
+printf 'host=kv1\n' >"$TEST_VM_CONFIG"
+out="$(cd "$root/caller2" && RUNNER_TEMP="$root/rt2" TEST_VM_NO_WAIT=1 tools/ci/browser.sh rest 2>&1)"; rc=$?
+check "TEST_VM_NO_WAIT=1 on a busy VM: runs here, saying why (rc=$rc)" rc_says "$rc" 0 '^tests: running on this machine: test VM kv1 is not available (kv1 is busy with ' "$out"
+out="$(cd "$root/caller2" && RUNNER_TEMP="$root/rt2" timeout 3 tools/ci/browser.sh rest 2>&1)"
+check "without it, prefer-vm says the run will wait its turn" grep -q '^remote: kv1 is busy with .*; this run will wait its turn$' <<<"$out"
+rm -f "$TEST_VM_CONFIG"; touch "$root/release"; wait "$a"
+rm -f wait.txt "$root/started" "$root/release"
+git -C "$caller" worktree remove --force "$root/caller2"
 
 # two at once, then a stop mid-run
 echo 0 >rc.txt; touch wait.txt
