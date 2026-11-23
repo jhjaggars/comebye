@@ -308,6 +308,16 @@ type apiEntry struct {
 	RemovedAt    *time.Time `json:"removed_at"`
 	LostAt       *time.Time `json:"lost_at"`
 	FinalReport  string     `json:"final_report"`
+	// ReportAt is when the report was written (nil: not recorded), ReportSeq
+	// how many reports the worker filed, ReportSource "explicit" for its own.
+	ReportAt     *time.Time `json:"report_at"`
+	ReportSeq    int        `json:"report_seq"`
+	ReportSource string     `json:"report_source"`
+	// LastPassReport is the worker's last reply from a turn that ended
+	// without a report (a loop pass, or finishing again), kept beside an
+	// older report; LastPassReportAt is when that turn ended.
+	LastPassReport   string     `json:"last_pass_report"`
+	LastPassReportAt *time.Time `json:"last_pass_report_at"`
 	// Loop, LoopEvery and LastPassAt describe a loop worker (`comebye loop`).
 	Loop             string     `json:"loop"`
 	LoopEveryMinutes int        `json:"loop_every_minutes"`

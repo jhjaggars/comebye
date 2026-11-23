@@ -98,7 +98,7 @@ func (s *Server) deliverCallbacks(agents []herdr.AgentInfo) {
 				s.logLedger(s.ledger.CallbackDone(e.ID, e.Callback.At, state, to, time.Now()))
 			},
 			noticeKey: func(to, text string) string {
-				return callbackNoticeKey(to, e.FinalReport, strings.Replace(text, roundNote(e), "", 1))
+				return callbackNoticeKey(to, e.FinalReport, strings.Replace(withoutReportAge(text), roundNote(e), "", 1))
 			},
 			seen:     func(key string) bool { return s.ledger.HasNoticeKey(e.ID, key) },
 			remember: func(key string) { s.logLedger(s.ledger.AddNoticeKey(e.ID, key)) },
@@ -206,7 +206,7 @@ func callbackText(e ledger.Entry, standIn bool) string {
 	if standIn {
 		t += " (You got this because the agent that requested the handoff is no longer available.)"
 	}
-	return t
+	return t + reportAgeNote(e, time.Now())
 }
 
 // roundNote is the sentence a finished notice adds for a worker's second or

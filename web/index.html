@@ -1955,6 +1955,11 @@
     .pm-rep summary { cursor: pointer; padding: var(--sp-2) 0; }
 
     .pm-rep .md { color: var(--text); max-height: 40vh; overflow: auto; }
+    /* A report's age, and a newer reply kept beside it (fresh reports). */
+    .rep-age { color: var(--muted); font-size: var(--fs-12); font-weight: normal; }
+    .rep-newer { margin: var(--sp-6) 0; padding: var(--sp-4) var(--sp-6); border-left: 2px solid var(--muted); }
+    .rep-newer-h { color: var(--muted); font-size: var(--fs-12); margin-bottom: var(--sp-2); }
+    .rep-newer .md { color: var(--text); max-height: 40vh; overflow: auto; }
     /* Desktop view (>= 1100px): two columns. The agent list stays on the
        left; one selection fills the pane on the right: an agent, or a page
        (Status, To do). 1100px leaves the agent view well over a

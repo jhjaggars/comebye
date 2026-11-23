@@ -531,7 +531,8 @@ func (s *Server) doHandoff(ctx context.Context, b handoffBody, from string, repl
 				e.PlanID = b.Plan
 			}
 			e.SawWorking, e.FinishedAt, e.FinalReport, e.ReportTries, e.Mark = false, nil, "", 0, nil
-			e.ReportSource, e.AwaitIdle = "", false
+			e.ReportSource, e.AwaitIdle, e.ReportAt = "", false, nil
+			e.LastPassReport, e.LastPassReportAt, e.PassCaptureAt, e.PassTries = "", nil, nil, 0
 		})
 		if err != nil {
 			return http.StatusInternalServerError, map[string]any{"code": "ledger_error", "message": "the worker started, but the ledger could not be saved: " + err.Error(), "worker": res}
@@ -634,6 +635,14 @@ func (s *Server) captureReport(e ledger.Entry) {
 	if latest != nil {
 		text = latest.Text
 	}
+	if e.PassCaptureAt != nil {
+		// A turn that ended without a report while an older one is on
+		// file (or a loop pass): its reply goes beside the report.
+		if err := s.ledger.SetPassReport(e.ID, *e.PassCaptureAt, text); err != nil {
+			log.Printf("ledger: %v", err)
+		}
+		return
+	}
 	if err := s.ledger.SetReport(e.ID, e.FinishedAt, text); err != nil {
 		log.Printf("ledger: %v", err)
 	}
@@ -716,6 +725,11 @@ type entryView struct {
 	Checks    *worktreeChecks `json:"checks,omitempty"`
 	// Queue is the entry's place in its landing queue (landqueue.go).
 	Queue *queueState `json:"queue,omitempty"`
+	// ReportAge says how old the report is ("report 3 from 2 h ago"), and
+	// NewerReplyAge how old the reply kept beside it is when that is newer
+	// (LastPassReport), as of this response.
+	ReportAge     string `json:"report_age,omitempty"`
+	NewerReplyAge string `json:"newer_reply_age,omitempty"`
 }
 
 // handleLedger lists the handoffs (removed and failed ones: the latest
@@ -745,11 +759,12 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
 	}
 	views := []entryView{}
 	qstates := s.queueStates()
+	now := time.Now()
 	for i, e := range entries {
 		if skip[i] {
 			continue
 		}
-		v := entryView{Entry: e}
+		v := entryView{Entry: e, ReportAge: reportAge(e, now), NewerReplyAge: newerReplyAge(e, now)}
 		if q, ok := qstates[e.AgentID]; ok && e.Status == ledger.Landing && e.Approval != nil && e.Approval.Queued {
 			v.Queue = &q
 		}

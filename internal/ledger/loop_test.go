@@ -18,8 +18,9 @@ func TestLoopPassEndIsNotAFinish(t *testing.T) {
 	s.Observe([]herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusWorking)}, now)
 	c := s.Observe([]herdr.AgentInfo{agent("desk/w9:p1", herdr.StatusIdle)}, now.Add(time.Minute))
 	got, _ := s.Get(e.ID)
-	if got.Status != Running || got.FinishedAt != nil || got.Callback != nil || len(c) != 0 {
-		t.Fatalf("pass end: status=%s finished=%v callback=%+v capture=%d; want running, no notice", got.Status, got.FinishedAt, got.Callback, len(c))
+	// The capture is the pass's last reply, kept beside the report (fresh reports).
+	if got.Status != Running || got.FinishedAt != nil || got.Callback != nil || len(c) != 1 || c[0].PassCaptureAt == nil {
+		t.Fatalf("pass end: status=%s finished=%v callback=%+v capture=%d; want running, no notice, the pass's reply captured", got.Status, got.FinishedAt, got.Callback, len(c))
 	}
 }
 

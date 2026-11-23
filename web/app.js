@@ -825,6 +825,38 @@ function fmtAgo(ms) {
   return Math.floor(s / 86400) + "d";
 }
 
+// reportAgeText says how old a ledger entry's report is ("report 3 from 2h ago"), so a reader can tell an old
+// report from a new one. Empty without a report.
+function reportAgeText(e) {
+  if (!e || !e.final_report) return "";
+  const what = e.report_source !== "explicit" ? "last reply, taken as its report," : e.report_seq > 1 ? `report ${e.report_seq}` : "report";
+  const at = Date.parse(e.report_at || "");
+  return Number.isNaN(at) ? `${what} age unknown` : `${what} from ${fmtAgo(at)} ago`;
+}
+
+// newerReplyMs is when the worker's last reply kept beside its report (a loop pass, or a turn that ended without
+// a report) was written, when that is newer than the report; NaN otherwise.
+function newerReplyMs(e) {
+  if (!e || !e.last_pass_report) return NaN;
+  const p = Date.parse(e.last_pass_report_at || ""), r = Date.parse(e.report_at || "");
+  return Number.isNaN(p) || (!Number.isNaN(r) && p <= r) ? NaN : p;
+}
+
+// reportAgeHtml is the report's age as a quiet chip for a report's summary line, with the newer reply's age.
+function reportAgeHtml(e) {
+  const t = reportAgeText(e);
+  if (!t) return "";
+  const n = newerReplyMs(e);
+  return ` <span class="rep-age">${esc(t)}${Number.isNaN(n) ? "" : ` · newer reply ${esc(fmtAgo(n))} ago`}</span>`;
+}
+
+// newerReplyHtml shows the newer reply under the report, labelled as not being a report.
+function newerReplyHtml(e, key) {
+  const n = newerReplyMs(e);
+  if (Number.isNaN(n)) return "";
+  return `<div class="rep-newer"><div class="rep-newer-h">Newer: its last reply, ${esc(fmtAgo(n))} ago (a turn that ended without a report; not a report)</div><div class="md">${renderMarkdown(e.last_pass_report, "newer:" + key)}</div></div>`;
+}
+
 const STATUS_ORDER = { blocked: 0, working: 1, done: 2, idle: 3, unknown: 4 };
 
 /* ---------- host filter (hub with more than one host) ---------- */
@@ -1789,7 +1821,7 @@ function planMemberHtml(m, p, open) {
   const e = open ? ledger.entries.find((x) => x.id === m.id) : null;
   const when = e && Date.parse(e.created_at) ? ` · started ${fmtAgo(Date.parse(e.created_at))} ago` : "";
   const trans = m.id && t.live ? ` · <a class="pm-tr" href="#/search/for?ledger=${encodeURIComponent(m.id)}">Transcript</a>` : "";
-  const detail = open ? `<div class="pm-detail">${esc(m.host || "")}${m.host ? " · " : ""}${esc(m.status)}${esc(when)}${trans}${e && e.final_report ? `<details class="pm-rep"><summary>Report</summary>${copyBtnHtml("rep:" + e.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md">${renderMarkdown(e.final_report, "pm" + e.id)}</div></details>` : ""}</div>` : "";
+  const detail = open ? `<div class="pm-detail">${esc(m.host || "")}${m.host ? " · " : ""}${esc(m.status)}${esc(when)}${trans}${e && e.final_report ? `<details class="pm-rep"><summary>Report${reportAgeHtml(e)}</summary>${copyBtnHtml("rep:" + e.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md">${renderMarkdown(e.final_report, "pm" + e.id)}</div>${newerReplyHtml(e, "pm" + e.id)}</details>` : ""}</div>` : "";
   return `<li><a class="pm${t.live ? "" : " gone"}" href="${esc(t.hash)}" title="${esc(t.tip)}"><span class="pm-name">${esc(m.repo_name || "?")}/${esc(m.branch)}</span><span class="pm-${esc(m.outcome)}">${esc(m.outcome === "pending" ? m.status : m.outcome)}</span>${live}</a>${detail}</li>`;
 }
 
@@ -2424,7 +2456,7 @@ function todoItemHtml(t, pfx, asPanel) {
         : l.handoff ? `<a class="td-tr" href="#/search/for?ledger=${encodeURIComponent(l.handoff)}" title="Open that handoff's transcript">${esc(l.kind === "transcript" || isRep(l) ? (l.kind === "transcript" ? label : "Transcript") : label.includes(l.handoff) ? label : `${label} (handoff ${l.handoff})`)}</a>`
         : `<span>${esc(label)}</span>`;
     }));
-    const repBody = repLink ? `<details class="td-rep"${todoRepOpen.has(t.id) ? " open" : ""}><summary>Full report</summary>${copyBtnHtml("rep:" + repLink.e.id, repLink.e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md">${renderMarkdown(repLink.e.final_report, "todorep:" + t.id)}</div></details>` : "";
+    const repBody = repLink ? `<details class="td-rep"${todoRepOpen.has(t.id) ? " open" : ""}><summary>Full report${reportAgeHtml(repLink.e)}</summary>${copyBtnHtml("rep:" + repLink.e.id, repLink.e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md">${renderMarkdown(repLink.e.final_report, "todorep:" + t.id)}</div>${newerReplyHtml(repLink.e, "todorep:" + t.id)}</details>` : "";
     const a = t.answer;
     const aAt = a ? Date.parse(a.at) : NaN;
     const answered = a
@@ -5112,7 +5144,7 @@ function archRowHTML(r) {
   const waits = left.filter((x) => !owes.includes(x) && !cant.includes(x));
   const line = (label, xs, cls) => xs.length ? `<div class="ar-left ${cls}"><b>${label}:</b> ${xs.map((x) => esc(archItemText(x))).join("; ")}</div>` : "";
   const e = r.report ? ledger.entries.find((x) => x && x.id === r.id) : null;
-  const rep = e && e.final_report ? `<details class="rv-report" data-id="${id}"><summary>Final report</summary><div class="md"></div></details>` : "";
+  const rep = e && e.final_report ? `<details class="rv-report" data-id="${id}"><summary>Final report${reportAgeHtml(e)}</summary><div class="md"></div>${newerReplyHtml(e, "archived:" + e.id)}</details>` : "";
   const resume = a.park_id ? `<button type="button" class="btn" data-ar="resume" data-id="${id}" aria-label="Unarchive ${name} and resume its pane"${busy}>Resume</button>` : "";
   const propose = r.agent_id ? `<button type="button" class="btn" data-ar="propose" data-id="${id}" aria-label="Propose removing ${name}"${busy}>Propose removal</button>` : "";
   return `<div class="rv-item ar-item" data-id="${id}">
@@ -5405,8 +5437,9 @@ function reviewItemHTML(it) {
   const askRows = !!(it.ask_review && it.ask_review.state === "unsafe");
   const warnings = (it.warnings || []).filter((w) => !(askRows && w.startsWith("the session says this is left"))).map((w) => `<li>${esc(w)}</li>`).join("");
   const notes = (it.notes || []).filter((w) => !(askRows && w.startsWith("the session listed ") && (w.includes(" as left, but it ") || w.startsWith("the session listed this as left:")))).map((w) => `<li>${esc(w)}</li>`).join("");
+  const repE = it.entry_id ? ledger.entries.find((x) => x && x.id === it.entry_id) : null;
   const report = it.final_report
-    ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report</summary>${copyBtnHtml("rep:" + it.id, it.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md"></div><div class="hubchk" data-id="${esc(it.id)}" hidden></div></details>` : "";
+    ? `<details class="rv-report" data-id="${esc(it.id)}"><summary>Final report${reportAgeHtml(repE && repE.final_report === it.final_report ? repE : null)}</summary>${copyBtnHtml("rep:" + it.id, it.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}<div class="md"></div>${repE ? newerReplyHtml(repE, "rv:" + it.id) : ""}<div class="hubchk" data-id="${esc(it.id)}" hidden></div></details>` : "";
   const loss = it.discardable && !done ? lossHTML(it) : "";
   const dd = !!it.delivered_discard && !done;
   let result = "";
@@ -8143,7 +8176,7 @@ function boardItemHtml(it, laneKey, showLane) {
     const e = it.report ? ledger.entries.find((x) => x && x.id === it.id) : null;
     const op = statusUi.open.has(it.id);
     const rpt = e && e.final_report
-      ? `<details class="st-row bd-rep" data-id="${escAttr(it.id)}"${op ? " open" : ""}><summary>Read report</summary>${op ? `<div class="st-rep">${copyBtnHtml("rep:" + it.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}</div><div class="md st-rep">${renderMarkdown(e.final_report, "board:" + it.id)}</div>` : ""}</details>`
+      ? `<details class="st-row bd-rep" data-id="${escAttr(it.id)}"${op ? " open" : ""}><summary>Read report${reportAgeHtml(e)}</summary>${op ? `<div class="st-rep">${copyBtnHtml("rep:" + it.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}</div><div class="md st-rep">${renderMarkdown(e.final_report, "board:" + it.id)}</div>${newerReplyHtml(e, "board:" + it.id)}` : ""}</details>`
       : `<span class="bd-d">${it.report ? "report loading" : "no report captured"}</span>`;
     rep = `<div class="bd-d">${esc(it.kind || "report")}${pages ? " · Page: " + pages : ""}</div>${rpt}`;
   }
@@ -8265,7 +8298,7 @@ function statusHTML(desktop) {
     }).join("");
     if (p.done.length) h += `<div class="st-g">Finished recently</div>` + p.done.map(({ e, at, ag }) => {
       const chip = { finished: ["", "reported"], landed: ["landed", "landed"], ready_to_remove: ["rtr", "ready to remove"], failed: ["failed", "failed"] }[e.status];
-      const body = e.final_report ? `<div class="st-rep">${copyBtnHtml("rep:" + e.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}</div><div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div><div class="hubchk st-rep" data-id="${escAttr(e.id)}" hidden></div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
+      const body = e.final_report ? `<div class="st-rep">${copyBtnHtml("rep:" + e.id, e.final_report, "Copy report", "Copy report as Markdown", "cpb-rep")}${reportAgeHtml(e)}</div><div class="md st-rep">${renderMarkdown(e.final_report, "status:" + e.id)}</div>${newerReplyHtml(e, "status:" + e.id)}<div class="hubchk st-rep" data-id="${escAttr(e.id)}" hidden></div>` : `<div class="st-m st-rep">${esc(e.error || "No report.")}</div>`;
       return `<details class="st-row" data-id="${escAttr(e.id)}"${statusUi.open.has(e.id) ? " open" : ""}><summary><span class="st-n">${esc(statusWho(e))}</span><span class="lg-chip ${chip[0]}">${chip[1]}</span>${usageChipHtml(e.id, true)}<span class="st-r">${esc(fmtAgo(at))} ago</span></summary>${statusUi.open.has(e.id) ? body : ""}</details>`;
     }).join("");
     return `<section class="st-proj${p.blocked.length || p.todos.length ? " hot" : ""}" aria-label="${escAttr(p.name)}"><div class="st-ph">${esc(p.name)}</div>${h}</section>`;

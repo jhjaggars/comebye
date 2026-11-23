@@ -144,6 +144,28 @@ type Entry struct {
 	// still working is the turn that ends with the report, not new work.
 	ReportSource string `json:"report_source,omitempty"`
 	AwaitIdle    bool   `json:"await_idle,omitempty"`
+	// ReportAt is when FinalReport was written: the worker's `comebye
+	// report`, or the reply the hub took when the worker finished (its
+	// FinishedAt then). Nil with a report: one from before ReportAt was
+	// recorded, whose age is not known.
+	ReportAt *time.Time `json:"report_at,omitempty"`
+	// LastPassReport is the worker's last reply from a turn that ended
+	// without a report of its own, when FinalReport is older: a loop
+	// worker's pass end, or a worker that finished again (or ended its
+	// landing turn) without `comebye report`. LastPassReportAt is when that
+	// turn ended. It is kept apart, not put in FinalReport, because
+	// FinalReport is the report the requester was told to read and what
+	// landing, the hub's check and the to-dos from its decisions work from:
+	// a pass's "nothing new" or a reply after the report would replace that
+	// deliverable with a line the worker never filed as one. Readers show
+	// it next to the report when it is newer (NewerReply). A new report
+	// (explicit, or one the hub takes) clears it.
+	LastPassReport   string     `json:"last_pass_report,omitempty"`
+	LastPassReportAt *time.Time `json:"last_pass_report_at,omitempty"`
+	// PassCaptureAt is the end of the turn whose last reply is still to be
+	// captured into LastPassReport (PassTries attempts so far).
+	PassCaptureAt *time.Time `json:"pass_capture_at,omitempty"`
+	PassTries     int        `json:"pass_tries,omitempty"`
 	// After lists the entries (ids) a waiting handoff is queued behind:
 	// it starts when all of them have reported. Kept after it starts.
 	After []string `json:"after,omitempty"`
@@ -1179,7 +1201,7 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 				unarchiveLocked(e, Running, "", "its agent is working again", now.UTC())
 				e.FinishedAt, e.SawWorking, e.Callback = nil, true, nil
 				if e.ReportSource != "explicit" {
-					e.FinalReport, e.ReportTries = "", 0
+					e.FinalReport, e.ReportTries, e.ReportAt = "", 0, nil
 				}
 				changed = true
 			}
@@ -1214,9 +1236,17 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 				if e.SawWorking && e.FinishedAt == nil {
 					t := now.UTC()
 					e.FinishedAt, e.SawWorking, e.ReportTries, e.ReportSource = &t, false, 0, ""
+					if e.FinalReport != "" {
+						// The landing turn ended without a landing report: the
+						// report on file is the one the landing was approved on,
+						// and the turn's last reply is newer.
+						markPass(e, t)
+					}
 					changed = true
 					capture = append(capture, copyEntry(e))
 				} else if e.FinishedAt != nil && e.FinalReport == "" && e.ReportTries < maxReportTries {
+					capture = append(capture, copyEntry(e))
+				} else if e.PassCapturePending() {
 					capture = append(capture, copyEntry(e))
 				}
 			}
@@ -1238,7 +1268,7 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 				// (SetReport leaves an explicit one alone). A guessed report
 				// is cleared, to be guessed again.
 				if e.ReportSource != "explicit" {
-					e.FinalReport, e.ReportTries = "", 0
+					e.FinalReport, e.ReportTries, e.ReportAt = "", 0, nil
 				}
 				e.Status, e.FinishedAt = Running, nil
 				e.Callback = nil
@@ -1253,14 +1283,24 @@ func (s *Store) Observe(agents []herdr.AgentInfo, now time.Time) []Entry {
 				// finished. Only its own report finishes it.
 				t := now.UTC()
 				e.SawWorking, e.LastPassAt = false, &t
+				markPass(e, t)
 				changed = true
+				capture = append(capture, copyEntry(e))
 			} else if e.Status == Running && e.SawWorking {
 				t := now.UTC()
 				e.Status, e.FinishedAt, e.SawWorking, e.ReportTries = Finished, &t, false, 0
+				if e.FinalReport != "" {
+					// Finished again without a new report: the report on file
+					// is an earlier round's, and this turn's last reply is
+					// newer. It goes beside the report, not over it.
+					markPass(e, t)
+				}
 				queueNotice(e, t)
 				changed = true
 				capture = append(capture, copyEntry(e))
 			} else if e.Reported() && e.FinalReport == "" && e.ReportTries < maxReportTries {
+				capture = append(capture, copyEntry(e))
+			} else if e.PassCapturePending() {
 				capture = append(capture, copyEntry(e))
 			}
 		}
@@ -1424,6 +1464,7 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		// as landed (SetLandCheck), and tells the requester then.
 		e.FinishedAt = &t
 		e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
+		freshReport(e, t)
 		e.AwaitIdle, e.SawWorking = true, false
 		return copyEntry(e), true, s.save()
 	}
@@ -1433,6 +1474,14 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		e.AwaitLandReport, e.AwaitIdle, e.SawWorking = false, true, false
 		e.FinishedAt = &t
 		e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
+		freshReport(e, t)
+		return copyEntry(e), true, s.save()
+	}
+	if again && e.NewerReply() {
+		// The same report filed again after a later reply: nothing new to
+		// tell the requester, but the worker stands by it now, so it is
+		// the current one again.
+		freshReport(e, t)
 		return copyEntry(e), true, s.save()
 	}
 	if e.Status == Landed && again {
@@ -1442,6 +1491,7 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 		if e.AwaitIdle {
 			// Still the landing turn (a corrected landing report).
 			e.FinalReport, e.ReportTries = Truncate(text, MaxReport), 0
+			freshReport(e, t)
 			return copyEntry(e), true, s.save()
 		}
 		e.Status = Finished // a report after landing is a new round's
@@ -1454,6 +1504,7 @@ func (s *Store) Report(agentID, text string, now time.Time) (Entry, bool, error)
 	e.Status, e.FinishedAt = Finished, &t
 	queueNotice(e, t)
 	e.FinalReport, e.ReportSource, e.ReportTries = Truncate(text, MaxReport), "explicit", 0
+	freshReport(e, t)
 	e.AwaitIdle, e.SawWorking = true, false
 	return copyEntry(e), true, s.save()
 }
@@ -1680,9 +1731,67 @@ func (s *Store) SetReport(id string, finishedAt *time.Time, report string) error
 		}
 		e.ReportTries++
 		e.FinalReport = Truncate(report, MaxReport)
+		if report != "" {
+			freshReport(e, *finishedAt)
+		}
 		return s.save()
 	}
 	return nil
+}
+
+// SetPassReport stores the last reply of a turn that ended without a report
+// (see LastPassReport), for the turn that ended at at, counting the attempt.
+// An empty reply keeps the one before.
+func (s *Store) SetPassReport(id string, at time.Time, reply string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data.Entries {
+		if e.ID != id {
+			continue
+		}
+		if e.PassCaptureAt == nil || !e.PassCaptureAt.Equal(at) {
+			return nil // a newer turn, or a report, since
+		}
+		e.PassTries++
+		if strings.TrimSpace(reply) != "" {
+			t := at.UTC()
+			e.LastPassReport, e.LastPassReportAt = Truncate(reply, MaxReport), &t
+			e.PassCaptureAt, e.PassTries = nil, 0
+		} else if e.PassTries >= maxReportTries {
+			e.PassCaptureAt, e.PassTries = nil, 0
+		}
+		return s.save()
+	}
+	return nil
+}
+
+// markPass asks for the last reply of the turn that ended at t.
+func markPass(e *Entry, t time.Time) {
+	e.PassCaptureAt, e.PassTries = &t, 0
+}
+
+// freshReport stamps a report just written at t: any reply kept beside the
+// old one is older now, and a capture still waiting for one is moot.
+func freshReport(e *Entry, t time.Time) {
+	at := t.UTC()
+	e.ReportAt = &at
+	e.LastPassReport, e.LastPassReportAt = "", nil
+	e.PassCaptureAt, e.PassTries = nil, 0
+}
+
+// PassCapturePending reports whether the last reply of a turn that ended
+// without a report is still to be captured.
+func (e Entry) PassCapturePending() bool {
+	return e.PassCaptureAt != nil && e.PassTries < maxReportTries
+}
+
+// NewerReply reports whether the entry holds a reply newer than its report
+// (LastPassReport): a reader shows it beside the report.
+func (e Entry) NewerReply() bool {
+	if e.LastPassReport == "" || e.LastPassReportAt == nil {
+		return false
+	}
+	return e.ReportAt == nil || e.LastPassReportAt.After(*e.ReportAt)
 }
 
 // Truncate cuts s to at most n bytes on a rune boundary, marking the cut.

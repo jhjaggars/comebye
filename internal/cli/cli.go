@@ -712,9 +712,12 @@ func cmdLedger(e *Env, args []string) error {
 		}
 		report := "no"
 		if en.FinalReport != "" {
-			report = "yes"
+			report = "yes, " + reportAgeShort(e, en)
 		} else if en.Status == "running" {
 			report = "-"
+		}
+		if r := newerReply(en); r != nil {
+			report += ", newer reply " + ago(e, *r)
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", en.ID, en.Status, en.Host, dash(en.RepoName), en.Branch, dash(worker), dash(modelLabel(en.Model, en.Thinking)), report, strings.Join(notes, "; "))
 	}
@@ -888,6 +891,12 @@ func readReport(e *Env, c *client, arg string, asJSON, summary bool) error {
 		return lastReply(e, c, arg, asJSON)
 	}
 	if found.FinalReport == "" && !asJSON {
+		if r := newerReply(*found); r != nil {
+			// No report yet, but a pass ended: its last reply is what there is.
+			fmt.Fprintf(e.Stdout, "%s on %s/%s (%s, %s) has no final report yet. Its last reply, from %s (a pass that ended without a report; not a report):\n\n%s\n",
+				dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, ago(e, *r), strings.TrimRight(found.LastPassReport, "\n"))
+			return nil
+		}
 		return fmt.Errorf("%s (%s) has no final report yet (status %s)", found.Branch, found.ID, found.Status)
 	}
 	var hub *apiHubCheck
@@ -898,16 +907,68 @@ func readReport(e *Env, c *client, arg string, asJSON, summary bool) error {
 		}
 	}
 	if asJSON {
-		return jsonOut(e, map[string]any{"entry": found.ID, "agent_id": found.AgentID, "branch": found.Branch, "status": found.Status, "final_report": found.FinalReport, "hub_checked": hub})
+		out := map[string]any{"entry": found.ID, "agent_id": found.AgentID, "branch": found.Branch, "status": found.Status, "final_report": found.FinalReport, "hub_checked": hub,
+			"report_at": found.ReportAt, "report_seq": found.ReportSeq, "report_source": found.ReportSource}
+		if found.FinalReport != "" {
+			out["report_age"] = reportAgeShort(e, *found)
+		}
+		if r := newerReply(*found); r != nil {
+			out["newer_reply"] = found.LastPassReport
+			out["newer_reply_at"] = r
+			out["newer_reply_age"] = ago(e, *r)
+		}
+		return jsonOut(e, out)
 	}
 	body := strings.TrimRight(found.FinalReport, "\n")
 	title := "Final report"
 	if summary {
 		body, title = summarizeReport(body, found.ID), "Summary of the final report"
 	}
-	fmt.Fprintf(e.Stdout, "%s of %s on %s/%s (%s, %s):\n\n%s\n", title, dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, body)
+	fmt.Fprintf(e.Stdout, "%s of %s on %s/%s (%s, %s, %s):\n", title, dash(found.AgentName), found.RepoName, found.Branch, found.ID, found.Status, reportAgeLong(e, *found))
+	if r := newerReply(*found); r != nil {
+		fmt.Fprintf(e.Stdout, "Note: the worker's last reply, from %s, is newer than this report; it is shown after it.\n", ago(e, *r))
+	}
+	fmt.Fprintf(e.Stdout, "\n%s\n", body)
 	printHubCheck(e.Stdout, hub)
+	if r := newerReply(*found); r != nil {
+		fmt.Fprintf(e.Stdout, "\n── Newer: the worker's last reply, from %s (a turn that ended without a report: not a report)\n\n%s\n", ago(e, *r), strings.TrimRight(found.LastPassReport, "\n"))
+	}
 	return nil
+}
+
+// reportAgeShort says how old an entry's report is: "2h ago", or "age
+// unknown" for a report from before the hub recorded report times.
+func reportAgeShort(e *Env, en apiEntry) string {
+	if en.ReportAt == nil {
+		return "age unknown"
+	}
+	return ago(e, *en.ReportAt)
+}
+
+// reportAgeLong is the read --report header's account of the report: which
+// one it is and how old ("report 3 from 2h ago").
+func reportAgeLong(e *Env, en apiEntry) string {
+	what := "report"
+	switch {
+	case en.ReportSource != "explicit":
+		what = "report (its last reply, taken by the hub)"
+	case en.ReportSeq > 1:
+		what = fmt.Sprintf("report %d", en.ReportSeq)
+	}
+	if en.ReportAt == nil {
+		return what + " from an unrecorded time (before report times were kept)"
+	}
+	return what + " from " + ago(e, *en.ReportAt)
+}
+
+// newerReply is when the reply kept beside the report was written, when it
+// is newer than the report (nil otherwise).
+func newerReply(en apiEntry) *time.Time {
+	r := en.LastPassReportAt
+	if en.LastPassReport == "" || r == nil || (en.ReportAt != nil && !r.After(*en.ReportAt)) {
+		return nil
+	}
+	return r
 }
 
 // apiHubCheck is the hub's check of a report (GET /api/ledger/ID/hubcheck).

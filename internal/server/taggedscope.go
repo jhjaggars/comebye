@@ -113,10 +113,12 @@ func taggedEntries(views []entryView, host string) []entryView {
 			AgentID: e.AgentID, PaneID: e.PaneID, AgentName: e.AgentName, Status: e.Status,
 			CreatedAt: e.CreatedAt, FinishedAt: e.FinishedAt, RemovedAt: e.RemovedAt, After: e.After, PlanID: e.PlanID,
 		}
+		ov := entryView{Entry: outline, Live: v.Live}
 		if after[e.ID] {
-			outline.FinalReport = e.FinalReport
+			outline.FinalReport, outline.ReportAt, outline.ReportSource, outline.ReportSeq = e.FinalReport, e.ReportAt, e.ReportSource, e.ReportSeq
+			ov = entryView{Entry: outline, Live: v.Live, ReportAge: v.ReportAge}
 		}
-		out = append(out, entryView{Entry: outline, Live: v.Live})
+		out = append(out, ov)
 	}
 	return out
 }

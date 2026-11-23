@@ -139,6 +139,21 @@ pi's thinking level, when the handoff chose them), worktree, brief, who asked, a
   counted as sent. A worker that has been told once and then only goes
   idle with a changed last message is not announced again: have it
   `comebye report` what the coordinator should see;
+
+  **Report age.** `report_at` on the entry is when the report on file was
+  written (its `comebye report`, or the finish whose last reply the hub
+  took); entries from before it have none, and readers say the age is
+  unknown. A turn that ends without a report while an older report is on
+  file (a loop pass, a worker that finishes again, a landing turn with no
+  landing report) does not replace that report: its last reply goes in
+  `last_pass_report`, with `last_pass_report_at`, and readers show it under
+  the report as a newer reply that is not a report. The report stays the
+  one the requester was told to read and what landing, the hub's check and
+  the to-dos from its decisions work from. A new report clears the newer
+  reply. `comebye read ID --report` (header), `comebye ledger` (REPORT
+  column; `--json` adds `report_age` and `newer_reply_age`), the app's
+  report views and the hub's finished notices all say how old the report
+  is;
 - `landing`: the user OKed landing (`comebye land`; the `approval`
   records who relayed it, the user's words and the approved tip) and the
   worker is landing its work;
