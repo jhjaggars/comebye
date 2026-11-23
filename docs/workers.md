@@ -451,6 +451,43 @@ Linux arm64 build). `npm ci` for `tools/uitest` happens on the first run of a su
   the versions only. It runs the pinned tools first on `PATH` (pi's mise Node is not CI's) and
   with `GOTOOLCHAIN=local`.
 
+### Running a suite on a worker: `tools/ci/remote.sh`
+
+```sh
+tools/ci/remote.sh HOST SUITE [ARG...]
+tools/ci/remote.sh kv1 browser rest
+tools/ci/remote.sh kv1 go test -race -p 4 ./...
+tools/ci/remote.sh kv1 flakes repeat 20 reviewcard     # "repeat reviewcard 20" is read the same way
+```
+
+SUITE is `browser` (`tools/ci/browser.sh`), `flakes` (`tools/ci/flakes.sh`), `prelanding`,
+`gotest` (`tools/ci/gotest.sh`) or `go`. It runs on the worker against **this worktree's exact
+state**, not the VM's own checkout: HEAD as a `git bundle` (with `origin/main`, for
+`browser.sh changed`), the tracked changes (`git diff --binary HEAD`) and the untracked files
+that are not ignored go to a fresh folder under `~/.cache/comebye-remote/runs` on the VM
+(`REMOTE_ROOT` to change), over this tool's ssh config for HOST. The VM needs no GitHub access.
+Nothing else is sent: no `.git/config` or remotes, no hooks, nothing from `~/.config`; an
+untracked file that looks like a secret (`.env`, `*.pem`, `*.key`, `id_*`, `.netrc`, `.npmrc`,
+`.git-credentials`, or a name with token, secret, credential or password in it that is not
+source code) is kept back, with a line saying so.
+
+There it runs under `tools/ci/capped.sh`, so the memory cap and `JOBS`/`go test -p` are sized
+to the VM, with the pinned tools first on `PATH` and `GOTOOLCHAIN=local`; the output streams
+back as it runs. `SCHEME EXTRA PARALLEL JOBS JOBS_FORCE GOTEST_P CAP_MEM BASE PORT REPEAT_PORT`
+are passed on when set. Afterwards the suite's artifacts come back to where a local run leaves
+them (`browser`: its OUT_DIR argument, else `${RUNNER_TEMP:-/tmp}/uitest-SUITE-SCHEME`; `flakes`:
+`$OUT_DIR`, else a new `/tmp/flakes.*`; `prelanding`: its OUT_DIR, else a new `/tmp/prelanding.*`),
+the run folder is removed, and the script exits with the suite's status. Go's build and module
+caches, npm's cache and `tools/uitest/node_modules` (per `package-lock.json`) stay warm in
+`~/.cache/comebye-remote/cache`. Ctrl-C stops the suite on the VM as well. A run folder that a
+lost link left behind is removed by the next run a day later.
+
+It refuses (exit 2, before anything is sent): a HOST this tool has no ssh config for
+(`$COMEBYE_WORKER_STATE`, default `~/.local/state/comebye-worker`: set it if your config has a
+`state_dir`), a VM without the toolchain at this checkout's pins (`worker toolchain HOST`), and
+a second run from the same worktree while one is going. 255 means ssh could not reach the VM.
+`tools/ci/remote_test.sh` tests it with a fake `ssh` and a local folder for the VM.
+
 ## Bringing a branch back from a worker that cannot push
 
 A worker keeps no GitHub login: its agents commit locally, under `/data/code` and

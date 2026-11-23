@@ -126,6 +126,10 @@ jobs:
       - name: theme contrast
         run: node tools/uitest/contrast.mjs
 
+      # tools/ci/remote.sh against a fake ssh and a local folder for the VM (about 10 s, no network).
+      - name: remote.sh self-test
+        run: tools/ci/remote_test.sh
+
 
   # Merge tier: every Go test, in two halves of about equal length (tools/ci/gotest.sh).
   go-full:
