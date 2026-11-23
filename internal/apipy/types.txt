@@ -1,0 +1,906 @@
+Records (generated from the hub's Go types; T? may be None, [T] is a list, {T} a dict with str keys,
+time is a timezone-aware UTC datetime, any is plain JSON).
+
+Whoami  (server.whoamiView)  Answers GET /api/whoami.
+  host str
+  role str
+  ledger bool
+  version str
+  hub_mode bool
+  hub str
+  public_url str
+  agent str
+  by str
+
+Agents  (server.agentsView)  Answers GET /api/agents (the slim view).
+  agents [Agent]
+  hosts [Host]
+
+Ledger  (server.ledgerView)  Answers GET /api/ledger.
+  entries [Entry]
+  marks [Mark]
+  plans [PlanView]
+  roles {Role}
+  asks {AskReview?}  Not for a tagged node
+
+TodoList  (server.todoListView)  Answers GET /api/todos.
+  todos [Todo]
+  open int
+  answered int
+  auto {int}
+
+TodoView  (server.todoView)  Answers GET /api/todos/{id}.
+  todo Todo
+
+Queue  (server.queueView)  Answers GET /api/queue.
+  queue [QueuedPrompt]
+
+PageList  (server.pageListView)  Answers GET /api/pages.
+  pages [Page]
+  public_url str
+  pages_url str
+  matches [PageMatch]?
+  partial bool?
+
+PageView  (server.pageView)  A page as the API shows it: GET /api/pages/{id} (with the body on ?body=1) and the answer to a publish (with Created).
+  page Page
+  path str
+  url str
+  body str?
+  body_version int
+  body_kind str
+  created bool?
+
+Log  (server.logView)  Answers GET /api/log.
+  events [Event]
+
+Archived  (server.archivedView)
+  archived [ArchivedSession]
+  count int
+  build_freed int             The build output freed across them, WorktreeBytes the disk their worktrees still use (as measured at archive time).
+  worktree_bytes int
+
+Removals  (server.removalsView)  Answers GET /api/removals (the user's).
+  removals [Removal?]
+  auto_removed [AutoRemovedView]
+  auto_remove bool
+  sweep_branches [SweepDone]
+
+Coordinators  (server.coordinatorsView)  Answers GET /api/coordinators.
+  coordinators [Coordinator]
+
+Agent  (server.browserAgent)
+  id str
+  host str
+  pane_id str
+  name str
+  agent str
+  display_agent str
+  agent_status str
+  state_labels {str}
+  cwd str
+  terminal_title_stripped str
+  worktree WorktreeInfo?
+  last_active time?
+  status_since time?
+  instance str                      The host's incarnation (the hub's peer registry).
+  blocked_on BlockedOn?             Says what a blocked agent is blocked on, once the hub has read its dialog.
+  status_note str                   Herdr said blocked, the screen shows no dialog and a running spinner, so the agent is reported as working (state.verifyBlocked).
+  background [HerdrBackgroundTask]  An idle or done agent's running background tasks (a test run, a CI watch, a Monitor), which will wake it when they end.
+  quiet_since time?                 A working handoff worker has written nothing for a long time (quiet.go).
+  park_hint ParkHint?               The hub suggests parking this agent (parksuggest.go).
+  chat ChatMark?                    This agent is a "Chat about this" helper (chat.go); the app shows the strip and the chip.
+  owner str                         The id of the coordinator that owns this agent (it handed the work off, planned it, or last prompted it), the same owner its notices go to (route.go).
+
+Approval  (ledger.Approval)  Records who relayed the user's OK to land, when, and what they approved: the branch tip then, landed onto Base.
+  by str
+  note str           The user's words, as relayed
+  at time
+  base str
+  tip str
+  branch str         The branch the work lands from when it is not the entry's own (a follow-on task the worker did on a new branch): the landing check looks at it instead of...
+  reported_at time?  When the worker had reported the work being landed (the entry's FinishedAt then), restored if the landing is cancelled.
+  queued bool        The landing queue (landqueue.go): Queued says the landing is in its repo+base queue, QueueSeq is its place in the order, and TurnAt is when the hub told the...
+  queue_seq int
+  turn_at time?
+  queue_end str
+
+Archival  (ledger.Archival)  The record an archived entry carries (Entry.Archive), present only while it is archived.
+  at time
+  by str
+  why str
+  from_ str           The status it was archived from, which Unarchive restores (a marked entry goes back to the status it was marked from: its mark is not restored).
+  mark Mark?          The removal mark it had, kept so the "what is left" answer survives while the removals review forgets it; Left are the unsettled items of that answer.
+  left [AskItem]
+  park_id str         The park record that closed its pane ("" when the agent was already gone or parked before).
+  build_freed int     The regenerable build output cleared at archive time, in bytes, and BuildDirs the directories (relative to the worktree).
+  build_dirs [str]
+  build_pending bool
+  worktree_bytes int  The disk the worktree still uses (measured after the build output went; 0: not measured).
+  tip str             The branch tip when it was archived (a new commit brings it back); Unmerged and Unpushed are the commits not in the base and, of them, those on no remote,...
+  unmerged int
+  unpushed int
+  checked_at time?    The last time the hub re-ran the proof on it.
+
+ArchiveEvent  (ledger.ArchiveEvent)  One archive or unarchive of an entry.
+  event str  "archived" or "unarchived"
+  at time
+  by str
+  why str
+
+ArchivedSession  (server.archivedRow)  One archived session, as `comebye archived` and the app list it.
+  id str
+  name str
+  agent_id str
+  host str
+  project str
+  branch str
+  purpose str
+  worktree str
+  report bool
+  archive Archival
+
+Ask  (ledger.Ask)  A marked session's answer about its own removal.
+  state str
+  reason str
+  asked_at time?
+  at time
+  items [AskItem]       What an UNSAFE answer lists, each typed so the hub can re-check it later (see AskItem).
+  reasked_at time?      Set while a re-ask is in flight: the standing answer stays (and keeps being re-checked) until the new one replaces it.
+  cleaning_at time?     Set while the session has been told to do the cleanup it listed ("Let it clean up"); it is asked again when it reports.
+  auto_clean_for time?  The At of the answer the hub sent the scratch go-ahead for by itself, so each answer gets it once.
+  reasks int            Counts the hub's automatic re-asks of this mark (a person's click is not counted); ReaskNote is how the last re-ask ended when it left the old answer...
+  reask_note str
+  loop LoopNote?        The last thing the sweep loop did about this answer, and when (it deleted a stale branch, or found every item had resolved).
+
+AskItem  (ledger.AskItem)  One thing an answer says is left to finish (an UNSAFE answer, "something is left", keeps the session from being removed).
+  type str
+  repo str
+  number int
+  id str
+  branch str
+  remote str
+  kind str
+  name str
+  host str
+  text str
+  was str         The type the session gave an item the hub re-typed when it read the answer (a "cleanup" naming a path becomes a "path").
+  done ItemDone?  Set when the sweep loop finished the item itself (it deleted a remote branch that was provably in the default branch).
+
+AskReview  (server.askReview)  A mark's answer with its items re-checked.
+  state str
+  answered_at time
+  items [ItemView]
+  resolved bool      An UNSAFE answer whose items have all resolved.
+  only_cleanup bool  Items are left, and every one still unresolved is cleanup the session can do itself, or its own scratch ("Let it clean up").
+  event bool         Some item resolved after the answer was given.
+  reasking time?
+  cleaning time?     The session was told to do its cleanup and has not reported yet.
+  reask_note str
+  reasks int
+  stale_only bool    Every item still unresolved is a stale branch the sweep can delete (so confirming the removal covers them).
+  loop LoopNote?     What the sweep loop last did about this answer, and when.
+
+AutoRemoval  (ledger.AutoRemoval)  Records a removal the hub made without the user's tap.
+  at time
+  reason str             "landed, clean, SAFE"
+  landed str             Says how the work was found in the base: "in origin/main" or "merged as PR #N" or "no commits".
+  worktree_removed bool  The worktree went, and its local branch with it (every commit was in the base; the remote branch is not touched); false means it was kept, with Kept saying why.
+  kept str
+  park_id str            The park record the host left (Recently closed), so the session can be resumed; "" when none was made.
+  undone_at time?        Set once the user undid it (a worker was started on the branch again); UndoNote says how that went.
+  undo_note str
+
+AutoRemovedView  (server.autoRemovedView)  One recent auto-removal as the review lists it.
+  entry_id str
+  host str
+  name str
+  repo str
+  branch str
+  at time
+  reason str
+  landed str
+  worktree_removed bool
+  kept str
+  undone_at time?
+  undo_note str
+  can_undo bool          The branch can be set up again (a repository and a branch are recorded, the host is known, and it was not undone already).
+  in_recent bool         The session is in Recently closed and can be resumed from there.
+
+AutoVerdictView  (server.autoVerdictView)  The automatic removal's verdict on one item.
+  ok bool
+  why str
+  reask bool  An old SAFE answer would be asked again.
+
+BlockedOn  (server.blockedOn)  What a blocked agent is blocked on, as the list shows it.
+  kind str   Permission, question, choice, confirm, or unknown (a dialog the app does not recognise, or none readable).
+  label str  The card's words: "permission prompt (git push origin x)".
+
+CI  (ledger.CI)  The CI state of a landed commit (gh run list --commit).
+  state str
+  sha str
+  url str
+  runs int
+  at time
+  told bool  The requester was told how CI ended.
+
+Callback  (ledger.Callback)  The hub's "your worker finished" message to ReplyTo.
+  state str
+  at time             Queued
+  tries int
+  seq int             The entry's ReportSeq when the notice was queued.
+  to str              Who got it (the requester, or the coordinator standing in).
+  delivered_at time?
+
+ChatMark  (server.chatMark)  Says which Page a chat helper is about.
+  page str
+  title str
+  version int
+  writable bool  Started with the read-only check overridden (the kind has no read-only mode); the app marks it "not read-only".
+
+CommitFact  (server.commitFact)  Where a commit named in a report is.
+  sha str
+  exists bool
+  on_branch bool
+  in_base bool
+
+CommitInfo  (server.commitInfo)
+  sha str
+  subject str
+
+Coordinator  (server.coordinatorInfo)  One coordinator in GET /api/coordinators: who it is, whether it is main, and the open work that is its own (the ids, so a coordinator's digest can keep to...
+  id str
+  host str
+  pane_id str
+  name str
+  main bool
+  status str      The agent's status; "" when the hub does not see it now
+  at time         When it was registered
+  handoffs [str]
+  closed [str]    The ids of its newest handoffs and to-dos that are no longer open (landed, removed, answered and done), so its digest can list what happened to them.
+  todos [str]
+  plans [str]
+
+DeliveredPage  (server.deliveredPage)  A Page that captures work, as the review shows it.
+  id str
+  title str
+  path str
+  url str
+
+DeliveredView  (server.deliveredView)  What the review shows of an item's delivery: the pages and what discarding it drops (the lists are capped; the counts are not).
+  pages [DeliveredPage]
+  not_captured [str]
+  at str
+  by str
+  holds bool             The Pages count as capturing the work, so the dirty files and local commits are notes and the item can be discarded in bulk.
+  why str                Says what stops it holding.
+  files int              What a discard drops: the counts are exact, the lists capped.
+  file_list [str]
+  commits int
+  commit_list [str]
+
+Entry  (server.entryView)  A ledger entry with live hints.
+  id str
+  host str
+  repo str                        The primary checkout on Host
+  repo_name str
+  branch str
+  previous_branches [str]         Earlier names of Branch (the worker renamed it).
+  base str
+  kind str
+  purpose str                     Says what the work is for when the branch is not meant to merge: one of DisposablePurposes ("research", "plan", "poc", …).
+  purpose_source str              Says where Purpose came from: "flag" (the handoff's --purpose), "branch" (inferred from the branch prefix) or "none" (no purpose passed and no prefix...
+  loop str                        Says the worker is meant to keep looping (a PR watcher): a short description of what it keeps doing, from `comebye handoff --loop`.
+  loop_every_minutes int          How often a loop worker is expected to run a pass (a standing loop that sleeps between passes, such as an hourly steward), from `comebye loop set --every`.
+  last_pass_at time?              When a loop worker last went idle after working: the end of its last pass.
+  kind_source str                 Says where Kind came from: request, setting, flag or auto (empty on entries from before host settings).
+  model str                       And Thinking are what the worker was started with: the handoff's request, else its host's default (empty: the agent's own default).
+  thinking str
+  agent_id str                    "<host>/<pane>"
+  host_instance str               The incarnation of Host the worker started on (the hub's peer registry).
+  pane_id str
+  agent_name str
+  workspace_id str
+  worktree str
+  reused bool
+  brief str
+  from_ str
+  status str
+  error str
+  created_at time
+  saw_working bool                The agent was seen working since it started (or since it last finished), so going idle now means it finished.
+  finished_at time?
+  final_report str
+  report_tries int
+  report_source str               "explicit" when the worker ran `comebye report` (it declared itself done), else empty (the hub took its last reply when it went idle).
+  await_idle bool
+  report_at time?                 When FinalReport was written: the worker's `comebye report`, or the reply the hub took when the worker finished (its FinishedAt then).
+  last_pass_report str            The worker's last reply from a turn that ended without a report of its own, when FinalReport is older: a loop worker's pass end, or a worker that finished...
+  last_pass_report_at time?
+  pass_capture_at time?           The end of the turn whose last reply is still to be captured into LastPassReport (PassTries attempts so far).
+  pass_tries int
+  after [str]                     Lists the entries (ids) a waiting handoff is queued behind: it starts when all of them have reported.
+  wait_kind str                   And WaitNote say why a waiting handoff has not started beyond its After steps: "cap" is the host's limit on running workers in the repository (WaitNote is...
+  wait_note str
+  plan_id str                     The plan this handoff is a member of, if any.
+  reply_to Ref?                   Who asked for the handoff, when it was an agent: the hub tells it when the worker finishes.
+  callback Callback?
+  report_seq int                  Counts the explicit reports (`comebye report`) the worker filed.
+  noticed bool
+  notice_seq int
+  mark Mark?
+  notice_keys [str]               The last notices delivered for this entry, each a key of recipient, report content and notice text (the hub's callbacks): the same report is never announced...
+  park_history [ParkEvent]        When the worker was parked (its pane closed, worktree and session kept) and resumed (a new pane, which the entry then follows).
+  marked_from str                 The status the entry had when it was marked, which unmarking restores.
+  approval Approval?              The user's OK to land, as relayed by `comebye land` (kept after it landed, until the next landing replaces it).
+  land_check LandCheck?           The hub's latest check of the landing (see LandCheck).
+  push_fetch PushFetch?           The hub bringing the branch back from a push-less host (one with no GitHub login): fetched over the provisioner's ssh and pushed to origin from there, for...
+  progress Progress?              The worker's latest progress note (`comebye report --progress`): it says what the worker is doing and is not a report, so it never finishes or lands anything.
+  await_land_report bool          The hub found the work on the base before the worker filed its landing report (so the entry is landed already); that report, when it comes, is the landing...
+  removed_at time?
+  lost_at time?                   When the entry became Lost (Error says why).
+  removal any                     The owning host's account of the removal (what was closed, whether the worktree went and why not).
+  auto_removed AutoRemoval?       Set when the hub removed the worker itself (see the server's autoremove.go): the removals review lists it for a day, with an Undo.
+  archive Archival?               The archive record while the entry is archived (nil otherwise); ArchiveHistory lists every archive and unarchive.
+  archive_history [ArchiveEvent]
+  live Live
+  candidate bool                  Hints that the entry could be marked ready to remove: it finished with a report, and its worktree is clean and merged (per checks at most checksTTL old).
+  checks WorktreeChecks?
+  queue QueueState?               The entry's place in its landing queue (landqueue.go).
+  report_age str                  Says how old the report is ("report 3 from 2 h ago"), and NewerReplyAge how old the reply kept beside it is when that is newer (LastPassReport), as of this...
+  newer_reply_age str
+
+Event  (server.Event)  One thing the hub handled.
+  id str
+  at time
+  key str      Makes an event once-only: a second event with the same key is dropped.
+  kind str
+  subject str  The handoff, agent or prompt the event is about.
+  who str      The agent's name, when there is one.
+  text str     One line the hub wrote from safe fields only.
+
+HerdrBackgroundTask  (herdr.BackgroundTask)  One running background task: its kind (bash, monitor or agent), a short harmless label and when it started.
+  kind str
+  label str
+  since str
+
+Host  (server.browserHost)  Drops LastSeen, which changes with every peer ping and is not shown.
+  name str
+  local bool
+  status str
+  error str
+  class_ str
+  since time?
+  addr str
+  version str               The host's binary version ("" = unknown); VersionMismatch marks a peer that differs from the hub, for the app's badge.
+  version_mismatch bool
+  agents int
+  no_agents bool
+  repo_damage [RepoDamage]
+  tmp Usage?
+
+ItemDone  (ledger.ItemDone)  Records how the sweep loop finished a leftover item.
+  at time
+  how str
+
+ItemView  (server.itemView)  One item of an answer with what the hub found when it looked.
+  type str
+  repo str
+  number int
+  id str
+  branch str
+  remote str
+  kind str
+  name str
+  host str
+  text str
+  was str           The type the session gave an item the hub re-typed when it read the answer (a "cleanup" naming a path becomes a "path").
+  done ItemDone?    Set when the sweep loop finished the item itself (it deleted a remote branch that was provably in the default branch).
+  label str
+  state str         Resolved (what it named has moved on), unresolved, or unchecked (the hub cannot tell).
+  now str
+  changed_at time?  When it resolved, when known (a PR merging, a to-do closing): an event after the answer is a reason to ask again.
+  stale bool        The item is deleting a remote branch of the session's own whose every commit is provably in the default branch (Proof says how): the sweep may do it...
+  proof str
+
+LandCheck  (ledger.LandCheck)  The hub's verdict on a landing: OK when the worktree is clean and every approved commit is in the base.
+  at time
+  ok bool
+  base str      The base checked against ("origin/main")
+  verdict str
+  reason str    Says why the check is pending or failed in the worker's terms ("the worker is still working", "the worker said it was done, ...").
+  state str     LandLanded, LandPending or LandFailed (empty on checks from before states: OK says landed, else failed).
+  landed [str]  Lists the base commits the work landed as, where found.
+  unmerged int  Counts the commits not in the base, Unpushed those of them on no remote (-1: not known).
+  unpushed int
+  stopped bool  The hub gave up re-checking (a landing open for too long).
+  ci CI?        The state of the landed commit's CI runs, once landed.
+
+LandedCommit  (server.landedCommit)  A branch commit whose change is in the base: As is the base commit with the same patch-id ("" when it was not found, e.g.
+  sha str
+  as_ str
+
+Live  (server.liveInfo)  An entry's agent as the fleet sees it now.
+  present bool
+  agent_status str
+  background [TranscriptBackgroundTask]  Lists the tasks the worker's session started in the background and has not seen end (Claude sessions; see transcript/background.go).
+  background_known bool
+
+LoopNote  (ledger.LoopNote)  Says what the sweep loop did and when.
+  at time
+  text str
+
+Mark  (ledger.Mark)  A "ready to remove" mark, on a ledger entry or on any other agent (kept in the ledger's marks, by host-qualified agent id).
+  agent_id str
+  host str
+  pane_id str
+  name str
+  workspace_id str
+  worktree str
+  cwd str
+  by str
+  reason str
+  discard bool      Proposes throwing the work away: removing the worktree even with uncommitted or unmerged work, and deleting the branch.
+  at time
+  ask Ask?          The marked session's own answer to "is it safe to remove you?" (nil: not asked, e.g.
+
+MemberView  (server.memberView)  A plan member without its report.
+  id str
+  host str
+  repo_name str
+  branch str
+  status str
+  outcome str
+  reported bool
+  agent_id str   "<host>/<pane>" while the member has an agent (the entry may outlive it); Followup is "working" or "landing" when a member of a settled plan is at work again.
+  pane_id str
+  followup str
+  after [str]    The member's id waits for these steps (ids).
+
+OriginCheck  (server.originCheck)  Compares a branch with origin's copy of the repository's default branch only, after a fetch that worked: not with the local branch (a checkout's own main...
+  ref str               "origin/<default>"; "" when it could not be compared.
+  fetched bool          A fetch of origin succeeded, so Ref is as fresh as origin.
+  unmerged_commits int  Counts the branch's commits with no equivalent in Ref (git cherry), -1 when unknown.
+  merged_pr int
+  why str               Says what stopped the comparison.
+  records bool          This host leaves a park record when asked to (a removal with record_park); an older host does not, and the hub then removes nothing by itself there.
+
+Page  (server.Page)  One published page and its kept versions.
+  id str
+  key str
+  title str
+  kind str
+  by str                  The publisher as the user reads it; Agent is its fleet id ("host/pane"), empty when the user published it; Host is where it ran.
+  agent str
+  host str
+  tagged bool
+  handoff str
+  created_at time
+  updated_at time
+  version int             The newest
+  script bool             The newest version's flag, set when a page is listed or read (it is not stored: each version keeps its own).
+  size int                Of the newest
+  versions [PageVersion]
+
+PageMatch  (server.PageMatch)  Where a search words appear in one page.
+  id str
+  version int
+  count int
+  snippet str
+
+PageSession  (server.PageSession)  Names a session as the transcript index does.
+  host str
+  kind str
+  id str
+
+PageVersion  (server.PageVersion)  One stored body.
+  n int
+  kind str
+  size int
+  at time
+  session PageSession?  The agent session that published this version, as the hub saw the pane at the time; empty for the user and for panes whose session herdr does not report.
+  thumbs [str]          Names the gallery thumbnails kept for this version ("light", "dark"); none for a version published without a Chrome to render them.
+  thumb_size int
+  script bool?          Whether an HTML body holds a <script> element (inline or src).
+
+ParkEvent  (ledger.ParkEvent)  One park or resume of a worker.
+  id str
+  event str  "parked" or "resumed"
+  at time
+  pane str   The pane it left, or the one it resumed in
+  freed int  The build output cleared at park, in bytes.
+
+ParkHint  (herdr.ParkHint)  Says an agent can be parked: it has been idle since Since and nothing stands in the way (no open question, background task, half-typed text or uncommitted...
+  since time
+
+PlanView  (server.planView)  A plan with its members, for the app and CLI.
+  id str
+  title str
+  size int
+  by str                Display string of the creator
+  reply_to Ref?         Creator, when an agent
+  created_at time
+  outcome str           "" while open, then PlanDone or PlanPartial.
+  settled_at time?
+  notified bool         The user was pushed for this settling.
+  callback Callback?
+  state str             Open, done or partial
+  done int              Members that finished
+  landing int           And Working count members of a settled plan that are back at work.
+  working int
+  members [MemberView]
+
+Progress  (ledger.Progress)  A worker's note on what it is doing now.
+  text str
+  phase str  One of ProgressPhases
+  at time
+
+PushFetch  (ledger.PushFetch)  One fetch-and-push of a push-less host's branch.
+  at time
+  report_seq int
+  via str         The provisioner node that ran it
+  branch str
+  ok bool
+  tip str         The commit now on origin
+  pushed str      Pushed, or same (already there)
+  note str
+
+QueueState  (server.queueState)  An entry's place in its landing queue, as the ledger shows it.
+  position int      1 is the front
+  ahead int
+  total int
+  turn bool         The worker has been told it is up
+  turn_at time?
+  expires_at time?  When a held turn is released
+
+QueuedPrompt  (server.QueuedPrompt)  One prompt waiting for (or settled after) delivery.
+  id str
+  agent_id str       And Name identify the target as it was when queued.
+  name str
+  text str           The sender's text, without the stamp added at delivery.
+  from_ str          A display string; FromID is the sending agent's id ("" for the user).
+  from_id str
+  at time
+  state str
+  tries int
+  settled_at time?   When it was delivered, expired, dropped or cancelled.
+  notice bool        Set while the sender still has to be told it was not delivered (expired or gone); the notice is fixed text.
+  held str           Says why a pending prompt is waiting although its agent is idle: the user has text in that agent's input box (typing.go).
+  held_since time?
+  held_noticed bool
+  parked bool        The target is a parked agent (its pane is closed); the prompt waits up to parkQueueTTL for it to resume, then goes to its new pane.
+  resumed_at time?   When the prompt was handed to the pane its agent resumed in; the normal wait runs from then, not from when it was queued.
+
+Ref  (ledger.Ref)  Addresses an agent: its host-qualified id and the name it had then (a pane id can be reused by another agent after a restart).
+  agent_id str
+  name str
+
+Removal  (server.removal)  One session marked ready to remove, as the review list shows it.
+  id str                         The host-qualified agent id
+  host str
+  pane_id str
+  name str
+  entry_id str                   A ledger worker's entry
+  repo str
+  branch str
+  base str
+  workspace_id str
+  worktree str
+  mark Mark
+  ask_review AskReview?          The session's answer with its items re-checked (see askcheck.go).
+  live Live
+  checks WorktreeChecks?
+  checks_error str
+  final_report str
+  warnings [str]
+  notes [str]
+  safe bool
+  discardable bool               The worktree has work a plain removal keeps (uncommitted changes, unmerged commits, an unfinished rebase); the user may confirm discarding it, with the tip...
+  delivered DeliveredView?       The Pages that capture the session's work (see captured.go).
+  delivered_discard bool
+  coordinator bool               The agent is a coordinator; removing it needs its id in the confirmation's coordinators as well.
+  auto_verdict AutoVerdictView?  Answers GET /api/removals?dry=1: what the automatic removal would decide now ("" with ok: it would be removed).
+
+RepoDamage  (state.RepoDamage)  A repository whose object store git reports as damaged: missing objects, or a ref that points at one.
+  repo str         Its name
+  path str         The repository's directory on that host
+  reason str
+  ref str          The broken ref git named, if any
+  hint str         How to repair it by hand
+  source str       What found it: fetch, git (another git command) or fsck.
+  since time
+  worktrees [str]  The checkouts that share the store, so the app can mark the agents working in them.
+
+ReviewRoute  (server.ReviewRoute)  Tracks telling the verdict to whoever should hear it.
+  to str     Fleet id once sent
+  name str   Who it went to
+  via str    Publisher or coordinator
+  state str  Pending, sent, expired
+  due time   Not before (the undo window)
+  tries int
+
+ReviewVerdict  (server.ReviewVerdict)  The user's answer to a review.
+  verdict str
+  note str
+  kind str          Fix, idea or looks_off, on "changes"
+  by str
+  at time
+  undo_until time?  When a Looks good can no longer be taken back.
+
+Role  (server.Role)  An agent's recorded role.
+  role str   "coordinator" or "chat"
+  name str
+  page str   The Page a chat helper was started about.
+  by str
+  at time
+  main bool  Marks the main coordinator: the one events nobody owns go to (route.go).
+
+SetChoice  (server.SetChoice)  The draft answer to one decision: a 1-based Option, or Text (the user's own words, "Other"), never both.
+  option int
+  text str
+  confirmed bool
+
+SetConflict  (server.SetConflict)  A rule that fires on the current answers.
+  rule str
+  level str
+  say str
+  fix SetFix?
+
+SetDecision  (server.SetDecision)  One decision of a set.
+  id str
+  title str
+  question str
+  surface str          The part of the system it changes
+  one_way bool         A one-way door: never accepted in bulk
+  release_early bool
+  after [str]          Shown after these are answered (a display order)
+  options [SetOption]
+  recommend int        The 1-based suggested option, 0 for none.
+
+SetDraft  (server.SetDraft)  The user's work so far.
+  rev int
+  choices {SetChoice}
+  facts {bool}         Known
+  note str             The user's free text about the set as a whole.
+  updated_at time
+  by str
+
+SetFact  (server.SetFact)  Something nobody knows yet, the cheapest way to find out, and the decisions it affects.
+  id str
+  text str
+  test str
+  affects [str]
+
+SetFix  (server.SetFix)  The one-click answer that clears a rule.
+  decision str
+  option int
+
+SetOption  (server.SetOption)  One answer to a decision.
+  label str
+  detail str
+  short str   A few words for a summary line
+
+SetResult  (server.SetResult)  The structured answer a submit records.
+  decisions {SetResultChoice}
+  facts {str}                  Known or unknown
+  note str                     The note on the set as a whole
+  warnings [SetConflict]
+
+SetResultChoice  (server.SetResultChoice)  One answer in the submitted result.
+  option int      0 for a text answer
+  label str       The option's label, or the text
+  text str        Set for a text answer ("Other")
+  suggested bool  It was the recommendation
+  early bool
+
+SetRisk  (server.SetRisk)  A risk and the decisions that govern it.
+  id str
+  text str
+  decisions [str]
+
+SetRule  (server.SetRule)  Fires when every decision in When has the given (1-based) option.
+  id str
+  level str    Block or warn
+  when {int}
+  say str
+  fix SetFix?
+
+SweepDone  (server.sweepDone)  One thing the loop did: a session it removed, or a remote branch it deleted.
+  at time
+  kind str
+  name str     The session's name
+  repo str
+  host str
+  branch str
+  tip str
+  restore str
+  backup str   The ref on Host that keeps the deleted branch's tip.
+  note str     A session removed but its worktree kept, and why; for an archived one, why it was archived.
+  freed int    The build output an archive cleared, in bytes.
+
+Todo  (server.Todo)  One item.
+  id str
+  question str
+  context str
+  kind str
+  options [TodoOption]    The choices a decision offers (2 to 9) and Recommend the 1-based numbers the asker recommends.
+  recommend [int]
+  links [TodoLink]
+  waiting TodoAgent?
+  state str
+  created_at time
+  updated_at time
+  created_by str
+  created_by_id str       Fleet id of an agent creator
+  answer TodoAnswer?
+  closed_by str
+  closed_at time?
+  drop_reason str
+  notice TodoNotice?
+  release TodoRelease?    Set on a kind "release" item: the version and commit a coordinator proposes, and what the user's approval did (release.go).
+  approval TodoApproval?  Set on a kind "approval" item: the action that waits for the user's passkey and where it stands (approvals.go).
+  set TodoSet?            A decision set: many decisions answered in one go (todoset.go).
+  source str              Says how the item came to be: "agent" (an agent added it), "hub-blocked" (the hub filed it, autotodo.go), or empty (a person).
+  dialog TodoDialog?      Binds a hub-blocked item to the dialog it was filed for, so an answer chosen from its Options is sent to the pane (todoanswer.go).
+  auto_key str
+  suggested bool
+  page TodoPage?          The Page version the item is about (any kind; review.go).
+  review TodoReview?
+  review_of str
+  relay TodoRelay?        Where the hub's own relay of the answer stands (relay.go).
+
+TodoAgent  (server.TodoAgent)  The agent waiting on an item.
+  id str
+  name str
+  instance str  The incarnation of the agent's host when the item was added (set by the hub from its peer registry, never from the request).
+  gone bool     Computed when the item is served: the host is no longer that incarnation, so the agent that asked is not the one now at that id.
+  parked bool   Computed when the item is served: the agent was parked (its pane is closed).
+  park_id str
+
+TodoAnswer  (server.TodoAnswer)  The answer to an item.
+  text str
+  by str
+  via str
+  at time
+
+TodoApproval  (server.TodoApproval)  The public part of a kind "approval" item: what is asked, of whom, and where it stands.
+  id str
+  action str
+  host str
+  subject str
+  requested_by str
+  state str
+  expires_at time
+  note str          Why the host refused an answer (state denied): the item stays open so the user can read it, and a new request from that host reuses it.
+
+TodoDialog  (server.TodoDialog)  The dialog a hub-blocked item stands for: its fingerprint when filed, and Rows[i] the dialog row of the item's option i+1.
+  fingerprint str
+  rows [int]
+
+TodoLink  (server.TodoLink)  Points at something the item is about: a URL (PR, artifact, report) and/or a handoff entry.
+  label str
+  url str
+  handoff str
+  kind str     Says what a handoff link opens: "report" (the stored final report, in place) or "transcript"; empty is an older link, read as its label says.
+
+TodoNotice  (server.TodoNotice)  Tracks the hub's note to the coordinator about an answer given in the app.
+  state str
+  tries int
+  at time
+
+TodoOption  (server.TodoOption)  One choice of a structured ask.
+  label str
+  detail str
+
+TodoPage  (server.TodoPage)  The Page version an item is about.
+  id str
+  version int
+  title str
+  agent str      The publisher's fleet id ("host/pane"), empty when the user published the Page; By is how the publisher is shown.
+  by str
+  url str        The in-app link to this version; Thumbs the schemes ("light", "dark") that have a thumbnail of this version and ThumbURL the template for fetching one, with...
+  thumbs [str]
+  thumb_url str
+
+TodoRelay  (server.TodoRelay)  Where the hub's relay of one answer stands.
+  subject str
+  state str
+  queue_id str
+  tries int
+  why str
+  to str
+  notice str
+  at time
+
+TodoRelease  (server.TodoRelease)  The structured part of a release item.
+  version str
+  commit str
+  state str
+  approved_by str
+  approved_at time?
+  tagged_at time?
+  host str            The host whose git and credentials did (or are doing) the tagging: this one, or the -release-host peer.
+  run_url str
+  error str
+  dismissed bool      The user abandoned this tagged release's rollout.
+  dismissed_by str
+  dismissed_at time?
+  rollout_note str    What the rolling rollout last left to say on this item (stopped at a host, done with a skipped host, cancelled); empty while it runs or when it finished...
+  dry_run str         The last dry run's output (a server run with -release-dry-run never tags).
+
+TodoReview  (server.TodoReview)  The review state of a kind "review" item.
+  verdict ReviewVerdict?
+  route ReviewRoute?
+  fix_id str              The Fix item a Needs changes filed
+  stale bool              Computed when served: open for more than reviewStale.
+  can_undo bool           Computed when served: a Looks good still inside its window.
+
+TodoSet  (server.TodoSet)  The set on a Todo.
+  decided [str]
+  risks [SetRisk]
+  decisions [SetDecision]
+  facts [SetFact]
+  rules [SetRule]
+  plan str                 A plan id whose waiting handoffs start when the set is submitted (slice: plans).
+  draft SetDraft
+  released [str]           Lists the release_early decisions already told to the coordinator; EarlyPending the ones whose notice has not gone out.
+  early_pending [str]
+  result SetResult?
+  submitted_at time?
+
+TranscriptBackgroundTask  (transcript.BackgroundTask)  A task a session started in the background and has not seen end.
+  id str
+  tool str   Bash, Agent, Monitor or Wakeup
+  desc str
+  since str
+  cmd bool   Desc is the command line (the call had no description), which can hold secrets; show only a short label made from it.
+
+Usage  (scratch.Usage)  How full the temporary directory's filesystem is.
+  path str
+  tmpfs bool    RAM-backed
+  total int
+  used int
+  used_pct int
+  warn bool     UsedPct is at or above WarnPct
+
+WorktreeChecks  (server.worktreeChecks)  The safety checks before a worker's worktree is removed: it must be clean and have nothing its base lacks.
+  path str
+  exists bool
+  primary bool            The path is a repository's primary checkout, which is never removed.
+  branch str
+  dirty bool
+  dirty_files int         Counts `git status --porcelain` lines (untracked included).
+  unmerged_commits int    Counts the branch's commits with no equivalent in the base (git cherry), -1 when unknown.
+  base_used str           Names the base the Unmerged count was taken against: the base branch, or origin's fresher copy of it ("origin/<base>").
+  repo str                The primary checkout
+  landed [LandedCommit]   Lists the branch's commits that are in the base under another SHA (a cherry-pick, a rebase, a squash of one commit: same patch-id), with the base commit...
+  equivalent str          Says why a branch whose commits git cherry could not match still has nothing the base lacks (a squash merge: its files are identical in the base, or a...
+  gone bool               The worktree does not exist, so the checks fell back to the repository: Records names what was checked (the branch if it is still there, commits the ledger...
+  records [str]
+  repo_missing str        Says why a gone worktree could not be checked against a repository (the recorded one no longer exists); RepoNote says the repository was not the recorded...
+  repo_note str
+  gone_in_origin str      Is, for a gone worktree with records, origin's copy of the base ("origin/main") when every record has all its commits in it: what an automatic removal...
+  tip str                 The commit the checks looked at (the branch, else HEAD); a discard is refused if it moved since the user reviewed it.
+  in_progress str         Names an unfinished git operation in the worktree: rebase, merge, cherry-pick, revert or bisect.
+  error str
+  detail WorktreeDetail?  Filled in for an inspection (checks?detail=1).
+  ci CI?                  The CI state of the commit asked for (checks?ci=SHA).
+  verified [CommitFact]   Answers checks?verify=SHA,...: where each named commit is.
+  origin OriginCheck?     Answers checks?origin=1: the strict comparison with origin's default branch that an automatic removal relies on (see autoremove.go).
+  remote_gone bool?       Answers checks?remote=1: whether origin no longer has the branch (nil: not asked, or origin could not be asked).
+
+WorktreeDetail  (server.worktreeDetail)  What a coordinator inspects before proposing to keep or discard a worker's work.
+  status [str]          `git status --porcelain`, at most maxDetailLines lines.
+  commits [CommitInfo]  The branch's commits with no equivalent in the base (git cherry -v), oldest first, at most maxDetailLines.
+  diff_stat str         `git diff --stat` of the branch against its merge base with the base branch.
+  upstream str          The branch's upstream ("" when none); Unpushed counts the branch's commits that are neither in the base nor on any remote-tracking branch: work that exists...
+  unpushed int
+  diff str              (checks?diff=1): the branch's committed changes against the merge base, then the uncommitted changes (git diff HEAD), each capped at maxDiffBytes.
+  work_diff str
+  diff_truncated bool
+
+WorktreeInfo  (herdr.WorktreeInfo)  Describes the repository checkout hosting a workspace.
+  repo str
+  checkout str
+  linked bool
+  branch str
