@@ -228,6 +228,11 @@ first words of its reply and shows it in the review:
   that names no PR, branch, push or issue, and never one it says to keep.
   Whatever else is left stays on the answer; the ask after the cleanup
   counts as one of Comebye's re-asks, so it stops at the same limit. The
+  same go-ahead covers a report the session says it still owes for its task
+  (`comebye report`): it is sent once per answer, even after the re-asks are
+  spent, and the session is not asked the same question again first; filing
+  the report ends the mark. Comebye's own asks and go-aheads wait while the
+  session has a background task running or a wakeup scheduled. The
   review says how old the answer is and has a **Re-ask** on every item;
   Comebye also asks again by itself when an item changes or a day-old
   answer still holds (see `docs/lifecycle.md`, "Evidence, not memory");
@@ -253,7 +258,11 @@ by hand, sweep (`comebye sweep`, or "Sweep for finished agents" in the
 ⋯ menu at the top right of the app's list). The hub looks at every ledger worker, on every
 host, that is `finished`, or still `running` but whose agent has been idle
 for 30 minutes (`--idle-after`; `0` turns it off), and that is not already
-marked. It never takes a coordinator, the caller itself, or a worker without
+marked. A worker still on its task is left alone, not marked or asked: one
+with a background task running or a wakeup scheduled (Claude sessions), and
+one whose last turn ended without a report (the turn after its report: a
+landing, a follow-up) or whose landing report is not filed yet, until its
+agent has been idle as long. It never takes a coordinator, the caller itself, or a worker without
 a worktree of its own. Each candidate is checked on its own host (origin is
 fetched first, once for all the worktrees of a repository, so a branch merged
 upstream since the last fetch counts as merged; a failing fetch is logged once a

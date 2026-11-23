@@ -62,7 +62,8 @@ func askPrompt(reason, by, focus string) string {
 		"Read-only commands for those checks are fine. " +
 		"Then, without asking, delete your own scratch and stop your own throwaway processes, after checking each one is yours: " +
 		"scratch is your /tmp and scratchpad files, your pre-edit backups, stray processes you started and throwaway herdr sessions you opened. " +
-		"Not scratch, so leave it and list it: a live resource the user asked to keep, unpushed commits, open PRs and branches, " +
+		"Not scratch, so leave it and list it: a background task or wakeup you are waiting on for this work (a CI watch, a test run), " +
+		"a live resource the user asked to keep, unpushed commits, open PRs and branches, " +
 		"credentials or accounts on real systems, and anything that is not your own. " +
 		"Take no other action now: no commits, pushes, merges, other cleanup or edits. " +
 		"Say what is left, in plain words, and who each item waits on: a decision only the user can make is waiting on the user; " +
@@ -378,6 +379,10 @@ func (s *Server) reask(m ledger.Mark, auto bool, focus string) error {
 		return &errReask{"busy", "the session is " + string(a.Status) + ": ask it when it is idle"}
 	case m.Ask != nil && (m.Ask.State == ledger.AskAsking || m.Ask.ReaskedAt != nil || m.Ask.CleaningAt != nil):
 		return &errReask{"asking", "the session is already being asked"}
+	case auto:
+		if w := s.waitingOn(*a); w != "" {
+			return &errReask{"busy", "the session is waiting on " + w + ": ask it when that ends"}
+		}
 	}
 	now := time.Now().UTC()
 	standing := m.Ask != nil && (m.Ask.State == ledger.AskSafe || m.Ask.State == ledger.AskUnsafe)
@@ -410,6 +415,19 @@ func (s *Server) reask(m ledger.Mark, auto bool, focus string) error {
 		s.runAsk(m, *a, askOpts{reask: standing, focus: focus})
 	}()
 	return nil
+}
+
+// waitingOn names the background task or scheduled wakeup an idle session
+// is waiting on, or "". The hub's own asks and go-aheads wait for it: an
+// ask lands as a new turn, and a session told to "take no other action"
+// stops what it was doing (bee-plugin stopped its CI watch, 2026-11-23).
+func (s *Server) waitingOn(a herdr.AgentInfo) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if bg := s.pendingTasks(ctx, a.Host, a.ID, a.PaneID); len(bg) > 0 {
+		return bgWhat(bg)
+	}
+	return ""
 }
 
 // reaskBody is the JSON body of a re-ask.
@@ -492,6 +510,9 @@ func (s *Server) reaskStale(it *removal, now time.Time) bool {
 	if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || a.Reasks >= s.reaskMax || it.AskReview == nil || it.AskReview.StaleOnly || !s.unsafeStale(a, it.AskReview, now) {
 		return false
 	}
+	if goAheadDue(it) {
+		return false // the hub's go-ahead goes first (reaskStep): the same question would get the same answer
+	}
 	last := a.At
 	if a.AskedAt != nil && a.AskedAt.After(last) {
 		last = *a.AskedAt
@@ -518,14 +539,18 @@ func (s *Server) reaskStep(ctx context.Context, now time.Time) []string {
 	var asked []string
 	for _, it := range s.marked() {
 		a := it.Mark.Ask
-		if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || a.Reasks >= s.reaskMax {
+		if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil {
 			continue
 		}
-		// Scratch the answer lists that was not sent its go-ahead yet (the
-		// session was busy, or the hub restarted): send it, and let the ask
-		// after the cleanup decide.
+		// Scratch or an owed report the answer lists that was not sent its
+		// go-ahead yet (the session was busy or waiting on a task, or the
+		// hub restarted): send it, and let what the session does next
+		// decide. It is not asked the same question again first.
 		if l := s.liveAgent(it.ID); l != nil && (l.Status == herdr.StatusIdle || l.Status == herdr.StatusDone) && s.autoLetCleanup(ctx, it) {
 			asked = append(asked, it.ID)
+			continue
+		}
+		if a.Reasks >= s.reaskMax || goAheadDue(it) {
 			continue
 		}
 		last := a.At

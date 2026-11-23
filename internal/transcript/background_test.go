@@ -207,3 +207,29 @@ func TestBackgroundBashMovedAfterItsTimeout(t *testing.T) {
 		t.Errorf("a finished foreground call is listed: %+v", l.Background)
 	}
 }
+
+func bgCallAt(id, name, input string, at time.Time) string {
+	return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"id":"m%s","role":"assistant","content":[{"type":"tool_use","id":%q,"name":%q,"input":%s}]}}`, at.UTC().Format(time.RFC3339Nano), id, id, name, input)
+}
+
+// A ScheduleWakeup is a wait like a background task: the session is idle
+// but not finished until it fires. A later call replaces it, stop ends it,
+// and once its time has passed it is gone.
+func TestBackgroundScheduledWakeup(t *testing.T) {
+	now := time.Now()
+	wake := bgCallAt("w1", "ScheduleWakeup", `{"delaySeconds":1200,"reason":"watching CI run","prompt":"x"}`, now)
+	l := bgLines(t, wake)
+	if len(l.Background) != 1 || l.Background[0].Tool != "Wakeup" || l.Background[0].Desc != "watching CI run" {
+		t.Fatalf("a pending wakeup not seen: %+v", l.Background)
+	}
+	if l = bgLines(t, wake, bgCallAt("w2", "ScheduleWakeup", `{"stop":true}`, now)); len(l.Background) != 0 {
+		t.Errorf("a stopped wakeup is still listed: %+v", l.Background)
+	}
+	if l = bgLines(t, bgCallAt("w3", "ScheduleWakeup", `{"delaySeconds":60,"reason":"old"}`, now.Add(-2*time.Minute))); len(l.Background) != 0 {
+		t.Errorf("a wakeup whose time has passed is still listed: %+v", l.Background)
+	}
+	l = bgLines(t, bgCallAt("w4", "ScheduleWakeup", `{"delaySeconds":60,"reason":"first"}`, now.Add(-2*time.Minute)), bgCallAt("w5", "ScheduleWakeup", `{"delaySeconds":600,"reason":"second"}`, now))
+	if len(l.Background) != 1 || l.Background[0].Desc != "second" {
+		t.Errorf("a later wakeup does not replace the earlier one: %+v", l.Background)
+	}
+}

@@ -28,6 +28,13 @@ import (
 // that names no PR, branch, push or issue, and a path or resource the
 // session says is its own; anything it says to keep, or that is not its
 // own, is never scratch. The rest of the answer stays as it is.
+//
+// The same go-ahead covers a report the session says it still owes for its
+// task (isOwedReport): filing it is finishing the work, not cleanup, and an
+// ask that told it to "take no other action" must not leave it waiting for
+// a go-ahead nobody else would give (stuck-scratch owed its landing report
+// and was asked three times, 2026-11-23). Filing the report ends the mark
+// (the worker is at work again), so the session is not asked again here.
 
 // cleanupWait bounds how long the hub waits for the session to finish its
 // cleanup before it asks again anyway.
@@ -44,6 +51,16 @@ func cleanupPrompt(items []string) string {
 	b.WriteString("Do not commit, push, merge or touch anything that is not listed. If a step cannot be done, or you find something else left, say so instead of improvising. " +
 		"When you are done, report in a few lines what you did. You will then be asked once more what is left.")
 	return b.String()
+}
+
+// goAheadPrompt is the hub's own go-ahead: cleanupPrompt, and when one of
+// the items is a report the session owes, leave to file it as its task says.
+func goAheadPrompt(items []string, report bool) string {
+	p := cleanupPrompt(items)
+	if report {
+		p = strings.Replace(p, "Do not commit, push, merge", "Filing the report your task asks for, with `comebye report` as the task says, is part of this. Do not commit, push, merge", 1)
+	}
+	return p
 }
 
 // cleanupItems are the unresolved cleanup items of a mark's review as the
@@ -64,19 +81,64 @@ func cleanupItems(ar *askReview) ([]string, string) {
 	return out, ""
 }
 
-// scratchItems are the unresolved scratch items of a review, whatever else
-// is left beside them: what the hub's own go-ahead covers.
-func scratchItems(ar *askReview) []string {
+// hubItems are the unresolved items of a review the hub's own go-ahead
+// covers, whatever else is left beside them: scratch, and a report the
+// session owes. report says whether one of them is that report.
+func hubItems(ar *askReview) (out []string, report bool) {
 	if ar == nil || ar.State != ledger.AskUnsafe {
-		return nil
+		return nil, false
 	}
-	var out []string
 	for _, v := range ar.Items {
-		if isScratch(v.AskItem) && v.State != itemResolved {
+		if v.State == itemResolved {
+			continue
+		}
+		switch {
+		case isOwedReport(v.AskItem):
+			out, report = append(out, cleanupText(v.AskItem)), true
+		case isScratch(v.AskItem):
 			out = append(out, cleanupText(v.AskItem))
 		}
 	}
-	return out
+	return out, report
+}
+
+var (
+	// owedReportRe: an item about the session's own report for its task...
+	owedReportRe = regexp.MustCompile(`(?i)\bcomebye report\b|\b(landing|final|my|the|its) report\b`)
+	// owedRe: ...that it says it has not filed yet.
+	owedRe = regexp.MustCompile(`(?i)\b(i )?(still )?owe[sd]?\b|\b(have ?n[o']t|has ?n[o']t|not( yet)?|never) (been )?(sent|filed|send|file)\b|\bstill (have|need) to (send|file)\b`)
+)
+
+// isOwedReport: an item saying the session still owes the report of its
+// own task (`comebye report`). It is the session's to file, so the hub's go-
+// ahead covers it; anything it says waits on someone else is not.
+func isOwedReport(item ledger.AskItem) bool {
+	switch orDefault(item.Was, item.Type) {
+	case ledger.ItemOther, ledger.ItemFollowup, ledger.ItemCleanup:
+	default:
+		return false
+	}
+	t := strings.ReplaceAll(item.Text, "`", " ")
+	return owedReportRe.MatchString(t) && owedRe.MatchString(t) && !notMineRe.MatchString(t)
+}
+
+// notMineRe: words that put an owed item on someone else.
+var notMineRe = regexp.MustCompile(`(?i)\bwaiting on the user\b|\bthe user (must|has to|needs to|should)\b|\bnot mine\b`)
+
+// goAheadDue: the answer lists a report the session owes and the hub's
+// go-ahead to file it was not sent for this answer yet. A re-ask waits for
+// it: the same question would get the same answer.
+func goAheadDue(it *removal) bool {
+	a := it.Mark.Ask
+	if a == nil || a.State != ledger.AskUnsafe || (a.AutoCleanFor != nil && a.AutoCleanFor.Equal(a.At)) {
+		return false
+	}
+	for _, item := range a.Items {
+		if isOwedReport(retype(item, it.Branch)) {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanupText is an item as the go-ahead names it: the session's words,
@@ -167,22 +229,27 @@ func (s *Server) letCleanup(ctx context.Context, it *removal) error {
 // cleanup counts against reaskMax). It reports whether it sent one.
 func (s *Server) autoLetCleanup(ctx context.Context, it *removal) bool {
 	a := it.Mark.Ask
-	if a == nil || a.State != ledger.AskUnsafe || a.Reasks >= s.reaskMax || a.ReaskedAt != nil || a.CleaningAt != nil ||
+	if a == nil || a.State != ledger.AskUnsafe || a.ReaskedAt != nil || a.CleaningAt != nil ||
 		(a.AutoCleanFor != nil && a.AutoCleanFor.Equal(a.At)) {
 		return false
 	}
-	has := false
+	scratch, owed := false, false
 	for _, item := range a.Items {
-		has = has || isScratch(retype(item, it.Branch))
+		r := retype(item, it.Branch)
+		owed = owed || isOwedReport(r)
+		scratch = scratch || isScratch(r)
 	}
-	if !has { // whether an item is scratch is in its words: no need to re-check the rest
+	// Whether an item is covered is in its words: no need to re-check the
+	// rest. An owed report is let through when the re-asks are spent too:
+	// the go-ahead is what the session is waiting for, once per answer.
+	if !owed && (!scratch || a.Reasks >= s.reaskMax) {
 		return false
 	}
-	items := scratchItems(s.askReviewOf(ctx, it))
+	items, report := hubItems(s.askReviewOf(ctx, it))
 	if len(items) == 0 {
 		return false
 	}
-	if err := s.sendCleanup(it, items, true); err != nil {
+	if err := s.sendCleanupPrompt(it, items, true, goAheadPrompt(items, report)); err != nil {
 		log.Printf("scratch go-ahead %s: %v", it.ID, err)
 		return false
 	}
@@ -202,6 +269,11 @@ func (s *Server) autoLetCleanupOf(ctx context.Context, id string) bool {
 // sendCleanup records the go-ahead on the mark and sends it. auto: the
 // hub's own, for the answer it was given for.
 func (s *Server) sendCleanup(it *removal, items []string, auto bool) error {
+	return s.sendCleanupPrompt(it, items, auto, cleanupPrompt(items))
+}
+
+// sendCleanupPrompt is sendCleanup with the go-ahead's text.
+func (s *Server) sendCleanupPrompt(it *removal, items []string, auto bool, prompt string) error {
 	m := it.Mark
 	a := s.liveAgent(m.AgentID)
 	switch {
@@ -211,6 +283,10 @@ func (s *Server) sendCleanup(it *removal, items []string, auto bool) error {
 		return &errReask{"busy", "the session is " + string(a.Status) + ": tell it when it is idle"}
 	case m.Ask.ReaskedAt != nil || m.Ask.CleaningAt != nil:
 		return &errReask{"asking", "the session is already being asked or cleaning up"}
+	case auto:
+		if w := s.waitingOn(*a); w != "" {
+			return &errReask{"busy", "the session is waiting on " + w + ": tell it when that ends"}
+		}
 	}
 	now := time.Now().UTC()
 	changed, err := s.ledger.UpdateAsk(m.AgentID, m.At, func(k *ledger.Ask) bool {
@@ -237,14 +313,14 @@ func (s *Server) sendCleanup(it *removal, items []string, auto bool) error {
 	s.asking.Add(1)
 	go func() {
 		defer s.asking.Done()
-		s.runCleanup(m, *a, items, auto)
+		s.runCleanup(m, *a, prompt, auto)
 	}()
 	return nil
 }
 
 // runCleanup sends the go-ahead, waits for the session to be idle with a
 // new reply, then asks what is left again.
-func (s *Server) runCleanup(m ledger.Mark, a herdr.AgentInfo, items []string, auto bool) {
+func (s *Server) runCleanup(m ledger.Mark, a herdr.AgentInfo, prompt string, auto bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cleanupWait+time.Minute)
 	defer cancel()
 	finish := func(note string) {
@@ -257,7 +333,7 @@ func (s *Server) runCleanup(m ledger.Mark, a herdr.AgentInfo, items []string, au
 		}
 	}
 	before := s.latestOf(ctx, a.Host, a.PaneID)
-	if err := s.promptHeld(ctx, a, cleanupPrompt(items)); err != nil {
+	if err := s.promptHeld(ctx, a, prompt); err != nil {
 		finish("could not tell it to clean up: " + err.Error())
 		return
 	}
