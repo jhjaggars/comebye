@@ -113,7 +113,8 @@
     const L = [
       { id: "a-prompt", label: "Focus the prompt box", keys: ["i"], run: () => focusPrompt() },
     ];
-    L.push({ id: "a-panel", label: "Show / hide the document and diff panel", keys: ["d"], run: () => window.SP && window.SP.toggle() });
+    L.push({ id: "a-panel", label: "Show / hide the side panel (document, diff, status)", keys: ["d"], run: () => window.SP && window.SP.toggle() });
+    if (ledger.on !== false) L.push({ id: "a-panel-status", label: "Status beside the chat", run: () => window.SP && window.SP.show("status") });
     if (hasLedger()) {
       L.push({ id: "a-mark", label: (marked ? "Unmark " : "Mark ready to remove: ") + nm, keys: ["m"], run: () => toggleMark() });
       L.push({ id: "a-role", label: "Set role for " + nm + "…", step: "role" });
@@ -512,7 +513,7 @@
     cols.append(
       sec("Everywhere", [["Command palette", [MOD, "K"]], ["This sheet", ["?"]], ["Leave the prompt box", ["Esc"]], ["Send a prompt", ["Enter"]]]),
       sec("Agents", [["Next / previous agent", ["j", "k"]], ["Next agent that needs you", ["n"]], ["Previous that needs you", ["Shift", "N"]], ["Agent 1–9 in the list", ["Alt", "1–9"]],
-        ["Focus the prompt", ["i"]], ["Doc and diff panel", ["d"]], ["Collapse / expand the list", ["["]], ["Mark / unmark", ["m"]], ["Rename (Claude agents)", ["r"]], ["Switch model", ["Shift", "M"]]]),
+        ["Focus the prompt", ["i"]], ["Side panel: doc, diff, status", ["d"]], ["Collapse / expand the list", ["["]], ["Mark / unmark", ["m"]], ["Rename (Claude agents)", ["r"]], ["Switch model", ["Shift", "M"]]]),
       sec("Go to", [["Search", ["/"]], ["Filter the agent list", ["f"]], ["Host picker", ["h"]], ["To do", ["g", "t"]], ["Status", ["g", "s"]], ["Ready to remove", ["g", "r"]], ["Main coordinator", ["g", "c"]], ["Agent list", ["g", "a"]]]),
       sec("To do page", [["Next / previous item", ["j", "k"]], ["Open the answer box", ["Enter"]], ["Pick an option", ["1–9"]], ["Close the item", ["Esc"]], ["Send an answer", [MOD, "Enter"]]]),
     );

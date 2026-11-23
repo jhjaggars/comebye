@@ -144,6 +144,8 @@ if want shapes; then node shapes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; f
 if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Fresh reports: a report's age, and a newer reply beside it, in the app's report views.
 if want reportage; then node reportage.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Status as the third tab of the side panel beside an agent's chat (statussplit.mjs: live, closes, URL and Back, phone sheet).
+if want statussplit; then node statussplit.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Tool calls as one grey line per run: the list, a call's input and output, the failure peek.
 if want toolruns; then node toolruns.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The same lines by keyboard only (arrows, Home/End, Enter/Space, Esc), the status line and a light axe-style audit.
