@@ -21,12 +21,19 @@
 # Go, npm and uitest's node_modules stay warm in the VM's cache folder (REMOTE_ROOT, default ~/.cache/comebye-remote
 # on the VM). Forwarded when set here: SCHEME EXTRA PARALLEL JOBS JOBS_FORCE GOTEST_P CAP_MEM BASE PORT REPEAT_PORT.
 #
-# Refused before anything runs (exit 2): a HOST with no provisioner ssh config, a VM whose toolchain is missing or
-# not this checkout's pins (`go run ./tools/worker toolchain HOST` installs them), and a second run from the same
-# worktree while one is going. 255: ssh could not reach the VM.
+# A worker powers itself off when idle. A stopped one is started first, through the provisioner (`worker start HOST`,
+# saying so and how long it took); REMOTE_START=0 refuses instead. While the suite runs, an idle hold on the VM
+# (remote-test-ID, 20 min, renewed every 5) keeps it from powering off: a plain ssh session is not activity to it.
+# The provisioner is $COMEBYE_WORKER_TOOL (words, e.g. "comebye-worker -config FILE"), else comebye-worker if it is
+# on PATH, else `go run ./tools/worker`.
+#
+# Refused before anything runs (exit 2): a HOST with no provisioner ssh config or no VM, a VM that is stopped with
+# REMOTE_START=0 or would not start, a VM whose toolchain is missing or not this checkout's pins
+# (`worker toolchain HOST` installs them), and a second run from the same worktree while one is going.
+# 255: ssh could not reach the VM.
 set -uo pipefail
 
-usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" >&2; exit 2; }
+usage() { sed -n '2,33p' "${BASH_SOURCE[0]}" >&2; exit 2; }
 die() { echo "remote: $*" >&2; exit 2; }
 [ $# -ge 2 ] || usage
 host="$1"; shift
@@ -74,13 +81,17 @@ lock="$gitdir/comebye-remote.lock"
 exec 9>"$lock" || die "cannot open $lock"
 flock -n 9 || die "another remote run from this worktree is going ($(cat "$gitdir/comebye-remote.run" 2>/dev/null || echo '?')); wait for it"
 
-run_id="$(hostname -s 2>/dev/null || echo host)-$(date +%Y%m%d-%H%M%S)-$$"
+me="$(hostname -s 2>/dev/null | tr 'A-Z' 'a-z' | tr -c 'a-z0-9-\n' - | cut -c1-16)"
+run_id="${me:-host}-$(date +%Y%m%d-%H%M%S)-$$" # also the idle hold's name: [a-z0-9-], at most 63 with its prefix
 echo "$host $run_id" >"$gitdir/comebye-remote.run"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/remote.XXXXXX")"
 hold=""; sent=""
 rroot='"${REMOTE_ROOT:-$HOME/.cache/comebye-remote}"'
 [ -n "${REMOTE_ROOT:-}" ] && rroot="$(q "$REMOTE_ROOT")"
 rrun="$rroot/runs/$(q "$run_id")"
+rhold='"${WK_IDLE_HOLDS:-$HOME/.local/state/comebye/idle-holds}"'"/remote-test-$run_id"
+# hold_cmd MINUTES: the VM's shell line that holds the VM up that long (idle-check.sh reads "<until> <reason>").
+hold_cmd() { echo "h=$rhold; mkdir -p \"\${h%/*}\" && echo \"\$((\$(date +%s) + $1 * 60)) remote test run $run_id\" >\"\$h.tmp\" && mv -f \"\$h.tmp\" \"\$h\""; }
 spid=""
 cleanup() {
   [ -n "$hold" ] && kill "$hold" 2>/dev/null
@@ -88,11 +99,35 @@ cleanup() {
     ( sleep 15; kill "$spid" ) >/dev/null 2>&1 9>&- & local t=$!
     wait "$spid" 2>/dev/null; kill "$t" 2>/dev/null
   fi
-  [ -n "$sent" ] && ssh_vm "rm -rf $rrun" </dev/null >/dev/null 2>&1
+  [ -n "$sent" ] && ssh_vm "rm -rf $rrun; rm -f $rhold" </dev/null >/dev/null 2>&1
   rm -rf "$tmp"; rm -f "$gitdir/comebye-remote.run"
 }
 trap cleanup EXIT
 trap 'exit 130' INT; trap 'exit 143' TERM HUP
+
+# ---- the VM is up: a stopped one is started through the provisioner
+if [ -n "${COMEBYE_WORKER_TOOL:-}" ]; then read -r -a wtool <<<"$COMEBYE_WORKER_TOOL"
+elif command -v comebye-worker >/dev/null; then wtool=(comebye-worker)
+else wtool=(go run ./tools/worker); fi
+# The cloud's view, no ssh: RUNNING, STOPPED, ...; "none" when the provisioner has no such VM, "" when it did not answer.
+vm_state() {
+  local j; j="$("${wtool[@]}" status --json "$host" 2>/dev/null 9>&-)" || return 0
+  grep -q '"name"' <<<"$j" || { echo none; return 0; }
+  sed -n 's/.*"state": *"\([^"]*\)".*/\1/p' <<<"$j" | head -1
+}
+vm="$(vm_state)"
+case "$vm" in
+  RUNNING|"") ;;
+  none) die "the provisioner (${wtool[*]}) has no VM $host" ;;
+  STOPPED|TERMINATED|SUSPENDED|Stopped|Paused)
+    [ "${REMOTE_START:-1}" = 0 ] && die "$host is $vm (a worker powers off when idle). Start it with: ${wtool[*]} start $host
+  (or leave REMOTE_START unset and this starts it)"
+    echo "remote: $host is $vm; starting it (${wtool[*]} start $host)" >&2
+    t0=$SECONDS
+    "${wtool[@]}" start "$host" >&2 9>&- || die "$host did not start (${wtool[*]} start $host failed; ${wtool[*]} status $host says more)"
+    echo "remote: $host started in $((SECONDS - t0)) s" >&2 ;;
+  *) die "$host is $vm: neither up nor stopped; try again shortly (${wtool[*]} status $host)" ;;
+esac
 
 # ---- the VM has this checkout's pinned toolchain
 pins="tools/worker/testrunner.go"
@@ -103,7 +138,7 @@ have="$(ssh_vm 'f="${COMEBYE_TEST_RUNNER_FILE:-/etc/comebye-worker/test-runner}"
   for t in go node npm google-chrome; do command -v "$t" >/dev/null || { echo "missing $t"; exit 0; }; done
   [ -f "$f" ] && tr "\n" " " <"$f" || echo "no $f"' </dev/null)"
 rc=$?
-[ $rc = 255 ] && { echo "remote: ssh could not reach $host" >&2; exit 255; }
+[ $rc = 255 ] && { echo "remote: ssh could not reach $host (the provisioner says: ${vm:-no answer}; ${wtool[*]} status $host)" >&2; exit 255; }
 have="${have% }"
 [ "$have" = "$want" ] || die "$host has no test toolchain at this checkout's pins (it says: ${have:-nothing}; want: $want).
   Install it with: go run ./tools/worker toolchain $host"
@@ -134,7 +169,7 @@ ndirty=$(git diff --name-only HEAD | wc -l); nnew=$(tar -tf "$tmp/untracked.tar"
 echo "remote: $host $run_id: $(git rev-parse --short HEAD) ($branch), $ndirty changed and $nnew untracked file(s)" >&2
 sent=1
 tar -C "$tmp" -cf - repo.bundle changes.patch untracked.tar HEAD BRANCH |
-  ssh_vm "set -e; root=$rroot; find \"\$root/runs\" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+  ssh_vm "set -e; $(hold_cmd 20); root=$rroot; find \"\$root/runs\" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
     mkdir -p $rrun/in $rrun/art; tar -xf - -C $rrun/in" ||
   { echo "remote: sending the worktree to $host failed" >&2; exit 255; }
 
@@ -178,12 +213,15 @@ if [ -n "$lockh" ] && [ -d "$nm" ] && [ ! -e tools/uitest/node_modules ]; then
   cp -al "$nm" tools/uitest/node_modules 2>/dev/null || cp -a "$nm" tools/uitest/node_modules
 fi
 echo "remote(vm): $(hostname), $(nproc) CPUs, in $src" >&2
+# The idle hold, renewed while the suite runs (it lapses on its own 20 min after a lost link).
+( while sleep 300; do '"$(hold_cmd 20)"'; done ) </dev/null >/dev/null 2>&1 &
+renew=$!
 setsid env'"$envs"' tools/ci/capped.sh'"$line"' </dev/null &
 pid=$!
 ( while IFS= read -r _; do :; done; kill -TERM -- "-$pid"; sleep 5; kill -KILL -- "-$pid" ) <&0 >/dev/null 2>&1 & # <&0: a background job reads /dev/null otherwise
 watch=$!
 wait "$pid"; rc=$?
-kill "$watch" 2>/dev/null
+kill "$watch" "$renew" 2>/dev/null
 if [ -n "$lockh" ] && [ -d tools/uitest/node_modules/playwright-core ] && [ ! -d "$nm" ]; then
   cp -al tools/uitest/node_modules "$nm.$$" 2>/dev/null || cp -a tools/uitest/node_modules "$nm.$$"
   mv -T "$nm.$$" "$nm" 2>/dev/null || rm -rf "$nm.$$"

@@ -6,8 +6,9 @@
 # flakes.sh that record what they saw. Covers: the send (committed, modified, staged, deleted, untracked; not
 # ignored files, secret-looking files or the remotes), the run (under capped.sh, the VM's caches, GOTOOLCHAIN),
 # live output, the exit status, the artifacts back, the run folder removed, the flakes argument order, a stop
-# mid-run killing the suite on the VM, and the refusals (unknown host, no toolchain, wrong pins, two runs at once,
-# ssh down).
+# mid-run killing the suite on the VM, the idle hold, a stopped VM started through a fake provisioner, and the
+# refusals (unknown host, no VM, stopped with REMOTE_START=0, a start that fails, no toolchain, wrong pins, two runs
+# at once, ssh down).
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0; ok() { echo "ok   $1"; }; bad() { echo "FAIL $1"; fail=1; }
@@ -30,6 +31,7 @@ cat >"$bin/ssh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >>"$root/ssh.log"
 [ -n "\${FAKE_SSH_DOWN:-}" ] && { echo "ssh: connect: no route" >&2; exit 255; }
+[ "\$(cat "$root/vmstate" 2>/dev/null)" = RUNNING ] || { echo 'virtualmachineinstance.kubevirt.io "kv1" not found' >&2; exit 255; }
 [ "\$1" = -F ] && [ "\$2" = "$state/kv1/ssh_config" ] || { echo "fake ssh: not the provisioner's config: \$*" >&2; exit 255; }
 shift 2
 while [ "\$1" = -o ]; do shift 2; done
@@ -37,6 +39,21 @@ while [ "\$1" = -o ]; do shift 2; done
 shift
 cd "$vm" && HOME="$vm" COMEBYE_TEST_RUNNER_FILE="$vm/etc/test-runner" exec bash -c "\$*"
 EOF
+# The fake provisioner: status --json from $root/vmstate (absent: no such VM); start sets RUNNING unless FAKE_START_FAIL.
+cat >"$bin/fake-worker" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >>"$root/worker.log"
+case "\$1" in
+  status) [ "\$2" = --json ] && [ "\$3" = kv1 ] && [ -f "$root/vmstate" ] || { echo '{"v":1,"provider":"kubevirt","workers":[]}'; exit 0; }
+          echo "{\"v\":1,\"provider\":\"kubevirt\",\"workers\":[{\"name\":\"kv1\",\"state\":\"\$(cat "$root/vmstate")\"}]}" ;;
+  start)  [ "\$2" = kv1 ] || exit 2; [ -n "\${FAKE_START_FAIL:-}" ] && { echo "start: the cluster said no" >&2; exit 1; }
+          sleep 1; echo RUNNING >"$root/vmstate"; echo "kv1 is up, comebye v1" ;;
+  *) exit 2 ;;
+esac
+EOF
+echo RUNNING >"$root/vmstate"
+export COMEBYE_WORKER_TOOL="$bin/fake-worker" # never the real provisioner
+unset REMOTE_START
 for t in node npm google-chrome; do printf '#!/bin/sh\necho stub\n' >"$tools/$t"; done
 command -v go >/dev/null || printf '#!/bin/sh\necho stub\n' >"$tools/go"
 chmod +x "$bin"/* "$tools"/*
@@ -70,6 +87,7 @@ echo "STREAMED from the vm"
   echo "gocache=\$GOCACHE"; echo "scheme=\${SCHEME:-}"; echo "jobs=\${JOBS:-}"; echo "branch=\$(git branch --show-current)"
   echo "origin_main=\$(git rev-parse --verify -q refs/remotes/origin/main >/dev/null && echo yes || echo no)"
   echo "remotes=\$(git remote -v | wc -l)"
+  echo "hold=\$(cat "\$HOME/.local/state/comebye/idle-holds/"remote-test-* 2>/dev/null)"
   echo "committed=\$(cat committed.txt)"; echo "modified=\$(cat modified.txt)"; echo "staged=\$(cat staged.txt)"
   echo "new=\$(cat sub/new.txt 2>/dev/null)"; echo "tokengo=\$([ -f sub/token.go ] && echo yes)"; echo "bin=\$(od -An -tx1 data.bin | tr -d ' \n')"
   for f in deleted.txt ignored.log secret.pem api-token.txt .env; do [ -e "\$f" ] && echo "present=\$f"; done
@@ -123,6 +141,10 @@ check "no git remotes on the VM" grep -qx 'remotes=0' "$rec"
 check "the remote's token is nowhere on the VM" bash -c "! grep -rqa tok3n '$vm'"
 check "run folder removed from the VM" bash -c "[ -z \"\$(ls -A '$vm/.cache/comebye-remote/runs')\" ]"
 check "cache folder kept" [ -d "$vm/.cache/comebye-remote/cache/go-build" ]
+now=$(date +%s); hold_until=$(sed -n 's/^hold=\([0-9]*\) remote test run .*/\1/p' "$rec")
+check "an idle hold for about 20 min while the suite ran" [ "$(( ${hold_until:-0} - now > 900 && ${hold_until:-0} - now <= 1200 ))" = 1 ]
+check "...removed afterwards" bash -c "[ -z \"\$(ls -A '$vm/.local/state/comebye/idle-holds')\" ]"
+check "a running VM is not started" bash -c "! grep -q '^start' '$root/worker.log'"
 check "lock released" bash -c "flock -n '$caller/.git/comebye-remote.lock' true"
 
 echo 0 >rc.txt
@@ -157,6 +179,28 @@ pins 1.2.3 4.5.6 7.8.9.10
 out="$(FAKE_SSH_DOWN=1 "$r" kv1 browser rest 2>&1)"; rc=$?
 check "ssh down: 255 (got $rc)" [ $rc = 255 ]
 check "unknown suite refused" bash -c "! '$r' kv1 rm -rf / 2>/dev/null"
+
+# a stopped VM
+echo 0 >rc.txt; : >"$root/worker.log"
+echo STOPPED >"$root/vmstate"
+out="$(REMOTE_START=0 "$r" kv1 browser rest 2>&1)"; rc=$?
+check "stopped, REMOTE_START=0: refused, saying how to start it (rc=$rc)" rc_says "$rc" 2 "kv1 is STOPPED (a worker powers off when idle). Start it with: $bin/fake-worker start kv1" "$out"
+check "...and not started" bash -c "! grep -q '^start' '$root/worker.log'"
+out="$(FAKE_START_FAIL=1 "$r" kv1 browser rest 2>&1)"; rc=$?
+check "a start that fails: refused (rc=$rc)" rc_says "$rc" 2 'kv1 did not start' "$out"
+check "...with the provisioner's own words" grep -q 'the cluster said no' <<<"$out"
+: >"$root/worker.log"
+out="$("$r" kv1 browser rest 2>&1)"; rc=$?
+check "stopped: started through the provisioner, then run (rc=$rc)" rc_says "$rc" 0 'kv1 is STOPPED; starting it' "$out"
+check "...saying how long the start took" grep -Eq '^remote: kv1 started in [0-9]+ s$' <<<"$out"
+check "...exactly once" [ "$(grep -c '^start kv1$' "$root/worker.log")" = 1 ]
+rm -f "$root/vmstate"
+out="$("$r" kv1 browser rest 2>&1)"; rc=$?
+check "the provisioner has no such VM: refused (rc=$rc)" rc_says "$rc" 2 'has no VM kv1' "$out"
+echo PROVISIONING >"$root/vmstate"
+out="$("$r" kv1 browser rest 2>&1)"; rc=$?
+check "neither up nor stopped: refused (rc=$rc)" rc_says "$rc" 2 'kv1 is PROVISIONING' "$out"
+echo RUNNING >"$root/vmstate"
 
 # two at once, then a stop mid-run
 echo 0 >rc.txt; touch wait.txt
