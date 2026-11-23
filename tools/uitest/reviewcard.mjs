@@ -17,6 +17,8 @@ if (!bin || !stateDir) { console.error("reviewcard.mjs: set COMEBYE_BIN and COME
 fs.mkdirSync(out, { recursive: true });
 const dark = process.env.SCHEME !== "light";
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "reviewcard-ui-"));
+// The pages written here are published copies by the end: remove the work directory however the script ends.
+process.on("exit", () => { try { fs.rmSync(work, { recursive: true, force: true }); } catch {} });
 const results = [];
 const env = { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w4:p1" };
 const publish = (key, title, noThumb) => {
@@ -216,18 +218,32 @@ for (const width of [1280, 390]) {
         await page.locator(`${LIST} .td-item[data-id="${t.id}"] .td-row`).click();
         await page.waitForSelector(`#rs .td-item.open[data-id="${t.id}"] .ds-set`);
         let fr; for (let i = 0; i < 60 && !fr; i++) { fr = page.frames().find((x) => x.url().includes("/p/" + withPic + "/")); if (!fr) await page.waitForTimeout(100); }
+        // A user selects text in a Page that has loaded. While the Page is still loading, its frame's new paints can take the
+        // pointer back from the strip over it, even after a move has reached Comment (traced: the whole press went to the frame).
+        await fr.waitForLoadState("load");
         await fr.evaluate(() => parent.postMessage({ type: "comebye-selection", v: 1, quote: "Each card shows", before: "", after: " a picture" }, "*"));
         // A redraw between the press and the release (the Page's sent comments arriving) must not lose the tap: it used
         // to put a new Comment button under the release, and no click fired.
         await page.locator("#pgs-addc").waitFor();
-        const cb = await page.locator("#pgs-addc").boundingBox();
-        await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
+        const cb = await page.locator("#pgs-addc").boundingBox(), cx = cb.x + cb.width / 2, cy = cb.y + cb.height / 2;
+        // The strip lies over the Page's frame, which runs in its own process (the pages origin). The browser sends pointer
+        // input to a process by where the last drawn frame put things, so a press sent before a frame with the new strip is
+        // drawn goes to the Page, and Comment never sees it (#pgs-note never appears, composing false). Press only once a
+        // move at that spot has reached the button itself. :hover is no proof: the app's document sets it on its own after
+        // a layout, from where the pointer last was (the check above pressed Comment at this very spot). A 1px nudge makes
+        // each poll a real move.
+        await page.locator("#pgs-addc").evaluate((b) => b.addEventListener("pointermove", (e) => { if (e.isTrusted) b.dataset.reached = "1"; }));
+        let nudge = 0;
+        await until(async () => {
+          await page.mouse.move(cx + (nudge ^= 1), cy);
+          return page.locator("#pgs-addc").evaluate((b) => b.dataset.reached === "1");
+        }, "a pointer move over Comment to reach it, not the Page's frame under it");
         await page.mouse.down();
         await page.evaluate(() => pgcRender());
         await page.mouse.up();
         await page.locator("#pgs-note").waitFor({ timeout: 5000 }).catch(async (e) => {
           await page.screenshot({ path: `${out}/split-set-FAIL-${width}-${dark ? "dark" : "light"}.png` }).catch(() => {});
-          throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ rsHidden: !document.querySelector("#rs:not([hidden])"), hist: history.state, sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, key: pgc.id + "/" + pgc.ver, frames: document.querySelectorAll("iframe.pgs-frame").length }))));
+          throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ rsHidden: !document.querySelector("#rs:not([hidden])"), hist: history.state, sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, key: pgc.id + "/" + pgc.ver, frames: document.querySelectorAll("iframe.pgs-frame").length, focus: document.activeElement && (document.activeElement.id || document.activeElement.tagName) }))));
         });
         await page.locator("#pgs-note").fill("Is one bucket enough?");
         await page.locator("#pgs-noteadd").click();
