@@ -498,12 +498,19 @@ While the suite runs, an idle hold (`remote-test-ID` in the VM's idle-holds fold
 renewed every 5) keeps the VM from powering off under it: the idle check does not count a plain
 ssh session as activity. The hold is removed with the run folder, and lapses by itself after a lost link.
 
-A VM runs **one suite at a time**. A run takes a lock there (`run.lock` in the cache root)
-before its suite starts. When another run holds it, the new one prints
+A VM runs **as many suites at once as it has slots**: N from its `test-slots` file (above;
+1 when there is none). A run takes a free slot there (`slot-I.lock` in the cache root) before
+its suite starts. When every slot is taken, the new one prints
 `remote(vm): kv1 is busy with RUN (SUITE, BRANCH, from HOST) since HH:MM:SSZ; waiting for it
-(Ctrl-C gives up)`, then `… is free after N s; starting` when its turn comes. Its idle hold
-covers the wait. The lock belongs to the run's processes on the VM, so a run that is killed,
-or whose link drops, frees it by itself. Ctrl-C while waiting gives up cleanly.
+(Ctrl-C gives up)` (with several slots: `… has all N slots busy (RUN …; RUN …); waiting for one`),
+then `… is free after N s; starting` when a slot frees. Its idle hold covers the wait. The
+lock belongs to the run's processes on the VM, so a run that is killed, or whose link drops,
+frees it by itself. Ctrl-C while waiting gives up cleanly. With more than one slot, each gets
+its share of the VM: `JOBS` and `GOTEST_P` of vCPUs / N (`JOBS` at most 4), `CAP_MEM` of 85% of
+RAM / N, and its own range of 5000 ports (`PORT`, `REPEAT_PORT`). A client from before slots
+still takes turns with new ones through `run.lock` (new runs hold it shared).
+`remote.sh --probe HOST` prints `slots=N free=F toolchain=ok|bad` with one ssh, and
+`remote.sh --state HOST` the provisioner's state with none.
 `--no-wait` (or `REMOTE_NO_WAIT=1`) refuses a busy VM instead of waiting, and
 `TEST_VM_NO_WAIT=1` makes the default path (below) run on this machine instead.
 
@@ -538,6 +545,27 @@ worker_config=~/.config/comebye-worker/kubevirt.conf   # optional: the provision
 `TEST_VM=local` keeps a run on this machine with no message (the opt-out); `TEST_VM=NAME` uses
 another worker for one run. A machine without the file, such as a contributor's or a worker's
 own, runs as before, with one line pointing here.
+
+A machine with several test VMs lists them in a **pool** file instead, which comes first:
+
+```sh
+# ~/.config/comebye-worker/test-pool   (or $TEST_POOL_CONFIG); tried in this order
+vm kv-a ~/.config/comebye-worker/kv-a.conf remote_root=/data/comebye-remote
+vm kv-b ~/.config/comebye-worker/kv-b.conf remote_root=/data/comebye-remote
+vm kv1  ~/.config/comebye-worker/kubevirt.conf
+```
+
+Each line is `vm NAME [PROVISIONER_CONFIG] [remote_root=DIR]`; other `key=value` words are
+ignored for now. A run asks every VM's provisioner for its state (no ssh), probes the running
+ones (`remote.sh --probe`), and goes to the one with the most free slots, the first listed on a
+tie: `tests: running browser on the test VM kv-a: 2 of 3 slots free (pool: kv-a 2/3 free, kv-b
+0/1 free, kv1 stopped; …)`. Only when every running VM is full is the first stopped one
+started, and the run goes there. When none can start, the run waits, probing every
+`TEST_POOL_POLL` seconds (10), and takes the first slot that frees anywhere in the pool; Ctrl-C
+gives up, and `TEST_VM_NO_WAIT=1` runs here instead. A VM that is down, unreachable or without
+this checkout's pins is passed over, and with none left the run stays here with one line
+saying why. A pool of one VM behaves like `test-vm`, and `TEST_VM=NAME` takes that VM with its
+pool line.
 
 ## Bringing a branch back from a worker that cannot push
 

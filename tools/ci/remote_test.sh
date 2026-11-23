@@ -35,29 +35,37 @@ unset REMOTE_ROOT OUT_DIR JOBS SCHEME EXTRA PARALLEL CAP_MEM BASE PORT
 export GIT_CONFIG_GLOBAL="$root/gitconfig" GIT_CONFIG_NOSYSTEM=1
 printf '[init]\n\tdefaultBranch = main\n[user]\n\tname = t\n\temail = t@example.com\n[commit]\n\tgpgsign = false\n' >"$GIT_CONFIG_GLOBAL"
 
-# The fake ssh: -F must be kv1's provisioner config, the host must be kv1; the command runs with HOME at the VM.
+# The fake VMs: kv1 lives in $root/vm with its state in $root/vmstate; any other HOST in $root/vm-HOST and
+# $root/vmstate-HOST (made by mkvm below). $root/down-HOST makes ssh to it fail.
+vmdir() { if [ "$1" = kv1 ]; then echo "$vm"; else echo "$root/vm-$1"; fi; }
+# The fake ssh: -F must be HOST's provisioner config; the command runs with HOME at that VM's folder.
 cat >"$bin/ssh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >>"$root/ssh.log"
 [ -n "\${FAKE_SSH_DOWN:-}" ] && { echo "ssh: connect: no route" >&2; exit 255; }
-[ "\$(cat "$root/vmstate" 2>/dev/null)" = RUNNING ] || { echo 'virtualmachineinstance.kubevirt.io "kv1" not found' >&2; exit 255; }
-[ "\$1" = -F ] && [ "\$2" = "$state/kv1/ssh_config" ] || { echo "fake ssh: not the provisioner's config: \$*" >&2; exit 255; }
-shift 2
+[ "\$1" = -F ] || { echo "fake ssh: no -F: \$*" >&2; exit 255; }
+f="\$2"; shift 2
 while [ "\$1" = -o ]; do shift 2; done
-[ "\$1" = kv1 ] || { echo "fake ssh: unknown host \$1" >&2; exit 255; }
-shift
-cd "$vm" && HOME="$vm" COMEBYE_TEST_RUNNER_FILE="$vm/etc/test-runner" exec bash -c "\$*"
+h="\$1"; shift
+if [ "\$h" = kv1 ]; then d="$vm"; st="$root/vmstate"; else d="$root/vm-\$h"; st="$root/vmstate-\$h"; fi
+[ "\$f" = "$state/\$h/ssh_config" ] && [ -d "\$d" ] || { echo "fake ssh: unknown host \$h or not the provisioner's config \$f" >&2; exit 255; }
+[ -e "$root/down-\$h" ] && { echo "ssh: connect to \$h: no route" >&2; exit 255; }
+[ "\$(cat "\$st" 2>/dev/null)" = RUNNING ] || { echo "virtualmachineinstance.kubevirt.io \"\$h\" not found" >&2; exit 255; }
+cd "\$d" && HOME="\$d" COMEBYE_TEST_RUNNER_FILE="\$d/etc/test-runner" exec bash -c "\$*"
 EOF
-# The fake provisioner: status --json from $root/vmstate (absent: no such VM); start sets RUNNING unless FAKE_START_FAIL.
+# The fake provisioner: status --json HOST from HOST's state file (absent: no such VM); start sets RUNNING unless
+# FAKE_START_FAIL. Each call is logged twice: "config=FILE" then the command (as before), and "with FILE: command".
 cat >"$bin/fake-worker" <<EOF
 #!/bin/bash
-[ "\$1" = -config ] && { echo "config=\$2" >>"$root/worker.log"; shift 2; }
-printf '%s\n' "\$*" >>"$root/worker.log"
+c=""; [ "\$1" = -config ] && { c="\$2"; echo "config=\$2" >>"$root/worker.log"; shift 2; }
+printf '%s\n' "\$*" >>"$root/worker.log"; printf 'with %s: %s\n' "\$c" "\$*" >>"$root/worker.log"
+h="\${3:-\$2}"; [ "\$1" = start ] && h="\$2"
+if [ "\$h" = kv1 ]; then st="$root/vmstate"; else st="$root/vmstate-\$h"; fi
 case "\$1" in
-  status) [ "\$2" = --json ] && [ "\$3" = kv1 ] && [ -f "$root/vmstate" ] || { echo '{"v":1,"provider":"kubevirt","workers":[]}'; exit 0; }
-          echo "{\"v\":1,\"provider\":\"kubevirt\",\"workers\":[{\"name\":\"kv1\",\"state\":\"\$(cat "$root/vmstate")\"}]}" ;;
-  start)  [ "\$2" = kv1 ] || exit 2; [ -n "\${FAKE_START_FAIL:-}" ] && { echo "start: the cluster said no" >&2; exit 1; }
-          sleep 1; echo RUNNING >"$root/vmstate"; echo "kv1 is up, comebye v1" ;;
+  status) [ "\$2" = --json ] && [ -f "\$st" ] || { echo '{"v":1,"provider":"kubevirt","workers":[]}'; exit 0; }
+          echo "{\"v\":1,\"provider\":\"kubevirt\",\"workers\":[{\"name\":\"\$h\",\"state\":\"\$(cat "\$st")\"}]}" ;;
+  start)  [ -f "\$st" ] || exit 2; [ -n "\${FAKE_START_FAIL:-}" ] && { echo "start: the cluster said no" >&2; exit 1; }
+          sleep 1; echo RUNNING >"\$st"; echo "\$h is up, comebye v1" ;;
   *) exit 2 ;;
 esac
 EOF
@@ -83,6 +91,8 @@ echo RUNNING >"$root/vmstate"
 export COMEBYE_WORKER_TOOL="$bin/fake-worker" # never the real provisioner
 unset REMOTE_START TEST_VM COMEBYE_WORKER_CONFIG COMEBYE_ON_VM COMEBYE_VM_DECIDED CI GITHUB_ACTIONS
 export TEST_VM_CONFIG="$root/test-vm" # absent unless a check writes it: never the real ~/.config one
+export TEST_POOL_CONFIG="$root/test-pool" # the same for the pool
+unset TEST_VM_NO_WAIT TEST_POOL_POLL
 for t in node npm google-chrome; do printf '#!/bin/sh\necho stub\n' >"$tools/$t"; done
 command -v go >/dev/null || printf '#!/bin/sh\necho stub\n' >"$tools/go"
 chmod +x "$bin"/* "$tools"/*
@@ -477,4 +487,71 @@ else
 fi
 rm -f wait.txt "$root/bind" "$root/release" "$vm/.cache/comebye-remote/test-slots"; unset COMEBYE_SLOT_PORT_BASE
 for w in caller2 caller3; do git -C "$caller" worktree remove --force "$root/$w"; done
+
+# ---- the pool (tools/ci/prefer-vm.sh with a test-pool file): most free slots first, start a stopped VM only when
+# every running one is full, then wait for a free slot anywhere
+bw="$caller/tools/ci/browser.sh"
+mkvm() { # HOST SLOTS STATE: a fake VM with this checkout's pins
+  local d; d="$(vmdir "$1")"; mkdir -p "$state/$1" "$d/etc" "$d/.cache/comebye-remote"
+  printf 'Host %s\n  HostName 127.0.0.1\n' "$1" >"$state/$1/ssh_config"
+  printf 'go=1.2.3\nnode=4.5.6\nchrome=7.8.9.10\n' >"$d/etc/test-runner"; echo "$2" >"$d/.cache/comebye-remote/test-slots"
+  echo "$3" >"$root/vmstate-$1"
+}
+hold() { # HOST I [ROOT]: hold that slot (as a run would) until $root/rel-HOST-I appears
+  local r="${3:-$(vmdir "$1")/.cache/comebye-remote}"; mkdir -p "$r"; rm -f "$root/rel-$1-$2"
+  ( exec 7>>"$r/slot-$2.lock"; flock 7; until [ -e "$root/rel-$1-$2" ]; do sleep 0.1; done ) 9>&- &
+  wf "! flock -n '$r/slot-$2.lock' true"
+}
+went() { sed -n "s|^pwd=$root/vm-\([a-z0-9-]*\)/.*|\1|p" "$RUNNER_TEMP/uitest-rest-dark/record.txt" 2>/dev/null; }
+pool_run() { rm -rf "$RUNNER_TEMP"; out="$(timeout 60 "$bw" rest 2>&1)"; rc=$?; [ -z "${POOL_DEBUG:-}" ] || printf '%s\n' "$out" | grep '^tests:\|^remote: kv' >&2; }
+mkvm kv-a 2 RUNNING; mkvm kv-b 1 RUNNING; mkvm kv-c 1 STOPPED
+mkdir -p "$root/vm-kv-b/data"
+cat >"$TEST_POOL_CONFIG" <<EOF
+# tried in this order
+vm kv-a
+vm kv-b $root/kv-b.conf remote_root=$root/vm-kv-b/data nvme_max_c=68   # a key for later is left alone
+vm kv-c
+prometheus=http://example.invalid
+EOF
+printf 'host=kv1\n' >"$TEST_VM_CONFIG" # the pool comes first
+echo 0 >rc.txt; : >"$root/worker.log"
+pool_run
+check "pool: the VM with the most free slots (kv-a, 2 of 2) (rc=$rc)" [ "$rc:$(went)" = 0:kv-a ]
+check "...saying so, with the pool's free slots" grep -qx 'tests: running browser on the test VM kv-a: 2 of 2 slots free (pool: kv-a 2/2 free, kv-b 1/1 free, kv-c stopped; TEST_VM=local runs it here)' <<<"$out"
+hold kv-a 0
+pool_run
+check "pool: a tie (1 free each) goes to the one listed first" [ "$rc:$(went)" = 0:kv-a ]
+hold kv-a 1
+pool_run
+check "pool: kv-a full, so kv-b (rc=$rc)" [ "$rc:$(went)" = 0:kv-b ]
+check "...with kv-b's provisioner config from its pool line" grep -qx "with $root/kv-b.conf: status --json kv-b" "$root/worker.log"
+check "...and its remote_root" grep -q "^pwd=$root/vm-kv-b/data/runs/" "$RUNNER_TEMP/uitest-rest-dark/record.txt"
+check "no VM started while a running one had a free slot" bash -c "! grep -q '^start' '$root/worker.log'"
+hold kv-b 0 "$root/vm-kv-b/data"
+pool_run
+check "pool: every running VM full: the first stopped one is started, and the run goes there (rc=$rc)" [ "$rc:$(went)" = 0:kv-c ]
+check "...saying so" bash -c "grep -q '^remote: kv-c is STOPPED; starting it' <<<\"\$1\" && grep -q '^tests: running browser on the test VM kv-c: started, as every running VM was full (pool: kv-a 0/2 free, kv-b 0/1 free; ' <<<\"\$1\"" _ "$out"
+check "...started once" [ "$(grep -c '^start kv-c$' "$root/worker.log")" = 1 ]
+hold kv-c 0
+check "pool full, TEST_VM_NO_WAIT=1: here, saying why" bash -c "out=\$(TEST_VM_NO_WAIT=1 '$bw' rest 2>&1); grep -q '^tests: running on this machine: every test VM in the pool is full (kv-a 0/2 free, kv-b 0/1 free, kv-c 0/1 free) and TEST_VM_NO_WAIT is set' <<<\"\$out\" && grep -q '^where=local' '$RUNNER_TEMP/uitest-rest-dark/where.txt'"
+rm -rf "$RUNNER_TEMP"; TEST_POOL_POLL=1 "$bw" rest >"$root/p.log" 2>&1 & p=$!
+check "pool full: the run waits for a free slot anywhere, saying so" wf "grep -q '^tests: every test VM in the pool is full (kv-a 0/2 free, kv-b 0/1 free, kv-c 0/1 free); waiting for a free slot anywhere in it (Ctrl-C gives up)$' '$root/p.log'"
+sleep 2
+check "...and has not run yet" [ ! -e "$RUNNER_TEMP/uitest-rest-dark/record.txt" ]
+touch "$root/rel-kv-b-0"; wait "$p"; rc=$?
+check "...then takes the slot that frees (kv-b) (rc=$rc)" [ "$rc:$(went)" = 0:kv-b ]
+check "...saying how long it waited" grep -Eq '^tests: running browser on the test VM kv-b: a slot free after [0-9]+ s \(pool: kv-a 0/2 free, kv-b 1/1 free, kv-c 0/1 free; ' "$root/p.log"
+touch "$root/rel-kv-a-0" "$root/rel-kv-a-1" "$root/rel-kv-c-0"; wait
+TEST_VM=kv-b pool_run
+check "TEST_VM=kv-b with a pool: kv-b, with its pool line's remote_root (rc=$rc)" bash -c "[ '$rc:$(went)' = 0:kv-b ] && grep -q '^pwd=$root/vm-kv-b/data/runs/' '$RUNNER_TEMP/uitest-rest-dark/record.txt'"
+touch "$root/down-kv-a"; pins_b() { printf 'go=0\nnode=0\nchrome=0\n' >"$root/vm-kv-b/etc/test-runner"; }; pins_b
+echo STOPPED >"$root/vmstate-kv-c"
+FAKE_START_FAIL=1 pool_run
+check "pool: nothing usable (unreachable, wrong pins, a start that fails): here, saying why (rc=$rc)" \
+  rc_says "$rc" 0 '^tests: running on this machine: no test VM in the pool is available (kv-a unreachable, kv-b without this checkout.s pins, kv-c would not start (kv-c did not start' "$out"
+rm -f "$root/down-kv-a"
+printf 'vm kv-a\n' >"$TEST_POOL_CONFIG"
+pool_run
+check "a pool of one: as test-vm (rc=$rc)" bash -c "[ '$rc:$(went)' = 0:kv-a ] && grep -qx 'tests: running browser on the test VM kv-a (TEST_VM=local runs it here)' <<<\"\$1\"" _ "$out"
+rm -f "$TEST_POOL_CONFIG" "$TEST_VM_CONFIG"
 exit $fail

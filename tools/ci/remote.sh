@@ -4,6 +4,8 @@
 #   tools/ci/remote.sh HOST SUITE [ARG...]
 #   tools/ci/remote.sh --check HOST     only the checks below (and a start); exit 0 when a run would go ahead
 #   tools/ci/remote.sh --probe HOST     one ssh, no start: prints `slots=N free=F toolchain=ok|bad` (255: ssh failed)
+#   tools/ci/remote.sh --state HOST     no ssh: prints the provisioner's state (RUNNING, STOPPED, ...; none: no such VM;
+#                                       an empty line: no answer). For the pool picker in tools/ci/prefer-vm.sh.
 #   --no-wait (before HOST, or REMOTE_NO_WAIT=1): refuse when the VM is busy instead of waiting for it
 #
 #   SUITE  browser ARG...   tools/ci/browser.sh ARG...    artifacts -> ARG 3, or ${RUNNER_TEMP:-/tmp}/uitest-SUITE-SCHEME
@@ -57,8 +59,8 @@ set -uo pipefail
 
 usage() { sed -n '2,/^set -uo/{/^#/p}' "${BASH_SOURCE[0]}" >&2; exit 2; }
 die() { echo "remote: $*" >&2; exit 2; }
-check=""; probe=""; nowait="${REMOTE_NO_WAIT:-}"; [ "$nowait" = 0 ] && nowait=""
-while :; do case "${1:-}" in --check) check=1; shift ;; --probe) check=1; probe=1; shift ;; --no-wait) nowait=1; shift ;; *) break ;; esac; done
+check=""; probe=""; state_only=""; nowait="${REMOTE_NO_WAIT:-}"; [ "$nowait" = 0 ] && nowait=""
+while :; do case "${1:-}" in --check) check=1; shift ;; --probe) check=1; probe=1; shift ;; --state) check=1; state_only=1; shift ;; --no-wait) nowait=1; shift ;; *) break ;; esac; done
 if [ -n "$check" ]; then [ $# = 1 ] || usage; else [ $# -ge 2 ] || usage; fi
 host="$1"; shift
 [[ "$host" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die "host '$host': want a worker name (lower-case letters, digits, '-')"
@@ -156,6 +158,7 @@ vm_state() {
   grep -q '"name"' <<<"$j" || { echo none; return 0; }
   sed -n 's/.*"state": *"\([^"]*\)".*/\1/p' <<<"$j" | head -1
 }
+if [ -n "$state_only" ]; then vm="$(vm_state)"; echo "$vm"; exit 0; fi
 vm=RUNNING; [ -n "$probe" ] || vm="$(vm_state)" # a probe asks the VM only: the caller asked the provisioner already
 case "$vm" in
   RUNNING|"") ;;
