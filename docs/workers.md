@@ -567,7 +567,7 @@ default the current directory; REPO defaults to its name), and with `--push` sen
 On the hub, list the push-less hosts and switch it on:
 
 ```sh
-comebye settings set --pushless-fetch on --pushless-hosts kv1 [--pushless-via laharl]
+comebye settings set --pushless-fetch on --pushless-hosts kv1 [--pushless-via my-desktop]
 ```
 
 When a handoff on a listed host reports, the hub asks the provisioner that reports the
@@ -664,14 +664,14 @@ provider=kubevirt
 ts_allow_login=you@example.com
 hub_url=https://hub.your-tailnet.ts.net
 hub_peer_url=https://hub.your-tailnet.ts.net
-# --- defaults, shown for reference
+# --- defaults, shown for reference (the node names are placeholders: set your own)
 # kube_context=                  # kubectl context; empty = the current one
 # kube_namespace=comebye-workers
 # kube_service_account=comebye-worker-tool  # the scoped account the prerequisites create
-# kube_node_prefer=rozalin,zetta        # the only nodes a VM may go to, in order; empty = any but kube_node_avoid
-# kube_node_avoid=adell,etna            # never
+# kube_node_prefer=node-a,node-b        # the only nodes a VM may go to, in order; empty = any but kube_node_avoid
+# kube_node_avoid=node-c,node-d         # never
 # kube_floor_gib=12                     # free memory a node keeps after the VM
-# kube_node_floor=zetta=8               # NODE=GIB,... per-node floors (replaces the default list)
+# kube_node_floor=node-b=8              # NODE=GIB,... per-node floors (replaces the default list)
 # kube_storage_class=longhorn
 # kube_data_storage_class=              # the data disk's class; empty = kube_storage_class (the boot disk always uses that)
 # vm_image_dv=debian-13-golden          # a DataVolume in the namespace, cloned per VM ...
@@ -737,7 +737,7 @@ second hint after a failed ssh) is not granted; the guest console log (`kubectl 
 - **The capacity gate** refuses a node unless it keeps its floor of free memory after the VM:
   allocatable memory, minus the larger of its pods' memory requests and its measured use (the
   metrics API, when it answers), minus the VM's memory plus 512 MiB of pod overhead, must still
-  be at least the floor (12 GiB, or the node's own `kube_node_floor`; the plan sets zetta to 8).
+  be at least the floor (12 GiB, or the node's own `kube_node_floor`, such as `node-b=8`).
   Only nodes in `kube_node_prefer` are candidates when it is set; cordoned, tainted, not-Ready
   and no-`devices.kubevirt.io/kvm` nodes are skipped; the first allowed node in preference order
   wins, and the VM is pinned to it.
@@ -843,7 +843,7 @@ one. The OAuth client never reaches a job's output, a plan or the host list (the
 through the same secret filter as for any provisioner), and the worker never receives it.
 Only a provisioner whose preflight config is the kubevirt one (this pod) offers the kind: a node
 that also holds an AWS or Google Cloud config reports that cloud's checks, so AWS and Google Cloud
-stay on laharl and a KubeVirt VM is built from the pod.
+stay on the desktop host and a KubeVirt VM is built from the pod.
 
 ### One-time steps in your homelab repo
 
