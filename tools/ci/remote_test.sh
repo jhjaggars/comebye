@@ -14,6 +14,10 @@
 # Then one suite at a time on the VM, with a second worktree as a second caller: a run waits its turn (saying whose
 # run holds the VM, under its own idle hold) and starts only once the first ends; a holder killed hard frees the
 # lock; giving up while waiting; --no-wait, directly and through prefer-vm.
+# Then slots (a test-slots file on the fake VM): --probe; two runs on a 2-slot VM run together, each in its own slot
+# with its own JOBS, CAP_MEM and ports; two browser stand-ins hold every port the real run.sh would use, side by side,
+# and the real scripts' port offsets fit a slot's range; a third run waits for either slot; an old client (exclusive
+# run.lock, as before slots) against new runs, both ways, and the real old remote.sh when the history has it.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0; ok() { echo "ok   $1"; }; bad() { echo "FAIL $1"; fail=1; }
@@ -57,6 +61,24 @@ case "\$1" in
   *) exit 2 ;;
 esac
 EOF
+# holdports.py BASE RELEASE OUT: listen on BASE+each offset in $PORT_OFFSETS (what run.sh uses), write "bound ..." or
+# "clash PORT" to OUT, and keep them until the file RELEASE appears (30 s at most). Exit 98 on a clash.
+cat >"$root/holdports.py" <<'EOF'
+import os, socket, sys, time
+base, release, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+socks = []
+for off in os.environ["PORT_OFFSETS"].split():
+    s = socket.socket(); p = base + int(off)
+    try:
+        s.bind(("127.0.0.1", p)); s.listen(1)
+    except OSError:
+        open(out, "w").write("clash %d\n" % p); sys.exit(98)
+    socks.append(s)
+open(out, "w").write("bound %d ports %d-%d\n" % (len(socks), base, base + max(int(o) for o in os.environ["PORT_OFFSETS"].split())))
+for _ in range(300):
+    if os.path.exists(release): break
+    time.sleep(0.1)
+EOF
 echo RUNNING >"$root/vmstate"
 export COMEBYE_WORKER_TOOL="$bin/fake-worker" # never the real provisioner
 unset REMOTE_START TEST_VM COMEBYE_WORKER_CONFIG COMEBYE_ON_VM COMEBYE_VM_DECIDED CI GITHUB_ACTIONS
@@ -95,6 +117,7 @@ echo "start \$PWD" >>"$root/starts.log"; trap 'echo "end \$PWD" >>"$root/starts.
 echo "where=\$([ -n "\${COMEBYE_ON_VM:-}" ] && echo vm || echo local)" >"\$out/where.txt"
 { echo "args=\$*"; echo "pwd=\$PWD"; echo "capped=\${CAPPED_BY_TEST:-no}"; echo "toolchain=\$GOTOOLCHAIN"
   echo "gocache=\$GOCACHE"; echo "scheme=\${SCHEME:-}"; echo "jobs=\${JOBS:-}"; echo "branch=\$(git branch --show-current)"
+  echo "port=\${PORT:-}"; echo "repeat_port=\${REPEAT_PORT:-}"; echo "capmem=\${CAP_MEM:-}"; echo "gotest_p=\${GOTEST_P:-}"; echo "parallel=\${PARALLEL:-}"
   echo "origin_main=\$(git rev-parse --verify -q refs/remotes/origin/main >/dev/null && echo yes || echo no)"
   echo "remotes=\$(git remote -v | wc -l)"
   echo "hold=\$(cat "\$HOME/.local/state/comebye/idle-holds/"remote-test-* 2>/dev/null)"
@@ -105,7 +128,11 @@ echo "where=\$([ -n "\${COMEBYE_ON_VM:-}" ] && echo vm || echo local)" >"\$out/w
 echo shot >"\$out/failures/check.png"
 if [ -e wait.txt ]; then
   echo \$\$ >"$root/suite.pid"; touch "$root/started"
-  for _ in \$(seq 200); do [ -e "$root/release" ] && break; sleep 0.1; done
+  if [ -e "$root/bind" ]; then # hold every port run.sh would listen on with this PORT (holdports.py), until released
+    python3 "$root/holdports.py" "\${PORT:-18741}" "$root/release" "\$out/bound.txt" || exit 98
+  else
+    for _ in \$(seq 200); do [ -e "$root/release" ] && break; sleep 0.1; done
+  fi
 fi
 exit "\$(cat rc.txt 2>/dev/null || echo 0)"
 EOF
@@ -335,4 +362,115 @@ check "stopped mid-run: exits 143 (got $rc)" [ $rc = 143 ]
 check "...and the suite on the VM is gone" bash -c "! kill -0 '${suite:-0}' 2>/dev/null"
 check "...and its run folder too" bash -c "[ -z \"\$(ls -A '$vm/.cache/comebye-remote/runs')\" ]"
 touch "$root/release"
+wait "$first" 2>/dev/null
+
+# ---- slots: a VM with test-slots says how many suites run on it at once
+rr="$vm/.cache/comebye-remote"
+for w in caller2 caller3; do git -C "$caller" worktree add -q --detach "$root/$w" HEAD; echo 0 >"$root/$w/rc.txt"; touch "$root/$w/wait.txt"; done
+r3="$root/caller3/tools/ci/remote.sh"
+starts() { grep -c '^start' "$root/starts.log"; }
+# --probe: one ssh, no provisioner, slots and free slots
+: >"$root/worker.log"
+check "--probe, no test-slots file: one slot, free" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=1 free=1 toolchain=ok" ]
+check "...without asking the provisioner" [ ! -s "$root/worker.log" ]
+echo 2 >"$vm/etc/test-slots"
+check "--probe, test-slots 2: two slots, both free" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=2 free=2 toolchain=ok" ]
+echo junk >"$vm/etc/test-slots"
+check "--probe, test-slots not a number: one slot" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=1 free=1 toolchain=ok" ]
+echo 2 >"$vm/etc/test-slots"; pins 9.9.9 4.5.6 7.8.9.10
+check "--probe, wrong pins: toolchain=bad" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=2 free=2 toolchain=bad" ]
+pins 1.2.3 4.5.6 7.8.9.10
+FAKE_SSH_DOWN=1 "$r" --probe kv1 >/dev/null 2>&1; rc=$?
+check "--probe, ssh down: 255 (got $rc)" [ $rc = 255 ]
+
+# The ports a browser suite listens on: every `port + N` in the real run.sh, and +1 of each for its light pass.
+offs="$(grep -o 'port + [0-9]*' "$here/../uitest/run.sh" | awk '{print $3}' | sort -un | tr '\n' ' ')"
+export PORT_OFFSETS="$(for o in 0 $offs; do printf '%s %s ' "$o" $((o + 1)); done)"
+maxoff=$(tr ' ' '\n' <<<"$PORT_OFFSETS" | sort -n | tail -1)
+flk=$(grep -o 'for p in [0-9 ]*; do' "$here/flakes.sh" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -n | tail -1)
+fits() { [ $((3 * 1000 + maxoff)) -lt 5000 ] && [ $((3 * 1000 + ${flk:-9999})) -lt 5000 ] &&
+  grep -qF 'PORT=$(( base_port + (i - 1) * 1000 ))' "$here/browser.sh" && grep -qF 'port=$((base + 1000 * free))' "$here/flakes.sh"; }
+check "a slot's 5000 ports hold run.sh (+$maxoff), 4 PARALLEL parts and 4 flakes jobs (+$flk)" fits
+export COMEBYE_SLOT_PORT_BASE=$((40000 + RANDOM % 40 * 100)) # the VM's slots from here, clear of a real run.sh's 18741
+if command -v python3 >/dev/null; then touch "$root/bind"; else echo "skip: no python3, so the browser stand-ins hold no ports"; fi
+
+# two runs on a 2-slot VM run together, each in its own slot with its own share; a third waits for either
+echo 0 >rc.txt; touch wait.txt; rm -f "$root/started" "$root/release"; : >"$root/starts.log"
+JOBS=1 CAP_MEM=512M PORT=18741 "$r" kv1 browser rest >"$root/a.log" 2>&1 & a=$!
+wf '[ "$(starts)" = 1 ]'
+JOBS=99 CAP_MEM=999G PORT=18741 RUNNER_TEMP="$root/rt2" "$r2" kv1 browser rest >"$root/b.log" 2>&1 & b=$!
+check "two runs on a 2-slot VM run together" wf '[ "$(starts)" = 2 ]'
+check "...each in its own slot" bash -c "grep -q 'slot 1 of 2' '$root/a.log' && grep -q 'slot 2 of 2' '$root/b.log'"
+check "--probe: both slots taken" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=2 free=0 toolchain=ok" ]
+runid() { sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$1"; }
+va="$rr/runs/$(runid "$root/a.log")/art"; vb="$rr/runs/$(runid "$root/b.log")/art" # their artifacts, on the VM while they run
+pa="$(sed -n 's/^port=//p' "$va/record.txt")"; pb="$(sed -n 's/^port=//p' "$vb/record.txt")"
+check "...the slots' own ports, not the PORT sent from here ($pa, $pb)" [ "$pa:$pb" = "$COMEBYE_SLOT_PORT_BASE:$((COMEBYE_SLOT_PORT_BASE + 5000))" ]
+check "...REPEAT_PORT (flakes) from the same range" [ "$(sed -n 's/^repeat_port=//p' "$vb/record.txt")" = "$pb" ]
+if [ -e "$root/bind" ]; then
+  check "two browser suites on one VM don't clash on ports: both hold all of run.sh's" \
+    bash -c "wf() { local i; for i in \$(seq 100); do eval \"\$1\" && return 0; sleep 0.1; done; return 1; }
+      wf 'grep -q ^bound \"$va/bound.txt\" 2>/dev/null && grep -q ^bound \"$vb/bound.txt\" 2>/dev/null'"
+  check "...and a clash would show (the first suite's port is taken)" \
+    python3 -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1', ${pa:-1})) == 0 else 1)"
+fi
+RUNNER_TEMP="$root/rt3" "$r3" kv1 browser rest >"$root/c.log" 2>&1 & c=$!
+check "a third waits, naming both runs that hold the slots" wf "grep -Eq '^remote\(vm\): .+ has all 2 slots busy \([a-z0-9-]+ \(browser, [^)]*\) since [0-9:]+Z; [a-z0-9-]+ \(browser, [^)]*\) since [0-9:]+Z\); waiting for one \(Ctrl-C gives up\)$' '$root/c.log'"
+sleep 3
+check "...its suite has not started" [ "$(starts)" = 2 ]
+touch "$root/release"; wait "$a"; ra_rc=$?; wait "$b"; rb_rc=$?; wait "$c"; rc_rc=$?
+check "...then it runs in a freed slot, after one of the first two ended (rc $ra_rc $rb_rc $rc_rc)" \
+  [ "$ra_rc:$rb_rc:$rc_rc:$(head -3 "$root/starts.log" | cut -d' ' -f1 | tr '\n' ' ')" = "0:0:0:start start end " ]
+check "...saying so" grep -Eq '^remote\(vm\): .+ is free after [0-9]+ s; starting$' "$root/c.log"
+sj=$(( $(nproc) / 2 )); [ $sj -ge 1 ] || sj=1; sjobs=$sj; [ $sjobs -le 4 ] || sjobs=4
+smem=$(( $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 1024 * 85 / 100 / 2 )); [ $smem -ge 1024 ] || smem=1024
+check "...a lower JOBS and CAP_MEM sent from here are kept" bash -c "grep -qx 'jobs=1' '$RUNNER_TEMP/uitest-rest-dark/record.txt' && grep -qx 'capmem=512M' '$RUNNER_TEMP/uitest-rest-dark/record.txt'"
+check "...higher ones become the slot's share (JOBS $sjobs, GOTEST_P $sj, CAP_MEM ${smem}M)" \
+  bash -c "grep -qx 'jobs=$sjobs' '$root/rt2/uitest-rest-dark/record.txt' && grep -qx 'gotest_p=$sj' '$root/rt2/uitest-rest-dark/record.txt' && grep -qx 'capmem=${smem}M' '$root/rt2/uitest-rest-dark/record.txt'"
+check "all slots free again" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=2 free=2 toolchain=ok" ]
+
+# an old client (before slots: run.lock, exclusive) against new slots. The old client's VM side, as it was:
+# exec 8>>run.lock; flock -n 8 || until flock -w 5 8; ...; write run.who; run. Played here by old_vm_side.
+old_vm_side() { # TAG: take run.lock the old way, log start/end, hold it until $root/release
+  ( exec 8>>"$rr/run.lock"; flock -n 8 || until flock -w 5 8; do :; done
+    printf '%s since %s\n' "old-$1 (browser, main, from old)" "$(date -u +%H:%M:%SZ)" >"$rr/run.who"
+    echo "start old-$1" >>"$root/starts.log"
+    until [ -e "$root/release" ]; do sleep 0.1; done; echo "end old-$1" >>"$root/starts.log" ) 9>&- &
+}
+rm -f "$root/release" "$root/bind"; : >"$root/starts.log" # no ports held from here on: an old client's PORT is 18741
+old_vm_side 1; o=$!
+wf 'grep -q "start old-1" "$root/starts.log"'
+check "an old client holds the VM: --probe says no slot is free" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=2 free=0 toolchain=ok" ]
+"$r" kv1 browser rest >"$root/a.log" 2>&1 & a=$!
+check "...a new run waits for it, saying whose run it is" wf "grep -q 'is busy with old-1 (browser, main, from old) since .*; waiting for it' '$root/a.log'"
+sleep 3
+check "...and has not started" [ "$(starts)" = 1 ]
+touch "$root/release"; wait "$o"; wait "$a"; rc=$?
+check "...then runs once the old one has ended (rc=$rc)" [ "$rc:$(head -3 "$root/starts.log" | cut -d' ' -f1,2 | tr '\n' ' ')" = "0:start old-1 end old-1 start $vm/.cache/comebye-remote/runs/$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$root/a.log")/src " ]
+rm -f "$root/release"; : >"$root/starts.log"
+"$r" kv1 browser rest >"$root/a.log" 2>&1 & a=$!
+wf '[ "$(starts)" = 1 ]'
+check "a new run holds a slot: an old client's check sees the VM busy" bash -c "[ -e '$rr/run.lock' ] && ! flock -n '$rr/run.lock' true"
+old_vm_side 2; o=$!
+sleep 3
+check "...an old client waits for it, though a slot is free" [ "$(grep -c 'old-2' "$root/starts.log")" = 0 ]
+touch "$root/release"; wait "$a"; wait "$o"
+check "...and runs once the new run has ended" [ "$(sed -n '2,3p' "$root/starts.log" | cut -d' ' -f1,2 | tr '\n' ' ')" = "end $vm/.cache/comebye-remote/runs/$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$root/a.log")/src start old-2 " ]
+# The real old client, when this checkout has its history (CI's shallow lint checkout does not).
+if git -C "$here" cat-file -e cca272b:tools/ci/remote.sh 2>/dev/null; then
+  git -C "$here" show cca272b:tools/ci/remote.sh >"$root/caller3/tools/ci/remote-old.sh"; chmod +x "$root/caller3/tools/ci/remote-old.sh"
+  rm -f "$root/release"; : >"$root/starts.log"
+  "$r" kv1 browser rest >"$root/a.log" 2>&1 & a=$!
+  wf '[ "$(starts)" = 1 ]'
+  RUNNER_TEMP="$root/rt3" "$root/caller3/tools/ci/remote-old.sh" kv1 browser rest >"$root/c.log" 2>&1 & c=$!
+  check "the real old remote.sh (cca272b) waits for a new run, saying whose" wf "grep -Eq '^remote\(vm\): .+ is busy with [a-z0-9-]+ \(browser, feat/x, .* waiting for it' '$root/c.log'"
+  sleep 3
+  check "...and has not started" [ "$(starts)" = 1 ]
+  touch "$root/release"; wait "$a"; wait "$c"; rc=$?
+  check "...then runs after it (rc=$rc)" [ "$rc:$(cut -d' ' -f1 "$root/starts.log" | tr '\n' ' ')" = "0:start end start end " ]
+else
+  echo "skip: no cca272b in this checkout's history, so no run of the real old client"
+fi
+rm -f wait.txt "$root/bind" "$root/release" "$vm/etc/test-slots"; unset COMEBYE_SLOT_PORT_BASE
+for w in caller2 caller3; do git -C "$caller" worktree remove --force "$root/$w"; done
 exit $fail
