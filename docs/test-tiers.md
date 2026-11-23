@@ -5,7 +5,7 @@ time. The plan, with the measurements behind it, is the Page "Test tiers plan" i
 
 | Tier | Trigger | What runs | Target | A failure blocks |
 |---|---|---|---|---|
-| Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched | 3.5 min (5 when `internal/server` changed) | merging the pull request |
+| Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched (a change that needs every script, such as one to CI or the driver, runs the merge tier's parallel browser jobs instead) | 3.5 min (5 when `internal/server` changed) | merging the pull request |
 | Merge | a push to main | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and the `rest` scripts in 4 parallel parts; the visual pass in dark and light | 4 min | the next release of that commit (and the landing queue reads it) |
 | Release | a `v*` tag | the gate (below), govulncheck, the 4 builds, then the publish | 2 min | nothing: it publishes |
 
@@ -35,6 +35,7 @@ the merge tier runs everything, so a wrong rule is caught on the next push to ma
 ## Running a suite locally
 
 ```sh
+tools/ci/browser.sh changed      # what a pull request would run for your changes (committed or not) against origin/main
 tools/ci/browser.sh smoke        # ~160 checks covering every screen, about 2 min
 tools/ci/browser.sh drive light  # drive.mjs in the light scheme
 tools/ci/browser.sh rest dark "" 2/4  # part 2 of 4 of the rest scripts (what one CI job runs)
@@ -42,9 +43,30 @@ tools/ci/browser.sh full         # everything, one scheme (tools/uitest/run.sh r
 tools/ci/gotest.sh --shard 1/2   # half of the Go work
 SCRIPTS="sidepanel peers" tools/uitest/run.sh   # just these scripts
 SHOTS=1 tools/uitest/run.sh      # a screenshot after every drive.mjs check (otherwise only failed ones)
+UITEST_PROFILE=/tmp/p.txt tools/ci/browser.sh rest  # also log each Chrome start, for profiling
 ```
 
 Several suites on one machine need different bases: `PORT=24741 tools/uitest/run.sh`.
+
+`PARALLEL=2 tools/ci/browser.sh rest` runs the rest parts at once (each on its own servers and ports, inside the one
+memory cap): the wall time drops to about the longest part's. It is serial unless asked, because it loads the machine
+more; keep it to 2 to 4 and never beside another heavy suite.
+
+## Keeping the browser suites fast
+
+Where the time went, and the rules that keep it from coming back:
+
+- **A wait that times out must fail the check.** `waitForFunction(…, { timeout: 40000 }).catch(() => {})` or an
+  optional `click().catch(() => {})` on something that is not there spends its whole timeout on every run, silently
+  (wakepolish spent 86 s of its 122 s that way; reviewcard 30 s; tododeeplink 32 s). Check for the element first
+  (`if (await loc.count())`), or let the wait throw.
+- **One Chrome per script.** `launch()` in `tools/uitest/lib.mjs` starts Chrome once per process and gives each call a
+  fresh context (its own cookies, storage and permissions); `browser.close()` closes that context.
+- **Slow down only what is under test.** pagetheme throttles the network after the app has loaded, and its heavy Page
+  is as heavy as the check needs (its load comes seconds after the first paint), not more.
+- **`-test-mode` shortens waits that only exist for real fleets:** the app polls every 300 ms, and a peer that is down
+  is retried every 2 s at most (not 30 s), so a worker that starts is seen at once.
+- `UITEST_PROFILE=FILE` logs every Chrome start; the `== script NAME: N s` lines give each script's time.
 
 ## Sharding the browser job
 
