@@ -123,7 +123,8 @@ for (const width of [1280, 390]) {
       const r = await addReview(`Review: Versioned ${width}`, pid); ids.push(r.id);
       publish(key, "Versioned demo two"); // v2
       await open(r.id);
-      await page.locator('#rs [data-rs-tab="page"]').click().catch(() => {});
+      // The Page/Decide tabs exist below 1100px only (on a desktop both sides show): a click there waited out the 30 s timeout.
+      if (width < 1100) await page.locator('#rs [data-rs-tab="page"]').click();
       const src = await page.locator("#rs iframe.pgs-frame").getAttribute("src");
       if (!new RegExp(`/p/${pid}/1$`).test(src)) throw new Error("frame src: " + src);
       await drop(r.id);
