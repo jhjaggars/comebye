@@ -446,7 +446,7 @@ Linux arm64 build). `npm ci` for `tools/uitest` happens on the first run of a su
   nothing else: no tailnet step, no service restart, `/data` untouched. Re-running it is a
   no-op when the versions already match.
 - `worker testcheck NAME [--remote-repo REPO] [--quick]` proves the VM runs the tests: the
-  pinned versions answer, then `go test -p 4 ./internal/...` and `tools/ci/browser.sh smoke`
+  pinned versions answer, then `go test -count=1 -p 4 ./internal/...` (never the test cache) and `tools/ci/browser.sh smoke`
   pass in `/data/code/REPO` (default `comebye`), with the output streamed. `--quick` checks
   the versions only. It runs the pinned tools first on `PATH` (pi's mise Node is not CI's) and
   with `GOTOOLCHAIN=local`.

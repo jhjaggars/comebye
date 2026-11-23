@@ -96,7 +96,7 @@ func TestTestCheckScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"WK_REPO_DIR='/data/code/comebye'", "WK_QUICK='0'", "WK_GO_VERSION='" + testPins.GoVersion + "'",
-		"WK_CHROME_VERSION='" + testPins.ChromeVersion + "'", "go test -p 4 ./internal/...", "tools/ci/browser.sh smoke", "GOTOOLCHAIN=local"} {
+		"WK_CHROME_VERSION='" + testPins.ChromeVersion + "'", "go test -count=1 -p 4 ./internal/...", "tools/ci/browser.sh smoke", "GOTOOLCHAIN=local"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the check lacks %q", want)
 		}

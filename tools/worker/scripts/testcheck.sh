@@ -34,7 +34,7 @@ echo "testcheck: $(git rev-parse --short HEAD 2>/dev/null || echo '?') in $WK_RE
 out=$(mktemp -d "${TMPDIR:-/tmp}/testcheck.XXXXXX")
 
 t0=$SECONDS
-if go test -p 4 ./internal/... >"$out/go-test.log" 2>&1; then
+if go test -count=1 -p 4 ./internal/... >"$out/go-test.log" 2>&1; then
   echo "ok    go test ./internal/... ($((SECONDS - t0)) s)"
 else
   tail -40 "$out/go-test.log"; echo "FAIL  go test ./internal/... (log: $out/go-test.log)"; exit 1
