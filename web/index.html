@@ -691,37 +691,41 @@
       max-height: 200px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
     }
 
-    /* The agent is working: a row at the bottom of the chat... */
+    /* The agent is working: a row at the bottom of the chat, in the quiet language of a tool run's line
+       ("Thought for 12s ›"): no box, muted type, a small pulsing dot, the timer small on the right. */
     .activity {
-      align-self: stretch; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-8);
-      padding: var(--sp-8) var(--sp-10); margin-top: var(--sp-4); border-radius: var(--r-12);
-      background: color-mix(in srgb, var(--blue) 10%, transparent);
-      border: 1px solid color-mix(in srgb, var(--blue) 28%, transparent);
-      font-size: var(--fs-13); color: var(--text);
+      align-self: stretch; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-6);
+      padding: var(--sp-4) var(--sp-6); min-height: var(--hit-32); border-radius: var(--r-8);
+      font-size: var(--fs-14); color: var(--muted);
     }
-    .activity .dot { flex: none; }
-    .activity .act-verb { font-weight: 650; color: var(--blue); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .activity .act-what { font-weight: 600; font-family: var(--ff-code); font-size: var(--fs-13); }
+    @media (pointer: coarse) { .activity { min-height: var(--hit-44); } }
+    .activity:hover { color: var(--text); }
+    .activity:focus-visible { outline-offset: -2px; color: var(--text); }
+    .activity .dot { flex: none; width: 8px; height: 8px; }
+    .activity .dot.working { animation-duration: 1.2s; }
+    .activity.thought .dot, .activity.thought .act-verb { display: none; }
+    .activity .act-verb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .activity .act-what { font-family: var(--ff-code); font-size: var(--fs-13); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .activity .act-what:empty { display: none; }
-    .activity .act-time { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .activity .act-time { margin-left: auto; color: var(--muted); font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
     .activity .act-detail {
-      flex-basis: 100%; min-width: 0; color: var(--muted);
+      flex-basis: 100%; min-width: 0; color: var(--muted); padding-left: calc(8px + var(--sp-6));
       font-family: var(--ff-code); font-size: var(--fs-12);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .activity .act-detail[hidden], .activity .act-subs[hidden] { display: none; }
-    .activity .act-subs { flex-basis: 100%; color: var(--purple); font-size: var(--fs-13); }
+    .activity .act-subs { flex-basis: 100%; color: var(--muted); font-size: var(--fs-12); padding-left: calc(8px + var(--sp-6)); }
     /* Tap for details: a chevron, and a panel spanning the row. */
     .activity { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
-    .activity .act-chev { flex: none; width: 8px; height: 8px; margin-left: var(--sp-2);
-      border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+    .activity .act-chev { flex: none; width: 6px; height: 6px; margin-left: var(--sp-2);
+      border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
       transform: rotate(45deg) translateY(-2px); transition: transform 0.15s; }
     .activity.open .act-chev { transform: rotate(-135deg) translate(-2px, 0); }
     .activity:not(.idle) .act-time + .act-chev { margin-left: var(--sp-2); }
     .activity.idle .act-chev { margin-left: auto; }
     .act-panel { flex-basis: 100%; min-width: 0; margin-top: var(--sp-6); padding-top: var(--sp-8); cursor: default;
-      border-top: 1px solid color-mix(in srgb, var(--blue) 22%, transparent);
+      border-top: 1px solid var(--border); color: var(--text);
       display: flex; flex-direction: column; gap: var(--sp-10); max-height: 55vh; overflow-y: auto; overscroll-behavior: contain; padding-right: var(--sp-6); }
     .act-panel[hidden] { display: none; }
     .ap-h { font-size: var(--fs-12); font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: var(--sp-4); }
@@ -744,13 +748,7 @@
     .ap-sub-think { font-size: var(--fs-12); color: var(--muted); font-style: italic; }
     .ap-steps { align-self: flex-start; min-height: var(--hit-36); padding: 0 var(--sp-12); font-size: var(--fs-13); flex: none; }
     /* The agent is idle but its background subagents still run. */
-    .activity.idle {
-      background: color-mix(in srgb, var(--purple) 8%, transparent);
-      border-color: color-mix(in srgb, var(--purple) 26%, transparent);
-      padding: var(--sp-6) var(--sp-10);
-    }
-    .activity.idle .dot { width: 9px; height: 9px; background: var(--purple); }
-    .activity.idle .act-verb { color: var(--purple); font-weight: 600; }
+    .activity.idle .dot { background: var(--purple); }
     /* ...and a moving bar under the header, visible while scrolled up. It
        moves by transform, which the compositor animates without repainting. */
     #detail header { position: relative; overflow: hidden; }

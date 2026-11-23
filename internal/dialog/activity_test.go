@@ -12,11 +12,13 @@ func TestDetectActivity(t *testing.T) {
 		want               *Activity
 	}{
 		{"claude random verb", "● Reading the pane\n\n· Shimmying… (27s · ↓ 2.1k tokens)\n" + claudeBottom, "claude",
-			&Activity{Text: "Shimmying", Note: "↓ 2.1k tokens", Generic: true}},
+			&Activity{Text: "Shimmying", Note: "2.1k tokens", Generic: true}},
+		{"claude thought for, arrow dropped", "✽ Pondering… (8s · ↓ 430 tokens · thought for 1s)\n" + claudeBottom, "claude",
+			&Activity{Text: "Pondering", Note: "430 tokens · thought for 1s", Generic: true}},
 		{"claude compaction", "✻ Compacting conversation… (1m 5s · esc to interrupt)\n" + claudeBottom, "claude",
 			&Activity{Text: "Compacting conversation"}},
 		{"claude todo with thinking", "✶ Running the test suite… (12s · ↑ 300 tokens · thinking)\n  ⎿  ☐ Fix the parser\n" + claudeBottom, "claude",
-			&Activity{Text: "Running the test suite", Note: "↑ 300 tokens · thinking"}},
+			&Activity{Text: "Running the test suite", Note: "300 tokens · thinking"}},
 		{"claude no parenthetical", "✢ Compacting conversation…\n" + claudeBottom, "claude",
 			&Activity{Text: "Compacting conversation"}},
 		{"claude idle", "● Done.\n" + claudeBottom, "claude", nil},

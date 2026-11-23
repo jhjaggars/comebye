@@ -410,6 +410,8 @@ await check("thinking live: 'Thinking…' while the agent thinks, opening to the
   same(await live.locator(".tr-txt").textContent(), "Thinking…", "label");
   same(await live.locator(".tr-dot.run").count(), 1, "pulsing dot");
   same(await live.evaluate((e) => e.nextElementSibling.classList.contains("activity")), true, "sits above the activity row");
+  same(await page.locator("#chat .activity.thought .act-verb").isVisible(), false, "the row does not repeat 'Thinking'");
+  same(await page.locator("#chat .activity .act-time").isVisible(), true, "the row keeps the timer");
   await live.locator(".tr-line").click();
   same((await live.locator(".think-body").textContent()).trim(), "Weighing the options.", "text");
   await page.evaluate(() => { state.chat.thinking = { text: "Weighing the options. Then deciding." }; renderActivity(); });
@@ -419,14 +421,41 @@ await check("thinking live: 'Thinking…' while the agent thinks, opening to the
   same(await page.locator("#chat .thinking.live").count(), 0, "gone when the agent stops");
 });
 
-await check("tap targets: the agent line, View steps and the thinking line are at least 44px on a phone", async () => {
+await check("activity row: a quiet line like a tool run's, no tinted box; the token count has no stray bar", async () => {
   await open(claude);
+  const act = { activity: { text: "Shimmying", generic: true, detail: "430 tokens · thought for 1s" } };
+  await page.route(/\/activity$/, (r) => r.fulfill({ json: act }));
+  await page.evaluate((act) => { state.chat.thinking = null; state.chat.last = { kind: "assistant", id: "x" }; activity.status = act.activity; activity.statusPane = state.selected; }, act);
+  await setWorking(true);
+  const row = page.locator("#chat .activity");
+  same(await row.locator(".act-verb").textContent(), "Thinking", "verb");
+  same(await row.locator(".act-verb").isVisible(), true, "verb shown with no live thought line");
+  const time = await row.locator(".act-time").textContent();
+  same(/^\d+:\d\d · 430 tokens · thought for 1s$/.test(time), true, "timer then detail, one separator: " + time);
+  const st = await row.evaluate((e) => { const c = getComputedStyle(e), v = getComputedStyle(e.querySelector(".act-verb")); return { bg: c.backgroundColor, border: c.borderTopWidth, color: c.color, weight: v.fontWeight }; });
+  same(st.bg, "rgba(0, 0, 0, 0)", "no tinted background");
+  same(st.border, "0px", "no border");
+  const muted = await page.evaluate(() => { const e = document.createElement("span"); e.style.color = "var(--muted)"; document.body.append(e); const c = getComputedStyle(e).color; e.remove(); return c; });
+  same(st.color, muted, "muted type");
+  same(st.weight, "400", "not bold");
+  await page.evaluate(() => { state.chat.last = { kind: "tool", tool: "Bash", args: "go test ./...", id: "z" }; renderActivity(); });
+  same(await row.locator(".act-verb").textContent(), "Running", "a running tool shares the row");
+  same(await row.evaluate((e) => getComputedStyle(e).backgroundColor), "rgba(0, 0, 0, 0)", "same quiet style");
+  await page.unroute(/\/activity$/);
+  await setWorking(false);
+});
+
+await check("tap targets: the agent line, View steps, the thinking line and the activity row are at least 44px on a phone", async () => {
+  await open(claude);
+  await page.evaluate(() => { state.chat.last = { kind: "assistant", id: "x" }; });
+  await setWorking(true);
   await page.locator("#chat .subrun .sa-line").click();
   await page.locator("#chat .thinking").first().locator(".tr-line").click();
-  for (const [what, loc] of [["agent line", page.locator("#chat .subrun .sa-line")], ["View steps", page.locator("#chat .subrun .sa-steps")], ["thinking line", page.locator("#chat .thinking .tr-line").first()]]) {
+  for (const [what, loc] of [["agent line", page.locator("#chat .subrun .sa-line")], ["View steps", page.locator("#chat .subrun .sa-steps")], ["thinking line", page.locator("#chat .thinking .tr-line").first()], ["activity row", page.locator("#chat .activity")]]) {
     const h = await loc.evaluate((e) => e.getBoundingClientRect().height);
     if (h < 43.5) throw new Error(what + " is " + h + "px");
   }
+  await setWorking(false);
 });
 
 // ---- desktop: 1280 ----

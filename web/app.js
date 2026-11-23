@@ -11589,7 +11589,8 @@ function renderActivity() {
   if (row.nextSibling !== anchor || row.parentNode !== chatEl) chatEl.insertBefore(row, anchor);
   row.classList.toggle("idle", !working);
   const step = working ? activityStep() : { verb: subagentCount(subs) + " running", what: "", detail: "" };
-  syncLiveThinking(chatEl, working && step.verb === "Thinking", row);
+  // While the "Thinking…" line shows above it, the row would only repeat it: it keeps the timer.
+  row.classList.toggle("thought", syncLiveThinking(chatEl, working && step.verb === "Thinking", row));
   row.querySelector(".act-verb").textContent = step.verb;
   row.querySelector(".act-what").textContent = step.what;
   row.querySelector(".act-detail").textContent = step.detail;
@@ -12216,17 +12217,19 @@ function fillThinking(d) {
 
 // syncLiveThinking keeps one "Thinking…" line above the activity row while the
 // agent is thinking, which opens to the latest thought; it goes when the agent
-// moves on (the finished thought is then the "Thought for Ns" line).
+// moves on (the finished thought is then the "Thought for Ns" line). Returns
+// whether the line shows.
 function syncLiveThinking(chatEl, show, row) {
   let el = chatEl.querySelector(":scope > .thinking.live");
   const th = show && state.chat && state.chat.thinking;
-  if (!th || !th.text) { if (el) el.remove(); return; }
+  if (!th || !th.text) { if (el) el.remove(); return false; }
   if (!el) el = renderThinking(th.text, 0, "live-thinking", true);
   if (el._text !== th.text) {
     el._text = th.text;
     if (!el.querySelector(".think-body").hidden) fillThinking(el);
   }
   if (el.nextSibling !== row || el.parentNode !== chatEl) chatEl.insertBefore(el, row);
+  return true;
 }
 
 /* ---------- subagent lines (Claude's Agent/Task calls) ---------- */

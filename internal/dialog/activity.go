@@ -72,7 +72,9 @@ func DetectActivity(screen, agentKind string) *Activity {
 func activityNote(paren string) string {
 	var keep []string
 	for _, part := range strings.Split(paren, "·") {
-		part = strings.TrimSpace(part)
+		// Claude marks the token count with an arrow ("↓ 430 tokens"); at the
+		// app's size the arrow reads as a stray bar ("0:08 · | 430 tokens").
+		part = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(part), "↑↓⇡⇣|│"))
 		switch {
 		case part == "", elapsed.MatchString(part),
 			strings.Contains(part, "esc to"), strings.Contains(part, "ctrl+"), strings.Contains(part, "to cancel"):
