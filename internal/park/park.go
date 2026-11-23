@@ -50,7 +50,6 @@ type Record struct {
 	ScratchFrom  string `json:"scratch_from,omitempty"`
 	ScratchTo    string `json:"scratch_to,omitempty"`
 	ScratchBytes int64  `json:"scratch_bytes,omitempty"`
-	ScratchNote  string `json:"scratch_note,omitempty"`
 	// What parking keeps on disk, measured at park (a worktree walk is cut off
 	// after a few seconds, so the figure may be a floor): for the "disk cost" line.
 	WorktreeBytes int64 `json:"worktree_bytes,omitempty"`

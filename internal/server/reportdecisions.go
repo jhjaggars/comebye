@@ -194,25 +194,6 @@ func parseReportDecisions(text string) (ds []reportDecision, found, none, unpars
 	return ds, true, false, false, skipped, raw
 }
 
-// quoted renders text as a Markdown quote that keeps its line breaks, cut
-// at n runes.
-func quoted(text string, n int) string {
-	text = strings.TrimSpace(strings.ReplaceAll(strings.ToValidUTF8(text, " "), "\r", ""))
-	if r := []rune(text); len(r) > n {
-		text = string(r[:n]) + "\n…"
-	}
-	lines := strings.Split(text, "\n")
-	for i, l := range lines {
-		l = strings.TrimRight(l, " \t")
-		if l == "" {
-			lines[i] = ">"
-		} else {
-			lines[i] = "> " + l
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
 func parseRecNumbers(s string) []int {
 	var out []int
 	for _, f := range regexp.MustCompile(`\d+`).FindAllString(s, -1) {
@@ -242,15 +223,10 @@ func reportKey(entryID, kind, text string) string {
 	return SourceReport + ":" + entryID + ":" + kind + ":" + hex.EncodeToString(h[:6])
 }
 
-// reportItems builds the items for a report: one per decision (at most
+// reportItemsSkip builds the items for a report: one per decision (at most
 // reportMaxDecisions), or the single pointer item for a section that did
-// not parse.
-func reportItems(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink) []Todo {
-	return reportItemsSkip(e, text, w, pages, nil)
-}
-
-// reportItemsSkip is reportItems without the decisions skip says are asked
-// already (this handoff's earlier report, answered or dropped or still open).
+// not parse. It leaves out the decisions skip says are asked already (this
+// handoff's earlier report, answered or dropped or still open).
 func reportItemsSkip(e ledger.Entry, text string, w *TodoAgent, pages []TodoLink, skip func(question string) bool) []Todo {
 	ds, found, _, unparsed, _, _ := parseReportDecisions(text)
 	if !found {

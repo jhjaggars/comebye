@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,20 +91,6 @@ type TodoReview struct {
 	Stale bool `json:"stale,omitempty"`
 	// CanUndo is computed when served: a Looks good still inside its window.
 	CanUndo bool `json:"can_undo,omitempty"`
-}
-
-var pageRefRE = regexp.MustCompile(`^(pg_[0-9a-f]{10})(?:@v?(\d+))?$`)
-
-// parsePageRef reads "pg_x" or "pg_x@v3" (the CLI's --page).
-func parsePageRef(s string) (id string, v int, ok bool) {
-	m := pageRefRE.FindStringSubmatch(strings.TrimSpace(s))
-	if m == nil {
-		return "", 0, false
-	}
-	if m[2] != "" {
-		v, _ = strconv.Atoi(m[2])
-	}
-	return m[1], v, true
 }
 
 // pageFor resolves a Page reference against the store: the version

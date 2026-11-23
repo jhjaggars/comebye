@@ -36,13 +36,11 @@ const (
 
 // Event kinds. A kind is part of the CLI's --kind filter.
 const (
-	evLanded    = "landed"     // work landed (CI not failed)
-	evPark      = "park"       // an idle agent parked automatically
-	evAutoRm    = "autoremove" // an agent removed automatically
-	evCleanup   = "cleanup"    // a landed handoff marked ready to remove
-	evBlocked   = "blocked"    // an agent is waiting on the user at a dialog
-	evUnblocked = "unblocked"  // that dialog cleared
-	evHeld      = "held"       // a queued prompt still held for typing
+	evLanded    = "landed"    // work landed (CI not failed)
+	evPark      = "park"      // an idle agent parked automatically
+	evBlocked   = "blocked"   // an agent is waiting on the user at a dialog
+	evUnblocked = "unblocked" // that dialog cleared
+	evHeld      = "held"      // a queued prompt still held for typing
 )
 
 // Event is one thing the hub handled.

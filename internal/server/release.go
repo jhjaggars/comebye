@@ -126,8 +126,6 @@ type UpgradeRunner interface {
 	Start(ctx context.Context, rec upgrade.Record, path string, rollback, dry bool) error
 }
 
-func (c ReleaseConfig) enabled() bool { return c.Tool != nil || c.Upgrade || c.Host != "" }
-
 // relState is the server's release bookkeeping.
 type relState struct {
 	mu     sync.Mutex // one tagging at a time

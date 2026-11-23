@@ -74,8 +74,6 @@ const (
 	// sweepDoneWindow how long the review and the board show them.
 	sweepKeepDone   = 100
 	sweepDoneWindow = 7 * 24 * time.Hour
-	// SweepReviewLink is the app's removals review.
-	SweepReviewLink = "/#/remove"
 )
 
 // sweepLoopSettings is the "sweep_loop" part of settings.json. A nil Enabled

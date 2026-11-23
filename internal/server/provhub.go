@@ -34,10 +34,9 @@ import (
 // its state directory and refreshes it from the node while a job is open.
 
 const (
-	hjMax       = 50
-	hjPollGap   = 700 * time.Millisecond
-	hjMaxItems  = 900
-	hjKeyMaxAge = 24 * time.Hour
+	hjMax      = 50
+	hjPollGap  = 700 * time.Millisecond
+	hjMaxItems = 900
 )
 
 var hubJobIDRe = regexp.MustCompile(`^hj_[0-9a-f]{16}$`)

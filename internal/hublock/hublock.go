@@ -105,9 +105,6 @@ type Lock struct {
 	err error // the last heartbeat failure, nil while healthy
 }
 
-// Path is the lock file.
-func (l *Lock) Path() string { return l.path }
-
 // Err is nil while the lock is held and its record is being refreshed. A
 // non-nil error means the heartbeat is failing (the volume went read-only
 // or away): the lease is running out, and another machine may take over.

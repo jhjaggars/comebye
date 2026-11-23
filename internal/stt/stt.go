@@ -20,7 +20,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -266,14 +265,4 @@ func fetchOne(ctx context.Context, client *http.Client, dst string, f File) erro
 		return err
 	}
 	return os.Rename(tmp.Name(), dst)
-}
-
-// Paths returns the pinned paths, sorted (for listings and tests).
-func Paths() []string {
-	var p []string
-	for _, f := range files {
-		p = append(p, f.Path)
-	}
-	sort.Strings(p)
-	return p
 }

@@ -178,22 +178,6 @@ func (s *Server) leftovers(ctx context.Context, now time.Time, del bool) (settle
 	return settled, deleted
 }
 
-// staleDeletions are the stale remote branches a reviewed removal's
-// confirmation would delete.
-func staleDeletions(it *removal) []string {
-	var out []string
-	if ar := it.AskReview; ar != nil && ar.StaleOnly {
-		for _, v := range ar.Items {
-			if v.Stale {
-				if b, ok := staleTarget(v.AskItem, it.Branch); ok {
-					out = append(out, "origin/"+b)
-				}
-			}
-		}
-	}
-	return out
-}
-
 // sessionBusy: the agent is working or blocked, so nothing is done around it.
 func sessionBusy(it *removal) bool {
 	return it.Live.Present && (it.Live.Status == herdr.StatusWorking || it.Live.Status == herdr.StatusBlocked)

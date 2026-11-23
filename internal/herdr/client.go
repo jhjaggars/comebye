@@ -39,13 +39,6 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
 
-// IsAgentBlocked reports whether err is herdr's "agent is waiting for input"
-// refusal, which agent.prompt returns instead of typing into a dialog.
-func IsAgentBlocked(err error) bool {
-	var he *Error
-	return errors.As(err, &he) && he.Code == "agent_blocked"
-}
-
 // envelope covers responses, push events, and stream errors in one shape.
 type envelope struct {
 	ID     string          `json:"id"`

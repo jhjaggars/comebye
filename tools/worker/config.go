@@ -60,7 +60,6 @@ type Config struct {
 
 	machineSet, diskSet bool
 	bootSet, dataSet    bool
-	floorsOwn           bool   // kube_node_floor was given: it replaces the default floors
 	baseAZ              string // aws_az as the config file has it; a per-request zone differs from it
 
 	// Per-request settings (a --spec): zero means not set. They are recorded

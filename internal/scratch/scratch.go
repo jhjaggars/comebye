@@ -128,14 +128,6 @@ func (r Report) Summary() string {
 	return s
 }
 
-func (r *Report) merge(o Report) {
-	r.Removed = append(r.Removed, o.Removed...)
-	r.Kept = append(r.Kept, o.Kept...)
-	r.Stopped = append(r.Stopped, o.Stopped...)
-	r.Bytes += o.Bytes
-	r.Errors = append(r.Errors, o.Errors...)
-}
-
 // HumanBytes formats a size (1.5 GB).
 func HumanBytes(n int64) string {
 	const k = 1024

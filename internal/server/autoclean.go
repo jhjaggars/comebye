@@ -22,7 +22,6 @@ import (
 const (
 	autoCleanEvery  = 3 * time.Minute // between looks at one entry
 	autoCleanWindow = 6 * time.Hour   // after landing
-	autoCleanTries  = 20
 	autoCleanReason = "landed, CI green, remote branch deleted, worktree clean (marked by the hub)"
 )
 

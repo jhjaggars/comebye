@@ -17,9 +17,7 @@ import (
 // watcher withdraws the item when the key is unlocked by any means (pinentry
 // included).
 
-// WatchEvery is how often the watcher looks at the agent; Cooldown is how
-// long it waits after asking before it asks again for the same lock. The
-// request itself waits RequestTTL, so an item left unanswered is gone and is
+// WatchEvery is how often the watcher looks at the agent. The request itself waits RequestTTL, so an item left unanswered is gone and is
 // asked again only that much later, while an agent is still active.
 //
 // The item stays: the request behind it lives RequestTTL, but the watcher
@@ -28,7 +26,6 @@ import (
 // when no agent has been active on the host for Grace.
 const (
 	WatchEvery = 30 * time.Second
-	Cooldown   = 10 * time.Minute // kept for callers; the watcher no longer waits between asks
 	Grace      = 30 * time.Minute // how long an idle host keeps the item
 	Refresh    = 45 * time.Second // renew the request when this little of it is left
 )

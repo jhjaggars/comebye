@@ -30,11 +30,9 @@ import (
 // so in "degraded"; prices are never invented.
 
 const (
-	ttlTypes    = 24 * time.Hour
-	ttlSpot     = 15 * time.Minute
-	ttlOnDemand = 7 * 24 * time.Hour
-	ttlAdvisor  = 24 * time.Hour
-	ttlScore    = 30 * time.Minute
+	ttlSpot    = 15 * time.Minute
+	ttlAdvisor = 24 * time.Hour
+	ttlScore   = 30 * time.Minute
 
 	advisorURL = "https://spot-bid-advisor.s3.amazonaws.com/spot-advisor-data.json"
 	// The estimate: price + the public IPv4 + the disks.

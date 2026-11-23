@@ -43,10 +43,6 @@ func (e *fileErr) Error() string { return e.message }
 
 func ferr(status int, code, msg string) *fileErr { return &fileErr{status, code, msg} }
 
-func writeFileErr(w http.ResponseWriter, e *fileErr) {
-	writeJSONStatus(w, e.status, map[string]string{"code": e.code, "message": e.message})
-}
-
 // panelRoots are what a request is judged against, all resolved.
 type panelRoots struct {
 	home, dir, pin string
