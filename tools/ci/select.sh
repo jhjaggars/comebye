@@ -44,7 +44,7 @@ while IFS= read -r f; do
     internal/playbook/*) lint=true; merge_go=true; add_pkg ./internal/playbook; add_pkg ./internal/server ;;
     internal/dialog/*) lint=true; merge_go=true; add_pkg ./internal/dialog; add_pkg ./internal/state; add_pkg ./internal/server ;;
     web/test/unlockinterop.mjs) lint=true; merge_browser=true; merge_go=true; add_script markdown; add_pkg ./internal/gpgunlock ;;
-    tools/release/tag) lint=true; merge_go=true; add_pkg ./tools/release; add_pkg ./internal/release ;;
+    tools/release/tag) lint=true; merge_go=true; add_pkg .; add_pkg ./internal/release ;;   # main.go embeds it
     tools/worker/testdata/*) lint=true; add_script provision; add_script provhosts; add_script provkubevirt; add_script wake; add_script multiconfig; add_script wakeuse; add_script wakepolish; merge_browser=true; merge_go=true; add_pkg ./tools/worker; add_pkg ./internal/provision; add_pkg ./internal/server ;;
     # The provisioner example manifests have a Go test (deploy/kubernetes/provisioner/manifests_test.go): the Role's allow-list, the Secret lint, kustomize.
     deploy/kubernetes/provisioner/*) lint=true; merge_go=true; add_pkg ./deploy/kubernetes/provisioner ;;
@@ -76,7 +76,9 @@ while IFS= read -r f; do
     tools/uitest/*|tools/devserver/*) lint=true; smoke=true; merge_browser=true ;;
     # A leaf Go package: nothing the browser scripts reach (they go through the hub), so Go tests only.
     internal/*/*.go|internal/*/*/*) lint=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
-    tools/demo/*|tools/genicon/*|tools/release/*|tools/stt/*) lint=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
+    tools/genicon/*) lint=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
+    # No Go files: node --check and the static checks only.
+    tools/demo/*|tools/release/*|tools/stt/*) lint=true ;;
     *.go) lint=true; merge_go=true; add_pkg . ;;
     *) everything=true ;;                                             # unknown: run everything
   esac
