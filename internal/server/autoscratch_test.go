@@ -139,6 +139,7 @@ func TestScratchOnlyAnswerIsCleanedUpAndRemoved(t *testing.T) {
 // answer listing only those gets no go-ahead.
 func TestMixedAnswerGetsAGoAheadForTheScratchOnly(t *testing.T) {
 	s, fh, _ := coordServer(t)
+	stubProbes(t, nil, nil, []string{"dev"}) // the kept cluster is up
 	open, _, _ := s.todos.add(Todo{Question: "which key?", Kind: "decision", State: TodoOpen, CreatedBy: "w"})
 	tmp := scratchFile(t)
 	kept := "- resource k3d-cluster dev mine, the user asked to keep it\n- decision " + open.ID + " waiting on the user\n- cleanup close my PR"

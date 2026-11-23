@@ -131,7 +131,8 @@ func TestHubDoesNotReaskASessionWaitingOnATask(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	s.askPoll, s.askWait = 10*time.Millisecond, 400*time.Millisecond
 	t.Cleanup(s.asking.Wait)
-	scriptedSession(s, fh, func(string) string { return "LEFT\n- pr jhjaggars/homelab#379 open; waiting on CI, then me" })
+	stubProbes(t, map[int]*probeResult{379: {State: "open"}}, nil, nil) // still open: only the task holds the re-ask
+	scriptedSession(s, fh, func(string) string { return "LEFT\n- pr o/r#379 open; waiting on CI, then me" })
 	var mu sync.Mutex
 	watching := true
 	bgLatest(s, func(string) []transcript.BackgroundTask {
@@ -142,7 +143,7 @@ func TestHubDoesNotReaskASessionWaitingOnATask(t *testing.T) {
 		}
 		return nil
 	})
-	m := markUnsafe(t, s, 2*s.reaskCap, ledger.AskItem{Type: "pr", Repo: "jhjaggars/homelab", Number: 379, Text: "open, waiting on CI"})
+	m := markUnsafe(t, s, 2*s.reaskCap, ledger.AskItem{Type: "pr", Repo: "o/r", Number: 379, Text: "open, waiting on CI"})
 	if got := s.reaskStep(context.Background(), time.Now()); len(got) != 0 || promptCount(fh) != 0 {
 		t.Fatalf("re-asked while it watches CI: %v, %d prompts", got, promptCount(fh))
 	}
