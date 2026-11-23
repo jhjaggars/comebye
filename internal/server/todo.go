@@ -869,7 +869,7 @@ func (s *Server) handleTodoList(w http.ResponseWriter, r *http.Request) {
 			answered++
 		}
 	}
-	writeJSON(w, map[string]any{"todos": s.todosForReader(r, s.todosGone(items)), "open": open, "answered": answered, "auto": s.todos.autoStats()})
+	writeJSON(w, todoListView{Todos: s.todosForReader(r, s.todosGone(items)), Open: open, Answered: answered, Auto: s.todos.autoStats()})
 }
 
 func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
@@ -882,10 +882,10 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.autoShownToAgent(it) || !callerOf(r).agent() {
-		writeJSON(w, map[string]any{"todo": s.todoGone(it)})
+		writeJSON(w, todoView{Todo: s.todoGone(it)})
 		return
 	}
-	writeJSON(w, map[string]any{"todo": s.todoGone(autoStub(it))})
+	writeJSON(w, todoView{Todo: s.todoGone(autoStub(it))})
 }
 
 // handleTodoAnswer: POST /api/todos/{id}/answer {text}. The user's answer

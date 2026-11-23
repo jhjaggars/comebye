@@ -738,7 +738,7 @@ func (s *Server) handleQueueList(w http.ResponseWriter, r *http.Request) {
 	if c := callerOf(r); c.tagged {
 		items = taggedQueue(items, c.host)
 	}
-	writeJSON(w, map[string]any{"queue": items})
+	writeJSON(w, queueView{Queue: items})
 }
 
 // handleQueueCancel withdraws a pending prompt (DELETE /api/queue/{id}).
