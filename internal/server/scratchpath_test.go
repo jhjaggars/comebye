@@ -63,7 +63,7 @@ func peerProbeRig(t *testing.T) (hub *Server, peer *probePeer, ps *httptest.Serv
 	return hub, peer, ps, tmp
 }
 
-// scratchItem is the jira-2952 item: a path the session calls its own scratch.
+// scratchPathItem is a path the session calls its own scratch.
 func scratchPathItem(name, host string) ledger.AskItem {
 	return ledger.AskItem{Type: ledger.ItemPath, Name: name, Host: host, Text: "343 MB of my scratch; deleting it is cleanup I can do if told to go ahead"}
 }
@@ -123,7 +123,7 @@ func TestRecheckPathThroughAPeer(t *testing.T) {
 	}
 }
 
-// The review of the jira-2952 answer on a peer: while the scratch is there it
+// The review of a scratch-only answer on a peer: while the scratch is there it
 // is only cleanup (the go-ahead covers it) and, with the re-asks spent, owed;
 // once it is gone, every item has resolved, which is the sweep's "nothing
 // left" (leftovers.go).
