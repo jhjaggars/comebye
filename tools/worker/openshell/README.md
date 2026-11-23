@@ -12,12 +12,12 @@ only `lo` and cannot reach a DERP relay.
 | `comebye-sandbox-init` | the sandbox's main process (no systemd): supervisor + idle exit |
 | `policy.yaml.tmpl`, `render-policy.sh` | least-privilege policy template and renderer |
 | `profiles/github-push.yaml` | GitHub provider profile (https clone/fetch/push, token held by the gateway) |
-| `build.sh` | build, secret-scan, push `registry.jaggars.cc/comebye-sandbox:vX.Y.Z` |
+| `build.sh` | build, secret-scan, push `$SBX_REGISTRY/comebye-sandbox:vX.Y.Z` (`SBX_REGISTRY` must be set, e.g. `registry.example.com`) |
 | `RUNBOOK.md` | one-time gateway setup: providers, login, differences from podman |
 
 ## Image
 
-`registry.jaggars.cc/comebye-sandbox:v0.5.12` — the tag **is** the comebye release it
+`registry.example.com/comebye-sandbox:v0.5.12` — the tag **is** the comebye release it
 contains; the hub and its workers must run the same one. Contents (all under
 `/usr/local`, because the image root is read-only to the workload and a PVC masks
 `/sandbox`): `comebye`, `tailscale`/`tailscaled` 1.92.5, `herdr`, node 22.20 + `pi`
@@ -26,7 +26,7 @@ contains; the hub and its workers must run the same one. Contents (all under
 Create it with the init as the command:
 
 ```sh
-openshell sandbox create --name NAME --from registry.jaggars.cc/comebye-sandbox:v0.5.12 \
+openshell sandbox create --name NAME --from registry.example.com/comebye-sandbox:v0.5.12 \
   --policy policy.yaml --provider anthropic-claude --provider github-push \
   --label managed-by=comebye-worker -- comebye-sandbox-init
 ```

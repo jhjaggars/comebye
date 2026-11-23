@@ -5,13 +5,13 @@ Placeholders only. Never paste a real key into this file, a shell history line, 
 
 ## 0. Gateway access
 
-Homelab gateway: endpoint `https://openshell.tail4a1fd.ts.net`, OIDC issuer
-`https://openshell-auth.tail4a1fd.ts.net`, client `openshell-cli`, workspace
+Homelab gateway: endpoint `https://openshell.your-tailnet.ts.net`, OIDC issuer
+`https://openshell-auth.your-tailnet.ts.net`, client `openshell-cli`, workspace
 `openshell-sandboxes` (`default` is refused). The CA is public, in Secret
 `openshell/openshell-client-tls` (`ca.crt`).
 
 ```sh
-# once per machine, on a user-owned tailnet node (laharl):
+# once per machine, on a user-owned tailnet node (your desktop host):
 export OPENSHELL_WORKSPACE=openshell-sandboxes
 bash ~/code/homelab/apps/tsidp-bridge/scripts/headless-login.sh homelab   # sessions last <= 12 h
 openshell provider list
@@ -109,7 +109,7 @@ Verified live: the command starts under `exec --tty` and prints the URL and the 
 
 ## 3. Kubernetes vs podman: differences recorded
 
-| Area | Kubernetes driver (homelab) | podman driver (laharl) |
+| Area | Kubernetes driver (homelab) | podman driver (desktop host) |
 | --- | --- | --- |
 | Tailnet | pod has `eth0` + default route: stock tailscaled works, no test knob | `lo` only: tailscaled registers but never dials DERP; **unsupported** (init sets the test knob only here) |
 | Workload uid | **10001**, no passwd entry: `whoami`/`ssh` say "No user exists for uid 10001", prompt shows `I have no name!`. Irrelevant for https git, claude, pi, herdr; ssh clients break | uid 1000 (`sandbox`) |
@@ -122,7 +122,7 @@ Verified live: the command starts under `exec --tty` and prints the URL and the 
 
 ## 4. What was run (W2, homelab gateway, fake credentials)
 
-Image `registry.jaggars.cc/comebye-sandbox:v0.5.12`, full policy from `render-policy.sh`:
+Image `registry.example.com/comebye-sandbox:v0.5.12`, full policy from `render-policy.sh`:
 
 | Check | Result |
 | --- | --- |
@@ -146,18 +146,18 @@ release assets exist. Suggested shape, in `.github/workflows/release.yml`, a fin
 1. Build `tools/worker/openshell` with `COMEBYE_VERSION=${GITHUB_REF_NAME}`, `docker buildx`
    (linux/amd64 first; arm64 works since the Dockerfile selects by `uname -m`).
 2. Run the same secret scan as `build.sh` (reuse the script: `build.sh` is the single source).
-3. Push `registry.jaggars.cc/comebye-sandbox:${GITHUB_REF_NAME}`; record the digest in the
+3. Push `registry.example.com/comebye-sandbox:${GITHUB_REF_NAME}`; record the digest in the
    release notes. Do not push `latest`: the hub and workers must match exactly.
 
 Where to push — decision for the maintainer:
 
-- **registry.jaggars.cc** (what the cluster pulls from today) needs a CI credential for a
+- **registry.example.com** (what the cluster pulls from today) needs a CI credential for a
   registry that is not on the public internet; a GitHub-hosted runner may not reach it. A
   self-hosted runner on the tailnet solves that and keeps the image off a third party.
 - **ghcr.io/jhjaggars/comebye-sandbox** is reachable from hosted runners with `GITHUB_TOKEN`,
   but the cluster would then pull from ghcr (add an image pull rule or mirror it with
-  `skopeo copy` into `registry.jaggars.cc` as the last step).
-- Interim (works today): run `tools/worker/openshell/build.sh vX.Y.Z --push` on laharl as
+  `skopeo copy` into `registry.example.com` as the last step).
+- Interim (works today): run `tools/worker/openshell/build.sh vX.Y.Z --push` on the desktop host (with `SBX_REGISTRY` set) as
   part of the release checklist, right after the GitHub release is published.
 
 Also to decide: the Tailscale/herdr/node/pi/claude versions are pinned by build args or the

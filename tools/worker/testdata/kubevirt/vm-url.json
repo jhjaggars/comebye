@@ -108,7 +108,7 @@
           }
         ],
         "nodeSelector": {
-          "kubernetes.io/hostname": "zetta.x.cc"
+          "kubernetes.io/hostname": "node-b.x.cc"
         },
         "terminationGracePeriodSeconds": 120,
         "volumes": [

@@ -106,7 +106,7 @@ func writeArchiveEnv(t *testing.T, c *Config, url string) {
 	if err := os.WriteFile(creds, []byte("key_id=k\nsecret_key=s\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	body := fmt.Sprintf("# the timer's settings\nCOMEBYE_ARCHIVE_S3=%s/bucket\nCOMEBYE_ARCHIVE_S3_CREDENTIALS=%q\nCOMEBYE_ARCHIVE_S3_PLAINTEXT=homelab\nCOMEBYE_ARCHIVE_ENCRYPTION=none\nCOMEBYE_HOST_NAME=laharl\n", url, creds)
+	body := fmt.Sprintf("# the timer's settings\nCOMEBYE_ARCHIVE_S3=%s/bucket\nCOMEBYE_ARCHIVE_S3_CREDENTIALS=%q\nCOMEBYE_ARCHIVE_S3_PLAINTEXT=homelab\nCOMEBYE_ARCHIVE_ENCRYPTION=none\nCOMEBYE_HOST_NAME=desk-a\n", url, creds)
 	if err := os.WriteFile(c.ArchiveEnv, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestExtractSessionsKeepsMtimeAndIsPrivate(t *testing.T) {
 
 func TestLoadArchiveEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
-	os.WriteFile(p, []byte("# comment\nCOMEBYE_ARCHIVE_S3=\"https://x/b\"\n COMEBYE_ARCHIVE_ENCRYPTION = none\nCOMEBYE_HOST_NAME=laharl\nOTHER=1\nnot a line\n"), 0o600)
+	os.WriteFile(p, []byte("# comment\nCOMEBYE_ARCHIVE_S3=\"https://x/b\"\n COMEBYE_ARCHIVE_ENCRYPTION = none\nCOMEBYE_HOST_NAME=desk-a\nOTHER=1\nnot a line\n"), 0o600)
 	c, err := loadArchiveEnv(p)
 	if err != nil || c.S3 != "https://x/b" || c.Encryption != "none" {
 		t.Fatalf("%v %+v", err, c)
@@ -401,7 +401,7 @@ func TestDestroySavesSessionsFirst(t *testing.T) {
 	if cl.Kind != "worker" || cl.Worker != "w1" || cl.Provider != "aws" || inst.ID != "i-1" {
 		t.Errorf("claim: %s", raw)
 	}
-	if len(a.s3.keys("v1/laharl/")) != 0 || len(a.s3.keys("hosts/laharl")) != 0 {
+	if len(a.s3.keys("v1/desk-a/")) != 0 || len(a.s3.keys("hosts/desk-a")) != 0 {
 		t.Error("wrote under the timer's own host name")
 	}
 	if ents, _ := os.ReadDir(filepath.Join(e.Cfg.StateDir, "pull")); len(ents) != 0 {

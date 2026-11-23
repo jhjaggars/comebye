@@ -22,6 +22,8 @@ data:
     # CHANGE-ME: the rest of your cluster's settings (docs/workers.md)
     # kube_storage_class=longhorn
     # vm_image_dv=debian-13-golden
-    # kube_node_prefer=rozalin,zetta
+    # kube_node_prefer=node-a,node-b    # no default: without it, any schedulable node but kube_node_avoid
+    # kube_node_avoid=node-c
+    # kube_node_floor=node-b=8
     # The OAuth client's mount (the Secret comebye-provisioner-tailscale-oauth).
     ts_oauth_file=/etc/comebye-provisioner/oauth/tailscale-oauth
