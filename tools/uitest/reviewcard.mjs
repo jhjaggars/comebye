@@ -219,7 +219,7 @@ for (const width of [1280, 390]) {
         // A redraw between the press and the release (the Page's sent comments arriving) must not lose the tap: it used
         // to put a new Comment button under the release, and no click fired.
         await page.locator("#pgs-addc").waitFor();
-        const cb = await page.locator("#pgs-addc").boundingBox(), x = cb.x + cb.width / 2, y = cb.y + cb.height / 2;
+        const cb = await page.locator("#pgs-addc").boundingBox(), cx = cb.x + cb.width / 2, cy = cb.y + cb.height / 2;
         // The strip lies over the Page's frame, which runs in its own process (the pages origin). The browser sends a press
         // to a process by where the last drawn frame put things, so a press sent before a frame with the new strip is drawn
         // goes to the Page, and Comment never sees it (#pgs-note never appears, composing false). Press only once the
@@ -227,7 +227,7 @@ for (const width of [1280, 390]) {
         // poll a real move.
         let nudge = 0;
         await until(async () => {
-          await page.mouse.move(x + (nudge ^= 1), y);
+          await page.mouse.move(cx + (nudge ^= 1), cy);
           return page.locator("#pgs-addc").evaluate((e) => e.matches(":hover"));
         }, "the pointer over Comment to reach it, not the Page's frame under it");
         await page.mouse.down();
