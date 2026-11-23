@@ -179,6 +179,7 @@ try {
   if (browser) await browser.close().catch(() => {});
   for (const p of procs) p.kill();
   fs.writeFileSync(path.join(out, "multiconfig-console.log"), log.join("\n"));
+  try { fs.rmSync(work, { recursive: true, force: true, maxRetries: 5 }); } catch {} // the servers may still be exiting
 }
 let failed = 0;
 for (const [name, ok, why] of results) { console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ": " + why}`); if (!ok) failed++; }
