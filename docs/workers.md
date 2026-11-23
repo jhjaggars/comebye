@@ -431,7 +431,8 @@ right after the packages in step 3:
 - **Go** at `go.mod`'s toolchain version, in `/usr/local/go`;
 - **Node** at CI's major version, in `/usr/local/lib/node-vX-linux-x64`;
 - **Chrome for Testing** (a fixed build at a fixed URL, unlike the stable channel's deb), in
-  `/opt/chrome-for-testing/VERSION`, as `google-chrome` on `PATH`;
+  `/opt/chrome-for-testing/VERSION`, as `google-chrome` in `/usr/local/bin` and `/usr/bin`
+  (where CI's is; the link in `/usr/bin` is made only if nothing else is there);
 - Chrome's libraries (its `deb.deps`, with Debian 13's `t64` names where they apply), fonts
   (Liberation, DejaVu, Noto Color Emoji), `python3`, `gnupg` and `sqlite3`, which the tests call.
 

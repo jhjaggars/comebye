@@ -77,6 +77,11 @@ if [ ! -x "$chrome_dir/chrome-linux64/chrome" ]; then
   mv "$tmp/chrome/chrome-linux64" "$chrome_dir/chrome-linux64"
 fi
 ln -sfn "$chrome_dir/chrome-linux64/chrome" /usr/local/bin/google-chrome
+# /usr/bin too, where CI's Chrome is: tools/uitest/lib.mjs defaults to it, and the pages
+# checks run `comebye publish` with PATH=/usr/bin:/bin. Never over a packaged Chrome.
+if [ ! -e /usr/bin/google-chrome ] || [ "$(readlink /usr/bin/google-chrome)" = /usr/local/bin/google-chrome ]; then
+  ln -sfn /usr/local/bin/google-chrome /usr/bin/google-chrome
+fi
 for d in /opt/chrome-for-testing/*; do [ "$d" = "$chrome_dir" ] || rm -rf "$d"; done
 
 # ---- what was installed, for `worker testcheck` and a person reading the VM

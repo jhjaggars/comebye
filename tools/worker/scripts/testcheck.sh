@@ -20,6 +20,7 @@ want go "$(go env GOVERSION 2>/dev/null || true)" "go$WK_GO_VERSION"
 want node "$(node --version 2>/dev/null || true)" "v$WK_NODE_VERSION"
 want npm "$(npm --version >/dev/null 2>&1 && echo present || echo missing)" present
 want google-chrome "$(google-chrome --version 2>/dev/null | awk '{print $NF}' || true)" "$WK_CHROME_VERSION"
+want /usr/bin/google-chrome "$(/usr/bin/google-chrome --version 2>/dev/null | awk '{print $NF}' || true)" "$WK_CHROME_VERSION"
 want python3 "$(python3 -c 'print("present")' 2>/dev/null || echo missing)" present
 want sqlite3 "$(sqlite3 -version >/dev/null 2>&1 && echo present || echo missing)" present
 want gpg "$(gpg --version >/dev/null 2>&1 && echo present || echo missing)" present

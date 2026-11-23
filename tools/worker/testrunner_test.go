@@ -56,7 +56,7 @@ func TestTestRunnerScriptCarriesEveryPin(t *testing.T) {
 		"https://go.dev/dl/go$WK_GO_VERSION.linux-amd64.tar.gz",
 		"https://nodejs.org/dist/v$WK_NODE_VERSION/node-v$WK_NODE_VERSION-linux-x64.tar.xz",
 		"https://storage.googleapis.com/chrome-for-testing-public/$WK_CHROME_VERSION/linux64/chrome-linux64.zip",
-		"sha256sum -c", "/usr/local/bin/google-chrome", "/usr/local/bin/go", "/usr/local/bin/npm",
+		"sha256sum -c", "/usr/local/bin/google-chrome", "ln -sfn /usr/local/bin/google-chrome /usr/bin/google-chrome", "/usr/local/bin/go", "/usr/local/bin/npm",
 		"python3", "gnupg", "sqlite3", "fonts-liberation", "libnss3", "libasound2",
 	} {
 		if !strings.Contains(s, want) {
