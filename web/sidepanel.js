@@ -1,9 +1,12 @@
 /* Side panels beside an agent's chat: a Doc panel (the document the agent
- * declared with `comebye show`, or a file the user picks) and a Diff panel
- * (what the agent's checkout changed). Both are read through the hub from the
- * agent's own host (GET <agent>/file and <agent>/diff); this file only draws
- * them. Desktop: a split beside the chat (drag the divider; D toggles it);
- * phone: a bottom sheet with Doc and Diff tabs.
+ * declared with `comebye show`, or a file the user picks), a Diff panel
+ * (what the agent's checkout changed) and a Status panel (the hub's Status
+ * page, the same one #/status shows full screen). Doc and Diff are read through
+ * the hub from the agent's own host (GET <agent>/file and <agent>/diff); this
+ * file only draws them. Status is drawn by app.js's renderStatus into #sp-st,
+ * so it stays live on the hub's events like the full-screen page.
+ * Desktop: a split beside the chat (drag the divider; D toggles it);
+ * phone: a bottom sheet with Doc, Diff and Status tabs.
  *
  * Uses app.js's globals: $, esc, escAttr, api, agentById, agentPath, state,
  * toast, renderMarkdown. Everything from the host is untrusted text: it goes
@@ -19,6 +22,7 @@
   // The Doc panel renders Markdown up to the host's own 1 MB cap (chat bubbles stop at MD_MAX_CHARS).
   const DOC_MD_MAX = 1100000;
   const reduced = () => matchMedia("(prefers-reduced-motion:reduce)").matches;
+  const TABS = ["doc", "diff", "status"];
 
   const st = {
     id: null,          // the selected agent's id
@@ -68,7 +72,7 @@
     if (!det || $("sp")) return;
     const btn = document.createElement("button");
     btn.id = "sp-btn"; btn.type = "button"; btn.className = "more"; btn.setAttribute("aria-pressed", "false");
-    btn.setAttribute("aria-label", "Side panel: document and diff"); btn.title = "Document and diff (D)";
+    btn.setAttribute("aria-label", "Side panel: document, diff and status"); btn.title = "Document, diff and status (D)";
     btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M14 4v16" stroke="currentColor" stroke-width="2"/></svg>';
     $("d-refresh").before(btn);
     const sp = document.createElement("aside");
@@ -77,6 +81,7 @@
       <div class="sp-tabs" role="tablist" aria-label="Side panel">
         <button type="button" class="sp-tab" role="tab" id="sp-tab-doc" data-tab="doc">Doc</button>
         <button type="button" class="sp-tab" role="tab" id="sp-tab-diff" data-tab="diff">Diff<span class="sp-badge" id="sp-n" hidden></span></button>
+        <button type="button" class="sp-tab" role="tab" id="sp-tab-status" data-tab="status">Status</button>
         <button type="button" class="sp-x" aria-label="Close the panel">&times;</button>
       </div>
       <div class="sp-bar" id="sp-bar"></div>
@@ -88,12 +93,15 @@
     sp.querySelector(".sp-tabs").addEventListener("keydown", (e) => {
       if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
       e.preventDefault();
-      setTab(st.tab === "doc" ? "diff" : "doc");
+      setTab(TABS[(TABS.indexOf(st.tab) + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length]);
       $("sp-tab-" + st.tab).focus();
     });
     sp.addEventListener("keydown", (e) => { if (e.key === "Escape" && st.open) { e.stopPropagation(); toggle(false); $("sp-btn").focus(); } });
     bindBar($("sp-bar"));
     bindBody($("sp-body"));
+    // Status in the panel answers clicks as the Status page does (app.js's handlers), only inside #sp-st.
+    $("sp-body").addEventListener("click", (e) => { if (e.target.closest && e.target.closest("#sp-st") && window.onStatusClick) window.onStatusClick(e); });
+    $("sp-body").addEventListener("toggle", (e) => { if (e.target.closest && e.target.closest("#sp-st") && window.onStatusToggle) window.onStatusToggle(e); }, true);
     bindGrip($("sp-grip"), det);
     if (typeof ResizeObserver !== "undefined") { // two columns only when the body is wide enough
       new ResizeObserver(() => {
@@ -144,6 +152,13 @@
     sync();
     if (st.open) tick(true); else stop();
   }
+  // show: open the panel on one tab (the command palette's "Status beside the chat").
+  function show(t) {
+    if (!st.id || !TABS.includes(t)) return;
+    st.tab = t;
+    remember({ tab: t });
+    toggle(true);
+  }
   function setTab(t) {
     if (t === st.tab) return;
     st.tab = t;
@@ -170,13 +185,17 @@
   function onAgent(id) {
     if (id === st.id) return;
     stop();
+    // Status is not about one agent: open beside one agent's chat, it stays open on the next agent's (an "open" link in it,
+    // j and k), and that agent remembers it. Doc and Diff are each agent's own and follow that agent's memory.
+    const carry = !!id && !!st.id && st.open && st.tab === "status";
     st.id = id;
     Object.assign(st, { pick: null, doc: null, pin: null, pinSeen: "", list: null, docErr: "", diff: null, diffErr: "", closed: new Set(), opened: new Set(), known: new Set(), loaded: new Map(), loading: new Set(), loadErr: new Map() });
     const det = $("detail");
     if (!id) { st.open = false; det.classList.remove("sp-open"); $("sp-btn").hidden = true; return; }
-    const m = recall();
+    const m = carry ? { ...recall(), open: true, tab: "status" } : recall();
+    if (carry) remember({ open: true, tab: "status" });
     st.open = !!m.open;
-    st.tab = m.tab === "diff" ? "diff" : "doc";
+    st.tab = TABS.includes(m.tab) ? m.tab : "doc";
     st.split = !!m.split;
     det.style.setProperty("--sp-w", (m.w || 44) + "%");
     $("sp-grip").setAttribute("aria-valuenow", String(Math.round(m.w || 44)));
@@ -213,6 +232,7 @@
   async function tick(now) {
     syncStream();
     if (!st.open || !st.id || document.hidden) return;
+    if (st.tab === "status") return; // drawn from the app's own state (renderStatus), which the hub's events keep current
     // With the push stream up, a poll is only a safety net.
     if (!now && st.live && Date.now() - st.fetchedAt < SAFETY_MS) return;
     // A load is in flight. A poll just waits for the next one, but a click (a
@@ -351,7 +371,10 @@
     n.textContent = String(files);
     n.hidden = !st.diff || !files;
     let html;
-    if (st.tab === "doc") {
+    if (st.tab === "status") {
+      // Full screen is the desktop's Status page; on a phone the sheet is nearly that already.
+      html = `<span class="sp-tot muted">The hub's Status, live</span>` + (isDesktop() ? `<button type="button" id="sp-full" title="Open the Status page in the main pane (g s)">Full screen</button>` : "");
+    } else if (st.tab === "doc") {
       const opts = docOptions();
       const heads = headingEls().filter((h) => /^H[1-4]$/.test(h.tagName));
       html = `<select id="sp-file" aria-label="Document">${opts}</select>
@@ -418,6 +441,7 @@
       }
     });
     bar.addEventListener("click", (e) => {
+      if (e.target.closest("#sp-full")) { if (window.openPage) window.openPage("status"); return; }
       if (e.target.id === "sp-split") {
         st.split = !st.split;
         remember({ split: st.split });
@@ -452,6 +476,12 @@
     const body = $("sp-body");
     if (!body || !st.open) return;
     const top = body.scrollTop;
+    if (st.tab === "status") {
+      if (!$("sp-st")) body.innerHTML = '<div id="sp-st" class="sp-st"></div>';
+      if (window.renderStatus) window.renderStatus();
+      renderBar();
+      return;
+    }
     body.innerHTML = st.tab === "doc" ? docHtml() : diffHtml();
     if (st.tab === "doc") afterDoc(opts);
     else if (opts.keepScroll) body.scrollTop = top;
@@ -769,6 +799,6 @@
     if (matchMedia("(max-width:1099px)").matches) toggle(false); // the sheet covers the prompt
   }
 
-  window.SP = { toggle, onAgent, isOpen: () => st.open };
+  window.SP = { toggle, show, onAgent, isOpen: () => st.open, statusShown: () => st.open && !!st.id && st.tab === "status" && !!$("sp-st") };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", inject); else inject();
 })();

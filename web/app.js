@@ -289,7 +289,7 @@ async function loadIdx() {
   if (idx.inflight || Date.now() - idx.at < 30000) return;
   idx.inflight = true;
   try { idx.st = await api("/api/recall/status"); } catch { idx.st = null; } finally { idx.inflight = false; idx.at = Date.now(); }
-  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body"), $("sp-st")]) if (el) el._html = "";
   renderStatus();
 }
 
@@ -8147,7 +8147,7 @@ function boardMarkSeen() {
   if (!board.data) return;
   board.seen = boardSnapshot(board.data);
   lsSet(BOARD_SEEN_KEY, JSON.stringify(board.seen));
-  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body"), $("sp-st")]) if (el) el._html = "";
   renderStatus();
 }
 
@@ -8360,18 +8360,20 @@ function fillHubChecks(root) {
   }
 }
 
-// renderStatus fills the desktop page and, on the phone, the Status screen.
+// renderStatus fills the desktop page, on the phone the Status screen, and the Status tab of the side panel beside an
+// agent's chat (sidepanel.js, #sp-st: the desktop's links in the desktop's split, the phone screen's in the phone's sheet).
 function renderStatus() {
-  for (const [el, desktop] of [[$("ps-body"), true], [$("ss-body"), false]]) {
+  const side = window.SP && window.SP.statusShown() ? $("sp-st") : null;
+  for (const [el, desktop] of [[$("ps-body"), true], [$("ss-body"), false], [side, isDesktop()]]) {
     if (!el) continue;
-    if (desktop && state.view !== "status") continue; // only the page on screen
-    if (!desktop && !sts.open) continue;
+    if (el === side) { /* shown whenever the panel is */ } else if (desktop && state.view !== "status") continue; // only the page on screen
+    else if (!desktop && !sts.open) continue;
     if (Date.now() - board.at > 20000) loadBoard();
     loadIdx();
     const html = statusHTML(desktop);
     if (el._html === html) continue;
     el._html = html;
-    const sc = el.closest(".page-body, .ss-body");
+    const sc = el.closest(".page-body, .ss-body, .sp-body");
     const y = sc ? sc.scrollTop : 0;
     const key = el.contains(document.activeElement) ? document.activeElement.dataset.bk : "";
     el.innerHTML = html;
@@ -8388,7 +8390,7 @@ function onStatusClick(ev) {
   else if (bm) {
     board.mode = bm.dataset.bdMode === "project" ? "project" : "status";
     lsSet(BOARD_MODE_KEY, board.mode);
-    for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
+    for (const el of [$("ps-body"), $("ss-body"), $("sp-st")]) if (el) el._html = "";
     renderStatus();
   } else if (ev.target.closest("[data-bd-seen]")) boardMarkSeen();
   else if (bt) boardGoTodo(bt.dataset.bdTodo);
@@ -8402,14 +8404,14 @@ function onStatusToggle(ev) {
   if (d.matches && d.matches("details.bd-lane")) {
     if (d.open === board.open.has(d.dataset.lane)) return;
     if (d.open) board.open.add(d.dataset.lane); else board.open.delete(d.dataset.lane);
-    for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
+    for (const el of [$("ps-body"), $("ss-body"), $("sp-st")]) if (el) el._html = "";
     renderStatus();
     return;
   }
   if (!d.matches || !d.matches("details.st-row")) return;
   if (d.open === statusUi.open.has(d.dataset.id)) return; // a re-rendered <details open> fires toggle too: not a change
   if (d.open) statusUi.open.add(d.dataset.id); else statusUi.open.delete(d.dataset.id);
-  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body"), $("sp-st")]) if (el) el._html = "";
   renderStatus();
 }
 
@@ -10896,7 +10898,7 @@ async function loadUsageChips() {
   }
   renderList();
   if (state.selected) renderDetail();
-  for (const el of [$("ps-body"), $("ss-body")]) if (el) el._html = "";
+  for (const el of [$("ps-body"), $("ss-body"), $("sp-st")]) if (el) el._html = "";
   renderStatus();
 }
 
