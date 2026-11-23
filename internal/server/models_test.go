@@ -81,10 +81,14 @@ func TestPiConfigModelsAndDefaults(t *testing.T) {
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, "models.json"), []byte(`{"providers":{"homelab":{"models":[{"id":"fast"},{"id":"thinking","reasoning":true}]}}}`), 0o600)
 	os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"defaultProvider":"homelab","defaultModel":"thinking","defaultThinkingLevel":"minimal"}`), 0o600)
-	t.Setenv("PATH", t.TempDir()) // no pi: the config file is the fallback
+	// No pi: the config file is the fallback. HOME too, or lookExec finds
+	// a real pi in ~/.local/bin and runs it.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", home)
 	c := discoverPi(context.Background(), home)
 	if c.Exact || c.Source != "~/.pi/agent/models.json" || len(c.Models) != 2 || c.Models[1].ID != "homelab/thinking" || !c.Models[1].Thinking ||
-		c.Default != "homelab/thinking" || c.DefaultThinking != "minimal" || len(c.Thinking) != len(thinkingLevels) {
+		c.Default != "homelab/thinking" || c.DefaultThinking != "minimal" || len(c.Thinking) != len(thinkingLevels) ||
+		!strings.Contains(c.Error, "pi is not installed") {
 		t.Fatalf("catalog = %+v", c)
 	}
 }
