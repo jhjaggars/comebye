@@ -40,10 +40,11 @@ window.__s = [];
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8Dwn4EIwESMolGFxCsEABhYAhHYAxhTAAAAAElFTkSuQmCC", "base64");
 function heavyHTML() {
   let h = cli(["pages", "new", "--title", "Heavy theme probe"]);
-  // ~3 MB of distinct inline images after the text: the load event waits for them, the first paint does not.
+  // ~1.6 MB of distinct inline images after the text: the load event waits for them (about 4 s at the 350 KB/s the
+  // check emulates, well after the first paint and the mid-load screenshot 1.2 s in), the first paint does not.
   const blob = Buffer.concat([PNG, Buffer.alloc(300 * 1024, 7)]).toString("base64");
   let imgs = "";
-  for (let i = 0; i < 8; i++) imgs += `<img alt="" width="8" height="8" src="data:image/png;base64,${blob}${i}">\n`;
+  for (let i = 0; i < 4; i++) imgs += `<img alt="" width="8" height="8" src="data:image/png;base64,${blob}${i}">\n`;
   h = h.replace("<head>", "<head>\n" + RECORDER);
   return h.replace("</main>", imgs + "</main>");
 }
@@ -74,11 +75,12 @@ for (const width of [390, 1280]) {
     await check(`pagetheme: a heavy Page paints in the app's mode from its first frame, never the device's (${tag})`, async () => {
       const { browser, ctx, page } = await launch({ width, height: width > 500 ? 800 : 844, dark: device === "dark", bypassCSP: false });
       try {
+        await page.goto(base + "/", { waitUntil: "load" });
+        await page.evaluate((t) => ComebyeThemes.set(t), THEMES[app]);
+        // Only the Page is slowed (the app is already loaded, and the hash change below does not reload it).
         const cdp = await ctx.newCDPSession(page);
         await cdp.send("Network.enable");
         await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 150, downloadThroughput: 350 * 1024, uploadThroughput: 350 * 1024 });
-        await page.goto(base + "/", { waitUntil: "load" });
-        await page.evaluate((t) => ComebyeThemes.set(t), THEMES[app]);
         await page.goto(base + "/#/pages/" + heavyId, { waitUntil: "commit" });
         let fr;
         for (let i = 0; i < 200 && !fr; i++) { fr = frameOf(page, heavyId); if (!fr) await page.waitForTimeout(50); }
