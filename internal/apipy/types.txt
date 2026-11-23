@@ -850,7 +850,7 @@ TodoSet  (server.TodoSet)  The set on a Todo.
 
 TranscriptBackgroundTask  (transcript.BackgroundTask)  A task a session started in the background and has not seen end.
   id str
-  tool str   Bash, Agent or Monitor
+  tool str   Bash, Agent, Monitor or Wakeup
   desc str
   since str
   cmd bool   Desc is the command line (the call had no description), which can hold secrets; show only a short label made from it.
