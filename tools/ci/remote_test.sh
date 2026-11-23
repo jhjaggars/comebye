@@ -72,7 +72,7 @@ for off in os.environ["PORT_OFFSETS"].split():
     try:
         s.bind(("127.0.0.1", p)); s.listen(1)
     except OSError:
-        open(out, "w").write("clash %d\n" % p); sys.exit(98)
+        open(out, "w").write("clash %d\n" % p); print("holdports: port %d is taken" % p, file=sys.stderr); sys.exit(98)
     socks.append(s)
 open(out, "w").write("bound %d ports %d-%d\n" % (len(socks), base, base + max(int(o) for o in os.environ["PORT_OFFSETS"].split())))
 for _ in range(300):
@@ -373,11 +373,12 @@ starts() { grep -c '^start' "$root/starts.log"; }
 : >"$root/worker.log"
 check "--probe, no test-slots file: one slot, free" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=1 free=1 toolchain=ok" ]
 check "...without asking the provisioner" [ ! -s "$root/worker.log" ]
-echo 2 >"$vm/etc/test-slots"
+echo 2 >"$vm/.cache/comebye-remote/test-slots"
 check "--probe, test-slots 2: two slots, both free" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=2 free=2 toolchain=ok" ]
-echo junk >"$vm/etc/test-slots"
+check "--probe, REMOTE_ROOT elsewhere: the slots file where the provisioner writes it" [ "$(REMOTE_ROOT="$vm/data" "$r" --probe kv1 2>/dev/null)" = "slots=2 free=2 toolchain=ok" ]
+echo junk >"$vm/.cache/comebye-remote/test-slots"
 check "--probe, test-slots not a number: one slot" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=1 free=1 toolchain=ok" ]
-echo 2 >"$vm/etc/test-slots"; pins 9.9.9 4.5.6 7.8.9.10
+echo 2 >"$vm/.cache/comebye-remote/test-slots"; pins 9.9.9 4.5.6 7.8.9.10
 check "--probe, wrong pins: toolchain=bad" [ "$("$r" --probe kv1 2>/dev/null)" = "slots=2 free=2 toolchain=bad" ]
 pins 1.2.3 4.5.6 7.8.9.10
 FAKE_SSH_DOWN=1 "$r" --probe kv1 >/dev/null 2>&1; rc=$?
@@ -391,7 +392,9 @@ flk=$(grep -o 'for p in [0-9 ]*; do' "$here/flakes.sh" | tr ' ' '\n' | grep -E '
 fits() { [ $((3 * 1000 + maxoff)) -lt 5000 ] && [ $((3 * 1000 + ${flk:-9999})) -lt 5000 ] &&
   grep -qF 'PORT=$(( base_port + (i - 1) * 1000 ))' "$here/browser.sh" && grep -qF 'port=$((base + 1000 * free))' "$here/flakes.sh"; }
 check "a slot's 5000 ports hold run.sh (+$maxoff), 4 PARALLEL parts and 4 flakes jobs (+$flk)" fits
-export COMEBYE_SLOT_PORT_BASE=$((40000 + RANDOM % 40 * 100)) # the VM's slots from here, clear of a real run.sh's 18741
+# The VM's slots from here: 27000-27900 (+5401 for the second slot), clear of a real run.sh or flakes run on this
+# machine (18741..about 24500) and mostly below the kernel's ephemeral ports (32768 up), which outgoing connections take.
+export COMEBYE_SLOT_PORT_BASE=$((27000 + RANDOM % 10 * 100))
 if command -v python3 >/dev/null; then touch "$root/bind"; else echo "skip: no python3, so the browser stand-ins hold no ports"; fi
 
 # two runs on a 2-slot VM run together, each in its own slot with its own share; a third waits for either
@@ -410,7 +413,8 @@ check "...REPEAT_PORT (flakes) from the same range" [ "$(sed -n 's/^repeat_port=
 if [ -e "$root/bind" ]; then
   check "two browser suites on one VM don't clash on ports: both hold all of run.sh's" \
     bash -c "wf() { local i; for i in \$(seq 100); do eval \"\$1\" && return 0; sleep 0.1; done; return 1; }
-      wf 'grep -q ^bound \"$va/bound.txt\" 2>/dev/null && grep -q ^bound \"$vb/bound.txt\" 2>/dev/null'"
+      wf 'grep -q ^bound \"$va/bound.txt\" 2>/dev/null && grep -q ^bound \"$vb/bound.txt\" 2>/dev/null'" ||
+    grep -h '^holdports:' "$root/a.log" "$root/b.log" # which port was taken, and by whom it may be: ss -ltnp
   check "...and a clash would show (the first suite's port is taken)" \
     python3 -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1', ${pa:-1})) == 0 else 1)"
 fi
@@ -471,6 +475,6 @@ if git -C "$here" cat-file -e cca272b:tools/ci/remote.sh 2>/dev/null; then
 else
   echo "skip: no cca272b in this checkout's history, so no run of the real old client"
 fi
-rm -f wait.txt "$root/bind" "$root/release" "$vm/etc/test-slots"; unset COMEBYE_SLOT_PORT_BASE
+rm -f wait.txt "$root/bind" "$root/release" "$vm/.cache/comebye-remote/test-slots"; unset COMEBYE_SLOT_PORT_BASE
 for w in caller2 caller3; do git -C "$caller" worktree remove --force "$root/$w"; done
 exit $fail

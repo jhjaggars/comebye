@@ -33,10 +33,11 @@
 # this script lives in, whatever the current directory. The heavy wrappers call this by themselves when a test VM
 # is configured (tools/ci/prefer-vm.sh).
 #
-# Slots: a VM runs up to N suites at once, N from its test-slots file (beside its test-runner file, so
-# /etc/comebye-worker/test-slots; `worker toolchain` writes it), 1 when there is none. A run takes a free slot there
-# (REMOTE_ROOT/slot-I.lock, I from 0, who holds it in slot-I.who) before its suite starts. When every slot is taken,
-# this one says whose runs hold them and since when, and waits for any slot, under its idle hold; Ctrl-C gives up.
+# Slots: a VM runs up to N suites at once, N from its test-slots file (REMOTE_ROOT/test-slots, else
+# ~/.cache/comebye-remote/test-slots, where `worker create` and `worker toolchain` write it), 1 when there is none.
+# A run takes a free slot there (REMOTE_ROOT/slot-I.lock, I from 0, who holds it in slot-I.who) before its suite
+# starts. When every slot is taken, this one says whose runs hold them and since when, and waits for any slot, under
+# its idle hold; Ctrl-C gives up.
 # A killed run's slot goes with its processes. With N > 1 each slot gets its share of the VM, so suites side by side
 # cannot clash: GOTEST_P = vCPUs / N, JOBS the same but at most 4, CAP_MEM = 85% of RAM / N (a lower value sent from
 # here is kept), PARALLEL at most 4, and PORT = REPEAT_PORT = 18741 + I * 5000: every port a browser or flakes run
@@ -69,7 +70,7 @@ q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # test-slots file (1 when absent or not a number; at most 8, so the port ranges stay below 65536). old_holds: a
 # client from before slots holds run.lock (exclusively). nfree N: the free slots, 0 while an old client holds the VM.
 # holders N: who holds the VM, as "WHO since TIME", several joined with "; ".
-slot_fns='slots_file="${COMEBYE_TEST_SLOTS_FILE:-$(dirname "${COMEBYE_TEST_RUNNER_FILE:-/etc/comebye-worker/test-runner}")/test-slots}"
+slot_fns='slots_file="$root/test-slots"; [ -e "$slots_file" ] || slots_file="$HOME/.cache/comebye-remote/test-slots"
 nslots() { local n=""; [ -r "$slots_file" ] && read -r n <"$slots_file"; n="${n//[[:space:]]/}"; [[ "$n" =~ ^[1-9][0-9]*$ ]] || n=1; [ "$n" -le 8 ] || n=8; echo "$n"; }
 old_holds() { [ -e "$root/run.lock" ] && ! flock -s -n "$root/run.lock" true 2>/dev/null; }
 slot_busy() { [ -e "$root/slot-$1.lock" ] && ! flock -n "$root/slot-$1.lock" true 2>/dev/null; }
