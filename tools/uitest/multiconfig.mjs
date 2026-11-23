@@ -50,7 +50,10 @@ case "$4" in
   status) printf '{"v":1,"provider":"kubevirt","workers":[{"name":"kv1","state":"%s","type":"4 vCPU, 32Gi","managed":true,"created_at":"${stoppedAt}","launched_at":null,"last_stop_at":null,"caps":{}}]}\\n' "$(cat $d/state-kv1)" ;;
   start)
     echo "starting $5" >&2; sleep 2
-    echo "waiting for comebye on $5 to be active" >&2; sleep 2
+    echo "waiting for comebye on $5 to be active" >&2
+    # Held until the page has shown this step (the test writes go-NAME), at most 60 s: a fixed 2 s here was the hub's
+    # own 2 s poll of the job, so the hub could step from "starting" straight to done and the page never show it.
+    i=0; while [ ! -e $d/go-$5 ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
     echo RUNNING > $d/state-$5; touch $d/started-$5
     echo "$5 is up, comebye v-test" ;;
 esac
@@ -100,6 +103,9 @@ try {
     page.on("pageerror", (e) => log.push(`pageerror: ${e.message}`));
     const shot = (n) => page.screenshot({ path: `${out}/multiconfig-${tag}-${n}.png` }).catch(() => {});
     const card = `.pr-card[data-name="${host}"]`, line = `.wk-line[data-wk-for="${host}"]`;
+    // The height of the Start button, read in the page in one go: the Peers screen redraws its cards on every poll, and a
+    // Playwright boundingBox() of a button replaced in between came back null.
+    const startHeight = (sel) => page.waitForFunction((s) => { const r = document.querySelector(s)?.getBoundingClientRect(); return r && r.height > 0 ? r.height : null; }, sel, { timeout: 5000 }).then((h) => h.jsonValue()).catch(() => null);
     const noHScroll = async () => {
       const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
       if (w[0] > w[1]) throw new Error("horizontal overflow " + w.join("/"));
@@ -110,8 +116,8 @@ try {
       await page.waitForSelector(`${line} [data-wk-start="${host}"]`, { timeout: 30000 }).catch(async (e) => { await shot("stopped-missing"); throw e; });
       const t = await page.locator(card).innerText();
       if (!/Stopped/.test(t) || !/idle off/.test(t) || !/kubevirt/.test(t)) throw new Error("card: " + t);
-      const box = await page.locator(`${line} [data-wk-start]`).boundingBox();
-      if (!box || box.height < 40) throw new Error("button " + JSON.stringify(box));
+      const h = await startHeight(`${line} [data-wk-start]`);
+      if (!h || h < 40) throw new Error("button height " + h);
       await shot("stopped");
       await noHScroll();
     });
@@ -132,8 +138,8 @@ try {
       const t = await page.locator("#pr-view").innerText();
       if (!/Status\s+Stopped/.test(t) || /Down|no response/.test(t)) throw new Error("detail: " + t);
       if (/not answering/.test(t)) throw new Error("settings note: " + t);
-      const box = await page.locator(`#pr-view [data-wk-start]`).boundingBox();
-      if (!box || box.height < 40) throw new Error("button " + JSON.stringify(box));
+      const h = await startHeight(`#pr-view [data-wk-start]`);
+      if (!h || h < 40) throw new Error("button height " + h);
       await shot("detail");
       await noHScroll();
     });
@@ -151,6 +157,7 @@ try {
       await noHScroll();
       await page.waitForFunction((sel) => /ssh config|waiting for comebye/.test(document.querySelector(sel)?.innerText || ""), `${line} .wk-prog`, { timeout: 15000 });
       await shot("progress");
+      fs.writeFileSync(path.join(wdir, "go-" + host), ""); // the stand-in finishes its start now
       await page.waitForFunction((n) => { const c = document.querySelector(`.pr-card[data-name="${n}"]`); return c && /Connected/.test(c.innerText) && !document.querySelector(`.wk-line[data-wk-for="${n}"]`); }, host, { timeout: 90000 });
       await shot("up");
       await noHScroll();

@@ -1540,8 +1540,12 @@ for (const width of [1280, 390]) {
       await page.waitForSelector("#detail", { state: "visible" });
       if (!/#\/agent\/w1(:|%3A)p1/.test(await page.evaluate(() => location.hash))) throw new Error("hash " + await page.evaluate(() => location.hash));
       // The gone one: a tooltip says so and the click lands on that handoff's transcript.
-      await page.goto(base + "/#/status", { waitUntil: "load" });
+      // Back to the list. On the phone #/status is the Status screen, which slides in over the list and its plan card
+      // (a click on the card then landed on the screen once it was open), so the phone goes to the list itself
+      // (a same-page hash change, as the open plan is not kept over a reload).
+      await page.goto(base + (width >= 1100 ? "/#/status" : "/#"), { waitUntil: "load" });
       await page.waitForSelector("#plans a.pm.gone", { state: "visible" });
+      if (width < 1100 && await page.evaluate(() => document.querySelector("#st-screen").classList.contains("open"))) throw new Error("the Status screen covers the list");
       const tip = await page.locator("#plans a.pm.gone").getAttribute("title");
       if (!/gone/.test(tip)) throw new Error("tooltip " + tip);
       await page.locator("#plans a.pm.gone").click();
@@ -1643,6 +1647,9 @@ for (const width of [1280, 390]) {
 }
 async function injectRepoDamage() {
   return page.evaluate(() => {
+    // The next fleet event replaces state.hosts and drops the damage injected here (the repair section then left the
+    // Status screen under its screenshot): hold setAgents, as freezeAgents does, until the check's finally.
+    if (!window.__setAgents) { window.__setAgents = window.setAgents; window.setAgents = () => {}; }
     const a = state.agents.find((x) => (x.worktree && x.worktree.checkout) || x.cwd);
     const dir = (a.worktree && a.worktree.checkout) || a.cwd;
     const local = state.hosts.find((h) => h.local) || state.hosts[0];
@@ -1683,7 +1690,10 @@ for (const width of [1280, 390]) {
         try { await page.locator(box + " .st-repair").screenshot({ path: `${out}/repo-damage-${width}.png`, timeout: 4000 }); break; }
         catch (e) { if (i >= 3) throw e; await idle(); }
       }
-    } finally { await unmockStatusData(); }
+    } finally {
+      await page.evaluate(() => { if (window.__setAgents) { window.setAgents = window.__setAgents; delete window.__setAgents; } }).catch(() => {});
+      await unmockStatusData();
+    }
   });
 }
 

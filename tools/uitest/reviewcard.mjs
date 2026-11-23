@@ -216,7 +216,14 @@ for (const width of [1280, 390]) {
         await page.waitForSelector(`#rs .td-item.open[data-id="${t.id}"] .ds-set`);
         let fr; for (let i = 0; i < 60 && !fr; i++) { fr = page.frames().find((x) => x.url().includes("/p/" + withPic + "/")); if (!fr) await page.waitForTimeout(100); }
         await fr.evaluate(() => parent.postMessage({ type: "comebye-selection", v: 1, quote: "Each card shows", before: "", after: " a picture" }, "*"));
-        await page.locator("#pgs-addc").click();
+        // A redraw between the press and the release (the Page's sent comments arriving) must not lose the tap: it used
+        // to put a new Comment button under the release, and no click fired.
+        await page.locator("#pgs-addc").waitFor();
+        const cb = await page.locator("#pgs-addc").boundingBox();
+        await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
+        await page.mouse.down();
+        await page.evaluate(() => pgcRender());
+        await page.mouse.up();
         await page.locator("#pgs-note").waitFor({ timeout: 5000 }).catch(async (e) => {
           await page.screenshot({ path: `${out}/split-set-FAIL-${width}-${dark ? "dark" : "light"}.png` }).catch(() => {});
           throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ rsHidden: !document.querySelector("#rs:not([hidden])"), hist: history.state, sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, key: pgc.id + "/" + pgc.ver, frames: document.querySelectorAll("iframe.pgs-frame").length }))));

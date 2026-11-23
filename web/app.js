@@ -7680,42 +7680,51 @@ function pgcEl(tag, cls, text) {
   return el;
 }
 
+// pgcDrawStrip fills the strip for the selection: the quote and Comment, or the note box while composing.
+function pgcDrawStrip(strip) {
+  const q = pgcEl("span", "pgs-selq", "“" + pgc.sel.quote + "”");
+  q.title = pgc.sel.quote;
+  if (!pgc.composing) {
+    const b = pgcEl("button", "btn primary", "Comment");
+    b.type = "button"; b.id = "pgs-addc";
+    b.addEventListener("click", () => { pgc.composing = true; pgcRender(); });
+    strip.append(q, b);
+  } else {
+    const ta = pgcEl("textarea");
+    ta.id = "pgs-note"; ta.maxLength = PGC.note; ta.rows = 3; ta.placeholder = "Your comment on this text";
+    ta.setAttribute("aria-label", "Your comment on the selected text");
+    const add = pgcEl("button", "btn primary", "Add"), cancel = pgcEl("button", "btn", "Cancel");
+    add.type = cancel.type = "button"; add.id = "pgs-noteadd"; cancel.id = "pgs-notecancel";
+    const done = () => {
+      const note = ta.value.trim();
+      if (!note || pgcItems().length >= PGC.max) return;
+      const list = pgcItems().slice();
+      list.push({ quote: pgc.sel.quote, before: pgc.sel.before, after: pgc.sel.after, note });
+      pgc.drafts.set(pgcKey(), list);
+      pgc.sel = null; pgc.composing = false; pgcRender();
+    };
+    add.addEventListener("click", done);
+    cancel.addEventListener("click", () => { pgc.composing = false; pgc.sel = null; pgcRender(); });
+    ta.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); done(); } });
+    const row = pgcEl("div", "pgs-selrow"); row.append(add, cancel);
+    strip.append(q, ta, row);
+    setTimeout(() => ta.focus(), 0);
+  }
+}
+
 function pgcRender() {
   const strip = $("pgs-sel"), tray = $("pgs-tray");
   if (!strip || !tray) return;
   const items = pgcItems();
-  // The strip: the selected text and what to do with it.
-  strip.replaceChildren();
-  strip.hidden = !pgc.sel;
-  if (pgc.sel) {
-    const q = pgcEl("span", "pgs-selq", "“" + pgc.sel.quote + "”");
-    q.title = pgc.sel.quote;
-    if (!pgc.composing) {
-      const b = pgcEl("button", "btn primary", "Comment");
-      b.type = "button"; b.id = "pgs-addc";
-      b.addEventListener("click", () => { pgc.composing = true; pgcRender(); });
-      strip.append(q, b);
-    } else {
-      const ta = pgcEl("textarea");
-      ta.id = "pgs-note"; ta.maxLength = PGC.note; ta.rows = 3; ta.placeholder = "Your comment on this text";
-      ta.setAttribute("aria-label", "Your comment on the selected text");
-      const add = pgcEl("button", "btn primary", "Add"), cancel = pgcEl("button", "btn", "Cancel");
-      add.type = cancel.type = "button"; add.id = "pgs-noteadd"; cancel.id = "pgs-notecancel";
-      const done = () => {
-        const note = ta.value.trim();
-        if (!note || items.length >= PGC.max) return;
-        const list = pgcItems().slice();
-        list.push({ quote: pgc.sel.quote, before: pgc.sel.before, after: pgc.sel.after, note });
-        pgc.drafts.set(pgcKey(), list);
-        pgc.sel = null; pgc.composing = false; pgcRender();
-      };
-      add.addEventListener("click", done);
-      cancel.addEventListener("click", () => { pgc.composing = false; pgc.sel = null; pgcRender(); });
-      ta.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); done(); } });
-      const row = pgcEl("div", "pgs-selrow"); row.append(add, cancel);
-      strip.append(q, ta, row);
-      setTimeout(() => ta.focus(), 0);
-    }
+  // The strip: the selected text and what to do with it. Drawn again only when the selection or the composing state
+  // changed: a redraw for anything else (the sent comments arriving, a draft added) between the press and the release
+  // of Comment put a new button under the release, the browser then fired no click, and the tap was lost.
+  const stripKey = pgc.sel ? JSON.stringify([pgc.sel.quote, pgc.sel.before, pgc.sel.after, !!pgc.composing]) : "";
+  if (strip._key !== stripKey) {
+    strip._key = stripKey;
+    strip.replaceChildren();
+    strip.hidden = !pgc.sel;
+    if (pgc.sel) pgcDrawStrip(strip);
   }
   // The tray: the comments to send, Send, and below them what was sent.
   tray.replaceChildren();
