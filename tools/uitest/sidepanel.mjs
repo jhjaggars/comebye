@@ -274,8 +274,17 @@ for (const width of [1440, 390]) {
     await page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(r), 0))); // its redraw has run
     const reopened = await page.evaluate(() => document.querySelectorAll("#sp-body details.df[open]").length);
     if (reopened) throw new Error(`a redraw opened ${reopened} file(s) that were closed`);
+    // The bar is redrawn by its parts: reopening flips "live" twice (the push stream is cut, then up again) and, beside
+    // the chat, adds Side by side; none of that rebuilds the Files menu. When it did, a pick that landed as the stream came
+    // up went to a menu no longer in the page and the jump below never happened (CI, 3 times on 2026-11-23).
+    if (!(await page.evaluate(() => new Promise((res) => {
+      const jump = document.querySelector("#sp-jump");
+      SP.toggle(false); SP.toggle(true);
+      const t0 = Date.now(), wait = () => document.querySelector("#sp-live")?.dataset.push === "1" || Date.now() - t0 > 6000 ? res(jump.isConnected) : setTimeout(wait, 50);
+      wait();
+    })))) throw new Error("the Files menu was rebuilt when the panel reopened and its push stream came up");
     await page.locator("#sp-jump").selectOption({ label: "c.go" });
-    await page.waitForFunction(() => { const d = [...document.querySelectorAll("#sp-body details.df")].find((x) => x.dataset.key.endsWith("|c.go")); return d && d.open; }, null, { timeout: 4000 });
+    await page.waitForFunction(() => { const d = [...document.querySelectorAll("#sp-body details.df")].find((x) => x.dataset.key.endsWith("|c.go")); return d && d.open; }, null, { timeout: 4000 }).catch(() => { throw new Error("the jump from the Files menu did not open c.go"); });
     if (!(await inView('#sp-body details.df[open] .p[title="c.go"]'))) throw new Error("c.go is not in view after the jump");
     if (/Collapse all/.test(await page.locator("#sp-fold").innerText())) await page.locator("#sp-fold").click();
     await page.locator("#sp-fold").click(); // expand all
