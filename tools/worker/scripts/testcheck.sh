@@ -6,7 +6,8 @@
 set -euo pipefail
 : "${WK_GO_VERSION:?}" "${WK_NODE_VERSION:?}" "${WK_CHROME_VERSION:?}" "${WK_REPO_DIR:?}"
 # The pinned tools first: a pane's PATH may also hold mise's Node (pi's), which is not CI's.
-export PATH="/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin"
+# WK_TOOL_BIN is where they are linked (a test points it at an empty folder).
+export PATH="${WK_TOOL_BIN:-/usr/local/bin}:$HOME/.local/bin:/usr/bin:/bin"
 # Never let go.mod's toolchain line download a different Go: the installed one must be it.
 export GOTOOLCHAIN=local
 # tools/ci/capped.sh caps the suites' memory with the user's systemd, which needs the user bus.

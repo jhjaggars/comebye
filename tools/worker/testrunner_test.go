@@ -125,9 +125,11 @@ func TestTestRunnerScriptsParse(t *testing.T) {
 			t.Errorf("%s: bash -n: %v\n%s", name, err, out)
 		}
 	}
-	// The quick check runs anywhere: with no matching tools it fails on the versions, before any test.
+	// The quick check runs anywhere: with no pinned tools where it looks first (an empty folder in place of
+	// /usr/local/bin, so a worker that has them, like kv1, gives the same answer), it fails on the versions,
+	// before any test.
 	cmd := exec.Command(bash, "-c", strings.Replace(cs, "WK_QUICK='0'", "WK_QUICK='1'", 1))
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/nonexistent", "XDG_RUNTIME_DIR=/nonexistent"}
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/nonexistent", "XDG_RUNTIME_DIR=/nonexistent", "WK_TOOL_BIN=" + t.TempDir()}
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "the toolchain is not as pinned") || strings.Contains(string(out), "go test") {
 		t.Errorf("the check passed without the tools, or ran tests: %v\n%s", err, out)
