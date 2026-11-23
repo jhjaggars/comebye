@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -248,10 +249,15 @@ func TestToolchainAndTestcheckCommands(t *testing.T) {
 	if err := e.toolchain(ctx, "w1"); err != nil {
 		t.Fatal(err)
 	}
-	last := r.calls[len(r.calls)-1]
-	if last.name != "ssh" || last.args[len(last.args)-1] != "sudo bash -s" || !strings.Contains(last.stdin, "WK_CHROME_SHA256=") {
-		t.Errorf("toolchain ran %s", last.line())
+	root, slots := r.calls[len(r.calls)-2], r.calls[len(r.calls)-1]
+	if root.name != "ssh" || root.args[len(root.args)-1] != "sudo bash -s" || !strings.Contains(root.stdin, "WK_CHROME_SHA256=") {
+		t.Errorf("toolchain ran %s", root.line())
 	}
+	// then, as the ssh user (not root), the slots file in the remote run cache
+	if slots.name != "ssh" || slots.args[len(slots.args)-1] != "bash -s" || !strings.Contains(slots.stdin, `d="$HOME/.cache/comebye-remote"`) {
+		t.Errorf("toolchain did not write the slots file: %s\n%s", slots.line(), slots.stdin)
+	}
+	var last call
 	if err := e.testcheck(ctx, "w1", testCheckOpts{Quick: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -288,5 +294,97 @@ func TestToolchainAndTestcheckCommands(t *testing.T) {
 	}
 	if code := run([]string{"-config", cfgPath, "testcheck", "a", "b"}, e2); code != 2 {
 		t.Errorf("testcheck with two names: exit %d", code)
+	}
+}
+
+// test_slots, else vCPUs / 4 with a floor of 1; a cloud VM (no vm_cpu) counts
+// its own.
+func TestTestSlotsConfig(t *testing.T) {
+	base := "ts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"
+	kube := "provider=kubevirt\n" + base
+	gcp := "project=comebye-test-0001\nzone=us-east1-b\nssh_source_cidr=198.51.100.1/32\n" + base
+	for _, tc := range []struct {
+		body string
+		want int
+		bad  bool
+	}{
+		{kube, 1, false}, // the default vm_cpu=4
+		{kube + "vm_cpu=12\n", 3, false},
+		{kube + "vm_cpu=13\nvm_cpu_request=2\n", 3, false},
+		{kube + "vm_cpu=2\nvm_cpu_request=1\n", 1, false},
+		{kube + "vm_cpu=12\ntest_slots=2\n", 2, false},
+		{kube + "test_slots=0\n", 1, false},
+		{gcp, 0, false},
+		{gcp + "test_slots=2\n", 2, false},
+		{kube + "test_slots=-1\n", 0, true},
+		{kube + "test_slots=65\n", 0, true},
+		{kube + "test_slots=two\n", 0, true},
+	} {
+		p := filepath.Join(t.TempDir(), "config")
+		os.WriteFile(p, []byte(tc.body+"state_dir="+t.TempDir()+"\n"), 0o600)
+		c, err := LoadConfig(p)
+		if tc.bad {
+			if err == nil {
+				t.Errorf("accepted:\n%s", tc.body)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%v\n%s", err, tc.body)
+			continue
+		}
+		if got := c.testSlots(); got != tc.want {
+			t.Errorf("slots %d, want %d:\n%s", got, tc.want, tc.body)
+		}
+	}
+}
+
+// The slots file lands in the remote run cache, replacing an old one, and a
+// VM that counts its own never writes less than 1.
+func TestTestSlotsScriptWritesTheFile(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	for _, n := range []int{3, 0} {
+		home := t.TempDir()
+		f := filepath.Join(home, ".cache", "comebye-remote", "test-slots")
+		os.MkdirAll(filepath.Dir(f), 0o755)
+		os.WriteFile(f, []byte("9\n"), 0o644)
+		cmd := exec.Command(bash, "-s")
+		cmd.Stdin = strings.NewReader(testSlotsScript(n))
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("n=%d: %v\n%s", n, err, out)
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		if (n > 0 && got != n) || got < 1 || got == 9 {
+			t.Errorf("n=%d: the file says %q", n, b)
+		}
+		if !strings.Contains(string(out), "test slots: "+strconv.Itoa(got)) {
+			t.Errorf("n=%d: output %q", n, out)
+		}
+		if _, err := os.Stat(f + ".tmp"); err == nil {
+			t.Errorf("n=%d: the temp file was left", n)
+		}
+	}
+}
+
+func TestDryRunShowsTheTestSlots(t *testing.T) {
+	c := kubeCfg(t)
+	c.VMCPU = 12
+	w := &fakeWorld{hubVersion: "v0.3.1", peers: map[string]bool{}}
+	r := &fakeRunner{state: map[string]bool{}}
+	r.handle = gceFake(w, c)
+	e, out, _ := newEnv(t, c, w, r)
+	e.DryRun = true
+	_ = e.create(context.Background(), "w1", createOpts{})
+	if !strings.Contains(out.String(), testSlotsFile+" = 3 (test_slots") {
+		t.Errorf("the plan does not show the slots:\n%s", out)
 	}
 }

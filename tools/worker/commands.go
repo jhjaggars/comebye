@@ -557,7 +557,7 @@ func (e *env) createPlan(name string, o createOpts) error {
 	machine := fmt.Sprintf("%s, boot %d GB, data %d GB %s", c.MachineType, c.BootDiskGB, c.DataDiskGB, c.DiskType)
 	if c.Provider == "kubevirt" {
 		e.printf("DRY RUN: nothing is created, no key is minted, no host is contacted; the cluster is only read (kubectl get).\n\n")
-		machine = fmt.Sprintf("%d vCPU, %s, boot %d GB, data %d GB on %s", c.VMCPU, c.VMMemory, c.BootDiskGB, c.DataDiskGB, c.KubeStorageClass)
+		machine = fmt.Sprintf("%d vCPU, %s, boot %d GB on %s, data %d GB on %s", c.VMCPU, c.VMMemory, c.BootDiskGB, c.KubeStorageClass, c.DataDiskGB, c.dataStorageClass())
 	} else {
 		e.printf("DRY RUN: nothing is created, no key is minted, no host is contacted.\n\n")
 	}
@@ -574,6 +574,11 @@ func (e *env) createPlan(name string, o createOpts) error {
 	if c.TestRunner {
 		e.printf("   test runner (test_runner=true): Go %s, Node %s, Chrome for Testing %s, each sha256 pinned;\n   Chrome's libraries, fonts, python3 (go test ./internal/... and tools/ci/browser.sh)\n",
 			testPins.GoVersion, testPins.NodeVersion, testPins.ChromeVersion)
+		slots := "the VM's vCPUs / 4, at least 1"
+		if n := c.testSlots(); n > 0 {
+			slots = strconv.Itoa(n)
+		}
+		e.printf("   as %s: %s = %s (test_slots; default vCPUs / 4)\n", c.SSHUser, testSlotsFile, slots)
 	}
 	e.printf("4. tailnet:\n")
 	if _, err := os.Stat(c.TSOAuthFile); err == nil {

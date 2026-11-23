@@ -30,11 +30,14 @@ type Config struct {
 	KubeFloorGiB     int      // memory a node must keep free after the VM (GiB)
 	KubeNodeFloors   map[string]int
 	KubeStorageClass string
-	VMImageDV        string // a DataVolume in the namespace, cloned per VM
-	VMImageURL       string // or: a qcow2 URL CDI imports per VM
-	VMCPU            int    // vCPUs, and the CPU limit
-	VMCPURequest     int    // the CPU request (the scheduler's share)
-	VMMemory         string // guest memory, request and limit (e.g. 32Gi)
+	// KubeDataStorageClass is the data disk's StorageClass (e.g. a node-local
+	// scratch class for a pinned test VM); empty = KubeStorageClass.
+	KubeDataStorageClass string
+	VMImageDV            string // a DataVolume in the namespace, cloned per VM
+	VMImageURL           string // or: a qcow2 URL CDI imports per VM
+	VMCPU                int    // vCPUs, and the CPU limit
+	VMCPURequest         int    // the CPU request (the scheduler's share)
+	VMMemory             string // guest memory, request and limit (e.g. 32Gi)
 
 	// openshell: the gateway that runs the sandboxes (see docs/workers.md).
 	OpenShellBin       string   // the CLI (default "openshell")
@@ -122,6 +125,9 @@ type Config struct {
 	// for kubevirt workers, off elsewhere; test_runner=true|false decides.
 	TestRunner    bool
 	testRunnerSet bool
+	// TestSlots is how many test suites the VM runs at once, written to
+	// test-slots in its remote run cache; 0 = vCPUs / 4, at least 1.
+	TestSlots int
 
 	// The LLM gateway (LiteLLM). Off unless LLMGatewayURL is set: then each
 	// worker gets its own virtual key, limited by the fields below.
@@ -415,6 +421,8 @@ func (c *Config) apply(kv map[string]string) error {
 			}
 		case "kube_storage_class":
 			c.KubeStorageClass = v
+		case "kube_data_storage_class":
+			c.KubeDataStorageClass = v
 		case "vm_image_dv":
 			c.VMImageDV = v
 		case "vm_image_url":
@@ -489,6 +497,8 @@ func (c *Config) apply(kv map[string]string) error {
 			default:
 				err = fmt.Errorf("test_runner must be true or false, not %q", v)
 			}
+		case "test_slots":
+			c.TestSlots, err = strconv.Atoi(v)
 		case "llm_gateway_url":
 			c.LLMGatewayURL = strings.TrimRight(v, "/")
 		case "llm_provisioner_key_file":
@@ -654,6 +664,7 @@ func (c *Config) Validate() error {
 		chk(c.DestroyAfterHours >= 0 && c.DestroyAfterHours <= 8760, "destroy_after_hours must be 0..8760"),
 		chk(c.HubVersion == "" || versionRe.MatchString(c.HubVersion), "hub_version %q is not a release tag like v0.3.0", c.HubVersion),
 		chk(!c.TestRunner || c.Provider != "openshell", "test_runner is for VM workers, not openshell sandboxes"),
+		chk(c.TestSlots >= 0 && c.TestSlots <= 64, "test_slots must be 0..64 (0 or unset: vCPUs / 4, at least 1)"),
 	} {
 		if e != nil {
 			return e

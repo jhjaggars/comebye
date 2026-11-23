@@ -451,6 +451,13 @@ Linux arm64 build). `npm ci` for `tools/uitest` happens on the first run of a su
   the versions only. It runs the pinned tools first on `PATH` (pi's mise Node is not CI's) and
   with `GOTOOLCHAIN=local`.
 
+Both `create` and `worker toolchain` also write the VM's **slot count**, how many suites it is
+meant to run at once, to `~/.cache/comebye-remote/test-slots` (the remote run cache, as the ssh
+user, with a line saying the number). It is `test_slots` when the config sets it, else the
+VM's vCPUs ÷ 4, at least 1: `vm_cpu=12` gives 3, `vm_cpu=4` gives 1. A cloud VM, whose vCPUs
+are not in the config, counts its own (`nproc`). Re-run `worker toolchain NAME` after changing
+either key.
+
 ### Running a suite on a worker: `tools/ci/remote.sh`
 
 ```sh
@@ -666,6 +673,7 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # kube_floor_gib=12                     # free memory a node keeps after the VM
 # kube_node_floor=zetta=8               # NODE=GIB,... per-node floors (replaces the default list)
 # kube_storage_class=longhorn
+# kube_data_storage_class=              # the data disk's class; empty = kube_storage_class (the boot disk always uses that)
 # vm_image_dv=debian-13-golden          # a DataVolume in the namespace, cloned per VM ...
 # vm_image_url=https://.../debian-13-genericcloud-amd64.qcow2   # ... or a qcow2 CDI imports (set one)
 # vm_cpu=4                              # vCPUs and the CPU limit
@@ -674,6 +682,7 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # boot_disk_gb=40
 # data_disk_gb=150
 # test_runner=true                      # the pinned Go, Node and Chrome (see The test runner)
+# test_slots=                           # suites at once, written to the VM's test-slots; empty = vm_cpu / 4, at least 1
 ```
 
 `project`, `zone` and `ssh_source_cidr` do not apply. The tool never reads or prints the
@@ -737,6 +746,39 @@ second hint after a failed ssh) is not granted; the guest console log (`kubectl 
   namespace, service account, golden image and storage class exist, and a node may take a VM.
   `missing` means the prerequisites manifest is not applied; `error` means something else is
   wrong.
+
+### A test VM pinned to a node (one config per node)
+
+A config file describes one kind of VM, so a pool of test VMs, each on its own node, is one
+config per node, passed with `-config`. `kube_node_prefer` with a single node pins the VM there:
+it goes to that node or the capacity gate refuses, never elsewhere. Size `vm_cpu` and
+`vm_memory` to the node, and put the data disk (Go's and npm's caches, the run folders) on
+node-local storage with `kube_data_storage_class`; the boot disk stays on `kube_storage_class`,
+where the golden image is cloned from. The node and class names below are placeholders:
+
+```
+# ~/.config/comebye-worker/test-node-a.conf
+provider=kubevirt
+ts_allow_login=you@example.com
+hub_url=https://hub.your-tailnet.ts.net
+hub_peer_url=https://hub.your-tailnet.ts.net
+kube_node_prefer=node-a                 # this VM goes to node-a and nowhere else
+kube_data_storage_class=local-scratch   # a node-local class for the data disk
+vm_cpu=12
+vm_cpu_request=8
+vm_memory=48Gi
+data_disk_gb=150
+# test_slots=3                          # the default here: 12 vCPUs / 4
+```
+
+```sh
+go run ./tools/worker -config ~/.config/comebye-worker/test-node-a.conf create --dry-run test-a
+go run ./tools/worker -config ~/.config/comebye-worker/test-node-a.conf create test-a
+```
+
+A second node gets its own file (`kube_node_prefer=node-b`, its own `vm_cpu` and `vm_memory`,
+and a different VM name). `preflight` with such a config also checks that the data disk's class
+exists. The dry run shows both classes and the slot count before anything is made.
 
 ## The in-cluster provisioner
 

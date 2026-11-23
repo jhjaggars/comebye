@@ -913,3 +913,45 @@ func TestPreflightInClusterCredentials(t *testing.T) {
 		t.Errorf("statted %v", statted)
 	}
 }
+
+// kube_data_storage_class moves the data disk only: unset, both disks are on
+// kube_storage_class (the golden datavolume.json); set, the boot disk stays.
+func TestKubeDataStorageClass(t *testing.T) {
+	class := func(v map[string]any) string {
+		return v["spec"].(map[string]any)["storage"].(map[string]any)["storageClassName"].(string)
+	}
+	bootClass := func(c *Config) string {
+		vm := renderVM(c, "w1", "node-a")
+		tpl := vm["spec"].(map[string]any)["dataVolumeTemplates"].([]any)[0].(map[string]any)
+		return class(tpl)
+	}
+	c := kubeCfg(t)
+	if c.KubeDataStorageClass != "" || class(renderDataDV(c, "w1")) != "longhorn" || bootClass(c) != "longhorn" {
+		t.Errorf("default: data %q, boot %q", class(renderDataDV(c, "w1")), bootClass(c))
+	}
+
+	base := "provider=kubevirt\nts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"
+	load := func(extra string) (*Config, error) {
+		p := filepath.Join(t.TempDir(), "config")
+		os.WriteFile(p, []byte(base+extra+"state_dir="+t.TempDir()+"\n"), 0o600)
+		return LoadConfig(p)
+	}
+	c, err := load("kube_data_storage_class=longhorn-local-scratch\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dv := renderDataDV(c, "w1")
+	if class(dv) != "longhorn-local-scratch" || bootClass(c) != "longhorn" {
+		t.Errorf("set: data %q, boot %q", class(dv), bootClass(c))
+	}
+	// the rest of the DataVolume is as before: blank, 150 GiB, RWO, kept after import
+	b, _ := json.Marshal(dv)
+	for _, want := range []string{`"blank":{}`, `"storage":"150Gi"`, `"accessModes":["ReadWriteOnce"]`, `"cdi.kubevirt.io/storage.deleteAfterCompletion":"false"`, `"name":"w1-data"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("data DataVolume lacks %s: %s", want, b)
+		}
+	}
+	if _, err := load("kube_data_storage_class=Not_A_Class\n"); err == nil {
+		t.Error("a bad kube_data_storage_class was accepted")
+	}
+}

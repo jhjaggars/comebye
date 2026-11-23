@@ -74,6 +74,7 @@ func (c *Config) validateKubeVirt(chk func(bool, string, ...any) error) error {
 		chk(kubeNameRe.MatchString(c.KubeNamespace), "bad kube_namespace %q", c.KubeNamespace),
 		chk(kubeNameRe.MatchString(c.KubeServiceAcct), "bad kube_service_account %q", c.KubeServiceAcct),
 		chk(kubeNameRe.MatchString(c.KubeStorageClass), "bad kube_storage_class %q", c.KubeStorageClass),
+		chk(c.KubeDataStorageClass == "" || kubeNameRe.MatchString(c.KubeDataStorageClass), "bad kube_data_storage_class %q", c.KubeDataStorageClass),
 		chk((c.VMImageDV == "") != (c.VMImageURL == ""), "set exactly one of vm_image_dv (a DataVolume in the namespace) and vm_image_url (a qcow2 to import)"),
 		chk(c.VMImageDV == "" || kubeNameRe.MatchString(c.VMImageDV), "bad vm_image_dv %q", c.VMImageDV),
 		chk(c.VMImageURL == "" || imageURLRe.MatchString(c.VMImageURL), "bad vm_image_url %q (an https URL of a .qcow2 or .img)", c.VMImageURL),
@@ -491,7 +492,7 @@ func (p *kubevirtProv) Plan(name, pub string, w logf) {
 		g.print(w)
 		node = g.Chosen
 	}
-	w("   1. DataVolume %s: the data disk, %d GiB on %s, a standalone object (the VM does not own it; destroy keeps it unless --delete-data-disk)\n", dataDVName(name), c.DataDiskGB, c.KubeStorageClass)
+	w("   1. DataVolume %s: the data disk, %d GiB on %s, a standalone object (the VM does not own it; destroy keeps it unless --delete-data-disk)\n", dataDVName(name), c.DataDiskGB, c.dataStorageClass())
 	w("   2. Secret %s: cloud-config with the %s user and YOUR PUBLIC ssh key, this worker's ssh host key (made here, pinned in known_hosts before the VM exists), the data disk mount.\n      No tailnet key, hub URL secret or token goes in it; the Tailscale key travels over ssh stdin later.\n", cloudInitName(name), c.SSHUser)
 	w("   3. VirtualMachine %s: %d vCPU (CPU request %d, limit %d), %s memory (request = limit), %d GiB boot disk cloned from %s,\n      pinned to node %s, runStrategy RerunOnFailure (an idle poweroff leaves it stopped), pod network only, the guest gets no service account token\n",
 		name, c.VMCPU, c.VMCPURequest, c.VMCPU, c.VMMemory, c.BootDiskGB, p.imageSource(), shortNode(node))
@@ -548,15 +549,24 @@ func renderDataDV(c *Config, name string) map[string]any {
 			"annotations": map[string]any{"cdi.kubevirt.io/storage.deleteAfterCompletion": "false"}},
 		"spec": map[string]any{
 			"source":  map[string]any{"blank": map[string]any{}},
-			"storage": storageSpec(c, c.DataDiskGB),
+			"storage": storageSpec(c.dataStorageClass(), c.DataDiskGB),
 		},
 	}
 }
 
-func storageSpec(c *Config, gb int) map[string]any {
+// dataStorageClass is the data disk's StorageClass: kube_data_storage_class,
+// else kube_storage_class.
+func (c *Config) dataStorageClass() string {
+	if c.KubeDataStorageClass != "" {
+		return c.KubeDataStorageClass
+	}
+	return c.KubeStorageClass
+}
+
+func storageSpec(class string, gb int) map[string]any {
 	return map[string]any{
 		"accessModes":      []any{"ReadWriteOnce"},
-		"storageClassName": c.KubeStorageClass,
+		"storageClassName": class,
 		"resources":        map[string]any{"requests": map[string]any{"storage": gibStr(gb)}},
 	}
 }
@@ -629,7 +639,7 @@ func renderVM(c *Config, name, node string) map[string]any {
 			"runStrategy": "RerunOnFailure",
 			"dataVolumeTemplates": []any{map[string]any{
 				"metadata": map[string]any{"name": bootDVName(name), "labels": kubeLabels(name)},
-				"spec":     map[string]any{"source": src, "storage": storageSpec(c, c.BootDiskGB)},
+				"spec":     map[string]any{"source": src, "storage": storageSpec(c.KubeStorageClass, c.BootDiskGB)},
 			}},
 			"template": map[string]any{
 				"metadata": map[string]any{"labels": kubeLabels(name)},
@@ -717,6 +727,9 @@ func (e *env) pfKubeVirt(ctx context.Context) pfCheck {
 		}
 	}
 	check("storage class "+c.KubeStorageClass, "storageclass", c.KubeStorageClass)
+	if d := c.dataStorageClass(); d != c.KubeStorageClass {
+		check("data disk storage class "+d, "storageclass", d)
+	}
 	nodes, _, nerr := k.kubeNodes(cctx)
 	cands := 0
 	if nerr != nil {

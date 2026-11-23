@@ -149,7 +149,7 @@ func (p *kubevirtProv) EnsureDataDisk(ctx context.Context, name string, w logf) 
 		w("  data disk %s: present\n", dataDVName(name))
 		return nil
 	}
-	w("  data disk %s: creating (%d GiB on %s)\n", dataDVName(name), p.cfg.DataDiskGB, p.cfg.KubeStorageClass)
+	w("  data disk %s: creating (%d GiB on %s)\n", dataDVName(name), p.cfg.DataDiskGB, p.cfg.dataStorageClass())
 	return p.apply(ctx, renderDataDV(p.cfg, name))
 }
 

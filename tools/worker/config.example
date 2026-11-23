@@ -60,6 +60,9 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # The test runner: Go, Node and Chrome for Testing, pinned by version and sha256 (tools/worker/testrunner.go),
 # so the worker can run go test ./internal/... and tools/ci/browser.sh. Default: true for kubevirt, false elsewhere.
 # test_runner=true
+# How many test suites the VM runs at once, written to ~/.cache/comebye-remote/test-slots on it
+# by create and `worker toolchain`. Default: vm_cpu / 4 (at least 1) for kubevirt; a cloud VM counts its own.
+# test_slots=
 
 # LLM gateway (LiteLLM on the tailnet). Off unless llm_gateway_url is set. Each worker then
 # gets its OWN virtual key (alias worker-NAME) with the limits below, delivered over ssh

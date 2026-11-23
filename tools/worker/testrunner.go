@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -106,7 +107,47 @@ func (e *env) installTestRunner(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("test runner bootstrap: %w", err)
 	}
+	out, err = e.sh(ctx, name, "bash -s", []byte(testSlotsScript(e.Cfg.testSlots())))
+	if err != nil {
+		return fmt.Errorf("writing %s: %w", testSlotsFile, err)
+	}
+	e.printf("  %s\n", strings.TrimSpace(out))
 	return nil
+}
+
+// testSlotsFile is where the VM says how many test suites it runs at once:
+// in the remote run cache (tools/ci/remote.sh's REMOTE_ROOT default), as the
+// ssh user.
+const testSlotsFile = "~/.cache/comebye-remote/test-slots"
+
+// testSlots is test_slots, else vCPUs / 4 with a minimum of 1. 0 means the
+// vCPU count is not in the config (a cloud machine type): the VM counts its own.
+func (c *Config) testSlots() int {
+	switch {
+	case c.TestSlots > 0:
+		return c.TestSlots
+	case c.Provider == "kubevirt":
+		return max(1, c.VMCPU/4)
+	}
+	return 0
+}
+
+// testSlotsScript is the user script that writes the slots file (n, or the
+// VM's nproc / 4 when n is 0), atomically, and prints what it wrote.
+func testSlotsScript(n int) string {
+	slots := "$(( $(nproc) / 4 ))"
+	if n > 0 {
+		slots = strconv.Itoa(n)
+	}
+	return `set -eu
+d="$HOME/.cache/comebye-remote"
+n=` + slots + `
+[ "$n" -ge 1 ] || n=1
+mkdir -p "$d"
+echo "$n" >"$d/test-slots.tmp"
+mv -f "$d/test-slots.tmp" "$d/test-slots"
+echo "test slots: $n (` + testSlotsFile + `)"
+`
 }
 
 // toolchain installs (or upgrades to) the pinned test toolchain on an existing
