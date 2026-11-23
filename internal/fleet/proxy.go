@@ -84,9 +84,12 @@ var hostProxyOps = map[string]struct {
 	// worker's session.
 	"repos":  {proxyOp{method: http.MethodGet, timeout: 30 * time.Second}, []string{"api", "repos"}, false},
 	"checks": {proxyOp{method: http.MethodGet, query: []string{"path", "branch", "base", "detail", "diff", "within", "repo", "prev", "hints", "origin"}, timeout: 45 * time.Second}, []string{"api", "checks"}, false},
-	// probe: whether a PR is still open, a pid alive or a k3d cluster there
-	// (the removals review re-checks what a session said keeps it). Hub-only.
-	"probe": {proxyOp{method: http.MethodGet, query: []string{"kind", "repo", "number", "pid", "name"}, timeout: 30 * time.Second}, []string{"api", "probe"}, true},
+	// probe: whether a PR is still open, a pid alive, a k3d cluster or a
+	// path there (the removals review re-checks what a session said keeps
+	// it). Hub-only. Every key a probe kind reads must be listed: one left
+	// out reaches the peer empty (a path probe then said "want an absolute
+	// path").
+	"probe": {proxyOp{method: http.MethodGet, query: []string{"kind", "repo", "number", "pid", "name", "path"}, timeout: 30 * time.Second}, []string{"api", "probe"}, true},
 	// A peer's token counts (usage.Store.SnapshotSince), gathered by the hub.
 	"usage-sessions": {proxyOp{method: http.MethodGet, query: []string{"since", "epoch", "limit"}, timeout: 60 * time.Second}, []string{"api", "usage", "sessions"}, true},
 	"worker":         {proxyOp{method: http.MethodPost, maxBody: 1<<20 + 64<<10, timeout: 160 * time.Second}, []string{"api", "worker"}, true},

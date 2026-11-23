@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -167,6 +169,41 @@ func TestLetItCleanUpSendsExactlyTheListedCleanupThenAsksAgain(t *testing.T) {
 		a := markOf(t, s, "desk/w2:p1").Ask
 		return a.State == ledger.AskSafe && a.ReaskedAt == nil && a.CleaningAt == nil
 	})
+}
+
+// The go-ahead is the user's, not the hub's: it is sent, and the session is
+// asked once more after it, even when the hub's own re-asks are spent; that
+// ask does not count against them.
+func TestLetItCleanUpAfterTheReasksAreSpent(t *testing.T) {
+	s, fh, say := replyServer(t)
+	s.probeTTL = 0
+	_, tmp := probeRoots(t)
+	dir := filepath.Join(tmp, "jfetch")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := markUnsafe(t, s, time.Minute, ledger.AskItem{Type: "path", Name: dir, Text: "343 MB of my scratch"})
+	if _, err := s.ledger.UpdateAsk(m.AgentID, m.At, func(k *ledger.Ask) bool { k.Reasks = s.reaskMax; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if w := do(s, "POST", "/api/marks/cleanup", userHdr, `{"agent_id":"desk/w2:p1"}`); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	waitFor(t, func() bool { return promptCount(fh) == 1 })
+	if p := lastPrompt(t, fh); !strings.Contains(p, "1. path "+dir+": 343 MB of my scratch") {
+		t.Fatalf("go-ahead:\n%s", p)
+	}
+	os.Remove(dir)
+	say("Deleted it.")
+	waitFor(t, func() bool { return promptCount(fh) == 2 })
+	say("NOTHING LEFT")
+	waitFor(t, func() bool {
+		a := markOf(t, s, "desk/w2:p1").Ask
+		return a.State == ledger.AskSafe && a.ReaskedAt == nil && a.CleaningAt == nil
+	})
+	if a := markOf(t, s, "desk/w2:p1").Ask; a.Reasks != s.reaskMax {
+		t.Fatalf("reasks = %d, want %d", a.Reasks, s.reaskMax)
+	}
 }
 
 func TestLetItCleanUpRefusals(t *testing.T) {

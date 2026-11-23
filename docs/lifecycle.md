@@ -210,10 +210,12 @@ build output inside the worktree is cleared, and the bytes freed are recorded.
 - **When the re-asks run out.** A marked session whose LEFT answer came back
   after the hub's last automatic re-ask (`reaskMax`, 3) is archived at the next
   step, without waiting out the clock, when its items, re-typed and re-checked,
-  are settled except for `cleanup`, `other` and `followup` ones: nothing the hub
-  can check or that is still moving. Those items go onto `archive.left` and show
-  on its row (`comebye archived`, the app). An open `pr`, `todo` or `decision`
-  item, or one the hub still checks (`branch`, `path`, `issue`, `resource`,
+  are settled except for `cleanup`, `other` and `followup` ones, and `path`
+  ones the session calls its own scratch that the hub looked at and found still
+  there: nothing the hub can check or that is still moving. Those items go onto
+  `archive.left` and show on its row (`comebye archived`, the app). An open
+  `pr`, `todo` or `decision` item, or one the hub still checks (`branch`, any
+  other `path`, a scratch `path` it could not check, `issue`, `resource`,
   `commits`), keeps it in the review, as before, until it settles or the clock
   runs out. No To do is filed for what is left. The other guards above still
   apply.

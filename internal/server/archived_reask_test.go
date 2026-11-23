@@ -42,6 +42,9 @@ func TestLeftOnlyOwed(t *testing.T) {
 		return itemView{AskItem: ledger.AskItem{Type: typ, Text: typ}, State: state}
 	}
 	unsafe := func(items ...itemView) *askReview { return &askReview{State: ledger.AskUnsafe, Items: items} }
+	scratch := func(state string) itemView {
+		return itemView{AskItem: ledger.AskItem{Type: ledger.ItemPath, Name: "/tmp/jfetch", Text: "343 MB of my scratch"}, State: state}
+	}
 	for _, tc := range []struct {
 		name  string
 		ar    *askReview
@@ -58,6 +61,10 @@ func TestLeftOnlyOwed(t *testing.T) {
 		{"a decision", unsafe(v(ledger.ItemDecision, itemOpen)), 0, false},
 		{"a branch the hub checks", unsafe(v(ledger.ItemBranch, itemOpen), v(ledger.ItemOther, itemUnchecked)), 0, false},
 		{"all settled: the proof removes it", &askReview{State: ledger.AskUnsafe, Resolved: true, Items: []itemView{v(ledger.ItemPR, itemResolved)}}, 0, false},
+		{"its own scratch path, still there", unsafe(scratch(itemOpen), v(ledger.ItemFollowup, itemUnchecked)), 2, true},
+		{"its own scratch path, can't check", unsafe(scratch(itemUnchecked)), 0, false},
+		{"a path not its scratch, still there", unsafe(v(ledger.ItemPath, itemOpen)), 0, false},
+		{"a path it says to keep", unsafe(itemView{AskItem: ledger.AskItem{Type: ledger.ItemPath, Name: "/tmp/x", Text: "my clone, keep it"}, State: itemOpen}), 0, false},
 		{"a stale branch: the sweep deletes it", &askReview{State: ledger.AskUnsafe, StaleOnly: true, Items: []itemView{v(ledger.ItemOther, itemOpen)}}, 0, false},
 	} {
 		left, ok := leftOnlyOwed(tc.ar)

@@ -25,8 +25,9 @@ import (
 // days (7; 3 for research, plan, review, spike, poc, eval and test work), and
 // a marked one whose "what is left" answer is still unsettled or that was
 // marked as delivered. A marked one whose answer still says LEFT after the
-// hub's last automatic re-ask, with only cleanup, other or followup items
-// unsettled, is archived at once, and those items go onto its record. Archiving parks the pane (when the agent is live and
+// hub's last automatic re-ask, with only cleanup, other or followup items (or
+// its own scratch path, still there) unsettled, is archived at once, and those
+// items go onto its record. Archiving parks the pane (when the agent is live and
 // idle), clears the regenerable build output in the worktree on its host (the
 // bytes freed are recorded) and sets the ledger status. Nothing else is
 // deleted: the worktree source, both branches, the transcript and the park
@@ -140,7 +141,8 @@ type archiveFacts struct {
 	planWaiting bool // its plan still has steps waiting
 	// reasksOut: the hub's automatic re-asks of its mark are used up, the last
 	// answer still says LEFT, and every item left is one only the user or
-	// nobody can settle (cleanup, other, followup): it is archived at once,
+	// nobody can settle (cleanup, other, followup, its own scratch path still
+	// there): it is archived at once,
 	// without waiting out the clock. left are those items.
 	reasksOut bool
 	left      []ledger.AskItem
@@ -157,10 +159,13 @@ func reasksSpent(m *ledger.Mark, max int) bool {
 }
 
 // leftOnlyOwed reads a re-checked LEFT answer (its items re-typed): it returns
-// the items still unsettled when every one is cleanup, other or followup, and
+// the items still unsettled when every one is cleanup, other or followup, or a
+// path the session calls its own scratch that the hub found still there; and
 // false when one is still moving or checkable (an open pr, a to-do, a
-// decision, a branch, a path, ...), when all have settled (the proof removes
-// it), or when what is left is a stale branch the sweep deletes.
+// decision, a branch, another path, a path it could not check, ...), when
+// all have settled (the proof removes it), or when what is left is a stale
+// branch the sweep deletes. Archiving deletes nothing of the work (the
+// worktree and branches stay), and the scratch goes onto its record.
 func leftOnlyOwed(ar *askReview) ([]ledger.AskItem, bool) {
 	if ar == nil || ar.State != ledger.AskUnsafe || ar.Resolved || ar.StaleOnly {
 		return nil, false
@@ -170,8 +175,12 @@ func leftOnlyOwed(ar *askReview) ([]ledger.AskItem, bool) {
 		if v.State == itemResolved {
 			continue
 		}
-		switch v.Type {
-		case ledger.ItemCleanup, ledger.ItemOther, ledger.ItemFollowup:
+		switch {
+		case v.Type == ledger.ItemCleanup, v.Type == ledger.ItemOther, v.Type == ledger.ItemFollowup:
+			left = append(left, v.AskItem)
+		case v.Type == ledger.ItemPath && v.State == itemOpen && isScratch(v.AskItem):
+			// Looked at and still there: a re-check will not settle it, and
+			// only the session (told to go ahead) or the user deletes it.
 			left = append(left, v.AskItem)
 		default:
 			return nil, false
